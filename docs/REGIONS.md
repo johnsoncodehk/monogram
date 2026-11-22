@@ -19,17 +19,24 @@ Built (the interpreter's lexer, `src/emit-lexer.ts`, which the emitted JS parser
 - **Derived entry**: how code enters a region is a fact of the grammar
   (`tagOpenOnlyOpensTags`, `src/grammar-analysis.ts`).
 - **Raw text** (`rawText`): an element whose tag name is declared raw has its whole body as ONE
-  token, in a raw frame; the dialect fixture's `<style>`.
+  token, in a raw frame; the dialect fixture's `<style>`. A declaration's `unlessBodyStarts`
+  makes the body ordinary children when the pattern matches at its start.
+- **Tag start** (`tagStart`): a `tagOpen` opens a tag only before a declared character; any other
+  is text in the children (the text run goes on over it) and the ordinary scan's in code.
+- **Directives**: openers, heads, bodies and continuations DERIVED from the grammar
+  (`directivesOf`), in an element frame's sub-state 3; arms the lexer could not delimit are
+  refused by name ("Directives").
+- **Text tokens** (`textTokens`): tokens tried in the children before the text run, each with an
+  optional `after` class; comments in text (`/* */` anywhere, `//` at a run's start or after a
+  blank).
+- The text dialect fixture `test/fixtures/textdialect.ts` (text children, `{}` holes, an
+  `operand` entry, raw `<script>` and a `<style>` raw unless its body starts with `{`), with its
+  rows in `test/text-dialect.ts`.
 - A lex error inside an undecided type-parameter signature is the signature's rewind verdict in
   every lexing mode (strict and recovering), so both passes lex one stream.
 
 Not built, in this order (each its own change with its gate):
-1. **Text tokens, directive openers, tag start**: `textTokens` (tokens tried before the text run:
-   comments in text, directive openers), directive openers derived from the grammar, `tagStart`
-   (a text run stops at `tagOpen` only when a declared character follows). Proven on a second
-   fixture shaped like a TSX template dialect: text children, directives, `{}` holes, raw
-   `<style>` / `<script>`.
-2. **Root region**: `html.ts` re-expressed as a file that starts inside a children frame that
+1. **Root region**: `html.ts` re-expressed as a file that starts inside a children frame that
    never pops, only if every `html.ts` artifact and `conformance/html` stay byte-identical;
    otherwise markup mode stays and the blocking difference is recorded here.
 
@@ -45,16 +52,17 @@ closer.
 | state | run token | own tokens (tried first) | pushes | pops at |
 |---|---|---|---|---|
 | code hole (`{`, template `${`) | none: ordinary scan | none | element (entry rule), template, hole | its closer at brace count 0 |
-| children | `text`, OPTIONAL: absent = children are code | `textTokens` (planned) | tag (at `tagOpen`, + `tagStart` planned), hole, directive (planned) | the close tag of the last open element |
+| children | `text`, OPTIONAL: absent = children are code | `textTokens` | tag (at `tagOpen`; with `tagStart`, only before its class), hole, directive | the close tag of the last open element |
 | tag (open / close) | none: ordinary scan, no regex | `tagTokens` | hole, nested element after `=`, type-argument depth (TS) | `tagClose` / self-close |
 | raw text | ONE raw token up to `tagOpen + closeMarker + name` | none | none | after the raw token (the close tag is lexed outside) |
-| directive (planned; code) | ordinary scan | none | as a code hole | its body's closer at count 0, unless a continuation literal follows |
+| directive head (code) | ordinary scan | none | a hole (deeper than its own paren depth) | the body opener at its own paren depth |
+| directive body | `text` | `textTokens` | as children; a tag opens its own frame | its closer at count 0, unless a continuation follows (then a head again) |
 | root (planned; whole-file markup) | the children state | as children | as children | never |
 
 Common to every state: a frame is pushed before its opener token and popped after its closer
 token, the token kinds come from the grammar's token declarations, and no state is
 reconstructed on relex. What is specific to a region is data: the run token and its stop test,
-the tag-start class, the raw-text tag set and its case rule, the directive openers.
+the tag-start class, the raw-text tag set, its case rule and body condition, the directive openers.
 
 ## Declaration
 
@@ -68,7 +76,10 @@ elements: {
   hole: { open: '{', close: '}' },
   tagTokens?: ['JSXString'],  // token TYPES lexed only in a tag, tried before the ordinary scan there
   typeParameters?: { head, signature },  // a tagOpen at an operand position that begins type parameters
-  rawText?: [{ tags: ['style'], token: 'StyleBody', ignoreCase?: true, embed?: { style: 'source.css' } }],
+  rawText?: [{ tags: ['style'], token: 'StyleBody', ignoreCase?: true, unlessBodyStarts?: seq(star(blank), '{'),
+               embed?: { style: 'source.css' } }],
+  tagStart?: oneOf('/', '>', '{', '$', '_', range('A', 'Z'), range('a', 'z')),  // one-unit class
+  textTokens?: [{ token: 'BlockComment' }, { token: 'LineComment', after: blank }],
 }
 ```
 
@@ -78,7 +89,24 @@ outside the region, so `</` and `/>` are tokens only where an element says so:
 
 `rawText` is a list of declarations, each in the shape of `MarkupConfig.rawText` plus its own
 `ignoreCase` (an evaluated dialect has a case-insensitive `<script>` and an exact-case `<style>`).
-`embed` is highlighter data; the lexer does not read it. Planned fields: `textTokens`, `tagStart`.
+`embed` is highlighter data; the lexer does not read it. `unlessBodyStarts` is a pattern tested at
+the body's first unit: when it matches, the element has ordinary children (the evaluated dialect
+reads `<style>{css}</style>` as an element with a hole, and `<style> /* c */ {x}` as CSS: blanks
+are skipped, comments are not). `tagStart` is a one-unit class (`MarkupConfig.tagOpenAfter` is
+the same fact for a markup file): a `tagOpen` opens a tag, from code, in the children or after
+an attribute's `=`, only when the unit after it is in the class. In the children any other
+`tagOpen` is text: the run is the text token's class runs joined by such `tagOpen`s, so the text
+token's own pattern no longer describes the whole run (its class excludes the `tagOpen`). In code
+it is lexed by the ordinary scan (an operator).
+
+`textTokens` (needs `text`) are scan tokens tried, in order, in the children before the text run;
+they keep their ordinary meaning in code (the same `BlockComment` is a comment in both). A text run
+stops where one of them matches: at the run's first unit always, further in the run only right
+after a unit of its `after` class when it has one. So `a //b` is text then a comment, `a//b` and
+`https://x` are text, and `//` right after a tag, a hole or another comment is a comment (a new run
+starts there; the evaluated dialect keeps `/* a */// b` as text, its block comment not ending the
+run). A skip token is skipped, as in code; any other is pushed. An unterminated `/*` matches
+nothing, so it is text.
 
 ## Frame encoding
 
@@ -107,7 +135,9 @@ ordinary scan (code children: whitespace, comments, strings and every other toke
 with `tagClose` (not a self-close) and its name is one of a `rawText` declaration's `tags` (in
 any case when that declaration has `ignoreCase`), the lexer finds the first
 `tagOpen + closeMarker + name` after the tag (case-insensitively under `ignoreCase`), pushes a
-raw frame, pushes ONE token of the declaration's `token` over the body, and pops the frame. An
+raw frame, pushes ONE token of the declaration's `token` over the body, and pops the frame
+(unless the declaration's `unlessBodyStarts` matches at the body's start: then the children are
+lexed as usual). An
 empty body is no token; with no close tag the body runs to the end of the file. The close tag
 is then lexed in the children as any close tag. A dynamic tag (`<{x}>`) has no name token and is
 never raw.
@@ -151,6 +181,89 @@ two behaviours on a toy where they differ (an element right after a value).
   group as code; if the token after `)` is one of `then` (`=>`, `:`) it keeps those tokens,
   otherwise, or on a lex error inside the group (in every lexing mode), it rewinds to an element.
   The rewind is bounded by one bracket group and is deterministic.
+
+## Directives
+
+A directive is a children item `@if (head) { children }`, optionally followed by continuations
+(`@else if (…) { … }`, `@else { … }`, `@empty { … }`, `@catch (e) { … }`, `@pending { … }`).
+Its head is code, its body is children closed by the hole closer. Nothing about it is
+dialect-specific in the lexer; every literal comes from the grammar.
+
+**Declaration: none.** The directive table is DERIVED, as the entry is, by
+`directivesOf(grammar, region)` (`src/grammar-analysis.ts`) and recorded by `lexSpecOf` as
+`elementDirectives` (absent when there is none, so the lexer is byte-identical); a region without
+`text` has none (code children lex a directive as code):
+- the CHILDREN items are the items repeated between an element arm's `tagClose` and its
+  `closeTag` (the `many(Child)` there), and the items of every directive BODY;
+- an OPENER is a literal that begins a children item (rule references at the item's head
+  expanded), other than `tagOpen` and `hole.open`, with its REQUIRED NEXT: every literal sequence
+  that must follow it in its arm, up to the head's `(` or the body's `hole.open` (`@if` → `(`;
+  `@for` → `await (` or `(`; `@try` → `{`);
+- the HEAD is that `( … )` group; the BODY is a reference to a rule whose every arm is
+  `hole.open … hole.close`, and it must follow the head's `)` (or the opener sequence);
+- a CONTINUATION is a literal that begins the items after a body (`opt(Else)`, `opt('@empty',
+  Body)`), with its own required next (`@else` → `if (` or `{`); it is itself a directive arm;
+- a CODE BLOCK is a children item whose literal ends with `hole.open` and whose last item is
+  `hole.close` (`@{ … }`).
+The table the lexers receive: `{ openers, continuations: { lit, nexts: string[][] }[], blocks:
+string[] }`. The text dialect's, printed by its gate: openers `@if (`, `@for await ( | (`,
+`@try {`; continuations `@else if ( | {`, `@empty {`, `@pending {`, `@catch (`; block `@{`.
+
+**Refusals, loud.** An arm the lexer could not delimit in text is REFUSED by name with its reason
+(`directivesOf(…).refused`), and `lexSpecOf` throws listing every one: a grammar author never gets
+a directive silently lexed as text. The reasons, each a row of `test/text-dialect.ts` on a toy:
+
+| arm | witness | reason |
+|---|---|---|
+| a bare head | `['@if', Expr, Body]`: `@if x {` | an expression stands between the opener and its body: the body's `{` cannot be told from one inside the head (an object literal, a block-bodied arrow) |
+| an opener followed by an expression | `['@case', Expr, ':']`: `@case x:` | the same: no literal says where its item ends |
+| an opener with nothing after it | `['@here']` | no head and no body |
+| a head not followed by a body | `['@if', '(', Expr, ')', Text]` | the head's `)` is not followed by a body |
+
+**The opener test** at a unit q of the children (a run's start, or inside a run: `a@if (` ends the
+text before the `@`): the opener literal at q; when it ends with an identifier unit, the unit after
+it is none (`@iffy` is text); then code trivia (whitespace and the grammar's skip tokens); then one
+of the required next sequences, each literal separated by trivia, a word literal again not running
+on (`@for awaits (` is text). Any other `@word` is text. Its read, to the unit after the last
+literal it compared, is recorded in `lxLookEnd`: a comment in the trivia can reach the end of the
+file. The opener token itself is then lexed by the ordinary scan inside the new frame (a word
+literal is a keyword of a scanned token, `AtWord` in the fixture, as `if` is of the identifier).
+
+**Frame kind and encoding.** An element frame (kind 2) with sub-state 3, the one free sub-state:
+- HEAD: the count field (bits 4 and up) holds `p + 1`, `p` the paren-head stack depth when the
+  head began. The head is lexed by the ordinary scan as code (`prevIsValue` treats sub-state 3 as
+  code, not as a tag). A `hole.open` at depth `p` is the body's opener (count field 0); a deeper
+  one pushes an element hole. Since the derivation admits only a parenthesised head or none, every
+  `{`, `[` or `(` inside the head is at depth > `p`: `@if ({a}.a) {` and `@if ([{a}][0]) {` open
+  their body at the `{` after the `)` (rows).
+- BODY: count field 0. Lexed as children (text, text tokens, holes, openers, tags), except that
+  a `tagOpen` pushes a NEW element frame (`6`, as an entry from code does), and a close tag pushes
+  a close-tag frame (`10`) that pops at its `tagClose`. So a stray `</q>` in a body is lexed as a
+  close tag, its name and `>`, and the body goes on; the PARSER then sees a close tag where the
+  body admits only children items and rejects (a must-reject row). A `hole.close` at count 0 is the
+  body's closer: its token is pushed inside the frame, then the CONTINUATION test runs after it
+  (blanks, the literal, its required next; read recorded): on a match the frame returns to HEAD
+  with the current paren depth and the ordinary scan lexes the continuation; otherwise the frame
+  pops and the rest is the enclosing children's (`@if (a) {y} @else x`: ` @else x` is text).
+- A code block opener pushes an element hole (kind 1) before its token; its closer at brace count
+  0 pops it, as any hole.
+A grammar without directives keeps sub-states 0-2 only; its lexer is byte-identical.
+
+**Entry / exit.** Entered only from the children (an element's or a body's): a directive is a
+children item. Exit: the body's closer with no continuation after it. In code an opener literal is
+an ordinary token; a directive at statement level in code would need its own entry rule (as an
+element there does), which is the line-start class.
+
+**Relex anchors.** Unchanged rule: the frame is pushed before the opener token and popped after
+the last body's closer, so every directive token records depth > 0 and the token after the frame
+records the enclosing frame's depth (> 0: a directive lives in children). The two reads past a
+token's end + 1, the opener test and the continuation test, are recorded in `lxLookEnd`, so a
+comment left open in their trivia (`@if /* (`) flags every token after it.
+
+**What stays undecidable** (lexer-local): the refused arms above (a bare head, `@case x:`); a
+directive at statement level in code (the line-start entry class); an `@word (` in text that the
+author meant as text (the evaluated dialect lexes it as a directive too, so the derived test agrees
+with it).
 
 ## What a lexer-local region cannot decide
 
@@ -212,6 +325,15 @@ stands on it at the depth before its own push, so an entry both lexes pushed aft
 divergence (`if (q)` edited to `ifx (q)`: a control head in one, not in the other) is never taken
 as shared.
 
+Reads of the region's own decisions: a tag start reads the unit after the `tagOpen` (within the
+`tagOpen` token's end + 1, or inside the text token that goes on over it); a raw-text body
+condition reads the body's leading blanks and one unit after them, all inside the element frame
+(the element's close tag, or the end of the file, comes after them): neither is recorded. A text
+token's attempt is a scan matcher's attempt and is recorded as one (its `readEndWalk` end, its
+over-read): an unterminated `/*` in text reads to the end of the file, past the element's close
+tag, so every token after it carries flag 32 (`<p>q /*</p>; z = 1;` with `*/` inserted at the
+end: without the record a restart at `1` keeps `</p>` as a close tag).
+
 Per state: a frame is pushed before its opener and popped after its closer, so the opener and
 everything inside record depth > 0 and the token after the closer may record 0. Raw text:
 the raw token is inside its frame, the close tag outside; the raw token's end is decided by the
@@ -232,14 +354,22 @@ children with directives, dynamic tags and an element right after a value): edit
    token up to `tagOpen + closeMarker + name`, pushed inside the frame; the close tag is lexed
    after the pop. Per declaration: tag names, token kind, `ignoreCase`. Empty body = no token;
    no close tag = to the end of the file; only an open tag ended by `tagClose` enters it.
+   `unlessBodyStarts` per declaration: a pattern tested at the body's first unit; when it
+   matches, no raw frame (the children are lexed as usual).
 2. The tag-name span: the index of the token right after `tagOpen` in an open tag, kept per
    open tag, so the tag's end can test it against the raw-text set.
 3. Optional children text: absent means children are lexed as code, with tags, close tags and
    holes still tracked; a `tagOpen` in the children always opens a nested tag.
 4. Per-state ordered token lists tried before the ordinary scan: `tagTokens` (in a tag, outside
-   holes and type arguments) and `textTokens` (planned: comments in text, directive openers).
-5. The text-run stop test: the text token's class, plus a tag-start test (`tagOpen` followed by
-   a declared class), plus directive openers; more than a character class.
+   holes and type arguments) and `textTokens` (in the children, before the text run; a text
+   token's `after` class tested on the unit before it inside a run; its failed attempt and its
+   over-read recorded as the scan matcher's).
+5. The text-run stop test: the text token's class, plus the tag-start test (a `tagOpen` stops the
+   run only when the unit after it is in `tagStart`; otherwise the run goes on over it), plus
+   the text tokens (a run stops before one that matches, `after` permitting), plus the
+   directive openers (the opener test); more than a character class. The tag-start test
+   also gates every other place a `tagOpen` opens a tag: the entry from code and the nested
+   element after `=` in a tag.
 6. Entry as a switch on the derived value: `operand` (`!prevIsValue()` + the `typeParameters`
    vetoes) or `always`.
 7. A root region that never pops, with the depth counted excluding it.
@@ -249,6 +379,14 @@ children with directives, dynamic tags and an element right after a value): edit
    decides the `<` and reads up to the unit after it (its trailing lookahead), `overTrigger` /
    `examinedUnits` of `head`; the portable relex checks it with the other reads.
 9. An error inside an undecided type-parameter signature is the rewind verdict in every mode.
+10. Directives (`elementDirectives`, derived): the opener and continuation tables (literal, word
+   flag, required literal sequences), the code-block literals; the opener test (literal, word
+   boundary, trivia = whitespace + skip tokens, a required sequence) in the children at a run's
+   start and inside a run (a run stops before an opener); sub-state 3 with the count field = head
+   paren depth + 1 (HEAD, code) or 0 (BODY, children: a tag pushes its own frame `6`, a close tag
+   `10`); the body opener at the head's own paren depth; after a body's closer the continuation
+   test (leading blanks allowed), back to HEAD or pop; both tests' reads recorded (the relex read
+   rule); `prevIsValue` treats sub-state 3 as code.
 
 ## What the generators need
 
@@ -261,7 +399,12 @@ children with directives, dynamic tags and an element right after a value): edit
   Monarch `nextEmbedded` at the open tag's end and `@pop` at the close tag.
 - Directives in children: keyword patterns inside the children, from the same opener literals
   (keyword + required next literal), and continuation keywords after a body.
-- `tagStart`: the tag-open pattern requires the declared next-character class.
+- `textTokens`: the children's patterns include the text tokens before the text pattern, and the
+  text pattern stops before them (`(?!/\*)`, `//` only after a blank).
+- `tagStart`: the tag-open pattern requires the declared next-character class; the children's
+  text pattern also covers a `tagOpen` not followed by it.
+- `unlessBodyStarts`: the raw-text `begin` requires the body not to start with the pattern (a
+  negative lookahead after the open tag), and the element otherwise takes the children patterns.
 - Root region: today's markup TextMate output is that case; nothing changes unless `html.ts`
   moves.
 
@@ -272,21 +415,17 @@ children with directives, dynamic tags and an element right after a value): edit
 | JSX / TSX | entered from code at an operand position; `<` is also an operator | text + holes + elements | stop characters `{ < > }` | none |
 | a TSX template dialect (evaluated as data) | code; an element is render output only at a line start or after `;` | text + holes + elements + directives (`@if (`, `@for (`, `@for await (`, `@switch (`, `@try {`; continuations `@else`, `@empty`, `@case X:`, `@default:`, `@pending`, `@catch (`) + `@{ … }` code blocks, whose bodies are code; `//` and `/* */` comments in text | at every index of a text run: `<` followed by `/ > { @ $ _ A-Z a-z`, `{`, `}`, and a directive opener (`@`, a keyword, its required next character); any other `@word` is text | `<script>` (case-insensitive) and `<style>` (exact case); raw only when the body does not start with `{` |
 | `test/fixtures/elementdialect.ts` | code; `<` only opens tags | code: elements, directives, `{expr}`, strings | n/a | `<style>` (exact case) |
+| `test/fixtures/textdialect.ts` | code, at an operand position; `<` is also relational | text + holes + elements + comments | `<` before `/ > { $ _ A-Z a-z`, `{`, `}`, `/*`, `//` after a blank | `<script>` (any case); `<style>` (exact case) unless its body starts with `{` |
 | HTML (`html.ts`, markup mode) | the whole file is children (a root region) | text + elements + comments + raw text | `tagOpen` followed by `tagOpenAfter` | `<script>`, `<style>`, … case-insensitive, with embeds |
 | Vue / Svelte / Astro (not built) | root region | text + elements + holes + directives | as HTML plus the hole opener | `<script>` / `<style>` with `lang=` embeds |
 
-Directive openers are to be derived from the grammar: the literals that can begin a children
-item other than `tagOpen` and the hole opener, each with the literal that must follow it in that
-rule when there is one (`@if` `(`; `@try` `{`). A continuation literal (`@else`, `@empty`,
-`@catch`) is one that follows a directive body in its rule.
+Directive openers and continuations are derived from the grammar ("Directives").
 
 ## Owed
 
 - The portable lexers' frames for JSX / TSX and the dialect (the list above). Until then
   `buildIR` refuses `elements`, and `guard-lead` / `predictive-first` skip the JSX grammars.
-- Text tokens / directive openers / tag start, the root region: the build order above.
-- A raw-text body condition (the evaluated dialect reads `<style>{css}</style>` as an element
-  with a hole, not raw text): not declared; it belongs with the TSRX-shaped fixture.
+- The root region: the build order above.
 - Re-measuring the five undecidable JSX shapes on a larger TSX corpus.
 - The tm-dialect expected-fail rows are TextMate-side (children repository, dynamic tags, the
   `<style>` embed, React vocabulary); they move with the generators.

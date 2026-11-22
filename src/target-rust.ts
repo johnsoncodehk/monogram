@@ -15,7 +15,7 @@ import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, t
 import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
-import { ATOM, COMPARISON, findAnyName, stopBytes, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
+import { ATOM, COMPARISON, findAnyName, stopBytes, isList, isNum, isRec, isRecList, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 import type {
@@ -109,7 +109,19 @@ macro_rules! cand {
     ($p:ident, $sb:ident, $ck:ident, $save:ident, $best:ident, $best_pos:ident, $rid:expr, $c:expr, $more:block) => {
         if $c { $best = Some($p.finish($rid, $sb, $p.off_at($save), $save)); $best_pos = $p.pos; $more $ck = $p.b.checkpoint(); } else { $p.scratch.truncate($sb); $p.b.restore($ck); } $p.back($save);
     };
+}
+/// A committed candidate (emit-portable.ts Commit; target-rust.ts commitBodyRs): \`$c\` from here;
+/// matched (\`undo_ne\`: and past its start), node \`$rid\` is returned after \`$set\` (a NUD's form, tail
+/// and capped flag), else what it did is undone to the checkpoint (\`clean\`: a clean failure left
+/// nothing to undo, so none is taken) and the statement after the macro runs.
+#[allow(unused_macros)]
+macro_rules! commit {
+    ($p:ident, $rid:expr, $c:expr, undo, { $($set:tt)* }) => {{ let m = $p.mark(); if $c { let n = $p.finish($rid, m.sb, $p.off_at(m.pos), m.pos); $($set)* return Some(n); } $p.reset(m); }};
+    ($p:ident, $rid:expr, $c:expr, undo_ne, { $($set:tt)* }) => {{ let m = $p.mark(); if $c && $p.pos > m.pos { let n = $p.finish($rid, m.sb, $p.off_at(m.pos), m.pos); $($set)* return Some(n); } $p.reset(m); }};
+    ($p:ident, $rid:expr, $c:expr, clean, { $($set:tt)* }) => {{ let save = $p.pos; let sb = $p.scratch.len(); if $c { let n = $p.finish($rid, sb, $p.off_at(save), save); $($set)* return Some(n); } }};
 }`;
+// A committed candidate's body in the building form: the \`commit!\` macro (as \`cand!\`: expanded in place).
+const commitBodyRs = (rid: number, cond: string, undo: boolean, nullable: boolean, set = '') => `commit!(self, ${rid}, ${cond}, ${nullable ? 'undo_ne' : undo ? 'undo' : 'clean'}, {${set}});`;
 // The typed-AST layer's form of a Guard over the token t: its parser keeps no lookahead mark, so
 // the second token is read directly. null: no guard.
 const astGuardRs = (g: Guard, t: string): string | null =>
@@ -1008,7 +1020,7 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
     openBest: (d) => `        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();\n        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(d)}`,
     cand: (d, i, cond) => candRs(d, i, cond, rid, markRs(d, i)),
     closeBest: '        self.pos = best_pos;\n        best',
-    commit: (_i, conds, cond, undo, nullable) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len();${undo ? ' let ck = self.b.checkpoint();' : ''} if ${cond}${nullable ? ' && self.pos > save' : ''} { return Some(self.finish(${rid}, sb, self.off_at(save), save)); }${undo ? ' self.back(save); self.scratch.truncate(sb); self.b.restore(ck);' : ''} }`, 'return None;'),
+    commit: (_i, conds, cond, undo, nullable) => commitRs(conds, `{ ${commitBodyRs(rid, cond, undo, nullable)} }`, 'return None;'),
     commitFail: '{ return None; }',
   });
 }
@@ -1107,7 +1119,7 @@ ${headUse}        loop {
   });
 }
 // A NUD that matched nothing: the state its frame leaves when no arm won (prattRule's nudClose).
-const NUD_FAIL_RS = '{ self.capped = false; self.form = 0; self.tail = false; return None; }';
+const NUD_FAIL_RS = '{ return self.nud_none(); }';
 function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
   const d = r.nudDispatch;
@@ -1156,7 +1168,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node, form,
     // tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (_i, conds) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len(); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; let n = self.finish(${rid}, sb, t.off as usize, save); self.form = 0; self.tail = false; return Some(n); }`, NUD_FAIL_RS, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len();${undo ? ' let ck = self.b.checkpoint();' : ''} if ${cond}${nullable ? ' && self.pos > save' : ''} { let n = self.finish(${rid}, sb, self.off_at(save), save); self.form = 0; self.tail = ${tail}; self.capped = ${capped}; return Some(n); }${undo ? ' self.back(save); self.scratch.truncate(sb); self.b.restore(ck);' : ''} }`, NUD_FAIL_RS),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitRs(conds, `{ ${commitBodyRs(rid, cond, undo, nullable, ` self.form = 0; self.tail = ${tail}; self.capped = ${capped}; `)} }`, NUD_FAIL_RS),
     commitPrefix: (_i, conds) => commitRs(conds, `if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
             let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
@@ -1256,6 +1268,7 @@ function docEditBlockRust(ir: ParserIR, shared: SharedAlgorithms): string {
   const segsInit = shapeB ? ', segs: Vec::new()' : '';
   const reuseInit = `${entriesInit}${segsInit}`;
   const relexFamily = `\n// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.relexFamily(ir)}\n`;
+  const reuseFamily = topReuse ? `\n// ---- reuse family: generated from src/reuse-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.reuseFamily(ir)}\n` : '';
   const initToks = 'scan_meta(&text)';
   const reuseShared = topReuse ? `
 fn count_live(nodes: &[Node], kids: &[i32], id: i32) -> usize {
@@ -1304,8 +1317,6 @@ fn shift_entry_meta(m: &mut EntryMeta, byte_delta: isize, tok_delta: isize) {
     m.off = (m.off as isize + byte_delta) as u32;
     m.end = (m.end as isize + byte_delta) as u32;
 }
-/// Per suffix entry, the tokens from its start to the old end, and their minimum. A suffix entry
-/// is adopted at pos when the new stream has that many tokens left.
 fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], old_root: i32) {
     let old = &nodes[old_root as usize];
     assert_eq!(entries.len(), old.kid_count as usize, "entry count vs root kids");
@@ -1364,23 +1375,12 @@ fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], 
     fn try_reuse_top(&mut self, old_root: B::H, old_entries: &[EntryMeta], new_toks: Vec<Tok>, byte_delta: isize, old_n: usize, prefix: usize, suffix: usize, validate: bool) -> Option<(B::H, usize)> {
         if validate { self.b.validate_entries(old_entries, old_root); }
         let old_kids = self.b.root_kids(old_root);
-        let mut prefix_len = 0usize;
-        while prefix_len < old_entries.len() {
-            if old_entries[prefix_len].ext as usize <= prefix { prefix_len += 1; } else { break; }
-        }
-        let mut suffix_start = old_entries.len();
-        let mut i = old_entries.len();
-        while i > prefix_len {
-            i -= 1;
-            if old_entries[i].tok_start as usize >= old_n - suffix { suffix_start = i; } else { break; }
-        }
+        let (prefix_len, suffix_start) = reuse_bounds(old_entries, prefix as isize, old_n as isize, suffix as isize);
+        let (prefix_len, suffix_start) = (prefix_len as usize, suffix_start as usize);
         let prefix_kids = old_kids[..prefix_len].to_vec();
         let suffix_cand = old_kids[suffix_start..].to_vec();
         let prefix_meta = &old_entries[..prefix_len];
         let suffix_meta = &old_entries[suffix_start..];
-        // min_rel: the tokens from the last suffix entry's start to the old end (entries ascend):
-        // with fewer tokens left than that, no entry can be adopted.
-        let min_rel: isize = suffix_meta.last().map_or(-1, |m| (old_n - m.tok_start as usize) as isize);
         self.toks = new_toks;
         self.pos = if prefix_len > 0 { prefix_meta[prefix_len - 1].tok_end as usize } else { 0 };
         self.scratch.clear();
@@ -1388,27 +1388,15 @@ fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], 
         let mut mid_meta: Vec<EntryMeta> = Vec::new();
         let rule_id = self.b.rule_id_of(old_root);
         let try_hit = |p: &mut Parser<'a, B>, mid: &[B::H], mid_meta: &[EntryMeta]| -> Option<(B::H, usize)> {
-            let left = p.toks.len() - p.pos;
-            if left > suffix { return None; }
-            if suffix_cand.is_empty() {
-                if left == 0 { return Some(p.finish_reuse(rule_id, &prefix_kids, mid, &suffix_cand, prefix_meta, mid_meta, suffix_meta, 0, byte_delta)); }
-                return None;
-            }
-            for hi in 0..suffix_meta.len() {
-                if old_n - suffix_meta[hi].tok_start as usize == left {
-                    return Some(p.finish_reuse(rule_id, &prefix_kids, mid, &suffix_cand, prefix_meta, mid_meta, suffix_meta, hi, byte_delta));
-                }
-            }
-            None
+            let at = reuse_adopt_at(suffix_meta, old_n as isize, suffix as isize, (p.toks.len() - p.pos) as isize);
+            if at < 0 { return None; }
+            Some(p.finish_reuse(rule_id, &prefix_kids, mid, &suffix_cand, prefix_meta, mid_meta, suffix_meta, at as usize, byte_delta))
         };
-        let passed = |p: &Parser<'a, B>| !suffix_cand.is_empty() && min_rel >= 0 && ((p.toks.len() - p.pos) as isize) < min_rel;
+        let passed = |p: &Parser<'a, B>| reuse_gave_up(suffix_meta, old_n as isize, (p.toks.len() - p.pos) as isize);
         if let Some(hit) = try_hit(self, &mid, &mid_meta) { return Some(hit); }
         if passed(self) { return None; }
         loop {
             if self.pos >= self.toks.len() {
-                if suffix_cand.is_empty() && self.pos == self.toks.len() {
-                    return Some(self.finish_reuse(rule_id, &prefix_kids, &mid, &suffix_cand, prefix_meta, &mid_meta, suffix_meta, 0, byte_delta));
-                }
                 return try_hit(self, &mid, &mid_meta);
             }
             self.look_reset();
@@ -1511,16 +1499,8 @@ impl<'a, B: Builder> Parser<'a, B> {
     fn try_reuse_seg(&mut self, old_root: B::H, old_segs: &[Seg], old_entries: &[EntryMeta], new_toks: Vec<Tok>, byte_delta: isize, old_n: usize, prefix: usize, suffix: usize, validate: bool) -> Option<(B::H, usize)> {
         if old_segs.is_empty() { return None; }
         if validate { self.b.validate_entry_segs(old_entries, old_segs, old_root); }
-        let mut prefix_len = 0usize;
-        while prefix_len < old_entries.len() {
-            if old_entries[prefix_len].ext as usize <= prefix { prefix_len += 1; } else { break; }
-        }
-        let mut suffix_start = old_entries.len();
-        let mut i = old_entries.len();
-        while i > prefix_len {
-            i -= 1;
-            if old_entries[i].tok_start as usize >= old_n - suffix { suffix_start = i; } else { break; }
-        }
+        let (prefix_len, suffix_start) = reuse_bounds(old_entries, prefix as isize, old_n as isize, suffix as isize);
+        let (prefix_len, suffix_start) = (prefix_len as usize, suffix_start as usize);
         let prefix_segs = &old_segs[..prefix_len];
         let suffix_cand = &old_segs[suffix_start..];
         let prefix_meta = &old_entries[..prefix_len];
@@ -1531,9 +1511,6 @@ impl<'a, B: Builder> Parser<'a, B> {
                 prefix_kids.push(self.b.root_kid_at(old_root, s.kid_start + j));
             }
         }
-        // min_rel: the tokens from the last suffix entry's start to the old end (entries ascend):
-        // with fewer tokens left than that, no entry can be adopted.
-        let min_rel: isize = suffix_meta.last().map_or(-1, |m| (old_n - m.tok_start as usize) as isize);
         self.toks = new_toks;
         self.pos = if prefix_len > 0 { prefix_meta[prefix_len - 1].tok_end as usize } else { 0 };
         self.scratch.clear();
@@ -1542,20 +1519,11 @@ impl<'a, B: Builder> Parser<'a, B> {
         let mut mid_meta: Vec<EntryMeta> = Vec::new();
         let rule_id = self.b.rule_id_of(old_root);
         let try_hit = |p: &mut Parser<'a, B>, mid_kids: &[B::H], mid_segs: &[Seg], mid_meta: &[EntryMeta]| -> Option<(B::H, usize)> {
-            let left = p.toks.len() - p.pos;
-            if left > suffix { return None; }
-            if suffix_cand.is_empty() {
-                if left == 0 { return Some(p.finish_reuse_seg(rule_id, prefix_segs, &prefix_kids, mid_segs, mid_kids, suffix_cand, prefix_meta, mid_meta, suffix_meta, old_root, 0, byte_delta)); }
-                return None;
-            }
-            for hi in 0..suffix_meta.len() {
-                if old_n - suffix_meta[hi].tok_start as usize == left {
-                    return Some(p.finish_reuse_seg(rule_id, prefix_segs, &prefix_kids, mid_segs, mid_kids, suffix_cand, prefix_meta, mid_meta, suffix_meta, old_root, hi, byte_delta));
-                }
-            }
-            None
+            let at = reuse_adopt_at(suffix_meta, old_n as isize, suffix as isize, (p.toks.len() - p.pos) as isize);
+            if at < 0 { return None; }
+            Some(p.finish_reuse_seg(rule_id, prefix_segs, &prefix_kids, mid_segs, mid_kids, suffix_cand, prefix_meta, mid_meta, suffix_meta, old_root, at as usize, byte_delta))
         };
-        let passed = |p: &Parser<'a, B>| !suffix_cand.is_empty() && min_rel >= 0 && ((p.toks.len() - p.pos) as isize) < min_rel;
+        let passed = |p: &Parser<'a, B>| reuse_gave_up(suffix_meta, old_n as isize, (p.toks.len() - p.pos) as isize);
         if let Some(hit) = try_hit(self, &mid_kids, &mid_segs, &mid_meta) { return Some(hit); }
         if passed(self) { return None; }
         ${hasHeadB ? `if prefix_len == 0 {
@@ -1573,20 +1541,12 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
         ` : ''}loop {
             if self.pos >= self.toks.len() {
-                if suffix_cand.is_empty() && self.pos == self.toks.len() {
-                    return Some(self.finish_reuse_seg(rule_id, prefix_segs, &prefix_kids, &mid_segs, &mid_kids, suffix_cand, prefix_meta, &mid_meta, suffix_meta, old_root, 0, byte_delta));
-                }
                 return try_hit(self, &mid_kids, &mid_segs, &mid_meta);
             }
             let sb = self.scratch.len();
             let (seg, meta) = match self.parse_loop_seg(sb) {
                 Some(pair) => pair,
-                None => {
-                    if suffix_cand.is_empty() && self.pos == self.toks.len() {
-                        return Some(self.finish_reuse_seg(rule_id, prefix_segs, &prefix_kids, &mid_segs, &mid_kids, suffix_cand, prefix_meta, &mid_meta, suffix_meta, old_root, 0, byte_delta));
-                    }
-                    return try_hit(self, &mid_kids, &mid_segs, &mid_meta);
-                }
+                None => return try_hit(self, &mid_kids, &mid_segs, &mid_meta),
             };
             let count = self.scratch.len() - sb;
             mid_kids.extend_from_slice(&self.scratch[sb..]);
@@ -1801,7 +1761,7 @@ struct AlignMeta { off: u32, end: u32, kid: u16, pd: u16, fd: u16, flags: u8, td
     AlignMeta { off: (m.off as isize + delta) as u32, end: (m.end as isize + delta) as u32, kid: m.kid, pd: m.pd, fd: m.fd, flags: m.flags, td: m.td }
 }
 struct Align { old_n: usize, new_n: usize, prefix: usize, suffix: usize, relexed: usize, reused: usize, stream_eq: Option<bool>, tree_eq: Option<bool> }
-${relexFamily}
+${relexFamily}${reuseFamily}
 fn compute_align_core(old_text: &str, old_toks: &[AlignMeta], new_text: &str, new_toks: &[AlignMeta]) -> (usize, usize, usize, usize) {
     let old_n = old_toks.len();
     let new_n = new_toks.len();
@@ -2416,6 +2376,10 @@ impl<'a, B: Builder> Parser<'a, B> {
     /// Start recording an entry's extent.
     #[inline(always)]
     fn look_reset(&mut self) { self.max_look = 0; self.peek_end = 0; }
+    /// A NUD that matched nothing, from its commit switch: the state its frame leaves then (prattRule's nudClose).
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn nud_none(&mut self) -> Option<Spanned<B::H>> { self.capped = false; self.form = 0; self.tail = false; None }
     #[inline(always)]
     fn mark(&self) -> Mark { Mark { pos: self.pos, sb: self.scratch.len(), ck: self.b.checkpoint() } }
     /// Undo everything since m: the position (as back), the scratch list and the builder.
@@ -5322,8 +5286,8 @@ pub fn parse_ast(src: &str) -> Option<AstRoot<'_>> {
 `;
 }
 
-const RS_ELEM: Record<ListTy, string> = { metas: 'AlignMeta', toks: 'Tok', bools: 'bool', depths: 'i64', edits: 'Edit' };
-const RS_SCALAR: Record<string, string> = { int: 'isize', lid: 'u16', depth: 'i64', bool: 'bool', meta: 'AlignMeta', tok: 'Tok' };
+const RS_ELEM: Record<Exclude<ListTy, `recs_${string}`>, string> = { metas: 'AlignMeta', toks: 'Tok', bools: 'bool', depths: 'i64', edits: 'Edit' };
+const RS_SCALAR: Record<string, string> = { int: 'isize', lid: 'u16', depth: 'i64', pos: 'u32', bool: 'bool', meta: 'AlignMeta', tok: 'Tok' };
 const RS_META: Record<MetaInt, string> = { off: 'u32', end: 'u32', kid: 'u16', pd: 'u16', fd: 'u16', td: 'u8' };
 const RS_TOK: Record<TokInt, string> = { off: 'u32', end: 'u32', kid: 'u16', lid: 'u16' };
 const RS_MK: Record<keyof MkMeta, string> = { off: 'u32', end: 'u32', kid: 'u16', nl: 'bool', fd: 'u16', pd: 'u16', lc: 'bool', lb: 'bool', hd: 'bool', td: 'u8' };
@@ -5343,9 +5307,13 @@ const rsBlock = (lines: string[]): string[] => lines.map((l) => RS_IND + l);
 const rustLowering: Lowering = {
   units: UNITS,
   ident: snake,
-  num: { int: 'isize', lid: 'u16', depth: 'i64' },
+  num: { int: 'isize', lid: 'u16', depth: 'i64', pos: 'u32' },
   type: (t, role, owned) => {
-    if (isList(t)) return role === 'param' ? `&[${RS_ELEM[t]}]` : `Vec<${RS_ELEM[t]}>`;
+    if (isList(t)) {
+      const el = isRecList(t) ? recName(t) : RS_ELEM[t];
+      return role === 'param' ? `&[${el}]` : `Vec<${el}>`;
+    }
+    if (isRec(t)) return recName(t);
     if (t === 'str') return role === 'param' || !owned ? '&str' : 'String';
     if (t === 'edit') return '&Edit';
     return RS_SCALAR[t];
@@ -5517,6 +5485,9 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
         ...s.state.map((n, i) => `${n} = lexed.${i + 1};`),
       ],
     },
+  },
+  record: {
+    field: (cx, r, _rec, f, ty) => cx.atom(`${rsWrap(r, ATOM)}.${snake(f)}`, ty === 'bool' ? 'bool' : 'int', cx.nat(ty)),
   },
 };
 

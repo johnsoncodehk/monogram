@@ -13,7 +13,7 @@ import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, typ
 import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
-import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
+import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isRec, isRecList, recName, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 
@@ -61,6 +61,18 @@ const commitSwGo = (t: string): CommitLowering => ({
   pick: (n) => `{ _c = ${n} }`,
   picked: (cases) => `\tswitch _c {\n${cases.map((c) => `\tcase ${c.n}:\n\t${c.stmt}`).join('\n')}\n\t}`,
 });
+// A committed candidate's body in a building form: `cond` from here; matched, `ret` of its node
+// (`fin` over the scratch start and the start position), else undone (`undo`: the checkpoint taken,
+// the undo to it, and where it keeps the scratch start and the position; none when the candidate
+// fails clean, so none is taken). The native engine's is its mark / reset (both within Go's inline
+// budget); the builder engine's mark is not inlined around the builder's Checkpoint, so its
+// checkpoint and undo stay printed in place (measured: +0.27% builder instructions with mark()).
+type GoUndo = { take: string; undo: string; sb: string; save: string };
+const UNDO_GO: GoUndo = { take: 'm := p.mark()', undo: 'p.reset(m)', sb: 'm.sb', save: 'm.pos' };
+const undoGoWc = (recv: string): GoUndo => ({ take: `save := p.pos; sb := len(p.scratch); ${arenaCkpt()}`, undo: `p.back(save); ${lostGoW(recv)}`, sb: 'sb', save: 'save' });
+const commitBodyGo = (cond: string, undo: GoUndo | null, nullable: boolean, fin: (sb: string, save: string) => string, ret: (n: string) => string) => (undo !== null
+  ? `{ ${undo.take}; if ${cond}${nullable ? ` && p.pos > ${undo.save}` : ''} { ${ret(fin(undo.sb, undo.save))} }; ${undo.undo} }`
+  : `{ save := p.pos; sb := len(p.scratch); if ${cond} { ${ret(fin('sb', 'save'))} } }`);
 // A committed candidate's statement: `body` when conds hold, then `fail` (unless body always returns).
 const commitGo = (conds: string[], body: string, fail: string, returns = false) =>
   `{ ${conds.length ? `if ${conds.join(' && ')} ${body.startsWith('{') ? body : `{ ${body} }`}` : body}${conds.length || !returns ? `; ${fail}` : ''} }`;
@@ -877,11 +889,14 @@ function engineMarkGo(recv: string): string {
   return `// mark: where a construct that may have to undo what it tries starts; ${recv === 'engine' ? 'reset undoes everything since (the position as back does, the scratch list and the arena).' : 'undoGoW undoes everything since.'}
 ${recv === 'engine'
   ? `func (p *engine) mark() mark { return mark{p.pos, len(p.scratch), len(p.nodes), len(p.kids)} }
-func (p *engine) reset(m mark) { p.back(m.pos); p.scratch = p.scratch[:m.sb]; p.nodes = p.nodes[:m.nb]; p.kids = p.kids[:m.kb] }`
+func (p *engine) reset(m mark) { p.back(m.pos); p.scratch = p.scratch[:m.sb]; p.nodes = p.nodes[:m.nb]; p.kids = p.kids[:m.kb] }
+// nudNone: a NUD that matched nothing, from its commit switch: the state its frame leaves then.
+func (p *engine) nudNone() int32 { p.capped = false; p.form = 0; p.tail = false; return -1 }`
   // Written so that it fits Go's inlining budget (cost 77 of 80). A reset method around the
   // builder's Restore cannot (cost 86 and more with every form tried), and a call where the undo
   // was inline would be added work on every failed branch, so the undo stays printed in place.
-  : `func (p *${recv}) mark() (m mark) { m.nb, m.kb = p.b.Checkpoint(); m.pos, m.sb = p.pos, len(p.scratch); return }`}`;
+  : `func (p *${recv}) mark() (m mark) { m.nb, m.kb = p.b.Checkpoint(); m.pos, m.sb = p.pos, len(p.scratch); return }
+func (p *${recv}) nudNone() (spanned, bool) { p.capped = false; p.form = 0; p.tail = false; return spanned{}, false }`}`;
 }
 // '>'-led composite operators (LexIdPlan.gtComps): the lexer scans every '>' alone. gtOp reads the
 // operator at ts[i]: a lone '>' extends over each adjacent single-character punct token after it
@@ -951,7 +966,7 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
     cand: (d, i, cond) => candGo(d, i, cond, `best = ${fin}; bestPos = p.pos;${markGo(d, i)} nb = len(p.nodes); kb = len(p.kids)`, lostGo),
     closeBest: '\tp.pos = bestPos\n\treturn best',
     commitPeek: '\t_ft := p.peek()',
-    commit: (_i, conds, cond, undo, nullable) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch);${undo ? ' nb := len(p.nodes); kb := len(p.kids);' : ''} if ${cond}${nullable ? ' && p.pos > save' : ''} { return ${fin} };${undo ? ` p.back(save); ${lostGo}` : ''} }`, 'return -1'),
+    commit: (_i, conds, cond, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, (sb, save) => `p.finish(${ruleIdOf(ar, r.name)}, ${sb}, p.offAt(${save}), ${save})`, (n) => `return ${n}`), 'return -1'),
     commitFail: '{ return -1 }',
   });
 }
@@ -1099,13 +1114,13 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   const lost = lostGo;
   const fin = `p.finish(${rid}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart))`;
   const B = goPrattBase(r, (ws) => `!_inW(${ws}, p.headLeafText(left))`);
-  const fail = '{ p.capped = false; p.form = 0; p.tail = false; return -1 }';
+  const fail = '{ return p.nudNone() }';
   const L: PrattLowering = {
     ...B,
     // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node, form,
     // tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (_i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; n := p.finish(${rid}, sb, int(t.Off), save); p.form = 0; p.tail = false; return n }`, fail, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch);${undo ? ' nb := len(p.nodes); kb := len(p.kids);' : ''} if ${cond}${nullable ? ' && p.pos > save' : ''} { n := p.finish(${rid}, sb, p.offAt(save), save); p.form = 0; p.tail = ${tail}; p.capped = ${capped}; return n };${undo ? ` p.back(save); ${lost}` : ''} }`, fail),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, (sb, save) => `p.finish(${rid}, ${sb}, p.offAt(${save}), ${save})`, (n) => `n := ${n}; p.form = 0; p.tail = ${tail}; p.capped = ${capped}; return n`), fail),
     commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \t\tp.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
@@ -1253,6 +1268,7 @@ function docEditBlockGo(ir: ParserIR, shared: SharedAlgorithms): string {
   const shapeB = topReuse?.kind === 'B';
   const hasHeadB = !!(shapeB && topReuse.kind === 'B' && topReuse.hasHead);
   const relexFamily = `\n// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.relexFamily(ir)}\n`;
+  const reuseFamily = topReuse ? `\n// ---- reuse family: generated from src/reuse-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.reuseFamily(ir)}\n` : '';
   const editBody = goEditBody('\t\td.root = -1', true);
   const parseFresh = `\td.root = p.parse(d.text, toksFromMeta(d.text, d.toks))`;
   const reuseFns = topReuse ? `
@@ -1319,22 +1335,11 @@ func (p *engine) tryReuseTop(oldRoot int32, oldEntries []EntryMeta, newText stri
 	old := p.nodes[oldRoot]
 	oldKids := make([]int32, old.KidCount)
 	for i := uint32(0); i < old.KidCount; i++ { oldKids[i] = p.kids[old.KidStart+i] }
-	prefixLen := 0
-	for prefixLen < len(oldEntries) {
-		if oldEntries[prefixLen].Ext <= prefix { prefixLen++ } else { break }
-	}
-	suffixStart := len(oldEntries)
-	for i := len(oldEntries) - 1; i >= prefixLen; i-- {
-		if oldEntries[i].TokStart >= oldN-suffix { suffixStart = i } else { break }
-	}
+	prefixLen, suffixStart := reuseBounds(oldEntries, prefix, oldN, suffix)
 	prefixKids := oldKids[:prefixLen]
 	suffixCand := oldKids[suffixStart:]
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
-	// minRel: the tokens from the last suffix entry's start to the old end (entries ascend, so the
-	// fewest of any entry): with fewer tokens left than that, no entry can be adopted.
-	minRel := -1
-	if len(suffixMeta) > 0 { minRel = oldN - suffixMeta[len(suffixMeta)-1].TokStart }
 	p.src = newText
 	p.toks = toksFromMeta(newText, newMeta)
 	if prefixLen > 0 { p.pos = prefixMeta[prefixLen-1].TokEnd } else { p.pos = 0 }
@@ -1376,22 +1381,14 @@ func (p *engine) tryReuseTop(oldRoot int32, oldEntries []EntryMeta, newText stri
 		return int32(len(p.nodes) - 1), len(prefixKids) + len(adopted)
 	}
 	tryHit := func() (int32, int, bool) {
-		if len(p.toks)-p.pos > suffix { return -1, 0, false }
-		if len(suffixCand) == 0 {
-			if p.pos == len(p.toks) { r, n := finishHit(0); return r, n, true }
-			return -1, 0, false
-		}
-		for i := range suffixMeta {
-			if oldN-suffixMeta[i].TokStart == len(p.toks)-p.pos { r, n := finishHit(i); return r, n, true }
-		}
+		if at := reuseAdoptAt(suffixMeta, oldN, suffix, len(p.toks)-p.pos); at >= 0 { r, n := finishHit(at); return r, n, true }
 		return -1, 0, false
 	}
-	passed := func() bool { return len(suffixCand) > 0 && minRel >= 0 && len(p.toks)-p.pos < minRel }
+	passed := func() bool { return reuseGaveUp(suffixMeta, oldN, len(p.toks)-p.pos) }
 	if r, n, ok := tryHit(); ok { return r, n }
 	if passed() { return -1, 0 }
 	for {
 		if p.pos >= len(p.toks) {
-			if len(suffixCand) == 0 && p.pos == len(p.toks) { return finishHit(0) }
 			if r, n, ok := tryHit(); ok { return r, n }
 			return -1, 0
 		}
@@ -1434,14 +1431,7 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMet
 	if oldRoot < 0 || len(oldSegs) == 0 { return -1, 0 }
 	if validate { p.assertEntriesVsSegs(oldEntries, oldSegs, oldRoot) }
 	old := p.nodes[oldRoot]
-	prefixLen := 0
-	for prefixLen < len(oldEntries) {
-		if oldEntries[prefixLen].Ext <= prefix { prefixLen++ } else { break }
-	}
-	suffixStart := len(oldEntries)
-	for i := len(oldEntries) - 1; i >= prefixLen; i-- {
-		if oldEntries[i].TokStart >= oldN-suffix { suffixStart = i } else { break }
-	}
+	prefixLen, suffixStart := reuseBounds(oldEntries, prefix, oldN, suffix)
 	prefixSegs := oldSegs[:prefixLen]
 	suffixCand := oldSegs[suffixStart:]
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
@@ -1450,10 +1440,6 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMet
 	for _, s := range prefixSegs {
 		for i := 0; i < s.KidCount; i++ { prefixKids = append(prefixKids, p.kids[old.KidStart+uint32(s.KidStart+i)]) }
 	}
-	// minRel: the tokens from the last suffix entry's start to the old end (entries ascend, so the
-	// fewest of any entry): with fewer tokens left than that, no entry can be adopted.
-	minRel := -1
-	if len(suffixMeta) > 0 { minRel = oldN - suffixMeta[len(suffixMeta)-1].TokStart }
 	p.src = newText
 	p.toks = toksFromMeta(newText, newMeta)
 	if prefixLen > 0 { p.pos = prefixMeta[prefixLen-1].TokEnd } else { p.pos = 0 }
@@ -1527,17 +1513,10 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMet
 		return int32(len(p.nodes) - 1), len(prefixSegs) + len(adoptedSegs)
 	}
 	tryHit := func() (int32, int, bool) {
-		if len(p.toks)-p.pos > suffix { return -1, 0, false }
-		if len(suffixCand) == 0 {
-			if p.pos == len(p.toks) { r, n := finishHit(0); return r, n, true }
-			return -1, 0, false
-		}
-		for i := range suffixMeta {
-			if oldN-suffixMeta[i].TokStart == len(p.toks)-p.pos { r, n := finishHit(i); return r, n, true }
-		}
+		if at := reuseAdoptAt(suffixMeta, oldN, suffix, len(p.toks)-p.pos); at >= 0 { r, n := finishHit(at); return r, n, true }
 		return -1, 0, false
 	}
-	passed := func() bool { return len(suffixCand) > 0 && minRel >= 0 && len(p.toks)-p.pos < minRel }
+	passed := func() bool { return reuseGaveUp(suffixMeta, oldN, len(p.toks)-p.pos) }
 	if r, n, ok := tryHit(); ok { return r, n }
 	if passed() { return -1, 0 }
 	${hasHeadB ? `if prefixLen == 0 {
@@ -1555,14 +1534,12 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMet
 	}
 	` : ''}for {
 		if p.pos >= len(p.toks) {
-			if len(suffixCand) == 0 && p.pos == len(p.toks) { return finishHit(0) }
 			if r, n, ok := tryHit(); ok { return r, n }
 			return -1, 0
 		}
 		sb := len(p.scratch)
 		seg, m, ok := p.parseLoopSeg(sb)
 		if !ok {
-			if len(suffixCand) == 0 && p.pos == len(p.toks) { return finishHit(0) }
 			if r, n, hit := tryHit(); hit { return r, n }
 			return -1, 0
 		}
@@ -1665,7 +1642,7 @@ type Align struct {
 	StreamEq *bool \`json:"streamEq,omitempty"\`
 	TreeEq   *bool \`json:"treeEq,omitempty"\`
 }
-${relexFamily}
+${relexFamily}${reuseFamily}
 func computeAlignCore(oldText string, oldToks []alignMeta, newText string, newToks []alignMeta) (oldN, newN, prefix, suffix int) {
 	oldN, newN = len(oldToks), len(newToks)
 	for prefix < oldN && prefix < newN {
@@ -1770,7 +1747,7 @@ function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
     cand: (d, i, cond) => candGo(d, i, cond, `best = ${fin}; found = true; bestPos = p.pos;${markGo(d, i)} ${arenaMark()}`, lostGoW(recv)),
     closeBest: '\tp.pos = bestPos\n\treturn best, found',
     commitPeek: '\t_ft := p.peek()',
-    commit: (_i, conds, cond, undo, nullable) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch);${undo ? ` ${arenaCkpt()};` : ''} if ${cond}${nullable ? ' && p.pos > save' : ''} { return ${fin}, true };${undo ? ` p.back(save); ${lostGoW(recv)}` : ''} }`, 'return spanned{}, false'),
+    commit: (_i, conds, cond, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? undoGoWc(recv) : null, nullable, (sb, save) => `p.finishW(${ruleIdOf(ar, r.name)}, ${sb}, p.offAt(${save}), ${save})`, (n) => `return ${n}, true`), 'return spanned{}, false'),
     commitFail: '{ return spanned{}, false }',
   });
 }
@@ -1871,11 +1848,11 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
   const lost = lostGoW(recv);
   const fin = `p.finishW(${rid}, sb, int(left.off), int(left.tokStart))`;
   const B = goPrattBase(r, (ws) => `!p.nllBlockedW(${ws}, left)`);
-  const fail = '{ p.capped = false; p.form = 0; p.tail = false; return spanned{}, false }';
+  const fail = '{ return p.nudNone() }';
   const L: PrattLowering = {
     ...B,
     commitLeaf: (_i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; n := p.finishW(${rid}, sb, int(t.Off), save); p.form = 0; p.tail = false; return n, true }`, fail, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch);${undo ? ` ${arenaCkpt()};` : ''} if ${cond}${nullable ? ' && p.pos > save' : ''} { n := p.finishW(${rid}, sb, p.offAt(save), save); p.form = 0; p.tail = ${tail}; p.capped = ${capped}; return n, true };${undo ? ` p.back(save); ${lost}` : ''} }`, fail),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? undoGoWc(recv) : null, nullable, (sb, save) => `p.finishW(${rid}, ${sb}, p.offAt(${save}), ${save})`, (n) => `n := ${n}; p.form = 0; p.tail = ${tail}; p.capped = ${capped}; return n, true`), fail),
     commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
@@ -2214,30 +2191,11 @@ ${topReuse
   const tryReuseTopW = shapeA
     ? `
 func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, newText string, newMeta []alignMeta, byteDelta, oldN, prefix, suffix int) (root int32, newEntries []EntryMeta, newHs []int32, reused int, ok bool) {
-	prefixLen := 0
-	for prefixLen < len(oldEntries) {
-		if oldEntries[prefixLen].Ext <= prefix {
-			prefixLen++
-		} else {
-			break
-		}
-	}
-	suffixStart := len(oldEntries)
-	for i := len(oldEntries) - 1; i >= prefixLen; i-- {
-		if oldEntries[i].TokStart >= oldN-suffix {
-			suffixStart = i
-		} else {
-			break
-		}
-	}
+	prefixLen, suffixStart := reuseBounds(oldEntries, prefix, oldN, suffix)
 	prefixKids := append([]int32(nil), oldHs[:prefixLen]...)
 	suffixCand := append([]int32(nil), oldHs[suffixStart:]...)
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
-	// minRel: the tokens from the last suffix entry's start to the old end (entries ascend, so the
-	// fewest of any entry): with fewer tokens left than that, no entry can be adopted.
-	minRel := -1
-	if len(suffixMeta) > 0 { minRel = oldN - suffixMeta[len(suffixMeta)-1].TokStart }
 	p := &parserW{cursor: cursor{toks: toksFromMeta(newText, newMeta)}, src: newText, b: b, drops: dropsOf(b), scratch: nil}
 	if prefixLen > 0 {
 		p.pos = prefixMeta[prefixLen-1].TokEnd
@@ -2284,33 +2242,19 @@ func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, 
 		return scratch[0], outE, children, len(prefixKids) + len(adopted), true
 	}
 	tryHit := func() (int32, []EntryMeta, []int32, int, bool) {
-		if len(p.toks)-p.pos > suffix {
-			return 0, nil, nil, 0, false
-		}
-		if len(suffixCand) == 0 {
-			if p.pos == len(p.toks) {
-				return finishHit(0)
-			}
-			return 0, nil, nil, 0, false
-		}
-		for i := range suffixMeta {
-			if oldN-suffixMeta[i].TokStart == len(p.toks)-p.pos {
-				return finishHit(i)
-			}
+		if at := reuseAdoptAt(suffixMeta, oldN, suffix, len(p.toks)-p.pos); at >= 0 {
+			return finishHit(at)
 		}
 		return 0, nil, nil, 0, false
 	}
 	if r, e, hs, n, hit := tryHit(); hit {
 		return r, e, hs, n, true
 	}
-	if len(suffixCand) > 0 && minRel >= 0 && len(p.toks)-p.pos < minRel {
+	if reuseGaveUp(suffixMeta, oldN, len(p.toks)-p.pos) {
 		return 0, nil, nil, 0, false
 	}
 	for {
 		if p.pos >= len(p.toks) {
-			if len(suffixCand) == 0 && p.pos == len(p.toks) {
-				return finishHit(0)
-			}
 			if r, e, hs, n, hit := tryHit(); hit {
 				return r, e, hs, n, true
 			}
@@ -2338,7 +2282,7 @@ func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, 
 		if r, e, hs, n, hit := tryHit(); hit {
 			return r, e, hs, n, true
 		}
-		if len(suffixCand) > 0 && minRel >= 0 && len(p.toks)-p.pos < minRel {
+		if reuseGaveUp(suffixMeta, oldN, len(p.toks)-p.pos) {
 			return 0, nil, nil, 0, false
 		}
 	}
@@ -2352,22 +2296,7 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 	if len(oldSegs) == 0 {
 		return 0, nil, nil, nil, 0, false
 	}
-	prefixLen := 0
-	for prefixLen < len(oldEntries) {
-		if oldEntries[prefixLen].Ext <= prefix {
-			prefixLen++
-		} else {
-			break
-		}
-	}
-	suffixStart := len(oldEntries)
-	for i := len(oldEntries) - 1; i >= prefixLen; i-- {
-		if oldEntries[i].TokStart >= oldN-suffix {
-			suffixStart = i
-		} else {
-			break
-		}
-	}
+	prefixLen, suffixStart := reuseBounds(oldEntries, prefix, oldN, suffix)
 	prefixSegs := append([]Seg(nil), oldSegs[:prefixLen]...)
 	suffixCand := append([]Seg(nil), oldSegs[suffixStart:]...)
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
@@ -2378,10 +2307,6 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 			prefixKids = append(prefixKids, oldRootHs[s.KidStart+i])
 		}
 	}
-	// minRel: the tokens from the last suffix entry's start to the old end (entries ascend, so the
-	// fewest of any entry): with fewer tokens left than that, no entry can be adopted.
-	minRel := -1
-	if len(suffixMeta) > 0 { minRel = oldN - suffixMeta[len(suffixMeta)-1].TokStart }
 	p := &parserW{cursor: cursor{toks: toksFromMeta(newText, newMeta)}, src: newText, b: b, drops: dropsOf(b), scratch: nil}
 	if prefixLen > 0 {
 		p.pos = prefixMeta[prefixLen-1].TokEnd
@@ -2450,26 +2375,15 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 		return scratch[0], outSegs, outE, children, len(prefixSegs) + len(adoptedSegs), true
 	}
 	tryHit := func() (int32, []Seg, []EntryMeta, []int32, int, bool) {
-		if len(p.toks)-p.pos > suffix {
-			return 0, nil, nil, nil, 0, false
-		}
-		if len(suffixCand) == 0 {
-			if p.pos == len(p.toks) {
-				return finishHit(0)
-			}
-			return 0, nil, nil, nil, 0, false
-		}
-		for i := range suffixMeta {
-			if oldN-suffixMeta[i].TokStart == len(p.toks)-p.pos {
-				return finishHit(i)
-			}
+		if at := reuseAdoptAt(suffixMeta, oldN, suffix, len(p.toks)-p.pos); at >= 0 {
+			return finishHit(at)
 		}
 		return 0, nil, nil, nil, 0, false
 	}
 	if r, sg, e, hs, n, hit := tryHit(); hit {
 		return r, sg, e, hs, n, true
 	}
-	if len(suffixCand) > 0 && minRel >= 0 && len(p.toks)-p.pos < minRel {
+	if reuseGaveUp(suffixMeta, oldN, len(p.toks)-p.pos) {
 		return 0, nil, nil, nil, 0, false
 	}
 	${hasHeadB
@@ -2486,7 +2400,7 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 			if r, sg, e, hs, n, hit := tryHit(); hit {
 				return r, sg, e, hs, n, true
 			}
-			if len(suffixCand) > 0 && minRel >= 0 && len(p.toks)-p.pos < minRel {
+			if reuseGaveUp(suffixMeta, oldN, len(p.toks)-p.pos) {
 				return 0, nil, nil, nil, 0, false
 			}
 		}
@@ -2494,9 +2408,6 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 `
     : ''}for {
 		if p.pos >= len(p.toks) {
-			if len(suffixCand) == 0 && p.pos == len(p.toks) {
-				return finishHit(0)
-			}
 			if r, sg, e, hs, n, hit := tryHit(); hit {
 				return r, sg, e, hs, n, true
 			}
@@ -2505,9 +2416,6 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 		sb := len(p.scratch)
 		m, pok := p.parseLoopSegW(sb)
 		if !pok {
-			if len(suffixCand) == 0 && p.pos == len(p.toks) {
-				return finishHit(0)
-			}
 			if r, sg, e, hs, n, hit := tryHit(); hit {
 				return r, sg, e, hs, n, true
 			}
@@ -2522,7 +2430,7 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 		if r, sg, e, hs, n, hit := tryHit(); hit {
 			return r, sg, e, hs, n, true
 		}
-		if len(suffixCand) > 0 && minRel >= 0 && len(p.toks)-p.pos < minRel {
+		if reuseGaveUp(suffixMeta, oldN, len(p.toks)-p.pos) {
 			return 0, nil, nil, nil, 0, false
 		}
 	}
@@ -3070,7 +2978,7 @@ func SlimJSONWith(b *SlimBuilder, root int32) string {
 }
 
 const GO_TYPES: Record<Ty, string> = {
-  int: 'int', lid: 'uint16', depth: 'int', bool: 'bool', str: 'string', meta: 'alignMeta', tok: 'Tok', edit: 'Edit',
+  int: 'int', lid: 'uint16', depth: 'int', pos: 'int', bool: 'bool', str: 'string', meta: 'alignMeta', tok: 'Tok', edit: 'Edit',
   metas: '[]alignMeta', toks: '[]Tok', bools: '[]bool', depths: '[]int', edits: '[]Edit',
 };
 const GO_META: Record<MetaInt, string> = { off: 'int32', end: 'int32', kid: 'uint16', pd: 'uint16', fd: 'uint16', td: 'uint8' };
@@ -3090,8 +2998,8 @@ const goBlock = (lines: string[]): string[] => lines.map((l) => GO_IND + l);
 const goLowering: Lowering = {
   units: UNITS,
   ident: (n) => n,
-  num: { int: 'int', lid: 'uint16', depth: 'int' },
-  type: (t) => GO_TYPES[t],
+  num: { int: 'int', lid: 'uint16', depth: 'int', pos: 'int' },
+  type: (t) => (isRecList(t) ? `[]${recName(t)}` : isRec(t) ? recName(t) : GO_TYPES[t]),
   cast: (_cx, r, nat) => ({ ...r, c: `${nat}(${r.c})`, nat, prec: ATOM }),
   owns: false,
   spliceInline: true,
@@ -3228,6 +3136,9 @@ ${[...ones, ...wides].join('\n')}
       destructure: (_cx, s) => [`${s.ids.join(', ')} ${s.declare ? ':=' : '='} ${s.call}`],
       lexStep: (_cx, s) => [`${[s.pos, ...s.state].join(', ')} = lexFrom(${s.text.c}, ${s.pos}, ${[...s.state, `&${s.out}`].join(', ')}, 1)`],
     },
+  },
+  record: {
+    field: (cx, r, _rec, f, ty) => cx.atom(`${goWrap(r, ATOM)}.${exported(f)}`, ty === 'bool' ? 'bool' : 'int', cx.nat(ty)),
   },
 };
 

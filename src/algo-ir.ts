@@ -6,9 +6,13 @@
 // algorithm comes from the IR; a lowering only spells it.
 import { type TextUnits, utf8Of, unitLen } from './text-units.ts';
 
-export type Num = 'int' | 'lid' | 'depth';
-export type ListTy = 'metas' | 'toks' | 'bools' | 'depths' | 'edits';
-export type Ty = Num | 'bool' | 'str' | 'meta' | 'tok' | 'edit' | ListTy;
+// `pos`: a token index or text offset held in a record field (a lowering may store it narrow).
+export type Num = 'int' | 'lid' | 'depth' | 'pos';
+// A record a family declares (`RecordDecl`), and a list of such records.
+export type RecTy = `rec_${string}`;
+export type RecListTy = `recs_${string}`;
+export type ListTy = 'metas' | 'toks' | 'bools' | 'depths' | 'edits' | RecListTy;
+export type Ty = Num | 'bool' | 'str' | 'meta' | 'tok' | 'edit' | RecTy | ListTy;
 export type MetaInt = 'off' | 'end' | 'kid' | 'pd' | 'fd' | 'td';
 export type MetaFlag = 'nl' | 'lc' | 'lb' | 'hd';
 export type TokInt = 'off' | 'end' | 'kid' | 'lid';
@@ -35,6 +39,8 @@ export type Expr =
   | { k: 'editInt'; e: Expr; f: 'start' | 'end' }
   | { k: 'editText'; e: Expr }
   | { k: 'metaText'; text: Expr; m: Expr }
+  // A field of a record the family declares.
+  | { k: 'field'; e: Expr; f: string }
   | { k: 'substr'; s: Expr; a: Expr; b: Expr }
   | { k: 'lidOf'; s: Expr }
   | ({ k: 'mkMeta' } & MkMeta)
@@ -94,11 +100,19 @@ export interface Param { name: string; ty: Ty }
 // data or spelling is the target's), so `printFns` skips it.
 export interface Fn { name: string; doc: string; params: Param[]; ret: Ty[]; body: Stmt[]; inline?: boolean; cold?: boolean; extern?: boolean }
 export type CodeRange = [number, number];
+// A record type a family declares: its fields in declaration order. The lowering spells the
+// record's type and its field reads; a field's type is a number kind or bool.
+export interface RecordDecl { name: string; fields: { name: string; ty: Num | 'bool' }[] }
 export interface CharSet { name: string; ranges: CodeRange[] }
 
-export const ELEM: Record<ListTy, Ty> = { metas: 'meta', toks: 'tok', bools: 'bool', depths: 'depth', edits: 'edit' };
-export const isNum = (t: Ty): t is Num => t === 'int' || t === 'lid' || t === 'depth';
-export const isList = (t: Ty): t is ListTy => t in ELEM;
+export const ELEM: Record<Exclude<ListTy, RecListTy>, Ty> = { metas: 'meta', toks: 'tok', bools: 'bool', depths: 'depth', edits: 'edit' };
+export const isNum = (t: Ty): t is Num => t === 'int' || t === 'lid' || t === 'depth' || t === 'pos';
+export const isRec = (t: Ty): t is RecTy => t.startsWith('rec_');
+export const isRecList = (t: Ty): t is RecListTy => t.startsWith('recs_');
+export const isList = (t: Ty): t is ListTy => t in ELEM || isRecList(t);
+// The element type of a list type; the record name of a record or record-list type.
+export const elemOf = (t: ListTy): Ty => (isRecList(t) ? `rec_${t.slice(5)}` : ELEM[t]);
+export const recName = (t: RecTy | RecListTy): string => t.slice(t.indexOf('_') + 1);
 
 // Printed expression: `c` has native type `nat`. `prec` is the lowering's own binding strength
 // (the printer only compares it with ATOM, "never needs grouping"); `owned` marks values the
@@ -211,6 +225,13 @@ export interface Lowering {
   spliceInline?: boolean;
   // The token-stream constructs (metas, tokens, edits, lists) the relex family is written in.
   relex?: RelexLowering;
+  // Family-declared records (`RecordDecl`): `type` spells `rec_` / `recs_` types too.
+  record?: RecordLowering;
+}
+
+export interface RecordLowering {
+  // The read of field `f` (of type `ty`) of record `r`, a record of type `rec`.
+  field(cx: Cx, r: R, rec: string, f: string, ty: Num | 'bool'): R;
 }
 
 export interface RelexLowering {
@@ -259,12 +280,18 @@ class Printer implements Cx {
   private reassigned = new Set<string>();
   private sigs: Map<string, Fn>;
   private sets: Set<string>;
+  private recs: Map<string, RecordDecl>;
   private L: Lowering;
 
-  constructor(lowering: Lowering, fns: Fn[], sets: CharSet[]) {
+  constructor(lowering: Lowering, fns: Fn[], sets: CharSet[], records: RecordDecl[] = []) {
     this.L = lowering;
     this.sigs = new Map(fns.map((f) => [f.name, f]));
     this.sets = new Set(sets.map((c) => c.name));
+    this.recs = new Map(records.map((r) => [r.name, r]));
+  }
+
+  private checkTy(t: Ty): void {
+    if ((isRec(t) || isRecList(t)) && !this.recs.has(recName(t))) throw new Error(`algo-ir: undeclared record ${t}`);
   }
 
   private rx(): RelexLowering {
@@ -305,7 +332,7 @@ class Printer implements Cx {
       case 'at': {
         const l = this.expr(e.list), i = this.expr(e.i);
         if (!isList(l.ty)) throw new Error('algo-ir: at() on non-list');
-        const ty = ELEM[l.ty];
+        const ty = elemOf(l.ty);
         return { ...RX().index(l, this.coerceR(i, this.rx().index)), ty, nat: this.nat(ty) };
       }
       case 'metaInt': return RX().metaInt(this, this.expr(e.m), e.f);
@@ -315,6 +342,14 @@ class Printer implements Cx {
       case 'editInt': return RX().editInt(this, this.expr(e.e), e.f);
       case 'editText': return RX().editText(this, this.expr(e.e));
       case 'metaText': return RX().metaText(this, this.expr(e.text), this.expr(e.m));
+      case 'field': {
+        const r = this.expr(e.e);
+        if (!isRec(r.ty)) throw new Error(`algo-ir: field ${e.f} of non-record`);
+        const rec = recName(r.ty), fd = this.recs.get(rec)?.fields.find((x) => x.name === e.f);
+        if (!fd) throw new Error(`algo-ir: record ${rec} has no field ${e.f}`);
+        if (!this.L.record) throw new Error('algo-ir: the lowering prints no records');
+        return this.L.record.field(this, r, rec, e.f, fd.ty);
+      }
       case 'substr': return RX().substr(this, this.expr(e.s), this.expr(e.a), this.expr(e.b));
       case 'lidOf': return RX().lidOf(this, this.expr(e.s));
       case 'mkMeta': return RX().mkMeta(this, MK_META_ORDER.map((f) => [f, this.expr(e[f])]));
@@ -419,6 +454,7 @@ class Printer implements Cx {
     switch (s.k) {
       case 'comment': return S.comment(s.text);
       case 'let': {
+        this.checkTy(s.ty);
         const r = this.expr(s.init);
         const owned = s.ty === 'str' ? !!r.owned : isList(s.ty);
         if (L.owns && isList(s.ty) && !r.owned) throw new Error(`algo-ir: let ${s.name} needs an owned list`);
@@ -438,7 +474,7 @@ class Printer implements Cx {
       }
       case 'setAt': {
         const v = this.env.get(s.list)!;
-        const elem = ELEM[v.ty as ListTy];
+        const elem = elemOf(v.ty as ListTy);
         const i = this.expr(s.i), r = this.expr(s.e);
         const val = isNum(elem) ? this.coerce(r, this.nat(elem)) : r.c;
         return this.rx().stmt.setAt(this.id(s.list), this.coerce(i, this.rx().index), val);
@@ -463,7 +499,7 @@ class Printer implements Cx {
       case 'forEach': {
         const l = this.expr(s.list);
         if (!isList(l.ty)) throw new Error('algo-ir: forEach over non-list');
-        this.env.set(s.v, { ty: ELEM[l.ty], owned: false });
+        this.env.set(s.v, { ty: elemOf(l.ty), owned: false });
         return this.rx().stmt.forEach(this.id(s.v), l.c, this.block(s.body, d + 1));
       }
       case 'break': return S.break();
@@ -515,7 +551,8 @@ class Printer implements Cx {
     this.reassigned = new Set();
     this.cur = f;
     this.scan(f.body);
-    for (const p of f.params) this.env.set(p.name, { ty: p.ty, owned: false });
+    for (const p of f.params) { this.checkTy(p.ty); this.env.set(p.name, { ty: p.ty, owned: false }); }
+    f.ret.forEach((t) => this.checkTy(t));
     return this.L.stmt.fn({
       name: this.id(f.name),
       params: f.params.map((p) => ({ name: this.id(p.name), type: this.type(p.ty, 'param') })),
@@ -613,7 +650,7 @@ export function inlineFn(f: Fn, args: string[], out: string, unset: number): Stm
   return [{ k: 'let', name: out, ty: f.ret[0], init: { k: 'int', v: unset } }, ...go(f.body, false)];
 }
 
-export function printFns(lowering: Lowering, fns: Fn[], sets: CharSet[] = []): string {
-  const p = new Printer(lowering, fns, sets);
+export function printFns(lowering: Lowering, fns: Fn[], sets: CharSet[] = [], records: RecordDecl[] = []): string {
+  const p = new Printer(lowering, fns, sets, records);
   return [...sets.map((c) => lowering.charSet(lowering.ident(c.name), c.ranges)), ...fns.filter((f) => !f.extern).map((f) => p.fn(f))].join('\n');
 }
