@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -62,6 +62,15 @@ const dispatchRsL = (t: string, opt: boolean): DispatchLowering => ({
 });
 const dispatchRs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, opt = false): string =>
   dispatchWalk(d, ids, arm, dispatchRsL(t, opt), opt);
+// A Commit's switch (emit-portable.ts commitWalk) over the buffered token t.
+const commitSwRs: CommitLowering = {
+  sw: (by, cases, dflt) => `        match t.${by} {\n${cases.map((c) => `        ${c.keys.join(' | ')} => {${c.stmt ? `\n${c.stmt}\n        ` : ''}}`).join('\n')}\n        _ => {${dflt ? `\n${dflt}\n        ` : ''}}\n        }`,
+  ifAll: ifRs,
+  notAll: (conds) => `!(${conds.join(' && ')})`,
+};
+// A committed candidate's statement: `body` when conds hold, then `fail` (unless body always returns).
+const commitRs = (conds: string[], body: string, fail: string, returns = false) =>
+  `{ ${conds.length ? `if ${conds.join(' && ')} ${body.startsWith('{') ? body : `{ ${body} }`}` : body}${conds.length || !returns ? ` ${fail}` : ''} }`;
 // Whether candidate i, just ended at pos, beats the best so far: it ends past it, or — a Dispatch
 // `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is kept only
 // in a list that has ranked candidates.
@@ -951,6 +960,10 @@ const rsRuleBase = (ids: LexIdPlan, recv: string) => ({
     return c.length && !keyed ? `        if let Some(t) = _ft { if ${c.join(' && ')} ${stmt} }` : ifRs(c, stmt);
   },
   dispatch: dispatchRsL('_ft', true),
+  // The commit switch runs before the frame, over `self` (the recognize form's frame takes `p`).
+  commitPeek: '        let _ft = self.peek();',
+  guardConds: (g: Guard) => guardCond(g, 't', false, 'self'),
+  commitSw: commitSwRs,
 });
 
 // A rule in recognize form (ParserIR.forms): whether it matches here, advancing past it. An rd
@@ -970,6 +983,9 @@ function ruleR(r: RuleIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
     openBest: () => '        let p = self; let save = p.pos; let mut best_pos = save;',
     cand: (_d, _i, cond) => `{ if ${cond} && p.pos > best_pos { best_pos = p.pos; } p.back(save); }`,
     closeBest: '        p.pos = best_pos;\n        best_pos > save',
+    commitSteps: rsSteps(ids, 'self', true),
+    commit: (_i, conds, cond, undo, nullable) => commitRs(conds, `{ ${undo ? 'let save = self.pos; ' : ''}if ${cond}${nullable ? ' && self.pos > save' : ''} { return true; }${undo ? ' self.back(save);' : ''} }`, 'return false;'),
+    commitFail: '{ return false; }',
   });
 }
 
@@ -989,6 +1005,8 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
     openBest: (d) => `        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();\n        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(d)}`,
     cand: (d, i, cond) => candRs(d, i, cond, rid, markRs(d, i)),
     closeBest: '        self.pos = best_pos;\n        best',
+    commit: (_i, conds, cond, undo, nullable) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len();${undo ? ' let ck = self.b.checkpoint();' : ''} if ${cond}${nullable ? ' && self.pos > save' : ''} { return Some(self.finish(${rid}, sb, self.off_at(save), save)); }${undo ? ' self.back(save); self.scratch.truncate(sb); self.b.restore(ck);' : ''} }`, 'return None;'),
+    commitFail: '{ return None; }',
   });
 }
 
@@ -1085,6 +1103,8 @@ ${headUse}        loop {
     }`,
   });
 }
+// A NUD that matched nothing: the state its frame leaves when no arm won (prattRule's nudClose).
+const NUD_FAIL_RS = '{ self.capped = false; self.form = 0; self.tail = false; return None; }';
 function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
   const d = r.nudDispatch;
@@ -1130,6 +1150,21 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
             self.back(save);
         }`,
     dispatch: dispatchRsL('t', false),
+    // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node, form,
+    // tail and capped flag; failing, no node and the frame's empty state.
+    commitLeaf: (_i, conds) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len(); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; let n = self.finish(${rid}, sb, t.off as usize, save); self.form = 0; self.tail = false; return Some(n); }`, NUD_FAIL_RS, true),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len();${undo ? ' let ck = self.b.checkpoint();' : ''} if ${cond}${nullable ? ' && self.pos > save' : ''} { let n = self.finish(${rid}, sb, self.off_at(save), save); self.form = 0; self.tail = ${tail}; self.capped = ${capped}; return Some(n); }${undo ? ' self.back(save); self.scratch.truncate(sb); self.b.restore(ck);' : ''} }`, NUD_FAIL_RS),
+    commitPrefix: (_i, conds) => commitRs(conds, `if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
+            let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
+            self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
+            match self.${r.name}_bp(pbp) {
+                Some(_) if ptgt && self.form != 0 => { self.back(save); self.scratch.truncate(sb); self.b.restore(ck); self.capped = false; return None; }
+                Some(operand) => { if operand.present { self.scratch.push(operand.h); } let n = self.finish(${rid}, sb, self.off_at(save), save); self.form = pform; self.tail = true; self.capped = false; return Some(n); }
+                None => { self.back(save); self.scratch.truncate(sb); self.b.restore(ck); }
+            }
+        }`, NUD_FAIL_RS),
+    commitFail: NUD_FAIL_RS,
+    commitSw: commitSwRs,
     led: {
       tailOpen: '!tail_closed',
       lbpAbove: (lbp) => `${lbp} > min_bp`,
@@ -1190,10 +1225,10 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
     bpClose: `        self.form = form;
         Some(left)
     }`,
-    nudOpen: `    fn ${r.name}_nud(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {
+    nudEnter: `    fn ${r.name}_nud(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {
         self.capped = false;
-        let t = self.peek()?;
-        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();
+        let t = self.peek()?;`,
+    nudOpen: `        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();
         let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(d)}
         let (mut bf, mut bt, mut bc) = (0u8, false, false);`,
     nudClose: `        // A sub-parse may leave self.capped set: only a capped arm that won makes THIS node capped.
