@@ -32,6 +32,13 @@ jobs:
         with:
           node-version: 24
 
+      # The Go toolchain the Go gates are recorded with: docs/ALLOCATIONS.md names it, and
+      # alloc-work compares its Go rows only under that version (not the image's preinstalled Go).
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.4'
+          cache: false
+
       - run: npm ci
 
       # Regenerate every grammar's artifacts FIRST: the uncommitted one
@@ -103,6 +110,14 @@ jobs:
         if: steps.changed.outputs.value == 'true'
         with:
           node-version: 24
+
+      # The Go toolchain the Go gates are recorded with: docs/ALLOCATIONS.md names it, and
+      # alloc-work compares its Go rows only under that version (not the image's preinstalled Go).
+      - uses: actions/setup-go@v5
+        if: steps.changed.outputs.value == 'true'
+        with:
+          go-version: '1.27.4'
+          cache: false
       - if: steps.changed.outputs.value == 'true'
         run: npm ci
 

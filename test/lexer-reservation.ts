@@ -174,8 +174,9 @@ func LexShape(src string) (int, int, int) {
   // A process-wide counter (runtime.MemStats.Mallocs, even with the GC off) also counts what the
   // runtime allocates for itself on other stacks, on its own schedule, while the parse runs. Seen
   // on this measurement: allocm creating an M for a goroutine the runtime woke (6 allocations,
-  // 5320 B, in 1 window of 400); on CI, "1 allocation, 16 B" for a different input in each failing
-  // run. A stack belongs to the parse or it does not, so this count does not depend on scheduling.
+  // 5320 B, in 1 window of 400), and the background scavenger re-arming its sleep timer, which
+  // grows a P's timer heap (runtime.bgscavenge → timer.reset → timers.addHeap: 1 allocation,
+  // 16 B: CI's "1 allocation, 16 B" for a different input in each failing run). A stack belongs to the parse or it does not, so this count does not depend on scheduling.
   // The measurement lives outside package parser so that its own allocations are not the parse's.
   writeFileSync(join(gdir, 'main.go'), `package main
 
