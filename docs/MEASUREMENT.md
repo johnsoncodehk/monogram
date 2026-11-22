@@ -65,3 +65,46 @@ The inputs are fixed: `checker.ts` and `parser.ts` of TypeScript at the reposito
 (`TS_REPO_SHA` in the workflows), `typescript.js` / `typescript.d.ts` of the locked `typescript`
 npm package, `gen-tm.ts` and `typescript.ts` of this repository as of `2632c2c`, a 2 MB synthetic
 file, a non-ASCII-heavy file and two dense one-byte-token files.
+
+## Recorded result: Rust against oxc (2026-11-22, monogram `8d75e66`)
+
+What is compared: monogram's Rust parser builds a **CST** (every token is a leaf) with the
+`typescript.ts` grammar; [oxc](https://github.com/oxc-project/oxc) builds an **AST**. They are
+not the same product, so the ratio compares two kinds of work on the same input, both parsing
+as TypeScript.
+
+Measured on monogram `8d75e66` against `oxc_parser` 0.126.0 with
+[`test/bench-rust-oxc`](../test/bench-rust-oxc/run.sh): both parsers in one GitHub-hosted job,
+9 alternating rounds, the median of the per-round time ratios. Two runs per mode, each cell
+gives both: pull request #126's final runs, and this repository's `measure-bench` runs on pull
+request #131 (runner CPUs AMD EPYC 7763, except the second reuse run on an EPYC 9V74). Only
+ratios inside one job compare: the spread between the two runs is the runner's. Time per
+parse, monogram ÷ oxc (above 1: oxc is faster):
+
+| input | reuse mode | fresh mode |
+|:--|--:|--:|
+| `checker.ts` (TypeScript compiler, 3.2 MB) | 1.032 / 1.091 | 1.063 / 1.041 |
+| `typescript.js` (npm `typescript` 5.9.3, 9.1 MB) | 1.024 / 1.039 | 0.999 / 0.985 |
+| `parser.ts` (TypeScript compiler) | 1.030 / 1.074 | 1.048 / 1.052 |
+| `typescript.d.ts` (npm `typescript` 5.9.3) | 1.143 / 1.127 | 1.023 / 1.018 |
+| 2 MB synthetic file | 1.150 / 1.117 | 1.159 / 1.159 |
+| non-ASCII-heavy file | 1.435 / 1.402 | 1.360 / 1.356 |
+| [`src/gen-tm.ts`](../src/gen-tm.ts) at `2632c2c` | 0.995 / 1.024 | 1.144 / 1.141 |
+| [`typescript.ts`](../typescript.ts) at `2632c2c` | 0.906 / 0.992 | 0.718 / 0.714 |
+
+Reuse mode is the like-for-like comparison: one `CstBuilder` kept across parses (`parse_with`)
+against one oxc `Allocator` `reset()` before each parse. There monogram makes no allocator call
+per parse and oxc 22 to 21,842; neither takes a page fault; oxc executes fewer instructions per
+parse, from 16% fewer (`typescript.ts`) to 39% (the non-ASCII file), 30% on `checker.ts`
+(Callgrind, [`test/bench-rust-profile`](../test/bench-rust-profile/run.sh)). Fresh mode is a
+new builder / allocator per parse.
+
+This table is hand-written from two on-demand `measure-bench` runs and is not regenerated.
+Later pull requests on 2026-11-22 (lexer and builder work) lowered the Rust parser's
+instruction count per parse by roughly a fifth, by the per-PR profile job; no wall-clock
+comparison with oxc has been recorded since, and a new one depends on the runner's CPU.
+
+The Go, TS and JS targets have not been compared with another parser on full TypeScript (an
+earlier Go-vs-tsgo comparison used the JavaScript grammar on repeated snippets, and its harness
+is gone). What each target allocates per parse is pinned in [ALLOCATIONS.md](ALLOCATIONS.md);
+`measure-targets` times them A/B on demand.

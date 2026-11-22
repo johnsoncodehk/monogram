@@ -61,8 +61,8 @@ const gapBy = new Map(gapRows.map((x) => [x.lang, x.r]));
 const LANGS = ['TypeScript', 'JavaScript', 'JSX', 'TSX', 'HTML', 'YAML'];
 
 let md = '';
-// The legend (agree / covered / Highlighter) is hand-written prose in the README, above the
-  // markers — this region is DATA only, so the narrative can be reworded without a regen.
+// The legend (agree / covered / Highlighter) is hand-written prose in docs/HIGHLIGHTER-EVIDENCE.md
+  // ("Reading the coverage table") — this region is DATA only, so the narrative can be reworded without a regen.
   md += '| Grammar | Parser — agree · covered | Highlighter — Monogram vs official |\n|---|---|---|\n';
 for (const lang of LANGS) {
   const c = covBy.get(lang), g = gapBy.get(lang);
