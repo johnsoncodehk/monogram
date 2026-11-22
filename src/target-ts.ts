@@ -97,15 +97,19 @@ function mk_tok(off: number, end: number, nl: boolean, kid: number, lid: number)
 `;
 }
 
+// The literal id of a token whose text is `text`, given the literals its kind can be
+// (shared.tokenLiterals): 0 when it can be none.
+const lidCallTs = (lits: string[], text: string): string => (lits.length === 0 ? '0' : `lid_of(${text})`);
+
 // One token at a dispatch site: the shared scanner says where it ends; the lexer records it.
-function scanTok(t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
+function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
   const name = t.name;
   // `emit(...)` threads the lexer state in stateful mode; a plain push otherwise. A skipped
   // token (comment) still records a newline it spans, so `sameLine` sees it.
   const kid = kidOf(ids, name);
   const push = t.skip
     ? `if (/[\\n\\r\\u2028\\u2029]/.test(src.slice(pos, e))) pendingNl = true; `
-    : `${stateful ? 'emit' : 'push'}(pos, e, ${kid}, lid_of(src.slice(pos, e))); `;
+    : `${stateful ? 'emit' : 'push'}(pos, e, ${kid}, ${lidCallTs(shared.tokenLiterals(ir, t, ids.lids.slice(1)), 'src.slice(pos, e)')}); `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
   const ext = identLike.has(name) ? 'e = lx_ext(src, e); ' : '';
@@ -121,7 +125,7 @@ function buildLexCandidates(
   const codes: string[] = [];
   const firsts: (LexFirstBytes | null)[] = [];
   for (const t of shared.scannedTokens(ir)) {
-    codes.push(scanTok(t, shared, stateful, ids, rxTok, identLike));
+    codes.push(scanTok(ir, t, shared, stateful, ids, rxTok, identLike));
     firsts.push(lexTokFirstBytes(t));
   }
   for (const p of ir.puncts) {
@@ -287,19 +291,20 @@ ${emitHooks}
   // (and not whitespace, which is consumed before the dispatch) the test is made in that unit's
   // dispatch arm, before the arm's own candidates, not in every round.
   const tplHeads = new Map<number, string>();
+  const tplLits = shared.templateLiterals(ir, ids.lids.slice(1));
   const headUnit = (t: string) => { const u = t.charCodeAt(0); return u < 128 && ![9, 10, 11, 12, 13, 32].includes(u) ? u : null; };
   const tplCloseTest = tpl ? `    if (templateStack.length > 0 && src.startsWith(${J(tpl.interpClose)}, pos) && templateStack[templateStack.length - 1] === 0) {
       templateStack.pop();
       const sp = scanTplSpan(pos + ${tlen(tpl.interpClose)}, false);
-      if (sp.interp) { const _tx = src.slice(pos, sp.end); emit(pos, sp.end, ${kidOf(ids, '$templateMiddle')}, lid_of(_tx)); templateStack.push(0); }
-      else { const _tx = src.slice(pos, sp.end); emit(pos, sp.end, ${kidOf(ids, '$templateTail')}, lid_of(_tx)); }
+      if (sp.interp) { emit(pos, sp.end, ${kidOf(ids, '$templateMiddle')}, ${lidCallTs(tplLits.middle, 'src.slice(pos, sp.end)')}); templateStack.push(0); }
+      else { emit(pos, sp.end, ${kidOf(ids, '$templateTail')}, ${lidCallTs(tplLits.tail, 'src.slice(pos, sp.end)')}); }
       pos = sp.end; continue;
     }
 ` : '';
   const tplOpenTest = tpl ? `    if (src.startsWith(${J(tpl.open)}, pos)) {
       const sp = scanTplSpan(pos + ${tlen(tpl.open)}, ${rx ? '!prevIsValue()' : 'true'});
-      if (sp.interp) { const _tx = src.slice(pos, sp.end); emit(pos, sp.end, ${kidOf(ids, '$templateHead')}, lid_of(_tx)); templateStack.push(0); }
-      else { const _tx = src.slice(pos, sp.end); emit(pos, sp.end, ${kidOf(ids, tpl.token)}, lid_of(_tx)); }
+      if (sp.interp) { emit(pos, sp.end, ${kidOf(ids, '$templateHead')}, ${lidCallTs(tplLits.head, 'src.slice(pos, sp.end)')}); templateStack.push(0); }
+      else { emit(pos, sp.end, ${kidOf(ids, tpl.token)}, ${lidCallTs(tplLits.whole, 'src.slice(pos, sp.end)')}); }
       pos = sp.end; continue;
     }
 ` : '';
@@ -3590,6 +3595,12 @@ const tsLowering: Lowering = {
   type: (t) => TS_TYPES[t],
   owns: false,
   charSet: (name, rs) => `const ${name} = /*#__PURE__*/ (() => { const a = new Uint8Array(256); for (const [lo, hi] of [${rs.map(([lo, hi]) => `[${lo},${hi}]`).join(', ')}]) for (let i = lo; i <= hi; i++) a[i] = 1; return a; })();`,
+  // A code unit past 255 indexes no table entry (undefined), so it ends the run.
+  runEndFn: `// The end of the run of code units in set from i: the first j >= i at which s ends or s[j] is not in it.
+function lexRunEnd(s: string, i: number, set: Uint8Array): number {
+  while (i < s.length && set[s.charCodeAt(i)] === 1) i++;
+  return i;
+}`,
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${tsWrap(r, ATOM)}`, prec: 90 }),
@@ -3604,6 +3615,7 @@ const tsLowering: Lowering = {
     code: (cx, s, i) => cx.atom(`${tsWrap(s, ATOM)}.charCodeAt(${i.c})`, 'int', 'number'),
     hasAt: (cx, s, i, lit) => cx.atom(`${tsWrap(s, ATOM)}.startsWith(${J(lit)}, ${i.c})`, 'bool', 'bool'),
     inSet: (_cx, set, c) => ({ c: `${set}[${c.c}] === 1`, ty: 'bool', nat: 'bool', prec: TS_OPS.eq[1] }),
+    runEnd: (cx, set, s, i) => cx.atom(`lexRunEnd(${s.c}, ${i.c}, ${set})`, 'int', 'number'),
     own: (_cx, r) => r,
   },
   stmt: {
