@@ -14,6 +14,7 @@ import type {
 import { validateShapeOrThrow } from './shape-validate.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, type BinOp, type Lowering, type R, type Ty } from './algo-ir.ts';
+import { UNI_ID_CONTINUE, UNI_ID_START } from './uni-ident.ts';
 import { type TextUnits, unitLen } from './text-units.ts';
 
 export type { ShapeSpec, ShapeIR } from './shape-schema.ts';
@@ -333,7 +334,7 @@ ${emitHooks}
   const identNameTs = ir.identToken;
   const identKidTs = identNameTs ? kidOf(ids, identNameTs) : 0;
   const lxExtConst = ir.identLike.length
-    ? `const LX_UNI_CONT = /[$\\u200c\\u200d\\p{ID_Continue}]+/uy;
+    ? `const LX_UNI_CONT = /${UNI_ID_CONTINUE}+/uy;
 function lx_ext(src: string, e: number): number {
   if (e >= src.length || src.charCodeAt(e) < 0x80) return e;
   LX_UNI_CONT.lastIndex = e;
@@ -343,7 +344,7 @@ function lx_ext(src: string, e: number): number {
 `
     : '';
   const lxUniIdentConst = (shared.scannedTokens(ir).some((t) => t.skip) ? TS_HAS_LINE_TERM : '') + (identNameTs
-    ? 'const LX_UNI_IDENT = /[$_\\p{ID_Start}][$\\u200c\\u200d\\p{ID_Continue}]*/uy;\n'
+    ? `const LX_UNI_IDENT = /${UNI_ID_START}${UNI_ID_CONTINUE}*/uy;\n`
     : '') + lxExtConst;
   const uniIdentPushTs = stateful ? 'emit' : 'push';
   const uniIdentFallbackTs = identNameTs

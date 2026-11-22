@@ -14,6 +14,7 @@ import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctF
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
+import { UNI_BLOCK_BITS, UNI_LEAF_BITS, uniIdentPlan } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
@@ -324,6 +325,27 @@ func lexHasLineTerm(s string) bool {
 }
 `;
 
+/** Go's integer type for a table whose entries are below `max`. */
+const goUint = (max: number) => (max <= 0x100 ? 'uint8' : max <= 0x10000 ? 'uint16' : 'uint32');
+/** uni-ident.ts's identifier classes and their lookup. Go's `unicode` package has the general
+ *  categories but no ID_Start / ID_Continue (Other_ID_Start, Pattern_Syntax), hence the table. */
+function goUniIdentTables(): string {
+  const p = uniIdentPlan();
+  const nums = (xs: readonly (number | bigint)[], hex: boolean) => xs.map((x) => (hex ? `0x${x.toString(16)}` : String(x))).join(', ');
+  return `var _uniTop = [${p.top.length}]${goUint(p.blocks.length / (1 << UNI_BLOCK_BITS))}{${nums(p.top, false)}}
+var _uniBlk = [${p.blocks.length}]${goUint(p.start.length)}{${nums(p.blocks, false)}}
+var _uniStart = [${p.start.length}]uint64{${nums(p.start, true)}}
+var _uniCont = [${p.cont.length}]uint64{${nums(p.cont, true)}}
+// Whether r is in the class whose leaves are given (uni-ident.ts's three levels).
+func uniIn(leaves *[${p.start.length}]uint64, r rune) bool {
+	t := uint32(r) >> ${UNI_LEAF_BITS + UNI_BLOCK_BITS}
+	if t >= ${p.top.length} { return false }
+	leaf := _uniBlk[uint32(_uniTop[t])<<${UNI_BLOCK_BITS}|(uint32(r)>>${UNI_LEAF_BITS})&${(1 << UNI_BLOCK_BITS) - 1}]
+	return (leaves[leaf]>>(uint32(r)&${(1 << UNI_LEAF_BITS) - 1}))&1 != 0
+}
+`;
+}
+
 // One token at a dispatch site: the shared scanner, spliced in, says where it ends; the lexer
 // records it.
 function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
@@ -566,33 +588,24 @@ ${emitHooks}
 	}
 	return r >= 0x2000 && r <= 0x200A
 }
-// ID_Start ≈ L + Nl (gen-tm.ts's widened approximation); ID_Continue adds Nd/Mn/Mc/Pc + ZWNJ/ZWJ.
-func isUniIdStart(r rune) bool { return r == '$' || r == '_' || unicode.IsLetter(r) || unicode.Is(unicode.Nl, r) }
-func isUniIdContinue(r rune) bool {
-	return isUniIdStart(r) || r == 0x200C || r == 0x200D || unicode.In(r, unicode.Nd, unicode.Mn, unicode.Mc, unicode.Pc)
-}
-func scanUniIdent(src string, pos int) (int, bool) {
+${goUniIdentTables()}func scanUniIdent(src string, pos int) (int, bool) {
 	r, w := utf8.DecodeRuneInString(src[pos:])
-	if !isUniIdStart(r) { return pos, false }
-	e := pos + w
-	for e < len(src) {
-		r2, w2 := utf8.DecodeRuneInString(src[e:])
-		if !isUniIdContinue(r2) { break }
-		e += w2
-	}
-	return e, true
+	if !uniIn(&_uniStart, r) { return pos, false }
+	return lxExtRun(src, pos+w), true
 }
 // Extend an identifier token that the ASCII pattern cut short at a non-ASCII
 // ID_Continue char (caf|é → café), mirroring emit-lexer's uniIdentContReY extension.
 func lxExt(src string, e int) int {
 	if e >= len(src) || src[e] < 0x80 { return e }
-	ee := e
-	for ee < len(src) {
-		r, w := utf8.DecodeRuneInString(src[ee:])
-		if !isUniIdContinue(r) { break }
-		ee += w
+	return lxExtRun(src, e)
+}
+func lxExtRun(src string, e int) int {
+	for e < len(src) {
+		r, w := utf8.DecodeRuneInString(src[e:])
+		if !uniIn(&_uniCont, r) { break }
+		e += w
 	}
-	return ee
+	return e
 }
 ` : `func isJsWs(r rune) bool {
 	if r == 0xA0 || r == 0x1680 || r == 0x2028 || r == 0x2029 || r == 0x202F || r == 0x205F || r == 0x3000 || r == 0xFEFF {
@@ -3406,13 +3419,8 @@ package parser
 import (
 \t"fmt"
 \t"strings"
-\t"unicode"
 \t"unicode/utf8"
 )
-
-// unicode is only referenced when the grammar declares an identifier token; pin it so other
-// grammars still compile.
-var _ = unicode.IsLetter
 
 // Slim hot-path token (kind/text via kindStr / src[Off:End]).
 type Tok struct {
