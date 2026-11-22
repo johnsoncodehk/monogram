@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, stepExpr as walkExpr, stepStmts as walkStmts, type StepLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -103,53 +103,43 @@ const CURSOR_GO: GoEngine = {
   mark: '', reset: '',
 };
 const branchGoR = (cond: string) => `{ sp := p.pos; if ${cond} { return true }; p.back(sp) }`;
-function stepCondR(s: Step, ids: LexIdPlan, e: GoEngine): string {
-  if ('share' in s && s.share !== undefined) return `p.sub${s.share}R()`;
-  return stepBodyR(s, ids, e);
+// The step walk's Go spelling (emit-portable.ts, StepLowering) for one engine: the native engine
+// building ('', receiver `engine`), the builder engine building ('W', receiver `recv`), or either
+// one recognizing ('R', ParserIR.forms; e: whose recognizers). Go: a body or a step's statements
+// are a func literal called in place.
+type GoForm = '' | 'W' | 'R';
+function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine): StepLowering {
+  const fn = (cond: string) => `func() bool { return ${cond} }`;
+  const L: StepLowering = {
+    inner: () => L,
+    shared: (id) => `p.sub${id}${f}()`,
+    lit: (s) => (gtCompLit(ids, s) ? `p.${e.matchComp}(${lidOf(ids, s.value)})` : `p.matchLit${f}(${lidOf(ids, s.value)})`),
+    tok: (name) => `p.matchTok${f}(${kidOf(ids, name)})`,
+    rule: (name) => (f === 'R' ? `p.rec${name}()` : f === 'W' ? `p.callRuleW((*${recv}).parse${name}W)` : `p.callRule(p.parse${name}())`),
+    // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
+    ruleBp: (name, bp) => (f === 'R' ? e.bpFound(name, bp) : f === 'W' ? `p.callRuleW(func(q *${recv}) (spanned, bool) { return q.bpW_${name}(${bp}) })` : `p.callRule(p.bp_${name}(${bp}))`),
+    star: (body) => `p.star${f}(${fn(body)})`,
+    opt: (body) => `p.opt${f}(${fn(body)})`,
+    sep: (elem, delim) => `p.sepBy${f}(${fn(elem)}, ${sepDelimLid(ids, delim)})`,
+    altlit: (values) => `p.altLit${f}([]uint16{${values.map((v) => lidOf(ids, v)).join(', ')}})`,
+    look: (id, is) => `${is ? '' : '!'}p.look${id}()`,   // recognize form (lookFnsR)
+    ahead: (set, is) => `p.${e.ahead}(${set}, ${is})`,
+    aheadCtx: (set, is) => (is ? `(p.${e.ahead}(${set}, true) || p.ctxWord())` : `(p.${e.ahead}(${set}, false) && !p.ctxWord())`),
+    sameLine: () => `func() bool { t := p.${e.peek}(); return t != nil && !t.Nl }()`,
+    inPlace: (_kind, stmts) => `func() bool { ${stmts} }()`,
+    ret: (cond) => `return ${cond}`,
+    // A `ctx` step's body is a boolean expression: no return path leaves between the two assignments.
+    suppress: (set, cond) => `p.suppressNext = ${set}; _r := (${cond}); p.suppressNext = 0; return _r`,
+    ctx: (ctx, cond) => `_c := p.ctx; p.ctx = ${ctx}; _r := (${cond}); p.ctx = _c; return _r`,
+    branch: (cond) => (f === 'R' ? branchGoR(cond) : f === 'W' ? branchGoW(cond, recv) : branchGo(cond)),
+    guarded: (first, branch) => `if _ft != nil && ${firstCond(first, '_ft', ids)} ${branch}`,
+    choice: (peek, tries) => `${peek ? `_ft := p.${e.peek}(); ` : ''}${tries.join('; ')}; return false`,
+    // Same-line `} else if`: newlines break Go ASI.
+    predictive: (arms) => `t := p.${e.peek}(); if t == nil { return false }; ${arms.map((a) => `if ${firstCond(a.first, 't', ids)} ${a.branch}`).join(' else ')}; return false`,
+  };
+  return L;
 }
-function stepBodyR(s: Step, ids: LexIdPlan, e: GoEngine): string {
-  const sc = (x: Step) => stepCondR(x, ids, e);
-  switch (s.t) {
-    case 'lit': return gtCompLit(ids, s) ? `p.${e.matchComp}(${lidOf(ids, s.value)})` : `p.matchLitR(${lidOf(ids, s.value)})`;
-    case 'tok': return `p.matchTokR(${kidOf(ids, s.name)})`;
-    case 'rule': return `p.rec${s.name}()`;
-    // Only a Pratt rule is called at a binding power; it is recognized by its building form (ParserIR.forms).
-    case 'ruleBp': return e.bpFound(s.name, s.bp);
-    case 'star': return `p.starR(func() bool { return ${sc(s.step)} })`;
-    case 'opt': return `p.optR(func() bool { return ${s.steps.map(sc).join(' && ')} })`;
-    case 'sep': return `p.sepByR(func() bool { return ${sc(s.elem)} }, ${sepDelimLid(ids, s.delim)})`;
-    case 'altlit': return `p.altLitR([]uint16{${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}})`;
-    case 'alt': case 'suppress': case 'ctx': return `func() bool { ${stepStmtsR(s, ids, e)} }()`;
-    case 'look': return `${s.is ? '' : '!'}p.look${s.id}()`;
-    case 'ahead': return `p.${e.ahead}(${s.set}, ${s.is})`;
-    case 'aheadCtx': return s.is ? `(p.${e.ahead}(${s.set}, true) || p.ctxWord())` : `(p.${e.ahead}(${s.set}, false) && !p.ctxWord())`;
-    case 'seq': return `(${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'})`;
-    case 'sameLine': return `func() bool { t := p.${e.peek}(); return t != nil && !t.Nl }()`;
-  }
-}
-function stepStmtsR(s: Step, ids: LexIdPlan, e: GoEngine): string {
-  const sc = (x: Step) => stepCondR(x, ids, e);
-  switch (s.t) {
-    case 'alt': {
-      const fs = s.firsts ?? [];
-      if (s.predictive) {
-        const arms = s.branches.map((br, i) => `if ${firstCond(fs[i]!, 't', ids)} ${branchGoR(br.length ? br.map(sc).join(' && ') : 'true')}`).join(' else ');
-        return `t := p.${e.peek}(); if t == nil { return false }; ${arms}; return false`;
-      }
-      const nAlts = s.branches.length;
-      const needPeek = s.branches.some((_, i) => isGuardable(fs[i] ?? null, nAlts));
-      const tries = s.branches.map((br, i) => {
-        const body = branchGoR(br.length ? br.map(sc).join(' && ') : 'true');
-        const f = fs[i] ?? null;
-        return isGuardable(f, nAlts) ? `if _ft != nil && ${firstCond(f, '_ft', ids)} ${body}` : body;
-      }).join('; ');
-      return `${needPeek ? `_ft := p.${e.peek}(); ` : ''}${tries}; return false`;
-    }
-    case 'suppress': return `p.suppressNext = ${s.set}; _r := (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); p.suppressNext = 0; return _r`;
-    case 'ctx': return `_c := p.ctx; p.ctx = ${s.ctx}; _r := (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); p.ctx = _c; return _r`;
-    default: return `return ${stepBodyR(s, ids, e)}`;
-  }
-}
+const stepCondR = (s: Step, ids: LexIdPlan, e: GoEngine): string => walkExpr(s, goSteps(ids, 'R', e.recv, e));
 // ParserIR.lookaheads, one method each, in recognize form: whether the body matches here. It
 // undoes the position, and the scratch list and the arena / builder too when its body runs a
 // Pratt rule's building form (Forms.lookBuilds).
@@ -161,7 +151,7 @@ function lookFnsR(ir: ParserIR, ids: LexIdPlan, e: GoEngine, onCursor: boolean):
   }).join('');
 }
 function sharedFnsR(ir: ParserIR, ids: LexIdPlan, e: GoEngine, onCursor: boolean): string {
-  return ir.shared.map((s, id) => (ir.forms.recognizeShared[id] && ir.forms.cursorOnly.shared[id] === onCursor ? `func (p *${e.recv}) sub${id}R() bool { ${stepStmtsR(s, ids, e)} }\n` : '')).join('');
+  return ir.shared.map((s, id) => (ir.forms.recognizeShared[id] && ir.forms.cursorOnly.shared[id] === onCursor ? `func (p *${e.recv}) sub${id}R() bool { ${walkStmts(s, goSteps(ids, 'R', e.recv, e))} }\n` : '')).join('');
 }
 // A rule in recognize form: whether it matches here, advancing past it. An rd rule has rdRule's
 // control flow building nothing: its longest match compares end positions only (a tie only
@@ -838,71 +828,14 @@ func leafEnd(ts []Tok, ti uint32, tt uint8) uint32 {
 }`;
 }
 
-function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  if ('share' in s && s.share !== undefined) return `p.sub${s.share}()`;
-  return stepBody(s, ids, ar);
-}
-// The step itself, printed in place (a shared step's method body; every other step's site).
-function stepBody(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  switch (s.t) {
-    case 'lit': return gtCompLit(ids, s) ? `p.matchComp(${lidOf(ids, s.value)})` : `p.matchLit(${lidOf(ids, s.value)})`;
-    case 'tok': return `p.matchTok(${kidOf(ids, s.name)})`;
-    case 'rule': return `p.callRule(p.parse${s.name}())`;
-    case 'ruleBp': return `p.callRule(p.bp_${s.name}(${s.bp}))`;
-    case 'star': return `p.star(func() bool { return ${stepCond(s.step, ids, ar)} })`;
-    case 'opt': return `p.opt(func() bool { return ${s.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} })`;
-    case 'sep': return `p.sepBy(func() bool { return ${stepCond(s.elem, ids, ar)} }, ${sepDelimLid(ids, s.delim)})`;
-    case 'altlit': return `p.altLit([]uint16{${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}})`;
-    case 'alt': return `func() bool { ${stepStmts(s, ids, ar)} }()`;
-    case 'look': return `${s.is ? '' : '!'}p.look${s.id}()`;   // recognize form (lookFnsR)
-    case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
-    case 'aheadCtx': return s.is ? `(p.ahead(${s.set}, true) || p.ctxWord())` : `(p.ahead(${s.set}, false) && !p.ctxWord())`;
-    case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'})`;
-    case 'sameLine': return `func() bool { t := p.peek(); return t != nil && !t.Nl }()`;
-    case 'suppress': return `func() bool { ${stepStmts(s, ids, ar)} }()`;
-    case 'ctx': return `func() bool { ${stepStmts(s, ids, ar)} }()`;
-  }
-}
-// The step as the statements of a function returning whether it matched: an `alt`, `suppress` or
-// `ctx` step needs statements, so in place it is printed as an immediately called func literal of these.
-// A `ctx` step puts the context it found back after its body, whether the body matched or not (the
-// body is a boolean expression: no return path leaves between the two assignments).
-function stepStmts(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  switch (s.t) {
-    case 'alt': {
-      if (s.predictive) return predAltBody(s.branches, ids, s.firsts, ar);
-      const firsts = s.firsts ?? [];
-      const nAlts = s.branches.length;
-      const needPeek = s.branches.some((_, i) => isGuardable(firsts[i] ?? null, nAlts));
-      const peekInit = needPeek ? `_ft := p.peek(); ` : '';
-      const tries = s.branches.map((br, i) => {
-        const body = branchGo(br.length ? br.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true');
-        const f = firsts[i] ?? null;
-        if (!isGuardable(f, nAlts)) return body;
-        return `if _ft != nil && ${firstCond(f, '_ft', ids)} ${body}`;
-      }).join('; ');
-      return `${peekInit}${tries}; return false`;
-    }
-    case 'suppress': return `p.suppressNext = ${s.set}; _r := (${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}); p.suppressNext = 0; return _r`;
-    case 'ctx': return `_c := p.ctx; p.ctx = ${s.ctx}; _r := (${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}); p.ctx = _c; return _r`;
-    default: return `return ${stepBody(s, ids, ar)}`;
-  }
-}
+const stepCond = (s: Step, ids: LexIdPlan, _ar: ArenaIdPlan): string => walkExpr(s, goSteps(ids, '', 'engine', ENGINE_GO));
 
 // ParserIR.shared, one method each: the step, run against the parser's scratch list. It undoes
 // nothing: a failed step leaves what it advanced and appended for the construct around its site.
 function sharedFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  return ir.shared.map((s, id) => (ir.forms.buildShared[id] ? `func (p *engine) sub${id}() bool { ${stepStmts(s, ids, ar)} }\n` : '')).join('');
+  return ir.shared.map((s, id) => (ir.forms.buildShared[id] ? `func (p *engine) sub${id}() bool { ${walkStmts(s, goSteps(ids, '', 'engine', ENGINE_GO))} }\n` : '')).join('');
 }
 
-function predAltBody(branches: Step[][], ids: LexIdPlan, firsts: FirstSig[] | undefined, ar: ArenaIdPlan): string {
-  // FIRST dispatch still only tries the matching arm; on half-failure restore like non-pred alt.
-  const arms = branches.map((br, i) => {
-    const steps = br.length ? br.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true';
-    return `if ${firstCond(firsts![i], 't', ids)} ${branchGo(steps)}`;
-  }).join(' else ');
-  return `t := p.peek(); if t == nil { return false }; ${arms}; return false`;
-}
 
 type ReusePlanA = { kind: 'A'; topOneBody: string };
 type ReusePlanB = { kind: 'B'; hasHead: boolean; headRule: string | null; loopTok: string; loopRule: string };
@@ -1787,62 +1720,9 @@ function arenaRestore(recv: string): string {
     : 'p.b.Restore(nb, kb)';
 }
 
-function stepCondW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  if ('share' in s && s.share !== undefined) return `p.sub${s.share}W()`;
-  return stepBodyW(s, ids, ar, recv);
-}
-function stepBodyW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  switch (s.t) {
-    case 'lit': return gtCompLit(ids, s) ? `p.matchComp(${lidOf(ids, s.value)})` : `p.matchLitW(${lidOf(ids, s.value)})`;
-    case 'tok': return `p.matchTokW(${kidOf(ids, s.name)})`;
-    case 'rule': return `p.callRuleW((*${recv}).parse${s.name}W)`;
-    case 'ruleBp': return `p.callRuleW(func(q *${recv}) (spanned, bool) { return q.bpW_${s.name}(${s.bp}) })`;
-    case 'star': return `p.starW(func() bool { return ${stepCondW(s.step, ids, ar, recv)} })`;
-    case 'opt': return `p.optW(func() bool { return ${s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} })`;
-    case 'sep': return `p.sepByW(func() bool { return ${stepCondW(s.elem, ids, ar, recv)} }, ${sepDelimLid(ids, s.delim)})`;
-    case 'altlit': return `p.altLitW([]uint16{${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}})`;
-    case 'alt': return `func() bool { ${stepStmtsW(s, ids, ar, recv)} }()`;
-    case 'look': return `${s.is ? '' : '!'}p.look${s.id}()`;   // recognize form (lookFnsR)
-    case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
-    case 'aheadCtx': return s.is ? `(p.ahead(${s.set}, true) || p.ctxWord())` : `(p.ahead(${s.set}, false) && !p.ctxWord())`;
-    case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'})`;
-    case 'sameLine': return `func() bool { t := p.peek(); return t != nil && !t.Nl }()`;
-    case 'suppress': return `func() bool { ${stepStmtsW(s, ids, ar, recv)} }()`;
-    case 'ctx': return `func() bool { ${stepStmtsW(s, ids, ar, recv)} }()`;
-  }
-}
-function stepStmtsW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  switch (s.t) {
-    case 'alt': return s.predictive ? predAltBodyW(s.branches, ids, ar, s.firsts, recv) : altBodyW(s.branches, ids, ar, s.firsts, recv);
-    case 'suppress': return `p.suppressNext = ${s.set}; _r := (${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'}); p.suppressNext = 0; return _r`;
-    case 'ctx': return `_c := p.ctx; p.ctx = ${s.ctx}; _r := (${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'}); p.ctx = _c; return _r`;
-    default: return `return ${stepBodyW(s, ids, ar, recv)}`;
-  }
-}
-function altBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: FirstSig[] | undefined, recv: string): string {
-  const fs = firsts ?? [];
-  const nAlts = branches.length;
-  const needPeek = branches.some((_, i) => isGuardable(fs[i] ?? null, nAlts));
-  const peekInit = needPeek ? `_ft := p.peek(); ` : '';
-  const tries = branches.map((br, i) => {
-    const body = branchGoW(br.length ? br.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true', recv);
-    const f = fs[i] ?? null;
-    if (!isGuardable(f, nAlts)) return body;
-    return `if _ft != nil && ${firstCond(f, '_ft', ids)} ${body}`;
-  }).join('; ');
-  return `${peekInit}${tries}; return false`;
-}
+const stepCondW = (s: Step, ids: LexIdPlan, _ar: ArenaIdPlan, recv: string): string => walkExpr(s, goSteps(ids, 'W', recv, ENGINE_GO_W));
 function sharedFnsW(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  return ir.shared.map((s, id) => (ir.forms.buildShared[id] ? `func (p *${recv}) sub${id}W() bool { ${stepStmtsW(s, ids, ar, recv)} }\n` : '')).join('');
-}
-function predAltBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: FirstSig[] | undefined, recv: string): string {
-  // Same-line `} else if` (native predAltBody joins with ' else '); newlines break Go ASI.
-  // FIRST dispatch; restore pos/scratch/arena on arm half-failure (like altBodyW).
-  const arms = branches.map((br, i) => {
-    const steps = br.length ? br.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true';
-    return `if ${firstCond(firsts![i], 't', ids)} ${branchGoW(steps, recv)}`;
-  }).join(' else ');
-  return `t := p.peek(); if t == nil { return false }; ${arms}; return false`;
+  return ir.shared.map((s, id) => (ir.forms.buildShared[id] ? `func (p *${recv}) sub${id}W() bool { ${walkStmts(s, goSteps(ids, 'W', recv, ENGINE_GO_W))} }\n` : '')).join('');
 }
 
 function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {

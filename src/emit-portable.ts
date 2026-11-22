@@ -769,6 +769,86 @@ export type Forms = {
    *  context), so a target with several engine types may print them once, on the cursor. */
   cursorOnly: { rules: string[]; shared: boolean[]; looks: boolean[] };
 };
+// ── The step walk: one description of how a step runs, rendered by every target ──
+// What a step runs, and under which frame, is decided here once: a star / opt / sep body (a step
+// inside a body), an ordered choice (each branch in a BRANCH frame, tried under its FIRST set when
+// that is small enough to test: isFirstGuardable), a predictive choice (only the branch its FIRST
+// set selects), a suppress or ctx body (the state set around the body's conjunction), a shared
+// step (ParserIR.shared: its function's call), and every leaf test. A StepLowering spells each
+// piece in one target's language, for one engine form (building or recognizing, ParserIR.forms)
+// over one receiver; it holds only that spelling.
+export type StepLowering = {
+  inner(): StepLowering;                         // the lowering inside a body or a choice (a target whose closures take their own receiver)
+  shared(id: number): string;                    // a call of ParserIR.shared[id] in this form
+  lit(s: Step & { t: 'lit' }): string;
+  tok(name: string): string;
+  rule(name: string): string;
+  ruleBp(name: string, bp: number): string;      // only a Pratt rule is called at a binding power
+  star(body: string): string;                    // body: the inner step, as a boolean expression
+  opt(body: string): string;
+  sep(elem: string, delim: string): string;
+  altlit(values: string[]): string;
+  look(id: number, is: boolean): string;         // a lookahead runs in recognize form whatever the form around it
+  ahead(set: number, is: boolean): string;
+  aheadCtx(set: number, is: boolean): string;
+  sameLine(): string;
+  inPlace(kind: 'alt' | 'suppress' | 'ctx', stmts: string): string;  // the step's statements (stepStmts) run where the step is
+  ret(cond: string): string;                     // statements returning cond
+  suppress(set: number, cond: string): string;   // statements: cond with ParserIR.suppressSets[set] staged for the next Pratt call
+  ctx(ctx: Ctx, cond: string): string;           // statements: cond in context ctx, the one in force put back after
+  branch(cond: string): string;                  // a BRANCH frame: returns true when cond matched, else undoes it
+  guarded(first: NonNullable<FirstSig>, branch: string): string;   // the branch, tried only when the next token is in first
+  choice(peek: boolean, tries: string[]): string;                  // the tries in order, then false; peek: a guard reads the next token
+  predictive(arms: { first: NonNullable<FirstSig>; branch: string }[]): string;   // the one arm the next token selects, else false
+};
+const conjOf = (steps: Step[], L: StepLowering): string => (steps.length ? steps.map((x) => stepExpr(x, L)).join(' && ') : 'true');
+/** A step as a boolean expression: a shared step's call, else the step itself (stepBody). */
+export function stepExpr(s: Step, L: StepLowering): string {
+  if ('share' in s && s.share !== undefined) return L.shared(s.share);
+  return stepBody(s, L);
+}
+/** The step itself, printed in place (a shared step's function body; every other step's site). */
+export function stepBody(s: Step, L: StepLowering): string {
+  switch (s.t) {
+    case 'lit': return L.lit(s);
+    case 'tok': return L.tok(s.name);
+    case 'rule': return L.rule(s.name);
+    case 'ruleBp': return L.ruleBp(s.name, s.bp);
+    case 'star': return L.star(stepExpr(s.step, L.inner()));
+    case 'opt': { const I = L.inner(); return L.opt(s.steps.map((x) => stepExpr(x, I)).join(' && ')); }
+    case 'sep': return L.sep(stepExpr(s.elem, L.inner()), s.delim);
+    case 'altlit': return L.altlit(s.opts.map((o) => o.value));
+    case 'alt': return L.inPlace('alt', stepStmts(s, L.inner()));
+    case 'look': return L.look(s.id, s.is);
+    case 'ahead': return L.ahead(s.set, s.is);
+    case 'aheadCtx': return L.aheadCtx(s.set, s.is);
+    case 'seq': return `(${conjOf(s.steps, L)})`;
+    case 'sameLine': return L.sameLine();
+    case 'suppress': return L.inPlace('suppress', L.suppress(s.set, conjOf(s.steps, L)));
+    case 'ctx': return L.inPlace('ctx', L.ctx(s.ctx, conjOf(s.steps, L)));
+  }
+}
+/** The step as the statements of a function returning whether it matched (a shared step's body;
+ *  an `alt`, `suppress` or `ctx` step run in place). */
+export function stepStmts(s: Step, L: StepLowering): string {
+  switch (s.t) {
+    case 'alt': {
+      if (s.predictive) return L.predictive(s.branches.map((br, i) => ({ first: s.firsts![i]!, branch: L.branch(conjOf(br, L)) })));
+      const firsts = s.firsts ?? [];
+      const n = s.branches.length;
+      const tries = s.branches.map((br, i) => {
+        const b = L.branch(conjOf(br, L));
+        const f = firsts[i] ?? null;
+        return isFirstGuardable(f, n) ? L.guarded(f, b) : b;
+      });
+      return L.choice(s.branches.some((_, i) => isFirstGuardable(firsts[i] ?? null, n)), tries);
+    }
+    case 'suppress': return L.suppress(s.set, conjOf(s.steps, L));
+    case 'ctx': return L.ctx(s.ctx, conjOf(s.steps, L));
+    default: return L.ret(stepBody(s, L));
+  }
+}
+
 function formsOf(rules: RuleIR[], lookaheads: Alt[], nShared: number, entry: string): Forms {
   const byName = new Map(rules.map((r) => [r.name, r]));
   const build = new Set<string>(), recognize = new Set<string>();

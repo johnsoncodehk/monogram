@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, stepExpr, stepStmts, type StepLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -456,13 +456,6 @@ function lex(src: string): Tok[] {
 }`;
 }
 
-// A Step as a boolean expression: building ('w'), it appends its children to the child stack;
-// recognized ('r'), nothing.
-const SUFFIX: Record<Mode, string> = { w: 'W', r: 'R' };
-function stepCond(s: Step, ids: LexIdPlan, m: Mode): string {
-  if ('share' in s && s.share !== undefined) return `sub${s.share}${SUFFIX[m]}()`;
-  return stepBody(s, ids, m);
-}
 // Lifted steps. A step printed as a function — the body of a star / opt / sep, an `alt`, `suppress`,
 // `ctx` or `sameLine` step — reads no local of the function around its site (its state is the
 // cursor and the child stack), so it is one module-level function, printed once per distinct body,
@@ -479,60 +472,41 @@ function lift(ids: LexIdPlan, body: string): string {
 function liftedFns(ids: LexIdPlan): string {
   return [...(LIFTED.get(ids) ?? new Map<string, string>())].map(([body, name]) => `function ${name}(): boolean { ${body} }\n`).join('');
 }
-// A step's statements run in place: a call of their lifted function.
-const stepCall = (ids: LexIdPlan, stmts: string): string => `${lift(ids, stmts)}()`;
-// The step itself, printed in place (a shared step's function body; every other step's site).
-function stepBody(s: Step, ids: LexIdPlan, m: Mode): string {
+// The step walk's TS spelling (emit-portable.ts, StepLowering), building ('w': children onto the
+// child stack) or recognizing ('r': nothing built). TS: a body or a step's statements are a lifted
+// module-level function (lift), so no closure is allocated where it runs.
+const SUFFIX: Record<Mode, string> = { w: 'W', r: 'R' };
+function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
   const S = SUFFIX[m];
-  const sc = (x: Step) => stepCond(x, ids, m);
   const fn = (cond: string) => lift(ids, `return ${cond};`);
-  switch (s.t) {
-    case 'lit': return `matchLit${S}(${lidOf(ids, s.value)})`;
-    case 'tok': return `matchTok${S}(${kidOf(ids, s.name)})`;
-    case 'rule': return `parse${s.name}${S}()`;
-    // Only a Pratt rule is called at a binding power. It is recognized by its building form
-    // (ParserIR.forms), whose node is dropped (_drop).
-    case 'ruleBp': return m === 'r' ? `_drop(_n, ${s.name}_bpW(${s.bp}))` : `${s.name}_bpW(${s.bp})`;
-    case 'star': return `star${S}(${fn(sc(s.step))})`;
-    case 'opt': return `opt${S}(${fn(s.steps.map(sc).join(' && '))})`;
-    case 'sep': return `sepBy${S}(${fn(sc(s.elem))}, ${sepDelimLid(ids, s.delim)})`;
-    case 'altlit': return `altLit${S}([${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}])`;
-    case 'alt': return stepCall(ids, stepStmts(s, ids, m));
-    // A lookahead is recognized whatever the mode around it (lookFns).
-    case 'look': return `${s.is ? '' : '!'}look${s.id}()`;
-    case 'ahead': return `ahead(${s.set}, ${s.is})`;
-    case 'aheadCtx': return s.is ? `(ahead(${s.set}, true) || ctxWord())` : `(ahead(${s.set}, false) && !ctxWord())`;
-    case 'seq': return `(${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'})`;
-    case 'sameLine': return stepCall(ids, 'const t = peek(); return t !== null && !t.nl;');
-    case 'suppress': return stepCall(ids, stepStmts(s, ids, m));
-    case 'ctx': return stepCall(ids, stepStmts(s, ids, m));
-  }
+  const L: StepLowering = {
+    inner: () => L,
+    shared: (id) => `sub${id}${S}()`,
+    lit: (s) => `matchLit${S}(${lidOf(ids, s.value)})`,
+    tok: (name) => `matchTok${S}(${kidOf(ids, name)})`,
+    rule: (name) => `parse${name}${S}()`,
+    // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
+    ruleBp: (name, bp) => (m === 'r' ? `_drop(_n, ${name}_bpW(${bp}))` : `${name}_bpW(${bp})`),
+    star: (body) => `star${S}(${fn(body)})`,
+    opt: (body) => `opt${S}(${fn(body)})`,
+    sep: (elem, delim) => `sepBy${S}(${fn(elem)}, ${sepDelimLid(ids, delim)})`,
+    altlit: (values) => `altLit${S}([${values.map((v) => lidOf(ids, v)).join(', ')}])`,
+    look: (id, is) => `${is ? '' : '!'}look${id}()`,
+    ahead: (set, is) => `ahead(${set}, ${is})`,
+    aheadCtx: (set, is) => (is ? `(ahead(${set}, true) || ctxWord())` : `(ahead(${set}, false) && !ctxWord())`),
+    sameLine: () => `${lift(ids, 'const t = peek(); return t !== null && !t.nl;')}()`,
+    inPlace: (_kind, stmts) => `${lift(ids, stmts)}()`,
+    ret: (cond) => `return ${cond};`,
+    suppress: (set, cond) => `_suppressNext = ${set}; const _r = (${cond}); _suppressNext = 0; return _r;`,
+    ctx: (ctx, cond) => `const _c = _ctx; _ctx = ${ctx}; const _r = (${cond}); _ctx = _c; return _r;`,
+    branch: (cond) => branchTs(cond, m),
+    guarded: (first, branch) => `if (_ft !== null && ${firstCond(first, '_ft', ids)}) ${branch}`,
+    choice: (peek, tries) => `${peek ? 'const _ft = peek(); ' : ''}${tries.join(' ')} return false;`,
+    predictive: (arms) => `const t = peek(); if (t === null) return false; ${arms.map((a) => `if (${firstCond(a.first, 't', ids)}) ${a.branch}`).join(' else ')} return false;`,
+  };
+  return L;
 }
-// The step as the statements of a function returning whether it matched: an `alt`, `suppress` or
-// `ctx` step needs statements, so in place it is printed as a call of a function of these (lift).
-// A `ctx` step puts the context it found back after its body, whether the body matched or not.
-function stepStmts(s: Step, ids: LexIdPlan, m: Mode): string {
-  const sc = (x: Step) => stepCond(x, ids, m);
-  switch (s.t) {
-    case 'alt': {
-      if (s.predictive) return predAltBody(s.branches, ids, s.firsts, m);
-      const firsts = s.firsts ?? [];
-      const nAlts = s.branches.length;
-      const needPeek = s.branches.some((_, i) => isGuardable(firsts[i] ?? null, nAlts));
-      const peekInit = needPeek ? `const _ft = peek(); ` : '';
-      const tries = s.branches.map((br, i) => {
-        const body = branchTs(br.length ? br.map(sc).join(' && ') : 'true', m);
-        const f = firsts[i] ?? null;
-        if (!isGuardable(f, nAlts)) return body;
-        return `if (_ft !== null && ${firstCond(f, '_ft', ids)}) ${body}`;
-      }).join(' ');
-      return `${peekInit}${tries} return false;`;
-    }
-    case 'suppress': return `_suppressNext = ${s.set}; const _r = (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); _suppressNext = 0; return _r;`;
-    case 'ctx': return `const _c = _ctx; _ctx = ${s.ctx}; const _r = (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); _ctx = _c; return _r;`;
-    default: return `return ${stepBody(s, ids, m)};`;
-  }
-}
+const stepCond = (s: Step, ids: LexIdPlan, m: Mode): string => stepExpr(s, tsSteps(ids, m));
 
 // ParserIR.lookaheads, one function each, in recognize form (ParserIR.forms): whether the body
 // matches here; it undoes the position (a Pratt rule it runs leaves nothing behind: its node is
@@ -547,18 +521,7 @@ function lookFns(ir: ParserIR, ids: LexIdPlan): string {
 // inlined step did.
 function sharedFns(ir: ParserIR, ids: LexIdPlan, m: Mode): string {
   const has = m === 'r' ? ir.forms.recognizeShared : ir.forms.buildShared;
-  return ir.shared.map((s, id) => (has[id] ? `function sub${id}${SUFFIX[m]}(): boolean { ${stepStmts(s, ids, m)} }\n` : '')).join('');
-}
-
-function predAltBody(branches: Step[][], ids: LexIdPlan, firsts: FirstSig[] | undefined, w: Mode): string {
-  const sc = (x: Step) => stepCond(x, ids, w);
-  // FIRST dispatch still only tries the matching arm; on half-failure restore like non-pred altBody.
-  const arms = branches.map((br, i) => {
-    const steps = br.length ? br.map(sc).join(' && ') : 'true';
-    const body = branchTs(steps, w);
-    return `if (${firstCond(firsts![i], 't', ids)}) ${body}`;
-  }).join(' else ');
-  return `const t = peek(); if (t === null) return false; ${arms} return false;`;
+  return ir.shared.map((s, id) => (has[id] ? `function sub${id}${SUFFIX[m]}(): boolean { ${stepStmts(s, tsSteps(ids, m))} }\n` : '')).join('');
 }
 
 /** Shape A: star(rule|alt(rule…)). Shape B: [opt(rule)]? star(seq(tok, opt(rule))). */
