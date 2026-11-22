@@ -129,13 +129,13 @@ module.exports = grammar({
 
     flow_map_entry: $ => choice(seq(choice(seq($.flow_explicit, optional($.flow_node)), $.flow_node), optional(seq(":", optional($.flow_node)))), seq(":", optional($.flow_node))),
 
-    flow_mapping: $ => seq($._flow_lbrace, optional(seq($.flow_map_entry, repeat(seq(",", $.flow_map_entry)))), optional(","), $._flow_rbrace),
+    flow_mapping: $ => seq(alias($._flow_lbrace, "{"), optional(seq($.flow_map_entry, repeat(seq(",", $.flow_map_entry)))), optional(","), alias($._flow_rbrace, "}")),
 
     flow_seq_entry: $ => choice(seq($.flow_seq_key, ":", optional($.flow_node)), seq("?", optional($.flow_node), optional(seq(":", optional($.flow_node)))), seq(":", optional($.flow_node)), $.flow_node),
 
     flow_seq_key: $ => choice(seq(optional($.property), choice($.flow_mapping, $.flow_sequence, $.dquote_key, $.squote_key, $.key)), $.alias),
 
-    flow_sequence: $ => seq($._flow_lbracket, optional(seq($.flow_seq_entry, repeat(seq(",", $.flow_seq_entry)))), optional(","), $._flow_rbracket),
+    flow_sequence: $ => seq(alias($._flow_lbracket, "["), optional(seq($.flow_seq_entry, repeat(seq(",", $.flow_seq_entry)))), optional(","), alias($._flow_rbracket, "]")),
 
     scalar: $ => choice($.dquote_key, $.squote_key, $.dquote, $.squote, $.block_scalar, $.key, $.num, $.bool_null, $.plain),
 
