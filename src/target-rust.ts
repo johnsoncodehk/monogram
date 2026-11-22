@@ -11,8 +11,8 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
-import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -850,47 +850,10 @@ fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) 
 }
 
 // Top-level step: uses `self`; children accumulate on `self.scratch`.
-type ReusePlanA = { kind: 'A'; topOneBody: string };
-type ReusePlanB = { kind: 'B'; hasHead: boolean; headRule: string | null; loopTok: string; loopRule: string };
-type ReusePlan = ReusePlanA | ReusePlanB;
-
-function matchLoopSeq(step: Step): { loopTok: string; loopRule: string } | null {
-  if (step.t !== 'seq' || step.steps.length !== 2) return null;
-  const [a, b] = step.steps;
-  if (a.t !== 'tok') return null;
-  if (b.t !== 'opt' || b.steps.length !== 1 || b.steps[0].t !== 'rule') return null;
-  return { loopTok: a.name, loopRule: (b.steps[0] as { t: 'rule'; name: string }).name };
-}
-
-function topReusePlan(ir: ParserIR): ReusePlan | null {
-  const entry = ir.rules.find((r) => r.name === ir.entry);
-  if (!entry || entry.kind !== 'rd' || entry.alts.length !== 1) return null;
-  const alt = entry.alts[0];
-  if (alt.length === 1 && alt[0].t === 'star') {
-    const step = alt[0].step;
-    if (step.t === 'rule') return { kind: 'A', topOneBody: `        return self.parse_${step.name}();` };
-    if (step.t === 'alt') {
-      for (const br of step.branches) {
-        if (br.length !== 1 || br[0].t !== 'rule') return null;
-      }
-      const tries = step.branches.map((br) => {
-        const name = (br[0] as { t: 'rule'; name: string }).name;
-        return `        { let sp = self.pos; if let Some(n) = self.parse_${name}() { return Some(n); } self.back(sp); }`;
-      }).join('\n');
-      return { kind: 'A', topOneBody: `${tries}\n        None` };
-    }
-    const loop = matchLoopSeq(step);
-    if (loop) return { kind: 'B', hasHead: false, headRule: null, ...loop };
-    return null;
-  }
-  if (alt.length === 2 && alt[0].t === 'opt' && alt[1].t === 'star') {
-    const hs = alt[0].steps;
-    if (hs.length !== 1 || hs[0].t !== 'rule') return null;
-    const loop = matchLoopSeq(alt[1].step);
-    if (!loop) return null;
-    return { kind: 'B', hasHead: true, headRule: hs[0].name, ...loop };
-  }
-  return null;
+// Shape A's one top-level entry: the first of its rules that matches.
+function topOneBody(plan: ReusePlanA): string {
+  if (plan.rules.length === 1) return `        return self.parse_${plan.rules[0]}();`;
+  return `${plan.rules.map((n) => `        { let sp = self.pos; if let Some(n) = self.parse_${n}() { return Some(n); } self.back(sp); }`).join('\n')}\n        None`;
 }
 
 
@@ -1081,7 +1044,7 @@ ${needPeek ? '        let _ft = self.peek();\n' : ''}${dispatchRs(r.altDispatch,
 function rdEntryWithReuseA(r: RdRule, plan: ReusePlanA, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
   return `    fn parse_top_one(&mut self) -> Option<Spanned<B::H>> {
-${plan.topOneBody}
+${topOneBody(plan)}
     }
     #[inline(always)]
     fn push_entry_from_h(&mut self, h: B::H) {
@@ -1178,9 +1141,12 @@ function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaI
 
 function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
-  const binArms = r.binary.map((b) => `${lidOf(ids, b.op)} => Some((${b.lbp}, ${b.rbp}, ${b.requireTarget}, ${b.noUnaryLhs}))`).join(', ');
-  const preArms = r.prefix.map((p) => `${lidOf(ids, p.op)} => Some((${p.rbp}, ${p.requireTarget}, ${p.form}))`).join(', ');
-  const postArms = r.postfix.map((p) => `${lidOf(ids, p.op)} => Some((${p.lbp}, ${p.requireTarget}))`).join(', ');
+  // The operator tables (emit-portable prattOpTables) as `match` functions: LLVM compiles a match
+  // on the lid returning constants to a lookup table, no hashing.
+  const ops = prattOpTables(r, ids);
+  const binArms = ops.bin.map((b) => `${b.lid} => Some((${b.lbp}, ${b.rbp}, ${b.tgt}, ${b.noUnary}))`).join(', ');
+  const preArms = ops.pre.map((p) => `${p.lid} => Some((${p.rbp}, ${p.tgt}, ${p.form}))`).join(', ');
+  const postArms = ops.post.map((p) => `${p.lid} => Some((${p.lbp}, ${p.tgt}))`).join(', ');
   // The NUD arms, each a longest-match candidate tried from `save`, reached through the rule's
   // Dispatch (emit-portable.ts, PrattRule.nudOrder / nudDispatch). `won` records the node just
   // finished as the best so far and moves `ck` past it; `lost` drops what the arm built.
@@ -1332,7 +1298,7 @@ ${dispatchRs(r.nudDispatch, 't', ids, nudArm)}
 
 
 function docEditBlockRust(ir: ParserIR, shared: SharedAlgorithms): string {
-  const topReuse = topReusePlan(ir);
+  const topReuse = ir.reuse;
   const shapeA = topReuse?.kind === 'A';
   const shapeB = topReuse?.kind === 'B';
   const hasHeadB = !!(shapeB && topReuse.kind === 'B' && topReuse.hasHead);
@@ -2086,7 +2052,7 @@ fn in_ctx_words(ctx: u8, t: &Tok) -> bool { let _ = (ctx, t); false${ctxWordLids
 }
 
 function emitParserMachine(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shapeB: boolean): string {
-  const reuse = topReusePlan(ir);
+  const reuse = ir.reuse;
   const entriesField = reuse ? '\n    entries: Vec<EntryMeta>,' : '';
   const segsField = shapeB ? '\n    segs: Vec<Seg>,' : '';
   const ruleFns = [...ir.rules.filter((r) => ir.forms.buildRules.includes(r.name)).map((r) => {
@@ -2711,7 +2677,7 @@ ${matchTemplate}${lookFns(ir, ids, ar)}${sharedFns(ir, ids, ar)}${ruleFns}
 }
 
 function emitParseWithHelpers(ir: ParserIR, shapeB: boolean): string {
-  const reuse = !!topReusePlan(ir);
+  const reuse = !!ir.reuse;
   return `
 pub fn parse_with<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> Option<B::H> {
     // A builder that parsed before is reused: its token buffer, arena and workspace are emptied
@@ -5532,7 +5498,7 @@ export const rustTarget = defineTarget({
 
 function emitRustLibrary(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
     const ar = buildArenaIdPlan(ir, ids);
-    const reuse = topReusePlan(ir);
+    const reuse = ir.reuse;
     const shapeB = reuse?.kind === 'B';
     const reuseInit = `${reuse ? ', entries: Vec::new()' : ''}${shapeB ? ', segs: Vec::new()' : ''}`;
     // EntryMeta is always emitted — Builder::entry_meta returns it (even when the side table is unused).

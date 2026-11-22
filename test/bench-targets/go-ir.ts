@@ -1,22 +1,23 @@
 // node go-ir.ts <callgrind.out> [--functions]: the Go target's instruction count of one parse from a
 // Callgrind output of go-main.go's count-* modes (run with --compress-strings=no --compress-pos=no).
 // Prints "ir=<total minus map lookups> total=<total> mapir=<map lookups' instructions>
-// mapcalls=<calls into the map runtime>"; --functions prints every function's own instructions.
+// mapcalls=<calls into the map runtime>"; --functions prints every function's own instructions,
+// --map-callers every function that calls into the map runtime, with its number of calls.
 //
-// Why the map runtime is apart: a Go map's hash seed is random per map and per process, so the
-// instructions of one lookup (its probe sequence, its false h2 matches, the key comparisons they
-// cost) differ from run to run (measured: up to 0.5% of a parse of checker.ts between two runs of
-// one binary), while the number of lookups does not. `mapir` is the inclusive cost of every call
-// from outside the map runtime into it (a lookup switches no stack, so Callgrind's inclusive cost
-// of that call is exact), `ir` the count without it, and `mapcalls` the number of those calls; `total` is printed for reference. Once no map is read on the parse
-// path (the Pratt operator tables and the keyword lookup are the two today), mapir and mapcalls
-// are 0 and ir = total.
+// Why the map runtime is counted: a Go map's hash seed is random per process, so the instructions
+// of one lookup (its probe sequence, its false h2 matches, the key comparisons they cost) differ
+// from run to run (measured: up to 0.5% of a parse of checker.ts between two runs of one binary),
+// while the number of lookups does not. `mapir` is the inclusive cost of every call from outside the
+// map runtime into it (a lookup switches no stack, so Callgrind's inclusive cost of that call is
+// exact) and `mapcalls` the number of those calls made from the parser's own code (package parser); the profile reports `total` and requires
+// mapcalls = 0 for it to repeat (the parse path of the typescript grammar reads no map).
 import { readFileSync } from 'node:fs';
 
 const [file, flag] = process.argv.slice(2);
 if (!file) throw new Error('usage: go-ir.ts <callgrind.out> [--functions]');
 const MAP_RUNTIME = /^(internal\/runtime\/maps\.|runtime\.(mapaccess|mapassign|mapiter|memhash|strhash|aeshash|typehash)|aeshashbody)/;
 const self = new Map<string, number>();
+const callers = new Map<string, number>();
 let fn = '', cfn = '', afterCalls = false, intoMap = false, total = NaN, mapcalls = 0, mapir = 0;
 for (const line of readFileSync(file, 'utf8').split('\n')) {
   if (line.startsWith('fn=')) { fn = line.slice(3).replace(/^\(\d+\)\s*/, ''); continue; }
@@ -24,7 +25,14 @@ for (const line of readFileSync(file, 'utf8').split('\n')) {
   if (line.startsWith('calls=')) {
     afterCalls = true;
     intoMap = MAP_RUNTIME.test(cfn) && !MAP_RUNTIME.test(fn);
-    if (intoMap) mapcalls += +line.slice(6).split(/\s+/)[0]!;
+    // Counted: calls from the parser's own code only. A call made by the runtime (another runtime
+    // function reaching a map helper) is not a lookup the parser asked for, and its number can
+    // depend on the hash seed (PR #146: 96,332 / 95,966 on one binary).
+    if (intoMap && fn.startsWith('consumer/parser.')) {
+      const n = +line.slice(6).split(/\s+/)[0]!;
+      mapcalls += n;
+      callers.set(fn, (callers.get(fn) ?? 0) + n);
+    }
     continue;
   }
   if (line.startsWith('totals:') || line.startsWith('summary:')) { if (Number.isNaN(total)) total = +line.split(/\s+/)[1]!; continue; }
@@ -39,5 +47,6 @@ if (!Number.isFinite(total)) throw new Error('no totals in ' + file);
 let sum = 0;
 for (const n of self.values()) sum += n;
 if (sum !== total) throw new Error(`${file}: own costs sum to ${sum}, totals say ${total}`);
-if (flag === '--functions') for (const [f, n] of [...self].sort((a, b) => b[1] - a[1])) console.log(n, f);
+if (flag === '--map-callers') for (const [f, n] of [...callers].sort((a, b) => b[1] - a[1])) console.log(n, f);
+else if (flag === '--functions') for (const [f, n] of [...self].sort((a, b) => b[1] - a[1])) console.log(n, f);
 else console.log(`ir=${total - mapir} total=${total} mapir=${mapir} mapcalls=${mapcalls}`);

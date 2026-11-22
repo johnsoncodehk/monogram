@@ -363,6 +363,45 @@ export type NewlineCfg = {
   flowClose: string[];
 };
 
+/** How incremental reuse cuts the entry rule into top-level entries, read off the entry rule's
+ *  shape once for every target. A: `star(rule)` or `star(alt(rule, ...))`, each entry one of `rules`
+ *  (tried in order). B: `[opt(headRule)] star(seq(loopTok, opt(loopRule)))`, the entries being the
+ *  head and each `loopTok`-led segment. Any other entry shape has no plan (no reuse). */
+export type ReusePlanA = { kind: 'A'; rules: string[] };
+export type ReusePlanB = { kind: 'B'; hasHead: boolean; headRule: string | null; loopTok: string; loopRule: string };
+export type ReusePlan = ReusePlanA | ReusePlanB;
+
+function reuseLoopSeq(step: Step): { loopTok: string; loopRule: string } | null {
+  if (step.t !== 'seq' || step.steps.length !== 2) return null;
+  const [a, b] = step.steps;
+  if (a.t !== 'tok') return null;
+  if (b.t !== 'opt' || b.steps.length !== 1 || b.steps[0].t !== 'rule') return null;
+  return { loopTok: a.name, loopRule: (b.steps[0] as { t: 'rule'; name: string }).name };
+}
+
+function reusePlanOf(rules: RuleIR[], entryName: string): ReusePlan | null {
+  const entry = rules.find((r) => r.name === entryName);
+  if (!entry || entry.kind !== 'rd' || entry.alts.length !== 1) return null;
+  const alt = entry.alts[0];
+  if (alt.length === 1 && alt[0].t === 'star') {
+    const step = alt[0].step;
+    if (step.t === 'rule') return { kind: 'A', rules: [step.name] };
+    if (step.t === 'alt') {
+      for (const br of step.branches) if (br.length !== 1 || br[0].t !== 'rule') return null;
+      return { kind: 'A', rules: step.branches.map((br) => (br[0] as { t: 'rule'; name: string }).name) };
+    }
+    const loop = reuseLoopSeq(step);
+    return loop ? { kind: 'B', hasHead: false, headRule: null, ...loop } : null;
+  }
+  if (alt.length === 2 && alt[0].t === 'opt' && alt[1].t === 'star') {
+    const hs = alt[0].steps;
+    if (hs.length !== 1 || hs[0].t !== 'rule') return null;
+    const loop = reuseLoopSeq(alt[1].step);
+    return loop ? { kind: 'B', hasHead: true, headRule: hs[0].name, ...loop } : null;
+  }
+  return null;
+}
+
 export type ParserIR = {
   grammarName: string;
   entry: string;
@@ -377,6 +416,7 @@ export type ParserIR = {
   lookaheads: Alt[];           // the bodies `look` steps run, indexed by Step.id; a body names only lower ids
   shared: Step[];              // the steps printed once and called from each site, indexed by Step.share (see shareSteps)
   forms: Forms;                // which rules and shared steps are printed in building and in recognize form (see Forms)
+  reuse: ReusePlan | null;     // how incremental reuse cuts the entry rule into top-level entries (see ReusePlan); null: no reuse
   suppressSets: string[][];    // the connector sets `suppress` steps disable, indexed by Step.set; [0] is the empty set
   regexCtx: RegexCtx | null;   // null unless the grammar has a regex token with context
   tpl: TplCfg | null;          // null unless the grammar has a template token
@@ -725,7 +765,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
   ]);
   const entry = findEntryRule(grammar);
   const forms = formsOf(rules, lookaheads, shared.length, entry);
-  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike };
+  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse: reusePlanOf(rules, entry), suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike };
 }
 
 // The step lists a rule runs: an rd rule's alternatives, a Pratt rule's NUD and LED arms.
@@ -1301,6 +1341,36 @@ export function ctxWordLids(ir: ParserIR, plan: LexIdPlan): Array<{ bit: number;
 export function lidOf(plan: LexIdPlan, text: string): number {
   const i = plan.lids.indexOf(text);
   return i >= 0 ? i : 0;
+}
+
+/** A Pratt rule's operator tables keyed by literal id: the one description of the binding-power
+ *  lookups (binary LED, prefix NUD, postfix LED) that every printer renders as its lookup (a
+ *  `match`, a lid-indexed array, a record). Entries in the rule's declaration order, at most one
+ *  per lid in each table; `size` = the number of literal ids, so a table of that length takes any
+ *  token's lid as its index. */
+export type PrattOpTables = {
+  size: number;
+  bin: Array<{ lid: number; lbp: number; rbp: number; tgt: boolean; noUnary: boolean }>;
+  pre: Array<{ lid: number; rbp: number; tgt: boolean; form: AssignForm }>;
+  post: Array<{ lid: number; lbp: number; tgt: boolean }>;
+};
+export function prattOpTables(r: PrattRule, plan: LexIdPlan): PrattOpTables {
+  const keyed = <T extends { op: string }, U>(table: string, xs: T[], f: (x: T, lid: number) => U): U[] => {
+    const seen = new Set<number>();
+    return xs.map((x) => {
+      const lid = plan.lids.indexOf(x.op);
+      if (lid <= 0) throw new Error(`portable: ${r.name}: ${table} operator ${JSON.stringify(x.op)} has no literal id`);
+      if (seen.has(lid)) throw new Error(`portable: ${r.name}: ${table} operator ${JSON.stringify(x.op)} is declared twice`);
+      seen.add(lid);
+      return f(x, lid);
+    });
+  };
+  return {
+    size: plan.lids.length,
+    bin: keyed('binary', r.binary, (b, lid) => ({ lid, lbp: b.lbp, rbp: b.rbp, tgt: b.requireTarget, noUnary: b.noUnaryLhs })),
+    pre: keyed('prefix', r.prefix, (p, lid) => ({ lid, rbp: p.rbp, tgt: p.requireTarget, form: p.form })),
+    post: keyed('postfix', r.postfix, (p, lid) => ({ lid, lbp: p.lbp, tgt: p.requireTarget })),
+  };
 }
 
 /**
