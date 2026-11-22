@@ -645,7 +645,7 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
   const otherTokenRules: MonarchRule[] = [];
   for (const t of grammar.tokens) {
     if (t.flags.includes('skip') || t.flags.includes('regex') || t.template || t === identToken) continue;
-    if (t.name === grammar.elements?.text) continue;  // an element region's text exists only inside the region
+    if (t.name === grammar.elements?.text || grammar.elements?.tagTokens?.includes(t.name)) continue;  // an element region's own tokens exist only inside the region
     if (t.string) continue;  // handled as a string span above
     const pattern = tokenPatternSource(t);
     const scope = classifyTokenScope(t);
