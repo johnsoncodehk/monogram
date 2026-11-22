@@ -14,7 +14,7 @@ import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctF
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
-import { UNI_SYM0, uniIdentPlan, uniLookup } from './uni-ident.ts';
+import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
@@ -325,14 +325,14 @@ func lexHasLineTerm(s string) bool {
  *  a const string, since Go has no compile-time evaluation to decode a denser form into. */
 function goUniIdentTables(): string {
   const p = uniIdentPlan();
-  const l = uniLookup(p, (k) => `(uint32(_uniT[${k}]) - ${UNI_SYM0})`);
+  const l = uniLookup(p, (k) => `uint32(_uniT[${k}])`);
   return `const _uniT = "${p.data.replace(/\\/g, '\\\\')}"
 // uni-ident.ts's class of r: 0 neither, 1 IdentifierPart only, 2 IdentifierStart too.
 func uniClass(r rune) uint32 {
 	cp := uint32(r)
 	if ${l.top} >= ${p.topLen} { return 0 }
 	var i uint32
-${l.steps.map((e) => `\ti = ${e}\n`).join('')}\treturn ${l.result}
+${l.steps.map((e) => `\ti = ${e}\n\tif i < ${l.uniform} { return i }\n`).join('')}\treturn ${l.result}
 }
 `;
 }

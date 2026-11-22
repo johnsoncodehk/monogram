@@ -16,7 +16,7 @@ import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctF
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
-import { UNI_SYM0, uniIdentPlan, uniLookup } from './uni-ident.ts';
+import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 import type {
   ShapeSpec, ShapeIR, ShapeIRRule, RuleShape, NodeShape, ChoiceShape, FieldDecl,
@@ -384,13 +384,13 @@ static _FLOW_D: [i8; ${ids.lids.length}] = [${lidDeltaTable(ids, nl.flowOpen, nl
 function rsUniIdentTables(): string {
   const p = uniIdentPlan();
   // In range by construction: every index the plan's lookup forms is inside its string.
-  const l = uniLookup(p, (k) => `((unsafe { *_UNI_T.get_unchecked(${k} as usize) }) as u32 - ${UNI_SYM0})`);
+  const l = uniLookup(p, (k) => `(unsafe { *_UNI_T.get_unchecked(${k} as usize) } as u32)`);
   return `static _UNI_T: &[u8; ${p.data.length}] = b"${p.data.replace(/\\/g, '\\\\')}";
 // uni-ident.ts's class of cp: 0 neither, 1 IdentifierPart only, 2 IdentifierStart too.
 #[inline(always)] fn _uni_class(cp: u32) -> u32 {
     if ${l.top} >= ${p.topLen} { return 0; }
     let mut i: u32;
-${l.steps.map((e) => `    i = ${e};\n`).join('')}    ${l.result}
+${l.steps.map((e) => `    i = ${e};\n    if i < ${l.uniform} { return i; }\n`).join('')}    ${l.result}
 }
 // The code point starting at byte e of valid UTF-8, and its width; a byte inside a
 // character (e is no boundary) is no code point (0x110000, in neither class).
