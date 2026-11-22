@@ -63,6 +63,22 @@ const dispatchRs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, key
 const beatsRs = (d: Dispatch, pos: string, i: number) => d.ranked.includes(i) ? `(${pos} > best_pos || ${pos} == best_pos && ${i} < bi)` : `${pos} > best_pos`;
 const markRs = (d: Dispatch, i: number) => (d.ranked.length ? ` bi = ${i};` : '');
 const biRs = (d: Dispatch) => (d.ranked.length ? ' let mut bi: i32 = -1;' : '');
+// ── The two frames of a construct that may have to undo what it tried ──
+// Every one is printed by one of these, so what a frame costs in the output is decided here.
+// The checkpoint (position, scratch length, builder checkpoint) taken over the parser `p`, and the
+// undo back to it.
+const ckptRs = (p: string) => `let sp = ${p}.pos; let sb = ${p}.scratch.len(); let ck = ${p}.b.checkpoint();`;
+const undoRs = (p: string) => `${p}.back(sp); ${p}.scratch.truncate(sb); ${p}.b.restore(ck);`;
+// BRANCH frame: one branch of an ordered choice (`alt`), over `p`: it returns true from the
+// choice when the branch matched, and undoes it when it did not.
+const branchRs = (cond: string) => `{ ${ckptRs('p')} if ${cond} { return true; } ${undoRs('p')} }`;
+// CANDIDATE frame: one candidate of a longest-match list (an rd rule's alternatives, a Pratt
+// rule's NUD arms) tried from `save`: when it matched and beats the best so far it becomes the
+// best (`win`: what records it; `ck` moves past its node), else what it built is dropped; either
+// way the position goes back to `save` for the next candidate.
+const lostRs = `self.scratch.truncate(sb); self.b.restore(ck);`;
+const candRs = (d: Dispatch, i: number, cond: string, win: string) =>
+  `{ if ${cond} && ${beatsRs(d, 'self.pos', i)} { ${win} } else { ${lostRs} } self.back(save); }`;
 // The typed-AST layer's form of a Guard over the token t: its parser keeps no lookahead mark, so
 // the second token is read directly. null: no guard.
 const astGuardRs = (g: Guard, t: string): string | null =>
@@ -747,7 +763,7 @@ function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: F
   const needPeek = branches.some((_, i) => isGuardable(fs[i] ?? null, nAlts));
   const peekInit = needPeek ? `let _ft = p.peek(); ` : '';
   const tries = branches.map((br, i) => {
-    const body = `{ let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); if ${br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'} { return true; } p.back(sp); p.scratch.truncate(sb); p.b.restore(ck); }`;
+    const body = branchRs(br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true');
     const f = fs[i] ?? null;
     if (!isGuardable(f, nAlts)) return body;
     return `if let Some(t) = _ft { if ${firstCond(f, 't', ids)} ${body} }`;
@@ -756,7 +772,7 @@ function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: F
 }
 // ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
 function lookFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  return ir.lookaheads.map((body, id) => `    fn look_${id}(&mut self) -> bool { let p = self; let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); let m = ${body.map((x) => stepCondP(x, ids, ar)).join(' && ')}; p.back(sp); p.scratch.truncate(sb); p.b.restore(ck); m }\n`).join('');
+  return ir.lookaheads.map((body, id) => `    fn look_${id}(&mut self) -> bool { let p = self; ${ckptRs('p')} let m = ${body.map((x) => stepCondP(x, ids, ar)).join(' && ')}; ${undoRs('p')} m }\n`).join('');
 }
 // ParserIR.shared, one method each: the step, run against the parser's scratch list and builder.
 // It undoes nothing: a failed step leaves what it advanced and appended for the construct around
@@ -771,7 +787,7 @@ function predAltBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts
   // FIRST dispatch; restore pos/scratch/builder on arm half-failure (like altBody).
   const arms = branches.map((br, i) => {
     const steps = br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true';
-    return `        ${i === 0 ? 'if' : 'else if'} ${firstCond(firsts![i], 't', ids)} { let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); if ${steps} { return true; } p.back(sp); p.scratch.truncate(sb); p.b.restore(ck); }`;
+    return `        ${i === 0 ? 'if' : 'else if'} ${firstCond(firsts![i], 't', ids)} ${branchRs(steps)}`;
   }).join('\n');
   return `let t = match p.peek() { Some(t) => t, None => return false };\n${arms}\n        false`;
 }
@@ -802,7 +818,7 @@ ${r.alts.map(arm).join('\n')}
   // The alternatives are reached through the rule's Dispatch (emit-portable.ts, RdRule.altDispatch).
   const alt = (i: number, keyed: boolean) => {
     const cond = r.alts[i]!.map((x) => stepCond(x, ids, ar)).join(' && ');
-    const body = `{ if ${cond} && ${beatsRs(r.altDispatch, 'self.pos', i)} { best = Some(self.finish(${rid}, sb, self.off_at(save), save)); best_pos = self.pos;${markRs(r.altDispatch, i)} ck = self.b.checkpoint(); } else { self.scratch.truncate(sb); self.b.restore(ck); } self.back(save); }`;
+    const body = candRs(r.altDispatch, i, cond, `best = Some(self.finish(${rid}, sb, self.off_at(save), save)); best_pos = self.pos;${markRs(r.altDispatch, i)} ck = self.b.checkpoint();`);
     const g = guardCond(r.altGuard[i]!, 't', keyed);
     return g.length && !keyed ? `        if let Some(t) = _ft { if ${g.join(' && ')} ${body} }` : ifRs(g, body);
   };
@@ -926,10 +942,10 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   // finished as the best so far and moves `ck` past it; `lost` drops what the arm built.
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
     `best_pos = self.pos;${markRs(r.nudDispatch, i)} bf = ${form}; bt = ${tail}; bc = ${capped}; ck = self.b.checkpoint();`;
-  const lost = `self.scratch.truncate(sb); self.b.restore(ck);`;
+  const lost = lostRs;
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    `{ if ${stepsCond(steps)} && ${beatsRs(r.nudDispatch, 'self.pos', i)} { best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won(i, '0', tail, capped)} } else { ${lost} } self.back(save); }`;
+    candRs(r.nudDispatch, i, stepsCond(steps), `best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won(i, '0', tail, capped)}`);
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
     switch (a.kind) {

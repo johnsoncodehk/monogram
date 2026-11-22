@@ -54,6 +54,25 @@ const dispatchGo = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, key
 const beatsGo = (d: Dispatch, pos: string, i: number) => d.ranked.includes(i) ? `(${pos} > bestPos || ${pos} == bestPos && ${i} < bi)` : `${pos} > bestPos`;
 const markGo = (d: Dispatch, i: number) => (d.ranked.length ? ` bi = ${i};` : '');
 const biGo = (d: Dispatch) => (d.ranked.length ? '; bi := -1' : '');
+// ── The two frames of a construct that may have to undo what it tried ──
+// Every one is printed by one of these, so what a frame costs in the output is decided here. The
+// checkpoint (position, scratch length, arena lengths) and the undo back to it, in the native
+// engine; the builder engine's checkpoint is the builder's (ckptGoW / undoGoW).
+const ckptGo = 'save := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids);';
+const undoGo = 'p.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]';
+const ckptGoW = (recv: string) => `sp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}`;
+const undoGoW = (recv: string) => `p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}`;
+// BRANCH frame: one branch of an ordered choice (`alt`): it returns true from the choice when the
+// branch matched, and undoes it when it did not.
+const branchGo = (cond: string) => `{ ${ckptGo} if ${cond} { return true }; ${undoGo} }`;
+const branchGoW = (cond: string, recv: string) => `{ ${ckptGoW(recv)}; if ${cond} { return true }; ${undoGoW(recv)} }`;
+// CANDIDATE frame: one candidate of a longest-match list tried from `save`: when it matched and
+// beats the best so far it becomes the best (`win` records it and moves the arena checkpoint past
+// its node), else `lost` drops what it built; either way the position goes back to `save`.
+const lostGo = 'p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]';
+const lostGoW = (recv: string) => `p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}`;
+const candGo = (d: Dispatch, i: number, cond: string, win: string, lost: string) =>
+  `{ if ${cond} && ${beatsGo(d, 'p.pos', i)} { ${win} } else { ${lost} }; p.back(save) }`;
 
 /** Emit kid/lid lookup tables into generated lexer source. */
 function renderIdTablesGo(ids: LexIdPlan): string {
@@ -587,7 +606,7 @@ function stepStmts(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
       const needPeek = s.branches.some((_, i) => isGuardable(firsts[i] ?? null, nAlts));
       const peekInit = needPeek ? `_ft := p.peek(); ` : '';
       const tries = s.branches.map((br, i) => {
-        const body = `{ save := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids); if ${br.length ? br.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'} { return true }; p.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb] }`;
+        const body = branchGo(br.length ? br.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true');
         const f = firsts[i] ?? null;
         if (!isGuardable(f, nAlts)) return body;
         return `if _ft != nil && ${firstCond(f, '_ft', ids)} ${body}`;
@@ -602,7 +621,7 @@ function stepStmts(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
 
 // ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
 function lookFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  return ir.lookaheads.map((body, id) => `func (p *engine) look${id}() bool { save := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids); m := ${body.map((x) => stepCond(x, ids, ar)).join(' && ')}; p.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; return m }\n`).join('');
+  return ir.lookaheads.map((body, id) => `func (p *engine) look${id}() bool { ${ckptGo} m := ${body.map((x) => stepCond(x, ids, ar)).join(' && ')}; ${undoGo}; return m }\n`).join('');
 }
 
 // ParserIR.shared, one method each: the step, run against the parser's scratch list. It undoes
@@ -615,7 +634,7 @@ function predAltBody(branches: Step[][], ids: LexIdPlan, firsts: FirstSig[] | un
   // FIRST dispatch still only tries the matching arm; on half-failure restore like non-pred alt.
   const arms = branches.map((br, i) => {
     const steps = br.length ? br.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true';
-    return `if ${firstCond(firsts![i], 't', ids)} { save := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids); if ${steps} { return true }; p.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb] }`;
+    return `if ${firstCond(firsts![i], 't', ids)} ${branchGo(steps)}`;
   }).join(' else ');
   return `t := p.peek(); if t == nil { return false }; ${arms}; return false`;
 }
@@ -688,7 +707,7 @@ ${r.alts.map(arm).join(' ')}
   // The alternatives are reached through the rule's Dispatch (emit-portable.ts, RdRule.altDispatch).
   const alt = (i: number, keyed: boolean) => {
     const cond = r.alts[i]!.map((x) => stepCond(x, ids, ar)).join(' && ');
-    const body = `{ if ${cond} && ${beatsGo(r.altDispatch, 'p.pos', i)} { best = p.finish(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save); bestPos = p.pos;${markGo(r.altDispatch, i)} nb = len(p.nodes); kb = len(p.kids) } else { p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb] }; p.back(save) }`;
+    const body = candGo(r.altDispatch, i, cond, `best = p.finish(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save); bestPos = p.pos;${markGo(r.altDispatch, i)} nb = len(p.nodes); kb = len(p.kids)`, lostGo);
     const g = guardCond(r.altGuard[i]!, '_ft', '', keyed);
     return ifGo(g.length && !keyed ? ['_ft != nil', ...g] : g, body);
   };
@@ -816,10 +835,10 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   const rid = ruleIdOf(ar, r.name);
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
     `bestPos = p.pos;${markGo(r.nudDispatch, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; nb = len(p.nodes); kb = len(p.kids)`;
-  const lost = `p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]`;
+  const lost = lostGo;
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    `{ if ${stepsCond(steps)} && ${beatsGo(r.nudDispatch, 'p.pos', i)} { best = p.finish(${rid}, sb, p.offAt(save), save); ${won(i, '0', tail, capped)} } else { ${lost} }; p.back(save) }`;
+    candGo(r.nudDispatch, i, stepsCond(steps), `best = p.finish(${rid}, sb, p.offAt(save), save); ${won(i, '0', tail, capped)}`, lost);
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
     switch (a.kind) {
@@ -1547,7 +1566,7 @@ function altBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: F
   const needPeek = branches.some((_, i) => isGuardable(fs[i] ?? null, nAlts));
   const peekInit = needPeek ? `_ft := p.peekW(); ` : '';
   const tries = branches.map((br, i) => {
-    const body = `{ sp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}; if ${br.length ? br.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'} { return true }; p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)} }`;
+    const body = branchGoW(br.length ? br.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true', recv);
     const f = fs[i] ?? null;
     if (!isGuardable(f, nAlts)) return body;
     return `if _ft != nil && ${firstCond(f, '_ft', ids)} ${body}`;
@@ -1556,7 +1575,7 @@ function altBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: F
 }
 // ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
 function lookFnsW(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  return ir.lookaheads.map((body, id) => `func (p *${recv}) look${id}W() bool { sp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}; m := ${body.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')}; p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; return m }\n`).join('');
+  return ir.lookaheads.map((body, id) => `func (p *${recv}) look${id}W() bool { ${ckptGoW(recv)}; m := ${body.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')}; ${undoGoW(recv)}; return m }\n`).join('');
 }
 function sharedFnsW(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
   return ir.shared.map((s, id) => `func (p *${recv}) sub${id}W() bool { ${stepStmtsW(s, ids, ar, recv)} }\n`).join('');
@@ -1566,7 +1585,7 @@ function predAltBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, first
   // FIRST dispatch; restore pos/scratch/arena on arm half-failure (like altBodyW).
   const arms = branches.map((br, i) => {
     const steps = br.length ? br.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true';
-    return `if ${firstCond(firsts![i], 't', ids)} { sp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}; if ${steps} { return true }; p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)} }`;
+    return `if ${firstCond(firsts![i], 't', ids)} ${branchGoW(steps, recv)}`;
   }).join(' else ');
   return `t := p.peekW(); if t == nil { return false }; ${arms}; return false`;
 }
@@ -1596,7 +1615,7 @@ ${r.alts.map(arm).join(' ')}
   // Longest match over the alternatives through the rule's Dispatch — as rdRule.
   const alt = (i: number, keyed: boolean) => {
     const cond = r.alts[i]!.map((x) => stepCondW(x, ids, ar, recv)).join(' && ');
-    const body = `{ if ${cond} && ${beatsGo(r.altDispatch, 'p.pos', i)} { best = p.finishW(${rid}, sb, p.offAtW(save), save); found = true; bestPos = p.pos;${markGo(r.altDispatch, i)} ${arenaMark(recv)} } else { p.scratch = p.scratch[:sb]; ${arenaRestore(recv)} }; p.back(save) }`;
+    const body = candGo(r.altDispatch, i, cond, `best = p.finishW(${rid}, sb, p.offAtW(save), save); found = true; bestPos = p.pos;${markGo(r.altDispatch, i)} ${arenaMark(recv)}`, lostGoW(recv));
     const g = guardCond(r.altGuard[i]!, '_ft', 'W', keyed);
     return ifGo(g.length && !keyed ? ['_ft != nil', ...g] : g, body);
   };
@@ -1721,10 +1740,10 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaI
   // The NUD arms: longest-match candidates through the rule's Dispatch, as in prattRule.
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
     `found = true; bestPos = p.pos;${markGo(r.nudDispatch, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; ${arenaMark(recv)}`;
-  const lost = `p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}`;
+  const lost = lostGoW(recv);
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    `{ if ${stepsCond(steps)} && ${beatsGo(r.nudDispatch, 'p.pos', i)} { best = p.finishW(${rid}, sb, p.offAtW(save), save); ${won(i, '0', tail, capped)} } else { ${lost} }; p.back(save) }`;
+    candGo(r.nudDispatch, i, stepsCond(steps), `best = p.finishW(${rid}, sb, p.offAtW(save), save); ${won(i, '0', tail, capped)}`, lost);
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
     switch (a.kind) {

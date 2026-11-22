@@ -51,6 +51,19 @@ const dispatchTs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, key
 const beatsTs = (d: Dispatch, pos: string, i: number) => d.ranked.includes(i) ? `(${pos} > bestPos || ${pos} === bestPos && ${i} < bi)` : `${pos} > bestPos`;
 const markTs = (d: Dispatch, i: number) => (d.ranked.length ? ` bi = ${i};` : '');
 const biTs = (d: Dispatch) => (d.ranked.length ? ', bi = -1' : '');
+// ── The two frames of a construct that may have to undo what it tried ──
+// Every one is printed by one of these, so what a frame costs in the output is decided here. The
+// checkpoint (position, children length; spans length in builder mode `w`) and the undo back to it.
+const ckptTs = (w: boolean) => `const sp = pos; const bk = kids.length;${w ? ' const bs = spans.length;' : ''}`;
+const undoTs = (w: boolean) => `back(sp); kids.length = bk;${w ? ' spans.length = bs;' : ''}`;
+// BRANCH frame: one branch of an ordered choice (`alt`): it returns true from the choice when the
+// branch matched, and undoes it when it did not.
+const branchTs = (cond: string, w: boolean) => `{ ${ckptTs(w)} if (${cond}) return true; ${undoTs(w)} }`;
+// CANDIDATE frame: one candidate of a longest-match list tried from `save` into its own children:
+// when it matched and beats the best so far, `win` records it; either way the position goes back
+// to `save` for the next candidate.
+const candTs = (d: Dispatch, i: number, w: boolean, cond: string, win: string) =>
+  `{ const kids: ${w ? 'any[] = []; const spans: BWSpan[] = [];' : 'Cst[] = [];'} if (${cond} && ${beatsTs(d, 'pos', i)}) { ${win} } back(save); }`;
 // The typed-AST layer tries an rd rule's alternatives in declaration order, each under its Guard.
 const astGuard = (r: RdRule, i: number): string => { const c = guardCond(r.altGuard[i]!, '_ft', false); return c.length ? `_ft !== null && ${c.join(' && ')}` : 'true'; };
 
@@ -441,9 +454,7 @@ function stepStmts(s: Step, ids: LexIdPlan, w: boolean): string {
       const needPeek = s.branches.some((_, i) => isGuardable(firsts[i] ?? null, nAlts));
       const peekInit = needPeek ? `const _ft = peek(); ` : '';
       const tries = s.branches.map((br, i) => {
-        const body = w
-          ? `{ const sp = pos; const bk = kids.length; const bs = spans.length; if (${br.length ? br.map(sc).join(' && ') : 'true'}) return true; back(sp); kids.length = bk; spans.length = bs; }`
-          : `{ const sp = pos; const bk = kids.length; if (${br.length ? br.map(sc).join(' && ') : 'true'}) return true; back(sp); kids.length = bk; }`;
+        const body = branchTs(br.length ? br.map(sc).join(' && ') : 'true', w);
         const f = firsts[i] ?? null;
         if (!isGuardable(f, nAlts)) return body;
         return `if (_ft !== null && ${firstCond(f, '_ft', ids)}) ${body}`;
@@ -460,8 +471,8 @@ function stepStmts(s: Step, ids: LexIdPlan, w: boolean): string {
 // It appends to the caller's children (and spans), as the step it stands for would.
 function lookFns(ir: ParserIR, ids: LexIdPlan, w = false): string {
   return ir.lookaheads.map((body, id) => w
-    ? `function look${id}W(kids: any[], spans: BWSpan[]): boolean { const sp = pos; const bk = kids.length; const bs = spans.length; const m = ${body.map((x) => stepCond(x, ids, true)).join(' && ')}; back(sp); kids.length = bk; spans.length = bs; return m; }\n`
-    : `function look${id}(kids: Cst[]): boolean { const sp = pos; const bk = kids.length; const m = ${body.map((x) => stepCond(x, ids)).join(' && ')}; back(sp); kids.length = bk; return m; }\n`).join('');
+    ? `function look${id}W(kids: any[], spans: BWSpan[]): boolean { ${ckptTs(true)} const m = ${body.map((x) => stepCond(x, ids, true)).join(' && ')}; ${undoTs(true)} return m; }\n`
+    : `function look${id}(kids: Cst[]): boolean { ${ckptTs(false)} const m = ${body.map((x) => stepCond(x, ids)).join(' && ')}; ${undoTs(false)} return m; }\n`).join('');
 }
 
 // ParserIR.shared, one function each: the step, run against the caller's children (and spans).
@@ -478,9 +489,7 @@ function predAltBody(branches: Step[][], ids: LexIdPlan, firsts?: FirstSig[], w 
   // FIRST dispatch still only tries the matching arm; on half-failure restore like non-pred altBody.
   const arms = branches.map((br, i) => {
     const steps = br.length ? br.map(sc).join(' && ') : 'true';
-    const body = w
-      ? `{ const sp = pos; const bk = kids.length; const bs = spans.length; if (${steps}) return true; back(sp); kids.length = bk; spans.length = bs; }`
-      : `{ const sp = pos; const bk = kids.length; if (${steps}) return true; back(sp); kids.length = bk; }`;
+    const body = branchTs(steps, w);
     return `if (${firstCond(firsts![i], 't', ids)}) ${body}`;
   }).join(' else ');
   return `const t = peek(); if (t === null) return false; ${arms} return false;`;
@@ -552,7 +561,7 @@ ${r.alts.map(arm).join(' ')}
   }
   // Longest match over the alternatives, reached through the rule's Dispatch (emit-portable.ts, RdRule).
   const alt = (i: number, keyed: boolean) => {
-    const body = `{ const kids: Cst[] = []; if (${r.alts[i]!.map((x) => stepCond(x, ids)).join(' && ')} && ${beatsTs(r.altDispatch, 'pos', i)}) { best = branch(${J(r.name)}, kids, save); bestPos = pos;${markTs(r.altDispatch, i)} } back(save); }`;
+    const body = candTs(r.altDispatch, i, false, r.alts[i]!.map((x) => stepCond(x, ids)).join(' && '), `best = branch(${J(r.name)}, kids, save); bestPos = pos;${markTs(r.altDispatch, i)}`);
     const g = guardCond(r.altGuard[i]!, '_ft', keyed);
     return ifTs(g.length && !keyed ? ['_ft !== null', ...g] : g, body);
   };
@@ -586,7 +595,7 @@ ${r.alts.map(arm).join(' ')}
 }`;
   }
   const alt = (i: number, keyed: boolean) => {
-    const body = `{ const kids: any[] = []; const spans: BWSpan[] = []; if (${r.alts[i]!.map((x) => stepCond(x, ids, true)).join(' && ')} && ${beatsTs(r.altDispatch, 'pos', i)}) { best = branchW(${J(r.name)}, kids, spans, save); bestPos = pos;${markTs(r.altDispatch, i)} } back(save); }`;
+    const body = candTs(r.altDispatch, i, true, r.alts[i]!.map((x) => stepCond(x, ids, true)).join(' && '), `best = branchW(${J(r.name)}, kids, spans, save); bestPos = pos;${markTs(r.altDispatch, i)}`);
     const g = guardCond(r.altGuard[i]!, '_ft', keyed);
     return ifTs(g.length && !keyed ? ['_ft !== null', ...g] : g, body);
   };
@@ -791,7 +800,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
     `best = ${nodeExpr}; bestPos = pos;${markTs(r.nudDispatch, i)} bf = ${form}; bt = ${tail}; bc = ${capped};`;
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids)).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    `{ const kids: Cst[] = []; if (${stepsCond(steps)} && ${beatsTs(r.nudDispatch, 'pos', i)}) { ${won(i, `branch(${J(r.name)}, kids, save)`, '0', tail, capped)} } back(save); }`;
+    candTs(r.nudDispatch, i, false, stepsCond(steps), won(i, `branch(${J(r.name)}, kids, save)`, '0', tail, capped));
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
     switch (a.kind) {
@@ -942,7 +951,7 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
     `best = ${frameExpr}; bestPos = pos;${markTs(r.nudDispatch, i)} bf = ${form}; bt = ${tail}; bc = ${capped};`;
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids, true)).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    `{ const kids: any[] = []; const spans: BWSpan[] = []; if (${stepsCond(steps)} && ${beatsTs(r.nudDispatch, 'pos', i)}) { ${won(i, `branchW(${cn}, kids, spans, save)`, '0', tail, capped)} } back(save); }`;
+    candTs(r.nudDispatch, i, true, stepsCond(steps), won(i, `branchW(${cn}, kids, spans, save)`, '0', tail, capped));
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
     switch (a.kind) {
