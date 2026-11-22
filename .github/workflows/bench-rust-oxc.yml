@@ -34,4 +34,4 @@ jobs:
           BENCH_EXTRA: bd2741c0e666ce9c438947b1ac2b06d9f148f82f
           BENCH_ONLY: '1'
           BENCH_GRAMMAR: typescript
-          BENCH_MODE: fresh
+          BENCH_MODE: reuse
