@@ -318,6 +318,19 @@ const CASES: Case[] = [
     reject: ['x y;', 'x:', 'x: ;', '{}', '{x!}', 'go', '{x', ': x;', '@ emit x;', 'pub x;', '@a pub;', 'pub pub emit x;', '#x;', '##(x);'],
   },
   {
+    // Lookahead bodies in recognize form (fixtures/lookrec.ts): a rule reached from a lookahead and
+    // from a consuming position (`Head`), one reached only from lookaheads (`Only`), each ending
+    // where its longest alternative ends (`on x::1;`, `do x.y;`); a lookahead that runs a Pratt
+    // rule, directly (`go`) or through an rd rule (`at`), and one whose Pratt rule is parsed with a
+    // connector suppressed (`in a in b;` refused).
+    grammar: 'lookrec', path: './fixtures/lookrec.ts',
+    accept: [
+      '', 'x: 1;', 'x:: a + 1;', 'if a;', 'if a + 1;', 'on x::1;', 'do x;', 'do x.y;', 'go a;', 'go a + b;', 'go a = b;',
+      'at [a]!;', 'at [a + b]!;', 'in a;', 'in a + b;', 'x: a in b;', 'x: 1; if b; go c = d; at [e]!; do f.g;',
+    ],
+    reject: ['if x: 1;', 'if x:: 1;', 'on x:1;', 'on x::y;', 'do 1;', 'do (x);', 'do x.;', 'go a = ;', 'at [a];', 'at [a]', 'in a in b;', 'x 1;'],
+  },
+  {
     // Literals of every shape lid_of looks a text up by (see the fixture): a token of each must
     // get its literal id from the lexer and from lid_of alike, on a fresh parse and in a Doc.
     grammar: 'lidshapes', path: './fixtures/lidshapes.ts',
