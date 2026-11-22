@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA } from './emit-portable.ts';
-import { elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
+import { elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -46,6 +46,18 @@ const dispatchTsL = (t: string): DispatchLowering => ({
 });
 const dispatchTs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, nilable = false): string =>
   dispatchWalk(d, ids, arm, dispatchTsL(t), nilable);
+// A Commit's switch (emit-portable.ts commitWalk) over the buffered token t.
+const commitSwTs = (t: string): CommitLowering => ({
+  sw: (by, cases, dflt) => `  switch (${t}.${by}) {\n${cases.map((c) => `${c.keys.map((k) => `  case ${k}:`).join('\n')}${c.stmt ? `\n${c.stmt}` : ''}\n  break;`).join('\n')}${dflt ? `\n  default:\n${dflt}` : ''}\n  }`,
+  ifAll: ifTs,
+  notAll: (conds) => `!(${conds.join(' && ')})`,
+  pickDecl: '  let _c = 0;',
+  pick: (n) => `{ _c = ${n}; }`,
+  picked: (cases) => `  switch (_c) {\n${cases.map((c) => `  case ${c.n}:\n  ${c.stmt}\n  break;`).join('\n')}\n  }`,
+});
+// A committed candidate's statement: `body` when conds hold, then `fail` (unless body always returns).
+const commitTs = (conds: string[], body: string, fail: string, returns = false) =>
+  `{ ${conds.length ? `if (${conds.join(' && ')}) ${body.startsWith('{') ? body : `{ ${body} }`}` : body}${conds.length || !returns ? ` ${fail}` : ''} }`;
 // Whether candidate i, just ended at pos, beats the best so far: it ends past it, or — a Dispatch
 // `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is kept only
 // in a list that has ranked candidates.
@@ -737,6 +749,13 @@ function tsRules(r: RdRule, ids: LexIdPlan, m: Mode): RuleLowering {
     guard: (g, keyed, stmt) => { const c = guardCond(g, '_ft', keyed); return ifTs(c.length && !keyed ? ['_ft !== null', ...c] : c, stmt); },
     dispatch: dispatchTsL('_ft'),
     closeBest: w ? '  pos = bestPos;\n  return _n !== b;' : '  pos = bestPos;\n  return bestPos > save;',
+    commitPeek: '  const _ft = peek();',
+    guardConds: (g) => guardCond(g, '_ft', false),
+    commit: (_i, conds, cond, undo, nullable) => commitTs(conds, w
+      ? `{ const save = pos, b = _n; if (${cond}${nullable ? ' && pos > save' : ''}) { finR(${cn}, b, save); return true; }${undo ? ' back(save); _n = b;' : ''} }`
+      : `{ ${undo ? 'const save = pos; ' : ''}if (${cond}${nullable ? ' && pos > save' : ''}) return true;${undo ? ' back(save);' : ''} }`, 'return false;'),
+    commitFail: '{ return false; }',
+    commitSw: commitSwTs('_ft'),
   };
 }
 
@@ -848,6 +867,8 @@ const ${r.name}_POST_TGT = ${set(ops.post)};`;
  *  matched, the node is the one slot left at the height `b` they found, else the stack is back at
  *  `b`. In the led loop the left operand is slot `b`: a led appends its other children after it,
  *  and `finP` finishes them all into slot `b`, the new left operand. */
+// A NUD that matched nothing: the state its frame leaves when no arm won (prattRuleW's nudClose).
+const NUD_FAIL_TS = '{ _capped = false; _form = 0; _tail = false; return false; }';
 function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
   const cn = J(r.name);
   const d = r.nudDispatch;
@@ -880,6 +901,24 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
       back(save);
     } }`,
     dispatch: dispatchTsL('t'),
+    // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node (the
+    // one slot at b), form, tail and capped flag; failing, no node and the frame's empty state.
+    commitLeaf: (_i, conds) => commitTs(conds, `{ const b = _n; leafSlotW(tok_kind(t), t); pos++; finP(${cn}, b); _form = 0; _tail = false; return true; }`, NUD_FAIL_TS, true),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitTs(conds, `{ const save = pos, b = _n; if (${cond}${nullable ? ' && pos > save' : ''}) { finR(${cn}, b, save); _capped = ${capped}; _form = 0; _tail = ${tail}; return true; }${undo ? ' back(save); _n = b;' : ''} }`, NUD_FAIL_TS),
+    commitPrefix: (_i, conds) => commitTs(conds, `{ const pbp = ${r.name}_PRE[t.lid];
+    if (pbp !== undefined) {
+      const save = pos, b = _n;
+      leafSlotW('$operator', t);
+      pos++;
+      if (${r.name}_bpW(pbp)) {
+        if (_form !== 0 && ${r.name}_PRE_TGT.has(t.lid)) { back(save); _n = b; _capped = false; return false; }
+        finP(${cn}, b); _form = ${r.name}_PRE_FORM[t.lid]!; _tail = true; _capped = false; return true;
+      }
+      back(save); _n = b;
+    } }`, NUD_FAIL_TS),
+    commitFail: NUD_FAIL_TS,
+    nudEnd: '}',
+    commitSw: commitSwTs('t'),
     led: {
       tailOpen: '!tailClosed',
       lbpAbove: (lbp) => `${lbp} > minBp`,
@@ -938,11 +977,11 @@ function parse${r.name}W(): boolean {
     bpClose: `  _form = form;
   return true;
 }`,
-    nudOpen: `function ${r.name}_nudW(minBp: number): boolean {
+    nudEnter: `function ${r.name}_nudW(minBp: number): boolean {
   _capped = false;
   const t = peek();
-  if (t === null) return false;
-  const save = pos, b = _n;
+  if (t === null) return false;`,
+    nudOpen: `  const save = pos, b = _n;
   let bestPos = save${biTs(d)}, bf = 0, bt = false, bc = false;`,
     nudClose: `  // A sub-parse may leave _capped set (e.g. grouping a capped arrow): only a capped arm that
   // won makes THIS node capped.
@@ -1263,8 +1302,9 @@ function tryReuseTopW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
   _builder = builder;
   const mid: H[] = [];
   const midMeta: EntryMeta[] = [];
-  const suffixBound = newN - suffix;
-  const maxCand = suffixMeta.length > 0 ? Math.max(...suffixMeta.map((m) => m.tokStart + tokDelta)) : -1;
+  // minRel: the tokens from the last suffix entry's start to the old end (entries ascend):
+  // with fewer tokens left than that, no entry can be adopted.
+  const minRel = suffixMeta.length > 0 ? oldN - suffixMeta[suffixMeta.length - 1]!.tokStart : -1;
   const finish = (adoptFrom: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
     const adopted = suffixCand.slice(adoptFrom).map((h) => shift(h, byteDelta, tokDelta));
     const children: H[] = [...prefixKids, ...mid, ...adopted];
@@ -1291,19 +1331,18 @@ function tryReuseTopW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
     return { root: r as H, entries: newEntries, entryHs: children, reused: prefixKids.length + adopted.length };
   };
   const tryHit = (): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
-    if (pos < suffixBound) return null;
+    if (newN - pos > suffix) return null;
     if (suffixCand.length === 0) {
       if (pos === newN) return finish(0);
       return null;
     }
-    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === pos);
-    if (hit >= 0) return finish(hit);
+    for (let i = 0; i < suffixMeta.length; i++) if (oldN - suffixMeta[i]!.tokStart === newN - pos) return finish(i);
     return null;
   };
   {
     const early = tryHit();
     if (early) return early;
-    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+    if (suffixCand.length > 0 && minRel >= 0 && newN - pos < minRel) return null;
   }
   for (;;) {
     if (pos >= toks.length) {
@@ -1322,7 +1361,7 @@ function tryReuseTopW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
     mid.push(h!);
     const hit = tryHit();
     if (hit) return hit;
-    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+    if (suffixCand.length > 0 && minRel >= 0 && newN - pos < minRel) return null;
   }
 }
 ` : ''}${shapeB ? `
@@ -1354,8 +1393,9 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
   const midKids: H[] = [];
   const midSegs: Seg[] = [];
   const midMeta: EntryMeta[] = [];
-  const suffixBound = newN - suffix;
-  const maxCand = suffixMeta.length > 0 ? Math.max(...suffixMeta.map((m) => m.tokStart + tokDelta)) : -1;
+  // minRel: the tokens from the last suffix entry's start to the old end (entries ascend):
+  // with fewer tokens left than that, no entry can be adopted.
+  const minRel = suffixMeta.length > 0 ? oldN - suffixMeta[suffixMeta.length - 1]!.tokStart : -1;
   const finish = (adoptFrom: number): { root: H; segs: Seg[]; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
     const adoptedSegs = suffixCand.slice(adoptFrom);
     const adoptedKids: H[] = [];
@@ -1405,19 +1445,18 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
     return { root: r as H, segs: newSegs, entries: newEntries, entryHs: children, reused: prefixSegs.length + adoptedSegs.length };
   };
   const tryHit = (): { root: H; segs: Seg[]; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
-    if (pos < suffixBound) return null;
+    if (newN - pos > suffix) return null;
     if (suffixCand.length === 0) {
       if (pos === newN) return finish(0);
       return null;
     }
-    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === pos);
-    if (hit >= 0) return finish(hit);
+    for (let i = 0; i < suffixMeta.length; i++) if (oldN - suffixMeta[i]!.tokStart === newN - pos) return finish(i);
     return null;
   };
   {
     const early = tryHit();
     if (early) return early;
-    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+    if (suffixCand.length > 0 && minRel >= 0 && newN - pos < minRel) return null;
   }
   ${hasHeadB ? `if (prefixLen === 0) {
     _n = 0;
@@ -1429,7 +1468,7 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
       midMeta.push({ ...pair.meta, kidStart: 0 });
       const hit = tryHit();
       if (hit) return hit;
-      if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+      if (suffixCand.length > 0 && minRel >= 0 && newN - pos < minRel) return null;
     }
   }
   ` : ''}for (;;) {
@@ -1450,7 +1489,7 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
     midMeta.push({ tokStart: pair.meta.tokStart, tokEnd: pair.meta.tokEnd, ext: pair.meta.ext, off: pair.meta.off, end: pair.meta.end, kidStart: 0, kidCount: midKids.length - before });
     const hit = tryHit();
     if (hit) return hit;
-    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+    if (suffixCand.length > 0 && minRel >= 0 && newN - pos < minRel) return null;
   }
 }
 ` : ''}

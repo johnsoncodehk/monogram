@@ -192,10 +192,26 @@ nodes. The element reading of a type-position `<T>(x: T) => T` never rejoins, so
 
 The rule is the template rule, unchanged: a window restarts at a token recorded at depth 0
 (outside every frame) and resyncs only at depth 0 on both sides; the frame stack is never
-reconstructed. A token whose lexing was decided by later text records one level deeper:
-- every token inside an undecided type-parameter signature, and the token that decides it;
-- every token inside the characters a type-parameter head veto read (the `<` it decided
-  included).
+reconstructed. Every token inside an undecided type-parameter signature, and the token that
+decides it, records one level deeper (the signature is lexer state, as a frame is).
+
+A token is also decided by what its lexer READ: its match, and the failed attempts before it at
+its start (the anchor rule, stated at the top of `src/relex-family.ts`). The read bounds are the
+shared functions of `src/lex-match-plan.ts`: `failRead` and `readEndWalk` for a failed attempt,
+`overTrigger` and `examinedUnits` for a match (a lazy repeat bounded as the regex runs it, so a
+block comment reads nothing past its `*/`). The portable relex checks them at relex time. The
+interpreter's lexer (`src/emit-lexer.ts`, windowed) records them while lexing: `lxLookEnd` is the
+exclusive end of the furthest read any decision so far made, and a token pushed while it is past
+the token's end + 1 carries flag 32: it is no restart anchor and no resync point. Such reads: a regex attempt that
+falls back to division (to the end of its line), an unterminated block comment (to the end of the
+file), a number that backed up inside its own pattern (`1._x`), and a type-parameter head veto
+(its match and the unit its trailing lookahead reads: it decides the `<` before it; a failed head
+opens an element, whose frame already holds what it read).
+
+Resync compares the paren-head stacks by their trajectory since the divergence point; a `(`
+stands on it at the depth before its own push, so an entry both lexes pushed after the
+divergence (`if (q)` edited to `ifx (q)`: a control head in one, not in the other) is never taken
+as shared.
 
 Per state: a frame is pushed before its opener and popped after its closer, so the opener and
 everything inside record depth > 0 and the token after the closer may record 0. Raw text:
@@ -260,7 +276,10 @@ Differences from the interpreter, none visible in the token stream:
    vetoes) or `always`.
 7. A root region that never pops, with the depth counted excluding it.
 8. Unchanged: one stack; push before the opener, pop after the closer; restart and resync at
-   depth 0; a token decided by later text records depth + 1; the depth record saturates at 255.
+   depth 0; a token inside an undecided signature records depth + 1; the depth record saturates
+   at 255. The type-parameter head veto is a READ (anchor rule (ii)), not a depth: its match
+   decides the `<` and reads up to the unit after it (its trailing lookahead), `overTrigger` /
+   `examinedUnits` of `head`; the portable relex checks it with the other reads.
 9. An error inside an undecided type-parameter signature is the rewind verdict in every mode.
 
 ## What the generators need
@@ -301,11 +320,6 @@ rule when there is one (`@if` `(`; `@try` `{`). A continuation literal (`@else`,
 - Text tokens / directive openers / tag start, the root region: the build order above.
 - A raw-text body condition (the evaluated dialect reads `<style>{css}</style>` as an element
   with a hole, not raw text): not declared; it belongs with the TSRX-shaped fixture.
-- The relex bound of a failed attempt and of an over-read inside a token (a regex attempt that
-  falls back to division, `let m = f() < / 2;` with `/` inserted; `x = 1._x;` → `1._5`; an
-  unterminated block comment; the head veto's trailing lookahead), and the paren-head keyword
-  case (`if` → `ifx` before `(q) / r /`), once the shared bound functions are in
-  `src/lex-match-plan.ts`.
 - Re-measuring the five undecidable JSX shapes on a larger TSX corpus.
 - The tm-dialect expected-fail rows are TextMate-side (children repository, dynamic tags, the
   `<style>` embed, React vocabulary); they move with the generators.

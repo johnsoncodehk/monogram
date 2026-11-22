@@ -196,6 +196,7 @@ export type RdRule = {
   predictive: boolean;
   altGuard: Guard[];        // parallel to alts: when each one is a candidate at all
   altDispatch: Dispatch;    // how a target reaches the alts a token admits (unused when predictive / one alt)
+  altCommit?: Commit;       // the keys at which one alternative is left (see Commit); absent: none
 };
 // The candidates of a longest-match list, by what the first token must be, as sections a target
 // prints in order: a `lid` section switches on the token's literal and a `kid` section on its
@@ -229,14 +230,17 @@ export function dispatchOf(keys: ReadonlyArray<TokenSet | null>): Dispatch {
   if (byKid.size) sections.push({ by: 'kid', groups: groups(byKid) });
   if (rest.length) sections.push({ by: 'rest', arms: rest });
   sections.sort((x, y) => first(x) - first(y));
+  return { sections, ranked: rankedOf(sections) };
+}
+/** Dispatch.ranked of sections tried in their order. */
+function rankedOf(sections: DispatchSection[]): number[] {
   // Each candidate in trying order, with the section kind and key it is reached by.
   type Tried = { i: number; by: DispatchSection['by']; key: string };
   const tried: Tried[] = sections.flatMap((sec): Tried[] => sec.by === 'rest'
     ? sec.arms.map((i) => ({ i, by: sec.by, key: '' }))
     : sec.groups.flatMap((g) => g.arms.map((i) => ({ i, by: sec.by, key: g.key }))));
   const mayShare = (x: Tried, y: Tried) => x.by === 'rest' || y.by === 'rest' || x.by !== y.by || x.key === y.key;
-  const ranked = tried.filter((x, n) => tried.slice(0, n).some((y) => y.i > x.i && mayShare(x, y))).map((x) => x.i).sort((a, b) => a - b);
-  return { sections, ranked };
+  return tried.filter((x, n) => tried.slice(0, n).some((y) => y.i > x.i && mayShare(x, y))).map((x) => x.i).sort((a, b) => a - b);
 }
 // The tokens outside which a candidate only repeats an earlier candidate of its list (null: it
 // never does, as far as this can tell). A candidate that opens with optional steps (`?` / `*`)
@@ -288,6 +292,120 @@ export type LeadTest = { set: number; is: boolean; ctx: boolean };
 export const guardedSteps = (g: Guard, steps: Step[]): Step[] => (g === null || g.skip === 0 ? steps : steps.slice(g.skip));
 /** A member of ParserIR.tokenSets, by its index and its members. */
 export type GuardSet = TokenSet & { id: number };
+
+// ── COMMITTED CHOICE: a longest-match list that has one candidate left at a token ──
+// A longest-match list (an rd rule's alternatives, a Pratt rule's NUD arms) runs every candidate a
+// token admits in a CANDIDATE frame: a checkpoint at the list's start, the best match so far and
+// its end compared with each candidate's, a checkpoint after each new best. All of it exists to
+// choose among candidates, so where the token leaves ONE candidate there is nothing to choose: the
+// candidate's match is the list's match, its failure the list's failure. Which candidates a token
+// can admit is the plan's own data — each candidate's Guard (its FIRST set and lead tests, and for
+// a NUD arm the literal or kind it is keyed on) — so it is decided here, per dispatch key, once:
+// - A key no candidate admits: the list fails there without its frame (`act` null).
+// - A key at which exactly one candidate's admission is certain (its first set and lead tests hold
+//   for every token with that key, and it has no test that only the run can decide: a SECOND set,
+//   a capped arm's binding power) and the others can be admitted only by such run-time tests
+//   (`unless`): when none of those admits the token, the certain one is COMMITTED: run without
+//   the frame. When one does, the token goes to the frame as before. A key with no certain
+//   candidate commits, under the same `unless`, to its earliest-declared one, whose own run-time
+//   tests then decide (refused: the list fails, as the frame would with nothing tried).
+// - Every other key: the frame (`'frame'`).
+// A committed candidate runs as the SINGLE form runs its alternative: a checkpoint only when its
+// steps can fail DIRTY (CommitAct.clean false: Step.clean's definition, the one a repetition reads:
+// a candidate that fails clean leaves the state as it found it, so its failure needs no undo), and
+// a match of no tokens is no match (CommitAct.nullable: such a match cannot win a longest match).
+// Sound because the frame would have run exactly that candidate: every other one is refused by
+// its guard, so the frame's best is the committed candidate's match or none. guard-refused attempts
+// every other candidate at each committed site on real inputs and requires that none would win.
+// A token's literal (lid) decides first: `lid` cases name the literals some candidate's test reads
+// (its first set, its lead sets, the context's words), each with its action, where it differs from
+// its kind's ('frame' included, so that its kind's case does not apply); every other token is
+// decided by its kind (`kid`), and a kind no case names goes to the frame. Keys are texts / kind
+// names, as Dispatch's are. Absent: no key commits or fails.
+// What a run still tests of a candidate at a key (CommitTest): its first-token test unless every
+// token of the key passes it (`first`), and those of its lead tests (indices into Guard.lead) that
+// some token of the key fails or that read the context; a SECOND set and a capped arm's binding
+// power are always tested.
+export type CommitTest = { arm: number; first: boolean; lead: number[] };
+export type CommitAct = CommitTest & { nullable: boolean; clean: boolean; unless: CommitTest[] };
+export type CommitCase = { keys: string[]; act: CommitAct | null | 'frame' };
+export type Commit = { lid: CommitCase[]; kid: CommitCase[] };
+/** What the commit analysis reads of one candidate: its first-token set (null: any token), its lead
+ *  tests, whether it has a test only the run decides, whether its steps can match nothing / fail
+ *  clean, and the kinds at which it has no commit form (an interpolated template arm). */
+export type CommitCand = { first: TokenSet | null; lead: LeadTest[]; runtime: boolean; nullable: boolean; clean: boolean; frameAt?: string[] };
+type CommitTables = { kinds: string[]; kindsOf: (text: string) => ReadonlySet<string>; tokenSets: TokenSet[]; ctxWords: string[] };
+/** The frame's Dispatch once a Commit decides some keys: a `lid` / `kid` group whose every token the
+ *  commit switch returns at (it fails there, or commits with no `unless`) is never reached by the
+ *  frame, so it is dropped (and `ranked` recomputed over the candidates left). */
+export function frameDispatch(d: Dispatch, c: Commit, kindsOf: (text: string) => ReadonlySet<string>): Dispatch {
+  const decided = (a: CommitCase['act']) => a === null || (a !== 'frame' && a.unless.length === 0);
+  const lidAct = (l: string) => c.lid.find((x) => x.keys.includes(l))?.act;
+  const kidAct = (k: string) => c.kid.find((x) => x.keys.includes(k))?.act ?? 'frame';
+  const lidDead = (l: string) => { const a = lidAct(l); return a !== undefined ? decided(a) : [...kindsOf(l)].every((k) => decided(kidAct(k))); };
+  const kidDead = (k: string) => decided(kidAct(k)) && c.lid.every((x) => decided(x.act) || !x.keys.some((l) => kindsOf(l).has(k)));
+  let pruned = false;
+  const sections = d.sections.flatMap((sec): DispatchSection[] => {
+    if (sec.by === 'rest') return [sec];
+    const groups = sec.groups.filter((g) => !(sec.by === 'lid' ? lidDead(g.key) : kidDead(g.key)));
+    if (groups.length < sec.groups.length) pruned = true;
+    return groups.length ? [{ by: sec.by, groups }] : [];
+  });
+  return pruned ? { sections, ranked: rankedOf(sections) } : d;
+}
+export function commitOf(cands: CommitCand[], P: CommitTables): Commit | undefined {
+  // A token class: a literal the tests read (or none of them: null) and a kind.
+  type Cls = { lit: string | null; kind: string };
+  const inSet = (s: TokenSet, c: Cls) => (c.lit !== null && s.lits.includes(c.lit)) || s.toks.includes(c.kind);
+  const firstHolds = (j: number, c: Cls) => cands[j]!.first === null || inSet(cands[j]!.first!, c);
+  // One lead test on the class: 'yes' / 'no', or 'maybe' (a context word: the context in force decides).
+  const leadAt = (l: LeadTest, c: Cls): 'yes' | 'no' | 'maybe' => {
+    const x = inSet(P.tokenSets[l.set]!, c);
+    if (!x && l.ctx && c.lit !== null && P.ctxWords.includes(c.lit)) return 'maybe';
+    return x === l.is ? 'yes' : 'no';
+  };
+  const lead = (j: number, c: Cls) => { const r = cands[j]!.lead.map((l) => leadAt(l, c)); return r.includes('no') ? 'no' : r.includes('maybe') ? 'maybe' : 'yes'; };
+  const viable = (j: number, c: Cls) => firstHolds(j, c) && lead(j, c) !== 'no';
+  const certain = (j: number, c: Cls) => firstHolds(j, c) && lead(j, c) === 'yes' && !cands[j]!.runtime;
+  const testAt = (j: number, cs: Cls[]): CommitTest => ({
+    arm: j,
+    first: !cs.every((c) => firstHolds(j, c)),
+    lead: cands[j]!.lead.flatMap((l, k) => (cs.every((c) => leadAt(l, c) === 'yes') ? [] : [k])),
+  });
+  const actAt = (cs: Cls[]): CommitAct | null | 'frame' => {
+    const V = cands.map((_, j) => j).filter((j) => cs.some((c) => viable(j, c)));
+    if (V.length === 0) return null;
+    if (V.some((j) => cs.some((c) => viable(j, c) && cands[j]!.frameAt?.includes(c.kind)))) return 'frame';
+    const sure = V.filter((j) => cs.every((c) => certain(j, c)));
+    if (sure.length > 1) return 'frame';
+    const i = sure[0] ?? V[0]!;
+    return { ...testAt(i, cs), nullable: cands[i]!.nullable, clean: cands[i]!.clean, unless: V.filter((j) => j !== i).map((j) => testAt(j, cs)) };
+  };
+  const same = (x: CommitCase['act'], y: CommitCase['act']) => JSON.stringify(x) === JSON.stringify(y);
+  const group = (keyed: Array<[string, CommitCase['act']]>): CommitCase[] => {
+    const out: CommitCase[] = [];
+    for (const [k, act] of keyed) { const g = out.find((c) => same(c.act, act)); if (g) g.keys.push(k); else out.push({ keys: [k], act }); }
+    return out;
+  };
+  const lits = new Set<string>();
+  for (const c of cands) {
+    for (const l of c.first?.lits ?? []) lits.add(l);
+    for (const t of c.lead) { for (const l of P.tokenSets[t.set]!.lits) lits.add(l); if (t.ctx) for (const w of P.ctxWords) lits.add(w); }
+  }
+  const kidActs = new Map(P.kinds.map((k) => [k, actAt([{ lit: null, kind: k }])] as const));
+  const lidKeys: Array<[string, CommitCase['act']]> = [];
+  for (const l of [...lits].sort()) {
+    const ks = [...P.kindsOf(l)];
+    if (ks.length === 0) continue;   // no token carries it
+    const act = actAt(ks.map((kind) => ({ lit: l, kind })));
+    if (ks.length === 1 && ks[0] !== '' && same(act, kidActs.get(ks[0]!) ?? 'frame')) continue;   // its kind's case decides it alike
+    lidKeys.push([l, act]);
+  }
+  const kidKeys = [...kidActs].filter(([, act]) => act !== 'frame');
+  const lid = group(lidKeys), kid = group(kidKeys);
+  if (![...lid, ...kid].some((c) => c.act !== 'frame')) return undefined;
+  return { lid: lid.filter((c) => !(c.act === 'frame' && kid.length === 0)), kid };
+}
 // One NUD arm of a Pratt rule, by the bucket that holds its plan and its index there.
 export type NudRef =
   | { kind: 'tok'; index: number }       // nudToks[index]
@@ -313,6 +431,7 @@ export type PrattRule = {
   nudOrder: NudRef[];                                 // every NUD arm above and the prefix arm, in declaration order: the longest-match candidates
   nudNames: string[];                                 // parallel to nudOrder: each arm's name (the prefix arm: opNames.prefix); see Step, NAMES
   nudDispatch: Dispatch;                              // how a target reaches the nudOrder arms a token admits
+  nudCommit?: Commit;                                 // the keys at which one NUD arm is left (see Commit); absent: none
   nudCappedGuard: Guard[];                            // parallel to nudCapped: when each capped seq is a candidate (see Guard)
   // requireTarget: the operand (prefix) / left operand (binary, postfix) must have FORM_TARGET,
   // else the whole Pratt call fails; noUnaryLhs: the left operand must not have FORM_UNARY.
@@ -1021,9 +1140,51 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
     }
   }
   lookaheads.forEach(annotateSteps);
+  // ── Committed choices (Commit): the candidates each token can admit, per dispatch key ──
+  {
+    // The kinds a parser can buffer: a skipped token (trivia) never reaches it.
+    const kinds = [...tokens.filter((t) => !t.skip).map((t) => t.name), ...(newlineCfg ? [newlineCfg.token] : []), ...(tpl ? ['$templateHead', '$templateMiddle', '$templateTail'] : [])];
+    const nullableStep = (s: Step): boolean => {
+      switch (s.t) {
+        case 'lit': case 'tok': case 'altlit': return false;
+        case 'rule': case 'ruleBp': return a.nullableRules.has(s.name);
+        case 'alt': return s.branches.some(nullableList);
+        case 'seq': case 'suppress': case 'ctx': return nullableList(s.steps);
+        default: return true;   // star / opt / sep, and every zero-width test
+      }
+    };
+    const nullableList = (steps: Step[]): boolean => steps.every(nullableStep);
+    const P = { kinds, kindsOf, tokenSets, ctxWords };
+    for (const r of rules) {
+      if (r.kind === 'rd') {
+        if (r.predictive || r.alts.length < 2) continue;
+        const c = commitOf(r.altGuard.map((g, i) => ({
+          first: g?.first ?? null, lead: g?.lead ?? [], runtime: g !== null && g.second !== null,
+          nullable: nullableList(guardedSteps(g, r.alts[i]!)), clean: listFailsClean(guardedSteps(g, r.alts[i]!)),
+        })), P);
+        if (c) { r.altCommit = c; r.altDispatch = frameDispatch(r.altDispatch, c, kindsOf); }
+      } else {
+        const ops = [...new Set(r.prefix.map((p) => p.op))];
+        const c = commitOf(r.nudOrder.map((n): CommitCand => {
+          switch (n.kind) {
+            case 'tok': {
+              const k = r.nudToks[n.index]!;
+              const tplArm = r.nudTplHole !== undefined && tpl !== null && k === tpl.token;
+              return { first: { lits: [], toks: tplArm ? [k, '$templateHead'] : [k] }, lead: [], runtime: false, nullable: false, clean: true, ...(tplArm ? { frameAt: ['$templateHead'] } : {}) };
+            }
+            case 'bracket': { const b = r.nudBrackets[n.index]!; return { first: { lits: [b.first], toks: [] }, lead: [], runtime: false, nullable: nullableList(b.steps), clean: listFailsClean(b.steps) }; }
+            case 'seq': { const g = r.nudSeqGuard[n.index]!; const st = guardedSteps(g, r.nudSeqs[n.index]!); return { first: g?.first ?? null, lead: g?.lead ?? [], runtime: g !== null && g.second !== null, nullable: nullableList(st), clean: listFailsClean(st) }; }
+            case 'capped': { const g = r.nudCappedGuard[n.index]!; const st = guardedSteps(g, r.nudCapped[n.index]!.steps); return { first: g?.first ?? null, lead: g?.lead ?? [], runtime: true, nullable: nullableList(st), clean: listFailsClean(st) }; }
+            case 'prefix': return { first: { lits: ops, toks: [] }, lead: [], runtime: false, nullable: false, clean: false };
+          }
+        }), P);
+        if (c) { r.nudCommit = c; r.nudDispatch = frameDispatch(r.nudDispatch, c, kindsOf); }
+      }
+    }
+  }
 
   const shared = shareSteps([
-    ...rules.flatMap(ruleBodies),
+    ...rules.flatMap(printedBodies),
     ...lookaheads,
   ]);
   const entry = findEntryRule(grammar);
@@ -1034,6 +1195,19 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
 
 // The step lists a rule runs: an rd rule's alternatives, a Pratt rule's NUD and LED arms.
 const ruleBodies = (r: RuleIR): Step[][] => (r.kind === 'rd' ? r.alts : [...r.nudBrackets.map((b) => b.steps), ...r.nudSeqs, ...r.nudCapped.map((c) => c.steps), ...r.leds.map((b) => b.steps)]);
+// The step lists a rule's functions print, once per place they are printed at (what shareSteps
+// counts): a candidate of a list with a Commit once in its frame if the frame still reaches it
+// (frameDispatch), and once per commit of it the switch prints (commitPrinted).
+const dispatchArms = (d: Dispatch): Set<number> => new Set(d.sections.flatMap((s) => (s.by === 'rest' ? s.arms : s.groups.flatMap((g) => g.arms))));
+function printedBodies(r: RuleIR): Step[][] {
+  const c = r.kind === 'rd' ? r.altCommit : r.nudCommit;
+  if (c === undefined) return ruleBodies(r);
+  const times = (i: number, d: Dispatch) => (dispatchArms(d).has(i) ? 1 : 0) + commitPrinted(c).filter((a) => a.arm === i).length;
+  if (r.kind === 'rd') return r.alts.flatMap((alt, i) => Array<Step[]>(times(i, r.altDispatch)).fill(alt));
+  const arm = (kind: NudRef['kind'], index: number) => r.nudOrder.findIndex((n) => n.kind === kind && 'index' in n && n.index === index);
+  const each = (kind: NudRef['kind'], lists: Step[][]) => lists.flatMap((s, k) => Array<Step[]>(times(arm(kind, k), r.nudDispatch)).fill(s));
+  return [...each('bracket', r.nudBrackets.map((b) => b.steps)), ...each('seq', r.nudSeqs), ...each('capped', r.nudCapped.map((c) => c.steps)), ...r.leds.map((b) => b.steps)];
+}
 // The steps directly inside a step (a `look` step's body is a lookahead of its own, not inside it).
 const stepKids = (s: Step): Step[] => {
   switch (s.t) {
@@ -1201,6 +1375,13 @@ export type RuleLowering = {
   guard(g: Guard, keyed: boolean, stmt: string): string;   // the candidate's statement under its Guard
   dispatch: DispatchLowering;
   closeBest: string;                             // LONGEST: go to the best's end; return it
+  // COMMITTED CHOICE (RdRule.altCommit): before the frame, the buffered token's Commit switch.
+  commitPeek: string;                            // buffer the next token for the switch and the frame after it
+  commitSteps?: StepLowering;                    // the committed alternative's steps, where the switch runs over another receiver than the frame
+  guardConds(g: Guard): string[];                // a Guard's tests of the buffered token (in the switch, where it is present)
+  commit(i: number, conds: string[], cond: string, undo: boolean, nullable: boolean): string;  // alternative i committed: when conds hold its steps `cond` run, its match returned (none of no token, when nullable); else no match. undo: its failure is undone to a checkpoint
+  commitFail: string;                            // no match, from the switch
+  commitSw: CommitLowering;
 };
 /** An rd rule's function in the form `L` spells. */
 export function ruleShell(r: RdRule, ids: LexIdPlan, L: RuleLowering): string {
@@ -1212,7 +1393,72 @@ export function ruleShell(r: RdRule, ids: LexIdPlan, L: RuleLowering): string {
   if (r.alts.length === 1) return L.fn([L.open, `${L.ind}${L.ifThen(cond(r.alts[0]!), L.accept(0))}`, L.fail]);
   const arm = (i: number, keyed: boolean) => L.guard(r.altGuard[i]!, keyed, L.cand(r.altDispatch, i, cond(guardedSteps(r.altGuard[i]!, r.alts[i]!))));
   const needPeek = r.altGuard.some((g) => g !== null);
-  return L.fn([L.openBest(r.altDispatch), ...(needPeek ? [L.peekOpt] : []), dispatchWalk(r.altDispatch, ids, arm, L.dispatch, true), L.closeBest]);
+  const frame = [dispatchWalk(r.altDispatch, ids, arm, L.dispatch, true), L.closeBest];
+  if (r.altCommit === undefined) return L.fn([L.openBest(r.altDispatch), ...(needPeek ? [L.peekOpt] : []), ...frame]);
+  const S = L.commitSteps ?? L.steps;
+  const tests = (t: CommitTest) => L.guardConds(commitGuard(r.altGuard[t.arm]!, t));
+  const act = (a: CommitAct | null) => (a === null ? L.commitFail
+    : L.commit(a.arm, tests(a), conjOf(guardedSteps(r.altGuard[a.arm]!, r.alts[a.arm]!), S), !a.clean || a.nullable, a.nullable));
+  // A frame left with no candidate (the switch decides every key it could reach) matches nothing.
+  const rest = dispatchArms(r.altDispatch).size === 0 ? [`${L.ind}${L.commitFail}`] : [L.openBest(r.altDispatch), ...frame];
+  return L.fn([L.commitPeek, L.dispatch.nil(commitWalk(r.altCommit, ids, act, tests, L.commitSw)), ...rest]);
+}
+
+// ── The committed choice: one walk over a Commit, rendered by every target ──
+// A CommitLowering spells a switch on the buffered token's literal or kind (each case: its keys
+// and its statement, '' for one that goes on to the frame; `dflt`: every other key's statements),
+// and the run-time tests: `ifAll` (stmt under conds) and `notAll` (the negation of a conjunction).
+// A commit that several cases share (one arm, the same run-time tests, under different `unless`
+// sets) is printed once: those cases `pick` its number (from 1; `pickDecl` declares the variable,
+// 0: none picked) and `picked` runs the one picked after the switch.
+export type CommitLowering = {
+  sw(by: 'lid' | 'kid', cases: { keys: string[]; stmt: string }[], dflt: string): string;
+  ifAll(conds: string[], stmt: string): string;
+  notAll(conds: string[]): string;
+  pickDecl: string;
+  pick(n: number): string;
+  picked(cases: { n: number; stmt: string }[]): string;
+};
+/** The tests a run still makes of a candidate's Guard at a key (CommitTest). */
+export const commitGuard = (g: Guard, t: CommitTest): Guard =>
+  (g === null ? null : { first: t.first ? g.first : null, second: g.second, lead: t.lead.map((k) => g.lead[k]!), skip: g.skip });
+/** A Commit's switch: act(a) commits (or, null, fails); tests(t) are a candidate's run-time tests,
+ *  each `unless` candidate's refusal a condition of its commit. */
+// A commit by what it runs (its arm and its own tests): the cases that run the same are one printing.
+const commitWhat = (a: CommitAct) => JSON.stringify({ ...a, unless: undefined });
+/** The commits a Commit's switch prints, once each (commitWalk): the arms whose steps it prints. */
+export function commitPrinted(c: Commit): CommitAct[] {
+  const out = new Map<string, CommitAct>();
+  for (const x of [...c.lid, ...c.kid]) if (x.act !== null && x.act !== 'frame' && !out.has(commitWhat(x.act))) out.set(commitWhat(x.act), x.act);
+  return [...out.values()];
+}
+export function commitWalk(c: Commit, ids: LexIdPlan, act: (a: CommitAct | null) => string, tests: (t: CommitTest) => string[], C: CommitLowering): string {
+  // A commit shared by more than one case is picked.
+  const what = commitWhat;
+  const uses = new Map<string, number>();
+  for (const x of [...c.lid, ...c.kid]) if (x.act !== null && x.act !== 'frame') uses.set(what(x.act), (uses.get(what(x.act)) ?? 0) + 1);
+  const shared = [...uses].filter(([, n]) => n > 1).map(([w]) => w);
+  const stmt = (a: CommitCase['act']): string => {
+    if (a === 'frame') return '';
+    if (a === null) return act(null);
+    const n = shared.indexOf(what(a)) + 1;
+    return C.ifAll(a.unless.map((u) => {
+      const t = tests(u);
+      if (t.length === 0) throw new Error('commitWalk: an unless candidate has no run-time test');
+      return C.notAll(t);
+    }), n > 0 ? C.pick(n) : act(a));
+  };
+  const id = (by: 'lid' | 'kid', k: string): string => {
+    const n = by === 'lid' ? lidOf(ids, k) : kidOf(ids, k);
+    if (n === 0) throw new Error(`commitWalk: ${by} key ${JSON.stringify(k)} has no id`);
+    return String(n);
+  };
+  const cases = (by: 'lid' | 'kid', cs: CommitCase[]) => cs.map((x) => ({ keys: x.keys.map((k) => id(by, k)), stmt: stmt(x.act) }));
+  const kid = c.kid.length ? C.sw('kid', cases('kid', c.kid), '') : '';
+  const sw = c.lid.length ? C.sw('lid', cases('lid', c.lid), kid) : kid;
+  if (shared.length === 0) return sw;
+  const acts = [...c.lid, ...c.kid].map((x) => x.act).filter((x): x is CommitAct => x !== null && x !== 'frame');
+  return [C.pickDecl, sw, C.picked(shared.map((w, k) => ({ n: k + 1, stmt: act(acts.find((x) => what(x) === w)!) })))].join('\n');
 }
 
 // ── The entry rule with reuse recording (ParserIR.reuse), decided once ──
@@ -1281,8 +1527,18 @@ export type PrattLowering = {
   entry: string;                                 // the entry function (and the operator tables, where the target prints them beside it)
   bpOpen(label: boolean): string;                // `bp` up to the loop's buffered token (label: a led continues the loop by name)
   bpClose: string;
-  nudOpen: string;                               // `nud` up to its candidates
+  nudEnter: string;                              // `nud` up to its buffered token `t` (none: no match)
+  nudOpen: string;                               // `nud`'s candidate frame, up to its candidates
   nudClose: string;
+  nudEnd: string;                                // the end of `nud`'s function, where it has no frame (the commit switch decides every key)
+  // COMMITTED CHOICE (PrattRule.nudCommit): before the frame, the buffered token's Commit switch.
+  // Each commit runs its arm when conds hold and returns its node, else fails (commitFail: no
+  // match, with the state the frame leaves when nothing matched).
+  commitLeaf(i: number, conds: string[]): string;                 // token arm i
+  commitSeq(i: number, conds: string[], cond: string, closesTail: boolean, capped: boolean, undo: boolean, nullable: boolean): string;  // a bracket / sequence / capped arm
+  commitPrefix(i: number, conds: string[]): string;               // the prefix-operator arm
+  commitFail: string;
+  commitSw: CommitLowering;
 };
 /** A Pratt rule's functions in the form `L` spells. */
 export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | 'elements' | 'identToken' | 'identLike' | 'puncts' | 'gtComps'>, ids: LexIdPlan, L: PrattLowering): string {
@@ -1333,7 +1589,32 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
   const postToks = r.postfixToks.length === 0 ? ''
     : L.postfixToks(groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok)).map((g) => g.key as number)) + (r.postfixTplHole !== undefined ? L.postfixTpl(r.postfixTplHole) : '');
   const bp = [L.bpOpen(r.leds.length > 0 || r.postfixToks.length > 0), leds, postToks, L.postfixOp, L.binary, ...(L.leftDone ? [L.leftDone] : []), L.bpClose].join('\n');
-  const nud = [L.nudOpen, dispatchWalk(d, ids, nudArm, L.dispatch, false), L.nudClose].join('\n');
+  // The committed arm's run-time tests at a key (CommitTest): its token / literal unless the key
+  // decides it, its guard's remaining tests, a capped arm's binding power.
+  const tests = (t: CommitTest): string[] => {
+    const a = r.nudOrder[t.arm]!;
+    switch (a.kind) {
+      case 'tok': return t.first ? [L.kidIs(kidOf(ids, r.nudToks[a.index]!))] : [];
+      case 'bracket': return t.first ? [L.lidIs(lidOf(ids, r.nudBrackets[a.index]!.first))] : [];
+      case 'seq': return L.nudGuard(commitGuard(r.nudSeqGuard[a.index]!, t), false);
+      case 'capped': return [L.capBelow(r.nudCapped[a.index]!.capBp), ...L.nudGuard(commitGuard(r.nudCappedGuard[a.index]!, t), false)];
+      case 'prefix': if (t.first) throw new Error('prattShell: a prefix arm is decided by its key'); return [];
+    }
+  };
+  const act = (c: CommitAct | null): string => {
+    if (c === null) return L.commitFail;
+    const a = r.nudOrder[c.arm]!, undo = !c.clean || c.nullable;
+    switch (a.kind) {
+      case 'tok': return L.commitLeaf(c.arm, tests(c));
+      case 'bracket': return L.commitSeq(c.arm, tests(c), cond(r.nudBrackets[a.index]!.steps), r.nudBracketClosesTail[a.index]!, false, undo, c.nullable);
+      case 'seq': return L.commitSeq(c.arm, tests(c), cond(guardedSteps(r.nudSeqGuard[a.index]!, r.nudSeqs[a.index]!)), r.nudSeqClosesTail[a.index]!, false, undo, c.nullable);
+      case 'capped': return L.commitSeq(c.arm, tests(c), cond(guardedSteps(r.nudCappedGuard[a.index]!, r.nudCapped[a.index]!.steps)), false, true, undo, c.nullable);
+      case 'prefix': return L.commitPrefix(c.arm, tests(c));
+    }
+  };
+  const commit = r.nudCommit === undefined ? [] : [commitWalk(r.nudCommit, ids, act, tests, L.commitSw)];
+  const frame = r.nudCommit !== undefined && dispatchArms(d).size === 0 ? [L.commitFail, L.nudEnd] : [L.nudOpen, dispatchWalk(d, ids, nudArm, L.dispatch, false), L.nudClose];
+  const nud = [L.nudEnter, ...commit, ...frame].join('\n');
   return [L.entry, bp, nud].join('\n');
 }
 
