@@ -654,9 +654,16 @@ const CASES: Case[] = [
       'let x: T?;', 'let x = y as T ? z : w;', 'type A = X extends Y ? T? : Z;', 'type A = [T?];', 'f(a as T?, b);',
       'let x: T?\nconst a = 1;', 'let x = y as T? -0x1 : U;', 'function f(): T?\nreturn {}', 'type A = { a: T?\nif : U };',
       'let x = y as T?\n(-z);', 'let x = y as T ? (-1) : 2;',
+      // a union's constituent begins no `|`, an intersection's no `|` / `&` (tsc's type levels)
+      'type T = | A | B;', 'type T = | & A;', 'type T = & A & B;', 'type T = A | & B & C;', 'type T = | (| A);', 'type T = [| A, & B];',
+      // an arrow's type parameter list starts with a name or `const`; a declaration's may be empty
+      'const f = <T,>() => 1;', 'const f = <const T>() => 1;', 'const f = async <out T>(a) => 1;', 'function f<>() {}',
+      'type F = <>() => void;', 'class C { m<>() {} }',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
-    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
+    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
+      'type T = | | A;', 'type T = A | | B;', 'type T = A & | B;', 'type T = & & A;', 'type T = & | A;', 'f<| | A>();', 'let x: [| | A];',
+      'const f = <>() => 1;', 'const f = async <>(a) => 1;', 'const f = <in T>() => 1;', 'f(<in out T>(a) => a);', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '{ b(); }.x;', '{ static x }.y;', '{ static x }', '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;',
       'let[0] = 1;', '(async\nfunction f() {});',
