@@ -330,7 +330,9 @@ const Prop = rule($ => {
     [MemberName, ...propTail(resetCtx)],
     // value property — any member name incl computed `[e]: v` (MemberName covers `[Expr]`)
     [MemberName, ':', Expr],
-    ['[', Expr, many(',', Expr), ']', ':', Expr],                      // computed comma list (lenient)
+    // computed comma list (lenient): `[a, b]: v`. One expression in the brackets is the
+    // value property above (`[e]` is a MemberName), so the list has at least one comma.
+    ['[', Expr, many1(',', Expr), ']', ':', Expr],
     // shorthand (Ident only): x | x = v — a reserved word here is invalid
     // (`var v = { class }`); a reserved word as a property KEY (`{ class: 1 }`) is fine,
     // already handled by the `[MemberName, ':', Expr]` branch above.
@@ -621,35 +623,39 @@ const Modifier = alt([alt('static', 'accessor'), not(alt('(', '=', '{', '}'))]);
 // A method, accessor or constructor has a body (MethodDefinition), after which nothing is
 // needed: a `;` there is an empty class element of its own. A field ends as a statement does.
 const memTail = (ctx) => ['(', sep(ctx(Param), ','), ')', ctx(Block)];
+// The member kinds, after the member's decorators and modifiers. Inner alt() is first-match, so
+// branches are ordered specific-before-general (generator/accessor before the MemberName
+// method/field split).
+const memberKinds = [
+  // `async` is order-free among modifiers (tsc parses any order), so it carries
+  // its own inner modifier run and an async member's body is [+Await]/[+Await,+Yield].
+  ['async', many(Modifier), '*', MemberName, ...memTail(asyncGenCtx)],      // async generator method
+  ['async', many(Modifier), alt('get', 'set'), MemberName, '(', opt(sep(awaitCtx(Param), ',')), ')', awaitCtx(Block)],  // async accessor (semantic error; parses)
+  ['async', many(Modifier), 'static', awaitCtx(Block)],                     // `async static { }` (semantic error; parses)
+  ['async', many(Modifier), MemberName, ...memTail(awaitCtx)],             // async method
+  ['*', MemberName, ...memTail(yieldCtx)],                                  // generator method
+  [alt('get', 'set'), MemberName, '(', opt(sep(resetCtx(Param), ',')), ')', resetCtx(Block)],  // accessor
+  [MemberName, alt(
+    [...memTail(resetCtx)],                                                 // method (requires `(`)
+    // field catch-all; a ';'-less field must not be followed by a same-line
+    // decorator (see typescript.ts)
+    [opt('=', resetCtx(Expr)), asi()],
+  )],
+];
 const ClassMember = rule($ => [
   ';',   // SemicolonClassElement: `class C { ; }`
-  ['constructor', '(', sep(resetCtx(Param), ','), ')', resetCtx(Block)],
   [many(DecoratorExpr), many(Modifier), 'static', awaitCtx(Block)],   // static block body is [+Await] (await reserved); decorators/modifiers parse (SEMANTIC errors)
-  // decorators PREFIX a member, before any modifier (see typescript.ts)
-  [
-    many(DecoratorExpr),
-    many(Modifier),
-    alt(
-      // `async` is order-free among modifiers (tsc parses any order), so it carries
-      // its own inner modifier run and an async member's body is [+Await]/[+Await,+Yield].
-      ['async', many(Modifier), '*', MemberName, ...memTail(asyncGenCtx)],      // async generator method
-      ['async', many(Modifier), alt('get', 'set'), MemberName, '(', opt(sep(awaitCtx(Param), ',')), ')', awaitCtx(Block)],  // async accessor (semantic error; parses)
-      ['async', many(Modifier), 'static', awaitCtx(Block)],                     // `async static { }` (semantic error; parses)
-      ['async', many(Modifier), MemberName, ...memTail(awaitCtx)],             // async method
-      ['*', MemberName, ...memTail(yieldCtx)],                                  // generator method
-      [alt('get', 'set'), MemberName, '(', opt(sep(resetCtx(Param), ',')), ')', resetCtx(Block)],  // accessor
-      [MemberName, alt(
-        [...memTail(resetCtx)],                                                 // method (requires `(`)
-        // field catch-all; a ';'-less field must not be followed by a same-line
-        // decorator (see typescript.ts)
-        [opt('=', resetCtx(Expr)), asi()],
-      )],
-    ),
-  ],
-  // Fallbacks for a member NAMED like a modifier (`static = 1`, `get = 1`, `async() {}`):
-  // many(Modifier) would eat the name, so the member kind alt fails and we land here.
-  [MemberName, opt('=', resetCtx(Expr)), asi()],
-  [MemberName, ...memTail(resetCtx)],
+  // A member is its decorators, then its modifiers (decorators PREFIX a member, before any
+  // modifier; see typescript.ts), then its kind; the prefix is parsed ONCE and the kind chosen
+  // after it. The outer alt() is first-match too: a member with no prefix is the second branch,
+  // which is also where a member NAMED like a modifier lands when the modifier run ate its name
+  // and no kind follows (`static;`, `accessor⏎@d m() {}`). A member with no prefix whose name is
+  // the identifier `constructor` is the constructor (its keyword leaf); with a prefix it is a
+  // method named `constructor`.
+  [alt(
+    [alt([many1(DecoratorExpr), many(Modifier)], many1(Modifier)), alt(...memberKinds)],
+    [alt(['constructor', ...memTail(resetCtx)], ...memberKinds)],
+  )],
 ]);
 
 const ImportSpecifier = rule($ => [
@@ -677,17 +683,23 @@ const ImportClause = rule($ => [
   ['*', 'as', ...bindingIdentifier],
 ]);
 
+// A class declaration from its `class` keyword on. Decl writes it once bare and once after a
+// declaration's decorators (below); gen-tm expands it to recover the `class Ident … { … }` shape
+// for highlighting.
+const classDecl = ['class', ...bindingIdentifier, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'];
 const Decl = rule($ => [
   // Function declarations live here (not in Stmt) so that at statement level a
   // leading `function` is preferred as a declaration over an IIFE expression-
   // statement: Program tries Decl before Stmt, so `function f(){}\n()=>{}` parses
   // as a declaration + arrow rather than longest-matching `function f(){}()` (IIFE).
   ...fnArms(bindingIdentifier, Block),
-  // class decl: optional decorators. gen-tm expands the opt()/many() to recover
-  // the `class Ident … { … }` shape for highlighting.
-  [many(DecoratorExpr), 'class', ...bindingIdentifier, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
+  classDecl,   // a class with no decorator; with them, the decorator arm below
   ['export', alt($, Stmt)],
-  [many1(DecoratorExpr), $],   // decorators before export/default/etc.
+  // A declaration's decorators, parsed ONCE, then what they decorate: a class takes them as its
+  // own (`@dec class C {}` is one declaration); any other declaration is `$` (`@dec export class
+  // C {}`). The inline alt is ordered, so a class is the first branch and the only one that
+  // parses it.
+  [many1(DecoratorExpr), alt(classDecl, $)],
   // A declaration that ends in a block needs nothing after it; every other one ends as a
   // statement does. After `default`, `function` and `class` start a declaration
   // (`export default [lookahead ∉ { function, async function, class }] AssignmentExpression`;
@@ -705,7 +717,6 @@ const Decl = rule($ => [
     [...bindingIdentifier, '=', Expr],        // import x = expr
     String_,                                  // import "m"
   ), asi()],
-  [many(DecoratorExpr), 'export', alt($, Stmt)],
 ]);
 
 // ── Entry ──

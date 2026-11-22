@@ -7,10 +7,12 @@
 // cannot see this (the tree is the same); a wall-clock check on a shared runner cannot hold a
 // bound. A work count can: it is deterministic and the same number in every target.
 //
-// The count is taken through the public Builder API of each emitted typescript parser (TS
-// `parseWith`, Go `ParseWith`, Rust `parse_with`) with a builder that forwards to the CST builder
-// and counts the nodes it is asked to build — nodes of attempts that lose included. Per construct
-// below, the input is one statement nested in the construct 1 and DEEP times:
+// The count is taken through the public Builder API of each emitted parser (TS `parseWith`, Go
+// `ParseWith`, Rust `parse_with`) with a builder that forwards to the CST builder and counts the
+// nodes it is asked to build — nodes of attempts that lose included. It is taken for the
+// typescript grammar and for the javascript grammar, each with its own constructs (the javascript
+// list has no type syntax). Per construct, the input is one statement nested in the construct 1
+// and DEEP times:
 //   • nodes built per token at depth DEEP is at most GROWTH × the same at depth 1;
 //   • every target reports the same token and node counts.
 // A construct in KNOWN_GROWTH is still run: it is an existing site that grows, listed with the
@@ -33,7 +35,7 @@ const nest = (d: number, open: (i: number) => string, close: string, inner = stm
   return s + '\n';
 };
 const wrap = (d: number, open: string, close: string, inner: string): string => `${open.repeat(d)}${inner}${close.repeat(d)}`;
-const CONSTRUCTS: Record<string, (d: number) => string> = {
+const TS_CONSTRUCTS: Record<string, (d: number) => string> = {
   'export namespace': (d) => nest(d, (i) => `export namespace N${i} {`, '}'),
   'namespace': (d) => nest(d, (i) => `namespace N${i} {`, '}'),
   'module': (d) => nest(d, (i) => `module M${i} {`, '}'),
@@ -95,9 +97,99 @@ const CONSTRUCTS: Record<string, (d: number) => string> = {
 // EXPECTED-FAIL: constructs whose work per token grows with depth today, each with the candidates
 // that parse it more than once. Each is owed its own change (a grammar decision, or an engine
 // mechanism that shares a sub-parse between candidates).
-const KNOWN_GROWTH: Record<string, string> = {
+const TS_KNOWN_GROWTH: Record<string, string> = {
   'array literal': 'predates longest match (0990a37 grows the same): an alternative that fails after the nested literal, then one that parses it again',
   'conditional type': 'predates longest match (0990a37 grows the same): an alternative that fails after the nested type, then one that parses it again',
+};
+
+// The javascript grammar's constructs: what is JavaScript (no type syntax), each nested in itself.
+// An `export` or a decorator nests too: the grammar reads a declaration in a function body as in a
+// module, so nesting is what shows a declaration parsed twice.
+const JS_CONSTRUCTS: Record<string, (d: number) => string> = {
+  'function declaration': (d) => nest(d, (i) => `function f${i}(a, b) {`, '}'),
+  'async function': (d) => nest(d, (i) => `async function f${i}() {`, '}'),
+  'generator function': (d) => nest(d, (i) => `function* f${i}() {`, '}'),
+  'async generator function': (d) => nest(d, (i) => `async function* f${i}() {`, '}'),
+  'function expression': (d) => nest(d, (i) => `const g${i} = function () {`, '};'),
+  'named function expression': (d) => nest(d, (i) => `const g${i} = function h${i}() {`, '};'),
+  'generator expression': (d) => nest(d, (i) => `const g${i} = function* () {`, '};'),
+  'immediately invoked function': (d) => nest(d, () => '(function () {', '})();'),
+  'arrow function, block body': (d) => nest(d, (i) => `const g${i} = (a, b) => {`, '};'),
+  'arrow function, expression body': (d) => `const z = ${'(a) => '.repeat(d)}1;\n`,
+  'async arrow function': (d) => nest(d, (i) => `const g${i} = async (a) => {`, '};'),
+  'callback argument': (d) => nest(d, (i) => `f${i}(() => {`, '});'),
+  'class method': (d) => nest(d, (i) => `class C${i} { m${i}() {`, '} }'),
+  'class static method': (d) => nest(d, (i) => `class C${i} { static m${i}() {`, '} }'),
+  'class async method': (d) => nest(d, (i) => `class C${i} { async m${i}() {`, '} }'),
+  'class static async method': (d) => nest(d, (i) => `class C${i} { static async m${i}() {`, '} }'),
+  'class generator method': (d) => nest(d, (i) => `class C${i} { *m${i}() {`, '} }'),
+  'class async generator method': (d) => nest(d, (i) => `class C${i} { async *m${i}() {`, '} }'),
+  'class accessor': (d) => nest(d, (i) => `class C${i} { get m${i}() {`, '} }'),
+  'class setter': (d) => nest(d, (i) => `class C${i} { set m${i}(v) {`, '} }'),
+  'class private method': (d) => nest(d, (i) => `class C${i} { #m${i}() {`, '} }'),
+  'class computed method': (d) => nest(d, (i) => `class C${i} { [k${i}]() {`, '} }'),
+  'class field': (d) => nest(d, (i) => `class C${i} { m${i} = () => {`, '} }'),
+  'class static field': (d) => nest(d, (i) => `class C${i} { static m${i} = () => {`, '} }'),
+  'class private field': (d) => nest(d, (i) => `class C${i} { #m${i} = () => {`, '} }'),
+  'class static block': (d) => nest(d, (i) => `class C${i} { static {`, '} }'),
+  'class constructor': (d) => nest(d, (i) => `class C${i} { constructor() {`, '} }'),
+  'class extends': (d) => nest(d, (i) => `class C${i} extends B { constructor() { super();`, '} }'),
+  'class expression': (d) => nest(d, (i) => `const K${i} = class { m${i}() {`, '} };'),
+  'named class expression': (d) => nest(d, (i) => `const K${i} = class C${i} { m${i}() {`, '} };'),
+  'decorated class': (d) => nest(d, (i) => `@dec class C${i} { @dec m${i}() {`, '} }'),
+  'decorated class, called decorator': (d) => nest(d, (i) => `@dec(1) class C${i} { m${i}() {`, '} }'),
+  'decorated method': (d) => nest(d, (i) => `class C${i} { @dec m${i}() {`, '} }'),
+  'decorated field': (d) => nest(d, (i) => `class C${i} { @dec m${i} = () => {`, '} }'),
+  'decorated class expression': (d) => nest(d, (i) => `const K${i} = @dec class { m${i}() {`, '} };'),
+  'decorated export class': (d) => nest(d, (i) => `@dec export class C${i} { m${i}() {`, '} }'),
+  'export decorated class': (d) => nest(d, (i) => `export @dec class C${i} { m${i}() {`, '} }'),
+  'export default decorated class': (d) => nest(d, (i) => `export default @dec class C${i} { m${i}() {`, '} }'),
+  'decorated export default class': (d) => nest(d, (i) => `@dec export default class C${i} { m${i}() {`, '} }'),
+  'export class': (d) => nest(d, (i) => `export class C${i} { m${i}() {`, '} }'),
+  'export default class': (d) => nest(d, (i) => `export default class C${i} { m${i}() {`, '} }'),
+  'export function': (d) => nest(d, (i) => `export function f${i}() {`, '}'),
+  'export async function': (d) => nest(d, (i) => `export async function f${i}() {`, '}'),
+  'export default function': (d) => nest(d, (i) => `export default function f${i}() {`, '}'),
+  'export const': (d) => nest(d, (i) => `export const g${i} = () => {`, '};'),
+  'object method': (d) => nest(d, (i) => `const o${i} = { m${i}() {`, '} };'),
+  'object async method': (d) => nest(d, (i) => `const o${i} = { async m${i}() {`, '} };'),
+  'object generator method': (d) => nest(d, (i) => `const o${i} = { *m${i}() {`, '} };'),
+  'object accessor': (d) => nest(d, (i) => `const o${i} = { get m${i}() {`, '} };'),
+  'object computed method': (d) => nest(d, (i) => `const o${i} = { [k${i}]() {`, '} };'),
+  'object property function': (d) => nest(d, (i) => `const o${i} = { m${i}: function () {`, '} };'),
+  'object property arrow': (d) => nest(d, (i) => `const o${i} = { m${i}: () => {`, '} };'),
+  'object literal': (d) => `const o = ${wrap(d, '{ a: ', ' }', '1')};\n`,
+  'object computed key': (d) => `const o = ${wrap(d, '{ [k]: ', ' }', '1')};\n`,
+  'object spread': (d) => `const o = ${wrap(d, '{ ...', ' }', 'x')};\n`,
+  'array literal': (d) => `const o = ${wrap(d, '[', ']', '1')};\n`,
+  'array of objects': (d) => `const o = ${wrap(d, '[{ a: ', ' }]', '1')};\n`,
+  'parentheses': (d) => `const o = ${wrap(d, '(', ')', '1')};\n`,
+  'call arguments': (d) => `${wrap(d, 'f(', ')', '1')};\n`,
+  'optional call': (d) => `${wrap(d, 'f?.(', ')', '1')};\n`,
+  'new expression': (d) => `const o = ${wrap(d, 'new A(', ')', '1')};\n`,
+  'conditional expression': (d) => `const o = ${wrap(d, 'a ? ', ' : 2', '1')};\n`,
+  'template literal': (d) => `const o = ${wrap(d, '`a${', '}`', '1')};\n`,
+  'tagged template': (d) => `const o = ${wrap(d, 'tag`a${', '}`', '1')};\n`,
+  'block': (d) => nest(d, () => '{', '}'),
+  'if': (d) => nest(d, () => 'if (a) {', '}'),
+  'if else': (d) => nest(d, () => 'if (a) { b(); } else {', '}'),
+  'else if': (d) => nest(d, () => 'if (a) { b(); } else if (c) {', '}'),
+  'for': (d) => nest(d, () => 'for (let i = 0; i < n; i++) {', '}'),
+  'for of': (d) => nest(d, () => 'for (const x of xs) {', '}'),
+  'for in': (d) => nest(d, () => 'for (const k in o) {', '}'),
+  'while': (d) => nest(d, () => 'while (a) {', '}'),
+  'do while': (d) => nest(d, () => 'do {', '} while (a);'),
+  'try': (d) => nest(d, () => 'try {', '} catch (e) { g(); }'),
+  'try finally': (d) => nest(d, () => 'try {', '} finally { g(); }'),
+  'switch': (d) => nest(d, () => 'switch (a) { case 1: {', '} }'),
+  'labelled block': (d) => nest(d, (i) => `l${i}: {`, '}'),
+  'labelled loop': (d) => nest(d, (i) => `l${i}: for (;;) {`, '}'),
+};
+
+// EXPECTED-FAIL, as TS_KNOWN_GROWTH.
+const JS_KNOWN_GROWTH: Record<string, string> = {
+  'array literal': "Expr's array arm `['[', many(opt($), ','), opt($), ']']`: the repetition parses the last element, fails for want of a `,`, and the trailing opt($) parses it again",
+  'array of objects': 'as `array literal`',
 };
 
 let ok = 0, fail = 0;
@@ -106,16 +198,11 @@ const check = (label: string, cond: boolean, detail = '') => {
   else { fail++; console.log(`  ✗ ${label}${detail ? ' — ' + detail : ''}`); }
 };
 const have = (cmd: string, arg: string) => { try { execFileSync(cmd, [arg], { stdio: 'pipe' }); return true; } catch { return false; } };
-
-const grammar = (await import('../typescript.ts')).default;
-const dir = scratchDir('portable-work');
-const names = Object.keys(CONSTRUCTS);
-// Two inputs per construct, in `names` order: depth 1, then depth DEEP.
-const inputs = names.flatMap((n) => [CONSTRUCTS[n]!(1), CONSTRUCTS[n]!(DEEP)]);
-const files = inputs.map((src, i) => { const f = join(dir, `in${i}.ts`); writeFileSync(f, src); return f; });
+const haveGo = have('go', 'version'), haveRust = have('rustc', '--version');
+if (!haveGo) console.log('  go: (toolchain not found — skipped)');
+if (!haveRust) console.log('  rust: (toolchain not found — skipped)');
 
 type Count = { toks: number; nodes: number } | null;   // null: the input was rejected
-const counts = new Map<string, Count[]>();
 // A consumer binary prints one line per input file: `<tokens>\t<nodes>`, or `reject`.
 const readCounts = (out: string): Count[] => out.trim().split('\n').map((l) => {
   if (l === 'reject') return null;
@@ -123,29 +210,33 @@ const readCounts = (out: string): Count[] => out.trim().split('\n').map((l) => {
   return { toks: toks!, nodes: nodes! };
 });
 
-// ── TS ──
-{
-  const file = join(dir, 'parser.ts');
-  writeFileSync(file, emitParser(grammar, tsTarget));
-  const m = await import(file);
-  counts.set('ts', inputs.map((src): Count => {
-    let nodes = 0;
-    const root = m.parseWith(src, {
-      leaf: (tt: string, kid: number, lid: number, off: number, end: number) => m.cstBuilder.leaf(tt, kid, lid, off, end),
-      node: (rule: string, children: unknown[], off: number, end: number) => { nodes++; return m.cstBuilder.node(rule, children, off, end); },
-    });
-    return root === null ? null : { toks: m.tokenize(src).length, nodes };
-  }));
-}
+// Every target's counts for one grammar's inputs, in their order.
+async function measure(grammar: Parameters<typeof emitParser>[0], dir: string, inputs: string[]): Promise<Map<string, Count[]>> {
+  const files = inputs.map((src, i) => { const f = join(dir, `in${i}.txt`); writeFileSync(f, src); return f; });
+  const counts = new Map<string, Count[]>();
 
-// ── Go ──
-if (!have('go', 'version')) console.log('  go: (toolchain not found — skipped)');
-else {
-  const gdir = join(dir, 'go');
-  mkdirSync(join(gdir, 'parser'), { recursive: true });
-  writeFileSync(join(gdir, 'go.mod'), 'module consumer\n\ngo 1.21\n');
-  writeFileSync(join(gdir, 'parser', 'parser.go'), emitParser(grammar, goTarget));
-  writeFileSync(join(gdir, 'main.go'), `package main
+  // ── TS ──
+  {
+    const file = join(dir, 'parser.ts');
+    writeFileSync(file, emitParser(grammar, tsTarget));
+    const m = await import(file);
+    counts.set('ts', inputs.map((src): Count => {
+      let nodes = 0;
+      const root = m.parseWith(src, {
+        leaf: (tt: string, kid: number, lid: number, off: number, end: number) => m.cstBuilder.leaf(tt, kid, lid, off, end),
+        node: (rule: string, children: unknown[], off: number, end: number) => { nodes++; return m.cstBuilder.node(rule, children, off, end); },
+      });
+      return root === null ? null : { toks: m.tokenize(src).length, nodes };
+    }));
+  }
+
+  // ── Go ──
+  if (haveGo) {
+    const gdir = join(dir, 'go');
+    mkdirSync(join(gdir, 'parser'), { recursive: true });
+    writeFileSync(join(gdir, 'go.mod'), 'module consumer\n\ngo 1.21\n');
+    writeFileSync(join(gdir, 'parser', 'parser.go'), emitParser(grammar, goTarget));
+    writeFileSync(join(gdir, 'main.go'), `package main
 
 import (
 	"fmt"
@@ -185,15 +276,14 @@ func main() {
 	}
 }
 `);
-  goBuild(['-o', 'consumer', '.'], { cwd: gdir });
-  counts.set('go', readCounts(execFileSync(join(gdir, 'consumer'), files, { encoding: 'utf8' })));
-}
+    goBuild(['-o', 'consumer', '.'], { cwd: gdir });
+    counts.set('go', readCounts(execFileSync(join(gdir, 'consumer'), files, { encoding: 'utf8' })));
+  }
 
-// ── Rust ──
-if (!have('rustc', '--version')) console.log('  rust: (toolchain not found — skipped)');
-else {
-  const rfile = join(dir, 'work.rs');
-  writeFileSync(rfile, emitParser(grammar, rustTarget) + `
+  // ── Rust ──
+  if (haveRust) {
+    const rfile = join(dir, 'work.rs');
+    writeFileSync(rfile, emitParser(grammar, rustTarget) + `
 #[derive(Default)]
 struct Counting { inner: CstBuilder, nodes: u64 }
 impl Builder for Counting {
@@ -228,38 +318,56 @@ fn main() {
     }
 }
 `);
-  execFileSync('rustc', ['-A', 'warnings', rfile, '-o', join(dir, 'work')], { stdio: 'pipe' });
-  counts.set('rust', readCounts(execFileSync(join(dir, 'work'), files, { encoding: 'utf8' })));
+    execFileSync('rustc', ['-A', 'warnings', rfile, '-o', join(dir, 'work')], { stdio: 'pipe' });
+    counts.set('rust', readCounts(execFileSync(join(dir, 'work'), files, { encoding: 'utf8' })));
+  }
+  return counts;
 }
 
-const [ref, ...others] = [...counts];
-const [refLabel, refCounts] = ref!;
-for (const [label, cs] of others) {
-  const diff = names.flatMap((n, k) => [1, DEEP].flatMap((d, j) => {
-    const a = refCounts[2 * k + j], b = cs[2 * k + j];
-    return JSON.stringify(a) === JSON.stringify(b) ? [] : [`${n} ×${d}: ${refLabel} ${JSON.stringify(a)} vs ${label} ${JSON.stringify(b)}`];
-  }));
-  check(`${label}: token and node counts ≡ ${refLabel}`, diff.length === 0, diff.slice(0, 3).join('; '));
-}
-for (const [label, cs] of counts) {
-  names.forEach((n, k) => {
+const GRAMMARS = [
+  { name: 'typescript', constructs: TS_CONSTRUCTS, known: TS_KNOWN_GROWTH },
+  { name: 'javascript', constructs: JS_CONSTRUCTS, known: JS_KNOWN_GROWTH },
+];
+const dir = scratchDir('portable-work');
+const summary: string[] = [];
+let targets: string[] = [];
+for (const { name, constructs, known } of GRAMMARS) {
+  const grammar = (await import(`../${name}.ts`)).default;
+  const gdir = join(dir, name);
+  mkdirSync(gdir);
+  const names = Object.keys(constructs);
+  // Two inputs per construct, in `names` order: depth 1, then depth DEEP.
+  const counts = await measure(grammar, gdir, names.flatMap((n) => [constructs[n]!(1), constructs[n]!(DEEP)]));
+  targets = [...counts.keys()];
+  const growth = (cs: Count[], k: number) => {
     const flat = cs[2 * k], deep = cs[2 * k + 1];
-    if (flat == null || deep == null) { check(`${label}: ${n} is accepted at depth 1 and ${DEEP}`, false, flat == null ? 'depth 1 rejected' : `depth ${DEEP} rejected`); return; }
-    const growth = (deep.nodes / deep.toks) / (flat.nodes / flat.toks);
-    const detail = `nodes built per token ${(flat.nodes / flat.toks).toFixed(2)} at depth 1, ${(deep.nodes / deep.toks).toFixed(2)} at depth ${DEEP} (×${growth.toFixed(2)})`;
-    const known = KNOWN_GROWTH[n];
-    if (known === undefined) check(`${label}: ${n} — work per token does not grow with depth`, growth <= GROWTH, detail);
-    else check(`${label}: ${n} — KNOWN_GROWTH entry still grows (remove the entry once it does not)`, growth > GROWTH, detail);
-  });
-}
-for (const n of Object.keys(KNOWN_GROWTH)) check(`KNOWN_GROWTH names a construct: ${n}`, n in CONSTRUCTS);
+    return flat && deep ? (deep.nodes / deep.toks) / (flat.nodes / flat.toks) : NaN;
+  };
 
-const worst = (label: string) => {
-  const cs = counts.get(label)!;
-  const g = names.map((n, k) => ({ n, g: cs[2 * k] && cs[2 * k + 1] ? (cs[2 * k + 1]!.nodes / cs[2 * k + 1]!.toks) / (cs[2 * k]!.nodes / cs[2 * k]!.toks) : NaN }));
-  const free = g.filter((x) => !(x.n in KNOWN_GROWTH)).sort((a, b) => b.g - a.g)[0]!;
-  return `largest growth outside KNOWN_GROWTH ×${free.g.toFixed(2)} (${free.n})`;
-};
-console.log(`portable-work: ${names.length} constructs × depth 1 and ${DEEP}, targets ${[...counts.keys()].join(' / ')}; ${worst(refLabel)}; ${Object.keys(KNOWN_GROWTH).length} known to grow`);
+  const [ref, ...others] = [...counts];
+  const [refLabel, refCounts] = ref!;
+  for (const [label, cs] of others) {
+    const diff = names.flatMap((n, k) => [1, DEEP].flatMap((d, j) => {
+      const a = refCounts[2 * k + j], b = cs[2 * k + j];
+      return JSON.stringify(a) === JSON.stringify(b) ? [] : [`${n} ×${d}: ${refLabel} ${JSON.stringify(a)} vs ${label} ${JSON.stringify(b)}`];
+    }));
+    check(`${name} ${label}: token and node counts ≡ ${refLabel}`, diff.length === 0, diff.slice(0, 3).join('; '));
+  }
+  for (const [label, cs] of counts) {
+    names.forEach((n, k) => {
+      const flat = cs[2 * k], deep = cs[2 * k + 1];
+      if (flat == null || deep == null) { check(`${name} ${label}: ${n} is accepted at depth 1 and ${DEEP}`, false, flat == null ? 'depth 1 rejected' : `depth ${DEEP} rejected`); return; }
+      const g = growth(cs, k);
+      const detail = `nodes built per token ${(flat.nodes / flat.toks).toFixed(2)} at depth 1, ${(deep.nodes / deep.toks).toFixed(2)} at depth ${DEEP} (×${g.toFixed(2)})`;
+      if (known[n] === undefined) check(`${name} ${label}: ${n} — work per token does not grow with depth`, g <= GROWTH, detail);
+      else check(`${name} ${label}: ${n} — KNOWN_GROWTH entry still grows (remove the entry once it does not)`, g > GROWTH, detail);
+    });
+  }
+  for (const n of Object.keys(known)) check(`${name} KNOWN_GROWTH names a construct: ${n}`, n in constructs);
+
+  const free = names.map((n, k) => ({ n, g: growth(refCounts, k) })).filter((x) => !(x.n in known)).sort((a, b) => b.g - a.g)[0]!;
+  summary.push(`${name}: ${names.length} constructs, largest growth outside KNOWN_GROWTH ×${free.g.toFixed(2)} (${free.n}), ${Object.keys(known).length} known to grow`);
+}
+console.log(`portable-work: depth 1 and ${DEEP}, targets ${targets.join(' / ')}\n  ${summary.join('\n  ')}`);
 console.log(`\n${ok} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
