@@ -53,6 +53,7 @@ module.exports = grammar({
 
   conflicts: $ => [
     [$.expr, $.type],
+    [$.prop, $.export_specifier],
     [$.expr],
     [$.stmt],
     [$.stmt, $.decl],
