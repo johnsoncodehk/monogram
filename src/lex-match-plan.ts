@@ -132,6 +132,182 @@ function seqInfo(is: Info[]): Info {
   return { first, nullable: allNul, zfail: allNul ? zfail : NONE, sure, chars: is.reduce((a, i) => union(a, i.chars), NONE), always: is.every((i) => i.always) };
 }
 
+/** Every character (UTF-16 unit) a match attempt of p can examine and then go past: the units of
+ *  its consuming atoms, lookahead bodies included. An attempt from a start position therefore
+ *  reads, at the latest, up to and including the first unit outside this set: no path passes it.
+ *  (A non-BMP character in a class stands for both surrogate ranges.) */
+export function examinedUnits(p: TokenPattern): CSet {
+  if (typeof p === 'string') return norm([...Array(p.length).keys()].map((i) => [p.charCodeAt(i), p.charCodeAt(i)]));
+  switch (p.type) {
+    case 'anyChar': return CHARS;
+    case 'charClass': return union(classSet(p.items, p.negate), p.items.some((it) => (it.type === 'char' ? it.value : it.to).length > 1) ? [[0xd800, 0xdfff]] : NONE);
+    case 'seq': case 'alt': return p.items.reduce((a, i) => union(a, examinedUnits(i)), NONE);
+    case 'repeat': case 'lookahead': case 'lookbehind': return examinedUnits(p.body);
+    case 'anchor': case 'never': return NONE;
+  }
+}
+
+// n copies of a run of u units, where u may be Infinity: no copy reads nothing.
+const times = (n: number, u: number): number => (n === 0 ? 0 : n * u);
+
+/** The most units a match of p can consume (Infinity when unbounded). */
+export function maxUnits(p: TokenPattern): number {
+  if (typeof p === 'string') return p.length;
+  switch (p.type) {
+    case 'anyChar': case 'charClass': return 1;
+    case 'seq': return p.items.reduce((a, i) => a + maxUnits(i), 0);
+    case 'alt': return p.items.reduce((a, i) => Math.max(a, maxUnits(i)), 0);
+    case 'repeat': { const b = maxUnits(p.body); return b === 0 ? 0 : p.max === undefined ? Infinity : times(p.max, b); }
+    case 'lookahead': case 'lookbehind': case 'anchor': case 'never': return 0;
+  }
+}
+
+/** The most units a FAILED match attempt of p, from its start, can read; -1 when p cannot fail.
+ *  A candidate whose attempt fails after reading more than a few units was decided by text past
+ *  its own start (a regex, an unterminated block comment): see `examinedUnits` for where it stops. */
+export function failRead(p: TokenPattern): number {
+  if (typeof p === 'string') return p.length === 0 ? -1 : p.length;
+  switch (p.type) {
+    case 'anyChar': case 'charClass': return 1;
+    case 'anchor': return 1;
+    case 'never': return 0;
+    case 'lookbehind': return 0;
+    case 'lookahead': return p.negate ? maxUnits(p.body) : failRead(p.body);
+    case 'alt': return p.items.some((i) => failRead(i) < 0) ? -1 : p.items.reduce((a, i) => Math.max(a, failRead(i)), 0);
+    case 'repeat': { const f = failRead(p.body); return p.min === 0 || f < 0 ? -1 : times(p.min - 1, maxUnits(p.body)) + f; }
+    case 'seq': {
+      let before = 0, most = -1;
+      for (const i of p.items) {
+        const f = failRead(i);
+        if (f >= 0) most = Math.max(most, before + f);
+        before += maxUnits(i);
+      }
+      return most;
+    }
+  }
+}
+
+/** The fewest units a match of p consumes. */
+export function minUnits(p: TokenPattern): number {
+  if (typeof p === 'string') return p.length;
+  switch (p.type) {
+    case 'anyChar': case 'charClass': return 1;
+    case 'seq': return p.items.reduce((a, i) => a + minUnits(i), 0);
+    case 'alt': return p.items.reduce((a, i) => Math.min(a, minUnits(i)), Infinity);
+    case 'repeat': return p.min * minUnits(p.body);
+    case 'lookahead': case 'lookbehind': case 'anchor': case 'never': return 0;
+  }
+}
+
+/** The most units ANY match attempt of p (one that matches or one that fails), from its start,
+ *  can read; Infinity when unbounded. The end anchor examines the unit after it (whether the
+ *  source ends there), so it reads one. */
+export function reach(p: TokenPattern): number {
+  if (typeof p === 'string') return p.length;
+  switch (p.type) {
+    case 'anyChar': case 'charClass': return 1;
+    case 'anchor': return p.kind === 'end' ? 1 : 0;
+    case 'never': case 'lookbehind': return 0;
+    case 'lookahead': return reach(p.body);
+    case 'alt': return p.items.reduce((a, i) => Math.max(a, reach(i)), 0);
+    case 'seq': {
+      let before = 0, most = 0;
+      for (const i of p.items) { most = Math.max(most, before + reach(i)); before += maxUnits(i); }
+      return most;
+    }
+    case 'repeat': {
+      const b = maxUnits(p.body);
+      if (b === 0) return reach(p.body);
+      if (p.max === undefined) return Infinity;
+      return times(Math.max(0, p.max - 1), b) + reach(p.body);
+    }
+  }
+}
+
+/** The most units a SUCCESSFUL match of p reads at or after the end of its match (Infinity when
+ *  unbounded): the tests that decided where the match ends. A repeat's last, failed attempt, an
+ *  alternative tried and abandoned, a trailing lookahead, the end anchor. A lexer's relex keeps a
+ *  token that ends before an edit only if the token could not have read the edited text.
+ *  Where committing to the first choice is the regex's answer (`committed`), the attempts the match
+ *  made are those of its own shape, bounded node by node; elsewhere the regex may back up out of
+ *  any choice after reading further, and only the pattern's whole reach bounds it. */
+export function overRead(p: TokenPattern): number {
+  if (!committed(p, ACCEPT)) {
+    const r = reach(p);
+    return r === Infinity ? Infinity : Math.max(0, r - minUnits(p));
+  }
+  return Math.max(0, ovr(p, []));
+}
+
+// The units node p, followed in its match by `rest`, reads at or after the end of the whole
+// match (the match is committed: every attempt is one of the shape's own). Negative: none.
+function ovr(p: TokenPattern, rest: TokenPattern[]): number {
+  const after = rest.reduce((a, i) => a + minUnits(i), 0);
+  if (typeof p === 'string') return -after;
+  switch (p.type) {
+    case 'anyChar': case 'charClass': case 'never': case 'lookbehind': return -after;
+    case 'anchor': return (p.kind === 'end' ? 1 : 0) - after;
+    case 'lookahead': return reach(p.body) - after;
+    case 'seq': return p.items.reduce((a, it, k) => Math.max(a, ovr(it, [...p.items.slice(k + 1), ...rest])), -after);
+    case 'alt': {
+      // The chosen item's own reads, and the attempts of the items before it, which began where
+      // the alternative begins: the alternative consumed at least its fewest units past there.
+      const own = p.items.reduce((a, it) => Math.max(a, ovr(it, rest)), -Infinity);
+      const tried = p.items.slice(0, -1).reduce((a, it) => Math.max(a, failRead(it)), -1);
+      return Math.max(own, tried < 0 ? -Infinity : tried - minUnits(p) - after);
+    }
+    case 'repeat': {
+      // Each iteration's own reads, then the attempt that ended the repeat (none once it reached
+      // its maximum, so the bound takes it as made). When the rest consumes the unit the repeat
+      // stopped at and no iteration can begin with that unit, that attempt read only it.
+      const own = ovr(p.body, rest);
+      const f = failRead(p.body);
+      if (f < 0) return own;
+      const ri = info({ type: 'seq', items: rest });
+      const one = rest.length > 0 && !ri.nullable && isEmpty(intersect(info(p.body).first, ri.first));
+      return Math.max(own, (one ? 1 : f) - after);
+    }
+  }
+}
+
+/** The units at the end of a successful match of p at which it can have read more than one unit
+ *  past its end (the attempt that read that far began by taking that unit): elsewhere a match
+ *  reads at most the unit at its end. Every unit read past the end is then one of
+ *  `examinedUnits(p)`. */
+export function overTrigger(p: TokenPattern): CSet {
+  if (!committed(p, ACCEPT)) return overRead(p) > 1 ? examinedUnits(p) : NONE;
+  return trig(p, []);
+}
+
+// The units at the whole match's end at which an attempt of node p (followed by `rest`) that
+// reads more than one unit past that end can begin; as `ovr`, an attempt that began before the
+// end takes the end's unit as one of its own.
+function trig(p: TokenPattern, rest: TokenPattern[]): CSet {
+  const after = rest.reduce((a, i) => a + minUnits(i), 0);
+  if (typeof p === 'string') return NONE;
+  switch (p.type) {
+    case 'anyChar': case 'charClass': case 'never': case 'lookbehind': case 'anchor': return NONE;
+    case 'lookahead': return reach(p.body) - after > 1 ? examinedUnits(p.body) : NONE;
+    case 'seq': return p.items.reduce((a, it, k) => union(a, trig(it, [...p.items.slice(k + 1), ...rest])), NONE);
+    case 'alt': {
+      let s = p.items.reduce((a, it) => union(a, trig(it, rest)), NONE);
+      for (const it of p.items.slice(0, -1)) if (failRead(it) - minUnits(p) - after > 1) s = union(s, examinedUnits(it));
+      return s;
+    }
+    case 'repeat': {
+      const own = trig(p.body, rest);
+      const f = failRead(p.body);
+      if (f < 0) return own;
+      const ri = info({ type: 'seq', items: rest });
+      const one = rest.length > 0 && !ri.nullable && isEmpty(intersect(info(p.body).first, ri.first));
+      if ((one ? 1 : f) - after <= 1) return own;
+      // The attempt that ended the repeat began at the end itself (nothing follows) with the
+      // body's first unit, or before it and took the end's unit on the way.
+      return union(own, rest.every((i) => maxUnits(i) === 0) && !info(p.body).nullable ? info(p.body).first : examinedUnits(p.body));
+    }
+  }
+}
+
 // The next characters at which a pattern surely fails.
 const failset = (i: Info): CSet => intersect(complement(i.first), i.nullable ? i.zfail : ALL);
 
