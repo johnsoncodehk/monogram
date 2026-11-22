@@ -140,10 +140,17 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine): StepLowe
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (f === 'R' ? e.bpFound(name, bp) : f === 'W' ? `p.callRuleW(p.bpW_${name}(${bp}))` : `p.callRule(p.bp_${name}(${bp}))`),
     // A body guard (emit-portable.ts annotateSteps): opt / sep test it before their one attempt,
-    // star before each attempt, so a refused attempt takes no mark.
-    star: (body, g) => (g === null ? `p.star${f}(${fn(body)})` : `p.starIn${f}(${g}, ${fn(body)})`),
-    opt: (body, g) => (g === null ? `p.opt${f}(${fn(body)})` : `(!p.${e.ahead}(${g}, true) || p.opt${f}(${fn(body)}))`),
-    sep: (elem, delim, g) => (g === null ? `p.sepBy${f}(${fn(elem)}, ${sepDelimLid(ids, delim)})` : `(!p.${e.ahead}(${g}, true) || p.sepBy${f}(${fn(elem)}, ${sepDelimLid(ids, delim)}))`),
+    // star before each attempt, so a refused attempt takes no mark. A clean body (Step.clean) is
+    // attempted without a mark (starC / optC / sepByC).
+    star: (body, g, c) => (g === null ? `p.star${c ? 'C' : ''}${f}(${fn(body)})` : `p.starIn${c ? 'C' : ''}${f}(${g}, ${fn(body)})`),
+    opt: (body, g, c) => {
+      const attempt = `p.opt${c ? 'C' : ''}${f}(${fn(body)})`;
+      return g === null ? attempt : `(!p.${e.ahead}(${g}, true) || ${attempt})`;
+    },
+    sep: (elem, delim, g, c) => {
+      const call = `p.sepBy${c ? 'C' : ''}${f}(${fn(elem)}, ${sepDelimLid(ids, delim)})`;
+      return g === null ? call : `(!p.${e.ahead}(${g}, true) || ${call})`;
+    },
     altlit: (values) => `p.altLit${f}([]uint16{${values.map((v) => lidOf(ids, v)).join(', ')}})`,
     look: (id, is) => `${is ? '' : '!'}p.look${id}()`,   // recognize form (lookFnsR)
     ahead: (set, is) => `p.${e.ahead}(${set}, ${is})`,
@@ -218,6 +225,28 @@ func (p *${recv}) starInR(k int, once func() bool) bool {
 	for p.ahead(k, true) { sp := p.pos; if !once() { p.back(sp); break } }
 	return true
 }
+// A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo. Kept out of
+// line (go:noinline), as the marked forms already are by Go's inline budget: inlined, these small
+// helpers and their closures grew the frames of the large rule functions, and every call of those
+// paid for it on paths that never run the helper (dense-semi: parseStmtW / parseDeclW +7.5
+// instructions per call, Go builder Ir +5.3%).
+//go:noinline
+func (p *${recv}) starCR(once func() bool) bool {
+\tfor once() {}
+\treturn true
+}
+//go:noinline
+func (p *${recv}) starInCR(k int, once func() bool) bool {
+\tfor p.ahead(k, true) && once() {}
+\treturn true
+}
+//go:noinline
+func (p *${recv}) optCR(body func() bool) bool { body(); return true }
+//go:noinline
+func (p *${recv}) sepByCR(elem func() bool, delim uint16) bool {
+\tif elem() { for p.matchLitR(delim) && elem() {} }
+\treturn true
+}
 func (p *${recv}) optR(body func() bool) bool {
 \tsp := p.pos; if !body() { p.back(sp) }; return true
 }
@@ -225,8 +254,7 @@ func (p *${recv}) sepByR(elem func() bool, delimLid uint16) bool {
 \tsp0 := p.pos
 \tif !elem() { p.back(sp0); return true }
 \tfor {
-\t\tsp := p.pos
-\t\tif !p.matchLitR(delimLid) { p.back(sp); break }
+\t\tif !p.matchLitR(delimLid) { break } // a failed delimiter match changes nothing: no mark before it
 \t\tsp2 := p.pos
 \t\tif !elem() { p.back(sp2); break }
 \t}
@@ -2049,6 +2077,28 @@ func (p *${recv}) starInW(k int, once func() bool) bool {
 	}
 	return true
 }
+// A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo. Kept out of
+// line (go:noinline), as the marked forms already are by Go's inline budget: inlined, these small
+// helpers and their closures grew the frames of the large rule functions, and every call of those
+// paid for it on paths that never run the helper (dense-semi: parseStmtW / parseDeclW +7.5
+// instructions per call, Go builder Ir +5.3%).
+//go:noinline
+func (p *${recv}) starCW(once func() bool) bool {
+\tfor once() {}
+\treturn true
+}
+//go:noinline
+func (p *${recv}) starInCW(k int, once func() bool) bool {
+\tfor p.ahead(k, true) && once() {}
+\treturn true
+}
+//go:noinline
+func (p *${recv}) optCW(body func() bool) bool { body(); return true }
+//go:noinline
+func (p *${recv}) sepByCW(elem func() bool, delim uint16) bool {
+\tif elem() { for p.matchLitW(delim) && elem() {} }
+\treturn true
+}
 func (p *${recv}) optW(body func() bool) bool {
 \tsp := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \tif !body() { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore()} }
@@ -2058,8 +2108,7 @@ func (p *${recv}) sepByW(elem func() bool, delim uint16) bool {
 \tsp0 := p.pos; sb0 := len(p.scratch); ${arenaCkpt().replace('nb, kb', 'nb0, kb0')}
 \tif !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; ${arenaRestore().replace('nb', 'nb0').replace('kb', 'kb0')}; return true }
 \tfor {
-\t\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt()}
-\t\tif !(p.litW(delim) && p.takeW(litTt(delim))) { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore()}; break }
+\t\tif !(p.litW(delim) && p.takeW(litTt(delim))) { break } // a failed delimiter match changes nothing: no mark before it
 \t\tsp2 := p.pos; sb2 := len(p.scratch); ${arenaCkpt().replace('nb, kb', 'nb2, kb2')}
 \t\tif !elem() { p.back(sp2); p.scratch = p.scratch[:sb2]; ${arenaRestore().replace('nb', 'nb2').replace('kb', 'kb2')}; break }
 \t}
@@ -3382,6 +3431,28 @@ func (p *engine) starIn(k int, once func() bool) bool {
 	for p.ahead(k, true) { m := p.mark(); if !once() { p.reset(m); break } }
 	return true
 }
+// A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo. Kept out of
+// line (go:noinline), as the marked forms already are by Go's inline budget: inlined, these small
+// helpers and their closures grew the frames of the large rule functions, and every call of those
+// paid for it on paths that never run the helper (dense-semi: parseStmtW / parseDeclW +7.5
+// instructions per call, Go builder Ir +5.3%).
+//go:noinline
+func (p *engine) starC(once func() bool) bool {
+\tfor once() {}
+\treturn true
+}
+//go:noinline
+func (p *engine) starInC(k int, once func() bool) bool {
+\tfor p.ahead(k, true) && once() {}
+\treturn true
+}
+//go:noinline
+func (p *engine) optC(body func() bool) bool { body(); return true }
+//go:noinline
+func (p *engine) sepByC(elem func() bool, delim uint16) bool {
+\tif elem() { for p.matchLit(delim) && elem() {} }
+\treturn true
+}
 func (p *engine) opt(body func() bool) bool {
 \tm := p.mark(); if !body() { p.reset(m) }; return true
 }
@@ -3389,8 +3460,7 @@ func (p *engine) sepBy(elem func() bool, delimLid uint16) bool {
 \tm0 := p.mark()
 \tif !elem() { p.reset(m0); return true }
 \tfor {
-\t\tm := p.mark()
-\t\tif !p.matchLit(delimLid) { p.reset(m); break }
+\t\tif !p.matchLit(delimLid) { break } // a failed delimiter match changes nothing: no mark before it
 \t\tm2 := p.mark()
 \t\tif !elem() { p.reset(m2); break } // trailing delim OK — keep delim
 \t}
