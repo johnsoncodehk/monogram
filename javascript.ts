@@ -609,7 +609,10 @@ const CatchParameter = rule($ => [
 
 const Stmt = rule($ => [
   Block,
-  arm('variable', field('kind', alt('let', 'const', 'var')), sep(field('binding', Binding), ','), asi()),
+  // VariableStatement / LexicalDeclaration (14.3): a VariableDeclarationList / BindingList has one
+  // or more declarations and no trailing comma, so `var;`, `const;` and `var a,` have no parse,
+  // and `let;` is the expression statement of the identifier `let` (sloppy mode).
+  arm('variable', field('kind', alt('let', 'const', 'var')), field('binding', Binding), many(field('bindingComma', ','), field('bindingRest', Binding)), asi()),
   ['if', '(', field('condition', Expr), many(field('conditionComma', ','), field('conditionRest', Expr)), ')', field('consequence', $), opt('else', field('alternative', $))],
   forStatement($, ForHead, ForAwaitHead),
   ['while', '(', field('condition', Expr), many(field('conditionComma', ','), field('conditionRest', Expr)), ')', field('body', $)],
@@ -631,8 +634,9 @@ const Stmt = rule($ => [
   arm('labelled', notReserved, field('label', Ident), ':', field('body', $)),
   arm('empty', ';'),
   ['debugger', asi()],
-  ['with', '(', field('object', Expr), ')', field('body', $)],
-  arm('using', opt(field('awaitKeyword', 'await')), field('usingKeyword', 'using'), sep(field('binding', Binding), ','), asi()),
+  // `with ( Expression ) Statement` (14.11): the object is an Expression, a comma list included.
+  ['with', '(', field('object', Expr), many(field('objectComma', ','), field('objectRest', Expr)), ')', field('body', $)],
+  arm('using', opt(field('awaitKeyword', 'await')), field('usingKeyword', 'using'), field('binding', Binding), many(field('bindingComma', ','), field('bindingRest', Binding)), asi()),
   Decl,
   // Not after a start that begins a block or a declaration (`expressionStatement`): without the
   // lookahead, longest match lets the expression reading win wherever a tail makes it longer

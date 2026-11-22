@@ -9,7 +9,7 @@
 // Positions: a node's start is tsc's `getStart()` (the first token); tsc's `pos` (leading trivia
 // included) is not produced (the harness compares it only when both sides carry it).
 import {
-  absent, and, branch, c, child, cook, fold, iff, inh, map, match, node, not, orElse, present, syn, text, v,
+  absent, and, branch, c, child, cook, fold, iff, inh, list, map, match, node, not, orElse, present, spread, syn, text, v,
   type Shape2Spec, type Term,
 } from '../../src/shape2-schema.ts';
 
@@ -42,9 +42,10 @@ const comma: Term = commaOf('first', 'comma', 'rest');
 /** A statement's optional label. */
 const label: Term = iff(present('label'), idOf('label'), absent);
 /** A declaration list spanning its keyword(s) to its last binding; `flags` from the keyword. */
-// tsc's parser takes an empty list (`var;`: its checker reports it), which then ends at its keyword.
-const declarationList = (from: string, flags: Term): Term =>
-  iff(present('binding'), node('VariableDeclarationList', { declarations: child('binding'), flags }, { from, to: 'binding' }), node('VariableDeclarationList', { declarations: child('binding'), flags }, { from, to: from === 'awaitKeyword' ? 'usingKeyword' : from }));
+const declarationList = (from: string, flags: Term): Term => {
+  const declarations = list(child('binding'), spread(child('bindingRest')));
+  return iff(present('bindingRest'), node('VariableDeclarationList', { declarations, flags }, { from, to: 'bindingRest' }), node('VariableDeclarationList', { declarations, flags }, { from, to: 'binding' }));
+};
 
 /** The statements (ECMA-262 14), one node per Stmt arm. */
 const STATEMENTS: Record<string, Term> = {
@@ -69,7 +70,7 @@ const STATEMENTS: Record<string, Term> = {
   labelled: node('LabeledStatement', { label: idOf('label'), statement: child('body') }),
   empty: node('EmptyStatement'),
   debugger_: node('DebuggerStatement'),
-  with_: node('WithStatement', { expression: child('object'), statement: child('body') }),
+  with_: node('WithStatement', { expression: commaOf('object'), statement: child('body') }),
   decl: child('decl'),
 };
 
