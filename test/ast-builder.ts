@@ -239,13 +239,13 @@ function demoBuilder(src: string): Builder<DemoNode | string> {
 
       // A few illustrative renames + positional → named fields (not full ESTree).
       if (rule === 'Program') return { type: 'Program', body: children };
-      if (rule === 'Stmt' || rule === 'Stmt_A') {
+      if (rule === 'Stmt') {
         // Heuristic: ExpressionStatement if single non-object remains unusual —
         // with drops, Stmt often becomes a thin wrapper already inlined; when kept,
         // treat as ExpressionStatement with expression = first child.
         return { type: 'ExpressionStatement', expression: children[0] };
       }
-      if (rule === 'Expr' || rule === 'Expr_A') {
+      if (rule === 'Expr') {
         // Binary-ish: left, op(text may be dropped), right → BinaryExpression when 2 kids
         if (children.length === 2) {
           return { type: 'BinaryExpression', left: children[0], right: children[1] };
@@ -255,9 +255,9 @@ function demoBuilder(src: string): Builder<DemoNode | string> {
         }
         return { type: 'Expression', children };
       }
-      if (rule === 'Decl' || rule === 'Decl_A') return { type: 'Declaration', children };
-      if (rule === 'Block' || rule === 'Block_A') return { type: 'BlockStatement', body: children };
-      return { type: rule.replace(/_A$/, ''), children };
+      if (rule === 'Decl') return { type: 'Declaration', children };
+      if (rule === 'Block') return { type: 'BlockStatement', body: children };
+      return { type: rule, children };
     },
   };
 }
@@ -373,7 +373,7 @@ console.log('\nast-builder: demo ESTree-ish builder golden');
     const nullStmt: Builder<unknown> = {
       leaf: (tt, _k, _l, off, end) => (tt === '$punct' || tt === '$keyword' ? null : { tt, off, end }),
       node: (rule, kids, off, end) => {
-        if (rule === 'Stmt' || rule === 'Stmt_A') return null;
+        if (rule === 'Stmt') return null;
         if (kids.length === 1) return kids as unknown[];
         return { rule, kids, off, end };
       },

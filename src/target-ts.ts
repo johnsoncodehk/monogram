@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -421,13 +421,16 @@ function stepBody(s: Step, ids: LexIdPlan, w: boolean): string {
     case 'alt': return `(() => { ${stepStmts(s, ids, w)} })()`;
     case 'look': return `${s.is ? '' : '!'}look${s.id}${S}(${ks})`;
     case 'ahead': return `ahead(${s.set}, ${s.is})`;
+    case 'aheadCtx': return s.is ? `(ahead(${s.set}, true) || ctxWord())` : `(ahead(${s.set}, false) && !ctxWord())`;
     case 'seq': return `(${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'})`;
     case 'sameLine': return `(() => { const t = peek(); return t !== null && !t.nl; })()`;
     case 'suppress': return `(() => { ${stepStmts(s, ids, w)} })()`;
+    case 'ctx': return `(() => { ${stepStmts(s, ids, w)} })()`;
   }
 }
-// The step as the statements of a function returning whether it matched: an `alt` or `suppress`
-// step needs statements, so in place it is printed as an immediately called function of these.
+// The step as the statements of a function returning whether it matched: an `alt`, `suppress` or
+// `ctx` step needs statements, so in place it is printed as an immediately called function of these.
+// A `ctx` step puts the context it found back after its body, whether the body matched or not.
 function stepStmts(s: Step, ids: LexIdPlan, w: boolean): string {
   const sc = (x: Step) => stepCond(x, ids, w);
   switch (s.t) {
@@ -448,6 +451,7 @@ function stepStmts(s: Step, ids: LexIdPlan, w: boolean): string {
       return `${peekInit}${tries} return false;`;
     }
     case 'suppress': return `_suppressNext = ${s.set}; const _r = (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); _suppressNext = 0; return _r;`;
+    case 'ctx': return `const _c = _ctx; _ctx = ${s.ctx}; const _r = (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); _ctx = _c; return _r;`;
     default: return `return ${stepBody(s, ids, w)};`;
   }
 }
@@ -530,7 +534,7 @@ function topReusePlan(ir: ParserIR): ReusePlan | null {
 
 function rdRule(r: RdRule, ids: LexIdPlan): string {
   if (r.predictive) {
-  const arm = (steps: Step[], i: number) => `  ${i === 0 ? 'if' : 'else if'} (${firstCond(r.altFirst[i], 't', ids)}) { const kids: Cst[] = []; if (${steps.map((x) => stepCond(x, ids)).join(' && ')}) return branch(${J(r.cstName)}, kids, save); }`;
+  const arm = (steps: Step[], i: number) => `  ${i === 0 ? 'if' : 'else if'} (${firstCond(r.altFirst[i], 't', ids)}) { const kids: Cst[] = []; if (${steps.map((x) => stepCond(x, ids)).join(' && ')}) return branch(${J(r.name)}, kids, save); }`;
   return `function parse${r.name}(): Node | null {
   const save = pos;
   const t = peek(); if (t === null) return null;
@@ -542,13 +546,13 @@ ${r.alts.map(arm).join(' ')}
   if (r.alts.length === 1) {   // nothing to choose among
     return `function parse${r.name}(): Node | null {
   const save = pos;
-  { const kids: Cst[] = []; if (${r.alts[0]!.map((x) => stepCond(x, ids)).join(' && ')}) return branch(${J(r.cstName)}, kids, save); back(save); }
+  { const kids: Cst[] = []; if (${r.alts[0]!.map((x) => stepCond(x, ids)).join(' && ')}) return branch(${J(r.name)}, kids, save); back(save); }
   return null;
 }`;
   }
   // Longest match over the alternatives, reached through the rule's Dispatch (emit-portable.ts, RdRule).
   const alt = (i: number, keyed: boolean) => {
-    const body = `{ const kids: Cst[] = []; if (${r.alts[i]!.map((x) => stepCond(x, ids)).join(' && ')} && ${beatsTs(r.altDispatch, 'pos', i)}) { best = branch(${J(r.cstName)}, kids, save); bestPos = pos;${markTs(r.altDispatch, i)} } back(save); }`;
+    const body = `{ const kids: Cst[] = []; if (${r.alts[i]!.map((x) => stepCond(x, ids)).join(' && ')} && ${beatsTs(r.altDispatch, 'pos', i)}) { best = branch(${J(r.name)}, kids, save); bestPos = pos;${markTs(r.altDispatch, i)} } back(save); }`;
     const g = guardCond(r.altGuard[i]!, '_ft', keyed);
     return ifTs(g.length && !keyed ? ['_ft !== null', ...g] : g, body);
   };
@@ -565,7 +569,7 @@ ${needPeek ? '  const _ft = peek();\n' : ''}${dispatchTs(r.altDispatch, '_ft', i
 /** Builder-mode RD rule — same control flow as rdRule, returns Frame (span+handles). */
 function rdRuleW(r: RdRule, ids: LexIdPlan): string {
   if (r.predictive) {
-  const arm = (steps: Step[], i: number) => `  ${i === 0 ? 'if' : 'else if'} (${firstCond(r.altFirst[i], 't', ids)}) { const kids: any[] = []; const spans: BWSpan[] = []; if (${steps.map((x) => stepCond(x, ids, true)).join(' && ')}) return branchW(${J(r.cstName)}, kids, spans, save); }`;
+  const arm = (steps: Step[], i: number) => `  ${i === 0 ? 'if' : 'else if'} (${firstCond(r.altFirst[i], 't', ids)}) { const kids: any[] = []; const spans: BWSpan[] = []; if (${steps.map((x) => stepCond(x, ids, true)).join(' && ')}) return branchW(${J(r.name)}, kids, spans, save); }`;
   return `function parse${r.name}W(): Frame | null {
   const save = pos;
   const t = peek(); if (t === null) return null;
@@ -577,12 +581,12 @@ ${r.alts.map(arm).join(' ')}
   if (r.alts.length === 1) {
     return `function parse${r.name}W(): Frame | null {
   const save = pos;
-  { const kids: any[] = []; const spans: BWSpan[] = []; if (${r.alts[0]!.map((x) => stepCond(x, ids, true)).join(' && ')}) return branchW(${J(r.cstName)}, kids, spans, save); back(save); }
+  { const kids: any[] = []; const spans: BWSpan[] = []; if (${r.alts[0]!.map((x) => stepCond(x, ids, true)).join(' && ')}) return branchW(${J(r.name)}, kids, spans, save); back(save); }
   return null;
 }`;
   }
   const alt = (i: number, keyed: boolean) => {
-    const body = `{ const kids: any[] = []; const spans: BWSpan[] = []; if (${r.alts[i]!.map((x) => stepCond(x, ids, true)).join(' && ')} && ${beatsTs(r.altDispatch, 'pos', i)}) { best = branchW(${J(r.cstName)}, kids, spans, save); bestPos = pos;${markTs(r.altDispatch, i)} } back(save); }`;
+    const body = `{ const kids: any[] = []; const spans: BWSpan[] = []; if (${r.alts[i]!.map((x) => stepCond(x, ids, true)).join(' && ')} && ${beatsTs(r.altDispatch, 'pos', i)}) { best = branchW(${J(r.name)}, kids, spans, save); bestPos = pos;${markTs(r.altDispatch, i)} } back(save); }`;
     const g = guardCond(r.altGuard[i]!, '_ft', keyed);
     return ifTs(g.length && !keyed ? ['_ft !== null', ...g] : g, body);
   };
@@ -622,7 +626,7 @@ function parse${r.name}W(): Frame | null {
   }
   _entries = localE;
   _entryHs = kids.slice();
-  return branchW(${J(r.cstName)}, kids, spans, save);
+  return branchW(${J(r.name)}, kids, spans, save);
 }`;
   }
   const headBlock = plan.hasHead && plan.headRule
@@ -683,7 +687,7 @@ ${headBlock}  for (;;) {
   _segs = segs;
   _entries = localE;
   _entryHs = kids.slice();
-  return branchW(${J(r.cstName)}, kids, spans, save);
+  return branchW(${J(r.name)}, kids, spans, save);
 }`;
 }
 
@@ -709,7 +713,7 @@ function parse${r.name}(): Node | null {
   }
   _entries = localE;
   _entryHs = kids;
-  return branch(${J(r.cstName)}, kids, save);
+  return branch(${J(r.name)}, kids, save);
 }`;
 }
 
@@ -772,7 +776,7 @@ ${headBlock}  for (;;) {
   _segs = segs;
   _entries = localE;
   _entryHs = kids;
-  return branch(${J(r.cstName)}, kids, save);
+  return branch(${J(r.name)}, kids, save);
 }`;
 }
 
@@ -787,16 +791,16 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
     `best = ${nodeExpr}; bestPos = pos;${markTs(r.nudDispatch, i)} bf = ${form}; bt = ${tail}; bc = ${capped};`;
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids)).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    `{ const kids: Cst[] = []; if (${stepsCond(steps)} && ${beatsTs(r.nudDispatch, 'pos', i)}) { ${won(i, `branch(${J(r.cstName)}, kids, save)`, '0', tail, capped)} } back(save); }`;
+    `{ const kids: Cst[] = []; if (${stepsCond(steps)} && ${beatsTs(r.nudDispatch, 'pos', i)}) { ${won(i, `branch(${J(r.name)}, kids, save)`, '0', tail, capped)} } back(save); }`;
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
     switch (a.kind) {
       case 'tok': {
         const k = r.nudToks[a.index]!;
-        const leafArm = ifTs(keyed ? [] : [`t.kid === ${kidOf(ids, k)}`], `{ pos++; if (${beatsTs(r.nudDispatch, 'pos', i)}) { ${won(i, `{ rule: ${J(r.cstName)}, children: [{ tokenType: tok_kind(t), offset: t.off, end: t.end }], offset: t.off, end: t.end }`, '0', false, false)} } back(save); }`);
+        const leafArm = ifTs(keyed ? [] : [`t.kid === ${kidOf(ids, k)}`], `{ pos++; if (${beatsTs(r.nudDispatch, 'pos', i)}) { ${won(i, `{ rule: ${J(r.name)}, children: [{ tokenType: tok_kind(t), offset: t.off, end: t.end }], offset: t.off, end: t.end }`, '0', false, false)} } back(save); }`);
         if (r.nudTplHole === undefined || !tpl || k !== tpl.token) return leafArm;
         return `${leafArm}
-  if (t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplate(parse${r.nudTplHole}); if (node !== null && ${beatsTs(r.nudDispatch, 'pos', i)}) { ${won(i, `{ rule: ${J(r.cstName)}, children: [node], offset: node.offset, end: node.end }`, '0', false, false)} } back(save); }`;
+  if (t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplate(parse${r.nudTplHole}); if (node !== null && ${beatsTs(r.nudDispatch, 'pos', i)}) { ${won(i, `{ rule: ${J(r.name)}, children: [node], offset: node.offset, end: node.end }`, '0', false, false)} } back(save); }`;
       }
       case 'bracket': {
         const b = r.nudBrackets[a.index]!;
@@ -817,7 +821,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
       const operand = ${r.name}_bp(pbp);
       if (operand !== null) {
         if (_form !== 0 && ${r.name}_PRE_TGT.has(t.lid)) { back(save); _capped = false; return null; }
-        if (${beatsTs(r.nudDispatch, 'pos', i)}) { ${won(i, `{ rule: ${J(r.cstName)}, children: [{ tokenType: '$operator', offset: t.off, end: t.end }, operand], offset: t.off, end: operand.end }`, `${r.name}_PRE_FORM[t.lid]!`, true, false)} }
+        if (${beatsTs(r.nudDispatch, 'pos', i)}) { ${won(i, `{ rule: ${J(r.name)}, children: [{ tokenType: '$operator', offset: t.off, end: t.end }, operand], offset: t.off, end: operand.end }`, `${r.name}_PRE_FORM[t.lid]!`, true, false)} }
       }
       back(save);
     } }`;
@@ -843,7 +847,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
   const binLids = new Set(r.binary.map((b) => lidOf(ids, b.op)));
   const ledBody = (b: Bracket, form: number, closes: boolean, hasBin: boolean, isLast: boolean) => `{
       const ledSave = pos; const kids: Cst[] = [left];
-      if (${b.steps.map((x) => stepCond(x, ids)).join(' && ')}) { left = node(${J(r.cstName)}, kids); form = ${form};${closes ? ' tailClosed = true;' : ''} continue ledLoop; }
+      if (${b.steps.map((x) => stepCond(x, ids)).join(' && ')}) { left = node(${J(r.name)}, kids); form = ${form};${closes ? ' tailClosed = true;' : ''} continue ledLoop; }
       back(ledSave);${hasBin ? '' : isLast ? ' break ledLoop;' : ''}
     }`;
   const ledSwitch = (() => {
@@ -863,10 +867,10 @@ ${groups.map((g) => {
     if (r.postfixToks.length === 0) return '';
     const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
     const tplPart = r.postfixTplHole !== undefined ? `
-    if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplate(parse${r.postfixTplHole}); if (node !== null) { left = { rule: ${J(r.cstName)}, children: [left, node], offset: left.offset, end: node.end }; form = 0; continue ledLoop; } }` : '';
+    if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplate(parse${r.postfixTplHole}); if (node !== null) { left = { rule: ${J(r.name)}, children: [left, node], offset: left.offset, end: node.end }; form = 0; continue ledLoop; } }` : '';
     return `    switch (t.kid) {
 ${groups.map((g) => `      case ${g.key}:
-        if (!tailClosed) { const leaf: Leaf = { tokenType: tok_kind(t), offset: t.off, end: t.end }; pos++; left = { rule: ${J(r.cstName)}, children: [left, leaf], offset: left.offset, end: leaf.end }; form = 0; continue ledLoop; }
+        if (!tailClosed) { const leaf: Leaf = { tokenType: tok_kind(t), offset: t.off, end: t.end }; pos++; left = { rule: ${J(r.name)}, children: [left, leaf], offset: left.offset, end: leaf.end }; form = 0; continue ledLoop; }
         break;`).join('\n')}
     }${tplPart}`;
   })();
@@ -897,7 +901,7 @@ ${postfixTokSwitch}
     const post = ${r.name}_POST[t.lid];
     if (!tailClosed && post !== undefined && post > minBp${r.postfixSameLine ? ' && !t.nl' : ''}) {
       if (form !== 0 && ${r.name}_POST_TGT.has(t.lid)) return null;
-      const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end }; pos++; left = { rule: ${J(r.cstName)}, children: [left, opLeaf], offset: left.offset, end: t.end }; tailClosed = true; form = 1; continue;
+      const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end }; pos++; left = { rule: ${J(r.name)}, children: [left, opLeaf], offset: left.offset, end: t.end }; tailClosed = true; form = 1; continue;
     }
     const info = ${r.name}_BIN[_opLid(t)];
     if (info === undefined || info.lbp <= minBp) break;
@@ -907,7 +911,7 @@ ${postfixTokSwitch}
     pos += _opN;
     const rhs = ${r.name}_bp(info.rbp);
     if (rhs === null) { back(ledSave); break; }
-    left = { rule: ${J(r.cstName)}, children: [left, opLeaf, rhs], offset: left.offset, end: rhs.end };
+    left = { rule: ${J(r.name)}, children: [left, opLeaf, rhs], offset: left.offset, end: rhs.end };
     form = 1; tailClosed = true;
   }
   _form = form;
@@ -932,7 +936,7 @@ ${dispatchTs(r.nudDispatch, 't', ids, nudArm)}
 
 /** Builder-mode Pratt — reuses ${name}_BIN/_PRE/_POST/_ATOM tables from the CST emit. */
 function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
-  const cn = J(r.cstName);
+  const cn = J(r.name);
   // The NUD arms: longest-match candidates through the rule's Dispatch, as in prattRule.
   const won = (i: number, frameExpr: string, form: string, tail: boolean, capped: boolean) =>
     `best = ${frameExpr}; bestPos = pos;${markTs(r.nudDispatch, i)} bf = ${form}; bt = ${tail}; bc = ${capped};`;
@@ -1590,8 +1594,7 @@ function docEditBlock(ir: ParserIR, shared: SharedAlgorithms): { code: string; p
   const shapeA = topReuse?.kind === 'A';
   const shapeB = topReuse?.kind === 'B';
   const hasHeadB = !!(shapeB && topReuse && topReuse.kind === 'B' && topReuse.hasHead);
-  const entryRule = ir.rules.find((r) => r.name === ir.entry);
-  const entryCst = entryRule && 'cstName' in entryRule ? entryRule.cstName : ir.entry;
+  const entryCst = ir.entry;
   const relexFamily = `\n// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.relexFamily(ir)}\n`;
   const editBody = `      [text, prevToks, relexed] = relexEdits(oldText, oldToks, edits);`;
   const initToks = 'scanMeta(src)';
@@ -2018,7 +2021,7 @@ ${editParse}
 
 type ShapeStepKind =
   | 'lit' | 'tok' | 'rule' | 'ruleBp' | 'star' | 'opt' | 'sep'
-  | 'altlit' | 'alt' | 'look' | 'ahead' | 'seq' | 'sameLine' | 'suppress';
+  | 'altlit' | 'alt' | 'look' | 'ahead' | 'aheadCtx' | 'seq' | 'sameLine' | 'suppress' | 'ctx';
 type ShapePrattKind =
   | 'atom' | 'group' | 'prefix' | 'binary' | 'postfix' | 'postfixTok'
   | 'led' | 'nudSeq' | 'nudCapped' | 'template';
@@ -2026,7 +2029,7 @@ type ShapeUnsupported = { rule: string; construct: string };
 
 const SHAPE_STEP_KINDS: readonly ShapeStepKind[] = [
   'lit', 'tok', 'rule', 'ruleBp', 'star', 'opt', 'sep',
-  'altlit', 'alt', 'look', 'ahead', 'seq', 'sameLine', 'suppress',
+  'altlit', 'alt', 'look', 'ahead', 'aheadCtx', 'seq', 'sameLine', 'suppress', 'ctx',
 ];
 const SHAPE_PRATT_KINDS: readonly ShapePrattKind[] = [
   'atom', 'group', 'prefix', 'binary', 'postfix', 'postfixTok',
@@ -2136,7 +2139,7 @@ function emitShapeTypeDecls(ir: ParserIR, shapeIR: ShapeIR): string {
       });
       const name = choiceUnionName(r.name, r.shape);
       lines.push(`export type ${name} = ${members.join(' | ')};`);
-      if (r.cstName === 'Stmt' || r.name === 'Stmt') lines.push(`export type Statement = ${name};`);
+      if (r.name === 'Stmt') lines.push(`export type Statement = ${name};`);
       if (r.name === ir.entry) lines.push(`export type AstRoot = ${name};`);
     } else if (r.shape.kind === 'pratt') {
       const members: string[] = [];
@@ -2170,7 +2173,7 @@ function emitShapeTypeDecls(ir: ParserIR, shapeIR: ShapeIR): string {
       const uniq = [...new Set(members)];
       const name = prattUnionName(r.name);
       lines.push(`export type ${name} = ${uniq.join(' | ')};`);
-      if (r.cstName === 'Expr' || r.name === 'Expr') lines.push(`export type Expression = ${name};`);
+      if (r.name === 'Expr') lines.push(`export type Expression = ${name};`);
       if (r.name === ir.entry) lines.push(`export type AstRoot = ${name};`);
     } else if (r.shape.kind === 'node' && r.name === ir.entry) {
       lines.push(`export type AstRoot = ${r.shape.type};`);
@@ -2221,12 +2224,14 @@ function emitAstRdAltSteps(
       case 'star': return visible(s.step);
       case 'opt':
       case 'seq':
-      case 'suppress': return s.steps.some(visible);
+      case 'suppress':
+      case 'ctx': return s.steps.some(visible);
       case 'sep': return visible(s.elem);
       case 'altlit': return s.opts.some((o) => !leafDropped(o.ttype, leaves));
       case 'alt': return s.branches.some((b) => b.some(visible));
       case 'look':
       case 'ahead':
+      case 'aheadCtx':
       case 'sameLine': return false;
     }
   };
@@ -2263,12 +2268,16 @@ function emitAstRdAltSteps(
         return `(() => { const t = peek(); return t !== null && !t.nl; })()`;
       case 'ahead':
         return `ahead(${s.set}, ${s.is})`;
+      case 'aheadCtx':
+        return s.is ? `(ahead(${s.set}, true) || ctxWord())` : `(ahead(${s.set}, false) && !ctxWord())`;
       case 'look': {
         const nv = local('Not');
         return `(() => { const ${nv}: unknown[] = []; return ${s.is ? '' : '!'}_shapeProbe(${nv}, _ap, () => ${emitSteps(ctx.look[s.id]!, nv)}); })()`;
       }
       case 'suppress':
         return `(() => { _suppressNext = ${s.set}; const _r = (${emitSteps(s.steps, sink)}); _suppressNext = 0; return _r; })()`;
+      case 'ctx':
+        return `(() => { const _c = _ctx; _ctx = ${s.ctx}; const _r = (${emitSteps(s.steps, sink)}); _ctx = _c; return _r; })()`;
       case 'altlit': {
         const arms = s.opts.map((o) =>
           `if (t.lid === ${lidOf(ids, o.value)}) { pos++; ${visible(s) ? `${sink}.push(${leafDropped(o.ttype, leaves) ? 'null' : J(o.value)});` : ''} return true; }`,
@@ -2511,7 +2520,7 @@ ${needPeek ? '  const _ft = peek();\n' : ''}${tries}
     return finalize(`function parseAst${r.name}(): unknown {
   const cst = parse${r.name}();
   if (cst === null) return null;
-  return { type: ${J(r.cstName)}, children: cst };
+  return { type: ${J(r.name)}, children: cst };
 }`);
   }
   if (shape.kind === 'leafValue') {
@@ -2545,7 +2554,7 @@ ${needPeek ? '  const _ft = peek();\n' : ''}${tries}
       return fn({ src: _src, kids: _fold.kids, off: __SPOFF__, end, altPath: [__ALT__, ..._ap]${arm.shape.folds?.length ? ', state: _fold.state' : ''} });
     }`;
       } else if (arm.shape.kind === 'keep') {
-        finish = `return { type: ${J(r.cstName)}, children: __SK__, arm: ${J(arm.name)}, alt: __ALT__ };`;
+        finish = `return { type: ${J(r.name)}, children: __SK__, arm: ${J(arm.name)}, alt: __ALT__ };`;
       } else {
         finish = `return null;`;
       }
@@ -2647,7 +2656,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
   };
 
   const keepFinish = (kidsExpr: string, saveExpr: string) =>
-    `{ type: ${J(r.cstName)}, children: ${kidsExpr}, headText: _shapeHeadText(${kidsExpr}[0])${spanKeep(
+    `{ type: ${J(r.name)}, children: ${kidsExpr}, headText: _shapeHeadText(${kidsExpr}[0])${spanKeep(
       `${saveExpr} < toks.length ? toks[${saveExpr}]!.off : 0`,
       `pos > 0 ? toks[pos - 1]!.end : (${saveExpr} < toks.length ? toks[${saveExpr}]!.off : 0)`,
     )} }`;
@@ -3619,6 +3628,13 @@ function ahead(k: number, is: boolean): boolean {
   const t = peek();
   return t === null ? !is : inSet(k, t) === is;
 }
+// Whether the next token is a word the context in force reserves (ParserIR.ctxWords): with the
+// \`ahead\` test of the guard's own set, an \`aheadCtx\` test. Outside every context it reads nothing.
+function ctxWord(): boolean {
+  if (_ctx === 0) return false;
+  const t = peek();
+  return t !== null && (false${ctxWordLids(ir, ids).map((w) => ` || ((_ctx & ${w.bit}) !== 0 && t.lid === ${w.lid})`).join('')});
+}
 // Whether the token after the current one is in set k (a longest-match candidate's SECOND guard).
 function secondIn(k: number): boolean {
   maxLook = Math.max(maxLook, pos + 2);
@@ -3685,6 +3701,9 @@ let _tail = false;   // whether the node the last _nud call returned closes the 
 // step stages for the next Pratt call, and the set in force in the current one.
 let _suppressNext = 0;
 let _suppressCur = 0;
+// The [Await]/[Yield] context word in force (ParserIR's Ctx: bit 1 await, bit 2 yield). A \`ctx\` step
+// sets it for its body and puts back what it found, so outside every such body it is 0.
+let _ctx = 0;
 let _src = '';
 function peek(): Tok | null { peekEnd = pos + 1; return pos < toks.length ? toks[pos] : null; }
 // Move the position back to sp (sp <= pos), first folding the abandoned stretch's furthest peek into maxLook.
