@@ -1,8 +1,10 @@
-// ShapeSpec v2: the EXPRESSION subset of tsc's AST (typescript 5.9, as test/shape-oracle-tsc.ts
-// normalises it) from typescript.ts, in the core calculus only (src/shape2-schema.ts). Checked
-// against tsc's parser by test/shape2-oracle.ts. Not total: an arm outside the subset (functions,
-// classes, arrows, object / array literals, templates, type syntax) is unmapped, and an
-// expression statement that reaches one is reported as outside the subset, not compared.
+// ShapeSpec v2: a subset of tsc's AST (typescript 5.9, as test/shape-oracle-tsc.ts normalises
+// it) from typescript.ts, in the core calculus only (src/shape2-schema.ts): the expressions
+// below, the root, and the statements (as in shape-v2-estree-expr.ts). Checked against tsc's
+// parser by test/shape2-oracle.ts. Not total: an arm outside the subset (`for`, `switch`,
+// declarations, binding patterns, functions, classes, arrows, object / array literals,
+// templates, type syntax) is unmapped, and a unit that reaches one is reported as outside the
+// subset, not compared.
 //
 // Positions: a node's start is tsc's `getStart()` (the first token); tsc's `pos` (leading trivia
 // included) is not produced (the harness compares it only when both sides carry it).
@@ -40,7 +42,9 @@ const comma: Term = commaOf('first', 'comma', 'rest');
 /** A statement's optional label. */
 const label: Term = iff(present('label'), idOf('label'), absent);
 /** A declaration list spanning its keyword(s) to its last binding; `flags` from the keyword. */
-const declarationList = (from: string, flags: Term): Term => node('VariableDeclarationList', { declarations: child('binding'), flags }, { from, to: 'binding' });
+// tsc's parser takes an empty list (`var;`: its checker reports it), which then ends at its keyword.
+const declarationList = (from: string, flags: Term): Term =>
+  iff(present('binding'), node('VariableDeclarationList', { declarations: child('binding'), flags }, { from, to: 'binding' }), node('VariableDeclarationList', { declarations: child('binding'), flags }, { from, to: from === 'awaitKeyword' ? 'usingKeyword' : from }));
 
 /** The statements (ECMA-262 14), one node per Stmt arm. */
 const STATEMENTS: Record<string, Term> = {
