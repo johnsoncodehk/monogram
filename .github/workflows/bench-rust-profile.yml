@@ -35,9 +35,9 @@ jobs:
       - run: test/bench-rust-profile/run.sh
         env:
           PROFILE_WORK: ${{ runner.temp }}/prof-work
-          # Before / after of perf/suppress-without-alloc: A = origin/master e8ddabd, M = its head c65e2a2.
-          PROFILE_A: e8ddabd4fe0e487bdf94d2defa3c6f384ad95e5b
-          PROFILE_M: c65e2a2bfabdf6c6d350b5d99ec1ca2e3585e852
+          # Before / after of perf/emit-sequence-once (threshold 4): A = origin/master 094b389, M = 3f2d311.
+          PROFILE_A: 094b389904f74bfdfc55fdc7005de682fb596ec4
+          PROFILE_M: 3f2d31182d3802b671ba814597fb38db4eb57016
 
       - uses: actions/upload-artifact@v4
         if: always()
