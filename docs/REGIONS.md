@@ -200,8 +200,8 @@ shared functions of `src/lex-match-plan.ts`: `failRead` and `readEndWalk` for a 
 `overTrigger` and `examinedUnits` for a match (a lazy repeat bounded as the regex runs it, so a
 block comment reads nothing past its `*/`). The portable relex checks them at relex time. The
 interpreter's lexer (`src/emit-lexer.ts`, windowed) records them while lexing: `lxLookEnd` is the
-furthest unit any decision so far read past its token's end + 1, and a token that starts before
-it carries flag 32: it is no restart anchor and no resync point. Such reads: a regex attempt that
+exclusive end of the furthest read any decision so far made, and a token pushed while it is past
+the token's end + 1 carries flag 32: it is no restart anchor and no resync point. Such reads: a regex attempt that
 falls back to division (to the end of its line), an unterminated block comment (to the end of the
 file), a number that backed up inside its own pattern (`1._x`), and a type-parameter head veto
 (its match and the unit its trailing lookahead reads: it decides the `<` before it; a failed head

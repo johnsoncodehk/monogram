@@ -254,11 +254,13 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   const resync = windowed && !stateful;
   // The relex anchor rule (src/relex-family.ts states it): a token is decided by everything its
   // lexer read, its own match and the failed attempts before it at its start. The windowed relex
-  // restarts after the last token B that ends before the edit, so it covers what B's decision read
-  // up to B's end + 1 (B is at least one unit). A read that can go further is tracked while
-  // lexing: \`lxLookEnd\` is the furthest unit (exclusive) any decision so far read, and a token that
-  // starts before it carries flag 32 and is no restart anchor (nor a resync point). Only a lexer
-  // that restarts at anchors (a resync lexer) tracks it.
+  // keeps the old tokens up to B, the last token ending before the edit, and lexes on from B's
+  // end: that is sound when nothing that decided B or a token before it read past B's end + 1
+  // (exclusive: up to the unit right after B, which is before the edit). The reads that can go
+  // further are tracked while lexing: \`lxLookEnd\` is the exclusive end of the furthest read any
+  // decision so far made, and a token pushed while it is past the token's end + 1 carries flag 32:
+  // no restart anchor (findRestart) and no resync point. Only a lexer that restarts at anchors (a
+  // resync lexer) tracks it; the tokenizer the interpreter runs does not.
   const looks = resync;
 
   const out: string[] = [];
@@ -693,8 +695,8 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   if (tracks) emit(`  let lxLookEnd = -1;              // the furthest unit (exclusive) a decision so far read past its token's end + 1`);
   // ── push ──
   emit(`  function tkPush(k«: number», t«: number», off«: number», end«: number») {`);
-  // a token that starts inside such a read is no restart anchor (flag 32)
-  if (tracks) emit(`    if (off < lxLookEnd) extraFl |= 32;`);
+  // a token whose decision, or one before it, read past its end + 1 is no restart anchor (flag 32)
+  if (tracks) emit(`    if (lxLookEnd > end + 1) extraFl |= 32;`);
   if (tagScope) emit(`    const rawOff = off, rawEnd = end;`);
   emit(`    off += srcBase«!»; end += srcBase«!»;`);
   emit(`    if (tokN === tkCap) growTok();`);
