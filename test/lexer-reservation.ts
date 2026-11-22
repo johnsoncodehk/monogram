@@ -11,7 +11,11 @@
 //     PEAK_PER_TOKEN × max(tokens, MIN_TOKENS) × size_of(Tok) + STACK_BYTES (the bracket and
 //     template stacks the lexer keeps beside the array, bounded by nesting depth);
 //   • tokens per input byte is at most 1 (every token consumes at least one byte);
-//   • a second parse with the builder of the first allocates nothing (expected-fail for now, below).
+//   • with a reused builder, the second and later parses of an input allocate nothing: the token
+//     stream, the arena and the workspace (scratch stack, top-level entry list, lexer stacks) all
+//     keep their capacity. Also after a rejected parse, and after one the lexer stops by a panic
+//     (input ending inside a template / an unclosed bracket), the next parse of the ordinary input
+//     the builder parsed before allocates nothing.
 // Counts, not timings: Rust through a counting global allocator around `lex`, Go through
 // `cap` / `len` of the slice `lex` returns. TS arrays expose no capacity; the engine grows them.
 // Missing go / rustc → logged + skipped.
@@ -35,6 +39,16 @@ const CORPORA: Record<string, string> = {
   'one token': 'x',
 };
 
+// Inputs a parse fails on, each parsed with a builder that has parsed ORDINARY twice, before ORDINARY
+// is parsed with it again: that parse must allocate nothing either.
+const ORDINARY = CORPORA['ordinary code (src/gen-tm.ts)']!;
+const FAILING: Record<string, string> = {
+  'rejected by the parser': 'let = ;',
+  'rejected with the lexer stacks non-empty (inside `${`, an open bracket)': 'x = `a${ f((',
+  'the lexer panics inside a template': 'f(1, `a${ g(`b',
+  'the lexer panics on a character it cannot lex': 'f((1, \u0001',
+};
+
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean, detail = '') => {
   if (cond) ok++;
@@ -47,10 +61,18 @@ const dir = scratchDir('lexer-reservation');
 const names = Object.keys(CORPORA);
 const files = names.map((n, i) => { const f = join(dir, `in${i}.ts`); writeFileSync(f, CORPORA[n]!); return f; });
 const bytesOf = (i: number) => Buffer.byteLength(CORPORA[names[i]!]!, 'utf8');
+const failNames = Object.keys(FAILING);
+const ordFile = join(dir, 'ordinary.ts');
+writeFileSync(ordFile, ORDINARY);
+const failFiles = failNames.map((n, i) => { const f = join(dir, `fail${i}.ts`); writeFileSync(f, FAILING[n]!); return f; });
+// One line per failing input: `<allocations>\t<bytes>` of the parse of ORDINARY after it, then 1 if
+// the failing parse panicked (a lexer error), 0 if it returned a reject.
+const afterFail = new Map<string, number[][]>();
+const readAfter = (out: string) => out.trim().split('\n').map((l) => l.split('\t').map(Number));
 
 // One line per input: `<tokens>\t<capacity>\t<peak bytes or -1>\t<size_of(Tok)>`.
-// `reAllocs` / `reBytes`: allocations (and bytes) of a second parse of the input with the builder
-// the first parse used.
+// `reAllocs` / `reBytes`: allocations (and bytes) of the second and third parse of the input with the
+// builder the first parse used.
 type Count = { toks: number; cap: number; peak: number; tokSize: number; reAllocs: number; reBytes: number };
 const readCounts = (out: string): Count[] => out.trim().split('\n').map((l) => {
   const [toks, cap, peak, tokSize, reAllocs, reBytes] = l.split('\t').map(Number);
@@ -86,16 +108,37 @@ unsafe impl GlobalAlloc for LrAlloc {
 #[global_allocator]
 static LR_GLOBAL: LrAlloc = LrAlloc;
 fn main() {
-    for f in std::env::args().skip(1) {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args[0] == "--after" {
+        // args[1] is the ordinary input, the rest are inputs a parse fails on.
+        std::panic::set_hook(Box::new(|_| {}));
+        let good = std::fs::read_to_string(&args[1]).unwrap();
+        for f in &args[2..] {
+            let bad = std::fs::read_to_string(f).unwrap();
+            let mut b = CstBuilder::default();
+            parse_with(&good, &mut b);
+            parse_with(&good, &mut b);
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parse_with(&bad, &mut b)));
+            assert!(!matches!(r, Ok(Some(_))), "{} was accepted", f);
+            let panicked = r.is_err() as u8;
+            let (a0, b0) = (LR_ALLOCS.load(Relaxed), LR_BYTES.load(Relaxed));
+            parse_with(&good, &mut b);
+            let (a1, b1) = (LR_ALLOCS.load(Relaxed), LR_BYTES.load(Relaxed));
+            println!("{}\\t{}\\t{}", a1 - a0, b1 - b0, panicked);
+        }
+        return;
+    }
+    for f in args {
         let src = std::fs::read_to_string(&f).unwrap();
         let base = LR_LIVE.load(Relaxed);
         LR_PEAK.store(base, Relaxed);
         let t = lex(&src);
         let peak = LR_PEAK.load(Relaxed) - base;
-        // A second parse of the same input with the builder the first one used.
+        // The second and third parse of the same input with the builder the first one used.
         let mut b = CstBuilder::default();
         parse_with(&src, &mut b);
         let (a0, b0) = (LR_ALLOCS.load(Relaxed), LR_BYTES.load(Relaxed));
+        parse_with(&src, &mut b);
         parse_with(&src, &mut b);
         let (a1, b1) = (LR_ALLOCS.load(Relaxed), LR_BYTES.load(Relaxed));
         println!("{}\\t{}\\t{}\\t{}\\t{}\\t{}", t.len(), t.capacity(), peak, std::mem::size_of::<Tok>(), a1 - a0, b1 - b0);
@@ -104,6 +147,7 @@ fn main() {
 `);
   execFileSync('rustc', ['-A', 'warnings', rfile, '-o', join(dir, 'reserve')], { stdio: 'pipe' });
   counts.set('rust', readCounts(execFileSync(join(dir, 'reserve'), files, { encoding: 'utf8' })));
+  afterFail.set('rust', readAfter(execFileSync(join(dir, 'reserve'), ['--after', ordFile, ...failFiles], { encoding: 'utf8' })));
 }
 
 // ── Go ──
@@ -129,8 +173,34 @@ func LexCounts(src string) (int, int, int, uint64, uint64) {
 	var m0, m1 runtime.MemStats
 	runtime.ReadMemStats(&m0)
 	ParseWith(src, b)
+	ParseWith(src, b)
 	runtime.ReadMemStats(&m1)
 	return len(t), cap(t), int(unsafe.Sizeof(Tok{})), m1.Mallocs - m0.Mallocs, m1.TotalAlloc - m0.TotalAlloc
+}
+
+func failParse(src string, b *CstBuilder) (ok, panicked bool) {
+	defer func() {
+		if recover() != nil { ok, panicked = false, true }
+	}()
+	_, ok = ParseWith(src, b)
+	return ok, false
+}
+
+// AfterFail parses good twice with one builder, then bad (which must fail, by a reject or a lexer
+// panic), and reports the allocations and bytes of a further parse of good with that builder.
+func AfterFail(good, bad string) (uint64, uint64, int) {
+	b := &CstBuilder{}
+	ParseWith(good, b)
+	ParseWith(good, b)
+	ok, panicked := failParse(bad, b)
+	if ok { panic("accepted: " + bad) }
+	p := 0
+	if panicked { p = 1 }
+	var m0, m1 runtime.MemStats
+	runtime.ReadMemStats(&m0)
+	ParseWith(good, b)
+	runtime.ReadMemStats(&m1)
+	return m1.Mallocs - m0.Mallocs, m1.TotalAlloc - m0.TotalAlloc, p
 }
 `);
   writeFileSync(join(gdir, 'main.go'), `package main
@@ -143,6 +213,21 @@ import (
 )
 
 func main() {
+	if os.Args[1] == "--after" {
+		good, err := os.ReadFile(os.Args[2])
+		if err != nil {
+			panic(err)
+		}
+		for _, f := range os.Args[3:] {
+			bad, err := os.ReadFile(f)
+			if err != nil {
+				panic(err)
+			}
+			ra, rb, p := parser.AfterFail(string(good), string(bad))
+			fmt.Printf("%d\\t%d\\t%d\\n", ra, rb, p)
+		}
+		return
+	}
 	for _, f := range os.Args[1:] {
 		b, err := os.ReadFile(f)
 		if err != nil {
@@ -155,6 +240,7 @@ func main() {
 `);
   goBuild(['-o', 'consumer', '.'], { cwd: gdir });
   counts.set('go', readCounts(execFileSync(join(gdir, 'consumer'), files, { encoding: 'utf8' })));
+  afterFail.set('go', readAfter(execFileSync(join(gdir, 'consumer'), ['--after', ordFile, ...failFiles], { encoding: 'utf8' })));
 }
 
 for (const [label, cs] of counts) {
@@ -169,18 +255,16 @@ for (const [label, cs] of counts) {
     }
   });
 }
-// A second parse with the builder of the first allocates nothing. EXPECTED-FAIL: the token stream and
-// the arena travel in the builder and are reused, but the parser's scratch stack, its top-level
-// entry list and the lexer's bracket / template stacks are still per-parse buffers (on `;;;` the
-// scratch and entry lists are input-sized). Carrying them in the builder needs a Builder trait
-// addition in Rust, which awaits the maintainer's decision. The check flips to a hard failure if
-// it starts passing, so the mark is removed when it does.
-let expectedFail = 0;
+// With a reused builder, the second and later parses allocate nothing.
 for (const [label, cs] of counts) names.forEach((n, i) => {
   const c = cs[i]!;
-  const label2 = `${label}: ${n} — second parse with a reused builder allocates nothing`;
-  if (c.reAllocs === 0) check(`${label2} (passes: remove its EXPECTED-FAIL mark)`, false);
-  else { expectedFail++; console.log(`  EXPECTED-FAIL ${label2}: ${c.reAllocs} allocations, ${c.reBytes} B`); }
+  check(`${label}: ${n} — second and third parse with a reused builder allocate nothing`, c.reAllocs === 0, `${c.reAllocs} allocations, ${c.reBytes} B`);
+});
+// … also right after a parse that failed, by a reject or by a lexer panic.
+for (const [label, rows] of afterFail) failNames.forEach((n, i) => {
+  const [allocs, bytes, panicked] = rows[i]!;
+  check(`${label}: ${n} — the parse ${n.includes('panics') ? 'panics' : 'returns a reject'}`, (panicked === 1) === n.includes('panics'));
+  check(`${label}: after a failed parse (${n}), a parse of ordinary code with the same builder allocates nothing`, allocs === 0, `${allocs} allocations, ${bytes} B`);
 });
 const [ref, ...others] = [...counts];
 if (ref) for (const [label, cs] of others) {
@@ -194,5 +278,5 @@ for (const [i, n] of names.entries()) {
   }).join('; ')}`);
 }
 console.log(`lexer-reservation: ${names.length} inputs, targets ${[...counts.keys()].join(' / ') || 'none'}`);
-console.log(`\n${ok} ok, ${fail} failed, ${expectedFail} expected-fail`);
+console.log(`\n${ok} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

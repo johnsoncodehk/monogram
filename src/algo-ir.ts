@@ -185,7 +185,8 @@ export interface RelexLowering {
     for(cx: Cx, v: string, from: R, to: R, body: Lines): Lines;
     forEach(v: string, list: string, body: Lines): Lines;
     destructure(cx: Cx, s: { declare: boolean; names: string[]; ids: string[]; call: string; mutable: (n: string) => boolean; reassigned: (n: string) => boolean }): Lines;
-    lexStep(cx: Cx, s: { text: R; posName: string; pos: string; out: string; state: string[] }): Lines;
+    /** stateTy holds the type of each state name, in order: a list-typed state (a stack) is the lexer's to update in place. */
+    lexStep(cx: Cx, s: { text: R; posName: string; pos: string; out: string; state: string[]; stateTy: Ty[] }): Lines;
   };
 }
 
@@ -426,7 +427,7 @@ class Printer implements Cx {
           mutable: (n) => this.mutable.has(n), reassigned: (n) => this.reassigned.has(n),
         });
       }
-      case 'lexStep': return this.rx().stmt.lexStep(this, { text: this.expr(s.text), posName: s.pos, pos: this.id(s.pos), out: this.id(s.out), state: s.state.map((n) => this.id(n)) });
+      case 'lexStep': return this.rx().stmt.lexStep(this, { text: this.expr(s.text), posName: s.pos, pos: this.id(s.pos), out: this.id(s.out), state: s.state.map((n) => this.id(n)), stateTy: s.state.map((n) => this.env.get(n)!.ty) });
     }
   }
 

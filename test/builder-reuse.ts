@@ -6,7 +6,10 @@
 // Nothing of an earlier parse may be observable in a later one: every input in each sequence
 // below is parsed with ONE builder, in order, and its CST JSON (or its rejection) must equal the
 // one a fresh builder gives. The sequences put a longer input before a shorter one and the
-// reverse, a rejected input before an accepted one, and dense one-byte tokens before ordinary code.
+// reverse, a rejected input before an accepted one, dense one-byte tokens before ordinary code, and
+// a parse that leaves the engine's transient buffers non-empty — rejected inside a template and an
+// open bracket, or stopped by a lexer panic — before ordinary code (the builder's workspace: Rust
+// `Builder::workspace_mut`, Go's unexported CstBuilder fields).
 // Missing go / rustc → logged + skipped.
 //
 //   node test/builder-reuse.ts
@@ -21,12 +24,20 @@ const SHORT = 'let x = f(1, "a") + y;\n';
 const OTHER = 'function g<T>(a: T): T { return a; }\nclass C { m() { return `t${1}`; } }\n';
 const DENSE = ';'.repeat(4096);
 const REJECTED = 'let = ;';
+// Rejected with the lexer's template and bracket stacks non-empty at the end of the input.
+const REJECTED_OPEN = 'x = `a${ f((';
+// The lexer stops by a panic (a lex error) part-way, its stacks non-empty.
+const LEX_PANIC_TEMPLATE = 'f(1, `a${ g(`b';
+const LEX_PANIC_CHAR = 'f((1, \u0001';
 const SEQUENCES: Record<string, string[]> = {
   'longer, then shorter': [LONG, SHORT],
   'shorter, then longer': [SHORT, LONG],
   'rejected, then accepted': [REJECTED, OTHER],
   'dense tokens, then ordinary code, then dense again': [DENSE, OTHER, DENSE],
   'accepted, then rejected, then accepted': [OTHER, REJECTED, SHORT],
+  'rejected with the lexer stacks non-empty, then accepted': [OTHER, REJECTED_OPEN, OTHER],
+  'the lexer panics inside a template, then accepted': [OTHER, LEX_PANIC_TEMPLATE, OTHER],
+  'the lexer panics on a character it cannot lex, then accepted': [OTHER, LEX_PANIC_CHAR, OTHER],
 };
 
 let ok = 0, fail = 0;

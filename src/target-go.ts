@@ -214,7 +214,7 @@ const lidInterpClose uint16 = ${lidOf(ids, tpl.interpClose)}
   const rxModuleConsts = `${rxBitTables}${tplLidConsts}`;
   const rxState = rx ? `\tprevLid, prevKid, bpLid := uint16(0), uint16(0), uint16(0)
 \thasPrev, hasPrev2 := false, false
-\tparenHead := []bool{}
+\tparenHead := stk.parenHead[:0]
 \tlastClose, lastBang := false, false
 \tprevIsValue := func() bool {
 \t\tif !hasPrev { return false }
@@ -234,7 +234,7 @@ const lidInterpClose uint16 = ${lidOf(ids, tpl.interpClose)}
 \t}
 \t_ = scanTplSpan
 ` : '';
-  const tplState = tpl ? `\ttemplateStack := []int{}
+  const tplState = tpl ? `\ttemplateStack := stk.templateStack[:0]
 ${tplSpanFn}` : '';
   const emitHooks = [
     rx ? `\t\tif lid == lidLParen {
@@ -392,8 +392,14 @@ ${pushHooks}\t\t*acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendi
 ${nlWs}${tplDispatch}${cascade}
 ${uniIdentFallbackGo}${loopPanicGo}`;
   const idTables = renderIdTablesGo(ids);
+  // The lexer's bracket-head and template-depth stacks, bounded by nesting depth: lexInto reuses
+  // the capacity of the ones in stk (a reused builder's) and leaves them there.
+  const stkFields = [rx ? '\tparenHead []bool\n' : '', tpl ? '\ttemplateStack []int\n' : ''].join('');
+  const lexStacks = `// lexStacks are the lexer's transient stacks, kept across lexes by a reused builder.
+type lexStacks struct {${stkFields ? `\n${stkFields}` : ''}}
+`;
   if (rxOnly) {
-    return `${idTables}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool) {
+    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool) {
 \tn := len(src)
 ${rxStateFrom}${emitRxOnly}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -401,16 +407,17 @@ ${loopBody}
 \t}
 \treturn pos, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang
 }
-func lex(src string) []Tok { return lexInto(src, nil) }
-// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer).
-func lexInto(src string, buf []Tok) []Tok {
+func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
+// likewise the stacks in stk.
+func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
 \tout := buf[:0]
-\tlexFrom(src, 0, false, 0, 0, 0, false, false, nil, false, false, &out, 0)
+\t_, _, _, _, _, _, _, stk.parenHead, _, _ = lexFrom(src, 0, false, 0, 0, 0, false, false, stk.parenHead[:0], false, false, &out, 0)
 \treturn out
 }`;
   }
   if (tplOnly) {
-    return `${idTables}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, templateStack []int, acc *[]Tok, limit int) (int, bool, []int) {
+    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, templateStack []int, acc *[]Tok, limit int) (int, bool, []int) {
 \tn := len(src)
 ${tplStateFrom}${emitTplOnly}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -418,16 +425,17 @@ ${loopBody}
 \t}
 \treturn pos, pendingNl, templateStack
 }
-func lex(src string) []Tok { return lexInto(src, nil) }
-// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer).
-func lexInto(src string, buf []Tok) []Tok {
+func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
+// likewise the stacks in stk.
+func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
 \tout := buf[:0]
-\tlexFrom(src, 0, false, nil, &out, 0)
+\t_, _, stk.templateStack = lexFrom(src, 0, false, stk.templateStack[:0], &out, 0)
 \treturn out
 }`;
   }
   if (rxTpl) {
-    return `${idTables}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, templateStack []int, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool, []int) {
+    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, templateStack []int, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool, []int) {
 \tn := len(src)
 ${rxStateFrom}${tplStateFrom}${emitRxTpl}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -435,18 +443,20 @@ ${loopBody}
 \t}
 \treturn pos, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang, templateStack
 }
-func lex(src string) []Tok { return lexInto(src, nil) }
-// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer).
-func lexInto(src string, buf []Tok) []Tok {
+func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
+// likewise the stacks in stk.
+func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
 \tout := buf[:0]
-\tlexFrom(src, 0, false, 0, 0, 0, false, false, nil, false, false, nil, &out, 0)
+\t_, _, _, _, _, _, _, stk.parenHead, _, _, stk.templateStack = lexFrom(src, 0, false, 0, 0, 0, false, false, stk.parenHead[:0], false, false, stk.templateStack[:0], &out, 0)
 \treturn out
 }`;
   }
   if (rxOrTpl) {
-    return `${idTables}${lexGoHelpers}${rxModuleConsts}${scans}func lex(src string) []Tok { return lexInto(src, nil) }
-// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer).
-func lexInto(src string, buf []Tok) []Tok {
+    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
+// likewise the stacks in stk.
+func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
 \ttoks := buf[:0]
 \tn := len(src)
 \tpos := 0
@@ -455,11 +465,11 @@ func lexInto(src string, buf []Tok) []Tok {
 ${rxState}${tplState}${nlState}${emitFn}${pushTokFn}\tfor pos < n {
 ${loopBody}
 \t}
-\treturn toks
+${rx ? '\tstk.parenHead = parenHead\n' : ''}${tpl ? '\tstk.templateStack = templateStack\n' : ''}\treturn toks
 }`;
   }
   if (newlineOnly) {
-    return `${idTables}${lexGoHelpers}${scans}func lexFrom(src string, pos int, pendingNl bool, flowDepth int, acc *[]Tok, limit int) (int, bool, int) {
+    return `${idTables}${lexStacks}${lexGoHelpers}${scans}func lexFrom(src string, pos int, pendingNl bool, flowDepth int, acc *[]Tok, limit int) (int, bool, int) {
 \tn := len(src)
 ${nlStateFrom}${pushTokAccFn}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -467,15 +477,16 @@ ${loopBody}
 \t}
 \treturn pos, pendingNl, flowDepth
 }
-func lex(src string) []Tok { return lexInto(src, nil) }
-// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer).
-func lexInto(src string, buf []Tok) []Tok {
+func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
+// likewise the stacks in stk.
+func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
 \tout := buf[:0]
 \tlexFrom(src, 0, false, 0, &out, 0)
 \treturn out
 }`;
   }
-  return `${idTables}${lexGoHelpers}${scans}func lexFrom(src string, pos int, pendingNl bool, acc *[]Tok, limit int) (int, bool) {
+  return `${idTables}${lexStacks}${lexGoHelpers}${scans}func lexFrom(src string, pos int, pendingNl bool, acc *[]Tok, limit int) (int, bool) {
 \tn := len(src)
 ${pushTokAccFn}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -483,9 +494,10 @@ ${loopBody}
 \t}
 \treturn pos, pendingNl
 }
-func lex(src string) []Tok { return lexInto(src, nil) }
-// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer).
-func lexInto(src string, buf []Tok) []Tok {
+func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
+// likewise the stacks in stk.
+func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
 \tout := buf[:0]
 \tlexFrom(src, 0, false, &out, 0)
 \treturn out
@@ -717,7 +729,7 @@ ${plan.topOneBody}
 }
 func (p *engine) parse${r.name}() int32 {
 \tsave := p.pos; sb := len(p.scratch)
-\tvar localE []EntryMeta
+\tlocalE := p.entries[:0]
 \tfor {
 \t\tsp := p.pos
 \t\tp.lookReset()
@@ -797,8 +809,8 @@ ${headFn}func (p *engine) parseLoopSeg(sb int) (Seg, EntryMeta, bool) {
 }
 func (p *engine) parse${r.name}() int32 {
 \tsave := p.pos; sb := len(p.scratch)
-\tvar local []Seg
-\tvar localE []EntryMeta
+\tlocal := p.segs[:0]
+\tlocalE := p.entries[:0]
 ${headBlock}\tfor {
 \t\tif seg, m, ok := p.parseLoopSeg(sb); ok { local = append(local, seg); localE = append(localE, m) } else { break }
 \t}
@@ -2682,6 +2694,7 @@ func inTokenSet(k int, t *Tok) bool {
 }
 
 function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  const reuse = topReusePlan(ir);
   const dropTtIds = ['$punct', '$keyword', '$operator']
     .map((n) => {
       try { return ttIdOf(ar, n); } catch { return null; }
@@ -2768,6 +2781,9 @@ type CstBuilder struct {
 \tNodes []Node
 \tKids  []int32
 \tToks  []Tok
+\t// The engine's transient buffers, kept for the next ParseWith (emptied by it before use).
+\tscratch []int32
+${reuse ? '\tentries []EntryMeta\n' : ''}${reuse?.kind === 'B' ? '\tsegs []Seg\n' : ''}\tlex     lexStacks
 }
 
 func (b *CstBuilder) Checkpoint() (nb, kb int) { return len(b.Nodes), len(b.Kids) }
@@ -2879,9 +2895,9 @@ ${wMethods}
 // Keeps ParseWith(CstBuilder) within the additive-prefix / byte-equal contract
 // without paying for a second method-instantiation (Go GC-shape stenciling tax).
 func parseWithCst(src string, b *CstBuilder) (int32, bool) {
-\tp := &engine{nodes: b.Nodes[:0], kids: b.Kids[:0]}
-\th := p.parse(src, lexInto(src, b.Toks))
-\tb.Nodes, b.Kids, b.Toks = p.nodes, p.kids, p.toks
+\tp := &engine{nodes: b.Nodes[:0], kids: b.Kids[:0], scratch: b.scratch[:0]${reuse ? ', entries: b.entries[:0]' : ''}${reuse?.kind === 'B' ? ', segs: b.segs[:0]' : ''}}
+\th := p.parse(src, lexInto(src, b.Toks, &b.lex))
+\tb.Nodes, b.Kids, b.Toks, b.scratch = p.nodes, p.kids, p.toks, p.scratch${reuse ? '\n\tb.entries = p.entries' : ''}${reuse?.kind === 'B' ? '\n\tb.segs = p.segs' : ''}
 \tif h < 0 { return 0, false }
 \treturn h, true
 }
