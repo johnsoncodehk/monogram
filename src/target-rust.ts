@@ -15,7 +15,7 @@ import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, t
 import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type StepLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
-import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
+import { ATOM, COMPARISON, findAnyName, stopBytes, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 import type {
@@ -5311,6 +5311,43 @@ fn lex_find(b: &[u8], mut i: usize, lit: &[u8]) -> usize {
         i += 1;
     }
 }`,
+  // Eight bytes per round: each test of the stop plan flags the bytes that may begin a stop (a
+  // zero-byte mask of the word XOR a byte, or the bytes below a bound), ORed; each flagged byte, in
+  // order, is then confirmed, without reading the word again.
+  findAnyFn: (stops) => {
+    const { masks, one, wide } = stopBytes(stops);
+    const hex = (b: number) => `0x${b.toString(16).toUpperCase().padStart(2, '0')}`;
+    const lets: string[] = [], terms: string[] = [];
+    masks.forEach((m, k) => {
+      if ('below' in m) terms.push(`(v.wrapping_sub(L * ${hex(m.below)}) & !v)`);
+      else { lets.push(`let x${k} = v ^ (L * ${hex(m.eq)});`); terms.push(`(x${k}.wrapping_sub(L) & !x${k})`); }
+    });
+    const at = (j: string) => [
+      ...one.map((b) => `b[${j}] == ${hex(b)}`),
+      ...wide.map((w) => `(b[${j}..].starts_with(&[${w.head.map(hex).join(', ')}]) && matches!(b.get(${j} + ${w.head.length}), Some(&(${w.last.map(hex).join(' | ')}))))`),
+    ].join(' || ');
+    return `/// Where the next of ${stops.map((c) => `U+${c.toString(16).toUpperCase().padStart(4, '0')}`).join(', ')} is in b from i: the index of its first byte, or b.len().
+#[inline(never)]
+fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
+    const L: u64 = 0x0101_0101_0101_0101;
+    while let Some(w) = b.get(i..i + 8) {
+        let v = u64::from_le_bytes([w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]]);
+        ${lets.join('\n        ')}
+        let mut m = (${terms.join(' | ')}) & (L << 7);
+        while m != 0 {
+            let j = i + (m.trailing_zeros() >> 3) as usize;
+            if ${at('j')} { return j; }
+            m &= m - 1;
+        }
+        i += 8;
+    }
+    while i < b.len() {
+        if ${at('i')} { return i; }
+        i += 1;
+    }
+    i
+}`;
+  },
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${rsWrap(r, ATOM)}`, prec: 90 }),
@@ -5327,6 +5364,7 @@ fn lex_find(b: &[u8], mut i: usize, lit: &[u8]) -> usize {
     inSet: (cx, set, c) => cx.atom(`${set.toUpperCase()}[${cx.coerce(c, 'usize')}]`, 'bool', 'bool'),
     runEnd: (cx, set, s, i) => cx.atom(`lex_run_end(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')}, &${set.toUpperCase()})`, 'int', 'usize'),
     find: (cx, s, i, lit) => cx.atom(`lex_find(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')}, ${J(lit)}.as_bytes())`, 'int', 'usize'),
+    findAny: (cx, s, i, stops) => cx.atom(`${findAnyName(stops)}(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')})`, 'int', 'usize'),
     own: (cx, r) => {
       if (r.ty === 'str') return cx.atom(`${rsWrap(r, ATOM)}.to_string()`, 'str', 'str', { owned: true });
       if (isList(r.ty)) return cx.atom(`${rsWrap(r, ATOM)}.to_vec()`, r.ty, r.ty, { owned: true });

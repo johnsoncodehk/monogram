@@ -43,7 +43,8 @@ export type LexTok =
       headBail: number[]; headBailNonAscii: boolean;
       pattern: TokenPattern; skip: boolean }
   | { kind: 'string'; name: string; delim: string; skip: boolean }                        // delim..delim, `\` escapes next
-  | { kind: 'line'; name: string; prefix: string; skip: boolean }                         // prefix..end-of-line
+  // prefix, then every character up to the first stop (the class's excluded characters) or the end
+  | { kind: 'line'; name: string; prefix: string; stops: number[]; skip: boolean }
   // open..the first close after it; `guard`: zero-width tests right after the opener.
   | { kind: 'block'; name: string; open: string; close: string; guard: TokenPattern | null; skip: boolean }
   // The general case: the raw token-pattern AST, compiled to a backtracking-free matcher
@@ -1393,8 +1394,8 @@ function lexTok(t: TokenDecl): LexTok {
       pattern: t.pattern, skip,
     };
   }
-  const line = lineCommentShape(t.pattern);   // PRECISE: prefix-literal then star(non-newline)
-  if (line) return { kind: 'line', name: t.name, prefix: line, skip };
+  const line = lineCommentShape(t.pattern);
+  if (line) return { kind: 'line', name: t.name, ...line, skip };
   return { kind: 'pattern', name: t.name, pattern: t.pattern, skip };
 }
 
@@ -1440,16 +1441,25 @@ function blockShape(p: TokenPattern): { open: string; close: string; guard: Toke
   return { open, close, guard: guards.length === 0 ? null : guards.length === 1 ? guards[0] : { type: 'seq', items: guards } };
 }
 
-// A token is a line comment iff its pattern is `seq(<literal>, star(charClass excluding \n))`.
-function lineCommentShape(p: TokenPattern): string | null {
+// `<literal> [^stops]*`: a literal, then a greedy run of every character but a set of stops, each
+// one character of the Basic Multilingual Plane (not a surrogate), so a target finds it by its
+// UTF-16 unit or its UTF-8 bytes. The shape is the pattern exactly: the scanner runs to the first
+// stop, so the stops are all the class's characters. A class with a range is no line shape.
+function lineCommentShape(p: TokenPattern): { prefix: string; stops: number[] } | null {
   if (typeof p === 'string' || p.type !== 'seq' || p.items.length !== 2) return null;
   const [head, tail] = p.items;
-  if (typeof head !== 'string') return null;
-  if (typeof tail === 'string' || tail.type !== 'repeat' || tail.min !== 0) return null;
+  if (!isLit(head)) return null;
+  if (typeof tail === 'string' || tail.type !== 'repeat' || tail.min !== 0 || tail.max !== undefined || !tail.greedy) return null;
   const body = tail.body;
-  if (typeof body === 'string' || body.type !== 'charClass' || !body.negate) return null;
-  const excludesNl = body.items.some((it): boolean => it.type === 'char' && it.value === '\n');
-  return excludesNl ? head : null;
+  if (typeof body === 'string' || body.type !== 'charClass' || !body.negate || body.items.length === 0) return null;
+  const stops: number[] = [];
+  for (const it of body.items) {
+    if (it.type !== 'char' || it.value.length !== 1) return null;
+    const c = it.value.charCodeAt(0);
+    if (c >= 0xd800 && c <= 0xdfff) return null;
+    stops.push(c);
+  }
+  return { prefix: head, stops: [...new Set(stops)].sort((a, b) => a - b) };
 }
 
 function codesToRanges(codes: number[]): CharRange[] {

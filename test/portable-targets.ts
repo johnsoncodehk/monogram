@@ -1503,6 +1503,16 @@ const NON_ASCII_LEX: string[] = [
   '\\u0000', 'a\\uF000', 'a\\u{10FFFF}', '\\u0030a', '\\u0301a', 'a\\uD800', 'a\\uDC00b', '\\uD835\\u0041', 'a\\u{110000}', 'x\\u2603', 'class C { #\\u0030; }',
 ];
 
+// Every LineTerminator (LF, CR, LS, PS, and CR LF) ends a line comment, a shebang and a
+// triple-slash directive, sets the newline flag of the next token, and ends a regular expression
+// (a refusal); compared as token streams in the parity corpus of the ECMAScript grammars.
+const LINE_TERMINATORS: string[] = ['\n', '\r', '\u2028', '\u2029', '\r\n'].flatMap((t) => [
+  `// c${t}x;`, `x // c${t}++y`, `a${t}// c${t}b`, `//${t}`, `// é${t}x`, `// \u2028 é \u2029${t}x`,
+  `#! sh${t}x;`, `#!${t}x`, `/// <reference path="a" />${t}x;`, `/// <a${t}x`,
+  `return // c${t}x;`, `x = y${t}// c${t}/re/g.exec(z)`, `/a${t}b/;`, `/[${t}]/;`, `/a/${t}/b/`,
+  `x${t}++y`, `a = \`x${t}y\`;`, `a = \`\${b // c${t}}\`;`, `/* c${t} */ x`,
+]);
+
 /** Reject cases. `lexMsg` set ⇒ expect that primary lexer message (≡ oracle). */
 const UNICODE_REJECT: { src: string; lexMsg: string | null }[] = [
   { src: '/* abc', lexMsg: null }, // unterminated block → `/`+`*` puncts → parse reject (not a lex throw)
@@ -1997,7 +2007,8 @@ for (const c of CASES) {
     const t0 = Date.now();
     const tokenize = compileTokenizer(lexSpecOf(grammar)) as (s: string) => Tok[];
     const inputs: { src: string; kind: string }[] = [...parityInputs(grammar, tokenize, { refusedOperands: ECMASCRIPT.has(c.grammar) }),
-      ...(ECMASCRIPT.has(c.grammar) ? NON_ASCII_LEX.map((src) => ({ src, kind: 'non-ASCII lexing' })) : [])];
+      ...(ECMASCRIPT.has(c.grammar) ? NON_ASCII_LEX.map((src) => ({ src, kind: 'non-ASCII lexing' })) : []),
+      ...(ECMASCRIPT.has(c.grammar) ? LINE_TERMINATORS.map((src) => ({ src, kind: 'line terminators' })) : [])];
     const want = inputs.map((i) => oracleOut(i.src));
     const wantToks = inputs.map((i): TokStream => {
       try { return JSON.stringify(tokenize(i.src).map((t) => [t.type, t.text, (t as unknown as { newlineBefore: boolean }).newlineBefore])); } catch { return null; }

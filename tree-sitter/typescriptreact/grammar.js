@@ -265,13 +265,13 @@ module.exports = grammar({
 
     jsxelement: $ => choice(seq("<", $.jsxtag_name, optional(seq("<", optional(seq($.type, repeat(seq(",", $.type)), optional(","))), ">")), repeat($.jsxattr), $.jsxself_close), seq("<", $.jsxtag_name, optional(seq("<", optional(seq($.type, repeat(seq(",", $.type)), optional(","))), ">")), repeat($.jsxattr), ">", repeat($.jsxchild), $.jsxclose, optional($.jsxtag_name), ">"), seq("<", ">", repeat($.jsxchild), $.jsxclose, ">")),
 
-    shebang: $ => token(/#![^\n]*/),
+    shebang: $ => token(/#![^\n\r\u2028\u2029]*/),
 
     jsdoc: $ => token(/\/\*\*(?:[\s\S])*?\*\//),
 
-    triple_slash: $ => token(/\/\/\/[ \t]*<[^\n]*/),
+    triple_slash: $ => token(/\/\/\/[ \t]*<[^\n\r\u2028\u2029]*/),
 
-    line_comment: $ => token(/\/\/[^\n]*/),
+    line_comment: $ => token(/\/\/[^\n\r\u2028\u2029]*/),
 
     block_comment: $ => token(/\/\*(?:[\s\S])*?\*\//),
 
