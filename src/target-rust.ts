@@ -142,7 +142,7 @@ function renderIdTablesRust(ids: LexIdPlan): string {
   }
   const lenArmsOf = (byLen: Map<number, { text: string; id: number }[]>) =>
     [...byLen.entries()].sort((a, b) => a[0] - b[0]).map(([len, ents]) => {
-      const arms = ents.map((e) => `${J(e.text)} => ${e.id}`).join(', ');
+      const arms = ents.map((e) => `${rsByteStr(e.text)} => ${e.id}`).join(', ');
       return `        ${len} => match text { ${arms}, _ => 0 },`;
     }).join('\n');
   const kwArms = lenArmsOf(byLenKw);
@@ -167,24 +167,26 @@ const _LID_FIRST_BITS: &[u8] = &[${bitsLit}];
 #[inline(always)] fn mk_tok(off: usize, end: usize, nl: bool, kid: u16, lid: u16) -> Tok { Tok { off: off as u32, end: end as u32, kid, lid, nl } }
 fn kid_of(kind: &str) -> u16 { match kind { ${kidArms}, _ => 0 } }
 /// O(1) length×first-byte prefilter (its bits hold every literal's key), then the match table of
-/// the text's first-byte class: a word is compared with word literals only.
+/// the text's first-byte class: a word is compared with word literals only. Over the text's bytes:
+/// a literal is compared byte for byte, so the lexer passes its token's bytes without the char
+/// boundary checks a \`&str\` slice makes.
 #[inline(always)]
-fn lid_of(text: &str) -> u16 {
+fn lid_of(text: &[u8]) -> u16 {
     let n = text.len();
     if n == 0 || n > _LID_MAX_LEN { return 0; }
-    let b0 = text.as_bytes()[0] as usize;
+    let b0 = text[0] as usize;
     if (_LID_FIRST_BITS[n * 32 + (b0 >> 3)] & (1u8 << (b0 & 7))) == 0 { return 0; }
     if matches!(b0, ${wordBytes.join(' | ')}) { lid_of_kw(text, n) } else { lid_of_punct(text, n) }
 }
 #[inline(never)]
-fn lid_of_kw(text: &str, n: usize) -> u16 {
+fn lid_of_kw(text: &[u8], n: usize) -> u16 {
     match n {
 ${kwArms || '        // no keyword lids'}
         _ => 0,
     }
 }
 #[inline(never)]
-fn lid_of_punct(text: &str, n: usize) -> u16 {
+fn lid_of_punct(text: &[u8], n: usize) -> u16 {
     match n {
 ${puArms || '        // no punct lids'}
         _ => 0,
@@ -213,13 +215,22 @@ function scanTok(t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: Le
   const push = t.skip
     ? `if src[pos..e].chars().any(|c| matches!(c, '\\n' | '\\r' | '\\u{2028}' | '\\u{2029}')) { ${nlVar} = true; } `
     : stateful
-      ? `st.emit(pos, e, ${kid}, lid_of(&src[pos..e])); `
-      : `toks.push(mk_tok(pos, e, pending_nl, ${kid}, lid_of(&src[pos..e]))); pending_nl = false; `;
+      ? `st.emit(pos, e, ${kid}, lid_of(&b[pos..e])); `
+      : `toks.push(mk_tok(pos, e, pending_nl, ${kid}, lid_of(&b[pos..e]))); pending_nl = false; `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
   const ext = identLike.has(name) ? 'let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(src, e) } else { e }; ' : '';
   const scan = `{ let e = ${shared.scanner(name)}(src, pos as isize); if e >= 0 { let e = e as usize; ${ext}${push}pos = e; continue; } }`;
   return rxTok !== undefined && name === rxTok ? `        if !st.prev_is_value() ${scan}` : `        ${scan}`;
+}
+
+/** A Rust byte-string literal of text's UTF-8 bytes (printable ASCII as is, the rest escaped). */
+function rsByteStr(text: string): string {
+  let out = 'b"';
+  for (const byte of Buffer.from(text, 'utf8')) {
+    out += byte >= 0x20 && byte < 0x7f && byte !== 0x22 && byte !== 0x5c ? String.fromCharCode(byte) : `\\x${byte.toString(16).padStart(2, '0')}`;
+  }
+  return out + '"';
 }
 
 function rustByteLit(b: number): string {
@@ -264,12 +275,17 @@ function buildLexCandidates(
 }
 
 /** Shared first-byte dispatch for all lexFrom variants in this target. */
-function renderLexByteDispatchRust(codes: string[], firsts: (LexFirstBytes | null)[], indent: string, specialAsciiArms: string, nonAsciiWsCheck: string): string {
+// `armHead`: code that runs first in the arm of one ASCII byte (and nowhere else), for a test that
+// only that byte can pass.
+function renderLexByteDispatchRust(codes: string[], firsts: (LexFirstBytes | null)[], indent: string, specialAsciiArms: string, nonAsciiWsCheck: string, armHead: { byte: number; code: string } | null = null): string {
   const { arms, fallbackIndices } = buildLexDispatchPlan(firsts);
   const fallback = fallbackIndices.map((i) => codes[i]).join('\n');
   let matchArms = specialAsciiArms;
+  // A byte no candidate starts with gets an arm of its own for the head code.
+  if (armHead && !arms.some((a) => a.bytes.includes(armHead.byte))) matchArms += `${indent}        ${rustMatchLabels([armHead.byte])} => {\n${armHead.code}${indent}        }\n`;
   for (const arm of arms) {
     matchArms += `${indent}        ${rustMatchLabels(arm.bytes)} => {\n`;
+    if (armHead && arm.bytes.includes(armHead.byte)) matchArms += armHead.code;
     matchArms += arm.indices.map((i) => codes[i]).join('\n') + '\n';
     matchArms += `${indent}        }\n`;
   }
@@ -286,7 +302,7 @@ ${indent}        }`;
 function newlinePartsRs(nl: NewlineCfg, ids: LexIdPlan): { consts: string; fields: string; init: string; ws: string; hooks: string; wsFrom: string; hooksFrom: string } {
   // Byte-oriented: ASCII ws by lead byte; non-ASCII via UTF-8 decode (JS \\s set).
   // LS/PS excluded: they fall to the unexpected-character panic, matching the interpreter.
-  const ws = (push: string) => `        if c == 32 || c == 9 || c == 11 || c == 12 { pos += 1; continue; }
+  const ws = (push: string) => `        if c == 32 || c == 9 || c == 11 || c == 12 { pos += 1; while pos < n && matches!(b[pos], 9 | 11 | 12 | 32) { pos += 1; } continue; }
         if c == 10 || c == 13 {
             let s = pos;
             pos += 1; if c == 13 && pos < n && b[pos] == 10 { pos += 1; }
@@ -347,33 +363,43 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   // grammars keep the flow-aware whitespace arms (flow_depth) and do NOT use the folded arms.
   const nonAsciiWsCheck = nlRs ? '' : `        if c >= 0xC2 { if let Some((ch, w)) = _char_at(src, pos) { if _is_js_ws(ch) { if ch == '\\u{2028}' || ch == '\\u{2029}' { ${nlVar} = true; } pos += w; continue; } } }
 `;
-  const wsNlArms = nlRs ? '' : `        9 | 11 | 12 | 32 => { pos += 1; continue; }
-        10 | 13 => { ${nlVar} = true; pos += 1; continue; }
+  // A whitespace run is consumed in one dispatch round: per byte only "is it still whitespace"
+  // is asked; the round's own checks (the loop bound, the template `}` test, the byte match) run
+  // once per run. A run after a line break also takes further breaks: the flag is already set.
+  const wsNlArms = nlRs ? '' : `        9 | 11 | 12 | 32 => { pos += 1; while pos < n && matches!(b[pos], 9 | 11 | 12 | 32) { pos += 1; } continue; }
+        10 | 13 => { ${nlVar} = true; pos += 1; while pos < n && matches!(b[pos], 9..=13 | 32) { pos += 1; } continue; }
 `;
   const tplOpenByte = tpl && tlen(tpl.open) === 1 ? firstUnit(tpl.open, UNITS) : null;
   const tplOpenArm = tplOpenByte !== null ? `        ${tplOpenByte} => {
             let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl!.open)}, ${rx ? '!st.prev_is_value()' : 'true'});
-            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl!.token)}, lid_of(&src[pos..e])); }
+            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, lid_of(&b[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl!.token)}, lid_of(&b[pos..e])); }
             pos = e; continue;
         }
 ` : '';
   const tplOpenPreCheck = tpl && tplOpenByte === null ? `        if ${startByteEq('pos', tpl.open)} {
             let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.open)}, ${rx ? '!st.prev_is_value()' : 'true'});
-            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl.token)}, lid_of(&src[pos..e])); }
+            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, lid_of(&b[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl.token)}, lid_of(&b[pos..e])); }
             pos = e; continue;
         }
 ` : '';
-  const tplDispatch = tpl ? `        if !st.template_stack.is_empty() && ${startByteEq('pos', tpl.interpClose)} && *st.template_stack.last().unwrap() == 0 {
+  // The template `}` test can pass only at the closer's first byte: when that byte is ASCII it is
+  // made in that byte's dispatch arm, before the arm's own candidates, not in every round.
+  const closeFirst = tpl ? firstUnit(tpl.interpClose, UNITS) : -1;
+  const specialBytes = [...(nlRs ? [] : [9, 10, 11, 12, 13, 32]), ...(tplOpenByte !== null ? [tplOpenByte] : [])];
+  const closeByte = tpl && closeFirst < 128 && !specialBytes.includes(closeFirst) ? closeFirst : null;
+  const tplCloseTest = tpl ? `        if !st.template_stack.is_empty() && ${startByteEq('pos', tpl.interpClose)} && *st.template_stack.last().unwrap() == 0 {
             st.template_stack.pop();
             let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.interpClose)}, false);
-            if interp { st.emit(pos, e, ${kidOf(ids, "$templateMiddle")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, "$templateTail")}, lid_of(&src[pos..e])); }
+            if interp { st.emit(pos, e, ${kidOf(ids, "$templateMiddle")}, lid_of(&b[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, "$templateTail")}, lid_of(&b[pos..e])); }
             pos = e; continue;
         }
-${tplOpenPreCheck}` : '';
+` : '';
+  const tplDispatch = tpl ? `${closeByte === null ? tplCloseTest : ''}${tplOpenPreCheck}` : '';
   const punctLine = (p: string) =>
     `        if ${startByteEq('pos', p)} { ${stateful ? `st.emit(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${tlen(p)}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${tlen(p)}; continue; }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
-  const cascade = renderLexByteDispatchRust(lexCodes, lexFirsts, '        ', `${wsNlArms}${tplOpenArm}`, nonAsciiWsCheck);
+  const cascade = renderLexByteDispatchRust(lexCodes, lexFirsts, '        ', `${wsNlArms}${tplOpenArm}`, nonAsciiWsCheck,
+    closeByte !== null ? { byte: closeByte, code: tplCloseTest } : null);
   // Struct fields / emit hooks / init are assembled per-feature so a grammar can have regex,
   // templates, or both share one LexState. Rx bookkeeping is fully integerized (lid/kid bit tables).
   const rxBitTables = rx ? `${rsBoolArr('_DIVT', lidFlagTable(ids, rx.divisionTexts))}
@@ -393,8 +419,8 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
   const identKid = identName ? kidOf(ids, identName) : 0;
   // Unicode ID_Start fallback (mirrors emit-lexer uniIdentReY) before unmatched-byte panic.
   const uniIdentEmit = stateful
-    ? `st.emit(pos, e, ${identKid}, lid_of(&src[pos..e]));`
-    : `toks.push(mk_tok(pos, e, pending_nl, ${identKid}, lid_of(&src[pos..e]))); pending_nl = false;`;
+    ? `st.emit(pos, e, ${identKid}, lid_of(&b[pos..e]));`
+    : `toks.push(mk_tok(pos, e, pending_nl, ${identKid}, lid_of(&b[pos..e]))); pending_nl = false;`;
   const uniIdentOrPanic = identName
     ? `        if c >= 0x80 { if let Some(e) = _scan_uni_ident(src, pos) { ${uniIdentEmit} pos = e; continue; } }
         panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`
@@ -1745,7 +1771,7 @@ fn compute_align_core(old_text: &str, old_toks: &[AlignMeta], new_text: &str, ne
     (old_n, new_n, prefix, suffix)
 }
 fn toks_from_meta(text: &str, meta: &[AlignMeta]) -> Vec<Tok> {
-    meta.iter().map(|m| { let tx = am_text(text, m); mk_tok(m.off as usize, m.end as usize, am_nl(m), m.kid, lid_of(tx)) }).collect()
+    meta.iter().map(|m| { let tx = am_text(text, m); mk_tok(m.off as usize, m.end as usize, am_nl(m), m.kid, lid_of(tx.as_bytes())) }).collect()
 }
 ${treeEqFn}${reuseFns}pub struct Doc<B: Builder = CstBuilder> {
     text: String,
@@ -5203,7 +5229,7 @@ const rustLowering: Lowering = {
       editText: (cx, e) => cx.atom(`${e.c}.text.as_str()`, 'str', 'str', { owned: false }),
       metaText: (cx, t, m) => cx.atom(`am_text(${cx.str(t)}, ${cx.ref(m)})`, 'str', 'str', { owned: false }),
       substr: (cx, s, a, b) => ({ c: `&${rsWrap(s, ATOM)}[${cx.coerce(a, 'usize')}..${cx.coerce(b, 'usize')}]`, ty: 'str', nat: 'str', prec: 90, owned: false }),
-      lidOf: (cx, s) => cx.atom(`lid_of(${cx.str(s)})`, 'lid', cx.nat('lid')),
+      lidOf: (cx, s) => cx.atom(`lid_of(${cx.str(s)}.as_bytes())`, 'lid', cx.nat('lid')),
       mkMeta: (cx, fs) => cx.atom(`mk_align(${fs.map(([f, r]) => cx.coerce(r, RS_MK[f])).join(', ')})`, 'meta', 'meta'),
       shiftMeta: (cx, m, d) => cx.atom(`shift_align(${cx.ref(m)}, ${cx.coerce(d, 'isize')})`, 'meta', 'meta'),
       metaEq: (_cx, a, b) => ({ c: `${a.c} == ${b.c}`, ty: 'bool', nat: 'bool', prec: RS_OPS.eq[1] }),
@@ -5532,7 +5558,7 @@ fn main() {
     // gives a token of that text when it rebuilds the token from its metadata.
     if args.get(1).map(|a| a.as_str()) == Some("lid-of") {
         let mut out = String::new();
-        for s in src.split('\\0') { out.push_str(&lid_of(s).to_string()); out.push('\\n'); }
+        for s in src.split('\\0') { out.push_str(&lid_of(s.as_bytes()).to_string()); out.push('\\n'); }
         print!("{}", out);
         return;
     }

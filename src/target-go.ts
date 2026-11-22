@@ -155,12 +155,16 @@ function buildLexCandidates(
 }
 
 /** Shared first-byte dispatch for all lexFrom variants in this target. */
-function renderLexByteDispatchGo(codes: string[], firsts: (LexFirstBytes | null)[], indent: string): string {
+// `heads`: per ASCII byte, code that runs first in that byte's arm (and nowhere else), for a test
+// only that byte can pass; a byte no candidate starts with gets an arm of its own.
+function renderLexByteDispatchGo(codes: string[], firsts: (LexFirstBytes | null)[], indent: string, heads: Map<number, string> = new Map()): string {
   const { arms, fallbackIndices } = buildLexDispatchPlan(firsts);
   const fallback = fallbackIndices.map((i) => codes[i]).join('\n');
   let switchArms = '';
+  for (const [byte, code] of heads) if (!arms.some((a) => a.bytes.includes(byte))) switchArms += `${indent}\tcase ${byte}:\n${code}`;
   for (const arm of arms) {
     switchArms += `${indent}\tcase ${arm.bytes.join(', ')}:\n`;
+    for (const b of arm.bytes) switchArms += heads.get(b) ?? '';
     switchArms += arm.indices.map((i) => codes[i]).join('\n') + '\n';
   }
   return `${indent}if c >= 128 {
@@ -181,7 +185,11 @@ function newlinePartsGo(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state
     state: `\tflowDepth := 0
 ${flowSets}`,
     stateFrom: flowSets,
-    ws: `\t\tif c == 32 || c == 9 || c == 11 || c == 12 { pos++; continue }
+    ws: `\t\tif c == 32 || c == 9 || c == 11 || c == 12 {
+\t\t\tpos++
+\t\t\tfor pos < n { if d := src[pos]; d != 32 && d != 9 && d != 11 && d != 12 { break }; pos++ }
+\t\t\tcontinue
+\t\t}
 \t\tif c == 10 || c == 13 {
 \t\t\ts := pos
 \t\t\tpos++; if c == 13 && pos < n && src[pos] == 10 { pos++ }
@@ -218,7 +226,6 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const punctLine = (p: string) =>
     `\t\tif strings.HasPrefix(src[pos:], ${J(p)}) { ${pushPunct(p)}; pos += ${tlen(p)}; continue }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
-  const cascade = renderLexByteDispatchGo(lexCodes, lexFirsts, '\t');
   const goBoolArr = (name: string, flags: boolean[]) =>
     `var ${name} = []bool{${flags.map((b) => (b ? 'true' : 'false')).join(', ')}}`;
   const rxBitTables = rx ? `${goBoolArr('_divT', lidFlagTable(ids, rx.divisionTexts))}
@@ -319,18 +326,32 @@ ${emitHooks}
 \t}
 \t_ = emit
 ` : '';
-  const tplDispatch = tpl ? `\t\tif len(templateStack) > 0 && strings.HasPrefix(src[pos:], ${J(tpl.interpClose)}) && templateStack[len(templateStack)-1] == 0 {
+  // The template tests can pass only at their delimiter's first byte: when that byte is ASCII
+  // (and not whitespace, which is consumed before the dispatch) the test is made in that byte's
+  // dispatch arm, before the arm's own candidates, not in every round.
+  const tplHeads = new Map<number, string>();
+  const headByte = (t: string) => { const b = Buffer.from(t, 'utf8')[0]!; return b < 128 && ![9, 10, 11, 12, 13, 32].includes(b) ? b : null; };
+  const tplCloseTest = tpl ? `\t\tif len(templateStack) > 0 && strings.HasPrefix(src[pos:], ${J(tpl.interpClose)}) && templateStack[len(templateStack)-1] == 0 {
 \t\t\ttemplateStack = templateStack[:len(templateStack)-1]
 \t\t\tinterp, e := scanTplSpan(pos + ${tlen(tpl.interpClose)}, false)
 \t\t\tif interp { emit(pos, e, ${kidOf(ids, '$templateMiddle')}, lidOf(src[pos:e])); templateStack = append(templateStack, 0) } else { emit(pos, e, ${kidOf(ids, '$templateTail')}, lidOf(src[pos:e])) }
 \t\t\tpos = e; continue
 \t\t}
-\t\tif strings.HasPrefix(src[pos:], ${J(tpl.open)}) {
+` : '';
+  const tplOpenTest = tpl ? `\t\tif strings.HasPrefix(src[pos:], ${J(tpl.open)}) {
 \t\t\tinterp, e := scanTplSpan(pos + ${tlen(tpl.open)}, ${rx ? '!prevIsValue()' : 'true'})
 \t\t\tif interp { emit(pos, e, ${kidOf(ids, '$templateHead')}, lidOf(src[pos:e])); templateStack = append(templateStack, 0) } else { emit(pos, e, ${kidOf(ids, tpl.token)}, lidOf(src[pos:e])) }
 \t\t\tpos = e; continue
 \t\t}
 ` : '';
+  let tplDispatch = '';
+  if (tpl) for (const [t, code] of [[tpl.interpClose, tplCloseTest], [tpl.open, tplOpenTest]] as const) {
+    const hb = headByte(t);
+    // Two tests at one byte keep their order; a test whose byte has no arm of its own stays here.
+    if (hb !== null && tplDispatch === '') tplHeads.set(hb, (tplHeads.get(hb) ?? '') + code);
+    else tplDispatch += code;
+  }
+  const cascade = renderLexByteDispatchGo(lexCodes, lexFirsts, '\t', tplHeads);
   const identNameGo = ir.identToken;
   const identKidGo = identNameGo ? kidOf(ids, identNameGo) : 0;
   const lexGoHelpers = (identNameGo || ir.identLike.length) ? `func isJsWs(r rune) bool {
@@ -376,8 +397,19 @@ func lxExt(src string, e int) int {
 `;
   const nlState = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).state : '';
   const nlStateFrom = nl ? newlinePartsGo(nl, 'pushTok', ids).stateFrom : '';
-  const nlWs = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).ws : `\t\tif c == 32 || c == 9 || c == 11 || c == 12 { pos++; continue }
-\t\tif c == 10 || c == 13 { pendingNl = true; pos++; continue }
+  // A whitespace run is consumed in one dispatch round (see the Rust target): per byte only "is
+  // it still whitespace"; a run after a line break also takes further breaks.
+  const nlWs = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).ws : `\t\tif c == 32 || c == 9 || c == 11 || c == 12 {
+\t\t\tpos++
+\t\t\tfor pos < n { if d := src[pos]; d != 32 && d != 9 && d != 11 && d != 12 { break }; pos++ }
+\t\t\tcontinue
+\t\t}
+\t\tif c == 10 || c == 13 {
+\t\t\tpendingNl = true
+\t\t\tpos++
+\t\t\tfor pos < n { if d := src[pos]; d != 32 && (d < 9 || d > 13) { break }; pos++ }
+\t\t\tcontinue
+\t\t}
 \t\tif c >= 0x80 {
 \t\t\tr, w := utf8.DecodeRuneInString(src[pos:])
 \t\t\tif isJsWs(r) { if r == 0x2028 || r == 0x2029 { pendingNl = true }; pos += w; continue }

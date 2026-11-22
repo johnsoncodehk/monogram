@@ -9,6 +9,11 @@ TS target and emitted JS parser by instrumentation of the emitted module (test/a
 (pointer compression; the model is in test/alloc-instrument.ts; the gate prints a measured `heapUsed` delta
 beside it). One warm parse runs before the measured one; what a module builds once is not counted.
 
+Go rows measured with go1.27.4. Which function an allocation is attributed to depends on the toolchain (one
+commit: a 16 B slice growth in `(*engine).matchLit` under go1.27.4, in `(*engine).finish` under go1.26.11), so the
+rows hold for this toolchain only. CI installs it (`actions/setup-go`, .github/workflows/ci.yml); with another one
+the Go rows are NOT RUN.
+
 Inputs (locked npm packages): `acorn@8.16.0` `dist/acorn.js`, `typescript@5.9.3` `lib/lib.es5.d.ts` and `lib/_tsserver.js` (also repeated 4×: per-token counts must not grow with size).
 
 Modes. TS target: `parse(src)` (the CST built directly) and `parseWith(src, cstBuilder)` (through builder frames).
