@@ -401,8 +401,10 @@ ${loopBody}
 \t}
 \treturn pos, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang
 }
-func lex(src string) []Tok {
-\tvar out []Tok
+func lex(src string) []Tok { return lexInto(src, nil) }
+// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer).
+func lexInto(src string, buf []Tok) []Tok {
+\tout := buf[:0]
 \tlexFrom(src, 0, false, 0, 0, 0, false, false, nil, false, false, &out, 0)
 \treturn out
 }`;
@@ -416,8 +418,10 @@ ${loopBody}
 \t}
 \treturn pos, pendingNl, templateStack
 }
-func lex(src string) []Tok {
-\tvar out []Tok
+func lex(src string) []Tok { return lexInto(src, nil) }
+// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer).
+func lexInto(src string, buf []Tok) []Tok {
+\tout := buf[:0]
 \tlexFrom(src, 0, false, nil, &out, 0)
 \treturn out
 }`;
@@ -431,15 +435,19 @@ ${loopBody}
 \t}
 \treturn pos, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang, templateStack
 }
-func lex(src string) []Tok {
-\tvar out []Tok
+func lex(src string) []Tok { return lexInto(src, nil) }
+// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer).
+func lexInto(src string, buf []Tok) []Tok {
+\tout := buf[:0]
 \tlexFrom(src, 0, false, 0, 0, 0, false, false, nil, false, false, nil, &out, 0)
 \treturn out
 }`;
   }
   if (rxOrTpl) {
-    return `${idTables}${lexGoHelpers}${rxModuleConsts}${scans}func lex(src string) []Tok {
-\tvar toks []Tok
+    return `${idTables}${lexGoHelpers}${rxModuleConsts}${scans}func lex(src string) []Tok { return lexInto(src, nil) }
+// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer).
+func lexInto(src string, buf []Tok) []Tok {
+\ttoks := buf[:0]
 \tn := len(src)
 \tpos := 0
 \tpendingNl := false
@@ -459,8 +467,10 @@ ${loopBody}
 \t}
 \treturn pos, pendingNl, flowDepth
 }
-func lex(src string) []Tok {
-\tvar out []Tok
+func lex(src string) []Tok { return lexInto(src, nil) }
+// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer).
+func lexInto(src string, buf []Tok) []Tok {
+\tout := buf[:0]
 \tlexFrom(src, 0, false, 0, &out, 0)
 \treturn out
 }`;
@@ -473,8 +483,10 @@ ${loopBody}
 \t}
 \treturn pos, pendingNl
 }
-func lex(src string) []Tok {
-\tvar out []Tok
+func lex(src string) []Tok { return lexInto(src, nil) }
+// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer).
+func lexInto(src string, buf []Tok) []Tok {
+\tout := buf[:0]
 \tlexFrom(src, 0, false, &out, 0)
 \treturn out
 }`;
@@ -2868,7 +2880,7 @@ ${wMethods}
 // without paying for a second method-instantiation (Go GC-shape stenciling tax).
 func parseWithCst(src string, b *CstBuilder) (int32, bool) {
 \tp := &engine{nodes: b.Nodes[:0], kids: b.Kids[:0]}
-\th := p.parse(src, lex(src))
+\th := p.parse(src, lexInto(src, b.Toks))
 \tb.Nodes, b.Kids, b.Toks = p.nodes, p.kids, p.toks
 \tif h < 0 { return 0, false }
 \treturn h, true
