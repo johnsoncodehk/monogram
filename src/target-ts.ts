@@ -495,9 +495,11 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
     rule: (name) => `parse${name}${S}()`,
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (m === 'r' ? `_drop(_n, ${name}_bpW(${bp}))` : `${name}_bpW(${bp})`),
-    star: (body) => `star${S}(${fn(body)})`,
-    opt: (body) => `opt${S}(${fn(body)})`,
-    sep: (elem, delim) => `sepBy${S}(${fn(elem)}, ${sepDelimLid(ids, delim)})`,
+    // A body guard (emit-portable.ts annotateSteps): opt / sep test it before their one attempt,
+    // star before each attempt, so a refused attempt takes no mark.
+    star: (body, g) => (g === null ? `star${S}(${fn(body)})` : `starIn${S}(${g}, ${fn(body)})`),
+    opt: (body, g) => (g === null ? `opt${S}(${fn(body)})` : `(!ahead(${g}, true) || opt${S}(${fn(body)}))`),
+    sep: (elem, delim, g) => (g === null ? `sepBy${S}(${fn(elem)}, ${sepDelimLid(ids, delim)})` : `(!ahead(${g}, true) || sepBy${S}(${fn(elem)}, ${sepDelimLid(ids, delim)}))`),
     altlit: (values) => `altLit${S}([${values.map((v) => lidOf(ids, v)).join(', ')}])`,
     look: (id, is) => `${is ? '' : '!'}look${id}()`,
     ahead: (set, is) => `ahead(${set}, ${is})`,
@@ -930,6 +932,10 @@ function starW(once: () => boolean): boolean {
   for (;;) { const sp = pos, bk = _n; if (!once()) { back(sp); _n = bk; break; } }
   return true;
 }
+function starInW(k: number, once: () => boolean): boolean {
+  while (ahead(k, true)) { const sp = pos, bk = _n; if (!once()) { back(sp); _n = bk; break; } }
+  return true;
+}
 function optW(body: () => boolean): boolean {
   const sp = pos, bk = _n; if (!body()) { back(sp); _n = bk; } return true;
 }
@@ -965,6 +971,10 @@ function matchTokR(kid: number): boolean {
 }
 function starR(once: () => boolean): boolean {
   for (;;) { const sp = pos; if (!once()) { back(sp); break; } }
+  return true;
+}
+function starInR(k: number, once: () => boolean): boolean {
+  while (ahead(k, true)) { const sp = pos; if (!once()) { back(sp); break; } }
   return true;
 }
 function optR(body: () => boolean): boolean {
