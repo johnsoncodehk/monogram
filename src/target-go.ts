@@ -2850,7 +2850,8 @@ func (b *SlimBuilder) Finish(scratch *[]int32, sb int, ruleId uint16, fallbackOf
 \toff, end := fallbackOff, fallbackOff
 ${kidsSpanGo}\tswitch nn - sb {
 \tcase 0:
-\t\treturn 0, off, false
+\t\t// The root keeps its node with no child: an accepted parse always has a root (ParseWith).
+\t\tif ruleId != ${entryRid} { return 0, off, false }
 \tcase 1:
 \t\t*scratch = s[:sb]
 \t\treturn s[sb], off, true
