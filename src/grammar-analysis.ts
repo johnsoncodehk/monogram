@@ -740,7 +740,7 @@ export function tagOpenOnlyOpensTags(grammar: CstGrammar, region: ElementRegion)
   };
   for (const r of grammar.rules) walk(r.body, false);
   if (!ok) return false;
-  const own = new Set([region.text, region.closeTag, region.selfClose, ...region.tagTokens ?? []]);
+  const own = new Set([region.text, region.closeTag, region.selfClose, ...region.tagTokens ?? [], ...(region.rawText ?? []).map((r) => r.token)]);
   const cc = lit.charCodeAt(0);
   for (const t of grammar.tokens) {
     if (own.has(t.name)) continue;

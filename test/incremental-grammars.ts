@@ -244,6 +244,9 @@ const FRAME_DOCS: Record<string, string[]> = {
   'test/fixtures/elementdialect': [
     'component C(a) {\n  <a k="v">@if (a) { <b/> } @else { "e" } {a}</a> "z" <c/>\n}',
     'component D() { <a><b>{1}</b><{t} id="d">"s"</{t}></a> }\ncomponent E() { "q" }',
+    // a raw-text element (`rawText`): one body token up to `</style`; edits that break or make
+    // the close tag, and an empty raw body
+    'component S() { <a><style k="v">.a { b: "c" } <i></style>"t"</a> <style></style> }',
   ],
 };
 // (`"` and `\` make lex errors: inside an undecided type-parameter signature an error is the
