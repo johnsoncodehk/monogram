@@ -1256,17 +1256,6 @@ func (p *engine) shiftSubtree(id int32, byteDelta, tokDelta int) {
 		}
 	}
 }
-// tailRel is, per suffix entry, the tokens from its start to the old end. A suffix entry is
-// adopted at pos when the new stream has that many tokens left.
-func tailRel(oldN int, suffixMeta []EntryMeta) ([]int, int) {
-	rel := make([]int, len(suffixMeta))
-	minRel := -1
-	for i, m := range suffixMeta {
-		rel[i] = oldN - m.TokStart
-		if minRel < 0 || rel[i] < minRel { minRel = rel[i] }
-	}
-	return rel, minRel
-}
 func shiftEntryMeta(m *EntryMeta, byteDelta, tokDelta int) {
 	m.TokStart += tokDelta
 	m.TokEnd += tokDelta
@@ -1306,7 +1295,10 @@ func (p *engine) tryReuseTop(oldRoot int32, oldEntries []EntryMeta, newText stri
 	suffixCand := oldKids[suffixStart:]
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
-	rel, minRel := tailRel(oldN, suffixMeta)
+	// minRel: the tokens from the last suffix entry's start to the old end (entries ascend, so the
+	// fewest of any entry): with fewer tokens left than that, no entry can be adopted.
+	minRel := -1
+	if len(suffixMeta) > 0 { minRel = oldN - suffixMeta[len(suffixMeta)-1].TokStart }
 	p.src = newText
 	p.toks = toksFromMeta(newText, newMeta)
 	if prefixLen > 0 { p.pos = prefixMeta[prefixLen-1].TokEnd } else { p.pos = 0 }
@@ -1354,7 +1346,7 @@ func (p *engine) tryReuseTop(oldRoot int32, oldEntries []EntryMeta, newText stri
 			return -1, 0, false
 		}
 		for i := range suffixMeta {
-			if rel[i] == len(p.toks)-p.pos { r, n := finishHit(i); return r, n, true }
+			if oldN-suffixMeta[i].TokStart == len(p.toks)-p.pos { r, n := finishHit(i); return r, n, true }
 		}
 		return -1, 0, false
 	}
@@ -1422,7 +1414,10 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMet
 	for _, s := range prefixSegs {
 		for i := 0; i < s.KidCount; i++ { prefixKids = append(prefixKids, p.kids[old.KidStart+uint32(s.KidStart+i)]) }
 	}
-	rel, minRel := tailRel(oldN, suffixMeta)
+	// minRel: the tokens from the last suffix entry's start to the old end (entries ascend, so the
+	// fewest of any entry): with fewer tokens left than that, no entry can be adopted.
+	minRel := -1
+	if len(suffixMeta) > 0 { minRel = oldN - suffixMeta[len(suffixMeta)-1].TokStart }
 	p.src = newText
 	p.toks = toksFromMeta(newText, newMeta)
 	if prefixLen > 0 { p.pos = prefixMeta[prefixLen-1].TokEnd } else { p.pos = 0 }
@@ -1502,7 +1497,7 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMet
 			return -1, 0, false
 		}
 		for i := range suffixMeta {
-			if rel[i] == len(p.toks)-p.pos { r, n := finishHit(i); return r, n, true }
+			if oldN-suffixMeta[i].TokStart == len(p.toks)-p.pos { r, n := finishHit(i); return r, n, true }
 		}
 		return -1, 0, false
 	}
@@ -2186,7 +2181,10 @@ func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, 
 	suffixCand := append([]int32(nil), oldHs[suffixStart:]...)
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
-	rel, minRel := tailRel(oldN, suffixMeta)
+	// minRel: the tokens from the last suffix entry's start to the old end (entries ascend, so the
+	// fewest of any entry): with fewer tokens left than that, no entry can be adopted.
+	minRel := -1
+	if len(suffixMeta) > 0 { minRel = oldN - suffixMeta[len(suffixMeta)-1].TokStart }
 	p := &parserW{cursor: cursor{toks: toksFromMeta(newText, newMeta)}, src: newText, b: b, drops: dropsOf(b), scratch: nil}
 	if prefixLen > 0 {
 		p.pos = prefixMeta[prefixLen-1].TokEnd
@@ -2243,7 +2241,7 @@ func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, 
 			return 0, nil, nil, 0, false
 		}
 		for i := range suffixMeta {
-			if rel[i] == len(p.toks)-p.pos {
+			if oldN-suffixMeta[i].TokStart == len(p.toks)-p.pos {
 				return finishHit(i)
 			}
 		}
@@ -2327,7 +2325,10 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 			prefixKids = append(prefixKids, oldRootHs[s.KidStart+i])
 		}
 	}
-	rel, minRel := tailRel(oldN, suffixMeta)
+	// minRel: the tokens from the last suffix entry's start to the old end (entries ascend, so the
+	// fewest of any entry): with fewer tokens left than that, no entry can be adopted.
+	minRel := -1
+	if len(suffixMeta) > 0 { minRel = oldN - suffixMeta[len(suffixMeta)-1].TokStart }
 	p := &parserW{cursor: cursor{toks: toksFromMeta(newText, newMeta)}, src: newText, b: b, drops: dropsOf(b), scratch: nil}
 	if prefixLen > 0 {
 		p.pos = prefixMeta[prefixLen-1].TokEnd
@@ -2406,7 +2407,7 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 			return 0, nil, nil, nil, 0, false
 		}
 		for i := range suffixMeta {
-			if rel[i] == len(p.toks)-p.pos {
+			if oldN-suffixMeta[i].TokStart == len(p.toks)-p.pos {
 				return finishHit(i)
 			}
 		}
