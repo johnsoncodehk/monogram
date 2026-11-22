@@ -90,6 +90,12 @@ const unsupported: [string, string][] = [
   ['percent in text', `const b = <span>50% off</span>;`],
   ['apostrophe in text', `const c = <p>It's great</p>;`],
   ['punctuation-heavy text', `const d = <p>Cost: $5 (each)!</p>;`],
+  // `</` is lexed as the JSX close-tag token EVERYWHERE (maximal munch), where tsc rescans `<` `/`
+  // as a close-tag opener only inside JSX children: `<` then a `/* */` comment is a type-argument
+  // list or a less-than outside them. Same missing mechanism: a token that exists only inside a
+  // lexer region (editor queue item 6: `</` is a token only where a region says so).
+  ['`<` before a comment in type arguments', `new Map</* comment */string, IArgs>()`],
+  ['`<` before a comment as less-than', `const t = a </* c */ b;`],
 ];
 
 let v_ok = 0;
@@ -134,9 +140,17 @@ console.log('   is between `>` and `</`. The TextMate HIGHLIGHTER has no such li
 console.log('   region-based): the derived highlighter shows raw text + entities highlight');
 console.log('   correctly. So this is a PARSER-conformance boundary only, not a highlighter');
 console.log('   gap.)');
+// Expected-fail: each row is valid TSX that Monogram rejects today. A row that starts parsing
+// fails the gate until it moves to corpus 1 (the record moves with the fix).
+const nowAccepted: string[] = [];
 for (const [name, code] of unsupported) {
   const we = weAccept(code), t = tsxAccepts(code);
+  if (we) nowAccepted.push(name);
   console.log(`    - ${we ? 'accept' : 'reject'}${t ? '' : ' [TS also rejects — recheck]'}: ${name}`);
+}
+if (nowAccepted.length) {
+  console.log(`✗ known-unsupported rows now parse: move them to corpus 1: ${nowAccepted.join('; ')}`);
+  process.exit(1);
 }
 
 // ── Hard gate: the curated valid-TSX set must be a SOLID majority. ──

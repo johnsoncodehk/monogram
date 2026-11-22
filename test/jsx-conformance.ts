@@ -89,6 +89,20 @@ console.log('\n── Corpus 3: type-behavior parity with the JavaScript base (w
 console.log(`  Matches base: ${par_ok}/${tsParity.length}`);
 for (const c of par_fail) console.log('    DIVERGED from base (withJsx changed type handling): ' + c);
 
+// ── Corpus 4: known-unsupported valid JSX (expected-fail) ──
+// Valid JSX (tsc, ScriptKind.JSX) that Monogram rejects for want of a lexer region: free text in
+// children, and `</` lexed as the close-tag token outside children (tsc rescans `</` as a
+// close-tag opener only inside JSX children). Editor queue item 6. A row that starts parsing
+// fails the gate until it moves to corpus 1.
+const unsupported: [string, string][] = [
+  ['apostrophe in text', `const c = <p>It's great</p>;`],
+  ['`<` before a comment as less-than', `x</*c*/y`],
+];
+const nowAccepted = unsupported.filter(([, code]) => weAccept(code)).map(([name]) => name);
+console.log('\n── Corpus 4: known-unsupported valid JSX (expected-fail) ──');
+for (const [name, code] of unsupported) console.log(`    - ${weAccept(code) ? 'accept' : 'reject'}${jsxAccepts(code) ? '' : ' [tsc also rejects — recheck]'}: ${name}`);
+if (nowAccepted.length) { console.log(`✗ known-unsupported rows now parse: move them to corpus 1: ${nowAccepted.join('; ')}`); process.exit(1); }
+
 const FLOOR = 0.85;
 const rate = v_ok / validJsx.length;
 console.log(`\nJSX subset acceptance: ${(rate * 100).toFixed(1)}%  (floor ${FLOOR * 100}%)`);
