@@ -1265,6 +1265,25 @@ const jsLookaheadEdit = jsLookaheadInit.indexOf('\n') + 1; // first char of peek
 // around such bodies (test/context-cases.ts): one session per document, the tree ≡ a fresh parse
 // after every batch.
 const CTX_EDITS: EditScenario[] = CTX_DOCS.map((init) => ({ init, batches: ctxEdits(init).map((e): EditBatch => [[e.start, e.end, e.text]]), longSession: true }));
+// Documents with template holes for the exhaustive one-character edits (above the edit sessions).
+const HOLE_EDIT_GRAMMARS = new Set(['javascript', 'typescript']);
+const HOLE_EDIT_DOCS = [
+  'f(a, `x${b + c}`);',
+  'let q = 1;\nf(`x${(b)}y${c}`);',
+  'g(`a${`b${c}d`}e`, 1);',
+  'h(`${ {a: "}"}.a }${\'`\'}`);',
+  'k(`${a // c\n}`);',
+];
+// Insert each of a few characters that open, close or end something at every offset, and delete
+// every character.
+function oneCharEdits(doc: string): [number, number, string][] {
+  const out: [number, number, string][] = [];
+  for (let at = 0; at <= doc.length; at++) {
+    for (const ch of ['x', ' ', '}', '{', '`', '$']) out.push([at, at, ch]);
+    if (at < doc.length) out.push([at, at + 1, '']);
+  }
+  return out;
+}
 const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
   calc: [
     { init: '1+2*3', batches: [[[3, 3, '4']]] },
@@ -1827,6 +1846,27 @@ for (const c of CASES) {
       console.log(`  ${c.grammar}/${r.label}: REJECT mismatch on ${JSON.stringify(src)} (oracle ok=${want.ok}, ${r.label} ok=${got.ok})`);
     }
     console.log(`  ${c.grammar}/${r.label}: ${acc}/${c.accept.length} accept ≡ oracle · ${rej}/${c.reject.length} reject ≡ oracle${snap ? ` · ${snap} shape drift` : ''}`);
+
+    // Every one-character insertion and deletion at every offset of small documents with template
+    // holes (nested, holding strings, braces, templates, comments): the edited Doc ≡ a fresh parse
+    // of the edited text, on the verdict and the CST, and its own validation (stream and tree
+    // against a fresh lex and parse) holds. Exhaustive, not random: a random edit rarely lands
+    // inside a hole, where the relex window must not restart.
+    if (HOLE_EDIT_GRAMMARS.has(c.grammar)) {
+      const sessions = HOLE_EDIT_DOCS.flatMap((init) => oneCharEdits(init).map((e) => ({ init, e, final: init.slice(0, e[0]) + e[2] + init.slice(e[1]) })));
+      const fresh = r.batch(sessions.map((x) => x.final));
+      const bad: string[] = [];
+      sessions.forEach((x, i) => {
+        const a = r.edit(JSON.stringify({ init: x.init, batches: [[x.e]] }), false), b = fresh[i]!;
+        const why = a.ok !== b.ok ? `edited ${a.ok ? 'accepts' : 'rejects'}, fresh ${b.ok ? 'accepts' : 'rejects'}`
+          : a.ok && a.cst !== b.cst ? 'CSTs differ'
+          : a.align && (a.align.streamEq === false || a.align.treeEq === false) ? `validation streamEq=${a.align.streamEq} treeEq=${a.align.treeEq}` : '';
+        if (why) bad.push(`${why}: ${JSON.stringify(x.init)} edit ${JSON.stringify(x.e)}`);
+      });
+      console.log(`  ${c.grammar}/${r.label}: ${sessions.length - bad.length}/${sessions.length} one-character edits in and around template holes ≡ fresh`);
+      for (const smp of bad.slice(0, 6)) console.log(`      ${smp}`);
+      failures += bad.length;
+    }
 
     const editScenarios = EDIT_SCENARIOS[c.grammar];
     if (editScenarios) {
