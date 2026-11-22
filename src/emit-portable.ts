@@ -647,6 +647,9 @@ function elementPlanOf(grammar: CstGrammar, el: NonNullable<CstGrammar['elements
   const always = tagOpenOnlyOpensTags(grammar, el);
   const tp = el.typeParameters;
   if (always && tp) throw new Error(`portable: elements.typeParameters: this grammar uses '${el.tagOpen}' only to open tags`);
+  // Not built in the portable lexers yet: refused, not lexed without them (docs/REGIONS.md, Owed).
+  if (el.tagStart) throw new Error('portable: elements.tagStart is not supported by the portable lexers yet');
+  if (el.rawText?.some((r) => r.unlessBodyStarts)) throw new Error('portable: elements.rawText[].unlessBodyStarts is not supported by the portable lexers yet');
   // The signature's rewind restores the frame stack, not the raw-text tag records.
   if (tp?.signature && el.rawText?.length) throw new Error('portable: elements.rawText with typeParameters.signature is not supported');
   let signature: ElementPlan['signature'] = null;

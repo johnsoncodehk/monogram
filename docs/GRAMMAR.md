@@ -96,6 +96,12 @@ that begins a type-parameter list (tsc's own JSX lookahead for `<T,` / `<T exten
 `<T>(…)` signature, which the lexer decides by lexing the group and keeping or discarding it).
 A grammar that declares no `typeParameters` gets no such rewind.
 
+A template dialect whose text may contain a bare `<` declares `tagStart`, the one-character class
+a `<` must be followed by to open a tag (`<p>1 < 2</p>` is then text); a raw-text declaration can
+carry `unlessBodyStarts`, a pattern under which the body is ordinary children instead (a
+`<style>` whose body starts with `{` holds an expression). [`test/fixtures/textdialect.ts`](../test/fixtures/textdialect.ts)
+declares both; [`test/text-dialect.ts`](../test/text-dialect.ts) has its rows.
+
 ### What a lexer-local region cannot decide
 
 tsc's scanner is driven by its parser: the parser knows whether a `<` is in a type or an
