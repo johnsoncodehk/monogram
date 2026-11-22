@@ -501,6 +501,7 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
 ` : '';
   const identName = ir.identToken;
   const identKid = identName ? kidOf(ids, identName) : 0;
+  const identEscErrRs = shared.identEscError(), uniClassRs = shared.uniClass();
   const identTok = ir.tokens.find((t) => t.name === identName);
   const identLid = identTok ? lidCall(shared.tokenLiterals(ir, identTok, ids.lids.slice(1)), '&b[pos..e]') : 'lid_of(&b[pos..e])';
   // Unicode ID_Start fallback (mirrors emit-lexer uniIdentReY) before unmatched-byte panic.
@@ -536,6 +537,11 @@ ${identName || ir.identLike.length ? `${rsUniIdentTables()}// Both out of line: 
     if let Some(e) = _scan_uni_ident(src.as_bytes(), pos) { return (e, 2); }
     panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(src.as_bytes()[pos] as char));
 }
+// The lexer error of an identifier whose escapes spell no IdentifierName (lex-family.ts).
+#[cold] #[inline(never)] fn ${identEscErrRs}(src: &str, pos: isize, e: isize) -> isize {
+    panic!("Invalid identifier escape at offset {}: '{}'", pos, &src[pos as usize..e as usize]);
+}
+#[inline(always)] fn ${uniClassRs}(cp: isize) -> isize { _uni_class(cp as u32) as isize }
 #[inline(never)] fn _lx_ext(b: &[u8], mut e: usize) -> usize {
     while e < b.len() {
         let (cp, w) = _lx_cp(b, e);
@@ -5235,7 +5241,7 @@ const RS_MK: Record<keyof MkMeta, string> = { off: 'u32', end: 'u32', kid: 'u16'
 // Operator spelling and binding strength; unary is 90, a negative literal 7, an `as` cast 8
 // (bare as an argument or index, parenthesized as an operand, where `x as T < y` reads as generics).
 const RS_OPS: Record<BinOp, [string, number]> = {
-  or: ['||', 1], and: ['&&', 2], eq: ['==', 3], ne: ['!=', 3], lt: ['<', 4], le: ['<=', 4], gt: ['>', 4], ge: ['>=', 4], shr: ['>>', 5], add: ['+', 6], sub: ['-', 6],
+  or: ['||', 1], and: ['&&', 2], eq: ['==', 3], ne: ['!=', 3], lt: ['<', 4], le: ['<=', 4], gt: ['>', 4], ge: ['>=', 4], shr: ['>>', 5], shl: ['<<', 5], add: ['+', 6], sub: ['-', 6],
 };
 const RS_CAST = 8;
 const RS_IND = '    ';
@@ -5309,7 +5315,7 @@ fn lex_find(b: &[u8], mut i: usize, lit: &[u8]) -> usize {
     bin: (op, a, b) => {
       const [sp, p] = RS_OPS[op];
       const side = (r: R, right: boolean): string =>
-        (r.prec < p || r.prec === RS_CAST || (right && r.prec === p) || (op === 'shr' && r.prec < ATOM) || (COMPARISON.has(op) && r.prec >= 3 && r.prec <= 4) ? `(${r.c})` : r.c);
+        (r.prec < p || r.prec === RS_CAST || (right && r.prec === p) || ((op === 'shr' || op === 'shl') && r.prec < ATOM) || (COMPARISON.has(op) && r.prec >= 3 && r.prec <= 4) ? `(${r.c})` : r.c);
       return { c: `${side(a, false)} ${sp} ${side(b, true)}`, prec: p };
     },
     call: (name, args) => `${name}(${args.join(', ')})`,
@@ -5340,6 +5346,9 @@ fn lex_find(b: &[u8], mut i: usize, lit: &[u8]) -> usize {
     fn: (f) => [
       ...f.doc.map((l) => `// ${l}`),
       ...(f.inline ? ['#[inline(always)]'] : []),
+      // Out of line only: `#[cold]` on the identifier escape scanners moved lex_from's register layout
+      // (+0.2% to +0.4% lexer instructions on real inputs, profile runs 45034540295 / 45035043707).
+      ...(f.cold ? ['#[inline(never)]'] : []),
       `fn ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}) -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`} {`,
       ...rsBlock(f.body),
       '}',

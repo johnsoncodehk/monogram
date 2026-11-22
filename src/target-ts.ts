@@ -335,6 +335,16 @@ function lx_ext(src: string, e: number): number {
   const m = LX_UNI_CONT.exec(src);
   return m ? e + m[0].length : e;
 }
+// The lexer error of an identifier whose escapes spell no IdentifierName (lex-family.ts).
+function ${shared.identEscError()}(src: string, pos: number, e: number): number {
+  throw new Error("Invalid identifier escape at offset " + pos + ": '" + src.slice(pos, e) + "'");
+}
+// JavaScript has the classes natively (uni-ident.ts).
+const LX_ID_START = /^${UNI_ID_START}$/u, LX_ID_PART = /^${UNI_ID_CONTINUE}$/u;
+function ${shared.uniClass()}(cp: number): number {
+  const ch = String.fromCodePoint(cp);
+  return LX_ID_START.test(ch) ? 2 : LX_ID_PART.test(ch) ? 1 : 0;
+}
 `
     : '';
   const lxUniIdentConst = (nl ? newlineParts(nl, 'emit', ids).table : '') + (shared.scannedTokens(ir).some((t) => t.skip) ? TS_HAS_LINE_TERM : '') + (identNameTs
@@ -2954,7 +2964,7 @@ const TS_TYPES: Record<Ty, string> = {
 };
 // Operator spelling and binding strength; unary is 90, a negative literal 7.
 const TS_OPS: Record<BinOp, [string, number]> = {
-  or: ['||', 1], and: ['&&', 2], eq: ['===', 3], ne: ['!==', 3], lt: ['<', 4], le: ['<=', 4], gt: ['>', 4], ge: ['>=', 4], shr: ['>>', 5], add: ['+', 6], sub: ['-', 6],
+  or: ['||', 1], and: ['&&', 2], eq: ['===', 3], ne: ['!==', 3], lt: ['<', 4], le: ['<=', 4], gt: ['>', 4], ge: ['>=', 4], shr: ['>>', 5], shl: ['<<', 5], add: ['+', 6], sub: ['-', 6],
 };
 const TS_IND = '  ';
 const tsWrap = (r: R, min: number): string => (r.prec < min ? `(${r.c})` : r.c);
@@ -2987,7 +2997,7 @@ function lexFind(s: string, i: number, lit: string): number {
     bin: (op, a, b) => {
       const [sp, p] = TS_OPS[op];
       const side = (r: R, right: boolean): string =>
-        (r.prec < p || (right && r.prec === p) || (op === 'shr' && r.prec < ATOM) || (COMPARISON.has(op) && r.prec >= 3 && r.prec <= 4) ? `(${r.c})` : r.c);
+        (r.prec < p || (right && r.prec === p) || ((op === 'shr' || op === 'shl') && r.prec < ATOM) || (COMPARISON.has(op) && r.prec >= 3 && r.prec <= 4) ? `(${r.c})` : r.c);
       return { c: `${side(a, false)} ${sp} ${side(b, true)}`, prec: p };
     },
     call: (name, args) => `${name}(${args.join(', ')})`,
