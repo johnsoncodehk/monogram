@@ -1768,6 +1768,8 @@ export function literalKinds(ir: Pick<ParserIR, 'tokens' | 'tpl' | 'elements' | 
       ks = new Set<string>();
       if (ir.puncts.includes(text)) ks.add('');
       for (const t of scannedTokens(ir)) if (tokenLiterals(ir, t, [text]).length) ks.add(t.name);
+      // an element region's own tokens carry the literal ids of their texts too
+      for (const n of elementTokens(ir.elements)) { const t = ir.tokens.find((d) => d.name === n)!; if (tokenLiterals(ir, t, [text]).length) ks.add(n); }
       const tl = templateLiterals(ir, [text]);
       if (ir.tpl && tl.whole.length) ks.add(ir.tpl.token);
       if (tl.head.length) ks.add('$templateHead');

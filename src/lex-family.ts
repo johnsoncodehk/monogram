@@ -737,7 +737,8 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
       fns.push(rd);
       body.push(
         let_(`r_${name}`, call(rd.name, 'q')), if_(gt(`r_${name}`, 're'), [set('re', `r_${name}`)]),
-        if_(ge(call(b.pattern(pat), 'q'), I(0)), [retN(I(verdict), 're')]),
+        // the regex's own match (with its backtracking), as the interpreter's LX_TP_HEAD / LX_TP_SIG
+        if_(ge(call(b.exact(pat), 'q'), I(0)), [retN(I(verdict), 're')]),
       );
     };
     if (e.head) look('ElHead', e.head, EL_NOT);

@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
+import { elementTokens, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -206,6 +206,10 @@ function elementLexerTS(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms, 
   const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0;
   const operand = el.entry === 'operand';
   if (operand && !rx) throw new Error('portable: an operand element entry needs the regex context (prevIsValue)');
+  // A region token whose text may be a literal carries that literal's id, as every token does
+  // (a Doc rebuilds a token's id from its text).
+  const carry = elementTokens(el).map((n) => ({ kid: kidOf(ids, n), lits: shared.tokenLiterals(ir, ir.tokens.find((t) => t.name === n)!, ids.lids.slice(1)) })).filter((c) => c.lits.length);
+  const lidOfRegion = (k: string, text: string, dflt: string) => carry.reduceRight((acc, c) => `${k} === ${c.kid} ? ${lidCallTs(c.lits, text)} : ${acc}`, dflt);
   const L = tlen(el.tagOpen);
   const consts = `${p.consts}const LID_EL_OPEN = ${lidOf(ids, el.tagOpen)};
 const LID_EL_CLOSE = ${lidOf(ids, el.tagClose)};
@@ -296,7 +300,7 @@ ${sig ? `      if (op === 2) {
       const [fe, fk, fl, ft, fp, fa, fla] = ${shared.elementFn('frame')}(src, pos, fr, tagAngle, toks.length > 0 && toks[toks.length - 1].lid === LID_EQ, laEnd);
       laEnd = fla;
       if (fe >= 0) {
-        emit(pos, fe, fk, fl);
+        emit(pos, fe, fk, ${lidOfRegion('fk', 'src.slice(pos, fe)', 'fl')});
 ${raw ? `        // each element frame's current tag: the index of its tagOpen token (the name is the next)
         if (fl === LID_EL_OPEN) { if (fp === 6) tagAt.push(toks.length - 1); else if (((fr >> 2) & 3) === 0) tagAt[tagAt.length - 1] = toks.length - 1; }
 ` : ''}        if (ft < 0) { templateStack.pop();${raw ? ' tagAt.pop();' : ''} elEnded = true; } else templateStack[templateStack.length - 1] = ft;
@@ -312,7 +316,7 @@ ${raw ? `        // an open tag ended: a raw-text name gives its body to a raw f
 ${raw ? `    if (templateStack.length > 0 && templateStack[templateStack.length - 1] === 3) {
       const i = tagAt[tagAt.length - 1] + 1;
       const [re, rk] = ${shared.elementFn('raw')}(src, toks[i].off, toks[i].end, pos);
-      emit(pos, re, rk, 0); templateStack.pop(); pos = re; continue;
+      emit(pos, re, rk, ${lidOfRegion('rk', 'src.slice(pos, re)', '0')}); templateStack.pop(); pos = re; continue;
     }
 ` : ''}`;
   const loopBody = `${sig ? '    if (specTok >= 0 && (specDone || specFail || pos >= n)) { specRewind(); continue; }\n' : ''}    const c = src.charCodeAt(pos);
