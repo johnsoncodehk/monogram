@@ -541,9 +541,13 @@ ${rxLoopBody}
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
-    lex_from(src, 0, false, 0, 0, 0, false, false, Vec::new(), false, false, &mut toks, 0);
-    toks.shrink_to_fit();
+    lex_into(src, &mut toks);
     toks
+}
+/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer).
+fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>) {
+    toks.clear();
+    lex_from(src, 0, false, 0, 0, 0, false, false, Vec::new(), false, false, toks, 0);
 }`;
   }
   if (tplOnly) {
@@ -559,9 +563,13 @@ ${loopBody}
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
-    lex_from(src, 0, false, Vec::new(), &mut toks, 0);
-    toks.shrink_to_fit();
+    lex_into(src, &mut toks);
     toks
+}
+/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer).
+fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>) {
+    toks.clear();
+    lex_from(src, 0, false, Vec::new(), toks, 0);
 }`;
   }
   if (rxTpl) {
@@ -577,21 +585,32 @@ ${loopBody}
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
-    lex_from(src, 0, false, 0, 0, 0, false, false, Vec::new(), false, false, Vec::new(), &mut toks, 0);
-    toks.shrink_to_fit();
+    lex_into(src, &mut toks);
     toks
+}
+/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer).
+fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>) {
+    toks.clear();
+    lex_from(src, 0, false, 0, 0, 0, false, false, Vec::new(), false, false, Vec::new(), toks, 0);
 }`;
   }
   if (rxOrTpl) {
     return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${stateImpl}fn lex<'a>(src: &'a str) -> Vec<Tok> {
+    let mut toks = Vec::new();
+    lex_into(src, &mut toks);
+    toks
+}
+/// Lexes src into out, replacing what it held and keeping its capacity (a reused builder's buffer).
+fn lex_into<'a>(src: &'a str, out: &mut Vec<Tok>) {
+    out.clear();
     let b = src.as_bytes();
     let n = b.len();
-${open}
+${open.replace('toks: Vec::new()', 'toks: std::mem::take(out)')}
     let mut pos = 0usize;
     while pos < n {
 ${loopBody}
     }
-    st.toks
+    *out = st.toks;
 }`;
   }
   if (newlineOnly) {
@@ -623,9 +642,13 @@ ${nlLoopBody}
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
-    lex_from(src, 0, false, 0, &mut toks, 0);
-    toks.shrink_to_fit();
+    lex_into(src, &mut toks);
     toks
+}
+/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer).
+fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>) {
+    toks.clear();
+    lex_from(src, 0, false, 0, toks, 0);
 }`;
   }
   return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool) {
@@ -639,9 +662,13 @@ ${loopBody.replace(/pending_nl/g, 'pending_nl').replace(/toks\.push/g, 'acc.push
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
-    lex_from(src, 0, false, &mut toks, 0);
-    toks.shrink_to_fit();
+    lex_into(src, &mut toks);
     toks
+}
+/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer).
+fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>) {
+    toks.clear();
+    lex_from(src, 0, false, toks, 0);
 }`;
 }
 
@@ -2353,8 +2380,11 @@ function emitParseWithHelpers(ir: ParserIR, shapeB: boolean): string {
   const reuseInit = `${reuse ? ', entries: Vec::new()' : ''}${shapeB ? ', segs: Vec::new()' : ''}`;
   return `
 pub fn parse_with<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> Option<B::H> {
-    let toks = lex(src);
-    let n = toks.len();
+    // A builder that parsed before is reused: its token buffer and arena are emptied (capacity
+    // kept), so nothing of the previous parse stays reachable and nothing is allocated again.
+    let mut toks = b.toks_mut().map(std::mem::take).unwrap_or_default();
+    lex_into(src, &mut toks);
+    b.restore((0, 0));
     let owned = std::mem::take(b);
     let mut p = Parser { toks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, src, b: owned, scratch: Vec::new()${reuseInit} };
     let root = match p.parse_${ir.entry}() {
