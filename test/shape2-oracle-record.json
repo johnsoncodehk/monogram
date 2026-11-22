@@ -3,41 +3,41 @@
   "corpus": "node_modules",
   "view": "expression statement",
   "units": 13292,
-  "compared": 11755,
-  "identical": 11755,
-  "outOfSubset": 1537
+  "compared": 12389,
+  "identical": 12383,
+  "outOfSubset": 903
  },
  "estree node_modules top-level statement": {
   "corpus": "node_modules",
   "view": "top-level statement",
   "units": 2478,
-  "compared": 856,
-  "identical": 856,
-  "outOfSubset": 1622
+  "compared": 1427,
+  "identical": 1424,
+  "outOfSubset": 1051
  },
  "estree node_modules file": {
   "corpus": "node_modules",
   "view": "file",
   "units": 186,
-  "compared": 3,
-  "identical": 3,
-  "outOfSubset": 183
+  "compared": 6,
+  "identical": 6,
+  "outOfSubset": 180
  },
  "tsc conformance/expressions expression statement": {
   "corpus": "conformance/expressions",
   "view": "expression statement",
   "units": 2176,
-  "compared": 1715,
-  "identical": 1714,
-  "outOfSubset": 459
+  "compared": 1784,
+  "identical": 1783,
+  "outOfSubset": 390
  },
  "tsc conformance/expressions top-level statement": {
   "corpus": "conformance/expressions",
   "view": "top-level statement",
   "units": 9208,
-  "compared": 5722,
-  "identical": 5721,
-  "outOfSubset": 3484
+  "compared": 5831,
+  "identical": 5830,
+  "outOfSubset": 3375
  },
  "tsc conformance/expressions file": {
   "corpus": "conformance/expressions",
