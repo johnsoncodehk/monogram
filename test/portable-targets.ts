@@ -117,6 +117,38 @@ const JS_DECORATORS = {
     'export @d default class {}', '@d default class C {}', 'x = @d function () {};',
   ],
 };
+// TypeScript decorators and modifiers before a declaration or a class expression, as tsc's
+// parser reads them (parseModifiers): decorators, modifier words, and a second decorator run
+// only after `export` / `default` (the two words a `@` may follow); every word is a modifier
+// only where tsc's nextTokenCanFollowModifier says so, and a run holds one `static` at most.
+const TS_DECORATORS = {
+  accept: [
+    '@d class C {}', '@d export class C {}', '@d export @e class C {}', 'export @d class C {}', 'public export @d class C {}',
+    '@d export default @e class {}', '@d export {a};', '@d export = x;', '@d interface I {}', '@d enum E {}', '@d const enum E {}',
+    '@d declare class C {}', '@d declare override class C {}', '@d export override class C {}', '@d override class C {}',
+    '@d in class C {}', '@d out class C {}', '@d default class C {}', '@d default abstract class C {}',
+    '@d default function f() {}', '@d public static abstract class C {}', 'static\nclass C {}',
+    'public\nclass C {}', '@d var x;', '@d function f() {}',
+    'x = @d class {};', 'x = @d @e class C {};', 'x = @d export @e class {};', 'x = @d abstract class {};', 'x = @d async class {};',
+    'x = @d default class {};', 'x = @d declare class {};', 'x = @d public static class {};', 'x = @d export default @e class {};',
+    'x = @d in out class {};',
+    // `async` before a declaration is a modifier word: the declaration follows on its line.
+    'declare var x;', 'declare let x: T;', 'declare const enum E {}', 'declare using x = f();', 'declare await using x = f();',
+    'async\nclass C {}', 'async class C {}',
+    'export default @d function f() {}', 'export default @d var x;', 'export default @d interface I {}', 'export default @d public class {}',
+    // tsc's parser reads `declare` before no declaration as an expression statement and skips the
+    // error for its missing `;` (parseErrorForMissingSemicolonAfter), so these are two statements.
+    'declare x;', 'declare @d class C {}', 'declare if (a) {}',
+    'export @d default function f() {}', 'export @d default abstract class C {}', 'export default @d class C {}',
+  ],
+  reject: [
+    'public @d class C {}', 'abstract @d class C {}', '@d public @e class C {}', '@d export abstract @e class C {}',
+    'export abstract @d class C {}', 'static static class C {}', '@d static static class C {}', '@d default x;', '@d default @e @f x;',
+    'x = abstract class {};', 'x = @d const class {};', 'x = @d static static class {};', 'x = @d export @e export @f class {};',
+    'x = @d public @e class {};',
+    'async @d class C {}', 'export @d default x;', 'export @d default @e class C {}',
+  ],
+};
 const EXPORT_DECLS = {
   accept: [
     'export var a = 1;', 'export let a\nx;', 'export const a = 1, b = 2;', 'export function f() {}', 'export async function f() {}',
@@ -496,7 +528,7 @@ const CASES: Case[] = [
     grammar: 'typescript', path: '../typescript.ts',
     accept: [
       ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...EXPORT_DECLS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
-      ...CTX_CASES.typescript.accept,
+      ...CTX_CASES.typescript.accept, ...TS_DECORATORS.accept,
       // A class heritage is a LeftHandSideExpression (see the JavaScript cases).
       'f(class extends (a, b) {});', 'f(class extends a[0] {});', 'f(class extends a`t` {});', 'f(class extends a?.b() {});',
       // `return` takes an expression only on its own line (a restricted production), so a
@@ -680,7 +712,7 @@ const CASES: Case[] = [
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
       'type T = | | A;', 'type T = A | | B;', 'type T = A & | B;', 'type T = & & A;', 'type T = & | A;', 'f<| | A>();', 'let x: [| | A];',
-      'const f = <>() => 1;', 'const f = async <>(a) => 1;', 'const f = <in T>() => 1;', 'f(<in out T>(a) => a);', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
+      'const f = <>() => 1;', 'const f = async <>(a) => 1;', 'const f = <in T>() => 1;', 'f(<in out T>(a) => a);', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, ...TS_DECORATORS.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '{ b(); }.x;', '{ static x }.y;', '{ static x }', '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;',
       'let[0] = 1;', '(async\nfunction f() {});',
