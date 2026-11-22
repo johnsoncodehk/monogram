@@ -1261,6 +1261,17 @@ const UNICODE_ACCEPT: string[] = [
   'let \u03C2 = \u03B1 + \u03B2;',  // Greek mix in expression
 ];
 
+// Non-ASCII at and inside tokens, compared as token streams (kind, text, newline flag, literal id)
+// in the parity corpus of the ECMAScript grammars: a lexer that tries at a non-ASCII byte only the
+// candidates that can begin with one must still give the interpreter's tokens.
+const NON_ASCII_LEX: string[] = [
+  ...UNICODE_ACCEPT,
+  'a\u2028b', 'a\u2029b', 'x\u00A0=\u00A0y;', '\uFEFFx\uFEFF;', 'a\u2028\u2029\u3000b', 'return\u2028x;',
+  '/* é\u2028 */ x', '/* 日本 */ x\n// é\u2029\ny', '// a\u2028\nb', '/** ドキュメント\u2029 */ y', '/* — ’ … */ z', '// — ’ …\nz',
+  'const r = /日本語/u.test(s);', 'x = a / 日 / b;', 'const t = `日本${変数}語 😀`;', "s = '日本\\'語' + \"é\";",
+  'const 変数 = 関数(引数, ŉame);', 'let café = naïve + résumé;', 'é', '😀', 'a\u0301b', 'x\u200Cy', '#!é\nx',
+];
+
 /** Reject cases. `lexMsg` set ⇒ expect that primary lexer message (≡ oracle). */
 const UNICODE_REJECT: { src: string; lexMsg: string | null }[] = [
   { src: '/* abc', lexMsg: null }, // unterminated block → `/`+`*` puncts → parse reject (not a lex throw)
@@ -1395,6 +1406,16 @@ const ECMASCRIPT = new Set(['javascript', 'typescript']);
 // and the targets it holds for (all when absent).
 type ExpectedFail = { grammars: string[]; reason: string; inputs?: string[]; oracleLexError?: RegExp; targets?: string[] };
 const CORPUS_EXPECTED_FAIL: ExpectedFail[] = [
+  {
+    // Owed (lexer lane, non-ASCII item): the Rust target's ID_Continue is `char::is_alphanumeric`
+    // (std has no general-category query), which lacks the combining marks (Mn / Mc) and connector
+    // punctuation (Pc) outside Other_Alphabetic, so `a` + U+0301 + `b` is one identifier in the
+    // interpreter and Go, an unexpected character in Rust. The fix is an ID_Continue table.
+    grammars: ['javascript', 'typescript'],
+    targets: ['rust'],
+    reason: 'Rust ID_Continue lacks Mn / Mc / Pc outside Other_Alphabetic (a combining mark continues no identifier)',
+    inputs: ['a\u0301b'],
+  },
   {
     // Owed: the rule lives in the interpreter's lexer alone (emit-lexer.ts lexIdentValid); a
     // portable lexer would need each target's Unicode ID_Start / ID_Continue tables to decode
@@ -1732,7 +1753,8 @@ for (const c of CASES) {
   {
     const t0 = Date.now();
     const tokenize = compileTokenizer(lexSpecOf(grammar)) as (s: string) => Tok[];
-    const inputs = [...parityInputs(grammar, tokenize, { refusedOperands: ECMASCRIPT.has(c.grammar) })];
+    const inputs: { src: string; kind: string }[] = [...parityInputs(grammar, tokenize, { refusedOperands: ECMASCRIPT.has(c.grammar) }),
+      ...(ECMASCRIPT.has(c.grammar) ? NON_ASCII_LEX.map((src) => ({ src, kind: 'non-ASCII lexing' })) : [])];
     const want = inputs.map((i) => oracleOut(i.src));
     const wantToks = inputs.map((i): TokStream => {
       try { return JSON.stringify(tokenize(i.src).map((t) => [t.type, t.text, (t as unknown as { newlineBefore: boolean }).newlineBefore])); } catch { return null; }

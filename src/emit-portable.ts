@@ -1570,10 +1570,11 @@ export type LexDispatchMeta = {
 
 export type LexDispatchArm = { bytes: number[]; indices: number[] };
 
-/** Build per-byte buckets (0..127) over a fixed global candidate sequence; fallback = full sequence. */
+/** Build per-byte buckets (0..127) over a fixed global candidate sequence; fallback (a non-ASCII
+ * unit at the token's start) = the candidates that may begin with one: first bytes unknown, or nonAscii. */
 export function buildLexDispatchPlan(firsts: (LexFirstBytes | null)[]): { arms: LexDispatchArm[]; fallbackIndices: number[] } {
   const n = firsts.length;
-  const fallbackIndices = [...Array(n).keys()];
+  const fallbackIndices = [...Array(n).keys()].filter((i) => firsts[i] === null || firsts[i]!.nonAscii);
   const asciiBuckets: number[][] = Array.from({ length: 128 }, () => []);
   for (let i = 0; i < n; i++) {
     const fb = firsts[i];
