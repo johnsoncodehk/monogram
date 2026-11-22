@@ -331,21 +331,16 @@ function lx_ext(src: string, e: number): number {
     : '';
   const nlState = nl ? newlineParts(nl, stateful ? 'emit' : 'push', ids).state : '';
   const nlStateFrom = nl ? newlineParts(nl, 'push', ids).stateFrom : '';
-  // A whitespace run is consumed in one dispatch round (see the Rust target): per unit only "is it
-  // still whitespace"; a run after a line terminator also takes further terminators.
+  // Whitespace is skipped before the dispatch, not dispatched (see the Rust target): per unit only
+  // "is it whitespace, is it a line terminator".
   const isWs = (v: string) => `${v} === 32 || ${v} === 9 || ${v} === 11 || ${v} === 12 || ${v} === 160 || ${v} === 5760 || (${v} >= 8192 && ${v} <= 8202) || ${v} === 8239 || ${v} === 8287 || ${v} === 12288 || ${v} === 65279`;
   const isNl = (v: string) => `${v} === 10 || ${v} === 13 || ${v} === 8232 || ${v} === 8233`;
-  const nlWs = nl ? newlineParts(nl, stateful ? 'emit' : 'push', ids).ws : `    if (${isNl('c')}) {
-      pendingNl = true; pos++;
-      for (let d = src.charCodeAt(pos); ${isWs('d')} || ${isNl('d')}; d = src.charCodeAt(pos)) pos++;
-      continue;
-    }
-    if (${isWs('c')}) {
-      pos++;
-      for (let d = src.charCodeAt(pos); ${isWs('d')}; d = src.charCodeAt(pos)) pos++;
-      continue;
-    }
+  // One comparison for the common non-whitespace unit (above space, below U+00A0).
+  const wsOrNl = (v: string) => `(${v} <= 32 ? ${v} === 32 || (${v} >= 9 && ${v} <= 13) : ${v} >= 160 && (${isWs(v)} || ${isNl(v)}))`;
+  const wsSkip = nl ? '' : `    for (let d = src.charCodeAt(pos); ${wsOrNl('d')}; d = src.charCodeAt(++pos)) if (${isNl('d')}) pendingNl = true;
+    if (pos >= n) break;
 `;
+  const nlWs = nl ? newlineParts(nl, stateful ? 'emit' : 'push', ids).ws : '';
   const pushHooks = nl && !stateful ? newlineParts(nl, 'push', ids).hooks : '';
   const pushFnDef = stateful ? '' : nl
     ? `  const push = (off: number, end: number, kid: number, lid: number) => {
@@ -353,7 +348,7 @@ ${pushHooks}    toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = fa
   };
 `
     : '  const push = (off: number, end: number, kid: number, lid: number) => { toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = false; };\n';
-  const loopBody = `    const c = src.charCodeAt(pos);
+  const loopBody = `${wsSkip}    const c = src.charCodeAt(pos);
     // JS line terminators LF/CR/LS/PS set newline-before, matching the interpreter (emit-lexer.ts).
 ${nlWs}${tplDispatch}${cascade}
 ${uniIdentFallbackTs}    throw new Error('Unexpected character at offset ' + pos + ': \\'' + src[pos] + '\\'');`;
