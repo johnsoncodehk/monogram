@@ -133,8 +133,11 @@ class LexScan {
         const { narrow, wide } = classParts(p.items);
         const m = inRanges('c', narrow);
         const head = [if_(ge('p', len('s')), [NONE]), let_('c', code('p'))];
-        if (p.negate) return [...head, if_(m, [NONE]), ...wide.map((ch) => if_(hasAt('p', ch), [NONE])), ret(add('p', I(1)))];
-        return [...head, if_(m, [ret(add('p', I(1)))]), ...wide.map((ch) => if_(hasAt('p', ch), [ret(add('p', litLen(ch)))])), NONE];
+        // A character beyond ASCII begins with a unit >= 128 in every target's units, so the
+        // class's wide characters are compared only there.
+        const beyond = (then: Stmt[]): Stmt[] => (wide.length ? [if_(ge('c', I(128)), then)] : []);
+        if (p.negate) return [...head, if_(m, [NONE]), ...beyond(wide.map((ch) => if_(hasAt('p', ch), [NONE]))), ret(add('p', I(1)))];
+        return [...head, if_(m, [ret(add('p', I(1)))]), ...beyond(wide.map((ch) => if_(hasAt('p', ch), [ret(add('p', litLen(ch)))]))), NONE];
       }
       case 'seq': {
         // Each step's position is its own local, checked to be a position in s before the
