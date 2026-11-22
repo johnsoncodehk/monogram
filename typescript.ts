@@ -39,6 +39,7 @@ import {
   Number_, String_, Template, Regex_, Decorator, PrivateField,
   notReserved, notReservedExpr, bindingIdentifier, asi, expressionStatement, conciseBody, classHeritageArms, newTargetArms, ecmaPrec, jsLedPrecs, jsScopes, jsBaseCanonical,
   forBindingArms, forHeadArms, forAwaitHeadArms, forStatement,
+  memberStart, memberAhead, memberWordRules, memberWord, exportDeclaration,
 } from './javascript.ts';
 
 // ── Type query reference (typeof's argument: just dotted identifiers) ──
@@ -97,6 +98,24 @@ const DecoratorExpr = rule($ => [
 // node keeps the param name out of `type`'s direct children (→ @variable), while the `: T`
 // annotation stays a nested `type` node (→ `T` still @type).
 const typeFnParam = () => tsRelax(Param, [opt('...'), Ident, opt('?'), opt(':', Type)], 'type_fn_param');
+
+// tsc's isStartOfType: whether the token here can begin a type, read from the tokens alone. It is
+// what decides a `T?` (parsePostfixTypeOrHigher): before a type start the `?` is a conditional
+// type's (or, after `as T`, the expression's), elsewhere it is the postfix nullable. A type
+// starts with an identifier or a contextual keyword (isIdentifier: not a reserved word), a
+// keyword type (`void`, `null`, `this`, `typeof`, `new`, `true`, `false`, `import`, `function`),
+// a literal or template, `{ [ < | & * ? ! ...`, a `-` before a number, or a `(` before what
+// begins a type or a parameter (isStartOfParenthesizedOrFunctionType: `)`, a `#name`, a
+// decorator, a modifier keyword, or a type start).
+const TypeStart = rule($ => [
+  alt(
+    [notReserved, Ident], 'void', 'null', 'this', 'typeof', 'new', 'true', 'false', 'import', 'function',
+    String_, Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, Template,
+    '{', '[', '<', '|', '&', '*', '?', '!', '...',
+  ),
+  ['-', alt(Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_)],
+  ['(', alt(')', PrivateField, Decorator, 'const', 'default', 'export', 'in', $)],
+]);
 
 const Type = rule($ => {
   const fnType = [opt(TypeParams), '(', sep(typeFnParam(), ','), ')', '=>', ReturnType];  // (a: T) => R  /  <T>(…) => R (the return may be a type predicate)
@@ -181,11 +200,9 @@ const Type = rule($ => {
     // starts no type (`function(if)`).
     ['function', '(', sep(alt([alt([alt('this', 'new'), ':'], not(alt('this', 'new'))), opt('...'), ReturnType]), ','), ')', opt(':', $)],
     // postfix nullable `T?`: tsc takes the `?` only when the NEXT token cannot start
-    // a type — otherwise the `?` belongs to a conditional type / an expression-level
-    // ternary after `as T`. tsc tests token-level isStartOfType; `not(alt('new', $))`
-    // mirrors it as a lookahead ('new' alone, a type START that a full type parse may
-    // still fail on, e.g. `x as T ? new X : y`). No line break before postfix (tsc).
-    [$, sameLine, '?', not(alt('new', $))],
+    // a type (`TypeStart`, its isStartOfType) — otherwise the `?` belongs to a conditional
+    // type / an expression-level ternary after `as T`. No line break before postfix (tsc).
+    [$, sameLine, '?', not(TypeStart)],
     [$, sameLine, '!'],   // postfix non-nullable: T!
     // mapped type (tsc's parseMappedType): `{`, an optional `readonly` (or `+readonly` /
     // `-readonly`), the type parameter `[K in T]` with an optional `as` clause, an optional `?`
@@ -209,10 +226,12 @@ const mappedTypeStart = alt([alt('+', '-'), 'readonly'], [opt('readonly'), '[', 
 
 // A modifier KEYWORD is a modifier only when the start of a member follows it; otherwise the
 // word is the member's NAME (`public() {}`, `static = 1`, `{ static: 1 }`, and equally after
-// other modifiers: `public static() {}`). This is tsc's parser rule (nextTokenCanFollowModifier).
+// other modifiers: `public static() {}`). This is tsc's parser rule (nextTokenCanFollowModifier),
+// and JavaScript's (`memberWord` in javascript.ts, which states the rule and the words `static`,
+// `get`, `set`, `async`, `accessor` once; the TypeScript words extend it).
 // A member start is a property name, `[` or `*` (tsc also lists `{` and `...`; no member
 // starts with either, so the word rejects under both readings). What differs per word is one
-// further condition, held in `modifierExtra`:
+// further condition, held in `modifierExtra` (JavaScript's `memberWordRules` and these):
 //   static              none                                (`static⏎x` is a static `x`)
 //   export              the start is not `as` or `*`; a `default` start is one `default`
 //                       takes (`export default class: T`; `export default: T` is a member
@@ -238,32 +257,21 @@ const mappedTypeStart = alt([alt('+', '-'), 'readonly'], [opt('readonly'), '[', 
 // so the member start `memberAhead` asks for still fails there.
 // Every modifier run of class, object-literal and type members is built from `modifierWord`,
 // so no word is consumed as a modifier unchecked.
-const memberStart = alt(Ident, PrivateField, String_, Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, '[', '*');
-const memberAhead = not(not(memberStart));
 // tsc's canFollowExportModifier and nextTokenCanFollowDefaultKeyword, read at the word after
 // `export` / `default`. (Each one-token alternation sits in its own double `not`, which the
 // emitted parsers test as one token set.)
 const exportAhead = [not(alt('as', '*')), not(not(alt(Decorator, memberStart)))];
 const defaultAhead = alt(not(not(alt('class', 'function', 'interface', Decorator))), ['abstract', sameLine, 'class'], ['async', sameLine, 'function']);
+// JavaScript's words (`memberWordRules`: static, get, set), extended with TypeScript's.
 const modifierExtra: Record<string, unknown[]> = {
-  static: [],
+  ...memberWordRules,
   export: [not(alt('as', '*')), not(['default', not(defaultAhead)]), not(['type', not(exportAhead)])],
   default: [not(not(defaultAhead))],
   const: [not(not('enum'))],
-  get: [not('*')],
-  set: [not('*')],
 };
-const modifierWord = (words: string[], { sameLineConst = false } = {}) => {
-  const ruled = (w: string) => w in modifierExtra && !(sameLineConst && w === 'const');
-  const sameLineWords = words.filter(w => !ruled(w));
-  return alt([
-    alt(
-      ...words.filter(ruled).map(w => [w, ...modifierExtra[w]]),
-      ...(sameLineWords.length ? [[alt(...sameLineWords), sameLine]] : []),
-    ),
-    memberAhead,
-  ]);
-};
+const { const: _const, ...classBodyExtra } = modifierExtra;
+const modifierWord = (words: string[], { sameLineConst = false } = {}) =>
+  memberWord(words, sameLineConst ? classBodyExtra : modifierExtra);
 // A modifier run holds AT MOST ONE `static` (tsc stops taking `static` as a modifier once it
 // has one; ECMAScript's ClassElement has a single `static` slot): the only reading of a
 // second `static` is the member NAME, so `static static x` has no production. `run` is that
@@ -947,8 +955,8 @@ const Decl = rule($ => [
   ['async', not('function'), $],
   ['namespace', ...bindingIdentifier, many('.', Ident), '{', many(Stmt), '}'],   // dotted name: `namespace A.B.C { … }`
   ['module', alt([...bindingIdentifier, many('.', Ident)], String_), '{', many(Stmt), '}'],   // `module A.B.C { … }` | `module "x" { … }`
-  ['export', 'as', 'namespace', ...bindingIdentifier, asi()],   // UMD NamespaceExportDeclaration — BEFORE the lenient `export alt($, Stmt)` (else `as` wraps as an expr-statement)
-  ['export', alt($, Stmt)],
+  ['export', 'as', 'namespace', ...bindingIdentifier, asi()],   // UMD NamespaceExportDeclaration — BEFORE `exportDeclaration`
+  exportDeclaration($, Stmt, ['var', 'let', 'const', 'using', ['await', 'using']]),
   // decorators may also sit BETWEEN `export` and `default` (`export @dec default
   // class C {}` — tsc parses the soup in either spot; ordering is a checker error).
   ['export', many(DecoratorExpr), 'default', alt(
@@ -1059,6 +1067,7 @@ export default defineGrammar({
     TypeParams, TypeParam,
     Decl, ClassMember, EnumMember,
     ImportClause, ImportSpecifier, ExportSpecifier, ModuleReference,
+    TypeStart,
     Program,
   },
 

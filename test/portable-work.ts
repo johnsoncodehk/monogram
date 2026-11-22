@@ -117,7 +117,6 @@ const TS_CONSTRUCTS: Record<string, (d: number) => string> = {
 // that parse it more than once. Each is owed its own change (a grammar decision, or an engine
 // mechanism that shares a sub-parse between candidates).
 const TS_KNOWN_GROWTH: Record<string, string> = {
-  'conditional type': "Type's postfix-nullable arm `[$, sameLine, '?', not(alt('new', $))]`: its lookahead parses the whole type after the `?` (the true branch), then the conditional arm parses it again (tsc tests one token, isStartOfType)",
   'arrow default parameter': "Expr: `(a = …)` is parsed by the arrow arm as a parameter list and by the parenthesized arm as `(Expr)`, so a default that holds an arrow function is parsed twice per level",
 };
 
