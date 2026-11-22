@@ -34,7 +34,7 @@ const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
 // keyed: the candidate is reached through its Dispatch key, which already tested the first token.
 const guardCond = (g: Guard, t: string, w: '' | 'W', keyed: boolean): string[] => {
   if (g === null) return [];
-  const parts = keyed && !g.first.not ? [] : [`inTokenSet(${g.first.id}, ${t})`];
+  const parts = keyed ? [] : [`inTokenSet(${g.first.id}, ${t})`];
   if (g.second !== null) parts.push(`p.secondIn(${g.second.id})`);
   return parts;
 };

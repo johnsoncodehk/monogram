@@ -44,10 +44,9 @@ const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
 const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
   isFirstGuardable(f, nAlts);
 // A longest-match candidate's Guard (emit-portable.ts) over the buffered token t, as conditions;
-// keyed: the candidate is reached through its Dispatch key, which already tested the first token
-// unless the guard leaves some of that key's literals out (`not`).
+// keyed: the candidate is reached through its Dispatch key, which already tested the first token.
 const guardCond = (g: Guard, t: string, keyed: boolean, recv = 'self'): string[] =>
-  g === null ? [] : [...(keyed && !g.first.not ? [] : [`in_token_set(${g.first.id}, &${t})`]), ...(g.second !== null ? [`${recv}.second_in(${g.second.id})`] : [])];
+  g === null ? [] : [...(keyed ? [] : [`in_token_set(${g.first.id}, &${t})`]), ...(g.second !== null ? [`${recv}.second_in(${g.second.id})`] : [])];
 // `if <conds> <body>` as one statement (just the body when there is no condition).
 const ifRs = (conds: string[], body: string) => (conds.length ? `        if ${conds.join(' && ')} ${body}` : `        ${body}`);
 // A candidate list's Dispatch over the buffered token t: arm(i, keyed) is candidate i's statement.
