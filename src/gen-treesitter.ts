@@ -1649,7 +1649,8 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
   // set keeps tree-sitter's default keyword extraction. A reserved word that no rule writes (JS
   // `enum`: a ReservedWord of the lexical grammar that no syntactic production uses) is no token,
   // and tree-sitter can only reserve a token: it gets a hidden token rule of its own, referenced by
-  // the sets only (tree-sitter keeps a rule a reserved set names). It is a keyword (word-shaped, no
+  // the sets only (tree-sitter keeps a rule a reserved set names; the word is checked to be a plain
+  // word, so it is also its own regex). It is a keyword (word-shaped, no
   // other token matches it) that no parse state shifts, so where it is reserved it is an error,
   // and elsewhere keyword extraction gives the word token, exactly as for any keyword.
   const reservedSets = ctx.reserved.plan.sets;
@@ -1669,7 +1670,10 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
     for (const { name, words } of reservedSets) block.push(`    ${name}: $ => [${words.map(word).join(', ')}],`);
     block.push(`    ${UNRESERVED_SET}: $ => [],`, '  },', '');
     lines.splice(reservedAt, 0, ...block);
-    for (const [w, name] of ownToken) ruleEntries.push(`    ${name}: $ => ${jsString(w)}`);
+    // A pattern, not a string: tree-sitter turns a rule that is one token into that token only when
+    // the token is auxiliary (a pattern) or the rule visible; a hidden rule over a string stays a
+    // non-terminal, which a reserved set cannot hold ("Cannot store non-terminals in a TokenSet").
+    for (const [w, name] of ownToken) ruleEntries.push(`    ${name}: $ => /${w}/`);
   }
 
   lines.push(ruleEntries.join(',\n\n'));
