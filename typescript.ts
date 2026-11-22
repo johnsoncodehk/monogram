@@ -15,8 +15,8 @@ function tsFnArms(nameParts, body) {
   return [
     ['function', ...nameParts, opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType), resetCtx(body)],
     ['function', '*', ...nameParts, opt(TypeParams), '(', sep(yieldCtx(Param), ','), ')', opt(":", ReturnType), yieldCtx(body)],
-    ['async', 'function', ...nameParts, opt(TypeParams), '(', sep(awaitCtx(Param), ','), ')', opt(":", ReturnType), awaitCtx(body)],
-    ['async', 'function', '*', ...nameParts, opt(TypeParams), '(', sep(asyncGenCtx(Param), ','), ')', opt(":", ReturnType), asyncGenCtx(body)],
+    ['async', sameLine, 'function', ...nameParts, opt(TypeParams), '(', sep(awaitCtx(Param), ','), ')', opt(":", ReturnType), awaitCtx(body)],
+    ['async', sameLine, 'function', '*', ...nameParts, opt(TypeParams), '(', sep(asyncGenCtx(Param), ','), ')', opt(":", ReturnType), asyncGenCtx(body)],
   ];
 }
 
@@ -37,7 +37,7 @@ import {
   Shebang, JSDoc, TripleSlash, LineComment, BlockComment,
   Ident, HexNumber, OctalNumber, BinaryNumber, BigInt_,
   Number_, String_, Template, Regex_, Decorator, PrivateField,
-  notReserved, notReservedExpr, bindingIdentifier, asi, classHeritageArms, newTargetArms, ecmaPrec, jsLedPrecs, jsScopes, jsBaseCanonical,
+  notReserved, notReservedExpr, bindingIdentifier, asi, expressionStatement, conciseBody, classHeritageArms, newTargetArms, ecmaPrec, jsLedPrecs, jsScopes, jsBaseCanonical,
 } from './javascript.ts';
 
 // ── Type query reference (typeof's argument: just dotted identifiers) ──
@@ -483,15 +483,14 @@ const Expr = rule($ => [
   // binary/logical/conditional operand nor an assignment target — so each arm is capped BELOW
   // the conditional `?`: it parses only at an assignment-or-looser minBp and admits no led once
   // parsed (`() => {} || a` rejects, NOT `(() => {}) || a`); a `||`/`?:` INSIDE an expression
-  // body (`() => a || b`) is unaffected. Body `alt(Block, $)` (Block FIRST) = the spec's
-  // ConciseBody `[lookahead ≠ {] AssignmentExpression | { FunctionBody }`.
-  capExpr('?', 'async', opt(TypeParams), '(', sep(awaitCtx(Param), ','), ')', opt(":", ReturnType), '=>', awaitCtx(alt(Block, $))),
-  capExpr('?', opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType), '=>', resetCtx(alt(Block, $))),
+  // body (`() => a || b`) is unaffected. The body is the JavaScript ConciseBody (`conciseBody`).
+  capExpr('?', 'async', opt(TypeParams), '(', sep(awaitCtx(Param), ','), ')', opt(":", ReturnType), '=>', awaitCtx(conciseBody(Block, $))),
+  capExpr('?', opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType), '=>', resetCtx(conciseBody(Block, $))),
   // async arrow with a BARE parameter: `async err => …`. tsc requires async and the
   // parameter on the same line (`async\nx => …` is `async;` then a plain arrow — ASI).
   // Without this arm the bare form only "parsed" by splitting into two statements.
-  capExpr('?', 'async', sameLine, awaitCtx(notReservedExpr, Ident), '=>', awaitCtx(alt(Block, $))),
-  capExpr('?', notReservedExpr, Ident, '=>', resetCtx(alt(Block, $))),
+  capExpr('?', 'async', sameLine, awaitCtx(notReservedExpr, Ident), '=>', awaitCtx(conciseBody(Block, $))),
+  capExpr('?', notReservedExpr, Ident, '=>', resetCtx(conciseBody(Block, $))),
   ['yield', alt(['*', $], [opt($)])],   // yield e | yield* e (delegate) | yield
   ['(', $, many(',', $), ')'],
   [$, 'satisfies', Type],
@@ -646,17 +645,11 @@ const Stmt = rule($ => [
   // lenient on the `{` form) correctly fail. (Guards the first binding; see ForHead for for-of.)
   [opt('await'), 'using', not(alt('[', '{')), sep(Binding, ','), asi()],
   Decl,
-  // ExpressionStatement lookahead restriction (ES2023 §14.5): a statement may not
-  // begin with `function` / `async function` — those are declarations at statement
-  // level. Without this guard, longest-match lets the expression arm win whenever a
-  // call/member tail makes it LONGER (`function f(){}\n(g)()` merged into one
-  // IIFE-style expression statement; tsc keeps them separate). `{` needs no guard
-  // (the Block alternative ties in length and wins as the first-listed alternative).
-  // `class` is NOT guarded yet: the class-DECLARATION arm is narrower than tsc's
-  // (extends-expression heritage, bare `;` class elements, decorator placements), so
-  // 31 tsc-valid corpus files still rely on the class-EXPRESSION fallback — widen the
-  // declaration arm first, then guard.
-  [not(alt('function', 'class', ['async', 'function'], ['let', '['])), Expr, many(',', Expr), asi()],
+  // The JavaScript expression statement (`expressionStatement`): tsc's parseStatement also takes
+  // `{` as a block and `function`, `class`, `@` and same-line `async function` as declarations
+  // before it tries an expression. The TypeScript declaration words (`type`, `namespace`,
+  // `declare`, `abstract`, …) are contextual: `type = 1;` is an expression statement.
+  expressionStatement(Expr),
 ]);
 
 // ── Type Parameters ──

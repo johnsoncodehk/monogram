@@ -364,8 +364,15 @@ const CASES: Case[] = [
       'function f() {} g()', 'if (a) {} b', 'import a from "m"\nx', 'export { a }\nx', 'export default a\nb',
       'export default class {} g()', 'export default class C {} g()', 'class C { a\nb }', 'class C { m() {} n() {} }',
       'class C { m() {}; n() {} }', 'class C { get g() {} set s(v) {} }',
+      // An expression statement does not begin with `{`, `function`, `async` `function` on one
+      // line, `class`, `let [` or a decorator: there it is a block or a declaration, and what
+      // follows is the next statement.
+      '{}\n(x)', 'function f() {}\n(x)', 'class C {}\n[0]', '@dec class C {}\n(x)', 'async\nfunction f() {}\n(x)',
+      'if (a) {}\n(x)', '({}).x;', '({ a: 1 }.x);', '(function () {})();', '(@dec class {}).x;', 'x = () => ({}).y;', 'let = 1;',
     ],
     reject: ['function (', 'a +;', 'if x {}', '{ a: }', 'for (;;', 'a ? b ;',
+      '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
+      '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;', 'let[0] = 1;', '(async\nfunction f() {});',
       // ... so no parameter list takes a reserved word as a name, `this` included (a `this`
       // parameter is TypeScript's).
       'function f(in) {}', 'function f(if, b) {}', 'x = function (a, while) {};', 'class C { m(in) {} }', 'x = { m(class) {} };',
@@ -578,9 +585,18 @@ const CASES: Case[] = [
       'import defer * as async from "m";', 'type T = A extends infer string ? 1 : 0;',
       'namespace A.if {}', 'module A.in {}', 'enum E { if, in }',
       'type T = { [this in K]: 1 };', 'type T = { readonly [K in U]: 1 };',
+      // An expression statement does not begin with `{`, `function`, `async` `function` on one
+      // line, `class`, `let [` or a decorator (see the JavaScript cases); the TypeScript
+      // declaration words stay contextual.
+      '{}\n(x)', 'function f() {}\n(x)', 'class C {}\n[0]', '@dec class C {}\n(x)', 'async\nfunction f() {}\n(x)',
+      'if (a) {}\n(x)', '({}).x;', '({ b(); }).x;', '(@dec class {}).x;', 'x = () => ({}).y;', 'let = 1;',
+      'type = 1;', 'namespace.x;', 'declare(x);', 'abstract(x);',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;', ...NO_IN_HEADS.reject,
+      '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
+      '{ b(); }.x;', '{ static x }.y;', '{ static x }', '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;',
+      'let[0] = 1;', '(async\nfunction f() {});',
       'import defer * from "m";', 'import defer * as from "m";',
       'a + b = 1;', 'a < b = 1;', 'a in b = 1;', 'a as T = 1;', '-x = 1;', 'x++ = 1;', '++x++;', '++-x;', '++ ++x;', '-x ** 2;', 'typeof x ** 2;', 'm > B<C> >>= 1;',
       'x\n++\n++\ny;', 'x\n++\n++y;', 'x\n--\n--\ny;', 'x\n++\n--\ny;', 'var z =\nx\n++\n++\ny;',

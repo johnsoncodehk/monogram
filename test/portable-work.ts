@@ -96,10 +96,6 @@ const CONSTRUCTS: Record<string, (d: number) => string> = {
 // that parse it more than once. Each is owed its own change (a grammar decision, or an engine
 // mechanism that shares a sub-parse between candidates).
 const KNOWN_GROWTH: Record<string, string> = {
-  'decorated class': "Stmt: after Decl matched `@dec class C {…}`, the expression-statement alternative parses it again as a decorated class expression (its lookahead does not exclude a leading decorator)",
-  'if': 'Stmt: after Block matched `{ if (a) {…} }`, the expression-statement alternative parses it again as an object literal with a method named `if`',
-  'while': 'as `if`: an object literal with a method named `while`',
-  'labelled block': 'as `if`: the expression-statement alternative re-reads each block as an object literal',
   'array literal': 'predates longest match (0990a37 grows the same): an alternative that fails after the nested literal, then one that parses it again',
   'conditional type': 'predates longest match (0990a37 grows the same): an alternative that fails after the nested type, then one that parses it again',
 };
