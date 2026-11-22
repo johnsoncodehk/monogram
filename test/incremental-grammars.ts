@@ -283,6 +283,35 @@ for (const [name, docs] of Object.entries(FRAME_DOCS)) {
 }
 console.log(`  lexer-frame edits: ${frameSteps} one-character edits over ${Object.values(FRAME_DOCS).flat().length} documents`);
 
+// The per-token frame-depth record is one byte and only a zero is read: it must SATURATE at 255.
+// A wrap at 256 nested holes would record 0 inside them and offer those tokens as relex anchors.
+// Documents with 254 … 257 (and 300) nested template holes: an edit inside the innermost hole,
+// one that closes a template there, and two after the nest.
+let deepSteps = 0;
+{
+  const em = (await import(`${TMP}/javascript.mts?v=` + process.pid)) as Em;
+  const session = em.createParser(), fresh = em.createParser();
+  for (const n of [254, 255, 256, 257, 300]) {
+    const doc = 'a = ' + '`${'.repeat(n) + 'x' + '}`'.repeat(n) + ';\nb = 1;\nc = 2;';
+    const x = doc.indexOf('x');
+    const edits: Edit[] = [
+      { start: x, end: x + 1, text: 'y' }, { start: x + 1, end: x + 1, text: '`' },
+      { start: doc.indexOf('1;'), end: doc.indexOf('1;') + 1, text: '3' }, { start: doc.indexOf('2;'), end: doc.indexOf('2;') + 1, text: '`' },
+    ];
+    for (const edit of edits) {
+      totalSteps++; deepSteps++;
+      const next = doc.slice(0, edit.start) + edit.text + doc.slice(edit.end);
+      const cst = session.parse(doc); session.edit(cst, [edit]); const fc = fresh.parse(next);
+      if (fc.errors.length > 0) totalErr++;
+      const a = JSON.stringify(objectify(fresh.tree, (fns) => fresh.visit(fc, fns))) + JSON.stringify(fc.errors);
+      const b = JSON.stringify(objectify(session.tree, (fns) => session.visit(cst, fns))) + JSON.stringify(cst.errors);
+      if (a !== b) { fails++; if (failures.length < 10) failures.push(`javascript ${n} nested holes ${JSON.stringify(edit)}: edit ≠ fresh`); continue; }
+      totalEqual++;
+    }
+  }
+}
+console.log(`  deep-hole edits: ${deepSteps} edits on documents with 254-300 nested template holes`);
+
 console.log(`incremental-grammars: ${totalEqual}/${totalSteps} steps equal+consistent across ${GRAMMARS.length} grammars (${totalErr} recovered with errors)`);
 for (const s of failures) console.log('  ✗ ' + s);
 if (fails > 0) {
