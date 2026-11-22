@@ -71,7 +71,43 @@ has every row of the table above; `jsTarget` and its gates are gone, the gates p
 portable targets.
 Acceptance: adding a target means writing one renderer.
 
-## 2. Second-language proof
+## 2. Editor artifacts derived from grammar data, not built-in vocabulary
+
+**Why.** The highlighters are what the project's user ships, and what the first outside
+evaluation asked for. That evaluation (a TSX dialect; reproduced on master `1d41fb2`) found the
+parser accepts each dialect form but every form fails in at least one generator: 26 of its 38
+editor test cases fail and innermost-scope agreement is 80.0%. The causes are in the engine:
+
+- `src/gen-tm.ts` detects element syntax from the grammar, then emits a fixed repository of
+  patterns that reads no rule (`generateJsxPatterns`), so a dialect's additions never reach
+  the output; JSDoc has a built-in sub-grammar in the same way. No gate checks the generators
+  for language-specific code; `test/agnostic.ts` covers the parser.
+- A token-stream grammar cannot enter a text or raw-text region for one construct. The parser's
+  JSX child is `Ident | Number | String` and a few punctuators, so `<p>Don't</p>` is a parse
+  error in Monogram's own TSX grammar; embeds (`source.css` in `<style>`) exist only in
+  whole-file markup mode.
+- tree-sitter node names are the rule names (one `expr` node for every expression), only two
+  field names exist, and only `highlights.scm` is generated. Generating the TypeScript and TSX
+  parsers costs about 12 CPU-minutes each (10,085 and 12,847 states) against 5 s for
+  JavaScript.
+- `gen-tm`'s alternative expansion runs out of memory on some grammar shapes (a second
+  decorator run on class members), which has forced grammar rules to be written as lookahead
+  instead of structure.
+
+**Plan.** Gates first (in place since PR #153: a dialect fixture and generator-agnosticism
+checks with their expected failures recorded, captures-with-`patterns` counts pinned, all six
+tree-sitter packages built with every query compiled); then keyword boundaries from each
+literal's own characters, scope names as data, bounded alternative expansion, tree-sitter node
+and field names from the grammar's `arm` / `field` names, and **lexer regions declared in the
+grammar**: nested text and raw-text regions with embeds, of which whole-file markup is the
+special case. Lexer regions are also what the portable targets need to stop refusing markup
+grammars (item 1) and what fixes TSX's own text.
+
+**Done means:** every expected-fail row of the dialect and agnosticism gates passes; no
+generated TextMate grammar has a capture with `patterns`; element patterns come from the
+grammar's rules; a dialect's grammar file is all a dialect needs.
+
+## 3. Second-language proof
 
 **Why.** Everything measured so far is the TypeScript / JavaScript family, whose grammars and
 engine grew together. Whether the design holds for other languages is unknown until a grammar
@@ -81,51 +117,82 @@ of a different family runs on it untuned.
 engine or the printers, compared against that language's fastest hand-written parser.
 Scheduled after the shared layer (item 1) converges.
 
+A first, partial result exists: the TSX dialect of item 2. The parser side held (each dialect
+form parses; whole files fail only where text regions are needed); the generators did not.
+
 **Done means:** the gap is known and published.
 
-## 3. Engine expressiveness instead of grammar workarounds
+## 4. Decisions made at generation time, and a grammar that means what it says
 
-**Why.** Where the engine lacks a mechanism the specification uses, the grammar imitates it
-with lookahead or duplicated arms. That costs work at parse time, makes the grammar harder to
-read than the specification, and leaves cases uncovered.
+**Why.** A parser's least work is one look at each token and one construction of each node;
+anything more is the parser finding out at run time what the grammar could have told the
+generator. Measured on `checker.ts` (master before this item): two candidates both succeed in
+2.2% of choices, yet 31% of rule calls happen inside attempts that are thrown away, almost all
+of them candidates that provably fail on their first one or two tokens (an expression is
+attempted at every statement and fails 39,829 times out of 44,949). That is about the size of
+the parser-side instruction gap to a hand-written parser. The same missing analysis is why the
+engine lacks what the specification's notation has, and the grammar imitates it with lookahead
+or duplicated arms.
 
-- **Parameterised productions, completed.** `[Await]` / `[Yield]` exist as contexts
-  (`awaitCtx`, `yieldCtx`; one context word in the portable parsers). Still owed:
-  - `[In]`, today imitated by `exclude('in', …)` at each `for` head site (`forHeadArms` in
-    `javascript.ts`);
-  - the `[Yield]` / `[Await]` line-break and assignment cases: `javascript.ts` reads `await`
-    and `yield` as unary prefix operators (`ecmaPrec`) beside a `yield` arm, where the
-    specification has YieldExpression at AssignmentExpression level with
-    `[no LineTerminator here]` before its `*` or operand (so `function* g() { yield⏎* x; }`
-    parses today);
-  - module-level `await`: at a script's top level `await (1,);` parses as a call of an
-    identifier `await`; a Module goal, where `await` is reserved, is not modelled.
-- **Cover grammars.** Arrow parameters and a parenthesised expression (`(a, b)` until `=>`)
-  are two arms, each parsed in full; a cover grammar parses the text once and decides after.
-- **Left context.** The decorator and modifier placement cases listed as owed in
-  `typescript.ts` (the declaration prefix comment before `classDecls`, and the member
-  decorators' second run) each need to know what came before the arm.
+**Plan.**
 
-**Done means:** each listed case is expressed by an engine mechanism, the grammar workaround it
-replaces is deleted, and the case is a test.
+- **Refutation guards**: a candidate that cannot match the buffered token is not attempted.
+  First piece: a candidate's leading one-token tests become its guard (PR #157); then
+  complement guards for unguarded candidates, guards on repetition bodies, two-token guards
+  where they pay. The interpreter keeps full longest match and takes no guard; gates check every
+  refusal against it.
+- **Committed choices**: where the analysis proves one viable alternative, take it without a
+  candidate frame.
+- **A build-time decision report** per grammar: for each choice point, decided by one token,
+  by two, by declaration order, by longest match (with a witness), or dead. A first run found
+  alternatives that can never win (the keyword types shadowed by the identifier arm) and four
+  ambiguities resolved only by arm order.
+- **Parameterised productions, completed**, as the notation of the specification rather than
+  per-case engine features: `[In]` (today `exclude('in', …)` at each `for` head site); the
+  `[Yield]` / `[Await]` line-break and assignment cases (`function* g() { yield⏎* x; }` parses
+  today); module-level `await`; and "left context" as a parameter (`Decl[±Prefixed]` for the
+  decorator and modifier placement cases owed in `typescript.ts`).
+- **Cover grammars.** Arrow parameters and a parenthesised expression are two arms, each parsed
+  in full; a cover grammar parses the text once and decides after.
+- **Total parsing in the portable engine** follows from committed choices: the expected set at
+  a failure is the failing decision's keys, and recovery synchronises on what may follow.
 
-## 4. Output contract: grammar plus ShapeSpec
+**Done means:** the decision report exists for every grammar and has no unexplained entry; each
+listed case is expressed by a mechanism, its grammar workaround deleted, and the case is a
+test; the portable parsers recover from errors.
+
+## 5. Output contract: grammar plus shape spec
 
 **Why.** The grammar is shape-agnostic: one grammar must be able to give a tsc-shaped AST and
-ESTree. A consumer supplies a `ShapeSpec` ([SHAPE.md](SHAPE.md)). Today a spec binds partly by
-position and arm index (`{ at: n }` fields, `altIndices`, `ctx.altPath`), so a grammar change
-that reorders or adds an arm can change an AST; grammar edits have kept arm order for that
-reason (`typescript.ts`, `Param`, commit `2b2f65f`). That coupling is a defect.
+ESTree, each consumer writing only a spec. The first spec format ([SHAPE.md](SHAPE.md)) binds by
+position and arm index, needs hand-written functions, and had never been compared with a
+reference parser (its ESTree-like fixture matched acorn on 0 of 1,330 files).
 
-**Done means:**
+**State.**
 
-- stable arm and child names in the grammar API, and shape specs that bind by name only;
-- two reference shapes as proof, a tsc-shaped AST and ESTree, each checked node for node
-  against its reference parser (`tsc`; an ESTree parser);
-- the shape layer generated from the shared layer for all three targets (today TS and Rust
-  have one, Go none).
+- Stable names in the grammar API (`arm(name, …)`, `field(name, item)`), transparent to every
+  parser and carried by the portable IR (PRs #146, #152).
+- Spec v2 (`src/shape2-schema.ts`, `src/shape2-eval.ts`): a closed calculus over those names:
+  a node's value synthesized from its arm's named children, synthesized and inherited scalar
+  attributes, a fixed operator set, no escape to code; a reference interpreter and a load-time
+  type check (PR #151).
+- An oracle harness against `tsc` and acorn, and a recorded scoreboard (PRs #146, #155). On the
+  expression subset, two declarative specs over the one grammar: ESTree equals acorn on 36,360
+  of 37,081 expression statements of real JavaScript (98.1%; the rest is one recorded gap, the
+  directive prologue), and the tsc shape equals `tsc` on 9,478 of 9,490 (99.9%; the 12 are
+  grammar defects).
 
-## 5. test262 as JavaScript's oracle
+**Plan.** Statements, declarations and types in both shapes, scored per statement and per
+file; then the spec compiled at generation time and fused into the engine plan, so a rule
+function constructs the consumer's typed node directly (a CST is one shape among others);
+incrementality declared in the spec for representation choices only (positions, shareable
+nodes, parent pointers) and derived otherwise from the calculus's dependencies.
+
+**Done means:** two reference shapes, a tsc-shaped AST and ESTree, each equal node for node to
+its reference parser on the recorded corpora; specs bind by name only; the shape layer is
+generated from the shared layer for all three targets and the first format is deleted.
+
+## 6. test262 as JavaScript's oracle
 
 **Why.** JavaScript syntax follows the ECMAScript productions ([CORRECTNESS.md](CORRECTNESS.md)).
 `tsc` is the oracle for TypeScript-only syntax only; measured against `tsc`'s JS-mode parser
@@ -135,18 +202,19 @@ parser accepts what the specification rejects.
 **Done means:** a gate runs `javascript.ts` over test262's syntax tests (positive and negative
 parse cases), with a pinned record of every file in the style of `JS-CONFORMANCE.md`.
 
-## 6. Every target measured on every pull request
+## 7. Every target measured on every pull request
 
-**Why.** The per-PR `profile` job gives Callgrind instruction counts for Rust only. Go and TS
-have allocation counts (`alloc-work`) and on-demand timing (`measure-targets`), but no work
-measure: a change that improves Rust and leaves Go and TS behind shows in no Go or TS record.
-A wall-clock number without the CPU model is not evidence ([MEASUREMENT.md](MEASUREMENT.md)).
+**Why.** A change that improves one target and leaves the others behind must show on the pull
+request that makes it (the first day of Go instruction counts found 17% of a Go parse inside
+the map runtime). A wall-clock number without the CPU model is not evidence ([MEASUREMENT.md](MEASUREMENT.md)).
 
-**Done means:** the profile job's summary has, per input, a deterministic work count for Rust,
-Go and TS side by side, A against M, and every wall-clock figure the project records names the
-runner's CPU.
+**State.** In place since PR #140: the profile job's summary has, per input, Rust and Go
+instruction counts and TypeScript / JavaScript block-execution counts and allocations side by
+side, A against M, lists single-target changes, and names the runner's CPU. Block counts detect
+a change of control flow, not its cost or direction. Fresh-mode Go and a deterministic cost
+measure for V8 are still missing.
 
-## 7. Speed, memory and size
+## 8. Speed, memory and size
 
 Speed, memory and emitted size are all goals; none is absolute. A trade-off is judged case by
 case on measured numbers (instructions, allocations, page faults, emitted bytes) and reported
@@ -165,6 +233,9 @@ being moved into the shared layer first (item 1), and after that a new target is
   that no token records.
 - **Highlighter long tail**: where a construct provably exceeds the TextMate model, the derived
   tree-sitter target resolves it ([HIGHLIGHTER-EVIDENCE.md](HIGHLIGHTER-EVIDENCE.md#the-ceiling-and-the-bar-for-claiming-it)).
+- **JavaScript productions still accepted against the specification** and the remaining
+  TypeScript-only gaps against `tsc`'s parser: recorded per case in [CORRECTNESS.md](CORRECTNESS.md)
+  and the grammar files; several wait on item 4.
 
 ## Not planned
 

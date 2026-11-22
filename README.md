@@ -245,9 +245,12 @@ reference parser. The test taxonomy (gates, metrics, ledger, benches): [docs/TES
 ## Where this is going
 
 [docs/ROADMAP.md](docs/ROADMAP.md), in order: one portable engine and shared runtime for all
-targets (and retiring the emitted JS parser), a second language family compared against its
-fastest hand-written parser, engine mechanisms in place of grammar workarounds, grammar plus ShapeSpec as the output contract, test262 as JavaScript's oracle, and
-every target measured on every pull request.
+targets (and retiring the emitted JS parser); editor artifacts derived from grammar data, with
+lexer regions a grammar can declare; a second language family compared against its fastest
+hand-written parser; decisions made at generation time instead of attempts at parse time, with
+the specification's parameterised productions and cover grammars; grammar plus shape spec as
+the output contract; test262 as JavaScript's oracle; and every target measured on every pull
+request.
 
 ## Prior art
 

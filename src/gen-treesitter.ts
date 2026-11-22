@@ -267,9 +267,11 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext): string {
   switch (expr.type) {
     case 'literal': {
       // A flow-collection delimiter literal (`[` `]` `{` `}`) is emitted by the external scanner (so
-      // flow_depth persists), so reference its synthetic scanner token instead of the bare string.
+      // flow_depth persists), so reference its synthetic scanner token instead of the bare string —
+      // aliased back to the literal, so the tree carries the same anonymous `"{"` node a plain literal
+      // would (the hidden external alone is no node: a query naming `"{"` would not compile).
       const flowSym = ctx.flowLiteralTokens.get(expr.value);
-      if (flowSym) return `$.${flowSym}`;
+      if (flowSym) return `alias($.${flowSym}, ${jsString(expr.value)})`;
       return jsString(expr.value);
     }
     case 'ref': {
