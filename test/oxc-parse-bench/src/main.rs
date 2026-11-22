@@ -6,22 +6,33 @@ use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 
+// BENCH_MODE=reuse: one Allocator for the warm-up and every timed iteration, reset() before each
+// parse (oxc_allocator 0.126: rewinds its last, biggest chunk and frees the others). Default fresh:
+// a new Allocator per iteration, dropped at its end.
 fn bench_one(path: &str, src: &str) {
+    let reuse = std::env::var("BENCH_MODE").map_or(false, |m| m == "reuse");
+    let mut kept = Allocator::default();
+    let mut once = |kept: &mut Allocator| {
+        if reuse {
+            kept.reset();
+            let ret = Parser::new(kept, src, SourceType::ts()).parse();
+            black_box(ret.program);
+            black_box(ret.errors);
+        } else {
+            let allocator = Allocator::default();
+            let ret = Parser::new(&allocator, src, SourceType::ts()).parse();
+            black_box(ret.program);
+            black_box(ret.errors);
+        }
+    };
     // warmup (JIT/allocator/cache)
-    for _ in 0..3 {
-        let allocator = Allocator::default();
-        let ret = Parser::new(&allocator, src, SourceType::ts()).parse();
-        black_box(ret.program);
-    }
+    for _ in 0..3 { once(&mut kept); }
 
     // timed: run until >= 1s elapsed, min 5 iters
     let mut n = 0u64;
     let start = Instant::now();
     loop {
-        let allocator = Allocator::default();
-        let ret = Parser::new(&allocator, src, SourceType::ts()).parse();
-        black_box(ret.program);
-        black_box(ret.errors);
+        once(&mut kept);
         n += 1;
         if n >= 5 && start.elapsed().as_millis() >= 1000 {
             break;

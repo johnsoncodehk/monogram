@@ -23,6 +23,11 @@ VARIANTS="A:cbb58a0 P:0990a37 Q:103b396 B:$B_SHA"
 # BENCH_GRAMMAR=<name>: the grammar file every variant emits (default typescript); with `javascript`
 # only the inputs that grammar accepts (in B) are timed.
 GRAMMAR=${BENCH_GRAMMAR:-typescript}
+# BENCH_MODE=fresh|reuse (default fresh, so older numbers stay comparable): fresh = a new CstBuilder /
+# Allocator per timed parse; reuse = one kept across parses (parse_with / Allocator::reset). The
+# binaries read it from the environment.
+export BENCH_MODE=${BENCH_MODE:-fresh}
+case $BENCH_MODE in fresh|reuse) ;; *) echo "BENCH_MODE must be fresh or reuse, not $BENCH_MODE"; exit 1;; esac
 if [ -n "${BENCH_EXTRA:-}" ]; then
   [ -n "${BENCH_ONLY:-}" ] && VARIANTS="B:$B_SHA D:$D_SHA"
   VARIANTS="$VARIANTS E:$(git rev-parse "$BENCH_EXTRA")"
@@ -34,6 +39,7 @@ nproc; uname -a; cat /proc/loadavg
 rustc -vV; cargo -V; node --version
 echo "origin/master = $D_SHA"
 echo "grammar = $GRAMMAR"
+echo "mode = $BENCH_MODE"
 for kv in $VARIANTS; do echo "${kv%%:*} = $(git log -1 --format='%h %ad %s' --date=iso "${kv#*:}")"; done
 
 echo "=== emit monogram Rust parsers"
