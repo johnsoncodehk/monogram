@@ -237,7 +237,7 @@ const LID_INTERP_CLOSE = ${lidOf(ids, tpl.interpClose)};
   function prevIsValue(): boolean {
     if (!hasPrev) return false;
     if (_pav[prevLid]) return lastBang;
-    const isExprKw = prevKid === KID_IDENT && !!_rxT[prevLid];
+    const isExprKw = prevKid === KID_IDENT && !!_rxT[prevLid] && !(hasPrev2 && !!_mem[bpLid]);
     const isParenHead = prevLid === LID_RPAREN && lastClose;
     return !isExprKw && !isParenHead && (!!_divK[prevKid] || !!_divT[prevLid]);
   }
@@ -268,7 +268,7 @@ ${emitHooks}
   const rxStateFrom = rx ? `  function prevIsValue(): boolean {
     if (!hasPrev) return false;
     if (_pav[prevLid]) return lastBang;
-    const isExprKw = prevKid === KID_IDENT && !!_rxT[prevLid];
+    const isExprKw = prevKid === KID_IDENT && !!_rxT[prevLid] && !(hasPrev2 && !!_mem[bpLid]);
     const isParenHead = prevLid === LID_RPAREN && lastClose;
     return !isExprKw && !isParenHead && (!!_divK[prevKid] || !!_divT[prevLid]);
   }

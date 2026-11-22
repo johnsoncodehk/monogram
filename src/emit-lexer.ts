@@ -649,7 +649,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`            // the candidate's LEADING-TRIVIA flags must match too (parsers read them)`);
     emit(`            && altFl«!»[wndPtr] === tkFl[tokN - 1]`);
     emit(`            && templateStack.length === 0 && altDp«!»[wndPtr] === 0`);
-    emit(`            && LX_PFXV[t] === 0 && LX_PARENKW[t] === 0`);
+    emit(`            && LX_PFXV[t] === 0 && LX_PARENKW[t] === 0 && LX_EXPRKW[t] === 0`);
     emit(`            && !(k === K_PUNCT && (t === ${tLParen} || t === ${tRParen}))) {`);
     emit(`          const q = altPd«!»[wndPtr];`);
     emit(`          if (q < dmgMinOld) dmgMinOld = q;`);
@@ -684,7 +684,8 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   emit(`    if (k < 0) return false;`);
   emit(`    const t = tokN > 0 ? tkT[tokN - 1] : pvT;`);
   emit(`    if (LX_PFXV[t] !== 0) return lastBangWasPostfix;`);
-  emit(`    if (k === ${kIdent} && LX_EXPRKW[t] !== 0) return false;`);
+  // an expression-head keyword heads an expression, except as a member name (`a.new / 2`)
+  emit(`    if (k === ${kIdent} && LX_EXPRKW[t] !== 0 && !(tokN >= 2 && LX_MEMBER[tkT[tokN - 2]] !== 0)) return false;`);
   emit(`    if (t === ${tRParen} && lastCloseWasParenHead) return false;`);
   emit(`    return LX_DIVK[k] !== 0 || LX_DIVT[t] !== 0;`);
   emit(`  }`);
@@ -1242,7 +1243,9 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       emit(`    // template depth zero, and no live cross-token flag: not a control-head ')',`);
       emit(`    // not a postfix-ambiguous op, not a control KEYWORD. Paren depth may be`);
       emit(`    // anything — the live stack is reconstructed from the recorded depths.`);
-      emit(`    if (tkDp[b] === 0 && LX_PFXV[tkT[b]] === 0 && LX_PARENKW[tkT[b]] === 0 && !(tkK[b] === 1 && tkT[b] === ${tRParen})) return b;`);
+      // (an expression-head keyword too: whether it is a member name reads the token before it,
+    // which a window seeded with one previous token does not have)
+    emit(`    if (tkDp[b] === 0 && LX_PFXV[tkT[b]] === 0 && LX_PARENKW[tkT[b]] === 0 && LX_EXPRKW[tkT[b]] === 0 && !(tkK[b] === 1 && tkT[b] === ${tRParen})) return b;`);
       emit(`  }`);
       emit(`  return -1;`);
     }

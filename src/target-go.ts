@@ -460,7 +460,7 @@ const lidInterpClose uint16 = ${lidOf(ids, tpl.interpClose)}
 \tprevIsValue := func() bool {
 \t\tif !hasPrev { return false }
 \t\tif _pav[prevLid] { return lastBang }
-\t\tisExprKw := prevKid == kidIdent && _rxT[prevLid]
+\t\tisExprKw := prevKid == kidIdent && _rxT[prevLid] && !(hasPrev2 && _mem[bpLid])
 \t\tisParenHead := prevLid == lidRParen && lastClose
 \t\treturn !isExprKw && !isParenHead && (_divK[prevKid] || _divT[prevLid])
 \t}
@@ -498,7 +498,7 @@ ${emitHooks}
   const rxStateFrom = rx ? `\tprevIsValue := func() bool {
 \t\tif !hasPrev { return false }
 \t\tif _pav[prevLid] { return lastBang }
-\t\tisExprKw := prevKid == kidIdent && _rxT[prevLid]
+\t\tisExprKw := prevKid == kidIdent && _rxT[prevLid] && !(hasPrev2 && _mem[bpLid])
 \t\tisParenHead := prevLid == lidRParen && lastClose
 \t\treturn !isExprKw && !isParenHead && (_divK[prevKid] || _divT[prevLid])
 \t}
