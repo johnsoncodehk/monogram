@@ -29,6 +29,7 @@ const GATES: Gate[] = [
   { group: 'core', name: 'cst-text-invariant', args: ['test/cst-text-invariant.ts'] },
   { group: 'conformance', name: 'ts-ast-structure', args: ['test/ts-ast-verify.ts'] },
   { group: 'conformance', name: 'shape-oracle', args: ['test/shape-oracle.ts'] },
+  { group: 'conformance', name: 'shape2-oracle', args: ['--stack-size=7000', 'test/shape2-oracle.ts', '--check'] },
   { group: 'core', name: 'cst-match-totality', args: ['test/cst-match-totality.ts'] },
   { group: 'core', name: 'grammar-names', args: ['test/grammar-names-transparent.ts'] },
   { group: 'core', name: 'shape2-eval', args: ['--stack-size=7000', 'test/shape2-eval.ts'] },
