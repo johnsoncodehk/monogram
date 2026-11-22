@@ -191,6 +191,22 @@ const forHeads: { accept: string[]; reject: string[]; tscDeparts: string[] } = {
   ],
 };
 
+// ── Declaration lists and `with` (14.3 VariableStatement / LexicalDeclaration, 14.11) ──
+// A VariableDeclarationList / BindingList has one or more declarations and no trailing comma, so a
+// `var` / `let` / `const` / `using` statement needs a binding; `let;` and `let` alone are the
+// expression statement of the identifier `let` (the sloppy reading), and so is `using;`. The object
+// of `with ( Expression )` is an Expression, a comma list included.
+const declarationLists: { accept: string[]; reject: string[]; tscDeparts: string[] } = {
+  accept: [
+    'let;', 'let', 'let\nx = 1;', 'var a, b;', 'let a = 1, b;', 'const a = 1, b = 2;', 'using;', 'using\nx;',
+    'with (a, b) c;', 'with (a) c;', 'with (a, b, c) {}',
+  ],
+  reject: [
+    'var;', 'const;', 'var a,', 'var a,;', 'let a,;', 'const a = 1,;', 'var\n;', 'with () c;', 'with (a,) c;',
+  ],
+  tscDeparts: ['var;', 'const;', 'var a,', 'var a,;', 'let a,;', 'const a = 1,;', 'var\n;'],
+};
+
 // ── Class element words (15.7 ClassElement, MethodDefinition; decorators proposal) ──
 // `static`, `async`, `accessor`, `get` and `set` are the element's keyword only where the rest
 // of that production follows; elsewhere the word is the element's name. `static` and `get` /
@@ -300,7 +316,19 @@ for (const [want, codes] of [[true, classElements.accept], [false, classElements
 console.log('\n── class element words ──');
 console.log(`  ${classElements.accept.length + classElements.reject.length - c_fail.length}/${classElements.accept.length + classElements.reject.length} as the productions (${classElements.tscDeparts.length} where tsc departs)`);
 for (const c of c_fail) console.log('    - ' + c);
-// Corpora 1, 2, the statement ends, the for heads and the class element words are hard gates.
+const d_fail: string[] = [];
+for (const [want, codes] of [[true, declarationLists.accept], [false, declarationLists.reject]] as const) {
+  for (const code of codes) {
+    const tscWant = declarationLists.tscDeparts.includes(code) ? !want : want;
+    if (jsAccepts(code) !== tscWant) d_fail.push(`tsc JS-mode ${tscWant ? 'rejects' : 'accepts'} ${JSON.stringify(code)}: fix the case or tscDeparts`);
+    if (weAccept(code) !== want) d_fail.push(`we ${want ? 'reject' : 'accept'} ${JSON.stringify(code)}`);
+  }
+}
+console.log('\n── declaration lists and with ──');
+console.log(`  ${declarationLists.accept.length + declarationLists.reject.length - d_fail.length}/${declarationLists.accept.length + declarationLists.reject.length} as the productions (${declarationLists.tscDeparts.length} where tsc departs)`);
+for (const c of d_fail) console.log('    - ' + c);
+// Corpora 1, 2, the statement ends, the for heads, the class element words and the declaration
+// lists are hard gates.
 // ── Expected-fail: inputs the productions reject that the grammar accepts today, each with its
 // cause. The gate fails when one of them is rejected (remove it then) or tsc stops rejecting it.
 const expectedFail: { code: string; reason: string }[] = [
@@ -319,5 +347,5 @@ for (const { code, reason } of expectedFail) {
 console.log('\n── expected-fail ──');
 console.log(`  ${expectedFail.length} accepted although the productions reject them (${new Set(expectedFail.map((e) => e.reason)).size} cause(s))${x_fail.length ? '' : ', as recorded'}`);
 for (const c of x_fail) console.log('    - ' + c);
-const gateFailed = v_fail.length + r_leak.length + s_fail.length + f_fail.length + c_fail.length + x_fail.length > 0;
+const gateFailed = v_fail.length + r_leak.length + s_fail.length + f_fail.length + c_fail.length + d_fail.length + x_fail.length > 0;
 if (gateFailed) process.exit(1);

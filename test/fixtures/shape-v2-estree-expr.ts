@@ -51,6 +51,9 @@ const orNull = (name: string): Term => orElse(child(name), c(null));
 /** A statement's optional label. */
 const label: Term = iff(present('label'), idOf('label'), c(null));
 
+/** A declaration list's bindings: the first and the rest. */
+const bindings: Term = list(child('binding'), spread(child('bindingRest')));
+
 // ── `for` (ECMA-262 14.7.4, 14.7.5) ──
 // The grammar factors a `for` statement's `( … )` into ForHead / ForAwaitHead, whose node is not
 // the statement's: both heads are RECORD-VALUED (an interface: `get`), and Stmt.for_ builds
@@ -104,8 +107,8 @@ const FOR_RULES: Shape2Spec['rules'] = {
 /** The statements (ECMA-262 14), one node per Stmt arm. */
 const STATEMENTS: Record<string, Term> = {
   block: child('block'),
-  variable: node('VariableDeclaration', { declarations: child('binding'), kind: text('kind') }),
-  using: node('VariableDeclaration', { declarations: child('binding'), kind: iff(present('awaitKeyword'), c('await using'), c('using')) }),
+  variable: node('VariableDeclaration', { declarations: bindings, kind: text('kind') }),
+  using: node('VariableDeclaration', { declarations: bindings, kind: iff(present('awaitKeyword'), c('await using'), c('using')) }),
   if_: node('IfStatement', { test: sequenceOf('condition', 'conditionRest'), consequent: child('consequence'), alternate: orNull('alternative') }),
   while_: node('WhileStatement', { test: sequenceOf('condition', 'conditionRest'), body: child('body') }),
   do_: node('DoWhileStatement', { body: child('body'), test: sequenceOf('condition', 'conditionRest') }),
@@ -122,7 +125,7 @@ const STATEMENTS: Record<string, Term> = {
   labelled: node('LabeledStatement', { body: child('body'), label: idOf('label') }),
   empty: node('EmptyStatement'),
   debugger_: node('DebuggerStatement'),
-  with_: node('WithStatement', { object: child('object'), body: child('body') }),
+  with_: node('WithStatement', { object: sequenceOf('object', 'objectRest'), body: child('body') }),
   for_: branch('alt', { paren: forStatement(false), await_: forStatement(true) }),
   decl: child('decl'),
 };

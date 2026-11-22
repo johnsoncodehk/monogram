@@ -42,9 +42,10 @@ const comma: Term = commaOf('first', 'comma', 'rest');
 /** A statement's optional label. */
 const label: Term = iff(present('label'), idOf('label'), absent);
 /** A declaration list spanning its keyword(s) to its last binding; `flags` from the keyword. */
-// tsc's parser takes an empty list (`var;`: its checker reports it), which then ends at its keyword.
-const declarationList = (from: string, flags: Term): Term =>
-  iff(present('binding'), node('VariableDeclarationList', { declarations: child('binding'), flags }, { from, to: 'binding' }), node('VariableDeclarationList', { declarations: child('binding'), flags }, { from, to: from === 'awaitKeyword' ? 'usingKeyword' : from }));
+const declarationList = (from: string, flags: Term): Term => {
+  const declarations = list(child('binding'), spread(child('bindingRest')));
+  return iff(present('bindingRest'), node('VariableDeclarationList', { declarations, flags }, { from, to: 'bindingRest' }), node('VariableDeclarationList', { declarations, flags }, { from, to: 'binding' }));
+};
 
 // ── `for` (ECMA-262 14.7.4, 14.7.5) ──
 // The grammar factors a `for` statement's `( … )` into ForHead / ForAwaitHead, whose node is not
@@ -117,7 +118,7 @@ const STATEMENTS: Record<string, Term> = {
   labelled: node('LabeledStatement', { label: idOf('label'), statement: child('body') }),
   empty: node('EmptyStatement'),
   debugger_: node('DebuggerStatement'),
-  with_: node('WithStatement', { expression: child('object'), statement: child('body') }),
+  with_: node('WithStatement', { expression: commaOf('object'), statement: child('body') }),
   for_: branch('alt', { paren: forStatement(absent), await_: forStatement(token('AwaitKeyword', 'awaitKeyword')) }),
   decl: child('decl'),
 };
