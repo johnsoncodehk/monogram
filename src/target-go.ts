@@ -9,11 +9,12 @@
 // stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
-import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, dispatchWalk, gtCompLit, type StepLowering, type DispatchLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
+import { UNI_BLOCK_BITS, UNI_LEAF_BITS, uniIdentPlan } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
@@ -41,13 +42,12 @@ const guardCond = (g: Guard, t: string, w: '' | 'W', keyed: boolean): string[] =
 const ifGo = (conds: string[], body: string) => (conds.length ? `\tif ${conds.join(' && ')} ${body}` : `\t${body}`);
 // A candidate list's Dispatch over the buffered token t: arm(i, keyed) is candidate i's statement.
 // nilable: t may be nil (no token left), which no key matches.
+const dispatchGoL = (t: string): DispatchLowering => ({
+  sw: (by, cases) => `\tswitch ${t}.${by === 'lid' ? 'Lid' : 'Kid'} {\n${cases.map((c) => `\tcase ${c.key}:\n${c.arms.join('\n')}`).join('\n')}\n\t}`,
+  nil: (sw) => `\tif ${t} != nil {\n${sw}\n\t}`,
+});
 const dispatchGo = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, nilable = false): string =>
-  d.sections.map((sec) => {
-    if (sec.by === 'rest') return sec.arms.map((i) => arm(i, false)).join('\n');
-    const id = (k: string) => (sec.by === 'lid' ? lidOf(ids, k) : kidOf(ids, k));
-    const sw = `\tswitch ${t}.${sec.by === 'lid' ? 'Lid' : 'Kid'} {\n${sec.groups.map((g) => `\tcase ${id(g.key)}:\n${g.arms.map((i) => arm(i, true)).join('\n')}`).join('\n')}\n\t}`;
-    return nilable ? `\tif ${t} != nil {\n${sw}\n\t}` : sw;
-  }).join('\n');
+  dispatchWalk(d, ids, arm, dispatchGoL(t), nilable);
 // Whether the candidate i that just ended at pos beats the best so far: it ends past it, or — a
 // Dispatch `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is
 // kept only in a list that has ranked candidates.
@@ -70,9 +70,21 @@ const branchGoW = (cond: string, recv: string) => `{ ${ckptGoW(recv)}; if ${cond
 // beats the best so far it becomes the best (`win` records it and moves the arena checkpoint past
 // its node), else `lost` drops what it built; either way the position goes back to `save`.
 const lostGo = 'p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]';
-const lostGoW = (recv: string) => `p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}`;
+const lostGoW = (_recv: string) => `p.scratch = p.scratch[:sb]; ${arenaRestore()}`;
 const candGo = (d: Dispatch, i: number, cond: string, win: string, lost: string) =>
   `{ if ${cond} && ${beatsGo(d, 'p.pos', i)} { ${win} } else { ${lost} }; p.back(save) }`;
+
+// The Go spelling of an rd rule's shell (emit-portable.ts, ruleShell), common to its three forms.
+// PREDICTIVE arms are joined on one line: Go's semicolon insertion after a line-final `}` would
+// break `}` / `else if` across lines.
+const goRuleBase = (r: RdRule, ids: LexIdPlan, guardW: '' | 'W') => ({
+  ind: '\t',
+  ifThen: (test: string, then: string) => `if ${test} ${then}`,
+  first: (f: FirstSig) => firstCond(f, 't', ids),
+  armJoin: ' ',
+  guard: (g: Guard, keyed: boolean, stmt: string) => { const c = guardCond(g, '_ft', guardW, keyed); return ifGo(c.length && !keyed ? ['_ft != nil', ...c] : c, stmt); },
+  dispatch: dispatchGoL('_ft'),
+});
 
 // ── The recognize form (ParserIR.forms) ──
 // A step that advances and reports whether it matched, building nothing, printed for one of the
@@ -103,53 +115,43 @@ const CURSOR_GO: GoEngine = {
   mark: '', reset: '',
 };
 const branchGoR = (cond: string) => `{ sp := p.pos; if ${cond} { return true }; p.back(sp) }`;
-function stepCondR(s: Step, ids: LexIdPlan, e: GoEngine): string {
-  if ('share' in s && s.share !== undefined) return `p.sub${s.share}R()`;
-  return stepBodyR(s, ids, e);
+// The step walk's Go spelling (emit-portable.ts, StepLowering) for one engine: the native engine
+// building ('', receiver `engine`), the builder engine building ('W', receiver `recv`), or either
+// one recognizing ('R', ParserIR.forms; e: whose recognizers). Go: a body or a step's statements
+// are a func literal called in place.
+type GoForm = '' | 'W' | 'R';
+function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine): StepLowering {
+  const fn = (cond: string) => `func() bool { return ${cond} }`;
+  const L: StepLowering = {
+    inner: () => L,
+    shared: (id) => `p.sub${id}${f}()`,
+    lit: (s) => (gtCompLit(ids, s) ? `p.${e.matchComp}(${lidOf(ids, s.value)})` : `p.matchLit${f}(${lidOf(ids, s.value)})`),
+    tok: (name) => `p.matchTok${f}(${kidOf(ids, name)})`,
+    rule: (name) => (f === 'R' ? `p.rec${name}()` : f === 'W' ? `p.callRuleW((*${recv}).parse${name}W)` : `p.callRule(p.parse${name}())`),
+    // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
+    ruleBp: (name, bp) => (f === 'R' ? e.bpFound(name, bp) : f === 'W' ? `p.callRuleW(func(q *${recv}) (spanned, bool) { return q.bpW_${name}(${bp}) })` : `p.callRule(p.bp_${name}(${bp}))`),
+    star: (body) => `p.star${f}(${fn(body)})`,
+    opt: (body) => `p.opt${f}(${fn(body)})`,
+    sep: (elem, delim) => `p.sepBy${f}(${fn(elem)}, ${sepDelimLid(ids, delim)})`,
+    altlit: (values) => `p.altLit${f}([]uint16{${values.map((v) => lidOf(ids, v)).join(', ')}})`,
+    look: (id, is) => `${is ? '' : '!'}p.look${id}()`,   // recognize form (lookFnsR)
+    ahead: (set, is) => `p.${e.ahead}(${set}, ${is})`,
+    aheadCtx: (set, is) => (is ? `(p.${e.ahead}(${set}, true) || p.ctxWord())` : `(p.${e.ahead}(${set}, false) && !p.ctxWord())`),
+    sameLine: () => `func() bool { t := p.${e.peek}(); return t != nil && !t.Nl }()`,
+    inPlace: (_kind, stmts) => `func() bool { ${stmts} }()`,
+    ret: (cond) => `return ${cond}`,
+    // A `ctx` step's body is a boolean expression: no return path leaves between the two assignments.
+    suppress: (set, cond) => `p.suppressNext = ${set}; _r := (${cond}); p.suppressNext = 0; return _r`,
+    ctx: (ctx, cond) => `_c := p.ctx; p.ctx = ${ctx}; _r := (${cond}); p.ctx = _c; return _r`,
+    branch: (cond) => (f === 'R' ? branchGoR(cond) : f === 'W' ? branchGoW(cond, recv) : branchGo(cond)),
+    guarded: (first, branch) => `if _ft != nil && ${firstCond(first, '_ft', ids)} ${branch}`,
+    choice: (peek, tries) => `${peek ? `_ft := p.${e.peek}(); ` : ''}${tries.join('; ')}; return false`,
+    // Same-line `} else if`: newlines break Go ASI.
+    predictive: (arms) => `t := p.${e.peek}(); if t == nil { return false }; ${arms.map((a) => `if ${firstCond(a.first, 't', ids)} ${a.branch}`).join(' else ')}; return false`,
+  };
+  return L;
 }
-function stepBodyR(s: Step, ids: LexIdPlan, e: GoEngine): string {
-  const sc = (x: Step) => stepCondR(x, ids, e);
-  switch (s.t) {
-    case 'lit': return gtCompLit(ids, s) ? `p.${e.matchComp}(${lidOf(ids, s.value)})` : `p.matchLitR(${lidOf(ids, s.value)})`;
-    case 'tok': return `p.matchTokR(${kidOf(ids, s.name)})`;
-    case 'rule': return `p.rec${s.name}()`;
-    // Only a Pratt rule is called at a binding power; it is recognized by its building form (ParserIR.forms).
-    case 'ruleBp': return e.bpFound(s.name, s.bp);
-    case 'star': return `p.starR(func() bool { return ${sc(s.step)} })`;
-    case 'opt': return `p.optR(func() bool { return ${s.steps.map(sc).join(' && ')} })`;
-    case 'sep': return `p.sepByR(func() bool { return ${sc(s.elem)} }, ${sepDelimLid(ids, s.delim)})`;
-    case 'altlit': return `p.altLitR([]uint16{${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}})`;
-    case 'alt': case 'suppress': case 'ctx': return `func() bool { ${stepStmtsR(s, ids, e)} }()`;
-    case 'look': return `${s.is ? '' : '!'}p.look${s.id}()`;
-    case 'ahead': return `p.${e.ahead}(${s.set}, ${s.is})`;
-    case 'aheadCtx': return s.is ? `(p.${e.ahead}(${s.set}, true) || p.ctxWord())` : `(p.${e.ahead}(${s.set}, false) && !p.ctxWord())`;
-    case 'seq': return `(${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'})`;
-    case 'sameLine': return `func() bool { t := p.${e.peek}(); return t != nil && !t.Nl }()`;
-  }
-}
-function stepStmtsR(s: Step, ids: LexIdPlan, e: GoEngine): string {
-  const sc = (x: Step) => stepCondR(x, ids, e);
-  switch (s.t) {
-    case 'alt': {
-      const fs = s.firsts ?? [];
-      if (s.predictive) {
-        const arms = s.branches.map((br, i) => `if ${firstCond(fs[i]!, 't', ids)} ${branchGoR(br.length ? br.map(sc).join(' && ') : 'true')}`).join(' else ');
-        return `t := p.${e.peek}(); if t == nil { return false }; ${arms}; return false`;
-      }
-      const nAlts = s.branches.length;
-      const needPeek = s.branches.some((_, i) => isGuardable(fs[i] ?? null, nAlts));
-      const tries = s.branches.map((br, i) => {
-        const body = branchGoR(br.length ? br.map(sc).join(' && ') : 'true');
-        const f = fs[i] ?? null;
-        return isGuardable(f, nAlts) ? `if _ft != nil && ${firstCond(f, '_ft', ids)} ${body}` : body;
-      }).join('; ');
-      return `${needPeek ? `_ft := p.${e.peek}(); ` : ''}${tries}; return false`;
-    }
-    case 'suppress': return `p.suppressNext = ${s.set}; _r := (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); p.suppressNext = 0; return _r`;
-    case 'ctx': return `_c := p.ctx; p.ctx = ${s.ctx}; _r := (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); p.ctx = _c; return _r`;
-    default: return `return ${stepBodyR(s, ids, e)}`;
-  }
-}
+const stepCondR = (s: Step, ids: LexIdPlan, e: GoEngine): string => walkExpr(s, goSteps(ids, 'R', e.recv, e));
 // ParserIR.lookaheads, one method each, in recognize form: whether the body matches here. It
 // undoes the position, and the scratch list and the arena / builder too when its body runs a
 // Pratt rule's building form (Forms.lookBuilds).
@@ -161,43 +163,26 @@ function lookFnsR(ir: ParserIR, ids: LexIdPlan, e: GoEngine, onCursor: boolean):
   }).join('');
 }
 function sharedFnsR(ir: ParserIR, ids: LexIdPlan, e: GoEngine, onCursor: boolean): string {
-  return ir.shared.map((s, id) => (ir.forms.recognizeShared[id] && ir.forms.cursorOnly.shared[id] === onCursor ? `func (p *${e.recv}) sub${id}R() bool { ${stepStmtsR(s, ids, e)} }\n` : '')).join('');
+  return ir.shared.map((s, id) => (ir.forms.recognizeShared[id] && ir.forms.cursorOnly.shared[id] === onCursor ? `func (p *${e.recv}) sub${id}R() bool { ${walkStmts(s, goSteps(ids, 'R', e.recv, e))} }\n` : '')).join('');
 }
 // A rule in recognize form: whether it matches here, advancing past it. An rd rule has rdRule's
 // control flow building nothing: its longest match compares end positions only (a tie only
 // chooses which node, and none is built). A Pratt rule runs its building form and drops the node.
 function ruleR(r: RdRule | PrattRule, ids: LexIdPlan, e: GoEngine): string {
   if (r.kind === 'pratt') return `func (p *${e.recv}) rec${r.name}() bool { return ${e.parsed(r.name)} }`;
-  const cond = (alt: Step[]) => alt.map((x) => stepCondR(x, ids, e)).join(' && ');
-  if (r.predictive) {
-    const arm = (steps: Step[], i: number) => `\t${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${cond(steps)} { return true } }`;
-    return `func (p *${e.recv}) rec${r.name}() bool {
-\tsave := p.pos
-\tt := p.${e.peek}(); if t == nil { return false }
-${r.alts.map(arm).join(' ')}
-\tp.back(save)
-\treturn false
-}`;
-  }
-  if (r.alts.length === 1) {
-    return `func (p *${e.recv}) rec${r.name}() bool {
-\tsave := p.pos
-\tif ${cond(r.alts[0]!)} { return true }
-\tp.back(save)
-\treturn false
-}`;
-  }
-  const alt = (i: number, keyed: boolean) => {
-    const g = guardCond(r.altGuard[i]!, '_ft', e.w, keyed);
-    return ifGo(g.length && !keyed ? ['_ft != nil', ...g] : g, `{ if ${cond(r.alts[i]!)} && p.pos > bestPos { bestPos = p.pos }; p.back(save) }`);
-  };
-  const needPeek = r.altGuard.some((g) => g !== null);
-  return `func (p *${e.recv}) rec${r.name}() bool {
-\tsave := p.pos; bestPos := save
-${needPeek ? `\t_ft := p.${e.peek}()\n` : ''}${dispatchGo(r.altDispatch, '_ft', ids, alt, true)}
-\tp.pos = bestPos
-\treturn bestPos > save
-}`;
+  return ruleShell(r, ids, {
+    ...goRuleBase(r, ids, e.w),
+    steps: goSteps(ids, 'R', e.recv, e),
+    fn: (lines) => `func (p *${e.recv}) rec${r.name}() bool {\n${lines.join('\n')}\n}`,
+    accept: () => '{ return true }',
+    open: '\tsave := p.pos',
+    peekOrFail: `\tt := p.${e.peek}(); if t == nil { return false }`,
+    fail: '\tp.back(save)\n\treturn false',
+    openBest: () => '\tsave := p.pos; bestPos := save',
+    peekOpt: `\t_ft := p.${e.peek}()`,
+    cand: (_d, _i, cond) => `{ if ${cond} && p.pos > bestPos { bestPos = p.pos }; p.back(save) }`,
+    closeBest: '\tp.pos = bestPos\n\treturn bestPos > save',
+  });
 }
 // The recognize forms of the cursor helpers (the same tokens examined, nothing built).
 const recognizeHelpersGo = (recv: string) => `func (p *${recv}) matchLitR(lid uint16) bool {
@@ -258,14 +243,9 @@ function renderIdTablesGo(ids: LexIdPlan): string {
   }
   return `var kindStr = []string{${kidsLit}}
 var _lids = []string{${lidsLit}}
-var _kidMap = map[string]uint16{}
 const _lidMaxLen = ${pf.maxLen}
 var _lidFirstBits = [...]byte{${bitsLit}}
 
-func init() {
-\tfor i, k := range kindStr { _kidMap[k] = uint16(i) }
-}
-func kidOf(kind string) uint16 { if v, ok := _kidMap[kind]; ok { return v }; return 0 }
 // lidKeyIsLiteral is the length x first-byte prefilter: false when no literal has the text's key.
 func lidKeyIsLiteral(text string) bool {
 \tn := len(text)
@@ -324,6 +304,27 @@ func lexHasLineTerm(s string) bool {
 }
 `;
 
+/** Go's integer type for a table whose entries are below `max`. */
+const goUint = (max: number) => (max <= 0x100 ? 'uint8' : max <= 0x10000 ? 'uint16' : 'uint32');
+/** uni-ident.ts's identifier classes and their lookup. Go's `unicode` package has the general
+ *  categories but no ID_Start / ID_Continue (Other_ID_Start, Pattern_Syntax), hence the table. */
+function goUniIdentTables(): string {
+  const p = uniIdentPlan();
+  const nums = (xs: readonly (number | bigint)[], hex: boolean) => xs.map((x) => (hex ? `0x${x.toString(16)}` : String(x))).join(', ');
+  return `var _uniTop = [${p.top.length}]${goUint(p.blocks.length / (1 << UNI_BLOCK_BITS))}{${nums(p.top, false)}}
+var _uniBlk = [${p.blocks.length}]${goUint(p.start.length)}{${nums(p.blocks, false)}}
+var _uniStart = [${p.start.length}]uint64{${nums(p.start, true)}}
+var _uniCont = [${p.cont.length}]uint64{${nums(p.cont, true)}}
+// Whether r is in the class whose leaves are given (uni-ident.ts's three levels).
+func uniIn(leaves *[${p.start.length}]uint64, r rune) bool {
+	t := uint32(r) >> ${UNI_LEAF_BITS + UNI_BLOCK_BITS}
+	if t >= ${p.top.length} { return false }
+	leaf := _uniBlk[uint32(_uniTop[t])<<${UNI_BLOCK_BITS}|(uint32(r)>>${UNI_LEAF_BITS})&${(1 << UNI_BLOCK_BITS) - 1}]
+	return (leaves[leaf]>>(uint32(r)&${(1 << UNI_LEAF_BITS) - 1}))&1 != 0
+}
+`;
+}
+
 // One token at a dispatch site: the shared scanner, spliced in, says where it ends; the lexer
 // records it.
 function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
@@ -381,15 +382,14 @@ ${indent}}`;
 }
 
 // Newline mode: every line break outside flow delimiters is a NEWLINE token spanning the break.
-function newlinePartsGo(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state: string; stateFrom: string; ws: string; hooks: string } {
+function newlinePartsGo(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state: string; stateFrom: string; table: string; ws: string; hooks: string } {
   const kidNl = kidOf(ids, nl.token);
-  const flowSets = `\t_flowOpen := map[string]bool{${nl.flowOpen.map((x) => `${J(x)}: true`).join(', ')}}
-\t_flowClose := map[string]bool{${nl.flowClose.map((x) => `${J(x)}: true`).join(', ')}}
-`;
   return {
     state: `\tflowDepth := 0
-${flowSets}`,
-    stateFrom: flowSets,
+`,
+    stateFrom: '',
+    table: `var _flowD = [${ids.lids.length}]int8{${lidDeltaTable(ids, nl.flowOpen, nl.flowClose).join(', ')}}
+`,
     ws: `\t\tif c == 32 || c == 9 || c == 11 || c == 12 {
 \t\t\tpos++
 \t\t\tfor pos < n { if d := src[pos]; d != 32 && d != 9 && d != 11 && d != 12 { break }; pos++ }
@@ -408,7 +408,7 @@ ${flowSets}`,
 \t\t\tif isJsWs(r) && r != 0x2028 && r != 0x2029 { pos += w; continue }
 \t\t}
 `,
-    hooks: `\t\tif kid == 0 && _flowOpen[_lids[lid]] { flowDepth++ } else if kid == 0 && _flowClose[_lids[lid]] { if flowDepth > 0 { flowDepth-- } }
+    hooks: `\t\tif kid == 0 { if d := int(_flowD[lid]); d != 0 { flowDepth += d; if flowDepth < 0 { flowDepth = 0 } } }
 `,
   };
 }
@@ -560,39 +560,30 @@ ${emitHooks}
   const cascade = renderLexByteDispatchGo(lexCodes, lexFirsts, '\t', tplHeads);
   const identNameGo = ir.identToken;
   const identKidGo = identNameGo ? kidOf(ids, identNameGo) : 0;
-  const lexGoHelpers = (shared.scannedTokens(ir).some((t) => t.skip) ? GO_HAS_LINE_TERM : '') + ((identNameGo || ir.identLike.length) ? `func isJsWs(r rune) bool {
+  const lexGoHelpers = (nl ? newlinePartsGo(nl, 'emit', ids).table : '') + (shared.scannedTokens(ir).some((t) => t.skip) ? GO_HAS_LINE_TERM : '') + ((identNameGo || ir.identLike.length) ? `func isJsWs(r rune) bool {
 	if r == 0xA0 || r == 0x1680 || r == 0x2028 || r == 0x2029 || r == 0x202F || r == 0x205F || r == 0x3000 || r == 0xFEFF {
 		return true
 	}
 	return r >= 0x2000 && r <= 0x200A
 }
-// ID_Start ≈ L + Nl (gen-tm.ts's widened approximation); ID_Continue adds Nd/Mn/Mc/Pc + ZWNJ/ZWJ.
-func isUniIdStart(r rune) bool { return r == '$' || r == '_' || unicode.IsLetter(r) || unicode.Is(unicode.Nl, r) }
-func isUniIdContinue(r rune) bool {
-	return isUniIdStart(r) || r == 0x200C || r == 0x200D || unicode.In(r, unicode.Nd, unicode.Mn, unicode.Mc, unicode.Pc)
-}
-func scanUniIdent(src string, pos int) (int, bool) {
+${goUniIdentTables()}func scanUniIdent(src string, pos int) (int, bool) {
 	r, w := utf8.DecodeRuneInString(src[pos:])
-	if !isUniIdStart(r) { return pos, false }
-	e := pos + w
-	for e < len(src) {
-		r2, w2 := utf8.DecodeRuneInString(src[e:])
-		if !isUniIdContinue(r2) { break }
-		e += w2
-	}
-	return e, true
+	if !uniIn(&_uniStart, r) { return pos, false }
+	return lxExtRun(src, pos+w), true
 }
 // Extend an identifier token that the ASCII pattern cut short at a non-ASCII
 // ID_Continue char (caf|é → café), mirroring emit-lexer's uniIdentContReY extension.
 func lxExt(src string, e int) int {
 	if e >= len(src) || src[e] < 0x80 { return e }
-	ee := e
-	for ee < len(src) {
-		r, w := utf8.DecodeRuneInString(src[ee:])
-		if !isUniIdContinue(r) { break }
-		ee += w
+	return lxExtRun(src, e)
+}
+func lxExtRun(src string, e int) int {
+	for e < len(src) {
+		r, w := utf8.DecodeRuneInString(src[e:])
+		if !uniIn(&_uniCont, r) { break }
+		e += w
 	}
-	return ee
+	return e
 }
 ` : `func isJsWs(r rune) bool {
 	if r == 0xA0 || r == 0x1680 || r == 0x2028 || r == 0x2029 || r == 0x202F || r == 0x205F || r == 0x3000 || r == 0xFEFF {
@@ -765,12 +756,6 @@ func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
 }`;
 }
 
-// A composed '>'-led literal (LexIdPlan.gtComps): only a lookahead operand, so never a tree leaf.
-function gtCompLit(ids: LexIdPlan, s: { value: string; ttype: string }): boolean {
-  if (!ids.gtComps.includes(s.value)) return false;
-  if (s.ttype !== '$punct') throw new Error(`goTarget: composed literal ${JSON.stringify(s.value)} must be punctuation`);
-  return true;
-}
 // The binary operator read at p.pos (t = p.toks[p.pos]): opLid, its token count opN and (withEnd)
 // its end offset opEnd. A '>' read counts the tokens it inspected toward maxLook.
 function gtOpRead(ids: LexIdPlan, withEnd: boolean): string {
@@ -875,159 +860,46 @@ func leafEnd(ts []Tok, ti uint32, tt uint8) uint32 {
 }`;
 }
 
-function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  if ('share' in s && s.share !== undefined) return `p.sub${s.share}()`;
-  return stepBody(s, ids, ar);
-}
-// The step itself, printed in place (a shared step's method body; every other step's site).
-function stepBody(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  switch (s.t) {
-    case 'lit': return gtCompLit(ids, s) ? `p.matchComp(${lidOf(ids, s.value)})` : `p.matchLit(${lidOf(ids, s.value)})`;
-    case 'tok': return `p.matchTok(${kidOf(ids, s.name)})`;
-    case 'rule': return `p.callRule(p.parse${s.name}())`;
-    case 'ruleBp': return `p.callRule(p.bp_${s.name}(${s.bp}))`;
-    case 'star': return `p.star(func() bool { return ${stepCond(s.step, ids, ar)} })`;
-    case 'opt': return `p.opt(func() bool { return ${s.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} })`;
-    case 'sep': return `p.sepBy(func() bool { return ${stepCond(s.elem, ids, ar)} }, ${sepDelimLid(ids, s.delim)})`;
-    case 'altlit': return `p.altLit([]uint16{${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}})`;
-    case 'alt': return `func() bool { ${stepStmts(s, ids, ar)} }()`;
-    case 'look': return `${s.is ? '' : '!'}p.look${s.id}()`;   // recognize form (lookFnsR)
-    case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
-    case 'aheadCtx': return s.is ? `(p.ahead(${s.set}, true) || p.ctxWord())` : `(p.ahead(${s.set}, false) && !p.ctxWord())`;
-    case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'})`;
-    case 'sameLine': return `func() bool { t := p.peek(); return t != nil && !t.Nl }()`;
-    case 'suppress': return `func() bool { ${stepStmts(s, ids, ar)} }()`;
-    case 'ctx': return `func() bool { ${stepStmts(s, ids, ar)} }()`;
-  }
-}
-// The step as the statements of a function returning whether it matched: an `alt`, `suppress` or
-// `ctx` step needs statements, so in place it is printed as an immediately called func literal of these.
-// A `ctx` step puts the context it found back after its body, whether the body matched or not (the
-// body is a boolean expression: no return path leaves between the two assignments).
-function stepStmts(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  switch (s.t) {
-    case 'alt': {
-      if (s.predictive) return predAltBody(s.branches, ids, s.firsts, ar);
-      const firsts = s.firsts ?? [];
-      const nAlts = s.branches.length;
-      const needPeek = s.branches.some((_, i) => isGuardable(firsts[i] ?? null, nAlts));
-      const peekInit = needPeek ? `_ft := p.peek(); ` : '';
-      const tries = s.branches.map((br, i) => {
-        const body = branchGo(br.length ? br.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true');
-        const f = firsts[i] ?? null;
-        if (!isGuardable(f, nAlts)) return body;
-        return `if _ft != nil && ${firstCond(f, '_ft', ids)} ${body}`;
-      }).join('; ');
-      return `${peekInit}${tries}; return false`;
-    }
-    case 'suppress': return `p.suppressNext = ${s.set}; _r := (${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}); p.suppressNext = 0; return _r`;
-    case 'ctx': return `_c := p.ctx; p.ctx = ${s.ctx}; _r := (${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}); p.ctx = _c; return _r`;
-    default: return `return ${stepBody(s, ids, ar)}`;
-  }
-}
+const stepCond = (s: Step, ids: LexIdPlan, _ar: ArenaIdPlan): string => walkExpr(s, goSteps(ids, '', 'engine', ENGINE_GO));
 
 // ParserIR.shared, one method each: the step, run against the parser's scratch list. It undoes
 // nothing: a failed step leaves what it advanced and appended for the construct around its site.
 function sharedFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  return ir.shared.map((s, id) => (ir.forms.buildShared[id] ? `func (p *engine) sub${id}() bool { ${stepStmts(s, ids, ar)} }\n` : '')).join('');
+  return ir.shared.map((s, id) => (ir.forms.buildShared[id] ? `func (p *engine) sub${id}() bool { ${walkStmts(s, goSteps(ids, '', 'engine', ENGINE_GO))} }\n` : '')).join('');
 }
 
-function predAltBody(branches: Step[][], ids: LexIdPlan, firsts: FirstSig[] | undefined, ar: ArenaIdPlan): string {
-  // FIRST dispatch still only tries the matching arm; on half-failure restore like non-pred alt.
-  const arms = branches.map((br, i) => {
-    const steps = br.length ? br.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true';
-    return `if ${firstCond(firsts![i], 't', ids)} ${branchGo(steps)}`;
-  }).join(' else ');
-  return `t := p.peek(); if t == nil { return false }; ${arms}; return false`;
+
+// Shape A's one top-level entry: the first of its rules that matches (native engine).
+function topOneBody(plan: ReusePlanA): string {
+  if (plan.rules.length === 1) return `\treturn p.parse${plan.rules[0]}()`;
+  return `${plan.rules.map((n) => `\t{ sp := p.pos; n := p.parse${n}(); if n >= 0 { return n }; p.back(sp) }`).join('\n')}\n\treturn -1`;
 }
 
-type ReusePlanA = { kind: 'A'; topOneBody: string };
-type ReusePlanB = { kind: 'B'; hasHead: boolean; headRule: string | null; loopTok: string; loopRule: string };
-type ReusePlan = ReusePlanA | ReusePlanB;
-
-function matchLoopSeq(step: Step): { loopTok: string; loopRule: string } | null {
-  if (step.t !== 'seq' || step.steps.length !== 2) return null;
-  const [a, b] = step.steps;
-  if (a.t !== 'tok') return null;
-  if (b.t !== 'opt' || b.steps.length !== 1 || b.steps[0].t !== 'rule') return null;
-  return { loopTok: a.name, loopRule: (b.steps[0] as { t: 'rule'; name: string }).name };
-}
-
-function topReusePlan(ir: ParserIR): ReusePlan | null {
-  const entry = ir.rules.find((r) => r.name === ir.entry);
-  if (!entry || entry.kind !== 'rd' || entry.alts.length !== 1) return null;
-  const alt = entry.alts[0];
-  if (alt.length === 1 && alt[0].t === 'star') {
-    const step = alt[0].step;
-    if (step.t === 'rule') return { kind: 'A', topOneBody: `\treturn p.parse${step.name}()` };
-    if (step.t === 'alt') {
-      for (const br of step.branches) {
-        if (br.length !== 1 || br[0].t !== 'rule') return null;
-      }
-      const tries = step.branches.map((br) => {
-        const name = (br[0] as { t: 'rule'; name: string }).name;
-        return `\t{ sp := p.pos; n := p.parse${name}(); if n >= 0 { return n }; p.back(sp) }`;
-      }).join('\n');
-      return { kind: 'A', topOneBody: `${tries}\n\treturn -1` };
-    }
-    const loop = matchLoopSeq(step);
-    if (loop) return { kind: 'B', hasHead: false, headRule: null, ...loop };
-    return null;
-  }
-  if (alt.length === 2 && alt[0].t === 'opt' && alt[1].t === 'star') {
-    const hs = alt[0].steps;
-    if (hs.length !== 1 || hs[0].t !== 'rule') return null;
-    const loop = matchLoopSeq(alt[1].step);
-    if (!loop) return null;
-    return { kind: 'B', hasHead: true, headRule: hs[0].name, ...loop };
-  }
-  return null;
-}
-
+// Longest match: the best node so far stays in the arena: nb/kb move past it, so a later
+// alternative that does not beat it is truncated away and one that does leaves it unreferenced.
 function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  if (r.predictive) {
-    const arm = (steps: Step[], i: number) => `\t${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return p.finish(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save) } }`;
-    return `func (p *engine) parse${r.name}() int32 {
-\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
-\tt := p.peek(); if t == nil { return -1 }
-${r.alts.map(arm).join(' ')}
-\tp.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]
-\treturn -1
-}`;
-  }
-  if (r.alts.length === 1) {   // nothing to choose among
-    return `func (p *engine) parse${r.name}() int32 {
-\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
-\tif ${r.alts[0]!.map((x) => stepCond(x, ids, ar)).join(' && ')} { return p.finish(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save) }
-\tp.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]
-\treturn -1
-}`;
-  }
-  // Longest match over the alternatives, in declaration order (emit-portable.ts, RdRule). The
-  // best node so far stays in the arena: nb/kb move past it, so a later alternative that does
-  // not beat it is truncated away and one that does leaves it unreferenced.
-  // The alternatives are reached through the rule's Dispatch (emit-portable.ts, RdRule.altDispatch).
-  const alt = (i: number, keyed: boolean) => {
-    const cond = r.alts[i]!.map((x) => stepCond(x, ids, ar)).join(' && ');
-    const body = candGo(r.altDispatch, i, cond, `best = p.finish(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save); bestPos = p.pos;${markGo(r.altDispatch, i)} nb = len(p.nodes); kb = len(p.kids)`, lostGo);
-    const g = guardCond(r.altGuard[i]!, '_ft', '', keyed);
-    return ifGo(g.length && !keyed ? ['_ft != nil', ...g] : g, body);
-  };
-  const needPeek = r.altGuard.some((g) => g !== null);
-  return `func (p *engine) parse${r.name}() int32 {
-\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
-\tbest := int32(-1); bestPos := save${biGo(r.altDispatch)}
-${needPeek ? '\t_ft := p.peek()\n' : ''}${dispatchGo(r.altDispatch, '_ft', ids, alt, true)}
-\tp.pos = bestPos
-\treturn best
-}`;
+  const fin = `p.finish(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save)`;
+  const open = '\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)';
+  return ruleShell(r, ids, {
+    ...goRuleBase(r, ids, ''),
+    steps: goSteps(ids, '', 'engine', ENGINE_GO),
+    fn: (lines) => `func (p *engine) parse${r.name}() int32 {\n${lines.join('\n')}\n}`,
+    accept: () => `{ return ${fin} }`,
+    open,
+    peekOrFail: '\tt := p.peek(); if t == nil { return -1 }',
+    fail: '\tp.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]\n\treturn -1',
+    openBest: (d) => `${open}\n\tbest := int32(-1); bestPos := save${biGo(d)}`,
+    peekOpt: '\t_ft := p.peek()',
+    cand: (d, i, cond) => candGo(d, i, cond, `best = ${fin}; bestPos = p.pos;${markGo(d, i)} nb = len(p.nodes); kb = len(p.kids)`, lostGo),
+    closeBest: '\tp.pos = bestPos\n\treturn best',
+  });
 }
 
 /** Entry rule that records per-top-kid EntryMeta (+ Node.ext oracle) via parseTopOne (shape A). */
 function rdEntryWithReuseA(r: RdRule, plan: ReusePlanA, ar: ArenaIdPlan): string {
   return `type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidStart, KidCount int }
 func (p *engine) parseTopOne() int32 {
-${plan.topOneBody}
+${topOneBody(plan)}
 }
 func (p *engine) parse${r.name}() int32 {
 \tsave := p.pos; sb := len(p.scratch)
@@ -1164,7 +1036,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
       case 'prefix':
         // An operand that parses but is not the target the operator requires fails the whole
         // Pratt call, whatever another arm matched.
-        return `\tif pbp, ok := pre_${r.name}[t.Lid]; ok {
+        return `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tp.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
 \t\toperand := p.bp_${r.name}(pbp.rbp)
 \t\tif operand >= 0 && pbp.tgt && p.form != 0 { p.back(save); ${lost}; p.capped = false; return -1 }
@@ -1173,8 +1045,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
 \t}`;
     }
   };
-  const bin = r.binary.map((b) => `${lidOf(ids, b.op)}: {${b.lbp}, ${b.rbp}, ${b.requireTarget}, ${b.noUnaryLhs}}`).join(', ');
-  const pre = r.prefix.map((p) => `${lidOf(ids, p.op)}: {${p.rbp}, ${p.requireTarget}, ${p.form}}`).join(', ');
+
   const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, suppressedIn: number[]) => {
     const parts: string[] = [];
     if (accessTail) parts.push('!tailClosed');
@@ -1218,10 +1089,7 @@ ${groups.map((g) => `\t\tcase ${g.key}:
 \t\t\t}`).join('\n')}
 \t\t}${tplPart}`;
   })();
-  const post = r.postfix.map((p) => `${lidOf(ids, p.op)}: {${p.lbp}, ${p.requireTarget}}`).join(', ');
-  return `var bin_${r.name} = map[uint16]bp{${bin}}
-var pre_${r.name} = map[uint16]preOp{${pre}}
-var post_${r.name} = map[uint16]postOp{${post}}
+  return `${goPrattOpTables(r, ids)}
 func (p *engine) parse${r.name}() int32 {
 \tprev := p.suppressCur
 \tp.suppressCur = p.suppressNext
@@ -1241,14 +1109,14 @@ ${(r.leds.length > 0 || r.postfixToks.length > 0) ? 'LedLoop:\n' : ''}\tfor {
 \t\tif t == nil { break }
 ${ledSwitch}
 ${postfixTokSwitch}
-\t\tif post, ok := post_${r.name}[t.Lid]; ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
+\t\tif post := post_${r.name}[t.Lid]; post.ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
 \t\t\tif post.tgt && form != 0 { return -1 }
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++; tailClosed = true
 \t\t\tleft = p.finish(${ruleIdOf(ar, r.name)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); form = 1; continue
 \t\t}
 ${gtOpRead(ids, false)}
-\t\tinfo, ok := bin_${r.name}[opLid]
-\t\tif !ok || info.lbp <= minBp { break }
+\t\tinfo := bin_${r.name}[opLid]
+\t\tif !info.ok || info.lbp <= minBp { break }
 \t\tif info.tgt && form != 0 || info.noUnary && form == 2 { return -1 }
 \t\tledSave := p.pos; sb := len(p.scratch)
 \t\tp.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos))
@@ -1279,10 +1147,23 @@ ${dispatchGo(r.nudDispatch, 't', ids, nudArm)}
 }`;
 }
 
+/** A Pratt rule's operator tables (emit-portable prattOpTables) as arrays indexed by the token's
+ *  lid, one entry per literal id (`ok` marks an operator): a bounds-checked load, where a
+ *  map[uint16] would hash on every LED iteration and every prefix NUD. */
+function goPrattOpTables(r: PrattRule, ids: LexIdPlan): string {
+  const ops = prattOpTables(r, ids);
+  const bin = ops.bin.map((b) => `${b.lid}: {${b.lbp}, ${b.rbp}, ${b.tgt}, ${b.noUnary}, true}`).join(', ');
+  const pre = ops.pre.map((p) => `${p.lid}: {${p.rbp}, ${p.tgt}, ${p.form}, true}`).join(', ');
+  const post = ops.post.map((p) => `${p.lid}: {${p.lbp}, ${p.tgt}, true}`).join(', ');
+  return `var bin_${r.name} = [${ops.size}]bp{${bin}}
+var pre_${r.name} = [${ops.size}]preOp{${pre}}
+var post_${r.name} = [${ops.size}]postOp{${post}}`;
+}
+
 const goEditBody = '\td.text, d.toks, relexed = relexEdits(oldText, oldToks, edits)';
 
 function docEditBlockGo(ir: ParserIR, shared: SharedAlgorithms): string {
-  const topReuse = topReusePlan(ir);
+  const topReuse = ir.reuse;
   const shapeA = topReuse?.kind === 'A';
   const shapeB = topReuse?.kind === 'B';
   const hasHeadB = !!(shapeB && topReuse.kind === 'B' && topReuse.hasHead);
@@ -1743,12 +1624,8 @@ func newDocCst(src string, b *CstBuilder) *Doc {
 	defer d.publish()
 	var toks []Tok
 	d.toks, toks = scanMetaToks(src)
-	// A Doc owns its arena, so a new one starts empty; size it from the token count instead of
-	// growing it by repeated append copies (TS-family code runs ~0.6 nodes and ~1.1 kids per token):
-	// growth garbage is what drives GC cycles, since a dropped Doc leaves a small live heap.
-	n := len(toks)
-	if cap(b.Nodes) < n*3/4 { b.Nodes = make([]Node, 0, n*3/4) }
-	if cap(b.Kids) < n*5/4 { b.Kids = make([]int32, 0, n*5/4) }
+	// The arena grows as the parse fills it, as in ParseWith and in every target: a node or kid count
+	// estimated from the token count is neither a fit nor a bound (6183a29, PR #126).
 	d.e.nodes, d.e.kids = b.Nodes[:0], b.Kids[:0]
 	d.root = d.e.parse(src, toks)
 ${topReuse ? '\td.entries = append([]EntryMeta(nil), d.e.entries...)\n' : ''}\treturn d
@@ -1805,128 +1682,40 @@ ${editParse}
 // Parallel combinators / rules ending in `W`. Existing `parse`/arena/`Doc` above
 // are byte-identical to pre-addon emit; this block is appended only.
 
-/** parserCst: direct arena ckpt on embedded Nodes/Kids (native twin). parserW: Builder.Checkpoint. */
-function arenaCkpt(recv: string): string {
-  return recv === 'parserCst'
-    ? 'nb, kb := len(p.Nodes), len(p.Kids)'
-    : 'nb, kb := p.b.Checkpoint()';
-}
+/** The builder engine's arena checkpoint (Builder.Checkpoint). */
+const arenaCkpt = () => 'nb, kb := p.b.Checkpoint()';
 /** Move the checkpoint past what was just built (the best alternative so far stays). */
-function arenaMark(recv: string): string {
-  return recv === 'parserCst'
-    ? 'nb, kb = len(p.Nodes), len(p.Kids)'
-    : 'nb, kb = p.b.Checkpoint()';
-}
-/** parserCst: slice-truncate restore. parserW: Builder.Restore. */
-function arenaRestore(recv: string): string {
-  return recv === 'parserCst'
-    ? 'p.Nodes = p.Nodes[:nb]; p.Kids = p.Kids[:kb]'
-    : 'p.b.Restore(nb, kb)';
-}
+const arenaMark = () => 'nb, kb = p.b.Checkpoint()';
+/** Undo to the checkpoint (Builder.Restore). */
+const arenaRestore = () => 'p.b.Restore(nb, kb)';
 
-function stepCondW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  if ('share' in s && s.share !== undefined) return `p.sub${s.share}W()`;
-  return stepBodyW(s, ids, ar, recv);
-}
-function stepBodyW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  switch (s.t) {
-    case 'lit': return gtCompLit(ids, s) ? `p.matchComp(${lidOf(ids, s.value)})` : `p.matchLitW(${lidOf(ids, s.value)})`;
-    case 'tok': return `p.matchTokW(${kidOf(ids, s.name)})`;
-    case 'rule': return `p.callRuleW((*${recv}).parse${s.name}W)`;
-    case 'ruleBp': return `p.callRuleW(func(q *${recv}) (spanned, bool) { return q.bpW_${s.name}(${s.bp}) })`;
-    case 'star': return `p.starW(func() bool { return ${stepCondW(s.step, ids, ar, recv)} })`;
-    case 'opt': return `p.optW(func() bool { return ${s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} })`;
-    case 'sep': return `p.sepByW(func() bool { return ${stepCondW(s.elem, ids, ar, recv)} }, ${sepDelimLid(ids, s.delim)})`;
-    case 'altlit': return `p.altLitW([]uint16{${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}})`;
-    case 'alt': return `func() bool { ${stepStmtsW(s, ids, ar, recv)} }()`;
-    case 'look': return `${s.is ? '' : '!'}p.look${s.id}()`;   // recognize form (lookFnsR)
-    case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
-    case 'aheadCtx': return s.is ? `(p.ahead(${s.set}, true) || p.ctxWord())` : `(p.ahead(${s.set}, false) && !p.ctxWord())`;
-    case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'})`;
-    case 'sameLine': return `func() bool { t := p.peek(); return t != nil && !t.Nl }()`;
-    case 'suppress': return `func() bool { ${stepStmtsW(s, ids, ar, recv)} }()`;
-    case 'ctx': return `func() bool { ${stepStmtsW(s, ids, ar, recv)} }()`;
-  }
-}
-function stepStmtsW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  switch (s.t) {
-    case 'alt': return s.predictive ? predAltBodyW(s.branches, ids, ar, s.firsts, recv) : altBodyW(s.branches, ids, ar, s.firsts, recv);
-    case 'suppress': return `p.suppressNext = ${s.set}; _r := (${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'}); p.suppressNext = 0; return _r`;
-    case 'ctx': return `_c := p.ctx; p.ctx = ${s.ctx}; _r := (${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'}); p.ctx = _c; return _r`;
-    default: return `return ${stepBodyW(s, ids, ar, recv)}`;
-  }
-}
-function altBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: FirstSig[] | undefined, recv: string): string {
-  const fs = firsts ?? [];
-  const nAlts = branches.length;
-  const needPeek = branches.some((_, i) => isGuardable(fs[i] ?? null, nAlts));
-  const peekInit = needPeek ? `_ft := p.peek(); ` : '';
-  const tries = branches.map((br, i) => {
-    const body = branchGoW(br.length ? br.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true', recv);
-    const f = fs[i] ?? null;
-    if (!isGuardable(f, nAlts)) return body;
-    return `if _ft != nil && ${firstCond(f, '_ft', ids)} ${body}`;
-  }).join('; ');
-  return `${peekInit}${tries}; return false`;
-}
+const stepCondW = (s: Step, ids: LexIdPlan, _ar: ArenaIdPlan, recv: string): string => walkExpr(s, goSteps(ids, 'W', recv, ENGINE_GO_W));
 function sharedFnsW(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  return ir.shared.map((s, id) => (ir.forms.buildShared[id] ? `func (p *${recv}) sub${id}W() bool { ${stepStmtsW(s, ids, ar, recv)} }\n` : '')).join('');
-}
-function predAltBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: FirstSig[] | undefined, recv: string): string {
-  // Same-line `} else if` (native predAltBody joins with ' else '); newlines break Go ASI.
-  // FIRST dispatch; restore pos/scratch/arena on arm half-failure (like altBodyW).
-  const arms = branches.map((br, i) => {
-    const steps = br.length ? br.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true';
-    return `if ${firstCond(firsts![i], 't', ids)} ${branchGoW(steps, recv)}`;
-  }).join(' else ');
-  return `t := p.peek(); if t == nil { return false }; ${arms}; return false`;
+  return ir.shared.map((s, id) => (ir.forms.buildShared[id] ? `func (p *${recv}) sub${id}W() bool { ${walkStmts(s, goSteps(ids, 'W', recv, ENGINE_GO_W))} }\n` : '')).join('');
 }
 
 function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  const rid = ruleIdOf(ar, r.name);
-  if (r.predictive) {
-    // Join with space (not newline): Go ASI inserts ';' after '}' at EOL, which
-    // breaks `} \\n else if` — native rdRule uses the same same-line join.
-    const arm = (steps: Step[], i: number) => `\t${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { return p.finishW(${rid}, sb, p.offAt(save), save), true } }`;
-    return `func (p *${recv}) parse${r.name}W() (spanned, bool) {
-\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
-\tt := p.peek(); if t == nil { return spanned{}, false }
-${r.alts.map(arm).join(' ')}
-\tp.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}
-\treturn spanned{}, false
-}`;
-  }
-  if (r.alts.length === 1) {
-    return `func (p *${recv}) parse${r.name}W() (spanned, bool) {
-\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
-\tif ${r.alts[0]!.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { return p.finishW(${rid}, sb, p.offAt(save), save), true }
-\tp.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}
-\treturn spanned{}, false
-}`;
-  }
-  // Longest match over the alternatives through the rule's Dispatch — as rdRule.
-  const alt = (i: number, keyed: boolean) => {
-    const cond = r.alts[i]!.map((x) => stepCondW(x, ids, ar, recv)).join(' && ');
-    const body = candGo(r.altDispatch, i, cond, `best = p.finishW(${rid}, sb, p.offAt(save), save); found = true; bestPos = p.pos;${markGo(r.altDispatch, i)} ${arenaMark(recv)}`, lostGoW(recv));
-    const g = guardCond(r.altGuard[i]!, '_ft', 'W', keyed);
-    return ifGo(g.length && !keyed ? ['_ft != nil', ...g] : g, body);
-  };
-  const needPeek = r.altGuard.some((g) => g !== null);
-  return `func (p *${recv}) parse${r.name}W() (spanned, bool) {
-\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
-\tvar best spanned; found := false; bestPos := save${biGo(r.altDispatch)}
-${needPeek ? '\t_ft := p.peek()\n' : ''}${dispatchGo(r.altDispatch, '_ft', ids, alt, true)}
-\tp.pos = bestPos
-\treturn best, found
-}`;
+  const fin = `p.finishW(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save)`;
+  const open = `\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}`;
+  return ruleShell(r, ids, {
+    ...goRuleBase(r, ids, 'W'),
+    steps: goSteps(ids, 'W', recv, ENGINE_GO_W),
+    fn: (lines) => `func (p *${recv}) parse${r.name}W() (spanned, bool) {\n${lines.join('\n')}\n}`,
+    accept: () => `{ return ${fin}, true }`,
+    open,
+    peekOrFail: '\tt := p.peek(); if t == nil { return spanned{}, false }',
+    fail: `\tp.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore()}\n\treturn spanned{}, false`,
+    openBest: (d) => `${open}\n\tvar best spanned; found := false; bestPos := save${biGo(d)}`,
+    peekOpt: '\t_ft := p.peek()',
+    cand: (d, i, cond) => candGo(d, i, cond, `best = ${fin}; found = true; bestPos = p.pos;${markGo(d, i)} ${arenaMark()}`, lostGoW(recv)),
+    closeBest: '\tp.pos = bestPos\n\treturn best, found',
+  });
 }
 
+// Shape A's one top-level entry in builder form.
 function topOneBodyW(plan: ReusePlanA): string {
-  return plan.topOneBody
-    .replace(/\{ sp := p\.pos; n := p\.parse([A-Za-z0-9_]+)\(\); if n >= 0 \{ return n \}; p\.back\(sp\) \}/g,
-      '{ sp := p.pos; fr, ok := p.parse$1W(); if ok { return fr, true }; p.back(sp) }')
-    .replace(/return p\.parse([A-Za-z0-9_]+)\(\)/g, 'return p.parse$1W()')
-    .replace(/return -1/g, 'return spanned{}, false');
+  if (plan.rules.length === 1) return `\treturn p.parse${plan.rules[0]}W()`;
+  return `${plan.rules.map((n) => `\t{ sp := p.pos; fr, ok := p.parse${n}W(); if ok { return fr, true }; p.back(sp) }`).join('\n')}\n\treturn spanned{}, false`;
 }
 
 function rdEntryWithReuseAW(r: RdRule, plan: ReusePlanA, ar: ArenaIdPlan, recv: string): string {
@@ -1937,7 +1726,7 @@ ${topOneBodyW(plan)}
 }
 func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch)
-\tvar localE []EntryMeta
+\tlocalE := p.entries[:0] // a reused builder's Workspace list (ParseWith), else nil
 \tfor {
 \t\tsp := p.pos
 \t\tp.lookReset()
@@ -1954,7 +1743,7 @@ func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \t\t\tp.scratch = append(p.scratch, fr.h)
 \t\t}
 \t}
-\tp.entryHs = append([]int32(nil), p.scratch[sb:]...)
+\tp.entryHs = append(p.entryHs[:0], p.scratch[sb:]...) // DocWith copies it out (parseWithMetaW)
 \tp.entries = localE
 \treturn p.finishW(${rid}, sb, p.offAt(save), save), true
 }`;
@@ -1983,10 +1772,10 @@ function rdEntryWithReuseBW(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Are
 `
     : '';
   return `${headFn}func (p *${recv}) parseLoopSegW(sb int) (EntryMeta, bool) {
-\tsp := p.pos; before := len(p.scratch); ${arenaCkpt(recv)}
+\tsp := p.pos; before := len(p.scratch); ${arenaCkpt()}
 \tp.lookReset()
 \tif !p.matchTokW(${kidOf(ids, plan.loopTok)}) {
-\t\tp.back(sp); p.scratch = p.scratch[:before]; ${arenaRestore(recv)}
+\t\tp.back(sp); p.scratch = p.scratch[:before]; ${arenaRestore()}
 \t\treturn EntryMeta{}, false
 \t}
 \tp.optW(func() bool { return p.callRuleW((*${recv}).parse${plan.loopRule}W) })
@@ -2007,13 +1796,13 @@ function rdEntryWithReuseBW(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Are
 }
 func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch)
-\tvar localE []EntryMeta
+\tlocalE := p.entries[:0] // a reused builder's Workspace list (ParseWith), else nil
 ${headBlock}\tfor {
 \t\tm, ok := p.parseLoopSegW(sb)
 \t\tif !ok { break }
 \t\tlocalE = append(localE, m)
 \t}
-\tp.entryHs = append([]int32(nil), p.scratch[sb:]...)
+\tp.entryHs = append(p.entryHs[:0], p.scratch[sb:]...) // DocWith copies it out (parseWithMetaW)
 \tp.entries = localE
 \treturn p.finishW(${rid}, sb, p.offAt(save), save), true
 }`;
@@ -2027,7 +1816,7 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaI
   const rid = ruleIdOf(ar, r.name);
   // The NUD arms: longest-match candidates through the rule's Dispatch, as in prattRule.
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
-    `found = true; bestPos = p.pos;${markGo(r.nudDispatch, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; ${arenaMark(recv)}`;
+    `found = true; bestPos = p.pos;${markGo(r.nudDispatch, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; ${arenaMark()}`;
   const lost = lostGoW(recv);
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
@@ -2057,7 +1846,7 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaI
         return ifGo([`minBp < ${c.capBp}`, ...guardCond(r.nudCappedGuard[a.index]!, 't', 'W', keyed)], seqArm(i, c.steps, false, true));
       }
       case 'prefix':
-        return `\tif pbp, ok := pre_${r.name}[t.Lid]; ok {
+        return `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
 \t\toperand, ook := p.bpW_${r.name}(pbp.rbp)
 \t\tif ook && pbp.tgt && p.form != 0 { p.back(save); ${lost}; p.capped = false; return spanned{}, false }
@@ -2076,10 +1865,10 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaI
     return parts.length ? `if ${parts.join(' && ')} ` : '';   // the `if` before the led's block; none when nothing gates it
   };
   const ledBody = (b: Bracket, form: number, closes: boolean) => `{
-\t\t\tledSave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
+\t\t\tledSave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \t\t\tp.scratch = append(p.scratch, left.h)
 \t\t\tif ${b.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { left = p.finishW(${rid}, sb, int(left.off), int(left.tokStart)); form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
-\t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}
+\t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]; ${arenaRestore()}
 \t\t}`;
   const ledSwitch = (() => {
     if (r.leds.length === 0) return '';
@@ -2133,14 +1922,14 @@ ${needLedLoop ? 'LedLoop:\n' : ''}\tfor {
 \t\tif t == nil { break }
 ${ledSwitch}
 ${postfixTokSwitch}
-\t\tif post, ok := post_${r.name}[t.Lid]; ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
+\t\tif post := post_${r.name}[t.Lid]; post.ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
 \t\t\tif post.tgt && form != 0 { return spanned{}, false }
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++; tailClosed = true
 \t\t\tleft = p.finishW(${rid}, sb, int(left.off), int(left.tokStart)); form = 1; continue
 \t\t}
 ${gtOpRead(ids, true)}
-\t\tinfo, ok := bin_${r.name}[opLid]
-\t\tif !ok || info.lbp <= minBp { break }
+\t\tinfo := bin_${r.name}[opLid]
+\t\tif !info.ok || info.lbp <= minBp { break }
 \t\tif info.tgt && form != 0 || info.noUnary && form == 2 { return spanned{}, false }
 \t\tledSave := p.pos; sb := len(p.scratch)
 \t\tp.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, opEnd)
@@ -2158,7 +1947,7 @@ func (p *${recv}) nudW_${r.name}(minBp int) (spanned, bool) {
 \tp.capped = false
 \tt := p.peek()
 \tif t == nil { return spanned{}, false }
-\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
+\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \tvar best spanned; found := false; bestPos := save${biGo(r.nudDispatch)}; bf, bt, bc := uint8(0), false, false
 \t_, _, _ = sb, nb, kb
 ${dispatchGo(r.nudDispatch, 't', ids, nudArm)}
@@ -2171,7 +1960,7 @@ ${dispatchGo(r.nudDispatch, 't', ids, nudArm)}
 }
 
 function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  const reuse = topReusePlan(ir);
+  const reuse = ir.reuse;
   // entryHs: flat entry-level handles (shape-A kids / shape-B root kids), snapshotted
   // before finishW consumes scratch — DocWith reuse reads this, never Builder.Nodes.
   const entriesField = reuse ? '\n\tentries []EntryMeta\n\tentryHs []int32' : '';
@@ -2186,89 +1975,35 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
   const matchTemplateW = tplHoleRules(ir).map((hole) => `func (p *${recv}) matchTemplateW_${hole}() (spanned, bool) {
 \tt := p.peek()
 \tif t == nil || t.Kid != ${kidOf(ids, '$templateHead')} { return spanned{}, false }
-\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
+\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \tp.pushLeafW(${ttIdOf(ar, '$templateHead')}, uint32(p.pos), t.Off, t.End); p.pos++
 \tfor {
 \t\texpr, ok := p.parse${hole}W()
-\t\tif !ok { p.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; return spanned{}, false }
+\t\tif !ok { p.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore()}; return spanned{}, false }
 \t\tif expr.present { p.scratch = append(p.scratch, expr.h) }
 \t\tnext := p.peek()
-\t\tif next == nil { p.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; return spanned{}, false }
+\t\tif next == nil { p.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore()}; return spanned{}, false }
 \t\tif next.Kid == ${kidOf(ids, '$templateMiddle')} { p.pushLeafW(${ttIdOf(ar, '$templateMiddle')}, uint32(p.pos), next.Off, next.End); p.pos++; continue }
 \t\tif next.Kid == ${kidOf(ids, '$templateTail')} { p.pushLeafW(${ttIdOf(ar, '$templateTail')}, uint32(p.pos), next.Off, next.End); p.pos++; break }
-\t\tp.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; return spanned{}, false
+\t\tp.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore()}; return spanned{}, false
 \t}
 \treturn p.finishW(${ruleIdOf(ar, '$template')}, sb, p.offAt(save), save), true
 }
 `).join('');
-  const cstDirect = recv === 'parserCst';
-  // parserCst: Nodes/Kids embedded (Rust by-value layout). parserW: interface Builder.
-  const pushLeafW = cstDirect ? `func (p *${recv}) pushLeafW(ttId uint16, tokIdx, off, end uint32) {
-\t_ = off; _ = end
-\tif ttId == TT_SKIP_PUNCT { return }
-\tp.scratch = append(p.scratch, encodeLeaf(tokIdx, uint8(ttId)))
-}` : `func (p *${recv}) pushLeafW(ttId uint16, tokIdx, off, end uint32) {
+  const pushLeafW = `func (p *${recv}) pushLeafW(ttId uint16, tokIdx, off, end uint32) {
 \t_ = p.b.Leaf(&p.scratch, ttId, tokIdx, off, end)
 }`;
-  const finishW = cstDirect ? `func (p *${recv}) finishW(ruleId uint16, sb, fallbackOff, tokStart int) spanned {
-\tnn := len(p.scratch)
-\tkidStart := len(p.Kids)
-\toff, end := uint32(fallbackOff), uint32(fallbackOff)
-\tif nn > sb {
-\t\tfirst := p.scratch[sb]
-\t\tlast := p.scratch[nn-1]
-\t\tif first < 0 {
-\t\t\tti, _ := decodeLeaf(first)
-\t\t\toff = uint32(p.toks[ti].Off)
-\t\t} else {
-\t\t\toff = p.Nodes[first].Offset
-\t\t}
-\t\tif last < 0 {
-\t\t\tti, _ := decodeLeaf(last)
-\t\t\tend = uint32(p.toks[ti].End)
-\t\t} else {
-\t\t\tend = p.Nodes[last].End
-\t\t}
-\t}
-\tp.Kids = append(p.Kids, p.scratch[sb:nn]...)
-\tp.scratch = p.scratch[:sb]
-\tp.Nodes = append(p.Nodes, Node{RuleId: ruleId, KidStart: uint32(kidStart), KidCount: uint32(nn - sb), Offset: off, End: end, TokStart: uint32(tokStart), TokEnd: uint32(p.pos), Ext: 0})
-\treturn spanned{h: int32(len(p.Nodes) - 1), off: off, tokStart: uint32(tokStart), present: true}
-}` : `func (p *${recv}) finishW(ruleId uint16, sb, fallbackOff, tokStart int) spanned {
+  const finishW = `func (p *${recv}) finishW(ruleId uint16, sb, fallbackOff, tokStart int) spanned {
 \th, off, present := p.b.Finish(&p.scratch, sb, ruleId, uint32(fallbackOff), uint32(tokStart), uint32(p.pos), p.toks)
 \treturn spanned{h: h, off: off, tokStart: uint32(tokStart), present: present}
 }`;
-  const headLeafTextW = cstDirect ? `func (p *${recv}) headLeafTextW(f spanned) string {
-\tif !f.present { return "" }
-\tid := f.h
-\tfor {
-\t\tif id < 0 {
-\t\t\tti, _ := decodeLeaf(id)
-\t\t\tt := p.toks[ti]
-\t\t\treturn p.src[t.Off:t.End]
-\t\t}
-\t\tnd := &p.Nodes[id]
-\t\tif nd.KidCount == 0 { break }
-\t\tid = p.Kids[nd.KidStart]
-\t}
-\tnd := &p.Nodes[id]
-\treturn p.src[nd.Offset:nd.End]
-}` : `func (p *${recv}) headLeafTextW(f spanned) string {
+  const headLeafTextW = `func (p *${recv}) headLeafTextW(f spanned) string {
 \tif !f.present { return "" }
 \ta, b := p.b.HeadSpan(f.h, p.toks)
 \tif a <= b && int(b) <= len(p.src) { return p.src[a:b] }
 \treturn ""
 }`;
-  const structFields = cstDirect
-    ? `\tcursor
-\tcapped bool
-\tform uint8 // assignment-target form of the node the last nud_/bp_ call returned
-\ttail bool  // whether the node the last nud_ call returned closes the access tail
-\tsrc string
-\tNodes []Node
-\tKids []int32
-\tscratch []int32`
-    : `\tcursor
+  const structFields = `\tcursor
 \tcapped bool
 \tform uint8 // assignment-target form of the node the last nud_/bp_ call returned
 \ttail bool  // whether the node the last nud_ call returned closes the access tail
@@ -2306,24 +2041,24 @@ func (p *${recv}) callRuleW(fn func(*${recv}) (spanned, bool)) bool {
 }
 func (p *${recv}) starW(once func() bool) bool {
 \tfor {
-\t\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
-\t\tif !once() { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; break }
+\t\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt()}
+\t\tif !once() { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore()}; break }
 \t}
 \treturn true
 }
 func (p *${recv}) optW(body func() bool) bool {
-\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
-\tif !body() { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)} }
+\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt()}
+\tif !body() { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore()} }
 \treturn true
 }
 func (p *${recv}) sepByW(elem func() bool, delim uint16) bool {
-\tsp0 := p.pos; sb0 := len(p.scratch); ${arenaCkpt(recv).replace('nb, kb', 'nb0, kb0')}
-\tif !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; ${arenaRestore(recv).replace('nb', 'nb0').replace('kb', 'kb0')}; return true }
+\tsp0 := p.pos; sb0 := len(p.scratch); ${arenaCkpt().replace('nb, kb', 'nb0, kb0')}
+\tif !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; ${arenaRestore().replace('nb', 'nb0').replace('kb', 'kb0')}; return true }
 \tfor {
-\t\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
-\t\tif !p.matchLitW(delim) { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; break }
-\t\tsp2 := p.pos; sb2 := len(p.scratch); ${arenaCkpt(recv).replace('nb, kb', 'nb2, kb2')}
-\t\tif !elem() { p.back(sp2); p.scratch = p.scratch[:sb2]; ${arenaRestore(recv).replace('nb', 'nb2').replace('kb', 'kb2')}; break }
+\t\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt()}
+\t\tif !p.matchLitW(delim) { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore()}; break }
+\t\tsp2 := p.pos; sb2 := len(p.scratch); ${arenaCkpt().replace('nb, kb', 'nb2, kb2')}
+\t\tif !elem() { p.back(sp2); p.scratch = p.scratch[:sb2]; ${arenaRestore().replace('nb', 'nb2').replace('kb', 'kb2')}; break }
 \t}
 \treturn true
 }
@@ -2980,7 +2715,7 @@ func inCtxWords(ctx uint8, t *Tok) bool { return false${ctxWordLids(ir, ids).map
 }
 
 function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  const reuse = topReusePlan(ir);
+  const reuse = ir.reuse;
   const dropTtIds = ['$punct', '$keyword', '$operator']
     .map((n) => {
       try { return ttIdOf(ar, n); } catch { return null; }
@@ -2997,7 +2732,7 @@ function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): stri
   // (measured ~6–8ms / ~12–15% on 2MB TS). Hot path for *CstBuilder reuses
   // the native engine; other Builders use interface parserW.
   const wMethods = emitParserMethodsW('parserW', ir, ids, ar);
-  const topReuse = topReusePlan(ir);
+  const topReuse = ir.reuse;
   const shapeA = topReuse?.kind === 'A';
   const shapeB = topReuse?.kind === 'B';
   const hasHeadB = !!(shapeB && topReuse && topReuse.kind === 'B' && topReuse.hasHead);
@@ -3066,10 +2801,23 @@ type CstBuilder struct {
 \tNodes []Node
 \tKids  []int32
 \tToks  []Tok
-\t// The engine's transient buffers, kept for the next ParseWith (emptied by it before use).
+\tws    Workspace
+}
+func (b *CstBuilder) Workspace() *Workspace { return &b.ws }
+
+// Workspace holds the engine's transient buffers between parses: the child scratch list${reuse ? ', the\n// top-level entry records' : ''}${reuse?.kind === 'B' ? ' and segments' : ''} and the lexer's stacks. ParseWith empties and reuses the
+// Workspace of a builder that has one (WorkspaceOwner), so a builder kept across parses does not
+// allocate them again: the Rust target's Builder::workspace_mut. Its fields are the engine's.
+type Workspace struct {
 \tscratch []int32
 ${reuse ? '\tentries []EntryMeta\n' : ''}${reuse?.kind === 'B' ? '\tsegs []Seg\n' : ''}\tlex     lexStacks
+\t// The builder engine's state, with its own scratch${reuse ? ' and entry lists' : ''}: kept here because Go's escape analysis
+\t// moves a parserW to the heap (one allocation per parse otherwise); emptied after each parse.
+\tw parserW
 }
+// WorkspaceOwner is the optional contract by which a builder keeps a Workspace (embed one and
+// return its address); without it every ParseWith starts from new buffers.
+type WorkspaceOwner interface { Workspace() *Workspace }
 
 func (b *CstBuilder) Checkpoint() (nb, kb int) { return len(b.Nodes), len(b.Kids) }
 func (b *CstBuilder) Restore(nb, kb int) { b.Nodes = b.Nodes[:nb]; b.Kids = b.Kids[:kb] }
@@ -3130,7 +2878,9 @@ type SlimBuilder struct {
 \tNodes []Node
 \tKids  []int32
 \tToks  []Tok
+\tws    Workspace
 }
+func (b *SlimBuilder) Workspace() *Workspace { return &b.ws }
 
 func (b *SlimBuilder) Checkpoint() (nb, kb int) { return len(b.Nodes), len(b.Kids) }
 func (b *SlimBuilder) Restore(nb, kb int) { b.Nodes = b.Nodes[:nb]; b.Kids = b.Kids[:kb] }
@@ -3180,17 +2930,27 @@ ${wMethods}
 // Keeps ParseWith(CstBuilder) within the additive-prefix / byte-equal contract
 // without paying for a second method-instantiation (Go GC-shape stenciling tax).
 func parseWithCst(src string, b *CstBuilder) (int32, bool) {
-\tp := &engine{nodes: b.Nodes[:0], kids: b.Kids[:0], scratch: b.scratch[:0]${reuse ? ', entries: b.entries[:0]' : ''}${reuse?.kind === 'B' ? ', segs: b.segs[:0]' : ''}}
-\th := p.parse(src, lexInto(src, b.Toks, &b.lex))
-\tb.Nodes, b.Kids, b.Toks, b.scratch = p.nodes, p.kids, p.toks, p.scratch${reuse ? '\n\tb.entries = p.entries' : ''}${reuse?.kind === 'B' ? '\n\tb.segs = p.segs' : ''}
+\tw := &b.ws
+\tp := &engine{nodes: b.Nodes[:0], kids: b.Kids[:0], scratch: w.scratch[:0]${reuse ? ', entries: w.entries[:0]' : ''}${reuse?.kind === 'B' ? ', segs: w.segs[:0]' : ''}}
+\th := p.parse(src, lexInto(src, b.Toks, &w.lex))
+\tb.Nodes, b.Kids, b.Toks, w.scratch = p.nodes, p.kids, p.toks, p.scratch${reuse ? '\n\tw.entries = p.entries' : ''}${reuse?.kind === 'B' ? '\n\tw.segs = p.segs' : ''}
 \tif h < 0 { return 0, false }
 \treturn h, true
 }
+// parseWithW: a builder that parsed before is reused as parse_with does in the Rust target: its
+// arena is emptied, its token buffer (the built-in builders') and Workspace are emptied and reused
+// (capacity kept), so nothing of the previous parse stays reachable and nothing is allocated again.
 func parseWithW(src string, b Builder) (int32, bool) {
-\tp := &parserW{cursor: cursor{toks: lex(src)}, src: src, b: b, scratch: nil}
+\tvar w *Workspace
+\tif o, is := b.(WorkspaceOwner); is { w = o.Workspace() } else { w = &Workspace{} }
+\tb.Restore(0, 0)
+\tp := &w.w
+\t*p = parserW{cursor: cursor{toks: lexInto(src, toksOf(b), &w.lex)}, src: src, b: b, scratch: p.scratch[:0]${reuse ? ', entries: p.entries[:0], entryHs: p.entryHs[:0]' : ''}}
 \tfr, ok := p.parse${ir.entry}W()
 \trecordToks(b, p.toks)
-\tif !ok || p.pos != len(p.toks) || !fr.present { return 0, false }
+\tok = ok && p.pos == len(p.toks) && fr.present
+\tp.cursor.toks, p.src, p.b = nil, "", nil // the workspace keeps buffers, not the input or the builder
+\tif !ok { return 0, false }
 \treturn fr.h, true
 }
 
@@ -3224,6 +2984,16 @@ func writeJSONWith(nodes []Node, kids []int32, toks []Tok, id int32, b *strings.
 
 ${docWithBlock}
 // recordToks hands the built-in builders the parse stream their leaves index.
+// toksOf: the token buffer of a built-in builder's last tree, which its next parse lexes into.
+func toksOf(b Builder) []Tok {
+\tswitch x := b.(type) {
+\tcase *CstBuilder:
+\t\treturn x.Toks
+\tcase *SlimBuilder:
+\t\treturn x.Toks
+\t}
+\treturn nil
+}
 func recordToks(b Builder, ts []Tok) {
 \tswitch x := b.(type) {
 \tcase *CstBuilder:
@@ -3261,8 +3031,8 @@ const exported = (s: string): string => s[0].toUpperCase() + s.slice(1);
 const goWrap = (r: R, min: number): string => (r.prec < min ? `(${r.c})` : r.c);
 const goBlock = (lines: string[]): string[] => lines.map((l) => GO_IND + l);
 
-// Shared-algorithm lowering: explicit conversions, slices; growth estimates are reserved up front
-// (GC churn from append doubling is the cost they avoid) and over-reserved slices are trimmed.
+// Shared-algorithm lowering: explicit conversions, slices; a list with an exact final length is
+// made with that capacity, any other list grows by append (no estimate is reserved: 6183a29).
 const goLowering: Lowering = {
   units: UNITS,
   ident: (n) => n,
@@ -3371,7 +3141,7 @@ export const goTarget = defineTarget({
     const ir = portableIR(grammar);
     const ids = buildLexIdPlan(ir);
     const ar = buildArenaIdPlan(ir, ids);
-    const reuse = topReusePlan(ir);
+    const reuse = ir.reuse;
     const ruleFns = [...ir.rules.filter((r) => ir.forms.buildRules.includes(r.name)).map((r) => {
       if (r.kind === 'pratt') return prattRule(r, ir.tpl, ids, ar);
       if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids, ar);
@@ -3406,13 +3176,8 @@ package parser
 import (
 \t"fmt"
 \t"strings"
-\t"unicode"
 \t"unicode/utf8"
 )
-
-// unicode is only referenced when the grammar declares an identifier token; pin it so other
-// grammars still compile.
-var _ = unicode.IsLetter
 
 // Slim hot-path token (kind/text via kindStr / src[Off:End]).
 type Tok struct {
@@ -3426,9 +3191,9 @@ type Node struct {
 \tRuleId uint16
 \tKidStart, KidCount, Offset, End, TokStart, TokEnd, Ext uint32
 }
-type bp struct{ lbp, rbp int; tgt, noUnary bool }
-type preOp struct{ rbp int; tgt bool; form uint8 }
-type postOp struct{ lbp int; tgt bool }
+type bp struct{ lbp, rbp int; tgt, noUnary, ok bool }
+type preOp struct{ rbp int; tgt bool; form uint8; ok bool }
+type postOp struct{ lbp int; tgt bool; ok bool }
 
 // engine is one parse's mutable state: the token stream it reads, the cursor and lookahead watermark, the arena it builds into and the reuse
 // metadata. A Doc owns one for its lifetime; ParseWith uses a fresh one per call. Nothing the
@@ -3565,13 +3330,13 @@ func (p *engine) opt(body func() bool) bool {
 \tm := p.mark(); if !body() { p.reset(m) }; return true
 }
 func (p *engine) sepBy(elem func() bool, delimLid uint16) bool {
-\tsp0 := p.pos; sb0 := len(p.scratch); nb0 := len(p.nodes); kb0 := len(p.kids)
-\tif !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; p.nodes = p.nodes[:nb0]; p.kids = p.kids[:kb0]; return true }
+\tm0 := p.mark()
+\tif !elem() { p.reset(m0); return true }
 \tfor {
-\t\tsp := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
-\t\tif !p.matchLit(delimLid) { p.back(sp); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; break }
-\t\tsp2 := p.pos; sb2 := len(p.scratch); nb2 := len(p.nodes); kb2 := len(p.kids)
-\t\tif !elem() { p.back(sp2); p.scratch = p.scratch[:sb2]; p.nodes = p.nodes[:nb2]; p.kids = p.kids[:kb2]; break }   // trailing delim OK — keep delim
+\t\tm := p.mark()
+\t\tif !p.matchLit(delimLid) { p.reset(m); break }
+\t\tm2 := p.mark()
+\t\tif !elem() { p.reset(m2); break } // trailing delim OK — keep delim
 \t}
 \treturn true
 }

@@ -364,6 +364,45 @@ export type NewlineCfg = {
   flowClose: string[];
 };
 
+/** How incremental reuse cuts the entry rule into top-level entries, read off the entry rule's
+ *  shape once for every target. A: `star(rule)` or `star(alt(rule, ...))`, each entry one of `rules`
+ *  (tried in order). B: `[opt(headRule)] star(seq(loopTok, opt(loopRule)))`, the entries being the
+ *  head and each `loopTok`-led segment. Any other entry shape has no plan (no reuse). */
+export type ReusePlanA = { kind: 'A'; rules: string[] };
+export type ReusePlanB = { kind: 'B'; hasHead: boolean; headRule: string | null; loopTok: string; loopRule: string };
+export type ReusePlan = ReusePlanA | ReusePlanB;
+
+function reuseLoopSeq(step: Step): { loopTok: string; loopRule: string } | null {
+  if (step.t !== 'seq' || step.steps.length !== 2) return null;
+  const [a, b] = step.steps;
+  if (a.t !== 'tok') return null;
+  if (b.t !== 'opt' || b.steps.length !== 1 || b.steps[0].t !== 'rule') return null;
+  return { loopTok: a.name, loopRule: (b.steps[0] as { t: 'rule'; name: string }).name };
+}
+
+function reusePlanOf(rules: RuleIR[], entryName: string): ReusePlan | null {
+  const entry = rules.find((r) => r.name === entryName);
+  if (!entry || entry.kind !== 'rd' || entry.alts.length !== 1) return null;
+  const alt = entry.alts[0];
+  if (alt.length === 1 && alt[0].t === 'star') {
+    const step = alt[0].step;
+    if (step.t === 'rule') return { kind: 'A', rules: [step.name] };
+    if (step.t === 'alt') {
+      for (const br of step.branches) if (br.length !== 1 || br[0].t !== 'rule') return null;
+      return { kind: 'A', rules: step.branches.map((br) => (br[0] as { t: 'rule'; name: string }).name) };
+    }
+    const loop = reuseLoopSeq(step);
+    return loop ? { kind: 'B', hasHead: false, headRule: null, ...loop } : null;
+  }
+  if (alt.length === 2 && alt[0].t === 'opt' && alt[1].t === 'star') {
+    const hs = alt[0].steps;
+    if (hs.length !== 1 || hs[0].t !== 'rule') return null;
+    const loop = reuseLoopSeq(alt[1].step);
+    return loop ? { kind: 'B', hasHead: true, headRule: hs[0].name, ...loop } : null;
+  }
+  return null;
+}
+
 export type ParserIR = {
   grammarName: string;
   entry: string;
@@ -378,6 +417,7 @@ export type ParserIR = {
   lookaheads: Alt[];           // the bodies `look` steps run, indexed by Step.id; a body names only lower ids
   shared: Step[];              // the steps printed once and called from each site, indexed by Step.share (see shareSteps)
   forms: Forms;                // which rules and shared steps are printed in building and in recognize form (see Forms)
+  reuse: ReusePlan | null;     // how incremental reuse cuts the entry rule into top-level entries (see ReusePlan); null: no reuse
   suppressSets: string[][];    // the connector sets `suppress` steps disable, indexed by Step.set; [0] is the empty set
   regexCtx: RegexCtx | null;   // null unless the grammar has a regex token with context
   tpl: TplCfg | null;          // null unless the grammar has a template token
@@ -725,7 +765,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
   ]);
   const entry = findEntryRule(grammar);
   const forms = formsOf(rules, lookaheads, shared.length, entry);
-  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike };
+  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse: reusePlanOf(rules, entry), suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike };
 }
 
 // The step lists a rule runs: an rd rule's alternatives, a Pratt rule's NUD and LED arms.
@@ -769,6 +809,144 @@ export type Forms = {
    *  context), so a target with several engine types may print them once, on the cursor. */
   cursorOnly: { rules: string[]; shared: boolean[]; looks: boolean[] };
 };
+// ── The step walk: one description of how a step runs, rendered by every target ──
+// What a step runs, and under which frame, is decided here once: a star / opt / sep body (a step
+// inside a body), an ordered choice (each branch in a BRANCH frame, tried under its FIRST set when
+// that is small enough to test: isFirstGuardable), a predictive choice (only the branch its FIRST
+// set selects), a suppress or ctx body (the state set around the body's conjunction), a shared
+// step (ParserIR.shared: its function's call), and every leaf test. A StepLowering spells each
+// piece in one target's language, for one engine form (building or recognizing, ParserIR.forms)
+// over one receiver; it holds only that spelling.
+export type StepLowering = {
+  inner(): StepLowering;                         // the lowering inside a body or a choice (a target whose closures take their own receiver)
+  shared(id: number): string;                    // a call of ParserIR.shared[id] in this form
+  lit(s: Step & { t: 'lit' }): string;
+  tok(name: string): string;
+  rule(name: string): string;
+  ruleBp(name: string, bp: number): string;      // only a Pratt rule is called at a binding power
+  star(body: string): string;                    // body: the inner step, as a boolean expression
+  opt(body: string): string;
+  sep(elem: string, delim: string): string;
+  altlit(values: string[]): string;
+  look(id: number, is: boolean): string;         // a lookahead runs in recognize form whatever the form around it
+  ahead(set: number, is: boolean): string;
+  aheadCtx(set: number, is: boolean): string;
+  sameLine(): string;
+  inPlace(kind: 'alt' | 'suppress' | 'ctx', stmts: string): string;  // the step's statements (stepStmts) run where the step is
+  ret(cond: string): string;                     // statements returning cond
+  suppress(set: number, cond: string): string;   // statements: cond with ParserIR.suppressSets[set] staged for the next Pratt call
+  ctx(ctx: Ctx, cond: string): string;           // statements: cond in context ctx, the one in force put back after
+  branch(cond: string): string;                  // a BRANCH frame: returns true when cond matched, else undoes it
+  guarded(first: NonNullable<FirstSig>, branch: string): string;   // the branch, tried only when the next token is in first
+  choice(peek: boolean, tries: string[]): string;                  // the tries in order, then false; peek: a guard reads the next token
+  predictive(arms: { first: NonNullable<FirstSig>; branch: string }[]): string;   // the one arm the next token selects, else false
+};
+const conjOf = (steps: Step[], L: StepLowering): string => (steps.length ? steps.map((x) => stepExpr(x, L)).join(' && ') : 'true');
+/** A step as a boolean expression: a shared step's call, else the step itself (stepBody). */
+export function stepExpr(s: Step, L: StepLowering): string {
+  if ('share' in s && s.share !== undefined) return L.shared(s.share);
+  return stepBody(s, L);
+}
+/** The step itself, printed in place (a shared step's function body; every other step's site). */
+export function stepBody(s: Step, L: StepLowering): string {
+  switch (s.t) {
+    case 'lit': return L.lit(s);
+    case 'tok': return L.tok(s.name);
+    case 'rule': return L.rule(s.name);
+    case 'ruleBp': return L.ruleBp(s.name, s.bp);
+    case 'star': return L.star(stepExpr(s.step, L.inner()));
+    case 'opt': { const I = L.inner(); return L.opt(s.steps.map((x) => stepExpr(x, I)).join(' && ')); }
+    case 'sep': return L.sep(stepExpr(s.elem, L.inner()), s.delim);
+    case 'altlit': return L.altlit(s.opts.map((o) => o.value));
+    case 'alt': return L.inPlace('alt', stepStmts(s, L.inner()));
+    case 'look': return L.look(s.id, s.is);
+    case 'ahead': return L.ahead(s.set, s.is);
+    case 'aheadCtx': return L.aheadCtx(s.set, s.is);
+    case 'seq': return `(${conjOf(s.steps, L)})`;
+    case 'sameLine': return L.sameLine();
+    case 'suppress': return L.inPlace('suppress', L.suppress(s.set, conjOf(s.steps, L)));
+    case 'ctx': return L.inPlace('ctx', L.ctx(s.ctx, conjOf(s.steps, L)));
+  }
+}
+/** The step as the statements of a function returning whether it matched (a shared step's body;
+ *  an `alt`, `suppress` or `ctx` step run in place). */
+export function stepStmts(s: Step, L: StepLowering): string {
+  switch (s.t) {
+    case 'alt': {
+      if (s.predictive) return L.predictive(s.branches.map((br, i) => ({ first: s.firsts![i]!, branch: L.branch(conjOf(br, L)) })));
+      const firsts = s.firsts ?? [];
+      const n = s.branches.length;
+      const tries = s.branches.map((br, i) => {
+        const b = L.branch(conjOf(br, L));
+        const f = firsts[i] ?? null;
+        return isFirstGuardable(f, n) ? L.guarded(f, b) : b;
+      });
+      return L.choice(s.branches.some((_, i) => isFirstGuardable(firsts[i] ?? null, n)), tries);
+    }
+    case 'suppress': return L.suppress(s.set, conjOf(s.steps, L));
+    case 'ctx': return L.ctx(s.ctx, conjOf(s.steps, L));
+    default: return L.ret(stepBody(s, L));
+  }
+}
+
+// ── The candidate dispatch: one walk over a Dispatch, rendered by every target ──
+// A DispatchLowering spells a `lid` / `kid` section's switch on the buffered token (each case: its
+// key and its candidates' statements, in order) and the test around it when that token may be
+// absent; `rest` sections are their candidates' statements in order.
+export type DispatchLowering = {
+  sw(by: 'lid' | 'kid', cases: { key: string; arms: string[] }[]): string;
+  nil(sw: string): string;                       // the switch, run only when there is a token
+};
+/** A candidate list's Dispatch: arm(i, keyed) is candidate i's statement (keyed: reached through
+ *  its key, which already tested the first token). nilable: the token may be absent. */
+export function dispatchWalk(d: Dispatch, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, D: DispatchLowering, nilable: boolean): string {
+  return d.sections.map((sec) => {
+    if (sec.by === 'rest') return sec.arms.map((i) => arm(i, false)).join('\n');
+    const id = (k: string) => String(sec.by === 'lid' ? lidOf(ids, k) : kidOf(ids, k));
+    const sw = D.sw(sec.by, sec.groups.map((g) => ({ key: id(g.key), arms: g.arms.map((i) => arm(i, true)) })));
+    return nilable ? D.nil(sw) : sw;
+  }).join('\n');
+}
+
+// ── The rule shell: how an rd rule's function runs, decided once ──
+// Three forms, from the rule's plan (RdRule): PREDICTIVE (the alternative the next token's FIRST
+// set selects, nothing else: no candidate frame, a commit), SINGLE (one alternative: nothing to
+// choose), LONGEST (every alternative its Dispatch admits, each in a CANDIDATE frame; the longest
+// wins, a tie the one declared first). A RuleLowering spells, for one rule in one engine form, the
+// function around the statements, the checkpoint and undo, how an alternative's match is accepted
+// (`accept(i)`: a node finished for alternative i, or only `true` when recognizing; the place a
+// per-alternative construction by a shape plan would go), the candidate frame and its guard.
+export type RuleLowering = {
+  steps: StepLowering;                           // the alternatives' steps
+  fn(lines: string[]): string;                   // the rule's function around its statements
+  ind: string;                                   // a statement's indentation
+  ifThen(test: string, then: string): string;    // `if test then` (no indentation)
+  first(f: FirstSig): string;                    // whether the buffered token starts an alternative (predictive)
+  accept(i: number): string;                     // the statement returning alternative i's match
+  open: string;                                  // PREDICTIVE / SINGLE: the checkpoint at entry
+  peekOrFail: string;                            // PREDICTIVE: buffer the next token; none: no match
+  armJoin: string;                               // between PREDICTIVE arms
+  fail: string;                                  // undo to the checkpoint; no match
+  openBest(d: Dispatch): string;                 // LONGEST: the checkpoint and the best so far
+  peekOpt: string;                               // LONGEST: buffer the next token (when a guard reads it)
+  cand(d: Dispatch, i: number, cond: string): string;      // the CANDIDATE frame of alternative i
+  guard(g: Guard, keyed: boolean, stmt: string): string;   // the candidate's statement under its Guard
+  dispatch: DispatchLowering;
+  closeBest: string;                             // LONGEST: go to the best's end; return it
+};
+/** An rd rule's function in the form `L` spells. */
+export function ruleShell(r: RdRule, ids: LexIdPlan, L: RuleLowering): string {
+  const cond = (steps: Step[]) => conjOf(steps, L.steps);
+  if (r.predictive) {
+    const arm = (steps: Step[], i: number) => `${L.ind}${i === 0 ? '' : 'else '}${L.ifThen(L.first(r.altFirst[i] ?? null), `{ ${L.ifThen(cond(steps), L.accept(i))} }`)}`;
+    return L.fn([L.open, L.peekOrFail, r.alts.map(arm).join(L.armJoin), L.fail]);
+  }
+  if (r.alts.length === 1) return L.fn([L.open, `${L.ind}${L.ifThen(cond(r.alts[0]!), L.accept(0))}`, L.fail]);
+  const arm = (i: number, keyed: boolean) => L.guard(r.altGuard[i]!, keyed, L.cand(r.altDispatch, i, cond(r.alts[i]!)));
+  const needPeek = r.altGuard.some((g) => g !== null);
+  return L.fn([L.openBest(r.altDispatch), ...(needPeek ? [L.peekOpt] : []), dispatchWalk(r.altDispatch, ids, arm, L.dispatch, true), L.closeBest]);
+}
+
 function formsOf(rules: RuleIR[], lookaheads: Alt[], nShared: number, entry: string): Forms {
   const byName = new Map(rules.map((r) => [r.name, r]));
   const build = new Set<string>(), recognize = new Set<string>();
@@ -1329,6 +1507,36 @@ export function lidOf(plan: LexIdPlan, text: string): number {
   return i >= 0 ? i : 0;
 }
 
+/** A Pratt rule's operator tables keyed by literal id: the one description of the binding-power
+ *  lookups (binary LED, prefix NUD, postfix LED) that every printer renders as its lookup (a
+ *  `match`, a lid-indexed array, a record). Entries in the rule's declaration order, at most one
+ *  per lid in each table; `size` = the number of literal ids, so a table of that length takes any
+ *  token's lid as its index. */
+export type PrattOpTables = {
+  size: number;
+  bin: Array<{ lid: number; lbp: number; rbp: number; tgt: boolean; noUnary: boolean }>;
+  pre: Array<{ lid: number; rbp: number; tgt: boolean; form: AssignForm }>;
+  post: Array<{ lid: number; lbp: number; tgt: boolean }>;
+};
+export function prattOpTables(r: PrattRule, plan: LexIdPlan): PrattOpTables {
+  const keyed = <T extends { op: string }, U>(table: string, xs: T[], f: (x: T, lid: number) => U): U[] => {
+    const seen = new Set<number>();
+    return xs.map((x) => {
+      const lid = plan.lids.indexOf(x.op);
+      if (lid <= 0) throw new Error(`portable: ${r.name}: ${table} operator ${JSON.stringify(x.op)} has no literal id`);
+      if (seen.has(lid)) throw new Error(`portable: ${r.name}: ${table} operator ${JSON.stringify(x.op)} is declared twice`);
+      seen.add(lid);
+      return f(x, lid);
+    });
+  };
+  return {
+    size: plan.lids.length,
+    bin: keyed('binary', r.binary, (b, lid) => ({ lid, lbp: b.lbp, rbp: b.rbp, tgt: b.requireTarget, noUnary: b.noUnaryLhs })),
+    pre: keyed('prefix', r.prefix, (p, lid) => ({ lid, rbp: p.rbp, tgt: p.requireTarget, form: p.form })),
+    post: keyed('postfix', r.postfix, (p, lid) => ({ lid, lbp: p.lbp, tgt: p.requireTarget })),
+  };
+}
+
 /**
  * O(1) early exit for runtime `lid_of`: a text whose key (length, first unit) no literal has is
  * no literal (lid 0), found without the table lookup.
@@ -1396,7 +1604,16 @@ export function lidWordByte(b: number): boolean {
 export function sepDelimLid(plan: LexIdPlan, delim: string): number {
   const lid = lidOf(plan, delim);
   if (lid >= plan.kwLid) throw new Error(`sep delimiter ${JSON.stringify(delim)} is a word: the portable targets match a delimiter as punctuation`);
+  if (plan.gtComps.includes(delim)) throw new Error(`sep delimiter ${JSON.stringify(delim)} is a composed '>' literal: the portable targets match a delimiter as one token`);
   return lid;
+}
+/** Whether a literal step is a composed '>'-led literal (LexIdPlan.gtComps), decided at generation
+ *  time: it spans several tokens and is only a lookahead operand, so it is matched by the target's
+ *  composite reader and never becomes a tree leaf. */
+export function gtCompLit(plan: LexIdPlan, s: { value: string; ttype: string }): boolean {
+  if (!plan.gtComps.includes(s.value)) return false;
+  if (s.ttype !== '$punct') throw new Error(`composed literal ${JSON.stringify(s.value)} must be punctuation`);
+  return true;
 }
 export function kidOf(plan: LexIdPlan, kind: string): number {
   const i = plan.kids.indexOf(kind);
@@ -1407,6 +1624,12 @@ export function kidOf(plan: LexIdPlan, kind: string): number {
  * Bool table indexed by lid for O(1) set membership in emitted lexers.
  * Slot 0 stays false: lids[0]='' means "not any literal" (Ident/Number text → lid 0).
  */
+/** Per lid: +1 for a text of `open`, -1 for one of `close`, else 0. Newline mode's flow depth
+ *  moves by it at each literal token, a table lookup instead of a set of strings. */
+export function lidDeltaTable(plan: LexIdPlan, open: readonly string[], close: readonly string[]): number[] {
+  const o = lidFlagTable(plan, open), c = lidFlagTable(plan, close);
+  return o.map((x, i) => (x ? 1 : 0) - (c[i] ? 1 : 0));
+}
 export function lidFlagTable(plan: LexIdPlan, texts: readonly string[]): boolean[] {
   const t = Array.from({ length: plan.lids.length }, () => false);
   for (const x of texts) {

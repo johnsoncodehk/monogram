@@ -106,13 +106,15 @@ else {
   // Builder needs — no generated rule helper or lexer constant.
   const GO_API = new Set(['Tokenize', 'Token', 'LexError', 'Error', 'Tok', 'Node', 'Edit', 'Align', 'EntryMeta', 'Seg', 'Doc', 'NewDoc', 'DocWith', 'NewDocWith', 'Document',
     'SetValidate', 'Text', 'Root', 'Builder', 'Shifter', 'CstBuilder', 'SlimBuilder', 'Checkpoint', 'Restore', 'Leaf', 'Finish', 'SpanOf', 'HeadSpan', 'Shift',
-    'ParseWith', 'CstJSONWith', 'SlimJSONWith', 'CstJSON', 'TT_NAMES', 'RULE_NAMES', 'TT_SKIP_PUNCT']);
+    'ParseWith', 'CstJSONWith', 'SlimJSONWith', 'CstJSON', 'TT_NAMES', 'RULE_NAMES', 'TT_SKIP_PUNCT',
+    // A builder that keeps the engine's buffers between parses (Rust: Builder::workspace_mut, Workspace).
+    'Workspace', 'WorkspaceOwner']);
   const exported = [...goSrc.matchAll(/^(?:func (?:\([^)]*\) )?|type |var |const )([A-Z]\w*)/gm)].map((x) => x[1]!);
   const extra = [...new Set(exported.filter((x) => !GO_API.has(x)))];
   check('go: package parser exports only its API', extra.length === 0, extra.slice(0, 12).join(' '));
   // Parser/lexer state lives on a per-call engine (a Doc owns its own): the only package-level
   // vars are read-only tables, and nothing is serialized behind a lock.
-  const GO_TABLE = /^(?:_|RULE_NAMES|TT_NAMES|kindStr|_lids|_kidMap|_lidFirstBits|_tokenSets|_divT|_divK|_rxT|_phK|_mem|_pav|lex(?:First|Cont)\w+|(?:atom|bin|pre|post)_\w+)$/;
+  const GO_TABLE = /^(?:_|RULE_NAMES|TT_NAMES|kindStr|_lids|_lidFirstBits|_uni(?:Top|Blk|Start|Cont)|_flowD|_tokenSets|_divT|_divK|_rxT|_phK|_mem|_pav|lex(?:First|Cont)\w+|(?:atom|bin|pre|post)_\w+)$/;
   const pkgVars = [...goSrc.matchAll(/^var (\w+)/gm)].map((x) => x[1]!).filter((x) => !GO_TABLE.test(x));
   check('go: no package-level mutable parser/lexer state', pkgVars.length === 0 && !/^var \($/m.test(goSrc), pkgVars.slice(0, 12).join(' '));
   check('go: package parser does not import sync', !/^\s*"sync"$/m.test(goSrc));
