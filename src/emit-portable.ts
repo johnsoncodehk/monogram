@@ -22,7 +22,7 @@
 // operators. buildIR THROWS on a construct outside this set rather than emit a wrong
 // parser. This is enough to derive a real JavaScript-subset parser (test/fixtures/minijs.ts).
 import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
-import { KIND, analyzeGrammar, concreteFirst, findEntryRule, tagOpenOnlyOpensTags } from './grammar-analysis.ts';
+import { KIND, analyzeGrammar, concreteFirst, directivesOf, findEntryRule, tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { nameRule, syntaxKey, type RuleNames } from './grammar-names.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { tokenPatternCharLoop, tokenPatternLiteralPrefix } from './token-pattern.ts';
@@ -650,6 +650,8 @@ function elementPlanOf(grammar: CstGrammar, el: NonNullable<CstGrammar['elements
   // Not built in the portable lexers yet: refused, not lexed without them (docs/REGIONS.md, Owed).
   if (el.tagStart) throw new Error('portable: elements.tagStart is out of scope until the portable lexers carry it');
   if (el.textTokens?.length) throw new Error('portable: elements.textTokens is out of scope until the portable lexers carry it');
+  const dir = directivesOf(grammar, el);
+  if (dir && (dir.openers.length || dir.continuations.length || dir.blocks.length)) throw new Error('portable: element directives are out of scope until the portable lexers carry them');
   if (el.rawText?.some((r) => r.unlessBodyStarts)) throw new Error('portable: elements.rawText[].unlessBodyStarts is out of scope until the portable lexers carry it');
   // The signature's rewind restores the frame stack, not the raw-text tag records.
   if (tp?.signature && el.rawText?.length) throw new Error('portable: elements.rawText with typeParameters.signature is out of scope');

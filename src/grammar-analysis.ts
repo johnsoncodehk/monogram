@@ -749,3 +749,156 @@ export function tagOpenOnlyOpensTags(grammar: CstGrammar, region: ElementRegion)
   }
   return true;
 }
+
+/** One derived directive literal and the literal sequences that must follow it (docs/REGIONS.md,
+ *  "Directives"): each sequence ends with the head's `(` or the body's `hole.open`. */
+export type DirectiveEntry = { lit: string; nexts: string[][] };
+export type Directives = {
+  openers: DirectiveEntry[];        // begin a children item: `@if` + `(`
+  continuations: DirectiveEntry[];  // follow a directive body: `@else` + `{` / `if (`
+  blocks: string[];                 // a children item `lit … hole.close` whose lit ends with hole.open: a code hole
+  refused: { arm: string; reason: string }[];  // arms the lexer cannot find in text, with why
+};
+
+/**
+ * The directives of a text-children element region, DERIVED from the grammar (docs/REGIONS.md,
+ * "Directives"). The children items are the items repeated between an element arm's `tagClose`
+ * and its `closeTag`, and the items of every directive body. An OPENER is a literal that begins a
+ * children item, other than `tagOpen` and `hole.open`, with the literal sequences that must follow
+ * it up to its head's `(` or its body's `hole.open`; the head is that parenthesised group, and the
+ * BODY (a rule whose arms are `hole.open … hole.close`) must follow it. A CONTINUATION is a
+ * literal that begins the item right after a body, with its own sequences. An arm the lexer could
+ * not delimit (an expression or a token before the body, a body that does not follow the head)
+ * is REFUSED by name, with the reason. Null for a region without `text` (code children lex a
+ * directive as code).
+ */
+export function directivesOf(grammar: CstGrammar, region: ElementRegion): Directives | null {
+  if (region.text === undefined) return null;
+  const rules = new Map(grammar.rules.map((r) => [r.name, r]));
+  const out: Directives = { openers: [], continuations: [], blocks: [], refused: [] };
+  const show = (e: RuleExpr): string => {
+    switch (e.type) {
+      case 'literal': return JSON.stringify(e.value);
+      case 'ref': return e.name;
+      case 'seq': return e.items.map(show).join(' ');
+      case 'alt': return `(${e.items.map(show).join(' | ')})`;
+      case 'quantifier': return `${show(e.body)}${e.kind}`;
+      case 'group': return show(e.body);
+      default: return e.type;
+    }
+  };
+  const seqOf = (e: RuleExpr): RuleExpr[] => (e.type === 'seq' ? e.items : e.type === 'group' ? seqOf(e.body) : [e]);
+  const altsOf = (e: RuleExpr): RuleExpr[][] => (e.type === 'alt' ? e.items.flatMap(altsOf) : e.type === 'group' ? altsOf(e.body) : [seqOf(e)]);
+  const isLit = (e: RuleExpr | undefined, v: string) => e?.type === 'literal' && e.value === v;
+  // a body: a rule whose every arm is `hole.open … hole.close`
+  const isBody = (e: RuleExpr | undefined): boolean => {
+    if (e?.type !== 'ref') return false;
+    const r = rules.get(e.name);
+    return !!r && altsOf(r.body).every((a) => isLit(a[0], region.hole.open) && isLit(a[a.length - 1], region.hole.close));
+  };
+  class Refuse extends Error {}
+  type Lead = { lits: string[]; items: RuleExpr[]; at: number };
+  // the literal sequences from items[i] up to a `(` or a body, each with the items it ended in
+  const leads = (items: RuleExpr[], i: number, seen: Set<string>): Lead[] => {
+    const it = items[i];
+    if (it === undefined) throw new Refuse('nothing follows it: no head and no body');
+    const rest = items.slice(i + 1);
+    switch (it.type) {
+      case 'literal':
+        if (it.value === '(' || it.value === region.hole.open) return [{ lits: [it.value], items, at: i }];
+        return leads(items, i + 1, seen).map((l) => ({ ...l, lits: [it.value, ...l.lits] }));
+      case 'ref': {
+        if (isBody(it)) return [{ lits: [region.hole.open], items, at: i }];
+        const r = rules.get(it.name);
+        if (!r || seen.has(it.name)) throw new Refuse(`\`${it.name}\` stands between it and its body: the body's \`${region.hole.open}\` cannot be told from one inside it`);
+        const s = new Set(seen).add(it.name);
+        return altsOf(r.body).flatMap((a) => leads([...a, ...rest], 0, s));
+      }
+      case 'quantifier':
+        if (it.kind !== '?') throw new Refuse(`\`${show(it)}\` stands between it and its body`);
+        return [...leads([...seqOf(it.body), ...rest], 0, seen), ...leads(items, i + 1, seen)];
+      case 'alt': return it.items.flatMap((a) => leads([...seqOf(a), ...rest], 0, seen));
+      case 'group': return leads([...seqOf(it.body), ...rest], 0, seen);
+      default: throw new Refuse(`\`${show(it)}\` stands between it and its body`);
+    }
+  };
+  // the arms an item list can begin with, rule references and groups at its head expanded
+  const arms = (items: RuleExpr[], seen: Set<string> = new Set()): RuleExpr[][] => {
+    const [head, ...rest] = items;
+    if (head === undefined) return [];
+    if (head.type === 'ref') {
+      const r = rules.get(head.name);
+      if (!r || seen.has(head.name)) return r ? [] : [items];
+      const s = new Set(seen).add(head.name);
+      return altsOf(r.body).flatMap((a) => arms([...a, ...rest], s));
+    }
+    if (head.type === 'quantifier') return [...arms([...seqOf(head.body), ...rest], seen), ...(head.kind === '+' ? [] : arms(rest, seen))];
+    if (head.type === 'alt' || head.type === 'group') return altsOf(head).flatMap((a) => arms([...a, ...rest], seen));
+    return [items];
+  };
+  const done = new Set<string>();
+  const bodies = new Set<string>();
+  // a directive arm: items[0] is its literal; derive its sequences, check its head and body, and
+  // take the arms of the item right after the body as continuations
+  const directive = (items: RuleExpr[], name: string, into: DirectiveEntry[]): void => {
+    const lit = (items[0] as { value: string }).value;
+    const key = `${into === out.openers ? 'o' : 'c'} ${show({ type: 'seq', items })}`;
+    if (done.has(key)) return;
+    done.add(key);
+    let ls: Lead[];
+    const after: RuleExpr[][] = [];
+    try {
+      ls = leads(items, 1, new Set());
+      for (const l of ls) {
+        let body = l.at;
+        if (l.lits[l.lits.length - 1] === '(') {
+          let depth = 0, j = l.at;
+          for (; j < l.items.length; j++) {
+            if (isLit(l.items[j], '(')) depth++;
+            else if (isLit(l.items[j], ')') && --depth === 0) break;
+          }
+          if (j >= l.items.length || !isBody(l.items[j + 1])) throw new Refuse('its head `( … )` is not followed by a body');
+          body = j + 1;
+        } else if (!isBody(l.items[body])) throw new Refuse(`its \`${region.hole.open}\` opens no body (a rule whose arms are \`${region.hole.open} … ${region.hole.close}\`)`);
+        bodies.add((l.items[body] as { name: string }).name);
+        after.push(...arms(l.items.slice(body + 1)));
+      }
+    } catch (e) {
+      if (!(e instanceof Refuse)) throw e;
+      out.refused.push({ arm: `${name}: ${show({ type: 'seq', items })}`, reason: e.message });
+      return;
+    }
+    let ent = into.find((d) => d.lit === lit);
+    if (!ent) into.push(ent = { lit, nexts: [] });
+    for (const l of ls) if (!ent.nexts.some((x) => x.join(' ') === l.lits.join(' '))) ent.nexts.push(l.lits);
+    for (const a of after) if (a[0]?.type === 'literal') directive(a, name, out.continuations);
+  };
+  const item = (e: RuleExpr, name: string) => {
+    for (const a of arms([e])) {
+      const h = a[0];
+      if (h?.type !== 'literal' || h.value === region.tagOpen || h.value === region.hole.open) continue;
+      if (h.value.endsWith(region.hole.open)) {
+        if (!isLit(a[a.length - 1], region.hole.close)) out.refused.push({ arm: `${name}: ${show({ type: 'seq', items: a })}`, reason: `its literal ends with \`${region.hole.open}\` but the item does not end with \`${region.hole.close}\`` });
+        else if (!out.blocks.includes(h.value)) out.blocks.push(h.value);
+        continue;
+      }
+      directive(a, name, out.openers);
+    }
+  };
+  // the children items: repeated between an element arm's tagClose and its closeTag
+  const walk = (e: RuleExpr, name: string): void => {
+    if (e.type === 'seq') {
+      const k = e.items.findIndex((x) => x.type === 'ref' && x.name === region.closeTag);
+      for (let i = 0; i < k; i++) if (isLit(e.items[i], region.tagClose)) for (let j = i + 1; j < k; j++) { const q = e.items[j]; if (q.type === 'quantifier') item(q.body, name); }
+    }
+    if (e.type === 'seq' || e.type === 'alt') e.items.forEach((x) => walk(x, name));
+    else if (e.type === 'quantifier' || e.type === 'group') walk(e.body, name);
+  };
+  for (const r of grammar.rules) walk(r.body, r.name);
+  // ... and the items of every directive body
+  for (let seen = 0; seen < bodies.size;) {
+    const name = [...bodies][seen++];
+    for (const a of altsOf(rules.get(name)!.body)) for (const q of a) if (q.type === 'quantifier') item(q.body, name);
+  }
+  return out;
+}

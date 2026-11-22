@@ -266,6 +266,13 @@ const FRAME_DOCS: Record<string, FrameDoc[]> = {
     // before it; an unterminated `/*` in text reads to the end of the file, past the element
     { doc: 'component C(a) {\n  <p>hi // n\n a/* c */b {a}// m\n</p>;\n  const z = 1; /* k */\n}', ins: [...TEXT_INS, '*'] },
     { doc: 'component C() { <p>q /*</p>; const z = 1; }', ins: ['*/', '*', '/', ' ', 'x'] },
+    // directives (derived openers, heads, bodies, continuations): edits that make and break an
+    // opener (`@if (` / `@iffy`), a head's parens and braces, a body's closer, a continuation;
+    // and an opener / a continuation made by closing a comment after the element (their tests
+    // read the comment to the end of the file)
+    { doc: 'component C(a) {\n  <p>x @if (a) { y <b/> } @else if ({a}.a) {m} @else { n } z@for await (i of a) {{i}} @empty {e}</p>;\n}', ins: ['{', '}', '<', '/', ';', 'x', ' ', '\n', '@', '(', ')', 'e', 'f'] },
+    { doc: 'component C(a) { <p>@if /* (a) {y}</p>; const z = 1; }', ins: ['*/ (a) {y}</p>; ', '*/'] },
+    { doc: 'component C(a) { <p>@if (a) {y} @else /* {n}</p>; const z = 1; }', ins: ['*/ {n}</p>; ', '*/'] },
   ],
 };
 // (`"` and `\` make lex errors: inside an undecided type-parameter signature an error is the

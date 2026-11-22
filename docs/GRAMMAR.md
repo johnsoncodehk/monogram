@@ -100,7 +100,10 @@ A template dialect whose text may contain a bare `<` declares `tagStart`, the on
 a `<` must be followed by to open a tag (`<p>1 < 2</p>` is then text); a raw-text declaration can
 carry `unlessBodyStarts`, a pattern under which the body is ordinary children instead (a
 `<style>` whose body starts with `{` holds an expression). [`test/fixtures/textdialect.ts`](../test/fixtures/textdialect.ts)
-declares both; [`test/text-dialect.ts`](../test/text-dialect.ts) has its rows.
+declares both, with `textTokens` (comments in text: tokens tried before the text run, `//` only
+after a blank) and directives in its children (`@if (…) { … } @else { … }`), which need no
+declaration: their openers, heads, bodies and continuations are derived from the rules, and an arm
+the lexer could not find in text is refused by name at load. [`test/text-dialect.ts`](../test/text-dialect.ts) has its rows.
 
 ### What a lexer-local region cannot decide
 
