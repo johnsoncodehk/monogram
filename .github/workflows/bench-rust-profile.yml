@@ -38,7 +38,7 @@ jobs:
           # Before / after of perf/token-array-reservation (#126) with builder workspace reuse:
           # A = origin/master 29b193b, M = aed2c94.
           PROFILE_A: 29b193ba523cef163b32c50f0abb33c537fad8f3
-          PROFILE_M: aed2c94feacdb6da809a06ea65827327f7c7d00f
+          PROFILE_M: 60e8b1248ed2e09bcc86d1463ba91ff55a43c780
 
       - uses: actions/upload-artifact@v4
         if: always()
