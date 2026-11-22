@@ -1329,7 +1329,7 @@ fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], 
         children.extend_from_slice(prefix_kids);
         children.extend_from_slice(mid);
         children.extend_from_slice(&adopted_hs);
-        let new_entries = reuse_entries(prefix_meta, mid_meta, suffix_meta, adopt_from as isize, byte_delta, tok_delta);
+        let new_entries = reuse_entries(prefix_meta, mid_meta, suffix_meta, adopt_from, byte_delta, tok_delta);
         let (off, end, tok_start, tok_end) = reuse_span(&new_entries);
         let sb = self.scratch.len();
         self.scratch.extend_from_slice(&children);
@@ -1342,8 +1342,7 @@ fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], 
     fn try_reuse_top(&mut self, old_root: B::H, old_entries: &[EntryMeta], new_toks: Vec<Tok>, byte_delta: isize, old_n: usize, prefix: usize, suffix: usize, validate: bool) -> Option<(B::H, usize)> {
         if validate { self.b.validate_entries(old_entries, old_root); }
         let old_kids = self.b.root_kids(old_root);
-        let (prefix_len, suffix_start) = reuse_bounds(old_entries, prefix as isize, old_n as isize, suffix as isize);
-        let (prefix_len, suffix_start) = (prefix_len as usize, suffix_start as usize);
+        let (prefix_len, suffix_start) = reuse_bounds(old_entries, prefix, old_n, suffix);
         let prefix_kids = old_kids[..prefix_len].to_vec();
         let suffix_cand = old_kids[suffix_start..].to_vec();
         let prefix_meta = &old_entries[..prefix_len];
@@ -1355,11 +1354,11 @@ fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], 
         let mut mid_meta: Vec<EntryMeta> = Vec::new();
         let rule_id = self.b.rule_id_of(old_root);
         let try_hit = |p: &mut Parser<'a, B>, mid: &[B::H], mid_meta: &[EntryMeta]| -> Option<(B::H, usize)> {
-            let at = reuse_adopt_at(suffix_meta, old_n as isize, suffix as isize, (p.toks.len() - p.pos) as isize);
+            let at = reuse_adopt_at(suffix_meta, old_n, suffix, p.toks.len() - p.pos);
             if at < 0 { return None; }
             Some(p.finish_reuse(rule_id, &prefix_kids, mid, &suffix_cand, prefix_meta, mid_meta, suffix_meta, at as usize, byte_delta))
         };
-        let passed = |p: &Parser<'a, B>| reuse_gave_up(suffix_meta, old_n as isize, (p.toks.len() - p.pos) as isize);
+        let passed = |p: &Parser<'a, B>| reuse_gave_up(suffix_meta, old_n, p.toks.len() - p.pos);
         if let Some(hit) = try_hit(self, &mid, &mid_meta) { return Some(hit); }
         if passed(self) { return None; }
         loop {
@@ -1422,7 +1421,7 @@ impl<'a, B: Builder> Parser<'a, B> {
         children.extend_from_slice(prefix_kids);
         children.extend_from_slice(mid_kids);
         children.extend_from_slice(&adopted_kids);
-        let (new_segs, new_entries) = reuse_seg_entries(prefix_segs, prefix_meta, mid_segs, mid_meta, suffix_cand, suffix_meta, adopt_from as isize, byte_delta, tok_delta);
+        let (new_segs, new_entries) = reuse_seg_entries(prefix_segs, prefix_meta, mid_segs, mid_meta, suffix_cand, suffix_meta, adopt_from, byte_delta, tok_delta);
         let (off, end, tok_start, tok_end) = reuse_span(&new_entries);
         let sb = self.scratch.len();
         self.scratch.extend_from_slice(&children);
@@ -1436,8 +1435,7 @@ impl<'a, B: Builder> Parser<'a, B> {
     fn try_reuse_seg(&mut self, old_root: B::H, old_segs: &[Seg], old_entries: &[EntryMeta], new_toks: Vec<Tok>, byte_delta: isize, old_n: usize, prefix: usize, suffix: usize, validate: bool) -> Option<(B::H, usize)> {
         if old_segs.is_empty() { return None; }
         if validate { self.b.validate_entry_segs(old_entries, old_segs, old_root); }
-        let (prefix_len, suffix_start) = reuse_bounds(old_entries, prefix as isize, old_n as isize, suffix as isize);
-        let (prefix_len, suffix_start) = (prefix_len as usize, suffix_start as usize);
+        let (prefix_len, suffix_start) = reuse_bounds(old_entries, prefix, old_n, suffix);
         let prefix_segs = &old_segs[..prefix_len];
         let suffix_cand = &old_segs[suffix_start..];
         let prefix_meta = &old_entries[..prefix_len];
@@ -1456,11 +1454,11 @@ impl<'a, B: Builder> Parser<'a, B> {
         let mut mid_meta: Vec<EntryMeta> = Vec::new();
         let rule_id = self.b.rule_id_of(old_root);
         let try_hit = |p: &mut Parser<'a, B>, mid_kids: &[B::H], mid_segs: &[Seg], mid_meta: &[EntryMeta]| -> Option<(B::H, usize)> {
-            let at = reuse_adopt_at(suffix_meta, old_n as isize, suffix as isize, (p.toks.len() - p.pos) as isize);
+            let at = reuse_adopt_at(suffix_meta, old_n, suffix, p.toks.len() - p.pos);
             if at < 0 { return None; }
             Some(p.finish_reuse_seg(rule_id, prefix_segs, &prefix_kids, mid_segs, mid_kids, suffix_cand, prefix_meta, mid_meta, suffix_meta, old_root, at as usize, byte_delta))
         };
-        let passed = |p: &Parser<'a, B>| reuse_gave_up(suffix_meta, old_n as isize, (p.toks.len() - p.pos) as isize);
+        let passed = |p: &Parser<'a, B>| reuse_gave_up(suffix_meta, old_n, p.toks.len() - p.pos);
         if let Some(hit) = try_hit(self, &mid_kids, &mid_segs, &mid_meta) { return Some(hit); }
         if passed(self) { return None; }
         ${hasHeadB ? `if prefix_len == 0 {
@@ -5397,7 +5395,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
     },
   },
   record: {
-    field: (cx, r, _rec, f, ty, nat) => cx.atom(`${rsWrap(r, ATOM)}.${snake(f)}`, ty === 'bool' ? 'bool' : 'int', nat),
+    field: (cx, r, _rec, f, ty, nat) => cx.atom(`${rsWrap(r, ATOM)}.${snake(f)}`, ty, nat),
     setField: (id, f, val) => [`${id}.${snake(f)} = ${val};`],
     // A Seg's fields index the kid and token Vecs directly.
     nat: (rec) => (rec === 'Seg' ? 'usize' : undefined),

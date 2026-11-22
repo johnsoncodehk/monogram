@@ -40,15 +40,15 @@ const ret = (...es: Expr[]): Stmt => ({ k: 'return', es });
 // trailing entries (after the prefix) that start in the unchanged suffix tokens.
 const reuseBounds: Fn = {
   name: 'reuseBounds',
-  doc: 'The kept prefix entries [0, prefixLen) and the suffix candidates [suffixStart, len(entries)).',
-  params: [{ name: 'entries', ty: ENTRIES }, { name: 'prefix', ty: 'int' }, { name: 'oldN', ty: 'int' }, { name: 'suffix', ty: 'int' }],
-  ret: ['int', 'int'],
+  doc: '',
+  params: [{ name: 'entries', ty: ENTRIES }, { name: 'prefix', ty: 'idx' }, { name: 'oldN', ty: 'idx' }, { name: 'suffix', ty: 'idx' }],
+  ret: ['idx', 'idx'],
   body: [
-    { k: 'let', name: 'prefixLen', ty: 'int', init: n(0) },
+    { k: 'let', name: 'prefixLen', ty: 'idx', init: n(0) },
     { k: 'while', c: bin('and', bin('lt', v('prefixLen'), len(v('entries'))), bin('le', fld('entries', v('prefixLen'), 'ext'), v('prefix'))), body: [
       { k: 'set', name: 'prefixLen', e: bin('add', v('prefixLen'), n(1)) },
     ] },
-    { k: 'let', name: 'suffixStart', ty: 'int', init: len(v('entries')) },
+    { k: 'let', name: 'suffixStart', ty: 'idx', init: len(v('entries')) },
     { k: 'while', c: bin('and', bin('gt', v('suffixStart'), v('prefixLen')), bin('ge', fld('entries', bin('sub', v('suffixStart'), n(1)), 'tokStart'), bin('sub', v('oldN'), v('suffix')))), body: [
       { k: 'set', name: 'suffixStart', e: bin('sub', v('suffixStart'), n(1)) },
     ] },
@@ -61,8 +61,8 @@ const reuseBounds: Fn = {
 // with no candidate, the end of the stream adopts nothing (index 0).
 const reuseAdoptAt: Fn = {
   name: 'reuseAdoptAt',
-  doc: 'The suffix candidate adopted with left tokens left (its index), or -1.',
-  params: [{ name: 'suffixMeta', ty: ENTRIES }, { name: 'oldN', ty: 'int' }, { name: 'suffix', ty: 'int' }, { name: 'left', ty: 'int' }],
+  doc: '',
+  params: [{ name: 'suffixMeta', ty: ENTRIES }, { name: 'oldN', ty: 'idx' }, { name: 'suffix', ty: 'idx' }, { name: 'left', ty: 'idx' }],
   ret: ['int'],
   body: [
     { k: 'if', c: bin('gt', v('left'), v('suffix')), then: [ret(n(-1))] },
@@ -79,11 +79,11 @@ const reuseAdoptAt: Fn = {
 // only consumes tokens.
 const reuseGaveUp: Fn = {
   name: 'reuseGaveUp',
-  doc: 'Whether, with left tokens left, no suffix candidate can be adopted any more.',
-  params: [{ name: 'suffixMeta', ty: ENTRIES }, { name: 'oldN', ty: 'int' }, { name: 'left', ty: 'int' }],
+  doc: '',
+  params: [{ name: 'suffixMeta', ty: ENTRIES }, { name: 'oldN', ty: 'idx' }, { name: 'left', ty: 'idx' }],
   ret: ['bool'],
   body: [
-    { k: 'let', name: 'c', ty: 'int', init: len(v('suffixMeta')) },
+    { k: 'let', name: 'c', ty: 'idx', init: len(v('suffixMeta')) },
     ret(bin('and', bin('gt', v('c'), n(0)), bin('lt', v('left'), bin('sub', v('oldN'), fld('suffixMeta', bin('sub', v('c'), n(1)), 'tokStart'))))),
   ],
 };
@@ -95,7 +95,7 @@ const recField = (e: Expr, f: string): Expr => ({ k: 'field', e, f });
 // An adopted entry moved by the edit: its tokens by tokDelta, its text by byteDelta.
 const shiftEntryMeta: Fn = {
   name: 'shiftEntryMeta',
-  doc: 'Moves entry m by the edit: its tokens by tokDelta, its text span by byteDelta.',
+  doc: '',
   params: [{ name: 'm', ty: ENTRY, ref: true }, { name: 'byteDelta', ty: 'int' }, { name: 'tokDelta', ty: 'int' }],
   ret: [],
   body: [
@@ -108,8 +108,8 @@ const shiftEntryMeta: Fn = {
 // adopted suffix from adoptFrom, moved by the edit.
 const reuseEntries: Fn = {
   name: 'reuseEntries',
-  doc: 'The new entries: the prefix, the middle, and the suffix from adoptFrom moved by the edit.',
-  params: [{ name: 'prefixMeta', ty: ENTRIES }, { name: 'midMeta', ty: ENTRIES }, { name: 'suffixMeta', ty: ENTRIES }, { name: 'adoptFrom', ty: 'int' }, { name: 'byteDelta', ty: 'int' }, { name: 'tokDelta', ty: 'int' }],
+  doc: '',
+  params: [{ name: 'prefixMeta', ty: ENTRIES }, { name: 'midMeta', ty: ENTRIES }, { name: 'suffixMeta', ty: ENTRIES }, { name: 'adoptFrom', ty: 'idx' }, { name: 'byteDelta', ty: 'int' }, { name: 'tokDelta', ty: 'int' }],
   ret: [ENTRIES],
   body: [
     { k: 'let', name: 'out', ty: ENTRIES, init: { k: 'newList', ty: ENTRIES, cap: bin('sub', bin('add', bin('add', len(v('prefixMeta')), len(v('midMeta'))), len(v('suffixMeta'))), v('adoptFrom')) } },
@@ -128,11 +128,11 @@ const reuseEntries: Fn = {
 // entries).
 const reuseSpan: Fn = {
   name: 'reuseSpan',
-  doc: 'The root span over entries: off, end, tokStart, tokEnd (all 0 without entries).',
+  doc: '',
   params: [{ name: 'entries', ty: ENTRIES }],
   ret: ['pos', 'pos', 'pos', 'pos'],
   body: [
-    { k: 'let', name: 'c', ty: 'int', init: len(v('entries')) },
+    { k: 'let', name: 'c', ty: 'idx', init: len(v('entries')) },
     { k: 'if', c: bin('eq', v('c'), n(0)), then: [ret(n(0), n(0), n(0), n(0))] },
     ret(fld('entries', n(0), 'off'), fld('entries', bin('sub', v('c'), n(1)), 'end'), fld('entries', n(0), 'tokStart'), fld('entries', bin('sub', v('c'), n(1)), 'tokEnd')),
   ],
@@ -156,16 +156,16 @@ const segPart = (segs: string, metas: string, from: Expr, shift: boolean): Stmt 
 });
 const reuseSegEntries: Fn = {
   name: 'reuseSegEntries',
-  doc: 'The new segments and entries: the prefix, the middle, and the suffix from adoptFrom moved by the edit.',
+  doc: '',
   params: [
     { name: 'prefixSegs', ty: SEGS }, { name: 'prefixMeta', ty: ENTRIES }, { name: 'midSegs', ty: SEGS }, { name: 'midMeta', ty: ENTRIES },
-    { name: 'suffixSegs', ty: SEGS }, { name: 'suffixMeta', ty: ENTRIES }, { name: 'adoptFrom', ty: 'int' }, { name: 'byteDelta', ty: 'int' }, { name: 'tokDelta', ty: 'int' },
+    { name: 'suffixSegs', ty: SEGS }, { name: 'suffixMeta', ty: ENTRIES }, { name: 'adoptFrom', ty: 'idx' }, { name: 'byteDelta', ty: 'int' }, { name: 'tokDelta', ty: 'int' },
   ],
   ret: [SEGS, ENTRIES],
   body: [
     { k: 'let', name: 'outSegs', ty: SEGS, init: { k: 'newList', ty: SEGS, cap: bin('sub', bin('add', bin('add', len(v('prefixSegs')), len(v('midSegs'))), len(v('suffixSegs'))), v('adoptFrom')) } },
     { k: 'let', name: 'outE', ty: ENTRIES, init: { k: 'newList', ty: ENTRIES, cap: bin('sub', bin('add', bin('add', len(v('prefixMeta')), len(v('midMeta'))), len(v('suffixMeta'))), v('adoptFrom')) } },
-    { k: 'let', name: 'kOff', ty: 'int', init: n(0) },
+    { k: 'let', name: 'kOff', ty: 'idx', init: n(0) },
     segPart('prefixSegs', 'prefixMeta', n(0), false),
     segPart('midSegs', 'midMeta', n(0), false),
     segPart('suffixSegs', 'suffixMeta', v('adoptFrom'), true),
@@ -183,7 +183,7 @@ const or = (...es: Expr[]): Expr => es.reduce((a, b) => bin('or', a, b));
 const brk = (c: Expr): Stmt => ({ k: 'if', c, then: [{ k: 'break' }] });
 const computeAlignCore: Fn = {
   name: 'computeAlignCore',
-  doc: 'The old and new token counts, and the tokens equal at their start (prefix) and end (suffix).',
+  doc: '',
   params: [{ name: 'oldText', ty: 'str' }, { name: 'oldToks', ty: 'metas' }, { name: 'newText', ty: 'str' }, { name: 'newToks', ty: 'metas' }],
   ret: ['idx', 'idx', 'idx', 'idx'],
   body: [
@@ -218,10 +218,11 @@ const computeAlignCore: Fn = {
 export const REUSE_FNS: Fn[] = [reuseBounds, reuseAdoptAt, reuseGaveUp, shiftEntryMeta, reuseEntries, reuseSpan, reuseSegEntries];
 
 // The functions a grammar's Doc uses: every Doc aligns the streams (computeAlignCore); the reuse
-// functions only with a reuse plan, the segment list only for shape B.
+// functions only with a reuse plan, and the entry list of its shape (A: reuseEntries, B: reuseSegEntries).
 export function reuseFamilyFns(ir: ParserIR): Fn[] {
   if (!ir.reuse) return [computeAlignCore];
-  return [computeAlignCore, ...REUSE_FNS.filter((f) => ir.reuse!.kind === 'B' || f !== reuseSegEntries)];
+  const unused = ir.reuse.kind === 'B' ? reuseEntries : reuseSegEntries;
+  return [computeAlignCore, ...REUSE_FNS.filter((f) => f !== unused)];
 }
 
 export function emitReuseFamily(ir: ParserIR, lowering: Lowering): string {

@@ -453,12 +453,16 @@ class Printer implements Cx {
     if (op === 'and' || op === 'or') return res(a, b, 'bool', 'bool');
     if (isNum(a.ty) && isNum(b.ty)) {
       let [ca, cb, nat] = [a, b, a.lit ? b.nat : a.nat];
+      // Counts, indices and record positions (idx, pos) stay unsigned together: their arithmetic
+      // is in idx, and a subtraction among them must not go below zero.
+      const uns = (r: R): boolean => r.ty === 'idx' || r.ty === 'pos' || !!r.lit;
+      const ty: Num = uns(a) && uns(b) && !(a.lit && b.lit) ? 'idx' : 'int';
       if (!(a.lit || b.lit || a.nat === b.nat)) {
-        nat = this.nat('int');
+        nat = this.nat(ty);
         ca = this.coerceR(a, nat);
         cb = this.coerceR(b, nat);
       }
-      return { ...res(ca, cb, cmp ? 'bool' : 'int', cmp ? 'bool' : nat), lit: !cmp && a.lit && b.lit };
+      return { ...res(ca, cb, cmp ? 'bool' : ty, cmp ? 'bool' : nat), lit: !cmp && a.lit && b.lit };
     }
     if (a.ty === 'str' && b.ty === 'str') return res({ ...a, c: this.str(a) }, { ...b, c: this.str(b) }, 'bool', 'bool');
     if (a.ty === 'bool' && b.ty === 'bool') return res(a, b, 'bool', 'bool');
@@ -634,7 +638,8 @@ class Printer implements Cx {
         return { name: this.id(p.name), type: p.ref ? this.recL().refType(recName(p.ty as RecTy)) : this.type(p.ty, 'param') };
       }),
       rets: f.ret.map((t) => this.type(t, 'ret')),
-      doc: f.doc.split('\n'),
+      // An empty doc prints no comment.
+      doc: f.doc === '' ? [] : f.doc.split('\n'),
       body: this.block(f.body, 1),
       inline: f.inline === true,
       cold: f.cold === true,

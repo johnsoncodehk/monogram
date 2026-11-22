@@ -146,7 +146,7 @@ function census(fns: Fn[]): Map<string, number> {
   for (const f of fns) {
     if (f.extern) continue;   // a signature only: the target prints it (printFns skips it)
     bump('defn');
-    for (let i = 0; i < f.doc.split('\n').length; i++) bump(';;');
+    if (f.doc !== '') for (let i = 0; i < f.doc.split('\n').length; i++) bump(';;');
     f.body.forEach(st);
   }
   return n;
