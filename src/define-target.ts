@@ -8,7 +8,7 @@ import type { Lowering } from './algo-ir.ts';
 import type { Target } from './emit.ts';
 import type { LexTok, ParserIR } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
-import { IDENT_ESC_ERR, TPL_SPAN, UNI_CLASS, emitLexScan, emitScanInline, scannedTokens, scannerName, templateLiterals, tokenLiterals } from './lex-family.ts';
+import { EL_FRAME_FN, EL_OPENS_FN, EL_REACH_FN, IDENT_ESC_ERR, TPL_SPAN, UNI_CLASS, emitLexScan, emitScanInline, scannedTokens, scannerName, templateLiterals, tokenLiterals } from './lex-family.ts';
 import { emitRelexFamily } from './relex-family.ts';
 
 // The shared algorithm families, printed for the defining target.
@@ -32,6 +32,9 @@ export interface SharedAlgorithms {
   // whose escapes spell no IdentifierName, `(s, p, e) -> int`, which does not return.
   uniClass(): string;
   identEscError(): string;
+  // The printed names of an element region's routines (lex-family.ts elementFns): the frame
+  // step, the type-parameter vetoes, and the read end of a signature's decision.
+  elementFn(which: 'frame' | 'opens' | 'reach'): string;
 }
 
 export interface TargetDefinition {
@@ -72,6 +75,7 @@ export function defineTarget(def: TargetDefinition): PortableTarget {
     tplSpan: () => lowering().ident(TPL_SPAN),
     identEscError: () => lowering().ident(IDENT_ESC_ERR),
     uniClass: () => lowering().ident(UNI_CLASS),
+    elementFn: (which) => lowering().ident({ frame: EL_FRAME_FN, opens: EL_OPENS_FN, reach: EL_REACH_FN }[which]),
   };
   const target: PortableTarget = {
     name: def.name,

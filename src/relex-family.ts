@@ -44,6 +44,9 @@ export interface RelexMode {
   newline: boolean;
   regex: boolean;
   template: boolean;
+  // An element region: the template stack is the frame stack (it exists without a template
+  // token too), and a token's depth also counts the lexer's element state (relexDepth).
+  elements: boolean;
   kidNl: number;
   lidLParen: number;
   // The lexer's reads past a token's end + 1 (anchor rule (ii)); token names resolved to kids.
@@ -61,6 +64,7 @@ export function relexMode(ir: ParserIR): RelexMode {
     newline,
     regex,
     template: window && !!ir.tpl,
+    elements: window && !!ir.elements,
     kidNl: newline ? kidOf(ids, ir.newlineCfg!.token) : -1,
     lidLParen: regex ? lidOf(ids, '(') : -1,
     // lexLookPlan asks relexMode only for `window`: resolved lazily, after this returns.
@@ -71,7 +75,9 @@ export function relexMode(ir: ParserIR): RelexMode {
 const looks = (m: RelexMode): boolean => m.look.arms.length > 0 || m.look.over.length > 0;
 
 // Meta records lexer state per token only when some state field feeds the meta.
-const perToken = (m: RelexMode): boolean => m.newline || m.regex || m.template;
+const perToken = (m: RelexMode): boolean => m.newline || m.regex || m.template || m.elements;
+// The lexer keeps a frame stack (template holes, and element frames).
+const frames = (m: RelexMode): boolean => m.template || m.elements;
 
 // ---- expression / statement shorthands ----
 type Ex = Expr | string;
@@ -122,7 +128,18 @@ export function lexState(m: RelexMode): StateField[] {
       { name: 'lastBang', ty: 'bool', init: F },
     );
   }
-  if (m.template) f.push({ name: 'templateStack', ty: 'depths', init: newList('depths') });
+  if (frames(m)) f.push({ name: 'templateStack', ty: 'depths', init: newList('depths') });
+  if (m.elements) {
+    // The token just lexed ended an element (a value for the regex test); the type-argument
+    // depth in the current tag; the furthest a lookahead read (the tokens before it record
+    // deeper); where a kept type-parameter signature ends (no element begins before it).
+    f.push(
+      { name: 'elEnded', ty: 'bool', init: F },
+      { name: 'tagAngle', ty: 'int', init: I(0) },
+      { name: 'laEnd', ty: 'int', init: I(0) },
+      { name: 'specUntil', ty: 'int', init: I(0) },
+    );
+  }
   return f;
 }
 
@@ -140,9 +157,25 @@ function metaOf(m: RelexMode, t: string): Expr {
     lc: m.regex ? x('lastClose') : F,
     lb: m.regex ? x('lastBang') : F,
     hd: m.regex ? and(eq(ti(t, 'lid'), I(m.lidLParen)), gt(len('parenHead'), I(0)), last('parenHead')) : F,
-    td: m.template ? len('templateStack') : I(0),
+    td: m.elements ? tdOf(t) : m.template ? len('templateStack') : I(0),
   };
 }
+
+// A token's depth under element regions, by the lexer state right after it (relexDepth).
+const tdOf = (t: Ex): Expr => call('relexDepth', len('templateStack'), 'elEnded', ti(t, 'off'), 'laEnd');
+const relexDepthFn = (): Fn => ({
+  name: 'relexDepth',
+  doc: 'A token\'s depth: the frames open after it, one more when it ended an element (the next token\'s lexing reads that),\nand one more when it starts before the end of a lookahead read (an edit there can change how it was lexed); saturates at 255.',
+  params: [{ name: 'n', ty: 'int' }, { name: 'ended', ty: 'bool' }, { name: 'off', ty: 'int' }, { name: 'la', ty: 'int' }],
+  ret: ['int'],
+  body: [
+    let_('d', 'int', 'n'),
+    if_('ended', [set('d', add('d', I(1)))]),
+    if_(lt('off', 'la'), [set('d', add('d', I(1)))]),
+    if_(gt('d', I(255)), [set('d', I(255))]),
+    ret('d'),
+  ],
+});
 
 // Lexer state at the resume point, recovered from the anchor token `anchor` = oldToks[rb].
 function restoreFromAnchor(m: RelexMode): Stmt[] {
@@ -169,7 +202,7 @@ function restoreFromAnchor(m: RelexMode): Stmt[] {
 // ---- functions ----
 
 function toMetaFn(): Fn {
-  const zero: RelexMode = { window: false, newline: false, regex: false, template: false, kidNl: -1, lidLParen: -1, look: { arms: [], over: [], reach: [] }, kidOf: () => -1 };
+  const zero: RelexMode = { window: false, newline: false, regex: false, template: false, elements: false, kidNl: -1, lidLParen: -1, look: { arms: [], over: [], reach: [] }, kidOf: () => -1 };
   return {
     name: 'toMeta',
     doc: 'Stateless meta for tokens of a lexer whose meta carries no lexer state.',
@@ -392,7 +425,7 @@ function windowRelexStepFn(m: RelexMode): Fn {
     let_('rb', 'int', I(-1)),
     if_(ge('maxIdx', I(0)), [set('rb', sub('maxIdx', I(1)))]),
   ];
-  if (m.template) {
+  if (frames(m)) {
     anchorSearch.push(
       { k: 'comment', text: 'Template depth cannot be restored from meta: resume only after a td == 0 token.' },
       if_(ge('rb', I(0)), [
@@ -420,7 +453,7 @@ function windowRelexStepFn(m: RelexMode): Fn {
         set('w', sub('w', I(1))),
       ]),
     );
-    if (m.template) {
+    if (frames(m)) {
       anchorSearch.push(
         { k: 'comment', text: 'Back to a td == 0 token at or before it.' },
         while_(and(ge('rb', I(0)), ne(mi(at('oldToks', 'rb'), 'td'), I(0))), [set('rb', sub('rb', I(1)))]),
@@ -437,7 +470,8 @@ function windowRelexStepFn(m: RelexMode): Fn {
     eq(mtext('oldText', 'o'), { k: 'substr', s: x('newText'), a: ti('t', 'off'), b: ti('t', 'end') }),
   ];
   if (m.newline) same.push(eq(mi('o', 'fd'), 'flowDepth'));
-  if (m.template) same.push(eq(mi('o', 'td'), I(0)), eq(len('templateStack'), I(0)));
+  if (m.elements) same.push(eq(mi('o', 'td'), I(0)), eq(tdOf('t'), I(0)));
+  else if (m.template) same.push(eq(mi('o', 'td'), I(0)), eq(len('templateStack'), I(0)));
   const pre: Stmt[] = [];
   if (m.regex) {
     same.push(eq(mi('o', 'pd'), len('parenHead')), eq(mf('o', 'lc'), 'lastClose'), eq(mf('o', 'lb'), 'lastBang'));
@@ -531,6 +565,7 @@ function relexEditsFn(m: RelexMode): Fn {
 export function relexFamilyFns(m: RelexMode): Fn[] {
   const fns: Fn[] = [];
   if (!perToken(m)) fns.push(toMetaFn());
+  if (m.elements) fns.push(relexDepthFn());
   fns.push(scanMetaToksFn(m), scanMetaFn(), checkStreamEqFn(), editRangeFn(), applyEditsFn());
   if (m.window) {
     fns.push(findTokAtOffKindFn());

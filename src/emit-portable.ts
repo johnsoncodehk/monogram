@@ -22,7 +22,7 @@
 // operators. buildIR THROWS on a construct outside this set rather than emit a wrong
 // parser. This is enough to derive a real JavaScript-subset parser (test/fixtures/minijs.ts).
 import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
-import { KIND, analyzeGrammar, concreteFirst, findEntryRule } from './grammar-analysis.ts';
+import { KIND, analyzeGrammar, concreteFirst, findEntryRule, tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { nameRule, syntaxKey, type RuleNames } from './grammar-names.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { tokenPatternCharLoop, tokenPatternLiteralPrefix } from './token-pattern.ts';
@@ -461,6 +461,7 @@ export type ParserIR = {
   suppressSets: string[][];    // the connector sets `suppress` steps disable, indexed by Step.set; [0] is the empty set
   regexCtx: RegexCtx | null;   // null unless the grammar has a regex token with context
   tpl: TplCfg | null;          // null unless the grammar has a template token
+  elements: ElementPlan | null;  // null unless the grammar declares an element region
   newlineCfg: NewlineCfg | null;  // null unless the grammar declares `newline`
   /** Token flagged `identifier` (Unicode ID_Start/ID_Continue fallback target); null if none. */
   identToken: string | null;
@@ -479,6 +480,65 @@ export function portableIR(grammar: CstGrammar): ParserIR {
   return buildIR(grammar);
 }
 
+// An element region (ElementRegion, docs/REGIONS.md) as the portable lexers read it: the frame
+// stack's delimiters, its region tokens (scanned only inside the region, never by the ordinary
+// scan: scannedTokens leaves them out), how code enters it, and TypeScript's type-parameter
+// vetoes as patterns. The frame encoding and every decision are the shared lexer family's
+// (lex-family.ts elementFns); the interpreter's lexer (emit-lexer.ts) is the oracle.
+export type ElementPlan = {
+  tagOpen: string; tagClose: string; closeMarker: string;
+  holeOpen: string; holeClose: string;
+  text: string | null;        // the children text run's token; null: children are lexed as code
+  closeTag: string; selfClose: string;
+  tagTokens: string[];        // tried in a tag (outside type arguments) before the ordinary scan
+  // 'always': every tagOpen in code outside a tag opens an element (tagOpenOnlyOpensTags);
+  // 'operand': only one where an operand may start, unless a veto below says otherwise.
+  entry: 'always' | 'operand';
+  head: TokenPattern | null;  // after tagOpen: a type-parameter list, never an element
+  // `tagOpen Name tagClose (`: decided by lexing the group as code; kept when its closer is
+  // followed by one of `then`.
+  signature: { pre: TokenPattern; then: string[] } | null;
+};
+
+// JavaScript's \s (the interpreter's signature regex is built with it).
+const JS_WS: TokenPattern = { type: 'charClass', negate: false, items: [
+  { type: 'range', from: '\t', to: '\r' }, ...[' ', '\u00a0', '\u1680'].map((value) => ({ type: 'char' as const, value })),
+  ...Array.from({ length: 11 }, (_, i) => ({ type: 'char' as const, value: String.fromCharCode(0x2000 + i) })), ...['\u2028', '\u2029', '\u202f', '\u205f', '\u3000', '\ufeff'].map((value) => ({ type: 'char' as const, value })),
+] };
+
+function elementPlanOf(grammar: CstGrammar, el: NonNullable<CstGrammar['elements']>, identToken: string | null): ElementPlan {
+  const tok = (name: string, role: string): string => {
+    if (!grammar.tokens.some((t) => t.name === name)) throw new Error(`portable: elements.${role}: no token named '${name}'`);
+    return name;
+  };
+  if (grammar.newline) throw new Error('portable: elements with newline mode are not supported');
+  const always = tagOpenOnlyOpensTags(grammar, el);
+  const tp = el.typeParameters;
+  if (always && tp) throw new Error(`portable: elements.typeParameters: this grammar uses '${el.tagOpen}' only to open tags`);
+  let signature: ElementPlan['signature'] = null;
+  if (tp?.signature) {
+    // The verdict is read off the bracket-head stack, which tracks `(` / `)` only.
+    if (tp.signature.open !== '(' || tp.signature.close !== ')') throw new Error('portable: elements.typeParameters.signature: only a ( … ) group is supported');
+    const ident = grammar.tokens.find((t) => t.name === identToken);
+    if (!ident) throw new Error('portable: elements.typeParameters.signature needs the identifier token');
+    const ws: TokenPattern = { type: 'repeat', body: JS_WS, min: 0, greedy: true };
+    signature = { pre: { type: 'seq', items: [ws, ident.pattern, ws, el.tagClose, ws, tp.signature.open] }, then: [...tp.signature.then] };
+  }
+  return {
+    tagOpen: el.tagOpen, tagClose: el.tagClose, closeMarker: el.closeMarker,
+    holeOpen: el.hole.open, holeClose: el.hole.close,
+    text: el.text === undefined ? null : tok(el.text, 'text'),
+    closeTag: tok(el.closeTag, 'closeTag'), selfClose: tok(el.selfClose, 'selfClose'),
+    tagTokens: (el.tagTokens ?? []).map((n) => tok(n, 'tagTokens')),
+    entry: always ? 'always' : 'operand',
+    head: tp?.head ?? null,
+    signature,
+  };
+}
+
+// The token names an element region lexes itself (never the ordinary scan).
+export const elementTokens = (e: ElementPlan | null): string[] => (e ? [...(e.text ? [e.text] : []), e.closeTag, e.selfClose, ...e.tagTokens] : []);
+
 // ── buildIR: grammar + analysis → the target-agnostic parse plan ──
 
 function isNeverPat(p: TokenPattern): boolean {
@@ -491,11 +551,6 @@ function buildIR(grammar: CstGrammar): ParserIR {
   }
   if (grammar.markup) {
     throw new Error('portable: markup-mode grammars are out of scope (use jsTarget or the interpreter path)');
-  }
-  // The portable lexers have no element-region frame stack yet (ElementRegion, emit-lexer.ts):
-  // refused rather than lexed without the region, so no target diverges from the interpreter.
-  if (grammar.elements) {
-    throw new Error('portable: element-region grammars are out of scope until the portable lexers carry the frame stack (use jsTarget or the interpreter path)');
   }
 
   const a = analyzeGrammar(grammar);
@@ -763,6 +818,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
   }
 
   const identToken = grammar.tokens.find((t) => t.identifier)?.name ?? null;
+  const elements = grammar.elements ? elementPlanOf(grammar, grammar.elements, identToken) : null;
   const identLike = [
     ...(identToken ? [identToken] : []),
     ...grammar.tokens.filter((t) => t.identifierPrefix).map((t) => t.name),
@@ -818,7 +874,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
   // the literal's spelling: `get` is an identifier, `@new` a decorator. So the signatures share no
   // literal text and no token kind, and neither begins with a literal some kind of the other's can
   // carry (`alt(['get', …], [Ident, …])` must try the second branch when the first fails on `get`).
-  const kindsOf = literalKinds({ tokens, tpl, identToken, identLike, puncts });
+  const kindsOf = literalKinds({ tokens, tpl, elements, identToken, identLike, puncts });
   // ── Refusal by the complement of FIRST ──
   // A candidate whose FIRST the plain analysis does not know (a Pratt rule leads: Stmt's expression
   // statement, a for-head's expression arms) has no `first` set, so it was tried at every token. Its
@@ -937,7 +993,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
   const entry = findEntryRule(grammar);
   const forms = formsOf(rules, lookaheads, shared.length, entry);
   const identPrefix = Object.fromEntries(identLike.map((n) => [n, grammar.tokens.find((t) => t.name === n)?.identifierPrefix ?? '']));
-  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse: reusePlanOf(rules, entry), suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike, identPrefix };
+  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse: reusePlanOf(rules, entry), suppressSets, regexCtx, tpl, elements, newlineCfg, identToken, identLike, identPrefix };
 }
 
 // The step lists a rule runs: an rd rule's alternatives, a Pratt rule's NUD and LED arms.
@@ -1193,7 +1249,7 @@ export type PrattLowering = {
   nudClose: string;
 };
 /** A Pratt rule's functions in the form `L` spells. */
-export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | 'identToken' | 'identLike' | 'puncts' | 'gtComps'>, ids: LexIdPlan, L: PrattLowering): string {
+export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | 'elements' | 'identToken' | 'identLike' | 'puncts' | 'gtComps'>, ids: LexIdPlan, L: PrattLowering): string {
   const cond = (steps: Step[]) => conjOf(steps, L.steps);
   const d = r.nudDispatch;
   const nudArm = (i: number, keyed: boolean): string => {
@@ -1673,7 +1729,7 @@ export type LexIdPlan = {
  * delimiters admit it (templateLiterals). A superset, as those are: a kind not listed never
  * carries the literal, so a token with the literal's id has one of these kinds.
  */
-export function literalKinds(ir: Pick<ParserIR, 'tokens' | 'tpl' | 'identToken' | 'identLike' | 'puncts'>): (text: string) => ReadonlySet<string> {
+export function literalKinds(ir: Pick<ParserIR, 'tokens' | 'tpl' | 'elements' | 'identToken' | 'identLike' | 'puncts'>): (text: string) => ReadonlySet<string> {
   const memo = new Map<string, Set<string>>();
   return (text) => {
     let ks = memo.get(text);
@@ -1759,6 +1815,10 @@ export function buildLexIdPlan(ir: ParserIR): LexIdPlan {
     litTexts.add(ir.tpl.interpOpen);
     litTexts.add(ir.tpl.interpClose);
     litTexts.add(ir.tpl.braceOpen);
+  }
+  if (ir.elements) {
+    const e = ir.elements;
+    for (const x of [e.tagOpen, e.tagClose, e.holeOpen, e.holeClose, '=', '(', ')', ...(e.signature?.then ?? [])]) litTexts.add(x);
   }
   if (ir.newlineCfg) {
     for (const x of ir.newlineCfg.flowOpen) litTexts.add(x);
@@ -1857,7 +1917,7 @@ export function prattOpTables(r: PrattRule, plan: LexIdPlan): PrattOpTables {
  *  literal, or the head of an interpolated template), a postfix or binary operator by its own lid, or a `>` that composes with the tokens
  *  after it (`>>`, `>=`, ...: ParserIR.gtComps). A group whose lid none of them takes ends the
  *  loop at once, as those checks would have; any other falls through to them. */
-export function prattLedExits(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | 'identToken' | 'identLike' | 'puncts' | 'gtComps'>, plan: LexIdPlan): Set<number> {
+export function prattLedExits(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | 'elements' | 'identToken' | 'identLike' | 'puncts' | 'gtComps'>, plan: LexIdPlan): Set<number> {
   const kinds = literalKinds(ir);
   const ops = new Set([...r.binary.map((b) => b.op), ...r.postfix.map((p) => p.op)]);
   const exits = new Set<number>();
