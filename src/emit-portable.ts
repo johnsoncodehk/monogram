@@ -867,7 +867,15 @@ function buildIR(grammar: CstGrammar): ParserIR {
   // match, so the step stops (star), matches nothing (opt) or matches no element (sep: its first
   // element; after a delimiter the element must match anyway) without the body's attempt and the
   // mark it is attempted under.
+  // Only a body that does not begin with a one-token match gets one: such a body's own first step
+  // already refuses the token without a call, so its guard would only add a test to every attempt
+  // that succeeds (measured on PR #169: Rust instructions rose on inputs whose bodies mostly match).
+  const leadsWithToken = (steps: readonly Step[]): boolean => {
+    const s = steps[0];
+    return s !== undefined && (s.t === 'lit' || s.t === 'tok' || s.t === 'altlit' || (s.t === 'seq' && leadsWithToken(s.steps)));
+  };
   const bodyGuard = (body: Step[]): number | undefined => {
+    if (leadsWithToken(body)) return undefined;
     const f = seqFirst(body);
     return f === null ? undefined : tokenSetOf(f);
   };
