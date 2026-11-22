@@ -460,7 +460,7 @@ const lidInterpClose uint16 = ${lidOf(ids, tpl.interpClose)}
 \tprevIsValue := func() bool {
 \t\tif !hasPrev { return false }
 \t\tif _pav[prevLid] { return lastBang }
-\t\tisExprKw := prevKid == kidIdent && _rxT[prevLid]
+\t\tisExprKw := prevKid == kidIdent && _rxT[prevLid] && !(hasPrev2 && _mem[bpLid])
 \t\tisParenHead := prevLid == lidRParen && lastClose
 \t\treturn !isExprKw && !isParenHead && (_divK[prevKid] || _divT[prevLid])
 \t}
@@ -498,7 +498,7 @@ ${emitHooks}
   const rxStateFrom = rx ? `\tprevIsValue := func() bool {
 \t\tif !hasPrev { return false }
 \t\tif _pav[prevLid] { return lastBang }
-\t\tisExprKw := prevKid == kidIdent && _rxT[prevLid]
+\t\tisExprKw := prevKid == kidIdent && _rxT[prevLid] && !(hasPrev2 && _mem[bpLid])
 \t\tisParenHead := prevLid == lidRParen && lastClose
 \t\treturn !isExprKw && !isParenHead && (_divK[prevKid] || _divT[prevLid])
 \t}
@@ -577,6 +577,11 @@ ${goUniIdentTables()}func scanUniIdent(src string, pos int) (int, bool) {
 	if uniClass(r) != 2 { return pos, false }
 	return lxExtRun(src, pos+w), true
 }
+// The lexer error of an identifier whose escapes spell no IdentifierName (lex-family.ts).
+func ${shared.identEscError()}(src string, pos, e int) int {
+	panic(&LexError{Off: pos, Msg: fmt.Sprintf("Invalid identifier escape at offset %d: '%s'", pos, src[pos:e])})
+}
+func ${shared.uniClass()}(cp int) int { return int(uniClass(rune(cp))) }
 // Extend an identifier token that the ASCII pattern cut short at a non-ASCII
 // ID_Continue char (caf|é → café), mirroring emit-lexer's uniIdentContReY extension.
 func lxExt(src string, e int) int {
@@ -2065,9 +2070,10 @@ ${entryMetaType}func parseWithMetaW(text string, meta []alignMeta, b Builder) (h
 	p := &parserW{cursor: cursor{toks: toksFromMeta(text, meta)}, src: text, b: b, scratch: nil}
 	fr, pok := p.parse${entry}W()
 	recordToks(b, p.toks)
-	if !pok || p.pos != len(p.toks) || !fr.present {
+	if !pok || p.pos != len(p.toks) {
 		return 0, nil, nil, false
 	}
+	if !fr.present { panic(errNoRoot) }
 ${topReuse
     ? `\treturn fr.h, append([]EntryMeta(nil), p.entries...), append([]int32(nil), p.entryHs...), true`
     : `\treturn fr.h, nil, nil, true`}
@@ -2650,9 +2656,18 @@ function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): stri
   const slimDropBody = dropTtIds.length
     ? `\tswitch ttId {\n\tcase ${slimDropCases}:\n\t\treturn false\n\t}\n`
     : '';
-  // Selection: Go cannot monomorphize a second parse instantiation for free
-  // (measured ~6–8ms / ~12–15% on 2MB TS). Hot path for *CstBuilder reuses
-  // the native engine; other Builders use interface parserW.
+  // Selection: *CstBuilder parses with the direct engine (parseWithCst); other Builders use the
+  // builder engine parserW. Why two engines: measured 2026-11-22 on 7fe75f9 (measure-profile,
+  // Go Callgrind instructions per reuse parse, checker.ts / gen-tm.ts / typescript.d.ts /
+  // dense-semi.ts), routing *CstBuilder through parserW costs +34.6% / +32.7% / +32.7% / +42.4%
+  // (interface Builder), and still +25.2% / +23.3% / +22.0% / +26.9% with parserW's builder
+  // field typed *CstBuilder (no interface: the bound of any devirtualisation). A generic
+  // parserW[B Builder] does not close the first gap: Go 1.27 stencils one instantiation per GC
+  // shape, and even a struct-typed B with its own shape calls B's methods through the dictionary
+  // (an indirect call, not inlined; objdump of a minimal program). So about 9 points are the
+  // interface and about 25 are parserW's own steps (leaf push through peek + Builder.Leaf, the
+  // spanned return of every rule, a builder checkpoint per mark): one engine is not taken until
+  // parserW is rebuilt on the direct engine's steps and the interface's ~9% is measured again.
   const wMethods = emitParserMethodsW('parserW', ir, ids, ar);
   const topReuse = ir.reuse;
   const shapeA = topReuse?.kind === 'A';
@@ -2819,7 +2834,8 @@ func (b *SlimBuilder) Node(scratch *[]int32, sb int, ruleId uint16, off, end, to
 \tnn := len(*scratch)
 \tcount := nn - sb
 \tif count == 1 { return }
-\tif count == 0 { *scratch = (*scratch)[:sb]; return }
+\t// The root keeps its node with no child: an accepted parse always has a root (ParseWith).
+\tif count == 0 && ruleId != ${entryRid} { *scratch = (*scratch)[:sb]; return }
 \tkidStart := len(b.Kids)
 \tb.Kids = append(b.Kids, (*scratch)[sb:nn]...)
 \t*scratch = (*scratch)[:sb]
@@ -2870,11 +2886,17 @@ func parseWithW(src string, b Builder) (int32, bool) {
 \t*p = parserW{cursor: cursor{toks: lexInto(src, toksOf(b), &w.lex)}, src: src, b: b, scratch: p.scratch[:0]${reuse ? ', entries: p.entries[:0], entryHs: p.entryHs[:0]' : ''}}
 \tfr, ok := p.parse${ir.entry}W()
 \trecordToks(b, p.toks)
-\tok = ok && p.pos == len(p.toks) && fr.present
+\tok = ok && p.pos == len(p.toks)
 \tp.cursor.toks, p.src, p.b = nil, "", nil // the workspace keeps buffers, not the input or the builder
 \tif !ok { return 0, false }
+\tif !fr.present { panic(errNoRoot) }
 \treturn fr.h, true
 }
+
+// errNoRoot: an accepted parse whose builder kept no node for the root (the entry rule). Accepting
+// or rejecting is the parser's verdict, never the builder's, so this is no reject: it is a builder
+// that breaks the contract (the built-in builders always keep the root), reported loudly.
+const errNoRoot = "the builder kept no node for the root rule of an accepted parse (a Builder must return one for the entry rule)"
 
 // ParseWith runs the builder-driven parse. *CstBuilder uses the concrete hot path (the native
 // engine); other Builders (e.g. *SlimBuilder) use interface parserW.
@@ -2946,7 +2968,7 @@ const GO_TOK: Record<TokInt, string> = { off: 'uint32', end: 'uint32', kid: 'uin
 const GO_MK: Record<keyof MkMeta, string> = { off: 'int32', end: 'int32', kid: 'uint16', nl: 'bool', fd: 'uint16', pd: 'uint16', lc: 'bool', lb: 'bool', hd: 'bool', td: 'uint8' };
 // Operator spelling and binding strength; unary is 90, a negative literal 7.
 const GO_OPS: Record<BinOp, [string, number]> = {
-  or: ['||', 1], and: ['&&', 2], eq: ['==', 3], ne: ['!=', 3], lt: ['<', 4], le: ['<=', 4], gt: ['>', 4], ge: ['>=', 4], shr: ['>>', 5], add: ['+', 6], sub: ['-', 6],
+  or: ['||', 1], and: ['&&', 2], eq: ['==', 3], ne: ['!=', 3], lt: ['<', 4], le: ['<=', 4], gt: ['>', 4], ge: ['>=', 4], shr: ['>>', 5], shl: ['<<', 5], add: ['+', 6], sub: ['-', 6],
 };
 const GO_IND = '\t';
 const exported = (s: string): string => s[0].toUpperCase() + s.slice(1);
@@ -2986,7 +3008,7 @@ func lexFind(s string, i int, lit string) int {
     bin: (op, a, b) => {
       const [sp, p] = GO_OPS[op];
       const side = (r: R, right: boolean): string =>
-        (r.prec < p || (right && r.prec === p) || (op === 'shr' && r.prec < ATOM) || (COMPARISON.has(op) && r.prec >= 3 && r.prec <= 4) ? `(${r.c})` : r.c);
+        (r.prec < p || (right && r.prec === p) || ((op === 'shr' || op === 'shl') && r.prec < ATOM) || (COMPARISON.has(op) && r.prec >= 3 && r.prec <= 4) ? `(${r.c})` : r.c);
       return { c: `${side(a, false)} ${sp} ${side(b, true)}`, prec: p };
     },
     call: (name, args) => `${name}(${args.join(', ')})`,
@@ -3018,6 +3040,7 @@ func lexFind(s string, i int, lit string) int {
     return: (vals) => [`return ${vals.join(', ')}`],
     fn: (f) => [
       ...f.doc.map((l) => `// ${l}`),
+      ...(f.cold ? ['//go:noinline'] : []),
       `func ${f.name}(${f.params.map((p) => `${p.name} ${p.type}`).join(', ')}) ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`} {`,
       ...goBlock(f.body),
       '}',

@@ -12,7 +12,7 @@ export type Ty = Num | 'bool' | 'str' | 'meta' | 'tok' | 'edit' | ListTy;
 export type MetaInt = 'off' | 'end' | 'kid' | 'pd' | 'fd' | 'td';
 export type MetaFlag = 'nl' | 'lc' | 'lb' | 'hd';
 export type TokInt = 'off' | 'end' | 'kid' | 'lid';
-export type BinOp = 'add' | 'sub' | 'shr' | 'lt' | 'le' | 'gt' | 'ge' | 'eq' | 'ne' | 'and' | 'or';
+export type BinOp = 'add' | 'sub' | 'shr' | 'shl' | 'lt' | 'le' | 'gt' | 'ge' | 'eq' | 'ne' | 'and' | 'or';
 export const COMPARISON = new Set<BinOp>(['lt', 'le', 'gt', 'ge', 'eq', 'ne']);
 
 export type MkMeta = { off: Expr; end: Expr; kid: Expr; nl: Expr; fd: Expr; pd: Expr; lc: Expr; lb: Expr; hd: Expr; td: Expr };
@@ -84,7 +84,11 @@ export type Stmt =
 export interface Param { name: string; ty: Ty }
 // `inline`: called once per token from a lexer's dispatch loop. A lowering may ask its compiler
 // to inline it, or splice it into its call sites at generation time (`spliceInline`).
-export interface Fn { name: string; doc: string; params: Param[]; ret: Ty[]; body: Stmt[]; inline?: boolean }
+// `cold`: called only on a path normal input does not take (an error); a lowering keeps it out of
+// line.
+// `extern`: a signature only; the target prints the function itself (a runtime routine whose
+// data or spelling is the target's), so `printFns` skips it.
+export interface Fn { name: string; doc: string; params: Param[]; ret: Ty[]; body: Stmt[]; inline?: boolean; cold?: boolean; extern?: boolean }
 export type CodeRange = [number, number];
 export interface CharSet { name: string; ranges: CodeRange[] }
 
@@ -160,7 +164,7 @@ export interface Lowering {
     while(c: string, body: Lines): Lines;
     break(): Lines;
     return(vals: string[]): Lines;
-    fn(s: { name: string; params: { name: string; type: string }[]; rets: string[]; doc: string[]; body: Lines; inline: boolean }): string;
+    fn(s: { name: string; params: { name: string; type: string }[]; rets: string[]; doc: string[]; body: Lines; inline: boolean; cold: boolean }): string;
   };
   // `inline` fns are not printed as functions; each call site prints `inlineFn` of the body
   // instead (for compilers that cannot be told to inline a function).
@@ -475,6 +479,7 @@ class Printer implements Cx {
       doc: f.doc.split('\n'),
       body: this.block(f.body, 1),
       inline: f.inline === true,
+      cold: f.cold === true,
     });
   }
 }
@@ -566,5 +571,5 @@ export function inlineFn(f: Fn, args: string[], out: string, unset: number): Stm
 
 export function printFns(lowering: Lowering, fns: Fn[], sets: CharSet[] = []): string {
   const p = new Printer(lowering, fns, sets);
-  return [...sets.map((c) => lowering.charSet(lowering.ident(c.name), c.ranges)), ...fns.map((f) => p.fn(f))].join('\n');
+  return [...sets.map((c) => lowering.charSet(lowering.ident(c.name), c.ranges)), ...fns.filter((f) => !f.extern).map((f) => p.fn(f))].join('\n');
 }

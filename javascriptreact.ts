@@ -151,19 +151,15 @@ export function withJsx(base: CstGrammar, opts: { name: string; scopeName: strin
   const rules: RuleDecl[] = [...patched.slice(0, -1), ...jsx.rules, entry];
 
   // The JSX tokens go right before the regex token (the declaration order the generators
-  // read); the lexer scans them only inside an element region.
-  // An element is entered where a regex literal may start, so an expression-head keyword the
-  // base's table lacks would leave `export default <p>…</p>` a comparison. INTERIM (owed in
-  // javascript.ts, where `export default /re/` is the same miss): `default` heads an
-  // expression; this delta goes when the base lists it.
+  // read); the lexer scans them only inside an element region, entered where a regex literal
+  // may start (the base's regexContext decides both).
   let placed = false;
   const tokens: TokenDecl[] = [];
   for (const t of base.tokens) {
     if (t.regexContext && !placed) {
       tokens.push(...jsx.tokens);
       placed = true;
-      const rat = t.regexContext.regexAfterTexts ?? [];
-      tokens.push(rat.includes('default') ? t : { ...t, regexContext: { ...t.regexContext, regexAfterTexts: [...rat, 'default'] } });
+      tokens.push(t);
     } else {
       tokens.push(t);
     }

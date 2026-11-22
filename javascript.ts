@@ -147,9 +147,9 @@ const regexFirstChar = altPattern(noneOf('/', '\\', '[', '*', '\n'), regexEscape
 const Regex_       = token(seq('/', regexFirstChar, star(regexChar), '/', star(identPart)), {   // flags: maximal-munch any IdentifierPart run (tsc lexes flags leniently; validity is a checker rule)
   regex: true,
   regexContext: {
-    divisionAfterTypes: ['Ident', 'Number', 'String', 'Template', 'BigInt'],
+    divisionAfterTypes: ['Ident', 'Number', 'String', 'Template', 'BigInt', 'PrivateField'],
     divisionAfterTexts: [')', ']', '++', '--', 'this', 'super', 'true', 'false', 'null', 'undefined'],
-    regexAfterTexts: ['in', 'of', 'instanceof', 'typeof', 'delete', 'void', 'await', 'yield', 'throw', 'return', 'case', 'do', 'else', 'new'],
+    regexAfterTexts: ['in', 'of', 'instanceof', 'typeof', 'delete', 'void', 'await', 'yield', 'throw', 'return', 'case', 'do', 'else', 'new', 'default'],
     // `kw ( … )` heads (control-flow): the closing `)` is a statement head, not a
     // value, so `if (a) /re/` parses `/re/` as a regex rather than division.
     regexAfterParenKeywords: ['if', 'while', 'for', 'with'],
@@ -265,13 +265,13 @@ export const bindingIdentifier = [notReserved, Ident];
 // spec's `[lookahead ≠ using of]` and `using` as an identifier then fails, so the guard is that
 // triple; `for (using of ;…)` (a binding named `of`) and `for (await using of of …)` stay valid.
 export const forBindingArms = (BindingPattern, Expr, annotation = []) => [
-  [alt(bindingIdentifier, BindingPattern), ...annotation, opt('=', exclude('in', Expr))],
+  [field('name', alt(bindingIdentifier, BindingPattern)), ...annotation, opt('=', exclude('in', field('value', Expr)))],
 ];
 // `tails` are what may follow the first binding of a `var` / `let` / `const` declaration and of a
 // `using` one: both grammars' heads parse it once and then branch.
 const forDeclaration = (ForBinding, tails, usingTails) => alt(
-  [alt('let', 'const', 'var'), ForBinding, alt(...tails)],
-  [not(['using', 'of', 'of']), alt('using', ['await', 'using']), not(alt('[', '{')), ForBinding, alt(...usingTails)],
+  [field('kind', alt('let', 'const', 'var')), field('binding', ForBinding), field('tail', alt(...tails))],
+  [not(['using', 'of', 'of']), field('kind', alt('using', ['await', 'using'])), not(alt('[', '{')), field('binding', ForBinding), field('tail', alt(...usingTails))],
 );
 // The head inside `for ( … )`:
 // - `for ( [lookahead ≠ let [] Expression[~In]opt ; Expression opt ; Expression opt )` and the
@@ -283,23 +283,24 @@ const forDeclaration = (ForBinding, tails, usingTails) => alt(
 //   comma after `of`; `for (async of => {};;)` is a C-style head;
 // - a declaration before `in` / `of` has one binding.
 export const forHeadArms = (Expr, ForBinding) => {
-  const cTail = [';', opt(Expr, many(',', Expr)), ';', opt(Expr, many(',', Expr))];   // `; cond ; update`
-  const cStyle = [many(',', ForBinding), ...cTail], forIn = ['in', Expr, many(',', Expr)], forOf = ['of', Expr];
+  const cTail = [';', opt(field('condition', Expr), many(field('conditionComma', ','), field('conditionRest', Expr))), ';', opt(field('increment', Expr), many(field('incrementComma', ','), field('incrementRest', Expr)))];   // `; cond ; update`
+  const cStyle = arm('classic', many(field('bindingComma', ','), field('bindingRest', ForBinding)), ...cTail);
+  const forIn = arm('in_', 'in', field('right', Expr), many(field('rightComma', ','), field('rightRest', Expr))), forOf = arm('of', 'of', field('right', Expr));
   return [
-    [forDeclaration(ForBinding, [cStyle, forIn, forOf], [cStyle, forOf])],
-    [not(['let', '[']), opt(exclude('in', Expr), many(',', exclude('in', Expr))), ...cTail],
-    [not(['let', '[']), exclude('in', Expr), ...forIn],
-    [not(alt('let', ['async', 'of'])), exclude('in', Expr), ...forOf],
+    arm('declaration', forDeclaration(ForBinding, [cStyle, forIn, forOf], [cStyle, forOf])),
+    arm('classic', not(['let', '[']), opt(exclude('in', field('initializer', Expr)), many(field('initializerComma', ','), exclude('in', field('initializerRest', Expr)))), ...cTail),
+    arm('in_', not(['let', '[']), exclude('in', field('left', Expr)), 'in', field('right', Expr), many(field('rightComma', ','), field('rightRest', Expr))),
+    arm('of', not(alt('let', ['async', 'of'])), exclude('in', field('left', Expr)), 'of', field('right', Expr)),
   ];
 };
 // The head inside `for await ( … )`: only the `of` forms, and its left side's lookahead is
 // `[lookahead ≠ let]` alone, so `for await (async of x)` is a loop over `x`.
 export const forAwaitHeadArms = (Expr, ForBinding) => [
-  [forDeclaration(ForBinding, [['of', Expr]], [['of', Expr]])],
-  [not('let'), exclude('in', Expr), 'of', Expr],
+  arm('declaration', forDeclaration(ForBinding, [arm('of', 'of', field('right', Expr))], [arm('of', 'of', field('right', Expr))])),
+  arm('of', not('let'), exclude('in', field('left', Expr)), 'of', field('right', Expr)),
 ];
 export const forStatement = ($, ForHead, ForAwaitHead) =>
-  ['for', alt(['(', ForHead, ')'], ['await', '(', ForAwaitHead, ')']), $];
+  ['for', alt(['(', field('head', ForHead), ')'], ['await', '(', field('head', ForAwaitHead), ')']), field('body', $)];
 
 // The guard of the *expression* identifier-NUD: an IdentifierReference is no reserved word, so
 // a reserved word with no expression form of its own is no expression (`in;`, `x = default`,
@@ -570,7 +571,7 @@ const BindingPattern = rule($ => [
 // ── Bindings & Parameters ──
 
 const Binding = rule($ => [
-  [alt(bindingIdentifier, BindingPattern), opt('=', Expr)],
+  [field('name', alt(bindingIdentifier, BindingPattern)), opt('=', field('value', Expr))],
 ]);
 
 // A binding in a for-head (`forBindingArms`): Binding with a no-`in` initializer.
@@ -608,30 +609,30 @@ const CatchParameter = rule($ => [
 
 const Stmt = rule($ => [
   Block,
-  [alt('let', 'const', 'var'), sep(Binding, ','), asi()],
-  ['if', '(', Expr, many(',', Expr), ')', $, opt('else', $)],
+  arm('variable', field('kind', alt('let', 'const', 'var')), sep(field('binding', Binding), ','), asi()),
+  ['if', '(', field('condition', Expr), many(field('conditionComma', ','), field('conditionRest', Expr)), ')', field('consequence', $), opt('else', field('alternative', $))],
   forStatement($, ForHead, ForAwaitHead),
-  ['while', '(', Expr, many(',', Expr), ')', $],
+  ['while', '(', field('condition', Expr), many(field('conditionComma', ','), field('conditionRest', Expr)), ')', field('body', $)],
   // A do-while's `;` is optional even on its line (12.10.1: a `;` is inserted after the `)`
   // that ends it), so `do x; while (y) z` is two statements.
-  ['do', $, 'while', '(', Expr, many(',', Expr), ')', opt(';')],
+  ['do', field('body', $), 'while', '(', field('condition', Expr), many(field('conditionComma', ','), field('conditionRest', Expr)), ')', opt(';')],
   ['switch', '(', Expr, many(',', Expr), ')', '{', many(SwitchCase), '}'],
   // The expression is a RESTRICTED production (`return [no LineTerminator here] Expression`):
   // after a line break it starts the next statement, so `return` ⏎ `var b` is two.
-  ['return', opt(sameLine, Expr, many(',', Expr)), asi()],
-  ['throw', Expr, many(',', Expr), asi()],
+  ['return', opt(sameLine, field('argument', Expr), many(field('argumentComma', ','), field('argumentRest', Expr))), asi()],
+  ['throw', field('argument', Expr), many(field('argumentComma', ','), field('argumentRest', Expr)), asi()],
   // The label is a RESTRICTED production (`break [no LineTerminator here] Label`)
   // and a label can't be a reserved word — without both, `break` ⏎ `case "X":`
   // inside a switch eats `case` as the label and the whole switch cascades.
-  ['break', opt(sameLine, notReserved, Ident), asi()],
-  ['continue', opt(sameLine, notReserved, Ident), asi()],
+  ['break', opt(sameLine, notReserved, field('label', Ident)), asi()],
+  ['continue', opt(sameLine, notReserved, field('label', Ident)), asi()],
   // TryStatement (14.15): a Catch, a Finally, or both, so `try {}` has no parse.
-  ['try', Block, not(not(alt('catch', 'finally'))), opt('catch', opt('(', CatchParameter, ')'), Block), opt('finally', Block)],
-  [notReserved, Ident, ':', $],
-  ';',
+  ['try', field('body', Block), not(not(alt('catch', 'finally'))), opt('catch', opt('(', field('parameter', CatchParameter), ')'), field('handler', Block)), opt('finally', field('finalizer', Block))],
+  arm('labelled', notReserved, field('label', Ident), ':', field('body', $)),
+  arm('empty', ';'),
   ['debugger', asi()],
-  ['with', '(', Expr, ')', $],
-  [opt('await'), 'using', sep(Binding, ','), asi()],
+  ['with', '(', field('object', Expr), ')', field('body', $)],
+  arm('using', opt(field('awaitKeyword', 'await')), field('usingKeyword', 'using'), sep(field('binding', Binding), ','), asi()),
   Decl,
   // Not after a start that begins a block or a declaration (`expressionStatement`): without the
   // lookahead, longest match lets the expression reading win wherever a tail makes it longer

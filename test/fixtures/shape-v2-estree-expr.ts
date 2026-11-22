@@ -1,10 +1,12 @@
-// ShapeSpec v2: the EXPRESSION subset of ESTree (as acorn 8 produces it) from javascript.ts, in the
-// core calculus only (src/shape2-schema.ts). Checked against acorn by test/shape2-oracle.ts.
-// Not total: an arm outside the subset (functions, classes, arrows, object / array literals,
-// templates) is unmapped, and an expression statement that reaches one is reported as outside
-// the subset, not compared.
+// ShapeSpec v2: a subset of ESTree (as acorn 8 produces it) from javascript.ts, in the core
+// calculus only (src/shape2-schema.ts): the expressions below, the root, and the statements
+// (blocks, variable statements with identifier bindings, `if`, loops but `for`, `return`, `throw`,
+// `break`, `continue`, labelled, `try`, `with`, `debugger`, empty). Checked against acorn by
+// test/shape2-oracle.ts. Not total: an arm outside the subset (`for`, `switch`, declarations,
+// binding patterns, functions, classes, arrows, object / array literals, templates) is unmapped,
+// and a unit that reaches one is reported as outside the subset, not compared.
 import {
-  absent, and, armOf, branch, c, child, cook, iff, inh, list, match, node, not, orElse, present, record,
+  absent, and, armOf, branch, c, child, cook, iff, inh, list, map, match, node, not, orElse, present, record,
   spread, syn, text, thread, v, wrapIf, type Shape2Spec, type Term,
 } from '../../src/shape2-schema.ts';
 
@@ -41,7 +43,38 @@ const FUNCTION_BODIES: Record<string, string[]> = {
 const prologue = (init: Term) => thread(init, 'p', and(v('p'), syn('directive', 'stmt')));
 
 /** `first (, rest)*`: the expression itself, or a SequenceExpression spanning the list. */
-const sequence: Term = iff(present('rest'), node('SequenceExpression', { expressions: list(child('first'), spread(child('rest'))) }, { from: 'first', to: 'rest' }), child('first'));
+const sequenceOf = (first: string, rest: string): Term =>
+  iff(present(rest), node('SequenceExpression', { expressions: list(child(first), spread(child(rest))) }, { from: first, to: rest }), child(first));
+const sequence: Term = sequenceOf('first', 'rest');
+/** An optional child's value, or acorn's explicit null. */
+const orNull = (name: string): Term => orElse(child(name), c(null));
+/** A statement's optional label. */
+const label: Term = iff(present('label'), idOf('label'), c(null));
+
+/** The statements (ECMA-262 14), one node per Stmt arm. */
+const STATEMENTS: Record<string, Term> = {
+  block: child('block'),
+  variable: node('VariableDeclaration', { declarations: child('binding'), kind: text('kind') }),
+  using: node('VariableDeclaration', { declarations: child('binding'), kind: iff(present('awaitKeyword'), c('await using'), c('using')) }),
+  if_: node('IfStatement', { test: sequenceOf('condition', 'conditionRest'), consequent: child('consequence'), alternate: orNull('alternative') }),
+  while_: node('WhileStatement', { test: sequenceOf('condition', 'conditionRest'), body: child('body') }),
+  do_: node('DoWhileStatement', { body: child('body'), test: sequenceOf('condition', 'conditionRest') }),
+  return_: node('ReturnStatement', { argument: iff(present('argument'), sequenceOf('argument', 'argumentRest'), c(null)) }),
+  throw_: node('ThrowStatement', { argument: sequenceOf('argument', 'argumentRest') }),
+  break_: node('BreakStatement', { label }),
+  continue_: node('ContinueStatement', { label }),
+  // A Catch is not a rule of its own: the clause spans `catch` .. its block.
+  try_: node('TryStatement', {
+    block: child('body'),
+    handler: iff(present('handler'), node('CatchClause', { param: orNull('parameter'), body: child('handler') }, { from: 'catchTok', to: 'handler' }), c(null)),
+    finalizer: orNull('finalizer'),
+  }),
+  labelled: node('LabeledStatement', { body: child('body'), label: idOf('label') }),
+  empty: node('EmptyStatement'),
+  debugger_: node('DebuggerStatement'),
+  with_: node('WithStatement', { object: child('object'), body: child('body') }),
+  decl: child('decl'),
+};
 
 export const estreeExprShape: Shape2Spec = {
   name: 'estree-expr',
@@ -61,7 +94,14 @@ export const estreeExprShape: Shape2Spec = {
     chainTop: { type: 'bool', default: true, rules: { Expr: Object.fromEntries(LINKS.map((a) => [a, { left: c(false) }])) } },
   },
   rules: {
-    Stmt: { expr: node('ExpressionStatement', { expression: sequence, directive: iff(and(inh('prologue'), syn('directive')), syn('stringBody', 'first'), absent) }) },
+    // The root: its statement list. acorn's `sourceType` (the goal acorn was run with) and the
+    // root's extent over trailing trivia are not produced (test/shape2-oracle.ts ROOT_NOT_COMPARED).
+    Program: { decl: node('Program', { body: map('alt', branch('alt', { decl: child('decl'), stmt: child('stmt') })) }) },
+    Stmt: { ...STATEMENTS, expr: node('ExpressionStatement', { expression: sequence, directive: iff(and(inh('prologue'), syn('directive')), syn('stringBody', 'first'), absent) }) },
+    Block: { brace: node('BlockStatement', { body: child('stmt') }) },
+    // A binding: identifier names (binding patterns are not mapped yet).
+    Binding: { seq: node('VariableDeclarator', { id: branch('name', { ident: idOf('ident') }), init: orNull('value') }) },
+    CatchParameter: { ident: idOf('ident') },
     Expr: {
       true_: literal(c(true)),
       false_: literal(c(false)),

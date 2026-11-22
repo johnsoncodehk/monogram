@@ -215,55 +215,61 @@ for (const name of ['javascript', 'typescript']) {
   }
 }
 
-// ── Element-region edit class (JSX) ─────────────────────────────────────────────────
-// The element region shares the template-hole frame stack, and a window re-lex restarts and
-// resyncs only outside every frame. Every one-character insertion (of the characters that
-// open, close or change a region) and every one-character deletion, at every offset of each
-// document: inside text, on a tag delimiter, across an element's boundary, inside a hole, a
-// template inside a hole, and a type-parameter signature the lexer decides by rewinding.
-const REGION_DOCS: Record<string, string[]> = {
+// ── Lexer-frame edit class ──────────────────────────────────────────────────────────
+// A window re-lex restarts only at a token recorded outside every lexer frame (a template's
+// `${ … }` hole) and resyncs only there, so every token that opens, continues or sits in a
+// hole must record a non-zero depth. Every one-character insertion of the characters that
+// open, close or change a frame, and every one-character deletion, at every offset of
+// documents with holes (nested, sibling, adjacent to code): edited ≡ fresh, self-consistent.
+// The random mutator above reaches a hole only by chance.
+const FRAME_DOCS: Record<string, string[]> = {
+  javascript: ['f(a, `x${b + c}`);', 'let q = 1;\nf(`x${(b)}y${c}`);\ng`t${`u${v}`}w`;'],
+  typescript: ['let s: string = `a${b as T}c${{ d: 1 }.d}`;\nx = 1;'],
+  // element regions (JSX) share the frame stack: text, tags, holes, templates in holes, a
+  // type-parameter signature the lexer decides by rewinding, `</*` outside elements
   typescriptreact: [
+    'let s = `a${b}c${{ d: 1 }.d}`;\nx = 1;',
     'let a = <p>It\'s {x} 50%</p>;\nlet b = 1;',
     'f(<a b={c > d}><i/>t</a>, `x${<b>y</b>}`);',
     'type F = <T>(x: T) => T;\nlet g = <T,>(y: T) => <q>{y}</q>;',
     'let m = new Map</* c */string, X>() </ 2;',
   ],
-  javascriptreact: ['let a = <><p>It\'s</p>{`${<b/>}`}</>;\nx</*c*/y;'],
+  javascriptreact: ['let s = `a${b}c${`${d}`}`;\nx = 1;', 'let a = <><p>It\'s</p>{`${<b/>}`}</>;\nx</*c*/y;'],
 };
-const REGION_INS = ['<', '>', '/', '{', '}', '`', '(', ')', ':', ',', 'x', ' ', '\n'];
-let regionSteps = 0;
-for (const [name, docs] of Object.entries(REGION_DOCS)) {
+const FRAME_INS = ['`', '$', '{', '}', '(', ')', '<', '>', '/', ':', ',', 'x', ' ', '\n'];
+let frameSteps = 0;
+for (const [name, docs] of Object.entries(FRAME_DOCS)) {
   const em = (await import(`${TMP}/${name}.mts?v=` + process.pid)) as Em;
   const session = em.createParser();
   const fresh = em.createParser();
   for (const doc of docs) {
     const edits: Edit[] = [];
     for (let at = 0; at <= doc.length; at++) {
-      for (const ins of REGION_INS) edits.push({ start: at, end: at, text: ins });
+      for (const ins of FRAME_INS) edits.push({ start: at, end: at, text: ins });
       if (at < doc.length) edits.push({ start: at, end: at + 1, text: '' });
     }
     for (const edit of edits) {
       const next = doc.slice(0, edit.start) + edit.text + doc.slice(edit.end);
-      totalSteps++; regionSteps++;
+      totalSteps++; frameSteps++;
       let cst: Cst, fc: Cst;
       try { cst = session.parse(doc); session.edit(cst, [edit]); fc = fresh.parse(next); }
-      catch (e) { fails++; if (failures.length < 10) failures.push(`${name} region ${JSON.stringify(edit)} on ${JSON.stringify(doc)}: THREW ${(e as Error).message.slice(0, 70)}`); continue; }
+      catch (e) { fails++; if (failures.length < 10) failures.push(`${name} frame ${JSON.stringify(edit)} on ${JSON.stringify(doc)}: THREW ${(e as Error).message.slice(0, 70)}`); continue; }
       if (fc.errors.length > 0) totalErr++;
       const a = JSON.stringify(objectify(fresh.tree, (fns) => fresh.visit(fc, fns))) + JSON.stringify(fc.errors);
       const b = JSON.stringify(objectify(session.tree, (fns) => session.visit(cst, fns))) + JSON.stringify(cst.errors);
       if (a !== b) {
         fails++;
         let i = 0; while (i < a.length && a[i] === b[i]) i++;
-        if (failures.length < 10) failures.push(`${name} region ${JSON.stringify(edit)} on ${JSON.stringify(doc)}: edit ≠ fresh @${i}\n      fresh: …${a.slice(Math.max(0, i - 40), i + 60)}…\n      inc:   …${b.slice(Math.max(0, i - 40), i + 60)}…`);
+        if (failures.length < 10) failures.push(`${name} frame ${JSON.stringify(edit)} on ${JSON.stringify(doc)}: edit ≠ fresh @${i}\n      fresh: …${a.slice(Math.max(0, i - 40), i + 60)}…\n      inc:   …${b.slice(Math.max(0, i - 40), i + 60)}…`);
         continue;
       }
       const sc = selfConsistent(session, cst);
-      if (sc !== null) { fails++; if (failures.length < 10) failures.push(`${name} region ${JSON.stringify(edit)}: SELF-INCONSISTENT ${sc}`); continue; }
+      if (sc !== null) { fails++; if (failures.length < 10) failures.push(`${name} frame ${JSON.stringify(edit)}: SELF-INCONSISTENT ${sc}`); continue; }
       totalEqual++;
     }
   }
 }
-console.log(`  element-region edits: ${regionSteps} one-character edits over ${Object.values(REGION_DOCS).flat().length} documents`);
+console.log(`  lexer-frame edits: ${frameSteps} one-character edits over ${Object.values(FRAME_DOCS).flat().length} documents`);
 
 console.log(`incremental-grammars: ${totalEqual}/${totalSteps} steps equal+consistent across ${GRAMMARS.length} grammars (${totalErr} recovered with errors)`);
 for (const s of failures) console.log('  ✗ ' + s);
