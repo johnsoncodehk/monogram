@@ -1,0 +1,25 @@
+// node test/emit-sizes.ts [<monogram source tree>=.]: the byte size and a short sha256 of
+// emitParser(<grammar>, <target>) for the two real grammars and every emit target that tree exports,
+// as one JSON object { "<grammar>": { "<target>": { bytes, sha } } } on stdout. The measurement
+// workflow (.github/workflows/measure-profile.yml) runs it on a pull request's merge base and head
+// and reports the sizes A / M / delta (test/bench-rust-profile/pr-summary.ts); the sha says whether
+// the emitted output is identical, which a size alone does not.
+import { createHash } from 'node:crypto';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+const root = resolve(process.argv[2] ?? '.');
+const url = (p: string) => pathToFileURL(root + '/' + p).href;
+const emit = await import(url('src/emit.ts'));
+const TARGETS = ['tsTarget', 'jsTarget', 'goTarget', 'rustTarget'] as const;
+const out: Record<string, Record<string, { bytes: number; sha: string }>> = {};
+for (const g of ['typescript', 'javascript']) {
+  const grammar = (await import(url(g + '.ts'))).default;
+  out[g] = {};
+  for (const t of TARGETS) {
+    if (!emit[t]) continue; // a target this tree does not have yet: absent, not zero
+    const s: string = emit.emitParser(grammar, emit[t]);
+    out[g][t.replace(/Target$/, '')] = { bytes: Buffer.byteLength(s, 'utf8'), sha: createHash('sha256').update(s).digest('hex').slice(0, 12) };
+  }
+}
+console.log(JSON.stringify(out, null, 1));

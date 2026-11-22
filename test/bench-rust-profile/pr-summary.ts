@@ -1,0 +1,158 @@
+// node pr-summary.ts <results.txt> <emit-sizes-A.json> <emit-sizes-M.json>: the Markdown report of
+// one A/M profile (run.sh with PROFILE_SCOPE=pr) for a pull request's job summary.
+//
+// What decides what (docs/MEASUREMENT.md):
+// - Callgrind instructions are deterministic: they decide a logic change. Any input whose
+//   instructions rise by more than 0.5% is listed under "Regressions".
+// - Work counters (tokens, nodes pushed, checkpoints, peeks, ...) must be identical unless the
+//   pull request changes the grammar or the parser's search; which ones differ is listed.
+// - For memory behaviour instructions are blind: allocator calls / bytes and page faults decide.
+//   Any rise in allocator calls per parse in reuse mode is listed under "Regressions".
+// - Emitted sizes: any increase above 1% is listed under "Regressions".
+// A regression is reported, never a failure (the grammar legitimately changes work). A cell the
+// harness did not produce for A or M is a failure: the report says NOT RUN and this exits 1.
+//
+// GRAMMAR_CHANGED=1 in the environment says the pull request touches a grammar file.
+import { readFileSync } from 'node:fs';
+
+const [resultsFile, sizesA, sizesM] = process.argv.slice(2);
+if (!resultsFile || !sizesA || !sizesM) throw new Error('usage: pr-summary.ts <results.txt> <emit-sizes-A.json> <emit-sizes-M.json>');
+const kv = (s: string) => Object.fromEntries([...s.matchAll(/(\w+)=(\S+)/g)].map((m) => [m[1], m[2]]));
+
+const ir: Record<string, number> = {};
+const irFailed: string[] = [];
+const count: Record<string, Record<string, string>> = {};
+const faults: Record<string, Record<string, string>> = {};
+const acc: Record<string, string> = {};
+const crashes: string[] = [];
+const files: string[] = [];
+for (const line of readFileSync(resultsFile, 'utf8').split('\n')) {
+  const p = line.trim().split(/\s+/);
+  if (p[0] === 'IR') { if (p[2] === 'FAILED' || !/^\d+$/.test(p[2] ?? '')) irFailed.push(p[1]); else ir[p[1]] = +p[2]; continue; }
+  if (p[0] !== 'A' && p[0] !== 'M') continue;
+  const v = p[0];
+  if (p[1] === 'COUNT') count[`${v}.${p[2]}`] = kv(line);
+  else if (p[1] === 'FAULTS') faults[`${v}.${p[3]}.${p[2]}`] = kv(line);
+  else if (p[1] === 'ACCEPT' || p[1] === 'REJECT') { acc[`${v}.${p[2]}`] = p[1]; if (!files.includes(p[2])) files.push(p[2]); }
+  else if (/CRASH$/.test(p[1])) crashes.push(line.trim());
+}
+
+const out: string[] = [];
+const say = (s = '') => out.push(s);
+const notRun: string[] = [...crashes, ...irFailed.map((t) => `Callgrind ${t} FAILED`)];
+const need = (what: string, x: unknown) => { if (x === undefined || (typeof x === 'number' && !Number.isFinite(x))) notRun.push(`${what} missing`); return x; };
+if (files.length === 0) notRun.push('no input was parsed at all');
+
+const pct = (a: number, m: number) => (a > 0 && Number.isFinite(a) && Number.isFinite(m) ? ((m / a - 1) * 100) : NaN);
+const fpct = (x: number) => (Number.isFinite(x) ? (x === 0 ? '0' : (x > 0 ? '+' : '') + x.toFixed(2) + '%') : '-');
+const num = (x: number | string | undefined) => (x === undefined || x === '' || !Number.isFinite(+x) ? '-' : (+x).toLocaleString('en-US', { maximumFractionDigits: 1 }));
+const table = (head: string[], rows: string[][]) => {
+  say('| ' + head.join(' | ') + ' |');
+  say('|' + head.map((_, i) => (i === 0 ? ':--' : '--:')).join('|') + '|');
+  for (const r of rows) say('| ' + r.join(' | ') + ' |');
+};
+
+const regress: string[] = [];
+const IR_LIMIT = 0.5, SIZE_LIMIT = 1;
+
+// ---- instructions (both modes, plus the lexer alone)
+for (const f of files) for (const v of ['A', 'M']) {
+  need(`${v} parse ${f} (COUNT)`, count[`${v}.${f}`]);
+  for (const k of ['parse', 'parse-reuse', 'lex']) need(`${v} Callgrind ${k} ${f}`, ir[`${v}.${k}.${f}`]);
+  for (const m of ['warm', 'reuse']) need(`${v} faults ${m} ${f}`, faults[`${v}.${f}.${m}`] ? 1 : undefined);
+}
+for (const f of files) for (const k of ['parse', 'parse-reuse', 'lex']) {
+  const d = pct(ir[`A.${k}.${f}`], ir[`M.${k}.${f}`]);
+  if (d > IR_LIMIT) regress.push(`instructions, ${k}, ${f}: ${fpct(d)} (${num(ir[`A.${k}.${f}`])} → ${num(ir[`M.${k}.${f}`])})`);
+}
+for (const f of files) {
+  const a = +(faults[`A.${f}.reuse`]?.allocs_per_parse ?? NaN), m = +(faults[`M.${f}.reuse`]?.allocs_per_parse ?? NaN);
+  if (m > a) regress.push(`allocator calls per parse in reuse mode, ${f}: ${num(a)} → ${num(m)}`);
+}
+
+// ---- emitted sizes
+const sa = JSON.parse(readFileSync(sizesA, 'utf8')) as Record<string, Record<string, { bytes: number; sha: string }>>;
+const sm = JSON.parse(readFileSync(sizesM, 'utf8')) as Record<string, Record<string, { bytes: number; sha: string }>>;
+const sizeRows: string[][] = [];
+for (const g of Object.keys(sm)) for (const t of Object.keys(sm[g])) {
+  const a = sa[g]?.[t], m = sm[g][t];
+  const d = a ? pct(a.bytes, m.bytes) : NaN;
+  if (d > SIZE_LIMIT) regress.push(`emitted size, ${g} ${t}: ${fpct(d)} (${num(a!.bytes)} → ${num(m.bytes)} bytes)`);
+  sizeRows.push([g, t, a ? num(a.bytes) : '(absent)', num(m.bytes), fpct(d), a && a.sha === m.sha ? 'identical' : 'differs']);
+}
+for (const g of Object.keys(sa)) for (const t of Object.keys(sa[g])) if (!sm[g]?.[t]) notRun.push(`emitted size ${g} ${t} missing for M`);
+
+// ---- work counters
+const WORK = ['tokens', 'final_nodes', 'final_kids', 'reachable_nodes', 'reachable_leaves', 'pushed_nodes', 'pushed_kids', 'leaf_pushes',
+  'checkpoints', 'restores', 'restores_discarding', 'discarded_nodes', 'discarded_kids', 'arena_high_water_nodes', 'peeks'];
+const workDiff: string[][] = [];
+for (const f of files) {
+  const a = count[`A.${f}`], m = count[`M.${f}`];
+  if (!a || !m) continue;
+  const diffs = WORK.filter((k) => a[k] !== m[k]).map((k) => `${k} ${num(a[k])} → ${num(m[k])}`);
+  if (acc[`A.${f}`] !== acc[`M.${f}`]) diffs.unshift(`verdict ${acc[`A.${f}`]} → ${acc[`M.${f}`]}`);
+  workDiff.push([f, diffs.length ? diffs.join('; ') : 'identical']);
+}
+const workChanged = workDiff.some((r) => r[1] !== 'identical');
+const grammarChanged = process.env.GRAMMAR_CHANGED === '1';
+
+// ---- the report
+const A = process.env.PROFILE_A_LABEL ?? 'A', M = process.env.PROFILE_M_LABEL ?? 'M';
+say('## Rust parser profile: A = ' + A + ', M = ' + M);
+say();
+say('Deterministic measurements of the emitted Rust parser (typescript grammar): Callgrind instructions, work counters, allocator calls, page faults; and emitted sizes. ' +
+  'Instructions decide logic changes; allocator calls and page faults decide memory changes; no wall-clock time is measured here (on demand: the `measure-bench` workflow).');
+say();
+if (notRun.length) {
+  say('### NOT RUN: the harness did not produce every measurement (this job fails)');
+  for (const x of notRun) say('- ' + x);
+  say();
+}
+if (regress.length) {
+  say(`### Regressions (reported, not failing): ${regress.length}`);
+  say(`Thresholds: instructions +${IR_LIMIT}%, any rise in reuse-mode allocator calls per parse, emitted size +${SIZE_LIMIT}%.`);
+  for (const x of regress) say('- **' + x + '**');
+} else say('### Regressions: none (instructions within +0.5%, reuse-mode allocator calls not up, emitted sizes within +1%)');
+say();
+say('### Work counters');
+if (!workChanged) say('Identical on every input.');
+else {
+  say(grammarChanged ? 'Differ (this pull request changes a grammar file, so work may legitimately change):'
+    : '**Differ although this pull request changes no grammar file** (the parser\'s search changed): check that this is intended.');
+  say();
+  table(['input', 'A → M'], workDiff);
+}
+say();
+const modeTable = (mode: 'fresh' | 'reuse') => {
+  const k = mode === 'fresh' ? 'parse' : 'parse-reuse';
+  const fm = mode === 'fresh' ? 'warm' : 'reuse';
+  const rows: string[][] = [];
+  for (const f of files) {
+    const cells = [f + (acc[`M.${f}`] === 'REJECT' ? ' (M rejects)' : '')];
+    const ia = ir[`A.${k}.${f}`], im = ir[`M.${k}.${f}`];
+    cells.push(num(ia), num(im), fpct(pct(ia, im)));
+    const pick = (v: string) => {
+      if (mode === 'fresh') { const c = count[`${v}.${f}`]; return c ? [+c.malloc + +c.realloc, +c.alloc_bytes, +faults[`${v}.${f}.warm`]?.minflt_per_parse, +c.peak_live_bytes] : []; }
+      const fl = faults[`${v}.${f}.reuse`]; return fl ? [+fl.allocs_per_parse, +fl.alloc_bytes_per_parse, +fl.minflt_per_parse, +fl.maxrss_kb * 1024] : [];
+    };
+    const [a, m] = [pick('A'), pick('M')];
+    for (let i = 0; i < 4; i++) cells.push(num(a[i]) + ' / ' + num(m[i]));
+    rows.push(cells);
+  }
+  say(`### Mode ${mode}: ${mode === 'fresh' ? 'a new CstBuilder per parse, dropped after it' : 'one CstBuilder kept across parses (parse_with reuses its buffers)'}`);
+  table(['input', 'Ir A', 'Ir M', 'Ir Δ', 'allocator calls A / M', 'alloc bytes A / M', 'page faults/parse A / M', mode === 'fresh' ? 'peak live bytes A / M' : 'max RSS bytes A / M'], rows);
+  say();
+};
+modeTable('reuse');
+modeTable('fresh');
+say('Ir: Callgrind instructions of one parse (fresh: parse + drop; reuse: one parse into a builder that has parsed the input once). ' +
+  'Fresh allocator calls / bytes / peak: one counted parse; reuse ones: the mean of 10 parses after 3 warm-up parses. Page faults: minor faults per parse over the same 10 (fresh: each dropping its buffers).');
+say();
+say('### Lexer alone (Callgrind, `lex(src)`)');
+table(['input', 'Ir A', 'Ir M', 'Ir Δ'], files.map((f) => [f, num(ir[`A.lex.${f}`]), num(ir[`M.lex.${f}`]), fpct(pct(ir[`A.lex.${f}`], ir[`M.lex.${f}`]))]));
+say();
+say('### Emitted parser sizes (`emitParser`, bytes)');
+table(["grammar", "target", "A", "M", "Δ", "output A vs M"], sizeRows);
+say();
+console.log(out.join('\n'));
+if (notRun.length) { console.error('NOT RUN: ' + notRun.join('; ')); process.exit(1); }
