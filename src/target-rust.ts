@@ -440,6 +440,13 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   // Byte-class dispatch folds whitespace/newline/template-open into the match's jump table so
   // the hot loop does one load + one match, instead of a chain of pre-checks per byte. Newline-mode
   // grammars keep the flow-aware whitespace arms (flow_depth) and do NOT use the folded arms.
+  const identKid0 = ir.identToken ? kidOf(ids, ir.identToken) : 0;
+  const identTok0 = ir.tokens.find((t) => t.name === ir.identToken);
+  const identLid0 = identTok0 ? lidCall(shared.tokenLiterals(ir, identTok0, ids.lids.slice(1)), '&b[pos..e]') : 'lid_of(&b[pos..e])';
+  const nonAsciiColdCall = `        let (e, k) = _lex_non_ascii(src, pos);
+        if k == 2 { ${stateful ? `st.emit(pos, e, ${identKid0}, ${identLid0});` : `toks.push(mk_tok(pos, e, pending_nl, ${identKid0}, ${identLid0})); pending_nl = false;`} } else if k == 1 { ${nlVar} = true; }
+        pos = e; continue;
+`;
   const nonAsciiWsCheck = nlRs ? '' : `        if c >= 0xC2 { if let Some((ch, w)) = _char_at(src, pos) { if _is_js_ws(ch) { if ch == '\\u{2028}' || ch == '\\u{2029}' { ${nlVar} = true; } pos += w; continue; } } }
 `;
   // A whitespace run is consumed in one dispatch round: per byte only "is it still whitespace"
@@ -478,7 +485,10 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const punctLine = (p: string) =>
     `        if ${startByteEq('pos', p)} { ${stateful ? `st.emit(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${tlen(p)}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${tlen(p)}; continue; }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
-  const cascade = renderLexByteDispatchRust(lexCodes, lexFirsts, '        ', `${wsNlArms}${tplOpenArm}`, nonAsciiWsCheck,
+  // Where no candidate can begin at a non-ASCII byte, the byte is whitespace, an identifier or an
+  // error: one cold call decides, so the dispatch loop holds no Unicode code (register layout).
+  const nonAsciiCold = !nlRs && !!ir.identToken && buildLexDispatchPlan(lexFirsts).fallbackIndices.length === 0;
+  const cascade = renderLexByteDispatchRust(lexCodes, lexFirsts, '        ', `${wsNlArms}${tplOpenArm}`, nonAsciiCold ? nonAsciiColdCall : nonAsciiWsCheck,
     closeByte !== null ? { byte: closeByte, code: tplCloseTest } : null);
   // Struct fields / emit hooks / init are assembled per-feature so a grammar can have regex,
   // templates, or both share one LexState. Rx bookkeeping is fully integerized (lid/kid bit tables).
@@ -503,7 +513,7 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
   const uniIdentEmit = stateful
     ? `st.emit(pos, e, ${identKid}, ${identLid});`
     : `toks.push(mk_tok(pos, e, pending_nl, ${identKid}, ${identLid})); pending_nl = false;`;
-  const uniIdentOrPanic = identName
+  const uniIdentOrPanic = identName && !nonAsciiCold
     ? `        if c >= 0x80 { if let Some(e) = _scan_uni_ident(b, pos) { ${uniIdentEmit} pos = e; continue; } }
         panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`
     : `        panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`;
@@ -525,6 +535,13 @@ ${identName || ir.identLike.length ? `${rsUniIdentTables()}// Both out of line: 
 }
 // Extend an identifier token that the ASCII pattern cut short at a non-ASCII
 // ID_Continue char (caf|é → café), mirroring emit-lexer's uniIdentContReY extension.
+// A non-ASCII byte no candidate begins with: (end, 0) whitespace, (end, 1) a line-terminating
+// whitespace, (end, 2) an identifier; anything else is the unexpected-character error.
+#[cold] #[inline(never)] fn _lex_non_ascii(src: &str, pos: usize) -> (usize, u8) {
+    if let Some((ch, w)) = _char_at(src, pos) { if _is_js_ws(ch) { return (pos + w, (ch == '\\u{2028}' || ch == '\\u{2029}') as u8); } }
+    if let Some(e) = _scan_uni_ident(src.as_bytes(), pos) { return (e, 2); }
+    panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(src.as_bytes()[pos] as char));
+}
 #[inline(never)] fn _lx_ext(b: &[u8], mut e: usize) -> usize {
     while e < b.len() {
         let (cp, w) = _lx_cp(b, e);
