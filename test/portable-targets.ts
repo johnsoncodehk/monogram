@@ -87,10 +87,16 @@ const FOR_HEADS = {
 // An IdentifierReference is no reserved word: a reserved word with no expression form of its own
 // is no expression, in both grammars (`notReservedExpr`).
 const RESERVED_EXPRS = {
-  accept: ['a in b;', 'a instanceof B;', 'x = function () {};', 'export default x;', 'f(this, null, true);'],
+  accept: [
+    'a in b;', 'a instanceof B;', 'x = function () {};', 'export default x;', 'f(this, null, true);',
+    'var [a] = b;', 'var[a] = 1;', 'var [a, ...b] = c;', 'for (var [a] of b);', 'for (var a in b);', 'for (var of of y);',
+  ],
   reject: [
     'in;', 'x\nin;', 'instanceof;', 'x = default;', 'f(export);', 'extends;', 'a\nextends;', 'x = function;',
     'x = const;', 'f(if);', 'x = a ? in : b;',
+    // `var` begins only a variable statement or a for-head declaration, never an expression
+    'x = var;', 'var.x;', 'f(...[var]);', 'for (var of X) {}', 'for (var of of) {}', 'for (var of of.x);', 'for (var in X) {}', 'for (var;;);',
+    'var [...x = a] = a;', 'for (var [...x = a] of b);',
   ],
 };
 // `export` takes a declaration (16.2.3), never another statement, in both grammars

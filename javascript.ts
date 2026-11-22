@@ -294,16 +294,16 @@ export const forStatement = ($, ForHead, ForAwaitHead) =>
 // The guard of the *expression* identifier-NUD: an IdentifierReference is no reserved word, so
 // a reserved word with no expression form of its own is no expression (`in;`, `x = default`,
 // `f(export)`, `extends;`, `const;`, `x = function;`, `void ;`, `throw ;`, a colon-less `case`,
-// `catch(x){}` with no `try`, a body-less `class`). A reserved word that begins an expression of
-// its own (`new`/`new.target`, `super`, `this`, `true`/`false`/`null`, `import(…)`) is left out,
-// and so are two words tsc's parser reads as an identifier expression in files it accepts:
-// `import` with no or a spread argument (`import()`, `import(...a)`) and `var` (`for (var of X)`,
-// `for (var in X)`, `var [...x = a] = a`). Owed: `var` and `import` are tsc-parser tolerance, not
-// the productions (the parser reads those inputs through this fallback).
+// `catch(x){}` with no `try`, a body-less `class`, `x = var`). A reserved word that begins an
+// expression of its own (`new`/`new.target`, `super`, `this`, `true`/`false`/`null`, `import(…)`)
+// is left out, and so is `import` with no or a spread argument (`import()`, `import(...a)`), which
+// tsc's parser reads through this fallback in files it accepts. Owed: that `import` is tsc-parser
+// tolerance, not the productions. `var` begins a variable statement or a for-head declaration
+// only, so a statement or head starting `var` is read once, as the declaration.
 export const notReservedExpr = reservableNot(alt(
   'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do',
   'else', 'enum', 'export', 'extends', 'finally', 'for', 'function', 'if', 'in', 'instanceof',
-  'return', 'switch', 'throw', 'try', 'typeof', 'void', 'while', 'with',
+  'return', 'switch', 'throw', 'try', 'typeof', 'var', 'void', 'while', 'with',
 ));
 
 // ── Precedence ladder (shared ECMAScript operator precedence) ──
