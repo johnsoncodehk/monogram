@@ -1274,7 +1274,8 @@ const jsLookaheadEdit = jsLookaheadInit.indexOf('\n') + 1; // first char of peek
 // around such bodies (test/context-cases.ts): one session per document, the tree ≡ a fresh parse
 // after every batch.
 const CTX_EDITS: EditScenario[] = CTX_DOCS.map((init) => ({ init, batches: ctxEdits(init).map((e): EditBatch => [[e.start, e.end, e.text]]), longSession: true }));
-// Documents with template holes for the exhaustive one-character edits (above the edit sessions).
+// Documents for the exhaustive one-character edits (above the edit sessions): template holes, and
+// a `/` decided by what follows it.
 const HOLE_EDIT_GRAMMARS = new Set(['javascript', 'typescript']);
 const HOLE_EDIT_DOCS = [
   'f(a, `x${b + c}`);',
@@ -1282,13 +1283,18 @@ const HOLE_EDIT_DOCS = [
   'g(`a${`b${c}d`}e`, 1);',
   'h(`${ {a: "}"}.a }${\'`\'}`);',
   'k(`${a // c\n}`);',
+  // A `/` whose kind (regex or division) is decided by text after it: a regex attempt that
+  // fails falls back to division, so an edit later on can change it.
+  'let m = f() < / 2;',
+  'x = y / z / w;',
+  'if (f() < /re/.test(s)) g();',
 ];
 // Insert each of a few characters that open, close or end something at every offset, and delete
 // every character.
 function oneCharEdits(doc: string): [number, number, string][] {
   const out: [number, number, string][] = [];
   for (let at = 0; at <= doc.length; at++) {
-    for (const ch of ['x', ' ', '}', '{', '`', '$']) out.push([at, at, ch]);
+    for (const ch of ['x', ' ', '}', '{', '`', '$', '/']) out.push([at, at, ch]);
     if (at < doc.length) out.push([at, at + 1, '']);
   }
   return out;
@@ -1878,7 +1884,7 @@ for (const c of CASES) {
           : want && (!a.align || a.align.oldN !== want.oldN || a.align.newN !== want.newN || a.align.prefix !== want.prefix || a.align.suffix !== want.suffix) ? `relexed stream ≠ a fresh lex (align ${JSON.stringify(a.align)}, oracle ${JSON.stringify(want)})` : '';
         if (why) bad.push(`${why}: ${JSON.stringify(x.init)} edit ${JSON.stringify(x.e)}`);
       });
-      console.log(`  ${c.grammar}/${r.label}: ${sessions.length - bad.length}/${sessions.length} one-character edits in and around template holes ≡ fresh`);
+      console.log(`  ${c.grammar}/${r.label}: ${sessions.length - bad.length}/${sessions.length} one-character edits in and around template holes and regex attempts ≡ fresh`);
       for (const smp of bad.slice(0, 6)) console.log(`      ${smp}`);
       failures += bad.length;
     }
