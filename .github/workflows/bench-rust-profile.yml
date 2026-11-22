@@ -35,9 +35,9 @@ jobs:
       - run: test/bench-rust-profile/run.sh
         env:
           PROFILE_WORK: ${{ runner.temp }}/prof-work
-          # Before / after of perf/token-array-reservation (#126): A = origin/master 188d7a3, M = bd2741c.
-          PROFILE_A: 188d7a34cb5150ee10815293d9e3f0739cf27944
-          PROFILE_M: bd2741c0e666ce9c438947b1ac2b06d9f148f82f
+          # perf/parser-emit-queue-1 R4: leaf type from lid/kid (A = d8485e2) vs M = f3f066b (R3 reverted).
+          PROFILE_A: d8485e2372cf7df5741f812a67f7d9a643e03adf
+          PROFILE_M: f3f066b3fad0ad150265aaa2745a5682e80b55d8
 
       - uses: actions/upload-artifact@v4
         if: always()
