@@ -1,7 +1,7 @@
 import {
   rule, defineGrammar,
   op, prefix, postfix, sameLine,
-  sep, opt, many, many1, alt, exclude, not, tsRelax, capExpr, notLeftLeaf, withHoles,
+  sep, opt, many, many1, alt, not, tsRelax, capExpr, notLeftLeaf, withHoles,
   awaitCtx, yieldCtx, asyncGenCtx, resetCtx,
 } from './src/api.ts';
 
@@ -38,6 +38,7 @@ import {
   Ident, HexNumber, OctalNumber, BinaryNumber, BigInt_,
   Number_, String_, Template, Regex_, Decorator, PrivateField,
   notReserved, notReservedExpr, bindingIdentifier, asi, expressionStatement, conciseBody, classHeritageArms, newTargetArms, ecmaPrec, jsLedPrecs, jsScopes, jsBaseCanonical,
+  forBindingArms, forHeadArms, forAwaitHeadArms, forStatement,
 } from './javascript.ts';
 
 // ── Type query reference (typeof's argument: just dotted identifiers) ──
@@ -548,12 +549,10 @@ const Binding = rule($ => [
   [alt([...bindingIdentifier, opt('!')], BindingPattern), opt(':', Type), opt('=', Expr)],
 ]);
 
-// A binding in a for-head: identical to Binding except the initializer is a
-// no-`in` expression, so `for (var a = 1 in xs)` reads `a = 1` then the for-in
-// `in` (TS's [~In] grammar), rather than greedily parsing `1 in xs`.
-const ForBinding = rule($ => [
-  [alt([...bindingIdentifier, opt('!')], BindingPattern), opt(':', Type), opt('=', exclude('in', Expr))],
-]);
+// A binding in a for-head (`forBindingArms`) with its type annotation. No definite-assignment
+// `!`: tsc's parser reads a for-head's declarations with parseVariableDeclaration, which takes
+// none (`for (var a!: T;;)` is a parse error), where a variable statement's take one.
+const ForBinding = rule($ => forBindingArms(BindingPattern, Expr, [opt(':', Type)]));
 
 
 const Param = rule($ => {
@@ -583,32 +582,8 @@ const Param = rule($ => {
   ];
 });
 
-const ForHead = rule($ => {
-  const cTail = [';', opt(Expr, many(',', Expr)), ';', opt(Expr, many(',', Expr))];  // `; cond ; update`
-  return [
-    // declared head: `let/const/var/using/await using <bindings>` then C-style or in/of.
-    // ForBinding gives a no-`in` initializer so `for (var a = 1 in xs)` parses.
-    // `for (using of of …)` has no parse tree: the spec's `[lookahead != using of]` on the
-    // `using` ForDeclaration arm suppresses the using-DECL reading, and `using` as an
-    // identifier then fails (`using of of` reads as two for-of keywords). Guard the exact
-    // triple only — `for (using of ;…)` (C-style, binding named `of`) and `for (await using
-    // of of …)` (the await-using arm) stay valid.
-    [not(['using', 'of', 'of']), alt('let', 'const', 'var', 'using', ['await', 'using']), sep(ForBinding, ','), alt(
-      cTail,
-      // the for-in OBJECT is a full Expression (comma included: `for (a in b, c)`);
-      // for-of takes an AssignmentExpression - no comma (tsc rejects `for (x of a, b)`)
-      ['in', Expr, many(',', Expr)],
-      ['of', Expr],
-    )],
-    [opt(Expr, many(',', Expr)), ...cTail],   // C-style, no declaration: `for (i=0; …; …)` / `for (;;)`
-    // for-in/of, no declaration: `for (x of xs)`. The target Expr parses in a no-`in`
-    // context (same exclude as binding initializers): the `in` belongs to the for-head,
-    // not to an in-LED inside the target — without it `for (key in obj)` swallowed the
-    // `in`, the arm failed, and the statement fell back to a CALL parse `for(...)`.
-    [exclude('in', Expr), 'in', Expr, many(',', Expr)],
-    [exclude('in', Expr), 'of', Expr],
-  ];
-});
+const ForHead = rule($ => forHeadArms(Expr, ForBinding));
+const ForAwaitHead = rule($ => forAwaitHeadArms(Expr, ForBinding));
 
 const SwitchCase = rule($ => [
   ['case', Expr, many(',', Expr), ':'],
@@ -620,7 +595,7 @@ const Stmt = rule($ => [
   Block,
   [alt('let', 'const', 'var'), sep(Binding, ','), asi()],
   ['if', '(', Expr, many(',', Expr), ')', $, opt('else', $)],
-  ['for', opt('await'), '(', ForHead, ')', $],
+  forStatement($, ForHead, ForAwaitHead),
   ['while', '(', Expr, many(',', Expr), ')', $],
   ['do', $, 'while', '(', Expr, many(',', Expr), ')', opt(';')],
   ['switch', '(', Expr, many(',', Expr), ')', '{', many(SwitchCase), '}'],
@@ -1080,7 +1055,7 @@ export default defineGrammar({
     Expr, Prop, MemberName, NewTarget, ClassHeritage,
     Stmt, Block,
     BindingProperty, BindingElement, ArrayBindingElement, BindingPattern,
-    Binding, ForBinding, Param, ForHead, SwitchCase,
+    Binding, ForBinding, Param, ForHead, ForAwaitHead, SwitchCase,
     TypeParams, TypeParam,
     Decl, ClassMember, EnumMember,
     ImportClause, ImportSpecifier, ExportSpecifier, ModuleReference,

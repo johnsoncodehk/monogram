@@ -333,7 +333,7 @@ export const TS_GOLDEN: { label: string; src: string; expect: unknown }[] = [
 export const FAIL_LOUD_RD_FNS = [
   'estreeStmt', 'estreeDecl', 'estreeParenOrComma', 'estreeExprLed',
   'estreeExprNudSeq', 'estreeArrow', 'tsTypeLed', 'estreeNewTargetLed',
-  'estreeArrayPattern', 'estreeBindingProperty', 'estreeParam', 'estreeForHead',
+  'estreeArrayPattern', 'estreeBindingProperty', 'estreeParam', 'estreeForHead', 'estreeForAwaitHead',
   'estreeSwitchCase', 'estreeDecorator', 'estreeClassMember',
   'tsTypeMember', 'estreeProp',
 ] as const;
@@ -342,4 +342,4 @@ export const FAIL_LOUD_PRATT_FNS = [
   'estreeExprBinary', 'estreeExprPrefix', 'estreeExprPostfixTok', 'estreeTemplateLiteral',
 ] as const;
 
-export const TYPESCRIPT_CUSTOM_FN_COUNT = 22;
+export const TYPESCRIPT_CUSTOM_FN_COUNT = 23;
