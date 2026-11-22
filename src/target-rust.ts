@@ -286,7 +286,7 @@ ${indent}        }`;
 function newlinePartsRs(nl: NewlineCfg, ids: LexIdPlan): { consts: string; fields: string; init: string; ws: string; hooks: string; wsFrom: string; hooksFrom: string } {
   // Byte-oriented: ASCII ws by lead byte; non-ASCII via UTF-8 decode (JS \\s set).
   // LS/PS excluded: they fall to the unexpected-character panic, matching the interpreter.
-  const ws = (push: string) => `        if c == 32 || c == 9 || c == 11 || c == 12 { pos += 1; continue; }
+  const ws = (push: string) => `        if c == 32 || c == 9 || c == 11 || c == 12 { pos += 1; while pos < n && matches!(b[pos], 9 | 11 | 12 | 32) { pos += 1; } continue; }
         if c == 10 || c == 13 {
             let s = pos;
             pos += 1; if c == 13 && pos < n && b[pos] == 10 { pos += 1; }
@@ -347,8 +347,11 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   // grammars keep the flow-aware whitespace arms (flow_depth) and do NOT use the folded arms.
   const nonAsciiWsCheck = nlRs ? '' : `        if c >= 0xC2 { if let Some((ch, w)) = _char_at(src, pos) { if _is_js_ws(ch) { if ch == '\\u{2028}' || ch == '\\u{2029}' { ${nlVar} = true; } pos += w; continue; } } }
 `;
-  const wsNlArms = nlRs ? '' : `        9 | 11 | 12 | 32 => { pos += 1; continue; }
-        10 | 13 => { ${nlVar} = true; pos += 1; continue; }
+  // A whitespace run is consumed in one dispatch round: per byte only "is it still whitespace"
+  // is asked; the round's own checks (the loop bound, the template `}` test, the byte match) run
+  // once per run. A run after a line break also takes further breaks: the flag is already set.
+  const wsNlArms = nlRs ? '' : `        9 | 11 | 12 | 32 => { pos += 1; while pos < n && matches!(b[pos], 9 | 11 | 12 | 32) { pos += 1; } continue; }
+        10 | 13 => { ${nlVar} = true; pos += 1; while pos < n && matches!(b[pos], 9..=13 | 32) { pos += 1; } continue; }
 `;
   const tplOpenByte = tpl && tlen(tpl.open) === 1 ? firstUnit(tpl.open, UNITS) : null;
   const tplOpenArm = tplOpenByte !== null ? `        ${tplOpenByte} => {

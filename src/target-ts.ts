@@ -154,7 +154,11 @@ function newlineParts(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state: 
     state: `  let flowDepth = 0;
 ${flowSets}`,
     stateFrom: flowSets,
-    ws: `    if (c === 32 || c === 9 || c === 11 || c === 12 || c === 160 || c === 5760 || (c >= 8192 && c <= 8202) || c === 8239 || c === 8287 || c === 12288 || c === 65279) { pos++; continue; }
+    ws: `    if (c === 32 || c === 9 || c === 11 || c === 12 || c === 160 || c === 5760 || (c >= 8192 && c <= 8202) || c === 8239 || c === 8287 || c === 12288 || c === 65279) {
+      pos++;
+      for (let d = src.charCodeAt(pos); d === 32 || d === 9 || d === 11 || d === 12 || d === 160 || d === 5760 || (d >= 8192 && d <= 8202) || d === 8239 || d === 8287 || d === 12288 || d === 65279; d = src.charCodeAt(pos)) pos++;
+      continue;
+    }
     if (c === 10 || c === 13) {   // LF/CR only — LS/PS fall through to the unexpected-character throw, matching the interpreter
       const s = pos;
       pos++; if (c === 13 && pos < n && src.charCodeAt(pos) === 10) pos++;
@@ -310,8 +314,20 @@ function lx_ext(src: string, e: number): number {
     : '';
   const nlState = nl ? newlineParts(nl, stateful ? 'emit' : 'push', ids).state : '';
   const nlStateFrom = nl ? newlineParts(nl, 'push', ids).stateFrom : '';
-  const nlWs = nl ? newlineParts(nl, stateful ? 'emit' : 'push', ids).ws : `    if (c === 10 || c === 13 || c === 8232 || c === 8233) { pendingNl = true; pos++; continue; }
-    if (c === 32 || c === 9 || c === 11 || c === 12 || c === 160 || c === 5760 || (c >= 8192 && c <= 8202) || c === 8239 || c === 8287 || c === 12288 || c === 65279) { pos++; continue; }
+  // A whitespace run is consumed in one dispatch round (see the Rust target): per unit only "is it
+  // still whitespace"; a run after a line terminator also takes further terminators.
+  const isWs = (v: string) => `${v} === 32 || ${v} === 9 || ${v} === 11 || ${v} === 12 || ${v} === 160 || ${v} === 5760 || (${v} >= 8192 && ${v} <= 8202) || ${v} === 8239 || ${v} === 8287 || ${v} === 12288 || ${v} === 65279`;
+  const isNl = (v: string) => `${v} === 10 || ${v} === 13 || ${v} === 8232 || ${v} === 8233`;
+  const nlWs = nl ? newlineParts(nl, stateful ? 'emit' : 'push', ids).ws : `    if (${isNl('c')}) {
+      pendingNl = true; pos++;
+      for (let d = src.charCodeAt(pos); ${isWs('d')} || ${isNl('d')}; d = src.charCodeAt(pos)) pos++;
+      continue;
+    }
+    if (${isWs('c')}) {
+      pos++;
+      for (let d = src.charCodeAt(pos); ${isWs('d')}; d = src.charCodeAt(pos)) pos++;
+      continue;
+    }
 `;
   const pushHooks = nl && !stateful ? newlineParts(nl, 'push', ids).hooks : '';
   const pushFnDef = stateful ? '' : nl

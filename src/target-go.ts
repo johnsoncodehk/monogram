@@ -181,7 +181,11 @@ function newlinePartsGo(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state
     state: `\tflowDepth := 0
 ${flowSets}`,
     stateFrom: flowSets,
-    ws: `\t\tif c == 32 || c == 9 || c == 11 || c == 12 { pos++; continue }
+    ws: `\t\tif c == 32 || c == 9 || c == 11 || c == 12 {
+\t\t\tpos++
+\t\t\tfor pos < n { if d := src[pos]; d != 32 && d != 9 && d != 11 && d != 12 { break }; pos++ }
+\t\t\tcontinue
+\t\t}
 \t\tif c == 10 || c == 13 {
 \t\t\ts := pos
 \t\t\tpos++; if c == 13 && pos < n && src[pos] == 10 { pos++ }
@@ -376,8 +380,19 @@ func lxExt(src string, e int) int {
 `;
   const nlState = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).state : '';
   const nlStateFrom = nl ? newlinePartsGo(nl, 'pushTok', ids).stateFrom : '';
-  const nlWs = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).ws : `\t\tif c == 32 || c == 9 || c == 11 || c == 12 { pos++; continue }
-\t\tif c == 10 || c == 13 { pendingNl = true; pos++; continue }
+  // A whitespace run is consumed in one dispatch round (see the Rust target): per byte only "is
+  // it still whitespace"; a run after a line break also takes further breaks.
+  const nlWs = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).ws : `\t\tif c == 32 || c == 9 || c == 11 || c == 12 {
+\t\t\tpos++
+\t\t\tfor pos < n { if d := src[pos]; d != 32 && d != 9 && d != 11 && d != 12 { break }; pos++ }
+\t\t\tcontinue
+\t\t}
+\t\tif c == 10 || c == 13 {
+\t\t\tpendingNl = true
+\t\t\tpos++
+\t\t\tfor pos < n { if d := src[pos]; d != 32 && (d < 9 || d > 13) { break }; pos++ }
+\t\t\tcontinue
+\t\t}
 \t\tif c >= 0x80 {
 \t\t\tr, w := utf8.DecodeRuneInString(src[pos:])
 \t\t\tif isJsWs(r) { if r == 0x2028 || r == 0x2029 { pendingNl = true }; pos += w; continue }
