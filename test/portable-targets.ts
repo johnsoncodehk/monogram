@@ -139,8 +139,12 @@ const TS_DECORATORS = {
     // error for its missing `;` (parseErrorForMissingSemicolonAfter), so these are two statements.
     'declare x;', 'declare @d class C {}', 'declare if (a) {}',
     'export @d default function f() {}', 'export @d default abstract class C {}', 'export default @d class C {}',
+    // The lexer makes `@new` one Decorator token, so both DecoratorExpr arms begin with it: the
+    // `'@new' NewTarget` arm is a longest-match candidate there, not a branch no token reaches.
+    '@new Foo() class C {}', '@new Foo class C {}', 'class C { @new Foo() m() {} }',
   ],
   reject: [
+    '@new class C {}', '@new Foo()() class C {}',
     'public @d class C {}', 'abstract @d class C {}', '@d public @e class C {}', '@d export abstract @e class C {}',
     'export abstract @d class C {}', 'static static class C {}', '@d static static class C {}', '@d default x;', '@d default @e @f x;',
     'x = abstract class {};', 'x = @d const class {};', 'x = @d static static class {};', 'x = @d export @e export @f class {};',
