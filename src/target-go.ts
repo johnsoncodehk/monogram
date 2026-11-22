@@ -577,6 +577,11 @@ ${goUniIdentTables()}func scanUniIdent(src string, pos int) (int, bool) {
 	if uniClass(r) != 2 { return pos, false }
 	return lxExtRun(src, pos+w), true
 }
+// The lexer error of an identifier whose escapes spell no IdentifierName (lex-family.ts).
+func ${shared.identEscError()}(src string, pos, e int) int {
+	panic(&LexError{Off: pos, Msg: fmt.Sprintf("Invalid identifier escape at offset %d: '%s'", pos, src[pos:e])})
+}
+func ${shared.uniClass()}(cp int) int { return int(uniClass(rune(cp))) }
 // Extend an identifier token that the ASCII pattern cut short at a non-ASCII
 // ID_Continue char (caf|é → café), mirroring emit-lexer's uniIdentContReY extension.
 func lxExt(src string, e int) int {
@@ -2955,7 +2960,7 @@ const GO_TOK: Record<TokInt, string> = { off: 'uint32', end: 'uint32', kid: 'uin
 const GO_MK: Record<keyof MkMeta, string> = { off: 'int32', end: 'int32', kid: 'uint16', nl: 'bool', fd: 'uint16', pd: 'uint16', lc: 'bool', lb: 'bool', hd: 'bool', td: 'uint8' };
 // Operator spelling and binding strength; unary is 90, a negative literal 7.
 const GO_OPS: Record<BinOp, [string, number]> = {
-  or: ['||', 1], and: ['&&', 2], eq: ['==', 3], ne: ['!=', 3], lt: ['<', 4], le: ['<=', 4], gt: ['>', 4], ge: ['>=', 4], shr: ['>>', 5], add: ['+', 6], sub: ['-', 6],
+  or: ['||', 1], and: ['&&', 2], eq: ['==', 3], ne: ['!=', 3], lt: ['<', 4], le: ['<=', 4], gt: ['>', 4], ge: ['>=', 4], shr: ['>>', 5], shl: ['<<', 5], add: ['+', 6], sub: ['-', 6],
 };
 const GO_IND = '\t';
 const exported = (s: string): string => s[0].toUpperCase() + s.slice(1);
@@ -2995,7 +3000,7 @@ func lexFind(s string, i int, lit string) int {
     bin: (op, a, b) => {
       const [sp, p] = GO_OPS[op];
       const side = (r: R, right: boolean): string =>
-        (r.prec < p || (right && r.prec === p) || (op === 'shr' && r.prec < ATOM) || (COMPARISON.has(op) && r.prec >= 3 && r.prec <= 4) ? `(${r.c})` : r.c);
+        (r.prec < p || (right && r.prec === p) || ((op === 'shr' || op === 'shl') && r.prec < ATOM) || (COMPARISON.has(op) && r.prec >= 3 && r.prec <= 4) ? `(${r.c})` : r.c);
       return { c: `${side(a, false)} ${sp} ${side(b, true)}`, prec: p };
     },
     call: (name, args) => `${name}(${args.join(', ')})`,
@@ -3027,6 +3032,7 @@ func lexFind(s string, i int, lit string) int {
     return: (vals) => [`return ${vals.join(', ')}`],
     fn: (f) => [
       ...f.doc.map((l) => `// ${l}`),
+      ...(f.cold ? ['//go:noinline'] : []),
       `func ${f.name}(${f.params.map((p) => `${p.name} ${p.type}`).join(', ')}) ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`} {`,
       ...goBlock(f.body),
       '}',

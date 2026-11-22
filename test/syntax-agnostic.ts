@@ -12,7 +12,7 @@ import { relexFamilyFns, relexMode } from '../src/relex-family.ts';
 import { lexScanFamily } from '../src/lex-family.ts';
 import { ATOM, type BinOp, type Expr, type Fn, type Lowering, type Stmt } from '../src/algo-ir.ts';
 
-const OP: Record<BinOp, string> = { add: '+', sub: '-', shr: 'shr', lt: '<', le: '<=', gt: '>', ge: '>=', eq: '=', ne: '/=', and: 'and', or: 'or' };
+const OP: Record<BinOp, string> = { add: '+', sub: '-', shr: 'shr', shl: 'shl', lt: '<', le: '<=', gt: '>', ge: '>=', eq: '=', ne: '/=', and: 'and', or: 'or' };
 const form = (...xs: string[]) => `(${xs.join(' ')})`;
 const nest = (lines: string[]) => lines.map((l) => '  ' + l);
 const kebab = (s: string) => s.replace(/[A-Z]/g, (m) => '-' + m.toLowerCase());
@@ -129,6 +129,7 @@ function census(fns: Fn[]): Map<string, number> {
     }
   };
   for (const f of fns) {
+    if (f.extern) continue;   // a signature only: the target prints it (printFns skips it)
     bump('defn');
     for (let i = 0; i < f.doc.split('\n').length; i++) bump(';;');
     f.body.forEach(st);
