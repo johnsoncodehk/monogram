@@ -175,7 +175,8 @@ echo "=== Go and TS targets: work per parse of the same inputs (Go: Callgrind in
 # So that a change which improves one target only shows as a move in one column of the summary.
 # Go: test/bench-targets/go-main.go count-fresh / count-reuse, collection toggled around the one
 # parse by a client request; built with -tags faketime and run with GOGC=off GOMAXPROCS=1
-# GODEBUG=asyncpreemptoff=1 (go-main.go says why each is needed). TS / JS: test/bench-targets/blocks.ts.
+# GODEBUG=asyncpreemptoff=1 (go-main.go says why each is needed); the map runtime's instructions are
+# counted apart (test/bench-targets/go-ir.ts says why). TS / JS: test/bench-targets/blocks.ts.
 # Both are pure functions of the emitted code and the input; PROFILE_TARGETS_REPEAT=1 (the default)
 # measures M a second time (M2), and the summary fails the job if M2 differs from M.
 mkdir -p "$OUT/targets"
@@ -193,8 +194,11 @@ for f in $MAIN; do
     t=${v%2} # M2 runs M's build
     for m in fresh reuse; do
       out=$OUT/targets/$v.go-$m.$f.cg
-      if env GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1 "${CG[@]}" --callgrind-out-file="$out" "$W/targets-$t/go/count" "count-$m" "$f" > "$out.stdout" 2> "$out.log"; then
-        echo "GOIR $v.$m.$f $(ir_of "$out") $(grep -aoE 'ACCEPT|REJECT' "$out.stdout" | head -1)" | tee -a "$R"
+      # setarch -R: without address randomization the page allocator's search over the heap's
+      # chunks is the same in every run (with it, a fresh parse varied by 0.03-0.14%).
+      if env GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1 setarch "$(uname -m)" -R "${CG[@]}" --callgrind-out-file="$out" "$W/targets-$t/go/count" "count-$m" "$f" > "$out.stdout" 2> "$out.log" \
+        && gi=$(node "$REPO/test/bench-targets/go-ir.ts" "$out"); then
+        echo "GOIR $v.$m.$f $(grep -aoE 'ACCEPT|REJECT' "$out.stdout" | head -1) $gi" | tee -a "$R"
       else
         echo "GOIR $v.$m.$f FAILED" | tee -a "$R"; tail -5 "$out.log"
       fi

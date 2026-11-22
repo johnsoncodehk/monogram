@@ -30,8 +30,13 @@ performance claim in a pull request or in the README comes from one of these, ru
   every 10 ms of wall time and the scheduler's work lands inside the measured region as often as
   Valgrind's speed allows), `GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1`, and collection
   toggled by a client request around the parse (`--toggle-collect=<function>` ends early: Callgrind
-  tracks returns by the stack pointer, and the Go runtime switches stacks). The profile measures M
-  twice and fails if the two differ by more than 0.01%.
+  tracks returns by the stack pointer, and the Go runtime switches stacks), heap profiling off (it
+  samples at random intervals), and no address randomization (`setarch -R`: the page allocator's
+  search depends on where the heap lies). What remains random is a Go map's hash seed: a lookup's
+  instructions differ between runs (up to 0.5% of a parse of `checker.ts`), their number does not.
+  So the Go column counts the parse WITHOUT the calls into the map runtime and lists the number of
+  those calls beside it (`test/bench-targets/go-ir.ts`); once no map is read on the parse path the
+  two agree. The profile measures M twice and fails if the two differ by more than 0.01%.
 - **The fair comparison with oxc is reuse mode on both sides**: one kept `CstBuilder`
   (`parse_with`) against one `Allocator` `reset()` before each parse. Fresh mode (a new builder /
   allocator per parse) is reported beside it.

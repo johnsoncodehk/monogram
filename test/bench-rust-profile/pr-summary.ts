@@ -26,18 +26,20 @@ const faults: Record<string, Record<string, string>> = {};
 const acc: Record<string, string> = {};
 const crashes: string[] = [];
 const files: string[] = [];
-// The other targets (run.sh, "Go and TS targets"): `GOIR <v>.<fresh|reuse>.<file> <Ir> <verdict>`,
-// `TSBLK <v>.<ts-parse|js-fresh>.<file> <verdict> blocks=<n> functions=<k>`; v = A, M or M2 (M again).
+// The other targets (run.sh, "Go and TS targets"): `GOIR <v>.<fresh|reuse>.<file> <verdict> ir=<n>
+// total=<n> mapir=<n> mapcalls=<n>` (test/bench-targets/go-ir.ts), `TSBLK <v>.<ts-parse|js-fresh>.<file>
+// <verdict> blocks=<n> functions=<k>`; v = A, M or M2 (M again).
 const work: Record<string, number> = {};
 const workVerdict: Record<string, string> = {};
+const goMap: Record<string, Record<string, string>> = {};
 for (const line of readFileSync(resultsFile, 'utf8').split('\n')) {
   const p = line.trim().split(/\s+/);
   if (p[0] === 'IR') { if (p[2] === 'FAILED' || !/^\d+$/.test(p[2] ?? '')) irFailed.push(p[1]); else ir[p[1]] = +p[2]; continue; }
   if (p[0] === 'GOIR' || p[0] === 'TSBLK') {
     const [v, mode, ...rest] = p[1].split('.');
     const key = `${v}.${p[0] === 'GOIR' ? 'go-' + mode : mode}.${rest.join('.')}`;
-    const n = p[0] === 'GOIR' ? p[2] : kv(line).blocks;
-    const verdict = p[0] === 'GOIR' ? p[3] : p[2];
+    const f = kv(line), n = p[0] === 'GOIR' ? f.ir : f.blocks, verdict = p[2];
+    if (p[0] === 'GOIR') goMap[key] = f;
     if (/^\d+$/.test(n ?? '') && (verdict === 'ACCEPT' || verdict === 'REJECT')) { work[key] = +n!; workVerdict[key] = verdict; }
     else irFailed.push(`${p[0]} ${p[1]}`);
     continue;
@@ -131,6 +133,8 @@ for (const f of tfiles) for (const c of cols.slice(2)) {
     const d = Math.abs(pct(m!, m2!));
     if (Number.isFinite(d)) repeatMax = Math.max(repeatMax, d);
     if (d > STILL) notRun.push(`${c.head} ${f}: M measured twice differs by ${fpct(d)} (${num(m)} / ${num(m2)}): the measure is not deterministic`);
+    const k = c.key!.startsWith('go-') ? `${c.key}.${f}` : '';
+    if (k && goMap[`M.${k}`]?.mapcalls !== goMap[`M2.${k}`]?.mapcalls) notRun.push(`${c.head} ${f}: map lookups of M measured twice differ (${goMap[`M.${k}`]?.mapcalls} / ${goMap[`M2.${k}`]?.mapcalls})`);
   }
 }
 const singleTarget: string[] = [];
@@ -178,7 +182,7 @@ if (singleTarget.length) {
 say();
 table(['input', ...cols.map((c) => c.head + ' Δ')], sideRows);
 say();
-say('Rust / Go: Callgrind instructions of one parse (Go: `ParseWith` into a new `CstBuilder` as the first parse of the process, or into the builder of a first parse; built with `-tags faketime`, run with `GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1`, the Go runtime\'s own work inside the parse included). ' +
+say('Rust / Go: Callgrind instructions of one parse (Go: `ParseWith` into a new `CstBuilder` as the first parse of the process, or into the builder of a first parse; built with `-tags faketime`, run with `GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1` without address randomization, the Go runtime\'s own work inside the parse included EXCEPT map lookups: a map\'s hash seed is random per process, so a lookup\'s instructions vary between runs; their number does not, and is listed below with their instructions in this run). ' +
   'TS / JS: V8 block executions of one `parse(src)` of the TS target and one `createParser().parse(src)` of the emitted JS parser (precise block coverage with counts): they see control flow, not the cost inside a block. ' +
   (repeated ? `M was measured twice for Go, TS and JS: the largest difference was ${fpct(repeatMax)}.` : 'M was measured once (PROFILE_TARGETS_REPEAT=0).'));
 say();
@@ -186,6 +190,12 @@ say('<details><summary>Go, TS and JS counts A / M</summary>');
 say();
 table(['input', ...cols.slice(2).map((c) => c.head + ' A / M')], tfiles.map((f) => [f, ...cols.slice(2).map((c) =>
   num(c.get('A', f)) + ' / ' + num(c.get('M', f)) + (workVerdict[`M.${c.key}.${f}`] === 'REJECT' ? ' (M rejects)' : ''))]));
+say();
+say();
+say('Go map lookups on the parse path (counted apart from Go Ir: calls into the map runtime, and their instructions in this run, which vary with the hash seed):');
+say();
+table(['input', 'fresh calls A / M', 'reuse calls A / M', 'fresh map Ir A / M', 'reuse map Ir A / M'], tfiles.map((f) => [f,
+  ...['mapcalls', 'mapir'].flatMap((k) => ['fresh', 'reuse'].map((m) => num(goMap[`A.go-${m}.${f}`]?.[k]) + ' / ' + num(goMap[`M.go-${m}.${f}`]?.[k])))]));
 say();
 say('</details>');
 say();

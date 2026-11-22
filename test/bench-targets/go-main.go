@@ -12,10 +12,13 @@ package main
 // first. Prints ACCEPT or REJECT. Deterministic only in the build and environment run.sh gives it:
 // `-tags faketime` (the runtime's clock stands still, so sysmon never preempts the parse: a
 // preemption runs the scheduler inside the measured region, as often as wall time allows) and
-// GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1 (no collector cycles, no preemption signals).
+// GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1 (no collector cycles, no preemption signals),
+// heap profiling off, and no address randomization (run.sh). The map runtime's instructions still
+// vary with the per-process hash seed; go-ir.ts counts them apart.
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"time"
 
 	"consumer/parser"
@@ -50,6 +53,11 @@ func main() {
 	}
 	src := string(b)
 	kept := &parser.CstBuilder{}
+	if mode == "count-fresh" || mode == "count-reuse" {
+		// Heap profiling samples an allocation at random intervals (a random number per sample);
+		// recording the sample is work that differs between runs.
+		runtime.MemProfileRate = 0
+	}
 	switch mode {
 	case "count-fresh":
 		verdict(measured(src, kept))
