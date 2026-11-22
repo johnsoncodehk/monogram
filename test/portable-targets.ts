@@ -117,6 +117,21 @@ const JS_DECORATORS = {
     'export @d default class {}', '@d default class C {}', 'x = @d function () {};',
   ],
 };
+// A template token referenced outside a Pratt NUD / postfix position (a `tok` step that carries
+// its hole rule: an optional-chain tail `?.` template, TypeScript's decorator tail) is matched with
+// its `${…}` holes, as the interpreter does, in every target: with no hole, with several, nested.
+const TEMPLATE_STEPS = {
+  js: {
+    accept: ['a?.`x${y}`;', 'a?.`x${y}m${z}t`;', 'a?.`x${`y${z}`}`;', 'a?.`x`;', 'a?.b`x${y}`;', 'a?.`x${y}`();', 'a?.`${a?.`${b}`}`;'],
+    reject: ['a?.`x${`;', 'a?.`x${y`;', 'a?.`x${}`;', 'new a?.`x${y}`;', '@x`a${b}c` class C {}', 'a!`x${y}`;'],
+  },
+  ts: {
+    accept: ['@x`a${b}c` class C {}', 'a?.`x${y}`;', 'a!`x${y}`;', 'a?.`x${y}m${z}t`;', 'a?.`x${`y${z}`}`;', '@x`${`a${b}`}` class C {}',
+      '@x`a` class C {}', 'a?.`x`;', '@x.y`a${b}` class C {}', '@x`a${b}`.y class C {}', 'a?.b`x${y}`;', 'a?.`x${y}`();',
+      'x = @d`${a}` class {};', 'a!?.`x${y}`;'],
+    reject: ['a?.`x${`;', '@x`a${}` class C {}', 'a?.`x${y`;', 'new a?.`x${y}`;', '@x`a${b` class C {}', '@x`${}` class C {}'],
+  },
+};
 // TypeScript decorators and modifiers before a declaration or a class expression, as tsc's
 // parser reads them (parseModifiers): decorators, modifier words, and a second decorator run
 // only after `export` / `default` (the two words a `@` may follow); every word is a modifier
@@ -548,7 +563,7 @@ const CASES: Case[] = [
       'new a.b();', '((((x))));',
       'for (a = x + y in b) c;',
       ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...EXPORT_DECLS.accept,
-      ...CTX_CASES.javascript.accept, ...JS_DECORATORS.accept, ...JS_MODULES.accept, ...TRY_STATEMENTS.accept,
+      ...CTX_CASES.javascript.accept, ...JS_DECORATORS.accept, ...TEMPLATE_STEPS.js.accept, ...JS_MODULES.accept, ...TRY_STATEMENTS.accept,
       // An assignment / update operand needs only a LeftHandSideExpression's shape; target validity is a consumer's.
       '-x++;', '(a) = 1;', 'a = b = c;', '1 = 2;', '1++;', '++1;', 'f() = 1;', 'f()++;', '++f();', 'this = 1;',
       '(a + b) = c;', '(a, b) = 1;', 'a?.b = 1;', 'a?.b++;', '[a + b] = c;', '({a: 1} = c);', 'new.target = 1;',
@@ -631,7 +646,7 @@ const CASES: Case[] = [
       'for (a = (x in b)) c;',
       'for (a = b ? x in c : y in d) e;',
       ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject,
-      ...CTX_CASES.javascript.reject,
+      ...CTX_CASES.javascript.reject, ...TEMPLATE_STEPS.js.reject,
       // An assignment / update operand (prefix ++/-- included) without a LeftHandSideExpression's shape has no parse.
       'a + b = c;', 'a++ = 1;', '-a = 1;', '++ -x;', '++x++;', '++ ++x;',
       // … wherever the expression is optional or repeated: a refused operand is not skipped.
@@ -657,7 +672,7 @@ const CASES: Case[] = [
     grammar: 'typescript', path: '../typescript.ts',
     accept: [
       ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...EXPORT_DECLS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
-      ...CTX_CASES.typescript.accept, ...TS_DECORATORS.accept, ...TS_MEMBER_DECORATORS.accept, ...TS_MODULES.accept, ...TRY_STATEMENTS.accept, ...TS_TRY.accept,
+      ...CTX_CASES.typescript.accept, ...TS_DECORATORS.accept, ...TEMPLATE_STEPS.ts.accept, ...TS_MEMBER_DECORATORS.accept, ...TS_MODULES.accept, ...TRY_STATEMENTS.accept, ...TS_TRY.accept,
       // A class heritage is a LeftHandSideExpression (see the JavaScript cases).
       'f(class extends (a, b) {});', 'f(class extends a[0] {});', 'f(class extends a`t` {});', 'f(class extends a?.b() {});',
       // `return` takes an expression only on its own line (a restricted production), so a
@@ -841,7 +856,7 @@ const CASES: Case[] = [
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
       'type T = | | A;', 'type T = A | | B;', 'type T = A & | B;', 'type T = & & A;', 'type T = & | A;', 'f<| | A>();', 'let x: [| | A];',
-      'const f = <>() => 1;', 'const f = async <>(a) => 1;', 'const f = <in T>() => 1;', 'f(<in out T>(a) => a);', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, ...TS_DECORATORS.reject, ...TS_MEMBER_DECORATORS.reject, ...TS_MODULES.reject, ...TRY_STATEMENTS.reject, ...TS_TRY.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
+      'const f = <>() => 1;', 'const f = async <>(a) => 1;', 'const f = <in T>() => 1;', 'f(<in out T>(a) => a);', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, ...TS_DECORATORS.reject, ...TEMPLATE_STEPS.ts.reject, ...TS_MEMBER_DECORATORS.reject, ...TS_MODULES.reject, ...TRY_STATEMENTS.reject, ...TS_TRY.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '{ b(); }.x;', '{ static x }.y;', '{ static x }', '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;',
       'let[0] = 1;', '(async\nfunction f() {});',
