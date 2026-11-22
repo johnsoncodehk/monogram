@@ -22,7 +22,12 @@ const peek = 'fn peek(&mut self) -> Option<Tok> {\n';
 if (src.split(peek).length !== 2) throw new Error('Parser::peek not found exactly once');
 src = src.replace(peek, peek + '        cnt_add(C_PEEK, 1);\n');
 // Buffer lengths and capacities left in the Parser by parse_with (scratch, top-level entries).
+// Two shapes of parse_with: the Parser's buffers moved back into the builder by hand (`*b = p.b;`),
+// or by a drop guard after `root` (a builder carrying a Workspace); the stores go right before either.
+const pbStore = '    PB[0].store(p.scratch.len() as u64, Relaxed); PB[1].store(p.scratch.capacity() as u64, Relaxed); PB[2].store(p.entries.len() as u64, Relaxed); PB[3].store(p.entries.capacity() as u64, Relaxed);\n';
 const pw = '    *b = p.b;\n    if let Some(t) = b.toks_mut() { *t = p.toks; }\n';
-if (src.split(pw).length !== 2) throw new Error('parse_with tail not found exactly once');
-src = src.replace(pw, '    PB[0].store(p.scratch.len() as u64, Relaxed); PB[1].store(p.scratch.capacity() as u64, Relaxed); PB[2].store(p.entries.len() as u64, Relaxed); PB[3].store(p.entries.capacity() as u64, Relaxed);\n' + pw);
+const pwGuard = '    };\n    root\n}\n\n/// Returns a parse\'s buffers';
+if (src.split(pw).length === 2) src = src.replace(pw, pbStore + pw);
+else if (src.split(pwGuard).length === 2) src = src.replace(pwGuard, '    };\n' + pbStore + '    root\n}\n\n/// Returns a parse\'s buffers');
+else throw new Error('parse_with tail not found exactly once');
 writeFileSync(out, src);

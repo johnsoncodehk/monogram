@@ -107,6 +107,13 @@ for f in $INPUTS; do
       "$W/mono-count-$v/target/release/mono-count-$v" --faults-$m "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v FAULTSCRASH $m $f" | tee -a "$R"
     done
   done
+  # oxc in both modes (fresh Allocator per parse; one Allocator reset between parses). A crash of the
+  # reference on a pathological input is recorded, never fatal.
+  if [ $HAVE_OXCCOUNT = 1 ]; then
+    for m in fresh reuse; do
+      { "$W/oxc-count/target/release/oxc-count" --faults $m "$f" || echo "OXCFAULTSCRASH $m $f (exit $?)"; } | tee -a "$R"
+    done
+  fi
 done
 
 echo "=== native time per parse (profiled build; one run each, indicative only: the benchmark is test/bench-rust-oxc)"
@@ -133,6 +140,7 @@ cg_run() { # <tag> <toggle> <cmd...>
 }
 for f in $INPUTS; do
   cg_run "C.parse.$f" '*oxc_prof_parse*' "$OXC/oxc-once" --once "$f"
+  cg_run "C.parse-reuse.$f" '*oxc_prof_parse_reuse*' "$OXC/oxc-once" --once-reuse "$f"
   [ $HAVE_LEX = 1 ] && cg_run "C.lex.$f" '*oxc_prof_lex*' "$W/oxc-lex/target/release/oxc-lex" --once "$f" && cat "$OUT/cg/C.lex.$f.stdout" | tee -a "$R"
   for v in A M; do
     b=$W/mono-prof-$v/target/release/mono-prof-$v

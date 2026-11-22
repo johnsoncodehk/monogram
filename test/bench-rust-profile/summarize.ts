@@ -11,12 +11,17 @@ const acc: Record<string, string> = {};
 const time: Record<string, number> = {};
 const bytes: Record<string, number> = {};
 const files: string[] = [];
+// FAULTS <mode> lines of the monogram count builds (`<v> FAULTS cold|warm|reuse <file> k=v…`) and
+// OXCFAULTS <fresh|reuse> <file> k=v… of oxc-count.
+const faults: Record<string, Record<string, string>> = {};
 for (const line of readFileSync(process.argv[2], 'utf8').split('\n')) {
   const p = line.trim().split(/\s+/);
   if (p[0] === 'IR' && p[2] !== 'FAILED') ir[p[1]] = +p[2];
   else if (p[0] === 'OXCCOUNT') oxc[p[1]] = kv(line);
   else if (p[0] === 'OXCLEX') oxclex[p[1]] = kv(line);
   else if (p[1] === 'COUNT') count[`${p[0]}.${p[2]}`] = kv(line);
+  else if (p[1] === 'FAULTS') faults[`${p[0]}.${p[2]}.${p[3]}`] = kv(line);
+  else if (p[0] === 'OXCFAULTS') faults[`C.${p[1] === 'fresh' ? 'warm' : p[1]}.${p[2]}`] = kv(line);
   else if (p[1] === 'ACCEPT' || p[1] === 'REJECT') {
     acc[`${p[0]}.${p[2]}`] = p[1];
     const b = kv(line).bytes; if (b) bytes[p[2]] = +b;
@@ -78,5 +83,25 @@ for (const f of files) {
   }
 }
 console.log('C arena/out = oxc Allocator used bytes after the parse; A/M arena/out = capacity bytes of the CST builder\'s nodes+kids+toks Vecs after the parse.');
+console.log('\n## Per mode: instructions, faults, allocator calls per parse (steady loop: 3 warm-up parses, mean of 10)');
+console.log('fresh = a new CstBuilder / Allocator per parse, dropped after it. reuse = one CstBuilder kept (parse_with) / one Allocator reset() before each parse.');
+console.log('Ir: Callgrind, one parse (fresh: X.parse; reuse: X.parse-reuse, after one warm parse). allocs, B: malloc+realloc calls and bytes;');
+console.log('fresh allocs/B are of the single counted parse (COUNT / OXCCOUNT), reuse ones the mean of the 10 measured parses. peak: fresh = peak live heap of one parse; reuse = max RSS of the loop.');
+const W4 = [16, 6, 3, 9, 9, 10, 12, 12];
+for (const mode of ['fresh', 'reuse']) {
+  console.log(`\n### mode ${mode}`);
+  row(['input', 'mode', 'p', 'Ir', 'flt/parse', 'allocs', 'alloc B', 'peak'], W4);
+  for (const f of files) for (const v of ['A', 'M', 'C']) {
+    const fl = faults[`${v}.${mode === 'fresh' ? 'warm' : 'reuse'}.${f}`];
+    const irv = ir[`${v}.${mode === 'fresh' ? 'parse' : 'parse-reuse'}.${f}`];
+    let allocs: string | undefined, ab: string | undefined, peak: string | undefined;
+    if (mode === 'fresh') {
+      const c = v === 'C' ? oxc[f] : count[`${v}.${f}`];
+      if (c) { allocs = f0(+c.malloc + +c.realloc); ab = c.alloc_bytes; peak = c.peak_live_bytes; }
+    } else if (fl) { allocs = fl.allocs_per_parse; ab = fl.alloc_bytes_per_parse; peak = fl.maxrss_kb ? `${fl.maxrss_kb}KiB rss` : undefined; }
+    row([f, mode, v, M(irv), fl?.minflt_per_parse, allocs, ab, peak], W4);
+  }
+}
+
 console.log('\n## oxc counts');
 for (const f of files) if (oxc[f]) console.log(`${f}: tokens=${oxc[f].tokens} ast_nodes(enter_node)=${oxc[f].ast_nodes} arena_capacity=${oxc[f].arena_capacity_bytes} oxc-lex tokens=${oxclex[f]?.tokens ?? '-'}`);

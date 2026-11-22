@@ -35,9 +35,10 @@ jobs:
       - run: test/bench-rust-profile/run.sh
         env:
           PROFILE_WORK: ${{ runner.temp }}/prof-work
-          # Before / after of perf/context-word (#127): A = origin/master c79c88c, M = e856918.
-          PROFILE_A: c79c88ce9b5de63336128d8aab3d625c1dfa6615
-          PROFILE_M: e856918f675d70c4886a8824c1adb3b10c8e188e
+          # Before / after of perf/token-array-reservation (#126) with builder workspace reuse:
+          # A = origin/master 29b193b, M = aed2c94.
+          PROFILE_A: 29b193ba523cef163b32c50f0abb33c537fad8f3
+          PROFILE_M: aed2c94feacdb6da809a06ea65827327f7c7d00f
 
       - uses: actions/upload-artifact@v4
         if: always()
