@@ -191,7 +191,9 @@ documented-bug corpus, and fails unless the derived grammar is at least 90% and 
 official tree-sitter grammar. Last run (CI on `3a18a69`): Monogram 96.3%, official 92.5%.
 
 The other derived packages are checked in the same job: every `queries/*.scm` of every
-grammar must compile against its wasm ([`test/treesitter-queries.ts`](../test/treesitter-queries.ts));
+grammar must compile against its wasm ([`test/treesitter-queries.ts`](../test/treesitter-queries.ts);
+YAML's `highlights.scm` is expected-fail: it lists the flow brackets, which the external scanner
+lexes, as anonymous nodes);
 the TSX and JSX grammars parse a corpus whose verdicts are compared with the interpreter's
 ([`test/treesitter-jsx.ts`](../test/treesitter-jsx.ts), report-only); and the job summary
 records, per grammar, `tree-sitter generate` wall and CPU time, peak memory and the
