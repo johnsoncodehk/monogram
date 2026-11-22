@@ -870,9 +870,9 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean): StepLowering {
     // A body guard (emit-portable.ts annotateSteps) is tested inside an out-of-line helper
     // (`star_in` / `opt_in` / `sep_by_in`, `#[inline(never)]`, generic over the body: one small
     // function per site), so the function holding the step does not grow by the guarded attempt.
-    star: (body, g) => (true ? `${recv}.star${R}(|p| ${body})` : `${recv}.star_in${R}(${g}, |p| ${body})`),
-    opt: (body, g) => (true ? `${recv}.opt${R}(|p| ${body})` : `(!${recv}.ahead(${g}, true) || ${recv}.opt_out${R}(|p| ${body}))`),
-    sep: (elem, delim, g) => (true ? `${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})` : `(!${recv}.ahead(${g}, true) || ${recv}.sep_by_out${R}(|p| ${elem}, ${sepDelimLid(ids, delim)}))`),
+    star: (body, g) => (g === null ? `${recv}.star${R}(|p| ${body})` : `${recv}.star_in${R}(${g}, |p| ${body})`),
+    opt: (body, g) => (g === null ? `${recv}.opt${R}(|p| ${body})` : `(!${recv}.ahead(${g}, true) || ${recv}.opt_out${R}(|p| ${body}))`),
+    sep: (elem, delim, g) => (g === null ? `${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})` : `(!${recv}.ahead(${g}, true) || ${recv}.sep_by_out${R}(|p| ${elem}, ${sepDelimLid(ids, delim)}))`),
     altlit: (values) => `${recv}.alt_lit${R}(&[${values.map((v) => lidOf(ids, v)).join(', ')}])`,
     look: (id, is) => `${is ? '' : '!'}${recv}.look_${id}()`,
     ahead: (set, is) => `${recv}.ahead(${set}, ${is})`,
@@ -975,8 +975,8 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
 }
 // A candidate whose condition holds a nested construct (a closure: star / opt / sep / alt) is its
 // own out-of-line method, so the rule's dispatching function does not hold the arm's code [experiment c1].
-function outlineRs(out: string[], name: string, cond: string): string {
-  if (true) return cond;
+function outlineRs(out: string[], name: string, cond: string, always = false): string {
+  if (!always && !cond.includes('|p')) return cond;
   out.push(`    #[inline(never)]\n    fn arm_${name}(&mut self) -> bool { ${cond} }`);
   return `self.arm_${name}()`;
 }
@@ -1107,7 +1107,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
             }
             self.back(save);
         }`,
-    nudSeq: (i, cond, tail, capped) => candRs(d, i, outlineRs(out, `${r.name}_s${i}`, cond), rid, `${markRs(d, i)} bf = 0; bt = ${tail}; bc = ${capped};`),
+    nudSeq: (i, cond, tail, capped) => candRs(d, i, outlineRs(out, `${r.name}_s${i}`, cond, true), rid, `${markRs(d, i)} bf = 0; bt = ${tail}; bc = ${capped};`),
     // An operand that parses but is not the target the operator requires fails the whole Pratt
     // call, whatever another arm matched.
     nudPrefix: (i) => `        if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
