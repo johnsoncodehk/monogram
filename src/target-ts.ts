@@ -108,6 +108,13 @@ function mk_tok(off: number, end: number, nl: boolean, kid: number, lid: number)
 // (shared.tokenLiterals): 0 when it can be none.
 const lidCallTs = (lits: string[], text: string): string => (lits.length === 0 ? '0' : `lid_of(${text})`);
 
+// Whether a skipped token's text holds a line terminator (LF, CR, U+2028, U+2029), read in place.
+const TS_HAS_LINE_TERM = `function lexHasLineTerm(s: string, a: number, b: number): boolean {
+  for (let i = a; i < b; i++) { const c = s.charCodeAt(i); if (c === 10 || c === 13 || c === 0x2028 || c === 0x2029) return true; }
+  return false;
+}
+`;
+
 // One token at a dispatch site: the shared scanner says where it ends; the lexer records it.
 function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
   const name = t.name;
@@ -115,7 +122,7 @@ function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: bo
   // token (comment) still records a newline it spans, so `sameLine` sees it.
   const kid = kidOf(ids, name);
   const push = t.skip
-    ? `if (/[\\n\\r\\u2028\\u2029]/.test(src.slice(pos, e))) pendingNl = true; `
+    ? `if (lexHasLineTerm(src, pos, e)) pendingNl = true; `
     : `${stateful ? 'emit' : 'push'}(pos, e, ${kid}, ${lidCallTs(shared.tokenLiterals(ir, t, ids.lids.slice(1)), 'src.slice(pos, e)')}); `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
@@ -335,7 +342,7 @@ function lx_ext(src: string, e: number): number {
 }
 `
     : '';
-  const lxUniIdentConst = (identNameTs
+  const lxUniIdentConst = (shared.scannedTokens(ir).some((t) => t.skip) ? TS_HAS_LINE_TERM : '') + (identNameTs
     ? 'const LX_UNI_IDENT = /[$_\\p{ID_Start}][$\\u200c\\u200d\\p{ID_Continue}]*/uy;\n'
     : '') + lxExtConst;
   const uniIdentPushTs = stateful ? 'emit' : 'push';
@@ -3650,10 +3657,17 @@ const tsLowering: Lowering = {
   owns: false,
   charSet: (name, rs) => `const ${name} = /*#__PURE__*/ (() => { const a = new Uint8Array(256); for (const [lo, hi] of [${rs.map(([lo, hi]) => `[${lo},${hi}]`).join(', ')}]) for (let i = lo; i <= hi; i++) a[i] = 1; return a; })();`,
   // A code unit past 255 indexes no table entry (undefined), so it ends the run.
+  // A unit loop: Rust's four-per-round shape did not pay in V8 (measure-targets, PR #138: ts-parse
+  // -3.9% to +2.6%, ts-parseWith +0.7% to +2.6%, within the 3% noise floor).
   runEndFn: `// The end of the run of code units in set from i: the first j >= i at which s ends or s[j] is not in it.
 function lexRunEnd(s: string, i: number, set: Uint8Array): number {
   while (i < s.length && set[s.charCodeAt(i)] === 1) i++;
   return i;
+}`,
+  findFn: `// Where lit next occurs in s from i: the first j >= i at which s has it, or s.length.
+function lexFind(s: string, i: number, lit: string): number {
+  const k = s.indexOf(lit, i);
+  return k < 0 ? s.length : k;
 }`,
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
@@ -3670,6 +3684,7 @@ function lexRunEnd(s: string, i: number, set: Uint8Array): number {
     hasAt: (cx, s, i, lit) => cx.atom(`${tsWrap(s, ATOM)}.startsWith(${J(lit)}, ${i.c})`, 'bool', 'bool'),
     inSet: (_cx, set, c) => ({ c: `${set}[${c.c}] === 1`, ty: 'bool', nat: 'bool', prec: TS_OPS.eq[1] }),
     runEnd: (cx, set, s, i) => cx.atom(`lexRunEnd(${s.c}, ${i.c}, ${set})`, 'int', 'number'),
+    find: (cx, s, i, lit) => cx.atom(`lexFind(${s.c}, ${i.c}, ${J(lit)})`, 'int', 'number'),
     own: (_cx, r) => r,
   },
   stmt: {
