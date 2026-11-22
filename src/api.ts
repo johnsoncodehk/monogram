@@ -249,9 +249,10 @@ class CtxNode {
   // Mark the wrapped items as [Await]/[Yield] context (the ECMAScript grammar
   // parameter): inside an async function/arrow/method body await is the AwaitExpression
   // operator (no bare-identifier reading), and inside a generator body yield is the
-  // YieldExpression operator. The await-yield-fork build transform reads this marker to
-  // name-fork the body-reachable rule closure; every other consumer treats it as a
-  // transparent group. Wrap ONLY the async/generator arm's body+params; a nested
+  // YieldExpression operator. The interpreter and the jsTarget parser read this marker
+  // through the await-yield-fork build transform (which name-forks the body-reachable rule
+  // closure); the portable targets (emit-portable.ts) parse the body with the context
+  // word set; every other consumer treats it as a transparent group. Wrap ONLY the async/generator arm's body+params; a nested
   // non-async function/arrow/class body is simply left UNwrapped (context resets).
   readonly __kind = 'ctx' as const;
   readonly mode: 'await' | 'yield' | 'asyncgen' | 'reset';
@@ -263,7 +264,8 @@ class NotNode {
   // Zero-width negative lookahead over an element, or an array (a seq, like
   // everywhere else in the rule DSL). Matches nothing; succeeds only when
   // `item` can't match. `reservable` flags the bare-identifier reserved-word guard
-  // (notReservedExpr) so the await-yield-fork transform extends it per context family.
+  // (notReservedExpr) so a parser extends it with the context's operator words (the
+  // await-yield-fork transform per context family; the portable targets per context word).
   readonly item: Element | Element[];
   readonly reservable: boolean;
   constructor(item: Element | Element[], reservable = false) { this.item = item; this.reservable = reservable; }
@@ -373,7 +375,8 @@ export function asyncGenCtx(...items: Element[]): CtxNode { return new CtxNode('
 // Reset to NO await/yield context (a nested non-async/non-generator function/arrow/
 // method body, a class body, a computed property key, a field initializer). Wrapping a
 // body in resetCtx() inside an already-forked family routes its refs back to the plain
-// family — the boundary the fork transform stops at.
+// family — the boundary the fork transform stops at (the portable targets clear the
+// context word there).
 export function resetCtx(...items: Element[]): CtxNode { return new CtxNode('reset', items); }
 
 // Zero-width negative lookahead: `not(x)` matches nothing and succeeds only when
@@ -382,7 +385,7 @@ export function not(item: Element | Element[]): NotNode {
   return new NotNode(item);
 }
 // The bare-identifier reserved-word guard (notReservedExpr / notReserved): a `not`
-// the await-yield-fork transform extends with await/yield inside those contexts.
+// a parser extends with await/yield inside those contexts (see NotNode).
 export function reservableNot(item: Element | Element[]): NotNode {
   return new NotNode(item, true);
 }
@@ -501,8 +504,8 @@ function toRuleExpr(el: Element, names: Lowering): RuleExpr {
     return { type: 'group', body, suppress: el.connectors };
   }
   if (el instanceof CtxNode) {
-    // Transparent group carrying the ctxMode marker; only the await-yield-fork
-    // transform reads ctxMode, everyone else recurses into body as a plain group.
+    // Transparent group carrying the ctxMode marker; only the parsers read ctxMode (see
+    // CtxNode), everyone else recurses into body as a plain group.
     const body = el.items.length === 1
       ? toRuleExpr(el.items[0], names)
       : { type: 'seq' as const, items: el.items.map(i => toRuleExpr(i, names)) };

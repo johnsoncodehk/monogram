@@ -22,7 +22,6 @@
 // operators. buildIR THROWS on a construct outside this set rather than emit a wrong
 // parser. This is enough to derive a real JavaScript-subset parser (test/fixtures/minijs.ts).
 import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
-import { withAwaitYield } from './await-yield-fork.ts';
 import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { tokenPatternCharLoop, tokenPatternLiteralPrefix } from './token-pattern.ts';
@@ -111,10 +110,30 @@ export type Step =
   | { t: 'alt'; branches: Step[][]; firsts?: FirstSig[]; predictive?: boolean; share?: number }            // inline alternation of sub-sequences (backtracking unless predictive)
   | { t: 'look'; id: number; is: boolean }                     // zero-width: whether ParserIR.lookaheads[id] matches here (is) or does not (!is)
   | { t: 'ahead'; set: number; is: boolean }                    // zero-width: whether the next token is (is) or is not (!is) in ParserIR.tokenSets[set]
+  | { t: 'aheadCtx'; row: number; is: boolean }                 // zero-width: the same test of ParserIR.tokenSets[ParserIR.ctxSets[row + the context in force]] (the reserved words)
   | { t: 'seq'; steps: Step[]; share?: number }                 // a grouped sub-sequence (e.g. a star body `(',' Expr)`)
   | { t: 'sameLine' }                                           // zero-width: the next token is on the same line (no preceding newline)
-  | { t: 'suppress'; set: number; steps: Step[]; share?: number };  // parse the body with the LED connectors of ParserIR.suppressSets[set] disabled (no-`in` context)
+  | { t: 'suppress'; set: number; steps: Step[]; share?: number }  // parse the body with the LED connectors of ParserIR.suppressSets[set] disabled (no-`in` context)
+  | { t: 'ctx'; ctx: Ctx; steps: Step[]; share?: number };      // parse the body in [Await]/[Yield] context `ctx`, then put back the one in force
 export type Alt = Step[];
+// The ECMAScript [Await] / [Yield] grammar parameters: the context a body is parsed in, as one word
+// a parser holds (bit CTX_AWAIT: `await` is the operator, bit CTX_YIELD: `yield` is). The grammar
+// marks each body that sets it (awaitCtx / yieldCtx / asyncGenCtx, resetCtx for the bodies that set
+// none: a plain function, an accessor, a field initializer); a `ctx` step is such a body. What the
+// context decides is whether those words are reserved: an identifier's reserved-word guard
+// (`reservableNot`) also refuses the context's operator words, so it is an `aheadCtx` test, one
+// token set per context. Every other step reads the parser's state as it always did, so a parse is
+// the same function of (position, state) with the context one more part of the state: a step or a
+// lookahead that two contexts share is one computation, and nothing keyed on rule and position is
+// kept that the context would have to join (the portable parsers keep no memo; a Doc reuses only
+// the entry rule's top-level entries, which are parsed in the entry's context, CTX_NONE).
+// A `ctx` step restores the context it found on success and on failure alike, so the context in
+// force is always that of the innermost enclosing body.
+export const CTX_NONE = 0, CTX_AWAIT = 1, CTX_YIELD = 2;
+export type Ctx = 0 | 1 | 2 | 3;
+const CTX_OF_MODE: Record<'await' | 'yield' | 'asyncgen' | 'reset', Ctx> = { await: 1, yield: 2, asyncgen: 3, reset: 0 };
+/** The operator words reserved in context `c` (indexed by the context word). */
+const CTX_WORDS: readonly string[][] = [[], ['await'], ['yield'], ['await', 'yield']];
 // The LED connectors a `suppress` step disables (`exclude('in', Expr)`: no `in` in a for-head) are
 // a constant of the grammar at each site, so a parser never builds one at run time. The grammar
 // analysis keeps each distinct set once (ParserIR.suppressSets, sorted; set 0 is the empty set, the
@@ -129,8 +148,8 @@ export type TokenSet = { lits: string[]; toks: string[] };
 // A lookahead over more than one token — `not(['[', alt(...), ...])` — runs its body and then
 // undoes everything the body did: the position, the children it appended and the nodes it built.
 // What it decides is a function of the body and the parser's state alone, so two lookaheads with
-// the same body are one computation, wherever they stand and in whichever [Await]/[Yield] fork
-// of a rule (a body that calls a forked rule names the fork, so its body differs). buildIR keeps
+// the same body are one computation, wherever they stand and in whichever [Await]/[Yield] context
+// (the context is part of the parser's state the body reads). buildIR keeps
 // each distinct body once in ParserIR.lookaheads and a `look` step names it; every target prints
 // one function per body (per parse mode it emits), called from each site.
 
@@ -154,7 +173,7 @@ export type TokenSet = { lits: string[]; toks: string[] };
 // target keeps a later-tried candidate on a tie only when it was declared earlier.
 // (An inline `alt` step is the other construct: ordered choice, the first branch that matches.)
 export type RdRule = {
-  kind: 'rd'; name: string; cstName: string; alts: Alt[];
+  kind: 'rd'; name: string; alts: Alt[];
   altFirst: FirstSig[];     // parallel to alts: each one's Step-level FIRST signature — the `predictive` switch's keys
   predictive: boolean;
   altGuard: Guard[];        // parallel to alts: when each one is a candidate at all
@@ -250,8 +269,7 @@ export type NudRef =
 export type Bracket = { first: string; steps: Step[] };          // a literal-led sequence (grouping/array; LED call/index)
 export type PrattRule = {
   kind: 'pratt';
-  name: string;       // the (possibly $A/$Y-forked) rule name — used for the parse fn names
-  cstName: string;    // the CANON name — the CST node label (a fork collapses to its base)
+  name: string;       // the rule name: the parse fn names and the CST node label
   nudToks: string[];                                  // NUD: a bare token wrapped in a node
   nudBrackets: Bracket[];                             // NUD: '(' … ')' / '[' … ']'
   nudSeqs: Step[][];                                  // NUD: a general sequence (guarded ident, class expr), tried with backtracking
@@ -355,6 +373,7 @@ export type ParserIR = {
   gtComps: string[];
   rules: RuleIR[];
   tokenSets: TokenSet[];       // the sets `ahead` steps test, indexed by Step.set
+  ctxSets: number[];           // the sets `aheadCtx` steps test: rows of four tokenSets ids, one per context word, a row starting at Step.row
   lookaheads: Alt[];           // the bodies `look` steps run, indexed by Step.id; a body names only lower ids
   shared: Step[];              // the steps printed once and called from each site, indexed by Step.share (see shareSteps)
   suppressSets: string[][];    // the connector sets `suppress` steps disable, indexed by Step.set; [0] is the empty set
@@ -368,12 +387,11 @@ export type ParserIR = {
   identLike: string[];
 };
 
-// The target-agnostic parse plan for a grammar. Applies the [Await]/[Yield] context fork
-// exactly as createParser does (so `await`/`yield` are keywords inside async/generator bodies
-// and identifiers outside — name-forked into $A/$Y/$AY rule families), then builds the IR each
-// portable Target (ts/go/rust) renders. The `Target` contract itself lives in emit.ts.
+// The target-agnostic parse plan for a grammar, the IR each portable Target (ts/go/rust) renders.
+// The [Await]/[Yield] context is a word the parser holds (see Ctx), not a copy of each rule per
+// context. The `Target` contract itself lives in emit.ts.
 export function portableIR(grammar: CstGrammar): ParserIR {
-  return buildIR(withAwaitYield(grammar));
+  return buildIR(grammar);
 }
 
 // ── buildIR: grammar + analysis → the target-agnostic parse plan ──
@@ -445,13 +463,26 @@ function buildIR(grammar: CstGrammar): ParserIR {
   // shared with the jsTarget parser of emit-parser.ts).
   const { suppressSets } = a;
   const suppressOf = (connectors: string[], steps: Step[]): Step => ({ t: 'suppress', set: a.suppressSetOf(connectors), steps });
+  const ctxOf = (mode: keyof typeof CTX_OF_MODE, steps: Step[]): Step => ({ t: 'ctx', ctx: CTX_OF_MODE[mode], steps });
+  // An identifier's reserved-word guard: the one-token test of its words and, in each context, the
+  // context's operator words. Its body is one token by construction (`reservableNot(alt(...))`).
+  const ctxSets: number[] = [];
+  const reservableOf = (steps: Step[]): Step => {
+    const m = steps.length === 1 ? oneTokenOf(steps[0]) : null;
+    if (m === null) throw new Error('portable: a reservable guard must test one token');
+    const row = CTX_WORDS.map((w) => tokenSetOf({ lits: [...m.lits, ...w], toks: m.toks }));
+    let at = 0;
+    while (at < ctxSets.length && row.some((id, c) => ctxSets[at + c] !== id)) at += row.length;
+    if (at === ctxSets.length) ctxSets.push(...row);
+    return { t: 'aheadCtx', row: at, is: false };
+  };
   // A negative lookahead. Over a one-token body it is the `ahead` test of that token's set, over
   // any other body the `look` test of that body; over an `ahead` or a `look` it is the same test
   // negated (so `not(not(x))` is a positive test).
   const notOf = (steps: Step[]): Step => {
     if (steps.length === 1) {
       const s = steps[0];
-      if (s.t === 'ahead' || s.t === 'look') return { ...s, is: !s.is };
+      if (s.t === 'ahead' || s.t === 'aheadCtx' || s.t === 'look') return { ...s, is: !s.is };
       const m = oneTokenOf(s);
       if (m !== null) return { t: 'ahead', set: tokenSetOf(m), is: false };
     }
@@ -463,12 +494,13 @@ function buildIR(grammar: CstGrammar): ParserIR {
     switch (e.type) {
       case 'literal': return { t: 'lit', value: e.value, ttype: litTtype(e.value) };
       case 'ref': return tokenNames.has(e.name) ? { t: 'tok', name: e.name } : { t: 'rule', name: e.name };
-      case 'group': {   // transparent (ctxMode is invisible to the portable parser)
+      case 'group': {
         const ss = altSteps(e.body);
+        if (e.ctxMode) return ctxOf(e.ctxMode, ss);                                 // [Await]/[Yield] context
         if (e.suppress && e.suppress.length) return suppressOf(e.suppress, ss);   // no-`in` context
         return ss.length === 1 ? ss[0] : { t: 'seq', steps: ss };
       }
-      case 'not': return notOf(altSteps(e.body));                 // zero-width negative lookahead
+      case 'not': return e.reservable ? reservableOf(altSteps(e.body)) : notOf(altSteps(e.body));   // zero-width negative lookahead
       case 'sameLine': return { t: 'sameLine' };                  // zero-width no-newline assertion
       case 'seq': return { t: 'seq', steps: e.items.map(stepOf) };  // grouped sub-sequence (star/sep body)
       case 'sep': return { t: 'sep', elem: stepOf(e.element), delim: e.delimiter };
@@ -533,13 +565,12 @@ function buildIR(grammar: CstGrammar): ParserIR {
   };
 
   const rules: RuleIR[] = grammar.rules.map((r) => {
-    const cstName = (r as { canon?: string }).canon ?? r.name;   // a forked $A/$Y rule labels its CST node with the base name
     // Pratt rules AND left-recursive non-Pratt rules (e.g. NewTarget, TS Type) both parse as
     // atom-then-continuation: buildPratt detects `startsSelf` and splits accordingly, so routing
     // left-recursive rules through it avoids the infinite left-recursion a plain rd rule would hit.
-    if (a.prattRules.has(r.name) || a.leftRecSet.has(r.name)) return buildPratt(r.name, cstName, r.body, a, stepOf, notOf, suppressOf, litTtype, altGuard, templateTokens);
+    if (a.prattRules.has(r.name) || a.leftRecSet.has(r.name)) return buildPratt(r.name, r.body, a, stepOf, notOf, reservableOf, suppressOf, ctxOf, litTtype, altGuard, templateTokens);
     const items = r.body.type === 'alt' ? r.body.items : [r.body];
-    return { kind: 'rd', name: r.name, cstName, alts: items.map(altSteps), altFirst: [], predictive: false, altGuard: items.map((e, i) => altGuard(e, items.slice(0, i))), altDispatch: { sections: [], ranked: [] } };
+    return { kind: 'rd', name: r.name, alts: items.map(altSteps), altFirst: [], predictive: false, altGuard: items.map((e, i) => altGuard(e, items.slice(0, i))), altDispatch: { sections: [], ranked: [] } };
   });
   // Longest match never picks an alternative that advances nothing, and only the entry rule
   // may match the empty input: an entry that must CHOOSE its empty alternative has no rendering.
@@ -572,8 +603,8 @@ function buildIR(grammar: CstGrammar): ParserIR {
         return { lits: [...lits], toks: [...toks] };
       }
       case 'seq': return seqFirst(s.steps);
-      case 'suppress': return seqFirst(s.steps);
-      case 'look': case 'ahead': case 'sameLine': case 'star': case 'opt': case 'sep': return null;   // zero-width / nullable leading → unpredictable
+      case 'suppress': case 'ctx': return seqFirst(s.steps);
+      case 'look': case 'ahead': case 'aheadCtx': case 'sameLine': case 'star': case 'opt': case 'sep': return null;   // zero-width / nullable leading → unpredictable
     }
     return null;
   };
@@ -615,7 +646,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
   const annotateSteps = (steps: Step[]): void => {
     for (const s of steps) {
       if (s.t === 'star') annotateSteps([s.step]);
-      else if (s.t === 'opt' || s.t === 'seq' || s.t === 'suppress') annotateSteps(s.steps);
+      else if (s.t === 'opt' || s.t === 'seq' || s.t === 'suppress' || s.t === 'ctx') annotateSteps(s.steps);
       else if (s.t === 'sep') annotateSteps([s.elem]);
       else if (s.t === 'alt') {
         s.firsts = s.branches.map((b) => seqFirst(b));
@@ -672,31 +703,6 @@ function buildIR(grammar: CstGrammar): ParserIR {
     };
   }
 
-  // The [Await]/[Yield] fork names rules `Expr$A`/`Expr$Y` — `$` is a valid TS identifier but
-  // NOT a Go/Rust one. Sanitize every rule-IDENTIFIER use (`$`→`_`) for the emitted parse-fn
-  // names; the CST node label (cstName) keeps the canon base name, so the tree is unchanged.
-  const san = (n: string) => n.replace(/\$/g, '_');
-  const sanStep = (s: Step): void => {
-    if (s.t === 'rule' || s.t === 'ruleBp') s.name = san(s.name);
-    else if (s.t === 'star') sanStep(s.step);
-    else if (s.t === 'opt' || s.t === 'seq' || s.t === 'suppress') s.steps.forEach(sanStep);
-    else if (s.t === 'sep') sanStep(s.elem);
-    else if (s.t === 'alt') s.branches.forEach((b) => b.forEach(sanStep));
-  };
-  for (const r of rules) {
-    r.name = san(r.name);
-    if (r.kind === 'rd') r.alts.forEach((alt) => alt.forEach(sanStep));
-    else {
-      r.nudBrackets.forEach((b) => b.steps.forEach(sanStep));
-      r.nudSeqs.forEach((seq) => seq.forEach(sanStep));
-      r.nudCapped.forEach((c) => c.steps.forEach(sanStep));
-      r.leds.forEach((b) => b.steps.forEach(sanStep));
-      if (r.nudTplHole !== undefined) r.nudTplHole = san(r.nudTplHole);
-      if (r.postfixTplHole !== undefined) r.postfixTplHole = san(r.postfixTplHole);
-    }
-  }
-  lookaheads.forEach((body) => body.forEach(sanStep));
-
   let newlineCfg: NewlineCfg | null = null;
   if (grammar.newline) {
     const nc = grammar.newline;
@@ -716,22 +722,23 @@ function buildIR(grammar: CstGrammar): ParserIR {
     ...rules.flatMap((r) => (r.kind === 'rd' ? r.alts : [...r.nudBrackets.map((b) => b.steps), ...r.nudSeqs, ...r.nudCapped.map((c) => c.steps), ...r.leds.map((b) => b.steps)])),
     ...lookaheads,
   ]);
-  return { grammarName: grammar.name ?? 'grammar', entry: san(findEntryRule(grammar)), tokens, puncts, gtComps, rules, tokenSets, lookaheads, shared, suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike };
+  return { grammarName: grammar.name ?? 'grammar', entry: findEntryRule(grammar), tokens, puncts, gtComps, rules, tokenSets, ctxSets, lookaheads, shared, suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike };
 }
 
 // ── Shared steps: a repeated step sequence is one function ──
 // A step is a computation over the parser's state alone: the position, the token stream and the
-// lexer's state behind it, the suppress set in force, the look extent, and the children list it
-// appends to (TS: the `kids`/`spans` arrays in scope, passed as arguments; Go/Rust: the parser's
-// scratch list and builder). It reads nothing of the site it stands at — not the enclosing rule's
-// longest-match bookkeeping, not its node, not the fork (a step that calls a forked rule names the
-// fork, so steps of different forks that differ are different steps) — and on a failure it leaves
-// what it advanced and appended for the construct around it to undo, as every step does. So two
+// lexer's state behind it, the suppress set and the [Await]/[Yield] context in force, the look
+// extent, and the children list it appends to (TS: the `kids`/`spans` arrays in scope, passed as
+// arguments; Go/Rust: the parser's scratch list and builder). It reads nothing of the site it
+// stands at — not the enclosing rule's longest-match bookkeeping, not its node — and on a failure
+// it leaves what it advanced and appended for the construct around it to undo, as every step does
+// (a `suppress` or `ctx` step puts back the set or context it changed itself, on either outcome, so
+// no failure leaves one changed). So two
 // structurally identical steps are one computation wherever they stand, and a function that runs
 // the step, called at each site, does exactly what the inlined copies did, failure included.
 // Steps are shared, not arms: a rule alternative or Pratt arm builds its node and keeps its best
 // candidate around its steps; only the steps inside it are candidates here.
-// What is shared: every compound step (star / opt / sep / alt / seq / suppress) that the printed
+// What is shared: every compound step (star / opt / sep / alt / seq / suppress / ctx) that the printed
 // program would hold at two or more places. Places are counted as printed: a step inside a shared
 // step is printed once, in that step's function, however many sites call it; inside an unshared
 // step, once per place that step is printed. So a step that only ever stands inside one shared
@@ -741,12 +748,12 @@ function buildIR(grammar: CstGrammar): ParserIR {
 // that function), so a reader that does not know the field still reads the step it marks.
 function shareSteps(roots: Step[][]): Step[] {
   type Compound = Extract<Step, { share?: number }>;
-  const isCompound = (s: Step): s is Compound => s.t === 'star' || s.t === 'opt' || s.t === 'sep' || s.t === 'alt' || s.t === 'seq' || s.t === 'suppress';
+  const isCompound = (s: Step): s is Compound => s.t === 'star' || s.t === 'opt' || s.t === 'sep' || s.t === 'alt' || s.t === 'seq' || s.t === 'suppress' || s.t === 'ctx';
   const kids = (s: Step): Step[] => {
     switch (s.t) {
       case 'star': return [s.step];
       case 'sep': return [s.elem];
-      case 'opt': case 'seq': case 'suppress': return s.steps;
+      case 'opt': case 'seq': case 'suppress': case 'ctx': return s.steps;
       case 'alt': return s.branches.flat();
       default: return [];
     }
@@ -890,8 +897,9 @@ function codesToRanges(codes: number[]): CharRange[] {
 // A Pratt rule's alternatives → NUD atoms/brackets/prefix + binary + mixfix LEDs.
 // Binding powers come from the analysis (opTable/prefixOps), single-sourced with the interpreter.
 function buildPratt(
-  name: string, cstName: string, body: RuleExpr, a: ReturnType<typeof analyzeGrammar>,
-  stepOf: (e: RuleExpr) => Step, notOf: (steps: Step[]) => Step, suppressOf: (connectors: string[], steps: Step[]) => Step,
+  name: string, body: RuleExpr, a: ReturnType<typeof analyzeGrammar>,
+  stepOf: (e: RuleExpr) => Step, notOf: (steps: Step[]) => Step, reservableOf: (steps: Step[]) => Step,
+  suppressOf: (connectors: string[], steps: Step[]) => Step, ctxOf: (mode: 'await' | 'yield' | 'asyncgen' | 'reset', steps: Step[]) => Step,
   litTtype: (v: string) => '$keyword' | '$punct',
   altGuard: (e: RuleExpr, earlier: readonly RuleExpr[]) => Guard, templateTokens: ReadonlySet<string>,
 ): PrattRule {
@@ -941,8 +949,7 @@ function buildPratt(
         continue;
       }
       if (items[0].type === 'prefix') { if (!sawPrefix) nudOrder.push({ kind: 'prefix' }); sawPrefix = true; continue; }
-      // A capExpr (arrow function): an assignment-level group{capBelow}. ctxMode in its body
-      // is treated as transparent (the await/yield fork is not modelled in the portable parser).
+      // A capExpr (arrow function): an assignment-level group{capBelow}.
       if (items.length === 1 && items[0].type === 'group' && items[0].capBelow !== undefined) {
         const capBp = a.nudCapOf(items[0]);
         if (capBp === null) throw new Error(`portable: capBelow connector '${items[0].capBelow}' has no binding power (rule ${name})`);
@@ -953,9 +960,9 @@ function buildPratt(
         continue;
       }
       if (items[0].type === 'literal') { nudOrder.push({ kind: 'bracket', index: nudBrackets.length }); nudBrackets.push({ first: items[0].value, steps: items.map((it) => stepOfPratt(it)) }); nudWritten.push(alt); continue; }
-      // A single transparent (non-suppress) group unwraps to its body (an explicit grouping).
+      // A single transparent group (no suppress, no context) unwraps to its body (an explicit grouping).
       let nudItems = items;
-      if (items.length === 1 && items[0].type === 'group' && !items[0].suppress) {
+      if (items.length === 1 && items[0].type === 'group' && !items[0].suppress && !items[0].ctxMode) {
         nudItems = items[0].body.type === 'seq' ? items[0].body.items : [items[0].body];
       }
       nudOrder.push({ kind: 'seq', index: nudSeqs.length });
@@ -998,9 +1005,9 @@ function buildPratt(
     if (e.type === 'ref' && e.name === name) return { t: 'rule', name };
     if (e.type === 'seq') return { t: 'seq', steps: e.items.map(stepOfPratt) };
     if (e.type === 'sameLine') return { t: 'sameLine' };
-    if (e.type === 'not') return notOf((e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt));
+    if (e.type === 'not') return (e.reservable ? reservableOf : notOf)((e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt));
+    if (e.type === 'group' && e.ctxMode && !e.capBelow) return ctxOf(e.ctxMode, (e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt));
     if (e.type === 'group' && e.suppress && e.suppress.length) return suppressOf(e.suppress, (e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt));
-    // ctxMode (await/yield) is transparent to the portable parser (no fork); unwrap the group.
     if (e.type === 'group' && !e.capBelow) {
       return e.body.type === 'seq' ? { t: 'seq', steps: e.body.items.map(stepOfPratt) } : stepOfPratt(e.body);
     }
@@ -1024,7 +1031,7 @@ function buildPratt(
   const endsInOperand = (steps: Step[]): boolean => { const l = steps[steps.length - 1]; return l !== undefined && l.t === 'rule' && l.name === name; };
   const nudBracketClosesTail = nudBrackets.map((b) => endsInOperand(b.steps));
   const nudSeqClosesTail = nudSeqs.map(endsInOperand);
-  const ledClosesTail = leds.map((l, i) => { const last = l.steps[l.steps.length - 1]?.t; return !ledAccessTail[i] || last === 'look' || last === 'ahead'; });
+  const ledClosesTail = leds.map((l, i) => { const last = l.steps[l.steps.length - 1]?.t; return !ledAccessTail[i] || last === 'look' || last === 'ahead' || last === 'aheadCtx'; });
   // A template token arm also matches an interpolated template (its head token), so it is in `rest`.
   const nudDispatch = dispatchOf(nudOrder.map((a): TokenSet | null => {
     switch (a.kind) {
@@ -1035,7 +1042,7 @@ function buildPratt(
       case 'prefix': return null;
     }
   }));
-  return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudSeqGuard, nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedGuard, nudOrder, nudDispatch, prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledSuppressedIn: [], ledForm, ledClosesTail, postfixToks, postfix, postfixSameLine, ...(nudTplHole !== undefined ? { nudTplHole } : {}), ...(postfixTplHole !== undefined ? { postfixTplHole } : {}) };
+  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, nudSeqGuard, nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedGuard, nudOrder, nudDispatch, prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledSuppressedIn: [], ledForm, ledClosesTail, postfixToks, postfix, postfixSameLine, ...(nudTplHole !== undefined ? { nudTplHole } : {}), ...(postfixTplHole !== undefined ? { postfixTplHole } : {}) };
 }
 
 // ── Lex integer ids (kid = kind index, lid = text/literal index) ──
@@ -1057,7 +1064,7 @@ function collectStepLitTexts(steps: Step[], out: Set<string>): void {
       case 'lit': out.add(s.value); break;
       case 'altlit': for (const o of s.opts) out.add(o.value); break;
       case 'sep': out.add(s.delim); collectStepLitTexts([s.elem], out); break;
-      case 'suppress': collectStepLitTexts(s.steps, out); break;
+      case 'suppress': case 'ctx': collectStepLitTexts(s.steps, out); break;
       case 'star': collectStepLitTexts([s.step], out); break;
       case 'opt': case 'seq': collectStepLitTexts(s.steps, out); break;
       case 'alt': for (const b of s.branches) collectStepLitTexts(b, out); break;
@@ -1262,7 +1269,7 @@ function collectStepTtypes(steps: Step[], out: Set<string>): void {
       case 'tok': out.add(s.name); break;
       case 'altlit': for (const o of s.opts) if (o.ttype !== '$punct') out.add(o.ttype); break;
       case 'sep': collectStepTtypes([s.elem], out); break;
-      case 'suppress': collectStepTtypes(s.steps, out); break;
+      case 'suppress': case 'ctx': collectStepTtypes(s.steps, out); break;
       case 'star': collectStepTtypes([s.step], out); break;
       case 'opt': case 'seq': collectStepTtypes(s.steps, out); break;
       case 'alt': for (const b of s.branches) collectStepTtypes(b, out); break;
@@ -1307,7 +1314,7 @@ export function buildArenaIdPlan(ir: ParserIR, lexIds: LexIdPlan): ArenaIdPlan {
   const ruleNames: string[] = [];
   const seenR = new Set<string>();
   const addR = (s: string) => { if (!seenR.has(s)) { seenR.add(s); ruleNames.push(s); } };
-  for (const r of ir.rules) addR(r.cstName);
+  for (const r of ir.rules) addR(r.name);
   if (ir.tpl) addR('$template');
 
   return { ttNames, ruleNames };

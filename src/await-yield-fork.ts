@@ -1,5 +1,9 @@
 // Build-time grammar transform implementing the ECMAScript [Await]/[Yield] grammar
 // parameters by NAME-FORKING the body-reachable rule closure into context families.
+// Applied by the interpreter (gen-parser.ts), the jsTarget parser (emit-parser.ts) and the
+// cst-match generator. The portable targets (emit-portable.ts) do not fork: they keep no
+// incremental row keyed on a rule below the top level, so the context is a word their
+// parser holds (see Ctx there).
 //
 // WHY a fork and not a runtime flag: Monogram's incremental adoption reuses a row iff
 // its window (text + bars) replays identically — a row's parse must be a pure function

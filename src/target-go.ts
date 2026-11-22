@@ -567,13 +567,17 @@ function stepBody(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
     case 'alt': return `func() bool { ${stepStmts(s, ids, ar)} }()`;
     case 'look': return `${s.is ? '' : '!'}p.look${s.id}()`;
     case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
+    case 'aheadCtx': return `p.ahead(int(_ctxSets[${s.row}+int(p.ctx)]), ${s.is})`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `func() bool { t := p.peek(); return t != nil && !t.Nl }()`;
     case 'suppress': return `func() bool { ${stepStmts(s, ids, ar)} }()`;
+    case 'ctx': return `func() bool { ${stepStmts(s, ids, ar)} }()`;
   }
 }
-// The step as the statements of a function returning whether it matched: an `alt` or `suppress`
-// step needs statements, so in place it is printed as an immediately called func literal of these.
+// The step as the statements of a function returning whether it matched: an `alt`, `suppress` or
+// `ctx` step needs statements, so in place it is printed as an immediately called func literal of these.
+// A `ctx` step puts the context it found back after its body, whether the body matched or not (the
+// body is a boolean expression: no return path leaves between the two assignments).
 function stepStmts(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
   switch (s.t) {
     case 'alt': {
@@ -591,6 +595,7 @@ function stepStmts(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
       return `${peekInit}${tries}; return false`;
     }
     case 'suppress': return `p.suppressNext = ${s.set}; _r := (${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}); p.suppressNext = 0; return _r`;
+    case 'ctx': return `_c := p.ctx; p.ctx = ${s.ctx}; _r := (${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}); p.ctx = _c; return _r`;
     default: return `return ${stepBody(s, ids, ar)}`;
   }
 }
@@ -660,7 +665,7 @@ function topReusePlan(ir: ParserIR): ReusePlan | null {
 
 function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
   if (r.predictive) {
-    const arm = (steps: Step[], i: number) => `\t${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return p.finish(${ruleIdOf(ar, r.cstName)}, sb, p.offAt(save), save) } }`;
+    const arm = (steps: Step[], i: number) => `\t${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return p.finish(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save) } }`;
     return `func (p *engine) parse${r.name}() int32 {
 \tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \tt := p.peek(); if t == nil { return -1 }
@@ -672,7 +677,7 @@ ${r.alts.map(arm).join(' ')}
   if (r.alts.length === 1) {   // nothing to choose among
     return `func (p *engine) parse${r.name}() int32 {
 \tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
-\tif ${r.alts[0]!.map((x) => stepCond(x, ids, ar)).join(' && ')} { return p.finish(${ruleIdOf(ar, r.cstName)}, sb, p.offAt(save), save) }
+\tif ${r.alts[0]!.map((x) => stepCond(x, ids, ar)).join(' && ')} { return p.finish(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save) }
 \tp.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]
 \treturn -1
 }`;
@@ -683,7 +688,7 @@ ${r.alts.map(arm).join(' ')}
   // The alternatives are reached through the rule's Dispatch (emit-portable.ts, RdRule.altDispatch).
   const alt = (i: number, keyed: boolean) => {
     const cond = r.alts[i]!.map((x) => stepCond(x, ids, ar)).join(' && ');
-    const body = `{ if ${cond} && ${beatsGo(r.altDispatch, 'p.pos', i)} { best = p.finish(${ruleIdOf(ar, r.cstName)}, sb, p.offAt(save), save); bestPos = p.pos;${markGo(r.altDispatch, i)} nb = len(p.nodes); kb = len(p.kids) } else { p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb] }; p.back(save) }`;
+    const body = `{ if ${cond} && ${beatsGo(r.altDispatch, 'p.pos', i)} { best = p.finish(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save); bestPos = p.pos;${markGo(r.altDispatch, i)} nb = len(p.nodes); kb = len(p.kids) } else { p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb] }; p.back(save) }`;
     const g = guardCond(r.altGuard[i]!, '_ft', '', keyed);
     return ifGo(g.length && !keyed ? ['_ft != nil', ...g] : g, body);
   };
@@ -720,7 +725,7 @@ func (p *engine) parse${r.name}() int32 {
 \t\tp.scratch = append(p.scratch, n)
 \t}
 \tp.entries = localE
-\treturn p.finish(${ruleIdOf(ar, r.cstName)}, sb, p.offAt(save), save)
+\treturn p.finish(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save)
 }`;
 }
 
@@ -796,7 +801,7 @@ ${headBlock}\tfor {
 \t}
 \tp.segs = local
 \tp.entries = localE
-\treturn p.finish(${ruleIdOf(ar, r.cstName)}, sb, p.offAt(save), save)
+\treturn p.finish(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save)
 }`;
 }
 
@@ -808,7 +813,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   // The NUD arms, each a longest-match candidate tried from `save`, reached through the rule's
   // Dispatch (emit-portable.ts, PrattRule.nudOrder / nudDispatch). `won` records the node just
   // finished as the best so far and moves nb/kb past it; `lost` drops what the arm built.
-  const rid = ruleIdOf(ar, r.cstName);
+  const rid = ruleIdOf(ar, r.name);
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
     `bestPos = p.pos;${markGo(r.nudDispatch, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; nb = len(p.nodes); kb = len(p.kids)`;
   const lost = `p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]`;
@@ -865,7 +870,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   const ledBody = (b: Bracket, form: number, closes: boolean) => `{
 \t\t\tledSave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \t\t\tp.scratch = append(p.scratch, left)
-\t\t\tif ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { left = p.finish(${ruleIdOf(ar, r.cstName)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
+\t\t\tif ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { left = p.finish(${ruleIdOf(ar, r.name)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
 \t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]
 \t\t}`;
   const ledSwitch = (() => {
@@ -886,13 +891,13 @@ ${groups.map((g) => {
     const tplPart = r.postfixTplHole !== undefined ? `
 \t\tif !tailClosed && t.Kid == ${kidOf(ids, '$templateHead')} {
 \t\t\tnode := p.matchTemplate_${r.postfixTplHole}()
-\t\t\tif node >= 0 { sb := len(p.scratch); p.scratch = append(p.scratch, left, node); left = p.finish(${ruleIdOf(ar, r.cstName)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); form = 0; continue LedLoop }
+\t\t\tif node >= 0 { sb := len(p.scratch); p.scratch = append(p.scratch, left, node); left = p.finish(${ruleIdOf(ar, r.name)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); form = 0; continue LedLoop }
 \t\t}` : '';
     return `\t\tswitch t.Kid {
 ${groups.map((g) => `\t\tcase ${g.key}:
 \t\t\tif !tailClosed {
 \t\t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left); p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++
-\t\t\t\tleft = p.finish(${ruleIdOf(ar, r.cstName)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); form = 0; continue LedLoop
+\t\t\t\tleft = p.finish(${ruleIdOf(ar, r.name)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); form = 0; continue LedLoop
 \t\t\t}`).join('\n')}
 \t\t}${tplPart}`;
   })();
@@ -922,7 +927,7 @@ ${postfixTokSwitch}
 \t\tif post, ok := post_${r.name}[t.Lid]; ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
 \t\t\tif post.tgt && form != 0 { return -1 }
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++; tailClosed = true
-\t\t\tleft = p.finish(${ruleIdOf(ar, r.cstName)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); form = 1; continue
+\t\t\tleft = p.finish(${ruleIdOf(ar, r.name)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); form = 1; continue
 \t\t}
 ${gtOpRead(ids, false)}
 \t\tinfo, ok := bin_${r.name}[opLid]
@@ -934,7 +939,7 @@ ${gtOpRead(ids, false)}
 \t\trhs := p.bp_${r.name}(info.rbp)
 \t\tif rhs < 0 { p.back(ledSave); p.scratch = p.scratch[:sb]; break }
 \t\tp.scratch = append(p.scratch, rhs)
-\t\tleft = p.finish(${ruleIdOf(ar, r.cstName)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart))
+\t\tleft = p.finish(${ruleIdOf(ar, r.name)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart))
 \t\tform = 1; tailClosed = true
 \t}
 \tp.form = form
@@ -1521,15 +1526,18 @@ function stepBodyW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
     case 'alt': return `func() bool { ${stepStmtsW(s, ids, ar, recv)} }()`;
     case 'look': return `${s.is ? '' : '!'}p.look${s.id}W()`;
     case 'ahead': return `p.aheadW(${s.set}, ${s.is})`;
+    case 'aheadCtx': return `p.aheadW(int(_ctxSets[${s.row}+int(p.ctx)]), ${s.is})`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'})`;
     case 'sameLine': return `func() bool { t := p.peekW(); return t != nil && !t.Nl }()`;
     case 'suppress': return `func() bool { ${stepStmtsW(s, ids, ar, recv)} }()`;
+    case 'ctx': return `func() bool { ${stepStmtsW(s, ids, ar, recv)} }()`;
   }
 }
 function stepStmtsW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
   switch (s.t) {
     case 'alt': return s.predictive ? predAltBodyW(s.branches, ids, ar, s.firsts, recv) : altBodyW(s.branches, ids, ar, s.firsts, recv);
     case 'suppress': return `p.suppressNext = ${s.set}; _r := (${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'}); p.suppressNext = 0; return _r`;
+    case 'ctx': return `_c := p.ctx; p.ctx = ${s.ctx}; _r := (${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'}); p.ctx = _c; return _r`;
     default: return `return ${stepBodyW(s, ids, ar, recv)}`;
   }
 }
@@ -1564,7 +1572,7 @@ function predAltBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, first
 }
 
 function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  const rid = ruleIdOf(ar, r.cstName);
+  const rid = ruleIdOf(ar, r.name);
   if (r.predictive) {
     // Join with space (not newline): Go ASI inserts ';' after '}' at EOL, which
     // breaks `} \\n else if` — native rdRule uses the same same-line join.
@@ -1611,7 +1619,7 @@ function topOneBodyW(plan: ReusePlanA): string {
 }
 
 function rdEntryWithReuseAW(r: RdRule, plan: ReusePlanA, ar: ArenaIdPlan, recv: string): string {
-  const rid = ruleIdOf(ar, r.cstName);
+  const rid = ruleIdOf(ar, r.name);
   // Engine-side EntryMeta (R2): never mutate consumer handles; span from spanned + SpanOf.
   return `func (p *${recv}) parseTopOneW() (spanned, bool) {
 ${topOneBodyW(plan)}
@@ -1644,7 +1652,7 @@ func (p *${recv}) parse${r.name}W() (spanned, bool) {
 }
 
 function rdEntryWithReuseBW(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  const rid = ruleIdOf(ar, r.cstName);
+  const rid = ruleIdOf(ar, r.name);
   const headFn = plan.hasHead && plan.headRule
     ? `func (p *${recv}) parseHeadSegW(sb int) (EntryMeta, bool) {
 \tp.lookReset()
@@ -1709,7 +1717,7 @@ function rdEntryWithReuseW(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: Arena
 }
 
 function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  const rid = ruleIdOf(ar, r.cstName);
+  const rid = ruleIdOf(ar, r.name);
   // The NUD arms: longest-match candidates through the rule's Dispatch, as in prattRule.
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
     `found = true; bestPos = p.pos;${markGo(r.nudDispatch, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; ${arenaMark(recv)}`;
@@ -1951,6 +1959,7 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 \tform uint8 // assignment-target form of the node the last nud_/bp_ call returned
 \ttail bool  // whether the node the last nud_ call returned closes the access tail
 \tsuppressNext, suppressCur uint16 // indices into the grammar's suppress sets (ParserIR.suppressSets; 0 = none)
+\tctx uint8 // the [Await]/[Yield] context word in force (bit 1 await, bit 2 yield; see ParserIR's Ctx)
 \tsrc string
 \tNodes []Node
 \tKids []int32
@@ -1962,6 +1971,7 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 \tform uint8 // assignment-target form of the node the last nud_/bp_ call returned
 \ttail bool  // whether the node the last nud_ call returned closes the access tail
 \tsuppressNext, suppressCur uint16 // indices into the grammar's suppress sets (ParserIR.suppressSets; 0 = none)
+\tctx uint8 // the [Await]/[Yield] context word in force (bit 1 await, bit 2 yield; see ParserIR's Ctx)
 \tsrc string
 \tb Builder
 \tscratch []int32${entriesField}`;
@@ -2676,7 +2686,9 @@ var _tokenSets = [...][${b.width}]uint32{${rows.join(', ')}}
 func inTokenSet(k int, t *Tok) bool {
 \tw := k >> 5
 \treturn (_tokenSets[t.Lid][w]|_tokenSets[_tokenSetKid+int(t.Kid)][w])&(1<<(k&31)) != 0
-}`;
+}
+// The sets an \`aheadCtx\` test reads (ParserIR.ctxSets): a row of one set per context word.
+var _ctxSets = [...]uint16{${ir.ctxSets.join(', ')}}`;
 }
 
 function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
@@ -2703,8 +2715,7 @@ function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): stri
   const initToks = 'scanMeta(src)';
   const freshMeta = 'scanMeta(d.text)';
   const editBody = goEditBody;
-  const entryRule = ir.rules.find((r) => r.name === ir.entry);
-  const entryCst = entryRule && 'cstName' in entryRule ? (entryRule as { cstName: string }).cstName : ir.entry;
+  const entryCst = ir.entry;
   const entryRid = ruleIdOf(ar, entryCst);
   const docWithBlock = emitDocWithGo(ir, entryRid, shapeA, shapeB, hasHeadB, !!topReuse, initToks, freshMeta, editBody);
   return `// ─── Builder API (additive; CST parse() / Doc above are unchanged) ───────────
@@ -3126,6 +3137,7 @@ type engine struct {
 \ttail bool  // whether the node the last nud_ call returned closes the access tail
 \tsrc string
 \tsuppressNext, suppressCur uint16 // indices into the grammar's suppress sets (ParserIR.suppressSets; 0 = none)
+\tctx uint8 // the [Await]/[Yield] context word in force (bit 1 await, bit 2 yield; see ParserIR's Ctx)
 \tnodes []Node
 \tkids []int32
 \tscratch []int32

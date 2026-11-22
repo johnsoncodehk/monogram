@@ -321,7 +321,7 @@ const CASES: Case[] = [
       '¦unterminated;', '«open a;', '‖a¤⟨x‖;', '^;', '^°°;;', '°;', '^° °° ;'],
   },
   {
-    // The REAL javascript.ts grammar (89 rules after the [Await]/[Yield] fork) — the proof
+    // The REAL javascript.ts grammar — the proof
     // that the target-agnostic emitter handles a full language end-to-end in ts/go/rust.
     // ASCII corpus only (byte-based go/rust use UTF-8 offsets, identical to the JS oracle's
     // UTF-16 offsets for ASCII; non-ASCII offset units differ inherently).
