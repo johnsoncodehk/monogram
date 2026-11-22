@@ -8,13 +8,15 @@ name: measure profile
 #
 # - pull_request touching the parser sources, a grammar file or the harness: A = the merge base,
 #   M = the pull request's head, PROFILE_SCOPE=pr (no oxc, no wall-clock, no cache simulation).
-# - workflow_dispatch: any two commits; scope `full` adds oxc beside them, the native timings, the
-#   phase regions, the annotations and the cache/branch simulation.
+# - the label `measure-profile-full` on such a pull request: the same A and M, scope `full`: oxc
+#   beside them, the native timings, the phase regions, the annotations, the cache/branch simulation.
+# - workflow_dispatch: any two commits, either scope.
 # Failure policy: a harness failure fails the job (a missing measurement is NOT RUN, never a pass);
 # a regression is printed at the top of the summary and does not fail it (docs/MEASUREMENT.md).
 # The wall-clock comparison with oxc is the separate, on-demand measure-bench workflow.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - 'src/**'
       - '*.ts'
@@ -33,7 +35,7 @@ on:
         required: false
         default: ''
       scope:
-        description: 'pr = deterministic A/M only (about 5 min); full = also oxc, native timings, regions, cache simulation (about 9 min)'
+        description: 'pr = deterministic A/M only (about 3.5 min); full = also oxc, native timings, regions, cache simulation (about 8 min)'
         type: choice
         options: [pr, full]
         default: pr
@@ -42,7 +44,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: measure-profile-${{ github.event.pull_request.number || github.run_id }}
+  group: measure-profile-${{ github.event.pull_request.number || github.run_id }}-${{ github.event.action == 'labeled' && 'full' || 'pr' }}
   cancel-in-progress: true
 
 # One pin for the TypeScript sources the harness downloads (same as ci.yml / readme-bench.yml).
@@ -51,6 +53,8 @@ env:
 
 jobs:
   profile:
+    # A label other than measure-profile-full changes nothing measured.
+    if: github.event.action != 'labeled' || github.event.label.name == 'measure-profile-full'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -75,11 +79,13 @@ jobs:
           IN_COMMIT: ${{ inputs.commit }}
           IN_BASELINE: ${{ inputs.baseline }}
           IN_SCOPE: ${{ inputs.scope }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'measure-profile-full') }}
         run: |
           set -euo pipefail
           git fetch -q origin master
           if [ "$EVENT" = pull_request ]; then
-            M=$PR_HEAD; A=$(git merge-base "$PR_BASE" "$PR_HEAD"); scope=pr
+            M=$PR_HEAD; A=$(git merge-base "$PR_BASE" "$PR_HEAD")
+            if [ "$FULL_LABEL" = true ]; then scope=full; else scope=pr; fi
           else
             git fetch -q origin "$IN_COMMIT" 2>/dev/null || true
             M=$(git rev-parse "$IN_COMMIT^{commit}" 2>/dev/null || git rev-parse "origin/$IN_COMMIT^{commit}")
