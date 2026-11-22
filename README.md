@@ -170,8 +170,10 @@ cannot express: [docs/HIGHLIGHTER-EVIDENCE.md](docs/HIGHLIGHTER-EVIDENCE.md).
   before each parse. Fresh mode is reported beside it.
 - Later work on 2026-11-22 lowered the Rust parser's instruction count by roughly a fifth. No
   wall-clock comparison has been recorded since; one depends on the runner's CPU.
-- Every pull request that touches the parser gets Callgrind instruction counts, allocator
-  calls and page faults against its merge base ([docs/MEASUREMENT.md](docs/MEASUREMENT.md)).
+- Every pull request that touches the parser is measured against its merge base on every
+  target: Rust and Go instruction counts (Callgrind), TypeScript and JavaScript block-execution
+  counts, allocator calls and page faults. A change that moves one target only is listed as
+  such ([docs/MEASUREMENT.md](docs/MEASUREMENT.md)).
 
 ### Allocations and sizes
 
