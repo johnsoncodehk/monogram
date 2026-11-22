@@ -536,7 +536,7 @@ function lowerStmt(n: E): Ast {
   switch (m.arm) {
     case 'block': return lowerBlock(m.block);
     case 'variable': case 'using': {
-      const decls = ('binding' in m ? m.binding : []).map(lowerBinding);
+      const decls = [m.binding, ...m.bindingRest].map(lowerBinding);
       const list = ast('VariableDeclarationList', off(n), decls.length ? decls[decls.length - 1].end : end(n), decls);
       return ast('VariableStatement', off(n), end(n), [list]);
     }
