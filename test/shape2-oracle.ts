@@ -2,8 +2,8 @@
 // interpreter (src/shape2-eval.ts) on the interpreter CST, against its reference parser through
 // the oracle harness (test/shape-oracle.ts), statement by statement:
 //
-//   estree  test/fixtures/shape2-estree-expr.ts on javascript.ts, against acorn
-//   tsc     test/fixtures/shape2-tsc-expr.ts on typescript.ts, against tsc's parser
+//   estree  test/fixtures/shape-v2-estree-expr.ts on javascript.ts, against acorn
+//   tsc     test/fixtures/shape-v2-tsc-expr.ts on typescript.ts, against tsc's parser
 //
 // Unit = one EXPRESSION STATEMENT (anywhere in a file: nested ones too). The oracle's
 // ExpressionStatement nodes and the candidate's (`Stmt.expr` arms) are paired by start offset;
@@ -36,7 +36,7 @@ type Shape = { name: 'estree' | 'tsc'; grammar: CstGrammar; spec: Shape2Spec; or
 async function shapeOf(name: string): Promise<Shape> {
   if (name === 'estree') {
     const { parseEstree, normaliseEstree } = await import('./shape-oracle-estree.ts');
-    const { estreeExprShape } = await import('./fixtures/shape2-estree-expr.ts');
+    const { estreeExprShape } = await import('./fixtures/shape-v2-estree-expr.ts');
     return {
       name, grammar: (await import('../javascript.ts')).default, spec: estreeExprShape,
       oracle: (src) => { const r = parseEstree(src); return r ? normaliseEstree(r.tree) : 'acorn rejects it'; },
@@ -44,7 +44,7 @@ async function shapeOf(name: string): Promise<Shape> {
   }
   if (name === 'tsc') {
     const { tscOracle } = await import('./shape-oracle-tsc.ts');
-    const { tscExprShape } = await import('./fixtures/shape2-tsc-expr.ts');
+    const { tscExprShape } = await import('./fixtures/shape-v2-tsc-expr.ts');
     return {
       name, grammar: (await import('../typescript.ts')).default, spec: tscExprShape,
       oracle: (src, path) => { const r = tscOracle(src, path); return 'tree' in r ? r.tree : 'skip' in r ? r.skip : r.fail; },
