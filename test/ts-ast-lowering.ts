@@ -581,7 +581,7 @@ function lowerStmt(n: E): Ast {
     case 'debugger_': return ast('DebuggerStatement', off(n), end(n));
     case 'with_': return ast('WithStatement', off(n), end(n), [lowerExpr(m.expr), lowerStmt(m.stmt)]);
     case 'decl': return lowerDecl(m.decl);
-    case 'expr': return ast('ExpressionStatement', off(n), end(n), [lowerExpr(m.expr)]);
+    case 'expr': return ast('ExpressionStatement', off(n), end(n), [lowerExpr(m.first)]);
     default: {
       const never_: never = m;
       throw new Unlowered(`Stmt arm ${(never_ as { arm: string }).arm}`, off(n));
