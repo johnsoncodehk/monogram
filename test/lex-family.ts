@@ -23,7 +23,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { token, rule, defineGrammar, many, seq, plus, star, oneOf, noneOf, range, repeat, altPattern, anyChar, notFollowedBy } from '../src/api.ts';
-import { buildLexIdPlan, portableIR, type ParserIR } from '../src/emit-portable.ts';
+import { buildLexDispatchPlan, buildLexIdPlan, lexTokFirstBytes, portableIR, punctFirstBytes, type ParserIR } from '../src/emit-portable.ts';
+import { info } from '../src/lex-match-plan.ts';
 import { tsTarget, goTarget, rustTarget, type Target } from '../src/emit.ts';
 import { type TextUnits, unitLen } from '../src/text-units.ts';
 import type { CstGrammar } from '../src/types.ts';
@@ -154,6 +155,9 @@ const CASES: Case[] = [
   ['Lazy', '%a;b', 0, -1],
   ['Lazy', '%a\n;;', 0, -1],
   ['BlockComment', '/* a', 0, -1],
+  ['BlockComment', '/* a * b ** c *** d **/x', 0, 23],
+  ['BlockComment', '/* a long comment with no close at all *', 0, -1],
+  ['LineComment', '// a line comment longer than one word\r\nx', 0, 39],
   ['BlockComment', 'x/**/', 1, 5],
   ['BlockComment', '/x', 0, -1],
   ['LineComment', '// hi\nx', 0, 5],
@@ -161,6 +165,7 @@ const CASES: Case[] = [
   ['LineComment', '/ x', 0, -1],
   ['Str', '"a\\"b"x', 0, 6],
   ['Str', 'x = "q"', 4, 7],
+  ['Str', '"a" "b"', 0, 3],
   ['Str', '"abc', 0, -1],
   ['Str', '"a\\', 0, -1],
   ['Hex', '0x1f+', 0, 4],
@@ -359,6 +364,47 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   const tl = tsTarget.shared.templateLiterals(tir, tlits);
   if (Object.values(tl).some((l) => l.length > 0)) fail(`typescript: a template piece can be a literal: ${JSON.stringify(tl)}`);
   console.log(`  ${pairs} (token, literal) pairs: every literal a token's regex matches is in its tokenLiterals; typescript records 0 for ${none.length} kinds and the template pieces`);
+}
+
+// ── 9. at a non-ASCII unit a lexer tries only the candidates that can begin with one ──
+// A lexer's first-byte dispatch sends a token start whose unit is >= 128 to its fallback list
+// (buildLexDispatchPlan). A candidate left out of that list must be one no non-ASCII character can
+// begin: proved here by lex-match-plan's own first-character analysis of the token pattern (a
+// punctuator: its first character), and seen on the token's regex at a sample of non-ASCII starts.
+{
+  const GS = ['../javascript.ts', '../typescript.ts', ...['calc', 'minijs', 'richtokens', 'regexjs', 'templatejs', 'envspec', 'envtpl', 'altjs', 'nudjs', 'sljs', 'unilits'].map((f) => `./fixtures/${f}.ts`)];
+  const STARTS = ['\u0080', '\u00a0', 'é', 'ñ', '\u2028', '\u2029', '\u3000', '\ufeff', '日', 'ŉ', '😀', '\u0301', '\u200c', '\uffff'];
+  let dropped = 0, kept = 0;
+  for (const path of GS) {
+    const g = (await import(path)).default as CstGrammar;
+    const pir = portableIR(g);
+    const toks = tsTarget.shared.scannedTokens(pir);
+    const cands: { name: string; pattern: import('../src/types.ts').TokenPattern }[] = [
+      ...toks.map((t) => ({ name: t.name, pattern: g.tokens.find((d) => d.name === t.name)!.pattern })),
+      ...pir.puncts.map((p) => ({ name: JSON.stringify(p), pattern: p as import('../src/types.ts').TokenPattern })),
+    ];
+    const { fallbackIndices } = buildLexDispatchPlan([...toks.map(lexTokFirstBytes), ...pir.puncts.map(punctFirstBytes)]);
+    const inFallback = new Set(fallbackIndices);
+    cands.forEach((c, i) => {
+      if (inFallback.has(i)) { kept++; return; }
+      dropped++;
+      const wide = info(c.pattern).first.filter(([, hi]) => hi >= 128);
+      if (wide.length) fail(`${g.name}: ${c.name} is left out of the non-ASCII fallback, but its pattern can begin with ${JSON.stringify(wide)}`);
+      const re = new RegExp(tokenPatternToRegex(c.pattern), 'y');
+      for (const st of STARTS) {
+        re.lastIndex = 0;
+        const m = re.exec(`${st}a1 ;\n`);
+        if (m && m[0].length > 0) fail(`${g.name}: ${c.name} is left out of the non-ASCII fallback, but its regex matches ${JSON.stringify(m[0])} at ${JSON.stringify(st)}`);
+      }
+    });
+    if (g.name === 'typescript') {
+      // No typescript token or punctuator begins with a non-ASCII character: such a start goes
+      // straight to the Unicode whitespace test and the identifier fallback.
+      const names = fallbackIndices.map((i) => cands[i]!.name);
+      if (names.length) fail(`typescript: the non-ASCII fallback holds ${JSON.stringify(names)}, want none`);
+    }
+  }
+  console.log(`  ${dropped} candidates left out of a non-ASCII fallback (${kept} kept), none can begin with a non-ASCII character`);
 }
 
 if (failures > 0) {

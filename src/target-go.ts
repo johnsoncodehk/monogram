@@ -10,11 +10,11 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, prattOpTables, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, prattOpTables, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
-import { type TextUnits, unitLen } from './text-units.ts';
+import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
 // Go strings are indexed by UTF-8 byte: every offset and length printed here is in bytes.
@@ -244,25 +244,54 @@ function renderIdTablesGo(ids: LexIdPlan): string {
   const lidsLit = ids.lids.map(J).join(', ');
   const pf = buildLidPrefilter(ids, UNITS);
   const bitsLit = [...pf.firstByLenBits].join(', ');
+  // The literal table as two string switches (words, the rest: buildLidTables), which the Go
+  // compiler turns into a search by length and value; no map is built at load time.
+  const tables = buildLidTables(ids, UNITS);
+  const cases = (half: [number, { text: string; id: number }[]][]) => half.flatMap(([, ents]) => ents).map((e) => `\tcase ${J(e.text)}:\n\t\treturn ${e.id}\n`).join('');
+  // The byte test of lidWordByte, as ranges of consecutive bytes (a package-level table would be mutable state).
+  const wordTest: string[] = [];
+  for (let b = 0; b < 256; b++) {
+    if (!lidWordByte(b) || lidWordByte(b - 1)) continue;
+    let e = b;
+    while (e < 255 && lidWordByte(e + 1)) e++;
+    wordTest.push(e === b ? `b == ${b}` : `(b >= ${b} && b <= ${e})`);
+  }
   return `var kindStr = []string{${kidsLit}}
 var _lids = []string{${lidsLit}}
 var _kidMap = map[string]uint16{}
-var _lidMap = map[string]uint16{}
 const _lidMaxLen = ${pf.maxLen}
 var _lidFirstBits = [...]byte{${bitsLit}}
 
 func init() {
 \tfor i, k := range kindStr { _kidMap[k] = uint16(i) }
-\tfor i, t := range _lids { _lidMap[t] = uint16(i) }
 }
 func kidOf(kind string) uint16 { if v, ok := _kidMap[kind]; ok { return v }; return 0 }
-func lidOf(text string) uint16 {
+// lidKeyIsLiteral is the length x first-byte prefilter: false when no literal has the text's key.
+func lidKeyIsLiteral(text string) bool {
 \tn := len(text)
-\tif n == 0 || n > _lidMaxLen { return 0 }
-\t// No literal has this (length, first byte) key ⇒ lid 0 (the bits hold every literal's key).
+\tif n == 0 || n > _lidMaxLen { return false }
 \tb0 := text[0]
-\tif _lidFirstBits[n*32+(int(b0)>>3)]&(1<<(b0&7)) == 0 { return 0 }
-\tif v, ok := _lidMap[text]; ok { return v }
+\treturn _lidFirstBits[n*32+(int(b0)>>3)]&(1<<(b0&7)) != 0
+}
+// lidOf is the literal id of a text (0: no literal): the prefilter, then the table half of its first byte.
+func lidOf(text string) uint16 {
+\tif !lidKeyIsLiteral(text) { return 0 }
+\tif b := text[0]; ${wordTest.join(' || ')} { return lidOfKw(text) }
+\treturn lidOfPunct(text)
+}
+// lidOfWord is lidOf for a token whose kind can equal word literals only (shared.tokenLiterals).
+func lidOfWord(text string) uint16 {
+\tif !lidKeyIsLiteral(text) { return 0 }
+\treturn lidOfKw(text)
+}
+func lidOfKw(text string) uint16 {
+\tswitch text {
+${cases(tables.word)}\t}
+\treturn 0
+}
+func lidOfPunct(text string) uint16 {
+\tswitch text {
+${cases(tables.rest)}\t}
 \treturn 0
 }
 func tokKind(t *Tok) string { return kindStr[t.Kid] }
@@ -285,7 +314,15 @@ func litTt(lid uint16) uint16 { if lid >= lidKw { return ${ttIdOf(ar, '$keyword'
 
 // The literal id of a token whose text is `text`, given the literals its kind can be
 // (shared.tokenLiterals): 0 when it can be none.
-const lidCallGo = (lits: string[], text: string): string => (lits.length === 0 ? '0' : `lidOf(${text})`);
+const lidCallGo = (lits: string[], text: string): string => (lits.length === 0 ? '0' : lits.every((l) => lidWordByte(firstUnit(l, UNITS))) ? `lidOfWord(${text})` : `lidOf(${text})`);
+
+// Whether a skipped token's text holds a line terminator (LF, CR, U+2028, U+2029): byte searches,
+// no decode.
+const GO_HAS_LINE_TERM = `// lexHasLineTerm is whether s holds a line terminator (LF, CR, U+2028, U+2029).
+func lexHasLineTerm(s string) bool {
+\treturn strings.IndexByte(s, '\\n') >= 0 || strings.IndexByte(s, '\\r') >= 0 || strings.Contains(s, "\\u2028") || strings.Contains(s, "\\u2029")
+}
+`;
 
 // One token at a dispatch site: the shared scanner, spliced in, says where it ends; the lexer
 // records it.
@@ -293,7 +330,7 @@ function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: bo
   const name = t.name;
   const kid = kidOf(ids, name);
   const push = t.skip
-    ? `if strings.ContainsAny(src[pos:e], "\\n\\r\\u2028\\u2029") { pendingNl = true }; `
+    ? `if lexHasLineTerm(src[pos:e]) { pendingNl = true }; `
     : `${stateful ? 'emit' : 'pushTok'}(pos, e, ${kid}, ${lidCallGo(shared.tokenLiterals(ir, t, ids.lids.slice(1)), 'src[pos:e]')}); `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
@@ -523,7 +560,7 @@ ${emitHooks}
   const cascade = renderLexByteDispatchGo(lexCodes, lexFirsts, '\t', tplHeads);
   const identNameGo = ir.identToken;
   const identKidGo = identNameGo ? kidOf(ids, identNameGo) : 0;
-  const lexGoHelpers = (identNameGo || ir.identLike.length) ? `func isJsWs(r rune) bool {
+  const lexGoHelpers = (shared.scannedTokens(ir).some((t) => t.skip) ? GO_HAS_LINE_TERM : '') + ((identNameGo || ir.identLike.length) ? `func isJsWs(r rune) bool {
 	if r == 0xA0 || r == 0x1680 || r == 0x2028 || r == 0x2029 || r == 0x202F || r == 0x205F || r == 0x3000 || r == 0xFEFF {
 		return true
 	}
@@ -563,7 +600,7 @@ func lxExt(src string, e int) int {
 	}
 	return r >= 0x2000 && r <= 0x200A
 }
-`;
+`);
   const nlState = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).state : '';
   const nlStateFrom = nl ? newlinePartsGo(nl, 'pushTok', ids).stateFrom : '';
   // A whitespace run is consumed in one dispatch round (see the Rust target): per byte only "is
@@ -3178,12 +3215,21 @@ const goLowering: Lowering = {
   owns: false,
   spliceInline: true,
   charSet: (name, rs) => `var ${name} = [256]bool{${rs.flatMap(([lo, hi]) => Array.from({ length: hi - lo + 1 }, (_, k) => `${lo + k}: true`)).join(', ')}}`,
+  // A byte loop: Rust's four-bytes-per-round shape measured slower here (measure-targets, PR #138:
+  // go-reuse +2.9% to +3.8% on acorn / checker / gen-tm), the compiler keeps the loop tight already.
   runEndFn: `// lexRunEnd is the end of the run of bytes in set from i: the first j >= i at which s ends or s[j] is not in it.
 func lexRunEnd(s string, i int, set *[256]bool) int {
 \tfor i < len(s) && set[s[i]] {
 \t\ti++
 \t}
 \treturn i
+}`,
+  findFn: `// lexFind is where lit next occurs in s from i: the first j >= i at which s has it, or len(s).
+func lexFind(s string, i int, lit string) int {
+\tif k := strings.Index(s[i:], lit); k >= 0 {
+\t\treturn i + k
+\t}
+\treturn len(s)
 }`,
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
@@ -3200,6 +3246,7 @@ func lexRunEnd(s string, i int, set *[256]bool) int {
     hasAt: (cx, s, i, lit) => cx.atom(`strings.HasPrefix(${goWrap(s, ATOM)}[${i.c}:], ${JSON.stringify(lit)})`, 'bool', 'bool'),
     inSet: (cx, set, c) => cx.atom(`${set}[${c.c}]`, 'bool', 'bool'),
     runEnd: (cx, set, s, i) => cx.atom(`lexRunEnd(${s.c}, ${i.c}, &${set})`, 'int', 'int'),
+    find: (cx, s, i, lit) => cx.atom(`lexFind(${s.c}, ${i.c}, ${JSON.stringify(lit)})`, 'int', 'int'),
     own: (_cx, r) => r,
   },
   stmt: {
