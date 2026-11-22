@@ -21,4 +21,8 @@ src = src.slice(0, r0) + region + src.slice(r1);
 const peek = 'fn peek(&mut self) -> Option<Tok> {\n';
 if (src.split(peek).length !== 2) throw new Error('Parser::peek not found exactly once');
 src = src.replace(peek, peek + '        cnt_add(C_PEEK, 1);\n');
+// Buffer lengths and capacities left in the Parser by parse_with (scratch, top-level entries).
+const pw = '    *b = p.b;\n    if let Some(t) = b.toks_mut() { *t = p.toks; }\n';
+if (src.split(pw).length !== 2) throw new Error('parse_with tail not found exactly once');
+src = src.replace(pw, '    PB[0].store(p.scratch.len() as u64, Relaxed); PB[1].store(p.scratch.capacity() as u64, Relaxed); PB[2].store(p.entries.len() as u64, Relaxed); PB[3].store(p.entries.capacity() as u64, Relaxed);\n' + pw);
 writeFileSync(out, src);

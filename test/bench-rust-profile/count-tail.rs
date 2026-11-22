@@ -15,9 +15,50 @@ static A_FREE: AtomicU64 = AtomicU64::new(0);
 static A_BYTES: AtomicU64 = AtomicU64::new(0); // bytes requested by alloc + bytes of growth by realloc
 static A_LIVE: AtomicI64 = AtomicI64::new(0);
 static A_PEAK: AtomicI64 = AtomicI64::new(0);
+// Copy model of realloc: the new buffer is allocated while the old one is alive (old + new), and
+// the old size is copied. A_PEAK above counts a realloc as growing in place.
+static A_PEAK_COPY: AtomicI64 = AtomicI64::new(0);
+static A_COPIED: AtomicU64 = AtomicU64::new(0);
 fn a_live(d: i64) {
     let v = A_LIVE.fetch_add(d, Relaxed) + d;
     A_PEAK.fetch_max(v, Relaxed);
+    A_PEAK_COPY.fetch_max(v, Relaxed);
+}
+// Buffer lengths and capacities the parse leaves behind in the Parser (patched into parse_with).
+static PB: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4]; // scratch len, scratch cap, entries len, entries cap
+// Minor / major page faults and max RSS of this process (getrusage, RUSAGE_SELF).
+#[repr(C)]
+struct Rusage { ut: [i64; 2], st: [i64; 2], maxrss: i64, ixrss: i64, idrss: i64, isrss: i64, minflt: i64, majflt: i64, rest: [i64; 8] }
+extern "C" { fn getrusage(who: i32, u: *mut Rusage) -> i32; }
+fn rusage() -> (i64, i64, i64) {
+    let mut u = Rusage { ut: [0; 2], st: [0; 2], maxrss: 0, ixrss: 0, idrss: 0, isrss: 0, minflt: 0, majflt: 0, rest: [0; 8] };
+    unsafe { getrusage(0, &mut u); }
+    (u.minflt, u.majflt, u.maxrss)
+}
+// One parse_with + drop of what it built, as one bench iteration in bench-tail.rs.
+fn fault_parse(src: &str) -> usize {
+    let mut b = CstBuilder::default();
+    let r = parse_with(src, &mut b);
+    let n = b.nodes.len() + r.map_or(0, |_| 1);
+    drop(std::hint::black_box(b));
+    n
+}
+// --faults-cold: the first parse in a fresh process (nothing allocated before it but the source);
+// --faults-warm: 3 warm-up parses, then the mean of 10 (each drops its buffers, as the bench loop does).
+fn faults_main(mode: &str, path: &str) {
+    let src = std::fs::read_to_string(path).unwrap();
+    if mode == "--faults-cold" {
+        let (f0, m0, _) = rusage();
+        std::hint::black_box(fault_parse(&src));
+        let (f1, m1, rss) = rusage();
+        println!("FAULTS cold {} minflt={} majflt={} maxrss_kb={}", path, f1 - f0, m1 - m0, rss);
+    } else {
+        for _ in 0..3 { std::hint::black_box(fault_parse(&src)); }
+        let (f0, m0, _) = rusage();
+        for _ in 0..10 { std::hint::black_box(fault_parse(&src)); }
+        let (f1, m1, rss) = rusage();
+        println!("FAULTS warm {} minflt_per_parse={:.1} majflt={} maxrss_kb={}", path, (f1 - f0) as f64 / 10.0, m1 - m0, rss);
+    }
 }
 unsafe impl GlobalAlloc for CountAlloc {
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
@@ -35,7 +76,8 @@ unsafe impl GlobalAlloc for CountAlloc {
     unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
         if ARMED.load(Relaxed) {
             A_REALLOC.fetch_add(1, Relaxed);
-            if n > l.size() { A_BYTES.fetch_add((n - l.size()) as u64, Relaxed); }
+            if n > l.size() { A_BYTES.fetch_add((n - l.size()) as u64, Relaxed); A_COPIED.fetch_add(l.size() as u64, Relaxed); }
+            A_PEAK_COPY.fetch_max(A_LIVE.load(Relaxed) + n as i64, Relaxed);
             a_live(n as i64 - l.size() as i64);
         }
         System.realloc(p, l, n)
@@ -85,6 +127,7 @@ fn count_main() {
     drop(t);
     ARMED.store(false, Relaxed);
     let lex_alloc = (A_MALLOC.swap(0, Relaxed), A_REALLOC.swap(0, Relaxed), A_FREE.swap(0, Relaxed), A_BYTES.swap(0, Relaxed), A_PEAK.swap(0, Relaxed));
+    let lex_copy = (A_PEAK_COPY.swap(0, Relaxed), A_COPIED.swap(0, Relaxed));
     A_LIVE.store(0, Relaxed);
     // the parse, armed
     ARMED.store(true, Relaxed);
@@ -92,6 +135,14 @@ fn count_main() {
     let r = parse_with(&src, &mut b);
     ARMED.store(false, Relaxed);
     let retained = A_LIVE.load(Relaxed);
+    let parse_copy = (A_PEAK_COPY.load(Relaxed), A_COPIED.load(Relaxed));
+    println!(
+        "BUFS {} toks_len={} toks_cap={} tok_size={} nodes_len={} nodes_cap={} node_size={} kids_len={} kids_cap={} scratch_len={} scratch_cap={} entries_len={} entries_cap={} entry_size={} \
+         peak_live_copy_bytes={} realloc_copied_bytes={} lex_peak_live_copy_bytes={} lex_realloc_copied_bytes={}",
+        path, b.toks.len(), b.toks.capacity(), std::mem::size_of::<Tok>(), b.nodes.len(), b.nodes.capacity(), std::mem::size_of::<Node>(),
+        b.kids.len(), b.kids.capacity(), PB[0].load(Relaxed), PB[1].load(Relaxed), PB[2].load(Relaxed), PB[3].load(Relaxed), std::mem::size_of::<EntryMeta>(),
+        parse_copy.0, parse_copy.1, lex_copy.0, lex_copy.1,
+    );
     let (nodes, kids, toks) = (b.nodes.len(), b.kids.len(), b.toks.len());
     let cap_bytes = b.nodes.capacity() * std::mem::size_of::<Node>() + b.kids.capacity() * 4 + b.toks.capacity() * std::mem::size_of::<Tok>();
     // reachable rule nodes from the root
@@ -140,5 +191,11 @@ fn count_main() {
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() == 3 && args[1].starts_with("--faults-") {
+        let (m, p) = (args[1].clone(), args[2].clone());
+        std::thread::Builder::new().stack_size(1 << 30).spawn(move || faults_main(&m, &p)).unwrap().join().unwrap();
+        return;
+    }
     std::thread::Builder::new().stack_size(1 << 30).spawn(count_main).unwrap().join().unwrap();
 }

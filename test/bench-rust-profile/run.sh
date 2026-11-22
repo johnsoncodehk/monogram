@@ -80,8 +80,11 @@ git show 2632c2c:src/gen-tm.ts > "$W/inputs/gen-tm.ts"
 git show 2632c2c:typescript.ts > "$W/inputs/typescript.ts"
 node "$HB/synth2mb.ts" "$W/inputs/synth2mb.ts"
 node "$H/synth-nonascii.ts" "$W/inputs/nonascii.ts"
-MAIN="checker.ts gen-tm.ts typescript.d.ts"
-INPUTS="$MAIN typescript.js parser.ts synth2mb.ts typescript.ts nonascii.ts"
+# Dense one-byte tokens with no trivia: one token per input byte, the most a lexer can emit.
+node -e 'require("fs").writeFileSync(process.argv[1], ";".repeat(1 << 20))' "$W/inputs/dense-semi.ts"
+node -e 'require("fs").writeFileSync(process.argv[1], "a" + "+a".repeat(1 << 19) + ";")' "$W/inputs/dense-plus.ts"
+MAIN="checker.ts gen-tm.ts typescript.d.ts dense-semi.ts"
+INPUTS="$MAIN typescript.js parser.ts synth2mb.ts typescript.ts nonascii.ts dense-plus.ts"
 (cd "$W/inputs" && wc -c $INPUTS && sha256sum $INPUTS)
 cd "$W/inputs"
 
@@ -92,6 +95,15 @@ for f in $INPUTS; do
   for v in A M; do
     "$W/mono-prof-$v/target/release/mono-prof-$v" --once "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v CRASH $f" | tee -a "$R"
     "$W/mono-count-$v/target/release/mono-count-$v" "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v COUNTCRASH $f" | tee -a "$R"
+  done
+done
+
+echo "=== page faults per parse (count builds, getrusage): first parse in a fresh process, and the warm bench loop"
+for f in $INPUTS; do
+  for v in A M; do
+    for m in cold warm; do
+      "$W/mono-count-$v/target/release/mono-count-$v" --faults-$m "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v FAULTSCRASH $m $f" | tee -a "$R"
+    done
   done
 done
 
@@ -178,7 +190,7 @@ grep -h '^desc:' "$OUT/sim/C.parse.checker.ts.out" || true; grep -h 'warning' "$
 
 echo "=== perf (if the runner allows it): instructions and cycles per parse, whole process minus --noop"
 if command -v perf >/dev/null && sudo sysctl -q kernel.perf_event_paranoid=1 && perf stat -e instructions:u true >/dev/null 2>&1; then
-  pst() { perf stat -x, -r 5 -e instructions:u,cycles:u,branch-misses:u "$@" 2>&1 >/dev/null | awk -F, '{print $3 "=" $1}' | tr '\n' ' '; }
+  pst() { perf stat -x, -r 5 -e instructions:u,cycles:u,branch-misses:u,page-faults "$@" 2>&1 >/dev/null | awk -F, '{print $3 "=" $1}' | tr '\n' ' '; }
   for f in $MAIN; do
     echo "PERF C $f once: $(pst "$OXC/oxc-once" --once "$f") noop: $(pst "$OXC/oxc-once" --noop "$f")" | tee -a "$R"
     for v in A M; do
