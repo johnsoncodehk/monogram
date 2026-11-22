@@ -2,7 +2,7 @@ import {
   rule, defineGrammar,
   op, prefix, postfix, sameLine,
   sep, opt, many, many1, alt, not, tsRelax, capExpr, notLeftLeaf, withHoles,
-  awaitCtx, yieldCtx, asyncGenCtx, resetCtx,
+  awaitCtx, yieldCtx, asyncGenCtx, resetCtx, arm, field,
 } from './src/api.ts';
 
 // Build the four async×generator arms of a TypeScript `function` form, routing each
@@ -458,7 +458,7 @@ const Expr = rule($ => [
   // `super = …` are all parse errors. Modeling super as a bare atom would let the generic
   // LEDs (type-arg call, optional chain, tagged template, assignment) attach and re-open
   // that whole class; further access chains off the RESULT normally (`super.x<T>()`).
-  ['super', alt(['(', sep($, ','), ')'], ['.', alt(Ident, PrivateField)], ['[', $, ']'])],
+  [field('superKeyword', 'super'), alt(['(', sep($, ','), ')'], ['.', alt(Ident, PrivateField)], ['[', $, ']'])],
   // bare-identifier NUD — excludes `super` AND `new` (reserved one-token text matches
   // handled by their own arms above; without these guards a failed `super`/`new` arm would
   // slide the keyword in here as an Ident — e.g. `new <T>Foo()` reparsing as `(new < T) > Foo()`).
@@ -494,7 +494,7 @@ const Expr = rule($ => [
   [$, '?.', alt(Ident, PrivateField, ['(', sep($, ','), ')'], ['[', $, ']'], Template, [...typeArgsInExpr(), '(', sep($, ','), ')'])],   // optional typed call `a?.<T>(args)`
   [$, '[', $, ']'],
   [$, sameLine, '!'],   // TS non-null assertion — RESTRICTED (no line break before `!`, like postfix ++/--); a LHS-chain tail (access can follow: `x!.y`, `x!()`)
-  [$, '?', $, ':', $],
+  [$, '?', field('then', $), ':', field('otherwise', $)],
   [$, 'as', Type],
   [$, 'instanceof', $],
   [$, 'in', $],
@@ -504,18 +504,18 @@ const Expr = rule($ => [
   // identifier nud, which excludes `new`), so `new <T>Foo()` — where the `new T` arm fails
   // on the leading `<` — can no longer fall through to `new` as an identifier and reparse
   // as the comparison `(new < T) > Foo()` (tsc: "Expression expected").
-  ['new', '.', 'target'],
+  arm('newDotTarget', field('newKeyword', 'new'), '.', field('targetKeyword', 'target')),
   // new T | new T(args) | new T<X> | new T<X>(args). An optional chain may NOT follow a bare
   // `new` (no Arguments): a NewExpression is not a valid `?.` base (the base must be a
   // MemberExpression / CallExpression — i.e. a `new` WITH `( )`), so `new a?.b`, `new a<T>?.b`,
   // `new class{}?.x`, `new new a()?.x` have no parse tree (tsc + V8 + babel all reject). The
   // `not('?.')` guards exactly the no-call exits; `new a()?.b` (Arguments consumed) chains via
   // the outer `?.` LED unchanged.
-  ['new', NewTarget, alt(
+  arm('construct', 'new', NewTarget, alt(
     [...typeArgsInExpr(), alt(['(', sep($, ','), ')'], not('?.'))],
     ['(', sep($, ','), ')'],
     not('?.'),
-  )],
+  )),
   ['new', 'class', ...bindingIdentifier, opt(TypeParams), opt('extends', ClassHeritage), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}', alt(['(', sep($, ','), ')'], not('?.'))],
   ['new', 'class', opt(TypeParams), opt('extends', ClassHeritage), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}', alt(['(', sep($, ','), ')'], not('?.'))],
   ['[', opt($), many(',', opt($)), ']'],   // array literal: each element parsed once (see javascript.ts)
@@ -541,7 +541,7 @@ const Expr = rule($ => [
   capExpr('?', 'async', sameLine, awaitCtx(notReservedExpr, Ident), '=>', awaitCtx(conciseBody(Block, $))),
   capExpr('?', notReservedExpr, Ident, '=>', resetCtx(conciseBody(Block, $))),
   ['yield', alt(['*', $], [opt($)])],   // yield e | yield* e (delegate) | yield
-  ['(', $, many(',', $), ')'],
+  ['(', field('first', $), many(field('comma', ','), field('rest', $)), ')'],
   [$, 'satisfies', Type],
   ['import', alt(['(', $, ')'], ['.', 'meta'], [...typeArgsInExpr(), opt('(', sep($, ','), ')')])],   // import(e) | import.meta | import<T>(args) (instantiation-expression; checker rejects)
   PrivateField,
