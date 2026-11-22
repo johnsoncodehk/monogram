@@ -870,9 +870,9 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean): StepLowering {
     // A body guard (emit-portable.ts annotateSteps) is tested inside an out-of-line helper
     // (`star_in` / `opt_in` / `sep_by_in`, `#[inline(never)]`, generic over the body: one small
     // function per site), so the function holding the step does not grow by the guarded attempt.
-    star: (body, g) => (g === null ? `${recv}.star${R}(|p| ${body})` : `${recv}.star_in${R}(${g}, |p| ${body})`),
-    opt: (body, g) => (g === null ? `${recv}.opt${R}(|p| ${body})` : `(!${recv}.ahead(${g}, true) || ${recv}.opt_out${R}(|p| ${body}))`),
-    sep: (elem, delim, g) => (g === null ? `${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})` : `(!${recv}.ahead(${g}, true) || ${recv}.sep_by_out${R}(|p| ${elem}, ${sepDelimLid(ids, delim)}))`),
+    star: (body, g) => (true ? `${recv}.star${R}(|p| ${body})` : `${recv}.star_in${R}(${g}, |p| ${body})`),
+    opt: (body, g) => (true ? `${recv}.opt${R}(|p| ${body})` : `(!${recv}.ahead(${g}, true) || ${recv}.opt_out${R}(|p| ${body}))`),
+    sep: (elem, delim, g) => (true ? `${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})` : `(!${recv}.ahead(${g}, true) || ${recv}.sep_by_out${R}(|p| ${elem}, ${sepDelimLid(ids, delim)}))`),
     altlit: (values) => `${recv}.alt_lit${R}(&[${values.map((v) => lidOf(ids, v)).join(', ')}])`,
     look: (id, is) => `${is ? '' : '!'}${recv}.look_${id}()`,
     ahead: (set, is) => `${recv}.ahead(${set}, ${is})`,
