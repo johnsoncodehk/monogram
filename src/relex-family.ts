@@ -10,8 +10,32 @@
 //
 // Offsets are in the target's native string units (whatever its lexer reports, e.g. UTF-16
 // code units or UTF-8 bytes); the family only does arithmetic on them.
+//
+// The anchor rule. The windowed relex keeps the old tokens up to an anchor and lexes on from the
+// anchor's end with the lexer state recovered from it; later it adopts the shifted old suffix
+// from the first new token past the edit whose lexer state matches the old one's. A token is
+// decided by everything its lexer read: its own match, and the failed attempts, at its start, of
+// the candidates its dispatch arm tries before its own (a regex attempt that falls back to
+// division reads to the end of its line). So a token may be kept only if nothing that decided it,
+// or any token before it, read text at or after the edit start. A token is a valid restart
+// anchor iff (i) it is at least one token before the last token that ends before the edit (every
+// read within a token's end + 1 then stays before the edit); (ii) no token at or before it was
+// decided by a read past its end + 1 that reaches the edit start: a failed attempt whose
+// `readEnd` (src/lex-family.ts, recomputed here on the old text at the token's start) passes
+// the edit start, or its own match (`overRead` past end + 1, only where the unit at its end is in
+// `overTrigger`) whose reads, through the units its pattern can go past, reach the edit start;
+// (iii) no template hole is open after it (td == 0), since the template stack is not recorded.
+// Clause (ii) checks only the tokens that start after z, the last unit before the edit that no
+// such read can go past (`LookPlan.reach`): a read from an earlier token stops at z at the
+// latest. That stays sound when an edit lengthens a run of such units backward across z (an
+// insertion right after z): the anchor then ends at or before z, and every token that could read
+// the edit is relexed. A resync token is past the edit, and the old tokens adopted after it read
+// only the unchanged text after them, so resync needs only the lexer state to match. Nothing of
+// this is recorded by the lexer: the lexers pay nothing for it.
 
 import { type ParserIR, buildLexIdPlan, kidOf, lidOf } from './emit-portable.ts';
+import { type LookPlan, lexLookPlan } from './lex-family.ts';
+import type { CSet } from './lex-match-plan.ts';
 import { type Expr, type Fn, type ListTy, type Lowering, type MetaFlag, type MetaInt, type Stmt, type TokInt, type Ty, printFns } from './algo-ir.ts';
 
 export interface RelexMode {
@@ -22,6 +46,9 @@ export interface RelexMode {
   template: boolean;
   kidNl: number;
   lidLParen: number;
+  // The lexer's reads past a token's end + 1 (anchor rule (ii)); token names resolved to kids.
+  look: LookPlan;
+  kidOf: (tok: string) => number;
 }
 
 export function relexMode(ir: ParserIR): RelexMode {
@@ -36,8 +63,12 @@ export function relexMode(ir: ParserIR): RelexMode {
     template: window && !!ir.tpl,
     kidNl: newline ? kidOf(ids, ir.newlineCfg!.token) : -1,
     lidLParen: regex ? lidOf(ids, '(') : -1,
+    // lexLookPlan asks relexMode only for `window`: resolved lazily, after this returns.
+    get look() { return lexLookPlan(ir); },
+    kidOf: (tok) => kidOf(ids, tok),
   };
 }
+const looks = (m: RelexMode): boolean => m.look.arms.length > 0 || m.look.over.length > 0;
 
 // Meta records lexer state per token only when some state field feeds the meta.
 const perToken = (m: RelexMode): boolean => m.newline || m.regex || m.template;
@@ -138,7 +169,7 @@ function restoreFromAnchor(m: RelexMode): Stmt[] {
 // ---- functions ----
 
 function toMetaFn(): Fn {
-  const zero: RelexMode = { window: false, newline: false, regex: false, template: false, kidNl: -1, lidLParen: -1 };
+  const zero: RelexMode = { window: false, newline: false, regex: false, template: false, kidNl: -1, lidLParen: -1, look: { arms: [], over: [], reach: [] }, kidOf: () => -1 };
   return {
     name: 'toMeta',
     doc: 'Stateless meta for tokens of a lexer whose meta carries no lexer state.',
@@ -293,6 +324,66 @@ const parenStacksEqFn = (): Fn => ({
   ],
 });
 
+// ---- anchor rule (ii): reads past a token's end + 1 ----
+
+const code = (s: Ex, i: Ex): Expr => ({ k: 'code', s: x(s), i: x(i) });
+const or = (...es: Ex[]): Expr => es.map(x).reduce((a, b) => ({ k: 'bin', op: 'or', a, b }));
+// Whether code unit c may be one of the units of `set`: its ASCII members compared, and any unit
+// beyond ASCII taken as one when the set has a member beyond ASCII (a UTF-8 target's units of one
+// character are all >= 128, a UTF-16 target's too), so the test errs only towards membership.
+function inUnits(c: Ex, set: CSet): Expr {
+  const ascii = set.filter(([a]) => a <= 127).map(([a, b]): [number, number] => [Math.max(0, a), Math.min(127, b)]);
+  const tests: Expr[] = ascii.map(([a, b]) => (a === b ? eq(c, I(a)) : and(ge(c, I(a)), le(c, I(b)))));
+  if (set.some(([, b]) => b >= 128)) tests.push(ge(c, I(128)));
+  return tests.length ? or(...tests) : F;
+}
+
+const readsBeforeFn = (m: RelexMode): Fn => {
+  const body: Stmt[] = [let_('r', 'int', I(0)), if_(ge('off', len('text')), [ret('r')]), let_('u', 'int', code('text', 'off'))];
+  m.look.arms.forEach((arm, ai) => {
+    const steps: Stmt[] = [];
+    arm.cands.forEach((c, k) => {
+      if (c.tok !== null) steps.push(if_(eq('kid', I(m.kidOf(c.tok))), [ret('r')]));
+      if (c.readEnd) steps.push(let_(`e${ai}_${k}`, 'int', call(c.readEnd, 'text', 'off')), if_(gt(`e${ai}_${k}`, 'r'), [set('r', `e${ai}_${k}`)]));
+    });
+    const test = arm.units === null ? ge('u', I(128)) : inUnits('u', arm.units.map((b): [number, number] => [b, b]));
+    body.push(if_(test, [...steps, ret('r')]));
+  });
+  body.push(ret('r'));
+  return {
+    name: 'relexReadsBefore',
+    doc: 'Where the failed attempts that decided the token of kind kid at off read to (exclusive): the attempts its dispatch arm makes\nbefore its own candidate that can read past its end + 1; 0 when none.',
+    params: [{ name: 'text', ty: 'str' }, { name: 'off', ty: 'int' }, { name: 'kid', ty: 'int' }],
+    ret: ['int'],
+    body,
+  };
+};
+
+const overEndFn = (m: RelexMode): Fn => ({
+  name: 'relexOverEnd',
+  doc: 'Where the match of the token of kind kid that ends at e read to (exclusive), when it can be past e + 1: through the units\nits pattern can go past, from a unit its match can read further at; 0 otherwise.',
+  params: [{ name: 'text', ty: 'str' }, { name: 'e', ty: 'int' }, { name: 'kid', ty: 'int' }],
+  ret: ['int'],
+  body: [
+    if_(ge('e', len('text')), [ret(I(0))]),
+    let_('c', 'int', code('text', 'e')),
+    ...m.look.over.map((o) => if_(and(eq('kid', I(m.kidOf(o.tok))), inUnits('c', o.trig)), [
+      let_('q', 'int', 'e'),
+      while_(and(lt('q', len('text')), inUnits(code('text', 'q'), o.examined)), [set('q', add('q', I(1)))]),
+      ret(add('q', I(1))),
+    ])),
+    ret(I(0)),
+  ],
+});
+
+const inReachFn = (m: RelexMode): Fn => ({
+  name: 'relexInReach',
+  doc: 'Whether a read past a token\'s end + 1 can go past code unit c.',
+  params: [{ name: 'c', ty: 'int' }],
+  ret: ['bool'],
+  body: [ret(inUnits('c', m.look.reach))],
+});
+
 function windowRelexStepFn(m: RelexMode): Fn {
   const anchorSearch: Stmt[] = [
     let_('maxIdx', 'int', I(-1)),
@@ -314,6 +405,28 @@ function windowRelexStepFn(m: RelexMode): Fn {
         ]),
       ]),
     );
+  }
+  if (looks(m)) {
+    anchorSearch.push(
+      { k: 'comment', text: 'Anchor rule (ii): no token at or before the anchor read the edit; only tokens after z can.' },
+      let_('z', 'int', sub('start', I(1))),
+      while_(and(ge('z', I(0)), call('relexInReach', code('oldText', 'z'))), [set('z', sub('z', I(1)))]),
+      let_('w', 'int', 'rb'),
+      while_(and(ge('w', I(0)), gt(mi(at('oldToks', 'w'), 'off'), 'z')), [
+        let_('wt', 'meta', at('oldToks', 'w')),
+        if_(or(
+          gt(call('relexReadsBefore', 'oldText', mi('wt', 'off'), mi('wt', 'kid')), 'start'),
+          gt(call('relexOverEnd', 'oldText', mi('wt', 'end'), mi('wt', 'kid')), 'start'),
+        ), [set('rb', sub('w', I(1)))]),
+        set('w', sub('w', I(1))),
+      ]),
+    );
+    if (m.template) {
+      anchorSearch.push(
+        { k: 'comment', text: 'Back to a td == 0 token at or before it.' },
+        while_(and(ge('rb', I(0)), ne(mi(at('oldToks', 'rb'), 'td'), I(0))), [set('rb', sub('rb', I(1)))]),
+      );
+    }
   }
 
   // Old token o at the shifted offset is interchangeable with t when its lexical identity and
@@ -423,6 +536,13 @@ export function relexFamilyFns(m: RelexMode): Fn[] {
   if (m.window) {
     fns.push(findTokAtOffKindFn());
     if (m.regex) fns.push(reconstructParensFn(), parenStacksEqFn());
+    if (looks(m)) {
+      // The read-end routines are the lex-scan family's, printed with the scanners.
+      for (const name of new Set(m.look.arms.flatMap((a) => a.cands.flatMap((c) => (c.readEnd ? [c.readEnd] : []))))) {
+        fns.push({ name, doc: '', params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }], ret: ['int'], body: [], extern: true });
+      }
+      fns.push(readsBeforeFn(m), overEndFn(m), inReachFn(m));
+    }
     fns.push(windowRelexStepFn(m));
   }
   fns.push(relexEditsFn(m));

@@ -20,10 +20,11 @@
 //
 // Offsets are in the target's native string units; the family only does arithmetic on them.
 
-import type { LexTok, ParserIR } from './emit-portable.ts';
+import { type LexTok, type ParserIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes } from './emit-portable.ts';
 import type { TokenCharClassItem, TokenPattern } from './types.ts';
+import { relexMode } from './relex-family.ts';
 import { type CharSet, type CodeRange, type Expr, type Fn, type Lowering, type Stmt, inlineFn, printFns, printStmts } from './algo-ir.ts';
-import { ACCEPT, committed, contOf, exitsWhereBodyStops, info, mayMatchText, oneChar, oneEnd } from './lex-match-plan.ts';
+import { ACCEPT, ALL, type CSet, committed, complement, contOf, examinedUnits, exitsWhereBodyStops, failRead, info, intersect, mayMatchText, oneChar, oneEnd, overRead, overTrigger, union } from './lex-match-plan.ts';
 import { oneUnit } from './text-units.ts';
 
 type Ex = Expr | string;
@@ -303,6 +304,54 @@ class LexScan {
     };
   }
 
+  // The exclusive end of what a failed attempt of t at p read (tokLook: its failRead is more than
+  // a few units). The fixed leading items of the pattern are walked as the matcher took them, so
+  // an attempt that failed among them reports only what it read there; past them, the attempt
+  // read at most up to and including the first unit no path can go past, or the end of the source.
+  readEnd(t: LexTok): Fn {
+    const name = readEndName(t.name);
+    const end1 = add(len('s'), I(1));
+    const doc = `${t.name}: where what a failed attempt at p read ends.`;
+    const mk = (body: Stmt[]): Fn => ({ ...sig(name, doc, [if_(lt('p', I(0)), [ret(I(0))]), ...body]), cold: true });
+    switch (t.kind) {
+      case 'string': return mk([if_(and(lt('p', len('s')), eq(code('p'), I(t.delim.charCodeAt(0)))), [ret(end1)]), ret(add('p', I(1)))]);
+      case 'block': return mk([if_(hasAt('p', t.open), [ret(end1)]), ret(add('p', litLen(t.open)))]);
+      case 'line': return mk([ret(add('p', litLen(t.prefix)))]);
+      case 'run': return mk([ret(add('p', I(1)))]);
+      case 'runBail': case 'pattern': {
+        const items = typeof t.pattern !== 'string' && t.pattern.type === 'seq' ? t.pattern.items : [t.pattern];
+        const body: Stmt[] = [let_('q', 'p')];
+        let k = 0;
+        for (; k < items.length; k++) {
+          const it = items[k]!;
+          if (typeof it === 'string' && it !== '') {
+            body.push(if_(not(hasAt('q', it)), [ret(add('q', litLen(it)))]), set('q', add('q', litLen(it))));
+          } else if (typeof it !== 'string' && it.type === 'charClass' && classParts(it.items).wide.length === 0 && !it.negate) {
+            body.push(if_(ge('q', len('s')), [ret(add('q', I(1)))]), if_(not(inRanges(code('q'), classParts(it.items).narrow)), [ret(add('q', I(1)))]), set('q', add('q', I(1))));
+          } else break;
+        }
+        const ex = examinedUnits({ type: 'seq', items: items.slice(k) });
+        const stop = intersect(complement(ex), [[0, 0xffff]]);
+        const stopUnits = stop.flatMap(([a, b]) => (b - a < 8 ? Array.from({ length: b - a + 1 }, (_, i) => a + i) : [-1]));
+        if (stop.length === 0) body.push(ret(end1));
+        else if (stopUnits.length <= 4 && stopUnits.every((c) => c >= 0 && (c < 0xd800 || c > 0xdfff))) body.push(ret(add(this.findAny('q', stopUnits), I(1))));
+        else {
+          // Past a unit beyond ASCII only when some path can take one (each of its units is >= 128).
+          const ascii = intersect(ex, [[0, 127]]), wide = intersect(ex, [[128, 0x10ffff]]).length > 0;
+          body.push(
+            while_(lt('q', len('s')), [
+              let_('c', code('q')),
+              if_(lt('c', I(128)), [if_(not(inRanges('c', ascii)), [BREAK])], wide ? [] : [BREAK]),
+              set('q', add('q', I(1))),
+            ]),
+            ret(add('q', I(1))),
+          );
+        }
+        return mk(body);
+      }
+    }
+  }
+
   // A pattern match that consumed nothing is no token. An identifier's pattern match is checked
   // for its escapes: the match and the check are one cold function of the token (`escScan`), so the
   // scanner, which the dispatch loop inlines, keeps the shape of a plain pattern call.
@@ -457,6 +506,94 @@ class LexScan {
   }
 }
 
+// ── What a token's decision reads past its own end (the relex window's lookahead plan) ──
+//
+// A token is decided by its own match and by the failed attempts, at its start, of the candidates
+// its dispatch arm tries before its own. The relex window (src/relex-family.ts) may keep a token
+// before an edit only if nothing that decided it read the edited text. Every read within the
+// token's end + 1 is covered by the window's margin; this plan names the reads that can go
+// further, from each token's shape (src/lex-match-plan.ts for a pattern):
+// - `failRead`: the most units a failed attempt reads from the token's start (-1: cannot fail);
+// - `over`: the most units a successful match reads at or after its end;
+// - `trig`: the units at the end at which a match can read more than one unit past it;
+// - `examined`: the units any attempt can read and go past (a read stops at the first unit
+//   outside it, which it reads).
+export type TokLook = { failRead: number; over: number; trig: CSet; examined: CSet };
+const ranges = (rs: CodeRange[]): CSet => union(rs.map(([a, b]) => [a, b]), []);
+const litUnits = (s: string): CSet => union([...s].map((c) => [c.charCodeAt(0), c.charCodeAt(0)]), []);
+export function tokLook(t: LexTok): TokLook {
+  const pat = (p: TokenPattern, fast: number): TokLook => ({
+    failRead: Math.max(fast, failRead(p)), over: Math.max(fast, overRead(p)), trig: overTrigger(p), examined: examinedUnits(p),
+  });
+  switch (t.kind) {
+    case 'run': return { failRead: 1, over: 1, trig: [], examined: union(ranges(t.first), ranges(t.cont)) };
+    // The ASCII run reads the unit it stops at; a bail goes to the pattern.
+    case 'runBail': { const l = pat(t.pattern, 1); return { ...l, examined: union(l.examined, union(ranges(t.first), ranges(t.cont))) }; }
+    // Unterminated, it reads to the end of the source; a match ends at its closing delimiter.
+    case 'string': return { failRead: Infinity, over: 0, trig: [], examined: ALL };
+    case 'block': return { failRead: Infinity, over: 0, trig: [], examined: ALL };
+    // After its prefix it cannot fail: it ends at its first stop or the end, which it reads.
+    case 'line': return { failRead: t.prefix.length, over: 1, trig: [], examined: union(litUnits(t.prefix), complement(t.stops.map((c) => [c, c]))) };
+    case 'pattern': return pat(t.pattern, 0);
+  }
+}
+
+// A failed attempt that reads more than this many units from the token's start may read past the
+// end + 1 of the token decided after it (which takes at least one unit).
+const FREE_FAIL = 3;
+// A match that reads more than this many units at or after its end may read past end + 1.
+const FREE_OVER = 2;
+
+export const readEndName = (tok: string): string => `lexReadEnd${ident(tok)}`;
+
+/** The relex window's lookahead plan of a grammar's lexer.
+ *  `arms`: each dispatch arm (its ASCII first units; `null` for a non-ASCII first unit) in which
+ *  a candidate whose failed attempt can read past the decided token's end + 1 is tried before
+ *  another candidate: its candidates in order up to the last such one (`tok` null for
+ *  punctuation), that one with the name of its read-end routine `(s, p) -> int` (the exclusive
+ *  end of what its failed attempt at p read). `over`: the tokens whose match can read past their
+ *  end + 1. `reach`: every unit any of those reads can go past. */
+export type LookPlan = {
+  arms: { units: number[] | null; cands: { tok: string | null; readEnd: string | null }[] }[];
+  over: { tok: string; trig: CSet; examined: CSet }[];
+  reach: CSet;
+};
+const lookPlans = new WeakMap<ParserIR, LookPlan>();
+export function lexLookPlan(ir: ParserIR): LookPlan {
+  const known = lookPlans.get(ir);
+  if (known) return known;
+  const plan: LookPlan = { arms: [], over: [], reach: [] };
+  lookPlans.set(ir, plan);
+  // Only the windowed relex keeps tokens before an edit.
+  if (!relexMode(ir).window) return plan;
+  const toks = scannedTokens(ir);
+  const looks = toks.map(tokLook);
+  // The candidate order of every target's dispatch: the scanned tokens, then the punctuation.
+  const firsts = [...toks.map(lexTokFirstBytes), ...ir.puncts.map(punctFirstBytes)];
+  const { arms, fallbackIndices } = buildLexDispatchPlan(firsts);
+  let reachSet: CSet = [];
+  // A failed candidate decides a token only if another one may still match after it: a later
+  // candidate of the arm, or, for a non-ASCII unit, the Unicode identifier fallback.
+  const armOf = (units: number[] | null, idx: number[], after: boolean): void => {
+    const noted = idx.map((i, k) => i < toks.length && looks[i]!.failRead > FREE_FAIL && (k < idx.length - 1 || after));
+    const lastNoted = noted.lastIndexOf(true);
+    if (lastNoted < 0) return;
+    plan.arms.push({
+      units,
+      cands: idx.slice(0, lastNoted + 1).map((i, k) => ({ tok: i < toks.length ? toks[i]!.name : null, readEnd: noted[k] ? readEndName(toks[i]!.name) : null })),
+    });
+    for (let k = 0; k <= lastNoted; k++) if (noted[k]) reachSet = union(reachSet, looks[idx[k]!]!.examined);
+  };
+  for (const a of arms) armOf(a.bytes, a.indices, false);
+  armOf(null, fallbackIndices, !!ir.identToken);
+  toks.forEach((t, i) => {
+    const l = looks[i]!;
+    if (l.over > FREE_OVER && l.trig.length > 0) { plan.over.push({ tok: t.name, trig: l.trig, examined: l.examined }); reachSet = union(reachSet, l.examined); }
+  });
+  plan.reach = reachSet;
+  return plan;
+}
+
 // The scanned tokens: every lexer token except the template token, which the target's template
 // state machine scans.
 export function scannedTokens(ir: Pick<ParserIR, 'tokens' | 'tpl'>): LexTok[] {
@@ -509,6 +646,8 @@ export function lexScanFamily(ir: ParserIR): Family {
       b.fns.push(b.identEsc());
     }
     if (ir.tpl) b.fns.push(b.tplSpan(ir.tpl));
+    const noted = new Set(lexLookPlan(ir).arms.flatMap((a) => a.cands.filter((c) => c.readEnd).map((c) => c.tok!)));
+    for (const t of scannedTokens(ir)) if (noted.has(t.name)) b.fns.push(b.readEnd(t));
     f = { sets: b.sets, fns: b.fns, runs: b.runs, finds: b.finds, stopSets: [...b.stopSets.values()] };
     families.set(ir, f);
   }
