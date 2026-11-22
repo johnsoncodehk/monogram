@@ -2818,13 +2818,13 @@
       "match": "\\b(in)\\b",
       "name": "keyword.control.loop.ts"
     },
+    "expr-scope-keyword-control-switch": {
+      "match": "\\b(default)\\b",
+      "name": "keyword.control.switch.ts"
+    },
     "expr-scope-keyword-control-flow": {
       "match": "\\b(yield)\\b",
       "name": "keyword.control.flow.ts"
-    },
-    "expr-scope-storage-modifier": {
-      "match": "\\b(async)\\b",
-      "name": "storage.modifier.ts"
     },
     "expr-scope-storage-type-namespace-decl": {
       "match": "\\b(module)\\b(?!\\s*(?:\\.|\\?\\.))",
@@ -2977,13 +2977,19 @@
           "include": "#expr-scope-keyword-control-loop"
         },
         {
+          "include": "#scope-keyword-control-export"
+        },
+        {
+          "include": "#expr-scope-keyword-control-switch"
+        },
+        {
           "include": "#expr-scope-keyword-control-flow"
         },
         {
           "include": "#scope-keyword-control-from-from"
         },
         {
-          "include": "#expr-scope-storage-modifier"
+          "include": "#scope-storage-modifier"
         },
         {
           "include": "#scope-keyword-other-extends"
