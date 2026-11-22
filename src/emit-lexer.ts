@@ -424,13 +424,13 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`// Min OLD-stream paren depth over the tokens inside the damage itself (set by the`);
     emit(`// caller before the window lex): the old-side trajectory min starts from here.`);
     emit(`let wndOldMin0 = 0x7fffffff;`);
+  }
+  if (resync) {
     emit(`// A token's place on the paren-depth trajectory: its recorded depth, except a '(' (which`);
     emit(`// records the depth INCLUDING its own entry) stands at the depth before its push. An entry`);
     emit(`// pushed after the divergence point is then never "at or below both minimums", so the fast`);
     emit(`// resync tier compares only entries both lexes had (\`if (q)\` vs \`ifx (q)\` differ in theirs).`);
     emit(`function lxPdBefore(k«: number», t«: number», pd«: number») { return k === K_PUNCT && t === ${tOf('(')} ? pd - 1 : pd; }`);
-  }
-  if (resync) {
     emit(`function buildAltSuffMin(lo«: number») {`);
     emit(`  if (altSuffMinBuf === null || altSuffMinBuf.length < altN + 1) altSuffMinBuf = new Int32Array(altN + 1025);`);
     emit(`  altSuffMin = altSuffMinBuf;`);
