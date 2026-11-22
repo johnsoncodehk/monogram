@@ -71,7 +71,7 @@ function errorNodes(root: any): number {
   return n;
 }
 
-interface Row { grammar: string; corpus: string; inputs: number; bothAccept: number; bothReject: number; tsOnlyReject: number; tsOnlyAccept: number; errorNodes: number }
+interface Row { grammar: string; corpus: string; inputs: number; bothAccept: number; bothReject: number; tsOnlyReject: number; tsOnlyAccept: number; errorNodes: number; splitDiffers: number }
 const rows: Row[] = [];
 const disagreements: string[] = [];
 let loadFailed = false;
@@ -90,13 +90,21 @@ for (const { lang, mod, corpora } of [
   parser.setLanguage(await Language.load(wasm));
   const interp = createParser((await import(mod)).default);
   const accepts = (src: string) => { try { interp.parse(src); return true; } catch { return false; } };
+  // Where both accept: the top-level statements start at the same offsets (a line break ends a
+  // statement where the interpreter ends it, `a\n++b` is two statements in both).
+  const starts = (src: string) => (interp.parse(src) as { children: { offset: number }[] }).children.map(c => c.offset).join(',');
+  const tsStarts = (root: any) => root.namedChildren.filter((c: any) => !c.isExtra).map((c: any) => c.startIndex).join(',');
   for (const [corpus, inputs] of Object.entries(corpora)) {
-    const r: Row = { grammar: lang, corpus, inputs: inputs.length, bothAccept: 0, bothReject: 0, tsOnlyReject: 0, tsOnlyAccept: 0, errorNodes: 0 };
+    const r: Row = { grammar: lang, corpus, inputs: inputs.length, bothAccept: 0, bothReject: 0, tsOnlyReject: 0, tsOnlyAccept: 0, errorNodes: 0, splitDiffers: 0 };
     for (const src of inputs) {
-      const errs = errorNodes(parser.parse(src)!.rootNode);
+      const root = parser.parse(src)!.rootNode;
+      const errs = errorNodes(root);
       r.errorNodes += errs;
       const mono = accepts(src), ts = errs === 0;
-      if (mono && ts) r.bothAccept++;
+      if (mono && ts) {
+        r.bothAccept++;
+        if (corpus === 'line breaks' && starts(src) !== tsStarts(root)) { r.splitDiffers++; disagreements.push(`${lang} [${corpus}] statements start at ${tsStarts(root)} in tree-sitter, ${starts(src)} in the interpreter: ${JSON.stringify(src).slice(0, 120)}`); }
+      }
       else if (!mono && !ts) r.bothReject++;
       else {
         if (mono) r.tsOnlyReject++; else r.tsOnlyAccept++;
@@ -108,9 +116,9 @@ for (const { lang, mod, corpora } of [
 }
 
 const table = [
-  '| grammar | corpus | inputs | both accept | both reject | tree-sitter-only ERROR | tree-sitter-only accept | ERROR/MISSING nodes |',
-  '|---|---|---:|---:|---:|---:|---:|---:|',
-  ...rows.map(r => `| ${r.grammar} | ${r.corpus} | ${r.inputs} | ${r.bothAccept} | ${r.bothReject} | ${r.tsOnlyReject} | ${r.tsOnlyAccept} | ${r.errorNodes} |`),
+  '| grammar | corpus | inputs | both accept | both reject | tree-sitter-only ERROR | tree-sitter-only accept | ERROR/MISSING nodes | split differs |',
+  '|---|---|---:|---:|---:|---:|---:|---:|---:|',
+  ...rows.map(r => `| ${r.grammar} | ${r.corpus} | ${r.inputs} | ${r.bothAccept} | ${r.bothReject} | ${r.tsOnlyReject} | ${r.tsOnlyAccept} | ${r.errorNodes} | ${r.splitDiffers} |`),
 ].join('\n');
 console.log(table);
 if (disagreements.length) console.log('\nDisagreements:\n' + disagreements.map(d => '  ' + d).join('\n'));
