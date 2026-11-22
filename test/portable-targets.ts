@@ -1858,9 +1858,15 @@ for (const c of CASES) {
       const bad: string[] = [];
       sessions.forEach((x, i) => {
         const a = r.edit(JSON.stringify({ init: x.init, batches: [[x.e]] }), false), b = fresh[i]!;
+        // The relexed stream itself (before the Doc parses it) ≡ a fresh lex: its alignment with
+        // the old stream is the oracle's. A Doc that re-scans when its parse fails would hide a
+        // wrong relex from the verdict and the tree, not from this.
+        let want: Align | null = null;
+        try { want = expectAlign(grammar, x.init, [[x.e]]); } catch { /* the edited text does not lex */ }
         const why = a.ok !== b.ok ? `edited ${a.ok ? 'accepts' : 'rejects'}, fresh ${b.ok ? 'accepts' : 'rejects'}`
           : a.ok && a.cst !== b.cst ? 'CSTs differ'
-          : a.align && (a.align.streamEq === false || a.align.treeEq === false) ? `validation streamEq=${a.align.streamEq} treeEq=${a.align.treeEq}` : '';
+          : a.align && (a.align.streamEq === false || a.align.treeEq === false) ? `validation streamEq=${a.align.streamEq} treeEq=${a.align.treeEq}`
+          : want && (!a.align || a.align.oldN !== want.oldN || a.align.newN !== want.newN || a.align.prefix !== want.prefix || a.align.suffix !== want.suffix) ? `relexed stream ≠ a fresh lex (align ${JSON.stringify(a.align)}, oracle ${JSON.stringify(want)})` : '';
         if (why) bad.push(`${why}: ${JSON.stringify(x.init)} edit ${JSON.stringify(x.e)}`);
       });
       console.log(`  ${c.grammar}/${r.label}: ${sessions.length - bad.length}/${sessions.length} one-character edits in and around template holes ≡ fresh`);
