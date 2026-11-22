@@ -70,10 +70,10 @@ const width = (p: TokenPattern): Expr | null => (typeof p === 'string' && p !== 
 const ident = (t: string): string => t.replace(/[^A-Za-z0-9]/g, '_');
 
 export const scannerName = (tok: string): string => `lexScan${ident(tok)}`;
-/** An identifier's escape check, `(s, q, e) -> int` (see `identEsc`). */
+// An identifier's escape check, (s, q, e) -> int (see identEsc).
 export const IDENT_ESC = 'lexIdentEsc';
-/** The target's Unicode identifier class of a code point, `(cp) -> int`: 0 neither, 1
- *  IdentifierPart only, 2 IdentifierStart too (uni-ident.ts). The target prints it. */
+// The target's Unicode identifier class of a code point, (cp) -> int: 0 neither, 1
+// IdentifierPart only, 2 IdentifierStart too (uni-ident.ts). The target prints it.
 export const UNI_CLASS = 'lexUniClass';
 /** The template span scanner (see `tplSpan`). */
 export const TPL_SPAN = 'lexTplSpan';
@@ -376,7 +376,7 @@ class LexScan {
         // A prefix literal is read first; the run's first character follows it at q.
         const q = t.prefix ? 'q' : 'p';
         const pre = t.prefix ? [if_(not(hasAt('p', t.prefix)), [NONE]), let_('q', add('p', litLen(t.prefix)))] : [];
-        return sig(name, `${t.name}: ${t.prefix ? `${t.prefix}, then ` : ''}an ASCII run while no bail character stops it, else the token pattern.`, [
+        return sig(name, t.prefix ? `${t.name}: its prefix literal, then an ASCII run while no bail character stops it, else the token pattern.` : `${t.name}: an ASCII run while no bail character stops it, else the token pattern.`, [
           ...pre,
           if_(ge(q, len('s')), [NONE]),
           let_('c', code(q)),
