@@ -839,13 +839,15 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`      if (${startsWithExpr('source', 'pos', tplInterpClose, 'cc')}) {`);
     emit(`        const depth = templateStack[templateStack.length - 1];`);
     emit(`        if (depth === 0) {`);
-    emit(`          templateStack.pop();`);
+    // A token that opens or continues a hole is recorded INSIDE its frame (the frame is on the
+    // stack at its push); only the tail, which closes it, is recorded outside. A window
+    // re-lex restarts and resyncs at depth-0 tokens only, so it never starts inside a hole.
     emit(`          const startPos = pos;`);
     emit(`          const r = lexTplSpan(source, pos + ${tplInterpClose.length}, false);`);
     emit(`          if (r.endsWithInterp) {`);
     emit(`            tkPush(${kOf('$templateMiddle')}, ${tplCloseT}, startPos, r.end);`);
-    emit(`            templateStack.push(0);`);
     emit(`          } else {`);
+    emit(`            templateStack.pop();`);
     emit(`            tkPush(${kOf('$templateTail')}, ${tplCloseT}, startPos, r.end);`);
     emit(`          }`);
     emit(`          pos = r.end;`);
@@ -861,8 +863,8 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`      const startPos = pos;`);
     emit(`      const r = lexTplSpan(source, pos + ${tplOpen.length}, !tagged);`);
     emit(`      if (r.endsWithInterp) {`);
-    emit(`        tkPush(${kOf('$templateHead')}, ${tplOpenT}, startPos, r.end);`);
     emit(`        templateStack.push(0);`);
+    emit(`        tkPush(${kOf('$templateHead')}, ${tplOpenT}, startPos, r.end);`);
     emit(`      } else {`);
     emit(`        tkPush(${kOf(templateToken.name)}, ${tplOpenT}, startPos, r.end);`);
     emit(`      }`);
