@@ -475,9 +475,19 @@ export type ParserIR = {
 // The target-agnostic parse plan for a grammar, the IR each portable Target (ts/go/rust) renders.
 // The [Await]/[Yield] context is a word the parser holds (see Ctx), not a copy of each rule per
 // context. The `Target` contract itself lives in emit.ts.
-export function portableIR(grammar: CstGrammar): ParserIR {
-  return buildIR(grammar);
+// `facts`: what a target's compiler makes a step cost, where the plan's choice depends on it (each
+// printer states its facts with the measurement behind them). Omitted: every step the analysis
+// proves, the plan the soundness gates check.
+export function portableIR(grammar: CstGrammar, facts: PortableFacts = { calleeFirstGuards: true }): ParserIR {
+  return buildIR(grammar, facts);
 }
+/**
+ * calleeFirstGuards: whether a star / opt / sep body that is one rd rule's call, with no FIRST of
+ * its own, is guarded by the called rule's FIRST (buildIR, ruleGuard). The guard is tested on every
+ * iteration to save the one call that refuses at the loop's exit, so it pays only where a refused
+ * call costs more than that test: a target whose function entry runs before the callee's dispatch.
+ */
+export type PortableFacts = { calleeFirstGuards: boolean };
 
 // ── buildIR: grammar + analysis → the target-agnostic parse plan ──
 
@@ -485,7 +495,7 @@ function isNeverPat(p: TokenPattern): boolean {
   return typeof p !== 'string' && p.type === 'never';
 }
 
-function buildIR(grammar: CstGrammar): ParserIR {
+function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   if (grammar.indent) {
     throw new Error('portable: indent-sensitive grammars are out of scope (use the interpreter path); declare `newline` without `indent` for line-boundary-only mode');
   }
@@ -881,9 +891,10 @@ function buildIR(grammar: CstGrammar): ParserIR {
   // symbols instead (concreteFirst, the one the complement refusal reads): its literals, and every
   // kind it holds as a kind. A token outside that set begins no match of the rule, so the attempt
   // (the rule's call, and the exit's attempt at `}`) is not made. A rule that can match empty has
-  // no such guard (an empty match is not refused by its first token).
+  // no such guard (an empty match is not refused by its first token). A target whose refused rd call
+  // is cheaper than the guard's test on every iteration does not take it (PortableFacts).
   const ruleGuard = (name: string): number | undefined => {
-    if (!rules.some((r) => r.kind === 'rd' && r.name === name) || a.nullableRules.has(name)) return undefined;
+    if (!facts.calleeFirstGuards || !rules.some((r) => r.kind === 'rd' && r.name === name) || a.nullableRules.has(name)) return undefined;
     const f = concrete.first1({ type: 'ref', name });
     const lits = [...f].filter((x) => !x.startsWith(KIND));
     const toks = [...f].filter((x) => x.startsWith(KIND)).map((x) => x.slice(KIND.length));
