@@ -85,7 +85,7 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | object | `{ rule, children, offset: off, end }` | 1 | 28,915 | 0.69 | 809,620 | 17.2% | 28,638 |
 | object | `{ tokenType, offset: off, end }` | 1 | 25,839 | 0.61 | 723,492 | 15.3% | 22,215 |
 | array growth | `toks.push(mk_tok(off, end, pendingNl, kid, lid))` | 1 | 18 | 0.00 | 607,924 | 12.9% | 0 |
-| .slice() → string | `src.slice(pos, e)` | 1 | 16,248 | 0.38 | 300,424 | 6.4% | 0 |
+| .slice() → string | `src.slice(pos, e)` | 2 | 16,248 | 0.38 | 300,424 | 6.4% | 0 |
 | array | `[N, N, N]` | 5 | 546 | 0.01 | 19,656 | 0.4% | 0 |
 | array | `["…","…","…","…","…"]` | 1 | 72 | 0.00 | 3,168 | 0.1% | 0 |
 | .slice() → string | `_src.slice(t.off, u.end)` | 1 | 161 | 0.00 | 2,576 | 0.1% | 0 |
@@ -105,7 +105,7 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | object | `{ rule, children, offset: off, end }` | 1 | 28,915 | 0.69 | 809,620 | 17.2% | 28,638 |
 | object | `{ tokenType, offset: off, end }` | 1 | 25,839 | 0.61 | 723,492 | 15.3% | 22,215 |
 | array growth | `toks.push(mk_tok(off, end, pendingNl, kid, lid))` | 1 | 18 | 0.00 | 607,924 | 12.9% | 0 |
-| .slice() → string | `src.slice(pos, e)` | 1 | 16,248 | 0.38 | 300,424 | 6.4% | 0 |
+| .slice() → string | `src.slice(pos, e)` | 2 | 16,248 | 0.38 | 300,424 | 6.4% | 0 |
 | array | `[N, N, N]` | 5 | 546 | 0.01 | 19,656 | 0.4% | 0 |
 | array | `["…","…","…","…","…"]` | 1 | 72 | 0.00 | 3,168 | 0.1% | 0 |
 | .slice() → string | `_src.slice(t.off, u.end)` | 1 | 161 | 0.00 | 2,576 | 0.1% | 0 |

@@ -260,7 +260,10 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
     const gir = portableIR(g);
     const toks = tsTarget.shared.scannedTokens(gir);
     const f = join(dir, `regex${mod++}.ts`);
-    writeFileSync(f, `${tsTarget.shared.lexScan(gir)}\nexport { ${toks.map((t) => tsTarget.shared.scanner(t.name)).join(', ')} };\n`);
+    // The escape check's two target routines, as stubs that pass every escape: the scanner's end
+    // is the regex's either way (whether an escape is valid is portable-targets' corpus).
+    const stubs = gir.identLike.length ? `function ${tsTarget.shared.uniClass()}(cp: number): number { return 2; }\nfunction ${tsTarget.shared.identEscError()}(s: string, p: number, e: number): number { return e; }\n` : '';
+    writeFileSync(f, `${tsTarget.shared.lexScan(gir)}\n${stubs}export { ${toks.map((t) => tsTarget.shared.scanner(t.name)).join(', ')} };\n`);
     const scan = await import(pathToFileURL(f).href) as Record<string, (s: string, p: number) => number>;
     for (const t of toks) {
       const decl = g.tokens.find((d) => d.name === t.name)!;
