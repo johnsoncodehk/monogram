@@ -70,7 +70,7 @@ Neither subsumes the other. `check` (self-consistency) does **not** replace the 
 
 ## 4. Bench — on demand
 
-`npm run bench:perf`, `bench:html-official`, `bench:issues` (the README bug ledger),
+`npm run bench:perf`, `bench:html-official`, `bench:issues` (the bug ledger in `HIGHLIGHTER-EVIDENCE.md`, its summary in the README),
 `gate:treesitter`, `compat`. Informational — perf, official-comparison detail, repo-compat. Not gates.
 
 ---
