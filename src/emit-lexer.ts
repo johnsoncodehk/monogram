@@ -17,6 +17,7 @@
 // group. test/emit-lexer-verify.ts gates the output against the golden token streams.
 import type { CstGrammar, IndentConfig, MarkupConfig, NewlineConfig, TokenDecl } from './types.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
+import { UNI_ID_CONTINUE, UNI_ID_START } from './uni-ident.ts';
 import {
   tokenBlockPatternFirstCharSet, tokenBlockPatternSource, tokenEscapeValidPatternSource, tokenPatternCharLoop,
   tokenPatternFirstCharSet, tokenPatternHasStartAnchor, tokenPatternSource,
@@ -351,9 +352,9 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`  }`);
     emit(`}`);
   }
-  emit(`const LX_UNI_IDENT = /[$_\\p{ID_Start}][$\\u200c\\u200d\\p{ID_Continue}]*/uy;`);
-  emit(`const LX_UNI_CONT = /[$\\u200c\\u200d\\p{ID_Continue}]+/uy;`);
-  emit(`const LX_UNI_FULL = /^[$_\\p{ID_Start}][$\\u200c\\u200d\\p{ID_Continue}]*/u;`);
+  emit(`const LX_UNI_IDENT = /${UNI_ID_START}${UNI_ID_CONTINUE}*/uy;`);
+  emit(`const LX_UNI_CONT = /${UNI_ID_CONTINUE}+/uy;`);
+  emit(`const LX_UNI_FULL = /^${UNI_ID_START}${UNI_ID_CONTINUE}*/u;`);
   emit(`const LX_DECODE_ESC = /\\\\u\\{([0-9a-fA-F]+)\\}|\\\\u([0-9a-fA-F]{4})/g;`);
   if (tplEscapeValid) emit(`const LX_TPL_ESC = new RegExp(${J(tplEscapeValid)}, 'y');`);
   // Regex-vs-division context tables (over interned k / t ints).

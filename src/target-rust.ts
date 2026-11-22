@@ -12,10 +12,11 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
+import { UNI_BLOCK_BITS, UNI_LEAF_BITS, uniIdentPlan } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 import type {
   ShapeSpec, ShapeIR, ShapeIRRule, RuleShape, NodeShape, ChoiceShape, FieldDecl,
@@ -270,7 +271,7 @@ function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: bo
       : `toks.push(mk_tok(pos, e, pending_nl, ${kid}, ${lid})); pending_nl = false; `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
-  const ext = identLike.has(name) ? 'let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(src, e) } else { e }; ' : '';
+  const ext = identLike.has(name) ? 'let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(b, e) } else { e }; ' : '';
   const scan = `{ let e = ${shared.scanner(name)}(src, pos as isize); if e >= 0 { let e = e as usize; ${ext}${push}pos = e; continue; } }`;
   return rxTok !== undefined && name === rxTok ? `        if !st.prev_is_value() ${scan}` : `        ${scan}`;
 }
@@ -365,20 +366,47 @@ function newlinePartsRs(nl: NewlineCfg, ids: LexIdPlan): { consts: string; field
 `;
   return {
     consts: `const _KID_NLTOK: u16 = ${kidOf(ids, nl.token)};
-const _FLOW_OPEN: &[&str] = ${`&[${nl.flowOpen.map(J).join(', ')}]`};
-const _FLOW_CLOSE: &[&str] = ${`&[${nl.flowClose.map(J).join(', ')}]`};
+static _FLOW_D: [i8; ${ids.lids.length}] = [${lidDeltaTable(ids, nl.flowOpen, nl.flowClose).join(', ')}];
 `,
     fields: 'flow_depth: i64',
     init: 'flow_depth: 0',
     ws: ws('emit'),
     wsFrom: ws('push_tok'),
-    hooks: `        if kid == 0 && _in(_FLOW_OPEN, _LIDS[lid as usize]) { self.flow_depth += 1; }
-        else if kid == 0 && _in(_FLOW_CLOSE, _LIDS[lid as usize]) { self.flow_depth = (self.flow_depth - 1).max(0); }
+    hooks: `        if kid == 0 { let d = ${rsFlag('_FLOW_D', 'lid')}; if d != 0 { self.flow_depth = (self.flow_depth + d as i64).max(0); } }
 `,
-    hooksFrom: `        if kid == 0 && _in(_FLOW_OPEN, _LIDS[lid as usize]) { flow_depth += 1; }
-        else if kid == 0 && _in(_FLOW_CLOSE, _LIDS[lid as usize]) { flow_depth = (flow_depth - 1).max(0); }
+    hooksFrom: `        if kid == 0 { let d = ${rsFlag('_FLOW_D', 'lid')}; if d != 0 { flow_depth = (flow_depth + d as i64).max(0); } }
 `,
   };
+}
+
+/** Rust's integer type for a table whose entries are below `max`. */
+const rsUint = (max: number) => (max <= 0x100 ? 'u8' : max <= 0x10000 ? 'u16' : 'u32');
+/** uni-ident.ts's identifier classes, its lookup, and the code point at a char boundary.
+ *  Rust's std has `is_alphanumeric` but no ID_Start / ID_Continue query, hence the table. */
+function rsUniIdentTables(): string {
+  const p = uniIdentPlan();
+  const nums = (xs: readonly (number | bigint)[], hex: boolean) => xs.map((x) => (hex ? `0x${x.toString(16)}` : String(x))).join(', ');
+  return `static _UNI_TOP: [${rsUint(p.blocks.length / (1 << UNI_BLOCK_BITS))}; ${p.top.length}] = [${nums(p.top, false)}];
+static _UNI_BLK: [${rsUint(p.start.length)}; ${p.blocks.length}] = [${nums(p.blocks, false)}];
+static _UNI_START: [u64; ${p.start.length}] = [${nums(p.start, true)}];
+static _UNI_CONT: [u64; ${p.cont.length}] = [${nums(p.cont, true)}];
+// Whether cp is in the class whose leaves are given (uni-ident.ts's three levels).
+#[inline(always)] fn _uni_in(leaves: &[u64; ${p.start.length}], cp: u32) -> bool {
+    let Some(&t) = _UNI_TOP.get((cp >> ${UNI_LEAF_BITS + UNI_BLOCK_BITS}) as usize) else { return false; };
+    // In range by construction: a block id < blocks, a leaf id < leaves.
+    let leaf = unsafe { *_UNI_BLK.get_unchecked((t as usize) << ${UNI_BLOCK_BITS} | ((cp >> ${UNI_LEAF_BITS}) & ${(1 << UNI_BLOCK_BITS) - 1}) as usize) } as usize;
+    (unsafe { *leaves.get_unchecked(leaf) } >> (cp & ${(1 << UNI_LEAF_BITS) - 1})) & 1 != 0
+}
+// The code point starting at byte e of valid UTF-8, and its width; a byte inside a
+// character (e is no boundary) is no code point (0x110000, in neither class).
+#[inline(always)] fn _lx_cp(b: &[u8], e: usize) -> (u32, usize) {
+    let c = b[e] as u32;
+    if c < 0xC0 { return (if c < 0x80 { c } else { 0x110000 }, 1); }
+    if c < 0xE0 { return ((c & 0x1F) << 6 | (b[e + 1] & 0x3F) as u32, 2); }
+    if c < 0xF0 { return ((c & 0x0F) << 12 | ((b[e + 1] & 0x3F) as u32) << 6 | (b[e + 2] & 0x3F) as u32, 3); }
+    ((c & 0x07) << 18 | ((b[e + 1] & 0x3F) as u32) << 12 | ((b[e + 2] & 0x3F) as u32) << 6 | (b[e + 3] & 0x3F) as u32, 4)
+}
+`;
 }
 
 /** Exact-size lid/kid flag tables as `static` (single .rodata copy; avoid const duplication). */
@@ -412,6 +440,13 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   // Byte-class dispatch folds whitespace/newline/template-open into the match's jump table so
   // the hot loop does one load + one match, instead of a chain of pre-checks per byte. Newline-mode
   // grammars keep the flow-aware whitespace arms (flow_depth) and do NOT use the folded arms.
+  const identKid0 = ir.identToken ? kidOf(ids, ir.identToken) : 0;
+  const identTok0 = ir.tokens.find((t) => t.name === ir.identToken);
+  const identLid0 = identTok0 ? lidCall(shared.tokenLiterals(ir, identTok0, ids.lids.slice(1)), '&b[pos..e]') : 'lid_of(&b[pos..e])';
+  const nonAsciiColdCall = `        let (e, k) = _lex_non_ascii(src, pos);
+        if k == 2 { ${stateful ? `st.emit(pos, e, ${identKid0}, ${identLid0});` : `toks.push(mk_tok(pos, e, pending_nl, ${identKid0}, ${identLid0})); pending_nl = false;`} } else if k == 1 { ${nlVar} = true; }
+        pos = e; continue;
+`;
   const nonAsciiWsCheck = nlRs ? '' : `        if c >= 0xC2 { if let Some((ch, w)) = _char_at(src, pos) { if _is_js_ws(ch) { if ch == '\\u{2028}' || ch == '\\u{2029}' { ${nlVar} = true; } pos += w; continue; } } }
 `;
   // A whitespace run is consumed in one dispatch round: per byte only "is it still whitespace"
@@ -450,7 +485,10 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const punctLine = (p: string) =>
     `        if ${startByteEq('pos', p)} { ${stateful ? `st.emit(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${tlen(p)}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${tlen(p)}; continue; }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
-  const cascade = renderLexByteDispatchRust(lexCodes, lexFirsts, '        ', `${wsNlArms}${tplOpenArm}`, nonAsciiWsCheck,
+  // Where no candidate can begin at a non-ASCII byte, the byte is whitespace, an identifier or an
+  // error: one cold call decides, so the dispatch loop holds no Unicode code (register layout).
+  const nonAsciiCold = !nlRs && !!ir.identToken && buildLexDispatchPlan(lexFirsts).fallbackIndices.length === 0;
+  const cascade = renderLexByteDispatchRust(lexCodes, lexFirsts, '        ', `${wsNlArms}${tplOpenArm}`, nonAsciiCold ? nonAsciiColdCall : nonAsciiWsCheck,
     closeByte !== null ? { byte: closeByte, code: tplCloseTest } : null);
   // Struct fields / emit hooks / init are assembled per-feature so a grammar can have regex,
   // templates, or both share one LexState. Rx bookkeeping is fully integerized (lid/kid bit tables).
@@ -475,8 +513,8 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
   const uniIdentEmit = stateful
     ? `st.emit(pos, e, ${identKid}, ${identLid});`
     : `toks.push(mk_tok(pos, e, pending_nl, ${identKid}, ${identLid})); pending_nl = false;`;
-  const uniIdentOrPanic = identName
-    ? `        if c >= 0x80 { if let Some(e) = _scan_uni_ident(src, pos) { ${uniIdentEmit} pos = e; continue; } }
+  const uniIdentOrPanic = identName && !nonAsciiCold
+    ? `        if c >= 0x80 { if let Some(e) = _scan_uni_ident(b, pos) { ${uniIdentEmit} pos = e; continue; } }
         panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`
     : `        panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`;
   // The source is a &str, so the character at a position is std's own decode of it: one boundary
@@ -489,42 +527,31 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
     matches!(ch, '\\u{00A0}' | '\\u{1680}' | '\\u{2028}' | '\\u{2029}' | '\\u{202F}' | '\\u{205F}' | '\\u{3000}' | '\\u{FEFF}')
         || { let u = ch as u32; (0x2000..=0x200A).contains(&u) }
 }
-// ID_Start ≈ Alphabetic (L + Nl + Other_Alphabetic); ID_Continue adds numerics + ZWNJ/ZWJ.
-// std has no general-category queries, so this is the closest dependency-free approximation
-// of gen-tm.ts's widened \\p{L}\\p{Nl} / +\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc} classes (combining
-// marks and connector punctuation outside Other_Alphabetic are not covered).
-#[inline(always)] fn _is_uni_id_start(ch: char) -> bool {
-    ch == '$' || ch == '_' || ch.is_alphabetic()
-}
-#[inline(always)] fn _is_uni_id_continue(ch: char) -> bool {
-    ch == '$' || ch == '_' || ch == '\\u{200C}' || ch == '\\u{200D}' || ch.is_alphanumeric()
-}
-fn _scan_uni_ident(s: &str, pos: usize) -> Option<usize> {
-    let (ch, w) = _char_at(s, pos)?;
-    if !_is_uni_id_start(ch) { return None; }
-    let mut e = pos + w;
-    while e < s.len() {
-        let Some((c2, w2)) = _char_at(s, e) else { break; };
-        if !_is_uni_id_continue(c2) { break; }
-        e += w2;
-    }
-    Some(e)
+${identName || ir.identLike.length ? `${rsUniIdentTables()}// Both out of line: inlined into the dispatch loop they cost every ASCII token (register layout).
+#[inline(never)] fn _scan_uni_ident(b: &[u8], pos: usize) -> Option<usize> {
+    let (cp, w) = _lx_cp(b, pos);
+    if !_uni_in(&_UNI_START, cp) { return None; }
+    Some(_lx_ext(b, pos + w))
 }
 // Extend an identifier token that the ASCII pattern cut short at a non-ASCII
 // ID_Continue char (caf|é → café), mirroring emit-lexer's uniIdentContReY extension.
-fn _lx_ext(s: &str, e: usize) -> usize {
-    if e >= s.len() || s.as_bytes()[e] < 0x80 { return e; }
-    let mut ee = e;
-    while ee < s.len() {
-        let Some((c2, w2)) = _char_at(s, ee) else { break; };
-        if !_is_uni_id_continue(c2) { break; }
-        ee += w2;
-    }
-    ee
+// A non-ASCII byte no candidate begins with: (end, 0) whitespace, (end, 1) a line-terminating
+// whitespace, (end, 2) an identifier; anything else is the unexpected-character error.
+#[cold] #[inline(never)] fn _lex_non_ascii(src: &str, pos: usize) -> (usize, u8) {
+    if let Some((ch, w)) = _char_at(src, pos) { if _is_js_ws(ch) { return (pos + w, (ch == '\\u{2028}' || ch == '\\u{2029}') as u8); } }
+    if let Some(e) = _scan_uni_ident(src.as_bytes(), pos) { return (e, 2); }
+    panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(src.as_bytes()[pos] as char));
 }
-`;
-  const needIn = !!(nlRs); // newline flow still uses string _in
-  const rxConsts = `${lexUtf8Helpers}${rxBitTables}${tplLidConsts}${needIn ? `fn _in(set: &[&str], x: &str) -> bool { set.iter().any(|s| *s == x) }\n` : ''}${nlRs ? nlRs.consts : ''}`;
+#[inline(never)] fn _lx_ext(b: &[u8], mut e: usize) -> usize {
+    while e < b.len() {
+        let (cp, w) = _lx_cp(b, e);
+        if !_uni_in(&_UNI_CONT, cp) { break; }
+        e += w;
+    }
+    e
+}
+` : ''}`;
+  const rxConsts = `${lexUtf8Helpers}${rxBitTables}${tplLidConsts}${nlRs ? nlRs.consts : ''}`;
   const pavHot = rx ? rsLidAny(ids, rx.postfixAfterValue, 'lid') : 'false';
   // The span itself is the shared family's scanner; this reads which delimiter ended it.
   const tplFn = tpl ? `fn _scan_tpl_span(s: &str, p: usize, strict: bool) -> (bool, usize) {
