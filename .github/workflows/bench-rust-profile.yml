@@ -35,9 +35,9 @@ jobs:
       - run: test/bench-rust-profile/run.sh
         env:
           PROFILE_WORK: ${{ runner.temp }}/prof-work
-          # Before / after of perf/context-word (#127): A = origin/master c79c88c, M = 127aa22.
+          # Experiment for #127, branch-free reserved-word test: A = origin/master c79c88c, M = 4f4539e (perf/context-word-exp).
           PROFILE_A: c79c88ce9b5de63336128d8aab3d625c1dfa6615
-          PROFILE_M: 127aa22449fe8aec05efb546808b8f9fcbec0150
+          PROFILE_M: 4f4539ecc4cf1d5e0abbde2becba2f14c7c5f469
 
       - uses: actions/upload-artifact@v4
         if: always()
