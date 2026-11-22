@@ -17,6 +17,7 @@
 // group. test/emit-lexer-verify.ts gates the output against the golden token streams.
 import type { CstGrammar, ElementRegion, IndentConfig, MarkupConfig, NewlineConfig, TokenDecl } from './types.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
+import { tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { UNI_ID_CONTINUE, UNI_ID_START } from './uni-ident.ts';
 import {
   tokenBlockPatternFirstCharSet, tokenBlockPatternSource, tokenEscapeValidPatternSource, tokenPatternCharLoop,
@@ -46,6 +47,10 @@ export interface LexSpec {
   composed?: string[];
   markup?: MarkupConfig | null;
   elements?: ElementRegion | null;
+  // How code enters an element region (derived: grammar-analysis.ts tagOpenOnlyOpensTags):
+  // 'always' = every `tagOpen` in code opens an element; ABSENT = only one where an operand
+  // may start (`!prevIsValue()` and the `typeParameters` vetoes).
+  elementEntry?: 'always';
   indent?: IndentConfig | null;
   newline?: NewlineConfig | null;
 }
@@ -54,7 +59,8 @@ export function lexSpecOf(grammar: CstGrammar): LexSpec {
   const lits = new Set<string>();
   for (const rule of grammar.rules) for (const l of collectLiterals(rule.body)) lits.add(l);
   for (const level of grammar.precs) for (const op of level.operators) lits.add(op.value);
-  return { tokens: grammar.tokens, literals: [...lits], composed: gtComposites(grammar), markup: grammar.markup, ...(grammar.elements ? { elements: grammar.elements } : {}), indent: grammar.indent, newline: grammar.newline };
+  return { tokens: grammar.tokens, literals: [...lits], composed: gtComposites(grammar), markup: grammar.markup,
+    ...(grammar.elements ? { elements: grammar.elements, ...(tagOpenOnlyOpensTags(grammar, grammar.elements) ? { elementEntry: 'always' as const } : {}) } : {}), indent: grammar.indent, newline: grammar.newline };
 }
 
 export interface LexerSymtab {
@@ -201,6 +207,9 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   // a lexer that speculating on a type-parameter signature: inside it, an error is the verdict,
   // never a recovered token (\`specTok\` below)
   const speculating = !!el?.typeParameters?.signature;
+  // every tagOpen in code opens an element (the grammar uses it for nothing else)
+  const enterAlways = !!el && spec.elementEntry === 'always';
+  if (enterAlways && el!.typeParameters) throw new Error(`elements.typeParameters: this grammar uses '${el!.tagOpen}' only to open tags, so no '${el!.tagOpen}' can begin a type-parameter list`);
   const recov = speculating ? '(recovering && specTok < 0)' : 'recovering';
   const lineSensitive = !!indent || !!newline;
   const stateful = !!markup || lineSensitive;
@@ -249,7 +258,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
      markup?.unquotedValueToken].filter(Boolean) as string[],
   );
   // Region tokens: lexed only inside their element region, never by the ordinary scan.
-  const elTokenNames = new Set<string>(el ? [el.text, el.closeTag, el.selfClose, ...el.tagTokens ?? []] : []);
+  const elTokenNames = new Set<string>(el ? [el.text, el.closeTag, el.selfClose, ...el.tagTokens ?? []].filter((x): x is string => !!x) : []);
   const lineTokenNames = new Set<string>(
     indent ? [indent.indentToken, indent.dedentToken, indent.newlineToken].filter(Boolean)
            : newline ? [newline.token] : [],
@@ -405,10 +414,12 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   }
   if (el) {
     const reEsc = (x: string) => x.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
-    const textDecl = spec.tokens.find(t => t.name === el.text);
-    if (!textDecl) throw new Error(`elements.text: no token named '${el.text}'`);
-    // The children text run is the text token's own pattern (a run of a character class).
-    emit(`const LX_EL_TEXT = new RegExp(${J(`(?:${tokenPatternSource(textDecl)})`)}, 'y');`);
+    if (el.text !== undefined) {
+      const textDecl = spec.tokens.find(t => t.name === el.text);
+      if (!textDecl) throw new Error(`elements.text: no token named '${el.text}'`);
+      // The children text run is the text token's own pattern (a run of a character class).
+      emit(`const LX_EL_TEXT = new RegExp(${J(`(?:${tokenPatternSource(textDecl)})`)}, 'y');`);
+    }
     (el.tagTokens ?? []).forEach((name, i) => {
       const d = spec.tokens.find(t => t.name === name);
       if (!d) throw new Error(`elements.tagTokens: no token named '${name}'`);
@@ -632,7 +643,9 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       emit(`    }`);
     }
   } else {
-    emit(`    tkDp[tokN] = templateStack.length;`);
+    // the frame depth saturates: the record is a byte and only a zero is read (restart / resync
+    // points), so a wrap at 256 nested holes would make a token inside them an anchor
+    emit(`    tkDp[tokN] = templateStack.length > 255 ? 255 : templateStack.length;`);
   }
   emit(`    tkPd[tokN] = parenHeadStack.length;`);
   emit(`    pendingNl = false;`);
@@ -757,7 +770,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   emit(`    if (t === ${tRParen} && lastCloseWasParenHead) return false;`);
   emit(`    return LX_DIVK[k] !== 0 || LX_DIVT[t] !== 0;`);
   emit(`  }`);
-  if (el) emitElementHelpers(emit, el, { kOf, puT, startsWithExpr, J });
+  if (el) emitElementHelpers(emit, el, enterAlways, { kOf, puT, startsWithExpr, J });
   if (markup) {
     // Tag-mode tracking after a token the scan emitted: the closing `tagClose` enters raw text
     // (a raw-text element) or text; the tag name decides raw-text entry and void retagging.
@@ -1186,9 +1199,10 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   };
 
   if (el) {
-    // an element entered from code: a tagOpen where an operand may start (the regex-literal
-    // position), outside a tag, unless it begins a type-parameter list
-    emit(`    if (${startsWithExpr('source', 'pos', el.tagOpen, 'cc')} && (templateStack.length === 0 || (templateStack[templateStack.length - 1] & 3) !== 2)${speculating ? ' && specTok < 0' : ''} && !prevIsValue() && lxOpensElement(pos)) {`);
+    // an element entered from code, outside a tag: every tagOpen (the grammar uses it only to
+    // open tags), or else one where an operand may start (the regex-literal position) unless it
+    // begins a type-parameter list
+    emit(`    if (${startsWithExpr('source', 'pos', el.tagOpen, 'cc')} && (templateStack.length === 0 || (templateStack[templateStack.length - 1] & 3) !== 2)${speculating ? ' && specTok < 0' : ''}${enterAlways ? '' : ' && !prevIsValue() && lxOpensElement(pos)'}) {`);
     emit(`      templateStack.push(6);`);
     emit(`      tkPush(K_PUNCT, ${puT(el.tagOpen)}, pos, pos + ${el.tagOpen.length});`);
     emit(`      pos += ${el.tagOpen.length};`);
@@ -1668,22 +1682,24 @@ type ElementCtx = {
 
 // Element-region helpers inside lexCore: whether a tagOpen at an operand position opens an
 // element (the type-parameter vetoes), the rewind of an undecided signature, and a tag's end.
-function emitElementHelpers(emit: (s?: string) => void, el: ElementRegion, c: ElementCtx) {
+function emitElementHelpers(emit: (s?: string) => void, el: ElementRegion, enterAlways: boolean, c: ElementCtx) {
   const L = el.tagOpen.length;
   const tp = el.typeParameters;
-  emit(`  function lxOpensElement(p«: number») {`);
-  if (tp?.head) emit(`    LX_TP_HEAD.lastIndex = p + ${L}; if (LX_TP_HEAD.test(source)) { lxLookEnd = LX_TP_HEAD.lastIndex; return false; }`);
-  if (tp?.signature) {
-    emit(`    LX_TP_SIG.lastIndex = p + ${L};`);
-    emit(`    if (LX_TP_SIG.test(source)) {`);
-    emit(`      specTok = tokN; specVerdict = 0; specClosedAt = -1; specParenBase = parenHeadStack.length;`);
-    emit(`      specDocLex = docLex.length; specPops = lexEmptyPops.length;`);
-    emit(`      specStack = templateStack.slice(); specParens = parenHeadStack.slice();`);
-    emit(`      return false;`);
-    emit(`    }`);
+  if (!enterAlways) {
+    emit(`  function lxOpensElement(p«: number») {`);
+    if (tp?.head) emit(`    LX_TP_HEAD.lastIndex = p + ${L}; if (LX_TP_HEAD.test(source)) { lxLookEnd = LX_TP_HEAD.lastIndex; return false; }`);
+    if (tp?.signature) {
+      emit(`    LX_TP_SIG.lastIndex = p + ${L};`);
+      emit(`    if (LX_TP_SIG.test(source)) {`);
+      emit(`      specTok = tokN; specVerdict = 0; specClosedAt = -1; specParenBase = parenHeadStack.length;`);
+      emit(`      specDocLex = docLex.length; specPops = lexEmptyPops.length;`);
+      emit(`      specStack = templateStack.slice(); specParens = parenHeadStack.slice();`);
+      emit(`      return false;`);
+      emit(`    }`);
+    }
+    emit(`    return true;`);
+    emit(`  }`);
   }
-  emit(`    return true;`);
-  emit(`  }`);
   if (tp?.signature) {
     // The head `tagOpen Name tagClose` was an open tag: keep its three tokens, drop what the
     // group was lexed into, restore the stacks and lex the children.
@@ -1738,14 +1754,17 @@ function emitElementFrame(emit: (s?: string) => void, el: ElementRegion, c: Elem
   emit(`          pos += ${LH};`);
   emit(`          continue;`);
   emit(`        }`);
-  emit(`        LX_EL_TEXT.lastIndex = pos;`);
-  emit(`        const tm = LX_EL_TEXT.exec(source);`);
-  emit(`        if (tm !== null && tm[0].length > 0) {`);
-  emit(`          const _e = pos + tm[0].length;`);
-  emit(`          tkPush(${c.kOf(el.text)}, 0, pos, _e);`);
-  emit(`          pos = _e;`);
-  emit(`          continue;`);
-  emit(`        }`);
+  if (el.text !== undefined) {
+    emit(`        LX_EL_TEXT.lastIndex = pos;`);
+    emit(`        const tm = LX_EL_TEXT.exec(source);`);
+    emit(`        if (tm !== null && tm[0].length > 0) {`);
+    emit(`          const _e = pos + tm[0].length;`);
+    emit(`          tkPush(${c.kOf(el.text)}, 0, pos, _e);`);
+    emit(`          pos = _e;`);
+    emit(`          continue;`);
+    emit(`        }`);
+  }
+  // without a text token the children are code: anything else falls through to the ordinary scan
   emit(`      } else {`);
   // a tag's own tokens (outside type arguments): tried before the ordinary scan
   (el.tagTokens ?? []).forEach((name, i) => {

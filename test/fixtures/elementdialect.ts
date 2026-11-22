@@ -7,13 +7,17 @@
 //   • a dynamic tag (`<{expr}>…</{expr}>`) and shorthand attributes (`<li {key}>`);
 //   • custom-element tag names with dashes (`<my-card>`) and namespaced attribute names
 //     (`on:click`); no upper/lower-case convention: every tag is a tag;
-//   • a raw-text element (`<style>…</style>`) whose body is CSS. A token-stream grammar has
-//     no lexer region today, so the body is ONE token here (`StyleBlock`); the declared-region
-//     mechanism (editor queue item 6) replaces this token with a region carrying an embed.
+//   • an ELEMENT REGION (`elements`, docs/REGIONS.md) with CODE children (no text token): an
+//     element's children are lexed as code, `</` and `/>` are tokens only inside an element,
+//     and since `<` begins nothing but element arms here, every `<` in code opens an element
+//     (the derived entry, grammar-analysis.ts tagOpenOnlyOpensTags);
+//   • a raw-text element (`<style>…</style>`) whose body is CSS: not expressible until the
+//     region's raw-text frame exists (docs/REGIONS.md, the build order), so no rule has it yet
+//     and the tm-dialect source's `<style>` line is an expected-fail parse row.
 // Program shape: `component Name(params) { nodes }`, optionally preceded by annotations.
 import {
   token, rule, defineGrammar, left, right, prefix, op, alt, seq, oneOf, range, star, sep, opt, many,
-  altPattern, noneOf, anyChar, notFollowedBy,
+  altPattern, noneOf, anyChar,
 } from '../../src/api.ts';
 
 const idStart = oneOf(range('a', 'z'), range('A', 'Z'), '_', '$');
@@ -28,7 +32,6 @@ const LineComment = token(seq('//', star(noneOf('\n'))), { skip: true, scope: 'c
 const Annotation = token(seq('@', idStart, star(idCont)), { scope: 'entity.name.function.decorator' });
 const CloseOpen = token(seq('<', '/'));
 const SelfClose = token(seq('/', '>'));
-const StyleBlock = token(seq('<style>', star(seq(notFollowedBy('</style>'), anyChar()), { greedy: false }), '</style>'), { scope: 'meta.embedded.block.css' });
 
 const Expr = rule(($) => [
   Number_,
@@ -48,7 +51,6 @@ const Attr = rule(() => [[AttrName, opt('=', alt(Str, Container))], Container]);
 const Node = rule(() => [Element, Directive, Container, Str]);
 const Region = rule(() => [['{', many(Node), '}']]);
 const Element = rule(() => [
-  StyleBlock,
   ['<', TagName, many(Attr), SelfClose],
   ['<', TagName, many(Attr), '>', many(Node), CloseOpen, TagName, '>'],
 ]);
@@ -62,7 +64,8 @@ const Program = rule(() => [many(Component)]);
 export default defineGrammar({
   name: 'elementdialect',
   scopeName: 'source.elementdialect',
-  tokens: { Ident, Number: Number_, Str, LineComment, Annotation, CloseOpen, SelfClose, StyleBlock },
+  tokens: { Ident, Number: Number_, Str, LineComment, Annotation, CloseOpen, SelfClose },
+  elements: { tagOpen: '<', tagClose: '>', closeMarker: '/', closeTag: 'CloseOpen', selfClose: 'SelfClose', hole: { open: '{', close: '}' } },
   prec: [left('==', '!='), left('+', '-'), right(prefix('!'))],
   scopes: {
     'keyword.control.conditional': ['@if', '@else'],
