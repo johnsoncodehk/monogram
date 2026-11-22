@@ -871,8 +871,8 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean): StepLowering {
     // (`star_in` / `opt_in` / `sep_by_in`, `#[inline(never)]`, generic over the body: one small
     // function per site), so the function holding the step does not grow by the guarded attempt.
     star: (body, g) => (g === null ? `${recv}.star${R}(|p| ${body})` : `${recv}.star_in${R}(${g}, |p| ${body})`),
-    opt: (body, g) => (g === null ? `${recv}.opt${R}(|p| ${body})` : `${recv}.opt_in${R}(${g}, |p| ${body})`),
-    sep: (elem, delim, g) => (g === null ? `${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})` : `${recv}.sep_by_in${R}(${g}, |p| ${elem}, ${sepDelimLid(ids, delim)})`),
+    opt: (body, g) => (g === null ? `${recv}.opt${R}(|p| ${body})` : `(!${recv}.ahead(${g}, true) || ${recv}.opt_out${R}(|p| ${body}))`),
+    sep: (elem, delim, g) => (g === null ? `${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})` : `(!${recv}.ahead(${g}, true) || ${recv}.sep_by_out${R}(|p| ${elem}, ${sepDelimLid(ids, delim)}))`),
     altlit: (values) => `${recv}.alt_lit${R}(&[${values.map((v) => lidOf(ids, v)).join(', ')}])`,
     look: (id, is) => `${is ? '' : '!'}${recv}.look_${id}()`,
     ahead: (set, is) => `${recv}.ahead(${set}, ${is})`,
@@ -2550,6 +2550,43 @@ impl<'a, B: Builder> Parser<'a, B> {
             if !self.match_lit(delim) { self.reset(m); break; }
             let m2 = self.mark();
             if !elem(self) { self.reset(m2); break; }
+        }
+        true
+    }
+    // The attempt of a guarded opt / sep whose guard the caller tested: out of line, per site.
+    #[inline(never)]
+    #[allow(dead_code)]
+    fn opt_out<F: Fn(&mut Self) -> bool>(&mut self, body: F) -> bool {
+        let m = self.mark(); if !body(self) { self.reset(m); } true
+    }
+    #[inline(never)]
+    #[allow(dead_code)]
+    fn sep_by_out<F: Fn(&mut Self) -> bool>(&mut self, elem: F, delim: u16) -> bool {
+        let m0 = self.mark();
+        if !elem(self) { self.reset(m0); return true; }
+        loop {
+            let m = self.mark();
+            if !self.match_lit(delim) { self.reset(m); break; }
+            let m2 = self.mark();
+            if !elem(self) { self.reset(m2); break; }
+        }
+        true
+    }
+    #[inline(never)]
+    #[allow(dead_code)]
+    fn opt_out_r<F: Fn(&mut Self) -> bool>(&mut self, body: F) -> bool {
+        let sp = self.pos; if !body(self) { self.back(sp); } true
+    }
+    #[inline(never)]
+    #[allow(dead_code)]
+    fn sep_by_out_r<F: Fn(&mut Self) -> bool>(&mut self, elem: F, delim: u16) -> bool {
+        let sp0 = self.pos;
+        if !elem(self) { self.back(sp0); return true; }
+        loop {
+            let sp = self.pos;
+            if !self.match_lit_r(delim) { self.back(sp); break; }
+            let sp2 = self.pos;
+            if !elem(self) { self.back(sp2); break; }
         }
         true
     }
