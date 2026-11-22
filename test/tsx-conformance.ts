@@ -95,6 +95,12 @@ const validTsx: string[] = [
   `let t: new <T>() => T;`,
   `const g = <T extends>(x)</T>;`,
   `const h = <T,>(x: T) => <p>{x}'s</p>;`,
+  // an attribute string is the tag's own token: no escapes, may span lines (tsc's scanJsxAttributeValue)
+  `let a = <a b="\\" c="d" />;`,
+  `let a = <a b='\\' c='it"s' d="it's" />;`,
+  `let a = <a b="x\ny" />;`,
+  `let a = <List<string> b="\\" />;`,
+  `let a = <a b={"\\\"" + 'q'} />;`,
 ];
 
 // ── Corpus 2: TS-without-JSX still parses under the .tsx grammar ──
@@ -120,8 +126,6 @@ const unsupported: [string, string][] = [
   ['needs parser context: call signature without a return type', `interface I { <T>(x: T); }`],
   // the type-parameter head pattern does not skip comments
   ['needs parser context: comment inside a type-parameter head', `const f = <T /* c */,>(x: T) => x;`],
-  // a JSX attribute string has no escapes; the tag lexes the base's string token
-  ['needs a tag-only attribute-string token in the region: backslash at the end of a JSX attribute string', `let a = <a b="\\" c="d" />;`],
   // an element is entered where a regex may start: after a value ended by ASI it is a comparison
   // (the same miss as `import a from "b"\n/re/.test(s)`)
   ['needs parser context (the prevIsValue class): an element after a statement ended by ASI on a value', `import a from "b"\n<h>it's</h>;`],
@@ -133,6 +137,7 @@ const invalidTsx: string[] = [
   `const b = <p>a } b</p>;`,
   `const c = <a>x;`,
   `x = a </ b;`,
+  `let a = <a b="x />;`,
   `const d = <a>x</a>\n/re/.test(s);`,
 ];
 

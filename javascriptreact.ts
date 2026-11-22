@@ -25,7 +25,7 @@
 //   2. Drop the `<T>expr` prefix cast from `Expr` (forbidden in .tsx/.jsx — the leading
 //      `<` is JSX; `as`/`satisfies` casts are unaffected). It is the only `Expr`
 //      alternative that begins with a literal `<`, so it is removed by shape.
-//   3. Add the JSX rules, their three region tokens (`/>`, `</`, the children text) and
+//   3. Add the JSX rules, their four region tokens (`/>`, `</`, the children text, the attribute string) and
 //      the ELEMENT REGION that lexes them (`elements`, see ELEMENTS): an element is
 //      entered where an operand may start, its children are text, and `</` / `/>` are
 //      tokens only inside it. Outside elements the base's lexing is unchanged.
@@ -45,6 +45,9 @@ import type { CstGrammar, RuleDecl, TokenDecl, RuleExpr, ElementRegion } from '.
 const JSXSelfClose = token(seq('/', '>'));
 const JSXClose = token(seq('<', '/'));
 const JSXText = token(plus(noneOf('{', '<', '>', '}')));
+// An attribute value string, lexed only inside a tag: tsc's `scanJsxAttributeValue` reads to the
+// matching quote with no escapes (`b="\"` is the one-character string `\`), across lines.
+const JSXString = token(altPattern(seq('"', star(noneOf('"')), '"'), seq("'", star(noneOf("'")), "'")), { scope: 'string.quoted' });
 
 // A `<` at an operand position that begins a TYPE-PARAMETER list (TypeScript bases only), as
 // tsc decides it under JSX: `<T,`, `<T =`, `<const T,`, `<T extends U` (not `extends=` /
@@ -61,6 +64,7 @@ const ELEMENTS = (hasTypes: boolean): ElementRegion => ({
   tagOpen: '<', tagClose: '>', closeMarker: '/',
   text: 'JSXText', closeTag: 'JSXClose', selfClose: 'JSXSelfClose',
   hole: { open: '{', close: '}' },
+  tagTokens: ['JSXString'],
   ...hasTypes ? { typeParameters: { head: typeParameterHead, signature: { open: '(', close: ')', then: ['=>', ':'] } } } : {},
 });
 
@@ -77,7 +81,7 @@ function buildJsxDecls(hasTypes: boolean): { rules: RuleDecl[]; tokens: TokenDec
   const typeArgs = hasTypes ? [opt('<', sep(Type, ','), '>')] : [];
 
   const JSXTagName = rule($ => [[Ident, nameTail]]);
-  const JSXAttrValue = rule($ => [String_, ['{', Expr, '}']]);
+  const JSXAttrValue = rule($ => [JSXString, ['{', Expr, '}']]);
   const JSXAttr = rule($ => [
     ['{', '...', Expr, '}'],                       // spread attribute {...expr}
     [Ident, nameTail, opt('=', JSXAttrValue)],     // name (= value)?
@@ -96,12 +100,12 @@ function buildJsxDecls(hasTypes: boolean): { rules: RuleDecl[]; tokens: TokenDec
 
   const g = defineGrammar({
     name: 'jsx-decls',
-    tokens: { Ident, Number: Number_, String: String_, JSXSelfClose, JSXClose, JSXText },
+    tokens: { Ident, Number: Number_, String: String_, JSXSelfClose, JSXClose, JSXText, JSXString },
     rules: { Expr, Type, JSXTagName, JSXAttrValue, JSXAttr, JSXContainer, JSXChild, JSXElement },
     entry: JSXElement,
   });
   const ruleNames = new Set(['JSXTagName', 'JSXAttrValue', 'JSXAttr', 'JSXContainer', 'JSXChild', 'JSXElement']);
-  const tokNames = new Set(['JSXSelfClose', 'JSXClose', 'JSXText']);
+  const tokNames = new Set(['JSXSelfClose', 'JSXClose', 'JSXText', 'JSXString']);
   return {
     rules: g.rules.filter(r => ruleNames.has(r.name)),
     tokens: g.tokens.filter(t => tokNames.has(t.name)),
