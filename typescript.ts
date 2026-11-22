@@ -273,18 +273,34 @@ const defaultAhead = alt(not(not(alt('class', 'function', 'interface', Decorator
 // JavaScript's words (`memberWordRules`: static, get, set), extended with TypeScript's.
 const modifierExtra: Record<string, unknown[]> = {
   ...memberWordRules,
+  export: [not(alt('as', '*')), not(['default', not(defaultAhead)]), not(['type', not(exportAhead)])],
+  default: [not(not(defaultAhead))],
   const: [not(not('enum'))],
 };
 const { const: _const, ...classBodyExtra } = modifierExtra;
-// The two words whose condition states their follower in full (a member start or a decorator).
+// Where a second decorator run is read (`secondRun`), `export` and `default` state their
+// follower in full: a member start or a decorator. Elsewhere a decorator after them is no
+// member's (class and object-literal members read no second run: see ClassMember), so the word
+// is the member's name there (`class C { export⏎@d x() {} }` is a field `export`, then a member).
 const followsDecorator: Record<string, unknown[]> = {
   export: [not(['default', not(defaultAhead)]), not(['type', not(exportAhead)]), ...exportAhead],
   default: [not(not(defaultAhead))],
 };
-const modifierWord = (words: string[], { sameLineConst = false } = {}) => {
-  const rest = words.filter(w => !(w in followsDecorator));
-  const own = words.filter(w => w in followsDecorator).map(w => [w, ...followsDecorator[w]!]);
-  const plain = rest.length ? memberWord(rest, sameLineConst ? classBodyExtra : modifierExtra) : null;
+// A parameter's modifiers: tsc's canFollowModifier also lists `{` and `...`, which start a
+// parameter (`f(public { a })`, `f(readonly ...a)`), though no member; `export` takes no `{`
+// (canFollowExportModifier), and `default` only its own followers.
+const paramStart = alt(memberStart, '{', '...');
+const paramExportAhead = [not(alt('as', '*', '{')), not(not(alt(Decorator, paramStart)))];
+const paramFollows: Record<string, unknown[]> = {
+  export: [not(['default', not(defaultAhead)]), not(['type', not(paramExportAhead)]), ...paramExportAhead],
+  default: followsDecorator.default!,
+};
+type ModifierOpts = { sameLineConst?: boolean; param?: boolean; secondRun?: boolean };
+const modifierWord = (words: string[], { sameLineConst = false, param = false, secondRun = false }: ModifierOpts = {}) => {
+  const follows: Record<string, unknown[]> = param ? paramFollows : secondRun ? followsDecorator : {};
+  const rest = words.filter(w => !(w in follows));
+  const own = words.filter(w => w in follows).map(w => [w, ...follows[w]!]);
+  const plain = rest.length ? memberWord(rest, sameLineConst ? classBodyExtra : modifierExtra, param ? not(not(paramStart)) : undefined) : null;
   return own.length ? alt(...(plain ? [plain] : []), ...own) : plain;
 };
 // A modifier run holds AT MOST ONE `static` (tsc stops taking `static` as a modifier once it
@@ -298,8 +314,8 @@ const modifierWord = (words: string[], { sameLineConst = false } = {}) => {
 // type, where `{ const [e]: 1 }` and the block `{ const [a] = b }` share a prefix, as do an
 // arrow's `=> { const [` block and a return-type literal) is left out of its rendering
 // (`treeSitterOmits`): a highlighter missing `{ const enum: 1 }` is harmless.
-const modifierRun = (words: string[], opts: { sameLineConst?: boolean; treeSitterOmits?: string[] } = {}) => {
-  const strictAny = modifierWord(words, opts), stat = modifierWord(['static']);
+const modifierRun = (words: string[], opts: ModifierOpts & { treeSitterOmits?: string[] } = {}) => {
+  const strictAny = modifierWord(words, opts), stat = modifierWord(['static'], opts.param ? { param: true } : {});
   const rest = modifierWord(words.filter(w => w !== 'static'), opts);
   const shown = words.filter(w => !opts.treeSitterOmits?.includes(w));
   const tsAny = shown.length === words.length ? strictAny : modifierWord(shown, opts);
@@ -312,7 +328,7 @@ const modifierRun = (words: string[], opts: { sameLineConst?: boolean; treeSitte
 
 // A class expression's decorators and modifiers (tsc's parseDecoratedExpression, entered at a
 // `@`): every modifier word but `const` (a modifier only before `enum`).
-const classExprMods = modifierRun(['abstract', 'accessor', 'async', 'declare', 'default', 'export', 'in', 'out', 'override', 'private', 'protected', 'public', 'readonly', 'static']);
+const classExprMods = modifierRun(['abstract', 'accessor', 'async', 'declare', 'default', 'export', 'in', 'out', 'override', 'private', 'protected', 'public', 'readonly', 'static'], { secondRun: true });
 const classExprPrefix = opt(many1(DecoratorExpr), classExprMods.run, opt(many1(DecoratorExpr), classExprMods.run));
 
 // An object-literal member is tsc's parseObjectLiteralElement: a spread, or a modifier run
@@ -589,6 +605,7 @@ const Binding = rule($ => [
 const ForBinding = rule($ => forBindingArms(BindingPattern, Expr, [opt(':', Type)]));
 
 
+const paramMods = modifierRun(['public', 'private', 'protected', 'readonly', 'override', 'static', 'abstract', 'accessor', 'async', 'export', 'declare', 'in', 'out', 'default'], { param: true });
 const Param = rule($ => {
   const tail = [opt('?'), opt(':', Type), opt('=', Expr)];   // ?  : T  = E
   const body = alt(
@@ -605,14 +622,16 @@ const Param = rule($ => {
     // no modifier (tsc's parser rejects all of those). This is the SOLE way `this`
     // reaches param position; the plain-name arm above excludes it.
     ['this', opt(':', Type)],
-    // optional decorators + optional parameter modifiers, then the binding.
-    // many1 → with modifiers; the no-modifier branch also catches a param NAMED
-    // like a modifier (`public: T`), which many() would otherwise eat. tsc parses
-    // the FULL modifier soup on any parameter (`f(static x)`, `f(export x)`,
-    // `f(async x)` are parse-clean — validity is the checker's job); only
-    // `const`/`default` are parse errors there and stay out.
-    [opt(DecoratorExpr), many1(alt('public', 'private', 'protected', 'readonly', 'override', 'static', 'abstract', 'accessor', 'async', 'export', 'declare', 'in', 'out')), body],
-    [opt(DecoratorExpr), body],
+    // tsc's parseModifiers, then the binding: decorators (any number, `f(@a @b x)`), modifier
+    // words, and after `export` / `default` a second decorator run (`f(export @d x)`). tsc
+    // parses the FULL modifier soup on any parameter (`f(static x)`, `f(export x)`, `f(async x)`
+    // are parse-clean — validity is the checker's job). Each word is a modifier only where
+    // `modifierWord` says so, so a parameter NAMED like one (`public: T`, `f(public)`) is the
+    // name (the second arm), `public @d x` has no parse, and a run holds one `static`
+    // (`f(static static x)` has no parse). Owed: a `static` in the second run (`f(export @d
+    // static x)`, valid), which needs the run's shape to carry whether the first had one.
+    [many(DecoratorExpr), paramMods.run1, opt(many1(DecoratorExpr), many(paramMods.rest)), body],
+    [many(DecoratorExpr), body],
   ];
 });
 
@@ -816,7 +835,12 @@ const ClassMember = rule($ => [
   [many(DecoratorExpr), many(Modifier), 'static', awaitCtx(Block)],   // static block body is [+Await] (await reserved); decorators/modifiers parse (SEMANTIC errors)
   // decorators PREFIX a member, before any modifier — tsc parse-rejects
   // `public @dec method()` ("Decorators are not valid here") and an orphan
-  // `@dec` with no member, which a standalone sibling alternative tolerated
+  // `@dec` with no member, which a standalone sibling alternative tolerated.
+  // Owed: the second decorator run after `export` / `default` (tsc's parseModifiers: `@d export
+  // @e x() {}`, `public export @d x() {}`, valid). With it (and tsc's isClassMemberStart, which
+  // takes no same-line `@` after modifier words none of which is a class-member modifier, unless
+  // the member starts with a decorator) the TextMate generator runs out of memory (2 GB heap,
+  // `npm run gen`), as with a second run shape after `async` (`staticTwice` below).
   [
     many(DecoratorExpr),
     not(staticTwice),
@@ -930,18 +954,21 @@ const classDecls = [
 // The modifier words of a declaration's prefix, each one a modifier only where `modifierWord`
 // says so (`public @d class C {}`, `abstract @d class C {}` have no parse); the `declare`,
 // `export` and `async` prefixes and `const enum` have arms of their own. After decorators the
-// words are those of tsc's parseModifiers, `in`, `out` and `default` among them (`@d default
-// class C {}`); a statement that starts with a word is read by tsc's isStartOfDeclaration walk,
-// which takes none of the three. Owed (it needs the left context): the walk takes no `override`
-// either, but `$` reaches the same prefix arm from `@d export override class C {}` (valid) and
-// from `export override class C {}` (no parse); likewise a `static` before a nested `export` /
-// `declare` arm and a second one after it (`static export static class C {}`), and the count of
-// decorator runs, two at most: a run after `default` is the second one at a statement's start
-// (`@d default @e class C {}`, valid) and the third past `export @d` (`export @d default @e class
-// C {}`), and `@d export @e export @f class C {}` has three. And the `declare` arm's statement
-// (tsc's expression statement `declare` without its `;`, `declare x;`) is a statement start's
-// only: past a prefix `declare` is a modifier (`export declare x;`, `@d declare @e class C {}`).
-const decoratedMods = modifierRun(['abstract', 'public', 'private', 'protected', 'readonly', 'static', 'override', 'accessor', 'in', 'out', 'default']);
+// words are those of tsc's parseModifiers, `in` and `out` among them (`@d in class C {}`); a
+// statement that starts with a word is read by tsc's isStartOfDeclaration walk, which takes
+// neither. Owed (each needs the left context, since `$` reaches the same arm at a statement's
+// start and past a prefix):
+// - `override`, which the walk does not take either: `@d export override class C {}` is valid,
+//   `export override class C {}` has no parse, and both reach this arm with `override class`.
+// - `default` after decorators (`@d default class C {}`, valid): past `export` the export
+//   default arm reads `@d default class C {}`, and the prefix arm would read it a second way
+//   (`export @dec default class C {}` would change its tree).
+// - one `static` across a nested `export` / `declare` arm (`static export static class C {}`).
+// - two decorator runs at most (`@d export @e export @f class C {}` has three).
+// - the `declare` arm's statement (tsc's expression statement `declare` without its `;`,
+//   `declare x;`) at a statement's start only: past a prefix `declare` is a modifier
+//   (`export declare x;`, `@d declare @e class C {}` have no parse).
+const decoratedMods = modifierRun(['abstract', 'public', 'private', 'protected', 'readonly', 'static', 'override', 'accessor', 'in', 'out']);
 const declMods = modifierRun(['abstract', 'public', 'private', 'protected', 'readonly', 'static', 'override', 'accessor']);
 // How a declaration ends is tsc's: one that ends in a block (`{ … }` of a function, class,
 // interface, enum, namespace or module) needs nothing after it; every other one ends as a
@@ -975,8 +1002,7 @@ const Decl = rule($ => [
   // prefixes is chosen after it (tsc's parseDeclaration: decorators, modifiers, then the keyword).
   // A second decorator run follows `export` (the export arms read it, `@dec export @e class C
   // {}`). A run holds one `static` at most (tsc's hasSeenStaticModifier), and a second one is no
-  // declaration keyword, so `$` starts with none (`static static class C {}` has no parse); nor
-  // with a decorator, which only a word's own run would read (`export @d default @e class C {}`).
+  // declaration keyword, so `$` starts with none (`static static class C {}` has no parse).
   // A class takes the prefix as its own (`@dec abstract class C {}` is one declaration); any other
   // declaration is `$` (`@dec export class C {}`, `@dec interface I {}`). tsc parses the soup before
   // any declaration and before var/let/const and `using` statements, which `$` alone can't reach
@@ -988,7 +1014,7 @@ const Decl = rule($ => [
   // the token after the prefix, so the first that matches is the only one.
   [alt([many1(DecoratorExpr), decoratedMods.run], declMods.run1), alt(
     ...classDecls,
-    [not(alt('static', Decorator)), $],
+    [not('static'), $],
     [alt('let', 'const', 'var'), sep(Binding, ','), asi()],
     [opt('await'), 'using', not(alt('[', '{')), Binding, many(',', Binding), asi()],
   )],
@@ -1003,14 +1029,13 @@ const Decl = rule($ => [
   ['namespace', ...bindingIdentifier, many('.', Ident), '{', many(Stmt), '}'],   // dotted name: `namespace A.B.C { … }`
   ['module', alt([...bindingIdentifier, many('.', Ident)], String_), '{', many(Stmt), '}'],   // `module A.B.C { … }` | `module "x" { … }`
   ['export', 'as', 'namespace', ...bindingIdentifier, asi()],   // UMD NamespaceExportDeclaration — BEFORE `exportDeclaration`
+  exportDeclaration($, Stmt, ['var', 'let', 'const', 'using', ['await', 'using']]),
   // decorators may also sit BETWEEN `export` and `default` (`export @dec default
   // class C {}` — tsc parses the soup in either spot; ordering is a checker error). There
   // `default` is a modifier word, so a declaration follows it (`export @d default x;` has no
   // parse), and the decorators are the second run, so no third one follows (`export @d default
-  // @e class C {}` has no parse; `export default @e class C {}` is one run). This arm comes
-  // before `exportDeclaration`, whose `$` reads `@dec default class C {}` too (a decorated
-  // prefix takes `default`), so the tie goes to this reading, as it always did.
-  ['export', alt([many1(DecoratorExpr), modifierWord(['default']), not(Decorator)], 'default'), alt(
+  // @e class C {}` has no parse; `export default @e class C {}` is one run).
+  ['export', alt([many1(DecoratorExpr), modifierWord(['default'], { secondRun: true }), not(Decorator)], 'default'), alt(
     ...tsFnArms([opt(...bindingIdentifier)], fnBodyOrAsi()),  // function
     [many(DecoratorExpr), opt('abstract'), 'class', ...bindingIdentifier, opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],  // named class
     [many(DecoratorExpr), opt('abstract'), 'class', opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],          // anonymous class
@@ -1020,7 +1045,6 @@ const Decl = rule($ => [
     [not(not(Decorator)), $],
     [Expr, asi()],   // catch-all: export default <expr>
   )],
-  exportDeclaration($, Stmt, ['var', 'let', 'const', 'using', ['await', 'using']]),
   ['export', opt('type'), '*', opt('as', alt(Ident, String_)), 'from', String_, asi()],   // export (type)? * (as ns)? from "m" — alias is a ModuleExportName
   ['export', '{', sep(ExportSpecifier, ','), '}', opt('from', String_), asi()],
   ['export', '=', Expr, asi()],

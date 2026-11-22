@@ -378,7 +378,9 @@
             "as": "operator",
             "get": "keyword",
             "set": "keyword",
+            "export": "keyword",
             "const": "keyword",
+            "default": "keyword",
             "public": "keyword",
             "private": "keyword",
             "protected": "keyword",
@@ -387,8 +389,6 @@
             "declare": "keyword",
             "out": "keyword",
             "async": "keyword",
-            "export": "keyword",
-            "default": "keyword",
             "static": "keyword",
             "@new": "keyword",
             "super": "keyword",
@@ -663,7 +663,15 @@
               "token": "keyword",
               "switchTo": "@root"
             },
+            "export": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
             "const": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "default": {
               "token": "keyword",
               "switchTo": "@root"
             },
@@ -696,14 +704,6 @@
               "switchTo": "@root"
             },
             "async": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
-            "export": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
-            "default": {
               "token": "keyword",
               "switchTo": "@root"
             },
@@ -1147,7 +1147,9 @@
             "as": "operator",
             "get": "keyword",
             "set": "keyword",
+            "export": "keyword",
             "const": "keyword",
+            "default": "keyword",
             "public": "keyword",
             "private": "keyword",
             "protected": "keyword",
@@ -1156,8 +1158,6 @@
             "declare": "keyword",
             "out": "keyword",
             "async": "keyword",
-            "export": "keyword",
-            "default": "keyword",
             "static": "keyword",
             "@new": "keyword",
             "super": "keyword",

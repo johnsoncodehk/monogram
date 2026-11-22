@@ -955,7 +955,7 @@
     },
     "regex-literal-prefix-ops": {
       "name": "string.regexp.tsx",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\byield)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bdefault)|(?<=\\bexport)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\byield)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.logical.prefix.tsx"
@@ -3095,13 +3095,13 @@
       "match": "\\b(get|set)\\b",
       "name": "storage.type.property.tsx"
     },
-    "scope-storage-type": {
-      "match": "\\b(const|let|var|using)\\b",
-      "name": "storage.type.tsx"
-    },
     "scope-keyword-control-export": {
       "match": "\\b(export)\\b",
       "name": "keyword.control.export.tsx"
+    },
+    "scope-storage-type": {
+      "match": "\\b(const|let|var|using)\\b",
+      "name": "storage.type.tsx"
     },
     "scope-keyword-control-switch": {
       "match": "\\b(default|switch|case)\\b",
@@ -3764,7 +3764,7 @@
     },
     "regex": {
       "name": "string.regexp.tsx",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\byield)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bdefault)|(?<=\\bexport)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\byield)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "comment.block.tsx"

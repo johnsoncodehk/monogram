@@ -126,8 +126,7 @@ const TS_DECORATORS = {
     '@d class C {}', '@d export class C {}', '@d export @e class C {}', 'export @d class C {}', 'public export @d class C {}',
     '@d export default @e class {}', '@d export {a};', '@d export = x;', '@d interface I {}', '@d enum E {}', '@d const enum E {}',
     '@d declare class C {}', '@d declare override class C {}', '@d export override class C {}', '@d override class C {}',
-    '@d in class C {}', '@d out class C {}', '@d default class C {}', '@d default abstract class C {}',
-    '@d default function f() {}', '@d public static abstract class C {}', 'static\nclass C {}',
+    '@d in class C {}', '@d out class C {}', '@d public static abstract class C {}', 'static\nclass C {}',
     'public\nclass C {}', '@d var x;', '@d function f() {}',
     'x = @d class {};', 'x = @d @e class C {};', 'x = @d export @e class {};', 'x = @d abstract class {};', 'x = @d async class {};',
     'x = @d default class {};', 'x = @d declare class {};', 'x = @d public static class {};', 'x = @d export default @e class {};',
@@ -147,6 +146,30 @@ const TS_DECORATORS = {
     'x = abstract class {};', 'x = @d const class {};', 'x = @d static static class {};', 'x = @d export @e export @f class {};',
     'x = @d public @e class {};',
     'async @d class C {}', 'export @d default x;', 'export @d default @e class C {}',
+  ],
+};
+// TypeScript decorators and modifiers of a parameter, as tsc's parser reads them
+// (parseModifiers: a second decorator run after `export` / `default`), and a class member's
+// decorators (the member's second run is owed: see ClassMember in typescript.ts).
+const TS_MEMBER_DECORATORS = {
+  accept: [
+    'function f(@a @b x) {}', 'class C { constructor(@a() @b() private x: T) {} }', 'class C { m(@a @b x) {} }',
+    'function f(export @d x) {}', 'function f(@a export @b public x) {}', 'function f(@a default @b x) {}',
+    'function f(public { a }) {}', 'function f(readonly ...a) {}', 'function f(export ...a) {}',
+    'function f(public public x) {}', 'function f(public: T) {}', 'function f(public) {}',
+    'function f(static, x) {}', 'function f(static\nx) {}', 'function f(export @a @b x) {}',
+    'class C { export\n@d x() {} }', 'class C { default\n@d x() {} }', 'class C { @a @b x() {} }',
+    'class C { @d static x() {} }', 'class C { static static() {} }',
+    'class C { export\n@d static x() {} }', 'class C { async export\n@d x() {} }',
+  ],
+  reject: [
+    'function f(public @d x) {}', 'function f(@a public @b x) {}', 'function f(static static x) {}',
+    'function f(export { a }) {}', 'function f(default x) {}', 'function f(async\nx) {}',
+    'function f(public\nx) {}', 'function f(@a export @b export @c x) {}', 'class C { export @d x() {} }',
+    'class C { declare export @d x() {} }', 'class C { @d export @e default @f x() {} }', 'class C { static export @d static x() {} }',
+    'class C { public @d x() {} }', 'class C { default @d x() {} }', 'class C { async @d x() {} }',
+    'class C { @d static static x() {} }',
+    'class C { export @d static static x() {} }', 'class C { async export @d x() {} }',
   ],
 };
 const EXPORT_DECLS = {
@@ -528,7 +551,7 @@ const CASES: Case[] = [
     grammar: 'typescript', path: '../typescript.ts',
     accept: [
       ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...EXPORT_DECLS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
-      ...CTX_CASES.typescript.accept, ...TS_DECORATORS.accept,
+      ...CTX_CASES.typescript.accept, ...TS_DECORATORS.accept, ...TS_MEMBER_DECORATORS.accept,
       // A class heritage is a LeftHandSideExpression (see the JavaScript cases).
       'f(class extends (a, b) {});', 'f(class extends a[0] {});', 'f(class extends a`t` {});', 'f(class extends a?.b() {});',
       // `return` takes an expression only on its own line (a restricted production), so a
@@ -712,7 +735,7 @@ const CASES: Case[] = [
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
       'type T = | | A;', 'type T = A | | B;', 'type T = A & | B;', 'type T = & & A;', 'type T = & | A;', 'f<| | A>();', 'let x: [| | A];',
-      'const f = <>() => 1;', 'const f = async <>(a) => 1;', 'const f = <in T>() => 1;', 'f(<in out T>(a) => a);', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, ...TS_DECORATORS.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
+      'const f = <>() => 1;', 'const f = async <>(a) => 1;', 'const f = <in T>() => 1;', 'f(<in out T>(a) => a);', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, ...TS_DECORATORS.reject, ...TS_MEMBER_DECORATORS.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '{ b(); }.x;', '{ static x }.y;', '{ static x }', '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;',
       'let[0] = 1;', '(async\nfunction f() {});',
