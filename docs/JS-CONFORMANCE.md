@@ -11,12 +11,12 @@ this record is stale, so every file that moves between cells shows in its diff.
 
 Corpus: `microsoft/TypeScript@6fbce89821d93a5b761581d9ac540455f38e9acb` `tests/cases/conformance` · oracle: `typescript@5.9.3`
 
-**4462 files measured**, 4431 agree (99.31%) · 1196 multi-file cases skipped · 1 excluded as oracle crashes (`ORACLE_CRASHES` in the test, by name).
+**4462 files measured**, 4424 agree (99.15%) · 1196 multi-file cases skipped · 1 excluded as oracle crashes (`ORACLE_CRASHES` in the test, by name).
 
 | cell (tsc / monogram) | files | |
 |---|---:|---|
-| `js/accept` | 1157 | agree: valid JavaScript per tsc, accepted |
-| `js/reject` | 30 | **disagree**: valid JavaScript per tsc, rejected: candidate gaps (read each derivation) |
+| `js/accept` | 1150 | agree: valid JavaScript per tsc, accepted |
+| `js/reject` | 37 | **disagree**: valid JavaScript per tsc, rejected: candidate gaps (read each derivation) |
 | `ts-only/reject` | 2713 | agree: TypeScript-only syntax per tsc, rejected |
 | `ts-only/accept` | 0 | **disagree**: TypeScript-only syntax per tsc, accepted: over-acceptance |
 | `js-error/reject` | 1 | agree: a JS-only syntactic error per tsc, rejected |
@@ -25,7 +25,7 @@ Corpus: `microsoft/TypeScript@6fbce89821d93a5b761581d9ac540455f38e9acb` `tests/c
 | `reject/accept` | 1 | **disagree**: a tsc parse error, accepted: over-acceptance |
 | `monogram-crash` | 0 | **disagree**: monogram threw something other than an input error: a bug |
 
-## `js/reject` (30)
+## `js/reject` (37)
 
 Valid JavaScript per tsc, rejected: candidate gaps (read each derivation).
 
@@ -38,8 +38,10 @@ Valid JavaScript per tsc, rejected: candidate gaps (read each derivation).
 - `classes/classStaticBlock/classStaticBlock20.ts`
 - `classes/members/privateNames/privateNameStaticMethodAsync.ts`
 - `es6/for-ofStatements/for-of-excess-declarations.ts`
+- `es6/variableDeclarations/VariableDeclaration1_es6.ts`
 - `esDecorators/esDecorators-arguments.ts`
 - `parser/ecmascript5/ConstructorDeclarations/parserConstructorDeclaration3.ts`
+- `parser/ecmascript5/ErrorRecovery/VariableLists/parserErrorRecovery_VariableList1.ts`
 - `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration10.ts`
 - `parser/ecmascript5/MemberFunctionDeclarations/parserMemberFunctionDeclaration4.ts`
 - `parser/ecmascript5/Statements/parserES5ForOfStatement2.ts`
@@ -49,6 +51,10 @@ Valid JavaScript per tsc, rejected: candidate gaps (read each derivation).
 - `parser/ecmascript5/Statements/parserForInStatement2.ts`
 - `parser/ecmascript5/Statements/parserForInStatement3.ts`
 - `parser/ecmascript5/Statements/parserForInStatement6.ts`
+- `parser/ecmascript5/VariableDeclarations/parserVariableDeclaration10.ts`
+- `parser/ecmascript5/VariableDeclarations/parserVariableDeclaration5.ts`
+- `parser/ecmascript5/VariableDeclarations/parserVariableDeclaration6.ts`
+- `parser/ecmascript5/VariableDeclarations/parserVariableDeclaration8.ts`
 - `parser/ecmascript6/Iterators/parserForOfStatement2.ts`
 - `parser/ecmascript6/Iterators/parserForOfStatement21.ts`
 - `parser/ecmascript6/Iterators/parserForOfStatement22.ts`
@@ -59,6 +65,7 @@ Valid JavaScript per tsc, rejected: candidate gaps (read each derivation).
 - `statements/VariableStatements/usingDeclarations/awaitUsingDeclarationsInForOf.3.ts`
 - `statements/VariableStatements/usingDeclarations/usingDeclarationsInForIn.ts`
 - `statements/VariableStatements/usingDeclarations/usingDeclarationsInForOf.3.ts`
+- `statements/labeledStatements/labeledStatementDeclarationListInLoopNoCrash1.ts`
 
 ## `ts-only/accept` (0)
 
