@@ -12,7 +12,10 @@
 //   • a longest-match candidate (rd alternative, NUD sequence or capped arm): it matches and ends
 //     past the winner, or at the winner's end while declared before it (it would have won);
 //   • an ordered or predictive branch: it matches before the branch that won (or none won);
-//   • a star / opt / sep body: it matches non-empty (the loop would have gone on).
+//   • a star / opt / sep body: it matches non-empty (the loop would have gone on);
+//   • a COMMITTED choice (emit-portable.ts Commit): at a key the commit switch decides, every
+//     candidate other than the committed one (all of them, where it fails or the key fails the
+//     list) is attempted from the list's start: none may have won.
 // The check runs on the IR, not on a target: guards are IR data, and each target renders a subset
 // of them (Rust leaves body guards out of Pratt arms), so one check bounds all three. Its engine is
 // an interpreter of the ParserIR that follows the portable engine step for step (the rule, Pratt
@@ -25,7 +28,7 @@
 //   node test/guard-refused.ts          [--strict-empty]   (also: GUARD_REFUSED_FILES=<n> to widen the corpus sample)
 import { readdirSync, readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { portableIR, buildLexIdPlan, buildArenaIdPlan, isFirstGuardable, type ParserIR, type Step, type Guard, type RdRule, type PrattRule, type Dispatch, type FirstSig } from '../src/emit-portable.ts';
+import { portableIR, buildLexIdPlan, buildArenaIdPlan, isFirstGuardable, type ParserIR, type Step, type Guard, type RdRule, type PrattRule, type Dispatch, type FirstSig, type Commit, type CommitAct, type CommitTest } from '../src/emit-portable.ts';
 import { emitParser, tsTarget } from '../src/emit.ts';
 import { scratchDir } from './scratch.ts';
 import type { CstGrammar } from '../src/types.ts';
@@ -38,10 +41,11 @@ type Tok = { kid: number; lid: number; off: number; end: number; nl: boolean };
 type Cst = { rule: string; children: Cst[] } | { tokenType: string; offset: number; end: number };
 // A guard that admitted a literal where what it guards then matched (and won): the gate's own
 // proof that it detects a wrong refusal is to refuse that literal there and see it reported.
-type Found = { body?: { step: Step; lid: number }; cand?: { guard: NonNullable<Guard>; lid: number } };
+type Found = { body?: { step: Step; lid: number }; cand?: { guard: NonNullable<Guard>; lid: number }; commit?: { list: string; lid: number; kid: number; arm: number } };
 type Outcome = { accept: boolean; tree: Cst | null; checked: number; unsound: string[]; found: Found };
-// The mutation: one body guard (by step) or one candidate guard (by identity) also refuses a literal.
-type Mutation = { step?: Step; guard?: NonNullable<Guard>; lid: number } | null;
+// The mutation: one body guard (by step) or one candidate guard (by identity) also refuses a literal,
+// or one list commits, at one token (lid and kid), to another candidate than its plan's (`commit`).
+type Mutation = { step?: Step; guard?: NonNullable<Guard>; lid: number; commit?: { list: string; kid: number; arm: number } } | null;
 
 // ── The engine ──
 // One interpreter per grammar; run(toks) parses a token list from the entry rule.
@@ -136,6 +140,7 @@ function engine(ir: ParserIR, mut: Mutation = null) {
   const ctxWord = () => { const t = peek(); return t !== null && ctxWordT(t); };
   const callRule = (x: Sp | null): boolean => { if (x === null) return false; scratch.push(x.h); return true; };
 
+  const guardSteps = (g: Guard, steps: Step[]): Step[] => steps.slice(g?.skip ?? 0);
   // ── checks ──
   // The state a refused attempt starts from and must leave untouched.
   const saveState = () => ({ pos, sb: scratch.length, ck: checkpoint(), ctx, capped, form, tail, suppressNext, suppressCur });
@@ -290,6 +295,30 @@ function engine(ir: ParserIR, mut: Mutation = null) {
     }
   }
 
+  // ── committed choices ──
+  // The action a Commit takes at t ('frame': the frame decides), with the mutation applied: its list
+  // commits at that token to another candidate, tested by its whole guard (`all`).
+  type Act = CommitAct & { all?: true };
+  function commitAct(list: string, c: Commit, t: Tok): Act | null | 'frame' {
+    const lc = t.lid !== 0 ? c.lid.find((x) => x.keys.includes(ids.lids[t.lid]!)) : undefined;
+    const act = lc !== undefined ? lc.act : c.kid.find((x) => x.keys.includes(ids.kids[t.kid]!))?.act ?? 'frame';
+    const m = mut?.commit;
+    if (m && m.list === list && t.lid === mut!.lid && t.kid === m.kid && act !== null && act !== 'frame') return { arm: m.arm, first: true, lead: [], nullable: true, clean: false, unless: [], all: true };
+    return act;
+  }
+  // A candidate's run-time tests at a key (CommitTest); `all`: its whole guard.
+  const rdTest = (g: Guard, x: CommitTest & { all?: true }, t: Tok): boolean => {
+    if (g === null) return true;
+    if (x.all) return guardOk(g, t, false);
+    if (x.first && !inSet(g.first!.id, t)) return false;
+    if (g.second !== null) { const i = pos + 1; if (!(i < toks.length && inSet(g.second.id, toks[i]!))) return false; }
+    for (const k of x.lead) { const l = g.lead[k]!; const v = inSet(l.set, t) || (l.ctx && ctxWordT(t)); if (v !== l.is) return false; }
+    return true;
+  };
+  const noteCommit = (list: string, t: Tok, arm: number, n: number) => {
+    if (!checking && found.commit === undefined && t.lid !== 0 && n > 1) found.commit = { list, lid: t.lid, kid: t.kid, arm: arm === 0 ? 1 : 0 };
+  };
+
   // ── rules ──
   function parseRule(name: string): Sp | null {
     const r = ruleByName.get(name)!;
@@ -326,6 +355,26 @@ function engine(ir: ParserIR, mut: Mutation = null) {
       if (all(rule.alts[0]!, r)) return won();
       pos = save; scratch.length = sb; restore(ck);
       return null;
+    }
+    const runAlt = (i: number) => all(rule.alts[i]!, r);
+    const every = rule.alts.map((_, i) => i);
+    const t0 = peek();
+    if (rule.altCommit !== undefined && t0 !== null) {
+      const act = commitAct(rule.name, rule.altCommit, t0);
+      if (act === null) { candidatesRefused(`${rule.name} (no candidate at this key)`, every, runAlt, save, -1, save); return null; }
+      if (act !== 'frame' && !act.unless.some((u) => rdTest(rule.altGuard[u.arm]!, u, t0))) {
+        const i = act.arm, g = rule.altGuard[i]!;
+        let res: Sp | null = null, end = save;
+        if (rdTest(g, act, t0)) {
+          const ck = checkpoint();
+          if (all(rule.alts[i]!.slice(g?.skip ?? 0), r) && (!act.nullable || pos > save)) { res = won(); end = pos; noteCommit(rule.name, t0, i, rule.alts.length); }
+          else { pos = save; scratch.length = sb; restore(ck); }
+        }
+        pos = save;
+        candidatesRefused(`${rule.name} (committed to ${i})`, every.filter((j) => res === null || j !== i), runAlt, end, res ? i : -1, save);
+        pos = end;
+        return res;
+      }
     }
     const d = rule.altDispatch;
     let ck = checkpoint();
@@ -475,6 +524,63 @@ function engine(ir: ParserIR, mut: Mutation = null) {
       else { scratch.length = sb; restore(ck); }
       pos = save;
     };
+    if (r.nudCommit !== undefined) {
+      const act = commitAct(r.name, r.nudCommit, t);
+      // Every arm that is a candidate at all here (a capped arm only below its binding power),
+      // attempted unguarded: whether it matches.
+      const arms = r.nudOrder.map((_, i) => i).filter((i) => { const a = r.nudOrder[i]!; return a.kind !== 'capped' || minBp < r.nudCapped[a.index]!.capBp; });
+      const runArm = (i: number): boolean => {
+        const a = r.nudOrder[i]!;
+        switch (a.kind) {
+          case 'tok': return matchTok(kidOf(r.nudToks[a.index]!), false) || (r.nudTplHole !== undefined && ir.tpl !== null && r.nudToks[a.index] === ir.tpl.token && matchTemplate(r.nudTplHole) !== null);
+          case 'bracket': return all(r.nudBrackets[a.index]!.steps, false);
+          case 'seq': return all(r.nudSeqs[a.index]!, false);
+          case 'capped': return all(r.nudCapped[a.index]!.steps, false);
+          case 'prefix': { const p = pre.get(r)!.get(t.lid); if (p === undefined) return false; pushLeaf(TT_OPERATOR, pos); pos++; return prattBp(r, p.rbp) !== null; }
+        }
+      };
+      const test = (x: CommitTest & { all?: true }): boolean => {
+        const a = r.nudOrder[x.arm]!;
+        switch (a.kind) {
+          case 'tok': return !(x.first || x.all) || t.kid === kidOf(r.nudToks[a.index]!);
+          case 'bracket': return !(x.first || x.all) || t.lid === lidOf(r.nudBrackets[a.index]!.first);
+          case 'seq': return rdTest(r.nudSeqGuard[a.index]!, x, t);
+          case 'capped': return minBp < r.nudCapped[a.index]!.capBp && rdTest(r.nudCappedGuard[a.index]!, x, t);
+          case 'prefix': return pre.get(r)!.has(t.lid);
+        }
+      };
+      const none = () => { capped = false; form = 0; tail = false; return null; };
+      if (act === null) { candidatesRefused(`${r.name} NUD (no arm at this key)`, arms, runArm, save, -1, save); return none(); }
+      if (act !== 'frame' && !act.unless.some(test)) {
+        const i = act.arm, a = r.nudOrder[i]!;
+        let res: Sp | null = null, end = save, f = 0, tl = false, cp = false;
+        if (test(act)) {
+          const ck = checkpoint();
+          if (a.kind === 'tok') { pushLeaf(t.kid, pos); pos++; res = finish(rid, sb); }
+          else if (a.kind === 'prefix') {
+            const p = pre.get(r)!.get(t.lid)!;
+            pushLeaf(TT_OPERATOR, pos); pos++;
+            const operand = prattBp(r, p.rbp);
+            if (operand !== null && p.requireTarget && form !== 0) { pos = save; scratch.length = sb; restore(ck); capped = false; return null; }
+            if (operand !== null) { scratch.push(operand.h); res = finish(rid, sb); f = p.form; tl = true; }
+          } else {
+            const steps = a.kind === 'bracket' ? r.nudBrackets[a.index]!.steps : a.kind === 'seq' ? guardSteps(r.nudSeqGuard[a.index]!, r.nudSeqs[a.index]!) : guardSteps(r.nudCappedGuard[a.index]!, r.nudCapped[a.index]!.steps);
+            if (all(steps, false) && (!act.nullable || pos > save)) {
+              res = finish(rid, sb);
+              tl = a.kind === 'bracket' ? r.nudBracketClosesTail[a.index]! : a.kind === 'seq' ? r.nudSeqClosesTail[a.index]! : false;
+              cp = a.kind === 'capped';
+            }
+          }
+          if (res === null) { pos = save; scratch.length = sb; restore(ck); } else { end = pos; noteCommit(r.name, t, i, r.nudOrder.length); }
+        }
+        pos = save; capped = false;
+        candidatesRefused(`${r.name} NUD (committed to ${i})`, arms.filter((j) => res === null || j !== i), runArm, end, res ? i : -1, save);
+        pos = end;
+        if (res === null) return none();
+        capped = cp; form = f; tail = tl;
+        return res;
+      }
+    }
     const reached = new Set<number>(), refused: number[] = [];
     for (const { i, keyed } of dispatchOrder(d, t)) {
       reached.add(i);
@@ -594,7 +700,8 @@ for (const [g, inputs] of [['typescript', tsInputs], ['javascript', jsInputs]] a
   const lib = await import(file) as { tokenize(s: string): Tok[]; parse(s: string): unknown };
   const run = engine(ir);
   let n = 0, accepted = 0, checks = 0, drift = 0, bad = 0;
-  const proof: { body?: { at: string; tokens: Tok[]; text: string; m: Mutation }; cand?: { at: string; tokens: Tok[]; text: string; m: Mutation } } = {};
+  type Proof = { at: string; tokens: Tok[]; text: string; m: Mutation };
+  const proof: { body?: Proof; cand?: Proof; commit?: Proof } = {};
   for (const path of inputs) {
     const text = readFileSync(path, 'utf8');
     let tokens: Tok[];
@@ -612,15 +719,19 @@ for (const [g, inputs] of [['typescript', tsInputs], ['javascript', jsInputs]] a
     for (const u of got.unsound) { bad++; if (bad <= 12) console.log(`  FAIL ${g} ${name}: ${u}`); }
     if (!proof.body && got.found.body) proof.body = { at: name, tokens, text, m: { step: got.found.body.step, lid: got.found.body.lid } };
     if (!proof.cand && got.found.cand) proof.cand = { at: name, tokens, text, m: { guard: got.found.cand.guard, lid: got.found.cand.lid } };
+    if (!proof.commit && got.found.commit) { const c = got.found.commit; proof.commit = { at: name, tokens, text, m: { lid: c.lid, commit: { list: c.list, kid: c.kid, arm: c.arm } } }; }
   }
   // The mutation proof: a body guard, then a candidate guard, made to refuse a literal it admitted
   // where its body / candidate matched; the gate must report it on that input.
   const ids = buildLexIdPlan(ir);
-  for (const kind of ['body', 'cand'] as const) {
+  const what = { body: 'guarded body', cand: 'guarded candidate', commit: 'committed choice' } as const;
+  for (const kind of ['body', 'cand', 'commit'] as const) {
     const p = proof[kind];
-    if (!p) { console.log(`  FAIL ${g}: no ${kind === 'body' ? 'guarded body' : 'guarded candidate'} matched from a literal: the mutation proof has nothing to mutate`); failures++; continue; }
+    if (!p) { console.log(`  FAIL ${g}: no ${what[kind]} matched from a literal: the mutation proof has nothing to mutate`); failures++; continue; }
     const caught = engine(ir, p.m)(p.tokens, p.text).unsound.length;
-    console.log(`  ${g}: mutation: the ${kind === 'body' ? 'body guard' : 'candidate guard'} that admitted ${JSON.stringify(ids.lids[p.m!.lid])} in ${p.at} made to refuse it: ${caught} unsound refusal(s) reported`);
+    const did = kind === 'commit' ? `the ${p.m!.commit!.list} list that committed at ${JSON.stringify(ids.lids[p.m!.lid])} in ${p.at} made to commit to its candidate ${p.m!.commit!.arm}`
+      : `the ${kind === 'body' ? 'body guard' : 'candidate guard'} that admitted ${JSON.stringify(ids.lids[p.m!.lid])} in ${p.at} made to refuse it`;
+    console.log(`  ${g}: mutation: ${did}: ${caught} unsound refusal(s) reported`);
     if (caught === 0) { console.log(`  FAIL ${g}: the mutated guard was not caught`); failures++; }
   }
   failures += drift + bad;
