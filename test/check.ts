@@ -30,6 +30,7 @@ const GATES: Gate[] = [
   { group: 'conformance', name: 'ts-ast-structure', args: ['test/ts-ast-verify.ts'] },
   { group: 'conformance', name: 'shape-oracle', args: ['test/shape-oracle.ts'] },
   { group: 'core', name: 'cst-match-totality', args: ['test/cst-match-totality.ts'] },
+  { group: 'core', name: 'grammar-names', args: ['test/grammar-names-transparent.ts'] },
   { group: 'core', name: 'incremental-verify', args: ['test/incremental-verify.ts'] },
   { group: 'emit-parity', name: 'emit-parser-verify', args: ['test/emit-parser-verify.ts'] },
   { group: 'emit-parity', name: 'emit-reject-messages', args: ['test/emit-reject-messages.ts'] },

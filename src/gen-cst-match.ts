@@ -22,6 +22,7 @@
 // must be matched by exactly its rule's matcher, consuming all children.
 import type { CstGrammar, PrecOperator, RuleDecl, RuleExpr } from './types.ts';
 import { isKeywordLiteral } from './grammar-utils.ts';
+import { nameRule, sanitizeIdent, type RuleNames } from './grammar-names.ts';
 import { withAwaitYield } from './await-yield-fork.ts';
 
 // ── Arm step plan ──
@@ -36,7 +37,7 @@ interface Capture {
 }
 
 type Step =
-  | { kind: 'lit'; text: string; tt: '$keyword' | '$punct'; cap?: Capture }
+  | { kind: 'lit'; text: string; tt: '$keyword' | '$punct'; node: RuleExpr; cap?: Capture }
   | { kind: 'litAlt'; texts: string[]; tt: ('$keyword' | '$punct')[]; cap?: Capture }
   | { kind: 'tok'; name: string; template: boolean; cap?: Capture }
   | { kind: 'node'; rule: string; cap?: Capture }
@@ -49,26 +50,6 @@ interface ArmPlan {
   name: string;
   steps: Step[];
   captures: Capture[];   // flattened, in declaration order
-}
-
-const RESERVED = new Set(['arm', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger',
-  'default', 'delete', 'do', 'else', 'enum', 'export', 'extends', 'false', 'finally', 'for', 'function',
-  'if', 'import', 'in', 'instanceof', 'new', 'null', 'return', 'super', 'switch', 'this', 'throw',
-  'true', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield', 'let', 'static', 'await']);
-
-const PUNCT_NAMES: Record<string, string> = {
-  '(': 'paren', ')': 'parenClose', '[': 'bracket', ']': 'bracketClose', '{': 'brace', '}': 'braceClose',
-  ';': 'semi', ',': 'comma', ':': 'colon', '.': 'dot', '...': 'spread', '?': 'question', '?.': 'optChain',
-  '=': 'eq', '=>': 'arrow', '<': 'lt', '>': 'gt', '*': 'star', '!': 'bang', '#': 'hash', '@': 'at',
-  '|': 'pipe', '&': 'amp', '-': 'dash', '+': 'plus', '/': 'slash', '%': 'percent', '~': 'tilde', '^': 'caret',
-};
-
-function lowerFirst(s: string): string { return s.charAt(0).toLowerCase() + s.slice(1); }
-function sanitizeIdent(s: string): string {
-  const cleaned = s.replace(/[^A-Za-z0-9_$]/g, '_');
-  let base = /^[0-9]/.test(cleaned) ? '_' + cleaned : cleaned;
-  if (base.startsWith('__')) base = 'f' + base;   // '__' is reserved for the emitted helpers
-  return RESERVED.has(base) ? base + '_' : base;
 }
 
 const J = (v: unknown) => JSON.stringify(v);
@@ -107,6 +88,8 @@ export function generateCstMatch(grammar: CstGrammar): string {
 
   // ── Plan building ──
 
+  let names: RuleNames;
+
   function buildArms(rule: RuleDecl): ArmPlan[] {
     const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
     const self = rule.name;
@@ -116,13 +99,8 @@ export function generateCstMatch(grammar: CstGrammar): string {
     });
 
     const plans: ArmPlan[] = [];
-    const armNames = new Set<string>();
-    const armName = (base: string): string => {
-      let nm = sanitizeIdent(base);
-      if (armNames.has(nm)) { let k = 2; while (armNames.has(nm + k)) k++; nm = nm + k; }
-      armNames.add(nm);
-      return nm;
-    };
+    // Every arm / branch / child name comes from the shared deriver (src/grammar-names.ts).
+    names = nameRule(rule);
 
     for (const alt of alts) {
       const rawItems = alt.type === 'seq' ? alt.items : [alt];
@@ -134,25 +112,24 @@ export function generateCstMatch(grammar: CstGrammar): string {
       if (items.some(it => it.type === 'op' || it.type === 'prefix' || it.type === 'postfix')) continue;
 
       const isLed = items[0]?.type === 'ref' && items[0].name === self;
-      const used = new Set<string>();
       const captures: Capture[] = [];
       const steps: Step[] = [];
       if (isLed) {
-        steps.push({ kind: 'node', rule: self, cap: addCap(captures, used, 'left', nodeType(self), 'one') });
-        for (const it of items.slice(1)) pushSteps(steps, it, captures, used, 'one');
+        steps.push({ kind: 'node', rule: self, cap: addCap(captures, items[0], nodeType(self), 'one') });
+        for (const it of items.slice(1)) pushSteps(steps, it, captures, 'one');
       } else {
-        for (const it of items) pushSteps(steps, it, captures, used, 'one');
+        for (const it of items) pushSteps(steps, it, captures, 'one');
       }
-      plans.push({ name: armName(deriveArmName(items, isLed)), steps, captures });
+      plans.push({ name: names.armOf.get(alt)!.name, steps, captures });
     }
 
     if (hasOps) {
       // Synthesized pratt operator forms (matching parsePratt's构造): op text via src.
-      plans.push(opPlan(armName('binaryOp'), [
+      plans.push(opPlan(names.ops!.binary, [
         selfCap('left'), opLeafCap('op'), selfCap('right'),
       ], self));
-      plans.push(opPlan(armName('prefixOp'), [opLeafCap('op'), selfCap('operand')], self));
-      plans.push(opPlan(armName('postfixOp'), [selfCap('operand'), opLeafCap('op')], self));
+      plans.push(opPlan(names.ops!.prefix, [opLeafCap('op'), selfCap('operand')], self));
+      plans.push(opPlan(names.ops!.postfix, [selfCap('operand'), opLeafCap('op')], self));
     }
     return plans;
 
@@ -168,11 +145,11 @@ export function generateCstMatch(grammar: CstGrammar): string {
     }
   }
 
-  function addCap(captures: Capture[], used: Set<string>, base: string, tsType: string, card: Card): Capture {
-    let nm = sanitizeIdent(base);
-    if (used.has(nm)) { let k = 2; while (used.has(nm + k)) k++; nm = nm + k; }
-    used.add(nm);
-    const cap = { name: nm, field: nm, tsType, card };
+  // The capture of `node`, named by the shared deriver.
+  function addCap(captures: Capture[], node: RuleExpr, tsType: string, card: Card): Capture {
+    const slot = names.childOf.get(node);
+    if (slot === undefined) throw new Error(`gen-cst-match: grammar-names named no child for a ${node.type} item`);
+    const cap = { name: slot.name, field: slot.name, tsType, card };
     captures.push(cap);
     return cap;
   }
@@ -181,65 +158,39 @@ export function generateCstMatch(grammar: CstGrammar): string {
     return `NodeEntry<${J(rule)}>`;
   }
 
-  // Name an arm from its first significant item; `sig` is already self-stripped for leds.
-  function deriveArmName(items: RuleExpr[], isLed: boolean): string {
-    const sig = isLed ? items.slice(1) : items;
-    return (isLed ? 'led_' : '') + nameFrom(sig, 8);
-  }
-  function nameFrom(items: RuleExpr[], fuel: number): string {
-    const first = items[0];
-    if (!first || fuel <= 0) return 'empty';
-    if (first.type === 'literal') {
-      const v = first.value;
-      return isKeywordLiteral(v) ? v : (PUNCT_NAMES[v] ?? 'p' + [...v].map(c => c.charCodeAt(0)).join('_'));
-    }
-    if (first.type === 'ref') return lowerFirst(first.name);
-    if (first.type === 'not' || first.type === 'sameLine' || first.type === 'noCommentBefore' || first.type === 'noMultilineFlowBefore' || first.type === 'notLeftLeaf') {
-      return nameFrom(items.slice(1), fuel - 1);   // zero-width: name by what follows
-    }
-    if (first.type === 'alt') {
-      const lits = first.items.filter((x): x is Extract<RuleExpr, { type: 'literal' }> => x.type === 'literal');
-      if (lits.length === first.items.length && lits.length > 0) return sanitizeIdent(lits[0].value);
-      return nameFrom([first.items[0], ...items.slice(1)], fuel - 1);
-    }
-    if (first.type === 'quantifier' || first.type === 'group') return nameFrom([first.body, ...items.slice(1)], fuel - 1);
-    if (first.type === 'sep') return lowerFirst(first.element.type === 'ref' ? first.element.name : 'list');
-    return first.type;
-  }
-
   // Translate one RuleExpr item into steps. `card` is the cardinality CONTEXT
   // (inside opt → 'opt', inside many/sep → 'many') applied to captures.
-  function pushSteps(steps: Step[], it: RuleExpr, captures: Capture[], used: Set<string>, card: Card): void {
+  function pushSteps(steps: Step[], it: RuleExpr, captures: Capture[], card: Card): void {
     switch (it.type) {
       case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf':
         return;   // zero-width: no children
       case 'literal':
-        steps.push({ kind: 'lit', text: it.value, tt: ttOf(it.value) });
+        steps.push({ kind: 'lit', text: it.value, tt: ttOf(it.value), node: it });
         return;
       case 'ref': {
         if (tokenNames.has(it.name)) {
           steps.push({
             kind: 'tok', name: it.name, template: templateTokenNames.has(it.name),
-            cap: addCap(captures, used, lowerFirst(it.name), templateTokenNames.has(it.name) ? `LeafEntry | NodeEntry<'$template'>` : 'LeafEntry', card),
+            cap: addCap(captures, it, templateTokenNames.has(it.name) ? `LeafEntry | NodeEntry<'$template'>` : 'LeafEntry', card),
           });
         } else {
-          steps.push({ kind: 'node', rule: it.name, cap: addCap(captures, used, lowerFirst(it.name), nodeType(it.name), card) });
+          steps.push({ kind: 'node', rule: it.name, cap: addCap(captures, it, nodeType(it.name), card) });
         }
         return;
       }
       case 'group':
-        pushSteps(steps, it.body, captures, used, card);
+        pushSteps(steps, it.body, captures, card);
         return;
       case 'quantifier': {
         const inner: Step[] = [];
         const innerCard: Card = it.kind === '?' ? (card === 'many' ? 'many' : 'opt') : 'many';
-        pushSteps(inner, it.body, captures, used, innerCard);
+        pushSteps(inner, it.body, captures, innerCard);
         // A $keyword literal LEADING an optional group marks the group's presence and
         // carries its position (the 'catch'/'else'/'finally' anchors consumers need) —
         // capture it as <kw>Tok.
         const lead = inner[0];
         if (it.kind === '?' && lead !== undefined && lead.kind === 'lit' && lead.tt === '$keyword' && lead.cap === undefined) {
-          lead.cap = addCap(captures, used, lead.text + 'Tok', 'LeafEntry', innerCard);
+          lead.cap = addCap(captures, lead.node, 'LeafEntry', innerCard);
         }
         if (it.kind === '?') steps.push({ kind: 'opt', min1: false, body: inner });
         else if (it.kind === '*') steps.push({ kind: 'many', body: inner });
@@ -251,7 +202,7 @@ export function generateCstMatch(grammar: CstGrammar): string {
         return;
       }
       case 'seq':
-        for (const sub of it.items) pushSteps(steps, sub, captures, used, card);
+        for (const sub of it.items) pushSteps(steps, sub, captures, card);
         return;
       case 'alt': {
         // Pure literal alternation → one capturing step (the matched text is the datum).
@@ -261,7 +212,7 @@ export function generateCstMatch(grammar: CstGrammar): string {
           const ts = texts.map(t => J(t)).join(' | ');
           steps.push({
             kind: 'litAlt', texts, tt: texts.map(ttOf),
-            cap: addCap(captures, used, sanitizeIdent(texts[0]) + 'Kw', ts, card),
+            cap: addCap(captures, it, ts, card),
           });
           return;
         }
@@ -269,29 +220,24 @@ export function generateCstMatch(grammar: CstGrammar): string {
         // OWN captures — the parent gets ONE field holding a per-branch sub-union
         // ({ branch: 'eq', expr } | { branch: 'empty' } | …), so consumers switch on
         // m.field.branch instead of probing flattened optionals.
-        const tagSet = new Set<string>();
         const branches: { tag: string; steps: Step[]; captures: Capture[] }[] = [];
         for (const b of it.items) {
           const bs: Step[] = [];
           const bCaps: Capture[] = [];
-          const bUsed = new Set<string>();
-          pushSteps(bs, b, bCaps, bUsed, 'one');
-          let tag = bs.length === 0 ? 'empty' : sanitizeIdent(nameFrom(b.type === 'seq' ? b.items : [b], 8));
-          if (tagSet.has(tag)) { let k = 2; while (tagSet.has(tag + k)) k++; tag = tag + k; }
-          tagSet.add(tag);
-          branches.push({ tag, steps: bs, captures: bCaps });
+          pushSteps(bs, b, bCaps, 'one');
+          branches.push({ tag: names.armOf.get(b)!.name, steps: bs, captures: bCaps });
         }
         const unionTs = branches.map(b => {
           const fields = b.captures.map(cp => `${cp.field}${cp.card === 'opt' ? '?' : ''}: ${cp.card === 'many' ? `(${cp.tsType})[]` : cp.tsType}`);
           return `{ branch: ${J(b.tag)}${fields.length ? '; ' + fields.join('; ') : ''} }`;
         }).join(' | ');
-        const cap = addCap(captures, used, 'alt', unionTs, card);
+        const cap = addCap(captures, it, unionTs, card);
         steps.push({ kind: 'branches', cap, branches });
         return;
       }
       case 'sep': {
         const el: Step[] = [];
-        pushSteps(el, it.element, captures, used, 'many');
+        pushSteps(el, it.element, captures, 'many');
         steps.push({ kind: 'sep', element: el, delimiter: it.delimiter, delimTt: ttOf(it.delimiter) });
         return;
       }
