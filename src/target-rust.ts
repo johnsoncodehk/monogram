@@ -1299,15 +1299,6 @@ fn shift_entry_meta(m: &mut EntryMeta, byte_delta: isize, tok_delta: isize) {
 }
 /// Per suffix entry, the tokens from its start to the old end, and their minimum. A suffix entry
 /// is adopted at pos when the new stream has that many tokens left.
-fn tail_rel(old_n: usize, suffix_meta: &[EntryMeta]) -> (Vec<isize>, isize) {
-    let mut rel = vec![0isize; suffix_meta.len()];
-    let mut min_rel = -1isize;
-    for (i, m) in suffix_meta.iter().enumerate() {
-        rel[i] = (old_n - m.tok_start as usize) as isize;
-        if min_rel < 0 || rel[i] < min_rel { min_rel = rel[i]; }
-    }
-    (rel, min_rel)
-}
 fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], old_root: i32) {
     let old = &nodes[old_root as usize];
     assert_eq!(entries.len(), old.kid_count as usize, "entry count vs root kids");
@@ -1380,7 +1371,9 @@ fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], 
         let suffix_cand = old_kids[suffix_start..].to_vec();
         let prefix_meta = &old_entries[..prefix_len];
         let suffix_meta = &old_entries[suffix_start..];
-        let (rel, min_rel) = tail_rel(old_n, suffix_meta);
+        // min_rel: the tokens from the last suffix entry's start to the old end (entries ascend):
+        // with fewer tokens left than that, no entry can be adopted.
+        let min_rel: isize = suffix_meta.last().map_or(-1, |m| (old_n - m.tok_start as usize) as isize);
         self.toks = new_toks;
         self.pos = if prefix_len > 0 { prefix_meta[prefix_len - 1].tok_end as usize } else { 0 };
         self.scratch.clear();
@@ -1395,7 +1388,7 @@ fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], 
                 return None;
             }
             for hi in 0..suffix_meta.len() {
-                if rel[hi] == left as isize {
+                if old_n - suffix_meta[hi].tok_start as usize == left {
                     return Some(p.finish_reuse(rule_id, &prefix_kids, mid, &suffix_cand, prefix_meta, mid_meta, suffix_meta, hi, byte_delta));
                 }
             }
@@ -1531,7 +1524,9 @@ impl<'a, B: Builder> Parser<'a, B> {
                 prefix_kids.push(self.b.root_kid_at(old_root, s.kid_start + j));
             }
         }
-        let (rel, min_rel) = tail_rel(old_n, suffix_meta);
+        // min_rel: the tokens from the last suffix entry's start to the old end (entries ascend):
+        // with fewer tokens left than that, no entry can be adopted.
+        let min_rel: isize = suffix_meta.last().map_or(-1, |m| (old_n - m.tok_start as usize) as isize);
         self.toks = new_toks;
         self.pos = if prefix_len > 0 { prefix_meta[prefix_len - 1].tok_end as usize } else { 0 };
         self.scratch.clear();
@@ -1547,7 +1542,7 @@ impl<'a, B: Builder> Parser<'a, B> {
                 return None;
             }
             for hi in 0..suffix_meta.len() {
-                if rel[hi] == left as isize {
+                if old_n - suffix_meta[hi].tok_start as usize == left {
                     return Some(p.finish_reuse_seg(rule_id, prefix_segs, &prefix_kids, mid_segs, mid_kids, suffix_cand, prefix_meta, mid_meta, suffix_meta, old_root, hi, byte_delta));
                 }
             }

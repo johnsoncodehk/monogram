@@ -1120,8 +1120,9 @@ function tryReuseTopW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
   _builder = builder;
   const mid: H[] = [];
   const midMeta: EntryMeta[] = [];
-  const suffixBound = newN - suffix;
-  const maxCand = suffixMeta.length > 0 ? Math.max(...suffixMeta.map((m) => m.tokStart + tokDelta)) : -1;
+  // minRel: the tokens from the last suffix entry's start to the old end (entries ascend):
+  // with fewer tokens left than that, no entry can be adopted.
+  const minRel = suffixMeta.length > 0 ? oldN - suffixMeta[suffixMeta.length - 1]!.tokStart : -1;
   const finish = (adoptFrom: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
     const adopted = suffixCand.slice(adoptFrom).map((h) => shift(h, byteDelta, tokDelta));
     const children: H[] = [...prefixKids, ...mid, ...adopted];
@@ -1148,19 +1149,18 @@ function tryReuseTopW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
     return { root: r as H, entries: newEntries, entryHs: children, reused: prefixKids.length + adopted.length };
   };
   const tryHit = (): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
-    if (pos < suffixBound) return null;
+    if (newN - pos > suffix) return null;
     if (suffixCand.length === 0) {
       if (pos === newN) return finish(0);
       return null;
     }
-    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === pos);
-    if (hit >= 0) return finish(hit);
+    for (let i = 0; i < suffixMeta.length; i++) if (oldN - suffixMeta[i]!.tokStart === newN - pos) return finish(i);
     return null;
   };
   {
     const early = tryHit();
     if (early) return early;
-    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+    if (suffixCand.length > 0 && minRel >= 0 && newN - pos < minRel) return null;
   }
   for (;;) {
     if (pos >= toks.length) {
@@ -1179,7 +1179,7 @@ function tryReuseTopW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
     mid.push(h!);
     const hit = tryHit();
     if (hit) return hit;
-    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+    if (suffixCand.length > 0 && minRel >= 0 && newN - pos < minRel) return null;
   }
 }
 ` : ''}${shapeB ? `
@@ -1211,8 +1211,9 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
   const midKids: H[] = [];
   const midSegs: Seg[] = [];
   const midMeta: EntryMeta[] = [];
-  const suffixBound = newN - suffix;
-  const maxCand = suffixMeta.length > 0 ? Math.max(...suffixMeta.map((m) => m.tokStart + tokDelta)) : -1;
+  // minRel: the tokens from the last suffix entry's start to the old end (entries ascend):
+  // with fewer tokens left than that, no entry can be adopted.
+  const minRel = suffixMeta.length > 0 ? oldN - suffixMeta[suffixMeta.length - 1]!.tokStart : -1;
   const finish = (adoptFrom: number): { root: H; segs: Seg[]; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
     const adoptedSegs = suffixCand.slice(adoptFrom);
     const adoptedKids: H[] = [];
@@ -1262,19 +1263,18 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
     return { root: r as H, segs: newSegs, entries: newEntries, entryHs: children, reused: prefixSegs.length + adoptedSegs.length };
   };
   const tryHit = (): { root: H; segs: Seg[]; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
-    if (pos < suffixBound) return null;
+    if (newN - pos > suffix) return null;
     if (suffixCand.length === 0) {
       if (pos === newN) return finish(0);
       return null;
     }
-    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === pos);
-    if (hit >= 0) return finish(hit);
+    for (let i = 0; i < suffixMeta.length; i++) if (oldN - suffixMeta[i]!.tokStart === newN - pos) return finish(i);
     return null;
   };
   {
     const early = tryHit();
     if (early) return early;
-    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+    if (suffixCand.length > 0 && minRel >= 0 && newN - pos < minRel) return null;
   }
   ${hasHeadB ? `if (prefixLen === 0) {
     _n = 0;
@@ -1286,7 +1286,7 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
       midMeta.push({ ...pair.meta, kidStart: 0 });
       const hit = tryHit();
       if (hit) return hit;
-      if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+      if (suffixCand.length > 0 && minRel >= 0 && newN - pos < minRel) return null;
     }
   }
   ` : ''}for (;;) {
@@ -1307,7 +1307,7 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
     midMeta.push({ tokStart: pair.meta.tokStart, tokEnd: pair.meta.tokEnd, ext: pair.meta.ext, off: pair.meta.off, end: pair.meta.end, kidStart: 0, kidCount: midKids.length - before });
     const hit = tryHit();
     if (hit) return hit;
-    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+    if (suffixCand.length > 0 && minRel >= 0 && newN - pos < minRel) return null;
   }
 }
 ` : ''}
