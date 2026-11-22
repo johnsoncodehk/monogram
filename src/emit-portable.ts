@@ -1588,6 +1588,26 @@ export function prattOpTables(r: PrattRule, plan: LexIdPlan): PrattOpTables {
   };
 }
 
+/** The LED loop's exits: the literal ids of a Pratt rule's led groups (its leds by first literal)
+ *  after which the loop ENDS when every arm of the group was tried and failed. The reference
+ *  (gen-parser.ts parsePratt) goes on to the operator table when no led matched; it can match only
+ *  a token that a later check of the loop takes: a postfix token (by the kinds the lexer gives the
+ *  literal, or the head of an interpolated template), a postfix or binary operator by its own lid, or a `>` that composes with the tokens
+ *  after it (`>>`, `>=`, ...: ParserIR.gtComps). A group whose lid none of them takes ends the
+ *  loop at once, as those checks would have; any other falls through to them. */
+export function prattLedExits(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | 'identToken' | 'identLike' | 'puncts' | 'gtComps'>, plan: LexIdPlan): Set<number> {
+  const kinds = literalKinds(ir);
+  const ops = new Set([...r.binary.map((b) => b.op), ...r.postfix.map((p) => p.op)]);
+  const exits = new Set<number>();
+  for (const b of r.leds) {
+    const ks = kinds(b.first);
+    const later = ops.has(b.first) || (b.first === '>' && ir.gtComps.length > 0)
+      || [...ks].some((k) => r.postfixToks.includes(k)) || (r.postfixTplHole !== undefined && ks.has('$templateHead'));
+    if (!later) exits.add(lidOf(plan, b.first));
+  }
+  return exits;
+}
+
 /**
  * O(1) early exit for runtime `lid_of`: a text whose key (length, first unit) no literal has is
  * no literal (lid 0), found without the table lookup.
