@@ -438,9 +438,9 @@ fn _lx_ext(s: &str, e: usize) -> usize {
     (false, q + ${tlen(tpl.open)})
 }
 ` : '';
-  const fields = ["toks: &'s mut Vec<Tok>", 'pending_nl: bool',
-    rx ? "prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: &'s mut Vec<bool>, last_close: bool, last_bang: bool" : '',
-    tpl ? "template_stack: &'s mut Vec<i64>" : '',
+  const fields = ['toks: Vec<Tok>', 'pending_nl: bool',
+    rx ? 'prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool' : '',
+    tpl ? 'template_stack: Vec<i64>' : '',
     nlRs ? nlRs.fields : ''].filter(Boolean).join(', ');
   // Force-inline bookkeeping into the lex cascade. Under rustc -O (no LTO), leaving
   // emit/prev_is_value as outlined calls flips full-parse I-cache layout so lex gains
@@ -463,15 +463,15 @@ fn _lx_ext(s: &str, e: usize) -> usize {
   ].filter(Boolean).join('\n');
   const emitTail = rx ? `
         self.bp_lid = self.prev_lid; self.has_prev2 = self.has_prev; self.prev_kid = kid; self.prev_lid = lid; self.has_prev = true;` : '';
-  const stateImpl = stateful ? `struct LexState<'s> { ${fields} }
-impl<'s> LexState<'s> {
+  const stateImpl = stateful ? `struct LexState { ${fields} }
+impl LexState {
 ${prevIsValue}${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
 ${emitHooks}
         self.toks.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;${emitTail}
     }
 }
 ` : '';
-  const rxScanImpl = rxOnly ? `struct RxScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: &'a mut Vec<bool>, last_close: bool, last_bang: bool }
+  const rxScanImpl = rxOnly ? `struct RxScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool }
 impl<'a> RxScan<'a> {
 ${inlAlways}    fn prev_is_value(&self) -> bool {
         if !self.has_prev { return false; }
@@ -489,7 +489,7 @@ ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
     }
 }
 ` : '';
-  const tplScanImpl = tplOnly ? `struct TplScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, template_stack: &'a mut Vec<i64> }
+  const tplScanImpl = tplOnly ? `struct TplScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, template_stack: Vec<i64> }
 impl<'a> TplScan<'a> {
 ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
         if !self.template_stack.is_empty() { if lid == _LID_BRACE_OPEN { *self.template_stack.last_mut().unwrap() += 1; } else if lid == _LID_INTERP_CLOSE { *self.template_stack.last_mut().unwrap() -= 1; } }
@@ -497,7 +497,7 @@ ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
     }
 }
 ` : '';
-  const rxTplScanImpl = rxTpl ? `struct RxTplScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: &'a mut Vec<bool>, last_close: bool, last_bang: bool, template_stack: &'a mut Vec<i64> }
+  const rxTplScanImpl = rxTpl ? `struct RxTplScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool, template_stack: Vec<i64> }
 impl<'a> RxTplScan<'a> {
 ${inlAlways}    fn prev_is_value(&self) -> bool {
         if !self.has_prev { return false; }
@@ -516,16 +516,20 @@ ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
     }
 }
 ` : '';
-  // The lexer's bracket-head and template-depth stacks, bounded by nesting depth. The lexer
-  // updates them in place, in a LexStacks the caller keeps (a reused builder's Workspace), so a
-  // later lex reuses their capacity, also after one stopped by a panic; each lex empties them first.
+  // The lexer's bracket-head and template-depth stacks, bounded by nesting depth. lex_into takes
+  // them from a LexStacks the caller keeps (a reused builder's Workspace), so a later lex reuses
+  // their capacity instead of allocating them again; each lex starts them empty. They travel
+  // through lex_from by value: kept in the scan's own struct, the hot emit path keeps them in
+  // registers, which a by-reference field costs about 14 instructions per token (Callgrind, CI:
+  // checker.ts lex 79.9M by value vs 84.7M by reference). The price: a lexer panic drops them, so
+  // the parse after one allocates them again (a few bytes, bounded by nesting depth).
   const stkFields = [rx ? 'paren_head: Vec<bool>' : '', tpl ? 'template_stack: Vec<i64>' : ''].filter(Boolean);
   const lexStacks = `/// The lexer's transient stacks (bracket heads, template depths), kept across lexes by a reused builder.
 #[derive(Default)]
 struct LexStacks {${stkFields.length ? ` ${stkFields.join(', ')} ` : ''}}
 `;
   const stkParam = stkFields.length ? 'stk' : '_stk';
-  const takeStk = (f: string) => `{ stk.${f}.clear(); &mut stk.${f} }`;
+  const takeStk = (f: string) => `{ let mut v = std::mem::take(&mut stk.${f}); v.clear(); v }`;
   const initFields = ['toks: Vec::new()', 'pending_nl: false',
     rx ? `prev_lid: 0, prev_kid: 0, bp_lid: 0, has_prev: false, has_prev2: false, paren_head: ${takeStk('paren_head')}, last_close: false, last_bang: false` : '',
     tpl ? `template_stack: ${takeStk('template_stack')}` : '',
@@ -539,7 +543,7 @@ ${uniIdentOrPanic}`;
     const rxLoopBody = `        let c = b[pos] as u32;
 ${nlWs}${cascade}
 ${uniIdentOrPanic}`;
-    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, paren_head: &mut Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, bool, bool) {
+    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -547,7 +551,7 @@ ${uniIdentOrPanic}`;
     while pos < n && (limit == 0 || st.acc.len() - base < limit) {
 ${rxLoopBody}
     }
-    (pos, st.pending_nl, st.prev_lid, st.prev_kid, st.bp_lid, st.has_prev, st.has_prev2, st.last_close, st.last_bang)
+    (pos, st.pending_nl, st.prev_lid, st.prev_kid, st.bp_lid, st.has_prev, st.has_prev2, st.paren_head, st.last_close, st.last_bang)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
@@ -557,12 +561,12 @@ fn lex<'a>(src: &'a str) -> Vec<Tok> {
 /// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer).
 fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) {
     toks.clear();
-    stk.paren_head.clear();
-    lex_from(src, 0, false, 0, 0, 0, false, false, &mut stk.paren_head, false, false, toks, 0);
+    let r = lex_from(src, 0, false, 0, 0, 0, false, false, ${takeStk('paren_head')}, false, false, toks, 0);
+    stk.paren_head = r.7;
 }`;
   }
   if (tplOnly) {
-    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${tplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, template_stack: &mut Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool) {
+    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${tplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, Vec<i64>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -570,7 +574,7 @@ fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) 
     while pos < n && (limit == 0 || st.acc.len() - base < limit) {
 ${loopBody}
     }
-    (pos, st.pending_nl)
+    (pos, st.pending_nl, st.template_stack)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
@@ -580,12 +584,12 @@ fn lex<'a>(src: &'a str) -> Vec<Tok> {
 /// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer).
 fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) {
     toks.clear();
-    stk.template_stack.clear();
-    lex_from(src, 0, false, &mut stk.template_stack, toks, 0);
+    let r = lex_from(src, 0, false, ${takeStk('template_stack')}, toks, 0);
+    stk.template_stack = r.2;
 }`;
   }
   if (rxTpl) {
-    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxTplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, paren_head: &mut Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: &mut Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, bool, bool) {
+    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxTplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Vec<i64>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -593,7 +597,7 @@ fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) 
     while pos < n && (limit == 0 || st.acc.len() - base < limit) {
 ${loopBody}
     }
-    (pos, st.pending_nl, st.prev_lid, st.prev_kid, st.bp_lid, st.has_prev, st.has_prev2, st.last_close, st.last_bang)
+    (pos, st.pending_nl, st.prev_lid, st.prev_kid, st.bp_lid, st.has_prev, st.has_prev2, st.paren_head, st.last_close, st.last_bang, st.template_stack)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
@@ -603,8 +607,8 @@ fn lex<'a>(src: &'a str) -> Vec<Tok> {
 /// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer).
 fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) {
     toks.clear();
-    stk.paren_head.clear(); stk.template_stack.clear();
-    lex_from(src, 0, false, 0, 0, 0, false, false, &mut stk.paren_head, false, false, &mut stk.template_stack, toks, 0);
+    let r = lex_from(src, 0, false, 0, 0, 0, false, false, ${takeStk('paren_head')}, false, false, ${takeStk('template_stack')}, toks, 0);
+    stk.paren_head = r.7; stk.template_stack = r.10;
 }`;
   }
   if (rxOrTpl) {
@@ -618,11 +622,12 @@ fn lex_into<'a>(src: &'a str, out: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) {
     out.clear();
     let b = src.as_bytes();
     let n = b.len();
-${open.replace('toks: Vec::new()', 'toks: out')}
+${open.replace('toks: Vec::new()', 'toks: std::mem::take(out)')}
     let mut pos = 0usize;
     while pos < n {
 ${loopBody}
     }
+    *out = st.toks;${rx ? '\n    stk.paren_head = st.paren_head;' : ''}${tpl ? '\n    stk.template_stack = st.template_stack;' : ''}
 }`;
   }
   if (newlineOnly) {
@@ -2435,7 +2440,8 @@ pub fn parse_with<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> Option<B
     // A builder that parsed before is reused: its token buffer, arena and workspace are emptied
     // (capacity kept), so nothing of the previous parse stays reachable and nothing is allocated
     // again. The guard hands them back to the builder when the parse ends, also by a panic (input
-    // the lexer cannot tokenize), so a rejected parse does not cost the next one its buffers.
+    // the lexer cannot tokenize), so a rejected parse does not cost the next one its buffers
+    // (except the lexer's two small stacks after a lexer panic: see LexStacks).
     let toks = b.toks_mut().map(std::mem::take).unwrap_or_default();
     let ws = b.workspace_mut().map(std::mem::take).unwrap_or_default();
     b.restore((0, 0));
@@ -5187,16 +5193,11 @@ const rustLowering: Lowering = {
         if (!s.declare) return [`(${s.ids.join(', ')}) = ${s.call};`];
         return [`let (${s.names.map((n, i) => (n !== '_' && s.mutable(n) ? `mut ${s.ids[i]}` : s.ids[i])).join(', ')}) = ${s.call};`];
       },
-      // lex_from updates a list-typed state (a stack) in place and returns the scalar ones.
-      lexStep: (cx, s) => {
-        const isList = (i: number) => s.stateTy[i] === 'bools' || s.stateTy[i] === 'depths';
-        const scalars = s.state.filter((_, i) => !isList(i));
-        return [
-          `let lexed = lex_from(${cx.str(s.text)}, ${s.pos} as usize, ${[...s.state.map((n, i) => (isList(i) ? `&mut ${n}` : n)), `&mut ${s.out}`].join(', ')}, 1);`,
-          `${s.pos} = lexed.0 as isize;`,
-          ...scalars.map((n, i) => `${n} = lexed.${i + 1};`),
-        ];
-      },
+      lexStep: (cx, s) => [
+        `let lexed = lex_from(${cx.str(s.text)}, ${s.pos} as usize, ${[...s.state, `&mut ${s.out}`].join(', ')}, 1);`,
+        `${s.pos} = lexed.0 as isize;`,
+        ...s.state.map((n, i) => `${n} = lexed.${i + 1};`),
+      ],
     },
   },
 };
