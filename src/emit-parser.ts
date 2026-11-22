@@ -3794,7 +3794,7 @@ function editCore(entryRule: string | undefined, edits?: Edit[]) {
     let lo = 0, hi = r0;
     while (lo < hi) { const mid = (lo + hi) >> 1; if (toff(mid) < cs) lo = mid + 1; else hi = mid; }
     let m = 0x7fffffff;
-    for (let i = lo; i < r0; i++) if (tkPd[i] < m) m = tkPd[i];
+    for (let i = lo; i < r0; i++) { const q = ${e.statefulLexer ? 'tkPd[i]' : 'lxPdBefore(tkK[i], tkT[i], tkPd[i])'}; if (q < m) m = q; }
     wndOldMin0 = m;
   }
   // Lex the window into the spare buffers (the old stream stays live for resync).

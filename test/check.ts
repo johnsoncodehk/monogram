@@ -20,6 +20,7 @@ interface Gate { group: string; name: string; args: string[] }
 const GATES: Gate[] = [
   { group: 'core', name: 'agnostic', args: ['test/agnostic.ts'] },
   { group: 'core', name: 'tag-open-entry', args: ['test/tag-open-entry.ts'] },
+  { group: 'core', name: 'text-dialect', args: ['test/text-dialect.ts'] },
   { group: 'core', name: 'left-recursion', args: ['test/left-recursion.ts'] },
   { group: 'core', name: 'nullable-rules', args: ['test/nullable-rules.ts'] },
   { group: 'core', name: 'template-holes', args: ['test/template-holes.ts'] },

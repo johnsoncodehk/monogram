@@ -15,10 +15,11 @@
 // a newline-mode NEWLINE spans its line break).
 // Flag bits: 1 newlineBefore, 2 commentBefore, 4 multilineFlowBefore, 8 '(' heads a control
 // group. test/emit-lexer-verify.ts gates the output against the golden token streams.
-import type { CstGrammar, ElementRegion, IndentConfig, MarkupConfig, NewlineConfig, TokenDecl } from './types.ts';
+import type { CstGrammar, ElementRegion, IndentConfig, MarkupConfig, NewlineConfig, TokenDecl, TokenPattern } from './types.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { UNI_ID_CONTINUE, UNI_ID_START } from './uni-ident.ts';
+import { type CSet, continuesAt, examinedUnits as examinedUnitsOf, failRead, failReadFirst, info as patternInfo, oneChar, overTrigger, readEndWalk, union } from './lex-match-plan.ts';
 import {
   tokenBlockPatternFirstCharSet, tokenBlockPatternSource, tokenEscapeValidPatternSource, tokenPatternCharLoop,
   tokenPatternFirstCharSet, tokenPatternHasStartAnchor, tokenPatternSource,
@@ -187,6 +188,41 @@ const nonAsciiWsConsume = (v: string, cont: boolean, indent: string): string =>
 
 type FirstSet = { ascii: Set<number>; nonAscii: boolean } | null;
 
+// A failed attempt that reads at most this many units from the start of the token it decides
+// reads within that token's end + 1 (a token is at least one unit): the relex window covers it.
+const FREE_FAIL = 2;
+// Whether UTF-16 unit `v` is one of `set` (EOF, -1, is never tested: callers bound v first).
+function unitIn(v: string, set: CSet): string {
+  const rs = set.map(([a, b]): [number, number] => [Math.max(0, a), Math.min(0xffff, b)]).filter(([a, b]) => a <= b);
+  if (rs.length === 1 && rs[0][0] === 0 && rs[0][1] === 0xffff) return 'true';
+  return rs.length ? `(${rs.map(([a, b]) => (a === b ? `${v} === ${a}` : `(${v} >= ${a} && ${v} <= ${b})`)).join(' || ')})` : 'false';
+}
+// The read-end routine of a pattern's failed attempt at p (readEndWalk, src/lex-match-plan.ts):
+// the exclusive end of what it read.
+function emitReadEnd(emit: (s?: string) => void, name: string, p: TokenPattern) {
+  const w = readEndWalk(p);
+  emit(`function ${name}(s«: string», p«: number») {`);
+  emit(`  let q = p;`);
+  for (const it of w.lead) {
+    if ('lit' in it) emit(`  if (!s.startsWith(${JSON.stringify(it.lit)}, q)) return q + ${it.lit.length}; q += ${it.lit.length};`);
+    else emit(`  if (q >= s.length) return q + 1; { const c = s.charCodeAt(q); if (!${unitIn('c', it.cls)}) return q + 1; } q++;`);
+  }
+  const past = unitIn('c', w.past);
+  if (past === 'true') emit(`  return s.length + 1;`);
+  else if (past === 'false') emit(`  return q + 1;`);
+  else { emit(`  while (q < s.length) { const c = s.charCodeAt(q); if (!${past}) break; q++; }`); emit(`  return q + 1;`); }
+  emit(`}`);
+}
+// The over-read routine of a pattern's match ending at e, called when the unit at e is one at which
+// it can read more than one unit past e (overTrigger): the exclusive end of what it read, through
+// the units the pattern examines.
+function emitOverEnd(emit: (s?: string) => void, name: string, p: TokenPattern) {
+  emit(`function ${name}(s«: string», e«: number») {`);
+  const past = unitIn('c', examinedUnitsOf(p));
+  emit(past === 'true' ? `  return s.length + 1;` : `  let q = e; while (q < s.length) { const c = s.charCodeAt(q); if (!${past}) break; q++; } return q + 1;`);
+  emit(`}`);
+}
+
 // Emit the lexer for `spec` over the id spaces of `st`.
 //   windowed — the incremental-relex machinery (resync against the previous stream,
 //              restart anchors, paren-stack reconstruction) the emitted parser drives;
@@ -215,6 +251,16 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   const stateful = !!markup || lineSensitive;
   const windowed = opts.windowed;
   const resync = windowed && !stateful;
+  // The relex anchor rule (src/relex-family.ts states it): a token is decided by everything its
+  // lexer read, its own match and the failed attempts before it at its start. The windowed relex
+  // keeps the old tokens up to B, the last token ending before the edit, and lexes on from B's
+  // end: that is sound when nothing that decided B or a token before it read past B's end + 1
+  // (exclusive: up to the unit right after B, which is before the edit). The reads that can go
+  // further are tracked while lexing: \`lxLookEnd\` is the exclusive end of the furthest read any
+  // decision so far made, and a token pushed while it is past the token's end + 1 carries flag 32:
+  // no restart anchor (findRestart) and no resync point. Only a lexer that restarts at anchors (a
+  // resync lexer) tracks it; the tokenizer the interpreter runs does not.
+  const looks = resync;
 
   const out: string[] = [];
   const emit = (s = '') => out.push(s);
@@ -329,6 +375,11 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
         k: kOf(t.name),
         identLike: identLike.has(t.name),
         loop: tokenPatternCharLoop(t),
+        // The relex anchor rule (src/relex-family.ts): what a failed attempt / a match reads past
+        // the end + 1 of the token it decides (`lxLookEnd` below); null when it cannot.
+        readEnd: looks && failRead(t.pattern) > FREE_FAIL ? `lxReadEnd_${id}` : null,
+        overEnd: looks && overTrigger(t.pattern).length > 0 ? `lxOverEnd_${id}` : null,
+        tokenPattern: t.pattern,
       };
     });
   type M = (typeof matchers)[number];
@@ -338,6 +389,15 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`const ${m.re} = new RegExp(${J(`(?:${m.pattern})`)}, ${J(m.flags)});`);
     if (m.blockRe) emit(`const ${m.blockRe} = new RegExp(${J(`(?:${m.blockPattern})`)}, ${J(m.flags)});`);
   }
+  // The reads past a token's end + 1 (\`looks\`): per matcher, its failed attempt's read end and its
+  // match's over-read; the type-parameter head veto's match decides the tagOpen before it.
+  const headOverEnd = looks && el?.typeParameters?.head ? 'lxOverEndTpHead' : null;
+  const tracks = matchers.some(m => m.readEnd || m.overEnd) || headOverEnd !== null;
+  for (const m of matchers) {
+    if (m.readEnd) emitReadEnd(emit, m.readEnd, m.tokenPattern);
+    if (m.overEnd) emitOverEnd(emit, m.overEnd, m.tokenPattern);
+  }
+  if (headOverEnd) emitOverEnd(emit, headOverEnd, el!.typeParameters!.head!);
   emit(`const LX_WS = /\\s+/y;`);
   emit(NON_ASCII_WS_FN);
   emit(`// window-truncation retry: a matcher failing at the WINDOW edge is not a lex`);
@@ -367,6 +427,11 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`let wndOldMin0 = 0x7fffffff;`);
   }
   if (resync) {
+    emit(`// A token's place on the paren-depth trajectory: its recorded depth, except a '(' (which`);
+    emit(`// records the depth INCLUDING its own entry) stands at the depth before its push. An entry`);
+    emit(`// pushed after the divergence point is then never "at or below both minimums", so the fast`);
+    emit(`// resync tier compares only entries both lexes had (\`if (q)\` vs \`ifx (q)\` differ in theirs).`);
+    emit(`function lxPdBefore(k«: number», t«: number», pd«: number») { return k === K_PUNCT && t === ${tOf('(')} ? pd - 1 : pd; }`);
     emit(`function buildAltSuffMin(lo«: number») {`);
     emit(`  if (altSuffMinBuf === null || altSuffMinBuf.length < altN + 1) altSuffMinBuf = new Int32Array(altN + 1025);`);
     emit(`  altSuffMin = altSuffMinBuf;`);
@@ -436,6 +501,19 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       emit(`const LX_RAW_FOLD = new Map«<string, number>»(${J(fold)});`);
       // the close tag of a case-folded raw-text element, in any ASCII case
       emit(`const LX_RAW_FOLD_END = new Map«<string, RegExp>»([${fold.map(([tag]) => `[${J(tag)}, new RegExp(${J(reEsc(el.tagOpen + el.closeMarker + tag))}, 'gi')]`).join(', ')}]);`);
+      if (el.rawText.some(r => r.unlessBodyStarts !== undefined)) {
+        // per raw-text name (exact, or case-folded): the body-start pattern under which its body is
+        // ordinary children, not raw
+        const un = (fold: boolean) => el.rawText!.filter(r => !!r.ignoreCase === fold && r.unlessBodyStarts !== undefined)
+          .flatMap(r => r.tags.map(tag => `[${J(fold ? tag.toLowerCase() : tag)}, new RegExp(${J(`(?:${tokenPatternSource({ pattern: r.unlessBodyStarts! })})`)}, 'y')]`)).join(', ');
+        emit(`const LX_RAW_UNLESS_EXACT = new Map«<string, RegExp>»([${un(false)}]);`);
+        emit(`const LX_RAW_UNLESS_FOLD = new Map«<string, RegExp>»([${un(true)}]);`);
+      }
+    }
+    if (el.tagStart !== undefined) {
+      // a tagOpen opens a tag only when the unit after it is one of the tag-start class
+      if (!oneChar(el.tagStart)) throw new Error('elements.tagStart: must be a one-unit class');
+      emit(`function lxTagStart(s«: string», p«: number») { if (p >= s.length) return false; const c = s.charCodeAt(p); return ${unitIn('c', patternInfo(el.tagStart).first)}; }`);
     }
     const tp = el.typeParameters;
     if (tp?.head) emit(`const LX_TP_HEAD = new RegExp(${J(`(?:${tokenPatternSource({ pattern: tp.head })})`)}, 'y');`);
@@ -624,11 +702,13 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`  // A type-parameter signature being decided (\`<T>(x: T) => T\`): the group is lexed as code;`);
     emit(`  // the token after its closer keeps it (one of the signature's \`then\`) or rewinds to an element.`);
     emit(`  ${speculating ? 'specTok = -1; let' : 'let specTok = -1,'} specVerdict = 0, specClosedAt = -1, specParenBase = 0, specDocLex = 0, specPops = 0;`);
-    emit(`  let lxLookEnd = -1;              // a tagOpen read as a type-parameter head decided by the characters up to here`);
     emit(`  let specStack«: number[]» = [], specParens«: boolean[]» = [];`);
   }
+  if (tracks) emit(`  let lxLookEnd = -1;              // the furthest unit (exclusive) a decision so far read past its token's end + 1`);
   // ── push ──
   emit(`  function tkPush(k«: number», t«: number», off«: number», end«: number») {`);
+  // a token whose decision, or one before it, read past its end + 1 is no restart anchor (flag 32)
+  if (tracks) emit(`    if (lxLookEnd > end + 1) extraFl |= 32;`);
   if (tagScope) emit(`    const rawOff = off, rawEnd = end;`);
   emit(`    off += srcBase«!»; end += srcBase«!»;`);
   emit(`    if (tokN === tkCap) growTok();`);
@@ -643,11 +723,9 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   if (el) {
     // the frame depth saturates (only a zero record is read: restart / resync points)
     // A token lexed while a signature is undecided (and the token deciding it) counts one level
-    // deeper: its lexing depends on the `<` before it, so it is no restart or resync point.
-    // ... and so does a token inside the characters a type-parameter head veto read (the
-    // `tagOpen` it decided included): an edit there can flip that decision.
-    const deeper = [el.typeParameters?.signature ? 'specTok >= 0' : '', el.typeParameters?.head ? 'off - srcBase«!» < lxLookEnd' : ''].filter(Boolean);
-    if (deeper.length) emit(`    { const d = templateStack.length + (${deeper.join(' || ')} ? 1 : 0); tkDp[tokN] = d > 255 ? 255 : d; }`);
+    // deeper: its lexing depends on the `<` before it, so it is no restart or resync point. (A
+    // type-parameter head veto is a read like a matcher's: `lxLookEnd`.)
+    if (el.typeParameters?.signature) emit(`    { const d = templateStack.length + (specTok >= 0 ? 1 : 0); tkDp[tokN] = d > 255 ? 255 : d; }`);
     else emit(`    tkDp[tokN] = templateStack.length > 255 ? 255 : templateStack.length;`);
     if (el.typeParameters?.signature) {
       emit(`    if (specClosedAt >= 0 && tokN > specClosedAt) {`);
@@ -728,16 +806,18 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`    //    (suffix min depth >= candidate depth, a pop-on-empty counted as -1): the`);
     emit(`    //    caller re-bases the adopted tkPd column by lexResyncPd.`);
     emit(`    if (wndPtr >= 0) {`);
-    emit(`      const pd = tkPd[tokN - 1];`);
-    emit(`      if (dmgMinNew < 0) { if (off >= wndCs«!») dmgMinNew = pd; }`);
-    emit(`      else if (pd < dmgMinNew) dmgMinNew = pd;`);
+    emit(`      const pd = tkPd[tokN - 1], pd0 = lxPdBefore(k, t, pd);`);
+    emit(`      if (dmgMinNew < 0) { if (off >= wndCs«!») dmgMinNew = pd0; }`);
+    emit(`      else if (pd0 < dmgMinNew) dmgMinNew = pd0;`);
     emit(`      if (off >= wndMinOff) {`);
-    emit(`        while (wndPtr < altN && (altOff«!»[wndPtr] < 0 ? altOff«!»[wndPtr] + srcLenP1 : altOff«!»[wndPtr]) + wndDelta < off) { if (altPd«!»[wndPtr] < dmgMinOld) dmgMinOld = altPd«!»[wndPtr]; wndPtr++; }`);
+    emit(`        while (wndPtr < altN && (altOff«!»[wndPtr] < 0 ? altOff«!»[wndPtr] + srcLenP1 : altOff«!»[wndPtr]) + wndDelta < off) { const q0 = lxPdBefore(altK«!»[wndPtr], altT«!»[wndPtr], altPd«!»[wndPtr]); if (q0 < dmgMinOld) dmgMinOld = q0; wndPtr++; }`);
     emit(`        if (wndPtr < altN && (altOff«!»[wndPtr] < 0 ? altOff«!»[wndPtr] + srcLenP1 : altOff«!»[wndPtr]) + wndDelta === off && altK«!»[wndPtr] === k && altT«!»[wndPtr] === t`);
     emit(`            && (altEnd«!»[wndPtr] < 0 ? altEnd«!»[wndPtr] + srcLenP1 : altEnd«!»[wndPtr]) + wndDelta === end`);
     emit(`            // the candidate's LEADING-TRIVIA flags must match too (parsers read them)`);
     emit(`            && altFl«!»[wndPtr] === tkFl[tokN - 1]`);
     emit(`            && templateStack.length === 0 && altDp«!»[wndPtr] === 0${el?.typeParameters?.signature ? ' && specTok < 0' : ''}`);
+    // outside every read past a token's end + 1: the adopted tokens' flag 32 is then a fresh lex's
+    if (tracks) emit(`            && (tkFl[tokN - 1] & 32) === 0`);
     emit(`            && LX_PFXV[t] === 0 && LX_PARENKW[t] === 0 && LX_EXPRKW[t] === 0`);
     emit(`            && !(k === K_PUNCT && (t === ${tLParen} || t === ${tRParen}))) {`);
     emit(`          const q = altPd«!»[wndPtr];`);
@@ -783,7 +863,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   emit(`    if (t === ${tRParen} && lastCloseWasParenHead) return false;`);
   emit(`    return LX_DIVK[k] !== 0 || LX_DIVT[t] !== 0;`);
   emit(`  }`);
-  if (el) emitElementHelpers(emit, el, enterAlways, { kOf, puT, startsWithExpr, J });
+  if (el) emitElementHelpers(emit, el, enterAlways, { kOf, puT, startsWithExpr, J, headOverEnd });
   if (markup) {
     // Tag-mode tracking after a token the scan emitted: the closing `tagClose` enters raw text
     // (a raw-text element) or text; the tag name decides raw-text entry and void retagging.
@@ -1053,7 +1133,8 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     groups.get(sig)!.ccs.push(cc);
   }
 
-  const emitMatcherTry = (m: M, re: string, ind: string) => {
+  // `ccs`: the first units of the dispatch arm (null: beyond ASCII), which bound a failed attempt's read
+  const emitMatcherTry = (m: M, re: string, ind: string, ccs: number[] | null) => {
     emit(`${ind}${re}.lastIndex = pos;`);
     emit(`${ind}{ const m = ${re}.exec(source);`);
     emit(`${ind}  if (m !== null) {`);
@@ -1101,6 +1182,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       emit(`${i2}  docLex.push({ offset: pos + lexSrcBase, end: pos + lexSrcBase + m[0].length, kind: 3, ch: m[0] });`);
       emit(`${i2}}`);
     }
+    if (m.overEnd) emit(`${i2}{ const e = pos + m[0].length; if (e < n) { const c = source.charCodeAt(e); if (${unitIn('c', overTrigger(m.tokenPattern))}) { const r = ${m.overEnd}(source, e); if (r > lxLookEnd) lxLookEnd = r; } } }`);
     if (m.skip) {
       emit(`${i2}if (/[\\n\\r\\u2028\\u2029]/.test(m[0])) pendingNl = true;`);
       if (indentComment) emit(`${i2}if (m[0].startsWith(${J(indentComment)})) pendingComment = true;`);
@@ -1112,16 +1194,22 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       emit(`${i2}pos = _e;`);
     }
     emit(`${i2}${CONT}`);
-    emit(`${ind}  } }`);
+    // a failed attempt from this arm's first units that can read past the end + 1 of the token decided after it
+    const recFail = m.readEnd !== null && (ccs === null ? failRead(m.tokenPattern) : Math.max(...ccs.map(c => failReadFirst(m.tokenPattern, c)))) > FREE_FAIL;
+    // ... and only when the unit after the first is one after which it can read on (continuesAt)
+    const cont = recFail && ccs !== null ? unitIn('c1', ccs.reduce<CSet>((a, c) => union(a, continuesAt(m.tokenPattern, c)), [])) : 'true';
+    emit(!recFail || cont === 'false' ? `${ind}  } }`
+      : cont === 'true' ? `${ind}  } else { const r = ${m.readEnd}(source, pos); if (r > lxLookEnd) lxLookEnd = r; } }`
+      : `${ind}  } else if (pos + 1 < n) { const c1 = source.charCodeAt(pos + 1); if (${cont}) { const r = ${m.readEnd}(source, pos); if (r > lxLookEnd) lxLookEnd = r; } } }`);
   };
-  const emitAct = (a: Act, ind: string) => {
+  const emitAct = (a: Act, ind: string, ccs: number[] | null) => {
     const reOf = (v: 'R' | 'B') => (v === 'B' ? a.m.blockRe! : a.m.re);
     const body = (v: 'R' | 'B', i: string) => {
       if (a.m.isRegex) {
         emit(`${i}if (!prevIsValue()) {`);
-        emitMatcherTry(a.m, reOf(v), i + '  ');
+        emitMatcherTry(a.m, reOf(v), i + '  ', ccs);
         emit(`${i}}`);
-      } else emitMatcherTry(a.m, reOf(v), i);
+      } else emitMatcherTry(a.m, reOf(v), i, ccs);
     };
     if (a.v0 === a.v1) { body(a.v0!, ind); return; }
     if (a.v0 && a.v1) {
@@ -1215,7 +1303,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     // an element entered from code, outside a tag: every tagOpen (the grammar uses it only to
     // open tags), or else one where an operand may start (the regex-literal position) unless it
     // begins a type-parameter list
-    emit(`    if (${startsWithExpr('source', 'pos', el.tagOpen, 'cc')} && (templateStack.length === 0 || (templateStack[templateStack.length - 1] & 3) !== 2)${speculating ? ' && specTok < 0' : ''}${enterAlways ? '' : ' && !prevIsValue() && lxOpensElement(pos)'}) {`);
+    emit(`    if (${startsWithExpr('source', 'pos', el.tagOpen, 'cc')}${el.tagStart !== undefined ? ` && lxTagStart(source, pos + ${el.tagOpen.length})` : ''} && (templateStack.length === 0 || (templateStack[templateStack.length - 1] & 3) !== 2)${speculating ? ' && specTok < 0' : ''}${enterAlways ? '' : ' && !prevIsValue() && lxOpensElement(pos)'}) {`);
     emit(`      templateStack.push(6);`);
     if (el.rawText?.length) emit(`      lxTagAt[templateStack.length - 1] = tokN;`);
     emit(`      tkPush(K_PUNCT, ${puT(el.tagOpen)}, pos, pos + ${el.tagOpen.length});`);
@@ -1253,10 +1341,10 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     }
     if (needsLabel && g.acts.length > 0) {
       emit(`        mt: {`);
-      for (const a of g.acts) emitAct(a, '          ');
+      for (const a of g.acts) emitAct(a, '          ', g.ccs);
       emit(`        }`);
     } else {
-      for (const a of g.acts) emitAct(a, '        ');
+      for (const a of g.acts) emitAct(a, '        ', g.ccs);
     }
     emitPunctChain(g.ps, '        ');
     emit(`        break;`);
@@ -1269,7 +1357,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   if (defaultActs.length > 0) {
     emit(`        if (cc > 127) {`);
     if (needsLabel) emit(`        mt: {`);
-    for (const a of defaultActs) emitAct(a, '          ');
+    for (const a of defaultActs) emitAct(a, '          ', null);
     if (needsLabel) emit(`        }`);
     emit(`        }`);
   }
@@ -1388,7 +1476,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       emit(`    // anything — the live stack is reconstructed from the recorded depths.`);
       // (an expression-head keyword too: whether it is a member name reads the token before it,
     // which a window seeded with one previous token does not have)
-    emit(`    if (tkDp[b] === 0 && LX_PFXV[tkT[b]] === 0 && LX_PARENKW[tkT[b]] === 0 && LX_EXPRKW[tkT[b]] === 0 && !(tkK[b] === 1 && tkT[b] === ${tRParen})) return b;`);
+    emit(`    if (tkDp[b] === 0${tracks ? ' && (tkFl[b] & 32) === 0' : ''} && LX_PFXV[tkT[b]] === 0 && LX_PARENKW[tkT[b]] === 0 && LX_EXPRKW[tkT[b]] === 0 && !(tkK[b] === 1 && tkT[b] === ${tRParen})) return b;`);
       emit(`  }`);
       emit(`  return -1;`);
     }
@@ -1692,6 +1780,7 @@ function startsWithExpr(src: string, posVar: string, lit: string, cc0Var?: strin
 type ElementCtx = {
   kOf: (name: string) => number; puT: (text: string) => number; tOf?: (text: string) => number;
   startsWithExpr: typeof startsWithExpr; J?: (v: unknown) => string; punctIs?: (i: string, lits: string[]) => string;
+  headOverEnd?: string | null;
 };
 
 // Element-region helpers inside lexCore: whether a tagOpen at an operand position opens an
@@ -1701,7 +1790,9 @@ function emitElementHelpers(emit: (s?: string) => void, el: ElementRegion, enter
   const tp = el.typeParameters;
   if (!enterAlways) {
     emit(`  function lxOpensElement(p«: number») {`);
-    if (tp?.head) emit(`    LX_TP_HEAD.lastIndex = p + ${L}; if (LX_TP_HEAD.test(source)) { lxLookEnd = LX_TP_HEAD.lastIndex; return false; }`);
+    // a head that begins type parameters decides the tagOpen by what its match read (a failed one
+    // opens an element, whose frame holds every token its attempt read)
+    if (tp?.head) emit(`    LX_TP_HEAD.lastIndex = p + ${L}; if (LX_TP_HEAD.test(source)) { ${c.headOverEnd ? `const e = LX_TP_HEAD.lastIndex, c = e < source.length ? source.charCodeAt(e) : -1, r = c >= 0 && ${unitIn('c', overTrigger(tp!.head!))} ? ${c.headOverEnd}(source, e) : e + 1; if (r > lxLookEnd) lxLookEnd = r; ` : ''}return false; }`);
     if (tp?.signature) {
       emit(`    LX_TP_SIG.lastIndex = p + ${L};`);
       emit(`    if (LX_TP_SIG.test(source)) {`);
@@ -1755,6 +1846,11 @@ function emitElementHelpers(emit: (s?: string) => void, el: ElementRegion, enter
     emit(`    if (i >= tokN - 1) return;`);
     emit(`    const name = source.slice(tkOff[i] - lexSrcBase, tkEnd[i] - lexSrcBase);`);
     emit(`    let k = LX_RAW_EXACT.get(name), end = -1;`);
+    if (el.rawText.some(r => r.unlessBodyStarts !== undefined)) {
+      // the body-start condition under which this name's body is ordinary children
+      emit(`    const ux = k !== undefined ? LX_RAW_UNLESS_EXACT.get(name) : LX_RAW_UNLESS_FOLD.get(name.toLowerCase());`);
+      emit(`    if (ux !== undefined) { ux.lastIndex = pos; if (ux.test(source)) return; }`);
+    }
     emit(`    if (k !== undefined) end = source.indexOf(${J(close)} + name, pos);`);
     emit(`    else {`);
     emit(`      k = LX_RAW_FOLD.get(name.toLowerCase());`);
@@ -1778,8 +1874,9 @@ function emitElementFrame(emit: (s?: string) => void, el: ElementRegion, c: Elem
   const LS = el.closeMarker.length + el.tagClose.length, LH = el.hole.open.length;
   emit(`    if (templateStack.length > 0 && (templateStack[templateStack.length - 1] & 3) === 2) {`);
   emit(`      const top = templateStack.length - 1, fr = templateStack[top], sub = (fr >> 2) & 3;`);
+  const ts = el.tagStart !== undefined ? ` && lxTagStart(source, pos + ${L})` : '';
   emit(`      if (sub === 0) {`);
-  emit(`        if (${sw(el.tagOpen)}) {`);
+  emit(`        if (${sw(el.tagOpen)}${ts}) {`);
   emit(`          if (${c.startsWithExpr('source', `pos + ${L}`, el.closeMarker)}) {`);
   emit(`            tkPush(${c.kOf(el.closeTag)}, 0, pos, pos + ${LC});`);
   emit(`            pos += ${LC}; templateStack[top] = fr | 8; tagAngle = 0;`);
@@ -1796,11 +1893,26 @@ function emitElementFrame(emit: (s?: string) => void, el: ElementRegion, c: Elem
   emit(`          pos += ${LH};`);
   emit(`          continue;`);
   emit(`        }`);
-  if (el.text !== undefined) {
+  if (el.text !== undefined && el.tagStart === undefined) {
     emit(`        LX_EL_TEXT.lastIndex = pos;`);
     emit(`        const tm = LX_EL_TEXT.exec(source);`);
     emit(`        if (tm !== null && tm[0].length > 0) {`);
     emit(`          const _e = pos + tm[0].length;`);
+    emit(`          tkPush(${c.kOf(el.text)}, 0, pos, _e);`);
+    emit(`          pos = _e;`);
+    emit(`          continue;`);
+    emit(`        }`);
+  } else if (el.text !== undefined) {
+    // the text run: runs of the text token's class, and every tagOpen that opens no tag
+    emit(`        let _e = pos;`);
+    emit(`        for (;;) {`);
+    emit(`          LX_EL_TEXT.lastIndex = _e;`);
+    emit(`          const tm = LX_EL_TEXT.exec(source);`);
+    emit(`          if (tm !== null) _e += tm[0].length;`);
+    emit(`          if (${sw(el.tagOpen, '_e')} && !lxTagStart(source, _e + ${L})) { _e += ${L}; continue; }`);
+    emit(`          break;`);
+    emit(`        }`);
+    emit(`        if (_e > pos) {`);
     emit(`          tkPush(${c.kOf(el.text)}, 0, pos, _e);`);
     emit(`          pos = _e;`);
     emit(`          continue;`);
@@ -1825,7 +1937,7 @@ function emitElementFrame(emit: (s?: string) => void, el: ElementRegion, c: Elem
   emit(`          if (tagAngle > 0) tagAngle--; else lxTagEnd(false);`);
   emit(`          continue;`);
   emit(`        }`);
-  emit(`        if (${sw(el.tagOpen)}) {`);
+  emit(`        if (${sw(el.tagOpen)}${ts}) {`);
   // after the attribute assign an element is a value (`a=<b/>`); elsewhere type arguments
   emit(`          const nested = tokN > 0 && ${c.punctIs!('tokN - 1', ['='])};`);
   emit(el.rawText?.length ? `          if (nested) { templateStack.push(6); lxTagAt[templateStack.length - 1] = tokN; } else tagAngle++;` : `          if (nested) templateStack.push(6); else tagAngle++;`);
