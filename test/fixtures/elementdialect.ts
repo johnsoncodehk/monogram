@@ -11,12 +11,11 @@
 //     element's children are lexed as code, `</` and `/>` are tokens only inside an element,
 //     and since `<` begins nothing but element arms here, every `<` in code opens an element
 //     (the derived entry, grammar-analysis.ts tagOpenOnlyOpensTags);
-//   • a raw-text element (`<style>…</style>`) whose body is CSS: not expressible until the
-//     region's raw-text frame exists (docs/REGIONS.md, the build order), so no rule has it yet
-//     and the tm-dialect source's `<style>` line is an expected-fail parse row.
+//   • a raw-text element (`<style>…</style>`) whose body is CSS: the region's `rawText`
+//     declaration makes the whole body ONE `StyleBody` token (docs/REGIONS.md, "Raw text").
 // Program shape: `component Name(params) { nodes }`, optionally preceded by annotations.
 import {
-  token, rule, defineGrammar, left, right, prefix, op, alt, seq, oneOf, range, star, sep, opt, many,
+  token, rule, defineGrammar, left, right, prefix, op, alt, seq, oneOf, range, star, plus, sep, opt, many,
   altPattern, noneOf, anyChar,
 } from '../../src/api.ts';
 
@@ -32,6 +31,8 @@ const LineComment = token(seq('//', star(noneOf('\n'))), { skip: true, scope: 'c
 const Annotation = token(seq('@', idStart, star(idCont)), { scope: 'entity.name.function.decorator' });
 const CloseOpen = token(seq('<', '/'));
 const SelfClose = token(seq('/', '>'));
+// the body of a raw-text element: lexed only by the region (its pattern is for the highlighters)
+const StyleBody = token(plus(noneOf('<')), { scope: 'meta.embedded.block.css' });
 
 const Expr = rule(($) => [
   Number_,
@@ -48,7 +49,7 @@ const Container = rule(() => [['{', Expr, '}']]);
 const TagName = rule(() => [[Ident, many('-', Ident)], Container]);
 const AttrName = rule(() => [[Ident, opt(':', Ident)]]);
 const Attr = rule(() => [[AttrName, opt('=', alt(Str, Container))], Container]);
-const Node = rule(() => [Element, Directive, Container, Str]);
+const Node = rule(() => [Element, Directive, Container, Str, StyleBody]);
 const Region = rule(() => [['{', many(Node), '}']]);
 const Element = rule(() => [
   ['<', TagName, many(Attr), SelfClose],
@@ -64,8 +65,9 @@ const Program = rule(() => [many(Component)]);
 export default defineGrammar({
   name: 'elementdialect',
   scopeName: 'source.elementdialect',
-  tokens: { Ident, Number: Number_, Str, LineComment, Annotation, CloseOpen, SelfClose },
-  elements: { tagOpen: '<', tagClose: '>', closeMarker: '/', closeTag: 'CloseOpen', selfClose: 'SelfClose', hole: { open: '{', close: '}' } },
+  tokens: { Ident, Number: Number_, Str, LineComment, Annotation, CloseOpen, SelfClose, StyleBody },
+  elements: { tagOpen: '<', tagClose: '>', closeMarker: '/', closeTag: 'CloseOpen', selfClose: 'SelfClose', hole: { open: '{', close: '}' },
+    rawText: [{ tags: ['style'], token: 'StyleBody', embed: { style: 'source.css' } }] },
   prec: [left('==', '!='), left('+', '-'), right(prefix('!'))],
   scopes: {
     'keyword.control.conditional': ['@if', '@else'],
