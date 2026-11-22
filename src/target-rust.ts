@@ -2168,6 +2168,19 @@ struct Spanned<H: Copy> { h: H, off: u32, tok_start: u32, present: bool }
 /// and the builder's checkpoint. Parser::reset goes back to it.
 #[derive(Clone, Copy)]
 struct Mark { pos: usize, sb: usize, ck: (usize, usize) }
+/// A node's children appended to the kids arena: a node has few (about two), so an element loop
+/// printed at each finish, never a call (a generic \`extend\` is inlined or called at LLVM's choice,
+/// which made each finish site's cost depend on the size of the function holding it).
+#[inline(always)]
+fn copy_kids(kids: &mut Vec<i32>, s: &[i32]) {
+    kids.reserve(s.len());
+    let n = kids.len();
+    unsafe {
+        let p = kids.as_mut_ptr().add(n);
+        for i in 0..s.len() { p.add(i).write(*s.get_unchecked(i)); }
+        kids.set_len(n + s.len());
+    }
+}
 ${CAND_MACRO_RS}
 
 #[derive(Default)]
@@ -2263,7 +2276,7 @@ ${shapeB ? `    #[inline(always)]
         } else {
             (fallback_off, fallback_off)
         };
-        self.kids.extend(scratch[sb..nn].iter().copied());
+        copy_kids(&mut self.kids, &scratch[sb..nn]);
         scratch.truncate(sb);
         self.nodes.push(Node { rule_id, kid_start: kid_start as u32, kid_count: (nn - sb) as u32, offset, end, tok_start, tok_end, ext: 0 });
         ((self.nodes.len() - 1) as i32, offset, true)
@@ -2272,7 +2285,7 @@ ${shapeB ? `    #[inline(always)]
     fn node(&mut self, scratch: &mut Vec<i32>, sb: usize, rule_id: u16, off: u32, end: u32, tok_start: u32, tok_end: u32) {
         let nn = scratch.len();
         let kid_start = self.kids.len();
-        self.kids.extend(scratch[sb..nn].iter().copied());
+        copy_kids(&mut self.kids, &scratch[sb..nn]);
         scratch.truncate(sb);
         self.nodes.push(Node { rule_id, kid_start: kid_start as u32, kid_count: (nn - sb) as u32, offset: off, end, tok_start, tok_end, ext: 0 });
         scratch.push((self.nodes.len() - 1) as i32);
@@ -2384,7 +2397,7 @@ impl Builder for SlimBuilder {
         if count == 1 { return; }
         if count == 0 { scratch.truncate(sb); return; }
         let kid_start = self.kids.len();
-        self.kids.extend(scratch[sb..nn].iter().copied());
+        copy_kids(&mut self.kids, &scratch[sb..nn]);
         scratch.truncate(sb);
         self.nodes.push(Node { rule_id, kid_start: kid_start as u32, kid_count: count as u32, offset: off, end, tok_start, tok_end, ext: 0 });
         scratch.push((self.nodes.len() - 1) as i32);
