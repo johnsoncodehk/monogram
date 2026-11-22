@@ -631,16 +631,40 @@ const MemberName = rule($ => [
   ['[', Expr, ']'],
 ]);
 
-// Branched: parse the modifier list ONCE, then branch on the member kind, so a
-// member's shared `modifiers …` prefix isn't re-parsed per alternative. Inner
-// alt() is first-match, so branches are ordered specific-before-general
-// (generator/accessor before the MemberName method/field split).
-// modifier only when NOT followed by name-making tokens (see typescript.ts)
-// `async` is NOT a generic member modifier here: it leads the async/async-generator
-// method arms below (which give the body its [Await] context), so the modifier soup
-// must not swallow it into a plain method (the class analog of the Decl modifier-prefix
-// fix). `static`/`accessor` stay generic modifiers.
-const Modifier = alt([alt('static', 'accessor'), not(alt('(', '=', '{', '}'))]);
+// ── Member words ──
+// A word that begins a member production (`static`, `async`, `accessor`, `get`, `set`, and
+// TypeScript's modifiers, which build on this) is that keyword only where the start of a member
+// follows it; otherwise it is the member's NAME (`static() {}`, `get = 1`, `static static;`,
+// `@d accessor;`). The two readings part at that one token: the keyword reading goes on with a
+// ClassElementName (an identifier name, a string, a number, a `#name`, `[`) or a `*`, the name
+// reading with anything else (`(`, `=`, `;`, `}`, or, past a line break, the next member). What
+// differs per word is one further condition, `memberWordRules`:
+//   static        none: `static [ClassElementName | * | {]`, on any line (`static⏎x` is a
+//                 static `x`; the static block `static {` is its own production)
+//   get / set     the start is not `*` (`get ClassElementName`, on any line: `get⏎x() {}` is
+//                 a getter, `get⏎*x() {}` a field `get` and a generator)
+//   every other   the start is on the word's own line (`async [no LineTerminator here]`,
+//                 `accessor [no LineTerminator here]`: `async⏎x() {}` is a field `async`)
+// A word in no production takes a further token only where its own arm reads one (`accessor`
+// a ClassElementName, no `*`), so the keyword reading fails there and so does the name reading,
+// which cannot take a same-line member start either.
+export const memberStart = alt(Ident, PrivateField, String_, Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, '[', '*');
+export const memberAhead = not(not(memberStart));
+export const memberWordRules: Record<string, unknown[]> = { static: [], get: [not('*')], set: [not('*')] };
+export const memberWord = (words: string[], rules: Record<string, unknown[]>) => {
+  const sameLineWords = words.filter(w => !(w in rules));
+  return alt([
+    alt(
+      ...words.filter(w => w in rules).map(w => [w, ...rules[w]]),
+      ...(sameLineWords.length ? [[alt(...sameLineWords), sameLine]] : []),
+    ),
+    memberAhead,
+  ]);
+};
+const staticWord = memberWord(['static'], memberWordRules);
+const asyncWord = memberWord(['async'], memberWordRules);
+const accessorWord = memberWord(['accessor'], memberWordRules);
+const getSetWord = memberWord(['get', 'set'], memberWordRules);
 // Class member ( params ) body, with params+body routed to a [Await]/[Yield] family:
 // plain methods reset (a method body has its OWN, non-inherited context — the spec's
 // implicit function boundary), generators yield, async await, async-generators both.
@@ -649,38 +673,35 @@ const Modifier = alt([alt('static', 'accessor'), not(alt('(', '=', '{', '}'))]);
 // A method, accessor or constructor has a body (MethodDefinition), after which nothing is
 // needed: a `;` there is an empty class element of its own. A field ends as a statement does.
 const memTail = (ctx) => ['(', sep(ctx(Param), ','), ')', ctx(Block)];
-// The member kinds, after the member's decorators and modifiers. Inner alt() is first-match, so
-// branches are ordered specific-before-general (generator/accessor before the MemberName
-// method/field split).
+// A class element (15.7 ClassElement, with the decorators proposal's DecoratorList and
+// `accessor`): `;`, a static block, or a member's decorators, at most one `static`, and then one
+// production, each word of which is a keyword only where `memberWord` says so. Inner alt() is
+// first-match; its branches part at their first token (the word, `*`, or a name), so the first
+// that matches is the only one. A member with no prefix whose name is the identifier
+// `constructor` is the constructor (its keyword leaf); with a prefix it is a method named
+// `constructor`.
 const memberKinds = [
-  // `async` is order-free among modifiers (tsc parses any order), so it carries
-  // its own inner modifier run and an async member's body is [+Await]/[+Await,+Yield].
-  ['async', many(Modifier), '*', MemberName, ...memTail(asyncGenCtx)],      // async generator method
-  ['async', many(Modifier), alt('get', 'set'), MemberName, '(', opt(sep(awaitCtx(Param), ',')), ')', awaitCtx(Block)],  // async accessor (semantic error; parses)
-  ['async', many(Modifier), 'static', awaitCtx(Block)],                     // `async static { }` (semantic error; parses)
-  ['async', many(Modifier), MemberName, ...memTail(awaitCtx)],             // async method
+  [accessorWord, MemberName, opt('=', resetCtx(Expr)), asi()],              // accessor field
+  [asyncWord, alt(
+    ['*', MemberName, ...memTail(asyncGenCtx)],                             // async generator method
+    [MemberName, ...memTail(awaitCtx)],                                     // async method
+  )],
   ['*', MemberName, ...memTail(yieldCtx)],                                  // generator method
-  [alt('get', 'set'), MemberName, '(', opt(sep(resetCtx(Param), ',')), ')', resetCtx(Block)],  // accessor
-  [MemberName, alt(
+  [getSetWord, MemberName, '(', opt(sep(resetCtx(Param), ',')), ')', resetCtx(Block)],  // accessor
+  // Where `get` / `set` is the accessor keyword it is no name (`get⏎x;` has no derivation; the
+  // same-line words cannot end a field before a member start anyway).
+  [not(getSetWord), MemberName, alt(
     [...memTail(resetCtx)],                                                 // method (requires `(`)
-    // field catch-all; a ';'-less field must not be followed by a same-line
-    // decorator (see typescript.ts)
+    // field; it ends as a statement does
     [opt('=', resetCtx(Expr)), asi()],
   )],
 ];
 const ClassMember = rule($ => [
   ';',   // SemicolonClassElement: `class C { ; }`
-  [many(DecoratorExpr), many(Modifier), 'static', awaitCtx(Block)],   // static block body is [+Await] (await reserved); decorators/modifiers parse (SEMANTIC errors)
-  // A member is its decorators, then its modifiers (decorators PREFIX a member, before any
-  // modifier; see typescript.ts), then its kind; the prefix is parsed ONCE and the kind chosen
-  // after it. The outer alt() is first-match too: a member with no prefix is the second branch,
-  // which is also where a member NAMED like a modifier lands when the modifier run ate its name
-  // and no kind follows (`static;`, `accessor⏎@d m() {}`). A member with no prefix whose name is
-  // the identifier `constructor` is the constructor (its keyword leaf); with a prefix it is a
-  // method named `constructor`.
+  ['static', awaitCtx(Block)],   // ClassStaticBlock: the body is [+Await] (await reserved)
   [alt(
-    [alt([many1(DecoratorExpr), many(Modifier)], many1(Modifier)), alt(...memberKinds)],
-    [alt(['constructor', ...memTail(resetCtx)], ...memberKinds)],
+    ['constructor', ...memTail(resetCtx)],
+    [many(DecoratorExpr), opt(staticWord), alt(...memberKinds)],
   )],
 ]);
 

@@ -11,27 +11,32 @@ this record is stale, so every file that moves between cells shows in its diff.
 
 Corpus: `microsoft/TypeScript@6fbce89821d93a5b761581d9ac540455f38e9acb` `tests/cases/conformance` · oracle: `typescript@5.9.3`
 
-**4462 files measured**, 4429 agree (99.26%) · 1196 multi-file cases skipped · 1 excluded as oracle crashes (`ORACLE_CRASHES` in the test, by name).
+**4462 files measured**, 4428 agree (99.24%) · 1196 multi-file cases skipped · 1 excluded as oracle crashes (`ORACLE_CRASHES` in the test, by name).
 
 | cell (tsc / monogram) | files | |
 |---|---:|---|
-| `js/accept` | 1167 | agree: valid JavaScript per tsc, accepted |
-| `js/reject` | 20 | **disagree**: valid JavaScript per tsc, rejected: candidate gaps (read each derivation) |
+| `js/accept` | 1162 | agree: valid JavaScript per tsc, accepted |
+| `js/reject` | 25 | **disagree**: valid JavaScript per tsc, rejected: candidate gaps (read each derivation) |
 | `ts-only/reject` | 2706 | agree: TypeScript-only syntax per tsc, rejected |
 | `ts-only/accept` | 7 | **disagree**: TypeScript-only syntax per tsc, accepted: over-acceptance |
-| `js-error/reject` | 0 | agree: a JS-only syntactic error per tsc, rejected |
-| `js-error/accept` | 1 | **disagree**: a JS-only syntactic error per tsc, accepted: over-acceptance |
-| `reject/reject` | 556 | agree: a tsc parse error, rejected |
-| `reject/accept` | 5 | **disagree**: a tsc parse error, accepted: over-acceptance |
+| `js-error/reject` | 1 | agree: a JS-only syntactic error per tsc, rejected |
+| `js-error/accept` | 0 | **disagree**: a JS-only syntactic error per tsc, accepted: over-acceptance |
+| `reject/reject` | 559 | agree: a tsc parse error, rejected |
+| `reject/accept` | 2 | **disagree**: a tsc parse error, accepted: over-acceptance |
 | `monogram-crash` | 0 | **disagree**: monogram threw something other than an input error: a bug |
 
-## `js/reject` (20)
+## `js/reject` (25)
 
 Valid JavaScript per tsc, rejected: candidate gaps (read each derivation).
 
 - `async/es5/asyncClass_es5.ts`
+- `async/es5/asyncGetter_es5.ts`
+- `async/es5/asyncSetter_es5.ts`
 - `async/es6/asyncClass_es6.ts`
+- `async/es6/asyncGetter_es6.ts`
+- `async/es6/asyncSetter_es6.ts`
 - `classes/classStaticBlock/classStaticBlock20.ts`
+- `classes/members/privateNames/privateNameStaticMethodAsync.ts`
 - `es6/for-ofStatements/for-of-excess-declarations.ts`
 - `esDecorators/esDecorators-arguments.ts`
 - `parser/ecmascript5/ConstructorDeclarations/parserConstructorDeclaration3.ts`
@@ -62,19 +67,16 @@ TypeScript-only syntax per tsc, accepted: over-acceptance.
 - `scanner/ecmascript5/scannerImportDeclaration1.ts`
 - `statements/VariableStatements/usingDeclarations/usingDeclarationsTopLevelOfModule.2.ts`
 
-## `js-error/accept` (1)
+## `js-error/accept` (0)
 
 A JS-only syntactic error per tsc, accepted: over-acceptance.
 
-- `classes/classStaticBlock/classStaticBlock19.ts`
+_None._
 
-## `reject/accept` (5)
+## `reject/accept` (2)
 
 A tsc parse error, accepted: over-acceptance.
 
-- `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration8.ts`
-- `parser/ecmascript5/MemberFunctionDeclarations/parserMemberFunctionDeclaration2.ts`
-- `parser/ecmascript5/MemberVariableDeclarations/parserMemberVariableDeclaration2.ts`
 - `parser/ecmascript5/RegressionTests/parser519458.ts`
 - `statements/VariableStatements/usingDeclarations/awaitUsingDeclarations.4.ts`
 

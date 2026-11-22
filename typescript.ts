@@ -39,6 +39,7 @@ import {
   Number_, String_, Template, Regex_, Decorator, PrivateField,
   notReserved, notReservedExpr, bindingIdentifier, asi, expressionStatement, conciseBody, classHeritageArms, newTargetArms, ecmaPrec, jsLedPrecs, jsScopes, jsBaseCanonical,
   forBindingArms, forHeadArms, forAwaitHeadArms, forStatement,
+  memberStart, memberAhead, memberWordRules, memberWord,
 } from './javascript.ts';
 
 // ── Type query reference (typeof's argument: just dotted identifiers) ──
@@ -209,10 +210,12 @@ const mappedTypeStart = alt([alt('+', '-'), 'readonly'], [opt('readonly'), '[', 
 
 // A modifier KEYWORD is a modifier only when the start of a member follows it; otherwise the
 // word is the member's NAME (`public() {}`, `static = 1`, `{ static: 1 }`, and equally after
-// other modifiers: `public static() {}`). This is tsc's parser rule (nextTokenCanFollowModifier).
+// other modifiers: `public static() {}`). This is tsc's parser rule (nextTokenCanFollowModifier),
+// and JavaScript's (`memberWord` in javascript.ts, which states the rule and the words `static`,
+// `get`, `set`, `async`, `accessor` once; the TypeScript words extend it).
 // A member start is a property name, `[` or `*` (tsc also lists `{` and `...`; no member
 // starts with either, so the word rejects under both readings). What differs per word is one
-// further condition, held in `modifierExtra`:
+// further condition, held in `modifierExtra` (JavaScript's `memberWordRules` and these):
 //   static              none                                (`static⏎x` is a static `x`)
 //   export              the start is not `as` or `*`; a `default` start is one `default`
 //                       takes (`export default class: T`; `export default: T` is a member
@@ -238,32 +241,21 @@ const mappedTypeStart = alt([alt('+', '-'), 'readonly'], [opt('readonly'), '[', 
 // so the member start `memberAhead` asks for still fails there.
 // Every modifier run of class, object-literal and type members is built from `modifierWord`,
 // so no word is consumed as a modifier unchecked.
-const memberStart = alt(Ident, PrivateField, String_, Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, '[', '*');
-const memberAhead = not(not(memberStart));
 // tsc's canFollowExportModifier and nextTokenCanFollowDefaultKeyword, read at the word after
 // `export` / `default`. (Each one-token alternation sits in its own double `not`, which the
 // emitted parsers test as one token set.)
 const exportAhead = [not(alt('as', '*')), not(not(alt(Decorator, memberStart)))];
 const defaultAhead = alt(not(not(alt('class', 'function', 'interface', Decorator))), ['abstract', sameLine, 'class'], ['async', sameLine, 'function']);
+// JavaScript's words (`memberWordRules`: static, get, set), extended with TypeScript's.
 const modifierExtra: Record<string, unknown[]> = {
-  static: [],
+  ...memberWordRules,
   export: [not(alt('as', '*')), not(['default', not(defaultAhead)]), not(['type', not(exportAhead)])],
   default: [not(not(defaultAhead))],
   const: [not(not('enum'))],
-  get: [not('*')],
-  set: [not('*')],
 };
-const modifierWord = (words: string[], { sameLineConst = false } = {}) => {
-  const ruled = (w: string) => w in modifierExtra && !(sameLineConst && w === 'const');
-  const sameLineWords = words.filter(w => !ruled(w));
-  return alt([
-    alt(
-      ...words.filter(ruled).map(w => [w, ...modifierExtra[w]]),
-      ...(sameLineWords.length ? [[alt(...sameLineWords), sameLine]] : []),
-    ),
-    memberAhead,
-  ]);
-};
+const { const: _const, ...classBodyExtra } = modifierExtra;
+const modifierWord = (words: string[], { sameLineConst = false } = {}) =>
+  memberWord(words, sameLineConst ? classBodyExtra : modifierExtra);
 // A modifier run holds AT MOST ONE `static` (tsc stops taking `static` as a modifier once it
 // has one; ECMAScript's ClassElement has a single `static` slot): the only reading of a
 // second `static` is the member NAME, so `static static x` has no production. `run` is that
