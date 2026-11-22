@@ -16,7 +16,7 @@ import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctF
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
-import { UNI_BLOCK_BITS, UNI_LEAF_BITS, uniIdentPlan } from './uni-ident.ts';
+import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 import type {
   ShapeSpec, ShapeIR, ShapeIRRule, RuleShape, NodeShape, ChoiceShape, FieldDecl,
@@ -372,23 +372,19 @@ static _FLOW_D: [i8; ${ids.lids.length}] = [${lidDeltaTable(ids, nl.flowOpen, nl
   };
 }
 
-/** Rust's integer type for a table whose entries are below `max`. */
-const rsUint = (max: number) => (max <= 0x100 ? 'u8' : max <= 0x10000 ? 'u16' : 'u32');
 /** uni-ident.ts's identifier classes, its lookup, and the code point at a char boundary.
  *  Rust's std has `is_alphanumeric` but no ID_Start / ID_Continue query, hence the table. */
 function rsUniIdentTables(): string {
   const p = uniIdentPlan();
-  const nums = (xs: readonly (number | bigint)[], hex: boolean) => xs.map((x) => (hex ? `0x${x.toString(16)}` : String(x))).join(', ');
-  return `static _UNI_TOP: [${rsUint(p.blocks.length / (1 << UNI_BLOCK_BITS))}; ${p.top.length}] = [${nums(p.top, false)}];
-static _UNI_BLK: [${rsUint(p.start.length)}; ${p.blocks.length}] = [${nums(p.blocks, false)}];
-static _UNI_START: [u64; ${p.start.length}] = [${nums(p.start, true)}];
-static _UNI_CONT: [u64; ${p.cont.length}] = [${nums(p.cont, true)}];
-// Whether cp is in the class whose leaves are given (uni-ident.ts's three levels).
-#[inline(always)] fn _uni_in(leaves: &[u64; ${p.start.length}], cp: u32) -> bool {
-    let Some(&t) = _UNI_TOP.get((cp >> ${UNI_LEAF_BITS + UNI_BLOCK_BITS}) as usize) else { return false; };
-    // In range by construction: a block id < blocks, a leaf id < leaves.
-    let leaf = unsafe { *_UNI_BLK.get_unchecked((t as usize) << ${UNI_BLOCK_BITS} | ((cp >> ${UNI_LEAF_BITS}) & ${(1 << UNI_BLOCK_BITS) - 1}) as usize) } as usize;
-    (unsafe { *leaves.get_unchecked(leaf) } >> (cp & ${(1 << UNI_LEAF_BITS) - 1})) & 1 != 0
+  // In range by construction: every index the plan's lookup forms is inside its string.
+  const l = uniLookup(p, (k) => `(unsafe { *_UNI_T.get_unchecked(${k} as usize) } as u32)`);
+  return `static _UNI_T: &[u8; ${p.data.length}] = b"${p.data.replace(/\\/g, '\\\\')}";
+// uni-ident.ts's class of cp: 0 neither, 1 IdentifierPart only, 2 IdentifierStart too.
+#[inline(always)] fn _uni_class(cp: u32) -> u32 {
+    if cp < ${p.flatLen} { return ${l.flat}; }
+    if ${l.top} >= ${p.topLen} { return 0; }
+    let mut i: u32;
+${l.steps.map((e) => `    i = ${e};\n    if i < ${l.uniform} { return i; }\n`).join('')}    ${l.result}
 }
 // The code point starting at byte e of valid UTF-8, and its width; a byte inside a
 // character (e is no boundary) is no code point (0x110000, in neither class).
@@ -523,7 +519,7 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
 ${identName || ir.identLike.length ? `${rsUniIdentTables()}// Both out of line: inlined into the dispatch loop they cost every ASCII token (register layout).
 #[inline(never)] fn _scan_uni_ident(b: &[u8], pos: usize) -> Option<usize> {
     let (cp, w) = _lx_cp(b, pos);
-    if !_uni_in(&_UNI_START, cp) { return None; }
+    if _uni_class(cp) != 2 { return None; }
     Some(_lx_ext(b, pos + w))
 }
 // Extend an identifier token that the ASCII pattern cut short at a non-ASCII
@@ -538,7 +534,7 @@ ${identName || ir.identLike.length ? `${rsUniIdentTables()}// Both out of line: 
 #[inline(never)] fn _lx_ext(b: &[u8], mut e: usize) -> usize {
     while e < b.len() {
         let (cp, w) = _lx_cp(b, e);
-        if !_uni_in(&_UNI_CONT, cp) { break; }
+        if _uni_class(cp) == 0 { break; }
         e += w;
     }
     e
