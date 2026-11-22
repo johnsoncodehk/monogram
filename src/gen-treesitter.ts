@@ -238,6 +238,10 @@ interface GrammarJsContext {
   /** The word token (keyword extraction) and the reserved word sets its guards render to. With no
    *  set, no word step is wrapped (the grammar.js of a grammar without such guards is unchanged). */
   reserved: { word: string | undefined; isWordLiteral: (text: string) => boolean; plan: ReservedSets };
+  /** Every literal renderExpr wrote into a rule. A reserved word must be a token of the generated
+   *  grammar (tree-sitter: "Reserved word 'enum' must be a token"); a word no rule writes gets a
+   *  token rule of its own (buildGrammarJs). */
+  renderedLiterals: Set<string>;
 }
 
 function hasMarker(expr: RuleExpr): boolean {
@@ -327,6 +331,12 @@ function lowerNotBeforeOptional(expr: RuleExpr & { type: 'seq' }, onGuard?: (gua
  * so a bare marker here renders to a harmless `blank()` (it never actually
  * appears outside a Pratt rule in practice).
  */
+/** A literal token written into a rule (every rule-body literal goes through here: renderedLiterals). */
+function ruleLiteral(text: string, ctx: GrammarJsContext): string {
+  ctx.renderedLiterals.add(text);
+  return jsString(text);
+}
+
 function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordSet?: string): string {
   switch (expr.type) {
     case 'literal': {
@@ -336,7 +346,7 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordSet?: string): st
       // would (the hidden external alone is no node: a query naming `"{"` would not compile).
       const flowSym = ctx.flowLiteralTokens.get(expr.value);
       if (flowSym) return `alias($.${flowSym}, ${jsString(expr.value)})`;
-      return jsString(expr.value);
+      return ruleLiteral(expr.value, ctx);
     }
     case 'ref': {
       // A template reference is the template RULE of the hole rule it declares (see
@@ -425,7 +435,7 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordSet?: string): st
       // sep(elem, ',') = optional(seq(elem, repeat(seq(',', elem)), optional(',')))
       // Trailing delimiter is allowed (matches the parser's matchSep behavior).
       const elem = renderExpr(expr.element, ctx);
-      const delim = jsString(expr.delimiter);
+      const delim = ruleLiteral(expr.delimiter, ctx);
       return `optional(seq(${elem}, repeat(seq(${delim}, ${elem})), optional(${delim})))`;
     }
     case 'op':
@@ -475,7 +485,8 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
     }
     const selfRef = `$.${ctx.ruleSnake.get(rule.name)}`;
     for (const { num, assoc, ops } of byLevel.values()) {
-      const opChoice = ops.length === 1 ? jsString(ops[0]) : `choice(${ops.map(jsString).join(', ')})`;
+      const opLits = ops.map(o => ruleLiteral(o, ctx));
+      const opChoice = opLits.length === 1 ? opLits[0] : `choice(${opLits.join(', ')})`;
       let inner: string;
       if (position === 'infix') inner = `seq(${selfRef}, field('operator', ${opChoice}), ${selfRef})`;
       else if (position === 'prefix') inner = `seq(field('operator', ${opChoice}), ${selfRef})`;
@@ -1465,6 +1476,7 @@ export function generateTreeSitter(grammar: CstGrammar, langName?: string): Tree
     terminalSets,
     classifiedAssertions: assertions.nodes,
     reserved: { word: grammar.tokens.find(t => t.identifier)?.name, isWordLiteral: assertions.isWordLiteral, plan: assertions.reservedSets },
+    renderedLiterals: new Set(),
     glrRules: new Set(),
     templatePlan,
     interpolationPlans,
@@ -1515,17 +1527,9 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
     lines.push('');
   }
 
-  // ── reserved word sets (planReservedSets): the first set is global (id 0) and stays empty, so a
-  // step outside every set keeps tree-sitter's default keyword extraction ──
-  const reservedSets = ctx.reserved.plan.sets;
-  if (reservedSets.length) {
-    lines.push('  reserved: {');
-    lines.push('    global: $ => [],');
-    for (const { name, words } of reservedSets) lines.push(`    ${name}: $ => [${words.map(jsString).join(', ')}],`);
-    lines.push(`    ${UNRESERVED_SET}: $ => [],`);
-    lines.push('  },');
-    lines.push('');
-  }
+  // ── reserved word sets (planReservedSets): written once the rules are rendered (a word must be
+  // a token: see renderedLiterals) ──
+  const reservedAt = lines.length;
 
   // ── externals (scanner-provided tokens) ──
   // Order MUST match the scanner.c TokenType enum (see externalSymbols()).
@@ -1587,11 +1591,13 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
 
   // Token rules (named) — those not provided by the scanner. Skip tokens are
   // included so `extras` references resolve.
+  const tokenBodies = new Set<string>();
   for (const tok of grammar.tokens) {
     const tokenBody = buildTokenBody(tok.name, ctx);
     if (tokenBody === null) continue;
     const snake = ctx.tokenSnake.get(tok.name)!;
     ruleEntries.push(`    ${snake}: $ => ${tokenBody}`);
+    tokenBodies.add(tokenBody);
   }
 
   // ── Template rule (interpolated template literal) ──
@@ -1637,6 +1643,33 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
         `    ${r.ruleSnake}: $ => seq(${jsString(r.open)}, ${interpHole}, ${jsString(r.close)})`,
       );
     }
+  }
+
+  // ── reserved word sets: the first set is global (id 0) and stays empty, so a step outside every
+  // set keeps tree-sitter's default keyword extraction. A reserved word that no rule writes (JS
+  // `enum`: a ReservedWord of the lexical grammar that no syntactic production uses) is no token,
+  // and tree-sitter can only reserve a token: it gets a hidden token rule of its own, referenced by
+  // the sets only (tree-sitter keeps a rule a reserved set names). It is a keyword (word-shaped, no
+  // other token matches it) that no parse state shifts, so where it is reserved it is an error,
+  // and elsewhere keyword extraction gives the word token, exactly as for any keyword.
+  const reservedSets = ctx.reserved.plan.sets;
+  if (reservedSets.length) {
+    const ownToken = new Map<string, string>();
+    for (const { words } of reservedSets) for (const w of words) {
+      if (ctx.renderedLiterals.has(w) || tokenBodies.has(jsString(w)) || ownToken.has(w)) continue;
+      if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(w)) throw new Error(`gen-treesitter: reserved word ${JSON.stringify(w)} is no rendered token and cannot name a token rule`);
+      const name = `_reserved_${w}`;
+      if ([...ctx.ruleSnake.values(), ...ctx.tokenSnake.values()].includes(name)) throw new Error(`gen-treesitter: reserved-word token rule ${name} collides with a rule`);
+      // ruleLiteral saw every rule literal: a second token for a written word would shadow it
+      if (ruleEntries.some(e => e.includes(jsString(w)))) throw new Error(`gen-treesitter: reserved word ${JSON.stringify(w)} is written by a rule that bypassed ruleLiteral`);
+      ownToken.set(w, name);
+    }
+    const word = (w: string) => ownToken.has(w) ? `$.${ownToken.get(w)}` : jsString(w);
+    const block = ['  reserved: {', '    global: $ => [],'];
+    for (const { name, words } of reservedSets) block.push(`    ${name}: $ => [${words.map(word).join(', ')}],`);
+    block.push(`    ${UNRESERVED_SET}: $ => [],`, '  },', '');
+    lines.splice(reservedAt, 0, ...block);
+    for (const [w, name] of ownToken) ruleEntries.push(`    ${name}: $ => ${jsString(w)}`);
   }
 
   lines.push(ruleEntries.join(',\n\n'));

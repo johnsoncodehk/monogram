@@ -35,9 +35,9 @@ const JSX_TEXT = [
 const RESERVED_WORDS = [
   'var if = 1;', 'let class = 2;', 'function return() {}', 'const { default } = o;',
   'try {} catch (this) {}', 'class A extends while {}', 'import { if } from "m";', 'import while from "m";',
-  'x = { if };', 'for (var new of a);', 'function f(delete) {}', 'const [typeof] = a;', 'x = y + break;',
+  'x = { if };', 'for (var new of a);', 'function f(delete) {}', 'const [typeof] = a;', 'x = y + break;', 'var enum = 1;',
   'a.if = 1;', 'x = { if: 1, class: 2 };', 'import { default as d } from "m";', 'class C { if() {} static() {} }',
-  'export { x as default };', 'o.class.new = 1;', 'x = { get if() { return 1; } };',
+  'export { x as default };', 'o.class.new = 1;', 'x = { get if() { return 1; } };', 'o.enum = { enum: 1 };',
 ];
 
 const { Parser, Language } = await import('web-tree-sitter');

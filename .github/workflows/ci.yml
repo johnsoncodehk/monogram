@@ -286,8 +286,9 @@ jobs:
             pids+=($!)
           done
           fail=0
+          declare -A failed=()
           for i in "${!langs[@]}"; do
-            if wait "${pids[$i]}"; then echo "✓ ${langs[$i]}"; else echo "✗ ${langs[$i]}"; cat "/tmp/gen-${langs[$i]}.log"; fail=1; fi
+            if wait "${pids[$i]}"; then echo "✓ ${langs[$i]}"; else echo "✗ ${langs[$i]}"; cat "/tmp/gen-${langs[$i]}.log"; fail=1; failed[${langs[$i]}]=1; fi
           done
           # Baseline numbers for the editor lane's tree-sitter changes: generate cost and parser size.
           {
@@ -298,7 +299,9 @@ jobs:
             echo "| grammar | wall s (parallel) | CPU user+sys s | peak RSS MB | STATE_COUNT | LARGE_STATE_COUNT | SYMBOL_COUNT | parser.c MB |"
             echo "|---|---:|---:|---:|---:|---:|---:|---:|"
             for g in "${langs[@]}"; do
-              read -r wall usr sys rss < "/tmp/time-$g.txt" || true
+              # A failed generate has no parser.c of this run (and time(1) prefixes its exit status line).
+              if [ -n "${failed[$g]:-}" ]; then echo "| $g | generate failed | | | | | | |"; continue; fi
+              read -r wall usr sys rss < <(tail -n1 "/tmp/time-$g.txt") || true
               pc="tree-sitter/$g/src/parser.c"
               def() { grep -m1 -oE "^#define $1 [0-9]+" "$pc" | awk '{print $3}'; }
               echo "| $g | $wall | $(awk "BEGIN{print $usr+$sys}") | $((rss / 1024)) | $(def STATE_COUNT) | $(def LARGE_STATE_COUNT) | $(def SYMBOL_COUNT) | $(awk "BEGIN{printf \"%.1f\", $(stat -c %s "$pc")/1048576}") |"
