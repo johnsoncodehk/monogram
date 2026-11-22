@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, stepExpr as walkExpr, stepStmts as walkStmts, type StepLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, dispatchWalk, type StepLowering, type DispatchLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -50,13 +50,12 @@ const guardCond = (g: Guard, t: string, keyed: boolean, recv = 'self'): string[]
 const ifRs = (conds: string[], body: string) => (conds.length ? `        if ${conds.join(' && ')} ${body}` : `        ${body}`);
 // A candidate list's Dispatch over the buffered token t: arm(i, keyed) is candidate i's statement.
 // opt: t is an Option<Tok> (none left: no key matches), bound as `t` inside a keyed section.
+const dispatchRsL = (t: string, opt: boolean): DispatchLowering => ({
+  sw: (by, cases) => `        match ${opt ? 't' : t}.${by} {\n${cases.map((c) => `        ${c.key} => {\n${c.arms.join('\n')}\n        }`).join('\n')}\n        _ => {}\n        }`,
+  nil: (sw) => `        if let Some(t) = ${t} {\n${sw}\n        }`,
+});
 const dispatchRs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, opt = false): string =>
-  d.sections.map((sec) => {
-    if (sec.by === 'rest') return sec.arms.map((i) => arm(i, false)).join('\n');
-    const id = (k: string) => (sec.by === 'lid' ? lidOf(ids, k) : kidOf(ids, k));
-    const sw = `        match ${opt ? 't' : t}.${sec.by} {\n${sec.groups.map((g) => `        ${id(g.key)} => {\n${g.arms.map((i) => arm(i, true)).join('\n')}\n        }`).join('\n')}\n        _ => {}\n        }`;
-    return opt ? `        if let Some(t) = ${t} {\n${sw}\n        }` : sw;
-  }).join('\n');
+  dispatchWalk(d, ids, arm, dispatchRsL(t, opt), opt);
 // Whether candidate i, just ended at pos, beats the best so far: it ends past it, or — a Dispatch
 // `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is kept only
 // in a list that has ranked candidates.
@@ -931,83 +930,58 @@ function sharedFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
     (ir.forms.recognizeShared[id] ? `    #[inline]\n    fn sub_${id}_r(&mut self) -> bool { let p = self; ${stepStmtsP(s, ids, ar, true)} }\n` : '')).join('');
 }
 
+// The Rust spelling of an rd rule's shell (emit-portable.ts, ruleShell), common to its two forms;
+// a guard reads the token bound by `if let Some(t)` (the buffered token is an Option).
+const rsRuleBase = (ids: LexIdPlan, recv: string) => ({
+  ind: '        ',
+  ifThen: (test: string, then: string) => `if ${test} ${then}`,
+  first: (f: FirstSig) => firstCond(f, 't', ids),
+  armJoin: '\n',
+  peekOpt: `        let _ft = ${recv}.peek();`,
+  guard: (g: Guard, keyed: boolean, stmt: string) => {
+    const c = guardCond(g, 't', keyed, recv);
+    return c.length && !keyed ? `        if let Some(t) = _ft { if ${c.join(' && ')} ${stmt} }` : ifRs(c, stmt);
+  },
+  dispatch: dispatchRsL('_ft', true),
+});
+
 // A rule in recognize form (ParserIR.forms): whether it matches here, advancing past it. An rd
 // rule has rdRule's control flow building nothing: its longest match compares end positions only
 // (a tie only chooses which node, and none is built). A Pratt rule runs its building form and
 // drops the node (the lookahead around it undoes the builder: Forms.lookBuilds).
 function ruleR(r: RuleIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   if (r.kind === 'pratt') return `    fn rec_${r.name}(&mut self) -> bool { self.parse_${r.name}().is_some() }`;
-  const cond = (alt: Step[]) => alt.map((x) => stepCondP(x, ids, ar, true)).join(' && ');
-  if (r.predictive) {
-    const arm = (steps: Step[], i: number) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${cond(steps)} { return true; } }`;
-    return `    fn rec_${r.name}(&mut self) -> bool {
-        let p = self; let save = p.pos;
-        let t = match p.peek() { Some(t) => t, None => return false };
-${r.alts.map(arm).join('\n')}
-        p.back(save);
-        false
-    }`;
-  }
-  if (r.alts.length === 1) {
-    return `    fn rec_${r.name}(&mut self) -> bool {
-        let p = self; let save = p.pos;
-        if ${cond(r.alts[0]!)} { return true; }
-        p.back(save);
-        false
-    }`;
-  }
-  const alt = (i: number, keyed: boolean) => {
-    const body = `{ if ${cond(r.alts[i]!)} && p.pos > best_pos { best_pos = p.pos; } p.back(save); }`;
-    const g = guardCond(r.altGuard[i]!, 't', keyed, 'p');
-    return g.length && !keyed ? `        if let Some(t) = _ft { if ${g.join(' && ')} ${body} }` : ifRs(g, body);
-  };
-  const needPeek = r.altGuard.some((g) => g !== null);
-  return `    fn rec_${r.name}(&mut self) -> bool {
-        let p = self; let save = p.pos; let mut best_pos = save;
-${needPeek ? '        let _ft = p.peek();\n' : ''}${dispatchRs(r.altDispatch, '_ft', ids, alt, true)}
-        p.pos = best_pos;
-        best_pos > save
-    }`;
+  return ruleShell(r, ids, {
+    ...rsRuleBase(ids, 'p'),
+    steps: rsSteps(ids, 'p', true),
+    fn: (lines) => `    fn rec_${r.name}(&mut self) -> bool {\n${lines.join('\n')}\n    }`,
+    accept: () => '{ return true; }',
+    open: '        let p = self; let save = p.pos;',
+    peekOrFail: '        let t = match p.peek() { Some(t) => t, None => return false };',
+    fail: '        p.back(save);\n        false',
+    openBest: () => '        let p = self; let save = p.pos; let mut best_pos = save;',
+    cand: (_d, _i, cond) => `{ if ${cond} && p.pos > best_pos { best_pos = p.pos; } p.back(save); }`,
+    closeBest: '        p.pos = best_pos;\n        best_pos > save',
+  });
 }
 
+// Longest match: the best node so far stays built: `ck` moves past it, so a later alternative
+// that does not beat it is restored away and one that does leaves it unreferenced.
 function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
-  if (r.predictive) {
-    const arm = (steps: Step[], i: number) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return Some(self.finish(${rid}, sb, self.off_at(save), save)); } }`;
-    return `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
-        let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
-        let t = match self.peek() { Some(t) => t, None => return None };
-${r.alts.map(arm).join('\n')}
-        self.back(save); self.scratch.truncate(sb); self.b.restore(ck);
-        None
-    }`;
-  }
-  if (r.alts.length === 1) {   // nothing to choose among
-    return `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
-        let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
-        if ${r.alts[0]!.map((x) => stepCond(x, ids, ar)).join(' && ')} { return Some(self.finish(${rid}, sb, self.off_at(save), save)); }
-        self.back(save); self.scratch.truncate(sb); self.b.restore(ck);
-        None
-    }`;
-  }
-  // Longest match over the alternatives, in declaration order (emit-portable.ts, RdRule). The
-  // best node so far stays built: `ck` moves past it, so a later alternative that does not beat
-  // it is restored away and one that does leaves it unreferenced.
-  // The alternatives are reached through the rule's Dispatch (emit-portable.ts, RdRule.altDispatch).
-  const alt = (i: number, keyed: boolean) => {
-    const cond = r.alts[i]!.map((x) => stepCond(x, ids, ar)).join(' && ');
-    const body = candRs(r.altDispatch, i, cond, rid, markRs(r.altDispatch, i));
-    const g = guardCond(r.altGuard[i]!, 't', keyed);
-    return g.length && !keyed ? `        if let Some(t) = _ft { if ${g.join(' && ')} ${body} }` : ifRs(g, body);
-  };
-  const needPeek = r.altGuard.some((g) => g !== null);
-  return `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
-        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();
-        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(r.altDispatch)}
-${needPeek ? '        let _ft = self.peek();\n' : ''}${dispatchRs(r.altDispatch, '_ft', ids, alt, true)}
-        self.pos = best_pos;
-        best
-    }`;
+  const sig = `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {`;
+  return ruleShell(r, ids, {
+    ...rsRuleBase(ids, 'self'),
+    steps: rsSteps(ids, 'self', false),
+    fn: (lines) => `${sig}\n${lines.join('\n')}\n    }`,
+    accept: () => `{ return Some(self.finish(${rid}, sb, self.off_at(save), save)); }`,
+    open: '        let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();',
+    peekOrFail: '        let t = match self.peek() { Some(t) => t, None => return None };',
+    fail: '        self.back(save); self.scratch.truncate(sb); self.b.restore(ck);\n        None',
+    openBest: (d) => `        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();\n        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(d)}`,
+    cand: (d, i, cond) => candRs(d, i, cond, rid, markRs(d, i)),
+    closeBest: '        self.pos = best_pos;\n        best',
+  });
 }
 
 /** Entry rule that records per-top-kid lookahead ext via parse_top_one (shape A). */

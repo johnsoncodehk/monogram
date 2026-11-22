@@ -849,6 +849,64 @@ export function stepStmts(s: Step, L: StepLowering): string {
   }
 }
 
+// ── The candidate dispatch: one walk over a Dispatch, rendered by every target ──
+// A DispatchLowering spells a `lid` / `kid` section's switch on the buffered token (each case: its
+// key and its candidates' statements, in order) and the test around it when that token may be
+// absent; `rest` sections are their candidates' statements in order.
+export type DispatchLowering = {
+  sw(by: 'lid' | 'kid', cases: { key: string; arms: string[] }[]): string;
+  nil(sw: string): string;                       // the switch, run only when there is a token
+};
+/** A candidate list's Dispatch: arm(i, keyed) is candidate i's statement (keyed: reached through
+ *  its key, which already tested the first token). nilable: the token may be absent. */
+export function dispatchWalk(d: Dispatch, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, D: DispatchLowering, nilable: boolean): string {
+  return d.sections.map((sec) => {
+    if (sec.by === 'rest') return sec.arms.map((i) => arm(i, false)).join('\n');
+    const id = (k: string) => String(sec.by === 'lid' ? lidOf(ids, k) : kidOf(ids, k));
+    const sw = D.sw(sec.by, sec.groups.map((g) => ({ key: id(g.key), arms: g.arms.map((i) => arm(i, true)) })));
+    return nilable ? D.nil(sw) : sw;
+  }).join('\n');
+}
+
+// ── The rule shell: how an rd rule's function runs, decided once ──
+// Three forms, from the rule's plan (RdRule): PREDICTIVE (the alternative the next token's FIRST
+// set selects, nothing else: no candidate frame, a commit), SINGLE (one alternative: nothing to
+// choose), LONGEST (every alternative its Dispatch admits, each in a CANDIDATE frame; the longest
+// wins, a tie the one declared first). A RuleLowering spells, for one rule in one engine form, the
+// function around the statements, the checkpoint and undo, how an alternative's match is accepted
+// (`accept(i)`: a node finished for alternative i, or only `true` when recognizing; the place a
+// per-alternative construction by a shape plan would go), the candidate frame and its guard.
+export type RuleLowering = {
+  steps: StepLowering;                           // the alternatives' steps
+  fn(lines: string[]): string;                   // the rule's function around its statements
+  ind: string;                                   // a statement's indentation
+  ifThen(test: string, then: string): string;    // `if test then` (no indentation)
+  first(f: FirstSig): string;                    // whether the buffered token starts an alternative (predictive)
+  accept(i: number): string;                     // the statement returning alternative i's match
+  open: string;                                  // PREDICTIVE / SINGLE: the checkpoint at entry
+  peekOrFail: string;                            // PREDICTIVE: buffer the next token; none: no match
+  armJoin: string;                               // between PREDICTIVE arms
+  fail: string;                                  // undo to the checkpoint; no match
+  openBest(d: Dispatch): string;                 // LONGEST: the checkpoint and the best so far
+  peekOpt: string;                               // LONGEST: buffer the next token (when a guard reads it)
+  cand(d: Dispatch, i: number, cond: string): string;      // the CANDIDATE frame of alternative i
+  guard(g: Guard, keyed: boolean, stmt: string): string;   // the candidate's statement under its Guard
+  dispatch: DispatchLowering;
+  closeBest: string;                             // LONGEST: go to the best's end; return it
+};
+/** An rd rule's function in the form `L` spells. */
+export function ruleShell(r: RdRule, ids: LexIdPlan, L: RuleLowering): string {
+  const cond = (steps: Step[]) => conjOf(steps, L.steps);
+  if (r.predictive) {
+    const arm = (steps: Step[], i: number) => `${L.ind}${i === 0 ? '' : 'else '}${L.ifThen(L.first(r.altFirst[i] ?? null), `{ ${L.ifThen(cond(steps), L.accept(i))} }`)}`;
+    return L.fn([L.open, L.peekOrFail, r.alts.map(arm).join(L.armJoin), L.fail]);
+  }
+  if (r.alts.length === 1) return L.fn([L.open, `${L.ind}${L.ifThen(cond(r.alts[0]!), L.accept(0))}`, L.fail]);
+  const arm = (i: number, keyed: boolean) => L.guard(r.altGuard[i]!, keyed, L.cand(r.altDispatch, i, cond(r.alts[i]!)));
+  const needPeek = r.altGuard.some((g) => g !== null);
+  return L.fn([L.openBest(r.altDispatch), ...(needPeek ? [L.peekOpt] : []), dispatchWalk(r.altDispatch, ids, arm, L.dispatch, true), L.closeBest]);
+}
+
 function formsOf(rules: RuleIR[], lookaheads: Alt[], nShared: number, entry: string): Forms {
   const byName = new Map(rules.map((r) => [r.name, r]));
   const build = new Set<string>(), recognize = new Set<string>();

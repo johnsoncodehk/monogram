@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, stepExpr, stepStmts, type StepLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, stepExpr, stepStmts, ruleShell, dispatchWalk, type StepLowering, type RuleLowering, type DispatchLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -38,13 +38,12 @@ const guardCond = (g: Guard, t: string, keyed: boolean): string[] =>
 const ifTs = (conds: string[], body: string) => (conds.length ? `  if (${conds.join(' && ')}) ${body}` : `  ${body}`);
 // A candidate list's Dispatch over the buffered token t: arm(i, keyed) is candidate i's statement.
 // nilable: t may be null (no token left), which no key matches.
+const dispatchTsL = (t: string): DispatchLowering => ({
+  sw: (by, cases) => `  switch (${t}.${by}) {\n${cases.map((c) => `  case ${c.key}:\n${c.arms.join('\n')}\n  break;`).join('\n')}\n  }`,
+  nil: (sw) => `  if (${t} !== null) {\n${sw}\n  }`,
+});
 const dispatchTs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, nilable = false): string =>
-  d.sections.map((sec) => {
-    if (sec.by === 'rest') return sec.arms.map((i) => arm(i, false)).join('\n');
-    const id = (k: string) => (sec.by === 'lid' ? lidOf(ids, k) : kidOf(ids, k));
-    const sw = `  switch (${t}.${sec.by}) {\n${sec.groups.map((g) => `  case ${id(g.key)}:\n${g.arms.map((i) => arm(i, true)).join('\n')}\n  break;`).join('\n')}\n  }`;
-    return nilable ? `  if (${t} !== null) {\n${sw}\n  }` : sw;
-  }).join('\n');
+  dispatchWalk(d, ids, arm, dispatchTsL(t), nilable);
 // Whether candidate i, just ended at pos, beats the best so far: it ends past it, or — a Dispatch
 // `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is kept only
 // in a list that has ranked candidates.
@@ -579,76 +578,39 @@ function topReusePlan(ir: ParserIR): ReusePlan | null {
 // drops the node.
 function ruleR(r: RdRule | PrattRule, ids: LexIdPlan): string {
   if (r.kind === 'pratt') return `function parse${r.name}R(): boolean { return _drop(_n, parse${r.name}W()); }`;
-  const cond = (alt: Step[]) => alt.map((x) => stepCond(x, ids, 'r')).join(' && ');
-  if (r.predictive) {
-    const arm = (steps: Step[], i: number) => `  ${i === 0 ? 'if' : 'else if'} (${firstCond(r.altFirst[i], 't', ids)}) { if (${cond(steps)}) return true; }`;
-    return `function parse${r.name}R(): boolean {
-  const save = pos;
-  const t = peek(); if (t === null) return false;
-${r.alts.map(arm).join(' ')}
-  back(save);
-  return false;
-}`;
-  }
-  if (r.alts.length === 1) {
-    return `function parse${r.name}R(): boolean {
-  const save = pos;
-  if (${cond(r.alts[0]!)}) return true;
-  back(save);
-  return false;
-}`;
-  }
-  const alt = (i: number, keyed: boolean) => {
-    const g = guardCond(r.altGuard[i]!, '_ft', keyed);
-    return ifTs(g.length && !keyed ? ['_ft !== null', ...g] : g, candTs(r.altDispatch, i, 'r', cond(r.alts[i]!), ''));
-  };
-  const needPeek = r.altGuard.some((g) => g !== null);
-  return `function parse${r.name}R(): boolean {
-  const save = pos;
-  let bestPos = save;
-${needPeek ? '  const _ft = peek();\n' : ''}${dispatchTs(r.altDispatch, '_ft', ids, alt, true)}
-  pos = bestPos;
-  return bestPos > save;
-}`;
+  return ruleShell(r, ids, tsRules(r, ids, 'r'));
 }
 
 /** An rd rule in building form, over the child stack. It returns whether it matched;
  *  matched, its node is the one slot it left on the stack (at the height `b` it found), else the
  *  stack is back at `b`. */
 function rdRuleW(r: RdRule, ids: LexIdPlan): string {
-  const cn = J(r.name);
-  const cond = (steps: Step[]) => steps.map((x) => stepCond(x, ids, 'w')).join(' && ');
-  if (r.predictive) {
-  const arm = (steps: Step[], i: number) => `  ${i === 0 ? 'if' : 'else if'} (${firstCond(r.altFirst[i], 't', ids)}) { if (${cond(steps)}) { finR(${cn}, b, save); return true; } }`;
-  return `function parse${r.name}W(): boolean {
-  const save = pos, b = _n;
-  const t = peek(); if (t === null) return false;
-${r.alts.map(arm).join(' ')}
-  back(save); _n = b;
-  return false;
-}`;
-  }
-  if (r.alts.length === 1) {
-    return `function parse${r.name}W(): boolean {
-  const save = pos, b = _n;
-  if (${cond(r.alts[0]!)}) { finR(${cn}, b, save); return true; }
-  back(save); _n = b;
-  return false;
-}`;
-  }
-  const alt = (i: number, keyed: boolean) => {
-    const body = candTs(r.altDispatch, i, 'w', cond(r.alts[i]!), `finR(${cn}, c, save); _keep(b, c); bestPos = pos;${markTs(r.altDispatch, i)}`);
-    const g = guardCond(r.altGuard[i]!, '_ft', keyed);
-    return ifTs(g.length && !keyed ? ['_ft !== null', ...g] : g, body);
+  return ruleShell(r, ids, tsRules(r, ids, 'w'));
+}
+
+// The TS spelling of an rd rule's shell (emit-portable.ts, ruleShell) in form m: building ('w')
+// keeps the child stack's height `b` beside the position and finishes the node (finR); a candidate
+// that wins is moved down to `b` over the best it beat (candTs).
+function tsRules(r: RdRule, ids: LexIdPlan, m: Mode): RuleLowering {
+  const cn = J(r.name), w = m === 'w';
+  return {
+    steps: tsSteps(ids, m),
+    fn: (lines) => `function parse${r.name}${w ? 'W' : 'R'}(): boolean {\n${lines.join('\n')}\n}`,
+    ind: '  ',
+    ifThen: (test, then) => `if (${test}) ${then}`,
+    first: (f) => firstCond(f, 't', ids),
+    accept: () => (w ? `{ finR(${cn}, b, save); return true; }` : 'return true;'),
+    open: w ? '  const save = pos, b = _n;' : '  const save = pos;',
+    peekOrFail: '  const t = peek(); if (t === null) return false;',
+    armJoin: ' ',
+    fail: w ? '  back(save); _n = b;\n  return false;' : '  back(save);\n  return false;',
+    openBest: (d) => (w ? `  const save = pos, b = _n;\n  let bestPos = save${biTs(d)};` : '  const save = pos;\n  let bestPos = save;'),
+    peekOpt: '  const _ft = peek();',
+    cand: (d, i, cond) => candTs(d, i, m, cond, `finR(${cn}, c, save); _keep(b, c); bestPos = pos;${markTs(d, i)}`),
+    guard: (g, keyed, stmt) => { const c = guardCond(g, '_ft', keyed); return ifTs(c.length && !keyed ? ['_ft !== null', ...c] : c, stmt); },
+    dispatch: dispatchTsL('_ft'),
+    closeBest: w ? '  pos = bestPos;\n  return _n !== b;' : '  pos = bestPos;\n  return bestPos > save;',
   };
-  const needPeek = r.altGuard.some((g) => g !== null);
-  return `function parse${r.name}W(): boolean {
-  const save = pos, b = _n;
-  let bestPos = save${biTs(r.altDispatch)};
-${needPeek ? '  const _ft = peek();\n' : ''}${dispatchTs(r.altDispatch, '_ft', ids, alt, true)}
-  pos = bestPos;
-  return _n !== b;
-}`;
 }
 
 // Shape A's one top-level entry in builder form: the first of its rules that matches.

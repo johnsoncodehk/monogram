@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, stepExpr as walkExpr, stepStmts as walkStmts, type StepLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, dispatchWalk, type StepLowering, type DispatchLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -41,13 +41,12 @@ const guardCond = (g: Guard, t: string, w: '' | 'W', keyed: boolean): string[] =
 const ifGo = (conds: string[], body: string) => (conds.length ? `\tif ${conds.join(' && ')} ${body}` : `\t${body}`);
 // A candidate list's Dispatch over the buffered token t: arm(i, keyed) is candidate i's statement.
 // nilable: t may be nil (no token left), which no key matches.
+const dispatchGoL = (t: string): DispatchLowering => ({
+  sw: (by, cases) => `\tswitch ${t}.${by === 'lid' ? 'Lid' : 'Kid'} {\n${cases.map((c) => `\tcase ${c.key}:\n${c.arms.join('\n')}`).join('\n')}\n\t}`,
+  nil: (sw) => `\tif ${t} != nil {\n${sw}\n\t}`,
+});
 const dispatchGo = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, nilable = false): string =>
-  d.sections.map((sec) => {
-    if (sec.by === 'rest') return sec.arms.map((i) => arm(i, false)).join('\n');
-    const id = (k: string) => (sec.by === 'lid' ? lidOf(ids, k) : kidOf(ids, k));
-    const sw = `\tswitch ${t}.${sec.by === 'lid' ? 'Lid' : 'Kid'} {\n${sec.groups.map((g) => `\tcase ${id(g.key)}:\n${g.arms.map((i) => arm(i, true)).join('\n')}`).join('\n')}\n\t}`;
-    return nilable ? `\tif ${t} != nil {\n${sw}\n\t}` : sw;
-  }).join('\n');
+  dispatchWalk(d, ids, arm, dispatchGoL(t), nilable);
 // Whether the candidate i that just ended at pos beats the best so far: it ends past it, or — a
 // Dispatch `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is
 // kept only in a list that has ranked candidates.
@@ -73,6 +72,18 @@ const lostGo = 'p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.k
 const lostGoW = (recv: string) => `p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}`;
 const candGo = (d: Dispatch, i: number, cond: string, win: string, lost: string) =>
   `{ if ${cond} && ${beatsGo(d, 'p.pos', i)} { ${win} } else { ${lost} }; p.back(save) }`;
+
+// The Go spelling of an rd rule's shell (emit-portable.ts, ruleShell), common to its three forms.
+// PREDICTIVE arms are joined on one line: Go's semicolon insertion after a line-final `}` would
+// break `}` / `else if` across lines.
+const goRuleBase = (r: RdRule, ids: LexIdPlan, guardW: '' | 'W') => ({
+  ind: '\t',
+  ifThen: (test: string, then: string) => `if ${test} ${then}`,
+  first: (f: FirstSig) => firstCond(f, 't', ids),
+  armJoin: ' ',
+  guard: (g: Guard, keyed: boolean, stmt: string) => { const c = guardCond(g, '_ft', guardW, keyed); return ifGo(c.length && !keyed ? ['_ft != nil', ...c] : c, stmt); },
+  dispatch: dispatchGoL('_ft'),
+});
 
 // ── The recognize form (ParserIR.forms) ──
 // A step that advances and reports whether it matched, building nothing, printed for one of the
@@ -158,36 +169,19 @@ function sharedFnsR(ir: ParserIR, ids: LexIdPlan, e: GoEngine, onCursor: boolean
 // chooses which node, and none is built). A Pratt rule runs its building form and drops the node.
 function ruleR(r: RdRule | PrattRule, ids: LexIdPlan, e: GoEngine): string {
   if (r.kind === 'pratt') return `func (p *${e.recv}) rec${r.name}() bool { return ${e.parsed(r.name)} }`;
-  const cond = (alt: Step[]) => alt.map((x) => stepCondR(x, ids, e)).join(' && ');
-  if (r.predictive) {
-    const arm = (steps: Step[], i: number) => `\t${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${cond(steps)} { return true } }`;
-    return `func (p *${e.recv}) rec${r.name}() bool {
-\tsave := p.pos
-\tt := p.${e.peek}(); if t == nil { return false }
-${r.alts.map(arm).join(' ')}
-\tp.back(save)
-\treturn false
-}`;
-  }
-  if (r.alts.length === 1) {
-    return `func (p *${e.recv}) rec${r.name}() bool {
-\tsave := p.pos
-\tif ${cond(r.alts[0]!)} { return true }
-\tp.back(save)
-\treturn false
-}`;
-  }
-  const alt = (i: number, keyed: boolean) => {
-    const g = guardCond(r.altGuard[i]!, '_ft', e.w, keyed);
-    return ifGo(g.length && !keyed ? ['_ft != nil', ...g] : g, `{ if ${cond(r.alts[i]!)} && p.pos > bestPos { bestPos = p.pos }; p.back(save) }`);
-  };
-  const needPeek = r.altGuard.some((g) => g !== null);
-  return `func (p *${e.recv}) rec${r.name}() bool {
-\tsave := p.pos; bestPos := save
-${needPeek ? `\t_ft := p.${e.peek}()\n` : ''}${dispatchGo(r.altDispatch, '_ft', ids, alt, true)}
-\tp.pos = bestPos
-\treturn bestPos > save
-}`;
+  return ruleShell(r, ids, {
+    ...goRuleBase(r, ids, e.w),
+    steps: goSteps(ids, 'R', e.recv, e),
+    fn: (lines) => `func (p *${e.recv}) rec${r.name}() bool {\n${lines.join('\n')}\n}`,
+    accept: () => '{ return true }',
+    open: '\tsave := p.pos',
+    peekOrFail: `\tt := p.${e.peek}(); if t == nil { return false }`,
+    fail: '\tp.back(save)\n\treturn false',
+    openBest: () => '\tsave := p.pos; bestPos := save',
+    peekOpt: `\t_ft := p.${e.peek}()`,
+    cand: (_d, _i, cond) => `{ if ${cond} && p.pos > bestPos { bestPos = p.pos }; p.back(save) }`,
+    closeBest: '\tp.pos = bestPos\n\treturn bestPos > save',
+  });
 }
 // The recognize forms of the cursor helpers (the same tokens examined, nothing built).
 const recognizeHelpersGo = (recv: string) => `func (p *${recv}) matchLitR(lid uint16) bool {
@@ -917,43 +911,24 @@ function topReusePlan(ir: ParserIR): ReusePlan | null {
   return null;
 }
 
+// Longest match: the best node so far stays in the arena: nb/kb move past it, so a later
+// alternative that does not beat it is truncated away and one that does leaves it unreferenced.
 function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  if (r.predictive) {
-    const arm = (steps: Step[], i: number) => `\t${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return p.finish(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save) } }`;
-    return `func (p *engine) parse${r.name}() int32 {
-\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
-\tt := p.peek(); if t == nil { return -1 }
-${r.alts.map(arm).join(' ')}
-\tp.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]
-\treturn -1
-}`;
-  }
-  if (r.alts.length === 1) {   // nothing to choose among
-    return `func (p *engine) parse${r.name}() int32 {
-\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
-\tif ${r.alts[0]!.map((x) => stepCond(x, ids, ar)).join(' && ')} { return p.finish(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save) }
-\tp.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]
-\treturn -1
-}`;
-  }
-  // Longest match over the alternatives, in declaration order (emit-portable.ts, RdRule). The
-  // best node so far stays in the arena: nb/kb move past it, so a later alternative that does
-  // not beat it is truncated away and one that does leaves it unreferenced.
-  // The alternatives are reached through the rule's Dispatch (emit-portable.ts, RdRule.altDispatch).
-  const alt = (i: number, keyed: boolean) => {
-    const cond = r.alts[i]!.map((x) => stepCond(x, ids, ar)).join(' && ');
-    const body = candGo(r.altDispatch, i, cond, `best = p.finish(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save); bestPos = p.pos;${markGo(r.altDispatch, i)} nb = len(p.nodes); kb = len(p.kids)`, lostGo);
-    const g = guardCond(r.altGuard[i]!, '_ft', '', keyed);
-    return ifGo(g.length && !keyed ? ['_ft != nil', ...g] : g, body);
-  };
-  const needPeek = r.altGuard.some((g) => g !== null);
-  return `func (p *engine) parse${r.name}() int32 {
-\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
-\tbest := int32(-1); bestPos := save${biGo(r.altDispatch)}
-${needPeek ? '\t_ft := p.peek()\n' : ''}${dispatchGo(r.altDispatch, '_ft', ids, alt, true)}
-\tp.pos = bestPos
-\treturn best
-}`;
+  const fin = `p.finish(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save)`;
+  const open = '\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)';
+  return ruleShell(r, ids, {
+    ...goRuleBase(r, ids, ''),
+    steps: goSteps(ids, '', 'engine', ENGINE_GO),
+    fn: (lines) => `func (p *engine) parse${r.name}() int32 {\n${lines.join('\n')}\n}`,
+    accept: () => `{ return ${fin} }`,
+    open,
+    peekOrFail: '\tt := p.peek(); if t == nil { return -1 }',
+    fail: '\tp.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]\n\treturn -1',
+    openBest: (d) => `${open}\n\tbest := int32(-1); bestPos := save${biGo(d)}`,
+    peekOpt: '\t_ft := p.peek()',
+    cand: (d, i, cond) => candGo(d, i, cond, `best = ${fin}; bestPos = p.pos;${markGo(d, i)} nb = len(p.nodes); kb = len(p.kids)`, lostGo),
+    closeBest: '\tp.pos = bestPos\n\treturn best',
+  });
 }
 
 /** Entry rule that records per-top-kid EntryMeta (+ Node.ext oracle) via parseTopOne (shape A). */
@@ -1763,42 +1738,21 @@ function sharedFnsW(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string)
 }
 
 function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  const rid = ruleIdOf(ar, r.name);
-  if (r.predictive) {
-    // Join with space (not newline): Go ASI inserts ';' after '}' at EOL, which
-    // breaks `} \\n else if` — native rdRule uses the same same-line join.
-    const arm = (steps: Step[], i: number) => `\t${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { return p.finishW(${rid}, sb, p.offAt(save), save), true } }`;
-    return `func (p *${recv}) parse${r.name}W() (spanned, bool) {
-\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
-\tt := p.peek(); if t == nil { return spanned{}, false }
-${r.alts.map(arm).join(' ')}
-\tp.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}
-\treturn spanned{}, false
-}`;
-  }
-  if (r.alts.length === 1) {
-    return `func (p *${recv}) parse${r.name}W() (spanned, bool) {
-\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
-\tif ${r.alts[0]!.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { return p.finishW(${rid}, sb, p.offAt(save), save), true }
-\tp.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}
-\treturn spanned{}, false
-}`;
-  }
-  // Longest match over the alternatives through the rule's Dispatch — as rdRule.
-  const alt = (i: number, keyed: boolean) => {
-    const cond = r.alts[i]!.map((x) => stepCondW(x, ids, ar, recv)).join(' && ');
-    const body = candGo(r.altDispatch, i, cond, `best = p.finishW(${rid}, sb, p.offAt(save), save); found = true; bestPos = p.pos;${markGo(r.altDispatch, i)} ${arenaMark(recv)}`, lostGoW(recv));
-    const g = guardCond(r.altGuard[i]!, '_ft', 'W', keyed);
-    return ifGo(g.length && !keyed ? ['_ft != nil', ...g] : g, body);
-  };
-  const needPeek = r.altGuard.some((g) => g !== null);
-  return `func (p *${recv}) parse${r.name}W() (spanned, bool) {
-\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
-\tvar best spanned; found := false; bestPos := save${biGo(r.altDispatch)}
-${needPeek ? '\t_ft := p.peek()\n' : ''}${dispatchGo(r.altDispatch, '_ft', ids, alt, true)}
-\tp.pos = bestPos
-\treturn best, found
-}`;
+  const fin = `p.finishW(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save)`;
+  const open = `\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}`;
+  return ruleShell(r, ids, {
+    ...goRuleBase(r, ids, 'W'),
+    steps: goSteps(ids, 'W', recv, ENGINE_GO_W),
+    fn: (lines) => `func (p *${recv}) parse${r.name}W() (spanned, bool) {\n${lines.join('\n')}\n}`,
+    accept: () => `{ return ${fin}, true }`,
+    open,
+    peekOrFail: '\tt := p.peek(); if t == nil { return spanned{}, false }',
+    fail: `\tp.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}\n\treturn spanned{}, false`,
+    openBest: (d) => `${open}\n\tvar best spanned; found := false; bestPos := save${biGo(d)}`,
+    peekOpt: '\t_ft := p.peek()',
+    cand: (d, i, cond) => candGo(d, i, cond, `best = ${fin}; found = true; bestPos = p.pos;${markGo(d, i)} ${arenaMark(recv)}`, lostGoW(recv)),
+    closeBest: '\tp.pos = bestPos\n\treturn best, found',
+  });
 }
 
 function topOneBodyW(plan: ReusePlanA): string {
