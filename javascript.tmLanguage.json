@@ -1701,11 +1701,11 @@
       "name": "keyword.other.extends.js"
     },
     "scope-storage-modifier": {
-      "match": "\\b(async|accessor)\\b",
+      "match": "\\b(async)\\b",
       "name": "storage.modifier.js"
     },
     "scope-storage-modifier-accessibility": {
-      "match": "\\b(static)\\b(?=\\s+(?:\\.\\.\\.|[[:alpha:]_$\\[*#{\"'0-9]))",
+      "match": "\\b(static|accessor)\\b(?=\\s+(?:\\.\\.\\.|[[:alpha:]_$\\[*#{\"'0-9]))",
       "name": "storage.modifier.js"
     },
     "scope-keyword-control-flow": {
@@ -1934,10 +1934,6 @@
       "match": "\\b(target|meta)\\b",
       "name": "keyword.other.js"
     },
-    "expr-scope-storage-modifier": {
-      "match": "\\b(async)\\b",
-      "name": "storage.modifier.js"
-    },
     "expression": {
       "patterns": [
         {
@@ -2043,7 +2039,7 @@
           "include": "#scope-keyword-other-extends"
         },
         {
-          "include": "#expr-scope-storage-modifier"
+          "include": "#scope-storage-modifier"
         },
         {
           "include": "#scope-storage-type-function"

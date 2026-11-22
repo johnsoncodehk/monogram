@@ -68,6 +68,7 @@ const GATES: Gate[] = [
   { group: 'highlighter', name: 'tm-mutation', args: ['test/tm-mutation.ts'] },
   { group: 'highlighter', name: 'tm-diagnostics', args: ['test/redcmd-tm-diagnostics.ts'] },
   { group: 'highlighter', name: 'tm-lookahead-words', args: ['test/tm-lookahead-words.ts'] },
+  { group: 'highlighter', name: 'tm-modifier-follow', args: ['test/tm-modifier-follow.ts'] },
   { group: 'highlighter', name: 'angle-depth', args: ['test/angle-depth-probe.ts'] },
   { group: 'highlighter', name: 'html-monarch', args: ['test/html-monarch.ts'] },
   { group: 'highlighter', name: 'html-embed-js', args: ['test/html-embed-js.ts'] },
