@@ -7,12 +7,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createParser, type CstLeaf, type CstNode } from '../src/gen-parser.ts';
 import type { CstGrammar } from '../src/types.ts';
-import { armNameOf, dependencies, evaluate, loadShape2, Shape2SpecError, Shape2Unmapped, type S2Value } from '../src/shape2-eval.ts';
+import { armNameOf, dependencies, evaluate, evaluator, loadShape2, Shape2SpecError, Shape2Unmapped, type S2Value } from '../src/shape2-eval.ts';
 import {
   absent, and, armOf, branch, c, child, cook, fold, iff, inh, let_, list, map, match, node, not, or, orElse,
-  present, record, spread, syn, text, typeByText, v, wrapIf, type Shape2Spec,
+  present, record, spread, syn, text, thread, typeByText, v, wrapIf, type Shape2Spec,
 } from '../src/shape2-schema.ts';
 import calc from './fixtures/namedcalc.ts';
+import { estreeExprShape } from './fixtures/shape-v2-estree-expr.ts';
 import javascript from '../javascript.ts';
 import typescript from '../typescript.ts';
 
@@ -119,6 +120,42 @@ check('calc: an inherited attribute set by a constant and passed on by a copy; i
   assert.deepEqual(deps['Expr.binaryOp'], { inherited: [] });
 });
 
+// Threaded list state: the only construct by which a node's context depends on its siblings.
+const leadSpec: Shape2Spec = {
+  ...calcSpec,
+  name: 'lead',
+  synthesized: { isLet: { type: 'bool', default: false, rules: { Stmt: { letDeclaration: c(true) } } } },
+  inherited: {
+    lead: { type: 'bool', default: false, rules: { Program: { program: { statement: thread(c(true), 'p', and(v('p'), syn('isLet', 'statement'))) } } } },
+  },
+  rules: { ...calcSpec.rules, Stmt: { ...calcSpec.rules.Stmt, expression: node('ExpressionStatement', { expression: child('expression'), lead: inh('lead') }) } },
+};
+type Fields = { fields: Record<string, S2Value> };
+
+check('calc: a threaded state across a list (each element sees the state its left siblings made)', () => {
+  const src = 'let a = 1; b; let c = 2; d;';
+  const body = (run(calc, leadSpec, src) as unknown as { fields: { body: Fields[] } }).fields.body;
+  assert.deepEqual(body.map((x) => x.fields.lead), [undefined, true, undefined, false]);
+  // the same value for one element evaluated on its own, in the context of its root
+  const cst = parse(calc, src);
+  const at = evaluator(loadShape2(calc, leadSpec), cst, src);
+  const stmts: CstNode[] = [];
+  const walk = (x: CstNode | CstLeaf): void => { if ('tokenType' in x) return; if (x.rule === 'Stmt') stmts.push(x); x.children.forEach(walk); };
+  walk(cst);
+  assert.deepEqual(at(stmts[1]), N('ExpressionStatement', 11, 13, { expression: N('Name', 11, 12, { name: 'b' }), lead: true }));
+  assert.equal((at(stmts[3]) as unknown as Fields).fields.lead, false);
+  // the empty list, a list of one
+  assert.deepEqual(run(calc, leadSpec, ''), N('Program', 0, 0, { body: [] }));
+  assert.equal((run(calc, leadSpec, 'x;') as unknown as { fields: { body: Fields[] } }).fields.body[0].fields.lead, true);
+});
+
+check('calc: dependencies of a thread (the element reads the state; the parent threads it)', () => {
+  const deps = dependencies(loadShape2(calc, leadSpec));
+  assert.deepEqual(deps['Stmt.expression'], { inherited: ['lead'] });
+  assert.deepEqual(deps['Program.program'], { inherited: [], threads: [{ attr: 'lead', over: 'statement', reads: ['isLet'] }] });
+  assert.deepEqual(deps['Stmt.letDeclaration'], { inherited: [] });
+});
+
 // ── The calculus on the JavaScript expression rules ──
 
 const stmtOf = (src: string): CstNode => parse(javascript, src).children[0] as CstNode;
@@ -199,6 +236,27 @@ check('js: inherited + synthesized attributes (ChainExpression boundary)', () =>
   assert.deepEqual(deps['Expr.ident'], { inherited: [] });
 });
 
+// ESTree's directive prologue by a thread: Program and function bodies, not plain blocks; a
+// parenthesised string, a declaration or any other statement ends the run.
+check('js: the directive prologue (threaded state, ESTree fixture)', () => {
+  const src = `'a'; "b\\n"; ('c'); 'd'; function f() { 'x'; y; 'z'; } { 'no'; } (() => { 'arrow'; });\n'late';`;
+  const loaded = loadShape2(javascript, estreeExprShape);
+  const cst = parse(javascript, src);
+  const at = evaluator(loaded, cst, src);
+  const got: [string, S2Value | undefined][] = [];
+  const walk = (x: CstNode | CstLeaf): void => {
+    if ('tokenType' in x) return;
+    if (x.rule === 'Stmt' && armNameOf(loaded, x, src) === 'expr' && src[x.offset] !== '(') got.push([src.slice(x.offset, x.end), (at(x) as unknown as Fields).fields.directive]);
+    x.children.forEach(walk);
+  };
+  walk(cst);
+  assert.deepEqual(got, [["'a';", 'a'], ['"b\\n";', 'b\\n'], ["'d';", undefined], ["'x';", 'x'], ['y;', undefined], ["'z';", undefined], ["'no';", undefined], ["'arrow';", 'arrow'], ["'late';", undefined]]);
+  const deps = dependencies(loaded);
+  assert.deepEqual(deps['Stmt.expr'].inherited, ['prologue']);
+  assert.deepEqual(deps['Block.brace'], { inherited: ['functionBody'], threads: [{ attr: 'prologue', over: 'stmt', reads: ['directive'] }] });
+  assert.deepEqual(deps['Program.decl'], { inherited: [], threads: [{ attr: 'prologue', over: 'alt', reads: ['directive'] }] });
+});
+
 // The reference matcher finds an arm for every node of real inputs (an arm consuming all the
 // node's children): JavaScript on acorn's own source, TypeScript on this interpreter's source.
 check('the matcher is total on real files', () => {
@@ -268,5 +326,29 @@ rejects('an inherited equation on an unknown child', calc, one({}, {
 rejects('an inherited equation on a leaf', calc, one({}, {
   inherited: { i: { type: 'bool', default: false, rules: E({ number: { number: c(true) } }) } },
 }), 'only a rule node has inherited attributes');
+
+// A sibling can be read only through a thread, and a thread's next state only from its element.
+const leadWith = (eq: unknown, extra: Record<string, unknown> = {}): Shape2Spec => one({}, {
+  synthesized: leadSpec.synthesized,
+  inherited: { lead: { type: 'bool', default: false, rules: { Program: { program: { statement: eq, ...extra } } } } } as Shape2Spec['inherited'],
+});
+rejects('an inherited equation reading a sibling\'s attribute', calc, leadWith(syn('isLet', 'statement')), 'Program.program.statement', 'a constant or `inh`');
+rejects('a thread over a child that does not repeat', calc, one({}, {
+  inherited: { i: { type: 'bool', default: false, rules: E({ parenthesized: { expression: thread(c(true), 'p', v('p')) } }) } },
+}), 'Expr.parenthesized.expression', 'is not repeated');
+rejects('a thread over a child not of the arm itself', javascript, one({}, {
+  inherited: { i: { type: 'bool', default: false, rules: { Program: { decl: { stmt: thread(c(true), 'p', v('p')) } } } } },
+}), 'Program.decl.stmt', 'no child stmt of its own');
+rejects('a thread whose initial state is computed', calc, leadWith(thread(syn('isLet', 'statement'), 'p', v('p'))), 'init', 'a constant or `inh`');
+rejects('a thread whose initial state has the wrong type', calc, leadWith(thread(c('yes'), 'p', v('p'))), 'init', 'initial state is "yes"');
+rejects('a thread whose next state has the wrong type', calc, leadWith(thread(c(true), 'p', armOf('statement'))), 'next', 'has type string');
+rejects('a thread whose next state reads inherited context', calc, leadWith(thread(c(true), 'p', inh('lead'))), 'next', '`inh` cannot appear in a thread');
+rejects('a thread whose next state builds a node', calc, leadWith(thread(c(true), 'p', node('N'))), 'next', '`node` cannot appear in a thread');
+rejects('a thread whose next state reads the parent\'s own attribute', calc, leadWith(thread(c(true), 'p', syn('isLet'))), 'next', 'the element\'s own children only');
+rejects('a thread whose next state reads a sibling outside the element', javascript, one({}, {
+  inherited: { i: { type: 'bool', default: false, rules: { Stmt: { switch_: { switchCase: thread(c(true), 'p', present('expr2')) } } } } },
+}), 'Stmt.switch_.switchCase next', 'expr2 is not in the element');
+rejects('a thread beside another equation for the same attribute', calc, leadWith(thread(c(true), 'p', v('p')), { x: c(true) }), 'Program.program', 'no other equation');
+rejects('a thread outside an inherited equation', calc, one(E({ number: thread(c(true), 'p', v('p')) as never })), '`thread` is not an operator');
 
 console.log(`shape2-eval: ${passed} checks passed`);
