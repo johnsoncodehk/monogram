@@ -467,7 +467,8 @@ function buildIR(grammar: CstGrammar): ParserIR {
   // An identifier's reserved-word guard: the one-token test of its words and, in each context, the
   // context's operator words. Its body is one token by construction (`reservableNot(alt(...))`).
   // The words' set is a constant of the site, as every `ahead` set is; only the context's words
-  // are read at run time, so the test costs one more comparison per word the context has.
+  // are read at run time: a printer tests the set, then (outside every context, at the cost of one
+  // load) whether the token is a word the context reserves.
   let ctxWords: string[] = [];
   const reservableOf = (steps: Step[]): Step => {
     const m = steps.length === 1 ? oneTokenOf(steps[0]) : null;

@@ -421,7 +421,7 @@ function stepBody(s: Step, ids: LexIdPlan, w: boolean): string {
     case 'alt': return `(() => { ${stepStmts(s, ids, w)} })()`;
     case 'look': return `${s.is ? '' : '!'}look${s.id}${S}(${ks})`;
     case 'ahead': return `ahead(${s.set}, ${s.is})`;
-    case 'aheadCtx': return `aheadCtx(${s.set}, ${s.is})`;
+    case 'aheadCtx': return s.is ? `(ahead(${s.set}, true) || ctxWord())` : `(ahead(${s.set}, false) && !ctxWord())`;
     case 'seq': return `(${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'})`;
     case 'sameLine': return `(() => { const t = peek(); return t !== null && !t.nl; })()`;
     case 'suppress': return `(() => { ${stepStmts(s, ids, w)} })()`;
@@ -2269,7 +2269,7 @@ function emitAstRdAltSteps(
       case 'ahead':
         return `ahead(${s.set}, ${s.is})`;
       case 'aheadCtx':
-        return `aheadCtx(${s.set}, ${s.is})`;
+        return s.is ? `(ahead(${s.set}, true) || ctxWord())` : `(ahead(${s.set}, false) && !ctxWord())`;
       case 'look': {
         const nv = local('Not');
         return `(() => { const ${nv}: unknown[] = []; return ${s.is ? '' : '!'}_shapeProbe(${nv}, _ap, () => ${emitSteps(ctx.look[s.id]!, nv)}); })()`;
@@ -3629,11 +3629,12 @@ function ahead(k: number, is: boolean): boolean {
   const t = peek();
   return t === null ? !is : inSet(k, t) === is;
 }
-// The \`aheadCtx\` test: the \`ahead\` test of set k, where a word the context in force reserves
-// (ParserIR.ctxWords) is also in the set.
-function aheadCtx(k: number, is: boolean): boolean {
-  const t = peek();
-  return t === null ? !is : (inSet(k, t)${ctxWordLids(ir, ids).map((w) => ` || ((_ctx & ${w.bit}) !== 0 && t.lid === ${w.lid})`).join('')}) === is;
+// Whether the next token is a word the context in force reserves (ParserIR.ctxWords): with the
+// \`ahead\` test of the guard's own set, an \`aheadCtx\` test. Outside every context it reads nothing.
+function ctxWord(): boolean {
+  if (_ctx === 0 || pos >= toks.length) return false;
+  const t = toks[pos]!;
+  return false${ctxWordLids(ir, ids).map((w) => ` || ((_ctx & ${w.bit}) !== 0 && t.lid === ${w.lid})`).join('')};
 }
 // Whether the token after the current one is in set k (a longest-match candidate's SECOND guard).
 function secondIn(k: number): boolean {

@@ -702,7 +702,7 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
       : `(|p: &mut Parser<'a, B>| -> bool { ${altBody(s.branches, ids, ar, s.firsts)} })(self)`;
     case 'look': return `${s.is ? '' : '!'}self.look_${s.id}()`;
     case 'ahead': return `self.ahead(${s.set}, ${s.is})`;
-    case 'aheadCtx': return `self.ahead_ctx(${s.set}, ${s.is})`;
+    case 'aheadCtx': return s.is ? `(self.ahead(${s.set}, true) || self.ctx_word())` : `(self.ahead(${s.set}, false) && !self.ctx_word())`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(self.peek(), Some(t) if !t.nl)`;
     case 'suppress': return `{ self.suppress_next = ${s.set}; let _r = (${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}); self.suppress_next = 0; _r }`;
@@ -728,7 +728,7 @@ function stepBodyP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
     case 'alt': return `(|p: &mut Parser<'a, B>| -> bool { ${stepStmtsP(s, ids, ar)} })(p)`;
     case 'look': return `${s.is ? '' : '!'}p.look_${s.id}()`;
     case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
-    case 'aheadCtx': return `p.ahead_ctx(${s.set}, ${s.is})`;
+    case 'aheadCtx': return s.is ? `(p.ahead(${s.set}, true) || p.ctx_word())` : `(p.ahead(${s.set}, false) && !p.ctx_word())`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(p.peek(), Some(t) if !t.nl)`;
     case 'suppress': return `{ p.suppress_next = ${s.set}; let _r = (${s.steps.length ? s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'}); p.suppress_next = 0; _r }`;
@@ -1818,7 +1818,8 @@ fn in_token_set(k: usize, t: &Tok) -> bool {
     let (l, c) = unsafe { (TOKEN_SETS.get_unchecked(t.lid as usize), TOKEN_SETS.get_unchecked(TOKEN_SET_KID + t.kid as usize)) };
     (l[k >> 5] | c[k >> 5]) & (1 << (k & 31)) != 0
 }
-// Whether t is a word the context ctx reserves (ParserIR.ctxWords; an \`aheadCtx\` test).
+// Whether t is a word the context ctx reserves (ParserIR.ctxWords): with the \`ahead\` test of the
+// guard's own set, an \`aheadCtx\` test.
 #[inline(always)]
 #[allow(dead_code)]
 fn in_ctx_words(ctx: u8, t: &Tok) -> bool { let _ = (ctx, t); false${ctxWordLids(ir, ids).map((w) => ` || (ctx & ${w.bit} != 0 && t.lid == ${w.lid})`).join('')} }`;
@@ -2249,7 +2250,8 @@ impl<'a, B: Builder> Parser<'a, B> {
     fn ahead(&mut self, k: usize, is: bool) -> bool { match self.peek() { Some(t) => in_token_set(k, &t) == is, None => !is } }
     #[inline(always)]
     #[allow(dead_code)]
-    fn ahead_ctx(&mut self, k: usize, is: bool) -> bool { match self.peek() { Some(t) => (in_token_set(k, &t) || in_ctx_words(self.ctx, &t)) == is, None => !is } }
+    /// Whether the next token is a word the context in force reserves; outside every context it reads nothing.
+    fn ctx_word(&self) -> bool { self.ctx != 0 && match self.toks.get(self.pos) { Some(t) => in_ctx_words(self.ctx, t), None => false } }
     /// Whether the token after the current one is in token set k (a longest-match candidate's SECOND guard).
     #[inline(always)]
     #[allow(dead_code)]
@@ -2921,7 +2923,7 @@ function emitRustAstRdAltSteps(
       case 'ahead':
         return `if ${okVar} && self.toks.get(self.pos).map_or(false, |t| in_token_set(${s.set}, t)) != ${s.is} { ${okVar} = false; }`;
       case 'aheadCtx':
-        return `if ${okVar} && self.toks.get(self.pos).map_or(false, |t| in_token_set(${s.set}, t) || in_ctx_words(self.ctx, t)) != ${s.is} { ${okVar} = false; }`;
+        return `if ${okVar} && self.toks.get(self.pos).map_or(false, |t| in_token_set(${s.set}, t) || (self.ctx != 0 && in_ctx_words(self.ctx, t))) != ${s.is} { ${okVar} = false; }`;
       case 'look': {
         // Gate on okVar to match TS `&&` short-circuit — otherwise probe still
         // runs after a failed predecessor and can re-enter recursive rules.
