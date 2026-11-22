@@ -456,6 +456,111 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   console.log(`  ${dropped} candidates left out of a non-ASCII fallback (${kept} kept), none can begin with a non-ASCII character`);
 }
 
+// ── 10. what a token's decision reads past its end (the relex anchor rule's plan) ──
+// lex-match-plan's read bounds of every token of every grammar, pinned for javascript; and, for
+// every scanned token of every portable grammar, the bounds proved by the printed scanners
+// themselves: a scan's result (its end, or no match) is the same whatever the source holds at
+// and after the bound: `readEnd` (or failRead) for an attempt that fails, the end + 1 for a match,
+// or, where the unit at the end is one of `overTrigger`, the first unit after the end that is not
+// one of `examinedUnits`, + 1.
+{
+  const { failRead, overRead, overTrigger, examinedUnits, reach, minUnits, maxUnits } = await import('../src/lex-match-plan.ts');
+  const { tokLook, lexLookPlan, readEndName } = await import('../src/lex-family.ts');
+  const inC = (c: number, s: [number, number][]) => s.some(([a, b]) => c >= a && c <= b);
+  // javascript, by its token patterns: [failRead, overRead, overTrigger empty?]
+  const JS_TABLE: Record<string, [number, number, boolean]> = {
+    Shebang: [2, 1, true], JSDoc: [Infinity, Infinity, false], TripleSlash: [Infinity, 1, true], LineComment: [2, 1, true],
+    BlockComment: [Infinity, Infinity, false], Ident: [Infinity, Infinity, false], HexNumber: [Infinity, 2, false],
+    OctalNumber: [Infinity, 2, false], BinaryNumber: [Infinity, 2, false], BigInt: [Infinity, 1, true], Number: [Infinity, Infinity, false],
+    String: [Infinity, Infinity, true], Template: [Infinity, 0, true], Regex: [Infinity, Infinity, false], Decorator: [1, Infinity, false],
+    PrivateField: [Infinity, Infinity, false],
+  };
+  const jsg = (await import('../javascript.ts')).default as CstGrammar;
+  for (const d of jsg.tokens) {
+    const want = JS_TABLE[d.name];
+    const got: [number, number, boolean] = [failRead(d.pattern), overRead(d.pattern), overTrigger(d.pattern).length === 0];
+    if (!want || JSON.stringify(want) !== JSON.stringify(got)) fail(`javascript/${d.name}: (failRead, overRead, no trigger) ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
+  }
+  const rx = jsg.tokens.find((d) => d.name === 'Regex')!;
+  const rxStops = JSON.stringify(complementBMP(examinedUnits(rx.pattern)));
+  if (rxStops !== '[[10,10],[13,13],[8232,8233]]') fail(`javascript/Regex: the units no attempt goes past are ${rxStops}, want the four line terminators`);
+  function complementBMP(s: [number, number][]): [number, number][] {
+    const out: [number, number][] = [];
+    let lo = 0;
+    for (const [a, b] of [...s].sort((x, y) => x[0] - y[0])) { if (b < 0) continue; if (a > lo) out.push([lo, Math.min(a - 1, 0xffff)]); lo = Math.max(lo, b + 1); if (lo > 0xffff) break; }
+    if (lo <= 0xffff) out.push([lo, 0xffff]);
+    return out;
+  }
+  // Every grammar's every token: the functions agree with one another.
+  let rows = 0;
+  for (const n of ['javascript', 'typescript', 'javascriptreact', 'typescriptreact', 'html', 'yaml']) {
+    const g = (await import(`../${n}.ts`)).default as CstGrammar;
+    for (const d of g.tokens) {
+      rows++;
+      const f = failRead(d.pattern), o = overRead(d.pattern), r = reach(d.pattern);
+      if (Number.isNaN(f) || Number.isNaN(o) || Number.isNaN(r)) fail(`${n}/${d.name}: a read bound is NaN`);
+      if (f > r) fail(`${n}/${d.name}: failRead ${f} > reach ${r}`);
+      if (minUnits(d.pattern) > maxUnits(d.pattern)) fail(`${n}/${d.name}: minUnits > maxUnits`);
+    }
+  }
+  // The plan of javascript's lexer: which failed attempts and which matches it checks.
+  const jir = portableIR(jsg);
+  const jplan = lexLookPlan(jir);
+  const noted = [...new Set(jplan.arms.flatMap((a) => a.cands.filter((c) => c.readEnd).map((c) => c.tok)))].sort();
+  const overToks = jplan.over.map((o) => o.tok).sort();
+  if (JSON.stringify(noted) !== JSON.stringify(['BigInt', 'BinaryNumber', 'BlockComment', 'HexNumber', 'JSDoc', 'Number', 'OctalNumber', 'Regex', 'TripleSlash'])) fail(`javascript: failed attempts checked ${JSON.stringify(noted)}`);
+  if (JSON.stringify(overToks) !== JSON.stringify(['Decorator', 'Ident', 'Number', 'PrivateField', 'Regex'])) fail(`javascript: matches checked ${JSON.stringify(overToks)}`);
+  console.log(`  ${rows} tokens of 6 grammars: read bounds consistent; javascript's pinned; its relex checks the failed attempts of ${noted.length} tokens and the matches of ${overToks.length}`);
+
+  // Proved on the printed scanners.
+  const PORTABLE = ['../javascript.ts', '../typescript.ts', ...['calc', 'minijs', 'richtokens', 'regexjs', 'templatejs', 'envspec', 'envtpl', 'altjs', 'nudjs', 'sljs', 'unilits'].map((f) => `./fixtures/${f}.ts`)];
+  const TAILS = ['', ' x', '\n;', '_x', '.x', '_1_1x', 'e+', '\\u{4', '\\u004', '*/', '/', '"', 'n', '1', 'x\n'];
+  const REPL = ['', 'x', '0', '/', '*/', '}', '\n', '"', '\\u0041', ' ', '_5', 'e5', '{'];
+  let proved = 0, unbounded = 0;
+  for (const path of PORTABLE) {
+    const g = (await import(path)).default as CstGrammar;
+    const gir = portableIR(g);
+    const toks = tsTarget.shared.scannedTokens(gir);
+    const plan = lexLookPlan(gir);
+    const withEnd = new Set(plan.arms.flatMap((a) => a.cands.filter((c) => c.readEnd).map((c) => c.tok!)));
+    const f = join(dir, `reads${mod++}.ts`);
+    const stubs = gir.identLike.length ? `function ${tsTarget.shared.uniClass()}(cp: number): number { return 2; }\nfunction ${tsTarget.shared.identEscError()}(s: string, p: number, e: number): number { return e; }\n` : '';
+    const exps = [...toks.map((t) => tsTarget.shared.scanner(t.name)), ...[...withEnd].map(readEndName)];
+    writeFileSync(f, `${tsTarget.shared.lexScan(gir)}\n${stubs}export { ${exps.join(', ')} };\n`);
+    const scan = await import(pathToFileURL(f).href) as Record<string, (s: string, p: number) => number>;
+    for (const t of toks) {
+      const decl = g.tokens.find((d) => d.name === t.name)!;
+      const look = tokLook(t);
+      const fn = scan[tsTarget.shared.scanner(t.name)]!;
+      let bad = 0;
+      for (const base of tokenEdgeTexts(decl)) {
+        for (const src of TAILS.map((tl) => base + tl)) {
+          const e = fn(src, 0);
+          let bound: number;
+          if (e < 0) {
+            if (look.failRead <= 3) bound = Math.max(0, look.failRead);
+            else if (withEnd.has(t.name)) bound = scan[readEndName(t.name)]!(src, 0);
+            else { unbounded++; continue; }
+          } else if (e < src.length && inC(src.charCodeAt(e), look.trig)) {
+            let q = e;
+            while (q < src.length && inC(src.charCodeAt(q), look.examined)) q++;
+            bound = q + 1;
+          } else bound = e + 1;
+          for (let c = Math.max(0, bound); c <= src.length; c++) {
+            for (const rp of REPL) {
+              const alt = src.slice(0, c) + rp;
+              proved++;
+              const e2 = fn(alt, 0);
+              if (e2 !== e && bad++ < 3) fail(`${g.name}/${t.name}: ${JSON.stringify(src)} scans to ${e}, and to ${e2} with ${JSON.stringify(rp)} from ${c} (its reads were bounded by ${bound})`);
+            }
+          }
+        }
+      }
+    }
+  }
+  console.log(`  every portable grammar: ${proved} scans unchanged by any text at or after their read bound (${unbounded} failed attempts no relex check needs: last in their arms)`);
+}
+
 if (failures > 0) {
   console.error(`\n✗ lex-family: ${failures} problem(s)`);
   process.exit(1);
