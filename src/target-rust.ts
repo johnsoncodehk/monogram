@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type StepLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -5700,12 +5700,16 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
   },
 };
 
+// Callee-FIRST body guards: a Rust rd call runs its prologue before the dispatch that refuses (40-48
+// instructions per refused call, PR #184), more than the guard's test on each iteration.
+const FACTS: PortableFacts = { calleeFirstGuards: true };
+
 export const rustTarget = defineTarget({
   name: 'rust',
   ext: 'rs',
   lowering: rustLowering,
   emitParser(grammar: CstGrammar, shared: SharedAlgorithms): string {
-    const ir = portableIR(grammar);
+    const ir = portableIR(grammar, FACTS);
     return emitRustLibrary(ir, buildLexIdPlan(ir), shared);
   },
   emitRunner,
@@ -6076,7 +6080,7 @@ fn main() {
 
 /** Emit a Rust parser with an optional specialized declarative-shape AST entry. */
 export function emitRust(grammar: CstGrammar, opts?: { shape?: ShapeSpec }): string {
-  const ir = portableIR(grammar);
+  const ir = portableIR(grammar, FACTS);
   const ids = buildLexIdPlan(ir);
   const base = emitRustLibrary(ir, ids, rustTarget.shared);
   if (!opts?.shape) return base;

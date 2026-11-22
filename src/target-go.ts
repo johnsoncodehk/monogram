@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type StepLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -128,14 +128,16 @@ const branchGoR = (cond: string) => `{ sp := p.pos; if ${cond} { return true }; 
 // one recognizing ('R', ParserIR.forms; e: whose recognizers). Go: a body or a step's statements
 // are a func literal called in place.
 type GoForm = '' | 'W' | 'R';
-function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine): StepLowering {
+function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: ArenaIdPlan): StepLowering {
+  // A literal's leaf type (litTt, decided here): a word is a $keyword leaf, anything else $punct.
+  const litTt = (lid: number) => (lid >= ids.kwLid ? ttIdOf(ar!, '$keyword') : TT_SKIP_PUNCT);
   const fn = (cond: string) => `func() bool { return ${cond} }`;
   const L: StepLowering = {
     inner: () => L,
     shared: (id) => `p.sub${id}${f}()`,
-    lit: (s) => (gtCompLit(ids, s) ? `p.${e.matchComp}(${lidOf(ids, s.value)})` : `p.matchLit${f}(${lidOf(ids, s.value)})`),
-    tok: (name) => `p.matchTok${f}(${kidOf(ids, name)})`,
-    template: (name, hole) => `(p.matchTok${f}(${kidOf(ids, name)}) || ${f === 'R' ? e.template(hole) : f === 'W' ? `p.callRuleW(p.matchTemplateW_${hole}())` : `p.callRule(p.matchTemplate_${hole}())`})`,
+    lit: (s) => (gtCompLit(ids, s) ? `p.${e.matchComp}(${lidOf(ids, s.value)})` : f === 'W' ? `p.litW(${lidOf(ids, s.value)}) && p.takeW(${litTt(lidOf(ids, s.value))})` : `p.matchLit${f}(${lidOf(ids, s.value)})`),
+    tok: (name) => (f === 'W' ? `p.tokW(${kidOf(ids, name)}) && p.takeW(${kidOf(ids, name)})` : `p.matchTok${f}(${kidOf(ids, name)})`),
+    template: (name, hole) => `(${f === 'W' ? `(${L.tok(name)})` : L.tok(name)} || ${f === 'R' ? e.template(hole) : f === 'W' ? `p.callRuleW(p.matchTemplateW_${hole}())` : `p.callRule(p.matchTemplate_${hole}())`})`,
     rule: (name) => (f === 'R' ? `p.rec${name}()` : f === 'W' ? `p.callRuleW(p.parse${name}W())` : `p.callRule(p.parse${name}())`),
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (f === 'R' ? e.bpFound(name, bp) : f === 'W' ? `p.callRuleW(p.bpW_${name}(${bp}))` : `p.callRule(p.bp_${name}(${bp}))`),
@@ -1907,9 +1909,9 @@ const arenaMark = () => 'nb, kb = p.b.Checkpoint()';
 /** Undo to the checkpoint (Builder.Restore). */
 const arenaRestore = () => 'p.b.Restore(nb, kb)';
 
-const stepCondW = (s: Step, ids: LexIdPlan, _ar: ArenaIdPlan, recv: string): string => walkExpr(s, goSteps(ids, 'W', recv, ENGINE_GO_W));
+const stepCondW = (s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string => walkExpr(s, goSteps(ids, 'W', recv, ENGINE_GO_W, ar));
 function sharedFnsW(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  return ir.shared.map((s, id) => (ir.forms.buildShared[id] ? `func (p *${recv}) sub${id}W() bool { ${walkStmts(s, goSteps(ids, 'W', recv, ENGINE_GO_W))} }\n` : '')).join('');
+  return ir.shared.map((s, id) => (ir.forms.buildShared[id] ? `func (p *${recv}) sub${id}W() bool { ${walkStmts(s, goSteps(ids, 'W', recv, ENGINE_GO_W, ar))} }\n` : '')).join('');
 }
 
 function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
@@ -1917,7 +1919,7 @@ function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
   const open = `\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}`;
   return ruleShell(r, ids, {
     ...goRuleBase(r, ids, 'W'),
-    steps: goSteps(ids, 'W', recv, ENGINE_GO_W),
+    steps: goSteps(ids, 'W', recv, ENGINE_GO_W, ar),
     fn: (lines) => `func (p *${recv}) parse${r.name}W() (spanned, bool) {\n${lines.join('\n')}\n}`,
     accept: () => `{ return ${fin}, true }`,
     open,
@@ -1984,7 +1986,7 @@ ${close}`,
     loopSeg: (kid, rule) => `func (p *${recv}) parseLoopSegW(sb int) (EntryMeta, bool) {
 \tsp := p.pos; before := len(p.scratch); ${arenaCkpt()}
 \tp.lookReset()
-\tif !p.matchTokW(${kid}) {
+\tif !(p.tokW(${kid}) && p.takeW(${kid})) {
 \t\tp.back(sp); p.scratch = p.scratch[:before]; ${arenaRestore()}
 \t\treturn EntryMeta{}, false
 \t}
@@ -2028,7 +2030,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
   const B = goPrattBase(r, (ws) => `!p.nllBlockedW(${ws}, left)`);
   const L: PrattLowering = {
     ...B,
-    steps: goSteps(ids, 'W', recv, ENGINE_GO_W),
+    steps: goSteps(ids, 'W', recv, ENGINE_GO_W, ar),
     nudGuard: (g, keyed) => guardCond(g, 't', 'W', keyed),
     nudLeaf: (i) => `{ p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; best = p.finishW(${rid}, sb, int(t.Off), save); ${won(i, '0', false, false)}; p.back(save) }`,
     nudTpl: (i, hole) => `\tif t.Kid == ${kidOf(ids, '$templateHead')} {
@@ -2182,26 +2184,29 @@ func (p *${recv}) nllBlockedW(words []string, left spanned) bool {
 \tfor _, w := range words { if w == h { return true } }
 \treturn false
 }
-// matchLitW / matchTokW read the token in place as the direct engine's matchLit / matchTok do (the
-// probe is a peek: peekEnd), and hand the leaf to the builder.
-func (p *${recv}) matchLitW(lid uint16) bool {
+// litW / tokW test the token in place as the direct engine's matchLit / matchTok do (the probe is a
+// peek: peekEnd); takeW consumes the token they accepted and hands its leaf to the builder. A step
+// spells the two in a row (\`p.litW(l) && p.takeW(tt)\`, tt the literal's litTt, a constant):
+// Go's inliner charges a call 57 of its budget of 80, so one function holding both the test and
+// the builder call is not inlined (cost 132), while each half is (litW 30, takeW 74). The builder call itself is out of line
+// (offerW): spelled inside takeW, the call's arguments put takeW over the budget (104), and a
+// leaf the builder drops (p.drops) makes no call at all.
+func (p *${recv}) litW(lid uint16) bool {
 \ti := p.pos
 \tp.peekEnd = i + 1
-\tif i >= len(p.toks) || p.toks[i].Lid != lid { return false }
-\tt := &p.toks[i]
-\tif tt := litTt(lid); !p.drops[uint8(tt)] { p.b.Leaf(&p.scratch, tt, uint32(i), t.Off, t.End) }
-\tp.pos = i + 1
-\treturn true
+\treturn i < len(p.toks) && p.toks[i].Lid == lid
 }
-func (p *${recv}) matchTokW(kid uint16) bool {
+func (p *${recv}) tokW(kid uint16) bool {
 \ti := p.pos
 \tp.peekEnd = i + 1
-\tif i >= len(p.toks) || p.toks[i].Kid != kid { return false }
-\tt := &p.toks[i]
-\tif !p.drops[uint8(kid)] { p.b.Leaf(&p.scratch, kid, uint32(i), t.Off, t.End) }
-\tp.pos = i + 1
+\treturn i < len(p.toks) && p.toks[i].Kid == kid
+}
+func (p *${recv}) takeW(tt uint16) bool {
+\tif !p.drops[uint8(tt)] { p.offerW(tt) }
+\tp.pos++
 \treturn true
 }
+func (p *${recv}) offerW(tt uint16) { i := p.pos; t := &p.toks[i]; p.b.Leaf(&p.scratch, tt, uint32(i), t.Off, t.End) }
 // callRuleW pushes the node of a rule call that matched (the call's two results, as callRule takes
 // the direct engine's: a direct call, not one through a method value).
 func (p *${recv}) callRuleW(fr spanned, ok bool) bool {
@@ -2242,7 +2247,7 @@ func (p *${recv}) starInCW(k int, once func() bool) bool {
 func (p *${recv}) optCW(body func() bool) bool { body(); return true }
 //go:noinline
 func (p *${recv}) sepByCW(elem func() bool, delim uint16) bool {
-\tif elem() { for p.matchLitW(delim) && elem() {} }
+\tif elem() { for p.litW(delim) && p.takeW(litTt(delim)) && elem() {} }
 \treturn true
 }
 func (p *${recv}) optW(body func() bool) bool {
@@ -2254,14 +2259,14 @@ func (p *${recv}) sepByW(elem func() bool, delim uint16) bool {
 \tsp0 := p.pos; sb0 := len(p.scratch); ${arenaCkpt().replace('nb, kb', 'nb0, kb0')}
 \tif !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; ${arenaRestore().replace('nb', 'nb0').replace('kb', 'kb0')}; return true }
 \tfor {
-\t\tif !p.matchLitW(delim) { break } // a failed delimiter match changes nothing: no mark before it
+\t\tif !(p.litW(delim) && p.takeW(litTt(delim))) { break } // a failed delimiter match changes nothing: no mark before it
 \t\tsp2 := p.pos; sb2 := len(p.scratch); ${arenaCkpt().replace('nb, kb', 'nb2, kb2')}
 \t\tif !elem() { p.back(sp2); p.scratch = p.scratch[:sb2]; ${arenaRestore().replace('nb', 'nb2').replace('kb', 'kb2')}; break }
 \t}
 \treturn true
 }
 func (p *${recv}) altLitW(lids []uint16) bool {
-\tfor _, lid := range lids { if p.matchLitW(lid) { return true } }
+\tfor _, lid := range lids { if p.litW(lid) && p.takeW(litTt(lid)) { return true } }
 \treturn false
 }
 
@@ -3381,12 +3386,16 @@ ${[...ones, ...wides].join('\n')}
   },
 };
 
+// No callee-FIRST body guards: a Go rd call refused at its dispatch costs less than the guard's test
+// on every iteration (measured: starInC 35 -> 48 instructions per call, typescript.d.ts +0.46% reuse).
+const FACTS: PortableFacts = { calleeFirstGuards: false };
+
 export const goTarget = defineTarget({
   name: 'go',
   ext: 'go',
   lowering: goLowering,
   emitParser(grammar: CstGrammar, shared: SharedAlgorithms): string {
-    const ir = portableIR(grammar);
+    const ir = portableIR(grammar, FACTS);
     const ids = buildLexIdPlan(ir);
     const lexText = lexer(ir, ids, shared);
     const ar = buildArenaIdPlan(ir, ids);

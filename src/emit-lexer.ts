@@ -258,7 +258,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
      markup?.unquotedValueToken].filter(Boolean) as string[],
   );
   // Region tokens: lexed only inside their element region, never by the ordinary scan.
-  const elTokenNames = new Set<string>(el ? [el.text, el.closeTag, el.selfClose, ...el.tagTokens ?? []].filter((x): x is string => !!x) : []);
+  const elTokenNames = new Set<string>(el ? [el.text, el.closeTag, el.selfClose, ...el.tagTokens ?? [], ...(el.rawText ?? []).map(r => r.token)].filter((x): x is string => !!x) : []);
   const lineTokenNames = new Set<string>(
     indent ? [indent.indentToken, indent.dedentToken, indent.newlineToken].filter(Boolean)
            : newline ? [newline.token] : [],
@@ -425,6 +425,18 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       if (!d) throw new Error(`elements.tagTokens: no token named '${name}'`);
       emit(`const LX_EL_TAG_${i} = new RegExp(${J(`(?:${tokenPatternSource(d)})`)}, 'y');`);
     });
+    if (el.rawText?.length) {
+      // raw-text tag names → the raw token's kind: exact names, and ASCII-case-folded ones
+      const exact: [string, number][] = [], fold: [string, number][] = [];
+      for (const r of el.rawText) {
+        if (!spec.tokens.some(t => t.name === r.token)) throw new Error(`elements.rawText: no token named '${r.token}'`);
+        for (const tag of r.tags) (r.ignoreCase ? fold : exact).push([r.ignoreCase ? tag.toLowerCase() : tag, kOf(r.token)]);
+      }
+      emit(`const LX_RAW_EXACT = new Map«<string, number>»(${J(exact)});`);
+      emit(`const LX_RAW_FOLD = new Map«<string, number>»(${J(fold)});`);
+      // the close tag of a case-folded raw-text element, in any ASCII case
+      emit(`const LX_RAW_FOLD_END = new Map«<string, RegExp>»([${fold.map(([tag]) => `[${J(tag)}, new RegExp(${J(reEsc(el.tagOpen + el.closeMarker + tag))}, 'gi')]`).join(', ')}]);`);
+    }
     const tp = el.typeParameters;
     if (tp?.head) emit(`const LX_TP_HEAD = new RegExp(${J(`(?:${tokenPatternSource({ pattern: tp.head })})`)}, 'y');`);
     if (tp?.signature) {
@@ -608,6 +620,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   }
   if (el) {
     emit(`  let tagAngle = 0;               // type-argument depth inside the current tag (\`<List<string>>\`)`);
+    if (el.rawText?.length) emit(`  let lxTagAt«: number[]» = [];     // per element frame: the index of its current tag's tagOpen token`);
     emit(`  // A type-parameter signature being decided (\`<T>(x: T) => T\`): the group is lexed as code;`);
     emit(`  // the token after its closer keeps it (one of the signature's \`then\`) or rewinds to an element.`);
     emit(`  ${speculating ? 'specTok = -1; let' : 'let specTok = -1,'} specVerdict = 0, specClosedAt = -1, specParenBase = 0, specDocLex = 0, specPops = 0;`);
@@ -643,7 +656,9 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       emit(`    }`);
     }
   } else {
-    emit(`    tkDp[tokN] = templateStack.length;`);
+    // the frame depth saturates: the record is a byte and only a zero is read (restart / resync
+    // points), so a wrap at 256 nested holes would make a token inside them an anchor
+    emit(`    tkDp[tokN] = templateStack.length > 255 ? 255 : templateStack.length;`);
   }
   emit(`    tkPd[tokN] = parenHeadStack.length;`);
   emit(`    pendingNl = false;`);
@@ -1202,6 +1217,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     // begins a type-parameter list
     emit(`    if (${startsWithExpr('source', 'pos', el.tagOpen, 'cc')} && (templateStack.length === 0 || (templateStack[templateStack.length - 1] & 3) !== 2)${speculating ? ' && specTok < 0' : ''}${enterAlways ? '' : ' && !prevIsValue() && lxOpensElement(pos)'}) {`);
     emit(`      templateStack.push(6);`);
+    if (el.rawText?.length) emit(`      lxTagAt[templateStack.length - 1] = tokN;`);
     emit(`      tkPush(K_PUNCT, ${puT(el.tagOpen)}, pos, pos + ${el.tagOpen.length});`);
     emit(`      pos += ${el.tagOpen.length};`);
     emit(`      tagAngle = 0;`);
@@ -1713,6 +1729,7 @@ function emitElementHelpers(emit: (s?: string) => void, el: ElementRegion, enter
     emit(`    tkDp[s] = d; tkDp[s + 1] = d; tkDp[s + 2] = d;`);
     emit(`    pos = tkEnd[s + 2] - srcBase«!»;`);
     emit(`    pendingNl = false; extraFl = 0; tagAngle = 0;`);
+    if (el.rawText?.length) emit(`    lxTagAt[templateStack.length - 1] = s; lxRawText(templateStack.length - 1);`);
     emit(`  }`);
   }
   // A tag ended (its tagClose or self-close token was just pushed): an open tag adds an open
@@ -1720,11 +1737,37 @@ function emitElementHelpers(emit: (s?: string) => void, el: ElementRegion, enter
   emit(`  function lxTagEnd(selfClosed«: boolean») {`);
   emit(`    const top = templateStack.length - 1, fr = templateStack[top];`);
   emit(`    let count = fr >> 4;`);
+  if (el.rawText?.length) emit(`    const opened = !selfClosed && ((fr >> 2) & 3) === 1;`);
   emit(`    if (!selfClosed) count += ((fr >> 2) & 3) === 1 ? 1 : -1;`);
   emit(`    if (count <= 0) { templateStack.pop(); tkFl[tokN - 1] |= 16; }`);
   emit(`    else templateStack[top] = (count << 4) | 2;`);
   emit(`    tagAngle = 0;`);
+  if (el.rawText?.length) emit(`    if (opened) lxRawText(top);`);
   emit(`  }`);
+  if (el.rawText?.length) {
+    // An open tag just ended: when its name (the token after its tagOpen, if that is not the
+    // tagClose itself) is a raw-text name, the body up to tagOpen + closeMarker + name is ONE raw
+    // token, pushed inside a raw frame (kind 3) and popped after it; the close tag is lexed next,
+    // in the children, as any close tag.
+    const close = el.tagOpen + el.closeMarker;
+    emit(`  function lxRawText(top«: number») {`);
+    emit(`    const i = lxTagAt[top] + 1;`);
+    emit(`    if (i >= tokN - 1) return;`);
+    emit(`    const name = source.slice(tkOff[i] - lexSrcBase, tkEnd[i] - lexSrcBase);`);
+    emit(`    let k = LX_RAW_EXACT.get(name), end = -1;`);
+    emit(`    if (k !== undefined) end = source.indexOf(${J(close)} + name, pos);`);
+    emit(`    else {`);
+    emit(`      k = LX_RAW_FOLD.get(name.toLowerCase());`);
+    emit(`      if (k === undefined) return;`);
+    emit(`      const re = LX_RAW_FOLD_END.get(name.toLowerCase())«!»;`);
+    emit(`      re.lastIndex = pos;`);
+    emit(`      const m = re.exec(source);`);
+    emit(`      end = m === null ? -1 : m.index;`);
+    emit(`    }`);
+    emit(`    if (end < 0) end = n;`);
+    emit(`    if (end > pos) { templateStack.push(3); tkPush(k, 0, pos, end); templateStack.pop(); pos = end; }`);
+    emit(`  }`);
+  }
 }
 
 // The element text frame at the top of the stack: children text, or the tag delimiters.
@@ -1742,6 +1785,7 @@ function emitElementFrame(emit: (s?: string) => void, el: ElementRegion, c: Elem
   emit(`            pos += ${LC}; templateStack[top] = fr | 8; tagAngle = 0;`);
   emit(`            continue;`);
   emit(`          }`);
+  if (el.rawText?.length) emit(`          lxTagAt[top] = tokN;`);
   emit(`          tkPush(K_PUNCT, ${c.puT(el.tagOpen)}, pos, pos + ${L});`);
   emit(`          pos += ${L}; templateStack[top] = fr | 4; tagAngle = 0;`);
   emit(`          continue;`);
@@ -1784,7 +1828,7 @@ function emitElementFrame(emit: (s?: string) => void, el: ElementRegion, c: Elem
   emit(`        if (${sw(el.tagOpen)}) {`);
   // after the attribute assign an element is a value (`a=<b/>`); elsewhere type arguments
   emit(`          const nested = tokN > 0 && ${c.punctIs!('tokN - 1', ['='])};`);
-  emit(`          if (nested) templateStack.push(6); else tagAngle++;`);
+  emit(el.rawText?.length ? `          if (nested) { templateStack.push(6); lxTagAt[templateStack.length - 1] = tokN; } else tagAngle++;` : `          if (nested) templateStack.push(6); else tagAngle++;`);
   emit(`          tkPush(K_PUNCT, ${c.puT(el.tagOpen)}, pos, pos + ${L});`);
   emit(`          pos += ${L};`);
   emit(`          if (nested) tagAngle = 0;`);
