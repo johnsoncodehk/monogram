@@ -13,7 +13,7 @@ import type { CstChild, CstLeaf, CstNode } from './gen-parser.ts';
 import type { CstGrammar, RuleDecl, RuleExpr } from './types.ts';
 import { isKeywordLiteral } from './grammar-utils.ts';
 import { nameRule, OP_FORM_CHILDREN, type RuleNames } from './grammar-names.ts';
-import { COOK_FNS, OPERATORS, type CookFn, type Scalar, type Shape2Spec, type Span, type Term } from './shape2-schema.ts';
+import { COOK_FNS, OPERATORS, type CookFn, type InhAttr, type InhEq, type Scalar, type Shape2Spec, type Span, type Term, type ThreadEq } from './shape2-schema.ts';
 
 // ── Values ──
 
@@ -340,7 +340,10 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
   for (const [attr, d] of Object.entries(inhs)) {
     eachArmKey(`inherited ${attr}`, d.rules, (a, v, w) => {
       if (v === null || typeof v !== 'object') { err(w, 'must map child names to equations'); return; }
-      for (const [kid, eq] of Object.entries(v as Record<string, Term>)) {
+      const eqs = Object.entries(v as Record<string, InhEq>);
+      if (eqs.length > 1 && eqs.some(([, e]) => e?.t === 'thread')) err(w, `an arm threading ${attr} has no other equation for it (its elements take the threaded state)`);
+      for (const [kid, eq] of eqs) {
+        if (eq?.t === 'thread') { threadEq(a, kid, eq, d, `${w}.${kid}`); continue; }
         const r = findSlotAnywhere(a, kid);
         if (!r) err(`${w}.${kid}`, `${a.where} has no child ${kid}`);
         else if (r.kind !== 'node') err(`${w}.${kid}`, `the child ${kid} is a ${r.kind}; only a rule node has inherited attributes`);
@@ -355,6 +358,23 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
   if (problems.length) throw new Shape2SpecError(problems);
   return { spec, grammar: g };
 
+  /** A threaded equation: on a repeated child of the arm's own scope; `init` as any inherited
+   * equation; `next` a scalar of the attribute's type over the accumulator and the element. */
+  function threadEq(a: ArmInfo, kid: string, eq: ThreadEq, d: InhAttr, w: string): void {
+    const slot = a.slots.get(kid);
+    const at = slot ? slot.quants.map(isList).lastIndexOf(true) : -1;
+    if (!slot) { err(w, `thread: ${a.where} has no child ${kid} of its own (a thread runs over a repetition of the arm itself)`); return; }
+    if (at < 0) { err(w, `thread: ${kid} is not repeated; a thread runs over the elements of a repetition`); return; }
+    if (slot.kind !== 'node' && slot.kind !== 'branch') err(w, `thread: ${kid} is a ${slot.kind}; the elements must hold rule nodes`);
+    const init = eq.init as Term;
+    if (init?.t === 'const') { if (!scalarOk(constTy(init.value), d.type)) err(`${w} init`, `a ${d.type} attribute's initial state is ${JSON.stringify(init.value)}`); }
+    else if (init?.t === 'inh') { if (!(init.attr in inhs)) err(`${w} init`, `no inherited attribute ${init.attr}`); else if (inhs[init.attr].type !== d.type) err(`${w} init`, `copies ${init.attr} (${inhs[init.attr].type}) into a ${d.type} attribute`); }
+    else err(`${w} init`, 'a thread\'s initial state is a constant or `inh` of the parent\'s attribute');
+    if (typeof eq.acc !== 'string') { err(w, 'thread: acc is a variable name'); return; }
+    const ty = term(eq.next, { info: a, base: slot.quants.slice(0, at + 1), vars: new Set([eq.acc]) }, `${w} next`, 'thread', a);
+    if (!scalarOk(ty, d.type)) err(`${w} next`, `a ${d.type} attribute's next state has type ${ty}`);
+  }
+
   function findSlotAnywhere(s: ScopeInfo, name: string): Slot | undefined {
     const own = s.slots.get(name);
     if (own) return own;
@@ -367,12 +387,13 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
 
   /** Check one term in a scope; returns its type. `ctx`: a value term, or a synthesized
    * attribute's equation (scalars over the subtree only). */
-  function term(raw: unknown, s: SScope, w: string, ctx: 'value' | 'syn', arm: ArmInfo): Ty {
+  function term(raw: unknown, s: SScope, w: string, ctx: 'value' | 'syn' | 'thread', arm: ArmInfo): Ty {
     if (typeof raw === 'function') { err(w, 'a function is not a term: the calculus has no escape to code (v2 has no `custom`)'); return 'any'; }
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) { err(w, `${JSON.stringify(raw)} is not a term`); return 'any'; }
     const e = raw as Term;
     if (!known.has(e.t)) { err(w, `\`${String((e as { t: unknown }).t)}\` is not an operator of the calculus (${[...known].join(', ')})`); return 'any'; }
     if (ctx === 'syn' && !OPERATORS[e.t].synAttr) { err(w, `\`${e.t}\` cannot appear in a synthesized attribute's equation (scalars over the subtree only)`); return 'any'; }
+    if (ctx === 'thread' && !OPERATORS[e.t].synAttr && e.t !== 'var') { err(w, `\`${e.t}\` cannot appear in a thread's next state (a scalar over the state and the element's own children only)`); return 'any'; }
     const sub = (x: unknown, at: string, sc: SScope = s): Ty => term(x, sc, `${w} ${at}`, ctx, arm);
     const need = (x: unknown, at: string, want: Ty): void => {
       const ty = sub(x, at);
@@ -381,7 +402,8 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
     const slotOf = (name: unknown, op: string): { slot: Slot; card: Card; scope: SScope } | undefined => {
       if (typeof name !== 'string') { err(w, `${op}: a child name is a string`); return undefined; }
       const r = resolveStatic(s, name);
-      if (!r) err(w, `${op}(${name}): ${s.info.where} has no child ${name} (its children: ${[...s.info.slots.keys()].join(', ') || 'none'})`);
+      if (!r && ctx === 'thread' && findSlotAnywhere(arm, name)) err(w, `${op}(${name}): ${name} is not in the element: a thread's next state reads only the element's own children (no other sibling)`);
+      else if (!r) err(w, `${op}(${name}): ${s.info.where} has no child ${name} (its children: ${[...s.info.slots.keys()].join(', ') || 'none'})`);
       return r;
     };
     switch (e.t) {
@@ -424,6 +446,7 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
         if (!d) { err(w, `syn: no synthesized attribute ${e.attr}`); return 'any'; }
         if (e.name === undefined) {
           if (ctx === 'syn') err(w, `syn(${e.attr}) of the node itself inside an equation is a cycle`);
+          if (ctx === 'thread') err(w, `syn(${e.attr}) of the parent inside a thread's next state: the next state reads the element's own children only`);
           return d.type === 'bool' ? 'bool' : d.type;
         }
         const r = slotOf(e.name, 'syn');
@@ -519,10 +542,22 @@ type Inh = Record<string, Scalar>;
 type RScope = { info: ScopeInfo; base: RuleExpr[]; frame: Frame; outer?: RScope; vars: Map<string, Bound>; m: Matched; node: CstNode; inh: Inh };
 type Bound = { value: S2Value | undefined; start: number; end: number };
 
+/** The value of `cst` (the root: its context is every inherited attribute's default). */
 export function evaluate(loaded: LoadedShape2, cst: CstNode, src: string): S2Value | undefined {
+  return evaluator(loaded, cst, src)(cst);
+}
+
+/** An evaluator over one tree: the value of any node under `root`, in the context its
+ * ancestors (and, through a thread, its left siblings) give it. Matches and attributes are
+ * memoised across calls. */
+export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n: CstNode) => S2Value | undefined {
   const { spec, grammar: g } = loaded;
   const matches = new WeakMap<CstNode, Matched>();
   const synMemo = new WeakMap<CstNode, Map<string, Scalar>>();
+  const threadMemo = new WeakMap<CstNode, Map<string, Map<CstNode, Scalar>>>();
+  const inhMemo = new WeakMap<CstNode, Inh>();
+  const kidNames = new WeakMap<CstNode, Map<CstNode, string>>();
+  let parents: WeakMap<CstNode, CstNode> | undefined;
   const inhs = spec.inherited ?? {};
   const rootInh: Inh = Object.fromEntries(Object.entries(inhs).map(([k, d]) => [k, d.default]));
 
@@ -555,13 +590,90 @@ export function evaluate(loaded: LoadedShape2, cst: CstNode, src: string): S2Val
     memo.set(attr, val);
     return val;
   }
-  /** The inherited attributes a parent (scope `s`, in its arm) hands its child `name`. */
-  function inhFor(s: RScope, name: string): Inh {
+  /** The inherited attributes a parent (scope `s`, in its arm) hands its child `kid`, named
+   * `name`: by the arm's thread when it threads the attribute, else by the child's equation. */
+  function inhFor(s: RScope, name: string, kid: CstNode): Inh {
     const out: Inh = {};
     for (const [attr, d] of Object.entries(inhs)) {
-      const eq = d.rules[s.m.info.rule]?.[s.m.info.arm]?.[name];
+      const eqs = d.rules[s.m.info.rule]?.[s.m.info.arm];
+      const th = eqs && Object.entries(eqs).find(([, e]) => e.t === 'thread');
+      if (th) {
+        const states = threadStates(s, attr, th[0], th[1] as ThreadEq);
+        out[attr] = states.has(kid) ? states.get(kid)! : d.default;
+        continue;
+      }
+      const eq = eqs?.[name] as Term | undefined;
       out[attr] = eq === undefined ? d.default : eq.t === 'const' ? eq.value : s.inh[(eq as { attr: string }).attr];
     }
+    return out;
+  }
+  /** The state a thread hands each rule node of each element of the repetition holding `over`. */
+  function threadStates(s: RScope, attr: string, over: string, eq: ThreadEq): Map<CstNode, Scalar> {
+    let byAttr = threadMemo.get(s.node);
+    if (!byAttr) { byAttr = new Map(); threadMemo.set(s.node, byAttr); }
+    const memo = byAttr.get(attr);
+    if (memo) return memo;
+    const arm = scopeOf(s.node, s.inh);
+    const slot = arm.info.slots.get(over)!;
+    const base = slot.quants.slice(0, slot.quants.map(isList).lastIndexOf(true) + 1);
+    const out = new Map<CstNode, Scalar>();
+    let state = ev(eq.init as Term, arm) as Scalar;
+    for (const f of iterFrames(arm.frame, base)) {
+      for (const n of nodesIn(arm.info, base, f)) out.set(n, state);
+      const acc: Bound = { value: state, start: s.node.offset, end: s.node.end };
+      state = ev(eq.next, { info: arm.info, base, frame: f, vars: new Map([[eq.acc, acc]]), m: arm.m, node: s.node, inh: s.inh }) as Scalar;
+    }
+    byAttr.set(attr, out);
+    return out;
+  }
+  /** The rule nodes one scope's frame holds (with the branches taken inside it). */
+  function nodesIn(info: ScopeInfo, base: RuleExpr[], f: Frame): CstNode[] {
+    const out: CstNode[] = [];
+    for (const slot of info.slots.values()) {
+      if (!startsWith(slot.quants, base)) continue;
+      for (const it of collect(f, slot.quants.slice(base.length), slot.node)) {
+        if (it?.k === 'node') out.push(it.node);
+        else if (it?.k === 'branch') out.push(...nodesIn(it.info, [], it.frame));
+      }
+    }
+    return out;
+  }
+  /** The name of each rule-node child of `p` (in its arm, or in a branch it took). */
+  function namesOfKids(p: CstNode): Map<CstNode, string> {
+    let out = kidNames.get(p);
+    if (out) return out;
+    out = new Map();
+    const visit = (info: ScopeInfo, f: Frame): void => {
+      for (const slot of info.slots.values()) for (const it of collect(f, slot.quants, slot.node)) {
+        if (it?.k === 'node') out!.set(it.node, slot.name);
+        else if (it?.k === 'branch') visit(it.info, it.frame);
+      }
+    };
+    const m = matched(p);
+    visit(m.info, m.frame);
+    kidNames.set(p, out);
+    return out;
+  }
+  /** A node's inherited attributes, from the root down. */
+  function inhOf(n: CstNode): Inh {
+    const memo = inhMemo.get(n);
+    if (memo) return memo;
+    if (!parents) {
+      parents = new WeakMap();
+      const walk = (x: CstNode): void => { for (const k of x.children) if (!isLeaf(k)) { parents!.set(k, x); walk(k); } };
+      walk(root);
+    }
+    const p = parents.get(n);
+    let out: Inh;
+    if (p === undefined) {
+      if (n !== root) throw new Error(`shape2: the node at ${n.offset}..${n.end} is not under the evaluator's root`);
+      out = rootInh;
+    } else {
+      const name = namesOfKids(p).get(n);
+      if (name === undefined) throw new Error(`shape2: the node at ${n.offset}..${n.end} is not a named child of its ${p.rule} parent`);
+      out = inhFor(scopeOf(p, inhOf(p)), name, n);
+    }
+    inhMemo.set(n, out);
     return out;
   }
   function resolve(s: RScope, name: string): { items: (Item | undefined)[]; card: Card; scope: RScope } {
@@ -580,7 +692,7 @@ export function evaluate(loaded: LoadedShape2, cst: CstNode, src: string): S2Val
   function itemValue(it: Item | undefined, holder: RScope, name: string): S2Value | undefined {
     if (it === undefined) return undefined;
     if (it.k !== 'node') throw new Error(`shape2: child ${name} is a ${it.k}`);
-    return valueOf(it.node, inhFor(holder, name));
+    return valueOf(it.node, inhFor(holder, name, it.node));
   }
   function spanEdge(s: RScope, name: string, edge: 'start' | 'end'): number {
     const b = lookupVar(s, name);
@@ -692,7 +804,7 @@ export function evaluate(loaded: LoadedShape2, cst: CstNode, src: string): S2Val
     }
   }
 
-  return valueOf(cst, rootInh);
+  return (n) => valueOf(n, inhOf(n));
 }
 const isNode = (v: S2Value | undefined): v is S2Node => v !== null && typeof v === 'object' && !Array.isArray(v) && 'kind' in v;
 
@@ -715,50 +827,84 @@ function iterFrames(f: Frame, quants: RuleExpr[]): Frame[] {
 // ── Dependencies (what incremental reuse needs) ──
 
 /** Per (rule, arm): the inherited attributes its VALUE depends on: those it reads (`inh`), and
- * those it hands a child by copy (`inh` in an inherited equation) when that child's value
- * depends on the copied attribute (a fixpoint over the rules). An arm that depends on none is a
- * function of its own subtree: its node is reusable wherever it sits. A constant equation
- * (`chainTop: false` for a link's object) makes the CHILD context-dependent, not the parent. */
-export function dependencies(loaded: LoadedShape2): Record<string, { inherited: string[] }> {
+ * those it hands a child by copy (`inh` in an inherited equation, or as a thread's initial
+ * state) when that child's value depends on the copied attribute (a fixpoint over the rules).
+ * An arm that depends on none is a function of its own subtree: its node is reusable wherever it
+ * sits. A constant equation (`chainTop: false` for a link's object) makes the CHILD context-
+ * dependent, not the parent.
+ *
+ * `threads`: the arm's threaded equations. An element of such a repetition depends on its LEFT
+ * SIBLINGS through the state only: the state entering element k is a function of the initial
+ * state and the `reads` (the synthesized attributes `next` reads, of each element before k). So
+ * after an edit, an element is reusable when the state entering it is unchanged; the elements
+ * after an edited one are re-evaluated only while the recomputed state differs from the old one,
+ * and reused from the first element whose incoming state is equal again. */
+export type ArmDeps = { inherited: string[]; threads?: { attr: string; over: string; reads: string[] }[] };
+export function dependencies(loaded: LoadedShape2): Record<string, ArmDeps> {
   const { spec, grammar: g } = loaded;
   const inhs = spec.inherited ?? {};
   const direct = new Map<string, Set<string>>();
-  const walkT = (x: unknown, acc: Set<string>): void => {
+  const walkT = (x: unknown, tag: string, acc: Set<string>): void => {
     if (x === null || typeof x !== 'object') return;
-    if ((x as Term).t === 'inh') acc.add((x as { attr: string }).attr);
-    for (const val of Object.values(x)) walkT(val, acc);
+    if ((x as Term).t === tag) acc.add((x as { attr: string }).attr);
+    for (const val of Object.values(x)) walkT(val, tag, acc);
   };
   for (const [rule, arms] of Object.entries(spec.rules)) for (const [arm, t] of Object.entries(arms)) {
     const acc = new Set<string>();
-    walkT(t, acc);
+    walkT(t, 'inh', acc);
     direct.set(`${rule}.${arm}`, acc);
   }
   const deps = new Map([...direct].map(([k, v2]) => [k, new Set(v2)]));
+  const threads = new Map<string, NonNullable<ArmDeps['threads']>>();
   const ofRule = (rule: string): Set<string> => {
     const out = new Set<string>();
     for (const [k, v2] of deps) if (k.startsWith(`${rule}.`)) v2.forEach((x) => out.add(x));
     return out;
   };
-  const slotRule = (scope: ScopeInfo, name: string): string | undefined => {
+  const slotRules = (scope: ScopeInfo, name: string): string[] => {
     const own = scope.slots.get(name);
-    if (own) return own.rule;
-    for (const sl of scope.slots.values()) for (const b of sl.branches?.values() ?? []) { const r = slotRule(b, name); if (r) return r; }
-    return undefined;
+    if (own) return own.rule ? [own.rule] : [];
+    for (const sl of scope.slots.values()) for (const b of sl.branches?.values() ?? []) { const r = slotRules(b, name); if (r.length) return r; }
+    return [];
   };
+  /** The rules of every rule node an element of the repetition `base` can hold. */
+  const elementRules = (scope: ScopeInfo, base: RuleExpr[]): string[] => {
+    const out: string[] = [];
+    for (const sl of scope.slots.values()) {
+      if (!startsWith(sl.quants, base)) continue;
+      if (sl.rule) out.push(sl.rule);
+      for (const b of sl.branches?.values() ?? []) out.push(...elementRules(b, []));
+    }
+    return out;
+  };
+  for (const [attr, d] of Object.entries(inhs)) for (const [rule, arms] of Object.entries(d.rules)) for (const [arm, kids] of Object.entries(arms)) {
+    for (const [kid, eq] of Object.entries(kids)) {
+      if (eq.t !== 'thread') continue;
+      const key = `${rule}.${arm}`;
+      const reads = new Set<string>();
+      walkT(eq.next, 'syn', reads);
+      if (!threads.has(key)) threads.set(key, []);
+      threads.get(key)!.push({ attr, over: kid, reads: [...reads].sort() });
+    }
+  }
   for (let changed = true; changed;) {
     changed = false;
     for (const [attr, d] of Object.entries(inhs)) for (const [rule, arms] of Object.entries(d.rules)) for (const [arm, kids] of Object.entries(arms)) {
       const key = `${rule}.${arm}`;
-      if (!deps.has(key)) continue;
+      if (!deps.has(key)) deps.set(key, new Set());   // an unmapped arm that hands its children context
       const info = g.arms.get(rule)!.find((a) => a.arm === arm)!;
       for (const [kid, eq] of Object.entries(kids)) {
-        if (eq.t !== 'inh') continue;
-        const r = slotRule(info, kid);
-        if (r && ofRule(r).has(attr) && !deps.get(key)!.has(eq.attr)) { deps.get(key)!.add(eq.attr); changed = true; }
+        const copied = eq.t === 'inh' ? eq.attr : eq.t === 'thread' && (eq.init as Term).t === 'inh' ? (eq.init as { attr: string }).attr : undefined;
+        if (copied === undefined) continue;
+        const rules = eq.t === 'thread'
+          ? elementRules(info, (() => { const q = info.slots.get(kid)!.quants; return q.slice(0, q.map(isList).lastIndexOf(true) + 1); })())
+          : slotRules(info, kid);
+        if (rules.some((r) => ofRule(r).has(attr)) && !deps.get(key)!.has(copied)) { deps.get(key)!.add(copied); changed = true; }
       }
     }
   }
-  return Object.fromEntries([...deps].map(([k, v2]) => [k, { inherited: [...v2].sort() }]));
+  const keys = [...new Set([...deps.keys(), ...threads.keys()])];
+  return Object.fromEntries(keys.map((k) => [k, { inherited: [...(deps.get(k) ?? [])].sort(), ...(threads.has(k) ? { threads: threads.get(k) } : {}) }]));
 }
 
 /** The arm name the reference matcher gives a CST node (for totality checks of the matcher). */
@@ -847,4 +993,5 @@ const COOK: Record<CookFn, (raw: string) => Scalar | undefined> = {
   privateName: (raw) => unescapeCodePoints(raw.slice(1)),
   regexPattern: (raw) => raw.slice(1, raw.lastIndexOf('/')),
   regexFlags: (raw) => raw.slice(raw.lastIndexOf('/') + 1),
+  stringBody: (raw) => raw.slice(1, -1),
 };

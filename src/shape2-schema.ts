@@ -16,6 +16,16 @@
 //   that flows down, decided by the parent's ARM and the child's NAME; it never carries a value
 //   or a subtree. That is the declared, limited use of outer context, and it is what tells the
 //   generator which nodes depend on where they sit (see `dependencies` in shape2-eval.ts).
+// - One list-level construct, THREADED state (`thread`), is the only way a node's context can
+//   depend on its SIBLINGS: a parent arm, for a repeated child, threads one scalar left to right
+//   across the repetition's iterations (the ELEMENTS): element k receives state k as the
+//   inherited attribute; state 0 is the equation's `init` (a constant or a copy of the parent's
+//   attribute, like any inherited equation); state k+1 is `next`, a scalar term over state k
+//   (`var(acc)`) and element k's OWN children and their synthesized attributes, nothing else
+//   (no `inh`, no child outside the element). So an element's context is a function of the
+//   synthesized attributes of the elements before it: the directive prologue (a statement is a
+//   directive while every statement before it in a Program / function body is one) is
+//   `thread(init, 'p', and(v('p'), syn('directive', 'stmt')))`. Nothing else reads a sibling.
 //
 // Each operator's dependency class is in OPERATORS (`synthesized`: own subtree only;
 // `inherited`: reads the parent's context). The survey's primitives (P2 type by operator text,
@@ -126,15 +136,25 @@ export const COOK_FNS = [
   'hasExtendedUnicodeEscape', // whether a string literal holds a `\u{...}` escape (tsc stores it on every string)
   'regexPattern',     // a RegularExpressionLiteral's body (between the slashes)
   'regexFlags',       // a RegularExpressionLiteral's flags
+  'stringBody',       // a string literal's source between its quotes, escapes kept (ESTree's `directive`)
 ] as const;
 export type CookFn = (typeof COOK_FNS)[number];
 
 /** A synthesized scalar attribute: an equation per (rule, arm); an arm without one takes
  * `default` (required unless every arm of every rule that is asked has an equation). */
 export type SynAttr = { type: ScalarType; default?: Scalar; rules: Record<string, Record<string, Term>> };
-/** An inherited scalar attribute: per (rule, arm, child name) an equation (a constant, or `inh`
- * of the parent's own attribute); every other child, and the root, gets `default`. */
-export type InhAttr = { type: ScalarType; default: Scalar; rules: Record<string, Record<string, Record<string, Term>>> };
+/** A threaded equation (see the header): on a REPEATED child of the arm's own scope. Every rule
+ * node inside iteration k of the innermost repetition holding that child (the child itself, or
+ * the rule nodes of the branch an alternation took there) receives state k; state 0 is `init`
+ * (a constant or `inh` of the parent's attribute), state k+1 is `next` evaluated in iteration
+ * k's scope (only that iteration's children) with `acc` bound to state k. */
+export type ThreadEq = { t: 'thread'; init: Term; acc: string; next: Term };
+/** An inherited equation: a constant, `inh` of the parent's own attribute, or a thread. */
+export type InhEq = Term | ThreadEq;
+/** An inherited scalar attribute: per (rule, arm, child name) an equation (InhEq); every other
+ * child, and the root, gets `default`. An arm holding a thread for the attribute has no other
+ * equation for it. */
+export type InhAttr = { type: ScalarType; default: Scalar; rules: Record<string, Record<string, Record<string, InhEq>>> };
 
 export type Shape2Spec = {
   name: string;
@@ -176,6 +196,7 @@ export const map = (over: string, body: Term): Term => ({ t: 'map', over, body }
 export const fold = (over: string, init: Term, acc: string, body: Term): Term => ({ t: 'fold', over, init, acc, body });
 export const let_ = (name: string, value: Term, body: Term): Term => ({ t: 'let', name, value, body });
 export const v = (name: string): Term => ({ t: 'var', name });
+export const thread = (init: Term, acc: string, next: Term): ThreadEq => ({ t: 'thread', init, acc, next });
 
 /** P2: a node type chosen by a child's text (an operator or a leaf), from a table. */
 export const typeByText = (name: string, table: Record<string, string>): Term =>
