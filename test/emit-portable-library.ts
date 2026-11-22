@@ -106,7 +106,9 @@ else {
   // Builder needs — no generated rule helper or lexer constant.
   const GO_API = new Set(['Tokenize', 'Token', 'LexError', 'Error', 'Tok', 'Node', 'Edit', 'Align', 'EntryMeta', 'Seg', 'Doc', 'NewDoc', 'DocWith', 'NewDocWith', 'Document',
     'SetValidate', 'Text', 'Root', 'Builder', 'Shifter', 'CstBuilder', 'SlimBuilder', 'Checkpoint', 'Restore', 'Leaf', 'Finish', 'SpanOf', 'HeadSpan', 'Shift',
-    'ParseWith', 'CstJSONWith', 'SlimJSONWith', 'CstJSON', 'TT_NAMES', 'RULE_NAMES', 'TT_SKIP_PUNCT']);
+    'ParseWith', 'CstJSONWith', 'SlimJSONWith', 'CstJSON', 'TT_NAMES', 'RULE_NAMES', 'TT_SKIP_PUNCT',
+    // A builder that keeps the engine's buffers between parses (Rust: Builder::workspace_mut, Workspace).
+    'Workspace', 'WorkspaceOwner']);
   const exported = [...goSrc.matchAll(/^(?:func (?:\([^)]*\) )?|type |var |const )([A-Z]\w*)/gm)].map((x) => x[1]!);
   const extra = [...new Set(exported.filter((x) => !GO_API.has(x)))];
   check('go: package parser exports only its API', extra.length === 0, extra.slice(0, 12).join(' '));
