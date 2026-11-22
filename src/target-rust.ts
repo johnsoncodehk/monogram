@@ -2146,13 +2146,7 @@ struct Mark { pos: usize, sb: usize, ck: (usize, usize) }
 /// which made each finish site's cost depend on the size of the function holding it).
 #[inline(always)]
 fn copy_kids(kids: &mut Vec<i32>, s: &[i32]) {
-    kids.reserve(s.len());
-    let n = kids.len();
-    unsafe {
-        let p = kids.as_mut_ptr().add(n);
-        for i in 0..s.len() { p.add(i).write(*s.get_unchecked(i)); }
-        kids.set_len(n + s.len());
-    }
+    kids.extend_from_slice(s);
 }
 ${CAND_MACRO_RS}
 
