@@ -132,6 +132,21 @@ function seqInfo(is: Info[]): Info {
   return { first, nullable: allNul, zfail: allNul ? zfail : NONE, sure, chars: is.reduce((a, i) => union(a, i.chars), NONE), always: is.every((i) => i.always) };
 }
 
+/** Every character (UTF-16 unit) a match attempt of p can examine and then go past: the units of
+ *  its consuming atoms, lookahead bodies included. An attempt from a start position therefore
+ *  reads, at the latest, up to and including the first unit outside this set: no path passes it.
+ *  (A non-BMP character in a class stands for both surrogate ranges.) */
+export function examinedUnits(p: TokenPattern): CSet {
+  if (typeof p === 'string') return norm([...Array(p.length).keys()].map((i) => [p.charCodeAt(i), p.charCodeAt(i)]));
+  switch (p.type) {
+    case 'anyChar': return CHARS;
+    case 'charClass': return union(classSet(p.items, p.negate), p.items.some((it) => (it.type === 'char' ? it.value : it.to).length > 1) ? [[0xd800, 0xdfff]] : NONE);
+    case 'seq': case 'alt': return p.items.reduce((a, i) => union(a, examinedUnits(i)), NONE);
+    case 'repeat': case 'lookahead': case 'lookbehind': return examinedUnits(p.body);
+    case 'anchor': case 'never': return NONE;
+  }
+}
+
 // The next characters at which a pattern surely fails.
 const failset = (i: Info): CSet => intersect(complement(i.first), i.nullable ? i.zfail : ALL);
 

@@ -22,6 +22,7 @@ import {
   tokenBlockPatternFirstCharSet, tokenBlockPatternSource, tokenEscapeValidPatternSource, tokenPatternCharLoop,
   tokenPatternFirstCharSet, tokenPatternHasStartAnchor, tokenPatternSource,
 } from './token-pattern.ts';
+import { complement, examinedUnits, intersect } from './lex-match-plan.ts';
 
 // The public token model: fresh objects owned by the caller.
 // type = the token decl name, '' for a punctuation literal, or one of the synthetic template
@@ -307,9 +308,17 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
         k: kOf(t.name),
         identLike: identLike.has(t.name),
         loop: tokenPatternCharLoop(t),
+        // a regex token tried and failed at an operand position: the units at which its attempt
+        // surely stopped (the decision to lex the opener otherwise read up to the first of them)
+        stop: t.flags.includes('regex') ? intersect(complement(examinedUnits(t.pattern)), [[0, 0xffff]]) : null,
       };
     });
   type M = (typeof matchers)[number];
+  // A token decided by text after its own start (a failed regex attempt) records one frame
+  // level deeper, with every token that starts before the farthest unit that decision read
+  // (`lxLookEnd`): an edit there can flip the decision, so none of them is a relex restart or
+  // resync point.
+  const lookEnd = matchers.some(m => m.isRegex);
 
   emit(`// ── Emitted lexer (emit-lexer.ts): specialized tokenize for this grammar ──`);
   for (const m of matchers) {
@@ -557,6 +566,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`  let sawCloseMarker = false;      // this tag began with the close marker`);
     emit(`  let lowerSrc«: string | null» = null;`);
   }
+  if (lookEnd) emit(`  let lxLookEnd = -1;              // a token decided by later text read the units up to here`);
   // ── push ──
   emit(`  function tkPush(k«: number», t«: number», off«: number», end«: number») {`);
   if (tagScope) emit(`    const rawOff = off, rawEnd = end;`);
@@ -570,7 +580,9 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`    tkFl[tokN] = (pendingNl ? 1 : 0) | extraFl;`);
   }
   emit(`    extraFl = 0;`);
-  emit(`    tkDp[tokN] = templateStack.length;`);
+  // the frame depth saturates (only a zero record is read: restart / resync points)
+  if (lookEnd) emit(`    { const d = templateStack.length + (off - srcBase«!» < lxLookEnd ? 1 : 0); tkDp[tokN] = d > 255 ? 255 : d; }`);
+  else emit(`    tkDp[tokN] = templateStack.length;`);
   emit(`    tkPd[tokN] = parenHeadStack.length;`);
   emit(`    pendingNl = false;`);
   emit(`    pvK = k; pvT = t;`);
@@ -998,6 +1010,11 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       if (a.m.isRegex) {
         emit(`${i}if (!prevIsValue()) {`);
         emitMatcherTry(a.m, reOf(v), i + '  ');
+        // failed: the opener lexes as something else, decided by the units the attempt read
+        const stop = a.m.stop!.map(([lo, hi]) => (lo === hi ? `_c === ${lo}` : `(_c >= ${lo} && _c <= ${hi})`)).join(' || ') || 'false';
+        emit(`${i}  { let _q = pos; for (; _q < source.length; _q++) { const _c = source.charCodeAt(_q); if (${stop}) break; }`);
+        emit(`${i}    if (_q >= source.length && lexWindowMore) throw LEX_RETRY;`);
+        emit(`${i}    if (_q + 1 > lxLookEnd) lxLookEnd = _q + 1; }`);
         emit(`${i}}`);
       } else emitMatcherTry(a.m, reOf(v), i);
     };
