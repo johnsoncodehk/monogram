@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, dispatchWalk, gtCompLit, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -573,24 +573,21 @@ function tsRules(r: RdRule, ids: LexIdPlan, m: Mode): RuleLowering {
   };
 }
 
-// Shape A's one top-level entry in builder form: the first of its rules that matches.
-function topOneBodyW(plan: ReusePlanA): string {
-  if (plan.rules.length === 1) return `  return parse${plan.rules[0]}W();`;
-  return `${plan.rules.map((n) => `  { const sp = pos; if (parse${n}W()) return true; back(sp); }`).join('\n')}\n  return false;`;
-}
-
-// The entry rule in builder form, recording what incremental reuse needs: shape A one EntryMeta per
-// top-level entry (kidStart: its slot under the root), shape B one Seg + EntryMeta per segment
-// (kidStart / kidCount: in handles). Engine-side metadata only (R2): consumer handles are never read
-// or mutated; _entryHs is a copy of the root's children.
+// The entry rule in builder form (emit-portable entryShell), recording what incremental reuse
+// needs: shape A one EntryMeta per top-level entry (kidStart: its slot under the root), shape B one
+// Seg + EntryMeta per segment (kidStart / kidCount: in handles). Engine-side metadata only (R2):
+// consumer handles are never read or mutated; _entryHs is a copy of the root's children.
 const ENTRY_META_TS = `type EntryMeta = { tokStart: number; tokEnd: number; ext: number; off: number; end: number; kidStart: number; kidCount: number };
 let _entries: EntryMeta[] = [];
 let _entryHs: any[] = [];
 `;
 function rdEntryWithReuseW(r: RdRule, plan: ReusePlan, ids: LexIdPlan): string {
-  if (plan.kind === 'A') {
-    return `${ENTRY_META_TS}function parseTopOneW(): boolean {
-${topOneBodyW(plan)}
+  return entryShell(plan, ids, {
+    topCall: (n) => `  return parse${n}W();`,
+    topTry: (n) => `  { const sp = pos; if (parse${n}W()) return true; back(sp); }`,
+    topFail: '  return false;',
+    entryA: (topOne) => `${ENTRY_META_TS}function parseTopOneW(): boolean {
+${topOne}
 }
 function parse${r.name}W(): boolean {
   const save = pos, b = _n;
@@ -606,22 +603,12 @@ function parse${r.name}W(): boolean {
   _entryHs = _kids(b);
   finR(${J(r.name)}, b, save);
   return true;
-}`;
-  }
-  const headBlock = plan.hasHead && plan.headRule
-    ? `  {
-    const pair = parseHeadSegW(0);
-    if (pair) { segs.push(pair.seg); localE.push(pair.meta); }
-  }
-  let k = _count(b);
-`
-    : '  let k = 0;\n';
-  // A segment's head: the head rule's node, when it matched and the builder kept a handle of it.
-  const headFn = plan.hasHead && plan.headRule
-    ? `function parseHeadSegW(kidStart: number): { seg: Seg; meta: EntryMeta } | null {
+}`,
+    // A segment's head: the head rule's node, when it matched and the builder kept a handle of it.
+    headSeg: (rule) => `function parseHeadSegW(kidStart: number): { seg: Seg; meta: EntryMeta } | null {
   lookReset();
   const c = _n;
-  optW(parse${plan.headRule}W);
+  optW(parse${rule}W);
   if (_count(c) === 0) return null;
   const s = c * _SW;
   const tokStart = _sp[s + 2]!, tokEnd = pos;
@@ -629,30 +616,36 @@ function parse${r.name}W(): boolean {
   const meta: EntryMeta = { tokStart, tokEnd, ext, off: _sp[s]!, end: _sp[(_n - 1) * _SW + 1]!, kidStart, kidCount: 1 };
   return { seg: { kidStart, kidCount: 1, tokStart, tokEnd, ext }, meta };
 }
-`
-    : '';
-  // A loop segment: its leading token, then the loop rule when it follows; its span runs from that
-  // token to the last child it left (the token itself when the builder dropped every child).
-  return `type Seg = { kidStart: number; kidCount: number; tokStart: number; tokEnd: number; ext: number };
-${ENTRY_META_TS}let _segs: Seg[] = [];
-${headFn}function parseLoopSegW(kidStart: number): { seg: Seg; meta: EntryMeta } | null {
+`,
+    headUse: `  {
+    const pair = parseHeadSegW(0);
+    if (pair) { segs.push(pair.seg); localE.push(pair.meta); }
+  }
+  let k = _count(b);
+`,
+    // A loop segment: its leading token, then the loop rule when it follows; its span runs from
+    // that token to the last child it left (the token itself when the builder dropped every child).
+    loopSeg: (kid, rule) => `function parseLoopSegW(kidStart: number): { seg: Seg; meta: EntryMeta } | null {
   const sp = pos, c = _n;
   lookReset();
   const t = peek();
-  if (t === null || !matchTokW(${kidOf(ids, plan.loopTok)})) { back(sp); _n = c; return null; }
-  optW(parse${plan.loopRule}W);
+  if (t === null || !matchTokW(${kid})) { back(sp); _n = c; return null; }
+  optW(parse${rule}W);
   const tokStart = sp, tokEnd = pos;
   const end = _n > c ? _sp[(_n - 1) * _SW + 1]! : t.end;
   const ext = Math.max(tokEnd, lookEnd());
   const kidCount = _count(c);
   const meta: EntryMeta = { tokStart, tokEnd, ext, off: t.off, end, kidStart, kidCount };
   return { seg: { kidStart, kidCount, tokStart, tokEnd, ext }, meta };
-}
+}`,
+    entryB: (headSeg, headUse, loopSeg) => `type Seg = { kidStart: number; kidCount: number; tokStart: number; tokEnd: number; ext: number };
+${ENTRY_META_TS}let _segs: Seg[] = [];
+${headSeg}${loopSeg}
 function parse${r.name}W(): boolean {
   const save = pos, b = _n;
   const segs: Seg[] = [];
   const localE: EntryMeta[] = [];
-${headBlock}  for (;;) {
+${headUse || '  let k = 0;\n'}  for (;;) {
     const pair = parseLoopSegW(k);
     if (pair === null) break;
     segs.push(pair.seg);
@@ -664,7 +657,8 @@ ${headBlock}  for (;;) {
   _entryHs = _kids(b);
   finR(${J(r.name)}, b, save);
   return true;
-}`;
+}`,
+  });
 }
 
 /** A Pratt rule's operator tables (emit-portable prattOpTables), keyed by the operator's lid. TS:

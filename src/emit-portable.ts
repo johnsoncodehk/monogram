@@ -1038,6 +1038,28 @@ export function ruleShell(r: RdRule, ids: LexIdPlan, L: RuleLowering): string {
   return L.fn([L.openBest(r.altDispatch), ...(needPeek ? [L.peekOpt] : []), dispatchWalk(r.altDispatch, ids, arm, L.dispatch, true), L.closeBest]);
 }
 
+// ── The entry rule with reuse recording (ParserIR.reuse), decided once ──
+// Shape A: the entry is a loop over top-level entries, each the first of plan.rules that matches,
+// recording one EntryMeta per entry. Shape B: an optional head segment (the head rule), then loop
+// segments (the loop token, then the loop rule when it follows), each recorded as a Seg / EntryMeta.
+// An EntryLowering spells the functions and what a segment records in one engine form.
+export type EntryLowering = {
+  topCall(rule: string): string;                 // shape A, one rule: the statement returning its match
+  topTry(rule: string): string;                  // shape A: the rule tried from here, its match returned
+  topFail: string;                               // shape A: none matched
+  entryA(topOne: string): string;                // shape A: the top-one function (body `topOne`) and the entry
+  headSeg(rule: string): string;                 // shape B: the head segment's function
+  headUse: string;                               // shape B: the entry's statements recording the head segment
+  loopSeg(kid: number, rule: string): string;    // shape B: one loop segment's function
+  entryB(headSeg: string, headUse: string, loopSeg: string): string;   // shape B: the functions and the entry ('' when there is no head)
+};
+/** The entry rule's functions under a reuse plan, in the form `L` spells. */
+export function entryShell(plan: ReusePlan, ids: LexIdPlan, L: EntryLowering): string {
+  if (plan.kind === 'A') return L.entryA(plan.rules.length === 1 ? L.topCall(plan.rules[0]!) : [...plan.rules.map((n) => L.topTry(n)), L.topFail].join('\n'));
+  const head = plan.hasHead ? plan.headRule : null;
+  return L.entryB(head ? L.headSeg(head) : '', head ? L.headUse : '', L.loopSeg(kidOf(ids, plan.loopTok), plan.loopRule));
+}
+
 // ── The Pratt shell: how a Pratt rule's functions run, decided once ──
 // Three functions: the entry (the suppress set staged for this call put in force), `bp` (a NUD,
 // then the LED loop at a minimum binding power) and `nud` (every NUD arm the rule's Dispatch

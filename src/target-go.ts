@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, dispatchWalk, gtCompLit, type StepLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type StepLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -875,12 +875,6 @@ function sharedFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
 }
 
 
-// Shape A's one top-level entry: the first of its rules that matches (native engine).
-function topOneBody(plan: ReusePlanA): string {
-  if (plan.rules.length === 1) return `\treturn p.parse${plan.rules[0]}()`;
-  return `${plan.rules.map((n) => `\t{ sp := p.pos; n := p.parse${n}(); if n >= 0 { return n }; p.back(sp) }`).join('\n')}\n\treturn -1`;
-}
-
 // Longest match: the best node so far stays in the arena: nb/kb move past it, so a later
 // alternative that does not beat it is truncated away and one that does leaves it unreferenced.
 function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
@@ -901,11 +895,17 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
   });
 }
 
-/** Entry rule that records per-top-kid EntryMeta (+ Node.ext oracle) via parseTopOne (shape A). */
-function rdEntryWithReuseA(r: RdRule, plan: ReusePlanA, ar: ArenaIdPlan): string {
-  return `type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidStart, KidCount int }
+/** The entry rule with reuse recording (emit-portable entryShell), native engine: EntryMeta per
+ *  top-level entry (+ the Node.ext oracle) via parseTopOne (shape A), or per segment (shape B). */
+function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  const rid = ruleIdOf(ar, r.name);
+  return entryShell(plan, ids, {
+    topCall: (n) => `\treturn p.parse${n}()`,
+    topTry: (n) => `\t{ sp := p.pos; n := p.parse${n}(); if n >= 0 { return n }; p.back(sp) }`,
+    topFail: '\treturn -1',
+    entryA: (topOne) => `type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidStart, KidCount int }
 func (p *engine) parseTopOne() int32 {
-${topOneBody(plan)}
+${topOne}
 }
 func (p *engine) parse${r.name}() int32 {
 \tsave := p.pos; sb := len(p.scratch)
@@ -922,16 +922,12 @@ func (p *engine) parse${r.name}() int32 {
 \t\tp.scratch = append(p.scratch, n)
 \t}
 \tp.entries = localE
-\treturn p.finish(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save)
-}`;
-}
-
-function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  const headFn = plan.hasHead && plan.headRule
-    ? `func (p *engine) parseHeadSeg(sb int) (Seg, EntryMeta, bool) {
+\treturn p.finish(${rid}, sb, p.offAt(save), save)
+}`,
+    headSeg: (rule) => `func (p *engine) parseHeadSeg(sb int) (Seg, EntryMeta, bool) {
 \tp.lookReset()
 \tbefore := len(p.scratch)
-\tp.opt(func() bool { return p.callRule(p.parse${plan.headRule}()) })
+\tp.opt(func() bool { return p.callRule(p.parse${rule}()) })
 \tif len(p.scratch) == before { return Seg{}, EntryMeta{}, false }
 \tn := p.scratch[before]
 \text := p.nodes[n].TokEnd
@@ -939,22 +935,17 @@ function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Aren
 \tmeta := EntryMeta{int(p.nodes[n].TokStart), int(p.nodes[n].TokEnd), int(ext), int(p.nodes[n].Offset), int(p.nodes[n].End), before - sb, 1}
 \treturn Seg{KidStart: before - sb, KidCount: 1, TokStart: int(p.nodes[n].TokStart), TokEnd: int(p.nodes[n].TokEnd), Ext: int(ext)}, meta, true
 }
-`
-    : '';
-  const headBlock = plan.hasHead && plan.headRule
-    ? `\tif h, m, ok := p.parseHeadSeg(sb); ok { local = append(local, h); localE = append(localE, m) }
-`
-    : '';
-  return `type Seg struct { KidStart, KidCount, TokStart, TokEnd, Ext int }
-type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidStart, KidCount int }
-${headFn}func (p *engine) parseLoopSeg(sb int) (Seg, EntryMeta, bool) {
+`,
+    headUse: `\tif h, m, ok := p.parseHeadSeg(sb); ok { local = append(local, h); localE = append(localE, m) }
+`,
+    loopSeg: (kid, rule) => `func (p *engine) parseLoopSeg(sb int) (Seg, EntryMeta, bool) {
 \tsp := p.pos; before := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \tp.lookReset()
-\tif !p.matchTok(${kidOf(ids, plan.loopTok)}) {
+\tif !p.matchTok(${kid}) {
 \t\tp.back(sp); p.scratch = p.scratch[:before]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]
 \t\treturn Seg{}, EntryMeta{}, false
 \t}
-\tp.opt(func() bool { return p.callRule(p.parse${plan.loopRule}()) })
+\tp.opt(func() bool { return p.callRule(p.parse${rule}()) })
 \tleaf := p.scratch[before]
 \tvar tokStart, tokEnd uint32
 \tvar off, end uint32
@@ -986,22 +977,22 @@ ${headFn}func (p *engine) parseLoopSeg(sb int) (Seg, EntryMeta, bool) {
 \tif l := uint32(p.lookEnd()); l > ext { ext = l }
 \tmeta := EntryMeta{int(tokStart), int(tokEnd), int(ext), int(off), int(end), before - sb, count}
 \treturn Seg{KidStart: before - sb, KidCount: count, TokStart: int(tokStart), TokEnd: int(tokEnd), Ext: int(ext)}, meta, true
-}
+}`,
+    entryB: (headSeg, headUse, loopSeg) => `type Seg struct { KidStart, KidCount, TokStart, TokEnd, Ext int }
+type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidStart, KidCount int }
+${headSeg}${loopSeg}
 func (p *engine) parse${r.name}() int32 {
 \tsave := p.pos; sb := len(p.scratch)
 \tlocal := p.segs[:0]
 \tlocalE := p.entries[:0]
-${headBlock}\tfor {
+${headUse}\tfor {
 \t\tif seg, m, ok := p.parseLoopSeg(sb); ok { local = append(local, seg); localE = append(localE, m) } else { break }
 \t}
 \tp.segs = local
 \tp.entries = localE
-\treturn p.finish(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save)
-}`;
-}
-
-function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  return plan.kind === 'A' ? rdEntryWithReuseA(r, plan, ar) : rdEntryWithReuseB(r, plan, ids, ar);
+\treturn p.finish(${rid}, sb, p.offAt(save), save)
+}`,
+  });
 }
 
 // The Go spelling of a Pratt rule's shell (emit-portable.ts, prattShell), common to its two
@@ -1703,17 +1694,20 @@ function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
   });
 }
 
-// Shape A's one top-level entry in builder form.
-function topOneBodyW(plan: ReusePlanA): string {
-  if (plan.rules.length === 1) return `\treturn p.parse${plan.rules[0]}W()`;
-  return `${plan.rules.map((n) => `\t{ sp := p.pos; fr, ok := p.parse${n}W(); if ok { return fr, true }; p.back(sp) }`).join('\n')}\n\treturn spanned{}, false`;
-}
-
-function rdEntryWithReuseAW(r: RdRule, plan: ReusePlanA, ar: ArenaIdPlan, recv: string): string {
+/** The entry rule with reuse recording (emit-portable entryShell), builder engine. Engine-side
+ *  EntryMeta (R2): consumer handles are never mutated; a span comes from spanned + SpanOf. */
+function rdEntryWithReuseW(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
   const rid = ruleIdOf(ar, r.name);
-  // Engine-side EntryMeta (R2): never mutate consumer handles; span from spanned + SpanOf.
-  return `func (p *${recv}) parseTopOneW() (spanned, bool) {
-${topOneBodyW(plan)}
+  const close = `\tp.entryHs = append(p.entryHs[:0], p.scratch[sb:]...) // DocWith copies it out (parseWithMetaW)
+\tp.entries = localE
+\treturn p.finishW(${rid}, sb, p.offAt(save), save), true
+}`;
+  return entryShell(plan, ids, {
+    topCall: (n) => `\treturn p.parse${n}W()`,
+    topTry: (n) => `\t{ sp := p.pos; fr, ok := p.parse${n}W(); if ok { return fr, true }; p.back(sp) }`,
+    topFail: '\treturn spanned{}, false',
+    entryA: (topOne) => `func (p *${recv}) parseTopOneW() (spanned, bool) {
+${topOne}
 }
 func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch)
@@ -1734,20 +1728,12 @@ func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \t\t\tp.scratch = append(p.scratch, fr.h)
 \t\t}
 \t}
-\tp.entryHs = append(p.entryHs[:0], p.scratch[sb:]...) // DocWith copies it out (parseWithMetaW)
-\tp.entries = localE
-\treturn p.finishW(${rid}, sb, p.offAt(save), save), true
-}`;
-}
-
-function rdEntryWithReuseBW(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  const rid = ruleIdOf(ar, r.name);
-  const headFn = plan.hasHead && plan.headRule
-    ? `func (p *${recv}) parseHeadSegW(sb int) (EntryMeta, bool) {
+${close}`,
+    headSeg: (rule) => `func (p *${recv}) parseHeadSegW(sb int) (EntryMeta, bool) {
 \tp.lookReset()
 \tbefore := len(p.scratch)
 \ttokStart := p.pos
-\tp.optW(func() bool { return p.callRuleW((*${recv}).parse${plan.headRule}W) })
+\tp.optW(func() bool { return p.callRuleW((*${recv}).parse${rule}W) })
 \tif len(p.scratch) == before { return EntryMeta{}, false }
 \th := p.scratch[before]
 \to0, e1 := p.b.SpanOf(h, p.toks)
@@ -1756,20 +1742,17 @@ function rdEntryWithReuseBW(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Are
 \tif l := p.lookEnd(); l > ext { ext = l }
 \treturn EntryMeta{tokStart, tokEnd, ext, int(o0), int(e1), before - sb, 1}, true
 }
-`
-    : '';
-  const headBlock = plan.hasHead && plan.headRule
-    ? `\tif m, ok := p.parseHeadSegW(sb); ok { localE = append(localE, m) }
-`
-    : '';
-  return `${headFn}func (p *${recv}) parseLoopSegW(sb int) (EntryMeta, bool) {
+`,
+    headUse: `\tif m, ok := p.parseHeadSegW(sb); ok { localE = append(localE, m) }
+`,
+    loopSeg: (kid, rule) => `func (p *${recv}) parseLoopSegW(sb int) (EntryMeta, bool) {
 \tsp := p.pos; before := len(p.scratch); ${arenaCkpt()}
 \tp.lookReset()
-\tif !p.matchTokW(${kidOf(ids, plan.loopTok)}) {
+\tif !p.matchTokW(${kid}) {
 \t\tp.back(sp); p.scratch = p.scratch[:before]; ${arenaRestore()}
 \t\treturn EntryMeta{}, false
 \t}
-\tp.optW(func() bool { return p.callRuleW((*${recv}).parse${plan.loopRule}W) })
+\tp.optW(func() bool { return p.callRuleW((*${recv}).parse${rule}W) })
 \tcount := len(p.scratch) - before
 \tif count == 0 { return EntryMeta{}, false }
 \tleaf := p.scratch[before]
@@ -1784,23 +1767,18 @@ function rdEntryWithReuseBW(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Are
 \text := tokEnd
 \tif l := p.lookEnd(); l > ext { ext = l }
 \treturn EntryMeta{tokStart, tokEnd, ext, int(o0), int(end), before - sb, count}, true
-}
+}`,
+    entryB: (headSeg, headUse, loopSeg) => `${headSeg}${loopSeg}
 func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch)
 \tlocalE := p.entries[:0] // a reused builder's Workspace list (ParseWith), else nil
-${headBlock}\tfor {
+${headUse}\tfor {
 \t\tm, ok := p.parseLoopSegW(sb)
 \t\tif !ok { break }
 \t\tlocalE = append(localE, m)
 \t}
-\tp.entryHs = append(p.entryHs[:0], p.scratch[sb:]...) // DocWith copies it out (parseWithMetaW)
-\tp.entries = localE
-\treturn p.finishW(${rid}, sb, p.offAt(save), save), true
-}`;
-}
-
-function rdEntryWithReuseW(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  return plan.kind === 'A' ? rdEntryWithReuseAW(r, plan, ar, recv) : rdEntryWithReuseBW(r, plan, ids, ar, recv);
+${close}`,
+  });
 }
 
 function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
