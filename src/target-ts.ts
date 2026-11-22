@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -51,6 +51,19 @@ const dispatchTs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, key
 const beatsTs = (d: Dispatch, pos: string, i: number) => d.ranked.includes(i) ? `(${pos} > bestPos || ${pos} === bestPos && ${i} < bi)` : `${pos} > bestPos`;
 const markTs = (d: Dispatch, i: number) => (d.ranked.length ? ` bi = ${i};` : '');
 const biTs = (d: Dispatch) => (d.ranked.length ? ', bi = -1' : '');
+// ── The two frames of a construct that may have to undo what it tried ──
+// Every one is printed by one of these, so what a frame costs in the output is decided here. The
+// checkpoint (position, children length; spans length in builder mode `w`) and the undo back to it.
+const ckptTs = (w: boolean) => `const sp = pos; const bk = kids.length;${w ? ' const bs = spans.length;' : ''}`;
+const undoTs = (w: boolean) => `back(sp); kids.length = bk;${w ? ' spans.length = bs;' : ''}`;
+// BRANCH frame: one branch of an ordered choice (`alt`): it returns true from the choice when the
+// branch matched, and undoes it when it did not.
+const branchTs = (cond: string, w: boolean) => `{ ${ckptTs(w)} if (${cond}) return true; ${undoTs(w)} }`;
+// CANDIDATE frame: one candidate of a longest-match list tried from `save` into its own children:
+// when it matched and beats the best so far, `win` records it; either way the position goes back
+// to `save` for the next candidate.
+const candTs = (d: Dispatch, i: number, w: boolean, cond: string, win: string) =>
+  `{ const kids: ${w ? 'any[] = []; const spans: BWSpan[] = [];' : 'Cst[] = [];'} if (${cond} && ${beatsTs(d, 'pos', i)}) { ${win} } back(save); }`;
 // The typed-AST layer tries an rd rule's alternatives in declaration order, each under its Guard.
 const astGuard = (r: RdRule, i: number): string => { const c = guardCond(r.altGuard[i]!, '_ft', false); return c.length ? `_ft !== null && ${c.join(' && ')}` : 'true'; };
 
@@ -63,6 +76,7 @@ const _LIDS: string[] = ${J(ids.lids)};
 const _KID_MAP = new Map<string, number>(KIND_STR.map((k, i) => [k, i]));
 const _LID_MAP = new Map<string, number>(_LIDS.map((t, i) => [t, i]));
 const _LID_MAX_LEN = ${pf.maxLen};
+const _LID_KW = ${ids.kwLid};
 const _LID_FIRST_BITS = new Uint8Array([${bitsLit}]);
 function kid_of(kind: string): number { return _KID_MAP.get(kind) ?? 0; }
 function lid_of(text: string): number {
@@ -410,14 +424,14 @@ function stepBody(s: Step, ids: LexIdPlan, w: boolean): string {
   const ks = w ? 'kids, spans' : 'kids';
   const sc = (x: Step) => stepCond(x, ids, w);
   switch (s.t) {
-    case 'lit': return `matchLit${S}(${lidOf(ids, s.value)}, ${J(s.ttype)}, ${ks})`;
-    case 'tok': return `matchTok${S}(${kidOf(ids, s.name)}, ${J(s.name)}, ${ks})`;
+    case 'lit': return `matchLit${S}(${lidOf(ids, s.value)}, ${ks})`;
+    case 'tok': return `matchTok${S}(${kidOf(ids, s.name)}, ${ks})`;
     case 'rule': return `callRule${S}(parse${s.name}${S}, ${ks})`;
     case 'ruleBp': return `callRule${S}(() => ${s.name}_bp${S}(${s.bp}), ${ks})`;
   case 'star': return `star${S}(() => ${sc(s.step)}, ${ks})`;
   case 'opt': return `opt${S}(() => ${s.steps.map(sc).join(' && ')}, ${ks})`;
-  case 'sep': return `sepBy${S}(() => ${sc(s.elem)}, ${lidOf(ids, s.delim)}, ${ks})`;
-    case 'altlit': return `altLit${S}([${s.opts.map((o) => `[${lidOf(ids, o.value)}, ${J(o.ttype)}]`).join(', ')}], ${ks})`;
+  case 'sep': return `sepBy${S}(() => ${sc(s.elem)}, ${sepDelimLid(ids, s.delim)}, ${ks})`;
+    case 'altlit': return `altLit${S}([${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}], ${ks})`;
     case 'alt': return `(() => { ${stepStmts(s, ids, w)} })()`;
     case 'look': return `${s.is ? '' : '!'}look${s.id}${S}(${ks})`;
     case 'ahead': return `ahead(${s.set}, ${s.is})`;
@@ -441,9 +455,7 @@ function stepStmts(s: Step, ids: LexIdPlan, w: boolean): string {
       const needPeek = s.branches.some((_, i) => isGuardable(firsts[i] ?? null, nAlts));
       const peekInit = needPeek ? `const _ft = peek(); ` : '';
       const tries = s.branches.map((br, i) => {
-        const body = w
-          ? `{ const sp = pos; const bk = kids.length; const bs = spans.length; if (${br.length ? br.map(sc).join(' && ') : 'true'}) return true; back(sp); kids.length = bk; spans.length = bs; }`
-          : `{ const sp = pos; const bk = kids.length; if (${br.length ? br.map(sc).join(' && ') : 'true'}) return true; back(sp); kids.length = bk; }`;
+        const body = branchTs(br.length ? br.map(sc).join(' && ') : 'true', w);
         const f = firsts[i] ?? null;
         if (!isGuardable(f, nAlts)) return body;
         return `if (_ft !== null && ${firstCond(f, '_ft', ids)}) ${body}`;
@@ -460,8 +472,8 @@ function stepStmts(s: Step, ids: LexIdPlan, w: boolean): string {
 // It appends to the caller's children (and spans), as the step it stands for would.
 function lookFns(ir: ParserIR, ids: LexIdPlan, w = false): string {
   return ir.lookaheads.map((body, id) => w
-    ? `function look${id}W(kids: any[], spans: BWSpan[]): boolean { const sp = pos; const bk = kids.length; const bs = spans.length; const m = ${body.map((x) => stepCond(x, ids, true)).join(' && ')}; back(sp); kids.length = bk; spans.length = bs; return m; }\n`
-    : `function look${id}(kids: Cst[]): boolean { const sp = pos; const bk = kids.length; const m = ${body.map((x) => stepCond(x, ids)).join(' && ')}; back(sp); kids.length = bk; return m; }\n`).join('');
+    ? `function look${id}W(kids: any[], spans: BWSpan[]): boolean { ${ckptTs(true)} const m = ${body.map((x) => stepCond(x, ids, true)).join(' && ')}; ${undoTs(true)} return m; }\n`
+    : `function look${id}(kids: Cst[]): boolean { ${ckptTs(false)} const m = ${body.map((x) => stepCond(x, ids)).join(' && ')}; ${undoTs(false)} return m; }\n`).join('');
 }
 
 // ParserIR.shared, one function each: the step, run against the caller's children (and spans).
@@ -478,9 +490,7 @@ function predAltBody(branches: Step[][], ids: LexIdPlan, firsts?: FirstSig[], w 
   // FIRST dispatch still only tries the matching arm; on half-failure restore like non-pred altBody.
   const arms = branches.map((br, i) => {
     const steps = br.length ? br.map(sc).join(' && ') : 'true';
-    const body = w
-      ? `{ const sp = pos; const bk = kids.length; const bs = spans.length; if (${steps}) return true; back(sp); kids.length = bk; spans.length = bs; }`
-      : `{ const sp = pos; const bk = kids.length; if (${steps}) return true; back(sp); kids.length = bk; }`;
+    const body = branchTs(steps, w);
     return `if (${firstCond(firsts![i], 't', ids)}) ${body}`;
   }).join(' else ');
   return `const t = peek(); if (t === null) return false; ${arms} return false;`;
@@ -552,7 +562,7 @@ ${r.alts.map(arm).join(' ')}
   }
   // Longest match over the alternatives, reached through the rule's Dispatch (emit-portable.ts, RdRule).
   const alt = (i: number, keyed: boolean) => {
-    const body = `{ const kids: Cst[] = []; if (${r.alts[i]!.map((x) => stepCond(x, ids)).join(' && ')} && ${beatsTs(r.altDispatch, 'pos', i)}) { best = branch(${J(r.name)}, kids, save); bestPos = pos;${markTs(r.altDispatch, i)} } back(save); }`;
+    const body = candTs(r.altDispatch, i, false, r.alts[i]!.map((x) => stepCond(x, ids)).join(' && '), `best = branch(${J(r.name)}, kids, save); bestPos = pos;${markTs(r.altDispatch, i)}`);
     const g = guardCond(r.altGuard[i]!, '_ft', keyed);
     return ifTs(g.length && !keyed ? ['_ft !== null', ...g] : g, body);
   };
@@ -586,7 +596,7 @@ ${r.alts.map(arm).join(' ')}
 }`;
   }
   const alt = (i: number, keyed: boolean) => {
-    const body = `{ const kids: any[] = []; const spans: BWSpan[] = []; if (${r.alts[i]!.map((x) => stepCond(x, ids, true)).join(' && ')} && ${beatsTs(r.altDispatch, 'pos', i)}) { best = branchW(${J(r.name)}, kids, spans, save); bestPos = pos;${markTs(r.altDispatch, i)} } back(save); }`;
+    const body = candTs(r.altDispatch, i, true, r.alts[i]!.map((x) => stepCond(x, ids, true)).join(' && '), `best = branchW(${J(r.name)}, kids, spans, save); bestPos = pos;${markTs(r.altDispatch, i)}`);
     const g = guardCond(r.altGuard[i]!, '_ft', keyed);
     return ifTs(g.length && !keyed ? ['_ft !== null', ...g] : g, body);
   };
@@ -659,7 +669,7 @@ function parse${r.name}W(): Frame | null {
   const kidStart = kids.length;
   const spanStart = spans.length;
   lookReset();
-  if (!matchTokW(${kidOf(ids, plan.loopTok)}, ${J(plan.loopTok)}, kids, spans)) { back(sp); kids.length = kidStart; spans.length = spanStart; return null; }
+  if (!matchTokW(${kidOf(ids, plan.loopTok)}, kids, spans)) { back(sp); kids.length = kidStart; spans.length = spanStart; return null; }
   optW(() => callRuleW(parse${plan.loopRule}W, kids, spans), kids, spans);
   const leafSp = spans[spanStart]!;
   const hasStmt = spans.length > spanStart + 1;
@@ -751,7 +761,7 @@ ${headFn}function parseLoopSeg(kids: Cst[]): { seg: Seg; meta: EntryMeta } | nul
   const sp = pos;
   const kidStart = kids.length;
   lookReset();
-  if (!matchTok(${kidOf(ids, plan.loopTok)}, ${J(plan.loopTok)}, kids)) { back(sp); kids.length = kidStart; return null; }
+  if (!matchTok(${kidOf(ids, plan.loopTok)}, kids)) { back(sp); kids.length = kidStart; return null; }
   opt(() => callRule(parse${plan.loopRule}, kids), kids);
   const leaf = kids[kidStart]!;
   const hasStmt = kids.length > kidStart + 1;
@@ -791,7 +801,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
     `best = ${nodeExpr}; bestPos = pos;${markTs(r.nudDispatch, i)} bf = ${form}; bt = ${tail}; bc = ${capped};`;
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids)).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    `{ const kids: Cst[] = []; if (${stepsCond(steps)} && ${beatsTs(r.nudDispatch, 'pos', i)}) { ${won(i, `branch(${J(r.name)}, kids, save)`, '0', tail, capped)} } back(save); }`;
+    candTs(r.nudDispatch, i, false, stepsCond(steps), won(i, `branch(${J(r.name)}, kids, save)`, '0', tail, capped));
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
     switch (a.kind) {
@@ -942,7 +952,7 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
     `best = ${frameExpr}; bestPos = pos;${markTs(r.nudDispatch, i)} bf = ${form}; bt = ${tail}; bc = ${capped};`;
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids, true)).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    `{ const kids: any[] = []; const spans: BWSpan[] = []; if (${stepsCond(steps)} && ${beatsTs(r.nudDispatch, 'pos', i)}) { ${won(i, `branchW(${cn}, kids, spans, save)`, '0', tail, capped)} } back(save); }`;
+    candTs(r.nudDispatch, i, true, stepsCond(steps), won(i, `branchW(${cn}, kids, spans, save)`, '0', tail, capped));
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
     switch (a.kind) {
@@ -1186,10 +1196,12 @@ function wrapUnaryW(rule: string, child: Frame): Frame {
   return joinFramesW(rule, child);
 }
 function headLeafTextW(f: Frame): string { return _src.slice(f.headOff, f.headEnd); }
-function matchLitW(lid: number, ttype: string, kids: any[], spans: BWSpan[]): boolean {
+// A literal is a \`$keyword\` leaf when it is a word (the lids from _LID_KW on), else \`$punct\`.
+function matchLitW(lid: number, kids: any[], spans: BWSpan[]): boolean {
   if (_GT_LIT[lid] !== 0) return _matchComp(lid);
   const t = peek();
   if (t === null || t.lid !== lid) return false;
+  const ttype = lid >= _LID_KW ? '$keyword' : '$punct';
   const f = leafFrameW(ttype, t); pos++;
   // Mirror CST matchLit: $punct is never a child. Other leaf-null drops also skip the span slot
   // so parent off/end track surviving children (matches CST omitting $punct).
@@ -1197,10 +1209,10 @@ function matchLitW(lid: number, ttype: string, kids: any[], spans: BWSpan[]): bo
   else if (ttype !== '$punct') { /* intentional drop — no span */ }
   return true;
 }
-function matchTokW(kid: number, name: string, kids: any[], spans: BWSpan[]): boolean {
+function matchTokW(kid: number, kids: any[], spans: BWSpan[]): boolean {
   const t = peek();
   if (t === null || t.kid !== kid) return false;
-  const f = leafFrameW(name, t); pos++;
+  const f = leafFrameW(KIND_STR[kid]!, t); pos++;
   if (f.hs.length > 0) absorbFrame(kids, spans, f);
   return true;
 }
@@ -1222,14 +1234,14 @@ function sepByW(elem: () => boolean, delimLid: number, kids: any[], spans: BWSpa
   if (!elem()) { back(sp0); kids.length = before0; spans.length = bs0; return true; }
   for (;;) {
     const sp = pos; const before = kids.length; const bs = spans.length;
-    if (!matchLitW(delimLid, '$punct', kids, spans)) { back(sp); kids.length = before; spans.length = bs; break; }
+    if (!matchLitW(delimLid, kids, spans)) { back(sp); kids.length = before; spans.length = bs; break; }
     const sp2 = pos; const before2 = kids.length; const bs2 = spans.length;
     if (!elem()) { back(sp2); kids.length = before2; spans.length = bs2; break; }
   }
   return true;
 }
-function altLitW(opts: [number, string][], kids: any[], spans: BWSpan[]): boolean {
-  for (const [lid, tt] of opts) if (matchLitW(lid, tt, kids, spans)) return true;
+function altLitW(lids: number[], kids: any[], spans: BWSpan[]): boolean {
+  for (const lid of lids) if (matchLitW(lid, kids, spans)) return true;
   return false;
 }
 ${matchTemplateW}${lookFns(ir, ids, true)}${sharedFns(ir, ids, true)}${ruleFnsW}
@@ -3727,16 +3739,17 @@ function branch(rule: string, kids: Cst[], save: number): Node {
 function node(rule: string, kids: Cst[], fallbackOff: number = 0): Node {
   return { rule, children: kids, offset: kids.length ? kids[0].offset : fallbackOff, end: kids.length ? kids[kids.length - 1].end : fallbackOff };
 }
-function matchLit(lid: number, ttype: string, kids: Cst[]): boolean {
+// A literal is a \`$keyword\` leaf when it is a word (the lids from _LID_KW on); a \`$punct\` is no leaf.
+function matchLit(lid: number, kids: Cst[]): boolean {
   if (_GT_LIT[lid] !== 0) return _matchComp(lid);
   const t = peek();
   if (t === null || t.lid !== lid) return false;
-  if (ttype !== '$punct') kids.push({ tokenType: ttype, offset: t.off, end: t.end }); pos++; return true;
+  if (lid >= _LID_KW) kids.push({ tokenType: '$keyword', offset: t.off, end: t.end }); pos++; return true;
 }
-function matchTok(kid: number, name: string, kids: Cst[]): boolean {
+function matchTok(kid: number, kids: Cst[]): boolean {
   const t = peek();
   if (t === null || t.kid !== kid) return false;
-  kids.push({ tokenType: name, offset: t.off, end: t.end }); pos++; return true;
+  kids.push({ tokenType: KIND_STR[kid]!, offset: t.off, end: t.end }); pos++; return true;
 }
 function callRule(fn: () => Node | null, kids: Cst[]): boolean {
   const n = fn();
@@ -3756,14 +3769,14 @@ function sepBy(elem: () => boolean, delimLid: number, kids: Cst[]): boolean {
   if (!elem()) { back(sp0); kids.length = before0; return true; }
   for (;;) {
     const sp = pos; const before = kids.length;
-    if (!matchLit(delimLid, '$punct', kids)) { back(sp); kids.length = before; break; }
+    if (!matchLit(delimLid, kids)) { back(sp); kids.length = before; break; }
     const sp2 = pos; const before2 = kids.length;
     if (!elem()) { back(sp2); kids.length = before2; break; }   // trailing delim OK — keep delim, drop elem pollution
   }
   return true;
 }
-function altLit(opts: [number, string][], kids: Cst[]): boolean {
-  for (const [lid, tt] of opts) if (matchLit(lid, tt, kids)) return true;
+function altLit(lids: number[], kids: Cst[]): boolean {
+  for (const lid of lids) if (matchLit(lid, kids)) return true;
   return false;
 }
 
