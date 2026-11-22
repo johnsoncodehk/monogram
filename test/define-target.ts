@@ -21,7 +21,7 @@ const src = (f: string) => readFileSync(new URL(`../src/${f}`, import.meta.url),
 let failures = 0;
 const fail = (msg: string) => { failures++; console.log(`  ✗ ${msg}`); };
 
-const CORE = ['algo-ir.ts', 'relex-family.ts', 'lex-family.ts', 'define-target.ts'];
+const CORE = ['algo-ir.ts', 'relex-family.ts', 'lex-family.ts', 'reuse-family.ts', 'define-target.ts'];
 const TARGETS = [
   { file: 'target-ts.ts', target: tsTarget, name: 'typescript' },
   { file: 'target-go.ts', target: goTarget, name: 'go' },
@@ -65,7 +65,7 @@ for (const t of TARGETS) {
   if (!/^const \w+Lowering: Lowering = \{/m.test(s)) fail(`${t.file}: defines no Lowering of its own`);
   for (const i of imports(s)) {
     if (/\/target-/.test(i)) fail(`${t.file}: imports another target module ${i}`);
-    if (/(relex|lex)-family/.test(i)) fail(`${t.file}: imports an algorithm family directly (${i}); use shared`);
+    if (/(relex|lex|reuse)-family/.test(i)) fail(`${t.file}: imports an algorithm family directly (${i}); use shared`);
   }
   if (/\b(printFns|emitRelexFamily|emitLexScan|lexScanFamily)\b/.test(s)) fail(`${t.file}: prints shared algorithms itself; use shared`);
 }
