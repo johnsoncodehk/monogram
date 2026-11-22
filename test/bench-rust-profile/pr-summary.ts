@@ -35,6 +35,13 @@ const goMap: Record<string, Record<string, string>> = {};
 for (const line of readFileSync(resultsFile, 'utf8').split('\n')) {
   const p = line.trim().split(/\s+/);
   if (p[0] === 'IR') { if (p[2] === 'FAILED' || !/^\d+$/.test(p[2] ?? '')) irFailed.push(p[1]); else ir[p[1]] = +p[2]; continue; }
+  if (p[0] === 'TSALLOC') {
+    const [v, mode, ...rest] = p[1].split('.');
+    const f = kv(line);
+    if (/^\d+$/.test(f.allocs ?? '')) work[`${v}.${mode}-allocs.${rest.join('.')}`] = +f.allocs!;
+    else irFailed.push(`${p[0]} ${p[1]}`);
+    continue;
+  }
   if (p[0] === 'GOIR' || p[0] === 'TSBLK') {
     const [v, mode, ...rest] = p[1].split('.');
     const key = `${v}.${p[0] === 'GOIR' ? 'go-' + mode : mode}.${rest.join('.')}`;
@@ -119,7 +126,8 @@ const MOVE = 0.1, STILL = 0.01;
 const cols: { target: string; head: string; get: (v: string, f: string) => number | undefined; key?: string }[] = [
   { target: 'Rust', head: 'Rust Ir fresh', get: (v, f) => ir[`${v}.parse.${f}`] },
   { target: 'Rust', head: 'Rust Ir reuse', get: (v, f) => ir[`${v}.parse-reuse.${f}`] },
-  ...([['Go', 'Go Ir reuse', 'go-reuse'], ['TS', 'TS blocks', 'ts-parse'], ['JS', 'JS blocks', 'js-fresh']] as const)
+  ...([['Go', 'Go Ir reuse', 'go-reuse'], ['TS', 'TS blocks', 'ts-parse'], ['TS', 'TS allocs', 'ts-parse-allocs'],
+    ['JS', 'JS blocks', 'js-fresh'], ['JS', 'JS allocs', 'js-fresh-allocs']] as const)
     .map(([target, head, key]) => ({ target, head, key, get: (v: string, f: string) => work[`${v}.${key}.${f}`] })),
 ];
 const repeated = Object.keys(work).some((k) => k.startsWith('M2.'));
@@ -127,18 +135,23 @@ const repeated = Object.keys(work).some((k) => k.startsWith('M2.'));
 const tfiles = files.filter((f) => Object.keys(work).some((k) => k.endsWith('.' + f)));
 if (tfiles.length === 0) notRun.push('the Go, TS and JS targets were measured on no input');
 let repeatMax = 0;
+// A cell whose M does not repeat cannot be trusted: it is shown as NOT RUN and listed, and the job
+// stays green (the code it measures may be untouched by the pull request; a red job would block it).
+const untrusted: string[] = [];
+const untrustedCell = new Set<string>();
 for (const f of tfiles) for (const c of cols.slice(2)) {
   for (const v of ['A', 'M']) need(`${v} ${c.head} ${f}`, c.get(v, f));
-  if (repeated) {
+  if (repeated && !c.key!.endsWith('-allocs')) {
     const m = c.get('M', f), m2 = c.get('M2', f);
     need(`M2 ${c.head} ${f}`, m2);
     const d = Math.abs(pct(m!, m2!));
     if (Number.isFinite(d)) repeatMax = Math.max(repeatMax, d);
     const mc = c.key === 'go-reuse' ? goMap[`M.go-reuse.${f}`]?.mapcalls : undefined;
-    if (d > STILL) notRun.push(`${c.head} ${f}: M measured twice differs by ${fpct(d)} (${num(m)} / ${num(m2)}): the measure is not deterministic` +
-      (mc && mc !== '0' ? ` (the parse makes ${num(mc)} calls into the Go map runtime, whose hash seed is random per process: read no map on the parse path)` : ''));
-    const k = c.key!.startsWith('go-') ? `${c.key}.${f}` : '';
-    if (k && goMap[`M.${k}`]?.mapcalls !== goMap[`M2.${k}`]?.mapcalls) notRun.push(`${c.head} ${f}: map lookups of M measured twice differ (${goMap[`M.${k}`]?.mapcalls} / ${goMap[`M2.${k}`]?.mapcalls})`);
+    if (d > STILL) {
+      untrusted.push(`${c.head} ${f}: M measured twice differs by ${fpct(d)} (${num(m)} / ${num(m2)})` +
+        (mc && mc !== '0' ? `: the parse makes ${num(mc)} calls into the Go map runtime, whose hash seed is random per process (read no map on the parse path)` : ''));
+      untrustedCell.add(`${c.head}.${f}`);
+    }
   }
 }
 const singleTarget: string[] = [];
@@ -148,12 +161,13 @@ for (const f of tfiles) {
   const cells = [f];
   for (const c of cols) {
     const d = pct(c.get('A', f)!, c.get('M', f)!);
+    if (untrustedCell.has(`${c.head}.${f}`)) { cells.push('NOT RUN'); still.delete(c.target); continue; }
     cells.push(Number.isFinite(d) && d !== 0 ? (d > 0 ? '+' : '') + d.toFixed(3) + '%' : fpct(d));
     if (!Number.isFinite(d)) { still.delete(c.target); continue; }
     if (Math.abs(d) > STILL) still.delete(c.target);
     if (Math.abs(d) > MOVE) moved.set(c.target, [...(moved.get(c.target) ?? []), `${c.head} ${fpct(d)}`]);
   }
-  // Go's map lookups, counted apart from Go Ir (go-ir.ts): shown here so that a lookup added or
+  // Go's map lookups from the parser's own code (go-ir.ts): shown here so that a lookup added or
   // removed on the parse path is visible in the same row.
   const ma = goMap[`A.go-reuse.${f}`]?.mapcalls, mm = goMap[`M.go-reuse.${f}`]?.mapcalls;
   cells.push(ma === mm ? num(mm) : `**${num(ma)} → ${num(mm)}**`);
@@ -176,6 +190,11 @@ if (notRun.length) {
   for (const x of notRun) say('- ' + x);
   say();
 }
+if (untrusted.length) {
+  say(`### NOT RUN: ${untrusted.length} measurement(s) did not repeat (shown as NOT RUN below; this does not fail the job)`);
+  for (const x of untrusted) say('- ' + x);
+  say();
+}
 if (regress.length) {
   say(`### Regressions (reported, not failing): ${regress.length}`);
   say(`Thresholds: instructions +${IR_LIMIT}%, any rise in reuse-mode allocator calls per parse, emitted size +${SIZE_LIMIT}%.`);
@@ -190,7 +209,8 @@ if (singleTarget.length) {
 say();
 table(['input', ...cols.map((c) => c.head + ' Δ'), 'Go map calls (A → M)'], sideRows);
 say();
-say('Rust / Go: Callgrind instructions of one parse (Go: `ParseWith` into the `CstBuilder` of a first parse, reuse mode only: a first parse into a new builder varies between runs in the page allocator; built with `-tags faketime`, run with `GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1`, the Go runtime\'s own work inside the parse included; the last column counts its calls into the Go map runtime, which must be 0: a map\'s hash seed is random per process, so a parse that reads a map does not repeat its count, and the job fails; the calling functions are in the artifact, `targets/*.map-callers.txt`). TS / JS: V8 block executions of one `parse(src)` of the TS target and one `createParser().parse(src)` of the emitted JS parser (precise block coverage with counts): they see control flow, not the cost inside a block. ' +
+say('Rust / Go: Callgrind instructions of one parse (Go: `ParseWith` into the `CstBuilder` of a first parse, reuse mode only: a first parse into a new builder varies between runs in the page allocator; built with `-tags faketime`, run with `GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1`, the Go runtime\'s own work inside the parse included; the last column counts the calls from the parser\'s own code into the Go map runtime, which should be 0: a map\'s hash seed is random per process, so a parse that reads a map does not repeat its instruction count, and its Go cell becomes NOT RUN; the calling functions are in the artifact, `targets/*.map-callers.txt`). ' +
+  'TS / JS blocks: V8 block executions of one `parse(src)` of the TS target and one `createParser().parse(src)` of the emitted JS parser (precise block coverage with counts). **They detect a change of control flow, not its cost or its direction**: on PR #141 they rose 7-10% while time fell 10-28% and allocations fell 27%. TS / JS allocs: the exact allocations of the same parse (test/alloc-instrument.ts, the alloc-work gate\'s counting), the cost signal beside them. ' +
   (repeated ? `M was measured twice for Go, TS and JS: the largest difference was ${fpct(repeatMax)}.` : 'M was measured once (PROFILE_TARGETS_REPEAT=0).'));
 say();
 say('<details><summary>Go, TS and JS counts A / M</summary>');

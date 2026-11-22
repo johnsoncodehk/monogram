@@ -24,7 +24,10 @@ performance claim in a pull request or in the README comes from one of these, ru
   by V8 precise block coverage with counts: the block executions of one parse. That is exact and
   sees control flow (a loop that does fewer rounds, a lookup that becomes a switch, a copy removed),
   but not the cost inside one block (a string slice against a byte read is the same block count),
-  and V8 reports a block that always runs with its function as part of the function's count.
+  and V8 reports a block that always runs with its function as part of the function's count. It
+  detects a change of control flow, not its cost or direction: on PR #141 block counts rose 7-10%
+  while time fell 10-28% and allocations 27%. So the exact allocations of the same parse
+  (`test/bench-targets/allocs.ts`, alloc-work's counting) are reported beside them.
 - **Go under Callgrind is deterministic only when built and run as the harness does**:
   `-tags faketime` (the runtime's clock stands still; with a real clock sysmon preempts the parse
   every 10 ms of wall time and the scheduler's work lands inside the measured region as often as
@@ -35,12 +38,13 @@ performance claim in a pull request or in the README comes from one of these, ru
   `checker.ts`), their number does not. The Go column counts every instruction of the parse, and
   beside it the number of calls into the map runtime (`test/bench-targets/go-ir.ts`), which must be
   0 for the count to repeat: the Pratt operator tables were the last maps on the typescript
-  grammar's parse path (PR #144), and a pull request that adds one fails the repeat check. Only
+  grammar's parse path (PR #144); a parse that reads one does not repeat, and its cell is reported NOT RUN. Only
   reuse mode (a parse into the builder of a first one) is measured: a first parse into a new
   builder varied by up to 0.14% between runs in the page allocator's search
   (`runtime.(*pageAlloc).find`), with or without address randomization; a fresh parse's
-  allocations are pinned by `alloc-work`. The profile measures M twice and fails if the two differ
-  by more than 0.01%.
+  allocations are pinned by `alloc-work`. The profile measures M twice; a Go / TS / JS cell whose
+  two measurements differ by more than 0.01% is reported NOT RUN in the summary, without failing
+  the job (the pull request may not touch the code it measures).
 - **The fair comparison with oxc is reuse mode on both sides**: one kept `CstBuilder`
   (`parse_with`) against one `Allocator` `reset()` before each parse. Fresh mode (a new builder /
   allocator per parse) is reported beside it.
@@ -57,7 +61,8 @@ performance claim in a pull request or in the README comes from one of these, ru
 | TS / JS / Go wall-clock A/B: alternating rounds in one job, a fresh process per measurement, medians and per-round ratios | `test/bench-targets/run.sh` (`TARGETS_BASE`, `TARGETS_COMMIT`, `TARGETS_GRAMMAR`, `TARGETS_ONLY`); workflow `measure-targets` | on demand: workflow_dispatch, or the `measure-targets` label on a pull request |
 
 Failure policy of the pull-request profile: a measurement the harness did not produce fails the
-job (NOT RUN is never a pass). A regression does not fail it (a threshold on instructions would be
+job (NOT RUN is never a pass); a Go / TS / JS measurement that did not repeat is shown as NOT RUN
+and does not fail it. A regression does not fail it (a threshold on instructions would be
 arbitrary, and a grammar change legitimately changes work); it is listed at the top of the summary:
 any input whose instructions rise by more than 0.5%, any rise in allocator calls per parse in reuse
 mode, any emitted size up by more than 1%; and, separately, every input on which one target moves by

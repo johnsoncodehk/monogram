@@ -9,7 +9,7 @@
 // from run to run (measured: up to 0.5% of a parse of checker.ts between two runs of one binary),
 // while the number of lookups does not. `mapir` is the inclusive cost of every call from outside the
 // map runtime into it (a lookup switches no stack, so Callgrind's inclusive cost of that call is
-// exact) and `mapcalls` the number of those calls; the profile reports `total` and requires
+// exact) and `mapcalls` the number of those calls made from the parser's own code (package parser); the profile reports `total` and requires
 // mapcalls = 0 for it to repeat (the parse path of the typescript grammar reads no map).
 import { readFileSync } from 'node:fs';
 
@@ -25,7 +25,10 @@ for (const line of readFileSync(file, 'utf8').split('\n')) {
   if (line.startsWith('calls=')) {
     afterCalls = true;
     intoMap = MAP_RUNTIME.test(cfn) && !MAP_RUNTIME.test(fn);
-    if (intoMap) {
+    // Counted: calls from the parser's own code only. A call made by the runtime (another runtime
+    // function reaching a map helper) is not a lookup the parser asked for, and its number can
+    // depend on the hash seed (PR #146: 96,332 / 95,966 on one binary).
+    if (intoMap && fn.startsWith('consumer/parser.')) {
       const n = +line.slice(6).split(/\s+/)[0]!;
       mapcalls += n;
       callers.set(fn, (callers.get(fn) ?? 0) + n);
