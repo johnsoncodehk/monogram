@@ -275,6 +275,9 @@ export function tokenCensus(g: CstGrammar, tmJson: TmGrammarJson): TokenCensus {
     // children text is painted by the element patterns (today gen-tm's JSX repository, whose
     // children region must exist; region-aware element patterns are the generators' item).
     if (g.elements?.text === t.name && repo['jsx-children']) { bump('element-region'); continue; }
+    // ... and a tag-only token (ElementRegion.tagTokens: the attribute string) by the tag's
+    // attribute patterns (gen-tm's `jsx-attributes`, whose string patterns paint it).
+    if (g.elements?.tagTokens?.includes(t.name) && repo['jsx-attributes']) { bump('element-region'); continue; }
     const delim = tokenPatternLiteralText(t);                          // a region owns this token's delimiter?
     if (delim && full.includes(JSON.stringify(delim).slice(1, -1))) { bump('region-owned'); continue; }
     orphans.push(`${t.name}[${t.flags.join(',') || '-'}]`);
