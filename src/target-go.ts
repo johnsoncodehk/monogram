@@ -74,6 +74,162 @@ const lostGoW = (recv: string) => `p.scratch = p.scratch[:sb]; ${arenaRestore(re
 const candGo = (d: Dispatch, i: number, cond: string, win: string, lost: string) =>
   `{ if ${cond} && ${beatsGo(d, 'p.pos', i)} { ${win} } else { ${lost} }; p.back(save) }`;
 
+// ── The recognize form (ParserIR.forms) ──
+// A step that advances and reports whether it matched, building nothing, printed for one of the
+// two engines (the native one, `engine`, or the builder one, `parserW`): each has its own cursor
+// helpers, so each has its own recognizers, and the names below are those of both.
+type GoEngine = {
+  recv: string; w: '' | 'W';
+  peek: string; ahead: string; matchComp: string;
+  bpFound: (name: string, bp: number) => string;   // a Pratt rule parsed at bp, its node dropped
+  parsed: (name: string) => string;                // a Pratt rule parsed, its node dropped
+  mark: string; reset: string;                     // undo everything (a lookahead that builds: Forms.lookBuilds)
+};
+const ENGINE_GO: GoEngine = {
+  recv: 'engine', w: '', peek: 'peek', ahead: 'ahead', matchComp: 'matchComp',
+  bpFound: (n, bp) => `(p.bp_${n}(${bp}) >= 0)`, parsed: (n) => `p.parse${n}() >= 0`,
+  mark: ckptGo, reset: undoGo,
+};
+const ENGINE_GO_W: GoEngine = {
+  recv: 'parserW', w: 'W', peek: 'peekW', ahead: 'aheadW', matchComp: 'matchCompW',
+  bpFound: (n, bp) => `parsedW(p.bpW_${n}(${bp}))`, parsed: (n) => `parsedW(p.parse${n}W())`,
+  mark: `${ckptGoW('parserW')};`, reset: undoGoW('parserW'),
+};
+const branchGoR = (cond: string) => `{ sp := p.pos; if ${cond} { return true }; p.back(sp) }`;
+function stepCondR(s: Step, ids: LexIdPlan, e: GoEngine): string {
+  if ('share' in s && s.share !== undefined) return `p.sub${s.share}R()`;
+  return stepBodyR(s, ids, e);
+}
+function stepBodyR(s: Step, ids: LexIdPlan, e: GoEngine): string {
+  const sc = (x: Step) => stepCondR(x, ids, e);
+  switch (s.t) {
+    case 'lit': return gtCompLit(ids, s) ? `p.${e.matchComp}(${lidOf(ids, s.value)})` : `p.matchLitR(${lidOf(ids, s.value)})`;
+    case 'tok': return `p.matchTokR(${kidOf(ids, s.name)})`;
+    case 'rule': return `p.rec${s.name}()`;
+    // Only a Pratt rule is called at a binding power; it is recognized by its building form (ParserIR.forms).
+    case 'ruleBp': return e.bpFound(s.name, s.bp);
+    case 'star': return `p.starR(func() bool { return ${sc(s.step)} })`;
+    case 'opt': return `p.optR(func() bool { return ${s.steps.map(sc).join(' && ')} })`;
+    case 'sep': return `p.sepByR(func() bool { return ${sc(s.elem)} }, ${sepDelimLid(ids, s.delim)})`;
+    case 'altlit': return `p.altLitR([]uint16{${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}})`;
+    case 'alt': case 'suppress': case 'ctx': return `func() bool { ${stepStmtsR(s, ids, e)} }()`;
+    case 'look': return `${s.is ? '' : '!'}p.look${s.id}()`;
+    case 'ahead': return `p.${e.ahead}(${s.set}, ${s.is})`;
+    case 'aheadCtx': return s.is ? `(p.${e.ahead}(${s.set}, true) || p.ctxWord())` : `(p.${e.ahead}(${s.set}, false) && !p.ctxWord())`;
+    case 'seq': return `(${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'})`;
+    case 'sameLine': return `func() bool { t := p.${e.peek}(); return t != nil && !t.Nl }()`;
+  }
+}
+function stepStmtsR(s: Step, ids: LexIdPlan, e: GoEngine): string {
+  const sc = (x: Step) => stepCondR(x, ids, e);
+  switch (s.t) {
+    case 'alt': {
+      const fs = s.firsts ?? [];
+      if (s.predictive) {
+        const arms = s.branches.map((br, i) => `if ${firstCond(fs[i]!, 't', ids)} ${branchGoR(br.length ? br.map(sc).join(' && ') : 'true')}`).join(' else ');
+        return `t := p.${e.peek}(); if t == nil { return false }; ${arms}; return false`;
+      }
+      const nAlts = s.branches.length;
+      const needPeek = s.branches.some((_, i) => isGuardable(fs[i] ?? null, nAlts));
+      const tries = s.branches.map((br, i) => {
+        const body = branchGoR(br.length ? br.map(sc).join(' && ') : 'true');
+        const f = fs[i] ?? null;
+        return isGuardable(f, nAlts) ? `if _ft != nil && ${firstCond(f, '_ft', ids)} ${body}` : body;
+      }).join('; ');
+      return `${needPeek ? `_ft := p.${e.peek}(); ` : ''}${tries}; return false`;
+    }
+    case 'suppress': return `p.suppressNext = ${s.set}; _r := (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); p.suppressNext = 0; return _r`;
+    case 'ctx': return `_c := p.ctx; p.ctx = ${s.ctx}; _r := (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); p.ctx = _c; return _r`;
+    default: return `return ${stepBodyR(s, ids, e)}`;
+  }
+}
+// ParserIR.lookaheads, one method each, in recognize form: whether the body matches here. It
+// undoes the position, and the scratch list and the arena / builder too when its body runs a
+// Pratt rule's building form (Forms.lookBuilds).
+function lookFnsR(ir: ParserIR, ids: LexIdPlan, e: GoEngine): string {
+  return ir.lookaheads.map((body, id) => {
+    const builds = ir.forms.lookBuilds[id]!;
+    return `func (p *${e.recv}) look${id}() bool { ${builds ? e.mark : 'sp := p.pos;'} r := ${body.map((x) => stepCondR(x, ids, e)).join(' && ')}; ${builds ? e.reset : 'p.back(sp)'}; return r }\n`;
+  }).join('');
+}
+function sharedFnsR(ir: ParserIR, ids: LexIdPlan, e: GoEngine): string {
+  return ir.shared.map((s, id) => (ir.forms.recognizeShared[id] ? `func (p *${e.recv}) sub${id}R() bool { ${stepStmtsR(s, ids, e)} }\n` : '')).join('');
+}
+// A rule in recognize form: whether it matches here, advancing past it. An rd rule has rdRule's
+// control flow building nothing: its longest match compares end positions only (a tie only
+// chooses which node, and none is built). A Pratt rule runs its building form and drops the node.
+function ruleR(r: RdRule | PrattRule, ids: LexIdPlan, e: GoEngine): string {
+  if (r.kind === 'pratt') return `func (p *${e.recv}) rec${r.name}() bool { return ${e.parsed(r.name)} }`;
+  const cond = (alt: Step[]) => alt.map((x) => stepCondR(x, ids, e)).join(' && ');
+  if (r.predictive) {
+    const arm = (steps: Step[], i: number) => `\t${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${cond(steps)} { return true } }`;
+    return `func (p *${e.recv}) rec${r.name}() bool {
+\tsave := p.pos
+\tt := p.${e.peek}(); if t == nil { return false }
+${r.alts.map(arm).join(' ')}
+\tp.back(save)
+\treturn false
+}`;
+  }
+  if (r.alts.length === 1) {
+    return `func (p *${e.recv}) rec${r.name}() bool {
+\tsave := p.pos
+\tif ${cond(r.alts[0]!)} { return true }
+\tp.back(save)
+\treturn false
+}`;
+  }
+  const alt = (i: number, keyed: boolean) => {
+    const g = guardCond(r.altGuard[i]!, '_ft', e.w, keyed);
+    return ifGo(g.length && !keyed ? ['_ft != nil', ...g] : g, `{ if ${cond(r.alts[i]!)} && p.pos > bestPos { bestPos = p.pos }; p.back(save) }`);
+  };
+  const needPeek = r.altGuard.some((g) => g !== null);
+  return `func (p *${e.recv}) rec${r.name}() bool {
+\tsave := p.pos; bestPos := save
+${needPeek ? `\t_ft := p.${e.peek}()\n` : ''}${dispatchGo(r.altDispatch, '_ft', ids, alt, true)}
+\tp.pos = bestPos
+\treturn bestPos > save
+}`;
+}
+// The recognize forms of the cursor helpers (the same tokens examined, nothing built).
+const recognizeHelpersGo = (recv: string) => `func (p *${recv}) matchLitR(lid uint16) bool {
+\ti := p.pos
+\tp.peekEnd = i + 1
+\tif i >= len(p.toks) || p.toks[i].Lid != lid { return false }
+\tp.pos = i + 1
+\treturn true
+}
+func (p *${recv}) matchTokR(kid uint16) bool {
+\ti := p.pos
+\tp.peekEnd = i + 1
+\tif i >= len(p.toks) || p.toks[i].Kid != kid { return false }
+\tp.pos = i + 1
+\treturn true
+}
+func (p *${recv}) starR(once func() bool) bool {
+\tfor { sp := p.pos; if !once() { p.back(sp); break } }
+\treturn true
+}
+func (p *${recv}) optR(body func() bool) bool {
+\tsp := p.pos; if !body() { p.back(sp) }; return true
+}
+func (p *${recv}) sepByR(elem func() bool, delimLid uint16) bool {
+\tsp0 := p.pos
+\tif !elem() { p.back(sp0); return true }
+\tfor {
+\t\tsp := p.pos
+\t\tif !p.matchLitR(delimLid) { p.back(sp); break }
+\t\tsp2 := p.pos
+\t\tif !elem() { p.back(sp2); break }
+\t}
+\treturn true
+}
+func (p *${recv}) altLitR(lids []uint16) bool {
+\tfor _, lid := range lids { if p.matchLitR(lid) { return true } }
+\treturn false
+}
+`;
+
 /** Emit kid/lid lookup tables into generated lexer source. */
 function renderIdTablesGo(ids: LexIdPlan): string {
   const kidsLit = ids.kids.map(J).join(', ');
@@ -657,7 +813,7 @@ function stepBody(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
     case 'sep': return `p.sepBy(func() bool { return ${stepCond(s.elem, ids, ar)} }, ${sepDelimLid(ids, s.delim)})`;
     case 'altlit': return `p.altLit([]uint16{${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}})`;
     case 'alt': return `func() bool { ${stepStmts(s, ids, ar)} }()`;
-    case 'look': return `${s.is ? '' : '!'}p.look${s.id}()`;
+    case 'look': return `${s.is ? '' : '!'}p.look${s.id}()`;   // recognize form (lookFnsR)
     case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
     case 'aheadCtx': return s.is ? `(p.ahead(${s.set}, true) || p.ctxWord())` : `(p.ahead(${s.set}, false) && !p.ctxWord())`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'})`;
@@ -692,15 +848,10 @@ function stepStmts(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
   }
 }
 
-// ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
-function lookFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  return ir.lookaheads.map((body, id) => `func (p *engine) look${id}() bool { ${ckptGo} r := ${body.map((x) => stepCond(x, ids, ar)).join(' && ')}; ${undoGo}; return r }\n`).join('');
-}
-
 // ParserIR.shared, one method each: the step, run against the parser's scratch list. It undoes
 // nothing: a failed step leaves what it advanced and appended for the construct around its site.
 function sharedFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  return ir.shared.map((s, id) => `func (p *engine) sub${id}() bool { ${stepStmts(s, ids, ar)} }\n`).join('');
+  return ir.shared.map((s, id) => (ir.forms.buildShared[id] ? `func (p *engine) sub${id}() bool { ${stepStmts(s, ids, ar)} }\n` : '')).join('');
 }
 
 function predAltBody(branches: Step[][], ids: LexIdPlan, firsts: FirstSig[] | undefined, ar: ArenaIdPlan): string {
@@ -1610,7 +1761,7 @@ function stepBodyW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
     case 'sep': return `p.sepByW(func() bool { return ${stepCondW(s.elem, ids, ar, recv)} }, ${sepDelimLid(ids, s.delim)})`;
     case 'altlit': return `p.altLitW([]uint16{${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}})`;
     case 'alt': return `func() bool { ${stepStmtsW(s, ids, ar, recv)} }()`;
-    case 'look': return `${s.is ? '' : '!'}p.look${s.id}W()`;
+    case 'look': return `${s.is ? '' : '!'}p.look${s.id}()`;   // recognize form (lookFnsR)
     case 'ahead': return `p.aheadW(${s.set}, ${s.is})`;
     case 'aheadCtx': return s.is ? `(p.aheadW(${s.set}, true) || p.ctxWord())` : `(p.aheadW(${s.set}, false) && !p.ctxWord())`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'})`;
@@ -1640,12 +1791,8 @@ function altBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: F
   }).join('; ');
   return `${peekInit}${tries}; return false`;
 }
-// ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
-function lookFnsW(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  return ir.lookaheads.map((body, id) => `func (p *${recv}) look${id}W() bool { ${ckptGoW(recv)}; r := ${body.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')}; ${undoGoW(recv)}; return r }\n`).join('');
-}
 function sharedFnsW(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  return ir.shared.map((s, id) => `func (p *${recv}) sub${id}W() bool { ${stepStmtsW(s, ids, ar, recv)} }\n`).join('');
+  return ir.shared.map((s, id) => (ir.forms.buildShared[id] ? `func (p *${recv}) sub${id}W() bool { ${stepStmtsW(s, ids, ar, recv)} }\n` : '')).join('');
 }
 function predAltBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: FirstSig[] | undefined, recv: string): string {
   // Same-line `} else if` (native predAltBody joins with ' else '); newlines break Go ASI.
@@ -1950,11 +2097,12 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
   // entryHs: flat entry-level handles (shape-A kids / shape-B root kids), snapshotted
   // before finishW consumes scratch — DocWith reuse reads this, never Builder.Nodes.
   const entriesField = reuse ? '\n\tentries []EntryMeta\n\tentryHs []int32' : '';
-  const ruleFnsW = ir.rules.map((r) => {
+  if (recv !== ENGINE_GO_W.recv) throw new Error(`goTarget: the builder engine is ${ENGINE_GO_W.recv}`);
+  const ruleFnsW = [...ir.rules.filter((r) => ir.forms.buildRules.includes(r.name)).map((r) => {
     if (r.kind === 'pratt') return prattRuleW(r, ir.tpl, ids, ar, recv);
     if (reuse && r.name === ir.entry) return rdEntryWithReuseW(r, reuse, ids, ar, recv);
     return rdRuleW(r, ids, ar, recv);
-  }).join('\n\n');
+  }), ...ir.rules.filter((r) => ir.forms.recognizeRules.includes(r.name)).map((r) => ruleR(r, ids, ENGINE_GO_W))].join('\n\n');
   // One template matcher per hole rule (tplHoleRules): the hole is parsed by the rule the
   // matching reference declares, called directly.
   const matchTemplateW = tplHoleRules(ir).map((hole) => `func (p *${recv}) matchTemplateW_${hole}() (spanned, bool) {
@@ -2131,7 +2279,10 @@ func (p *${recv}) altLitW(lids []uint16) bool {
 \treturn false
 }
 
-${matchTemplateW}${lookFnsW(ir, ids, ar, recv)}${sharedFnsW(ir, ids, ar, recv)}${ruleFnsW}
+${recognizeHelpersGo(recv)}// found: whether a builder-engine parse matched (its node dropped: a recognize form).
+func parsedW(_ spanned, ok bool) bool { return ok }
+
+${matchTemplateW}${lookFnsR(ir, ids, ENGINE_GO_W)}${sharedFnsW(ir, ids, ar, recv)}${sharedFnsR(ir, ids, ENGINE_GO_W)}${ruleFnsW}
 `;
 }
 
@@ -3158,11 +3309,11 @@ export const goTarget = defineTarget({
     const ids = buildLexIdPlan(ir);
     const ar = buildArenaIdPlan(ir, ids);
     const reuse = topReusePlan(ir);
-    const ruleFns = ir.rules.map((r) => {
+    const ruleFns = [...ir.rules.filter((r) => ir.forms.buildRules.includes(r.name)).map((r) => {
       if (r.kind === 'pratt') return prattRule(r, ir.tpl, ids, ar);
       if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids, ar);
       return rdRule(r, ids, ar);
-    }).join('\n\n');
+    }), ...ir.rules.filter((r) => ir.forms.recognizeRules.includes(r.name)).map((r) => ruleR(r, ids, ENGINE_GO))].join('\n\n');
     // One template matcher per hole rule (tplHoleRules): the hole is parsed by the rule the
     // matching reference declares, called directly.
     const matchTemplate = tplHoleRules(ir).map((hole) => `func (p *engine) matchTemplate_${hole}() int32 {
@@ -3387,7 +3538,8 @@ func (p *engine) altLit(lids []uint16) bool {
 \treturn false
 }
 
-${matchTemplate}${lookFns(ir, ids, ar)}${sharedFns(ir, ids, ar)}${ruleFns}
+${recognizeHelpersGo('engine')}
+${matchTemplate}${lookFnsR(ir, ids, ENGINE_GO)}${sharedFns(ir, ids, ar)}${sharedFnsR(ir, ids, ENGINE_GO)}${ruleFns}
 
 func (p *engine) writeJSON(id int32, b *strings.Builder) { writeJSONWith(p.nodes, p.kids, p.toks, id, b) }
 

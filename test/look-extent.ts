@@ -47,7 +47,7 @@ if (!HAS_RUST) console.log('  rust: (toolchain absent — skipped)');
 const ENV = ['A=1\nB=2\nC=3', 'A=fn(1,\n2)\nB=3\nC=4', 'A=1\n# note\nB=2\n\n\nC=3', 'X\nA=1\nB=fn(a,\nb)\nC=3', Array.from({ length: 12 }, (_, i) => `K${i}=${i}`).join('\n')];
 const ENVTPL = ['A=`x${B}y`\nC=2', 'A=fn(`a`,\nb)\nB=`q${r}s`\nC=1', 'A=1\nB=`z`\nC=`a${b}c${d}e`'];
 const GRAMMARS: { name: string; path: string; files?: () => string[] }[] = [
-  ...['calc', 'minijs', 'richtokens', 'regexjs', 'templatejs', 'envspec', 'envtpl', 'altjs', 'nudjs', 'postjs', 'seqjs', 'sljs', 'arrowjs', 'ledjs', 'noinjs', 'longestjs', 'guardjs']
+  ...['calc', 'minijs', 'richtokens', 'regexjs', 'templatejs', 'envspec', 'envtpl', 'altjs', 'nudjs', 'postjs', 'seqjs', 'sljs', 'arrowjs', 'ledjs', 'noinjs', 'longestjs', 'guardjs', 'lookrec']
     .map((name) => ({ name, path: `./fixtures/${name}.ts`, files: name === 'envspec' ? () => ENV : name === 'envtpl' ? () => ENVTPL : undefined })),
   { name: 'javascript', path: '../javascript.ts', files: () => ['javascript', 'typescript'].map((g) => readFileSync(`${ROOT}tree-sitter/${g}/grammar.js`, 'utf8')) },
   { name: 'typescript', path: '../typescript.ts', files: () => readdirSync(`${ROOT}src`).filter((f) => f.endsWith('.ts')).sort().slice(0, 12).map((f) => readFileSync(`${ROOT}src/${f}`, 'utf8')) },
