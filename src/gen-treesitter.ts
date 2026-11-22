@@ -27,6 +27,8 @@ export interface TreeSitterOutput {
   highlightsScm: string;
   /** src/scanner.c source (external scanner scaffold) */
   scannerC: string;
+  /** tree-sitter.json source (see buildTreeSitterJson: it selects ABI 15) */
+  treeSitterJson: string;
   /** names of the external tokens the scanner provides (empty if none needed) */
   externalTokens: string[];
   /** Every zero-width assertion of the grammar's rule trees (as tree-sitter sees them: the relaxed
@@ -1295,7 +1297,7 @@ function externalSymbols(ctx: GrammarJsContext): string[] {
 // supported yet (a generated external scanner is the next increment). No external
 // tokens → no scanner.c. Void elements use a higher-precedence `_void_name` token so
 // `<br>` never enters the container branch (the same idea as the parser's VoidName).
-function buildMarkupTreeSitter(grammar: CstGrammar, grammarName: string): TreeSitterOutput {
+function buildMarkupTreeSitter(grammar: CstGrammar, grammarName: string): Omit<TreeSitterOutput, 'treeSitterJson'> {
   const m = grammar.markup!;
   const idTok = grammar.tokens.find(t => t.identifier);
   const namePat = idTok ? tokenPatternSource(idTok) : '[a-zA-Z][\\w:.-]*';
@@ -1436,8 +1438,21 @@ export function generateTreeSitter(grammar: CstGrammar, langName?: string): Tree
   const name = (langName ?? (grammar as { name?: string }).name ?? 'language');
   const grammarName = toSnake(name);
   // Markup languages (HTML/Vue) get the purpose-built markup grammar, not the token-stream one.
-  if (grammar.markup) return buildMarkupTreeSitter(grammar, grammarName);
+  const out = grammar.markup ? buildMarkupTreeSitter(grammar, grammarName) : buildTokenTreeSitter(grammar, grammarName);
+  return { ...out, treeSitterJson: buildTreeSitterJson(grammar, grammarName) };
+}
 
+/** tree-sitter.json, the package's tree-sitter metadata. `tree-sitter generate` emits ABI 15 only
+ *  for a package that has one (it reads `metadata.version`); without it the parser is ABI 14, which
+ *  has no reserved word sets: a 0.26 CLI then drops grammar.js's `reserved` silently. */
+function buildTreeSitterJson(grammar: CstGrammar, grammarName: string): string {
+  return JSON.stringify({
+    grammars: [{ name: grammarName, scope: grammar.scopeName ?? `source.${grammarName}`, path: '.', highlights: 'queries/highlights.scm' }],
+    metadata: { version: '0.0.0', license: 'MIT' },
+  }, null, 2);
+}
+
+function buildTokenTreeSitter(grammar: CstGrammar, grammarName: string): Omit<TreeSitterOutput, 'treeSitterJson'> {
   const tokenNames = new Set(grammar.tokens.map(t => t.name));
   const ruleSnake = new Map<string, string>();
   const tokenSnake = new Map<string, string>();
