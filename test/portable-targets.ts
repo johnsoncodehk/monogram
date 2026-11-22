@@ -1304,6 +1304,9 @@ const HOLE_EDIT_DOCS = [
 const LOOK_EDIT_DOCS: { doc: string; ins: string[] }[] = [
   { doc: 'x = 1._x;', ins: ['5', '_', 'x', '.'] },
   { doc: 'x = 1._1_1_x;', ins: ['5', '_'] },
+  // `1._` backs up to `1` (its fraction tried `._`); inserting a digit after `_` makes one number.
+  { doc: 'x = 1._ ;', ins: ['5', '1'] },
+  { doc: 'x = 1._1_ ;', ins: ['5'] },
   { doc: 'x = 1.', ins: ['_5', '_', '5', 'e'] },
   { doc: 'a = 0', ins: ['xF', 'x', 'F', 'n'] },
   { doc: 'a = 1', ins: ['e+5', 'e5', 'e+'] },
