@@ -339,7 +339,10 @@ function scrubIso(value: unknown, parentKey = ''): unknown {
     return value;
   }
   if (Array.isArray(value)) {
-    let mapped = value.map((v) => scrubIso(v, parentKey === 'children' ? 'children' : '')).filter((v) => v !== null && v !== undefined);
+    // In a keep shape's `children` an empty repetition is an empty pack (MemberName's computed
+    // `[e]` keeps its `, …` list, empty); Rust packs nothing for it.
+    let mapped = value.map((v) => scrubIso(v, parentKey === 'children' ? 'children' : ''))
+      .filter((v) => v !== null && v !== undefined && !(parentKey === 'children' && Array.isArray(v) && v.length === 0));
     while (mapped.length === 1 && Array.isArray(mapped[0])) mapped = mapped[0] as unknown[];
     if (mapped.length > 0 && mapped.every((x) => Array.isArray(x))) mapped = mapped.flat();
     return mapped;

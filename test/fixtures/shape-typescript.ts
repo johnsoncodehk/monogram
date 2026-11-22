@@ -467,9 +467,11 @@ export const typescriptShape: ShapeSpec = {
 
     // ─── Prop ─────────────────────────────────────────────────────────
     Prop: custom('estreeProp',
-      '6 alts covering object literal props (spread, modifier run then accessor / method / ' +
-      'key:value, async, generator, computed list, shorthand). Shorthand vs keyed distinguished ' +
-      'only by alt; spread is `...` Expr. Same “alt → flag / product type” gap as BindingProperty.', { types: ['Property', 'Property', 'Property', 'Property', 'Property', 'Property'] }),
+      '2 alts covering object literal props (spread; a modifier run then accessor / `*` method / ' +
+      'method / key:value / shorthand). Shorthand vs keyed distinguished only by the branch; ' +
+      'spread is `...` Expr. Same “alt → flag / product type” gap as BindingProperty. The second ' +
+      'arm streams as `ObjectMember`, so the Rust rebuild does not take its members for ' +
+      'BindingProperty\'s second arm (a shorthand), whose text a shorthand member shares.', { types: ['Property', 'ObjectMember'] }),
   },
 };
 
@@ -1075,31 +1077,34 @@ function tsTypeMember(ctx: TsAstCustomCtx): unknown {
   return unhandledCustom('tsTypeMember', ctx);
 }
 
-// Prop's arms: 0 spread, 1 modifier run then accessor | `*` method | method | value, 2 async
-// then `*` method | accessor | method, 3 `*` method, 4 computed list, 5 shorthand. An arm that
-// branches holds its branch's kids as one pack (kids[0]), told apart by its length (an
-// accessor's 4, a `*` method's 5, a method's or value's 2: the name, then a method's 4-kid
-// tail or the value). Owed: these products are not ESTree's (a getter is a computed init, a
-// method a `set`, a shorthand a keyed property); they are kept as they were before the arms
-// were merged, the unmodified form's where a modified and an unmodified arm merged.
+// Prop's arms: 0 spread, 1 a modifier run (perhaps empty), then an accessor | `*` method |
+// method | value | shorthand. Arm 1 holds its member's kids as one pack (kids[0]), told apart by
+// its shape: a shorthand's starts with its name's text; a method's or value's is 2 (the name,
+// then a method's 4-kid tail or the value); an accessor's and a `*` method's are 5 (name, type
+// parameters, parameters, return type, body), and a `*` method is the one whose modifier words
+// (and comments) are followed by a `*`. Owed: these products are not ESTree's (a getter is a
+// computed init, a method a `set`, a generator a `get`, a shorthand a keyed property); they are
+// kept as they were before the arms were merged, the unmodified form's where a modified and an
+// unmodified arm merged.
+const GENERATOR_MEMBER = /^(?:\s+|\/\*[\s\S]*?\*\/|\/\/[^\n]*|[A-Za-z_$][\w$]*)*\*/;
 function estreeProp(ctx: TsAstCustomCtx): unknown {
   const arm = ctx.altPath[0];
   const k = ctx.kids;
   const keyed = (kk: readonly unknown[], computed: boolean) => ({ type: 'Property', key: typeof kk[0] === 'string' ? I(kk[0]) : kk[0], value: kk[1], kind: 'init', shorthand: false, computed, method: false });
-  const fn = (kk: readonly unknown[]) => ({ type: 'Property', key: kk[0], value: { type: 'FunctionExpression', params: flatKids(kk[1] ?? []), body: kk[2] }, kind: 'init', method: true, shorthand: false, computed: false });
-  const pack = Array.isArray(k[0]) ? k[0] as unknown[] : [];
-  if (arm === 0 || arm === 4 || arm === 5) return keyed(k, false);
-  if (arm === 3) return { type: 'Property', key: k[0], value: k[1], kind: 'get', shorthand: false, computed: false, method: false };
-  if (arm === 1 && pack.length === 4) return keyed(pack, true);
-  if (arm === 1 && pack.length === 5) return fn(pack);
-  if (arm === 1 && pack.length === 2) {
+  if (arm === 0) return keyed(k, false);
+  const pack = arm === 1 && Array.isArray(k[0]) ? k[0] as unknown[] : null;
+  if (pack && typeof pack[0] === 'string') return keyed(pack, false);
+  if (pack && pack.length === 5) {
+    return GENERATOR_MEMBER.test(ctx.src.slice(ctx.off, ctx.end))
+      ? { type: 'Property', key: pack[0], value: pack[1], kind: 'get', shorthand: false, computed: false, method: false }
+      : keyed([pack[0], pack[2]], true);
+  }
+  if (pack && pack.length === 2) {
     const tail = pack[1];
     return Array.isArray(tail) && tail.length === 4 && Array.isArray(tail[1])
       ? { type: 'Property', key: pack[0], value: tail[0], kind: 'set', shorthand: false, computed: false, method: false }
       : keyed(pack, false);
   }
-  if (arm === 2 && pack.length === 4) return { type: 'Property', key: I(String(pack[0])), value: I(String(pack[0])), kind: 'init', shorthand: true, computed: false, method: false };
-  if (arm === 2 && pack.length === 5) return fn(pack);
   return unhandledCustom('estreeProp', ctx);
 }
 
