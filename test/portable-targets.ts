@@ -87,14 +87,36 @@ const FOR_HEADS = {
 // An IdentifierReference is no reserved word: a reserved word with no expression form of its own
 // is no expression, in both grammars (`notReservedExpr`).
 const RESERVED_EXPRS = {
-  accept: ['a in b;', 'a instanceof B;', 'x = function () {};', 'export default x;', 'f(this, null, true);'],
+  accept: [
+    'a in b;', 'a instanceof B;', 'x = function () {};', 'export default x;', 'f(this, null, true);',
+    'var [a] = b;', 'var[a] = 1;', 'var [a, ...b] = c;', 'for (var [a] of b);', 'for (var a in b);', 'for (var of of y);',
+  ],
   reject: [
     'in;', 'x\nin;', 'instanceof;', 'x = default;', 'f(export);', 'extends;', 'a\nextends;', 'x = function;',
     'x = const;', 'f(if);', 'x = a ? in : b;',
+    // `var` begins only a variable statement or a for-head declaration, never an expression
+    'x = var;', 'var.x;', 'f(...[var]);', 'for (var of X) {}', 'for (var of of) {}', 'for (var of of.x);', 'for (var in X) {}', 'for (var;;);',
+    'var [...x = a] = a;', 'for (var [...x = a] of b);',
   ],
 };
 // `export` takes a declaration (16.2.3), never another statement, in both grammars
 // (`exportDeclaration`); TypeScript's also takes `using`, as tsc's parser does.
+// JavaScript decorators (the decorators proposal): a DecoratorList belongs to a class, a
+// declaration or an expression, and an exported class takes it before `export` or after it,
+// not both. No other declaration takes one.
+const JS_DECORATORS = {
+  accept: [
+    '@d class C {}', '@a @b() class C {}', 'export @d class C {}', '@d export class C {}', '@a @b export class C {}',
+    '@d\nexport class C {}', 'export default @d class {}', '@d export default class {}', '@d export default class C {}',
+    'x = @d class {};', 'x = @a @b class C {};', 'f(@a @b class {});',
+  ],
+  reject: [
+    '@d function f() {}', '@d async function f() {}', '@d var x;', '@d export var x;', '@d export function f() {}',
+    '@d export { a };', '@d export * from "m";', '@d export default x;', '@d export default function () {}',
+    '@d import x from "m";', '@d export @e class C {}', '@d export default @e class {}', '@d export x;',
+    'export @d default class {}', '@d default class C {}', 'x = @d function () {};',
+  ],
+};
 const EXPORT_DECLS = {
   accept: [
     'export var a = 1;', 'export let a\nx;', 'export const a = 1, b = 2;', 'export function f() {}', 'export async function f() {}',
@@ -378,7 +400,7 @@ const CASES: Case[] = [
       'new a.b();', '((((x))));',
       'for (a = x + y in b) c;',
       ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...EXPORT_DECLS.accept,
-      ...CTX_CASES.javascript.accept,
+      ...CTX_CASES.javascript.accept, ...JS_DECORATORS.accept,
       // An assignment / update operand needs only a LeftHandSideExpression's shape; target validity is a consumer's.
       '-x++;', '(a) = 1;', 'a = b = c;', '1 = 2;', '1++;', '++1;', 'f() = 1;', 'f()++;', '++f();', 'this = 1;',
       '(a + b) = c;', '(a, b) = 1;', 'a?.b = 1;', 'a?.b++;', '[a + b] = c;', '({a: 1} = c);', 'new.target = 1;',
@@ -435,6 +457,7 @@ const CASES: Case[] = [
     reject: ['function (', 'a +;', 'if x {}', '{ a: }', 'for (;;', 'a ? b ;',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;', 'let[0] = 1;', '(async\nfunction f() {});',
+      ...JS_DECORATORS.reject,
       // ... so no parameter list takes a reserved word as a name, `this` included (a `this`
       // parameter is TypeScript's).
       'function f(in) {}', 'function f(if, b) {}', 'x = function (a, while) {};', 'class C { m(in) {} }', 'x = { m(class) {} };',
@@ -661,9 +684,16 @@ const CASES: Case[] = [
       'let x: T?;', 'let x = y as T ? z : w;', 'type A = X extends Y ? T? : Z;', 'type A = [T?];', 'f(a as T?, b);',
       'let x: T?\nconst a = 1;', 'let x = y as T? -0x1 : U;', 'function f(): T?\nreturn {}', 'type A = { a: T?\nif : U };',
       'let x = y as T?\n(-z);', 'let x = y as T ? (-1) : 2;',
+      // a union's constituent begins no `|`, an intersection's no `|` / `&` (tsc's type levels)
+      'type T = | A | B;', 'type T = | & A;', 'type T = & A & B;', 'type T = A | & B & C;', 'type T = | (| A);', 'type T = [| A, & B];',
+      // an arrow's type parameter list starts with a name or `const`; a declaration's may be empty
+      'const f = <T,>() => 1;', 'const f = <const T>() => 1;', 'const f = async <out T>(a) => 1;', 'function f<>() {}',
+      'type F = <>() => void;', 'class C { m<>() {} }',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
-    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
+    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
+      'type T = | | A;', 'type T = A | | B;', 'type T = A & | B;', 'type T = & & A;', 'type T = & | A;', 'f<| | A>();', 'let x: [| | A];',
+      'const f = <>() => 1;', 'const f = async <>(a) => 1;', 'const f = <in T>() => 1;', 'f(<in out T>(a) => a);', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '{ b(); }.x;', '{ static x }.y;', '{ static x }', '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;',
       'let[0] = 1;', '(async\nfunction f() {});',

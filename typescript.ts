@@ -119,6 +119,15 @@ const TypeStart = rule($ => [
 
 const Type = rule($ => {
   const fnType = [opt(TypeParams), '(', sep(typeFnParam(), ','), ')', '=>', ReturnType];  // (a: T) => R  /  <T>(…) => R (the return may be a type predicate)
+  // tsc parses a type in levels (parseUnionTypeOrHigher, parseIntersectionTypeOrHigher,
+  // parseTypeOperatorOrHigher): a union's constituents are intersections, an intersection's are
+  // type operators, and a leading `|` / `&` belongs to the union / intersection it starts, read
+  // once at that level (`| A`, `& A`, `| & A`). So what follows a `|` (leading or between
+  // constituents) begins no `|`, and what follows a `&` begins neither `|` nor `&`: `| | A`,
+  // `A | | B`, `A & | B`, `& & A` have no parse. The arms are flat (one Type each), so the level
+  // is stated as that first token. (A type operator's operand is the same level, but `keyof |
+  // A` still parses: `keyof` is also read as a type name, which tsc never does; owed.)
+  const unionMember = not('|'), intersectionMember = not(alt('|', '&'));
   return [
     // A bare type reference / entity name. The identifier-subject predicate `x is T` is NOT
     // here for the PARSER: tsc's parser accepts it ONLY in a function RETURN-TYPE position
@@ -131,10 +140,10 @@ const Type = rule($ => {
     tsRelax(Ident, [Ident, opt('is', Type)]),
     [$, sameLine, '<', sep($, ','), '>'],   // type-arg application T<A> — `<` must be on the same line (no ASI), like the postfix `[`/`!` arms below
     [$, sameLine, '[', ']'],   // array type T[] — `[` must be on the same line (no ASI)
-    [$, '|', $],
-    [$, '&', $],
-    ['|', $],   // leading pipe: type T = | A | B
-    ['&', $],   // leading amp:  type T = & A & B
+    [$, '|', unionMember, $],
+    [$, '&', intersectionMember, $],
+    ['|', unionMember, $],   // leading pipe: type T = | A | B
+    ['&', intersectionMember, $],   // leading amp:  type T = & A & B
     ['keyof', $],
     ['typeof', TypeofRef],
     ['readonly', $],
@@ -493,8 +502,12 @@ const Expr = rule($ => [
   // the conditional `?`: it parses only at an assignment-or-looser minBp and admits no led once
   // parsed (`() => {} || a` rejects, NOT `(() => {}) || a`); a `||`/`?:` INSIDE an expression
   // body (`() => a || b`) is unaffected. The body is the JavaScript ConciseBody (`conciseBody`).
-  capExpr('?', 'async', opt(TypeParams), '(', sep(awaitCtx(Param), ','), ')', opt(":", ReturnType), '=>', awaitCtx(conciseBody(Block, $))),
-  capExpr('?', opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType), '=>', resetCtx(conciseBody(Block, $))),
+  // An arrow's type parameter list starts with a name or `const` (tsc's
+  // isParenthesizedArrowFunctionExpression: after `<` an identifier or `const`, else the `<` is
+  // a type assertion's), so `<>() => 1` and `<in T>() => 1` are no arrows; a declaration's or a
+  // function type's list may be empty (`function f<>() {}`, `type F = <>() => void`).
+  capExpr('?', 'async', notArrowTypeParams, opt(TypeParams), '(', sep(awaitCtx(Param), ','), ')', opt(":", ReturnType), '=>', awaitCtx(conciseBody(Block, $))),
+  capExpr('?', notArrowTypeParams, opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType), '=>', resetCtx(conciseBody(Block, $))),
   // async arrow with a BARE parameter: `async err => …`. tsc requires async and the
   // parameter on the same line (`async\nx => …` is `async;` then a plain arrow — ASI).
   // Without this arm the bare form only "parsed" by splitting into two statements.
@@ -661,6 +674,9 @@ const TypeParam = rule($ => {
 const TypeParams = rule($ => [
   ['<', sep(TypeParam, ','), '>'],
 ]);
+// (see the arrow arms) an arrow whose `<` is followed by no name and no `const` has no type
+// parameter list; the test stands right before the arm's optional list, the one it conditions
+const notArrowTypeParams = not(['<', not(alt([notReserved, Ident], 'const'))]);
 
 // ── Declarations ──
 
