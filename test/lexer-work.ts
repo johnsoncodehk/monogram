@@ -12,8 +12,9 @@
 //   • Rust: `std::str::from_utf8(x)` validates all of x (x.len()); `.chars()` decodes the chars
 //     it yields (their UTF-8 widths).
 //   • Go: `utf8.DecodeRuneInString(x)` reads at most one encoding (min(len(x), utf8.UTFMax));
-//     `strings.ContainsAny(x, …)` searches all of x (len(x)); `strings.HasPrefix(x, lit)` compares
-//     lit alone and is not counted.
+//     `strings.ContainsAny(x, …)` and `strings.Contains(x, …)` search all of x (len(x));
+//     `strings.Index(x, lit)` / `strings.IndexByte(x, c)` read up to the match's end, or all of x;
+//     `strings.HasPrefix(x, lit)` compares lit alone and is not counted.
 //   • TS: `RegExp.prototype.exec` (behind `test`, `match`, `search`, … too) reads, for a sticky
 //     regex, the match and one unit after it, and otherwise the whole string from lastIndex; the
 //     String routines that scan or copy (`slice`, `indexOf`, `startsWith`, …, table below) read
@@ -82,7 +83,8 @@ const readCounts = (out: string): Count[] => out.trim().split('\n').map((l) => {
     substr: (_s, _a, r) => (r as string).length,
     startsWith: (_s, a) => String(a[0]).length,
     endsWith: (_s, a) => String(a[0]).length,
-    indexOf: (s, a) => s.length - Number(a[1] ?? 0),
+    // To the end of the match, or to the end of s when there is none.
+    indexOf: (s, a, r) => ((r as number) < 0 ? s.length : (r as number) + String(a[0]).length) - Math.max(0, Number(a[1] ?? 0)),
     lastIndexOf: (s) => s.length,
     includes: (s, a) => s.length - Number(a[1] ?? 0),
     split: (s) => s.length,
@@ -117,7 +119,8 @@ else {
   mkdirSync(join(gdir, 'parser'), { recursive: true });
   writeFileSync(join(gdir, 'go.mod'), 'module consumer\n\ngo 1.21\n');
   let src = emitParser(grammar, goTarget);
-  src = src.replaceAll('utf8.DecodeRuneInString(', 'lwDecodeRuneInString(').replaceAll('strings.ContainsAny(', 'lwContainsAny(');
+  src = src.replaceAll('utf8.DecodeRuneInString(', 'lwDecodeRuneInString(').replaceAll('strings.ContainsAny(', 'lwContainsAny(')
+    .replaceAll('strings.Contains(', 'lwContains(').replaceAll('strings.IndexByte(', 'lwIndexByte(').replaceAll('strings.Index(', 'lwIndex(');
   for (const m of src.matchAll(/\butf8\.(\w+)|\[\]rune\(|\bstrings\.(?!HasPrefix\(|Builder\b)(\w+)/g)) {
     check(`go: string routine ${m[0]} is counted`, false, 'add a counting twin for it');
   }
@@ -140,6 +143,31 @@ func lwDecodeRuneInString(s string) (rune, int) {
 func lwContainsAny(s, chars string) bool {
 	LwWork += len(s)
 	return strings.ContainsAny(s, chars)
+}
+
+func lwContains(s, sub string) bool {
+	LwWork += len(s)
+	return strings.Contains(s, sub)
+}
+
+func lwIndex(s, lit string) int {
+	k := strings.Index(s, lit)
+	if k < 0 {
+		LwWork += len(s)
+	} else {
+		LwWork += k + len(lit)
+	}
+	return k
+}
+
+func lwIndexByte(s string, c byte) int {
+	k := strings.IndexByte(s, c)
+	if k < 0 {
+		LwWork += len(s)
+	} else {
+		LwWork += k + 1
+	}
+	return k
 }
 `);
   writeFileSync(join(gdir, 'main.go'), `package main

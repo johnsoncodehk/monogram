@@ -1,8 +1,9 @@
 name: README auto-regen
 
-# Auto-refreshes the two generated regions of README.md and commits them back to master in a
-# SINGLE commit:
-#   - the cross-language bug ledger (<!-- issues:start/end -->), via `npm run bench:issues`
+# Auto-refreshes the generated regions of README.md and docs/HIGHLIGHTER-EVIDENCE.md and commits
+# them back to master in a SINGLE commit:
+#   - the cross-language bug ledger (<!-- issues:start/end -->: the full ledger in
+#     docs/HIGHLIGHTER-EVIDENCE.md, its summary line in README.md), via `npm run bench:issues`
 #     (test/issue-table.ts) — Monogram's DERIVED grammars vs each hand-written OFFICIAL one on
 #     real reported bugs across TS / TSX / HTML / CSS / JS. Corpus-free: in-repo issue
 #     cases + the official grammars only.
@@ -20,7 +21,7 @@ name: README auto-regen
 # four corpora are pinned to commits (the TS tests/cases count alone swings the parser numbers).
 # Bump a pin deliberately to re-baseline.
 #
-# No infinite loop: the bot commit touches only README.md, which is NOT in the paths filter, so
+# No infinite loop: the bot commit touches only README.md and docs/, which are NOT in the paths filter, so
 # it can't re-trigger ([skip ci] is a backstop). One workflow = one committer = no push race.
 
 on:
@@ -125,12 +126,12 @@ jobs:
       - name: Commit the refreshed README (if it changed)
         run: |
           set -euo pipefail
-          if git diff --quiet -- README.md; then
+          if git diff --quiet -- README.md docs/HIGHLIGHTER-EVIDENCE.md; then
             echo "README already current — nothing to commit."
             exit 0
           fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md
+          git add README.md docs/HIGHLIGHTER-EVIDENCE.md
           git commit -m "chore: refresh README ledger + coverage table [skip ci]"
           git push

@@ -75,12 +75,18 @@ const sig = (name: string, doc: string, body: Stmt[]): Fn => ({ name, doc, param
 class LexScan {
   sets: CharSet[] = [];
   fns: Fn[] = [];
-  runs = false;   // some scanner calls the target's runEnd routine
+  runs = false;    // some scanner calls the target's runEnd routine
+  finds = false;   // some scanner calls the target's find routine
   private pats = new Map<string, string>();
 
   runEnd(set: string, i: Ex): Expr {
     this.runs = true;
     return { k: 'runEnd', set, s: x('s'), i: x(i) };
+  }
+
+  find(i: Ex, lit: string): Expr {
+    this.finds = true;
+    return { k: 'find', s: x('s'), i: x(i), lit };
   }
 
   charSet(name: string, rs: CodeRange[]): string {
@@ -337,9 +343,7 @@ class LexScan {
       case 'line':
         return sig(name, `${t.name}: ${t.prefix} to the end of the line.`, [
           if_(not(hasAt('p', t.prefix)), [NONE]),
-          let_('e', add('p', litLen(t.prefix))),
-          while_(lt('e', len('s')), [if_(eq(code('e'), I(10)), [BREAK]), set('e', add('e', I(1)))]),
-          ret('e'),
+          ret(this.find(add('p', litLen(t.prefix)), '\n')),
         ]);
       case 'block': {
         const guard = t.guard === null ? [] : [let_('g', call(this.exact(t.guard), 'e')), if_(lt('g', I(0)), [NONE])];
@@ -347,8 +351,9 @@ class LexScan {
           if_(not(hasAt('p', t.open)), [NONE]),
           let_('e', add('p', litLen(t.open))),
           ...guard,
-          while_(lt('e', len('s')), [if_(hasAt('e', t.close), [ret(add('e', litLen(t.close)))]), set('e', add('e', I(1)))]),
-          NONE,
+          set('e', this.find('e', t.close)),
+          if_(ge('e', len('s')), [NONE]),
+          ret(add('e', litLen(t.close))),
         ]);
       }
       case 'pattern':
@@ -396,22 +401,23 @@ export function templateLiterals(ir: ParserIR, lits: readonly string[]): { whole
   return { whole: span(t.open, t.open), head: span(t.open, t.interpOpen), middle: span(t.interpClose, t.interpOpen), tail: span(t.interpClose, t.open) };
 }
 
-const families = new WeakMap<ParserIR, { sets: CharSet[]; fns: Fn[]; runs: boolean }>();
-export function lexScanFamily(ir: ParserIR): { sets: CharSet[]; fns: Fn[]; runs: boolean } {
+type Family = { sets: CharSet[]; fns: Fn[]; runs: boolean; finds: boolean };
+const families = new WeakMap<ParserIR, Family>();
+export function lexScanFamily(ir: ParserIR): Family {
   let f = families.get(ir);
   if (!f) {
     const b = new LexScan();
     for (const t of scannedTokens(ir)) b.fns.push({ ...b.scanner(t), inline: true });
     if (ir.tpl) b.fns.push(b.tplSpan(ir.tpl));
-    f = { sets: b.sets, fns: b.fns, runs: b.runs };
+    f = { sets: b.sets, fns: b.fns, runs: b.runs, finds: b.finds };
     families.set(ir, f);
   }
   return f;
 }
 
 export function emitLexScan(ir: ParserIR, lowering: Lowering): string {
-  const { sets, fns, runs } = lexScanFamily(ir);
-  return [...(runs ? [lowering.runEndFn] : []), printFns(lowering, lowering.spliceInline ? fns.filter((f) => !f.inline) : fns, sets)].join('\n');
+  const { sets, fns, runs, finds } = lexScanFamily(ir);
+  return [...(runs ? [lowering.runEndFn] : []), ...(finds ? [lowering.findFn] : []), printFns(lowering, lowering.spliceInline ? fns.filter((f) => !f.inline) : fns, sets)].join('\n');
 }
 
 // Scanners return -1 or a position, never this.

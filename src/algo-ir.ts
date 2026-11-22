@@ -58,7 +58,10 @@ export type Expr =
   | { k: 'inSet'; set: string; c: Expr }
   // The end of the run of code units in a declared CharSet from i (0 <= i <= len(s)): the first
   // j >= i at which s ends or its code unit is not a member.
-  | { k: 'runEnd'; set: string; s: Expr; i: Expr };
+  | { k: 'runEnd'; set: string; s: Expr; i: Expr }
+  // Where the literal (non-empty) next occurs in s from i (0 <= i <= len(s)): the first j >= i at
+  // which s has it, or len(s) when there is none.
+  | { k: 'find'; s: Expr; i: Expr; lit: string };
 
 export type Stmt =
   | { k: 'let'; name: string; ty: Ty; init: Expr }
@@ -131,8 +134,9 @@ export interface Lowering {
   borrowVal?(r: R): string;
   // A module-level membership table for `inSet` and `runEnd`.
   charSet(name: string, ranges: CodeRange[]): string;
-  // The runtime routine `runEnd` calls, printed once by a family that uses it.
+  // The runtime routines `runEnd` and `find` call, each printed once by a family that uses it.
   runEndFn: string;
+  findFn: string;
   expr: {
     literal(v: number | boolean | string): Printed;
     not(r: R): Printed;
@@ -143,6 +147,7 @@ export interface Lowering {
     hasAt(cx: Cx, s: R, i: R, lit: string): R;
     inSet(cx: Cx, set: string, c: R): R;
     runEnd(cx: Cx, set: string, s: R, i: R): R;
+    find(cx: Cx, s: R, i: R, lit: string): R;
     // Required when `owns`: an owned copy of a borrowed value.
     own?(cx: Cx, r: R): R;
   };
@@ -297,6 +302,10 @@ class Printer implements Cx {
       case 'runEnd': {
         if (!this.sets.has(e.set)) throw new Error(`algo-ir: undeclared char set ${e.set}`);
         return X.runEnd(this, this.id(e.set), this.expr(e.s), this.expr(e.i));
+      }
+      case 'find': {
+        if (e.lit === '') throw new Error('algo-ir: find() of the empty literal');
+        return X.find(this, this.expr(e.s), this.expr(e.i), e.lit);
       }
     }
   }
