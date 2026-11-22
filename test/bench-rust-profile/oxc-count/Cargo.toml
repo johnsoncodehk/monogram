@@ -1,0 +1,16 @@
+# Counts for the oxc side (not the profiled build): tokens (TokensParserConfig), AST nodes
+# (oxc_ast_visit enter_node), heap traffic through a counting global allocator.
+[package]
+name = "oxc-count"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+oxc_parser = { version = "0.126.0", features = ["regular_expression"] }
+oxc_allocator = "0.126.0"
+oxc_span = "0.126.0"
+oxc_ast = "0.126.0"
+oxc_ast_visit = "0.126.0"
+
+[profile.release]
+debug = false
