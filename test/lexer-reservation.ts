@@ -18,7 +18,8 @@
 //     the builder parsed before allocates nothing — except, in Rust after a lexer panic, the
 //     lexer's two stacks (expected-fail, below).
 // Counts, not timings: Rust through a counting global allocator around `lex`, Go through
-// `cap` / `len` of the slice `lex` returns. TS arrays expose no capacity; the engine grows them.
+// `cap` / `len` of the slice `lex` returns and the runtime's allocation profile (below). TS
+// arrays expose no capacity; the engine grows them.
 // Missing go / rustc → logged + skipped.
 //
 //   node test/lexer-reservation.ts
@@ -160,99 +161,137 @@ else {
   writeFileSync(join(gdir, 'parser', 'parser.go'), emitParser(grammar, goTarget));
   writeFileSync(join(gdir, 'parser', 'reserve.go'), `package parser
 
-import (
-	"runtime"
-	"runtime/debug"
-	"unsafe"
-)
+import "unsafe"
 
-// noGC runs f with the collector off, so the Mallocs delta around it counts the parse's own
-// allocations, not the runtime's for a GC cycle that happens to start inside it.
-func noGC(f func()) {
-	old := debug.SetGCPercent(-1)
-	defer debug.SetGCPercent(old)
-	f()
-}
-
-// LexCounts lexes src and reports the token slice's length, capacity and element size, then the
-// allocations and bytes of a second ParseWith of src with the builder the first one used.
-func LexCounts(src string) (int, int, int, uint64, uint64) {
+// LexShape lexes src and reports the token slice's length, capacity and element size.
+func LexShape(src string) (int, int, int) {
 	t := lex(src)
-	b := &CstBuilder{}
-	ParseWith(src, b)
-	var m0, m1 runtime.MemStats
-	noGC(func() {
-		runtime.ReadMemStats(&m0)
-		ParseWith(src, b)
-		ParseWith(src, b)
-		runtime.ReadMemStats(&m1)
-	})
-	return len(t), cap(t), int(unsafe.Sizeof(Tok{})), m1.Mallocs - m0.Mallocs, m1.TotalAlloc - m0.TotalAlloc
-}
-
-func failParse(src string, b *CstBuilder) (ok, panicked bool) {
-	defer func() {
-		if recover() != nil { ok, panicked = false, true }
-	}()
-	_, ok = ParseWith(src, b)
-	return ok, false
-}
-
-// AfterFail parses good twice with one builder, then bad (which must fail, by a reject or a lexer
-// panic), and reports the allocations and bytes of a further parse of good with that builder.
-func AfterFail(good, bad string) (uint64, uint64, int) {
-	b := &CstBuilder{}
-	ParseWith(good, b)
-	ParseWith(good, b)
-	ok, panicked := failParse(bad, b)
-	if ok { panic("accepted: " + bad) }
-	p := 0
-	if panicked { p = 1 }
-	var m0, m1 runtime.MemStats
-	noGC(func() {
-		runtime.ReadMemStats(&m0)
-		ParseWith(good, b)
-		runtime.ReadMemStats(&m1)
-	})
-	return m1.Mallocs - m0.Mallocs, m1.TotalAlloc - m0.TotalAlloc, p
+	return len(t), cap(t), int(unsafe.Sizeof(Tok{}))
 }
 `);
+  // A parse's allocations are read from the runtime's allocation profile at rate 1 (every
+  // allocation recorded with its call stack): the records whose stack runs through package parser.
+  // A process-wide counter (runtime.MemStats.Mallocs, even with the GC off) also counts what the
+  // runtime allocates for itself on other stacks, on its own schedule, while the parse runs. Seen
+  // on this measurement: allocm creating an M for a goroutine the runtime woke (6 allocations,
+  // 5320 B, in 1 window of 400); on CI, "1 allocation, 16 B" for a different input in each failing
+  // run. A stack belongs to the parse or it does not, so this count does not depend on scheduling.
+  // The measurement lives outside package parser so that its own allocations are not the parse's.
   writeFileSync(join(gdir, 'main.go'), `package main
 
 import (
 	"fmt"
 	"os"
+	"runtime"
+	"strings"
 
 	"consumer/parser"
 )
 
-func main() {
-	if os.Args[1] == "--after" {
-		good, err := os.ReadFile(os.Args[2])
-		if err != nil {
-			panic(err)
+func init() { runtime.MemProfileRate = 1 }
+
+// parserAllocs: allocations and bytes so far whose stack has a frame of package parser, or is
+// truncated (deeper than a record holds: its parser frames may be the ones cut off). Three GC
+// cycles first: a record is published once the cycle after its allocation has ended.
+func parserAllocs() (n, bytes int64) {
+	for i := 0; i < 3; i++ {
+		runtime.GC()
+	}
+	var recs []runtime.MemProfileRecord
+	for k, _ := runtime.MemProfile(nil, true); ; {
+		recs = make([]runtime.MemProfileRecord, k+64)
+		var ok bool
+		if k, ok = runtime.MemProfile(recs, true); ok {
+			recs = recs[:k]
+			break
 		}
-		for _, f := range os.Args[3:] {
-			bad, err := os.ReadFile(f)
-			if err != nil {
-				panic(err)
+	}
+	for _, r := range recs {
+		st := r.Stack()
+		in := len(st) == len(r.Stack0)
+		for fr := runtime.CallersFrames(st); !in; {
+			f, more := fr.Next()
+			in = strings.HasPrefix(f.Function, "consumer/parser.")
+			if !more {
+				break
 			}
-			ra, rb, p := parser.AfterFail(string(good), string(bad))
+		}
+		if in {
+			n += r.AllocObjects
+			bytes += r.AllocBytes
+		}
+	}
+	return
+}
+
+func measure(f func()) (int64, int64) {
+	n0, b0 := parserAllocs()
+	f()
+	n1, b1 := parserAllocs()
+	return n1 - n0, b1 - b0
+}
+
+func failParse(src string, b *parser.CstBuilder) (ok, panicked bool) {
+	defer func() {
+		if recover() != nil {
+			ok, panicked = false, true
+		}
+	}()
+	_, ok = parser.ParseWith(src, b)
+	return ok, false
+}
+
+func read(f string) string {
+	b, err := os.ReadFile(f)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
+
+func main() {
+	if os.Args[1] == "--version" {
+		fmt.Println(runtime.Version())
+		return
+	}
+	if os.Args[1] == "--after" {
+		// Parse good twice with one builder, then bad (which must fail, by a reject or a lexer
+		// panic), and report the allocations and bytes of a further parse of good with that builder.
+		good := read(os.Args[2])
+		for _, f := range os.Args[3:] {
+			b := &parser.CstBuilder{}
+			parser.ParseWith(good, b)
+			parser.ParseWith(good, b)
+			ok, panicked := failParse(read(f), b)
+			if ok {
+				panic("accepted: " + f)
+			}
+			p := 0
+			if panicked {
+				p = 1
+			}
+			ra, rb := measure(func() { parser.ParseWith(good, b) })
 			fmt.Printf("%d\\t%d\\t%d\\n", ra, rb, p)
 		}
 		return
 	}
+	// Per input: the token slice's shape, then the allocations and bytes of a second and third
+	// ParseWith of it with the builder the first one used.
 	for _, f := range os.Args[1:] {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			panic(err)
-		}
-		n, c, sz, ra, rb := parser.LexCounts(string(b))
+		src := read(f)
+		n, c, sz := parser.LexShape(src)
+		b := &parser.CstBuilder{}
+		parser.ParseWith(src, b)
+		ra, rb := measure(func() {
+			parser.ParseWith(src, b)
+			parser.ParseWith(src, b)
+		})
 		fmt.Printf("%d\\t%d\\t-1\\t%d\\t%d\\t%d\\n", n, c, sz, ra, rb)
 	}
 }
 `);
   goBuild(['-o', 'consumer', '.'], { cwd: gdir });
+  console.log(`  go: ${execFileSync(join(gdir, 'consumer'), ['--version'], { encoding: 'utf8' }).trim()}`);
   counts.set('go', readCounts(execFileSync(join(gdir, 'consumer'), files, { encoding: 'utf8' })));
   afterFail.set('go', readAfter(execFileSync(join(gdir, 'consumer'), ['--after', ordFile, ...failFiles], { encoding: 'utf8' })));
 }
