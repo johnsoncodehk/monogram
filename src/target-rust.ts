@@ -842,13 +842,11 @@ function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: F
 }
 // ParserIR.lookaheads, one method each, in recognize form (ParserIR.forms): whether the body
 // matches here. It undoes the position, and the scratch list and the builder too when its body
-// runs a Pratt rule's building form (Forms.lookBuilds). Never inlined: a recognize-form body is small
-// enough that LLVM inlined it into the Pratt loop that calls it, which cost that hot loop more
-// than the call (Callgrind, checker.ts: Expr_bp +1.5M instructions with look_10 inlined).
+// runs a Pratt rule's building form (Forms.lookBuilds).
 function lookFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   return ir.lookaheads.map((body, id) => {
     const builds = ir.forms.lookBuilds[id]!;
-    return `    #[inline(never)]\n    fn look_${id}(&mut self) -> bool { let p = self; ${builds ? ckptRs('p') : 'let sp = p.pos;'} let r = ${body.map((x) => stepCondP(x, ids, ar, true)).join(' && ')}; ${builds ? undoRs('p') : 'p.back(sp);'} r }\n`;
+    return `    fn look_${id}(&mut self) -> bool { let p = self; ${builds ? ckptRs('p') : 'let sp = p.pos;'} let r = ${body.map((x) => stepCondP(x, ids, ar, true)).join(' && ')}; ${builds ? undoRs('p') : 'p.back(sp);'} r }\n`;
   }).join('');
 }
 // ParserIR.shared, one method per form it is printed in (ParserIR.forms): the step, run against
