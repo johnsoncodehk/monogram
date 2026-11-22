@@ -826,7 +826,6 @@ ${plan.topOneBody}
     fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
         let save = self.pos; let sb = self.scratch.len();
         self.entries.clear();
-        self.entries.reserve((self.toks.len().saturating_sub(self.pos) / 2).max(8));
         loop {
             let sp = self.pos;
             self.look_reset();
@@ -4972,8 +4971,7 @@ const rsWrap = (r: R, min: number): string => (r.prec < min ? `(${r.c})` : r.c);
 const rsBlock = (lines: string[]): string[] => lines.map((l) => RS_IND + l);
 
 // Shared-algorithm lowering: snake_case, `as` casts, owned String/Vec vs borrowed &str/&[T].
-// Growth estimates are not reserved (no GC to save; realloc growth matches the base allocation
-// pattern), so nothing is over-reserved and there is nothing to trim. Exact capacities are kept.
+// Lists without an exact capacity grow as they are pushed to. Exact capacities are kept.
 const rustLowering: Lowering = {
   units: UNITS,
   ident: snake,
@@ -5069,7 +5067,6 @@ const rustLowering: Lowering = {
         `${s.pos} = lexed.0 as isize;`,
         ...s.state.map((n, i) => `${n} = lexed.${i + 1};`),
       ],
-      shrink: () => [],
     },
   },
 };

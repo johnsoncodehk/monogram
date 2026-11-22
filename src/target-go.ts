@@ -705,9 +705,7 @@ ${plan.topOneBody}
 }
 func (p *engine) parse${r.name}() int32 {
 \tsave := p.pos; sb := len(p.scratch)
-\tcapHint := (len(p.toks) - p.pos) / 2
-\tif capHint < 8 { capHint = 8 }
-\tlocalE := make([]EntryMeta, 0, capHint)
+\tvar localE []EntryMeta
 \tfor {
 \t\tsp := p.pos
 \t\tp.lookReset()
@@ -787,10 +785,8 @@ ${headFn}func (p *engine) parseLoopSeg(sb int) (Seg, EntryMeta, bool) {
 }
 func (p *engine) parse${r.name}() int32 {
 \tsave := p.pos; sb := len(p.scratch)
-\tcapHint := (len(p.toks) - p.pos) / 2
-\tif capHint < 8 { capHint = 8 }
-\tlocal := make([]Seg, 0, capHint)
-\tlocalE := make([]EntryMeta, 0, capHint)
+\tvar local []Seg
+\tvar localE []EntryMeta
 ${headBlock}\tfor {
 \t\tif seg, m, ok := p.parseLoopSeg(sb); ok { local = append(local, seg); localE = append(localE, m) } else { break }
 \t}
@@ -1422,10 +1418,8 @@ func newDocCst(src string, b *CstBuilder) *Doc {
 	var toks []Tok
 	d.toks, toks = scanMetaToks(src)
 	// A Doc owns its arena, so a new one starts empty; size it from the token count instead of
-	// growing it by repeated append copies (TS-family code runs ~0.6 nodes and ~1.1 kids per token).
-	// The token and meta slices are likewise sized from the source (len/2 covers dense code, where a
-	// token averages over two bytes): growth garbage is what drives GC cycles, since a dropped Doc
-	// leaves a small live heap.
+	// growing it by repeated append copies (TS-family code runs ~0.6 nodes and ~1.1 kids per token):
+	// growth garbage is what drives GC cycles, since a dropped Doc leaves a small live heap.
 	n := len(toks)
 	if cap(b.Nodes) < n*3/4 { b.Nodes = make([]Node, 0, n*3/4) }
 	if cap(b.Kids) < n*5/4 { b.Kids = make([]int32, 0, n*5/4) }
@@ -1618,9 +1612,7 @@ ${topOneBodyW(plan)}
 }
 func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch)
-\tcapHint := (len(p.toks) - p.pos) / 2
-\tif capHint < 8 { capHint = 8 }
-\tlocalE := make([]EntryMeta, 0, capHint)
+\tvar localE []EntryMeta
 \tfor {
 \t\tsp := p.pos
 \t\tp.lookReset()
@@ -1690,9 +1682,7 @@ function rdEntryWithReuseBW(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Are
 }
 func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch)
-\tcapHint := (len(p.toks) - p.pos) / 2
-\tif capHint < 8 { capHint = 8 }
-\tlocalE := make([]EntryMeta, 0, capHint)
+\tvar localE []EntryMeta
 ${headBlock}\tfor {
 \t\tm, ok := p.parseLoopSegW(sb)
 \t\tif !ok { break }
@@ -3027,10 +3017,7 @@ const goLowering: Lowering = {
       shiftMeta: (cx, m, d) => cx.atom(`shiftAlign(${m.c}, ${cx.coerce(d, 'int')})`, 'meta', 'meta'),
       metaEq: (_cx, a, b) => ({ c: `${a.c} == ${b.c}`, ty: 'bool', nat: 'bool', prec: GO_OPS.eq[1] }),
       splice: (cx, s, a, b, ins) => ({ c: `${goWrap(s, ATOM)}[:${cx.coerce(a, 'int')}] + ${ins.c} + ${goWrap(s, ATOM)}[${cx.coerce(b, 'int')}:]`, ty: 'str', nat: 'str', prec: GO_OPS.add[1] }),
-      newList: (cx, ty, cap, estimate) => {
-        const c = cap ?? estimate;
-        return cx.atom(c ? `make(${GO_TYPES[ty]}, 0, ${cx.coerce(c, 'int')})` : 'nil', ty, ty, { owned: true });
-      },
+      newList: (cx, ty, cap) => cx.atom(cap ? `make(${GO_TYPES[ty]}, 0, ${cx.coerce(cap, 'int')})` : 'nil', ty, ty, { owned: true }),
       falses: (cx, n) => cx.atom(`make([]bool, ${cx.coerce(n, 'int')})`, 'bools', 'bools', { owned: true }),
       prefix: (cx, l, n, estimate) => cx.atom(`append(make(${GO_TYPES[l.ty]}, 0, ${cx.coerce(estimate, 'int')}), ${goWrap(l, ATOM)}[:${cx.coerce(n, 'int')}]...)`, l.ty, l.ty, { owned: true }),
     },
@@ -3041,7 +3028,6 @@ const goLowering: Lowering = {
       forEach: (v, l, body) => [`for _, ${v} := range ${l} {`, ...goBlock(body), '}'],
       destructure: (_cx, s) => [`${s.ids.join(', ')} ${s.declare ? ':=' : '='} ${s.call}`],
       lexStep: (_cx, s) => [`${[s.pos, ...s.state].join(', ')} = lexFrom(${s.text.c}, ${s.pos}, ${[...s.state, `&${s.out}`].join(', ')}, 1)`],
-      shrink: (_cx, l, ty) => [`if cap(${l}) > 2*len(${l}) { ${l} = append(${GO_TYPES[ty]}(nil), ${l}...) }`],
     },
   },
 };
