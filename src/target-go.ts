@@ -2096,7 +2096,7 @@ func (p *${recv}) starInCW(k int, once func() bool) bool {
 func (p *${recv}) optCW(body func() bool) bool { body(); return true }
 //go:noinline
 func (p *${recv}) sepByCW(elem func() bool, delim uint16) bool {
-\tif elem() { for p.matchLitW(delim) && elem() {} }
+\tif elem() { for p.litW(delim) && p.takeW(litTt(delim)) && elem() {} }
 \treturn true
 }
 func (p *${recv}) optW(body func() bool) bool {
