@@ -117,7 +117,7 @@ const MOVE = 0.1, STILL = 0.01;
 const cols: { target: string; head: string; get: (v: string, f: string) => number | undefined; key?: string }[] = [
   { target: 'Rust', head: 'Rust Ir fresh', get: (v, f) => ir[`${v}.parse.${f}`] },
   { target: 'Rust', head: 'Rust Ir reuse', get: (v, f) => ir[`${v}.parse-reuse.${f}`] },
-  ...([['Go', 'Go Ir fresh', 'go-fresh'], ['Go', 'Go Ir reuse', 'go-reuse'], ['TS', 'TS blocks', 'ts-parse'], ['JS', 'JS blocks', 'js-fresh']] as const)
+  ...([['Go', 'Go Ir reuse', 'go-reuse'], ['TS', 'TS blocks', 'ts-parse'], ['JS', 'JS blocks', 'js-fresh']] as const)
     .map(([target, head, key]) => ({ target, head, key, get: (v: string, f: string) => work[`${v}.${key}.${f}`] })),
 ];
 const repeated = Object.keys(work).some((k) => k.startsWith('M2.'));
@@ -182,7 +182,7 @@ if (singleTarget.length) {
 say();
 table(['input', ...cols.map((c) => c.head + ' Δ')], sideRows);
 say();
-say('Rust / Go: Callgrind instructions of one parse (Go: `ParseWith` into a new `CstBuilder` as the first parse of the process, or into the builder of a first parse; built with `-tags faketime`, run with `GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1` without address randomization, the Go runtime\'s own work inside the parse included EXCEPT map lookups: a map\'s hash seed is random per process, so a lookup\'s instructions vary between runs; their number does not, and is listed below with their instructions in this run). ' +
+say('Rust / Go: Callgrind instructions of one parse (Go: `ParseWith` into the `CstBuilder` of a first parse, reuse mode only: a first parse into a new builder varies between runs in the page allocator; built with `-tags faketime`, run with `GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1`, the Go runtime\'s own work inside the parse included EXCEPT map lookups: a map\'s hash seed is random per process, so a lookup\'s instructions vary between runs; their number does not, and is listed below with their instructions in this run). ' +
   'TS / JS: V8 block executions of one `parse(src)` of the TS target and one `createParser().parse(src)` of the emitted JS parser (precise block coverage with counts): they see control flow, not the cost inside a block. ' +
   (repeated ? `M was measured twice for Go, TS and JS: the largest difference was ${fpct(repeatMax)}.` : 'M was measured once (PROFILE_TARGETS_REPEAT=0).'));
 say();
@@ -194,8 +194,8 @@ say();
 say();
 say('Go map lookups on the parse path (counted apart from Go Ir: calls into the map runtime, and their instructions in this run, which vary with the hash seed):');
 say();
-table(['input', 'fresh calls A / M', 'reuse calls A / M', 'fresh map Ir A / M', 'reuse map Ir A / M'], tfiles.map((f) => [f,
-  ...['mapcalls', 'mapir'].flatMap((k) => ['fresh', 'reuse'].map((m) => num(goMap[`A.go-${m}.${f}`]?.[k]) + ' / ' + num(goMap[`M.go-${m}.${f}`]?.[k])))]));
+table(['input', 'calls A / M', 'map Ir A / M'], tfiles.map((f) => [f,
+  ...['mapcalls', 'mapir'].map((k) => num(goMap[`A.go-reuse.${f}`]?.[k]) + ' / ' + num(goMap[`M.go-reuse.${f}`]?.[k]))]));
 say();
 say('</details>');
 say();
