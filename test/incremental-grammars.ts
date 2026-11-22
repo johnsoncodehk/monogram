@@ -31,7 +31,7 @@ type Parser = { parse(s: string): Cst; edit(cst: Cst, edits: Edit[]): void; visi
 type Tok = { type: string; text: string; offset: number; newlineBefore: boolean; commentBefore: boolean; multilineFlowBefore: boolean };
 type Em = { createParser(): Parser & { tokenAt(cst: Cst, i: number): Tok }; tokenize(s: string): Tok[] };
 
-const GRAMMARS = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'yaml', 'html', 'test/fixtures/envspec'];
+const GRAMMARS = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'yaml', 'html', 'test/fixtures/envspec', 'test/fixtures/elementdialect'];
 
 let seedState = 0x5EED1E55;
 const rand = () => ((seedState = (seedState * 48271) % 0x7fffffff) / 0x7fffffff);
@@ -239,13 +239,19 @@ const FRAME_DOCS: Record<string, string[]> = {
     'let a = <a b="\\" c=\'d\ne\'>t</a>;\nlet z = "q";',
   ],
   javascriptreact: ['let s = `a${b}c${`${d}`}`;\nx = 1;', 'let a = <><p>It\'s</p>{`${<b/>}`}</>;\nx</*c*/y;'],
+  // CODE children (no text token) and the derived entry (every `<` in code opens an element):
+  // directives and regions in children, a dynamic tag, an element right after a value, holes
+  'test/fixtures/elementdialect': [
+    'component C(a) {\n  <a k="v">@if (a) { <b/> } @else { "e" } {a}</a> "z" <c/>\n}',
+    'component D() { <a><b>{1}</b><{t} id="d">"s"</{t}></a> }\ncomponent E() { "q" }',
+  ],
 };
 // (`"` and `\` make lex errors: inside an undecided type-parameter signature an error is the
 // signature's rewind verdict, in the strict and the recovering pass alike)
 const FRAME_INS = ['`', '$', '{', '}', '(', ')', '<', '>', '/', ':', ',', 'x', ' ', '\n', '"', '\\'];
 let frameSteps = 0;
 for (const [name, docs] of Object.entries(FRAME_DOCS)) {
-  const em = (await import(`${TMP}/${name}.mts?v=` + process.pid)) as Em;
+  const em = (await import(`${TMP}/${name.replace(/\//g, '_')}.mts?v=` + process.pid)) as Em;
   const session = em.createParser();
   const fresh = em.createParser();
   for (const doc of docs) {
