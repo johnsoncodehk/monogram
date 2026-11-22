@@ -739,7 +739,8 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
     regexCtx = {
       regexToken: rxTok.name,
       identToken: grammar.tokens.find((t) => t.identifier)?.name ?? '',
-      divisionTypes: [...(rxCfg.divisionAfterTypes ?? [])],
+      // A template's tail ends a value as its NoSubstitution form does (the interpreter's LX_DIVK).
+      divisionTypes: [...(rxCfg.divisionAfterTypes ?? []), ...(grammar.tokens.some((t) => t.template) ? ['$templateTail'] : [])],
       divisionTexts: [...(rxCfg.divisionAfterTexts ?? [])],
       regexTexts: [...(rxCfg.regexAfterTexts ?? [])],
       parenHeadKw: [...(rxCfg.regexAfterParenKeywords ?? [])],

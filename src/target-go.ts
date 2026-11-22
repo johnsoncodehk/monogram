@@ -1183,35 +1183,20 @@ var pre_${r.name} = [${ops.size}]preOp{${pre}}
 var post_${r.name} = [${ops.size}]postOp{${post}}`;
 }
 
-// The relex of an edit (both Docs). RESCAN: a lexer error in the relex is the text's own when a
-// fresh lex refuses it too: the text is rejected with no token stream, after `clear` empties what
-// the Doc keeps of its tree; a fresh lex that succeeds replaces the relexed stream (a relex defect
-// repaired). Counted in Align (rescanChecks, rescanRepairs); removed with the relex fix.
+// The relex of an edit (both Docs). A lexer error in the relex is the text's own (the relexed
+// stream equals a fresh lex: relex-family.ts): the text is rejected with no token stream, after
+// `clear` empties what the Doc keeps of its tree.
 const goEditBody = (clear: string, treeEq: boolean) => `\ttext, toks, relexed, lexed := relexOrReject(oldText, oldToks, edits)
 \td.text = text
 \tif !lexed {
-\t\td.rescanChecks++
-\t\tfresh, ok := lexOrNil(d.text)
-\t\tif !ok {
 ${clear}
-\t\t\td.toks = nil
-\t\t\ta := &Align{OldN: len(oldToks), RescanChecks: d.rescanChecks, RescanRepairs: d.rescanRepairs}
-\t\t\tif d.validate { t := true; a.StreamEq = &t${treeEq ? '; a.TreeEq = &t' : ''} }
-\t\t\td.align = a
-\t\t\treturn -1
-\t\t}
-\t\td.rescanRepairs++
-\t\ttoks, relexed = fresh, len(fresh)
+\t\td.toks = nil
+\t\ta := &Align{OldN: len(oldToks)}
+\t\tif d.validate { t := true; a.StreamEq = &t${treeEq ? '; a.TreeEq = &t' : ''} }
+\t\td.align = a
+\t\treturn -1
 \t}
 \td.toks = toks`;
-// RESCAN after a rejecting parse (both Docs): the relexed stream should equal a fresh lex by
-// construction, but known relex defects break that (portable-targets: HOLE_EDIT_EXPECTED_FAIL), so
-// a fresh lex checks it, and only a stream that differs is replaced and parsed again (`reparse`).
-const goRescan = (ind: string, reparse: string) => `${ind}d.rescanChecks++
-${ind}if !sameAsFreshLex(d.text, d.toks) {
-${ind}\td.rescanRepairs++
-${ind}\tif fresh, lexed := lexOrNil(d.text); lexed { d.toks = fresh; ${reparse} } else { d.toks = nil }
-${ind}}`;
 // The one panic an edit expects is the lexer's (*LexError); any other panic is a bug and propagates.
 const goLexFns = `
 // relexOrReject is relexEdits, or lexed=false when the relex meets a lexer error (*LexError).
@@ -1224,26 +1209,6 @@ func relexOrReject(text string, toks []alignMeta, edits []Edit) (nt string, nm [
 	}()
 	nt, nm, n = relexEdits(text, toks, edits)
 	return nt, nm, n, true
-}
-// lexOrNil is a fresh lex of text, or ok=false when the lexer refuses it.
-func lexOrNil(text string) (m []alignMeta, ok bool) {
-	defer func() {
-		if r := recover(); r != nil {
-			if _, isLex := r.(*LexError); !isLex { panic(r) }
-			m, ok = nil, false
-		}
-	}()
-	return scanMeta(text), true
-}
-// sameAsFreshLex: whether m equals a fresh lex of text (false when the lexer refuses it).
-func sameAsFreshLex(text string, m []alignMeta) (eq bool) {
-	defer func() {
-		if r := recover(); r != nil {
-			if _, isLex := r.(*LexError); !isLex { panic(r) }
-			eq = false
-		}
-	}()
-	return checkStreamEq(text, m)
 }`;
 
 function docEditBlockGo(ir: ParserIR, shared: SharedAlgorithms): string {
@@ -1252,11 +1217,8 @@ function docEditBlockGo(ir: ParserIR, shared: SharedAlgorithms): string {
   const shapeB = topReuse?.kind === 'B';
   const hasHeadB = !!(shapeB && topReuse.kind === 'B' && topReuse.hasHead);
   const relexFamily = `\n// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.relexFamily(ir)}\n`;
-  const editBody = goEditBody('\t\t\td.root = -1', true);
-  const parseFreshRetry = `\td.root = p.parse(d.text, toksFromMeta(d.text, d.toks))
-\tif d.root < 0 {
-${goRescan('\t\t', 'd.root = p.parse(d.text, toksFromMeta(d.text, d.toks))')}
-\t}`;
+  const editBody = goEditBody('\t\td.root = -1', true);
+  const parseFresh = `\td.root = p.parse(d.text, toksFromMeta(d.text, d.toks))`;
   const reuseFns = topReuse ? `
 func (p *engine) countLive(id int32) int {
 	if id < 0 { return 0 }
@@ -1590,12 +1552,12 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMet
 \t\t\td.entries = append([]EntryMeta(nil), p.entries...)
 \t\t\treused = n
 \t\t} else {
-${parseFreshRetry}
+${parseFresh}
 \t\t\td.entries = append([]EntryMeta(nil), p.entries...)
 \t\t\treused = 0
 \t\t}
 \t} else {
-${parseFreshRetry}
+${parseFresh}
 \t\td.entries = append([]EntryMeta(nil), p.entries...)
 \t\treused = 0
 \t}`
@@ -1611,17 +1573,17 @@ ${parseFreshRetry}
 \t\t\td.entries = append([]EntryMeta(nil), p.entries...)
 \t\t\treused = n
 \t\t} else {
-${parseFreshRetry}
+${parseFresh}
 \t\t\td.entries = append([]EntryMeta(nil), p.entries...)
 \t\t\treused = 0
 \t\t}
 \t} else {
-${parseFreshRetry}
+${parseFresh}
 \t\td.entries = append([]EntryMeta(nil), p.entries...)
 \t\treused = 0
 \t}`
     : `\treused := 0
-${parseFreshRetry}`;
+${parseFresh}`;
   const treeEqFn = `
 // checkTreeEq compares p's tree for text with a fresh parse on a separate engine.
 func (p *engine) checkTreeEq(text string, root int32) bool {
@@ -1666,10 +1628,6 @@ type Align struct {
 	Reused   int   \`json:"reused"\`
 	StreamEq *bool \`json:"streamEq,omitempty"\`
 	TreeEq   *bool \`json:"treeEq,omitempty"\`
-	// The Doc's totals since it was made: fresh lexes that checked a relex (RESCAN in Edit), and
-	// those that replaced the relexed stream (a relex defect repaired).
-	RescanChecks  int \`json:"rescanChecks"\`
-	RescanRepairs int \`json:"rescanRepairs"\`
 }
 ${relexFamily}
 func computeAlignCore(oldText string, oldToks []alignMeta, newText string, newToks []alignMeta) (oldN, newN, prefix, suffix int) {
@@ -1701,7 +1659,7 @@ func toksFromMeta(text string, meta []alignMeta) []Tok {
 ${treeEqFn}${reuseFns}${goLexFns}
 // A Doc owns its tree: its engine (e) keeps the arena, parse stream and reuse metadata across
 // edits, and b (the caller's CstBuilder under NewDocWith) is pointed at that tree after each call.
-type Doc struct { text string; root int32; toks []alignMeta; align *Align; validate bool; rescanChecks, rescanRepairs int; b *CstBuilder; e engine${topReuse ? '; entries []EntryMeta' : ''} }
+type Doc struct { text string; root int32; toks []alignMeta; align *Align; validate bool; b *CstBuilder; e engine${topReuse ? '; entries []EntryMeta' : ''} }
 func (d *Doc) publish() { d.b.Nodes, d.b.Kids, d.b.Toks = d.e.nodes, d.e.kids, d.e.toks }
 func NewDoc(src string) *Doc { return newDocCst(src, &CstBuilder{}) }
 func newDocCst(src string, b *CstBuilder) *Doc {
@@ -1733,7 +1691,7 @@ func (d *Doc) Edit(edits []Edit) (ret int32) {
 ${editBody}
 	oldN, newN, prefix, suffix := computeAlignCore(oldText, oldToks, d.text, d.toks)
 ${editParse}
-	a := &Align{OldN: oldN, NewN: newN, Prefix: prefix, Suffix: suffix, Relexed: relexed, Reused: reused, RescanChecks: d.rescanChecks, RescanRepairs: d.rescanRepairs}
+	a := &Align{OldN: oldN, NewN: newN, Prefix: prefix, Suffix: suffix, Relexed: relexed, Reused: reused}
 	if d.validate {
 		func() { defer func() { recover() }(); v := checkStreamEq(d.text, d.toks); a.StreamEq = &v }()
 		func() { defer func() { recover() }(); t := p.checkTreeEq(d.text, d.root); a.TreeEq = &t }()
@@ -2533,9 +2491,6 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 \t\t\treused = n
 \t\t} else {
 \t\t\th, ne, nhs, ok := parseWithMetaW(d.text, d.toks, d.b)
-\t\t\tif !ok {
-${goRescan('\t\t\t\t', 'h, ne, nhs, ok = parseWithMetaW(d.text, d.toks, d.b)')}
-\t\t\t}
 \t\t\tif ok {
 \t\t\t\td.root = h
 \t\t\t\td.entries = ne
@@ -2549,9 +2504,6 @@ ${goRescan('\t\t\t\t', 'h, ne, nhs, ok = parseWithMetaW(d.text, d.toks, d.b)')}
 \t\t}
 \t} else {
 \t\th, ne, nhs, ok := parseWithMetaW(d.text, d.toks, d.b)
-\t\tif !ok {
-${goRescan('\t\t\t', 'h, ne, nhs, ok = parseWithMetaW(d.text, d.toks, d.b)')}
-\t\t}
 \t\tif ok {
 \t\t\td.root = h
 \t\t\td.entries = ne
@@ -2578,9 +2530,6 @@ ${goRescan('\t\t\t', 'h, ne, nhs, ok = parseWithMetaW(d.text, d.toks, d.b)')}
 \t\t\treused = n
 \t\t} else {
 \t\t\th, ne, nhs, ok := parseWithMetaW(d.text, d.toks, d.b)
-\t\t\tif !ok {
-${goRescan('\t\t\t\t', 'h, ne, nhs, ok = parseWithMetaW(d.text, d.toks, d.b)')}
-\t\t\t}
 \t\t\tif ok {
 \t\t\t\td.root = h
 \t\t\t\td.entries = ne
@@ -2596,9 +2545,6 @@ ${goRescan('\t\t\t\t', 'h, ne, nhs, ok = parseWithMetaW(d.text, d.toks, d.b)')}
 \t\t}
 \t} else {
 \t\th, ne, nhs, ok := parseWithMetaW(d.text, d.toks, d.b)
-\t\tif !ok {
-${goRescan('\t\t\t', 'h, ne, nhs, ok = parseWithMetaW(d.text, d.toks, d.b)')}
-\t\t}
 \t\tif ok {
 \t\t\td.root = h
 \t\t\td.entries = ne
@@ -2614,9 +2560,6 @@ ${goRescan('\t\t\t', 'h, ne, nhs, ok = parseWithMetaW(d.text, d.toks, d.b)')}
 \t}`
     : `\treused := 0
 \th, _, _, ok := parseWithMetaW(d.text, d.toks, d.b)
-\tif !ok {
-${goRescan('\t\t', 'h, _, _, ok = parseWithMetaW(d.text, d.toks, d.b)')}
-\t}
 \tif ok {
 \t\td.root = h
 \t} else {
@@ -2626,7 +2569,7 @@ ${goRescan('\t\t', 'h, _, _, ok = parseWithMetaW(d.text, d.toks, d.b)')}
   // A text that does not lex: no tree, no entries (the next edit parses afresh).
   const lexClear = (topReuse
     ? ['d.root = -1', 'd.entries = nil', 'd.entryHs = nil', ...(shapeB ? ['d.segs = nil'] : [])]
-    : ['d.root = -1']).map((l) => `\t\t\t${l}`).join('\n');
+    : ['d.root = -1']).map((l) => `\t\t${l}`).join('\n');
   const editBody = goEditBody(lexClear, false);
 
   const initAssign = topReuse
@@ -2657,7 +2600,6 @@ type DocWith struct {
 	toks     []alignMeta
 	align    *Align
 	validate bool
-	rescanChecks, rescanRepairs int
 	b        Builder${entriesFields}
 }
 
@@ -2692,7 +2634,7 @@ func (d *DocWith) Edit(edits []Edit) (ret int32) {
 ${editBody}
 	oldN, newN, prefix, suffix := computeAlignCore(oldText, oldToks, d.text, d.toks)
 ${editReuse}
-	a := &Align{OldN: oldN, NewN: newN, Prefix: prefix, Suffix: suffix, Relexed: relexed, Reused: reused, RescanChecks: d.rescanChecks, RescanRepairs: d.rescanRepairs}
+	a := &Align{OldN: oldN, NewN: newN, Prefix: prefix, Suffix: suffix, Relexed: relexed, Reused: reused}
 	if d.validate {
 		func() {
 			defer func() { recover() }()
