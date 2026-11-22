@@ -565,11 +565,8 @@ function lowerStmt(n: E): Ast {
       const kids: Ast[] = [lowerBlock(m.block)];
       if (m.catchTok !== undefined && m.block2 !== undefined) {
         const catchKids: Ast[] = [];
-        const target = m.alt?.branch === 'param' ? m.alt.param : m.alt?.branch === 'bindingPattern' ? m.alt.bindingPattern : undefined;
-        if (target !== undefined) {
-          const t = ruleIs(target, 'BindingPattern') ? lowerBindingPattern(target) : lowerBindingTarget(target);
-          catchKids.push(ast('VariableDeclaration', off(target), end(target), [t]));
-        }
+        const target = m.catchParameter;   // a CatchParameter: a name or a pattern (then its type)
+        if (target !== undefined) catchKids.push(ast('VariableDeclaration', off(target), end(target), [lowerBindingTarget(target)]));
         catchKids.push(lowerBlock(m.block2));
         kids.push(ast('CatchClause', off(m.catchTok), end(m.block2), catchKids));
       }
