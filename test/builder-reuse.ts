@@ -86,6 +86,17 @@ const readPairs = (out: string) => out.trim().split('\n').map((l) => l.split('\t
     check(`ts dropAll: ${JSON.stringify(src.slice(0, 30))} is reported as ${oracleVerdict(src) ? 'a builder with no root' : 'a reject'}`, dropped(src) === (oracleVerdict(src) ? 'NOROOT' : 'REJECT'), dropped(src));
 }
 
+// A builder that keeps nothing, in Go and Rust (as TS dropAll above): one line per input of every
+// sequence, in order: NOROOT for an accepted input (the contract broken, loudly), REJECT for a rejected one.
+function checkDropped(label: string, out: string): void {
+  const lines = out.trimEnd().split('\n');
+  let i = 0;
+  for (const n of seqNames) for (const src of SEQUENCES[n]!) {
+    const got = lines[i++];
+    check(`${label} dropAll: ${JSON.stringify(src.slice(0, 30))} is reported as ${oracleVerdict(src) ? 'a builder with no root' : 'a reject'}`, got === (oracleVerdict(src) ? 'NOROOT' : 'REJECT'), got);
+  }
+}
+
 // ── Go ──
 if (!have('go', 'version')) console.log('  go: (toolchain not found — skipped)');
 else {
@@ -120,7 +131,40 @@ func parseJSON(src string, b parser.Builder) (s string) {
 	panic("builder")
 }
 
+// dropAll keeps nothing: an accepted parse has no root to hand back, which ParseWith reports by
+// panicking (the builder contract), never as a reject.
+type dropAll struct{}
+
+func (dropAll) Leaf(*[]int32, uint16, uint32, uint32, uint32) bool { return false }
+func (dropAll) Finish(s *[]int32, sb int, _ uint16, fo, _, _ uint32, _ []parser.Tok) (int32, uint32, bool) {
+	*s = (*s)[:sb]
+	return 0, fo, false
+}
+func (dropAll) Node(s *[]int32, sb int, _ uint16, _, _, _, _ uint32) { *s = (*s)[:sb] }
+func (dropAll) SpanOf(int32, []parser.Tok) (uint32, uint32)   { return 0, 0 }
+func (dropAll) HeadSpan(int32, []parser.Tok) (uint32, uint32) { return 0, 0 }
+func (dropAll) Checkpoint() (int, int)                        { return 0, 0 }
+func (dropAll) Restore(int, int)                              {}
+
+func dropped(src string) (s string) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, lex := r.(*parser.LexError); lex { s = "REJECT" } else if strings.Contains(fmt.Sprint(r), "no node for the root") { s = "NOROOT" } else { s = fmt.Sprint("PANIC ", r) }
+		}
+	}()
+	if _, ok := parser.ParseWith(src, dropAll{}); !ok { return "REJECT" }
+	return "ROOT"
+}
+
 func main() {
+	if os.Args[1] == "drop" {
+		for _, f := range os.Args[2:] {
+			b, err := os.ReadFile(f)
+			if err != nil { panic(err) }
+			fmt.Println(dropped(string(b)))
+		}
+		return
+	}
 	// The first argument names the builder (cst: the native engine's fast path; slim: the builder
 	// engine, ParseWith through the Builder interface); each further one is a sequence of file
 	// paths joined by ','.
@@ -140,6 +184,7 @@ func main() {
   goBuild(['-o', 'consumer', '.'], { cwd: gdir });
   for (const [label, b] of [['go', 'cst'], ['go SlimBuilder', 'slim']] as const)
     results.set(label, readPairs(execFileSync(join(gdir, 'consumer'), [b, ...seqFiles.map((fs) => fs.join(','))], { encoding: 'utf8', maxBuffer: 1 << 28 })));
+  checkDropped('go', execFileSync(join(gdir, 'consumer'), ['drop', ...seqFiles.flat()], { encoding: 'utf8', maxBuffer: 1 << 28 }));
 }
 
 // ── Rust ──
@@ -159,8 +204,35 @@ fn parse_slim(src: &str, b: &mut SlimBuilder) -> String {
         _ => "REJECT".to_string(),
     }
 }
+// DropAll keeps nothing: an accepted parse has no root to hand back, which parse_with reports by
+// panicking (the builder contract), never as a reject.
+#[derive(Default)]
+struct DropAll;
+impl Builder for DropAll {
+    type H = i32;
+    fn leaf(&mut self, _: &mut Vec<i32>, _: u16, _: u32, _: u32, _: u32) -> bool { false }
+    fn node(&mut self, scratch: &mut Vec<i32>, sb: usize, _: u16, _: u32, _: u32, _: u32, _: u32) { scratch.truncate(sb); }
+    fn span_of(&self, _: i32, _: &[Tok]) -> (u32, u32) { (0, 0) }
+    fn head_span(&self, _: i32, _: &[Tok]) -> (u32, u32) { (0, 0) }
+    fn dummy_h() -> i32 { 0 }
+    fn tok_range(&self, _: i32) -> (u32, u32) { (0, 0) }
+}
+fn dropped(src: &str) -> &'static str {
+    match std::panic::catch_unwind(|| parse_with(src, &mut DropAll::default())) {
+        Ok(Some(_)) => "ROOT",
+        Ok(None) => "REJECT",
+        Err(e) => {
+            let m = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
+            if m.contains("no node for the root") { "NOROOT" } else { "REJECT" }
+        }
+    }
+}
 fn main() {
     std::panic::set_hook(Box::new(|_| {}));
+    if std::env::args().nth(1).unwrap() == "drop" {
+        for f in std::env::args().skip(2) { println!("{}", dropped(&std::fs::read_to_string(f).unwrap())); }
+        return;
+    }
     // The first argument names the builder (cst or slim); each further one is a sequence: file
     // paths joined by ','.
     let slim = std::env::args().nth(1).unwrap() == "slim";
@@ -179,6 +251,7 @@ fn main() {
   execFileSync('rustc', ['-A', 'warnings', rfile, '-o', join(dir, 'reuse')], { stdio: 'pipe' });
   for (const [label, b] of [['rust', 'cst'], ['rust SlimBuilder', 'slim']] as const)
     results.set(label, readPairs(execFileSync(join(dir, 'reuse'), [b, ...seqFiles.map((fs) => fs.join(','))], { encoding: 'utf8', maxBuffer: 1 << 28 })));
+  checkDropped('rust', execFileSync(join(dir, 'reuse'), ['drop', ...seqFiles.flat()], { encoding: 'utf8', maxBuffer: 1 << 28 }));
 }
 
 for (const [label, rows] of results) {

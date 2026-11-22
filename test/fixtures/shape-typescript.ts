@@ -625,8 +625,8 @@ function estreeStmt(ctx: TsAstCustomCtx): unknown {
     case 12: return { type: 'LabeledStatement', label: I(String(k[0])), body: k[1] };
     case 13: return { type: 'EmptyStatement' };
     case 14: return { type: 'DebuggerStatement' };
-    case 15: return { type: 'WithStatement', object: k[1], body: k[2] };
-    case 16: return { type: 'VariableDeclaration', kind: 'using', declarations: flatKids(k.slice(-1)) };
+    case 15: return { type: 'WithStatement', object: seqExpr(k[1], k[2]), body: k[3] };
+    case 16: return { type: 'VariableDeclaration', kind: 'using', declarations: flatKids(k) };
     case 17: return firstKid(k) ?? k[0];
     case 18: {
       const expr = stripAsi(k)[0];
