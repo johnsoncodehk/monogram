@@ -7,7 +7,7 @@
 // Positions: a node's start is tsc's `getStart()` (the first token); tsc's `pos` (leading trivia
 // included) is not produced (the harness compares it only when both sides carry it).
 import {
-  absent, and, branch, c, child, cook, fold, iff, inh, map, match, node, not, orElse, syn, text, v,
+  absent, and, branch, c, child, cook, fold, iff, inh, map, match, node, not, orElse, present, syn, text, v,
   type Shape2Spec, type Term,
 } from '../../src/shape2-schema.ts';
 
@@ -34,8 +34,40 @@ const PREFIX: Record<string, string> = { '!': 'ExclamationToken', '~': 'TildeTok
 const kindOf = (table: Record<string, string>): Term => match(text('op'), Object.fromEntries(Object.entries(table).map(([k, x]) => [k, c(x)])));
 
 /** `first (, rest)*` as tsc's left-nested comma BinaryExpression. */
-const comma: Term = fold('rest', child('first'), 'acc',
-  node('BinaryExpression', { left: v('acc'), operatorToken: token('CommaToken', 'comma'), right: child('rest') }, { from: 'acc', to: 'rest' }));
+const commaOf = (first: string, comma = `${first}Comma`, rest = `${first}Rest`): Term => fold(rest, child(first), 'acc',
+  node('BinaryExpression', { left: v('acc'), operatorToken: token('CommaToken', comma), right: child(rest) }, { from: 'acc', to: rest }));
+const comma: Term = commaOf('first', 'comma', 'rest');
+/** A statement's optional label. */
+const label: Term = iff(present('label'), idOf('label'), absent);
+/** A declaration list spanning its keyword(s) to its last binding; `flags` from the keyword. */
+const declarationList = (from: string, flags: Term): Term => node('VariableDeclarationList', { declarations: child('binding'), flags }, { from, to: 'binding' });
+
+/** The statements (ECMA-262 14), one node per Stmt arm. */
+const STATEMENTS: Record<string, Term> = {
+  block: child('block'),
+  variable: node('VariableStatement', { declarationList: declarationList('kind', match(text('kind'), { var: absent, let: c('Let'), const: c('Const') })) }),
+  using: node('VariableStatement', {
+    declarationList: iff(present('awaitKeyword'), declarationList('awaitKeyword', c('Const|Using')), declarationList('usingKeyword', c('Using'))),
+  }),
+  if_: node('IfStatement', { expression: commaOf('condition'), thenStatement: child('consequence'), elseStatement: child('alternative') }),
+  while_: node('WhileStatement', { expression: commaOf('condition'), statement: child('body') }),
+  do_: node('DoStatement', { statement: child('body'), expression: commaOf('condition') }),
+  return_: node('ReturnStatement', { expression: iff(present('argument'), commaOf('argument'), absent) }),
+  throw_: node('ThrowStatement', { expression: commaOf('argument') }),
+  break_: node('BreakStatement', { label }),
+  continue_: node('ContinueStatement', { label }),
+  // A Catch is not a rule of its own: the clause spans `catch` .. its block.
+  try_: node('TryStatement', {
+    tryBlock: child('body'),
+    catchClause: iff(present('handler'), node('CatchClause', { variableDeclaration: child('parameter'), block: child('handler') }, { from: 'catchTok', to: 'handler' }), absent),
+    finallyBlock: child('finalizer'),
+  }),
+  labelled: node('LabeledStatement', { label: idOf('label'), statement: child('body') }),
+  empty: node('EmptyStatement'),
+  debugger_: node('DebuggerStatement'),
+  with_: node('WithStatement', { expression: child('object'), statement: child('body') }),
+  decl: child('decl'),
+};
 
 /** tsc's OptionalChain flag: every link of a chain that holds a `?.` (synthesized `optional`). */
 const chainFlags: Term = iff(syn('optional'), c('OptionalChain'), absent);
@@ -54,7 +86,18 @@ export const tscExprShape: Shape2Spec = {
     // The root: its statement list. The `endOfFileToken` and the root's extent over trailing
     // trivia are not produced (test/shape2-oracle.ts ROOT_NOT_COMPARED).
     Program: { decl: node('SourceFile', { statements: map('alt', branch('alt', { decl: child('decl'), stmt: child('stmt') })) }) },
-    Stmt: { expr: node('ExpressionStatement', { expression: comma }) },
+    Stmt: { ...STATEMENTS, expr: node('ExpressionStatement', { expression: comma }) },
+    Block: { brace: node('Block', { statements: child('stmt') }) },
+    // A binding: identifier names (binding patterns are not mapped yet); a type annotation is
+    // outside the subset (Type is not mapped).
+    Binding: {
+      seq: node('VariableDeclaration', {
+        name: branch('name', { ident: idOf('ident') }),
+        exclamationToken: branch('name', { ident: iff(present('exclamation'), token('ExclamationToken', 'exclamation'), absent) }),
+        type: child('type'), initializer: child('value'),
+      }),
+    },
+    CatchParameter: { ident: node('VariableDeclaration', { name: idOf('ident'), type: child('type') }) },
     Expr: {
       true_: node('TrueKeyword'),
       false_: node('FalseKeyword'),
