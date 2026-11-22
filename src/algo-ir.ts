@@ -7,7 +7,8 @@
 import { type TextUnits, utf8Of, unitLen } from './text-units.ts';
 
 // `pos`: a token index or text offset held in a record field (a lowering may store it narrow).
-export type Num = 'int' | 'lid' | 'depth' | 'pos';
+// `idx`: a count or list index, never negative (a lowering may give it its unsigned size type).
+export type Num = 'int' | 'lid' | 'depth' | 'pos' | 'idx';
 // A record a family declares (`RecordDecl`), and a list of such records.
 export type RecTy = `rec_${string}`;
 export type RecListTy = `recs_${string}`;
@@ -114,7 +115,7 @@ export interface RecordDecl { name: string; fields: { name: string; ty: Num | 'b
 export interface CharSet { name: string; ranges: CodeRange[] }
 
 export const ELEM: Record<Exclude<ListTy, RecListTy>, Ty> = { metas: 'meta', toks: 'tok', bools: 'bool', depths: 'depth', edits: 'edit' };
-export const isNum = (t: Ty): t is Num => t === 'int' || t === 'lid' || t === 'depth' || t === 'pos';
+export const isNum = (t: Ty): t is Num => t === 'int' || t === 'lid' || t === 'depth' || t === 'pos' || t === 'idx';
 export const isRec = (t: Ty): t is RecTy => t.startsWith('rec_');
 export const isRecList = (t: Ty): t is RecListTy => t.startsWith('recs_');
 export const isList = (t: Ty): t is ListTy => t in ELEM || isRecList(t);

@@ -173,14 +173,57 @@ const reuseSegEntries: Fn = {
   ],
 };
 
+// The edit's alignment of the old and new token streams: the tokens equal at the start (same kind,
+// span, newline flag and text) and at the end (same kind, flag and text, the span moved by the
+// text's length change), never overlapping.
+const mi = (m: string, f: 'kid' | 'off' | 'end'): Expr => ({ k: 'metaInt', m: v(m), f });
+const nl = (m: string): Expr => ({ k: 'metaFlag', m: v(m), f: 'nl' });
+const text = (t: string, m: string): Expr => ({ k: 'metaText', text: v(t), m: v(m) });
+const or = (...es: Expr[]): Expr => es.reduce((a, b) => bin('or', a, b));
+const brk = (c: Expr): Stmt => ({ k: 'if', c, then: [{ k: 'break' }] });
+const computeAlignCore: Fn = {
+  name: 'computeAlignCore',
+  doc: 'The old and new token counts, and the tokens equal at their start (prefix) and end (suffix).',
+  params: [{ name: 'oldText', ty: 'str' }, { name: 'oldToks', ty: 'metas' }, { name: 'newText', ty: 'str' }, { name: 'newToks', ty: 'metas' }],
+  ret: ['idx', 'idx', 'idx', 'idx'],
+  body: [
+    { k: 'let', name: 'oldN', ty: 'idx', init: len(v('oldToks')) },
+    { k: 'let', name: 'newN', ty: 'idx', init: len(v('newToks')) },
+    { k: 'let', name: 'prefix', ty: 'idx', init: n(0) },
+    { k: 'while', c: bin('and', bin('lt', v('prefix'), v('oldN')), bin('lt', v('prefix'), v('newN'))), body: [
+      { k: 'let', name: 'o', ty: 'meta', init: { k: 'at', list: v('oldToks'), i: v('prefix') } },
+      { k: 'let', name: 'm', ty: 'meta', init: { k: 'at', list: v('newToks'), i: v('prefix') } },
+      brk(or(bin('ne', mi('o', 'kid'), mi('m', 'kid')), bin('ne', mi('o', 'off'), mi('m', 'off')), bin('ne', mi('o', 'end'), mi('m', 'end')), bin('ne', nl('o'), nl('m')))),
+      brk(bin('ne', text('oldText', 'o'), text('newText', 'm'))),
+      { k: 'set', name: 'prefix', e: bin('add', v('prefix'), n(1)) },
+    ] },
+    // The length change is signed: both lengths are taken as int before the subtraction.
+    { k: 'let', name: 'newLen', ty: 'int', init: len(v('newText')) },
+    { k: 'let', name: 'delta', ty: 'int', init: bin('sub', v('newLen'), len(v('oldText'))) },
+    { k: 'let', name: 'minN', ty: 'idx', init: v('oldN') },
+    { k: 'if', c: bin('lt', v('newN'), v('minN')), then: [{ k: 'set', name: 'minN', e: v('newN') }] },
+    { k: 'let', name: 'suffix', ty: 'idx', init: n(0) },
+    { k: 'while', c: bin('lt', bin('add', v('prefix'), v('suffix')), v('minN')), body: [
+      { k: 'let', name: 'o', ty: 'meta', init: { k: 'at', list: v('oldToks'), i: bin('sub', bin('sub', v('oldN'), n(1)), v('suffix')) } },
+      { k: 'let', name: 'm', ty: 'meta', init: { k: 'at', list: v('newToks'), i: bin('sub', bin('sub', v('newN'), n(1)), v('suffix')) } },
+      brk(or(bin('ne', mi('o', 'kid'), mi('m', 'kid')), bin('ne', nl('o'), nl('m')))),
+      brk(or(bin('ne', mi('m', 'off'), bin('add', mi('o', 'off'), v('delta'))), bin('ne', mi('m', 'end'), bin('add', mi('o', 'end'), v('delta'))))),
+      brk(bin('ne', text('oldText', 'o'), text('newText', 'm'))),
+      { k: 'set', name: 'suffix', e: bin('add', v('suffix'), n(1)) },
+    ] },
+    ret(v('oldN'), v('newN'), v('prefix'), v('suffix')),
+  ],
+};
+
 export const REUSE_FNS: Fn[] = [reuseBounds, reuseAdoptAt, reuseGaveUp, shiftEntryMeta, reuseEntries, reuseSpan, reuseSegEntries];
 
-// The functions a grammar's reuse plan uses: none without one; the segment list only for shape B.
+// The functions a grammar's Doc uses: every Doc aligns the streams (computeAlignCore); the reuse
+// functions only with a reuse plan, the segment list only for shape B.
 export function reuseFamilyFns(ir: ParserIR): Fn[] {
-  if (!ir.reuse) return [];
-  return REUSE_FNS.filter((f) => ir.reuse!.kind === 'B' || f !== reuseSegEntries);
+  if (!ir.reuse) return [computeAlignCore];
+  return [computeAlignCore, ...REUSE_FNS.filter((f) => ir.reuse!.kind === 'B' || f !== reuseSegEntries)];
 }
 
 export function emitReuseFamily(ir: ParserIR, lowering: Lowering): string {
-  return ir.reuse ? printFns(lowering, reuseFamilyFns(ir), [], [ENTRY_META, SEG]) : '';
+  return printFns(lowering, reuseFamilyFns(ir), [], [ENTRY_META, SEG]);
 }

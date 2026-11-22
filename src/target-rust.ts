@@ -1256,7 +1256,7 @@ function docEditBlockRust(ir: ParserIR, shared: SharedAlgorithms): string {
   const segsInit = shapeB ? ', segs: Vec::new()' : '';
   const reuseInit = `${entriesInit}${segsInit}`;
   const relexFamily = `\n// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.relexFamily(ir)}\n`;
-  const reuseFamily = topReuse ? `\n// ---- reuse family: generated from src/reuse-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.reuseFamily(ir)}\n` : '';
+  const reuseFamily = `\n// ---- reuse family: generated from src/reuse-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.reuseFamily(ir)}\n`;
   const initToks = 'scan_meta(&text)';
   const reuseShared = topReuse ? `
 fn count_live(nodes: &[Node], kids: &[i32], id: i32) -> usize {
@@ -1699,30 +1699,6 @@ struct AlignMeta { off: u32, end: u32, kid: u16, pd: u16, fd: u16, flags: u8, td
 }
 struct Align { old_n: usize, new_n: usize, prefix: usize, suffix: usize, relexed: usize, reused: usize, stream_eq: Option<bool>, tree_eq: Option<bool> }
 ${relexFamily}${reuseFamily}
-fn compute_align_core(old_text: &str, old_toks: &[AlignMeta], new_text: &str, new_toks: &[AlignMeta]) -> (usize, usize, usize, usize) {
-    let old_n = old_toks.len();
-    let new_n = new_toks.len();
-    let mut prefix = 0usize;
-    while prefix < old_n && prefix < new_n {
-        let o = &old_toks[prefix];
-        let n = &new_toks[prefix];
-        if o.kid != n.kid || o.off != n.off || o.end != n.end || am_nl(o) != am_nl(n) { break; }
-        if am_text(old_text, o) != am_text(new_text, n) { break; }
-        prefix += 1;
-    }
-    let delta = new_text.len() as isize - old_text.len() as isize;
-    let min_n = old_n.min(new_n);
-    let mut suffix = 0usize;
-    while prefix + suffix < min_n {
-        let o = &old_toks[old_n - 1 - suffix];
-        let n = &new_toks[new_n - 1 - suffix];
-        if o.kid != n.kid || am_nl(o) != am_nl(n) { break; }
-        if n.off != (o.off as isize + delta) as u32 || n.end != (o.end as isize + delta) as u32 { break; }
-        if am_text(old_text, o) != am_text(new_text, n) { break; }
-        suffix += 1;
-    }
-    (old_n, new_n, prefix, suffix)
-}
 fn toks_from_meta(text: &str, meta: &[AlignMeta]) -> Vec<Tok> {
     meta.iter().map(|m| { let tx = am_text(text, m); mk_tok(m.off as usize, m.end as usize, am_nl(m), m.kid, lid_of(tx.as_bytes())) }).collect()
 }
@@ -5220,7 +5196,7 @@ pub fn parse_ast(src: &str) -> Option<AstRoot<'_>> {
 }
 
 const RS_ELEM: Record<Exclude<ListTy, `recs_${string}`>, string> = { metas: 'AlignMeta', toks: 'Tok', bools: 'bool', depths: 'i64', edits: 'Edit' };
-const RS_SCALAR: Record<string, string> = { int: 'isize', lid: 'u16', depth: 'i64', pos: 'u32', bool: 'bool', meta: 'AlignMeta', tok: 'Tok' };
+const RS_SCALAR: Record<string, string> = { int: 'isize', lid: 'u16', depth: 'i64', pos: 'u32', idx: 'usize', bool: 'bool', meta: 'AlignMeta', tok: 'Tok' };
 const RS_META: Record<MetaInt, string> = { off: 'u32', end: 'u32', kid: 'u16', pd: 'u16', fd: 'u16', td: 'u8' };
 const RS_TOK: Record<TokInt, string> = { off: 'u32', end: 'u32', kid: 'u16', lid: 'u16' };
 const RS_MK: Record<keyof MkMeta, string> = { off: 'u32', end: 'u32', kid: 'u16', nl: 'bool', fd: 'u16', pd: 'u16', lc: 'bool', lb: 'bool', hd: 'bool', td: 'u8' };
@@ -5240,7 +5216,7 @@ const rsBlock = (lines: string[]): string[] => lines.map((l) => RS_IND + l);
 const rustLowering: Lowering = {
   units: UNITS,
   ident: snake,
-  num: { int: 'isize', lid: 'u16', depth: 'i64', pos: 'u32' },
+  num: { int: 'isize', lid: 'u16', depth: 'i64', pos: 'u32', idx: 'usize' },
   type: (t, role, owned) => {
     if (isList(t)) {
       const el = isRecList(t) ? recName(t) : RS_ELEM[t];

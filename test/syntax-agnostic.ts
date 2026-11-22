@@ -21,7 +21,7 @@ const at = (c: string) => ({ c, prec: ATOM });
 
 const sexpr: Lowering = {
   ident: kebab,
-  num: { int: 'int', lid: 'lid', depth: 'int', pos: 'int' },
+  num: { int: 'int', lid: 'lid', depth: 'int', pos: 'int', idx: 'int' },
   type: (t) => t,
   cast: (_cx, r, nat) => ({ ...r, c: form('as', nat, r.c), nat, prec: ATOM }),
   owns: false,

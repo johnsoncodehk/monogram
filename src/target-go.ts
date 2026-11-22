@@ -1253,7 +1253,7 @@ function docEditBlockGo(ir: ParserIR, shared: SharedAlgorithms): string {
   const shapeB = topReuse?.kind === 'B';
   const hasHeadB = !!(shapeB && topReuse.kind === 'B' && topReuse.hasHead);
   const relexFamily = `\n// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.relexFamily(ir)}\n`;
-  const reuseFamily = topReuse ? `\n// ---- reuse family: generated from src/reuse-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.reuseFamily(ir)}\n` : '';
+  const reuseFamily = `\n// ---- reuse family: generated from src/reuse-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.reuseFamily(ir)}\n`;
   const editBody = goEditBody('\t\td.root = -1', true);
   const parseFresh = `\td.root = p.parse(d.text, toksFromMeta(d.text, d.toks))`;
   const reuseFns = topReuse ? `
@@ -1577,24 +1577,6 @@ type Align struct {
 	TreeEq   *bool \`json:"treeEq,omitempty"\`
 }
 ${relexFamily}${reuseFamily}
-func computeAlignCore(oldText string, oldToks []alignMeta, newText string, newToks []alignMeta) (oldN, newN, prefix, suffix int) {
-	oldN, newN = len(oldToks), len(newToks)
-	for prefix < oldN && prefix < newN {
-		o, n := oldToks[prefix], newToks[prefix]
-		if o.Kid != n.Kid || o.Off != n.Off || o.End != n.End || amNl(o) != amNl(n) { break }
-		if amText(oldText, o) != amText(newText, n) { break }
-		prefix++
-	}
-	delta := len(newText) - len(oldText)
-	minN := oldN; if newN < minN { minN = newN }
-	for prefix+suffix < minN {
-		o, n := oldToks[oldN-1-suffix], newToks[newN-1-suffix]
-		if o.Kid != n.Kid || amNl(o) != amNl(n) || n.Off != o.Off+int32(delta) || n.End != o.End+int32(delta) { break }
-		if amText(oldText, o) != amText(newText, n) { break }
-		suffix++
-	}
-	return
-}
 func toksFromMeta(text string, meta []alignMeta) []Tok {
 	t := make([]Tok, len(meta))
 	for i, m := range meta {
@@ -2868,7 +2850,7 @@ func SlimJSONWith(b *SlimBuilder, root int32) string {
 }
 
 const GO_TYPES: Record<Ty, string> = {
-  int: 'int', lid: 'uint16', depth: 'int', pos: 'int', bool: 'bool', str: 'string', meta: 'alignMeta', tok: 'Tok', edit: 'Edit',
+  int: 'int', lid: 'uint16', depth: 'int', pos: 'int', idx: 'int', bool: 'bool', str: 'string', meta: 'alignMeta', tok: 'Tok', edit: 'Edit',
   metas: '[]alignMeta', toks: '[]Tok', bools: '[]bool', depths: '[]int', edits: '[]Edit',
 };
 const GO_META: Record<MetaInt, string> = { off: 'int32', end: 'int32', kid: 'uint16', pd: 'uint16', fd: 'uint16', td: 'uint8' };
@@ -2889,7 +2871,7 @@ const goType = (t: Ty): string => (isRecList(t) ? `[]${recName(t)}` : isRec(t) ?
 const goLowering: Lowering = {
   units: UNITS,
   ident: (n) => n,
-  num: { int: 'int', lid: 'uint16', depth: 'int', pos: 'int' },
+  num: { int: 'int', lid: 'uint16', depth: 'int', pos: 'int', idx: 'int' },
   type: (t) => goType(t),
   cast: (_cx, r, nat) => ({ ...r, c: `${nat}(${r.c})`, nat, prec: ATOM }),
   owns: false,

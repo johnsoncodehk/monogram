@@ -1314,7 +1314,8 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
         align = validate ? { ...lexReject, streamEq: true, treeEq: isCst ? true : null } : lexReject;
         return null;
       }
-      const core = { ...computeAlign(oldText, oldToks, text, prevToks), relexed };
+      const [oldN, newN, prefix, suffix] = computeAlignCore(oldText, oldToks, text, prevToks);
+      const core = { oldN, newN, prefix, suffix, relexed };
       const byteDelta = text.length - oldText.length;
       let reused = 0;
       let next: H | null = null;
@@ -1360,7 +1361,7 @@ function docEditBlock(ir: ParserIR, shared: SharedAlgorithms): string {
   const shapeA = topReuse?.kind === 'A';
   const shapeB = topReuse?.kind === 'B';
   const relexFamily = `\n// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.relexFamily(ir)}\n`;
-  const reuseFamily = topReuse ? `\n// ---- reuse family: generated from src/reuse-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.reuseFamily(ir)}\n` : '';
+  const reuseFamily = `\n// ---- reuse family: generated from src/reuse-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.reuseFamily(ir)}\n`;
   // validate with cstBuilder: the tree against a fresh parse's, and (reusing entries) the recorded
   // entries against the old tree.
   const reuseFns = `
@@ -1426,26 +1427,6 @@ function shift_align(m: AlignMeta, delta: number): AlignMeta {
 }
 type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed: number; reused: number; streamEq?: boolean; treeEq?: boolean | null };
 ${relexFamily}${reuseFamily}
-function computeAlign(oldText: string, oldToks: AlignMeta[], newText: string, newToks: AlignMeta[]): Omit<Align, 'relexed' | 'reused' | 'streamEq' | 'treeEq'> {
-  const oldN = oldToks.length, newN = newToks.length;
-  let prefix = 0;
-  while (prefix < oldN && prefix < newN) {
-    const o = oldToks[prefix], n = newToks[prefix];
-    if (o.kid !== n.kid || o.off !== n.off || o.end !== n.end || am_nl(o) !== am_nl(n)) break;
-    if (am_text(oldText, o) !== am_text(newText, n)) break;
-    prefix++;
-  }
-  const delta = newText.length - oldText.length;
-  const minN = Math.min(oldN, newN);
-  let suffix = 0;
-  while (prefix + suffix < minN) {
-    const o = oldToks[oldN - 1 - suffix], n = newToks[newN - 1 - suffix];
-    if (o.kid !== n.kid || am_nl(o) !== am_nl(n) || n.off !== o.off + delta || n.end !== o.end + delta) break;
-    if (am_text(oldText, o) !== am_text(newText, n)) break;
-    suffix++;
-  }
-  return { oldN, newN, prefix, suffix };
-}
 function toksFromMeta(text: string, meta: AlignMeta[]): Tok[] {
   return meta.map((m) => {
     const tx = am_text(text, m);
@@ -2924,7 +2905,7 @@ export function parseAst(src: string, opts?: { customs?: AstCustoms }): ${rootTy
 }
 
 const TS_TYPES: Record<Ty, string> = {
-  int: 'number', lid: 'number', depth: 'number', pos: 'number', bool: 'boolean', str: 'string', meta: 'AlignMeta', tok: 'Tok', edit: 'Edit',
+  int: 'number', lid: 'number', depth: 'number', pos: 'number', idx: 'number', bool: 'boolean', str: 'string', meta: 'AlignMeta', tok: 'Tok', edit: 'Edit',
   metas: 'AlignMeta[]', toks: 'Tok[]', bools: 'boolean[]', depths: 'number[]', edits: 'Edit[]',
 };
 // Operator spelling and binding strength; unary is 90, a negative literal 7.
@@ -2939,7 +2920,7 @@ const tsBlock = (lines: string[]): string[] => lines.map((l) => TS_IND + l);
 const tsLowering: Lowering = {
   units: UNITS,
   ident: (n) => n,
-  num: { int: 'number', lid: 'number', depth: 'number', pos: 'number' },
+  num: { int: 'number', lid: 'number', depth: 'number', pos: 'number', idx: 'number' },
   type: (t) => (isRecList(t) ? `${recName(t)}[]` : isRec(t) ? recName(t) : TS_TYPES[t]),
   owns: false,
   charSet: (name, rs) => `const ${name} = /*#__PURE__*/ (() => { const a = new Uint8Array(256); for (const [lo, hi] of [${rs.map(([lo, hi]) => `[${lo},${hi}]`).join(', ')}]) for (let i = lo; i <= hi; i++) a[i] = 1; return a; })();`,
