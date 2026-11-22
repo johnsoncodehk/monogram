@@ -10,7 +10,12 @@
 //     first non-blank character is the hole opener (`unlessBodyStarts`): `<style>{css}</style>`
 //     is an element with a hole;
 //   • comments in text (`textTokens`): `/* … */` anywhere in a run; `//` (to the end of the line)
-//     at a run's start or right after a blank: `a //b` is a comment, `a//b` and `https://x` text.
+//     at a run's start or right after a blank: `a //b` is a comment, `a//b` and `https://x` text;
+//   • directives in the children (derived from the rules: grammar-analysis.ts directivesOf):
+//     `@if (…) { children } @else if (…) { … } @else { … }`, `@for [await] (x of xs) { … }
+//     @empty { … }`, `@try { … } @pending { … } @catch (e) { … }`, and the code block `@{ … }`.
+//     An opener counts anywhere in a run (`a@if (`), only before its required next literal
+//     (`@if x`, `@iffy` are text).
 // Program shape: `component Name(params) { statements }`; a statement is a declaration, a
 // return, or an element (render output). An element after a value is a comparison (`a <b`), as
 // after the close of another element on the same line: `<a/>; <b/>` separates two of them.
@@ -43,6 +48,9 @@ const CloseTag = token(seq('<', '/'));
 const SelfClose = token(seq('/', '>'));
 const StyleBody = token(plus(noneOf('<')), { scope: 'meta.embedded.block.css' });
 const ScriptBody = token(plus(noneOf('<')), { scope: 'meta.embedded.block.js' });
+// a directive word (`@if`, `@else`, …): the directive literals are keywords of this token, as `if` is
+// of the identifier; any other `@word` in code is one too (in text it is text)
+const AtWord = token(seq('@', idStart, star(idCont)), { scope: 'keyword.control.directive' });
 
 const Expr = rule(($) => [
   Number_,
@@ -51,6 +59,10 @@ const Expr = rule(($) => [
   Regex,
   Element,
   ['(', $, ')'],
+  // a record and a list: braces and brackets inside a directive head (`@if ({a}.a) {`)
+  ['{', opt(sep(Ident, ',')), '}'],
+  ['[', opt(sep($, ',')), ']'],
+  [$, '[', $, ']'],
   [prefix, $],
   [$, op, $],
   [$, '(', opt(sep($, ',')), ')'],
@@ -60,7 +72,17 @@ const Expr = rule(($) => [
 const Hole = rule(() => [['{', Expr, '}']]);
 const TagName = rule(() => [[Ident, many('-', Ident)], Hole]);
 const Attr = rule(() => [[Ident, opt('=', alt(Str, Hole))], Hole]);
-const Child = rule(() => [Element, Hole, Text, StyleBody, ScriptBody]);
+const Child = rule(() => [Element, Hole, Text, StyleBody, ScriptBody, Directive]);
+// a directive's body: children closed by the hole closer
+const Body = rule(() => [['{', many(Child), '}']]);
+const Else = rule(($) => [['@else', 'if', '(', Expr, ')', Body, opt($)], ['@else', Body]]);
+const Directive = rule(() => [
+  ['@if', '(', Expr, ')', Body, opt(Else)],
+  ['@for', opt('await'), '(', Ident, 'of', Expr, ')', Body, opt('@empty', Body)],
+  ['@try', Body, opt('@pending', Body), opt('@catch', '(', Ident, ')', Body)],
+  // a code block: its group holds statements, not children
+  ['@{', many(Statement), '}'],
+]);
 const Element = rule(() => [
   ['<', TagName, many(Attr), SelfClose],
   ['<', TagName, many(Attr), '>', many(Child), CloseTag, TagName, '>'],
@@ -77,7 +99,7 @@ const Program = rule(() => [many(Component)]);
 export default defineGrammar({
   name: 'textdialect',
   scopeName: 'source.textdialect',
-  tokens: { Ident, Number: Number_, Str, Regex, LineComment, BlockComment, Text, CloseTag, SelfClose, StyleBody, ScriptBody },
+  tokens: { Ident, AtWord, Number: Number_, Str, Regex, LineComment, BlockComment, Text, CloseTag, SelfClose, StyleBody, ScriptBody },
   elements: {
     tagOpen: '<', tagClose: '>', closeMarker: '/', text: 'Text', closeTag: 'CloseTag', selfClose: 'SelfClose',
     hole: { open: '{', close: '}' },
@@ -92,9 +114,9 @@ export default defineGrammar({
   },
   prec: [left('==', '!='), left('<', '>'), left('+', '-'), right(prefix('!'))],
   scopes: {
-    'keyword.control': ['return'],
+    'keyword.control': ['return', '@if', '@else', '@for', '@empty', '@try', '@pending', '@catch', 'of', 'await', 'if'],
     'storage.type': ['component', 'const'],
     'punctuation.definition.tag': ['<', '>'],
   },
-  rules: { Expr, Hole, TagName, Attr, Child, Element, Statement, Component, Program },
+  rules: { Expr, Hole, TagName, Attr, Child, Body, Else, Directive, Element, Statement, Component, Program },
 });
