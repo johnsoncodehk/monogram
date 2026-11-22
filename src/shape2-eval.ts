@@ -501,6 +501,12 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
           } else sub(x, `[${i}]`);
         });
         return 'list';
+      case 'dropLastIf': {
+        need(e.cond, 'cond', 'bool');
+        const ty = sub(e.list, 'list');
+        if (ty !== 'list') err(`${w} list`, `dropLastIf takes a list (a list, map or repeated child), not a ${ty}`);
+        return 'list';
+      }
       case 'match': {
         need(e.on, 'on', 'string');
         const tys = Object.entries(e.cases ?? {}).map(([k, x]) => sub(x, `case ${JSON.stringify(k)}`));
@@ -548,6 +554,15 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
     }
   }
   function span(sp: Span, s: SScope, w: string): void {
+    if (sp !== null && typeof sp === 'object' && 'after' in sp) {
+      const nm = sp.after;
+      if (typeof nm !== 'string') { err(w, 'span.after is a child or variable name'); return; }
+      if (hasVar(s, nm)) return;
+      const r = resolveStatic(s, nm);
+      if (!r) err(w, `span.after: ${s.info.where} has no child or variable ${nm}`);
+      else if (r.card !== 'one') err(w, `span.after: ${nm} is ${r.card === 'opt' ? 'optional' : 'a list'}, so it can be absent: a zero-width node sits after a token that is always there`);
+      return;
+    }
     for (const k of ['from', 'to'] as const) {
       const nm = sp?.[k];
       if (typeof nm !== 'string') { err(w, `span.${k} is a child or variable name`); continue; }
@@ -770,8 +785,9 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
           const val = ev(x, s);
           if (val !== undefined) fields[k] = val;
         }
-        const start = t.span ? spanEdge(s, t.span.from, 'start') : s.node.offset;
-        const end = t.span ? spanEdge(s, t.span.to, 'end') : s.node.end;
+        const sp = t.span;
+        const start = !sp ? s.node.offset : 'after' in sp ? spanEdge(s, sp.after, 'end') : spanEdge(s, sp.from, 'start');
+        const end = !sp ? s.node.end : 'after' in sp ? start : spanEdge(s, sp.to, 'end');
         return { kind: ev(t.type, s) as string, start, end, fields };
       }
       case 'record': {
@@ -786,6 +802,10 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
           else out.push(ev(x, s) ?? null);
         }
         return out;
+      }
+      case 'dropLastIf': {
+        const l = ev(t.list, s) as S2Value[];
+        return ev(t.cond, s) === true && l.length > 0 ? l.slice(0, -1) : l;
       }
       case 'match': {
         const on = ev(t.on, s) as string;
