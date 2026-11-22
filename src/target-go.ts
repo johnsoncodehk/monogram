@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -259,14 +259,9 @@ function renderIdTablesGo(ids: LexIdPlan): string {
   }
   return `var kindStr = []string{${kidsLit}}
 var _lids = []string{${lidsLit}}
-var _kidMap = map[string]uint16{}
 const _lidMaxLen = ${pf.maxLen}
 var _lidFirstBits = [...]byte{${bitsLit}}
 
-func init() {
-\tfor i, k := range kindStr { _kidMap[k] = uint16(i) }
-}
-func kidOf(kind string) uint16 { if v, ok := _kidMap[kind]; ok { return v }; return 0 }
 // lidKeyIsLiteral is the length x first-byte prefilter: false when no literal has the text's key.
 func lidKeyIsLiteral(text string) bool {
 \tn := len(text)
@@ -403,15 +398,14 @@ ${indent}}`;
 }
 
 // Newline mode: every line break outside flow delimiters is a NEWLINE token spanning the break.
-function newlinePartsGo(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state: string; stateFrom: string; ws: string; hooks: string } {
+function newlinePartsGo(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state: string; stateFrom: string; table: string; ws: string; hooks: string } {
   const kidNl = kidOf(ids, nl.token);
-  const flowSets = `\t_flowOpen := map[string]bool{${nl.flowOpen.map((x) => `${J(x)}: true`).join(', ')}}
-\t_flowClose := map[string]bool{${nl.flowClose.map((x) => `${J(x)}: true`).join(', ')}}
-`;
   return {
     state: `\tflowDepth := 0
-${flowSets}`,
-    stateFrom: flowSets,
+`,
+    stateFrom: '',
+    table: `var _flowD = [${ids.lids.length}]int8{${lidDeltaTable(ids, nl.flowOpen, nl.flowClose).join(', ')}}
+`,
     ws: `\t\tif c == 32 || c == 9 || c == 11 || c == 12 {
 \t\t\tpos++
 \t\t\tfor pos < n { if d := src[pos]; d != 32 && d != 9 && d != 11 && d != 12 { break }; pos++ }
@@ -430,7 +424,7 @@ ${flowSets}`,
 \t\t\tif isJsWs(r) && r != 0x2028 && r != 0x2029 { pos += w; continue }
 \t\t}
 `,
-    hooks: `\t\tif kid == 0 && _flowOpen[_lids[lid]] { flowDepth++ } else if kid == 0 && _flowClose[_lids[lid]] { if flowDepth > 0 { flowDepth-- } }
+    hooks: `\t\tif kid == 0 { if d := int(_flowD[lid]); d != 0 { flowDepth += d; if flowDepth < 0 { flowDepth = 0 } } }
 `,
   };
 }
@@ -582,7 +576,7 @@ ${emitHooks}
   const cascade = renderLexByteDispatchGo(lexCodes, lexFirsts, '\t', tplHeads);
   const identNameGo = ir.identToken;
   const identKidGo = identNameGo ? kidOf(ids, identNameGo) : 0;
-  const lexGoHelpers = (shared.scannedTokens(ir).some((t) => t.skip) ? GO_HAS_LINE_TERM : '') + ((identNameGo || ir.identLike.length) ? `func isJsWs(r rune) bool {
+  const lexGoHelpers = (nl ? newlinePartsGo(nl, 'emit', ids).table : '') + (shared.scannedTokens(ir).some((t) => t.skip) ? GO_HAS_LINE_TERM : '') + ((identNameGo || ir.identLike.length) ? `func isJsWs(r rune) bool {
 	if r == 0xA0 || r == 0x1680 || r == 0x2028 || r == 0x2029 || r == 0x202F || r == 0x205F || r == 0x3000 || r == 0xFEFF {
 		return true
 	}

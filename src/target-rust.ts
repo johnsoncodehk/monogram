@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -366,18 +366,15 @@ function newlinePartsRs(nl: NewlineCfg, ids: LexIdPlan): { consts: string; field
 `;
   return {
     consts: `const _KID_NLTOK: u16 = ${kidOf(ids, nl.token)};
-const _FLOW_OPEN: &[&str] = ${`&[${nl.flowOpen.map(J).join(', ')}]`};
-const _FLOW_CLOSE: &[&str] = ${`&[${nl.flowClose.map(J).join(', ')}]`};
+static _FLOW_D: [i8; ${ids.lids.length}] = [${lidDeltaTable(ids, nl.flowOpen, nl.flowClose).join(', ')}];
 `,
     fields: 'flow_depth: i64',
     init: 'flow_depth: 0',
     ws: ws('emit'),
     wsFrom: ws('push_tok'),
-    hooks: `        if kid == 0 && _in(_FLOW_OPEN, _LIDS[lid as usize]) { self.flow_depth += 1; }
-        else if kid == 0 && _in(_FLOW_CLOSE, _LIDS[lid as usize]) { self.flow_depth = (self.flow_depth - 1).max(0); }
+    hooks: `        if kid == 0 { let d = ${rsFlag('_FLOW_D', 'lid')}; if d != 0 { self.flow_depth = (self.flow_depth + d as i64).max(0); } }
 `,
-    hooksFrom: `        if kid == 0 && _in(_FLOW_OPEN, _LIDS[lid as usize]) { flow_depth += 1; }
-        else if kid == 0 && _in(_FLOW_CLOSE, _LIDS[lid as usize]) { flow_depth = (flow_depth - 1).max(0); }
+    hooksFrom: `        if kid == 0 { let d = ${rsFlag('_FLOW_D', 'lid')}; if d != 0 { flow_depth = (flow_depth + d as i64).max(0); } }
 `,
   };
 }
@@ -537,8 +534,7 @@ ${identName || ir.identLike.length ? `${rsUniIdentTables()}// Both out of line: 
     e
 }
 ` : ''}`;
-  const needIn = !!(nlRs); // newline flow still uses string _in
-  const rxConsts = `${lexUtf8Helpers}${rxBitTables}${tplLidConsts}${needIn ? `fn _in(set: &[&str], x: &str) -> bool { set.iter().any(|s| *s == x) }\n` : ''}${nlRs ? nlRs.consts : ''}`;
+  const rxConsts = `${lexUtf8Helpers}${rxBitTables}${tplLidConsts}${nlRs ? nlRs.consts : ''}`;
   const pavHot = rx ? rsLidAny(ids, rx.postfixAfterValue, 'lid') : 'false';
   // The span itself is the shared family's scanner; this reads which delimiter ended it.
   const tplFn = tpl ? `fn _scan_tpl_span(s: &str, p: usize, strict: bool) -> (bool, usize) {
