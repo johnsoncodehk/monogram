@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -63,6 +63,22 @@ const dispatchRs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, key
 const beatsRs = (d: Dispatch, pos: string, i: number) => d.ranked.includes(i) ? `(${pos} > best_pos || ${pos} == best_pos && ${i} < bi)` : `${pos} > best_pos`;
 const markRs = (d: Dispatch, i: number) => (d.ranked.length ? ` bi = ${i};` : '');
 const biRs = (d: Dispatch) => (d.ranked.length ? ' let mut bi: i32 = -1;' : '');
+// ── The two frames of a construct that may have to undo what it tried ──
+// Every one is printed by one of these, so what a frame costs in the output is decided here.
+// The checkpoint (position, scratch length, builder checkpoint) taken over the parser `p`, and the
+// undo back to it.
+const ckptRs = (p: string) => `let m = ${p}.mark();`;
+const undoRs = (p: string) => `${p}.reset(m);`;
+// BRANCH frame: one branch of an ordered choice (`alt`), over `p`: it returns true from the
+// choice when the branch matched, and undoes it when it did not.
+const branchRs = (cond: string) => `{ ${ckptRs('p')} if ${cond} { return true; } ${undoRs('p')} }`;
+// CANDIDATE frame: one candidate of a longest-match list (an rd rule's alternatives, a Pratt
+// rule's NUD arms) tried from `save`: when it matched and beats the best so far it becomes the
+// best (`win`: what records it; `ck` moves past its node), else what it built is dropped; either
+// way the position goes back to `save` for the next candidate.
+const lostRs = `self.scratch.truncate(sb); self.b.restore(ck);`;
+const candRs = (d: Dispatch, i: number, cond: string, win: string) =>
+  `{ if ${cond} && ${beatsRs(d, 'self.pos', i)} { ${win} } else { ${lostRs} } self.back(save); }`;
 // The typed-AST layer's form of a Guard over the token t: its parser keeps no lookahead mark, so
 // the second token is read directly. null: no guard.
 const astGuardRs = (g: Guard, t: string): string | null =>
@@ -86,6 +102,8 @@ function gtRuntimeRust(ids: LexIdPlan): string {
     return `(${a}, ${b}) => ${r}, `;
   }).join('');
   return `const GT_LID: u16 = ${ids.gtComps.length > 0 ? lidOf(ids, '>') : 'u16::MAX'};
+/// The first word lid (LexIdPlan.kwLid): a literal from here on is a \`$keyword\` leaf, one before it a \`$punct\` (no leaf).
+const LID_KW: u16 = ${ids.kwLid};
 #[inline(always)] fn gt_step(a: u16, b: u16) -> u16 { match (a, b) { ${arms}_ => 0 } }
 #[inline]
 fn gt_op(toks: &[Tok], i: usize) -> (u16, usize, u32) {
@@ -738,14 +756,14 @@ function topReusePlan(ir: ParserIR): ReusePlan | null {
 function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
   if ('share' in s && s.share !== undefined) return `self.sub_${s.share}()`;
   switch (s.t) {
-    case 'lit': return gtCompLit(ids, s) ? `self.match_comp(${lidOf(ids, s.value)})` : `self.match_lit(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
-    case 'tok': return `self.match_tok(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
+    case 'lit': return gtCompLit(ids, s) ? `self.match_comp(${lidOf(ids, s.value)})` : `self.match_lit(${lidOf(ids, s.value)})`;
+    case 'tok': return `self.match_tok(${kidOf(ids, s.name)})`;
     case 'rule': return `self.call_rule(Parser::parse_${s.name})`;
     case 'ruleBp': return `self.call_rule(|p| p.${s.name}_bp(${s.bp}))`;
     case 'star': return `self.star(|p| ${stepCondP(s.step, ids, ar)})`;
     case 'opt': return `self.opt(|p| ${s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ')})`;
-    case 'sep': return `self.sep_by(|p| ${stepCondP(s.elem, ids, ar)}, ${lidOf(ids, s.delim)})`;
-    case 'altlit': return `self.alt_lit(&[${s.opts.map((o) => `(${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)})`).join(', ')}])`;
+    case 'sep': return `self.sep_by(|p| ${stepCondP(s.elem, ids, ar)}, ${sepDelimLid(ids, s.delim)})`;
+    case 'altlit': return `self.alt_lit(&[${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}])`;
     case 'alt': return s.predictive
       ? `(|p: &mut Parser<'a, B>| -> bool { ${predAltBody(s.branches, ids, ar, s.firsts)} })(self)`
       : `(|p: &mut Parser<'a, B>| -> bool { ${altBody(s.branches, ids, ar, s.firsts)} })(self)`;
@@ -766,14 +784,14 @@ function stepCondP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
 // The step itself over `p`, printed in place (a shared step's method body; every other step's site).
 function stepBodyP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
   switch (s.t) {
-    case 'lit': return gtCompLit(ids, s) ? `p.match_comp(${lidOf(ids, s.value)})` : `p.match_lit(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
-    case 'tok': return `p.match_tok(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
+    case 'lit': return gtCompLit(ids, s) ? `p.match_comp(${lidOf(ids, s.value)})` : `p.match_lit(${lidOf(ids, s.value)})`;
+    case 'tok': return `p.match_tok(${kidOf(ids, s.name)})`;
     case 'rule': return `p.call_rule(Parser::parse_${s.name})`;
     case 'ruleBp': return `p.call_rule(|p| p.${s.name}_bp(${s.bp}))`;
     case 'star': return `p.star(|p| ${stepCondP(s.step, ids, ar)})`;
     case 'opt': return `p.opt(|p| ${s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ')})`;
-    case 'sep': return `p.sep_by(|p| ${stepCondP(s.elem, ids, ar)}, ${lidOf(ids, s.delim)})`;
-    case 'altlit': return `p.alt_lit(&[${s.opts.map((o) => `(${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)})`).join(', ')}])`;
+    case 'sep': return `p.sep_by(|p| ${stepCondP(s.elem, ids, ar)}, ${sepDelimLid(ids, s.delim)})`;
+    case 'altlit': return `p.alt_lit(&[${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}])`;
     case 'alt': return `(|p: &mut Parser<'a, B>| -> bool { ${stepStmtsP(s, ids, ar)} })(p)`;
     case 'look': return `${s.is ? '' : '!'}p.look_${s.id}()`;
     case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
@@ -796,7 +814,7 @@ function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: F
   const needPeek = branches.some((_, i) => isGuardable(fs[i] ?? null, nAlts));
   const peekInit = needPeek ? `let _ft = p.peek(); ` : '';
   const tries = branches.map((br, i) => {
-    const body = `{ let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); if ${br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'} { return true; } p.back(sp); p.scratch.truncate(sb); p.b.restore(ck); }`;
+    const body = branchRs(br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true');
     const f = fs[i] ?? null;
     if (!isGuardable(f, nAlts)) return body;
     return `if let Some(t) = _ft { if ${firstCond(f, 't', ids)} ${body} }`;
@@ -805,7 +823,7 @@ function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: F
 }
 // ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
 function lookFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  return ir.lookaheads.map((body, id) => `    fn look_${id}(&mut self) -> bool { let p = self; let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); let m = ${body.map((x) => stepCondP(x, ids, ar)).join(' && ')}; p.back(sp); p.scratch.truncate(sb); p.b.restore(ck); m }\n`).join('');
+  return ir.lookaheads.map((body, id) => `    fn look_${id}(&mut self) -> bool { let p = self; ${ckptRs('p')} let r = ${body.map((x) => stepCondP(x, ids, ar)).join(' && ')}; ${undoRs('p')} r }\n`).join('');
 }
 // ParserIR.shared, one method each: the step, run against the parser's scratch list and builder.
 // It undoes nothing: a failed step leaves what it advanced and appended for the construct around
@@ -820,7 +838,7 @@ function predAltBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts
   // FIRST dispatch; restore pos/scratch/builder on arm half-failure (like altBody).
   const arms = branches.map((br, i) => {
     const steps = br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true';
-    return `        ${i === 0 ? 'if' : 'else if'} ${firstCond(firsts![i], 't', ids)} { let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); if ${steps} { return true; } p.back(sp); p.scratch.truncate(sb); p.b.restore(ck); }`;
+    return `        ${i === 0 ? 'if' : 'else if'} ${firstCond(firsts![i], 't', ids)} ${branchRs(steps)}`;
   }).join('\n');
   return `let t = match p.peek() { Some(t) => t, None => return false };\n${arms}\n        false`;
 }
@@ -851,7 +869,7 @@ ${r.alts.map(arm).join('\n')}
   // The alternatives are reached through the rule's Dispatch (emit-portable.ts, RdRule.altDispatch).
   const alt = (i: number, keyed: boolean) => {
     const cond = r.alts[i]!.map((x) => stepCond(x, ids, ar)).join(' && ');
-    const body = `{ if ${cond} && ${beatsRs(r.altDispatch, 'self.pos', i)} { best = Some(self.finish(${rid}, sb, self.off_at(save), save)); best_pos = self.pos;${markRs(r.altDispatch, i)} ck = self.b.checkpoint(); } else { self.scratch.truncate(sb); self.b.restore(ck); } self.back(save); }`;
+    const body = candRs(r.altDispatch, i, cond, `best = Some(self.finish(${rid}, sb, self.off_at(save), save)); best_pos = self.pos;${markRs(r.altDispatch, i)} ck = self.b.checkpoint();`);
     const g = guardCond(r.altGuard[i]!, 't', keyed);
     return g.length && !keyed ? `        if let Some(t) = _ft { if ${g.join(' && ')} ${body} }` : ifRs(g, body);
   };
@@ -925,7 +943,7 @@ function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Aren
   return `${headFn}    fn parse_loop_seg(&mut self, sb: usize) -> Option<(Seg, EntryMeta)> {
         let sp = self.pos; let before = self.scratch.len(); let ck = self.b.checkpoint();
         self.look_reset();
-        if !self.match_tok(${kidOf(ids, plan.loopTok)}, ${ttIdOf(ar, plan.loopTok)}) {
+        if !self.match_tok(${kidOf(ids, plan.loopTok)}) {
             self.back(sp); self.scratch.truncate(before); self.b.restore(ck);
             return None;
         }
@@ -974,10 +992,10 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   // finished as the best so far and moves `ck` past it; `lost` drops what the arm built.
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
     `best_pos = self.pos;${markRs(r.nudDispatch, i)} bf = ${form}; bt = ${tail}; bc = ${capped}; ck = self.b.checkpoint();`;
-  const lost = `self.scratch.truncate(sb); self.b.restore(ck);`;
+  const lost = lostRs;
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    `{ if ${stepsCond(steps)} && ${beatsRs(r.nudDispatch, 'self.pos', i)} { best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won(i, '0', tail, capped)} } else { ${lost} } self.back(save); }`;
+    candRs(r.nudDispatch, i, stepsCond(steps), `best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won(i, '0', tail, capped)}`);
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
     switch (a.kind) {
@@ -2027,6 +2045,10 @@ impl<H> Default for Workspace<H> {
 /// Parser-side span+handle frame. Span fields are independent of H (Pratt never reads H for spans).
 #[derive(Clone, Copy)]
 struct Spanned<H: Copy> { h: H, off: u32, tok_start: u32, present: bool }
+/// Where a construct that may have to undo what it tries starts: the position, the scratch length
+/// and the builder's checkpoint. Parser::reset goes back to it.
+#[derive(Clone, Copy)]
+struct Mark { pos: usize, sb: usize, ck: (usize, usize) }
 
 #[derive(Default)]
 pub struct CstBuilder {
@@ -2318,6 +2340,11 @@ impl<'a, B: Builder> Parser<'a, B> {
     #[inline(always)]
     fn look_reset(&mut self) { self.max_look = 0; self.peek_end = 0; }
     #[inline(always)]
+    fn mark(&self) -> Mark { Mark { pos: self.pos, sb: self.scratch.len(), ck: self.b.checkpoint() } }
+    /// Undo everything since m: the position (as back), the scratch list and the builder.
+    #[inline(always)]
+    fn reset(&mut self, m: Mark) { self.back(m.pos); self.scratch.truncate(m.sb); self.b.restore(m.ck); }
+    #[inline(always)]
     #[allow(dead_code)]
     fn ahead(&mut self, k: usize, is: bool) -> bool { match self.peek() { Some(t) => in_token_set(k, &t) == is, None => !is } }
     #[inline(always)]
@@ -2357,9 +2384,9 @@ impl<'a, B: Builder> Parser<'a, B> {
         let h = self.head_leaf_text(left); words.iter().any(|w| *w == h)
     }
     #[inline(always)]
-    fn match_lit(&mut self, lid: u16, tt_id: u16) -> bool {
+    fn match_lit(&mut self, lid: u16) -> bool {
         match self.peek() {
-            Some(t) if t.lid == lid => { self.push_leaf(tt_id, self.pos as u32, t.off, t.end); self.pos += 1; true }
+            Some(t) if t.lid == lid => { self.push_leaf(if lid >= LID_KW { ${ttIdOf(ar, '$keyword')} } else { ${punctId} }, self.pos as u32, t.off, t.end); self.pos += 1; true }
             _ => false
         }
     }
@@ -2383,9 +2410,10 @@ impl<'a, B: Builder> Parser<'a, B> {
         r
     }
     #[inline(always)]
-    fn match_tok(&mut self, kid: u16, tt_id: u16) -> bool {
+    /// A token kind's leaf type id is its kid (ArenaIdPlan: TT_NAMES starts with the kids).
+    fn match_tok(&mut self, kid: u16) -> bool {
         match self.peek() {
-            Some(t) if t.kid == kid => { self.push_leaf(tt_id, self.pos as u32, t.off, t.end); self.pos += 1; true }
+            Some(t) if t.kid == kid => { self.push_leaf(kid, self.pos as u32, t.off, t.end); self.pos += 1; true }
             _ => false
         }
     }
@@ -2399,32 +2427,32 @@ impl<'a, B: Builder> Parser<'a, B> {
     #[inline(always)]
     fn star(&mut self, once: fn(&mut Parser<'a, B>) -> bool) -> bool {
         loop {
-            let sp = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
-            if !once(self) { self.back(sp); self.scratch.truncate(sb); self.b.restore(ck); break; }
+            let m = self.mark();
+            if !once(self) { self.reset(m); break; }
         }
         true
     }
     #[inline(always)]
     fn opt(&mut self, body: fn(&mut Parser<'a, B>) -> bool) -> bool {
-        let sp = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
-        if !body(self) { self.back(sp); self.scratch.truncate(sb); self.b.restore(ck); }
+        let m = self.mark();
+        if !body(self) { self.reset(m); }
         true
     }
     #[inline(always)]
     fn sep_by(&mut self, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
-        let sp0 = self.pos; let sb0 = self.scratch.len(); let ck0 = self.b.checkpoint();
-        if !elem(self) { self.back(sp0); self.scratch.truncate(sb0); self.b.restore(ck0); return true; }
+        let m0 = self.mark();
+        if !elem(self) { self.reset(m0); return true; }
         loop {
-            let sp = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
-            if !self.match_lit(delim, ${punctId}) { self.back(sp); self.scratch.truncate(sb); self.b.restore(ck); break; }
-            let sp2 = self.pos; let sb2 = self.scratch.len(); let ck2 = self.b.checkpoint();
-            if !elem(self) { self.back(sp2); self.scratch.truncate(sb2); self.b.restore(ck2); break; }
+            let m = self.mark();
+            if !self.match_lit(delim) { self.reset(m); break; }
+            let m2 = self.mark();
+            if !elem(self) { self.reset(m2); break; }
         }
         true
     }
     #[inline(always)]
-    fn alt_lit(&mut self, opts: &[(u16, u16)]) -> bool {
-        for (lid, tt) in opts { if self.match_lit(*lid, *tt) { return true; } }
+    fn alt_lit(&mut self, lids: &[u16]) -> bool {
+        for lid in lids { if self.match_lit(*lid) { return true; } }
         false
     }
 
