@@ -58,9 +58,11 @@ function slotsOfStep(s: Step, leaves: Record<string, TokenLeafPolicy>): Slot[] {
     case 'seq':
       return s.steps.flatMap((x) => slotsOfStep(x, leaves));
     case 'suppress':
+    case 'ctx':
       return s.steps.flatMap((x) => slotsOfStep(x, leaves));
     case 'look':
     case 'ahead':
+    case 'aheadCtx':
     case 'sameLine':
       return [{ k: 'zw' }];
   }
@@ -158,7 +160,6 @@ function resolveShape(
   spec: ShapeSpec,
 ): { shape: RuleShape; source: ShapeIRRule['source'] } {
   if (spec.rules[r.name]) return { shape: spec.rules[r.name]!, source: 'exact' };
-  if (spec.rules[r.cstName]) return { shape: spec.rules[r.cstName]!, source: 'cstName' };
   return { shape: { kind: 'keep' }, source: 'default' };
 }
 
@@ -499,7 +500,7 @@ export function validateShape(grammarModule: { default: CstGrammar }, spec: Shap
       if (spec.unmapped === 'error') {
         diags.push({
           level: 'error', rule: r.name, code: 'unmapped',
-          message: `rule '${r.name}' (cst=${r.cstName}) has no shape mapping and unmapped:'error'`,
+          message: `rule '${r.name}' has no shape mapping and unmapped:'error'`,
         });
       } else {
         diags.push({
@@ -510,14 +511,13 @@ export function validateShape(grammarModule: { default: CstGrammar }, spec: Shap
     }
     resolved.set(r.name, shape);
     checkRuleShape(r, shape, spec.leaves, diags, inlineRules);
-    rulesOut.push({ name: r.name, cstName: r.cstName, kind: r.kind, source, shape });
+    rulesOut.push({ name: r.name, kind: r.kind, source, shape });
   }
 
   const irNames = new Set(pir.rules.map((r) => r.name));
-  const cstNames = new Set(pir.rules.map((r) => r.cstName));
   for (const k of Object.keys(spec.rules)) {
-    if (!irNames.has(k) && !cstNames.has(k)) {
-      diags.push({ level: 'error', code: 'unknown-rule', message: `shape key '${k}' is not an IR rule name or cstName` });
+    if (!irNames.has(k)) {
+      diags.push({ level: 'error', code: 'unknown-rule', message: `shape key '${k}' is not an IR rule name` });
     }
   }
 

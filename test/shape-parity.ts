@@ -331,9 +331,11 @@ async function main(): Promise<void> {
   if (tsMod) {
     check(tsMod.shapeCoverage.unsupported.length === 0, 'typescript coverage unsupported=0');
     printCoverage('typescript', tsMod.shapeCoverage);
+    // Each Pratt slot of the grammar, rendered once (the portable IR has one rule per grammar
+    // rule; while it forked [Await]/[Yield] each count was four times this, one per family).
     const want: Record<string, number> = {
-      led: 124, nudSeq: 28, nudCapped: 16, postfix: 8, postfixTok: 12,
-      group: 220, prefix: 44, binary: 156, template: 8,
+      led: 31, nudSeq: 7, nudCapped: 4, postfix: 2, postfixTok: 3,
+      group: 55, prefix: 11, binary: 39, template: 2,
     };
     const got = tsMod.shapeCoverage.pratt;
     const prattOk = Object.keys(want).every((k) => got[k] === want[k]);
@@ -942,15 +944,15 @@ async function main(): Promise<void> {
         if (children.length === 1) return children;
         if (children.length === 0) return null;
         if (rule === 'Program') return { type: 'Program', body: children };
-        if (rule === 'Stmt' || rule === 'Stmt_A') return { type: 'ExpressionStatement', expression: children[0] };
-        if (rule === 'Expr' || rule === 'Expr_A') {
+        if (rule === 'Stmt') return { type: 'ExpressionStatement', expression: children[0] };
+        if (rule === 'Expr') {
           if (children.length === 2) return { type: 'BinaryExpression', left: children[0], right: children[1] };
           if (children.length === 3) return { type: 'BinaryExpression', left: children[0], operator: children[1], right: children[2] };
           return { type: 'Expression', children };
         }
-        if (rule === 'Decl' || rule === 'Decl_A') return { type: 'Declaration', children };
-        if (rule === 'Block' || rule === 'Block_A') return { type: 'BlockStatement', body: children };
-        return { type: rule.replace(/_A$/, ''), children };
+        if (rule === 'Decl') return { type: 'Declaration', children };
+        if (rule === 'Block') return { type: 'BlockStatement', body: children };
+        return { type: rule, children };
       },
     });
     const projectToDemo = (tree: unknown): unknown => {

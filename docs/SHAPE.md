@@ -30,7 +30,7 @@ type ShapeSpec = {
 | `spans` | Inject unified `off`/`end` source-range fields on node products (`required` always, `optional` as `off?`/`end?`, `none` omit). |
 | `unmapped` | `'default'` keeps unmapped rules as positional CST-shaped nodes; `'error'` demands full coverage (calc uses this). |
 | `leaves` | Token-class policies: `{ action: 'drop' \| 'keep' \| 'leafValue', fn? }`. `leafValue` coercions: `identity`, `number`, `bigint`, `string`, `boolean`, `ident` (or a custom name). |
-| `rules` | Map rule name → product shape. Exact IR names override inherited `cstName` mappings. |
+| `rules` | Map rule name → product shape. |
 
 Adjudications (spans, unmapped, heterogeneous alts, rule keying) live in
 `ADJUDICATIONS` in [`shape-schema.ts`](../src/shape-schema.ts).
