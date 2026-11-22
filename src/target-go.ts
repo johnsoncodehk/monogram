@@ -2920,7 +2920,7 @@ func parseWithW(src string, b Builder) (int32, bool) {
 // engine); other Builders (e.g. *SlimBuilder) use interface parserW.
 // ok=false is reject (distinct from a leaf handle, which may also be negative).
 func ParseWith(src string, b Builder) (h int32, ok bool) {
-\tif cb, is := b.(*CstBuilder); is {
+\tif cb, is := b.(*CstBuilder); is && false {
 \t\treturn parseWithCst(src, cb)
 \t}
 \treturn parseWithW(src, b)
