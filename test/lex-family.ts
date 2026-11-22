@@ -469,8 +469,9 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   const inC = (c: number, s: [number, number][]) => s.some(([a, b]) => c >= a && c <= b);
   // javascript, by its token patterns: [failRead, overRead, overTrigger empty?]
   const JS_TABLE: Record<string, [number, number, boolean]> = {
-    Shebang: [2, 1, true], JSDoc: [Infinity, Infinity, false], TripleSlash: [Infinity, 1, true], LineComment: [2, 1, true],
-    BlockComment: [Infinity, Infinity, false], Ident: [Infinity, Infinity, false], HexNumber: [Infinity, 2, false],
+    // (a lazy repeat is bounded as the regex runs it: a block comment reads nothing past its `*/`)
+    Shebang: [2, 1, true], JSDoc: [Infinity, 0, true], TripleSlash: [Infinity, 1, true], LineComment: [2, 1, true],
+    BlockComment: [Infinity, 0, true], Ident: [Infinity, Infinity, false], HexNumber: [Infinity, 2, false],
     OctalNumber: [Infinity, 2, false], BinaryNumber: [Infinity, 2, false], BigInt: [Infinity, 1, true], Number: [Infinity, Infinity, false],
     String: [Infinity, Infinity, true], Template: [Infinity, 0, true], Regex: [Infinity, Infinity, false], Decorator: [1, Infinity, false],
     PrivateField: [Infinity, Infinity, false],
@@ -559,6 +560,50 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
     }
   }
   console.log(`  every portable grammar: ${proved} scans unchanged by any text at or after their read bound (${unbounded} failed attempts no relex check needs: last in their arms)`);
+
+  // The same bounds proved on the regexes the interpreter's lexer runs (src/emit-lexer.ts records
+  // them while lexing): every token of every grammar, a failed attempt bounded by its
+  // `readEndWalk`, a match by the unit after its end, or, at an `overTrigger` unit, by the first
+  // unit after the end outside `examinedUnits`, + 1. Lazy repeats (block comments) included.
+  const { readEndWalk } = await import('../src/lex-match-plan.ts');
+  const { tokenPatternSource } = await import('../src/token-pattern.ts');
+  const walkEnd = (w: ReturnType<typeof readEndWalk>, s: string): number => {
+    let q = 0;
+    for (const it of w.lead) {
+      if ('lit' in it) { if (!s.startsWith(it.lit, q)) return q + it.lit.length; q += it.lit.length; }
+      else { if (q >= s.length || !inC(s.charCodeAt(q), it.cls)) return q + 1; q++; }
+    }
+    while (q < s.length && inC(s.charCodeAt(q), w.past)) q++;
+    return q + 1;
+  };
+  let rxProved = 0;
+  for (const n of ['javascript', 'typescript', 'javascriptreact', 'typescriptreact', 'html', 'yaml']) {
+    const g = (await import(`../${n}.ts`)).default as CstGrammar;
+    for (const d of g.tokens) {
+      if (d.template) continue;
+      const re = new RegExp(`(?:${tokenPatternSource(d)})`, 'y');
+      const run = (s: string): number => { re.lastIndex = 0; const m = re.exec(s); return m === null ? -1 : m[0].length; };
+      const w = readEndWalk(d.pattern), trig = overTrigger(d.pattern), ex = examinedUnits(d.pattern);
+      let bad = 0;
+      for (const base of tokenEdgeTexts(d)) {
+        for (const src of TAILS.map((tl) => base + tl)) {
+          const e = run(src);
+          let bound: number;
+          if (e < 0) bound = walkEnd(w, src);
+          else if (e < src.length && inC(src.charCodeAt(e), trig)) { let q = e; while (q < src.length && inC(src.charCodeAt(q), ex)) q++; bound = q + 1; }
+          else bound = e + 1;
+          for (let c = Math.max(0, bound); c <= src.length; c++) {
+            for (const rp of REPL) {
+              rxProved++;
+              const e2 = run(src.slice(0, c) + rp);
+              if (e2 !== e && bad++ < 3) fail(`${n}/${d.name} (regex): ${JSON.stringify(src)} matches to ${e}, and to ${e2} with ${JSON.stringify(rp)} from ${c} (its reads were bounded by ${bound})`);
+            }
+          }
+        }
+      }
+    }
+  }
+  console.log(`  every grammar's token regexes (the interpreter's lexer): ${rxProved} matches unchanged by any text at or after their read bound`);
 }
 
 if (failures > 0) {

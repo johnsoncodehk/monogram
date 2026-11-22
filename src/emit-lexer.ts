@@ -424,6 +424,11 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`// Min OLD-stream paren depth over the tokens inside the damage itself (set by the`);
     emit(`// caller before the window lex): the old-side trajectory min starts from here.`);
     emit(`let wndOldMin0 = 0x7fffffff;`);
+    emit(`// A token's place on the paren-depth trajectory: its recorded depth, except a '(' (which`);
+    emit(`// records the depth INCLUDING its own entry) stands at the depth before its push. An entry`);
+    emit(`// pushed after the divergence point is then never "at or below both minimums", so the fast`);
+    emit(`// resync tier compares only entries both lexes had (\`if (q)\` vs \`ifx (q)\` differ in theirs).`);
+    emit(`function lxPdBefore(k«: number», t«: number», pd«: number») { return k === K_PUNCT && t === ${tOf('(')} ? pd - 1 : pd; }`);
   }
   if (resync) {
     emit(`function buildAltSuffMin(lo«: number») {`);
@@ -787,11 +792,11 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`    //    (suffix min depth >= candidate depth, a pop-on-empty counted as -1): the`);
     emit(`    //    caller re-bases the adopted tkPd column by lexResyncPd.`);
     emit(`    if (wndPtr >= 0) {`);
-    emit(`      const pd = tkPd[tokN - 1];`);
-    emit(`      if (dmgMinNew < 0) { if (off >= wndCs«!») dmgMinNew = pd; }`);
-    emit(`      else if (pd < dmgMinNew) dmgMinNew = pd;`);
+    emit(`      const pd = tkPd[tokN - 1], pd0 = lxPdBefore(k, t, pd);`);
+    emit(`      if (dmgMinNew < 0) { if (off >= wndCs«!») dmgMinNew = pd0; }`);
+    emit(`      else if (pd0 < dmgMinNew) dmgMinNew = pd0;`);
     emit(`      if (off >= wndMinOff) {`);
-    emit(`        while (wndPtr < altN && (altOff«!»[wndPtr] < 0 ? altOff«!»[wndPtr] + srcLenP1 : altOff«!»[wndPtr]) + wndDelta < off) { if (altPd«!»[wndPtr] < dmgMinOld) dmgMinOld = altPd«!»[wndPtr]; wndPtr++; }`);
+    emit(`        while (wndPtr < altN && (altOff«!»[wndPtr] < 0 ? altOff«!»[wndPtr] + srcLenP1 : altOff«!»[wndPtr]) + wndDelta < off) { const q0 = lxPdBefore(altK«!»[wndPtr], altT«!»[wndPtr], altPd«!»[wndPtr]); if (q0 < dmgMinOld) dmgMinOld = q0; wndPtr++; }`);
     emit(`        if (wndPtr < altN && (altOff«!»[wndPtr] < 0 ? altOff«!»[wndPtr] + srcLenP1 : altOff«!»[wndPtr]) + wndDelta === off && altK«!»[wndPtr] === k && altT«!»[wndPtr] === t`);
     emit(`            && (altEnd«!»[wndPtr] < 0 ? altEnd«!»[wndPtr] + srcLenP1 : altEnd«!»[wndPtr]) + wndDelta === end`);
     emit(`            // the candidate's LEADING-TRIVIA flags must match too (parsers read them)`);
