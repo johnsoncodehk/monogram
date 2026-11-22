@@ -1274,6 +1274,43 @@ const jsLookaheadEdit = jsLookaheadInit.indexOf('\n') + 1; // first char of peek
 // around such bodies (test/context-cases.ts): one session per document, the tree ≡ a fresh parse
 // after every batch.
 const CTX_EDITS: EditScenario[] = CTX_DOCS.map((init) => ({ init, batches: ctxEdits(init).map((e): EditBatch => [[e.start, e.end, e.text]]), longSession: true }));
+// Documents for the exhaustive one-character edits (above the edit sessions): template holes, and
+// a `/` decided by what follows it.
+const HOLE_EDIT_GRAMMARS = new Set(['javascript', 'typescript']);
+const HOLE_EDIT_DOCS = [
+  'f(a, `x${b + c}`);',
+  'let q = 1;\nf(`x${(b)}y${c}`);',
+  'g(`a${`b${c}d`}e`, 1);',
+  'h(`${ {a: "}"}.a }${\'`\'}`);',
+  'k(`${a // c\n}`);',
+  // A `/` whose kind (regex or division) is decided by text after it: a regex attempt that
+  // fails falls back to division, so an edit later on can change it.
+  'let m = f() < / 2;',
+  'x = y / z / w;',
+  'if (f() < /re/.test(s)) g();',
+];
+// Edits whose relexed stream is known to differ from a fresh lex, each with its cause; the gate
+// fails when one passes.
+const HOLE_EDIT_EXPECTED_FAIL: { doc: string; edit: [number, number, string]; reason: string }[] = [
+  // `/ 2;` after `<` is a regex attempt that fails (no closing `/` on the line) and falls back to
+  // division; the `/` appended at the end makes `/ 2;/` a regex. The `/` token's kind was decided
+  // by text past its end, yet it stays in the kept prefix (the window restarts two tokens before
+  // the edit). Owed: a token decided by looking past its end, and the tokens inside that lookahead,
+  // record one level deeper, so they are no restart or resync anchor (the depth rule the element
+  // regions' signature rewind needs too). The Doc's re-scan after a failed parse hides it from
+  // the verdict and the tree today.
+  { doc: 'let m = f() < / 2;', edit: [18, 18, '/'], reason: 'a regex attempt that fell back to division is kept as a relex anchor' },
+];
+// Insert each of a few characters that open, close or end something at every offset, and delete
+// every character.
+function oneCharEdits(doc: string): [number, number, string][] {
+  const out: [number, number, string][] = [];
+  for (let at = 0; at <= doc.length; at++) {
+    for (const ch of ['x', ' ', '}', '{', '`', '$', '/']) out.push([at, at, ch]);
+    if (at < doc.length) out.push([at, at + 1, '']);
+  }
+  return out;
+}
 const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
   calc: [
     { init: '1+2*3', batches: [[[3, 3, '4']]] },
@@ -1846,6 +1883,36 @@ for (const c of CASES) {
       console.log(`  ${c.grammar}/${r.label}: REJECT mismatch on ${JSON.stringify(src)} (oracle ok=${want.ok}, ${r.label} ok=${got.ok})`);
     }
     console.log(`  ${c.grammar}/${r.label}: ${acc}/${c.accept.length} accept ≡ oracle · ${rej}/${c.reject.length} reject ≡ oracle${snap ? ` · ${snap} shape drift` : ''}`);
+
+    // Every one-character insertion and deletion at every offset of small documents with template
+    // holes (nested, holding strings, braces, templates, comments): the edited Doc ≡ a fresh parse
+    // of the edited text, on the verdict and the CST, and its own validation (stream and tree
+    // against a fresh lex and parse) holds. Exhaustive, not random: a random edit rarely lands
+    // inside a hole, where the relex window must not restart.
+    if (HOLE_EDIT_GRAMMARS.has(c.grammar)) {
+      const sessions = HOLE_EDIT_DOCS.flatMap((init) => oneCharEdits(init).map((e) => ({ init, e, final: init.slice(0, e[0]) + e[2] + init.slice(e[1]) })));
+      const fresh = r.batch(sessions.map((x) => x.final));
+      const bad: string[] = [];
+      let knownHit = 0;
+      sessions.forEach((x, i) => {
+        const a = r.edit(JSON.stringify({ init: x.init, batches: [[x.e]] }), false), b = fresh[i]!;
+        // The relexed stream itself (before the Doc parses it) ≡ a fresh lex: its alignment with
+        // the old stream is the oracle's. A Doc that re-scans when its parse fails would hide a
+        // wrong relex from the verdict and the tree, not from this.
+        let want: Align | null = null;
+        try { want = expectAlign(grammar, x.init, [[x.e]]); } catch { /* the edited text does not lex */ }
+        const why = a.ok !== b.ok ? `edited ${a.ok ? 'accepts' : 'rejects'}, fresh ${b.ok ? 'accepts' : 'rejects'}`
+          : a.ok && a.cst !== b.cst ? 'CSTs differ'
+          : a.align && (a.align.streamEq === false || a.align.treeEq === false) ? `validation streamEq=${a.align.streamEq} treeEq=${a.align.treeEq}`
+          : want && (!a.align || a.align.oldN !== want.oldN || a.align.newN !== want.newN || a.align.prefix !== want.prefix || a.align.suffix !== want.suffix) ? `relexed stream ≠ a fresh lex (align ${JSON.stringify(a.align)}, oracle ${JSON.stringify(want)})` : '';
+        const known = HOLE_EDIT_EXPECTED_FAIL.find((k) => k.doc === x.init && JSON.stringify(k.edit) === JSON.stringify(x.e));
+        if (known) { if (!why) bad.push(`expected-fail passes now, remove it (${known.reason}): ${JSON.stringify(x.init)} edit ${JSON.stringify(x.e)}`); else knownHit++; return; }
+        if (why) bad.push(`${why}: ${JSON.stringify(x.init)} edit ${JSON.stringify(x.e)}`);
+      });
+      console.log(`  ${c.grammar}/${r.label}: ${sessions.length - bad.length - knownHit}/${sessions.length} one-character edits in and around template holes and regex attempts ≡ fresh (${knownHit} expected-fail)`);
+      for (const smp of bad.slice(0, 6)) console.log(`      ${smp}`);
+      failures += bad.length;
+    }
 
     const editScenarios = EDIT_SCENARIOS[c.grammar];
     if (editScenarios) {
