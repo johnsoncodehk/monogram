@@ -586,6 +586,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`  // A type-parameter signature being decided (\`<T>(x: T) => T\`): the group is lexed as code;`);
     emit(`  // the token after its closer keeps it (one of the signature's \`then\`) or rewinds to an element.`);
     emit(`  let specTok = -1, specVerdict = 0, specClosedAt = -1, specParenBase = 0, specDocLex = 0, specPops = 0;`);
+    emit(`  let lxLookEnd = -1;              // a tagOpen read as a type-parameter head decided by the characters up to here`);
     emit(`  let specStack«: number[]» = [], specParens«: boolean[]» = [];`);
   }
   // ── push ──
@@ -605,7 +606,10 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     // the frame depth saturates (only a zero record is read: restart / resync points)
     // A token lexed while a signature is undecided (and the token deciding it) counts one level
     // deeper: its lexing depends on the `<` before it, so it is no restart or resync point.
-    if (el.typeParameters?.signature) emit(`    { const d = templateStack.length + (specTok >= 0 ? 1 : 0); tkDp[tokN] = d > 255 ? 255 : d; }`);
+    // ... and so does a token inside the characters a type-parameter head veto read (the
+    // `tagOpen` it decided included): an edit there can flip that decision.
+    const deeper = [el.typeParameters?.signature ? 'specTok >= 0' : '', el.typeParameters?.head ? 'off - srcBase«!» < lxLookEnd' : ''].filter(Boolean);
+    if (deeper.length) emit(`    { const d = templateStack.length + (${deeper.join(' || ')} ? 1 : 0); tkDp[tokN] = d > 255 ? 255 : d; }`);
     else emit(`    tkDp[tokN] = templateStack.length > 255 ? 255 : templateStack.length;`);
     if (el.typeParameters?.signature) {
       emit(`    if (specClosedAt >= 0 && tokN > specClosedAt) {`);
@@ -1655,7 +1659,7 @@ function emitElementHelpers(emit: (s?: string) => void, el: ElementRegion, c: El
   const L = el.tagOpen.length;
   const tp = el.typeParameters;
   emit(`  function lxOpensElement(p«: number») {`);
-  if (tp?.head) emit(`    LX_TP_HEAD.lastIndex = p + ${L}; if (LX_TP_HEAD.test(source)) return false;`);
+  if (tp?.head) emit(`    LX_TP_HEAD.lastIndex = p + ${L}; if (LX_TP_HEAD.test(source)) { lxLookEnd = LX_TP_HEAD.lastIndex; return false; }`);
   if (tp?.signature) {
     emit(`    LX_TP_SIG.lastIndex = p + ${L};`);
     emit(`    if (LX_TP_SIG.test(source)) {`);
