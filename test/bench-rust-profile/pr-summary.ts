@@ -38,7 +38,9 @@ for (const line of readFileSync(resultsFile, 'utf8').split('\n')) {
   if (p[0] === 'GOIR' || p[0] === 'TSBLK') {
     const [v, mode, ...rest] = p[1].split('.');
     const key = `${v}.${p[0] === 'GOIR' ? 'go-' + mode : mode}.${rest.join('.')}`;
-    const f = kv(line), n = p[0] === 'GOIR' ? f.ir : f.blocks, verdict = p[2];
+    // Go: every instruction of the parse, the map runtime's included (once the parse path reads no
+    // map, as on the typescript grammar since the Pratt tables became arrays, the count repeats exactly).
+    const f = kv(line), n = p[0] === 'GOIR' ? f.total : f.blocks, verdict = p[2];
     if (p[0] === 'GOIR') goMap[key] = f;
     if (/^\d+$/.test(n ?? '') && (verdict === 'ACCEPT' || verdict === 'REJECT')) { work[key] = +n!; workVerdict[key] = verdict; }
     else irFailed.push(`${p[0]} ${p[1]}`);
@@ -132,7 +134,9 @@ for (const f of tfiles) for (const c of cols.slice(2)) {
     need(`M2 ${c.head} ${f}`, m2);
     const d = Math.abs(pct(m!, m2!));
     if (Number.isFinite(d)) repeatMax = Math.max(repeatMax, d);
-    if (d > STILL) notRun.push(`${c.head} ${f}: M measured twice differs by ${fpct(d)} (${num(m)} / ${num(m2)}): the measure is not deterministic`);
+    const mc = c.key === 'go-reuse' ? goMap[`M.go-reuse.${f}`]?.mapcalls : undefined;
+    if (d > STILL) notRun.push(`${c.head} ${f}: M measured twice differs by ${fpct(d)} (${num(m)} / ${num(m2)}): the measure is not deterministic` +
+      (mc && mc !== '0' ? ` (the parse makes ${num(mc)} calls into the Go map runtime, whose hash seed is random per process: read no map on the parse path)` : ''));
     const k = c.key!.startsWith('go-') ? `${c.key}.${f}` : '';
     if (k && goMap[`M.${k}`]?.mapcalls !== goMap[`M2.${k}`]?.mapcalls) notRun.push(`${c.head} ${f}: map lookups of M measured twice differ (${goMap[`M.${k}`]?.mapcalls} / ${goMap[`M2.${k}`]?.mapcalls})`);
   }
@@ -186,8 +190,7 @@ if (singleTarget.length) {
 say();
 table(['input', ...cols.map((c) => c.head + ' Δ'), 'Go map calls (A → M)'], sideRows);
 say();
-say('Rust / Go: Callgrind instructions of one parse (Go: `ParseWith` into the `CstBuilder` of a first parse, reuse mode only: a first parse into a new builder varies between runs in the page allocator; built with `-tags faketime`, run with `GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1`, the Go runtime\'s own work inside the parse included EXCEPT map lookups: a map\'s hash seed is random per process, so a lookup\'s instructions vary between runs; their number does not, and is the last column (their instructions in this run below; the calling functions in the artifact, `targets/*.map-callers.txt`)). ' +
-  'TS / JS: V8 block executions of one `parse(src)` of the TS target and one `createParser().parse(src)` of the emitted JS parser (precise block coverage with counts): they see control flow, not the cost inside a block. ' +
+say('Rust / Go: Callgrind instructions of one parse (Go: `ParseWith` into the `CstBuilder` of a first parse, reuse mode only: a first parse into a new builder varies between runs in the page allocator; built with `-tags faketime`, run with `GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1`, the Go runtime\'s own work inside the parse included; the last column counts its calls into the Go map runtime, which must be 0: a map\'s hash seed is random per process, so a parse that reads a map does not repeat its count, and the job fails; the calling functions are in the artifact, `targets/*.map-callers.txt`). TS / JS: V8 block executions of one `parse(src)` of the TS target and one `createParser().parse(src)` of the emitted JS parser (precise block coverage with counts): they see control flow, not the cost inside a block. ' +
   (repeated ? `M was measured twice for Go, TS and JS: the largest difference was ${fpct(repeatMax)}.` : 'M was measured once (PROFILE_TARGETS_REPEAT=0).'));
 say();
 say('<details><summary>Go, TS and JS counts A / M</summary>');

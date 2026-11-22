@@ -32,13 +32,15 @@ performance claim in a pull request or in the README comes from one of these, ru
   toggled by a client request around the parse (`--toggle-collect=<function>` ends early: Callgrind
   tracks returns by the stack pointer, and the Go runtime switches stacks). What remains random is a
   Go map's hash seed: a lookup's instructions differ between runs (up to 0.5% of a parse of
-  `checker.ts`), their number does not. So the Go column counts the parse WITHOUT the calls into the
-  map runtime and lists the number of those calls beside it (`test/bench-targets/go-ir.ts`); once no
-  map is read on the parse path the two agree. Only reuse mode (a parse into the builder of a first
-  one) is measured: a first parse into a new builder varied by up to 0.14% between runs in the
-  page allocator's search (`runtime.(*pageAlloc).find`), with or without address randomization; a
-  fresh parse's allocations are pinned by `alloc-work`. The profile measures M twice and fails if
-  the two differ by more than 0.01%.
+  `checker.ts`), their number does not. The Go column counts every instruction of the parse, and
+  beside it the number of calls into the map runtime (`test/bench-targets/go-ir.ts`), which must be
+  0 for the count to repeat: the Pratt operator tables were the last maps on the typescript
+  grammar's parse path (PR #144), and a pull request that adds one fails the repeat check. Only
+  reuse mode (a parse into the builder of a first one) is measured: a first parse into a new
+  builder varied by up to 0.14% between runs in the page allocator's search
+  (`runtime.(*pageAlloc).find`), with or without address randomization; a fresh parse's
+  allocations are pinned by `alloc-work`. The profile measures M twice and fails if the two differ
+  by more than 0.01%.
 - **The fair comparison with oxc is reuse mode on both sides**: one kept `CstBuilder`
   (`parse_with`) against one `Allocator` `reset()` before each parse. Fresh mode (a new builder /
   allocator per parse) is reported beside it.
