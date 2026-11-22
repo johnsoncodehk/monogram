@@ -173,7 +173,8 @@ done
 
 echo "=== Go and TS targets: work per parse of the same inputs (Go: Callgrind instructions; TS target and emitted JS parser: V8 block executions)"
 # So that a change which improves one target only shows as a move in one column of the summary.
-# Go: test/bench-targets/go-main.go count (a parse into a reused CstBuilder), collection toggled
+# Go: test/bench-targets/go-main.go count (a parse into a reused CstBuilder: the direct engine) and
+# count-builder (into a reused SlimBuilder: the builder engine), collection toggled
 # around it by a client request; built with -tags faketime and run with GOGC=off GOMAXPROCS=1
 # GODEBUG=asyncpreemptoff=1 (go-main.go says why each is needed); the map runtime's instructions are
 # counted (test/bench-targets/go-ir.ts says why). TS / JS: test/bench-targets/blocks.ts (block
@@ -193,14 +194,19 @@ TVARIANTS="A M"; [ "${PROFILE_TARGETS_REPEAT:-1}" = 1 ] && TVARIANTS="A M M2"
 for f in $MAIN; do
   for v in $TVARIANTS; do
     t=${v%2} # M2 runs M's build
-    out=$OUT/targets/$v.go-reuse.$f.cg
-    if env GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1 "${CG[@]}" --callgrind-out-file="$out" "$W/targets-$t/go/count" count "$f" > "$out.stdout" 2> "$out.log" \
-      && gi=$(node "$REPO/test/bench-targets/go-ir.ts" "$out") \
-      && node "$REPO/test/bench-targets/go-ir.ts" "$out" --map-callers > "$out.map-callers.txt"; then
-      echo "GOIR $v.reuse.$f $(grep -aoE 'ACCEPT|REJECT' "$out.stdout" | head -1) $gi" | tee -a "$R"
-    else
-      echo "GOIR $v.reuse.$f FAILED" | tee -a "$R"; tail -5 "$out.log"
-    fi
+    # reuse: into a kept CstBuilder (the direct engine); builder: into a kept SlimBuilder (the
+    # builder engine parserW, through the Builder interface).
+    for gm in reuse builder; do
+      out=$OUT/targets/$v.go-$gm.$f.cg
+      cm=count; [ $gm = builder ] && cm=count-builder
+      if env GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1 "${CG[@]}" --callgrind-out-file="$out" "$W/targets-$t/go/count" $cm "$f" > "$out.stdout" 2> "$out.log" \
+        && gi=$(node "$REPO/test/bench-targets/go-ir.ts" "$out") \
+        && node "$REPO/test/bench-targets/go-ir.ts" "$out" --map-callers > "$out.map-callers.txt"; then
+        echo "GOIR $v.$gm.$f $(grep -aoE 'ACCEPT|REJECT' "$out.stdout" | head -1) $gi" | tee -a "$R"
+      else
+        echo "GOIR $v.$gm.$f FAILED" | tee -a "$R"; tail -5 "$out.log"
+      fi
+    done
     for tm in ts-parse js-fresh; do
       if r=$(node "$REPO/test/bench-targets/blocks.ts" "$W/targets-$t/${tm%%-*}.mts" "$tm" "$f" "$OUT/targets/$v.$tm.$f.json"); then
         echo "TSBLK $v.$tm.$f $r" | tee -a "$R"

@@ -466,6 +466,9 @@ export type ParserIR = {
   /** Identifier-like tokens (bare identifier + identifierPrefix tokens): an adjacent
    *  ID_Continue-only char run extends the previous token of one of these kinds. */
   identLike: string[];
+  /** Each identLike token's identifierPrefix ('' for the bare identifier): the text before the
+   *  IdentifierName an escape check reads. */
+  identPrefix: Record<string, string>;
 };
 
 // The target-agnostic parse plan for a grammar, the IR each portable Target (ts/go/rust) renders.
@@ -896,7 +899,8 @@ function buildIR(grammar: CstGrammar): ParserIR {
   ]);
   const entry = findEntryRule(grammar);
   const forms = formsOf(rules, lookaheads, shared.length, entry);
-  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse: reusePlanOf(rules, entry), suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike };
+  const identPrefix = Object.fromEntries(identLike.map((n) => [n, grammar.tokens.find((t) => t.name === n)?.identifierPrefix ?? '']));
+  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse: reusePlanOf(rules, entry), suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike, identPrefix };
 }
 
 // The step lists a rule runs: an rd rule's alternatives, a Pratt rule's NUD and LED arms.

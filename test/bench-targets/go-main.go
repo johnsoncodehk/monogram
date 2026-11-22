@@ -8,6 +8,9 @@ package main
 //
 // count: one parse under Callgrind (test/bench-rust-profile/run.sh), the second parse into the
 // builder of a first, collection toggled on and off around it by a client request (vg_amd64.s).
+// ParseWith of a *CstBuilder runs the direct engine (engine); count-builder measures the same way
+// a parse into a kept *SlimBuilder, which runs the builder engine (parserW) through the Builder
+// interface: the engine every custom builder and every DocWith edit uses.
 // Prints ACCEPT or REJECT. Deterministic only in the build and environment run.sh gives it:
 // `-tags faketime` (the runtime's clock stands still, so sysmon never preempts the parse: a
 // preemption runs the scheduler inside the measured region, as often as wall time allows) and
@@ -30,7 +33,7 @@ var sink any
 func toggleCollect() { vgRequest(&[6]uint64{0x43540002}) }
 
 //go:noinline
-func measured(src string, b *parser.CstBuilder) bool {
+func measured(src string, b parser.Builder) bool {
 	toggleCollect()
 	_, ok := parser.ParseWith(src, b)
 	toggleCollect()
@@ -53,10 +56,14 @@ func main() {
 	}
 	src := string(b)
 	kept := &parser.CstBuilder{}
-	if mode == "count" {
-		parser.ParseWith(src, kept)
-		verdict(measured(src, kept))
-		sink = kept
+	if mode == "count" || mode == "count-builder" {
+		var kb parser.Builder = kept
+		if mode == "count-builder" {
+			kb = &parser.SlimBuilder{}
+		}
+		parser.ParseWith(src, kb)
+		verdict(measured(src, kb))
+		sink = kb
 		return
 	}
 	once := func() bool {
