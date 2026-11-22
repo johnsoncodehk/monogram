@@ -158,6 +158,13 @@ func MeasureAllocs(src string, reuse bool) AllocOut {
 	if !reuse {
 		b = &CstBuilder{}
 	}
+	// One P while measuring. An allocation under 16 B without pointers goes to its P's current
+	// 16 B tiny block, and the heap profile records a block, not each allocation in it. With
+	// several Ps a parse preempted on one P can resume on another, whose block is filled to another
+	// offset, so whether one allocation opens a block varied between runs (go fresh _tsserver.js:
+	// 60 or 61 allocations, 5 runs in 40). With one P the parse's tiny allocations fill blocks in
+	// its own order from the empty block ReadMemStats leaves (it flushes every P's cache).
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	old := debug.SetGCPercent(-1)
 	defer debug.SetGCPercent(old)
 	before := profileBySite()
