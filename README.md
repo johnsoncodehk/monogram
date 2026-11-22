@@ -70,6 +70,8 @@ This matters because `tsc`'s *parser* is not the same thing as the language. It 
 | `for (var a, b of c)` | reject | accept | reject | Before `in` / `of` a declaration has one binding: `var ForBinding` and `ForDeclaration` (`LetOrConst ForBinding`) take a single one, where the C-style head takes a list (`for (var a, b;;)`). |
 | `for (async of x)` | reject | accept | reject | The for-of left side has `[lookahead ∉ { let, async of }]`, so `async of` can only begin an arrow, a C-style head (`for (async of => {};;)`); `for await (async of x)`, whose lookahead is `let` alone, *is* valid. |
 | `for (using x in y)` | reject | accept | reject | A `using` declaration has no for-in production: the for-in arm's ForDeclaration is `[~Using]`. `for (using in y)` *is* valid — there `using` is an identifier. |
+| `class C { async get x() {} }`, `class C { async static m() {} }` (JavaScript) | reject | accept | reject (acorn) | A class element has one `static`, before the rest (`static async m() {}`), and `async [no LineTerminator here]` begins a method or a generator method (AsyncMethod, AsyncGeneratorMethod), never an accessor. |
+| `class C { @d static {} }`, `class C { accessor m() {} }` (JavaScript) | reject | accept | | Under the decorators proposal a DecoratorList prefixes a method, a field or an `accessor` field, not a static block, and `accessor [no LineTerminator here] ClassElementName Initializer?` declares a field only. |
 
 `tsc` rejecting the first and accepting the others (its parser doesn't enforce those productions until the checker) is exactly why "match `tsc`" can't *be* the definition of correct — only the measurement oracle.
 

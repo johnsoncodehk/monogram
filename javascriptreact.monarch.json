@@ -610,11 +610,11 @@
               "token": "keyword",
               "switchTo": "@root"
             },
-            "accessor": {
+            "constructor": {
               "token": "keyword",
               "switchTo": "@root"
             },
-            "constructor": {
+            "accessor": {
               "token": "keyword",
               "switchTo": "@root"
             },
@@ -889,8 +889,8 @@
             "from": "keyword",
             "as": "keyword",
             "static": "keyword",
-            "accessor": "keyword",
             "constructor": "keyword",
+            "accessor": "keyword",
             "typeof": "operator",
             "void": "operator",
             "delete": "operator",

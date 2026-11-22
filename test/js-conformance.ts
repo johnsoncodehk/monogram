@@ -184,6 +184,35 @@ const forHeads: { accept: string[]; reject: string[]; tscDeparts: string[] } = {
   ],
 };
 
+// ── Class element words (15.7 ClassElement, MethodDefinition; decorators proposal) ──
+// `static`, `async`, `accessor`, `get` and `set` are the element's keyword only where the rest
+// of that production follows; elsewhere the word is the element's name. `static` and `get` /
+// `set` take a ClassElementName (or `static` a `*` / `{`) on any line, `async [no LineTerminator
+// here]` a name or `*`, `accessor [no LineTerminator here]` a name, and an element has one
+// `static`, after its decorators. A field is one name, so `get⏎x;` is no element.
+// `tscDeparts` names each case tsc's JS-mode parser decides the other way.
+const classElements: { accept: string[]; reject: string[]; tscDeparts: string[] } = {
+  accept: [
+    'class C { static static; }', 'class C { @d static; }', 'class C { static accessor; }', 'class C { accessor accessor; }',
+    'class C { static; accessor; async; get; set }', 'class C { static\nx }', 'class C { get\nx() {} }',
+    'class C { get\n*x() {} }', 'class C { async\nx() {} }', 'class C { async\n*x() {} }', 'class C { accessor\nx }',
+    'class C { accessor\n*x() {} }', 'class C { accessor\n@d y() {} }', 'class C { static\n{} }',
+    'class C { static async\n*x() {} }', 'class C { static async *x() {} }', 'class C { static get get() {} }',
+    'class C { @d static accessor x = 1 }', 'class C { @d\nstatic async *[k]() {} }',
+  ],
+  reject: [
+    'class C { static static x }', 'class C { accessor x() {} }', 'class C { accessor *x() {} }',
+    'class C { accessor static x }', 'class C { accessor get x() {} }', 'class C { async static x() {} }',
+    'class C { async get x() {} }', 'class C { async static {} }', 'class C { @d static {} }',
+    'class C { static static {} }', 'class C { static @d x }', 'class C { get\nx; }', 'class C { set\nx = 1 }',
+  ],
+  tscDeparts: [
+    'class C { accessor x() {} }', 'class C { accessor *x() {} }', 'class C { accessor static x }',
+    'class C { accessor get x() {} }', 'class C { async static x() {} }', 'class C { async get x() {} }',
+    'class C { async static {} }', 'class C { @d static {} }', 'class C { static static {} }',
+  ],
+};
+
 // ── Corpus 2: TS-only syntax that has NO production here — must all reject ──
 // (TS's .js parser leniently accepts most of these; we are correctly stricter.)
 const tsOnly: [string, string][] = [
@@ -252,6 +281,18 @@ for (const [want, codes] of [[true, forHeads.accept], [false, forHeads.reject]] 
 console.log('\n── for heads ──');
 console.log(`  ${forHeads.accept.length + forHeads.reject.length - f_fail.length}/${forHeads.accept.length + forHeads.reject.length} as the productions (${forHeads.tscDeparts.length} where tsc departs)`);
 for (const c of f_fail) console.log('    - ' + c);
-// Corpora 1, 2, the statement ends and the for heads are hard gates.
-const gateFailed = v_fail.length + r_leak.length + s_fail.length + f_fail.length > 0;
+
+const c_fail: string[] = [];
+for (const [want, codes] of [[true, classElements.accept], [false, classElements.reject]] as const) {
+  for (const code of codes) {
+    const tscWant = classElements.tscDeparts.includes(code) ? !want : want;
+    if (jsAccepts(code) !== tscWant) c_fail.push(`tsc JS-mode ${tscWant ? 'rejects' : 'accepts'} ${JSON.stringify(code)}: fix the case or tscDeparts`);
+    if (weAccept(code) !== want) c_fail.push(`we ${want ? 'reject' : 'accept'} ${JSON.stringify(code)}`);
+  }
+}
+console.log('\n── class element words ──');
+console.log(`  ${classElements.accept.length + classElements.reject.length - c_fail.length}/${classElements.accept.length + classElements.reject.length} as the productions (${classElements.tscDeparts.length} where tsc departs)`);
+for (const c of c_fail) console.log('    - ' + c);
+// Corpora 1, 2, the statement ends, the for heads and the class element words are hard gates.
+const gateFailed = v_fail.length + r_leak.length + s_fail.length + f_fail.length + c_fail.length > 0;
 if (gateFailed) process.exit(1);

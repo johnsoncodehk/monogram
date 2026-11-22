@@ -84,6 +84,27 @@ const FOR_HEADS = {
     'async function f() { for await (let.x of y); }', 'async function f() { for await (let of y); }',
   ],
 };
+// An IdentifierReference is no reserved word: a reserved word with no expression form of its own
+// is no expression, in both grammars (`notReservedExpr`).
+const RESERVED_EXPRS = {
+  accept: ['a in b;', 'a instanceof B;', 'x = function () {};', 'export default x;', 'f(this, null, true);'],
+  reject: [
+    'in;', 'x\nin;', 'instanceof;', 'x = default;', 'f(export);', 'extends;', 'a\nextends;', 'x = function;',
+    'x = const;', 'f(if);', 'x = a ? in : b;',
+  ],
+};
+// `export` takes a declaration (16.2.3), never another statement, in both grammars
+// (`exportDeclaration`); TypeScript's also takes `using`, as tsc's parser does.
+const EXPORT_DECLS = {
+  accept: [
+    'export var a = 1;', 'export let a\nx;', 'export const a = 1, b = 2;', 'export function f() {}', 'export async function f() {}',
+    'export class C {}', 'export { a }', 'export { a }\nx;', 'export { a as b, c }', 'export { a } from "m"',
+  ],
+  reject: [
+    'export if (x) {}', 'export ;', 'export x;', 'export x = 1;', 'export (x);', 'export { a } b', 'export { a }\n.b;',
+    'export return;', 'export async\nfunction f() {}', 'export {} {}', 'export while (x) {}',
+  ],
+};
 const CASES: Case[] = [
   {
     grammar: 'calc', path: './fixtures/calc.ts',
@@ -343,7 +364,7 @@ const CASES: Case[] = [
       'for (a in b) { d = c in e; }',
       'new a.b();', '((((x))));',
       'for (a = x + y in b) c;',
-      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept,
+      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...EXPORT_DECLS.accept,
       ...CTX_CASES.javascript.accept,
       // An assignment / update operand needs only a LeftHandSideExpression's shape; target validity is a consumer's.
       '-x++;', '(a) = 1;', 'a = b = c;', '1 = 2;', '1++;', '++1;', 'f() = 1;', 'f()++;', '++f();', 'this = 1;',
@@ -425,7 +446,7 @@ const CASES: Case[] = [
       'x\n++;', 'x\n--', '(x\n++);', 'a = [x\n++];', 'x\n++\n-y;', 'x\n++\ny++;', 'x\n++ ++y;', 'class C { p = x\n++ }', 'class C { p = x\n++\ny }',
       'for (a = (x in b)) c;',
       'for (a = b ? x in c : y in d) e;',
-      ...NO_IN_HEADS.reject, ...FOR_HEADS.reject,
+      ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject,
       ...CTX_CASES.javascript.reject,
       // An assignment / update operand (prefix ++/-- included) without a LeftHandSideExpression's shape has no parse.
       'a + b = c;', 'a++ = 1;', '-a = 1;', '++ -x;', '++x++;', '++ ++x;',
@@ -442,14 +463,16 @@ const CASES: Case[] = [
       'x = function this() {}', 'import "m" x', 'export * from "m" x', 'export default a b', 'export var a = 1 b',
       'class C { a b }', 'class C { m() n() {} }', 'class C { get g() set s(v) {} }', 'class C { m(); }',
       // an update expression is no callee: `a++(x)` is `a++` and `(x)` with nothing between them
-      'a++(x);'],
+      'a++(x);',
+      // an `export`ed declaration is not a `using` one (explicit resource management; tsc's parser takes it)
+      'export using x = y;'],
   },
   {
     // The real typescript.ts grammar — the second, most complex full language proving the
     // agnostic emitter (types, generics, interfaces, enums, assertions, variance). ASCII.
     grammar: 'typescript', path: '../typescript.ts',
     accept: [
-      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
+      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...EXPORT_DECLS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
       ...CTX_CASES.typescript.accept,
       // A class heritage is a LeftHandSideExpression (see the JavaScript cases).
       'f(class extends (a, b) {});', 'f(class extends a[0] {});', 'f(class extends a`t` {});', 'f(class extends a?.b() {});',
@@ -620,14 +643,19 @@ const CASES: Case[] = [
       // declaration words stay contextual.
       '{}\n(x)', 'function f() {}\n(x)', 'class C {}\n[0]', '@dec class C {}\n(x)', 'async\nfunction f() {}\n(x)',
       'if (a) {}\n(x)', '({}).x;', '({ b(); }).x;', '(@dec class {}).x;', 'x = () => ({}).y;', 'let = 1;',
-      'type = 1;', 'namespace.x;', 'declare(x);', 'abstract(x);',
+      'type = 1;', 'namespace.x;', 'declare(x);', 'abstract(x);', 'export using x = y;', 'export await using x = y;',
+      // a `T?` is the postfix nullable only where no type starts after the `?` (tsc's isStartOfType)
+      'let x: T?;', 'let x = y as T ? z : w;', 'type A = X extends Y ? T? : Z;', 'type A = [T?];', 'f(a as T?, b);',
+      'let x: T?\nconst a = 1;', 'let x = y as T? -0x1 : U;', 'function f(): T?\nreturn {}', 'type A = { a: T?\nif : U };',
+      'let x = y as T?\n(-z);', 'let x = y as T ? (-1) : 2;',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
-    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...CTX_CASES.typescript.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
+    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '{ b(); }.x;', '{ static x }.y;', '{ static x }', '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;',
       'let[0] = 1;', '(async\nfunction f() {});',
       'import defer * from "m";', 'import defer * as from "m";',
+      'let x: T? !;', 'let x = y as T? -0x1;', 'function f(): T?\n... {}', 'type A = { a: T?\n() };', 'let x: T? string;', 'let x: T?\nin;',
       'a + b = 1;', 'a < b = 1;', 'a in b = 1;', 'a as T = 1;', '-x = 1;', 'x++ = 1;', '++x++;', '++-x;', '++ ++x;', '-x ** 2;', 'typeof x ** 2;', 'm > B<C> >>= 1;',
       'x\n++\n++\ny;', 'x\n++\n++y;', 'x\n--\n--\ny;', 'x\n++\n--\ny;', 'var z =\nx\n++\n++\ny;',
       'function f() { return x\n++\n++\ny; }', 'f()\n++\n++\ny;', 'a[0]\n--\n--y;', '{ x\n++\n++\ny }',
