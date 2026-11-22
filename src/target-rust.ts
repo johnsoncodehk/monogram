@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, dispatchWalk, gtCompLit, type StepLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type StepLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -843,14 +843,6 @@ fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) 
 }`;
 }
 
-// Top-level step: uses `self`; children accumulate on `self.scratch`.
-// Shape A's one top-level entry: the first of its rules that matches.
-function topOneBody(plan: ReusePlanA): string {
-  if (plan.rules.length === 1) return `        return self.parse_${plan.rules[0]}();`;
-  return `${plan.rules.map((n) => `        { let sp = self.pos; if let Some(n) = self.parse_${n}() { return Some(n); } self.back(sp); }`).join('\n')}\n        None`;
-}
-
-
 // The step walk's Rust spelling (emit-portable.ts, StepLowering), over the receiver `recv`: `self`
 // at a rule's top level (children accumulate on `self.scratch`), `p` inside a closure or a method
 // that took `let p = self`; `r`: in recognize form (ParserIR.forms), advancing and building
@@ -971,11 +963,16 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
   });
 }
 
-/** Entry rule that records per-top-kid lookahead ext via parse_top_one (shape A). */
-function rdEntryWithReuseA(r: RdRule, plan: ReusePlanA, ar: ArenaIdPlan): string {
+/** The entry rule with reuse recording (emit-portable entryShell): per-top-kid lookahead ext via
+ *  parse_top_one (shape A), or a Seg / EntryMeta per segment (shape B). */
+function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
-  return `    fn parse_top_one(&mut self) -> Option<Spanned<B::H>> {
-${topOneBody(plan)}
+  return entryShell(plan, ids, {
+    topCall: (n) => `        return self.parse_${n}();`,
+    topTry: (n) => `        { let sp = self.pos; if let Some(n) = self.parse_${n}() { return Some(n); } self.back(sp); }`,
+    topFail: '        None',
+    entryA: (topOne) => `    fn parse_top_one(&mut self) -> Option<Spanned<B::H>> {
+${topOne}
     }
     #[inline(always)]
     fn push_entry_from_h(&mut self, h: B::H) {
@@ -1001,16 +998,11 @@ ${topOneBody(plan)}
             }
         }
         Some(self.finish(${rid}, sb, self.off_at(save), save))
-    }`;
-}
-
-function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  const rid = ruleIdOf(ar, r.name);
-  const headFn = plan.hasHead && plan.headRule
-    ? `    fn parse_head_seg(&mut self, sb: usize) -> Option<(Seg, EntryMeta)> {
+    }`,
+    headSeg: (rule) => `    fn parse_head_seg(&mut self, sb: usize) -> Option<(Seg, EntryMeta)> {
         self.look_reset();
         let before = self.scratch.len();
-        self.opt(|p| p.call_rule(Parser::parse_${plan.headRule}));
+        self.opt(|p| p.call_rule(Parser::parse_${rule}));
         if self.scratch.len() == before { return None; }
         let n = self.scratch[before];
         let (tok_start, tok_end) = self.b.tok_range(n);
@@ -1022,20 +1014,17 @@ function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Aren
         let meta = EntryMeta { tok_start: tok_start as u32, tok_end: tok_end as u32, ext: ext as u32, off, end, kid_start, kid_count: 1 };
         Some((Seg { kid_start: before - sb, kid_count: 1, tok_start: tok_start as usize, tok_end: tok_end as usize, ext: ext as usize }, meta))
     }
-`
-    : '';
-  const headBlock = plan.hasHead && plan.headRule
-    ? `        if let Some((h, m)) = self.parse_head_seg(sb) { local.push(h); local_e.push(m); }
-`
-    : '';
-  return `${headFn}    fn parse_loop_seg(&mut self, sb: usize) -> Option<(Seg, EntryMeta)> {
+`,
+    headUse: `        if let Some((h, m)) = self.parse_head_seg(sb) { local.push(h); local_e.push(m); }
+`,
+    loopSeg: (kid, rule) => `    fn parse_loop_seg(&mut self, sb: usize) -> Option<(Seg, EntryMeta)> {
         let sp = self.pos; let before = self.scratch.len(); let ck = self.b.checkpoint();
         self.look_reset();
-        if !self.match_tok(${kidOf(ids, plan.loopTok)}) {
+        if !self.match_tok(${kid}) {
             self.back(sp); self.scratch.truncate(before); self.b.restore(ck);
             return None;
         }
-        self.opt(|p| p.call_rule(Parser::parse_${plan.loopRule}));
+        self.opt(|p| p.call_rule(Parser::parse_${rule}));
         let leaf = self.scratch[before];
         let (tok_start, mut tok_end) = self.b.tok_range(leaf);
         let count = self.scratch.len() - before;
@@ -1049,12 +1038,13 @@ function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Aren
         let meta = EntryMeta { tok_start: tok_start as u32, tok_end: tok_end as u32, ext: ext as u32, off, end, kid_start, kid_count: count as u32 };
         // Engine-side EntryMeta is the reuse decision source; Seg kept as validate oracle (+ SEGK mirror).
         Some((Seg { kid_start: before - sb, kid_count: count, tok_start: tok_start as usize, tok_end: tok_end as usize, ext: ext as usize }, meta))
-    }
+    }`,
+    entryB: (headSeg, headUse, loopSeg) => `${headSeg}${loopSeg}
     fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
         let save = self.pos; let sb = self.scratch.len();
         let mut local = std::mem::take(&mut self.segs); local.clear();
         let mut local_e = std::mem::take(&mut self.entries); local_e.clear();
-${headBlock}        loop {
+${headUse}        loop {
             match self.parse_loop_seg(sb) {
                 Some((seg, meta)) => { local.push(seg); local_e.push(meta); }
                 None => break,
@@ -1063,13 +1053,9 @@ ${headBlock}        loop {
         self.segs = local;
         self.entries = local_e;
         Some(self.finish(${rid}, sb, self.off_at(save), save))
-    }`;
+    }`,
+  });
 }
-
-function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  return plan.kind === 'A' ? rdEntryWithReuseA(r, plan, ar) : rdEntryWithReuseB(r, plan, ids, ar);
-}
-
 function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
   const d = r.nudDispatch;
