@@ -375,10 +375,6 @@ export type ParserIR = {
   tokenSets: TokenSet[];       // the sets `ahead` steps test, indexed by Step.set
   ctxWords: string[];          // the operator word each context bit reserves in an `aheadCtx` test (ctxWords[i] for bit 1 << i); empty when no step tests one
   lookaheads: Alt[];           // the bodies `look` steps run, indexed by Step.id; a body names only lower ids
-  /** Parallel to `lookaheads`: the tokenSets id of the tokens a match of the body can begin with
-   *  (the body is not nullable: on any other token, or at the end, it does not match), or null
-   *  when its first step does not tell. See "A lookahead's first token" in buildIR. */
-  lookFirst: (number | null)[];
   shared: Step[];              // the steps printed once and called from each site, indexed by Step.share (see shareSteps)
   forms: Forms;                // which rules and shared steps are printed in building and in recognize form (see Forms)
   suppressSets: string[][];    // the connector sets `suppress` steps disable, indexed by Step.set; [0] is the empty set
@@ -676,51 +672,6 @@ function buildIR(grammar: CstGrammar): ParserIR {
     }
   }
   lookaheads.forEach(annotateSteps);
-  // A lookahead's first token. A body that cannot match the empty input consumes a token at the
-  // position, and only one its FIRST set holds: on any other token (or at the end) it does not
-  // match. `stepsFirst` is that set as keys (literal texts and token kinds), from the Steps: a
-  // zero-width test (`ahead`, `look`, `sameLine`) is passed over (its set is then a superset of the
-  // tokens that can match, which is all a refusal needs), a nullable step adds its FIRST and goes
-  // on, a rule reference takes the grammar's FIRST and nullability (grammar-analysis.ts, the sets
-  // the longest-match guards use). null: the body is nullable, or a FIRST is not knowable (a Pratt
-  // rule with a prefix operator). A target may test the set before running the body: the body's
-  // first consuming step reads that same token, so the test changes neither the result nor the
-  // lookahead's extent.
-  const stepsFirst = (steps: Step[], acc: Set<string>): boolean | null => {   // true: nullable
-    for (const s of steps) {
-      const n = stepFirst(s, acc);
-      if (n !== true) return n;
-    }
-    return true;
-  };
-  const stepFirst = (s: Step, acc: Set<string>): boolean | null => {
-    switch (s.t) {
-      case 'lit': acc.add(gtComps.includes(s.value) ? '>' : s.value); return false;   // a composed operator begins at a '>' token
-      case 'tok': acc.add(s.name); return false;
-      case 'altlit': for (const o of s.opts) acc.add(o.value); return false;
-      case 'rule': case 'ruleBp': {
-        const ref: RuleExpr = { type: 'ref', name: s.name };
-        const f = a.exprFirst(ref);
-        if (f === null) return null;
-        for (const k of f) acc.add(gtComps.includes(k) ? '>' : k);
-        return a.exprNullable(ref);
-      }
-      case 'star': return stepFirst(s.step, acc) === null ? null : true;
-      case 'opt': return stepsFirst(s.steps, acc) === null ? null : true;
-      case 'sep': return stepFirst(s.elem, acc) === null ? null : true;   // sep_by matches zero elements too
-      case 'alt': {
-        let nullable = false;
-        for (const b of s.branches) { const n = stepsFirst(b, acc); if (n === null) return null; nullable ||= n; }
-        return nullable;
-      }
-      case 'seq': case 'suppress': case 'ctx': return stepsFirst(s.steps, acc);
-      case 'look': case 'ahead': case 'aheadCtx': case 'sameLine': return true;
-    }
-  };
-  const lookFirst = lookaheads.map((body) => {
-    const keys = new Set<string>();
-    return stepsFirst(body, keys) === false ? tokenSetOf(keySet(keys)) : null;
-  });
 
   // Regex-vs-division context (only if the grammar declares a regex token + config).
   let regexCtx: RegexCtx | null = null;
@@ -774,7 +725,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
   ]);
   const entry = findEntryRule(grammar);
   const forms = formsOf(rules, lookaheads, shared.length, entry);
-  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, lookFirst, shared, forms, suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike };
+  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike };
 }
 
 // The step lists a rule runs: an rd rule's alternatives, a Pratt rule's NUD and LED arms.
