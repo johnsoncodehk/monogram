@@ -4,8 +4,8 @@
 // index LEDs), and a CST→JSON printer over stdin. It is the reference rendering — its CST
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
-import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, stepExpr, stepStmts, ruleShell, dispatchWalk, gtCompLit, type StepLowering, type RuleLowering, type DispatchLowering } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, stepExpr, stepStmts, ruleShell, dispatchWalk, gtCompLit, type StepLowering, type RuleLowering, type DispatchLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -14,6 +14,7 @@ import type {
 import { validateShapeOrThrow } from './shape-validate.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, type BinOp, type Lowering, type R, type Ty } from './algo-ir.ts';
+import { UNI_ID_CONTINUE, UNI_ID_START } from './uni-ident.ts';
 import { type TextUnits, unitLen } from './text-units.ts';
 
 export type { ShapeSpec, ShapeIR } from './shape-schema.ts';
@@ -168,14 +169,13 @@ ${indent}}`;
 }
 
 // Newline mode: every line break outside flow delimiters is a NEWLINE token spanning the break.
-function newlineParts(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state: string; stateFrom: string; ws: string; hooks: string } {
-  const flowSets = `  const _flowOpen = new Set([${nl.flowOpen.map(J).join(', ')}]);
-  const _flowClose = new Set([${nl.flowClose.map(J).join(', ')}]);
-`;
+function newlineParts(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state: string; stateFrom: string; table: string; ws: string; hooks: string } {
   return {
     state: `  let flowDepth = 0;
-${flowSets}`,
-    stateFrom: flowSets,
+`,
+    stateFrom: '',
+    table: `const _FLOW_D: number[] = [${lidDeltaTable(ids, nl.flowOpen, nl.flowClose).join(', ')}];
+`,
     ws: `    if (c === 32 || c === 9 || c === 11 || c === 12 || c === 160 || c === 5760 || (c >= 8192 && c <= 8202) || c === 8239 || c === 8287 || c === 12288 || c === 65279) {
       pos++;
       for (let d = src.charCodeAt(pos); d === 32 || d === 9 || d === 11 || d === 12 || d === 160 || d === 5760 || (d >= 8192 && d <= 8202) || d === 8239 || d === 8287 || d === 12288 || d === 65279; d = src.charCodeAt(pos)) pos++;
@@ -189,8 +189,7 @@ ${flowSets}`,
       continue;
     }
 `,
-    hooks: `    if (kid === 0 && _flowOpen.has(_LIDS[lid]!)) flowDepth++;
-    else if (kid === 0 && _flowClose.has(_LIDS[lid]!)) flowDepth = Math.max(0, flowDepth - 1);
+    hooks: `    if (kid === 0) { const d = _FLOW_D[lid]!; if (d !== 0) flowDepth = Math.max(0, flowDepth + d); }
 `,
   };
 }
@@ -328,7 +327,7 @@ ${emitHooks}
   const identNameTs = ir.identToken;
   const identKidTs = identNameTs ? kidOf(ids, identNameTs) : 0;
   const lxExtConst = ir.identLike.length
-    ? `const LX_UNI_CONT = /[$\\u200c\\u200d\\p{ID_Continue}]+/uy;
+    ? `const LX_UNI_CONT = /${UNI_ID_CONTINUE}+/uy;
 function lx_ext(src: string, e: number): number {
   if (e >= src.length || src.charCodeAt(e) < 0x80) return e;
   LX_UNI_CONT.lastIndex = e;
@@ -337,8 +336,8 @@ function lx_ext(src: string, e: number): number {
 }
 `
     : '';
-  const lxUniIdentConst = (shared.scannedTokens(ir).some((t) => t.skip) ? TS_HAS_LINE_TERM : '') + (identNameTs
-    ? 'const LX_UNI_IDENT = /[$_\\p{ID_Start}][$\\u200c\\u200d\\p{ID_Continue}]*/uy;\n'
+  const lxUniIdentConst = (nl ? newlineParts(nl, 'emit', ids).table : '') + (shared.scannedTokens(ir).some((t) => t.skip) ? TS_HAS_LINE_TERM : '') + (identNameTs
+    ? `const LX_UNI_IDENT = /${UNI_ID_START}${UNI_ID_CONTINUE}*/uy;\n`
     : '') + lxExtConst;
   const uniIdentPushTs = stateful ? 'emit' : 'push';
   const uniIdentFallbackTs = identNameTs
@@ -528,48 +527,6 @@ function lookFns(ir: ParserIR, ids: LexIdPlan): string {
 function sharedFns(ir: ParserIR, ids: LexIdPlan, m: Mode): string {
   const has = m === 'r' ? ir.forms.recognizeShared : ir.forms.buildShared;
   return ir.shared.map((s, id) => (has[id] ? `function sub${id}${SUFFIX[m]}(): boolean { ${stepStmts(s, tsSteps(ids, m))} }\n` : '')).join('');
-}
-
-/** Shape A: star(rule|alt(rule…)). Shape B: [opt(rule)]? star(seq(tok, opt(rule))). */
-type ReusePlanA = { kind: 'A'; rules: string[] };
-type ReusePlanB = { kind: 'B'; hasHead: boolean; headRule: string | null; loopTok: string; loopRule: string };
-type ReusePlan = ReusePlanA | ReusePlanB;
-
-function matchLoopSeq(step: Step): { loopTok: string; loopRule: string } | null {
-  if (step.t !== 'seq' || step.steps.length !== 2) return null;
-  const [a, b] = step.steps;
-  if (a.t !== 'tok') return null;
-  if (b.t !== 'opt' || b.steps.length !== 1 || b.steps[0].t !== 'rule') return null;
-  return { loopTok: a.name, loopRule: (b.steps[0] as { t: 'rule'; name: string }).name };
-}
-
-function topReusePlan(ir: ParserIR): ReusePlan | null {
-  const entry = ir.rules.find((r) => r.name === ir.entry);
-  if (!entry || entry.kind !== 'rd' || entry.alts.length !== 1) return null;
-  const alt = entry.alts[0];
-  // Shape A (unchanged): sole step star(rule) or star(alt(rule…))
-  if (alt.length === 1 && alt[0].t === 'star') {
-    const step = alt[0].step;
-    if (step.t === 'rule') return { kind: 'A', rules: [step.name] };
-    if (step.t === 'alt') {
-      for (const br of step.branches) {
-        if (br.length !== 1 || br[0].t !== 'rule') return null;
-      }
-      return { kind: 'A', rules: step.branches.map((br) => (br[0] as { t: 'rule'; name: string }).name) };
-    }
-    const loop = matchLoopSeq(step);
-    if (loop) return { kind: 'B', hasHead: false, headRule: null, ...loop };
-    return null;
-  }
-  // Shape B with optional head: [opt(rule R), star(seq(tok T, opt(rule R2)))]
-  if (alt.length === 2 && alt[0].t === 'opt' && alt[1].t === 'star') {
-    const hs = alt[0].steps;
-    if (hs.length !== 1 || hs[0].t !== 'rule') return null;
-    const loop = matchLoopSeq(alt[1].step);
-    if (!loop) return null;
-    return { kind: 'B', hasHead: true, headRule: hs[0].name, ...loop };
-  }
-  return null;
 }
 
 // A rule in recognize form (ParserIR.forms): whether it matches here, advancing past it. An rd
@@ -868,7 +825,7 @@ ${dispatchTs(r.nudDispatch, 't', ids, nudArm)}
  *  recognize form, and every rule in the forms its call sites need (ParserIR.forms). parse() runs
  *  it with cstBuilder, parseWith() with the caller's builder. */
 function engineRuntime(ir: ParserIR, ids: LexIdPlan): string {
-  const reuse = topReusePlan(ir);
+  const reuse = ir.reuse;
   const ruleFns = [...ir.rules.filter((r) => ir.forms.buildRules.includes(r.name)).map((r) => {
     if (r.kind === 'pratt') return prattRuleW(r, ir.tpl, ids);
     if (reuse && r.name === ir.entry) return rdEntryWithReuseW(r, reuse, ids);
@@ -1081,7 +1038,7 @@ export const cstBuilder: Builder<Cst> = {
 
 /** The library's entry points over the engine: parse, parseWith, and the incremental Doc. */
 function docRuntime(ir: ParserIR): string {
-  const reuse = topReusePlan(ir);
+  const reuse = ir.reuse;
   const topReuse = reuse !== null;
   const shapeA = reuse?.kind === 'A';
   const shapeB = reuse?.kind === 'B';
@@ -1440,7 +1397,7 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
 
 // The Doc's token metadata, the relex family and the edit-time checks.
 function docEditBlock(ir: ParserIR, shared: SharedAlgorithms): string {
-  const topReuse = topReusePlan(ir);
+  const topReuse = ir.reuse;
   const shapeA = topReuse?.kind === 'A';
   const shapeB = topReuse?.kind === 'B';
   const relexFamily = `\n// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.relexFamily(ir)}\n`;

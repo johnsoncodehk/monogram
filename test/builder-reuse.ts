@@ -9,7 +9,8 @@
 // reverse, a rejected input before an accepted one, dense one-byte tokens before ordinary code, and
 // a parse that leaves the engine's transient buffers non-empty — rejected inside a template and an
 // open bracket, or stopped by a lexer panic — before ordinary code (the builder's workspace: Rust
-// `Builder::workspace_mut`, Go's unexported CstBuilder fields).
+// `Builder::workspace_mut`, Go `WorkspaceOwner`). Go runs both CstBuilder (the native engine) and
+// SlimBuilder (the builder engine behind the Builder interface).
 // Missing go / rustc → logged + skipped.
 //
 //   node test/builder-reuse.ts
@@ -87,30 +88,41 @@ import (
 	"consumer/parser"
 )
 
-func parseJSON(src string, b *parser.CstBuilder) (s string) {
+func parseJSON(src string, b parser.Builder) (s string) {
 	defer func() {
 		if recover() != nil { s = "REJECT" }
 	}()
 	h, ok := parser.ParseWith(src, b)
 	if !ok { return "REJECT" }
-	return parser.CstJSONWith(b, h)
+	switch x := b.(type) {
+	case *parser.CstBuilder:
+		return parser.CstJSONWith(x, h)
+	case *parser.SlimBuilder:
+		return parser.SlimJSONWith(x, h)
+	}
+	panic("builder")
 }
 
 func main() {
-	// Each argument is one sequence: file paths joined by ','.
-	for _, seq := range os.Args[1:] {
-		reused := &parser.CstBuilder{}
+	// The first argument names the builder (cst: the native engine's fast path; slim: the builder
+	// engine, ParseWith through the Builder interface); each further one is a sequence of file
+	// paths joined by ','.
+	newB := func() parser.Builder { return &parser.CstBuilder{} }
+	if os.Args[1] == "slim" { newB = func() parser.Builder { return &parser.SlimBuilder{} } }
+	for _, seq := range os.Args[2:] {
+		reused := newB()
 		for _, f := range strings.Split(seq, ",") {
 			b, err := os.ReadFile(f)
 			if err != nil { panic(err) }
 			src := string(b)
-			fmt.Printf("%s\\t%s\\n", parseJSON(src, reused), parseJSON(src, &parser.CstBuilder{}))
+			fmt.Printf("%s\\t%s\\n", parseJSON(src, reused), parseJSON(src, newB()))
 		}
 	}
 }
 `);
   goBuild(['-o', 'consumer', '.'], { cwd: gdir });
-  results.set('go', readPairs(execFileSync(join(gdir, 'consumer'), seqFiles.map((fs) => fs.join(',')), { encoding: 'utf8', maxBuffer: 1 << 28 })));
+  for (const [label, b] of [['go', 'cst'], ['go SlimBuilder', 'slim']] as const)
+    results.set(label, readPairs(execFileSync(join(gdir, 'consumer'), [b, ...seqFiles.map((fs) => fs.join(','))], { encoding: 'utf8', maxBuffer: 1 << 28 })));
 }
 
 // ── Rust ──

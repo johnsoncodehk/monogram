@@ -487,6 +487,29 @@ function checkSpliceLegality(
   }
 }
 
+// A bind the schema declares but no printer renders is an error, wherever its node shape sits
+// (a rule, a choice arm, a Pratt slot): `{ label }` would otherwise render as `undefined`, a
+// silent fallback. It is implemented once grammar names reach the portable IR.
+function checkUnimplementedBinds(ruleName: string, shape: RuleShape | undefined, diags: ShapeDiag[]): void {
+  if (!shape) return;
+  if (shape.kind === 'node') {
+    for (const f of shape.fields) {
+      if (typeof f.bind === 'object' && 'label' in f.bind) {
+        diags.push({
+          level: 'error', rule: ruleName, code: 'bind-unimplemented',
+          message: `field '${f.name}' binds { label: '${f.bind.label}' }: label binds are not implemented (no printer renders them)`,
+        });
+      }
+    }
+  } else if (shape.kind === 'choice') {
+    for (const arm of shape.arms) checkUnimplementedBinds(ruleName, arm.shape, diags);
+  } else if (shape.kind === 'pratt') {
+    for (const slot of [shape.atom, shape.group, shape.nudSeq, shape.nudCapped, shape.prefix, shape.binary, shape.postfix, shape.led, shape.postfixTok, shape.template]) {
+      checkUnimplementedBinds(ruleName, slot as RuleShape | undefined, diags);
+    }
+  }
+}
+
 export function validateShape(grammarModule: { default: CstGrammar }, spec: ShapeSpec): ValidateResult {
   const pir = portableIR(grammarModule.default);
   const diags: ShapeDiag[] = [];
@@ -510,6 +533,7 @@ export function validateShape(grammarModule: { default: CstGrammar }, spec: Shap
       }
     }
     resolved.set(r.name, shape);
+    checkUnimplementedBinds(r.name, shape, diags);
     checkRuleShape(r, shape, spec.leaves, diags, inlineRules);
     rulesOut.push({ name: r.name, kind: r.kind, source, shape });
   }

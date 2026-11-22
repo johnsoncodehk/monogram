@@ -1,18 +1,21 @@
 // Compare the Monogram-CST-lowered AST (test/ts-ast-lowering.ts) against the REAL tsc
-// AST, pre-order, node by node: kind (compared as ts.SyntaxKind NUMBERS — names are
-// looked up forward, dodging enum aliases), start (getStart, trivia-excluded) and end.
-// On a mismatch the subtree is skipped and counted. GATE semantics: the snippet battery
-// (plus parserindenter.ts when the corpus is present) must be divergence-free — this is
-// the parser↔tsc STRUCTURE conformance gate (it caught the mixfix-LED precedence bug
-// that accept/reject and token-scope gates were blind to).
+// AST, pre-order, node by node, through the oracle harness (test/shape-oracle.ts) in its
+// STRUCTURE view: kind (SyntaxKind names, canonicalised: an alias maps to the first name
+// the enum declares), start (getStart, trivia-excluded), end, and the child list in
+// forEachChild order. On a mismatch the subtree is skipped and counted. GATE semantics: the
+// snippet battery (plus parserindenter.ts when the corpus is present) must be
+// divergence-free — this is the parser↔tsc STRUCTURE conformance gate (it caught the
+// mixfix-LED precedence bug that accept/reject and token-scope gates were blind to).
 //
 //   node test/ts-ast-verify.ts                  # snippet battery
 //   node test/ts-ast-verify.ts <file.ts> [...]  # real files
 import { existsSync, readFileSync } from 'node:fs';
-import ts from 'typescript';
+import type ts from 'typescript';
 import { createParser } from '../src/gen-parser.ts';
 import { lowerProgram, Unlowered, type Ast } from './ts-ast-lowering.ts';
 import { objTree } from './obj-tree.ts';
+import { compareTrees, structureView, type NTree, type Producer } from './shape-oracle.ts';
+import { canonicalKind, normaliseTs, tscProduce } from './shape-oracle-tsc.ts';
 
 // The lowering runs against the INTERPRETER oracle through the object-tree adapter
 // (absolute coordinates) — the grammar↔tsc structure contract is engine-independent,
@@ -20,81 +23,53 @@ import { objTree } from './obj-tree.ts';
 const grammar = (await import('../typescript.ts')).default;
 const parser = createParser(grammar);
 
-const kindNum = (name: string): number => {
-  const v = (ts.SyntaxKind as unknown as Record<string, number>)[name];
-  if (v === undefined) throw new Error(`unknown SyntaxKind name: ${name}`);
-  return v;
-};
+// The structure view's root is the statement list: a SourceFile's span includes trailing
+// trivia, which a token-span tree has no place for, so the root's span is not compared.
+const rootView = (children: NTree[]): NTree => ({ kind: 'SourceFile', start: 0, end: 0, fields: { children } });
+// A name SyntaxKind does not have (the lowering's UnknownTypeNode placeholder) stays as
+// written: it equals no tsc kind, so it is reported as a kind divergence.
+const fromAst = (a: Ast): NTree => ({ kind: canonicalKind(a.kind) ?? a.kind, start: a.pos, end: a.end, fields: { children: a.children.map(fromAst) } });
 
-interface Stats { matched: number; kindMiss: number; spanMiss: number; childMiss: number; samples: string[] }
-
-function tscChildren(n: ts.Node): ts.Node[] {
-  const out: ts.Node[] = [];
-  n.forEachChild((c) => { out.push(c); });
-  return out;
+/** tsc's tree in the structure view (statements only at the root). */
+export function tscStructure(sf: ts.SourceFile): NTree {
+  return rootView(sf.statements.map((s) => structureView(normaliseTs(s, sf))));
 }
 
-function compare(mine: Ast, theirs: ts.Node, sf: ts.SourceFile, st: Stats): void {
-  const tKind = theirs.kind;
-  const tStart = theirs.getStart(sf);
-  const tEnd = theirs.end;
-  if (kindNum(mine.kind) !== tKind) {
-    st.kindMiss++;
-    if (st.samples.length < 12) st.samples.push(`kind: mine=${mine.kind} tsc=${ts.SyntaxKind[tKind]} @${tStart}..${tEnd} «${sf.text.slice(tStart, Math.min(tEnd, tStart + 30)).replace(/\n/g, '\\n')}»`);
-    return;
-  }
-  if (mine.pos !== tStart || mine.end !== tEnd) {
-    st.spanMiss++;
-    if (st.samples.length < 12) st.samples.push(`span: ${mine.kind} mine=${mine.pos}..${mine.end} tsc=${tStart}..${tEnd} «${sf.text.slice(tStart, Math.min(tEnd, tStart + 30)).replace(/\n/g, '\\n')}»`);
-    return;
-  }
-  st.matched++;
-  const tc = tscChildren(theirs);
-  if (mine.children.length !== tc.length) {
-    st.childMiss++;
-    if (st.samples.length < 12) st.samples.push(`children: ${mine.kind} mine=[${mine.children.map((c) => c.kind).join(' ')}] tsc=[${tc.map((c) => ts.SyntaxKind[c.kind]).join(' ')}] @${tStart}`);
-    return;
-  }
-  for (let i = 0; i < tc.length; i++) compare(mine.children[i], tc[i], sf, st);
-}
+/** The tsc oracle in the structure view. Structural contract: VALID files only. When tsc
+ * itself reports parse errors, its tree is an error-RECOVERY shape (each parser's recovery
+ * strategy is its own) — comparing structures there compares recovery policies. */
+export const tscStructureOracle: Producer = (code, path) => tscProduce(code, path, tscStructure);
 
-function run(name: string, code: string): { ok: boolean; skipped?: boolean; line: string; samples: string[] } {
-  // Structural contract: VALID files only. When tsc itself reports parse errors, its
-  // tree is an error-RECOVERY shape (each parser's recovery strategy is its own) —
-  // comparing structures there compares recovery policies, not the grammar.
-  {
-    const probe = ts.createSourceFile('f.ts', code, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS) as ts.SourceFile & { parseDiagnostics: unknown[] };
-    if (probe.parseDiagnostics.length > 0) {
-      return { ok: true, skipped: true, line: `${name}: SKIPPED (tsc reports ${probe.parseDiagnostics.length} parse error(s) — recovery shapes are out of contract)`, samples: [] };
-    }
-  }
+/** The hand-written lowering as a harness candidate (structure view). */
+export const loweringCandidate: Producer = (code) => {
   let rootObj;
   try { rootObj = parser.parse(code); }
-  catch (e) { return { ok: false, line: `${name}: MONOGRAM REJECT ${(e as Error).message.slice(0, 60)}`, samples: [] }; }
+  catch (e) { return { fail: `MONOGRAM REJECT ${(e as Error).message.slice(0, 60)}` }; }
   const adapter = objTree(rootObj as never, grammar);
-  let mine: Ast;
-  try { mine = lowerProgram(adapter, adapter.rootId, code); }
+  try { return { tree: rootView(lowerProgram(adapter, adapter.rootId, code).children.map(fromAst)) }; }
   catch (e) {
-    if (e instanceof Unlowered) return { ok: false, line: `${name}: UNLOWERED ${e.what} @${e.at}`, samples: [] };
-    return { ok: false, line: `${name}: LOWER THROW ${(e as Error).message.slice(0, 80)}`, samples: [] };
+    if (e instanceof Unlowered) return { fail: `UNLOWERED ${e.what} @${e.at}` };
+    return { fail: `LOWER THROW ${(e as Error).message.slice(0, 80)}` };
   }
-  const sf = ts.createSourceFile('f.ts', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const st: Stats = { matched: 0, kindMiss: 0, spanMiss: 0, childMiss: 0, samples: [] };
-  // SourceFile itself: compare statements list against my root children.
-  const tc = sf.statements as readonly ts.Node[];
-  if (mine.children.length !== tc.length) {
-    return { ok: false, line: `${name}: top-level count mine=${mine.children.length} tsc=${tc.length}`, samples: [] };
-  }
-  for (let i = 0; i < tc.length; i++) compare(mine.children[i], tc[i], sf, st);
-  const miss = st.kindMiss + st.spanMiss + st.childMiss;
+};
+
+function run(name: string, code: string): { ok: boolean; skipped?: boolean; line: string; samples: string[] } {
+  const o = tscStructureOracle(code, 'f.ts');
+  if ('skip' in o) return { ok: true, skipped: true, line: `${name}: SKIPPED (${o.skip})`, samples: [] };
+  if ('fail' in o) return { ok: false, line: `${name}: ORACLE ${o.fail}`, samples: [] };
+  const c = loweringCandidate(code, 'f.ts');
+  if (!('tree' in c)) return { ok: false, line: `${name}: ${'fail' in c ? c.fail : c.skip}`, samples: [] };
+  const st = compareTrees(o.tree, c.tree);
+  const n = (cls: string) => st.divergences.filter((d) => d.cls === cls).length;
+  const other = st.divergences.length - n('kind') - n('span') - n('list-length');
   return {
-    ok: miss === 0,
-    line: `${name}: ${st.matched} matched, ${st.kindMiss} kind / ${st.spanMiss} span / ${st.childMiss} children mismatches`,
-    samples: st.samples,
+    ok: st.divergences.length === 0,
+    line: `${name}: ${st.matched - 1 /* the root wrapper */} matched, ${n('kind')} kind / ${n('span')} span / ${n('list-length')} children mismatches${other ? ` / ${other} other` : ''}`,
+    samples: st.divergences.slice(0, 12).map((d) => `${d.cls} at ${d.path} (${d.at}): tsc=${d.expected} mine=${d.got}`),
   };
 }
 
-const SNIPPETS: [string, string][] = [
+export const SNIPPETS: [string, string][] = [
   ['var-binary', 'const a = 1 + 2 * b;'],
   ['call', 'f(x, y);'],
   ['member-chain', 'a.b?.c!.d;'],
@@ -138,38 +113,40 @@ const SNIPPETS: [string, string][] = [
   ['comma-empty', ';;'],
 ];
 
-const CORPUS_FILES = [
+export const CORPUS_FILES = [
   '/tmp/ts-repo/tests/cases/conformance/parser/ecmascript5/RealWorld/parserindenter.ts',
   '/tmp/ts-repo/tests/cases/conformance/fixSignatureCaching.ts',
 ];
-const files = process.argv.slice(2);
-let pass = 0, fail = 0;
-if (files.length > 0) {
-  for (const f of files) {
-    const code = readFileSync(f, 'utf-8');
-    const r = run(f.split('/').pop()!, code);
-    console.log((r.ok ? '✓ ' : '✗ ') + r.line);
-    for (const s of r.samples) console.log('    ', s);
-    r.ok ? pass++ : fail++;
+if (import.meta.main) {
+  const files = process.argv.slice(2);
+  let pass = 0, fail = 0;
+  if (files.length > 0) {
+    for (const f of files) {
+      const code = readFileSync(f, 'utf-8');
+      const r = run(f.split('/').pop()!, code);
+      console.log((r.ok ? '✓ ' : '✗ ') + r.line);
+      for (const s of r.samples) console.log('    ', s);
+      r.ok ? pass++ : fail++;
+    }
+  } else {
+    for (const [name, code] of SNIPPETS) {
+      const r = run(name, code);
+      console.log((r.ok ? '✓ ' : '✗ ') + r.line);
+      for (const s of r.samples) console.log('    ', s);
+      r.ok ? pass++ : fail++;
+    }
+    for (const cf of CORPUS_FILES) {
+      if (!existsSync(cf)) continue;
+      const r = run(cf.split('/').pop()!, readFileSync(cf, 'utf-8'));
+      console.log((r.ok ? '✓ ' : '✗ ') + r.line);
+      for (const s of r.samples) console.log('    ', s);
+      r.ok ? pass++ : fail++;
+    }
   }
-} else {
-  for (const [name, code] of SNIPPETS) {
-    const r = run(name, code);
-    console.log((r.ok ? '✓ ' : '✗ ') + r.line);
-    for (const s of r.samples) console.log('    ', s);
-    r.ok ? pass++ : fail++;
+  console.log(`\n${pass} clean, ${fail} with divergences`);
+  if (fail > 0) {
+    console.error('✗ lowered AST diverges from tsc');
+    process.exit(1);
   }
-  for (const cf of CORPUS_FILES) {
-    if (!existsSync(cf)) continue;
-    const r = run(cf.split('/').pop()!, readFileSync(cf, 'utf-8'));
-    console.log((r.ok ? '✓ ' : '✗ ') + r.line);
-    for (const s of r.samples) console.log('    ', s);
-    r.ok ? pass++ : fail++;
-  }
+  console.log('✓ lowered AST ≡ tsc node-by-node');
 }
-console.log(`\n${pass} clean, ${fail} with divergences`);
-if (fail > 0) {
-  console.error('✗ lowered AST diverges from tsc');
-  process.exit(1);
-}
-console.log('✓ lowered AST ≡ tsc node-by-node');
