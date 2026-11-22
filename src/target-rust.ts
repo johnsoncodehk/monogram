@@ -958,7 +958,8 @@ function ruleR(r: RuleIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
 function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
   const sig = `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {`;
-  return ruleShell(r, ids, {
+  const out: string[] = [];
+  const shell = ruleShell(r, ids, {
     ...rsRuleBase(ids, 'self'),
     steps: rsSteps(ids, 'self', false),
     fn: (lines) => `${sig}\n${lines.join('\n')}\n    }`,
@@ -967,9 +968,17 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
     peekOrFail: '        let t = match self.peek() { Some(t) => t, None => return None };',
     fail: '        self.back(save); self.scratch.truncate(sb); self.b.restore(ck);\n        None',
     openBest: (d) => `        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();\n        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(d)}`,
-    cand: (d, i, cond) => candRs(d, i, cond, rid, markRs(d, i)),
+    cand: (d, i, cond) => candRs(d, i, outlineRs(out, `${r.name}_a${i}`, cond), rid, markRs(d, i)),
     closeBest: '        self.pos = best_pos;\n        best',
   });
+  return [shell, ...out].join('\n');
+}
+// A candidate whose condition holds a nested construct (a closure: star / opt / sep / alt) is its
+// own out-of-line method, so the rule's dispatching function does not hold the arm's code [experiment c1].
+function outlineRs(out: string[], name: string, cond: string): string {
+  if (!cond.includes('|p')) return cond;
+  out.push(`    #[inline(never)]\n    fn arm_${name}(&mut self) -> bool { ${cond} }`);
+  return `self.arm_${name}()`;
 }
 
 /** The entry rule with reuse recording (emit-portable entryShell): per-top-kid lookahead ext via
@@ -1067,6 +1076,7 @@ ${headUse}        loop {
 }
 function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
+  const out: string[] = [];
   const d = r.nudDispatch;
   // The operator tables (emit-portable prattOpTables) as `match` functions: LLVM compiles a match
   // on the lid returning constants to a lookup table, no hashing.
@@ -1097,7 +1107,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
             }
             self.back(save);
         }`,
-    nudSeq: (i, cond, tail, capped) => candRs(d, i, cond, rid, `${markRs(d, i)} bf = 0; bt = ${tail}; bc = ${capped};`),
+    nudSeq: (i, cond, tail, capped) => candRs(d, i, outlineRs(out, `${r.name}_s${i}`, cond), rid, `${markRs(d, i)} bf = 0; bt = ${tail}; bc = ${capped};`),
     // An operand that parses but is not the target the operator requires fails the whole Pratt
     // call, whatever another arm matched.
     nudPrefix: (i) => `        if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
@@ -1184,7 +1194,8 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
         best
     }`,
   };
-  return prattShell(r, ir, ids, L);
+  const shell = prattShell(r, ir, ids, L);
+  return [shell, ...out].join('\n');
 }
 
 
