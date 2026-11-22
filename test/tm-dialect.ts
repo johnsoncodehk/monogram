@@ -75,7 +75,7 @@ const has = (prefix: string) => (s: string[]) => s.some(x => x === prefix || x.s
   section = 'dialect';
   const { grammar: g } = await load(dialect);
   const src = [
-    '@route',
+    '@route @iffy',
     'component Card(item, show) {',
     '  @if (show) { <b/> } @else { "n" }',
     '  @each (y of item.list) { "z" }',
@@ -91,17 +91,17 @@ const has = (prefix: string) => (s: string[]) => s.some(x => x === prefix || x.s
     '  </my-card>',
     '}',
   ].join('\n');
-  const kwBug = 'the keyword pattern is `\\b(@if|…)\\b`: `\\b` before `@` holds only after a word character, so the annotation pattern wins (item 2)';
   scopeRow('annotation `@route` is an annotation', 'pass', undefined, g, src, '@route', 0, s => inner(s).startsWith('entity.name.function.decorator'));
-  scopeRow('`@if` at statement start is a keyword', 'xfail', kwBug, g, src, '@if', 0, s => inner(s).startsWith('keyword.control.conditional'));
-  scopeRow('`@else` after `} ` is a keyword', 'xfail', kwBug, g, src, '@else', 0, s => inner(s).startsWith('keyword.control.conditional'));
-  scopeRow('`@each` is a keyword', 'xfail', kwBug, g, src, '@each', 0, s => inner(s).startsWith('keyword.control.loop'));
+  scopeRow('annotation `@iffy` is not the keyword `@if` (the keyword ends at a word boundary)', 'pass', undefined, g, src, 'fy', 0, s => inner(s).startsWith('entity.name.function.decorator'));
+  scopeRow('`@if` at statement start is a keyword', 'pass', undefined, g, src, '@if', 1, s => inner(s).startsWith('keyword.control.conditional'));
+  scopeRow('`@else` after `} ` is a keyword', 'pass', undefined, g, src, '@else', 0, s => inner(s).startsWith('keyword.control.conditional'));
+  scopeRow('`@each` is a keyword', 'pass', undefined, g, src, '@each', 0, s => inner(s).startsWith('keyword.control.loop'));
   scopeRow('`of` inside a directive head is a keyword', 'pass', undefined, g, src, 'of item', 0, s => inner(s).startsWith('keyword.control.loop'));
   scopeRow('custom-element tag name `my-card`', 'pass', undefined, g, src, 'my-card', 0, s => inner(s).startsWith('entity.name.tag'));
   scopeRow('namespaced attribute name `on:click`', 'pass', undefined, g, src, 'click', 0, s => inner(s).startsWith('entity.other.attribute-name'));
   scopeRow('shorthand attribute `{item}` is an embedded expression', 'pass', undefined, g, src, '{item}', 0, has('meta.embedded.expression'));
   const children = 'element children are a fixed JSX-children repository (`generateJsxPatterns`) that reads no grammar rule, so a directive inside an element is plain child text (items 2 and 6)';
-  scopeRow('`@if` inside element children is a keyword', 'xfail', children, g, src, '@if', 1, s => inner(s).startsWith('keyword.control.conditional'));
+  scopeRow('`@if` inside element children is a keyword', 'xfail', children, g, src, '@if', 2, s => inner(s).startsWith('keyword.control.conditional'));
   scopeRow('`@empty` inside element children is a keyword', 'xfail', children, g, src, '@empty', 0, s => inner(s).startsWith('keyword.control.loop'));
   scopeRow('`of` inside element children is a keyword', 'xfail', children, g, src, 'of item', 1, s => inner(s).startsWith('keyword.control.loop'));
   scopeRow('a directive region `{` in children is not an expression container', 'xfail', children, g, src, '{', 4, s => !has('meta.embedded.expression')(s));
