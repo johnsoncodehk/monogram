@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -141,26 +141,14 @@ function renderIdTablesRust(ids: LexIdPlan): string {
   const kidsLit = ids.kids.map(J).join(', ');
   const lidsLit = ids.lids.map(J).join(', ');
   const kidArms = ids.kids.map((k, i) => `${J(k)} => ${i}`).join(', ');
-  // Group lids[1..] by byte length, in two match tables split by the first-byte class
-  // lid_of routes a text by (lidWordByte), so each literal is in the table its own text reaches.
-  const byLenKw = new Map<number, { text: string; id: number }[]>();
-  const byLenPu = new Map<number, { text: string; id: number }[]>();
-  for (let i = 1; i < ids.lids.length; i++) {
-    const text = ids.lids[i]!;
-    const blen = tlen(text);
-    const ent = { text, id: i };
-    const map = lidWordByte(firstUnit(text, UNITS)) ? byLenKw : byLenPu;
-    const arr = map.get(blen) ?? [];
-    arr.push(ent);
-    map.set(blen, arr);
-  }
-  const lenArmsOf = (byLen: Map<number, { text: string; id: number }[]>) =>
-    [...byLen.entries()].sort((a, b) => a[0] - b[0]).map(([len, ents]) => {
+  const tables = buildLidTables(ids, UNITS);
+  const lenArmsOf = (byLen: [number, { text: string; id: number }[]][]) =>
+    byLen.map(([len, ents]) => {
       const arms = ents.map((e) => `${rsByteStr(e.text)} => ${e.id}`).join(', ');
       return `        ${len} => match text { ${arms}, _ => 0 },`;
     }).join('\n');
-  const kwArms = lenArmsOf(byLenKw);
-  const puArms = lenArmsOf(byLenPu);
+  const kwArms = lenArmsOf(tables.word);
+  const puArms = lenArmsOf(tables.rest);
   const pf = buildLidPrefilter(ids, UNITS);
   const bitsLit = [...pf.firstByLenBits].join(', ');
   // The byte pattern of lidWordByte, from the function itself (ranges of consecutive bytes).

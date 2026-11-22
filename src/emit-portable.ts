@@ -1338,6 +1338,23 @@ export function buildLidPrefilter(plan: LexIdPlan, units: TextUnits): LidPrefilt
 }
 
 /**
+ * The literal table split by the first-byte class `lid_of` routes a text by (lidWordByte): words
+ * and the rest, each grouped by the literal's length in `units` (ascending). A target prints a
+ * match per half, so an identifier is compared with word literals only.
+ */
+export function buildLidTables(plan: LexIdPlan, units: TextUnits): { word: [number, { text: string; id: number }[]][]; rest: [number, { text: string; id: number }[]][] } {
+  const word = new Map<number, { text: string; id: number }[]>(), rest = new Map<number, { text: string; id: number }[]>();
+  for (let i = 1; i < plan.lids.length; i++) {
+    const text = plan.lids[i]!;
+    const len = unitLen(text, units);
+    const m = lidWordByte(firstUnit(text, units)) ? word : rest;
+    m.set(len, [...(m.get(len) ?? []), { text, id: i }]);
+  }
+  const sorted = (m: Map<number, { text: string; id: number }[]>) => [...m.entries()].sort((a, b) => a[0] - b[0]);
+  return { word: sorted(word), rest: sorted(rest) };
+}
+
+/**
  * The first-byte class by which a target that splits its literal table in two (Rust: words and
  * the rest, so an identifier is compared with words only) splits it, and by which its `lid_of`
  * routes a text: the table half a literal is in is the half `lid_of` looks in for that text.

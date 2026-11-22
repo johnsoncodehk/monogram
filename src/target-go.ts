@@ -10,11 +10,11 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
-import { type TextUnits, unitLen } from './text-units.ts';
+import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
 // Go strings are indexed by UTF-8 byte: every offset and length printed here is in bytes.
@@ -244,25 +244,48 @@ function renderIdTablesGo(ids: LexIdPlan): string {
   const lidsLit = ids.lids.map(J).join(', ');
   const pf = buildLidPrefilter(ids, UNITS);
   const bitsLit = [...pf.firstByLenBits].join(', ');
+  // The literal table as two string switches (words, the rest: buildLidTables), which the Go
+  // compiler turns into a search by length and value; no map is built at load time.
+  const tables = buildLidTables(ids, UNITS);
+  const cases = (half: [number, { text: string; id: number }[]][]) => half.flatMap(([, ents]) => ents).map((e) => `\tcase ${J(e.text)}:\n\t\treturn ${e.id}\n`).join('');
+  const wordBytes = Array.from({ length: 256 }, (_, b) => b).filter(lidWordByte);
   return `var kindStr = []string{${kidsLit}}
 var _lids = []string{${lidsLit}}
 var _kidMap = map[string]uint16{}
-var _lidMap = map[string]uint16{}
 const _lidMaxLen = ${pf.maxLen}
 var _lidFirstBits = [...]byte{${bitsLit}}
+var _lidWordByte = [256]bool{${wordBytes.map((b) => `${b}: true`).join(', ')}}
 
 func init() {
 \tfor i, k := range kindStr { _kidMap[k] = uint16(i) }
-\tfor i, t := range _lids { _lidMap[t] = uint16(i) }
 }
 func kidOf(kind string) uint16 { if v, ok := _kidMap[kind]; ok { return v }; return 0 }
-func lidOf(text string) uint16 {
+// lidKeyIsLiteral is the length x first-byte prefilter: false when no literal has the text's key.
+func lidKeyIsLiteral(text string) bool {
 \tn := len(text)
-\tif n == 0 || n > _lidMaxLen { return 0 }
-\t// No literal has this (length, first byte) key ⇒ lid 0 (the bits hold every literal's key).
+\tif n == 0 || n > _lidMaxLen { return false }
 \tb0 := text[0]
-\tif _lidFirstBits[n*32+(int(b0)>>3)]&(1<<(b0&7)) == 0 { return 0 }
-\tif v, ok := _lidMap[text]; ok { return v }
+\treturn _lidFirstBits[n*32+(int(b0)>>3)]&(1<<(b0&7)) != 0
+}
+// lidOf is the literal id of a text (0: no literal): the prefilter, then the table half of its first byte.
+func lidOf(text string) uint16 {
+\tif !lidKeyIsLiteral(text) { return 0 }
+\tif _lidWordByte[text[0]] { return lidOfKw(text) }
+\treturn lidOfPunct(text)
+}
+// lidOfWord is lidOf for a token whose kind can equal word literals only (shared.tokenLiterals).
+func lidOfWord(text string) uint16 {
+\tif !lidKeyIsLiteral(text) { return 0 }
+\treturn lidOfKw(text)
+}
+func lidOfKw(text string) uint16 {
+\tswitch text {
+${cases(tables.word)}\t}
+\treturn 0
+}
+func lidOfPunct(text string) uint16 {
+\tswitch text {
+${cases(tables.rest)}\t}
 \treturn 0
 }
 func tokKind(t *Tok) string { return kindStr[t.Kid] }
@@ -285,7 +308,7 @@ func litTt(lid uint16) uint16 { if lid >= lidKw { return ${ttIdOf(ar, '$keyword'
 
 // The literal id of a token whose text is `text`, given the literals its kind can be
 // (shared.tokenLiterals): 0 when it can be none.
-const lidCallGo = (lits: string[], text: string): string => (lits.length === 0 ? '0' : `lidOf(${text})`);
+const lidCallGo = (lits: string[], text: string): string => (lits.length === 0 ? '0' : lits.every((l) => lidWordByte(firstUnit(l, UNITS))) ? `lidOfWord(${text})` : `lidOf(${text})`);
 
 // Whether a skipped token's text holds a line terminator (LF, CR, U+2028, U+2029): byte searches,
 // no decode.
