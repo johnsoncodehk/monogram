@@ -586,7 +586,7 @@ ${inlAlways}    fn prev_is_value(&self) -> bool {
         let (has_prev, prev_kid, prev_lid) = self.prev();
         if !has_prev { return false; }
         if ${rsFlag('_PAV', 'prev_lid')} { return self.last_bang; }
-        let is_expr_kw = prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'prev_lid')};
+        let is_expr_kw = prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'prev_lid')} && { let (has_prev2, bp_lid) = self.prev2(); !(has_prev2 && ${rsFlag('_MEM', 'bp_lid')}) };
         let is_paren_head = prev_lid == _LID_RPAREN && self.last_close;
         !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'prev_kid')} || ${rsFlag('_DIVT', 'prev_lid')})
     }
@@ -624,7 +624,7 @@ ${inlAlways}    fn prev_is_value(&self) -> bool {
         let (has_prev, prev_kid, prev_lid) = self.prev();
         if !has_prev { return false; }
         if ${rsFlag('_PAV', 'prev_lid')} { return self.last_bang; }
-        let is_expr_kw = prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'prev_lid')};
+        let is_expr_kw = prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'prev_lid')} && { let (has_prev2, bp_lid) = self.prev2(); !(has_prev2 && ${rsFlag('_MEM', 'bp_lid')}) };
         let is_paren_head = prev_lid == _LID_RPAREN && self.last_close;
         !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'prev_kid')} || ${rsFlag('_DIVT', 'prev_lid')})
     }
@@ -661,7 +661,7 @@ ${inlAlways}    fn prev_is_value(&self) -> bool {
         let (has_prev, prev_kid, prev_lid) = self.prev();
         if !has_prev { return false; }
         if ${rsFlag('_PAV', 'prev_lid')} { return self.last_bang; }
-        let is_expr_kw = prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'prev_lid')};
+        let is_expr_kw = prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'prev_lid')} && { let (has_prev2, bp_lid) = self.prev2(); !(has_prev2 && ${rsFlag('_MEM', 'bp_lid')}) };
         let is_paren_head = prev_lid == _LID_RPAREN && self.last_close;
         !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'prev_kid')} || ${rsFlag('_DIVT', 'prev_lid')})
     }
