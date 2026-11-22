@@ -4,7 +4,7 @@
 // templates) is unmapped, and an expression statement that reaches one is reported as outside
 // the subset, not compared.
 import {
-  absent, and, armOf, branch, c, child, cook, iff, inh, list, match, node, not, orElse, present, record,
+  absent, and, armOf, branch, c, child, cook, iff, inh, list, map, match, node, not, orElse, present, record,
   spread, syn, text, thread, v, wrapIf, type Shape2Spec, type Term,
 } from '../../src/shape2-schema.ts';
 
@@ -61,6 +61,9 @@ export const estreeExprShape: Shape2Spec = {
     chainTop: { type: 'bool', default: true, rules: { Expr: Object.fromEntries(LINKS.map((a) => [a, { left: c(false) }])) } },
   },
   rules: {
+    // The root: its statement list. acorn's `sourceType` (the goal acorn was run with) and the
+    // root's extent over trailing trivia are not produced (test/shape2-oracle.ts ROOT_NOT_COMPARED).
+    Program: { decl: node('Program', { body: map('alt', branch('alt', { decl: child('decl'), stmt: child('stmt') })) }) },
     Stmt: { expr: node('ExpressionStatement', { expression: sequence, directive: iff(and(inh('prologue'), syn('directive')), syn('stringBody', 'first'), absent) }) },
     Expr: {
       true_: literal(c(true)),
