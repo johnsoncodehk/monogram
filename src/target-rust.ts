@@ -5177,6 +5177,20 @@ const rustLowering: Lowering = {
     for (const [lo, hi] of rs) for (let c = lo; c <= hi; c++) a[c] = true;
     return `const ${name.toUpperCase()}: [bool; 256] = [${a.map((b) => (b ? 'true' : 'false')).join(', ')}];`;
   },
+  // Four bytes per round: one table test each, and one bounds test per round instead of per byte.
+  runEndFn: `/// The end of the run of bytes in \`set\` from i: the first j >= i at which b ends or b[j] is not in it.
+#[inline(always)]
+fn lex_run_end(b: &[u8], mut i: usize, set: &[bool; 256]) -> usize {
+    while let Some(w) = b.get(i..i + 4) {
+        if !set[w[0] as usize] { return i; }
+        if !set[w[1] as usize] { return i + 1; }
+        if !set[w[2] as usize] { return i + 2; }
+        if !set[w[3] as usize] { return i + 3; }
+        i += 4;
+    }
+    while i < b.len() && set[b[i] as usize] { i += 1; }
+    i
+}`,
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${rsWrap(r, ATOM)}`, prec: 90 }),
@@ -5191,6 +5205,7 @@ const rustLowering: Lowering = {
     code: (cx, s, i) => ({ c: `${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}] as u32`, ty: 'int', nat: 'u32', prec: RS_CAST }),
     hasAt: (cx, s, i, lit) => cx.atom(`${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}..].starts_with(${J(lit)}.as_bytes())`, 'bool', 'bool'),
     inSet: (cx, set, c) => cx.atom(`${set.toUpperCase()}[${cx.coerce(c, 'usize')}]`, 'bool', 'bool'),
+    runEnd: (cx, set, s, i) => cx.atom(`lex_run_end(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')}, &${set.toUpperCase()})`, 'int', 'usize'),
     own: (cx, r) => {
       if (r.ty === 'str') return cx.atom(`${rsWrap(r, ATOM)}.to_string()`, 'str', 'str', { owned: true });
       if (isList(r.ty)) return cx.atom(`${rsWrap(r, ATOM)}.to_vec()`, r.ty, r.ty, { owned: true });

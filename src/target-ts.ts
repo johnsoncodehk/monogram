@@ -3537,6 +3537,12 @@ const tsLowering: Lowering = {
   type: (t) => TS_TYPES[t],
   owns: false,
   charSet: (name, rs) => `const ${name} = /*#__PURE__*/ (() => { const a = new Uint8Array(256); for (const [lo, hi] of [${rs.map(([lo, hi]) => `[${lo},${hi}]`).join(', ')}]) for (let i = lo; i <= hi; i++) a[i] = 1; return a; })();`,
+  // A code unit past 255 indexes no table entry (undefined), so it ends the run.
+  runEndFn: `// The end of the run of code units in set from i: the first j >= i at which s ends or s[j] is not in it.
+function lexRunEnd(s: string, i: number, set: Uint8Array): number {
+  while (i < s.length && set[s.charCodeAt(i)] === 1) i++;
+  return i;
+}`,
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${tsWrap(r, ATOM)}`, prec: 90 }),
@@ -3551,6 +3557,7 @@ const tsLowering: Lowering = {
     code: (cx, s, i) => cx.atom(`${tsWrap(s, ATOM)}.charCodeAt(${i.c})`, 'int', 'number'),
     hasAt: (cx, s, i, lit) => cx.atom(`${tsWrap(s, ATOM)}.startsWith(${J(lit)}, ${i.c})`, 'bool', 'bool'),
     inSet: (_cx, set, c) => ({ c: `${set}[${c.c}] === 1`, ty: 'bool', nat: 'bool', prec: TS_OPS.eq[1] }),
+    runEnd: (cx, set, s, i) => cx.atom(`lexRunEnd(${s.c}, ${i.c}, ${set})`, 'int', 'number'),
     own: (_cx, r) => r,
   },
   stmt: {

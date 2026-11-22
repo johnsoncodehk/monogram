@@ -55,7 +55,10 @@ export type Expr =
   // The literal's length in the target's native string units (an int constant).
   | { k: 'litLen'; lit: string }
   // Whether c is a member of a declared CharSet (only ASCII codes are ever members).
-  | { k: 'inSet'; set: string; c: Expr };
+  | { k: 'inSet'; set: string; c: Expr }
+  // The end of the run of code units in a declared CharSet from i (0 <= i <= len(s)): the first
+  // j >= i at which s ends or its code unit is not a member.
+  | { k: 'runEnd'; set: string; s: Expr; i: Expr };
 
 export type Stmt =
   | { k: 'let'; name: string; ty: Ty; init: Expr }
@@ -126,8 +129,10 @@ export interface Lowering {
   borrowStr?(r: R): string;
   borrowList?(r: R): string;
   borrowVal?(r: R): string;
-  // A module-level membership table for `inSet`.
+  // A module-level membership table for `inSet` and `runEnd`.
   charSet(name: string, ranges: CodeRange[]): string;
+  // The runtime routine `runEnd` calls, printed once by a family that uses it.
+  runEndFn: string;
   expr: {
     literal(v: number | boolean | string): Printed;
     not(r: R): Printed;
@@ -137,6 +142,7 @@ export interface Lowering {
     code(cx: Cx, s: R, i: R): R;
     hasAt(cx: Cx, s: R, i: R, lit: string): R;
     inSet(cx: Cx, set: string, c: R): R;
+    runEnd(cx: Cx, set: string, s: R, i: R): R;
     // Required when `owns`: an owned copy of a borrowed value.
     own?(cx: Cx, r: R): R;
   };
@@ -287,6 +293,10 @@ class Printer implements Cx {
       case 'inSet': {
         if (!this.sets.has(e.set)) throw new Error(`algo-ir: undeclared char set ${e.set}`);
         return X.inSet(this, this.id(e.set), this.expr(e.c));
+      }
+      case 'runEnd': {
+        if (!this.sets.has(e.set)) throw new Error(`algo-ir: undeclared char set ${e.set}`);
+        return X.runEnd(this, this.id(e.set), this.expr(e.s), this.expr(e.i));
       }
     }
   }

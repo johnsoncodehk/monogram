@@ -75,7 +75,13 @@ const sig = (name: string, doc: string, body: Stmt[]): Fn => ({ name, doc, param
 class LexScan {
   sets: CharSet[] = [];
   fns: Fn[] = [];
+  runs = false;   // some scanner calls the target's runEnd routine
   private pats = new Map<string, string>();
+
+  runEnd(set: string, i: Ex): Expr {
+    this.runs = true;
+    return { k: 'runEnd', set, s: x('s'), i: x(i) };
+  }
 
   charSet(name: string, rs: CodeRange[]): string {
     this.sets.push({ name, ranges: rs.filter(([lo]) => lo <= 127).map(([lo, hi]) => [Math.max(0, lo), Math.min(127, hi)]) });
@@ -303,8 +309,7 @@ class LexScan {
           if_(ge('p', len('s')), [NONE]),
           let_('c', code('p')),
           if_(inSet(fs, 'c'), [
-            let_('e', add('p', I(1))),
-            while_(lt('e', len('s')), [if_(not(inSet(cs, code('e'))), [BREAK]), set('e', add('e', I(1)))]),
+            let_('e', this.runEnd(cs, add('p', I(1)))),
             if_(ge('e', len('s')), [ret('e')]),
             let_('d', code('e')),
             if_(not(bails('d', t.bail, t.bailNonAscii)), [ret('e')]),
@@ -358,22 +363,22 @@ export function scannedTokens(ir: ParserIR): LexTok[] {
   return ir.tokens.filter((t) => t.name !== ir.tpl?.token);
 }
 
-const families = new WeakMap<ParserIR, { sets: CharSet[]; fns: Fn[] }>();
-export function lexScanFamily(ir: ParserIR): { sets: CharSet[]; fns: Fn[] } {
+const families = new WeakMap<ParserIR, { sets: CharSet[]; fns: Fn[]; runs: boolean }>();
+export function lexScanFamily(ir: ParserIR): { sets: CharSet[]; fns: Fn[]; runs: boolean } {
   let f = families.get(ir);
   if (!f) {
     const b = new LexScan();
     for (const t of scannedTokens(ir)) b.fns.push({ ...b.scanner(t), inline: true });
     if (ir.tpl) b.fns.push(b.tplSpan(ir.tpl));
-    f = { sets: b.sets, fns: b.fns };
+    f = { sets: b.sets, fns: b.fns, runs: b.runs };
     families.set(ir, f);
   }
   return f;
 }
 
 export function emitLexScan(ir: ParserIR, lowering: Lowering): string {
-  const { sets, fns } = lexScanFamily(ir);
-  return printFns(lowering, lowering.spliceInline ? fns.filter((f) => !f.inline) : fns, sets);
+  const { sets, fns, runs } = lexScanFamily(ir);
+  return [...(runs ? [lowering.runEndFn] : []), printFns(lowering, lowering.spliceInline ? fns.filter((f) => !f.inline) : fns, sets)].join('\n');
 }
 
 // Scanners return -1 or a position, never this.

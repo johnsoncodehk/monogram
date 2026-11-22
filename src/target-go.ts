@@ -3063,6 +3063,13 @@ const goLowering: Lowering = {
   owns: false,
   spliceInline: true,
   charSet: (name, rs) => `var ${name} = [256]bool{${rs.flatMap(([lo, hi]) => Array.from({ length: hi - lo + 1 }, (_, k) => `${lo + k}: true`)).join(', ')}}`,
+  runEndFn: `// lexRunEnd is the end of the run of bytes in set from i: the first j >= i at which s ends or s[j] is not in it.
+func lexRunEnd(s string, i int, set *[256]bool) int {
+\tfor i < len(s) && set[s[i]] {
+\t\ti++
+\t}
+\treturn i
+}`,
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${goWrap(r, ATOM)}`, prec: 90 }),
@@ -3077,6 +3084,7 @@ const goLowering: Lowering = {
     code: (cx, s, i) => cx.atom(`int(${goWrap(s, ATOM)}[${i.c}])`, 'int', 'int'),
     hasAt: (cx, s, i, lit) => cx.atom(`strings.HasPrefix(${goWrap(s, ATOM)}[${i.c}:], ${JSON.stringify(lit)})`, 'bool', 'bool'),
     inSet: (cx, set, c) => cx.atom(`${set}[${c.c}]`, 'bool', 'bool'),
+    runEnd: (cx, set, s, i) => cx.atom(`lexRunEnd(${s.c}, ${i.c}, &${set})`, 'int', 'int'),
     own: (_cx, r) => r,
   },
   stmt: {
