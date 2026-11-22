@@ -37,7 +37,7 @@ jobs:
           PROFILE_WORK: ${{ runner.temp }}/prof-work
           # Before / after of perf/token-array-reservation: A = origin/master 1771256, M = 6183a29.
           PROFILE_A: 1771256f2d869deeb13752c683039c56d3c149b4
-          PROFILE_M: 6183a292f1b470cd7a4163ecfdc34d4562652d52
+          PROFILE_M: 9675cc8027f91d6598888e237551036c32f21c5f
 
       - uses: actions/upload-artifact@v4
         if: always()
