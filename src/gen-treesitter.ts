@@ -1099,7 +1099,7 @@ interface ZeroWidthPlan {
 }
 
 function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerTokens: Set<string>, prattRules: Set<string>,
-  isWordLiteral: (text: string) => boolean): ZeroWidthPlan {
+  isWordLiteral: (text: string) => boolean, reserved: Set<string>): ZeroWidthPlan {
   const plan: ZeroWidthPlan = { tokens: [], tokenOf: new Map(), lowered: new Set() };
   // A grammar with its own line handling (NEWLINE tokens, indentation) has its own scanner rules.
   if (grammar.indent || grammar.newline) return plan;
@@ -1153,8 +1153,10 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
   for (const b of collectTsSharedRules(grammar).values()) walk(b);
   if (!cands.length) return plan;
 
-  // ── AFTER / CONT of each candidate, over the automaton where every candidate is its own terminal ──
-  const termOf = new Map(cands.map((c, i) => [c.node, `@zw${i}`]));
+  // ── AFTER / CONT of the live candidates, over the automaton where each is its own terminal and
+  // every other candidate renders as nothing (as a dropped one will) ──
+  const analyze = (live: Set<number>) => {
+  const termOf = new Map(cands.flatMap((c, i) => live.has(i) ? [[c.node, `@zw${i}`] as [RuleExpr, string]] : []));
   const graph = treeSitterLeafGraph(grammar, tokenNames, scannerTokens, prattRules, termOf);
   const lr = buildLr(graph);
   const after = cands.map(() => new Set<string>()), cont = cands.map(() => new Set<string>());
@@ -1182,34 +1184,48 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
   lr.states.forEach((st, s) => {
     // CONT: the terminals SHIFTED where the token is valid (a reduction's lookahead is no
     // continuation: the `)` after `(a` is valid after `a` in no state that also ends a statement;
-    // the shift sets are exact per LR(0) core, the lookaheads a union over its contexts).
-    // A same-line marker competes with every such shift. A line-end alternative only with the
-    // shifts that EXTEND a construct already complete (an item after a rule reference: the operator
-    // after an expression, the `(` of a call, `[`, a template, `of`): a token that starts an operand
-    // after a terminal (`yield` and its optional argument, `=>` after a parameter name) is where the
-    // grammar would need its own line-break restriction, and the scanner cannot tell that state from
-    // the others where the same token starts the next statement, so there the line end wins.
-    const shifts = st.next.filter(l => graph.nt[l] < 0).map(l => graph.sym[l]);
+    // the shift sets are exact per LR(0) core, the lookaheads a union over its contexts), and of
+    // those only the ones that EXTEND a construct already complete (an item after a rule reference:
+    // the operator after an expression, the `(` of a call, `[`, a template, `of`). A terminal that
+    // starts an operand after a terminal (the optional argument of `yield`, `=>` after a parameter
+    // name, a prefix `++` after `yield`) is where the grammar would need a line-break restriction of
+    // its own; the scanner cannot tell that state from the many where the same terminal follows the
+    // token, so there the token wins.
     const extends_ = new Set<string>();
     for (const it of st.items) if (it >= 0 && graph.nt[it] >= 0) for (const t of firstAfter(it)) extends_.add(t);
     for (const t of valid[s]) {
       const i = idOf(t);
       if (i < 0) continue;
-      for (const u of cands[i].kind === 'same-line' ? shifts : extends_) if (idOf(u) < 0) cont[i].add(u);
+      for (const u of extends_) if (idOf(u) < 0) cont[i].add(u);
     }
     for (const [sym, to] of st.goto) {
       const i = idOf(sym);
       if (i >= 0) for (const u of valid[to]) if (idOf(u) < 0) after[i].add(u);
     }
   });
-  const wordShaped = (t: string) => t === word || (t.startsWith("'") && isWordLiteral(t.slice(1)));
+  return { after, cont };
+  };
+  // A keyword the word token can also lex (one no reserved set excludes from it everywhere).
+  const wordShaped = (t: string) => t === word || (t.startsWith("'") && isWordLiteral(t.slice(1)) && !reserved.has(t.slice(1)));
   const meets = (a: Set<string>, b: Set<string>) =>
     [...a].some(t => b.has(t)) || (!!word && ((a.has(word) && [...b].some(wordShaped)) || (b.has(word) && [...a].some(wordShaped))));
+  const rejects = (i: number, r: ReturnType<typeof analyze>) =>
+    !r.after[i].size || (cands[i].kind === 'same-line' ? meets(r.after[i], r.cont[i]) : (!!word && r.cont[i].has(word)));
+  // A dropped candidate renders as nothing, which changes what the others can see (a postfix `!`
+  // whose marker is dropped is a direct continuation): analyze again until nothing more drops.
+  const live = new Set(cands.map((_, i) => i));
+  let res = analyze(live);
+  for (;;) {
+    const out = [...live].filter(i => rejects(i, res));
+    if (!out.length) break;
+    for (const i of out) live.delete(i);
+    res = analyze(live);
+  }
+  const { after, cont } = res;
   const byKey = new Map<string, ZeroWidthToken>();
   const counters = { 'line-end': 0, 'same-line': 0 };
   cands.forEach((c, i) => {
-    if (!after[i].size) return;
-    if (c.kind === 'same-line' ? meets(after[i], cont[i]) : (!!word && cont[i].has(word))) return;
+    if (!live.has(i)) return;
     // Line-end alternatives with the same arms are ONE token whose sets are the union over its uses:
     // a token per statement kind would keep tree-sitter from sharing the states of an expression's
     // end between the statements it can end (JavaScript, measured locally: 2,462 states with four
@@ -1783,7 +1799,8 @@ function buildTokenTreeSitter(grammar: CstGrammar, grammarName: string): Omit<Tr
 
   const terminalSets = computeTerminalSets(grammar, tokenNames);
   const assertions = classifyAssertions(grammar, tokenNames, terminalSets);
-  const zeroWidth = planZeroWidth(grammar, tokenNames, new Set(scannerTokenFor.keys()), prattRules, assertions.isWordLiteral);
+  const zeroWidth = planZeroWidth(grammar, tokenNames, new Set(scannerTokenFor.keys()), prattRules, assertions.isWordLiteral,
+    new Set(assertions.reservedSets.sets[0]?.words ?? []));
   for (const n of zeroWidth.lowered) for (const rec of assertions.recordOf.get(n)!) rec.cls = 'lowered';
   for (const t of zeroWidth.tokens) externalSnake.add(t.snake);
   const ctx: GrammarJsContext = {
@@ -2775,8 +2792,28 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   const literals = [...lits].sort();
   const litId = new Map(literals.map((l, i) => [l, i]));
   const SKIP = -2;
-  const openers = new Set<string>();
-  for (const t of grammar.tokens) if (t.flags.includes('skip')) for (const p of tokenPatternLiteralPrefixes(t)) openers.add(p);
+  // A skip token the scanner skips itself (so a line break inside or after it is seen): its opening
+  // literal, and how it ends: a closing literal (the last item of its sequence) or the line (a final
+  // run of characters that excludes the line terminator). Any other skip token's opener defers.
+  type Skip = { opener: string; closer: string | null };
+  const skips: Skip[] = [];
+  const deferOpeners = new Set<string>();
+  for (const t of grammar.tokens) {
+    if (!t.flags.includes('skip')) continue;
+    const p = t.pattern;
+    const last = typeof p !== 'string' && p.type === 'seq' ? p.items[p.items.length - 1] : null;
+    const closer = typeof last === 'string' ? last
+      : last && last.type === 'repeat' && typeof last.body !== 'string' && last.body.type === 'charClass' && last.body.negate
+        && last.body.items.some(it => it.type === 'char' && it.value === '\n') ? null : undefined;
+    for (const o of tokenPatternLiteralPrefixes(t)) {
+      if (closer === undefined) deferOpeners.add(o);
+      else if (!skips.some(k => k.opener === o)) skips.push({ opener: o, closer });
+    }
+  }
+  // An opener that extends another one with the same end (`/**` of `/*`, `///` of `//`) is read as
+  // that one: the shorter opener's body takes the rest (`/**/` closes at its `*/`).
+  for (let i = skips.length - 1; i >= 0; i--)
+    if (skips.some(k => k !== skips[i] && k.closer === skips[i].closer && skips[i].opener.startsWith(k.opener))) skips.splice(i, 1);
   const kindTokens = grammar.tokens.filter(t => !t.flags.includes('skip') && !tokenPatternIsNever(t)).map(t => t.name);
   if (kindTokens.length > 64) throw new Error(`gen-treesitter: ${kindTokens.length} non-literal tokens; the zero-width scanner's token mask holds 64`);
   const cRanges = (set: CSet, v: string) => {
@@ -2805,7 +2842,7 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   H.push('  return m;');
   H.push('}');
   // The longest literal (or skip opener) at the input, as a trie of nested switches.
-  type Node = { kids: Map<number, Node>; lit?: number; skip?: boolean };
+  type Node = { kids: Map<number, Node>; lit?: number; skip?: number };
   const root: Node = { kids: new Map() };
   const insert = (text: string, mark: (n: Node) => void) => {
     let n = root;
@@ -2813,9 +2850,28 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
     mark(n);
   };
   literals.forEach((l, i) => insert(l, n => { n.lit = i; }));
-  for (const o of openers) insert(o, n => { n.skip = true; });
+  for (const o of deferOpeners) insert(o, n => { n.skip = SKIP; });
+  skips.forEach((k, i) => insert(k.opener, n => { n.skip = -10 - i; }));
   H.push(`// The literals, by id: ${literals.map((l, i) => `${i} ${JSON.stringify(l)}`).join(', ')}`);
-  H.push(`static int zw_literal(TSLexer *lexer) {   // the longest literal id, ${SKIP} for a skip opener, -1 for none`);
+  H.push(`// The skip tokens skipped here: ${skips.map((k, i) => `${i} ${JSON.stringify(k.opener)} to ${k.closer === null ? 'the line end' : JSON.stringify(k.closer)}`).join(', ')}`);
+  H.push('static bool zw_skip_comment(TSLexer *lexer, int k, bool *line_break) {   // past its end; false at an unterminated one');
+  H.push('  switch (k) {');
+  skips.forEach((k, i) => {
+    if (k.closer === null) { H.push(`    case ${i}: while (!lexer->eof(lexer) && !zw_line_terminator(lexer->lookahead)) skip(lexer); return true;`); return; }
+    const cs = [...k.closer].map(c => c.codePointAt(0)!);
+    H.push(`    case ${i}: { static const int32_t close[] = { ${cs.join(', ')} }; unsigned at = 0;`);
+    H.push('      while (!lexer->eof(lexer)) {');
+    H.push('        int32_t c = lexer->lookahead;');
+    H.push('        if (zw_line_terminator(c)) *line_break = true;');
+    H.push('        skip(lexer);');
+    H.push(`        if (c == close[at]) { if (++at == ${cs.length}) return true; } else at = c == close[0] ? 1 : 0;`);
+    H.push('      }');
+    H.push('      return false; }');
+  });
+  H.push('  }');
+  H.push('  return false;');
+  H.push('}');
+  H.push(`static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: skip token k; ${SKIP}: an opener to defer; -1: none`);
   H.push('  int best = -1;');
   const emit = (n: Node, depth: number, text: string) => {
     const pad = '  '.repeat(depth + 1);
@@ -2824,8 +2880,8 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
     for (const [c, k] of [...n.kids].sort((a, b) => a[0] - b[0])) {
       const t = text + String.fromCodePoint(c);
       H.push(`${pad}  case ${c}:`);
-      H.push(`${pad}    advance(lexer);`);
-      if (k.skip) H.push(`${pad}    best = ${SKIP};`);
+      H.push(`${pad}    skip(lexer);`);
+      if (k.skip !== undefined) H.push(`${pad}    best = ${k.skip};`);
       else if (k.lit !== undefined) H.push(isWordLit(t) ? `${pad}    if (!zw_word_char(lexer->lookahead)) best = ${k.lit};` : `${pad}    best = ${k.lit};`);
       emit(k, depth + 2, t);
       H.push(`${pad}    break;`);
@@ -2838,12 +2894,15 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   // Per token: is a literal / a token / the end of the input in AFTER, in CONT, in its lookahead arms.
   // A word-shaped literal is also the word token where the set has that (keyword extraction lexes it
   // as the word token where the keyword itself is not valid).
-  const has = (set: Iterable<string>, kindLit: string) => { const s = new Set(set); return s.has(`'${kindLit}`) || (!!word && isWordLit(kindLit) && s.has(word)); };
+  const exact = (set: Iterable<string>, kindLit: string) => new Set(set).has(`'${kindLit}`);
+  const reservedWords = new Set(ctx.reserved.plan.sets[0]?.words ?? []);
+  const has = (set: Iterable<string>, kindLit: string) => { const s = new Set(set); return s.has(`'${kindLit}`) || (!!word && isWordLit(kindLit) && !reservedWords.has(kindLit) && s.has(word)); };
   const mask = (set: Iterable<string>) => { const s = new Set(set); let m = 0n; kindTokens.forEach((n, i) => { if (s.has(n)) m |= 1n << BigInt(i); }); return `0x${m.toString(16)}ull`; };
   const boolRow = (f: (l: string) => boolean) => `{ ${literals.map(l => (f(l) ? 1 : 0)).join(', ')} }`;
-  H.push('typedef struct { int symbol; bool line_end; bool line_break; bool after_end; uint64_t after_tok, cont_tok, ahead_tok; const bool *after_lit, *cont_lit, *ahead_lit; } ZeroWidth;');
+  H.push('typedef struct { int symbol; bool line_end; bool line_break; bool after_end; uint64_t after_tok, cont_tok, ahead_tok; const bool *after_exact, *after_lit, *cont_lit, *ahead_lit; } ZeroWidth;');
   tokens.forEach(t => {
     const S = t.snake.toUpperCase();
+    H.push(`static const bool ${S}_AFTER_EXACT[] = ${boolRow(l => exact(t.after, l))};`);
     H.push(`static const bool ${S}_AFTER[] = ${boolRow(l => has(t.after, l))};`);
     H.push(`static const bool ${S}_CONT[] = ${boolRow(l => has(t.cont, l))};`);
     H.push(`static const bool ${S}_AHEAD[] = ${boolRow(l => t.ahead.includes(`'${l}`))};`);
@@ -2851,7 +2910,7 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   H.push('static const ZeroWidth ZERO_WIDTH[] = {');
   for (const t of tokens) {
     const S = t.snake.toUpperCase();
-    H.push(`  { ${S}, ${t.kind === 'line-end'}, ${t.lineBreak}, ${t.after.has(END)}, ${mask(t.after)}, ${mask(t.cont)}, ${mask(t.ahead)}, ${S}_AFTER, ${S}_CONT, ${S}_AHEAD },`);
+    H.push(`  { ${S}, ${t.kind === 'line-end'}, ${t.lineBreak}, ${t.after.has(END)}, ${mask(t.after)}, ${mask(t.cont)}, ${mask(t.ahead)}, ${S}_AFTER_EXACT, ${S}_AFTER, ${S}_CONT, ${S}_AHEAD },`);
   }
   H.push('};');
   H.push('// A line-end token where its assertion holds (a line break or the end of the input, or a lookahead');
@@ -2860,20 +2919,27 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   H.push('// 1: returned; 0: declined; 2: declined before anything but whitespace was read, `/` next (regex).');
   H.push('static int scan_zero_width(TSLexer *lexer, const bool *valid_symbols) {');
   H.push('  lexer->mark_end(lexer);');
-  H.push('  bool line_break = false;');
-  H.push('  while (iswspace(lexer->lookahead)) { if (zw_line_terminator(lexer->lookahead)) line_break = true; skip(lexer); }');
-  if (regexSym) H.push(`  if (valid_symbols[${regexSym}] && lexer->lookahead == '/') return 2;`);
-  H.push('  bool end = lexer->eof(lexer);');
-  H.push('  uint64_t cand = 0; int lit = -1;');
-  H.push('  if (!end) { cand = zw_token_candidates(lexer->lookahead); lit = zw_literal(lexer); }');
+  H.push('  bool line_break = false, end;');
+  H.push('  uint64_t cand; int lit;');
+  H.push('  for (;;) {');
+  H.push('    while (iswspace(lexer->lookahead)) { if (zw_line_terminator(lexer->lookahead)) line_break = true; skip(lexer); }');
+  if (regexSym) H.push(`    if (valid_symbols[${regexSym}] && lexer->lookahead == '/') return 2;`);
+  H.push('    end = lexer->eof(lexer);');
+  H.push('    cand = 0; lit = -1;');
+  H.push('    if (!end) { cand = zw_token_candidates(lexer->lookahead); lit = zw_literal(lexer); }');
+  H.push('    if (lit > -10) break;');
+  H.push('    if (!zw_skip_comment(lexer, -10 - lit, &line_break)) return 0;');
+  H.push('  }');
   H.push(`  if (lit == ${SKIP}) return 0;`);
+  H.push('  // Two passes: a keyword the token names itself first, then a keyword read as the word token.');
+  H.push('  for (int pass = 0; pass < 2; pass++)');
   H.push(`  for (unsigned i = 0; i < ${tokens.length}; i++) {`);
   H.push('    const ZeroWidth *z = &ZERO_WIDTH[i];');
   H.push('    if (!valid_symbols[z->symbol]) continue;');
   H.push('    bool ahead = !end && (lit >= 0 ? z->ahead_lit[lit] : (cand & z->ahead_tok) != 0);');
   H.push('    bool holds = z->line_end ? ((z->line_break && (line_break || end)) || ahead) : (!line_break && !end);');
   H.push('    if (!holds) continue;');
-  H.push('    bool after = end ? z->after_end : lit >= 0 ? z->after_lit[lit] : (cand & z->after_tok) != 0;');
+  H.push('    bool after = end ? z->after_end : lit >= 0 ? (pass == 0 ? z->after_exact[lit] : z->after_lit[lit]) : (cand & z->after_tok) != 0;');
   H.push('    bool cont = !end && (lit >= 0 ? z->cont_lit[lit] : (cand & z->cont_tok) != 0);');
   H.push('    if (after && !cont) { lexer->result_symbol = z->symbol; return 1; }');
   H.push('  }');

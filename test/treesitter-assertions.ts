@@ -28,13 +28,14 @@ const RENDERED: AssertionClass[] = ['lowered', 'reserved-set'];
 // (js / jsx 41 of 43, ts / tsx 63 of 65; the two left are `not("new")` / `not("super")`, sets that
 // are no subset of the chain).
 // Item 2: the line-end alternatives (`asi()`: its `not(sameLine)` and `not(not("}"))` arms) and the
-// `sameLine` items render as zero-width external tokens (planZeroWidth): js 35, jsx 37, ts 119, tsx 121
-// lowered; the `sameLine` items left are the ones whose AFTER meets their CONT.
+// `sameLine` items render as zero-width external tokens (planZeroWidth): js 41, jsx 43, ts 131, tsx 133
+// lowered (every scanner-class assertion of js / jsx); the 6 `sameLine` left in ts / tsx are the ones
+// whose AFTER meets their CONT.
 const PINNED: Record<string, Partial<Record<AssertionClass, number>>> = {
-  javascript:      { lowered: 35,  vacuous: 6,  'reserved-set': 41, scanner: 6,  reserved: 2, lookahead1: 23, lookahead: 8 },
-  typescript:      { lowered: 119, vacuous: 60, 'reserved-set': 63, scanner: 18, reserved: 2, lookahead1: 88, lookahead: 69, 'left-context': 2 },
-  javascriptreact: { lowered: 37,  vacuous: 6,  'reserved-set': 41, scanner: 6,  reserved: 2, lookahead1: 23, lookahead: 8 },
-  typescriptreact: { lowered: 121, vacuous: 60, 'reserved-set': 63, scanner: 18, reserved: 2, lookahead1: 88, lookahead: 69, 'left-context': 2 },
+  javascript:      { lowered: 41,  vacuous: 6,  'reserved-set': 41, scanner: 0,  reserved: 2, lookahead1: 23, lookahead: 8 },
+  typescript:      { lowered: 131, vacuous: 60, 'reserved-set': 63, scanner: 6,  reserved: 2, lookahead1: 88, lookahead: 69, 'left-context': 2 },
+  javascriptreact: { lowered: 43,  vacuous: 6,  'reserved-set': 41, scanner: 0,  reserved: 2, lookahead1: 23, lookahead: 8 },
+  typescriptreact: { lowered: 133, vacuous: 60, 'reserved-set': 63, scanner: 6,  reserved: 2, lookahead1: 88, lookahead: 69, 'left-context': 2 },
   yaml:            { lowered: 1,  scanner: 16, lookahead1: 6 },
 };
 
