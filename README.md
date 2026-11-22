@@ -80,7 +80,7 @@ This matters because `tsc`'s *parser* is not the same thing as the language. It 
 <!-- coverage:start -->
 | Grammar | Parser — agree · covered | Highlighter — Monogram vs official |
 |---|---|---|
-| TypeScript | 99.9% · 76.4% | 99.0% vs 99.3% |
+| TypeScript | 99.5% · 76.4% | 99.0% vs 99.3% |
 | JavaScript | 95.8% · 65.5% | 99.0% vs 83.6% |
 | JSX | 97.1% · 52.5% | 94.3% vs 94.3% |
 | TSX | 96.7% · 65.7% | 95.6% vs 95.4% |
