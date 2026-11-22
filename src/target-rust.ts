@@ -381,6 +381,7 @@ function rsUniIdentTables(): string {
   return `static _UNI_T: &[u8; ${p.data.length}] = b"${p.data.replace(/\\/g, '\\\\')}";
 // uni-ident.ts's class of cp: 0 neither, 1 IdentifierPart only, 2 IdentifierStart too.
 #[inline(always)] fn _uni_class(cp: u32) -> u32 {
+    if cp < ${p.flatLen} { return ${l.flat}; }
     if ${l.top} >= ${p.topLen} { return 0; }
     let mut i: u32;
 ${l.steps.map((e) => `    i = ${e};\n    if i < ${l.uniform} { return i; }\n`).join('')}    ${l.result}

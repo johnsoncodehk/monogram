@@ -314,6 +314,7 @@ function goUniIdentTables(): string {
 // uni-ident.ts's class of r: 0 neither, 1 IdentifierPart only, 2 IdentifierStart too.
 func uniClass(r rune) uint32 {
 	cp := uint32(r)
+	if cp < ${p.flatLen} { return ${l.flat} }
 	if ${l.top} >= ${p.topLen} { return 0 }
 	var i uint32
 ${l.steps.map((e) => `\ti = ${e}\n\tif i < ${l.uniform} { return i }\n`).join('')}\treturn ${l.result}

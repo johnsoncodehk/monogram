@@ -27,7 +27,9 @@ export const UNI_ID_CONTINUE = '[$\\u200c\\u200d\\p{ID_Continue}]';
  * `i = entry(level, (i - 3) << level.fanBits | (cp >> level.shift) & (2^fanBits - 1))`, where an
  * entry is `width` symbols, most significant first, at `level.at + j * width`. Past the last
  * level, i - 3 is a leaf of `2^leafBits` code points, two to a symbol (two bits each). Equal nodes
- * of every level are stored once.
+ * of every level are stored once. Ahead of the trie, the first `flatLen` code points (ASCII and
+ * Latin-1, which end or continue most non-ASCII identifier runs) are stored flat, two to a symbol
+ * from `flatAt`: one read each.
  */
 export interface UniIdentPlan {
   data: string;
@@ -35,6 +37,8 @@ export interface UniIdentPlan {
   levels: { at: number; width: 1 | 2; shift: number; fanBits: number }[];
   leafAt: number;
   leafBits: number;
+  flatAt: number;
+  flatLen: number;
 }
 
 /** The first symbol byte: symbols are `0`..`o`, so the only byte a string literal escapes is `\`. */
@@ -44,6 +48,8 @@ export const UNI_SYM0 = 0x30;
 const SHIFTS = [11, 8, 5, 2];
 /** Ids below this are uniform nodes (their class); see UniIdentPlan. */
 const UNIFORM = 3;
+/** The code points stored flat ahead of the trie. */
+const FLAT = 256;
 
 let plan: UniIdentPlan | undefined;
 
@@ -99,7 +105,9 @@ export function uniIdentPlan(): UniIdentPlan {
   while (ids.length > 0 && ids[ids.length - 1] === 0) ids.pop();
   const topWidth = entryWidth(count);
   const top = ids.flatMap((x) => entry(x, topWidth));
-  const all = [top, ...nodes.map((n) => n.syms), leafSyms];
+  const flat: number[] = [];
+  for (let cp = 0; cp < FLAT; cp += 2) flat.push(cls[cp]! | (cls[cp + 1]! << 2));
+  const all = [top, ...nodes.map((n) => n.syms), leafSyms, flat];
   const ats: number[] = [];
   let at = 0;
   for (const part of all) { ats.push(at); at += part.length; }
@@ -108,12 +116,14 @@ export function uniIdentPlan(): UniIdentPlan {
     data,
     topLen: ids.length,
     levels: [{ at: 0, width: topWidth, shift: SHIFTS[0]!, fanBits: 0 }, ...nodes.map((n, k) => ({ at: ats[k + 1]!, width: n.width, shift: n.shift, fanBits: n.fanBits }))],
-    leafAt: ats[ats.length - 1]!,
+    leafAt: ats[ats.length - 2]!,
     leafBits,
+    flatAt: ats[ats.length - 1]!,
+    flatLen: FLAT,
   };
   // The lookup the printers spell, run here over the same string, must give every code point its class.
   const l = uniLookup(plan, (k) => `D.charCodeAt(${k})`);
-  const classOf = new Function('D', `return (cp) => { let i; if (${l.top} >= ${plan.topLen}) return 0; ${l.steps.map((e) => `i = ${e}; if (i < ${l.uniform}) return i;`).join(' ')} return ${l.result}; }`)(data) as (cp: number) => number;
+  const classOf = new Function('D', `return (cp) => { let i; if (cp < ${plan.flatLen}) return ${l.flat}; if (${l.top} >= ${plan.topLen}) return 0; ${l.steps.map((e) => `i = ${e}; if (i < ${l.uniform}) return i;`).join(' ')} return ${l.result}; }`)(data) as (cp: number) => number;
   for (let cp = 0; cp < 0x110000; cp++) if (classOf(cp) !== cls[cp]) throw new Error(`uni-ident: the table misclassifies U+${cp.toString(16)}`);
   return plan;
 }
@@ -127,14 +137,14 @@ const entry = (x: number, width: 1 | 2) => (width === 1 ? [x] : [x >> 6, x & 63]
 /**
  * The lookup of a code point's class (UniIdentPlan) as target-neutral expressions over the
  * unsigned 32-bit variables `cp` and `i`, every operator parenthesised (Go's precedence of `<<` /
- * `&` / `|` is not C's): a printer returns 0 when `top >= topLen`, then assigns each of `steps` to
+ * `&` / `|` is not C's): a printer returns `flat` when `cp < flatLen`, 0 when `top >= topLen`, then assigns each of `steps` to
  * `i` in order, returning i as soon as it is below `uniform`, and returns `result` after the last.
  * `byte(k)` spells the data string's byte at index expression k as an unsigned 32-bit value.
  * Constants are folded into one term per index (an index sum is written with `+`, its constant
  * last, and stays non-negative: i >= uniform there), and a leaf symbol's four low bits are its
  * value (UNI_SYM0 is a multiple of 16), so a leaf needs no subtraction.
  */
-export function uniLookup(p: UniIdentPlan, byte: (k: string) => string): { top: string; steps: string[]; result: string; uniform: number } {
+export function uniLookup(p: UniIdentPlan, byte: (k: string) => string): { flat: string; top: string; steps: string[]; result: string; uniform: number } {
   if (UNI_SYM0 % 16 !== 0) throw new Error('uni-ident: a leaf symbol must keep its value in its low four bits');
   const term = (k: number) => (k === 0 ? '' : k > 0 ? ` + ${k}` : ` - ${-k}`);
   // The entry at (j << fanBits) + x of a level whose j is an id (i), or at j for the top.
@@ -145,6 +155,6 @@ export function uniLookup(p: UniIdentPlan, byte: (k: string) => string): { top: 
   const steps = [ent(p.levels[0]!, top, 0), ...p.levels.slice(1).map((l) =>
     ent(l, `((i << ${l.fanBits}) + ((cp >> ${l.shift}) & ${(1 << l.fanBits) - 1}))`, UNIFORM << l.fanBits))];
   const half = p.leafBits - 1;
-  const v = byte(`((i << ${half}) + ((cp & ${(1 << p.leafBits) - 1}) >> 1)${term(p.leafAt - (UNIFORM << half))})`);
-  return { top, steps, result: `((${v} >> ((cp & 1) << 1)) & 3)`, uniform: UNIFORM };
+  const pair = (k: string) => `((${byte(k)} >> ((cp & 1) << 1)) & 3)`;
+  return { flat: pair(`((cp >> 1) + ${p.flatAt})`), top, steps, result: pair(`((i << ${half}) + ((cp & ${(1 << p.leafBits) - 1}) >> 1)${term(p.leafAt - (UNIFORM << half))})`), uniform: UNIFORM };
 }
