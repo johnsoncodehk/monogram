@@ -1,0 +1,16 @@
+{
+ "estree node_modules": {
+  "corpus": "node_modules",
+  "statements": 13292,
+  "compared": 11755,
+  "identical": 11673,
+  "outOfSubset": 1537
+ },
+ "tsc conformance/expressions": {
+  "corpus": "conformance/expressions",
+  "statements": 2176,
+  "compared": 1715,
+  "identical": 1714,
+  "outOfSubset": 459
+ }
+}
