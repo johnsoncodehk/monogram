@@ -197,7 +197,6 @@ export type RdRule = {
   altGuard: Guard[];        // parallel to alts: when each one is a candidate at all
   altDispatch: Dispatch;    // how a target reaches the alts a token admits (unused when predictive / one alt)
   altCommit?: Commit;       // the keys at which one alternative is left (see Commit); absent: none
-  altBody?: Array<Step | null>;   // parallel to alts, with a Commit: an alternative both its frame and its commit run, as one step printed once (see commitBodies)
 };
 // The candidates of a longest-match list, by what the first token must be, as sections a target
 // prints in order: a `lid` section switches on the token's literal and a `kid` section on its
@@ -357,16 +356,6 @@ export function frameDispatch(d: Dispatch, c: Commit, kindsOf: (text: string) =>
   });
   return pruned ? { sections, ranked: rankedOf(sections) } : d;
 }
-/** The candidates a list's Commit commits to that its frame still reaches: each one's steps (those
- *  after its guard's lead tests) as ONE `seq` step, so that shareSteps counts it at its two places
- *  and prints it once, as a shared step both call; null for every other candidate (printed where it
- *  runs) and for one of one step (a call already, or a compound step shareSteps shares itself). `steps`: parallel to
- *  the list, null for an arm with no steps (a token or prefix arm). */
-function commitBodies(c: Commit, frame: Dispatch, steps: Array<Step[] | null>): Array<Step | null> | undefined {
-  const inFrame = dispatchArms(frame), committed = new Set(commitPrinted(c).map((a) => a.arm));
-  const out = steps.map((st, i): Step | null => (st !== null && st.length > 1 && inFrame.has(i) && committed.has(i) ? { t: 'seq', steps: st } : null));
-  return out.some((s) => s !== null) ? out : undefined;
-}
 export function commitOf(cands: CommitCand[], P: CommitTables): Commit | undefined {
   // A token class: a literal the tests read (or none of them: null) and a kind.
   type Cls = { lit: string | null; kind: string };
@@ -448,7 +437,6 @@ export type PrattRule = {
   nudNames: string[];                                 // parallel to nudOrder: each arm's name (the prefix arm: opNames.prefix); see Step, NAMES
   nudDispatch: Dispatch;                              // how a target reaches the nudOrder arms a token admits
   nudCommit?: Commit;                                 // the keys at which one NUD arm is left (see Commit); absent: none
-  nudBody?: Array<Step | null>;                       // parallel to nudOrder, with a Commit: an arm both its frame and its commit run, as one step printed once (see commitBodies)
   nudCappedGuard: Guard[];                            // parallel to nudCapped: when each capped seq is a candidate (see Guard)
   // requireTarget: the operand (prefix) / left operand (binary, postfix) must have FORM_TARGET,
   // else the whole Pratt call fails; noUnaryLhs: the left operand must not have FORM_UNARY.
@@ -1114,7 +1102,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
           first: g?.first ?? null, lead: g?.lead ?? [], runtime: g !== null && g.second !== null,
           nullable: nullableList(guardedSteps(g, r.alts[i]!)), clean: listFailsClean(guardedSteps(g, r.alts[i]!)),
         })), P);
-        if (c) { r.altDispatch = frameDispatch(r.altDispatch, c, kindsOf); r.altCommit = failSetOf(c); r.altBody = commitBodies(c, r.altDispatch, r.alts.map((alt, i) => guardedSteps(r.altGuard[i]!, alt))); }
+        if (c) { r.altDispatch = frameDispatch(r.altDispatch, c, kindsOf); r.altCommit = failSetOf(c); }
       } else {
         const ops = [...new Set(r.prefix.map((p) => p.op))];
         const c = commitOf(r.nudOrder.map((n): CommitCand => {
@@ -1130,7 +1118,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
             case 'prefix': return { first: { lits: ops, toks: [] }, lead: [], runtime: false, nullable: false, clean: false };
           }
         }), P);
-        if (c) { r.nudDispatch = frameDispatch(r.nudDispatch, c, kindsOf); r.nudCommit = failSetOf(c); r.nudBody = commitBodies(c, r.nudDispatch, r.nudOrder.map((n) => (n.kind === 'bracket' ? r.nudBrackets[n.index]!.steps : n.kind === 'seq' ? guardedSteps(r.nudSeqGuard[n.index]!, r.nudSeqs[n.index]!) : n.kind === 'capped' ? guardedSteps(r.nudCappedGuard[n.index]!, r.nudCapped[n.index]!.steps) : null))); }
+        if (c) { r.nudDispatch = frameDispatch(r.nudDispatch, c, kindsOf); r.nudCommit = failSetOf(c); }
       }
     }
   }
@@ -1151,16 +1139,14 @@ const ruleBodies = (r: RuleIR): Step[][] => (r.kind === 'rd' ? r.alts : [...r.nu
 // counts): a candidate of a list with a Commit once in its frame if the frame still reaches it
 // (frameDispatch), and once per commit of it the switch prints (commitPrinted).
 const dispatchArms = (d: Dispatch): Set<number> => new Set(d.sections.flatMap((s) => (s.by === 'rest' ? s.arms : s.groups.flatMap((g) => g.arms))));
-const commitBodiesOf = (r: RuleIR): Step[] => ((r.kind === 'rd' ? r.altBody : r.nudBody) ?? []).filter((b): b is Step => b !== null);
 function printedBodies(r: RuleIR): Step[][] {
   const c = r.kind === 'rd' ? r.altCommit : r.nudCommit;
   if (c === undefined) return ruleBodies(r);
   const times = (i: number, d: Dispatch) => (dispatchArms(d).has(i) ? 1 : 0) + commitPrinted(c).filter((a) => a.arm === i).length;
-  // An arm with a body (commitBodies) is that one step at each of its places.
-  const at = (i: number, steps: Step[], d: Dispatch, body: Array<Step | null> | undefined) => { const b = body?.[i]; return Array<Step[]>(times(i, d)).fill(b ? [b] : steps); };
-  if (r.kind === 'rd') return r.alts.flatMap((alt, i) => at(i, alt, r.altDispatch, r.altBody));
+  const at = (i: number, steps: Step[], d: Dispatch) => Array<Step[]>(times(i, d)).fill(steps);
+  if (r.kind === 'rd') return r.alts.flatMap((alt, i) => at(i, alt, r.altDispatch));
   const arm = (kind: NudRef['kind'], index: number) => r.nudOrder.findIndex((n) => n.kind === kind && 'index' in n && n.index === index);
-  const each = (kind: NudRef['kind'], lists: Step[][]) => lists.flatMap((s, k) => at(arm(kind, k), s, r.nudDispatch, r.nudBody));
+  const each = (kind: NudRef['kind'], lists: Step[][]) => lists.flatMap((s, k) => at(arm(kind, k), s, r.nudDispatch));
   return [...each('bracket', r.nudBrackets.map((b) => b.steps)), ...each('seq', r.nudSeqs), ...each('capped', r.nudCapped.map((c) => c.steps)), ...r.leds.map((b) => b.steps)];
 }
 // The steps directly inside a step (a `look` step's body is a lookahead of its own, not inside it).
@@ -1346,8 +1332,8 @@ export function ruleShell(r: RdRule, ids: LexIdPlan, L: RuleLowering): string {
     return L.fn([L.open, L.peekOrFail, r.alts.map(arm).join(L.armJoin), L.fail]);
   }
   if (r.alts.length === 1) return L.fn([L.open, `${L.ind}${L.ifThen(cond(r.alts[0]!), L.accept(0))}`, L.fail]);
-  // An alternative's steps as the frame or the commit (over S) runs them: its body step when it has one (commitBodies).
-  const body = (i: number, S: StepLowering) => { const b = r.altBody?.[i]; return b ? stepExpr(b, S) : conjOf(guardedSteps(r.altGuard[i]!, r.alts[i]!), S); };
+  // An alternative's steps as the frame or the commit (over S) runs them.
+  const body = (i: number, S: StepLowering) => conjOf(guardedSteps(r.altGuard[i]!, r.alts[i]!), S);
   const arm = (i: number, keyed: boolean) => L.guard(r.altGuard[i]!, keyed, L.cand(r.altDispatch, i, body(i, L.steps)));
   const needPeek = r.altGuard.some((g) => g !== null);
   const frame = [dispatchWalk(r.altDispatch, ids, arm, L.dispatch, true), L.closeBest];
@@ -1504,8 +1490,7 @@ export type PrattLowering = {
 export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | 'identToken' | 'identLike' | 'puncts' | 'gtComps'>, ids: LexIdPlan, L: PrattLowering): string {
   const cond = (steps: Step[]) => conjOf(steps, L.steps);
   const d = r.nudDispatch;
-  // An arm's steps: its body step when it has one (commitBodies).
-  const armCond = (i: number, steps: Step[]) => { const b = r.nudBody?.[i]; return b ? stepExpr(b, L.steps) : cond(steps); };
+  const armCond = (_i: number, steps: Step[]) => cond(steps);
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
     switch (a.kind) {
@@ -1590,7 +1575,6 @@ function formsOf(rules: RuleIR[], lookaheads: Alt[], nShared: number, entry: str
     const r = byName.get(name);
     if (r === undefined) return;
     for (const body of ruleBodies(r)) for (const s of body) buildStep(s);
-    for (const b of commitBodiesOf(r)) buildStep(b);
     if (r.kind === 'pratt') for (const h of [r.nudTplHole, r.postfixTplHole]) if (h !== undefined) buildRule(h);
   };
   const buildStep = (s: Step): void => {
@@ -1604,7 +1588,7 @@ function formsOf(rules: RuleIR[], lookaheads: Alt[], nShared: number, entry: str
     if (r === undefined || recognize.has(name)) return;
     recognize.add(name);
     if (r.kind === 'pratt') buildRule(name);   // recognized by its building form
-    else { for (const alt of r.alts) for (const s of alt) recognizeStep(s); for (const b of commitBodiesOf(r)) recognizeStep(b); }
+    else for (const alt of r.alts) for (const s of alt) recognizeStep(s);
   };
   const recognizeStep = (s: Step): void => {
     if ('share' in s && s.share !== undefined) { if (recognizeShared[s.share]) return; recognizeShared[s.share] = true; }
@@ -1646,7 +1630,7 @@ function formsOf(rules: RuleIR[], lookaheads: Alt[], nShared: number, entry: str
     if ('share' in s && s.share !== undefined && recognizeShared[s.share] && callsBuild(s)) sharedCalls[s.share] = true;
     stepKids(s).forEach(markShared);
   };
-  for (const r of rules) { for (const body of ruleBodies(r)) body.forEach(markShared); commitBodiesOf(r).forEach(markShared); }
+  for (const r of rules) for (const body of ruleBodies(r)) body.forEach(markShared);
   lookaheads.forEach((body) => body.forEach(markShared));
   return {
     buildRules: rules.filter((r) => build.has(r.name)).map((r) => r.name),

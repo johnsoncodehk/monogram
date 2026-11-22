@@ -603,11 +603,9 @@ function tsRules(r: RdRule, ids: LexIdPlan, m: Mode): RuleLowering {
     closeBest: w ? '  pos = bestPos;\n  return _n !== b;' : '  pos = bestPos;\n  return bestPos > save;',
     commitPeek: '  const _ft = peek();',
     guardConds: (g) => guardCond(g, '_ft', false),
-    // The start (position, child-stack height) is read before the steps run: arguments are
-    // evaluated in order. Undoing a clean failure is a no-op, so one helper serves both.
-    commit: (_i, conds, cond, _undo, nullable) => commitTs(conds, nullable
-      ? `{ const s = pos; return ${w ? `commitW(${cn}, s, _n, ` : 'commitR(s, '}${cond} && pos > s); }`
-      : `{ return ${w ? `commitW(${cn}, pos, _n, ` : 'commitR(pos, '}${cond}); }`, 'return false;', true),
+    commit: (_i, conds, cond, undo, nullable) => commitTs(conds, w
+      ? `{ const save = pos, b = _n; if (${cond}${nullable ? ' && pos > save' : ''}) { finR(${cn}, b, save); return true; }${undo ? ' back(save); _n = b;' : ''} }`
+      : `{ ${undo ? 'const save = pos; ' : ''}if (${cond}${nullable ? ' && pos > save' : ''}) return true;${undo ? ' back(save);' : ''} }`, 'return false;'),
     commitFail: '{ return false; }',
     commitSw: commitSwTs('_ft'),
   };
@@ -758,9 +756,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
     // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node (the
     // one slot at b), form, tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (_i, conds) => commitTs(conds, `{ const b = _n; leafSlotW(tok_kind(t), t); pos++; finP(${cn}, b); _form = 0; _tail = false; return true; }`, NUD_FAIL_TS, true),
-    commitSeq: (_i, conds, cond, tail, capped, _undo, nullable) => commitTs(conds, nullable
-      ? `{ const s = pos; return commitNud(${cn}, s, _n, ${cond} && pos > s, ${tail}, ${capped}); }`
-      : `{ return commitNud(${cn}, pos, _n, ${cond}, ${tail}, ${capped}); }`, NUD_FAIL_TS, true),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitTs(conds, `{ const save = pos, b = _n; if (${cond}${nullable ? ' && pos > save' : ''}) { finR(${cn}, b, save); _capped = ${capped}; _form = 0; _tail = ${tail}; return true; }${undo ? ' back(save); _n = b;' : ''} }`, NUD_FAIL_TS),
     commitPrefix: (_i, conds) => commitTs(conds, `{ const pbp = ${r.name}_PRE[t.lid];
     if (pbp !== undefined) {
       const save = pos, b = _n;
@@ -3210,14 +3206,6 @@ let _form = 0;   // assignment-target form of the node the last _nud/_bp call re
 let _tail = false;   // whether the node the last _nud call returned closes the access tail
 // A NUD that matched nothing, from its commit switch: the state its frame leaves then.
 function nudNone(): boolean { _capped = false; _form = 0; _tail = false; return false; }
-// A committed candidate's end (target-ts.ts commit lowerings), its steps run from position s with
-// the child stack at b: matched (ok), its node; else everything since undone (no match).
-function commitW(rule: string, s: number, b: number, ok: boolean): boolean { if (ok) { finR(rule, b, s); return true; } back(s); _n = b; return false; }
-function commitR(s: number, ok: boolean): boolean { if (ok) return true; back(s); return false; }
-function commitNud(rule: string, s: number, b: number, ok: boolean, tail: boolean, capped: boolean): boolean {
-  if (ok) { finR(rule, b, s); _capped = capped; _form = 0; _tail = tail; return true; }
-  back(s); _n = b; return nudNone();
-}
 // Indices into the grammar's suppress sets (ParserIR.suppressSets; 0 = none): the set a \`suppress\`
 // step stages for the next Pratt call, and the set in force in the current one.
 let _suppressNext = 0;
