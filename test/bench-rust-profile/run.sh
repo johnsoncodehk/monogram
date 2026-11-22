@@ -90,7 +90,7 @@ cd "$W/inputs"
 
 echo "=== acceptance and work counts (count builds; not profiled)"
 for f in $INPUTS; do
-  "$OXC/oxc-once" --once "$f" | sed 's/^/C /' | tee -a "$R"
+  { "$OXC/oxc-once" --once "$f" || echo "CRASH $f oxc-once (exit $?)"; } | sed 's/^/C /' | tee -a "$R"
   # oxc-count overflows its stack on dense-plus.ts (a 1 MB left-deep `a+a+…`): that is a fact about
   # the reference, not a reason to lose the whole profile, so a crash here is recorded and the run goes on.
   [ $HAVE_OXCCOUNT = 1 ] && { "$W/oxc-count/target/release/oxc-count" "$f" || echo "OXCCOUNT $f crashed (exit $?)"; } | tee -a "$R"
@@ -111,7 +111,7 @@ done
 
 echo "=== native time per parse (profiled build; one run each, indicative only: the benchmark is test/bench-rust-oxc)"
 for f in $MAIN; do
-  "$OXC/oxc-parse-bench" "$f" | awk -v f="$f" '{print "C TIME parse", f, "ms=" $3}' | tee -a "$R"
+  { "$OXC/oxc-parse-bench" "$f" || echo "crashed - (exit $?)"; } | awk -v f="$f" '{print "C TIME parse", f, "ms=" $3}' | tee -a "$R"
   for v in A M; do
     "$W/mono-prof-$v/target/release/mono-prof-$v" --time "$f" | sed "s/^/$v /" | tee -a "$R"
     "$W/mono-prof-$v/target/release/mono-prof-$v" --time-lex "$f" | sed "s/^/$v /" | tee -a "$R"
