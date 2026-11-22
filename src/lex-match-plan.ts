@@ -275,8 +275,76 @@ function ovr(p: TokenPattern, rest: TokenPattern[]): number {
  *  reads at most the unit at its end. Every unit read past the end is then one of
  *  `examinedUnits(p)`. */
 export function overTrigger(p: TokenPattern): CSet {
-  if (!committed(p, ACCEPT)) return overRead(p) > 1 ? examinedUnits(p) : NONE;
-  return trig(p, []);
+  if (overRead(p) <= 1) return NONE;
+  if (committed(p, ACCEPT)) return trig(p, []);
+  // The regex may back up out of any choice. An attempt that read past the end of the match took
+  // the end's unit as one more unit of some path that consumed the match's text: a unit the
+  // pattern's derivative by that text can begin with (`deriv` over-approximates it). Every such
+  // derivative is explored, over the units the pattern tells apart; a zero-width test that reads
+  // more than one unit is taken as reading anywhere.
+  return derivFollow(p) ?? examinedUnits(p);
+}
+
+// The units some path of p can take right after having consumed a whole match of p: the union of
+// the first units of p's derivatives by every text p matches. null when the derivatives do not
+// close within a bound.
+function derivFollow(p: TokenPattern): CSet | null {
+  // One representative per run of units no class of p tells apart.
+  const cuts = new Set<number>([0, 0x10000]);
+  const walk = (q: TokenPattern): void => {
+    if (typeof q === 'string') { for (const ch of q) { const c = ch.charCodeAt(0); cuts.add(c); cuts.add(c + 1); } return; }
+    switch (q.type) {
+      case 'charClass': for (const it of q.items) { const a = (it.type === 'char' ? it.value : it.from).charCodeAt(0), b = (it.type === 'char' ? it.value : it.to).charCodeAt(0); cuts.add(a); cuts.add(b + 1); } return;
+      case 'seq': case 'alt': q.items.forEach(walk); return;
+      case 'repeat': case 'lookahead': case 'lookbehind': walk(q.body); return;
+      default: return;
+    }
+  };
+  walk(p);
+  let wideLook = false;
+  const looks = (q: TokenPattern): void => {
+    if (typeof q === 'string') return;
+    if (q.type === 'lookahead' && reach(q.body) > 1) wideLook = true;
+    if (q.type === 'seq' || q.type === 'alt') q.items.forEach(looks);
+    if (q.type === 'repeat' || q.type === 'lookahead') looks(q.body);
+  };
+  looks(p);
+  if (wideLook) return null;
+  const reps = [...cuts].sort((a, b) => a - b).filter((c) => c < 0x10000);
+  const runs: [number, number][] = reps.map((c, i) => [c, (reps[i + 1] ?? 0x10000) - 1]);
+  const seen = new Map<string, TokenPattern>();
+  const todo: TokenPattern[] = [];
+  const add = (q: TokenPattern): void => { const n = simplify(q), k = JSON.stringify(n); if (!seen.has(k)) { seen.set(k, n); todo.push(n); } };
+  // The derivatives by a non-empty text: the start pattern itself only once a unit is consumed.
+  for (const [c] of runs) { const d = deriv(p, c); if (d !== null) add(d); }
+  let out: CSet = NONE;
+  while (todo.length) {
+    if (seen.size > 400) return null;
+    const q = todo.pop()!;
+    const qi = info(q);
+    // q accepts here: the text so far is a whole match; q's consuming starts are the follow.
+    if (qi.nullable) out = union(out, qi.first);
+    for (const [c] of runs) { const d = deriv(q, c); if (d !== null) add(d); }
+  }
+  return out;
+}
+
+// Flattens seqs and alts and drops empty literals, so equal derivatives print alike.
+function simplify(p: TokenPattern): TokenPattern {
+  if (typeof p === 'string') return p;
+  switch (p.type) {
+    case 'seq': {
+      const items = p.items.map(simplify).flatMap((i) => (typeof i !== 'string' && i.type === 'seq' ? i.items : i === '' ? [] : [i]));
+      return items.length === 0 ? '' : items.length === 1 ? items[0]! : { type: 'seq', items };
+    }
+    case 'alt': {
+      const seenK = new Set<string>();
+      const items = p.items.map(simplify).flatMap((i) => (typeof i !== 'string' && i.type === 'alt' ? i.items : [i])).filter((i) => { const k = JSON.stringify(i); if (seenK.has(k)) return false; seenK.add(k); return true; });
+      return items.length === 1 ? items[0]! : { type: 'alt', items };
+    }
+    case 'repeat': return { ...p, body: simplify(p.body) };
+    default: return p;
+  }
 }
 
 // The units at the whole match's end at which an attempt of node p (followed by `rest`) that
