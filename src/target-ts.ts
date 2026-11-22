@@ -1025,6 +1025,15 @@ export const cstBuilder: Builder<Cst> = {
 }
 
 /** The library's entry points over the engine: parse, parseWith, and the incremental Doc. */
+// RESCAN in createDoc().edit, the Doc's two fresh lexes (each counted in Align: rescanChecks, and
+// rescanRepairs when it replaced the relexed stream; removed with the relex fix of the known
+// defects, portable-targets HOLE_EDIT_EXPECTED_FAIL):
+// - after a rejected parse: the relexed stream should equal a fresh lex by construction; a fresh
+//   lex checks it, and only a stream that differs is replaced and parsed again;
+// - after a lexer error in the relex: the text is rejected when a fresh lex refuses it too, and the
+//   Doc keeps no token stream (the next edit relexes it all). The lexer reports an error by
+//   throwing, so the one throw caught is the relex's (owed: errors by return); a throw anywhere
+//   else in edit is a bug and surfaces.
 function docRuntime(ir: ParserIR): string {
   const reuse = ir.reuse;
   const topReuse = reuse !== null;
@@ -1309,7 +1318,6 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
   let entries: EntryMeta[] = [];
   let entryHs: H[] = [];` : ''}
   let root: H | null = null;
-  // The Doc's re-scans so far (RESCAN in edit): fresh lexes that checked a relex, and those that replaced it.
   let rescanChecks = 0, rescanRepairs = 0;
   {
     const got = parseWithMeta(src, prevToks, builder);
@@ -1325,10 +1333,7 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
     edit(edits: Edit[]): H | null {
       const oldText = text, oldToks = prevToks;
       let relexed = 0;
-      // A lexer error in the relex: the text is rejected when a fresh lex refuses it too, and the
-      // Doc keeps no token stream (the next edit relexes it all). The lexer reports an error by
-      // throwing, so the one throw caught is the relex's (owed: the lexer reports errors by
-      // return); a throw anywhere else in edit is a bug and surfaces. The fresh lex is RESCAN.
+      // RESCAN (the generator's docRuntime): a lexer error, the text's own if a fresh lex fails too.
       try {
         [text, prevToks, relexed] = relexEdits(oldText, oldToks, edits);
       } catch {
@@ -1366,10 +1371,7 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
       }` : ''}
       if (next === null) {
         let got = parseWithMeta(text, prevToks, builder);
-        // RESCAN: the parse rejected. The relexed stream should equal a fresh lex by construction,
-        // but known relex defects break that (portable-targets: HOLE_EDIT_EXPECTED_FAIL), so a fresh
-        // lex checks it, and only a stream that differs is replaced and parsed again (counted in
-        // Align: rescanChecks, rescanRepairs; removed with the relex fix).
+        // RESCAN: a fresh lex checks the relexed stream of a rejected parse (known relex defects).
         if (got.root === null) {
           rescanChecks++;
           if (!sameAsFreshLex(text, prevToks)) {
