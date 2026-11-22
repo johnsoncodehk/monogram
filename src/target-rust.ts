@@ -540,7 +540,7 @@ ${rxLoopBody}
     (pos, st.pending_nl, st.prev_lid, st.prev_kid, st.bp_lid, st.has_prev, st.has_prev2, st.paren_head, st.last_close, st.last_bang)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::with_capacity(src.len() / 2 + 16);
+    let mut toks = Vec::new();
     lex_from(src, 0, false, 0, 0, 0, false, false, Vec::new(), false, false, &mut toks, 0);
     toks
 }`;
@@ -557,7 +557,7 @@ ${loopBody}
     (pos, st.pending_nl, st.template_stack)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::with_capacity(src.len() / 2 + 16);
+    let mut toks = Vec::new();
     lex_from(src, 0, false, Vec::new(), &mut toks, 0);
     toks
 }`;
@@ -574,7 +574,7 @@ ${loopBody}
     (pos, st.pending_nl, st.prev_lid, st.prev_kid, st.bp_lid, st.has_prev, st.has_prev2, st.paren_head, st.last_close, st.last_bang, st.template_stack)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::with_capacity(src.len() / 2 + 16);
+    let mut toks = Vec::new();
     lex_from(src, 0, false, 0, 0, 0, false, false, Vec::new(), false, false, Vec::new(), &mut toks, 0);
     toks
 }`;
@@ -619,7 +619,7 @@ ${nlLoopBody}
     (pos, st.pending_nl, st.flow_depth)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::with_capacity(src.len() / 2 + 16);
+    let mut toks = Vec::new();
     lex_from(src, 0, false, 0, &mut toks, 0);
     toks
 }`;
@@ -634,7 +634,7 @@ ${loopBody.replace(/pending_nl/g, 'pending_nl').replace(/toks\.push/g, 'acc.push
     (pos, pending_nl)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::with_capacity(src.len() / 2 + 16);
+    let mut toks = Vec::new();
     lex_from(src, 0, false, &mut toks, 0);
     toks
 }`;
