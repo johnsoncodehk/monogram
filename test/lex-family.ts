@@ -23,7 +23,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { token, rule, defineGrammar, many, seq, plus, star, oneOf, noneOf, range, repeat, altPattern, anyChar, notFollowedBy } from '../src/api.ts';
-import { portableIR, type ParserIR } from '../src/emit-portable.ts';
+import { buildLexIdPlan, portableIR, type ParserIR } from '../src/emit-portable.ts';
 import { tsTarget, goTarget, rustTarget, type Target } from '../src/emit.ts';
 import { type TextUnits, unitLen } from '../src/text-units.ts';
 import type { CstGrammar } from '../src/types.ts';
@@ -322,6 +322,43 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   }
   if (advances === 0) fail('no literal advance found in any emitted lexer (the spellings this check reads have changed)');
   console.log(`  ${advances} literal advances in the emitted lexers are their literal's length in the target's units`);
+}
+
+// ── 7. the literals a token kind can be (tokenLiterals) hold every literal its regex can match ──
+// A lexer records literal id 0 without a lookup for a kind whose list is empty, so a list must
+// hold every literal a token of the kind can be: here, every literal its whole token regex (what
+// the interpreter's lexer runs) matches. The typescript grammar's lists are also pinned, so a
+// change in what the analysis proves is seen.
+{
+  let pairs = 0;
+  const GS = ['../javascript.ts', '../typescript.ts', ...['calc', 'minijs', 'richtokens', 'regexjs', 'templatejs', 'envspec', 'envtpl', 'altjs', 'nudjs', 'sljs', 'unilits'].map((f) => `./fixtures/${f}.ts`)];
+  for (const path of GS) {
+    const g = (await import(path)).default as CstGrammar;
+    const pir = portableIR(g);
+    const lits = buildLexIdPlan(pir).lids.slice(1);
+    for (const t of tsTarget.shared.scannedTokens(pir)) {
+      const decl = g.tokens.find((d) => d.name === t.name)!;
+      const re = new RegExp(`^(?:${tokenPatternToRegex(decl.pattern)})$`);
+      const have = new Set(tsTarget.shared.tokenLiterals(pir, t, lits));
+      for (const l of lits) {
+        pairs++;
+        if (re.test(l) && !have.has(l)) fail(`${g.name}: ${t.name}'s regex matches the literal ${JSON.stringify(l)}, which tokenLiterals leaves out`);
+      }
+    }
+  }
+  const ts = (await import('../typescript.ts')).default as CstGrammar;
+  const tir = portableIR(ts);
+  const tlits = buildLexIdPlan(tir).lids.slice(1);
+  const lists = Object.fromEntries(tsTarget.shared.scannedTokens(tir).filter((t) => !t.skip).map((t) => [t.name, tsTarget.shared.tokenLiterals(tir, t, tlits)]));
+  const words = tlits.filter((l) => /^[A-Za-z_$][\w$]*$/.test(l));
+  if (JSON.stringify(lists['Ident']) !== JSON.stringify(words)) fail(`typescript: Ident can be ${JSON.stringify(lists['Ident'])}, want every word literal`);
+  if (JSON.stringify(lists['Decorator']) !== JSON.stringify(['@new'])) fail(`typescript: Decorator can be ${JSON.stringify(lists['Decorator'])}, want ["@new"]`);
+  const none = Object.keys(lists).filter((k) => lists[k]!.length === 0).sort();
+  const NONE = ['BigInt', 'BinaryNumber', 'HexNumber', 'Number', 'OctalNumber', 'PrivateField', 'Regex', 'String'];
+  if (JSON.stringify(none) !== JSON.stringify(NONE)) fail(`typescript: the kinds that can be no literal are ${JSON.stringify(none)}, want ${JSON.stringify(NONE)}`);
+  const tl = tsTarget.shared.templateLiterals(tir, tlits);
+  if (Object.values(tl).some((l) => l.length > 0)) fail(`typescript: a template piece can be a literal: ${JSON.stringify(tl)}`);
+  console.log(`  ${pairs} (token, literal) pairs: every literal a token's regex matches is in its tokenLiterals; typescript records 0 for ${none.length} kinds and the template pieces`);
 }
 
 if (failures > 0) {

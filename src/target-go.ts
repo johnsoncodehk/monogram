@@ -119,6 +119,10 @@ func litTt(lid uint16) uint16 { if lid >= lidKw { return ${ttIdOf(ar, '$keyword'
 `;
 }
 
+// The literal id of a token whose text is `text`, given the literals its kind can be
+// (shared.tokenLiterals): 0 when it can be none.
+const lidCallGo = (lits: string[], text: string): string => (lits.length === 0 ? '0' : `lidOf(${text})`);
+
 // One token at a dispatch site: the shared scanner, spliced in, says where it ends; the lexer
 // records it.
 function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
@@ -126,7 +130,7 @@ function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: bo
   const kid = kidOf(ids, name);
   const push = t.skip
     ? `if strings.ContainsAny(src[pos:e], "\\n\\r\\u2028\\u2029") { pendingNl = true }; `
-    : `${stateful ? 'emit' : 'pushTok'}(pos, e, ${kid}, lidOf(src[pos:e])); `;
+    : `${stateful ? 'emit' : 'pushTok'}(pos, e, ${kid}, ${lidCallGo(shared.tokenLiterals(ir, t, ids.lids.slice(1)), 'src[pos:e]')}); `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
   const ext = identLike.has(name) ? 'e = lxExt(src, e); ' : '';
@@ -330,17 +334,18 @@ ${emitHooks}
   // (and not whitespace, which is consumed before the dispatch) the test is made in that byte's
   // dispatch arm, before the arm's own candidates, not in every round.
   const tplHeads = new Map<number, string>();
+  const tplLits = shared.templateLiterals(ir, ids.lids.slice(1));
   const headByte = (t: string) => { const b = Buffer.from(t, 'utf8')[0]!; return b < 128 && ![9, 10, 11, 12, 13, 32].includes(b) ? b : null; };
   const tplCloseTest = tpl ? `\t\tif len(templateStack) > 0 && strings.HasPrefix(src[pos:], ${J(tpl.interpClose)}) && templateStack[len(templateStack)-1] == 0 {
 \t\t\ttemplateStack = templateStack[:len(templateStack)-1]
 \t\t\tinterp, e := scanTplSpan(pos + ${tlen(tpl.interpClose)}, false)
-\t\t\tif interp { emit(pos, e, ${kidOf(ids, '$templateMiddle')}, lidOf(src[pos:e])); templateStack = append(templateStack, 0) } else { emit(pos, e, ${kidOf(ids, '$templateTail')}, lidOf(src[pos:e])) }
+\t\t\tif interp { emit(pos, e, ${kidOf(ids, '$templateMiddle')}, ${lidCallGo(tplLits.middle, 'src[pos:e]')}); templateStack = append(templateStack, 0) } else { emit(pos, e, ${kidOf(ids, '$templateTail')}, ${lidCallGo(tplLits.tail, 'src[pos:e]')}) }
 \t\t\tpos = e; continue
 \t\t}
 ` : '';
   const tplOpenTest = tpl ? `\t\tif strings.HasPrefix(src[pos:], ${J(tpl.open)}) {
 \t\t\tinterp, e := scanTplSpan(pos + ${tlen(tpl.open)}, ${rx ? '!prevIsValue()' : 'true'})
-\t\t\tif interp { emit(pos, e, ${kidOf(ids, '$templateHead')}, lidOf(src[pos:e])); templateStack = append(templateStack, 0) } else { emit(pos, e, ${kidOf(ids, tpl.token)}, lidOf(src[pos:e])) }
+\t\t\tif interp { emit(pos, e, ${kidOf(ids, '$templateHead')}, ${lidCallGo(tplLits.head, 'src[pos:e]')}); templateStack = append(templateStack, 0) } else { emit(pos, e, ${kidOf(ids, tpl.token)}, ${lidCallGo(tplLits.whole, 'src[pos:e]')}) }
 \t\t\tpos = e; continue
 \t\t}
 ` : '';

@@ -265,3 +265,57 @@ export function oneChar(p: TokenPattern): boolean {
   }
   return false;
 }
+
+// Whether some match of p can span exactly `text` from its start. Every zero-width test (a
+// lookaround or an anchor) is taken as passing and a character may be one or two units (a
+// surrogate pair), so the answer is a superset of the texts p's tokens can have: false proves that
+// no token of p is `text`, whatever surrounds it.
+export function mayMatchText(p: TokenPattern, text: string): boolean {
+  return endsOf(p, text, new Set([0])).has(text.length);
+}
+function endsOf(p: TokenPattern, t: string, from: Set<number>): Set<number> {
+  const out = new Set<number>();
+  if (typeof p === 'string') {
+    for (const i of from) if (t.startsWith(p, i)) out.add(i + p.length);
+    return out;
+  }
+  switch (p.type) {
+    case 'anyChar':
+      for (const i of from) { if (i < t.length) out.add(i + 1); if (i + 1 < t.length) out.add(i + 2); }
+      return out;
+    case 'charClass':
+      for (const i of from) {
+        if (i >= t.length) continue;
+        const hit = (w: number) => p.items.some((it) => (it.type === 'char'
+          ? t.startsWith(it.value, i) && it.value.length === w
+          : w === 1 && t.charCodeAt(i) >= it.from.charCodeAt(0) && t.charCodeAt(i) <= it.to.charCodeAt(0)));
+        for (const w of [1, 2]) if (i + w <= t.length && (p.negate || hit(w))) out.add(i + w);
+      }
+      return out;
+    case 'seq': {
+      let cur = from;
+      for (const it of p.items) cur = endsOf(it, t, cur);
+      return cur;
+    }
+    case 'alt':
+      for (const it of p.items) for (const e of endsOf(it, t, from)) out.add(e);
+      return out;
+    case 'repeat': {
+      // Positions after k copies, for k = 0, 1, …; a position seen before adds nothing new.
+      let cur = from;
+      const seen = new Set<number>();
+      for (let k = 0; cur.size > 0 && (p.max === undefined || k <= p.max); k++) {
+        if (k >= p.min) for (const e of cur) out.add(e);
+        const fresh = new Set([...cur].filter((e) => !seen.has(e) || k < p.min));
+        for (const e of cur) seen.add(e);
+        if (fresh.size === 0) break;
+        cur = endsOf(p.body, t, fresh);
+      }
+      return out;
+    }
+    case 'lookahead': case 'lookbehind': case 'anchor':
+      return new Set(from);
+    case 'never':
+      return out;
+  }
+}

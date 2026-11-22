@@ -166,17 +166,29 @@ const _LID_FIRST_BITS: &[u8] = &[${bitsLit}];
 #[inline(always)] fn tok_text<'a>(src: &'a str, t: &Tok) -> &'a str { &src[t.off as usize..t.end as usize] }
 #[inline(always)] fn mk_tok(off: usize, end: usize, nl: bool, kid: u16, lid: u16) -> Tok { Tok { off: off as u32, end: end as u32, kid, lid, nl } }
 fn kid_of(kind: &str) -> u16 { match kind { ${kidArms}, _ => 0 } }
-/// O(1) length×first-byte prefilter (its bits hold every literal's key), then the match table of
-/// the text's first-byte class: a word is compared with word literals only. Over the text's bytes:
-/// a literal is compared byte for byte, so the lexer passes its token's bytes without the char
-/// boundary checks a \`&str\` slice makes.
+/// O(1) length×first-byte prefilter: false when no literal has the text's key (its bits hold every
+/// literal's key).
+#[inline(always)]
+fn lid_key_is_literal(text: &[u8]) -> bool {
+    let n = text.len();
+    if n == 0 || n > _LID_MAX_LEN { return false; }
+    let b0 = text[0] as usize;
+    (_LID_FIRST_BITS[n * 32 + (b0 >> 3)] & (1u8 << (b0 & 7))) != 0
+}
+/// The prefilter, then the match table of the text's first-byte class: a word is compared with
+/// word literals only. Over the text's bytes: a literal is compared byte for byte, so the lexer
+/// passes its token's bytes without the char boundary checks a \`&str\` slice makes.
 #[inline(always)]
 fn lid_of(text: &[u8]) -> u16 {
-    let n = text.len();
-    if n == 0 || n > _LID_MAX_LEN { return 0; }
-    let b0 = text[0] as usize;
-    if (_LID_FIRST_BITS[n * 32 + (b0 >> 3)] & (1u8 << (b0 & 7))) == 0 { return 0; }
-    if matches!(b0, ${wordBytes.join(' | ')}) { lid_of_kw(text, n) } else { lid_of_punct(text, n) }
+    if !lid_key_is_literal(text) { return 0; }
+    if matches!(text[0], ${wordBytes.join(' | ')}) { lid_of_kw(text, text.len()) } else { lid_of_punct(text, text.len()) }
+}
+/// lid_of for a token whose kind can equal word literals only (the generator proved it from the
+/// kind's shape, tokenLiterals): the word table, without the first-byte routing.
+#[inline(always)]
+fn lid_of_word(text: &[u8]) -> u16 {
+    if !lid_key_is_literal(text) { return 0; }
+    lid_of_kw(text, text.len())
 }
 #[inline(never)]
 fn lid_of_kw(text: &[u8], n: usize) -> u16 {
@@ -207,16 +219,24 @@ const RULE_NAMES: &[&str] = &[${ar.ruleNames.map(J).join(', ')}];
 // returns the whole lexer state through memory.
 const LEX_FROM_ATTR = '#[inline(always)]\n';
 
+// The literal id of a token whose text is `bytes`, given the literals its kind can be
+// (shared.tokenLiterals): 0 when it can be none, the word table alone when it can be words only.
+function lidCall(lits: string[], bytes: string): string {
+  if (lits.length === 0) return '0';
+  return lits.every((l) => lidWordByte(firstUnit(l, UNITS))) ? `lid_of_word(${bytes})` : `lid_of(${bytes})`;
+}
+
 // One token at a dispatch site: the shared scanner says where it ends; the lexer records it.
-function scanTok(t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
+function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
   const name = t.name;
   const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
   const kid = kidOf(ids, name);
+  const lid = lidCall(shared.tokenLiterals(ir, t, ids.lids.slice(1)), '&b[pos..e]');
   const push = t.skip
     ? `if src[pos..e].chars().any(|c| matches!(c, '\\n' | '\\r' | '\\u{2028}' | '\\u{2029}')) { ${nlVar} = true; } `
     : stateful
-      ? `st.emit(pos, e, ${kid}, lid_of(&b[pos..e])); `
-      : `toks.push(mk_tok(pos, e, pending_nl, ${kid}, lid_of(&b[pos..e]))); pending_nl = false; `;
+      ? `st.emit(pos, e, ${kid}, ${lid}); `
+      : `toks.push(mk_tok(pos, e, pending_nl, ${kid}, ${lid})); pending_nl = false; `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
   const ext = identLike.has(name) ? 'let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(src, e) } else { e }; ' : '';
@@ -264,7 +284,7 @@ function buildLexCandidates(
   const codes: string[] = [];
   const firsts: (LexFirstBytes | null)[] = [];
   for (const t of shared.scannedTokens(ir)) {
-    codes.push(scanTok(t, shared, stateful, ids, rxTok, identLike));
+    codes.push(scanTok(ir, t, shared, stateful, ids, rxTok, identLike));
     firsts.push(lexTokFirstBytes(t));
   }
   for (const p of ir.puncts) {
@@ -370,15 +390,16 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
         10 | 13 => { ${nlVar} = true; pos += 1; while pos < n && matches!(b[pos], 9..=13 | 32) { pos += 1; } continue; }
 `;
   const tplOpenByte = tpl && tlen(tpl.open) === 1 ? firstUnit(tpl.open, UNITS) : null;
+  const tplLits = shared.templateLiterals(ir, ids.lids.slice(1));
   const tplOpenArm = tplOpenByte !== null ? `        ${tplOpenByte} => {
             let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl!.open)}, ${rx ? '!st.prev_is_value()' : 'true'});
-            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, lid_of(&b[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl!.token)}, lid_of(&b[pos..e])); }
+            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, ${lidCall(tplLits.head, '&b[pos..e]')}); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl!.token)}, ${lidCall(tplLits.whole, '&b[pos..e]')}); }
             pos = e; continue;
         }
 ` : '';
   const tplOpenPreCheck = tpl && tplOpenByte === null ? `        if ${startByteEq('pos', tpl.open)} {
             let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.open)}, ${rx ? '!st.prev_is_value()' : 'true'});
-            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, lid_of(&b[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl.token)}, lid_of(&b[pos..e])); }
+            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, ${lidCall(tplLits.head, '&b[pos..e]')}); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl.token)}, ${lidCall(tplLits.whole, '&b[pos..e]')}); }
             pos = e; continue;
         }
 ` : '';
@@ -390,7 +411,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const tplCloseTest = tpl ? `        if !st.template_stack.is_empty() && ${startByteEq('pos', tpl.interpClose)} && *st.template_stack.last().unwrap() == 0 {
             st.template_stack.pop();
             let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.interpClose)}, false);
-            if interp { st.emit(pos, e, ${kidOf(ids, "$templateMiddle")}, lid_of(&b[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, "$templateTail")}, lid_of(&b[pos..e])); }
+            if interp { st.emit(pos, e, ${kidOf(ids, "$templateMiddle")}, ${lidCall(tplLits.middle, '&b[pos..e]')}); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, "$templateTail")}, ${lidCall(tplLits.tail, '&b[pos..e]')}); }
             pos = e; continue;
         }
 ` : '';
@@ -417,10 +438,12 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
 ` : '';
   const identName = ir.identToken;
   const identKid = identName ? kidOf(ids, identName) : 0;
+  const identTok = ir.tokens.find((t) => t.name === identName);
+  const identLid = identTok ? lidCall(shared.tokenLiterals(ir, identTok, ids.lids.slice(1)), '&b[pos..e]') : 'lid_of(&b[pos..e])';
   // Unicode ID_Start fallback (mirrors emit-lexer uniIdentReY) before unmatched-byte panic.
   const uniIdentEmit = stateful
-    ? `st.emit(pos, e, ${identKid}, lid_of(&b[pos..e]));`
-    : `toks.push(mk_tok(pos, e, pending_nl, ${identKid}, lid_of(&b[pos..e]))); pending_nl = false;`;
+    ? `st.emit(pos, e, ${identKid}, ${identLid});`
+    : `toks.push(mk_tok(pos, e, pending_nl, ${identKid}, ${identLid})); pending_nl = false;`;
   const uniIdentOrPanic = identName
     ? `        if c >= 0x80 { if let Some(e) = _scan_uni_ident(src, pos) { ${uniIdentEmit} pos = e; continue; } }
         panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`
