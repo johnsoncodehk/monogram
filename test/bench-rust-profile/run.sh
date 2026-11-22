@@ -194,7 +194,8 @@ for f in $MAIN; do
     t=${v%2} # M2 runs M's build
     out=$OUT/targets/$v.go-reuse.$f.cg
     if env GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1 "${CG[@]}" --callgrind-out-file="$out" "$W/targets-$t/go/count" count "$f" > "$out.stdout" 2> "$out.log" \
-      && gi=$(node "$REPO/test/bench-targets/go-ir.ts" "$out"); then
+      && gi=$(node "$REPO/test/bench-targets/go-ir.ts" "$out") \
+      && node "$REPO/test/bench-targets/go-ir.ts" "$out" --map-callers > "$out.map-callers.txt"; then
       echo "GOIR $v.reuse.$f $(grep -aoE 'ACCEPT|REJECT' "$out.stdout" | head -1) $gi" | tee -a "$R"
     else
       echo "GOIR $v.reuse.$f FAILED" | tee -a "$R"; tail -5 "$out.log"

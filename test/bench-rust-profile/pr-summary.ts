@@ -149,6 +149,10 @@ for (const f of tfiles) {
     if (Math.abs(d) > STILL) still.delete(c.target);
     if (Math.abs(d) > MOVE) moved.set(c.target, [...(moved.get(c.target) ?? []), `${c.head} ${fpct(d)}`]);
   }
+  // Go's map lookups, counted apart from Go Ir (go-ir.ts): shown here so that a lookup added or
+  // removed on the parse path is visible in the same row.
+  const ma = goMap[`A.go-reuse.${f}`]?.mapcalls, mm = goMap[`M.go-reuse.${f}`]?.mapcalls;
+  cells.push(ma === mm ? num(mm) : `**${num(ma)} → ${num(mm)}**`);
   sideRows.push(cells);
   if (moved.size && still.size) singleTarget.push(`${f}: ${[...moved.values()].flat().join(', ')}; unchanged: ${[...still].join(', ')}`);
 }
@@ -180,9 +184,9 @@ if (singleTarget.length) {
   for (const x of singleTarget) say('- ' + x);
 } else say(`Single-target changes: none (no input where one target moves by more than ${MOVE}% while another stays within ${STILL}%).`);
 say();
-table(['input', ...cols.map((c) => c.head + ' Δ')], sideRows);
+table(['input', ...cols.map((c) => c.head + ' Δ'), 'Go map calls (A → M)'], sideRows);
 say();
-say('Rust / Go: Callgrind instructions of one parse (Go: `ParseWith` into the `CstBuilder` of a first parse, reuse mode only: a first parse into a new builder varies between runs in the page allocator; built with `-tags faketime`, run with `GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1`, the Go runtime\'s own work inside the parse included EXCEPT map lookups: a map\'s hash seed is random per process, so a lookup\'s instructions vary between runs; their number does not, and is listed below with their instructions in this run). ' +
+say('Rust / Go: Callgrind instructions of one parse (Go: `ParseWith` into the `CstBuilder` of a first parse, reuse mode only: a first parse into a new builder varies between runs in the page allocator; built with `-tags faketime`, run with `GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1`, the Go runtime\'s own work inside the parse included EXCEPT map lookups: a map\'s hash seed is random per process, so a lookup\'s instructions vary between runs; their number does not, and is the last column (their instructions in this run below; the calling functions in the artifact, `targets/*.map-callers.txt`)). ' +
   'TS / JS: V8 block executions of one `parse(src)` of the TS target and one `createParser().parse(src)` of the emitted JS parser (precise block coverage with counts): they see control flow, not the cost inside a block. ' +
   (repeated ? `M was measured twice for Go, TS and JS: the largest difference was ${fpct(repeatMax)}.` : 'M was measured once (PROFILE_TARGETS_REPEAT=0).'));
 say();
