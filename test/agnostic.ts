@@ -7,6 +7,7 @@ import { tokenPatternStartsWithDecimal } from '../src/token-pattern.ts';
 import { createParser } from '../src/gen-parser.ts';
 import { generateLanguageConfig } from '../src/gen-vscode-config.ts';
 import { generateTmLanguage } from '../src/gen-tm.ts';
+import { emitTokenizerModule, lexSpecOf } from '../src/emit-lexer.ts';
 
 const Word = token(plus(range('a', 'z')), { identifier: true });   // identifier token, ASCII-only on purpose, NOT named "Ident"
 const digit = range('0', '9');
@@ -144,6 +145,31 @@ const ccarve = ctm.repository['jsx-self-closing-element-in-expression']?.begin ?
 const kwOk = (s: string) => s.includes('\\bsubtypeof\\b') && !s.includes('\\bextends\\b') && !s.includes('\\bis\\b');
 check('gen-tm no-comma constraint keyword derived from type-param rule (subtypeof, not hardcoded `extends`/`is`)',
   kwOk(cbegin) && kwOk(ccarve));
+
+// Element regions are grammar data: a toy markup with `[name]…[!name]` elements, `name!]`
+// self-close, `( … )` holes and `Prose` text: none of JSX's characters or names. The region
+// lexes its text and its own tokens by their DECLARED names, and a grammar that declares no
+// `typeParameters` gets no type-parameter rewind in its emitted lexer.
+{
+  const Prose = token(plus(noneOf('[', ']', '(', ')')));
+  const Shut = token(seq('[', '!'));
+  const Solo = token(seq('!', ']'));
+  const RHole = rule(() => [['(', Word, ')']]);
+  const RChild = rule(() => [RElem, RHole, Prose]);
+  const RElem = rule(() => [['[', Word, Solo], ['[', Word, ']', many(RChild), Shut, Word, ']']]);
+  const RProg = rule(() => [[many(RElem)]]);
+  const gr = defineGrammar({
+    name: 'bracketmarkup', tokens: { Word, Prose, Shut, Solo }, rules: { RHole, RChild, RElem, RProg }, entry: RProg,
+    elements: { tagOpen: '[', tagClose: ']', closeMarker: '!', text: 'Prose', closeTag: 'Shut', selfClose: 'Solo', hole: { open: '(', close: ')' } },
+  });
+  const pr = createParser(gr);
+  const toks = pr.tokenize("[p]it's 50% & <b> (x) {y}[q!][!p]");
+  check('element region: text lexed as the declared text token', toks.some((t) => t.type === 'Prose' && t.text === "it's 50% & <b> "));
+  check('element region: close / self-close tokens by their declared names', toks.some((t) => t.type === 'Shut') && toks.some((t) => t.type === 'Solo'));
+  check('element region: parses on the shared engine', pr.parse("[p]it's (x)[q!][!p]").rule !== undefined);
+  const lexSrc = emitTokenizerModule(lexSpecOf(gr));
+  check('element region without typeParameters: no type-parameter rewind emitted', !lexSrc.includes('lxSpecRewind') && !lexSrc.includes('LX_TP_'));
+}
 
 console.log(fail === 0 ? `\n${ok}/${ok} agnosticism checks pass — engine has no TS-specific token assumptions` : `\n${fail} FAILED`);
 process.exit(fail === 0 ? 0 : 1);

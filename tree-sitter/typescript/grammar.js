@@ -251,13 +251,13 @@ module.exports = grammar({
 
     type_start: $ => choice(choice(reserved("reserved_1", $.ident), "void", "null", "this", "typeof", "new", "true", "false", "import", "function", $.string, $.number, $.hex_number, $.octal_number, $.binary_number, $.big_int, $.template, "{", "[", "<", "|", "&", "*", "?", "!", "..."), seq("-", choice($.number, $.hex_number, $.octal_number, $.binary_number, $.big_int)), seq("(", choice(")", $.private_field, $.decorator, "const", "default", "export", "in", $.type_start))),
 
-    shebang: $ => token(/#![^\n]*/),
+    shebang: $ => token(/#![^\n\r\u2028\u2029]*/),
 
     jsdoc: $ => token(/\/\*\*(?:[\s\S])*?\*\//),
 
-    triple_slash: $ => token(/\/\/\/[ \t]*<[^\n]*/),
+    triple_slash: $ => token(/\/\/\/[ \t]*<[^\n\r\u2028\u2029]*/),
 
-    line_comment: $ => token(/\/\/[^\n]*/),
+    line_comment: $ => token(/\/\/[^\n\r\u2028\u2029]*/),
 
     block_comment: $ => token(/\/\*(?:[\s\S])*?\*\//),
 

@@ -895,7 +895,7 @@
     },
     "shebang": {
       "name": "comment.line.shebang.js.jsx",
-      "match": "^#![^\\n]*"
+      "match": "^#![^\\n\\r\\u2028\\u2029]*"
     },
     "docblock": {
       "patterns": [
@@ -1431,7 +1431,7 @@
     },
     "linecomment": {
       "name": "comment.line.double-slash.js.jsx",
-      "match": "//[^\\n]*"
+      "match": "//[^\\n\\r\\u2028\\u2029]*"
     },
     "blockcomment": {
       "name": "comment.block.js.jsx",
@@ -2244,7 +2244,7 @@
       "name": "storage.type.function.arrow.js.jsx"
     },
     "operator-overrides": {
-      "match": "(>>>=)|(\\*\\*=)|(<<=)|(>>=)|(\\?\\?=)|(\\|\\|=)|(&&=)|(===)|(!==)|(>>>)|(\\+=)|(-=)|(\\*=)|(/=)|(%=)|(&=)|(\\|=)|(\\^=)|(\\?\\?)|(\\|\\|)|(&&)|(==)|(!=)|(<=)|(>=)|(<<)|(>>)|(\\*\\*)|(\\+\\+)|(--)|(\\*)|(=)|(-)|(!)|(<)|(>)|(\\|)|(\\^)|(&)|(\\+)|(/)|(%)|(~)",
+      "match": "(>>>=)|(\\*\\*=)|(<<=)|(>>=)|(\\?\\?=)|(\\|\\|=)|(&&=)|(===)|(!==)|(>>>)|(\\+=)|(-=)|(\\*=)|(/=)|(%=)|(&=)|(\\|=)|(\\^=)|(\\?\\?)|(\\|\\|)|(&&)|(==)|(!=)|(<=)|(>=)|(<<)|(>>)|(\\*\\*)|(\\+\\+)|(--)|(\\*)|(=)|(-)|(<)|(>)|(\\|)|(\\^)|(&)|(\\+)|(/)|(%)|(!)|(~)",
       "captures": {
         "1": {
           "name": "keyword.operator.assignment.js.jsx"
@@ -2346,13 +2346,13 @@
           "name": "keyword.operator.arithmetic.js.jsx"
         },
         "34": {
-          "name": "keyword.operator.logical.prefix.js.jsx"
+          "name": "keyword.operator.relational.js.jsx"
         },
         "35": {
           "name": "keyword.operator.relational.js.jsx"
         },
         "36": {
-          "name": "keyword.operator.relational.js.jsx"
+          "name": "keyword.operator.bitwise.js.jsx"
         },
         "37": {
           "name": "keyword.operator.bitwise.js.jsx"
@@ -2361,7 +2361,7 @@
           "name": "keyword.operator.bitwise.js.jsx"
         },
         "39": {
-          "name": "keyword.operator.bitwise.js.jsx"
+          "name": "keyword.operator.arithmetic.js.jsx"
         },
         "40": {
           "name": "keyword.operator.arithmetic.js.jsx"
@@ -2370,7 +2370,7 @@
           "name": "keyword.operator.arithmetic.js.jsx"
         },
         "42": {
-          "name": "keyword.operator.arithmetic.js.jsx"
+          "name": "keyword.operator.logical.prefix.js.jsx"
         },
         "43": {
           "name": "keyword.operator.logical.prefix.js.jsx"
@@ -2718,7 +2718,7 @@
     },
     "directives": {
       "name": "comment.line.triple-slash.js.jsx",
-      "match": "///[ \\t]*<[^\\n]*"
+      "match": "///[ \\t]*<[^\\n\\r\\u2028\\u2029]*"
     },
     "this-literal": {
       "match": "\\b(this)\\b",

@@ -15,7 +15,7 @@ import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, t
 import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type StepLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
-import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
+import { ATOM, COMPARISON, findAnyName, stopBytes, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 import type {
@@ -855,10 +855,10 @@ fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) 
 // nothing. Rust: a body is a non-capturing closure `|p| …` (a `fn(&mut Parser<B>) -> bool`, so no
 // environment is allocated), whose receiver is its own `p` (inner); a choice's statements are a
 // closure called in place; a suppress / ctx body is a block expression.
-function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean): StepLowering {
+function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true): StepLowering {
   const R = r ? '_r' : '';
   const L: StepLowering = {
-    inner: () => (recv === 'p' ? L : rsSteps(ids, 'p', r)),
+    inner: () => (recv === 'p' ? L : rsSteps(ids, 'p', r, guards)),
     shared: (id) => `${recv}.sub_${id}${R}()`,
     lit: (s) => (gtCompLit(ids, s) ? `${recv}.match_comp(${lidOf(ids, s.value)})` : `${recv}.match_lit${R}(${lidOf(ids, s.value)})`),
     tok: (name) => `${recv}.match_tok${R}(${kidOf(ids, name)})`,
@@ -867,14 +867,21 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean): StepLowering {
     rule: (name) => (r ? `${recv}.rec_${name}()` : `${recv}.call_rule(Parser::parse_${name})`),
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (r ? `${recv}.${name}_bp(${bp}).is_some()` : `${recv}.call_rule(|p| p.${name}_bp(${bp}))`),
-    // The body guard (emit-portable.ts annotateSteps) is not rendered in Rust yet, a measured codegen
-    // fact: PR #169's guarded spelling left the work counters of parse_Stmt / parse_Decl / Expr_nud
-    // identical but added +8 to +11 instructions per call to each (LLVM compiles the whole function
-    // differently), so Rust parse instructions rose (dense-semi +4.96%, typescript.ts +1.40%) where
-    // Go and TS fell on every input. The guard only skips attempts that fail, so ignoring it is sound.
-    star: (body, _guard) => `${recv}.star${R}(|p| ${body})`,
-    opt: (body, _guard) => `${recv}.opt${R}(|p| ${body})`,
-    sep: (elem, delim, _guard) => `${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})`,
+    // A body guard (emit-portable.ts annotateSteps): star tests it before each attempt inside an
+    // out-of-line loop (`star_in`); opt / sep test it here and make their attempt out of line
+    // (`opt_out` / `sep_by_out`). Both are `#[inline(never)]` and generic over the body, so each site
+    // is one small function with its body inlined, and the function holding the step grows by a set
+    // test and a call only. A measured codegen fact decides that spelling: with the attempt inline
+    // (PR #169), or the guard inside a helper, LLVM allocated the registers of the large rule
+    // functions differently (same executed branches, other spills: one identifier NUD 246 -> 256
+    // instructions) and Rust parse instructions rose (dense-semi +4.96%; helpers: +0.3% to +4.5%).
+    // Not inside Pratt arms (`guards` false, prattRule): Expr_nud, about 13k instructions, moved by
+    // +9 to +13 per call wherever guarded code joined it (dense-plus +1.30% to +1.87%); without them
+    // dense-plus is +0.43%. PR #184 has the variants and their profile runs. The guard only skips
+    // attempts that cannot match, so leaving it out is sound.
+    star: (body, g) => (g === null || !guards ? `${recv}.star${R}(|p| ${body})` : `${recv}.star_in${R}(${g}, |p| ${body})`),
+    opt: (body, g) => (g === null || !guards ? `${recv}.opt${R}(|p| ${body})` : `(!${recv}.ahead(${g}, true) || ${recv}.opt_out${R}(|p| ${body}))`),
+    sep: (elem, delim, g) => (g === null || !guards ? `${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})` : `(!${recv}.ahead(${g}, true) || ${recv}.sep_by_out${R}(|p| ${elem}, ${sepDelimLid(ids, delim)}))`),
     altlit: (values) => `${recv}.alt_lit${R}(&[${values.map((v) => lidOf(ids, v)).join(', ')}])`,
     look: (id, is) => `${is ? '' : '!'}${recv}.look_${id}()`,
     ahead: (set, is) => `${recv}.ahead(${set}, ${is})`,
@@ -1083,7 +1090,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   const lost = lostRs;
   const fin = `self.finish(${rid}, sb, left.off as usize, left.tok_start as usize)`;
   const L: PrattLowering = {
-    steps: rsSteps(ids, 'self', false),
+    steps: rsSteps(ids, 'self', false, false),   // no body guards in Pratt arms (see rsSteps)
     ifAll: ifRs,
     kidIs: (k) => `t.kid == ${k}`,
     lidIs: (l) => `t.lid == ${l}`,
@@ -1920,10 +1927,9 @@ impl Doc<CstBuilder> {
 
 
 /** Emit Builder trait, CstBuilder/SlimBuilder, sole Parser machine, and parse_with helpers. */
-// The `ahead` test's table: whether a token is in tokenSets[k] (see tokenSetBits). The sets only body
-// guards test are left out: this printer does not render body guards (see rsSteps).
+// The `ahead` test's table: whether a token is in tokenSets[k] (see tokenSetBits).
 function tokenSetRuntimeRust(ir: ParserIR, ids: LexIdPlan): string {
-  const b = tokenSetBits(ids, ir.tokenSets.slice(0, ir.bodyGuardOnly));
+  const b = tokenSetBits(ids, ir.tokenSets);
   const rows: string[] = [];
   for (let r = 0; r * b.width < b.words.length; r++) rows.push(`[${b.words.slice(r * b.width, (r + 1) * b.width).join(', ')}]`);
   return `#[allow(dead_code)]
@@ -2523,6 +2529,60 @@ impl<'a, B: Builder> Parser<'a, B> {
             let m2 = self.mark();
             if !elem(self) { self.reset(m2); break; }
         }
+        true
+    }
+    // The guarded forms: the body is attempted only where the next token is in tokenSets[k]. Out of
+    // line and generic over the body, so each site is its own small function with the body inlined.
+    #[inline(never)]
+    #[allow(dead_code)]
+    fn star_in<F: Fn(&mut Self) -> bool>(&mut self, k: usize, once: F) -> bool {
+        while self.ahead(k, true) {
+            let m = self.mark();
+            if !once(self) { self.reset(m); break; }
+        }
+        true
+    }
+    // The attempt of a guarded opt / sep whose guard the caller tested: out of line, per site.
+    #[inline(never)]
+    #[allow(dead_code)]
+    fn opt_out<F: Fn(&mut Self) -> bool>(&mut self, body: F) -> bool {
+        let m = self.mark(); if !body(self) { self.reset(m); } true
+    }
+    #[inline(never)]
+    #[allow(dead_code)]
+    fn sep_by_out<F: Fn(&mut Self) -> bool>(&mut self, elem: F, delim: u16) -> bool {
+        let m0 = self.mark();
+        if !elem(self) { self.reset(m0); return true; }
+        loop {
+            let m = self.mark();
+            if !self.match_lit(delim) { self.reset(m); break; }
+            let m2 = self.mark();
+            if !elem(self) { self.reset(m2); break; }
+        }
+        true
+    }
+    #[inline(never)]
+    #[allow(dead_code)]
+    fn opt_out_r<F: Fn(&mut Self) -> bool>(&mut self, body: F) -> bool {
+        let sp = self.pos; if !body(self) { self.back(sp); } true
+    }
+    #[inline(never)]
+    #[allow(dead_code)]
+    fn sep_by_out_r<F: Fn(&mut Self) -> bool>(&mut self, elem: F, delim: u16) -> bool {
+        let sp0 = self.pos;
+        if !elem(self) { self.back(sp0); return true; }
+        loop {
+            let sp = self.pos;
+            if !self.match_lit_r(delim) { self.back(sp); break; }
+            let sp2 = self.pos;
+            if !elem(self) { self.back(sp2); break; }
+        }
+        true
+    }
+    #[inline(never)]
+    #[allow(dead_code)]
+    fn star_in_r<F: Fn(&mut Self) -> bool>(&mut self, k: usize, once: F) -> bool {
+        while self.ahead(k, true) { let sp = self.pos; if !once(self) { self.back(sp); break; } }
         true
     }
     #[inline(always)]
@@ -5305,6 +5365,43 @@ fn lex_find(b: &[u8], mut i: usize, lit: &[u8]) -> usize {
         i += 1;
     }
 }`,
+  // Eight bytes per round: each test of the stop plan flags the bytes that may begin a stop (a
+  // zero-byte mask of the word XOR a byte, or the bytes below a bound), ORed; each flagged byte, in
+  // order, is then confirmed, without reading the word again.
+  findAnyFn: (stops) => {
+    const { masks, one, wide } = stopBytes(stops);
+    const hex = (b: number) => `0x${b.toString(16).toUpperCase().padStart(2, '0')}`;
+    const lets: string[] = [], terms: string[] = [];
+    masks.forEach((m, k) => {
+      if ('below' in m) terms.push(`(v.wrapping_sub(L * ${hex(m.below)}) & !v)`);
+      else { lets.push(`let x${k} = v ^ (L * ${hex(m.eq)});`); terms.push(`(x${k}.wrapping_sub(L) & !x${k})`); }
+    });
+    const at = (j: string) => [
+      ...one.map((b) => `b[${j}] == ${hex(b)}`),
+      ...wide.map((w) => `(b[${j}..].starts_with(&[${w.head.map(hex).join(', ')}]) && matches!(b.get(${j} + ${w.head.length}), Some(&(${w.last.map(hex).join(' | ')}))))`),
+    ].join(' || ');
+    return `/// Where the next of ${stops.map((c) => `U+${c.toString(16).toUpperCase().padStart(4, '0')}`).join(', ')} is in b from i: the index of its first byte, or b.len().
+#[inline(never)]
+fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
+    const L: u64 = 0x0101_0101_0101_0101;
+    while let Some(w) = b.get(i..i + 8) {
+        let v = u64::from_le_bytes([w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]]);
+        ${lets.join('\n        ')}
+        let mut m = (${terms.join(' | ')}) & (L << 7);
+        while m != 0 {
+            let j = i + (m.trailing_zeros() >> 3) as usize;
+            if ${at('j')} { return j; }
+            m &= m - 1;
+        }
+        i += 8;
+    }
+    while i < b.len() {
+        if ${at('i')} { return i; }
+        i += 1;
+    }
+    i
+}`;
+  },
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${rsWrap(r, ATOM)}`, prec: 90 }),
@@ -5321,6 +5418,7 @@ fn lex_find(b: &[u8], mut i: usize, lit: &[u8]) -> usize {
     inSet: (cx, set, c) => cx.atom(`${set.toUpperCase()}[${cx.coerce(c, 'usize')}]`, 'bool', 'bool'),
     runEnd: (cx, set, s, i) => cx.atom(`lex_run_end(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')}, &${set.toUpperCase()})`, 'int', 'usize'),
     find: (cx, s, i, lit) => cx.atom(`lex_find(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')}, ${J(lit)}.as_bytes())`, 'int', 'usize'),
+    findAny: (cx, s, i, stops) => cx.atom(`${findAnyName(stops)}(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')})`, 'int', 'usize'),
     own: (cx, r) => {
       if (r.ty === 'str') return cx.atom(`${rsWrap(r, ATOM)}.to_string()`, 'str', 'str', { owned: true });
       if (isList(r.ty)) return cx.atom(`${rsWrap(r, ATOM)}.to_vec()`, r.ty, r.ty, { owned: true });
