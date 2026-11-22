@@ -134,6 +134,37 @@ export interface RawEmbed {
 }
 
 /**
+ * Element regions inside a token-stream grammar (JSX): markup elements entered from code.
+ * A `tagOpen` where an operand may start (the regex-literal position of `prevIsValue`) opens
+ * an element; in a tag the ordinary tokens are lexed (no regex), `closeMarker`+`tagClose` is
+ * the `selfClose` token, `hole.open` opens a code region up to its matching `hole.close`, and
+ * `tagClose` ends the tag. After an open tag the children are TEXT: one `text` token per run of
+ * characters its pattern admits (the run stops at the first character the pattern excludes),
+ * `tagOpen`+`closeMarker` is the `closeTag` token, another `tagOpen` opens a nested element,
+ * `hole.open` a code region. The three token types exist only inside their region (they are
+ * not scanned elsewhere), so `</` and `/>` are tokens only where an element says so.
+ * Entry is LEXER-LOCAL: the lexer stays a pure function of the text. The region shares the
+ * template literal's hole stack (one frame stack, one depth record per token), so a windowed
+ * relex restarts and resyncs only outside every region, as it does outside every template.
+ * ABSENT → the emitted lexer is byte-identical to a grammar without it.
+ */
+export interface ElementRegion {
+  tagOpen: string;       // opens a tag (e.g. '<')
+  tagClose: string;      // ends a tag (e.g. '>')
+  closeMarker: string;   // after `tagOpen`: a close tag; before `tagClose`: a self-close (e.g. '/')
+  text: string;          // token TYPE of a children text run; its pattern must be a run of a character class
+  closeTag: string;      // token TYPE of `tagOpen`+`closeMarker` in children
+  selfClose: string;     // token TYPE of `closeMarker`+`tagClose` in a tag
+  hole: { open: string; close: string };  // a code region inside a tag or the children (e.g. '{' '}')
+  // A `tagOpen` at an operand position that begins a TYPE-PARAMETER list, not an element:
+  //   head      — the characters right after `tagOpen` (e.g. `T,` / `T extends U`): never an element;
+  //   signature — a head `tagOpen Name tagClose` followed by the bracket group `open … close`
+  //               whose closer is followed by one of `then` (`<T>(x: T) => T`, `<T>(x): T`):
+  //               the lexer lexes the group as code and keeps those tokens.
+  typeParameters?: { head?: TokenPattern; signature?: { open: string; close: string; then: string[] } };
+}
+
+/**
  * Declarative markup-mode tokenization (opt-in, e.g. HTML/Vue). When a grammar
  * declares `markup`, the lexer runs a text / tag / raw-text STATE MACHINE instead
  * of the pure token stream: text between tags is one TEXT token (whitespace and
@@ -592,6 +623,7 @@ export interface CstGrammar {
   name?: string;
   scopeName?: string;  // declared TextMate scope name (e.g. source.ts); its suffix drives every scope's language tag
   markup?: MarkupConfig;  // opt-in markup-mode tokenization (HTML/Vue); absent for token-stream languages
+  elements?: ElementRegion;  // opt-in element regions entered from code (JSX); absent → byte-identical lexer
   indent?: IndentConfig;  // opt-in indentation-sensitive tokenization (YAML); absent → byte-identical token stream
   newline?: NewlineConfig;  // opt-in NEWLINE-sensitive tokenization, independent of indent (no indent stack): a NEWLINE token at every block-context line break
   expressionRule?: string;  // name of the rule that produces an EXPRESSION: the rule a template reference's `${…}` holes parse with unless the reference names another (RuleExpr ref.hole), and the rule gen-tm derives a `#expression` sub-grammar from (for expression-only embeds, e.g. Vue `{{ }}`)

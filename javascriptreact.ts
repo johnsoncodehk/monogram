@@ -25,21 +25,44 @@
 //   2. Drop the `<T>expr` prefix cast from `Expr` (forbidden in .tsx/.jsx — the leading
 //      `<` is JSX; `as`/`satisfies` casts are unaffected). It is the only `Expr`
 //      alternative that begins with a literal `<`, so it is removed by shape.
-//   3. Add the JSX rules + the `/>` / `</` atomic tokens (placed before the regex token
-//      so `</div>` lexes a close-tag, not a regex literal), and mark `>` / `}` as
-//      division-context so a following `/` after a tag/container isn't a regex.
+//   3. Add the JSX rules, their three region tokens (`/>`, `</`, the children text) and
+//      the ELEMENT REGION that lexes them (`elements`, see ELEMENTS): an element is
+//      entered where an operand may start, its children are text, and `</` / `/>` are
+//      tokens only inside it. Outside elements the base's lexing is unchanged.
 //
 // Generic type-arguments on a tag (`<List<string>>`) are TypeScript-only, so the JSX
 // rules include them only when the base has a `Type` rule (TS) and omit them for the
 // type-free JavaScript base.
 
-import { token, rule, defineGrammar, sameLine, sep, opt, many, alt, seq } from './src/api.ts';
+import { token, rule, defineGrammar, sameLine, sep, opt, many, alt, seq, plus, star, noneOf, oneOf, range, altPattern, optPattern, notFollowedBy } from './src/api.ts';
 import javascript, { Ident, Number_, String_ } from './javascript.ts';
-import type { CstGrammar, RuleDecl, TokenDecl, RuleExpr } from './src/types.ts';
+import type { CstGrammar, RuleDecl, TokenDecl, RuleExpr, ElementRegion } from './src/types.ts';
 
-// `/>` (self-closing) and `</` (close-tag open) are atomic JSX punctuation tokens.
+// The element region's own tokens (see ELEMENTS below): each exists only inside an element.
+// `/>` ends a self-closing tag, `</` opens a close tag in the children, and a children text run
+// is one JSXText token: every character up to the next `{` or `<` (`>` and `}` are not text:
+// tsc reports them in text, so they end the run and the parser rejects them).
 const JSXSelfClose = token(seq('/', '>'));
 const JSXClose = token(seq('<', '/'));
+const JSXText = token(plus(noneOf('{', '<', '>', '}')));
+
+// A `<` at an operand position that begins a TYPE-PARAMETER list (TypeScript bases only), as
+// tsc decides it under JSX: `<T,`, `<T =`, `<const T,`, `<T extends U` (not `extends=` /
+// `extends>` / `extends/`, which are attributes), and a `<T>` head followed by a parameter
+// list that ends in `=>` or `:` (a function / constructor type or a call signature in a type).
+const ws = star(oneOf(' ', '\t', '\n', '\r'));
+const idStart = oneOf(range('a', 'z'), range('A', 'Z'), '_', '$');
+const idCont = oneOf(range('a', 'z'), range('A', 'Z'), range('0', '9'), '_', '$');
+const typeParameterHead = seq(
+  ws, optPattern(seq('const', plus(oneOf(' ', '\t', '\n', '\r')))), idStart, star(idCont), ws,
+  altPattern(',', seq('=', notFollowedBy(oneOf('=', '>'))), seq('extends', notFollowedBy(idCont), ws, notFollowedBy(oneOf('=', '>', '/')))),
+);
+const ELEMENTS = (hasTypes: boolean): ElementRegion => ({
+  tagOpen: '<', tagClose: '>', closeMarker: '/',
+  text: 'JSXText', closeTag: 'JSXClose', selfClose: 'JSXSelfClose',
+  hole: { open: '{', close: '}' },
+  ...hasTypes ? { typeParameters: { head: typeParameterHead, signature: { open: '(', close: ')', then: ['=>', ':'] } } } : {},
+});
 
 // Build the JSX rule + token DECLARATIONS (serialized, name-referenced). The JSX
 // rules reference `Expr`/`Type` via stub rules of those names, so once spliced into a
@@ -63,8 +86,7 @@ function buildJsxDecls(hasTypes: boolean): { rules: RuleDecl[]; tokens: TokenDec
   const JSXChild = rule($ => [
     JSXElement,
     JSXContainer,
-    Ident, Number_, String_,                       // tokenizable text words
-    alt(',', '.', ':', ';', '!', '?'),             // common sentence punctuation
+    JSXText,                                       // a text run (the element region's text token)
   ]);
   const JSXElement = rule($ => [
     ['<', JSXTagName, ...typeArgs, many(JSXAttr), JSXSelfClose],
@@ -74,12 +96,12 @@ function buildJsxDecls(hasTypes: boolean): { rules: RuleDecl[]; tokens: TokenDec
 
   const g = defineGrammar({
     name: 'jsx-decls',
-    tokens: { Ident, Number: Number_, String: String_, JSXSelfClose, JSXClose },
+    tokens: { Ident, Number: Number_, String: String_, JSXSelfClose, JSXClose, JSXText },
     rules: { Expr, Type, JSXTagName, JSXAttrValue, JSXAttr, JSXContainer, JSXChild, JSXElement },
     entry: JSXElement,
   });
   const ruleNames = new Set(['JSXTagName', 'JSXAttrValue', 'JSXAttr', 'JSXContainer', 'JSXChild', 'JSXElement']);
-  const tokNames = new Set(['JSXSelfClose', 'JSXClose']);
+  const tokNames = new Set(['JSXSelfClose', 'JSXClose', 'JSXText']);
   return {
     rules: g.rules.filter(r => ruleNames.has(r.name)),
     tokens: g.tokens.filter(t => tokNames.has(t.name)),
@@ -128,17 +150,16 @@ export function withJsx(base: CstGrammar, opts: { name: string; scopeName: strin
   const entry = patched[patched.length - 1];
   const rules: RuleDecl[] = [...patched.slice(0, -1), ...jsx.rules, entry];
 
-  // Insert the JSX tokens immediately before the regex token (so `</`,`/>` lex
-  // atomically) and extend its division-context with `>` / `}`.
+  // The JSX tokens go right before the regex token (the declaration order the generators
+  // read); the lexer scans them only inside an element region, entered where a regex literal
+  // may start (the base's regexContext decides both).
   let placed = false;
   const tokens: TokenDecl[] = [];
   for (const t of base.tokens) {
     if (t.regexContext && !placed) {
       tokens.push(...jsx.tokens);
       placed = true;
-      const dat = t.regexContext.divisionAfterTexts ?? [];
-      const add = ['>', '}'].filter(x => !dat.includes(x));
-      tokens.push({ ...t, regexContext: { ...t.regexContext, divisionAfterTexts: [...dat, ...add] } });
+      tokens.push(t);
     } else {
       tokens.push(t);
     }
@@ -150,6 +171,7 @@ export function withJsx(base: CstGrammar, opts: { name: string; scopeName: strin
   // names natively. Pure DATA merge — gen-tm only looks them up, so the engine stays agnostic.
   return {
     ...base, name: opts.name, scopeName: opts.scopeName, rules, tokens,
+    elements: ELEMENTS(hasTypes),
     canonicalRepoNames: { ...base.canonicalRepoNames, ...JSX_CANONICAL },
     // The JSX layer's own tree-sitter GLR conflicts: `{` after a tag is a JSX expression container
     // or an expression, and over a type base `<T` may open a type parameter list or a JSX tag.
