@@ -187,10 +187,16 @@ const dialectSrc = [
   const rejects = (s: string) => { const r = parses(s); return { ok: !r.ok, saw: r.saw }; };
   const types = (s: string) => p.tokenize(s).map((t: { type: string; text: string }) => `${t.type || "'"}${t.text}`);
   const tokenRow = (id: string, s: string, want: string) => rows.push({ section, id, status: 'pass', check: () => { const ts = types(s); return { ok: ts.includes(want), saw: ts.join(' ') }; } });
-  const styleLine = dialectSrc.split('\n').findIndex(l => l.includes('<style>'));
-  const withoutStyle = dialectSrc.split('\n').filter((_, i) => i !== styleLine).join('\n');
-  rows.push({ section, id: 'the dialect source without its `<style>` line parses', status: 'pass', check: () => parses(withoutStyle) });
-  rows.push({ section, id: 'the whole dialect source parses', status: 'xfail', why: 'the `<style>` body is CSS, which code children cannot lex; it needs the region\'s raw-text frame (docs/REGIONS.md, build step 3)', check: () => parses(dialectSrc) });
+  rows.push({ section, id: 'the whole dialect source parses', status: 'pass', check: () => parses(dialectSrc) });
+  // a raw-text element (`rawText`): its body is ONE token up to `</style`, the close tag lexed after
+  tokenRow('`<style>` body is one raw token', dialectSrc, 'StyleBody.a { color: red; }');
+  tokenRow('the raw body keeps `<`, `{` and quotes verbatim', 'component C() { <style k="v">a <b> {c} "d</style> }', 'StyleBodya <b> {c} "d');
+  tokenRow('the close tag after a raw body is the close-tag token', 'component C() { <style>x</style> }', 'CloseOpen</');
+  tokenRow('an empty raw body is no token: the close tag follows the open tag', 'component C() { <style></style> }', 'CloseOpen</');
+  tokenRow('the raw body ends only at `</style` (exact case: `</STYLE>` is body)', 'component C() { <style>a</STYLE>b</style> }', 'StyleBodya</STYLE>b');
+  tokenRow('a self-closing `<style/>` has no raw body', 'component C() { <style/> "x" }', 'Str"x"');
+  rows.push({ section, id: 'an element after a raw-text element parses', status: 'pass', check: () => parses('component C() { <a><style>.x{}</style><b/></a> }') });
+  rows.push({ section, id: 'must reject: a raw-text element with no close tag (the body runs to the end)', status: 'pass', check: () => rejects('component C() { <style>abc }') });
   tokenRow('`</` in children is the close-tag token', 'component C() { <a>"x"</a> }', 'CloseOpen</');
   tokenRow('`/>` in a tag is the self-close token', 'component C() { <a/> }', 'SelfClose/>');
   tokenRow('children are code: a string child is the string token', 'component C() { <a>"x"</a> }', 'Str"x"');

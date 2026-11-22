@@ -163,6 +163,13 @@ export interface ElementRegion {
   // Token TYPES lexed only inside a tag (open or close tag, outside its holes), tried before the
   // ordinary scan there and nowhere else: e.g. an attribute string with no escapes (`b="\"`).
   tagTokens?: string[];
+  // RAW-TEXT elements (`<style>`, `<script>`): when an open tag whose NAME is one of `tags` ends,
+  // its whole body up to `tagOpen + closeMarker + name` is ONE `token` (none when the body is
+  // empty; to the end of the file when no close tag follows), and the close tag is lexed as
+  // usual. `ignoreCase`: the name and the close tag match case-insensitively (HTML `<SCRIPT>`).
+  // `embed` (per tag name: the embedded language's scope) is highlighter data, as in
+  // `MarkupConfig.rawText`; the lexer does not read it.
+  rawText?: { tags: string[]; token: string; ignoreCase?: boolean; embed?: Record<string, string | RawEmbed> }[];
   // A `tagOpen` at an operand position that begins a TYPE-PARAMETER list, not an element:
   //   head      — the characters right after `tagOpen` (e.g. `T,` / `T extends U`): never an element;
   //   signature — a head `tagOpen Name tagClose` followed by the bracket group `open … close`
