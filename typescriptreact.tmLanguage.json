@@ -3072,7 +3072,7 @@
       "name": "support.type.primitive.tsx"
     },
     "scope-keyword-other": {
-      "match": "\\b(unique|out|@new|target|meta)\\b",
+      "match": "\\b(unique|out|target|meta)\\b",
       "name": "keyword.other.tsx"
     },
     "scope-keyword-control-import": {
@@ -3331,6 +3331,10 @@
       "match": "\\b(yield)\\b",
       "name": "keyword.control.flow.tsx"
     },
+    "expr-scope-keyword-other": {
+      "match": "\\b(out|target|meta)\\b",
+      "name": "keyword.other.tsx"
+    },
     "expr-scope-storage-type-namespace-decl": {
       "match": "\\b(module)\\b(?!\\s*(?:\\.|\\?\\.))",
       "name": "storage.type.namespace.tsx"
@@ -3506,7 +3510,7 @@
           "include": "#scope-keyword-other-extends"
         },
         {
-          "include": "#scope-keyword-other"
+          "include": "#expr-scope-keyword-other"
         },
         {
           "include": "#scope-storage-type-function"

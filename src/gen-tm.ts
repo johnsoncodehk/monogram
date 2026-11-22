@@ -1,6 +1,7 @@
 import type { CstGrammar, RuleExpr, RuleDecl, InjectClause, TokenDecl } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
 import { analyzeGrammar } from './grammar-analysis.ts';
+import { compileTokenizer, lexSpecOf } from './emit-lexer.ts';
 import {
   tokenEscapePatternSource,
   tokenBlockPatternSource,
@@ -62,6 +63,25 @@ interface TmGrammar {
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** A keyword literal as a regex bounded by its OWN edge characters: `\b` goes on an edge only
+ *  where that edge's character is a word character. `\b` before a non-word character (the `@` of
+ *  `@if`) holds only after a word character, so a blanket `\b(@if)\b` never matches `@if` at line
+ *  start or after a space; the lexer begins the token at `@` whatever precedes it, and so does this. */
+function boundedKeyword(lit: string): string {
+  const word = /\w/;
+  return `${word.test(lit[0]) ? '\\b' : ''}${escapeRegex(lit)}${word.test(lit[lit.length - 1]) ? '\\b' : ''}`;
+}
+
+/** An alternation of keyword literals, each bounded by `boundedKeyword`. When every literal is
+ *  word-edged on both sides (every committed grammar's word keywords) this is the shared-boundary
+ *  form `\b(a|b)\b`, the same regex. */
+function keywordAlternation(lits: string[]): string {
+  const word = /\w/;
+  return lits.every(l => word.test(l[0]) && word.test(l[l.length - 1]))
+    ? `\\b(${lits.map(escapeRegex).join('|')})\\b`
+    : `(${lits.map(boundedKeyword).join('|')})`;
 }
 
 /** Escape a character for use inside a regex character class `[...]`.
@@ -4725,6 +4745,8 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
   const langName = scopeName.replace(/^source\./, '');
   const repository: Record<string, TmPattern> = {};
   const topPatterns: { include: string }[] = [];
+  // repository key of a keyword pattern → repository key of the token pattern it must precede.
+  const keywordBeforeToken = new Map<string, string>();
 
   const tokenNames = new Set(grammar.tokens.map(t => t.name));
   const { scopeOverrides } = grammar;
@@ -6819,7 +6841,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
         if (scope) {
           // a word literal is `\b`-bounded; a punctuation literal (e.g. `&`) must NOT be — `\b&\b`
           // never matches. Pick the boundary by the literal's class.
-          const m = isKeywordLiteral(kw) ? `\\b${escapeRegex(kw)}\\b` : escapeRegex(kw);
+          const m = isKeywordLiteral(kw) ? boundedKeyword(kw) : escapeRegex(kw);
           tpInner.push({ match: m, name: `${scope}.${langName}` });
         }
       }
@@ -8047,6 +8069,19 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
     .filter(([k]) => isKeywordLiteral(k) && !allLiterals.has(k));
 
   if (allKwLiterals.length > 0 || extraIdents.length > 0) {
+    // The token the LEXER gives a keyword literal's text, when that is not the identifier token
+    // (`@if` / `@new` lex as one Decorator / annotation token: a keyword literal matches a named
+    // token by text). Such a literal competes with that token's own pattern at the same position,
+    // so a pattern for it is ordered just ahead of the token's (`keywordBeforeToken`); a literal
+    // with no declared scope is left to the token, whose scope it already has (`keyword.other` is
+    // the fallback for literals the identifier token would otherwise paint as a name).
+    const lexKw = compileTokenizer(lexSpecOf(grammar));
+    const lexedByToken = (kw: string): TokenDecl | undefined => {
+      const toks = lexKw(kw);
+      if (toks.length !== 1 || toks[0].text !== kw) return undefined;
+      const tok = grammar.tokens.find(t => t.name === toks[0].type);
+      return tok && !tok.identifier ? tok : undefined;
+    };
     const keywordGroups = new Map<string, string[]>();
     for (const kw of allKwLiterals) {
       const scopes = scopeOverrides.get(kw);
@@ -8055,6 +8090,8 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
           if (!keywordGroups.has(scope)) keywordGroups.set(scope, []);
           keywordGroups.get(scope)!.push(kw);
         }
+      } else if (lexedByToken(kw)) {
+        continue;
       } else {
         if (!keywordGroups.has('keyword.other')) keywordGroups.set('keyword.other', []);
         keywordGroups.get('keyword.other')!.push(kw);
@@ -8129,7 +8166,9 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       // Everything else → unconditional flat match.
       const beforeStringKws = kws.filter(k => alwaysBeforeString(k));
       const ctxOpKws = (isOperatorExpr || isContextualCtrl)
-        ? kws.filter(k => (contextualOps.has(k) || (isContextualCtrl && !reservedWordsForCtx.has(k))) && !alwaysBeforeString(k))
+        // (A literal the lexer gives a non-identifier token can never be an identifier, so it is
+        // never contextual: `@each` is a keyword wherever it lexes.)
+        ? kws.filter(k => (contextualOps.has(k) || (isContextualCtrl && !reservedWordsForCtx.has(k) && !lexedByToken(k))) && !alwaysBeforeString(k))
         : [];
       const ctxOpSet = new Set(ctxOpKws);
       // Accessibility-style modifiers that double as identifiers (`public x` vs
@@ -8211,12 +8250,30 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
         const valueAbstain = isBuiltinClass && valuePosOpeners.length > 0
           ? `(?!\\s*(?:${valuePosOpeners.join('|')}))`
           : '';
-        repository[key] = {
-          match: `\\b(${globalKws.map(escapeRegex).join('|')})\\b${valueAbstain}`,
-          name: `${scope}.${langName}`,
-        };
-        topPatterns.push({ include: `#${key}` });
-        if (isOperatorExpr) operatorExprIncludeKeys.push(key);
+        // Literals the lexer gives another named token: one pattern per such token, ranked just
+        // ahead of that token's pattern (see lexedByToken).
+        const byToken = new Map<string, string[]>();
+        const flat: string[] = [];
+        for (const k of globalKws) {
+          const tok = lexedByToken(k);
+          if (tok) { const tk = tok.name.toLowerCase(); byToken.set(tk, [...(byToken.get(tk) ?? []), k]); }
+          else flat.push(k);
+        }
+        if (flat.length > 0) {
+          repository[key] = {
+            match: `${keywordAlternation(flat)}${valueAbstain}`,
+            name: `${scope}.${langName}`,
+          };
+          topPatterns.push({ include: `#${key}` });
+          if (isOperatorExpr) operatorExprIncludeKeys.push(key);
+        }
+        for (const [tk, lits] of byToken) {
+          const bkey = `${key}-${tk}`;
+          repository[bkey] = { match: `${keywordAlternation(lits)}${valueAbstain}`, name: `${scope}.${langName}` };
+          topPatterns.push({ include: `#${bkey}` });
+          keywordBeforeToken.set(bkey, tk);
+          if (isOperatorExpr) operatorExprIncludeKeys.push(bkey);
+        }
       }
       // Contextual accessibility modifiers: one guarded entry, placed at the same
       // position as the flat group (before #ident) so a real modifier still wins,
@@ -8224,7 +8281,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       if (ctxModKws.length > 0) {
         const mkey = `${key}-accessibility`;
         repository[mkey] = {
-          match: `\\b(${ctxModKws.map(escapeRegex).join('|')})\\b${modifierGuard}`,
+          match: `${keywordAlternation(ctxModKws)}${modifierGuard}`,
           name: `${scope}.${langName}`,
         };
         topPatterns.push({ include: `#${mkey}` });
@@ -8236,7 +8293,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       if (ctxDeclKws.length > 0) {
         const dkey = `${key}-decl`;
         repository[dkey] = {
-          match: `\\b(${ctxDeclKws.map(escapeRegex).join('|')})\\b(?!\\s*(?:${accessorOpeners.join('|')}))`,
+          match: `${keywordAlternation(ctxDeclKws)}(?!\\s*(?:${accessorOpeners.join('|')}))`,
           name: `${scope}.${langName}`,
         };
         topPatterns.push({ include: `#${dkey}` });
@@ -8244,7 +8301,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       for (const kw of beforeStringKws) {
         const ckey = `${key}-${kw.replace(/[^a-z0-9]/gi, '')}`;
         repository[ckey] = {
-          match: `\\b${escapeRegex(kw)}\\b(?=\\s*["'])`,
+          match: `${boundedKeyword(kw)}(?=\\s*["'])`,
           name: `${scope}.${langName}`,
         };
         topPatterns.push({ include: `#${ckey}` });
@@ -8258,7 +8315,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       for (const kw of ctxOpKws) {
         const ckey = `${key}-${kw.replace(/[^a-z0-9]/gi, '')}`;
         repository[ckey] = {
-          match: `\\b(${escapeRegex(kw)})\\b${guard}`,
+          match: `${keywordAlternation([kw])}${guard}`,
           name: `${scope}.${langName}`,
         };
         topPatterns.push({ include: `#${ckey}` });
@@ -8311,7 +8368,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       const typeBuiltinKey = 'type-builtin-literals';
       if (typeBuiltinLiterals.length > 0) {
         repository[typeBuiltinKey] = {
-          match: `\\b(${typeBuiltinLiterals.map(escapeRegex).join('|')})\\b`,
+          match: keywordAlternation(typeBuiltinLiterals),
           name: `support.type.builtin.${langName}`,
         };
       }
@@ -8334,7 +8391,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       for (const [scope, kws] of typeStorageMods) {
         const tmKey = `type-${scope.replace(/\./g, '-')}`;
         repository[tmKey] = {
-          match: `\\b(${kws.map(escapeRegex).join('|')})\\b`,
+          match: keywordAlternation(kws),
           name: `${scope}.${langName}`,
         };
         typeStorageModIncludes.push({ include: `#${tmKey}` });
@@ -8553,6 +8610,9 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
   // Stable sort: tokens/patterns sharing an order number keep their insertion order.
   function scopeOrder(include: string): number {
     const key = include.slice(1); // remove '#'
+    // A keyword literal the lexer gives a named token is tried just before that token's pattern.
+    const lexedAs = keywordBeforeToken.get(key);
+    if (lexedAs !== undefined) return scopeOrder(`#${lexedAs}`) - 0.01;
     // Generic-arrow type params (`<T>(…) =>`, `async <T>(…) =>`) must beat the
     // generic-call layers, #type-cast and #comparison: its trigger is the most
     // specific (arrow position + arrow-param confirm) and it fully scopes the
