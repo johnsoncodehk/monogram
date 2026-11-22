@@ -215,7 +215,7 @@ export const exportDeclaration = ($, Stmt, declarationWords) =>
 // `AttributeKey : IdentifierName | StringLiteral`): the specifier and every attribute value are
 // string literals (`import x from y`, `with { type: 1 }` have no parse), and nothing restricts a
 // line break before `with`. tsc's parser takes any expression for both, the legacy `assert` for
-// `with`, and no `with` past a line break (README, "Correctness: the productions, not tsc").
+// `with`, and no `with` past a line break (docs/CORRECTNESS.md).
 // tree-sitter renders no attributes: after a specifier, `with` would also begin a `with`
 // statement past an inserted `;`, which a CFG without lookahead cannot tell apart.
 const withEntry = [alt(Ident, String_), ':', String_];
