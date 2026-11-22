@@ -70,8 +70,8 @@ const GUARDS: { test: string; index: string }[] = [
 ];
 const READS = new Set(['toks[pos]', 'toks[pos + 1]', 'toks[j]', 'toks[save]']);
 function oracleSource(lib: string, shapeB: boolean): string {
-  // The parse engine the oracle runs: from the parser state to the library entry (the CST path;
-  // the builder path is one of the parsers compared). A grammar without '>' composites has no
+  // The parse engine the oracle runs: from the parser state to the library entry (the engine
+  // and its builder protocol, run with the CST builder). A grammar without '>' composites has no
   // `j` guard; peek's guard is always there.
   const a = lib.indexOf('\nlet toks: Tok[] = [];'), b = lib.indexOf('\n// Library entry.');
   if (a < 0 || b < a) throw new Error('oracle: parse engine bounds not found');
@@ -82,8 +82,8 @@ function oracleSource(lib: string, shapeB: boolean): string {
   const stray = left.filter((x) => !READS.has(x));
   if (stray.length) throw new Error(`oracle: unguarded token-array access in the parse engine: ${[...new Set(stray)].join(', ')}`);
   const reruns = shapeB
-    ? `const n = e.tokStart === 0 && e.kidStart === 0 && __isHead() ? parseHeadSeg([]) : parseLoopSeg([]);`
-    : `const n = parseTopOne();`;
+    ? `const n = (e.tokStart === 0 && e.kidStart === 0 && __isHead() ? parseHeadSegW(0) : parseLoopSegW(0)) !== null;`
+    : `const n = parseTopOneW();`;
   return `${lib.slice(0, a)}
 let _seen = 0;
 function _saw(i: number): boolean { if (i + 1 > _seen) _seen = i + 1; return i < toks.length; }
@@ -99,10 +99,10 @@ export function __oracle(src: string): [number, number, number][] | null {
   ${shapeB ? `__headFirst = ents.length > 0 && !(all.length > 0 && all[0]!.kid === ${'__LOOP_KID__'});` : ''}
   const out: [number, number, number][] = [];
   for (const e of ents) {
-    toks = all; pos = e.tokStart; _seen = 0;
+    toks = all; pos = e.tokStart; _seen = 0; _n = 0;
     _capped = false; _form = 0; _tail = false; _suppressNext = null; _suppressCur = null;
     ${reruns}
-    if (n === null || pos !== e.tokEnd) throw new Error('oracle: entry at token ' + e.tokStart + ' did not parse alone to token ' + e.tokEnd);
+    if (!n || pos !== e.tokEnd) throw new Error('oracle: entry at token ' + e.tokStart + ' did not parse alone to token ' + e.tokEnd);
     out.push([e.tokStart, e.tokEnd, Math.max(e.tokEnd, _seen)]);
   }
   return out;
@@ -125,7 +125,7 @@ export function __edit(s: { init: string; batches: [number, number, string][][] 
 function tsProbeSource(lib: string): string {
   const hook = '    align(): Align | null { return align; },';
   const n = lib.split(hook).length - 1;
-  if (n !== 2) throw new Error(`probe: expected the CST and builder Doc objects (2 hooks), found ${n}`);
+  if (n !== 1) throw new Error(`probe: expected the Doc object (1 hook), found ${n}`);
   return lib.split(hook).join(`${hook}\n    __entries(): EntryMeta[] { return entries; },`) + TS_PROBE;
 }
 const GO_PROBE = `package main
@@ -277,10 +277,10 @@ for (const g of GRAMMARS) {
   const dir = `${TMP}/${g.name}`;
   mkdirSync(dir, { recursive: true });
   const lib = emitParser(grammar, tsTarget);
-  const shapeB = /\nfunction parseLoopSeg\(/.test(lib);
+  const shapeB = /\nfunction parseLoopSegW\(/.test(lib);
   let oracleSrc = oracleSource(lib, shapeB);
   if (shapeB) {
-    const m = lib.match(/function parseLoopSeg\(kids: Cst\[\]\)[^]*?if \(!matchTok\((\d+),/);
+    const m = lib.match(/function parseLoopSegW\(kidStart: number\)[^]*?!matchTokW\((\d+)\)/);
     if (!m) throw new Error('oracle: shape-B loop token not found');
     oracleSrc = oracleSrc.replace('__LOOP_KID__', m[1]!);
   }
