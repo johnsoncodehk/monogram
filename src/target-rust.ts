@@ -542,6 +542,7 @@ ${rxLoopBody}
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
     lex_from(src, 0, false, 0, 0, 0, false, false, Vec::new(), false, false, &mut toks, 0);
+    toks.shrink_to_fit();
     toks
 }`;
   }
@@ -559,6 +560,7 @@ ${loopBody}
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
     lex_from(src, 0, false, Vec::new(), &mut toks, 0);
+    toks.shrink_to_fit();
     toks
 }`;
   }
@@ -576,6 +578,7 @@ ${loopBody}
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
     lex_from(src, 0, false, 0, 0, 0, false, false, Vec::new(), false, false, Vec::new(), &mut toks, 0);
+    toks.shrink_to_fit();
     toks
 }`;
   }
@@ -621,6 +624,7 @@ ${nlLoopBody}
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
     lex_from(src, 0, false, 0, &mut toks, 0);
+    toks.shrink_to_fit();
     toks
 }`;
   }
@@ -636,6 +640,7 @@ ${loopBody.replace(/pending_nl/g, 'pending_nl').replace(/toks\.push/g, 'acc.push
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
     lex_from(src, 0, false, &mut toks, 0);
+    toks.shrink_to_fit();
     toks
 }`;
 }
