@@ -253,7 +253,8 @@ export interface RecordLowering {
   refArg(r: R): string;
   // `list` (a local list) extended by every element of `from`.
   extend(cx: Cx, list: string, from: R): Lines;
-  // A target whose records are references: a copy of the record `r` (a record local is a value).
+  // A target whose records are references: a copy of the record `r`, for a local the function
+  // writes (a record local is a value).
   copy?(cx: Cx, r: R): R;
 }
 
@@ -513,7 +514,7 @@ class Printer implements Cx {
       case 'let': {
         this.checkTy(s.ty);
         let r = this.expr(s.init);
-        if (isRec(s.ty) && !r.owned && this.L.record?.copy) r = this.L.record.copy(this, r);
+        if (isRec(s.ty) && !r.owned && this.mutable.has(s.name) && this.L.record?.copy) r = this.L.record.copy(this, r);
         const owned = s.ty === 'str' ? !!r.owned : isList(s.ty);
         if (L.owns && isList(s.ty) && !r.owned) throw new Error(`algo-ir: let ${s.name} needs an owned list`);
         this.env.set(s.name, { ty: s.ty, owned });

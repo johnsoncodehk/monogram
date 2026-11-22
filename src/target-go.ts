@@ -1400,32 +1400,7 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMet
 		children = append(children, prefixKids...)
 		children = append(children, midKids...)
 		children = append(children, adoptedKids...)
-		newSegs := make([]Seg, 0, len(prefixSegs)+len(midSegs)+len(adoptedSegs))
-		newEntries := make([]EntryMeta, 0, len(prefixMeta)+len(midMeta)+len(suffixMeta)-adoptFrom)
-		kOff := 0
-		for i, s := range prefixSegs {
-			em := prefixMeta[i]
-			em.KidStart = kOff
-			newSegs = append(newSegs, Seg{kOff, s.KidCount, s.TokStart, s.TokEnd, s.Ext})
-			newEntries = append(newEntries, em)
-			kOff += s.KidCount
-		}
-		for i, s := range midSegs {
-			em := midMeta[i]
-			em.KidStart = kOff
-			newSegs = append(newSegs, Seg{kOff, s.KidCount, s.TokStart, s.TokEnd, s.Ext})
-			newEntries = append(newEntries, em)
-			kOff += s.KidCount
-		}
-		adoptedMeta := append([]EntryMeta(nil), suffixMeta[adoptFrom:]...)
-		for i, s := range adoptedSegs {
-			em := adoptedMeta[i]
-			shiftEntryMeta(&em, byteDelta, tokDelta)
-			em.KidStart = kOff
-			newSegs = append(newSegs, Seg{kOff, s.KidCount, s.TokStart + tokDelta, s.TokEnd + tokDelta, s.Ext + tokDelta})
-			newEntries = append(newEntries, em)
-			kOff += s.KidCount
-		}
+		newSegs, newEntries := reuseSegEntries(prefixSegs, prefixMeta, midSegs, midMeta, suffixCand, suffixMeta, adoptFrom, byteDelta, tokDelta)
 		off, end, tokStart, tokEnd := reuseSpan(newEntries)
 		kidStart := len(p.kids)
 		p.kids = append(p.kids, children...)
@@ -2226,32 +2201,7 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 		children = append(children, prefixKids...)
 		children = append(children, midKids...)
 		children = append(children, adoptedKids...)
-		outSegs := make([]Seg, 0, len(prefixSegs)+len(midSegs)+len(adoptedSegs))
-		outE := make([]EntryMeta, 0, len(prefixMeta)+len(midMeta)+len(suffixMeta)-adoptFrom)
-		kOff := 0
-		for i, s := range prefixSegs {
-			em := prefixMeta[i]
-			em.KidStart = kOff
-			outSegs = append(outSegs, Seg{kOff, s.KidCount, s.TokStart, s.TokEnd, s.Ext})
-			outE = append(outE, em)
-			kOff += s.KidCount
-		}
-		for i, s := range midSegs {
-			em := midMeta[i]
-			em.KidStart = kOff
-			outSegs = append(outSegs, Seg{kOff, s.KidCount, s.TokStart, s.TokEnd, s.Ext})
-			outE = append(outE, em)
-			kOff += s.KidCount
-		}
-		adoptedMeta := append([]EntryMeta(nil), suffixMeta[adoptFrom:]...)
-		for i, s := range adoptedSegs {
-			em := adoptedMeta[i]
-			shiftEntryMeta(&em, byteDelta, tokDelta)
-			em.KidStart = kOff
-			outSegs = append(outSegs, Seg{kOff, s.KidCount, s.TokStart + tokDelta, s.TokEnd + tokDelta, s.Ext + tokDelta})
-			outE = append(outE, em)
-			kOff += s.KidCount
-		}
+		outSegs, outE := reuseSegEntries(prefixSegs, prefixMeta, midSegs, midMeta, suffixCand, suffixMeta, adoptFrom, byteDelta, tokDelta)
 		off, end, tokStart, tokEnd := reuseSpan(outE)
 		scratch := append([]int32(nil), children...)
 		b.Node(&scratch, 0, ${entryRid}, uint32(off), uint32(end), uint32(tokStart), uint32(tokEnd))

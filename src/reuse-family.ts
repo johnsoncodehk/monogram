@@ -21,6 +21,12 @@ export const ENTRY_META: RecordDecl = {
   fields: ['tokStart', 'tokEnd', 'ext', 'off', 'end', 'kidStart', 'kidCount'].map((name) => ({ name, ty: 'pos' as const })),
 };
 const ENTRIES = 'recs_EntryMeta' as const;
+// A segment of the root's kids (shape B: an entry may own several root kids).
+export const SEG: RecordDecl = {
+  name: 'Seg',
+  fields: ['kidStart', 'kidCount', 'tokStart', 'tokEnd', 'ext'].map((name) => ({ name, ty: 'pos' as const })),
+};
+const SEGS = 'recs_Seg' as const;
 
 const v = (name: string): Expr => ({ k: 'var', name });
 const n = (k: number): Expr => ({ k: 'int', v: k });
@@ -132,10 +138,45 @@ const reuseSpan: Fn = {
   ],
 };
 
-export const REUSE_FNS: Fn[] = [reuseBounds, reuseAdoptAt, reuseGaveUp, shiftEntryMeta, reuseEntries, reuseSpan];
+// Shape B's new segments and entries: the kept prefix, the re-parsed middle and the adopted suffix
+// from adoptFrom (moved by the edit), each entry's kids placed after the ones before it.
+const segPart = (segs: string, metas: string, from: Expr, shift: boolean): Stmt => ({
+  k: 'for', v: 'i', from, to: len(v(segs)), body: [
+    { k: 'let', name: 's', ty: 'rec_Seg', init: { k: 'at', list: v(segs), i: v('i') } },
+    { k: 'let', name: 'em', ty: ENTRY, init: { k: 'at', list: v(metas), i: v('i') } },
+    ...(shift ? [{ k: 'run', call: call('shiftEntryMeta', v('em'), v('byteDelta'), v('tokDelta')) } as Stmt] : []),
+    { k: 'setField', name: 'em', f: 'kidStart', e: v('kOff') },
+    { k: 'push', list: 'outSegs', e: { k: 'mkRec', rec: 'Seg', fields: {
+      kidStart: v('kOff'), kidCount: recField(v('s'), 'kidCount'),
+      ...Object.fromEntries(['tokStart', 'tokEnd', 'ext'].map((f) => [f, shift ? bin('add', recField(v('s'), f), v('tokDelta')) : recField(v('s'), f)])),
+    } } },
+    { k: 'push', list: 'outE', e: v('em') },
+    { k: 'set', name: 'kOff', e: bin('add', v('kOff'), recField(v('s'), 'kidCount')) },
+  ],
+});
+const reuseSegEntries: Fn = {
+  name: 'reuseSegEntries',
+  doc: 'The new segments and entries: the prefix, the middle, and the suffix from adoptFrom moved by the edit.',
+  params: [
+    { name: 'prefixSegs', ty: SEGS }, { name: 'prefixMeta', ty: ENTRIES }, { name: 'midSegs', ty: SEGS }, { name: 'midMeta', ty: ENTRIES },
+    { name: 'suffixSegs', ty: SEGS }, { name: 'suffixMeta', ty: ENTRIES }, { name: 'adoptFrom', ty: 'int' }, { name: 'byteDelta', ty: 'int' }, { name: 'tokDelta', ty: 'int' },
+  ],
+  ret: [SEGS, ENTRIES],
+  body: [
+    { k: 'let', name: 'outSegs', ty: SEGS, init: { k: 'newList', ty: SEGS, cap: bin('sub', bin('add', bin('add', len(v('prefixSegs')), len(v('midSegs'))), len(v('suffixSegs'))), v('adoptFrom')) } },
+    { k: 'let', name: 'outE', ty: ENTRIES, init: { k: 'newList', ty: ENTRIES, cap: bin('sub', bin('add', bin('add', len(v('prefixMeta')), len(v('midMeta'))), len(v('suffixMeta'))), v('adoptFrom')) } },
+    { k: 'let', name: 'kOff', ty: 'int', init: n(0) },
+    segPart('prefixSegs', 'prefixMeta', n(0), false),
+    segPart('midSegs', 'midMeta', n(0), false),
+    segPart('suffixSegs', 'suffixMeta', v('adoptFrom'), true),
+    ret(v('outSegs'), v('outE')),
+  ],
+};
+
+export const REUSE_FNS: Fn[] = [reuseBounds, reuseAdoptAt, reuseGaveUp, shiftEntryMeta, reuseEntries, reuseSpan, reuseSegEntries];
 
 // The family for a grammar whose entry rule records entries (`ir.reuse`); empty otherwise.
 export function emitReuseFamily(ir: ParserIR, lowering: Lowering): string {
   if (!ir.reuse) return '';
-  return printFns(lowering, REUSE_FNS, [], [ENTRY_META]);
+  return printFns(lowering, REUSE_FNS.filter((f) => ir.reuse!.kind === 'B' || f !== reuseSegEntries), [], [ENTRY_META, SEG]);
 }

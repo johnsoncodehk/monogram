@@ -1383,31 +1383,7 @@ impl<'a, B: Builder> Parser<'a, B> {
         children.extend_from_slice(prefix_kids);
         children.extend_from_slice(mid_kids);
         children.extend_from_slice(&adopted_kids);
-        let mut new_segs: Vec<Seg> = Vec::with_capacity(prefix_segs.len() + mid_segs.len() + adopted_segs.len());
-        let mut new_entries: Vec<EntryMeta> = Vec::with_capacity(prefix_meta.len() + mid_meta.len() + suffix_meta.len().saturating_sub(adopt_from));
-        let mut k_off = 0usize;
-        for (s, m) in prefix_segs.iter().zip(prefix_meta.iter()) {
-            new_segs.push(Seg { kid_start: k_off, kid_count: s.kid_count, tok_start: s.tok_start, tok_end: s.tok_end, ext: s.ext });
-            let mut em = *m;
-            em.kid_start = k_off as u32;
-            new_entries.push(em);
-            k_off += s.kid_count;
-        }
-        for (s, m) in mid_segs.iter().zip(mid_meta.iter()) {
-            new_segs.push(Seg { kid_start: k_off, kid_count: s.kid_count, tok_start: s.tok_start, tok_end: s.tok_end, ext: s.ext });
-            let mut em = *m;
-            em.kid_start = k_off as u32;
-            new_entries.push(em);
-            k_off += s.kid_count;
-        }
-        for (s, m) in adopted_segs.iter().zip(suffix_meta[adopt_from..].iter()) {
-            new_segs.push(Seg { kid_start: k_off, kid_count: s.kid_count, tok_start: (s.tok_start as isize + tok_delta) as usize, tok_end: (s.tok_end as isize + tok_delta) as usize, ext: (s.ext as isize + tok_delta) as usize });
-            let mut em = *m;
-            shift_entry_meta(&mut em, byte_delta, tok_delta);
-            em.kid_start = k_off as u32;
-            new_entries.push(em);
-            k_off += s.kid_count;
-        }
+        let (new_segs, new_entries) = reuse_seg_entries(prefix_segs, prefix_meta, mid_segs, mid_meta, suffix_cand, suffix_meta, adopt_from as isize, byte_delta, tok_delta);
         let (off, end, tok_start, tok_end) = reuse_span(&new_entries);
         let sb = self.scratch.len();
         self.scratch.extend_from_slice(&children);

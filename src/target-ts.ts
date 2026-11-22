@@ -1176,33 +1176,7 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
       }
     }
     const children: H[] = [...prefixKids, ...midKids, ...adoptedKids];
-    const newSegs: Seg[] = [];
-    const newEntries: EntryMeta[] = [];
-    let kOff = 0;
-    for (let i = 0; i < prefixSegs.length; i++) {
-      const s = prefixSegs[i]!;
-      const m = { ...prefixMeta[i]!, kidStart: kOff };
-      newSegs.push({ kidStart: kOff, kidCount: s.kidCount, tokStart: s.tokStart, tokEnd: s.tokEnd, ext: s.ext });
-      newEntries.push(m);
-      kOff += s.kidCount;
-    }
-    for (let i = 0; i < midSegs.length; i++) {
-      const s = midSegs[i]!;
-      const m = { ...midMeta[i]!, kidStart: kOff };
-      newSegs.push({ kidStart: kOff, kidCount: s.kidCount, tokStart: s.tokStart, tokEnd: s.tokEnd, ext: s.ext });
-      newEntries.push(m);
-      kOff += s.kidCount;
-    }
-    const adoptedMeta = suffixMeta.slice(adoptFrom);
-    for (let i = 0; i < adoptedSegs.length; i++) {
-      const s = adoptedSegs[i]!;
-      const em = { ...adoptedMeta[i]! };
-      shiftEntryMeta(em, byteDelta, tokDelta);
-      em.kidStart = kOff;
-      newSegs.push({ kidStart: kOff, kidCount: s.kidCount, tokStart: s.tokStart + tokDelta, tokEnd: s.tokEnd + tokDelta, ext: s.ext + tokDelta });
-      newEntries.push(em);
-      kOff += s.kidCount;
-    }
+    const [newSegs, newEntries] = reuseSegEntries(prefixSegs, prefixMeta, midSegs, midMeta, suffixCand, suffixMeta, adoptFrom, byteDelta, tokDelta);
     const [offset, end, tokStart, tokEnd] = reuseSpan(newEntries);
     _bSave = tokStart;
     const savePos = pos;
