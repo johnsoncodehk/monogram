@@ -506,8 +506,8 @@ const Expr = rule($ => [
   // isParenthesizedArrowFunctionExpression: after `<` an identifier or `const`, else the `<` is
   // a type assertion's), so `<>() => 1` and `<in T>() => 1` are no arrows; a declaration's or a
   // function type's list may be empty (`function f<>() {}`, `type F = <>() => void`).
-  capExpr('?', notArrowTypeParams(['async']), 'async', opt(TypeParams), '(', sep(awaitCtx(Param), ','), ')', opt(":", ReturnType), '=>', awaitCtx(conciseBody(Block, $))),
-  capExpr('?', notArrowTypeParams([]), opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType), '=>', resetCtx(conciseBody(Block, $))),
+  capExpr('?', 'async', notArrowTypeParams, opt(TypeParams), '(', sep(awaitCtx(Param), ','), ')', opt(":", ReturnType), '=>', awaitCtx(conciseBody(Block, $))),
+  capExpr('?', notArrowTypeParams, opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType), '=>', resetCtx(conciseBody(Block, $))),
   // async arrow with a BARE parameter: `async err => …`. tsc requires async and the
   // parameter on the same line (`async\nx => …` is `async;` then a plain arrow — ASI).
   // Without this arm the bare form only "parsed" by splitting into two statements.
@@ -674,8 +674,9 @@ const TypeParam = rule($ => {
 const TypeParams = rule($ => [
   ['<', sep(TypeParam, ','), '>'],
 ]);
-// (see the arrow arms) an arrow whose `<` is followed by no name and no `const` has no type parameter list
-const notArrowTypeParams = (prefix) => not([...prefix, '<', not(alt([notReserved, Ident], 'const'))]);
+// (see the arrow arms) an arrow whose `<` is followed by no name and no `const` has no type
+// parameter list; the test stands right before the arm's optional list, the one it conditions
+const notArrowTypeParams = not(['<', not(alt([notReserved, Ident], 'const'))]);
 
 // ── Declarations ──
 
