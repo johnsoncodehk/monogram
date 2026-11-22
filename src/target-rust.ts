@@ -976,7 +976,7 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
 // A candidate whose condition holds a nested construct (a closure: star / opt / sep / alt) is its
 // own out-of-line method, so the rule's dispatching function does not hold the arm's code [experiment c1].
 function outlineRs(out: string[], name: string, cond: string): string {
-  if (!cond.includes('|p')) return cond;
+  if (true) return cond;
   out.push(`    #[inline(never)]\n    fn arm_${name}(&mut self) -> bool { ${cond} }`);
   return `self.arm_${name}()`;
 }
