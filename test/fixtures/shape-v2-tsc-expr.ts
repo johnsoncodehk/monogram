@@ -1,10 +1,10 @@
 // ShapeSpec v2: a subset of tsc's AST (typescript 5.9, as test/shape-oracle-tsc.ts normalises
 // it) from typescript.ts, in the core calculus only (src/shape2-schema.ts): the expressions
 // below, the root, the statements, functions, arrows and their parameters (as in
-// shape-v2-estree-expr.ts). Checked against tsc's parser by test/shape2-oracle.ts. Not total: an
-// arm outside the subset (`switch`, other declarations, binding patterns, methods, classes,
-// object / array literals, templates, type syntax) is unmapped, and a unit that reaches one is reported as outside the
-// subset, not compared.
+// shape-v2-estree-expr.ts), binding patterns, object / array literals, spread and templates.
+// Checked against tsc's parser by test/shape2-oracle.ts. Not total: an arm outside the subset
+// (`switch`, other declarations, classes, an object member's modifier words and decorators, type
+// syntax) is unmapped, and a unit that reaches one is reported as outside the subset, not compared.
 //
 // Positions: a node's start is tsc's `getStart()` (the first token); tsc's `pos` (leading trivia
 // included) is not produced (the harness compares it only when both sides carry it).

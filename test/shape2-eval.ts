@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createParser, type CstLeaf, type CstNode } from '../src/gen-parser.ts';
 import type { CstGrammar } from '../src/types.ts';
-import { armNameOf, dependencies, evaluate, evaluator, loadShape2, Shape2SpecError, Shape2Unmapped, type S2Value } from '../src/shape2-eval.ts';
+import { armNameOf, dependencies, evaluate, evaluator, loadShape2, Shape2SpecError, Shape2Unmapped, spineOf, type S2Value } from '../src/shape2-eval.ts';
 import {
   absent, and, armOf, branch, c, child, cook, fold, iff, inh, let_, list, map, match, node, not, or, orElse,
   dropLastIf, get, present, record, spread, syn, text, thread, typeByText, v, wrapIf, type Shape2Spec, type Term,
@@ -362,6 +362,12 @@ check('literals, spread, templates (both fixtures, against acorn and tsc)', () =
 check('right-dependent inherited equations: ESTree has exactly binaryOp.left, tsc none', () => {
   assert.deepEqual(loadShape2(javascript, estreeExprShape).rightDependent, [{ rule: 'Expr', arm: 'binaryOp', child: 'left', attr: 'pattern', reads: ['op'] }]);
   assert.deepEqual(loadShape2(typescript, tscExprShape).rightDependent, []);
+  // The spine a fused parser rewrites when `=` arrives: the arms reading `pattern` and the
+  // children it is passed on to.
+  assert.deepEqual(spineOf(loadShape2(javascript, estreeExprShape), 'pattern'), {
+    reads: ['Expr.array', 'Expr.binaryOp', 'Expr.object', 'Expr.spread', 'Prop.spread'],
+    copies: ['Expr.array.element', 'Expr.array.elementRest', 'Expr.object.property', 'Expr.spread.expr', 'Prop.init.value', 'Prop.spread.argument'],
+  });
   // A constant equation and a copy are L-attributed by construction.
   assert.deepEqual(loadShape2(javascript, { ...estreeExprShape, inherited: { ...estreeExprShape.inherited, pattern: { ...estreeExprShape.inherited!.pattern, rules: { ForHead: { of: { left: c(true) } } } } } }).rightDependent, []);
 });

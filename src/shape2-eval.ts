@@ -1094,6 +1094,25 @@ export function dependencies(loaded: LoadedShape2): Record<string, ArmDeps> {
   return Object.fromEntries(keys.map((k) => [k, { inherited: [...(deps.get(k) ?? [])].sort(), ...(threads.has(k) ? { threads: threads.get(k) } : {}) }]));
 }
 
+/** The SPINE of an inherited attribute: the arms whose value reads it (`reads`: `rule.arm`) and
+ * the children it is copied into (`copies`: `rule.arm.child`, by an equation that reads the
+ * parent's own value of it). For an attribute a right-dependent equation decides, this is the
+ * set a parser that builds as it goes must rewrite when the deciding leaf arrives: the nodes
+ * reached from the decided child through `copies` whose arm is in `reads`, and nothing below a
+ * node whose arm does not pass the attribute on. */
+export function spineOf(loaded: LoadedShape2, attr: string): { reads: string[]; copies: string[] } {
+  const { spec } = loaded;
+  const hasInh = (x: unknown): boolean => x !== null && typeof x === 'object' && (((x as Term).t === 'inh' && (x as { attr: string }).attr === attr) || Object.values(x).some(hasInh));
+  const reads: string[] = [];
+  for (const [rule, arms] of Object.entries(spec.rules)) for (const [arm, t] of Object.entries(arms)) if (hasInh(t)) reads.push(`${rule}.${arm}`);
+  const copies: string[] = [];
+  const d = spec.inherited?.[attr];
+  for (const [rule, arms] of Object.entries(d?.rules ?? {})) for (const [arm, kids] of Object.entries(arms)) {
+    for (const [kid, eq] of Object.entries(kids)) if (hasInh(eq.t === 'thread' ? eq.init : eq)) copies.push(`${rule}.${arm}.${kid}`);
+  }
+  return { reads: reads.sort(), copies: copies.sort() };
+}
+
 /** The arm name the reference matcher gives a CST node (for totality checks of the matcher). */
 export function armNameOf(loaded: LoadedShape2, n: CstNode, src: string): string {
   return matchArm(loaded.grammar, n, src).info.arm;
