@@ -52,6 +52,7 @@ const sexpr: Lowering = {
       : [`(when ${s.c}`, ...nest(s.then), ')']),
     while: (c, body) => [`(while ${c}`, ...nest(body), ')'],
     break: () => ['(break)'],
+    run: (call) => call,
     return: (vals) => [form('return', ...vals)],
     fn: (f) => [
       ...f.doc.map((l) => `;; ${l}`),
@@ -93,6 +94,11 @@ const sexpr: Lowering = {
   },
   record: {
     field: (cx, r, _rec, f, ty) => cx.atom(form('field', r.c, kebab(f)), ty === 'bool' ? 'bool' : 'int', 'int'),
+    setField: (id, f, val) => [form('set-field!', id, kebab(f), val)],
+    make: (cx, rec, fs) => cx.atom(form('make-record', kebab(rec), ...fs.map(([f, v]) => `#:${kebab(f)} ${v}`)), `rec_${rec}`, `rec_${rec}`),
+    refType: (rec) => form('ref', kebab(rec)),
+    refArg: (r) => r.c,
+    extend: (_cx, l, from) => [form('extend!', l, from.c)],
   },
 };
 

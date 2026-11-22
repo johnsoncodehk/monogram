@@ -3004,10 +3004,11 @@ function ${findAnyName(stops)}(s: string, i: number): number {
     },
     while: (c, body) => [`while (${c}) {`, ...tsBlock(body), '}'],
     break: () => ['break;'],
+    run: (call) => `${call};`,
     return: (vals) => [`return ${vals.length === 1 ? vals[0] : `[${vals.join(', ')}]`};`],
     fn: (f) => [
       ...f.doc.map((l) => `// ${l}`),
-      `function ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): ${f.rets.length === 1 ? f.rets[0] : `[${f.rets.join(', ')}]`} {`,
+      `function ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): ${f.rets.length === 0 ? 'void' : f.rets.length === 1 ? f.rets[0] : `[${f.rets.join(', ')}]`} {`,
       ...tsBlock(f.body),
       '}',
     ].join('\n'),
@@ -3050,6 +3051,12 @@ function ${findAnyName(stops)}(s: string, i: number): number {
     },
   },  record: {
     field: (cx, r, _rec, f, ty) => cx.atom(`${tsWrap(r, ATOM)}.${f}`, ty === 'bool' ? 'bool' : 'int', cx.nat(ty)),
+    setField: (id, f, val) => [`${id}.${f} = ${val};`],
+    make: (cx, rec, fs) => cx.atom(`{ ${fs.map(([f, v]) => `${f}: ${v}`).join(', ')} }`, `rec_${rec}`, `rec_${rec}`),
+    refType: (rec) => rec,
+    refArg: (r) => r.c,
+    // One push per element: a spread passes one argument per element (the engine's argument limit).
+    extend: (_cx, l, from) => [`for (const el of ${from.c}) ${l}.push(el);`],
   },
 };
 

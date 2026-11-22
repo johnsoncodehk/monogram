@@ -5382,6 +5382,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
     },
     while: (c, body) => [`while ${c} {`, ...rsBlock(body), '}'],
     break: () => ['break;'],
+    run: (call) => `${call};`,
     return: (vals) => [`return ${vals.length === 1 ? vals[0] : `(${vals.join(', ')})`};`],
     fn: (f) => [
       ...f.doc.map((l) => `// ${l}`),
@@ -5389,7 +5390,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
       // Out of line only: `#[cold]` on the identifier escape scanners moved lex_from's register layout
       // (+0.2% to +0.4% lexer instructions on real inputs, profile runs 45034540295 / 45035043707).
       ...(f.cold ? ['#[inline(never)]'] : []),
-      `fn ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}) -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`} {`,
+      `fn ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')})${f.rets.length === 0 ? '' : ` -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`}`} {`,
       ...rsBlock(f.body),
       '}',
     ].join('\n'),
@@ -5433,6 +5434,11 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
   },
   record: {
     field: (cx, r, _rec, f, ty) => cx.atom(`${rsWrap(r, ATOM)}.${snake(f)}`, ty === 'bool' ? 'bool' : 'int', cx.nat(ty)),
+    setField: (id, f, val) => [`${id}.${snake(f)} = ${val};`],
+    make: (cx, rec, fs) => cx.atom(`${rec} { ${fs.map(([f, v]) => `${snake(f)}: ${v}`).join(', ')} }`, `rec_${rec}`, `rec_${rec}`),
+    refType: (rec) => `&mut ${rec}`,
+    refArg: (r) => `&mut ${r.c}`,
+    extend: (_cx, l, from) => [`${l}.extend_from_slice(${from.owned ? `&${from.c}` : from.c});`],
   },
 };
 
