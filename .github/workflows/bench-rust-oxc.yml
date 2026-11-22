@@ -30,6 +30,6 @@ jobs:
       # BENCH_EXTRA: a commit to time as variant E against D (origin/master); BENCH_GRAMMAR: typescript (default) or javascript. Edit per measurement.
       - run: test/bench-rust-oxc/run.sh 9
         env:
-          BENCH_EXTRA: c485c425f09bf6a0c431187d1e3e379d42de4741
+          BENCH_EXTRA: 127aa22449fe8aec05efb546808b8f9fcbec0150
           BENCH_ONLY: '1'
           BENCH_GRAMMAR: typescript
