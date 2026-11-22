@@ -262,6 +262,10 @@ const FRAME_DOCS: Record<string, FrameDoc[]> = {
   'test/fixtures/textdialect': [
     { doc: 'component C(a) {\n  <p k="v">1 < 2 {a} <b/>x<9 <></></p>;\n  const z = a <b;\n  return <{a}>y</{a}>;\n}', ins: TEXT_INS },
     { doc: 'component S() { <style>{a}</style>; <style> .x{}</style>; <script>a<b</script> }', ins: TEXT_INS },
+    // comments in text (`textTokens`): edits that make or break `/*`, `*/`, `//` and the blank
+    // before it; an unterminated `/*` in text reads to the end of the file, past the element
+    { doc: 'component C(a) {\n  <p>hi // n\n a/* c */b {a}// m\n</p>;\n  const z = 1; /* k */\n}', ins: [...TEXT_INS, '*'] },
+    { doc: 'component C() { <p>q /*</p>; const z = 1; }', ins: ['*/', '*', '/', ' ', 'x'] },
   ],
 };
 // (`"` and `\` make lex errors: inside an undecided type-parameter signature an error is the
