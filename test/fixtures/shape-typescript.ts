@@ -354,6 +354,9 @@ export const typescriptShape: ShapeSpec = {
       'Modifier keywords are dropped leaves; accessibility/readonly/optional/`...`rest ' +
       'flags must be recovered from alt structure + remaining kids. Excessively branched ' +
       'for choice+node without a flag-from-alt primitive.', { types: ['Identifier', 'Identifier', 'Identifier'] }),
+    CatchParameter: custom('estreeCatchParam',
+      '2 alts: a binding identifier or a binding pattern, each with an optional type annotation. ' +
+      'Lowered to ESTree\'s CatchClause param: the Identifier, or the pattern itself.', { types: ['Identifier', 'Identifier'] }),
     ForHead: custom('estreeForHead',
       '4 alts (for-let/const/var/using ; for(;;) ; for-in ; for-of) are three different ' +
       'ESTree parents (ForStatement / ForInStatement / ForOfStatement) assembled at Stmt ' +
@@ -484,7 +487,7 @@ export const typescriptShape: ShapeSpec = {
 export const EXPECTED_CST_NAMES = [
   'Type', 'TypeMember', 'DecoratorExpr', 'TypeofRef', 'Expr', 'Prop', 'MemberName',
   'NewTarget', 'ClassHeritage', 'Stmt', 'Block', 'BindingProperty', 'BindingElement',
-  'ArrayBindingElement', 'BindingPattern', 'Binding', 'ForBinding', 'Param', 'ForHead', 'ForAwaitHead',
+  'ArrayBindingElement', 'BindingPattern', 'Binding', 'ForBinding', 'Param', 'CatchParameter', 'ForHead', 'ForAwaitHead',
   'SwitchCase', 'TypeParams', 'TypeParam', 'Decl', 'ClassMember',
   'EnumMember', 'ImportClause', 'ImportSpecifier', 'ExportSpecifier', 'ModuleReference', 'TypeStart', 'Program',
 ] as const;
@@ -954,6 +957,15 @@ function estreeParam(ctx: TsAstCustomCtx): unknown {
   return { type: 'Identifier', ...(typeof id === 'string' ? { name: id } : id as object), decorators: flatKids(k[0] ?? []), optional: arm === 1 };
 }
 
+// A catch parameter: arm 0 a name, arm 1 a pattern, each with an optional type annotation.
+function estreeCatchParam(ctx: TsAstCustomCtx): unknown {
+  const arm = ctx.altPath[0];
+  if (arm !== 0 && arm !== 1) return unhandledCustom('estreeCatchParam', ctx);
+  // ESTree's CatchClause param: the Identifier or the pattern itself.
+  const id = ctx.kids[0];
+  return typeof id === 'string' ? { type: 'Identifier', name: id } : id;
+}
+
 function estreeForHead(ctx: TsAstCustomCtx): unknown {
   const arm = ctx.altPath[0];
   // Classic heads (arms 0/1) mirror the Rust streaming SC_FORSTATEMENT schema:
@@ -1101,7 +1113,7 @@ function tsTypeMember(ctx: TsAstCustomCtx): unknown {
 }
 
 // Prop's arms: 0 spread, 1 a modifier run (perhaps empty), then an accessor | `*` method |
-// method | value | shorthand. Arm 1 holds its member's kids as one pack (kids[0]), told apart by
+// method | value | shorthand. Arm 1 holds its run's slots, then its member's kids as one pack, told apart by
 // its shape: a shorthand's starts with its name's text; a method's or value's is 2 (the name,
 // then a method's 4-kid tail or the value); an accessor's and a `*` method's are 5 (name, type
 // parameters, parameters, return type, body), and a `*` method is the one whose modifier words
@@ -1115,7 +1127,12 @@ function estreeProp(ctx: TsAstCustomCtx): unknown {
   const k = ctx.kids;
   const keyed = (kk: readonly unknown[], computed: boolean) => ({ type: 'Property', key: typeof kk[0] === 'string' ? I(kk[0]) : kk[0], value: kk[1], kind: 'init', shorthand: false, computed, method: false });
   if (arm === 0) return keyed(k, false);
-  const pack = arm === 1 && Array.isArray(k[0]) ? k[0] as unknown[] : null;
+  // The run's slots (a list of its decorators, or a `null` for an absent `static`) come first, at
+  // every level of the run's nesting; the member's pack is what is left.
+  const runSlot = (x: unknown) => x === null || (Array.isArray(x) && x.every(d => (d as { type?: string })?.type === 'Decorator'));
+  const unwrap = (a: unknown): unknown => Array.isArray(a) && a.length >= 2 && a.slice(0, -1).every(runSlot) ? unwrap(a[a.length - 1]) : a;
+  const inner = arm === 1 ? unwrap(k) : null;
+  const pack = Array.isArray(inner) ? inner as unknown[] : null;
   if (pack && typeof pack[0] === 'string') return keyed(pack, false);
   if (pack && pack.length === 5) {
     return GENERATOR_MEMBER.test(ctx.src.slice(ctx.off, ctx.end))
@@ -1149,6 +1166,7 @@ export const typescriptEstreeCustoms: TsAstCustoms = {
   estreeArrayPattern,
   estreeBindingProperty,
   estreeParam,
+  estreeCatchParam,
   estreeForHead,
   estreeForAwaitHead,
   estreeSwitchCase,

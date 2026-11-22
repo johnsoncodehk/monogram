@@ -153,8 +153,10 @@ const TS_DECORATORS = {
   ],
 };
 // TypeScript decorators and modifiers of a parameter, as tsc's parser reads them
-// (parseModifiers: a second decorator run after `export` / `default`), and a class member's
-// decorators (the member's second run is owed: see ClassMember in typescript.ts).
+// (parseModifiers: a second decorator run after `export` / `default`, one `static` across both
+// runs; a function type's first parameter takes no decorator, isUnambiguouslyStartOfFunctionType),
+// of an object-literal member (a second run only: no member starts with `@`), and a class member's
+// (`async` a word of its run; the member's second run is owed: see ClassMember in typescript.ts).
 const TS_MEMBER_DECORATORS = {
   accept: [
     'function f(@a @b x) {}', 'class C { constructor(@a() @b() private x: T) {} }', 'class C { m(@a @b x) {} }',
@@ -165,6 +167,16 @@ const TS_MEMBER_DECORATORS = {
     'class C { export\n@d x() {} }', 'class C { default\n@d x() {} }', 'class C { @a @b x() {} }',
     'class C { @d static x() {} }', 'class C { static static() {} }',
     'class C { export\n@d static x() {} }', 'class C { async export\n@d x() {} }',
+    'type T = (x, @a y) => 1;', 'type T = <U>(@a x) => 1;', 'type T = new (@a x) => 1;',
+    'type T = (public x) => 1;', 'type T = { (@a x): void };', 'class C { async async x() {} }',
+    'class C { static async async *x() {} }', 'class C { async static async x() {} }',
+    'class C { async async; }', 'class C { async async get x() {} }',
+    'class C { async async [k: string]: 1 }', 'function f(export @d static x) {}',
+    'function f(@d export @e static x) {}', 'function f(export @d public static x) {}',
+    'class C { constructor(export @d static x) {} }', 'x = { export @d m() {} };',
+    'x = { static async export @d m() {} };', 'x = { export @d async static m() {} };',
+    'x = { default @d static m() {} };', 'x = { export @d [k]: 1 };', 'x = { export\n@d m() {} };',
+    'x = { async export @d async *m() {} };', 'x = { export @d async };', 'x = { export @d static: 1 };',
   ],
   reject: [
     'function f(public @d x) {}', 'function f(@a public @b x) {}', 'function f(static static x) {}',
@@ -174,6 +186,83 @@ const TS_MEMBER_DECORATORS = {
     'class C { public @d x() {} }', 'class C { default @d x() {} }', 'class C { async @d x() {} }',
     'class C { @d static static x() {} }',
     'class C { export @d static static x() {} }', 'class C { async export @d x() {} }',
+    'type T = (@a x) => 1;', 'type T = (export @a x) => 1;', 'let f: (@a x) => 1;',
+    'class C { async static async static x() {} }', 'function f(static export @d static x) {}',
+    'function f(export @d static static x) {}', 'x = { @d m() {} };', 'x = { export @d export @e m() {} };',
+    'x = { export @d static static m() {} };', 'x = { static export @d static m() {} };',
+    'x = { public @d m() {} };', 'x = { export @d };', 'x = { static\n@d m() {} };',
+  ],
+};
+// Module items (16.2): a module specifier and every import attribute value are string literals,
+// `with` may follow a line break, and an ImportCall takes one or two AssignmentExpressions. tsc's
+// parser takes any expression for both, the legacy `assert`, no `with` past a line break, and
+// `import x = …` in JavaScript too (docs/CORRECTNESS.md). TypeScript's specifier `type` is tsc's
+// (parseImportOrExportSpecifier, line breaks aside).
+const JS_MODULES = {
+  accept: [
+    'import x from "m" with { type: "json" };', 'import x from "m" with {};',
+    'import x from "m" with { type: "json", };', 'import x from "m" with { "type": "json" };',
+    'import x from "m" with { if: "x" };', 'import "m" with { type: "json" };',
+    'import { a } from "m" with { type: "json" };', 'import x from "m"\nwith { type: "json" };',
+    'export * from "m" with { type: "json" };', 'export * as ns from "m" with { type: "json" };',
+    'export { a } from "m" with { type: "json" };', 'export * as "s s" from "m";',
+    'export * as default from "m";', 'x = import("m");', 'x = import("m",);',
+    'x = import("m", { with: { type: "json" } });', 'x = import("m", o,);', 'x = import.meta.url;',
+    'x = import((a, b));',
+  ],
+  reject: [
+    'import x from "m" with { type: 1 };', 'import x from "m" assert { type: "json" };',
+    'import x from "m" with { type };', 'import x from "m" with { type: "json" } with { a: "b" };',
+    'export { a } with { type: "json" };', 'import x = require("m");', 'import x = N.y;',
+    'export import x = N;', 'import type = require("m");', 'x = import("m", a, b);', 'x = import();',
+    'x = import(...a);', 'x = import;', 'import x from y;',
+  ],
+};
+const TS_MODULES = {
+  accept: [
+    'import x from "m" with { type: "json" };', 'import x from "m" with {};',
+    'import x from "m" with { type: "json", };', 'import x from "m" with { "type": "json" };',
+    'import x from "m" with { if: "x" };', 'import "m" with { type: "json" };',
+    'import { a } from "m" with { type: "json" };', 'import type X from "m" with { type: "json" };',
+    'import defer * as ns from "m" with { type: "json" };', 'export * from "m" with { type: "json" };',
+    'export * as ns from "m" with { type: "json" };', 'export { a } from "m" with { type: "json" };',
+    'export type * from "m" with { type: "json" };', 'export type { a } from "m" with { type: "json" };',
+    'import x from "m"\nwith { type: "json" };', 'import x from "m" with { type: "json", type: "css" };',
+    'import { type as } from "m";', 'import { type as as as } from "m";', 'import { type as as } from "m";',
+    'import { type as b } from "m";', 'import { type\na } from "m";', 'import { type if as x } from "m";',
+    'import { type "s" as b } from "m";', 'import { type type } from "m";', 'export { type\na };',
+    'export { type as as as };', 'export { type as };', 'export * as "s s" from "m";',
+    'import defer from "m";',
+  ],
+  reject: [
+    'import x from "m" with { type: 1 };', 'import x from "m" with { type: a };',
+    'import x from "m" assert { type: "json" };', 'import "m" assert { type: "json" };',
+    'export * from "m" assert { type: "json" };', 'import x from "m" with { type };',
+    'import x from "m" with { [a]: "x" };', 'import x from "m" with { type: "json" } with { a: "b" };',
+    'export { a } with { type: "json" };', 'import x = require("m") with { type: "json" };',
+    'import x from y;', 'import x from `m`;', 'export { a } from y;',
+    'import { type as as as as } from "m";', 'import { type if } from "m";',
+    'import { type as as "s" } from "m";', 'import defer x from "m";', 'import defer { a } from "m";',
+    'import source x from "m";',
+  ],
+};
+// TryStatement (14.15): a Catch, a Finally or both; a CatchParameter is a BindingIdentifier or a
+// BindingPattern (TypeScript adds a type annotation), never a FormalParameter.
+const TRY_STATEMENTS = {
+  accept: [
+    'try {} catch (e) {}', 'try {} catch ({ a }) {}', 'try {} catch ([a]) {}', 'try {} catch {}', 'try {} finally {}',
+    'try {} catch ({ a = 1, b: [c] }) {}', 'try {} catch ([a = 1, ...b]) {}', 'try {} catch (e) {} finally {}',
+  ],
+  reject: [
+    'try {}', 'try {} catch (e = 1) {}', 'try {} catch (...e) {}', 'try {} catch (@d e) {}', 'try {} catch (e, f) {}',
+    'try {} catch () {}', 'try {} catch (if) {}', 'try {} catch (e) {} catch (f) {}', 'try {} catch (a.b) {}',
+  ],
+};
+const TS_TRY = {
+  accept: ['try {} catch (e: unknown) {}', 'try {} catch (e: Error) {}', 'try {} catch ({ a }: T) {}'],
+  reject: [
+    'try {} catch (e: T = 1) {}', 'try {} catch (e?) {}', 'try {} catch (e?: T) {}', 'try {} catch (this) {}',
+    'try {} catch (public e) {}', 'try {} catch (e!: T) {}', 'try {} catch (e: ) {}',
   ],
 };
 const EXPORT_DECLS = {
@@ -459,7 +548,7 @@ const CASES: Case[] = [
       'new a.b();', '((((x))));',
       'for (a = x + y in b) c;',
       ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...EXPORT_DECLS.accept,
-      ...CTX_CASES.javascript.accept, ...JS_DECORATORS.accept,
+      ...CTX_CASES.javascript.accept, ...JS_DECORATORS.accept, ...JS_MODULES.accept, ...TRY_STATEMENTS.accept,
       // An assignment / update operand needs only a LeftHandSideExpression's shape; target validity is a consumer's.
       '-x++;', '(a) = 1;', 'a = b = c;', '1 = 2;', '1++;', '++1;', 'f() = 1;', 'f()++;', '++f();', 'this = 1;',
       '(a + b) = c;', '(a, b) = 1;', 'a?.b = 1;', 'a?.b++;', '[a + b] = c;', '({a: 1} = c);', 'new.target = 1;',
@@ -516,7 +605,7 @@ const CASES: Case[] = [
     reject: ['function (', 'a +;', 'if x {}', '{ a: }', 'for (;;', 'a ? b ;',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;', 'let[0] = 1;', '(async\nfunction f() {});',
-      ...JS_DECORATORS.reject,
+      ...JS_DECORATORS.reject, ...JS_MODULES.reject, ...TRY_STATEMENTS.reject,
       // ... so no parameter list takes a reserved word as a name, `this` included (a `this`
       // parameter is TypeScript's).
       'function f(in) {}', 'function f(if, b) {}', 'x = function (a, while) {};', 'class C { m(in) {} }', 'x = { m(class) {} };',
@@ -568,7 +657,7 @@ const CASES: Case[] = [
     grammar: 'typescript', path: '../typescript.ts',
     accept: [
       ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...EXPORT_DECLS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
-      ...CTX_CASES.typescript.accept, ...TS_DECORATORS.accept, ...TS_MEMBER_DECORATORS.accept,
+      ...CTX_CASES.typescript.accept, ...TS_DECORATORS.accept, ...TS_MEMBER_DECORATORS.accept, ...TS_MODULES.accept, ...TRY_STATEMENTS.accept, ...TS_TRY.accept,
       // A class heritage is a LeftHandSideExpression (see the JavaScript cases).
       'f(class extends (a, b) {});', 'f(class extends a[0] {});', 'f(class extends a`t` {});', 'f(class extends a?.b() {});',
       // `return` takes an expression only on its own line (a restricted production), so a
@@ -752,7 +841,7 @@ const CASES: Case[] = [
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
       'type T = | | A;', 'type T = A | | B;', 'type T = A & | B;', 'type T = & & A;', 'type T = & | A;', 'f<| | A>();', 'let x: [| | A];',
-      'const f = <>() => 1;', 'const f = async <>(a) => 1;', 'const f = <in T>() => 1;', 'f(<in out T>(a) => a);', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, ...TS_DECORATORS.reject, ...TS_MEMBER_DECORATORS.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
+      'const f = <>() => 1;', 'const f = async <>(a) => 1;', 'const f = <in T>() => 1;', 'f(<in out T>(a) => a);', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, ...TS_DECORATORS.reject, ...TS_MEMBER_DECORATORS.reject, ...TS_MODULES.reject, ...TRY_STATEMENTS.reject, ...TS_TRY.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '{ b(); }.x;', '{ static x }.y;', '{ static x }', '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;',
       'let[0] = 1;', '(async\nfunction f() {});',

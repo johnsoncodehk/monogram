@@ -39,7 +39,7 @@ import {
   Number_, String_, Template, Regex_, Decorator, PrivateField,
   notReserved, notReservedExpr, bindingIdentifier, asi, expressionStatement, conciseBody, classHeritageArms, newTargetArms, ecmaPrec, jsLedPrecs, jsScopes, jsBaseCanonical,
   forBindingArms, forHeadArms, forAwaitHeadArms, forStatement,
-  memberStart, memberAhead, memberWordRules, memberWord, exportDeclaration,
+  memberStart, memberAhead, memberWordRules, memberWord, exportDeclaration, moduleSpecifier,
 } from './javascript.ts';
 
 // ── Type query reference (typeof's argument: just dotted identifiers) ──
@@ -118,7 +118,15 @@ const TypeStart = rule($ => [
 ]);
 
 const Type = rule($ => {
-  const fnType = [opt(TypeParams), '(', sep(typeFnParam(), ','), ')', '=>', ReturnType];  // (a: T) => R  /  <T>(…) => R (the return may be a type predicate)
+  // (a: T) => R  /  <T>(…) => R (the return may be a type predicate). A type that starts with `(`
+  // is a function type only by tsc's isUnambiguouslyStartOfFunctionType, whose skipParameterStart
+  // reads modifier words but no decorator (parseModifiers without decorators): the first
+  // parameter carries none (`(@a x) => 1`, `(export @a x) => 1` have no parse), while after type
+  // parameters or `new`, and on every later parameter, parseParameter reads them (`<T>(@a x) =>
+  // 1`, `new (@a x) => 1`, `(x, @a y) => 1`).
+  // (tree-sitter renders no lookahead, so it keeps the one shape `<T>?(`.)
+  const fnHead = (lead: unknown[]) => [...(lead.length ? [tsRelax(alt([TypeParams, '('], ['(', ...lead]), [opt(TypeParams), '('])] : [opt(TypeParams), '(']), sep(typeFnParam(), ','), ')', '=>', ReturnType];
+  const fnType = fnHead([not([many(paramMods.any), Decorator])]);
   // tsc parses a type in levels (parseUnionTypeOrHigher, parseIntersectionTypeOrHigher,
   // parseTypeOperatorOrHigher): a union's constituents are intersections, an intersection's are
   // type operators, and a leading `|` / `&` belongs to the union / intersection it starts, read
@@ -149,7 +157,7 @@ const Type = rule($ => {
     ['readonly', $],
     ['(', $, ')'],
     fnType,                          // function type
-    [opt('abstract'), 'new', ...fnType],  // constructor type (= `new` + function type)
+    [opt('abstract'), 'new', ...fnHead([])],  // constructor type (= `new` + function type)
     // tuple element: `...`? (name `?`? `:`)? `...`? Type `?`?  — the second `...`
     // covers a named rest member `n: ...T[]` (TS: RestType after the label); the
     // trailing `?` covers optional members `n: T?` / `T?` (TS: OptionalType).
@@ -361,7 +369,7 @@ const classExprPrefix = opt(many1(DecoratorExpr), classExprMods.run, opt(many1(D
 // The inner alt() is first-match; its branches part at one token (`get`/`set` then a name, `*`,
 // a name then `?`/`!`/`<`/`(`/`:`, or a name alone), so the first that matches is the only one.
 const Prop = rule($ => {
-  const mods = modifierRun(['public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'export', 'declare', 'in', 'out', 'const', 'default'], { treeSitterOmits: ['const'] });
+  const mods = modifierRun(['public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'export', 'declare', 'in', 'out', 'const', 'default'], { treeSitterOmits: ['const'], secondRun: true });
   const asyncMod = modifierWord(['async']);
   const sig = (ctx) => [opt(TypeParams), '(', sep(ctx(Param), ','), ')', opt(':', ReturnType), ctx(fnBodyOrAsi())];
   const members = (generator, method) => alt(
@@ -371,11 +379,21 @@ const Prop = rule($ => {
     [notReserved, Ident, opt('?'), opt('!'), opt('=', Expr)],
   );
   const plain = members(yieldCtx, resetCtx), withAsync = members(asyncGenCtx, awaitCtx);
-  const words = many(mods.rest), asyncWords = many(alt(mods.rest, asyncMod));
+  // tsc reads one decorator run inside the modifier run, after a word (only `export` / `default`
+  // may precede it: `modifierWord`'s `secondRun` followers), and a member never starts with one
+  // (`@` begins no element of tsc's object literal list: `{ @d m() {} }` has no parse). The run is
+  // a word of the run here, and "once" is the lookahead after it (`{ export @d export @e m() {} }`
+  // has no parse; it runs only where a decorator run was read): stating it by shape, as `static`
+  // and `async` are, makes the run's stop places eight instead of four, and the TextMate
+  // generator, which expands every rule body into its sequences (gen-tm's expandAlts), runs out
+  // of memory on it (2 GB heap, `npm run gen`).
+  const runWord = alt(mods.any, asyncMod);
+  const decorators = [many1(DecoratorExpr), not([many(runWord), Decorator])];
+  const words = many(alt(mods.rest, decorators)), asyncWords = many(alt(mods.rest, asyncMod, decorators));
   return [
     ['...', Expr],                                                     // spread
     tsRelax(
-      [words, alt(
+      [not(Decorator), words, alt(
         [mods.stat, words, alt([asyncMod, asyncWords, withAsync], plain)],
         [asyncMod, asyncWords, opt(mods.stat, asyncWords), withAsync],
         plain,
@@ -627,10 +645,15 @@ const Param = rule($ => {
     // parses the FULL modifier soup on any parameter (`f(static x)`, `f(export x)`, `f(async x)`
     // are parse-clean — validity is the checker's job). Each word is a modifier only where
     // `modifierWord` says so, so a parameter NAMED like one (`public: T`, `f(public)`) is the
-    // name (the second arm), `public @d x` has no parse, and a run holds one `static`
-    // (`f(static static x)` has no parse). Owed: a `static` in the second run (`f(export @d
-    // static x)`, valid), which needs the run's shape to carry whether the first had one.
-    [many(DecoratorExpr), paramMods.run1, opt(many1(DecoratorExpr), many(paramMods.rest)), body],
+    // name (the second arm), `public @d x` has no parse, and the two runs hold one `static`
+    // between them (tsc's hasSeenStaticModifier spans parseModifiers): `f(static static x)` and
+    // `f(static export @d static x)` have no parse, `f(export @d static x)` parses. So the words
+    // are read in two shapes, parted at the first run's `static`: with it, the second run takes
+    // none; without it, the second run is a run of its own.
+    [many(DecoratorExpr), tsRelax(alt(
+      [many(paramMods.rest), paramMods.stat, many(paramMods.rest), opt(many1(DecoratorExpr), many(paramMods.rest))],
+      [many1(paramMods.rest), opt(many1(DecoratorExpr), paramMods.run)],
+    ), [many1(paramMods.any), opt(many1(DecoratorExpr), many(paramMods.rest))]), body],
     [many(DecoratorExpr), body],
   ];
 });
@@ -642,6 +665,16 @@ const SwitchCase = rule($ => [
   ['case', Expr, many(',', Expr), ':'],
   ['default', ':'],
   Stmt,
+]);
+
+// A catch clause's parameter (14.15 `CatchParameter : BindingIdentifier | BindingPattern`), not
+// a FormalParameter, with TypeScript's type annotation (tsc's parseCatchClause reads
+// parseVariableDeclaration: a name or pattern and a type, no `!`; which types are allowed is the
+// checker's). No initializer: the production has none, and tsc's parser takes one and leaves it
+// to the checker (docs/CORRECTNESS.md). No rest, `?`, `this`, decorator or modifier.
+const CatchParameter = rule($ => [
+  [...bindingIdentifier, opt(':', Type)],
+  [BindingPattern, opt(':', Type)],
 ]);
 
 const Stmt = rule($ => [
@@ -661,7 +694,8 @@ const Stmt = rule($ => [
   // inside a switch eats `case` as the label and the whole switch cascades.
   ['break', opt(sameLine, notReserved, Ident), asi()],
   ['continue', opt(sameLine, notReserved, Ident), asi()],
-  ['try', Block, opt('catch', opt('(', alt(Param, BindingPattern), ')'), Block), opt('finally', Block)],
+  // TryStatement (14.15): a Catch, a Finally, or both, so `try {}` has no parse.
+  ['try', Block, not(not(alt('catch', 'finally'))), opt('catch', opt('(', CatchParameter, ')'), Block), opt('finally', Block)],
   [notReserved, Ident, ':', $],
   ';',
   ['debugger', asi()],
@@ -806,6 +840,11 @@ const Modifier = classMods.any;
 const modRun = classMods.run;
 const asyncMod = modifierWord(['async']);
 const accessorMod = modifierWord(['get', 'set']);
+// The words after `async`: every modifier word, `async` itself among them (tsc's parseModifiers
+// takes `async` as often as it can follow: `async async x() {}`, `static async async x() {}`).
+// (tree-sitter keeps its plain run of words: `async` there would be one more modifier-vs-name
+// decision against the method name `async` in its GLR table.)
+const asyncWords = tsRelax(many(alt(Modifier, asyncMod)), many(Modifier));
 // The single `static` slot spans the whole member, and the words go on after `async`
 // (`static async x`, `async static x`). `modRun` gives the leading run its shape; the words
 // after `async` are a plain repetition, because a second run shape there multiplies the
@@ -849,15 +888,15 @@ const ClassMember = rule($ => [
       // `async` is order-free among modifiers (tsc parses any order; the checker
       // validates), so it carries its own inner modifier run and an async member's
       // body is [+Await]/[+Await,+Yield].
-      [asyncMod, many(Modifier), '*', MemberName, opt('?'), opt(TypeParams), ...memTail(asyncGenCtx)],   // async generator method
-      [asyncMod, many(Modifier), accessorMod, MemberName, opt(TypeParams), '(', opt(sep(awaitCtx(Param), ',')), ')', opt(":", ReturnType), awaitCtx(fnBodyOrAsi())],  // async accessor (semantic error; parses)
-      [asyncMod, many(Modifier), 'static', awaitCtx(Block)],                              // `async static { }` (semantic error; parses)
-      [asyncMod, many(Modifier), not(accessorMod), ...propertyOrMethodName, opt('?'), opt(TypeParams), ...memTail(awaitCtx)],   // async method
+      [asyncMod, asyncWords, '*', MemberName, opt('?'), opt(TypeParams), ...memTail(asyncGenCtx)],   // async generator method
+      [asyncMod, asyncWords, accessorMod, MemberName, opt(TypeParams), '(', opt(sep(awaitCtx(Param), ',')), ')', opt(":", ReturnType), awaitCtx(fnBodyOrAsi())],  // async accessor (semantic error; parses)
+      [asyncMod, asyncWords, 'static', awaitCtx(Block)],                              // `async static { }` (semantic error; parses)
+      [asyncMod, asyncWords, not(accessorMod), ...propertyOrMethodName, opt('?'), opt(TypeParams), ...memTail(awaitCtx)],   // async method
       ['*', MemberName, opt('?'), opt(TypeParams), ...memTail(yieldCtx)],                // generator method
       [accessorMod, MemberName, opt(TypeParams), '(', opt(sep(resetCtx(Param), ',')), ')', opt(":", ReturnType), resetCtx(fnBodyOrAsi())],  // accessor (type params parse; semantic error)
       // index signature, after any modifiers (`async` among them, as in tsc): the type member's
       // one form (`indexSignature`), so a bracket that starts one is no method or field name.
-      [opt(asyncMod, many(Modifier)), ...indexSignature],
+      [opt(asyncMod, asyncWords), ...indexSignature],
       // a bare identifier `constructor` member MUST be a call signature — tsc rejects a
       // `constructor` field/property ("'(' expected"): `constructor;`, `constructor = 1`,
       // `constructor: T`, even modified (`public constructor;`). TypeParams parse; `?`/`!`
@@ -874,7 +913,7 @@ const ClassMember = rule($ => [
       )],
       // `async` is a modifier like any other to tsc, so it may also precede a field
       // (`async x;` parses; the checker rejects it).
-      [asyncMod, many(Modifier), not('constructor'), not(accessorMod), ...propertyOrMethodName, ...fieldTail],
+      [asyncMod, asyncWords, not('constructor'), not(accessorMod), ...propertyOrMethodName, ...fieldTail],
     ),
   ],
 ]);
@@ -883,11 +922,15 @@ const EnumMember = rule($ => [
   [MemberName, opt('=', Expr)],
 ]);
 
-// Per-specifier `type` modifier (`import { type A }`, `export { type A as B }`). A LONE
-// `type` is the specifier NAME (`{ type }`, `{ type as B }`, `{ type, x }`), so the
-// modifier reading fires only when a real binding name follows on the same line — the
-// not(',', '}', 'as') guard keeps the bare-name reading reachable.
-const typeMod = () => opt('type', sameLine, not(alt(',', '}', 'as')));
+// Per-specifier `type` modifier (`import { type A }`, `export { type A as B }`), as tsc's
+// parseImportOrExportSpecifier decides it from the tokens after `type` (a ModuleExportName is an
+// IdentifierName or a string; no line break matters): `type` is the modifier before a name that
+// is not `as` (`{ type A }`, `{ type⏎A }`), before `as as` and a name (`{ type as as x }`: the
+// type-only `as`, renamed), and before an `as` no name follows (`{ type as }`: the type-only
+// `as`). Otherwise it is the specifier's name: `{ type }`, `{ type, x }`, `{ type as x }`,
+// `{ type as as }` (`type` renamed to `as`).
+const moduleExportName = alt(Ident, String_);
+const typeMod = () => opt('type', not(not(alt([not('as'), moduleExportName], ['as', 'as', moduleExportName], ['as', not(moduleExportName)]))));
 const ImportSpecifier = rule($ => [
   // A module-side name `as` a local name, or a local name alone. The local name is a binding
   // identifier; the name read from the module, before `as`, is an IdentifierName (tsc's
@@ -908,11 +951,11 @@ const ExportSpecifier = rule($ => [
   // when followed by a real name that ISN'T `as` (arm 1), or by `as` that is itself the
   // name — `{ type as }`, no rename target after (arm 2). Otherwise `type` is the name:
   // `{ type }`, `{ type as B }` (renamed), `{ type, x }` all take arm 3.
-  ['type', sameLine, not('as'), not(alt(',', '}')), alt(Ident, String_), opt('as', alt(Ident, String_))],
+  ['type', not('as'), alt(Ident, String_), opt('as', alt(Ident, String_))],
   // name is `as`: `{ type as }` (no rename) or `{ type as as Y }` (DOUBLE as = rename).
   // A single `{ type as Y }` is NOT this arm — the not(Ident/String) / second-`as` guard
   // rejects it so it falls to arm 3 as name=`type` renamed to Y.
-  ['type', sameLine, 'as', alt([not(alt(Ident, String_))], ['as', alt(Ident, String_)])],
+  ['type', 'as', alt([not(alt(Ident, String_))], ['as', alt(Ident, String_)])],
   [alt(Ident, String_), opt('as', alt(Ident, String_))],
 ]);
 
@@ -1045,17 +1088,17 @@ const Decl = rule($ => [
     [not(not(Decorator)), $],
     [Expr, asi()],   // catch-all: export default <expr>
   )],
-  ['export', opt('type'), '*', opt('as', alt(Ident, String_)), 'from', String_, asi()],   // export (type)? * (as ns)? from "m" — alias is a ModuleExportName
-  ['export', '{', sep(ExportSpecifier, ','), '}', opt('from', String_), asi()],
+  ['export', opt('type'), '*', opt('as', alt(Ident, String_)), 'from', ...moduleSpecifier, asi()],   // export (type)? * (as ns)? from "m" — alias is a ModuleExportName
+  ['export', '{', sep(ExportSpecifier, ','), '}', opt('from', ...moduleSpecifier), asi()],
   ['export', '=', Expr, asi()],
-  ['export', 'type', '{', sep(ExportSpecifier, ','), '}', opt('from', String_), asi()],
+  ['export', 'type', '{', sep(ExportSpecifier, ','), '}', opt('from', ...moduleSpecifier), asi()],
   ['const', 'enum', ...bindingIdentifier, '{', sep(EnumMember, ','), '}'],
   ['import', alt(
-    [ImportClause, 'from', String_],          // import X from "m"  (also `import type from "m"` = default named `type`)
-    ['type', ImportClause, 'from', String_],  // import type X from "m"
+    [ImportClause, 'from', ...moduleSpecifier],   // import X from "m"  (also `import type from "m"` = default named `type`)
+    ['type', ImportClause, 'from', ...moduleSpecifier],   // import type X from "m"
     ['type', ...bindingIdentifier, '=', ModuleReference],    // import type X = require(…) / = ns.Foo (type-only import-equals)
     [...bindingIdentifier, '=', ModuleReference],            // import x = require(…) / = ns.Foo  (also `import type = …` where `type` is the binding name)
-    String_,                                  // import "m"
+    moduleSpecifier,                          // import "m"
   ), asi()],
 ]);
 
@@ -1142,7 +1185,7 @@ export default defineGrammar({
     Expr, Prop, MemberName, NewTarget, ClassHeritage,
     Stmt, Block,
     BindingProperty, BindingElement, ArrayBindingElement, BindingPattern,
-    Binding, ForBinding, Param, ForHead, ForAwaitHead, SwitchCase,
+    Binding, ForBinding, Param, CatchParameter, ForHead, ForAwaitHead, SwitchCase,
     TypeParams, TypeParam,
     Decl, ClassMember, EnumMember,
     ImportClause, ImportSpecifier, ExportSpecifier, ModuleReference,
