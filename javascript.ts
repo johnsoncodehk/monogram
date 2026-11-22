@@ -28,7 +28,7 @@ import {
   token, rule, defineGrammar,
   left, right, none, noUnaryLhs, lhsTarget, prefixTarget, postfixTarget,
   op, prefix, postfix, sameLine,
-  sep, opt, many, many1, alt, exclude, not, reservableNot, capExpr,
+  sep, opt, many, many1, alt, exclude, not, reservableNot, capExpr, tsRelax,
   awaitCtx, yieldCtx, asyncGenCtx, resetCtx,
   altPattern, optPattern, seq, oneOf, noneOf, range, anyChar, star, plus, repeat, notFollowedBy, start,
 } from './src/api.ts';
@@ -210,6 +210,16 @@ export const conciseBody = (Block, Expr) => alt(Block, [not('{'), Expr]);
 // in TypeScript `using`, which tsc's parser takes there; `declarationWords`).
 export const exportDeclaration = ($, Stmt, declarationWords) =>
   ['export', alt($, [not(not(alt(...declarationWords))), Stmt])];
+// A module specifier and its import attributes (16.2.2 `FromClause : from ModuleSpecifier`,
+// `WithClause : with { } | with { WithEntries ,opt }`, `WithEntries : AttributeKey : StringLiteral`,
+// `AttributeKey : IdentifierName | StringLiteral`): the specifier and every attribute value are
+// string literals (`import x from y`, `with { type: 1 }` have no parse), and nothing restricts a
+// line break before `with`. tsc's parser takes any expression for both, the legacy `assert` for
+// `with`, and no `with` past a line break (README, "Correctness: the productions, not tsc").
+// tree-sitter renders no attributes: after a specifier, `with` would also begin a `with`
+// statement past an inserted `;`, which a CFG without lookahead cannot tell apart.
+const withEntry = [alt(Ident, String_), ':', String_];
+export const moduleSpecifier = [String_, tsRelax(opt('with', '{', opt(...withEntry, many(',', ...withEntry), opt(',')), '}'), [])];
 
 // ── Always-reserved words ──
 // The `Ident` token deliberately swallows keywords (they lex as identifiers), so
@@ -300,11 +310,16 @@ export const forStatement = ($, ForHead, ForAwaitHead) =>
 // tsc's parser reads through this fallback in files it accepts. Owed: that `import` is tsc-parser
 // tolerance, not the productions. `var` begins a variable statement or a for-head declaration
 // only, so a statement or head starting `var` is read once, as the declaration.
-export const notReservedExpr = reservableNot(alt(
+const noExprReserved = [
   'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do',
   'else', 'enum', 'export', 'extends', 'finally', 'for', 'function', 'if', 'in', 'instanceof',
   'return', 'switch', 'throw', 'try', 'typeof', 'var', 'void', 'while', 'with',
-));
+];
+export const notReservedExpr = reservableNot(alt(...noExprReserved));
+// JavaScript's: `import` is an expression only as ImportCall and `import.meta` (13.3.10
+// `ImportCall : import ( AssignmentExpression ,opt ) | import ( AssignmentExpression ,
+// AssignmentExpression ,opt )`), so `import()`, `import(a, b, c)` and `import(...a)` have no parse.
+const notReservedJsExpr = reservableNot(alt(...noExprReserved, 'import'));
 
 // ── Precedence ladder (shared ECMAScript operator precedence) ──
 
@@ -446,7 +461,7 @@ const Expr = rule($ => [
   // `super` is a CONSTRAINED primary (mirrors tsc's parseSuperExpression): MUST be
   // immediately followed by a call `(args)`, member `.name`/`.#priv`, or element `[expr]`.
   ['super', alt(['(', sep($, ','), ')'], ['.', alt(Ident, PrivateField)], ['[', $, ']'])],
-  [not('super'), not('new'), notReservedExpr, Ident],
+  [not('super'), not('new'), notReservedJsExpr, Ident],
   Number_,
   String_,
   Template,
@@ -502,11 +517,12 @@ const Expr = rule($ => [
   // async arrow with a BARE parameter: `async err => …` (ES2017). `async` and the
   // parameter must share a line (`async\nx => …` is `async;` then a plain arrow —
   // the spec's [no LineTerminator here] between async and the binding identifier).
-  capExpr('?', 'async', sameLine, awaitCtx(notReservedExpr, Ident), '=>', awaitCtx(conciseBody(Block, $))),
-  capExpr('?', notReservedExpr, Ident, '=>', resetCtx(conciseBody(Block, $))),
+  capExpr('?', 'async', sameLine, awaitCtx(notReservedJsExpr, Ident), '=>', awaitCtx(conciseBody(Block, $))),
+  capExpr('?', notReservedJsExpr, Ident, '=>', resetCtx(conciseBody(Block, $))),
   ['yield', alt(['*', $], [opt($)])],   // yield e | yield* e (delegate) | yield
   ['(', $, many(',', $), ')'],
-  ['import', alt(['(', $, ')'], ['.', 'meta'])],
+  // ImportCall: one or two AssignmentExpressions, no spread (the `...` arm is Arguments'), and ImportMeta
+  ['import', alt(['(', not('...'), $, opt(',', opt(not('...'), $, opt(','))), ')'], ['.', 'meta'])],
   PrivateField,
   HexNumber, OctalNumber, BinaryNumber, BigInt_,
   // function expression, 4-way split on async × generator (see fnArms).
@@ -761,12 +777,11 @@ const Decl = rule($ => [
     [many(DecoratorExpr), 'class', many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],                          // anonymous class
     [Expr, asi()],   // catch-all: export default <expr>
   )],
-  ['export', '*', alt(['from', String_], ['as', Ident, 'from', String_]), asi()],
-  ['export', '{', sep(ExportSpecifier, ','), '}', opt('from', String_), asi()],
+  ['export', '*', alt(['from', ...moduleSpecifier], ['as', alt(Ident, String_), 'from', ...moduleSpecifier]), asi()],   // the alias is a ModuleExportName
+  ['export', '{', sep(ExportSpecifier, ','), '}', opt('from', ...moduleSpecifier), asi()],
   ['import', alt(
-    [ImportClause, 'from', String_],          // import X from "m"
-    [...bindingIdentifier, '=', Expr],        // import x = expr
-    String_,                                  // import "m"
+    [ImportClause, 'from', ...moduleSpecifier],   // import X from "m"
+    moduleSpecifier,                              // import "m"
   ), asi()],
 ]);
 

@@ -39,7 +39,7 @@ import {
   Number_, String_, Template, Regex_, Decorator, PrivateField,
   notReserved, notReservedExpr, bindingIdentifier, asi, expressionStatement, conciseBody, classHeritageArms, newTargetArms, ecmaPrec, jsLedPrecs, jsScopes, jsBaseCanonical,
   forBindingArms, forHeadArms, forAwaitHeadArms, forStatement,
-  memberStart, memberAhead, memberWordRules, memberWord, exportDeclaration,
+  memberStart, memberAhead, memberWordRules, memberWord, exportDeclaration, moduleSpecifier,
 } from './javascript.ts';
 
 // ── Type query reference (typeof's argument: just dotted identifiers) ──
@@ -911,11 +911,15 @@ const EnumMember = rule($ => [
   [MemberName, opt('=', Expr)],
 ]);
 
-// Per-specifier `type` modifier (`import { type A }`, `export { type A as B }`). A LONE
-// `type` is the specifier NAME (`{ type }`, `{ type as B }`, `{ type, x }`), so the
-// modifier reading fires only when a real binding name follows on the same line — the
-// not(',', '}', 'as') guard keeps the bare-name reading reachable.
-const typeMod = () => opt('type', sameLine, not(alt(',', '}', 'as')));
+// Per-specifier `type` modifier (`import { type A }`, `export { type A as B }`), as tsc's
+// parseImportOrExportSpecifier decides it from the tokens after `type` (a ModuleExportName is an
+// IdentifierName or a string; no line break matters): `type` is the modifier before a name that
+// is not `as` (`{ type A }`, `{ type⏎A }`), before `as as` and a name (`{ type as as x }`: the
+// type-only `as`, renamed), and before an `as` no name follows (`{ type as }`: the type-only
+// `as`). Otherwise it is the specifier's name: `{ type }`, `{ type, x }`, `{ type as x }`,
+// `{ type as as }` (`type` renamed to `as`).
+const moduleExportName = alt(Ident, String_);
+const typeMod = () => opt('type', not(not(alt([not('as'), moduleExportName], ['as', 'as', moduleExportName], ['as', not(moduleExportName)]))));
 const ImportSpecifier = rule($ => [
   // A module-side name `as` a local name, or a local name alone. The local name is a binding
   // identifier; the name read from the module, before `as`, is an IdentifierName (tsc's
@@ -936,11 +940,11 @@ const ExportSpecifier = rule($ => [
   // when followed by a real name that ISN'T `as` (arm 1), or by `as` that is itself the
   // name — `{ type as }`, no rename target after (arm 2). Otherwise `type` is the name:
   // `{ type }`, `{ type as B }` (renamed), `{ type, x }` all take arm 3.
-  ['type', sameLine, not('as'), not(alt(',', '}')), alt(Ident, String_), opt('as', alt(Ident, String_))],
+  ['type', not('as'), alt(Ident, String_), opt('as', alt(Ident, String_))],
   // name is `as`: `{ type as }` (no rename) or `{ type as as Y }` (DOUBLE as = rename).
   // A single `{ type as Y }` is NOT this arm — the not(Ident/String) / second-`as` guard
   // rejects it so it falls to arm 3 as name=`type` renamed to Y.
-  ['type', sameLine, 'as', alt([not(alt(Ident, String_))], ['as', alt(Ident, String_)])],
+  ['type', 'as', alt([not(alt(Ident, String_))], ['as', alt(Ident, String_)])],
   [alt(Ident, String_), opt('as', alt(Ident, String_))],
 ]);
 
@@ -1073,17 +1077,17 @@ const Decl = rule($ => [
     [not(not(Decorator)), $],
     [Expr, asi()],   // catch-all: export default <expr>
   )],
-  ['export', opt('type'), '*', opt('as', alt(Ident, String_)), 'from', String_, asi()],   // export (type)? * (as ns)? from "m" — alias is a ModuleExportName
-  ['export', '{', sep(ExportSpecifier, ','), '}', opt('from', String_), asi()],
+  ['export', opt('type'), '*', opt('as', alt(Ident, String_)), 'from', ...moduleSpecifier, asi()],   // export (type)? * (as ns)? from "m" — alias is a ModuleExportName
+  ['export', '{', sep(ExportSpecifier, ','), '}', opt('from', ...moduleSpecifier), asi()],
   ['export', '=', Expr, asi()],
-  ['export', 'type', '{', sep(ExportSpecifier, ','), '}', opt('from', String_), asi()],
+  ['export', 'type', '{', sep(ExportSpecifier, ','), '}', opt('from', ...moduleSpecifier), asi()],
   ['const', 'enum', ...bindingIdentifier, '{', sep(EnumMember, ','), '}'],
   ['import', alt(
-    [ImportClause, 'from', String_],          // import X from "m"  (also `import type from "m"` = default named `type`)
-    ['type', ImportClause, 'from', String_],  // import type X from "m"
+    [ImportClause, 'from', ...moduleSpecifier],   // import X from "m"  (also `import type from "m"` = default named `type`)
+    ['type', ImportClause, 'from', ...moduleSpecifier],   // import type X from "m"
     ['type', ...bindingIdentifier, '=', ModuleReference],    // import type X = require(…) / = ns.Foo (type-only import-equals)
     [...bindingIdentifier, '=', ModuleReference],            // import x = require(…) / = ns.Foo  (also `import type = …` where `type` is the binding name)
-    String_,                                  // import "m"
+    moduleSpecifier,                          // import "m"
   ), asi()],
 ]);
 
