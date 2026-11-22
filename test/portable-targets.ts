@@ -83,6 +83,15 @@ const FOR_HEADS = {
     'async function f() { for await (let.x of y); }', 'async function f() { for await (let of y); }',
   ],
 };
+// An IdentifierReference is no reserved word: a reserved word with no expression form of its own
+// is no expression, in both grammars (`notReservedExpr`).
+const RESERVED_EXPRS = {
+  accept: ['a in b;', 'a instanceof B;', 'x = function () {};', 'export default x;', 'f(this, null, true);'],
+  reject: [
+    'in;', 'x\nin;', 'instanceof;', 'x = default;', 'f(export);', 'extends;', 'a\nextends;', 'x = function;',
+    'x = const;', 'f(if);', 'x = a ? in : b;',
+  ],
+};
 const CASES: Case[] = [
   {
     grammar: 'calc', path: './fixtures/calc.ts',
@@ -342,7 +351,7 @@ const CASES: Case[] = [
       'for (a in b) { d = c in e; }',
       'new a.b();', '((((x))));',
       'for (a = x + y in b) c;',
-      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept,
+      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept,
       // An assignment / update operand needs only a LeftHandSideExpression's shape; target validity is a consumer's.
       '-x++;', '(a) = 1;', 'a = b = c;', '1 = 2;', '1++;', '++1;', 'f() = 1;', 'f()++;', '++f();', 'this = 1;',
       '(a + b) = c;', '(a, b) = 1;', 'a?.b = 1;', 'a?.b++;', '[a + b] = c;', '({a: 1} = c);', 'new.target = 1;',
@@ -423,7 +432,7 @@ const CASES: Case[] = [
       'x\n++;', 'x\n--', '(x\n++);', 'a = [x\n++];', 'x\n++\n-y;', 'x\n++\ny++;', 'x\n++ ++y;', 'class C { p = x\n++ }', 'class C { p = x\n++\ny }',
       'for (a = (x in b)) c;',
       'for (a = b ? x in c : y in d) e;',
-      ...NO_IN_HEADS.reject, ...FOR_HEADS.reject,
+      ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject,
       // An assignment / update operand (prefix ++/-- included) without a LeftHandSideExpression's shape has no parse.
       'a + b = c;', 'a++ = 1;', '-a = 1;', '++ -x;', '++x++;', '++ ++x;',
       // … wherever the expression is optional or repeated: a refused operand is not skipped.
@@ -446,7 +455,7 @@ const CASES: Case[] = [
     // agnostic emitter (types, generics, interfaces, enums, assertions, variance). ASCII.
     grammar: 'typescript', path: '../typescript.ts',
     accept: [
-      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
+      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
       // A class heritage is a LeftHandSideExpression (see the JavaScript cases).
       'f(class extends (a, b) {});', 'f(class extends a[0] {});', 'f(class extends a`t` {});', 'f(class extends a?.b() {});',
       // `return` takes an expression only on its own line (a restricted production), so a
@@ -619,7 +628,7 @@ const CASES: Case[] = [
       'type = 1;', 'namespace.x;', 'declare(x);', 'abstract(x);',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
-    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
+    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '{ b(); }.x;', '{ static x }.y;', '{ static x }', '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;',
       'let[0] = 1;', '(async\nfunction f() {});',

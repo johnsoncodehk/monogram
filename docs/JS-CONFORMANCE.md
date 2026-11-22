@@ -11,14 +11,14 @@ this record is stale, so every file that moves between cells shows in its diff.
 
 Corpus: `microsoft/TypeScript@6fbce89821d93a5b761581d9ac540455f38e9acb` `tests/cases/conformance` · oracle: `typescript@5.9.3`
 
-**4462 files measured**, 4428 agree (99.24%) · 1196 multi-file cases skipped · 1 excluded as oracle crashes (`ORACLE_CRASHES` in the test, by name).
+**4462 files measured**, 4433 agree (99.35%) · 1196 multi-file cases skipped · 1 excluded as oracle crashes (`ORACLE_CRASHES` in the test, by name).
 
 | cell (tsc / monogram) | files | |
 |---|---:|---|
 | `js/accept` | 1162 | agree: valid JavaScript per tsc, accepted |
 | `js/reject` | 25 | **disagree**: valid JavaScript per tsc, rejected: candidate gaps (read each derivation) |
-| `ts-only/reject` | 2706 | agree: TypeScript-only syntax per tsc, rejected |
-| `ts-only/accept` | 7 | **disagree**: TypeScript-only syntax per tsc, accepted: over-acceptance |
+| `ts-only/reject` | 2711 | agree: TypeScript-only syntax per tsc, rejected |
+| `ts-only/accept` | 2 | **disagree**: TypeScript-only syntax per tsc, accepted: over-acceptance |
 | `js-error/reject` | 1 | agree: a JS-only syntactic error per tsc, rejected |
 | `js-error/accept` | 0 | **disagree**: a JS-only syntactic error per tsc, accepted: over-acceptance |
 | `reject/reject` | 559 | agree: a tsc parse error, rejected |
@@ -55,17 +55,12 @@ Valid JavaScript per tsc, rejected: candidate gaps (read each derivation).
 - `statements/VariableStatements/usingDeclarations/usingDeclarationsInForIn.ts`
 - `statements/VariableStatements/usingDeclarations/usingDeclarationsInForOf.3.ts`
 
-## `ts-only/accept` (7)
+## `ts-only/accept` (2)
 
 TypeScript-only syntax per tsc, accepted: over-acceptance.
 
-- `parser/ecmascript5/ExportAssignments/parserExportAssignment1.ts`
-- `parser/ecmascript5/ExportAssignments/parserExportAssignment2.ts`
-- `parser/ecmascript5/ExportAssignments/parserExportAssignment7.ts`
-- `parser/ecmascript5/ExportAssignments/parserExportAssignment8.ts`
 - `parser/ecmascript5/parserImportDeclaration1.ts`
 - `scanner/ecmascript5/scannerImportDeclaration1.ts`
-- `statements/VariableStatements/usingDeclarations/usingDeclarationsTopLevelOfModule.2.ts`
 
 ## `js-error/accept` (0)
 

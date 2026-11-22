@@ -284,30 +284,19 @@ export const forAwaitHeadArms = (Expr, ForBinding) => [
 export const forStatement = ($, ForHead, ForAwaitHead) =>
   ['for', alt(['(', ForHead, ')'], ['await', '(', ForAwaitHead, ')']), $];
 
-// A NARROWER guard for the *expression* identifier-NUD only. The full `notReserved`
-// set can NOT be used at expression position: most always-reserved words legitimately
-// begin an expression via their own dedicated forms (`new`/`new.target`, `class`/
-// `function` expressions, `import(…)`/`import<T>`, `super`, `this`, `true`/`false`/
-// `null`, …), and TS's own error-recovery tolerates several reserved words sliding into
-// the bare-identifier fallback inside otherwise-valid files (e.g. `export default …`,
-// undeclared `for (x in …)`, `class … extends (e)`, a decorator before `export`). The
-// words below have NO such role: the prefix operators `void`/`typeof`/`delete` (which
-// must take an operand), the `catch`/`throw` keywords, `enum`, `case` (a bare `case`
-// expression let `case 1 y();` inside a switch parse as three statements), and
-// `class` (a valid class expression always out-matches the bare-identifier fallback,
-// so forbidding the fallback only rejects broken classes — `class extends D ;` with
-// no body parsed as three statements). Forbidding the bare-identifier fallback for
-// exactly these rejects `catch(x){}` with no `try`, `void ;`/`typeof ;`/`delete ;`
-// (operatorless prefix op), `throw ;`, a colon-less `case`, and a body-less `class`
-// — while leaving every valid expression (and TS's recovery cases) untouched.
-// Verified by a zero-flip accept/reject scan over the conformance corpus; widening
-// further regresses: `extends` is load-bearing for tsc's tolerated heritage shapes
-// (`interface I extends { }` reads `{` as the body, `extends A extends B`,
-// `extends Foo?.Bar` — all parse-accepted by tsc through the identifier fallback).
+// The guard of the *expression* identifier-NUD: an IdentifierReference is no reserved word, so
+// a reserved word with no expression form of its own is no expression (`in;`, `x = default`,
+// `f(export)`, `extends;`, `const;`, `x = function;`, `void ;`, `throw ;`, a colon-less `case`,
+// `catch(x){}` with no `try`, a body-less `class`). A reserved word that begins an expression of
+// its own (`new`/`new.target`, `super`, `this`, `true`/`false`/`null`, `import(…)`) is left out,
+// and so are two words tsc's parser reads as an identifier expression in files it accepts:
+// `import` with no or a spread argument (`import()`, `import(...a)`) and `var` (`for (var of X)`,
+// `for (var in X)`, `var [...x = a] = a`). Owed: `var` and `import` are tsc-parser tolerance, not
+// the productions (the parser reads those inputs through this fallback).
 export const notReservedExpr = reservableNot(alt(
-  'break', 'case', 'catch', 'class', 'continue', 'debugger', 'delete', 'do',
-  'else', 'enum', 'finally', 'for', 'if', 'return', 'switch', 'throw', 'try',
-  'typeof', 'void', 'while', 'with',
+  'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do',
+  'else', 'enum', 'export', 'extends', 'finally', 'for', 'function', 'if', 'in', 'instanceof',
+  'return', 'switch', 'throw', 'try', 'typeof', 'void', 'while', 'with',
 ));
 
 // ── Precedence ladder (shared ECMAScript operator precedence) ──
