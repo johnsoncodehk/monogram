@@ -3028,7 +3028,7 @@ function ${findAnyName(stops)}(s: string, i: number): number {
       lexStep: (_cx, s) => [`({ ${[s.posName === 'pos' ? 'pos' : `pos: ${s.posName}`, ...s.state].join(', ')} } = lexFrom(${s.text.c}, ${s.pos}, ${[...s.state, s.out].join(', ')}, 1));`],
     },
   },  record: {
-    field: (cx, r, _rec, f, ty) => cx.atom(`${tsWrap(r, ATOM)}.${f}`, ty === 'bool' ? 'bool' : 'int', cx.nat(ty)),
+    field: (cx, r, _rec, f, ty, nat) => cx.atom(`${tsWrap(r, ATOM)}.${f}`, ty === 'bool' ? 'bool' : 'int', nat),
     setField: (id, f, val) => [`${id}.${f} = ${val};`],
     make: (cx, rec, fs) => cx.atom(`{ ${fs.map(([f, v]) => `${f}: ${v}`).join(', ')} }`, `rec_${rec}`, `rec_${rec}`, { owned: true }),
     refType: (rec) => rec,

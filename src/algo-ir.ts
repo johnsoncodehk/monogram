@@ -240,8 +240,10 @@ export interface Lowering {
 }
 
 export interface RecordLowering {
-  // The read of field `f` (of type `ty`) of record `r`, a record of type `rec`.
-  field(cx: Cx, r: R, rec: string, f: string, ty: Num | 'bool'): R;
+  // The read of field `f` (of type `ty`, stored as `nat`) of record `r`, a record of type `rec`.
+  field(cx: Cx, r: R, rec: string, f: string, ty: Num | 'bool', nat: string): R;
+  // The native type a numeric field is stored as, when not its kind's (`num`): a layout choice.
+  nat?(rec: string, f: string, ty: Num): string | undefined;
   // The write of field `f` of the record variable `id`; `val` is already of the field's type.
   setField(id: string, f: string, val: string): Lines;
   // A new record; `fields` in declaration order, each already of its field's type.
@@ -317,7 +319,8 @@ class Printer implements Cx {
   }
 
   // A value stored into a field of type `ty`: converted to the field's native type.
-  private fieldVal(r: R, ty: Num | 'bool'): string { return isNum(ty) ? this.coerce(r, this.nat(ty)) : r.c; }
+  private fieldVal(r: R, rec: string, f: string, ty: Num | 'bool'): string { return isNum(ty) ? this.coerce(r, this.fieldNat(rec, f, ty)) : r.c; }
+  private fieldNat(rec: string, f: string, ty: Num | 'bool'): string { return isNum(ty) ? this.L.record?.nat?.(rec, f, ty) ?? this.nat(ty) : 'bool'; }
 
   private fieldOf(name: string, f: string): Num | 'bool' {
     const v = this.env.get(name);
@@ -384,7 +387,7 @@ class Printer implements Cx {
         if (!d) throw new Error(`algo-ir: undeclared record ${e.rec}`);
         const given = Object.keys(e.fields);
         if (given.length !== d.fields.length || d.fields.some((f) => !(f.name in e.fields))) throw new Error(`algo-ir: ${e.rec} needs exactly its fields`);
-        return this.recL().make(this, e.rec, d.fields.map((f) => [f.name, this.fieldVal(this.expr(e.fields[f.name]), f.ty)]));
+        return this.recL().make(this, e.rec, d.fields.map((f) => [f.name, this.fieldVal(this.expr(e.fields[f.name]), e.rec, f.name, f.ty)]));
       }
       case 'field': {
         const r = this.expr(e.e);
@@ -392,7 +395,7 @@ class Printer implements Cx {
         const rec = recName(r.ty), fd = this.recs.get(rec)?.fields.find((x) => x.name === e.f);
         if (!fd) throw new Error(`algo-ir: record ${rec} has no field ${e.f}`);
         if (!this.L.record) throw new Error('algo-ir: the lowering prints no records');
-        return this.L.record.field(this, r, rec, e.f, fd.ty);
+        return this.L.record.field(this, r, rec, e.f, fd.ty, this.fieldNat(rec, e.f, fd.ty));
       }
       case 'substr': return RX().substr(this, this.expr(e.s), this.expr(e.a), this.expr(e.b));
       case 'lidOf': return RX().lidOf(this, this.expr(e.s));
@@ -542,7 +545,7 @@ class Printer implements Cx {
       }
       case 'setField': {
         const ty = this.fieldOf(s.name, s.f);
-        return this.recL().setField(this.id(s.name), s.f, this.fieldVal(this.expr(s.e), ty));
+        return this.recL().setField(this.id(s.name), s.f, this.fieldVal(this.expr(s.e), recName(this.env.get(s.name)!.ty as RecTy), s.f, ty));
       }
       case 'run': {
         const fn = this.sigs.get(s.call.fn);

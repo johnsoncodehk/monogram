@@ -5406,8 +5406,10 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
     },
   },
   record: {
-    field: (cx, r, _rec, f, ty) => cx.atom(`${rsWrap(r, ATOM)}.${snake(f)}`, ty === 'bool' ? 'bool' : 'int', cx.nat(ty)),
+    field: (cx, r, _rec, f, ty, nat) => cx.atom(`${rsWrap(r, ATOM)}.${snake(f)}`, ty === 'bool' ? 'bool' : 'int', nat),
     setField: (id, f, val) => [`${id}.${snake(f)} = ${val};`],
+    // A Seg's fields index the kid and token Vecs directly.
+    nat: (rec) => (rec === 'Seg' ? 'usize' : undefined),
     make: (cx, rec, fs) => cx.atom(`${rec} { ${fs.map(([f, v]) => `${snake(f)}: ${v}`).join(', ')} }`, `rec_${rec}`, `rec_${rec}`, { owned: true }),
     refType: (rec) => `&mut ${rec}`,
     refArg: (r) => `&mut ${r.c}`,

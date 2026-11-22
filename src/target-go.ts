@@ -3027,7 +3027,7 @@ ${[...ones, ...wides].join('\n')}
     },
   },
   record: {
-    field: (cx, r, _rec, f, ty) => cx.atom(`${goWrap(r, ATOM)}.${exported(f)}`, ty === 'bool' ? 'bool' : 'int', cx.nat(ty)),
+    field: (cx, r, _rec, f, ty, nat) => cx.atom(`${goWrap(r, ATOM)}.${exported(f)}`, ty === 'bool' ? 'bool' : 'int', nat),
     setField: (id, f, val) => [`${id}.${exported(f)} = ${val}`],
     make: (cx, rec, fs) => cx.atom(`${rec}{${fs.map(([f, v]) => `${exported(f)}: ${v}`).join(', ')}}`, `rec_${rec}`, `rec_${rec}`, { owned: true }),
     refType: (rec) => `*${rec}`,
