@@ -7,7 +7,8 @@
 //
 // Unit = one EXPRESSION STATEMENT (anywhere in a file: nested ones too). The oracle's
 // ExpressionStatement nodes and the candidate's (`Stmt.expr` arms) are paired by start offset;
-// each pair is compared with `compareTrees`. A statement whose evaluation reaches an arm the spec
+// each candidate is evaluated in the context of its file (its ancestors and, through a thread,
+// its left siblings: the directive prologue), and each pair is compared with `compareTrees`. A statement whose evaluation reaches an arm the spec
 // does not map is OUTSIDE THE SUBSET (counted by that arm), not compared. Files the oracle skips
 // (acorn rejects / tsc reports parse errors) and files the grammar rejects are counted apart.
 //
@@ -21,7 +22,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createParser, type CstLeaf, type CstNode } from '../src/gen-parser.ts';
 import type { CstGrammar } from '../src/types.ts';
-import { armNameOf, evaluate, loadShape2, Shape2Unmapped, type LoadedShape2, type S2Node } from '../src/shape2-eval.ts';
+import { armNameOf, evaluator, loadShape2, Shape2Unmapped, type LoadedShape2, type S2Node } from '../src/shape2-eval.ts';
 import type { Shape2Spec } from '../src/shape2-schema.ts';
 import { compareTrees, conformanceFiles, type Divergence, type NTree, type NValue } from './shape-oracle.ts';
 
@@ -113,11 +114,12 @@ export function runShape(shape: Shape, corpus: string, paths: string[], samples 
       x.children.forEach(walk);
     };
     walk(cst);
+    const valueAt = evaluator(loaded, cst, src);   // each statement in its context (a directive's prologue)
     for (const [at, expected] of want) {
       const n = got.get(at);
       if (!n) { r.unpaired++; continue; }
       let value;
-      try { value = evaluate(loaded, n, src) as S2Node; } catch (e) {
+      try { value = valueAt(n) as S2Node; } catch (e) {
         if (e instanceof Shape2Unmapped) { r.outOfSubset++; bump(r.unmapped, `${e.rule}.${e.arm}`); continue; }
         r.evalErrors++; bump(r.unmapped, `ERROR ${(e as Error).message.slice(0, 80)}`); continue;
       }

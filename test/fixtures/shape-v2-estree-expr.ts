@@ -4,8 +4,8 @@
 // templates) is unmapped, and an expression statement that reaches one is reported as outside
 // the subset, not compared.
 import {
-  and, branch, c, child, cook, iff, inh, list, match, node, orElse, present, record, spread, syn,
-  text, wrapIf, type Shape2Spec, type Term,
+  absent, and, armOf, branch, c, child, cook, iff, inh, list, match, node, not, orElse, present, record,
+  spread, syn, text, thread, v, wrapIf, type Shape2Spec, type Term,
 } from '../../src/shape2-schema.ts';
 
 /** An Identifier node from a named leaf (a property name, `new` / `target`). */
@@ -26,19 +26,42 @@ const ASSIGN = ['=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', 
 const LOGICAL = ['||', '&&', '??'];
 const binaryType = match(text('op'), Object.fromEntries([...ASSIGN.map((o) => [o, c('AssignmentExpression')]), ...LOGICAL.map((o) => [o, c('LogicalExpression')])]), c('BinaryExpression'));
 
+// The directive prologue (ECMA-262 11.2.1; acorn's `directive`): the leading run of statements
+// of a Program or a function body that are a lone, unparenthesised string literal. Threaded
+// state `prologue` (src/shape2-schema.ts): true entering the first statement of a Program, and
+// of a Block that is a function body (inherited `functionBody`: the grammar has one Block rule
+// for both ECMAScript's Block and FunctionBody, so the parent arm tells them apart); stays true
+// while each statement is a directive candidate (synthesized `directive`).
+const FUNCTION_BODIES: Record<string, string[]> = {
+  Expr: ['function_', 'function_2', 'async', 'async2', 'seq', 'seq2', 'seq3', 'seq4'],   // function expressions, arrows
+  Decl: ['function_', 'function_2', 'async', 'async2', 'export_2'],                     // declarations, `export default function`
+  Prop: ['get', 'async', 'async2', 'star', 'memberName'],                               // object methods / accessors
+  ClassMember: ['seq'],                                                                  // constructor, methods, accessors
+};
+const prologue = (init: Term) => thread(init, 'p', and(v('p'), syn('directive', 'stmt')));
+
 /** `first (, rest)*`: the expression itself, or a SequenceExpression spanning the list. */
 const sequence: Term = iff(present('rest'), node('SequenceExpression', { expressions: list(child('first'), spread(child('rest'))) }, { from: 'first', to: 'rest' }), child('first'));
 
 export const estreeExprShape: Shape2Spec = {
   name: 'estree-expr',
   synthesized: {
+    directive: { type: 'bool', default: false, rules: { Stmt: { expr: and(not(present('rest')), match(armOf('first'), { string: c(true) }, c(false))) } } },
+    stringBody: { type: 'string', rules: { Expr: { string: cook('stringBody', 'string') } } },
     optional: { type: 'bool', default: false, rules: { Expr: { led_optChain: c(true), led_dot: syn('optional', 'left'), led_bracket: syn('optional', 'left'), led_paren: syn('optional', 'left') } } },
   },
   inherited: {
+    functionBody: { type: 'bool', default: false, rules: Object.fromEntries(Object.entries(FUNCTION_BODIES).map(([r, arms]) => [r, Object.fromEntries(arms.map((a) => [a, { block: c(true) }]))])) },
+    prologue: {
+      type: 'bool', default: false, rules: {
+        Program: { decl: { alt: thread(c(true), 'p', and(v('p'), branch('alt', { decl: c(false), stmt: syn('directive', 'stmt') }))) } },
+        Block: { brace: { stmt: prologue(inh('functionBody')) } },
+      },
+    },
     chainTop: { type: 'bool', default: true, rules: { Expr: Object.fromEntries(LINKS.map((a) => [a, { left: c(false) }])) } },
   },
   rules: {
-    Stmt: { expr: node('ExpressionStatement', { expression: sequence }) },
+    Stmt: { expr: node('ExpressionStatement', { expression: sequence, directive: iff(and(inh('prologue'), syn('directive')), syn('stringBody', 'first'), absent) }) },
     Expr: {
       true_: literal(c(true)),
       false_: literal(c(false)),

@@ -414,6 +414,13 @@ const CASES: Case[] = [
     reject: ['a++--;', 'a++.b;', 'a++ ++;', '++;', 'a + b++.c;', '-a++.b;'],
   },
   {
+    // A led whose connector is also a postfix operator: when the led fails after its connector,
+    // the LED loop goes on to the operator table (the reference does), where the postfix binds.
+    grammar: 'ledexitjs', path: './fixtures/ledexitjs.ts',
+    accept: ['a!;', 'a!(b);', 'a!(b)!;', 'a! + b;', 'a!(b) + c!;', '(a!)!(b);'],
+    reject: ['a!!(b);', 'a!(;', '!a;', 'a!b;', 'a!(b;'],
+  },
+  {
     // A grouped sub-sequence `seq` step: comma lists as `star([',', $])` (e.g. `many(',', $)`),
     // the array/argument-list shape javascript.ts uses.
     grammar: 'seqjs', path: './fixtures/seqjs.ts',

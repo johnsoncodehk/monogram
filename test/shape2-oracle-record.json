@@ -3,7 +3,7 @@
   "corpus": "node_modules",
   "statements": 13292,
   "compared": 11755,
-  "identical": 11673,
+  "identical": 11755,
   "outOfSubset": 1537
  },
  "tsc conformance/expressions": {
