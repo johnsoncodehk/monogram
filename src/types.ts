@@ -473,7 +473,13 @@ export interface LedPrec {
   chainRhs?: boolean;    // trailing self-operand at this lbp (default: full expression)
 }
 
-export type RuleExpr =
+// Every node may carry an author-written NAME (src/api.ts `arm` / `field`; read through
+// src/grammar-names.ts): `arm` names an alternative (a rule arm or an inline `alt` branch) by
+// its syntax role, `field` names a child or group (`condition`, `then`, `object`, ...). Names
+// describe the syntax, never one AST's node or field names. Both are transparent to parsing:
+// no parser, CST, highlighter or analysis reads them, so adding one changes no output.
+export type RuleExpr = RuleExprNode & { arm?: string; field?: string };
+type RuleExprNode =
   | { type: 'seq'; items: RuleExpr[] }
   | { type: 'alt'; items: RuleExpr[] }
   | { type: 'literal'; value: string }

@@ -9,8 +9,8 @@
 // stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
-import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -71,7 +71,7 @@ const branchGoW = (cond: string, recv: string) => `{ ${ckptGoW(recv)}; if ${cond
 // beats the best so far it becomes the best (`win` records it and moves the arena checkpoint past
 // its node), else `lost` drops what it built; either way the position goes back to `save`.
 const lostGo = 'p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]';
-const lostGoW = (recv: string) => `p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}`;
+const lostGoW = (_recv: string) => `p.scratch = p.scratch[:sb]; ${arenaRestore()}`;
 const candGo = (d: Dispatch, i: number, cond: string, win: string, lost: string) =>
   `{ if ${cond} && ${beatsGo(d, 'p.pos', i)} { ${win} } else { ${lost} }; p.back(save) }`;
 
@@ -944,47 +944,10 @@ function predAltBody(branches: Step[][], ids: LexIdPlan, firsts: FirstSig[] | un
   return `t := p.peek(); if t == nil { return false }; ${arms}; return false`;
 }
 
-type ReusePlanA = { kind: 'A'; topOneBody: string };
-type ReusePlanB = { kind: 'B'; hasHead: boolean; headRule: string | null; loopTok: string; loopRule: string };
-type ReusePlan = ReusePlanA | ReusePlanB;
-
-function matchLoopSeq(step: Step): { loopTok: string; loopRule: string } | null {
-  if (step.t !== 'seq' || step.steps.length !== 2) return null;
-  const [a, b] = step.steps;
-  if (a.t !== 'tok') return null;
-  if (b.t !== 'opt' || b.steps.length !== 1 || b.steps[0].t !== 'rule') return null;
-  return { loopTok: a.name, loopRule: (b.steps[0] as { t: 'rule'; name: string }).name };
-}
-
-function topReusePlan(ir: ParserIR): ReusePlan | null {
-  const entry = ir.rules.find((r) => r.name === ir.entry);
-  if (!entry || entry.kind !== 'rd' || entry.alts.length !== 1) return null;
-  const alt = entry.alts[0];
-  if (alt.length === 1 && alt[0].t === 'star') {
-    const step = alt[0].step;
-    if (step.t === 'rule') return { kind: 'A', topOneBody: `\treturn p.parse${step.name}()` };
-    if (step.t === 'alt') {
-      for (const br of step.branches) {
-        if (br.length !== 1 || br[0].t !== 'rule') return null;
-      }
-      const tries = step.branches.map((br) => {
-        const name = (br[0] as { t: 'rule'; name: string }).name;
-        return `\t{ sp := p.pos; n := p.parse${name}(); if n >= 0 { return n }; p.back(sp) }`;
-      }).join('\n');
-      return { kind: 'A', topOneBody: `${tries}\n\treturn -1` };
-    }
-    const loop = matchLoopSeq(step);
-    if (loop) return { kind: 'B', hasHead: false, headRule: null, ...loop };
-    return null;
-  }
-  if (alt.length === 2 && alt[0].t === 'opt' && alt[1].t === 'star') {
-    const hs = alt[0].steps;
-    if (hs.length !== 1 || hs[0].t !== 'rule') return null;
-    const loop = matchLoopSeq(alt[1].step);
-    if (!loop) return null;
-    return { kind: 'B', hasHead: true, headRule: hs[0].name, ...loop };
-  }
-  return null;
+// Shape A's one top-level entry: the first of its rules that matches (native engine).
+function topOneBody(plan: ReusePlanA): string {
+  if (plan.rules.length === 1) return `\treturn p.parse${plan.rules[0]}()`;
+  return `${plan.rules.map((n) => `\t{ sp := p.pos; n := p.parse${n}(); if n >= 0 { return n }; p.back(sp) }`).join('\n')}\n\treturn -1`;
 }
 
 function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
@@ -1030,7 +993,7 @@ ${needPeek ? '\t_ft := p.peek()\n' : ''}${dispatchGo(r.altDispatch, '_ft', ids, 
 function rdEntryWithReuseA(r: RdRule, plan: ReusePlanA, ar: ArenaIdPlan): string {
   return `type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidStart, KidCount int }
 func (p *engine) parseTopOne() int32 {
-${plan.topOneBody}
+${topOneBody(plan)}
 }
 func (p *engine) parse${r.name}() int32 {
 \tsave := p.pos; sb := len(p.scratch)
@@ -1167,7 +1130,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
       case 'prefix':
         // An operand that parses but is not the target the operator requires fails the whole
         // Pratt call, whatever another arm matched.
-        return `\tif pbp, ok := pre_${r.name}[t.Lid]; ok {
+        return `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tp.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
 \t\toperand := p.bp_${r.name}(pbp.rbp)
 \t\tif operand >= 0 && pbp.tgt && p.form != 0 { p.back(save); ${lost}; p.capped = false; return -1 }
@@ -1176,8 +1139,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
 \t}`;
     }
   };
-  const bin = r.binary.map((b) => `${lidOf(ids, b.op)}: {${b.lbp}, ${b.rbp}, ${b.requireTarget}, ${b.noUnaryLhs}}`).join(', ');
-  const pre = r.prefix.map((p) => `${lidOf(ids, p.op)}: {${p.rbp}, ${p.requireTarget}, ${p.form}}`).join(', ');
+
   const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, suppressedIn: number[]) => {
     const parts: string[] = [];
     if (accessTail) parts.push('!tailClosed');
@@ -1221,10 +1183,7 @@ ${groups.map((g) => `\t\tcase ${g.key}:
 \t\t\t}`).join('\n')}
 \t\t}${tplPart}`;
   })();
-  const post = r.postfix.map((p) => `${lidOf(ids, p.op)}: {${p.lbp}, ${p.requireTarget}}`).join(', ');
-  return `var bin_${r.name} = map[uint16]bp{${bin}}
-var pre_${r.name} = map[uint16]preOp{${pre}}
-var post_${r.name} = map[uint16]postOp{${post}}
+  return `${goPrattOpTables(r, ids)}
 func (p *engine) parse${r.name}() int32 {
 \tprev := p.suppressCur
 \tp.suppressCur = p.suppressNext
@@ -1244,14 +1203,14 @@ ${(r.leds.length > 0 || r.postfixToks.length > 0) ? 'LedLoop:\n' : ''}\tfor {
 \t\tif t == nil { break }
 ${ledSwitch}
 ${postfixTokSwitch}
-\t\tif post, ok := post_${r.name}[t.Lid]; ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
+\t\tif post := post_${r.name}[t.Lid]; post.ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
 \t\t\tif post.tgt && form != 0 { return -1 }
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++; tailClosed = true
 \t\t\tleft = p.finish(${ruleIdOf(ar, r.name)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); form = 1; continue
 \t\t}
 ${gtOpRead(ids, false)}
-\t\tinfo, ok := bin_${r.name}[opLid]
-\t\tif !ok || info.lbp <= minBp { break }
+\t\tinfo := bin_${r.name}[opLid]
+\t\tif !info.ok || info.lbp <= minBp { break }
 \t\tif info.tgt && form != 0 || info.noUnary && form == 2 { return -1 }
 \t\tledSave := p.pos; sb := len(p.scratch)
 \t\tp.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos))
@@ -1282,10 +1241,23 @@ ${dispatchGo(r.nudDispatch, 't', ids, nudArm)}
 }`;
 }
 
+/** A Pratt rule's operator tables (emit-portable prattOpTables) as arrays indexed by the token's
+ *  lid, one entry per literal id (`ok` marks an operator): a bounds-checked load, where a
+ *  map[uint16] would hash on every LED iteration and every prefix NUD. */
+function goPrattOpTables(r: PrattRule, ids: LexIdPlan): string {
+  const ops = prattOpTables(r, ids);
+  const bin = ops.bin.map((b) => `${b.lid}: {${b.lbp}, ${b.rbp}, ${b.tgt}, ${b.noUnary}, true}`).join(', ');
+  const pre = ops.pre.map((p) => `${p.lid}: {${p.rbp}, ${p.tgt}, ${p.form}, true}`).join(', ');
+  const post = ops.post.map((p) => `${p.lid}: {${p.lbp}, ${p.tgt}, true}`).join(', ');
+  return `var bin_${r.name} = [${ops.size}]bp{${bin}}
+var pre_${r.name} = [${ops.size}]preOp{${pre}}
+var post_${r.name} = [${ops.size}]postOp{${post}}`;
+}
+
 const goEditBody = '\td.text, d.toks, relexed = relexEdits(oldText, oldToks, edits)';
 
 function docEditBlockGo(ir: ParserIR, shared: SharedAlgorithms): string {
-  const topReuse = topReusePlan(ir);
+  const topReuse = ir.reuse;
   const shapeA = topReuse?.kind === 'A';
   const shapeB = topReuse?.kind === 'B';
   const hasHeadB = !!(shapeB && topReuse.kind === 'B' && topReuse.hasHead);
@@ -1746,12 +1718,8 @@ func newDocCst(src string, b *CstBuilder) *Doc {
 	defer d.publish()
 	var toks []Tok
 	d.toks, toks = scanMetaToks(src)
-	// A Doc owns its arena, so a new one starts empty; size it from the token count instead of
-	// growing it by repeated append copies (TS-family code runs ~0.6 nodes and ~1.1 kids per token):
-	// growth garbage is what drives GC cycles, since a dropped Doc leaves a small live heap.
-	n := len(toks)
-	if cap(b.Nodes) < n*3/4 { b.Nodes = make([]Node, 0, n*3/4) }
-	if cap(b.Kids) < n*5/4 { b.Kids = make([]int32, 0, n*5/4) }
+	// The arena grows as the parse fills it, as in ParseWith and in every target: a node or kid count
+	// estimated from the token count is neither a fit nor a bound (6183a29, PR #126).
 	d.e.nodes, d.e.kids = b.Nodes[:0], b.Kids[:0]
 	d.root = d.e.parse(src, toks)
 ${topReuse ? '\td.entries = append([]EntryMeta(nil), d.e.entries...)\n' : ''}\treturn d
@@ -1808,24 +1776,12 @@ ${editParse}
 // Parallel combinators / rules ending in `W`. Existing `parse`/arena/`Doc` above
 // are byte-identical to pre-addon emit; this block is appended only.
 
-/** parserCst: direct arena ckpt on embedded Nodes/Kids (native twin). parserW: Builder.Checkpoint. */
-function arenaCkpt(recv: string): string {
-  return recv === 'parserCst'
-    ? 'nb, kb := len(p.Nodes), len(p.Kids)'
-    : 'nb, kb := p.b.Checkpoint()';
-}
+/** The builder engine's arena checkpoint (Builder.Checkpoint). */
+const arenaCkpt = () => 'nb, kb := p.b.Checkpoint()';
 /** Move the checkpoint past what was just built (the best alternative so far stays). */
-function arenaMark(recv: string): string {
-  return recv === 'parserCst'
-    ? 'nb, kb = len(p.Nodes), len(p.Kids)'
-    : 'nb, kb = p.b.Checkpoint()';
-}
-/** parserCst: slice-truncate restore. parserW: Builder.Restore. */
-function arenaRestore(recv: string): string {
-  return recv === 'parserCst'
-    ? 'p.Nodes = p.Nodes[:nb]; p.Kids = p.Kids[:kb]'
-    : 'p.b.Restore(nb, kb)';
-}
+const arenaMark = () => 'nb, kb = p.b.Checkpoint()';
+/** Undo to the checkpoint (Builder.Restore). */
+const arenaRestore = () => 'p.b.Restore(nb, kb)';
 
 function stepCondW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
   if ('share' in s && s.share !== undefined) return `p.sub${s.share}W()`;
@@ -1892,31 +1848,31 @@ function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
     // breaks `} \\n else if` — native rdRule uses the same same-line join.
     const arm = (steps: Step[], i: number) => `\t${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { return p.finishW(${rid}, sb, p.offAt(save), save), true } }`;
     return `func (p *${recv}) parse${r.name}W() (spanned, bool) {
-\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
+\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \tt := p.peek(); if t == nil { return spanned{}, false }
 ${r.alts.map(arm).join(' ')}
-\tp.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}
+\tp.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore()}
 \treturn spanned{}, false
 }`;
   }
   if (r.alts.length === 1) {
     return `func (p *${recv}) parse${r.name}W() (spanned, bool) {
-\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
+\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \tif ${r.alts[0]!.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { return p.finishW(${rid}, sb, p.offAt(save), save), true }
-\tp.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}
+\tp.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore()}
 \treturn spanned{}, false
 }`;
   }
   // Longest match over the alternatives through the rule's Dispatch — as rdRule.
   const alt = (i: number, keyed: boolean) => {
     const cond = r.alts[i]!.map((x) => stepCondW(x, ids, ar, recv)).join(' && ');
-    const body = candGo(r.altDispatch, i, cond, `best = p.finishW(${rid}, sb, p.offAt(save), save); found = true; bestPos = p.pos;${markGo(r.altDispatch, i)} ${arenaMark(recv)}`, lostGoW(recv));
+    const body = candGo(r.altDispatch, i, cond, `best = p.finishW(${rid}, sb, p.offAt(save), save); found = true; bestPos = p.pos;${markGo(r.altDispatch, i)} ${arenaMark()}`, lostGoW(recv));
     const g = guardCond(r.altGuard[i]!, '_ft', 'W', keyed);
     return ifGo(g.length && !keyed ? ['_ft != nil', ...g] : g, body);
   };
   const needPeek = r.altGuard.some((g) => g !== null);
   return `func (p *${recv}) parse${r.name}W() (spanned, bool) {
-\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
+\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \tvar best spanned; found := false; bestPos := save${biGo(r.altDispatch)}
 ${needPeek ? '\t_ft := p.peek()\n' : ''}${dispatchGo(r.altDispatch, '_ft', ids, alt, true)}
 \tp.pos = bestPos
@@ -1924,12 +1880,10 @@ ${needPeek ? '\t_ft := p.peek()\n' : ''}${dispatchGo(r.altDispatch, '_ft', ids, 
 }`;
 }
 
+// Shape A's one top-level entry in builder form.
 function topOneBodyW(plan: ReusePlanA): string {
-  return plan.topOneBody
-    .replace(/\{ sp := p\.pos; n := p\.parse([A-Za-z0-9_]+)\(\); if n >= 0 \{ return n \}; p\.back\(sp\) \}/g,
-      '{ sp := p.pos; fr, ok := p.parse$1W(); if ok { return fr, true }; p.back(sp) }')
-    .replace(/return p\.parse([A-Za-z0-9_]+)\(\)/g, 'return p.parse$1W()')
-    .replace(/return -1/g, 'return spanned{}, false');
+  if (plan.rules.length === 1) return `\treturn p.parse${plan.rules[0]}W()`;
+  return `${plan.rules.map((n) => `\t{ sp := p.pos; fr, ok := p.parse${n}W(); if ok { return fr, true }; p.back(sp) }`).join('\n')}\n\treturn spanned{}, false`;
 }
 
 function rdEntryWithReuseAW(r: RdRule, plan: ReusePlanA, ar: ArenaIdPlan, recv: string): string {
@@ -1940,7 +1894,7 @@ ${topOneBodyW(plan)}
 }
 func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch)
-\tvar localE []EntryMeta
+\tlocalE := p.entries[:0] // a reused builder's Workspace list (ParseWith), else nil
 \tfor {
 \t\tsp := p.pos
 \t\tp.lookReset()
@@ -1957,7 +1911,7 @@ func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \t\t\tp.scratch = append(p.scratch, fr.h)
 \t\t}
 \t}
-\tp.entryHs = append([]int32(nil), p.scratch[sb:]...)
+\tp.entryHs = append(p.entryHs[:0], p.scratch[sb:]...) // DocWith copies it out (parseWithMetaW)
 \tp.entries = localE
 \treturn p.finishW(${rid}, sb, p.offAt(save), save), true
 }`;
@@ -1986,10 +1940,10 @@ function rdEntryWithReuseBW(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Are
 `
     : '';
   return `${headFn}func (p *${recv}) parseLoopSegW(sb int) (EntryMeta, bool) {
-\tsp := p.pos; before := len(p.scratch); ${arenaCkpt(recv)}
+\tsp := p.pos; before := len(p.scratch); ${arenaCkpt()}
 \tp.lookReset()
 \tif !p.matchTokW(${kidOf(ids, plan.loopTok)}) {
-\t\tp.back(sp); p.scratch = p.scratch[:before]; ${arenaRestore(recv)}
+\t\tp.back(sp); p.scratch = p.scratch[:before]; ${arenaRestore()}
 \t\treturn EntryMeta{}, false
 \t}
 \tp.optW(func() bool { return p.callRuleW((*${recv}).parse${plan.loopRule}W) })
@@ -2010,13 +1964,13 @@ function rdEntryWithReuseBW(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Are
 }
 func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch)
-\tvar localE []EntryMeta
+\tlocalE := p.entries[:0] // a reused builder's Workspace list (ParseWith), else nil
 ${headBlock}\tfor {
 \t\tm, ok := p.parseLoopSegW(sb)
 \t\tif !ok { break }
 \t\tlocalE = append(localE, m)
 \t}
-\tp.entryHs = append([]int32(nil), p.scratch[sb:]...)
+\tp.entryHs = append(p.entryHs[:0], p.scratch[sb:]...) // DocWith copies it out (parseWithMetaW)
 \tp.entries = localE
 \treturn p.finishW(${rid}, sb, p.offAt(save), save), true
 }`;
@@ -2030,7 +1984,7 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaI
   const rid = ruleIdOf(ar, r.name);
   // The NUD arms: longest-match candidates through the rule's Dispatch, as in prattRule.
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
-    `found = true; bestPos = p.pos;${markGo(r.nudDispatch, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; ${arenaMark(recv)}`;
+    `found = true; bestPos = p.pos;${markGo(r.nudDispatch, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; ${arenaMark()}`;
   const lost = lostGoW(recv);
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
@@ -2060,7 +2014,7 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaI
         return ifGo([`minBp < ${c.capBp}`, ...guardCond(r.nudCappedGuard[a.index]!, 't', 'W', keyed)], seqArm(i, c.steps, false, true));
       }
       case 'prefix':
-        return `\tif pbp, ok := pre_${r.name}[t.Lid]; ok {
+        return `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
 \t\toperand, ook := p.bpW_${r.name}(pbp.rbp)
 \t\tif ook && pbp.tgt && p.form != 0 { p.back(save); ${lost}; p.capped = false; return spanned{}, false }
@@ -2079,10 +2033,10 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaI
     return parts.length ? `if ${parts.join(' && ')} ` : '';   // the `if` before the led's block; none when nothing gates it
   };
   const ledBody = (b: Bracket, form: number, closes: boolean) => `{
-\t\t\tledSave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
+\t\t\tledSave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \t\t\tp.scratch = append(p.scratch, left.h)
 \t\t\tif ${b.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { left = p.finishW(${rid}, sb, int(left.off), int(left.tokStart)); form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
-\t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}
+\t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]; ${arenaRestore()}
 \t\t}`;
   const ledSwitch = (() => {
     if (r.leds.length === 0) return '';
@@ -2136,14 +2090,14 @@ ${needLedLoop ? 'LedLoop:\n' : ''}\tfor {
 \t\tif t == nil { break }
 ${ledSwitch}
 ${postfixTokSwitch}
-\t\tif post, ok := post_${r.name}[t.Lid]; ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
+\t\tif post := post_${r.name}[t.Lid]; post.ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
 \t\t\tif post.tgt && form != 0 { return spanned{}, false }
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++; tailClosed = true
 \t\t\tleft = p.finishW(${rid}, sb, int(left.off), int(left.tokStart)); form = 1; continue
 \t\t}
 ${gtOpRead(ids, true)}
-\t\tinfo, ok := bin_${r.name}[opLid]
-\t\tif !ok || info.lbp <= minBp { break }
+\t\tinfo := bin_${r.name}[opLid]
+\t\tif !info.ok || info.lbp <= minBp { break }
 \t\tif info.tgt && form != 0 || info.noUnary && form == 2 { return spanned{}, false }
 \t\tledSave := p.pos; sb := len(p.scratch)
 \t\tp.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, opEnd)
@@ -2161,7 +2115,7 @@ func (p *${recv}) nudW_${r.name}(minBp int) (spanned, bool) {
 \tp.capped = false
 \tt := p.peek()
 \tif t == nil { return spanned{}, false }
-\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
+\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \tvar best spanned; found := false; bestPos := save${biGo(r.nudDispatch)}; bf, bt, bc := uint8(0), false, false
 \t_, _, _ = sb, nb, kb
 ${dispatchGo(r.nudDispatch, 't', ids, nudArm)}
@@ -2174,7 +2128,7 @@ ${dispatchGo(r.nudDispatch, 't', ids, nudArm)}
 }
 
 function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  const reuse = topReusePlan(ir);
+  const reuse = ir.reuse;
   // entryHs: flat entry-level handles (shape-A kids / shape-B root kids), snapshotted
   // before finishW consumes scratch — DocWith reuse reads this, never Builder.Nodes.
   const entriesField = reuse ? '\n\tentries []EntryMeta\n\tentryHs []int32' : '';
@@ -2189,89 +2143,35 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
   const matchTemplateW = tplHoleRules(ir).map((hole) => `func (p *${recv}) matchTemplateW_${hole}() (spanned, bool) {
 \tt := p.peek()
 \tif t == nil || t.Kid != ${kidOf(ids, '$templateHead')} { return spanned{}, false }
-\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
+\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \tp.pushLeafW(${ttIdOf(ar, '$templateHead')}, uint32(p.pos), t.Off, t.End); p.pos++
 \tfor {
 \t\texpr, ok := p.parse${hole}W()
-\t\tif !ok { p.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; return spanned{}, false }
+\t\tif !ok { p.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore()}; return spanned{}, false }
 \t\tif expr.present { p.scratch = append(p.scratch, expr.h) }
 \t\tnext := p.peek()
-\t\tif next == nil { p.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; return spanned{}, false }
+\t\tif next == nil { p.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore()}; return spanned{}, false }
 \t\tif next.Kid == ${kidOf(ids, '$templateMiddle')} { p.pushLeafW(${ttIdOf(ar, '$templateMiddle')}, uint32(p.pos), next.Off, next.End); p.pos++; continue }
 \t\tif next.Kid == ${kidOf(ids, '$templateTail')} { p.pushLeafW(${ttIdOf(ar, '$templateTail')}, uint32(p.pos), next.Off, next.End); p.pos++; break }
-\t\tp.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; return spanned{}, false
+\t\tp.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore()}; return spanned{}, false
 \t}
 \treturn p.finishW(${ruleIdOf(ar, '$template')}, sb, p.offAt(save), save), true
 }
 `).join('');
-  const cstDirect = recv === 'parserCst';
-  // parserCst: Nodes/Kids embedded (Rust by-value layout). parserW: interface Builder.
-  const pushLeafW = cstDirect ? `func (p *${recv}) pushLeafW(ttId uint16, tokIdx, off, end uint32) {
-\t_ = off; _ = end
-\tif ttId == TT_SKIP_PUNCT { return }
-\tp.scratch = append(p.scratch, encodeLeaf(tokIdx, uint8(ttId)))
-}` : `func (p *${recv}) pushLeafW(ttId uint16, tokIdx, off, end uint32) {
+  const pushLeafW = `func (p *${recv}) pushLeafW(ttId uint16, tokIdx, off, end uint32) {
 \t_ = p.b.Leaf(&p.scratch, ttId, tokIdx, off, end)
 }`;
-  const finishW = cstDirect ? `func (p *${recv}) finishW(ruleId uint16, sb, fallbackOff, tokStart int) spanned {
-\tnn := len(p.scratch)
-\tkidStart := len(p.Kids)
-\toff, end := uint32(fallbackOff), uint32(fallbackOff)
-\tif nn > sb {
-\t\tfirst := p.scratch[sb]
-\t\tlast := p.scratch[nn-1]
-\t\tif first < 0 {
-\t\t\tti, _ := decodeLeaf(first)
-\t\t\toff = uint32(p.toks[ti].Off)
-\t\t} else {
-\t\t\toff = p.Nodes[first].Offset
-\t\t}
-\t\tif last < 0 {
-\t\t\tti, _ := decodeLeaf(last)
-\t\t\tend = uint32(p.toks[ti].End)
-\t\t} else {
-\t\t\tend = p.Nodes[last].End
-\t\t}
-\t}
-\tp.Kids = append(p.Kids, p.scratch[sb:nn]...)
-\tp.scratch = p.scratch[:sb]
-\tp.Nodes = append(p.Nodes, Node{RuleId: ruleId, KidStart: uint32(kidStart), KidCount: uint32(nn - sb), Offset: off, End: end, TokStart: uint32(tokStart), TokEnd: uint32(p.pos), Ext: 0})
-\treturn spanned{h: int32(len(p.Nodes) - 1), off: off, tokStart: uint32(tokStart), present: true}
-}` : `func (p *${recv}) finishW(ruleId uint16, sb, fallbackOff, tokStart int) spanned {
+  const finishW = `func (p *${recv}) finishW(ruleId uint16, sb, fallbackOff, tokStart int) spanned {
 \th, off, present := p.b.Finish(&p.scratch, sb, ruleId, uint32(fallbackOff), uint32(tokStart), uint32(p.pos), p.toks)
 \treturn spanned{h: h, off: off, tokStart: uint32(tokStart), present: present}
 }`;
-  const headLeafTextW = cstDirect ? `func (p *${recv}) headLeafTextW(f spanned) string {
-\tif !f.present { return "" }
-\tid := f.h
-\tfor {
-\t\tif id < 0 {
-\t\t\tti, _ := decodeLeaf(id)
-\t\t\tt := p.toks[ti]
-\t\t\treturn p.src[t.Off:t.End]
-\t\t}
-\t\tnd := &p.Nodes[id]
-\t\tif nd.KidCount == 0 { break }
-\t\tid = p.Kids[nd.KidStart]
-\t}
-\tnd := &p.Nodes[id]
-\treturn p.src[nd.Offset:nd.End]
-}` : `func (p *${recv}) headLeafTextW(f spanned) string {
+  const headLeafTextW = `func (p *${recv}) headLeafTextW(f spanned) string {
 \tif !f.present { return "" }
 \ta, b := p.b.HeadSpan(f.h, p.toks)
 \tif a <= b && int(b) <= len(p.src) { return p.src[a:b] }
 \treturn ""
 }`;
-  const structFields = cstDirect
-    ? `\tcursor
-\tcapped bool
-\tform uint8 // assignment-target form of the node the last nud_/bp_ call returned
-\ttail bool  // whether the node the last nud_ call returned closes the access tail
-\tsrc string
-\tNodes []Node
-\tKids []int32
-\tscratch []int32`
-    : `\tcursor
+  const structFields = `\tcursor
 \tcapped bool
 \tform uint8 // assignment-target form of the node the last nud_/bp_ call returned
 \ttail bool  // whether the node the last nud_ call returned closes the access tail
@@ -2309,24 +2209,24 @@ func (p *${recv}) callRuleW(fn func(*${recv}) (spanned, bool)) bool {
 }
 func (p *${recv}) starW(once func() bool) bool {
 \tfor {
-\t\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
-\t\tif !once() { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; break }
+\t\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt()}
+\t\tif !once() { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore()}; break }
 \t}
 \treturn true
 }
 func (p *${recv}) optW(body func() bool) bool {
-\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
-\tif !body() { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)} }
+\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt()}
+\tif !body() { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore()} }
 \treturn true
 }
 func (p *${recv}) sepByW(elem func() bool, delim uint16) bool {
-\tsp0 := p.pos; sb0 := len(p.scratch); ${arenaCkpt(recv).replace('nb, kb', 'nb0, kb0')}
-\tif !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; ${arenaRestore(recv).replace('nb', 'nb0').replace('kb', 'kb0')}; return true }
+\tsp0 := p.pos; sb0 := len(p.scratch); ${arenaCkpt().replace('nb, kb', 'nb0, kb0')}
+\tif !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; ${arenaRestore().replace('nb', 'nb0').replace('kb', 'kb0')}; return true }
 \tfor {
-\t\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
-\t\tif !p.matchLitW(delim) { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; break }
-\t\tsp2 := p.pos; sb2 := len(p.scratch); ${arenaCkpt(recv).replace('nb, kb', 'nb2, kb2')}
-\t\tif !elem() { p.back(sp2); p.scratch = p.scratch[:sb2]; ${arenaRestore(recv).replace('nb', 'nb2').replace('kb', 'kb2')}; break }
+\t\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt()}
+\t\tif !p.matchLitW(delim) { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore()}; break }
+\t\tsp2 := p.pos; sb2 := len(p.scratch); ${arenaCkpt().replace('nb, kb', 'nb2, kb2')}
+\t\tif !elem() { p.back(sp2); p.scratch = p.scratch[:sb2]; ${arenaRestore().replace('nb', 'nb2').replace('kb', 'kb2')}; break }
 \t}
 \treturn true
 }
@@ -2983,7 +2883,7 @@ func inCtxWords(ctx uint8, t *Tok) bool { return false${ctxWordLids(ir, ids).map
 }
 
 function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  const reuse = topReusePlan(ir);
+  const reuse = ir.reuse;
   const dropTtIds = ['$punct', '$keyword', '$operator']
     .map((n) => {
       try { return ttIdOf(ar, n); } catch { return null; }
@@ -3000,7 +2900,7 @@ function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): stri
   // (measured ~6–8ms / ~12–15% on 2MB TS). Hot path for *CstBuilder reuses
   // the native engine; other Builders use interface parserW.
   const wMethods = emitParserMethodsW('parserW', ir, ids, ar);
-  const topReuse = topReusePlan(ir);
+  const topReuse = ir.reuse;
   const shapeA = topReuse?.kind === 'A';
   const shapeB = topReuse?.kind === 'B';
   const hasHeadB = !!(shapeB && topReuse && topReuse.kind === 'B' && topReuse.hasHead);
@@ -3069,10 +2969,23 @@ type CstBuilder struct {
 \tNodes []Node
 \tKids  []int32
 \tToks  []Tok
-\t// The engine's transient buffers, kept for the next ParseWith (emptied by it before use).
+\tws    Workspace
+}
+func (b *CstBuilder) Workspace() *Workspace { return &b.ws }
+
+// Workspace holds the engine's transient buffers between parses: the child scratch list${reuse ? ', the\n// top-level entry records' : ''}${reuse?.kind === 'B' ? ' and segments' : ''} and the lexer's stacks. ParseWith empties and reuses the
+// Workspace of a builder that has one (WorkspaceOwner), so a builder kept across parses does not
+// allocate them again: the Rust target's Builder::workspace_mut. Its fields are the engine's.
+type Workspace struct {
 \tscratch []int32
 ${reuse ? '\tentries []EntryMeta\n' : ''}${reuse?.kind === 'B' ? '\tsegs []Seg\n' : ''}\tlex     lexStacks
+\t// The builder engine's state, with its own scratch${reuse ? ' and entry lists' : ''}: kept here because Go's escape analysis
+\t// moves a parserW to the heap (one allocation per parse otherwise); emptied after each parse.
+\tw parserW
 }
+// WorkspaceOwner is the optional contract by which a builder keeps a Workspace (embed one and
+// return its address); without it every ParseWith starts from new buffers.
+type WorkspaceOwner interface { Workspace() *Workspace }
 
 func (b *CstBuilder) Checkpoint() (nb, kb int) { return len(b.Nodes), len(b.Kids) }
 func (b *CstBuilder) Restore(nb, kb int) { b.Nodes = b.Nodes[:nb]; b.Kids = b.Kids[:kb] }
@@ -3133,7 +3046,9 @@ type SlimBuilder struct {
 \tNodes []Node
 \tKids  []int32
 \tToks  []Tok
+\tws    Workspace
 }
+func (b *SlimBuilder) Workspace() *Workspace { return &b.ws }
 
 func (b *SlimBuilder) Checkpoint() (nb, kb int) { return len(b.Nodes), len(b.Kids) }
 func (b *SlimBuilder) Restore(nb, kb int) { b.Nodes = b.Nodes[:nb]; b.Kids = b.Kids[:kb] }
@@ -3183,17 +3098,27 @@ ${wMethods}
 // Keeps ParseWith(CstBuilder) within the additive-prefix / byte-equal contract
 // without paying for a second method-instantiation (Go GC-shape stenciling tax).
 func parseWithCst(src string, b *CstBuilder) (int32, bool) {
-\tp := &engine{nodes: b.Nodes[:0], kids: b.Kids[:0], scratch: b.scratch[:0]${reuse ? ', entries: b.entries[:0]' : ''}${reuse?.kind === 'B' ? ', segs: b.segs[:0]' : ''}}
-\th := p.parse(src, lexInto(src, b.Toks, &b.lex))
-\tb.Nodes, b.Kids, b.Toks, b.scratch = p.nodes, p.kids, p.toks, p.scratch${reuse ? '\n\tb.entries = p.entries' : ''}${reuse?.kind === 'B' ? '\n\tb.segs = p.segs' : ''}
+\tw := &b.ws
+\tp := &engine{nodes: b.Nodes[:0], kids: b.Kids[:0], scratch: w.scratch[:0]${reuse ? ', entries: w.entries[:0]' : ''}${reuse?.kind === 'B' ? ', segs: w.segs[:0]' : ''}}
+\th := p.parse(src, lexInto(src, b.Toks, &w.lex))
+\tb.Nodes, b.Kids, b.Toks, w.scratch = p.nodes, p.kids, p.toks, p.scratch${reuse ? '\n\tw.entries = p.entries' : ''}${reuse?.kind === 'B' ? '\n\tw.segs = p.segs' : ''}
 \tif h < 0 { return 0, false }
 \treturn h, true
 }
+// parseWithW: a builder that parsed before is reused as parse_with does in the Rust target: its
+// arena is emptied, its token buffer (the built-in builders') and Workspace are emptied and reused
+// (capacity kept), so nothing of the previous parse stays reachable and nothing is allocated again.
 func parseWithW(src string, b Builder) (int32, bool) {
-\tp := &parserW{cursor: cursor{toks: lex(src)}, src: src, b: b, scratch: nil}
+\tvar w *Workspace
+\tif o, is := b.(WorkspaceOwner); is { w = o.Workspace() } else { w = &Workspace{} }
+\tb.Restore(0, 0)
+\tp := &w.w
+\t*p = parserW{cursor: cursor{toks: lexInto(src, toksOf(b), &w.lex)}, src: src, b: b, scratch: p.scratch[:0]${reuse ? ', entries: p.entries[:0], entryHs: p.entryHs[:0]' : ''}}
 \tfr, ok := p.parse${ir.entry}W()
 \trecordToks(b, p.toks)
-\tif !ok || p.pos != len(p.toks) || !fr.present { return 0, false }
+\tok = ok && p.pos == len(p.toks) && fr.present
+\tp.cursor.toks, p.src, p.b = nil, "", nil // the workspace keeps buffers, not the input or the builder
+\tif !ok { return 0, false }
 \treturn fr.h, true
 }
 
@@ -3227,6 +3152,16 @@ func writeJSONWith(nodes []Node, kids []int32, toks []Tok, id int32, b *strings.
 
 ${docWithBlock}
 // recordToks hands the built-in builders the parse stream their leaves index.
+// toksOf: the token buffer of a built-in builder's last tree, which its next parse lexes into.
+func toksOf(b Builder) []Tok {
+\tswitch x := b.(type) {
+\tcase *CstBuilder:
+\t\treturn x.Toks
+\tcase *SlimBuilder:
+\t\treturn x.Toks
+\t}
+\treturn nil
+}
 func recordToks(b Builder, ts []Tok) {
 \tswitch x := b.(type) {
 \tcase *CstBuilder:
@@ -3264,8 +3199,8 @@ const exported = (s: string): string => s[0].toUpperCase() + s.slice(1);
 const goWrap = (r: R, min: number): string => (r.prec < min ? `(${r.c})` : r.c);
 const goBlock = (lines: string[]): string[] => lines.map((l) => GO_IND + l);
 
-// Shared-algorithm lowering: explicit conversions, slices; growth estimates are reserved up front
-// (GC churn from append doubling is the cost they avoid) and over-reserved slices are trimmed.
+// Shared-algorithm lowering: explicit conversions, slices; a list with an exact final length is
+// made with that capacity, any other list grows by append (no estimate is reserved: 6183a29).
 const goLowering: Lowering = {
   units: UNITS,
   ident: (n) => n,
@@ -3374,7 +3309,7 @@ export const goTarget = defineTarget({
     const ir = portableIR(grammar);
     const ids = buildLexIdPlan(ir);
     const ar = buildArenaIdPlan(ir, ids);
-    const reuse = topReusePlan(ir);
+    const reuse = ir.reuse;
     const ruleFns = [...ir.rules.filter((r) => ir.forms.buildRules.includes(r.name)).map((r) => {
       if (r.kind === 'pratt') return prattRule(r, ir.tpl, ids, ar);
       if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids, ar);
@@ -3424,9 +3359,9 @@ type Node struct {
 \tRuleId uint16
 \tKidStart, KidCount, Offset, End, TokStart, TokEnd, Ext uint32
 }
-type bp struct{ lbp, rbp int; tgt, noUnary bool }
-type preOp struct{ rbp int; tgt bool; form uint8 }
-type postOp struct{ lbp int; tgt bool }
+type bp struct{ lbp, rbp int; tgt, noUnary, ok bool }
+type preOp struct{ rbp int; tgt bool; form uint8; ok bool }
+type postOp struct{ lbp int; tgt bool; ok bool }
 
 // engine is one parse's mutable state: the token stream it reads, the cursor and lookahead watermark, the arena it builds into and the reuse
 // metadata. A Doc owns one for its lifetime; ParseWith uses a fresh one per call. Nothing the
@@ -3563,13 +3498,13 @@ func (p *engine) opt(body func() bool) bool {
 \tm := p.mark(); if !body() { p.reset(m) }; return true
 }
 func (p *engine) sepBy(elem func() bool, delimLid uint16) bool {
-\tsp0 := p.pos; sb0 := len(p.scratch); nb0 := len(p.nodes); kb0 := len(p.kids)
-\tif !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; p.nodes = p.nodes[:nb0]; p.kids = p.kids[:kb0]; return true }
+\tm0 := p.mark()
+\tif !elem() { p.reset(m0); return true }
 \tfor {
-\t\tsp := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
-\t\tif !p.matchLit(delimLid) { p.back(sp); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; break }
-\t\tsp2 := p.pos; sb2 := len(p.scratch); nb2 := len(p.nodes); kb2 := len(p.kids)
-\t\tif !elem() { p.back(sp2); p.scratch = p.scratch[:sb2]; p.nodes = p.nodes[:nb2]; p.kids = p.kids[:kb2]; break }   // trailing delim OK — keep delim
+\t\tm := p.mark()
+\t\tif !p.matchLit(delimLid) { p.reset(m); break }
+\t\tm2 := p.mark()
+\t\tif !elem() { p.reset(m2); break } // trailing delim OK — keep delim
 \t}
 \treturn true
 }
