@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isRec, isRecList, recName, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -52,6 +52,18 @@ const dispatchGoL = (t: string): DispatchLowering => ({
 });
 const dispatchGo = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, nilable = false): string =>
   dispatchWalk(d, ids, arm, dispatchGoL(t), nilable);
+// A Commit's switch (emit-portable.ts commitWalk) over the buffered token t.
+const commitSwGo = (t: string): CommitLowering => ({
+  sw: (by, cases, dflt) => `\tswitch ${t}.${by === 'lid' ? 'Lid' : 'Kid'} {\n${cases.map((c) => `\tcase ${c.keys.join(', ')}:${c.stmt ? `\n${c.stmt}` : ''}`).join('\n')}${dflt ? `\n\tdefault:\n${dflt}` : ''}\n\t}`,
+  ifAll: ifGo,
+  notAll: (conds) => `!(${conds.join(' && ')})`,
+  pickDecl: '\t_c := 0',
+  pick: (n) => `{ _c = ${n} }`,
+  picked: (cases) => `\tswitch _c {\n${cases.map((c) => `\tcase ${c.n}:\n\t${c.stmt}`).join('\n')}\n\t}`,
+});
+// A committed candidate's statement: `body` when conds hold, then `fail` (unless body always returns).
+const commitGo = (conds: string[], body: string, fail: string, returns = false) =>
+  `{ ${conds.length ? `if ${conds.join(' && ')} ${body.startsWith('{') ? body : `{ ${body} }`}` : body}${conds.length || !returns ? `; ${fail}` : ''} }`;
 // Whether the candidate i that just ended at pos beats the best so far: it ends past it, or — a
 // Dispatch `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is
 // kept only in a list that has ranked candidates.
@@ -88,6 +100,8 @@ const goRuleBase = (r: RdRule, ids: LexIdPlan, guardW: '' | 'W') => ({
   armJoin: ' ',
   guard: (g: Guard, keyed: boolean, stmt: string) => { const c = guardCond(g, '_ft', guardW, keyed); return ifGo(c.length && !keyed ? ['_ft != nil', ...c] : c, stmt); },
   dispatch: dispatchGoL('_ft'),
+  guardConds: (g: Guard) => guardCond(g, '_ft', guardW, false),
+  commitSw: commitSwGo('_ft'),
 });
 
 // ── The recognize form (ParserIR.forms) ──
@@ -202,6 +216,9 @@ function ruleR(r: RdRule | PrattRule, ids: LexIdPlan, e: GoEngine): string {
     peekOpt: `\t_ft := p.${e.peek}()`,
     cand: (_d, _i, cond) => `{ if ${cond} && p.pos > bestPos { bestPos = p.pos }; p.back(save) }`,
     closeBest: '\tp.pos = bestPos\n\treturn bestPos > save',
+    commitPeek: `\t_ft := p.${e.peek}()`,
+    commit: (_i, conds, cond, undo, nullable) => commitGo(conds, `{ ${undo ? 'save := p.pos; ' : ''}if ${cond}${nullable ? ' && p.pos > save' : ''} { return true };${undo ? ' p.back(save)' : ''} }`, 'return false'),
+    commitFail: '{ return false }',
   });
 }
 // The recognize forms of the cursor helpers (the same tokens examined, nothing built).
@@ -933,6 +950,9 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
     peekOpt: '\t_ft := p.peek()',
     cand: (d, i, cond) => candGo(d, i, cond, `best = ${fin}; bestPos = p.pos;${markGo(d, i)} nb = len(p.nodes); kb = len(p.kids)`, lostGo),
     closeBest: '\tp.pos = bestPos\n\treturn best',
+    commitPeek: '\t_ft := p.peek()',
+    commit: (_i, conds, cond, undo, nullable) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch);${undo ? ' nb := len(p.nodes); kb := len(p.kids);' : ''} if ${cond}${nullable ? ' && p.pos > save' : ''} { return ${fin} };${undo ? ` p.back(save); ${lostGo}` : ''} }`, 'return -1'),
+    commitFail: '{ return -1 }',
   });
 }
 
@@ -1079,8 +1099,24 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   const lost = lostGo;
   const fin = `p.finish(${rid}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart))`;
   const B = goPrattBase(r, (ws) => `!_inW(${ws}, p.headLeafText(left))`);
+  const fail = '{ p.capped = false; p.form = 0; p.tail = false; return -1 }';
   const L: PrattLowering = {
     ...B,
+    // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node, form,
+    // tail and capped flag; failing, no node and the frame's empty state.
+    commitLeaf: (_i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; n := p.finish(${rid}, sb, int(t.Off), save); p.form = 0; p.tail = false; return n }`, fail, true),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch);${undo ? ' nb := len(p.nodes); kb := len(p.kids);' : ''} if ${cond}${nullable ? ' && p.pos > save' : ''} { n := p.finish(${rid}, sb, p.offAt(save), save); p.form = 0; p.tail = ${tail}; p.capped = ${capped}; return n };${undo ? ` p.back(save); ${lost}` : ''} }`, fail),
+    commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok {
+\t\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
+\t\tp.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
+\t\toperand := p.bp_${r.name}(pbp.rbp)
+\t\tif operand >= 0 && pbp.tgt && p.form != 0 { p.back(save); ${lost}; p.capped = false; return -1 }
+\t\tif operand >= 0 { p.scratch = append(p.scratch, operand); n := p.finish(${rid}, sb, int(t.Off), save); p.form = pbp.form; p.tail = true; p.capped = false; return n }
+\t\tp.back(save); ${lost}
+\t}`, fail),
+    commitFail: fail,
+    nudEnd: '}',
+    commitSw: commitSwGo('t'),
     steps: goSteps(ids, '', 'engine', ENGINE_GO),
     nudGuard: (g, keyed) => guardCond(g, 't', '', keyed),
     nudLeaf: (i) => `{ p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, '0', false, false)}; p.back(save) }`,
@@ -1156,10 +1192,10 @@ ${label ? 'LedLoop:\n' : ''}\tfor {
     bpClose: `\tp.form = form
 \treturn left
 }`,
-    nudOpen: `func (p *engine) nud_${r.name}(minBp int) int32 {
+    nudEnter: `func (p *engine) nud_${r.name}(minBp int) int32 {
 ${B.nudPeek}
-\tif t == nil { return -1 }
-\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
+\tif t == nil { return -1 }`,
+    nudOpen: `\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \tbest := int32(-1); bestPos := save${biGo(d)}; bf, bt, bc := uint8(0), false, false
 \t_, _, _ = sb, nb, kb`,
     nudClose: `\t// A sub-parse may leave p.capped set: only a capped arm that won makes THIS node capped.
@@ -1644,6 +1680,9 @@ function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
     peekOpt: '\t_ft := p.peek()',
     cand: (d, i, cond) => candGo(d, i, cond, `best = ${fin}; found = true; bestPos = p.pos;${markGo(d, i)} ${arenaMark()}`, lostGoW(recv)),
     closeBest: '\tp.pos = bestPos\n\treturn best, found',
+    commitPeek: '\t_ft := p.peek()',
+    commit: (_i, conds, cond, undo, nullable) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch);${undo ? ` ${arenaCkpt()};` : ''} if ${cond}${nullable ? ' && p.pos > save' : ''} { return ${fin}, true };${undo ? ` p.back(save); ${lostGoW(recv)}` : ''} }`, 'return spanned{}, false'),
+    commitFail: '{ return spanned{}, false }',
   });
 }
 
@@ -1743,8 +1782,22 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
   const lost = lostGoW(recv);
   const fin = `p.finishW(${rid}, sb, int(left.off), int(left.tokStart))`;
   const B = goPrattBase(r, (ws) => `!p.nllBlockedW(${ws}, left)`);
+  const fail = '{ p.capped = false; p.form = 0; p.tail = false; return spanned{}, false }';
   const L: PrattLowering = {
     ...B,
+    commitLeaf: (_i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; n := p.finishW(${rid}, sb, int(t.Off), save); p.form = 0; p.tail = false; return n, true }`, fail, true),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch);${undo ? ` ${arenaCkpt()};` : ''} if ${cond}${nullable ? ' && p.pos > save' : ''} { n := p.finishW(${rid}, sb, p.offAt(save), save); p.form = 0; p.tail = ${tail}; p.capped = ${capped}; return n, true };${undo ? ` p.back(save); ${lost}` : ''} }`, fail),
+    commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok {
+\t\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
+\t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
+\t\toperand, ook := p.bpW_${r.name}(pbp.rbp)
+\t\tif ook && pbp.tgt && p.form != 0 { p.back(save); ${lost}; p.capped = false; return spanned{}, false }
+\t\tif ook { if operand.present { p.scratch = append(p.scratch, operand.h) }; n := p.finishW(${rid}, sb, p.offAt(save), save); p.form = pbp.form; p.tail = true; p.capped = false; return n, true }
+\t\tp.back(save); ${lost}
+\t}`, fail),
+    commitFail: fail,
+    nudEnd: '}',
+    commitSw: commitSwGo('t'),
     steps: goSteps(ids, 'W', recv, ENGINE_GO_W, ar),
     nudGuard: (g, keyed) => guardCond(g, 't', 'W', keyed),
     nudLeaf: (i) => `{ p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; best = p.finishW(${rid}, sb, int(t.Off), save); ${won(i, '0', false, false)}; p.back(save) }`,
@@ -1821,10 +1874,10 @@ ${label ? 'LedLoop:\n' : ''}\tfor {
     bpClose: `\tp.form = form
 \treturn left, true
 }`,
-    nudOpen: `func (p *${recv}) nudW_${r.name}(minBp int) (spanned, bool) {
+    nudEnter: `func (p *${recv}) nudW_${r.name}(minBp int) (spanned, bool) {
 ${B.nudPeek}
-\tif t == nil { return spanned{}, false }
-\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
+\tif t == nil { return spanned{}, false }`,
+    nudOpen: `\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \tvar best spanned; found := false; bestPos := save${biGo(d)}; bf, bt, bc := uint8(0), false, false
 \t_, _, _ = sb, nb, kb`,
     nudClose: `${B.nudClose}

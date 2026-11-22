@@ -21,6 +21,7 @@ import { generateInputs } from './grammar-gen.ts';
 import { objectify } from './emitted-obj.ts';
 import { scratchDir } from './scratch.ts';
 import { CTX_DOCS, CTX_SCRIPT } from './context-cases.ts';
+import { HOLE_EDIT_DOCS, LOOK_EDIT_DOCS } from './relex-edit-docs.ts';
 
 const TMP = scratchDir('incremental-grammars');
 
@@ -221,10 +222,14 @@ for (const name of ['javascript', 'typescript']) {
 // hole must record a non-zero depth. Every one-character insertion of the characters that
 // open, close or change a frame, and every one-character deletion, at every offset of
 // documents with holes (nested, sibling, adjacent to code): edited ≡ fresh, self-consistent.
-// The random mutator above reaches a hole only by chance.
-const FRAME_DOCS: Record<string, string[]> = {
-  javascript: ['f(a, `x${b + c}`);', 'let q = 1;\nf(`x${(b)}y${c}`);\ng`t${`u${v}`}w`;'],
-  typescript: ['let s: string = `a${b as T}c${{ d: 1 }.d}`;\nx = 1;'],
+// The random mutator above reaches a hole only by chance. With them, the portable Doc's documents
+// (test/relex-edit-docs.ts): a `/` decided by the text after it, a paren-head keyword, and tokens
+// decided by reading past their end + 1, each LOOK document with its own insertions (the relex
+// anchor rule, src/relex-family.ts).
+type FrameDoc = string | { doc: string; ins: string[] };
+const FRAME_DOCS: Record<string, FrameDoc[]> = {
+  javascript: ['f(a, `x${b + c}`);', 'let q = 1;\nf(`x${(b)}y${c}`);\ng`t${`u${v}`}w`;', ...HOLE_EDIT_DOCS, ...LOOK_EDIT_DOCS],
+  typescript: ['let s: string = `a${b as T}c${{ d: 1 }.d}`;\nx = 1;', ...HOLE_EDIT_DOCS, ...LOOK_EDIT_DOCS],
   // element regions (JSX) share the frame stack: text, tags, holes, templates in holes, a
   // type-parameter signature the lexer decides by rewinding, `</*` outside elements
   typescriptreact: [
@@ -232,9 +237,10 @@ const FRAME_DOCS: Record<string, string[]> = {
     'let a = <p>It\'s {x} 50%</p>;\nlet b = 1;',
     'f(<a b={c > d}><i/>t</a>, `x${<b>y</b>}`);',
     'type F = <T>(x: T) => T;\nlet g = <T,>(y: T) => <q>{y}</q>;',
-    // (not `</ 2`: a `/` that fails as a regex is a division decided by later text, a separate
-    // relex miss on master: `f() < / 2;` + `/`)
     'let m = new Map</* c */string, X>();',
+    'let m = f() < / 2;\nlet n = <T,>(y: T) => y;',
+    // a type-parameter head veto reads one unit past its match (its trailing lookahead)
+    'let g = <T extends U>(y: T) => y;\nlet h = <T = U,>(y: T) => y;',
     // a tag-only attribute string (no escapes, may span lines)
     'let a = <a b="\\" c=\'d\ne\'>t</a>;\nlet z = "q";',
   ],
@@ -257,10 +263,11 @@ for (const [name, docs] of Object.entries(FRAME_DOCS)) {
   const em = (await import(`${TMP}/${name.replace(/\//g, '_')}.mts?v=` + process.pid)) as Em;
   const session = em.createParser();
   const fresh = em.createParser();
-  for (const doc of docs) {
+  for (const fd of docs) {
+    const doc = typeof fd === 'string' ? fd : fd.doc;
     const edits: Edit[] = [];
     for (let at = 0; at <= doc.length; at++) {
-      for (const ins of FRAME_INS) edits.push({ start: at, end: at, text: ins });
+      for (const ins of typeof fd === 'string' ? FRAME_INS : fd.ins) edits.push({ start: at, end: at, text: ins });
       if (at < doc.length) edits.push({ start: at, end: at + 1, text: '' });
     }
     for (const edit of edits) {
