@@ -294,14 +294,29 @@ class LexScan {
     };
   }
 
-  // A pattern match that consumed nothing is no token; an identifier's match reports the branch.
+  // A pattern match that consumed nothing is no token. An identifier's pattern match is checked
+  // for its escapes: the match and the check are one cold function of the token (`escScan`), so the
+  // scanner, which the dispatch loop inlines, keeps the shape of a plain pattern call.
   private nonEmpty(m: string): Stmt[] {
-    return [let_('e', call(m, 'p')), if_(gt('e', 'p'), [this.matched()]), NONE];
+    return this.esc === null ? [let_('e', call(m, 'p')), if_(gt('e', 'p'), [ret('e')]), NONE] : [ret(call(this.escScan(m), 'p'))];
   }
-  // The identifier prefix of the token being scanned (null: not identifier-like).
+  // The same after a run that stopped at a bail character (e is already bound).
+  private fallback(m: string): Stmt[] {
+    return this.esc === null ? [set('e', call(m, 'p')), if_(gt('e', 'p'), [ret('e')]), NONE] : [ret(call(this.escScan(m), 'p'))];
+  }
+  // The identifier prefix of the token being scanned (null: not identifier-like), and its name.
   private esc: string | null = null;
-  private matched(): Stmt {
-    return ret(this.esc === null ? 'e' : call4(IDENT_ESC, 's', 'p', this.esc ? add('p', litLen(this.esc)) : x('p'), 'e'));
+  private escTok = '';
+  private escScan(m: string): string {
+    const name = `${scannerName(this.escTok)}Esc`, q = this.esc ? add('p', litLen(this.esc)) : x('p');
+    if (!this.fns.some((f) => f.name === name)) {
+      this.fns.push({
+        name, cold: true, doc: `${this.escTok}: its token pattern's match, whose escapes must spell IdentifierName characters.`,
+        params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }], ret: ['int'],
+        body: [let_('e', call(m, 'p')), if_(gt('e', 'p'), [ret(call4(IDENT_ESC, 's', 'p', q, 'e'))]), NONE],
+      });
+    }
+    return name;
   }
 
   // A negative p is no position in s. Ruling it out first also tells native compilers that every
@@ -309,6 +324,7 @@ class LexScan {
   // `esc`: t's identifier prefix when it is an identifier(-like) token (see the header), else null.
   scanner(t: LexTok, esc: string | null): Fn {
     this.esc = esc;
+    this.escTok = t.name;
     const f = this.scanBody(t);
     this.esc = null;
     return { ...f, body: [if_(lt('p', I(0)), [NONE]), ...f.body] };
@@ -397,9 +413,7 @@ class LexScan {
               if_(ge('e', len('s')), [ret('e')]),
               let_('d', code('e')),
               if_(not(bails('d', t.bail, t.bailNonAscii)), [ret('e')]),
-              set('e', call(m, 'p')),
-              if_(gt('e', 'p'), [this.matched()]),
-              NONE,
+              ...this.fallback(m),
             ] : [ret('e')]),
           ]),
           ...(head.length || t.bailNonAscii || t.headBailNonAscii ? [if_(bails('c', head, t.bailNonAscii || t.headBailNonAscii), this.nonEmpty(m))] : []),
