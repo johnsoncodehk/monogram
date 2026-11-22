@@ -614,7 +614,7 @@ const BindingPattern = rule($ => [
 // ── Bindings & Parameters ──
 
 const Binding = rule($ => [
-  [alt([...bindingIdentifier, opt('!')], BindingPattern), opt(':', Type), opt('=', Expr)],
+  [field('name', alt([...bindingIdentifier, opt(field('exclamation', '!'))], BindingPattern)), opt(':', field('type', Type)), opt('=', field('value', Expr))],
 ]);
 
 // A binding in a for-head (`forBindingArms`) with its type annotation. No definite-assignment
@@ -679,33 +679,33 @@ const CatchParameter = rule($ => [
 
 const Stmt = rule($ => [
   Block,
-  [alt('let', 'const', 'var'), sep(Binding, ','), asi()],
-  ['if', '(', Expr, many(',', Expr), ')', $, opt('else', $)],
+  arm('variable', field('kind', alt('let', 'const', 'var')), sep(field('binding', Binding), ','), asi()),
+  ['if', '(', field('condition', Expr), many(field('conditionComma', ','), field('conditionRest', Expr)), ')', field('consequence', $), opt('else', field('alternative', $))],
   forStatement($, ForHead, ForAwaitHead),
-  ['while', '(', Expr, many(',', Expr), ')', $],
-  ['do', $, 'while', '(', Expr, many(',', Expr), ')', opt(';')],
+  ['while', '(', field('condition', Expr), many(field('conditionComma', ','), field('conditionRest', Expr)), ')', field('body', $)],
+  ['do', field('body', $), 'while', '(', field('condition', Expr), many(field('conditionComma', ','), field('conditionRest', Expr)), ')', opt(';')],
   ['switch', '(', Expr, many(',', Expr), ')', '{', many(SwitchCase), '}'],
   // `return [no LineTerminator here] Expression`: after a line break the expression starts the
   // next statement (tsc's parseReturnStatement parses one only where no `;` could be inserted).
-  ['return', opt(sameLine, Expr, many(',', Expr)), asi()],
-  ['throw', Expr, many(',', Expr), asi()],
+  ['return', opt(sameLine, field('argument', Expr), many(field('argumentComma', ','), field('argumentRest', Expr))), asi()],
+  ['throw', field('argument', Expr), many(field('argumentComma', ','), field('argumentRest', Expr)), asi()],
   // The label is a RESTRICTED production (`break [no LineTerminator here] Label`)
   // and a label can't be a reserved word — without both, `break` ⏎ `case "X":`
   // inside a switch eats `case` as the label and the whole switch cascades.
-  ['break', opt(sameLine, notReserved, Ident), asi()],
-  ['continue', opt(sameLine, notReserved, Ident), asi()],
+  ['break', opt(sameLine, notReserved, field('label', Ident)), asi()],
+  ['continue', opt(sameLine, notReserved, field('label', Ident)), asi()],
   // TryStatement (14.15): a Catch, a Finally, or both, so `try {}` has no parse.
-  ['try', Block, not(not(alt('catch', 'finally'))), opt('catch', opt('(', CatchParameter, ')'), Block), opt('finally', Block)],
-  [notReserved, Ident, ':', $],
-  ';',
+  ['try', field('body', Block), not(not(alt('catch', 'finally'))), opt('catch', opt('(', field('parameter', CatchParameter), ')'), field('handler', Block)), opt('finally', field('finalizer', Block))],
+  arm('labelled', notReserved, field('label', Ident), ':', field('body', $)),
+  arm('empty', ';'),
   ['debugger', asi()],
-  ['with', '(', Expr, ')', $],
+  ['with', '(', field('object', Expr), ')', field('body', $)],
   // A `using` / `await using` declaration binding is a BindingIdentifier — NOT a pattern. The
   // `not(alt('[','{'))` routes a `[`/`{` start to the expression arm instead: `using [a] = b`
   // is `using[a] = b` (element-assignment on the identifier `using`) and stays valid, while
   // `using {a} = b` / `await using [a] = null` (no derivation — V8 + babel reject; tsc is
   // lenient on the `{` form) correctly fail. (Guards the first binding; see ForHead for for-of.)
-  [opt('await'), 'using', not(alt('[', '{')), sep(Binding, ','), asi()],
+  arm('using', opt(field('awaitKeyword', 'await')), field('usingKeyword', 'using'), not(alt('[', '{')), sep(field('binding', Binding), ','), asi()),
   Decl,
   // The JavaScript expression statement (`expressionStatement`): tsc's parseStatement also takes
   // `{` as a block and `function`, `class`, `@` and same-line `async function` as declarations
