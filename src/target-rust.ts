@@ -109,7 +109,19 @@ macro_rules! cand {
     ($p:ident, $sb:ident, $ck:ident, $save:ident, $best:ident, $best_pos:ident, $rid:expr, $c:expr, $more:block) => {
         if $c { $best = Some($p.finish($rid, $sb, $p.off_at($save), $save)); $best_pos = $p.pos; $more $ck = $p.b.checkpoint(); } else { $p.scratch.truncate($sb); $p.b.restore($ck); } $p.back($save);
     };
+}
+/// A committed candidate (emit-portable.ts Commit; target-rust.ts commitBodyRs): \`$c\` from here;
+/// matched (\`undo_ne\`: and past its start), node \`$rid\` is returned after \`$set\` (a NUD's form, tail
+/// and capped flag), else what it did is undone to the checkpoint (\`clean\`: a clean failure left
+/// nothing to undo, so none is taken) and the statement after the macro runs.
+#[allow(unused_macros)]
+macro_rules! commit {
+    ($p:ident, $rid:expr, $c:expr, undo, { $($set:tt)* }) => {{ let m = $p.mark(); if $c { let n = $p.finish($rid, m.sb, $p.off_at(m.pos), m.pos); $($set)* return Some(n); } $p.reset(m); }};
+    ($p:ident, $rid:expr, $c:expr, undo_ne, { $($set:tt)* }) => {{ let m = $p.mark(); if $c && $p.pos > m.pos { let n = $p.finish($rid, m.sb, $p.off_at(m.pos), m.pos); $($set)* return Some(n); } $p.reset(m); }};
+    ($p:ident, $rid:expr, $c:expr, clean, { $($set:tt)* }) => {{ let save = $p.pos; let sb = $p.scratch.len(); if $c { let n = $p.finish($rid, sb, $p.off_at(save), save); $($set)* return Some(n); } }};
 }`;
+// A committed candidate's body in the building form: the \`commit!\` macro (as \`cand!\`: expanded in place).
+const commitBodyRs = (rid: number, cond: string, undo: boolean, nullable: boolean, set = '') => `commit!(self, ${rid}, ${cond}, ${nullable ? 'undo_ne' : undo ? 'undo' : 'clean'}, {${set}});`;
 // The typed-AST layer's form of a Guard over the token t: its parser keeps no lookahead mark, so
 // the second token is read directly. null: no guard.
 const astGuardRs = (g: Guard, t: string): string | null =>
@@ -1008,7 +1020,7 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
     openBest: (d) => `        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();\n        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(d)}`,
     cand: (d, i, cond) => candRs(d, i, cond, rid, markRs(d, i)),
     closeBest: '        self.pos = best_pos;\n        best',
-    commit: (_i, conds, cond, undo, nullable) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len();${undo ? ' let ck = self.b.checkpoint();' : ''} if ${cond}${nullable ? ' && self.pos > save' : ''} { return Some(self.finish(${rid}, sb, self.off_at(save), save)); }${undo ? ' self.back(save); self.scratch.truncate(sb); self.b.restore(ck);' : ''} }`, 'return None;'),
+    commit: (_i, conds, cond, undo, nullable) => commitRs(conds, `{ ${commitBodyRs(rid, cond, undo, nullable)} }`, 'return None;'),
     commitFail: '{ return None; }',
   });
 }
@@ -1107,7 +1119,7 @@ ${headUse}        loop {
   });
 }
 // A NUD that matched nothing: the state its frame leaves when no arm won (prattRule's nudClose).
-const NUD_FAIL_RS = '{ self.capped = false; self.form = 0; self.tail = false; return None; }';
+const NUD_FAIL_RS = '{ return self.nud_none(); }';
 function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
   const d = r.nudDispatch;
@@ -1156,7 +1168,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node, form,
     // tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (_i, conds) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len(); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; let n = self.finish(${rid}, sb, t.off as usize, save); self.form = 0; self.tail = false; return Some(n); }`, NUD_FAIL_RS, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len();${undo ? ' let ck = self.b.checkpoint();' : ''} if ${cond}${nullable ? ' && self.pos > save' : ''} { let n = self.finish(${rid}, sb, self.off_at(save), save); self.form = 0; self.tail = ${tail}; self.capped = ${capped}; return Some(n); }${undo ? ' self.back(save); self.scratch.truncate(sb); self.b.restore(ck);' : ''} }`, NUD_FAIL_RS),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitRs(conds, `{ ${commitBodyRs(rid, cond, undo, nullable, ` self.form = 0; self.tail = ${tail}; self.capped = ${capped}; `)} }`, NUD_FAIL_RS),
     commitPrefix: (_i, conds) => commitRs(conds, `if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
             let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
@@ -2287,6 +2299,10 @@ impl<'a, B: Builder> Parser<'a, B> {
     /// Start recording an entry's extent.
     #[inline(always)]
     fn look_reset(&mut self) { self.max_look = 0; self.peek_end = 0; }
+    /// A NUD that matched nothing, from its commit switch: the state its frame leaves then (prattRule's nudClose).
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn nud_none(&mut self) -> Option<Spanned<B::H>> { self.capped = false; self.form = 0; self.tail = false; None }
     #[inline(always)]
     fn mark(&self) -> Mark { Mark { pos: self.pos, sb: self.scratch.len(), ck: self.b.checkpoint() } }
     /// Undo everything since m: the position (as back), the scratch list and the builder.

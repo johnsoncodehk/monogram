@@ -17,7 +17,7 @@
 // group. test/emit-lexer-verify.ts gates the output against the golden token streams.
 import type { CstGrammar, ElementRegion, IndentConfig, MarkupConfig, NewlineConfig, TokenDecl, TokenPattern } from './types.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
-import { tagOpenOnlyOpensTags } from './grammar-analysis.ts';
+import { type Directives, directivesOf, tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { UNI_ID_CONTINUE, UNI_ID_START } from './uni-ident.ts';
 import { type CSet, continuesAt, examinedUnits as examinedUnitsOf, failRead, failReadFirst, info as patternInfo, oneChar, overTrigger, readEndWalk, union } from './lex-match-plan.ts';
 import {
@@ -52,6 +52,8 @@ export interface LexSpec {
   // 'always' = every `tagOpen` in code opens an element; ABSENT = only one where an operand
   // may start (`!prevIsValue()` and the `typeParameters` vetoes).
   elementEntry?: 'always';
+  // The region's directives (derived: grammar-analysis.ts directivesOf); ABSENT when it has none.
+  elementDirectives?: Directives;
   indent?: IndentConfig | null;
   newline?: NewlineConfig | null;
 }
@@ -61,7 +63,14 @@ export function lexSpecOf(grammar: CstGrammar): LexSpec {
   for (const rule of grammar.rules) for (const l of collectLiterals(rule.body)) lits.add(l);
   for (const level of grammar.precs) for (const op of level.operators) lits.add(op.value);
   return { tokens: grammar.tokens, literals: [...lits], composed: gtComposites(grammar), markup: grammar.markup,
-    ...(grammar.elements ? { elements: grammar.elements, ...(tagOpenOnlyOpensTags(grammar, grammar.elements) ? { elementEntry: 'always' as const } : {}) } : {}), indent: grammar.indent, newline: grammar.newline };
+    ...(grammar.elements ? { elements: grammar.elements, ...(tagOpenOnlyOpensTags(grammar, grammar.elements) ? { elementEntry: 'always' as const } : {}), ...directivesSpec(grammar, grammar.elements) } : {}), indent: grammar.indent, newline: grammar.newline };
+}
+// The derived directives, or a loud refusal of every arm the lexer could not find in text.
+function directivesSpec(grammar: CstGrammar, region: ElementRegion): { elementDirectives?: Directives } {
+  const d = directivesOf(grammar, region);
+  if (d === null) return {};
+  if (d.refused.length) throw new Error(`elements: ${d.refused.length} directive arm(s) the lexer cannot find in text (docs/REGIONS.md, "Directives"):\n${d.refused.map(r => `  ${r.arm}: ${r.reason}`).join('\n')}`);
+  return d.openers.length || d.blocks.length ? { elementDirectives: d } : {};
 }
 
 export interface LexerSymtab {
@@ -392,7 +401,9 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   // The reads past a token's end + 1 (\`looks\`): per matcher, its failed attempt's read end and its
   // match's over-read; the type-parameter head veto's match decides the tagOpen before it.
   const headOverEnd = looks && el?.typeParameters?.head ? 'lxOverEndTpHead' : null;
-  const tracks = matchers.some(m => m.readEnd || m.overEnd) || headOverEnd !== null;
+  // directive tests read past the token they decide (trivia after the literal)
+  const dirs = el && spec.elementDirectives ? spec.elementDirectives : null;
+  const tracks = matchers.some(m => m.readEnd || m.overEnd) || headOverEnd !== null || (looks && dirs !== null);
   for (const m of matchers) {
     if (m.readEnd) emitReadEnd(emit, m.readEnd, m.tokenPattern);
     if (m.overEnd) emitOverEnd(emit, m.overEnd, m.tokenPattern);
@@ -514,6 +525,17 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       // a tagOpen opens a tag only when the unit after it is one of the tag-start class
       if (!oneChar(el.tagStart)) throw new Error('elements.tagStart: must be a one-unit class');
       emit(`function lxTagStart(s«: string», p«: number») { if (p >= s.length) return false; const c = s.charCodeAt(p); return ${unitIn('c', patternInfo(el.tagStart).first)}; }`);
+    }
+    const dd = spec.elementDirectives;
+    if (dd) {
+      // the derived directives (grammar-analysis.ts directivesOf): [literal, 1 = a word literal /
+      // 2 = a code block opener / 0, the required literal sequences ([literal, word])]
+      const idc = patternInfo(spec.tokens.find(t => t.identifier)?.pattern ?? '').chars;
+      const word = (l: string) => { const u = l.charCodeAt(l.length - 1); return idc.some(([a, b]) => u >= a && u <= b) ? 1 : 0; };
+      const row = (d: { lit: string; nexts: string[][] }, block = false) => [d.lit, block ? 2 : word(d.lit), d.nexts.map(n => n.map(l => [l, word(l)]))];
+      emit(`const LX_DIR_OPEN«: [string, number, [string, number][][]][]» = ${J([...dd.openers.map(d => row(d)), ...dd.blocks.map(b => row({ lit: b, nexts: [[]] }, true))])};`);
+      emit(`const LX_DIR_CONT«: [string, number, [string, number][][]][]» = ${J(dd.continuations.map(d => row(d)))};`);
+      emit(`function lxIdCont(c«: number») { return ${unitIn('c', idc)}; }`);
     }
     const tp = el.typeParameters;
     if (tp?.head) emit(`const LX_TP_HEAD = new RegExp(${J(`(?:${tokenPatternSource({ pattern: tp.head })})`)}, 'y');`);
@@ -851,7 +873,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   emit(`  function prevIsValue() {`);
   if (el) {
     // inside a tag nothing is a regex; the token that ends an element entered from code is a value
-    emit(`    if (templateStack.length > 0 && (templateStack[templateStack.length - 1] & 3) === 2 && (templateStack[templateStack.length - 1] & 12) !== 0) return true;`);
+    emit(`    if (templateStack.length > 0 && (templateStack[templateStack.length - 1] & 3) === 2 && (templateStack[templateStack.length - 1] & 12) !== 0${dirs ? ' && (templateStack[templateStack.length - 1] & 12) !== 12' : ''}) return true;`);
     emit(`    if (tokN > 0 && (tkFl[tokN - 1] & 16) !== 0) return true;`);
   }
   emit(`    const k = tokN > 0 ? tkK[tokN - 1] : pvK;`);
@@ -872,7 +894,13 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     if (after !== undefined && !oneChar(after)) throw new Error(`elements.textTokens: '${token}'.after must be a one-unit class`);
     return { re: m.re, k: m.k, skip: m.skip, readEnd: m.readEnd, overEnd: m.overEnd, pattern: m.tokenPattern, first: patternInfo(m.tokenPattern).first, after: after === undefined ? null : patternInfo(after).first };
   });
-  if (el) emitElementHelpers(emit, el, enterAlways, { kOf, puT, startsWithExpr, J, headOverEnd, textTokens });
+  const dirCtx = dirs ? {
+    // the identifier's units: a word literal must not run on into one (\`@iffy\`)
+    idCont: patternInfo(spec.tokens.find(t => t.identifier)?.pattern ?? '').chars,
+    skips: matchers.filter(m => m.skip).map(m => ({ re: m.re, first: patternInfo(m.tokenPattern).first, readEnd: m.readEnd })),
+    looks,
+  } : null;
+  if (el) emitElementHelpers(emit, el, enterAlways, { kOf, puT, startsWithExpr, J, headOverEnd, textTokens, dirs, dirCtx });
   if (markup) {
     // Tag-mode tracking after a token the scan emitted: the closing `tagClose` enters raw text
     // (a raw-text element) or text; the tag name decides raw-text entry and void retagging.
@@ -922,7 +950,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`    if (pos >= n) break;`);
   }
   emit(`    const cc = source.charCodeAt(pos);`);
-  if (el) emitElementFrame(emit, el, { kOf, puT, tOf, startsWithExpr, punctIs, textTokens });
+  if (el) emitElementFrame(emit, el, { kOf, puT, tOf, startsWithExpr, punctIs, textTokens, dirs });
   if (markup) {
     emit(`    // ── markup TEXT mode: a comment, a tag open, or the text run up to the next real tag open ──`);
     emit(`    if (mode === 0) {`);
@@ -1791,7 +1819,10 @@ type ElementCtx = {
   kOf: (name: string) => number; puT: (text: string) => number; tOf?: (text: string) => number;
   startsWithExpr: typeof startsWithExpr; J?: (v: unknown) => string; punctIs?: (i: string, lits: string[]) => string;
   headOverEnd?: string | null; textTokens: TextTokenPlan[];
+  dirs?: Directives | null; dirCtx?: { idCont: CSet; skips: { re: string; first: CSet; readEnd: string | null }[]; looks: boolean } | null;
 };
+// The first units of a region's directive openers and code block openers.
+const dirFirst = (d: Directives): CSet => union([], [...d.openers.map(o => o.lit), ...d.blocks].map((l): [number, number] => [l.charCodeAt(0), l.charCodeAt(0)]));
 // A failed attempt of a text token at `at`: its read, past the end + 1 of the token it decides,
 // is recorded (the relex anchor rule; the read bound is the scan matcher's own).
 const ttFailRecord = (t: TextTokenPlan, at: string) => (t.readEnd ? ` { const r = ${t.readEnd}(source, ${at}); if (r > lxLookEnd) lxLookEnd = r; }` : '');
@@ -1836,16 +1867,66 @@ function emitElementHelpers(emit: (s?: string) => void, el: ElementRegion, enter
     if (el.rawText?.length) emit(`    lxTagAt[templateStack.length - 1] = s; lxRawText(templateStack.length - 1);`);
     emit(`  }`);
   }
-  if (c.textTokens.length) {
-    // Inside a text run (q past its first unit): whether a text token starts at q, so the run
-    // stops before it. Its match is taken at the next run's start, which records its over-read.
-    emit(`  function lxTextTokenAt(q«: number») {`);
+  if (c.textTokens.length || c.dirs) {
+    // Inside a text run (q past its first unit): whether a text token or a directive opener
+    // starts at q, so the run stops before it. Its match is taken at the next run's start, which
+    // records a text token's over-read.
+    emit(`  function lxTextStopAt(q«: number») {`);
     emit(`    const c = source.charCodeAt(q);`);
     for (const t of c.textTokens) {
       const cond = [unitIn('c', t.first), ...(t.after ? [`((b) => ${unitIn('b', t.after)})(source.charCodeAt(q - 1))`] : [])].join(' && ');
       emit(`    if (${cond}) { ${t.re}.lastIndex = q; if (${t.re}.test(source)) return true;${ttFailRecord(t, 'q')} }`);
     }
+    if (c.dirs) emit(`    if (${unitIn('c', dirFirst(c.dirs))} && lxDirAt(q, LX_DIR_OPEN, false) >= 0) return true;`);
     emit(`    return false;`);
+    emit(`  }`);
+  }
+  if (c.dirs) {
+    const x = c.dirCtx!;
+    // code trivia after a directive literal: whitespace and the grammar's skip tokens (a failed
+    // skip attempt's read is recorded as the scan matcher's)
+    emit(`  function lxTrivia(p«: number») {`);
+    emit(`    for (;;) {`);
+    emit(`      LX_WS.lastIndex = p; const w = LX_WS.exec(source); if (w !== null) p += w[0].length;`);
+    emit(`      if (p >= n) return p;`);
+    emit(`      const c = source.charCodeAt(p);`);
+    emit(`      let moved = false;`);
+    for (const s of x.skips) emit(`      if (!moved && ${unitIn('c', s.first)}) { ${s.re}.lastIndex = p; const m = ${s.re}.exec(source); if (m !== null && m[0].length > 0) { p += m[0].length; moved = true; }${s.readEnd ? ` else { const r = ${s.readEnd}(source, p); if (r > lxLookEnd) lxLookEnd = r; }` : ''} }`);
+    emit(`      if (!moved) return p;`);
+    emit(`    }`);
+    emit(`  }`);
+    // A directive literal of \`tab\` at q (after blanks, with \`lead\`), not running on into an
+    // identifier, followed by one of its required literal sequences (trivia between): its index,
+    // or -1. What it read is recorded (a comment in the trivia can reach the end of the file).
+    emit(`  function lxDirAt(q«: number», tab«: [string, number, [string, number][][]][]», lead«: boolean») {`);
+    emit(`    let p0 = q;`);
+    emit(`    if (lead) { LX_WS.lastIndex = q; const w = LX_WS.exec(source); if (w !== null) p0 += w[0].length; }`);
+    emit(`    let far = p0 + 1, hit = -1;`);
+    emit(`    for (let i = 0; i < tab.length && hit < 0; i++) {`);
+    emit(`      const d = tab[i];`);
+    emit(`      if (!source.startsWith(d[0], p0)) continue;`);
+    emit(`      const e = p0 + d[0].length;`);
+    emit(`      if (e + 1 > far) far = e + 1;`);
+    emit(`      if (d[1] === 1 && e < n && lxIdCont(source.charCodeAt(e))) continue;`);
+    emit(`      for (const nx of d[2]) {`);
+    emit(`        let p = e, ok = true;`);
+    emit(`        for (const [l, w] of nx) {`);
+    emit(`          p = lxTrivia(p);`);
+    emit(`          if (p + l.length + 1 > far) far = p + l.length + 1;`);
+    emit(`          if (!source.startsWith(l, p) || (w !== 0 && p + l.length < n && lxIdCont(source.charCodeAt(p + l.length)))) { ok = false; break; }`);
+    emit(`          p += l.length;`);
+    emit(`        }`);
+    emit(`        if (ok) { hit = i; break; }`);
+    emit(`      }`);
+    emit(`    }`);
+    if (x.looks) emit(`    if (far > lxLookEnd) lxLookEnd = far;`);
+    emit(`    return hit;`);
+    emit(`  }`);
+    // A body's closer was just pushed: a continuation after it returns the frame to a head (the
+    // ordinary scan lexes it and what follows as code); otherwise the directive ends.
+    emit(`  function lxDirAfterBody(top«: number») {`);
+    emit(`    if (lxDirAt(pos, LX_DIR_CONT, true) >= 0) templateStack[top] = 14 | ((parenHeadStack.length + 1) << 4);`);
+    emit(`    else templateStack.pop();`);
     emit(`  }`);
   }
   // A tag ended (its tagClose or self-close token was just pushed): an open tag adds an open
@@ -1900,8 +1981,22 @@ function emitElementFrame(emit: (s?: string) => void, el: ElementRegion, c: Elem
   emit(`    if (templateStack.length > 0 && (templateStack[templateStack.length - 1] & 3) === 2) {`);
   emit(`      const top = templateStack.length - 1, fr = templateStack[top], sub = (fr >> 2) & 3;`);
   const ts = el.tagStart !== undefined ? ` && lxTagStart(source, pos + ${L})` : '';
-  emit(`      if (sub === 0) {`);
+  const D = c.dirs, LHC = el.hole.close.length;
+  // a directive body (sub-state 3, count 0) is children; in it a tag opens a frame of its own
+  emit(D ? `      if (sub === 0 || (sub === 3 && (fr >> 4) === 0)) {` : `      if (sub === 0) {`);
   emit(`        if (${sw(el.tagOpen)}${ts}) {`);
+  if (D) {
+    // a close tag in a body closes no element of it: a frame of its own that pops at its tagClose
+    emit(`          if (sub === 3) {`);
+    emit(`            const close = ${c.startsWithExpr('source', `pos + ${L}`, el.closeMarker)};`);
+    emit(`            templateStack.push(close ? 10 : 6);`);
+    if (el.rawText?.length) emit(`            if (!close) lxTagAt[templateStack.length - 1] = tokN;`);
+    emit(`            if (close) { tkPush(${c.kOf(el.closeTag)}, 0, pos, pos + ${LC}); pos += ${LC}; }`);
+    emit(`            else { tkPush(K_PUNCT, ${c.puT(el.tagOpen)}, pos, pos + ${L}); pos += ${L}; }`);
+    emit(`            tagAngle = 0;`);
+    emit(`            continue;`);
+    emit(`          }`);
+  }
   emit(`          if (${c.startsWithExpr('source', `pos + ${L}`, el.closeMarker)}) {`);
   emit(`            tkPush(${c.kOf(el.closeTag)}, 0, pos, pos + ${LC});`);
   emit(`            pos += ${LC}; templateStack[top] = fr | 8; tagAngle = 0;`);
@@ -1918,6 +2013,25 @@ function emitElementFrame(emit: (s?: string) => void, el: ElementRegion, c: Elem
   emit(`          pos += ${LH};`);
   emit(`          continue;`);
   emit(`        }`);
+  if (D) {
+    // a body's closer; then a continuation, or the directive's end
+    emit(`        if (sub === 3 && ${sw(el.hole.close)}) {`);
+    emit(`          tkPush(K_PUNCT, ${c.tOf!(el.hole.close)}, pos, pos + ${LHC});`);
+    emit(`          pos += ${LHC};`);
+    emit(`          lxDirAfterBody(top);`);
+    emit(`          continue;`);
+    emit(`        }`);
+    // a directive opener: its frame (a head, lexed as code) is pushed before its token, which the
+    // ordinary scan then lexes in it (a word literal is a keyword of a scanned token, as in code);
+    // a code block opener pushes an element hole
+    emit(`        if (${unitIn('cc', dirFirst(D))}) {`);
+    emit(`          const d = lxDirAt(pos, LX_DIR_OPEN, false);`);
+    emit(`          if (d >= 0) {`);
+    emit(`            templateStack.push(LX_DIR_OPEN[d][1] === 2 ? 1 : 14 | ((parenHeadStack.length + 1) << 4));`);
+    emit(`            continue;`);
+    emit(`          }`);
+    emit(`        }`);
+  }
   for (const t of c.textTokens) {
     // a text token at the run's start (after a tag, a hole, another text token or a text run
     // that stopped before it)
@@ -1937,7 +2051,7 @@ function emitElementFrame(emit: (s?: string) => void, el: ElementRegion, c: Elem
     emit(`          }${ttFailRecord(t, 'pos')}`);
     emit(`        }`);
   }
-  if (el.text !== undefined && el.tagStart === undefined && !c.textTokens.length) {
+  if (el.text !== undefined && el.tagStart === undefined && !c.textTokens.length && !D) {
     emit(`        LX_EL_TEXT.lastIndex = pos;`);
     emit(`        const tm = LX_EL_TEXT.exec(source);`);
     emit(`        if (tm !== null && tm[0].length > 0) {`);
@@ -1953,14 +2067,14 @@ function emitElementFrame(emit: (s?: string) => void, el: ElementRegion, c: Elem
     emit(`        for (;;) {`);
     emit(`          LX_EL_TEXT.lastIndex = _e;`);
     emit(`          const tm = LX_EL_TEXT.exec(source);`);
-    if (c.textTokens.length) {
+    if (c.textTokens.length || D) {
       emit(`          const _r = tm !== null ? _e + tm[0].length : _e;`);
       emit(`          let q = _e > pos ? _e : pos + 1;`);
-      emit(`          while (q < _r && !lxTextTokenAt(q)) q++;`);
+      emit(`          while (q < _r && !lxTextStopAt(q)) q++;`);
       emit(`          if (q < _r) { _e = q; break; }`);
       emit(`          _e = _r;`);
     } else emit(`          if (tm !== null) _e += tm[0].length;`);
-    if (el.tagStart !== undefined) emit(`          if (${sw(el.tagOpen, '_e')} && !lxTagStart(source, _e + ${L})${c.textTokens.length ? ` && !(_e > pos && lxTextTokenAt(_e))` : ''}) { _e += ${L}; continue; }`);
+    if (el.tagStart !== undefined) emit(`          if (${sw(el.tagOpen, '_e')} && !lxTagStart(source, _e + ${L})${c.textTokens.length || D ? ` && !(_e > pos && lxTextStopAt(_e))` : ''}) { _e += ${L}; continue; }`);
     emit(`          break;`);
     emit(`        }`);
     emit(`        if (_e > pos) {`);
@@ -1970,6 +2084,17 @@ function emitElementFrame(emit: (s?: string) => void, el: ElementRegion, c: Elem
     emit(`        }`);
   }
   // without a text token the children are code: anything else falls through to the ordinary scan
+  if (D) {
+    // a directive head (sub-state 3, count = its paren depth + 1): code, by the ordinary scan; a
+    // hole opener at that depth opens the body, a deeper one an element hole
+    emit(`      } else if (sub === 3) {`);
+    emit(`        if (${sw(el.hole.open)}) {`);
+    emit(`          if (parenHeadStack.length === (fr >> 4) - 1) templateStack[top] = 14; else templateStack.push(1);`);
+    emit(`          tkPush(K_PUNCT, ${c.tOf!(el.hole.open)}, pos, pos + ${LH});`);
+    emit(`          pos += ${LH};`);
+    emit(`          continue;`);
+    emit(`        }`);
+  }
   emit(`      } else {`);
   // a tag's own tokens (outside type arguments): tried before the ordinary scan
   (el.tagTokens ?? []).forEach((name, i) => {
