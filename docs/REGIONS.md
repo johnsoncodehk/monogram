@@ -33,8 +33,9 @@ Not built, in this order (each its own change with its gate):
    never pops, only if every `html.ts` artifact and `conformance/html` stay byte-identical;
    otherwise markup mode stays and the blocking difference is recorded here.
 
-The portable lexers (TypeScript, Go, Rust) have no frames yet: `buildIR` refuses a grammar that
-declares `elements`, loudly, as it refuses markup.
+The portable lexers (TypeScript, Go, Rust) carry the same frames (below, "The portable lexers"):
+JSX, TSX and the dialect fixture have portable parsers, checked against the interpreter by
+`test/portable-targets.ts`.
 
 ## The model: a region is a declared lexer state
 
@@ -210,6 +211,37 @@ the characters that open, close or change a frame, and every deletion, at every 
 documents with frames (templates, JSX text and holes, signatures, attribute strings, code
 children with directives, dynamic tags and an element right after a value): edited ≡ fresh.
 
+## The portable lexers
+
+Built from one plan (`ElementPlan`, `src/emit-portable.ts`) and one family of shared routines
+(`src/lex-family.ts`, `elementFns`), printed by each target:
+- the frame step (`lexElFrame`): what an element frame on top of the stack lexes at a position
+  (children: close tag, nested tag, hole, text run; tag: tag tokens, self-close, tag close with
+  type-argument depth, nested element after `=`, hole), as (end, kind, literal, new top frame,
+  frame to push, type-argument depth, look end);
+- the type-parameter vetoes (`lexElOpens`): the head and signature patterns matched as the
+  interpreter's regexes match them, and how far they read;
+- the raw body (`lexElRaw`) and the read end of a signature's decision (`lexElReach`).
+The printers place these in the dispatch loop and keep the state: the frame stack (the template
+stack, with element holes counting braces as template holes do), whether the last token ended an
+element, the type-argument depth, the look end, where a kept signature ends, and (raw text) each
+element frame's tagOpen token index.
+
+Differences from the interpreter, none visible in the token stream:
+- A type-parameter signature is decided before its `tagOpen` is lexed: the lexer lexes the group
+  as code to its verdict (a lex error there is the verdict "element"), rewinds, and then lexes
+  the `tagOpen` as the verdict says. A kept signature is lexed twice; in exchange every lexer
+  step yields one token, so a Doc records the lexer state after each token as before. Rust has
+  no catchable lexer error, so its error routines return a sentinel while a signature is
+  undecided.
+- Relex: a token's depth (`relexDepth`, `src/relex-family.ts`) is the frames open after it, plus
+  one when it ended an element, plus one when it starts before the look end: the furthest any
+  lookahead read (the vetoes' patterns, a signature's group and the token deciding it, a tag
+  token's failed attempt). Anchors and resync need depth 0, as for templates.
+- A region's own tokens carry no literal id (0), as in the interpreter: the parser matches a
+  literal by its id alone, so a text `if` must never be the keyword. A Doc rebuilding ids from
+  text applies the same class test.
+
 ## What the portable lexers need
 
 1. Frame kinds: template hole, element hole, element frame, and a raw frame (kind 3): one body
@@ -263,8 +295,9 @@ rule when there is one (`@if` `(`; `@try` `{`). A continuation literal (`@else`,
 
 ## Owed
 
-- The portable lexers' frames for JSX / TSX and the dialect (the list above). Until then
-  `buildIR` refuses `elements`, and `guard-lead` / `predictive-first` skip the JSX grammars.
+- In the portable lexers: text tokens / directive openers / tag start and the root region, as
+  they are built here; a raw-text grammar that also declares a type-parameter signature is
+  refused (the signature's rewind does not restore the raw-text tag records).
 - Text tokens / directive openers / tag start, the root region: the build order above.
 - A raw-text body condition (the evaluated dialect reads `<style>{css}</style>` as an element
   with a hole, not raw text): not declared; it belongs with the TSRX-shaped fixture.
