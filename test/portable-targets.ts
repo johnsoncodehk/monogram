@@ -566,6 +566,8 @@ const CASES: Case[] = [
       // `export default` heads an expression: a `/` after `default` begins a regex (a division cannot follow it)
       'export default /re/.test(x);', 'export default /=/;', 'switch (a) { default: /re/.test(x); }',
       // ... but as a member name a keyword is a value and a `/` after it divides, as after a private name
+      // after a template's tail a `/` divides, as after a template with no substitution
+      'x = `${a}` / 2 / 3;', 'x = `a${b}c${d}` / e / f;',
       'x = a.new / 2 / 3;', 'x = a.default / b / c;', 'x = a?.typeof / 2 / 3;', 'x = a.return / 2 / 3;', 'class C { #x = 1; m() { return this.#x / 2 / 3; } }',
       'function f() { return /re/.test(x); }', 'x = typeof /re/;', 'switch (a) { case /re/: break; }',
       'x.y.z++;', '(a++).b;', 'a++ instanceof B;', 'a++\n(x);',
@@ -686,6 +688,8 @@ const CASES: Case[] = [
       ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...EXPORT_DECLS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
       'export default /re/.test(x);', 'export default /=/;', 'switch (a) { default: /re/.test(x); }',
       // ... but as a member name a keyword is a value and a `/` after it divides, as after a private name
+      // after a template's tail a `/` divides, as after a template with no substitution
+      'x = `${a}` / 2 / 3;', 'x = `a${b}c${d}` / e / f;',
       'x = a.new / 2 / 3;', 'x = a.default / b / c;', 'x = a?.typeof / 2 / 3;', 'x = a.return / 2 / 3;', 'class C { #x = 1; m() { return this.#x / 2 / 3; } }',
       'function f() { return /re/.test(x); }', 'x = typeof /re/;', 'switch (a) { case /re/: break; }',
       ...CTX_CASES.typescript.accept, ...TS_DECORATORS.accept, ...TEMPLATE_STEPS.ts.accept, ...TS_MEMBER_DECORATORS.accept, ...TS_MODULES.accept, ...TRY_STATEMENTS.accept, ...TS_TRY.accept,
