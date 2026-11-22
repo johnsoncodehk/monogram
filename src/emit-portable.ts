@@ -38,7 +38,8 @@ export type LexTok =
   // else fall back to the general pattern matcher from the token start. `bail` governs where
   // the cont run may STOP; `headBail` are ENTRY chars claimed by a complex head alternative
   // (e.g. an escape-led first char) that must route straight to the general matcher.
-  | { kind: 'runBail'; name: string; first: CharRange[]; cont: CharRange[];
+  // `prefix`: a literal the run follows (`#` of a private name); '' for none.
+  | { kind: 'runBail'; name: string; prefix: string; first: CharRange[]; cont: CharRange[];
       bail: number[]; bailNonAscii: boolean;
       headBail: number[]; headBailNonAscii: boolean;
       pattern: TokenPattern; skip: boolean }
@@ -1141,6 +1142,19 @@ function lexTok(t: TokenDecl): LexTok {
   if (delim !== null) return { kind: 'string', name: t.name, delim, skip };
   const bd = blockShape(t.pattern);
   if (bd) return { kind: 'block', name: t.name, ...bd, skip };
+  // A literal, then a char run (a prefixed identifier: `#name`): the run's plan after the
+  // literal, so only a match through a complex alternative reaches the pattern matcher.
+  const pre = literalThenRun(t.pattern);
+  if (pre) {
+    const { prefix, loop: l } = pre;
+    return {
+      kind: 'runBail', name: t.name, prefix,
+      first: codesToRanges(l.first), cont: codesToRanges(l.cont),
+      bail: l.bail, bailNonAscii: l.bailNonAscii,
+      headBail: l.headBail, headBailNonAscii: l.headBailNonAscii,
+      pattern: t.pattern, skip,
+    };
+  }
   const loop = tokenPatternCharLoop(t);
   // Plain `run` only when NOTHING needs the general matcher: no cont-stop bails AND no
   // complex head alternative (`run` has no fallback path — a headBail entry char would
@@ -1150,7 +1164,7 @@ function lexTok(t: TokenDecl): LexTok {
   }
   if (loop) {
     return {
-      kind: 'runBail', name: t.name,
+      kind: 'runBail', name: t.name, prefix: '',
       first: codesToRanges(loop.first), cont: codesToRanges(loop.cont),
       bail: loop.bail, bailNonAscii: loop.bailNonAscii,
       headBail: loop.headBail, headBailNonAscii: loop.headBailNonAscii,
@@ -1160,6 +1174,13 @@ function lexTok(t: TokenDecl): LexTok {
   const line = lineCommentShape(t.pattern);   // PRECISE: prefix-literal then star(non-newline)
   if (line) return { kind: 'line', name: t.name, prefix: line, skip };
   return { kind: 'pattern', name: t.name, pattern: t.pattern, skip };
+}
+
+// `lit head rep*` where `head rep*` is a char loop: the literal and the loop's plan.
+function literalThenRun(p: TokenPattern): { prefix: string; loop: NonNullable<ReturnType<typeof tokenPatternCharLoop>> } | null {
+  if (typeof p === 'string' || p.type !== 'seq' || p.items.length !== 3 || !isLit(p.items[0])) return null;
+  const loop = tokenPatternCharLoop({ pattern: { ...p, items: p.items.slice(1) } });
+  return loop ? { prefix: p.items[0], loop } : null;
 }
 
 const isLit = (p: TokenPattern | undefined): p is string => typeof p === 'string' && p.length > 0;
@@ -1881,6 +1902,7 @@ export function lexTokFirstBytes(t: LexTok): LexFirstBytes | null {
   switch (t.kind) {
     case 'run': return rangesToFirstBytes(t.first);
     case 'runBail': {
+      if (t.prefix) return punctFirstBytes(t.prefix);
       // first ASCII ∪ bail ASCII ∪ headBail ASCII — so both a `\`-led Ident (cont-escape
       // opener) and a complex-head-only entry char reach this token's dispatch arm.
       const fb = rangesToFirstBytes(t.first);
