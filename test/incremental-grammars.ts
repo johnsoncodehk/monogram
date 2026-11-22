@@ -20,6 +20,7 @@ import { emitParser, jsTarget } from '../src/emit.ts';
 import { generateInputs } from './grammar-gen.ts';
 import { objectify } from './emitted-obj.ts';
 import { scratchDir } from './scratch.ts';
+import { CTX_DOCS, CTX_SCRIPT } from './context-cases.ts';
 
 const TMP = scratchDir('incremental-grammars');
 
@@ -176,25 +177,7 @@ for (const name of GRAMMARS) {
 // cross-family row, and a surgery-eligible in-body keystroke must re-run the body
 // statement's rule (Stmt$A, …) with the right ambient context. The random mutator above
 // only hits these by luck; this scripts them. Each step stays edit≡fresh + self-consistent.
-const FORK_DOCS = [
-  'async function f(g) {\n  let x = await g();\n  return x;\n}\n',
-  'function* gen() {\n  yield 1;\n  let y = 2;\n  return y;\n}\n',
-  'const h = async (a) => {\n  await a;\n  return a;\n};\n',
-  'class C {\n  async m() { await this.x; }\n  *g() { yield 1; }\n  plain() { let await = 1; return await; }\n}\n',
-  'async function* ag() {\n  yield await next();\n  for (let i = 0; i < 3; i++) { await tick(); }\n}\n',
-];
-// each op replaces the FIRST occurrence of `find` (skipped if absent in the current text)
-const FORK_SCRIPT: [string, string][] = [
-  ['async function', 'function'],          // drop async: enclosing body Block$A -> Block
-  ['{\n  let', '{\n  let q = 0;\n  let'],   // surgery-path keystroke inside the now-sync body
-  ['function', 'async function'],          // re-add async: body Block -> Block$A
-  ['function*', 'function'],               // drop generator star: body Block$Y -> Block
-  ['async (a)', 'async (a, b)'],           // edit an async arrow's parameter list
-  ['await ', 'await  '],                   // touch an await operand site
-  ['yield 1', 'yield 1 + 1'],              // edit a yield operand inside a generator body
-  ['async m()', 'm()'],                    // class: drop a method's async
-  ['*g()', 'g()'],                         // class: drop a method's generator star
-];
+// The documents and edits are test/context-cases.ts's (the portable targets' Doc path runs them too).
 function replaceOnce(text: string, find: string, repl: string): { next: string; edit: Edit } | null {
   const at = text.indexOf(find);
   if (at < 0) return null;
@@ -204,11 +187,11 @@ for (const name of ['javascript', 'typescript']) {
   const em = (await import(`${TMP}/${name}.mts?v=` + process.pid)) as Em;
   const session = em.createParser();
   const fresh = em.createParser();
-  for (const doc of FORK_DOCS) {
+  for (const doc of CTX_DOCS) {
     let text = doc;
     let cst: Cst;
     try { cst = session.parse(text); } catch (e) { fails++; failures.push(`${name} fork-doc: parse THREW: ${(e as Error).message.slice(0, 60)}`); continue; }
-    for (const [find, repl] of FORK_SCRIPT) {
+    for (const [find, repl] of CTX_SCRIPT) {
       const m = replaceOnce(text, find, repl);
       if (!m) continue;
       totalSteps++;

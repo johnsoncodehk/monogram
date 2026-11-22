@@ -38,6 +38,7 @@ import { objectify } from './emitted-obj.ts';
 import { buildLexIdPlan, portableIR } from '../src/emit-portable.ts';
 import { asGoMain } from './go-main.ts';
 import { parityInputs, type Tok } from './parity-corpus.ts';
+import { CTX_CASES, CTX_DOCS, ctxEdits } from './context-cases.ts';
 import { goBuild, scratchDir } from './scratch.ts';
 import type { CstGrammar } from '../src/types.ts';
 
@@ -343,6 +344,7 @@ const CASES: Case[] = [
       'new a.b();', '((((x))));',
       'for (a = x + y in b) c;',
       ...NO_IN_HEADS.accept, ...FOR_HEADS.accept,
+      ...CTX_CASES.javascript.accept,
       // An assignment / update operand needs only a LeftHandSideExpression's shape; target validity is a consumer's.
       '-x++;', '(a) = 1;', 'a = b = c;', '1 = 2;', '1++;', '++1;', 'f() = 1;', 'f()++;', '++f();', 'this = 1;',
       '(a + b) = c;', '(a, b) = 1;', 'a?.b = 1;', 'a?.b++;', '[a + b] = c;', '({a: 1} = c);', 'new.target = 1;',
@@ -424,6 +426,7 @@ const CASES: Case[] = [
       'for (a = (x in b)) c;',
       'for (a = b ? x in c : y in d) e;',
       ...NO_IN_HEADS.reject, ...FOR_HEADS.reject,
+      ...CTX_CASES.javascript.reject,
       // An assignment / update operand (prefix ++/-- included) without a LeftHandSideExpression's shape has no parse.
       'a + b = c;', 'a++ = 1;', '-a = 1;', '++ -x;', '++x++;', '++ ++x;',
       // … wherever the expression is optional or repeated: a refused operand is not skipped.
@@ -447,6 +450,7 @@ const CASES: Case[] = [
     grammar: 'typescript', path: '../typescript.ts',
     accept: [
       ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
+      ...CTX_CASES.typescript.accept,
       // A class heritage is a LeftHandSideExpression (see the JavaScript cases).
       'f(class extends (a, b) {});', 'f(class extends a[0] {});', 'f(class extends a`t` {});', 'f(class extends a?.b() {});',
       // `return` takes an expression only on its own line (a restricted production), so a
@@ -619,7 +623,7 @@ const CASES: Case[] = [
       'type = 1;', 'namespace.x;', 'declare(x);', 'abstract(x);',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
-    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
+    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...CTX_CASES.typescript.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '{ b(); }.x;', '{ static x }.y;', '{ static x }', '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;',
       'let[0] = 1;', '(async\nfunction f() {});',
@@ -1016,6 +1020,10 @@ const jsLargeInit = ('var r = /a/g; `t${x}u`; f(1);\n').repeat(40);
 const jsLargeEdit = jsLargeInit.indexOf('f(1)', 600) + 2;
 const jsLookaheadInit = 'let x = (a)\nfoo;\nbar;';
 const jsLookaheadEdit = jsLookaheadInit.indexOf('\n') + 1; // first char of peeked-into second stmt
+// Edits that move a body in and out of an async / generator function, and keystrokes inside and
+// around such bodies (test/context-cases.ts): one session per document, the tree ≡ a fresh parse
+// after every batch.
+const CTX_EDITS: EditScenario[] = CTX_DOCS.map((init) => ({ init, batches: ctxEdits(init).map((e): EditBatch => [[e.start, e.end, e.text]]), longSession: true }));
 const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
   calc: [
     { init: '1+2*3', batches: [[[3, 3, '4']]] },
@@ -1062,6 +1070,11 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     // Division → regex flip far from the edit; suffix adoption needs equal prev-token/paren state.
     { init: 'x = a / b / c; `t${y}u`;', batches: [[[4, 6, '']]] },
     { init: jsLargeInit, batches: [[[jsLargeEdit, jsLargeEdit + 1, '9']]], large: true, maxRelexed: 15 },
+    ...CTX_EDITS,
+  ],
+  // The same edits of the [Await]/[Yield] context (test/context-cases.ts) on the typescript grammar.
+  typescript: [
+    ...CTX_EDITS,
   ],
   templatejs: [
     { init: '`a${x}b`;', batches: [[[4, 5, 'y']]] },
