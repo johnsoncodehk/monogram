@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, stepExpr, stepStmts, ruleShell, dispatchWalk, gtCompLit, type StepLowering, type RuleLowering, type DispatchLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, dispatchWalk, gtCompLit, type StepLowering, type RuleLowering, type DispatchLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -679,6 +679,21 @@ ${headBlock}  for (;;) {
 }`;
 }
 
+/** A Pratt rule's operator tables (emit-portable prattOpTables), keyed by the operator's lid. TS:
+ *  an object literal with integer keys, which V8 keeps as indexed elements (no hashing); the
+ *  typed-AST printers read the same tables. */
+function tsPrattOpTables(r: PrattRule, ids: LexIdPlan): string {
+  const ops = prattOpTables(r, ids);
+  const rec = <T extends { lid: number }>(xs: T[], v: (x: T) => string | number) => `{ ${xs.map((x) => `${x.lid}: ${v(x)}`).join(', ')} }`;
+  const set = <T extends { lid: number; tgt: boolean }>(xs: T[]) => `new Set<number>([${xs.filter((x) => x.tgt).map((x) => x.lid).join(', ')}])`;
+  return `const ${r.name}_BIN: Record<number, { lbp: number; rbp: number; tgt: boolean; noUnary: boolean }> = ${rec(ops.bin, (b) => `{ lbp: ${b.lbp}, rbp: ${b.rbp}, tgt: ${b.tgt}, noUnary: ${b.noUnary} }`)};
+const ${r.name}_PRE: Record<number, number> = ${rec(ops.pre, (p) => p.rbp)};
+const ${r.name}_PRE_FORM: Record<number, number> = ${rec(ops.pre, (p) => p.form)};
+const ${r.name}_PRE_TGT = ${set(ops.pre)};
+const ${r.name}_POST: Record<number, number> = ${rec(ops.post, (p) => p.lbp)};
+const ${r.name}_POST_TGT = ${set(ops.post)};`;
+}
+
 /** A Pratt rule in building form, over the child stack: its operator tables ${name}_BIN / _PRE /
  *  _POST, then `X_bpW` / `X_nudW`, which return whether they matched; matched, the node is
  *  the one slot left at the height `b` they found, else the stack is back at `b`. In the led loop
@@ -774,15 +789,7 @@ ${groups.map((g) => `      case ${g.key}:
         break;`).join('\n')}
     }${tplPart}`;
   })();
-  const BIN = `{ ${r.binary.map((b) => `${lidOf(ids, b.op)}: { lbp: ${b.lbp}, rbp: ${b.rbp}, tgt: ${b.requireTarget}, noUnary: ${b.noUnaryLhs} }`).join(', ')} }`;
-  const PRE = `{ ${r.prefix.map((p) => `${lidOf(ids, p.op)}: ${p.rbp}`).join(', ')} }`;
-  const POST = `{ ${r.postfix.map((p) => `${lidOf(ids, p.op)}: ${p.lbp}`).join(', ')} }`;
-  return `const ${r.name}_BIN: Record<number, { lbp: number; rbp: number; tgt: boolean; noUnary: boolean }> = ${BIN};
-const ${r.name}_PRE: Record<number, number> = ${PRE};
-const ${r.name}_PRE_FORM: Record<number, number> = { ${r.prefix.map((p) => `${lidOf(ids, p.op)}: ${p.form}`).join(', ')} };
-const ${r.name}_PRE_TGT = new Set<number>([${r.prefix.filter((p) => p.requireTarget).map((p) => lidOf(ids, p.op)).join(', ')}]);
-const ${r.name}_POST: Record<number, number> = ${POST};
-const ${r.name}_POST_TGT = new Set<number>([${r.postfix.filter((p) => p.requireTarget).map((p) => lidOf(ids, p.op)).join(', ')}]);
+  return `${tsPrattOpTables(r, ids)}
 function parse${r.name}W(): boolean {
   const prev = _suppressCur; _suppressCur = _suppressNext; _suppressNext = 0;
   const r = ${r.name}_bpW(0);
