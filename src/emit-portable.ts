@@ -104,16 +104,16 @@ export type Step =
   | { t: 'tok'; name: string }                                  // match a token kind
   | { t: 'rule'; name: string }                                 // call a rule, append its node
   | { t: 'ruleBp'; name: string; bp: number }                   // call a Pratt rule at a given binding power (chain-rhs led trailing operand)
-  | { t: 'star'; step: Step }                                   // repeat inner 0+
-  | { t: 'opt'; steps: Step[] }                                 // optional sub-sequence
-  | { t: 'sep'; elem: Step; delim: string }                     // elem (delim elem)*
+  | { t: 'star'; step: Step; share?: number }                   // repeat inner 0+
+  | { t: 'opt'; steps: Step[]; share?: number }                 // optional sub-sequence
+  | { t: 'sep'; elem: Step; delim: string; share?: number }     // elem (delim elem)*
   | { t: 'altlit'; opts: Lit[] }                                // inline alternation of literals (fast path)
-  | { t: 'alt'; branches: Step[][]; firsts?: FirstSig[]; predictive?: boolean }                            // inline alternation of sub-sequences (backtracking unless predictive)
+  | { t: 'alt'; branches: Step[][]; firsts?: FirstSig[]; predictive?: boolean; share?: number }            // inline alternation of sub-sequences (backtracking unless predictive)
   | { t: 'look'; id: number; is: boolean }                     // zero-width: whether ParserIR.lookaheads[id] matches here (is) or does not (!is)
   | { t: 'ahead'; set: number; is: boolean }                    // zero-width: whether the next token is (is) or is not (!is) in ParserIR.tokenSets[set]
-  | { t: 'seq'; steps: Step[] }                                 // a grouped sub-sequence (e.g. a star body `(',' Expr)`)
+  | { t: 'seq'; steps: Step[]; share?: number }                 // a grouped sub-sequence (e.g. a star body `(',' Expr)`)
   | { t: 'sameLine' }                                           // zero-width: the next token is on the same line (no preceding newline)
-  | { t: 'suppress'; set: number; steps: Step[] };             // parse the body with the LED connectors of ParserIR.suppressSets[set] disabled (no-`in` context)
+  | { t: 'suppress'; set: number; steps: Step[]; share?: number };  // parse the body with the LED connectors of ParserIR.suppressSets[set] disabled (no-`in` context)
 export type Alt = Step[];
 // The LED connectors a `suppress` step disables (`exclude('in', Expr)`: no `in` in a for-head) are
 // a constant of the grammar at each site, so a parser never builds one at run time. The grammar
@@ -356,6 +356,7 @@ export type ParserIR = {
   rules: RuleIR[];
   tokenSets: TokenSet[];       // the sets `ahead` steps test, indexed by Step.set
   lookaheads: Alt[];           // the bodies `look` steps run, indexed by Step.id; a body names only lower ids
+  shared: Step[];              // the steps printed once and called from each site, indexed by Step.share (see shareSteps)
   suppressSets: string[][];    // the connector sets `suppress` steps disable, indexed by Step.set; [0] is the empty set
   regexCtx: RegexCtx | null;   // null unless the grammar has a regex token with context
   tpl: TplCfg | null;          // null unless the grammar has a template token
@@ -711,7 +712,82 @@ function buildIR(grammar: CstGrammar): ParserIR {
     ...(identToken ? [identToken] : []),
     ...grammar.tokens.filter((t) => t.identifierPrefix).map((t) => t.name),
   ];
-  return { grammarName: grammar.name ?? 'grammar', entry: san(findEntryRule(grammar)), tokens, puncts, gtComps, rules, tokenSets, lookaheads, suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike };
+  const shared = shareSteps([
+    ...rules.flatMap((r) => (r.kind === 'rd' ? r.alts : [...r.nudBrackets.map((b) => b.steps), ...r.nudSeqs, ...r.nudCapped.map((c) => c.steps), ...r.leds.map((b) => b.steps)])),
+    ...lookaheads,
+  ]);
+  return { grammarName: grammar.name ?? 'grammar', entry: san(findEntryRule(grammar)), tokens, puncts, gtComps, rules, tokenSets, lookaheads, shared, suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike };
+}
+
+// ── Shared steps: a repeated step sequence is one function ──
+// A step is a computation over the parser's state alone: the position, the token stream and the
+// lexer's state behind it, the suppress set in force, the look extent, and the children list it
+// appends to (TS: the `kids`/`spans` arrays in scope, passed as arguments; Go/Rust: the parser's
+// scratch list and builder). It reads nothing of the site it stands at — not the enclosing rule's
+// longest-match bookkeeping, not its node, not the fork (a step that calls a forked rule names the
+// fork, so steps of different forks that differ are different steps) — and on a failure it leaves
+// what it advanced and appended for the construct around it to undo, as every step does. So two
+// structurally identical steps are one computation wherever they stand, and a function that runs
+// the step, called at each site, does exactly what the inlined copies did, failure included.
+// Steps are shared, not arms: a rule alternative or Pratt arm builds its node and keeps its best
+// candidate around its steps; only the steps inside it are candidates here.
+// What is shared: every compound step (star / opt / sep / alt / seq / suppress) that the printed
+// program would hold at two or more places. Places are counted as printed: a step inside a shared
+// step is printed once, in that step's function, however many sites call it; inside an unshared
+// step, once per place that step is printed. So a step that only ever stands inside one shared
+// step is not a function of its own. A leaf step (a literal, a token, a rule call, a zero-width
+// test) is already one helper call and is never shared. `Step.share` marks every occurrence with
+// the id of its entry in ParserIR.shared; it says only how a target prints the step (a call to
+// that function), so a reader that does not know the field still reads the step it marks.
+function shareSteps(roots: Step[][]): Step[] {
+  type Compound = Extract<Step, { share?: number }>;
+  const isCompound = (s: Step): s is Compound => s.t === 'star' || s.t === 'opt' || s.t === 'sep' || s.t === 'alt' || s.t === 'seq' || s.t === 'suppress';
+  const kids = (s: Step): Step[] => {
+    switch (s.t) {
+      case 'star': return [s.step];
+      case 'sep': return [s.elem];
+      case 'opt': case 'seq': case 'suppress': return s.steps;
+      case 'alt': return s.branches.flat();
+      default: return [];
+    }
+  };
+  // Each distinct compound step by its structure: its size (in steps, itself included), how often
+  // each distinct compound child occurs in it, how often it stands directly in a root list, and
+  // every occurrence.
+  type Entry = { size: number; children: Map<string, number>; atRoot: number; occ: Compound[] };
+  const entries = new Map<string, Entry>();
+  const keyOf = new Map<Step, string>();
+  const visit = (s: Step): number => {   // the step's size; records its entry when compound
+    let size = 1;
+    for (const c of kids(s)) size += visit(c);
+    if (!isCompound(s)) return size;
+    let key = keyOf.get(s);
+    if (key === undefined) { key = JSON.stringify(s); keyOf.set(s, key); }
+    let e = entries.get(key);
+    if (e === undefined) {
+      e = { size, children: new Map(), atRoot: 0, occ: [] };
+      for (const c of kids(s)) if (isCompound(c)) { const ck = keyOf.get(c)!; e.children.set(ck, (e.children.get(ck) ?? 0) + 1); }
+      entries.set(key, e);
+    }
+    e.occ.push(s);
+    return size;
+  };
+  for (const list of roots) for (const s of list) { visit(s); if (isCompound(s)) entries.get(keyOf.get(s)!)!.atRoot++; }
+  // Places each step is printed at, from the biggest down (a parent is bigger than its children).
+  const printed = new Map<string, number>();
+  for (const [k, e] of entries) printed.set(k, e.atRoot);
+  const shared: Step[] = [];
+  const idOf = new Map<string, number>();
+  for (const [k, e] of [...entries].sort((x, y) => y[1].size - x[1].size)) {
+    const n = printed.get(k)!;
+    const share = n >= 2;
+    if (share) idOf.set(k, -1);
+    for (const [ck, m] of e.children) printed.set(ck, printed.get(ck)! + m * (share ? 1 : n));
+  }
+  // Ids in the order the steps are first met (an inner step before the step around it).
+  for (const [k, e] of entries) if (idOf.has(k)) { idOf.set(k, shared.length); shared.push(e.occ[0]!); }
+  for (const [k, e] of entries) { const id = idOf.get(k); if (id !== undefined) for (const s of e.occ) s.share = id; }
+  return shared;
 }
 
 // Classify a token: a fast-path shape (run/string/line/block) when the pattern IS that shape,

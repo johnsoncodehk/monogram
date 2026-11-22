@@ -550,6 +550,11 @@ func leafEnd(ts []Tok, ti uint32, tt uint8) uint32 {
 }
 
 function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  if ('share' in s && s.share !== undefined) return `p.sub${s.share}()`;
+  return stepBody(s, ids, ar);
+}
+// The step itself, printed in place (a shared step's method body; every other step's site).
+function stepBody(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
   switch (s.t) {
     case 'lit': return gtCompLit(ids, s) ? `p.matchComp(${lidOf(ids, s.value)})` : `p.matchLit(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
     case 'tok': return `p.matchTok(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
@@ -559,8 +564,20 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
     case 'opt': return `p.opt(func() bool { return ${s.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} })`;
     case 'sep': return `p.sepBy(func() bool { return ${stepCond(s.elem, ids, ar)} }, ${lidOf(ids, s.delim)})`;
     case 'altlit': return `p.altLit([]struct{ Lid uint16; TtId uint8 }{${s.opts.map((o) => `{${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)}}`).join(', ')}})`;
+    case 'alt': return `func() bool { ${stepStmts(s, ids, ar)} }()`;
+    case 'look': return `${s.is ? '' : '!'}p.look${s.id}()`;
+    case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
+    case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'})`;
+    case 'sameLine': return `func() bool { t := p.peek(); return t != nil && !t.Nl }()`;
+    case 'suppress': return `func() bool { ${stepStmts(s, ids, ar)} }()`;
+  }
+}
+// The step as the statements of a function returning whether it matched: an `alt` or `suppress`
+// step needs statements, so in place it is printed as an immediately called func literal of these.
+function stepStmts(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  switch (s.t) {
     case 'alt': {
-      if (s.predictive) return `func() bool { ${predAltBody(s.branches, ids, s.firsts, ar)} }()`;
+      if (s.predictive) return predAltBody(s.branches, ids, s.firsts, ar);
       const firsts = s.firsts ?? [];
       const nAlts = s.branches.length;
       const needPeek = s.branches.some((_, i) => isGuardable(firsts[i] ?? null, nAlts));
@@ -571,19 +588,22 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
         if (!isGuardable(f, nAlts)) return body;
         return `if _ft != nil && ${firstCond(f, '_ft', ids)} ${body}`;
       }).join('; ');
-      return `func() bool { ${peekInit}${tries}; return false }()`;
+      return `${peekInit}${tries}; return false`;
     }
-    case 'look': return `${s.is ? '' : '!'}p.look${s.id}()`;
-    case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
-    case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'})`;
-    case 'sameLine': return `func() bool { t := p.peek(); return t != nil && !t.Nl }()`;
-    case 'suppress': return `func() bool { p.suppressNext = ${s.set}; _r := (${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}); p.suppressNext = 0; return _r }()`;
+    case 'suppress': return `p.suppressNext = ${s.set}; _r := (${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}); p.suppressNext = 0; return _r`;
+    default: return `return ${stepBody(s, ids, ar)}`;
   }
 }
 
 // ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
 function lookFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   return ir.lookaheads.map((body, id) => `func (p *engine) look${id}() bool { save := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids); m := ${body.map((x) => stepCond(x, ids, ar)).join(' && ')}; p.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; return m }\n`).join('');
+}
+
+// ParserIR.shared, one method each: the step, run against the parser's scratch list. It undoes
+// nothing: a failed step leaves what it advanced and appended for the construct around its site.
+function sharedFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  return ir.shared.map((s, id) => `func (p *engine) sub${id}() bool { ${stepStmts(s, ids, ar)} }\n`).join('');
 }
 
 function predAltBody(branches: Step[][], ids: LexIdPlan, firsts: FirstSig[] | undefined, ar: ArenaIdPlan): string {
@@ -1485,6 +1505,10 @@ function arenaRestore(recv: string): string {
 }
 
 function stepCondW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
+  if ('share' in s && s.share !== undefined) return `p.sub${s.share}W()`;
+  return stepBodyW(s, ids, ar, recv);
+}
+function stepBodyW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
   switch (s.t) {
     case 'lit': return gtCompLit(ids, s) ? `p.matchCompW(${lidOf(ids, s.value)})` : `p.matchLitW(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
     case 'tok': return `p.matchTokW(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
@@ -1494,14 +1518,19 @@ function stepCondW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
     case 'opt': return `p.optW(func() bool { return ${s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} })`;
     case 'sep': return `p.sepByW(func() bool { return ${stepCondW(s.elem, ids, ar, recv)} }, ${lidOf(ids, s.delim)})`;
     case 'altlit': return `p.altLitW([]struct{ Lid, TtId uint16 }{${s.opts.map((o) => `{${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)}}`).join(', ')}})`;
-    case 'alt': return s.predictive
-      ? `func() bool { ${predAltBodyW(s.branches, ids, ar, s.firsts, recv)} }()`
-      : `func() bool { ${altBodyW(s.branches, ids, ar, s.firsts, recv)} }()`;
+    case 'alt': return `func() bool { ${stepStmtsW(s, ids, ar, recv)} }()`;
     case 'look': return `${s.is ? '' : '!'}p.look${s.id}W()`;
     case 'ahead': return `p.aheadW(${s.set}, ${s.is})`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'})`;
     case 'sameLine': return `func() bool { t := p.peekW(); return t != nil && !t.Nl }()`;
-    case 'suppress': return `func() bool { p.suppressNext = ${s.set}; _r := (${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'}); p.suppressNext = 0; return _r }()`;
+    case 'suppress': return `func() bool { ${stepStmtsW(s, ids, ar, recv)} }()`;
+  }
+}
+function stepStmtsW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
+  switch (s.t) {
+    case 'alt': return s.predictive ? predAltBodyW(s.branches, ids, ar, s.firsts, recv) : altBodyW(s.branches, ids, ar, s.firsts, recv);
+    case 'suppress': return `p.suppressNext = ${s.set}; _r := (${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'}); p.suppressNext = 0; return _r`;
+    default: return `return ${stepBodyW(s, ids, ar, recv)}`;
   }
 }
 function altBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: FirstSig[] | undefined, recv: string): string {
@@ -1520,6 +1549,9 @@ function altBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: F
 // ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
 function lookFnsW(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
   return ir.lookaheads.map((body, id) => `func (p *${recv}) look${id}W() bool { sp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}; m := ${body.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')}; p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; return m }\n`).join('');
+}
+function sharedFnsW(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
+  return ir.shared.map((s, id) => `func (p *${recv}) sub${id}W() bool { ${stepStmtsW(s, ids, ar, recv)} }\n`).join('');
 }
 function predAltBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: FirstSig[] | undefined, recv: string): string {
   // Same-line `} else if` (native predAltBody joins with ' else '); newlines break Go ASI.
@@ -2006,7 +2038,7 @@ func (p *${recv}) altLitW(opts []struct{ Lid, TtId uint16 }) bool {
 \treturn false
 }
 
-${matchTemplateW}${lookFnsW(ir, ids, ar, recv)}${ruleFnsW}
+${matchTemplateW}${lookFnsW(ir, ids, ar, recv)}${sharedFnsW(ir, ids, ar, recv)}${ruleFnsW}
 `;
 }
 
@@ -3245,7 +3277,7 @@ func (p *engine) altLit(opts []struct{ Lid uint16; TtId uint8 }) bool {
 \treturn false
 }
 
-${matchTemplate}${lookFns(ir, ids, ar)}${ruleFns}
+${matchTemplate}${lookFns(ir, ids, ar)}${sharedFns(ir, ids, ar)}${ruleFns}
 
 func (p *engine) writeJSON(id int32, b *strings.Builder) { writeJSONWith(p.nodes, p.kids, p.toks, id, b) }
 
