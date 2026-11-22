@@ -35,9 +35,9 @@ jobs:
       - run: test/bench-rust-profile/run.sh
         env:
           PROFILE_WORK: ${{ runner.temp }}/prof-work
-          # Before / after of perf/emit-sequence-once (threshold 4): A = origin/master 094b389, M = 3f2d311.
+          # Before / after of perf/emit-sequence-once (threshold 2): A = origin/master 094b389, M = 041d527.
           PROFILE_A: 094b389904f74bfdfc55fdc7005de682fb596ec4
-          PROFILE_M: 3f2d31182d3802b671ba814597fb38db4eb57016
+          PROFILE_M: 041d527dd241db639229aa907c6504041c96dd5a
 
       - uses: actions/upload-artifact@v4
         if: always()
