@@ -83,6 +83,8 @@ function engine(ir: ParserIR, mut: Mutation = null) {
   type Mark = { pos: number; sb: number; ck: number };
   const mark = (): Mark => ({ pos, sb: scratch.length, ck: checkpoint() });
   const reset = (m: Mark) => { pos = m.pos; scratch.length = m.sb; restore(m.ck); };
+  // A binary operator composed of several `>` tokens: its leaf spans them (by its first token).
+  const opEnd = new Map<number, number>();
   const pushLeaf = (tt: number, i: number) => { if (tt !== PUNCT) scratch.push(-(i * 256 + tt) - 1); };
   function finish(rule: number, sb: number): Sp {
     nodes.push({ rule, kids: scratch.slice(sb) });
@@ -448,7 +450,7 @@ function engine(ir: ParserIR, mut: Mutation = null) {
       if (b === undefined || b.lbp <= minBp) break;
       if ((b.requireTarget && fm !== 0) || (b.noUnaryLhs && fm === 2)) return null;
       const ledSave = pos, sb = scratch.length; scratch.push(left.h);
-      pushLeaf(TT_OPERATOR, pos); pos += opN;
+      pushLeaf(TT_OPERATOR, pos); if (opN > 1) opEnd.set(pos, toks[pos + opN - 1]!.end); pos += opN;
       const rhs = prattBp(r, b.rbp);
       if (rhs === null) { pos = ledSave; scratch.length = sb; break; }
       scratch.push(rhs.h);
@@ -538,14 +540,14 @@ function engine(ir: ParserIR, mut: Mutation = null) {
 
   // The tree in the CST's form (TS target `parse`): a node's rule and children, a leaf's type and span.
   function tree(h: number): Cst {
-    if (h < 0) { const v = -h - 1, t = toks[Math.floor(v / 256)]!; return { tokenType: ar.ttNames[v % 256]!, offset: t.off, end: t.end }; }
+    if (h < 0) { const v = -h - 1, t = toks[Math.floor(v / 256)]!; const i = Math.floor(v / 256); return { tokenType: ar.ttNames[v % 256]!, offset: t.off, end: opEnd.get(i) ?? t.end }; }
     const nd = nodes[h]!;
     return { rule: ar.ruleNames[nd.rule]!, children: nd.kids.map(tree) };
   }
   return function run(tokens: Tok[], text: string): Outcome {
     toks = tokens; src = text;
     pos = 0; capped = false; form = 0; tail = false; suppressNext = 0; suppressCur = 0; ctx = 0;
-    scratch.length = 0; nodes.length = 0; checked = 0; unsound = []; found = {};
+    scratch.length = 0; nodes.length = 0; opEnd.clear(); checked = 0; unsound = []; found = {};
     const root = parseRule(ir.entry);
     const accept = root !== null && pos === toks.length;
     return { accept, tree: accept ? tree(root!.h) : null, checked, unsound, found };
