@@ -27,6 +27,7 @@ const sexpr: Lowering = {
   charSet: (name, rs) => form('define-char-set', name, ...rs.map(([lo, hi]) => form(String(lo), String(hi)))),
   runEndFn: form('define-runtime', 'run-end'),
   findFn: form('define-runtime', 'find'),
+  findAnyFn: (stops) => form('define-runtime', 'find-any', ...stops.map(String)),
   expr: {
     literal: (v) => at(typeof v === 'string' ? JSON.stringify(v) : typeof v === 'boolean' ? (v ? '#t' : '#f') : String(v)),
     not: (r) => at(form('not', r.c)),
@@ -39,6 +40,7 @@ const sexpr: Lowering = {
     inSet: (_cx, set, c) => at(form('in-set?', set, c.c)),
     runEnd: (cx, set, s, i) => cx.atom(form('run-end', set, s.c, i.c), 'int', 'int'),
     find: (cx, s, i, lit) => cx.atom(form('find', s.c, i.c, JSON.stringify(lit)), 'int', 'int'),
+    findAny: (cx, s, i, stops) => cx.atom(form('find-any', s.c, i.c, form('stops', ...stops.map(String))), 'int', 'int'),
   },
   stmt: {
     comment: (text) => [`;; ${text}`],
@@ -115,6 +117,7 @@ function census(fns: Fn[]): Map<string, number> {
     if (e.k === 'inSet') bump('in-set?');
     if (e.k === 'runEnd') bump('run-end');
     if (e.k === 'find') bump('find');
+    if (e.k === 'findAny') { bump('find-any'); bump('stops'); }
     for (const v of Object.values(e)) {
       if (Array.isArray(v)) v.forEach((y) => y && typeof y === 'object' && 'k' in y && ex(y as Expr));
       else if (v && typeof v === 'object' && 'k' in v) ex(v as Expr);
@@ -180,7 +183,7 @@ for (const path of FIXTURES) {
   try { heads = read(out); } catch (e) { fail(`${path}: ${(e as Error).message}`); continue; }
   const want = census(fns);
   want.set('define-char-set', lex.sets.length);
-  want.set('define-runtime', (want.has('run-end') ? 1 : 0) + (want.has('find') ? 1 : 0));
+  want.set('define-runtime', (want.has('run-end') ? 1 : 0) + (want.has('find') ? 1 : 0) + lex.stopSets.length);
   for (const [k, n] of want) {
     const got = k.split('|').reduce((s, h) => s + (heads.get(h) ?? 0), 0);
     if (got !== n) fail(`${path}: ${k} printed ${got}×, IR holds ${n}`);

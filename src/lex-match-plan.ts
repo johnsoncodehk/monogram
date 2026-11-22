@@ -147,6 +147,43 @@ export function examinedUnits(p: TokenPattern): CSet {
   }
 }
 
+/** The most units a match of p can consume (Infinity when unbounded). */
+export function maxUnits(p: TokenPattern): number {
+  if (typeof p === 'string') return p.length;
+  switch (p.type) {
+    case 'anyChar': case 'charClass': return 1;
+    case 'seq': return p.items.reduce((a, i) => a + maxUnits(i), 0);
+    case 'alt': return p.items.reduce((a, i) => Math.max(a, maxUnits(i)), 0);
+    case 'repeat': { const b = maxUnits(p.body); return b === 0 ? 0 : p.max === undefined ? Infinity : p.max * b; }
+    case 'lookahead': case 'lookbehind': case 'anchor': case 'never': return 0;
+  }
+}
+
+/** The most units a FAILED match attempt of p, from its start, can read; -1 when p cannot fail.
+ *  A candidate whose attempt fails after reading more than a few units was decided by text past
+ *  its own start (a regex, an unterminated block comment): see `examinedUnits` for where it stops. */
+export function failRead(p: TokenPattern): number {
+  if (typeof p === 'string') return p.length === 0 ? -1 : p.length;
+  switch (p.type) {
+    case 'anyChar': case 'charClass': return 1;
+    case 'anchor': return 1;
+    case 'never': return 0;
+    case 'lookbehind': return 0;
+    case 'lookahead': return p.negate ? maxUnits(p.body) : failRead(p.body);
+    case 'alt': return p.items.some((i) => failRead(i) < 0) ? -1 : p.items.reduce((a, i) => Math.max(a, failRead(i)), 0);
+    case 'repeat': { const f = failRead(p.body); return p.min === 0 || f < 0 ? -1 : (p.min - 1) * maxUnits(p.body) + f; }
+    case 'seq': {
+      let before = 0, most = -1;
+      for (const i of p.items) {
+        const f = failRead(i);
+        if (f >= 0) most = Math.max(most, before + f);
+        before += maxUnits(i);
+      }
+      return most;
+    }
+  }
+}
+
 // The next characters at which a pattern surely fails.
 const failset = (i: Info): CSet => intersect(complement(i.first), i.nullable ? i.zfail : ALL);
 
