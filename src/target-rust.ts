@@ -5200,10 +5200,12 @@ const rustLowering: Lowering = {
     for (const [lo, hi] of rs) for (let c = lo; c <= hi; c++) a[c] = true;
     return `const ${name.toUpperCase()}: [bool; 256] = [${a.map((b) => (b ? 'true' : 'false')).join(', ')}];`;
   },
-  // Four bytes per round: one table test each, and one bounds test per round instead of per byte.
+  // The first byte alone (a run of none, as after a one-letter name, costs one test), then four
+  // bytes per round: one table test each, and one bounds test per round instead of per byte.
   runEndFn: `/// The end of the run of bytes in \`set\` from i: the first j >= i at which b ends or b[j] is not in it.
 #[inline(always)]
 fn lex_run_end(b: &[u8], mut i: usize, set: &[bool; 256]) -> usize {
+    match b.get(i) { Some(&c) if set[c as usize] => i += 1, _ => return i }
     while let Some(w) = b.get(i..i + 4) {
         if !set[w[0] as usize] { return i; }
         if !set[w[1] as usize] { return i + 1; }
