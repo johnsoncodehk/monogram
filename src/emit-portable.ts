@@ -110,7 +110,7 @@ export type Step =
   | { t: 'alt'; branches: Step[][]; firsts?: FirstSig[]; predictive?: boolean; share?: number }            // inline alternation of sub-sequences (backtracking unless predictive)
   | { t: 'look'; id: number; is: boolean }                     // zero-width: whether ParserIR.lookaheads[id] matches here (is) or does not (!is)
   | { t: 'ahead'; set: number; is: boolean }                    // zero-width: whether the next token is (is) or is not (!is) in ParserIR.tokenSets[set]
-  | { t: 'aheadCtx'; row: number; is: boolean }                 // zero-width: the same test of ParserIR.tokenSets[ParserIR.ctxSets[row + the context in force]] (the reserved words)
+  | { t: 'aheadCtx'; set: number; is: boolean }                 // zero-width: the `ahead` test of tokenSets[set] plus the operator words of the context in force (ParserIR.ctxWords)
   | { t: 'seq'; steps: Step[]; share?: number }                 // a grouped sub-sequence (e.g. a star body `(',' Expr)`)
   | { t: 'sameLine' }                                           // zero-width: the next token is on the same line (no preceding newline)
   | { t: 'suppress'; set: number; steps: Step[]; share?: number }  // parse the body with the LED connectors of ParserIR.suppressSets[set] disabled (no-`in` context)
@@ -121,8 +121,8 @@ export type Alt = Step[];
 // marks each body that sets it (awaitCtx / yieldCtx / asyncGenCtx, resetCtx for the bodies that set
 // none: a plain function, an accessor, a field initializer); a `ctx` step is such a body. What the
 // context decides is whether those words are reserved: an identifier's reserved-word guard
-// (`reservableNot`) also refuses the context's operator words, so it is an `aheadCtx` test, one
-// token set per context. Every other step reads the parser's state as it always did, so a parse is
+// (`reservableNot`) also refuses the context's operator words, so it is an `aheadCtx` test: its
+// words' set, or a word of ParserIR.ctxWords whose bit the context has. Every other step reads the parser's state as it always did, so a parse is
 // the same function of (position, state) with the context one more part of the state: a step or a
 // lookahead that two contexts share is one computation, and nothing keyed on rule and position is
 // kept that the context would have to join (the portable parsers keep no memo; a Doc reuses only
@@ -132,8 +132,8 @@ export type Alt = Step[];
 export const CTX_NONE = 0, CTX_AWAIT = 1, CTX_YIELD = 2;
 export type Ctx = 0 | 1 | 2 | 3;
 const CTX_OF_MODE: Record<'await' | 'yield' | 'asyncgen' | 'reset', Ctx> = { await: 1, yield: 2, asyncgen: 3, reset: 0 };
-/** The operator words reserved in context `c` (indexed by the context word). */
-const CTX_WORDS: readonly string[][] = [[], ['await'], ['yield'], ['await', 'yield']];
+/** The operator word each context bit reserves: CTX_WORDS[i] for bit 1 << i. */
+const CTX_WORDS: readonly string[] = ['await', 'yield'];
 // The LED connectors a `suppress` step disables (`exclude('in', Expr)`: no `in` in a for-head) are
 // a constant of the grammar at each site, so a parser never builds one at run time. The grammar
 // analysis keeps each distinct set once (ParserIR.suppressSets, sorted; set 0 is the empty set, the
@@ -373,7 +373,7 @@ export type ParserIR = {
   gtComps: string[];
   rules: RuleIR[];
   tokenSets: TokenSet[];       // the sets `ahead` steps test, indexed by Step.set
-  ctxSets: number[];           // the sets `aheadCtx` steps test: rows of four tokenSets ids, one per context word, a row starting at Step.row
+  ctxWords: string[];          // the operator word each context bit reserves in an `aheadCtx` test (ctxWords[i] for bit 1 << i); empty when no step tests one
   lookaheads: Alt[];           // the bodies `look` steps run, indexed by Step.id; a body names only lower ids
   shared: Step[];              // the steps printed once and called from each site, indexed by Step.share (see shareSteps)
   suppressSets: string[][];    // the connector sets `suppress` steps disable, indexed by Step.set; [0] is the empty set
@@ -466,15 +466,14 @@ function buildIR(grammar: CstGrammar): ParserIR {
   const ctxOf = (mode: keyof typeof CTX_OF_MODE, steps: Step[]): Step => ({ t: 'ctx', ctx: CTX_OF_MODE[mode], steps });
   // An identifier's reserved-word guard: the one-token test of its words and, in each context, the
   // context's operator words. Its body is one token by construction (`reservableNot(alt(...))`).
-  const ctxSets: number[] = [];
+  // The words' set is a constant of the site, as every `ahead` set is; only the context's words
+  // are read at run time, so the test costs one more comparison per word the context has.
+  let ctxWords: string[] = [];
   const reservableOf = (steps: Step[]): Step => {
     const m = steps.length === 1 ? oneTokenOf(steps[0]) : null;
     if (m === null) throw new Error('portable: a reservable guard must test one token');
-    const row = CTX_WORDS.map((w) => tokenSetOf({ lits: [...m.lits, ...w], toks: m.toks }));
-    let at = 0;
-    while (at < ctxSets.length && row.some((id, c) => ctxSets[at + c] !== id)) at += row.length;
-    if (at === ctxSets.length) ctxSets.push(...row);
-    return { t: 'aheadCtx', row: at, is: false };
+    ctxWords = [...CTX_WORDS];
+    return { t: 'aheadCtx', set: tokenSetOf(m), is: false };
   };
   // A negative lookahead. Over a one-token body it is the `ahead` test of that token's set, over
   // any other body the `look` test of that body; over an `ahead` or a `look` it is the same test
@@ -722,7 +721,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
     ...rules.flatMap((r) => (r.kind === 'rd' ? r.alts : [...r.nudBrackets.map((b) => b.steps), ...r.nudSeqs, ...r.nudCapped.map((c) => c.steps), ...r.leds.map((b) => b.steps)])),
     ...lookaheads,
   ]);
-  return { grammarName: grammar.name ?? 'grammar', entry: findEntryRule(grammar), tokens, puncts, gtComps, rules, tokenSets, ctxSets, lookaheads, shared, suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike };
+  return { grammarName: grammar.name ?? 'grammar', entry: findEntryRule(grammar), tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike };
 }
 
 // ── Shared steps: a repeated step sequence is one function ──
@@ -1110,6 +1109,7 @@ export function buildLexIdPlan(ir: ParserIR): LexIdPlan {
   }
   for (const body of ir.lookaheads) collectStepLitTexts(body, litTexts);
   for (const s of ir.tokenSets) for (const x of s.lits) litTexts.add(x);
+  for (const x of ir.ctxWords) litTexts.add(x);
   for (const s of ir.suppressSets) for (const x of s) litTexts.add(x);
   if (ir.regexCtx) {
     for (const x of ir.regexCtx.divisionTexts) litTexts.add(x);
@@ -1167,6 +1167,15 @@ export function tokenSetBits(plan: LexIdPlan, sets: readonly TokenSet[]): TokenS
 }
 
 /** Resolve lid for a known text; 0 if not in the plan (matches runtime lid_of). */
+/** The context bit and the literal id of each word of ParserIR.ctxWords (an `aheadCtx` test
+ *  refuses the token when the context has the bit and the token's lid is the word's). */
+export function ctxWordLids(ir: ParserIR, plan: LexIdPlan): Array<{ bit: number; lid: number }> {
+  return ir.ctxWords.map((w, i) => {
+    const lid = plan.lids.indexOf(w);
+    if (lid <= 0) throw new Error(`portable: context word ${JSON.stringify(w)} has no literal id`);
+    return { bit: 1 << i, lid };
+  });
+}
 export function lidOf(plan: LexIdPlan, text: string): number {
   const i = plan.lids.indexOf(text);
   return i >= 0 ? i : 0;

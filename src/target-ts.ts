@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -421,7 +421,7 @@ function stepBody(s: Step, ids: LexIdPlan, w: boolean): string {
     case 'alt': return `(() => { ${stepStmts(s, ids, w)} })()`;
     case 'look': return `${s.is ? '' : '!'}look${s.id}${S}(${ks})`;
     case 'ahead': return `ahead(${s.set}, ${s.is})`;
-    case 'aheadCtx': return `ahead(_CTX_SETS[${s.row} + _ctx]!, ${s.is})`;
+    case 'aheadCtx': return `aheadCtx(${s.set}, ${s.is})`;
     case 'seq': return `(${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'})`;
     case 'sameLine': return `(() => { const t = peek(); return t !== null && !t.nl; })()`;
     case 'suppress': return `(() => { ${stepStmts(s, ids, w)} })()`;
@@ -2269,7 +2269,7 @@ function emitAstRdAltSteps(
       case 'ahead':
         return `ahead(${s.set}, ${s.is})`;
       case 'aheadCtx':
-        return `ahead(_CTX_SETS[${s.row} + _ctx]!, ${s.is})`;
+        return `aheadCtx(${s.set}, ${s.is})`;
       case 'look': {
         const nv = local('Not');
         return `(() => { const ${nv}: unknown[] = []; return ${s.is ? '' : '!'}_shapeProbe(${nv}, _ap, () => ${emitSteps(ctx.look[s.id]!, nv)}); })()`;
@@ -3629,8 +3629,12 @@ function ahead(k: number, is: boolean): boolean {
   const t = peek();
   return t === null ? !is : inSet(k, t) === is;
 }
-// The sets an \`aheadCtx\` test reads (ParserIR.ctxSets): a row of one set per context word.
-const _CTX_SETS: number[] = [${ir.ctxSets.join(', ')}];
+// The \`aheadCtx\` test: the \`ahead\` test of set k, where a word the context in force reserves
+// (ParserIR.ctxWords) is also in the set.
+function aheadCtx(k: number, is: boolean): boolean {
+  const t = peek();
+  return t === null ? !is : (inSet(k, t)${ctxWordLids(ir, ids).map((w) => ` || ((_ctx & ${w.bit}) !== 0 && t.lid === ${w.lid})`).join('')}) === is;
+}
 // Whether the token after the current one is in set k (a longest-match candidate's SECOND guard).
 function secondIn(k: number): boolean {
   maxLook = Math.max(maxLook, pos + 2);
