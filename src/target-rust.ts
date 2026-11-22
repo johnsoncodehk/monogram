@@ -855,10 +855,10 @@ fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) 
 // nothing. Rust: a body is a non-capturing closure `|p| …` (a `fn(&mut Parser<B>) -> bool`, so no
 // environment is allocated), whose receiver is its own `p` (inner); a choice's statements are a
 // closure called in place; a suppress / ctx body is a block expression.
-function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean): StepLowering {
+function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true): StepLowering {
   const R = r ? '_r' : '';
   const L: StepLowering = {
-    inner: () => (recv === 'p' ? L : rsSteps(ids, 'p', r)),
+    inner: () => (recv === 'p' ? L : rsSteps(ids, 'p', r, guards)),
     shared: (id) => `${recv}.sub_${id}${R}()`,
     lit: (s) => (gtCompLit(ids, s) ? `${recv}.match_comp(${lidOf(ids, s.value)})` : `${recv}.match_lit${R}(${lidOf(ids, s.value)})`),
     tok: (name) => `${recv}.match_tok${R}(${kidOf(ids, name)})`,
@@ -870,9 +870,9 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean): StepLowering {
     // A body guard (emit-portable.ts annotateSteps) is tested inside an out-of-line helper
     // (`star_in` / `opt_in` / `sep_by_in`, `#[inline(never)]`, generic over the body: one small
     // function per site), so the function holding the step does not grow by the guarded attempt.
-    star: (body, g) => (g === null ? `${recv}.star${R}(|p| ${body})` : `${recv}.star_in${R}(${g}, |p| ${body})`),
-    opt: (body, g) => (g === null ? `${recv}.opt${R}(|p| ${body})` : `(!${recv}.ahead(${g}, true) || ${recv}.opt_out${R}(|p| ${body}))`),
-    sep: (elem, delim, g) => (g === null ? `${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})` : `(!${recv}.ahead(${g}, true) || ${recv}.sep_by_out${R}(|p| ${elem}, ${sepDelimLid(ids, delim)}))`),
+    star: (body, g) => (g === null || !guards ? `${recv}.star${R}(|p| ${body})` : `${recv}.star_in${R}(${g}, |p| ${body})`),
+    opt: (body, g) => (g === null || !guards ? `${recv}.opt${R}(|p| ${body})` : `(!${recv}.ahead(${g}, true) || ${recv}.opt_out${R}(|p| ${body}))`),
+    sep: (elem, delim, g) => (g === null || !guards ? `${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})` : `(!${recv}.ahead(${g}, true) || ${recv}.sep_by_out${R}(|p| ${elem}, ${sepDelimLid(ids, delim)}))`),
     altlit: (values) => `${recv}.alt_lit${R}(&[${values.map((v) => lidOf(ids, v)).join(', ')}])`,
     look: (id, is) => `${is ? '' : '!'}${recv}.look_${id}()`,
     ahead: (set, is) => `${recv}.ahead(${set}, ${is})`,
@@ -958,8 +958,7 @@ function ruleR(r: RuleIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
 function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
   const sig = `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {`;
-  const out: string[] = [];
-  const shell = ruleShell(r, ids, {
+  return ruleShell(r, ids, {
     ...rsRuleBase(ids, 'self'),
     steps: rsSteps(ids, 'self', false),
     fn: (lines) => `${sig}\n${lines.join('\n')}\n    }`,
@@ -968,17 +967,9 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
     peekOrFail: '        let t = match self.peek() { Some(t) => t, None => return None };',
     fail: '        self.back(save); self.scratch.truncate(sb); self.b.restore(ck);\n        None',
     openBest: (d) => `        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();\n        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(d)}`,
-    cand: (d, i, cond) => candRs(d, i, outlineRs(out, `${r.name}_a${i}`, cond), rid, markRs(d, i)),
+    cand: (d, i, cond) => candRs(d, i, cond, rid, markRs(d, i)),
     closeBest: '        self.pos = best_pos;\n        best',
   });
-  return [shell, ...out].join('\n');
-}
-// A candidate whose condition holds a nested construct (a closure: star / opt / sep / alt) is its
-// own out-of-line method, so the rule's dispatching function does not hold the arm's code [experiment c1].
-function outlineRs(out: string[], name: string, cond: string, always = false): string {
-  if (!always && !cond.includes('|p')) return cond;
-  out.push(`    #[inline(never)]\n    fn arm_${name}(&mut self) -> bool { ${cond} }`);
-  return `self.arm_${name}()`;
 }
 
 /** The entry rule with reuse recording (emit-portable entryShell): per-top-kid lookahead ext via
@@ -1076,7 +1067,6 @@ ${headUse}        loop {
 }
 function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
-  const out: string[] = [];
   const d = r.nudDispatch;
   // The operator tables (emit-portable prattOpTables) as `match` functions: LLVM compiles a match
   // on the lid returning constants to a lookup table, no hashing.
@@ -1091,7 +1081,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   const lost = lostRs;
   const fin = `self.finish(${rid}, sb, left.off as usize, left.tok_start as usize)`;
   const L: PrattLowering = {
-    steps: rsSteps(ids, 'self', false),
+    steps: rsSteps(ids, 'self', false, false),   // [variant a5] no body guards in Pratt arms
     ifAll: ifRs,
     kidIs: (k) => `t.kid == ${k}`,
     lidIs: (l) => `t.lid == ${l}`,
@@ -1107,7 +1097,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
             }
             self.back(save);
         }`,
-    nudSeq: (i, cond, tail, capped) => candRs(d, i, outlineRs(out, `${r.name}_s${i}`, cond, true), rid, `${markRs(d, i)} bf = 0; bt = ${tail}; bc = ${capped};`),
+    nudSeq: (i, cond, tail, capped) => candRs(d, i, cond, rid, `${markRs(d, i)} bf = 0; bt = ${tail}; bc = ${capped};`),
     // An operand that parses but is not the target the operator requires fails the whole Pratt
     // call, whatever another arm matched.
     nudPrefix: (i) => `        if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
@@ -1194,8 +1184,7 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
         best
     }`,
   };
-  const shell = prattShell(r, ir, ids, L);
-  return [shell, ...out].join('\n');
+  return prattShell(r, ir, ids, L);
 }
 
 
