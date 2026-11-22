@@ -7,7 +7,7 @@
 // comes from the generator itself (`generateTreeSitter(...).assertions`, decided beside the
 // rendering), so nothing is dropped without a record.
 //
-// The pinned counts are the record: a change that raises an inexact count fails; a change that
+// The pinned counts are the record: a change that raises a dropped or inexact count fails; a change that
 // lowers one must lower the pinned number in the same commit (the record moves with the generator).
 // Exact counts (`lowered`, `vacuous`) are pinned too, so a reclassification is visible.
 //   node test/treesitter-assertions.ts           check against the pinned counts
@@ -19,14 +19,19 @@ import { resolve } from 'node:path';
 import { generateTreeSitter, EXACT_ASSERTION_CLASSES, type AssertionClass, type AssertionRecord } from '../src/gen-treesitter.ts';
 import type { CstGrammar } from '../src/types.ts';
 
-const CLASSES: AssertionClass[] = ['lowered', 'vacuous', 'scanner', 'reserved', 'lookahead1', 'lookahead', 'left-context'];
+const CLASSES: AssertionClass[] = ['lowered', 'vacuous', 'reserved-set', 'scanner', 'reserved', 'lookahead1', 'lookahead', 'left-context'];
+// Rendered into grammar.js (every other class is dropped to blank()).
+const RENDERED: AssertionClass[] = ['lowered', 'reserved-set'];
 
 // Pinned on master 5a6c557 (editor lane, tree-sitter item 1a: the ledger made visible; no rendering change).
+// Item 1b: reserved-word guards before the word token render as tree-sitter reserved word sets
+// (js / jsx 41 of 43, ts / tsx 63 of 65; the two left are `not("new")` / `not("super")`, sets that
+// are no subset of the chain).
 const PINNED: Record<string, Partial<Record<AssertionClass, number>>> = {
-  javascript:      { vacuous: 6,  scanner: 27, reserved: 43, lookahead1: 37,  lookahead: 8 },
-  typescript:      { vacuous: 60, scanner: 92, reserved: 65, lookahead1: 133, lookahead: 69, 'left-context': 2 },
-  javascriptreact: { vacuous: 6,  scanner: 29, reserved: 43, lookahead1: 37,  lookahead: 8 },
-  typescriptreact: { vacuous: 60, scanner: 94, reserved: 65, lookahead1: 133, lookahead: 69, 'left-context': 2 },
+  javascript:      { vacuous: 6,  'reserved-set': 41, scanner: 27, reserved: 2, lookahead1: 37,  lookahead: 8 },
+  typescript:      { vacuous: 60, 'reserved-set': 63, scanner: 92, reserved: 2, lookahead1: 133, lookahead: 69, 'left-context': 2 },
+  javascriptreact: { vacuous: 6,  'reserved-set': 41, scanner: 29, reserved: 2, lookahead1: 37,  lookahead: 8 },
+  typescriptreact: { vacuous: 60, 'reserved-set': 63, scanner: 94, reserved: 2, lookahead1: 133, lookahead: 69, 'left-context': 2 },
   yaml:            { lowered: 1,  scanner: 16, lookahead1: 6 },
 };
 
@@ -35,14 +40,15 @@ const count = (rs: AssertionRecord[]) => {
   for (const r of rs) out[r.cls] = (out[r.cls] ?? 0) + 1;
   return out;
 };
+const dropped = (c: Partial<Record<AssertionClass, number>>) => CLASSES.filter(k => !RENDERED.includes(k)).reduce((s, k) => s + (c[k] ?? 0), 0);
 const inexact = (c: Partial<Record<AssertionClass, number>>) =>
   CLASSES.filter(k => !EXACT_ASSERTION_CLASSES.includes(k)).reduce((s, k) => s + (c[k] ?? 0), 0);
 
 const showRules = process.argv.includes('--rules');
 const showList = process.argv.includes('--list');
 const summary: string[] = ['### tree-sitter: zero-width assertions per grammar', '',
-  'Only `lowered` is rendered and `vacuous` drops are proven exact; every other class is dropped and the generated grammar may accept more than the grammar (the class names the lowering that would make it exact). Gate: `test/treesitter-assertions.ts`.', '',
-  `| grammar | ${CLASSES.join(' | ')} | inexact |`, `|---|${CLASSES.map(() => '---:').join('|')}|---:|`];
+  '`lowered` and `reserved-set` are rendered; `lowered` and `vacuous` are exact. Every other class is dropped and the generated grammar may accept more than the grammar (the class names the lowering that would make it exact); `reserved-set` is exact except in parse states shared with a less reserved word position. Gate: `test/treesitter-assertions.ts`.', '',
+  `| grammar | ${CLASSES.join(' | ')} | dropped | inexact |`, `|---|${CLASSES.map(() => '---:').join('|')}|---:|---:|`];
 const perRule: string[] = [];
 let bad = 0;
 for (const [name, pinned] of Object.entries(PINNED)) {
@@ -53,13 +59,13 @@ for (const [name, pinned] of Object.entries(PINNED)) {
   const ok = diffs.length === 0;
   if (!ok) bad++;
   const fmt = (c: Partial<Record<AssertionClass, number>>) => CLASSES.map(k => `${k} ${c[k] ?? 0}`).join(', ');
-  console.log(`${ok ? '✓' : '✗'} ${name}: ${records.length} assertion(s), ${inexact(got)} inexact (${fmt(got)})`);
+  console.log(`${ok ? '✓' : '✗'} ${name}: ${records.length} assertion(s), ${dropped(got)} dropped, ${inexact(got)} inexact (${fmt(got)})`);
   if (!ok) {
-    const rose = inexact(got) > inexact(pinned) || diffs.some(k => !EXACT_ASSERTION_CLASSES.includes(k) && (got[k] ?? 0) > (pinned[k] ?? 0));
+    const rose = inexact(got) > inexact(pinned) || dropped(got) > dropped(pinned) || diffs.some(k => !EXACT_ASSERTION_CLASSES.includes(k) && !RENDERED.includes(k) && (got[k] ?? 0) > (pinned[k] ?? 0));
     console.log(`    pinned: ${fmt(pinned)}${rose ? ' (a change ADDED inexact drops)' : ' (update the pinned counts)'}`);
   }
   if (showList) for (const r of [...records].sort((a, b) => CLASSES.indexOf(a.cls) - CLASSES.indexOf(b.cls))) console.log(`    ${r.cls.padEnd(12)} ${r.rule}: ${r.text}`);
-  summary.push(`| ${name} | ${CLASSES.map(k => got[k] ?? 0).join(' | ')} | ${inexact(got)} |`);
+  summary.push(`| ${name} | ${CLASSES.map(k => got[k] ?? 0).join(' | ')} | ${dropped(got)} | ${inexact(got)} |`);
   const byRule = new Map<string, AssertionRecord[]>();
   for (const r of records) { const k = `${r.rule} (${r.kind})`; if (!byRule.has(k)) byRule.set(k, []); byRule.get(k)!.push(r); }
   const rows = [...byRule].map(([k, rs]) => ({ k, c: count(rs) })).sort((a, b) => inexact(b.c) - inexact(a.c) || a.k.localeCompare(b.k));

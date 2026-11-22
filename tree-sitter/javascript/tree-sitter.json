@@ -1,0 +1,14 @@
+{
+  "grammars": [
+    {
+      "name": "javascript",
+      "scope": "source.js",
+      "path": ".",
+      "highlights": "queries/highlights.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.0.0",
+    "license": "MIT"
+  }
+}
