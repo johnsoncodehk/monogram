@@ -67,8 +67,8 @@ const biRs = (d: Dispatch) => (d.ranked.length ? ' let mut bi: i32 = -1;' : '');
 // Every one is printed by one of these, so what a frame costs in the output is decided here.
 // The checkpoint (position, scratch length, builder checkpoint) taken over the parser `p`, and the
 // undo back to it.
-const ckptRs = (p: string) => `let sp = ${p}.pos; let sb = ${p}.scratch.len(); let ck = ${p}.b.checkpoint();`;
-const undoRs = (p: string) => `${p}.back(sp); ${p}.scratch.truncate(sb); ${p}.b.restore(ck);`;
+const ckptRs = (p: string) => `let m = ${p}.mark();`;
+const undoRs = (p: string) => `${p}.reset(m);`;
 // BRANCH frame: one branch of an ordered choice (`alt`), over `p`: it returns true from the
 // choice when the branch matched, and undoes it when it did not.
 const branchRs = (cond: string) => `{ ${ckptRs('p')} if ${cond} { return true; } ${undoRs('p')} }`;
@@ -772,7 +772,7 @@ function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: F
 }
 // ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
 function lookFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  return ir.lookaheads.map((body, id) => `    fn look_${id}(&mut self) -> bool { let p = self; ${ckptRs('p')} let m = ${body.map((x) => stepCondP(x, ids, ar)).join(' && ')}; ${undoRs('p')} m }\n`).join('');
+  return ir.lookaheads.map((body, id) => `    fn look_${id}(&mut self) -> bool { let p = self; ${ckptRs('p')} let r = ${body.map((x) => stepCondP(x, ids, ar)).join(' && ')}; ${undoRs('p')} r }\n`).join('');
 }
 // ParserIR.shared, one method each: the step, run against the parser's scratch list and builder.
 // It undoes nothing: a failed step leaves what it advanced and appended for the construct around
@@ -1977,6 +1977,10 @@ ${shapeB ? `    #[inline(always)]
 /// Parser-side span+handle frame. Span fields are independent of H (Pratt never reads H for spans).
 #[derive(Clone, Copy)]
 struct Spanned<H: Copy> { h: H, off: u32, tok_start: u32, present: bool }
+/// Where a construct that may have to undo what it tries starts: the position, the scratch length
+/// and the builder's checkpoint. Parser::reset goes back to it.
+#[derive(Clone, Copy)]
+struct Mark { pos: usize, sb: usize, ck: (usize, usize) }
 
 #[derive(Default)]
 pub struct CstBuilder {
@@ -2262,6 +2266,11 @@ impl<'a, B: Builder> Parser<'a, B> {
     #[inline(always)]
     fn look_reset(&mut self) { self.max_look = 0; self.peek_end = 0; }
     #[inline(always)]
+    fn mark(&self) -> Mark { Mark { pos: self.pos, sb: self.scratch.len(), ck: self.b.checkpoint() } }
+    /// Undo everything since m: the position (as back), the scratch list and the builder.
+    #[inline(always)]
+    fn reset(&mut self, m: Mark) { self.back(m.pos); self.scratch.truncate(m.sb); self.b.restore(m.ck); }
+    #[inline(always)]
     #[allow(dead_code)]
     fn ahead(&mut self, k: usize, is: bool) -> bool { match self.peek() { Some(t) => in_token_set(k, &t) == is, None => !is } }
     #[inline(always)]
@@ -2343,26 +2352,26 @@ impl<'a, B: Builder> Parser<'a, B> {
     #[inline(always)]
     fn star(&mut self, once: fn(&mut Parser<'a, B>) -> bool) -> bool {
         loop {
-            let sp = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
-            if !once(self) { self.back(sp); self.scratch.truncate(sb); self.b.restore(ck); break; }
+            let m = self.mark();
+            if !once(self) { self.reset(m); break; }
         }
         true
     }
     #[inline(always)]
     fn opt(&mut self, body: fn(&mut Parser<'a, B>) -> bool) -> bool {
-        let sp = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
-        if !body(self) { self.back(sp); self.scratch.truncate(sb); self.b.restore(ck); }
+        let m = self.mark();
+        if !body(self) { self.reset(m); }
         true
     }
     #[inline(always)]
     fn sep_by(&mut self, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
-        let sp0 = self.pos; let sb0 = self.scratch.len(); let ck0 = self.b.checkpoint();
-        if !elem(self) { self.back(sp0); self.scratch.truncate(sb0); self.b.restore(ck0); return true; }
+        let m0 = self.mark();
+        if !elem(self) { self.reset(m0); return true; }
         loop {
-            let sp = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
-            if !self.match_lit(delim, ${punctId}) { self.back(sp); self.scratch.truncate(sb); self.b.restore(ck); break; }
-            let sp2 = self.pos; let sb2 = self.scratch.len(); let ck2 = self.b.checkpoint();
-            if !elem(self) { self.back(sp2); self.scratch.truncate(sb2); self.b.restore(ck2); break; }
+            let m = self.mark();
+            if !self.match_lit(delim, ${punctId}) { self.reset(m); break; }
+            let m2 = self.mark();
+            if !elem(self) { self.reset(m2); break; }
         }
         true
     }

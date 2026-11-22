@@ -58,10 +58,10 @@ const biGo = (d: Dispatch) => (d.ranked.length ? '; bi := -1' : '');
 // Every one is printed by one of these, so what a frame costs in the output is decided here. The
 // checkpoint (position, scratch length, arena lengths) and the undo back to it, in the native
 // engine; the builder engine's checkpoint is the builder's (ckptGoW / undoGoW).
-const ckptGo = 'save := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids);';
-const undoGo = 'p.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]';
-const ckptGoW = (recv: string) => `sp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}`;
-const undoGoW = (recv: string) => `p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}`;
+const ckptGo = 'm := p.mark();';
+const undoGo = 'p.reset(m)';
+const ckptGoW = (_recv: string) => 'm := p.mark()';
+const undoGoW = (_recv: string) => 'p.back(m.pos); p.scratch = p.scratch[:m.sb]; p.b.Restore(m.nb, m.kb)';
 // BRANCH frame: one branch of an ordered choice (`alt`): it returns true from the choice when the
 // branch matched, and undoes it when it did not.
 const branchGo = (cond: string) => `{ ${ckptGo} if ${cond} { return true }; ${undoGo} }`;
@@ -525,7 +525,15 @@ func (p *${recv}) back(sp int) { if p.peekEnd > p.maxLook { p.maxLook = p.peekEn
 // lookEnd: one past the furthest token the current entry examined.
 func (p *${recv}) lookEnd() int { if p.peekEnd > p.maxLook { return p.peekEnd }; return p.maxLook }
 // lookReset starts recording an entry's extent.
-func (p *${recv}) lookReset() { p.maxLook = 0; p.peekEnd = 0 }`;
+func (p *${recv}) lookReset() { p.maxLook = 0; p.peekEnd = 0 }
+// mark: where a construct that may have to undo what it tries starts; ${recv === 'engine' ? 'reset undoes everything since (the position as back does, the scratch list and the arena).' : 'undoGoW undoes everything since.'}
+${recv === 'engine'
+  ? `func (p *engine) mark() mark { return mark{p.pos, len(p.scratch), len(p.nodes), len(p.kids)} }
+func (p *engine) reset(m mark) { p.back(m.pos); p.scratch = p.scratch[:m.sb]; p.nodes = p.nodes[:m.nb]; p.kids = p.kids[:m.kb] }`
+  // Written so that it fits Go's inlining budget (cost 77 of 80). A reset method around the
+  // builder's Restore cannot (cost 86 and more with every form tried), and a call where the undo
+  // was inline would be added work on every failed branch, so the undo stays printed in place.
+  : `func (p *${recv}) mark() (m mark) { m.nb, m.kb = p.b.Checkpoint(); m.pos, m.sb = p.pos, len(p.scratch); return }`}`;
 }
 // '>'-led composite operators (LexIdPlan.gtComps): the lexer scans every '>' alone. gtOp reads the
 // operator at ts[i]: a lone '>' extends over each adjacent single-character punct token after it
@@ -621,7 +629,7 @@ function stepStmts(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
 
 // ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
 function lookFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  return ir.lookaheads.map((body, id) => `func (p *engine) look${id}() bool { ${ckptGo} m := ${body.map((x) => stepCond(x, ids, ar)).join(' && ')}; ${undoGo}; return m }\n`).join('');
+  return ir.lookaheads.map((body, id) => `func (p *engine) look${id}() bool { ${ckptGo} r := ${body.map((x) => stepCond(x, ids, ar)).join(' && ')}; ${undoGo}; return r }\n`).join('');
 }
 
 // ParserIR.shared, one method each: the step, run against the parser's scratch list. It undoes
@@ -1575,7 +1583,7 @@ function altBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: F
 }
 // ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
 function lookFnsW(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  return ir.lookaheads.map((body, id) => `func (p *${recv}) look${id}W() bool { ${ckptGoW(recv)}; m := ${body.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')}; ${undoGoW(recv)}; return m }\n`).join('');
+  return ir.lookaheads.map((body, id) => `func (p *${recv}) look${id}W() bool { ${ckptGoW(recv)}; r := ${body.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')}; ${undoGoW(recv)}; return r }\n`).join('');
 }
 function sharedFnsW(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
   return ir.shared.map((s, id) => `func (p *${recv}) sub${id}W() bool { ${stepStmtsW(s, ids, ar, recv)} }\n`).join('');
@@ -3149,6 +3157,9 @@ type postOp struct{ lbp int; tgt bool }
 // metadata. A Doc owns one for its lifetime; ParseWith uses a fresh one per call. Nothing the
 // parser or lexer mutates is package-level, so different Docs, ParseWith and Tokenize are
 // independent (and safe from concurrent goroutines); a single Doc is not safe for concurrent use.
+// mark: the position, scratch length and arena (or builder checkpoint) lengths a construct that
+// may have to undo what it tries starts from (engine.mark / reset, parserW.mark / reset).
+type mark struct{ pos, sb, nb, kb int }
 type engine struct {
 \ttoks []Tok
 \tpos, maxLook int
@@ -3290,11 +3301,11 @@ func (p *engine) callRule(id int32) bool {
 \tp.scratch = append(p.scratch, id); return true
 }
 func (p *engine) star(once func() bool) bool {
-\tfor { sp := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids); if !once() { p.back(sp); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; break } }
+\tfor { m := p.mark(); if !once() { p.reset(m); break } }
 \treturn true
 }
 func (p *engine) opt(body func() bool) bool {
-\tsp := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids); if !body() { p.back(sp); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb] }; return true
+\tm := p.mark(); if !body() { p.reset(m) }; return true
 }
 func (p *engine) sepBy(elem func() bool, delimLid uint16) bool {
 \tsp0 := p.pos; sb0 := len(p.scratch); nb0 := len(p.nodes); kb0 := len(p.kids)
