@@ -7,11 +7,16 @@
 //      branches and every other node, in memory) emit byte-identical parsers for every target.
 //   3. the deriver: a repeated derived name is suffixed and reported; an author-written name is
 //      never suffixed; two equal written names in one scope are an error.
+//   4. the portable IR carries the names (src/emit-portable.ts, Step NAMES): an rd rule's
+//      `altNames`, a Pratt rule's `nudNames` / `ledNames` / `ledLeftNames` / `postfixTokNames` /
+//      `opNames`, a step's `field`, an inline alternation's `branchNames`, each the deriver's; with
+//      them dropped, the IR of a named grammar equals the unnamed one's.
 import { createHash } from 'node:crypto';
 import { emitParser, tsTarget, jsTarget, goTarget, rustTarget } from '../src/emit.ts';
 import { createParser } from '../src/gen-parser.ts';
 import { generateCstMatch } from '../src/gen-cst-match.ts';
 import { nameReport, nameRule } from '../src/grammar-names.ts';
+import { portableIR, type RdRule, type PrattRule, type Step } from '../src/emit-portable.ts';
 import type { CstGrammar, RuleExpr } from '../src/types.ts';
 import { rule, alt, arm, field, defineGrammar, token, many, opt, seq, range, star } from '../src/api.ts';
 import calc from './fixtures/calc.ts';
@@ -70,6 +75,52 @@ for (const name of ['javascript', 'typescript']) {
     const a = emitParser(g, target), b = emitParser(named, target);
     check(a === b, `${name} ${t} parser byte-identical with a name on every node (${sha(a)})`, `${sha(a)} vs ${sha(b)}`);
   }
+}
+
+// ── 4. the names in the portable IR ──
+const IR_NAMES = new Set(['field', 'branchNames', 'altNames', 'nudNames', 'ledNames', 'ledLeftNames', 'postfixTokNames', 'opNames']);
+const irSyntax = (g: CstGrammar): string => JSON.stringify(portableIR(g), (k, v) => (IR_NAMES.has(k) ? undefined : v));
+const stepFields = (steps: readonly Step[]): string[] => steps.flatMap((s): string[] => {
+  const own = s.field !== undefined ? [s.field] : [];
+  switch (s.t) {
+    case 'star': return [...own, ...stepFields([s.step])];
+    case 'sep': return [...own, ...stepFields([s.elem])];
+    case 'opt': case 'seq': case 'suppress': case 'ctx': return [...own, ...stepFields(s.steps)];
+    case 'alt': return [...own, ...s.branches.flatMap(stepFields)];
+    default: return own;
+  }
+});
+{
+  const ir = portableIR(namedCalc);
+  const stmt = ir.rules.find((r) => r.name === 'Stmt') as RdRule, expr = ir.rules.find((r) => r.name === 'Expr') as PrattRule;
+  const program = ir.rules.find((r) => r.name === 'Program') as RdRule;
+  check(JSON.stringify(stmt.altNames) === '["letDeclaration","expression"]' && JSON.stringify(stmt.alts.map(stepFields)) === '[["binding","initializer"],["expression"]]',
+    'IR: Stmt altNames and step fields as written', JSON.stringify([stmt.altNames, stmt.alts.map(stepFields)]));
+  check(JSON.stringify(program.altNames) === '["program"]' && JSON.stringify(stepFields(program.alts[0]!)) === '["statement"]',
+    'IR: a named child inside many()', JSON.stringify([program.altNames, stepFields(program.alts[0]!)]));
+  check(JSON.stringify(expr.nudNames) === '["number","name","parenthesized","prefixOp"]' && JSON.stringify(expr.opNames) === '{"binary":"binaryOp","prefix":"prefixOp","postfix":"postfixOp"}'
+    && JSON.stringify(expr.nudBrackets.map((b) => stepFields(b.steps))) === '[["expression"]]',
+    'IR: Expr NUD arm names (the prefix arm by its operator form), operator forms, a bracket arm\'s field', JSON.stringify([expr.nudNames, expr.opNames]));
+  check(irSyntax(namedCalc) === irSyntax(calc), 'IR: namedcalc with its names dropped equals calc');
+}
+{
+  const Id = token(seq(range('a', 'z'), star(range('a', 'z'))), { identifier: true });
+  const R = rule(() => [['x', alt(arm('one', 'a', Id), arm('two', 'b', Id)), opt('else', field('alternate', Id))]]);
+  const r = portableIR(defineGrammar({ name: 'n6', tokens: { Id }, rules: { R } })).rules[0] as RdRule;
+  const a = r.alts[0]!.find((s) => s.t === 'alt');
+  check(a?.t === 'alt' && JSON.stringify(a.branchNames) === '["one","two"]' && a.field === 'alt' && JSON.stringify(stepFields(r.alts[0]!)) === '["alt","id","id","elseTok","alternate"]',
+    'IR: an inline alternation\'s branchNames and field; the elseTok anchor on its literal', JSON.stringify(r.alts[0]));
+}
+for (const name of ['javascript', 'typescript']) {
+  const g = (await import(`../${name}.ts`)).default as CstGrammar;
+  const ir = portableIR(g);
+  const rd = ir.rules.filter((r): r is RdRule => r.kind === 'rd'), pr = ir.rules.filter((r): r is PrattRule => r.kind === 'pratt');
+  const full = rd.every((r) => r.altNames.length === r.alts.length)
+    && pr.every((r) => r.nudNames.length === r.nudOrder.length && r.ledNames.length === r.leds.length && r.ledLeftNames.length === r.leds.length && r.postfixTokNames.length === r.postfixToks.length);
+  const fields = [...rd.flatMap((r) => r.alts.flatMap(stepFields)), ...pr.flatMap((r) => [...r.nudSeqs, ...r.nudBrackets.map((b) => b.steps), ...r.leds.map((b) => b.steps)].flatMap(stepFields))];
+  check(full, `${name}: IR arm names parallel to every arm list`);
+  check(fields.length > 300, `${name}: the IR carries the deriver's child names (${fields.length} step fields)`);
+  check(irSyntax(nameEverything(g)) === irSyntax(g), `${name}: IR with a name on every node equals the plain IR once names are dropped`);
 }
 
 // ── 3. the deriver's rules ──
