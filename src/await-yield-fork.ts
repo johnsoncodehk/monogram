@@ -82,7 +82,11 @@ export function withAwaitYield(grammar: CstGrammar): CstGrammar {
   // ── 2. Rewrite an expr for emission in family `fam` (null = plain/base): a ref to a
   // rule in closure[fam] becomes the $F clone; a nested ctx marker switches family;
   // a reset marker drops to plain; a GUARD_RULE ref takes the family-suffixed guard. ──
+  // A rebuilt node keeps the grammar names of the node it replaces (src/grammar-names.ts).
   function rewrite(expr: RuleExpr, fam: Family | null): RuleExpr {
+    return keepNames(expr, rewriteNode(expr, fam));
+  }
+  function rewriteNode(expr: RuleExpr, fam: Family | null): RuleExpr {
     if (!expr || typeof expr !== 'object') return expr;
     switch (expr.type) {
       case 'ref': {
@@ -154,7 +158,8 @@ export function dropForks(grammar: CstGrammar): CstGrammar {
   const canonOf = new Map<string, string>();
   for (const r of grammar.rules) if (r.canon) canonOf.set(r.name, r.canon);
   if (canonOf.size === 0) return grammar;
-  const reref = (e: RuleExpr): RuleExpr => {
+  const reref = (e: RuleExpr): RuleExpr => keepNames(e, rerefNode(e));
+  const rerefNode = (e: RuleExpr): RuleExpr => {
     if (!e || typeof e !== 'object') return e;
     switch (e.type) {
       case 'ref':
@@ -180,4 +185,15 @@ function addReserved(inner: RuleExpr, words: string[]): RuleExpr {
   const lits = words.map((w): RuleExpr => ({ type: 'literal', value: w }));
   if (inner.type === 'alt') return { type: 'alt', items: [...inner.items, ...lits] };
   return { type: 'alt', items: [inner, ...lits] };
+}
+
+// The `arm` / `field` names a node carries (src/grammar-names.ts) survive a transform that
+// rebuilds it: the fork and its reversal change which rule a reference names, never what an
+// item is called.
+function keepNames(from: RuleExpr, to: RuleExpr): RuleExpr {
+  if (!from || typeof from !== 'object' || from === to || (from.arm === undefined && from.field === undefined)) return to;
+  const out = { ...to };
+  if (from.arm !== undefined) out.arm = from.arm;
+  if (from.field !== undefined) out.field = from.field;
+  return out;
 }

@@ -397,7 +397,7 @@ say('the Go rows are NOT RUN.');
 say();
 say(`Inputs (locked npm packages): \`acorn@${pkgVersion('acorn')}\` \`dist/acorn.js\`, \`typescript@${pkgVersion('typescript')}\` \`lib/lib.es5.d.ts\` and \`lib/_tsserver.js\` (also repeated 4×: per-token counts must not grow with size).`);
 say();
-say('Modes. TS target: `parse(src)` (the CST built directly) and `parseWith(src, cstBuilder)` (through builder frames).');
+say('Modes. TS target: `parse(src)` and `parseWith(src, cstBuilder)`: one engine, run with the CST builder; `parse` adds no step of its own.');
 say('JS target: `fresh` = a new `createParser()` per parse, `reuse` = one parser, its document reused. Go: `fresh` = a new');
 say('`CstBuilder` per `ParseWith`, `reuse` = one kept. RESULT = what the returned tree holds (TS: objects reachable from');
 say('it; Go fresh: the final capacity of `Nodes` / `Kids` / `Toks`); OVERHEAD = everything else, garbage once the parse');

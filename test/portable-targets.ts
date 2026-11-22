@@ -1414,6 +1414,13 @@ const NON_ASCII_LEX: string[] = [
   '/* é\u2028 */ x', '/* 日本 */ x\n// é\u2029\ny', '// a\u2028\nb', '/** ドキュメント\u2029 */ y', '/* — ’ … */ z', '// — ’ …\nz',
   'const r = /日本語/u.test(s);', 'x = a / 日 / b;', 'const t = `日本${変数}語 😀`;', "s = '日本\\'語' + \"é\";",
   'const 変数 = 関数(引数, ŉame);', 'let café = naïve + résumé;', 'é', '😀', 'a\u0301b', 'x\u200Cy', '#!é\nx',
+  // Identifier characters by Unicode property, across scripts and planes: combining marks (Mn, Mc),
+  // ZWJ, connector punctuation (Pc), Other_ID_Start / Other_ID_Continue, letter numbers (Nl),
+  // astral ID_Start and ID_Continue, and characters that are letters but not ID_Start
+  // (Pattern_Syntax U+2E2F) or symbols (U+2603), which start no identifier.
+  'x\u200Dy', 'क्षत्रिय = 1;', 'a\u203Fb + \u2040', '℘ + ℮ + ゛', 'a\u00B7b', 'ⅰⅱ + Ⅻ', 'ab\u0903c',
+  '𝑥 = 𝑦 + 1;', 'let 𐐀𐐁 = 1;', 'a\u{E0100}b', '_\u0301', '$\u200C', 'x\u{1F600}', '\u2E2F', 'a\u2E2Fb', 'x = \u2603;',
+  'éa1 + a1é', 'α.β?.γ', 'x\u0301\u0301\u0301',
 ];
 
 /** Reject cases. `lexMsg` set ⇒ expect that primary lexer message (≡ oracle). */
@@ -1550,16 +1557,6 @@ const ECMASCRIPT = new Set(['javascript', 'typescript']);
 // and the targets it holds for (all when absent).
 type ExpectedFail = { grammars: string[]; reason: string; inputs?: string[]; oracleLexError?: RegExp; targets?: string[] };
 const CORPUS_EXPECTED_FAIL: ExpectedFail[] = [
-  {
-    // Owed (lexer lane, non-ASCII item): the Rust target's ID_Continue is `char::is_alphanumeric`
-    // (std has no general-category query), which lacks the combining marks (Mn / Mc) and connector
-    // punctuation (Pc) outside Other_Alphabetic, so `a` + U+0301 + `b` is one identifier in the
-    // interpreter and Go, an unexpected character in Rust. The fix is an ID_Continue table.
-    grammars: ['javascript', 'typescript'],
-    targets: ['rust'],
-    reason: 'Rust ID_Continue lacks Mn / Mc / Pc outside Other_Alphabetic (a combining mark continues no identifier)',
-    inputs: ['a\u0301b'],
-  },
   {
     // Owed: the rule lives in the interpreter's lexer alone (emit-lexer.ts lexIdentValid); a
     // portable lexer would need each target's Unicode ID_Start / ID_Continue tables to decode
