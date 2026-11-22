@@ -180,7 +180,7 @@ module.exports = grammar({
 
     jsxtag_name: $ => seq(reserved("unreserved", $.ident), repeat(choice(seq(".", reserved("unreserved", $.ident)), seq(":", reserved("unreserved", $.ident)), seq("-", reserved("unreserved", $.ident))))),
 
-    jsxattr_value: $ => choice($.string, seq("{", $.expr, "}")),
+    jsxattr_value: $ => choice($.jsxstring, seq("{", $.expr, "}")),
 
     jsxattr: $ => choice(seq("{", "...", $.expr, "}"), seq(reserved("unreserved", $.ident), repeat(choice(seq(".", reserved("unreserved", $.ident)), seq(":", reserved("unreserved", $.ident)), seq("-", reserved("unreserved", $.ident)))), optional(seq("=", $.jsxattr_value)))),
 
@@ -219,6 +219,8 @@ module.exports = grammar({
     jsxclose: $ => token(/<\//),
 
     jsxtext: $ => token(/[^{<>}]+/),
+
+    jsxstring: $ => token(/"[^"]*"|'[^']*'/),
 
     decorator: $ => token(/@(?:(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[a-zA-Z0-9_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\}|\.)*)?/),
 

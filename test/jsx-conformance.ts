@@ -45,6 +45,11 @@ const validJsx: string[] = [
   `const w = <a>{\`x\${<b>y's</b>}\`}</a>;`,
   `x</*c*/y`,
   `const r = />/.test(s);`,
+  // an attribute string is the tag's own token: no escapes, may span lines (tsc's scanJsxAttributeValue)
+  `let a = <a b="\\" c="d" />;`,
+  `let a = <a b='\\' c='it"s' d="it's" />;`,
+  `let a = <a b="x\ny" />;`,
+  `let a = <a b={"\\\"" + 'q'} />;`,
 ];
 
 // ── Corpus 2: plain JavaScript still parses under the .jsx grammar ──
@@ -100,10 +105,9 @@ for (const c of par_fail) console.log('    DIVERGED from base (withJsx changed t
 // differs from tsc's parser-driven scanner (ElementRegion in src/types.ts). A row that starts
 // parsing fails the gate until it moves to corpus 1.
 const unsupported: [string, string][] = [
-  ['needs a tag-only attribute-string token in the region: backslash at the end of a JSX attribute string', `let a = <a b="\\" c="d" />;`],
 ];
 // Invalid JSX the element region must reject.
-const invalidJsx: string[] = [`const a = <p>a > b</p>;`, `const b = <p>a } b</p>;`, `const c = <a>x;`, `x = a </ b;`];
+const invalidJsx: string[] = [`const a = <p>a > b</p>;`, `const b = <p>a } b</p>;`, `const c = <a>x;`, `x = a </ b;`, `let a = <a b="x />;`];
 const overAccepted = invalidJsx.filter(weAccept);
 console.log(`\n── Corpus 5: invalid JSX must be rejected ── ${invalidJsx.length - overAccepted.length}/${invalidJsx.length}`);
 for (const c of invalidJsx.filter(jsxAccepts)) console.log('    WARNING — tsc accepts this invalid snippet: ' + JSON.stringify(c));
