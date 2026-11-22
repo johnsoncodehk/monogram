@@ -567,7 +567,7 @@ function stepBody(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
     case 'alt': return `func() bool { ${stepStmts(s, ids, ar)} }()`;
     case 'look': return `${s.is ? '' : '!'}p.look${s.id}()`;
     case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
-    case 'aheadCtx': return `p.aheadCtx(${s.set}, ${s.is})`;
+    case 'aheadCtx': return s.is ? `(p.ahead(${s.set}, true) || p.ctxWord())` : `(p.ahead(${s.set}, false) && !p.ctxWord())`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `func() bool { t := p.peek(); return t != nil && !t.Nl }()`;
     case 'suppress': return `func() bool { ${stepStmts(s, ids, ar)} }()`;
@@ -1526,7 +1526,7 @@ function stepBodyW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
     case 'alt': return `func() bool { ${stepStmtsW(s, ids, ar, recv)} }()`;
     case 'look': return `${s.is ? '' : '!'}p.look${s.id}W()`;
     case 'ahead': return `p.aheadW(${s.set}, ${s.is})`;
-    case 'aheadCtx': return `p.aheadCtxW(${s.set}, ${s.is})`;
+    case 'aheadCtx': return s.is ? `(p.aheadW(${s.set}, true) || p.ctxWord())` : `(p.aheadW(${s.set}, false) && !p.ctxWord())`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'})`;
     case 'sameLine': return `func() bool { t := p.peekW(); return t != nil && !t.Nl }()`;
     case 'suppress': return `func() bool { ${stepStmtsW(s, ids, ar, recv)} }()`;
@@ -1986,7 +1986,7 @@ func (p *${recv}) peekW() *Tok {
 }
 ${lookRecordGo(recv)}
 func (p *${recv}) aheadW(k int, is bool) bool { t := p.peekW(); return (t != nil && inTokenSet(k, t)) == is }
-func (p *${recv}) aheadCtxW(k int, is bool) bool { t := p.peekW(); return (t != nil && (inTokenSet(k, t) || inCtxWords(p.ctx, t))) == is }
+func (p *${recv}) ctxWord() bool { return p.ctx != 0 && p.pos < len(p.toks) && inCtxWords(p.ctx, &p.toks[p.pos]) }
 // secondInW: whether the token after the current one is in tokenSets[k] (a candidate's SECOND guard).
 func (p *${recv}) secondInW(k int) bool { i := p.pos + 1; if i >= p.maxLook { p.maxLook = i + 1 }; return i < len(p.toks) && inTokenSet(k, &p.toks[i]) }
 func (p *${recv}) offAtW(i int) int { if i < len(p.toks) { return int(p.toks[i].Off) }; return 0 }
@@ -2688,7 +2688,8 @@ func inTokenSet(k int, t *Tok) bool {
 \tw := k >> 5
 \treturn (_tokenSets[t.Lid][w]|_tokenSets[_tokenSetKid+int(t.Kid)][w])&(1<<(k&31)) != 0
 }
-// inCtxWords: whether t is a word the context ctx reserves (ParserIR.ctxWords; an \`aheadCtx\` test).
+// inCtxWords: whether t is a word the context ctx reserves (ParserIR.ctxWords): with the \`ahead\` test
+// of the guard's own set, an \`aheadCtx\` test.
 func inCtxWords(ctx uint8, t *Tok) bool { return false${ctxWordLids(ir, ids).map((w) => ` || (ctx&${w.bit} != 0 && t.Lid == ${w.lid})`).join('')} }`;
 }
 
@@ -3208,7 +3209,8 @@ func (p *engine) peek() *Tok {
 ${lookRecordGo('engine')}
 ${tokenSetRuntimeGo(ir, ids)}
 func (p *engine) ahead(k int, is bool) bool { t := p.peek(); return (t != nil && inTokenSet(k, t)) == is }
-func (p *engine) aheadCtx(k int, is bool) bool { t := p.peek(); return (t != nil && (inTokenSet(k, t) || inCtxWords(p.ctx, t))) == is }
+// ctxWord: whether the next token is a word the context in force reserves; outside every context it reads nothing.
+func (p *engine) ctxWord() bool { return p.ctx != 0 && p.pos < len(p.toks) && inCtxWords(p.ctx, &p.toks[p.pos]) }
 // secondIn: whether the token after the current one is in tokenSets[k] (a candidate's SECOND guard).
 func (p *engine) secondIn(k int) bool { i := p.pos + 1; if i >= p.maxLook { p.maxLook = i + 1 }; return i < len(p.toks) && inTokenSet(k, &p.toks[i]) }
 func (p *engine) offAt(i int) int { if i < len(p.toks) { return int(p.toks[i].Off) }; return 0 }
