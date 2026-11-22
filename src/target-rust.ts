@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattLedExits, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, dispatchWalk, gtCompLit, guardedSteps, type StepLowering, type DispatchLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, dispatchWalk, gtCompLit, type StepLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -1071,127 +1071,76 @@ function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaI
 }
 
 function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  const tpl = ir.tpl;
   const rid = ruleIdOf(ar, r.name);
+  const d = r.nudDispatch;
   // The operator tables (emit-portable prattOpTables) as `match` functions: LLVM compiles a match
   // on the lid returning constants to a lookup table, no hashing.
   const ops = prattOpTables(r, ids);
   const binArms = ops.bin.map((b) => `${b.lid} => Some((${b.lbp}, ${b.rbp}, ${b.tgt}, ${b.noUnary}))`).join(', ');
   const preArms = ops.pre.map((p) => `${p.lid} => Some((${p.rbp}, ${p.tgt}, ${p.form}))`).join(', ');
   const postArms = ops.post.map((p) => `${p.lid} => Some((${p.lbp}, ${p.tgt}))`).join(', ');
-  // The NUD arms, each a longest-match candidate tried from `save`, reached through the rule's
-  // Dispatch (emit-portable.ts, PrattRule.nudOrder / nudDispatch). `won` records the node just
-  // finished as the best so far and moves `ck` past it; `lost` drops what the arm built.
+  // `won` records the node just finished as the best so far and moves `ck` past it; `lost` drops
+  // what the arm built. A sequence arm's frame is the `cand!` macro (candRs).
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
-    `best_pos = self.pos;${markRs(r.nudDispatch, i)} bf = ${form}; bt = ${tail}; bc = ${capped}; ck = self.b.checkpoint();`;
+    `best_pos = self.pos;${markRs(d, i)} bf = ${form}; bt = ${tail}; bc = ${capped}; ck = self.b.checkpoint();`;
   const lost = lostRs;
-  const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true');
-  const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    candRs(r.nudDispatch, i, stepsCond(steps), rid, `${markRs(r.nudDispatch, i)} bf = 0; bt = ${tail}; bc = ${capped};`);
-  const nudArm = (i: number, keyed: boolean): string => {
-    const a = r.nudOrder[i]!;
-    switch (a.kind) {
-      case 'tok': {
-        const k = r.nudToks[a.index]!;
-        const leafArm = ifRs([...(keyed ? [] : [`t.kid == ${kidOf(ids, k)}`]), beatsRs(r.nudDispatch, 'save + 1', i)], `{ self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; best = Some(self.finish(${rid}, sb, t.off as usize, save)); ${won(i, '0', false, false)} self.back(save); }`);
-        if (r.nudTplHole === undefined || !tpl || k !== tpl.token) return leafArm;
-        return `${leafArm}
-        if t.kid == ${kidOf(ids, "$templateHead")} {
-            match self.match_template(Self::parse_${r.nudTplHole}) {
-                Some(n) if ${beatsRs(r.nudDispatch, 'self.pos', i)} => { if n.present { self.scratch.push(n.h); } best = Some(self.finish(${rid}, sb, n.off as usize, n.tok_start as usize)); ${won(i, '0', false, false)} }
+  const fin = `self.finish(${rid}, sb, left.off as usize, left.tok_start as usize)`;
+  const L: PrattLowering = {
+    steps: rsSteps(ids, 'self', false),
+    ifAll: ifRs,
+    kidIs: (k) => `t.kid == ${k}`,
+    lidIs: (l) => `t.lid == ${l}`,
+    capBelow: (bp) => `min_bp < ${bp}`,
+    nudGuard: (g, keyed) => guardCond(g, 't', keyed),
+    beats: (i, end) => beatsRs(d, end, i),
+    leafEnd: 'save + 1',
+    nudLeaf: (i) => `{ self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; best = Some(self.finish(${rid}, sb, t.off as usize, save)); ${won(i, '0', false, false)} self.back(save); }`,
+    nudTpl: (i, hole) => `        if t.kid == ${kidOf(ids, '$templateHead')} {
+            match self.match_template(Self::parse_${hole}) {
+                Some(n) if ${beatsRs(d, 'self.pos', i)} => { if n.present { self.scratch.push(n.h); } best = Some(self.finish(${rid}, sb, n.off as usize, n.tok_start as usize)); ${won(i, '0', false, false)} }
                 _ => { ${lost} }
             }
             self.back(save);
-        }`;
-      }
-      case 'bracket': {
-        const b = r.nudBrackets[a.index]!;
-        return ifRs(keyed ? [] : [`t.lid == ${lidOf(ids, b.first)}`], seqArm(i, b.steps, r.nudBracketClosesTail[a.index]!, false));
-      }
-      case 'seq':
-        return ifRs(guardCond(r.nudSeqGuard[a.index]!, 't', keyed), seqArm(i, guardedSteps(r.nudSeqGuard[a.index]!, r.nudSeqs[a.index]!), r.nudSeqClosesTail[a.index]!, false));
-      case 'capped': {
-        const c = r.nudCapped[a.index]!;
-        return ifRs([`min_bp < ${c.capBp}`, ...guardCond(r.nudCappedGuard[a.index]!, 't', keyed)], seqArm(i, guardedSteps(r.nudCappedGuard[a.index]!, c.steps), false, true));
-      }
-      case 'prefix':
-        // An operand that parses but is not the target the operator requires fails the whole
-        // Pratt call, whatever another arm matched.
-        return `        if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
+        }`,
+    nudSeq: (i, cond, tail, capped) => candRs(d, i, cond, rid, `${markRs(d, i)} bf = 0; bt = ${tail}; bc = ${capped};`),
+    // An operand that parses but is not the target the operator requires fails the whole Pratt
+    // call, whatever another arm matched.
+    nudPrefix: (i) => `        if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
             match self.${r.name}_bp(pbp) {
                 Some(_) if ptgt && self.form != 0 => { self.back(save); ${lost} self.capped = false; return None; }
-                Some(operand) if ${beatsRs(r.nudDispatch, 'self.pos', i)} => { if operand.present { self.scratch.push(operand.h); } best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won(i, 'pform', true, false)} }
+                Some(operand) if ${beatsRs(d, 'self.pos', i)} => { if operand.present { self.scratch.push(operand.h); } best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won(i, 'pform', true, false)} }
                 _ => { ${lost} }
             }
             self.back(save);
-        }`;
-    }
-  };
-  const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, suppressedIn: number[]) => {
-    const parts: string[] = [];
-    if (accessTail) parts.push('!tail_closed');
-    if (lbp !== null) parts.push(`${lbp} > min_bp`);
-    if (sameLine) parts.push('!t.nl');
-    if (nll) parts.push(`!self.nll_blocked(&[${nll.map(J).join(', ')}], &left)`);
-    for (const set of suppressedIn) parts.push(`self.suppress_cur != ${set}`);
-    return parts.length ? `if ${parts.join(' && ')} ` : '';   // the `if` before the led's block; none when nothing gates it
-  };
-  // Arms sharing a lid (`[` array-type then indexed-access) fall through to each other; when the
-  // LAST arm of a group failed, the loop ends if no later check can take the token (prattLedExits:
-  // `<` is also the relational operator, so its group falls through to the binary check).
-  const exits = prattLedExits(r, ir, ids);
-  const ledBody = (b: Bracket, form: number, closes: boolean, exit: boolean) => `{
+        }`,
+    dispatch: dispatchRsL('t', false),
+    led: {
+      tailOpen: '!tail_closed',
+      lbpAbove: (lbp) => `${lbp} > min_bp`,
+      sameLine: '!t.nl',
+      notLeftLeaf: (words) => `!self.nll_blocked(&[${words.map(J).join(', ')}], &left)`,
+      notSuppressed: (set) => `self.suppress_cur != ${set}`,
+      ifAll: (parts) => (parts.length ? `if ${parts.join(' && ')} ` : ''),
+    },
+    ledArm: (_i, cond, form, closes, exit) => `{
                 let led_save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
                 self.scratch.push(left.h);
-                if ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { left = self.finish(${rid}, sb, left.off as usize, left.tok_start as usize); form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
+                if ${cond} { left = ${fin}; form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
                 self.back(led_save); self.scratch.truncate(sb); self.b.restore(ck);${exit ? ' break;' : ''}
-            }`;
-  const ledMatch = (() => {
-    if (r.leds.length === 0) return '';
-    const groups = groupByPreserveOrder(r.leds, (b) => lidOf(ids, b.first));
-    return `            match t.lid {
-${groups.map((g) => {
-  const lid = g.key as number;
-  const arms = g.members.map(({ item: b, index: i }, j) =>
-    `                ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, r.ledSuppressedIn[i]!)}${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!, exits.has(lid) && j === g.members.length - 1)}`);
-  return `                ${lid} => {\n${arms.join('\n')}\n                }`;
-}).join('\n')}
+            }`,
+    ledSwitch: (cases) => `            match t.lid {
+${cases.map((c) => `                ${c.key} => {\n${c.arms.map((a) => `                ${a}`).join('\n')}\n                }`).join('\n')}
                 _ => {}
-            }`;
-  })();
-  const postfixTokMatch = (() => {
-    if (r.postfixToks.length === 0) return '';
-    const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
-    const tplPart = r.postfixTplHole !== undefined ? `
-            if !tail_closed && t.kid == ${kidOf(ids, "$templateHead")} { if let Some(n) = self.match_template(Self::parse_${r.postfixTplHole}) { let sb = self.scratch.len(); if left.present { self.scratch.push(left.h); } if n.present { self.scratch.push(n.h); } left = self.finish(${rid}, sb, left.off as usize, left.tok_start as usize); form = 0; continue; } }` : '';
-    return `            match t.kid {
-${groups.map((g) => `                ${g.key} => { if !tail_closed { let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; left = self.finish(${rid}, sb, left.off as usize, left.tok_start as usize); form = 0; continue; } }`).join('\n')}
+            }`,
+    postfixToks: (kids) => `            match t.kid {
+${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; left = ${fin}; form = 0; continue; } }`).join('\n')}
                 _ => {}
-            }${tplPart}`;
-  })();
-  return `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
-        let prev = self.suppress_cur;
-        self.suppress_cur = self.suppress_next;
-        self.suppress_next = 0;
-        let r = self.${r.name}_bp(0);
-        self.suppress_cur = prev;
-        r
-    }
-    fn ${r.name}_bin(op: u16) -> Option<(i64, i64, bool, bool)> { match op { ${binArms}${binArms ? ', ' : ''}_ => None } }
-    fn ${r.name}_pre(op: u16) -> Option<(i64, bool, u8)> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
-    fn ${r.name}_post(op: u16) -> Option<(i64, bool)> { match op { ${postArms}${postArms ? ', ' : ''}_ => None } }
-    fn ${r.name}_bp(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {
-        let mut left = self.${r.name}_nud(min_bp)?;
-        let mut form = self.form;
-        if self.capped { return Some(left); }
-        let mut tail_closed = self.tail;
-        loop {
-            let t = match self.peek() { Some(t) => t, None => break };
-${ledMatch}
-${postfixTokMatch}
-            if let Some((plbp, ptgt)) = Self::${r.name}_post(t.lid) { if !tail_closed && plbp > min_bp${r.postfixSameLine ? ' && !t.nl' : ''} { if ptgt && form != 0 { return None; } let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1; left = self.finish(${rid}, sb, left.off as usize, left.tok_start as usize); tail_closed = true; form = 1; continue; } }
-            let (op_lid, op_n, op_end) = self.op_read(t);
+            }`,
+    postfixTpl: (hole) => `
+            if !tail_closed && t.kid == ${kidOf(ids, '$templateHead')} { if let Some(n) = self.match_template(Self::parse_${hole}) { let sb = self.scratch.len(); if left.present { self.scratch.push(left.h); } if n.present { self.scratch.push(n.h); } left = ${fin}; form = 0; continue; } }`,
+    postfixOp: `            if let Some((plbp, ptgt)) = Self::${r.name}_post(t.lid) { if !tail_closed && plbp > min_bp${r.postfixSameLine ? ' && !t.nl' : ''} { if ptgt && form != 0 { return None; } let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1; left = ${fin}; tail_closed = true; form = 1; continue; } }`,
+    binary: `            let (op_lid, op_n, op_end) = self.op_read(t);
             let (lbp, rbp, tgt, no_unary) = match Self::${r.name}_bin(op_lid) { Some(x) => x, None => break };
             if lbp <= min_bp { break; }
             if tgt && form != 0 || no_unary && form == 2 { return None; }
@@ -1201,26 +1150,46 @@ ${postfixTokMatch}
             self.pos += op_n;
             let rhs = match self.${r.name}_bp(rbp) { Some(r) => r, None => { self.back(led_save); self.scratch.truncate(sb); break; } };
             if rhs.present { self.scratch.push(rhs.h); }
-            left = self.finish(${rid}, sb, left.off as usize, left.tok_start as usize);
+            left = ${fin};
             form = 1; tail_closed = true;
-        }
-        self.form = form;
-        Some(left)
+        }`,
+    entry: `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
+        let prev = self.suppress_cur;
+        self.suppress_cur = self.suppress_next;
+        self.suppress_next = 0;
+        let r = self.${r.name}_bp(0);
+        self.suppress_cur = prev;
+        r
     }
-    fn ${r.name}_nud(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {
+    fn ${r.name}_bin(op: u16) -> Option<(i64, i64, bool, bool)> { match op { ${binArms}${binArms ? ', ' : ''}_ => None } }
+    fn ${r.name}_pre(op: u16) -> Option<(i64, bool, u8)> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
+    fn ${r.name}_post(op: u16) -> Option<(i64, bool)> { match op { ${postArms}${postArms ? ', ' : ''}_ => None } }`,
+    // Rust's `loop` takes no label here: a led's `continue` / `break` are the innermost loop's.
+    bpOpen: () => `    fn ${r.name}_bp(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {
+        let mut left = self.${r.name}_nud(min_bp)?;
+        let mut form = self.form;
+        if self.capped { return Some(left); }
+        let mut tail_closed = self.tail;
+        loop {
+            let t = match self.peek() { Some(t) => t, None => break };`,
+    bpClose: `        self.form = form;
+        Some(left)
+    }`,
+    nudOpen: `    fn ${r.name}_nud(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {
         self.capped = false;
         let t = self.peek()?;
         let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();
-        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(r.nudDispatch)}
-        let (mut bf, mut bt, mut bc) = (0u8, false, false);
-${dispatchRs(r.nudDispatch, 't', ids, nudArm)}
-        // A sub-parse may leave self.capped set: only a capped arm that won makes THIS node capped.
+        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(d)}
+        let (mut bf, mut bt, mut bc) = (0u8, false, false);`,
+    nudClose: `        // A sub-parse may leave self.capped set: only a capped arm that won makes THIS node capped.
         self.capped = bc;
         self.form = bf;
         self.tail = bt;
         self.pos = best_pos;
         best
-    }`;
+    }`,
+  };
+  return prattShell(r, ir, ids, L);
 }
 
 
