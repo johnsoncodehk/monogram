@@ -28,6 +28,7 @@ const GATES: Gate[] = [
   { group: 'core', name: 'refactor-guard', args: ['test/refactor-guard.ts'] },
   { group: 'core', name: 'cst-text-invariant', args: ['test/cst-text-invariant.ts'] },
   { group: 'conformance', name: 'ts-ast-structure', args: ['test/ts-ast-verify.ts'] },
+  { group: 'conformance', name: 'shape-oracle', args: ['test/shape-oracle.ts'] },
   { group: 'core', name: 'cst-match-totality', args: ['test/cst-match-totality.ts'] },
   { group: 'core', name: 'incremental-verify', args: ['test/incremental-verify.ts'] },
   { group: 'emit-parity', name: 'emit-parser-verify', args: ['test/emit-parser-verify.ts'] },
