@@ -65,8 +65,18 @@ export type Term =
   | { t: 'inh'; attr: string }
   /** A node. `type` is a string term (a constant, or a `match` on an operator's text: P2). */
   | { t: 'node'; type: Term; fields: Record<string, Term>; span?: Span }
-  /** A plain record (a value that is not a node, e.g. ESTree's `regex: { pattern, flags }`). */
+  /** A plain record (a value that is not a node, e.g. ESTree's `regex: { pattern, flags }`). An
+   * arm whose whole term is a record makes its rule RECORD-VALUED (see `get`). */
   | { t: 'record'; fields: Record<string, Term> }
+  /** A field of a named child's value, where the child's rule is RECORD-VALUED: every mapped arm
+   * of that rule is a `record` term, all with the same field names (an arm without a value for
+   * one writes `absent`). Such a rule is an interface, not a node: its child is read only through
+   * `get` (`child` of it is a load error), and `get` of a field the rule does not declare, or of a
+   * child of any other rule, is a load error. Only records are projectable, never a node's fields,
+   * so a parent reads no descendant beyond what the child's rule exposes. A helper rule that the
+   * grammar factors out of one production (ForHead: the `( … )` of a `for` statement, whose node
+   * also holds the body) is mapped this way. */
+  | { t: 'get'; name: string; field: string }
   /** A list; a `spread` item splices a list-valued term in. */
   | { t: 'list'; items: (Term | { spread: Term })[] }
   /** A case on a string term; `else` when no case matches (without it, no match is an error). */
@@ -107,6 +117,7 @@ export const OPERATORS: Record<TermTag, { dep: 'synthesized' | 'inherited'; synA
   inh: { dep: 'inherited', synAttr: false },
   node: { dep: 'synthesized', synAttr: false },
   record: { dep: 'synthesized', synAttr: false },
+  get: { dep: 'synthesized', synAttr: false },
   list: { dep: 'synthesized', synAttr: false },
   match: { dep: 'synthesized', synAttr: true },
   if: { dep: 'synthesized', synAttr: true },
@@ -182,6 +193,7 @@ export const inh = (attr: string): Term => ({ t: 'inh', attr });
 export const node = (type: string | Term, fields: Record<string, Term> = {}, span?: Span): Term =>
   ({ t: 'node', type: typeof type === 'string' ? c(type) : type, fields, ...(span ? { span } : {}) });
 export const record = (fields: Record<string, Term>): Term => ({ t: 'record', fields });
+export const get = (name: string, field: string): Term => ({ t: 'get', name, field });
 export const list = (...items: (Term | { spread: Term })[]): Term => ({ t: 'list', items });
 export const spread = (of: Term): { spread: Term } => ({ spread: of });
 export const match = (on: Term, cases: Record<string, Term>, orElse?: Term): Term =>

@@ -135,13 +135,15 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine): StepLowe
     shared: (id) => `p.sub${id}${f}()`,
     lit: (s) => (gtCompLit(ids, s) ? `p.${e.matchComp}(${lidOf(ids, s.value)})` : `p.matchLit${f}(${lidOf(ids, s.value)})`),
     tok: (name) => `p.matchTok${f}(${kidOf(ids, name)})`,
-    template: (name, hole) => `(p.matchTok${f}(${kidOf(ids, name)}) || ${f === 'R' ? e.template(hole) : f === 'W' ? `p.callRuleW((*${recv}).matchTemplateW_${hole})` : `p.callRule(p.matchTemplate_${hole}())`})`,
-    rule: (name) => (f === 'R' ? `p.rec${name}()` : f === 'W' ? `p.callRuleW((*${recv}).parse${name}W)` : `p.callRule(p.parse${name}())`),
+    template: (name, hole) => `(p.matchTok${f}(${kidOf(ids, name)}) || ${f === 'R' ? e.template(hole) : f === 'W' ? `p.callRuleW(p.matchTemplateW_${hole}())` : `p.callRule(p.matchTemplate_${hole}())`})`,
+    rule: (name) => (f === 'R' ? `p.rec${name}()` : f === 'W' ? `p.callRuleW(p.parse${name}W())` : `p.callRule(p.parse${name}())`),
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
-    ruleBp: (name, bp) => (f === 'R' ? e.bpFound(name, bp) : f === 'W' ? `p.callRuleW(func(q *${recv}) (spanned, bool) { return q.bpW_${name}(${bp}) })` : `p.callRule(p.bp_${name}(${bp}))`),
-    star: (body) => `p.star${f}(${fn(body)})`,
-    opt: (body) => `p.opt${f}(${fn(body)})`,
-    sep: (elem, delim) => `p.sepBy${f}(${fn(elem)}, ${sepDelimLid(ids, delim)})`,
+    ruleBp: (name, bp) => (f === 'R' ? e.bpFound(name, bp) : f === 'W' ? `p.callRuleW(p.bpW_${name}(${bp}))` : `p.callRule(p.bp_${name}(${bp}))`),
+    // A body guard (emit-portable.ts annotateSteps): opt / sep test it before their one attempt,
+    // star before each attempt, so a refused attempt takes no mark.
+    star: (body, g) => (g === null ? `p.star${f}(${fn(body)})` : `p.starIn${f}(${g}, ${fn(body)})`),
+    opt: (body, g) => (g === null ? `p.opt${f}(${fn(body)})` : `(!p.${e.ahead}(${g}, true) || p.opt${f}(${fn(body)}))`),
+    sep: (elem, delim, g) => (g === null ? `p.sepBy${f}(${fn(elem)}, ${sepDelimLid(ids, delim)})` : `(!p.${e.ahead}(${g}, true) || p.sepBy${f}(${fn(elem)}, ${sepDelimLid(ids, delim)}))`),
     altlit: (values) => `p.altLit${f}([]uint16{${values.map((v) => lidOf(ids, v)).join(', ')}})`,
     look: (id, is) => `${is ? '' : '!'}p.look${id}()`,   // recognize form (lookFnsR)
     ahead: (set, is) => `p.${e.ahead}(${set}, ${is})`,
@@ -211,6 +213,10 @@ func (p *${recv}) matchTokR(kid uint16) bool {
 func (p *${recv}) starR(once func() bool) bool {
 \tfor { sp := p.pos; if !once() { p.back(sp); break } }
 \treturn true
+}
+func (p *${recv}) starInR(k int, once func() bool) bool {
+	for p.ahead(k, true) { sp := p.pos; if !once() { p.back(sp); break } }
+	return true
 }
 func (p *${recv}) optR(body func() bool) bool {
 \tsp := p.pos; if !body() { p.back(sp) }; return true
@@ -460,7 +466,7 @@ const lidInterpClose uint16 = ${lidOf(ids, tpl.interpClose)}
 \tprevIsValue := func() bool {
 \t\tif !hasPrev { return false }
 \t\tif _pav[prevLid] { return lastBang }
-\t\tisExprKw := prevKid == kidIdent && _rxT[prevLid]
+\t\tisExprKw := prevKid == kidIdent && _rxT[prevLid] && !(hasPrev2 && _mem[bpLid])
 \t\tisParenHead := prevLid == lidRParen && lastClose
 \t\treturn !isExprKw && !isParenHead && (_divK[prevKid] || _divT[prevLid])
 \t}
@@ -498,7 +504,7 @@ ${emitHooks}
   const rxStateFrom = rx ? `\tprevIsValue := func() bool {
 \t\tif !hasPrev { return false }
 \t\tif _pav[prevLid] { return lastBang }
-\t\tisExprKw := prevKid == kidIdent && _rxT[prevLid]
+\t\tisExprKw := prevKid == kidIdent && _rxT[prevLid] && !(hasPrev2 && _mem[bpLid])
 \t\tisParenHead := prevLid == lidRParen && lastClose
 \t\treturn !isExprKw && !isParenHead && (_divK[prevKid] || _divT[prevLid])
 \t}
@@ -1738,7 +1744,7 @@ ${close}`,
 \tp.lookReset()
 \tbefore := len(p.scratch)
 \ttokStart := p.pos
-\tp.optW(func() bool { return p.callRuleW((*${recv}).parse${rule}W) })
+\tp.optW(func() bool { return p.callRuleW(p.parse${rule}W()) })
 \tif len(p.scratch) == before { return EntryMeta{}, false }
 \th := p.scratch[before]
 \to0, e1 := p.b.SpanOf(h, p.toks)
@@ -1757,7 +1763,7 @@ ${close}`,
 \t\tp.back(sp); p.scratch = p.scratch[:before]; ${arenaRestore()}
 \t\treturn EntryMeta{}, false
 \t}
-\tp.optW(func() bool { return p.callRuleW((*${recv}).parse${rule}W) })
+\tp.optW(func() bool { return p.callRuleW(p.parse${rule}W()) })
 \tcount := len(p.scratch) - before
 \tif count == 0 { return EntryMeta{}, false }
 \tleaf := p.scratch[before]
@@ -1950,18 +1956,29 @@ func (p *${recv}) nllBlockedW(words []string, left spanned) bool {
 \tfor _, w := range words { if w == h { return true } }
 \treturn false
 }
+// matchLitW / matchTokW read the token in place as the direct engine's matchLit / matchTok do (the
+// probe is a peek: peekEnd), and hand the leaf to the builder.
 func (p *${recv}) matchLitW(lid uint16) bool {
-\tt := p.peek()
-\tif t != nil && t.Lid == lid { p.pushLeafW(litTt(lid), uint32(p.pos), t.Off, t.End); p.pos++; return true }
-\treturn false
+\ti := p.pos
+\tp.peekEnd = i + 1
+\tif i >= len(p.toks) || p.toks[i].Lid != lid { return false }
+\tt := &p.toks[i]
+\tp.b.Leaf(&p.scratch, litTt(lid), uint32(i), t.Off, t.End)
+\tp.pos = i + 1
+\treturn true
 }
 func (p *${recv}) matchTokW(kid uint16) bool {
-\tt := p.peek()
-\tif t != nil && t.Kid == kid { p.pushLeafW(kid, uint32(p.pos), t.Off, t.End); p.pos++; return true }
-\treturn false
+\ti := p.pos
+\tp.peekEnd = i + 1
+\tif i >= len(p.toks) || p.toks[i].Kid != kid { return false }
+\tt := &p.toks[i]
+\tp.b.Leaf(&p.scratch, kid, uint32(i), t.Off, t.End)
+\tp.pos = i + 1
+\treturn true
 }
-func (p *${recv}) callRuleW(fn func(*${recv}) (spanned, bool)) bool {
-\tfr, ok := fn(p)
+// callRuleW pushes the node of a rule call that matched (the call's two results, as callRule takes
+// the direct engine's: a direct call, not one through a method value).
+func (p *${recv}) callRuleW(fr spanned, ok bool) bool {
 \tif !ok { return false }
 \tif fr.present { p.scratch = append(p.scratch, fr.h) }
 \treturn true
@@ -1972,6 +1989,13 @@ func (p *${recv}) starW(once func() bool) bool {
 \t\tif !once() { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore()}; break }
 \t}
 \treturn true
+}
+func (p *${recv}) starInW(k int, once func() bool) bool {
+	for p.ahead(k, true) {
+		sp := p.pos; sb := len(p.scratch); ${arenaCkpt()}
+		if !once() { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore()}; break }
+	}
+	return true
 }
 func (p *${recv}) optW(body func() bool) bool {
 \tsp := p.pos; sb := len(p.scratch); ${arenaCkpt()}
@@ -2070,9 +2094,10 @@ ${entryMetaType}func parseWithMetaW(text string, meta []alignMeta, b Builder) (h
 	p := &parserW{cursor: cursor{toks: toksFromMeta(text, meta)}, src: text, b: b, scratch: nil}
 	fr, pok := p.parse${entry}W()
 	recordToks(b, p.toks)
-	if !pok || p.pos != len(p.toks) || !fr.present {
+	if !pok || p.pos != len(p.toks) {
 		return 0, nil, nil, false
 	}
+	if !fr.present { panic(errNoRoot) }
 ${topReuse
     ? `\treturn fr.h, append([]EntryMeta(nil), p.entries...), append([]int32(nil), p.entryHs...), true`
     : `\treturn fr.h, nil, nil, true`}
@@ -2678,6 +2703,14 @@ function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): stri
   const entryCst = ir.entry;
   const entryRid = ruleIdOf(ar, entryCst);
   const docWithBlock = emitDocWithGo(ir, entryRid, shapeA, shapeB, hasHeadB, !!topReuse, initToks, freshMeta, editBody);
+  // The span of a built-in builder's node (an arena of Nodes) from its first and last children,
+  // read in place as SpanOf of each would read it; only an operator leaf at a '>' (leafEnd) needs a call.
+  const gtLeaf = ids.gtComps.length ? `; if tt == ${ttIdOf(ar, '$operator')} && t.Lid == ${lidOf(ids, '>')} { end = leafEnd(toks, ti, tt) }` : '';
+  const kidsSpanGo = `\tif nn > sb {
+\t\tif first := s[sb]; first < 0 { ti, _ := decodeLeaf(first); off = toks[ti].Off } else { off = b.Nodes[first].Offset }
+\t\tif last := s[nn-1]; last < 0 { ${gtLeaf ? 'ti, tt' : 'ti, _'} := decodeLeaf(last); t := &toks[ti]; end = t.End${gtLeaf} } else { end = b.Nodes[last].End }
+\t}
+`;
   return `// ─── Builder API (additive; CST parse() / Doc above are unchanged) ───────────
 // Builder is pure / bottom-up. Backtracking truncates scratch (+ optional arena
 // checkpoint); discarded handles are garbage.
@@ -2765,19 +2798,16 @@ func (b *CstBuilder) Leaf(scratch *[]int32, ttId uint16, tokIdx, off, end uint32
 }
 // Finish is a byte-twin of native finish (always creates a node, present=true).
 func (b *CstBuilder) Finish(scratch *[]int32, sb int, ruleId uint16, fallbackOff, tokStart, tokEnd uint32, toks []Tok) (int32, uint32, bool) {
-\tnn := len(*scratch)
+\ts := *scratch
+\tnn := len(s)
 \tkidStart := len(b.Kids)
 \toff, end := fallbackOff, fallbackOff
-\tif nn > sb {
-\t\to0, _ := cstKidOffEnd(b.Nodes, toks, (*scratch)[sb])
-\t\t_, e1 := cstKidOffEnd(b.Nodes, toks, (*scratch)[nn-1])
-\t\toff, end = o0, e1
-\t}
-\tb.Kids = append(b.Kids, (*scratch)[sb:nn]...)
-\t*scratch = (*scratch)[:sb]
+${kidsSpanGo}\tb.Kids = append(b.Kids, s[sb:nn]...)
+\t*scratch = s[:sb]
 \tb.Nodes = append(b.Nodes, Node{RuleId: ruleId, KidStart: uint32(kidStart), KidCount: uint32(nn - sb), Offset: off, End: end, TokStart: tokStart, TokEnd: tokEnd, Ext: 0})
 \treturn int32(len(b.Nodes) - 1), off, true
 }
+
 func (b *CstBuilder) Node(scratch *[]int32, sb int, ruleId uint16, off, end, tokStart, tokEnd uint32) {
 \tnn := len(*scratch)
 \tkidStart := len(b.Kids)
@@ -2826,14 +2856,31 @@ ${slimDropBody}\tif ttId == ${punctId} { return false }
 \t*scratch = append(*scratch, encodeLeaf(tokIdx, uint8(ttId)))
 \treturn true
 }
+// Finish is builderFinishDefault with the spans read in place and Node's collapse inline.
 func (b *SlimBuilder) Finish(scratch *[]int32, sb int, ruleId uint16, fallbackOff, tokStart, tokEnd uint32, toks []Tok) (int32, uint32, bool) {
-\treturn builderFinishDefault(b, scratch, sb, ruleId, fallbackOff, tokStart, tokEnd, toks)
+\ts := *scratch
+\tnn := len(s)
+\toff, end := fallbackOff, fallbackOff
+${kidsSpanGo}\tswitch nn - sb {
+\tcase 0:
+\t\t// The root keeps its node with no child: an accepted parse always has a root (ParseWith).
+\t\tif ruleId != ${entryRid} { return 0, off, false }
+\tcase 1:
+\t\t*scratch = s[:sb]
+\t\treturn s[sb], off, true
+\t}
+\tkidStart := len(b.Kids)
+\tb.Kids = append(b.Kids, s[sb:nn]...)
+\t*scratch = s[:sb]
+\tb.Nodes = append(b.Nodes, Node{RuleId: ruleId, KidStart: uint32(kidStart), KidCount: uint32(nn - sb), Offset: off, End: end, TokStart: tokStart, TokEnd: tokEnd, Ext: 0})
+\treturn int32(len(b.Nodes) - 1), off, true
 }
 func (b *SlimBuilder) Node(scratch *[]int32, sb int, ruleId uint16, off, end, tokStart, tokEnd uint32) {
 \tnn := len(*scratch)
 \tcount := nn - sb
 \tif count == 1 { return }
-\tif count == 0 { *scratch = (*scratch)[:sb]; return }
+\t// The root keeps its node with no child: an accepted parse always has a root (ParseWith).
+\tif count == 0 && ruleId != ${entryRid} { *scratch = (*scratch)[:sb]; return }
 \tkidStart := len(b.Kids)
 \tb.Kids = append(b.Kids, (*scratch)[sb:nn]...)
 \t*scratch = (*scratch)[:sb]
@@ -2884,11 +2931,17 @@ func parseWithW(src string, b Builder) (int32, bool) {
 \t*p = parserW{cursor: cursor{toks: lexInto(src, toksOf(b), &w.lex)}, src: src, b: b, scratch: p.scratch[:0]${reuse ? ', entries: p.entries[:0], entryHs: p.entryHs[:0]' : ''}}
 \tfr, ok := p.parse${ir.entry}W()
 \trecordToks(b, p.toks)
-\tok = ok && p.pos == len(p.toks) && fr.present
+\tok = ok && p.pos == len(p.toks)
 \tp.cursor.toks, p.src, p.b = nil, "", nil // the workspace keeps buffers, not the input or the builder
 \tif !ok { return 0, false }
+\tif !fr.present { panic(errNoRoot) }
 \treturn fr.h, true
 }
+
+// errNoRoot: an accepted parse whose builder kept no node for the root (the entry rule). Accepting
+// or rejecting is the parser's verdict, never the builder's, so this is no reject: it is a builder
+// that breaks the contract (the built-in builders always keep the root), reported loudly.
+const errNoRoot = "the builder kept no node for the root rule of an accepted parse (a Builder must return one for the entry rule)"
 
 // ParseWith runs the builder-driven parse. *CstBuilder uses the concrete hot path (the native
 // engine); other Builders (e.g. *SlimBuilder) use interface parserW.
@@ -3306,6 +3359,10 @@ func (p *engine) callRule(id int32) bool {
 func (p *engine) star(once func() bool) bool {
 \tfor { m := p.mark(); if !once() { p.reset(m); break } }
 \treturn true
+}
+func (p *engine) starIn(k int, once func() bool) bool {
+	for p.ahead(k, true) { m := p.mark(); if !once() { p.reset(m); break } }
+	return true
 }
 func (p *engine) opt(body func() bool) bool {
 \tm := p.mark(); if !body() { p.reset(m) }; return true
