@@ -111,11 +111,28 @@ export const ATOM = 100;
 
 // The name of the routine that finds the first of `stops` (one per set of stops a family uses).
 export const findAnyName = (stops: readonly number[]): string => `lexFindAny${stops.map((c) => c.toString(16).toUpperCase()).join('_')}`;
-// A set of stops in UTF-8, for a lowering that scans bytes: the first bytes the stops begin with
-// (sorted, distinct), and each stop's bytes.
-export function stopBytes(stops: readonly number[]): { leads: number[]; seqs: number[][] } {
+// A set of stops in UTF-8, for a lowering that scans bytes eight at a time. `masks`: the byte
+// tests one round ORs together, each flagging (at least) every byte that may begin a stop: `below`
+// n flags every byte < n (one test for several control-character stops; it also flags the other
+// bytes below n, which the confirmation rejects), `eq` b flags every byte equal to b. `confirm`:
+// at a flagged byte, the stops it may begin, by their bytes after the first: `one` the stops of
+// one byte, `wide` the longer ones grouped by their bytes before the last.
+export type StopBytes = {
+  masks: ({ below: number } | { eq: number })[];
+  one: number[];
+  wide: { head: number[]; last: number[] }[];
+};
+export function stopBytes(stops: readonly number[]): StopBytes {
   const seqs = stops.map((c) => utf8Of(String.fromCharCode(c)));
-  return { leads: [...new Set(seqs.map((q) => q[0]!))].sort((a, b) => a - b), seqs };
+  const one = seqs.filter((q) => q.length === 1).map((q) => q[0]!);
+  const masks: StopBytes['masks'] = one.length > 1 && one.every((b) => b < 0x20) ? [{ below: Math.max(...one) + 1 }] : one.map((b) => ({ eq: b }));
+  const wide: StopBytes['wide'] = [];
+  for (const q of seqs.filter((q) => q.length > 1)) {
+    const head = q.slice(0, -1), g = wide.find((w) => w.head.join() === head.join());
+    if (g) g.last.push(q[q.length - 1]!); else wide.push({ head, last: [q[q.length - 1]!] });
+  }
+  for (const lead of [...new Set(wide.map((w) => w.head[0]!))]) masks.push({ eq: lead });
+  return { masks, one, wide };
 }
 export function checkStops(stops: readonly number[]): void {
   if (stops.length === 0) throw new Error('algo-ir: findAny() of no stops');

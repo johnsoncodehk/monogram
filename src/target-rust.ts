@@ -5292,37 +5292,41 @@ fn lex_find(b: &[u8], mut i: usize, lit: &[u8]) -> usize {
         i += 1;
     }
 }`,
-  // Eight bytes per round test for every byte a stop begins with (one zero-byte mask per such
-  // byte, ORed: the lowest flagged byte is the first candidate); a candidate is then confirmed.
+  // Eight bytes per round: each test of the stop plan flags the bytes that may begin a stop (a
+  // zero-byte mask of the word XOR a byte, or the bytes below a bound), ORed; each flagged byte, in
+  // order, is then confirmed, without reading the word again.
   findAnyFn: (stops) => {
-    const { leads, seqs } = stopBytes(stops);
+    const { masks, one, wide } = stopBytes(stops);
     const hex = (b: number) => `0x${b.toString(16).toUpperCase().padStart(2, '0')}`;
-    const lead = (v: string) => leads.map((b) => `${v} == ${hex(b)}`).join(' || ');
-    const masks = leads.map((b) => `zero(v ^ (L * ${hex(b)}))`).join(' | ');
-    const one = seqs.filter((q) => q.length === 1).map((q) => `b[i] == ${hex(q[0]!)}`);
-    const wide = seqs.filter((q) => q.length > 1).map((q) => `b[i..].starts_with(&[${q.map(hex).join(', ')}])`);
+    const lets: string[] = [], terms: string[] = [];
+    masks.forEach((m, k) => {
+      if ('below' in m) terms.push(`(v.wrapping_sub(L * ${hex(m.below)}) & !v)`);
+      else { lets.push(`let x${k} = v ^ (L * ${hex(m.eq)});`); terms.push(`(x${k}.wrapping_sub(L) & !x${k})`); }
+    });
+    const at = (j: string) => [
+      ...one.map((b) => `b[${j}] == ${hex(b)}`),
+      ...wide.map((w) => `(b[${j}..].starts_with(&[${w.head.map(hex).join(', ')}]) && matches!(b.get(${j} + ${w.head.length}), Some(&(${w.last.map(hex).join(' | ')}))))`),
+    ].join(' || ');
     return `/// Where the next of ${stops.map((c) => `U+${c.toString(16).toUpperCase().padStart(4, '0')}`).join(', ')} is in b from i: the index of its first byte, or b.len().
 #[inline(never)]
 fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
     const L: u64 = 0x0101_0101_0101_0101;
-    #[inline(always)]
-    fn zero(x: u64) -> u64 { x.wrapping_sub(L) & !x }
-    loop {
-        match b.get(i..i + 8) {
-            Some(w) => {
-                let v = u64::from_le_bytes([w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]]);
-                let m = (${masks}) & (L << 7);
-                if m == 0 { i += 8; continue; }
-                i += (m.trailing_zeros() >> 3) as usize;
-            }
-            None => {
-                while i < b.len() && !(${lead('b[i]')}) { i += 1; }
-                if i == b.len() { return i; }
-            }
+    while let Some(w) = b.get(i..i + 8) {
+        let v = u64::from_le_bytes([w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]]);
+        ${lets.join('\n        ')}
+        let mut m = (${terms.join(' | ')}) & (L << 7);
+        while m != 0 {
+            let j = i + (m.trailing_zeros() >> 3) as usize;
+            if ${at('j')} { return j; }
+            m &= m - 1;
         }
-        if ${[...one, ...wide].join(' || ')} { return i; }
+        i += 8;
+    }
+    while i < b.len() {
+        if ${at('i')} { return i; }
         i += 1;
     }
+    i
 }`;
   },
   expr: {

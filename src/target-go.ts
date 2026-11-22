@@ -2994,43 +2994,42 @@ func lexFind(s string, i int, lit string) int {
 \t}
 \treturn len(s)
 }`,
-  // Eight bytes per round test for every byte a stop begins with (one zero-byte mask per such
-  // byte, ORed: the lowest flagged byte is the first candidate); a candidate is then confirmed.
+  // Eight bytes per round: each test of the stop plan flags the bytes that may begin a stop (a
+  // zero-byte mask of the word XOR a byte, or the bytes below a bound), ORed; each flagged byte, in
+  // order, is then confirmed, without reading the word again.
   findAnyFn: (stops) => {
-    const { leads, seqs } = stopBytes(stops);
+    const { masks, one, wide } = stopBytes(stops);
     const hex = (b: number) => `0x${b.toString(16).toUpperCase().padStart(2, '0')}`;
-    const lead = (v: string) => leads.map((b) => `${v} != ${hex(b)}`).join(' && ');
-    const masks = leads.map((b, k) => `\t\t\tx${k} := v ^ (L * ${hex(b)})`).join('\n');
-    const or = leads.map((_, k) => `(x${k} - L) &^ x${k}`).join(' | ');
-    const one = seqs.filter((q) => q.length === 1).map((q) => `s[i] == ${hex(q[0]!)}`);
-    const wide = seqs.filter((q) => q.length > 1).map((q) => `strings.HasPrefix(s[i:], "${q.map((b) => `\\x${b.toString(16).padStart(2, '0')}`).join('')}")`);
+    const lets: string[] = [], terms: string[] = [];
+    masks.forEach((m, k) => {
+      if ('below' in m) terms.push(`(v - L*${hex(m.below)}) &^ v`);
+      else { lets.push(`\t\tx${k} := v ^ (L * ${hex(m.eq)})`); terms.push(`(x${k} - L) &^ x${k}`); }
+    });
+    const goStr = (q: number[]) => `"${q.map((b) => `\\x${b.toString(16).padStart(2, '0')}`).join('')}"`;
+    const at = (j: string) => [
+      ...one.map((b) => `s[${j}] == ${hex(b)}`),
+      ...wide.map((w) => `(strings.HasPrefix(s[${j}:], ${goStr(w.head)}) && ${j}+${w.head.length} < len(s) && (${w.last.map((l) => `s[${j}+${w.head.length}] == ${hex(l)}`).join(' || ')}))`),
+    ].join(' || ');
     return `// ${findAnyName(stops)} is where the next of ${stops.map((c) => `U+${c.toString(16).toUpperCase().padStart(4, '0')}`).join(', ')} is in s from i: the index of its first byte, or len(s).
 func ${findAnyName(stops)}(s string, i int) int {
 \tconst L = 0x0101010101010101
-\tfor {
-\t\tif i+8 <= len(s) {
-\t\t\tw := s[i : i+8]
-\t\t\tv := uint64(w[0]) | uint64(w[1])<<8 | uint64(w[2])<<16 | uint64(w[3])<<24 | uint64(w[4])<<32 | uint64(w[5])<<40 | uint64(w[6])<<48 | uint64(w[7])<<56
-${masks}
-\t\t\tm := (${or}) & (L << 7)
-\t\t\tif m == 0 {
-\t\t\t\ti += 8
-\t\t\t\tcontinue
-\t\t\t}
-\t\t\ti += bits.TrailingZeros64(m) >> 3
-\t\t} else {
-\t\t\tfor i < len(s) && ${lead('s[i]')} {
-\t\t\t\ti++
-\t\t\t}
-\t\t\tif i == len(s) {
-\t\t\t\treturn i
+\tfor ; i+8 <= len(s); i += 8 {
+\t\tw := s[i : i+8]
+\t\tv := uint64(w[0]) | uint64(w[1])<<8 | uint64(w[2])<<16 | uint64(w[3])<<24 | uint64(w[4])<<32 | uint64(w[5])<<40 | uint64(w[6])<<48 | uint64(w[7])<<56
+${lets.join('\n')}
+\t\tfor m := (${terms.join(' | ')}) & (L << 7); m != 0; m &= m - 1 {
+\t\t\tj := i + bits.TrailingZeros64(m)>>3
+\t\t\tif ${at('j')} {
+\t\t\t\treturn j
 \t\t\t}
 \t\t}
-\t\tif ${[...one, ...wide].join(' || ')} {
+\t}
+\tfor ; i < len(s); i++ {
+\t\tif ${at('i')} {
 \t\t\treturn i
 \t\t}
-\t\ti++
 \t}
+\treturn i
 }`;
   },
   expr: {

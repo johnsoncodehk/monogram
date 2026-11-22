@@ -104,7 +104,7 @@ class LexScan {
   }
 
   findAny(i: Ex, stops: number[]): Expr {
-    this.stopSets.set(stops.join(','), stops);
+    this.stopSets.set(JSON.stringify(stops), stops);
     return { k: 'findAny', s: x('s'), i: x(i), stops };
   }
 
