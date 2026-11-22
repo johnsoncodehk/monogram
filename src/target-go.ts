@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -108,10 +108,14 @@ func mkTok(off, end int, nl bool, kid, lid uint16) Tok { return Tok{Off: uint32(
 }
 
 /** Emit TT_NAMES / RULE_NAMES lookup tables for arena slim encoding. */
-function renderArenaTablesGo(ar: ArenaIdPlan): string {
+function renderArenaTablesGo(ar: ArenaIdPlan, ids: LexIdPlan): string {
   return `var TT_NAMES = []string{${ar.ttNames.map(J).join(', ')}}
 var RULE_NAMES = []string{${ar.ruleNames.map(J).join(', ')}}
 const TT_SKIP_PUNCT = ${TT_SKIP_PUNCT}
+// lidKw: the first word lid (LexIdPlan.kwLid). A literal from here on is a $keyword leaf, one
+// before it a $punct (no leaf); litTt is its leaf type id.
+const lidKw = ${ids.kwLid}
+func litTt(lid uint16) uint16 { if lid >= lidKw { return ${ttIdOf(ar, '$keyword')} }; return TT_SKIP_PUNCT }
 `;
 }
 
@@ -583,14 +587,14 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
 // The step itself, printed in place (a shared step's method body; every other step's site).
 function stepBody(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
   switch (s.t) {
-    case 'lit': return gtCompLit(ids, s) ? `p.matchComp(${lidOf(ids, s.value)})` : `p.matchLit(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
-    case 'tok': return `p.matchTok(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
+    case 'lit': return gtCompLit(ids, s) ? `p.matchComp(${lidOf(ids, s.value)})` : `p.matchLit(${lidOf(ids, s.value)})`;
+    case 'tok': return `p.matchTok(${kidOf(ids, s.name)})`;
     case 'rule': return `p.callRule(p.parse${s.name}())`;
     case 'ruleBp': return `p.callRule(p.bp_${s.name}(${s.bp}))`;
     case 'star': return `p.star(func() bool { return ${stepCond(s.step, ids, ar)} })`;
     case 'opt': return `p.opt(func() bool { return ${s.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} })`;
-    case 'sep': return `p.sepBy(func() bool { return ${stepCond(s.elem, ids, ar)} }, ${lidOf(ids, s.delim)})`;
-    case 'altlit': return `p.altLit([]struct{ Lid uint16; TtId uint8 }{${s.opts.map((o) => `{${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)}}`).join(', ')}})`;
+    case 'sep': return `p.sepBy(func() bool { return ${stepCond(s.elem, ids, ar)} }, ${sepDelimLid(ids, s.delim)})`;
+    case 'altlit': return `p.altLit([]uint16{${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}})`;
     case 'alt': return `func() bool { ${stepStmts(s, ids, ar)} }()`;
     case 'look': return `${s.is ? '' : '!'}p.look${s.id}()`;
     case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
@@ -780,7 +784,7 @@ type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidStart, KidCount int 
 ${headFn}func (p *engine) parseLoopSeg(sb int) (Seg, EntryMeta, bool) {
 \tsp := p.pos; before := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \tp.lookReset()
-\tif !p.matchTok(${kidOf(ids, plan.loopTok)}, ${ttIdOf(ar, plan.loopTok)}) {
+\tif !p.matchTok(${kidOf(ids, plan.loopTok)}) {
 \t\tp.back(sp); p.scratch = p.scratch[:before]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]
 \t\treturn Seg{}, EntryMeta{}, false
 \t}
@@ -1542,14 +1546,14 @@ function stepCondW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
 }
 function stepBodyW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
   switch (s.t) {
-    case 'lit': return gtCompLit(ids, s) ? `p.matchCompW(${lidOf(ids, s.value)})` : `p.matchLitW(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
-    case 'tok': return `p.matchTokW(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
+    case 'lit': return gtCompLit(ids, s) ? `p.matchCompW(${lidOf(ids, s.value)})` : `p.matchLitW(${lidOf(ids, s.value)})`;
+    case 'tok': return `p.matchTokW(${kidOf(ids, s.name)})`;
     case 'rule': return `p.callRuleW((*${recv}).parse${s.name}W)`;
     case 'ruleBp': return `p.callRuleW(func(q *${recv}) (spanned, bool) { return q.bpW_${s.name}(${s.bp}) })`;
     case 'star': return `p.starW(func() bool { return ${stepCondW(s.step, ids, ar, recv)} })`;
     case 'opt': return `p.optW(func() bool { return ${s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} })`;
-    case 'sep': return `p.sepByW(func() bool { return ${stepCondW(s.elem, ids, ar, recv)} }, ${lidOf(ids, s.delim)})`;
-    case 'altlit': return `p.altLitW([]struct{ Lid, TtId uint16 }{${s.opts.map((o) => `{${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)}}`).join(', ')}})`;
+    case 'sep': return `p.sepByW(func() bool { return ${stepCondW(s.elem, ids, ar, recv)} }, ${sepDelimLid(ids, s.delim)})`;
+    case 'altlit': return `p.altLitW([]uint16{${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}})`;
     case 'alt': return `func() bool { ${stepStmtsW(s, ids, ar, recv)} }()`;
     case 'look': return `${s.is ? '' : '!'}p.look${s.id}W()`;
     case 'ahead': return `p.aheadW(${s.set}, ${s.is})`;
@@ -1703,7 +1707,7 @@ function rdEntryWithReuseBW(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Are
   return `${headFn}func (p *${recv}) parseLoopSegW(sb int) (EntryMeta, bool) {
 \tsp := p.pos; before := len(p.scratch); ${arenaCkpt(recv)}
 \tp.lookReset()
-\tif !p.matchTokW(${kidOf(ids, plan.loopTok)}, ${ttIdOf(ar, plan.loopTok)}) {
+\tif !p.matchTokW(${kidOf(ids, plan.loopTok)}) {
 \t\tp.back(sp); p.scratch = p.scratch[:before]; ${arenaRestore(recv)}
 \t\treturn EntryMeta{}, false
 \t}
@@ -2025,9 +2029,9 @@ func (p *${recv}) nllBlockedW(words []string, left spanned) bool {
 \tfor _, w := range words { if w == h { return true } }
 \treturn false
 }
-func (p *${recv}) matchLitW(lid, ttId uint16) bool {
+func (p *${recv}) matchLitW(lid uint16) bool {
 \tt := p.peekW()
-\tif t != nil && t.Lid == lid { p.pushLeafW(ttId, uint32(p.pos), t.Off, t.End); p.pos++; return true }
+\tif t != nil && t.Lid == lid { p.pushLeafW(litTt(lid), uint32(p.pos), t.Off, t.End); p.pos++; return true }
 \treturn false
 }
 func (p *${recv}) matchCompW(lid uint16) bool {
@@ -2037,9 +2041,9 @@ func (p *${recv}) matchCompW(lid uint16) bool {
 \tif e := p.pos + n + 1; e > p.maxLook { p.maxLook = e }
 \tp.pos += n; return true
 }
-func (p *${recv}) matchTokW(kid, ttId uint16) bool {
+func (p *${recv}) matchTokW(kid uint16) bool {
 \tt := p.peekW()
-\tif t != nil && t.Kid == kid { p.pushLeafW(ttId, uint32(p.pos), t.Off, t.End); p.pos++; return true }
+\tif t != nil && t.Kid == kid { p.pushLeafW(kid, uint32(p.pos), t.Off, t.End); p.pos++; return true }
 \treturn false
 }
 func (p *${recv}) callRuleW(fn func(*${recv}) (spanned, bool)) bool {
@@ -2065,14 +2069,14 @@ func (p *${recv}) sepByW(elem func() bool, delim uint16) bool {
 \tif !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; ${arenaRestore(recv).replace('nb', 'nb0').replace('kb', 'kb0')}; return true }
 \tfor {
 \t\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
-\t\tif !p.matchLitW(delim, TT_SKIP_PUNCT) { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; break }
+\t\tif !p.matchLitW(delim) { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; break }
 \t\tsp2 := p.pos; sb2 := len(p.scratch); ${arenaCkpt(recv).replace('nb, kb', 'nb2, kb2')}
 \t\tif !elem() { p.back(sp2); p.scratch = p.scratch[:sb2]; ${arenaRestore(recv).replace('nb', 'nb2').replace('kb', 'kb2')}; break }
 \t}
 \treturn true
 }
-func (p *${recv}) altLitW(opts []struct{ Lid, TtId uint16 }) bool {
-\tfor _, o := range opts { if p.matchLitW(o.Lid, o.TtId) { return true } }
+func (p *${recv}) altLitW(lids []uint16) bool {
+\tfor _, lid := range lids { if p.matchLitW(lid) { return true } }
 \treturn false
 }
 
@@ -3177,7 +3181,7 @@ type engine struct {
 ${reuse ? '\tentries []EntryMeta\n' : ''}${reuse?.kind === 'B' ? '\tsegs []Seg\n' : ''}}
 const arenaCompactK = 4
 
-${renderArenaTablesGo(ar)}
+${renderArenaTablesGo(ar, ids)}
 
 ${lexer(ir, ids, shared)}
 
@@ -3271,19 +3275,20 @@ func (p *engine) finish(ruleId uint16, sb, fallbackOff, tokStart int) int32 {
 \tp.nodes = append(p.nodes, Node{RuleId: ruleId, KidStart: uint32(kidStart), KidCount: uint32(nn - sb), Offset: off, End: end, TokStart: uint32(tokStart), TokEnd: uint32(p.pos), Ext: 0})
 \treturn int32(len(p.nodes) - 1)
 }
-func (p *engine) matchLit(lid uint16, ttId uint8) bool {
+func (p *engine) matchLit(lid uint16) bool {
 \ti := p.pos
 \tp.peekEnd = i + 1 // the probe is a peek (TS/Rust matchLit go through peek())
 \tif i >= len(p.toks) || p.toks[i].Lid != lid { return false }
-\tif ttId != TT_SKIP_PUNCT { p.scratch = append(p.scratch, encodeLeaf(uint32(i), ttId)) }
+\tif lid >= lidKw { p.scratch = append(p.scratch, encodeLeaf(uint32(i), ${ttIdOf(ar, '$keyword')})) }
 \tp.pos = i + 1
 \treturn true
 }
-func (p *engine) matchTok(kid uint16, ttId uint8) bool {
+// A token kind's leaf type id is its kid (ArenaIdPlan: TT_NAMES starts with the kids).
+func (p *engine) matchTok(kid uint16) bool {
 \ti := p.pos
 \tp.peekEnd = i + 1
 \tif i >= len(p.toks) || p.toks[i].Kid != kid { return false }
-\tif ttId != TT_SKIP_PUNCT { p.scratch = append(p.scratch, encodeLeaf(uint32(i), ttId)) }
+\tp.scratch = append(p.scratch, encodeLeaf(uint32(i), uint8(kid)))
 \tp.pos = i + 1
 \treturn true
 }
@@ -3312,14 +3317,14 @@ func (p *engine) sepBy(elem func() bool, delimLid uint16) bool {
 \tif !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; p.nodes = p.nodes[:nb0]; p.kids = p.kids[:kb0]; return true }
 \tfor {
 \t\tsp := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
-\t\tif !p.matchLit(delimLid, TT_SKIP_PUNCT) { p.back(sp); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; break }
+\t\tif !p.matchLit(delimLid) { p.back(sp); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; break }
 \t\tsp2 := p.pos; sb2 := len(p.scratch); nb2 := len(p.nodes); kb2 := len(p.kids)
 \t\tif !elem() { p.back(sp2); p.scratch = p.scratch[:sb2]; p.nodes = p.nodes[:nb2]; p.kids = p.kids[:kb2]; break }   // trailing delim OK — keep delim
 \t}
 \treturn true
 }
-func (p *engine) altLit(opts []struct{ Lid uint16; TtId uint8 }) bool {
-\tfor _, o := range opts { if p.matchLit(o.Lid, o.TtId) { return true } }
+func (p *engine) altLit(lids []uint16) bool {
+\tfor _, lid := range lids { if p.matchLit(lid) { return true } }
 \treturn false
 }
 

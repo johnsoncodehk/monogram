@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -105,6 +105,8 @@ function gtRuntimeRust(ids: LexIdPlan): string {
     return `(${a}, ${b}) => ${r}, `;
   }).join('');
   return `const GT_LID: u16 = ${ids.gtComps.length > 0 ? lidOf(ids, '>') : 'u16::MAX'};
+/// The first word lid (LexIdPlan.kwLid): a literal from here on is a \`$keyword\` leaf, one before it a \`$punct\` (no leaf).
+const LID_KW: u16 = ${ids.kwLid};
 #[inline(always)] fn gt_step(a: u16, b: u16) -> u16 { match (a, b) { ${arms}_ => 0 } }
 #[inline]
 fn gt_op(toks: &[Tok], i: usize) -> (u16, usize, u32) {
@@ -708,14 +710,14 @@ function topReusePlan(ir: ParserIR): ReusePlan | null {
 function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
   if ('share' in s && s.share !== undefined) return `self.sub_${s.share}()`;
   switch (s.t) {
-    case 'lit': return gtCompLit(ids, s) ? `self.match_comp(${lidOf(ids, s.value)})` : `self.match_lit(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
-    case 'tok': return `self.match_tok(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
+    case 'lit': return gtCompLit(ids, s) ? `self.match_comp(${lidOf(ids, s.value)})` : `self.match_lit(${lidOf(ids, s.value)})`;
+    case 'tok': return `self.match_tok(${kidOf(ids, s.name)})`;
     case 'rule': return `self.call_rule(Parser::parse_${s.name})`;
     case 'ruleBp': return `self.call_rule(|p| p.${s.name}_bp(${s.bp}))`;
     case 'star': return `self.star(|p| ${stepCondP(s.step, ids, ar)})`;
     case 'opt': return `self.opt(|p| ${s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ')})`;
-    case 'sep': return `self.sep_by(|p| ${stepCondP(s.elem, ids, ar)}, ${lidOf(ids, s.delim)})`;
-    case 'altlit': return `self.alt_lit(&[${s.opts.map((o) => `(${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)})`).join(', ')}])`;
+    case 'sep': return `self.sep_by(|p| ${stepCondP(s.elem, ids, ar)}, ${sepDelimLid(ids, s.delim)})`;
+    case 'altlit': return `self.alt_lit(&[${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}])`;
     case 'alt': return s.predictive
       ? `(|p: &mut Parser<'a, B>| -> bool { ${predAltBody(s.branches, ids, ar, s.firsts)} })(self)`
       : `(|p: &mut Parser<'a, B>| -> bool { ${altBody(s.branches, ids, ar, s.firsts)} })(self)`;
@@ -736,14 +738,14 @@ function stepCondP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
 // The step itself over `p`, printed in place (a shared step's method body; every other step's site).
 function stepBodyP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
   switch (s.t) {
-    case 'lit': return gtCompLit(ids, s) ? `p.match_comp(${lidOf(ids, s.value)})` : `p.match_lit(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
-    case 'tok': return `p.match_tok(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
+    case 'lit': return gtCompLit(ids, s) ? `p.match_comp(${lidOf(ids, s.value)})` : `p.match_lit(${lidOf(ids, s.value)})`;
+    case 'tok': return `p.match_tok(${kidOf(ids, s.name)})`;
     case 'rule': return `p.call_rule(Parser::parse_${s.name})`;
     case 'ruleBp': return `p.call_rule(|p| p.${s.name}_bp(${s.bp}))`;
     case 'star': return `p.star(|p| ${stepCondP(s.step, ids, ar)})`;
     case 'opt': return `p.opt(|p| ${s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ')})`;
-    case 'sep': return `p.sep_by(|p| ${stepCondP(s.elem, ids, ar)}, ${lidOf(ids, s.delim)})`;
-    case 'altlit': return `p.alt_lit(&[${s.opts.map((o) => `(${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)})`).join(', ')}])`;
+    case 'sep': return `p.sep_by(|p| ${stepCondP(s.elem, ids, ar)}, ${sepDelimLid(ids, s.delim)})`;
+    case 'altlit': return `p.alt_lit(&[${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}])`;
     case 'alt': return `(|p: &mut Parser<'a, B>| -> bool { ${stepStmtsP(s, ids, ar)} })(p)`;
     case 'look': return `${s.is ? '' : '!'}p.look_${s.id}()`;
     case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
@@ -894,7 +896,7 @@ function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Aren
   return `${headFn}    fn parse_loop_seg(&mut self, sb: usize) -> Option<(Seg, EntryMeta)> {
         let sp = self.pos; let before = self.scratch.len(); let ck = self.b.checkpoint();
         self.look_reset();
-        if !self.match_tok(${kidOf(ids, plan.loopTok)}, ${ttIdOf(ar, plan.loopTok)}) {
+        if !self.match_tok(${kidOf(ids, plan.loopTok)}) {
             self.back(sp); self.scratch.truncate(before); self.b.restore(ck);
             return None;
         }
@@ -2339,9 +2341,9 @@ impl<'a, B: Builder> Parser<'a, B> {
         let h = self.head_leaf_text(left); words.iter().any(|w| *w == h)
     }
     #[inline(always)]
-    fn match_lit(&mut self, lid: u16, tt_id: u16) -> bool {
+    fn match_lit(&mut self, lid: u16) -> bool {
         match self.peek() {
-            Some(t) if t.lid == lid => { self.push_leaf(tt_id, self.pos as u32, t.off, t.end); self.pos += 1; true }
+            Some(t) if t.lid == lid => { self.push_leaf(if lid >= LID_KW { ${ttIdOf(ar, '$keyword')} } else { ${punctId} }, self.pos as u32, t.off, t.end); self.pos += 1; true }
             _ => false
         }
     }
@@ -2365,9 +2367,10 @@ impl<'a, B: Builder> Parser<'a, B> {
         r
     }
     #[inline(always)]
-    fn match_tok(&mut self, kid: u16, tt_id: u16) -> bool {
+    /// A token kind's leaf type id is its kid (ArenaIdPlan: TT_NAMES starts with the kids).
+    fn match_tok(&mut self, kid: u16) -> bool {
         match self.peek() {
-            Some(t) if t.kid == kid => { self.push_leaf(tt_id, self.pos as u32, t.off, t.end); self.pos += 1; true }
+            Some(t) if t.kid == kid => { self.push_leaf(kid, self.pos as u32, t.off, t.end); self.pos += 1; true }
             _ => false
         }
     }
@@ -2398,15 +2401,15 @@ impl<'a, B: Builder> Parser<'a, B> {
         if !elem(self) { self.reset(m0); return true; }
         loop {
             let m = self.mark();
-            if !self.match_lit(delim, ${punctId}) { self.reset(m); break; }
+            if !self.match_lit(delim) { self.reset(m); break; }
             let m2 = self.mark();
             if !elem(self) { self.reset(m2); break; }
         }
         true
     }
     #[inline(always)]
-    fn alt_lit(&mut self, opts: &[(u16, u16)]) -> bool {
-        for (lid, tt) in opts { if self.match_lit(*lid, *tt) { return true; } }
+    fn alt_lit(&mut self, lids: &[u16]) -> bool {
+        for lid in lids { if self.match_lit(*lid) { return true; } }
         false
     }
 
