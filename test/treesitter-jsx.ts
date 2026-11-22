@@ -42,8 +42,10 @@ const RESERVED_WORDS = [
 ];
 
 // Contextual keywords: every keyword the generated grammar reads both ways (generateTreeSitter's
-// `contextualKeywords`, derived from the grammar), as an identifier in each position class. Only the
-// inputs the interpreter accepts are kept, so the target is that every one parses.
+// `contextualKeywords`, derived from the grammar), as an identifier in each position class: one
+// class per word-token step of the JavaScript and TypeScript grammars (the steps a keyword set is
+// planned for, planContextualWords). Only the inputs the interpreter accepts are kept, so the target
+// is that every one parses.
 const CONTEXTUAL_POSITIONS = [
   (w: string) => `let ${w} = 1;`,                        // binding name
   (w: string) => `function f(${w}) {}`,                  // parameter
@@ -55,6 +57,66 @@ const CONTEXTUAL_POSITIONS = [
   (w: string) => `import ${w} from "m";`,                // default import
   (w: string) => `export { ${w} };`,                     // export specifier
   (w: string) => `${w}: while (1) break ${w};`,          // label
+  (w: string) => `${w}: for (;;) continue ${w};`,        // continue label
+  (w: string) => `function ${w}() {}`,                   // function declaration name
+  (w: string) => `function* ${w}() {}`,                  // generator declaration name
+  (w: string) => `class ${w} {}`,                        // class declaration name
+  (w: string) => `x = function ${w}() {};`,              // function expression name
+  (w: string) => `x = function* ${w}() {};`,             // generator expression name
+  (w: string) => `x = class ${w} {};`,                   // class expression name
+  (w: string) => `class C extends ${w} {}`,              // heritage
+  (w: string) => `x = ${w} => 1;`,                       // arrow parameter
+  (w: string) => `x = async ${w} => 1;`,                 // async arrow parameter
+  (w: string) => `x = ${w}.y;`,                          // member object
+  (w: string) => `for (const ${w} of a);`,               // for-of binding
+  (w: string) => `for (let ${w} in a);`,                 // for-in binding
+  (w: string) => `let { ${w} } = o;`,                    // shorthand binding property
+  (w: string) => `let { a: ${w} } = o;`,                 // binding property value
+  (w: string) => `let { ${w}: a } = o;`,                 // binding property key
+  (w: string) => `let { ...${w} } = o;`,                 // binding rest property
+  (w: string) => `let [${w}] = a;`,                      // array binding element
+  (w: string) => `let [...${w}] = a;`,                   // array binding rest
+  (w: string) => `function f(...${w}) {}`,               // rest parameter
+  (w: string) => `try {} catch (${w}) {}`,               // catch parameter
+  (w: string) => `import { a as ${w} } from "m";`,       // import alias
+  (w: string) => `import { ${w} as a } from "m";`,       // imported name
+  (w: string) => `import * as ${w} from "m";`,           // namespace import
+  (w: string) => `export { a as ${w} };`,                // export alias
+  (w: string) => `export { ${w} as a };`,                // exported local
+  (w: string) => `export * as ${w} from "m";`,           // namespace export
+  // TypeScript
+  (w: string) => `let x: ${w};`,                         // type reference
+  (w: string) => `let x: ${w}.T;`,                       // qualified type name
+  (w: string) => `let x: typeof ${w};`,                  // typeof query
+  (w: string) => `let x: [${w}: string];`,               // named tuple member
+  (w: string) => `let f: (${w}: number) => void;`,       // function type parameter
+  (w: string) => `let f: (...${w}: number[]) => void;`,  // function type rest parameter
+  (w: string) => `type ${w} = 1;`,                       // type alias name
+  (w: string) => `interface ${w} {}`,                    // interface name
+  (w: string) => `enum ${w} {}`,                         // enum name
+  (w: string) => `namespace ${w} {}`,                    // namespace name
+  (w: string) => `declare module ${w} {}`,               // module name
+  (w: string) => `function f<${w}>() {}`,                // type parameter
+  (w: string) => `function f<const ${w}>() {}`,          // const type parameter
+  (w: string) => `type T<in ${w}> = 1;`,                 // variance-annotated type parameter
+  (w: string) => `type T = X extends infer ${w} ? 1 : 2;`, // infer
+  (w: string) => `function f(x): asserts ${w} {}`,       // asserts predicate
+  (w: string) => `function f(x): ${w} is string {}`,     // type predicate
+  (w: string) => `interface I { ${w}: 1 }`,              // property signature
+  (w: string) => `interface I { m(${w}): void }`,        // method signature parameter
+  (w: string) => `interface I { [${w}: string]: 1 }`,    // index signature parameter
+  (w: string) => `interface I { new (${w}): I }`,        // construct signature parameter
+  (w: string) => `class C { [${w}: string]: any }`,      // class index signature
+  (w: string) => `class C { constructor(public ${w}) {} }`, // parameter property
+  (w: string) => `class C { static ${w}() {} }`,         // modified member name
+  (w: string) => `class C implements ${w} {}`,           // implements clause
+  (w: string) => `import ${w} = require("m");`,          // import-equals name
+  (w: string) => `import x = ${w}.y;`,                   // import-equals module reference
+  (w: string) => `import { type ${w} } from "m";`,       // type-only import specifier
+  (w: string) => `export { type ${w} };`,                // type-only export specifier
+  (w: string) => `export type { ${w} };`,                // type-only export clause
+  (w: string) => `@${w} class C {}`,                     // decorator
+  (w: string) => `let x = <${w}>y;`,                     // type assertion
 ];
 
 const { Parser, Language } = await import('web-tree-sitter');

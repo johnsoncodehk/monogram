@@ -254,6 +254,9 @@ interface GrammarJsContext {
   wordLiterals: string[];
   /** planContextualWords: per word-token step, the keywords it also reads as the word token. */
   contextualPlan: Map<RuleExpr, string[]>;
+  /** The keywords some step of contextualPlan reads as the word token: only these are written through
+   *  `_keyword_<K>` (a keyword no step reads as a name stays a plain string, so it costs no symbol). */
+  identWords: Set<string>;
   /** The keywords given both readings (buildGrammarJs fills it). */
   bothReadings: string[];
 }
@@ -348,8 +351,8 @@ function lowerNotBeforeOptional(expr: RuleExpr & { type: 'seq' }, onGuard?: (gua
 /** A literal token written into a rule (every rule-body literal goes through here: renderedLiterals). */
 function ruleLiteral(text: string, ctx: GrammarJsContext): string {
   ctx.renderedLiterals.add(text);
-  // A keyword is read through its own hidden rule (contextual words: why).
-  if (ctx.wordLiterals.includes(text)) return `$.${keywordRuleName(text, 'kw')}`;
+  // A keyword some step also reads as a name is read through its own hidden rule (contextual words: why).
+  if (ctx.identWords.has(text)) return `$.${keywordRuleName(text, 'kw')}`;
   return jsString(text);
 }
 
@@ -399,7 +402,8 @@ function renderWordStep(node: RuleExpr, ref: string, guard: WordGuard | undefine
 // step: as a shift, or as the lookahead of a reduction there. That is decided over the LR(0) automaton
 // of the grammar as tree-sitter sees it (the tree-sitter view of each group, the Pratt rules as their
 // operator productions): every LR(1) state tree-sitter builds has the item core of an LR(0) state, and
-// a reduction's lookahead is within its rule's FOLLOW (SLR), so the sets are a superset. The answer
+// a reduction's lookahead there is within the LALR(1) lookahead of that core, so the sets are a
+// superset. The answer
 // feeds back (a step that reads K as an identifier makes K valid in its states, and a K shift advances
 // it), so the automaton is rebuilt until the sets stop growing.
 //
@@ -528,63 +532,126 @@ function planContextualWords(grammar: CstGrammar, tokenNames: Set<string>, word:
     go(ruleG[nt].first);
     return firstCache[nt] = [...out];
   };
-  // FOLLOW over terminal leaves, per rule.
-  const followTerms: Set<number>[] = ruleNames.map(() => new Set());
-  for (let changed = true; changed;) {
-    changed = false;
-    for (let l = 0; l < leaves.length; l++) {
-      const nt = leaves[l].nt;
-      if (nt < 0) continue;
-      const { terms, end } = termNext(follow[l]);
-      const add = [...terms, ...(isLast[l] || end ? followTerms[leaves[l].rule] : [])];
-      for (const t of add) if (!followTerms[nt].has(t)) { followTerms[nt].add(t); changed = true; }
-    }
+  // The terminals that may follow a rule-reference leaf inside its rule, and whether its rule may end
+  // after it (through nullable rules): what a closure item for that rule inherits (LALR below).
+  const after = new Map<number, { terms: number[]; end: boolean }>();
+  for (let l = 0; l < leaves.length; l++) if (leaves[l].nt >= 0) {
+    const r = termNext(follow[l]);
+    after.set(l, { terms: r.terms, end: r.end || isLast[l] });
   }
-  // An item: a leaf id (after it), or -1 - rule (the rule's start).
+  // An item: a leaf id (after it), or -1 - rule (the rule's start). Complete: its rule may end there.
   const nextOf = (it: number) => it < 0 ? ruleG[-1 - it].first : follow[it];
-  const completeRule = (it: number) => it < 0 ? (nullable[-1 - it] ? -1 - it : -1) : (isLast[it] || termNext(follow[it]).end ? leaves[it].rule : -1);
+  const complete = (it: number) => it < 0 ? nullable[-1 - it] : isLast[it];
+  // Keyword sets are bit sets over `words`: a keyword leaf is its own bit, a word-token leaf the
+  // keywords it reads as a name (`allowed`, which the fixpoint below grows).
+  const W = Math.max(1, Math.ceil(words.length / 32));
+  const bitOf = new Map(words.map((w, i) => [w, i]));
   const allowed = new Map<number, Set<string>>();
   const allowedOf = (l: number) => allowed.get(l) ?? allowed.set(l, new Set()).get(l)!;
+  const orTerm = (into: Uint32Array, at: number, t: number) => {
+    const k = kwOf(t);
+    if (k !== null) { const b = bitOf.get(k)!; into[at + (b >> 5)] |= 1 << (b & 31); return; }
+    if (isIdent(t)) for (const w of allowed.get(t) ?? []) { const b = bitOf.get(w)!; into[at + (b >> 5)] |= 1 << (b & 31); }
+  };
+  /** into[at..] |= from[fa..]; true when into grew. */
+  const orInto = (into: Uint32Array, at: number, from: Uint32Array, fa: number) => {
+    let grewAny = false;
+    for (let i = 0; i < W; i++) { const v = (into[at + i] | from[fa + i]) >>> 0; if (v !== into[at + i]) { into[at + i] = v; grewAny = true; } }
+    return grewAny;
+  };
   const entry = ruleOf(grammar.rules[grammar.rules.length - 1].name);
   for (let grew = true; grew;) {
     grew = false;
-    const seenStates = new Set<string>();
-    const queue: number[][] = [[-1 - entry]];
-    while (queue.length) {
-      const kernel = queue.pop()!;
+    // ── the LR(0) automaton: kernels, closures (kernel items first), gotos ──
+    const stateOf = new Map<string, number>();
+    const kernels: number[][] = [];
+    const closures: number[][] = [];
+    const gotos: Map<string, number>[] = [];
+    const intern = (kernel: number[]) => {
       const key = kernel.join(',');
-      if (seenStates.has(key)) continue;
-      seenStates.add(key);
-      // closure
-      const items = new Set(kernel);
-      const stack = [...kernel];
-      while (stack.length) {
-        const it = stack.pop()!;
-        for (const l of nextOf(it)) {
+      let s = stateOf.get(key);
+      if (s === undefined) { s = kernels.length; stateOf.set(key, s); kernels.push(kernel); }
+      return s;
+    };
+    intern([-1 - entry]);
+    for (let s = 0; s < kernels.length; s++) {
+      const items = [...kernels[s]];
+      const inItems = new Set(items);
+      for (let i = 0; i < items.length; i++) {
+        for (const l of nextOf(items[i])) {
           const nt = leaves[l].nt;
-          if (nt >= 0 && !items.has(-1 - nt)) { items.add(-1 - nt); stack.push(-1 - nt); }
+          if (nt >= 0 && !inItems.has(-1 - nt)) { inItems.add(-1 - nt); items.push(-1 - nt); }
         }
       }
-      const next: number[] = [];
-      for (const it of items) for (const l of nextOf(it)) next.push(l);
-      const { terms } = termNext(next);
-      const steps = terms.filter(isIdent);
-      // goto targets: grouped by symbol (a keyword also advances the steps that read it as a name)
-      const bySym = new Map<string, number[]>();
-      for (const l of next) { const s = leaves[l].sym; (bySym.get(s) ?? bySym.set(s, []).get(s)!).push(l); }
-      for (const l of next) if (isIdent(l)) for (const w of allowed.get(l) ?? []) { const s = `'${w}`; (bySym.get(s) ?? bySym.set(s, []).get(s)!).push(l); }
-      for (const ls of bySym.values()) queue.push([...new Set(ls)].sort((a, b) => a - b));
+      closures[s] = items;
+      // goto targets, grouped by symbol (a keyword also advances the steps that read it as a name)
+      const bySym = new Map<string, Set<number>>();
+      const add = (sym: string, l: number) => (bySym.get(sym) ?? bySym.set(sym, new Set()).get(sym)!).add(l);
+      for (const it of items) for (const l of nextOf(it)) {
+        add(leaves[l].sym, l);
+        if (isIdent(l)) for (const w of allowed.get(l) ?? []) add(`'${w}`, l);
+      }
+      const g = new Map<string, number>();
+      for (const [sym, ls] of bySym) g.set(sym, intern([...ls].sort((a, b) => a - b)));
+      gotos[s] = g;
+    }
+    // ── LALR(1) lookaheads (keywords only) of the kernel items, propagated to a fixpoint ──
+    // In a state, a closure item `start of B` added by an item I whose next leaf L references B gets
+    // the keywords that may follow L in I's rule, and I's own lookaheads when I's rule may end after L;
+    // a goto carries an item's lookaheads to the advanced item. A completed item's lookaheads are its
+    // reduction's lookaheads: the union over the LR(1) states sharing this core, so a superset of what
+    // tree-sitter's states hold.
+    const kernelPos = kernels.map(k => new Map(k.map((it, i) => [it, i])));
+    const kla = kernels.map(k => new Uint32Array(k.length * W));
+    const spont = new Map<number, Uint32Array>();
+    for (const [l, a] of after) { const m = new Uint32Array(W); for (const t of a.terms) orTerm(m, 0, t); spont.set(l, m); }
+    const closureLa = (s: number): Uint32Array => {
+      const items = closures[s];
+      const pos = new Map(items.map((it, i) => [it, i]));
+      const la = new Uint32Array(items.length * W);
+      la.set(kla[s]);
+      for (let changed = true; changed;) {
+        changed = false;
+        for (let i = 0; i < items.length; i++) for (const l of nextOf(items[i])) {
+          if (leaves[l].nt < 0) continue;
+          const q = pos.get(-1 - leaves[l].nt)! * W;
+          if (orInto(la, q, spont.get(l)!, 0)) changed = true;
+          if (after.get(l)!.end && orInto(la, q, la, i * W)) changed = true;
+        }
+      }
+      return la;
+    };
+    const queued = new Uint8Array(kernels.length).fill(1);
+    const work = kernels.map((_, s) => s).reverse();
+    while (work.length) {
+      const s = work.pop()!;
+      queued[s] = 0;
+      const items = closures[s], la = closureLa(s), g = gotos[s];
+      const push = (sym: string, l: number, i: number) => {
+        const t = g.get(sym)!;
+        if (orInto(kla[t], kernelPos[t].get(l)! * W, la, i * W) && !queued[t]) { queued[t] = 1; work.push(t); }
+      };
+      for (let i = 0; i < items.length; i++) for (const l of nextOf(items[i])) {
+        push(leaves[l].sym, l, i);
+        if (isIdent(l)) for (const w of allowed.get(l) ?? []) push(`'${w}`, l, i);
+      }
+    }
+    // ── the keywords valid in each state that shifts a word-token step: shifted, or the lookahead of
+    // a completed item ──
+    for (let s = 0; s < kernels.length; s++) {
+      const items = closures[s];
+      const steps: number[] = [];
+      for (const it of items) for (const l of nextOf(it)) if (isIdent(l)) steps.push(l);
       if (!steps.length) continue;
-      // the keywords valid here: shifted, or the lookahead of a completed item
-      const valid = new Set<string>();
-      const identsValid = new Set(steps);
-      const addTerm = (t: number) => { const k = kwOf(t); if (k) valid.add(k); else if (isIdent(t)) identsValid.add(t); };
-      terms.forEach(addTerm);
-      for (const it of items) { const r = completeRule(it); if (r >= 0) followTerms[r].forEach(addTerm); }
-      for (const l of identsValid) for (const w of allowed.get(l) ?? []) valid.add(w);
+      const valid = new Uint32Array(W);
+      for (const it of items) for (const l of nextOf(it)) if (leaves[l].nt < 0) orTerm(valid, 0, l);
+      const la = closureLa(s);
+      items.forEach((it, i) => { if (complete(it)) orInto(valid, 0, la, i * W); });
       for (const l of steps) {
         const a = allowedOf(l), ex = leaves[l].excl;
-        for (const w of valid) if (!a.has(w) && !ex?.has(w)) { a.add(w); grew = true; }
+        words.forEach((w, b) => {
+          if ((valid[b >> 5] >>> (b & 31)) & 1 && !a.has(w) && !ex?.has(w)) { a.add(w); grew = true; }
+        });
       }
     }
   }
@@ -1757,6 +1824,8 @@ function buildTokenTreeSitter(grammar: CstGrammar, grammarName: string): Omit<Tr
   const assertions = classifyAssertions(grammar, tokenNames, terminalSets);
   const wordTok = grammar.tokens.find(t => t.identifier)?.name;
   const wordLiterals = wordTok ? collectWordLiterals(grammar, assertions.isWordLiteral) : [];
+  const contextualPlan = wordTok && wordLiterals.length
+    ? planContextualWords(grammar, tokenNames, wordTok, wordLiterals, prattRules, new Set(scannerTokenFor.keys()), assertions.isWordLiteral) : new Map<RuleExpr, string[]>();
   const ctx: GrammarJsContext = {
     grammar, tokenNames, ruleSnake, tokenSnake, prattRules, externalSnake, scannerTokenFor,
     flowLiteralTokens,
@@ -1768,8 +1837,8 @@ function buildTokenTreeSitter(grammar: CstGrammar, grammarName: string): Omit<Tr
     contextualWords: new Map(),
     bothReadings: [],
     wordLiterals,
-    contextualPlan: wordTok && wordLiterals.length
-      ? planContextualWords(grammar, tokenNames, wordTok, wordLiterals, prattRules, new Set(scannerTokenFor.keys()), assertions.isWordLiteral) : new Map(),
+    contextualPlan,
+    identWords: new Set([...contextualPlan.values()].flat()),
     glrRules: new Set(),
     templatePlan,
     interpolationPlans,
@@ -1957,7 +2026,7 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
     for (const n of [kw, id]) if (ruleNames.has(n) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(n)) throw new Error(`gen-treesitter: contextual-keyword rule name ${n} collides or is no rule name`);
     // Written only where a rule uses it (a keyword every guard excludes has no identifier reading;
     // tree-sitter rejects an unused rule only as a warning, but the grammar should not carry one).
-    const asKeyword = ctx.renderedLiterals.has(w);
+    const asKeyword = ctx.renderedLiterals.has(w) && ctx.identWords.has(w);
     if (asKeyword) ruleEntries.push(`    ${kw}: $ => ${jsString(w)}`);
     if (identRead.has(w)) ctx.renderedLiterals.add(w);
     if (identRead.has(w)) ruleEntries.push(`    ${id}: $ => prec.dynamic(-1, alias(${jsString(w)}, $.${wordSnake}))`);
