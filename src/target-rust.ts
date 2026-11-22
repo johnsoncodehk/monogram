@@ -60,9 +60,9 @@ const dispatchRs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, key
 // Whether candidate i, just ended at pos, beats the best so far: it ends past it, or — a Dispatch
 // `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is kept only
 // in a list that has ranked candidates.
-const beatsRs = (d: Dispatch, pos: string, i: number) => d.ranked.includes(i) ? `(${pos} > best_pos || ${pos} == best_pos && ${i} < bi)` : `${pos} > best_pos`;
-const markRs = (d: Dispatch, i: number) => (d.ranked.length ? ` bi = ${i};` : '');
-const biRs = (d: Dispatch) => (d.ranked.length ? ' let mut bi: i32 = -1;' : '');
+// The list's state is the parser's `Lm` value `lm` (Parser::lm), so `bi` is kept in every list and
+// is a dead store, removed by the compiler, in one without ranked candidates.
+const beatsRs = (d: Dispatch, pos: string, i: number) => d.ranked.includes(i) ? `(${pos} > lm.best_pos || ${pos} == lm.best_pos && ${i} < lm.bi)` : `${pos} > lm.best_pos`;
 // ── The two frames of a construct that may have to undo what it tried ──
 // Every one is printed by one of these, so what a frame costs in the output is decided here.
 // The checkpoint (position, scratch length, builder checkpoint) taken over the parser `p`, and the
@@ -72,13 +72,16 @@ const undoRs = (p: string) => `${p}.reset(m);`;
 // BRANCH frame: one branch of an ordered choice (`alt`), over `p`: it returns true from the
 // choice when the branch matched, and undoes it when it did not.
 const branchRs = (cond: string) => `{ ${ckptRs('p')} if ${cond} { return true; } ${undoRs('p')} }`;
-// CANDIDATE frame: one candidate of a longest-match list (an rd rule's alternatives, a Pratt
-// rule's NUD arms) tried from `save`: when it matched and beats the best so far it becomes the
-// best (`win`: what records it; `ck` moves past its node), else what it built is dropped; either
-// way the position goes back to `save` for the next candidate.
-const lostRs = `self.scratch.truncate(sb); self.b.restore(ck);`;
-const candRs = (d: Dispatch, i: number, cond: string, win: string) =>
-  `{ if ${cond} && ${beatsRs(d, 'self.pos', i)} { ${win} } else { ${lostRs} } self.back(save); }`;
+// CANDIDATE frame: one candidate i of a longest-match list (an rd rule's alternatives, a Pratt
+// rule's NUD arms) of rule `rid`, tried from the list's start `lm.save`: Parser::lm_keep settles
+// it (when it matched and beats the best so far it becomes the best, else what it built is
+// dropped; the position goes back to the start) and says whether it won, which runs `won`.
+// A ranked candidate (Dispatch.ranked) also wins a tie with a later-declared best (lm_keep_ranked).
+const lostRs = `self.scratch.truncate(lm.sb); self.b.restore(lm.ck);`;
+const candRs = (d: Dispatch, i: number, cond: string, rid: number, won = '') => {
+  const keep = `self.lm_keep${d.ranked.includes(i) ? '_ranked' : ''}(&mut lm, ok, ${rid}, ${i})`;
+  return `{ let ok = ${cond}; ${won ? `if ${keep} { ${won} }` : `${keep};`} }`;
+};
 // The typed-AST layer's form of a Guard over the token t: its parser keeps no lookahead mark, so
 // the second token is read directly. null: no guard.
 const astGuardRs = (g: Guard, t: string): string | null =>
@@ -818,17 +821,15 @@ ${r.alts.map(arm).join('\n')}
   // The alternatives are reached through the rule's Dispatch (emit-portable.ts, RdRule.altDispatch).
   const alt = (i: number, keyed: boolean) => {
     const cond = r.alts[i]!.map((x) => stepCond(x, ids, ar)).join(' && ');
-    const body = candRs(r.altDispatch, i, cond, `best = Some(self.finish(${rid}, sb, self.off_at(save), save)); best_pos = self.pos;${markRs(r.altDispatch, i)} ck = self.b.checkpoint();`);
+    const body = candRs(r.altDispatch, i, cond, rid);
     const g = guardCond(r.altGuard[i]!, 't', keyed);
     return g.length && !keyed ? `        if let Some(t) = _ft { if ${g.join(' && ')} ${body} }` : ifRs(g, body);
   };
   const needPeek = r.altGuard.some((g) => g !== null);
   return `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
-        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();
-        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(r.altDispatch)}
+        let mut lm = self.lm();
 ${needPeek ? '        let _ft = self.peek();\n' : ''}${dispatchRs(r.altDispatch, '_ft', ids, alt, true)}
-        self.pos = best_pos;
-        best
+        self.lm_end(lm)
     }`;
 }
 
@@ -940,23 +941,23 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   // The NUD arms, each a longest-match candidate tried from `save`, reached through the rule's
   // Dispatch (emit-portable.ts, PrattRule.nudOrder / nudDispatch). `won` records the node just
   // finished as the best so far and moves `ck` past it; `lost` drops what the arm built.
-  const won = (i: number, form: string, tail: boolean, capped: boolean) =>
-    `best_pos = self.pos;${markRs(r.nudDispatch, i)} bf = ${form}; bt = ${tail}; bc = ${capped}; ck = self.b.checkpoint();`;
+  const form3 = (form: string, tail: boolean, capped: boolean) => `bf = ${form}; bt = ${tail}; bc = ${capped};`;
+  const won = (i: number, form: string, tail: boolean, capped: boolean) => `self.lm_set(&mut lm, n, ${i}); ${form3(form, tail, capped)}`;
   const lost = lostRs;
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    candRs(r.nudDispatch, i, stepsCond(steps), `best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won(i, '0', tail, capped)}`);
+    candRs(r.nudDispatch, i, stepsCond(steps), rid, form3('0', tail, capped));
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
     switch (a.kind) {
       case 'tok': {
         const k = r.nudToks[a.index]!;
-        const leafArm = ifRs([...(keyed ? [] : [`t.kid == ${kidOf(ids, k)}`]), beatsRs(r.nudDispatch, 'save + 1', i)], `{ self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; best = Some(self.finish(${rid}, sb, t.off as usize, save)); ${won(i, '0', false, false)} self.back(save); }`);
+        const leafArm = ifRs([...(keyed ? [] : [`t.kid == ${kidOf(ids, k)}`]), beatsRs(r.nudDispatch, 'save + 1', i)], `{ self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; let n = self.finish(${rid}, sb, t.off as usize, save); ${won(i, '0', false, false)} self.back(save); }`);
         if (r.nudTplHole === undefined || !tpl || k !== tpl.token) return leafArm;
         return `${leafArm}
         if t.kid == ${kidOf(ids, "$templateHead")} {
             match self.match_template(Self::parse_${r.nudTplHole}) {
-                Some(n) if ${beatsRs(r.nudDispatch, 'self.pos', i)} => { if n.present { self.scratch.push(n.h); } best = Some(self.finish(${rid}, sb, n.off as usize, n.tok_start as usize)); ${won(i, '0', false, false)} }
+                Some(n) if ${beatsRs(r.nudDispatch, 'self.pos', i)} => { if n.present { self.scratch.push(n.h); } let n = self.finish(${rid}, sb, n.off as usize, n.tok_start as usize); ${won(i, '0', false, false)} }
                 _ => { ${lost} }
             }
             self.back(save);
@@ -979,7 +980,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
             match self.${r.name}_bp(pbp) {
                 Some(_) if ptgt && self.form != 0 => { self.back(save); ${lost} self.capped = false; return None; }
-                Some(operand) if ${beatsRs(r.nudDispatch, 'self.pos', i)} => { if operand.present { self.scratch.push(operand.h); } best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won(i, 'pform', true, false)} }
+                Some(operand) if ${beatsRs(r.nudDispatch, 'self.pos', i)} => { if operand.present { self.scratch.push(operand.h); } let n = self.finish(${rid}, sb, self.off_at(save), save); ${won(i, 'pform', true, false)} }
                 _ => { ${lost} }
             }
             self.back(save);
@@ -1073,16 +1074,14 @@ ${postfixTokMatch}
     fn ${r.name}_nud(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {
         self.capped = false;
         let t = self.peek()?;
-        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();
-        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(r.nudDispatch)}
+        let mut lm = self.lm(); let (save, sb) = (lm.save, lm.sb);
         let (mut bf, mut bt, mut bc) = (0u8, false, false);
 ${dispatchRs(r.nudDispatch, 't', ids, nudArm)}
         // A sub-parse may leave self.capped set: only a capped arm that won makes THIS node capped.
         self.capped = bc;
         self.form = bf;
         self.tail = bt;
-        self.pos = best_pos;
-        best
+        self.lm_end(lm)
     }`;
 }
 
@@ -1981,6 +1980,11 @@ struct Spanned<H: Copy> { h: H, off: u32, tok_start: u32, present: bool }
 /// and the builder's checkpoint. Parser::reset goes back to it.
 #[derive(Clone, Copy)]
 struct Mark { pos: usize, sb: usize, ck: (usize, usize) }
+/// A longest-match list being tried (an rd rule's alternatives, a Pratt rule's NUD arms): where its
+/// candidates start (position, scratch length) and the best candidate so far, its end and its
+/// index. ck is the builder's checkpoint past the best node, so a candidate that loses is undone
+/// to it and the best node stays built.
+struct Lm<H: Copy> { save: usize, sb: usize, ck: (usize, usize), best: Option<Spanned<H>>, best_pos: usize, bi: i32 }
 
 #[derive(Default)]
 pub struct CstBuilder {
@@ -2270,6 +2274,31 @@ impl<'a, B: Builder> Parser<'a, B> {
     /// Undo everything since m: the position (as back), the scratch list and the builder.
     #[inline(always)]
     fn reset(&mut self, m: Mark) { self.back(m.pos); self.scratch.truncate(m.sb); self.b.restore(m.ck); }
+    /// Start a longest-match list here.
+    #[inline(always)]
+    fn lm(&self) -> Lm<B::H> { Lm { save: self.pos, sb: self.scratch.len(), ck: self.b.checkpoint(), best: None, best_pos: self.pos, bi: -1 } }
+    /// Record node n, ending at the position, as candidate i's win.
+    #[inline(always)]
+    fn lm_set(&mut self, lm: &mut Lm<B::H>, n: Spanned<B::H>, i: i32) { lm.best = Some(n); lm.best_pos = self.pos; lm.bi = i; lm.ck = self.b.checkpoint(); }
+    /// Settle candidate i of rule rid, just tried (ok: it matched): it wins when it matched and
+    /// \`won\` (it beats the best so far), and its node is finished; else what it built is undone.
+    /// Either way the position goes back to the list's start. Returns whether it won.
+    #[inline(always)]
+    fn lm_settle(&mut self, lm: &mut Lm<B::H>, won: bool, rid: u16, i: i32) -> bool {
+        if won { let n = self.finish(rid, lm.sb, self.off_at(lm.save), lm.save); self.lm_set(lm, n, i); } else { self.scratch.truncate(lm.sb); self.b.restore(lm.ck); }
+        self.back(lm.save);
+        won
+    }
+    /// A candidate beats the best so far when it ends past it.
+    #[inline(always)]
+    fn lm_keep(&mut self, lm: &mut Lm<B::H>, ok: bool, rid: u16, i: i32) -> bool { let won = ok && self.pos > lm.best_pos; self.lm_settle(lm, won, rid, i) }
+    /// A ranked candidate (Dispatch.ranked) also beats a tie with a best declared after it.
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn lm_keep_ranked(&mut self, lm: &mut Lm<B::H>, ok: bool, rid: u16, i: i32) -> bool { let won = ok && (self.pos > lm.best_pos || self.pos == lm.best_pos && i < lm.bi); self.lm_settle(lm, won, rid, i) }
+    /// The list's result: its best node, the position at its end (none: the start).
+    #[inline(always)]
+    fn lm_end(&mut self, lm: Lm<B::H>) -> Option<Spanned<B::H>> { self.pos = lm.best_pos; lm.best }
     #[inline(always)]
     #[allow(dead_code)]
     fn ahead(&mut self, k: usize, is: bool) -> bool { match self.peek() { Some(t) => in_token_set(k, &t) == is, None => !is } }
