@@ -506,30 +506,41 @@ fn _lx_ext(s: &str, e: usize) -> usize {
 }
 ` : '';
   const fields = ['toks: Vec<Tok>', 'pending_nl: bool',
-    rx ? 'prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool' : '',
+    rx ? 'base: usize, prev0: (bool, u16, u16), bp0: (bool, u16), paren_head: Vec<bool>, last_close: bool, last_bang: bool' : '',
     tpl ? 'template_stack: Vec<i64>' : '',
     nlRs ? nlRs.fields : ''].filter(Boolean).join(', ');
   // Force-inline bookkeeping into the lex cascade. Under rustc -O (no LTO), leaving
   // emit/prev_is_value as outlined calls flips full-parse I-cache layout so lex gains
   // reverse into a parse regress; LTO / codegen-units=1 hide it — #[inline(always)] fixes -O.
   const inlAlways = '    #[inline(always)]\n';
-  const prevIsValue = rx ? `${inlAlways}    fn prev_is_value(&self) -> bool {
-        if !self.has_prev { return false; }
-        if ${rsFlag('_PAV', 'self.prev_lid')} { return self.last_bang; }
-        let is_expr_kw = self.prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'self.prev_lid')};
-        let is_paren_head = self.prev_lid == _LID_RPAREN && self.last_close;
-        !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'self.prev_kid')} || ${rsFlag('_DIVT', 'self.prev_lid')})
+  const prevIsValue = rx ? `${inlAlways}    /// The previous token: (present, kid, lid). The tokens are their own record: the last one this
+    /// lex recorded, else the one before it began (prev0).
+    fn prev(&self) -> (bool, u16, u16) {
+        let n = self.toks.len();
+        if n > self.base { let t = &self.toks[n - 1]; (true, t.kid, t.lid) } else { self.prev0 }
+    }
+${inlAlways}    /// The token before the previous one: (present, lid).
+    fn prev2(&self) -> (bool, u16) {
+        let n = self.toks.len();
+        if n > self.base + 1 { (true, self.toks[n - 2].lid) } else if n == self.base + 1 { (self.prev0.0, self.prev0.2) } else { self.bp0 }
+    }
+${inlAlways}    fn prev_is_value(&self) -> bool {
+        let (has_prev, prev_kid, prev_lid) = self.prev();
+        if !has_prev { return false; }
+        if ${rsFlag('_PAV', 'prev_lid')} { return self.last_bang; }
+        let is_expr_kw = prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'prev_lid')};
+        let is_paren_head = prev_lid == _LID_RPAREN && self.last_close;
+        !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'prev_kid')} || ${rsFlag('_DIVT', 'prev_lid')})
     }
 ` : '';
   const emitHooks = [
-    rx ? `        if lid == _LID_LPAREN { let is_member = self.has_prev2 && ${rsFlag('_MEM', 'self.bp_lid')}; self.paren_head.push(!is_member && self.prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'self.prev_lid')}); }
+    rx ? `        if lid == _LID_LPAREN { let (has_prev2, bp_lid) = self.prev2(); let (_, prev_kid, prev_lid) = self.prev(); let is_member = has_prev2 && ${rsFlag('_MEM', 'bp_lid')}; self.paren_head.push(!is_member && prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'prev_lid')}); }
         else if lid == _LID_RPAREN { self.last_close = self.paren_head.pop().unwrap_or(false); }
         if ${pavHot} { self.last_bang = self.prev_is_value(); }` : '',
     tpl ? `        if !self.template_stack.is_empty() { if lid == _LID_BRACE_OPEN { *self.template_stack.last_mut().unwrap() += 1; } else if lid == _LID_INTERP_CLOSE { *self.template_stack.last_mut().unwrap() -= 1; } }` : '',
     nlRs ? nlRs.hooks : '',
   ].filter(Boolean).join('\n');
-  const emitTail = rx ? `
-        self.bp_lid = self.prev_lid; self.has_prev2 = self.has_prev; self.prev_kid = kid; self.prev_lid = lid; self.has_prev = true;` : '';
+  const emitTail = rx ? `` : '';
   const stateImpl = stateful ? `struct LexState { ${fields} }
 impl LexState {
 ${prevIsValue}${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
@@ -538,21 +549,32 @@ ${emitHooks}
     }
 }
 ` : '';
-  const rxScanImpl = rxOnly ? `struct RxScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool }
+  const rxScanImpl = rxOnly ? `struct RxScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, base: usize, prev0: (bool, u16, u16), bp0: (bool, u16), paren_head: Vec<bool>, last_close: bool, last_bang: bool }
 impl<'a> RxScan<'a> {
+${inlAlways}    /// The previous token: (present, kid, lid). The tokens are their own record: the last one this
+    /// lex recorded, else the one before it began (prev0).
+    fn prev(&self) -> (bool, u16, u16) {
+        let n = self.acc.len();
+        if n > self.base { let t = &self.acc[n - 1]; (true, t.kid, t.lid) } else { self.prev0 }
+    }
+${inlAlways}    /// The token before the previous one: (present, lid).
+    fn prev2(&self) -> (bool, u16) {
+        let n = self.acc.len();
+        if n > self.base + 1 { (true, self.acc[n - 2].lid) } else if n == self.base + 1 { (self.prev0.0, self.prev0.2) } else { self.bp0 }
+    }
 ${inlAlways}    fn prev_is_value(&self) -> bool {
-        if !self.has_prev { return false; }
-        if ${rsFlag('_PAV', 'self.prev_lid')} { return self.last_bang; }
-        let is_expr_kw = self.prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'self.prev_lid')};
-        let is_paren_head = self.prev_lid == _LID_RPAREN && self.last_close;
-        !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'self.prev_kid')} || ${rsFlag('_DIVT', 'self.prev_lid')})
+        let (has_prev, prev_kid, prev_lid) = self.prev();
+        if !has_prev { return false; }
+        if ${rsFlag('_PAV', 'prev_lid')} { return self.last_bang; }
+        let is_expr_kw = prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'prev_lid')};
+        let is_paren_head = prev_lid == _LID_RPAREN && self.last_close;
+        !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'prev_kid')} || ${rsFlag('_DIVT', 'prev_lid')})
     }
 ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
-        if lid == _LID_LPAREN { let is_member = self.has_prev2 && ${rsFlag('_MEM', 'self.bp_lid')}; self.paren_head.push(!is_member && self.prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'self.prev_lid')}); }
+        if lid == _LID_LPAREN { let (has_prev2, bp_lid) = self.prev2(); let (_, prev_kid, prev_lid) = self.prev(); let is_member = has_prev2 && ${rsFlag('_MEM', 'bp_lid')}; self.paren_head.push(!is_member && prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'prev_lid')}); }
         else if lid == _LID_RPAREN { self.last_close = self.paren_head.pop().unwrap_or(false); }
         if ${pavHot} { self.last_bang = self.prev_is_value(); }
         self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;
-        self.bp_lid = self.prev_lid; self.has_prev2 = self.has_prev; self.prev_kid = kid; self.prev_lid = lid; self.has_prev = true;
     }
 }
 ` : '';
@@ -564,22 +586,33 @@ ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
     }
 }
 ` : '';
-  const rxTplScanImpl = rxTpl ? `struct RxTplScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool, template_stack: Vec<i64> }
+  const rxTplScanImpl = rxTpl ? `struct RxTplScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, base: usize, prev0: (bool, u16, u16), bp0: (bool, u16), paren_head: Vec<bool>, last_close: bool, last_bang: bool, template_stack: Vec<i64> }
 impl<'a> RxTplScan<'a> {
+${inlAlways}    /// The previous token: (present, kid, lid). The tokens are their own record: the last one this
+    /// lex recorded, else the one before it began (prev0).
+    fn prev(&self) -> (bool, u16, u16) {
+        let n = self.acc.len();
+        if n > self.base { let t = &self.acc[n - 1]; (true, t.kid, t.lid) } else { self.prev0 }
+    }
+${inlAlways}    /// The token before the previous one: (present, lid).
+    fn prev2(&self) -> (bool, u16) {
+        let n = self.acc.len();
+        if n > self.base + 1 { (true, self.acc[n - 2].lid) } else if n == self.base + 1 { (self.prev0.0, self.prev0.2) } else { self.bp0 }
+    }
 ${inlAlways}    fn prev_is_value(&self) -> bool {
-        if !self.has_prev { return false; }
-        if ${rsFlag('_PAV', 'self.prev_lid')} { return self.last_bang; }
-        let is_expr_kw = self.prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'self.prev_lid')};
-        let is_paren_head = self.prev_lid == _LID_RPAREN && self.last_close;
-        !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'self.prev_kid')} || ${rsFlag('_DIVT', 'self.prev_lid')})
+        let (has_prev, prev_kid, prev_lid) = self.prev();
+        if !has_prev { return false; }
+        if ${rsFlag('_PAV', 'prev_lid')} { return self.last_bang; }
+        let is_expr_kw = prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'prev_lid')};
+        let is_paren_head = prev_lid == _LID_RPAREN && self.last_close;
+        !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'prev_kid')} || ${rsFlag('_DIVT', 'prev_lid')})
     }
 ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
-        if lid == _LID_LPAREN { let is_member = self.has_prev2 && ${rsFlag('_MEM', 'self.bp_lid')}; self.paren_head.push(!is_member && self.prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'self.prev_lid')}); }
+        if lid == _LID_LPAREN { let (has_prev2, bp_lid) = self.prev2(); let (_, prev_kid, prev_lid) = self.prev(); let is_member = has_prev2 && ${rsFlag('_MEM', 'bp_lid')}; self.paren_head.push(!is_member && prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'prev_lid')}); }
         else if lid == _LID_RPAREN { self.last_close = self.paren_head.pop().unwrap_or(false); }
         if ${pavHot} { self.last_bang = self.prev_is_value(); }
         if !self.template_stack.is_empty() { if lid == _LID_BRACE_OPEN { *self.template_stack.last_mut().unwrap() += 1; } else if lid == _LID_INTERP_CLOSE { *self.template_stack.last_mut().unwrap() -= 1; } }
         self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;
-        self.bp_lid = self.prev_lid; self.has_prev2 = self.has_prev; self.prev_kid = kid; self.prev_lid = lid; self.has_prev = true;
     }
 }
 ` : '';
@@ -598,7 +631,7 @@ struct LexStacks {${stkFields.length ? ` ${stkFields.join(', ')} ` : ''}}
   const stkParam = stkFields.length ? 'stk' : '_stk';
   const takeStk = (f: string) => `{ let mut v = std::mem::take(&mut stk.${f}); v.clear(); v }`;
   const initFields = ['toks: Vec::new()', 'pending_nl: false',
-    rx ? `prev_lid: 0, prev_kid: 0, bp_lid: 0, has_prev: false, has_prev2: false, paren_head: ${takeStk('paren_head')}, last_close: false, last_bang: false` : '',
+    rx ? `base: 0, prev0: (false, 0, 0), bp0: (false, 0), paren_head: ${takeStk('paren_head')}, last_close: false, last_bang: false` : '',
     tpl ? `template_stack: ${takeStk('template_stack')}` : '',
     nlRs ? nlRs.init : ''].filter(Boolean).join(', ');
   const open = stateful ? `    let mut st = LexState { ${initFields} };` : `    let mut toks: Vec<Tok> = Vec::new();\n    let mut pending_nl = false;`;
@@ -610,15 +643,16 @@ ${uniIdentOrPanic}`;
     const rxLoopBody = `        let c = b[pos] as u32;
 ${nlWs}${cascade}
 ${uniIdentOrPanic}`;
-    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool) {
+    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
-    let mut st = RxScan { acc, pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, paren_head, last_close, last_bang };
+    let mut st = RxScan { acc, pending_nl, base, prev0: (has_prev, prev_kid, prev_lid), bp0: (has_prev2, bp_lid), paren_head, last_close, last_bang };
     while pos < n && (limit == 0 || st.acc.len() - base < limit) {
 ${rxLoopBody}
     }
-    (pos, st.pending_nl, st.prev_lid, st.prev_kid, st.bp_lid, st.has_prev, st.has_prev2, st.paren_head, st.last_close, st.last_bang)
+    let ((has_prev, prev_kid, prev_lid), (has_prev2, bp_lid)) = (st.prev(), st.prev2());
+    (pos, st.pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, st.paren_head, st.last_close, st.last_bang)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
@@ -656,15 +690,16 @@ fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) 
 }`;
   }
   if (rxTpl) {
-    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxTplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Vec<i64>) {
+    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxTplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Vec<i64>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
-    let mut st = RxTplScan { acc, pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, paren_head, last_close, last_bang, template_stack };
+    let mut st = RxTplScan { acc, pending_nl, base, prev0: (has_prev, prev_kid, prev_lid), bp0: (has_prev2, bp_lid), paren_head, last_close, last_bang, template_stack };
     while pos < n && (limit == 0 || st.acc.len() - base < limit) {
 ${loopBody}
     }
-    (pos, st.pending_nl, st.prev_lid, st.prev_kid, st.bp_lid, st.has_prev, st.has_prev2, st.paren_head, st.last_close, st.last_bang, st.template_stack)
+    let ((has_prev, prev_kid, prev_lid), (has_prev2, bp_lid)) = (st.prev(), st.prev2());
+    (pos, st.pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, st.paren_head, st.last_close, st.last_bang, st.template_stack)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
