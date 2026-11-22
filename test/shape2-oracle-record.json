@@ -11,17 +11,17 @@
   "corpus": "node_modules",
   "view": "top-level statement",
   "units": 2478,
-  "compared": 396,
-  "identical": 396,
-  "outOfSubset": 2082
+  "compared": 855,
+  "identical": 855,
+  "outOfSubset": 1623
  },
  "estree node_modules file": {
   "corpus": "node_modules",
   "view": "file",
   "units": 186,
-  "compared": 1,
-  "identical": 1,
-  "outOfSubset": 185
+  "compared": 3,
+  "identical": 3,
+  "outOfSubset": 183
  },
  "tsc conformance/expressions expression statement": {
   "corpus": "conformance/expressions",
@@ -35,16 +35,16 @@
   "corpus": "conformance/expressions",
   "view": "top-level statement",
   "units": 9208,
-  "compared": 1132,
-  "identical": 1131,
-  "outOfSubset": 8074
+  "compared": 5720,
+  "identical": 5719,
+  "outOfSubset": 3486
  },
  "tsc conformance/expressions file": {
   "corpus": "conformance/expressions",
   "view": "file",
   "units": 349,
-  "compared": 0,
-  "identical": 0,
-  "outOfSubset": 349
+  "compared": 2,
+  "identical": 2,
+  "outOfSubset": 347
  }
 }

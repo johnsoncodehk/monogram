@@ -586,7 +586,7 @@ ${inlAlways}    fn prev_is_value(&self) -> bool {
         let (has_prev, prev_kid, prev_lid) = self.prev();
         if !has_prev { return false; }
         if ${rsFlag('_PAV', 'prev_lid')} { return self.last_bang; }
-        let is_expr_kw = prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'prev_lid')};
+        let is_expr_kw = prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'prev_lid')} && { let (has_prev2, bp_lid) = self.prev2(); !(has_prev2 && ${rsFlag('_MEM', 'bp_lid')}) };
         let is_paren_head = prev_lid == _LID_RPAREN && self.last_close;
         !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'prev_kid')} || ${rsFlag('_DIVT', 'prev_lid')})
     }
@@ -624,7 +624,7 @@ ${inlAlways}    fn prev_is_value(&self) -> bool {
         let (has_prev, prev_kid, prev_lid) = self.prev();
         if !has_prev { return false; }
         if ${rsFlag('_PAV', 'prev_lid')} { return self.last_bang; }
-        let is_expr_kw = prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'prev_lid')};
+        let is_expr_kw = prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'prev_lid')} && { let (has_prev2, bp_lid) = self.prev2(); !(has_prev2 && ${rsFlag('_MEM', 'bp_lid')}) };
         let is_paren_head = prev_lid == _LID_RPAREN && self.last_close;
         !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'prev_kid')} || ${rsFlag('_DIVT', 'prev_lid')})
     }
@@ -661,7 +661,7 @@ ${inlAlways}    fn prev_is_value(&self) -> bool {
         let (has_prev, prev_kid, prev_lid) = self.prev();
         if !has_prev { return false; }
         if ${rsFlag('_PAV', 'prev_lid')} { return self.last_bang; }
-        let is_expr_kw = prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'prev_lid')};
+        let is_expr_kw = prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'prev_lid')} && { let (has_prev2, bp_lid) = self.prev2(); !(has_prev2 && ${rsFlag('_MEM', 'bp_lid')}) };
         let is_paren_head = prev_lid == _LID_RPAREN && self.last_close;
         !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'prev_kid')} || ${rsFlag('_DIVT', 'prev_lid')})
     }
@@ -867,9 +867,14 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean): StepLowering {
     rule: (name) => (r ? `${recv}.rec_${name}()` : `${recv}.call_rule(Parser::parse_${name})`),
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (r ? `${recv}.${name}_bp(${bp}).is_some()` : `${recv}.call_rule(|p| p.${name}_bp(${bp}))`),
-    star: (body) => `${recv}.star${R}(|p| ${body})`,
-    opt: (body) => `${recv}.opt${R}(|p| ${body})`,
-    sep: (elem, delim) => `${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})`,
+    // The body guard (emit-portable.ts annotateSteps) is not rendered in Rust yet, a measured codegen
+    // fact: PR #169's guarded spelling left the work counters of parse_Stmt / parse_Decl / Expr_nud
+    // identical but added +8 to +11 instructions per call to each (LLVM compiles the whole function
+    // differently), so Rust parse instructions rose (dense-semi +4.96%, typescript.ts +1.40%) where
+    // Go and TS fell on every input. The guard only skips attempts that fail, so ignoring it is sound.
+    star: (body, _guard) => `${recv}.star${R}(|p| ${body})`,
+    opt: (body, _guard) => `${recv}.opt${R}(|p| ${body})`,
+    sep: (elem, delim, _guard) => `${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})`,
     altlit: (values) => `${recv}.alt_lit${R}(&[${values.map((v) => lidOf(ids, v)).join(', ')}])`,
     look: (id, is) => `${is ? '' : '!'}${recv}.look_${id}()`,
     ahead: (set, is) => `${recv}.ahead(${set}, ${is})`,
@@ -1207,8 +1212,8 @@ function docEditBlockRust(ir: ParserIR, shared: SharedAlgorithms): string {
             let ntoks = toks_from_meta(&text, &meta);
             let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b: B::default(), scratch: Vec::new()${topReuse ? (shapeB ? ', entries: Vec::new(), segs: Vec::new()' : ', entries: Vec::new()') : ''} };
             match p.parse_${ir.entry}() {
-                Some(fr) if p.pos == p.toks.len() && fr.present => {
-                    self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
+                Some(fr) if p.pos == p.toks.len() => {
+                    self.root = Some(fr.root()); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
                     self.b = p.b; self.scratch = p.scratch; self.keep_toks(p.toks);${topReuse ? (shapeB ? ' self.entries = p.entries; self.segs = p.segs;' : ' self.entries = p.entries;') : ''}
                 }
                 _ => {
@@ -1631,8 +1636,8 @@ fn check_tree_eq_arena(text: &str, toks_a: &[Tok], nodes: &[Node], kids: &[i32],
                 let ntoks = toks_from_meta(&text, &meta);
                 let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new() };
                 match p.parse_${ir.entry}() {
-                    Some(fr) if p.pos == p.toks.len() && fr.present => {
-                        self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
+                    Some(fr) if p.pos == p.toks.len() => {
+                        self.root = Some(fr.root()); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
                         self.b = p.b; self.scratch = p.scratch; self.keep_toks(p.toks); self.entries = p.entries; reused = 0;
                     }
                     _ => {
@@ -1645,8 +1650,8 @@ fn check_tree_eq_arena(text: &str, toks_a: &[Tok], nodes: &[Node], kids: &[i32],
             let ntoks = toks_from_meta(&text, &meta);
             let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new() };
             match p.parse_${ir.entry}() {
-                Some(fr) if p.pos == p.toks.len() && fr.present => {
-                    self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
+                Some(fr) if p.pos == p.toks.len() => {
+                    self.root = Some(fr.root()); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
                     self.b = p.b; self.scratch = p.scratch; self.keep_toks(p.toks); self.entries = p.entries;
                 }
                 _ => {
@@ -1686,8 +1691,8 @@ ${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&
                 let ntoks = toks_from_meta(&text, &meta);
                 let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new(), segs: Vec::new() };
                 match p.parse_${ir.entry}() {
-                    Some(fr) if p.pos == p.toks.len() && fr.present => {
-                        self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
+                    Some(fr) if p.pos == p.toks.len() => {
+                        self.root = Some(fr.root()); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
                         self.b = p.b; self.scratch = p.scratch; self.keep_toks(p.toks); self.segs = p.segs; self.entries = p.entries; reused = 0;
                     }
                     _ => {
@@ -1700,8 +1705,8 @@ ${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&
             let ntoks = toks_from_meta(&text, &meta);
             let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new(), segs: Vec::new() };
             match p.parse_${ir.entry}() {
-                Some(fr) if p.pos == p.toks.len() && fr.present => {
-                    self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
+                Some(fr) if p.pos == p.toks.len() => {
+                    self.root = Some(fr.root()); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
                     self.b = p.b; self.scratch = p.scratch; self.keep_toks(p.toks); self.segs = p.segs; self.entries = p.entries;
                 }
                 _ => {
@@ -1729,8 +1734,8 @@ ${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&
         let ntoks = toks_from_meta(&text, &meta);
         let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b: B::default(), scratch: Vec::new()${reuseInit} };
         match p.parse_${ir.entry}() {
-            Some(fr) if p.pos == p.toks.len() && fr.present => {
-                self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
+            Some(fr) if p.pos == p.toks.len() => {
+                self.root = Some(fr.root()); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
                 self.b = p.b; self.scratch = p.scratch; self.keep_toks(p.toks);${docTakeReuse}
             }
             _ => {
@@ -1825,8 +1830,8 @@ impl<B: Builder + Default> Doc<B> {
         let b = std::mem::take(&mut self.b);
         let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b, scratch: Vec::new()${reuseInit} };
         match p.parse_${ir.entry}() {
-            Some(fr) if p.pos == p.toks.len() && fr.present => {
-                self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
+            Some(fr) if p.pos == p.toks.len() => {
+                self.root = Some(fr.root()); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
                 self.b = p.b; self.scratch = p.scratch; self.keep_toks(p.toks);${docTakeReuse}
             }
             _ => {
@@ -1870,8 +1875,8 @@ ${editParse.replace(/self\./g, 'd.')}
                     let ntoks = toks_from_meta(&text, &meta);
                     let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b: B::default(), scratch: Vec::new()${topReuse ? (shapeB ? ', entries: Vec::new(), segs: Vec::new()' : ', entries: Vec::new()') : ''} };
                     match p.parse_${ir.entry}() {
-                        Some(fr) if p.pos == p.toks.len() && fr.present => {
-                            self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
+                        Some(fr) if p.pos == p.toks.len() => {
+                            self.root = Some(fr.root()); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
                             self.b = p.b; self.scratch = p.scratch; self.keep_toks(p.toks);${topReuse ? (shapeB ? ' self.entries = p.entries; self.segs = p.segs;' : ' self.entries = p.entries;') : ''}
                         }
                         _ => {
@@ -1905,7 +1910,7 @@ impl Doc<CstBuilder> {
         let n = toks.len();
         let mut p = Parser { toks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &self.text, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
         match p.parse_${ir.entry}() {
-            Some(fr) if p.pos == p.toks.len() && fr.present => Some((p, fr.h)),
+            Some(fr) if p.pos == p.toks.len() => Some((p, fr.root())),
             _ => None,
         }
     }
@@ -1915,9 +1920,10 @@ impl Doc<CstBuilder> {
 
 
 /** Emit Builder trait, CstBuilder/SlimBuilder, sole Parser machine, and parse_with helpers. */
-// The `ahead` test's table: whether a token is in tokenSets[k] (see tokenSetBits).
+// The `ahead` test's table: whether a token is in tokenSets[k] (see tokenSetBits). The sets only body
+// guards test are left out: this printer does not render body guards (see rsSteps).
 function tokenSetRuntimeRust(ir: ParserIR, ids: LexIdPlan): string {
-  const b = tokenSetBits(ids, ir.tokenSets);
+  const b = tokenSetBits(ids, ir.tokenSets.slice(0, ir.bodyGuardOnly));
   const rows: string[] = [];
   for (let r = 0; r * b.width < b.words.length; r++) rows.push(`[${b.words.slice(r * b.width, (r + 1) * b.width).join(', ')}]`);
   return `#[allow(dead_code)]
@@ -2093,6 +2099,12 @@ impl<H> Default for Workspace<H> {
 /// Parser-side span+handle frame. Span fields are independent of H (Pratt never reads H for spans).
 #[derive(Clone, Copy)]
 struct Spanned<H: Copy> { h: H, off: u32, tok_start: u32, present: bool }
+impl<H: Copy> Spanned<H> {
+    /// The root of an accepted parse. Accepting or rejecting is the parser's verdict, never the
+    /// builder's, so a builder that kept no node for the entry rule breaks the contract (the
+    /// built-in builders always keep the root): reported loudly, not as a reject.
+    fn root(self) -> H { if !self.present { panic!("the builder kept no node for the root rule of an accepted parse (a Builder must return one for the entry rule)"); } self.h }
+}
 /// Where a construct that may have to undo what it tries starts: the position, the scratch length
 /// and the builder's checkpoint. Parser::reset goes back to it.
 #[derive(Clone, Copy)]
@@ -2324,7 +2336,8 @@ impl Builder for SlimBuilder {
         let nn = scratch.len();
         let count = nn - sb;
         if count == 1 { return; }
-        if count == 0 { scratch.truncate(sb); return; }
+        // The root keeps its node with no child: an accepted parse always has a root (parse_with).
+        if count == 0 && rule_id != ${ruleIdOf(ar, ir.entry)} { scratch.truncate(sb); return; }
         let kid_start = self.kids.len();
         copy_kids(&mut self.kids, &scratch[sb..nn]);
         scratch.truncate(sb);
@@ -2582,7 +2595,7 @@ pub fn parse_with<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> Option<B
     lex_into(src, &mut p.toks, &mut g.lex);
     p.scratch.clear();
     let root = match p.parse_${ir.entry}() {
-        Some(fr) if p.pos == p.toks.len() && fr.present => Some(fr.h),
+        Some(fr) if p.pos == p.toks.len() => Some(fr.root()),
         _ => None,
     };
     root
@@ -5481,7 +5494,7 @@ pub fn tokenize<'a>(src: &'a str) -> Vec<Token<'a>> {
 fn parse<'a>(src: &'a str) -> Option<(Parser<'a>, i32)> {
     let mut p = Parser { toks: lex(src), pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
     match p.parse_${ir.entry}() {
-        Some(fr) if p.pos == p.toks.len() && fr.present => Some((p, fr.h)),
+        Some(fr) if p.pos == p.toks.len() => Some((p, fr.root())),
         _ => None,
     }
 }
