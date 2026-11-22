@@ -2869,20 +2869,22 @@ func dropsOf(b Builder) [256]bool {
 \tif d, ok := b.(leafDropper); ok { return d.dropsLeaves() }
 \treturn [256]bool{}
 }
-// Finish is builderFinishDefault with the spans read in place and Node's collapse inline.
+// Finish is builderFinishDefault with the spans read in place and Node's collapse inline, decided
+// before the spans are read.
 func (b *SlimBuilder) Finish(scratch *[]int32, sb int, ruleId uint16, fallbackOff, tokStart, tokEnd uint32, toks []Tok) (int32, uint32, bool) {
 \ts := *scratch
 \tnn := len(s)
-\toff, end := fallbackOff, fallbackOff
-${kidsSpanGo}\tswitch nn - sb {
+\tswitch nn - sb {
 \tcase 0:
 \t\t// The root keeps its node with no child: an accepted parse always has a root (ParseWith).
-\t\tif ruleId != ${entryRid} { return 0, off, false }
+\t\tif ruleId != ${entryRid} { return 0, fallbackOff, false }
 \tcase 1:
+\t\t// Collapsed to its one child: only the child's start is read (no end, no node).
 \t\t*scratch = s[:sb]
-\t\treturn s[sb], off, true
+\t\tif h := s[sb]; h < 0 { ti, _ := decodeLeaf(h); return h, toks[ti].Off, true } else { return h, b.Nodes[h].Offset, true }
 \t}
-\tkidStart := len(b.Kids)
+\toff, end := fallbackOff, fallbackOff
+${kidsSpanGo}\tkidStart := len(b.Kids)
 \tb.Kids = append(b.Kids, s[sb:nn]...)
 \t*scratch = s[:sb]
 \tb.Nodes = append(b.Nodes, Node{RuleId: ruleId, KidStart: uint32(kidStart), KidCount: uint32(nn - sb), Offset: off, End: end, TokStart: tokStart, TokEnd: tokEnd, Ext: 0})
