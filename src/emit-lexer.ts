@@ -599,7 +599,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`  let tagAngle = 0;               // type-argument depth inside the current tag (\`<List<string>>\`)`);
     emit(`  // A type-parameter signature being decided (\`<T>(x: T) => T\`): the group is lexed as code;`);
     emit(`  // the token after its closer keeps it (one of the signature's \`then\`) or rewinds to an element.`);
-    emit(`  specTok = -1; let specVerdict = 0, specClosedAt = -1, specParenBase = 0, specDocLex = 0, specPops = 0;`);
+    emit(`  ${speculating ? 'specTok = -1; let' : 'let specTok = -1,'} specVerdict = 0, specClosedAt = -1, specParenBase = 0, specDocLex = 0, specPops = 0;`);
     emit(`  let lxLookEnd = -1;              // a tagOpen read as a type-parameter head decided by the characters up to here`);
     emit(`  let specStack«: number[]» = [], specParens«: boolean[]» = [];`);
   }
