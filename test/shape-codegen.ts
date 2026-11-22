@@ -179,6 +179,22 @@ const NEGATIVES: { label: string; spec: typeof calcShape; wantCode: string }[] =
     wantCode: 'star-needs-list',
   },
   {
+    // `{ label }` is declared by the schema but rendered by no printer: an error, not `undefined`.
+    label: 'bind-unimplemented',
+    spec: {
+      ...calcShape,
+      rules: {
+        ...calcShape.rules,
+        Program: {
+          kind: 'node',
+          type: 'Program',
+          fields: [{ name: 'body', bind: { from: 'list', of: 0 }, typeHint: 'Statement' }, { name: 'first', bind: { label: 'stmt' } }],
+        },
+      },
+    },
+    wantCode: 'bind-unimplemented',
+  },
+  {
     label: 'unmapped',
     spec: {
       ...calcShape,

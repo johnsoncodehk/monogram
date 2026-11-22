@@ -29,6 +29,7 @@ import { analyzeGrammar, findEntryRule, markupContainerOf, type MarkupContainer,
 import { emitLexer, emitTokenColumns, lexSpecOf } from './emit-lexer.ts';
 import type { Target } from './emit.ts';
 import { withAwaitYield } from './await-yield-fork.ts';
+import { syntaxKey } from './grammar-names.ts';
 
 // ── Static analysis ──
 // The STRUCTURAL analysis (precedence, NUD/LED + atom/continuation classification, left
@@ -523,7 +524,7 @@ class Emitter {
    * that escapes to the wrong loop — the one real hazard of inlining the tree-walk.
    */
   private matchFn(expr: RuleExpr): string {
-    const key = JSON.stringify(expr);
+    const key = syntaxKey(expr);   // equal syntax is one helper, whatever its names
     const existing = this.helpers.get(key);
     if (existing) return existing;
     const name = `m${this.helpers.size}`;
