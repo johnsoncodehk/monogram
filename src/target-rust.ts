@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidWordByte, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -702,9 +702,12 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
       : `(|p: &mut Parser<'a, B>| -> bool { ${altBody(s.branches, ids, ar, s.firsts)} })(self)`;
     case 'look': return `${s.is ? '' : '!'}self.look_${s.id}()`;
     case 'ahead': return `self.ahead(${s.set}, ${s.is})`;
+    case 'aheadCtx': return s.is ? `(self.ahead(${s.set}, true) || self.ctx_word())` : `(self.ahead(${s.set}, false) && !self.ctx_word())`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(self.peek(), Some(t) if !t.nl)`;
     case 'suppress': return `{ self.suppress_next = ${s.set}; let _r = (${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}); self.suppress_next = 0; _r }`;
+    // The body is a boolean expression (no `?`, no return), so the context is put back on either outcome.
+    case 'ctx': return `{ let _c = self.ctx; self.ctx = ${s.ctx}; let _r = (${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}); self.ctx = _c; _r }`;
   }
 }
 function stepCondP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
@@ -725,9 +728,11 @@ function stepBodyP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
     case 'alt': return `(|p: &mut Parser<'a, B>| -> bool { ${stepStmtsP(s, ids, ar)} })(p)`;
     case 'look': return `${s.is ? '' : '!'}p.look_${s.id}()`;
     case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
+    case 'aheadCtx': return s.is ? `(p.ahead(${s.set}, true) || p.ctx_word())` : `(p.ahead(${s.set}, false) && !p.ctx_word())`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(p.peek(), Some(t) if !t.nl)`;
     case 'suppress': return `{ p.suppress_next = ${s.set}; let _r = (${s.steps.length ? s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'}); p.suppress_next = 0; _r }`;
+    case 'ctx': return `{ let _c = p.ctx; p.ctx = ${s.ctx}; let _r = (${s.steps.length ? s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'}); p.ctx = _c; _r }`;
   }
 }
 // The step over `p` as the body of a function returning whether it matched (an `alt` needs
@@ -772,7 +777,7 @@ function predAltBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts
 }
 
 function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  const rid = ruleIdOf(ar, r.cstName);
+  const rid = ruleIdOf(ar, r.name);
   if (r.predictive) {
     const arm = (steps: Step[], i: number) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return Some(self.finish(${rid}, sb, self.off_at(save), save)); } }`;
     return `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
@@ -813,7 +818,7 @@ ${needPeek ? '        let _ft = self.peek();\n' : ''}${dispatchRs(r.altDispatch,
 
 /** Entry rule that records per-top-kid lookahead ext via parse_top_one (shape A). */
 function rdEntryWithReuseA(r: RdRule, plan: ReusePlanA, ar: ArenaIdPlan): string {
-  const rid = ruleIdOf(ar, r.cstName);
+  const rid = ruleIdOf(ar, r.name);
   return `    fn parse_top_one(&mut self) -> Option<Spanned<B::H>> {
 ${plan.topOneBody}
     }
@@ -846,7 +851,7 @@ ${plan.topOneBody}
 }
 
 function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  const rid = ruleIdOf(ar, r.cstName);
+  const rid = ruleIdOf(ar, r.name);
   const headFn = plan.hasHead && plan.headRule
     ? `    fn parse_head_seg(&mut self, sb: usize) -> Option<(Seg, EntryMeta)> {
         self.look_reset();
@@ -912,7 +917,7 @@ function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaI
 }
 
 function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  const rid = ruleIdOf(ar, r.cstName);
+  const rid = ruleIdOf(ar, r.name);
   const binArms = r.binary.map((b) => `${lidOf(ids, b.op)} => Some((${b.lbp}, ${b.rbp}, ${b.requireTarget}, ${b.noUnaryLhs}))`).join(', ');
   const preArms = r.prefix.map((p) => `${lidOf(ids, p.op)} => Some((${p.rbp}, ${p.requireTarget}, ${p.form}))`).join(', ');
   const postArms = r.postfix.map((p) => `${lidOf(ids, p.op)} => Some((${p.lbp}, ${p.requireTarget}))`).join(', ');
@@ -1086,7 +1091,7 @@ function docEditBlockRust(ir: ParserIR, shared: SharedAlgorithms): string {
             let text = self.text.clone();
             let meta = self.toks.clone();
             let ntoks = toks_from_meta(&text, &meta);
-            let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, src: &text, b: B::default(), scratch: Vec::new()${topReuse ? (shapeB ? ', entries: Vec::new(), segs: Vec::new()' : ', entries: Vec::new()') : ''} };
+            let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b: B::default(), scratch: Vec::new()${topReuse ? (shapeB ? ', entries: Vec::new(), segs: Vec::new()' : ', entries: Vec::new()') : ''} };
             match p.parse_${ir.entry}() {
                 Some(fr) if p.pos == p.toks.len() && fr.present => {
                     self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -1502,7 +1507,7 @@ fn check_tree_eq_arena(text: &str, toks_a: &[Tok], nodes: &[Node], kids: &[i32],
             let scratch = std::mem::take(&mut self.scratch);
             let old_entries = std::mem::take(&mut self.entries);
             let old_root = self.root.take().unwrap();
-            let mut p = Parser { toks: Vec::new(), pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, src: &text, b, scratch, entries: Vec::new() };
+            let mut p = Parser { toks: Vec::new(), pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b, scratch, entries: Vec::new() };
             if let Some((root, n)) = p.try_reuse_top(old_root, &old_entries, toks_from_meta(&text, &meta), byte_delta, old_n, prefix, suffix, self.validate) {
                 self.root = Some(root);
                 reused = n;
@@ -1510,7 +1515,7 @@ fn check_tree_eq_arena(text: &str, toks_a: &[Tok], nodes: &[Node], kids: &[i32],
                 self.b = p.b; self.scratch = p.scratch; self.keep_toks(p.toks); self.entries = p.entries;
             } else {
                 let ntoks = toks_from_meta(&text, &meta);
-                let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new() };
+                let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new() };
                 match p.parse_${ir.entry}() {
                     Some(fr) if p.pos == p.toks.len() && fr.present => {
                         self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -1524,7 +1529,7 @@ fn check_tree_eq_arena(text: &str, toks_a: &[Tok], nodes: &[Node], kids: &[i32],
             }
         } else {
             let ntoks = toks_from_meta(&text, &meta);
-            let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new() };
+            let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new() };
             match p.parse_${ir.entry}() {
                 Some(fr) if p.pos == p.toks.len() && fr.present => {
                     self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -1557,7 +1562,7 @@ ${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&
             let old_segs = std::mem::take(&mut self.segs);
             let old_entries = std::mem::take(&mut self.entries);
             let old_root = self.root.take().unwrap();
-            let mut p = Parser { toks: Vec::new(), pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, src: &text, b, scratch, entries: Vec::new(), segs: Vec::new() };
+            let mut p = Parser { toks: Vec::new(), pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b, scratch, entries: Vec::new(), segs: Vec::new() };
             if let Some((root, n)) = p.try_reuse_seg(old_root, &old_segs, &old_entries, toks_from_meta(&text, &meta), byte_delta, old_n, prefix, suffix, self.validate) {
                 self.root = Some(root);
                 reused = n;
@@ -1565,7 +1570,7 @@ ${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&
                 self.b = p.b; self.scratch = p.scratch; self.keep_toks(p.toks); self.segs = p.segs; self.entries = p.entries;
             } else {
                 let ntoks = toks_from_meta(&text, &meta);
-                let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new(), segs: Vec::new() };
+                let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new(), segs: Vec::new() };
                 match p.parse_${ir.entry}() {
                     Some(fr) if p.pos == p.toks.len() && fr.present => {
                         self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -1579,7 +1584,7 @@ ${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&
             }
         } else {
             let ntoks = toks_from_meta(&text, &meta);
-            let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new(), segs: Vec::new() };
+            let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new(), segs: Vec::new() };
             match p.parse_${ir.entry}() {
                 Some(fr) if p.pos == p.toks.len() && fr.present => {
                     self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -1608,7 +1613,7 @@ ${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&
     : `        let text = self.text.clone();
         let meta = self.toks.clone();
         let ntoks = toks_from_meta(&text, &meta);
-        let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, src: &text, b: B::default(), scratch: Vec::new()${reuseInit} };
+        let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b: B::default(), scratch: Vec::new()${reuseInit} };
         match p.parse_${ir.entry}() {
             Some(fr) if p.pos == p.toks.len() && fr.present => {
                 self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -1704,7 +1709,7 @@ impl<B: Builder + Default> Doc<B> {
         let meta = self.toks.clone();
         let ntoks = toks_from_meta(&text, &meta);
         let b = std::mem::take(&mut self.b);
-        let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, src: &text, b, scratch: Vec::new()${reuseInit} };
+        let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b, scratch: Vec::new()${reuseInit} };
         match p.parse_${ir.entry}() {
             Some(fr) if p.pos == p.toks.len() && fr.present => {
                 self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -1749,7 +1754,7 @@ ${editParse.replace(/self\./g, 'd.')}
                     let text = self.text.clone();
                     let meta = self.toks.clone();
                     let ntoks = toks_from_meta(&text, &meta);
-                    let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, src: &text, b: B::default(), scratch: Vec::new()${topReuse ? (shapeB ? ', entries: Vec::new(), segs: Vec::new()' : ', entries: Vec::new()') : ''} };
+                    let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b: B::default(), scratch: Vec::new()${topReuse ? (shapeB ? ', entries: Vec::new(), segs: Vec::new()' : ', entries: Vec::new()') : ''} };
                     match p.parse_${ir.entry}() {
                         Some(fr) if p.pos == p.toks.len() && fr.present => {
                             self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -1784,7 +1789,7 @@ impl Doc<CstBuilder> {
         // Fresh independent parse (does not touch Doc arena) — used by non-edit callers.
         let toks = toks_from_meta(&self.text, &self.toks);
         let n = toks.len();
-        let mut p = Parser { toks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, src: &self.text, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
+        let mut p = Parser { toks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &self.text, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
         match p.parse_${ir.entry}() {
             Some(fr) if p.pos == p.toks.len() && fr.present => Some((p, fr.h)),
             _ => None,
@@ -1812,7 +1817,12 @@ fn in_token_set(k: usize, t: &Tok) -> bool {
     // as for the lexer's flag tables; k is a constant at every call site, so is word k >> 5.
     let (l, c) = unsafe { (TOKEN_SETS.get_unchecked(t.lid as usize), TOKEN_SETS.get_unchecked(TOKEN_SET_KID + t.kid as usize)) };
     (l[k >> 5] | c[k >> 5]) & (1 << (k & 31)) != 0
-}`;
+}
+// Whether t is a word the context ctx reserves (ParserIR.ctxWords): with the \`ahead\` test of the
+// guard's own set, an \`aheadCtx\` test.
+#[inline(always)]
+#[allow(dead_code)]
+fn in_ctx_words(ctx: u8, t: &Tok) -> bool { let _ = (ctx, t); false${ctxWordLids(ir, ids).map((w) => ` || (ctx & ${w.bit} != 0 && t.lid == ${w.lid})`).join('')} }`;
 }
 
 function emitParserMachine(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shapeB: boolean): string {
@@ -2206,6 +2216,9 @@ struct Parser<'a, B: Builder = CstBuilder> {
     /// \`suppress\` step stages for the next Pratt call, and the set in force in the current one.
     suppress_next: u16,
     suppress_cur: u16,
+    /// The [Await]/[Yield] context word in force (bit 1 await, bit 2 yield; see ParserIR's Ctx).
+    /// A \`ctx\` step sets it for its body and puts back what it found, so outside every such body it is 0.
+    ctx: u8,
     src: &'a str,
     b: B,
     scratch: Vec<B::H>,${entriesField}${segsField}
@@ -2235,6 +2248,10 @@ impl<'a, B: Builder> Parser<'a, B> {
     #[inline(always)]
     #[allow(dead_code)]
     fn ahead(&mut self, k: usize, is: bool) -> bool { match self.peek() { Some(t) => in_token_set(k, &t) == is, None => !is } }
+    #[inline(always)]
+    #[allow(dead_code)]
+    /// Whether the next token is a word the context in force reserves; outside every context it reads nothing.
+    fn ctx_word(&mut self) -> bool { self.ctx != 0 && match self.peek() { Some(t) => in_ctx_words(self.ctx, &t), None => false } }
     /// Whether the token after the current one is in token set k (a longest-match candidate's SECOND guard).
     #[inline(always)]
     #[allow(dead_code)]
@@ -2352,7 +2369,7 @@ pub fn parse_with<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> Option<B
     let toks = lex(src);
     let n = toks.len();
     let owned = std::mem::take(b);
-    let mut p = Parser { toks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, src, b: owned, scratch: Vec::new()${reuseInit} };
+    let mut p = Parser { toks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src, b: owned, scratch: Vec::new()${reuseInit} };
     let root = match p.parse_${ir.entry}() {
         Some(fr) if p.pos == p.toks.len() && fr.present => Some(fr.h),
         _ => None,
@@ -2533,9 +2550,11 @@ function rustShapeFirstOfSteps(steps: Step[]): FirstSig {
         return 'done';
       }
       case 'seq':
-      case 'suppress': return walkSeq(s.steps);
+      case 'suppress':
+      case 'ctx': return walkSeq(s.steps);
       case 'look':
       case 'ahead':
+      case 'aheadCtx':
       case 'sameLine': return 'nullable'; // zero-width: consumes nothing
       case 'opt': return walkSeq(s.steps) === 'unknown' ? 'unknown' : 'nullable';
       case 'star': return walkSeq([s.step]) === 'unknown' ? 'unknown' : 'nullable';
@@ -2816,12 +2835,14 @@ function emitRustAstRdAltSteps(
       case 'star': return visible(s.step);
       case 'opt':
       case 'seq':
-      case 'suppress': return s.steps.some(visible);
+      case 'suppress':
+      case 'ctx': return s.steps.some(visible);
       case 'sep': return visible(s.elem);
       case 'altlit': return s.opts.some((o) => !rustLeafDropped(o.ttype, leaves));
       case 'alt': return s.branches.some((b) => b.some(visible));
       case 'look':
       case 'ahead':
+      case 'aheadCtx':
       case 'sameLine': return false;
     }
   };
@@ -2829,7 +2850,7 @@ function emitRustAstRdAltSteps(
    *  pos/vals (so a surrounding txn can use the 2-field light snapshot).
    *  lit/tok/altlit touch pos + vals only; sameLine is read-only; look is
    *  self-restoring (full ck/restore inside) and externally transparent;
-   *  suppress self-restores suppress_next. Visible star/opt/sep/alt write
+   *  suppress self-restores suppress_next, ctx the context. Visible star/opt/sep/alt write
    *  the arena via shape_pack_range/shape_list_from on success paths —
    *  impure. rule/ruleBp call parse_ast_* which may write the arena
    *  (customs/pack) — always impure. */
@@ -2840,8 +2861,10 @@ function emitRustAstRdAltSteps(
       case 'altlit': return true;
       case 'sameLine': return true;
       case 'ahead': return true;
+      case 'aheadCtx': return true;
       case 'look': return true;
       case 'suppress': return s.steps.every(pure);
+      case 'ctx': return s.steps.every(pure);
       case 'seq': return s.steps.every(pure);
       case 'star': return !visible(s.step) && pure(s.step);
       case 'opt': return !s.steps.some(visible) && s.steps.every(pure);
@@ -2899,6 +2922,8 @@ function emitRustAstRdAltSteps(
         return `if ${okVar} { match self.toks.get(self.pos) { Some(t) if !t.nl => {} _ => { ${okVar} = false; } } }`;
       case 'ahead':
         return `if ${okVar} && self.toks.get(self.pos).map_or(false, |t| in_token_set(${s.set}, t)) != ${s.is} { ${okVar} = false; }`;
+      case 'aheadCtx':
+        return `if ${okVar} && self.toks.get(self.pos).map_or(false, |t| in_token_set(${s.set}, t) || (self.ctx != 0 && in_ctx_words(self.ctx, t))) != ${s.is} { ${okVar} = false; }`;
       case 'look': {
         // Gate on okVar to match TS `&&` short-circuit — otherwise probe still
         // runs after a failed predecessor and can re-enter recursive rules.
@@ -2924,6 +2949,18 @@ function emitRustAstRdAltSteps(
             ${emitSteps(s.steps, sok)}
             self.set_suppress_next(_sn_save);
             if !${sok} { ${okVar} = false; }
+        }`;
+      }
+      case 'ctx': {
+        // The steps hold no return and no \`?\`, so the context is put back on either outcome.
+        const cok = local('ctx_ok');
+        return `if ${okVar} {
+            let _ctx_save = self.ctx;
+            self.ctx = ${s.ctx};
+            let mut ${cok} = true;
+            ${emitSteps(s.steps, cok)}
+            self.ctx = _ctx_save;
+            if !${cok} { ${okVar} = false; }
         }`;
       }
       case 'altlit': {
@@ -3325,7 +3362,7 @@ function emitRustRdMethod(
     // Positional keep via RD alts → structure event (streaming-only).
     const tries = rule.alts.map((_, ai) => ({
       altIdx: ai,
-      finish: `Some(${rustStreamFinish(J(rule.cstName), '__SPOFF__', 'self.last_end(__SPOFF__)')})`,
+      finish: `Some(${rustStreamFinish(J(rule.name), '__SPOFF__', 'self.last_end(__SPOFF__)')})`,
     }));
     return rdMethod(tries);
   }
@@ -3339,7 +3376,7 @@ function emitRustRdMethod(
       } else if (arm.shape.kind === 'inline') {
         finish = `Some(self.shape_pack_range(_sk_base))`;
       } else if (arm.shape.kind === 'keep') {
-        finish = `Some(${rustStreamFinish(J(rule.cstName), '__SPOFF__', 'self.last_end(__SPOFF__)', '__ALT__')})`;
+        finish = `Some(${rustStreamFinish(J(rule.name), '__SPOFF__', 'self.last_end(__SPOFF__)', '__ALT__')})`;
       } else if (arm.shape.kind === 'list') {
         finish = `Some(self.shape_list_from(_sk_base))`;
       } else if (arm.shape.kind === 'custom') {
@@ -3564,7 +3601,7 @@ function emitRustPrattMethod(
         } else if (groupSlot.kind === 'node') {
           finish = `return Some(${nodeFinish(rustShapeNodeObjectExpr(groupSlot as NodeShape, '_sk_base', '(0u32, 0u32)', shapeIR.spans, 'save_off', 'self.last_end(save_off)', undefined), '_sk_base')});`;
         } else {
-          finish = `return Some(${keepFinish('_sk_base', rule.cstName, 'save_off')});`;
+          finish = `return Some(${keepFinish('_sk_base', rule.name, 'save_off')});`;
         }
         return `if self.peek_lid() == Some(${lidOf(ids, b.first)}) {
             let save = self.pos;
@@ -3643,7 +3680,7 @@ function emitRustPrattMethod(
             let _ab = self.vals.len();
             self.vals.push(SVal::Str(_op.0, _op.1));
             self.vals.push(argument);
-            return Some(${keepFinish('_ab', rule.cstName, '_op.0')});
+            return Some(${keepFinish('_ab', rule.name, '_op.0')});
         }\n        `;
       }
     }
@@ -3664,7 +3701,7 @@ function emitRustPrattMethod(
       } else if (nudSeqSlot.kind === 'inline') {
         finish = inlineFinishReturn('_sk_base');
       } else {
-        finish = `return Some(${keepFinish('_sk_base', rule.cstName, 'save_off')});`;
+        finish = `return Some(${keepFinish('_sk_base', rule.name, 'save_off')});`;
       }
       return `{
             let save = self.pos;
@@ -3698,7 +3735,7 @@ function emitRustPrattMethod(
       } else if (nudCappedSlot.kind === 'inline') {
         finish = `*pc = true; ${inlineFinishReturn('_sk_base')}`;
       } else {
-        finish = `*pc = true; return Some(${keepFinish('_sk_base', rule.cstName, 'save_off')});`;
+        finish = `*pc = true; return Some(${keepFinish('_sk_base', rule.name, 'save_off')});`;
       }
       return `if min_bp < ${c.capBp} {
             let save = self.pos;
@@ -3864,7 +3901,7 @@ function emitRustPrattMethod(
             self.vals.push(left);
             self.vals.push(SVal::Str(_op.0, _op.1));
             self.vals.push(_right);
-            left = ${keepFinish('_ab', rule.cstName, '_off')};
+            left = ${keepFinish('_ab', rule.name, '_off')};
             form = 1; tail_closed = true;
             continue;
         }`;
@@ -3927,7 +3964,7 @@ function emitRustPrattMethod(
                     let _ab = self.vals.len();
                     self.vals.push(left);
                     self.vals.push(SVal::Str(_op.0, _op.1));
-                    left = ${keepFinish('_ab', rule.cstName, '_off')};
+                    left = ${keepFinish('_ab', rule.name, '_off')};
                     tail_closed = true;
                     form = 1;
                     continue;
@@ -3955,7 +3992,7 @@ function emitRustPrattMethod(
         // enclosing block's value.
         finish = rustStreamFinish(J(node.type), 't.off as u32', 't.end as u32') + ';';
       } else {
-        finish = `{ let _ab = self.vals.len(); self.vals.push(left); self.vals.push(leaf); left = ${keepFinish('_ab', rule.cstName, '_off')}; }`;
+        finish = `{ let _ab = self.vals.len(); self.vals.push(left); self.vals.push(leaf); left = ${keepFinish('_ab', rule.name, '_off')}; }`;
       }
       return `if self.peek_kid() == Some(${g.key}) {
                 if !tail_closed {
@@ -3983,7 +4020,7 @@ function emitRustPrattMethod(
         const nodeShape = postfixTokSlot as NodeShape;
         tplFinish = rustStreamFinish(J(nodeShape.type), 'node_off as u32', 'node_end as u32') + ';';
       } else {
-        tplFinish = `{ let _ab = self.vals.len(); self.vals.push(left); self.vals.push(node); left = ${keepFinish('_ab', rule.cstName, 'node_off')}; }`;
+        tplFinish = `{ let _ab = self.vals.len(); self.vals.push(left); self.vals.push(node); left = ${keepFinish('_ab', rule.name, 'node_off')}; }`;
       }
       tplPart = `
             if !tail_closed && self.peek_kid() == Some(${kidOf(ids, '$templateHead')}) {
@@ -4025,7 +4062,7 @@ function emitRustPrattMethod(
     const stepsCloseWithGt = (steps: Step[]): boolean => {
       for (const s of steps) {
         if (s.t === 'lit' && s.value === '>') return true;
-        if (s.t === 'seq' || s.t === 'suppress') { if (stepsCloseWithGt(s.steps)) return true; }
+        if (s.t === 'seq' || s.t === 'suppress' || s.t === 'ctx') { if (stepsCloseWithGt(s.steps)) return true; }
       }
       return false;
     };
@@ -4062,7 +4099,7 @@ function emitRustPrattMethod(
         } else if (ledSlot.kind === 'inline') {
           finish = `left = self.shape_pack_range(_sk_base);`;
         } else {
-          finish = `{ self.vals.insert(_sk_base, left); left = ${keepFinish('_sk_base', rule.cstName, '_off')}; }`;
+          finish = `{ self.vals.insert(_sk_base, left); left = ${keepFinish('_sk_base', rule.name, '_off')}; }`;
         }
         return `${parts.length ? `if ${parts.join(' && ')} ` : ''}{
                     let led_save = self.pos;
@@ -4169,7 +4206,7 @@ function rustShapeUnsupported(ir: ParserIR, shapeIR: ShapeIR): Array<{ rule: str
       if (!supportedLeaf(step.name) || shapeIR.leaves[step.name]?.action === 'drop') note(rule, `step:tok-policy:${step.name}`);
     } else if (step.t === 'alt') {
       for (const branch of step.branches) for (const s of branch) walkStep(rule, s);
-    } else if (step.t === 'opt' || step.t === 'seq' || step.t === 'suppress') {
+    } else if (step.t === 'opt' || step.t === 'seq' || step.t === 'suppress' || step.t === 'ctx') {
       for (const s of step.steps) walkStep(rule, s);
     } else if (step.t === 'look') {
       for (const s of ir.lookaheads[step.id]!) walkStep(rule, s);
@@ -4527,6 +4564,8 @@ struct ShapeParser<'a, 'c, C: ShapeCustoms<'a>> {
     suppress_next: u16,
     suppress_cur: u16,
     suppress_log: Vec<(u8, u16)>,
+    /// The [Await]/[Yield] context word in force (see Parser::ctx); a \`ctx\` step restores it itself.
+    ctx: u8,
     capped: bool,
     /// Assignment-target form of the node the last nud/bp call returned.
     form: u8,
@@ -4939,7 +4978,7 @@ fn parse_ast_impl<'a, 'c, C: ShapeCustoms<'a>>(src: &'a str, customs: &'c C, emi
         },
         vals: Vec::with_capacity(1024),
         ap_stack: Vec::with_capacity(256),
-        suppress_next: 0, suppress_cur: 0, suppress_log: Vec::with_capacity(64), capped: false, form: 0, tail: false,
+        suppress_next: 0, suppress_cur: 0, ctx: 0, suppress_log: Vec::with_capacity(64), capped: false, form: 0, tail: false,
         emit_events,
         events: events_init,
     };
@@ -5177,7 +5216,7 @@ pub fn tokenize<'a>(src: &'a str) -> Vec<Token<'a>> {
 // The CST over a fresh arena that lives in the returned Parser (serialize with write_json).
 // Library callers use parse_with / Doc.
 fn parse<'a>(src: &'a str) -> Option<(Parser<'a>, i32)> {
-    let mut p = Parser { toks: lex(src), pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, src, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
+    let mut p = Parser { toks: lex(src), pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
     match p.parse_${ir.entry}() {
         Some(fr) if p.pos == p.toks.len() && fr.present => Some((p, fr.h)),
         _ => None,

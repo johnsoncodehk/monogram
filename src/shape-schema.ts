@@ -116,9 +116,8 @@ export type ShapeSpec = {
 
 export type ShapeIRRule = {
   name: string;
-  cstName: string;
   kind: 'rd' | 'pratt';
-  source: 'exact' | 'cstName' | 'default';
+  source: 'exact' | 'default';
   shape: RuleShape;
 };
 export type ShapeIR = {
@@ -147,13 +146,13 @@ export const ADJUDICATIONS = {
   spans: 'Use unified off/end fields with required, optional, or none injection.',
   unmapped: 'Unmapped rules default to keep; unmapped:error enables strict coverage.',
   altHeterogeneous: 'Choice arms partition every RD alternative exactly once.',
-  ruleKeying: 'Exact IR rule names override inherited cstName mappings.',
+  ruleKeying: 'A rule shape is keyed by its IR rule name.',
 } as const;
 
 /** Emit-time static coverage of Shape AST step/pratt rendering. */
 export type ShapeStepKind =
   | 'lit' | 'tok' | 'rule' | 'ruleBp' | 'star' | 'opt' | 'sep'
-  | 'altlit' | 'alt' | 'look' | 'ahead' | 'seq' | 'sameLine' | 'suppress';
+  | 'altlit' | 'alt' | 'look' | 'ahead' | 'aheadCtx' | 'seq' | 'sameLine' | 'suppress' | 'ctx';
 export type ShapePrattKind =
   | 'atom' | 'group' | 'prefix' | 'binary' | 'postfix' | 'postfixTok'
   | 'led' | 'nudSeq' | 'nudCapped' | 'template';
@@ -166,7 +165,7 @@ export type ShapeCoverage = {
 
 export const SHAPE_STEP_KINDS: readonly ShapeStepKind[] = [
   'lit', 'tok', 'rule', 'ruleBp', 'star', 'opt', 'sep',
-  'altlit', 'alt', 'look', 'ahead', 'seq', 'sameLine', 'suppress',
+  'altlit', 'alt', 'look', 'ahead', 'aheadCtx', 'seq', 'sameLine', 'suppress', 'ctx',
 ] as const;
 export const SHAPE_PRATT_KINDS: readonly ShapePrattKind[] = [
   'atom', 'group', 'prefix', 'binary', 'postfix', 'postfixTok',

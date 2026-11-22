@@ -7,7 +7,7 @@
  * mapping (node/list/choice/pratt/keep/custom) — NEVER silent custom without
  * a why-primitives-fail argument.
  *
- * Keys are cstNames → forks inherit (validator expands to 117 IR rules).
+ * Keys are the IR rule names: one per grammar rule.
  */
 import type { ShapeSpec, CustomShape, StreamType } from '../../src/shape-schema.ts';
 
