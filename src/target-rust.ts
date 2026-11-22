@@ -869,10 +869,21 @@ function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: F
 // ParserIR.lookaheads, one method each, in recognize form (ParserIR.forms): whether the body
 // matches here. It undoes the position, and the scratch list and the builder too when its body
 // runs a Pratt rule's building form (Forms.lookBuilds).
+// The body is out of line and its caller holds only the test of the body's first token
+// (ParserIR.lookFirst), so what a lookahead runs never becomes part of the function it guards: a
+// site pays one token-set test where the lookahead cannot match, and a call where it may. Without
+// a first-token set the site is the call, except for a body of zero-width tests of the next token
+// alone (`sameLine`, `ahead`): that body is itself the test, printed at the site.
+const tokenTestOnly = (body: Step[]) => body.every((s) => s.t === 'ahead' || s.t === 'aheadCtx' || s.t === 'sameLine');
 function lookFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   return ir.lookaheads.map((body, id) => {
     const builds = ir.forms.lookBuilds[id]!;
-    return `    fn look_${id}(&mut self) -> bool { let p = self; ${builds ? ckptRs('p') : 'let sp = p.pos;'} let r = ${body.map((x) => stepCondP(x, ids, ar, true)).join(' && ')}; ${builds ? undoRs('p') : 'p.back(sp);'} r }\n`;
+    const first = ir.lookFirst[id];
+    const run = `{ let p = self; ${builds ? ckptRs('p') : 'let sp = p.pos;'} let r = ${body.map((x) => stepCondP(x, ids, ar, true)).join(' && ')}; ${builds ? undoRs('p') : 'p.back(sp);'} r }`;
+    return first === null
+      ? `    #[inline(${tokenTestOnly(body) ? 'always' : 'never'})]\n    fn look_${id}(&mut self) -> bool ${run}\n`
+      : `    #[inline(always)]\n    fn look_${id}(&mut self) -> bool { match self.peek() { Some(t) if in_token_set(${first}, &t) => self.look_${id}_body(), _ => false } }\n`
+        + `    #[inline(never)]\n    fn look_${id}_body(&mut self) -> bool ${run}\n`;
   }).join('');
 }
 // ParserIR.shared, one method per form it is printed in (ParserIR.forms): the step, run against
