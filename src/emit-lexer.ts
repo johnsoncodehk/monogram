@@ -656,7 +656,9 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       emit(`    }`);
     }
   } else {
-    emit(`    tkDp[tokN] = templateStack.length;`);
+    // the frame depth saturates: the record is a byte and only a zero is read (restart / resync
+    // points), so a wrap at 256 nested holes would make a token inside them an anchor
+    emit(`    tkDp[tokN] = templateStack.length > 255 ? 255 : templateStack.length;`);
   }
   emit(`    tkPd[tokN] = parenHeadStack.length;`);
   emit(`    pendingNl = false;`);
