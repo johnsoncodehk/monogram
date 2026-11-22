@@ -23,6 +23,7 @@
 // parser. This is enough to derive a real JavaScript-subset parser (test/fixtures/minijs.ts).
 import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
 import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
+import { nameRule, syntaxKey, type RuleNames } from './grammar-names.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { tokenPatternCharLoop, tokenPatternLiteralPrefix } from './token-pattern.ts';
 import { type TextUnits, firstUnit, oneUnit, unitLen } from './text-units.ts';
@@ -98,7 +99,16 @@ export function groupByPreserveOrder<T>(
   }
   return order.map((key) => ({ key, members: map.get(key)! }));
 }
-export type Step =
+// NAMES (src/grammar-names.ts nameRule: the author-written `arm` / `field`, else the derived
+// name) are data the IR carries for a consumer that finds a child or an arm by name (a shape);
+// no parse path reads them, and every key under which the IR dedupes or compares steps
+// (stepKey, syntaxKey) leaves them out, so a name never changes a parser. A step lowered from a
+// named grammar node carries `field` (not `name`: `rule` / `tok` steps already use `name` for
+// what they call); an inline alternation carries `branchNames`, parallel to `branches`. A
+// shared step (ParserIR.shared) is its first occurrence: each occurrence in a rule body keeps
+// its own names.
+export type Step = StepOp & { field?: string };
+type StepOp =
   | { t: 'lit'; value: string; ttype: '$keyword' | '$punct' }   // match a literal by text
   | { t: 'tok'; name: string }                                  // match a token kind
   | { t: 'rule'; name: string }                                 // call a rule, append its node
@@ -107,7 +117,7 @@ export type Step =
   | { t: 'opt'; steps: Step[]; share?: number }                 // optional sub-sequence
   | { t: 'sep'; elem: Step; delim: string; share?: number }     // elem (delim elem)*
   | { t: 'altlit'; opts: Lit[] }                                // inline alternation of literals (fast path)
-  | { t: 'alt'; branches: Step[][]; firsts?: FirstSig[]; predictive?: boolean; share?: number }            // inline alternation of sub-sequences (backtracking unless predictive)
+  | { t: 'alt'; branches: Step[][]; branchNames?: string[]; firsts?: FirstSig[]; predictive?: boolean; share?: number }            // inline alternation of sub-sequences (backtracking unless predictive)
   | { t: 'look'; id: number; is: boolean }                     // zero-width: whether ParserIR.lookaheads[id] matches here (is) or does not (!is)
   | { t: 'ahead'; set: number; is: boolean }                    // zero-width: whether the next token is (is) or is not (!is) in ParserIR.tokenSets[set]
   | { t: 'aheadCtx'; set: number; is: boolean }                 // zero-width: the `ahead` test of tokenSets[set] plus the operator words of the context in force (ParserIR.ctxWords)
@@ -116,6 +126,11 @@ export type Step =
   | { t: 'suppress'; set: number; steps: Step[]; share?: number }  // parse the body with the LED connectors of ParserIR.suppressSets[set] disabled (no-`in` context)
   | { t: 'ctx'; ctx: Ctx; steps: Step[]; share?: number };      // parse the body in [Await]/[Yield] context `ctx`, then put back the one in force
 export type Alt = Step[];
+/** A step's (or step list's) structure as a string, without its names: the key under which two
+ *  equal structures are one computation (a lookahead body, a shared step). */
+export function stepKey(s: Step | readonly Step[]): string {
+  return JSON.stringify(s, (k, v) => (k === 'field' || k === 'branchNames' ? undefined : v));
+}
 // The ECMAScript [Await] / [Yield] grammar parameters: the context a body is parsed in, as one word
 // a parser holds (bit CTX_AWAIT: `await` is the operator, bit CTX_YIELD: `yield` is). The grammar
 // marks each body that sets it (awaitCtx / yieldCtx / asyncGenCtx, resetCtx for the bodies that set
@@ -174,6 +189,7 @@ export type TokenSet = { lits: string[]; toks: string[] };
 // (An inline `alt` step is the other construct: ordered choice, the first branch that matches.)
 export type RdRule = {
   kind: 'rd'; name: string; alts: Alt[];
+  altNames: string[];       // parallel to alts: each one's arm name (see Step, NAMES)
   altFirst: FirstSig[];     // parallel to alts: each one's Step-level FIRST signature — the `predictive` switch's keys
   predictive: boolean;
   altGuard: Guard[];        // parallel to alts: when each one is a candidate at all
@@ -232,7 +248,7 @@ export function dispatchOf(keys: ReadonlyArray<TokenSet | null>): Dispatch {
 // step's FIRST comes from `first` (null: not known, so nothing is concluded).
 export function sameAsEarlierOutside(e: RuleExpr, earlier: readonly RuleExpr[], first: (e: RuleExpr) => Set<string> | null): Set<string> | null {
   const itemsOf = (x: RuleExpr): RuleExpr[] => (x.type === 'seq' ? x.items : [x]);
-  const written = new Set(earlier.map((x) => JSON.stringify(itemsOf(x))));
+  const written = new Set(earlier.map((x) => syntaxKey(itemsOf(x))));
   const items = itemsOf(e);
   const lead = new Set<string>();
   for (let k = 0; k < items.length - 1; k++) {
@@ -241,7 +257,7 @@ export function sameAsEarlierOutside(e: RuleExpr, earlier: readonly RuleExpr[], 
     const f = first(opt);
     if (f === null) return null;
     for (const key of f) lead.add(key);
-    if (written.has(JSON.stringify(items.slice(k + 1)))) return lead;
+    if (written.has(syntaxKey(items.slice(k + 1)))) return lead;
   }
   return null;
 }
@@ -282,6 +298,7 @@ export type PrattRule = {
   nudSeqPredictive: boolean;                          // all nudSeqs non-null & pairwise disjoint → render a switch
   nudCapped: Array<{ steps: Step[]; capBp: number }>; // NUD: an assignment-level capped sequence (arrow function) — parsed only when minBp < capBp, admits no led
   nudOrder: NudRef[];                                 // every NUD arm above and the prefix arm, in declaration order: the longest-match candidates
+  nudNames: string[];                                 // parallel to nudOrder: each arm's name (the prefix arm: opNames.prefix); see Step, NAMES
   nudDispatch: Dispatch;                              // how a target reaches the nudOrder arms a token admits
   nudCappedGuard: Guard[];                            // parallel to nudCapped: when each capped seq is a candidate (see Guard)
   // requireTarget: the operand (prefix) / left operand (binary, postfix) must have FORM_TARGET,
@@ -289,6 +306,8 @@ export type PrattRule = {
   prefix: Array<{ op: string; rbp: number; requireTarget: boolean; form: AssignForm }>;  // NUD: prefix op then operand at rbp; form = the node's
   binary: Array<{ op: string; lbp: number; rbp: number; requireTarget: boolean; noUnaryLhs: boolean }>;  // LED: infix op, bind iff lbp > minBp, rhs at rbp
   leds: Bracket[];                                    // LED: mixfix continuation (call/member/index), tried before operators
+  ledNames: string[];                                 // parallel to leds: each arm's name
+  ledLeftNames: string[];                             // parallel to leds: the name of its left operand (the self `$`; derived: `left`)
   ledAccessTail: boolean[];                           // parallel to leds: a "closed punct-connector" tail (member/call/index) — disabled once a postfix binds
   ledLbp: Array<number | null>;                       // parallel to leds: precedence gate (ternary/in/instanceof) — bind only when lbp > minBp; null = bind maximally tight
   ledSameLine: boolean[];                             // parallel to leds: a leading `sameLine` guard (TS type tails) — the connector must be on the operand's line
@@ -297,6 +316,10 @@ export type PrattRule = {
   ledForm: AssignForm[];                              // parallel to leds: the built node's form (a binary-connector led, `a < T >`/`a as T`, is not a target)
   ledClosesTail: boolean[];                           // parallel to leds: not an access tail, or ends in a negative lookahead (`Foo<T>` then nothing)
   postfixToks: string[];                              // LED: a postfix token `$ X` (e.g. a tagged template), tried like a mixfix led (also an access tail)
+  postfixTokNames: string[];                          // parallel to postfixToks: each arm's name
+  // The names of the synthesized operator forms (a prefix / binary / postfix node); null when the
+  // rule declares no operators. An operator itself is named by its text (`prefix[i].op` ...).
+  opNames: { binary: string; prefix: string; postfix: string } | null;
   postfix: Array<{ op: string; lbp: number; requireTarget: boolean }>;  // LED: a postfix operator `$ ++` — binds iff lbp > minBp + !tailClosed, no rhs, closes the tail
   postfixSameLine: boolean;                           // the postfix arm is `$ sameLine ++` (a restricted production): the operator binds only on its operand's line
   // Present iff the template token is in nudToks / postfixToks: the rule that parses the
@@ -495,7 +518,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
   const lookaheads: Alt[] = [];
   const lookaheadIds = new Map<string, number>();
   const lookaheadOf = (steps: Step[]): number => {
-    const key = JSON.stringify(steps);
+    const key = stepKey(steps);
     let id = lookaheadIds.get(key);
     if (id === undefined) { id = lookaheads.length; lookaheads.push(steps); lookaheadIds.set(key, id); }
     return id;
@@ -530,8 +553,20 @@ function buildIR(grammar: CstGrammar): ParserIR {
     return { t: 'look', id: lookaheadOf(steps), is: false };
   };
 
-  // RuleExpr → Step. `selfName` (when set) maps a self-ref to a fresh rule call.
-  function stepOf(e: RuleExpr): Step {
+  // The names of the rule being lowered (nameRule): stepOf copies them onto the steps it makes.
+  let names: RuleNames | null = null;
+  const named = (e: RuleExpr, s: Step): Step => {
+    const f = names?.childOf.get(e)?.name;
+    if (f !== undefined) s.field = f;
+    // Only an alternation the deriver walks has branch names (one inside a lookahead has none:
+    // zero-width, it holds no child).
+    const bs = s.t === 'alt' ? names?.branches.get(e) : undefined;
+    if (bs !== undefined) (s as Extract<Step, { t: 'alt' }>).branchNames = bs.map((x) => x.name);
+    return s;
+  };
+  // RuleExpr → Step, with the names `named` copies.
+  function stepOf(e: RuleExpr): Step { return named(e, stepNode(e)); }
+  function stepNode(e: RuleExpr): Step {
     switch (e.type) {
       case 'literal': return { t: 'lit', value: e.value, ttype: litTtype(e.value) };
       case 'ref': return tokenNames.has(e.name) ? { t: 'tok', name: e.name } : { t: 'rule', name: e.name };
@@ -609,9 +644,11 @@ function buildIR(grammar: CstGrammar): ParserIR {
     // Pratt rules AND left-recursive non-Pratt rules (e.g. NewTarget, TS Type) both parse as
     // atom-then-continuation: buildPratt detects `startsSelf` and splits accordingly, so routing
     // left-recursive rules through it avoids the infinite left-recursion a plain rd rule would hit.
-    if (a.prattRules.has(r.name) || a.leftRecSet.has(r.name)) return buildPratt(r.name, r.body, a, stepOf, notOf, reservableOf, suppressOf, ctxOf, litTtype, altGuard, templateTokens);
+    names = nameRule(r);
+    if (a.prattRules.has(r.name) || a.leftRecSet.has(r.name)) return buildPratt(r.name, r.body, a, names, stepOf, named, notOf, reservableOf, suppressOf, ctxOf, litTtype, altGuard, templateTokens);
     const items = r.body.type === 'alt' ? r.body.items : [r.body];
-    return { kind: 'rd', name: r.name, alts: items.map(altSteps), altFirst: [], predictive: false, altGuard: items.map((e, i) => altGuard(e, items.slice(0, i))), altDispatch: { sections: [], ranked: [] } };
+    const altNames = items.map((e) => names!.armOf.get(e)!.name);
+    return { kind: 'rd', name: r.name, alts: items.map(altSteps), altNames, altFirst: [], predictive: false, altGuard: items.map((e, i) => altGuard(e, items.slice(0, i))), altDispatch: { sections: [], ranked: [] } };
   });
   // Longest match never picks an alternative that advances nothing, and only the entry rule
   // may match the empty input: an entry that must CHOOSE its empty alternative has no rendering.
@@ -1061,7 +1098,7 @@ function shareSteps(roots: Step[][]): Step[] {
     for (const c of kids(s)) size += visit(c);
     if (!isCompound(s)) return size;
     let key = keyOf.get(s);
-    if (key === undefined) { key = JSON.stringify(s); keyOf.set(s, key); }
+    if (key === undefined) { key = stepKey(s); keyOf.set(s, key); }
     let e = entries.get(key);
     if (e === undefined) {
       e = { size, children: new Map(), atRoot: 0, occ: [] };
@@ -1189,8 +1226,8 @@ function codesToRanges(codes: number[]): CharRange[] {
 // A Pratt rule's alternatives → NUD atoms/brackets/prefix + binary + mixfix LEDs.
 // Binding powers come from the analysis (opTable/prefixOps), single-sourced with the interpreter.
 function buildPratt(
-  name: string, body: RuleExpr, a: ReturnType<typeof analyzeGrammar>,
-  stepOf: (e: RuleExpr) => Step, notOf: (steps: Step[]) => Step, reservableOf: (steps: Step[]) => Step,
+  name: string, body: RuleExpr, a: ReturnType<typeof analyzeGrammar>, names: RuleNames,
+  stepOf: (e: RuleExpr) => Step, named: (e: RuleExpr, s: Step) => Step, notOf: (steps: Step[]) => Step, reservableOf: (steps: Step[]) => Step,
   suppressOf: (connectors: string[], steps: Step[]) => Step, ctxOf: (mode: 'await' | 'yield' | 'asyncgen' | 'reset', steps: Step[]) => Step,
   litTtype: (v: string) => '$keyword' | '$punct',
   altGuard: (e: RuleExpr, earlier: readonly RuleExpr[]) => Guard, templateTokens: ReadonlySet<string>,
@@ -1203,6 +1240,8 @@ function buildPratt(
   const nudSeqGuard: Guard[] = [];
   const nudCappedGuard: Guard[] = [];
   const nudOrder: NudRef[] = [];
+  const nudNames: string[] = [], ledNames: string[] = [], ledLeftNames: string[] = [], postfixTokNames: string[] = [];
+  const armName = (alt: RuleExpr): string => names.armOf.get(alt)!.name;
   // The NUD alternatives so far that are candidates at every binding power (a token, a bracket
   // or a sequence: a capped one is not, and the prefix arm is no written sequence) — what a later
   // sequence may only repeat (altGuard).
@@ -1234,30 +1273,30 @@ function buildPratt(
     if (!startsSelf) {
       // NUD
       if (items.length === 1 && items[0].type === 'ref' && a.tokenNames.has(items[0].name)) {
-        nudOrder.push({ kind: 'tok', index: nudToks.length });
+        nudOrder.push({ kind: 'tok', index: nudToks.length }); nudNames.push(armName(alt));
         nudToks.push(items[0].name);
         nudWritten.push(alt);
         if (items[0].hole !== undefined) nudTplHole = oneHole('NUD', nudTplHole, items[0].hole);
         continue;
       }
-      if (items[0].type === 'prefix') { if (!sawPrefix) nudOrder.push({ kind: 'prefix' }); sawPrefix = true; continue; }
+      if (items[0].type === 'prefix') { if (!sawPrefix) { nudOrder.push({ kind: 'prefix' }); nudNames.push(names.ops!.prefix); } sawPrefix = true; continue; }
       // A capExpr (arrow function): an assignment-level group{capBelow}.
       if (items.length === 1 && items[0].type === 'group' && items[0].capBelow !== undefined) {
         const capBp = a.nudCapOf(items[0]);
         if (capBp === null) throw new Error(`portable: capBelow connector '${items[0].capBelow}' has no binding power (rule ${name})`);
         const b = items[0].body;
-        nudOrder.push({ kind: 'capped', index: nudCapped.length });
+        nudOrder.push({ kind: 'capped', index: nudCapped.length }); nudNames.push(armName(alt));
         nudCappedGuard.push(altGuard(alt, []));
         nudCapped.push({ steps: (b.type === 'seq' ? b.items : [b]).map((it) => stepOfPratt(it)), capBp });
         continue;
       }
-      if (items[0].type === 'literal') { nudOrder.push({ kind: 'bracket', index: nudBrackets.length }); nudBrackets.push({ first: items[0].value, steps: items.map((it) => stepOfPratt(it)) }); nudWritten.push(alt); continue; }
+      if (items[0].type === 'literal') { nudOrder.push({ kind: 'bracket', index: nudBrackets.length }); nudNames.push(armName(alt)); nudBrackets.push({ first: items[0].value, steps: items.map((it) => stepOfPratt(it)) }); nudWritten.push(alt); continue; }
       // A single transparent group (no suppress, no context) unwraps to its body (an explicit grouping).
       let nudItems = items;
       if (items.length === 1 && items[0].type === 'group' && !items[0].suppress && !items[0].ctxMode) {
         nudItems = items[0].body.type === 'seq' ? items[0].body.items : [items[0].body];
       }
-      nudOrder.push({ kind: 'seq', index: nudSeqs.length });
+      nudOrder.push({ kind: 'seq', index: nudSeqs.length }); nudNames.push(armName(alt));
       nudSeqGuard.push(altGuard(alt, nudWritten));
       nudWritten.push(alt);
       nudSeqs.push(nudItems.map((it) => stepOfPratt(it)));   // general NUD sequence (guarded ident, class expr)
@@ -1279,6 +1318,7 @@ function buildPratt(
       if (prec && prec.rhsBp !== null && lastIsOperand) steps[steps.length - 1] = { t: 'ruleBp', name, bp: prec.rhsBp };
       const wordConnector = /^[A-Za-z]/.test(conn);                                           // `in`/`instanceof`/`as` — not a tail
       leds.push({ first: conn, steps });
+      ledNames.push(armName(alt)); ledLeftNames.push(names.childOf.get(items[0])!.name);
       ledAccessTail.push(!lastIsOperand && !wordConnector);
       ledLbp.push(prec ? prec.lbp : null);
       ledSameLine.push(hasSameLine);
@@ -1286,14 +1326,15 @@ function buildPratt(
       continue;
     }
     if (rest.length === 1 && rest[0].type === 'ref' && a.tokenNames.has(rest[0].name)) {   // postfix token (tagged template)
-      postfixToks.push(rest[0].name);
+      postfixToks.push(rest[0].name); postfixTokNames.push(armName(alt));
       if (rest[0].hole !== undefined) postfixTplHole = oneHole('postfix', postfixTplHole, rest[0].hole);
       continue;
     }
     throw new Error(`portable: Pratt LED shape not in scope (rule ${name})`);
   }
   // a self-ref inside a NUD/LED sub-sequence is a fresh parse of this rule
-  function stepOfPratt(e: RuleExpr): Step {
+  function stepOfPratt(e: RuleExpr): Step { return named(e, prattNode(e)); }
+  function prattNode(e: RuleExpr): Step {
     if (e.type === 'ref' && e.name === name) return { t: 'rule', name };
     if (e.type === 'seq') return { t: 'seq', steps: e.items.map(stepOfPratt) };
     if (e.type === 'sameLine') return { t: 'sameLine' };
@@ -1308,7 +1349,7 @@ function buildPratt(
     if (e.type === 'quantifier' && e.kind === '*') return { t: 'star', step: stepOfPratt(e.body) };
     if (e.type === 'quantifier' && e.kind === '+') return { t: 'seq', steps: [stepOfPratt(e.body), { t: 'star', step: stepOfPratt(e.body) }] };
     if (e.type === 'literal') return { t: 'lit', value: e.value, ttype: litTtype(e.value) };
-    return stepOf(e);
+    return stepOf(e);   // names its step itself (`named` again finds the same names)
   }
   const prefix = sawPrefix
     ? [...a.prefixOps.entries()].map(([op, info]) => ({ op, rbp: info.rbp, requireTarget: !!info.requireTarget, form: (a.postfixOpValues.has(op) ? FORM_NOT_TARGET : FORM_UNARY) as AssignForm }))
@@ -1334,7 +1375,7 @@ function buildPratt(
       case 'prefix': return null;
     }
   }));
-  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, nudSeqGuard, nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedGuard, nudOrder, nudDispatch, prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledSuppressedIn: [], ledForm, ledClosesTail, postfixToks, postfix, postfixSameLine, ...(nudTplHole !== undefined ? { nudTplHole } : {}), ...(postfixTplHole !== undefined ? { postfixTplHole } : {}) };
+  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, nudSeqGuard, nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedGuard, nudOrder, nudNames, nudDispatch, prefix, binary, leds, ledNames, ledLeftNames, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledSuppressedIn: [], ledForm, ledClosesTail, postfixToks, postfixTokNames, postfix, postfixSameLine, opNames: names.ops ?? null, ...(nudTplHole !== undefined ? { nudTplHole } : {}), ...(postfixTplHole !== undefined ? { postfixTplHole } : {}) };
 }
 
 // ── Lex integer ids (kid = kind index, lid = text/literal index) ──
