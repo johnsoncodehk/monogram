@@ -12,6 +12,8 @@ name: measure profile
 #   M = the pull request's head, PROFILE_SCOPE=pr (no oxc, no wall-clock, no cache simulation).
 # - the label `measure-profile-full` on such a pull request: the same A and M, scope `full`: oxc
 #   beside them, the native timings, the phase regions, the annotations, the cache/branch simulation.
+# - push to a `land/**` branch touching the same paths: A = its merge base with master, M = its
+#   head, scope `pr` (the check a pull request gets, without opening one).
 # - workflow_dispatch: any two commits, either scope.
 # Failure policy: a harness failure fails the job (a missing measurement is NOT RUN, never a pass);
 # a regression is printed at the top of the summary and does not fail it (docs/MEASUREMENT.md).
@@ -28,6 +30,12 @@ on:
       - 'test/oxc-parse-bench/**'
       - 'test/emit-sizes.ts'
       - '.github/workflows/measure-profile.yml'
+  # A branch pushed for the full check without a pull request (see ci.yml): A = its merge base
+  # with master, M = its head, scope `pr`.
+  # No `paths:` here: on the push that CREATES a branch GitHub does not diff against master, so a
+  # path filter can miss it. The `relevant` job below decides, against the merge base.
+  push:
+    branches: ['land/**']
   workflow_dispatch:
     inputs:
       commit:
@@ -55,9 +63,31 @@ env:
   TS_REPO_SHA: '6fbce89821d93a5b761581d9ac540455f38e9acb'
 
 jobs:
+  # For a `land/**` push: does the branch touch what this workflow measures, against its merge
+  # base with master? (The same paths as the pull_request filter above.) Other events: yes.
+  relevant:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.d.outputs.run }}
+    steps:
+      - uses: actions/checkout@v5
+        if: github.event_name == 'push'
+        with:
+          fetch-depth: 0
+      - id: d
+        run: |
+          if [ "${{ github.event_name }}" != "push" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          git fetch -q origin master; base=$(git merge-base origin/master HEAD)
+          if git diff --name-only "$base" HEAD | grep -qE '^src/|^[^/]+\.ts$|^test/bench-rust-profile/|^test/bench-targets/|^test/bench-rust-oxc/|^test/oxc-parse-bench/|^test/emit-sizes\.ts$|^\.github/workflows/measure-profile\.yml$'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; echo "measured paths changed since $base"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "nothing this workflow measures changed since $base"
+          fi
+
   profile:
+    needs: relevant
     # A label other than measure-profile-full changes nothing measured.
-    if: github.event.action != 'labeled' || github.event.label.name == 'measure-profile-full'
+    if: needs.relevant.outputs.run == 'true' && (github.event.action != 'labeled' || github.event.label.name == 'measure-profile-full')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -96,6 +126,8 @@ jobs:
           if [ "$EVENT" = pull_request ]; then
             M=$PR_HEAD; A=$(git merge-base "$PR_BASE" "$PR_HEAD")
             if [ "$FULL_LABEL" = true ]; then scope=full; else scope=pr; fi
+          elif [ "$EVENT" = push ]; then
+            M=$GITHUB_SHA; A=$(git merge-base origin/master "$M"); scope=pr
           else
             git fetch -q origin "$IN_COMMIT" 2>/dev/null || true
             M=$(git rev-parse "$IN_COMMIT^{commit}" 2>/dev/null || git rev-parse "origin/$IN_COMMIT^{commit}")

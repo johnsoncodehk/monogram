@@ -245,7 +245,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
      markup?.unquotedValueToken].filter(Boolean) as string[],
   );
   // Region tokens: lexed only inside their element region, never by the ordinary scan.
-  const elTokenNames = new Set<string>(el ? [el.text, el.closeTag, el.selfClose] : []);
+  const elTokenNames = new Set<string>(el ? [el.text, el.closeTag, el.selfClose, ...el.tagTokens ?? []] : []);
   const lineTokenNames = new Set<string>(
     indent ? [indent.indentToken, indent.dedentToken, indent.newlineToken].filter(Boolean)
            : newline ? [newline.token] : [],
@@ -400,6 +400,11 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     if (!textDecl) throw new Error(`elements.text: no token named '${el.text}'`);
     // The children text run is the text token's own pattern (a run of a character class).
     emit(`const LX_EL_TEXT = new RegExp(${J(`(?:${tokenPatternSource(textDecl)})`)}, 'y');`);
+    (el.tagTokens ?? []).forEach((name, i) => {
+      const d = spec.tokens.find(t => t.name === name);
+      if (!d) throw new Error(`elements.tagTokens: no token named '${name}'`);
+      emit(`const LX_EL_TAG_${i} = new RegExp(${J(`(?:${tokenPatternSource(d)})`)}, 'y');`);
+    });
     const tp = el.typeParameters;
     if (tp?.head) emit(`const LX_TP_HEAD = new RegExp(${J(`(?:${tokenPatternSource({ pattern: tp.head })})`)}, 'y');`);
     if (tp?.signature) {
@@ -1734,6 +1739,11 @@ function emitElementFrame(emit: (s?: string) => void, el: ElementRegion, c: Elem
   emit(`          continue;`);
   emit(`        }`);
   emit(`      } else {`);
+  // a tag's own tokens (outside type arguments): tried before the ordinary scan
+  (el.tagTokens ?? []).forEach((name, i) => {
+    emit(`        if (tagAngle === 0) { LX_EL_TAG_${i}.lastIndex = pos; const gm = LX_EL_TAG_${i}.exec(source);`);
+    emit(`          if (gm !== null && gm[0].length > 0) { const _e = pos + gm[0].length; tkPush(${c.kOf(name)}, 0, pos, _e); pos = _e; continue; } }`);
+  });
   emit(`        if (sub === 1 && tagAngle === 0 && ${c.startsWithExpr('source', 'pos', el.closeMarker + el.tagClose, 'cc')}) {`);
   emit(`          tkPush(${c.kOf(el.selfClose)}, 0, pos, pos + ${LS});`);
   emit(`          pos += ${LS};`);

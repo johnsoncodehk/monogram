@@ -1,8 +1,11 @@
 name: CI
 
 on:
+  # `land/**`: a branch pushed for the full check before it is put on master WITHOUT a pull
+  # request (a pull request notifies every subscriber; most changes are not news). It is checked
+  # as a pull request would be: path gates against its merge base with master, caches restored.
   push:
-    branches: [master]
+    branches: [master, 'land/**']
   pull_request:
   # Nightly + on-demand FULL run: the tree-sitter job below only generates when tree-sitter/**
   # changed (the materialized grammar is its sole input), so these backstop the one input it can't
@@ -97,6 +100,10 @@ jobs:
             echo "value=true" >> "$GITHUB_OUTPUT"; echo "forced full run (${{ github.event_name }})"; exit 0
           fi
           if [ "${{ github.event_name }}" = "pull_request" ]; then base="${{ github.event.pull_request.base.sha }}"; else base="${{ github.event.before }}"; fi
+          # A `land/**` branch is judged against its merge base with master, as a pull request is.
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" != "refs/heads/master" ]; then
+            git fetch -q origin master; base="$(git merge-base origin/master HEAD || true)"
+          fi
           if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
             echo "value=true" >> "$GITHUB_OUTPUT"; echo "no usable base — running the gate"; exit 0
           fi
@@ -168,6 +175,10 @@ jobs:
             echo "value=true" >> "$GITHUB_OUTPUT"; echo "forced full run (${{ github.event_name }})"; exit 0
           fi
           if [ "${{ github.event_name }}" = "pull_request" ]; then base="${{ github.event.pull_request.base.sha }}"; else base="${{ github.event.before }}"; fi
+          # A `land/**` branch is judged against its merge base with master, as a pull request is.
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" != "refs/heads/master" ]; then
+            git fetch -q origin master; base="$(git merge-base origin/master HEAD || true)"
+          fi
           if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
             echo "value=true" >> "$GITHUB_OUTPUT"; echo "no usable base — running the gate"; exit 0
           fi
