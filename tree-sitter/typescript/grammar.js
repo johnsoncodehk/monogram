@@ -240,6 +240,8 @@ module.exports = grammar({
 
     module_reference: $ => choice(seq("require", "(", choice($.string, seq($.expr, repeat(seq(",", $.expr)))), ")"), seq($.ident, repeat(seq(".", $.ident)))),
 
+    type_start: $ => choice(choice($.ident, "void", "null", "this", "typeof", "new", "true", "false", "import", "function", $.string, $.number, $.hex_number, $.octal_number, $.binary_number, $.big_int, $.template, "{", "[", "<", "|", "&", "*", "?", "!", "..."), seq("-", choice($.number, $.hex_number, $.octal_number, $.binary_number, $.big_int)), seq("(", choice(")", $.private_field, $.decorator, "const", "default", "export", "in", $.type_start))),
+
     shebang: $ => token(/#![^\n]*/),
 
     jsdoc: $ => token(/\/\*\*(?:[\s\S])*?\*\//),

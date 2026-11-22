@@ -419,6 +419,8 @@ export const typescriptShape: ShapeSpec = {
     },
     ExportSpecifier: { kind: 'keep' },
     ModuleReference: { kind: 'keep' },
+    // read only inside the `T?` lookahead, so it is in no tree
+    TypeStart: { kind: 'keep' },
 
     DecoratorExpr: custom('estreeDecorator',
       'alt[0] is `Decorator star(call|typeargs|!|.|?.|Template)` — the star is a ' +
@@ -484,7 +486,7 @@ export const EXPECTED_CST_NAMES = [
   'NewTarget', 'ClassHeritage', 'Stmt', 'Block', 'BindingProperty', 'BindingElement',
   'ArrayBindingElement', 'BindingPattern', 'Binding', 'ForBinding', 'Param', 'ForHead', 'ForAwaitHead',
   'SwitchCase', 'TypeParams', 'TypeParam', 'Decl', 'ClassMember',
-  'EnumMember', 'ImportClause', 'ImportSpecifier', 'ExportSpecifier', 'ModuleReference', 'Program',
+  'EnumMember', 'ImportClause', 'ImportSpecifier', 'ExportSpecifier', 'ModuleReference', 'TypeStart', 'Program',
 ] as const;
 
 

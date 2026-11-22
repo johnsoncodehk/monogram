@@ -99,6 +99,24 @@ const DecoratorExpr = rule($ => [
 // annotation stays a nested `type` node (→ `T` still @type).
 const typeFnParam = () => tsRelax(Param, [opt('...'), Ident, opt('?'), opt(':', Type)], 'type_fn_param');
 
+// tsc's isStartOfType: whether the token here can begin a type, read from the tokens alone. It is
+// what decides a `T?` (parsePostfixTypeOrHigher): before a type start the `?` is a conditional
+// type's (or, after `as T`, the expression's), elsewhere it is the postfix nullable. A type
+// starts with an identifier or a contextual keyword (isIdentifier: not a reserved word), a
+// keyword type (`void`, `null`, `this`, `typeof`, `new`, `true`, `false`, `import`, `function`),
+// a literal or template, `{ [ < | & * ? ! ...`, a `-` before a number, or a `(` before what
+// begins a type or a parameter (isStartOfParenthesizedOrFunctionType: `)`, a `#name`, a
+// decorator, a modifier keyword, or a type start).
+const TypeStart = rule($ => [
+  alt(
+    [notReserved, Ident], 'void', 'null', 'this', 'typeof', 'new', 'true', 'false', 'import', 'function',
+    String_, Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, Template,
+    '{', '[', '<', '|', '&', '*', '?', '!', '...',
+  ),
+  ['-', alt(Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_)],
+  ['(', alt(')', PrivateField, Decorator, 'const', 'default', 'export', 'in', $)],
+]);
+
 const Type = rule($ => {
   const fnType = [opt(TypeParams), '(', sep(typeFnParam(), ','), ')', '=>', ReturnType];  // (a: T) => R  /  <T>(…) => R (the return may be a type predicate)
   return [
@@ -182,11 +200,9 @@ const Type = rule($ => {
     // starts no type (`function(if)`).
     ['function', '(', sep(alt([alt([alt('this', 'new'), ':'], not(alt('this', 'new'))), opt('...'), ReturnType]), ','), ')', opt(':', $)],
     // postfix nullable `T?`: tsc takes the `?` only when the NEXT token cannot start
-    // a type — otherwise the `?` belongs to a conditional type / an expression-level
-    // ternary after `as T`. tsc tests token-level isStartOfType; `not(alt('new', $))`
-    // mirrors it as a lookahead ('new' alone, a type START that a full type parse may
-    // still fail on, e.g. `x as T ? new X : y`). No line break before postfix (tsc).
-    [$, sameLine, '?', not(alt('new', $))],
+    // a type (`TypeStart`, its isStartOfType) — otherwise the `?` belongs to a conditional
+    // type / an expression-level ternary after `as T`. No line break before postfix (tsc).
+    [$, sameLine, '?', not(TypeStart)],
     [$, sameLine, '!'],   // postfix non-nullable: T!
     // mapped type (tsc's parseMappedType): `{`, an optional `readonly` (or `+readonly` /
     // `-readonly`), the type parameter `[K in T]` with an optional `as` clause, an optional `?`
@@ -1051,6 +1067,7 @@ export default defineGrammar({
     TypeParams, TypeParam,
     Decl, ClassMember, EnumMember,
     ImportClause, ImportSpecifier, ExportSpecifier, ModuleReference,
+    TypeStart,
     Program,
   },
 

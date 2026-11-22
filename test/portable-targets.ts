@@ -640,6 +640,10 @@ const CASES: Case[] = [
       '{}\n(x)', 'function f() {}\n(x)', 'class C {}\n[0]', '@dec class C {}\n(x)', 'async\nfunction f() {}\n(x)',
       'if (a) {}\n(x)', '({}).x;', '({ b(); }).x;', '(@dec class {}).x;', 'x = () => ({}).y;', 'let = 1;',
       'type = 1;', 'namespace.x;', 'declare(x);', 'abstract(x);', 'export using x = y;', 'export await using x = y;',
+      // a `T?` is the postfix nullable only where no type starts after the `?` (tsc's isStartOfType)
+      'let x: T?;', 'let x = y as T ? z : w;', 'type A = X extends Y ? T? : Z;', 'type A = [T?];', 'f(a as T?, b);',
+      'let x: T?\nconst a = 1;', 'let x = y as T? -0x1 : U;', 'function f(): T?\nreturn {}', 'type A = { a: T?\nif : U };',
+      'let x = y as T?\n(-z);', 'let x = y as T ? (-1) : 2;',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
@@ -647,6 +651,7 @@ const CASES: Case[] = [
       '{ b(); }.x;', '{ static x }.y;', '{ static x }', '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;',
       'let[0] = 1;', '(async\nfunction f() {});',
       'import defer * from "m";', 'import defer * as from "m";',
+      'let x: T? !;', 'let x = y as T? -0x1;', 'function f(): T?\n... {}', 'type A = { a: T?\n() };', 'let x: T? string;', 'let x: T?\nin;',
       'a + b = 1;', 'a < b = 1;', 'a in b = 1;', 'a as T = 1;', '-x = 1;', 'x++ = 1;', '++x++;', '++-x;', '++ ++x;', '-x ** 2;', 'typeof x ** 2;', 'm > B<C> >>= 1;',
       'x\n++\n++\ny;', 'x\n++\n++y;', 'x\n--\n--\ny;', 'x\n++\n--\ny;', 'var z =\nx\n++\n++\ny;',
       'function f() { return x\n++\n++\ny; }', 'f()\n++\n++\ny;', 'a[0]\n--\n--y;', '{ x\n++\n++\ny }',
