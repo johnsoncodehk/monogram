@@ -75,12 +75,24 @@ const branchRs = (cond: string, r = false) => r
   ? `{ let sp = p.pos; if ${cond} { return true; } p.back(sp); }`
   : `{ ${ckptRs('p')} if ${cond} { return true; } ${undoRs('p')} }`;
 // CANDIDATE frame: one candidate of a longest-match list (an rd rule's alternatives, a Pratt
-// rule's NUD arms) tried from `save`: when it matched and beats the best so far it becomes the
-// best (`win`: what records it; `ck` moves past its node), else what it built is dropped; either
-// way the position goes back to `save` for the next candidate.
+// rule's NUD arms) of rule `rid`, tried from `save`: when it matched and beats the best so far,
+// its node is finished as the best, `more` records its index / form, and `ck` moves past the node;
+// else what it built is dropped; either way the position goes back to `save` for the next
+// candidate. Printed as the `cand!` macro (CAND_MACRO_RS), which expands to exactly that frame.
 const lostRs = `self.scratch.truncate(sb); self.b.restore(ck);`;
-const candRs = (d: Dispatch, i: number, cond: string, win: string) =>
-  `{ if ${cond} && ${beatsRs(d, 'self.pos', i)} { ${win} } else { ${lostRs} } self.back(save); }`;
+const candRs = (d: Dispatch, i: number, cond: string, rid: number, more: string) =>
+  `{ cand!(self, sb, ck, save, best, best_pos, ${rid}, ${cond} && ${beatsRs(d, 'self.pos', i)}, {${more}}); }`;
+// The candidate frame as a macro, not a method: a helper over the list's state was measured to
+// cost instructions (+2 to +9%: LLVM does not treat the call as it treats the frame in place),
+// and a macro expands to the frame in place. The list's locals are passed by name (hygiene).
+const CAND_MACRO_RS = `/// A longest-match candidate (target-rust.ts candRs): if \`$c\` (it matched and beats the best so far),
+/// node \`$rid\` is finished as the best and the checkpoint moves past it, else what it built is dropped;
+/// then the position goes back to the list's start.
+macro_rules! cand {
+    ($p:ident, $sb:ident, $ck:ident, $save:ident, $best:ident, $best_pos:ident, $rid:expr, $c:expr, $more:block) => {
+        if $c { $best = Some($p.finish($rid, $sb, $p.off_at($save), $save)); $best_pos = $p.pos; $more $ck = $p.b.checkpoint(); } else { $p.scratch.truncate($sb); $p.b.restore($ck); } $p.back($save);
+    };
+}`;
 // The typed-AST layer's form of a Guard over the token t: its parser keeps no lookahead mark, so
 // the second token is read directly. null: no guard.
 const astGuardRs = (g: Guard, t: string): string | null =>
@@ -925,7 +937,7 @@ ${r.alts.map(arm).join('\n')}
   // The alternatives are reached through the rule's Dispatch (emit-portable.ts, RdRule.altDispatch).
   const alt = (i: number, keyed: boolean) => {
     const cond = r.alts[i]!.map((x) => stepCond(x, ids, ar)).join(' && ');
-    const body = candRs(r.altDispatch, i, cond, `best = Some(self.finish(${rid}, sb, self.off_at(save), save)); best_pos = self.pos;${markRs(r.altDispatch, i)} ck = self.b.checkpoint();`);
+    const body = candRs(r.altDispatch, i, cond, rid, markRs(r.altDispatch, i));
     const g = guardCond(r.altGuard[i]!, 't', keyed);
     return g.length && !keyed ? `        if let Some(t) = _ft { if ${g.join(' && ')} ${body} }` : ifRs(g, body);
   };
@@ -1051,7 +1063,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   const lost = lostRs;
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    candRs(r.nudDispatch, i, stepsCond(steps), `best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won(i, '0', tail, capped)}`);
+    candRs(r.nudDispatch, i, stepsCond(steps), rid, `${markRs(r.nudDispatch, i)} bf = 0; bt = ${tail}; bc = ${capped};`);
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
     switch (a.kind) {
@@ -2105,6 +2117,7 @@ struct Spanned<H: Copy> { h: H, off: u32, tok_start: u32, present: bool }
 /// and the builder's checkpoint. Parser::reset goes back to it.
 #[derive(Clone, Copy)]
 struct Mark { pos: usize, sb: usize, ck: (usize, usize) }
+${CAND_MACRO_RS}
 
 #[derive(Default)]
 pub struct CstBuilder {
