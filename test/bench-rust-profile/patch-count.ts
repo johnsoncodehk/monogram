@@ -13,7 +13,8 @@ function sub(from: string, to: string, times: number) {
   if (n !== times) throw new Error(`expected ${times}× ${JSON.stringify(from)} in CstBuilder, found ${n}`);
   region = region.split(from).join(to);
 }
-sub('self.kids.extend(scratch[sb..nn].iter().copied());', 'cnt_node(nn - sb, self.nodes.len() + 1); self.kids.extend(scratch[sb..nn].iter().copied());', 2);
+const kidCopy = region.includes('copy_kids(&mut self.kids, &scratch[sb..nn]);') ? 'copy_kids(&mut self.kids, &scratch[sb..nn]);' : 'self.kids.extend(scratch[sb..nn].iter().copied());';
+sub(kidCopy, 'cnt_node(nn - sb, self.nodes.len() + 1); ' + kidCopy, 2);
 sub('scratch.push(encode_leaf(tok_idx, tt_id as u8));', 'cnt_add(C_LEAF, 1); scratch.push(encode_leaf(tok_idx, tt_id as u8));', 1);
 sub('fn checkpoint(&self) -> (usize, usize) { (self.nodes.len(), self.kids.len()) }', 'fn checkpoint(&self) -> (usize, usize) { cnt_add(C_CKPT, 1); (self.nodes.len(), self.kids.len()) }', 1);
 sub('fn restore(&mut self, ck: (usize, usize)) { self.nodes.truncate(ck.0);', 'fn restore(&mut self, ck: (usize, usize)) { cnt_restore(&self.nodes, ck.0, self.kids.len(), ck.1); self.nodes.truncate(ck.0);', 1);
