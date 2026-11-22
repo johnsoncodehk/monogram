@@ -20,6 +20,9 @@ VARIANTS="A:cbb58a0 P:0990a37 Q:103b396 B:$B_SHA"
 [ "$D_SHA" != "$B_SHA" ] && VARIANTS="$VARIANTS D:$D_SHA"
 # BENCH_EXTRA=<commit>: one more variant E (e.g. a pull request's head, to compare with D = master);
 # BENCH_ONLY=1 then drops A/P/Q so the job is shorter.
+# BENCH_GRAMMAR=<name>: the grammar file every variant emits (default typescript); with `javascript`
+# only the inputs that grammar accepts (in B) are timed.
+GRAMMAR=${BENCH_GRAMMAR:-typescript}
 if [ -n "${BENCH_EXTRA:-}" ]; then
   [ -n "${BENCH_ONLY:-}" ] && VARIANTS="B:$B_SHA D:$D_SHA"
   VARIANTS="$VARIANTS E:$(git rev-parse "$BENCH_EXTRA")"
@@ -30,6 +33,7 @@ lscpu | grep -E '^(Model name|Architecture|CPU\(s\)|Thread\(s\) per core|Core\(s
 nproc; uname -a; cat /proc/loadavg
 rustc -vV; cargo -V; node --version
 echo "origin/master = $D_SHA"
+echo "grammar = $GRAMMAR"
 for kv in $VARIANTS; do echo "${kv%%:*} = $(git log -1 --format='%h %ad %s' --date=iso "${kv#*:}")"; done
 
 echo "=== emit monogram Rust parsers"
@@ -37,7 +41,7 @@ for kv in $VARIANTS; do
   v=${kv%%:*}; c=${kv#*:}
   git worktree add -q --detach "$W/src-$v" "$c"
   (cd "$W/src-$v" && npm ci --silent --no-audit --no-fund)
-  node "$H/emit.ts" "$W/src-$v" "$W/parser-$v.rs"
+  node "$H/emit.ts" "$W/src-$v" "$W/parser-$v.rs" "$GRAMMAR"
   grep -n '^pub fn parse_with\|^pub struct CstBuilder' "$W/parser-$v.rs" | sed "s/^/$v: /"
   d=$W/mono-$v; mkdir -p "$d/src"
   sed "s/@NAME@/mono-bench-$v/" "$H/mono-Cargo.toml" > "$d/Cargo.toml"

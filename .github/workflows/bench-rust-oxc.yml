@@ -30,5 +30,6 @@ jobs:
       # BENCH_EXTRA: 0807b8143ad160773842ef67bb3faea730ff28a6
       - run: test/bench-rust-oxc/run.sh 9
         env:
-          BENCH_EXTRA: 604cc7c65bcb18dfd4d023db3142f17c98c65f1e
+          BENCH_EXTRA: cb940d2e4813bb907fc228fe4e3e392f17f8e4de
           BENCH_ONLY: '1'
+          BENCH_GRAMMAR: javascript
