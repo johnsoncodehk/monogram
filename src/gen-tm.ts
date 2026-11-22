@@ -825,19 +825,30 @@ function findContextualAccessibilityModifiers(grammar: CstGrammar): Set<string> 
   if (modKws.size === 0) return modKws;
 
   const ruleByName = new Map(grammar.rules.map(r => [r.name, r]));
+  const byName = new Map(grammar.rules.map(r => [r.name, r.body]));
 
   // Modifier literals an expression can END with (its last-set), peeking through
   // opt/many/group/alt — used to attribute the NEXT sibling's first-set as FOLLOW.
   const lastModifiers = (e: RuleExpr, out: Set<string>): void => {
     switch (e.type) {
       case 'literal': if (modKws.has(e.value)) out.add(e.value); return;
-      case 'seq': if (e.items.length) lastModifiers(e.items[e.items.length - 1], out); return;
+      case 'seq':   // looks back past nullable items, as FIRST looks past them
+        for (let j = e.items.length - 1; j >= 0; j--) { lastModifiers(e.items[j], out); if (!ruleIsNullable(e.items[j], byName)) return; }
+        return;
       case 'alt': for (const it of e.items) lastModifiers(it, out); return;
       case 'quantifier': case 'group': lastModifiers(e.body, out); return;
       case 'sep': lastModifiers(e.element, out); return;
     }
   };
-  // First-set literals of an expression, resolving rule refs (so `Block` → `{`).
+  // First-set literals of an expression, resolving rule refs (so `Block` → `{`). A nullable item
+  // (a zero-width lookahead, an `opt`, a `many`) is no occurrence of what follows it: FIRST looks
+  // past it to the next item (`not(…)` says what may follow, it is not a follower itself).
+  const firstOfItems = (items: RuleExpr[], from: number, out: Set<string>, seen: Set<string>): void => {
+    for (let j = from; j < items.length; j++) {
+      firstLiterals(items[j], out, seen);
+      if (!ruleIsNullable(items[j], byName)) return;
+    }
+  };
   const firstLiterals = (e: RuleExpr, out: Set<string>, seen: Set<string>): void => {
     switch (e.type) {
       case 'literal': out.add(e.value); return;
@@ -848,7 +859,7 @@ function findContextualAccessibilityModifiers(grammar: CstGrammar): Set<string> 
         if (r) firstLiterals(r.body, out, seen);
         return;
       }
-      case 'seq': if (e.items.length) firstLiterals(e.items[0], out, seen); return;
+      case 'seq': firstOfItems(e.items, 0, out, seen); return;
       case 'alt': for (const it of e.items) firstLiterals(it, out, seen); return;
       case 'quantifier': case 'group': firstLiterals(e.body, out, seen); return;
       case 'sep': firstLiterals(e.element, out, seen); return;
@@ -862,8 +873,7 @@ function findContextualAccessibilityModifiers(grammar: CstGrammar): Set<string> 
       for (let i = 0; i < e.items.length; i++) {
         const enders = new Set<string>();
         lastModifiers(e.items[i], enders);
-        const nxt = e.items[i + 1];
-        if (enders.size && nxt) for (const m of enders) firstLiterals(nxt, followers.get(m)!, new Set());
+        if (enders.size) for (const m of enders) firstOfItems(e.items, i + 1, followers.get(m)!, new Set());
       }
       e.items.forEach(walk);
     } else if (e.type === 'alt') e.items.forEach(walk);

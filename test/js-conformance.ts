@@ -175,8 +175,10 @@ const forHeads: { accept: string[]; reject: string[]; tscDeparts: string[] } = {
     'for (async of => 1 of x);', 'for (var a, b of c);', 'for (let a, b in c);', 'for (const a, b of c);',
     'for (using a, b of c);', 'for (using a in b);', 'for (using {a} of b);', 'async function f() { for await (a in b); }', 'async function f() { for await (;;); }',
     'async function f() { for await (let.x of y); }', 'async function f() { for await (let of y); }',
+    'for (var of x);', 'for (var in x);', 'for (var;;);', 'for (var of of);',
   ],
   tscDeparts: [
+    'for (var of x);', 'for (var in x);', 'for (var;;);', 'for (var of of);',
     'for (x = [a in b];;);', 'for (let = 1;;);', 'for (let.x;;);', 'for (let.x in x);',
     'for (let of x);', 'for (async of x);', 'for (async of => 1 of x);', 'for (var a, b of c);', 'for (let a, b in c);',
     'for (const a, b of c);', 'for (using a, b of c);', 'for (using a in b);', 'for (using {a} of b);',
