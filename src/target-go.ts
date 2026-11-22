@@ -3266,26 +3266,8 @@ const goLowering: Lowering = {
   owns: false,
   spliceInline: true,
   charSet: (name, rs) => `var ${name} = [256]bool{${rs.flatMap(([lo, hi]) => Array.from({ length: hi - lo + 1 }, (_, k) => `${lo + k}: true`)).join(', ')}}`,
-  // Four bytes per round, as Rust's lex_run_end: one loop test per round (s[i+3] first, so the
-  // compiler drops the other three bounds checks), then a byte loop for the tail.
   runEndFn: `// lexRunEnd is the end of the run of bytes in set from i: the first j >= i at which s ends or s[j] is not in it.
 func lexRunEnd(s string, i int, set *[256]bool) int {
-\tfor i+3 < len(s) {
-\t\t_ = s[i+3]
-\t\tif !set[s[i]] {
-\t\t\treturn i
-\t\t}
-\t\tif !set[s[i+1]] {
-\t\t\treturn i + 1
-\t\t}
-\t\tif !set[s[i+2]] {
-\t\t\treturn i + 2
-\t\t}
-\t\tif !set[s[i+3]] {
-\t\t\treturn i + 3
-\t\t}
-\t\ti += 4
-\t}
 \tfor i < len(s) && set[s[i]] {
 \t\ti++
 \t}
