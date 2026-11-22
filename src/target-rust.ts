@@ -1839,7 +1839,7 @@ impl<B: Builder + Default> Doc<B> {
                 self.root = None;
                 self.keep_toks(Vec::new());
                 // validate: no stream equals a fresh lex's (and no tree a fresh parse's) when a fresh lex fails too.
-                let fails = if self.validate { Some(std::panic::catch_unwind(|| { scan_meta(&self.text); }).is_err()) } else { None };
+                let fails = if self.validate { Some(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| { scan_meta(&self.text); })).is_err()) } else { None };
                 self.align = Some(Align { old_n: old_toks.len(), new_n: 0, prefix: 0, suffix: 0, relexed: 0, reused: 0, stream_eq: fails, tree_eq: if B::SUPPORTS_TREE_EQ { fails } else { None } });
                 return;
             }
