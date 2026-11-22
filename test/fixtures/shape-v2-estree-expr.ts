@@ -1,9 +1,9 @@
 // ShapeSpec v2: a subset of ESTree (as acorn 8 produces it) from javascript.ts, in the core
 // calculus only (src/shape2-schema.ts): the expressions below, the root, and the statements
-// (blocks, variable statements with identifier bindings, `if`, loops but `for`, `return`, `throw`,
-// `break`, `continue`, labelled, `try`, `with`, `debugger`, empty). Checked against acorn by
-// test/shape2-oracle.ts. Not total: an arm outside the subset (`for`, `switch`, declarations,
-// binding patterns, functions, classes, arrows, object / array literals, templates) is unmapped,
+// (blocks, variable statements with identifier bindings, `if`, loops, `return`, `throw`, `break`,
+// `continue`, labelled, `try`, `with`, `debugger`, empty), functions, arrows and their parameters.
+// Checked against acorn by test/shape2-oracle.ts. Not total: an arm outside the subset (`switch`,
+// other declarations, binding patterns, methods, classes, object / array literals, templates) is unmapped,
 // and a unit that reaches one is reported as outside the subset, not compared.
 import {
   absent, and, armOf, branch, c, child, cook, get, iff, inh, list, map, match, node, not, orElse, present, record,
