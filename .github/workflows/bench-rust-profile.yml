@@ -35,9 +35,9 @@ jobs:
       - run: test/bench-rust-profile/run.sh
         env:
           PROFILE_WORK: ${{ runner.temp }}/prof-work
-          # perf/lexer-queue-1: x
-          PROFILE_A: 8ebf7c4f0000
-          PROFILE_M: x
+          # perf/lexer-queue-1: baseline: master
+          PROFILE_A: 8ebf7c4c4a1b6861667cf701afc02fa1e57da047
+          PROFILE_M: 8ebf7c4c4a1b6861667cf701afc02fa1e57da047
 
       - uses: actions/upload-artifact@v4
         if: always()
