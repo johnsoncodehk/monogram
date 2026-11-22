@@ -113,7 +113,7 @@ const target = defineTarget({
 const HEAD: Partial<Record<Stmt['k'], string[]>> = {
   let: ['define'], set: ['set!'], setAt: ['set-nth!'], push: ['push!'], if: ['if', 'when'], while: ['while'], for: ['for'],
   forEach: ['for-each'], break: ['break'], return: ['return'], letCall: ['define-values'], setCall: ['set-values!'],
-  lexStep: ['lex-step!'], shrink: ['shrink!'],
+  lexStep: ['lex-step!'], shrink: ['shrink!'], extend: ['extend!'], setField: ['set-field!'],
 };
 function census(fns: Fn[]): Map<string, number> {
   const n = new Map<string, number>();
@@ -123,6 +123,7 @@ function census(fns: Fn[]): Map<string, number> {
     if (e.k === 'not') bump('not');
     if (e.k === 'at') bump('nth');
     if (e.k === 'field') bump('field');
+    if (e.k === 'mkRec') bump('make-record');
     if (e.k === 'code') bump('char-code');
     if (e.k === 'hasAt') bump('starts-at?');
     if (e.k === 'inSet') bump('in-set?');
@@ -135,7 +136,7 @@ function census(fns: Fn[]): Map<string, number> {
     }
   };
   const st = (s: Stmt): void => {
-    bump(s.k === 'comment' ? ';;' : HEAD[s.k]!.join('|'));
+    if (s.k !== 'run') bump(s.k === 'comment' ? ';;' : HEAD[s.k]!.join('|'));
     for (const [key, v] of Object.entries(s)) {
       if (key === 'then' || key === 'else' || key === 'body') (v as Stmt[] | undefined)?.forEach(st);
       else if (Array.isArray(v)) v.forEach((y) => y && typeof y === 'object' && ex(y as Expr));
