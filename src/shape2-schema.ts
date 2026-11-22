@@ -38,8 +38,15 @@ export type ScalarType = 'string' | 'number' | 'bool';
 
 /** A span: the start of `from` to the end of `to`; each a child name or a bound variable. A
  * list-valued child contributes its first element's start / its last element's end. Without a
- * span, a node spans the arm (its CST node). */
-export type Span = { from: string; to: string };
+ * span, a node spans the arm (its CST node).
+ *
+ * `{ after: X }` is ZERO WIDTH at the END of X: a node that consumed no token, placed where the
+ * previous token ends (tsc's "missing" nodes: an `OmittedExpression` for an array hole is built
+ * at getNodePos, the end of the token before it: in `[e, , f]` at the end of the first `,`; in
+ * `[,]` at the end of `[`). X is a child that is always present in its scope (a required child:
+ * an optional or repeated one is a load error, since it can be absent and the previous token is
+ * not then X) or a bound variable. */
+export type Span = { from: string; to: string } | { after: string };
 
 export type Term =
   /** A constant scalar. */
@@ -79,6 +86,13 @@ export type Term =
   | { t: 'get'; name: string; field: string }
   /** A list; a `spread` item splices a list-valued term in. */
   | { t: 'list'; items: (Term | { spread: Term })[] }
+  /** `list` without its final element when `cond` (a bool) holds; an empty list stays empty. The
+   * condition is an ordinary term over the arm's children, never an absence test on the list's
+   * values (a hole a spec writes as null and a missing child stay distinct). An array pattern or
+   * literal is `[ E? (, E?)* ]` in the grammar and both oracles drop its final element when that
+   * is a hole (`[a,]` -> [a]; `[a,,]` -> [a, hole]; `[,]` -> [hole]): the condition is the fold
+   * "the final iteration's element is absent". */
+  | { t: 'dropLastIf'; cond: Term; list: Term }
   /** A case on a string term; `else` when no case matches (without it, no match is an error). */
   | { t: 'match'; on: Term; cases: Record<string, Term>; else?: Term }
   | { t: 'if'; cond: Term; then: Term; else: Term }
@@ -119,6 +133,7 @@ export const OPERATORS: Record<TermTag, { dep: 'synthesized' | 'inherited'; synA
   record: { dep: 'synthesized', synAttr: false },
   get: { dep: 'synthesized', synAttr: false },
   list: { dep: 'synthesized', synAttr: false },
+  dropLastIf: { dep: 'synthesized', synAttr: false },
   match: { dep: 'synthesized', synAttr: true },
   if: { dep: 'synthesized', synAttr: true },
   and: { dep: 'synthesized', synAttr: true },
@@ -196,6 +211,7 @@ export const record = (fields: Record<string, Term>): Term => ({ t: 'record', fi
 export const get = (name: string, field: string): Term => ({ t: 'get', name, field });
 export const list = (...items: (Term | { spread: Term })[]): Term => ({ t: 'list', items });
 export const spread = (of: Term): { spread: Term } => ({ spread: of });
+export const dropLastIf = (cond: Term, of: Term): Term => ({ t: 'dropLastIf', cond, list: of });
 export const match = (on: Term, cases: Record<string, Term>, orElse?: Term): Term =>
   ({ t: 'match', on, cases, ...(orElse ? { else: orElse } : {}) });
 export const iff = (cond: Term, then: Term, otherwise: Term): Term => ({ t: 'if', cond, then, else: otherwise });

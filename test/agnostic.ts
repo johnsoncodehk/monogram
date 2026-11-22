@@ -169,6 +169,40 @@ check('gen-tm no-comma constraint keyword derived from type-param rule (subtypeo
   check('element region: parses on the shared engine', pr.parse("[p]it's (x)[q!][!p]").rule !== undefined);
   const lexSrc = emitTokenizerModule(lexSpecOf(gr));
   check('element region without typeParameters: no type-parameter rewind emitted', !lexSrc.includes('lxSpecRewind') && !lexSrc.includes('LX_TP_'));
+
+  // The same toy with CODE children: no text token, so an element's children are lexed by the
+  // ordinary scan (here `Word`s and `(…)` holes), while `[!` / `!]` stay region tokens.
+  const CElem = rule(() => [['[', Word, Solo], ['[', Word, ']', many(alt(CElem, RHole, Word)), Shut, Word, ']']]);
+  const CProg = rule(() => [[many(CElem)]]);
+  const gc = defineGrammar({
+    name: 'bracketcode', tokens: { Word, Shut, Solo }, rules: { RHole, CElem, CProg }, entry: CProg,
+    elements: { tagOpen: '[', tagClose: ']', closeMarker: '!', closeTag: 'Shut', selfClose: 'Solo', hole: { open: '(', close: ')' } },
+  });
+  const pc = createParser(gc);
+  const ctoks = pc.tokenize('[p] one two (x) [q!] [!p]');
+  check('element region, code children: children lexed by the ordinary scan', ctoks.filter((t) => t.type === 'Word').map((t) => t.text).join(' ') === 'p one two x q p');
+  check('element region, code children: close / self-close tokens by their declared names', ctoks.some((t) => t.type === 'Shut') && ctoks.some((t) => t.type === 'Solo'));
+  check('element region, code children: parses on the shared engine', pc.parse('[p] one (x) [q!] [!p]').rule !== undefined);
+  check('element region, code children: no text scan emitted', !emitTokenizerModule(lexSpecOf(gc)).includes('LX_EL_TEXT'));
+  check('element region, code children: `[!` outside an element is no token', (() => { try { pc.tokenize('[!p]'); return false; } catch { return true; } })());
+
+  // Raw-text elements by declared names: `[code]…[!code]` in any case (`ignoreCase`), `[pre]`
+  // only in its own case; the body is one `Verbatim` token, the close tag lexed after it.
+  const Verbatim = token(plus(anyChar()));
+  const VElem = rule(() => [['[', Word, Solo], ['[', Word, ']', many(alt(VElem, RHole, Word, Verbatim)), Shut, Word, ']']]);
+  const VProg = rule(() => [[many(VElem)]]);
+  const gv = defineGrammar({
+    name: 'bracketraw', tokens: { Word, Shut, Solo, Verbatim }, rules: { RHole, VElem, VProg }, entry: VProg,
+    elements: { tagOpen: '[', tagClose: ']', closeMarker: '!', closeTag: 'Shut', selfClose: 'Solo', hole: { open: '(', close: ')' },
+      rawText: [{ tags: ['code'], token: 'Verbatim', ignoreCase: true }, { tags: ['pre'], token: 'Verbatim' }] },
+  });
+  const pv = createParser(gv);
+  const raw = (s: string) => pv.tokenize(s).filter((t) => t.type === 'Verbatim').map((t) => t.text);
+  check('raw text: the body is one declared token, holes and tags inside it verbatim', raw('[a][code] x [b] (c) [!code][!a]').join('|') === ' x [b] (c) ');
+  check('raw text, ignoreCase: `[CODE]…[!Code]` closes in any case', raw('[CODE]y[!Code]').join('|') === 'y');
+  check('raw text, exact case: `[pre]` body runs past `[!PRE]` to `[!pre]`', raw('[pre]z[!PRE]w[!pre]').join('|') === 'z[!PRE]w');
+  check('raw text: a name not declared raw keeps code children', raw('[p] q [!p]').length === 0);
+  check('raw text: parses on the shared engine', pv.parse('[a][code] x [b] [!code] w [!a]').rule !== undefined);
 }
 
 console.log(fail === 0 ? `\n${ok}/${ok} agnosticism checks pass — engine has no TS-specific token assumptions` : `\n${fail} FAILED`);

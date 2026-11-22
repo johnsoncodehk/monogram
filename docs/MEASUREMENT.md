@@ -8,6 +8,19 @@ performance claim in a pull request or in the README comes from one of these, ru
 - **Instruction counts decide a logic change.** Callgrind counts are deterministic: the same
   commit gives the same count on any runner. A change that deletes work shows as fewer
   instructions; one that does not, does not.
+- **But a Rust total moves with code layout, by up to about 1% of a parse.** In a function of
+  thousands of instructions (`Expr_nud` is about 13k; the lexer's dispatch function likewise) any
+  change, even a cold call site out of line, makes LLVM assign registers differently: single-stepping
+  two builds showed the same branches taken and the cost per call moved by up to about ±10
+  instructions, in a different direction on different inputs (PR #184). So for a change to parser or
+  lexer logic, read in this order: (1) the work counters: a change that removes work is durable;
+  (2) the Rust totals over the real inputs as a set (`checker.ts`, `typescript.js`, `parser.ts`,
+  `typescript.d.ts`, `gen-tm.ts`, `typescript.ts`): the set must not get worse, and no real input
+  may rise by more than about 0.3% without an explanation; the synthetic stress inputs
+  (`dense-semi`, `dense-plus`, `nonascii`, `synth2mb`) are reported and may move inside that band;
+  (3) an input that moves against the counters gets the per-function Callgrind (the full-scope
+  profile), which says whether it is work or layout (same call counts, cost per call changed).
+  Go instructions and TS block counts have no such band: a rise there is real.
 - **For a change in memory behaviour, instructions are blind**: allocator calls and bytes and page
   faults decide. (PR #126: instructions flat, wall-clock +46%, explained entirely by page faults.)
 - **Work counters** (tokens, nodes pushed, checkpoints, restores, peeks) say what the parser did.

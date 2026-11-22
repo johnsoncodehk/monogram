@@ -13,7 +13,8 @@
 // reserved-aware "qualKeys" variant) and every parse CONTROL loop. The interpreter keeps its
 // loops independent so it remains a genuine oracle for the emitter's loops — an oracle sharing
 // the suspect machinery could not catch bugs in it.
-import type { CstGrammar, RuleExpr, RuleDecl } from './types.ts';
+import type { CstGrammar, RuleExpr, RuleDecl, ElementRegion } from './types.ts';
+import { tokenPatternFirstCharSet } from './token-pattern.ts';
 
 export interface OpInfo {
   lbp: number;
@@ -698,4 +699,53 @@ export function concreteFirst(grammar: CstGrammar, a: ReturnType<typeof analyzeG
     /** The grammar's literal texts a token of `kind` may be. */
     literalsOf: (kind: string): readonly string[] => ofKind.get(kind) ?? [],
   };
+}
+
+/**
+ * Whether a grammar uses its element region's `tagOpen` ONLY to open tags (docs/REGIONS.md,
+ * "Entry from code"). Then a `tagOpen` in code can only begin an element, and the lexer enters
+ * the region at every code position; otherwise (JS / TS: `<` is a comparison and opens type
+ * arguments) only where an operand may start. True when all of these hold:
+ *   - every occurrence of the `tagOpen` literal in a rule is the FIRST item of a sequence that
+ *     also references the region's `closeTag` or `selfClose` token (an element arm);
+ *   - no operator table lists it, and no `sep` uses it as its delimiter;
+ *   - no other literal, operator or scanned token can begin with it (`<=`, `<<`, a token whose
+ *     pattern starts with `<`): the entry test runs before the ordinary scan, so such a token
+ *     could never be lexed at a code position. The region's own tokens are not scanned in code.
+ * A pure function of the grammar; the lexer reads it once (lexSpecOf).
+ */
+export function tagOpenOnlyOpensTags(grammar: CstGrammar, region: ElementRegion): boolean {
+  const lit = region.tagOpen;
+  if (grammar.precs.some((l) => l.operators.some((o) => o.value.startsWith(lit)))) return false;
+  const closers = new Set([region.closeTag, region.selfClose]);
+  const refsCloser = (e: RuleExpr): boolean => {
+    switch (e.type) {
+      case 'ref': return closers.has(e.name);
+      case 'seq': case 'alt': return e.items.some(refsCloser);
+      case 'quantifier': case 'group': return refsCloser(e.body);
+      case 'sep': return refsCloser(e.element);
+      default: return false;
+    }
+  };
+  let ok = true;
+  const walk = (e: RuleExpr, elementHead: boolean): void => {
+    switch (e.type) {
+      case 'literal': if (e.value.startsWith(lit) && !(elementHead && e.value === lit)) ok = false; return;
+      case 'seq': { const arm = refsCloser(e); e.items.forEach((it, i) => walk(it, i === 0 && arm)); return; }
+      case 'alt': for (const it of e.items) walk(it, false); return;
+      case 'quantifier': case 'group': case 'not': walk(e.body, false); return;
+      case 'sep': if (e.delimiter.startsWith(lit)) ok = false; walk(e.element, false); return;
+      default: return;
+    }
+  };
+  for (const r of grammar.rules) walk(r.body, false);
+  if (!ok) return false;
+  const own = new Set([region.text, region.closeTag, region.selfClose, ...region.tagTokens ?? [], ...(region.rawText ?? []).map((r) => r.token)]);
+  const cc = lit.charCodeAt(0);
+  for (const t of grammar.tokens) {
+    if (own.has(t.name)) continue;
+    const f = tokenPatternFirstCharSet(t);
+    if (f === null || (cc < 128 ? f.ascii.has(cc) : f.nonAscii)) return false;
+  }
+  return true;
 }

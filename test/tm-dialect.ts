@@ -8,6 +8,9 @@
 //      (no `JSX*` rules, a declared tag-name scope, no upper/lower-case convention, `"`-only
 //      strings, no entities, no fragments; and a `[tag]…[/tag]` bracket syntax) must get its
 //      vocabulary from the grammar, in the spirit of test/agnostic.ts.
+//   3. PARSE rows: the interpreter (src/gen-parser.ts) parses the dialect source of part 1. The
+//      fixture declares an element region with code children (docs/REGIONS.md), so these rows
+//      gate the lexer's region frames on a grammar that is not JSX, beside the highlighter's.
 //
 // Every row states the behaviour WANTED. A row the generator does not meet yet is marked
 // `xfail` with its reason and the editor-queue item expected to flip it. The gate fails when a
@@ -21,6 +24,7 @@ import vsctm from 'vscode-textmate';
 import onig from 'vscode-oniguruma';
 import { token, rule, defineGrammar, seq, oneOf, range, star, sep, opt, many, alt, noneOf } from '../src/api.ts';
 import { generateTmLanguage } from '../src/gen-tm.ts';
+import { createParser } from '../src/gen-parser.ts';
 import type { CstGrammar } from '../src/types.ts';
 import dialect from './fixtures/elementdialect.ts';
 
@@ -71,26 +75,27 @@ const inner = (s: string[]) => s[s.length - 1] ?? '';
 const has = (prefix: string) => (s: string[]) => s.some(x => x === prefix || x.startsWith(prefix + '.'));
 
 // ── 1. the dialect ──
+const dialectSrc = [
+  '@route @iffy',
+  'component Card(item, show) {',
+  '  @if (show) { <b/> } @else { "n" }',
+  '  @each (y of item.list) { "z" }',
+  '  <my-card on:click={item.open} title="x" {item}>',
+  '    @if (show) {',
+  '      <span>{item.name}</span>',
+  '    } @else {',
+  '      "none"',
+  '    }',
+  '    @each (x of item.list) { <li {x}>{x}</li> } @empty { "empty" }',
+  '    <{item.tag} id="d">"dyn"</{item.tag}>',
+  '    <style>.a { color: red; }</style>',
+  '  </my-card>',
+  '}',
+].join('\n');
 {
   section = 'dialect';
   const { grammar: g } = await load(dialect);
-  const src = [
-    '@route @iffy',
-    'component Card(item, show) {',
-    '  @if (show) { <b/> } @else { "n" }',
-    '  @each (y of item.list) { "z" }',
-    '  <my-card on:click={item.open} title="x" {item}>',
-    '    @if (show) {',
-    '      <span>{item.name}</span>',
-    '    } @else {',
-    '      "none"',
-    '    }',
-    '    @each (x of item.list) { <li {x}>{x}</li> } @empty { "empty" }',
-    '    <{item.tag} id="d">"dyn"</{item.tag}>',
-    '    <style>.a { color: red; }</style>',
-    '  </my-card>',
-    '}',
-  ].join('\n');
+  const src = dialectSrc;
   scopeRow('annotation `@route` is an annotation', 'pass', undefined, g, src, '@route', 0, s => inner(s).startsWith('entity.name.function.decorator'));
   scopeRow('annotation `@iffy` is not the keyword `@if` (the keyword ends at a word boundary)', 'pass', undefined, g, src, 'fy', 0, s => inner(s).startsWith('entity.name.function.decorator'));
   scopeRow('`@if` at statement start is a keyword', 'pass', undefined, g, src, '@if', 1, s => inner(s).startsWith('keyword.control.conditional'));
@@ -174,6 +179,38 @@ const has = (prefix: string) => (s: string[]) => s.some(x => x === prefix || x.s
   scopeRow('`[/note]`: the declared tag-name scope reaches the close tag', 'xfail', ctx, bg, bsrc, 'note', 1, s => inner(s).startsWith('entity.name.tag'));
 }
 
+// ── 3. the interpreter parses the dialect (its element region: code children, derived entry) ──
+{
+  section = 'parse';
+  const p = createParser(dialect);
+  const parses = (s: string) => { try { p.parse(s); return { ok: true, saw: 'parsed' }; } catch (e) { return { ok: false, saw: (e as Error).message.slice(0, 100) }; } };
+  const rejects = (s: string) => { const r = parses(s); return { ok: !r.ok, saw: r.saw }; };
+  const types = (s: string) => p.tokenize(s).map((t: { type: string; text: string }) => `${t.type || "'"}${t.text}`);
+  const tokenRow = (id: string, s: string, want: string) => rows.push({ section, id, status: 'pass', check: () => { const ts = types(s); return { ok: ts.includes(want), saw: ts.join(' ') }; } });
+  rows.push({ section, id: 'the whole dialect source parses', status: 'pass', check: () => parses(dialectSrc) });
+  // a raw-text element (`rawText`): its body is ONE token up to `</style`, the close tag lexed after
+  tokenRow('`<style>` body is one raw token', dialectSrc, 'StyleBody.a { color: red; }');
+  tokenRow('the raw body keeps `<`, `{` and quotes verbatim', 'component C() { <style k="v">a <b> {c} "d</style> }', 'StyleBodya <b> {c} "d');
+  tokenRow('the close tag after a raw body is the close-tag token', 'component C() { <style>x</style> }', 'CloseOpen</');
+  tokenRow('an empty raw body is no token: the close tag follows the open tag', 'component C() { <style></style> }', 'CloseOpen</');
+  tokenRow('the raw body ends only at `</style` (exact case: `</STYLE>` is body)', 'component C() { <style>a</STYLE>b</style> }', 'StyleBodya</STYLE>b');
+  tokenRow('a self-closing `<style/>` has no raw body', 'component C() { <style/> "x" }', 'Str"x"');
+  rows.push({ section, id: 'an element after a raw-text element parses', status: 'pass', check: () => parses('component C() { <a><style>.x{}</style><b/></a> }') });
+  rows.push({ section, id: 'must reject: a raw-text element with no close tag (the body runs to the end)', status: 'pass', check: () => rejects('component C() { <style>abc }') });
+  tokenRow('`</` in children is the close-tag token', 'component C() { <a>"x"</a> }', 'CloseOpen</');
+  tokenRow('`/>` in a tag is the self-close token', 'component C() { <a/> }', 'SelfClose/>');
+  tokenRow('children are code: a string child is the string token', 'component C() { <a>"x"</a> }', 'Str"x"');
+  // `<` begins only element arms (grammar-analysis.ts tagOpenOnlyOpensTags), so a `<` right after
+  // a value opens an element too (an operand-position entry would not enter here)
+  tokenRow('a `<` right after a value in code opens an element', 'component C() { "z" <b/> }', 'SelfClose/>');
+  rows.push({ section, id: 'a `<` right after a value in code opens an element (parses)', status: 'pass', check: () => parses('component C() { "z" <b/> }') });
+  rows.push({ section, id: 'nested elements, directives and a dynamic tag in code children', status: 'pass', check: () => parses('component C() { <a k="v">@if (x) { <b>{n}</b> } @else { "e" } <{t} id="d">"s"</{t}></a> }') });
+  rows.push({ section, id: 'must reject: `/>` outside an element', status: 'pass', check: () => rejects('component C() { "a" /> }') });
+  rows.push({ section, id: 'must reject: `</a>` with no open element', status: 'pass', check: () => rejects('component C() { </a> }') });
+  rows.push({ section, id: 'must reject: an element that is never closed', status: 'pass', check: () => rejects('component C() { <a>"x" }') });
+  rows.push({ section, id: 'must reject: a code child the grammar does not have (an identifier)', status: 'pass', check: () => rejects('component C() { <a>x</a> }') });
+}
+
 const all = process.argv.includes('--all');
 let pass = 0, xfail = 0, regress = 0, flipped = 0;
 for (const r of rows) {
@@ -184,7 +221,7 @@ for (const r of rows) {
   else xfail++;
   if (all) console.log(`  ${r.status === 'pass' ? (res.ok ? 'pass ' : 'FAIL ') : (res.ok ? 'XPASS' : 'xfail')} ${r.id}\n      saw: ${res.saw}${r.why && !res.ok ? `\n      why: ${r.why}` : ''}`);
 }
-for (const sec of ['dialect', 'agnostic']) {
+for (const sec of ['dialect', 'agnostic', 'parse']) {
   const rs = rows.filter(r => r.section === sec);
   console.log(`${sec}: ${rs.filter(r => r.status === 'pass').length} pass rows, ${rs.filter(r => r.status === 'xfail').length} expected-fail rows`);
 }

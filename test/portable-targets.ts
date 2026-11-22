@@ -566,6 +566,8 @@ const CASES: Case[] = [
       // `export default` heads an expression: a `/` after `default` begins a regex (a division cannot follow it)
       'export default /re/.test(x);', 'export default /=/;', 'switch (a) { default: /re/.test(x); }',
       // ... but as a member name a keyword is a value and a `/` after it divides, as after a private name
+      // after a template's tail a `/` divides, as after a template with no substitution
+      'x = `${a}` / 2 / 3;', 'x = `a${b}c${d}` / e / f;',
       'x = a.new / 2 / 3;', 'x = a.default / b / c;', 'x = a?.typeof / 2 / 3;', 'x = a.return / 2 / 3;', 'class C { #x = 1; m() { return this.#x / 2 / 3; } }',
       'function f() { return /re/.test(x); }', 'x = typeof /re/;', 'switch (a) { case /re/: break; }',
       'x.y.z++;', '(a++).b;', 'a++ instanceof B;', 'a++\n(x);',
@@ -686,6 +688,8 @@ const CASES: Case[] = [
       ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...EXPORT_DECLS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
       'export default /re/.test(x);', 'export default /=/;', 'switch (a) { default: /re/.test(x); }',
       // ... but as a member name a keyword is a value and a `/` after it divides, as after a private name
+      // after a template's tail a `/` divides, as after a template with no substitution
+      'x = `${a}` / 2 / 3;', 'x = `a${b}c${d}` / e / f;',
       'x = a.new / 2 / 3;', 'x = a.default / b / c;', 'x = a?.typeof / 2 / 3;', 'x = a.return / 2 / 3;', 'class C { #x = 1; m() { return this.#x / 2 / 3; } }',
       'function f() { return /re/.test(x); }', 'x = typeof /re/;', 'switch (a) { case /re/: break; }',
       ...CTX_CASES.typescript.accept, ...TS_DECORATORS.accept, ...TEMPLATE_STEPS.ts.accept, ...TS_MEMBER_DECORATORS.accept, ...TS_MODULES.accept, ...TRY_STATEMENTS.accept, ...TS_TRY.accept,
@@ -1059,9 +1063,7 @@ function runBatch(cmd: string, srcs: string[]): Outcome[] {
     return { ok: true, cst: canon(JSON.parse(line)) };
   });
 }
-// rescanChecks / rescanRepairs: the Doc's totals of fresh lexes that checked a relex (a rejected parse,
-// a lexer error) and of those that replaced the relexed stream: a relex defect the Doc repaired.
-type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed?: number; reused?: number; rescanChecks?: number; rescanRepairs?: number; streamEq?: boolean; treeEq?: boolean };
+type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed?: number; reused?: number; streamEq?: boolean; treeEq?: boolean };
 type EditOutcome = Outcome & { align?: Align };
 function parseAlignStderr(stderr: string): Align | undefined {
   for (const line of stderr.split('\n')) {
@@ -1544,7 +1546,7 @@ const UNICODE_REJECT: { src: string; lexMsg: string | null }[] = [
 ];
 
 // init = 'const x = "café";' — JS indices: " @10, c@11, a@12, f@13, é@14, "@15, ;@16
-const UNICODE_EDITS: { name: string; init: string; batches: EditBatch[]; restores?: boolean; repairs?: string }[] = [
+const UNICODE_EDITS: { name: string; init: string; batches: EditBatch[]; restores?: boolean }[] = [
   { name: 'edit-before-multibyte', init: 'const x = "café";', batches: [[[14, 14, 'X']]] },
   { name: 'edit-replace-multibyte', init: 'const x = "café";', batches: [[[14, 15, 'e']]] },
   { name: 'edit-after-multibyte', init: 'const x = "café";', batches: [[[15, 15, '!']]] },
@@ -1651,12 +1653,6 @@ function unicodeParity(r: Runner, oracleOut: (src: string) => Outcome): void {
     else {
       failures++;
       console.log(`  javascript/unicode/${r.label}: edit-session mismatch (${sc.name}) final=${JSON.stringify(final)}`);
-    }
-    // A re-scan that replaced the relexed stream is a relex defect: only the listed ones may.
-    const repaired = (a.align?.rescanRepairs ?? 0) > 0;
-    if (repaired !== !!sc.repairs) {
-      failures++;
-      console.log(`  javascript/unicode/${r.label}: ${repaired ? `the Doc's re-scan repaired the relexed stream (${sc.name}): a relex defect` : `expected-fail passes now, remove it (${sc.repairs}): ${sc.name}`}`);
     }
   }
   console.log(`  javascript/unicode/${r.label}: ${editOk}/${UNICODE_EDITS.length} edit-sessions ≡ fresh`);
@@ -1919,25 +1915,22 @@ for (const c of CASES) {
         .flatMap(({ doc: init, ins }) => oneCharEdits(init, ins).map((e) => ({ init, e, final: init.slice(0, e[0]) + e[2] + init.slice(e[1]) })));
       const fresh = r.batch(sessions.map((x) => x.final));
       const bad: string[] = [];
-      let knownHit = 0, checks = 0, repairs = 0;
+      let knownHit = 0;
       sessions.forEach((x, i) => {
         const a = r.edit(JSON.stringify({ init: x.init, batches: [[x.e]] }), false), b = fresh[i]!;
         // The relexed stream itself (before the Doc parses it) ≡ a fresh lex: its alignment with
-        // the old stream is the oracle's. A Doc that re-scans when its parse fails would hide a
-        // wrong relex from the verdict and the tree, not from this.
+        // the old stream is the oracle's.
         let want: Align | null = null;
         try { want = expectAlign(grammar, x.init, [[x.e]]); } catch { /* the edited text does not lex */ }
         const why = a.ok !== b.ok ? `edited ${a.ok ? 'accepts' : 'rejects'}, fresh ${b.ok ? 'accepts' : 'rejects'}`
           : a.ok && a.cst !== b.cst ? 'CSTs differ'
           : a.align && (a.align.streamEq === false || a.align.treeEq === false) ? `validation streamEq=${a.align.streamEq} treeEq=${a.align.treeEq}`
-          : want && (!a.align || a.align.oldN !== want.oldN || a.align.newN !== want.newN || a.align.prefix !== want.prefix || a.align.suffix !== want.suffix) ? `relexed stream ≠ a fresh lex (align ${JSON.stringify(a.align)}, oracle ${JSON.stringify(want)})`
-          : (a.align?.rescanRepairs ?? 0) > 0 ? `the Doc's re-scan replaced the relexed stream (align ${JSON.stringify(a.align)})` : '';
-        checks += a.align?.rescanChecks ?? 0; repairs += a.align?.rescanRepairs ?? 0;
+          : want && (!a.align || a.align.oldN !== want.oldN || a.align.newN !== want.newN || a.align.prefix !== want.prefix || a.align.suffix !== want.suffix) ? `relexed stream ≠ a fresh lex (align ${JSON.stringify(a.align)}, oracle ${JSON.stringify(want)})` : '';
         const known = HOLE_EDIT_EXPECTED_FAIL.find((k) => k.doc === x.init && JSON.stringify(k.edit) === JSON.stringify(x.e));
         if (known) { if (!why) bad.push(`expected-fail passes now, remove it (${known.reason}): ${JSON.stringify(x.init)} edit ${JSON.stringify(x.e)}`); else knownHit++; return; }
         if (why) bad.push(`${why}: ${JSON.stringify(x.init)} edit ${JSON.stringify(x.e)}`);
       });
-      console.log(`  ${c.grammar}/${r.label}: ${sessions.length - bad.length - knownHit}/${sessions.length} one-character edits in and around template holes, regex attempts and reads past a token's end ≡ fresh (${knownHit} expected-fail; the Doc re-scanned ${checks} times, ${repairs} of them replacing the relexed stream)`);
+      console.log(`  ${c.grammar}/${r.label}: ${sessions.length - bad.length - knownHit}/${sessions.length} one-character edits in and around template holes, regex attempts and reads past a token's end ≡ fresh (${knownHit} expected-fail)`);
       for (const smp of bad.slice(0, 6)) console.log(`      ${smp}`);
       failures += bad.length;
     }
@@ -1956,10 +1949,6 @@ for (const c of CASES) {
         else {
           failures++;
           console.log(`  ${c.grammar}/${r.label}: edit-session mismatch (final=${JSON.stringify(final)}) A ok=${a.ok} B ok=${b.ok}`);
-        }
-        if ((a.align?.rescanRepairs ?? 0) > 0) {
-          failures++;
-          console.log(`  ${c.grammar}/${r.label}: the Doc's re-scan replaced the relexed stream (final=${JSON.stringify(final)}): a relex defect`);
         }
         const want = expectAlign(grammar, sc.init, sc.batches);
         if (a.align && a.align.oldN === want.oldN && a.align.newN === want.newN && a.align.prefix === want.prefix && a.align.suffix === want.suffix) {

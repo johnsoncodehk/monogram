@@ -7,8 +7,8 @@
 // The oracle is independent of the signatures and of the lexer plan buildIR reads: the concrete
 // alphabet is a symbol per token kind plus a symbol per literal text, the literal's kind being the
 // one the interpreter's own lexer (compileTokenizer) gives that text alone; an arm's FIRST over that
-// alphabet is computed here from its steps (a zero-width test is taken as passing, so it is a
-// superset). For every predictive list of every portable grammar:
+// alphabet is computed here from its steps (a one-token test keeps the symbols it passes; any other
+// zero-width test is taken as passing, so it is a superset). For every predictive list of every portable grammar:
 //   - the arms' FIRST sets are pairwise disjoint;
 //   - each arm's FIRST is inside what its signature admits (a token's literal among the signature's
 //     literals, or its kind among the signature's kinds), so the switch reaches the arm.
@@ -68,9 +68,31 @@ for (const path of paths) {
   // FIRST over the alphabet, with whether the steps can match nothing.
   type F = { syms: Set<string>; empty: boolean };
   const ruleFirst = new Map<string, F>(ir.rules.map((r) => [r.name, { syms: new Set(), empty: false }]));
+  // A one-token test (`ahead` / `aheadCtx`) before a step keeps only the symbols it passes: a
+  // literal symbol is in a set by its text or its kind, a kind symbol by its kind; `aheadCtx` may
+  // also pass or refuse a context's operator word, so its positive form keeps those words too and
+  // its negative form refuses only the set. Every other zero-width test is taken as passing.
+  const inTokenSet = (set: number, sym: string): boolean => {
+    const t = ir.tokenSets[set]!;
+    if (sym.startsWith('<')) return t.toks.includes(sym.slice(1, -1));
+    const l = sym.slice(1, -1), k = kindOf(l);
+    return t.lits.includes(l) || (k !== null && t.toks.includes(k));
+  };
+  const keepOf = (s: Step): ((sym: string) => boolean) | null => {
+    if (s.t === 'ahead') return (x) => inTokenSet(s.set, x) === s.is;
+    if (s.t === 'aheadCtx') return s.is ? (x) => inTokenSet(s.set, x) || ir.ctxWords.some((w) => x === `'${w}'`) : (x) => !inTokenSet(s.set, x);
+    return null;
+  };
   const seqF = (steps: Step[]): F => {
     const syms = new Set<string>();
-    for (const s of steps) { const f = stepF(s); f.syms.forEach((x) => syms.add(x)); if (!f.empty) return { syms, empty: false }; }
+    const keeps: Array<(sym: string) => boolean> = [];
+    for (const s of steps) {
+      const k = keepOf(s);
+      if (k) { keeps.push(k); continue; }
+      const f = stepF(s);
+      f.syms.forEach((x) => { if (keeps.every((kp) => kp(x))) syms.add(x); });
+      if (!f.empty) return { syms, empty: false };
+    }
     return { syms, empty: true };
   };
   const union = (fs: F[]): F => ({ syms: new Set(fs.flatMap((f) => [...f.syms])), empty: fs.some((f) => f.empty) });

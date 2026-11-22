@@ -587,29 +587,31 @@ const Block = rule($ => [
 const BindingProperty = rule($ => [
   // `name: elem` — the KEY is a PropertyName, so a reserved word is allowed here
   // (`{ while: y }`); the bound name inside `elem` is guarded by BindingElement.
-  [Ident, ':', BindingElement],
+  arm('identPair', field('key', Ident), ':', field('value', BindingElement)),
   // shorthand `a` / shorthand-with-default `a = 1` — the name is a BindingIdentifier,
   // so a reserved word is invalid (`{ while }`, `{ class }`).
-  [...bindingIdentifier, opt('=', Expr)],
-  [alt(String_, Number_, ['[', Expr, ']']), ':', BindingElement],  // "s"/0/[e]: elem
+  arm('shorthand', ...bindingName, opt('=', field('value', Expr))),
+  arm('pair', field('key', alt(String_, Number_, arm('computed', field('bracket', '['), field('expr', Expr), field('bracketClose', ']')))), ':', field('value', BindingElement)),  // "s"/0/[e]: elem
   // rest: ...r | ...{ a } — tsc also parses `...r: name` and `...r = init` (the
   // object-binding-element shape is uniform; "rest can't have a property name /
   // initializer" are checker errors, both parse-clean).
-  ['...', alt(bindingIdentifier, BindingPattern), opt(':', BindingElement), opt('=', Expr)],
+  arm('rest', field('ellipsis', '...'), field('argument', alt(bindingIdentifier, BindingPattern)), opt(':', field('element', BindingElement)), opt('=', field('value', Expr))),
 ]);
 
 const BindingElement = rule($ => [
-  [alt(bindingIdentifier, BindingPattern), opt('=', Expr)],  // a | { a }  (optionally = default)
+  [field('name', alt(bindingIdentifier, BindingPattern)), opt('=', field('value', Expr))],  // a | { a }  (optionally = default)
 ]);
 
 const ArrayBindingElement = rule($ => [
   BindingElement,
-  ['...', alt(bindingIdentifier, BindingPattern)],    // [...rest] | [...{ a }]
+  arm('rest', field('ellipsis', '...'), field('argument', alt(bindingIdentifier, BindingPattern))),    // [...rest] | [...{ a }]
 ]);
 
 const BindingPattern = rule($ => [
-  ['{', sep(BindingProperty, ','), '}'],                  // { a, b: c, ...rest }
-  ['[', opt(ArrayBindingElement), many(',', opt(ArrayBindingElement)), ']'],  // [a, , b, ...rest]
+  arm('object', '{', sep(field('property', BindingProperty), ','), '}'),                  // { a, b: c, ...rest }
+  // [a, , b, ...rest]: a hole is an absent element. The `[` and each `,` are named: a hole's
+  // position is the end of the token before it (tsc's OmittedExpression).
+  arm('array', field('bracket', '['), opt(field('element', ArrayBindingElement)), many(field('comma', ','), opt(field('elementRest', ArrayBindingElement))), ']'),
 ]);
 
 // ── Bindings & Parameters ──

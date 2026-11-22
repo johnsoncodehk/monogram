@@ -9,7 +9,7 @@
 // Positions: a node's start is tsc's `getStart()` (the first token); tsc's `pos` (leading trivia
 // included) is not produced (the harness compares it only when both sides carry it).
 import {
-  absent, and, branch, c, child, cook, fold, get, iff, inh, map, match, node, not, orElse, present, record, syn, text, v, list, spread,
+  absent, and, branch, c, child, cook, dropLastIf, fold, get, iff, inh, map, match, node, not, orElse, present, record, syn, text, v, list, spread,
   type Shape2Spec, type Term,
 } from '../../src/shape2-schema.ts';
 
@@ -92,7 +92,7 @@ const FOR_RULES: Shape2Spec['rules'] = {
     declaration: declarationHead(['of'], ['of']),
     of: head({ kind: c('of'), initializer: child('left'), expression: child('right') }),
   },
-  ForBinding: { seq: node('VariableDeclaration', { name: branch('name', { ident: idOf('ident') }), type: child('type'), initializer: child('value') }) },
+  ForBinding: { seq: node('VariableDeclaration', { name: target('name'), type: child('type'), initializer: child('value') }) },
 };
 
 /** The statements (ECMA-262 14), one node per Stmt arm. */
@@ -156,12 +156,54 @@ const ARROWS: Record<string, Term> = {
   arrowIdentifier: arrow(false, bareParameter, false),
   asyncArrowIdentifier: arrow(true, bareParameter, false),
 };
+// ── Binding patterns ──
+// tsc's BindingElement holds a property's key (`propertyName`) beside the element's own name
+// and initializer, so the grammar's BindingElement rule (`name = value`) is RECORD-VALUED here:
+// each parent builds the BindingElement node from its fields (`get`). A hole is an
+// OmittedExpression: zero width at the end of the token before it (`[` or the iteration's `,`:
+// tsc builds it at getNodePos), so it is a node with an `after` span; both oracles drop the
+// final hole (`finalHole`).
+function target(alt: string): Term { return branch(alt, { ident: idOf('ident'), bindingPattern: child('bindingPattern') }); }
+const omitted = (after: string): Term => node('OmittedExpression', {}, { after });
+const finalHole = (first: string, over: string, rest: string): Term => fold(over, not(present(first)), 'h', not(present(rest)));
+const fromElement = (extra: Record<string, Term>, element = 'value'): Term =>
+  node('BindingElement', { ...extra, name: get(element, 'name'), initializer: get(element, 'initializer') });
+const PATTERN_RULES: Shape2Spec['rules'] = {
+  BindingPattern: {
+    object: node('ObjectBindingPattern', { elements: child('property') }),
+    array: node('ArrayBindingPattern', {
+      elements: dropLastIf(finalHole('element', 'comma', 'elementRest'),
+        list(orElse(child('element'), omitted('bracket')), spread(map('comma', orElse(child('elementRest'), omitted('comma')))))),
+    }),
+  },
+  BindingProperty: {
+    identPair: fromElement({ propertyName: idOf('key') }),
+    shorthand: node('BindingElement', { name: idOf('name'), initializer: child('value') }),
+    pair: fromElement({
+      propertyName: branch('key', {
+        string: node('StringLiteral', { text: cook('stringValue', 'string'), hasExtendedUnicodeEscape: cook('hasExtendedUnicodeEscape', 'string') }, { from: 'string', to: 'string' }),
+        number: node('NumericLiteral', { text: cook('tsNumericText', 'number'), numericLiteralFlags: cook('tsNumericLiteralFlags', 'number') }, { from: 'number', to: 'number' }),
+        computed: node('ComputedPropertyName', { expression: child('expr') }, { from: 'bracket', to: 'bracketClose' }),
+      }),
+    }),
+    // `...r` / `...{ a }`; tsc also parses `...r: x = 1` (a checker error), where `r` is the key.
+    rest: iff(present('element'),
+      fromElement({ dotDotDotToken: token('DotDotDotToken', 'ellipsis'), propertyName: target('argument') }, 'element'),
+      node('BindingElement', { dotDotDotToken: token('DotDotDotToken', 'ellipsis'), name: target('argument'), initializer: child('value') })),
+  },
+  BindingElement: { seq: record({ name: target('name'), initializer: child('value') }) },
+  ArrayBindingElement: {
+    bindingElement: fromElement({}, 'bindingElement'),
+    rest: node('BindingElement', { dotDotDotToken: token('DotDotDotToken', 'ellipsis'), name: target('argument') }),
+  },
+};
+
 /** A parameter: tsc's Parameter; its decorators are `modifiers`. The modifier-word arm
  * (`public x`) is not mapped yet (classes). Identifier names only: patterns are not mapped yet. */
 const parameter = (rest: boolean): Term => node('Parameter', {
   modifiers: iff(present('decorator'), child('decorator'), absent),
   ...(rest ? { dotDotDotToken: token('DotDotDotToken', 'ellipsis') } : {}),
-  name: branch('name', { ident: idOf('ident') }),
+  name: target('name'),
   questionToken: iff(present('question'), token('QuestionToken', 'question'), absent),
   type: child('type'), initializer: child('value'),
 });
@@ -212,14 +254,15 @@ export const tscExprShape: Shape2Spec = {
     // outside the subset (Type is not mapped).
     Binding: {
       seq: node('VariableDeclaration', {
-        name: branch('name', { ident: idOf('ident') }),
-        exclamationToken: branch('name', { ident: iff(present('exclamation'), token('ExclamationToken', 'exclamation'), absent) }),
+        name: target('name'),
+        exclamationToken: branch('name', { ident: iff(present('exclamation'), token('ExclamationToken', 'exclamation'), absent), bindingPattern: absent }),
         type: child('type'), initializer: child('value'),
       }),
     },
     ...PARAM_RULES,
+    ...PATTERN_RULES,
     Decl: FUNCTION_DECLARATIONS,
-    CatchParameter: { ident: node('VariableDeclaration', { name: idOf('ident'), type: child('type') }) },
+    CatchParameter: { ident: node('VariableDeclaration', { name: idOf('ident'), type: child('type') }), bindingPattern: node('VariableDeclaration', { name: child('bindingPattern'), type: child('type') }) },
     ...FOR_RULES,
     Expr: {
       ...PRIMARY,

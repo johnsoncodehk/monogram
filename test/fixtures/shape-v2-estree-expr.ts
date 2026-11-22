@@ -3,10 +3,10 @@
 // (blocks, variable statements with identifier bindings, `if`, loops, `return`, `throw`, `break`,
 // `continue`, labelled, `try`, `with`, `debugger`, empty), functions, arrows and their parameters.
 // Checked against acorn by test/shape2-oracle.ts. Not total: an arm outside the subset (`switch`,
-// other declarations, binding patterns, methods, classes, object / array literals, templates) is unmapped,
+// other declarations, methods, classes, object / array literals, templates) is unmapped,
 // and a unit that reaches one is reported as outside the subset, not compared.
 import {
-  absent, and, armOf, branch, c, child, cook, get, iff, inh, list, map, match, node, not, orElse, present, record,
+  absent, and, armOf, branch, c, child, cook, dropLastIf, fold, get, iff, inh, list, map, match, node, not, orElse, present, record,
   spread, syn, text, thread, v, wrapIf, type Shape2Spec, type Term,
 } from '../../src/shape2-schema.ts';
 
@@ -105,7 +105,7 @@ const FOR_RULES: Shape2Spec['rules'] = {
     declaration: declarationHead(['of'], ['of']),
     of: head({ kind: c('of'), left: child('left'), right: child('right') }),
   },
-  ForBinding: { seq: node('VariableDeclarator', { id: branch('name', { ident: idOf('ident') }), init: orElse(child('value'), c(null)) }) },
+  ForBinding: { seq: node('VariableDeclarator', { id: target('name'), init: orElse(child('value'), c(null)) }) },
 };
 
 // ── Functions (ECMA-262 15.2 - 15.6) ──
@@ -128,10 +128,40 @@ const ARROW_RULES: Record<string, Term> = {
   arrowIdentifier: arrow(false, list(idOf('parameter'))),
   asyncArrowIdentifier: arrow(true, list(idOf('parameter'))),
 };
-/** A parameter (FormalParameter): a binding element (identifier names only: patterns are not
- * mapped yet), with a default (AssignmentPattern) or rest (RestElement). A decorator on a
- * parameter is no ECMAScript (acorn rejects it), so it is not read. */
-const bindingName: Term = branch('name', { ident: idOf('ident') });
+// ── Binding patterns (ECMA-262 14.3.3) ──
+// A binding target is an identifier or a pattern: the inline alternation `name` (or `argument`
+// after `...`) with branches `ident` / `bindingPattern`.
+function target(alt: string): Term { return branch(alt, { ident: idOf('ident'), bindingPattern: child('bindingPattern') }); }
+const withDefault = (left: Term): Term => iff(present('value'), node('AssignmentPattern', { left, right: child('value') }), left);
+const patternProperty = (key: Term, value: Term, flags: { shorthand: boolean; computed: Term }): Term =>
+  node('Property', { method: c(false), shorthand: c(flags.shorthand), computed: flags.computed, key, value, kind: c('init') });
+const literalKey = (leaf: string, value: Term): Term => node('Literal', { value, raw: text(leaf) }, { from: leaf, to: leaf });
+/** `[ E? (, E?)* ]`: whether the final element is a hole (absent): the first one when there is
+ * no `,`, else the last iteration's. Both oracles drop that final hole (`[a,]` has one element). */
+export const finalHole = (first: string, over: string, rest: string): Term => fold(over, not(present(first)), 'h', not(present(rest)));
+const PATTERN_RULES: Shape2Spec['rules'] = {
+  BindingPattern: {
+    object: node('ObjectPattern', { properties: child('property') }),
+    array: node('ArrayPattern', { elements: dropLastIf(finalHole('element', 'comma', 'elementRest'), list(child('element'), spread(child('elementRest')))) }),
+  },
+  BindingProperty: {
+    identPair: patternProperty(idOf('key'), child('value'), { shorthand: false, computed: c(false) }),
+    shorthand: patternProperty(idOf('name'), withDefault(idOf('name')), { shorthand: true, computed: c(false) }),
+    pair: patternProperty(branch('key', {
+      string: literalKey('string', cook('stringValue', 'string')),
+      number: literalKey('number', cook('numberValue', 'number')),
+      computed: child('expr'),
+    }), child('value'), { shorthand: false, computed: branch('key', { string: c(false), number: c(false), computed: c(true) }) }),
+    rest: node('RestElement', { argument: target('argument') }),
+  },
+  BindingElement: { seq: withDefault(target('name')) },
+  ArrayBindingElement: { bindingElement: child('bindingElement'), rest: node('RestElement', { argument: target('argument') }) },
+};
+
+/** A parameter (FormalParameter): a binding element, with a default (AssignmentPattern) or rest
+ * (RestElement). A decorator on a parameter is no ECMAScript (acorn rejects it), so it is not
+ * read. */
+const bindingName: Term = target('name');
 const PARAM_RULES: Shape2Spec['rules'] = {
   Param: {
     plain: branch('binding', {
@@ -207,10 +237,11 @@ export const estreeExprShape: Shape2Spec = {
     Program: { decl: node('Program', { body: map('alt', branch('alt', { decl: child('decl'), stmt: child('stmt') })) }) },
     Stmt: { ...STATEMENTS, expr: node('ExpressionStatement', { expression: sequence, directive: iff(and(inh('prologue'), syn('directive')), syn('stringBody', 'first'), absent) }) },
     Block: { brace: node('BlockStatement', { body: child('stmt') }) },
-    // A binding: identifier names (binding patterns are not mapped yet).
-    Binding: { seq: node('VariableDeclarator', { id: branch('name', { ident: idOf('ident') }), init: orNull('value') }) },
-    CatchParameter: { ident: idOf('ident') },
+    // A binding: an identifier or a pattern.
+    Binding: { seq: node('VariableDeclarator', { id: target('name'), init: orNull('value') }) },
+    CatchParameter: { ident: idOf('ident'), bindingPattern: child('bindingPattern') },
     ...PARAM_RULES,
+    ...PATTERN_RULES,
     Decl: functionArms('FunctionDeclaration', idOf('name')),
     ...FOR_RULES,
     Expr: {
