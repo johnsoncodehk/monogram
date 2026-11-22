@@ -9,7 +9,7 @@
 // Positions: a node's start is tsc's `getStart()` (the first token); tsc's `pos` (leading trivia
 // included) is not produced (the harness compares it only when both sides carry it).
 import {
-  absent, and, branch, c, child, cook, dropLastIf, fold, get, iff, inh, map, match, node, not, orElse, present, record, syn, text, v, list, spread,
+  absent, and, branch, c, child, cook, dropLastIf, fold, get, iff, inh, let_, map, match, node, not, orElse, present, record, syn, text, v, list, spread,
   type Shape2Spec, type Term,
 } from '../../src/shape2-schema.ts';
 
@@ -217,6 +217,82 @@ const PARAM_RULES: Shape2Spec['rules'] = {
 /** tsc's OptionalChain flag: every link of a chain that holds a `?.` (synthesized `optional`). */
 const chainFlags: Term = iff(syn('optional'), c('OptionalChain'), absent);
 
+// ── Object and array literals, templates ──
+// tsc keeps an object / array literal on the left of `=` as it is (no pattern reinterpretation),
+// so this shape has no right-dependent equation.
+/** A property name (MemberName); a computed one holds a comma list (a checker error, parsed). */
+const KEY_RULES: Shape2Spec['rules'] = {
+  MemberName: {
+    ident: idOf('ident'),
+    privateField: privateOf('privateField'),
+    string: node('StringLiteral', { text: cook('stringValue', 'string'), hasExtendedUnicodeEscape: cook('hasExtendedUnicodeEscape', 'string') }),
+    number: numeric('number'),
+    hexNumber: numeric('hexNumber'),
+    octalNumber: numeric('octalNumber'),
+    binaryNumber: numeric('binaryNumber'),
+    bigInt: node('BigIntLiteral', { text: cook('tsBigIntText', 'bigInt') }),
+    computed: node('ComputedPropertyName', { expression: commaOf('expr', 'comma', 'exprRest') }),
+  },
+};
+/** Evaluate `inner` only when the repeated child `name` has no element: a modifier word or a
+ * decorator of an object-literal member (a checker error, parsed) is not mapped yet (classes),
+ * so a member that has one is outside the subset. */
+const without = (name: string, inner: Term): Term => let_('$none', list(spread(map(name, branch(name, {})))), inner);
+const marks: Record<string, Term> = {
+  questionToken: iff(present('question'), token('QuestionToken', 'question'), absent),
+  exclamationToken: iff(present('exclamation'), token('ExclamationToken', 'exclamation'), absent),
+};
+/** One object-literal member (the inner alternation `member`), after its modifiers (`async`). */
+const objectMember = (isAsync: boolean): Term => {
+  const modifiers = isAsync ? { modifiers: list(token('AsyncKeyword', 'asyncWord')) } : {};
+  const sig = { typeParameters: child('typeParameters'), parameters: child('parameter'), type: returnType, body: branch('body', { block: child('block') }) };
+  return branch('member', {
+    ...(isAsync ? {} : { accessor: node(match(text('kind'), { get: c('GetAccessor'), set: c('SetAccessor') }), { name: child('key'), ...sig }) }),
+    generatorMethod: node('MethodDeclaration', { ...modifiers, asteriskToken: token('AsteriskToken', 'asterisk'), name: child('key'), ...marks, ...sig }),
+    named: branch('tail', {
+      method: node('MethodDeclaration', { ...modifiers, name: child('key'), ...marks, ...sig }),
+      ...(isAsync ? {} : { init: node('PropertyAssignment', { name: child('key'), ...marks, initializer: child('value') }) }),
+    }),
+    ...(isAsync ? {} : {
+      shorthand: node('ShorthandPropertyAssignment', {
+        name: idOf('name'), ...marks, equalsToken: iff(present('equals'), token('EqualsToken', 'equals'), absent), objectAssignmentInitializer: child('value'),
+      }),
+    }),
+  });
+};
+const PROP_RULES: Shape2Spec['rules'] = {
+  Prop: {
+    spread: node('SpreadAssignment', { expression: child('argument') }),
+    member: without('word', branch('form', {
+      async: without('word', iff(present('staticWord'), branch('staticWord', {}), objectMember(true))),
+      plain: objectMember(false),
+    })),
+  },
+};
+const arrayElements: Term = dropLastIf(finalHole('element', 'comma', 'elementRest'),
+  list(orElse(child('element'), omitted('bracket')), spread(map('comma', orElse(child('elementRest'), omitted('comma'))))));
+/** A template part: tsc's text, raw text and escape flags, over the whole token. */
+const templatePart = (kind: string, leaf: string): Term => node(kind, {
+  text: cook('tsTemplateText', leaf), rawText: cook('tsTemplateRawText', leaf), templateFlags: cook('tsTemplateFlags', leaf),
+  hasExtendedUnicodeEscape: iff(cook('hasExtendedUnicodeEscape', leaf), c(true), absent),
+}, { from: leaf, to: leaf });
+const templateOf = (name: string): Term => branch(name, {
+  noSubstitution: templatePart('NoSubstitutionTemplateLiteral', 'quasi'),
+  substitution: node('TemplateExpression', {
+    head: templatePart('TemplateHead', 'head'),
+    templateSpans: map('expr', node('TemplateSpan', {
+      expression: child('expr'),
+      literal: branch('part', { middle: templatePart('TemplateMiddle', 'literal'), tail: templatePart('TemplateTail', 'literal') }),
+    }, { from: 'expr', to: 'part' })),
+  }, { from: name, to: name }),
+});
+const LITERALS: Record<string, Term> = {
+  array: node('ArrayLiteralExpression', { elements: arrayElements }),
+  object: node('ObjectLiteralExpression', { properties: child('property') }),
+  template: templateOf('template'),
+  led_template: node('TaggedTemplateExpression', { tag: child('left'), template: templateOf('template') }),
+};
+
 /** The PrimaryExpression arms Expr and NewTarget (a `new` callee) share: the literals and `this`. */
 const PRIMARY: Record<string, Term> = {
   true_: node('TrueKeyword'),
@@ -306,6 +382,7 @@ export const tscExprShape: Shape2Spec = {
       }, node('PrefixUnaryExpression', { operator: kindOf(PREFIX), operand: child('operand') })),
       ...FUNCTION_EXPRESSIONS,
       ...ARROWS,
+      ...LITERALS,
       postfixOp: node('PostfixUnaryExpression', { operand: child('operand'), operator: kindOf(PREFIX) }),
     },
     NewTarget: {
@@ -321,6 +398,9 @@ export const tscExprShape: Shape2Spec = {
       led_dot: node('PropertyAccessExpression', { expression: child('left'), name: name() }),
       led_bracket: node('ElementAccessExpression', { expression: child('left'), argumentExpression: child('expr') }),
       paren: node('ParenthesizedExpression', { expression: comma }),
+      ...LITERALS,
     },
+    ...KEY_RULES,
+    ...PROP_RULES,
   },
 };

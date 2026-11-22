@@ -372,13 +372,14 @@ const classExprPrefix = opt(many1(DecoratorExpr), classExprMods.run, opt(many1(D
 const Prop = rule($ => {
   const mods = modifierRun(['public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'export', 'declare', 'in', 'out', 'const', 'default'], { treeSitterOmits: ['const'], secondRun: true });
   const asyncMod = modifierWord(['async']);
-  const sig = (ctx) => [opt(TypeParams), '(', sep(ctx(Param), ','), ')', opt(':', ReturnType), ctx(fnBodyOrAsi())];
-  const members = (generator, method) => alt(
-    [alt('get', 'set'), MemberName, ...sig(resetCtx)],
-    ['*', MemberName, opt('?'), opt('!'), ...sig(generator)],
-    [MemberName, opt('?'), opt('!'), alt(sig(method), [':', Expr])],
-    [notReserved, Ident, opt('?'), opt('!'), opt('=', Expr)],
-  );
+  const sig = (ctx) => [opt(field('typeParameters', TypeParams)), '(', sep(ctx(field('parameter', Param)), ','), ')', opt(':', ReturnType), ctx(field('body', fnBodyOrAsi()))];
+  const marks = [opt(field('question', '?')), opt(field('exclamation', '!'))];
+  const members = (generator, method) => field('member', alt(
+    arm('accessor', field('kind', alt('get', 'set')), field('key', MemberName), ...sig(resetCtx)),
+    arm('generatorMethod', field('asterisk', '*'), field('key', MemberName), ...marks, ...sig(generator)),
+    arm('named', field('key', MemberName), ...marks, field('tail', alt(arm('method', ...sig(method)), arm('init', ':', field('value', Expr))))),
+    arm('shorthand', notReserved, field('name', Ident), ...marks, opt(field('equals', '='), field('value', Expr))),
+  ));
   const plain = members(yieldCtx, resetCtx), withAsync = members(asyncGenCtx, awaitCtx);
   // tsc reads one decorator run inside the modifier run, after a word (only `export` / `default`
   // may precede it: `modifierWord`'s `secondRun` followers), and a member never starts with one
@@ -390,17 +391,17 @@ const Prop = rule($ => {
   // of memory on it (2 GB heap, `npm run gen`).
   const runWord = alt(mods.any, asyncMod);
   const decorators = [many1(DecoratorExpr), not([many(runWord), Decorator])];
-  const words = many(alt(mods.rest, decorators)), asyncWords = many(alt(mods.rest, asyncMod, decorators));
+  const words = many(field('word', alt(mods.rest, decorators))), asyncWords = many(field('word', alt(mods.rest, asyncMod, decorators)));
   return [
-    ['...', Expr],                                                     // spread
-    tsRelax(
-      [not(Decorator), words, alt(
-        [mods.stat, words, alt([asyncMod, asyncWords, withAsync], plain)],
-        [asyncMod, asyncWords, opt(mods.stat, asyncWords), withAsync],
-        plain,
-      )],
+    arm('spread', '...', field('argument', Expr)),
+    arm('member', tsRelax(
+      [not(Decorator), words, field('form', alt(
+        arm('static_', field('staticWord', mods.stat), words, field('afterStatic', alt(arm('async', field('asyncWord', asyncMod), asyncWords, withAsync), arm('plain', plain)))),
+        arm('async', field('asyncWord', asyncMod), asyncWords, opt(field('staticWord', mods.stat), many(field('wordAfterStatic', alt(mods.rest, asyncMod, decorators)))), withAsync),
+        arm('plain', plain),
+      ))],
       [many(alt(mods.any, asyncMod)), plain],
-    ),
+    )),
   ];
 });
 
@@ -537,8 +538,8 @@ const Expr = rule($ => [
   )),
   ['new', 'class', ...bindingIdentifier, opt(TypeParams), opt('extends', ClassHeritage), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}', alt(['(', sep($, ','), ')'], not('?.'))],
   ['new', 'class', opt(TypeParams), opt('extends', ClassHeritage), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}', alt(['(', sep($, ','), ')'], not('?.'))],
-  ['[', opt($), many(',', opt($)), ']'],   // array literal: each element parsed once (see javascript.ts)
-  ['{', sep(Prop, ','), '}'],
+  arm('array', field('bracket', '['), opt(field('element', $)), many(field('comma', ','), opt(field('elementRest', $))), ']'),   // array literal: each element parsed once (see javascript.ts)
+  arm('object', '{', sep(field('property', Prop), ','), '}'),
   // Arrow functions, async/non-async SPLIT so the [Await] grammar parameter routes
   // each arm's params + body to the right rule family (await-yield-fork.ts): an async
   // arrow's params and body are await-context (`async (a = await) =>` rejects), a
@@ -813,7 +814,7 @@ const MemberName = rule($ => [
   OctalNumber,
   BinaryNumber,
   BigInt_,
-  ['[', Expr, many(',', Expr), ']'],
+  arm('computed', field('bracket', '['), field('expr', Expr), many(field('comma', ','), field('exprRest', Expr)), field('bracketClose', ']')),
 ]);
 
 // An index signature is one form wherever a member may be one: parseTypeMember and

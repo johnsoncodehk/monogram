@@ -41,7 +41,7 @@ const FUNCTION_BODIES: Record<string, Record<string, string>> = {
   Expr: { ...Object.fromEntries(FUNCTIONS.map((a) => [a, 'body'])), ...Object.fromEntries(ARROWS.map((a) => [a, 'block'])) },   // function expressions, arrows (a block body)
   NewTarget: Object.fromEntries(FUNCTIONS.map((a) => [a, 'body'])),                                                                    // a function expression as a `new` callee
   Decl: { ...Object.fromEntries(FUNCTIONS.map((a) => [a, 'body'])), export_2: 'body' },                                        // declarations, `export default function`
-  Prop: Object.fromEntries(['get', 'async', 'async2', 'star', 'memberName'].map((a) => [a, 'block'])),                           // object methods / accessors
+  Prop: Object.fromEntries(['accessor', 'asyncGeneratorMethod', 'asyncMethod', 'generatorMethod', 'method'].map((a) => [a, 'body'])),   // object methods / accessors
   ClassMember: { seq: 'block' },                                                                                                 // constructor, methods, accessors
 };
 const prologue = (init: Term) => thread(init, 'p', and(v('p'), syn('directive', 'stmt')));
@@ -171,6 +171,66 @@ const PARAM_RULES: Shape2Spec['rules'] = {
   },
 };
 
+// ── Object and array literals (ECMA-262 13.2.4, 13.2.5), templates (13.2.8) ──
+// A literal on the left of `=` (and a `for … in / of` head's left) is an assignment PATTERN
+// (13.15.5): ESTree builds ArrayPattern / ObjectPattern / RestElement / AssignmentPattern there.
+// The grammar parses an expression (the cover grammar), so the shape says where the pattern
+// reading holds: the inherited `pattern`, true for the left operand of `=` (a RIGHT-DEPENDENT
+// equation: the operator follows the operand) and for a `for` head's left, handed down through
+// the elements, the properties' values and the spread arguments. Whether the pattern is VALID
+// (`[a + b] = c`) is the grammar's business, not the shape's.
+const inPattern = inh('pattern');
+/** A property key (MemberName): computed when it is `[ e ]`. */
+const KEY_RULES: Shape2Spec['rules'] = {
+  MemberName: {
+    ident: idOf('ident'),
+    privateField: privateOf('privateField'),
+    string: literal(cook('stringValue', 'string')),
+    number: literal(cook('numberValue', 'number')),
+    hexNumber: literal(cook('numberValue', 'hexNumber')),
+    octalNumber: literal(cook('numberValue', 'octalNumber')),
+    binaryNumber: literal(cook('numberValue', 'binaryNumber')),
+    bigInt: literal(cook('bigintValue', 'bigInt'), { bigint: cook('bigintText', 'bigInt') }),
+    computed: child('expr'),
+  },
+};
+const computedKey: Term = match(armOf('key'), { computed: c(true) }, c(false));
+const objectProperty = (value: Term, f: { kind?: Term; method?: boolean; shorthand?: boolean; key?: Term; computed?: Term } = {}): Term => node('Property', {
+  method: c(f.method ?? false), shorthand: c(f.shorthand ?? false), computed: f.computed ?? computedKey, key: f.key ?? child('key'), value, kind: f.kind ?? c('init'),
+});
+/** A method's or accessor's function: from its `(` to its body. */
+const methodFunction = (generator: boolean, isAsync: boolean): Term => node('FunctionExpression', {
+  id: c(null), expression: c(false), generator: c(generator), async: c(isAsync), params: child('parameter'), body: child('body'),
+}, { from: 'paren', to: 'body' });
+const spreadOrRest = (argument: string): Term => node(iff(inPattern, c('RestElement'), c('SpreadElement')), { argument: child(argument) });
+const PROP_RULES: Shape2Spec['rules'] = {
+  Prop: {
+    spread: spreadOrRest('argument'),
+    accessor: objectProperty(methodFunction(false, false), { kind: text('kind') }),
+    asyncGeneratorMethod: objectProperty(methodFunction(true, true), { method: true }),
+    asyncMethod: objectProperty(methodFunction(false, true), { method: true }),
+    generatorMethod: objectProperty(methodFunction(true, false), { method: true }),
+    method: objectProperty(methodFunction(false, false), { method: true }),
+    init: objectProperty(child('value')),
+    // `{ a = 1 }` (CoverInitializedName) is only a pattern's: an AssignmentPattern value.
+    shorthand: objectProperty(branch('initializer', {
+      none: idOf('name'),
+      assign: node('AssignmentPattern', { left: idOf('name'), right: child('value') }, { from: 'name', to: 'value' }),
+    }), { shorthand: true, key: idOf('name'), computed: c(false) }),
+  },
+};
+const arrayElements: Term = dropLastIf(finalHole('element', 'comma', 'elementRest'), list(child('element'), spread(child('elementRest'))));
+/** A template part: its body (the `inside` span) cooked and raw; `tail` on the last part. */
+const quasi = (leaf: string, tail: boolean): Term =>
+  node('TemplateElement', { value: record({ raw: cook('templateRaw', leaf), cooked: cook('templateCooked', leaf) }), tail: c(tail) }, { inside: leaf });
+const templateLiteral = (name: string): Term => branch(name, {
+  noSubstitution: node('TemplateLiteral', { expressions: list(), quasis: list(quasi('quasi', true)) }, { from: name, to: name }),
+  substitution: node('TemplateLiteral', {
+    expressions: child('expr'),
+    quasis: list(quasi('head', false), spread(map('expr', branch('part', { middle: quasi('literal', false), tail: quasi('literal', true) })))),
+  }, { from: name, to: name }),
+});
+
 /** The statements (ECMA-262 14), one node per Stmt arm. */
 const STATEMENTS: Record<string, Term> = {
   block: child('block'),
@@ -222,6 +282,19 @@ export const estreeExprShape: Shape2Spec = {
     optional: { type: 'bool', default: false, rules: { Expr: { led_optChain: c(true), led_dot: syn('optional', 'left'), led_bracket: syn('optional', 'left'), led_paren: syn('optional', 'left') } } },
   },
   inherited: {
+    pattern: {
+      type: 'bool', default: false, rules: {
+        Expr: {
+          binaryOp: { left: match(text('op'), { '=': c(true) }, c(false)) },
+          array: { element: inPattern, elementRest: inPattern },
+          object: { property: inPattern },
+          spread: { expr: inPattern },
+        },
+        Prop: { init: { value: inPattern }, spread: { argument: inPattern } },
+        ForHead: { in_: { left: c(true) }, of: { left: c(true) } },
+        ForAwaitHead: { of: { left: c(true) } },
+      },
+    },
     functionBody: { type: 'bool', default: false, rules: Object.fromEntries(Object.entries(FUNCTION_BODIES).map(([r, arms]) => [r, Object.fromEntries(Object.entries(arms).map(([a, body]) => [a, { [body]: c(true) }]))])) },
     prologue: {
       type: 'bool', default: false, rules: {
@@ -244,10 +317,16 @@ export const estreeExprShape: Shape2Spec = {
     ...PATTERN_RULES,
     Decl: functionArms('FunctionDeclaration', idOf('name')),
     ...FOR_RULES,
+    ...KEY_RULES,
+    ...PROP_RULES,
     Expr: {
       ...PRIMARY,
       privateField: privateOf('privateField'),
-      spread: node('SpreadElement', { argument: child('expr') }),
+      spread: spreadOrRest('expr'),
+      array: node(iff(inPattern, c('ArrayPattern'), c('ArrayExpression')), { elements: arrayElements }),
+      object: node(iff(inPattern, c('ObjectPattern'), c('ObjectExpression')), { properties: child('property') }),
+      template: templateLiteral('template'),
+      led_template: node('TaggedTemplateExpression', { tag: child('left'), quasi: templateLiteral('template') }),
       paren: sequence,
       super_: branch('alt', {
         paren: node('CallExpression', { callee: node('Super', {}, { from: 'superKeyword', to: 'superKeyword' }), arguments: child('expr'), optional: c(false) }),
@@ -272,7 +351,10 @@ export const estreeExprShape: Shape2Spec = {
         star: node('YieldExpression', { delegate: c(true), argument: child('expr') }),
         expr: node('YieldExpression', { delegate: c(false), argument: orElse(child('expr'), c(null)) }),
       }),
-      binaryOp: node(binaryType, { left: child('left'), operator: text('op'), right: child('right') }),
+      // `=` inside a pattern (`[a = 1] = b`) is an element's default.
+      binaryOp: iff(and(inPattern, match(text('op'), { '=': c(true) }, c(false))),
+        node('AssignmentPattern', { left: child('left'), right: child('right') }),
+        node(binaryType, { left: child('left'), operator: text('op'), right: child('right') })),
       prefixOp: match(text('op'), {
         '++': node('UpdateExpression', { operator: text('op'), prefix: c(true), argument: child('operand') }),
         '--': node('UpdateExpression', { operator: text('op'), prefix: c(true), argument: child('operand') }),
@@ -297,6 +379,10 @@ export const estreeExprShape: Shape2Spec = {
       led_dot: node('MemberExpression', { object: child('left'), property: property(), computed: c(false), optional: c(false) }),
       led_bracket: node('MemberExpression', { object: child('left'), property: child('expr'), computed: c(true), optional: c(false) }),
       paren: sequence,
+      array: node('ArrayExpression', { elements: arrayElements }),
+      object: node('ObjectExpression', { properties: child('property') }),
+      template: templateLiteral('template'),
+      led_template: node('TaggedTemplateExpression', { tag: child('left'), quasi: templateLiteral('template') }),
     },
   },
 };

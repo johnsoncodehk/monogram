@@ -382,25 +382,25 @@ const DecoratorExpr = rule($ => [
 const Prop = rule($ => {
   // ( … ) { … }, params+body routed to a [Await]/[Yield] family (see memTail); the
   // MemberName stays outside it (a computed key inherits the enclosing context).
-  const propTail = (ctx) => ['(', sep(ctx(Param), ','), ')', ctx(Block)];
+  const propTail = (ctx) => [field('paren', '('), sep(ctx(field('parameter', Param)), ','), ')', ctx(field('body', Block))];
   return [
-    ['...', Expr],                                                     // spread
+    arm('spread', '...', field('argument', Expr)),
     // accessor (get/set) — get/set bodies are plain (reset)
-    [alt('get', 'set'), MemberName, '(', opt(sep(resetCtx(Param), ',')), ')', resetCtx(Block)],
+    arm('accessor', field('kind', alt('get', 'set')), field('key', MemberName), field('paren', '('), opt(sep(resetCtx(field('parameter', Param)), ',')), ')', resetCtx(field('body', Block))),
     // method, 4-way split on async × generator (each routes params+body to its family)
-    ['async', '*', MemberName, ...propTail(asyncGenCtx)],
-    ['async', MemberName, ...propTail(awaitCtx)],
-    ['*', MemberName, ...propTail(yieldCtx)],
-    [MemberName, ...propTail(resetCtx)],
+    arm('asyncGeneratorMethod', 'async', '*', field('key', MemberName), ...propTail(asyncGenCtx)),
+    arm('asyncMethod', 'async', field('key', MemberName), ...propTail(awaitCtx)),
+    arm('generatorMethod', '*', field('key', MemberName), ...propTail(yieldCtx)),
+    arm('method', field('key', MemberName), ...propTail(resetCtx)),
     // value property — any member name incl computed `[e]: v` (MemberName covers `[Expr]`)
-    [MemberName, ':', Expr],
+    arm('init', field('key', MemberName), ':', field('value', Expr)),
     // computed comma list (lenient): `[a, b]: v`. One expression in the brackets is the
     // value property above (`[e]` is a MemberName), so the list has at least one comma.
-    ['[', Expr, many1(',', Expr), ']', ':', Expr],
+    arm('computedList', '[', Expr, many1(',', Expr), ']', ':', Expr),
     // shorthand (Ident only): x | x = v — a reserved word here is invalid
     // (`var v = { class }`); a reserved word as a property KEY (`{ class: 1 }`) is fine,
     // already handled by the `[MemberName, ':', Expr]` branch above.
-    [notReserved, Ident, alt(['=', Expr], [])],
+    arm('shorthand', notReserved, field('name', Ident), field('initializer', alt(arm('assign', '=', field('value', Expr)), arm('none')))),
   ];
 });
 
@@ -455,8 +455,8 @@ export const newTargetArms = ($, Expr, newArgs, { identGuard, Prop, fnExprArms, 
   arm('importMeta', 'import', '.', 'meta'),
   ['new', not('<'), $, newArgs],
   Template,
-  arm('array', '[', opt(field('element', Expr)), many(',', opt(field('elementRest', Expr))), ']'),
-  arm('object', '{', sep(Prop, ','), '}'),
+  arm('array', field('bracket', '['), opt(field('element', Expr)), many(field('comma', ','), opt(field('elementRest', Expr))), ']'),
+  arm('object', '{', sep(field('property', Prop), ','), '}'),
   ...fnExprArms,
   [$, '.', alt(Ident, PrivateField)],
   [$, '[', Expr, ']'],
@@ -522,8 +522,8 @@ const Expr = rule($ => [
   // array literal `[a, , ...b,]`: an element or a hole, then `,` and an element or a hole, the
   // ArrayBindingPattern's form. Each element is parsed once: `many(opt($), ','), opt($)` parsed
   // the last one in the repetition, found no `,`, and parsed it again (twice per nesting level).
-  ['[', opt($), many(',', opt($)), ']'],
-  ['{', sep(Prop, ','), '}'],
+  arm('array', field('bracket', '['), opt(field('element', $)), many(field('comma', ','), opt(field('elementRest', $))), ']'),
+  arm('object', '{', sep(field('property', Prop), ','), '}'),
   // Arrow functions, async/non-async SPLIT so the [Await] grammar parameter can route
   // each arm's params + body to the right rule family (await-yield-fork.ts): an async
   // arrow's params and body are await-context (`async (a = await) =>` rejects — await
@@ -679,7 +679,7 @@ const MemberName = rule($ => [
   OctalNumber,
   BinaryNumber,
   BigInt_,
-  ['[', Expr, ']'],
+  arm('computed', field('bracket', '['), field('expr', Expr), field('bracketClose', ']')),
 ]);
 
 // ── Member words ──
