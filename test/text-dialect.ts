@@ -5,6 +5,10 @@
 // expected failure, with its cause); an xfail that passes fails the gate until its mark flips.
 //   node test/text-dialect.ts [--all]
 import { createParser } from '../src/gen-parser.ts';
+import { directivesOf } from '../src/grammar-analysis.ts';
+import { lexSpecOf } from '../src/emit-lexer.ts';
+import { token, rule, defineGrammar, seq, oneOf, range, star, plus, noneOf, many, alt } from '../src/api.ts';
+import type { CstGrammar } from '../src/types.ts';
 import dialect from './fixtures/textdialect.ts';
 
 type Row = { section: string; id: string; status: 'pass' | 'xfail'; why?: string; check: () => { ok: boolean; saw: string } };
@@ -72,6 +76,76 @@ tokens('`//` right after a block comment starts a new run: a comment', C('<p>/* 
 tokens('code comments are unchanged', C('const b = 1; // c\n/* d */ return b;'), ['\'";"', 'Ident"return"']);
 parse('text with comments parses', C('<p>hi // note\n a/* c */b <b>z</b>// n\n a//b</p>;'));
 reject('a comment does not end an element: its close tag is commented out', C('<p>a // </p>'));
+
+// ── directives: openers, heads, bodies, continuations, all derived from the rules ──
+section = 'directives';
+const derived = directivesOf(dialect, dialect.elements!)!;
+const table = (es: { lit: string; nexts: string[][] }[]) => es.map((e) => `${e.lit} ${e.nexts.map((n) => n.join(' ')).join(' | ')}`).join('; ');
+console.log(`derived openers: ${table(derived.openers)}\nderived continuations: ${table(derived.continuations)}\nderived code blocks: ${derived.blocks.join(' ')}\nrefused arms: ${derived.refused.length}`);
+rows.push({ section, id: 'the derived openers', status: 'pass', check: () => { const s = table(derived.openers); return { ok: s === '@if (; @for await ( | (; @try {', saw: s }; } });
+rows.push({ section, id: 'the derived continuations', status: 'pass', check: () => { const s = table(derived.continuations); return { ok: s === '@else if ( | {; @empty {; @pending {; @catch (', saw: s }; } });
+rows.push({ section, id: 'the derived code block opener, and no refused arm', status: 'pass', check: () => ({ ok: derived.blocks.join() === '@{' && derived.refused.length === 0, saw: `${derived.blocks} / ${derived.refused.length}` }) });
+// the opener test: the literal, not running on into a word, then its required next literal
+tokens('`@if (` opens a directive', C('<p>@if (a) {y}</p>'), ['\'">"', 'AtWord"@if"', '\'"("']);
+tokens('`@if x` is text: its required next is `(`', C('<p>@if x</p>'), ['Text"@if x"']);
+tokens('`@iffy (` is text: the literal runs on into a word', C('<p>@iffy (a)</p>'), ['Text"@iffy (a)"']);
+tokens('`a@if (` ends the text before the `@`', C('<p>a@if (a) {y}</p>'), ['Text"a"', 'AtWord"@if"']);
+tokens('`x@if (y)` likewise, inside a run', C('<p>x y@if (a) {z}</p>'), ['Text"x y"', 'AtWord"@if"']);
+tokens('`@for await (` opens a directive', C('<p>@for await (i of a) {y}</p>'), ['AtWord"@for"', 'Ident"await"', '\'"("']);
+tokens('`@for awaits (` is text', C('<p>@for awaits (i)</p>'), ['Text"@for awaits (i)"']);
+tokens('`@{` opens a code block', C('<p>@{ const q = 1; <b/> }</p>'), ['\'"@{"', 'Ident"const"']);
+tokens('a comment between the literal and its `(` is code trivia', C('<p>@if /* c */ (a) {y}</p>'), ['AtWord"@if"', '\'"("']);
+tokens('a line comment too', C('<p>@if // c\n (a) {y}</p>'), ['AtWord"@if"', '\'"("']);
+tokens('`@else` in text is text: it is no opener', C('<p>a @else {b}</p>'), ['Text"a @else "']);
+// heads: a `{` opens the body only at the head’s own paren depth
+parse('braces inside the head’s parens open no body', C('<p>@if ({a}.a) { y }</p>;'));
+parse('brackets and braces inside the head’s parens open no body', C('<p>@if ([{a}][0]) { y }</p>;'));
+tokens('the body after a braced head is text', C('<p>@if ({a}.a) { y }</p>'), ['\'")"', '\'"{"', 'Text" y "', '\'"}"']);
+// bodies and continuations
+tokens('a continuation right after a body', C('<p>@if (a) {y} @else {n}</p>'), ['\'"}"', 'AtWord"@else"', '\'"{"', 'Text"n"']);
+tokens('`@else if (` continues', C('<p>@if (a) {y} @else if (a) {m} @else {n}</p>'), ['AtWord"@else"', 'Ident"if"', '\'"("']);
+tokens('`@else x` is no continuation: the directive ends, the rest is text', C('<p>@if (a) {y} @else x</p>'), ['\'"}"', 'Text" @else x"']);
+tokens('`@elsewhere {` is no continuation', C('<p>@if (a) {y} @elsewhere {n}</p>'), ['\'"}"', 'Text" @elsewhere "']);
+tokens('text between a body and `@else` ends the directive', C('<p>@if (a) {y} t @else {n}</p>'), ['Text" t @else "']);
+parse('`@for … @empty`, `@try … @pending … @catch`, `@try … @catch`', C('<p>@for (i of a) {<i>{i}</i>} @empty {none} @try {t} @pending {p} @catch (e) {c} @try {t} @catch (e) {c}</p>;'));
+parse('directives nest, with elements, holes and comments in bodies', C('<p>@if (a) { <b>@for (i of a) { {i} // n\n }</b> } @else { /* c */ x }</p>;'));
+parse('a code block with statements and an element', C('<p>@{ const q = 1; <b/> } x</p>;'));
+parse('the whole chain', C('<p>x @if (a) { yes <b/> } @else if (a) {m} @else { no } z</p>;'));
+reject('a body never closed', C('<p>@if (a) {y</p>;'));
+// a close tag in a body closes no element of the body: it is lexed in a frame of its own (popped
+// at its `>`), so the parser sees a close tag where the body admits only children, and rejects
+tokens('a stray close tag in a body: lexed as a close tag, the body goes on', C('<p>@if (a) { </q> y }</p>'), ['CloseTag"</"', 'Ident"q"', '\'">"', 'Text" y "', '\'"}"']);
+reject('a stray close tag in a body', C('<p>@if (a) { </q> y }</p>;'));
+reject('a body closer outside a body (`}` in an element’s children)', C('<p>a } b</p>;'));
+tokens('with no directive before it, `@else {n}` is text and a hole', C('<p>@else {n}</p>'), ['Text"@else "', '\'"{"']);
+// what the derivation refuses, by name: arms whose head or body the lexer could not delimit
+{
+  const Ident = token(seq(oneOf(range('a', 'z')), star(oneOf(range('a', 'z')))), { identifier: true });
+  const AtW = token(seq('@', oneOf(range('a', 'z')), star(oneOf(range('a', 'z')))));
+  const Txt = token(plus(noneOf('<', '{', '}')));
+  const Shut = token(seq('<', '/'));
+  const Solo = token(seq('/', '>'));
+  const toy = (arms: (B: unknown) => unknown[]): CstGrammar => {
+    const Body = rule(() => [['{', many(Txt), '}']]);
+    const Dir = rule(() => arms(Body) as never);
+    const El = rule(() => [['<', Ident, '>', many(alt(Txt, Dir)), Shut, Ident, '>']]);
+    const Prog = rule(() => [[many(El)]]);
+    return defineGrammar({ name: 'dirtoy', tokens: { Ident, AtW, Txt, Shut, Solo }, rules: { Body, Dir, El, Prog }, entry: Prog,
+      elements: { tagOpen: '<', tagClose: '>', closeMarker: '/', text: 'Txt', closeTag: 'Shut', selfClose: 'Solo', hole: { open: '{', close: '}' } } });
+  };
+  const refusal = (id: string, g: () => CstGrammar, want: RegExp) => rows.push({ section, id: `refused by name: ${id}`, status: 'pass', check: () => {
+    const gr = g(); const d = directivesOf(gr, gr.elements!)!;
+    let threw = ''; try { lexSpecOf(gr); } catch (e) { threw = (e as Error).message; }
+    const r = d.refused.map((x) => `${x.arm}: ${x.reason}`).join(' / ');
+    console.log(`  refused (${id}): ${r}`);
+    return { ok: want.test(r) && threw.includes(d.refused[0]?.arm ?? '\0'), saw: `${r} | lexSpecOf: ${threw.split('\n')[0]}` };
+  } });
+  refusal('a bare expression head (`@if x {`: the head could hold the body opener)', () => toy((B) => [['@if', Ident, B]]), /@if.*Ident.*stands between it and its body/);
+  refusal('an opener followed by an expression (`@case x:`)', () => toy(() => [['@case', Ident, ':']]), /@case.*Ident.*stands between/);
+  refusal('an opener with nothing after it', () => toy(() => [['@here']]), /@here.*nothing follows it/);
+  refusal('a head not followed by a body', () => toy(() => [['@if', '(', Ident, ')', Txt]]), /@if.*head `\( … \)` is not followed by a body/);
+  rows.push({ section, id: 'a derivable toy has no refusal and loads', status: 'pass', check: () => { const gr = toy((B) => [['@if', '(', Ident, ')', B]]); const d = directivesOf(gr, gr.elements!)!; let ok = true; try { lexSpecOf(gr); } catch { ok = false; } return { ok: ok && d.refused.length === 0 && d.openers.length === 1, saw: JSON.stringify(d) }; } });
+}
 
 // ── entry: where code enters an element (derived: `operand`, `<` is also relational) ──
 section = 'entry';
