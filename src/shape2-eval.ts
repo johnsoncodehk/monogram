@@ -312,6 +312,19 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
   const inhs = spec.inherited ?? {};
   const armIn = (rule: string, arm: string): ArmInfo | undefined => g.arms.get(rule)?.find((a) => a.arm === arm);
   const known = new Set(Object.keys(OPERATORS));
+  // The RECORD-VALUED rules (see `get` in shape2-schema.ts): rule -> its field names.
+  const recordRules = new Map<string, Set<string>>();
+  for (const [rule, arms] of Object.entries(spec.rules ?? {})) {
+    if (arms === null || typeof arms !== 'object') continue;
+    const terms = Object.entries(arms as Record<string, Term>);
+    const recs = terms.filter(([, t]) => t?.t === 'record');
+    if (recs.length === 0) continue;
+    if (recs.length < terms.length) { err(`rules ${rule}`, `a record-valued rule maps every arm to a record (${terms.filter(([, t]) => t?.t !== 'record').map(([a]) => a).join(', ')} ${terms.length - recs.length > 1 ? 'are' : 'is'} not)`); continue; }
+    const fieldsOf = (t: Term): string => Object.keys((t as { fields: object }).fields ?? {}).sort().join(', ');
+    const want = fieldsOf(recs[0][1]);
+    for (const [a, t] of recs) if (fieldsOf(t) !== want) err(`rules ${rule}.${a}`, `a record-valued rule's arms all have the same fields (${recs[0][0]}: ${want}; ${a}: ${fieldsOf(t)}); write \`absent\` for a field an arm has no value for`);
+    recordRules.set(rule, new Set(Object.keys((recs[0][1] as { fields: object }).fields ?? {})));
+  }
 
   // Every rule / arm key must exist; under `total` every arm of a mapped rule must be mapped.
   const eachArmKey = (where: string, table: Record<string, Record<string, unknown>>, visit: (a: ArmInfo, v: unknown, w: string) => void): void => {
@@ -415,7 +428,18 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
         if (r.slot.kind === 'leaf') err(w, `child(${e.name}): ${e.name} is a leaf, which has no value of its own: use text / cook, or build a node with its span`);
         if (r.slot.kind === 'branch') err(w, `child(${e.name}): ${e.name} is an inline alternation: use branch(${e.name}, {...})`);
         if (r.slot.kind === 'template') err(w, `child(${e.name}): template literals are not in the calculus yet`);
+        if (r.slot.rule && recordRules.has(r.slot.rule)) err(w, `child(${e.name}): ${r.slot.rule} is record-valued (an interface, not a node): read its fields with get(${e.name}, field)`);
         return r.card === 'many' ? 'list' : 'any';
+      }
+      case 'get': {
+        const r = slotOf(e.name, 'get');
+        if (!r) return 'any';
+        if (r.slot.kind !== 'node') { err(w, `get(${e.name}, ${e.field}): ${e.name} is a ${r.slot.kind}; only a child of a record-valued rule is projectable`); return 'any'; }
+        if (r.card === 'many') err(w, `get(${e.name}, ${e.field}): ${e.name} is a list`);
+        const fields = recordRules.get(r.slot.rule!);
+        if (!fields) err(w, `get(${e.name}, ${e.field}): ${r.slot.rule} is not record-valued; a node's fields are not projectable`);
+        else if (!fields.has(e.field)) err(w, `get(${e.name}, ${e.field}): ${r.slot.rule} has no field ${e.field} (its fields: ${[...fields].join(', ')})`);
+        return 'any';
       }
       case 'text': {
         if (e.name === undefined) return 'string';
@@ -735,6 +759,11 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
         return it === undefined ? undefined : synOf((it as { node: CstNode }).node, t.attr);
       }
       case 'inh': return s.inh[t.attr];
+      case 'get': {
+        const r = resolve(s, t.name);
+        const rec = itemValue(r.items[0], r.scope, t.name) as { record: Record<string, S2Value> } | undefined;
+        return rec === undefined ? undefined : rec.record[t.field];
+      }
       case 'node': {
         const fields: Record<string, S2Value> = {};
         for (const [k, x] of Object.entries(t.fields)) {

@@ -6,7 +6,7 @@
 // binding patterns, functions, classes, arrows, object / array literals, templates) is unmapped,
 // and a unit that reaches one is reported as outside the subset, not compared.
 import {
-  absent, and, armOf, branch, c, child, cook, iff, inh, list, map, match, node, not, orElse, present, record,
+  absent, and, armOf, branch, c, child, cook, get, iff, inh, list, map, match, node, not, orElse, present, record,
   spread, syn, text, thread, v, wrapIf, type Shape2Spec, type Term,
 } from '../../src/shape2-schema.ts';
 
@@ -54,6 +54,56 @@ const label: Term = iff(present('label'), idOf('label'), c(null));
 /** A declaration list's bindings: the first and the rest. */
 const bindings: Term = list(child('binding'), spread(child('bindingRest')));
 
+// ── `for` (ECMA-262 14.7.4, 14.7.5) ──
+// The grammar factors a `for` statement's `( … )` into ForHead / ForAwaitHead, whose node is not
+// the statement's: both heads are RECORD-VALUED (an interface: `get`), and Stmt.for_ builds
+// For / ForIn / ForOfStatement from the head's fields and its own body.
+/** A declaration in a head: `kind` (a keyword alternation, or `using` / `await using`), its
+ * first binding and, in a C-style head, the rest. */
+const headDeclaration = (kind: Term, rest: boolean): Term => {
+  const decl = (to: string, declarations: Term): Term => node('VariableDeclaration', { declarations, kind }, { from: 'kind', to });
+  return rest
+    ? iff(present('bindingRest'), decl('bindingRest', list(child('binding'), spread(child('bindingRest')))), decl('binding', list(child('binding'))))
+    : decl('binding', list(child('binding')));
+};
+const optSequence = (first: string, rest: string): Term => iff(present(first), sequenceOf(first, rest), absent);
+type HeadFields = { kind: Term; init: Term; test: Term; update: Term; left: Term; right: Term };
+const head = (f: Partial<HeadFields>): Term => record({ kind: f.kind!, init: f.init ?? absent, test: f.test ?? absent, update: f.update ?? absent, left: f.left ?? absent, right: f.right ?? absent });
+/** One field of a declaration head: per kind branch (`let_` / `using`), per tail. */
+const declField = (pick: (kind: Term, tail: 'classic' | 'in_' | 'of') => Term, tails: ('classic' | 'in_' | 'of')[], usingTails: ('classic' | 'in_' | 'of')[]): Term => branch('alt', {
+  let_: branch('tail', Object.fromEntries(tails.map((t) => [t, pick(text('kind'), t)]))),
+  using: branch('tail', Object.fromEntries(usingTails.map((t) => [t, pick(branch('kind', { using: c('using'), await_: c('await using') }), t)]))),
+});
+const declarationHead = (tails: ('classic' | 'in_' | 'of')[], usingTails: ('classic' | 'in_' | 'of')[]): Term => {
+  const f = (pick: (kind: Term, tail: 'classic' | 'in_' | 'of') => Term): Term => declField(pick, tails, usingTails);
+  return head({
+    kind: f((_, t) => c(t === 'classic' ? 'for' : t === 'in_' ? 'in' : 'of')),
+    init: f((k, t) => (t === 'classic' ? headDeclaration(k, true) : absent)),
+    test: f((_, t) => (t === 'classic' ? optSequence('condition', 'conditionRest') : absent)),
+    update: f((_, t) => (t === 'classic' ? optSequence('increment', 'incrementRest') : absent)),
+    left: f((k, t) => (t === 'classic' ? absent : headDeclaration(k, false))),
+    right: f((_, t) => (t === 'in_' ? sequenceOf('right', 'rightRest') : t === 'of' ? child('right') : absent)),
+  });
+};
+const forStatement = (isAwait: boolean): Term => match(get('head', 'kind'), {
+  for: node('ForStatement', { init: orElse(get('head', 'init'), c(null)), test: orElse(get('head', 'test'), c(null)), update: orElse(get('head', 'update'), c(null)), body: child('body') }),
+  in: node('ForInStatement', { left: get('head', 'left'), right: get('head', 'right'), body: child('body') }),
+  of: node('ForOfStatement', { await: c(isAwait), left: get('head', 'left'), right: get('head', 'right'), body: child('body') }),
+});
+const FOR_RULES: Shape2Spec['rules'] = {
+  ForHead: {
+    declaration: declarationHead(['classic', 'in_', 'of'], ['classic', 'of']),
+    classic: head({ kind: c('for'), init: optSequence('initializer', 'initializerRest'), test: optSequence('condition', 'conditionRest'), update: optSequence('increment', 'incrementRest') }),
+    in_: head({ kind: c('in'), left: child('left'), right: sequenceOf('right', 'rightRest') }),
+    of: head({ kind: c('of'), left: child('left'), right: child('right') }),
+  },
+  ForAwaitHead: {
+    declaration: declarationHead(['of'], ['of']),
+    of: head({ kind: c('of'), left: child('left'), right: child('right') }),
+  },
+  ForBinding: { seq: node('VariableDeclarator', { id: branch('name', { ident: idOf('ident') }), init: orElse(child('value'), c(null)) }) },
+};
+
 /** The statements (ECMA-262 14), one node per Stmt arm. */
 const STATEMENTS: Record<string, Term> = {
   block: child('block'),
@@ -76,6 +126,7 @@ const STATEMENTS: Record<string, Term> = {
   empty: node('EmptyStatement'),
   debugger_: node('DebuggerStatement'),
   with_: node('WithStatement', { object: sequenceOf('object', 'objectRest'), body: child('body') }),
+  for_: branch('alt', { paren: forStatement(false), await_: forStatement(true) }),
   decl: child('decl'),
 };
 
@@ -105,6 +156,7 @@ export const estreeExprShape: Shape2Spec = {
     // A binding: identifier names (binding patterns are not mapped yet).
     Binding: { seq: node('VariableDeclarator', { id: branch('name', { ident: idOf('ident') }), init: orNull('value') }) },
     CatchParameter: { ident: idOf('ident') },
+    ...FOR_RULES,
     Expr: {
       true_: literal(c(true)),
       false_: literal(c(false)),

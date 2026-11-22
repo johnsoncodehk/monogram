@@ -300,7 +300,7 @@ export const forAwaitHeadArms = (Expr, ForBinding) => [
   arm('of', not('let'), exclude('in', field('left', Expr)), 'of', field('right', Expr)),
 ];
 export const forStatement = ($, ForHead, ForAwaitHead) =>
-  ['for', alt(['(', field('head', ForHead), ')'], ['await', '(', field('head', ForAwaitHead), ')']), field('body', $)];
+  ['for', alt(['(', field('head', ForHead), ')'], [field('awaitKeyword', 'await'), '(', field('head', ForAwaitHead), ')']), field('body', $)];
 
 // The guard of the *expression* identifier-NUD: an IdentifierReference is no reserved word, so
 // a reserved word with no expression form of its own is no expression (`in;`, `x = default`,
