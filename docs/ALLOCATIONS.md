@@ -26,20 +26,20 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 
 | target | grammar | input | mode | tokens | nodes | allocations | per token | per node | bytes | B per token | B per node | result allocs | result bytes | overhead bytes |
 |:--|:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
-| ts | typescript | acorn.js | parse | 42,209 | 28,638 | 143,990 | 3.41 | 5.03 | 4,737,224 | 112.2 | 165.4 | 79,491 | 2,313,619 | 2,423,605 |
-| ts | typescript | acorn.js | parseWith | 42,209 | 28,638 | 143,990 | 3.41 | 5.03 | 4,737,224 | 112.2 | 165.4 | 79,491 | 2,313,619 | 2,423,605 |
-| ts | typescript | lib.es5.d.ts | parse | 13,659 | 7,165 | 45,933 | 3.36 | 6.41 | 1,556,604 | 114.0 | 217.3 | 20,279 | 590,445 | 966,159 |
-| ts | typescript | lib.es5.d.ts | parseWith | 13,659 | 7,165 | 45,933 | 3.36 | 6.41 | 1,556,604 | 114.0 | 217.3 | 20,279 | 590,445 | 966,159 |
-| ts | typescript | _tsserver.js | parse | 4,932 | 3,136 | 16,225 | 3.29 | 5.17 | 546,084 | 110.7 | 174.1 | 8,667 | 252,082 | 294,002 |
-| ts | typescript | _tsserver.js | parseWith | 4,932 | 3,136 | 16,225 | 3.29 | 5.17 | 546,084 | 110.7 | 174.1 | 8,667 | 252,082 | 294,002 |
-| ts | typescript | _tsserver.js ×4 | parse | 19,728 | 12,541 | 64,821 | 3.29 | 5.17 | 2,138,796 | 108.4 | 170.5 | 34,662 | 1,008,192 | 1,130,604 |
-| ts | typescript | _tsserver.js ×4 | parseWith | 19,728 | 12,541 | 64,821 | 3.29 | 5.17 | 2,138,796 | 108.4 | 170.5 | 34,662 | 1,008,192 | 1,130,604 |
-| ts | javascript | acorn.js | parse | 42,051 | 28,638 | 143,896 | 3.42 | 5.02 | 4,735,316 | 112.6 | 165.4 | 79,491 | 2,313,271 | 2,422,045 |
-| ts | javascript | acorn.js | parseWith | 42,051 | 28,638 | 143,896 | 3.42 | 5.02 | 4,735,316 | 112.6 | 165.4 | 79,491 | 2,313,271 | 2,422,045 |
-| ts | javascript | _tsserver.js | parse | 4,928 | 3,136 | 16,317 | 3.31 | 5.20 | 548,612 | 111.3 | 174.9 | 8,667 | 251,964 | 296,648 |
-| ts | javascript | _tsserver.js | parseWith | 4,928 | 3,136 | 16,317 | 3.31 | 5.20 | 548,612 | 111.3 | 174.9 | 8,667 | 251,964 | 296,648 |
-| ts | javascript | _tsserver.js ×4 | parse | 19,712 | 12,541 | 65,189 | 3.31 | 5.20 | 2,148,908 | 109.0 | 171.4 | 34,662 | 1,007,719 | 1,141,189 |
-| ts | javascript | _tsserver.js ×4 | parseWith | 19,712 | 12,541 | 65,189 | 3.31 | 5.20 | 2,148,908 | 109.0 | 171.4 | 34,662 | 1,007,719 | 1,141,189 |
+| ts | typescript | acorn.js | parse | 42,209 | 28,638 | 143,009 | 3.39 | 4.99 | 4,717,632 | 111.8 | 164.7 | 79,491 | 2,313,619 | 2,404,013 |
+| ts | typescript | acorn.js | parseWith | 42,209 | 28,638 | 143,009 | 3.39 | 4.99 | 4,717,632 | 111.8 | 164.7 | 79,491 | 2,313,619 | 2,404,013 |
+| ts | typescript | lib.es5.d.ts | parse | 13,659 | 7,165 | 45,296 | 3.32 | 6.32 | 1,543,864 | 113.0 | 215.5 | 20,279 | 590,445 | 953,419 |
+| ts | typescript | lib.es5.d.ts | parseWith | 13,659 | 7,165 | 45,296 | 3.32 | 6.32 | 1,543,864 | 113.0 | 215.5 | 20,279 | 590,445 | 953,419 |
+| ts | typescript | _tsserver.js | parse | 4,932 | 3,136 | 16,205 | 3.29 | 5.17 | 545,680 | 110.6 | 174.0 | 8,667 | 252,082 | 293,598 |
+| ts | typescript | _tsserver.js | parseWith | 4,932 | 3,136 | 16,205 | 3.29 | 5.17 | 545,680 | 110.6 | 174.0 | 8,667 | 252,082 | 293,598 |
+| ts | typescript | _tsserver.js ×4 | parse | 19,728 | 12,541 | 64,741 | 3.28 | 5.16 | 2,137,180 | 108.3 | 170.4 | 34,662 | 1,008,192 | 1,128,988 |
+| ts | typescript | _tsserver.js ×4 | parseWith | 19,728 | 12,541 | 64,741 | 3.28 | 5.16 | 2,137,180 | 108.3 | 170.4 | 34,662 | 1,008,192 | 1,128,988 |
+| ts | javascript | acorn.js | parse | 42,051 | 28,638 | 142,915 | 3.40 | 4.99 | 4,715,724 | 112.1 | 164.7 | 79,491 | 2,313,271 | 2,402,453 |
+| ts | javascript | acorn.js | parseWith | 42,051 | 28,638 | 142,915 | 3.40 | 4.99 | 4,715,724 | 112.1 | 164.7 | 79,491 | 2,313,271 | 2,402,453 |
+| ts | javascript | _tsserver.js | parse | 4,928 | 3,136 | 16,297 | 3.31 | 5.20 | 548,208 | 111.2 | 174.8 | 8,667 | 251,964 | 296,244 |
+| ts | javascript | _tsserver.js | parseWith | 4,928 | 3,136 | 16,297 | 3.31 | 5.20 | 548,208 | 111.2 | 174.8 | 8,667 | 251,964 | 296,244 |
+| ts | javascript | _tsserver.js ×4 | parse | 19,712 | 12,541 | 65,109 | 3.30 | 5.19 | 2,147,292 | 108.9 | 171.2 | 34,662 | 1,007,719 | 1,139,573 |
+| ts | javascript | _tsserver.js ×4 | parseWith | 19,712 | 12,541 | 65,109 | 3.30 | 5.19 | 2,147,292 | 108.9 | 171.2 | 34,662 | 1,007,719 | 1,139,573 |
 | js | typescript | acorn.js | fresh | 42,209 | 28,813 | 5,109 | 0.12 | 0.18 | 13,844,124 | 328.0 | 480.5 | - | - | - |
 | js | typescript | acorn.js | reuse | 42,209 | 28,813 | 4,950 | 0.12 | 0.17 | 233,752 | 5.5 | 8.1 | - | - | - |
 | js | typescript | lib.es5.d.ts | fresh | 13,659 | 7,677 | 7,430 | 0.54 | 0.97 | 2,562,784 | 187.6 | 333.8 | - | - | - |
@@ -73,12 +73,12 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 
 | kind | site (literals folded) | in functions | allocations | per token | modeled bytes | share | in result |
 |:--|:--|--:|--:|--:|--:|--:|--:|
-| object | `{ off, end, nl, kid, lid }` | 1 | 42,209 | 1.00 | 1,350,688 | 28.5% | 0 |
+| object | `{ off, end, nl, kid, lid }` | 1 | 42,209 | 1.00 | 1,350,688 | 28.6% | 0 |
 | .slice() → array | `_hs.slice(b, _n)` | 1 | 28,916 | 0.69 | 898,372 | 19.0% | 28,638 |
-| object | `{ rule, children, offset: off, end }` | 1 | 28,915 | 0.69 | 809,620 | 17.1% | 28,638 |
+| object | `{ rule, children, offset: off, end }` | 1 | 28,915 | 0.69 | 809,620 | 17.2% | 28,638 |
 | object | `{ tokenType, offset: off, end }` | 1 | 25,839 | 0.61 | 723,492 | 15.3% | 22,215 |
-| array growth | `toks.push(mk_tok(off, end, pendingNl, kid, lid))` | 1 | 18 | 0.00 | 607,924 | 12.8% | 0 |
-| .slice() → string | `src.slice(pos, e)` | 1 | 17,229 | 0.41 | 320,016 | 6.8% | 0 |
+| array growth | `toks.push(mk_tok(off, end, pendingNl, kid, lid))` | 1 | 18 | 0.00 | 607,924 | 12.9% | 0 |
+| .slice() → string | `src.slice(pos, e)` | 1 | 16,248 | 0.38 | 300,424 | 6.4% | 0 |
 | array | `[N, N, N]` | 5 | 546 | 0.01 | 19,656 | 0.4% | 0 |
 | array | `["…","…","…","…","…"]` | 1 | 72 | 0.00 | 3,168 | 0.1% | 0 |
 | .slice() → string | `_src.slice(t.off, u.end)` | 1 | 161 | 0.00 | 2,576 | 0.1% | 0 |
@@ -93,12 +93,12 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 
 | kind | site (literals folded) | in functions | allocations | per token | modeled bytes | share | in result |
 |:--|:--|--:|--:|--:|--:|--:|--:|
-| object | `{ off, end, nl, kid, lid }` | 1 | 42,209 | 1.00 | 1,350,688 | 28.5% | 0 |
+| object | `{ off, end, nl, kid, lid }` | 1 | 42,209 | 1.00 | 1,350,688 | 28.6% | 0 |
 | .slice() → array | `_hs.slice(b, _n)` | 1 | 28,916 | 0.69 | 898,372 | 19.0% | 28,638 |
-| object | `{ rule, children, offset: off, end }` | 1 | 28,915 | 0.69 | 809,620 | 17.1% | 28,638 |
+| object | `{ rule, children, offset: off, end }` | 1 | 28,915 | 0.69 | 809,620 | 17.2% | 28,638 |
 | object | `{ tokenType, offset: off, end }` | 1 | 25,839 | 0.61 | 723,492 | 15.3% | 22,215 |
-| array growth | `toks.push(mk_tok(off, end, pendingNl, kid, lid))` | 1 | 18 | 0.00 | 607,924 | 12.8% | 0 |
-| .slice() → string | `src.slice(pos, e)` | 1 | 17,229 | 0.41 | 320,016 | 6.8% | 0 |
+| array growth | `toks.push(mk_tok(off, end, pendingNl, kid, lid))` | 1 | 18 | 0.00 | 607,924 | 12.9% | 0 |
+| .slice() → string | `src.slice(pos, e)` | 1 | 16,248 | 0.38 | 300,424 | 6.4% | 0 |
 | array | `[N, N, N]` | 5 | 546 | 0.01 | 19,656 | 0.4% | 0 |
 | array | `["…","…","…","…","…"]` | 1 | 72 | 0.00 | 3,168 | 0.1% | 0 |
 | .slice() → string | `_src.slice(t.off, u.end)` | 1 | 161 | 0.00 | 2,576 | 0.1% | 0 |
