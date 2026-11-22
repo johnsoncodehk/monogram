@@ -206,10 +206,17 @@ also in the `test` job summary): `lowered` and `vacuous` are exact (FIRST/FOLLOW
 assertion always holds where the CFG reaches it). Every other class marks a place where the
 generated grammar may accept more than the grammar does. The class names the lowering that would
 make it exact: `scanner` (a line-terminator, comment or flow-state condition, for an external
-scanner token), `reserved` (keywords excluded right before the word token, for a tree-sitter
-`reserved` word set), `lookahead1` (a one-token lookahead over any other continuation),
+scanner token), `reserved` (keywords excluded right before the word token whose set is not
+rendered), `lookahead1` (a one-token lookahead over any other continuation),
 `lookahead` (several tokens or a nested assertion) and `left-context` (a predicate on the left
-operand). Recorded on `5a6c557`:
+operand). `reserved-set` is rendered: keywords excluded right before the word token become a
+tree-sitter `reserved` word set on that token. tree-sitter applies one set per parse state (the
+highest id), so the sets are a chain from most to least reserving and every unguarded word
+position carries the empty last set. Where a guarded and a less guarded position share a state,
+the less reserving reading wins, so the rendering never rejects more than the grammar. It is
+exact in every other state. Recorded on `5a6c557`, before `reserved-set` (item 1b moved js / jsx
+41 and ts / tsx 63 occurrences from `reserved` to `reserved-set`; 2 stay, `not("new")` and
+`not("super")`, whose sets are not in the chain):
 
 | grammar | total | lowered | vacuous | scanner | reserved | lookahead1 | lookahead | left-context |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|

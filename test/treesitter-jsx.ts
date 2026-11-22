@@ -1,6 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  treesitter-jsx.ts — REPORT-ONLY verdict comparison for the DERIVED tree-sitter TSX and JSX
-//  grammars (CI `treesitter` job). Until now CI generated these two grammars (the conflict gate)
+//  grammars, and over the TS issue cases and the reserved-word corpus the TS and JS ones
+//  (CI `treesitter` job). Until now CI generated these two grammars (the conflict gate)
 //  but never built or parsed with them. Over a corpus of TSX / JSX inputs it parses each with
 //  the tree-sitter wasm and counts ERROR / MISSING nodes, and compares the accept verdict (no
 //  such node) with the Monogram interpreter's on the same grammar — as test/yaml-treesitter.ts
@@ -28,6 +29,17 @@ const JSX_TEXT = [
   'const e = <p>line one\n  line two</p>;',
 ];
 
+// Reserved words in and out of identifier positions: the near-misses a dropped reserved-word guard
+// lets through (`var if`), beside the valid uses of the same words (property names, `as` targets).
+// The interpreter's verdict is the oracle, as for every corpus here.
+const RESERVED_WORDS = [
+  'var if = 1;', 'let class = 2;', 'function return() {}', 'const { default } = o;',
+  'try {} catch (this) {}', 'class A extends while {}', 'import { if } from "m";', 'import while from "m";',
+  'x = { if };', 'for (var new of a);', 'function f(delete) {}', 'const [typeof] = a;', 'x = y + break;',
+  'a.if = 1;', 'x = { if: 1, class: 2 };', 'import { default as d } from "m";', 'class C { if() {} static() {} }',
+  'export { x as default };', 'o.class.new = 1;', 'x = { get if() { return 1; } };',
+];
+
 const { Parser, Language } = await import('web-tree-sitter');
 await Parser.init();
 
@@ -45,8 +57,10 @@ let loadFailed = false;
 for (const { lang, mod, corpora } of [
   { lang: 'typescriptreact', mod: '../typescriptreact.ts', corpora: {
     'curated JSX': JSX_CASES, 'TSX issue cases': tsxIssueCases.map(c => c.src),
-    'TS issue cases': issueTests.map(t => t.input), 'JSX text': JSX_TEXT } },
-  { lang: 'javascriptreact', mod: '../javascriptreact.ts', corpora: { 'curated JSX': JSX_CASES, 'JSX text': JSX_TEXT } },
+    'TS issue cases': issueTests.map(t => t.input), 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS } },
+  { lang: 'javascriptreact', mod: '../javascriptreact.ts', corpora: { 'curated JSX': JSX_CASES, 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS } },
+  { lang: 'typescript', mod: '../typescript.ts', corpora: { 'TS issue cases': issueTests.map(t => t.input), 'reserved words': RESERVED_WORDS } },
+  { lang: 'javascript', mod: '../javascript.ts', corpora: { 'reserved words': RESERVED_WORDS } },
 ]) {
   const wasm = `tree-sitter/${lang}/tree-sitter-${lang}.wasm`;
   if (!existsSync(wasm)) { console.error(`✗ ${wasm} not found (build it: cd tree-sitter/${lang} && npx tree-sitter build --wasm .)`); loadFailed = true; continue; }
@@ -79,7 +93,7 @@ const table = [
 console.log(table);
 if (disagreements.length) console.log('\nDisagreements:\n' + disagreements.map(d => '  ' + d).join('\n'));
 if (process.env.GITHUB_STEP_SUMMARY) {
-  appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### tree-sitter TSX / JSX verdicts against the interpreter (report-only)\n\n${table}\n` +
+  appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### tree-sitter verdicts against the interpreter (report-only)\n\n${table}\n` +
     (disagreements.length ? `\n<details><summary>${disagreements.length} disagreement(s)</summary>\n\n${disagreements.map(d => '- `' + d.replace(/`/g, "'") + '`').join('\n')}\n</details>\n` : ''));
 }
 if (loadFailed) process.exit(1);

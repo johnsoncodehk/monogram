@@ -36,19 +36,23 @@ export interface TreeSitterOutput {
   assertions: AssertionRecord[];
 }
 
-/** How grammar.js renders a zero-width assertion. Exact: `lowered` (rendered by a CFG rewrite),
+/** How grammar.js renders a zero-width assertion. `reserved-set`: a one-token exclusion of word-shaped
+ *  literals directly before the word token, rendered as a tree-sitter reserved word set on that token
+ *  (see planReservedSets): exact in every parse state that shifts no differently-reserved word token;
+ *  where one does, tree-sitter applies ONE set per state (the highest id), and the sets are ordered so
+ *  that the less reserving reading wins, so it never rejects more than the grammar. Exact: `lowered` (rendered by a CFG rewrite),
  *  `vacuous` (FIRST/FOLLOW prove the assertion holds wherever the CFG reaches it, so dropping it
  *  changes nothing). Every other class is DROPPED and the generated grammar may accept more than the
  *  grammar does; the class names the lowering that would make it exact:
  *  - `scanner`: a line-terminator / comment / flow-state condition, lowerable to an external scanner
  *    token that sees the skipped text (tree-sitter-javascript's `_automatic_semicolon` technique);
- *  - `reserved`: one-token exclusion of identifier-shaped literals directly before the `word` token,
- *    lowerable to a tree-sitter `reserved` word set on that token;
+ *  - `reserved`: one-token exclusion of identifier-shaped literals before the `word` token that is
+ *    not rendered as a reserved word set (see `reserved-set`);
  *  - `lookahead1`: one-token lookahead over any other continuation (no tree-sitter primitive; exact
  *    only by a FIRST-restricted copy of the continuation);
  *  - `lookahead`: a lookahead over more than one token or a nested assertion: not expressible;
  *  - `left-context`: a predicate on the left operand's head leaf (notLeftLeaf): not expressible. */
-export type AssertionClass = 'lowered' | 'vacuous' | 'scanner' | 'reserved' | 'lookahead1' | 'lookahead' | 'left-context';
+export type AssertionClass = 'lowered' | 'vacuous' | 'reserved-set' | 'scanner' | 'reserved' | 'lookahead1' | 'lookahead' | 'left-context';
 export const EXACT_ASSERTION_CLASSES: readonly AssertionClass[] = ['lowered', 'vacuous'];
 export interface AssertionRecord {
   /** grammar rule whose tree holds the assertion */
@@ -231,6 +235,9 @@ interface GrammarJsContext {
   /** Every assertion node classifyAssertions saw. renderExpr refuses one it did not (an assertion
    *  reached by no classified path would be dropped without a record). */
   classifiedAssertions: Set<RuleExpr>;
+  /** The word token (keyword extraction) and the reserved word sets its guards render to. With no
+   *  set, no word step is wrapped (the grammar.js of a grammar without such guards is unchanged). */
+  reserved: { word: string | undefined; isWordLiteral: (text: string) => boolean; plan: ReservedSets };
 }
 
 function hasMarker(expr: RuleExpr): boolean {
@@ -320,7 +327,7 @@ function lowerNotBeforeOptional(expr: RuleExpr & { type: 'seq' }, onGuard?: (gua
  * so a bare marker here renders to a harmless `blank()` (it never actually
  * appears outside a Pratt rule in practice).
  */
-function renderExpr(expr: RuleExpr, ctx: GrammarJsContext): string {
+function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordSet?: string): string {
   switch (expr.type) {
     case 'literal': {
       // A flow-collection delimiter literal (`[` `]` `{` `}`) is emitted by the external scanner (so
@@ -347,15 +354,36 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext): string {
         : ctx.tokenNames.has(expr.name)
         ? `$.${ctx.tokenSnake.get(expr.name) ?? toSnake(expr.name)}`
         : `$.${ctx.ruleSnake.get(expr.name) ?? toSnake(expr.name)}`;
+      // Every word-token step names its reserved set once any guard renders to one: a guarded step
+      // its guard's, every other step the empty `unreserved` (planReservedSets: why all of them).
+      const word = ctx.reserved.plan.sets.length && expr.name === ctx.reserved.word
+        ? `reserved(${jsString(wordSet ?? UNRESERVED_SET)}, ${ref})` : ref;
       // The identifier right after a definition keyword carries a `name` field so
       // highlights.scm can capture it with the standard `name:` query form.
-      if (ctx.nameFieldNodes.has(expr)) return `field('name', ${ref})`;
-      return ref;
+      if (ctx.nameFieldNodes.has(expr)) return `field('name', ${word})`;
+      return word;
     }
     case 'seq': {
       const lowered = lowerNotBeforeOptional(expr);
       if (lowered) return renderExpr(lowered, ctx);
-      const parts = expr.items.map(i => renderExpr(i, ctx)).filter(p => p !== 'blank()');
+      // A reserved-word guard renders as its set on the word-token step it guards (the guard itself,
+      // zero-width, still renders to blank()).
+      const setAt = new Map<number, string>();
+      expr.items.forEach((item, i) => {
+        if (item.type !== 'not') return;
+        let j = i + 1;
+        while (j < expr.items.length && ASSERTION_KINDS.has(tsView(expr.items[j]).type)) j++;
+        const words = reservedGuardWords(item, expr.items[j], ctx.reserved.word, ctx.reserved.isWordLiteral);
+        const name = words && ctx.reserved.plan.nameOf(words);
+        if (name) setAt.set(j, name);
+      });
+      const parts = expr.items.map((item, i) => {
+        const set = setAt.get(i);
+        if (set === undefined) return renderExpr(item, ctx);
+        const v = tsView(item);
+        if (v !== item && item.type === 'group' && item.tsRuleName) throw new Error('gen-treesitter: a reserved-word guard before a named tsRelax group');
+        return renderExpr(v, ctx, set);
+      }).filter(p => p !== 'blank()');
       if (parts.length === 0) return 'blank()';
       if (parts.length === 1) return parts[0];
       return `seq(${parts.join(', ')})`;
@@ -737,9 +765,48 @@ function greedyTail(alt: RuleExpr, follow: Set<string>, firstOf: TerminalSets['f
 // Keyword extraction is modelled: a `word`-shaped literal that is not valid in a state is lexed as
 // the word token, so a word-shaped literal and the word token stand for each other's text.
 
+/** A `not(S)` whose next consuming item is the word token, S a choice of word-shaped literals: the
+ *  words it reserves there (sorted, distinct), else null. */
+function reservedGuardWords(guard: RuleExpr, next: RuleExpr | undefined, word: string | undefined, isWordLiteral: (text: string) => boolean): string[] | null {
+  if (guard.type !== 'not' || !word) return null;
+  const v = next && tsView(next);
+  if (!v || v.type !== 'ref' || v.name !== word) return null;
+  const words = new Set<string>();
+  const collect = (e: RuleExpr): boolean => {
+    e = tsView(e);
+    if (e.type === 'literal') { words.add(e.value); return isWordLiteral(e.value); }
+    if (e.type === 'alt') return e.items.every(collect);
+    if (e.type === 'seq' && e.items.length === 1) return collect(e.items[0]);
+    return false;
+  };
+  return collect(guard.body) ? [...words].sort() : null;
+}
+
+// ── reserved word sets ──
+// tree-sitter gives each parse state ONE reserved set: the highest-id set among its items that shift
+// the word token (ids in declaration order; the first, global set is id 0). So the sets are rendered
+// as a CHAIN, most reserving first, and every word-token step that no guard reserves gets the last,
+// empty set `unreserved`: wherever two readings share a state, the less reserving one wins and the
+// generated grammar never rejects more than the grammar. A guard set that is no subset of the chain's
+// smallest so far stays unrendered (`reserved`).
+interface ReservedSets { sets: { name: string; words: string[] }[]; nameOf: (words: string[]) => string | null }
+const UNRESERVED_SET = 'unreserved';
+function planReservedSets(guards: string[][]): ReservedSets {
+  const distinct = new Map<string, string[]>();
+  for (const w of guards) distinct.set(w.join(' '), w);
+  const chain: { name: string; words: string[] }[] = [];
+  for (const words of [...distinct.values()].sort((a, b) => b.length - a.length || a.join(' ').localeCompare(b.join(' ')))) {
+    const last = chain[chain.length - 1];
+    if (last && !words.every(w => last.words.includes(w))) continue;
+    chain.push({ name: `reserved_${chain.length + 1}`, words });
+  }
+  const byKey = new Map(chain.map(c => [c.words.join(' '), c.name]));
+  return { sets: chain, nameOf: words => byKey.get(words.join(' ')) ?? null };
+}
+
 const ASSERTION_KINDS = new Set<RuleExpr['type']>(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf']);
 
-function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: TerminalSets): { records: AssertionRecord[]; nodes: Set<RuleExpr> } {
+function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: TerminalSets): { records: AssertionRecord[]; nodes: Set<RuleExpr>; reservedSets: ReservedSets; isWordLiteral: (text: string) => boolean } {
   const records: AssertionRecord[] = [];
   const nodes = new Set<RuleExpr>();
   const identTok = grammar.tokens.find(t => t.identifier);
@@ -785,7 +852,9 @@ function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: 
     }
     return null;
   };
-  const isWordRef = (e: RuleExpr | undefined) => { const v = e && tsView(e); return !!v && v.type === 'ref' && v.name === word; };
+  const isWordLiteral = (text: string) => !!identRe && identRe.test(text);
+  // Guards rendered as a reserved set: their word list, by occurrence (finalised by planReservedSets).
+  const guardWords = new Map<AssertionRecord, string[]>();
 
   const classify = (e: RuleExpr, P: Set<string>, next: RuleExpr | undefined): AssertionClass => {
     if (e.type === 'sameLine' || e.type === 'noCommentBefore' || e.type === 'noMultilineFlowBefore') return 'scanner';
@@ -803,19 +872,22 @@ function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: 
     if (ASSERTION_KINDS.has(body.type)) return 'lookahead';
     // Negative lookahead not(X): exact when X cannot start at any terminal the CFG sees here.
     if (!sets.nullable(body) && !meets(sets.firstOf(body), P)) return 'vacuous';
-    const S = tokSet(body);
-    if (!S) return 'lookahead';
-    if ([...S].every(t => t !== word && wordShaped(t)) && ![...S].some(t => P.has(t)) && isWordRef(next)) return 'reserved';
-    return 'lookahead1';
+    if (reservedGuardWords(e, next, word, isWordLiteral)) return 'reserved';
+    return tokSet(body) ? 'lookahead1' : 'lookahead';
   };
 
   const lowered = new Set<RuleExpr>();
   let rule = '';
-  const visit = (e: RuleExpr, after: Set<string>, next?: RuleExpr): void => {
+  // `next`: the next consuming item after `e`; `nextInSeq`: the same, when it is in e's own seq (the
+  // only place renderExpr can attach a reserved set to).
+  const visit = (e: RuleExpr, after: Set<string>, next?: RuleExpr, nextInSeq?: RuleExpr): void => {
     e = tsView(e);
     if (ASSERTION_KINDS.has(e.type)) {
       nodes.add(e);
-      records.push({ rule, kind: e.type as AssertionRecord['kind'], cls: lowered.has(e) ? 'lowered' : classify(e, after, next), text: assertionText(e) });
+      const rec: AssertionRecord = { rule, kind: e.type as AssertionRecord['kind'], cls: lowered.has(e) ? 'lowered' : classify(e, after, next), text: assertionText(e) };
+      const words = rec.cls === 'reserved' ? reservedGuardWords(e, nextInSeq, word, isWordLiteral) : null;
+      if (words) guardWords.set(rec, words);
+      records.push(rec);
       return;
     }
     switch (e.type) {
@@ -824,11 +896,11 @@ function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: 
         const low = lowerNotBeforeOptional(e, g => lowered.add(g));
         if (low) return visit(low, after, next);
         let cur = after;
-        let nextItem = next;
+        let nextItem = next, nextIn: RuleExpr | undefined;
         for (let i = e.items.length - 1; i >= 0; i--) {
           const item = e.items[i];
-          visit(item, cur, nextItem);
-          if (!ASSERTION_KINDS.has(tsView(item).type)) nextItem = item;
+          visit(item, cur, nextItem, nextIn);
+          if (!ASSERTION_KINDS.has(tsView(item).type)) nextItem = nextIn = item;
           if (sets.nullable(item)) { const s = new Set(cur); for (const t of sets.firstOf(item)) s.add(t); cur = s; }
           else cur = sets.firstOf(item);
         }
@@ -847,7 +919,9 @@ function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: 
     }
   };
   for (const r of grammar.rules) { rule = r.name; visit(r.body, sets.follow.get(r.name)!); }
-  return { records, nodes };
+  const reservedSets = planReservedSets([...guardWords.values()]);
+  for (const [rec, words] of guardWords) if (reservedSets.nameOf(words)) rec.cls = 'reserved-set';
+  return { records, nodes, reservedSets, isWordLiteral };
 }
 
 // ── Token rules ──────────────────────────────────────────────────────────────
@@ -1390,6 +1464,7 @@ export function generateTreeSitter(grammar: CstGrammar, langName?: string): Tree
     nullableNonStart,
     terminalSets,
     classifiedAssertions: assertions.nodes,
+    reserved: { word: grammar.tokens.find(t => t.identifier)?.name, isWordLiteral: assertions.isWordLiteral, plan: assertions.reservedSets },
     glrRules: new Set(),
     templatePlan,
     interpolationPlans,
@@ -1437,6 +1512,18 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
   const identTok = grammar.tokens.find(t => t.identifier);
   if (identTok) {
     lines.push(`  word: $ => $.${ctx.tokenSnake.get(identTok.name)},`);
+    lines.push('');
+  }
+
+  // ── reserved word sets (planReservedSets): the first set is global (id 0) and stays empty, so a
+  // step outside every set keeps tree-sitter's default keyword extraction ──
+  const reservedSets = ctx.reserved.plan.sets;
+  if (reservedSets.length) {
+    lines.push('  reserved: {');
+    lines.push('    global: $ => [],');
+    for (const { name, words } of reservedSets) lines.push(`    ${name}: $ => [${words.map(jsString).join(', ')}],`);
+    lines.push(`    ${UNRESERVED_SET}: $ => [],`);
+    lines.push('  },');
     lines.push('');
   }
 
