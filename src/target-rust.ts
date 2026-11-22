@@ -879,9 +879,20 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
     // +9 to +13 per call wherever guarded code joined it (dense-plus +1.30% to +1.87%); without them
     // dense-plus is +0.43%. PR #184 has the variants and their profile runs. The guard only skips
     // attempts that cannot match, so leaving it out is sound.
-    star: (body, g) => (g === null || !guards ? `${recv}.star${R}(|p| ${body})` : `${recv}.star_in${R}(${g}, |p| ${body})`),
-    opt: (body, g) => (g === null || !guards ? `${recv}.opt${R}(|p| ${body})` : `(!${recv}.ahead(${g}, true) || ${recv}.opt_out${R}(|p| ${body}))`),
-    sep: (elem, delim, g) => (g === null || !guards ? `${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})` : `(!${recv}.ahead(${g}, true) || ${recv}.sep_by_out${R}(|p| ${elem}, ${sepDelimLid(ids, delim)}))`),
+    // A clean body (Step.clean) is attempted without a mark: the `_c` forms (no state to undo, so
+    // star / opt have one form for building and recognizing).
+    star: (body, g, c) => {
+      const C = c ? '_c' : R;
+      return g === null || !guards ? `${recv}.star${C}(|p| ${body})` : `${recv}.star_in${C}(${g}, |p| ${body})`;
+    },
+    opt: (body, g, c) => {
+      const C = c ? '_c' : R;
+      return g === null || !guards ? `${recv}.opt${C}(|p| ${body})` : `(!${recv}.ahead(${g}, true) || ${recv}.opt_out${C}(|p| ${body}))`;
+    },
+    sep: (elem, delim, g, c) => {
+      const C = c ? `_c${R}` : R;
+      return g === null || !guards ? `${recv}.sep_by${C}(|p| ${elem}, ${sepDelimLid(ids, delim)})` : `(!${recv}.ahead(${g}, true) || ${recv}.sep_by_out${C}(|p| ${elem}, ${sepDelimLid(ids, delim)}))`;
+    },
     altlit: (values) => `${recv}.alt_lit${R}(&[${values.map((v) => lidOf(ids, v)).join(', ')}])`,
     look: (id, is) => `${is ? '' : '!'}${recv}.look_${id}()`,
     ahead: (set, is) => `${recv}.ahead(${set}, ${is})`,
@@ -2516,8 +2527,7 @@ impl<'a, B: Builder> Parser<'a, B> {
         let m0 = self.mark();
         if !elem(self) { self.reset(m0); return true; }
         loop {
-            let m = self.mark();
-            if !self.match_lit(delim) { self.reset(m); break; }
+            if !self.match_lit(delim) { break; } // a failed delimiter match changes nothing: no mark before it
             let m2 = self.mark();
             if !elem(self) { self.reset(m2); break; }
         }
@@ -2546,8 +2556,7 @@ impl<'a, B: Builder> Parser<'a, B> {
         let m0 = self.mark();
         if !elem(self) { self.reset(m0); return true; }
         loop {
-            let m = self.mark();
-            if !self.match_lit(delim) { self.reset(m); break; }
+            if !self.match_lit(delim) { break; } // a failed delimiter match changes nothing: no mark before it
             let m2 = self.mark();
             if !elem(self) { self.reset(m2); break; }
         }
@@ -2564,8 +2573,7 @@ impl<'a, B: Builder> Parser<'a, B> {
         let sp0 = self.pos;
         if !elem(self) { self.back(sp0); return true; }
         loop {
-            let sp = self.pos;
-            if !self.match_lit_r(delim) { self.back(sp); break; }
+            if !self.match_lit_r(delim) { break; } // a failed delimiter match changes nothing: no mark before it
             let sp2 = self.pos;
             if !elem(self) { self.back(sp2); break; }
         }
@@ -2575,6 +2583,47 @@ impl<'a, B: Builder> Parser<'a, B> {
     #[allow(dead_code)]
     fn star_in_r<F: Fn(&mut Self) -> bool>(&mut self, k: usize, once: F) -> bool {
         while self.ahead(k, true) { let sp = self.pos; if !once(self) { self.back(sp); break; } }
+        true
+    }
+    // A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo; the same
+    // code builds or recognizes (the body is the form's own), except a delimiter's match.
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn star_c(&mut self, once: fn(&mut Parser<'a, B>) -> bool) -> bool { while once(self) {} true }
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn opt_c(&mut self, body: fn(&mut Parser<'a, B>) -> bool) -> bool { body(self); true }
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn sep_by_c(&mut self, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
+        if elem(self) { while self.match_lit(delim) && elem(self) {} }
+        true
+    }
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn sep_by_c_r(&mut self, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
+        if elem(self) { while self.match_lit_r(delim) && elem(self) {} }
+        true
+    }
+    #[inline(never)]
+    #[allow(dead_code)]
+    fn star_in_c<F: Fn(&mut Self) -> bool>(&mut self, k: usize, once: F) -> bool {
+        while self.ahead(k, true) && once(self) {}
+        true
+    }
+    #[inline(never)]
+    #[allow(dead_code)]
+    fn opt_out_c<F: Fn(&mut Self) -> bool>(&mut self, body: F) -> bool { body(self); true }
+    #[inline(never)]
+    #[allow(dead_code)]
+    fn sep_by_out_c<F: Fn(&mut Self) -> bool>(&mut self, elem: F, delim: u16) -> bool {
+        if elem(self) { while self.match_lit(delim) && elem(self) {} }
+        true
+    }
+    #[inline(never)]
+    #[allow(dead_code)]
+    fn sep_by_out_c_r<F: Fn(&mut Self) -> bool>(&mut self, elem: F, delim: u16) -> bool {
+        if elem(self) { while self.match_lit_r(delim) && elem(self) {} }
         true
     }
     #[inline(always)]
@@ -2610,8 +2659,7 @@ impl<'a, B: Builder> Parser<'a, B> {
         let sp0 = self.pos;
         if !elem(self) { self.back(sp0); return true; }
         loop {
-            let sp = self.pos;
-            if !self.match_lit_r(delim) { self.back(sp); break; }
+            if !self.match_lit_r(delim) { break; } // a failed delimiter match changes nothing: no mark before it
             let sp2 = self.pos;
             if !elem(self) { self.back(sp2); break; }
         }
