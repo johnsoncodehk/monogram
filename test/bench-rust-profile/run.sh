@@ -176,7 +176,8 @@ echo "=== Go and TS targets: work per parse of the same inputs (Go: Callgrind in
 # Go: test/bench-targets/go-main.go count (a parse into a reused CstBuilder), collection toggled
 # around it by a client request; built with -tags faketime and run with GOGC=off GOMAXPROCS=1
 # GODEBUG=asyncpreemptoff=1 (go-main.go says why each is needed); the map runtime's instructions are
-# counted apart (test/bench-targets/go-ir.ts says why). TS / JS: test/bench-targets/blocks.ts.
+# counted (test/bench-targets/go-ir.ts says why). TS / JS: test/bench-targets/blocks.ts (block
+# executions) and test/bench-targets/allocs.ts (exact allocations).
 # Both are pure functions of the emitted code and the input; PROFILE_TARGETS_REPEAT=1 (the default)
 # measures M a second time (M2), and the summary fails the job if M2 differs from M.
 mkdir -p "$OUT/targets"
@@ -194,7 +195,8 @@ for f in $MAIN; do
     t=${v%2} # M2 runs M's build
     out=$OUT/targets/$v.go-reuse.$f.cg
     if env GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1 "${CG[@]}" --callgrind-out-file="$out" "$W/targets-$t/go/count" count "$f" > "$out.stdout" 2> "$out.log" \
-      && gi=$(node "$REPO/test/bench-targets/go-ir.ts" "$out"); then
+      && gi=$(node "$REPO/test/bench-targets/go-ir.ts" "$out") \
+      && node "$REPO/test/bench-targets/go-ir.ts" "$out" --map-callers > "$out.map-callers.txt"; then
       echo "GOIR $v.reuse.$f $(grep -aoE 'ACCEPT|REJECT' "$out.stdout" | head -1) $gi" | tee -a "$R"
     else
       echo "GOIR $v.reuse.$f FAILED" | tee -a "$R"; tail -5 "$out.log"
@@ -206,6 +208,17 @@ for f in $MAIN; do
         echo "TSBLK $v.$tm.$f FAILED" | tee -a "$R"
       fi
     done
+  done
+done
+# Allocations of the TS / JS parse: exact counts, so A and M once (test/bench-targets/allocs.ts;
+# one process per module: instrumenting it is most of the cost).
+for v in A M; do
+  for tm in ts-parse js-fresh; do
+    if out=$(node "$REPO/test/bench-targets/allocs.ts" "$W/targets-$v/${tm%%-*}.mts" "$tm" "$W/targets-$v/alloc" $MAIN); then
+      while read -r f rest; do echo "TSALLOC $v.$tm.$f $rest" | tee -a "$R"; done <<< "$out"
+    else
+      echo "TSALLOC $v.$tm.all FAILED" | tee -a "$R"
+    fi
   done
 done
 echo "Go and TS targets: $((SECONDS - T0)) s (emit, build and measure)"
