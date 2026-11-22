@@ -720,7 +720,7 @@ const ${r.name}_POST_TGT = ${set(ops.post)};`;
  *  `b`. In the led loop the left operand is slot `b`: a led appends its other children after it,
  *  and `finP` finishes them all into slot `b`, the new left operand. */
 // A NUD that matched nothing: the state its frame leaves when no arm won (prattRuleW's nudClose).
-const NUD_FAIL_TS = '{ _capped = false; _form = 0; _tail = false; return false; }';
+const NUD_FAIL_TS = '{ return nudNone(); }';
 function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
   const cn = J(r.name);
   const d = r.nudDispatch;
@@ -3238,6 +3238,8 @@ let peekEnd = 0;
 let _capped = false;
 let _form = 0;   // assignment-target form of the node the last _nud/_bp call returned
 let _tail = false;   // whether the node the last _nud call returned closes the access tail
+// A NUD that matched nothing, from its commit switch: the state its frame leaves then.
+function nudNone(): boolean { _capped = false; _form = 0; _tail = false; return false; }
 // Indices into the grammar's suppress sets (ParserIR.suppressSets; 0 = none): the set a \`suppress\`
 // step stages for the next Pratt call, and the set in force in the current one.
 let _suppressNext = 0;
