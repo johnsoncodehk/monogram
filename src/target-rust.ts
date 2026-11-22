@@ -1169,6 +1169,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
                 self.back(led_save); self.scratch.truncate(sb); self.b.restore(ck);${hasBin ? '' : isLast ? ' break;' : ''}
             }`;
   const ledFn = (b: Bracket, i: number) => !ledOut[i] ? '' : `
+    #[cold]
     #[inline(never)]
     fn ${r.name}_led_${i}(&mut self, left: Spanned<B::H>) -> Option<Spanned<B::H>> {
         let led_save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
