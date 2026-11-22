@@ -39,6 +39,7 @@ const ARROWS = ['arrow', 'asyncArrow', 'arrowIdentifier', 'asyncArrowIdentifier'
 /** rule -> arm -> the child that is the function body. */
 const FUNCTION_BODIES: Record<string, Record<string, string>> = {
   Expr: { ...Object.fromEntries(FUNCTIONS.map((a) => [a, 'body'])), ...Object.fromEntries(ARROWS.map((a) => [a, 'block'])) },   // function expressions, arrows (a block body)
+  NewTarget: Object.fromEntries(FUNCTIONS.map((a) => [a, 'body'])),                                                                    // a function expression as a `new` callee
   Decl: { ...Object.fromEntries(FUNCTIONS.map((a) => [a, 'body'])), export_2: 'body' },                                        // declarations, `export default function`
   Prop: Object.fromEntries(['get', 'async', 'async2', 'star', 'memberName'].map((a) => [a, 'block'])),                           // object methods / accessors
   ClassMember: { seq: 'block' },                                                                                                 // constructor, methods, accessors
@@ -166,6 +167,23 @@ const STATEMENTS: Record<string, Term> = {
   decl: child('decl'),
 };
 
+/** The PrimaryExpression arms Expr and NewTarget (a `new` callee) share: the literals and `this`. */
+const PRIMARY: Record<string, Term> = {
+  true_: literal(c(true)),
+  false_: literal(c(false)),
+  null_: literal(c(null)),
+  undefined: node('Identifier', { name: c('undefined') }),
+  this_: node('ThisExpression'),
+  ident: node('Identifier', { name: cook('identifierName', 'ident') }),
+  number: literal(cook('numberValue', 'number')),
+  hexNumber: literal(cook('numberValue', 'hexNumber')),
+  octalNumber: literal(cook('numberValue', 'octalNumber')),
+  binaryNumber: literal(cook('numberValue', 'binaryNumber')),
+  bigInt: literal(cook('bigintValue', 'bigInt'), { bigint: cook('bigintText', 'bigInt') }),
+  string: literal(cook('stringValue', 'string')),
+  regex: literal(c(null), { regex: record({ pattern: cook('regexPattern', 'regex'), flags: cook('regexFlags', 'regex') }) }),
+};
+
 export const estreeExprShape: Shape2Spec = {
   name: 'estree-expr',
   synthesized: {
@@ -196,19 +214,7 @@ export const estreeExprShape: Shape2Spec = {
     Decl: functionArms('FunctionDeclaration', idOf('name')),
     ...FOR_RULES,
     Expr: {
-      true_: literal(c(true)),
-      false_: literal(c(false)),
-      null_: literal(c(null)),
-      undefined: node('Identifier', { name: c('undefined') }),
-      this_: node('ThisExpression'),
-      ident: node('Identifier', { name: cook('identifierName', 'ident') }),
-      number: literal(cook('numberValue', 'number')),
-      hexNumber: literal(cook('numberValue', 'hexNumber')),
-      octalNumber: literal(cook('numberValue', 'octalNumber')),
-      binaryNumber: literal(cook('numberValue', 'binaryNumber')),
-      bigInt: literal(cook('bigintValue', 'bigInt'), { bigint: cook('bigintText', 'bigInt') }),
-      string: literal(cook('stringValue', 'string')),
-      regex: literal(c(null), { regex: record({ pattern: cook('regexPattern', 'regex'), flags: cook('regexFlags', 'regex') }) }),
+      ...PRIMARY,
       privateField: privateOf('privateField'),
       spread: node('SpreadElement', { argument: child('expr') }),
       paren: sequence,
@@ -248,9 +254,16 @@ export const estreeExprShape: Shape2Spec = {
     },
     // The callee of `new` (a MemberExpression, never a call).
     NewTarget: {
+      ...PRIMARY,
+      superMember: branch('alt', {
+        dot: node('MemberExpression', { object: node('Super', {}, { from: 'superKeyword', to: 'superKeyword' }), property: idOf('ident'), computed: c(false), optional: c(false) }),
+        bracket: node('MemberExpression', { object: node('Super', {}, { from: 'superKeyword', to: 'superKeyword' }), property: child('expr'), computed: c(true), optional: c(false) }),
+      }),
+      newDotTarget: node('MetaProperty', { meta: idOf('newKeyword', c('new')), property: idOf('targetKeyword', c('target')) }),
+      ...functionArms('FunctionExpression', iff(present('name'), idOf('name'), c(null))),
       ident: node('Identifier', { name: cook('identifierName', 'ident') }),
       new_: node('NewExpression', { callee: child('newTarget'), arguments: child('expr') }),
-      led_dot: node('MemberExpression', { object: child('left'), property: idOf('ident'), computed: c(false), optional: c(false) }),
+      led_dot: node('MemberExpression', { object: child('left'), property: property(), computed: c(false), optional: c(false) }),
       led_bracket: node('MemberExpression', { object: child('left'), property: child('expr'), computed: c(true), optional: c(false) }),
       paren: sequence,
     },

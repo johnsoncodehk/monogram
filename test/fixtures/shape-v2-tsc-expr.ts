@@ -175,6 +175,23 @@ const PARAM_RULES: Shape2Spec['rules'] = {
 /** tsc's OptionalChain flag: every link of a chain that holds a `?.` (synthesized `optional`). */
 const chainFlags: Term = iff(syn('optional'), c('OptionalChain'), absent);
 
+/** The PrimaryExpression arms Expr and NewTarget (a `new` callee) share: the literals and `this`. */
+const PRIMARY: Record<string, Term> = {
+  true_: node('TrueKeyword'),
+  false_: node('FalseKeyword'),
+  null_: node('NullKeyword'),
+  this_: node('ThisKeyword'),
+  undefined: node('Identifier', { text: c('undefined') }),
+  ident: node('Identifier', { text: cook('identifierName', 'ident') }),
+  number: numeric('number'),
+  hexNumber: numeric('hexNumber'),
+  octalNumber: numeric('octalNumber'),
+  binaryNumber: numeric('binaryNumber'),
+  bigInt: node('BigIntLiteral', { text: cook('tsBigIntText', 'bigInt') }),
+  string: node('StringLiteral', { text: cook('stringValue', 'string'), hasExtendedUnicodeEscape: cook('hasExtendedUnicodeEscape', 'string') }),
+  regex: node('RegularExpressionLiteral', { text: text('regex') }),
+};
+
 export const tscExprShape: Shape2Spec = {
   name: 'tsc-expr',
   synthesized: {
@@ -205,19 +222,7 @@ export const tscExprShape: Shape2Spec = {
     CatchParameter: { ident: node('VariableDeclaration', { name: idOf('ident'), type: child('type') }) },
     ...FOR_RULES,
     Expr: {
-      true_: node('TrueKeyword'),
-      false_: node('FalseKeyword'),
-      null_: node('NullKeyword'),
-      this_: node('ThisKeyword'),
-      undefined: node('Identifier', { text: c('undefined') }),
-      ident: node('Identifier', { text: cook('identifierName', 'ident') }),
-      number: numeric('number'),
-      hexNumber: numeric('hexNumber'),
-      octalNumber: numeric('octalNumber'),
-      binaryNumber: numeric('binaryNumber'),
-      bigInt: node('BigIntLiteral', { text: cook('tsBigIntText', 'bigInt') }),
-      string: node('StringLiteral', { text: cook('stringValue', 'string'), hasExtendedUnicodeEscape: cook('hasExtendedUnicodeEscape', 'string') }),
-      regex: node('RegularExpressionLiteral', { text: text('regex') }),
+      ...PRIMARY,
       privateField: privateOf('privateField'),
       spread: node('SpreadElement', { expression: child('expr') }),
       paren: node('ParenthesizedExpression', { expression: comma }),
@@ -261,9 +266,16 @@ export const tscExprShape: Shape2Spec = {
       postfixOp: node('PostfixUnaryExpression', { operand: child('operand'), operator: kindOf(PREFIX) }),
     },
     NewTarget: {
+      ...PRIMARY,
+      superMember: branch('alt', {
+        dot: node('PropertyAccessExpression', { expression: token('SuperKeyword', 'superKeyword'), name: idOf('ident') }),
+        bracket: node('ElementAccessExpression', { expression: token('SuperKeyword', 'superKeyword'), argumentExpression: child('expr') }),
+      }),
+      newDotTarget: node('MetaProperty', { keywordToken: c('NewKeyword'), name: idOf('targetKeyword', c('target')) }),
+      ...FUNCTION_EXPRESSIONS,
       ident: node('Identifier', { text: cook('identifierName', 'ident') }),
       new_: node('NewExpression', { expression: child('newTarget'), arguments: branch('alt', { paren: child('expr') }) }),
-      led_dot: node('PropertyAccessExpression', { expression: child('left'), name: idOf('ident') }),
+      led_dot: node('PropertyAccessExpression', { expression: child('left'), name: name() }),
       led_bracket: node('ElementAccessExpression', { expression: child('left'), argumentExpression: child('expr') }),
       paren: node('ParenthesizedExpression', { expression: comma }),
     },
