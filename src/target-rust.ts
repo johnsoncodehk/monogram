@@ -872,6 +872,12 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean): StepLowering {
     // identical but added +8 to +11 instructions per call to each (LLVM compiles the whole function
     // differently), so Rust parse instructions rose (dense-semi +4.96%, typescript.ts +1.40%) where
     // Go and TS fell on every input. The guard only skips attempts that fail, so ignoring it is sound.
+    // Every Rust spelling measured since moves Expr_nud's register allocation (a ptrace trace of one
+    // identifier NUD: same branches, other spills, 246 -> 256 instructions): out-of-line helpers
+    // taking the set id (+2.0% to +4.5%), per site generic (dense-plus +1.30%), the guard in the
+    // caller with the attempt out of line (dense-plus +1.44%, checker +0.24%), the same without
+    // guards in Pratt arms (dense-plus +0.43%, nonascii +0.31%; real inputs -0.26% to -1.13%), arms
+    // out of line (dense-plus +0.86% to +3.75%). Profile runs 45046190403 to 45050288980.
     star: (body, _guard) => `${recv}.star${R}(|p| ${body})`,
     opt: (body, _guard) => `${recv}.opt${R}(|p| ${body})`,
     sep: (elem, delim, _guard) => `${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})`,
