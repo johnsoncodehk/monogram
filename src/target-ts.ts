@@ -237,7 +237,7 @@ const LID_INTERP_CLOSE = ${lidOf(ids, tpl.interpClose)};
   function prevIsValue(): boolean {
     if (!hasPrev) return false;
     if (_pav[prevLid]) return lastBang;
-    const isExprKw = prevKid === KID_IDENT && !!_rxT[prevLid];
+    const isExprKw = prevKid === KID_IDENT && !!_rxT[prevLid] && !(hasPrev2 && !!_mem[bpLid]);
     const isParenHead = prevLid === LID_RPAREN && lastClose;
     return !isExprKw && !isParenHead && (!!_divK[prevKid] || !!_divT[prevLid]);
   }
@@ -268,7 +268,7 @@ ${emitHooks}
   const rxStateFrom = rx ? `  function prevIsValue(): boolean {
     if (!hasPrev) return false;
     if (_pav[prevLid]) return lastBang;
-    const isExprKw = prevKid === KID_IDENT && !!_rxT[prevLid];
+    const isExprKw = prevKid === KID_IDENT && !!_rxT[prevLid] && !(hasPrev2 && !!_mem[bpLid]);
     const isParenHead = prevLid === LID_RPAREN && lastClose;
     return !isExprKw && !isParenHead && (!!_divK[prevKid] || !!_divT[prevLid]);
   }
@@ -1034,9 +1034,13 @@ function runW<H>(builder: Builder<H>): H | null {
   lookReset();
   _builder = builder;
   _n = 0;
-  const ok = parse${ir.entry}W() && pos === toks.length && _soleOk(0);
-  const root = ok ? _sole(0) as H : null;
+  const ok = parse${ir.entry}W() && pos === toks.length;
+  const sole = ok && _soleOk(0);
+  const root = sole ? _sole(0) as H : null;
   _hs.fill(null);   // the stack keeps no handle of this parse alive
+  // Accepting or rejecting is the parser's verdict, never the builder's: an accepted parse whose
+  // builder kept no single node for the root (the entry rule) breaks the builder contract.
+  if (ok && !sole) throw new Error('the builder kept no node for the root rule of an accepted parse (a Builder must return one for the entry rule)');
   return root;
 }
 

@@ -10,7 +10,12 @@
 // a parse that leaves the engine's transient buffers non-empty — rejected inside a template and an
 // open bracket, or stopped by a lexer panic — before ordinary code (the builder's workspace: Rust
 // `Builder::workspace_mut`, Go `WorkspaceOwner`). Go runs both CstBuilder (the native engine) and
-// SlimBuilder (the builder engine behind the Builder interface).
+// SlimBuilder (the builder engine behind the Builder interface), Rust both CstBuilder and SlimBuilder.
+// The verdict of every builder is the interpreter's (createParser): accepting or rejecting is the
+// parser's decision, never the builder's, so a program whose root keeps no child (empty, only
+// comments, only empty statements: a SlimBuilder drops every leaf of `;`) is accepted by every
+// builder. A builder that keeps no node for the root of an accepted parse breaks the builder
+// contract and fails loudly (TS: `dropAll` below), never reports a reject.
 // Missing go / rustc → logged + skipped.
 //
 //   node test/builder-reuse.ts
@@ -19,6 +24,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { emitParser, tsTarget, goTarget, rustTarget } from '../src/emit.ts';
 import { goBuild, scratchDir } from './scratch.ts';
+import { createParser } from '../src/gen-parser.ts';
 
 const LONG = readFileSync(new URL('../typescript.ts', import.meta.url), 'utf8');
 const SHORT = 'let x = f(1, "a") + y;\n';
@@ -39,6 +45,7 @@ const SEQUENCES: Record<string, string[]> = {
   'rejected with the lexer stacks non-empty, then accepted': [OTHER, REJECTED_OPEN, OTHER],
   'the lexer panics inside a template, then accepted': [OTHER, LEX_PANIC_TEMPLATE, OTHER],
   'the lexer panics on a character it cannot lex, then accepted': [OTHER, LEX_PANIC_CHAR, OTHER],
+  'programs whose root keeps no child: empty, only a comment, only empty statements': ['', '// only a comment\n', ';;;', OTHER, ''],
 };
 
 let ok = 0, fail = 0;
@@ -49,6 +56,8 @@ const check = (label: string, cond: boolean, detail = '') => {
 const have = (cmd: string, arg: string) => { try { execFileSync(cmd, [arg], { stdio: 'pipe' }); return true; } catch { return false; } };
 
 const grammar = (await import('../typescript.ts')).default;
+const oracle = createParser(grammar);
+const oracleVerdict = (src: string): boolean => { try { oracle.parse(src); return true; } catch { return false; } };
 const dir = scratchDir('builder-reuse');
 const seqNames = Object.keys(SEQUENCES);
 // One file list per sequence; the consumer prints, per file, `<reused>\t<fresh>` (CST JSON or REJECT).
@@ -69,6 +78,12 @@ const readPairs = (out: string) => out.trim().split('\n').map((l) => l.split('\t
     rows.push(...reused.map((r, i) => [r, fresh[i]!]));
   }
   results.set('ts', rows);
+  // A builder that keeps no node at all: an accepted parse has no root to hand back, which the
+  // engine reports loudly (a broken builder contract), never as a reject.
+  const dropAll = { leaf: () => null, node: () => null };
+  const dropped = (src: string) => { try { return m.parseWith(src, dropAll) === null ? 'REJECT' : 'ROOT'; } catch (e) { return /no node for the root/.test(String(e)) ? 'NOROOT' : 'REJECT'; } };
+  for (const n of seqNames) for (const src of SEQUENCES[n]!)
+    check(`ts dropAll: ${JSON.stringify(src.slice(0, 30))} is reported as ${oracleVerdict(src) ? 'a builder with no root' : 'a reject'}`, dropped(src) === (oracleVerdict(src) ? 'NOROOT' : 'REJECT'), dropped(src));
 }
 
 // ── Go ──
@@ -90,7 +105,9 @@ import (
 
 func parseJSON(src string, b parser.Builder) (s string) {
 	defer func() {
-		if recover() != nil { s = "REJECT" }
+		if r := recover(); r != nil {
+			if _, lex := r.(*parser.LexError); lex { s = "REJECT" } else { s = fmt.Sprint("PANIC ", r) }
+		}
 	}()
 	h, ok := parser.ParseWith(src, b)
 	if !ok { return "REJECT" }
@@ -136,22 +153,32 @@ fn parse_json(src: &str, b: &mut CstBuilder) -> String {
         _ => "REJECT".to_string(),
     }
 }
+fn parse_slim(src: &str, b: &mut SlimBuilder) -> String {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parse_with(src, b))) {
+        Ok(Some(h)) => slim_json_with(b, h),
+        _ => "REJECT".to_string(),
+    }
+}
 fn main() {
     std::panic::set_hook(Box::new(|_| {}));
-    // Each argument is one sequence: file paths joined by ','.
-    for seq in std::env::args().skip(1) {
+    // The first argument names the builder (cst or slim); each further one is a sequence: file
+    // paths joined by ','.
+    let slim = std::env::args().nth(1).unwrap() == "slim";
+    for seq in std::env::args().skip(2) {
         let mut reused = CstBuilder::default();
+        let mut reused_slim = SlimBuilder::default();
         for f in seq.split(',') {
             let src = std::fs::read_to_string(f).unwrap();
-            let r = parse_json(&src, &mut reused);
-            let fresh = parse_json(&src, &mut CstBuilder::default());
+            let (r, fresh) = if slim { (parse_slim(&src, &mut reused_slim), parse_slim(&src, &mut SlimBuilder::default())) }
+                else { (parse_json(&src, &mut reused), parse_json(&src, &mut CstBuilder::default())) };
             println!("{}\\t{}", r, fresh);
         }
     }
 }
 `);
   execFileSync('rustc', ['-A', 'warnings', rfile, '-o', join(dir, 'reuse')], { stdio: 'pipe' });
-  results.set('rust', readPairs(execFileSync(join(dir, 'reuse'), seqFiles.map((fs) => fs.join(',')), { encoding: 'utf8', maxBuffer: 1 << 28 })));
+  for (const [label, b] of [['rust', 'cst'], ['rust SlimBuilder', 'slim']] as const)
+    results.set(label, readPairs(execFileSync(join(dir, 'reuse'), [b, ...seqFiles.map((fs) => fs.join(','))], { encoding: 'utf8', maxBuffer: 1 << 28 })));
 }
 
 for (const [label, rows] of results) {
@@ -161,6 +188,8 @@ for (const [label, rows] of results) {
       const [reused, fresh] = rows[r++]!;
       check(`${label}: ${n} — input ${i + 1} (${src.length} B) with the reused builder ≡ a fresh builder`, reused === fresh,
         `reused ${reused!.slice(0, 80)}… vs fresh ${fresh!.slice(0, 80)}…`);
+      check(`${label}: ${n} — input ${i + 1} (${src.length} B): the verdict is the interpreter's`, (fresh !== 'REJECT') === oracleVerdict(src),
+        `fresh ${fresh!.slice(0, 80)}, interpreter ${oracleVerdict(src) ? 'accepts' : 'rejects'}`);
     });
   }
   // The sequences are meaningful only if both verdicts occur.

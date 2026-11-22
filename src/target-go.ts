@@ -460,7 +460,7 @@ const lidInterpClose uint16 = ${lidOf(ids, tpl.interpClose)}
 \tprevIsValue := func() bool {
 \t\tif !hasPrev { return false }
 \t\tif _pav[prevLid] { return lastBang }
-\t\tisExprKw := prevKid == kidIdent && _rxT[prevLid]
+\t\tisExprKw := prevKid == kidIdent && _rxT[prevLid] && !(hasPrev2 && _mem[bpLid])
 \t\tisParenHead := prevLid == lidRParen && lastClose
 \t\treturn !isExprKw && !isParenHead && (_divK[prevKid] || _divT[prevLid])
 \t}
@@ -498,7 +498,7 @@ ${emitHooks}
   const rxStateFrom = rx ? `\tprevIsValue := func() bool {
 \t\tif !hasPrev { return false }
 \t\tif _pav[prevLid] { return lastBang }
-\t\tisExprKw := prevKid == kidIdent && _rxT[prevLid]
+\t\tisExprKw := prevKid == kidIdent && _rxT[prevLid] && !(hasPrev2 && _mem[bpLid])
 \t\tisParenHead := prevLid == lidRParen && lastClose
 \t\treturn !isExprKw && !isParenHead && (_divK[prevKid] || _divT[prevLid])
 \t}
@@ -2081,9 +2081,10 @@ ${entryMetaType}func parseWithMetaW(text string, meta []alignMeta, b Builder) (h
 	p := &parserW{cursor: cursor{toks: toksFromMeta(text, meta)}, src: text, b: b, scratch: nil}
 	fr, pok := p.parse${entry}W()
 	recordToks(b, p.toks)
-	if !pok || p.pos != len(p.toks) || !fr.present {
+	if !pok || p.pos != len(p.toks) {
 		return 0, nil, nil, false
 	}
+	if !fr.present { panic(errNoRoot) }
 ${topReuse
     ? `\treturn fr.h, append([]EntryMeta(nil), p.entries...), append([]int32(nil), p.entryHs...), true`
     : `\treturn fr.h, nil, nil, true`}
@@ -2864,7 +2865,8 @@ func (b *SlimBuilder) Node(scratch *[]int32, sb int, ruleId uint16, off, end, to
 \tnn := len(*scratch)
 \tcount := nn - sb
 \tif count == 1 { return }
-\tif count == 0 { *scratch = (*scratch)[:sb]; return }
+\t// The root keeps its node with no child: an accepted parse always has a root (ParseWith).
+\tif count == 0 && ruleId != ${entryRid} { *scratch = (*scratch)[:sb]; return }
 \tkidStart := len(b.Kids)
 \tb.Kids = append(b.Kids, (*scratch)[sb:nn]...)
 \t*scratch = (*scratch)[:sb]
@@ -2915,11 +2917,17 @@ func parseWithW(src string, b Builder) (int32, bool) {
 \t*p = parserW{cursor: cursor{toks: lexInto(src, toksOf(b), &w.lex)}, src: src, b: b, scratch: p.scratch[:0]${reuse ? ', entries: p.entries[:0], entryHs: p.entryHs[:0]' : ''}}
 \tfr, ok := p.parse${ir.entry}W()
 \trecordToks(b, p.toks)
-\tok = ok && p.pos == len(p.toks) && fr.present
+\tok = ok && p.pos == len(p.toks)
 \tp.cursor.toks, p.src, p.b = nil, "", nil // the workspace keeps buffers, not the input or the builder
 \tif !ok { return 0, false }
+\tif !fr.present { panic(errNoRoot) }
 \treturn fr.h, true
 }
+
+// errNoRoot: an accepted parse whose builder kept no node for the root (the entry rule). Accepting
+// or rejecting is the parser's verdict, never the builder's, so this is no reject: it is a builder
+// that breaks the contract (the built-in builders always keep the root), reported loudly.
+const errNoRoot = "the builder kept no node for the root rule of an accepted parse (a Builder must return one for the entry rule)"
 
 // ParseWith runs the builder-driven parse. *CstBuilder uses the concrete hot path (the native
 // engine); other Builders (e.g. *SlimBuilder) use interface parserW.
