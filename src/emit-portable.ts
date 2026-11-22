@@ -833,8 +833,8 @@ function buildIR(grammar: CstGrammar): ParserIR {
   // It is emitted only where it can refuse a token the list is actually tried at: one that begins
   // another candidate of the same list. A refusal no such token reaches would be a test with
   // nothing to refute.
+  const concrete = concreteFirst(grammar, a, { kindsOf: (l) => [...kindsOf(l)], gtComps, maybeWords: CTX_WORDS });
   {
-    const concrete = concreteFirst(grammar, a, { kindsOf: (l) => [...kindsOf(l)], gtComps, maybeWords: CTX_WORDS });
     const kinds = [...tokens.map((t) => t.name), ...(tpl ? ['$templateHead', '$templateMiddle', '$templateTail'] : [])];
     const grammarLits = concrete.literals.filter((l) => !gtComps.includes(l));
     for (const r of rules) {
@@ -876,9 +876,23 @@ function buildIR(grammar: CstGrammar): ParserIR {
   // match, so the step stops (star), matches nothing (opt) or matches no element (sep: its first
   // element; after a delimiter the element must match anyway) without the body's attempt and the
   // mark it is attempted under.
+  // A body that is one rd rule's call whose FIRST the plain analysis does not know (a Pratt rule
+  // leads one of its alternatives: Block's `many(Stmt)`) is guarded by the rule's FIRST over concrete
+  // symbols instead (concreteFirst, the one the complement refusal reads): its literals, and every
+  // kind it holds as a kind. A token outside that set begins no match of the rule, so the attempt
+  // (the rule's call, and the exit's attempt at `}`) is not made. A rule that can match empty has
+  // no such guard (an empty match is not refused by its first token).
+  const ruleGuard = (name: string): number | undefined => {
+    if (!rules.some((r) => r.kind === 'rd' && r.name === name) || a.nullableRules.has(name)) return undefined;
+    const f = concrete.first1({ type: 'ref', name });
+    const lits = [...f].filter((x) => !x.startsWith(KIND));
+    const toks = [...f].filter((x) => x.startsWith(KIND)).map((x) => x.slice(KIND.length));
+    return tokenSetOf({ lits, toks });
+  };
   const bodyGuard = (body: Step[]): number | undefined => {
     const f = seqFirst(body);
-    return f === null ? undefined : tokenSetOf(f);
+    if (f !== null) return tokenSetOf(f);
+    return body.length === 1 && body[0]!.t === 'rule' ? ruleGuard(body[0]!.name) : undefined;
   };
   // A star / opt / sep body that FAILS CLEAN (`clean`): a failed attempt of it leaves the parser's
   // state (position, children, builder) as it found it, so the attempt takes no mark and a failure
