@@ -896,7 +896,7 @@ async function main(): Promise<void> {
     const failLoudFns = [
       'estreeStmt', 'estreeDecl', 'estreeParenOrComma', 'estreeExprLed',
       'estreeExprNudSeq', 'estreeArrow', 'tsTypeLed', 'estreeNewTargetLed',
-      'estreeArrayPattern', 'estreeBindingProperty', 'estreeParam', 'estreeForHead',
+      'estreeArrayPattern', 'estreeBindingProperty', 'estreeParam', 'estreeForHead', 'estreeForAwaitHead',
       'estreeSwitchCase', 'estreeDecorator', 'estreeClassMember',
       'tsTypeMember', 'estreeProp',
     ] as const;
@@ -914,7 +914,7 @@ async function main(): Promise<void> {
         }
       }
     }
-    check(failLoudOk === 17, `typescript custom fallback fail-loud ${failLoudOk}/17`);
+    check(failLoudOk === 18, `typescript custom fallback fail-loud ${failLoudOk}/18`);
 
     const extraFailLoudFns = [
       'estreeExprBinary', 'estreeExprPrefix', 'estreeExprPostfixTok', 'estreeTemplateLiteral',

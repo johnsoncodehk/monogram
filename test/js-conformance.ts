@@ -149,6 +149,41 @@ const statementEnds: { accept: string[]; reject: string[] } = {
   ],
 };
 
+// ── `for` heads (14.7.4 ForStatement, 14.7.5 ForInOfStatement) ──
+// `for ( [lookahead ≠ let [] Expression[~In]opt ; …`, the `var` / lexical forms with [~In]
+// initializers, `for ( [lookahead ≠ let [] LeftHandSideExpression in …`, `for ( [lookahead ∉
+// { let, async of }] LeftHandSideExpression of …`, `for await ( [lookahead ≠ let] … of …` (only
+// `of`), one ForBinding before `in` / `of`, and a `using` declaration with no pattern and no `in`
+// (explicit resource management: ForDeclaration[+Using] takes ForBinding[~Pattern], the for-in
+// arm's is [~Using]). `let` as an identifier is the sloppy reading
+// (strict mode makes it an early error, which is not the parser's). The verdicts are the
+// productions'; `tscDeparts` names each case tsc's JS-mode parser decides the other way.
+const forHeads: { accept: string[]; reject: string[]; tscDeparts: string[] } = {
+  accept: [
+    'for (a = (b in c);;);', 'for (f(a in b);;);', 'for (x = [a in b];;);', 'for (a; b in c; d in e);',
+    'for (x = a ? b in c : d;;);', 'for (let;;);', 'for (let = 1;;);', 'for (let.x;;);', 'for ((let)[0] = 1;;);',
+    'for (let[a] = 1;;);', 'for (let in x);', 'for (let.x in x);', 'for (let [a] in x);', 'for ((let) of x);',
+    'for (let of of x);', 'for (async of => 1;;);', 'for (async.x of y);', 'for ((async) of y);', 'for (of of y);',
+    'for (var a = 1 in b);', 'for (var a = b ? c in d : e;;);', 'for (using of x);', 'for (using [a] of x);',
+    'for (using [a] in x);',
+    'async function f() { for await (async of x); }', 'async function f() { for await ((let) of x); }',
+    'async function f() { for await (var [a] of b); }',
+  ],
+  reject: [
+    'for (a = b in c;;);', 'for (a in b in c;;);', 'for (a in b;;);', 'for (a, b in c;;);', 'for (x = y = a in b;;);',
+    'for (let[0] = 1;;);', 'for (let[0] in x);', 'for (let.x of y);', 'for (let of x);', 'for (async of x);',
+    'for (async of => 1 of x);', 'for (var a, b of c);', 'for (let a, b in c);', 'for (const a, b of c);',
+    'for (using a, b of c);', 'for (using a in b);', 'for (using {a} of b);', 'async function f() { for await (a in b); }', 'async function f() { for await (;;); }',
+    'async function f() { for await (let.x of y); }', 'async function f() { for await (let of y); }',
+  ],
+  tscDeparts: [
+    'for (x = [a in b];;);', 'for (let = 1;;);', 'for (let.x;;);', 'for (let.x in x);',
+    'for (let of x);', 'for (async of x);', 'for (async of => 1 of x);', 'for (var a, b of c);', 'for (let a, b in c);',
+    'for (const a, b of c);', 'for (using a, b of c);', 'for (using a in b);', 'for (using {a} of b);',
+    'async function f() { for await (let of y); }',
+  ],
+};
+
 // ── Corpus 2: TS-only syntax that has NO production here — must all reject ──
 // (TS's .js parser leniently accepts most of these; we are correctly stricter.)
 const tsOnly: [string, string][] = [
@@ -205,6 +240,18 @@ for (const [want, codes] of [[true, statementEnds.accept], [false, statementEnds
 console.log('\n── Statement ends (ASI) ──');
 console.log(`  ${statementEnds.accept.length + statementEnds.reject.length - s_fail.length}/${statementEnds.accept.length + statementEnds.reject.length} as the spec and tsc`);
 for (const c of s_fail) console.log('    - ' + c);
-// Corpora 1, 2 and the statement ends are hard gates.
-const gateFailed = v_fail.length + r_leak.length + s_fail.length > 0;
+
+const f_fail: string[] = [];
+for (const [want, codes] of [[true, forHeads.accept], [false, forHeads.reject]] as const) {
+  for (const code of codes) {
+    const tscWant = forHeads.tscDeparts.includes(code) ? !want : want;
+    if (jsAccepts(code) !== tscWant) f_fail.push(`tsc JS-mode ${tscWant ? 'rejects' : 'accepts'} ${JSON.stringify(code)}: fix the case or tscDeparts`);
+    if (weAccept(code) !== want) f_fail.push(`we ${want ? 'reject' : 'accept'} ${JSON.stringify(code)}`);
+  }
+}
+console.log('\n── for heads ──');
+console.log(`  ${forHeads.accept.length + forHeads.reject.length - f_fail.length}/${forHeads.accept.length + forHeads.reject.length} as the productions (${forHeads.tscDeparts.length} where tsc departs)`);
+for (const c of f_fail) console.log('    - ' + c);
+// Corpora 1, 2, the statement ends and the for heads are hard gates.
+const gateFailed = v_fail.length + r_leak.length + s_fail.length + f_fail.length > 0;
 if (gateFailed) process.exit(1);

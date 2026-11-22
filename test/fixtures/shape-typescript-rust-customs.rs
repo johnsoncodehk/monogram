@@ -523,6 +523,8 @@ fn schema_for(etype: &str, alt: u32) -> &'static Schema {
         ("TaggedTemplateExpression", 0, &SC_TAGGEDTPL),
         ("ForHead", 2, &SC_FORHEAD),
         ("ForHead", 3, &SC_FORHEAD),
+        ("ForAwaitHead", 0, &SC_FORHEAD),
+        ("ForAwaitHead", 1, &SC_FORHEAD),
     ];
     for &(t, a, sc) in s {
         if t == etype && a == alt { return sc; }
@@ -3711,6 +3713,8 @@ pub fn rebuild_estree(events: &[StreamEvent], src: &str) -> String {
     for ev in events {
         let (tag, alt, off, end) = (ev.typ, ev.alt, ev.off, ev.end);
         if tag == "ForHead" { forhead_alts.push(alt); }
+        // A `for await` head's alts are ForHead's declared (0) and left-hand-side `of` (3) alts.
+        if tag == "ForAwaitHead" { forhead_alts.push(if alt == 0 { 0 } else { 3 }); }
         // Wrapper events re-emit the exact node already on top of the stack
         // (Stmt arm 0 wraps its BlockStatement kid; arm 17 passes a kid through).
         // Same tag + same span ⇒ same logical node ⇒ skip the duplicate push.
@@ -3736,7 +3740,7 @@ pub fn rebuild_estree(events: &[StreamEvent], src: &str) -> String {
         // discard them so their children remain collectable as this node's.
         while let Some(top) = stack.last() {
             let (ttag, toff, tend, _) = *top;
-            if ttag == "ForHead" { stack.pop(); continue; }
+            if ttag == "ForHead" || ttag == "ForAwaitHead" { stack.pop(); continue; }
             if (s.any_kids || s.kids.contains(&ttag)) && toff >= off && tend <= end {
                 let (ttag2, toff2, tend2, j) = stack.pop().unwrap();
                 pool.push((ttag2, toff2, tend2, j));

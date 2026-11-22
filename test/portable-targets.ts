@@ -57,6 +57,32 @@ const NO_IN_HEADS = {
   ],
   reject: ['for (var a = b in c;;);', 'for (var a = b in c in d;;);', 'for (var a = b, c = d in e;;);'],
 };
+// The restrictions of a `for` head (14.7.4, 14.7.5), the same in both grammars: the C-style head's
+// first expressions are Expression[~In] and do not begin with `let [`; a for-in left side does not
+// begin with `let [`, a for-of one with `let` or `async of`, a `for await` one with `let`; a
+// declaration before `in` / `of` has one binding, a `using` one no pattern and no `in`; `for await`
+// has only the `of` forms. Each verdict
+// is the productions'; test/js-conformance.ts lists where tsc's parser departs from them.
+const FOR_HEADS = {
+  accept: [
+    'for (a = (b in c);;);', 'for (f(a in b), [c in d];;);', 'for (a; b in c; d in e);', 'for (x = a ? b in c : d;;);',
+    'for (let;;);', 'for (let = 1;;);', 'for (let.x;;);', 'for ((let)[0] = 1;;);', 'for (let[a] = 1;;);',
+    'for (let in x);', 'for (let.x in x);', 'for (let [a] in x);', 'for ((let) of x);', 'for (let of of x);',
+    'for (async of => 1;;);', 'for (async.x of y);', 'for ((async) of y);', 'for (async in y);', 'for (of of y);',
+    'for (using of x);', 'for (using [a] of x);', 'for (using [a] in x);', 'for (var a = 1 in b);', 'for (var a of b); for (var [a] in b);',
+    'async function f() { for await (async of x); for await (x.y of z); for await (const [a] of b); for await ((let) of c); }',
+    'async function f() { for await (var a of b) for await (using x of y) for await (await using x of y); }',
+  ],
+  reject: [
+    'for (a = b in c;;);', 'for (a in b in c;;);', 'for (a in b;;);', 'for (a, b in c;;);', 'for (x = y = a in b;;);',
+    'for (x = a, b in c;;);', 'for (let[0] = 1;;);', 'for (let[0] in x);', 'for (let.x of y);', 'for (let of x);',
+    'for (let[0] of x);', 'for (async of x);', 'for (async of => 1 of x);', 'for (var a, b of c);',
+    'for (let a, b in c);', 'for (const a, b of c);', 'for (using a, b of c);', 'for (using a in b);', 'for (using {a} of b);',
+    'async function f() { for await (a in b); }', 'async function f() { for await (;;); }',
+    'async function f() { for await (var a in b); }', 'async function f() { for await (let a = 1;;); }',
+    'async function f() { for await (let.x of y); }', 'async function f() { for await (let of y); }',
+  ],
+};
 const CASES: Case[] = [
   {
     grammar: 'calc', path: './fixtures/calc.ts',
@@ -316,7 +342,7 @@ const CASES: Case[] = [
       'for (a in b) { d = c in e; }',
       'new a.b();', '((((x))));',
       'for (a = x + y in b) c;',
-      ...NO_IN_HEADS.accept,
+      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept,
       // An assignment / update operand needs only a LeftHandSideExpression's shape; target validity is a consumer's.
       '-x++;', '(a) = 1;', 'a = b = c;', '1 = 2;', '1++;', '++1;', 'f() = 1;', 'f()++;', '++f();', 'this = 1;',
       '(a + b) = c;', '(a, b) = 1;', 'a?.b = 1;', 'a?.b++;', '[a + b] = c;', '({a: 1} = c);', 'new.target = 1;',
@@ -397,7 +423,7 @@ const CASES: Case[] = [
       'x\n++;', 'x\n--', '(x\n++);', 'a = [x\n++];', 'x\n++\n-y;', 'x\n++\ny++;', 'x\n++ ++y;', 'class C { p = x\n++ }', 'class C { p = x\n++\ny }',
       'for (a = (x in b)) c;',
       'for (a = b ? x in c : y in d) e;',
-      ...NO_IN_HEADS.reject,
+      ...NO_IN_HEADS.reject, ...FOR_HEADS.reject,
       // An assignment / update operand (prefix ++/-- included) without a LeftHandSideExpression's shape has no parse.
       'a + b = c;', 'a++ = 1;', '-a = 1;', '++ -x;', '++x++;', '++ ++x;',
       // … wherever the expression is optional or repeated: a refused operand is not skipped.
@@ -420,7 +446,7 @@ const CASES: Case[] = [
     // agnostic emitter (types, generics, interfaces, enums, assertions, variance). ASCII.
     grammar: 'typescript', path: '../typescript.ts',
     accept: [
-      ...NO_IN_HEADS.accept,
+      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
       // A class heritage is a LeftHandSideExpression (see the JavaScript cases).
       'f(class extends (a, b) {});', 'f(class extends a[0] {});', 'f(class extends a`t` {});', 'f(class extends a?.b() {});',
       // `return` takes an expression only on its own line (a restricted production), so a
@@ -593,7 +619,7 @@ const CASES: Case[] = [
       'type = 1;', 'namespace.x;', 'declare(x);', 'abstract(x);',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
-    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;', ...NO_IN_HEADS.reject,
+    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '{ b(); }.x;', '{ static x }.y;', '{ static x }', '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;',
       'let[0] = 1;', '(async\nfunction f() {});',
