@@ -212,7 +212,8 @@ export function nameRule(rule: RuleDecl): RuleNames {
         // A keyword literal LEADING an optional group marks the group's presence and carries
         // its position (the 'catch' / 'else' / 'finally' anchors consumers need).
         const lead = it.kind === '?' ? leadLiteral(it.body) : null;
-        if (lead && isKeywordLiteral(lead.value)) children.push(put(out.childOf, lead, scope.take(lead.value + 'Tok', lead.field)));
+        // A lead the author named is already this scope's child (the `literal` case below).
+        if (lead && lead.field === undefined && isKeywordLiteral(lead.value)) children.push(put(out.childOf, lead, scope.take(lead.value + 'Tok', lead.field)));
         return;
       }
       case 'sep':
