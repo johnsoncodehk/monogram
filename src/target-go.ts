@@ -65,7 +65,7 @@ const biGo = (d: Dispatch) => (d.ranked.length ? '; bi := -1' : '');
 const ckptGo = 'm := p.mark();';
 const undoGo = 'p.reset(m)';
 const ckptGoW = (_recv: string) => 'm := p.mark()';
-const undoGoW = (_recv: string) => 'p.back(m.pos); p.scratch = p.scratch[:m.sb]; p.b.Restore(m.nb, m.kb)';
+const undoGoW = (_recv: string) => 'p.back(m.pos); p.scratch = p.scratch[:m.sb]; p.restore(m.nb, m.kb)';
 // BRANCH frame: one branch of an ordered choice (`alt`): it returns true from the choice when the
 // branch matched, and undoes it when it did not.
 const branchGo = (cond: string) => `{ ${ckptGo} if ${cond} { return true }; ${undoGo} }`;
@@ -834,7 +834,7 @@ func (p *engine) reset(m mark) { p.back(m.pos); p.scratch = p.scratch[:m.sb]; p.
   // Written so that it fits Go's inlining budget (cost 77 of 80). A reset method around the
   // builder's Restore cannot (cost 86 and more with every form tried), and a call where the undo
   // was inline would be added work on every failed branch, so the undo stays printed in place.
-  : `func (p *${recv}) mark() (m mark) { m.nb, m.kb = p.b.Checkpoint(); m.pos, m.sb = p.pos, len(p.scratch); return }`}`;
+  : `func (p *${recv}) mark() mark {\n\tif !p.ckKnown { p.askCk() }\n\treturn mark{p.pos, len(p.scratch), p.ckNb, p.ckKb}\n}`}`;
 }
 // '>'-led composite operators (LexIdPlan.gtComps): the lexer scans every '>' alone. gtOp reads the
 // operator at ts[i]: a lone '>' extends over each adjacent single-character punct token after it
@@ -1675,12 +1675,12 @@ ${editParse}
 // Parallel combinators / rules ending in `W`. Existing `parse`/arena/`Doc` above
 // are byte-identical to pre-addon emit; this block is appended only.
 
-/** The builder engine's arena checkpoint (Builder.Checkpoint). */
-const arenaCkpt = () => 'nb, kb := p.b.Checkpoint()';
+/** The builder engine's arena checkpoint (ckpt: Builder.Checkpoint, asked only when stale). */
+const arenaCkpt = () => 'nb, kb := p.ckpt()';
 /** Move the checkpoint past what was just built (the best alternative so far stays). */
-const arenaMark = () => 'nb, kb = p.b.Checkpoint()';
-/** Undo to the checkpoint (Builder.Restore). */
-const arenaRestore = () => 'p.b.Restore(nb, kb)';
+const arenaMark = () => 'nb, kb = p.ckpt()';
+/** Undo to the checkpoint (restore: Builder.Restore, called only when something was built since). */
+const arenaRestore = () => 'p.restore(nb, kb)';
 
 const stepCondW = (s: Step, ids: LexIdPlan, _ar: ArenaIdPlan, recv: string): string => walkExpr(s, goSteps(ids, 'W', recv, ENGINE_GO_W));
 function sharedFnsW(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
@@ -1924,12 +1924,34 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 }
 `).join('');
   const pushLeafW = `func (p *${recv}) pushLeafW(ttId uint16, tokIdx, off, end uint32) {
-\t_ = p.b.Leaf(&p.scratch, ttId, tokIdx, off, end)
+\tif p.b.Leaf(&p.scratch, ttId, tokIdx, off, end) { p.ckKnown = false }
 }`;
   const finishW = `func (p *${recv}) finishW(ruleId uint16, sb, fallbackOff, tokStart int) spanned {
 \th, off, present := p.b.Finish(&p.scratch, sb, ruleId, uint32(fallbackOff), uint32(tokStart), uint32(p.pos), p.toks)
+\tp.ckKnown = false
 \treturn spanned{h: h, off: off, tokStart: uint32(tokStart), present: present}
 }`;
+  // The builder's checkpoint as of the last call that may have built (Leaf that kept a leaf, Finish)
+  // or the last restore: a mark asks the builder only when it is stale, and a restore to the
+  // checkpoint the builder already has is no call. 610,110 Checkpoint and 58,721 Restore interface
+  // calls on checker.ts became about 213k and 5k (a counting builder, shared-runtime-10/leafcount).
+  // The slow paths (askCk, restoreB) are go:noinline so that ckpt, restore and mark, whose fast
+  // path is a field test, fit Go's inlining budget (80) with the call counted once.
+  const ckptW = `// ckpt is the builder's checkpoint (Builder.Checkpoint), asked only when a builder call may have
+// changed it since it was last known.
+func (p *${recv}) ckpt() (int, int) {
+\tif !p.ckKnown { p.askCk() }
+\treturn p.ckNb, p.ckKb
+}
+//go:noinline
+func (p *${recv}) askCk() { p.ckNb, p.ckKb = p.b.Checkpoint(); p.ckKnown = true }
+// restore undoes the builder back to checkpoint (nb, kb) (Builder.Restore), unless it is there
+// already: nothing that may build ran since that checkpoint was known.
+func (p *${recv}) restore(nb, kb int) {
+\tif !p.ckKnown || p.ckNb != nb || p.ckKb != kb { p.restoreB(nb, kb) }
+}
+//go:noinline
+func (p *${recv}) restoreB(nb, kb int) { p.b.Restore(nb, kb); p.ckNb, p.ckKb, p.ckKnown = nb, kb, true }`;
   const headLeafTextW = `func (p *${recv}) headLeafTextW(f spanned) string {
 \tif !f.present { return "" }
 \ta, b := p.b.HeadSpan(f.h, p.toks)
@@ -1942,12 +1964,15 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 \ttail bool  // whether the node the last nud_ call returned closes the access tail
 \tsrc string
 \tb Builder
+\tckNb, ckKb int // the builder's checkpoint, while ckKnown (ckpt / restore)
+\tckKnown bool
 \tscratch []int32${entriesField}`;
   return `type ${recv} struct {
 ${structFields}
 }
 
 ${engineMarkGo(recv)}
+${ckptW}
 ${pushLeafW}
 ${finishW}
 ${headLeafTextW}
@@ -1963,7 +1988,7 @@ func (p *${recv}) matchLitW(lid uint16) bool {
 \tp.peekEnd = i + 1
 \tif i >= len(p.toks) || p.toks[i].Lid != lid { return false }
 \tt := &p.toks[i]
-\tp.b.Leaf(&p.scratch, litTt(lid), uint32(i), t.Off, t.End)
+\tif p.b.Leaf(&p.scratch, litTt(lid), uint32(i), t.Off, t.End) { p.ckKnown = false }
 \tp.pos = i + 1
 \treturn true
 }
@@ -1972,7 +1997,7 @@ func (p *${recv}) matchTokW(kid uint16) bool {
 \tp.peekEnd = i + 1
 \tif i >= len(p.toks) || p.toks[i].Kid != kid { return false }
 \tt := &p.toks[i]
-\tp.b.Leaf(&p.scratch, kid, uint32(i), t.Off, t.End)
+\tif p.b.Leaf(&p.scratch, kid, uint32(i), t.Off, t.End) { p.ckKnown = false }
 \tp.pos = i + 1
 \treturn true
 }
@@ -2713,7 +2738,9 @@ function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): stri
 `;
   return `// ─── Builder API (additive; CST parse() / Doc above are unchanged) ───────────
 // Builder is pure / bottom-up. Backtracking truncates scratch (+ optional arena
-// checkpoint); discarded handles are garbage.
+// checkpoint); discarded handles are garbage. Checkpoint is a function of the builder's state:
+// Restore(nb, kb) returns it to the state Checkpoint reported as (nb, kb), and only Finish, Node,
+// Restore and a Leaf that returns true (kept) may change it (the engine asks again only then).
 // *CstBuilder hot path = the native engine. Interface path = parserW.
 // Optional shift: separate Shifter interface (Go has no optional methods); type
 // assert. treeEq capacity = *CstBuilder identity (NewDocWith routes Cst → NewDoc).
