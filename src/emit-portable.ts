@@ -1451,6 +1451,12 @@ export function kidOf(plan: LexIdPlan, kind: string): number {
  * Bool table indexed by lid for O(1) set membership in emitted lexers.
  * Slot 0 stays false: lids[0]='' means "not any literal" (Ident/Number text → lid 0).
  */
+/** Per lid: +1 for a text of `open`, -1 for one of `close`, else 0. Newline mode's flow depth
+ *  moves by it at each literal token, a table lookup instead of a set of strings. */
+export function lidDeltaTable(plan: LexIdPlan, open: readonly string[], close: readonly string[]): number[] {
+  const o = lidFlagTable(plan, open), c = lidFlagTable(plan, close);
+  return o.map((x, i) => (x ? 1 : 0) - (c[i] ? 1 : 0));
+}
 export function lidFlagTable(plan: LexIdPlan, texts: readonly string[]): boolean[] {
   const t = Array.from({ length: plan.lids.length }, () => false);
   for (const x of texts) {

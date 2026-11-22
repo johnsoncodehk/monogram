@@ -10,10 +10,11 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, prattOpTables, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
+import { UNI_BLOCK_BITS, UNI_LEAF_BITS, uniIdentPlan } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
@@ -258,14 +259,9 @@ function renderIdTablesGo(ids: LexIdPlan): string {
   }
   return `var kindStr = []string{${kidsLit}}
 var _lids = []string{${lidsLit}}
-var _kidMap = map[string]uint16{}
 const _lidMaxLen = ${pf.maxLen}
 var _lidFirstBits = [...]byte{${bitsLit}}
 
-func init() {
-\tfor i, k := range kindStr { _kidMap[k] = uint16(i) }
-}
-func kidOf(kind string) uint16 { if v, ok := _kidMap[kind]; ok { return v }; return 0 }
 // lidKeyIsLiteral is the length x first-byte prefilter: false when no literal has the text's key.
 func lidKeyIsLiteral(text string) bool {
 \tn := len(text)
@@ -324,6 +320,27 @@ func lexHasLineTerm(s string) bool {
 }
 `;
 
+/** Go's integer type for a table whose entries are below `max`. */
+const goUint = (max: number) => (max <= 0x100 ? 'uint8' : max <= 0x10000 ? 'uint16' : 'uint32');
+/** uni-ident.ts's identifier classes and their lookup. Go's `unicode` package has the general
+ *  categories but no ID_Start / ID_Continue (Other_ID_Start, Pattern_Syntax), hence the table. */
+function goUniIdentTables(): string {
+  const p = uniIdentPlan();
+  const nums = (xs: readonly (number | bigint)[], hex: boolean) => xs.map((x) => (hex ? `0x${x.toString(16)}` : String(x))).join(', ');
+  return `var _uniTop = [${p.top.length}]${goUint(p.blocks.length / (1 << UNI_BLOCK_BITS))}{${nums(p.top, false)}}
+var _uniBlk = [${p.blocks.length}]${goUint(p.start.length)}{${nums(p.blocks, false)}}
+var _uniStart = [${p.start.length}]uint64{${nums(p.start, true)}}
+var _uniCont = [${p.cont.length}]uint64{${nums(p.cont, true)}}
+// Whether r is in the class whose leaves are given (uni-ident.ts's three levels).
+func uniIn(leaves *[${p.start.length}]uint64, r rune) bool {
+	t := uint32(r) >> ${UNI_LEAF_BITS + UNI_BLOCK_BITS}
+	if t >= ${p.top.length} { return false }
+	leaf := _uniBlk[uint32(_uniTop[t])<<${UNI_BLOCK_BITS}|(uint32(r)>>${UNI_LEAF_BITS})&${(1 << UNI_BLOCK_BITS) - 1}]
+	return (leaves[leaf]>>(uint32(r)&${(1 << UNI_LEAF_BITS) - 1}))&1 != 0
+}
+`;
+}
+
 // One token at a dispatch site: the shared scanner, spliced in, says where it ends; the lexer
 // records it.
 function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
@@ -381,15 +398,14 @@ ${indent}}`;
 }
 
 // Newline mode: every line break outside flow delimiters is a NEWLINE token spanning the break.
-function newlinePartsGo(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state: string; stateFrom: string; ws: string; hooks: string } {
+function newlinePartsGo(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state: string; stateFrom: string; table: string; ws: string; hooks: string } {
   const kidNl = kidOf(ids, nl.token);
-  const flowSets = `\t_flowOpen := map[string]bool{${nl.flowOpen.map((x) => `${J(x)}: true`).join(', ')}}
-\t_flowClose := map[string]bool{${nl.flowClose.map((x) => `${J(x)}: true`).join(', ')}}
-`;
   return {
     state: `\tflowDepth := 0
-${flowSets}`,
-    stateFrom: flowSets,
+`,
+    stateFrom: '',
+    table: `var _flowD = [${ids.lids.length}]int8{${lidDeltaTable(ids, nl.flowOpen, nl.flowClose).join(', ')}}
+`,
     ws: `\t\tif c == 32 || c == 9 || c == 11 || c == 12 {
 \t\t\tpos++
 \t\t\tfor pos < n { if d := src[pos]; d != 32 && d != 9 && d != 11 && d != 12 { break }; pos++ }
@@ -408,7 +424,7 @@ ${flowSets}`,
 \t\t\tif isJsWs(r) && r != 0x2028 && r != 0x2029 { pos += w; continue }
 \t\t}
 `,
-    hooks: `\t\tif kid == 0 && _flowOpen[_lids[lid]] { flowDepth++ } else if kid == 0 && _flowClose[_lids[lid]] { if flowDepth > 0 { flowDepth-- } }
+    hooks: `\t\tif kid == 0 { if d := int(_flowD[lid]); d != 0 { flowDepth += d; if flowDepth < 0 { flowDepth = 0 } } }
 `,
   };
 }
@@ -560,39 +576,30 @@ ${emitHooks}
   const cascade = renderLexByteDispatchGo(lexCodes, lexFirsts, '\t', tplHeads);
   const identNameGo = ir.identToken;
   const identKidGo = identNameGo ? kidOf(ids, identNameGo) : 0;
-  const lexGoHelpers = (shared.scannedTokens(ir).some((t) => t.skip) ? GO_HAS_LINE_TERM : '') + ((identNameGo || ir.identLike.length) ? `func isJsWs(r rune) bool {
+  const lexGoHelpers = (nl ? newlinePartsGo(nl, 'emit', ids).table : '') + (shared.scannedTokens(ir).some((t) => t.skip) ? GO_HAS_LINE_TERM : '') + ((identNameGo || ir.identLike.length) ? `func isJsWs(r rune) bool {
 	if r == 0xA0 || r == 0x1680 || r == 0x2028 || r == 0x2029 || r == 0x202F || r == 0x205F || r == 0x3000 || r == 0xFEFF {
 		return true
 	}
 	return r >= 0x2000 && r <= 0x200A
 }
-// ID_Start ≈ L + Nl (gen-tm.ts's widened approximation); ID_Continue adds Nd/Mn/Mc/Pc + ZWNJ/ZWJ.
-func isUniIdStart(r rune) bool { return r == '$' || r == '_' || unicode.IsLetter(r) || unicode.Is(unicode.Nl, r) }
-func isUniIdContinue(r rune) bool {
-	return isUniIdStart(r) || r == 0x200C || r == 0x200D || unicode.In(r, unicode.Nd, unicode.Mn, unicode.Mc, unicode.Pc)
-}
-func scanUniIdent(src string, pos int) (int, bool) {
+${goUniIdentTables()}func scanUniIdent(src string, pos int) (int, bool) {
 	r, w := utf8.DecodeRuneInString(src[pos:])
-	if !isUniIdStart(r) { return pos, false }
-	e := pos + w
-	for e < len(src) {
-		r2, w2 := utf8.DecodeRuneInString(src[e:])
-		if !isUniIdContinue(r2) { break }
-		e += w2
-	}
-	return e, true
+	if !uniIn(&_uniStart, r) { return pos, false }
+	return lxExtRun(src, pos+w), true
 }
 // Extend an identifier token that the ASCII pattern cut short at a non-ASCII
 // ID_Continue char (caf|é → café), mirroring emit-lexer's uniIdentContReY extension.
 func lxExt(src string, e int) int {
 	if e >= len(src) || src[e] < 0x80 { return e }
-	ee := e
-	for ee < len(src) {
-		r, w := utf8.DecodeRuneInString(src[ee:])
-		if !isUniIdContinue(r) { break }
-		ee += w
+	return lxExtRun(src, e)
+}
+func lxExtRun(src string, e int) int {
+	for e < len(src) {
+		r, w := utf8.DecodeRuneInString(src[e:])
+		if !uniIn(&_uniCont, r) { break }
+		e += w
 	}
-	return ee
+	return e
 }
 ` : `func isJsWs(r rune) bool {
 	if r == 0xA0 || r == 0x1680 || r == 0x2028 || r == 0x2029 || r == 0x202F || r == 0x205F || r == 0x3000 || r == 0xFEFF {
@@ -3341,13 +3348,8 @@ package parser
 import (
 \t"fmt"
 \t"strings"
-\t"unicode"
 \t"unicode/utf8"
 )
-
-// unicode is only referenced when the grammar declares an identifier token; pin it so other
-// grammars still compile.
-var _ = unicode.IsLetter
 
 // Slim hot-path token (kind/text via kindStr / src[Off:End]).
 type Tok struct {

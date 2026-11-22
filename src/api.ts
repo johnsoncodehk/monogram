@@ -94,7 +94,7 @@ interface RuleOptions {
 
 type Element = string | TokenRef | RuleRef | Marker | Combinator;
 type Sequence = Element[];
-type Alternative = Element | Sequence;
+type Alternative = Element | Sequence | ArmNode;
 type RuleBody = (self: RuleRef) => Alternative[];
 
 export class RuleRef {
@@ -314,7 +314,42 @@ class HolesNode {
   constructor(token: TokenRef, rule: RuleRef) { this.token = token; this.rule = rule; }
 }
 
-type Combinator = HolesNode | SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode | NotNode | CtxNode | RelaxNode | CapExprNode;
+// Names (read through src/grammar-names.ts). A name describes a SYNTAX role: the keyword or
+// spec production an alternative is (`arm('if', ...)`, `arm('memberDot', ...)`), the role a
+// child plays (`field('condition', Expr)`, `field('then', Stmt)`), never one AST's node or
+// field names: each consumer's ShapeSpec maps the names to its own AST. A name is a property
+// of the node it names, so it is transparent to parsing (no parser, CST or highlighter reads
+// it). Without one, a derived name stands (grammar-names.ts), which is positional when it
+// repeats in its scope.
+class ArmNode {
+  // A named alternative: a rule arm (an item of the array a rule body returns) or an `alt`
+  // branch. Lowers to exactly what the unnamed alternative lowers to, plus `arm: name`.
+  readonly __kind = 'arm' as const;
+  readonly name: string;
+  readonly items: Element[];
+  constructor(name: string, items: Element[]) { this.name = name; this.items = items; }
+}
+class FieldNode {
+  // A named child: ONE item (a reference, literal, quantifier, alternation, ...). Lowers to
+  // exactly what the item lowers to, plus `field: name`. One item, not a run of them: a run
+  // would need a group node of its own, and a node the unnamed grammar does not have is not
+  // transparent to the parsers that read a sequence's items.
+  readonly __kind = 'field' as const;
+  readonly name: string;
+  readonly item: Element;
+  constructor(name: string, item: Element) { this.name = name; this.item = item; }
+}
+
+type Combinator = HolesNode | SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode | NotNode | CtxNode | RelaxNode | CapExprNode | FieldNode;
+
+/** A named alternative (see ArmNode). */
+export function arm(name: string, ...items: Element[]): ArmNode {
+  return new ArmNode(name, items);
+}
+/** A named child (see FieldNode). */
+export function field(name: string, item: Element): FieldNode {
+  return new FieldNode(name, item);
+}
 
 export function sep(item: Element, delimiter: string): SepNode {
   return new SepNode(item, delimiter);
@@ -527,19 +562,11 @@ function toRuleExpr(el: Element, names: Lowering): RuleExpr {
       : { type: 'seq' as const, items: el.items.map(i => toRuleExpr(i, names)) };
     return { type: 'group', body, capBelow: el.below };
   }
-  if (el instanceof AltNode) {
-    // A branch may be a single element or a sequence (array → seq).
-    return {
-      type: 'alt',
-      items: el.items.map(i => {
-        if (Array.isArray(i)) {
-          return i.length === 1
-            ? toRuleExpr(i[0], names)
-            : { type: 'seq' as const, items: i.map(x => toRuleExpr(x, names)) };
-        }
-        return toRuleExpr(i, names);
-      }),
-    };
+  if (el instanceof AltNode) return { type: 'alt', items: el.items.map(i => alternativeExpr(i, names)) };
+  if (el instanceof FieldNode) {
+    const e = toRuleExpr(el.item, names);
+    if (e.field !== undefined) throw new Error(`field(${JSON.stringify(el.name)}): the item is already named ${JSON.stringify(e.field)}`);
+    return { ...e, field: el.name };
   }
   if (el instanceof NotNode) {
     // an array is a seq here like everywhere else in the rule DSL
@@ -559,14 +586,19 @@ function toRuleExpr(el: Element, names: Lowering): RuleExpr {
   throw new Error(`Unknown element: ${JSON.stringify(el)}`);
 }
 
+// One alternative (a rule arm or an `alt` branch): an element, a sequence (an array: a seq,
+// or its one item), or a named arm (what its items lower to, plus `arm`).
+function alternativeExpr(a: Alternative, names: Lowering): RuleExpr {
+  if (a instanceof ArmNode) return { ...alternativeExpr(a.items, names), arm: a.name };
+  if (Array.isArray(a)) {
+    if (a.length === 1) return toRuleExpr(a[0], names);
+    return { type: 'seq' as const, items: a.map(el => toRuleExpr(el, names)) };
+  }
+  return toRuleExpr(a, names);
+}
+
 function convertAlternatives(alts: Alternative[], names: Lowering): RuleExpr {
-  const items: RuleExpr[] = alts.map(a => {
-    if (Array.isArray(a)) {
-      if (a.length === 1) return toRuleExpr(a[0], names);
-      return { type: 'seq' as const, items: a.map(el => toRuleExpr(el, names)) };
-    }
-    return toRuleExpr(a, names);
-  });
+  const items: RuleExpr[] = alts.map(a => alternativeExpr(a, names));
   if (items.length === 1) return items[0];
   return { type: 'alt', items };
 }
