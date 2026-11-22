@@ -13,7 +13,7 @@ import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, typ
 import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type StepLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
-import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
+import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 
@@ -2994,6 +2994,45 @@ func lexFind(s string, i int, lit string) int {
 \t}
 \treturn len(s)
 }`,
+  // Eight bytes per round test for every byte a stop begins with (one zero-byte mask per such
+  // byte, ORed: the lowest flagged byte is the first candidate); a candidate is then confirmed.
+  findAnyFn: (stops) => {
+    const { leads, seqs } = stopBytes(stops);
+    const hex = (b: number) => `0x${b.toString(16).toUpperCase().padStart(2, '0')}`;
+    const lead = (v: string) => leads.map((b) => `${v} != ${hex(b)}`).join(' && ');
+    const masks = leads.map((b, k) => `\t\t\tx${k} := v ^ (L * ${hex(b)})`).join('\n');
+    const or = leads.map((_, k) => `(x${k} - L) &^ x${k}`).join(' | ');
+    const one = seqs.filter((q) => q.length === 1).map((q) => `s[i] == ${hex(q[0]!)}`);
+    const wide = seqs.filter((q) => q.length > 1).map((q) => `strings.HasPrefix(s[i:], "${q.map((b) => `\\x${b.toString(16).padStart(2, '0')}`).join('')}")`);
+    return `// ${findAnyName(stops)} is where the next of ${stops.map((c) => `U+${c.toString(16).toUpperCase().padStart(4, '0')}`).join(', ')} is in s from i: the index of its first byte, or len(s).
+func ${findAnyName(stops)}(s string, i int) int {
+\tconst L = 0x0101010101010101
+\tfor {
+\t\tif i+8 <= len(s) {
+\t\t\tw := s[i : i+8]
+\t\t\tv := uint64(w[0]) | uint64(w[1])<<8 | uint64(w[2])<<16 | uint64(w[3])<<24 | uint64(w[4])<<32 | uint64(w[5])<<40 | uint64(w[6])<<48 | uint64(w[7])<<56
+${masks}
+\t\t\tm := (${or}) & (L << 7)
+\t\t\tif m == 0 {
+\t\t\t\ti += 8
+\t\t\t\tcontinue
+\t\t\t}
+\t\t\ti += bits.TrailingZeros64(m) >> 3
+\t\t} else {
+\t\t\tfor i < len(s) && ${lead('s[i]')} {
+\t\t\t\ti++
+\t\t\t}
+\t\t\tif i == len(s) {
+\t\t\t\treturn i
+\t\t\t}
+\t\t}
+\t\tif ${[...one, ...wide].join(' || ')} {
+\t\t\treturn i
+\t\t}
+\t\ti++
+\t}
+}`;
+  },
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${goWrap(r, ATOM)}`, prec: 90 }),
@@ -3010,6 +3049,7 @@ func lexFind(s string, i int, lit string) int {
     inSet: (cx, set, c) => cx.atom(`${set}[${c.c}]`, 'bool', 'bool'),
     runEnd: (cx, set, s, i) => cx.atom(`lexRunEnd(${s.c}, ${i.c}, &${set})`, 'int', 'int'),
     find: (cx, s, i, lit) => cx.atom(`lexFind(${s.c}, ${i.c}, ${JSON.stringify(lit)})`, 'int', 'int'),
+    findAny: (cx, s, i, stops) => cx.atom(`${findAnyName(stops)}(${s.c}, ${i.c})`, 'int', 'int'),
     own: (_cx, r) => r,
   },
   stmt: {
@@ -3077,6 +3117,7 @@ export const goTarget = defineTarget({
   emitParser(grammar: CstGrammar, shared: SharedAlgorithms): string {
     const ir = portableIR(grammar);
     const ids = buildLexIdPlan(ir);
+    const lexText = lexer(ir, ids, shared);
     const ar = buildArenaIdPlan(ir, ids);
     const reuse = ir.reuse;
     const ruleFns = [...ir.rules.filter((r) => ir.forms.buildRules.includes(r.name)).map((r) => {
@@ -3112,7 +3153,7 @@ package parser
 
 import (
 \t"fmt"
-\t"strings"
+${lexText.includes('bits.') ? '\t"math/bits"\n' : ''}\t"strings"
 \t"unicode/utf8"
 )
 
@@ -3154,7 +3195,7 @@ const arenaCompactK = 4
 
 ${renderArenaTablesGo(ar, ids)}
 
-${lexer(ir, ids, shared)}
+${lexText}
 
 // Public token (the tokenizer's output model).
 type Token struct {

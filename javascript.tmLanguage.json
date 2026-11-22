@@ -416,7 +416,7 @@
     },
     "shebang": {
       "name": "comment.line.shebang.js",
-      "match": "^#![^\\n]*"
+      "match": "^#![^\\n\\r\\u2028\\u2029]*"
     },
     "docblock": {
       "patterns": [
@@ -952,7 +952,7 @@
     },
     "linecomment": {
       "name": "comment.line.double-slash.js",
-      "match": "//[^\\n]*"
+      "match": "//[^\\n\\r\\u2028\\u2029]*"
     },
     "blockcomment": {
       "name": "comment.block.js",
@@ -2230,7 +2230,7 @@
     },
     "directives": {
       "name": "comment.line.triple-slash.js",
-      "match": "///[ \\t]*<[^\\n]*"
+      "match": "///[ \\t]*<[^\\n\\r\\u2028\\u2029]*"
     },
     "this-literal": {
       "match": "\\b(this)\\b",

@@ -15,7 +15,7 @@ import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, t
 import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type StepLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
-import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
+import { ATOM, COMPARISON, findAnyName, stopBytes, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 import type {
@@ -5292,6 +5292,39 @@ fn lex_find(b: &[u8], mut i: usize, lit: &[u8]) -> usize {
         i += 1;
     }
 }`,
+  // Eight bytes per round test for every byte a stop begins with (one zero-byte mask per such
+  // byte, ORed: the lowest flagged byte is the first candidate); a candidate is then confirmed.
+  findAnyFn: (stops) => {
+    const { leads, seqs } = stopBytes(stops);
+    const hex = (b: number) => `0x${b.toString(16).toUpperCase().padStart(2, '0')}`;
+    const lead = (v: string) => leads.map((b) => `${v} == ${hex(b)}`).join(' || ');
+    const masks = leads.map((b) => `zero(v ^ (L * ${hex(b)}))`).join(' | ');
+    const one = seqs.filter((q) => q.length === 1).map((q) => `b[i] == ${hex(q[0]!)}`);
+    const wide = seqs.filter((q) => q.length > 1).map((q) => `b[i..].starts_with(&[${q.map(hex).join(', ')}])`);
+    return `/// Where the next of ${stops.map((c) => `U+${c.toString(16).toUpperCase().padStart(4, '0')}`).join(', ')} is in b from i: the index of its first byte, or b.len().
+#[inline(never)]
+fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
+    const L: u64 = 0x0101_0101_0101_0101;
+    #[inline(always)]
+    fn zero(x: u64) -> u64 { x.wrapping_sub(L) & !x }
+    loop {
+        match b.get(i..i + 8) {
+            Some(w) => {
+                let v = u64::from_le_bytes([w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]]);
+                let m = (${masks}) & (L << 7);
+                if m == 0 { i += 8; continue; }
+                i += (m.trailing_zeros() >> 3) as usize;
+            }
+            None => {
+                while i < b.len() && !(${lead('b[i]')}) { i += 1; }
+                if i == b.len() { return i; }
+            }
+        }
+        if ${[...one, ...wide].join(' || ')} { return i; }
+        i += 1;
+    }
+}`;
+  },
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${rsWrap(r, ATOM)}`, prec: 90 }),
@@ -5308,6 +5341,7 @@ fn lex_find(b: &[u8], mut i: usize, lit: &[u8]) -> usize {
     inSet: (cx, set, c) => cx.atom(`${set.toUpperCase()}[${cx.coerce(c, 'usize')}]`, 'bool', 'bool'),
     runEnd: (cx, set, s, i) => cx.atom(`lex_run_end(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')}, &${set.toUpperCase()})`, 'int', 'usize'),
     find: (cx, s, i, lit) => cx.atom(`lex_find(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')}, ${J(lit)}.as_bytes())`, 'int', 'usize'),
+    findAny: (cx, s, i, stops) => cx.atom(`${findAnyName(stops)}(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')})`, 'int', 'usize'),
     own: (cx, r) => {
       if (r.ty === 'str') return cx.atom(`${rsWrap(r, ATOM)}.to_string()`, 'str', 'str', { owned: true });
       if (isList(r.ty)) return cx.atom(`${rsWrap(r, ATOM)}.to_vec()`, r.ty, r.ty, { owned: true });

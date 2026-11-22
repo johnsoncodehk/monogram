@@ -137,13 +137,13 @@ const Template     = token(seq('`', star(altPattern(noneOf('`', '\\', '$'), seq(
   template: { open: '`', interpOpen: '${', interpClose: '}' },
 });
 const regexEscape = seq('\\', noneOf(lineTerminator));
-const regexClassBody = star(altPattern(noneOf(']', '\\', '\n'), regexEscape));
+const regexClassBody = star(altPattern(noneOf(']', '\\', lineTerminator), regexEscape));
 // RegularExpressionChar; the FIRST char additionally excludes `*` (RegularExpressionFirstChar)
 // so `/*` is never a regex start — it is a block-comment open, and an unterminated `/* … /`
 // is a lexical error, NOT a regex literal. (A `*` anywhere after the first char stays legal:
 // `/a*/`.) Body is one-or-more total, so `//` remains a LineComment as before.
-const regexChar      = altPattern(noneOf('/', '\\', '[', '\n'), regexEscape, seq('[', regexClassBody, ']'));
-const regexFirstChar = altPattern(noneOf('/', '\\', '[', '*', '\n'), regexEscape, seq('[', regexClassBody, ']'));
+const regexChar      = altPattern(noneOf('/', '\\', '[', lineTerminator), regexEscape, seq('[', regexClassBody, ']'));
+const regexFirstChar = altPattern(noneOf('/', '\\', '[', '*', lineTerminator), regexEscape, seq('[', regexClassBody, ']'));
 const Regex_       = token(seq('/', regexFirstChar, star(regexChar), '/', star(identPart)), {   // flags: maximal-munch any IdentifierPart run (tsc lexes flags leniently; validity is a checker rule)
   regex: true,
   regexContext: {
@@ -172,10 +172,11 @@ const Decorator    = token(seq('@', optPattern(seq(identStart, star(altPattern(i
 // (`#\u{6F}_`). A non-ASCII literal `#name` (`#℘`, `#ZWNJ`) is handled by the lexer's Unicode
 // fallback, which recognises this token's leading `#` as a name prefix.
 const PrivateField = token(seq('#', identStart, star(identPart)), { scope: 'variable.other.property', identifierPrefix: '#' });
-const Shebang      = token(seq(start(), '#!', star(noneOf('\n'))), { skip: true, scope: 'comment.line.shebang' });
+const Shebang      = token(seq(start(), '#!', star(noneOf(lineTerminator))), { skip: true, scope: 'comment.line.shebang' });
 const JSDoc        = token(seq('/**', notFollowedBy('/'), star(seq(notFollowedBy('*/'), anyChar()), { greedy: false }), '*/'), { skip: true, scope: 'comment.block.documentation', embed: 'jsdoc' });
-const TripleSlash  = token(seq('///', star(hspace), '<', star(noneOf('\n'))), { skip: true, scope: 'comment.line.triple-slash' });
-const LineComment  = token(seq('//', star(noneOf('\n'))), { skip: true });
+const TripleSlash  = token(seq('///', star(hspace), '<', star(noneOf(lineTerminator))), { skip: true, scope: 'comment.line.triple-slash' });
+// SingleLineCommentChar / HashbangComment: any character but a LineTerminator (LF, CR, LS, PS).
+const LineComment  = token(seq('//', star(noneOf(lineTerminator))), { skip: true });
 const BlockComment = token(seq('/*', star(seq(notFollowedBy('*/'), anyChar()), { greedy: false }), '*/'), { skip: true });
 
 // The token consts, reserved-word guards, precedence ladder, and scope map are

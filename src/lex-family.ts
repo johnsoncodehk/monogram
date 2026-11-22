@@ -90,6 +90,7 @@ class LexScan {
   fns: Fn[] = [];
   runs = false;    // some scanner calls the target's runEnd routine
   finds = false;   // some scanner calls the target's find routine
+  stopSets = new Map<string, number[]>();   // the sets of stops some scanner's findAny takes
   private pats = new Map<string, string>();
 
   runEnd(set: string, i: Ex): Expr {
@@ -100,6 +101,11 @@ class LexScan {
   find(i: Ex, lit: string): Expr {
     this.finds = true;
     return { k: 'find', s: x('s'), i: x(i), lit };
+  }
+
+  findAny(i: Ex, stops: number[]): Expr {
+    this.stopSets.set(stops.join(','), stops);
+    return { k: 'findAny', s: x('s'), i: x(i), stops };
   }
 
   charSet(name: string, rs: CodeRange[]): string {
@@ -427,9 +433,9 @@ class LexScan {
         ]);
       }
       case 'line':
-        return sig(name, `${t.name}: ${t.prefix} to the end of the line.`, [
+        return sig(name, `${t.name}: ${t.prefix}, then up to its first stop.`, [
           if_(not(hasAt('p', t.prefix)), [NONE]),
-          ret(this.find(add('p', litLen(t.prefix)), '\n')),
+          ret(this.findAny(add('p', litLen(t.prefix)), t.stops)),
         ]);
       case 'block': {
         const guard = t.guard === null ? [] : [let_('g', call(this.exact(t.guard), 'e')), if_(lt('g', I(0)), [NONE])];
@@ -487,7 +493,7 @@ export function templateLiterals(ir: Pick<ParserIR, 'tpl'>, lits: readonly strin
   return { whole: span(t.open, t.open), head: span(t.open, t.interpOpen), middle: span(t.interpClose, t.interpOpen), tail: span(t.interpClose, t.open) };
 }
 
-type Family = { sets: CharSet[]; fns: Fn[]; runs: boolean; finds: boolean };
+type Family = { sets: CharSet[]; fns: Fn[]; runs: boolean; finds: boolean; stopSets: number[][] };
 const families = new WeakMap<ParserIR, Family>();
 export function lexScanFamily(ir: ParserIR): Family {
   let f = families.get(ir);
@@ -500,15 +506,15 @@ export function lexScanFamily(ir: ParserIR): Family {
       b.fns.push(b.identEsc());
     }
     if (ir.tpl) b.fns.push(b.tplSpan(ir.tpl));
-    f = { sets: b.sets, fns: b.fns, runs: b.runs, finds: b.finds };
+    f = { sets: b.sets, fns: b.fns, runs: b.runs, finds: b.finds, stopSets: [...b.stopSets.values()] };
     families.set(ir, f);
   }
   return f;
 }
 
 export function emitLexScan(ir: ParserIR, lowering: Lowering): string {
-  const { sets, fns, runs, finds } = lexScanFamily(ir);
-  return [...(runs ? [lowering.runEndFn] : []), ...(finds ? [lowering.findFn] : []), printFns(lowering, lowering.spliceInline ? fns.filter((f) => !f.inline) : fns, sets)].join('\n');
+  const { sets, fns, runs, finds, stopSets } = lexScanFamily(ir);
+  return [...(runs ? [lowering.runEndFn] : []), ...(finds ? [lowering.findFn] : []), ...stopSets.map((st) => lowering.findAnyFn(st)), printFns(lowering, lowering.spliceInline ? fns.filter((f) => !f.inline) : fns, sets)].join('\n');
 }
 
 // Scanners return -1 or a position, never this.
