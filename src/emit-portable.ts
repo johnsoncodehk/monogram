@@ -101,7 +101,7 @@ export function groupByPreserveOrder<T>(
 }
 export type Step =
   | { t: 'lit'; value: string; ttype: '$keyword' | '$punct' }   // match a literal by text
-  | { t: 'tok'; name: string }                                  // match a token kind
+  | { t: 'tok'; name: string; hole?: string }                   // match a token kind; a template kind (TplCfg) carries the rule that parses its `${…}` holes and also matches an interpolated template
   | { t: 'rule'; name: string }                                 // call a rule, append its node
   | { t: 'ruleBp'; name: string; bp: number }                   // call a Pratt rule at a given binding power (chain-rhs led trailing operand)
   | { t: 'star'; step: Step; share?: number }                   // repeat inner 0+
@@ -344,15 +344,20 @@ export type TplCfg = {
   escapeValid: TokenPattern | null;
 };
 
-/** Every rule that parses template holes in `ir`, in first-use order: a target whose template
- *  matcher cannot take the hole rule as an argument emits one matcher per entry. */
+/** Every rule that parses template holes in `ir` (a Pratt rule's template arms, a template `tok`
+ *  step's hole), in first-use order: a target whose template matcher cannot take the hole rule as
+ *  an argument emits one matcher per entry. */
 export function tplHoleRules(ir: ParserIR): string[] {
   const out = new Set<string>();
+  const visit = (st: Step): void => { if (st.t === 'tok' && st.hole !== undefined) out.add(st.hole); stepKids(st).forEach(visit); };
   for (const r of ir.rules) {
-    if (r.kind !== 'pratt') continue;
-    if (r.nudTplHole !== undefined) out.add(r.nudTplHole);
-    if (r.postfixTplHole !== undefined) out.add(r.postfixTplHole);
+    if (r.kind === 'pratt') {
+      if (r.nudTplHole !== undefined) out.add(r.nudTplHole);
+      if (r.postfixTplHole !== undefined) out.add(r.postfixTplHole);
+    }
+    for (const body of ruleBodies(r)) body.forEach(visit);
   }
+  for (const body of ir.lookaheads) body.forEach(visit);
   return [...out];
 }
 
@@ -469,7 +474,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
   const oneTokenOf = (s: Step): TokenSet | null => {
     switch (s.t) {
       case 'lit': return gtComps.includes(s.value) ? null : { lits: [s.value], toks: [] };
-      case 'tok': return { lits: [], toks: [s.name] };
+      case 'tok': return s.hole !== undefined ? null : { lits: [], toks: [s.name] };   // a template with holes spans several tokens
       case 'altlit': return s.opts.some((o) => gtComps.includes(o.value)) ? null : { lits: s.opts.map((o) => o.value), toks: [] };
       case 'seq': return s.steps.length === 1 ? oneTokenOf(s.steps[0]) : null;
       case 'alt': {
@@ -535,7 +540,9 @@ function buildIR(grammar: CstGrammar): ParserIR {
   function stepOf(e: RuleExpr): Step {
     switch (e.type) {
       case 'literal': return { t: 'lit', value: e.value, ttype: litTtype(e.value) };
-      case 'ref': return tokenNames.has(e.name) ? { t: 'tok', name: e.name } : { t: 'rule', name: e.name };
+      // A template reference carries its hole rule (RuleExpr ref.hole): the step also matches an
+      // interpolated template, wherever it stands.
+      case 'ref': return tokenNames.has(e.name) ? { t: 'tok', name: e.name, ...(e.hole !== undefined ? { hole: e.hole } : {}) } : { t: 'rule', name: e.name };
       case 'group': {
         const ss = altSteps(e.body);
         if (e.ctxMode) return ctxOf(e.ctxMode, ss);                                 // [Await]/[Yield] context
@@ -822,6 +829,7 @@ export type StepLowering = {
   shared(id: number): string;                    // a call of ParserIR.shared[id] in this form
   lit(s: Step & { t: 'lit' }): string;
   tok(name: string): string;
+  template(name: string, hole: string): string;  // the template kind `name`: its token, or an interpolated template whose holes `hole` parses (a building form, recognized or not: its node is dropped when recognizing)
   rule(name: string): string;
   ruleBp(name: string, bp: number): string;      // only a Pratt rule is called at a binding power
   star(body: string): string;                    // body: the inner step, as a boolean expression
@@ -851,7 +859,7 @@ export function stepExpr(s: Step, L: StepLowering): string {
 export function stepBody(s: Step, L: StepLowering): string {
   switch (s.t) {
     case 'lit': return L.lit(s);
-    case 'tok': return L.tok(s.name);
+    case 'tok': return s.hole !== undefined ? L.template(s.name, s.hole) : L.tok(s.name);
     case 'rule': return L.rule(s.name);
     case 'ruleBp': return L.ruleBp(s.name, s.bp);
     case 'star': return L.star(stepExpr(s.step, L.inner()));
@@ -962,6 +970,7 @@ function formsOf(rules: RuleIR[], lookaheads: Alt[], nShared: number, entry: str
   const buildStep = (s: Step): void => {
     if ('share' in s && s.share !== undefined) { if (buildShared[s.share]) return; buildShared[s.share] = true; }
     if (s.t === 'rule' || s.t === 'ruleBp') buildRule(s.name);
+    if (s.t === 'tok' && s.hole !== undefined) buildRule(s.hole);
     for (const k of stepKids(s)) buildStep(k);
   };
   const recognizeRule = (name: string): void => {
@@ -975,6 +984,7 @@ function formsOf(rules: RuleIR[], lookaheads: Alt[], nShared: number, entry: str
     if ('share' in s && s.share !== undefined) { if (recognizeShared[s.share]) return; recognizeShared[s.share] = true; }
     if (s.t === 'rule') recognizeRule(s.name);
     if (s.t === 'ruleBp') buildRule(s.name);   // only a Pratt rule is called at a binding power
+    if (s.t === 'tok' && s.hole !== undefined) buildRule(s.hole);   // a template is matched by its building form, its node dropped
     for (const k of stepKids(s)) recognizeStep(k);
   };
   buildRule(entry);
@@ -982,7 +992,7 @@ function formsOf(rules: RuleIR[], lookaheads: Alt[], nShared: number, entry: str
   // Whether a recognize-form step runs a building form (a Pratt rule's), directly or through the
   // rd rules it recognizes (a fixed point over their recursion); a nested lookahead undoes its own.
   const rdBuilds = new Set<string>();
-  const builds = (s: Step): boolean => s.t === 'ruleBp' || (s.t === 'rule' && (byName.get(s.name)?.kind === 'pratt' || rdBuilds.has(s.name))) || stepKids(s).some(builds);
+  const builds = (s: Step): boolean => s.t === 'ruleBp' || (s.t === 'tok' && s.hole !== undefined) || (s.t === 'rule' && (byName.get(s.name)?.kind === 'pratt' || rdBuilds.has(s.name))) || stepKids(s).some(builds);
   for (let changed = true; changed;) {
     changed = false;
     for (const name of recognize) {
@@ -994,7 +1004,7 @@ function formsOf(rules: RuleIR[], lookaheads: Alt[], nShared: number, entry: str
   // shared steps and lookaheads they call (nested lookaheads included, unlike `builds`), is a
   // building form. A fixed point over rd rules and lookaheads together, which call each other.
   const ruleCalls = new Set<string>(), lookCalls = new Array<boolean>(lookaheads.length).fill(false);
-  const callsBuild = (s: Step): boolean => s.t === 'ruleBp'
+  const callsBuild = (s: Step): boolean => s.t === 'ruleBp' || (s.t === 'tok' && s.hole !== undefined)
     || (s.t === 'rule' && (byName.get(s.name)?.kind === 'pratt' || ruleCalls.has(s.name)))
     || (s.t === 'look' && lookCalls[s.id]!) || stepKids(s).some(callsBuild);
   for (let changed = true; changed;) {

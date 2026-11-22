@@ -863,6 +863,8 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean): StepLowering {
     shared: (id) => `${recv}.sub_${id}${R}()`,
     lit: (s) => (gtCompLit(ids, s) ? `${recv}.match_comp(${lidOf(ids, s.value)})` : `${recv}.match_lit${R}(${lidOf(ids, s.value)})`),
     tok: (name) => `${recv}.match_tok${R}(${kidOf(ids, name)})`,
+    // Recognized, an interpolated template runs its building matcher and its node is dropped.
+    template: (name, hole) => `(${recv}.match_tok${R}(${kidOf(ids, name)}) || ${r ? `${recv}.match_template(Parser::parse_${hole}).is_some()` : `${recv}.call_rule(|p| p.match_template(Parser::parse_${hole}))`})`,
     rule: (name) => (r ? `${recv}.rec_${name}()` : `${recv}.call_rule(Parser::parse_${name})`),
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (r ? `${recv}.${name}_bp(${bp}).is_some()` : `${recv}.call_rule(|p| p.${name}_bp(${bp}))`),
