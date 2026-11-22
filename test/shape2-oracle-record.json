@@ -11,9 +11,9 @@
   "corpus": "node_modules",
   "view": "top-level statement",
   "units": 2478,
-  "compared": 855,
-  "identical": 855,
-  "outOfSubset": 1623
+  "compared": 856,
+  "identical": 856,
+  "outOfSubset": 1622
  },
  "estree node_modules file": {
   "corpus": "node_modules",
@@ -35,9 +35,9 @@
   "corpus": "conformance/expressions",
   "view": "top-level statement",
   "units": 9208,
-  "compared": 5720,
-  "identical": 5719,
-  "outOfSubset": 3486
+  "compared": 5722,
+  "identical": 5721,
+  "outOfSubset": 3484
  },
  "tsc conformance/expressions file": {
   "corpus": "conformance/expressions",

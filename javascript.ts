@@ -147,9 +147,9 @@ const regexFirstChar = altPattern(noneOf('/', '\\', '[', '*', '\n'), regexEscape
 const Regex_       = token(seq('/', regexFirstChar, star(regexChar), '/', star(identPart)), {   // flags: maximal-munch any IdentifierPart run (tsc lexes flags leniently; validity is a checker rule)
   regex: true,
   regexContext: {
-    divisionAfterTypes: ['Ident', 'Number', 'String', 'Template', 'BigInt'],
+    divisionAfterTypes: ['Ident', 'Number', 'String', 'Template', 'BigInt', 'PrivateField'],
     divisionAfterTexts: [')', ']', '++', '--', 'this', 'super', 'true', 'false', 'null', 'undefined'],
-    regexAfterTexts: ['in', 'of', 'instanceof', 'typeof', 'delete', 'void', 'await', 'yield', 'throw', 'return', 'case', 'do', 'else', 'new'],
+    regexAfterTexts: ['in', 'of', 'instanceof', 'typeof', 'delete', 'void', 'await', 'yield', 'throw', 'return', 'case', 'do', 'else', 'new', 'default'],
     // `kw ( … )` heads (control-flow): the closing `)` is a statement head, not a
     // value, so `if (a) /re/` parses `/re/` as a regex rather than division.
     regexAfterParenKeywords: ['if', 'while', 'for', 'with'],
@@ -300,7 +300,7 @@ export const forAwaitHeadArms = (Expr, ForBinding) => [
   arm('of', not('let'), exclude('in', field('left', Expr)), 'of', field('right', Expr)),
 ];
 export const forStatement = ($, ForHead, ForAwaitHead) =>
-  ['for', alt(['(', field('head', ForHead), ')'], ['await', '(', field('head', ForAwaitHead), ')']), field('body', $)];
+  ['for', alt(['(', field('head', ForHead), ')'], [field('awaitKeyword', 'await'), '(', field('head', ForAwaitHead), ')']), field('body', $)];
 
 // The guard of the *expression* identifier-NUD: an IdentifierReference is no reserved word, so
 // a reserved word with no expression form of its own is no expression (`in;`, `x = default`,
