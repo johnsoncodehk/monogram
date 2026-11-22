@@ -10,6 +10,7 @@ import { defineTarget } from '../src/define-target.ts';
 import { portableIR } from '../src/emit-portable.ts';
 import { relexFamilyFns, relexMode } from '../src/relex-family.ts';
 import { lexScanFamily } from '../src/lex-family.ts';
+import { REUSE_FNS } from '../src/reuse-family.ts';
 import { ATOM, type BinOp, type Expr, type Fn, type Lowering, type Stmt } from '../src/algo-ir.ts';
 
 const OP: Record<BinOp, string> = { add: '+', sub: '-', shr: 'shr', shl: 'shl', lt: '<', le: '<=', gt: '>', ge: '>=', eq: '=', ne: '/=', and: 'and', or: 'or' };
@@ -20,7 +21,7 @@ const at = (c: string) => ({ c, prec: ATOM });
 
 const sexpr: Lowering = {
   ident: kebab,
-  num: { int: 'int', lid: 'lid', depth: 'int' },
+  num: { int: 'int', lid: 'lid', depth: 'int', pos: 'int' },
   type: (t) => t,
   cast: (_cx, r, nat) => ({ ...r, c: form('as', nat, r.c), nat, prec: ATOM }),
   owns: false,
@@ -90,13 +91,16 @@ const sexpr: Lowering = {
       shrink: (_cx, l) => [form('shrink!', l)],
     },
   },
+  record: {
+    field: (cx, r, _rec, f, ty) => cx.atom(form('field', r.c, kebab(f)), ty === 'bool' ? 'bool' : 'int', 'int'),
+  },
 };
 
 const target = defineTarget({
   name: 'sexpr-syntax-probe',
   ext: 'scm',
   lowering: sexpr,
-  emitParser: (grammar, shared) => { const ir = portableIR(grammar); return shared.lexScan(ir) + '\n' + shared.relexFamily(ir); },
+  emitParser: (grammar, shared) => { const ir = portableIR(grammar); return shared.lexScan(ir) + '\n' + shared.relexFamily(ir) + '\n' + shared.reuseFamily(ir); },
 });
 
 // IR census: what the printed forms must account for.
@@ -112,6 +116,7 @@ function census(fns: Fn[]): Map<string, number> {
     if (e.k === 'bin') bump(OP[e.op]);
     if (e.k === 'not') bump('not');
     if (e.k === 'at') bump('nth');
+    if (e.k === 'field') bump('field');
     if (e.k === 'code') bump('char-code');
     if (e.k === 'hasAt') bump('starts-at?');
     if (e.k === 'inSet') bump('in-set?');
@@ -174,7 +179,7 @@ const fail = (msg: string) => { failures++; console.log(`  ✗ ${msg}`); };
 for (const path of FIXTURES) {
   const grammar = (await import(path)).default;
   const lex = lexScanFamily(portableIR(grammar));
-  const fns = [...lex.fns, ...relexFamilyFns(relexMode(portableIR(grammar)))];
+  const fns = [...lex.fns, ...relexFamilyFns(relexMode(portableIR(grammar))), ...(portableIR(grammar).reuse ? REUSE_FNS : [])];
   const out = target.emitParser(grammar);
   const code = out.split('\n').filter((l) => !/^\s*;;/.test(l)).join('\n').replace(/"(?:[^"\\]|\\.)*"/g, '""');
   const bad = code.match(C_SURFACE);
@@ -196,4 +201,4 @@ if (failures > 0) {
   console.error(`\n✗ syntax-agnostic: ${failures} problem(s)`);
   process.exit(1);
 }
-console.log('\n✓ syntax-agnostic: the lex-scan and relex families print as S-expressions through defineTarget; every IR construct accounted for');
+console.log('\n✓ syntax-agnostic: the lex-scan and relex families print as S-expressions through defineTarget (with the reuse family); every IR construct accounted for');
