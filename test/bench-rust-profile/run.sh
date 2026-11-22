@@ -91,7 +91,9 @@ cd "$W/inputs"
 echo "=== acceptance and work counts (count builds; not profiled)"
 for f in $INPUTS; do
   "$OXC/oxc-once" --once "$f" | sed 's/^/C /' | tee -a "$R"
-  [ $HAVE_OXCCOUNT = 1 ] && "$W/oxc-count/target/release/oxc-count" "$f" | tee -a "$R"
+  # oxc-count overflows its stack on dense-plus.ts (a 1 MB left-deep `a+a+…`): that is a fact about
+  # the reference, not a reason to lose the whole profile, so a crash here is recorded and the run goes on.
+  [ $HAVE_OXCCOUNT = 1 ] && { "$W/oxc-count/target/release/oxc-count" "$f" || echo "OXCCOUNT $f crashed (exit $?)"; } | tee -a "$R"
   for v in A M; do
     "$W/mono-prof-$v/target/release/mono-prof-$v" --once "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v CRASH $f" | tee -a "$R"
     "$W/mono-count-$v/target/release/mono-count-$v" "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v COUNTCRASH $f" | tee -a "$R"
