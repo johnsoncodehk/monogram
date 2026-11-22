@@ -92,6 +92,18 @@ const RESERVED_EXPRS = {
     'x = const;', 'f(if);', 'x = a ? in : b;',
   ],
 };
+// `export` takes a declaration (16.2.3), never another statement, in both grammars
+// (`exportDeclaration`); TypeScript's also takes `using`, as tsc's parser does.
+const EXPORT_DECLS = {
+  accept: [
+    'export var a = 1;', 'export let a\nx;', 'export const a = 1, b = 2;', 'export function f() {}', 'export async function f() {}',
+    'export class C {}', 'export { a }', 'export { a }\nx;', 'export { a as b, c }', 'export { a } from "m"',
+  ],
+  reject: [
+    'export if (x) {}', 'export ;', 'export x;', 'export x = 1;', 'export (x);', 'export { a } b', 'export { a }\n.b;',
+    'export return;', 'export async\nfunction f() {}', 'export {} {}', 'export while (x) {}',
+  ],
+};
 const CASES: Case[] = [
   {
     grammar: 'calc', path: './fixtures/calc.ts',
@@ -351,7 +363,7 @@ const CASES: Case[] = [
       'for (a in b) { d = c in e; }',
       'new a.b();', '((((x))));',
       'for (a = x + y in b) c;',
-      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept,
+      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...EXPORT_DECLS.accept,
       // An assignment / update operand needs only a LeftHandSideExpression's shape; target validity is a consumer's.
       '-x++;', '(a) = 1;', 'a = b = c;', '1 = 2;', '1++;', '++1;', 'f() = 1;', 'f()++;', '++f();', 'this = 1;',
       '(a + b) = c;', '(a, b) = 1;', 'a?.b = 1;', 'a?.b++;', '[a + b] = c;', '({a: 1} = c);', 'new.target = 1;',
@@ -432,7 +444,7 @@ const CASES: Case[] = [
       'x\n++;', 'x\n--', '(x\n++);', 'a = [x\n++];', 'x\n++\n-y;', 'x\n++\ny++;', 'x\n++ ++y;', 'class C { p = x\n++ }', 'class C { p = x\n++\ny }',
       'for (a = (x in b)) c;',
       'for (a = b ? x in c : y in d) e;',
-      ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject,
+      ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject,
       // An assignment / update operand (prefix ++/-- included) without a LeftHandSideExpression's shape has no parse.
       'a + b = c;', 'a++ = 1;', '-a = 1;', '++ -x;', '++x++;', '++ ++x;',
       // … wherever the expression is optional or repeated: a refused operand is not skipped.
@@ -448,14 +460,16 @@ const CASES: Case[] = [
       'x = function this() {}', 'import "m" x', 'export * from "m" x', 'export default a b', 'export var a = 1 b',
       'class C { a b }', 'class C { m() n() {} }', 'class C { get g() set s(v) {} }', 'class C { m(); }',
       // an update expression is no callee: `a++(x)` is `a++` and `(x)` with nothing between them
-      'a++(x);'],
+      'a++(x);',
+      // an `export`ed declaration is not a `using` one (explicit resource management; tsc's parser takes it)
+      'export using x = y;'],
   },
   {
     // The real typescript.ts grammar — the second, most complex full language proving the
     // agnostic emitter (types, generics, interfaces, enums, assertions, variance). ASCII.
     grammar: 'typescript', path: '../typescript.ts',
     accept: [
-      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
+      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...EXPORT_DECLS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
       // A class heritage is a LeftHandSideExpression (see the JavaScript cases).
       'f(class extends (a, b) {});', 'f(class extends a[0] {});', 'f(class extends a`t` {});', 'f(class extends a?.b() {});',
       // `return` takes an expression only on its own line (a restricted production), so a
@@ -625,10 +639,10 @@ const CASES: Case[] = [
       // declaration words stay contextual.
       '{}\n(x)', 'function f() {}\n(x)', 'class C {}\n[0]', '@dec class C {}\n(x)', 'async\nfunction f() {}\n(x)',
       'if (a) {}\n(x)', '({}).x;', '({ b(); }).x;', '(@dec class {}).x;', 'x = () => ({}).y;', 'let = 1;',
-      'type = 1;', 'namespace.x;', 'declare(x);', 'abstract(x);',
+      'type = 1;', 'namespace.x;', 'declare(x);', 'abstract(x);', 'export using x = y;', 'export await using x = y;',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
-    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
+    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '{ b(); }.x;', '{ static x }.y;', '{ static x }', '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;',
       'let[0] = 1;', '(async\nfunction f() {});',

@@ -203,6 +203,13 @@ export const expressionStatement = (Expr) => [
 // An arrow's body (`ConciseBody : [lookahead ≠ {] ExpressionBody | { FunctionBody }`): after `=>`
 // a `{` begins the function body, never an object literal, so `() => { b() {} }.x` has no parse.
 export const conciseBody = (Block, Expr) => alt(Block, [not('{'), Expr]);
+// `export Declaration` / `export VariableStatement` (16.2.3 ExportDeclaration): what follows
+// `export` is a declaration, never another statement, so `export if (x) {}`, `export x;`,
+// `export ;` have no parse and `export { a }` is the export list, not `export` and a block. A
+// declaration is `Decl` (`$`) or one of the statements that declare (`var` / `let` / `const`, and
+// in TypeScript `using`, which tsc's parser takes there; `declarationWords`).
+export const exportDeclaration = ($, Stmt, declarationWords) =>
+  ['export', alt($, [not(not(alt(...declarationWords))), Stmt])];
 
 // ── Always-reserved words ──
 // The `Ident` token deliberately swallows keywords (they lex as identifiers), so
@@ -730,7 +737,7 @@ const Decl = rule($ => [
   // as a declaration + arrow rather than longest-matching `function f(){}()` (IIFE).
   ...fnArms(bindingIdentifier, Block),
   classDecl,   // a class with no decorator; with them, the decorator arm below
-  ['export', alt($, Stmt)],
+  exportDeclaration($, Stmt, ['var', 'let', 'const']),
   // A declaration's decorators, parsed ONCE, then what they decorate: a class takes them as its
   // own (`@dec class C {}` is one declaration); any other declaration is `$` (`@dec export class
   // C {}`). The inline alt is ordered, so a class is the first branch and the only one that
