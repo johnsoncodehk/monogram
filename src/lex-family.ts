@@ -334,6 +334,7 @@ class LexScan {
         const ex = examinedUnits({ type: 'seq', items: items.slice(k) });
         const stop = intersect(complement(ex), [[0, 0xffff]]);
         const stopUnits = stop.flatMap(([a, b]) => (b - a < 8 ? Array.from({ length: b - a + 1 }, (_, i) => a + i) : [-1]));
+        if (stop.length === 0 && k === 0) return mk([ret(end1)]);
         if (stop.length === 0) body.push(ret(end1));
         else if (stopUnits.length <= 4 && stopUnits.every((c) => c >= 0 && (c < 0xd800 || c > 0xdfff))) body.push(ret(add(this.findAny('q', stopUnits), I(1))));
         else {

@@ -3235,6 +3235,8 @@ const goBlock = (lines: string[]): string[] => lines.map((l) => GO_IND + l);
 
 // Shared-algorithm lowering: explicit conversions, slices; a list with an exact final length is
 // made with that capacity, any other list grows by append (no estimate is reserved: 6183a29).
+// A Go string literal; Go rejects a byte order mark inside a source file, so it is an escape.
+const goLit = (v: string): string => JSON.stringify(v).replace(/\ufeff/g, '\\uFEFF');
 const goLowering: Lowering = {
   units: UNITS,
   ident: (n) => n,
@@ -3303,7 +3305,7 @@ ${[...ones, ...wides].join('\n')}
 }`;
   },
   expr: {
-    literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
+    literal: (v) => ({ c: typeof v === 'string' ? goLit(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${goWrap(r, ATOM)}`, prec: 90 }),
     bin: (op, a, b) => {
       const [sp, p] = GO_OPS[op];
@@ -3314,7 +3316,7 @@ ${[...ones, ...wides].join('\n')}
     call: (name, args) => `${name}(${args.join(', ')})`,
     len: (cx, l) => cx.atom(`len(${l.c})`, 'int', 'int'),
     code: (cx, s, i) => cx.atom(`int(${goWrap(s, ATOM)}[${i.c}])`, 'int', 'int'),
-    hasAt: (cx, s, i, lit) => cx.atom(`strings.HasPrefix(${goWrap(s, ATOM)}[${i.c}:], ${JSON.stringify(lit)})`, 'bool', 'bool'),
+    hasAt: (cx, s, i, lit) => cx.atom(`strings.HasPrefix(${goWrap(s, ATOM)}[${i.c}:], ${goLit(lit)})`, 'bool', 'bool'),
     inSet: (cx, set, c) => cx.atom(`${set}[${c.c}]`, 'bool', 'bool'),
     runEnd: (cx, set, s, i) => cx.atom(`lexRunEnd(${s.c}, ${i.c}, &${set})`, 'int', 'int'),
     find: (cx, s, i, lit) => cx.atom(`lexFind(${s.c}, ${i.c}, ${JSON.stringify(lit)})`, 'int', 'int'),
