@@ -1508,7 +1508,16 @@ export function lidWordByte(b: number): boolean {
 export function sepDelimLid(plan: LexIdPlan, delim: string): number {
   const lid = lidOf(plan, delim);
   if (lid >= plan.kwLid) throw new Error(`sep delimiter ${JSON.stringify(delim)} is a word: the portable targets match a delimiter as punctuation`);
+  if (plan.gtComps.includes(delim)) throw new Error(`sep delimiter ${JSON.stringify(delim)} is a composed '>' literal: the portable targets match a delimiter as one token`);
   return lid;
+}
+/** Whether a literal step is a composed '>'-led literal (LexIdPlan.gtComps), decided at generation
+ *  time: it spans several tokens and is only a lookahead operand, so it is matched by the target's
+ *  composite reader and never becomes a tree leaf. */
+export function gtCompLit(plan: LexIdPlan, s: { value: string; ttype: string }): boolean {
+  if (!plan.gtComps.includes(s.value)) return false;
+  if (s.ttype !== '$punct') throw new Error(`composed literal ${JSON.stringify(s.value)} must be punctuation`);
+  return true;
 }
 export function kidOf(plan: LexIdPlan, kind: string): number {
   const i = plan.kids.indexOf(kind);

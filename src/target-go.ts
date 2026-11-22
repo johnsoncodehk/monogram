@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, dispatchWalk, type StepLowering, type DispatchLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, dispatchWalk, gtCompLit, type StepLowering, type DispatchLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -749,12 +749,6 @@ func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
 }`;
 }
 
-// A composed '>'-led literal (LexIdPlan.gtComps): only a lookahead operand, so never a tree leaf.
-function gtCompLit(ids: LexIdPlan, s: { value: string; ttype: string }): boolean {
-  if (!ids.gtComps.includes(s.value)) return false;
-  if (s.ttype !== '$punct') throw new Error(`goTarget: composed literal ${JSON.stringify(s.value)} must be punctuation`);
-  return true;
-}
 // The binary operator read at p.pos (t = p.toks[p.pos]): opLid, its token count opN and (withEnd)
 // its end offset opEnd. A '>' read counts the tokens it inspected toward maxLook.
 function gtOpRead(ids: LexIdPlan, withEnd: boolean): string {

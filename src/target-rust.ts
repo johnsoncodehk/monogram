@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, dispatchWalk, type StepLowering, type DispatchLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, dispatchWalk, gtCompLit, type StepLowering, type DispatchLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -97,12 +97,6 @@ macro_rules! cand {
 const astGuardRs = (g: Guard, t: string): string | null =>
   g === null ? null : [`in_token_set(${g.first.id}, &${t})`, ...(g.second !== null ? [`self.toks.get(self.pos + 1).map_or(false, |t2| in_token_set(${g.second.id}, t2))`] : [])].join(' && ');
 
-/** A composed '>'-led literal (LexIdPlan.gtComps): only a lookahead operand, so never a tree leaf. */
-function gtCompLit(ids: LexIdPlan, s: { value: string; ttype: string }): boolean {
-  if (!ids.gtComps.includes(s.value)) return false;
-  if (s.ttype !== '$punct') throw new Error(`rustTarget: composed literal ${J(s.value)} must be punctuation`);
-  return true;
-}
 // '>'-led composite operators (LexIdPlan.gtComps): the lexer scans every '>' alone. gt_op reads the
 // operator at toks[i]: a lone '>' extends over each adjacent single-character punct token after it
 // while the text stays a composite (gt_step: prefix lid × next character lid → composite lid). A

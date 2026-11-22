@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, stepExpr, stepStmts, ruleShell, dispatchWalk, type StepLowering, type RuleLowering, type DispatchLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, stepExpr, stepStmts, ruleShell, dispatchWalk, gtCompLit, type StepLowering, type RuleLowering, type DispatchLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -488,7 +488,7 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
   const L: StepLowering = {
     inner: () => L,
     shared: (id) => `sub${id}${S}()`,
-    lit: (s) => `matchLit${S}(${lidOf(ids, s.value)})`,
+    lit: (s) => (gtCompLit(ids, s) ? `_matchComp(${lidOf(ids, s.value)})` : `matchLit${S}(${lidOf(ids, s.value)})`),
     tok: (name) => `matchTok${S}(${kidOf(ids, name)})`,
     rule: (name) => `parse${name}${S}()`,
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
@@ -990,7 +990,6 @@ function opLeafW(t: Tok, lid: number): void {
 function headLeafTextW(b: number): string { return _src.slice(_sp[b * _SW + 3], _sp[b * _SW + 4]); }
 // A literal is a \`$keyword\` leaf when it is a word (the lids from _LID_KW on), else \`$punct\`.
 function matchLitW(lid: number): boolean {
-  if (_GT_LIT[lid] !== 0) return _matchComp(lid);
   const t = peek();
   if (t === null || t.lid !== lid) return false;
   leafW(lid >= _LID_KW ? '$keyword' : '$punct', t); pos++;
@@ -1030,7 +1029,6 @@ function altLitW(lids: number[]): boolean {
 function _drop(b: number, ok: boolean): boolean { _n = b; return ok; }
 // The recognize forms (ParserIR.forms): the same tokens examined, nothing built.
 function matchLitR(lid: number): boolean {
-  if (_GT_LIT[lid] !== 0) return _matchComp(lid);
   const t = peek();
   if (t === null || t.lid !== lid) return false;
   pos++; return true;
