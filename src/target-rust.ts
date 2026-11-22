@@ -867,9 +867,18 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
     rule: (name) => (r ? `${recv}.rec_${name}()` : `${recv}.call_rule(Parser::parse_${name})`),
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (r ? `${recv}.${name}_bp(${bp}).is_some()` : `${recv}.call_rule(|p| p.${name}_bp(${bp}))`),
-    // A body guard (emit-portable.ts annotateSteps) is tested inside an out-of-line helper
-    // (`star_in` / `opt_in` / `sep_by_in`, `#[inline(never)]`, generic over the body: one small
-    // function per site), so the function holding the step does not grow by the guarded attempt.
+    // A body guard (emit-portable.ts annotateSteps): star tests it before each attempt inside an
+    // out-of-line loop (`star_in`); opt / sep test it here and make their attempt out of line
+    // (`opt_out` / `sep_by_out`). Both are `#[inline(never)]` and generic over the body, so each site
+    // is one small function with its body inlined, and the function holding the step grows by a set
+    // test and a call only. A measured codegen fact decides that spelling: with the attempt inline
+    // (PR #169), or the guard inside a helper, LLVM allocated the registers of the large rule
+    // functions differently (same executed branches, other spills: one identifier NUD 246 -> 256
+    // instructions) and Rust parse instructions rose (dense-semi +4.96%; helpers: +0.3% to +4.5%).
+    // Not inside Pratt arms (`guards` false, prattRule): Expr_nud, about 13k instructions, moved by
+    // +9 to +13 per call wherever guarded code joined it (dense-plus +1.30% to +1.87%); without them
+    // dense-plus is +0.43%. PR #184 has the variants and their profile runs. The guard only skips
+    // attempts that cannot match, so leaving it out is sound.
     star: (body, g) => (g === null || !guards ? `${recv}.star${R}(|p| ${body})` : `${recv}.star_in${R}(${g}, |p| ${body})`),
     opt: (body, g) => (g === null || !guards ? `${recv}.opt${R}(|p| ${body})` : `(!${recv}.ahead(${g}, true) || ${recv}.opt_out${R}(|p| ${body}))`),
     sep: (elem, delim, g) => (g === null || !guards ? `${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})` : `(!${recv}.ahead(${g}, true) || ${recv}.sep_by_out${R}(|p| ${elem}, ${sepDelimLid(ids, delim)}))`),
@@ -1081,7 +1090,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   const lost = lostRs;
   const fin = `self.finish(${rid}, sb, left.off as usize, left.tok_start as usize)`;
   const L: PrattLowering = {
-    steps: rsSteps(ids, 'self', false, false),   // [variant a5] no body guards in Pratt arms
+    steps: rsSteps(ids, 'self', false, false),   // no body guards in Pratt arms (see rsSteps)
     ifAll: ifRs,
     kidIs: (k) => `t.kid == ${k}`,
     lidIs: (l) => `t.lid == ${l}`,
@@ -2533,26 +2542,6 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
         true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
-    fn opt_in<F: Fn(&mut Self) -> bool>(&mut self, k: usize, body: F) -> bool {
-        if self.ahead(k, true) { let m = self.mark(); if !body(self) { self.reset(m); } }
-        true
-    }
-    #[inline(never)]
-    #[allow(dead_code)]
-    fn sep_by_in<F: Fn(&mut Self) -> bool>(&mut self, k: usize, elem: F, delim: u16) -> bool {
-        if !self.ahead(k, true) { return true; }
-        let m0 = self.mark();
-        if !elem(self) { self.reset(m0); return true; }
-        loop {
-            let m = self.mark();
-            if !self.match_lit(delim) { self.reset(m); break; }
-            let m2 = self.mark();
-            if !elem(self) { self.reset(m2); break; }
-        }
-        true
-    }
     // The attempt of a guarded opt / sep whose guard the caller tested: out of line, per site.
     #[inline(never)]
     #[allow(dead_code)]
@@ -2594,26 +2583,6 @@ impl<'a, B: Builder> Parser<'a, B> {
     #[allow(dead_code)]
     fn star_in_r<F: Fn(&mut Self) -> bool>(&mut self, k: usize, once: F) -> bool {
         while self.ahead(k, true) { let sp = self.pos; if !once(self) { self.back(sp); break; } }
-        true
-    }
-    #[inline(never)]
-    #[allow(dead_code)]
-    fn opt_in_r<F: Fn(&mut Self) -> bool>(&mut self, k: usize, body: F) -> bool {
-        if self.ahead(k, true) { let sp = self.pos; if !body(self) { self.back(sp); } }
-        true
-    }
-    #[inline(never)]
-    #[allow(dead_code)]
-    fn sep_by_in_r<F: Fn(&mut Self) -> bool>(&mut self, k: usize, elem: F, delim: u16) -> bool {
-        if !self.ahead(k, true) { return true; }
-        let sp0 = self.pos;
-        if !elem(self) { self.back(sp0); return true; }
-        loop {
-            let sp = self.pos;
-            if !self.match_lit_r(delim) { self.back(sp); break; }
-            let sp2 = self.pos;
-            if !elem(self) { self.back(sp2); break; }
-        }
         true
     }
     #[inline(always)]

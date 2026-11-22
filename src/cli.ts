@@ -105,6 +105,7 @@ const treeSitter = generateTreeSitter(grammar, langName);
 emit(`tree-sitter/${langName}/grammar.js`, treeSitter.grammarJs);
 emit(`tree-sitter/${langName}/queries/highlights.scm`, treeSitter.highlightsScm);
 if (treeSitter.scannerC.trim()) emit(`tree-sitter/${langName}/src/scanner.c`, treeSitter.scannerC);
+emit(`tree-sitter/${langName}/tree-sitter.json`, treeSitter.treeSitterJson);
 // A package.json so `tree-sitter generate`/`build` can load grammar.js as CommonJS
 // (the repo root is "type":"module", which would otherwise treat .js as ESM and
 // fail on `module.exports`). Minimal — just enough to build the wasm in CI.

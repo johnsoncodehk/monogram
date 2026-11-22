@@ -1,0 +1,14 @@
+{
+  "grammars": [
+    {
+      "name": "html",
+      "scope": "text.html.basic",
+      "path": ".",
+      "highlights": "queries/highlights.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.0.0",
+    "license": "MIT"
+  }
+}
