@@ -597,3 +597,103 @@ export function analyzeGrammar(grammar: CstGrammar) {
     suppressSets, suppressSetOf, suppressedIn,
   };
 }
+
+// ── FIRST over concrete symbols (the guards of the compiled parsers) ──
+// The plain FIRST above names a token kind or a literal text, and gives up where a Pratt rule's
+// prefix operator leads. A compiled parser tests a token against a set in which a token is ONE
+// symbol: its literal when its text is one of the grammar's literals, else its kind. A set over
+// those symbols can say what a key set cannot — an identifier that is no reserved word — so the
+// zero-width tests in front of a candidate fold into it. `first1(e)` is the set of symbols a
+// NON-EMPTY match of `e` can begin with (a superset):
+//   - a literal is its own symbol (a composed `>` operator begins at the `>` token); a token kind is
+//     its kind's symbol plus every literal the lexer gives that kind (an interpolated template
+//     kind also begins with its head);
+//   - a prefix-operator item (`prefix $`) is each prefix operator of the precedence table;
+//   - a `not` over a body that reads exactly one token removes that body's symbols from what the
+//     items after it begin with; a reserved-word guard removes them except the context's words
+//     (`maybeWords`: whether those are reserved is the context's, known only at run time);
+//     `not(not(X))` keeps only X's FIRST; every other zero-width test keeps everything.
+// Which kinds may carry a literal is the lexer plan's (`kindsOf`, a superset; none: no token does),
+// handed in as data: this analysis knows the grammar, not the lexer. A symbol is a literal's text,
+// or KIND + a token kind's name.
+export const KIND = '\u0000';
+export type ConcreteLex = { kindsOf: (lit: string) => readonly string[]; gtComps: readonly string[]; maybeWords: readonly string[] };
+export function concreteFirst(grammar: CstGrammar, a: ReturnType<typeof analyzeGrammar>, lex: ConcreteLex) {
+  const literals = new Set<string>();
+  const collect = (e: RuleExpr): void => {
+    if (e.type === 'literal') literals.add(e.value);
+    else if (e.type === 'sep') { literals.add(e.delimiter); collect(e.element); }
+    else if (e.type === 'seq' || e.type === 'alt') e.items.forEach(collect);
+    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') collect(e.body);
+  };
+  grammar.rules.forEach((r) => collect(r.body));
+  for (const lv of grammar.precs) for (const o of lv.operators) literals.add(o.value);
+  const litSym = (v: string): string => (lex.gtComps.includes(v) ? '>' : v);
+  const ofKind = new Map<string, string[]>();
+  for (const l of literals) for (const k of lex.kindsOf(l)) (ofKind.get(k) ?? ofKind.set(k, []).get(k)!).push(l);
+  const kindSyms = (k: string): string[] => [KIND + k, ...(ofKind.get(k) ?? []), ...(a.templateTokenNames.has(k) ? [KIND + '$templateHead'] : [])];
+  // The one token a `not` body tests, as symbols (null: the body reads more, or not exactly one).
+  const oneToken = (e: RuleExpr): string[] | null => {
+    switch (e.type) {
+      case 'literal': return lex.gtComps.includes(e.value) ? null : [e.value];
+      case 'ref': return a.tokenNames.has(e.name) ? kindSyms(e.name) : null;
+      case 'group': return e.suppress || e.ctxMode ? null : oneToken(e.body);
+      case 'seq': return e.items.length === 1 ? oneToken(e.items[0]!) : null;
+      case 'alt': { const out: string[] = []; for (const it of e.items) { const m = oneToken(it); if (m === null) return null; out.push(...m); } return out; }
+      default: return null;
+    }
+  };
+  type F = { syms: Set<string>; empty: boolean };
+  const ruleF = new Map<string, F>(grammar.rules.map((r) => [r.name, { syms: new Set(), empty: false }]));
+  // What a zero-width test before an item lets the item's first token be (null: anything).
+  type Keep = (sym: string) => boolean;
+  const keepOf = (e: RuleExpr): Keep | null => {
+    if (e.type !== 'not') return null;
+    if (e.body.type === 'not') { const f = first(e.body.body); return f.empty ? null : (s) => f.syms.has(s); }
+    const m = oneToken(e.body);
+    if (m === null) return null;
+    const out = new Set(m);
+    return e.reservable ? (s) => !out.has(s) || lex.maybeWords.includes(s) : (s) => !out.has(s);
+  };
+  const ZERO = new Set<RuleExpr['type']>(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'op', 'postfix']);
+  function seqF(items: readonly RuleExpr[]): F {
+    const syms = new Set<string>();
+    const keeps: Keep[] = [];
+    for (const it of items) {
+      if (ZERO.has(it.type)) { const k = keepOf(it); if (k) keeps.push(k); continue; }
+      const f = first(it);
+      for (const s of f.syms) if (keeps.every((k) => k(s))) syms.add(s);
+      if (!f.empty) return { syms, empty: false };
+    }
+    return { syms, empty: true };
+  }
+  function first(e: RuleExpr): F {
+    switch (e.type) {
+      case 'literal': return { syms: new Set([litSym(e.value)]), empty: false };
+      case 'ref': return a.tokenNames.has(e.name) ? { syms: new Set(kindSyms(e.name)), empty: false } : ruleF.get(e.name)!;
+      case 'seq': return seqF(e.items);
+      case 'alt': { const fs = e.items.map(first); return { syms: new Set(fs.flatMap((f) => [...f.syms])), empty: fs.some((f) => f.empty) }; }
+      case 'quantifier': { const f = first(e.body); return { syms: f.syms, empty: e.kind === '+' ? f.empty : true }; }
+      case 'group': return first(e.body);
+      case 'sep': return { syms: first(e.element).syms, empty: true };
+      case 'prefix': return { syms: new Set([...a.prefixOps.keys()].map(litSym)), empty: false };
+      default: return seqF([e]);   // a zero-width test alone
+    }
+  }
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const r of grammar.rules) {
+      const f = first(r.body), old = ruleF.get(r.name)!;
+      const syms = new Set([...old.syms, ...f.syms]);
+      if (syms.size !== old.syms.size || f.empty !== old.empty) { ruleF.set(r.name, { syms, empty: old.empty || f.empty }); changed = true; }
+    }
+  }
+  return {
+    /** The symbols a non-empty match of `e` can begin with. */
+    first1: (e: RuleExpr): Set<string> => first(e).syms,
+    /** The symbols a set of keys (each a literal text or a token kind, as exprFirst gives them) admits. */
+    keySyms: (keys: Iterable<string>): Set<string> => new Set([...keys].flatMap((k) => (a.tokenNames.has(k) ? kindSyms(k) : [litSym(k)]))),
+    /** The grammar's literal texts a token of `kind` may be. */
+    literalsOf: (kind: string): readonly string[] => ofKind.get(kind) ?? [],
+  };
+}

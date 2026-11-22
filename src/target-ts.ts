@@ -34,7 +34,7 @@ const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
 // A longest-match candidate's Guard (emit-portable.ts) over the buffered token t, as conditions;
 // keyed: the candidate is reached through its Dispatch key, which already tested the first token.
 const guardCond = (g: Guard, t: string, keyed: boolean): string[] =>
-  g === null ? [] : [...(keyed ? [] : [`inSet(${g.first.id}, ${t})`]), ...(g.second !== null ? [`secondIn(${g.second.id})`] : [])];
+  g === null ? [] : [...(keyed && !g.first.not ? [] : [`inSet(${g.first.id}, ${t})`]), ...(g.second !== null ? [`secondIn(${g.second.id})`] : [])];
 // `if (<conds>) <body>` as one statement (just the body when there is no condition).
 const ifTs = (conds: string[], body: string) => (conds.length ? `  if (${conds.join(' && ')}) ${body}` : `  ${body}`);
 // A candidate list's Dispatch over the buffered token t: arm(i, keyed) is candidate i's statement.
@@ -3132,10 +3132,11 @@ function tokenSetRuntime(ir: ParserIR, ids: LexIdPlan): string {
   const b = tokenSetBits(ids, ir.tokenSets);
   return `const _SET_WIDTH = ${b.width};
 const _SET_KID = ${b.kidBase};
+const _SET_VETO = ${b.vetoBase};
 const _SETS = new Uint32Array([${b.words.join(', ')}]);
 function inSet(k: number, t: Tok): boolean {
   const w = k >>> 5;
-  return (((_SETS[t.lid * _SET_WIDTH + w]! | _SETS[(_SET_KID + t.kid) * _SET_WIDTH + w]!) >>> (k & 31)) & 1) === 1;
+  return ((((_SETS[t.lid * _SET_WIDTH + w]! | _SETS[(_SET_KID + t.kid) * _SET_WIDTH + w]!) & ~_SETS[(_SET_VETO + t.lid) * _SET_WIDTH + w]!) >>> (k & 31)) & 1) === 1;
 }
 function ahead(k: number, is: boolean): boolean {
   const t = peek();

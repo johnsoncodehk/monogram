@@ -22,7 +22,7 @@
 // operators. buildIR THROWS on a construct outside this set rather than emit a wrong
 // parser. This is enough to derive a real JavaScript-subset parser (test/fixtures/minijs.ts).
 import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
-import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
+import { KIND, analyzeGrammar, concreteFirst, findEntryRule } from './grammar-analysis.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { tokenPatternCharLoop, tokenPatternLiteralPrefix } from './token-pattern.ts';
 import { type TextUnits, firstUnit, oneUnit, unitLen } from './text-units.ts';
@@ -145,7 +145,10 @@ const CTX_WORDS: readonly string[] = ['await', 'yield'];
 // `not(not(alt(Ident, String, '[')))` — is this test, so buildIR lowers it to an `ahead` step over
 // one shared set instead of a body every target prints at every site. Members are sorted; each
 // distinct set appears once in ParserIR.tokenSets.
-export type TokenSet = { lits: string[]; toks: string[] };
+// Since the guards became sets over concrete symbols, a token kind in `toks` stands for its tokens
+// whose literal is not in `not` (absent: none left out): `not` is how a set says "an identifier
+// that is no reserved word".
+export type TokenSet = { lits: string[]; toks: string[]; not?: string[] };
 // A lookahead over more than one token — `not(['[', alt(...), ...])` — runs its body and then
 // undoes everything the body did: the position, the children it appended and the nodes it built.
 // What it decides is a function of the body and the parser's state alone, so two lookaheads with
@@ -464,6 +467,54 @@ function buildIR(grammar: CstGrammar): ParserIR {
 
   const litTtype = (v: string): '$keyword' | '$punct' => (isKeywordLiteral(v) ? '$keyword' : '$punct');
 
+  // Regex-vs-division context (only if the grammar declares a regex token + config).
+  let regexCtx: RegexCtx | null = null;
+  const rxTok = grammar.tokens.find((t) => t.flags.includes('regex'));
+  const rxCfg = grammar.tokens.find((t) => t.regexContext)?.regexContext;
+  if (rxTok && rxCfg) {
+    regexCtx = {
+      regexToken: rxTok.name,
+      identToken: grammar.tokens.find((t) => t.identifier)?.name ?? '',
+      divisionTypes: [...(rxCfg.divisionAfterTypes ?? [])],
+      divisionTexts: [...(rxCfg.divisionAfterTexts ?? [])],
+      regexTexts: [...(rxCfg.regexAfterTexts ?? [])],
+      parenHeadKw: [...(rxCfg.regexAfterParenKeywords ?? [])],
+      memberAccess: [...(rxCfg.memberAccessTexts ?? [])],
+      postfixAfterValue: [...(rxCfg.postfixAfterValueTexts ?? [])],
+    };
+  }
+
+  // Template literals (only if the grammar declares a template token).
+  let tpl: TplCfg | null = null;
+  const tplTok = grammar.tokens.find((t) => t.template);
+  if (tplTok && tplTok.template) {
+    tpl = {
+      token: tplTok.name,
+      open: tplTok.template.open,
+      interpOpen: tplTok.template.interpOpen,
+      interpClose: tplTok.template.interpClose,
+      braceOpen: tplTok.template.interpOpen.slice(-1),
+      escapeValid: tplTok.escapeValidPattern ?? null,
+    };
+  }
+
+  let newlineCfg: NewlineCfg | null = null;
+  if (grammar.newline) {
+    const nc = grammar.newline;
+    newlineCfg = {
+      token: nc.token,
+      flowOpen: [...(nc.flowOpen ?? [])],
+      flowClose: [...(nc.flowClose ?? [])],
+    };
+  }
+
+  const identToken = grammar.tokens.find((t) => t.identifier)?.name ?? null;
+  const identLike = [
+    ...(identToken ? [identToken] : []),
+    ...grammar.tokens.filter((t) => t.identifierPrefix).map((t) => t.name),
+  ];
+  const kindsOf = literalKinds({ tokens, tpl, identToken, identLike, puncts });
+
   // The members of a step that matches exactly one token and decides on it alone (a literal
   // other than a composed `>` operator, a token kind, or an alternation of such); null otherwise.
   const oneTokenOf = (s: Step): TokenSet | null => {
@@ -487,7 +538,8 @@ function buildIR(grammar: CstGrammar): ParserIR {
   const tokenSets: TokenSet[] = [];
   const tokenSetIds = new Map<string, number>();
   const tokenSetOf = (m: TokenSet): number => {
-    const set = { lits: [...new Set(m.lits)].sort(), toks: [...new Set(m.toks)].sort() };
+    const not = [...new Set(m.not ?? [])].sort();
+    const set: TokenSet = { lits: [...new Set(m.lits)].sort(), toks: [...new Set(m.toks)].sort(), ...(not.length ? { not } : {}) };
     const key = JSON.stringify(set);
     let id = tokenSetIds.get(key);
     if (id === undefined) { id = tokenSets.length; tokenSets.push(set); tokenSetIds.set(key, id); }
@@ -567,43 +619,48 @@ function buildIR(grammar: CstGrammar): ParserIR {
     return [stepOf(e)];
   }
 
-  // The Guard of a longest-match candidate (a rule alternative), from the grammar's own FIRST and
-  // SECOND sets (grammar-analysis.ts exprFirst / exprSecond — the sets the interpreter prunes its
-  // longest-match candidates with; exprFirst sees through a leading guard, an optional prefix and
-  // a rule reference).
-  // - first: the tokens a NON-EMPTY match of the alternative can begin with. An alternative that
-  //   can only match nothing at a token cannot win a longest match, so skipping it there changes
-  //   no parse. Not knowable (a Pratt rule leads: exprFirst gives up on `prefix`) → no guard.
-  // - second: the tokens such a match can continue with. The argument: exprSecond over-approximates
-  //   the token that follows the FIRST token of every match, and `len1` says whether a match of
-  //   one token exists. Only when none does (and the alternative is not nullable — the
-  //   interpreter's condition, gen-parser.ts altSecondDispatch) is a second token outside that set
-  //   proof that the alternative cannot match non-empty here. That reads the token after the
-  //   first as what follows it in the grammar, which holds only where the first token is ONE
-  //   token of the stream: an interpolated template is a head token followed by its hole's
-  //   tokens, so an alternative that can begin with a template kind gets no second guard.
-  //   (A composed `>` operator is never a FIRST member — it is an infix operator — but may be a
-  //   SECOND one; it is keyed on the `>` token it begins with.)
+  // The Guard of a longest-match candidate (a rule alternative or a Pratt NUD arm).
+  // - first: the symbols a NON-EMPTY match of the candidate can begin with — FIRST over concrete
+  //   symbols (grammar-analysis.ts concreteFirst): through a Pratt rule's prefix operators, with
+  //   the one-token `not` tests and reserved-word guards in front of it applied, so "an identifier
+  //   that is no reserved word" is one set. A candidate that can only match nothing at a token
+  //   cannot win a longest match, so skipping it there changes no parse.
+  // - second: the tokens such a match can continue with, from the grammar's plain FIRST and SECOND
+  //   sets (exprFirst / exprSecond, the sets the interpreter prunes its candidates with). The
+  //   argument: exprSecond over-approximates the token that follows the FIRST token of every
+  //   match, and `len1` says whether a match of one token exists. Only when none does (and the
+  //   alternative is not nullable — the interpreter's condition, gen-parser.ts altSecondDispatch)
+  //   is a second token outside that set proof that the alternative cannot match non-empty here.
+  //   That reads the token after the first as what follows it in the grammar, which holds only
+  //   where the first token is ONE token of the stream: an interpolated template is a head token
+  //   followed by its hole's tokens, so an alternative that can begin with a template kind gets no
+  //   second guard. (A composed `>` operator is never a FIRST member — it is an infix operator —
+  //   but may be a SECOND one; it is keyed on the `>` token it begins with.)
   //   test/fixtures/guardjs.ts has inputs the `len1` condition decides (`{x}`) and the guard refuses (`x;`).
   const templateTokens = new Set(grammar.tokens.filter((t) => t.template).map((t) => t.name));
-  const keySet = (keys: Iterable<string>): TokenSet => {
-    const lits: string[] = [], toks: string[] = [];
-    for (const k of keys) {
-      if (tokenNames.has(k)) { toks.push(k); if (templateTokens.has(k)) toks.push('$templateHead'); }   // an interpolated template opens with its head
-      else lits.push(gtComps.includes(k) ? '>' : k);                                                    // a composed operator begins at a '>' token
-    }
-    return { lits, toks };
+  const concrete = concreteFirst(grammar, a, { kindsOf: (l) => [...kindsOf(l)], gtComps, maybeWords: CTX_WORDS });
+  // A set of concrete symbols as a TokenSet: the kinds whose own symbol it holds, the literals it
+  // holds, and the literals of those kinds it leaves out.
+  const symbolSet = (syms: ReadonlySet<string>): TokenSet => {
+    const toks = [...syms].filter((x) => x.startsWith(KIND)).map((x) => x.slice(KIND.length));
+    // Every literal stays a member in its own right: the kinds that may carry it are a superset, so
+    // one of `toks` may not be the kind its tokens actually have.
+    const lits = [...syms].filter((x) => !x.startsWith(KIND));
+    const not = [...new Set(toks.flatMap((k) => concrete.literalsOf(k)))].filter((l) => !syms.has(l));
+    return not.length ? { lits, toks, not } : { lits, toks };
   };
+  const keySet = (keys: Iterable<string>): TokenSet => symbolSet(concrete.keySyms(keys));
   const guardSet = (m: TokenSet): GuardSet => { const id = tokenSetOf(m); return { id, ...tokenSets[id]! }; };
   // earlier: the candidates declared before `e` in its list, tried wherever they can match.
   const altGuard = (e: RuleExpr, earlier: readonly RuleExpr[]): Guard => {
-    const all = a.exprFirst(e), lead = sameAsEarlierOutside(e, earlier, a.exprFirst);
-    const f = lead === null ? all : all === null ? lead : new Set([...all].filter((k) => lead.has(k)));
-    if (f === null || f.size === 0) return null;
-    const oneToken = [...f].every((k) => !templateTokens.has(k));
+    const all = concrete.first1(e), lead = sameAsEarlierOutside(e, earlier, a.exprFirst);
+    const f = lead === null ? all : new Set([...concrete.keySyms(lead)].filter((x) => all.has(x)));
+    if (f.size === 0) return null;
+    const plain = a.exprFirst(e);
+    const oneToken = plain !== null && [...plain].every((k) => !templateTokens.has(k));
     const sec = oneToken && !a.exprNullable(e) ? a.exprSecond(e) : null;
     const second = sec !== null && sec.s !== null && !sec.len1 && sec.s.size > 0 ? guardSet(keySet(sec.s)) : null;
-    return { first: guardSet(keySet(f)), second };
+    return { first: guardSet(symbolSet(f)), second };
   };
 
   const rules: RuleIR[] = grammar.rules.map((r) => {
@@ -622,52 +679,6 @@ function buildIR(grammar: CstGrammar): ParserIR {
     throw new Error(`portable: entry rule ${entryDecl.name} has several alternatives and can match the empty input — not in scope (give it one alternative)`);
   }
 
-  // Regex-vs-division context (only if the grammar declares a regex token + config).
-  let regexCtx: RegexCtx | null = null;
-  const rxTok = grammar.tokens.find((t) => t.flags.includes('regex'));
-  const rxCfg = grammar.tokens.find((t) => t.regexContext)?.regexContext;
-  if (rxTok && rxCfg) {
-    regexCtx = {
-      regexToken: rxTok.name,
-      identToken: grammar.tokens.find((t) => t.identifier)?.name ?? '',
-      divisionTypes: [...(rxCfg.divisionAfterTypes ?? [])],
-      divisionTexts: [...(rxCfg.divisionAfterTexts ?? [])],
-      regexTexts: [...(rxCfg.regexAfterTexts ?? [])],
-      parenHeadKw: [...(rxCfg.regexAfterParenKeywords ?? [])],
-      memberAccess: [...(rxCfg.memberAccessTexts ?? [])],
-      postfixAfterValue: [...(rxCfg.postfixAfterValueTexts ?? [])],
-    };
-  }
-
-  // Template literals (only if the grammar declares a template token).
-  let tpl: TplCfg | null = null;
-  const tplTok = grammar.tokens.find((t) => t.template);
-  if (tplTok && tplTok.template) {
-    tpl = {
-      token: tplTok.name,
-      open: tplTok.template.open,
-      interpOpen: tplTok.template.interpOpen,
-      interpClose: tplTok.template.interpClose,
-      braceOpen: tplTok.template.interpOpen.slice(-1),
-      escapeValid: tplTok.escapeValidPattern ?? null,
-    };
-  }
-
-  let newlineCfg: NewlineCfg | null = null;
-  if (grammar.newline) {
-    const nc = grammar.newline;
-    newlineCfg = {
-      token: nc.token,
-      flowOpen: [...(nc.flowOpen ?? [])],
-      flowClose: [...(nc.flowClose ?? [])],
-    };
-  }
-
-  const identToken = grammar.tokens.find((t) => t.identifier)?.name ?? null;
-  const identLike = [
-    ...(identToken ? [identToken] : []),
-    ...grammar.tokens.filter((t) => t.identifierPrefix).map((t) => t.name),
-  ];
   // ── FIRST signatures + predictive flags ──
   // Per-branch FIRST (literal texts + token kinds the branch can begin with, or null =
   // unpredictable) feeds Phase 3's predictive switch dispatch. Computed conservatively from the
@@ -719,7 +730,6 @@ function buildIR(grammar: CstGrammar): ParserIR {
   // the literal's spelling: `get` is an identifier, `@new` a decorator. So the signatures share no
   // literal text and no token kind, and neither begins with a literal some kind of the other's can
   // carry (`alt(['get', …], [Ident, …])` must try the second branch when the first fails on `get`).
-  const kindsOf = literalKinds({ tokens, tpl, identToken, identLike, puncts });
   const meets = (a: NonNullable<FirstSig>, b: NonNullable<FirstSig>): boolean =>
     a.lits.some((l) => b.lits.includes(l) || b.toks.some((k) => kindsOf(l).has(k))) || a.toks.some((k) => b.toks.includes(k));
   const disjoint = (a: FirstSig, b: FirstSig): boolean => a !== null && b !== null && !meets(a, b) && !meets(b, a);
@@ -1431,7 +1441,7 @@ export function buildLexIdPlan(ir: ParserIR): LexIdPlan {
     }
   }
   for (const body of ir.lookaheads) collectStepLitTexts(body, litTexts);
-  for (const s of ir.tokenSets) for (const x of s.lits) litTexts.add(x);
+  for (const s of ir.tokenSets) for (const x of [...s.lits, ...(s.not ?? [])]) litTexts.add(x);   // a literal a set leaves out must have its own id
   for (const x of ir.ctxWords) litTexts.add(x);
   for (const s of ir.suppressSets) for (const x of s) litTexts.add(x);
   if (ir.regexCtx) {
@@ -1463,33 +1473,39 @@ export function buildLexIdPlan(ir: ParserIR): LexIdPlan {
 }
 
 /**
- * ParserIR.tokenSets as bit rows, the one table every target prints for its `ahead` test. There is
- * one row per token key: row `lid` for each lid, then row `kidBase + kid` for each kid; bit k of a
- * row says whether that key is a member of set k. A token t is in set k iff bit k of row `t.lid` or
- * of row `kidBase + t.kid` is set (lid 0, "no literal", and kid 0 are never members). Row r is
- * `words[r * width .. (r + 1) * width)`, 32 bits per word, low bit first, so a test reads word
- * `k >> 5` of the token's two rows: at a call site k is a constant, so that word's offset and the
- * mask `1 << (k & 31)` are constants and the test is two loads keyed by the token's own ids.
+ * ParserIR.tokenSets as bit rows, the one table every target prints for its set tests. Row `lid`
+ * says for each set whether a token with that literal is in it (the literal is one of the set's
+ * `lits`), row `kidBase + kid` whether a token of that kind is (the kind is one of its `toks`), and
+ * row `vetoBase + lid` whether the set leaves that literal out although its kind is in (`not`,
+ * when the literal is not one of its `lits`). A token is in set k iff bit k of its lid row or of
+ * its kid row is set and bit k of its veto row is not — exactly: a literal in `lits` is in
+ * whatever its kind; otherwise the kind decides, unless `not` leaves the literal out (lid 0, "no
+ * literal", and kid 0 are never members). That holds without knowing which kinds can carry a
+ * literal, so it needs nothing from the lexer. Row r is `words[r * width .. (r + 1) * width)`, 32
+ * bits per word, low bit first, so a test reads word `k >> 5` of the token's three rows: at a call
+ * site k is a constant, so that word's offset and the mask `1 << (k & 31)` are constants.
  */
-export type TokenSetBits = { width: number; kidBase: number; words: number[] };
+export type TokenSetBits = { width: number; kidBase: number; vetoBase: number; words: number[] };
 export function tokenSetBits(plan: LexIdPlan, sets: readonly TokenSet[]): TokenSetBits {
-  const kidBase = plan.lids.length;
+  const kidBase = plan.lids.length, vetoBase = kidBase + plan.kids.length;
   const width = Math.max(1, Math.ceil(sets.length / 32));
-  const words = new Array<number>((kidBase + plan.kids.length) * width).fill(0);
+  const words = new Array<number>((vetoBase + plan.lids.length) * width).fill(0);
   const put = (row: number, k: number) => { words[row * width + (k >>> 5)] = (words[row * width + (k >>> 5)] | (1 << (k & 31))) >>> 0; };
+  const lidOfSet = (l: string): number => {
+    const lid = plan.lids.indexOf(l);
+    if (lid <= 0) throw new Error(`tokenSetBits: literal ${JSON.stringify(l)} has no lid`);
+    return lid;
+  };
   sets.forEach((s, k) => {
-    for (const l of s.lits) {
-      const lid = plan.lids.indexOf(l);
-      if (lid <= 0) throw new Error(`tokenSetBits: literal ${JSON.stringify(l)} has no lid`);
-      put(lid, k);
-    }
+    for (const l of s.lits) put(lidOfSet(l), k);
+    for (const l of s.not ?? []) if (!s.lits.includes(l)) put(vetoBase + lidOfSet(l), k);
     for (const t of s.toks) {
       const kid = plan.kids.indexOf(t);
       if (kid <= 0) throw new Error(`tokenSetBits: token kind ${JSON.stringify(t)} has no kid`);
       put(kidBase + kid, k);
     }
   });
-  return { width, kidBase, words };
+  return { width, kidBase, vetoBase, words };
 }
 
 /** Resolve lid for a known text; 0 if not in the plan (matches runtime lid_of). */

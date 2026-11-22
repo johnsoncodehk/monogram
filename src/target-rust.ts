@@ -44,9 +44,10 @@ const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
 const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
   isFirstGuardable(f, nAlts);
 // A longest-match candidate's Guard (emit-portable.ts) over the buffered token t, as conditions;
-// keyed: the candidate is reached through its Dispatch key, which already tested the first token.
+// keyed: the candidate is reached through its Dispatch key, which already tested the first token
+// unless the guard leaves some of that key's literals out (`not`).
 const guardCond = (g: Guard, t: string, keyed: boolean, recv = 'self'): string[] =>
-  g === null ? [] : [...(keyed ? [] : [`in_token_set(${g.first.id}, &${t})`]), ...(g.second !== null ? [`${recv}.second_in(${g.second.id})`] : [])];
+  g === null ? [] : [...(keyed && !g.first.not ? [] : [`in_token_set(${g.first.id}, &${t})`]), ...(g.second !== null ? [`${recv}.second_in(${g.second.id})`] : [])];
 // `if <conds> <body>` as one statement (just the body when there is no condition).
 const ifRs = (conds: string[], body: string) => (conds.length ? `        if ${conds.join(' && ')} ${body}` : `        ${body}`);
 // A candidate list's Dispatch over the buffered token t: arm(i, keyed) is candidate i's statement.
@@ -1963,14 +1964,17 @@ function tokenSetRuntimeRust(ir: ParserIR, ids: LexIdPlan): string {
   return `#[allow(dead_code)]
 const TOKEN_SET_KID: usize = ${b.kidBase};
 #[allow(dead_code)]
+const TOKEN_SET_VETO: usize = ${b.vetoBase};
+#[allow(dead_code)]
 static TOKEN_SETS: [[u32; ${b.width}]; ${rows.length}] = [${rows.join(', ')}];
 #[inline(always)]
 #[allow(dead_code)]
 fn in_token_set(k: usize, t: &Tok) -> bool {
-    // Rows are exact-size (one per lid, then one per kid) and a token's ids are always in range,
-    // as for the lexer's flag tables; k is a constant at every call site, so is word k >> 5.
-    let (l, c) = unsafe { (TOKEN_SETS.get_unchecked(t.lid as usize), TOKEN_SETS.get_unchecked(TOKEN_SET_KID + t.kid as usize)) };
-    (l[k >> 5] | c[k >> 5]) & (1 << (k & 31)) != 0
+    // Rows are exact-size (one per lid, one per kid, one veto row per lid) and a token's ids are
+    // always in range, as for the lexer's flag tables; k is a constant at every call site, so is
+    // word k >> 5.
+    let (l, c, v) = unsafe { (TOKEN_SETS.get_unchecked(t.lid as usize), TOKEN_SETS.get_unchecked(TOKEN_SET_KID + t.kid as usize), TOKEN_SETS.get_unchecked(TOKEN_SET_VETO + t.lid as usize)) };
+    (l[k >> 5] | c[k >> 5]) & !v[k >> 5] & (1 << (k & 31)) != 0
 }
 // Whether t is a word the context ctx reserves (ParserIR.ctxWords): with the \`ahead\` test of the
 // guard's own set, an \`aheadCtx\` test.

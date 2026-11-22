@@ -34,7 +34,7 @@ const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
 // keyed: the candidate is reached through its Dispatch key, which already tested the first token.
 const guardCond = (g: Guard, t: string, w: '' | 'W', keyed: boolean): string[] => {
   if (g === null) return [];
-  const parts = keyed ? [] : [`inTokenSet(${g.first.id}, ${t})`];
+  const parts = keyed && !g.first.not ? [] : [`inTokenSet(${g.first.id}, ${t})`];
   if (g.second !== null) parts.push(`p.secondIn(${g.second.id})`);
   return parts;
 };
@@ -2704,10 +2704,11 @@ function tokenSetRuntimeGo(ir: ParserIR, ids: LexIdPlan): string {
   const rows: string[] = [];
   for (let r = 0; r * b.width < b.words.length; r++) rows.push(`{${b.words.slice(r * b.width, (r + 1) * b.width).join(', ')}}`);
   return `const _tokenSetKid = ${b.kidBase}
+const _tokenSetVeto = ${b.vetoBase}
 var _tokenSets = [...][${b.width}]uint32{${rows.join(', ')}}
 func inTokenSet(k int, t *Tok) bool {
 \tw := k >> 5
-\treturn (_tokenSets[t.Lid][w]|_tokenSets[_tokenSetKid+int(t.Kid)][w])&(1<<(k&31)) != 0
+\treturn (_tokenSets[t.Lid][w]|_tokenSets[_tokenSetKid+int(t.Kid)][w])&^_tokenSets[_tokenSetVeto+int(t.Lid)][w]&(1<<(k&31)) != 0
 }
 // inCtxWords: whether t is a word the context ctx reserves (ParserIR.ctxWords): with the \`ahead\` test
 // of the guard's own set, an \`aheadCtx\` test.
