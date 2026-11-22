@@ -867,11 +867,14 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean): StepLowering {
     rule: (name) => (r ? `${recv}.rec_${name}()` : `${recv}.call_rule(Parser::parse_${name})`),
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (r ? `${recv}.${name}_bp(${bp}).is_some()` : `${recv}.call_rule(|p| p.${name}_bp(${bp}))`),
-    // A body guard (emit-portable.ts annotateSteps): opt / sep test it before their one attempt,
-    // star before each attempt, so a refused attempt takes no mark.
-    star: (body, g) => (g === null ? `${recv}.star${R}(|p| ${body})` : `${recv}.star_in${R}(${g}, |p| ${body})`),
-    opt: (body, g) => `${g === null ? '' : `(!${recv}.ahead(${g}, true) || `}${recv}.opt${R}(|p| ${body})${g === null ? '' : ')'}`,
-    sep: (elem, delim, g) => `${g === null ? '' : `(!${recv}.ahead(${g}, true) || `}${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})${g === null ? '' : ')'}`,
+    // The body guard (emit-portable.ts annotateSteps) is not rendered in Rust yet, a measured codegen
+    // fact: PR #169's guarded spelling left the work counters of parse_Stmt / parse_Decl / Expr_nud
+    // identical but added +8 to +11 instructions per call to each (LLVM compiles the whole function
+    // differently), so Rust parse instructions rose (dense-semi +4.96%, typescript.ts +1.40%) where
+    // Go and TS fell on every input. The guard only skips attempts that fail, so ignoring it is sound.
+    star: (body, _guard) => `${recv}.star${R}(|p| ${body})`,
+    opt: (body, _guard) => `${recv}.opt${R}(|p| ${body})`,
+    sep: (elem, delim, _guard) => `${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})`,
     altlit: (values) => `${recv}.alt_lit${R}(&[${values.map((v) => lidOf(ids, v)).join(', ')}])`,
     look: (id, is) => `${is ? '' : '!'}${recv}.look_${id}()`,
     ahead: (set, is) => `${recv}.ahead(${set}, ${is})`,
@@ -1917,9 +1920,10 @@ impl Doc<CstBuilder> {
 
 
 /** Emit Builder trait, CstBuilder/SlimBuilder, sole Parser machine, and parse_with helpers. */
-// The `ahead` test's table: whether a token is in tokenSets[k] (see tokenSetBits).
+// The `ahead` test's table: whether a token is in tokenSets[k] (see tokenSetBits). The sets only body
+// guards test are left out: this printer does not render body guards (see rsSteps).
 function tokenSetRuntimeRust(ir: ParserIR, ids: LexIdPlan): string {
-  const b = tokenSetBits(ids, ir.tokenSets);
+  const b = tokenSetBits(ids, ir.tokenSets.slice(0, ir.bodyGuardOnly));
   const rows: string[] = [];
   for (let r = 0; r * b.width < b.words.length; r++) rows.push(`[${b.words.slice(r * b.width, (r + 1) * b.width).join(', ')}]`);
   return `#[allow(dead_code)]
@@ -2497,15 +2501,6 @@ impl<'a, B: Builder> Parser<'a, B> {
         true
     }
     #[inline(always)]
-    #[allow(dead_code)]
-    fn star_in(&mut self, k: usize, once: fn(&mut Parser<'a, B>) -> bool) -> bool {
-        while self.ahead(k, true) {
-            let m = self.mark();
-            if !once(self) { self.reset(m); break; }
-        }
-        true
-    }
-    #[inline(always)]
     fn opt(&mut self, body: fn(&mut Parser<'a, B>) -> bool) -> bool {
         let m = self.mark();
         if !body(self) { self.reset(m); }
@@ -2543,12 +2538,6 @@ impl<'a, B: Builder> Parser<'a, B> {
     #[allow(dead_code)]
     fn star_r(&mut self, once: fn(&mut Parser<'a, B>) -> bool) -> bool {
         loop { let sp = self.pos; if !once(self) { self.back(sp); break; } }
-        true
-    }
-    #[inline(always)]
-    #[allow(dead_code)]
-    fn star_in_r(&mut self, k: usize, once: fn(&mut Parser<'a, B>) -> bool) -> bool {
-        while self.ahead(k, true) { let sp = self.pos; if !once(self) { self.back(sp); break; } }
         true
     }
     #[inline(always)]

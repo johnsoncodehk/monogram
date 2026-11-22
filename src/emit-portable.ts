@@ -452,6 +452,9 @@ export type ParserIR = {
   gtComps: string[];
   rules: RuleIR[];
   tokenSets: TokenSet[];       // the sets `ahead` steps test, indexed by Step.set
+  /** tokenSets[bodyGuardOnly..] are tested by star / opt / sep body guards (Step.guard) and by
+   *  nothing else, so a target that does not render body guards can leave them out of its table. */
+  bodyGuardOnly: number;
   ctxWords: string[];          // the operator word each context bit reserves in an `aheadCtx` test (ctxWords[i] for bit 1 << i); empty when no step tests one
   lookaheads: Alt[];           // the bodies `look` steps run, indexed by Step.id; a body names only lower ids
   shared: Step[];              // the steps printed once and called from each site, indexed by Step.share (see shareSteps)
@@ -887,6 +890,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
       }
     }
   };
+  const bodyGuardOnly = tokenSets.length;   // annotateSteps's body guards are the last sets made
   for (const r of rules) {
     if (r.kind === 'rd') {
       r.altFirst = r.alts.map((alt) => seqFirst(alt));
@@ -911,7 +915,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
   const entry = findEntryRule(grammar);
   const forms = formsOf(rules, lookaheads, shared.length, entry);
   const identPrefix = Object.fromEntries(identLike.map((n) => [n, grammar.tokens.find((t) => t.name === n)?.identifierPrefix ?? '']));
-  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse: reusePlanOf(rules, entry), suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike, identPrefix };
+  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, bodyGuardOnly, ctxWords, lookaheads, shared, forms, reuse: reusePlanOf(rules, entry), suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike, identPrefix };
 }
 
 // The step lists a rule runs: an rd rule's alternatives, a Pratt rule's NUD and LED arms.
