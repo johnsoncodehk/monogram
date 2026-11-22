@@ -382,18 +382,18 @@ const Prop = rule($ => {
   // tsc reads one decorator run inside the modifier run, after a word (only `export` / `default`
   // may precede it: `modifierWord`'s `secondRun` followers), and a member never starts with one
   // (`@` begins no element of tsc's object literal list: `{ @d m() {} }` has no parse). The run is
-  // a word of the run here, and "once" is the lookahead `twoRuns` (`{ export @d export @e m() {} }`
-  // has no parse): stating it by shape, as `static` and `async` are, makes the run's stop places
-  // eight instead of four, and the TextMate generator, which expands every rule body into its
-  // sequences (gen-tm's expandAlts), runs out of memory on it (2 GB heap, `npm run gen`).
-  const decorators = many1(DecoratorExpr);
+  // a word of the run here, and "once" is the lookahead after it (`{ export @d export @e m() {} }`
+  // has no parse; it runs only where a decorator run was read): stating it by shape, as `static`
+  // and `async` are, makes the run's stop places eight instead of four, and the TextMate
+  // generator, which expands every rule body into its sequences (gen-tm's expandAlts), runs out
+  // of memory on it (2 GB heap, `npm run gen`).
   const runWord = alt(mods.any, asyncMod);
-  const twoRuns = [many(runWord), decorators, many(runWord), Decorator];
+  const decorators = [many1(DecoratorExpr), not([many(runWord), Decorator])];
   const words = many(alt(mods.rest, decorators)), asyncWords = many(alt(mods.rest, asyncMod, decorators));
   return [
     ['...', Expr],                                                     // spread
     tsRelax(
-      [not(Decorator), not(twoRuns), words, alt(
+      [not(Decorator), words, alt(
         [mods.stat, words, alt([asyncMod, asyncWords, withAsync], plain)],
         [asyncMod, asyncWords, opt(mods.stat, asyncWords), withAsync],
         plain,
