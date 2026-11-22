@@ -139,9 +139,11 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine): StepLowe
     rule: (name) => (f === 'R' ? `p.rec${name}()` : f === 'W' ? `p.callRuleW(p.parse${name}W())` : `p.callRule(p.parse${name}())`),
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (f === 'R' ? e.bpFound(name, bp) : f === 'W' ? `p.callRuleW(p.bpW_${name}(${bp}))` : `p.callRule(p.bp_${name}(${bp}))`),
-    star: (body) => `p.star${f}(${fn(body)})`,
-    opt: (body) => `p.opt${f}(${fn(body)})`,
-    sep: (elem, delim) => `p.sepBy${f}(${fn(elem)}, ${sepDelimLid(ids, delim)})`,
+    // A body guard (emit-portable.ts annotateSteps): opt / sep test it before their one attempt,
+    // star before each attempt, so a refused attempt takes no mark.
+    star: (body, g) => (g === null ? `p.star${f}(${fn(body)})` : `p.starIn${f}(${g}, ${fn(body)})`),
+    opt: (body, g) => (g === null ? `p.opt${f}(${fn(body)})` : `(!p.${e.ahead}(${g}, true) || p.opt${f}(${fn(body)}))`),
+    sep: (elem, delim, g) => (g === null ? `p.sepBy${f}(${fn(elem)}, ${sepDelimLid(ids, delim)})` : `(!p.${e.ahead}(${g}, true) || p.sepBy${f}(${fn(elem)}, ${sepDelimLid(ids, delim)}))`),
     altlit: (values) => `p.altLit${f}([]uint16{${values.map((v) => lidOf(ids, v)).join(', ')}})`,
     look: (id, is) => `${is ? '' : '!'}p.look${id}()`,   // recognize form (lookFnsR)
     ahead: (set, is) => `p.${e.ahead}(${set}, ${is})`,
@@ -211,6 +213,10 @@ func (p *${recv}) matchTokR(kid uint16) bool {
 func (p *${recv}) starR(once func() bool) bool {
 \tfor { sp := p.pos; if !once() { p.back(sp); break } }
 \treturn true
+}
+func (p *${recv}) starInR(k int, once func() bool) bool {
+	for p.ahead(k, true) { sp := p.pos; if !once() { p.back(sp); break } }
+	return true
 }
 func (p *${recv}) optR(body func() bool) bool {
 \tsp := p.pos; if !body() { p.back(sp) }; return true
@@ -1984,6 +1990,13 @@ func (p *${recv}) starW(once func() bool) bool {
 \t}
 \treturn true
 }
+func (p *${recv}) starInW(k int, once func() bool) bool {
+	for p.ahead(k, true) {
+		sp := p.pos; sb := len(p.scratch); ${arenaCkpt()}
+		if !once() { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore()}; break }
+	}
+	return true
+}
 func (p *${recv}) optW(body func() bool) bool {
 \tsp := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \tif !body() { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore()} }
@@ -3302,6 +3315,10 @@ func (p *engine) callRule(id int32) bool {
 func (p *engine) star(once func() bool) bool {
 \tfor { m := p.mark(); if !once() { p.reset(m); break } }
 \treturn true
+}
+func (p *engine) starIn(k int, once func() bool) bool {
+	for p.ahead(k, true) { m := p.mark(); if !once() { p.reset(m); break } }
+	return true
 }
 func (p *engine) opt(body func() bool) bool {
 \tm := p.mark(); if !body() { p.reset(m) }; return true
