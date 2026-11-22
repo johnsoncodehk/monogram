@@ -15,10 +15,11 @@
 // a newline-mode NEWLINE spans its line break).
 // Flag bits: 1 newlineBefore, 2 commentBefore, 4 multilineFlowBefore, 8 '(' heads a control
 // group. test/emit-lexer-verify.ts gates the output against the golden token streams.
-import type { CstGrammar, ElementRegion, IndentConfig, MarkupConfig, NewlineConfig, TokenDecl } from './types.ts';
+import type { CstGrammar, ElementRegion, IndentConfig, MarkupConfig, NewlineConfig, TokenDecl, TokenPattern } from './types.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { UNI_ID_CONTINUE, UNI_ID_START } from './uni-ident.ts';
+import { type CSet, examinedUnits as examinedUnitsOf, failRead, overTrigger, readEndWalk } from './lex-match-plan.ts';
 import {
   tokenBlockPatternFirstCharSet, tokenBlockPatternSource, tokenEscapeValidPatternSource, tokenPatternCharLoop,
   tokenPatternFirstCharSet, tokenPatternHasStartAnchor, tokenPatternSource,
@@ -187,6 +188,42 @@ const nonAsciiWsConsume = (v: string, cont: boolean, indent: string): string =>
 
 type FirstSet = { ascii: Set<number>; nonAscii: boolean } | null;
 
+// A failed attempt that reads at most this many units from the start of the token it decides
+// reads within that token's end + 1 (a token is at least one unit): the relex window covers it.
+const FREE_FAIL = 2;
+// Whether UTF-16 unit `v` is one of `set` (EOF, -1, is never tested: callers bound v first).
+function unitIn(v: string, set: CSet): string {
+  const rs = set.map(([a, b]): [number, number] => [Math.max(0, a), Math.min(0xffff, b)]).filter(([a, b]) => a <= b);
+  if (rs.length === 1 && rs[0][0] === 0 && rs[0][1] === 0xffff) return 'true';
+  return rs.length ? `(${rs.map(([a, b]) => (a === b ? `${v} === ${a}` : `(${v} >= ${a} && ${v} <= ${b})`)).join(' || ')})` : 'false';
+}
+// The read-end routine of a pattern's failed attempt at p (readEndWalk, src/lex-match-plan.ts):
+// the exclusive end of what it read.
+function emitReadEnd(emit: (s?: string) => void, name: string, p: TokenPattern) {
+  const w = readEndWalk(p);
+  emit(`function ${name}(s«: string», p«: number») {`);
+  emit(`  let q = p;`);
+  for (const it of w.lead) {
+    if ('lit' in it) emit(`  if (!s.startsWith(${JSON.stringify(it.lit)}, q)) return q + ${it.lit.length}; q += ${it.lit.length};`);
+    else emit(`  if (q >= s.length) return q + 1; { const c = s.charCodeAt(q); if (!${unitIn('c', it.cls)}) return q + 1; } q++;`);
+  }
+  const past = unitIn('c', w.past);
+  if (past === 'true') emit(`  return s.length + 1;`);
+  else if (past === 'false') emit(`  return q + 1;`);
+  else { emit(`  while (q < s.length) { const c = s.charCodeAt(q); if (!${past}) break; q++; }`); emit(`  return q + 1;`); }
+  emit(`}`);
+}
+// The over-read routine of a pattern's match ending at e: the exclusive end of what the match read
+// at or after e when the unit at e is one at which it can read more than one unit past e (through
+// the units the pattern examines, overTrigger), else e + 1.
+function emitOverEnd(emit: (s?: string) => void, name: string, p: TokenPattern) {
+  emit(`function ${name}(s«: string», e«: number») {`);
+  emit(`  if (e >= s.length || !${unitIn('s.charCodeAt(e)', overTrigger(p))}) return e + 1;`);
+  const past = unitIn('c', examinedUnitsOf(p));
+  emit(past === 'true' ? `  return s.length + 1;` : `  let q = e; while (q < s.length) { const c = s.charCodeAt(q); if (!${past}) break; q++; } return q + 1;`);
+  emit(`}`);
+}
+
 // Emit the lexer for `spec` over the id spaces of `st`.
 //   windowed — the incremental-relex machinery (resync against the previous stream,
 //              restart anchors, paren-stack reconstruction) the emitted parser drives;
@@ -215,6 +252,14 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   const stateful = !!markup || lineSensitive;
   const windowed = opts.windowed;
   const resync = windowed && !stateful;
+  // The relex anchor rule (src/relex-family.ts states it): a token is decided by everything its
+  // lexer read, its own match and the failed attempts before it at its start. The windowed relex
+  // restarts after the last token B that ends before the edit, so it covers what B's decision read
+  // up to B's end + 1 (B is at least one unit). A read that can go further is tracked while
+  // lexing: \`lxLookEnd\` is the furthest unit (exclusive) any decision so far read, and a token that
+  // starts before it carries flag 32 and is no restart anchor (nor a resync point). Only a lexer
+  // that restarts at anchors (a resync lexer) tracks it.
+  const looks = resync;
 
   const out: string[] = [];
   const emit = (s = '') => out.push(s);
@@ -329,6 +374,11 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
         k: kOf(t.name),
         identLike: identLike.has(t.name),
         loop: tokenPatternCharLoop(t),
+        // The relex anchor rule (src/relex-family.ts): what a failed attempt / a match reads past
+        // the end + 1 of the token it decides (`lxLookEnd` below); null when it cannot.
+        readEnd: looks && failRead(t.pattern) > FREE_FAIL ? `lxReadEnd_${id}` : null,
+        overEnd: looks && overTrigger(t.pattern).length > 0 ? `lxOverEnd_${id}` : null,
+        tokenPattern: t.pattern,
       };
     });
   type M = (typeof matchers)[number];
@@ -338,6 +388,15 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`const ${m.re} = new RegExp(${J(`(?:${m.pattern})`)}, ${J(m.flags)});`);
     if (m.blockRe) emit(`const ${m.blockRe} = new RegExp(${J(`(?:${m.blockPattern})`)}, ${J(m.flags)});`);
   }
+  // The reads past a token's end + 1 (\`looks\`): per matcher, its failed attempt's read end and its
+  // match's over-read; the type-parameter head veto's match decides the tagOpen before it.
+  const headOverEnd = looks && el?.typeParameters?.head ? 'lxOverEndTpHead' : null;
+  const tracks = matchers.some(m => m.readEnd || m.overEnd) || headOverEnd !== null;
+  for (const m of matchers) {
+    if (m.readEnd) emitReadEnd(emit, m.readEnd, m.tokenPattern);
+    if (m.overEnd) emitOverEnd(emit, m.overEnd, m.tokenPattern);
+  }
+  if (headOverEnd) emitOverEnd(emit, headOverEnd, el!.typeParameters!.head!);
   emit(`const LX_WS = /\\s+/y;`);
   emit(NON_ASCII_WS_FN);
   emit(`// window-truncation retry: a matcher failing at the WINDOW edge is not a lex`);
@@ -624,11 +683,13 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`  // A type-parameter signature being decided (\`<T>(x: T) => T\`): the group is lexed as code;`);
     emit(`  // the token after its closer keeps it (one of the signature's \`then\`) or rewinds to an element.`);
     emit(`  ${speculating ? 'specTok = -1; let' : 'let specTok = -1,'} specVerdict = 0, specClosedAt = -1, specParenBase = 0, specDocLex = 0, specPops = 0;`);
-    emit(`  let lxLookEnd = -1;              // a tagOpen read as a type-parameter head decided by the characters up to here`);
     emit(`  let specStack«: number[]» = [], specParens«: boolean[]» = [];`);
   }
+  if (tracks) emit(`  let lxLookEnd = -1;              // the furthest unit (exclusive) a decision so far read past its token's end + 1`);
   // ── push ──
   emit(`  function tkPush(k«: number», t«: number», off«: number», end«: number») {`);
+  // a token that starts inside such a read is no restart anchor (flag 32)
+  if (tracks) emit(`    if (off < lxLookEnd) extraFl |= 32;`);
   if (tagScope) emit(`    const rawOff = off, rawEnd = end;`);
   emit(`    off += srcBase«!»; end += srcBase«!»;`);
   emit(`    if (tokN === tkCap) growTok();`);
@@ -643,11 +704,9 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   if (el) {
     // the frame depth saturates (only a zero record is read: restart / resync points)
     // A token lexed while a signature is undecided (and the token deciding it) counts one level
-    // deeper: its lexing depends on the `<` before it, so it is no restart or resync point.
-    // ... and so does a token inside the characters a type-parameter head veto read (the
-    // `tagOpen` it decided included): an edit there can flip that decision.
-    const deeper = [el.typeParameters?.signature ? 'specTok >= 0' : '', el.typeParameters?.head ? 'off - srcBase«!» < lxLookEnd' : ''].filter(Boolean);
-    if (deeper.length) emit(`    { const d = templateStack.length + (${deeper.join(' || ')} ? 1 : 0); tkDp[tokN] = d > 255 ? 255 : d; }`);
+    // deeper: its lexing depends on the `<` before it, so it is no restart or resync point. (A
+    // type-parameter head veto is a read like a matcher's: `lxLookEnd`.)
+    if (el.typeParameters?.signature) emit(`    { const d = templateStack.length + (specTok >= 0 ? 1 : 0); tkDp[tokN] = d > 255 ? 255 : d; }`);
     else emit(`    tkDp[tokN] = templateStack.length > 255 ? 255 : templateStack.length;`);
     if (el.typeParameters?.signature) {
       emit(`    if (specClosedAt >= 0 && tokN > specClosedAt) {`);
@@ -738,6 +797,8 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`            // the candidate's LEADING-TRIVIA flags must match too (parsers read them)`);
     emit(`            && altFl«!»[wndPtr] === tkFl[tokN - 1]`);
     emit(`            && templateStack.length === 0 && altDp«!»[wndPtr] === 0${el?.typeParameters?.signature ? ' && specTok < 0' : ''}`);
+    // outside every read past a token's end + 1: the adopted tokens' flag 32 is then a fresh lex's
+    if (tracks) emit(`            && (tkFl[tokN - 1] & 32) === 0`);
     emit(`            && LX_PFXV[t] === 0 && LX_PARENKW[t] === 0 && LX_EXPRKW[t] === 0`);
     emit(`            && !(k === K_PUNCT && (t === ${tLParen} || t === ${tRParen}))) {`);
     emit(`          const q = altPd«!»[wndPtr];`);
@@ -783,7 +844,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   emit(`    if (t === ${tRParen} && lastCloseWasParenHead) return false;`);
   emit(`    return LX_DIVK[k] !== 0 || LX_DIVT[t] !== 0;`);
   emit(`  }`);
-  if (el) emitElementHelpers(emit, el, enterAlways, { kOf, puT, startsWithExpr, J });
+  if (el) emitElementHelpers(emit, el, enterAlways, { kOf, puT, startsWithExpr, J, headOverEnd });
   if (markup) {
     // Tag-mode tracking after a token the scan emitted: the closing `tagClose` enters raw text
     // (a raw-text element) or text; the tag name decides raw-text entry and void retagging.
@@ -1101,6 +1162,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       emit(`${i2}  docLex.push({ offset: pos + lexSrcBase, end: pos + lexSrcBase + m[0].length, kind: 3, ch: m[0] });`);
       emit(`${i2}}`);
     }
+    if (m.overEnd) emit(`${i2}{ const r = ${m.overEnd}(source, pos + m[0].length); if (r > lxLookEnd) lxLookEnd = r; }`);
     if (m.skip) {
       emit(`${i2}if (/[\\n\\r\\u2028\\u2029]/.test(m[0])) pendingNl = true;`);
       if (indentComment) emit(`${i2}if (m[0].startsWith(${J(indentComment)})) pendingComment = true;`);
@@ -1112,7 +1174,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       emit(`${i2}pos = _e;`);
     }
     emit(`${i2}${CONT}`);
-    emit(`${ind}  } }`);
+    emit(m.readEnd ? `${ind}  } else { const r = ${m.readEnd}(source, pos); if (r > lxLookEnd) lxLookEnd = r; } }` : `${ind}  } }`);
   };
   const emitAct = (a: Act, ind: string) => {
     const reOf = (v: 'R' | 'B') => (v === 'B' ? a.m.blockRe! : a.m.re);
@@ -1388,7 +1450,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       emit(`    // anything — the live stack is reconstructed from the recorded depths.`);
       // (an expression-head keyword too: whether it is a member name reads the token before it,
     // which a window seeded with one previous token does not have)
-    emit(`    if (tkDp[b] === 0 && LX_PFXV[tkT[b]] === 0 && LX_PARENKW[tkT[b]] === 0 && LX_EXPRKW[tkT[b]] === 0 && !(tkK[b] === 1 && tkT[b] === ${tRParen})) return b;`);
+    emit(`    if (tkDp[b] === 0${tracks ? ' && (tkFl[b] & 32) === 0' : ''} && LX_PFXV[tkT[b]] === 0 && LX_PARENKW[tkT[b]] === 0 && LX_EXPRKW[tkT[b]] === 0 && !(tkK[b] === 1 && tkT[b] === ${tRParen})) return b;`);
       emit(`  }`);
       emit(`  return -1;`);
     }
@@ -1692,6 +1754,7 @@ function startsWithExpr(src: string, posVar: string, lit: string, cc0Var?: strin
 type ElementCtx = {
   kOf: (name: string) => number; puT: (text: string) => number; tOf?: (text: string) => number;
   startsWithExpr: typeof startsWithExpr; J?: (v: unknown) => string; punctIs?: (i: string, lits: string[]) => string;
+  headOverEnd?: string | null;
 };
 
 // Element-region helpers inside lexCore: whether a tagOpen at an operand position opens an
@@ -1701,7 +1764,9 @@ function emitElementHelpers(emit: (s?: string) => void, el: ElementRegion, enter
   const tp = el.typeParameters;
   if (!enterAlways) {
     emit(`  function lxOpensElement(p«: number») {`);
-    if (tp?.head) emit(`    LX_TP_HEAD.lastIndex = p + ${L}; if (LX_TP_HEAD.test(source)) { lxLookEnd = LX_TP_HEAD.lastIndex; return false; }`);
+    // a head that begins type parameters decides the tagOpen by what its match read (a failed one
+    // opens an element, whose frame holds every token its attempt read)
+    if (tp?.head) emit(`    LX_TP_HEAD.lastIndex = p + ${L}; if (LX_TP_HEAD.test(source)) { ${c.headOverEnd ? `const r = ${c.headOverEnd}(source, LX_TP_HEAD.lastIndex); if (r > lxLookEnd) lxLookEnd = r; ` : ''}return false; }`);
     if (tp?.signature) {
       emit(`    LX_TP_SIG.lastIndex = p + ${L};`);
       emit(`    if (LX_TP_SIG.test(source)) {`);

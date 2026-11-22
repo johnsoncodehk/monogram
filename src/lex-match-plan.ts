@@ -187,6 +187,26 @@ export function failRead(p: TokenPattern): number {
   }
 }
 
+/** Where a FAILED attempt of p at a position read to, as a walk: the fixed leading items of p (a
+ *  literal, or a class of one-unit members), taken as the matcher takes them, so an attempt that
+ *  failed among them read only up to the item that refused (as a whole literal); past them, it
+ *  read at most up to and including the first unit outside `past` (the units the rest of p can
+ *  examine and go past), or to the end of the source. A lexer's read-end routine is this walk
+ *  (lex-family's `readEnd` prints the same one for the portable scanners). */
+export type ReadEndWalk = { lead: ({ lit: string } | { cls: CSet })[]; past: CSet };
+export function readEndWalk(p: TokenPattern): ReadEndWalk {
+  const items = typeof p !== 'string' && p.type === 'seq' ? p.items : [p];
+  const lead: ReadEndWalk['lead'] = [];
+  let k = 0;
+  for (; k < items.length; k++) {
+    const it = items[k]!;
+    if (typeof it === 'string' && it !== '') lead.push({ lit: it });
+    else if (typeof it !== 'string' && it.type === 'charClass' && !it.negate && it.items.every((m) => oneUnit(m.type === 'char' ? m.value : m.to) && (m.type === 'char' || oneUnit(m.from)))) lead.push({ cls: classSet(it.items, false) });
+    else break;
+  }
+  return { lead, past: examinedUnits({ type: 'seq', items: items.slice(k) }) };
+}
+
 /** The fewest units a match of p consumes. */
 export function minUnits(p: TokenPattern): number {
   if (typeof p === 'string') return p.length;
@@ -232,7 +252,7 @@ export function reach(p: TokenPattern): number {
  *  made are those of its own shape, bounded node by node; elsewhere the regex may back up out of
  *  any choice after reading further, and only the pattern's whole reach bounds it. */
 export function overRead(p: TokenPattern): number {
-  if (!committed(p, ACCEPT)) {
+  if (!commits(p, ACCEPT, true)) {
     const r = reach(p);
     return r === Infinity ? Infinity : Math.max(0, r - minUnits(p));
   }
@@ -261,6 +281,9 @@ function ovr(p: TokenPattern, rest: TokenPattern[]): number {
       // its maximum, so the bound takes it as made). When the rest consumes the unit the repeat
       // stopped at and no iteration can begin with that unit, that attempt read only it.
       const own = ovr(p.body, rest);
+      // Lazy: the rest was tried first at every count and failed before it matched, so each of
+      // those attempts began at least one unit before where the matching rest begins.
+      if (!p.greedy) return Math.max(own, failRead({ type: 'seq', items: rest }) - 1 - after);
       const f = failRead(p.body);
       if (f < 0) return own;
       const ri = info({ type: 'seq', items: rest });
@@ -276,7 +299,7 @@ function ovr(p: TokenPattern, rest: TokenPattern[]): number {
  *  `examinedUnits(p)`. */
 export function overTrigger(p: TokenPattern): CSet {
   if (overRead(p) <= 1) return NONE;
-  if (committed(p, ACCEPT)) return trig(p, []);
+  if (commits(p, ACCEPT, true)) return trig(p, []);
   // The regex may back up out of any choice. An attempt that read past the end of the match took
   // the end's unit as one more unit of some path that consumed the match's text: a unit the
   // pattern's derivative by that text can begin with (`deriv` over-approximates it). Every such
@@ -364,6 +387,7 @@ function trig(p: TokenPattern, rest: TokenPattern[]): CSet {
     }
     case 'repeat': {
       const own = trig(p.body, rest);
+      if (!p.greedy) return failRead({ type: 'seq', items: rest }) - 1 - after > 1 ? union(own, examinedUnits({ type: 'seq', items: rest })) : own;
       const f = failRead(p.body);
       if (f < 0) return own;
       const ri = info({ type: 'seq', items: rest });
@@ -467,14 +491,24 @@ const pairwiseDisjoint = (items: TokenPattern[]): boolean =>
  *  then running the continuation gives the regex's answer for p followed by that continuation,
  *  and whether committing fails exactly where the regex fails. */
 export function committed(p: TokenPattern, c: Cont): boolean {
+  return commits(p, c, false);
+}
+
+// `committed`, and with `lazy` also a lazy repeat whose continuation is the rest of the whole
+// pattern (`c.rest` is a pattern, not inside a loop): the regex tries that rest first at every
+// count and, once it matches, the whole match is over, so nothing backs into the repeat. A
+// matcher printed from `committed` takes the most repeats, so only the read bounds (`overRead`,
+// `overTrigger`), which follow the lazy repeat as the regex runs it, ask with `lazy`.
+function commits(p: TokenPattern, c: Cont, lazy: boolean): boolean {
   if (typeof p === 'string') return true;
   switch (p.type) {
     case 'anyChar': case 'charClass': case 'anchor': case 'never': case 'lookbehind': return true;
-    case 'lookahead': return committed(p.body, ACCEPT);
-    case 'seq': return p.items.every((it, k) => committed(it, contOf(p.items.slice(k + 1), c)));
-    case 'alt': return (c.total || pairwiseDisjoint(p.items)) && p.items.every((it) => committed(it, c));
+    case 'lookahead': return commits(p.body, ACCEPT, lazy);
+    case 'seq': return p.items.every((it, k) => commits(it, contOf(p.items.slice(k + 1), c), lazy));
+    case 'alt': return (c.total || pairwiseDisjoint(p.items)) && p.items.every((it) => commits(it, c, lazy));
     case 'repeat':
-      return p.greedy && exitsWhereBodyStops(p.body, c) && committed(p.body, inLoop(p.body, c));
+      if (!p.greedy) return lazy && c.rest !== null && commits(p.body, ANY, lazy);
+      return exitsWhereBodyStops(p.body, c) && commits(p.body, inLoop(p.body, c), lazy);
   }
 }
 
