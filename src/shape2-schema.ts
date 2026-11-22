@@ -42,7 +42,8 @@ export type Term =
   | { t: 'child'; name: string }
   /** The source text of a named single child, or of the arm when `name` is omitted. */
   | { t: 'text'; name?: string }
-  /** A closed leaf cooking function (COOK_FNS) applied to a named leaf's text. */
+  /** A closed leaf cooking function (COOK_FNS) applied to a named leaf's text (some are absent
+   * for some spellings: `tsNumericLiteralFlags` of a literal tsc flags nothing on). */
   | { t: 'cook'; fn: CookFn; name: string }
   /** Whether an optional child is present / a repeated child has at least one element. */
   | { t: 'present'; name: string }
@@ -117,6 +118,12 @@ export const COOK_FNS = [
   'stringValue',      // a string literal's SV (ECMA-262 12.9.4): quotes removed, escapes decoded
   'numberValue',      // a NumericLiteral's MV: decimal, `0x` / `0o` / `0b`, legacy octal, `_` separators
   'bigintValue',      // a BigInt literal's value as decimal digits + `n` (the oracles' JSON form of a bigint)
+  'bigintText',       // a BigInt literal as written, without the `n` suffix and `_` separators (ESTree `bigint`)
+  'privateName',      // a PrivateIdentifier's name: the text after `#`, escapes decoded
+  'tsNumericText',    // tsc's NumericLiteral text: the MV as a JavaScript number string (`0x1F` -> "31", `1.50` -> "1.5")
+  'tsNumericLiteralFlags', // tsc's numericLiteralFlags (TokenFlags of the literal's spelling), absent when none
+  'tsBigIntText',     // tsc's BigIntLiteral text: as written, `_` separators removed
+  'hasExtendedUnicodeEscape', // whether a string literal holds a `\u{...}` escape (tsc stores it on every string)
   'regexPattern',     // a RegularExpressionLiteral's body (between the slashes)
   'regexFlags',       // a RegularExpressionLiteral's flags
 ] as const;

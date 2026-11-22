@@ -491,13 +491,13 @@ const Expr = rule($ => [
   // being removed in TS#60263), so PrivateField stays — the CST producer models the syntax, not
   // a tsc-only restriction. Any "no private in optional chain" rule, were it real, would be a
   // Static-Semantics check in a CST consumer, never a parse-level exclusion here.
-  [$, '?.', alt(Ident, PrivateField, ['(', sep($, ','), ')'], ['[', $, ']'], Template, [...typeArgsInExpr(), '(', sep($, ','), ')'])],   // optional typed call `a?.<T>(args)`
+  [$, field('questionDot', '?.'), alt(Ident, PrivateField, ['(', sep($, ','), ')'], ['[', $, ']'], Template, [...typeArgsInExpr(), '(', sep($, ','), ')'])],   // optional typed call `a?.<T>(args)`
   [$, '[', $, ']'],
   [$, sameLine, '!'],   // TS non-null assertion — RESTRICTED (no line break before `!`, like postfix ++/--); a LHS-chain tail (access can follow: `x!.y`, `x!()`)
-  [$, '?', field('then', $), ':', field('otherwise', $)],
+  [$, field('question', '?'), field('then', $), field('colon', ':'), field('otherwise', $)],
   [$, 'as', Type],
-  [$, 'instanceof', $],
-  [$, 'in', $],
+  [$, field('instanceofKeyword', 'instanceof'), $],
+  [$, field('inKeyword', 'in'), $],
   [$, Template],
   // `new.target` meta-property — the ONLY form where `new` is not followed by a target.
   // Listed before the `new T` arm and matched by the dedicated `new` arms (NOT the bare
@@ -540,7 +540,7 @@ const Expr = rule($ => [
   // Without this arm the bare form only "parsed" by splitting into two statements.
   capExpr('?', 'async', sameLine, awaitCtx(notReservedExpr, Ident), '=>', awaitCtx(conciseBody(Block, $))),
   capExpr('?', notReservedExpr, Ident, '=>', resetCtx(conciseBody(Block, $))),
-  ['yield', alt(['*', $], [opt($)])],   // yield e | yield* e (delegate) | yield
+  ['yield', alt([field('asterisk', '*'), $], [opt($)])],   // yield e | yield* e (delegate) | yield
   ['(', field('first', $), many(field('comma', ','), field('rest', $)), ')'],
   [$, 'satisfies', Type],
   ['import', alt(['(', $, ')'], ['.', 'meta'], [...typeArgsInExpr(), opt('(', sep($, ','), ')')])],   // import(e) | import.meta | import<T>(args) (instantiation-expression; checker rejects)

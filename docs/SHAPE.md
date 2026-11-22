@@ -1,5 +1,11 @@
 # Shape mapping — declarative AST on top of the CST
 
+> **v2 (in progress):** the spec language that replaces this one binds by the grammar's stable
+> NAMES (`arm` / `field`, `src/grammar-names.ts`) instead of positions, and is a closed calculus
+> with no `custom` escape: [`src/shape2-schema.ts`](../src/shape2-schema.ts) defines it,
+> [`src/shape2-eval.ts`](../src/shape2-eval.ts) is its reference interpreter (gate `shape2-eval`).
+> No printer renders v2 yet; this document describes v1.
+
 A **shape** maps a grammar's concrete syntax tree (CST) into a consumer AST
 (types + builders). You declare the mapping once as a `ShapeSpec`;
 [`emitTs(grammar, { shape })`](../src/target-ts.ts) appends typed AST constructors
