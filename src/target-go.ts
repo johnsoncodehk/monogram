@@ -2650,9 +2650,18 @@ function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): stri
   const slimDropBody = dropTtIds.length
     ? `\tswitch ttId {\n\tcase ${slimDropCases}:\n\t\treturn false\n\t}\n`
     : '';
-  // Selection: Go cannot monomorphize a second parse instantiation for free
-  // (measured ~6–8ms / ~12–15% on 2MB TS). Hot path for *CstBuilder reuses
-  // the native engine; other Builders use interface parserW.
+  // Selection: *CstBuilder parses with the direct engine (parseWithCst); other Builders use the
+  // builder engine parserW. Why two engines: measured 2026-11-22 on 7fe75f9 (measure-profile,
+  // Go Callgrind instructions per reuse parse, checker.ts / gen-tm.ts / typescript.d.ts /
+  // dense-semi.ts), routing *CstBuilder through parserW costs +34.6% / +32.7% / +32.7% / +42.4%
+  // (interface Builder), and still +25.2% / +23.3% / +22.0% / +26.9% with parserW's builder
+  // field typed *CstBuilder (no interface: the bound of any devirtualisation). A generic
+  // parserW[B Builder] does not close the first gap: Go 1.27 stencils one instantiation per GC
+  // shape, and even a struct-typed B with its own shape calls B's methods through the dictionary
+  // (an indirect call, not inlined; objdump of a minimal program). So about 9 points are the
+  // interface and about 25 are parserW's own steps (leaf push through peek + Builder.Leaf, the
+  // spanned return of every rule, a builder checkpoint per mark): one engine is not taken until
+  // parserW is rebuilt on the direct engine's steps and the interface's ~9% is measured again.
   const wMethods = emitParserMethodsW('parserW', ir, ids, ar);
   const topReuse = ir.reuse;
   const shapeA = topReuse?.kind === 'A';
