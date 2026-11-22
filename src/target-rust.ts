@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidWordByte, buildArenaIdPlan, lidOf, prattOpTables, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -1134,9 +1134,12 @@ function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaI
 
 function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
-  const binArms = r.binary.map((b) => `${lidOf(ids, b.op)} => Some((${b.lbp}, ${b.rbp}, ${b.requireTarget}, ${b.noUnaryLhs}))`).join(', ');
-  const preArms = r.prefix.map((p) => `${lidOf(ids, p.op)} => Some((${p.rbp}, ${p.requireTarget}, ${p.form}))`).join(', ');
-  const postArms = r.postfix.map((p) => `${lidOf(ids, p.op)} => Some((${p.lbp}, ${p.requireTarget}))`).join(', ');
+  // The operator tables (emit-portable prattOpTables) as `match` functions: LLVM compiles a match
+  // on the lid returning constants to a lookup table, no hashing.
+  const ops = prattOpTables(r, ids);
+  const binArms = ops.bin.map((b) => `${b.lid} => Some((${b.lbp}, ${b.rbp}, ${b.tgt}, ${b.noUnary}))`).join(', ');
+  const preArms = ops.pre.map((p) => `${p.lid} => Some((${p.rbp}, ${p.tgt}, ${p.form}))`).join(', ');
+  const postArms = ops.post.map((p) => `${p.lid} => Some((${p.lbp}, ${p.tgt}))`).join(', ');
   // The NUD arms, each a longest-match candidate tried from `save`, reached through the rule's
   // Dispatch (emit-portable.ts, PrattRule.nudOrder / nudDispatch). `won` records the node just
   // finished as the best so far and moves `ck` past it; `lost` drops what the arm built.

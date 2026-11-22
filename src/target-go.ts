@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, prattOpTables, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -1127,7 +1127,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
       case 'prefix':
         // An operand that parses but is not the target the operator requires fails the whole
         // Pratt call, whatever another arm matched.
-        return `\tif pbp, ok := pre_${r.name}[t.Lid]; ok {
+        return `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tp.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
 \t\toperand := p.bp_${r.name}(pbp.rbp)
 \t\tif operand >= 0 && pbp.tgt && p.form != 0 { p.back(save); ${lost}; p.capped = false; return -1 }
@@ -1136,8 +1136,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
 \t}`;
     }
   };
-  const bin = r.binary.map((b) => `${lidOf(ids, b.op)}: {${b.lbp}, ${b.rbp}, ${b.requireTarget}, ${b.noUnaryLhs}}`).join(', ');
-  const pre = r.prefix.map((p) => `${lidOf(ids, p.op)}: {${p.rbp}, ${p.requireTarget}, ${p.form}}`).join(', ');
+
   const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, suppressedIn: number[]) => {
     const parts: string[] = [];
     if (accessTail) parts.push('!tailClosed');
@@ -1181,10 +1180,7 @@ ${groups.map((g) => `\t\tcase ${g.key}:
 \t\t\t}`).join('\n')}
 \t\t}${tplPart}`;
   })();
-  const post = r.postfix.map((p) => `${lidOf(ids, p.op)}: {${p.lbp}, ${p.requireTarget}}`).join(', ');
-  return `var bin_${r.name} = map[uint16]bp{${bin}}
-var pre_${r.name} = map[uint16]preOp{${pre}}
-var post_${r.name} = map[uint16]postOp{${post}}
+  return `${goPrattOpTables(r, ids)}
 func (p *engine) parse${r.name}() int32 {
 \tprev := p.suppressCur
 \tp.suppressCur = p.suppressNext
@@ -1204,14 +1200,14 @@ ${(r.leds.length > 0 || r.postfixToks.length > 0) ? 'LedLoop:\n' : ''}\tfor {
 \t\tif t == nil { break }
 ${ledSwitch}
 ${postfixTokSwitch}
-\t\tif post, ok := post_${r.name}[t.Lid]; ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
+\t\tif post := post_${r.name}[t.Lid]; post.ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
 \t\t\tif post.tgt && form != 0 { return -1 }
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++; tailClosed = true
 \t\t\tleft = p.finish(${ruleIdOf(ar, r.name)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); form = 1; continue
 \t\t}
 ${gtOpRead(ids, false)}
-\t\tinfo, ok := bin_${r.name}[opLid]
-\t\tif !ok || info.lbp <= minBp { break }
+\t\tinfo := bin_${r.name}[opLid]
+\t\tif !info.ok || info.lbp <= minBp { break }
 \t\tif info.tgt && form != 0 || info.noUnary && form == 2 { return -1 }
 \t\tledSave := p.pos; sb := len(p.scratch)
 \t\tp.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos))
@@ -1240,6 +1236,19 @@ ${dispatchGo(r.nudDispatch, 't', ids, nudArm)}
 \tp.pos = bestPos
 \treturn best
 }`;
+}
+
+/** A Pratt rule's operator tables (emit-portable prattOpTables) as arrays indexed by the token's
+ *  lid, one entry per literal id (`ok` marks an operator): a bounds-checked load, where a
+ *  map[uint16] would hash on every LED iteration and every prefix NUD. */
+function goPrattOpTables(r: PrattRule, ids: LexIdPlan): string {
+  const ops = prattOpTables(r, ids);
+  const bin = ops.bin.map((b) => `${b.lid}: {${b.lbp}, ${b.rbp}, ${b.tgt}, ${b.noUnary}, true}`).join(', ');
+  const pre = ops.pre.map((p) => `${p.lid}: {${p.rbp}, ${p.tgt}, ${p.form}, true}`).join(', ');
+  const post = ops.post.map((p) => `${p.lid}: {${p.lbp}, ${p.tgt}, true}`).join(', ');
+  return `var bin_${r.name} = [${ops.size}]bp{${bin}}
+var pre_${r.name} = [${ops.size}]preOp{${pre}}
+var post_${r.name} = [${ops.size}]postOp{${post}}`;
 }
 
 const goEditBody = '\td.text, d.toks, relexed = relexEdits(oldText, oldToks, edits)';
@@ -2008,7 +2017,7 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaI
         return ifGo([`minBp < ${c.capBp}`, ...guardCond(r.nudCappedGuard[a.index]!, 't', 'W', keyed)], seqArm(i, c.steps, false, true));
       }
       case 'prefix':
-        return `\tif pbp, ok := pre_${r.name}[t.Lid]; ok {
+        return `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
 \t\toperand, ook := p.bpW_${r.name}(pbp.rbp)
 \t\tif ook && pbp.tgt && p.form != 0 { p.back(save); ${lost}; p.capped = false; return spanned{}, false }
@@ -2084,14 +2093,14 @@ ${needLedLoop ? 'LedLoop:\n' : ''}\tfor {
 \t\tif t == nil { break }
 ${ledSwitch}
 ${postfixTokSwitch}
-\t\tif post, ok := post_${r.name}[t.Lid]; ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
+\t\tif post := post_${r.name}[t.Lid]; post.ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
 \t\t\tif post.tgt && form != 0 { return spanned{}, false }
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++; tailClosed = true
 \t\t\tleft = p.finishW(${rid}, sb, int(left.off), int(left.tokStart)); form = 1; continue
 \t\t}
 ${gtOpRead(ids, true)}
-\t\tinfo, ok := bin_${r.name}[opLid]
-\t\tif !ok || info.lbp <= minBp { break }
+\t\tinfo := bin_${r.name}[opLid]
+\t\tif !info.ok || info.lbp <= minBp { break }
 \t\tif info.tgt && form != 0 || info.noUnary && form == 2 { return spanned{}, false }
 \t\tledSave := p.pos; sb := len(p.scratch)
 \t\tp.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, opEnd)
@@ -3313,9 +3322,9 @@ type Node struct {
 \tRuleId uint16
 \tKidStart, KidCount, Offset, End, TokStart, TokEnd, Ext uint32
 }
-type bp struct{ lbp, rbp int; tgt, noUnary bool }
-type preOp struct{ rbp int; tgt bool; form uint8 }
-type postOp struct{ lbp int; tgt bool }
+type bp struct{ lbp, rbp int; tgt, noUnary, ok bool }
+type preOp struct{ rbp int; tgt bool; form uint8; ok bool }
+type postOp struct{ lbp int; tgt bool; ok bool }
 
 // engine is one parse's mutable state: the token stream it reads, the cursor and lookahead watermark, the arena it builds into and the reuse
 // metadata. A Doc owns one for its lifetime; ParseWith uses a fresh one per call. Nothing the

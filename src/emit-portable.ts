@@ -1303,6 +1303,36 @@ export function lidOf(plan: LexIdPlan, text: string): number {
   return i >= 0 ? i : 0;
 }
 
+/** A Pratt rule's operator tables keyed by literal id: the one description of the binding-power
+ *  lookups (binary LED, prefix NUD, postfix LED) that every printer renders as its lookup (a
+ *  `match`, a lid-indexed array, a record). Entries in the rule's declaration order, at most one
+ *  per lid in each table; `size` = the number of literal ids, so a table of that length takes any
+ *  token's lid as its index. */
+export type PrattOpTables = {
+  size: number;
+  bin: Array<{ lid: number; lbp: number; rbp: number; tgt: boolean; noUnary: boolean }>;
+  pre: Array<{ lid: number; rbp: number; tgt: boolean; form: AssignForm }>;
+  post: Array<{ lid: number; lbp: number; tgt: boolean }>;
+};
+export function prattOpTables(r: PrattRule, plan: LexIdPlan): PrattOpTables {
+  const keyed = <T extends { op: string }, U>(table: string, xs: T[], f: (x: T, lid: number) => U): U[] => {
+    const seen = new Set<number>();
+    return xs.map((x) => {
+      const lid = plan.lids.indexOf(x.op);
+      if (lid <= 0) throw new Error(`portable: ${r.name}: ${table} operator ${JSON.stringify(x.op)} has no literal id`);
+      if (seen.has(lid)) throw new Error(`portable: ${r.name}: ${table} operator ${JSON.stringify(x.op)} is declared twice`);
+      seen.add(lid);
+      return f(x, lid);
+    });
+  };
+  return {
+    size: plan.lids.length,
+    bin: keyed('binary', r.binary, (b, lid) => ({ lid, lbp: b.lbp, rbp: b.rbp, tgt: b.requireTarget, noUnary: b.noUnaryLhs })),
+    pre: keyed('prefix', r.prefix, (p, lid) => ({ lid, rbp: p.rbp, tgt: p.requireTarget, form: p.form })),
+    post: keyed('postfix', r.postfix, (p, lid) => ({ lid, lbp: p.lbp, tgt: p.requireTarget })),
+  };
+}
+
 /**
  * O(1) early exit for runtime `lid_of`: a text whose key (length, first unit) no literal has is
  * no literal (lid 0), found without the table lookup.
