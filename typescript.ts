@@ -473,7 +473,7 @@ const Expr = rule($ => [
   )],
   ['new', 'class', ...bindingIdentifier, opt(TypeParams), opt('extends', ClassHeritage), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}', alt(['(', sep($, ','), ')'], not('?.'))],
   ['new', 'class', opt(TypeParams), opt('extends', ClassHeritage), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}', alt(['(', sep($, ','), ')'], not('?.'))],
-  ['[', many(opt($), ','), opt($), ']'],
+  ['[', opt($), many(',', opt($)), ']'],   // array literal: each element parsed once (see javascript.ts)
   ['{', sep(Prop, ','), '}'],
   // Arrow functions, async/non-async SPLIT so the [Await] grammar parameter routes
   // each arm's params + body to the right rule family (await-yield-fork.ts): an async

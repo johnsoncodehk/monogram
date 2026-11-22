@@ -104,7 +104,7 @@ module.exports = grammar({
       seq("new", $.new_target, choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), blank())),
       seq("new", "class", field('name', $.ident), optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}", choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), blank())),
       seq("new", "class", optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}", choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), blank())),
-      seq("[", repeat(seq(optional($.expr), ",")), optional($.expr), "]"),
+      seq("[", optional($.expr), repeat(seq(",", optional($.expr))), "]"),
       seq("{", optional(seq($.prop, repeat(seq(",", $.prop)), optional(","))), "}"),
       seq("async", "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", "=>", choice($.block, $.expr)),
       seq("(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", "=>", choice($.block, $.expr)),

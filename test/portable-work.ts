@@ -70,6 +70,20 @@ const TS_CONSTRUCTS: Record<string, (d: number) => string> = {
   'object computed key': (d) => `const o = ${wrap(d, '{ [k]: ', ' }', '1')};\n`,
   'object modified async method': (d) => nest(d, (i) => `const o${i} = { public static async m${i}() {`, '} };'),
   'array literal': (d) => `const o = ${wrap(d, '[', ']', '1')};\n`,
+  'array of objects': (d) => `const o = ${wrap(d, '[{ a: ', ' }]', '1')};\n`,
+  // Lists: each kind nested in itself, with its last element right before the close (where an
+  // element parsed by a repetition that then wants a separator would be parsed again).
+  'array, last of two': (d) => `const o = ${wrap(d, '[0, ', ']', '1')};\n`,
+  'array, trailing comma': (d) => `const o = ${wrap(d, '[', ',]', '1')};\n`,
+  'array, elisions': (d) => `const o = ${wrap(d, '[, ', ', ,]', '1')};\n`,
+  'array, spread': (d) => `const o = ${wrap(d, '[0, ...', ']', 'x')};\n`,
+  'array destructuring assignment': (d) => `${wrap(d, '[', ']', 'a')} = x;\n`,
+  'array binding pattern': (d) => `const ${wrap(d, '[b, ', ']', 'a')} = x;\n`,
+  'arrow array parameter': (d) => `const f = (${wrap(d, '[', ']', 'a')}) => 1;\n`,
+  'arrow default parameter': (d) => `const f = ${wrap(d, '(a = ', ') => 1', '1')};\n`,
+  'object pattern': (d) => `const ${wrap(d, '{ b, a: ', ' }', 'a')} = x;\n`,
+  'call, last of two': (d) => `${wrap(d, 'f(0, ', ')', '1')};\n`,
+  'call, trailing comma': (d) => `${wrap(d, 'f(', ',)', '1')};\n`,
   'parentheses': (d) => `const o = ${wrap(d, '(', ')', '1')};\n`,
   'call arguments': (d) => `${wrap(d, 'f(', ')', '1')};\n`,
   'generic call': (d) => `${wrap(d, 'f<T>(', ')', '1')};\n`,
@@ -90,6 +104,11 @@ const TS_CONSTRUCTS: Record<string, (d: number) => string> = {
   'type literal': (d) => `type T = ${wrap(d, '{ a: ', ' }', 'number')};\n`,
   'type arguments': (d) => `type T = ${wrap(d, 'A<', '>', 'number')};\n`,
   'tuple type': (d) => `type T = ${wrap(d, '[', ']', 'number')};\n`,
+  'tuple, last of two': (d) => `type T = ${wrap(d, '[0, ', ']', 'number')};\n`,
+  'named tuple': (d) => `type T = ${wrap(d, '[a?: ', ']', 'number')};\n`,
+  'rest tuple': (d) => `type T = ${wrap(d, '[0, ...', ']', 'number')};\n`,
+  'type arguments, last of two': (d) => `type T = ${wrap(d, 'A<0, ', '>', 'number')};\n`,
+  'union, leading pipe': (d) => `type T = ${wrap(d, '| (', ')', 'number')};\n`,
   'function type': (d) => `type T = ${wrap(d, '(a: ', ') => void', 'number')};\n`,
   'conditional type': (d) => `type T = ${wrap(d, 'A extends B ? ', ' : 2', '1')};\n`,
 };
@@ -98,8 +117,8 @@ const TS_CONSTRUCTS: Record<string, (d: number) => string> = {
 // that parse it more than once. Each is owed its own change (a grammar decision, or an engine
 // mechanism that shares a sub-parse between candidates).
 const TS_KNOWN_GROWTH: Record<string, string> = {
-  'array literal': 'predates longest match (0990a37 grows the same): an alternative that fails after the nested literal, then one that parses it again',
-  'conditional type': 'predates longest match (0990a37 grows the same): an alternative that fails after the nested type, then one that parses it again',
+  'conditional type': "Type's postfix-nullable arm `[$, sameLine, '?', not(alt('new', $))]`: its lookahead parses the whole type after the `?` (the true branch), then the conditional arm parses it again (tsc tests one token, isStartOfType)",
+  'arrow default parameter': "Expr: `(a = …)` is parsed by the arrow arm as a parameter list and by the parenthesized arm as `(Expr)`, so a default that holds an arrow function is parsed twice per level",
 };
 
 // The javascript grammar's constructs: what is JavaScript (no type syntax), each nested in itself.
@@ -163,6 +182,19 @@ const JS_CONSTRUCTS: Record<string, (d: number) => string> = {
   'object spread': (d) => `const o = ${wrap(d, '{ ...', ' }', 'x')};\n`,
   'array literal': (d) => `const o = ${wrap(d, '[', ']', '1')};\n`,
   'array of objects': (d) => `const o = ${wrap(d, '[{ a: ', ' }]', '1')};\n`,
+  // Lists: each kind nested in itself, with its last element right before the close (where an
+  // element parsed by a repetition that then wants a separator would be parsed again).
+  'array, last of two': (d) => `const o = ${wrap(d, '[0, ', ']', '1')};\n`,
+  'array, trailing comma': (d) => `const o = ${wrap(d, '[', ',]', '1')};\n`,
+  'array, elisions': (d) => `const o = ${wrap(d, '[, ', ', ,]', '1')};\n`,
+  'array, spread': (d) => `const o = ${wrap(d, '[0, ...', ']', 'x')};\n`,
+  'array destructuring assignment': (d) => `${wrap(d, '[', ']', 'a')} = x;\n`,
+  'array binding pattern': (d) => `const ${wrap(d, '[b, ', ']', 'a')} = x;\n`,
+  'arrow array parameter': (d) => `const f = (${wrap(d, '[', ']', 'a')}) => 1;\n`,
+  'arrow default parameter': (d) => `const f = ${wrap(d, '(a = ', ') => 1', '1')};\n`,
+  'object pattern': (d) => `const ${wrap(d, '{ b, a: ', ' }', 'a')} = x;\n`,
+  'call, last of two': (d) => `${wrap(d, 'f(0, ', ')', '1')};\n`,
+  'call, trailing comma': (d) => `${wrap(d, 'f(', ',)', '1')};\n`,
   'parentheses': (d) => `const o = ${wrap(d, '(', ')', '1')};\n`,
   'call arguments': (d) => `${wrap(d, 'f(', ')', '1')};\n`,
   'optional call': (d) => `${wrap(d, 'f?.(', ')', '1')};\n`,
@@ -188,8 +220,7 @@ const JS_CONSTRUCTS: Record<string, (d: number) => string> = {
 
 // EXPECTED-FAIL, as TS_KNOWN_GROWTH.
 const JS_KNOWN_GROWTH: Record<string, string> = {
-  'array literal': "Expr's array arm `['[', many(opt($), ','), opt($), ']']`: the repetition parses the last element, fails for want of a `,`, and the trailing opt($) parses it again",
-  'array of objects': 'as `array literal`',
+  'arrow default parameter': "Expr: `(a = …)` is parsed by the arrow arm as a parameter list and by the parenthesized arm as `(Expr)`, so a default that holds an arrow function is parsed twice per level",
 };
 
 let ok = 0, fail = 0;

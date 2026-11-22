@@ -436,7 +436,10 @@ const Expr = rule($ => [
   ['new', not('<'), NewTarget, alt(['(', sep($, ','), ')'], not('?.'))],
   ['new', 'class', ...bindingIdentifier, opt('extends', ClassHeritage), '{', many(ClassMember), '}', alt(['(', sep($, ','), ')'], not('?.'))],
   ['new', 'class', opt('extends', ClassHeritage), '{', many(ClassMember), '}', alt(['(', sep($, ','), ')'], not('?.'))],
-  ['[', many(opt($), ','), opt($), ']'],
+  // array literal `[a, , ...b,]`: an element or a hole, then `,` and an element or a hole, the
+  // ArrayBindingPattern's form. Each element is parsed once: `many(opt($), ','), opt($)` parsed
+  // the last one in the repetition, found no `,`, and parsed it again (twice per nesting level).
+  ['[', opt($), many(',', opt($)), ']'],
   ['{', sep(Prop, ','), '}'],
   // Arrow functions, async/non-async SPLIT so the [Await] grammar parameter can route
   // each arm's params + body to the right rule family (await-yield-fork.ts): an async
