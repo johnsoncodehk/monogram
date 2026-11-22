@@ -11,18 +11,18 @@ this record is stale, so every file that moves between cells shows in its diff.
 
 Corpus: `microsoft/TypeScript@6fbce89821d93a5b761581d9ac540455f38e9acb` `tests/cases/conformance` · oracle: `typescript@5.9.3`
 
-**4462 files measured**, 4428 agree (99.24%) · 1196 multi-file cases skipped · 1 excluded as oracle crashes (`ORACLE_CRASHES` in the test, by name).
+**4462 files measured**, 4431 agree (99.31%) · 1196 multi-file cases skipped · 1 excluded as oracle crashes (`ORACLE_CRASHES` in the test, by name).
 
 | cell (tsc / monogram) | files | |
 |---|---:|---|
 | `js/accept` | 1157 | agree: valid JavaScript per tsc, accepted |
 | `js/reject` | 30 | **disagree**: valid JavaScript per tsc, rejected: candidate gaps (read each derivation) |
-| `ts-only/reject` | 2711 | agree: TypeScript-only syntax per tsc, rejected |
-| `ts-only/accept` | 2 | **disagree**: TypeScript-only syntax per tsc, accepted: over-acceptance |
+| `ts-only/reject` | 2713 | agree: TypeScript-only syntax per tsc, rejected |
+| `ts-only/accept` | 0 | **disagree**: TypeScript-only syntax per tsc, accepted: over-acceptance |
 | `js-error/reject` | 1 | agree: a JS-only syntactic error per tsc, rejected |
 | `js-error/accept` | 0 | **disagree**: a JS-only syntactic error per tsc, accepted: over-acceptance |
-| `reject/reject` | 559 | agree: a tsc parse error, rejected |
-| `reject/accept` | 2 | **disagree**: a tsc parse error, accepted: over-acceptance |
+| `reject/reject` | 560 | agree: a tsc parse error, rejected |
+| `reject/accept` | 1 | **disagree**: a tsc parse error, accepted: over-acceptance |
 | `monogram-crash` | 0 | **disagree**: monogram threw something other than an input error: a bug |
 
 ## `js/reject` (30)
@@ -60,12 +60,11 @@ Valid JavaScript per tsc, rejected: candidate gaps (read each derivation).
 - `statements/VariableStatements/usingDeclarations/usingDeclarationsInForIn.ts`
 - `statements/VariableStatements/usingDeclarations/usingDeclarationsInForOf.3.ts`
 
-## `ts-only/accept` (2)
+## `ts-only/accept` (0)
 
 TypeScript-only syntax per tsc, accepted: over-acceptance.
 
-- `parser/ecmascript5/parserImportDeclaration1.ts`
-- `scanner/ecmascript5/scannerImportDeclaration1.ts`
+_None._
 
 ## `js-error/accept` (0)
 
@@ -73,11 +72,10 @@ A JS-only syntactic error per tsc, accepted: over-acceptance.
 
 _None._
 
-## `reject/accept` (2)
+## `reject/accept` (1)
 
 A tsc parse error, accepted: over-acceptance.
 
-- `parser/ecmascript5/RegressionTests/parser519458.ts`
 - `statements/VariableStatements/usingDeclarations/awaitUsingDeclarations.4.ts`
 
 ## `monogram-crash` (0)
