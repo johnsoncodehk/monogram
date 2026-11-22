@@ -3657,6 +3657,8 @@ const tsLowering: Lowering = {
   owns: false,
   charSet: (name, rs) => `const ${name} = /*#__PURE__*/ (() => { const a = new Uint8Array(256); for (const [lo, hi] of [${rs.map(([lo, hi]) => `[${lo},${hi}]`).join(', ')}]) for (let i = lo; i <= hi; i++) a[i] = 1; return a; })();`,
   // A code unit past 255 indexes no table entry (undefined), so it ends the run.
+  // A unit loop: Rust's four-per-round shape did not pay in V8 (measure-targets, PR #138: ts-parse
+  // -3.9% to +2.6%, ts-parseWith +0.7% to +2.6%, within the 3% noise floor).
   runEndFn: `// The end of the run of code units in set from i: the first j >= i at which s ends or s[j] is not in it.
 function lexRunEnd(s: string, i: number, set: Uint8Array): number {
   while (i < s.length && set[s.charCodeAt(i)] === 1) i++;

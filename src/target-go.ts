@@ -248,13 +248,19 @@ function renderIdTablesGo(ids: LexIdPlan): string {
   // compiler turns into a search by length and value; no map is built at load time.
   const tables = buildLidTables(ids, UNITS);
   const cases = (half: [number, { text: string; id: number }[]][]) => half.flatMap(([, ents]) => ents).map((e) => `\tcase ${J(e.text)}:\n\t\treturn ${e.id}\n`).join('');
-  const wordBytes = Array.from({ length: 256 }, (_, b) => b).filter(lidWordByte);
+  // The byte test of lidWordByte, as ranges of consecutive bytes (a package-level table would be mutable state).
+  const wordTest: string[] = [];
+  for (let b = 0; b < 256; b++) {
+    if (!lidWordByte(b) || lidWordByte(b - 1)) continue;
+    let e = b;
+    while (e < 255 && lidWordByte(e + 1)) e++;
+    wordTest.push(e === b ? `b == ${b}` : `(b >= ${b} && b <= ${e})`);
+  }
   return `var kindStr = []string{${kidsLit}}
 var _lids = []string{${lidsLit}}
 var _kidMap = map[string]uint16{}
 const _lidMaxLen = ${pf.maxLen}
 var _lidFirstBits = [...]byte{${bitsLit}}
-var _lidWordByte = [256]bool{${wordBytes.map((b) => `${b}: true`).join(', ')}}
 
 func init() {
 \tfor i, k := range kindStr { _kidMap[k] = uint16(i) }
@@ -270,7 +276,7 @@ func lidKeyIsLiteral(text string) bool {
 // lidOf is the literal id of a text (0: no literal): the prefilter, then the table half of its first byte.
 func lidOf(text string) uint16 {
 \tif !lidKeyIsLiteral(text) { return 0 }
-\tif _lidWordByte[text[0]] { return lidOfKw(text) }
+\tif b := text[0]; ${wordTest.join(' || ')} { return lidOfKw(text) }
 \treturn lidOfPunct(text)
 }
 // lidOfWord is lidOf for a token whose kind can equal word literals only (shared.tokenLiterals).
@@ -3266,6 +3272,8 @@ const goLowering: Lowering = {
   owns: false,
   spliceInline: true,
   charSet: (name, rs) => `var ${name} = [256]bool{${rs.flatMap(([lo, hi]) => Array.from({ length: hi - lo + 1 }, (_, k) => `${lo + k}: true`)).join(', ')}}`,
+  // A byte loop: Rust's four-bytes-per-round shape measured slower here (measure-targets, PR #138:
+  // go-reuse +2.9% to +3.8% on acorn / checker / gen-tm), the compiler keeps the loop tight already.
   runEndFn: `// lexRunEnd is the end of the run of bytes in set from i: the first j >= i at which s ends or s[j] is not in it.
 func lexRunEnd(s string, i int, set *[256]bool) int {
 \tfor i < len(s) && set[s[i]] {
