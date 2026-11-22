@@ -488,6 +488,11 @@ function buildIR(grammar: CstGrammar): ParserIR {
   if (grammar.markup) {
     throw new Error('portable: markup-mode grammars are out of scope (use jsTarget or the interpreter path)');
   }
+  // The portable lexers have no element-region frame stack yet (ElementRegion, emit-lexer.ts):
+  // refused rather than lexed without the region, so no target diverges from the interpreter.
+  if (grammar.elements) {
+    throw new Error('portable: element-region grammars are out of scope until the portable lexers carry the frame stack (use jsTarget or the interpreter path)');
+  }
 
   const a = analyzeGrammar(grammar);
   const tokenNames = a.tokenNames;

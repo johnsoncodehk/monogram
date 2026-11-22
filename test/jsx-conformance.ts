@@ -39,6 +39,12 @@ const validJsx: string[] = [
   `render(<App config={cfg} />);`,
   `function Card({ title }) {\n  return <section className="card"><h2>{title}</h2></section>;\n}`,
   `const u = <div className={\`box \${variant}\`} />;`,
+  // children are TEXT (the element region); `</` is a token only inside an element
+  `const c = <p>It's great</p>;`,
+  `const v = <p>50% & a # b | c \\ d — ©</p>;`,
+  `const w = <a>{\`x\${<b>y's</b>}\`}</a>;`,
+  `x</*c*/y`,
+  `const r = />/.test(s);`,
 ];
 
 // ── Corpus 2: plain JavaScript still parses under the .jsx grammar ──
@@ -90,14 +96,19 @@ console.log(`  Matches base: ${par_ok}/${tsParity.length}`);
 for (const c of par_fail) console.log('    DIVERGED from base (withJsx changed type handling): ' + c);
 
 // ── Corpus 4: known-unsupported valid JSX (expected-fail) ──
-// Valid JSX (tsc, ScriptKind.JSX) that Monogram rejects for want of a lexer region: free text in
-// children, and `</` lexed as the close-tag token outside children (tsc rescans `</` as a
-// close-tag opener only inside JSX children). Editor queue item 6. A row that starts parsing
-// fails the gate until it moves to corpus 1.
+// Valid JSX (tsc, ScriptKind.JSX) that Monogram rejects: where the lexer-local element region
+// differs from tsc's parser-driven scanner (ElementRegion in src/types.ts). A row that starts
+// parsing fails the gate until it moves to corpus 1.
 const unsupported: [string, string][] = [
-  ['apostrophe in text', `const c = <p>It's great</p>;`],
-  ['`<` before a comment as less-than', `x</*c*/y`],
+  ['backslash at the end of a JSX attribute string', `let a = <a b="\\" c="d" />;`],
 ];
+// Invalid JSX the element region must reject.
+const invalidJsx: string[] = [`const a = <p>a > b</p>;`, `const b = <p>a } b</p>;`, `const c = <a>x;`, `x = a </ b;`];
+const overAccepted = invalidJsx.filter(weAccept);
+console.log(`\n── Corpus 5: invalid JSX must be rejected ── ${invalidJsx.length - overAccepted.length}/${invalidJsx.length}`);
+for (const c of invalidJsx.filter(jsxAccepts)) console.log('    WARNING — tsc accepts this invalid snippet: ' + JSON.stringify(c));
+for (const c of overAccepted) console.log('    ✗ ACCEPTED: ' + JSON.stringify(c));
+if (overAccepted.length) process.exit(1);
 const nowAccepted = unsupported.filter(([, code]) => weAccept(code)).map(([name]) => name);
 console.log('\n── Corpus 4: known-unsupported valid JSX (expected-fail) ──');
 for (const [name, code] of unsupported) console.log(`    - ${weAccept(code) ? 'accept' : 'reject'}${jsxAccepts(code) ? '' : ' [tsc also rejects — recheck]'}: ${name}`);

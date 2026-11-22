@@ -15,7 +15,7 @@
 // a newline-mode NEWLINE spans its line break).
 // Flag bits: 1 newlineBefore, 2 commentBefore, 4 multilineFlowBefore, 8 '(' heads a control
 // group. test/emit-lexer-verify.ts gates the output against the golden token streams.
-import type { CstGrammar, IndentConfig, MarkupConfig, NewlineConfig, TokenDecl } from './types.ts';
+import type { CstGrammar, ElementRegion, IndentConfig, MarkupConfig, NewlineConfig, TokenDecl } from './types.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { UNI_ID_CONTINUE, UNI_ID_START } from './uni-ident.ts';
 import {
@@ -45,6 +45,7 @@ export interface LexSpec {
   // Literals the lexer never forms (they keep their ids): the parser composes them (gtComposites).
   composed?: string[];
   markup?: MarkupConfig | null;
+  elements?: ElementRegion | null;
   indent?: IndentConfig | null;
   newline?: NewlineConfig | null;
 }
@@ -53,7 +54,7 @@ export function lexSpecOf(grammar: CstGrammar): LexSpec {
   const lits = new Set<string>();
   for (const rule of grammar.rules) for (const l of collectLiterals(rule.body)) lits.add(l);
   for (const level of grammar.precs) for (const op of level.operators) lits.add(op.value);
-  return { tokens: grammar.tokens, literals: [...lits], composed: gtComposites(grammar), markup: grammar.markup, indent: grammar.indent, newline: grammar.newline };
+  return { tokens: grammar.tokens, literals: [...lits], composed: gtComposites(grammar), markup: grammar.markup, ...(grammar.elements ? { elements: grammar.elements } : {}), indent: grammar.indent, newline: grammar.newline };
 }
 
 export interface LexerSymtab {
@@ -191,6 +192,12 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   const markup = spec.markup ?? undefined;
   const indent = spec.indent ?? undefined;
   const newline = spec.newline ?? undefined;
+  // Element regions (JSX): frames on the template-hole stack. Encoding of one frame (number):
+  // low 2 bits = kind (0 template hole, 1 element hole, 2 element text frame); a hole keeps its
+  // brace count in the bits above (step 4); a text frame keeps its sub-state in bits 2-3
+  // (0 children text, 1 open tag, 2 close tag) and its open-element count above (step 16).
+  // Without `elements` every frame is a template hole and the encoding is the plain count.
+  const el = spec.elements ?? undefined;
   const lineSensitive = !!indent || !!newline;
   const stateful = !!markup || lineSensitive;
   const windowed = opts.windowed;
@@ -237,6 +244,8 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     [markup?.textToken, markup?.rawText?.token, markup?.comment?.token, markup?.voidNameToken,
      markup?.unquotedValueToken].filter(Boolean) as string[],
   );
+  // Region tokens: lexed only inside their element region, never by the ordinary scan.
+  const elTokenNames = new Set<string>(el ? [el.text, el.closeTag, el.selfClose] : []);
   const lineTokenNames = new Set<string>(
     indent ? [indent.indentToken, indent.dedentToken, indent.newlineToken].filter(Boolean)
            : newline ? [newline.token] : [],
@@ -287,7 +296,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
 
   // The scan matchers, in declaration order, with their baked regexes and per-matcher facts.
   const matchers = spec.tokens
-    .filter(t => t.name !== templateToken?.name && !markupTokenNames.has(t.name) && !lineTokenNames.has(t.name))
+    .filter(t => t.name !== templateToken?.name && !markupTokenNames.has(t.name) && !lineTokenNames.has(t.name) && !elTokenNames.has(t.name))
     .map((t, idx) => {
       const blockPattern = tokenBlockPatternSource(t);
       const id = `${idx}_${t.name.replace(/[^A-Za-z0-9_]/g, '_')}`;
@@ -383,6 +392,21 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       const ccEscape = (s: string) => s.replace(/[\[\]\\^-]/g, '\\$&');
       const quotes = markup.attributeQuotes ?? ['"', "'"];
       emit(`const LX_UNQUOTED = new RegExp(${J('[^\\s' + ccEscape(quotes.join('') + markup.tagOpen + markup.tagClose + (markup.attributeAssign ?? '=') + '`') + ']+')}, 'y');`);
+    }
+  }
+  if (el) {
+    const reEsc = (x: string) => x.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+    const textDecl = spec.tokens.find(t => t.name === el.text);
+    if (!textDecl) throw new Error(`elements.text: no token named '${el.text}'`);
+    // The children text run is the text token's own pattern (a run of a character class).
+    emit(`const LX_EL_TEXT = new RegExp(${J(`(?:${tokenPatternSource(textDecl)})`)}, 'y');`);
+    const tp = el.typeParameters;
+    if (tp?.head) emit(`const LX_TP_HEAD = new RegExp(${J(`(?:${tokenPatternSource({ pattern: tp.head })})`)}, 'y');`);
+    if (tp?.signature) {
+      const identDecl = spec.tokens.find(t => t.identifier);
+      if (!identDecl) throw new Error('elements.typeParameters.signature needs the identifier token');
+      emit(`const LX_TP_SIG = new RegExp(${J(`\\s*(?:${tokenPatternSource(identDecl)})\\s*${reEsc(el.tagClose)}\\s*${reEsc(tp.signature.open)}`)}, 'y');`);
+      litTable(`LX_SIG_THEN`, tp.signature.then);
     }
   }
   if (indent?.blockScalar) {
@@ -557,6 +581,13 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`  let sawCloseMarker = false;      // this tag began with the close marker`);
     emit(`  let lowerSrc«: string | null» = null;`);
   }
+  if (el) {
+    emit(`  let tagAngle = 0;               // type-argument depth inside the current tag (\`<List<string>>\`)`);
+    emit(`  // A type-parameter signature being decided (\`<T>(x: T) => T\`): the group is lexed as code;`);
+    emit(`  // the token after its closer keeps it (one of the signature's \`then\`) or rewinds to an element.`);
+    emit(`  let specTok = -1, specVerdict = 0, specClosedAt = -1, specParenBase = 0, specDocLex = 0, specPops = 0;`);
+    emit(`  let specStack«: number[]» = [], specParens«: boolean[]» = [];`);
+  }
   // ── push ──
   emit(`  function tkPush(k«: number», t«: number», off«: number», end«: number») {`);
   if (tagScope) emit(`    const rawOff = off, rawEnd = end;`);
@@ -570,7 +601,21 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`    tkFl[tokN] = (pendingNl ? 1 : 0) | extraFl;`);
   }
   emit(`    extraFl = 0;`);
-  emit(`    tkDp[tokN] = templateStack.length;`);
+  if (el) {
+    // the frame depth saturates (only a zero record is read: restart / resync points)
+    // A token lexed while a signature is undecided (and the token deciding it) counts one level
+    // deeper: its lexing depends on the `<` before it, so it is no restart or resync point.
+    if (el.typeParameters?.signature) emit(`    { const d = templateStack.length + (specTok >= 0 ? 1 : 0); tkDp[tokN] = d > 255 ? 255 : d; }`);
+    else emit(`    tkDp[tokN] = templateStack.length > 255 ? 255 : templateStack.length;`);
+    if (el.typeParameters?.signature) {
+      emit(`    if (specClosedAt >= 0 && tokN > specClosedAt) {`);
+      emit(`      specClosedAt = -1;`);
+      emit(`      if (k === K_PUNCT && LX_SIG_THEN[t] !== 0) specTok = -1; else specVerdict = 2;`);
+      emit(`    }`);
+    }
+  } else {
+    emit(`    tkDp[tokN] = templateStack.length;`);
+  }
   emit(`    tkPd[tokN] = parenHeadStack.length;`);
   emit(`    pendingNl = false;`);
   emit(`    pvK = k; pvT = t;`);
@@ -648,7 +693,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`            && (altEnd«!»[wndPtr] < 0 ? altEnd«!»[wndPtr] + srcLenP1 : altEnd«!»[wndPtr]) + wndDelta === end`);
     emit(`            // the candidate's LEADING-TRIVIA flags must match too (parsers read them)`);
     emit(`            && altFl«!»[wndPtr] === tkFl[tokN - 1]`);
-    emit(`            && templateStack.length === 0 && altDp«!»[wndPtr] === 0`);
+    emit(`            && templateStack.length === 0 && altDp«!»[wndPtr] === 0${el?.typeParameters?.signature ? ' && specTok < 0' : ''}`);
     emit(`            && LX_PFXV[t] === 0 && LX_PARENKW[t] === 0`);
     emit(`            && !(k === K_PUNCT && (t === ${tLParen} || t === ${tRParen}))) {`);
     emit(`          const q = altPd«!»[wndPtr];`);
@@ -680,6 +725,11 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   emit(`  // prevIsValue, baked: postfix-ambiguous op → its recorded position; an expression-`);
   emit(`  // head keyword or a control-head ')' is NOT a value; else division-prev type/text.`);
   emit(`  function prevIsValue() {`);
+  if (el) {
+    // inside a tag nothing is a regex; the token that ends an element entered from code is a value
+    emit(`    if (templateStack.length > 0 && (templateStack[templateStack.length - 1] & 3) === 2 && (templateStack[templateStack.length - 1] & 12) !== 0) return true;`);
+    emit(`    if (tokN > 0 && (tkFl[tokN - 1] & 16) !== 0) return true;`);
+  }
   emit(`    const k = tokN > 0 ? tkK[tokN - 1] : pvK;`);
   emit(`    if (k < 0) return false;`);
   emit(`    const t = tokN > 0 ? tkT[tokN - 1] : pvT;`);
@@ -688,6 +738,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   emit(`    if (t === ${tRParen} && lastCloseWasParenHead) return false;`);
   emit(`    return LX_DIVK[k] !== 0 || LX_DIVT[t] !== 0;`);
   emit(`  }`);
+  if (el) emitElementHelpers(emit, el, { kOf, puT, startsWithExpr, J });
   if (markup) {
     // Tag-mode tracking after a token the scan emitted: the closing `tagClose` enters raw text
     // (a raw-text element) or text; the tag name decides raw-text entry and void retagging.
@@ -721,13 +772,24 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`  }`);
   }
   const CONT = markup ? `{ lxTagTrack(); continue; }` : `continue;`;
-  emit(`  while (pos < n) {`);
+  const speculates = !!el?.typeParameters?.signature;
+  if (speculates) {
+    // a lex error while deciding a type-parameter signature decides it: the head was an element
+    emit(`  for (;;) {`);
+    emit(`  try {`);
+    emit(`  while (true) {`);
+  } else emit(`  while (pos < n) {`);
   if (resync) {
     emit(`    // resync retracts the duplicated token push — and any lexer diagnostics`);
     emit(`    // emitted FOR it (the old stream's persisted entry survives via the shift)`);
     emit(resyncRetractLine('    '));
   }
+  if (speculates) {
+    emit(`    if (specTok >= 0 && (specVerdict === 2 || pos >= n)) lxSpecRewind();`);
+    emit(`    if (pos >= n) break;`);
+  }
   emit(`    const cc = source.charCodeAt(pos);`);
+  if (el) emitElementFrame(emit, el, { kOf, puT, tOf, startsWithExpr, punctIs });
   if (markup) {
     emit(`    // ── markup TEXT mode: a comment, a tag open, or the text run up to the next real tag open ──`);
     emit(`    if (mode === 0) {`);
@@ -832,10 +894,27 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   }
   if (indent?.blockScalar) emitBlockScalar(emit, indent, kOf(indent.blockScalar.token));
   if (indent?.rawBlock) emitRawBlock(emit, indent, kOf(indent.rawBlock.token));
+  if (el) {
+    // an element hole: its closer at brace count 0 ends it (the token is pushed inside the frame)
+    emit(`    if (templateStack.length > 0 && (templateStack[templateStack.length - 1] & 3) === 1) {`);
+    emit(`      const fv = templateStack[templateStack.length - 1];`);
+    emit(`      if (${startsWithExpr('source', 'pos', el.hole.close, 'cc')}) {`);
+    emit(`        if (fv === 1) {`);
+    emit(`          tkPush(K_PUNCT, ${tOf(el.hole.close)}, pos, pos + ${el.hole.close.length});`);
+    emit(`          pos += ${el.hole.close.length};`);
+    emit(`          templateStack.pop();`);
+    emit(`          continue;`);
+    emit(`        }`);
+    emit(`        templateStack[templateStack.length - 1] = fv - 4;`);
+    emit(`      } else if (${startsWithExpr('source', 'pos', el.hole.open, 'cc')}) {`);
+    emit(`        templateStack[templateStack.length - 1] = fv + 4;`);
+    emit(`      }`);
+    emit(`    }`);
+  }
   if (templateToken) {
     const tplCloseT = kwFirstCcs.has(tplInterpClose.charCodeAt(0)) ? 'lexKwT(source, startPos, r.end)' : '0';
     const tplOpenT = kwFirstCcs.has(tplOpen.charCodeAt(0)) ? 'lexKwT(source, startPos, r.end)' : '0';
-    emit(`    if (templateStack.length > 0) {`);
+    emit(el ? `    if (templateStack.length > 0 && (templateStack[templateStack.length - 1] & 3) === 0) {` : `    if (templateStack.length > 0) {`);
     emit(`      if (${startsWithExpr('source', 'pos', tplInterpClose, 'cc')}) {`);
     emit(`        const depth = templateStack[templateStack.length - 1];`);
     emit(`        if (depth === 0) {`);
@@ -851,9 +930,9 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`          pos = r.end;`);
     emit(`          continue;`);
     emit(`        }`);
-    emit(`        templateStack[templateStack.length - 1] = depth - 1;`);
+    emit(el ? `        templateStack[templateStack.length - 1] = depth - 4;` : `        templateStack[templateStack.length - 1] = depth - 1;`);
     emit(`      } else if (cc === ${tplBraceOpen.charCodeAt(0)}) {`);
-    emit(`        templateStack[templateStack.length - 1]++;`);
+    emit(el ? `        templateStack[templateStack.length - 1] += 4;` : `        templateStack[templateStack.length - 1]++;`);
     emit(`      }`);
     emit(`    }`);
     emit(`    if (${startsWithExpr('source', 'pos', tplOpen, 'cc')}) {`);
@@ -1019,6 +1098,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     } else if (lit === ')') {
       emit(`${ind}if (parenHeadStack.length === 0) { lastCloseWasParenHead = false; lexEmptyPops.push(tokN); }`);
       emit(`${ind}else lastCloseWasParenHead = parenHeadStack.pop()«!»;`);
+      if (el?.typeParameters?.signature) emit(`${ind}if (specTok >= 0 && tokN > specTok + 3 && parenHeadStack.length === specParenBase) specClosedAt = tokN;`);
     }
     if (regexCtx?.postfixAfterValueTexts?.includes(lit)) {
       emit(`${ind}lastBangWasPostfix = prevIsValue();`);
@@ -1085,6 +1165,17 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     return rs.map(([a, b]) => (a === b ? `${v} === ${a}` : `(${v} >= ${a} && ${v} <= ${b})`)).join(' || ');
   };
 
+  if (el) {
+    // an element entered from code: a tagOpen where an operand may start (the regex-literal
+    // position), outside a tag, unless it begins a type-parameter list
+    emit(`    if (${startsWithExpr('source', 'pos', el.tagOpen, 'cc')} && (templateStack.length === 0 || (templateStack[templateStack.length - 1] & 3) !== 2)${speculates ? ' && specTok < 0' : ''} && !prevIsValue() && lxOpensElement(pos)) {`);
+    emit(`      templateStack.push(6);`);
+    emit(`      tkPush(K_PUNCT, ${puT(el.tagOpen)}, pos, pos + ${el.tagOpen.length});`);
+    emit(`      pos += ${el.tagOpen.length};`);
+    emit(`      tagAngle = 0;`);
+    emit(`      continue;`);
+    emit(`    }`);
+  }
   emit(`    switch (cc) {`);
   for (const g of groups.values()) {
     emit(`      ${g.ccs.map(c => `case ${c}:`).join(' ')} {`);
@@ -1197,6 +1288,11 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   emit(`    }`);
   emit(`    throw new Error("Unexpected character at offset " + pos + ": '" + source[pos] + "'");`);
   emit(`  }`);
+  if (speculates) {
+    emit(`  break;`);
+    emit(`  } catch (e) { if (specTok < 0 || e === LEX_RETRY) throw e; specVerdict = 2; }`);
+    emit(`  }`);
+  }
   if (resync) emit(resyncRetractLine('  '));
   if (indent) {
     emit(`  while (indentStack.length > 1) { indentStack.pop(); tkPush(${kOf(indent.dedentToken)}, 0, pos, pos); }`);
@@ -1541,4 +1637,121 @@ function startsWithExpr(src: string, posVar: string, lit: string, cc0Var?: strin
     parts.push(`${lhs} === ${lit.charCodeAt(i)}`);
   }
   return parts.join(' && ');
+}
+
+type ElementCtx = {
+  kOf: (name: string) => number; puT: (text: string) => number; tOf?: (text: string) => number;
+  startsWithExpr: typeof startsWithExpr; J?: (v: unknown) => string; punctIs?: (i: string, lits: string[]) => string;
+};
+
+// Element-region helpers inside lexCore: whether a tagOpen at an operand position opens an
+// element (the type-parameter vetoes), the rewind of an undecided signature, and a tag's end.
+function emitElementHelpers(emit: (s?: string) => void, el: ElementRegion, c: ElementCtx) {
+  const L = el.tagOpen.length;
+  const tp = el.typeParameters;
+  emit(`  function lxOpensElement(p«: number») {`);
+  if (tp?.head) emit(`    LX_TP_HEAD.lastIndex = p + ${L}; if (LX_TP_HEAD.test(source)) return false;`);
+  if (tp?.signature) {
+    emit(`    LX_TP_SIG.lastIndex = p + ${L};`);
+    emit(`    if (LX_TP_SIG.test(source)) {`);
+    emit(`      specTok = tokN; specVerdict = 0; specClosedAt = -1; specParenBase = parenHeadStack.length;`);
+    emit(`      specDocLex = docLex.length; specPops = lexEmptyPops.length;`);
+    emit(`      specStack = templateStack.slice(); specParens = parenHeadStack.slice();`);
+    emit(`      return false;`);
+    emit(`    }`);
+  }
+  emit(`    return true;`);
+  emit(`  }`);
+  if (tp?.signature) {
+    // The head `tagOpen Name tagClose` was an open tag: keep its three tokens, drop what the
+    // group was lexed into, restore the stacks and lex the children.
+    emit(`  function lxSpecRewind() {`);
+    emit(`    const s = specTok;`);
+    emit(`    specTok = -1; specVerdict = 0; specClosedAt = -1;`);
+    emit(`    tokN = s + 3;`);
+    emit(`    templateStack.length = 0; for (let i = 0; i < specStack.length; i++) templateStack.push(specStack[i]);`);
+    emit(`    parenHeadStack.length = 0; for (let i = 0; i < specParens.length; i++) parenHeadStack.push(specParens[i]);`);
+    emit(`    docLex.length = specDocLex; lexEmptyPops.length = specPops;`);
+    emit(`    templateStack.push(18);`);
+    emit(`    const d = templateStack.length > 255 ? 255 : templateStack.length;`);
+    emit(`    tkDp[s] = d; tkDp[s + 1] = d; tkDp[s + 2] = d;`);
+    emit(`    pos = tkEnd[s + 2] - srcBase«!»;`);
+    emit(`    pendingNl = false; extraFl = 0; tagAngle = 0;`);
+    emit(`  }`);
+  }
+  // A tag ended (its tagClose or self-close token was just pushed): an open tag adds an open
+  // element, a close tag removes one; at none the frame pops and that token is a value.
+  emit(`  function lxTagEnd(selfClosed«: boolean») {`);
+  emit(`    const top = templateStack.length - 1, fr = templateStack[top];`);
+  emit(`    let count = fr >> 4;`);
+  emit(`    if (!selfClosed) count += ((fr >> 2) & 3) === 1 ? 1 : -1;`);
+  emit(`    if (count <= 0) { templateStack.pop(); tkFl[tokN - 1] |= 16; }`);
+  emit(`    else templateStack[top] = (count << 4) | 2;`);
+  emit(`    tagAngle = 0;`);
+  emit(`  }`);
+}
+
+// The element text frame at the top of the stack: children text, or the tag delimiters.
+// Anything else in a tag falls through to the ordinary scan (no regex there: prevIsValue).
+function emitElementFrame(emit: (s?: string) => void, el: ElementRegion, c: ElementCtx) {
+  const sw = (lit: string, at = 'pos') => c.startsWithExpr('source', at, lit, at === 'pos' ? 'cc' : undefined);
+  const L = el.tagOpen.length, LC = el.tagOpen.length + el.closeMarker.length;
+  const LS = el.closeMarker.length + el.tagClose.length, LH = el.hole.open.length;
+  emit(`    if (templateStack.length > 0 && (templateStack[templateStack.length - 1] & 3) === 2) {`);
+  emit(`      const top = templateStack.length - 1, fr = templateStack[top], sub = (fr >> 2) & 3;`);
+  emit(`      if (sub === 0) {`);
+  emit(`        if (${sw(el.tagOpen)}) {`);
+  emit(`          if (${c.startsWithExpr('source', `pos + ${L}`, el.closeMarker)}) {`);
+  emit(`            tkPush(${c.kOf(el.closeTag)}, 0, pos, pos + ${LC});`);
+  emit(`            pos += ${LC}; templateStack[top] = fr | 8; tagAngle = 0;`);
+  emit(`            continue;`);
+  emit(`          }`);
+  emit(`          tkPush(K_PUNCT, ${c.puT(el.tagOpen)}, pos, pos + ${L});`);
+  emit(`          pos += ${L}; templateStack[top] = fr | 4; tagAngle = 0;`);
+  emit(`          continue;`);
+  emit(`        }`);
+  emit(`        if (${sw(el.hole.open)}) {`);
+  emit(`          templateStack.push(1);`);
+  emit(`          tkPush(K_PUNCT, ${c.tOf!(el.hole.open)}, pos, pos + ${LH});`);
+  emit(`          pos += ${LH};`);
+  emit(`          continue;`);
+  emit(`        }`);
+  emit(`        LX_EL_TEXT.lastIndex = pos;`);
+  emit(`        const tm = LX_EL_TEXT.exec(source);`);
+  emit(`        if (tm !== null && tm[0].length > 0) {`);
+  emit(`          const _e = pos + tm[0].length;`);
+  emit(`          tkPush(${c.kOf(el.text)}, 0, pos, _e);`);
+  emit(`          pos = _e;`);
+  emit(`          continue;`);
+  emit(`        }`);
+  emit(`      } else {`);
+  emit(`        if (sub === 1 && tagAngle === 0 && ${c.startsWithExpr('source', 'pos', el.closeMarker + el.tagClose, 'cc')}) {`);
+  emit(`          tkPush(${c.kOf(el.selfClose)}, 0, pos, pos + ${LS});`);
+  emit(`          pos += ${LS};`);
+  emit(`          lxTagEnd(true);`);
+  emit(`          continue;`);
+  emit(`        }`);
+  emit(`        if (${sw(el.tagClose)}) {`);
+  emit(`          tkPush(K_PUNCT, ${c.puT(el.tagClose)}, pos, pos + ${el.tagClose.length});`);
+  emit(`          pos += ${el.tagClose.length};`);
+  emit(`          if (tagAngle > 0) tagAngle--; else lxTagEnd(false);`);
+  emit(`          continue;`);
+  emit(`        }`);
+  emit(`        if (${sw(el.tagOpen)}) {`);
+  // after the attribute assign an element is a value (`a=<b/>`); elsewhere type arguments
+  emit(`          const nested = tokN > 0 && ${c.punctIs!('tokN - 1', ['='])};`);
+  emit(`          if (nested) templateStack.push(6); else tagAngle++;`);
+  emit(`          tkPush(K_PUNCT, ${c.puT(el.tagOpen)}, pos, pos + ${L});`);
+  emit(`          pos += ${L};`);
+  emit(`          if (nested) tagAngle = 0;`);
+  emit(`          continue;`);
+  emit(`        }`);
+  emit(`        if (tagAngle === 0 && ${sw(el.hole.open)}) {`);
+  emit(`          templateStack.push(1);`);
+  emit(`          tkPush(K_PUNCT, ${c.tOf!(el.hole.open)}, pos, pos + ${LH});`);
+  emit(`          pos += ${LH};`);
+  emit(`          continue;`);
+  emit(`        }`);
+  emit(`      }`);
+  emit(`    }`);
 }
