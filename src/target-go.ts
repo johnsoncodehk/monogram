@@ -1990,7 +1990,7 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 \ttail bool  // whether the node the last nud_ call returned closes the access tail
 \tsrc string
 \tb Builder
-\tdrops *[256]bool // the leaf types b never keeps (dropsOf): such a leaf is not offered
+\tdrops [256]bool // the leaf types b never keeps (dropsOf): such a leaf is not offered
 \tscratch []int32${entriesField}`;
   return `type ${recv} struct {
 ${structFields}
@@ -2677,6 +2677,9 @@ function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): stri
     })
     .filter((x): x is number => x !== null);
   const punctId = TT_SKIP_PUNCT;
+  // The leaf types SlimBuilder never keeps: its Leaf's switch and its drop table (dropsLeaves).
+  const slimDropIdList = [...new Set([...dropTtIds, punctId])];
+  const slimDropIds = slimDropIdList.join(', ');
   // Selection: *CstBuilder parses with the direct engine (parseWithCst); other Builders use the
   // builder engine parserW. Why two engines: measured 2026-11-22 on 7fe75f9 (measure-profile,
   // Go Callgrind instructions per reuse parse, checker.ts / gen-tm.ts / typescript.d.ts /
@@ -2847,22 +2850,24 @@ func (b *SlimBuilder) Checkpoint() (nb, kb int) { return len(b.Nodes), len(b.Kid
 func (b *SlimBuilder) Restore(nb, kb int) { b.Nodes = b.Nodes[:nb]; b.Kids = b.Kids[:kb] }
 func (b *SlimBuilder) Leaf(scratch *[]int32, ttId uint16, tokIdx, off, end uint32) bool {
 \t_ = off; _ = end
-\tif slimDrops[uint8(ttId)] { return false }
+\tswitch ttId { case ${slimDropIds}: return false }
 \t*scratch = append(*scratch, encodeLeaf(tokIdx, uint8(ttId)))
 \treturn true
 }
-// slimDrops: the leaf types a SlimBuilder never keeps (punctuation, keywords, operators).
-var slimDrops = [256]bool{${[...new Set([...dropTtIds, punctId])].map((id) => `${id}: true`).join(', ')}}
-func (b *SlimBuilder) dropsLeaves() *[256]bool { return &slimDrops }
+// dropsLeaves: the leaf types a SlimBuilder never keeps (punctuation, keywords, operators: the
+// ids its Leaf refuses), as a table (no package-level state: built per parse).
+func (b *SlimBuilder) dropsLeaves() (t [256]bool) {
+\t${slimDropIdList.map((id) => `t[${id}]`).join(', ')} = ${slimDropIdList.map(() => 'true').join(', ')}
+\treturn
+}
 // leafDropper: a built-in builder that declares the leaf types it never keeps, read once per parse
 // (dropsOf), so that the builder engine does not offer them: a Leaf call through the Builder
 // interface is a dynamic call in Go (Rust's builder engine is monomorphised and inlines the test).
 // Any other Builder is offered every leaf.
-type leafDropper interface{ dropsLeaves() *[256]bool }
-var keepAllLeaves [256]bool
-func dropsOf(b Builder) *[256]bool {
+type leafDropper interface{ dropsLeaves() [256]bool }
+func dropsOf(b Builder) [256]bool {
 \tif d, ok := b.(leafDropper); ok { return d.dropsLeaves() }
-\treturn &keepAllLeaves
+\treturn [256]bool{}
 }
 // Finish is builderFinishDefault with the spans read in place and Node's collapse inline.
 func (b *SlimBuilder) Finish(scratch *[]int32, sb int, ruleId uint16, fallbackOff, tokStart, tokEnd uint32, toks []Tok) (int32, uint32, bool) {
