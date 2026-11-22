@@ -279,13 +279,21 @@ func litTt(lid uint16) uint16 { if lid >= lidKw { return ${ttIdOf(ar, '$keyword'
 // (shared.tokenLiterals): 0 when it can be none.
 const lidCallGo = (lits: string[], text: string): string => (lits.length === 0 ? '0' : `lidOf(${text})`);
 
+// Whether a skipped token's text holds a line terminator (LF, CR, U+2028, U+2029): byte searches,
+// no decode.
+const GO_HAS_LINE_TERM = `// lexHasLineTerm is whether s holds a line terminator (LF, CR, U+2028, U+2029).
+func lexHasLineTerm(s string) bool {
+\treturn strings.IndexByte(s, '\\n') >= 0 || strings.IndexByte(s, '\\r') >= 0 || strings.Contains(s, "\\u2028") || strings.Contains(s, "\\u2029")
+}
+`;
+
 // One token at a dispatch site: the shared scanner, spliced in, says where it ends; the lexer
 // records it.
 function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
   const name = t.name;
   const kid = kidOf(ids, name);
   const push = t.skip
-    ? `if strings.ContainsAny(src[pos:e], "\\n\\r\\u2028\\u2029") { pendingNl = true }; `
+    ? `if lexHasLineTerm(src[pos:e]) { pendingNl = true }; `
     : `${stateful ? 'emit' : 'pushTok'}(pos, e, ${kid}, ${lidCallGo(shared.tokenLiterals(ir, t, ids.lids.slice(1)), 'src[pos:e]')}); `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
@@ -515,7 +523,7 @@ ${emitHooks}
   const cascade = renderLexByteDispatchGo(lexCodes, lexFirsts, '\t', tplHeads);
   const identNameGo = ir.identToken;
   const identKidGo = identNameGo ? kidOf(ids, identNameGo) : 0;
-  const lexGoHelpers = (identNameGo || ir.identLike.length) ? `func isJsWs(r rune) bool {
+  const lexGoHelpers = (shared.scannedTokens(ir).some((t) => t.skip) ? GO_HAS_LINE_TERM : '') + ((identNameGo || ir.identLike.length) ? `func isJsWs(r rune) bool {
 	if r == 0xA0 || r == 0x1680 || r == 0x2028 || r == 0x2029 || r == 0x202F || r == 0x205F || r == 0x3000 || r == 0xFEFF {
 		return true
 	}
@@ -555,7 +563,7 @@ func lxExt(src string, e int) int {
 	}
 	return r >= 0x2000 && r <= 0x200A
 }
-`;
+`);
   const nlState = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).state : '';
   const nlStateFrom = nl ? newlinePartsGo(nl, 'pushTok', ids).stateFrom : '';
   // A whitespace run is consumed in one dispatch round (see the Rust target): per byte only "is
@@ -3226,6 +3234,13 @@ func lexRunEnd(s string, i int, set *[256]bool) int {
 \t}
 \treturn i
 }`,
+  findFn: `// lexFind is where lit next occurs in s from i: the first j >= i at which s has it, or len(s).
+func lexFind(s string, i int, lit string) int {
+\tif k := strings.Index(s[i:], lit); k >= 0 {
+\t\treturn i + k
+\t}
+\treturn len(s)
+}`,
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${goWrap(r, ATOM)}`, prec: 90 }),
@@ -3241,6 +3256,7 @@ func lexRunEnd(s string, i int, set *[256]bool) int {
     hasAt: (cx, s, i, lit) => cx.atom(`strings.HasPrefix(${goWrap(s, ATOM)}[${i.c}:], ${JSON.stringify(lit)})`, 'bool', 'bool'),
     inSet: (cx, set, c) => cx.atom(`${set}[${c.c}]`, 'bool', 'bool'),
     runEnd: (cx, set, s, i) => cx.atom(`lexRunEnd(${s.c}, ${i.c}, &${set})`, 'int', 'int'),
+    find: (cx, s, i, lit) => cx.atom(`lexFind(${s.c}, ${i.c}, ${JSON.stringify(lit)})`, 'int', 'int'),
     own: (_cx, r) => r,
   },
   stmt: {

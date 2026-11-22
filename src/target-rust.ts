@@ -229,6 +229,35 @@ const RULE_NAMES: &[&str] = &[${ar.ruleNames.map(J).join(', ')}];
 }
 
 
+// Whether a skipped token's bytes hold a line terminator (LF, CR, U+2028, U+2029), read as bytes:
+// eight per round test for LF, CR and E2 (the lead byte of U+2028 / U+2029: E2 80 A8 / A9); the
+// lowest flagged byte of a round is the first candidate (a zero-byte mask is exact at its lowest
+// bit), which is then checked whole, and the search goes on after it.
+const RS_HAS_LINE_TERM = `#[inline(never)]
+fn _lx_has_line_term(b: &[u8]) -> bool {
+    const L: u64 = 0x0101_0101_0101_0101;
+    let z = |v: u64| v.wrapping_sub(L) & !v & (L << 7);
+    let mut i = 0;
+    loop {
+        let c = match b.get(i..i + 8) {
+            Some(w) => {
+                let v = u64::from_le_bytes([w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]]);
+                let m = z(v ^ (L * 10)) | z(v ^ (L * 13)) | z(v ^ (L * 0xE2));
+                if m == 0 { i += 8; continue; }
+                i += (m.trailing_zeros() >> 3) as usize;
+                b[i]
+            }
+            None => match b.get(i) { Some(&c) => c, None => return false },
+        };
+        match c {
+            10 | 13 => return true,
+            0xE2 if b.get(i + 1) == Some(&0x80) && matches!(b.get(i + 2), Some(&(0xA8 | 0xA9))) => return true,
+            _ => i += 1,
+        }
+    }
+}
+`;
+
 // The relex family steps `lex_from` one token at a time; out of line, every step rebuilds and
 // returns the whole lexer state through memory.
 const LEX_FROM_ATTR = '#[inline(always)]\n';
@@ -247,7 +276,7 @@ function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: bo
   const kid = kidOf(ids, name);
   const lid = lidCall(shared.tokenLiterals(ir, t, ids.lids.slice(1)), '&b[pos..e]');
   const push = t.skip
-    ? `if src[pos..e].chars().any(|c| matches!(c, '\\n' | '\\r' | '\\u{2028}' | '\\u{2029}')) { ${nlVar} = true; } `
+    ? `if _lx_has_line_term(&b[pos..e]) { ${nlVar} = true; } `
     : stateful
       ? `st.emit(pos, e, ${kid}, ${lid}); `
       : `toks.push(mk_tok(pos, e, pending_nl, ${kid}, ${lid})); pending_nl = false; `;
@@ -464,7 +493,7 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
     : `        panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`;
   // The source is a &str, so the character at a position is std's own decode of it: one boundary
   // check and the character's bytes, none past it. None where pos is no character boundary.
-  const lexUtf8Helpers = `#[inline(always)] fn _char_at(s: &str, pos: usize) -> Option<(char, usize)> {
+  const lexUtf8Helpers = `${shared.scannedTokens(ir).some((t) => t.skip) ? RS_HAS_LINE_TERM : ''}#[inline(always)] fn _char_at(s: &str, pos: usize) -> Option<(char, usize)> {
     let ch = s.get(pos..)?.chars().next()?;
     Some((ch, ch.len_utf8()))
 }
@@ -5370,6 +5399,30 @@ fn lex_run_end(b: &[u8], mut i: usize, set: &[bool; 256]) -> usize {
     while i < b.len() && set[b[i] as usize] { i += 1; }
     i
 }`,
+  // Eight bytes per round test for the literal's first byte (a zero-byte mask of the word XOR that
+  // byte: its lowest flagged byte is the first match); a match is then compared whole.
+  findFn: `/// Where lit next occurs in b from i: the first j >= i at which b has it, or b.len().
+#[inline(never)]
+fn lex_find(b: &[u8], mut i: usize, lit: &[u8]) -> usize {
+    const L: u64 = 0x0101_0101_0101_0101;
+    let k = L * lit[0] as u64;
+    loop {
+        match b.get(i..i + 8) {
+            Some(w) => {
+                let v = u64::from_le_bytes([w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]]) ^ k;
+                let m = v.wrapping_sub(L) & !v & (L << 7);
+                if m == 0 { i += 8; continue; }
+                i += (m.trailing_zeros() >> 3) as usize;
+            }
+            None => {
+                while i < b.len() && b[i] != lit[0] { i += 1; }
+                if i == b.len() { return i; }
+            }
+        }
+        if b[i..].starts_with(lit) { return i; }
+        i += 1;
+    }
+}`,
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${rsWrap(r, ATOM)}`, prec: 90 }),
@@ -5385,6 +5438,7 @@ fn lex_run_end(b: &[u8], mut i: usize, set: &[bool; 256]) -> usize {
     hasAt: (cx, s, i, lit) => cx.atom(`${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}..].starts_with(${J(lit)}.as_bytes())`, 'bool', 'bool'),
     inSet: (cx, set, c) => cx.atom(`${set.toUpperCase()}[${cx.coerce(c, 'usize')}]`, 'bool', 'bool'),
     runEnd: (cx, set, s, i) => cx.atom(`lex_run_end(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')}, &${set.toUpperCase()})`, 'int', 'usize'),
+    find: (cx, s, i, lit) => cx.atom(`lex_find(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')}, ${J(lit)}.as_bytes())`, 'int', 'usize'),
     own: (cx, r) => {
       if (r.ty === 'str') return cx.atom(`${rsWrap(r, ATOM)}.to_string()`, 'str', 'str', { owned: true });
       if (isList(r.ty)) return cx.atom(`${rsWrap(r, ATOM)}.to_vec()`, r.ty, r.ty, { owned: true });
