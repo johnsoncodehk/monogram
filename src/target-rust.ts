@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, dispatchWalk, gtCompLit, type StepLowering, type DispatchLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -51,13 +51,12 @@ const guardCond = (g: Guard, t: string, keyed: boolean, recv = 'self'): string[]
 const ifRs = (conds: string[], body: string) => (conds.length ? `        if ${conds.join(' && ')} ${body}` : `        ${body}`);
 // A candidate list's Dispatch over the buffered token t: arm(i, keyed) is candidate i's statement.
 // opt: t is an Option<Tok> (none left: no key matches), bound as `t` inside a keyed section.
+const dispatchRsL = (t: string, opt: boolean): DispatchLowering => ({
+  sw: (by, cases) => `        match ${opt ? 't' : t}.${by} {\n${cases.map((c) => `        ${c.key} => {\n${c.arms.join('\n')}\n        }`).join('\n')}\n        _ => {}\n        }`,
+  nil: (sw) => `        if let Some(t) = ${t} {\n${sw}\n        }`,
+});
 const dispatchRs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, opt = false): string =>
-  d.sections.map((sec) => {
-    if (sec.by === 'rest') return sec.arms.map((i) => arm(i, false)).join('\n');
-    const id = (k: string) => (sec.by === 'lid' ? lidOf(ids, k) : kidOf(ids, k));
-    const sw = `        match ${opt ? 't' : t}.${sec.by} {\n${sec.groups.map((g) => `        ${id(g.key)} => {\n${g.arms.map((i) => arm(i, true)).join('\n')}\n        }`).join('\n')}\n        _ => {}\n        }`;
-    return opt ? `        if let Some(t) = ${t} {\n${sw}\n        }` : sw;
-  }).join('\n');
+  dispatchWalk(d, ids, arm, dispatchRsL(t, opt), opt);
 // Whether candidate i, just ended at pos, beats the best so far: it ends past it, or — a Dispatch
 // `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is kept only
 // in a list that has ranked candidates.
@@ -99,12 +98,6 @@ macro_rules! cand {
 const astGuardRs = (g: Guard, t: string): string | null =>
   g === null ? null : [`in_token_set(${g.first.id}, &${t})`, ...(g.second !== null ? [`self.toks.get(self.pos + 1).map_or(false, |t2| in_token_set(${g.second.id}, t2))`] : [])].join(' && ');
 
-/** A composed '>'-led literal (LexIdPlan.gtComps): only a lookahead operand, so never a tree leaf. */
-function gtCompLit(ids: LexIdPlan, s: { value: string; ttype: string }): boolean {
-  if (!ids.gtComps.includes(s.value)) return false;
-  if (s.ttype !== '$punct') throw new Error(`rustTarget: composed literal ${J(s.value)} must be punctuation`);
-  return true;
-}
 // '>'-led composite operators (LexIdPlan.gtComps): the lexer scans every '>' alone. gt_op reads the
 // operator at toks[i]: a lone '>' extends over each adjacent single-character punct token after it
 // while the text stays a composite (gt_step: prefix lid × next character lid → composite lid). A
@@ -857,80 +850,48 @@ function topOneBody(plan: ReusePlanA): string {
 }
 
 
-// Top-level step: uses `self`; children accumulate on `self.scratch`.
-function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  if ('share' in s && s.share !== undefined) return `self.sub_${s.share}()`;
-  switch (s.t) {
-    case 'lit': return gtCompLit(ids, s) ? `self.match_comp(${lidOf(ids, s.value)})` : `self.match_lit(${lidOf(ids, s.value)})`;
-    case 'tok': return `self.match_tok(${kidOf(ids, s.name)})`;
-    case 'rule': return `self.call_rule(Parser::parse_${s.name})`;
-    case 'ruleBp': return `self.call_rule(|p| p.${s.name}_bp(${s.bp}))`;
-    case 'star': return `self.star(|p| ${stepCondP(s.step, ids, ar)})`;
-    case 'opt': return `self.opt(|p| ${s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ')})`;
-    case 'sep': return `self.sep_by(|p| ${stepCondP(s.elem, ids, ar)}, ${sepDelimLid(ids, s.delim)})`;
-    case 'altlit': return `self.alt_lit(&[${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}])`;
-    case 'alt': return s.predictive
-      ? `(|p: &mut Parser<'a, B>| -> bool { ${predAltBody(s.branches, ids, ar, s.firsts)} })(self)`
-      : `(|p: &mut Parser<'a, B>| -> bool { ${altBody(s.branches, ids, ar, s.firsts)} })(self)`;
-    case 'look': return `${s.is ? '' : '!'}self.look_${s.id}()`;
-    case 'ahead': return `self.ahead(${s.set}, ${s.is})`;
-    case 'aheadCtx': return s.is ? `(self.ahead(${s.set}, true) || self.ctx_word())` : `(self.ahead(${s.set}, false) && !self.ctx_word())`;
-    case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'})`;
-    case 'sameLine': return `matches!(self.peek(), Some(t) if !t.nl)`;
-    case 'suppress': return `{ self.suppress_next = ${s.set}; let _r = (${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}); self.suppress_next = 0; _r }`;
-    // The body is a boolean expression (no `?`, no return), so the context is put back on either outcome.
-    case 'ctx': return `{ let _c = self.ctx; self.ctx = ${s.ctx}; let _r = (${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}); self.ctx = _c; _r }`;
-  }
-}
-// Over `p`: a step inside a closure or a method that took `let p = self`. `r`: in recognize form
-// (ParserIR.forms): it advances and reports whether it matched, and builds nothing.
-function stepCondP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, r = false): string {
-  if ('share' in s && s.share !== undefined) return `p.sub_${s.share}${r ? '_r' : ''}()`;
-  return stepBodyP(s, ids, ar, r);
-}
-// The step itself over `p`, printed in place (a shared step's method body; every other step's site).
-function stepBodyP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, r: boolean): string {
+// The step walk's Rust spelling (emit-portable.ts, StepLowering), over the receiver `recv`: `self`
+// at a rule's top level (children accumulate on `self.scratch`), `p` inside a closure or a method
+// that took `let p = self`; `r`: in recognize form (ParserIR.forms), advancing and building
+// nothing. Rust: a body is a non-capturing closure `|p| …` (a `fn(&mut Parser<B>) -> bool`, so no
+// environment is allocated), whose receiver is its own `p` (inner); a choice's statements are a
+// closure called in place; a suppress / ctx body is a block expression.
+function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean): StepLowering {
   const R = r ? '_r' : '';
-  const sc = (x: Step) => stepCondP(x, ids, ar, r);
-  switch (s.t) {
-    case 'lit': return gtCompLit(ids, s) ? `p.match_comp(${lidOf(ids, s.value)})` : `p.match_lit${R}(${lidOf(ids, s.value)})`;
-    case 'tok': return `p.match_tok${R}(${kidOf(ids, s.name)})`;
-    case 'rule': return r ? `p.rec_${s.name}()` : `p.call_rule(Parser::parse_${s.name})`;
-    // Only a Pratt rule is called at a binding power; it is recognized by its building form (ParserIR.forms).
-    case 'ruleBp': return r ? `p.${s.name}_bp(${s.bp}).is_some()` : `p.call_rule(|p| p.${s.name}_bp(${s.bp}))`;
-    case 'star': return `p.star${R}(|p| ${sc(s.step)})`;
-    case 'opt': return `p.opt${R}(|p| ${s.steps.map(sc).join(' && ')})`;
-    case 'sep': return `p.sep_by${R}(|p| ${sc(s.elem)}, ${sepDelimLid(ids, s.delim)})`;
-    case 'altlit': return `p.alt_lit${R}(&[${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}])`;
-    case 'alt': return `(|p: &mut Parser<'a, B>| -> bool { ${stepStmtsP(s, ids, ar, r)} })(p)`;
-    case 'look': return `${s.is ? '' : '!'}p.look_${s.id}()`;
-    case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
-    case 'aheadCtx': return s.is ? `(p.ahead(${s.set}, true) || p.ctx_word())` : `(p.ahead(${s.set}, false) && !p.ctx_word())`;
-    case 'seq': return `(${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'})`;
-    case 'sameLine': return `matches!(p.peek(), Some(t) if !t.nl)`;
-    case 'suppress': return `{ p.suppress_next = ${s.set}; let _r = (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); p.suppress_next = 0; _r }`;
-    case 'ctx': return `{ let _c = p.ctx; p.ctx = ${s.ctx}; let _r = (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); p.ctx = _c; _r }`;
-  }
+  const L: StepLowering = {
+    inner: () => (recv === 'p' ? L : rsSteps(ids, 'p', r)),
+    shared: (id) => `${recv}.sub_${id}${R}()`,
+    lit: (s) => (gtCompLit(ids, s) ? `${recv}.match_comp(${lidOf(ids, s.value)})` : `${recv}.match_lit${R}(${lidOf(ids, s.value)})`),
+    tok: (name) => `${recv}.match_tok${R}(${kidOf(ids, name)})`,
+    rule: (name) => (r ? `${recv}.rec_${name}()` : `${recv}.call_rule(Parser::parse_${name})`),
+    // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
+    ruleBp: (name, bp) => (r ? `${recv}.${name}_bp(${bp}).is_some()` : `${recv}.call_rule(|p| p.${name}_bp(${bp}))`),
+    star: (body) => `${recv}.star${R}(|p| ${body})`,
+    opt: (body) => `${recv}.opt${R}(|p| ${body})`,
+    sep: (elem, delim) => `${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})`,
+    altlit: (values) => `${recv}.alt_lit${R}(&[${values.map((v) => lidOf(ids, v)).join(', ')}])`,
+    look: (id, is) => `${is ? '' : '!'}${recv}.look_${id}()`,
+    ahead: (set, is) => `${recv}.ahead(${set}, ${is})`,
+    aheadCtx: (set, is) => (is ? `(${recv}.ahead(${set}, true) || ${recv}.ctx_word())` : `(${recv}.ahead(${set}, false) && !${recv}.ctx_word())`),
+    sameLine: () => `matches!(${recv}.peek(), Some(t) if !t.nl)`,
+    inPlace: (kind, stmts) => (kind === 'alt' ? `(|p: &mut Parser<'a, B>| -> bool { ${stmts} })(${recv})` : stmts),
+    ret: (cond) => cond,
+    suppress: (set, cond) => `{ ${recv}.suppress_next = ${set}; let _r = (${cond}); ${recv}.suppress_next = 0; _r }`,
+    // The body is a boolean expression (no `?`, no return), so the context is put back on either outcome.
+    ctx: (ctx, cond) => `{ let _c = ${recv}.ctx; ${recv}.ctx = ${ctx}; let _r = (${cond}); ${recv}.ctx = _c; _r }`,
+    branch: (cond) => branchRs(cond, r),
+    guarded: (first, branch) => `if let Some(t) = _ft { if ${firstCond(first, 't', ids)} ${branch} }`,
+    choice: (peek, tries) => `${peek ? `let _ft = ${recv}.peek(); ` : ''}${tries.join(' ')} false`,
+    // FIRST dispatch; restore pos/scratch/builder on arm half-failure (like a choice).
+    predictive: (arms) => `let t = match ${recv}.peek() { Some(t) => t, None => return false };\n${arms.map((a, i) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(a.first, 't', ids)} ${a.branch}`).join('\n')}\n        false`,
+  };
+  return L;
 }
-// The step over `p` as the body of a function returning whether it matched (an `alt` needs
-// statements, so in place it is printed as an immediately called closure of these).
-function stepStmtsP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, r = false): string {
-  if (s.t === 'alt') return s.predictive ? predAltBody(s.branches, ids, ar, s.firsts, r) : altBody(s.branches, ids, ar, s.firsts, r);
-  return stepBodyP(s, ids, ar, r);
-}
-function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: FirstSig[], r = false): string {
-  const fs = firsts ?? [];
-  const nAlts = branches.length;
-  const needPeek = branches.some((_, i) => isGuardable(fs[i] ?? null, nAlts));
-  const peekInit = needPeek ? `let _ft = p.peek(); ` : '';
-  const tries = branches.map((br, i) => {
-    const body = branchRs(br.length ? br.map((x) => stepCondP(x, ids, ar, r)).join(' && ') : 'true', r);
-    const f = fs[i] ?? null;
-    if (!isGuardable(f, nAlts)) return body;
-    return `if let Some(t) = _ft { if ${firstCond(f, 't', ids)} ${body} }`;
-  }).join(' ');
-  return `${peekInit}${tries} false`;
-}
+const stepCond = (s: Step, ids: LexIdPlan, _ar: ArenaIdPlan): string => walkExpr(s, rsSteps(ids, 'self', false));
+// Over `p`: a step inside a closure or a method that took `let p = self`. `r`: in recognize form.
+const stepCondP = (s: Step, ids: LexIdPlan, _ar: ArenaIdPlan, r = false): string => walkExpr(s, rsSteps(ids, 'p', r));
+// The step over `p` as the body of a function returning whether it matched.
+const stepStmtsP = (s: Step, ids: LexIdPlan, _ar: ArenaIdPlan, r = false): string => walkStmts(s, rsSteps(ids, 'p', r));
 // ParserIR.lookaheads, one method each, in recognize form (ParserIR.forms): whether the body
 // matches here. It undoes the position, and the scratch list and the builder too when its body
 // runs a Pratt rule's building form (Forms.lookBuilds).
@@ -952,14 +913,21 @@ function sharedFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
     (ir.forms.buildShared[id] ? `    #[inline]\n    fn sub_${id}(&mut self) -> bool { let p = self; ${stepStmtsP(s, ids, ar)} }\n` : '') +
     (ir.forms.recognizeShared[id] ? `    #[inline]\n    fn sub_${id}_r(&mut self) -> bool { let p = self; ${stepStmtsP(s, ids, ar, true)} }\n` : '')).join('');
 }
-function predAltBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: FirstSig[], r = false): string {
-  // FIRST dispatch; restore pos/scratch/builder on arm half-failure (like altBody).
-  const arms = branches.map((br, i) => {
-    const steps = br.length ? br.map((x) => stepCondP(x, ids, ar, r)).join(' && ') : 'true';
-    return `        ${i === 0 ? 'if' : 'else if'} ${firstCond(firsts![i], 't', ids)} ${branchRs(steps, r)}`;
-  }).join('\n');
-  return `let t = match p.peek() { Some(t) => t, None => return false };\n${arms}\n        false`;
-}
+
+// The Rust spelling of an rd rule's shell (emit-portable.ts, ruleShell), common to its two forms;
+// a guard reads the token bound by `if let Some(t)` (the buffered token is an Option).
+const rsRuleBase = (ids: LexIdPlan, recv: string) => ({
+  ind: '        ',
+  ifThen: (test: string, then: string) => `if ${test} ${then}`,
+  first: (f: FirstSig) => firstCond(f, 't', ids),
+  armJoin: '\n',
+  peekOpt: `        let _ft = ${recv}.peek();`,
+  guard: (g: Guard, keyed: boolean, stmt: string) => {
+    const c = guardCond(g, 't', keyed, recv);
+    return c.length && !keyed ? `        if let Some(t) = _ft { if ${c.join(' && ')} ${stmt} }` : ifRs(c, stmt);
+  },
+  dispatch: dispatchRsL('_ft', true),
+});
 
 // A rule in recognize form (ParserIR.forms): whether it matches here, advancing past it. An rd
 // rule has rdRule's control flow building nothing: its longest match compares end positions only
@@ -967,77 +935,37 @@ function predAltBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts
 // drops the node (the lookahead around it undoes the builder: Forms.lookBuilds).
 function ruleR(r: RuleIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   if (r.kind === 'pratt') return `    fn rec_${r.name}(&mut self) -> bool { self.parse_${r.name}().is_some() }`;
-  const cond = (alt: Step[]) => alt.map((x) => stepCondP(x, ids, ar, true)).join(' && ');
-  if (r.predictive) {
-    const arm = (steps: Step[], i: number) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${cond(steps)} { return true; } }`;
-    return `    fn rec_${r.name}(&mut self) -> bool {
-        let p = self; let save = p.pos;
-        let t = match p.peek() { Some(t) => t, None => return false };
-${r.alts.map(arm).join('\n')}
-        p.back(save);
-        false
-    }`;
-  }
-  if (r.alts.length === 1) {
-    return `    fn rec_${r.name}(&mut self) -> bool {
-        let p = self; let save = p.pos;
-        if ${cond(r.alts[0]!)} { return true; }
-        p.back(save);
-        false
-    }`;
-  }
-  const alt = (i: number, keyed: boolean) => {
-    const body = `{ if ${cond(r.alts[i]!)} && p.pos > best_pos { best_pos = p.pos; } p.back(save); }`;
-    const g = guardCond(r.altGuard[i]!, 't', keyed, 'p');
-    return g.length && !keyed ? `        if let Some(t) = _ft { if ${g.join(' && ')} ${body} }` : ifRs(g, body);
-  };
-  const needPeek = r.altGuard.some((g) => g !== null);
-  return `    fn rec_${r.name}(&mut self) -> bool {
-        let p = self; let save = p.pos; let mut best_pos = save;
-${needPeek ? '        let _ft = p.peek();\n' : ''}${dispatchRs(r.altDispatch, '_ft', ids, alt, true)}
-        p.pos = best_pos;
-        best_pos > save
-    }`;
+  return ruleShell(r, ids, {
+    ...rsRuleBase(ids, 'p'),
+    steps: rsSteps(ids, 'p', true),
+    fn: (lines) => `    fn rec_${r.name}(&mut self) -> bool {\n${lines.join('\n')}\n    }`,
+    accept: () => '{ return true; }',
+    open: '        let p = self; let save = p.pos;',
+    peekOrFail: '        let t = match p.peek() { Some(t) => t, None => return false };',
+    fail: '        p.back(save);\n        false',
+    openBest: () => '        let p = self; let save = p.pos; let mut best_pos = save;',
+    cand: (_d, _i, cond) => `{ if ${cond} && p.pos > best_pos { best_pos = p.pos; } p.back(save); }`,
+    closeBest: '        p.pos = best_pos;\n        best_pos > save',
+  });
 }
 
+// Longest match: the best node so far stays built: `ck` moves past it, so a later alternative
+// that does not beat it is restored away and one that does leaves it unreferenced.
 function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
-  if (r.predictive) {
-    const arm = (steps: Step[], i: number) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return Some(self.finish(${rid}, sb, self.off_at(save), save)); } }`;
-    return `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
-        let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
-        let t = match self.peek() { Some(t) => t, None => return None };
-${r.alts.map(arm).join('\n')}
-        self.back(save); self.scratch.truncate(sb); self.b.restore(ck);
-        None
-    }`;
-  }
-  if (r.alts.length === 1) {   // nothing to choose among
-    return `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
-        let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
-        if ${r.alts[0]!.map((x) => stepCond(x, ids, ar)).join(' && ')} { return Some(self.finish(${rid}, sb, self.off_at(save), save)); }
-        self.back(save); self.scratch.truncate(sb); self.b.restore(ck);
-        None
-    }`;
-  }
-  // Longest match over the alternatives, in declaration order (emit-portable.ts, RdRule). The
-  // best node so far stays built: `ck` moves past it, so a later alternative that does not beat
-  // it is restored away and one that does leaves it unreferenced.
-  // The alternatives are reached through the rule's Dispatch (emit-portable.ts, RdRule.altDispatch).
-  const alt = (i: number, keyed: boolean) => {
-    const cond = r.alts[i]!.map((x) => stepCond(x, ids, ar)).join(' && ');
-    const body = candRs(r.altDispatch, i, cond, rid, markRs(r.altDispatch, i));
-    const g = guardCond(r.altGuard[i]!, 't', keyed);
-    return g.length && !keyed ? `        if let Some(t) = _ft { if ${g.join(' && ')} ${body} }` : ifRs(g, body);
-  };
-  const needPeek = r.altGuard.some((g) => g !== null);
-  return `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
-        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();
-        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(r.altDispatch)}
-${needPeek ? '        let _ft = self.peek();\n' : ''}${dispatchRs(r.altDispatch, '_ft', ids, alt, true)}
-        self.pos = best_pos;
-        best
-    }`;
+  const sig = `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {`;
+  return ruleShell(r, ids, {
+    ...rsRuleBase(ids, 'self'),
+    steps: rsSteps(ids, 'self', false),
+    fn: (lines) => `${sig}\n${lines.join('\n')}\n    }`,
+    accept: () => `{ return Some(self.finish(${rid}, sb, self.off_at(save), save)); }`,
+    open: '        let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();',
+    peekOrFail: '        let t = match self.peek() { Some(t) => t, None => return None };',
+    fail: '        self.back(save); self.scratch.truncate(sb); self.b.restore(ck);\n        None',
+    openBest: (d) => `        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();\n        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(d)}`,
+    cand: (d, i, cond) => candRs(d, i, cond, rid, markRs(d, i)),
+    closeBest: '        self.pos = best_pos;\n        best',
+  });
 }
 
 /** Entry rule that records per-top-kid lookahead ext via parse_top_one (shape A). */
