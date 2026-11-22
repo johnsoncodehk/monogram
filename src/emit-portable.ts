@@ -22,7 +22,7 @@
 // operators. buildIR THROWS on a construct outside this set rather than emit a wrong
 // parser. This is enough to derive a real JavaScript-subset parser (test/fixtures/minijs.ts).
 import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
-import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
+import { KIND, analyzeGrammar, concreteFirst, findEntryRule } from './grammar-analysis.ts';
 import { nameRule, syntaxKey, type RuleNames } from './grammar-names.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { tokenPatternCharLoop, tokenPatternLiteralPrefix } from './token-pattern.ts';
@@ -810,6 +810,47 @@ function buildIR(grammar: CstGrammar): ParserIR {
   // literal text and no token kind, and neither begins with a literal some kind of the other's can
   // carry (`alt(['get', …], [Ident, …])` must try the second branch when the first fails on `get`).
   const kindsOf = literalKinds({ tokens, tpl, identToken, identLike, puncts });
+  // ── Refusal by the complement of FIRST ──
+  // A candidate whose FIRST the plain analysis does not know (a Pratt rule leads: Stmt's expression
+  // statement, a for-head's expression arms) has no `first` set, so it was tried at every token. Its
+  // FIRST over concrete symbols (grammar-analysis.ts concreteFirst: through prefix operators, with
+  // one-token `not` tests and reserved-word guards applied) is known, and so is the set of tokens
+  // that provably begin NO match of it: a literal outside that FIRST, and a kind outside it that
+  // no literal of it may carry (the lexer plan's literalKinds, a superset: a token of such a kind
+  // cannot be one of its literals, so it is not a member whatever its literal). That set is an
+  // ordinary token set; the guard refuses the token when it is IN it, a negative lead test, so the
+  // set test and its table are the ones every guard uses. It joins the candidate's own negative
+  // lead test when it has one (one set test for both), else stands before the others.
+  // It is emitted only where it can refuse a token the list is actually tried at: one that begins
+  // another candidate of the same list. A refusal no such token reaches would be a test with
+  // nothing to refute.
+  {
+    const concrete = concreteFirst(grammar, a, { kindsOf: (l) => [...kindsOf(l)], gtComps, maybeWords: CTX_WORDS });
+    const kinds = [...tokens.map((t) => t.name), ...(tpl ? ['$templateHead', '$templateMiddle', '$templateTail'] : [])];
+    const grammarLits = concrete.literals.filter((l) => !gtComps.includes(l));
+    for (const r of rules) {
+      if (r.kind !== 'rd' || r.alts.length < 2) continue;
+      const decl = grammar.rules.find((d) => d.name === r.name)!;
+      const items = decl.body.type === 'alt' ? decl.body.items : [decl.body];
+      const firsts = items.map((e) => concrete.first1(e));
+      r.altGuard = r.altGuard.map((g, i) => {
+        if (g !== null && g.first !== null) return g;
+        const f = firsts[i]!;
+        const litsIn = [...f].filter((x) => !x.startsWith(KIND));
+        const lits = grammarLits.filter((l) => !f.has(l));
+        const toks = kinds.filter((k) => !f.has(KIND + k) && !litsIn.some((l) => kindsOf(l).has(k)));
+        const refused = (x: string) => (x.startsWith(KIND) ? toks.includes(x.slice(KIND.length)) : lits.includes(x));
+        if (!firsts.some((o, j) => j !== i && [...o].some(refused))) return g;
+        const head = g?.lead[0];
+        if (head !== undefined && !head.is) {
+          const s = tokenSets[head.set]!;
+          return { ...g!, lead: [{ set: tokenSetOf({ lits: [...s.lits, ...lits], toks: [...s.toks, ...toks] }), is: false, ctx: head.ctx }, ...g!.lead.slice(1)] };
+        }
+        const set = tokenSetOf({ lits, toks });
+        return g === null ? { first: null, second: null, lead: [{ set, is: false, ctx: false }], skip: 0 } : { ...g, lead: [{ set, is: false, ctx: false }, ...g.lead] };
+      });
+    }
+  }
   const meets = (a: NonNullable<FirstSig>, b: NonNullable<FirstSig>): boolean =>
     a.lits.some((l) => b.lits.includes(l) || b.toks.some((k) => kindsOf(l).has(k))) || a.toks.some((k) => b.toks.includes(k));
   const disjoint = (a: FirstSig, b: FirstSig): boolean => a !== null && b !== null && !meets(a, b) && !meets(b, a);
@@ -1036,6 +1077,128 @@ export function ruleShell(r: RdRule, ids: LexIdPlan, L: RuleLowering): string {
   const arm = (i: number, keyed: boolean) => L.guard(r.altGuard[i]!, keyed, L.cand(r.altDispatch, i, cond(guardedSteps(r.altGuard[i]!, r.alts[i]!))));
   const needPeek = r.altGuard.some((g) => g !== null);
   return L.fn([L.openBest(r.altDispatch), ...(needPeek ? [L.peekOpt] : []), dispatchWalk(r.altDispatch, ids, arm, L.dispatch, true), L.closeBest]);
+}
+
+// ── The entry rule with reuse recording (ParserIR.reuse), decided once ──
+// Shape A: the entry is a loop over top-level entries, each the first of plan.rules that matches,
+// recording one EntryMeta per entry. Shape B: an optional head segment (the head rule), then loop
+// segments (the loop token, then the loop rule when it follows), each recorded as a Seg / EntryMeta.
+// An EntryLowering spells the functions and what a segment records in one engine form.
+export type EntryLowering = {
+  topCall(rule: string): string;                 // shape A, one rule: the statement returning its match
+  topTry(rule: string): string;                  // shape A: the rule tried from here, its match returned
+  topFail: string;                               // shape A: none matched
+  entryA(topOne: string): string;                // shape A: the top-one function (body `topOne`) and the entry
+  headSeg(rule: string): string;                 // shape B: the head segment's function
+  headUse: string;                               // shape B: the entry's statements recording the head segment
+  loopSeg(kid: number, rule: string): string;    // shape B: one loop segment's function
+  entryB(headSeg: string, headUse: string, loopSeg: string): string;   // shape B: the functions and the entry ('' when there is no head)
+};
+/** The entry rule's functions under a reuse plan, in the form `L` spells. */
+export function entryShell(plan: ReusePlan, ids: LexIdPlan, L: EntryLowering): string {
+  if (plan.kind === 'A') return L.entryA(plan.rules.length === 1 ? L.topCall(plan.rules[0]!) : [...plan.rules.map((n) => L.topTry(n)), L.topFail].join('\n'));
+  const head = plan.hasHead ? plan.headRule : null;
+  return L.entryB(head ? L.headSeg(head) : '', head ? L.headUse : '', L.loopSeg(kidOf(ids, plan.loopTok), plan.loopRule));
+}
+
+// ── The Pratt shell: how a Pratt rule's functions run, decided once ──
+// Three functions: the entry (the suppress set staged for this call put in force), `bp` (a NUD,
+// then the LED loop at a minimum binding power) and `nud` (every NUD arm the rule's Dispatch
+// admits, each a longest-match candidate). The LED loop tries, in order: the led groups (the leds
+// by their connector's lid, each arm under its guard; a group whose arms all failed ends the loop
+// when prattLedExits says no later check can take its token), the postfix tokens (by kid; then an
+// interpolated template), the postfix operator, the binary operator. A PrattLowering spells, for
+// one rule in one engine form, each piece. Where a match becomes a value (the place a shape plan's
+// per-arm `construct` goes): nudLeaf / nudTpl / nudSeq / nudPrefix (a NUD arm's node), led (a
+// led's node over the left operand), postfixToks / postfixTpl / postfixOp / binary (an operator
+// node over it); and `leftDone`: the left operand the loop leaves, once nothing continues it.
+export type LedGuardLowering = {
+  tailOpen: string;                              // no postfix closed the access tail
+  lbpAbove(lbp: number): string;                 // the led's precedence gate: lbp > minBp
+  sameLine: string;                              // the connector is on the operand's line
+  notLeftLeaf(words: string[]): string;          // the left node's head-leaf text is none of words
+  notSuppressed(set: number): string;            // the suppress set in force is not ParserIR.suppressSets[set]
+  ifAll(parts: string[]): string;                // the `if` before the led's block ('' when nothing gates it)
+};
+export type PrattLowering = {
+  steps: StepLowering;                           // the arms' steps
+  ifAll(conds: string[], stmt: string): string;  // `if conds then stmt` as one statement (stmt alone when none)
+  kidIs(kid: number): string;                    // the buffered token's kind is kid
+  lidIs(lid: number): string;                    // the buffered token's literal is lid
+  capBelow(bp: number): string;                  // minBp < bp: a capped arm is a candidate
+  nudGuard(g: Guard, keyed: boolean): string[];  // the conditions of a NUD candidate's Guard on the buffered token (keyed: its Dispatch key tested the first token)
+  beats(i: number, end: string): string;         // arm i, ending at end, beats the best so far
+  leafEnd: string;                               // where a one-token arm ends
+  nudLeaf(i: number): string;                    // the token arm i (after its tests): its node as the best
+  nudTpl(i: number, hole: string): string;       // arm i's interpolated template, whose holes `hole` parses
+  nudSeq(i: number, cond: string, closesTail: boolean, capped: boolean): string;  // the CANDIDATE frame of a sequence arm
+  nudPrefix(i: number): string;                  // the prefix-operator arm
+  dispatch: DispatchLowering;
+  led: LedGuardLowering;
+  ledArm(i: number, cond: string, form: AssignForm, closesTail: boolean, exit: boolean): string;  // led i's block: its node over the left operand, else undone (and the loop left when exit)
+  ledSwitch(cases: { key: number; arms: string[] }[]): string;      // the led groups, by the token's lid
+  postfixToks(kids: number[]): string;           // the postfix tokens, by the token's kid
+  postfixTpl(hole: string): string;              // the postfix interpolated template
+  postfixOp: string;                             // the postfix operator
+  binary: string;                                // the binary operator, its right operand at rbp
+  leftDone?: string;                             // after the loop: the left operand's finishing step (none for the CST)
+  entry: string;                                 // the entry function (and the operator tables, where the target prints them beside it)
+  bpOpen(label: boolean): string;                // `bp` up to the loop's buffered token (label: a led continues the loop by name)
+  bpClose: string;
+  nudOpen: string;                               // `nud` up to its candidates
+  nudClose: string;
+};
+/** A Pratt rule's functions in the form `L` spells. */
+export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | 'identToken' | 'identLike' | 'puncts' | 'gtComps'>, ids: LexIdPlan, L: PrattLowering): string {
+  const cond = (steps: Step[]) => conjOf(steps, L.steps);
+  const d = r.nudDispatch;
+  const nudArm = (i: number, keyed: boolean): string => {
+    const a = r.nudOrder[i]!;
+    switch (a.kind) {
+      case 'tok': {
+        const k = r.nudToks[a.index]!;
+        const leaf = L.ifAll([...(keyed ? [] : [L.kidIs(kidOf(ids, k))]), L.beats(i, L.leafEnd)], L.nudLeaf(i));
+        return r.nudTplHole === undefined || !ir.tpl || k !== ir.tpl.token ? leaf : `${leaf}\n${L.nudTpl(i, r.nudTplHole)}`;
+      }
+      case 'bracket': {
+        const b = r.nudBrackets[a.index]!;
+        return L.ifAll(keyed ? [] : [L.lidIs(lidOf(ids, b.first))], L.nudSeq(i, cond(b.steps), r.nudBracketClosesTail[a.index]!, false));
+      }
+      case 'seq': {
+        const g = r.nudSeqGuard[a.index]!;
+        return L.ifAll(L.nudGuard(g, keyed), L.nudSeq(i, cond(guardedSteps(g, r.nudSeqs[a.index]!)), r.nudSeqClosesTail[a.index]!, false));
+      }
+      case 'capped': {
+        const c = r.nudCapped[a.index]!;
+        const g = r.nudCappedGuard[a.index]!;
+        return L.ifAll([L.capBelow(c.capBp), ...L.nudGuard(g, keyed)], L.nudSeq(i, cond(guardedSteps(g, c.steps)), false, true));
+      }
+      case 'prefix': return L.nudPrefix(i);
+    }
+  };
+  const G = L.led;
+  const ledIf = (i: number) => {
+    const parts: string[] = [];
+    if (r.ledAccessTail[i]) parts.push(G.tailOpen);
+    const lbp = r.ledLbp[i]!;
+    if (lbp !== null) parts.push(G.lbpAbove(lbp));
+    if (r.ledSameLine[i]) parts.push(G.sameLine);
+    const nll = r.ledNotLeftLeaf[i]!;
+    if (nll) parts.push(G.notLeftLeaf(nll));
+    for (const set of r.ledSuppressedIn[i]!) parts.push(G.notSuppressed(set));
+    return G.ifAll(parts);
+  };
+  const exits = prattLedExits(r, ir, ids);
+  const leds = r.leds.length === 0 ? '' : L.ledSwitch(groupByPreserveOrder(r.leds, (b) => lidOf(ids, b.first)).map((g) => {
+    const lid = g.key as number;
+    return { key: lid, arms: g.members.map(({ item: b, index: i }, j) =>
+      `${ledIf(i)}${L.ledArm(i, cond(b.steps), r.ledForm[i]!, r.ledClosesTail[i]!, exits.has(lid) && j === g.members.length - 1)}`) };
+  }));
+  const postToks = r.postfixToks.length === 0 ? ''
+    : L.postfixToks(groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok)).map((g) => g.key as number)) + (r.postfixTplHole !== undefined ? L.postfixTpl(r.postfixTplHole) : '');
+  const bp = [L.bpOpen(r.leds.length > 0 || r.postfixToks.length > 0), leds, postToks, L.postfixOp, L.binary, ...(L.leftDone ? [L.leftDone] : []), L.bpClose].join('\n');
+  const nud = [L.nudOpen, dispatchWalk(d, ids, nudArm, L.dispatch, false), L.nudClose].join('\n');
+  return [L.entry, bp, nud].join('\n');
 }
 
 function formsOf(rules: RuleIR[], lookaheads: Alt[], nShared: number, entry: string): Forms {

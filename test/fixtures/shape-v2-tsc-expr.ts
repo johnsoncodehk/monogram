@@ -7,7 +7,7 @@
 // Positions: a node's start is tsc's `getStart()` (the first token); tsc's `pos` (leading trivia
 // included) is not produced (the harness compares it only when both sides carry it).
 import {
-  absent, and, branch, c, child, cook, fold, iff, inh, match, node, not, orElse, syn, text, v,
+  absent, and, branch, c, child, cook, fold, iff, inh, map, match, node, not, orElse, syn, text, v,
   type Shape2Spec, type Term,
 } from '../../src/shape2-schema.ts';
 
@@ -51,6 +51,9 @@ export const tscExprShape: Shape2Spec = {
     chainTop: { type: 'bool', default: true, rules: { Expr: Object.fromEntries(['led_dot', 'led_optChain', 'led_bracket', 'led_paren', 'led_bang'].map((a) => [a, { left: c(false) }])) } },
   },
   rules: {
+    // The root: its statement list. The `endOfFileToken` and the root's extent over trailing
+    // trivia are not produced (test/shape2-oracle.ts ROOT_NOT_COMPARED).
+    Program: { decl: node('SourceFile', { statements: map('alt', branch('alt', { decl: child('decl'), stmt: child('stmt') })) }) },
     Stmt: { expr: node('ExpressionStatement', { expression: comma }) },
     Expr: {
       true_: node('TrueKeyword'),
