@@ -32,17 +32,10 @@ on:
       - '.github/workflows/measure-profile.yml'
   # A branch pushed for the full check without a pull request (see ci.yml): A = its merge base
   # with master, M = its head, scope `pr`.
+  # No `paths:` here: on the push that CREATES a branch GitHub does not diff against master, so a
+  # path filter can miss it. The `relevant` job below decides, against the merge base.
   push:
     branches: ['land/**']
-    paths:
-      - 'src/**'
-      - '*.ts'
-      - 'test/bench-rust-profile/**'
-      - 'test/bench-targets/**'
-      - 'test/bench-rust-oxc/**'
-      - 'test/oxc-parse-bench/**'
-      - 'test/emit-sizes.ts'
-      - '.github/workflows/measure-profile.yml'
   workflow_dispatch:
     inputs:
       commit:
@@ -70,9 +63,31 @@ env:
   TS_REPO_SHA: '6fbce89821d93a5b761581d9ac540455f38e9acb'
 
 jobs:
+  # For a `land/**` push: does the branch touch what this workflow measures, against its merge
+  # base with master? (The same paths as the pull_request filter above.) Other events: yes.
+  relevant:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.d.outputs.run }}
+    steps:
+      - uses: actions/checkout@v5
+        if: github.event_name == 'push'
+        with:
+          fetch-depth: 0
+      - id: d
+        run: |
+          if [ "${{ github.event_name }}" != "push" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          git fetch -q origin master; base=$(git merge-base origin/master HEAD)
+          if git diff --name-only "$base" HEAD | grep -qE '^src/|^[^/]+\.ts$|^test/bench-rust-profile/|^test/bench-targets/|^test/bench-rust-oxc/|^test/oxc-parse-bench/|^test/emit-sizes\.ts$|^\.github/workflows/measure-profile\.yml$'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; echo "measured paths changed since $base"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "nothing this workflow measures changed since $base"
+          fi
+
   profile:
+    needs: relevant
     # A label other than measure-profile-full changes nothing measured.
-    if: github.event.action != 'labeled' || github.event.label.name == 'measure-profile-full'
+    if: needs.relevant.outputs.run == 'true' && (github.event.action != 'labeled' || github.event.label.name == 'measure-profile-full')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

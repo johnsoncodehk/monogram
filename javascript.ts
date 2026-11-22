@@ -42,10 +42,10 @@ import {
 // resolve at thunk-eval time (defined below), so this is safe to call inside a rule().
 function fnArms(nameParts, body) {
   return [
-    ['function', ...nameParts, '(', sep(Param, ','), ')', resetCtx(body)],
-    ['function', '*', ...nameParts, '(', sep(yieldCtx(Param), ','), ')', yieldCtx(body)],
-    ['async', sameLine, 'function', ...nameParts, '(', sep(awaitCtx(Param), ','), ')', awaitCtx(body)],
-    ['async', sameLine, 'function', '*', ...nameParts, '(', sep(asyncGenCtx(Param), ','), ')', asyncGenCtx(body)],
+    arm('function_', 'function', ...nameParts, '(', sep(field('parameter', Param), ','), ')', resetCtx(field('body', body))),
+    arm('generator', 'function', field('asterisk', '*'), ...nameParts, '(', sep(yieldCtx(field('parameter', Param)), ','), ')', yieldCtx(field('body', body))),
+    arm('asyncFunction', field('asyncKeyword', 'async'), sameLine, 'function', ...nameParts, '(', sep(awaitCtx(field('parameter', Param)), ','), ')', awaitCtx(field('body', body))),
+    arm('asyncGenerator', field('asyncKeyword', 'async'), sameLine, 'function', field('asterisk', '*'), ...nameParts, '(', sep(asyncGenCtx(field('parameter', Param)), ','), ')', asyncGenCtx(field('body', body))),
   ];
 }
 
@@ -203,7 +203,7 @@ export const expressionStatement = (Expr) => [
 ];
 // An arrow's body (`ConciseBody : [lookahead ≠ {] ExpressionBody | { FunctionBody }`): after `=>`
 // a `{` begins the function body, never an object literal, so `() => { b() {} }.x` has no parse.
-export const conciseBody = (Block, Expr) => alt(Block, [not('{'), Expr]);
+export const conciseBody = (Block, Expr) => alt(arm('block', Block), arm('expression', not('{'), Expr));
 // `export Declaration` / `export VariableStatement` (16.2.3 ExportDeclaration): what follows
 // `export` is a declaration, never another statement, so `export if (x) {}`, `export x;`,
 // `export ;` have no parse and `export { a }` is the export list, not `export` and a block. A
@@ -252,6 +252,8 @@ export const notReserved = not(alt(
 // takes an identifier or any keyword after LastReservedWord, in every context), so contextual
 // and strict-mode-only words stay names (`function f(yield, let, of) {}`).
 export const bindingIdentifier = [notReserved, Ident];
+// The same, as a function's or class's name: the child `name`.
+export const bindingName = [notReserved, field('name', Ident)];
 
 // ── The `for` statement (14.7.4 ForStatement, 14.7.5 ForInOfStatement) ──
 // Both grammars build their ForBinding, ForHead and ForAwaitHead rules and their `for` statement
@@ -514,13 +516,13 @@ const Expr = rule($ => [
   // `||`/`?:` INSIDE an expression body (`() => a || b`) is unaffected — parsed by the body `$`.
   // The body is a ConciseBody (`conciseBody`): `() => {}` is a block body, not an object literal
   // that absorbs a trailing `|| a` / `.x`, also where the block does not parse.
-  capExpr('?', 'async', '(', sep(awaitCtx(Param), ','), ')', '=>', awaitCtx(conciseBody(Block, $))),
-  capExpr('?', '(', sep(Param, ','), ')', '=>', resetCtx(conciseBody(Block, $))),
+  arm('asyncArrow', capExpr('?', field('asyncKeyword', 'async'), '(', sep(awaitCtx(field('parameter', Param)), ','), ')', field('arrow', '=>'), awaitCtx(field('body', conciseBody(Block, $))))),
+  arm('arrow', capExpr('?', '(', sep(field('parameter', Param), ','), ')', field('arrow', '=>'), resetCtx(field('body', conciseBody(Block, $))))),
   // async arrow with a BARE parameter: `async err => …` (ES2017). `async` and the
   // parameter must share a line (`async\nx => …` is `async;` then a plain arrow —
   // the spec's [no LineTerminator here] between async and the binding identifier).
-  capExpr('?', 'async', sameLine, awaitCtx(notReservedJsExpr, Ident), '=>', awaitCtx(conciseBody(Block, $))),
-  capExpr('?', notReservedJsExpr, Ident, '=>', resetCtx(conciseBody(Block, $))),
+  arm('asyncArrowIdentifier', capExpr('?', field('asyncKeyword', 'async'), sameLine, awaitCtx(notReservedJsExpr, field('parameter', Ident)), field('arrow', '=>'), awaitCtx(field('body', conciseBody(Block, $))))),
+  arm('arrowIdentifier', capExpr('?', notReservedJsExpr, field('parameter', Ident), field('arrow', '=>'), resetCtx(field('body', conciseBody(Block, $))))),
   ['yield', alt(['*', $], [opt($)])],   // yield e | yield* e (delegate) | yield
   ['(', field('first', $), many(field('comma', ','), field('rest', $)), ')'],
   // ImportCall: one or two AssignmentExpressions, no spread (the `...` arm is Arguments'), and ImportMeta
@@ -528,7 +530,7 @@ const Expr = rule($ => [
   PrivateField,
   HexNumber, OctalNumber, BinaryNumber, BigInt_,
   // function expression, 4-way split on async × generator (see fnArms).
-  ...fnArms([opt(...bindingIdentifier)], Block),
+  ...fnArms([opt(...bindingName)], Block),
   // named vs anonymous kept separate (greedy opt(Ident) would eat a leading
   // `extends`). A ClassExpression takes a DecoratorList, as a ClassDeclaration does: any number
   // of decorators (`x = @a @b class {}`).
@@ -583,11 +585,11 @@ const ForBinding = rule($ => forBindingArms(BindingPattern, Expr));
 // `this` parameter is TypeScript's).
 const Param = rule($ => {
   const body = alt(
-    [alt(bindingIdentifier, BindingPattern), opt('=', Expr)],
-    ['...', alt(bindingIdentifier, BindingPattern), opt('=', Expr)],   // rest (an initializer is a CHECKER error in tsc, not a parse error)
+    arm('single', field('name', alt(bindingIdentifier, BindingPattern)), opt('=', field('value', Expr))),
+    arm('rest', field('ellipsis', '...'), field('name', alt(bindingIdentifier, BindingPattern)), opt('=', field('value', Expr))),   // rest (an initializer is a CHECKER error in tsc, not a parse error)
   );
   return [
-    [opt(DecoratorExpr), body],
+    arm('plain', opt(field('decorator', DecoratorExpr)), field('binding', body)),
   ];
 });
 
@@ -610,7 +612,10 @@ const CatchParameter = rule($ => [
 
 const Stmt = rule($ => [
   Block,
-  arm('variable', field('kind', alt('let', 'const', 'var')), sep(field('binding', Binding), ','), asi()),
+  // VariableStatement / LexicalDeclaration (14.3): a VariableDeclarationList / BindingList has one
+  // or more declarations and no trailing comma, so `var;`, `const;` and `var a,` have no parse,
+  // and `let;` is the expression statement of the identifier `let` (sloppy mode).
+  arm('variable', field('kind', alt('let', 'const', 'var')), field('binding', Binding), many(field('bindingComma', ','), field('bindingRest', Binding)), asi()),
   ['if', '(', field('condition', Expr), many(field('conditionComma', ','), field('conditionRest', Expr)), ')', field('consequence', $), opt('else', field('alternative', $))],
   forStatement($, ForHead, ForAwaitHead),
   ['while', '(', field('condition', Expr), many(field('conditionComma', ','), field('conditionRest', Expr)), ')', field('body', $)],
@@ -632,8 +637,9 @@ const Stmt = rule($ => [
   arm('labelled', notReserved, field('label', Ident), ':', field('body', $)),
   arm('empty', ';'),
   ['debugger', asi()],
-  ['with', '(', field('object', Expr), ')', field('body', $)],
-  arm('using', opt(field('awaitKeyword', 'await')), field('usingKeyword', 'using'), sep(field('binding', Binding), ','), asi()),
+  // `with ( Expression ) Statement` (14.11): the object is an Expression, a comma list included.
+  ['with', '(', field('object', Expr), many(field('objectComma', ','), field('objectRest', Expr)), ')', field('body', $)],
+  arm('using', opt(field('awaitKeyword', 'await')), field('usingKeyword', 'using'), field('binding', Binding), many(field('bindingComma', ','), field('bindingRest', Binding)), asi()),
   Decl,
   // Not after a start that begins a block or a declaration (`expressionStatement`): without the
   // lookahead, longest match lets the expression reading win wherever a tail makes it longer
@@ -765,7 +771,7 @@ const Decl = rule($ => [
   // leading `function` is preferred as a declaration over an IIFE expression-
   // statement: Program tries Decl before Stmt, so `function f(){}\n()=>{}` parses
   // as a declaration + arrow rather than longest-matching `function f(){}()` (IIFE).
-  ...fnArms(bindingIdentifier, Block),
+  ...fnArms(bindingName, Block),
   classDecl,   // a class with no decorator; with them, the decorator arm below
   exportDeclaration($, Stmt, ['var', 'let', 'const']),
   // A declaration's decorators, parsed ONCE, then what they decorate. Under the decorators
@@ -783,7 +789,7 @@ const Decl = rule($ => [
   // (`export default [lookahead ∉ { function, async function, class }] AssignmentExpression`;
   // the inline alt is ordered, so their arms come first), so `export default class {} g()` is two.
   ['export', 'default', alt(
-    ...fnArms([opt(...bindingIdentifier)], Block),  // function
+    ...fnArms([opt(...bindingName)], Block),  // function
     [many(DecoratorExpr), 'class', ...bindingIdentifier, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],  // named class
     [many(DecoratorExpr), 'class', many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],                          // anonymous class
     [Expr, asi()],   // catch-all: export default <expr>

@@ -14,6 +14,10 @@ import {
 } from '../src/shape2-schema.ts';
 import calc from './fixtures/namedcalc.ts';
 import { estreeExprShape } from './fixtures/shape-v2-estree-expr.ts';
+import { tscExprShape } from './fixtures/shape-v2-tsc-expr.ts';
+import { compareTrees, type NTree } from './shape-oracle.ts';
+import { normaliseEstree, parseEstree } from './shape-oracle-estree.ts';
+import { tscOracle } from './shape-oracle-tsc.ts';
 import javascript from '../javascript.ts';
 import typescript from '../typescript.ts';
 
@@ -284,6 +288,26 @@ check('js: the directive prologue (threaded state, ESTree fixture)', () => {
   assert.deepEqual(deps['Stmt.expr'].inherited, ['prologue']);
   assert.deepEqual(deps['Block.brace'], { inherited: ['functionBody'], threads: [{ attr: 'prologue', over: 'stmt', reads: ['directive'] }] });
   assert.deepEqual(deps['Program.decl'], { inherited: [], threads: [{ attr: 'prologue', over: 'alt', reads: ['directive'] }] });
+});
+
+// Functions, arrows and parameters in both shapes, against their oracles: every form (plain,
+// generator, async, async generator; expression and declaration; arrow with a list, one
+// identifier, a block or an expression body; default and rest parameters; tsc's `this`
+// parameter and optional parameter, and a declaration with no body). A function is a function of
+// its own subtree in both shapes: only a body's prologue (ESTree) reads context.
+check('functions, arrows and parameters (both fixtures, against acorn and tsc)', () => {
+  const js = `function f(a, b = 1, ...c) { return a; }\nasync function* g() { 'use strict'; }\nx = function () {};\ny = async function h(a) {};\nz = (a, b) => a + b;\nw = async x => { 'd'; };\nv = async (a) => a;\nu = q => q;\nfunction* k(x) { yield x; }\n`;
+  const ts = `${js}function t(this) {}\nfunction o(a?, b = 2) {}\nfunction ov(a);\n`;
+  for (const [g, spec, src, oracle] of [
+    [javascript, estreeExprShape, js, () => normaliseEstree(parseEstree(js)!.tree)],
+    [typescript, tscExprShape, ts, () => { const r = tscOracle(ts, 'a.ts'); return 'tree' in r ? r.tree : assert.fail(JSON.stringify(r)); }],
+  ] as const) {
+    // The root's own extent and its end-of-file leaf are not compared (shape2-oracle.ts ROOT_NOT_COMPARED).
+    const root = (t: NTree): NTree => ({ kind: t.kind, start: 0, end: 0, fields: Object.fromEntries(Object.entries(t.fields).filter(([k]) => k !== 'sourceType' && k !== 'endOfFileToken')) });
+    assert.deepEqual(compareTrees(root(oracle()), root(run(g, spec, src) as NTree), 1).divergences, [], spec.name);
+    const deps = dependencies(loadShape2(g, spec));
+    for (const a of ['function_', 'generator', 'asyncFunction', 'asyncGenerator', 'arrow', 'asyncArrow', 'arrowIdentifier', 'asyncArrowIdentifier']) assert.deepEqual(deps[`Expr.${a}`]?.inherited ?? [], [], `${spec.name} Expr.${a}`);
+  }
 });
 
 // The reference matcher finds an arm for every node of real inputs (an arm consuming all the

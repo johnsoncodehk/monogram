@@ -506,10 +506,17 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (m === 'r' ? `_drop(_n, ${name}_bpW(${bp}))` : `${name}_bpW(${bp})`),
     // A body guard (emit-portable.ts annotateSteps): opt / sep test it before their one attempt,
-    // star before each attempt, so a refused attempt takes no mark.
-    star: (body, g) => (g === null ? `star${S}(${fn(body)})` : `starIn${S}(${g}, ${fn(body)})`),
-    opt: (body, g) => (g === null ? `opt${S}(${fn(body)})` : `(!ahead(${g}, true) || opt${S}(${fn(body)}))`),
-    sep: (elem, delim, g) => (g === null ? `sepBy${S}(${fn(elem)}, ${sepDelimLid(ids, delim)})` : `(!ahead(${g}, true) || sepBy${S}(${fn(elem)}, ${sepDelimLid(ids, delim)}))`),
+    // star before each attempt, so a refused attempt takes no mark. A clean body (Step.clean) is
+    // attempted without a mark (starC / sepByC; an opt's attempt is the body itself).
+    star: (body, g, c) => (g === null ? `star${c ? 'C' : S}(${fn(body)})` : `starIn${c ? 'C' : S}(${g}, ${fn(body)})`),
+    opt: (body, g, c) => {
+      const attempt = c ? `${body} || true` : `opt${S}(${fn(body)})`;
+      return g === null ? (c ? `(${attempt})` : attempt) : `(!ahead(${g}, true) || ${attempt})`;
+    },
+    sep: (elem, delim, g, c) => {
+      const call = `sepBy${c ? 'C' : ''}${S}(${fn(elem)}, ${sepDelimLid(ids, delim)})`;
+      return g === null ? call : `(!ahead(${g}, true) || ${call})`;
+    },
     altlit: (values) => `altLit${S}([${values.map((v) => lidOf(ids, v)).join(', ')}])`,
     look: (id, is) => `${is ? '' : '!'}look${id}()`,
     ahead: (set, is) => `ahead(${set}, ${is})`,
@@ -946,6 +953,10 @@ function starInW(k: number, once: () => boolean): boolean {
   while (ahead(k, true)) { const sp = pos, bk = _n; if (!once()) { back(sp); _n = bk; break; } }
   return true;
 }
+// A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo.
+function starC(once: () => boolean): boolean { while (once()); return true; }
+function starInC(k: number, once: () => boolean): boolean { while (ahead(k, true) && once()); return true; }
+function sepByCW(elem: () => boolean, delimLid: number): boolean { if (elem()) while (matchLitW(delimLid) && elem()); return true; }
 function optW(body: () => boolean): boolean {
   const sp = pos, bk = _n; if (!body()) { back(sp); _n = bk; } return true;
 }
@@ -954,8 +965,8 @@ function sepByW(elem: () => boolean, delimLid: number): boolean {
   const sp0 = pos, bk0 = _n;
   if (!elem()) { back(sp0); _n = bk0; return true; }
   for (;;) {
-    const sp = pos, bk = _n;
-    if (!matchLitW(delimLid)) { back(sp); _n = bk; break; }
+    // A failed delimiter match changes nothing: no mark before it.
+    if (!matchLitW(delimLid)) break;
     const sp2 = pos, bk2 = _n;
     if (!elem()) { back(sp2); _n = bk2; break; }
   }
@@ -990,12 +1001,13 @@ function starInR(k: number, once: () => boolean): boolean {
 function optR(body: () => boolean): boolean {
   const sp = pos; if (!body()) back(sp); return true;
 }
+function sepByCR(elem: () => boolean, delimLid: number): boolean { if (elem()) while (matchLitR(delimLid) && elem()); return true; }
 function sepByR(elem: () => boolean, delimLid: number): boolean {
   const sp0 = pos;
   if (!elem()) { back(sp0); return true; }
   for (;;) {
-    const sp = pos;
-    if (!matchLitR(delimLid)) { back(sp); break; }
+    // A failed delimiter match changes nothing: no mark before it.
+    if (!matchLitR(delimLid)) break;
     const sp2 = pos;
     if (!elem()) { back(sp2); break; }
   }
@@ -1025,6 +1037,15 @@ export const cstBuilder: Builder<Cst> = {
 }
 
 /** The library's entry points over the engine: parse, parseWith, and the incremental Doc. */
+// RESCAN in createDoc().edit, the Doc's two fresh lexes (each counted in Align: rescanChecks, and
+// rescanRepairs when it replaced the relexed stream; removed with the relex fix of the known
+// defects, portable-targets HOLE_EDIT_EXPECTED_FAIL):
+// - after a rejected parse: the relexed stream should equal a fresh lex by construction; a fresh
+//   lex checks it, and only a stream that differs is replaced and parsed again;
+// - after a lexer error in the relex: the text is rejected when a fresh lex refuses it too, and the
+//   Doc keeps no token stream (the next edit relexes it all). The lexer reports an error by
+//   throwing, so the one throw caught is the relex's (owed: errors by return); a throw anywhere
+//   else in edit is a bug and surfaces.
 function docRuntime(ir: ParserIR): string {
   const reuse = ir.reuse;
   const topReuse = reuse !== null;
@@ -1032,8 +1053,6 @@ function docRuntime(ir: ParserIR): string {
   const shapeB = reuse?.kind === 'B';
   const hasHeadB = reuse?.kind === 'B' && reuse.hasHead;
   const entryCst = ir.entry;
-  // A fresh relex, when the window relex left a stale stream (unterminated → closed restore).
-  const freshMeta = 'scanMeta(text)';
   return `// The one handle slot i holds, when it holds exactly one (a root; a reused top-level entry).
 function _soleOk(i: number): boolean { const k = _sp[i * _SW + 5]; return k === 1 || k === 2 && (_hs[i] as any[]).length === 1; }
 function _sole(i: number): any { return _sp[i * _SW + 5] === 1 ? _hs[i] : (_hs[i] as any[])[0]; }
@@ -1311,6 +1330,7 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
   let entries: EntryMeta[] = [];
   let entryHs: H[] = [];` : ''}
   let root: H | null = null;
+  let rescanChecks = 0, rescanRepairs = 0;
   {
     const got = parseWithMeta(src, prevToks, builder);
     root = got.root;${topReuse ? `
@@ -1325,8 +1345,27 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
     edit(edits: Edit[]): H | null {
       const oldText = text, oldToks = prevToks;
       let relexed = 0;
+      // RESCAN (the generator's docRuntime): a lexer error, the text's own if a fresh lex fails too.
       try {
-      [text, prevToks, relexed] = relexEdits(oldText, oldToks, edits);
+        [text, prevToks, relexed] = relexEdits(oldText, oldToks, edits);
+      } catch {
+        text = applyEdits(oldText, edits);
+        rescanChecks++;
+        const fresh = lexOrNull(text);
+        if (fresh === null) {
+          prevToks = [];
+          root = null;${topReuse ? `
+          entries = [];
+          entryHs = [];` : ''}${shapeB ? `
+          segs = [];` : ''}
+          const lexReject = { oldN: oldToks.length, newN: 0, prefix: 0, suffix: 0, relexed: 0, reused: 0, rescanChecks, rescanRepairs };
+          align = validate ? { ...lexReject, streamEq: true, treeEq: isCst ? true : null } : lexReject;
+          return null;
+        }
+        rescanRepairs++;
+        prevToks = fresh;
+        relexed = fresh.length;
+      }
       const core = { ...computeAlign(oldText, oldToks, text, prevToks), relexed };
       const byteDelta = text.length - oldText.length;
       let reused = 0;
@@ -1344,7 +1383,16 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
       }` : ''}
       if (next === null) {
         let got = parseWithMeta(text, prevToks, builder);
-        if (got.root === null) { prevToks = ${freshMeta}; got = parseWithMeta(text, prevToks, builder); }
+        // RESCAN: a fresh lex checks the relexed stream of a rejected parse (known relex defects).
+        if (got.root === null) {
+          rescanChecks++;
+          if (!sameAsFreshLex(text, prevToks)) {
+            rescanRepairs++;
+            const fresh = lexOrNull(text);
+            prevToks = fresh ?? [];
+            if (fresh !== null) got = parseWithMeta(text, prevToks, builder);
+          }
+        }
         next = got.root;${topReuse ? `
         entries = got.entries;
         entryHs = got.entryHs as H[];` : ''}${shapeB ? `
@@ -1357,28 +1405,9 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
         try { streamEq = checkStreamEq(text, prevToks); } catch { streamEq = false; }
         // treeEq: the tree against a fresh parse's, with cstBuilder only; any other builder's
         // handles are opaque, so it reports null (rust SUPPORTS_TREE_EQ=false).
-        align = { ...core, reused, streamEq, treeEq: isCst ? checkTreeEq(text, root as unknown as Node | null) : null };
+        align = { ...core, reused, rescanChecks, rescanRepairs, streamEq, treeEq: isCst ? checkTreeEq(text, root as unknown as Node | null) : null };
       } else {
-        align = { ...core, reused };
-      }
-      } catch {
-        text = applyEdits(oldText, edits);
-        try {
-          prevToks = ${freshMeta};
-          const got = parseWithMeta(text, prevToks, builder);
-          root = got.root;${topReuse ? `
-          entries = got.entries;
-          entryHs = got.entryHs as H[];` : ''}${shapeB ? `
-          segs = got.segs;` : ''}
-          align = { oldN: oldToks.length, newN: prevToks.length, prefix: 0, suffix: 0, relexed: prevToks.length, reused: 0 };
-        } catch {
-          prevToks = [];
-          root = null;${topReuse ? `
-          entries = [];
-          entryHs = [];` : ''}${shapeB ? `
-          segs = [];` : ''}
-          align = { oldN: oldToks.length, newN: 0, prefix: 0, suffix: 0, relexed: 0, reused: 0 };
-        }
+        align = { ...core, reused, rescanChecks, rescanRepairs };
       }
       return root;
     },
@@ -1405,6 +1434,14 @@ function checkTreeEq(text: string, root: Node | null): boolean {
     if (root === null || fresh === null) return root === fresh;
     return cstJSON(root) === cstJSON(fresh as Cst);
   } catch { return root === null; }
+}
+// A fresh lex of text, or null when the lexer refuses it (edit's RESCAN).
+function lexOrNull(text: string): AlignMeta[] | null {
+  try { return scanMeta(text); } catch { return null; }
+}
+// Whether meta equals a fresh lex of text (false when the lexer refuses it).
+function sameAsFreshLex(text: string, meta: AlignMeta[]): boolean {
+  try { return checkStreamEq(text, meta); } catch { return false; }
 }
 ${topReuse ? `function shiftSubtree(n: Cst, byteDelta: number, tokDelta: number): void {
   n.offset += byteDelta;
@@ -1463,9 +1500,10 @@ function mk_align(off: number, end: number, kid: number, nl: boolean, fd: number
 function shift_align(m: AlignMeta, delta: number): AlignMeta {
   return { off: m.off + delta, end: m.end + delta, kid: m.kid, pd: m.pd, fd: m.fd, flags: m.flags, td: m.td };
 }
-type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed: number; reused: number; streamEq?: boolean; treeEq?: boolean | null };
+// rescanChecks / rescanRepairs: the Doc's totals since it was made (createDoc, RESCAN in edit).
+type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed: number; reused: number; rescanChecks: number; rescanRepairs: number; streamEq?: boolean; treeEq?: boolean | null };
 ${relexFamily}
-function computeAlign(oldText: string, oldToks: AlignMeta[], newText: string, newToks: AlignMeta[]): Omit<Align, 'relexed' | 'reused' | 'streamEq' | 'treeEq'> {
+function computeAlign(oldText: string, oldToks: AlignMeta[], newText: string, newToks: AlignMeta[]): Omit<Align, 'relexed' | 'reused' | 'rescanChecks' | 'rescanRepairs' | 'streamEq' | 'treeEq'> {
   const oldN = oldToks.length, newN = newToks.length;
   let prefix = 0;
   while (prefix < oldN && prefix < newN) {

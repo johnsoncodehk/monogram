@@ -1,9 +1,9 @@
 // ShapeSpec v2: a subset of ESTree (as acorn 8 produces it) from javascript.ts, in the core
 // calculus only (src/shape2-schema.ts): the expressions below, the root, and the statements
-// (blocks, variable statements with identifier bindings, `if`, loops but `for`, `return`, `throw`,
-// `break`, `continue`, labelled, `try`, `with`, `debugger`, empty). Checked against acorn by
-// test/shape2-oracle.ts. Not total: an arm outside the subset (`for`, `switch`, declarations,
-// binding patterns, functions, classes, arrows, object / array literals, templates) is unmapped,
+// (blocks, variable statements with identifier bindings, `if`, loops, `return`, `throw`, `break`,
+// `continue`, labelled, `try`, `with`, `debugger`, empty), functions, arrows and their parameters.
+// Checked against acorn by test/shape2-oracle.ts. Not total: an arm outside the subset (`switch`,
+// other declarations, binding patterns, methods, classes, object / array literals, templates) is unmapped,
 // and a unit that reaches one is reported as outside the subset, not compared.
 import {
   absent, and, armOf, branch, c, child, cook, get, iff, inh, list, map, match, node, not, orElse, present, record,
@@ -34,11 +34,14 @@ const binaryType = match(text('op'), Object.fromEntries([...ASSIGN.map((o) => [o
 // of a Block that is a function body (inherited `functionBody`: the grammar has one Block rule
 // for both ECMAScript's Block and FunctionBody, so the parent arm tells them apart); stays true
 // while each statement is a directive candidate (synthesized `directive`).
-const FUNCTION_BODIES: Record<string, string[]> = {
-  Expr: ['function_', 'function_2', 'async', 'async2', 'seq', 'seq2', 'seq3', 'seq4'],   // function expressions, arrows
-  Decl: ['function_', 'function_2', 'async', 'async2', 'export_2'],                     // declarations, `export default function`
-  Prop: ['get', 'async', 'async2', 'star', 'memberName'],                               // object methods / accessors
-  ClassMember: ['seq'],                                                                  // constructor, methods, accessors
+const FUNCTIONS = ['function_', 'generator', 'asyncFunction', 'asyncGenerator'] as const;
+const ARROWS = ['arrow', 'asyncArrow', 'arrowIdentifier', 'asyncArrowIdentifier'] as const;
+/** rule -> arm -> the child that is the function body. */
+const FUNCTION_BODIES: Record<string, Record<string, string>> = {
+  Expr: { ...Object.fromEntries(FUNCTIONS.map((a) => [a, 'body'])), ...Object.fromEntries(ARROWS.map((a) => [a, 'block'])) },   // function expressions, arrows (a block body)
+  Decl: { ...Object.fromEntries(FUNCTIONS.map((a) => [a, 'body'])), export_2: 'body' },                                        // declarations, `export default function`
+  Prop: Object.fromEntries(['get', 'async', 'async2', 'star', 'memberName'].map((a) => [a, 'block'])),                           // object methods / accessors
+  ClassMember: { seq: 'block' },                                                                                                 // constructor, methods, accessors
 };
 const prologue = (init: Term) => thread(init, 'p', and(v('p'), syn('directive', 'stmt')));
 
@@ -50,6 +53,9 @@ const sequence: Term = sequenceOf('first', 'rest');
 const orNull = (name: string): Term => orElse(child(name), c(null));
 /** A statement's optional label. */
 const label: Term = iff(present('label'), idOf('label'), c(null));
+
+/** A declaration list's bindings: the first and the rest. */
+const bindings: Term = list(child('binding'), spread(child('bindingRest')));
 
 // ── `for` (ECMA-262 14.7.4, 14.7.5) ──
 // The grammar factors a `for` statement's `( … )` into ForHead / ForAwaitHead, whose node is not
@@ -101,11 +107,44 @@ const FOR_RULES: Shape2Spec['rules'] = {
   ForBinding: { seq: node('VariableDeclarator', { id: branch('name', { ident: idOf('ident') }), init: orElse(child('value'), c(null)) }) },
 };
 
+// ── Functions (ECMA-262 15.2 - 15.6) ──
+// Four arms per form (plain, generator, async, async generator: the grammar routes each one's
+// parameters and body to its [Await] / [Yield] family), so `generator` / `async` are the arm's.
+const FUNCTION_FLAGS: Record<(typeof FUNCTIONS)[number], [boolean, boolean]> = { function_: [false, false], generator: [true, false], asyncFunction: [false, true], asyncGenerator: [true, true] };
+const fn = (type: string, id: Term, generator: boolean, isAsync: boolean): Term =>
+  node(type, { id, expression: c(false), generator: c(generator), async: c(isAsync), params: child('parameter'), body: child('body') });
+const functionArms = (type: string, id: Term): Record<string, Term> =>
+  Object.fromEntries(FUNCTIONS.map((a) => [a, fn(type, id, ...FUNCTION_FLAGS[a])]));
+/** An arrow: a parenthesised parameter list (`parameter` repeats) or one identifier; a block or
+ * an expression body (ConciseBody). */
+const arrow = (isAsync: boolean, params: Term): Term => node('ArrowFunctionExpression', {
+  id: c(null), expression: branch('body', { block: c(false), expression: c(true) }), generator: c(false), async: c(isAsync),
+  params, body: branch('body', { block: child('block'), expression: child('expr') }),
+});
+const ARROW_RULES: Record<string, Term> = {
+  arrow: arrow(false, child('parameter')),
+  asyncArrow: arrow(true, child('parameter')),
+  arrowIdentifier: arrow(false, list(idOf('parameter'))),
+  asyncArrowIdentifier: arrow(true, list(idOf('parameter'))),
+};
+/** A parameter (FormalParameter): a binding element (identifier names only: patterns are not
+ * mapped yet), with a default (AssignmentPattern) or rest (RestElement). A decorator on a
+ * parameter is no ECMAScript (acorn rejects it), so it is not read. */
+const bindingName: Term = branch('name', { ident: idOf('ident') });
+const PARAM_RULES: Shape2Spec['rules'] = {
+  Param: {
+    plain: branch('binding', {
+      single: iff(present('value'), node('AssignmentPattern', { left: bindingName, right: child('value') }), bindingName),
+      rest: node('RestElement', { argument: bindingName }),
+    }),
+  },
+};
+
 /** The statements (ECMA-262 14), one node per Stmt arm. */
 const STATEMENTS: Record<string, Term> = {
   block: child('block'),
-  variable: node('VariableDeclaration', { declarations: child('binding'), kind: text('kind') }),
-  using: node('VariableDeclaration', { declarations: child('binding'), kind: iff(present('awaitKeyword'), c('await using'), c('using')) }),
+  variable: node('VariableDeclaration', { declarations: bindings, kind: text('kind') }),
+  using: node('VariableDeclaration', { declarations: bindings, kind: iff(present('awaitKeyword'), c('await using'), c('using')) }),
   if_: node('IfStatement', { test: sequenceOf('condition', 'conditionRest'), consequent: child('consequence'), alternate: orNull('alternative') }),
   while_: node('WhileStatement', { test: sequenceOf('condition', 'conditionRest'), body: child('body') }),
   do_: node('DoWhileStatement', { body: child('body'), test: sequenceOf('condition', 'conditionRest') }),
@@ -122,7 +161,7 @@ const STATEMENTS: Record<string, Term> = {
   labelled: node('LabeledStatement', { body: child('body'), label: idOf('label') }),
   empty: node('EmptyStatement'),
   debugger_: node('DebuggerStatement'),
-  with_: node('WithStatement', { object: child('object'), body: child('body') }),
+  with_: node('WithStatement', { object: sequenceOf('object', 'objectRest'), body: child('body') }),
   for_: branch('alt', { paren: forStatement(false), await_: forStatement(true) }),
   decl: child('decl'),
 };
@@ -135,7 +174,7 @@ export const estreeExprShape: Shape2Spec = {
     optional: { type: 'bool', default: false, rules: { Expr: { led_optChain: c(true), led_dot: syn('optional', 'left'), led_bracket: syn('optional', 'left'), led_paren: syn('optional', 'left') } } },
   },
   inherited: {
-    functionBody: { type: 'bool', default: false, rules: Object.fromEntries(Object.entries(FUNCTION_BODIES).map(([r, arms]) => [r, Object.fromEntries(arms.map((a) => [a, { block: c(true) }]))])) },
+    functionBody: { type: 'bool', default: false, rules: Object.fromEntries(Object.entries(FUNCTION_BODIES).map(([r, arms]) => [r, Object.fromEntries(Object.entries(arms).map(([a, body]) => [a, { [body]: c(true) }]))])) },
     prologue: {
       type: 'bool', default: false, rules: {
         Program: { decl: { alt: thread(c(true), 'p', and(v('p'), branch('alt', { decl: c(false), stmt: syn('directive', 'stmt') }))) } },
@@ -153,6 +192,8 @@ export const estreeExprShape: Shape2Spec = {
     // A binding: identifier names (binding patterns are not mapped yet).
     Binding: { seq: node('VariableDeclarator', { id: branch('name', { ident: idOf('ident') }), init: orNull('value') }) },
     CatchParameter: { ident: idOf('ident') },
+    ...PARAM_RULES,
+    Decl: functionArms('FunctionDeclaration', idOf('name')),
     ...FOR_RULES,
     Expr: {
       true_: literal(c(true)),
@@ -201,6 +242,8 @@ export const estreeExprShape: Shape2Spec = {
         await: node('AwaitExpression', { argument: child('operand') }),
         yield: node('YieldExpression', { delegate: c(false), argument: child('operand') }),
       }, node('UnaryExpression', { operator: text('op'), prefix: c(true), argument: child('operand') })),
+      ...functionArms('FunctionExpression', iff(present('name'), idOf('name'), c(null))),
+      ...ARROW_RULES,
       postfixOp: node('UpdateExpression', { operator: text('op'), prefix: c(false), argument: child('operand') }),
     },
     // The callee of `new` (a MemberExpression, never a call).

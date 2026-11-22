@@ -140,10 +140,17 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine): StepLowe
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (f === 'R' ? e.bpFound(name, bp) : f === 'W' ? `p.callRuleW(p.bpW_${name}(${bp}))` : `p.callRule(p.bp_${name}(${bp}))`),
     // A body guard (emit-portable.ts annotateSteps): opt / sep test it before their one attempt,
-    // star before each attempt, so a refused attempt takes no mark.
-    star: (body, g) => (g === null ? `p.star${f}(${fn(body)})` : `p.starIn${f}(${g}, ${fn(body)})`),
-    opt: (body, g) => (g === null ? `p.opt${f}(${fn(body)})` : `(!p.${e.ahead}(${g}, true) || p.opt${f}(${fn(body)}))`),
-    sep: (elem, delim, g) => (g === null ? `p.sepBy${f}(${fn(elem)}, ${sepDelimLid(ids, delim)})` : `(!p.${e.ahead}(${g}, true) || p.sepBy${f}(${fn(elem)}, ${sepDelimLid(ids, delim)}))`),
+    // star before each attempt, so a refused attempt takes no mark. A clean body (Step.clean) is
+    // attempted without a mark (starC / optC / sepByC).
+    star: (body, g, c) => (g === null ? `p.star${c ? 'C' : ''}${f}(${fn(body)})` : `p.starIn${c ? 'C' : ''}${f}(${g}, ${fn(body)})`),
+    opt: (body, g, c) => {
+      const attempt = `p.opt${c ? 'C' : ''}${f}(${fn(body)})`;
+      return g === null ? attempt : `(!p.${e.ahead}(${g}, true) || ${attempt})`;
+    },
+    sep: (elem, delim, g, c) => {
+      const call = `p.sepBy${c ? 'C' : ''}${f}(${fn(elem)}, ${sepDelimLid(ids, delim)})`;
+      return g === null ? call : `(!p.${e.ahead}(${g}, true) || ${call})`;
+    },
     altlit: (values) => `p.altLit${f}([]uint16{${values.map((v) => lidOf(ids, v)).join(', ')}})`,
     look: (id, is) => `${is ? '' : '!'}p.look${id}()`,   // recognize form (lookFnsR)
     ahead: (set, is) => `p.${e.ahead}(${set}, ${is})`,
@@ -218,6 +225,28 @@ func (p *${recv}) starInR(k int, once func() bool) bool {
 	for p.ahead(k, true) { sp := p.pos; if !once() { p.back(sp); break } }
 	return true
 }
+// A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo. Kept out of
+// line (go:noinline), as the marked forms already are by Go's inline budget: inlined, these small
+// helpers and their closures grew the frames of the large rule functions, and every call of those
+// paid for it on paths that never run the helper (dense-semi: parseStmtW / parseDeclW +7.5
+// instructions per call, Go builder Ir +5.3%).
+//go:noinline
+func (p *${recv}) starCR(once func() bool) bool {
+\tfor once() {}
+\treturn true
+}
+//go:noinline
+func (p *${recv}) starInCR(k int, once func() bool) bool {
+\tfor p.ahead(k, true) && once() {}
+\treturn true
+}
+//go:noinline
+func (p *${recv}) optCR(body func() bool) bool { body(); return true }
+//go:noinline
+func (p *${recv}) sepByCR(elem func() bool, delim uint16) bool {
+\tif elem() { for p.matchLitR(delim) && elem() {} }
+\treturn true
+}
 func (p *${recv}) optR(body func() bool) bool {
 \tsp := p.pos; if !body() { p.back(sp) }; return true
 }
@@ -225,8 +254,7 @@ func (p *${recv}) sepByR(elem func() bool, delimLid uint16) bool {
 \tsp0 := p.pos
 \tif !elem() { p.back(sp0); return true }
 \tfor {
-\t\tsp := p.pos
-\t\tif !p.matchLitR(delimLid) { p.back(sp); break }
+\t\tif !p.matchLitR(delimLid) { break } // a failed delimiter match changes nothing: no mark before it
 \t\tsp2 := p.pos
 \t\tif !elem() { p.back(sp2); break }
 \t}
@@ -1153,7 +1181,68 @@ var pre_${r.name} = [${ops.size}]preOp{${pre}}
 var post_${r.name} = [${ops.size}]postOp{${post}}`;
 }
 
-const goEditBody = '\td.text, d.toks, relexed = relexEdits(oldText, oldToks, edits)';
+// The relex of an edit (both Docs). RESCAN: a lexer error in the relex is the text's own when a
+// fresh lex refuses it too: the text is rejected with no token stream, after `clear` empties what
+// the Doc keeps of its tree; a fresh lex that succeeds replaces the relexed stream (a relex defect
+// repaired). Counted in Align (rescanChecks, rescanRepairs); removed with the relex fix.
+const goEditBody = (clear: string, treeEq: boolean) => `\ttext, toks, relexed, lexed := relexOrReject(oldText, oldToks, edits)
+\td.text = text
+\tif !lexed {
+\t\td.rescanChecks++
+\t\tfresh, ok := lexOrNil(d.text)
+\t\tif !ok {
+${clear}
+\t\t\td.toks = nil
+\t\t\ta := &Align{OldN: len(oldToks), RescanChecks: d.rescanChecks, RescanRepairs: d.rescanRepairs}
+\t\t\tif d.validate { t := true; a.StreamEq = &t${treeEq ? '; a.TreeEq = &t' : ''} }
+\t\t\td.align = a
+\t\t\treturn -1
+\t\t}
+\t\td.rescanRepairs++
+\t\ttoks, relexed = fresh, len(fresh)
+\t}
+\td.toks = toks`;
+// RESCAN after a rejecting parse (both Docs): the relexed stream should equal a fresh lex by
+// construction, but known relex defects break that (portable-targets: HOLE_EDIT_EXPECTED_FAIL), so
+// a fresh lex checks it, and only a stream that differs is replaced and parsed again (`reparse`).
+const goRescan = (ind: string, reparse: string) => `${ind}d.rescanChecks++
+${ind}if !sameAsFreshLex(d.text, d.toks) {
+${ind}\td.rescanRepairs++
+${ind}\tif fresh, lexed := lexOrNil(d.text); lexed { d.toks = fresh; ${reparse} } else { d.toks = nil }
+${ind}}`;
+// The one panic an edit expects is the lexer's (*LexError); any other panic is a bug and propagates.
+const goLexFns = `
+// relexOrReject is relexEdits, or lexed=false when the relex meets a lexer error (*LexError).
+func relexOrReject(text string, toks []alignMeta, edits []Edit) (nt string, nm []alignMeta, n int, lexed bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, isLex := r.(*LexError); !isLex { panic(r) }
+			nt, nm, n, lexed = applyEdits(text, edits), nil, 0, false
+		}
+	}()
+	nt, nm, n = relexEdits(text, toks, edits)
+	return nt, nm, n, true
+}
+// lexOrNil is a fresh lex of text, or ok=false when the lexer refuses it.
+func lexOrNil(text string) (m []alignMeta, ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, isLex := r.(*LexError); !isLex { panic(r) }
+			m, ok = nil, false
+		}
+	}()
+	return scanMeta(text), true
+}
+// sameAsFreshLex: whether m equals a fresh lex of text (false when the lexer refuses it).
+func sameAsFreshLex(text string, m []alignMeta) (eq bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, isLex := r.(*LexError); !isLex { panic(r) }
+			eq = false
+		}
+	}()
+	return checkStreamEq(text, m)
+}`;
 
 function docEditBlockGo(ir: ParserIR, shared: SharedAlgorithms): string {
   const topReuse = ir.reuse;
@@ -1161,10 +1250,11 @@ function docEditBlockGo(ir: ParserIR, shared: SharedAlgorithms): string {
   const shapeB = topReuse?.kind === 'B';
   const hasHeadB = !!(shapeB && topReuse.kind === 'B' && topReuse.hasHead);
   const relexFamily = `\n// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.relexFamily(ir)}\n`;
-  const editBody = goEditBody;
-  const freshMeta = 'scanMeta(d.text)';
+  const editBody = goEditBody('\t\t\td.root = -1', true);
   const parseFreshRetry = `\td.root = p.parse(d.text, toksFromMeta(d.text, d.toks))
-\tif d.root < 0 { d.toks = ${freshMeta}; d.root = p.parse(d.text, toksFromMeta(d.text, d.toks)) }`;
+\tif d.root < 0 {
+${goRescan('\t\t', 'd.root = p.parse(d.text, toksFromMeta(d.text, d.toks))')}
+\t}`;
   const reuseFns = topReuse ? `
 func (p *engine) countLive(id int32) int {
 	if id < 0 { return 0 }
@@ -1579,6 +1669,10 @@ type Align struct {
 	Reused   int   \`json:"reused"\`
 	StreamEq *bool \`json:"streamEq,omitempty"\`
 	TreeEq   *bool \`json:"treeEq,omitempty"\`
+	// The Doc's totals since it was made: fresh lexes that checked a relex (RESCAN in Edit), and
+	// those that replaced the relexed stream (a relex defect repaired).
+	RescanChecks  int \`json:"rescanChecks"\`
+	RescanRepairs int \`json:"rescanRepairs"\`
 }
 ${relexFamily}
 func computeAlignCore(oldText string, oldToks []alignMeta, newText string, newToks []alignMeta) (oldN, newN, prefix, suffix int) {
@@ -1607,9 +1701,10 @@ func toksFromMeta(text string, meta []alignMeta) []Tok {
 	}
 	return t
 }
-${treeEqFn}${reuseFns}// A Doc owns its tree: its engine (e) keeps the arena, parse stream and reuse metadata across
+${treeEqFn}${reuseFns}${goLexFns}
+// A Doc owns its tree: its engine (e) keeps the arena, parse stream and reuse metadata across
 // edits, and b (the caller's CstBuilder under NewDocWith) is pointed at that tree after each call.
-type Doc struct { text string; root int32; toks []alignMeta; align *Align; validate bool; b *CstBuilder; e engine${topReuse ? '; entries []EntryMeta' : ''} }
+type Doc struct { text string; root int32; toks []alignMeta; align *Align; validate bool; rescanChecks, rescanRepairs int; b *CstBuilder; e engine${topReuse ? '; entries []EntryMeta' : ''} }
 func (d *Doc) publish() { d.b.Nodes, d.b.Kids, d.b.Toks = d.e.nodes, d.e.kids, d.e.toks }
 func NewDoc(src string) *Doc { return newDocCst(src, &CstBuilder{}) }
 func newDocCst(src string, b *CstBuilder) *Doc {
@@ -1638,29 +1733,10 @@ func (d *Doc) Edit(edits []Edit) (ret int32) {
 	p := &d.e
 	defer d.publish()
 	oldText, oldToks := d.text, d.toks
-	relexed := 0
-	defer func() {
-		if rec := recover(); rec != nil {
-			d.text = applyEdits(oldText, edits)
-			func() {
-				defer func() {
-					if recover() != nil {
-						d.toks = nil
-						d.root = -1
-						d.align = &Align{OldN: len(oldToks), NewN: 0, Prefix: 0, Suffix: 0, Relexed: 0, Reused: 0}
-					}
-				}()
-				d.toks = ${freshMeta}
-				d.root = p.parse(d.text, toksFromMeta(d.text, d.toks))
-				d.align = &Align{OldN: len(oldToks), NewN: len(d.toks), Prefix: 0, Suffix: 0, Relexed: len(d.toks), Reused: 0}
-			}()
-			ret = d.root
-		}
-	}()
 ${editBody}
 	oldN, newN, prefix, suffix := computeAlignCore(oldText, oldToks, d.text, d.toks)
 ${editParse}
-	a := &Align{OldN: oldN, NewN: newN, Prefix: prefix, Suffix: suffix, Relexed: relexed, Reused: reused}
+	a := &Align{OldN: oldN, NewN: newN, Prefix: prefix, Suffix: suffix, Relexed: relexed, Reused: reused, RescanChecks: d.rescanChecks, RescanRepairs: d.rescanRepairs}
 	if d.validate {
 		func() { defer func() { recover() }(); v := checkStreamEq(d.text, d.toks); a.StreamEq = &v }()
 		func() { defer func() { recover() }(); t := p.checkTreeEq(d.text, d.root); a.TreeEq = &t }()
@@ -1924,7 +2000,7 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 }
 `).join('');
   const pushLeafW = `func (p *${recv}) pushLeafW(ttId uint16, tokIdx, off, end uint32) {
-\t_ = p.b.Leaf(&p.scratch, ttId, tokIdx, off, end)
+\tif !p.drops[uint8(ttId)] { _ = p.b.Leaf(&p.scratch, ttId, tokIdx, off, end) }
 }`;
   const finishW = `func (p *${recv}) finishW(ruleId uint16, sb, fallbackOff, tokStart int) spanned {
 \th, off, present := p.b.Finish(&p.scratch, sb, ruleId, uint32(fallbackOff), uint32(tokStart), uint32(p.pos), p.toks)
@@ -1942,6 +2018,7 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 \ttail bool  // whether the node the last nud_ call returned closes the access tail
 \tsrc string
 \tb Builder
+\tdrops [256]bool // the leaf types b never keeps (dropsOf): such a leaf is not offered
 \tscratch []int32${entriesField}`;
   return `type ${recv} struct {
 ${structFields}
@@ -1963,7 +2040,7 @@ func (p *${recv}) matchLitW(lid uint16) bool {
 \tp.peekEnd = i + 1
 \tif i >= len(p.toks) || p.toks[i].Lid != lid { return false }
 \tt := &p.toks[i]
-\tp.b.Leaf(&p.scratch, litTt(lid), uint32(i), t.Off, t.End)
+\tif tt := litTt(lid); !p.drops[uint8(tt)] { p.b.Leaf(&p.scratch, tt, uint32(i), t.Off, t.End) }
 \tp.pos = i + 1
 \treturn true
 }
@@ -1972,7 +2049,7 @@ func (p *${recv}) matchTokW(kid uint16) bool {
 \tp.peekEnd = i + 1
 \tif i >= len(p.toks) || p.toks[i].Kid != kid { return false }
 \tt := &p.toks[i]
-\tp.b.Leaf(&p.scratch, kid, uint32(i), t.Off, t.End)
+\tif !p.drops[uint8(kid)] { p.b.Leaf(&p.scratch, kid, uint32(i), t.Off, t.End) }
 \tp.pos = i + 1
 \treturn true
 }
@@ -1997,6 +2074,28 @@ func (p *${recv}) starInW(k int, once func() bool) bool {
 	}
 	return true
 }
+// A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo. Kept out of
+// line (go:noinline), as the marked forms already are by Go's inline budget: inlined, these small
+// helpers and their closures grew the frames of the large rule functions, and every call of those
+// paid for it on paths that never run the helper (dense-semi: parseStmtW / parseDeclW +7.5
+// instructions per call, Go builder Ir +5.3%).
+//go:noinline
+func (p *${recv}) starCW(once func() bool) bool {
+\tfor once() {}
+\treturn true
+}
+//go:noinline
+func (p *${recv}) starInCW(k int, once func() bool) bool {
+\tfor p.ahead(k, true) && once() {}
+\treturn true
+}
+//go:noinline
+func (p *${recv}) optCW(body func() bool) bool { body(); return true }
+//go:noinline
+func (p *${recv}) sepByCW(elem func() bool, delim uint16) bool {
+\tif elem() { for p.matchLitW(delim) && elem() {} }
+\treturn true
+}
 func (p *${recv}) optW(body func() bool) bool {
 \tsp := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \tif !body() { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore()} }
@@ -2006,8 +2105,7 @@ func (p *${recv}) sepByW(elem func() bool, delim uint16) bool {
 \tsp0 := p.pos; sb0 := len(p.scratch); ${arenaCkpt().replace('nb, kb', 'nb0, kb0')}
 \tif !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; ${arenaRestore().replace('nb', 'nb0').replace('kb', 'kb0')}; return true }
 \tfor {
-\t\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt()}
-\t\tif !p.matchLitW(delim) { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore()}; break }
+\t\tif !p.matchLitW(delim) { break } // a failed delimiter match changes nothing: no mark before it
 \t\tsp2 := p.pos; sb2 := len(p.scratch); ${arenaCkpt().replace('nb, kb', 'nb2, kb2')}
 \t\tif !elem() { p.back(sp2); p.scratch = p.scratch[:sb2]; ${arenaRestore().replace('nb', 'nb2').replace('kb', 'kb2')}; break }
 \t}
@@ -2033,8 +2131,6 @@ function emitDocWithGo(
   hasHeadB: boolean,
   topReuse: boolean,
   initToks: string,
-  freshMeta: string,
-  editBody: string,
 ): string {
   const entry = ir.entry;
   const segsField = shapeB ? '\n\tsegs []Seg' : '';
@@ -2091,7 +2187,7 @@ func (b *CstBuilder) Shift(h int32, byteDelta, tokDelta int) int32 {
 
   const parseWithMetaW = `
 ${entryMetaType}func parseWithMetaW(text string, meta []alignMeta, b Builder) (h int32, entries []EntryMeta, entryHs []int32, ok bool) {
-	p := &parserW{cursor: cursor{toks: toksFromMeta(text, meta)}, src: text, b: b, scratch: nil}
+	p := &parserW{cursor: cursor{toks: toksFromMeta(text, meta)}, src: text, b: b, drops: dropsOf(b), scratch: nil}
 	fr, pok := p.parse${entry}W()
 	recordToks(b, p.toks)
 	if !pok || p.pos != len(p.toks) {
@@ -2128,7 +2224,7 @@ func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, 
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
 	rel, minRel := tailRel(oldN, suffixMeta)
-	p := &parserW{cursor: cursor{toks: toksFromMeta(newText, newMeta)}, src: newText, b: b, scratch: nil}
+	p := &parserW{cursor: cursor{toks: toksFromMeta(newText, newMeta)}, src: newText, b: b, drops: dropsOf(b), scratch: nil}
 	if prefixLen > 0 {
 		p.pos = prefixMeta[prefixLen-1].TokEnd
 	} else {
@@ -2269,7 +2365,7 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 		}
 	}
 	rel, minRel := tailRel(oldN, suffixMeta)
-	p := &parserW{cursor: cursor{toks: toksFromMeta(newText, newMeta)}, src: newText, b: b, scratch: nil}
+	p := &parserW{cursor: cursor{toks: toksFromMeta(newText, newMeta)}, src: newText, b: b, drops: dropsOf(b), scratch: nil}
 	if prefixLen > 0 {
 		p.pos = prefixMeta[prefixLen-1].TokEnd
 	} else {
@@ -2432,8 +2528,7 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 \t\t} else {
 \t\t\th, ne, nhs, ok := parseWithMetaW(d.text, d.toks, d.b)
 \t\t\tif !ok {
-\t\t\t\td.toks = ${freshMeta}
-\t\t\t\th, ne, nhs, ok = parseWithMetaW(d.text, d.toks, d.b)
+${goRescan('\t\t\t\t', 'h, ne, nhs, ok = parseWithMetaW(d.text, d.toks, d.b)')}
 \t\t\t}
 \t\t\tif ok {
 \t\t\t\td.root = h
@@ -2449,8 +2544,7 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 \t} else {
 \t\th, ne, nhs, ok := parseWithMetaW(d.text, d.toks, d.b)
 \t\tif !ok {
-\t\t\td.toks = ${freshMeta}
-\t\t\th, ne, nhs, ok = parseWithMetaW(d.text, d.toks, d.b)
+${goRescan('\t\t\t', 'h, ne, nhs, ok = parseWithMetaW(d.text, d.toks, d.b)')}
 \t\t}
 \t\tif ok {
 \t\t\td.root = h
@@ -2479,8 +2573,7 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 \t\t} else {
 \t\t\th, ne, nhs, ok := parseWithMetaW(d.text, d.toks, d.b)
 \t\t\tif !ok {
-\t\t\t\td.toks = ${freshMeta}
-\t\t\t\th, ne, nhs, ok = parseWithMetaW(d.text, d.toks, d.b)
+${goRescan('\t\t\t\t', 'h, ne, nhs, ok = parseWithMetaW(d.text, d.toks, d.b)')}
 \t\t\t}
 \t\t\tif ok {
 \t\t\t\td.root = h
@@ -2498,8 +2591,7 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 \t} else {
 \t\th, ne, nhs, ok := parseWithMetaW(d.text, d.toks, d.b)
 \t\tif !ok {
-\t\t\td.toks = ${freshMeta}
-\t\t\th, ne, nhs, ok = parseWithMetaW(d.text, d.toks, d.b)
+${goRescan('\t\t\t', 'h, ne, nhs, ok = parseWithMetaW(d.text, d.toks, d.b)')}
 \t\t}
 \t\tif ok {
 \t\t\td.root = h
@@ -2517,8 +2609,7 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
     : `\treused := 0
 \th, _, _, ok := parseWithMetaW(d.text, d.toks, d.b)
 \tif !ok {
-\t\td.toks = ${freshMeta}
-\t\th, _, _, ok = parseWithMetaW(d.text, d.toks, d.b)
+${goRescan('\t\t', 'h, _, _, ok = parseWithMetaW(d.text, d.toks, d.b)')}
 \t}
 \tif ok {
 \t\td.root = h
@@ -2526,27 +2617,11 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 \t\td.root = -1
 \t}`;
 
-  const recoverAssign = topReuse
-    ? (shapeB
-      ? `\t\t\t\td.root = h
-\t\t\t\td.entries = ne
-\t\t\t\td.entryHs = nhs
-\t\t\t\td.segs = segsFromEntries(ne)`
-      : `\t\t\t\td.root = h
-\t\t\t\td.entries = ne
-\t\t\t\td.entryHs = nhs`)
-    : `\t\t\t\td.root = h`;
-
-  const recoverClear = topReuse
-    ? (shapeB
-      ? `\t\t\t\td.root = -1
-\t\t\t\td.entries = nil
-\t\t\t\td.entryHs = nil
-\t\t\t\td.segs = nil`
-      : `\t\t\t\td.root = -1
-\t\t\t\td.entries = nil
-\t\t\t\td.entryHs = nil`)
-    : `\t\t\t\td.root = -1`;
+  // A text that does not lex: no tree, no entries (the next edit parses afresh).
+  const lexClear = (topReuse
+    ? ['d.root = -1', 'd.entries = nil', 'd.entryHs = nil', ...(shapeB ? ['d.segs = nil'] : [])]
+    : ['d.root = -1']).map((l) => `\t\t\t${l}`).join('\n');
+  const editBody = goEditBody(lexClear, false);
 
   const initAssign = topReuse
     ? (shapeB
@@ -2576,6 +2651,7 @@ type DocWith struct {
 	toks     []alignMeta
 	align    *Align
 	validate bool
+	rescanChecks, rescanRepairs int
 	b        Builder${entriesFields}
 }
 
@@ -2607,34 +2683,10 @@ func (d *DocWith) Align() *Align      { return d.align }
 
 func (d *DocWith) Edit(edits []Edit) (ret int32) {
 	oldText, oldToks := d.text, d.toks
-	relexed := 0
-	defer func() {
-		if rec := recover(); rec != nil {
-			d.text = applyEdits(oldText, edits)
-			func() {
-				defer func() {
-					if recover() != nil {
-${recoverClear}
-						d.toks = nil
-						d.align = &Align{OldN: len(oldToks), NewN: 0, Prefix: 0, Suffix: 0, Relexed: 0, Reused: 0}
-					}
-				}()
-				d.toks = ${freshMeta}
-				${topReuse ? 'h, ne, nhs, ok' : 'h, _, _, ok'} := parseWithMetaW(d.text, d.toks, d.b)
-				if ok {
-${recoverAssign}
-				} else {
-${recoverClear}
-				}
-				d.align = &Align{OldN: len(oldToks), NewN: len(d.toks), Prefix: 0, Suffix: 0, Relexed: len(d.toks), Reused: 0}
-			}()
-			ret = d.root
-		}
-	}()
 ${editBody}
 	oldN, newN, prefix, suffix := computeAlignCore(oldText, oldToks, d.text, d.toks)
 ${editReuse}
-	a := &Align{OldN: oldN, NewN: newN, Prefix: prefix, Suffix: suffix, Relexed: relexed, Reused: reused}
+	a := &Align{OldN: oldN, NewN: newN, Prefix: prefix, Suffix: suffix, Relexed: relexed, Reused: reused, RescanChecks: d.rescanChecks, RescanRepairs: d.rescanRepairs}
 	if d.validate {
 		func() {
 			defer func() { recover() }()
@@ -2674,12 +2726,9 @@ function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): stri
     })
     .filter((x): x is number => x !== null);
   const punctId = TT_SKIP_PUNCT;
-  const slimDropCases = dropTtIds.length
-    ? dropTtIds.map((id) => `${id}`).join(', ')
-    : '/* none */';
-  const slimDropBody = dropTtIds.length
-    ? `\tswitch ttId {\n\tcase ${slimDropCases}:\n\t\treturn false\n\t}\n`
-    : '';
+  // The leaf types SlimBuilder never keeps: its Leaf's switch and its drop table (dropsLeaves).
+  const slimDropIdList = [...new Set([...dropTtIds, punctId])];
+  const slimDropIds = slimDropIdList.join(', ');
   // Selection: *CstBuilder parses with the direct engine (parseWithCst); other Builders use the
   // builder engine parserW. Why two engines: measured 2026-11-22 on 7fe75f9 (measure-profile,
   // Go Callgrind instructions per reuse parse, checker.ts / gen-tm.ts / typescript.d.ts /
@@ -2698,11 +2747,9 @@ function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): stri
   const shapeB = topReuse?.kind === 'B';
   const hasHeadB = !!(shapeB && topReuse && topReuse.kind === 'B' && topReuse.hasHead);
   const initToks = 'scanMeta(src)';
-  const freshMeta = 'scanMeta(d.text)';
-  const editBody = goEditBody;
   const entryCst = ir.entry;
   const entryRid = ruleIdOf(ar, entryCst);
-  const docWithBlock = emitDocWithGo(ir, entryRid, shapeA, shapeB, hasHeadB, !!topReuse, initToks, freshMeta, editBody);
+  const docWithBlock = emitDocWithGo(ir, entryRid, shapeA, shapeB, hasHeadB, !!topReuse, initToks);
   // The span of a built-in builder's node (an arena of Nodes) from its first and last children,
   // read in place as SpanOf of each would read it; only an operator leaf at a '>' (leafEnd) needs a call.
   const gtLeaf = ids.gtComps.length ? `; if tt == ${ttIdOf(ar, '$operator')} && t.Lid == ${lidOf(ids, '>')} { end = leafEnd(toks, ti, tt) }` : '';
@@ -2852,24 +2899,41 @@ func (b *SlimBuilder) Checkpoint() (nb, kb int) { return len(b.Nodes), len(b.Kid
 func (b *SlimBuilder) Restore(nb, kb int) { b.Nodes = b.Nodes[:nb]; b.Kids = b.Kids[:kb] }
 func (b *SlimBuilder) Leaf(scratch *[]int32, ttId uint16, tokIdx, off, end uint32) bool {
 \t_ = off; _ = end
-${slimDropBody}\tif ttId == ${punctId} { return false }
+\tswitch ttId { case ${slimDropIds}: return false }
 \t*scratch = append(*scratch, encodeLeaf(tokIdx, uint8(ttId)))
 \treturn true
 }
-// Finish is builderFinishDefault with the spans read in place and Node's collapse inline.
+// dropsLeaves: the leaf types a SlimBuilder never keeps (punctuation, keywords, operators: the
+// ids its Leaf refuses), as a table (no package-level state: built per parse).
+func (b *SlimBuilder) dropsLeaves() (t [256]bool) {
+\t${slimDropIdList.map((id) => `t[${id}]`).join(', ')} = ${slimDropIdList.map(() => 'true').join(', ')}
+\treturn
+}
+// leafDropper: a built-in builder that declares the leaf types it never keeps, read once per parse
+// (dropsOf), so that the builder engine does not offer them: a Leaf call through the Builder
+// interface is a dynamic call in Go (Rust's builder engine is monomorphised and inlines the test).
+// Any other Builder is offered every leaf.
+type leafDropper interface{ dropsLeaves() [256]bool }
+func dropsOf(b Builder) [256]bool {
+\tif d, ok := b.(leafDropper); ok { return d.dropsLeaves() }
+\treturn [256]bool{}
+}
+// Finish is builderFinishDefault with the spans read in place and Node's collapse inline, decided
+// before the spans are read.
 func (b *SlimBuilder) Finish(scratch *[]int32, sb int, ruleId uint16, fallbackOff, tokStart, tokEnd uint32, toks []Tok) (int32, uint32, bool) {
 \ts := *scratch
 \tnn := len(s)
-\toff, end := fallbackOff, fallbackOff
-${kidsSpanGo}\tswitch nn - sb {
+\tswitch nn - sb {
 \tcase 0:
 \t\t// The root keeps its node with no child: an accepted parse always has a root (ParseWith).
-\t\tif ruleId != ${entryRid} { return 0, off, false }
+\t\tif ruleId != ${entryRid} { return 0, fallbackOff, false }
 \tcase 1:
+\t\t// Collapsed to its one child: only the child's start is read (no end, no node).
 \t\t*scratch = s[:sb]
-\t\treturn s[sb], off, true
+\t\tif h := s[sb]; h < 0 { ti, _ := decodeLeaf(h); return h, toks[ti].Off, true } else { return h, b.Nodes[h].Offset, true }
 \t}
-\tkidStart := len(b.Kids)
+\toff, end := fallbackOff, fallbackOff
+${kidsSpanGo}\tkidStart := len(b.Kids)
 \tb.Kids = append(b.Kids, s[sb:nn]...)
 \t*scratch = s[:sb]
 \tb.Nodes = append(b.Nodes, Node{RuleId: ruleId, KidStart: uint32(kidStart), KidCount: uint32(nn - sb), Offset: off, End: end, TokStart: tokStart, TokEnd: tokEnd, Ext: 0})
@@ -2928,7 +2992,7 @@ func parseWithW(src string, b Builder) (int32, bool) {
 \tif o, is := b.(WorkspaceOwner); is { w = o.Workspace() } else { w = &Workspace{} }
 \tb.Restore(0, 0)
 \tp := &w.w
-\t*p = parserW{cursor: cursor{toks: lexInto(src, toksOf(b), &w.lex)}, src: src, b: b, scratch: p.scratch[:0]${reuse ? ', entries: p.entries[:0], entryHs: p.entryHs[:0]' : ''}}
+\t*p = parserW{cursor: cursor{toks: lexInto(src, toksOf(b), &w.lex)}, src: src, b: b, drops: dropsOf(b), scratch: p.scratch[:0]${reuse ? ', entries: p.entries[:0], entryHs: p.entryHs[:0]' : ''}}
 \tfr, ok := p.parse${ir.entry}W()
 \trecordToks(b, p.toks)
 \tok = ok && p.pos == len(p.toks)
@@ -3364,6 +3428,28 @@ func (p *engine) starIn(k int, once func() bool) bool {
 	for p.ahead(k, true) { m := p.mark(); if !once() { p.reset(m); break } }
 	return true
 }
+// A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo. Kept out of
+// line (go:noinline), as the marked forms already are by Go's inline budget: inlined, these small
+// helpers and their closures grew the frames of the large rule functions, and every call of those
+// paid for it on paths that never run the helper (dense-semi: parseStmtW / parseDeclW +7.5
+// instructions per call, Go builder Ir +5.3%).
+//go:noinline
+func (p *engine) starC(once func() bool) bool {
+\tfor once() {}
+\treturn true
+}
+//go:noinline
+func (p *engine) starInC(k int, once func() bool) bool {
+\tfor p.ahead(k, true) && once() {}
+\treturn true
+}
+//go:noinline
+func (p *engine) optC(body func() bool) bool { body(); return true }
+//go:noinline
+func (p *engine) sepByC(elem func() bool, delim uint16) bool {
+\tif elem() { for p.matchLit(delim) && elem() {} }
+\treturn true
+}
 func (p *engine) opt(body func() bool) bool {
 \tm := p.mark(); if !body() { p.reset(m) }; return true
 }
@@ -3371,8 +3457,7 @@ func (p *engine) sepBy(elem func() bool, delimLid uint16) bool {
 \tm0 := p.mark()
 \tif !elem() { p.reset(m0); return true }
 \tfor {
-\t\tm := p.mark()
-\t\tif !p.matchLit(delimLid) { p.reset(m); break }
+\t\tif !p.matchLit(delimLid) { break } // a failed delimiter match changes nothing: no mark before it
 \t\tm2 := p.mark()
 \t\tif !elem() { p.reset(m2); break } // trailing delim OK — keep delim
 \t}

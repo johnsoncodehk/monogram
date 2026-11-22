@@ -115,9 +115,9 @@ type StepOp =
   | { t: 'tok'; name: string; hole?: string }                   // match a token kind; a template kind (TplCfg) carries the rule that parses its `${…}` holes and also matches an interpolated template
   | { t: 'rule'; name: string }                                 // call a rule, append its node
   | { t: 'ruleBp'; name: string; bp: number }                   // call a Pratt rule at a given binding power (chain-rhs led trailing operand)
-  | { t: 'star'; step: Step; guard?: number; share?: number }                   // repeat inner 0+
-  | { t: 'opt'; steps: Step[]; guard?: number; share?: number }                 // optional sub-sequence
-  | { t: 'sep'; elem: Step; delim: string; guard?: number; share?: number }     // elem (delim elem)*
+  | { t: 'star'; step: Step; guard?: number; clean?: true; share?: number }                   // repeat inner 0+
+  | { t: 'opt'; steps: Step[]; guard?: number; clean?: true; share?: number }                 // optional sub-sequence
+  | { t: 'sep'; elem: Step; delim: string; guard?: number; clean?: true; share?: number }     // elem (delim elem)*
   | { t: 'altlit'; opts: Lit[] }                                // inline alternation of literals (fast path)
   | { t: 'alt'; branches: Step[][]; branchNames?: string[]; firsts?: FirstSig[]; predictive?: boolean; share?: number }            // inline alternation of sub-sequences (backtracking unless predictive)
   | { t: 'look'; id: number; is: boolean }                     // zero-width: whether ParserIR.lookaheads[id] matches here (is) or does not (!is)
@@ -880,12 +880,32 @@ function buildIR(grammar: CstGrammar): ParserIR {
     const f = seqFirst(body);
     return f === null ? undefined : tokenSetOf(f);
   };
+  // A star / opt / sep body that FAILS CLEAN (`clean`): a failed attempt of it leaves the parser's
+  // state (position, children, builder) as it found it, so the attempt takes no mark and a failure
+  // undoes nothing. Each piece undoes its own failure: a literal or token test changes nothing until
+  // it matches, a zero-width test never moves, an rd rule's function undoes itself on every form's
+  // failure (ruleShell: the checkpoint at entry), an inline choice's branches each run in a BRANCH
+  // frame, and a star / opt / sep never fails. A step list fails clean when everything before its
+  // last step is a zero-width test and its last step fails clean. Not clean: a Pratt rule's call (it
+  // can fail after its NUD matched: an operator whose operand must be a target), and any list whose
+  // later step can fail after an earlier one consumed.
+  const zeroWidth = (s: Step): boolean => s.t === 'ahead' || s.t === 'aheadCtx' || s.t === 'sameLine' || s.t === 'look';
+  const rdRules = new Set(rules.filter((r) => r.kind === 'rd').map((r) => r.name));
+  const failsClean = (s: Step): boolean => {
+    switch (s.t) {
+      case 'lit': case 'tok': case 'altlit': case 'alt': case 'star': case 'opt': case 'sep': return true;
+      case 'rule': return rdRules.has(s.name);
+      case 'seq': case 'suppress': case 'ctx': return listFailsClean(s.steps);
+      default: return zeroWidth(s);
+    }
+  };
+  const listFailsClean = (steps: Step[]): boolean => steps.length > 0 && steps.slice(0, -1).every(zeroWidth) && failsClean(steps[steps.length - 1]!);
   const annotateSteps = (steps: Step[]): void => {
     for (const s of steps) {
-      if (s.t === 'star') { annotateSteps([s.step]); const g = bodyGuard([s.step]); if (g !== undefined) s.guard = g; }
-      else if (s.t === 'opt') { annotateSteps(s.steps); const g = bodyGuard(s.steps); if (g !== undefined) s.guard = g; }
+      if (s.t === 'star') { annotateSteps([s.step]); const g = bodyGuard([s.step]); if (g !== undefined) s.guard = g; if (failsClean(s.step)) s.clean = true; }
+      else if (s.t === 'opt') { annotateSteps(s.steps); const g = bodyGuard(s.steps); if (g !== undefined) s.guard = g; if (listFailsClean(s.steps)) s.clean = true; }
       else if (s.t === 'seq' || s.t === 'suppress' || s.t === 'ctx') annotateSteps(s.steps);
-      else if (s.t === 'sep') { annotateSteps([s.elem]); const g = bodyGuard([s.elem]); if (g !== undefined) s.guard = g; }
+      else if (s.t === 'sep') { annotateSteps([s.elem]); const g = bodyGuard([s.elem]); if (g !== undefined) s.guard = g; if (failsClean(s.elem)) s.clean = true; }
       else if (s.t === 'alt') {
         s.firsts = s.branches.map((b) => seqFirst(b));
         s.predictive = allDisjoint(s.firsts);
@@ -978,10 +998,11 @@ export type StepLowering = {
   rule(name: string): string;
   ruleBp(name: string, bp: number): string;      // only a Pratt rule is called at a binding power
   // body: the inner step, as a boolean expression; guard: the body is attempted only when the next
-  // token is in ParserIR.tokenSets[guard] (null: always attempted)
-  star(body: string, guard: number | null): string;
-  opt(body: string, guard: number | null): string;
-  sep(elem: string, delim: string, guard: number | null): string;   // guard: of the first element
+  // token is in ParserIR.tokenSets[guard] (null: always attempted); clean: the body fails clean
+  // (Step.clean), so an attempt takes no mark and a failed one undoes nothing
+  star(body: string, guard: number | null, clean: boolean): string;
+  opt(body: string, guard: number | null, clean: boolean): string;
+  sep(elem: string, delim: string, guard: number | null, clean: boolean): string;   // guard: of the first element
   altlit(values: string[]): string;
   look(id: number, is: boolean): string;         // a lookahead runs in recognize form whatever the form around it
   ahead(set: number, is: boolean): string;
@@ -1009,9 +1030,9 @@ export function stepBody(s: Step, L: StepLowering): string {
     case 'tok': return s.hole !== undefined ? L.template(s.name, s.hole) : L.tok(s.name);
     case 'rule': return L.rule(s.name);
     case 'ruleBp': return L.ruleBp(s.name, s.bp);
-    case 'star': return L.star(stepExpr(s.step, L.inner()), s.guard ?? null);
-    case 'opt': { const I = L.inner(); return L.opt(s.steps.map((x) => stepExpr(x, I)).join(' && '), s.guard ?? null); }
-    case 'sep': return L.sep(stepExpr(s.elem, L.inner()), s.delim, s.guard ?? null);
+    case 'star': return L.star(stepExpr(s.step, L.inner()), s.guard ?? null, s.clean === true);
+    case 'opt': { const I = L.inner(); return L.opt(s.steps.map((x) => stepExpr(x, I)).join(' && '), s.guard ?? null, s.clean === true); }
+    case 'sep': return L.sep(stepExpr(s.elem, L.inner()), s.delim, s.guard ?? null, s.clean === true);
     case 'altlit': return L.altlit(s.opts.map((o) => o.value));
     case 'alt': return L.inPlace('alt', stepStmts(s, L.inner()));
     case 'look': return L.look(s.id, s.is);

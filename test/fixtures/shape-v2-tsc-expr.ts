@@ -1,9 +1,9 @@
 // ShapeSpec v2: a subset of tsc's AST (typescript 5.9, as test/shape-oracle-tsc.ts normalises
 // it) from typescript.ts, in the core calculus only (src/shape2-schema.ts): the expressions
-// below, the root, and the statements (as in shape-v2-estree-expr.ts). Checked against tsc's
-// parser by test/shape2-oracle.ts. Not total: an arm outside the subset (`for`, `switch`,
-// declarations, binding patterns, functions, classes, arrows, object / array literals,
-// templates, type syntax) is unmapped, and a unit that reaches one is reported as outside the
+// below, the root, the statements, functions, arrows and their parameters (as in
+// shape-v2-estree-expr.ts). Checked against tsc's parser by test/shape2-oracle.ts. Not total: an
+// arm outside the subset (`switch`, other declarations, binding patterns, methods, classes,
+// object / array literals, templates, type syntax) is unmapped, and a unit that reaches one is reported as outside the
 // subset, not compared.
 //
 // Positions: a node's start is tsc's `getStart()` (the first token); tsc's `pos` (leading trivia
@@ -42,9 +42,10 @@ const comma: Term = commaOf('first', 'comma', 'rest');
 /** A statement's optional label. */
 const label: Term = iff(present('label'), idOf('label'), absent);
 /** A declaration list spanning its keyword(s) to its last binding; `flags` from the keyword. */
-// tsc's parser takes an empty list (`var;`: its checker reports it), which then ends at its keyword.
-const declarationList = (from: string, flags: Term): Term =>
-  iff(present('binding'), node('VariableDeclarationList', { declarations: child('binding'), flags }, { from, to: 'binding' }), node('VariableDeclarationList', { declarations: child('binding'), flags }, { from, to: from === 'awaitKeyword' ? 'usingKeyword' : from }));
+const declarationList = (from: string, flags: Term): Term => {
+  const declarations = list(child('binding'), spread(child('bindingRest')));
+  return iff(present('bindingRest'), node('VariableDeclarationList', { declarations, flags }, { from, to: 'bindingRest' }), node('VariableDeclarationList', { declarations, flags }, { from, to: 'binding' }));
+};
 
 // ── `for` (ECMA-262 14.7.4, 14.7.5) ──
 // The grammar factors a `for` statement's `( … )` into ForHead / ForAwaitHead, whose node is not
@@ -117,9 +118,58 @@ const STATEMENTS: Record<string, Term> = {
   labelled: node('LabeledStatement', { label: idOf('label'), statement: child('body') }),
   empty: node('EmptyStatement'),
   debugger_: node('DebuggerStatement'),
-  with_: node('WithStatement', { expression: child('object'), statement: child('body') }),
+  with_: node('WithStatement', { expression: commaOf('object'), statement: child('body') }),
   for_: branch('alt', { paren: forStatement(absent), await_: forStatement(token('AwaitKeyword', 'awaitKeyword')) }),
   decl: child('decl'),
+};
+
+// ── Functions ──
+// Four arms per form (plain, generator, async, async generator). tsc's `modifiers` holds the
+// `async` keyword (and, on a declaration, `export` / `declare` / `default`: those come with the
+// import / export slice); `asteriskToken` the generator's `*`.
+type FnArm = 'function_' | 'generator' | 'asyncFunction' | 'asyncGenerator';
+const FUNCTIONS: FnArm[] = ['function_', 'generator', 'asyncFunction', 'asyncGenerator'];
+const asyncModifier: Term = list(token('AsyncKeyword', 'asyncKeyword'));
+/** A return type: a type, or a type predicate `x is T` (not mapped yet: types are not mapped). */
+const returnType: Term = branch('returnType', { type: child('type') });
+const fnFields = (a: FnArm, name: Term, body: Term): Record<string, Term> => ({
+  ...(a === 'asyncFunction' || a === 'asyncGenerator' ? { modifiers: asyncModifier } : {}),
+  ...(a === 'generator' || a === 'asyncGenerator' ? { asteriskToken: token('AsteriskToken', 'asterisk') } : {}),
+  name,
+  typeParameters: child('typeParameters'), parameters: child('parameter'), type: returnType, body,
+});
+// A declaration's body is a block, or none (an overload or an ambient signature).
+const FUNCTION_DECLARATIONS = Object.fromEntries(FUNCTIONS.map((a) => [a, node('FunctionDeclaration', fnFields(a, idOf('name'), branch('body', { block: child('block'), semi: absent })))]));
+const FUNCTION_EXPRESSIONS = Object.fromEntries(FUNCTIONS.map((a) => [a, node('FunctionExpression', fnFields(a, iff(present('name'), idOf('name'), absent), child('body')))]));
+/** An arrow: a parenthesised parameter list (`parameter` repeats) or one identifier (a Parameter
+ * over it); a block or an expression body (ConciseBody). */
+const arrow = (isAsync: boolean, parameters: Term, typed: boolean): Term => node('ArrowFunction', {
+  ...(isAsync ? { modifiers: asyncModifier } : {}),
+  ...(typed ? { typeParameters: child('typeParameters'), parameters, type: returnType } : { parameters }),
+  equalsGreaterThanToken: token('EqualsGreaterThanToken', 'arrow'),
+  body: branch('body', { block: child('block'), expression: child('expr') }),
+});
+const bareParameter: Term = list(node('Parameter', { name: idOf('parameter') }, { from: 'parameter', to: 'parameter' }));
+const ARROWS: Record<string, Term> = {
+  arrow: arrow(false, child('parameter'), true),
+  asyncArrow: arrow(true, child('parameter'), true),
+  arrowIdentifier: arrow(false, bareParameter, false),
+  asyncArrowIdentifier: arrow(true, bareParameter, false),
+};
+/** A parameter: tsc's Parameter; its decorators are `modifiers`. The modifier-word arm
+ * (`public x`) is not mapped yet (classes). Identifier names only: patterns are not mapped yet. */
+const parameter = (rest: boolean): Term => node('Parameter', {
+  modifiers: iff(present('decorator'), child('decorator'), absent),
+  ...(rest ? { dotDotDotToken: token('DotDotDotToken', 'ellipsis') } : {}),
+  name: branch('name', { ident: idOf('ident') }),
+  questionToken: iff(present('question'), token('QuestionToken', 'question'), absent),
+  type: child('type'), initializer: child('value'),
+});
+const PARAM_RULES: Shape2Spec['rules'] = {
+  Param: {
+    thisParameter: node('Parameter', { name: idOf('thisKeyword', c('this')), type: child('type') }),
+    plain: branch('binding', { single: parameter(false), rest: parameter(true) }),
+  },
 };
 
 /** tsc's OptionalChain flag: every link of a chain that holds a `?.` (synthesized `optional`). */
@@ -150,6 +200,8 @@ export const tscExprShape: Shape2Spec = {
         type: child('type'), initializer: child('value'),
       }),
     },
+    ...PARAM_RULES,
+    Decl: FUNCTION_DECLARATIONS,
     CatchParameter: { ident: node('VariableDeclaration', { name: idOf('ident'), type: child('type') }) },
     ...FOR_RULES,
     Expr: {
@@ -204,6 +256,8 @@ export const tscExprShape: Shape2Spec = {
         await: node('AwaitExpression', { expression: child('operand') }),
         yield: node('YieldExpression', { expression: child('operand') }),
       }, node('PrefixUnaryExpression', { operator: kindOf(PREFIX), operand: child('operand') })),
+      ...FUNCTION_EXPRESSIONS,
+      ...ARROWS,
       postfixOp: node('PostfixUnaryExpression', { operand: child('operand'), operator: kindOf(PREFIX) }),
     },
     NewTarget: {

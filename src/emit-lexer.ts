@@ -198,6 +198,10 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   // (0 children text, 1 open tag, 2 close tag) and its open-element count above (step 16).
   // Without `elements` every frame is a template hole and the encoding is the plain count.
   const el = spec.elements ?? undefined;
+  // a lexer that speculating on a type-parameter signature: inside it, an error is the verdict,
+  // never a recovered token (\`specTok\` below)
+  const speculating = !!el?.typeParameters?.signature;
+  const recov = speculating ? '(recovering && specTok < 0)' : 'recovering';
   const lineSensitive = !!indent || !!newline;
   const stateful = !!markup || lineSensitive;
   const windowed = opts.windowed;
@@ -245,7 +249,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
      markup?.unquotedValueToken].filter(Boolean) as string[],
   );
   // Region tokens: lexed only inside their element region, never by the ordinary scan.
-  const elTokenNames = new Set<string>(el ? [el.text, el.closeTag, el.selfClose] : []);
+  const elTokenNames = new Set<string>(el ? [el.text, el.closeTag, el.selfClose, ...el.tagTokens ?? []] : []);
   const lineTokenNames = new Set<string>(
     indent ? [indent.indentToken, indent.dedentToken, indent.newlineToken].filter(Boolean)
            : newline ? [newline.token] : [],
@@ -333,6 +337,11 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   emit(`let lexWindowMore = false;`);
   emit(`let lexSrcBase = 0;`);
   emit(`let lexDiagBase = 0;   // docLex floor for the current window (its own emissions sit above)`);
+  // A type-parameter signature being decided (\`<T>(x: T) => T\`, ElementRegion.typeParameters):
+  // the token index of its tagOpen, -1 when none. Module level, because a lex error ANYWHERE while
+  // it is undecided (lexTplSpan included) is its rewind verdict, in the recovering pass as in the
+  // strict one: the two passes must lex the same stream.
+  if (speculating) emit(`let specTok = -1;`);
   emit(`// ')' pops that found an empty stack, in THIS lexCore call's token indices`);
   emit(`let lexEmptyPops«: number[]» = [];`);
   if (windowed) {
@@ -400,6 +409,11 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     if (!textDecl) throw new Error(`elements.text: no token named '${el.text}'`);
     // The children text run is the text token's own pattern (a run of a character class).
     emit(`const LX_EL_TEXT = new RegExp(${J(`(?:${tokenPatternSource(textDecl)})`)}, 'y');`);
+    (el.tagTokens ?? []).forEach((name, i) => {
+      const d = spec.tokens.find(t => t.name === name);
+      if (!d) throw new Error(`elements.tagTokens: no token named '${name}'`);
+      emit(`const LX_EL_TAG_${i} = new RegExp(${J(`(?:${tokenPatternSource(d)})`)}, 'y');`);
+    });
     const tp = el.typeParameters;
     if (tp?.head) emit(`const LX_TP_HEAD = new RegExp(${J(`(?:${tokenPatternSource({ pattern: tp.head })})`)}, 'y');`);
     if (tp?.signature) {
@@ -488,7 +502,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       emit(`        const m = LX_TPL_ESC.exec(source);`);
       emit(`        if (!m) {`);
       emit(`          if (lexWindowMore) throw LEX_RETRY;`);
-      emit(`          if (recovering) { docLex.push({ offset: pos + lexSrcBase, end: pos + lexSrcBase + 1, kind: 1, ch: '' }); pos += 1; continue; }`);
+      emit(`          if (${recov}) { docLex.push({ offset: pos + lexSrcBase, end: pos + lexSrcBase + 1, kind: 1, ch: '' }); pos += 1; continue; }`);
       emit(`          throw new Error('Invalid escape sequence in template at offset ' + pos);`);
       emit(`        }`);
       emit(`        pos += m[0].length;`);
@@ -502,7 +516,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`    pos++;`);
     emit(`  }`);
     emit(`  if (lexWindowMore) throw LEX_RETRY;`);
-    emit(`  if (recovering) {`);
+    emit(`  if (${recov}) {`);
     emit(`    docLex.push({ offset: tplFrom + lexSrcBase, end: source.length + lexSrcBase, kind: 2, ch: '' });`);
     emit(`    return { endsWithInterp: false, end: source.length };`);
     emit(`  }`);
@@ -585,7 +599,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`  let tagAngle = 0;               // type-argument depth inside the current tag (\`<List<string>>\`)`);
     emit(`  // A type-parameter signature being decided (\`<T>(x: T) => T\`): the group is lexed as code;`);
     emit(`  // the token after its closer keeps it (one of the signature's \`then\`) or rewinds to an element.`);
-    emit(`  let specTok = -1, specVerdict = 0, specClosedAt = -1, specParenBase = 0, specDocLex = 0, specPops = 0;`);
+    emit(`  ${speculating ? 'specTok = -1; let' : 'let specTok = -1,'} specVerdict = 0, specClosedAt = -1, specParenBase = 0, specDocLex = 0, specPops = 0;`);
     emit(`  let lxLookEnd = -1;              // a tagOpen read as a type-parameter head decided by the characters up to here`);
     emit(`  let specStack«: number[]» = [], specParens«: boolean[]» = [];`);
   }
@@ -777,8 +791,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`  }`);
   }
   const CONT = markup ? `{ lxTagTrack(); continue; }` : `continue;`;
-  const speculates = !!el?.typeParameters?.signature;
-  if (speculates) {
+  if (speculating) {
     // a lex error while deciding a type-parameter signature decides it: the head was an element
     emit(`  for (;;) {`);
     emit(`  try {`);
@@ -789,7 +802,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`    // emitted FOR it (the old stream's persisted entry survives via the shift)`);
     emit(resyncRetractLine('    '));
   }
-  if (speculates) {
+  if (speculating) {
     emit(`    if (specTok >= 0 && (specVerdict === 2 || pos >= n)) lxSpecRewind();`);
     emit(`    if (pos >= n) break;`);
   }
@@ -1058,7 +1071,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       const plen = (identPrefixByName.get(m.name) ?? '').length;
       emit(`${i2}if (!lexIdentValid(m[0], ${plen})) {`);
       emit(`${i2}  if (lexWindowMore) throw LEX_RETRY;`);
-      emit(`${i2}  if (!recovering) throw new Error("Invalid identifier escape at offset " + pos + ": '" + m[0] + "'");`);
+      emit(`${i2}  if (!${recov}) throw new Error("Invalid identifier escape at offset " + pos + ": '" + m[0] + "'");`);
       emit(`${i2}  docLex.push({ offset: pos + lexSrcBase, end: pos + lexSrcBase + m[0].length, kind: 3, ch: m[0] });`);
       emit(`${i2}}`);
     }
@@ -1175,7 +1188,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   if (el) {
     // an element entered from code: a tagOpen where an operand may start (the regex-literal
     // position), outside a tag, unless it begins a type-parameter list
-    emit(`    if (${startsWithExpr('source', 'pos', el.tagOpen, 'cc')} && (templateStack.length === 0 || (templateStack[templateStack.length - 1] & 3) !== 2)${speculates ? ' && specTok < 0' : ''} && !prevIsValue() && lxOpensElement(pos)) {`);
+    emit(`    if (${startsWithExpr('source', 'pos', el.tagOpen, 'cc')} && (templateStack.length === 0 || (templateStack[templateStack.length - 1] & 3) !== 2)${speculating ? ' && specTok < 0' : ''} && !prevIsValue() && lxOpensElement(pos)) {`);
     emit(`      templateStack.push(6);`);
     emit(`      tkPush(K_PUNCT, ${puT(el.tagOpen)}, pos, pos + ${el.tagOpen.length});`);
     emit(`      pos += ${el.tagOpen.length};`);
@@ -1287,7 +1300,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`    }`);
   }
   emit(`    if (lexWindowMore) throw LEX_RETRY;`);
-  emit(`    if (recovering) {`);
+  emit(`    if (${recov}) {`);
   emit(`      docLex.push({ offset: pos + srcBase, end: pos + srcBase + 1, kind: 0, ch: source[pos] });`);
   emit(`      tkPush(${st.KIND_NAMED_FALLBACK}, 0, pos, pos + 1);`);
   emit(`      pos += 1;`);
@@ -1295,7 +1308,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   emit(`    }`);
   emit(`    throw new Error("Unexpected character at offset " + pos + ": '" + source[pos] + "'");`);
   emit(`  }`);
-  if (speculates) {
+  if (speculating) {
     emit(`  break;`);
     emit(`  } catch (e) { if (specTok < 0 || e === LEX_RETRY) throw e; specVerdict = 2; }`);
     emit(`  }`);
@@ -1734,6 +1747,11 @@ function emitElementFrame(emit: (s?: string) => void, el: ElementRegion, c: Elem
   emit(`          continue;`);
   emit(`        }`);
   emit(`      } else {`);
+  // a tag's own tokens (outside type arguments): tried before the ordinary scan
+  (el.tagTokens ?? []).forEach((name, i) => {
+    emit(`        if (tagAngle === 0) { LX_EL_TAG_${i}.lastIndex = pos; const gm = LX_EL_TAG_${i}.exec(source);`);
+    emit(`          if (gm !== null && gm[0].length > 0) { const _e = pos + gm[0].length; tkPush(${c.kOf(name)}, 0, pos, _e); pos = _e; continue; } }`);
+  });
   emit(`        if (sub === 1 && tagAngle === 0 && ${c.startsWithExpr('source', 'pos', el.closeMarker + el.tagClose, 'cc')}) {`);
   emit(`          tkPush(${c.kOf(el.selfClose)}, 0, pos, pos + ${LS});`);
   emit(`          pos += ${LS};`);

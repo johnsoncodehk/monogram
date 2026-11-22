@@ -53,6 +53,7 @@
 (number) @number
 (string) @string
 (template_chars) @string
+(jsxstring) @string
 (regex_literal) @string.regexp
 (decorator) @function.macro
 (private_field) @property

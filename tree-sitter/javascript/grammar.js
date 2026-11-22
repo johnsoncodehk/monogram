@@ -61,64 +61,6 @@ module.exports = grammar({
     [$.class_member],
     [$.expr, $.prop, $.export_specifier],
     [$.expr, $.export_specifier],
-    [$._keyword_accessor, $._ident_accessor],
-    [$._keyword_as, $._ident_as],
-    [$._keyword_async, $._ident_async],
-    [$._keyword_await, $._ident_await],
-    [$._keyword_break, $._ident_break],
-    [$._keyword_case, $._ident_case],
-    [$._keyword_catch, $._ident_catch],
-    [$._keyword_class, $._ident_class],
-    [$._keyword_const, $._ident_const],
-    [$._keyword_constructor, $._ident_constructor],
-    [$._keyword_continue, $._ident_continue],
-    [$._keyword_debugger, $._ident_debugger],
-    [$._keyword_default, $._ident_default],
-    [$._keyword_delete, $._ident_delete],
-    [$._keyword_do, $._ident_do],
-    [$._keyword_else, $._ident_else],
-    [$._keyword_export, $._ident_export],
-    [$._keyword_extends, $._ident_extends],
-    [$._keyword_false, $._ident_false],
-    [$._keyword_finally, $._ident_finally],
-    [$._keyword_for, $._ident_for],
-    [$._keyword_from, $._ident_from],
-    [$._keyword_function, $._ident_function],
-    [$._keyword_get, $._ident_get],
-    [$._keyword_if, $._ident_if],
-    [$._keyword_import, $._ident_import],
-    [$._keyword_in, $._ident_in],
-    [$._keyword_instanceof, $._ident_instanceof],
-    [$._keyword_let, $._ident_let],
-    [$._keyword_meta, $._ident_meta],
-    [$._keyword_new, $._ident_new],
-    [$._keyword_null, $._ident_null],
-    [$._keyword_of, $._ident_of],
-    [$._keyword_return, $._ident_return],
-    [$._keyword_set, $._ident_set],
-    [$._keyword_static, $._ident_static],
-    [$._keyword_super, $._ident_super],
-    [$._keyword_switch, $._ident_switch],
-    [$._keyword_target, $._ident_target],
-    [$._keyword_this, $._ident_this],
-    [$._keyword_throw, $._ident_throw],
-    [$._keyword_true, $._ident_true],
-    [$._keyword_try, $._ident_try],
-    [$._keyword_typeof, $._ident_typeof],
-    [$._keyword_undefined, $._ident_undefined],
-    [$._keyword_using, $._ident_using],
-    [$._keyword_var, $._ident_var],
-    [$._keyword_void, $._ident_void],
-    [$._keyword_while, $._ident_while],
-    [$._keyword_with, $._ident_with],
-    [$._keyword_yield, $._ident_yield],
-  ],
-
-  inline: $ => [
-    $._contextual_unreserved,
-    $._contextual_reserved_2,
-    $._contextual_reserved_1,
-    $._contextual_reserved_3,
   ],
 
   rules: {
@@ -141,98 +83,98 @@ module.exports = grammar({
       prec.left(12, seq($.expr, field('operator', choice("+", "-")), $.expr)),
       prec.left(13, seq($.expr, field('operator', choice("*", "/", "%")), $.expr)),
       prec.right(14, seq($.expr, field('operator', "**"), $.expr)),
-      prec.right(15, seq(field('operator', choice("!", "~", "+", "-", $._keyword_typeof, $._keyword_void, $._keyword_delete, $._keyword_await, $._keyword_yield)), $.expr)),
+      prec.right(15, seq(field('operator', choice("!", "~", "+", "-", "typeof", "void", "delete", "await", "yield")), $.expr)),
       prec.right(16, seq(field('operator', choice("++", "--")), $.expr)),
       prec.left(17, seq($.expr, field('operator', choice("++", "--")))),
-      $._keyword_true,
-      $._keyword_false,
-      $._keyword_null,
-      $._keyword_undefined,
-      $._keyword_this,
-      seq($._keyword_super, choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq(".", choice($._contextual_unreserved, $.private_field)), seq("[", $.expr, "]"))),
-      $._contextual_reserved_2,
+      "true",
+      "false",
+      "null",
+      "undefined",
+      "this",
+      seq("super", choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq(".", choice(reserved("unreserved", $.ident), $.private_field)), seq("[", $.expr, "]"))),
+      reserved("reserved_2", $.ident),
       $.number,
       $.string,
       $.template,
       $.regex_literal,
       seq("...", $.expr),
       prec.left(18, seq($.expr, "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")),
-      prec.left(18, seq($.expr, ".", choice($._contextual_unreserved, $.private_field))),
-      prec.left(18, seq($.expr, "?.", choice($._contextual_unreserved, $.private_field, seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("[", $.expr, "]"), $.template))),
+      prec.left(18, seq($.expr, ".", choice(reserved("unreserved", $.ident), $.private_field))),
+      prec.left(18, seq($.expr, "?.", choice(reserved("unreserved", $.ident), $.private_field, seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("[", $.expr, "]"), $.template))),
       prec.left(18, seq($.expr, "[", $.expr, "]")),
       prec.left(18, seq($.expr, "?", $.expr, ":", $.expr)),
-      prec.left(18, seq($.expr, $._keyword_instanceof, $.expr)),
-      prec.left(18, seq($.expr, $._keyword_in, $.expr)),
+      prec.left(18, seq($.expr, "instanceof", $.expr)),
+      prec.left(18, seq($.expr, "in", $.expr)),
       prec.left(18, seq($.expr, $.template)),
-      seq($._keyword_new, ".", $._keyword_target),
-      seq($._keyword_new, $.new_target, choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), blank())),
-      seq($._keyword_new, $._keyword_class, field('name', $._contextual_reserved_1), optional(seq($._keyword_extends, $.class_heritage)), "{", repeat($.class_member), "}", choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), blank())),
-      seq($._keyword_new, $._keyword_class, optional(seq($._keyword_extends, $.class_heritage)), "{", repeat($.class_member), "}", choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), blank())),
+      seq("new", ".", "target"),
+      seq("new", $.new_target, choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), blank())),
+      seq("new", "class", field('name', reserved("reserved_1", $.ident)), optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}", choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), blank())),
+      seq("new", "class", optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}", choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), blank())),
       seq("[", optional($.expr), repeat(seq(",", optional($.expr))), "]"),
       seq("{", optional(seq($.prop, repeat(seq(",", $.prop)), optional(","))), "}"),
-      seq($._keyword_async, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", "=>", choice($.block, $.expr)),
+      seq("async", "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", "=>", choice($.block, $.expr)),
       seq("(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", "=>", choice($.block, $.expr)),
-      seq($._keyword_async, $._contextual_reserved_2, "=>", choice($.block, $.expr)),
-      seq($._contextual_reserved_2, "=>", choice($.block, $.expr)),
-      seq($._keyword_yield, choice(seq("*", $.expr), optional($.expr))),
+      seq("async", reserved("reserved_2", $.ident), "=>", choice($.block, $.expr)),
+      seq(reserved("reserved_2", $.ident), "=>", choice($.block, $.expr)),
+      seq("yield", choice(seq("*", $.expr), optional($.expr))),
       seq("(", $.expr, repeat(seq(",", $.expr)), ")"),
-      seq($._keyword_import, choice(seq("(", $.expr, optional(seq(",", optional(seq($.expr, optional(","))))), ")"), seq(".", $._keyword_meta))),
+      seq("import", choice(seq("(", $.expr, optional(seq(",", optional(seq($.expr, optional(","))))), ")"), seq(".", "meta"))),
       $.private_field,
       $.hex_number,
       $.octal_number,
       $.binary_number,
       $.big_int,
-      seq($._keyword_function, optional(field('name', $._contextual_reserved_1)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
-      seq($._keyword_function, "*", optional(field('name', $._contextual_reserved_1)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
-      seq($._keyword_async, $._keyword_function, optional(field('name', $._contextual_reserved_1)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
-      seq($._keyword_async, $._keyword_function, "*", optional(field('name', $._contextual_reserved_1)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
-      seq(repeat($.decorator_expr), $._keyword_class, field('name', $._contextual_reserved_1), repeat(seq($._keyword_extends, optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}"),
-      seq(repeat($.decorator_expr), $._keyword_class, repeat(seq($._keyword_extends, optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}")
+      seq("function", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
+      seq("function", "*", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
+      seq("async", "function", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
+      seq("async", "function", "*", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
+      seq(repeat($.decorator_expr), "class", field('name', reserved("reserved_1", $.ident)), repeat(seq("extends", optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}"),
+      seq(repeat($.decorator_expr), "class", repeat(seq("extends", optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}")
     ),
 
-    prop: $ => choice(seq("...", $.expr), seq(choice($._keyword_get, $._keyword_set), $.member_name, "(", optional(optional(seq($.param, repeat(seq(",", $.param)), optional(",")))), ")", $.block), seq($._keyword_async, "*", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($._keyword_async, $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("*", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($.member_name, ":", $.expr), seq("[", $.expr, repeat1(seq(",", $.expr)), "]", ":", $.expr), seq($._contextual_reserved_1, choice(seq("=", $.expr), blank()))),
+    prop: $ => choice(seq("...", $.expr), seq(choice("get", "set"), $.member_name, "(", optional(optional(seq($.param, repeat(seq(",", $.param)), optional(",")))), ")", $.block), seq("async", "*", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("*", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($.member_name, ":", $.expr), seq("[", $.expr, repeat1(seq(",", $.expr)), "]", ":", $.expr), seq(reserved("reserved_1", $.ident), choice(seq("=", $.expr), blank()))),
 
-    member_name: $ => choice($._contextual_unreserved, $.private_field, $.string, $.number, $.hex_number, $.octal_number, $.binary_number, $.big_int, seq("[", $.expr, "]")),
+    member_name: $ => choice(reserved("unreserved", $.ident), $.private_field, $.string, $.number, $.hex_number, $.octal_number, $.binary_number, $.big_int, seq("[", $.expr, "]")),
 
-    new_target: $ => choice($._contextual_unreserved, prec.right(seq($._keyword_new, $.new_target, optional(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")))), $.template, seq($.new_target, ".", $._contextual_unreserved), seq($.new_target, "[", $.expr, "]"), seq($.new_target, $.template), seq("(", $.expr, repeat(seq(",", $.expr)), ")")),
+    new_target: $ => choice(reserved("unreserved", $.ident), prec.right(seq("new", $.new_target, optional(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")))), $.template, seq($.new_target, ".", reserved("unreserved", $.ident)), seq($.new_target, "[", $.expr, "]"), seq($.new_target, $.template), seq("(", $.expr, repeat(seq(",", $.expr)), ")")),
 
-    class_heritage: $ => choice($.number, $.string, $._keyword_true, $._keyword_false, $._keyword_null, $._keyword_undefined, $._contextual_reserved_3, seq("(", $.expr, repeat(seq(",", $.expr)), ")"), seq($._keyword_class, optional(field('name', $._contextual_reserved_1)), optional(seq($._keyword_extends, $.class_heritage)), "{", repeat($.class_member), "}"), seq($.class_heritage, ".", choice($._contextual_unreserved, $.private_field)), seq($.class_heritage, "?.", choice($._contextual_unreserved, $.private_field, seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("[", $.expr, "]"), $.template)), seq($.class_heritage, "[", $.expr, "]"), seq($.class_heritage, "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq($.class_heritage, $.template)),
+    class_heritage: $ => choice($.number, $.string, "true", "false", "null", "undefined", reserved("reserved_3", $.ident), seq("(", $.expr, repeat(seq(",", $.expr)), ")"), seq("class", optional(field('name', reserved("reserved_1", $.ident))), optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}"), seq($.class_heritage, ".", choice(reserved("unreserved", $.ident), $.private_field)), seq($.class_heritage, "?.", choice(reserved("unreserved", $.ident), $.private_field, seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("[", $.expr, "]"), $.template)), seq($.class_heritage, "[", $.expr, "]"), seq($.class_heritage, "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq($.class_heritage, $.template)),
 
-    stmt: $ => choice($.block, seq(choice($._keyword_let, $._keyword_const, $._keyword_var), optional(seq($.binding, repeat(seq(",", $.binding)), optional(","))), choice(";", blank(), blank())), seq($._keyword_if, "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt, optional(seq($._keyword_else, $.stmt))), seq($._keyword_for, choice(seq("(", $.for_head, ")"), seq($._keyword_await, "(", $.for_await_head, ")")), $.stmt), seq($._keyword_while, "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt), seq($._keyword_do, $.stmt, $._keyword_while, "(", $.expr, repeat(seq(",", $.expr)), ")", optional(";")), seq($._keyword_switch, "(", $.expr, repeat(seq(",", $.expr)), ")", "{", repeat($.switch_case), "}"), seq($._keyword_return, optional(seq($.expr, repeat(seq(",", $.expr)))), choice(";", blank(), blank())), seq($._keyword_throw, $.expr, repeat(seq(",", $.expr)), choice(";", blank(), blank())), seq($._keyword_break, optional($._contextual_reserved_1), choice(";", blank(), blank())), seq($._keyword_continue, optional($._contextual_reserved_1), choice(";", blank(), blank())), seq($._keyword_try, $.block, optional(seq($._keyword_catch, optional(seq("(", $.catch_parameter, ")")), $.block)), optional(seq($._keyword_finally, $.block))), seq($._contextual_reserved_1, ":", $.stmt), ";", seq($._keyword_debugger, choice(";", blank(), blank())), seq($._keyword_with, "(", $.expr, ")", $.stmt), seq(optional($._keyword_await), $._keyword_using, optional(seq($.binding, repeat(seq(",", $.binding)), optional(","))), choice(";", blank(), blank())), $.decl, seq($.expr, repeat(seq(",", $.expr)), choice(";", blank(), blank()))),
+    stmt: $ => choice($.block, seq(choice("let", "const", "var"), $.binding, repeat(seq(",", $.binding)), choice(";", blank(), blank())), seq("if", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt, optional(seq("else", $.stmt))), seq("for", choice(seq("(", $.for_head, ")"), seq("await", "(", $.for_await_head, ")")), $.stmt), seq("while", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt), seq("do", $.stmt, "while", "(", $.expr, repeat(seq(",", $.expr)), ")", optional(";")), seq("switch", "(", $.expr, repeat(seq(",", $.expr)), ")", "{", repeat($.switch_case), "}"), seq("return", optional(seq($.expr, repeat(seq(",", $.expr)))), choice(";", blank(), blank())), seq("throw", $.expr, repeat(seq(",", $.expr)), choice(";", blank(), blank())), seq("break", optional(reserved("reserved_1", $.ident)), choice(";", blank(), blank())), seq("continue", optional(reserved("reserved_1", $.ident)), choice(";", blank(), blank())), seq("try", $.block, optional(seq("catch", optional(seq("(", $.catch_parameter, ")")), $.block)), optional(seq("finally", $.block))), seq(reserved("reserved_1", $.ident), ":", $.stmt), ";", seq("debugger", choice(";", blank(), blank())), seq("with", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt), seq(optional("await"), "using", $.binding, repeat(seq(",", $.binding)), choice(";", blank(), blank())), $.decl, seq($.expr, repeat(seq(",", $.expr)), choice(";", blank(), blank()))),
 
     block: $ => seq("{", repeat($.stmt), "}"),
 
-    binding_property: $ => choice(seq($._contextual_unreserved, ":", $.binding_element), seq($._contextual_reserved_1, optional(seq("=", $.expr))), seq(choice($.string, $.number, seq("[", $.expr, "]")), ":", $.binding_element), seq("...", choice($._contextual_reserved_1, $.binding_pattern))),
+    binding_property: $ => choice(seq(reserved("unreserved", $.ident), ":", $.binding_element), seq(reserved("reserved_1", $.ident), optional(seq("=", $.expr))), seq(choice($.string, $.number, seq("[", $.expr, "]")), ":", $.binding_element), seq("...", choice(reserved("reserved_1", $.ident), $.binding_pattern))),
 
-    binding_element: $ => seq(choice($._contextual_reserved_1, $.binding_pattern), optional(seq("=", $.expr))),
+    binding_element: $ => seq(choice(reserved("reserved_1", $.ident), $.binding_pattern), optional(seq("=", $.expr))),
 
-    array_binding_element: $ => choice($.binding_element, seq("...", choice($._contextual_reserved_1, $.binding_pattern))),
+    array_binding_element: $ => choice($.binding_element, seq("...", choice(reserved("reserved_1", $.ident), $.binding_pattern))),
 
     binding_pattern: $ => choice(seq("{", optional(seq($.binding_property, repeat(seq(",", $.binding_property)), optional(","))), "}"), seq("[", optional($.array_binding_element), repeat(seq(",", optional($.array_binding_element))), "]")),
 
-    binding: $ => seq(choice($._contextual_reserved_1, $.binding_pattern), optional(seq("=", $.expr))),
+    binding: $ => seq(choice(reserved("reserved_1", $.ident), $.binding_pattern), optional(seq("=", $.expr))),
 
-    for_binding: $ => seq(choice($._contextual_reserved_1, $.binding_pattern), optional(seq("=", $.expr))),
+    for_binding: $ => seq(choice(reserved("reserved_1", $.ident), $.binding_pattern), optional(seq("=", $.expr))),
 
-    param: $ => seq(optional($.decorator_expr), choice(seq(choice($._contextual_reserved_1, $.binding_pattern), optional(seq("=", $.expr))), seq("...", choice($._contextual_reserved_1, $.binding_pattern), optional(seq("=", $.expr))))),
+    param: $ => seq(optional($.decorator_expr), choice(seq(choice(reserved("reserved_1", $.ident), $.binding_pattern), optional(seq("=", $.expr))), seq("...", choice(reserved("reserved_1", $.ident), $.binding_pattern), optional(seq("=", $.expr))))),
 
-    catch_parameter: $ => choice($._contextual_reserved_1, $.binding_pattern),
+    catch_parameter: $ => choice(reserved("reserved_1", $.ident), $.binding_pattern),
 
-    for_head: $ => choice(choice(seq(choice($._keyword_let, $._keyword_const, $._keyword_var), $.for_binding, choice(seq(repeat(seq(",", $.for_binding)), ";", optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr))))), seq($._keyword_in, $.expr, repeat(seq(",", $.expr))), seq($._keyword_of, $.expr))), seq(choice($._keyword_using, seq($._keyword_await, $._keyword_using)), $.for_binding, choice(seq(repeat(seq(",", $.for_binding)), ";", optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr))))), seq($._keyword_of, $.expr)))), seq(optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr))))), seq($.expr, $._keyword_in, $.expr, repeat(seq(",", $.expr))), seq($.expr, $._keyword_of, $.expr)),
+    for_head: $ => choice(choice(seq(choice("let", "const", "var"), $.for_binding, choice(seq(repeat(seq(",", $.for_binding)), ";", optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr))))), seq("in", $.expr, repeat(seq(",", $.expr))), seq("of", $.expr))), seq(choice("using", seq("await", "using")), $.for_binding, choice(seq(repeat(seq(",", $.for_binding)), ";", optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr))))), seq("of", $.expr)))), seq(optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr))))), seq($.expr, "in", $.expr, repeat(seq(",", $.expr))), seq($.expr, "of", $.expr)),
 
-    for_await_head: $ => choice(choice(seq(choice($._keyword_let, $._keyword_const, $._keyword_var), $.for_binding, choice(seq($._keyword_of, $.expr))), seq(choice($._keyword_using, seq($._keyword_await, $._keyword_using)), $.for_binding, choice(seq($._keyword_of, $.expr)))), seq($.expr, $._keyword_of, $.expr)),
+    for_await_head: $ => choice(choice(seq(choice("let", "const", "var"), $.for_binding, choice(seq("of", $.expr))), seq(choice("using", seq("await", "using")), $.for_binding, choice(seq("of", $.expr)))), seq($.expr, "of", $.expr)),
 
-    switch_case: $ => choice(seq($._keyword_case, $.expr, repeat(seq(",", $.expr)), ":"), seq($._keyword_default, ":"), $.stmt),
+    switch_case: $ => choice(seq("case", $.expr, repeat(seq(",", $.expr)), ":"), seq("default", ":"), $.stmt),
 
-    decl: $ => choice(seq($._keyword_function, field('name', $._contextual_reserved_1), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($._keyword_function, "*", field('name', $._contextual_reserved_1), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($._keyword_async, $._keyword_function, field('name', $._contextual_reserved_1), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($._keyword_async, $._keyword_function, "*", field('name', $._contextual_reserved_1), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($._keyword_class, field('name', $._contextual_reserved_1), repeat(seq($._keyword_extends, optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}"), seq($._keyword_export, choice($.decl, $.stmt)), seq(repeat1($.decorator_expr), choice(seq($._keyword_class, field('name', $._contextual_reserved_1), repeat(seq($._keyword_extends, optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}"), $.decl)), seq($._keyword_export, $._keyword_default, choice(seq($._keyword_function, optional(field('name', $._contextual_reserved_1)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($._keyword_function, "*", optional(field('name', $._contextual_reserved_1)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($._keyword_async, $._keyword_function, optional(field('name', $._contextual_reserved_1)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($._keyword_async, $._keyword_function, "*", optional(field('name', $._contextual_reserved_1)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq(repeat($.decorator_expr), $._keyword_class, field('name', $._contextual_reserved_1), repeat(seq($._keyword_extends, optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}"), seq(repeat($.decorator_expr), $._keyword_class, repeat(seq($._keyword_extends, optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}"), seq($.expr, choice(";", blank(), blank())))), seq($._keyword_export, "*", choice(seq($._keyword_from, $.string), seq($._keyword_as, choice($._contextual_unreserved, $.string), $._keyword_from, $.string)), choice(";", blank(), blank())), seq($._keyword_export, "{", optional(seq($.export_specifier, repeat(seq(",", $.export_specifier)), optional(","))), "}", optional(seq($._keyword_from, $.string)), choice(";", blank(), blank())), seq($._keyword_import, choice(seq($.import_clause, $._keyword_from, $.string), $.string), choice(";", blank(), blank()))),
+    decl: $ => choice(seq("function", field('name', reserved("reserved_1", $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("function", "*", field('name', reserved("reserved_1", $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", "function", field('name', reserved("reserved_1", $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", "function", "*", field('name', reserved("reserved_1", $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("class", field('name', reserved("reserved_1", $.ident)), repeat(seq("extends", optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}"), seq("export", choice($.decl, $.stmt)), seq(repeat1($.decorator_expr), choice(seq("class", field('name', reserved("reserved_1", $.ident)), repeat(seq("extends", optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}"), $.decl)), seq("export", "default", choice(seq("function", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("function", "*", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", "function", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", "function", "*", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq(repeat($.decorator_expr), "class", field('name', reserved("reserved_1", $.ident)), repeat(seq("extends", optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}"), seq(repeat($.decorator_expr), "class", repeat(seq("extends", optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}"), seq($.expr, choice(";", blank(), blank())))), seq("export", "*", choice(seq("from", $.string), seq("as", choice(reserved("unreserved", $.ident), $.string), "from", $.string)), choice(";", blank(), blank())), seq("export", "{", optional(seq($.export_specifier, repeat(seq(",", $.export_specifier)), optional(","))), "}", optional(seq("from", $.string)), choice(";", blank(), blank())), seq("import", choice(seq($.import_clause, "from", $.string), $.string), choice(";", blank(), blank()))),
 
-    class_member: $ => choice(";", seq($._keyword_static, $.block), choice(seq($._keyword_constructor, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq(repeat($.decorator_expr), optional(choice(choice($._keyword_static))), choice(seq(choice(choice(choice($._keyword_accessor))), $.member_name, optional(seq("=", $.expr)), choice(";", blank(), blank())), seq(choice(choice(choice($._keyword_async))), choice(seq("*", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block))), seq("*", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq(choice(choice($._keyword_get, $._keyword_set)), $.member_name, "(", optional(optional(seq($.param, repeat(seq(",", $.param)), optional(",")))), ")", $.block), seq($.member_name, choice(seq("(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq(optional(seq("=", $.expr)), choice(";", blank(), blank())))))))),
+    class_member: $ => choice(";", seq("static", $.block), choice(seq("constructor", "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq(repeat($.decorator_expr), optional(choice(choice("static"))), choice(seq(choice(choice(choice("accessor"))), $.member_name, optional(seq("=", $.expr)), choice(";", blank(), blank())), seq(choice(choice(choice("async"))), choice(seq("*", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block))), seq("*", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq(choice(choice("get", "set")), $.member_name, "(", optional(optional(seq($.param, repeat(seq(",", $.param)), optional(",")))), ")", $.block), seq($.member_name, choice(seq("(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq(optional(seq("=", $.expr)), choice(";", blank(), blank())))))))),
 
-    import_clause: $ => choice(seq($._contextual_reserved_1, optional(seq(",", choice(seq("{", optional(seq($.import_specifier, repeat(seq(",", $.import_specifier)), optional(","))), "}"), seq("*", $._keyword_as, $._contextual_reserved_1))))), seq("{", optional(seq($.import_specifier, repeat(seq(",", $.import_specifier)), optional(","))), "}"), seq("*", $._keyword_as, $._contextual_reserved_1)),
+    import_clause: $ => choice(seq(reserved("reserved_1", $.ident), optional(seq(",", choice(seq("{", optional(seq($.import_specifier, repeat(seq(",", $.import_specifier)), optional(","))), "}"), seq("*", "as", reserved("reserved_1", $.ident)))))), seq("{", optional(seq($.import_specifier, repeat(seq(",", $.import_specifier)), optional(","))), "}"), seq("*", "as", reserved("reserved_1", $.ident))),
 
-    import_specifier: $ => choice(seq($._contextual_unreserved, $._keyword_as, $._contextual_reserved_1), $._contextual_reserved_1, seq($.string, $._keyword_as, $._contextual_reserved_1)),
+    import_specifier: $ => choice(seq(reserved("unreserved", $.ident), "as", reserved("reserved_1", $.ident)), reserved("reserved_1", $.ident), seq($.string, "as", reserved("reserved_1", $.ident))),
 
-    export_specifier: $ => seq(choice($._contextual_unreserved, $.string), optional(seq($._keyword_as, choice($._contextual_unreserved, $.string)))),
+    export_specifier: $ => seq(choice(reserved("unreserved", $.ident), $.string), optional(seq("as", choice(reserved("unreserved", $.ident), $.string)))),
 
     shebang: $ => token(/#![^\n\r\u2028\u2029]*/),
 
@@ -269,218 +211,6 @@ module.exports = grammar({
     ),
 
     template_substitution: $ => seq("${", $.expr, "}"),
-
-    _contextual_unreserved: $ => choice(reserved("unreserved", $.ident), $._ident_accessor, $._ident_as, $._ident_async, $._ident_await, $._ident_break, $._ident_case, $._ident_catch, $._ident_class, $._ident_const, $._ident_constructor, $._ident_continue, $._ident_debugger, $._ident_default, $._ident_delete, $._ident_do, $._ident_else, $._ident_export, $._ident_extends, $._ident_false, $._ident_finally, $._ident_for, $._ident_from, $._ident_function, $._ident_get, $._ident_if, $._ident_import, $._ident_in, $._ident_instanceof, $._ident_let, $._ident_meta, $._ident_new, $._ident_null, $._ident_of, $._ident_return, $._ident_set, $._ident_static, $._ident_super, $._ident_switch, $._ident_target, $._ident_this, $._ident_throw, $._ident_true, $._ident_try, $._ident_typeof, $._ident_undefined, $._ident_using, $._ident_var, $._ident_void, $._ident_while, $._ident_with, $._ident_yield),
-
-    _contextual_reserved_2: $ => choice(reserved("reserved_2", $.ident), $._ident_accessor, $._ident_as, $._ident_async, $._ident_await, $._ident_constructor, $._ident_false, $._ident_from, $._ident_get, $._ident_let, $._ident_meta, $._ident_new, $._ident_null, $._ident_of, $._ident_set, $._ident_static, $._ident_super, $._ident_target, $._ident_this, $._ident_true, $._ident_undefined, $._ident_using, $._ident_yield),
-
-    _contextual_reserved_1: $ => choice(reserved("reserved_1", $.ident), $._ident_accessor, $._ident_as, $._ident_async, $._ident_await, $._ident_constructor, $._ident_from, $._ident_get, $._ident_let, $._ident_meta, $._ident_of, $._ident_set, $._ident_static, $._ident_target, $._ident_undefined, $._ident_using, $._ident_yield),
-
-    _contextual_reserved_3: $ => choice(reserved("reserved_3", $.ident), $._ident_accessor, $._ident_as, $._ident_async, $._ident_await, $._ident_constructor, $._ident_false, $._ident_from, $._ident_get, $._ident_import, $._ident_let, $._ident_meta, $._ident_new, $._ident_null, $._ident_of, $._ident_set, $._ident_static, $._ident_super, $._ident_target, $._ident_this, $._ident_true, $._ident_undefined, $._ident_using, $._ident_yield),
-
-    _keyword_accessor: $ => "accessor",
-
-    _ident_accessor: $ => prec.dynamic(-1, alias("accessor", $.ident)),
-
-    _keyword_as: $ => "as",
-
-    _ident_as: $ => prec.dynamic(-1, alias("as", $.ident)),
-
-    _keyword_async: $ => "async",
-
-    _ident_async: $ => prec.dynamic(-1, alias("async", $.ident)),
-
-    _keyword_await: $ => "await",
-
-    _ident_await: $ => prec.dynamic(-1, alias("await", $.ident)),
-
-    _keyword_break: $ => "break",
-
-    _ident_break: $ => prec.dynamic(-1, alias("break", $.ident)),
-
-    _keyword_case: $ => "case",
-
-    _ident_case: $ => prec.dynamic(-1, alias("case", $.ident)),
-
-    _keyword_catch: $ => "catch",
-
-    _ident_catch: $ => prec.dynamic(-1, alias("catch", $.ident)),
-
-    _keyword_class: $ => "class",
-
-    _ident_class: $ => prec.dynamic(-1, alias("class", $.ident)),
-
-    _keyword_const: $ => "const",
-
-    _ident_const: $ => prec.dynamic(-1, alias("const", $.ident)),
-
-    _keyword_constructor: $ => "constructor",
-
-    _ident_constructor: $ => prec.dynamic(-1, alias("constructor", $.ident)),
-
-    _keyword_continue: $ => "continue",
-
-    _ident_continue: $ => prec.dynamic(-1, alias("continue", $.ident)),
-
-    _keyword_debugger: $ => "debugger",
-
-    _ident_debugger: $ => prec.dynamic(-1, alias("debugger", $.ident)),
-
-    _keyword_default: $ => "default",
-
-    _ident_default: $ => prec.dynamic(-1, alias("default", $.ident)),
-
-    _keyword_delete: $ => "delete",
-
-    _ident_delete: $ => prec.dynamic(-1, alias("delete", $.ident)),
-
-    _keyword_do: $ => "do",
-
-    _ident_do: $ => prec.dynamic(-1, alias("do", $.ident)),
-
-    _keyword_else: $ => "else",
-
-    _ident_else: $ => prec.dynamic(-1, alias("else", $.ident)),
-
-    _keyword_export: $ => "export",
-
-    _ident_export: $ => prec.dynamic(-1, alias("export", $.ident)),
-
-    _keyword_extends: $ => "extends",
-
-    _ident_extends: $ => prec.dynamic(-1, alias("extends", $.ident)),
-
-    _keyword_false: $ => "false",
-
-    _ident_false: $ => prec.dynamic(-1, alias("false", $.ident)),
-
-    _keyword_finally: $ => "finally",
-
-    _ident_finally: $ => prec.dynamic(-1, alias("finally", $.ident)),
-
-    _keyword_for: $ => "for",
-
-    _ident_for: $ => prec.dynamic(-1, alias("for", $.ident)),
-
-    _keyword_from: $ => "from",
-
-    _ident_from: $ => prec.dynamic(-1, alias("from", $.ident)),
-
-    _keyword_function: $ => "function",
-
-    _ident_function: $ => prec.dynamic(-1, alias("function", $.ident)),
-
-    _keyword_get: $ => "get",
-
-    _ident_get: $ => prec.dynamic(-1, alias("get", $.ident)),
-
-    _keyword_if: $ => "if",
-
-    _ident_if: $ => prec.dynamic(-1, alias("if", $.ident)),
-
-    _keyword_import: $ => "import",
-
-    _ident_import: $ => prec.dynamic(-1, alias("import", $.ident)),
-
-    _keyword_in: $ => "in",
-
-    _ident_in: $ => prec.dynamic(-1, alias("in", $.ident)),
-
-    _keyword_instanceof: $ => "instanceof",
-
-    _ident_instanceof: $ => prec.dynamic(-1, alias("instanceof", $.ident)),
-
-    _keyword_let: $ => "let",
-
-    _ident_let: $ => prec.dynamic(-1, alias("let", $.ident)),
-
-    _keyword_meta: $ => "meta",
-
-    _ident_meta: $ => prec.dynamic(-1, alias("meta", $.ident)),
-
-    _keyword_new: $ => "new",
-
-    _ident_new: $ => prec.dynamic(-1, alias("new", $.ident)),
-
-    _keyword_null: $ => "null",
-
-    _ident_null: $ => prec.dynamic(-1, alias("null", $.ident)),
-
-    _keyword_of: $ => "of",
-
-    _ident_of: $ => prec.dynamic(-1, alias("of", $.ident)),
-
-    _keyword_return: $ => "return",
-
-    _ident_return: $ => prec.dynamic(-1, alias("return", $.ident)),
-
-    _keyword_set: $ => "set",
-
-    _ident_set: $ => prec.dynamic(-1, alias("set", $.ident)),
-
-    _keyword_static: $ => "static",
-
-    _ident_static: $ => prec.dynamic(-1, alias("static", $.ident)),
-
-    _keyword_super: $ => "super",
-
-    _ident_super: $ => prec.dynamic(-1, alias("super", $.ident)),
-
-    _keyword_switch: $ => "switch",
-
-    _ident_switch: $ => prec.dynamic(-1, alias("switch", $.ident)),
-
-    _keyword_target: $ => "target",
-
-    _ident_target: $ => prec.dynamic(-1, alias("target", $.ident)),
-
-    _keyword_this: $ => "this",
-
-    _ident_this: $ => prec.dynamic(-1, alias("this", $.ident)),
-
-    _keyword_throw: $ => "throw",
-
-    _ident_throw: $ => prec.dynamic(-1, alias("throw", $.ident)),
-
-    _keyword_true: $ => "true",
-
-    _ident_true: $ => prec.dynamic(-1, alias("true", $.ident)),
-
-    _keyword_try: $ => "try",
-
-    _ident_try: $ => prec.dynamic(-1, alias("try", $.ident)),
-
-    _keyword_typeof: $ => "typeof",
-
-    _ident_typeof: $ => prec.dynamic(-1, alias("typeof", $.ident)),
-
-    _keyword_undefined: $ => "undefined",
-
-    _ident_undefined: $ => prec.dynamic(-1, alias("undefined", $.ident)),
-
-    _keyword_using: $ => "using",
-
-    _ident_using: $ => prec.dynamic(-1, alias("using", $.ident)),
-
-    _keyword_var: $ => "var",
-
-    _ident_var: $ => prec.dynamic(-1, alias("var", $.ident)),
-
-    _keyword_void: $ => "void",
-
-    _ident_void: $ => prec.dynamic(-1, alias("void", $.ident)),
-
-    _keyword_while: $ => "while",
-
-    _ident_while: $ => prec.dynamic(-1, alias("while", $.ident)),
-
-    _keyword_with: $ => "with",
-
-    _ident_with: $ => prec.dynamic(-1, alias("with", $.ident)),
-
-    _keyword_yield: $ => "yield",
-
-    _ident_yield: $ => prec.dynamic(-1, alias("yield", $.ident)),
 
     _reserved_enum: $ => token(prec(1, /enum/))
   }
