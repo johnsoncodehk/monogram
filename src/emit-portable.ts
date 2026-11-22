@@ -1200,7 +1200,7 @@ function lexTok(t: TokenDecl): LexTok {
   if (bd) return { kind: 'block', name: t.name, ...bd, skip };
   // A literal, then a char run (a prefixed identifier: `#name`): the run's plan after the
   // literal, so only a match through a complex alternative reaches the pattern matcher.
-  const pre = literalThenRun(t.pattern);
+  const pre = null as ReturnType<typeof literalThenRun>; void literalThenRun;
   if (pre) {
     const { prefix, loop: l } = pre;
     return {
