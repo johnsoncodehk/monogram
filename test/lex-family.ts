@@ -272,7 +272,10 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
           re.lastIndex = 0;
           const m = re.exec(src);
           const want = m && m[0].length > 0 ? m[0].length : -1;
-          const got = fn(src, 0);
+          // An identifier(-like) token's match from its pattern comes back as -2 - end (the escape
+          // branch, which the dispatch site checks); its end is the same.
+          const raw = fn(src, 0);
+          const got = gir.identLike.includes(t.name) && raw < -1 ? -2 - raw : raw;
           checked++;
           if (got !== want && bad++ < 3) fail(`${g.name}/${t.name} (${t.kind}): ${JSON.stringify(src)} scans to ${got}, its regex to ${want}`);
         }

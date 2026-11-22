@@ -12,7 +12,7 @@ export type Ty = Num | 'bool' | 'str' | 'meta' | 'tok' | 'edit' | ListTy;
 export type MetaInt = 'off' | 'end' | 'kid' | 'pd' | 'fd' | 'td';
 export type MetaFlag = 'nl' | 'lc' | 'lb' | 'hd';
 export type TokInt = 'off' | 'end' | 'kid' | 'lid';
-export type BinOp = 'add' | 'sub' | 'shr' | 'lt' | 'le' | 'gt' | 'ge' | 'eq' | 'ne' | 'and' | 'or';
+export type BinOp = 'add' | 'sub' | 'shr' | 'shl' | 'lt' | 'le' | 'gt' | 'ge' | 'eq' | 'ne' | 'and' | 'or';
 export const COMPARISON = new Set<BinOp>(['lt', 'le', 'gt', 'ge', 'eq', 'ne']);
 
 export type MkMeta = { off: Expr; end: Expr; kid: Expr; nl: Expr; fd: Expr; pd: Expr; lc: Expr; lb: Expr; hd: Expr; td: Expr };
@@ -84,7 +84,9 @@ export type Stmt =
 export interface Param { name: string; ty: Ty }
 // `inline`: called once per token from a lexer's dispatch loop. A lowering may ask its compiler
 // to inline it, or splice it into its call sites at generation time (`spliceInline`).
-export interface Fn { name: string; doc: string; params: Param[]; ret: Ty[]; body: Stmt[]; inline?: boolean }
+// `extern`: a signature only; the target prints the function itself (a runtime routine whose
+// data or spelling is the target's), so `printFns` skips it.
+export interface Fn { name: string; doc: string; params: Param[]; ret: Ty[]; body: Stmt[]; inline?: boolean; extern?: boolean }
 export type CodeRange = [number, number];
 export interface CharSet { name: string; ranges: CodeRange[] }
 
@@ -566,5 +568,5 @@ export function inlineFn(f: Fn, args: string[], out: string, unset: number): Stm
 
 export function printFns(lowering: Lowering, fns: Fn[], sets: CharSet[] = []): string {
   const p = new Printer(lowering, fns, sets);
-  return [...sets.map((c) => lowering.charSet(lowering.ident(c.name), c.ranges)), ...fns.map((f) => p.fn(f))].join('\n');
+  return [...sets.map((c) => lowering.charSet(lowering.ident(c.name), c.ranges)), ...fns.filter((f) => !f.extern).map((f) => p.fn(f))].join('\n');
 }

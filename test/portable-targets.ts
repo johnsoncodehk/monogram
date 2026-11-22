@@ -1425,6 +1425,14 @@ const NON_ASCII_LEX: string[] = [
   'x\u200Dy', 'क्षत्रिय = 1;', 'a\u203Fb + \u2040', '℘ + ℮ + ゛', 'a\u00B7b', 'ⅰⅱ + Ⅻ', 'ab\u0903c',
   '𝑥 = 𝑦 + 1;', 'let 𐐀𐐁 = 1;', 'a\u{E0100}b', '_\u0301', '$\u200C', 'x\u{1F600}', '\u2E2F', 'a\u2E2Fb', 'x = \u2603;',
   'éa1 + a1é', 'α.β?.γ', 'x\u0301\u0301\u0301',
+  // Identifier escapes, checked against the same classes: an escape must decode to an
+  // IdentifierStart (first) or IdentifierPart character. Accepted: letters, a leading-zero
+  // braced escape, a non-ASCII ID_Start, an astral one as a surrogate-pair escape (as the
+  // interpreter decodes it), a combining mark after the first character, a private name.
+  // Refused: NUL, a private-use and a non-character code point, a digit or combining mark first,
+  // lone surrogates, a code point past U+10FFFF, a symbol, a digit-first private name.
+  'a\\u0062c', '\\u{000000061}b', '\\u00e9t\\u00E9', '\\uD835\\uDC9C', 'x\\u{1D465}', 'a\\u0301', '#\\u0061 in o', 'class C { #\\u{61}b; }',
+  '\\u0000', 'a\\uF000', 'a\\u{10FFFF}', '\\u0030a', '\\u0301a', 'a\\uD800', 'a\\uDC00b', '\\uD835\\u0041', 'a\\u{110000}', 'x\\u2603', 'class C { #\\u0030; }',
 ];
 
 /** Reject cases. `lexMsg` set ⇒ expect that primary lexer message (≡ oracle). */
@@ -1561,14 +1569,6 @@ const ECMASCRIPT = new Set(['javascript', 'typescript']);
 // and the targets it holds for (all when absent).
 type ExpectedFail = { grammars: string[]; reason: string; inputs?: string[]; oracleLexError?: RegExp; targets?: string[] };
 const CORPUS_EXPECTED_FAIL: ExpectedFail[] = [
-  {
-    // Owed: the rule lives in the interpreter's lexer alone (emit-lexer.ts lexIdentValid); a
-    // portable lexer would need each target's Unicode ID_Start / ID_Continue tables to decode
-    // and test the escape.
-    grammars: ['javascript', 'typescript', 'richtokens'],
-    reason: 'an identifier escape that decodes to no identifier character (\\u0000, a\\uF000) is refused only by the interpreter\'s lexer',
-    oracleLexError: /^Invalid identifier escape/,
-  },
   {
     // Owed: the interpreter's Unicode identifier fallback (LX_UNI_IDENT, and the TS target's copy)
     // starts with [$_\p{ID_Start}], so an ASCII `$` the grammar's identifier pattern excludes is

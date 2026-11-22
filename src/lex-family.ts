@@ -2,7 +2,9 @@
 // printed for each target through the `Lowering` it registers with `defineTarget`.
 //
 // Every scanner is `(s, p) -> end`, with end > p for a match and -1 for none (a negative p never
-// matches). A token pattern means what its regex means (the interpreter's lexer runs that regex):
+// matches). An identifier(-like) token's scanner returns -2 - end instead when its match came from
+// the token pattern rather than the ASCII run (the branch that can take a `\u` escape); the
+// dispatch site then runs `IDENT_ESC` on the match, out of line, so no identifier pays a search. A token pattern means what its regex means (the interpreter's lexer runs that regex):
 // the end of the first match in the regex's order of choices, where a choice that leaves the rest
 // of the pattern unmatched is given up for the next one. Where committing to the first choice is
 // that answer (src/lex-match-plan.ts decides it per node), a pattern compiles to a matcher of its
@@ -28,9 +30,10 @@ const x = (e: Ex): Expr => (typeof e === 'string' ? { k: 'var', name: e } : e);
 const I = (v: number): Expr => ({ k: 'int', v });
 const F: Expr = { k: 'bool', v: false };
 const bin = (op: Extract<Expr, { k: 'bin' }>['op']) => (a: Ex, b: Ex): Expr => ({ k: 'bin', op, a: x(a), b: x(b) });
-const add = bin('add'), sub = bin('sub'), lt = bin('lt'), le = bin('le'), gt = bin('gt'), ge = bin('ge'), eq = bin('eq'), ne = bin('ne');
+const add = bin('add'), sub = bin('sub'), shl = bin('shl'), lt = bin('lt'), le = bin('le'), gt = bin('gt'), ge = bin('ge'), eq = bin('eq'), ne = bin('ne');
 const any = (es: Expr[]): Expr => (es.length ? es.reduce((a, b) => ({ k: 'bin', op: 'or', a, b })) : F);
 const and = (a: Ex, b: Ex): Expr => ({ k: 'bin', op: 'and', a: x(a), b: x(b) });
+const or = (a: Ex, b: Ex): Expr => ({ k: 'bin', op: 'or', a: x(a), b: x(b) });
 const not = (e: Ex): Expr => ({ k: 'not', e: x(e) });
 const len = (e: Ex): Expr => ({ k: 'len', e: x(e) });
 const code = (i: Ex): Expr => ({ k: 'code', s: x('s'), i: x(i) });
@@ -67,6 +70,11 @@ const width = (p: TokenPattern): Expr | null => (typeof p === 'string' && p !== 
 const ident = (t: string): string => t.replace(/[^A-Za-z0-9]/g, '_');
 
 export const scannerName = (tok: string): string => `lexScan${ident(tok)}`;
+/** An identifier's escape check, `(s, q, e) -> int` (see `identEsc`). */
+export const IDENT_ESC = 'lexIdentEsc';
+/** The target's Unicode identifier class of a code point, `(cp) -> int`: 0 neither, 1
+ *  IdentifierPart only, 2 IdentifierStart too (uni-ident.ts). The target prints it. */
+export const UNI_CLASS = 'lexUniClass';
 /** The template span scanner (see `tplSpan`). */
 export const TPL_SPAN = 'lexTplSpan';
 
@@ -281,16 +289,70 @@ class LexScan {
     };
   }
 
-  // A pattern match that consumed nothing is no token.
+  // A pattern match that consumed nothing is no token; an identifier's match reports the branch.
   private nonEmpty(m: string): Stmt[] {
-    return [let_('e', call(m, 'p')), if_(gt('e', 'p'), [ret('e')]), NONE];
+    return [let_('e', call(m, 'p')), if_(gt('e', 'p'), [this.matched()]), NONE];
   }
+  private esc = false;
+  private matched(): Stmt { return ret(this.esc ? sub(I(-2), 'e') : 'e'); }
 
   // A negative p is no position in s. Ruling it out first also tells native compilers that every
   // index the scanner reads is non-negative, so they can drop per-character bounds checks.
-  scanner(t: LexTok): Fn {
+  // `esc`: t is an identifier(-like) token (see the header for what its scanner returns).
+  scanner(t: LexTok, esc: boolean): Fn {
+    this.esc = esc;
     const f = this.scanBody(t);
+    this.esc = false;
     return { ...f, body: [if_(lt('p', I(0)), [NONE]), ...f.body] };
+  }
+
+  // Whether the identifier text s[q, e) (after its prefix), as its token pattern matched it, spells
+  // an IdentifierName: every `\u` escape decodes to an IdentifierStart (the first character) or an
+  // IdentifierPart character. As the interpreter's lexIdentValid, which matches the decoded text,
+  // a high-surrogate escape followed by a low-surrogate escape is the one character they spell.
+  // Returns e, or -1 when the text is no IdentifierName.
+  identEsc(): Fn {
+    // The escape at i (`\uXXXX` or `\u{X...}`, as the token pattern matched it) into v; i moves
+    // past it. A braced value stops growing past U+10FFFF, so it cannot overflow.
+    const hex = (v: string): Stmt[] => [
+      set('d', code('i')),
+      if_(ge('d', I(97)), [set('d', sub('d', I(87)))], [if_(ge('d', I(65)), [set('d', sub('d', I(55)))], [set('d', sub('d', I(48)))])]),
+      if_(le(v, I(0x10ffff)), [set(v, add(shl(v, I(4)), 'd'))]),
+      set('i', add('i', I(1))),
+    ];
+    const escape = (v: string): Stmt[] => [
+      set('i', add('i', I(2))),
+      set(v, I(0)),
+      if_(eq(code('i'), I(123)), [
+        set('i', add('i', I(1))),
+        while_(ne(code('i'), I(125)), hex(v)),
+        set('i', add('i', I(1))),
+      ], [let_('n', add('i', I(4))), while_(lt('i', 'n'), hex(v))]),
+    ];
+    const inR = (v: string, lo: number, hi: number) => and(ge(v, I(lo)), le(v, I(hi)));
+    return {
+      name: IDENT_ESC,
+      doc: 'Whether an identifier spells its escapes as IdentifierName characters: e, else -1.',
+      params: [{ name: 's', ty: 'str' }, { name: 'q', ty: 'int' }, { name: 'e', ty: 'int' }],
+      ret: ['int'],
+      body: [
+        let_('i', 'q'), let_('d', I(0)), let_('cp', I(0)), let_('lo', I(0)), let_('need', I(0)),
+        while_(lt('i', 'e'), [
+          if_(eq(code('i'), I(92)), [
+            set('need', I(1)),
+            if_(eq('i', 'q'), [set('need', I(2))]),
+            ...escape('cp'),
+            if_(and(inR('cp', 0xd800, 0xdbff), and(lt('i', 'e'), eq(code('i'), I(92)))), [
+              ...escape('lo'),
+              if_(inR('lo', 0xdc00, 0xdfff), [set('cp', add(add(I(0x10000), shl(sub('cp', I(0xd800)), I(10))), sub('lo', I(0xdc00))))]),
+            ]),
+            if_(or(inR('cp', 0xd800, 0xdfff), gt('cp', I(0x10ffff))), [NONE]),
+            if_(lt({ k: 'call', fn: UNI_CLASS, args: [x('cp')] }, 'need'), [NONE]),
+          ], [set('i', add('i', I(1)))]),
+        ]),
+        ret('e'),
+      ],
+    };
   }
 
   private scanBody(t: LexTok): Fn {
@@ -320,7 +382,7 @@ class LexScan {
             let_('d', code('e')),
             if_(not(bails('d', t.bail, t.bailNonAscii)), [ret('e')]),
             set('e', call(m, 'p')),
-            if_(gt('e', 'p'), [ret('e')]),
+            if_(gt('e', 'p'), [this.matched()]),
             NONE,
           ]),
           if_(bails('c', head, t.bailNonAscii || t.headBailNonAscii), this.nonEmpty(m)),
@@ -407,7 +469,11 @@ export function lexScanFamily(ir: ParserIR): Family {
   let f = families.get(ir);
   if (!f) {
     const b = new LexScan();
-    for (const t of scannedTokens(ir)) b.fns.push({ ...b.scanner(t), inline: true });
+    for (const t of scannedTokens(ir)) b.fns.push({ ...b.scanner(t, ir.identLike.includes(t.name)), inline: true });
+    if (ir.identLike.length) {
+      b.fns.push({ name: UNI_CLASS, doc: '', params: [{ name: 'cp', ty: 'int' }], ret: ['int'], body: [], extern: true });
+      b.fns.push(b.identEsc());
+    }
     if (ir.tpl) b.fns.push(b.tplSpan(ir.tpl));
     f = { sets: b.sets, fns: b.fns, runs: b.runs, finds: b.finds };
     families.set(ir, f);
