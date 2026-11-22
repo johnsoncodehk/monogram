@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, dispatchWalk, gtCompLit, guardedSteps, type StepLowering, type DispatchLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, prattLedExits, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, dispatchWalk, gtCompLit, guardedSteps, type StepLowering, type DispatchLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -1004,7 +1004,8 @@ function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaI
   return plan.kind === 'A' ? rdEntryWithReuseA(r, plan, ar) : rdEntryWithReuseB(r, plan, ids, ar);
 }
 
-function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaIdPlan): string {
+function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  const tpl = ir.tpl;
   // The NUD arms, each a longest-match candidate tried from `save`, reached through the rule's
   // Dispatch (emit-portable.ts, PrattRule.nudOrder / nudDispatch). `won` records the node just
   // finished as the best so far and moves nb/kb past it; `lost` drops what the arm built.
@@ -1061,11 +1062,14 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
     for (const set of suppressedIn) parts.push(`p.suppressCur != ${set}`);
     return parts.length ? `if ${parts.join(' && ')} ` : '';   // the `if` before the led's block; none when nothing gates it
   };
-  const ledBody = (b: Bracket, form: number, closes: boolean) => `{
+  // Arms sharing a lid (`[` array-type then indexed-access) fall through to each other; when the
+  // LAST arm of a group failed, the loop ends if no later check can take the token (prattLedExits).
+  const exits = prattLedExits(r, ir, ids);
+  const ledBody = (b: Bracket, form: number, closes: boolean, exit: boolean) => `{
 \t\t\tledSave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \t\t\tp.scratch = append(p.scratch, left)
 \t\t\tif ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { left = p.finish(${ruleIdOf(ar, r.name)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
-\t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]
+\t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]${exit ? '; break LedLoop' : ''}
 \t\t}`;
   const ledSwitch = (() => {
     if (r.leds.length === 0) return '';
@@ -1073,8 +1077,8 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
     return `\t\tswitch t.Lid {
 ${groups.map((g) => {
   const lid = g.key as number;
-  const arms = g.members.map(({ item: b, index: i }) =>
-    `\t\t\t${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, r.ledSuppressedIn[i]!)}${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!)}`);
+  const arms = g.members.map(({ item: b, index: i }, j) =>
+    `\t\t\t${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, r.ledSuppressedIn[i]!)}${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!, exits.has(lid) && j === g.members.length - 1)}`);
   return `\t\tcase ${lid}:\n${arms.join('\n')}`;
 }).join('\n')}
 \t\t}`;
@@ -1818,7 +1822,8 @@ function rdEntryWithReuseW(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: Arena
   return plan.kind === 'A' ? rdEntryWithReuseAW(r, plan, ar, recv) : rdEntryWithReuseBW(r, plan, ids, ar, recv);
 }
 
-function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
+function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
+  const tpl = ir.tpl;
   const rid = ruleIdOf(ar, r.name);
   // The NUD arms: longest-match candidates through the rule's Dispatch, as in prattRule.
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
@@ -1870,11 +1875,12 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaI
     for (const set of suppressedIn) parts.push(`p.suppressCur != ${set}`);
     return parts.length ? `if ${parts.join(' && ')} ` : '';   // the `if` before the led's block; none when nothing gates it
   };
-  const ledBody = (b: Bracket, form: number, closes: boolean) => `{
+  const exits = prattLedExits(r, ir, ids);   // as in prattRule
+  const ledBody = (b: Bracket, form: number, closes: boolean, exit: boolean) => `{
 \t\t\tledSave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \t\t\tp.scratch = append(p.scratch, left.h)
 \t\t\tif ${b.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { left = p.finishW(${rid}, sb, int(left.off), int(left.tokStart)); form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
-\t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]; ${arenaRestore()}
+\t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]; ${arenaRestore()}${exit ? '; break LedLoop' : ''}
 \t\t}`;
   const ledSwitch = (() => {
     if (r.leds.length === 0) return '';
@@ -1882,8 +1888,8 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaI
     return `\t\tswitch t.Lid {
 ${groups.map((g) => {
   const lid = g.key as number;
-  const arms = g.members.map(({ item: b, index: i }) =>
-    `\t\t\t${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, r.ledSuppressedIn[i]!)}${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!)}`);
+  const arms = g.members.map(({ item: b, index: i }, j) =>
+    `\t\t\t${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, r.ledSuppressedIn[i]!)}${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!, exits.has(lid) && j === g.members.length - 1)}`);
   return `\t\tcase ${lid}:\n${arms.join('\n')}`;
 }).join('\n')}
 \t\t}`;
@@ -1972,7 +1978,7 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
   const entriesField = reuse ? '\n\tentries []EntryMeta\n\tentryHs []int32' : '';
   if (recv !== ENGINE_GO_W.recv) throw new Error(`goTarget: the builder engine is ${ENGINE_GO_W.recv}`);
   const ruleFnsW = [...ir.rules.filter((r) => ir.forms.buildRules.includes(r.name)).map((r) => {
-    if (r.kind === 'pratt') return prattRuleW(r, ir.tpl, ids, ar, recv);
+    if (r.kind === 'pratt') return prattRuleW(r, ir, ids, ar, recv);
     if (reuse && r.name === ir.entry) return rdEntryWithReuseW(r, reuse, ids, ar, recv);
     return rdRuleW(r, ids, ar, recv);
   }), ...ir.rules.filter((r) => ir.forms.recognizeRules.includes(r.name) && !ir.forms.cursorOnly.rules.includes(r.name)).map((r) => ruleR(r, ids, ENGINE_GO_W))].join('\n\n');
@@ -3149,7 +3155,7 @@ export const goTarget = defineTarget({
     const ar = buildArenaIdPlan(ir, ids);
     const reuse = ir.reuse;
     const ruleFns = [...ir.rules.filter((r) => ir.forms.buildRules.includes(r.name)).map((r) => {
-      if (r.kind === 'pratt') return prattRule(r, ir.tpl, ids, ar);
+      if (r.kind === 'pratt') return prattRule(r, ir, ids, ar);
       if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids, ar);
       return rdRule(r, ids, ar);
     }), ...ir.rules.filter((r) => ir.forms.recognizeRules.includes(r.name) && !ir.forms.cursorOnly.rules.includes(r.name)).map((r) => ruleR(r, ids, ENGINE_GO))].join('\n\n');

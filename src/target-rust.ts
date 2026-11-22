@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, dispatchWalk, gtCompLit, guardedSteps, type StepLowering, type DispatchLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattLedExits, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, dispatchWalk, gtCompLit, guardedSteps, type StepLowering, type DispatchLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -1070,7 +1070,8 @@ function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaI
   return plan.kind === 'A' ? rdEntryWithReuseA(r, plan, ar) : rdEntryWithReuseB(r, plan, ids, ar);
 }
 
-function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaIdPlan): string {
+function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  const tpl = ir.tpl;
   const rid = ruleIdOf(ar, r.name);
   // The operator tables (emit-portable prattOpTables) as `match` functions: LLVM compiles a match
   // on the lid returning constants to a lookup table, no hashing.
@@ -1136,19 +1137,15 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
     for (const set of suppressedIn) parts.push(`self.suppress_cur != ${set}`);
     return parts.length ? `if ${parts.join(' && ')} ` : '';   // the `if` before the led's block; none when nothing gates it
   };
-  // A lid that ALSO has a binary entry (`<` is both a type-arg LED and the
-  // relational operator) must not `break` the Pratt loop when its LED arms
-  // fail — the restore happens, then control falls through to the binary
-  // while-let below so `<` still parses as a comparison. Lids with no binary
-  // entry still fall through between MULTIPLE arms of the SAME lid (e.g. `[`
-  // is array-type then indexed-access): only the LAST arm of a group emits the
-  // `break` (all arms for that lid failed ⇒ the expression ends).
-  const binLids = new Set(r.binary.map((b) => lidOf(ids, b.op)));
-  const ledBody = (b: Bracket, form: number, closes: boolean, hasBin: boolean, isLast: boolean) => `{
+  // Arms sharing a lid (`[` array-type then indexed-access) fall through to each other; when the
+  // LAST arm of a group failed, the loop ends if no later check can take the token (prattLedExits:
+  // `<` is also the relational operator, so its group falls through to the binary check).
+  const exits = prattLedExits(r, ir, ids);
+  const ledBody = (b: Bracket, form: number, closes: boolean, exit: boolean) => `{
                 let led_save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
                 self.scratch.push(left.h);
                 if ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { left = self.finish(${rid}, sb, left.off as usize, left.tok_start as usize); form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
-                self.back(led_save); self.scratch.truncate(sb); self.b.restore(ck);${hasBin ? '' : isLast ? ' break;' : ''}
+                self.back(led_save); self.scratch.truncate(sb); self.b.restore(ck);${exit ? ' break;' : ''}
             }`;
   const ledMatch = (() => {
     if (r.leds.length === 0) return '';
@@ -1156,9 +1153,8 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
     return `            match t.lid {
 ${groups.map((g) => {
   const lid = g.key as number;
-  const hasBin = binLids.has(lid);
   const arms = g.members.map(({ item: b, index: i }, j) =>
-    `                ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, r.ledSuppressedIn[i]!)}${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!, hasBin, j === g.members.length - 1)}`);
+    `                ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, r.ledSuppressedIn[i]!)}${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!, exits.has(lid) && j === g.members.length - 1)}`);
   return `                ${lid} => {\n${arms.join('\n')}\n                }`;
 }).join('\n')}
                 _ => {}
@@ -1987,7 +1983,7 @@ function emitParserMachine(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shapeB
   const entriesField = reuse ? '\n    entries: Vec<EntryMeta>,' : '';
   const segsField = shapeB ? '\n    segs: Vec<Seg>,' : '';
   const ruleFns = [...ir.rules.filter((r) => ir.forms.buildRules.includes(r.name)).map((r) => {
-    if (r.kind === 'pratt') return prattRule(r, ir.tpl, ids, ar);
+    if (r.kind === 'pratt') return prattRule(r, ir, ids, ar);
     if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids, ar);
     return rdRule(r, ids, ar);
   }), ...ir.rules.filter((r) => ir.forms.recognizeRules.includes(r.name)).map((r) => ruleR(r, ids, ar))].join('\n\n');

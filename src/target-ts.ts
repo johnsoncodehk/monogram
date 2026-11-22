@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, dispatchWalk, gtCompLit, guardedSteps, type StepLowering, type RuleLowering, type DispatchLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattLedExits, stepExpr, stepStmts, ruleShell, dispatchWalk, gtCompLit, guardedSteps, type StepLowering, type RuleLowering, type DispatchLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -687,7 +687,8 @@ const ${r.name}_POST_TGT = ${set(ops.post)};`;
  *  the one slot left at the height `b` they found, else the stack is back at `b`. In the led loop
  *  the left operand is slot `b`: a led appends its other children after it, and `finP` finishes
  *  them all into slot `b`, the new left operand. */
-function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
+function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
+  const tpl = ir.tpl;
   const cn = J(r.name);
   // The NUD arms, each a longest-match candidate tried from `save`, reached through the rule's
   // Dispatch (emit-portable.ts, PrattRule.nudOrder / nudDispatch). `fin` is the finish of the arm's
@@ -742,16 +743,14 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
     for (const set of suppressedIn) parts.push(`_suppressCur !== ${set}`);
     return parts.length ? `if (${parts.join(' && ')}) ` : '';   // the `if` before the led's block; none when nothing gates it
   };
-  // A lid that ALSO has a binary entry (`<` is both a type-arg LED and the relational operator)
-  // must not `break` the Pratt loop when its LED arms fail: the restore happens, then control falls
-  // through to the binary check below so `<` still parses as a comparison. Multiple arms sharing a
-  // lid (e.g. `[` array-type then indexed-access) fall through to each other; only the LAST arm of
-  // a group emits `break ledLoop`.
-  const binLids = new Set(r.binary.map((b) => lidOf(ids, b.op)));
-  const ledBody = (b: Bracket, form: number, closes: boolean, hasBin: boolean, isLast: boolean) => `{
+  // Arms sharing a lid (`[` array-type then indexed-access) fall through to each other; when the
+  // LAST arm of a group failed, the loop ends if no later check can take the token (prattLedExits:
+  // `<` is also the relational operator, so its group falls through to the binary check).
+  const exits = prattLedExits(r, ir, ids);
+  const ledBody = (b: Bracket, form: number, closes: boolean, exit: boolean) => `{
       const ledSave = pos;
       if (${b.steps.map((x) => stepCond(x, ids, 'w')).join(' && ')}) { finP(${cn}, b); form = ${form};${closes ? ' tailClosed = true;' : ''} continue ledLoop; }
-      back(ledSave); _n = b + 1;${hasBin ? '' : isLast ? ' break ledLoop;' : ''}
+      back(ledSave); _n = b + 1;${exit ? ' break ledLoop;' : ''}
     }`;
   const ledSwitch = (() => {
     if (r.leds.length === 0) return '';
@@ -759,9 +758,8 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
     return `    switch (t.lid) {
 ${groups.map((g) => {
   const lid = g.key as number;
-  const hasBin = binLids.has(lid);
   const arms = g.members.map(({ item: b, index: i }, j) =>
-    `      ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, r.ledSuppressedIn[i]!)}${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!, hasBin, j === g.members.length - 1)}`);
+    `      ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, r.ledSuppressedIn[i]!)}${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!, exits.has(lid) && j === g.members.length - 1)}`);
   return `      case ${lid}:\n${arms.join('\n')}\n        break;`;
 }).join('\n')}
     }`;
@@ -837,7 +835,7 @@ ${dispatchTs(r.nudDispatch, 't', ids, nudArm)}
 function engineRuntime(ir: ParserIR, ids: LexIdPlan): string {
   const reuse = ir.reuse;
   const ruleFns = [...ir.rules.filter((r) => ir.forms.buildRules.includes(r.name)).map((r) => {
-    if (r.kind === 'pratt') return prattRuleW(r, ir.tpl, ids);
+    if (r.kind === 'pratt') return prattRuleW(r, ir, ids);
     if (reuse && r.name === ir.entry) return rdEntryWithReuseW(r, reuse, ids);
     return rdRuleW(r, ids);
   }), ...ir.rules.filter((r) => ir.forms.recognizeRules.includes(r.name)).map((r) => ruleR(r, ids))].join('\n\n');
