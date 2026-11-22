@@ -126,6 +126,13 @@ const statementEnds: { accept: string[]; reject: string[] } = {
     'export default function () {} g()', 'export var a = 1\nb',
     'class C { a\nb }', 'class C { a = 1\nb() {} }', 'class C { m() {} n() {} }', 'class C { m() {}; n() {} }',
     'class C { get g() {} set s(v) {} }', 'class C { static {} a }', 'class C { a; b }',
+    // An expression statement does not begin with `{`, `function`, `async` `function` on one
+    // line, `class`, `let [` or a decorator (14.5): there the statement is a block or a
+    // declaration, and what follows it is the next statement. In an expression it is a literal.
+    '{}\n(x)', '{}\n[x]', 'function f() {}\n(x)', 'function* g() {}\n[0]', 'class C {}\n[0]', '@dec class C {}\n(x)',
+    'async\nfunction f() {}', 'async\nfunction f() {}\n(x)', 'if (a) {}\n(x)', 'L: {}\n(x)', 'do {}\nwhile (y)',
+    '({}).x', '({ a: 1 }.x)', '(function () {})()', '(class {}).name', '(@dec class {}).x', 'x = {}.y', 'f({}.x)',
+    'x = () => ({}).y', 'x = () => {}\n(y)', 'export default {}.x', 'let = 1', 'let.x', 'async.x', 'async()',
   ],
   reject: [
     'a b', 'a = 1 b = 2', 'var a = 1 var b = 2', 'let a const b = 1', 'function f() { return a b }',
@@ -135,6 +142,10 @@ const statementEnds: { accept: string[]; reject: string[] } = {
     'export { a } from "m" x', 'export * from "m" x', 'export * as a from "m" x', 'export default a b',
     'export var a = 1 b',
     'class C { a b }', 'class C { a = 1 b }', 'class C { m() n() {} }', 'class C { get g() set s(v) {} }',
+    '{ a: 1 }.x', '{ a: 1 }\n.x', '{} .b', '{}\n.b', '{} = b', '{ a } = b', '{}, b', '{} in b', '{ b() {} }.x',
+    '{ ...a }.b', '{ function () {} }', 'if (a) {} = b', 'if (a) {} .b', 'while (a) {}, b', 'L: {}.x',
+    'do {}\n(x)\nwhile (y)', 'function f() {}.x', 'function f() {} = b', 'async function f() {}.x', 'class C {}.name',
+    '@dec class {}.x', '@dec class C {}.x', 'let[0] = 1', '(async\nfunction f() {})', 'x = async\nfunction () {}',
   ],
 };
 
