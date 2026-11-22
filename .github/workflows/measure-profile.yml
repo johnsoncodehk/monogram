@@ -2,8 +2,10 @@ name: measure profile
 
 # The deterministic profile of the emitted Rust parser, A against M (test/bench-rust-profile/run.sh):
 # Callgrind instructions per parse in both modes (a new CstBuilder per parse; one kept across
-# parses), the lexer alone, work counters, allocator calls and bytes, page faults, peak memory; and
-# emitParser sizes for both real grammars and every target (test/emit-sizes.ts). The report goes to
+# parses), the lexer alone, work counters, allocator calls and bytes, page faults, peak memory; beside
+# it the Go target's Callgrind instructions per parse (both modes) and the TS target's and emitted JS
+# parser's V8 block executions per parse, side by side per input; and emitParser sizes for both real
+# grammars and every target (test/emit-sizes.ts). The report goes to
 # the job summary (test/bench-rust-profile/pr-summary.ts); the raw results are the run's artifact.
 #
 # - pull_request touching the parser sources, a grammar file or the harness: A = the merge base,
@@ -21,6 +23,7 @@ on:
       - 'src/**'
       - '*.ts'
       - 'test/bench-rust-profile/**'
+      - 'test/bench-targets/**'
       - 'test/bench-rust-oxc/**'
       - 'test/oxc-parse-bench/**'
       - 'test/emit-sizes.ts'
@@ -67,6 +70,13 @@ jobs:
           node-version: 24
 
       - uses: dtolnay/rust-toolchain@stable
+
+      # The Go target is measured beside the Rust one (run.sh, "Go and TS targets"); the version the
+      # Go gates are recorded with (ci.yml).
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.4'
+          cache: false
 
       - run: sudo apt-get update -q && sudo apt-get install -y -q valgrind
 
@@ -145,6 +155,7 @@ jobs:
           W='${{ runner.temp }}/prof-work'
           export PROFILE_A_LABEL="$(git log -1 --format='`%h` %s' "$A")"
           export PROFILE_M_LABEL="$(git log -1 --format='`%h` %s' "$M")"
+          export RUNNER_CPU="$(lscpu | sed -n 's/^Model name: *//p'), $(nproc) CPUs"
           node test/bench-rust-profile/pr-summary.ts "$W/out/results.txt" "$W/out/emit-sizes-A.json" "$W/out/emit-sizes-M.json" > "$W/out/summary.md" || status=$?
           cat "$W/out/summary.md" >> "$GITHUB_STEP_SUMMARY"
           if [ "$SCOPE" = full ]; then
