@@ -31,7 +31,7 @@ type Parser = { parse(s: string): Cst; edit(cst: Cst, edits: Edit[]): void; visi
 type Tok = { type: string; text: string; offset: number; newlineBefore: boolean; commentBefore: boolean; multilineFlowBefore: boolean };
 type Em = { createParser(): Parser & { tokenAt(cst: Cst, i: number): Tok }; tokenize(s: string): Tok[] };
 
-const GRAMMARS = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'yaml', 'html', 'test/fixtures/envspec'];
+const GRAMMARS = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'yaml', 'html', 'test/fixtures/envspec', 'test/fixtures/elementdialect'];
 
 let seedState = 0x5EED1E55;
 const rand = () => ((seedState = (seedState * 48271) % 0x7fffffff) / 0x7fffffff);
@@ -239,13 +239,19 @@ const FRAME_DOCS: Record<string, string[]> = {
     'let a = <a b="\\" c=\'d\ne\'>t</a>;\nlet z = "q";',
   ],
   javascriptreact: ['let s = `a${b}c${`${d}`}`;\nx = 1;', 'let a = <><p>It\'s</p>{`${<b/>}`}</>;\nx</*c*/y;'],
+  // CODE children (no text token) and the derived entry (every `<` in code opens an element):
+  // directives and regions in children, a dynamic tag, an element right after a value, holes
+  'test/fixtures/elementdialect': [
+    'component C(a) {\n  <a k="v">@if (a) { <b/> } @else { "e" } {a}</a> "z" <c/>\n}',
+    'component D() { <a><b>{1}</b><{t} id="d">"s"</{t}></a> }\ncomponent E() { "q" }',
+  ],
 };
 // (`"` and `\` make lex errors: inside an undecided type-parameter signature an error is the
 // signature's rewind verdict, in the strict and the recovering pass alike)
 const FRAME_INS = ['`', '$', '{', '}', '(', ')', '<', '>', '/', ':', ',', 'x', ' ', '\n', '"', '\\'];
 let frameSteps = 0;
 for (const [name, docs] of Object.entries(FRAME_DOCS)) {
-  const em = (await import(`${TMP}/${name}.mts?v=` + process.pid)) as Em;
+  const em = (await import(`${TMP}/${name.replace(/\//g, '_')}.mts?v=` + process.pid)) as Em;
   const session = em.createParser();
   const fresh = em.createParser();
   for (const doc of docs) {
@@ -276,6 +282,35 @@ for (const [name, docs] of Object.entries(FRAME_DOCS)) {
   }
 }
 console.log(`  lexer-frame edits: ${frameSteps} one-character edits over ${Object.values(FRAME_DOCS).flat().length} documents`);
+
+// The per-token frame-depth record is one byte and only a zero is read: it must SATURATE at 255.
+// A wrap at 256 nested holes would record 0 inside them and offer those tokens as relex anchors.
+// Documents with 254 … 257 (and 300) nested template holes: an edit inside the innermost hole,
+// one that closes a template there, and two after the nest.
+let deepSteps = 0;
+{
+  const em = (await import(`${TMP}/javascript.mts?v=` + process.pid)) as Em;
+  const session = em.createParser(), fresh = em.createParser();
+  for (const n of [254, 255, 256, 257, 300]) {
+    const doc = 'a = ' + '`${'.repeat(n) + 'x' + '}`'.repeat(n) + ';\nb = 1;\nc = 2;';
+    const x = doc.indexOf('x');
+    const edits: Edit[] = [
+      { start: x, end: x + 1, text: 'y' }, { start: x + 1, end: x + 1, text: '`' },
+      { start: doc.indexOf('1;'), end: doc.indexOf('1;') + 1, text: '3' }, { start: doc.indexOf('2;'), end: doc.indexOf('2;') + 1, text: '`' },
+    ];
+    for (const edit of edits) {
+      totalSteps++; deepSteps++;
+      const next = doc.slice(0, edit.start) + edit.text + doc.slice(edit.end);
+      const cst = session.parse(doc); session.edit(cst, [edit]); const fc = fresh.parse(next);
+      if (fc.errors.length > 0) totalErr++;
+      const a = JSON.stringify(objectify(fresh.tree, (fns) => fresh.visit(fc, fns))) + JSON.stringify(fc.errors);
+      const b = JSON.stringify(objectify(session.tree, (fns) => session.visit(cst, fns))) + JSON.stringify(cst.errors);
+      if (a !== b) { fails++; if (failures.length < 10) failures.push(`javascript ${n} nested holes ${JSON.stringify(edit)}: edit ≠ fresh`); continue; }
+      totalEqual++;
+    }
+  }
+}
+console.log(`  deep-hole edits: ${deepSteps} edits on documents with 254-300 nested template holes`);
 
 console.log(`incremental-grammars: ${totalEqual}/${totalSteps} steps equal+consistent across ${GRAMMARS.length} grammars (${totalErr} recovered with errors)`);
 for (const s of failures) console.log('  ✗ ' + s);
