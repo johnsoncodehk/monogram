@@ -35,10 +35,9 @@ jobs:
       - run: test/bench-rust-profile/run.sh
         env:
           PROFILE_WORK: ${{ runner.temp }}/prof-work
-          # Before / after of perf/token-array-reservation (#126) with builder workspace reuse:
-          # A = origin/master 29b193b, M = aed2c94.
-          PROFILE_A: 29b193ba523cef163b32c50f0abb33c537fad8f3
-          PROFILE_M: 60e8b1248ed2e09bcc86d1463ba91ff55a43c780
+          # #126's lexer stacks by reference (A = aed2c94) vs moved by value (M = bench-variant/workspace-byvalue 940fb1c).
+          PROFILE_A: aed2c94feacdb6da809a06ea65827327f7c7d00f
+          PROFILE_M: 940fb1c28be917ca134af7f22ef0dc0e0deac824
 
       - uses: actions/upload-artifact@v4
         if: always()
