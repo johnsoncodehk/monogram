@@ -330,7 +330,10 @@ export type GuardSet = TokenSet & { id: number };
 export type CommitTest = { arm: number; first: boolean; lead: number[] };
 export type CommitAct = CommitTest & { nullable: boolean; clean: boolean; unless: CommitTest[] };
 export type CommitCase = { keys: string[]; act: CommitAct | null | 'frame' };
-export type Commit = { lid: CommitCase[]; kid: CommitCase[] };
+// `fail`: the punctuation literals at which no candidate can begin. A punctuation token has no kind
+// any kid case names, so it needs no case: the frame path tests them as one set (failSet, a
+// ParserIR.tokenSets id) before its frame, which would have tried nothing there.
+export type Commit = { lid: CommitCase[]; kid: CommitCase[]; fail?: string[]; failSet?: number };
 /** What the commit analysis reads of one candidate: its first-token set (null: any token), its lead
  *  tests, whether it has a test only the run decides, whether its steps can match nothing / fail
  *  clean, and the kinds at which it has no commit form (an interpolated template arm). */
@@ -343,7 +346,7 @@ export function frameDispatch(d: Dispatch, c: Commit, kindsOf: (text: string) =>
   const decided = (a: CommitCase['act']) => a === null || (a !== 'frame' && a.unless.length === 0);
   const lidAct = (l: string) => c.lid.find((x) => x.keys.includes(l))?.act;
   const kidAct = (k: string) => c.kid.find((x) => x.keys.includes(k))?.act ?? 'frame';
-  const lidDead = (l: string) => { const a = lidAct(l); return a !== undefined ? decided(a) : [...kindsOf(l)].every((k) => decided(kidAct(k))); };
+  const lidDead = (l: string) => { if (c.fail?.includes(l)) return true; const a = lidAct(l); return a !== undefined ? decided(a) : [...kindsOf(l)].every((k) => decided(kidAct(k))); };
   const kidDead = (k: string) => decided(kidAct(k)) && c.lid.every((x) => decided(x.act) || !x.keys.some((l) => kindsOf(l).has(k)));
   let pruned = false;
   const sections = d.sections.flatMap((sec): DispatchSection[] => {
@@ -413,9 +416,11 @@ export function commitOf(cands: CommitCand[], P: CommitTables): Commit | undefin
     lidKeys.push([l, act]);
   }
   const kidKeys = [...kidActs].filter(([, act]) => act !== 'frame');
-  const lid = group(lidKeys), kid = group(kidKeys);
-  if (![...lid, ...kid].some((c) => c.act !== 'frame')) return undefined;
-  return { lid: lid.filter((c) => !(c.act === 'frame' && kid.length === 0)), kid };
+  const punct = (l: string) => { const ks = P.kindsOf(l); return ks.size === 1 && ks.has(''); };
+  const fail = lidKeys.filter(([l, act]) => act === null && punct(l)).map(([l]) => l);
+  const lid = group(lidKeys.filter(([l]) => !fail.includes(l))), kid = group(kidKeys);
+  if (![...lid, ...kid].some((c) => c.act !== 'frame') && fail.length === 0) return undefined;
+  return { lid: lid.filter((c) => !(c.act === 'frame' && kid.length === 0)), kid, ...(fail.length ? { fail } : {}) };
 }
 // One NUD arm of a Pratt rule, by the bucket that holds its plan and its index there.
 export type NudRef =
@@ -1101,6 +1106,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
     };
     const nullableList = (steps: Step[]): boolean => steps.every(nullableStep);
     const P = { kinds, kindsOf, tokenSets, ctxWords };
+    const failSetOf = (c: Commit): Commit => { if (c.fail) { c.failSet = tokenSetOf({ lits: c.fail, toks: [] }); delete c.fail; } return c; };
     for (const r of rules) {
       if (r.kind === 'rd') {
         if (r.predictive || r.alts.length < 2) continue;
@@ -1108,7 +1114,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
           first: g?.first ?? null, lead: g?.lead ?? [], runtime: g !== null && g.second !== null,
           nullable: nullableList(guardedSteps(g, r.alts[i]!)), clean: listFailsClean(guardedSteps(g, r.alts[i]!)),
         })), P);
-        if (c) { r.altCommit = c; r.altDispatch = frameDispatch(r.altDispatch, c, kindsOf); r.altBody = commitBodies(c, r.altDispatch, r.alts.map((alt, i) => guardedSteps(r.altGuard[i]!, alt))); }
+        if (c) { r.altDispatch = frameDispatch(r.altDispatch, c, kindsOf); r.altCommit = failSetOf(c); r.altBody = commitBodies(c, r.altDispatch, r.alts.map((alt, i) => guardedSteps(r.altGuard[i]!, alt))); }
       } else {
         const ops = [...new Set(r.prefix.map((p) => p.op))];
         const c = commitOf(r.nudOrder.map((n): CommitCand => {
@@ -1124,7 +1130,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
             case 'prefix': return { first: { lits: ops, toks: [] }, lead: [], runtime: false, nullable: false, clean: false };
           }
         }), P);
-        if (c) { r.nudCommit = c; r.nudDispatch = frameDispatch(r.nudDispatch, c, kindsOf); r.nudBody = commitBodies(c, r.nudDispatch, r.nudOrder.map((n) => (n.kind === 'bracket' ? r.nudBrackets[n.index]!.steps : n.kind === 'seq' ? guardedSteps(r.nudSeqGuard[n.index]!, r.nudSeqs[n.index]!) : n.kind === 'capped' ? guardedSteps(r.nudCappedGuard[n.index]!, r.nudCapped[n.index]!.steps) : null))); }
+        if (c) { r.nudDispatch = frameDispatch(r.nudDispatch, c, kindsOf); r.nudCommit = failSetOf(c); r.nudBody = commitBodies(c, r.nudDispatch, r.nudOrder.map((n) => (n.kind === 'bracket' ? r.nudBrackets[n.index]!.steps : n.kind === 'seq' ? guardedSteps(r.nudSeqGuard[n.index]!, r.nudSeqs[n.index]!) : n.kind === 'capped' ? guardedSteps(r.nudCappedGuard[n.index]!, r.nudCapped[n.index]!.steps) : null))); }
       }
     }
   }
@@ -1352,7 +1358,7 @@ export function ruleShell(r: RdRule, ids: LexIdPlan, L: RuleLowering): string {
     : L.commit(a.arm, tests(a), body(a.arm, S), !a.clean || a.nullable, a.nullable));
   // A frame left with no candidate (the switch decides every key it could reach) matches nothing.
   const rest = dispatchArms(r.altDispatch).size === 0 ? [`${L.ind}${L.commitFail}`] : [L.openBest(r.altDispatch), ...frame];
-  return L.fn([L.commitPeek, L.dispatch.nil(commitWalk(r.altCommit, ids, act, tests, L.commitSw)), ...rest]);
+  return L.fn([L.commitPeek, L.dispatch.nil(commitWalk(r.altCommit, ids, act, tests, L.commitSw, L.guardConds(failSetGuard(r.altCommit)))), ...rest]);
 }
 
 // ── The committed choice: one walk over a Commit, rendered by every target ──
@@ -1383,7 +1389,9 @@ export function commitPrinted(c: Commit): CommitAct[] {
   for (const x of [...c.lid, ...c.kid]) if (x.act !== null && x.act !== 'frame' && !out.has(commitWhat(x.act))) out.set(commitWhat(x.act), x.act);
   return [...out.values()];
 }
-export function commitWalk(c: Commit, ids: LexIdPlan, act: (a: CommitAct | null) => string, tests: (t: CommitTest) => string[], C: CommitLowering): string {
+/** The Guard whose only test is Commit.failSet: the conditions a lowering prints for it are the set test. */
+export const failSetGuard = (c: Commit): Guard => (c.failSet === undefined ? null : { first: { id: c.failSet, lits: [], toks: [] }, second: null, lead: [], skip: 0 });
+export function commitWalk(c: Commit, ids: LexIdPlan, act: (a: CommitAct | null) => string, tests: (t: CommitTest) => string[], C: CommitLowering, failTest: string[]): string {
   // A commit shared by more than one case is picked.
   const what = commitWhat;
   const uses = new Map<string, number>();
@@ -1407,9 +1415,10 @@ export function commitWalk(c: Commit, ids: LexIdPlan, act: (a: CommitAct | null)
   const cases = (by: 'lid' | 'kid', cs: CommitCase[]) => cs.map((x) => ({ keys: x.keys.map((k) => id(by, k)), stmt: stmt(x.act) }));
   const kid = c.kid.length ? C.sw('kid', cases('kid', c.kid), '') : '';
   const sw = c.lid.length ? C.sw('lid', cases('lid', c.lid), kid) : kid;
-  if (shared.length === 0) return sw;
+  const fail = failTest.length ? [C.ifAll(failTest, act(null))] : [];
+  if (shared.length === 0) return [...(sw ? [sw] : []), ...fail].join('\n');
   const acts = [...c.lid, ...c.kid].map((x) => x.act).filter((x): x is CommitAct => x !== null && x !== 'frame');
-  return [C.pickDecl, sw, C.picked(shared.map((w, k) => ({ n: k + 1, stmt: act(acts.find((x) => what(x) === w)!) })))].join('\n');
+  return [C.pickDecl, sw, C.picked(shared.map((w, k) => ({ n: k + 1, stmt: act(acts.find((x) => what(x) === w)!) }))), ...fail].join('\n');
 }
 
 // ── The entry rule with reuse recording (ParserIR.reuse), decided once ──
@@ -1565,7 +1574,7 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
       case 'prefix': return L.commitPrefix(c.arm, tests(c));
     }
   };
-  const commit = r.nudCommit === undefined ? [] : [commitWalk(r.nudCommit, ids, act, tests, L.commitSw)];
+  const commit = r.nudCommit === undefined ? [] : [commitWalk(r.nudCommit, ids, act, tests, L.commitSw, L.nudGuard(failSetGuard(r.nudCommit), false))];
   const frame = r.nudCommit !== undefined && dispatchArms(d).size === 0 ? [L.commitFail, L.nudEnd] : [L.nudOpen, dispatchWalk(d, ids, nudArm, L.dispatch, false), L.nudClose];
   const nud = [L.nudEnter, ...commit, ...frame].join('\n');
   return [L.entry, bp, nud].join('\n');
