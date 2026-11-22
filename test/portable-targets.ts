@@ -35,7 +35,7 @@ import { createParser } from '../src/gen-parser.ts';
 import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
 import { emitParser, jsTarget, tsTarget, goTarget, rustTarget } from '../src/emit.ts';
 import { objectify } from './emitted-obj.ts';
-import { buildLexIdPlan, portableIR } from '../src/emit-portable.ts';
+import { buildLexIdPlan, elementTokens, portableIR } from '../src/emit-portable.ts';
 import { asGoMain } from './go-main.ts';
 import { parityInputs, type Tok } from './parity-corpus.ts';
 import { CTX_CASES, CTX_DOCS, ctxEdits } from './context-cases.ts';
@@ -1016,8 +1016,12 @@ const CASES: Case[] = [
       'x = <a>{ {} }</a>;', 'x = <a b="\\" />;', 'if (a) <a/>; else <b></b>', 'x = <T>(x: <U>() => U) => x;',
       'x = <a>{/* c */}</a>;', 'x = (<a/>) / 2;', 'x = <a/> / 2 / 3;', 'x = <a>{(<b/>)}</a>;', 'let f: <T>(x: T) => T;',
       'x = <a>text\nmore</a>;', 'let m = new Map</* c */string, X>();', 'const x: number = 1;',
+      // children text that spells a literal is text, never that literal (region tokens carry no
+      // literal id): each parses differently, or not at all, where the text is taken as the literal
+      "x = <a>if (x) {'{'}</a>;", 'x = <a>return</a>;', 'x = <a>function</a>;', 'x = <a>;</a>;', 'x = <a>class</a>;',
+      'x = <a>{b}if{c}</a>;', 'x = <a><b>{c};</b>)</a>;', 'x = <a>as</a> as T;', 'x = <a>,</a>, 1;',
     ],
-    reject: ['x = <a x=<b/> />;', 'x = <a>}</a>;', 'x = <a>></a>;', 'x = <b>{x}</b>\n/re/.test(y);', 'x = <a/>\n<b/>;', 'x = <a>;', 'x = </a>;'],
+    reject: ['x = <a>=></a>;', 'x = <a x=<b/> />;', 'x = <a>}</a>;', 'x = <a>></a>;', 'x = <b>{x}</b>\n/re/.test(y);', 'x = <a/>\n<b/>;', 'x = <a>;', 'x = </a>;'],
   },
   {
     grammar: 'javascriptreact', path: '../javascriptreact.ts',
@@ -1025,8 +1029,12 @@ const CASES: Case[] = [
       'x = <a b="c" d={e}>t {f} <g/> h</a>;', 'x = <></>;', 'x = a < b > c;', 'x = <a>{`t${<b/>}`}</a>;',
       "x = <b>(it's)</b>;", 'x = <a>{ {} }</a>;', 'if (a) <a/>; else <b></b>', 'x = (<a/>) / 2;', 'x = <a/> / 2 / 3;',
       "let a = <><p>It's</p>{`${<b/>}`}</>;\nx</*c*/y;", 'x = <a.b c:d="e" {...f}/>;',
+      // children text that spells a literal is text, never that literal (region tokens carry no
+      // literal id): each parses differently, or not at all, where the text is taken as the literal
+      "x = <a>if (x) {'{'}</a>;", 'x = <a>return</a>;', 'x = <a>function</a>;', 'x = <a>;</a>;', 'x = <a>class</a>;',
+      'x = <a>{b}if{c}</a>;', 'x = <a><b>{c};</b>)</a>;', 'x = <a>,</a>, 1;',
     ],
-    reject: ['x = <a>}</a>;', 'x = <a>;', 'x = </a>;', 'f = <T,>(x) => x;'],
+    reject: ['x = <a>}</a>;', 'x = <a>;', 'x = </a>;', 'f = <T,>(x) => x;', 'x = <a>=></a>;', 'x = <a>as</a> as T;'],
   },
   {
     // code children, and the derived entry: every `<` in code opens an element
@@ -1034,8 +1042,11 @@ const CASES: Case[] = [
     accept: [
       'component C(a) {\n  <a k="v">@if (a) { <b/> } @else { "e" } {a}</a> "z" <c/>\n}',
       'component D() { <a><b>{1}</b><{t} id="d">"s"</{t}></a> }\ncomponent E() { "q" }',
+      // a raw body is one token whatever it spells (a directive, a keyword, a closer, a hole), next to code children
+      'component C() { <style>@if (a) { </style> }', 'component C() { <style>component</style> <a>@if (b) { <c/> }</a> }',
+      'component C() { <a><style>}</style>"t"</a> }', 'component C() { <style>{a}</style> }', 'component C() { <style>x</STYLE></style> }',
     ],
-    reject: ['component C() { /> }', 'component C() { </a> }', 'component C() { <a> }'],
+    reject: ['component C() { /> }', 'component C() { </a> }', 'component C() { <a> }', 'component C() { <STYLE>x</STYLE> }', 'component C() { <style>x }'],
   },
 ];
 // The element-region grammars' cases may be run alone: PORTABLE_GRAMMARS=a,b (a development aid;
@@ -1345,6 +1356,8 @@ const FRAME_EDIT_DOCS: Record<string, string[]> = {
   elementdialect: [
     'component C(a) {\n  <a k="v">@if (a) { <b/> } @else { "e" } {a}</a> "z" <c/>\n}',
     'component D() { <a><b>{1}</b><{t} id="d">"s"</{t}></a> }\ncomponent E() { "q" }',
+    // a raw-text element: one body token up to its close tag; edits that break or make the close tag, an empty body
+    'component S() { <a><style k="v">.a { b: "c" } <i></style>"t"</a> <style></style> }',
   ],
 };
 const HOLE_EDIT_DOCS = [
@@ -2146,14 +2159,17 @@ for (const c of CASES) {
       // One literal id per text: the id the lexer gives a token, and the one lid_of gives the
       // same text when a Doc rebuilds that token from its metadata, are both the text's index in
       // the grammar's literal table (0: no literal) — for every token of the corpus and for
-      // every literal of the table.
+      // every literal of the table. A token of an element region's own (text, raw text, tag
+      // tokens, close / self-close) carries 0 whatever its text: it is never a literal.
+      const regionTok = new Set(elementTokens(portableIR(grammar).elements));
       const lidBad: string[] = [];
       const texts = new Set<string>(lids.slice(1));
       inputs.forEach((input, i) => {
         if (gotToks[i] === null || gotToks[i] === 'NUL') return;
         for (const [kind, text, , lid] of JSON.parse(gotToks[i]!) as [string, string, boolean, number][]) {
           texts.add(text);
-          if (lid !== lidOfText(text)) lidBad.push(`lexer gives ${kind} ${JSON.stringify(text)} lid ${lid}, the table ${lidOfText(text)} — in ${JSON.stringify(input.src.slice(0, 80))}`);
+          const want = regionTok.has(kind) ? 0 : lidOfText(text);
+          if (lid !== want) lidBad.push(`lexer gives ${kind} ${JSON.stringify(text)} lid ${lid}, its id ${want} — in ${JSON.stringify(input.src.slice(0, 80))}`);
         }
       });
       const textList = [...texts].filter((t) => !t.includes('\0'));

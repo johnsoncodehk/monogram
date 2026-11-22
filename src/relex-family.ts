@@ -33,7 +33,7 @@
 // only the unchanged text after them, so resync needs only the lexer state to match. Nothing of
 // this is recorded by the lexer: the lexers pay nothing for it.
 
-import { type ParserIR, buildLexIdPlan, kidOf, lidOf } from './emit-portable.ts';
+import { type ParserIR, buildLexIdPlan, kidOf, lidOf, regionKids } from './emit-portable.ts';
 import { type LookPlan, lexLookPlan } from './lex-family.ts';
 import type { CSet } from './lex-match-plan.ts';
 import { type Expr, type Fn, type ListTy, type Lowering, type MetaFlag, type MetaInt, type Stmt, type TokInt, type Ty, printFns } from './algo-ir.ts';
@@ -49,6 +49,8 @@ export interface RelexMode {
   elements: boolean;
   // Raw-text elements: the lexer keeps each element frame's tagOpen token index (tagAt).
   raw: boolean;
+  // The kinds of the region's own tokens: they carry no literal id (emit-portable.ts regionKids).
+  regionKids: number[];
   kidNl: number;
   lidLParen: number;
   // The lexer's reads past a token's end + 1 (anchor rule (ii)); token names resolved to kids.
@@ -68,6 +70,7 @@ export function relexMode(ir: ParserIR): RelexMode {
     template: window && !!ir.tpl,
     elements: window && !!ir.elements,
     raw: window && !!ir.elements?.rawText.length,
+    regionKids: regionKids(ir, ids),
     kidNl: newline ? kidOf(ids, ir.newlineCfg!.token) : -1,
     lidLParen: regex ? lidOf(ids, '(') : -1,
     // lexLookPlan asks relexMode only for `window`: resolved lazily, after this returns.
@@ -186,12 +189,16 @@ function restoreFromAnchor(m: RelexMode): Stmt[] {
   const s: Stmt[] = [set('scanOff', mi('anchor', 'end'))];
   if (m.newline) s.push(set('flowDepth', mi('anchor', 'fd')), set('pendingNl', eq(mi('anchor', 'kid'), I(m.kidNl))));
   if (m.regex) {
+    // a token's literal id from its text: none for a region token (regionKids)
+    const lidOfTok = (name: string, t: Expr): Stmt[] => m.regionKids.length
+      ? [if_(or(...m.regionKids.map((k) => eq(mi(t, 'kid'), I(k)))), [set(name, I(0))], [set(name, { k: 'lidOf', s: mtext('oldText', t) })])]
+      : [set(name, { k: 'lidOf', s: mtext('oldText', t) })];
     s.push(
-      set('prevLid', { k: 'lidOf', s: mtext('oldText', 'anchor') }),
+      ...lidOfTok('prevLid', x('anchor')),
       set('prevKid', mi('anchor', 'kid')),
       set('hasPrev', T),
       if_(ge('rb', I(1)), [
-        set('bpLid', { k: 'lidOf', s: mtext('oldText', at('oldToks', sub('rb', I(1)))) }),
+        ...lidOfTok('bpLid', at('oldToks', sub('rb', I(1)))),
         set('hasPrev2', T),
       ]),
       set('lastClose', mf('anchor', 'lc')),
@@ -206,7 +213,7 @@ function restoreFromAnchor(m: RelexMode): Stmt[] {
 // ---- functions ----
 
 function toMetaFn(): Fn {
-  const zero: RelexMode = { window: false, newline: false, regex: false, template: false, elements: false, raw: false, kidNl: -1, lidLParen: -1, look: { arms: [], over: [], reach: [] }, kidOf: () => -1 };
+  const zero: RelexMode = { window: false, newline: false, regex: false, template: false, elements: false, raw: false, regionKids: [], kidNl: -1, lidLParen: -1, look: { arms: [], over: [], reach: [] }, kidOf: () => -1 };
   return {
     name: 'toMeta',
     doc: 'Stateless meta for tokens of a lexer whose meta carries no lexer state.',

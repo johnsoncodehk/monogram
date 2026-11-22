@@ -552,6 +552,10 @@ function elementPlanOf(grammar: CstGrammar, el: NonNullable<CstGrammar['elements
   };
 }
 
+// The kinds of an element region's own tokens. They carry no literal id (0), whatever their text:
+// the parser matches a literal by its id alone, and a region token is never a literal (the
+// interpreter's lexer records 0 for them too). A Doc that rebuilds ids from text tests this class.
+export const regionKids = (ir: ParserIR, ids: LexIdPlan): number[] => elementTokens(ir.elements).map((n) => kidOf(ids, n));
 // The token names an element region lexes itself (never the ordinary scan).
 export const elementTokens = (e: ElementPlan | null): string[] => (e ? [...(e.text ? [e.text] : []), e.closeTag, e.selfClose, ...e.tagTokens, ...e.rawText.map((r) => r.token)] : []);
 
@@ -1769,8 +1773,6 @@ export function literalKinds(ir: Pick<ParserIR, 'tokens' | 'tpl' | 'elements' | 
       ks = new Set<string>();
       if (ir.puncts.includes(text)) ks.add('');
       for (const t of scannedTokens(ir)) if (tokenLiterals(ir, t, [text]).length) ks.add(t.name);
-      // an element region's own tokens carry the literal ids of their texts too
-      for (const n of elementTokens(ir.elements)) { const t = ir.tokens.find((d) => d.name === n)!; if (tokenLiterals(ir, t, [text]).length) ks.add(n); }
       const tl = templateLiterals(ir, [text]);
       if (ir.tpl && tl.whole.length) ks.add(ir.tpl.token);
       if (tl.head.length) ks.add('$templateHead');

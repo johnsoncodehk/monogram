@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { elementTokens, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
+import { elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -364,10 +364,6 @@ function elementLexerRust(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms
   const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0;
   const operand = el.entry === 'operand';
   if (operand && !rx) throw new Error('portable: an operand element entry needs the regex context (prevIsValue)');
-  // A region token whose text may be a literal carries that literal's id, as every token does
-  // (a Doc rebuilds a token's id from its text).
-  const carry = elementTokens(el).map((n) => ({ kid: kidOf(ids, n), lits: shared.tokenLiterals(ir, ir.tokens.find((t) => t.name === n)!, ids.lids.slice(1)) })).filter((c) => c.lits.length);
-  const lidOfRegion = (k: string, bytes: string, dflt: string) => carry.reduceRight((acc, c) => `if ${k} == ${c.kid} { ${lidCall(c.lits, bytes)} } else { ${acc} }`, `${dflt} as u16`);
   const L = tlen(el.tagOpen);
   // While a signature is undecided an error is its verdict: a sentinel from the error routines.
   const fail = (code: string) => (sig ? code.replace(/let \(interp, e\) = _scan_tpl_span\(([^;]*)\);/g, 'let (interp, e) = _scan_tpl_span($1); if e == usize::MAX { st.spec_fail = true; continue; }') : code);
@@ -474,7 +470,7 @@ ${sig ? '            if op == 2 { st.spec_begin(pos); }\n' : ''}        }
             let (fe, fk, fl, ft, fp, fa, fla) = ${shared.elementFn('frame')}(src, pos as isize, fr as isize, st.tag_angle, after_eq, st.la_end);
             st.la_end = fla;
             if fe >= 0 {
-                st.emit(pos, fe as usize, fk as u16, ${lidOfRegion('fk', '&b[pos..fe as usize]', 'fl')});
+                st.emit(pos, fe as usize, fk as u16, fl as u16);
 ${raw ? `                // each element frame's current tag: the index of its tagOpen token (the name is the next)
                 if fl as u16 == _LID_EL_OPEN { let at = st.acc.len() as i64 - 1; if fp == 6 { st.tag_at.push(at); } else if (fr >> 2) & 3 == 0 { *st.tag_at.last_mut().unwrap() = at; } }
 ` : ''}                if ft < 0 { st.template_stack.pop();${raw ? ' st.tag_at.pop();' : ''} st.el_ended = true; } else { *st.template_stack.last_mut().unwrap() = ft as i64; }
@@ -490,7 +486,7 @@ ${raw ? `                // an open tag ended: a raw-text name gives its body to
 ${raw ? `        if st.template_stack.last() == Some(&3) {
             let t = st.acc[(*st.tag_at.last().unwrap() + 1) as usize];
             let (re, rk) = ${shared.elementFn('raw')}(src, t.off as isize, t.end as isize, pos as isize);
-            st.emit(pos, re as usize, rk as u16, ${lidOfRegion('rk', '&b[pos..re as usize]', '0')}); st.template_stack.pop(); pos = re as usize; continue;
+            st.emit(pos, re as usize, rk as u16, 0); st.template_stack.pop(); pos = re as usize; continue;
         }
 ` : ''}`;
   const panicSite = sig ? p.uniIdentOrPanic.replace(/(\s*)panic!\("Unexpected character/, '$1if st.spec_on { st.spec_fail = true; continue; }$1panic!("Unexpected character') : p.uniIdentOrPanic;
@@ -1985,7 +1981,7 @@ fn compute_align_core(old_text: &str, old_toks: &[AlignMeta], new_text: &str, ne
     (old_n, new_n, prefix, suffix)
 }
 fn toks_from_meta(text: &str, meta: &[AlignMeta]) -> Vec<Tok> {
-    meta.iter().map(|m| { let tx = am_text(text, m); mk_tok(m.off as usize, m.end as usize, am_nl(m), m.kid, lid_of(tx.as_bytes())) }).collect()
+    meta.iter().map(|m| { let tx = am_text(text, m); mk_tok(m.off as usize, m.end as usize, am_nl(m), m.kid, ${regionKids(ir, buildLexIdPlan(ir)).length ? `if ${regionKids(ir, buildLexIdPlan(ir)).map((k) => `m.kid == ${k}`).join(' || ')} { 0 } else { lid_of(tx.as_bytes()) }` : 'lid_of(tx.as_bytes())'}) }).collect()
 }
 ${treeEqFn}${reuseFns}pub struct Doc<B: Builder = CstBuilder> {
     text: String,

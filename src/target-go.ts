@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { elementTokens, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
+import { elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -416,10 +416,6 @@ function elementLexerGo(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms, 
   const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0;
   const operand = el.entry === 'operand';
   if (operand && !rx) throw new Error('portable: an operand element entry needs the regex context (prevIsValue)');
-  // A region token whose text may be a literal carries that literal's id, as every token does
-  // (a Doc rebuilds a token's id from its text).
-  const carry = elementTokens(el).map((n) => ({ kid: kidOf(ids, n), lits: shared.tokenLiterals(ir, ir.tokens.find((t) => t.name === n)!, ids.lids.slice(1)) })).filter((c) => c.lits.length);
-  const lidOfRegion = (k: string, text: string, dflt: string) => `func() uint16 { ${carry.map((c) => `if ${k} == ${c.kid} { return ${lidCallGo(c.lits, text)} }; `).join('')}return uint16(${dflt}) }()`;
   const L = tlen(el.tagOpen);
   const consts = `const lidElOpen uint16 = ${lidOf(ids, el.tagOpen)}
 const lidElClose uint16 = ${lidOf(ids, el.tagClose)}
@@ -519,7 +515,7 @@ ${sig ? `\t\t\tif op == 2 {
 \t\t\tfe, fk, fl, ft, fp, fa, fla := ${shared.elementFn('frame')}(src, pos, fr, tagAngle, len(*acc) > 0 && (*acc)[len(*acc)-1].Lid == lidEq, laEnd)
 \t\t\tlaEnd = fla
 \t\t\tif fe >= 0 {
-\t\t\t\temit(pos, fe, uint16(fk), ${carry.length ? lidOfRegion('fk', 'src[pos:fe]', 'fl') : 'uint16(fl)'})
+\t\t\t\temit(pos, fe, uint16(fk), uint16(fl))
 ${raw ? `\t\t\t\t// each element frame's current tag: the index of its tagOpen token (the name is the next)
 \t\t\t\tif uint16(fl) == lidElOpen { if fp == 6 { tagAt = append(tagAt, len(*acc)-1) } else if (fr>>2)&3 == 0 { tagAt[len(tagAt)-1] = len(*acc) - 1 } }
 ` : ''}\t\t\t\tif ft < 0 { templateStack = templateStack[:len(templateStack)-1];${raw ? ' tagAt = tagAt[:len(tagAt)-1];' : ''} elEnded = true } else { templateStack[len(templateStack)-1] = ft }
@@ -536,7 +532,7 @@ ${raw ? `\t\t\t\t// an open tag ended: a raw-text name gives its body to a raw f
 ${raw ? `\t\tif len(templateStack) > 0 && templateStack[len(templateStack)-1] == 3 {
 \t\t\ti := tagAt[len(tagAt)-1] + 1
 \t\t\tre, rk := ${shared.elementFn('raw')}(src, int((*acc)[i].Off), int((*acc)[i].End), pos)
-\t\t\temit(pos, re, uint16(rk), ${carry.length ? lidOfRegion('rk', 'src[pos:re]', '0') : '0'}); templateStack = templateStack[:len(templateStack)-1]; pos = re; continue
+\t\t\temit(pos, re, uint16(rk), 0); templateStack = templateStack[:len(templateStack)-1]; pos = re; continue
 \t\t}
 ` : ''}`;
   const loopBody = `${sig ? '\t\tif specTok >= 0 && (specDone || specFail || pos >= n) { specRewind(); continue }\n' : ''}\t\tc := int(src[pos])
@@ -1827,7 +1823,7 @@ func toksFromMeta(text string, meta []alignMeta) []Tok {
 	t := make([]Tok, len(meta))
 	for i, m := range meta {
 		tx := amText(text, m)
-		t[i] = mkTok(int(m.Off), int(m.End), amNl(m), m.Kid, lidOf(tx))
+		t[i] = mkTok(int(m.Off), int(m.End), amNl(m), m.Kid, ${regionKids(ir, buildLexIdPlan(ir)).length ? `func() uint16 { if ${regionKids(ir, buildLexIdPlan(ir)).map((k) => `m.Kid == ${k}`).join(' || ')} { return 0 }; return lidOf(tx) }()` : 'lidOf(tx)'})
 	}
 	return t
 }
