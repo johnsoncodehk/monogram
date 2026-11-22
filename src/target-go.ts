@@ -3452,13 +3452,13 @@ func (p *engine) opt(body func() bool) bool {
 \tm := p.mark(); if !body() { p.reset(m) }; return true
 }
 func (p *engine) sepBy(elem func() bool, delimLid uint16) bool {
-\tsp0 := p.pos; sb0 := len(p.scratch); nb0 := len(p.nodes); kb0 := len(p.kids)
-\tif !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; p.nodes = p.nodes[:nb0]; p.kids = p.kids[:kb0]; return true }
+\tm0 := p.mark()
+\tif !elem() { p.reset(m0); return true }
 \tfor {
-\t\tsp := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
-\t\tif !p.matchLit(delimLid) { p.back(sp); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; break }
-\t\tsp2 := p.pos; sb2 := len(p.scratch); nb2 := len(p.nodes); kb2 := len(p.kids)
-\t\tif !elem() { p.back(sp2); p.scratch = p.scratch[:sb2]; p.nodes = p.nodes[:nb2]; p.kids = p.kids[:kb2]; break }   // trailing delim OK — keep delim
+\t\tm := p.mark()
+\t\tif !p.matchLit(delimLid) { p.reset(m); break }
+\t\tm2 := p.mark()
+\t\tif !elem() { p.reset(m2); break } // trailing delim OK — keep delim
 \t}
 \treturn true
 }
