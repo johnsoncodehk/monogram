@@ -31,6 +31,7 @@ type Ex = Expr | string;
 const x = (e: Ex): Expr => (typeof e === 'string' ? { k: 'var', name: e } : e);
 const I = (v: number): Expr => ({ k: 'int', v });
 const F: Expr = { k: 'bool', v: false };
+const T: Expr = { k: 'bool', v: true };
 const bin = (op: Extract<Expr, { k: 'bin' }>['op']) => (a: Ex, b: Ex): Expr => ({ k: 'bin', op, a: x(a), b: x(b) });
 const add = bin('add'), sub = bin('sub'), shl = bin('shl'), lt = bin('lt'), le = bin('le'), gt = bin('gt'), ge = bin('ge'), eq = bin('eq'), ne = bin('ne');
 const any = (es: Expr[]): Expr => (es.length ? es.reduce((a, b) => ({ k: 'bin', op: 'or', a, b })) : F);
@@ -660,6 +661,13 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
   // lexer's look end (the tokens before it record one level deeper: docs/REGIONS.md, Relex).
   const tagLooks = e.tagTokens.map((name) => tokLook(tokOf(name)).failRead > FREE_FAIL);
   e.tagTokens.forEach((name, i) => { if (tagLooks[i]) fns.push(b.readEnd(tokOf(name))); });
+  // Whether a token can begin at p (its first units; any beyond ASCII when it may begin there):
+  // an attempt where it cannot reads only the unit at p.
+  const mayBegin = (name: string): Expr => {
+    const fb = lexTokFirstBytes(tokOf(name));
+    if (!fb) return T;
+    return and(lt('p', len('s')), any([...fb.bytes.map((u) => eq(code('p'), I(u))), ...(fb.nonAscii ? [ge(code('p'), I(128))] : [])]));
+  };
   const L = litLen(e.tagOpen);
   // The frame step (the frame fr on top is an element frame): what the frame lexes at p, before
   // the ordinary scan. Returns (end, kid, lid, frame, push, angle, look): end -1 when the frame
@@ -686,7 +694,7 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
   e.tagTokens.forEach((name, i) => tag.push(if_(eq('angle', I(0)), [
     let_(`g${i}`, call(scannerName(name), 'p')),
     if_(gt(`g${i}`, 'p'), [tok(`g${i}`, kidE(name), 0, 'fr', 0, 'angle')]),
-    ...(tagLooks[i] ? [let_(`r${i}`, call(readEndName(name), 'p')), if_(gt(`r${i}`, 'look'), [set('look', `r${i}`)])] : []),
+    ...(tagLooks[i] ? [if_(mayBegin(name), [let_(`r${i}`, call(readEndName(name), 'p')), if_(gt(`r${i}`, 'look'), [set('look', `r${i}`)])])] : []),
   ])));
   tag.push(
     if_(and(and(eq('sb', I(1)), eq('angle', I(0))), hasAt('p', e.closeMarker + e.tagClose)), [

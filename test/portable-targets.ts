@@ -1037,6 +1037,8 @@ const CASES: Case[] = [
 // The element-region grammars' cases may be run alone: PORTABLE_GRAMMARS=a,b (a development aid;
 // the gate runs every case).
 const ONLY = process.env.PORTABLE_GRAMMARS?.split(',');
+// Likewise PORTABLE_TARGETS=go,rust: which compiled targets run (TypeScript always does).
+const TARGETS_ONLY = process.env.PORTABLE_TARGETS?.split(',');
 
 // tsc's JSX conformance cases (each `// @filename` part one input), when the pinned corpus is present.
 const JSX_GRAMMARS = new Set(['typescriptreact', 'javascriptreact']);
@@ -1781,7 +1783,7 @@ for (const c of CASES) {
     spans: { cmd: 'node', args: [tsFile, 'tok-spans'] }, utf8Edits: false,
   });
 
-  if (HAS_GO && !c.tsOnly) {
+  if (HAS_GO && !c.tsOnly && (!TARGETS_ONLY || TARGETS_ONLY.includes('go'))) {
     const gdir = `${dir}/go`; mkdirSync(gdir, { recursive: true });
     writeFileSync(`${gdir}/parser.go`, asGoMain(emitParser(grammar, goTarget)));
     writeFileSync(`${gdir}/runner.go`, goTarget.emitRunner?.() ?? '');
@@ -1795,7 +1797,7 @@ for (const c of CASES) {
       spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true,
     });
   }
-  if (HAS_RUST && !c.tsOnly) {
+  if (HAS_RUST && !c.tsOnly && (!TARGETS_ONLY || TARGETS_ONLY.includes('rust'))) {
     const rfile = `${dir}/main.rs`;
     const bin = `${dir}/pr`;
     writeFileSync(rfile, emitParser(grammar, rustTarget) + (rustTarget.emitRunner?.() ?? ''));

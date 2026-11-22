@@ -378,6 +378,65 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   console.log(`  ${advances} literal advances in the emitted lexers are their literal's length in the target's units`);
 }
 
+// ── 6b. an element region's routines are the interpreter's (src/emit-lexer.ts) ──
+// The region tokens (children text, tag tokens) scan to their regex's end; the type-parameter
+// vetoes decide what the interpreter's LX_TP_HEAD / LX_TP_SIG regexes decide, on every text built
+// from a vocabulary of the pieces they read, and how far they read bounds where they could have
+// looked (an extension of the text past that bound never changes the decision).
+{
+  const { scannerName, EL_OPENS_FN, EL_NOT, EL_OPEN, EL_SPECULATE } = await import('../src/lex-family.ts');
+  let scanned = 0, decided = 0;
+  for (const path of ['../typescriptreact.ts', '../javascriptreact.ts', './fixtures/elementdialect.ts']) {
+    const g = (await import(path)).default as CstGrammar;
+    const gir = portableIR(g);
+    const e = gir.elements!;
+    const region = [...(e.text ? [e.text] : []), ...e.tagTokens];
+    const opens = e.entry === 'operand' && (e.head || e.signature) ? [EL_OPENS_FN] : [];
+    const f = join(dir, `el${mod++}.ts`);
+    const stubs = gir.identLike.length ? `function ${tsTarget.shared.uniClass()}(cp: number): number { return 2; }\nfunction ${tsTarget.shared.identEscError()}(s: string, p: number, e: number): number { return e; }\n` : '';
+    writeFileSync(f, `${tsTarget.shared.lexScan(gir)}\n${stubs}export { ${[...region.map((n) => scannerName(n)), ...opens].join(', ')} };\n`);
+    const m = await import(pathToFileURL(f).href) as Record<string, (s: string, p: number) => number | number[]>;
+    for (const name of region) {
+      const decl = g.tokens.find((d) => d.name === name)!;
+      const re = new RegExp(tokenPatternToRegex(decl.pattern), 'y');
+      for (const base of tokenEdgeTexts(decl)) for (const src of [base, base + ' x', base + base, base + '<', base + '"\n}']) {
+        re.lastIndex = 0;
+        const mm = re.exec(src);
+        const want = mm && mm[0].length > 0 ? mm[0].length : -1;
+        const got = m[scannerName(name)]!(src, 0);
+        scanned++;
+        if (got !== want) fail(`${g.name}/${name}: ${JSON.stringify(src)} scans to ${got}, its regex to ${want}`);
+      }
+    }
+    if (!opens.length) continue;
+    const tp = g.elements!.typeParameters!;
+    const head = tp.head ? new RegExp(`(?:${tokenPatternToRegex(tp.head)})`, 'y') : null;
+    const ident = g.tokens.find((t) => t.identifier)!;
+    const sig = tp.signature ? new RegExp(`\\s*(?:${tokenPatternToRegex(ident.pattern)})\\s*>\\s*\\(`, 'y') : null;
+    const want = (s: string): number => {
+      if (head) { head.lastIndex = 1; if (head.test(s)) return EL_NOT; }
+      if (sig) { sig.lastIndex = 1; if (sig.test(s)) return EL_SPECULATE; }
+      return EL_OPEN;
+    };
+    const PIECES = ['T', 'const', 'extends', ' ', '\n', ',', '=', '==', '=>', '>', '/', '(', 'x', '_1', '$', ' ', 'U'];
+    const texts: string[] = [];
+    const grow = (s: string, d: number): void => { texts.push(s); if (d < 4) for (const p of PIECES) grow(s + p, d + 1); };
+    grow('<', 0);
+    for (const s of texts) {
+      const [op, re] = m[EL_OPENS_FN]!(s, 0) as number[];
+      decided++;
+      if (op !== want(s)) { fail(`${g.name}: ${EL_OPENS_FN}(${JSON.stringify(s)}) = ${op}, the interpreter's vetoes ${want(s)}`); continue; }
+      // the read bound: past it nothing changes the decision
+      if (re < 1 || re > s.length + 1) fail(`${g.name}: ${EL_OPENS_FN}(${JSON.stringify(s)}) reads to ${re}`);
+      else if (re <= s.length) for (const tail of ['x', ' ', ',', '>', '(', '=']) {
+        const t = s.slice(0, re) + tail + s.slice(re);
+        if (want(t) !== op) fail(`${g.name}: ${JSON.stringify(s)} decided by reading to ${re}, but ${JSON.stringify(t)} decides ${want(t)}`);
+      }
+    }
+  }
+  console.log(`  element regions: ${scanned} region-token texts scan to their regex's end; ${decided} type-parameter veto texts decided as the interpreter decides, within their read bound`);
+}
+
 // ── 7. the literals a token kind can be (tokenLiterals) hold every literal its regex can match ──
 // A lexer records literal id 0 without a lookup for a kind whose list is empty, so a list must
 // hold every literal a token of the kind can be: here, every literal its whole token regex (what
