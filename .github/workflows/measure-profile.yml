@@ -12,6 +12,8 @@ name: measure profile
 #   M = the pull request's head, PROFILE_SCOPE=pr (no oxc, no wall-clock, no cache simulation).
 # - the label `measure-profile-full` on such a pull request: the same A and M, scope `full`: oxc
 #   beside them, the native timings, the phase regions, the annotations, the cache/branch simulation.
+# - push to a `land/**` branch touching the same paths: A = its merge base with master, M = its
+#   head, scope `pr` (the check a pull request gets, without opening one).
 # - workflow_dispatch: any two commits, either scope.
 # Failure policy: a harness failure fails the job (a missing measurement is NOT RUN, never a pass);
 # a regression is printed at the top of the summary and does not fail it (docs/MEASUREMENT.md).
@@ -19,6 +21,19 @@ name: measure profile
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
+    paths:
+      - 'src/**'
+      - '*.ts'
+      - 'test/bench-rust-profile/**'
+      - 'test/bench-targets/**'
+      - 'test/bench-rust-oxc/**'
+      - 'test/oxc-parse-bench/**'
+      - 'test/emit-sizes.ts'
+      - '.github/workflows/measure-profile.yml'
+  # A branch pushed for the full check without a pull request (see ci.yml): A = its merge base
+  # with master, M = its head, scope `pr`.
+  push:
+    branches: ['land/**']
     paths:
       - 'src/**'
       - '*.ts'
@@ -96,6 +111,8 @@ jobs:
           if [ "$EVENT" = pull_request ]; then
             M=$PR_HEAD; A=$(git merge-base "$PR_BASE" "$PR_HEAD")
             if [ "$FULL_LABEL" = true ]; then scope=full; else scope=pr; fi
+          elif [ "$EVENT" = push ]; then
+            M=$GITHUB_SHA; A=$(git merge-base origin/master "$M"); scope=pr
           else
             git fetch -q origin "$IN_COMMIT" 2>/dev/null || true
             M=$(git rev-parse "$IN_COMMIT^{commit}" 2>/dev/null || git rev-parse "origin/$IN_COMMIT^{commit}")

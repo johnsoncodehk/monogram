@@ -679,7 +679,10 @@ const CatchParameter = rule($ => [
 
 const Stmt = rule($ => [
   Block,
-  arm('variable', field('kind', alt('let', 'const', 'var')), sep(field('binding', Binding), ','), asi()),
+  // VariableStatement / LexicalDeclaration (14.3): a VariableDeclarationList / BindingList has one
+  // or more declarations and no trailing comma, so `var;`, `const;` and `var a,` have no parse,
+  // and `let;` is the expression statement of the identifier `let` (sloppy mode).
+  arm('variable', field('kind', alt('let', 'const', 'var')), field('binding', Binding), many(field('bindingComma', ','), field('bindingRest', Binding)), asi()),
   ['if', '(', field('condition', Expr), many(field('conditionComma', ','), field('conditionRest', Expr)), ')', field('consequence', $), opt('else', field('alternative', $))],
   forStatement($, ForHead, ForAwaitHead),
   ['while', '(', field('condition', Expr), many(field('conditionComma', ','), field('conditionRest', Expr)), ')', field('body', $)],
@@ -699,13 +702,14 @@ const Stmt = rule($ => [
   arm('labelled', notReserved, field('label', Ident), ':', field('body', $)),
   arm('empty', ';'),
   ['debugger', asi()],
-  ['with', '(', field('object', Expr), ')', field('body', $)],
+  // `with ( Expression ) Statement` (14.11): the object is an Expression, a comma list included.
+  ['with', '(', field('object', Expr), many(field('objectComma', ','), field('objectRest', Expr)), ')', field('body', $)],
   // A `using` / `await using` declaration binding is a BindingIdentifier — NOT a pattern. The
   // `not(alt('[','{'))` routes a `[`/`{` start to the expression arm instead: `using [a] = b`
   // is `using[a] = b` (element-assignment on the identifier `using`) and stays valid, while
   // `using {a} = b` / `await using [a] = null` (no derivation — V8 + babel reject; tsc is
   // lenient on the `{` form) correctly fail. (Guards the first binding; see ForHead for for-of.)
-  arm('using', opt(field('awaitKeyword', 'await')), field('usingKeyword', 'using'), not(alt('[', '{')), sep(field('binding', Binding), ','), asi()),
+  arm('using', opt(field('awaitKeyword', 'await')), field('usingKeyword', 'using'), not(alt('[', '{')), field('binding', Binding), many(field('bindingComma', ','), field('bindingRest', Binding)), asi()),
   Decl,
   // The JavaScript expression statement (`expressionStatement`): tsc's parseStatement also takes
   // `{` as a block and `function`, `class`, `@` and same-line `async function` as declarations
@@ -1052,13 +1056,14 @@ const Decl = rule($ => [
   // (`accessor var x`, `public using y`, `@dec var x`); which combinations are valid is the
   // checker's line ("decorators are not valid here", `async class`). Not before an arbitrary
   // statement (`public someExpr;`, `@dec if (…)` are tsc parse errors). `using` requires a real
-  // binding here: `@dec using x` is parse-clean but `using 1` is a tsc parse error (zero-binding
-  // `var;` by contrast is clean, so var/let/const keep the lenient sep()). The branches part at
+  // binding here, and so does a var/let/const one: a VariableDeclarationList / BindingList has
+  // one or more declarations and no trailing comma (tsc's parser takes `var;` and `var a,` and its
+  // checker reports them: docs/CORRECTNESS.md). The branches part at
   // the token after the prefix, so the first that matches is the only one.
   [alt([many1(DecoratorExpr), decoratedMods.run], declMods.run1), alt(
     ...classDecls,
     [not('static'), $],
-    [alt('let', 'const', 'var'), sep(Binding, ','), asi()],
+    [alt('let', 'const', 'var'), Binding, many(',', Binding), asi()],
     [opt('await'), 'using', not(alt('[', '{')), Binding, many(',', Binding), asi()],
   )],
   // A leading `async` before a declaration other than a function: tsc's parser accepts it (the
