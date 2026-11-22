@@ -450,7 +450,7 @@
     },
     "regex-literal-prefix-ops": {
       "name": "string.regexp.ts",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\byield)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;])|(?<=\\b@new)|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\bnew)|(?<=\\byield)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.logical.prefix.ts"
@@ -3257,7 +3257,7 @@
     },
     "regex": {
       "name": "string.regexp.ts",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\byield)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;])|(?<=\\b@new)|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\bnew)|(?<=\\byield)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "comment.block.ts"
