@@ -10,7 +10,7 @@ import type { CstGrammar } from '../src/types.ts';
 import { armNameOf, dependencies, evaluate, evaluator, loadShape2, Shape2SpecError, Shape2Unmapped, type S2Value } from '../src/shape2-eval.ts';
 import {
   absent, and, armOf, branch, c, child, cook, fold, iff, inh, let_, list, map, match, node, not, or, orElse,
-  get, present, record, spread, syn, text, thread, typeByText, v, wrapIf, type Shape2Spec,
+  dropLastIf, get, present, record, spread, syn, text, thread, typeByText, v, wrapIf, type Shape2Spec, type Term,
 } from '../src/shape2-schema.ts';
 import calc from './fixtures/namedcalc.ts';
 import { estreeExprShape } from './fixtures/shape-v2-estree-expr.ts';
@@ -310,6 +310,38 @@ check('functions, arrows and parameters (both fixtures, against acorn and tsc)',
   }
 });
 
+// Binding patterns in both shapes, against their oracles: object and array patterns in variable
+// declarations, parameters, catch and for heads; shorthand with a default, identifier / string /
+// number / computed keys, nested patterns, rest; array holes, with the final hole dropped by
+// `dropLastIf` (`[h,]`, `[,]`, `[i,,]`, `[]`) and, in tsc, each hole an OmittedExpression at the
+// end of the token before it (`{ after }`).
+check('binding patterns (both fixtures, against acorn and tsc)', () => {
+  const js = 'var {a, b: c, d = 1, ...r} = x, [e, , f = 2, ...g] = y, [h,] = z, [,] = w, [i,,] = q, [, , j] = q, {"s": t, [k]: m, 0: n} = o, [] = p, [[u], {v: [w2 = 3]}] = s, {} = e;\n'
+    + 'function f([a, b] = q, {c} = q, ...[d]) {}\ntry {} catch ({message}) {}\nfor (const [k, v] of m);\nfor (let {a} = b;;);\n';
+  const ts = `${js}var {...r2: x2 = 1} = o;\n`;
+  for (const [g, spec, src, oracle] of [
+    [javascript, estreeExprShape, js, () => normaliseEstree(parseEstree(js)!.tree)],
+    [typescript, tscExprShape, ts, () => { const r = tscOracle(ts, 'a.ts'); return 'tree' in r ? r.tree : assert.fail(JSON.stringify(r)); }],
+  ] as const) {
+    const root = (t: NTree): NTree => ({ kind: t.kind, start: 0, end: 0, fields: Object.fromEntries(Object.entries(t.fields).filter(([k]) => k !== 'sourceType' && k !== 'endOfFileToken')) });
+    assert.deepEqual(compareTrees(root(oracle()), root(run(g, spec, src) as NTree), 1).divergences, [], spec.name);
+    const deps = dependencies(loadShape2(g, spec));
+    for (const r of ['BindingPattern.object', 'BindingPattern.array', 'BindingElement.seq', 'BindingProperty.pair']) assert.deepEqual(deps[r]?.inherited ?? [], [], `${spec.name} ${r}`);
+  }
+});
+
+check('calc: dropLastIf drops the final element only when its condition holds; an empty list stays empty', () => {
+  const spec = (cond: boolean, items: Term): Shape2Spec => ({ ...calcSpec, rules: { ...calcSpec.rules, Program: { program: node('P', { l: dropLastIf(c(cond), items) }) } } });
+  assert.deepEqual(run(calc, spec(true, list(c(1), c(2))), ''), N('P', 0, 0, { l: [1] }));
+  assert.deepEqual(run(calc, spec(false, list(c(1), c(2))), ''), N('P', 0, 0, { l: [1, 2] }));
+  assert.deepEqual(run(calc, spec(true, child('statement')), ''), N('P', 0, 0, { l: [] }));
+});
+
+check('calc: a span { after } is zero width at the end of its child', () => {
+  const spec: Shape2Spec = { ...calcSpec, rules: { ...calcSpec.rules, Expr: { ...calcSpec.rules.Expr, prefixOp: node('Neg', { at: node('Gap', {}, { after: 'op' }) }) } } };
+  assert.deepEqual(run(calc, spec, '- x;'), N('Program', 0, 4, { body: [N('ExpressionStatement', 0, 4, { expression: N('Neg', 0, 3, { at: N('Gap', 1, 1) }) })] }));
+});
+
 // The reference matcher finds an arm for every node of real inputs (an arm consuming all the
 // node's children): JavaScript on acorn's own source, TypeScript on this interpreter's source.
 check('the matcher is total on real files', () => {
@@ -366,6 +398,12 @@ rejects('get of a leaf', javascript, forRules({ break_: get('label', 'x') }, okH
 rejects('child() of a record-valued rule (an interface, not a node)', javascript, forRules({ for_: branch('alt', { paren: child('head') }) }, okHead), 'Stmt.for_', 'ForHead is record-valued');
 rejects('a record-valued rule with an arm that is not a record', javascript, forRules({}, { classic: record({ kind: c('classic') }), of: node('X') }), 'rules ForHead', 'every arm to a record', 'of is not');
 rejects('a record-valued rule whose arms have different fields', javascript, forRules({}, { classic: record({ kind: c('classic') }), of: record({ kind: c('of'), left: absent }) }), 'rules ForHead.of', 'the same fields');
+rejects('dropLastIf with a condition that is not a bool', calc, one({ Program: { program: dropLastIf(text('statement' as never) as never, child('statement')) } }), 'cond');
+rejects('dropLastIf with a condition that is a string', calc, one(E({ parenthesized: dropLastIf(armOf('expression'), list()) })), 'cond', 'must be a bool');
+rejects('dropLastIf of a value that is not a list', calc, one(E({ parenthesized: dropLastIf(c(true), child('expression')) })), 'Expr.parenthesized list', 'takes a list');
+rejects('a span after an optional child (it can be absent)', javascript, one({ Stmt: { return_: node('R', {}, { after: 'argument' }) } }), 'span.after', 'argument is optional');
+rejects('a span after a list (it can be empty)', calc, one({ Program: { program: node('P', {}, { after: 'statement' }) } }), 'span.after', 'statement is a list');
+rejects('a span after an unknown name', calc, one(E({ number: node('N', {}, { after: 'nope' }) })), 'span.after', 'no child or variable nope');
 rejects('a span over an unknown name', calc, one(E({ number: node('N', {}, { from: 'number', to: 'nope' }) })), 'span.to', 'nope');
 rejects('total: an unmapped arm', calc, one({ Stmt: { expression: c(1) } }, { total: true }), 'rules Stmt.letDeclaration', 'not mapped');
 rejects('total: an unmapped branch', javascript, one(E({ led_dot: branch('alt', { ident: c(1) }) }), { total: true }), 'branch privateField not mapped');
