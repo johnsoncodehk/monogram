@@ -156,6 +156,9 @@ export interface ElementRegion {
   closeTag: string;      // token TYPE of `tagOpen`+`closeMarker` in children
   selfClose: string;     // token TYPE of `closeMarker`+`tagClose` in a tag
   hole: { open: string; close: string };  // a code region inside a tag or the children (e.g. '{' '}')
+  // Token TYPES lexed only inside a tag (open or close tag, outside its holes), tried before the
+  // ordinary scan there and nowhere else: e.g. an attribute string with no escapes (`b="\"`).
+  tagTokens?: string[];
   // A `tagOpen` at an operand position that begins a TYPE-PARAMETER list, not an element:
   //   head      — the characters right after `tagOpen` (e.g. `T,` / `T extends U`): never an element;
   //   signature — a head `tagOpen Name tagClose` followed by the bracket group `open … close`

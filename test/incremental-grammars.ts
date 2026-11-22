@@ -235,6 +235,8 @@ const FRAME_DOCS: Record<string, string[]> = {
     // (not `</ 2`: a `/` that fails as a regex is a division decided by later text, a separate
     // relex miss on master: `f() < / 2;` + `/`)
     'let m = new Map</* c */string, X>();',
+    // a tag-only attribute string (no escapes, may span lines)
+    'let a = <a b="\\" c=\'d\ne\'>t</a>;\nlet z = "q";',
   ],
   javascriptreact: ['let s = `a${b}c${`${d}`}`;\nx = 1;', 'let a = <><p>It\'s</p>{`${<b/>}`}</>;\nx</*c*/y;'],
 };
