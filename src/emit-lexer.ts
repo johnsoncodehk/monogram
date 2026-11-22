@@ -19,7 +19,7 @@ import type { CstGrammar, ElementRegion, IndentConfig, MarkupConfig, NewlineConf
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { UNI_ID_CONTINUE, UNI_ID_START } from './uni-ident.ts';
-import { type CSet, continuesAt, examinedUnits as examinedUnitsOf, failRead, failReadFirst, overTrigger, readEndWalk, union } from './lex-match-plan.ts';
+import { type CSet, continuesAt, examinedUnits as examinedUnitsOf, failRead, failReadFirst, info as patternInfo, oneChar, overTrigger, readEndWalk, union } from './lex-match-plan.ts';
 import {
   tokenBlockPatternFirstCharSet, tokenBlockPatternSource, tokenEscapeValidPatternSource, tokenPatternCharLoop,
   tokenPatternFirstCharSet, tokenPatternHasStartAnchor, tokenPatternSource,
@@ -501,6 +501,19 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       emit(`const LX_RAW_FOLD = new Map«<string, number>»(${J(fold)});`);
       // the close tag of a case-folded raw-text element, in any ASCII case
       emit(`const LX_RAW_FOLD_END = new Map«<string, RegExp>»([${fold.map(([tag]) => `[${J(tag)}, new RegExp(${J(reEsc(el.tagOpen + el.closeMarker + tag))}, 'gi')]`).join(', ')}]);`);
+      if (el.rawText.some(r => r.unlessBodyStarts !== undefined)) {
+        // per raw-text name (exact, or case-folded): the body-start pattern under which its body is
+        // ordinary children, not raw
+        const un = (fold: boolean) => el.rawText!.filter(r => !!r.ignoreCase === fold && r.unlessBodyStarts !== undefined)
+          .flatMap(r => r.tags.map(tag => `[${J(fold ? tag.toLowerCase() : tag)}, new RegExp(${J(`(?:${tokenPatternSource({ pattern: r.unlessBodyStarts! })})`)}, 'y')]`)).join(', ');
+        emit(`const LX_RAW_UNLESS_EXACT = new Map«<string, RegExp>»([${un(false)}]);`);
+        emit(`const LX_RAW_UNLESS_FOLD = new Map«<string, RegExp>»([${un(true)}]);`);
+      }
+    }
+    if (el.tagStart !== undefined) {
+      // a tagOpen opens a tag only when the unit after it is one of the tag-start class
+      if (!oneChar(el.tagStart)) throw new Error('elements.tagStart: must be a one-unit class');
+      emit(`function lxTagStart(s«: string», p«: number») { if (p >= s.length) return false; const c = s.charCodeAt(p); return ${unitIn('c', patternInfo(el.tagStart).first)}; }`);
     }
     const tp = el.typeParameters;
     if (tp?.head) emit(`const LX_TP_HEAD = new RegExp(${J(`(?:${tokenPatternSource({ pattern: tp.head })})`)}, 'y');`);
@@ -1290,7 +1303,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     // an element entered from code, outside a tag: every tagOpen (the grammar uses it only to
     // open tags), or else one where an operand may start (the regex-literal position) unless it
     // begins a type-parameter list
-    emit(`    if (${startsWithExpr('source', 'pos', el.tagOpen, 'cc')} && (templateStack.length === 0 || (templateStack[templateStack.length - 1] & 3) !== 2)${speculating ? ' && specTok < 0' : ''}${enterAlways ? '' : ' && !prevIsValue() && lxOpensElement(pos)'}) {`);
+    emit(`    if (${startsWithExpr('source', 'pos', el.tagOpen, 'cc')}${el.tagStart !== undefined ? ` && lxTagStart(source, pos + ${el.tagOpen.length})` : ''} && (templateStack.length === 0 || (templateStack[templateStack.length - 1] & 3) !== 2)${speculating ? ' && specTok < 0' : ''}${enterAlways ? '' : ' && !prevIsValue() && lxOpensElement(pos)'}) {`);
     emit(`      templateStack.push(6);`);
     if (el.rawText?.length) emit(`      lxTagAt[templateStack.length - 1] = tokN;`);
     emit(`      tkPush(K_PUNCT, ${puT(el.tagOpen)}, pos, pos + ${el.tagOpen.length});`);
@@ -1833,6 +1846,11 @@ function emitElementHelpers(emit: (s?: string) => void, el: ElementRegion, enter
     emit(`    if (i >= tokN - 1) return;`);
     emit(`    const name = source.slice(tkOff[i] - lexSrcBase, tkEnd[i] - lexSrcBase);`);
     emit(`    let k = LX_RAW_EXACT.get(name), end = -1;`);
+    if (el.rawText.some(r => r.unlessBodyStarts !== undefined)) {
+      // the body-start condition under which this name's body is ordinary children
+      emit(`    const ux = k !== undefined ? LX_RAW_UNLESS_EXACT.get(name) : LX_RAW_UNLESS_FOLD.get(name.toLowerCase());`);
+      emit(`    if (ux !== undefined) { ux.lastIndex = pos; if (ux.test(source)) return; }`);
+    }
     emit(`    if (k !== undefined) end = source.indexOf(${J(close)} + name, pos);`);
     emit(`    else {`);
     emit(`      k = LX_RAW_FOLD.get(name.toLowerCase());`);
@@ -1856,8 +1874,9 @@ function emitElementFrame(emit: (s?: string) => void, el: ElementRegion, c: Elem
   const LS = el.closeMarker.length + el.tagClose.length, LH = el.hole.open.length;
   emit(`    if (templateStack.length > 0 && (templateStack[templateStack.length - 1] & 3) === 2) {`);
   emit(`      const top = templateStack.length - 1, fr = templateStack[top], sub = (fr >> 2) & 3;`);
+  const ts = el.tagStart !== undefined ? ` && lxTagStart(source, pos + ${L})` : '';
   emit(`      if (sub === 0) {`);
-  emit(`        if (${sw(el.tagOpen)}) {`);
+  emit(`        if (${sw(el.tagOpen)}${ts}) {`);
   emit(`          if (${c.startsWithExpr('source', `pos + ${L}`, el.closeMarker)}) {`);
   emit(`            tkPush(${c.kOf(el.closeTag)}, 0, pos, pos + ${LC});`);
   emit(`            pos += ${LC}; templateStack[top] = fr | 8; tagAngle = 0;`);
@@ -1874,11 +1893,26 @@ function emitElementFrame(emit: (s?: string) => void, el: ElementRegion, c: Elem
   emit(`          pos += ${LH};`);
   emit(`          continue;`);
   emit(`        }`);
-  if (el.text !== undefined) {
+  if (el.text !== undefined && el.tagStart === undefined) {
     emit(`        LX_EL_TEXT.lastIndex = pos;`);
     emit(`        const tm = LX_EL_TEXT.exec(source);`);
     emit(`        if (tm !== null && tm[0].length > 0) {`);
     emit(`          const _e = pos + tm[0].length;`);
+    emit(`          tkPush(${c.kOf(el.text)}, 0, pos, _e);`);
+    emit(`          pos = _e;`);
+    emit(`          continue;`);
+    emit(`        }`);
+  } else if (el.text !== undefined) {
+    // the text run: runs of the text token's class, and every tagOpen that opens no tag
+    emit(`        let _e = pos;`);
+    emit(`        for (;;) {`);
+    emit(`          LX_EL_TEXT.lastIndex = _e;`);
+    emit(`          const tm = LX_EL_TEXT.exec(source);`);
+    emit(`          if (tm !== null) _e += tm[0].length;`);
+    emit(`          if (${sw(el.tagOpen, '_e')} && !lxTagStart(source, _e + ${L})) { _e += ${L}; continue; }`);
+    emit(`          break;`);
+    emit(`        }`);
+    emit(`        if (_e > pos) {`);
     emit(`          tkPush(${c.kOf(el.text)}, 0, pos, _e);`);
     emit(`          pos = _e;`);
     emit(`          continue;`);
@@ -1903,7 +1937,7 @@ function emitElementFrame(emit: (s?: string) => void, el: ElementRegion, c: Elem
   emit(`          if (tagAngle > 0) tagAngle--; else lxTagEnd(false);`);
   emit(`          continue;`);
   emit(`        }`);
-  emit(`        if (${sw(el.tagOpen)}) {`);
+  emit(`        if (${sw(el.tagOpen)}${ts}) {`);
   // after the attribute assign an element is a value (`a=<b/>`); elsewhere type arguments
   emit(`          const nested = tokN > 0 && ${c.punctIs!('tokN - 1', ['='])};`);
   emit(el.rawText?.length ? `          if (nested) { templateStack.push(6); lxTagAt[templateStack.length - 1] = tokN; } else tagAngle++;` : `          if (nested) templateStack.push(6); else tagAngle++;`);
