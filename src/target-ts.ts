@@ -1109,20 +1109,8 @@ function tryReuseTopW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
   const finish = (adoptFrom: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
     const adopted = suffixCand.slice(adoptFrom).map((h) => shift(h, byteDelta, tokDelta));
     const children: H[] = [...prefixKids, ...mid, ...adopted];
-    const adoptedMeta = suffixMeta.slice(adoptFrom);
-    const newEntries: EntryMeta[] = new Array(prefixMeta.length + midMeta.length + adoptedMeta.length);
-    let ei = 0;
-    for (let i = 0; i < prefixMeta.length; i++) newEntries[ei++] = prefixMeta[i]!;
-    for (let i = 0; i < midMeta.length; i++) newEntries[ei++] = midMeta[i]!;
-    for (let i = 0; i < adoptedMeta.length; i++) {
-      const m = { ...adoptedMeta[i]! };
-      shiftEntryMeta(m, byteDelta, tokDelta);
-      newEntries[ei++] = m;
-    }
-    const offset = newEntries.length > 0 ? newEntries[0]!.off : 0;
-    const end = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.end : offset;
-    const tokStart = newEntries.length > 0 ? newEntries[0]!.tokStart : 0;
-    const tokEnd = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.tokEnd : 0;
+    const newEntries = reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta);
+    const [offset, end, tokStart, tokEnd] = reuseSpan(newEntries);
     _bSave = tokStart;
     const savePos = pos;
     pos = tokEnd;
@@ -1215,10 +1203,7 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
       newEntries.push(em);
       kOff += s.kidCount;
     }
-    const offset = newEntries.length > 0 ? newEntries[0]!.off : 0;
-    const end = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.end : offset;
-    const tokStart = newEntries.length > 0 ? newEntries[0]!.tokStart : 0;
-    const tokEnd = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.tokEnd : 0;
+    const [offset, end, tokStart, tokEnd] = reuseSpan(newEntries);
     _bSave = tokStart;
     const savePos = pos;
     pos = tokEnd;
@@ -1380,13 +1365,6 @@ ${topReuse ? `function shiftSubtree(n: Cst, byteDelta: number, tokDelta: number)
   n.offset += byteDelta;
   n.end += byteDelta;
   if ('children' in n) for (const c of n.children) shiftSubtree(c, byteDelta, tokDelta);
-}
-function shiftEntryMeta(m: EntryMeta, byteDelta: number, tokDelta: number): void {
-  m.tokStart += tokDelta;
-  m.tokEnd += tokDelta;
-  m.ext += tokDelta;
-  m.off += byteDelta;
-  m.end += byteDelta;
 }
 ${shapeA ? `function assertEntriesVsNodes(entries: EntryMeta[], oldRoot: Node): void {
   const oldKids = oldRoot.children as Node[];
@@ -3052,9 +3030,10 @@ function ${findAnyName(stops)}(s: string, i: number): number {
   },  record: {
     field: (cx, r, _rec, f, ty) => cx.atom(`${tsWrap(r, ATOM)}.${f}`, ty === 'bool' ? 'bool' : 'int', cx.nat(ty)),
     setField: (id, f, val) => [`${id}.${f} = ${val};`],
-    make: (cx, rec, fs) => cx.atom(`{ ${fs.map(([f, v]) => `${f}: ${v}`).join(', ')} }`, `rec_${rec}`, `rec_${rec}`),
+    make: (cx, rec, fs) => cx.atom(`{ ${fs.map(([f, v]) => `${f}: ${v}`).join(', ')} }`, `rec_${rec}`, `rec_${rec}`, { owned: true }),
     refType: (rec) => rec,
     refArg: (r) => r.c,
+    copy: (cx, r) => cx.atom(`{ ...${r.c} }`, r.ty, r.nat, { owned: true }),
     // One push per element: a spread passes one argument per element (the engine's argument limit).
     extend: (_cx, l, from) => [`for (const el of ${from.c}) ${l}.push(el);`],
   },

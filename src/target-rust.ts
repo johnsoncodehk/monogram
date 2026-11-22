@@ -1258,14 +1258,6 @@ fn shift_subtree(nodes: &mut [Node], kids: &mut [i32], id: i32, byte_delta: isiz
         }
     }
 }
-#[inline(always)]
-fn shift_entry_meta(m: &mut EntryMeta, byte_delta: isize, tok_delta: isize) {
-    m.tok_start = (m.tok_start as isize + tok_delta) as u32;
-    m.tok_end = (m.tok_end as isize + tok_delta) as u32;
-    m.ext = (m.ext as isize + tok_delta) as u32;
-    m.off = (m.off as isize + byte_delta) as u32;
-    m.end = (m.end as isize + byte_delta) as u32;
-}
 fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], old_root: i32) {
     let old = &nodes[old_root as usize];
     assert_eq!(entries.len(), old.kid_count as usize, "entry count vs root kids");
@@ -1298,21 +1290,8 @@ fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], 
         children.extend_from_slice(prefix_kids);
         children.extend_from_slice(mid);
         children.extend_from_slice(&adopted_hs);
-        let mut new_entries: Vec<EntryMeta> = Vec::with_capacity(prefix_meta.len() + mid_meta.len() + suffix_meta.len().saturating_sub(adopt_from));
-        new_entries.extend_from_slice(prefix_meta);
-        new_entries.extend_from_slice(mid_meta);
-        for m in &suffix_meta[adopt_from..] {
-            let mut em = *m;
-            shift_entry_meta(&mut em, byte_delta, tok_delta);
-            new_entries.push(em);
-        }
-        let (off, end, tok_start, tok_end) = if new_entries.is_empty() {
-            (0u32, 0u32, 0u32, 0u32)
-        } else {
-            let first = &new_entries[0];
-            let last = new_entries.last().unwrap();
-            (first.off, last.end, first.tok_start, last.tok_end)
-        };
+        let new_entries = reuse_entries(prefix_meta, mid_meta, suffix_meta, adopt_from as isize, byte_delta, tok_delta);
+        let (off, end, tok_start, tok_end) = reuse_span(&new_entries);
         let sb = self.scratch.len();
         self.scratch.extend_from_slice(&children);
         self.b.node(&mut self.scratch, sb, rule_id, off, end, tok_start, tok_end);
@@ -1429,13 +1408,7 @@ impl<'a, B: Builder> Parser<'a, B> {
             new_entries.push(em);
             k_off += s.kid_count;
         }
-        let (off, end, tok_start, tok_end) = if new_entries.is_empty() {
-            (0u32, 0u32, 0u32, 0u32)
-        } else {
-            let first = &new_entries[0];
-            let last = new_entries.last().unwrap();
-            (first.off, last.end, first.tok_start, last.tok_end)
-        };
+        let (off, end, tok_start, tok_end) = reuse_span(&new_entries);
         let sb = self.scratch.len();
         self.scratch.extend_from_slice(&children);
         self.b.node(&mut self.scratch, sb, rule_id, off, end, tok_start, tok_end);
@@ -5435,7 +5408,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
   record: {
     field: (cx, r, _rec, f, ty) => cx.atom(`${rsWrap(r, ATOM)}.${snake(f)}`, ty === 'bool' ? 'bool' : 'int', cx.nat(ty)),
     setField: (id, f, val) => [`${id}.${snake(f)} = ${val};`],
-    make: (cx, rec, fs) => cx.atom(`${rec} { ${fs.map(([f, v]) => `${snake(f)}: ${v}`).join(', ')} }`, `rec_${rec}`, `rec_${rec}`),
+    make: (cx, rec, fs) => cx.atom(`${rec} { ${fs.map(([f, v]) => `${snake(f)}: ${v}`).join(', ')} }`, `rec_${rec}`, `rec_${rec}`, { owned: true }),
     refType: (rec) => `&mut ${rec}`,
     refArg: (r) => `&mut ${r.c}`,
     extend: (_cx, l, from) => [`${l}.extend_from_slice(${from.owned ? `&${from.c}` : from.c});`],

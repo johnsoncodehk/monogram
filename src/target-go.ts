@@ -1257,13 +1257,6 @@ func (p *engine) shiftSubtree(id int32, byteDelta, tokDelta int) {
 		}
 	}
 }
-func shiftEntryMeta(m *EntryMeta, byteDelta, tokDelta int) {
-	m.TokStart += tokDelta
-	m.TokEnd += tokDelta
-	m.Ext += tokDelta
-	m.Off += byteDelta
-	m.End += byteDelta
-}
 ${shapeA ? `func (p *engine) assertEntriesVsNodes(oldEntries []EntryMeta, oldRoot int32) {
 	old := p.nodes[oldRoot]
 	if len(oldEntries) != int(old.KidCount) {
@@ -1307,21 +1300,8 @@ func (p *engine) tryReuseTop(oldRoot int32, oldEntries []EntryMeta, newText stri
 		children = append(children, prefixKids...)
 		children = append(children, mid...)
 		children = append(children, adopted...)
-		adoptedMeta := append([]EntryMeta(nil), suffixMeta[adoptFrom:]...)
-		newEntries := make([]EntryMeta, 0, len(prefixMeta)+len(midMeta)+len(adoptedMeta))
-		newEntries = append(newEntries, prefixMeta...)
-		newEntries = append(newEntries, midMeta...)
-		for i := range adoptedMeta {
-			shiftEntryMeta(&adoptedMeta[i], byteDelta, tokDelta)
-			newEntries = append(newEntries, adoptedMeta[i])
-		}
-		off, end, tokStart, tokEnd := 0, 0, 0, 0
-		if len(newEntries) > 0 {
-			off = newEntries[0].Off
-			end = newEntries[len(newEntries)-1].End
-			tokStart = newEntries[0].TokStart
-			tokEnd = newEntries[len(newEntries)-1].TokEnd
-		}
+		newEntries := reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta)
+		off, end, tokStart, tokEnd := reuseSpan(newEntries)
 		kidStart := len(p.kids)
 		p.kids = append(p.kids, children...)
 		p.nodes = append(p.nodes, Node{RuleId: old.RuleId, KidStart: uint32(kidStart), KidCount: uint32(len(children)), Offset: uint32(off), End: uint32(end), TokStart: uint32(tokStart), TokEnd: uint32(tokEnd)})
@@ -1446,13 +1426,7 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMet
 			newEntries = append(newEntries, em)
 			kOff += s.KidCount
 		}
-		off, end, tokStart, tokEnd := 0, 0, 0, 0
-		if len(newEntries) > 0 {
-			off = newEntries[0].Off
-			end = newEntries[len(newEntries)-1].End
-			tokStart = newEntries[0].TokStart
-			tokEnd = newEntries[len(newEntries)-1].TokEnd
-		}
+		off, end, tokStart, tokEnd := reuseSpan(newEntries)
 		kidStart := len(p.kids)
 		p.kids = append(p.kids, children...)
 		p.nodes = append(p.nodes, Node{RuleId: old.RuleId, KidStart: uint32(kidStart), KidCount: uint32(len(children)), Offset: uint32(off), End: uint32(end), TokStart: uint32(tokStart), TokEnd: uint32(tokEnd)})
@@ -2150,21 +2124,8 @@ func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, 
 		children = append(children, prefixKids...)
 		children = append(children, mid...)
 		children = append(children, adopted...)
-		adoptedMeta := append([]EntryMeta(nil), suffixMeta[adoptFrom:]...)
-		outE := make([]EntryMeta, 0, len(prefixMeta)+len(midMeta)+len(adoptedMeta))
-		outE = append(outE, prefixMeta...)
-		outE = append(outE, midMeta...)
-		for i := range adoptedMeta {
-			shiftEntryMeta(&adoptedMeta[i], byteDelta, tokDelta)
-			outE = append(outE, adoptedMeta[i])
-		}
-		off, end, tokStart, tokEnd := 0, 0, 0, 0
-		if len(outE) > 0 {
-			off = outE[0].Off
-			end = outE[len(outE)-1].End
-			tokStart = outE[0].TokStart
-			tokEnd = outE[len(outE)-1].TokEnd
-		}
+		outE := reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta)
+		off, end, tokStart, tokEnd := reuseSpan(outE)
 		scratch := append([]int32(nil), children...)
 		b.Node(&scratch, 0, ${entryRid}, uint32(off), uint32(end), uint32(tokStart), uint32(tokEnd))
 		if len(scratch) != 1 {
@@ -2291,13 +2252,7 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 			outE = append(outE, em)
 			kOff += s.KidCount
 		}
-		off, end, tokStart, tokEnd := 0, 0, 0, 0
-		if len(outE) > 0 {
-			off = outE[0].Off
-			end = outE[len(outE)-1].End
-			tokStart = outE[0].TokStart
-			tokEnd = outE[len(outE)-1].TokEnd
-		}
+		off, end, tokStart, tokEnd := reuseSpan(outE)
 		scratch := append([]int32(nil), children...)
 		b.Node(&scratch, 0, ${entryRid}, uint32(off), uint32(end), uint32(tokStart), uint32(tokEnd))
 		if len(scratch) != 1 {
@@ -3074,7 +3029,7 @@ ${[...ones, ...wides].join('\n')}
   record: {
     field: (cx, r, _rec, f, ty) => cx.atom(`${goWrap(r, ATOM)}.${exported(f)}`, ty === 'bool' ? 'bool' : 'int', cx.nat(ty)),
     setField: (id, f, val) => [`${id}.${exported(f)} = ${val}`],
-    make: (cx, rec, fs) => cx.atom(`${rec}{${fs.map(([f, v]) => `${exported(f)}: ${v}`).join(', ')}}`, `rec_${rec}`, `rec_${rec}`),
+    make: (cx, rec, fs) => cx.atom(`${rec}{${fs.map(([f, v]) => `${exported(f)}: ${v}`).join(', ')}}`, `rec_${rec}`, `rec_${rec}`, { owned: true }),
     refType: (rec) => `*${rec}`,
     refArg: (r) => `&${r.c}`,
     extend: (_cx, l, from) => [`${l} = append(${l}, ${from.c}...)`],

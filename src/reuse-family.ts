@@ -82,7 +82,57 @@ const reuseGaveUp: Fn = {
   ],
 };
 
-export const REUSE_FNS: Fn[] = [reuseBounds, reuseAdoptAt, reuseGaveUp];
+const ENTRY = 'rec_EntryMeta' as const;
+const call = (fn: string, ...args: Expr[]): Expr & { k: 'call' } => ({ k: 'call', fn, args });
+const recField = (e: Expr, f: string): Expr => ({ k: 'field', e, f });
+
+// An adopted entry moved by the edit: its tokens by tokDelta, its text by byteDelta.
+const shiftEntryMeta: Fn = {
+  name: 'shiftEntryMeta',
+  doc: 'Moves entry m by the edit: its tokens by tokDelta, its text span by byteDelta.',
+  params: [{ name: 'm', ty: ENTRY, ref: true }, { name: 'byteDelta', ty: 'int' }, { name: 'tokDelta', ty: 'int' }],
+  ret: [],
+  body: [
+    ...['tokStart', 'tokEnd', 'ext'].map((f): Stmt => ({ k: 'setField', name: 'm', f, e: bin('add', recField(v('m'), f), v('tokDelta')) })),
+    ...['off', 'end'].map((f): Stmt => ({ k: 'setField', name: 'm', f, e: bin('add', recField(v('m'), f), v('byteDelta')) })),
+  ],
+};
+
+// The new root's entries (one per root child): the kept prefix, the re-parsed middle, and the
+// adopted suffix from adoptFrom, moved by the edit.
+const reuseEntries: Fn = {
+  name: 'reuseEntries',
+  doc: 'The new entries: the prefix, the middle, and the suffix from adoptFrom moved by the edit.',
+  params: [{ name: 'prefixMeta', ty: ENTRIES }, { name: 'midMeta', ty: ENTRIES }, { name: 'suffixMeta', ty: ENTRIES }, { name: 'adoptFrom', ty: 'int' }, { name: 'byteDelta', ty: 'int' }, { name: 'tokDelta', ty: 'int' }],
+  ret: [ENTRIES],
+  body: [
+    { k: 'let', name: 'out', ty: ENTRIES, init: { k: 'newList', ty: ENTRIES, cap: bin('sub', bin('add', bin('add', len(v('prefixMeta')), len(v('midMeta'))), len(v('suffixMeta'))), v('adoptFrom')) } },
+    { k: 'extend', list: 'out', from: v('prefixMeta') },
+    { k: 'extend', list: 'out', from: v('midMeta') },
+    { k: 'for', v: 'i', from: v('adoptFrom'), to: len(v('suffixMeta')), body: [
+      { k: 'let', name: 'em', ty: ENTRY, init: { k: 'at', list: v('suffixMeta'), i: v('i') } },
+      { k: 'run', call: call('shiftEntryMeta', v('em'), v('byteDelta'), v('tokDelta')) },
+      { k: 'push', list: 'out', e: v('em') },
+    ] },
+    ret(v('out')),
+  ],
+};
+
+// The root's span over its entries: the first one's start, the last one's end (all zero without
+// entries).
+const reuseSpan: Fn = {
+  name: 'reuseSpan',
+  doc: 'The root span over entries: off, end, tokStart, tokEnd (all 0 without entries).',
+  params: [{ name: 'entries', ty: ENTRIES }],
+  ret: ['pos', 'pos', 'pos', 'pos'],
+  body: [
+    { k: 'let', name: 'c', ty: 'int', init: len(v('entries')) },
+    { k: 'if', c: bin('eq', v('c'), n(0)), then: [ret(n(0), n(0), n(0), n(0))] },
+    ret(fld('entries', n(0), 'off'), fld('entries', bin('sub', v('c'), n(1)), 'end'), fld('entries', n(0), 'tokStart'), fld('entries', bin('sub', v('c'), n(1)), 'tokEnd')),
+  ],
+};
+
+export const REUSE_FNS: Fn[] = [reuseBounds, reuseAdoptAt, reuseGaveUp, shiftEntryMeta, reuseEntries, reuseSpan];
 
 // The family for a grammar whose entry rule records entries (`ir.reuse`); empty otherwise.
 export function emitReuseFamily(ir: ParserIR, lowering: Lowering): string {

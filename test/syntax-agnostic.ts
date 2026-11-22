@@ -95,7 +95,7 @@ const sexpr: Lowering = {
   record: {
     field: (cx, r, _rec, f, ty) => cx.atom(form('field', r.c, kebab(f)), ty === 'bool' ? 'bool' : 'int', 'int'),
     setField: (id, f, val) => [form('set-field!', id, kebab(f), val)],
-    make: (cx, rec, fs) => cx.atom(form('make-record', kebab(rec), ...fs.map(([f, v]) => `#:${kebab(f)} ${v}`)), `rec_${rec}`, `rec_${rec}`),
+    make: (cx, rec, fs) => cx.atom(form('make-record', kebab(rec), ...fs.map(([f, v]) => `#:${kebab(f)} ${v}`)), `rec_${rec}`, `rec_${rec}`, { owned: true }),
     refType: (rec) => form('ref', kebab(rec)),
     refArg: (r) => r.c,
     extend: (_cx, l, from) => [form('extend!', l, from.c)],
