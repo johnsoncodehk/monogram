@@ -3602,10 +3602,18 @@ const tsLowering: Lowering = {
   type: (t) => TS_TYPES[t],
   owns: false,
   charSet: (name, rs) => `const ${name} = /*#__PURE__*/ (() => { const a = new Uint8Array(256); for (const [lo, hi] of [${rs.map(([lo, hi]) => `[${lo},${hi}]`).join(', ')}]) for (let i = lo; i <= hi; i++) a[i] = 1; return a; })();`,
-  // A code unit past 255 indexes no table entry (undefined), so it ends the run.
+  // A code unit past 255 indexes no table entry (undefined), so it ends the run. Four units per
+  // round, as Rust's lex_run_end: one loop test per round.
   runEndFn: `// The end of the run of code units in set from i: the first j >= i at which s ends or s[j] is not in it.
 function lexRunEnd(s: string, i: number, set: Uint8Array): number {
-  while (i < s.length && set[s.charCodeAt(i)] === 1) i++;
+  const n = s.length;
+  for (; i + 3 < n; i += 4) {
+    if (set[s.charCodeAt(i)] !== 1) return i;
+    if (set[s.charCodeAt(i + 1)] !== 1) return i + 1;
+    if (set[s.charCodeAt(i + 2)] !== 1) return i + 2;
+    if (set[s.charCodeAt(i + 3)] !== 1) return i + 3;
+  }
+  while (i < n && set[s.charCodeAt(i)] === 1) i++;
   return i;
 }`,
   findFn: `// Where lit next occurs in s from i: the first j >= i at which s has it, or s.length.
