@@ -36,8 +36,8 @@ jobs:
         env:
           PROFILE_WORK: ${{ runner.temp }}/prof-work
           # perf/parser-emit-queue-1 R4: leaf type from lid/kid (A = d8485e2) vs M = f3f066b (R3 reverted).
-          PROFILE_A: d8485e2372cf7df5741f812a67f7d9a643e03adf
-          PROFILE_M: f3f066b3fad0ad150265aaa2745a5682e80b55d8
+          PROFILE_A: 8d75e666ae88a9339efc8065455353fa79717e43
+          PROFILE_M: abf72454a908a46b8db34acff4fe571c24f6e356
 
       - uses: actions/upload-artifact@v4
         if: always()
