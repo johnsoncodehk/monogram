@@ -10,7 +10,7 @@ import type { CstGrammar } from '../src/types.ts';
 import { armNameOf, dependencies, evaluate, evaluator, loadShape2, Shape2SpecError, Shape2Unmapped, type S2Value } from '../src/shape2-eval.ts';
 import {
   absent, and, armOf, branch, c, child, cook, fold, iff, inh, let_, list, map, match, node, not, or, orElse,
-  present, record, spread, syn, text, thread, typeByText, v, wrapIf, type Shape2Spec,
+  get, present, record, spread, syn, text, thread, typeByText, v, wrapIf, type Shape2Spec,
 } from '../src/shape2-schema.ts';
 import calc from './fixtures/namedcalc.ts';
 import { estreeExprShape } from './fixtures/shape-v2-estree-expr.ts';
@@ -202,6 +202,35 @@ check('js: list / spread / present on a repetition; span over a list child', () 
   }));
 });
 
+// A RECORD-VALUED rule (`get`): ForHead is an interface of the `for` statement, which builds its
+// node from the head's fields and its own body.
+const forSpec: Shape2Spec = {
+  name: 'for', rules: {
+    ...jsBase,
+    Stmt: {
+      expr: child('first'),
+      for_: branch('alt', { paren: match(get('head', 'kind'), {
+        classic: node('For', { test: orElse(get('head', 'test'), c(null)), body: child('body') }),
+        of: node('ForOf', { left: get('head', 'left'), right: get('head', 'right'), body: child('body') }),
+      }) }),
+    },
+    ForHead: {
+      classic: record({ kind: c('classic'), test: child('condition'), left: absent, right: absent }),
+      of: record({ kind: c('of'), test: absent, left: child('left'), right: child('right') }),
+    },
+  },
+};
+check('js: a record-valued rule projected by get (for heads)', () => {
+  assert.deepEqual(jsEval(forSpec, 'for (a of b) c;'), N('ForOf', 0, 15, { left: N('Id', 5, 6, { name: 'a' }), right: N('Id', 10, 11, { name: 'b' }), body: N('Id', 13, 14, { name: 'c' }) }));
+  assert.deepEqual(jsEval(forSpec, 'for (;;) c;'), N('For', 0, 11, { test: null, body: N('Id', 9, 10, { name: 'c' }) }));
+  assert.deepEqual(jsEval(forSpec, 'for (; x;) c;'), N('For', 0, 13, { test: N('Id', 7, 8, { name: 'x' }), body: N('Id', 11, 12, { name: 'c' }) }));
+  assert.throws(() => jsEval(forSpec, 'for (a in b) c;'), (e: unknown) => e instanceof Shape2Unmapped && e.rule === 'ForHead' && e.arm === 'in_');
+  // A value depends on what its record's fields depend on: nothing here.
+  const d = dependencies(loadShape2(javascript, forSpec));
+  assert.deepEqual(d['ForHead.classic'], { inherited: [] });
+  assert.deepEqual(d['Stmt.for_'], { inherited: [] });
+});
+
 // ESTree's ChainExpression: an inherited attribute (am I the top of a member / call chain?)
 // and a synthesized one (does my chain hold a `?.`?).
 const chainSpec: Shape2Spec = {
@@ -305,6 +334,14 @@ rejects('a branch case that is not a branch', javascript, one(E({ led_dot: branc
 rejects('branch() of a node', calc, one(E({ parenthesized: branch('expression', {}) })), 'not an inline alternation');
 rejects('map over a single child', calc, one(E({ parenthesized: map('expression', c(1)) })), 'is not repeated');
 rejects('an unbound variable', calc, one(E({ number: v('x') })), 'var(x) is not bound');
+const forRules = (stmt: Shape2Spec['rules'][string], head: Shape2Spec['rules'][string]): Shape2Spec => one({ Stmt: stmt, ForHead: head });
+const okHead = { classic: record({ kind: c('classic'), test: absent }), of: record({ kind: c('of'), test: absent }) };
+rejects('get of a field the record-valued rule does not declare', javascript, forRules({ for_: branch('alt', { paren: get('head', 'init') }) }, okHead), 'Stmt.for_', 'get(head, init)', 'ForHead has no field init');
+rejects('get of a child whose rule is not record-valued (a node is not projectable)', javascript, forRules({ while_: get('body', 'test') }, okHead), 'Stmt.while_', 'Stmt is not record-valued');
+rejects('get of a leaf', javascript, forRules({ break_: get('label', 'x') }, okHead), 'get(label, x)', 'label is a leaf');
+rejects('child() of a record-valued rule (an interface, not a node)', javascript, forRules({ for_: branch('alt', { paren: child('head') }) }, okHead), 'Stmt.for_', 'ForHead is record-valued');
+rejects('a record-valued rule with an arm that is not a record', javascript, forRules({}, { classic: record({ kind: c('classic') }), of: node('X') }), 'rules ForHead', 'every arm to a record', 'of is not');
+rejects('a record-valued rule whose arms have different fields', javascript, forRules({}, { classic: record({ kind: c('classic') }), of: record({ kind: c('of'), left: absent }) }), 'rules ForHead.of', 'the same fields');
 rejects('a span over an unknown name', calc, one(E({ number: node('N', {}, { from: 'number', to: 'nope' }) })), 'span.to', 'nope');
 rejects('total: an unmapped arm', calc, one({ Stmt: { expression: c(1) } }, { total: true }), 'rules Stmt.letDeclaration', 'not mapped');
 rejects('total: an unmapped branch', javascript, one(E({ led_dot: branch('alt', { ident: c(1) }) }), { total: true }), 'branch privateField not mapped');
