@@ -198,6 +198,27 @@ records, per grammar, `tree-sitter generate` wall and CPU time, peak memory and 
 `parser.c` state and symbol counts (report-only baselines for changes to the tree-sitter
 generator).
 
+A tree-sitter grammar is a CFG and has no lookahead, so the grammar's zero-width assertions
+(`not`, `sameLine`, `noCommentBefore`, `noMultilineFlowBefore`, `notLeftLeaf`) are rendered
+exactly only where a rewrite exists and are otherwise dropped. The generator records every
+occurrence with its class ([`test/treesitter-assertions.ts`](../test/treesitter-assertions.ts),
+also in the `test` job summary): `lowered` and `vacuous` are exact (FIRST/FOLLOW prove the
+assertion always holds where the CFG reaches it). Every other class marks a place where the
+generated grammar may accept more than the grammar does. The class names the lowering that would
+make it exact: `scanner` (a line-terminator, comment or flow-state condition, for an external
+scanner token), `reserved` (keywords excluded right before the word token, for a tree-sitter
+`reserved` word set), `lookahead1` (a one-token lookahead over any other continuation),
+`lookahead` (several tokens or a nested assertion) and `left-context` (a predicate on the left
+operand). Recorded on `5a6c557`:
+
+| grammar | total | lowered | vacuous | scanner | reserved | lookahead1 | lookahead | left-context |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| javascript | 121 | 0 | 6 | 27 | 43 | 37 | 8 | 0 |
+| typescript | 421 | 0 | 60 | 92 | 65 | 133 | 69 | 2 |
+| javascriptreact | 123 | 0 | 6 | 29 | 43 | 37 | 8 | 0 |
+| typescriptreact | 423 | 0 | 60 | 94 | 65 | 133 | 69 | 2 |
+| yaml | 23 | 1 | 0 | 16 | 0 | 6 | 0 | 0 |
+
 ## Dialects and other editors
 
 Measures of what the generators do for a grammar that is not one of the six committed ones.
