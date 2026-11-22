@@ -67,6 +67,9 @@ const commitSwRs: CommitLowering = {
   sw: (by, cases, dflt) => `        match t.${by} {\n${cases.map((c) => `        ${c.keys.join(' | ')} => {${c.stmt ? `\n${c.stmt}\n        ` : ''}}`).join('\n')}\n        _ => {${dflt ? `\n${dflt}\n        ` : ''}}\n        }`,
   ifAll: ifRs,
   notAll: (conds) => `!(${conds.join(' && ')})`,
+  pickDecl: '        let mut _c = 0u8;',
+  pick: (n) => `{ _c = ${n}; }`,
+  picked: (cases) => `        match _c {\n${cases.map((c) => `        ${c.n} => ${c.stmt}`).join('\n')}\n        _ => {}\n        }`,
 };
 // A committed candidate's statement: `body` when conds hold, then `fail` (unless body always returns).
 const commitRs = (conds: string[], body: string, fail: string, returns = false) =>

@@ -1326,10 +1326,16 @@ export function ruleShell(r: RdRule, ids: LexIdPlan, L: RuleLowering): string {
 // A CommitLowering spells a switch on the buffered token's literal or kind (each case: its keys
 // and its statement, '' for one that goes on to the frame; `dflt`: every other key's statements),
 // and the run-time tests: `ifAll` (stmt under conds) and `notAll` (the negation of a conjunction).
+// A commit that several cases share (one arm, the same run-time tests, under different `unless`
+// sets) is printed once: those cases `pick` its number (from 1; `pickDecl` declares the variable,
+// 0: none picked) and `picked` runs the one picked after the switch.
 export type CommitLowering = {
   sw(by: 'lid' | 'kid', cases: { keys: string[]; stmt: string }[], dflt: string): string;
   ifAll(conds: string[], stmt: string): string;
   notAll(conds: string[]): string;
+  pickDecl: string;
+  pick(n: number): string;
+  picked(cases: { n: number; stmt: string }[]): string;
 };
 /** The tests a run still makes of a candidate's Guard at a key (CommitTest). */
 export const commitGuard = (g: Guard, t: CommitTest): Guard =>
@@ -1337,14 +1343,20 @@ export const commitGuard = (g: Guard, t: CommitTest): Guard =>
 /** A Commit's switch: act(a) commits (or, null, fails); tests(t) are a candidate's run-time tests,
  *  each `unless` candidate's refusal a condition of its commit. */
 export function commitWalk(c: Commit, ids: LexIdPlan, act: (a: CommitAct | null) => string, tests: (t: CommitTest) => string[], C: CommitLowering): string {
+  // A commit by what it runs (its arm and its own tests); shared by more than one case: picked.
+  const what = (a: CommitAct) => JSON.stringify({ ...a, unless: undefined });
+  const uses = new Map<string, number>();
+  for (const x of [...c.lid, ...c.kid]) if (x.act !== null && x.act !== 'frame') uses.set(what(x.act), (uses.get(what(x.act)) ?? 0) + 1);
+  const shared = [...uses].filter(([, n]) => n > 1).map(([w]) => w);
   const stmt = (a: CommitCase['act']): string => {
     if (a === 'frame') return '';
     if (a === null) return act(null);
+    const n = shared.indexOf(what(a)) + 1;
     return C.ifAll(a.unless.map((u) => {
       const t = tests(u);
       if (t.length === 0) throw new Error('commitWalk: an unless candidate has no run-time test');
       return C.notAll(t);
-    }), act(a));
+    }), n > 0 ? C.pick(n) : act(a));
   };
   const id = (by: 'lid' | 'kid', k: string): string => {
     const n = by === 'lid' ? lidOf(ids, k) : kidOf(ids, k);
@@ -1353,7 +1365,10 @@ export function commitWalk(c: Commit, ids: LexIdPlan, act: (a: CommitAct | null)
   };
   const cases = (by: 'lid' | 'kid', cs: CommitCase[]) => cs.map((x) => ({ keys: x.keys.map((k) => id(by, k)), stmt: stmt(x.act) }));
   const kid = c.kid.length ? C.sw('kid', cases('kid', c.kid), '') : '';
-  return c.lid.length ? C.sw('lid', cases('lid', c.lid), kid) : kid;
+  const sw = c.lid.length ? C.sw('lid', cases('lid', c.lid), kid) : kid;
+  if (shared.length === 0) return sw;
+  const acts = [...c.lid, ...c.kid].map((x) => x.act).filter((x): x is CommitAct => x !== null && x !== 'frame');
+  return [C.pickDecl, sw, C.picked(shared.map((w, k) => ({ n: k + 1, stmt: act(acts.find((x) => what(x) === w)!) })))].join('\n');
 }
 
 // ── The entry rule with reuse recording (ParserIR.reuse), decided once ──

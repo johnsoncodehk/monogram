@@ -57,6 +57,9 @@ const commitSwGo = (t: string): CommitLowering => ({
   sw: (by, cases, dflt) => `\tswitch ${t}.${by === 'lid' ? 'Lid' : 'Kid'} {\n${cases.map((c) => `\tcase ${c.keys.join(', ')}:${c.stmt ? `\n${c.stmt}` : ''}`).join('\n')}${dflt ? `\n\tdefault:\n${dflt}` : ''}\n\t}`,
   ifAll: ifGo,
   notAll: (conds) => `!(${conds.join(' && ')})`,
+  pickDecl: '\t_c := 0',
+  pick: (n) => `{ _c = ${n} }`,
+  picked: (cases) => `\tswitch _c {\n${cases.map((c) => `\tcase ${c.n}:\n\t${c.stmt}`).join('\n')}\n\t}`,
 });
 // A committed candidate's statement: `body` when conds hold, then `fail` (unless body always returns).
 const commitGo = (conds: string[], body: string, fail: string, returns = false) =>
