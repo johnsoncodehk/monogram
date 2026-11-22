@@ -133,9 +133,9 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine): StepLowe
   const L: StepLowering = {
     inner: () => L,
     shared: (id) => `p.sub${id}${f}()`,
-    lit: (s) => (gtCompLit(ids, s) ? `p.${e.matchComp}(${lidOf(ids, s.value)})` : `p.matchLit${f}(${lidOf(ids, s.value)})`),
-    tok: (name) => `p.matchTok${f}(${kidOf(ids, name)})`,
-    template: (name, hole) => `(p.matchTok${f}(${kidOf(ids, name)}) || ${f === 'R' ? e.template(hole) : f === 'W' ? `p.callRuleW(p.matchTemplateW_${hole}())` : `p.callRule(p.matchTemplate_${hole}())`})`,
+    lit: (s) => (gtCompLit(ids, s) ? `p.${e.matchComp}(${lidOf(ids, s.value)})` : f === 'W' ? `(p.litW(${lidOf(ids, s.value)}) && p.takeW(litTt(${lidOf(ids, s.value)})))` : `p.matchLit${f}(${lidOf(ids, s.value)})`),
+    tok: (name) => (f === 'W' ? `(p.tokW(${kidOf(ids, name)}) && p.takeW(${kidOf(ids, name)}))` : `p.matchTok${f}(${kidOf(ids, name)})`),
+    template: (name, hole) => `(${L.tok(name)} ||${f === 'R' ? e.template(hole) : f === 'W' ? `p.callRuleW(p.matchTemplateW_${hole}())` : `p.callRule(p.matchTemplate_${hole}())`})`,
     rule: (name) => (f === 'R' ? `p.rec${name}()` : f === 'W' ? `p.callRuleW(p.parse${name}W())` : `p.callRule(p.parse${name}())`),
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (f === 'R' ? e.bpFound(name, bp) : f === 'W' ? `p.callRuleW(p.bpW_${name}(${bp}))` : `p.callRule(p.bp_${name}(${bp}))`),
@@ -1807,7 +1807,7 @@ ${close}`,
     loopSeg: (kid, rule) => `func (p *${recv}) parseLoopSegW(sb int) (EntryMeta, bool) {
 \tsp := p.pos; before := len(p.scratch); ${arenaCkpt()}
 \tp.lookReset()
-\tif !p.matchTokW(${kid}) {
+\tif !(p.tokW(${kid}) && p.takeW(${kid})) {
 \t\tp.back(sp); p.scratch = p.scratch[:before]; ${arenaRestore()}
 \t\treturn EntryMeta{}, false
 \t}
@@ -2005,26 +2005,29 @@ func (p *${recv}) nllBlockedW(words []string, left spanned) bool {
 \tfor _, w := range words { if w == h { return true } }
 \treturn false
 }
-// matchLitW / matchTokW read the token in place as the direct engine's matchLit / matchTok do (the
-// probe is a peek: peekEnd), and hand the leaf to the builder.
-func (p *${recv}) matchLitW(lid uint16) bool {
+// litW / tokW test the token in place as the direct engine's matchLit / matchTok do (the probe is a
+// peek: peekEnd); takeW consumes the token they accepted and hands its leaf to the builder. A step
+// spells the two in a row (\`p.litW(l) && p.takeW(litTt(l))\`): Go's inliner charges a call 57 of
+// its budget of 80, so one function holding both the test and the builder call is not inlined
+// (cost 132), while each half is (litW 30, takeW 74). The builder call itself is out of line
+// (offerW): spelled inside takeW, the call's arguments put takeW over the budget (104), and a
+// leaf the builder drops (p.drops) makes no call at all.
+func (p *${recv}) litW(lid uint16) bool {
 \ti := p.pos
 \tp.peekEnd = i + 1
-\tif i >= len(p.toks) || p.toks[i].Lid != lid { return false }
-\tt := &p.toks[i]
-\tif tt := litTt(lid); !p.drops[uint8(tt)] { p.b.Leaf(&p.scratch, tt, uint32(i), t.Off, t.End) }
-\tp.pos = i + 1
-\treturn true
+\treturn i < len(p.toks) && p.toks[i].Lid == lid
 }
-func (p *${recv}) matchTokW(kid uint16) bool {
+func (p *${recv}) tokW(kid uint16) bool {
 \ti := p.pos
 \tp.peekEnd = i + 1
-\tif i >= len(p.toks) || p.toks[i].Kid != kid { return false }
-\tt := &p.toks[i]
-\tif !p.drops[uint8(kid)] { p.b.Leaf(&p.scratch, kid, uint32(i), t.Off, t.End) }
-\tp.pos = i + 1
+\treturn i < len(p.toks) && p.toks[i].Kid == kid
+}
+func (p *${recv}) takeW(tt uint16) bool {
+\tif !p.drops[uint8(tt)] { p.offerW(tt) }
+\tp.pos++
 \treturn true
 }
+func (p *${recv}) offerW(tt uint16) { i := p.pos; t := &p.toks[i]; p.b.Leaf(&p.scratch, tt, uint32(i), t.Off, t.End) }
 // callRuleW pushes the node of a rule call that matched (the call's two results, as callRule takes
 // the direct engine's: a direct call, not one through a method value).
 func (p *${recv}) callRuleW(fr spanned, ok bool) bool {
@@ -2056,14 +2059,14 @@ func (p *${recv}) sepByW(elem func() bool, delim uint16) bool {
 \tif !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; ${arenaRestore().replace('nb', 'nb0').replace('kb', 'kb0')}; return true }
 \tfor {
 \t\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt()}
-\t\tif !p.matchLitW(delim) { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore()}; break }
+\t\tif !(p.litW(delim) && p.takeW(litTt(delim))) { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore()}; break }
 \t\tsp2 := p.pos; sb2 := len(p.scratch); ${arenaCkpt().replace('nb, kb', 'nb2, kb2')}
 \t\tif !elem() { p.back(sp2); p.scratch = p.scratch[:sb2]; ${arenaRestore().replace('nb', 'nb2').replace('kb', 'kb2')}; break }
 \t}
 \treturn true
 }
 func (p *${recv}) altLitW(lids []uint16) bool {
-\tfor _, lid := range lids { if p.matchLitW(lid) { return true } }
+\tfor _, lid := range lids { if p.litW(lid) && p.takeW(litTt(lid)) { return true } }
 \treturn false
 }
 
