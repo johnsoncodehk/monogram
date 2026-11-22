@@ -18,18 +18,18 @@ Built (the interpreter's lexer, `src/emit-lexer.ts`, which the emitted JS parser
 - **Code children**: without a `text` token, children are lexed by the ordinary scan.
 - **Derived entry**: how code enters a region is a fact of the grammar
   (`tagOpenOnlyOpensTags`, `src/grammar-analysis.ts`).
+- **Raw text** (`rawText`): an element whose tag name is declared raw has its whole body as ONE
+  token, in a raw frame; the dialect fixture's `<style>`.
 - A lex error inside an undecided type-parameter signature is the signature's rewind verdict in
   every lexing mode (strict and recovering), so both passes lex one stream.
 
 Not built, in this order (each its own change with its gate):
-1. **Raw text**: a frame whose body is one raw token, `ElementRegion.rawText` (below); replaces
-   nothing in JSX, and gives the dialect fixture its `<style>` element.
-2. **Text tokens, directive openers, tag start**: `textTokens` (tokens tried before the text run:
+1. **Text tokens, directive openers, tag start**: `textTokens` (tokens tried before the text run:
    comments in text, directive openers), directive openers derived from the grammar, `tagStart`
    (a text run stops at `tagOpen` only when a declared character follows). Proven on a second
    fixture shaped like a TSX template dialect: text children, directives, `{}` holes, raw
    `<style>` / `<script>`.
-3. **Root region**: `html.ts` re-expressed as a file that starts inside a children frame that
+2. **Root region**: `html.ts` re-expressed as a file that starts inside a children frame that
    never pops, only if every `html.ts` artifact and `conformance/html` stay byte-identical;
    otherwise markup mode stays and the blocking difference is recorded here.
 
@@ -47,7 +47,7 @@ closer.
 | code hole (`{`, template `${`) | none: ordinary scan | none | element (entry rule), template, hole | its closer at brace count 0 |
 | children | `text`, OPTIONAL: absent = children are code | `textTokens` (planned) | tag (at `tagOpen`, + `tagStart` planned), hole, directive (planned) | the close tag of the last open element |
 | tag (open / close) | none: ordinary scan, no regex | `tagTokens` | hole, nested element after `=`, type-argument depth (TS) | `tagClose` / self-close |
-| raw text (planned) | ONE raw token up to `tagOpen + closeMarker + name` | none | none | after the raw token (the close tag is lexed outside) |
+| raw text | ONE raw token up to `tagOpen + closeMarker + name` | none | none | after the raw token (the close tag is lexed outside) |
 | directive (planned; code) | ordinary scan | none | as a code hole | its body's closer at count 0, unless a continuation literal follows |
 | root (planned; whole-file markup) | the children state | as children | as children | never |
 
@@ -68,15 +68,17 @@ elements: {
   hole: { open: '{', close: '}' },
   tagTokens?: ['JSXString'],  // token TYPES lexed only in a tag, tried before the ordinary scan there
   typeParameters?: { head, signature },  // a tagOpen at an operand position that begins type parameters
+  rawText?: [{ tags: ['style'], token: 'StyleBody', ignoreCase?: true, embed?: { style: 'source.css' } }],
 }
 ```
 
-The region's own tokens (`text`, `closeTag`, `selfClose`, `tagTokens`) are not scan matchers
+The region's own tokens (`text`, `closeTag`, `selfClose`, `tagTokens`, the `rawText` tokens) are not scan matchers
 outside the region, so `</` and `/>` are tokens only where an element says so:
 `a </* c */ b`, `new Map</* c */string, X>()`, `x = />/.test(s)` lex as tsc lexes them.
 
-Planned fields: `rawText: { tags | tag-name pattern, token, ignoreCase?, embed?: { scope, include } }`
-(the shape of `MarkupConfig.rawText`), `textTokens`, `tagStart`.
+`rawText` is a list of declarations, each in the shape of `MarkupConfig.rawText` plus its own
+`ignoreCase` (an evaluated dialect has a case-insensitive `<script>` and an exact-case `<style>`).
+`embed` is highlighter data; the lexer does not read it. Planned fields: `textTokens`, `tagStart`.
 
 ## Frame encoding
 
@@ -88,7 +90,7 @@ the kind:
   token is pushed inside the frame;
 - 2, element frame: the sub-state in bits 2-3 (0 children, 1 open tag, 2 close tag) and the
   open-element count above, step 16;
-- 3, free: the raw-text frame.
+- 3, raw-text frame: holds exactly the raw body token (pushed after it, popped after the token).
 
 An element entered from code pushes one element frame (`6`: kind 2, open tag). Nested
 elements in its children share that frame through the count. An open tag's end adds one; a
@@ -99,6 +101,16 @@ lexed with no regex; `<` after the tag name counts type-argument depth (`<List<s
 `tagOpen + closeMarker` is the close-tag token (sub-state close tag), another `tagOpen` opens a
 nested tag, a hole opener pushes a hole, and then either one text token (with `text`) or the
 ordinary scan (code children: whitespace, comments, strings and every other token as in code).
+
+**Raw text.** The element frame keeps, per frame, the index of its current tag's `tagOpen` token
+(the tag NAME is the token after it; markup's `curTag` is the same fact). When an OPEN tag ends
+with `tagClose` (not a self-close) and its name is one of a `rawText` declaration's `tags` (in
+any case when that declaration has `ignoreCase`), the lexer finds the first
+`tagOpen + closeMarker + name` after the tag (case-insensitively under `ignoreCase`), pushes a
+raw frame, pushes ONE token of the declaration's `token` over the body, and pops the frame. An
+empty body is no token; with no close tag the body runs to the end of the file. The close tag
+is then lexed in the children as any close tag. A dynamic tag (`<{x}>`) has no name token and is
+never raw.
 
 A grammar without `elements` gets the lexer it had before regions existed, byte for byte.
 
@@ -179,14 +191,32 @@ nodes. The element reading of a type-position `<T>(x: T) => T` never rejoins, so
 
 The rule is the template rule, unchanged: a window restarts at a token recorded at depth 0
 (outside every frame) and resyncs only at depth 0 on both sides; the frame stack is never
-reconstructed. A token whose lexing was decided by later text records one level deeper:
-- every token inside an undecided type-parameter signature, and the token that decides it;
-- every token inside the characters a type-parameter head veto read (the `<` it decided
-  included).
+reconstructed. Every token inside an undecided type-parameter signature, and the token that
+decides it, records one level deeper (the signature is lexer state, as a frame is).
+
+A token is also decided by what its lexer READ: its match, and the failed attempts before it at
+its start (the anchor rule, stated at the top of `src/relex-family.ts`). The read bounds are the
+shared functions of `src/lex-match-plan.ts`: `failRead` and `readEndWalk` for a failed attempt,
+`overTrigger` and `examinedUnits` for a match (a lazy repeat bounded as the regex runs it, so a
+block comment reads nothing past its `*/`). The portable relex checks them at relex time. The
+interpreter's lexer (`src/emit-lexer.ts`, windowed) records them while lexing: `lxLookEnd` is the
+exclusive end of the furthest read any decision so far made, and a token pushed while it is past
+the token's end + 1 carries flag 32: it is no restart anchor and no resync point. Such reads: a regex attempt that
+falls back to division (to the end of its line), an unterminated block comment (to the end of the
+file), a number that backed up inside its own pattern (`1._x`), and a type-parameter head veto
+(its match and the unit its trailing lookahead reads: it decides the `<` before it; a failed head
+opens an element, whose frame already holds what it read).
+
+Resync compares the paren-head stacks by their trajectory since the divergence point; a `(`
+stands on it at the depth before its own push, so an entry both lexes pushed after the
+divergence (`if (q)` edited to `ifx (q)`: a control head in one, not in the other) is never taken
+as shared.
 
 Per state: a frame is pushed before its opener and popped after its closer, so the opener and
-everything inside record depth > 0 and the token after the closer may record 0. Raw text
-(planned): the raw token is inside its frame, the close tag outside. Root region (planned):
+everything inside record depth > 0 and the token after the closer may record 0. Raw text:
+the raw token is inside its frame, the close tag outside; the raw token's end is decided by the
+text after it (the first close tag), and it lies inside its element frame, so it is never an
+anchor. Root region (planned):
 depth is counted excluding the root frame, so a markup file gets depth-0 anchors (the state
 "root children, no open frame" is the default) and the "stateful grammar restarts at the file
 head" rule goes away for markup once HTML runs on the model.
@@ -198,9 +228,10 @@ children with directives, dynamic tags and an element right after a value): edit
 
 ## What the portable lexers need
 
-1. Frame kinds: template hole, element hole, element frame, and a raw frame (the free 4th value
-   of the 2-bit kind): one body token up to `tagOpen + closeMarker + name`, pushed inside the
-   frame; the close tag is lexed after the pop.
+1. Frame kinds: template hole, element hole, element frame, and a raw frame (kind 3): one body
+   token up to `tagOpen + closeMarker + name`, pushed inside the frame; the close tag is lexed
+   after the pop. Per declaration: tag names, token kind, `ignoreCase`. Empty body = no token;
+   no close tag = to the end of the file; only an open tag ended by `tagClose` enters it.
 2. The tag-name span: the index of the token right after `tagOpen` in an open tag, kept per
    open tag, so the tag's end can test it against the raw-text set.
 3. Optional children text: absent means children are lexed as code, with tags, close tags and
@@ -213,7 +244,10 @@ children with directives, dynamic tags and an element right after a value): edit
    vetoes) or `always`.
 7. A root region that never pops, with the depth counted excluding it.
 8. Unchanged: one stack; push before the opener, pop after the closer; restart and resync at
-   depth 0; a token decided by later text records depth + 1; the depth record saturates at 255.
+   depth 0; a token inside an undecided signature records depth + 1; the depth record saturates
+   at 255. The type-parameter head veto is a READ (anchor rule (ii)), not a depth: its match
+   decides the `<` and reads up to the unit after it (its trailing lookahead), `overTrigger` /
+   `examinedUnits` of `head`; the portable relex checks it with the other reads.
 9. An error inside an undecided type-parameter signature is the rewind verdict in every mode.
 
 ## What the generators need
@@ -237,7 +271,7 @@ children with directives, dynamic tags and an element right after a value): edit
 |---|---|---|---|---|
 | JSX / TSX | entered from code at an operand position; `<` is also an operator | text + holes + elements | stop characters `{ < > }` | none |
 | a TSX template dialect (evaluated as data) | code; an element is render output only at a line start or after `;` | text + holes + elements + directives (`@if (`, `@for (`, `@for await (`, `@switch (`, `@try {`; continuations `@else`, `@empty`, `@case X:`, `@default:`, `@pending`, `@catch (`) + `@{ … }` code blocks, whose bodies are code; `//` and `/* */` comments in text | at every index of a text run: `<` followed by `/ > { @ $ _ A-Z a-z`, `{`, `}`, and a directive opener (`@`, a keyword, its required next character); any other `@word` is text | `<script>` (case-insensitive) and `<style>` (exact case); raw only when the body does not start with `{` |
-| `test/fixtures/elementdialect.ts` | code; `<` only opens tags | code: elements, directives, `{expr}`, strings | n/a | planned (`<style>`) |
+| `test/fixtures/elementdialect.ts` | code; `<` only opens tags | code: elements, directives, `{expr}`, strings | n/a | `<style>` (exact case) |
 | HTML (`html.ts`, markup mode) | the whole file is children (a root region) | text + elements + comments + raw text | `tagOpen` followed by `tagOpenAfter` | `<script>`, `<style>`, … case-insensitive, with embeds |
 | Vue / Svelte / Astro (not built) | root region | text + elements + holes + directives | as HTML plus the hole opener | `<script>` / `<style>` with `lang=` embeds |
 
@@ -250,12 +284,9 @@ rule when there is one (`@if` `(`; `@try` `{`). A continuation literal (`@else`,
 
 - The portable lexers' frames for JSX / TSX and the dialect (the list above). Until then
   `buildIR` refuses `elements`, and `guard-lead` / `predictive-first` skip the JSX grammars.
-- Raw text, text tokens / directive openers / tag start, the root region: the build order above.
-- The relex bound of a failed attempt and of an over-read inside a token (a regex attempt that
-  falls back to division, `let m = f() < / 2;` with `/` inserted; `x = 1._x;` → `1._5`; an
-  unterminated block comment; the head veto's trailing lookahead), and the paren-head keyword
-  case (`if` → `ifx` before `(q) / r /`), once the shared bound functions are in
-  `src/lex-match-plan.ts`.
+- Text tokens / directive openers / tag start, the root region: the build order above.
+- A raw-text body condition (the evaluated dialect reads `<style>{css}</style>` as an element
+  with a hole, not raw text): not declared; it belongs with the TSRX-shaped fixture.
 - Re-measuring the five undecidable JSX shapes on a larger TSX corpus.
 - The tm-dialect expected-fail rows are TextMate-side (children repository, dynamic tags, the
   `<style>` embed, React vocabulary); they move with the generators.
