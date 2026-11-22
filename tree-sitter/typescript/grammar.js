@@ -166,7 +166,7 @@ module.exports = grammar({
       seq("new", $.new_target, choice(seq("<", optional(seq($.type, repeat(seq(",", $.type)), optional(","))), ">", choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), blank())), seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), blank())),
       seq("new", "class", field('name', $.ident), optional($.type_params), optional(seq("extends", $.class_heritage)), optional(seq("implements", optional(seq($.type, repeat(seq(",", $.type)), optional(","))))), "{", repeat($.class_member), "}", choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), blank())),
       seq("new", "class", optional($.type_params), optional(seq("extends", $.class_heritage)), optional(seq("implements", optional(seq($.type, repeat(seq(",", $.type)), optional(","))))), "{", repeat($.class_member), "}", choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), blank())),
-      seq("[", repeat(seq(optional($.expr), ",")), optional($.expr), "]"),
+      seq("[", optional($.expr), repeat(seq(",", optional($.expr))), "]"),
       seq("{", optional(seq($.prop, repeat(seq(",", $.prop)), optional(","))), "}"),
       seq("async", optional($.type_params), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", optional(seq(":", $.type)), "=>", choice($.block, $.expr)),
       seq(optional($.type_params), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", optional(seq(":", $.type)), "=>", choice($.block, $.expr)),
