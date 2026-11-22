@@ -1288,25 +1288,36 @@ const HOLE_EDIT_DOCS = [
   'let m = f() < / 2;',
   'x = y / z / w;',
   'if (f() < /re/.test(s)) g();',
+  // Whether `/` after `)` is a regex or a division depends on the keyword before the matching `(`:
+  // an edit to the keyword changes how text to its right lexes.
+  'if (q) /r/.test(s);',
+  'ifx (q) / r / 2;',
+  'while (a) /re/;',
+];
+// Documents whose tokens are decided by reading past their end + 1, each with the texts inserted
+// at every offset (and every character deleted): a number that tried a longer form and backed
+// up (`1._x`), a run of such tries (`1._1_1_x`), an insertion right after the last unit such a
+// read cannot pass (`x = 1.` + `_5`, `a = 0` + `xF`), an identifier escape, a block comment left
+// open (its attempt reads to the end of the source and falls back to `/`).
+const LOOK_EDIT_DOCS: { doc: string; ins: string[] }[] = [
+  { doc: 'x = 1._x;', ins: ['5', '_', 'x', '.'] },
+  { doc: 'x = 1._1_1_x;', ins: ['5', '_'] },
+  { doc: 'x = 1.', ins: ['_5', '_', '5', 'e'] },
+  { doc: 'a = 0', ins: ['xF', 'x', 'F', 'n'] },
+  { doc: 'a = 1', ins: ['e+5', 'e5', 'e+'] },
+  { doc: 'x = a\\u0041;', ins: ['b', '{', '}', '\\', 'u'] },
+  { doc: 'x = y /* c', ins: ['*/', '*', '/'] },
+  { doc: 'x = y / 2; /* c\nz', ins: ['*/', '/'] },
 ];
 // Edits whose relexed stream is known to differ from a fresh lex, each with its cause; the gate
 // fails when one passes.
-const HOLE_EDIT_EXPECTED_FAIL: { doc: string; edit: [number, number, string]; reason: string }[] = [
-  // `/ 2;` after `<` is a regex attempt that fails (no closing `/` on the line) and falls back to
-  // division; the `/` appended at the end makes `/ 2;/` a regex. The `/` token's kind was decided
-  // by text past its end, yet it stays in the kept prefix (the window restarts two tokens before
-  // the edit). Owed: a token decided by looking past its end, and the tokens inside that lookahead,
-  // record one level deeper, so they are no restart or resync anchor (the depth rule the element
-  // regions' signature rewind needs too). The Doc's re-scan after a failed parse hides it from
-  // the verdict and the tree today.
-  { doc: 'let m = f() < / 2;', edit: [18, 18, '/'], reason: 'a regex attempt that fell back to division is kept as a relex anchor' },
-];
+const HOLE_EDIT_EXPECTED_FAIL: { doc: string; edit: [number, number, string]; reason: string }[] = [];
 // Insert each of a few characters that open, close or end something at every offset, and delete
 // every character.
-function oneCharEdits(doc: string): [number, number, string][] {
+function oneCharEdits(doc: string, ins: string[] = ['x', ' ', '}', '{', '`', '$', '/']): [number, number, string][] {
   const out: [number, number, string][] = [];
   for (let at = 0; at <= doc.length; at++) {
-    for (const ch of ['x', ' ', '}', '{', '`', '$', '/']) out.push([at, at, ch]);
+    for (const ch of ins) out.push([at, at, ch]);
     if (at < doc.length) out.push([at, at + 1, '']);
   }
   return out;
@@ -1890,7 +1901,8 @@ for (const c of CASES) {
     // against a fresh lex and parse) holds. Exhaustive, not random: a random edit rarely lands
     // inside a hole, where the relex window must not restart.
     if (HOLE_EDIT_GRAMMARS.has(c.grammar)) {
-      const sessions = HOLE_EDIT_DOCS.flatMap((init) => oneCharEdits(init).map((e) => ({ init, e, final: init.slice(0, e[0]) + e[2] + init.slice(e[1]) })));
+      const sessions = [...HOLE_EDIT_DOCS.map((doc) => ({ doc, ins: undefined })), ...LOOK_EDIT_DOCS]
+        .flatMap(({ doc: init, ins }) => oneCharEdits(init, ins).map((e) => ({ init, e, final: init.slice(0, e[0]) + e[2] + init.slice(e[1]) })));
       const fresh = r.batch(sessions.map((x) => x.final));
       const bad: string[] = [];
       let knownHit = 0;
@@ -1909,7 +1921,7 @@ for (const c of CASES) {
         if (known) { if (!why) bad.push(`expected-fail passes now, remove it (${known.reason}): ${JSON.stringify(x.init)} edit ${JSON.stringify(x.e)}`); else knownHit++; return; }
         if (why) bad.push(`${why}: ${JSON.stringify(x.init)} edit ${JSON.stringify(x.e)}`);
       });
-      console.log(`  ${c.grammar}/${r.label}: ${sessions.length - bad.length - knownHit}/${sessions.length} one-character edits in and around template holes and regex attempts ≡ fresh (${knownHit} expected-fail)`);
+      console.log(`  ${c.grammar}/${r.label}: ${sessions.length - bad.length - knownHit}/${sessions.length} one-character edits in and around template holes, regex attempts and reads past a token's end ≡ fresh (${knownHit} expected-fail)`);
       for (const smp of bad.slice(0, 6)) console.log(`      ${smp}`);
       failures += bad.length;
     }

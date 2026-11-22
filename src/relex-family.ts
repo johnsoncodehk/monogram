@@ -339,7 +339,7 @@ function inUnits(c: Ex, set: CSet): Expr {
 }
 
 const readsBeforeFn = (m: RelexMode): Fn => {
-  const body: Stmt[] = [let_('r', 'int', I(0)), if_(ge('off', len('text')), [ret('r')]), let_('u', 'int', code('text', 'off'))];
+  const body: Stmt[] = m.look.arms.length ? [let_('r', 'int', I(0)), if_(ge('off', len('text')), [ret('r')]), let_('u', 'int', code('text', 'off'))] : [let_('r', 'int', I(0))];
   m.look.arms.forEach((arm, ai) => {
     const steps: Stmt[] = [];
     arm.cands.forEach((c, k) => {
@@ -365,8 +365,7 @@ const overEndFn = (m: RelexMode): Fn => ({
   params: [{ name: 'text', ty: 'str' }, { name: 'e', ty: 'int' }, { name: 'kid', ty: 'int' }],
   ret: ['int'],
   body: [
-    if_(ge('e', len('text')), [ret(I(0))]),
-    let_('c', 'int', code('text', 'e')),
+    ...(m.look.over.length ? [if_(ge('e', len('text')), [ret(I(0))]), let_('c', 'int', code('text', 'e'))] : []),
     ...m.look.over.map((o) => if_(and(eq('kid', I(m.kidOf(o.tok))), inUnits('c', o.trig)), [
       let_('q', 'int', 'e'),
       while_(and(lt('q', len('text')), inUnits(code('text', 'q'), o.examined)), [set('q', add('q', I(1)))]),
