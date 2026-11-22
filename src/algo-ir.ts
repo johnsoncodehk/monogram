@@ -43,8 +43,8 @@ export type Expr =
   | { k: 'call'; fn: string; args: Expr[] }
   | { k: 'splice'; s: Expr; a: Expr; b: Expr; ins: Expr }
   | { k: 'own'; e: Expr }
-  // `cap` is an exact final length; `estimate` is a growth guess the lowering may reserve or ignore.
-  | { k: 'newList'; ty: ListTy; cap?: Expr; estimate?: Expr }
+  // `cap` is an exact final length; a list without one grows as it is pushed to.
+  | { k: 'newList'; ty: ListTy; cap?: Expr }
   | { k: 'falses'; n: Expr }
   | { k: 'prefix'; list: Expr; n: Expr; estimate: Expr }
   | { k: 'lexAll'; text: Expr }
@@ -73,8 +73,6 @@ export type Stmt =
   // One lexer step: `lexFrom(text, pos, ...state, out, 1)` reassigning pos and every state var.
   // The lexer itself is emitted per target outside this IR; `state` follows its parameter order.
   | { k: 'lexStep'; text: Expr; pos: string; out: string; state: string[] }
-  // Release list capacity when more than half of it is unused (lowerings that never over-reserve skip it).
-  | { k: 'shrink'; list: string }
   | { k: 'comment'; text: string };
 
 export interface Param { name: string; ty: Ty }
@@ -177,7 +175,7 @@ export interface RelexLowering {
     shiftMeta(cx: Cx, m: R, delta: R): R;
     metaEq(cx: Cx, a: R, b: R): R;
     splice(cx: Cx, s: R, a: R, b: R, ins: R): R;
-    newList(cx: Cx, ty: ListTy, cap?: R, estimate?: R): R;
+    newList(cx: Cx, ty: ListTy, cap?: R): R;
     falses(cx: Cx, n: R): R;
     prefix(cx: Cx, list: R, n: R, estimate: R): R;
   };
@@ -188,7 +186,6 @@ export interface RelexLowering {
     forEach(v: string, list: string, body: Lines): Lines;
     destructure(cx: Cx, s: { declare: boolean; names: string[]; ids: string[]; call: string; mutable: (n: string) => boolean; reassigned: (n: string) => boolean }): Lines;
     lexStep(cx: Cx, s: { text: R; posName: string; pos: string; out: string; state: string[] }): Lines;
-    shrink(cx: Cx, list: string, ty: ListTy): Lines;
   };
 }
 
@@ -276,7 +273,7 @@ class Printer implements Cx {
       }
       case 'splice': return RX().splice(this, this.expr(e.s), this.expr(e.a), this.expr(e.b), this.expr(e.ins));
       case 'own': return this.own(this.expr(e.e));
-      case 'newList': return RX().newList(this, e.ty, e.cap && this.expr(e.cap), e.estimate && this.expr(e.estimate));
+      case 'newList': return RX().newList(this, e.ty, e.cap && this.expr(e.cap));
       case 'falses': return RX().falses(this, this.expr(e.n));
       case 'prefix': {
         const l = this.expr(e.list);
@@ -336,7 +333,6 @@ class Printer implements Cx {
         case 'set': this.mutable.add(s.name); this.reassigned.add(s.name); break;
         case 'setCall': for (const n of s.names) { this.mutable.add(n); this.reassigned.add(n); } break;
         case 'setAt': case 'push': this.mutable.add(s.list); break;
-        case 'shrink': this.mutable.add(s.list); this.reassigned.add(s.list); break;
         case 'lexStep':
           for (const n of [s.pos, ...s.state]) { this.mutable.add(n); this.reassigned.add(n); }
           this.mutable.add(s.out);
@@ -360,7 +356,7 @@ class Printer implements Cx {
         const owned = s.ty === 'str' ? !!r.owned : isList(s.ty);
         if (L.owns && isList(s.ty) && !r.owned) throw new Error(`algo-ir: let ${s.name} needs an owned list`);
         this.env.set(s.name, { ty: s.ty, owned });
-        const emptyList = s.init.k === 'newList' && !s.init.cap && !s.init.estimate;
+        const emptyList = s.init.k === 'newList' && !s.init.cap;
         return S.let(this, { id: this.id(s.name), ty: s.ty, r, owned, mutable: this.mutable.has(s.name), reassigned: this.reassigned.has(s.name), emptyList });
       }
       case 'set': {
@@ -431,7 +427,6 @@ class Printer implements Cx {
         });
       }
       case 'lexStep': return this.rx().stmt.lexStep(this, { text: this.expr(s.text), posName: s.pos, pos: this.id(s.pos), out: this.id(s.out), state: s.state.map((n) => this.id(n)) });
-      case 'shrink': return this.rx().stmt.shrink(this, this.id(s.list), this.env.get(s.list)!.ty as ListTy);
     }
   }
 
