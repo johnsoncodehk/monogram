@@ -1333,7 +1333,9 @@ export function ruleShell(r: RdRule, ids: LexIdPlan, L: RuleLowering): string {
   const tests = (t: CommitTest) => L.guardConds(commitGuard(r.altGuard[t.arm]!, t));
   const act = (a: CommitAct | null) => (a === null ? L.commitFail
     : L.commit(a.arm, tests(a), conjOf(guardedSteps(r.altGuard[a.arm]!, r.alts[a.arm]!), S), !a.clean || a.nullable, a.nullable));
-  return L.fn([L.commitPeek, L.dispatch.nil(commitWalk(r.altCommit, ids, act, tests, L.commitSw)), L.openBest(r.altDispatch), ...frame]);
+  // A frame left with no candidate (the switch decides every key it could reach) matches nothing.
+  const rest = dispatchArms(r.altDispatch).size === 0 ? [`${L.ind}${L.commitFail}`] : [L.openBest(r.altDispatch), ...frame];
+  return L.fn([L.commitPeek, L.dispatch.nil(commitWalk(r.altCommit, ids, act, tests, L.commitSw)), ...rest]);
 }
 
 // ── The committed choice: one walk over a Commit, rendered by every target ──
@@ -1462,6 +1464,7 @@ export type PrattLowering = {
   nudEnter: string;                              // `nud` up to its buffered token `t` (none: no match)
   nudOpen: string;                               // `nud`'s candidate frame, up to its candidates
   nudClose: string;
+  nudEnd: string;                                // the end of `nud`'s function, where it has no frame (the commit switch decides every key)
   // COMMITTED CHOICE (PrattRule.nudCommit): before the frame, the buffered token's Commit switch.
   // Each commit runs its arm when conds hold and returns its node, else fails (commitFail: no
   // match, with the state the frame leaves when nothing matched).
@@ -1544,7 +1547,8 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
     }
   };
   const commit = r.nudCommit === undefined ? [] : [commitWalk(r.nudCommit, ids, act, tests, L.commitSw)];
-  const nud = [L.nudEnter, ...commit, L.nudOpen, dispatchWalk(d, ids, nudArm, L.dispatch, false), L.nudClose].join('\n');
+  const frame = r.nudCommit !== undefined && dispatchArms(d).size === 0 ? [L.commitFail, L.nudEnd] : [L.nudOpen, dispatchWalk(d, ids, nudArm, L.dispatch, false), L.nudClose];
+  const nud = [L.nudEnter, ...commit, ...frame].join('\n');
   return [L.entry, bp, nud].join('\n');
 }
 

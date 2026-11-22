@@ -1167,6 +1167,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
             }
         }`, NUD_FAIL_RS),
     commitFail: NUD_FAIL_RS,
+    nudEnd: '    }',
     commitSw: commitSwRs,
     led: {
       tailOpen: '!tail_closed',

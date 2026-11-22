@@ -769,6 +769,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
       back(save); _n = b;
     } }`, NUD_FAIL_TS),
     commitFail: NUD_FAIL_TS,
+    nudEnd: '}',
     commitSw: commitSwTs('t'),
     led: {
       tailOpen: '!tailClosed',

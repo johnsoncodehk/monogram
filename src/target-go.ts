@@ -1115,6 +1115,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
 \t\tp.back(save); ${lost}
 \t}`, fail),
     commitFail: fail,
+    nudEnd: '}',
     commitSw: commitSwGo('t'),
     steps: goSteps(ids, '', 'engine', ENGINE_GO),
     nudGuard: (g, keyed) => guardCond(g, 't', '', keyed),
@@ -1884,6 +1885,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
 \t\tp.back(save); ${lost}
 \t}`, fail),
     commitFail: fail,
+    nudEnd: '}',
     commitSw: commitSwGo('t'),
     steps: goSteps(ids, 'W', recv, ENGINE_GO_W, ar),
     nudGuard: (g, keyed) => guardCond(g, 't', 'W', keyed),
