@@ -44,7 +44,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: measure-profile-${{ github.event.pull_request.number || github.run_id }}-${{ github.event.action == 'labeled' && 'full' || 'pr' }}
+  group: measure-profile-${{ github.event.pull_request.number || github.run_id }}-${{ github.event.label.name || 'push' }}
   cancel-in-progress: true
 
 # One pin for the TypeScript sources the harness downloads (same as ci.yml / readme-bench.yml).
