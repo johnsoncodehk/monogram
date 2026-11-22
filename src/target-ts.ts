@@ -48,7 +48,7 @@ const dispatchTs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, key
   dispatchWalk(d, ids, arm, dispatchTsL(t), nilable);
 // A Commit's switch (emit-portable.ts commitWalk) over the buffered token t.
 const commitSwTs = (t: string): CommitLowering => ({
-  sw: (by, cases, dflt) => `  switch (${t}.${by}) {\n${cases.map((c) => `${c.keys.map((k) => `  case ${k}:`).join('\n')}${c.stmt ? `\n${c.stmt}` : ''}\n  break;`).join('\n')}${dflt ? `\n  default:\n${dflt}` : ''}\n  }`,
+  sw: (by, cases, dflt) => `  switch (${t}.${by}) {\n${cases.map((c) => `  ${c.keys.map((k) => `case ${k}:`).join(' ')}${c.stmt ? `\n${c.stmt}` : ''}\n  break;`).join('\n')}${dflt ? `\n  default:\n${dflt}` : ''}\n  }`,
   ifAll: ifTs,
   notAll: (conds) => `!(${conds.join(' && ')})`,
   pickDecl: '  let _c = 0;',
@@ -604,8 +604,8 @@ function tsRules(r: RdRule, ids: LexIdPlan, m: Mode): RuleLowering {
     commitPeek: '  const _ft = peek();',
     guardConds: (g) => guardCond(g, '_ft', false),
     commit: (_i, conds, cond, undo, nullable) => commitTs(conds, w
-      ? `{ const save = pos, b = _n; if (${cond}${nullable ? ' && pos > save' : ''}) { finR(${cn}, b, save); return true; }${undo ? ' back(save); _n = b;' : ''} }`
-      : `{ ${undo ? 'const save = pos; ' : ''}if (${cond}${nullable ? ' && pos > save' : ''}) return true;${undo ? ' back(save);' : ''} }`, 'return false;'),
+      ? `{ const s = pos, b = _n; if (${cond}${nullable ? ' && pos > s' : ''}) { finR(${cn}, b, s); return true; }${undo ? ' back(s); _n = b;' : ''} }`
+      : `{ ${undo ? 'const s = pos; ' : ''}if (${cond}${nullable ? ' && pos > s' : ''}) return true;${undo ? ' back(s);' : ''} }`, 'return false;'),
     commitFail: '{ return false; }',
     commitSw: commitSwTs('_ft'),
   };
@@ -756,7 +756,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
     // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node (the
     // one slot at b), form, tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (_i, conds) => commitTs(conds, `{ const b = _n; leafSlotW(tok_kind(t), t); pos++; finP(${cn}, b); _form = 0; _tail = false; return true; }`, NUD_FAIL_TS, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitTs(conds, `{ const save = pos, b = _n; if (${cond}${nullable ? ' && pos > save' : ''}) { finR(${cn}, b, save); _capped = ${capped}; _form = 0; _tail = ${tail}; return true; }${undo ? ' back(save); _n = b;' : ''} }`, NUD_FAIL_TS),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitTs(conds, `{ const s = pos, b = _n; if (${cond}${nullable ? ' && pos > s' : ''}) { finR(${cn}, b, s); _capped = ${capped}; _form = 0; _tail = ${tail}; return true; }${undo ? ' back(s); _n = b;' : ''} }`, NUD_FAIL_TS),
     commitPrefix: (_i, conds) => commitTs(conds, `{ const pbp = ${r.name}_PRE[t.lid];
     if (pbp !== undefined) {
       const save = pos, b = _n;
