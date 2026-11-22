@@ -665,6 +665,9 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
     }
     const p = parents.get(n);
     let out: Inh;
+    // A template's interpolations are not in the calculus yet (`child` of a template is
+    // rejected), so a node inside one has no defined context: outside the subset.
+    if (p?.rule === '$template') throw new Shape2Unmapped('$template', 'interpolation');
     if (p === undefined) {
       if (n !== root) throw new Error(`shape2: the node at ${n.offset}..${n.end} is not under the evaluator's root`);
       out = rootInh;
