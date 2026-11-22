@@ -1688,7 +1688,10 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
     // A pattern, not a string: tree-sitter turns a rule that is one token into that token only when
     // the token is auxiliary (a pattern) or the rule visible; a hidden rule over a string stays a
     // non-terminal, which a reserved set cannot hold ("Cannot store non-terminals in a TokenSet").
-    for (const [w, name] of ownToken) ruleEntries.push(`    ${name}: $ => /${w}/`);
+    // Lexical precedence 1: a keyword must be PREFERRED over the word token on their common string
+    // (identify_keywords: does_match_same_string), which a string literal is implicitly and a
+    // pattern declared after the word token is not (without it `var enum = 1;` stayed accepted).
+    for (const [w, name] of ownToken) ruleEntries.push(`    ${name}: $ => token(prec(1, /${w}/))`);
   }
 
   lines.push(ruleEntries.join(',\n\n'));

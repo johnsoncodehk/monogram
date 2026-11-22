@@ -230,7 +230,7 @@ module.exports = grammar({
 
     template_substitution: $ => seq("${", $.expr, "}"),
 
-    _reserved_enum: $ => /enum/
+    _reserved_enum: $ => token(prec(1, /enum/))
   }
 });
 
