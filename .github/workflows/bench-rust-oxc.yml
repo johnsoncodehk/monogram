@@ -27,9 +27,9 @@ jobs:
 
       - run: npm ci
 
-      # BENCH_EXTRA: 0807b8143ad160773842ef67bb3faea730ff28a6
+      # BENCH_EXTRA: a commit to time as variant E against D (origin/master); BENCH_GRAMMAR: typescript (default) or javascript. Edit per measurement.
       - run: test/bench-rust-oxc/run.sh 9
         env:
           BENCH_EXTRA: 0376a6ece8ed6cdbfb71566e6fb6626b6c7b56da
           BENCH_ONLY: '1'
-          BENCH_GRAMMAR: javascript
+          BENCH_GRAMMAR: typescript
