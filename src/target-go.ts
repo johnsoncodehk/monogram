@@ -397,19 +397,20 @@ func lxExt(src string, e int) int {
 `;
   const nlState = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).state : '';
   const nlStateFrom = nl ? newlinePartsGo(nl, 'pushTok', ids).stateFrom : '';
-  // ASCII whitespace is skipped before the dispatch, not dispatched (see the Rust target): per
-  // byte only its class is read (wsClass: 1 space, 2 line break).
-  const wsSkip = nl ? '' : `\t\tif w := wsClass[src[pos]]; w != 0 {
-\t\t\tfor {
-\t\t\t\tif w == 2 { pendingNl = true }
-\t\t\t\tpos++
-\t\t\t\tif pos >= n { break }
-\t\t\t\tif w = wsClass[src[pos]]; w == 0 { break }
-\t\t\t}
-\t\t\tif pos >= n { break }
+  // A whitespace run is consumed in one dispatch round (see the Rust target): per byte only "is
+  // it still whitespace"; a run after a line break also takes further breaks.
+  const nlWs = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).ws : `\t\tif c == 32 || c == 9 || c == 11 || c == 12 {
+\t\t\tpos++
+\t\t\tfor pos < n { if d := src[pos]; d != 32 && d != 9 && d != 11 && d != 12 { break }; pos++ }
+\t\t\tcontinue
 \t\t}
-`;
-  const nlWs = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).ws : `\t\tif c >= 0x80 {
+\t\tif c == 10 || c == 13 {
+\t\t\tpendingNl = true
+\t\t\tpos++
+\t\t\tfor pos < n { if d := src[pos]; d != 32 && (d < 9 || d > 13) { break }; pos++ }
+\t\t\tcontinue
+\t\t}
+\t\tif c >= 0x80 {
 \t\t\tr, w := utf8.DecodeRuneInString(src[pos:])
 \t\t\tif isJsWs(r) { if r == 0x2028 || r == 0x2029 { pendingNl = true }; pos += w; continue }
 \t\t}
@@ -442,11 +443,10 @@ ${pushHooks}\t\t*acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendi
     : `\tpushTok := func(off, end int, kid, lid uint16) { *acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendingNl = false }
 \t_ = pushTok
 `;
-  const loopBody = `${wsSkip}\t\tc := int(src[pos])
+  const loopBody = `\t\tc := int(src[pos])
 ${nlWs}${tplDispatch}${cascade}
 ${uniIdentFallbackGo}${loopPanicGo}`;
-  const idTables = renderIdTablesGo(ids) + (nl ? '' : `var wsClass = [256]uint8{${Array.from({ length: 256 }, (_, i) => (i === 10 || i === 13 ? 2 : i === 9 || i === 11 || i === 12 || i === 32 ? 1 : 0)).join(', ')}}
-`);
+  const idTables = renderIdTablesGo(ids);
   // The lexer's bracket-head and template-depth stacks, bounded by nesting depth: lexInto reuses
   // the capacity of the ones in stk (a reused builder's) and leaves them there.
   const stkFields = [rx ? '\tparenHead []bool\n' : '', tpl ? '\ttemplateStack []int\n' : ''].join('');

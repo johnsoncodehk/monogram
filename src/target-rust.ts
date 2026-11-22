@@ -363,20 +363,12 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   // grammars keep the flow-aware whitespace arms (flow_depth) and do NOT use the folded arms.
   const nonAsciiWsCheck = nlRs ? '' : `        if c >= 0xC2 { if let Some((ch, w)) = _char_at(src, pos) { if _is_js_ws(ch) { if ch == '\\u{2028}' || ch == '\\u{2029}' { ${nlVar} = true; } pos += w; continue; } } }
 `;
-  // ASCII whitespace is skipped before the dispatch, not dispatched: a round is a token (or a
-  // comment), and per whitespace byte only its class is read (_WS: 1 space, 2 line break). The
-  // round's own checks (the loop bound and token limit, the template `}` test, the byte match)
-  // concern the next token, and whitespace emits none. Newline-mode grammars, whose breaks are
-  // tokens, keep their whitespace arms.
-  const wsSkip = nlRs ? '' : `        let mut w = _WS[b[pos] as usize];
-        if w != 0 {
-            loop { ${nlVar} |= w == 2; pos += 1; if pos >= n { break; } w = _WS[b[pos] as usize]; if w == 0 { break; } }
-            if pos >= n { break; }
-        }
+  // A whitespace run is consumed in one dispatch round: per byte only "is it still whitespace"
+  // is asked; the round's own checks (the loop bound, the template `}` test, the byte match) run
+  // once per run. A run after a line break also takes further breaks: the flag is already set.
+  const wsNlArms = nlRs ? '' : `        9 | 11 | 12 | 32 => { pos += 1; while pos < n && matches!(b[pos], 9 | 11 | 12 | 32) { pos += 1; } continue; }
+        10 | 13 => { ${nlVar} = true; pos += 1; while pos < n && matches!(b[pos], 9..=13 | 32) { pos += 1; } continue; }
 `;
-  const wsTable = nlRs ? '' : `static _WS: [u8; 256] = [${Array.from({ length: 256 }, (_, i) => (i === 10 || i === 13 ? 2 : i === 9 || i === 11 || i === 12 || i === 32 ? 1 : 0)).join(', ')}];
-`;
-  const wsNlArms = '';
   const tplOpenByte = tpl && tlen(tpl.open) === 1 ? firstUnit(tpl.open, UNITS) : null;
   const tplOpenArm = tplOpenByte !== null ? `        ${tplOpenByte} => {
             let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl!.open)}, ${rx ? '!st.prev_is_value()' : 'true'});
@@ -478,7 +470,7 @@ fn _lx_ext(s: &str, e: usize) -> usize {
 }
 `;
   const needIn = !!(nlRs); // newline flow still uses string _in
-  const rxConsts = `${lexUtf8Helpers}${wsTable}${rxBitTables}${tplLidConsts}${needIn ? `fn _in(set: &[&str], x: &str) -> bool { set.iter().any(|s| *s == x) }\n` : ''}${nlRs ? nlRs.consts : ''}`;
+  const rxConsts = `${lexUtf8Helpers}${rxBitTables}${tplLidConsts}${needIn ? `fn _in(set: &[&str], x: &str) -> bool { set.iter().any(|s| *s == x) }\n` : ''}${nlRs ? nlRs.consts : ''}`;
   const pavHot = rx ? rsLidAny(ids, rx.postfixAfterValue, 'lid') : 'false';
   // The span itself is the shared family's scanner; this reads which delimiter ended it.
   const tplFn = tpl ? `fn _scan_tpl_span(s: &str, p: usize, strict: bool) -> (bool, usize) {
@@ -588,11 +580,11 @@ struct LexStacks {${stkFields.length ? ` ${stkFields.join(', ')} ` : ''}}
     nlRs ? nlRs.init : ''].filter(Boolean).join(', ');
   const open = stateful ? `    let mut st = LexState { ${initFields} };` : `    let mut toks: Vec<Tok> = Vec::new();\n    let mut pending_nl = false;`;
   const nlWs = nlRs ? nlRs.ws : '';
-  const loopBody = `${wsSkip}        let c = b[pos] as u32;
+  const loopBody = `        let c = b[pos] as u32;
 ${nlWs}${tplDispatch}${cascade}
 ${uniIdentOrPanic}`;
   if (rxOnly) {
-    const rxLoopBody = `${wsSkip}        let c = b[pos] as u32;
+    const rxLoopBody = `        let c = b[pos] as u32;
 ${nlWs}${cascade}
 ${uniIdentOrPanic}`;
     return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool) {
