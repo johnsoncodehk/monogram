@@ -13,10 +13,10 @@ import {
 // Param/Block/Type/TypeParams resolve at thunk-eval time (defined below).
 function tsFnArms(nameParts, body) {
   return [
-    ['function', ...nameParts, opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType), resetCtx(body)],
-    ['function', '*', ...nameParts, opt(TypeParams), '(', sep(yieldCtx(Param), ','), ')', opt(":", ReturnType), yieldCtx(body)],
-    ['async', sameLine, 'function', ...nameParts, opt(TypeParams), '(', sep(awaitCtx(Param), ','), ')', opt(":", ReturnType), awaitCtx(body)],
-    ['async', sameLine, 'function', '*', ...nameParts, opt(TypeParams), '(', sep(asyncGenCtx(Param), ','), ')', opt(":", ReturnType), asyncGenCtx(body)],
+    arm('function_', 'function', ...nameParts, opt(field('typeParameters', TypeParams)), '(', sep(field('parameter', Param), ','), ')', opt(":", ReturnType), resetCtx(field('body', body))),
+    arm('generator', 'function', field('asterisk', '*'), ...nameParts, opt(field('typeParameters', TypeParams)), '(', sep(yieldCtx(field('parameter', Param)), ','), ')', opt(":", ReturnType), yieldCtx(field('body', body))),
+    arm('asyncFunction', field('asyncKeyword', 'async'), sameLine, 'function', ...nameParts, opt(field('typeParameters', TypeParams)), '(', sep(awaitCtx(field('parameter', Param)), ','), ')', opt(":", ReturnType), awaitCtx(field('body', body))),
+    arm('asyncGenerator', field('asyncKeyword', 'async'), sameLine, 'function', field('asterisk', '*'), ...nameParts, opt(field('typeParameters', TypeParams)), '(', sep(asyncGenCtx(field('parameter', Param)), ','), ')', opt(":", ReturnType), asyncGenCtx(field('body', body))),
   ];
 }
 
@@ -37,7 +37,7 @@ import {
   Shebang, JSDoc, TripleSlash, LineComment, BlockComment,
   Ident, HexNumber, OctalNumber, BinaryNumber, BigInt_,
   Number_, String_, Template, Regex_, Decorator, PrivateField,
-  notReserved, notReservedExpr, bindingIdentifier, asi, expressionStatement, conciseBody, classHeritageArms, newTargetArms, ecmaPrec, jsLedPrecs, jsScopes, jsBaseCanonical,
+  notReserved, notReservedExpr, bindingIdentifier, bindingName, asi, expressionStatement, conciseBody, classHeritageArms, newTargetArms, ecmaPrec, jsLedPrecs, jsScopes, jsBaseCanonical,
   forBindingArms, forHeadArms, forAwaitHeadArms, forStatement,
   memberStart, memberAhead, memberWordRules, memberWord, exportDeclaration, moduleSpecifier,
 } from './javascript.ts';
@@ -415,7 +415,7 @@ const Prop = rule($ => {
 // bare `Type` node — identical CST shape to a pre-predicate return slot, leaving AST lowering /
 // cst-match unaffected. tsRelax: tree-sitter renders just `Type` here (the predicate lives in
 // its general type instead), so adding ReturnType to ~18 slots doesn't inflate its GLR table.
-const ReturnType = tsRelax(alt([notReserved, Ident, sameLine, 'is', Type], Type), Type);
+const ReturnType = tsRelax(field('returnType', alt([notReserved, Ident, sameLine, 'is', Type], Type)), Type);   // `field` inside: a name on the tsRelax group is not taken
 
 // The heritage forms are JavaScript's (`classHeritageArms`, javascript.ts); TypeScript's class
 // expression carries type parameters and an `implements` clause, and a base may take type
@@ -551,20 +551,20 @@ const Expr = rule($ => [
   // isParenthesizedArrowFunctionExpression: after `<` an identifier or `const`, else the `<` is
   // a type assertion's), so `<>() => 1` and `<in T>() => 1` are no arrows; a declaration's or a
   // function type's list may be empty (`function f<>() {}`, `type F = <>() => void`).
-  capExpr('?', 'async', notArrowTypeParams, opt(TypeParams), '(', sep(awaitCtx(Param), ','), ')', opt(":", ReturnType), '=>', awaitCtx(conciseBody(Block, $))),
-  capExpr('?', notArrowTypeParams, opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType), '=>', resetCtx(conciseBody(Block, $))),
+  arm('asyncArrow', capExpr('?', field('asyncKeyword', 'async'), notArrowTypeParams, opt(field('typeParameters', TypeParams)), '(', sep(awaitCtx(field('parameter', Param)), ','), ')', opt(":", ReturnType), field('arrow', '=>'), awaitCtx(field('body', conciseBody(Block, $))))),
+  arm('arrow', capExpr('?', notArrowTypeParams, opt(field('typeParameters', TypeParams)), '(', sep(field('parameter', Param), ','), ')', opt(":", ReturnType), field('arrow', '=>'), resetCtx(field('body', conciseBody(Block, $))))),
   // async arrow with a BARE parameter: `async err => …`. tsc requires async and the
   // parameter on the same line (`async\nx => …` is `async;` then a plain arrow — ASI).
   // Without this arm the bare form only "parsed" by splitting into two statements.
-  capExpr('?', 'async', sameLine, awaitCtx(notReservedExpr, Ident), '=>', awaitCtx(conciseBody(Block, $))),
-  capExpr('?', notReservedExpr, Ident, '=>', resetCtx(conciseBody(Block, $))),
+  arm('asyncArrowIdentifier', capExpr('?', field('asyncKeyword', 'async'), sameLine, awaitCtx(notReservedExpr, field('parameter', Ident)), field('arrow', '=>'), awaitCtx(field('body', conciseBody(Block, $))))),
+  arm('arrowIdentifier', capExpr('?', notReservedExpr, field('parameter', Ident), field('arrow', '=>'), resetCtx(field('body', conciseBody(Block, $))))),
   ['yield', alt([field('asterisk', '*'), $], [opt($)])],   // yield e | yield* e (delegate) | yield
   ['(', field('first', $), many(field('comma', ','), field('rest', $)), ')'],
   [$, 'satisfies', Type],
   ['import', alt(['(', $, ')'], ['.', 'meta'], [...typeArgsInExpr(), opt('(', sep($, ','), ')')])],   // import(e) | import.meta | import<T>(args) (instantiation-expression; checker rejects)
   PrivateField,
   HexNumber, OctalNumber, BinaryNumber, BigInt_,
-  ...tsFnArms([opt(...bindingIdentifier)], Block),
+  ...tsFnArms([opt(...bindingName)], Block),
   // named vs anonymous kept separate (greedy opt(Ident) would eat a leading
   // `extends`/`implements`). A decorated class expression is tsc's parseDecoratedExpression:
   // decorators, modifier words, a second decorator run after `export` / `default`, then `class`
@@ -625,21 +625,22 @@ const ForBinding = rule($ => forBindingArms(BindingPattern, Expr, [opt(':', Type
 
 const paramMods = modifierRun(['public', 'private', 'protected', 'readonly', 'override', 'static', 'abstract', 'accessor', 'async', 'export', 'declare', 'in', 'out', 'default'], { param: true });
 const Param = rule($ => {
-  const tail = [opt('?'), opt(':', Type), opt('=', Expr)];   // ?  : T  = E
+  const tail = [opt(field('question', '?')), opt(':', field('type', Type)), opt('=', field('value', Expr))];   // ?  : T  = E
+  const name = field('name', alt(bindingIdentifier, BindingPattern));
   const body = alt(
     // The name is a BindingIdentifier (tsc's parseNameOfParameter → parseBindingIdentifier),
     // in every parameter list, value or type: no reserved word, and so not `this`, which tsc
     // treats as a special parameter form accepting ONLY bare `this` or `this: T` (the
     // dedicated arm below) — `this?`, `this = 1`, `this: T = 1`, and any decorated/modified
     // `this` (`@dec this`, `public this`) are parse errors there.
-    [alt(bindingIdentifier, BindingPattern), ...tail],
-    ['...', alt(bindingIdentifier, BindingPattern), opt('?'), opt(':', Type), opt('=', Expr)],   // rest (`?`/initializer are CHECKER errors in tsc, not parse errors)
+    arm('single', name, ...tail),
+    arm('rest', field('ellipsis', '...'), name, ...tail),   // rest (`?`/initializer are CHECKER errors in tsc, not parse errors)
   );
   return [
     // `this`-param: bare `this` or `this: T` ONLY — no `?`, no default, no decorator,
     // no modifier (tsc's parser rejects all of those). This is the SOLE way `this`
     // reaches param position; the plain-name arm above excludes it.
-    ['this', opt(':', Type)],
+    arm('thisParameter', field('thisKeyword', 'this'), opt(':', field('type', Type))),
     // tsc's parseModifiers, then the binding: decorators (any number, `f(@a @b x)`), modifier
     // words, and after `export` / `default` a second decorator run (`f(export @d x)`). tsc
     // parses the FULL modifier soup on any parameter (`f(static x)`, `f(export x)`, `f(async x)`
@@ -650,11 +651,11 @@ const Param = rule($ => {
     // `f(static export @d static x)` have no parse, `f(export @d static x)` parses. So the words
     // are read in two shapes, parted at the first run's `static`: with it, the second run takes
     // none; without it, the second run is a run of its own.
-    [many(DecoratorExpr), tsRelax(alt(
+    arm('modified', many(DecoratorExpr), tsRelax(alt(
       [many(paramMods.rest), paramMods.stat, many(paramMods.rest), opt(many1(DecoratorExpr), many(paramMods.rest))],
       [many1(paramMods.rest), opt(many1(DecoratorExpr), paramMods.run)],
-    ), [many1(paramMods.any), opt(many1(DecoratorExpr), many(paramMods.rest))]), body],
-    [many(DecoratorExpr), body],
+    ), [many1(paramMods.any), opt(many1(DecoratorExpr), many(paramMods.rest))]), field('binding', body)),
+    arm('plain', many(field('decorator', DecoratorExpr)), field('binding', body)),
   ];
 });
 
@@ -1026,7 +1027,7 @@ const Decl = rule($ => [
   // leading `function` is preferred as a declaration over an IIFE expression-
   // statement: Program tries Decl before Stmt, so `function f(){}\n()=>{}` parses
   // as a declaration + arrow rather than longest-matching `function f(){}()` (IIFE).
-  ...tsFnArms(bindingIdentifier, fnBodyOrAsi()),
+  ...tsFnArms(bindingName, fnBodyOrAsi()),
   // The declaration NAME slots below are a `bindingIdentifier`: a reserved word is not a
   // legal declaration name (`interface void {}`, `class while {}`, `enum for {}`,
   // `namespace debugger {}` — all TS errors), while a contextual keyword name
@@ -1084,7 +1085,7 @@ const Decl = rule($ => [
   // parse), and the decorators are the second run, so no third one follows (`export @d default
   // @e class C {}` has no parse; `export default @e class C {}` is one run).
   ['export', alt([many1(DecoratorExpr), modifierWord(['default'], { secondRun: true }), not(Decorator)], 'default'), alt(
-    ...tsFnArms([opt(...bindingIdentifier)], fnBodyOrAsi()),  // function
+    ...tsFnArms([opt(...bindingName)], fnBodyOrAsi()),  // function
     [many(DecoratorExpr), opt('abstract'), 'class', ...bindingIdentifier, opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],  // named class
     [many(DecoratorExpr), opt('abstract'), 'class', opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],          // anonymous class
     ['interface', ...bindingIdentifier, opt(TypeParams), heritageClauses, '{', many(TypeMember), '}'],   // export default interface (interface is not an Expr)
