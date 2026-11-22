@@ -489,6 +489,8 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
     shared: (id) => `sub${id}${S}()`,
     lit: (s) => (gtCompLit(ids, s) ? `_matchComp(${lidOf(ids, s.value)})` : `matchLit${S}(${lidOf(ids, s.value)})`),
     tok: (name) => `matchTok${S}(${kidOf(ids, name)})`,
+    // Recognized, an interpolated template runs its building matcher and its node is dropped.
+    template: (name, hole) => `(matchTok${S}(${kidOf(ids, name)}) || ${m === 'r' ? `_drop(_n, matchTemplateW(parse${hole}W))` : `matchTemplateW(parse${hole}W)`})`,
     rule: (name) => `parse${name}${S}()`,
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (m === 'r' ? `_drop(_n, ${name}_bpW(${bp}))` : `${name}_bpW(${bp})`),
