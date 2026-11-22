@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattLedExits, stepExpr, stepStmts, ruleShell, dispatchWalk, gtCompLit, type StepLowering, type RuleLowering, type DispatchLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattLedExits, stepExpr, stepStmts, ruleShell, dispatchWalk, gtCompLit, guardedSteps, type StepLowering, type RuleLowering, type DispatchLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -34,7 +34,8 @@ const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
 // A longest-match candidate's Guard (emit-portable.ts) over the buffered token t, as conditions;
 // keyed: the candidate is reached through its Dispatch key, which already tested the first token.
 const guardCond = (g: Guard, t: string, keyed: boolean): string[] =>
-  g === null ? [] : [...(keyed ? [] : [`inSet(${g.first.id}, ${t})`]), ...(g.second !== null ? [`secondIn(${g.second.id})`] : [])];
+  g === null ? [] : [...(keyed || g.first === null ? [] : [`inSet(${g.first.id}, ${t})`]), ...(g.second !== null ? [`secondIn(${g.second.id})`] : []),
+    ...g.lead.map((l) => { const inS = l.ctx ? `(inSet(${l.set}, ${t}) || inCtxWords(${t}))` : `inSet(${l.set}, ${t})`; return l.is ? inS : `!${inS}`; })];   // its lead tests (LeadTest) on t
 // `if (<conds>) <body>` as one statement (just the body when there is no condition).
 const ifTs = (conds: string[], body: string) => (conds.length ? `  if (${conds.join(' && ')}) ${body}` : `  ${body}`);
 // A candidate list's Dispatch over the buffered token t: arm(i, keyed) is candidate i's statement.
@@ -712,10 +713,10 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
         return ifTs(keyed ? [] : [`t.lid === ${lidOf(ids, b.first)}`], seqArm(i, b.steps, r.nudBracketClosesTail[a.index]!, false));
       }
       case 'seq':
-        return ifTs(guardCond(r.nudSeqGuard[a.index]!, 't', keyed), seqArm(i, r.nudSeqs[a.index]!, r.nudSeqClosesTail[a.index]!, false));
+        return ifTs(guardCond(r.nudSeqGuard[a.index]!, 't', keyed), seqArm(i, guardedSteps(r.nudSeqGuard[a.index]!, r.nudSeqs[a.index]!), r.nudSeqClosesTail[a.index]!, false));
       case 'capped': {
         const c = r.nudCapped[a.index]!;
-        return ifTs([`minBp < ${c.capBp}`, ...guardCond(r.nudCappedGuard[a.index]!, 't', keyed)], seqArm(i, c.steps, false, true));
+        return ifTs([`minBp < ${c.capBp}`, ...guardCond(r.nudCappedGuard[a.index]!, 't', keyed)], seqArm(i, guardedSteps(r.nudCappedGuard[a.index]!, c.steps), false, true));
       }
       case 'prefix':
         // An operand that parses but is not the target the operator requires fails the whole
@@ -3153,7 +3154,11 @@ function ahead(k: number, is: boolean): boolean {
 function ctxWord(): boolean {
   if (_ctx === 0) return false;
   const t = peek();
-  return t !== null && (false${ctxWordLids(ir, ids).map((w) => ` || ((_ctx & ${w.bit}) !== 0 && t.lid === ${w.lid})`).join('')});
+  return t !== null && inCtxWords(t);
+}
+// Whether t is a word the context in force reserves (a guard's lead test reads the buffered token).
+function inCtxWords(t: Tok): boolean {
+  return _ctx !== 0 && (false${ctxWordLids(ir, ids).map((w) => ` || ((_ctx & ${w.bit}) !== 0 && t.lid === ${w.lid})`).join('')});
 }
 // Whether the token after the current one is in set k (a longest-match candidate's SECOND guard).
 function secondIn(k: number): boolean {

@@ -190,6 +190,32 @@ The derived `queries/highlights.scm` is structural, read off the grammar's rules
 documented-bug corpus, and fails unless the derived grammar is at least 90% and at least the
 official tree-sitter grammar. Last run (CI on `3a18a69`): Monogram 96.3%, official 92.5%.
 
+The other derived packages are checked in the same job: every `queries/*.scm` of every
+grammar must compile against its wasm ([`test/treesitter-queries.ts`](../test/treesitter-queries.ts));
+the TSX and JSX grammars parse a corpus whose verdicts are compared with the interpreter's
+([`test/treesitter-jsx.ts`](../test/treesitter-jsx.ts), report-only); and the job summary
+records, per grammar, `tree-sitter generate` wall and CPU time, peak memory and the
+`parser.c` state and symbol counts (report-only baselines for changes to the tree-sitter
+generator).
+
+## Dialects and other editors
+
+Measures of what the generators do for a grammar that is not one of the six committed ones.
+They are records, not targets; each moves only with a generator change that says why.
+
+- [`test/tm-dialect.ts`](../test/tm-dialect.ts): scope assertions on an element dialect that is
+  not React ([`test/fixtures/elementdialect.ts`](../test/fixtures/elementdialect.ts): `@if` /
+  `@each` directive keywords beside an `@name` annotation token, directive regions, dynamic
+  tags, a `<style>` body), and on element grammars whose rule names, tag-name scope and
+  conventions are not JSX's. Rows the generator does not meet yet are expected-fail with their
+  reason; the gate fails when a passing row breaks and when an expected-fail row starts
+  passing. Recorded on `86f6530`: dialect 6 pass / 11 expected-fail, agnostic 4 pass /
+  8 expected-fail.
+- [`test/tm-capture-patterns.ts`](../test/tm-capture-patterns.ts): captures that carry
+  `patterns`, per committed grammar. VS Code accepts them; Sublime Text rejects a grammar that
+  has any. Recorded on `86f6530`: typescript and javascript 0, typescriptreact and
+  javascriptreact 5 each (dotted JSX tag names), html 32, yaml 22.
+
 ## Known differences from the official highlighter
 
 A handful of token patterns are scoped differently from VS Code's official TypeScript grammar
