@@ -35,9 +35,9 @@ jobs:
       - run: test/bench-rust-profile/run.sh
         env:
           PROFILE_WORK: ${{ runner.temp }}/prof-work
-          # #126's lexer stacks by reference (A = aed2c94) vs moved by value (M = bench-variant/workspace-byvalue 940fb1c).
-          PROFILE_A: aed2c94feacdb6da809a06ea65827327f7c7d00f
-          PROFILE_M: 940fb1c28be917ca134af7f22ef0dc0e0deac824
+          # perf/parser-emit-queue-1 R1: undo frames as one mark (A = 35ed376, output = master) vs M = d8485e2.
+          PROFILE_A: 35ed376578f5fac25da5a08340cd00444545f7e3
+          PROFILE_M: d8485e2372cf7df5741f812a67f7d9a643e03adf
 
       - uses: actions/upload-artifact@v4
         if: always()
