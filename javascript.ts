@@ -36,14 +36,16 @@ import {
 // Build the four async×generator arms of a `function` form, routing each arm's params
 // and body to its [Await]/[Yield] family: plain resets to none, generator -> yield,
 // async -> await, async-generator -> both. `nameParts` is spread in after `function`
-// (and `*` for the generator arms); `body` is the function body element. Param/Block
+// (and `*` for the generator arms); `body` is the function body element. `async` and
+// `function` share a line (`async [no LineTerminator here] function`): after a line break
+// `async` is an identifier and `function` begins the next statement. Param/Block
 // resolve at thunk-eval time (defined below), so this is safe to call inside a rule().
 function fnArms(nameParts, body) {
   return [
     ['function', ...nameParts, '(', sep(Param, ','), ')', resetCtx(body)],
     ['function', '*', ...nameParts, '(', sep(yieldCtx(Param), ','), ')', yieldCtx(body)],
-    ['async', 'function', ...nameParts, '(', sep(awaitCtx(Param), ','), ')', awaitCtx(body)],
-    ['async', 'function', '*', ...nameParts, '(', sep(asyncGenCtx(Param), ','), ')', asyncGenCtx(body)],
+    ['async', sameLine, 'function', ...nameParts, '(', sep(awaitCtx(Param), ','), ')', awaitCtx(body)],
+    ['async', sameLine, 'function', '*', ...nameParts, '(', sep(asyncGenCtx(Param), ','), ')', asyncGenCtx(body)],
   ];
 }
 
@@ -184,6 +186,23 @@ export {
   Ident, HexNumber, OctalNumber, BinaryNumber, BigInt_,
   Number_, String_, Template, Regex_, Decorator, PrivateField,
 };
+
+// Where a statement may not be an expression statement (14.5, `ExpressionStatement : [lookahead ∉
+// { {, function, async [no LineTerminator here] function, class, let [ }] Expression ;`): there
+// `{` begins a block, `function` / `async function` / `class` a declaration, and `let [` a lexical
+// declaration, so what an expression would read beyond them (`{}.x`, `class C {}.name`) is the
+// next statement or no statement. A decorator begins a declaration too: the decorators proposal
+// (ecma262 PR #2417) gives ClassDeclaration and ClassExpression the same `DecoratorList?` and adds
+// `@` to the like lookahead of `export default`, and tsc's parseStatement routes `@` to
+// parseDeclaration. Both grammars' expression statement is this one arm; an expression elsewhere
+// (`({}).x`, `f({}.x)`, `x = @dec class {}`) is not restricted.
+export const expressionStatement = (Expr) => [
+  not(alt('{', 'function', 'class', Decorator)), not(alt(['async', sameLine, 'function'], ['let', '['])),
+  Expr, many(',', Expr), asi(),
+];
+// An arrow's body (`ConciseBody : [lookahead ≠ {] ExpressionBody | { FunctionBody }`): after `=>`
+// a `{` begins the function body, never an object literal, so `() => { b() {} }.x` has no parse.
+export const conciseBody = (Block, Expr) => alt(Block, [not('{'), Expr]);
 
 // ── Always-reserved words ──
 // The `Ident` token deliberately swallows keywords (they lex as identifiers), so
@@ -426,16 +445,15 @@ const Expr = rule($ => [
   // each arm is capped BELOW the conditional `?`: it parses only at an assignment-or-looser
   // minBp and, once parsed, admits no led (`() => {} || a` rejects, NOT `(() => {}) || a`). A
   // `||`/`?:` INSIDE an expression body (`() => a || b`) is unaffected — parsed by the body `$`.
-  // The body is `alt(Block, $)` (Block FIRST) = the spec's ConciseBody `[lookahead ≠ {]
-  // AssignmentExpression | { FunctionBody }`: `() => {}` is a block body, not an object literal
-  // that greedily absorbs a trailing `|| a` / `.x`.
-  capExpr('?', 'async', '(', sep(awaitCtx(Param), ','), ')', '=>', awaitCtx(alt(Block, $))),
-  capExpr('?', '(', sep(Param, ','), ')', '=>', resetCtx(alt(Block, $))),
+  // The body is a ConciseBody (`conciseBody`): `() => {}` is a block body, not an object literal
+  // that absorbs a trailing `|| a` / `.x`, also where the block does not parse.
+  capExpr('?', 'async', '(', sep(awaitCtx(Param), ','), ')', '=>', awaitCtx(conciseBody(Block, $))),
+  capExpr('?', '(', sep(Param, ','), ')', '=>', resetCtx(conciseBody(Block, $))),
   // async arrow with a BARE parameter: `async err => …` (ES2017). `async` and the
   // parameter must share a line (`async\nx => …` is `async;` then a plain arrow —
   // the spec's [no LineTerminator here] between async and the binding identifier).
-  capExpr('?', 'async', sameLine, awaitCtx(notReservedExpr, Ident), '=>', awaitCtx(alt(Block, $))),
-  capExpr('?', notReservedExpr, Ident, '=>', resetCtx(alt(Block, $))),
+  capExpr('?', 'async', sameLine, awaitCtx(notReservedExpr, Ident), '=>', awaitCtx(conciseBody(Block, $))),
+  capExpr('?', notReservedExpr, Ident, '=>', resetCtx(conciseBody(Block, $))),
   ['yield', alt(['*', $], [opt($)])],   // yield e | yield* e (delegate) | yield
   ['(', $, many(',', $), ')'],
   ['import', alt(['(', $, ')'], ['.', 'meta'])],
@@ -565,17 +583,10 @@ const Stmt = rule($ => [
   ['with', '(', Expr, ')', $],
   [opt('await'), 'using', sep(Binding, ','), asi()],
   Decl,
-  // ExpressionStatement lookahead restriction (ES2023 §14.5): a statement may not
-  // begin with `function` / `async function` — those are declarations at statement
-  // level. Without this guard, longest-match lets the expression arm win whenever a
-  // call/member tail makes it LONGER (`function f(){}\n(g)()` merged into one
-  // IIFE-style expression statement; tsc keeps them separate). `{` needs no guard
-  // (the Block alternative ties in length and wins as the first-listed alternative).
-  // `class` is NOT guarded yet: the class-DECLARATION arm is narrower than tsc's
-  // (extends-expression heritage, bare `;` class elements, decorator placements), so
-  // 31 tsc-valid corpus files still rely on the class-EXPRESSION fallback — widen the
-  // declaration arm first, then guard.
-  [not(alt('function', 'class', ['async', 'function'], ['let', '['])), Expr, many(',', Expr), asi()],
+  // Not after a start that begins a block or a declaration (`expressionStatement`): without the
+  // lookahead, longest match lets the expression reading win wherever a tail makes it longer
+  // (`{} .b`, `function f(){}\n(g)()`, `@dec class {}.x`).
+  expressionStatement(Expr),
 ]);
 
 // ── Declarations ──
