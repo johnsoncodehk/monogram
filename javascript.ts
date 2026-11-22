@@ -28,7 +28,7 @@ import {
   token, rule, defineGrammar,
   left, right, none, noUnaryLhs, lhsTarget, prefixTarget, postfixTarget,
   op, prefix, postfix, sameLine,
-  sep, opt, many, many1, alt, exclude, not, reservableNot, capExpr, tsRelax,
+  sep, opt, many, many1, alt, exclude, not, reservableNot, capExpr, tsRelax, arm, field,
   awaitCtx, yieldCtx, asyncGenCtx, resetCtx,
   altPattern, optPattern, seq, oneOf, noneOf, range, anyChar, star, plus, repeat, notFollowedBy, start,
 } from './src/api.ts';
@@ -198,7 +198,7 @@ export {
 // (`({}).x`, `f({}.x)`, `x = @dec class {}`) is not restricted.
 export const expressionStatement = (Expr) => [
   not(alt('{', 'function', 'class', Decorator)), not(alt(['async', sameLine, 'function'], ['let', '['])),
-  Expr, many(',', Expr), asi(),
+  field('first', Expr), many(field('comma', ','), field('rest', Expr)), asi(),
 ];
 // An arrow's body (`ConciseBody : [lookahead ≠ {] ExpressionBody | { FunctionBody }`): after `=>`
 // a `{` begins the function body, never an object literal, so `() => { b() {} }.x` has no parse.
@@ -440,7 +440,7 @@ export const newTargetArms = ($, Expr, newArgs, taggedTemplate = []) => [
   [$, '[', Expr, ']'],
   [$, Template],
   ...taggedTemplate,
-  ['(', Expr, many(',', Expr), ')'],
+  ['(', field('first', Expr), many(field('comma', ','), field('rest', Expr)), ')'],
 ];
 
 const ClassHeritage = rule($ => classHeritageArms($, Expr,
@@ -460,7 +460,7 @@ const Expr = rule($ => [
   'true', 'false', 'null', 'undefined', 'this',
   // `super` is a CONSTRAINED primary (mirrors tsc's parseSuperExpression): MUST be
   // immediately followed by a call `(args)`, member `.name`/`.#priv`, or element `[expr]`.
-  ['super', alt(['(', sep($, ','), ')'], ['.', alt(Ident, PrivateField)], ['[', $, ']'])],
+  [field('superKeyword', 'super'), alt(['(', sep($, ','), ')'], ['.', alt(Ident, PrivateField)], ['[', $, ']'])],
   [not('super'), not('new'), notReservedJsExpr, Ident],
   Number_,
   String_,
@@ -481,19 +481,19 @@ const Expr = rule($ => [
   // not adjudicate tsc-only restrictions.
   [$, '?.', alt(Ident, PrivateField, ['(', sep($, ','), ')'], ['[', $, ']'], Template)],
   [$, '[', $, ']'],
-  [$, '?', $, ':', $],
+  [$, '?', field('then', $), ':', field('otherwise', $)],
   [$, 'instanceof', $],
   [$, 'in', $],
   [$, Template],
   // `new.target` meta-property — the only `new` form not followed by a target; matched by a
   // dedicated arm (NOT the bare identifier nud, which excludes `new`) so a failed `new T` arm
   // can't slide `new` in as an Ident (`new <T>Foo()` → the comparison `(new < T) > Foo()`).
-  ['new', '.', 'target'],
+  arm('newDotTarget', field('newKeyword', 'new'), '.', field('targetKeyword', 'target')),
   // new T | new T(args). An optional chain may NOT follow a bare `new` (no Arguments): a
   // NewExpression is not a valid `?.` base, so `new a?.b` / `new class{}?.x` have no parse tree
   // (tsc + V8 + babel all reject). `not('?.')` guards the no-call exit; `new a()?.b` chains via
   // the outer `?.` LED unchanged.
-  ['new', not('<'), NewTarget, alt(['(', sep($, ','), ')'], not('?.'))],
+  arm('construct', 'new', not('<'), NewTarget, alt(['(', sep($, ','), ')'], not('?.'))),
   ['new', 'class', ...bindingIdentifier, opt('extends', ClassHeritage), '{', many(ClassMember), '}', alt(['(', sep($, ','), ')'], not('?.'))],
   ['new', 'class', opt('extends', ClassHeritage), '{', many(ClassMember), '}', alt(['(', sep($, ','), ')'], not('?.'))],
   // array literal `[a, , ...b,]`: an element or a hole, then `,` and an element or a hole, the
@@ -520,7 +520,7 @@ const Expr = rule($ => [
   capExpr('?', 'async', sameLine, awaitCtx(notReservedJsExpr, Ident), '=>', awaitCtx(conciseBody(Block, $))),
   capExpr('?', notReservedJsExpr, Ident, '=>', resetCtx(conciseBody(Block, $))),
   ['yield', alt(['*', $], [opt($)])],   // yield e | yield* e (delegate) | yield
-  ['(', $, many(',', $), ')'],
+  ['(', field('first', $), many(field('comma', ','), field('rest', $)), ')'],
   // ImportCall: one or two AssignmentExpressions, no spread (the `...` arm is Arguments'), and ImportMeta
   ['import', alt(['(', not('...'), $, opt(',', opt(not('...'), $, opt(','))), ')'], ['.', 'meta'])],
   PrivateField,

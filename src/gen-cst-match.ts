@@ -22,7 +22,7 @@
 // must be matched by exactly its rule's matcher, consuming all children.
 import type { CstGrammar, PrecOperator, RuleDecl, RuleExpr } from './types.ts';
 import { isKeywordLiteral } from './grammar-utils.ts';
-import { nameRule, sanitizeIdent, type RuleNames } from './grammar-names.ts';
+import { nameRule, sanitizeIdent, OP_FORM_CHILDREN, type RuleNames } from './grammar-names.ts';
 import { withAwaitYield } from './await-yield-fork.ts';
 
 // ── Arm step plan ──
@@ -125,11 +125,9 @@ export function generateCstMatch(grammar: CstGrammar): string {
 
     if (hasOps) {
       // Synthesized pratt operator forms (matching parsePratt's构造): op text via src.
-      plans.push(opPlan(names.ops!.binary, [
-        selfCap('left'), opLeafCap('op'), selfCap('right'),
-      ], self));
-      plans.push(opPlan(names.ops!.prefix, [opLeafCap('op'), selfCap('operand')], self));
-      plans.push(opPlan(names.ops!.postfix, [selfCap('operand'), opLeafCap('op')], self));
+      for (const form of ['binary', 'prefix', 'postfix'] as const) {
+        plans.push(opPlan(names.ops![form], OP_FORM_CHILDREN[form].map((nm) => (nm === 'op' ? opLeafCap(nm) : selfCap(nm))), self));
+      }
     }
     return plans;
 

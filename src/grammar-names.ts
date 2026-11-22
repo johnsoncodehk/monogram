@@ -96,6 +96,16 @@ export type RuleNames = {
   branches: Map<RuleExpr, ArmNames[]>;
 };
 
+/** The children of the synthesized Pratt operator forms, in CST order: a binary node is
+ * `[left, op, right]`, a prefix node `[op, operand]`, a postfix node `[operand, op]` (`op` is
+ * the `$operator` leaf). Fixed names: the forms come from the precedence table, not from an
+ * arm an author could annotate. */
+export const OP_FORM_CHILDREN = {
+  binary: ['left', 'op', 'right'],
+  prefix: ['op', 'operand'],
+  postfix: ['operand', 'op'],
+} as const;
+
 /** A naming scope: a derived name that repeats gets the first free numeric suffix (2, 3, …). */
 class Scope {
   private used = new Set<string>();
@@ -202,7 +212,8 @@ export function nameRule(rule: RuleDecl): RuleNames {
         // A keyword literal LEADING an optional group marks the group's presence and carries
         // its position (the 'catch' / 'else' / 'finally' anchors consumers need).
         const lead = it.kind === '?' ? leadLiteral(it.body) : null;
-        if (lead && isKeywordLiteral(lead.value)) children.push(put(out.childOf, lead, scope.take(lead.value + 'Tok', lead.field)));
+        // A lead the author named is already this scope's child (the `literal` case below).
+        if (lead && lead.field === undefined && isKeywordLiteral(lead.value)) children.push(put(out.childOf, lead, scope.take(lead.value + 'Tok', lead.field)));
         return;
       }
       case 'sep':
