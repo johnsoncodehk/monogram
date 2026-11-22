@@ -1,4 +1,4 @@
-import type { LedPrec, CstGrammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, IndentConfig, NewlineConfig, StringInterpolation, TokenPattern } from './types.ts';
+import type { LedPrec, CstGrammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, ElementRegion, IndentConfig, NewlineConfig, StringInterpolation, TokenPattern } from './types.ts';
 import { computeNullableRules, findEntryRule } from './grammar-analysis.ts';
 import {
   altPattern, anyChar, followedBy, never, noneOf, notFollowedBy,
@@ -618,6 +618,7 @@ interface GrammarConfig {
   contextualScopes?: { token: TokenRef; within: RuleRef | RuleRef[]; scope: string }[];
   entry: RuleRef;
   markup?: MarkupConfig;  // opt-in markup-mode tokenization (HTML/Vue)
+  elements?: ElementRegion;  // opt-in element regions entered from code (JSX), by token TYPE names like `markup`
   indent?: IndentConfig;  // opt-in indentation-sensitive tokenization (YAML)
   newline?: NewlineConfig;  // opt-in NEWLINE-sensitive tokenization, independent of indent (no indent stack)
   expression?: RuleRef;   // the rule that produces an EXPRESSION: parses the `${…}` holes of every bare template-token reference (see withHoles), and enables a derived `#expression` sub-grammar (expression-only embeds)
@@ -732,7 +733,7 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
     });
     return { token: tokenName, within, scope: entry.scope };
   });
-  const grammar = { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, rules, scopeOverrides, contextualScopes, markup: config.markup, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest, treeSitterConflicts: config.treeSitterConflicts };
+  const grammar = { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, rules, scopeOverrides, contextualScopes, markup: config.markup, elements: config.elements, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest, treeSitterConflicts: config.treeSitterConflicts };
 
   // Nullable NON-ENTRY rules are a definition error: the engine never returns an empty match for a
   // rule, so such a rule's empty case is unreachable and references to it fail silently where the

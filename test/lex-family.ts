@@ -49,6 +49,7 @@ const identStart = oneOf(range('a', 'z'), range('A', 'Z'), '_');
 const hex = oneOf(digit, range('a', 'f'));
 const toClose = seq(notFollowedBy('*/'), anyChar());
 const LineComment = token(seq('//', star(noneOf('\n'))), { skip: true });
+const Rem = token(seq('--', star(noneOf('\n', '\r', '\u2028', '\u2029'))), { skip: true });   // stops at every JS LineTerminator
 const DocComment = token(seq('/**', notFollowedBy('/'), star(toClose), '*/'), { skip: true });
 const BlockComment = token(seq('/*', star(toClose), '*/'), { skip: true });
 // Patterns whose regex backs up: `0*` gives back zeros, the 1–5 digit alternative gives way to
@@ -65,7 +66,7 @@ const Atom = rule(() => [Esc, Tag, Lazy, Hex, Float, Int, Str, Ident]);
 const Program = rule(() => [[many(Atom)]]);
 const kinds = defineGrammar({
   name: 'lexkinds',
-  tokens: { LineComment, DocComment, BlockComment, Esc, Tag, Lazy, Str, Hex, Float, Int, Ident },
+  tokens: { LineComment, Rem, DocComment, BlockComment, Esc, Tag, Lazy, Str, Hex, Float, Int, Ident },
   rules: { Atom, Program },
   entry: Program,
 });
@@ -73,7 +74,7 @@ const flat = (await import('../javascript.ts')).default as CstGrammar;
 
 const kindOf = (ir: ParserIR, name: string) => ir.tokens.find((t) => t.name === name);
 const ir = portableIR(kinds);
-const want: [string, string][] = [['LineComment', 'line'], ['DocComment', 'block'], ['BlockComment', 'block'], ['Esc', 'pattern'], ['Tag', 'pattern'], ['Lazy', 'pattern'], ['Str', 'string'], ['Hex', 'pattern'], ['Float', 'pattern'], ['Int', 'pattern'], ['Ident', 'run']];
+const want: [string, string][] = [['LineComment', 'line'], ['Rem', 'line'], ['DocComment', 'block'], ['BlockComment', 'block'], ['Esc', 'pattern'], ['Tag', 'pattern'], ['Lazy', 'pattern'], ['Str', 'string'], ['Hex', 'pattern'], ['Float', 'pattern'], ['Int', 'pattern'], ['Ident', 'run']];
 for (const [name, k] of want) if (kindOf(ir, name)?.kind !== k) fail(`lexkinds: ${name} is ${kindOf(ir, name)?.kind}, want ${k}`);
 for (const name of ['JSDoc', 'BlockComment']) if (kindOf(portableIR(flat), name)?.kind !== 'block') fail(`javascript: ${name} is not a block`);
 
@@ -93,6 +94,42 @@ for (const name of ['JSDoc', 'BlockComment']) if (kindOf(portableIR(flat), name)
   } as never);
   const nir = portableIR(near);
   for (const name of ['Str', 'Block', 'Greedy']) if (kindOf(nir, name)?.kind !== 'pattern') fail(`nearshapes: ${name} is ${kindOf(nir, name)?.kind}, want pattern`);
+}
+
+// ── 4c. a line shape IS its token's pattern ──
+// The `line` scanner runs from its prefix to the first of its stops, so the shape is proven equal
+// to the declared pattern by rebuilding the pattern from the shape: the prefix, then a greedy run
+// of every character but exactly the stops. A class the shape could not run exactly (a range, a
+// stop that is two UTF-16 units) is no line shape.
+{
+  const rebuilt = (t: { prefix: string; stops: number[] }) => seq(t.prefix, star(noneOf(...t.stops.map((c) => String.fromCharCode(c)))));
+  const canonical = (p: unknown): string => JSON.stringify(p, (_k, v) => (v && typeof v === 'object' && v.type === 'charClass'
+    ? { ...v, items: [...v.items].sort((a: { value?: string; from?: string }, b: { value?: string; from?: string }) => ((a.value ?? a.from)! < (b.value ?? b.from)! ? -1 : 1)) } : v));
+  let lines = 0;
+  for (const path of ['../javascript.ts', '../typescript.ts', ...['calc', 'minijs', 'richtokens', 'regexjs', 'templatejs', 'envspec', 'envtpl', 'altjs', 'nudjs', 'sljs', 'unilits'].map((f) => `./fixtures/${f}.ts`)]) {
+    const g = (await import(path)).default as CstGrammar;
+    for (const t of portableIR(g).tokens) {
+      if (t.kind !== 'line') continue;
+      lines++;
+      const decl = g.tokens.find((d) => d.name === t.name)!;
+      if (canonical(rebuilt(t)) !== canonical(decl.pattern)) fail(`${g.name}/${t.name}: its line shape (${JSON.stringify(t.prefix)} up to ${t.stops.join(', ')}) is not its pattern ${JSON.stringify(decl.pattern)}`);
+    }
+  }
+  const jsLine = portableIR(flat).tokens.find((t) => t.name === 'LineComment');
+  if (jsLine?.kind !== 'line' || jsLine.stops.join() !== '10,13,8232,8233') fail(`javascript: LineComment stops at ${jsLine?.kind === 'line' ? jsLine.stops.join() : jsLine?.kind}, want every LineTerminator (10,13,8232,8233)`);
+  const NearId = token(plus(range('a', 'z')), { identifier: true });
+  const odd = portableIR(defineGrammar({
+    name: 'nearlines',
+    tokens: {
+      Ranged: token(seq('#', star(noneOf(range('0', '9'), '\n'))), { skip: true }),
+      Astral: token(seq('%', star(noneOf('\n', '\u{1F600}'))), { skip: true }),
+      Wide: token(seq(';;', star(noneOf('\n', '\r', '\u2028', '\u2029', 'é'))), { skip: true }),
+      Ident: NearId,
+    },
+    rules: { Program: rule(() => [[many(NearId)]]) },
+  } as never));
+  for (const [name, k] of [['Ranged', 'pattern'], ['Astral', 'pattern'], ['Wide', 'line']] as const) if (kindOf(odd, name)?.kind !== k) fail(`nearlines: ${name} is ${kindOf(odd, name)?.kind}, want ${k}`);
+  console.log(`  ${lines} line shapes ≡ their token patterns; a ranged or astral class is no line shape`);
 }
 
 // ── 2. every emitted lexer defines each scanner once and calls it ──
@@ -161,6 +198,15 @@ const CASES: Case[] = [
   ['BlockComment', 'x/**/', 1, 5],
   ['BlockComment', '/x', 0, -1],
   ['LineComment', '// hi\nx', 0, 5],
+  ['LineComment', '// hi\rx', 0, 7],
+  ['Rem', '-- hi\rx', 0, 5],
+  ['Rem', '-- a long remark, then CR\rx', 0, 25],
+  ['Rem', '-- a long remark, then LS\u2028x', 0, 25],
+  ['Rem', '-- a long remark, then PS\u2029x', 0, 25],
+  ['Rem', '-- é\u2027\u202a then CR LF\r\nx', 0, 17],
+  ['Rem', '-- no terminator at all, past eight units', 0, 41],
+  ['Rem', '--', 0, 2],
+  ['Rem', '-x', 0, -1],
   ['LineComment', '//', 0, 2],
   ['LineComment', '/ x', 0, -1],
   ['Str', '"a\\"b"x', 0, 6],

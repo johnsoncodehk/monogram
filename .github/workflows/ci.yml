@@ -185,8 +185,8 @@ jobs:
       - if: steps.changed.outputs.value == 'true'
         run: npm ci
 
-      # The generated parser and its wasm are a PURE FUNCTION of the grammar package's grammar.js and
-      # scanner.c and of the tree-sitter-cli version (package-lock.json): one cache entry per grammar
+      # The generated parser and its wasm are a PURE FUNCTION of the grammar package's grammar.js,
+      # scanner.c and tree-sitter.json (it selects the ABI) and of the tree-sitter-cli version (package-lock.json): one cache entry per grammar
       # under that key, so a PR that changes one grammar's package regenerates that grammar only
       # (generating typescript / typescriptreact costs about 12 min each). A hit carries the same
       # parser.c the conflict gate would produce, so skipping it is sound. schedule /
@@ -203,7 +203,7 @@ jobs:
             tree-sitter/typescript/src/tree_sitter
             tree-sitter/typescript/tree-sitter-typescript.wasm
             /tmp/time-typescript.txt
-          key: ts-gen-typescript-${{ hashFiles('tree-sitter/typescript/grammar.js', 'tree-sitter/typescript/src/scanner.c', 'package-lock.json') }}
+          key: ts-gen-typescript-${{ hashFiles('tree-sitter/typescript/grammar.js', 'tree-sitter/typescript/src/scanner.c', 'tree-sitter/typescript/tree-sitter.json', 'package-lock.json') }}
       - uses: actions/cache@v4
         id: ts-typescriptreact
         if: steps.changed.outputs.value == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request')
@@ -215,7 +215,7 @@ jobs:
             tree-sitter/typescriptreact/src/tree_sitter
             tree-sitter/typescriptreact/tree-sitter-typescriptreact.wasm
             /tmp/time-typescriptreact.txt
-          key: ts-gen-typescriptreact-${{ hashFiles('tree-sitter/typescriptreact/grammar.js', 'tree-sitter/typescriptreact/src/scanner.c', 'package-lock.json') }}
+          key: ts-gen-typescriptreact-${{ hashFiles('tree-sitter/typescriptreact/grammar.js', 'tree-sitter/typescriptreact/src/scanner.c', 'tree-sitter/typescriptreact/tree-sitter.json', 'package-lock.json') }}
       - uses: actions/cache@v4
         id: ts-javascript
         if: steps.changed.outputs.value == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request')
@@ -227,7 +227,7 @@ jobs:
             tree-sitter/javascript/src/tree_sitter
             tree-sitter/javascript/tree-sitter-javascript.wasm
             /tmp/time-javascript.txt
-          key: ts-gen-javascript-${{ hashFiles('tree-sitter/javascript/grammar.js', 'tree-sitter/javascript/src/scanner.c', 'package-lock.json') }}
+          key: ts-gen-javascript-${{ hashFiles('tree-sitter/javascript/grammar.js', 'tree-sitter/javascript/src/scanner.c', 'tree-sitter/javascript/tree-sitter.json', 'package-lock.json') }}
       - uses: actions/cache@v4
         id: ts-javascriptreact
         if: steps.changed.outputs.value == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request')
@@ -239,7 +239,7 @@ jobs:
             tree-sitter/javascriptreact/src/tree_sitter
             tree-sitter/javascriptreact/tree-sitter-javascriptreact.wasm
             /tmp/time-javascriptreact.txt
-          key: ts-gen-javascriptreact-${{ hashFiles('tree-sitter/javascriptreact/grammar.js', 'tree-sitter/javascriptreact/src/scanner.c', 'package-lock.json') }}
+          key: ts-gen-javascriptreact-${{ hashFiles('tree-sitter/javascriptreact/grammar.js', 'tree-sitter/javascriptreact/src/scanner.c', 'tree-sitter/javascriptreact/tree-sitter.json', 'package-lock.json') }}
       - uses: actions/cache@v4
         id: ts-html
         if: steps.changed.outputs.value == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request')
@@ -251,7 +251,7 @@ jobs:
             tree-sitter/html/src/tree_sitter
             tree-sitter/html/tree-sitter-html.wasm
             /tmp/time-html.txt
-          key: ts-gen-html-${{ hashFiles('tree-sitter/html/grammar.js', 'tree-sitter/html/src/scanner.c', 'package-lock.json') }}
+          key: ts-gen-html-${{ hashFiles('tree-sitter/html/grammar.js', 'tree-sitter/html/src/scanner.c', 'tree-sitter/html/tree-sitter.json', 'package-lock.json') }}
       - uses: actions/cache@v4
         id: ts-yaml
         if: steps.changed.outputs.value == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request')
@@ -263,7 +263,7 @@ jobs:
             tree-sitter/yaml/src/tree_sitter
             tree-sitter/yaml/tree-sitter-yaml.wasm
             /tmp/time-yaml.txt
-          key: ts-gen-yaml-${{ hashFiles('tree-sitter/yaml/grammar.js', 'tree-sitter/yaml/src/scanner.c', 'package-lock.json') }}
+          key: ts-gen-yaml-${{ hashFiles('tree-sitter/yaml/grammar.js', 'tree-sitter/yaml/src/scanner.c', 'tree-sitter/yaml/tree-sitter.json', 'package-lock.json') }}
 
       # Conflict gate: `tree-sitter generate` for every derived grammar IN PARALLEL (was sequential
       # ~12 min; parallel ≈ the slowest single grammar, ts/tsx ~5 min). A conflict introduced by a
@@ -286,8 +286,9 @@ jobs:
             pids+=($!)
           done
           fail=0
+          declare -A failed=()
           for i in "${!langs[@]}"; do
-            if wait "${pids[$i]}"; then echo "✓ ${langs[$i]}"; else echo "✗ ${langs[$i]}"; cat "/tmp/gen-${langs[$i]}.log"; fail=1; fi
+            if wait "${pids[$i]}"; then echo "✓ ${langs[$i]}"; else echo "✗ ${langs[$i]}"; cat "/tmp/gen-${langs[$i]}.log"; fail=1; failed[${langs[$i]}]=1; fi
           done
           # Baseline numbers for the editor lane's tree-sitter changes: generate cost and parser size.
           {
@@ -298,7 +299,9 @@ jobs:
             echo "| grammar | wall s (parallel) | CPU user+sys s | peak RSS MB | STATE_COUNT | LARGE_STATE_COUNT | SYMBOL_COUNT | parser.c MB |"
             echo "|---|---:|---:|---:|---:|---:|---:|---:|"
             for g in "${langs[@]}"; do
-              read -r wall usr sys rss < "/tmp/time-$g.txt" || true
+              # A failed generate has no parser.c of this run (and time(1) prefixes its exit status line).
+              if [ -n "${failed[$g]:-}" ]; then echo "| $g | generate failed | | | | | | |"; continue; fi
+              read -r wall usr sys rss < <(tail -n1 "/tmp/time-$g.txt") || true
               pc="tree-sitter/$g/src/parser.c"
               def() { grep -m1 -oE "^#define $1 [0-9]+" "$pc" | awk '{print $3}'; }
               echo "| $g | $wall | $(awk "BEGIN{print $usr+$sys}") | $((rss / 1024)) | $(def STATE_COUNT) | $(def LARGE_STATE_COUNT) | $(def SYMBOL_COUNT) | $(awk "BEGIN{printf \"%.1f\", $(stat -c %s "$pc")/1048576}") |"
