@@ -1199,30 +1199,7 @@ function docEditBlockRust(ir: ParserIR, shared: SharedAlgorithms): string {
   const segsInit = shapeB ? ', segs: Vec::new()' : '';
   const reuseInit = `${entriesInit}${segsInit}`;
   const relexFamily = `\n// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.relexFamily(ir)}\n`;
-  const editBody = `        let (text, toks, n) = relex_edits(&old_text, &old_toks, edits);
-        self.text = text;
-        self.toks = toks;
-        relexed = n as usize;`;
   const initToks = 'scan_meta(&text)';
-  const freshMeta = 'scan_meta(&self.text)';
-  const freshRetryRs = `        if self.root.is_none() {
-            self.toks = ${freshMeta};
-            let text = self.text.clone();
-            let meta = self.toks.clone();
-            let ntoks = toks_from_meta(&text, &meta);
-            let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b: B::default(), scratch: Vec::new()${topReuse ? (shapeB ? ', entries: Vec::new(), segs: Vec::new()' : ', entries: Vec::new()') : ''} };
-            match p.parse_${ir.entry}() {
-                Some(fr) if p.pos == p.toks.len() => {
-                    self.root = Some(fr.root()); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
-                    self.b = p.b; self.scratch = p.scratch; self.keep_toks(p.toks);${topReuse ? (shapeB ? ' self.entries = p.entries; self.segs = p.segs;' : ' self.entries = p.entries;') : ''}
-                }
-                _ => {
-                    self.root = None; self.baseline = p.b.arena_len(); self.last_pos = p.pos;
-                    self.b = p.b; self.scratch = p.scratch; self.keep_toks(p.toks);${topReuse ? (shapeB ? ' self.entries = p.entries; self.segs = p.segs;' : ' self.entries = p.entries;') : ''}
-                }
-            }
-        }
-`;
   const reuseShared = topReuse ? `
 fn count_live(nodes: &[Node], kids: &[i32], id: i32) -> usize {
     let mut n = 1usize;
@@ -1661,7 +1638,7 @@ fn check_tree_eq_arena(text: &str, toks_a: &[Tok], nodes: &[Node], kids: &[i32],
             }
             reused = 0;
         }
-${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&self.text, &self.toks)) } else { None };
+        let stream_eq = if self.validate { Some(check_stream_eq(&self.text, &self.toks)) } else { None };
         let tree_eq = if self.validate && B::SUPPORTS_TREE_EQ {
             Some(self.b.check_tree_eq(&self.text, self.root))
         } else { None };
@@ -1716,7 +1693,7 @@ ${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&
             }
             reused = 0;
         }
-${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&self.text, &self.toks)) } else { None };
+        let stream_eq = if self.validate { Some(check_stream_eq(&self.text, &self.toks)) } else { None };
         let tree_eq = if self.validate && B::SUPPORTS_TREE_EQ {
             Some(self.b.check_tree_eq(&self.text, self.root))
         } else { None };
@@ -1744,7 +1721,7 @@ ${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&
             }
         }
         let reused = 0usize;
-${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&self.text, &self.toks)) } else { None };
+        let stream_eq = if self.validate { Some(check_stream_eq(&self.text, &self.toks)) } else { None };
         let tree_eq = if self.validate && B::SUPPORTS_TREE_EQ {
             Some(self.b.check_tree_eq(&self.text, self.root))
         } else { None };
@@ -1849,51 +1826,26 @@ impl<B: Builder + Default> Doc<B> {
     pub fn edit(&mut self, edits: &[Edit]) {
         let old_text = self.text.clone();
         let old_toks = self.toks.clone();
-        let edits_owned: Vec<Edit> = edits.iter().map(|e| Edit { start: e.start, end: e.end, text: e.text.clone() }).collect();
-        let self_ptr = self as *mut Self;
-        let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let d = unsafe { &mut *self_ptr };
-            let mut relexed = 0usize;
-            {
-                // Re-bind names expected by editBody / editParse templates.
-                let edits = &edits_owned[..];
-                let _ = edits;
-${editBody.replace(/self\./g, 'd.')}
-                let (old_n, new_n, prefix, suffix) = compute_align_core(&old_text, &old_toks, &d.text, &d.toks);
-${editParse.replace(/self\./g, 'd.')}
+        // The relexed stream equals a fresh lex by construction, so a lexer error here is the
+        // text's own: the text is rejected and the Doc keeps no token stream (the next edit relexes
+        // all of it). The lexer reports an error by panicking, so the one panic caught is the
+        // relex's (owed: the lexer reports errors by return); a panic anywhere else is a bug and
+        // propagates.
+        let relexed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| relex_edits(&old_text, &old_toks, edits))) {
+            Ok((text, toks, n)) => { self.text = text; self.toks = toks; n as usize }
+            Err(_) => {
+                self.text = apply_edits(&old_text, edits);
+                self.toks = Vec::new();
+                self.root = None;
+                self.keep_toks(Vec::new());
+                // validate: no stream equals a fresh lex's (and no tree a fresh parse's) when a fresh lex fails too.
+                let fails = if self.validate { Some(std::panic::catch_unwind(|| { scan_meta(&self.text); }).is_err()) } else { None };
+                self.align = Some(Align { old_n: old_toks.len(), new_n: 0, prefix: 0, suffix: 0, relexed: 0, reused: 0, stream_eq: fails, tree_eq: if B::SUPPORTS_TREE_EQ { fails } else { None } });
+                return;
             }
-            let _ = relexed;
-        }));
-        if ok.is_err() {
-            self.text = apply_edits(&old_text, &edits_owned);
-            let toks = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ${freshMeta.replace(/self\.text/g, 'self.text')}));
-            match toks {
-                Ok(t) => {
-                    self.toks = t;
-                    let text = self.text.clone();
-                    let meta = self.toks.clone();
-                    let ntoks = toks_from_meta(&text, &meta);
-                    let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b: B::default(), scratch: Vec::new()${topReuse ? (shapeB ? ', entries: Vec::new(), segs: Vec::new()' : ', entries: Vec::new()') : ''} };
-                    match p.parse_${ir.entry}() {
-                        Some(fr) if p.pos == p.toks.len() => {
-                            self.root = Some(fr.root()); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
-                            self.b = p.b; self.scratch = p.scratch; self.keep_toks(p.toks);${topReuse ? (shapeB ? ' self.entries = p.entries; self.segs = p.segs;' : ' self.entries = p.entries;') : ''}
-                        }
-                        _ => {
-                            self.root = None; self.baseline = p.b.arena_len(); self.last_pos = p.pos;
-                            self.b = p.b; self.scratch = p.scratch; self.keep_toks(p.toks);${topReuse ? (shapeB ? ' self.entries = p.entries; self.segs = p.segs;' : ' self.entries = p.entries;') : ''}
-                        }
-                    }
-                    self.align = Some(Align { old_n: old_toks.len(), new_n: self.toks.len(), prefix: 0, suffix: 0, relexed: self.toks.len(), reused: 0, stream_eq: None, tree_eq: None });
-                }
-                Err(_) => {
-                    self.toks = Vec::new();
-                    self.root = None;
-                    self.keep_toks(Vec::new());
-                    self.align = Some(Align { old_n: old_toks.len(), new_n: 0, prefix: 0, suffix: 0, relexed: 0, reused: 0, stream_eq: None, tree_eq: None });
-                }
-            }
-        }
+        };
+        let (old_n, new_n, prefix, suffix) = compute_align_core(&old_text, &old_toks, &self.text, &self.toks);
+${editParse}
     }
 }
 impl Doc<CstBuilder> {

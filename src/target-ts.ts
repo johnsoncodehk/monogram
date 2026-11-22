@@ -1032,8 +1032,6 @@ function docRuntime(ir: ParserIR): string {
   const shapeB = reuse?.kind === 'B';
   const hasHeadB = reuse?.kind === 'B' && reuse.hasHead;
   const entryCst = ir.entry;
-  // A fresh relex, when the window relex left a stale stream (unterminated → closed restore).
-  const freshMeta = 'scanMeta(text)';
   return `// The one handle slot i holds, when it holds exactly one (a root; a reused top-level entry).
 function _soleOk(i: number): boolean { const k = _sp[i * _SW + 5]; return k === 1 || k === 2 && (_hs[i] as any[]).length === 1; }
 function _sole(i: number): any { return _sp[i * _SW + 5] === 1 ? _hs[i] : (_hs[i] as any[])[0]; }
@@ -1325,8 +1323,24 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
     edit(edits: Edit[]): H | null {
       const oldText = text, oldToks = prevToks;
       let relexed = 0;
+      // The relexed stream equals a fresh lex by construction, so a lexer error here is the text's
+      // own: the text is rejected and the Doc keeps no token stream (the next edit relexes it all).
+      // The lexer reports an error by throwing, so the one throw caught is the relex's (owed: the
+      // lexer reports errors by return); a throw anywhere else in edit is a bug and surfaces.
       try {
-      [text, prevToks, relexed] = relexEdits(oldText, oldToks, edits);
+        [text, prevToks, relexed] = relexEdits(oldText, oldToks, edits);
+      } catch {
+        text = applyEdits(oldText, edits);
+        prevToks = [];
+        root = null;${topReuse ? `
+        entries = [];
+        entryHs = [];` : ''}${shapeB ? `
+        segs = [];` : ''}
+        const lexReject = { oldN: oldToks.length, newN: 0, prefix: 0, suffix: 0, relexed: 0, reused: 0 };
+        // validate: no stream equals a fresh lex's, and no tree a fresh parse's, when a fresh lex fails too.
+        align = validate ? { ...lexReject, streamEq: lexFails(text), treeEq: isCst ? lexFails(text) : null } : lexReject;
+        return null;
+      }
       const core = { ...computeAlign(oldText, oldToks, text, prevToks), relexed };
       const byteDelta = text.length - oldText.length;
       let reused = 0;
@@ -1343,8 +1357,7 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
         if (got) { next = got.root; segs = got.segs; entries = got.entries; entryHs = got.entryHs; reused = got.reused; }
       }` : ''}
       if (next === null) {
-        let got = parseWithMeta(text, prevToks, builder);
-        if (got.root === null) { prevToks = ${freshMeta}; got = parseWithMeta(text, prevToks, builder); }
+        const got = parseWithMeta(text, prevToks, builder);
         next = got.root;${topReuse ? `
         entries = got.entries;
         entryHs = got.entryHs as H[];` : ''}${shapeB ? `
@@ -1360,25 +1373,6 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
         align = { ...core, reused, streamEq, treeEq: isCst ? checkTreeEq(text, root as unknown as Node | null) : null };
       } else {
         align = { ...core, reused };
-      }
-      } catch {
-        text = applyEdits(oldText, edits);
-        try {
-          prevToks = ${freshMeta};
-          const got = parseWithMeta(text, prevToks, builder);
-          root = got.root;${topReuse ? `
-          entries = got.entries;
-          entryHs = got.entryHs as H[];` : ''}${shapeB ? `
-          segs = got.segs;` : ''}
-          align = { oldN: oldToks.length, newN: prevToks.length, prefix: 0, suffix: 0, relexed: prevToks.length, reused: 0 };
-        } catch {
-          prevToks = [];
-          root = null;${topReuse ? `
-          entries = [];
-          entryHs = [];` : ''}${shapeB ? `
-          segs = [];` : ''}
-          align = { oldN: oldToks.length, newN: 0, prefix: 0, suffix: 0, relexed: 0, reused: 0 };
-        }
       }
       return root;
     },
@@ -1405,6 +1399,10 @@ function checkTreeEq(text: string, root: Node | null): boolean {
     if (root === null || fresh === null) return root === fresh;
     return cstJSON(root) === cstJSON(fresh as Cst);
   } catch { return root === null; }
+}
+// Whether a fresh lex of text fails (validate, after a relex reported a lexer error).
+function lexFails(text: string): boolean {
+  try { scanMeta(text); return false; } catch { return true; }
 }
 ${topReuse ? `function shiftSubtree(n: Cst, byteDelta: number, tokDelta: number): void {
   n.offset += byteDelta;
