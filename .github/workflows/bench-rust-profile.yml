@@ -35,9 +35,9 @@ jobs:
       - run: test/bench-rust-profile/run.sh
         env:
           PROFILE_WORK: ${{ runner.temp }}/prof-work
-          # perf/parser-emit-queue-1 R4: leaf type from lid/kid (A = d8485e2) vs M = f3f066b (R3 reverted).
-          PROFILE_A: 8d75e666ae88a9339efc8065455353fa79717e43
-          PROFILE_M: ee669f629d68b37b9bb726369ffed76cc7a7b0cd
+          # perf/lexer-queue-1: x
+          PROFILE_A: 8ebf7c4f0000
+          PROFILE_M: x
 
       - uses: actions/upload-artifact@v4
         if: always()
