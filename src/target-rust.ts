@@ -687,6 +687,7 @@ function topReusePlan(ir: ParserIR): ReusePlan | null {
 
 // Top-level step: uses `self`; children accumulate on `self.scratch`.
 function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  if ('share' in s && s.share !== undefined) return `self.sub_${s.share}()`;
   switch (s.t) {
     case 'lit': return gtCompLit(ids, s) ? `self.match_comp(${lidOf(ids, s.value)})` : `self.match_lit(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
     case 'tok': return `self.match_tok(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
@@ -707,6 +708,11 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
   }
 }
 function stepCondP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  if ('share' in s && s.share !== undefined) return `p.sub_${s.share}()`;
+  return stepBodyP(s, ids, ar);
+}
+// The step itself over `p`, printed in place (a shared step's method body; every other step's site).
+function stepBodyP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
   switch (s.t) {
     case 'lit': return gtCompLit(ids, s) ? `p.match_comp(${lidOf(ids, s.value)})` : `p.match_lit(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
     case 'tok': return `p.match_tok(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
@@ -716,15 +722,19 @@ function stepCondP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
     case 'opt': return `p.opt(|p| ${s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ')})`;
     case 'sep': return `p.sep_by(|p| ${stepCondP(s.elem, ids, ar)}, ${lidOf(ids, s.delim)})`;
     case 'altlit': return `p.alt_lit(&[${s.opts.map((o) => `(${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)})`).join(', ')}])`;
-    case 'alt': return s.predictive
-      ? `(|p: &mut Parser<'a, B>| -> bool { ${predAltBody(s.branches, ids, ar, s.firsts)} })(p)`
-      : `(|p: &mut Parser<'a, B>| -> bool { ${altBody(s.branches, ids, ar, s.firsts)} })(p)`;
+    case 'alt': return `(|p: &mut Parser<'a, B>| -> bool { ${stepStmtsP(s, ids, ar)} })(p)`;
     case 'look': return `${s.is ? '' : '!'}p.look_${s.id}()`;
     case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(p.peek(), Some(t) if !t.nl)`;
     case 'suppress': return `{ p.suppress_next = ${s.set}; let _r = (${s.steps.length ? s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'}); p.suppress_next = 0; _r }`;
   }
+}
+// The step over `p` as the body of a function returning whether it matched (an `alt` needs
+// statements, so in place it is printed as an immediately called closure of these).
+function stepStmtsP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  if (s.t === 'alt') return s.predictive ? predAltBody(s.branches, ids, ar, s.firsts) : altBody(s.branches, ids, ar, s.firsts);
+  return stepBodyP(s, ids, ar);
 }
 function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: FirstSig[]): string {
   const fs = firsts ?? [];
@@ -742,6 +752,15 @@ function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: F
 // ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
 function lookFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   return ir.lookaheads.map((body, id) => `    fn look_${id}(&mut self) -> bool { let p = self; let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); let m = ${body.map((x) => stepCondP(x, ids, ar)).join(' && ')}; p.back(sp); p.scratch.truncate(sb); p.b.restore(ck); m }\n`).join('');
+}
+// ParserIR.shared, one method each: the step, run against the parser's scratch list and builder.
+// It undoes nothing: a failed step leaves what it advanced and appended for the construct around
+// its site to undo, as the inlined step did. `#[inline]` is a hint only: a step printed at one
+// site was a closure with one caller, which LLVM always inlines; a shared step has several
+// callers, and the hint lets LLVM inline the small ones there (fewer instructions per parse than
+// no hint, measured; `#[inline(always)]` is no better and inlines the large ones too).
+function sharedFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  return ir.shared.map((s, id) => `    #[inline]\n    fn sub_${id}(&mut self) -> bool { let p = self; ${stepStmtsP(s, ids, ar)} }\n`).join('');
 }
 function predAltBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: FirstSig[]): string {
   // FIRST dispatch; restore pos/scratch/builder on arm half-failure (like altBody).
@@ -2320,7 +2339,7 @@ impl<'a, B: Builder> Parser<'a, B> {
         false
     }
 
-${matchTemplate}${lookFns(ir, ids, ar)}${ruleFns}
+${matchTemplate}${lookFns(ir, ids, ar)}${sharedFns(ir, ids, ar)}${ruleFns}
 }
 `;
 }

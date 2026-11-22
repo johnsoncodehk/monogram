@@ -401,6 +401,11 @@ function lex(src: string): Tok[] {
 // When `w` is true, emit the builder-mode helpers (`matchLitW` …) that also maintain
 // a parallel `spans` array — span bookkeeping never reads consumer handles.
 function stepCond(s: Step, ids: LexIdPlan, w = false): string {
+  if ('share' in s && s.share !== undefined) return `sub${s.share}${w ? 'W' : ''}(${w ? 'kids, spans' : 'kids'})`;
+  return stepBody(s, ids, w);
+}
+// The step itself, printed in place (a shared step's function body; every other step's site).
+function stepBody(s: Step, ids: LexIdPlan, w: boolean): string {
   const S = w ? 'W' : '';
   const ks = w ? 'kids, spans' : 'kids';
   const sc = (x: Step) => stepCond(x, ids, w);
@@ -413,8 +418,21 @@ function stepCond(s: Step, ids: LexIdPlan, w = false): string {
   case 'opt': return `opt${S}(() => ${s.steps.map(sc).join(' && ')}, ${ks})`;
   case 'sep': return `sepBy${S}(() => ${sc(s.elem)}, ${lidOf(ids, s.delim)}, ${ks})`;
     case 'altlit': return `altLit${S}([${s.opts.map((o) => `[${lidOf(ids, o.value)}, ${J(o.ttype)}]`).join(', ')}], ${ks})`;
+    case 'alt': return `(() => { ${stepStmts(s, ids, w)} })()`;
+    case 'look': return `${s.is ? '' : '!'}look${s.id}${S}(${ks})`;
+    case 'ahead': return `ahead(${s.set}, ${s.is})`;
+    case 'seq': return `(${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'})`;
+    case 'sameLine': return `(() => { const t = peek(); return t !== null && !t.nl; })()`;
+    case 'suppress': return `(() => { ${stepStmts(s, ids, w)} })()`;
+  }
+}
+// The step as the statements of a function returning whether it matched: an `alt` or `suppress`
+// step needs statements, so in place it is printed as an immediately called function of these.
+function stepStmts(s: Step, ids: LexIdPlan, w: boolean): string {
+  const sc = (x: Step) => stepCond(x, ids, w);
+  switch (s.t) {
     case 'alt': {
-      if (s.predictive) return `(() => { ${predAltBody(s.branches, ids, s.firsts, w)} })()`;
+      if (s.predictive) return predAltBody(s.branches, ids, s.firsts, w);
       const firsts = s.firsts ?? [];
       const nAlts = s.branches.length;
       const needPeek = s.branches.some((_, i) => isGuardable(firsts[i] ?? null, nAlts));
@@ -427,13 +445,10 @@ function stepCond(s: Step, ids: LexIdPlan, w = false): string {
         if (!isGuardable(f, nAlts)) return body;
         return `if (_ft !== null && ${firstCond(f, '_ft', ids)}) ${body}`;
       }).join(' ');
-      return `(() => { ${peekInit}${tries} return false; })()`;
+      return `${peekInit}${tries} return false;`;
     }
-    case 'look': return `${s.is ? '' : '!'}look${s.id}${S}(${ks})`;
-    case 'ahead': return `ahead(${s.set}, ${s.is})`;
-    case 'seq': return `(${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'})`;
-    case 'sameLine': return `(() => { const t = peek(); return t !== null && !t.nl; })()`;
-    case 'suppress': return `(() => { _suppressNext = ${s.set}; const _r = (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); _suppressNext = 0; return _r; })()`;
+    case 'suppress': return `_suppressNext = ${s.set}; const _r = (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); _suppressNext = 0; return _r;`;
+    default: return `return ${stepBody(s, ids, w)};`;
   }
 }
 
@@ -443,6 +458,15 @@ function lookFns(ir: ParserIR, ids: LexIdPlan, w = false): string {
   return ir.lookaheads.map((body, id) => w
     ? `function look${id}W(kids: any[], spans: BWSpan[]): boolean { const sp = pos; const bk = kids.length; const bs = spans.length; const m = ${body.map((x) => stepCond(x, ids, true)).join(' && ')}; back(sp); kids.length = bk; spans.length = bs; return m; }\n`
     : `function look${id}(kids: Cst[]): boolean { const sp = pos; const bk = kids.length; const m = ${body.map((x) => stepCond(x, ids)).join(' && ')}; back(sp); kids.length = bk; return m; }\n`).join('');
+}
+
+// ParserIR.shared, one function each: the step, run against the caller's children (and spans).
+// It undoes nothing: a failed step leaves what it advanced and appended for the construct around
+// its site to undo, as the inlined step did.
+function sharedFns(ir: ParserIR, ids: LexIdPlan, w = false): string {
+  return ir.shared.map((s, id) => w
+    ? `function sub${id}W(kids: any[], spans: BWSpan[]): boolean { ${stepStmts(s, ids, true)} }\n`
+    : `function sub${id}(kids: Cst[]): boolean { ${stepStmts(s, ids, false)} }\n`).join('');
 }
 
 function predAltBody(branches: Step[][], ids: LexIdPlan, firsts?: FirstSig[], w = false): string {
@@ -1204,7 +1228,7 @@ function altLitW(opts: [number, string][], kids: any[], spans: BWSpan[]): boolea
   for (const [lid, tt] of opts) if (matchLitW(lid, tt, kids, spans)) return true;
   return false;
 }
-${matchTemplateW}${lookFns(ir, ids, true)}${ruleFnsW}
+${matchTemplateW}${lookFns(ir, ids, true)}${sharedFns(ir, ids, true)}${ruleFnsW}
 
 /** Default CST builder — same object shape as parse(). */
 export const cstBuilder: Builder<Cst> = {
@@ -3725,7 +3749,7 @@ function altLit(opts: [number, string][], kids: Cst[]): boolean {
   return false;
 }
 
-${matchTemplate}${lookFns(ir, ids)}${ruleFns}
+${matchTemplate}${lookFns(ir, ids)}${sharedFns(ir, ids)}${ruleFns}
 
 // Library entry. tokenize(src) is the lexer alone: fresh Token objects the caller owns, and no
 // parser state touched. parse(src) lexes and parses; the CST is plain objects, independent of
