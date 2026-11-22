@@ -47,6 +47,7 @@ const GATES: Gate[] = [
   { group: 'emit-parity', name: 'portable-targets', args: ['test/portable-targets.ts'] },
   { group: 'emit-parity', name: 'portable-work', args: ['test/portable-work.ts'] },
   { group: 'emit-parity', name: 'predictive-first', args: ['test/predictive-first.ts'] },
+  { group: 'emit-parity', name: 'guard-lead', args: ['test/guard-lead.ts'] },
   { group: 'emit-parity', name: 'look-extent', args: ['test/look-extent.ts'] },
   { group: 'emit-parity', name: 'lexer-work', args: ['test/lexer-work.ts'] },
   { group: 'emit-parity', name: 'lexer-reservation', args: ['test/lexer-reservation.ts'] },

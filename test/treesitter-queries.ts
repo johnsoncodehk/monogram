@@ -12,11 +12,6 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 // Query files known not to compile, with the reason. Expected-fail: the gate fails if one of
 // these starts compiling (drop its entry in the same commit) or if any other file fails.
 const KNOWN_BAD: Record<string, string> = {
-  // `[ ":" "?" "-" "{" "," "}" "[" "]" ] @punctuation.delimiter` lists the grammar's punctuation
-  // literals, but YAML's flow brackets are lexed by the external scanner (`_flow_lbrace`, …), so
-  // `"{"` `"}"` `"["` `"]"` are no anonymous node of the grammar: web-tree-sitter rejects the file
-  // ("Bad node name ''"). gen-treesitter must list only literals that are nodes.
-  'yaml/queries/highlights.scm': 'punctuation literals that the external scanner lexes are listed as anonymous nodes',
 };
 
 const { Parser, Language, Query } = await import('web-tree-sitter');
