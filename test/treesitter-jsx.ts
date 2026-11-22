@@ -15,6 +15,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { appendFileSync, existsSync } from 'node:fs';
 import { createParser } from '../src/gen-parser.ts';
+import { generateTreeSitter } from '../src/gen-treesitter.ts';
 import { JSX_CASES } from './curated-corpora.ts';
 import { cases as tsxIssueCases } from './tsx-issue-cases.ts';
 import { tests as issueTests } from './issue-cases.ts';
@@ -38,6 +39,22 @@ const RESERVED_WORDS = [
   'x = { if };', 'for (var new of a);', 'function f(delete) {}', 'const [typeof] = a;', 'x = y + break;', 'var enum = 1;',
   'a.if = 1;', 'x = { if: 1, class: 2 };', 'import { default as d } from "m";', 'class C { if() {} }', 'class C { static() {} }',
   'export { x as default };', 'o.class.new = 1;', 'x = { get if() { return 1; } };', 'o.enum = { enum: 1 };',
+];
+
+// Contextual keywords: every keyword the generated grammar reads both ways (generateTreeSitter's
+// `contextualKeywords`, derived from the grammar), as an identifier in each position class. Only the
+// inputs the interpreter accepts are kept, so the target is that every one parses.
+const CONTEXTUAL_POSITIONS = [
+  (w: string) => `let ${w} = 1;`,                        // binding name
+  (w: string) => `function f(${w}) {}`,                  // parameter
+  (w: string) => `x = ${w} + 1;`,                        // expression
+  (w: string) => `class C { ${w}() {} }`,                // class member name
+  (w: string) => `o.${w} = { ${w}: 1 };`,                // property access, property key
+  (w: string) => `x = { ${w} };`,                        // shorthand property
+  (w: string) => `import { ${w} } from "m";`,            // import specifier
+  (w: string) => `import ${w} from "m";`,                // default import
+  (w: string) => `export { ${w} };`,                     // export specifier
+  (w: string) => `${w}: while (1) break ${w};`,          // label
 ];
 
 const { Parser, Language } = await import('web-tree-sitter');
@@ -66,9 +83,13 @@ for (const { lang, mod, corpora } of [
   if (!existsSync(wasm)) { console.error(`✗ ${wasm} not found (build it: cd tree-sitter/${lang} && npx tree-sitter build --wasm .)`); loadFailed = true; continue; }
   const parser = new Parser();
   parser.setLanguage(await Language.load(wasm));
-  const interp = createParser((await import(mod)).default);
+  const grammar = (await import(mod)).default;
+  const interp = createParser(grammar);
   const accepts = (src: string) => { try { interp.parse(src); return true; } catch { return false; } };
-  for (const [corpus, inputs] of Object.entries(corpora)) {
+  const words = generateTreeSitter(grammar, lang).contextualKeywords ?? [];
+  const contextual = words.flatMap(w => CONTEXTUAL_POSITIONS.map(p => p(w))).filter(accepts);
+  console.log(`${lang}: ${words.length} contextual keywords, ${contextual.length} accepted identifier uses`);
+  for (const [corpus, inputs] of Object.entries({ ...corpora, 'contextual keywords': contextual })) {
     const r: Row = { grammar: lang, corpus, inputs: inputs.length, bothAccept: 0, bothReject: 0, tsOnlyReject: 0, tsOnlyAccept: 0, errorNodes: 0 };
     for (const src of inputs) {
       const errs = errorNodes(parser.parse(src)!.rootNode);
