@@ -103,7 +103,7 @@ done
 echo "=== page faults per parse (count builds, getrusage): first parse in a fresh process, and the warm bench loop"
 for f in $INPUTS; do
   for v in A M; do
-    for m in cold warm; do
+    for m in cold warm reuse; do
       "$W/mono-count-$v/target/release/mono-count-$v" --faults-$m "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v FAULTSCRASH $m $f" | tee -a "$R"
     done
   done
@@ -115,6 +115,7 @@ for f in $MAIN; do
   for v in A M; do
     "$W/mono-prof-$v/target/release/mono-prof-$v" --time "$f" | sed "s/^/$v /" | tee -a "$R"
     "$W/mono-prof-$v/target/release/mono-prof-$v" --time-lex "$f" | sed "s/^/$v /" | tee -a "$R"
+    "$W/mono-prof-$v/target/release/mono-prof-$v" --time-reuse "$f" | sed "s/^/$v /" | tee -a "$R"
   done
 done
 
@@ -138,6 +139,7 @@ for f in $INPUTS; do
     grep -qF "$v ACCEPT $f " "$R" || { echo "$v rejects $f: profiled anyway (the parse fails late or early; see its tables)"; }
     cg_run "$v.parse.$f" '*mono_prof_parse*' "$b" --once "$f"
     cg_run "$v.lex.$f" '*mono_prof_lex*' "$b" --lex-once "$f"
+    cg_run "$v.parse-reuse.$f" '*mono_prof_parse_reuse*' "$b" --once-reuse "$f"
     case " $MAIN " in *" $f "*) cg_run "$v.tokenize.$f" '*mono_prof_tokenize*' "$b" --tokenize-once "$f";; esac
   done
 done

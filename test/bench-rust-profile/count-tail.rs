@@ -44,9 +44,23 @@ fn fault_parse(src: &str) -> usize {
     n
 }
 // --faults-cold: the first parse in a fresh process (nothing allocated before it but the source);
-// --faults-warm: 3 warm-up parses, then the mean of 10 (each drops its buffers, as the bench loop does).
+// --faults-warm: 3 warm-up parses, then the mean of 10 (each drops its buffers, as the bench loop does);
+// --faults-reuse: the same with ONE builder kept across all parses (parse_with reuses its buffers),
+//   also counting the allocator calls and bytes of the 10 measured parses.
 fn faults_main(mode: &str, path: &str) {
     let src = std::fs::read_to_string(path).unwrap();
+    if mode == "--faults-reuse" {
+        let mut b = CstBuilder::default();
+        for _ in 0..3 { std::hint::black_box(parse_with(&src, &mut b)); }
+        let (f0, m0, _) = rusage();
+        ARMED.store(true, Relaxed);
+        for _ in 0..10 { std::hint::black_box(parse_with(&src, &mut b)); }
+        ARMED.store(false, Relaxed);
+        let (f1, m1, rss) = rusage();
+        println!("FAULTS reuse {} minflt_per_parse={:.1} majflt={} maxrss_kb={} allocs_per_parse={:.1} alloc_bytes_per_parse={:.0}", path, (f1 - f0) as f64 / 10.0, m1 - m0, rss,
+            (A_MALLOC.load(Relaxed) + A_REALLOC.load(Relaxed)) as f64 / 10.0, A_BYTES.load(Relaxed) as f64 / 10.0);
+        return;
+    }
     if mode == "--faults-cold" {
         let (f0, m0, _) = rusage();
         std::hint::black_box(fault_parse(&src));

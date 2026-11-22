@@ -19,6 +19,13 @@ fn mono_prof_parse(src: &str) -> (bool, usize, usize, usize) {
     out
 }
 
+// Reuse mode: one parse_with into a builder that has already parsed this input once.
+#[inline(never)]
+fn mono_prof_parse_reuse(src: &str, b: &mut CstBuilder) -> (bool, usize) {
+    let r = parse_with(src, b);
+    (r.is_some(), b.nodes.len())
+}
+
 #[inline(never)]
 fn mono_prof_lex(src: &str) -> usize {
     let t = lex(src);
@@ -63,6 +70,16 @@ fn mono_main() {
         }
         "--lex-once" => println!("LEX {} bytes={} tokens={}", path, src.len(), mono_prof_lex(&src)),
         "--tokenize-once" => println!("TOKENIZE {} bytes={} tokens={}", path, src.len(), mono_prof_tokenize(&src)),
+        "--once-reuse" => {
+            let mut b = CstBuilder::default();
+            std::hint::black_box(parse_with(&src, &mut b));
+            let (ok, nodes) = mono_prof_parse_reuse(&src, &mut b);
+            println!("{} {} reuse bytes={} rule_nodes={}", if ok { "ACCEPT" } else { "REJECT" }, path, src.len(), nodes);
+        }
+        "--time-reuse" => {
+            let mut b = CstBuilder::default();
+            mono_time(path, &src, "parse-reuse", || { std::hint::black_box(mono_prof_parse_reuse(&src, &mut b)); });
+        }
         "--noop" => println!("NOOP {} bytes={}", path, src.len()),
         "--time" => mono_time(path, &src, "parse", || { std::hint::black_box(mono_prof_parse(&src)); }),
         "--time-lex" => mono_time(path, &src, "lex", || { std::hint::black_box(mono_prof_lex(&src)); }),
