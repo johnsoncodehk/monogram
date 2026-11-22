@@ -954,8 +954,8 @@ function sepByW(elem: () => boolean, delimLid: number): boolean {
   const sp0 = pos, bk0 = _n;
   if (!elem()) { back(sp0); _n = bk0; return true; }
   for (;;) {
-    const sp = pos, bk = _n;
-    if (!matchLitW(delimLid)) { back(sp); _n = bk; break; }
+    // A failed delimiter match changes nothing: no mark before it.
+    if (!matchLitW(delimLid)) break;
     const sp2 = pos, bk2 = _n;
     if (!elem()) { back(sp2); _n = bk2; break; }
   }
@@ -994,8 +994,8 @@ function sepByR(elem: () => boolean, delimLid: number): boolean {
   const sp0 = pos;
   if (!elem()) { back(sp0); return true; }
   for (;;) {
-    const sp = pos;
-    if (!matchLitR(delimLid)) { back(sp); break; }
+    // A failed delimiter match changes nothing: no mark before it.
+    if (!matchLitR(delimLid)) break;
     const sp2 = pos;
     if (!elem()) { back(sp2); break; }
   }

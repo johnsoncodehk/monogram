@@ -2516,8 +2516,7 @@ impl<'a, B: Builder> Parser<'a, B> {
         let m0 = self.mark();
         if !elem(self) { self.reset(m0); return true; }
         loop {
-            let m = self.mark();
-            if !self.match_lit(delim) { self.reset(m); break; }
+            if !self.match_lit(delim) { break; } // a failed delimiter match changes nothing: no mark before it
             let m2 = self.mark();
             if !elem(self) { self.reset(m2); break; }
         }
@@ -2546,8 +2545,7 @@ impl<'a, B: Builder> Parser<'a, B> {
         let m0 = self.mark();
         if !elem(self) { self.reset(m0); return true; }
         loop {
-            let m = self.mark();
-            if !self.match_lit(delim) { self.reset(m); break; }
+            if !self.match_lit(delim) { break; } // a failed delimiter match changes nothing: no mark before it
             let m2 = self.mark();
             if !elem(self) { self.reset(m2); break; }
         }
@@ -2564,8 +2562,7 @@ impl<'a, B: Builder> Parser<'a, B> {
         let sp0 = self.pos;
         if !elem(self) { self.back(sp0); return true; }
         loop {
-            let sp = self.pos;
-            if !self.match_lit_r(delim) { self.back(sp); break; }
+            if !self.match_lit_r(delim) { break; } // a failed delimiter match changes nothing: no mark before it
             let sp2 = self.pos;
             if !elem(self) { self.back(sp2); break; }
         }
@@ -2610,8 +2607,7 @@ impl<'a, B: Builder> Parser<'a, B> {
         let sp0 = self.pos;
         if !elem(self) { self.back(sp0); return true; }
         loop {
-            let sp = self.pos;
-            if !self.match_lit_r(delim) { self.back(sp); break; }
+            if !self.match_lit_r(delim) { break; } // a failed delimiter match changes nothing: no mark before it
             let sp2 = self.pos;
             if !elem(self) { self.back(sp2); break; }
         }

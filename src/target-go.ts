@@ -225,8 +225,7 @@ func (p *${recv}) sepByR(elem func() bool, delimLid uint16) bool {
 \tsp0 := p.pos
 \tif !elem() { p.back(sp0); return true }
 \tfor {
-\t\tsp := p.pos
-\t\tif !p.matchLitR(delimLid) { p.back(sp); break }
+\t\tif !p.matchLitR(delimLid) { break } // a failed delimiter match changes nothing: no mark before it
 \t\tsp2 := p.pos
 \t\tif !elem() { p.back(sp2); break }
 \t}
@@ -2054,8 +2053,7 @@ func (p *${recv}) sepByW(elem func() bool, delim uint16) bool {
 \tsp0 := p.pos; sb0 := len(p.scratch); ${arenaCkpt().replace('nb, kb', 'nb0, kb0')}
 \tif !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; ${arenaRestore().replace('nb', 'nb0').replace('kb', 'kb0')}; return true }
 \tfor {
-\t\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt()}
-\t\tif !p.matchLitW(delim) { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore()}; break }
+\t\tif !p.matchLitW(delim) { break } // a failed delimiter match changes nothing: no mark before it
 \t\tsp2 := p.pos; sb2 := len(p.scratch); ${arenaCkpt().replace('nb, kb', 'nb2, kb2')}
 \t\tif !elem() { p.back(sp2); p.scratch = p.scratch[:sb2]; ${arenaRestore().replace('nb', 'nb2').replace('kb', 'kb2')}; break }
 \t}
@@ -3371,8 +3369,7 @@ func (p *engine) sepBy(elem func() bool, delimLid uint16) bool {
 \tm0 := p.mark()
 \tif !elem() { p.reset(m0); return true }
 \tfor {
-\t\tm := p.mark()
-\t\tif !p.matchLit(delimLid) { p.reset(m); break }
+\t\tif !p.matchLit(delimLid) { break } // a failed delimiter match changes nothing: no mark before it
 \t\tm2 := p.mark()
 \t\tif !elem() { p.reset(m2); break } // trailing delim OK — keep delim
 \t}
