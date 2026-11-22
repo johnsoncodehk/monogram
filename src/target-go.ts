@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, prattLedExits, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, dispatchWalk, gtCompLit, guardedSteps, type StepLowering, type DispatchLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, dispatchWalk, gtCompLit, type StepLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -1004,127 +1004,93 @@ function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaI
   return plan.kind === 'A' ? rdEntryWithReuseA(r, plan, ar) : rdEntryWithReuseB(r, plan, ids, ar);
 }
 
+// The Go spelling of a Pratt rule's shell (emit-portable.ts, prattShell), common to its two
+// engines. Every frame is printed in place, not called: Go inlines no function past its budget,
+// and a helper over the loop's locals is past it.
+const goPrattBase = (r: PrattRule, leftLeaf: (words: string) => string) => {
+  const d = r.nudDispatch;
+  return {
+    ifAll: ifGo,
+    kidIs: (k: number) => `t.Kid == ${k}`,
+    lidIs: (l: number) => `t.Lid == ${l}`,
+    capBelow: (bp: number) => `minBp < ${bp}`,
+    beats: (i: number, end: string) => beatsGo(d, end, i),
+    leafEnd: 'save+1',
+    dispatch: dispatchGoL('t'),
+    led: {
+      tailOpen: '!tailClosed',
+      lbpAbove: (lbp: number) => `${lbp} > minBp`,
+      sameLine: '!t.Nl',
+      notLeftLeaf: (words: string[]) => leftLeaf(`[]string{${words.map(J).join(', ')}}`),
+      notSuppressed: (set: number) => `p.suppressCur != ${set}`,
+      ifAll: (parts: string[]) => (parts.length ? `if ${parts.join(' && ')} ` : ''),
+    },
+    ledSwitch: (cases: { key: number; arms: string[] }[]) => `\t\tswitch t.Lid {
+${cases.map((c) => `\t\tcase ${c.key}:\n${c.arms.map((a) => `\t\t\t${a}`).join('\n')}`).join('\n')}
+\t\t}`,
+    nudPeek: `\tp.capped = false
+\tt := p.peek()`,
+    nudClose: `\tp.capped = bc
+\tp.form = bf
+\tp.tail = bt
+\tp.pos = bestPos`,
+  };
+};
+
 function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  const tpl = ir.tpl;
-  // The NUD arms, each a longest-match candidate tried from `save`, reached through the rule's
-  // Dispatch (emit-portable.ts, PrattRule.nudOrder / nudDispatch). `won` records the node just
-  // finished as the best so far and moves nb/kb past it; `lost` drops what the arm built.
+  // The native engine. `won` records the node just finished as the best so far and moves nb/kb
+  // past it; `lost` drops what the arm built.
   const rid = ruleIdOf(ar, r.name);
+  const d = r.nudDispatch;
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
-    `bestPos = p.pos;${markGo(r.nudDispatch, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; nb = len(p.nodes); kb = len(p.kids)`;
+    `bestPos = p.pos;${markGo(d, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; nb = len(p.nodes); kb = len(p.kids)`;
   const lost = lostGo;
-  const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true');
-  const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    candGo(r.nudDispatch, i, stepsCond(steps), `best = p.finish(${rid}, sb, p.offAt(save), save); ${won(i, '0', tail, capped)}`, lost);
-  const nudArm = (i: number, keyed: boolean): string => {
-    const a = r.nudOrder[i]!;
-    switch (a.kind) {
-      case 'tok': {
-        const k = r.nudToks[a.index]!;
-        const leafArm = ifGo([...(keyed ? [] : [`t.Kid == ${kidOf(ids, k)}`]), beatsGo(r.nudDispatch, 'save+1', i)], `{ p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, '0', false, false)}; p.back(save) }`);
-        if (r.nudTplHole === undefined || !tpl || k !== tpl.token) return leafArm;
-        return `${leafArm}
-\tif t.Kid == ${kidOf(ids, '$templateHead')} {
-\t\tnode := p.matchTemplate_${r.nudTplHole}()
-\t\tif node >= 0 && ${beatsGo(r.nudDispatch, 'p.pos', i)} { p.scratch = append(p.scratch, node); best = p.finish(${rid}, sb, int(p.nodes[node].Offset), int(p.nodes[node].TokStart)); ${won(i, '0', false, false)} } else { ${lost} }
+  const fin = `p.finish(${rid}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart))`;
+  const B = goPrattBase(r, (ws) => `!_inW(${ws}, p.headLeafText(left))`);
+  const L: PrattLowering = {
+    ...B,
+    steps: goSteps(ids, '', 'engine', ENGINE_GO),
+    nudGuard: (g, keyed) => guardCond(g, 't', '', keyed),
+    nudLeaf: (i) => `{ p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, '0', false, false)}; p.back(save) }`,
+    nudTpl: (i, hole) => `\tif t.Kid == ${kidOf(ids, '$templateHead')} {
+\t\tnode := p.matchTemplate_${hole}()
+\t\tif node >= 0 && ${beatsGo(d, 'p.pos', i)} { p.scratch = append(p.scratch, node); best = p.finish(${rid}, sb, int(p.nodes[node].Offset), int(p.nodes[node].TokStart)); ${won(i, '0', false, false)} } else { ${lost} }
 \t\tp.back(save)
-\t}`;
-      }
-      case 'bracket': {
-        const b = r.nudBrackets[a.index]!;
-        return ifGo(keyed ? [] : [`t.Lid == ${lidOf(ids, b.first)}`], seqArm(i, b.steps, r.nudBracketClosesTail[a.index]!, false));
-      }
-      case 'seq':
-        return ifGo(guardCond(r.nudSeqGuard[a.index]!, 't', '', keyed), seqArm(i, guardedSteps(r.nudSeqGuard[a.index]!, r.nudSeqs[a.index]!), r.nudSeqClosesTail[a.index]!, false));
-      case 'capped': {
-        const c = r.nudCapped[a.index]!;
-        return ifGo([`minBp < ${c.capBp}`, ...guardCond(r.nudCappedGuard[a.index]!, 't', '', keyed)], seqArm(i, guardedSteps(r.nudCappedGuard[a.index]!, c.steps), false, true));
-      }
-      case 'prefix':
-        // An operand that parses but is not the target the operator requires fails the whole
-        // Pratt call, whatever another arm matched.
-        return `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok {
+\t}`,
+    nudSeq: (i, cond, tail, capped) => candGo(d, i, cond, `best = p.finish(${rid}, sb, p.offAt(save), save); ${won(i, '0', tail, capped)}`, lost),
+    // An operand that parses but is not the target the operator requires fails the whole Pratt
+    // call, whatever another arm matched.
+    nudPrefix: (i) => `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tp.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
 \t\toperand := p.bp_${r.name}(pbp.rbp)
 \t\tif operand >= 0 && pbp.tgt && p.form != 0 { p.back(save); ${lost}; p.capped = false; return -1 }
-\t\tif operand >= 0 && ${beatsGo(r.nudDispatch, 'p.pos', i)} { p.scratch = append(p.scratch, operand); best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, 'pbp.form', true, false)} } else { ${lost} }
+\t\tif operand >= 0 && ${beatsGo(d, 'p.pos', i)} { p.scratch = append(p.scratch, operand); best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, 'pbp.form', true, false)} } else { ${lost} }
 \t\tp.back(save)
-\t}`;
-    }
-  };
-
-  const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, suppressedIn: number[]) => {
-    const parts: string[] = [];
-    if (accessTail) parts.push('!tailClosed');
-    if (lbp !== null) parts.push(`${lbp} > minBp`);
-    if (sameLine) parts.push('!t.Nl');
-    if (nll) parts.push(`!_inW([]string{${nll.map(J).join(', ')}}, p.headLeafText(left))`);
-    for (const set of suppressedIn) parts.push(`p.suppressCur != ${set}`);
-    return parts.length ? `if ${parts.join(' && ')} ` : '';   // the `if` before the led's block; none when nothing gates it
-  };
-  // Arms sharing a lid (`[` array-type then indexed-access) fall through to each other; when the
-  // LAST arm of a group failed, the loop ends if no later check can take the token (prattLedExits).
-  const exits = prattLedExits(r, ir, ids);
-  const ledBody = (b: Bracket, form: number, closes: boolean, exit: boolean) => `{
+\t}`,
+    ledArm: (_i, cond, form, closes, exit) => `{
 \t\t\tledSave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \t\t\tp.scratch = append(p.scratch, left)
-\t\t\tif ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { left = p.finish(${ruleIdOf(ar, r.name)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
+\t\t\tif ${cond} { left = ${fin}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
 \t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]${exit ? '; break LedLoop' : ''}
-\t\t}`;
-  const ledSwitch = (() => {
-    if (r.leds.length === 0) return '';
-    const groups = groupByPreserveOrder(r.leds, (b) => lidOf(ids, b.first));
-    return `\t\tswitch t.Lid {
-${groups.map((g) => {
-  const lid = g.key as number;
-  const arms = g.members.map(({ item: b, index: i }, j) =>
-    `\t\t\t${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, r.ledSuppressedIn[i]!)}${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!, exits.has(lid) && j === g.members.length - 1)}`);
-  return `\t\tcase ${lid}:\n${arms.join('\n')}`;
-}).join('\n')}
-\t\t}`;
-  })();
-  const postfixTokSwitch = (() => {
-    if (r.postfixToks.length === 0) return '';
-    const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
-    const tplPart = r.postfixTplHole !== undefined ? `
-\t\tif !tailClosed && t.Kid == ${kidOf(ids, '$templateHead')} {
-\t\t\tnode := p.matchTemplate_${r.postfixTplHole}()
-\t\t\tif node >= 0 { sb := len(p.scratch); p.scratch = append(p.scratch, left, node); left = p.finish(${ruleIdOf(ar, r.name)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); form = 0; continue LedLoop }
-\t\t}` : '';
-    return `\t\tswitch t.Kid {
-${groups.map((g) => `\t\tcase ${g.key}:
+\t\t}`,
+    postfixToks: (kids) => `\t\tswitch t.Kid {
+${kids.map((k) => `\t\tcase ${k}:
 \t\t\tif !tailClosed {
 \t\t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left); p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++
-\t\t\t\tleft = p.finish(${ruleIdOf(ar, r.name)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); form = 0; continue LedLoop
+\t\t\t\tleft = ${fin}; form = 0; continue LedLoop
 \t\t\t}`).join('\n')}
-\t\t}${tplPart}`;
-  })();
-  return `${goPrattOpTables(r, ids)}
-func (p *engine) parse${r.name}() int32 {
-\tprev := p.suppressCur
-\tp.suppressCur = p.suppressNext
-\tp.suppressNext = 0
-\tr := p.bp_${r.name}(0)
-\tp.suppressCur = prev
-\treturn r
-}
-func (p *engine) bp_${r.name}(minBp int) int32 {
-\tleft := p.nud_${r.name}(minBp)
-\tif left < 0 { return -1 }
-\tform := p.form
-\tif p.capped { return left }
-\ttailClosed := p.tail
-${(r.leds.length > 0 || r.postfixToks.length > 0) ? 'LedLoop:\n' : ''}\tfor {
-\t\tt := p.peek()
-\t\tif t == nil { break }
-${ledSwitch}
-${postfixTokSwitch}
-\t\tif post := post_${r.name}[t.Lid]; post.ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
+\t\t}`,
+    postfixTpl: (hole) => `
+\t\tif !tailClosed && t.Kid == ${kidOf(ids, '$templateHead')} {
+\t\t\tnode := p.matchTemplate_${hole}()
+\t\t\tif node >= 0 { sb := len(p.scratch); p.scratch = append(p.scratch, left, node); left = ${fin}; form = 0; continue LedLoop }
+\t\t}`,
+    postfixOp: `\t\tif post := post_${r.name}[t.Lid]; post.ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
 \t\t\tif post.tgt && form != 0 { return -1 }
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++; tailClosed = true
-\t\t\tleft = p.finish(${ruleIdOf(ar, r.name)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); form = 1; continue
-\t\t}
-${gtOpRead(ids, false)}
+\t\t\tleft = ${fin}; form = 1; continue
+\t\t}`,
+    binary: `${gtOpRead(ids, false)}
 \t\tinfo := bin_${r.name}[opLid]
 \t\tif !info.ok || info.lbp <= minBp { break }
 \t\tif info.tgt && form != 0 || info.noUnary && form == 2 { return -1 }
@@ -1134,27 +1100,42 @@ ${gtOpRead(ids, false)}
 \t\trhs := p.bp_${r.name}(info.rbp)
 \t\tif rhs < 0 { p.back(ledSave); p.scratch = p.scratch[:sb]; break }
 \t\tp.scratch = append(p.scratch, rhs)
-\t\tleft = p.finish(${ruleIdOf(ar, r.name)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart))
+\t\tleft = ${fin}
 \t\tform = 1; tailClosed = true
-\t}
-\tp.form = form
+\t}`,
+    entry: `${goPrattOpTables(r, ids)}
+func (p *engine) parse${r.name}() int32 {
+\tprev := p.suppressCur
+\tp.suppressCur = p.suppressNext
+\tp.suppressNext = 0
+\tr := p.bp_${r.name}(0)
+\tp.suppressCur = prev
+\treturn r
+}`,
+    bpOpen: (label) => `func (p *engine) bp_${r.name}(minBp int) int32 {
+\tleft := p.nud_${r.name}(minBp)
+\tif left < 0 { return -1 }
+\tform := p.form
+\tif p.capped { return left }
+\ttailClosed := p.tail
+${label ? 'LedLoop:\n' : ''}\tfor {
+\t\tt := p.peek()
+\t\tif t == nil { break }`,
+    bpClose: `\tp.form = form
 \treturn left
-}
-func (p *engine) nud_${r.name}(minBp int) int32 {
-\tp.capped = false
-\tt := p.peek()
+}`,
+    nudOpen: `func (p *engine) nud_${r.name}(minBp int) int32 {
+${B.nudPeek}
 \tif t == nil { return -1 }
 \tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
-\tbest := int32(-1); bestPos := save${biGo(r.nudDispatch)}; bf, bt, bc := uint8(0), false, false
-\t_, _, _ = sb, nb, kb
-${dispatchGo(r.nudDispatch, 't', ids, nudArm)}
-\t// A sub-parse may leave p.capped set: only a capped arm that won makes THIS node capped.
-\tp.capped = bc
-\tp.form = bf
-\tp.tail = bt
-\tp.pos = bestPos
+\tbest := int32(-1); bestPos := save${biGo(d)}; bf, bt, bc := uint8(0), false, false
+\t_, _, _ = sb, nb, kb`,
+    nudClose: `\t// A sub-parse may leave p.capped set: only a capped arm that won makes THIS node capped.
+${B.nudClose}
 \treturn best
-}`;
+}`,
+  };
+  return prattShell(r, ir, ids, L);
 }
 
 /** A Pratt rule's operator tables (emit-portable prattOpTables) as arrays indexed by the token's
@@ -1823,123 +1804,60 @@ function rdEntryWithReuseW(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: Arena
 }
 
 function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  const tpl = ir.tpl;
+  // The builder engine: as prattRule, over spanned handles and the builder's checkpoint.
   const rid = ruleIdOf(ar, r.name);
-  // The NUD arms: longest-match candidates through the rule's Dispatch, as in prattRule.
+  const d = r.nudDispatch;
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
-    `found = true; bestPos = p.pos;${markGo(r.nudDispatch, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; ${arenaMark()}`;
+    `found = true; bestPos = p.pos;${markGo(d, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; ${arenaMark()}`;
   const lost = lostGoW(recv);
-  const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true');
-  const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    candGo(r.nudDispatch, i, stepsCond(steps), `best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, '0', tail, capped)}`, lost);
-  const nudArm = (i: number, keyed: boolean): string => {
-    const a = r.nudOrder[i]!;
-    switch (a.kind) {
-      case 'tok': {
-        const k = r.nudToks[a.index]!;
-        const leafArm = ifGo([...(keyed ? [] : [`t.Kid == ${kidOf(ids, k)}`]), beatsGo(r.nudDispatch, 'save+1', i)], `{ p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; best = p.finishW(${rid}, sb, int(t.Off), save); ${won(i, '0', false, false)}; p.back(save) }`);
-        if (r.nudTplHole === undefined || !tpl || k !== tpl.token) return leafArm;
-        return `${leafArm}
-\tif t.Kid == ${kidOf(ids, '$templateHead')} {
-\t\tn, ok := p.matchTemplateW_${r.nudTplHole}()
-\t\tif ok && ${beatsGo(r.nudDispatch, 'p.pos', i)} { if n.present { p.scratch = append(p.scratch, n.h) }; best = p.finishW(${rid}, sb, int(n.off), int(n.tokStart)); ${won(i, '0', false, false)} } else { ${lost} }
+  const fin = `p.finishW(${rid}, sb, int(left.off), int(left.tokStart))`;
+  const B = goPrattBase(r, (ws) => `!p.nllBlockedW(${ws}, left)`);
+  const L: PrattLowering = {
+    ...B,
+    steps: goSteps(ids, 'W', recv, ENGINE_GO_W),
+    nudGuard: (g, keyed) => guardCond(g, 't', 'W', keyed),
+    nudLeaf: (i) => `{ p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; best = p.finishW(${rid}, sb, int(t.Off), save); ${won(i, '0', false, false)}; p.back(save) }`,
+    nudTpl: (i, hole) => `\tif t.Kid == ${kidOf(ids, '$templateHead')} {
+\t\tn, ok := p.matchTemplateW_${hole}()
+\t\tif ok && ${beatsGo(d, 'p.pos', i)} { if n.present { p.scratch = append(p.scratch, n.h) }; best = p.finishW(${rid}, sb, int(n.off), int(n.tokStart)); ${won(i, '0', false, false)} } else { ${lost} }
 \t\tp.back(save)
-\t}`;
-      }
-      case 'bracket': {
-        const b = r.nudBrackets[a.index]!;
-        return ifGo(keyed ? [] : [`t.Lid == ${lidOf(ids, b.first)}`], seqArm(i, b.steps, r.nudBracketClosesTail[a.index]!, false));
-      }
-      case 'seq':
-        return ifGo(guardCond(r.nudSeqGuard[a.index]!, 't', 'W', keyed), seqArm(i, guardedSteps(r.nudSeqGuard[a.index]!, r.nudSeqs[a.index]!), r.nudSeqClosesTail[a.index]!, false));
-      case 'capped': {
-        const c = r.nudCapped[a.index]!;
-        return ifGo([`minBp < ${c.capBp}`, ...guardCond(r.nudCappedGuard[a.index]!, 't', 'W', keyed)], seqArm(i, guardedSteps(r.nudCappedGuard[a.index]!, c.steps), false, true));
-      }
-      case 'prefix':
-        return `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok {
+\t}`,
+    nudSeq: (i, cond, tail, capped) => candGo(d, i, cond, `best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, '0', tail, capped)}`, lost),
+    nudPrefix: (i) => `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
 \t\toperand, ook := p.bpW_${r.name}(pbp.rbp)
 \t\tif ook && pbp.tgt && p.form != 0 { p.back(save); ${lost}; p.capped = false; return spanned{}, false }
-\t\tif ook && ${beatsGo(r.nudDispatch, 'p.pos', i)} { if operand.present { p.scratch = append(p.scratch, operand.h) }; best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, 'pbp.form', true, false)} } else { ${lost} }
+\t\tif ook && ${beatsGo(d, 'p.pos', i)} { if operand.present { p.scratch = append(p.scratch, operand.h) }; best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, 'pbp.form', true, false)} } else { ${lost} }
 \t\tp.back(save)
-\t}`;
-    }
-  };
-  const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, suppressedIn: number[]) => {
-    const parts: string[] = [];
-    if (accessTail) parts.push('!tailClosed');
-    if (lbp !== null) parts.push(`${lbp} > minBp`);
-    if (sameLine) parts.push('!t.Nl');
-    if (nll) parts.push(`!p.nllBlockedW([]string{${nll.map(J).join(', ')}}, left)`);
-    for (const set of suppressedIn) parts.push(`p.suppressCur != ${set}`);
-    return parts.length ? `if ${parts.join(' && ')} ` : '';   // the `if` before the led's block; none when nothing gates it
-  };
-  const exits = prattLedExits(r, ir, ids);   // as in prattRule
-  const ledBody = (b: Bracket, form: number, closes: boolean, exit: boolean) => `{
+\t}`,
+    ledArm: (_i, cond, form, closes, exit) => `{
 \t\t\tledSave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \t\t\tp.scratch = append(p.scratch, left.h)
-\t\t\tif ${b.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { left = p.finishW(${rid}, sb, int(left.off), int(left.tokStart)); form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
+\t\t\tif ${cond} { left = ${fin}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
 \t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]; ${arenaRestore()}${exit ? '; break LedLoop' : ''}
-\t\t}`;
-  const ledSwitch = (() => {
-    if (r.leds.length === 0) return '';
-    const groups = groupByPreserveOrder(r.leds, (b) => lidOf(ids, b.first));
-    return `\t\tswitch t.Lid {
-${groups.map((g) => {
-  const lid = g.key as number;
-  const arms = g.members.map(({ item: b, index: i }, j) =>
-    `\t\t\t${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, r.ledSuppressedIn[i]!)}${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!, exits.has(lid) && j === g.members.length - 1)}`);
-  return `\t\tcase ${lid}:\n${arms.join('\n')}`;
-}).join('\n')}
-\t\t}`;
-  })();
-  const postfixTokSwitch = (() => {
-    if (r.postfixToks.length === 0) return '';
-    const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
-    const tplPart = r.postfixTplHole !== undefined ? `
+\t\t}`,
+    postfixToks: (kids) => `\t\tswitch t.Kid {
+${kids.map((k) => `\t\tcase ${k}:
+\t\t\tif !tailClosed {
+\t\t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left.h); p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++
+\t\t\t\tleft = ${fin}; form = 0; continue LedLoop
+\t\t\t}`).join('\n')}
+\t\t}`,
+    postfixTpl: (hole) => `
 \t\tif !tailClosed && t.Kid == ${kidOf(ids, '$templateHead')} {
-\t\t\tif n, ok := p.matchTemplateW_${r.postfixTplHole}(); ok {
+\t\t\tif n, ok := p.matchTemplateW_${hole}(); ok {
 \t\t\t\tsb := len(p.scratch)
 \t\t\t\tif left.present { p.scratch = append(p.scratch, left.h) }
 \t\t\t\tif n.present { p.scratch = append(p.scratch, n.h) }
-\t\t\t\tleft = p.finishW(${rid}, sb, int(left.off), int(left.tokStart)); form = 0; continue LedLoop
+\t\t\t\tleft = ${fin}; form = 0; continue LedLoop
 \t\t\t}
-\t\t}` : '';
-    return `\t\tswitch t.Kid {
-${groups.map((g) => `\t\tcase ${g.key}:
-\t\t\tif !tailClosed {
-\t\t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left.h); p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++
-\t\t\t\tleft = p.finishW(${rid}, sb, int(left.off), int(left.tokStart)); form = 0; continue LedLoop
-\t\t\t}`).join('\n')}
-\t\t}${tplPart}`;
-  })();
-  const needLedLoop = r.leds.length > 0 || r.postfixToks.length > 0;
-  return `func (p *${recv}) parse${r.name}W() (spanned, bool) {
-\tprev := p.suppressCur
-\tp.suppressCur = p.suppressNext
-\tp.suppressNext = 0
-\tr, ok := p.bpW_${r.name}(0)
-\tp.suppressCur = prev
-\treturn r, ok
-}
-func (p *${recv}) bpW_${r.name}(minBp int) (spanned, bool) {
-\tleft, ok := p.nudW_${r.name}(minBp)
-\tif !ok { return spanned{}, false }
-\tform := p.form
-\tif p.capped { return left, true }
-\ttailClosed := p.tail
-${needLedLoop ? 'LedLoop:\n' : ''}\tfor {
-\t\tt := p.peek()
-\t\tif t == nil { break }
-${ledSwitch}
-${postfixTokSwitch}
-\t\tif post := post_${r.name}[t.Lid]; post.ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
+\t\t}`,
+    postfixOp: `\t\tif post := post_${r.name}[t.Lid]; post.ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
 \t\t\tif post.tgt && form != 0 { return spanned{}, false }
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++; tailClosed = true
-\t\t\tleft = p.finishW(${rid}, sb, int(left.off), int(left.tokStart)); form = 1; continue
-\t\t}
-${gtOpRead(ids, true)}
+\t\t\tleft = ${fin}; form = 1; continue
+\t\t}`,
+    binary: `${gtOpRead(ids, true)}
 \t\tinfo := bin_${r.name}[opLid]
 \t\tif !info.ok || info.lbp <= minBp { break }
 \t\tif info.tgt && form != 0 || info.noUnary && form == 2 { return spanned{}, false }
@@ -1949,26 +1867,40 @@ ${gtOpRead(ids, true)}
 \t\trhs, rok := p.bpW_${r.name}(info.rbp)
 \t\tif !rok { p.back(ledSave); p.scratch = p.scratch[:sb]; break }
 \t\tif rhs.present { p.scratch = append(p.scratch, rhs.h) }
-\t\tleft = p.finishW(${rid}, sb, int(left.off), int(left.tokStart))
+\t\tleft = ${fin}
 \t\tform = 1; tailClosed = true
-\t}
-\tp.form = form
+\t}`,
+    entry: `func (p *${recv}) parse${r.name}W() (spanned, bool) {
+\tprev := p.suppressCur
+\tp.suppressCur = p.suppressNext
+\tp.suppressNext = 0
+\tr, ok := p.bpW_${r.name}(0)
+\tp.suppressCur = prev
+\treturn r, ok
+}`,
+    bpOpen: (label) => `func (p *${recv}) bpW_${r.name}(minBp int) (spanned, bool) {
+\tleft, ok := p.nudW_${r.name}(minBp)
+\tif !ok { return spanned{}, false }
+\tform := p.form
+\tif p.capped { return left, true }
+\ttailClosed := p.tail
+${label ? 'LedLoop:\n' : ''}\tfor {
+\t\tt := p.peek()
+\t\tif t == nil { break }`,
+    bpClose: `\tp.form = form
 \treturn left, true
-}
-func (p *${recv}) nudW_${r.name}(minBp int) (spanned, bool) {
-\tp.capped = false
-\tt := p.peek()
+}`,
+    nudOpen: `func (p *${recv}) nudW_${r.name}(minBp int) (spanned, bool) {
+${B.nudPeek}
 \tif t == nil { return spanned{}, false }
 \tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
-\tvar best spanned; found := false; bestPos := save${biGo(r.nudDispatch)}; bf, bt, bc := uint8(0), false, false
-\t_, _, _ = sb, nb, kb
-${dispatchGo(r.nudDispatch, 't', ids, nudArm)}
-\tp.capped = bc
-\tp.form = bf
-\tp.tail = bt
-\tp.pos = bestPos
+\tvar best spanned; found := false; bestPos := save${biGo(d)}; bf, bt, bc := uint8(0), false, false
+\t_, _, _ = sb, nb, kb`,
+    nudClose: `${B.nudClose}
 \treturn best, found
-}`;
+}`,
+  };
+  return prattShell(r, ir, ids, L);
 }
 
 function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
