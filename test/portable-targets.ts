@@ -101,6 +101,22 @@ const RESERVED_EXPRS = {
 };
 // `export` takes a declaration (16.2.3), never another statement, in both grammars
 // (`exportDeclaration`); TypeScript's also takes `using`, as tsc's parser does.
+// JavaScript decorators (the decorators proposal): a DecoratorList belongs to a class, a
+// declaration or an expression, and an exported class takes it before `export` or after it,
+// not both. No other declaration takes one.
+const JS_DECORATORS = {
+  accept: [
+    '@d class C {}', '@a @b() class C {}', 'export @d class C {}', '@d export class C {}', '@a @b export class C {}',
+    '@d\nexport class C {}', 'export default @d class {}', '@d export default class {}', '@d export default class C {}',
+    'x = @d class {};', 'x = @a @b class C {};', 'f(@a @b class {});',
+  ],
+  reject: [
+    '@d function f() {}', '@d async function f() {}', '@d var x;', '@d export var x;', '@d export function f() {}',
+    '@d export { a };', '@d export * from "m";', '@d export default x;', '@d export default function () {}',
+    '@d import x from "m";', '@d export @e class C {}', '@d export default @e class {}', '@d export x;',
+    'export @d default class {}', '@d default class C {}', 'x = @d function () {};',
+  ],
+};
 const EXPORT_DECLS = {
   accept: [
     'export var a = 1;', 'export let a\nx;', 'export const a = 1, b = 2;', 'export function f() {}', 'export async function f() {}',
@@ -371,7 +387,7 @@ const CASES: Case[] = [
       'new a.b();', '((((x))));',
       'for (a = x + y in b) c;',
       ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...EXPORT_DECLS.accept,
-      ...CTX_CASES.javascript.accept,
+      ...CTX_CASES.javascript.accept, ...JS_DECORATORS.accept,
       // An assignment / update operand needs only a LeftHandSideExpression's shape; target validity is a consumer's.
       '-x++;', '(a) = 1;', 'a = b = c;', '1 = 2;', '1++;', '++1;', 'f() = 1;', 'f()++;', '++f();', 'this = 1;',
       '(a + b) = c;', '(a, b) = 1;', 'a?.b = 1;', 'a?.b++;', '[a + b] = c;', '({a: 1} = c);', 'new.target = 1;',
@@ -428,6 +444,7 @@ const CASES: Case[] = [
     reject: ['function (', 'a +;', 'if x {}', '{ a: }', 'for (;;', 'a ? b ;',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;', 'let[0] = 1;', '(async\nfunction f() {});',
+      ...JS_DECORATORS.reject,
       // ... so no parameter list takes a reserved word as a name, `this` included (a `this`
       // parameter is TypeScript's).
       'function f(in) {}', 'function f(if, b) {}', 'x = function (a, while) {};', 'class C { m(in) {} }', 'x = { m(class) {} };',

@@ -122,8 +122,8 @@ module.exports = grammar({
       seq("function", "*", optional(field('name', $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
       seq("async", "function", optional(field('name', $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
       seq("async", "function", "*", optional(field('name', $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
-      seq(optional($.decorator_expr), "class", field('name', $.ident), repeat(seq("extends", optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}"),
-      seq(optional($.decorator_expr), "class", repeat(seq("extends", optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}")
+      seq(repeat($.decorator_expr), "class", field('name', $.ident), repeat(seq("extends", optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}"),
+      seq(repeat($.decorator_expr), "class", repeat(seq("extends", optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}")
     ),
 
     prop: $ => choice(seq("...", $.expr), seq(choice("get", "set"), $.member_name, "(", optional(optional(seq($.param, repeat(seq(",", $.param)), optional(",")))), ")", $.block), seq("async", "*", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("*", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($.member_name, ":", $.expr), seq("[", $.expr, repeat1(seq(",", $.expr)), "]", ":", $.expr), seq($.ident, choice(seq("=", $.expr), blank()))),

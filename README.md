@@ -74,6 +74,7 @@ This matters because `tsc`'s *parser* is not the same thing as the language. It 
 | `for (using x in y)` | reject | accept | reject | A `using` declaration has no for-in production: the for-in arm's ForDeclaration is `[~Using]`. `for (using in y)` *is* valid — there `using` is an identifier. |
 | `class C { async get x() {} }`, `class C { async static m() {} }` (JavaScript) | reject | accept | reject (acorn) | A class element has one `static`, before the rest (`static async m() {}`), and `async [no LineTerminator here]` begins a method or a generator method (AsyncMethod, AsyncGeneratorMethod), never an accessor. |
 | `class C { @d static {} }`, `class C { accessor m() {} }` (JavaScript) | reject | accept | | Under the decorators proposal a DecoratorList prefixes a method, a field or an `accessor` field, not a static block, and `accessor [no LineTerminator here] ClassElementName Initializer?` declares a field only. |
+| `@d function f() {}`, `@d export var x`, `@d export @e class C {}` (JavaScript) | reject | accept | | Under the decorators proposal a DecoratorList belongs to a class: ClassDeclaration and ClassExpression take one, and an exported class takes it before `export` or after it, not both (`DecoratorList export [lookahead ≠ @] ClassDeclaration`). No other declaration or export form has one. |
 
 `tsc` rejecting the first and accepting the others (its parser doesn't enforce those productions until the checker) is exactly why "match `tsc`" can't *be* the definition of correct — only the measurement oracle.
 

@@ -512,9 +512,10 @@ const Expr = rule($ => [
   // function expression, 4-way split on async × generator (see fnArms).
   ...fnArms([opt(...bindingIdentifier)], Block),
   // named vs anonymous kept separate (greedy opt(Ident) would eat a leading
-  // `extends`); decorator dimension collapsed via opt(DecoratorExpr).
-  [opt(DecoratorExpr), 'class', ...bindingIdentifier, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
-  [opt(DecoratorExpr), 'class', many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
+  // `extends`). A ClassExpression takes a DecoratorList, as a ClassDeclaration does: any number
+  // of decorators (`x = @a @b class {}`).
+  [many(DecoratorExpr), 'class', ...bindingIdentifier, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
+  [many(DecoratorExpr), 'class', many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
 ]);
 
 // ── Statements ──
@@ -738,11 +739,16 @@ const Decl = rule($ => [
   ...fnArms(bindingIdentifier, Block),
   classDecl,   // a class with no decorator; with them, the decorator arm below
   exportDeclaration($, Stmt, ['var', 'let', 'const']),
-  // A declaration's decorators, parsed ONCE, then what they decorate: a class takes them as its
-  // own (`@dec class C {}` is one declaration); any other declaration is `$` (`@dec export class
-  // C {}`). The inline alt is ordered, so a class is the first branch and the only one that
-  // parses it.
-  [many1(DecoratorExpr), alt(classDecl, $)],
+  // A declaration's decorators, parsed ONCE, then what they decorate. Under the decorators
+  // proposal a DecoratorList belongs to a class: ClassDeclaration takes it (`@dec class C {}` is
+  // one declaration), and so does an exported class, written before `export` or after it, not
+  // both (`DecoratorList export [lookahead ≠ @] ClassDeclaration`, and the same with `default`).
+  // So after the decorators come a class, or `export` / `export default` and an undecorated
+  // class, read by the export arms (`$`); no other declaration takes decorators (`@dec function
+  // f() {}`, `@dec export var x`, `@dec export { a }`, `@dec export default x`, `@dec export
+  // @dec class C {}` have no parse). The inline alt is ordered, so a class is the first branch
+  // and the only one that parses it.
+  [many1(DecoratorExpr), alt(classDecl, [not(not(['export', opt('default'), 'class'])), $])],
   // A declaration that ends in a block needs nothing after it; every other one ends as a
   // statement does. After `default`, `function` and `class` start a declaration
   // (`export default [lookahead ∉ { function, async function, class }] AssignmentExpression`;
