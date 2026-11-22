@@ -11,8 +11,8 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
-import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, dispatchWalk, gtCompLit, type StepLowering, type DispatchLowering } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, dispatchWalk, gtCompLit, guardedSteps, type StepLowering, type DispatchLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -46,7 +46,12 @@ const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
 // A longest-match candidate's Guard (emit-portable.ts) over the buffered token t, as conditions;
 // keyed: the candidate is reached through its Dispatch key, which already tested the first token.
 const guardCond = (g: Guard, t: string, keyed: boolean, recv = 'self'): string[] =>
-  g === null ? [] : [...(keyed ? [] : [`in_token_set(${g.first.id}, &${t})`]), ...(g.second !== null ? [`${recv}.second_in(${g.second.id})`] : [])];
+  g === null ? [] : [...(keyed || g.first === null ? [] : [`in_token_set(${g.first.id}, &${t})`]), ...(g.second !== null ? [`${recv}.second_in(${g.second.id})`] : []), ...g.lead.map((l) => leadRs(l, t, recv))];
+// A guard's lead test (emit-portable.ts LeadTest) on the buffered token t.
+const leadRs = (l: LeadTest, t: string, recv: string): string => {
+  const inS = l.ctx ? `(in_token_set(${l.set}, &${t}) || (${recv}.ctx != 0 && in_ctx_words(${recv}.ctx, &${t})))` : `in_token_set(${l.set}, &${t})`;
+  return l.is ? inS : `!${inS}`;
+};
 // `if <conds> <body>` as one statement (just the body when there is no condition).
 const ifRs = (conds: string[], body: string) => (conds.length ? `        if ${conds.join(' && ')} ${body}` : `        ${body}`);
 // A candidate list's Dispatch over the buffered token t: arm(i, keyed) is candidate i's statement.
@@ -96,7 +101,7 @@ macro_rules! cand {
 // The typed-AST layer's form of a Guard over the token t: its parser keeps no lookahead mark, so
 // the second token is read directly. null: no guard.
 const astGuardRs = (g: Guard, t: string): string | null =>
-  g === null ? null : [`in_token_set(${g.first.id}, &${t})`, ...(g.second !== null ? [`self.toks.get(self.pos + 1).map_or(false, |t2| in_token_set(${g.second.id}, t2))`] : [])].join(' && ');
+  g === null || g.first === null ? null : [`in_token_set(${g.first.id}, &${t})`, ...(g.second !== null ? [`self.toks.get(self.pos + 1).map_or(false, |t2| in_token_set(${g.second.id}, t2))`] : [])].join(' && ');
 
 // '>'-led composite operators (LexIdPlan.gtComps): the lexer scans every '>' alone. gt_op reads the
 // operator at toks[i]: a lone '>' extends over each adjacent single-character punct token after it
@@ -1101,10 +1106,10 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
         return ifRs(keyed ? [] : [`t.lid == ${lidOf(ids, b.first)}`], seqArm(i, b.steps, r.nudBracketClosesTail[a.index]!, false));
       }
       case 'seq':
-        return ifRs(guardCond(r.nudSeqGuard[a.index]!, 't', keyed), seqArm(i, r.nudSeqs[a.index]!, r.nudSeqClosesTail[a.index]!, false));
+        return ifRs(guardCond(r.nudSeqGuard[a.index]!, 't', keyed), seqArm(i, guardedSteps(r.nudSeqGuard[a.index]!, r.nudSeqs[a.index]!), r.nudSeqClosesTail[a.index]!, false));
       case 'capped': {
         const c = r.nudCapped[a.index]!;
-        return ifRs([`min_bp < ${c.capBp}`, ...guardCond(r.nudCappedGuard[a.index]!, 't', keyed)], seqArm(i, c.steps, false, true));
+        return ifRs([`min_bp < ${c.capBp}`, ...guardCond(r.nudCappedGuard[a.index]!, 't', keyed)], seqArm(i, guardedSteps(r.nudCappedGuard[a.index]!, c.steps), false, true));
       }
       case 'prefix':
         // An operand that parses but is not the target the operator requires fails the whole

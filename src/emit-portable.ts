@@ -273,7 +273,18 @@ export function sameAsEarlierOutside(e: RuleExpr, earlier: readonly RuleExpr[], 
 // earlier candidate's steps again, end where that one ends and lose the tie, so it is refused
 // there. A token so refused is one the earlier candidate's guard admits: the union of a list's
 // `first` sets is still every token a match of the list can begin with.
-export type Guard = { first: GuardSet; second: GuardSet | null } | null;
+// `lead`: the candidate's own leading one-token tests, taken over by the guard (see leadOf): its
+// first `skip` steps are `ahead` / `aheadCtx` tests of the token at the candidate's start, and the
+// guard runs them on the token a target has already buffered, before the candidate's frame, so a
+// refusal costs no frame and the candidate's statement runs only its steps after them
+// (`steps.slice(skip)`). Adjacent negative tests are one test of the union of their sets. A guard
+// with lead tests and no FIRST set has `first` null: it refuses only by its lead tests.
+export type Guard = { first: GuardSet | null; second: GuardSet | null; lead: LeadTest[]; skip: number } | null;
+/** One test of the buffered token: whether it is in ParserIR.tokenSets[set] — or, with `ctx`, a
+ *  word the context in force reserves (ParserIR.ctxWords) — compared with `is`. */
+export type LeadTest = { set: number; is: boolean; ctx: boolean };
+/** The steps a candidate runs inside its frame: those after the tests its guard took over. */
+export const guardedSteps = (g: Guard, steps: Step[]): Step[] => (g === null || g.skip === 0 ? steps : steps.slice(g.skip));
 /** A member of ParserIR.tokenSets, by its index and its members. */
 export type GuardSet = TokenSet & { id: number };
 // One NUD arm of a Pratt rule, by the bucket that holds its plan and its index there.
@@ -638,7 +649,34 @@ function buildIR(grammar: CstGrammar): ParserIR {
     const oneToken = [...f].every((k) => !templateTokens.has(k));
     const sec = oneToken && !a.exprNullable(e) ? a.exprSecond(e) : null;
     const second = sec !== null && sec.s !== null && !sec.len1 && sec.s.size > 0 ? guardSet(keySet(sec.s)) : null;
-    return { first: guardSet(keySet(f)), second };
+    return { first: guardSet(keySet(f)), second, lead: [], skip: 0 };
+  };
+  // The guard of a candidate whose steps are `steps`, with the candidate's leading one-token tests
+  // taken over (Guard.lead). Moving a test out of the candidate's frame onto the buffered token
+  // changes nothing the candidate decides, because each such test (1) is zero-width and builds
+  // nothing, (2) stands before every step that consumes, fails or changes the parser's state (the
+  // context, the suppress set: a `ctx` / `suppress` step is not a lead test, and none is looked
+  // through), so it reads the token at the candidate's start in the state the frame starts in,
+  // and (3) reads only that token — its kind and literal, and for `aheadCtx` the context in force —
+  // the token every target has already buffered there (a peek that reads no further than it, so
+  // no lookahead extent grows). A refused candidate cannot match, so it was never tried anywhere a
+  // refusal now skips. A shared step (ParserIR.shared) is a call, not a lead test.
+  const leadOf = (g: Guard, steps: readonly Step[]): Guard => {
+    let skip = 0;
+    const lead: LeadTest[] = [];
+    for (const s of steps) {
+      if ((s.t !== 'ahead' && s.t !== 'aheadCtx') || ('share' in s && s.share !== undefined)) break;
+      const t: LeadTest = { set: s.set, is: s.is, ctx: s.t === 'aheadCtx' };
+      const prev = lead[lead.length - 1];
+      if (prev !== undefined && !prev.is && !t.is) {
+        // not in A, and not in B (or a context word): not in A ∪ B (or a context word)
+        const x = tokenSets[prev.set]!, y = tokenSets[t.set]!;
+        lead[lead.length - 1] = { set: tokenSetOf({ lits: [...x.lits, ...y.lits], toks: [...x.toks, ...y.toks] }), is: false, ctx: prev.ctx || t.ctx };
+      } else lead.push(t);
+      skip++;
+    }
+    if (skip === 0) return g;
+    return g === null ? { first: null, second: null, lead, skip } : { ...g, lead, skip };
   };
 
   const rules: RuleIR[] = grammar.rules.map((r) => {
@@ -646,10 +684,18 @@ function buildIR(grammar: CstGrammar): ParserIR {
     // atom-then-continuation: buildPratt detects `startsSelf` and splits accordingly, so routing
     // left-recursive rules through it avoids the infinite left-recursion a plain rd rule would hit.
     names = nameRule(r);
-    if (a.prattRules.has(r.name) || a.leftRecSet.has(r.name)) return buildPratt(r.name, r.body, a, names, stepOf, named, notOf, reservableOf, suppressOf, ctxOf, litTtype, altGuard, templateTokens);
+    if (a.prattRules.has(r.name) || a.leftRecSet.has(r.name)) {
+      const p = buildPratt(r.name, r.body, a, names, stepOf, named, notOf, reservableOf, suppressOf, ctxOf, litTtype, altGuard, templateTokens);
+      p.nudSeqGuard = p.nudSeqGuard.map((g, i) => leadOf(g, p.nudSeqs[i]!));
+      p.nudCappedGuard = p.nudCappedGuard.map((g, i) => leadOf(g, p.nudCapped[i]!.steps));
+      return p;
+    }
     const items = r.body.type === 'alt' ? r.body.items : [r.body];
     const altNames = items.map((e) => names!.armOf.get(e)!.name);
-    return { kind: 'rd', name: r.name, alts: items.map(altSteps), altNames, altFirst: [], predictive: false, altGuard: items.map((e, i) => altGuard(e, items.slice(0, i))), altDispatch: { sections: [], ranked: [] } };
+    const alts = items.map(altSteps);
+    // A single alternative is no candidate (ruleShell SINGLE): it has no guard to take tests over.
+    const altGuards = items.map((e, i) => altGuard(e, items.slice(0, i)));
+    return { kind: 'rd', name: r.name, alts, altNames, altFirst: [], predictive: false, altGuard: items.length > 1 ? altGuards.map((g, i) => leadOf(g, alts[i]!)) : altGuards, altDispatch: { sections: [], ranked: [] } };
   });
   // Longest match never picks an alternative that advances nothing, and only the entry rule
   // may match the empty input: an entry that must CHOOSE its empty alternative has no rendering.
@@ -979,7 +1025,7 @@ export function ruleShell(r: RdRule, ids: LexIdPlan, L: RuleLowering): string {
     return L.fn([L.open, L.peekOrFail, r.alts.map(arm).join(L.armJoin), L.fail]);
   }
   if (r.alts.length === 1) return L.fn([L.open, `${L.ind}${L.ifThen(cond(r.alts[0]!), L.accept(0))}`, L.fail]);
-  const arm = (i: number, keyed: boolean) => L.guard(r.altGuard[i]!, keyed, L.cand(r.altDispatch, i, cond(r.alts[i]!)));
+  const arm = (i: number, keyed: boolean) => L.guard(r.altGuard[i]!, keyed, L.cand(r.altDispatch, i, cond(guardedSteps(r.altGuard[i]!, r.alts[i]!))));
   const needPeek = r.altGuard.some((g) => g !== null);
   return L.fn([L.openBest(r.altDispatch), ...(needPeek ? [L.peekOpt] : []), dispatchWalk(r.altDispatch, ids, arm, L.dispatch, true), L.closeBest]);
 }
