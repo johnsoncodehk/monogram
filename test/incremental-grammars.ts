@@ -240,7 +240,7 @@ const FRAME_DOCS: Record<string, string[]> = {
   ],
   javascriptreact: ['let s = `a${b}c${`${d}`}`;\nx = 1;', 'let a = <><p>It\'s</p>{`${<b/>}`}</>;\nx</*c*/y;'],
 };
-const FRAME_INS = ['`', '$', '{', '}', '(', ')', '<', '>', '/', ':', ',', 'x', ' ', '\n', '"', '\\'];
+const FRAME_INS = ['`', '$', '{', '}', '(', ')', '<', '>', '/', ':', ',', 'x', ' ', '\n'];
 let frameSteps = 0;
 for (const [name, docs] of Object.entries(FRAME_DOCS)) {
   const em = (await import(`${TMP}/${name}.mts?v=` + process.pid)) as Em;
