@@ -550,7 +550,7 @@ export const readEndName = (tok: string): string => `lexReadEnd${ident(tok)}`;
  *  `arms`: each dispatch arm (its ASCII first units; `null` for a non-ASCII first unit) in which
  *  a candidate whose failed attempt can read past the decided token's end + 1 is tried before
  *  another candidate: its candidates in order up to the last such one (`tok` null for
- *  punctuation), that one with the name of its read-end routine `(s, p) -> int` (the exclusive
+ *  punctuation), that one with the name of its read-end routine, of the source and a position, (the exclusive
  *  end of what its failed attempt at p read). `over`: the tokens whose match can read past their
  *  end + 1. `reach`: every unit any of those reads can go past. */
 export type LookPlan = {

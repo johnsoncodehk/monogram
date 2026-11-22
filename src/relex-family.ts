@@ -361,7 +361,7 @@ const readsBeforeFn = (m: RelexMode): Fn => {
 
 const overEndFn = (m: RelexMode): Fn => ({
   name: 'relexOverEnd',
-  doc: 'Where the match of the token of kind kid that ends at e read to (exclusive), when it can be past e + 1: through the units\nits pattern can go past, from a unit its match can read further at; 0 otherwise.',
+  doc: 'Where the match of the token of kind kid that ends at e read to (exclusive), when it can be past e + 1: through the units\nits pattern can pass, from a unit its match can read further at; 0 otherwise.',
   params: [{ name: 'text', ty: 'str' }, { name: 'e', ty: 'int' }, { name: 'kid', ty: 'int' }],
   ret: ['int'],
   body: [
@@ -377,7 +377,7 @@ const overEndFn = (m: RelexMode): Fn => ({
 
 const inReachFn = (m: RelexMode): Fn => ({
   name: 'relexInReach',
-  doc: 'Whether a read past a token\'s end + 1 can go past code unit c.',
+  doc: 'Whether a read past a token\'s end + 1 can pass code unit c.',
   params: [{ name: 'c', ty: 'int' }],
   ret: ['bool'],
   body: [ret(inUnits('c', m.look.reach))],
