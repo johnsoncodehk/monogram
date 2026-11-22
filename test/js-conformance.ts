@@ -301,5 +301,23 @@ console.log('\n── class element words ──');
 console.log(`  ${classElements.accept.length + classElements.reject.length - c_fail.length}/${classElements.accept.length + classElements.reject.length} as the productions (${classElements.tscDeparts.length} where tsc departs)`);
 for (const c of c_fail) console.log('    - ' + c);
 // Corpora 1, 2, the statement ends, the for heads and the class element words are hard gates.
-const gateFailed = v_fail.length + r_leak.length + s_fail.length + f_fail.length + c_fail.length > 0;
+// ── Expected-fail: inputs the productions reject that the grammar accepts today, each with its
+// cause. The gate fails when one of them is rejected (remove it then) or tsc stops rejecting it.
+const expectedFail: { code: string; reason: string }[] = [
+  // DoubleStringCharacter / SingleStringCharacter exclude LF and CR (LS / PS are allowed since
+  // ES2019); tsc's parser reports "Unterminated string literal". `String_` admits them because
+  // the JSX grammars reuse `String_` for attribute values, and a JSX attribute string MAY span
+  // lines (JSXDoubleStringCharacters). Owed: a string token of the JSX tag region, then `String_`
+  // excludes LF / CR.
+  ...['"a\nb"', '"a\rb"', "'a\nb'", "'a\r\nb'"].map((q) => ({ code: `x = ${q};`, reason: 'a raw LF / CR inside a string literal (String_ is shared with JSX attribute values)' })),
+];
+const x_fail: string[] = [];
+for (const { code, reason } of expectedFail) {
+  if (jsAccepts(code)) x_fail.push(`tsc JS-mode accepts ${JSON.stringify(code)}: not a rejection, fix the case`);
+  if (!weAccept(code)) x_fail.push(`we reject ${JSON.stringify(code)} now: remove the expected-fail (${reason})`);
+}
+console.log('\n── expected-fail ──');
+console.log(`  ${expectedFail.length} accepted although the productions reject them (${new Set(expectedFail.map((e) => e.reason)).size} cause(s))${x_fail.length ? '' : ', as recorded'}`);
+for (const c of x_fail) console.log('    - ' + c);
+const gateFailed = v_fail.length + r_leak.length + s_fail.length + f_fail.length + c_fail.length + x_fail.length > 0;
 if (gateFailed) process.exit(1);

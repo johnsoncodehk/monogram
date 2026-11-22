@@ -2981,20 +2981,15 @@ function lexFind(s: string, i: number, lit: string): number {
   const k = s.indexOf(lit, i);
   return k < 0 ? s.length : k;
 }`,
-  // The engine's own scan of the run of units before a stop (a sticky regular expression's
-  // test() moves lastIndex to the run's end, reads one unit past it and allocates no match
-  // object): no per-unit JavaScript.
-  findAnyFn: (stops) => {
-    const u = (c: number) => `\\u${c.toString(16).padStart(4, '0')}`;
-    const re = `${findAnyName(stops)}_RUN`;
-    return `// Where the next of ${stops.map((c) => `U+${c.toString(16).toUpperCase().padStart(4, '0')}`).join(', ')} is in s from i, or s.length.
-const ${re} = /[^${stops.map(u).join('')}]*/y;
+  // One code unit per round, compared with each stop: no allocation, no regular expression.
+  findAnyFn: (stops) => `// Where the next of ${stops.map((c) => `U+${c.toString(16).toUpperCase().padStart(4, '0')}`).join(', ')} is in s from i, or s.length.
 function ${findAnyName(stops)}(s: string, i: number): number {
-  ${re}.lastIndex = i;
-  ${re}.test(s);
-  return ${re}.lastIndex;
-}`;
-  },
+  for (; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (${stops.map((c) => `c === ${c}`).join(' || ')}) return i;
+  }
+  return s.length;
+}`,
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${tsWrap(r, ATOM)}`, prec: 90 }),
