@@ -178,6 +178,11 @@ export interface ElementRegion {
   // run goes on over it), in code it is lexed by the ordinary scan. ABSENT → every `tagOpen`
   // opens a tag. (`MarkupConfig.tagOpenAfter` is the same fact for a markup file.)
   tagStart?: TokenPattern;
+  // TEXT TOKENS: token TYPES tried, in order, in the children before the text run (needs `text`),
+  // e.g. comments in text. A text run stops where one of them matches: at the run's first unit
+  // always; further in the run only right after a unit of its `after` class, when it has one
+  // (`a//b` is text, `a //b` a comment). They keep their ordinary meaning in code.
+  textTokens?: { token: string; after?: TokenPattern }[];
   // A `tagOpen` at an operand position that begins a TYPE-PARAMETER list, not an element:
   //   head      — the characters right after `tagOpen` (e.g. `T,` / `T extends U`): never an element;
   //   signature — a head `tagOpen Name tagClose` followed by the bracket group `open … close`

@@ -863,7 +863,16 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   emit(`    if (t === ${tRParen} && lastCloseWasParenHead) return false;`);
   emit(`    return LX_DIVK[k] !== 0 || LX_DIVT[t] !== 0;`);
   emit(`  }`);
-  if (el) emitElementHelpers(emit, el, enterAlways, { kOf, puT, startsWithExpr, J, headOverEnd });
+  // the children's text tokens (ElementRegion.textTokens): each is an ordinary scan matcher, tried
+  // first in the children; `after` bounds where it may stop a run
+  const textTokens: TextTokenPlan[] = (el?.textTokens ?? []).map(({ token, after }) => {
+    if (el!.text === undefined) throw new Error('elements.textTokens: needs a text token (elements.text)');
+    const m = matchers.find(x => x.name === token);
+    if (!m) throw new Error(`elements.textTokens: no scanned token named '${token}'`);
+    if (after !== undefined && !oneChar(after)) throw new Error(`elements.textTokens: '${token}'.after must be a one-unit class`);
+    return { re: m.re, k: m.k, skip: m.skip, readEnd: m.readEnd, overEnd: m.overEnd, pattern: m.tokenPattern, first: patternInfo(m.tokenPattern).first, after: after === undefined ? null : patternInfo(after).first };
+  });
+  if (el) emitElementHelpers(emit, el, enterAlways, { kOf, puT, startsWithExpr, J, headOverEnd, textTokens });
   if (markup) {
     // Tag-mode tracking after a token the scan emitted: the closing `tagClose` enters raw text
     // (a raw-text element) or text; the tag name decides raw-text entry and void retagging.
@@ -913,7 +922,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`    if (pos >= n) break;`);
   }
   emit(`    const cc = source.charCodeAt(pos);`);
-  if (el) emitElementFrame(emit, el, { kOf, puT, tOf, startsWithExpr, punctIs });
+  if (el) emitElementFrame(emit, el, { kOf, puT, tOf, startsWithExpr, punctIs, textTokens });
   if (markup) {
     emit(`    // ── markup TEXT mode: a comment, a tag open, or the text run up to the next real tag open ──`);
     emit(`    if (mode === 0) {`);
@@ -1777,11 +1786,15 @@ function startsWithExpr(src: string, posVar: string, lit: string, cc0Var?: strin
   return parts.join(' && ');
 }
 
+type TextTokenPlan = { re: string; k: number; skip: boolean; readEnd: string | null; overEnd: string | null; pattern: TokenPattern; first: CSet; after: CSet | null };
 type ElementCtx = {
   kOf: (name: string) => number; puT: (text: string) => number; tOf?: (text: string) => number;
   startsWithExpr: typeof startsWithExpr; J?: (v: unknown) => string; punctIs?: (i: string, lits: string[]) => string;
-  headOverEnd?: string | null;
+  headOverEnd?: string | null; textTokens: TextTokenPlan[];
 };
+// A failed attempt of a text token at `at`: its read, past the end + 1 of the token it decides,
+// is recorded (the relex anchor rule; the read bound is the scan matcher's own).
+const ttFailRecord = (t: TextTokenPlan, at: string) => (t.readEnd ? ` { const r = ${t.readEnd}(source, ${at}); if (r > lxLookEnd) lxLookEnd = r; }` : '');
 
 // Element-region helpers inside lexCore: whether a tagOpen at an operand position opens an
 // element (the type-parameter vetoes), the rewind of an undecided signature, and a tag's end.
@@ -1821,6 +1834,18 @@ function emitElementHelpers(emit: (s?: string) => void, el: ElementRegion, enter
     emit(`    pos = tkEnd[s + 2] - srcBase«!»;`);
     emit(`    pendingNl = false; extraFl = 0; tagAngle = 0;`);
     if (el.rawText?.length) emit(`    lxTagAt[templateStack.length - 1] = s; lxRawText(templateStack.length - 1);`);
+    emit(`  }`);
+  }
+  if (c.textTokens.length) {
+    // Inside a text run (q past its first unit): whether a text token starts at q, so the run
+    // stops before it. Its match is taken at the next run's start, which records its over-read.
+    emit(`  function lxTextTokenAt(q«: number») {`);
+    emit(`    const c = source.charCodeAt(q);`);
+    for (const t of c.textTokens) {
+      const cond = [unitIn('c', t.first), ...(t.after ? [`((b) => ${unitIn('b', t.after)})(source.charCodeAt(q - 1))`] : [])].join(' && ');
+      emit(`    if (${cond}) { ${t.re}.lastIndex = q; if (${t.re}.test(source)) return true;${ttFailRecord(t, 'q')} }`);
+    }
+    emit(`    return false;`);
     emit(`  }`);
   }
   // A tag ended (its tagClose or self-close token was just pushed): an open tag adds an open
@@ -1893,7 +1918,26 @@ function emitElementFrame(emit: (s?: string) => void, el: ElementRegion, c: Elem
   emit(`          pos += ${LH};`);
   emit(`          continue;`);
   emit(`        }`);
-  if (el.text !== undefined && el.tagStart === undefined) {
+  for (const t of c.textTokens) {
+    // a text token at the run's start (after a tag, a hole, another text token or a text run
+    // that stopped before it)
+    emit(`        if (${unitIn('cc', t.first)}) {`);
+    emit(`          ${t.re}.lastIndex = pos;`);
+    emit(`          const xm = ${t.re}.exec(source);`);
+    emit(`          if (xm !== null && xm[0].length > 0) {`);
+    if (t.overEnd) emit(`            { const e = pos + xm[0].length; if (e < n) { const c = source.charCodeAt(e); if (${unitIn('c', overTrigger(t.pattern))}) { const r = ${t.overEnd}(source, e); if (r > lxLookEnd) lxLookEnd = r; } } }`);
+    if (t.skip) {
+      emit(`            if (/[\\n\\r\\u2028\\u2029]/.test(xm[0])) pendingNl = true;`);
+      emit(`            pos += xm[0].length;`);
+    } else {
+      emit(`            tkPush(${t.k}, 0, pos, pos + xm[0].length);`);
+      emit(`            pos += xm[0].length;`);
+    }
+    emit(`            continue;`);
+    emit(`          }${ttFailRecord(t, 'pos')}`);
+    emit(`        }`);
+  }
+  if (el.text !== undefined && el.tagStart === undefined && !c.textTokens.length) {
     emit(`        LX_EL_TEXT.lastIndex = pos;`);
     emit(`        const tm = LX_EL_TEXT.exec(source);`);
     emit(`        if (tm !== null && tm[0].length > 0) {`);
@@ -1903,13 +1947,20 @@ function emitElementFrame(emit: (s?: string) => void, el: ElementRegion, c: Elem
     emit(`          continue;`);
     emit(`        }`);
   } else if (el.text !== undefined) {
-    // the text run: runs of the text token's class, and every tagOpen that opens no tag
+    // the text run: runs of the text token's class, joined by every tagOpen that opens no tag
+    // (\`tagStart\`), up to the first text token after its first unit
     emit(`        let _e = pos;`);
     emit(`        for (;;) {`);
     emit(`          LX_EL_TEXT.lastIndex = _e;`);
     emit(`          const tm = LX_EL_TEXT.exec(source);`);
-    emit(`          if (tm !== null) _e += tm[0].length;`);
-    emit(`          if (${sw(el.tagOpen, '_e')} && !lxTagStart(source, _e + ${L})) { _e += ${L}; continue; }`);
+    if (c.textTokens.length) {
+      emit(`          const _r = tm !== null ? _e + tm[0].length : _e;`);
+      emit(`          let q = _e > pos ? _e : pos + 1;`);
+      emit(`          while (q < _r && !lxTextTokenAt(q)) q++;`);
+      emit(`          if (q < _r) { _e = q; break; }`);
+      emit(`          _e = _r;`);
+    } else emit(`          if (tm !== null) _e += tm[0].length;`);
+    if (el.tagStart !== undefined) emit(`          if (${sw(el.tagOpen, '_e')} && !lxTagStart(source, _e + ${L})${c.textTokens.length ? ` && !(_e > pos && lxTextTokenAt(_e))` : ''}) { _e += ${L}; continue; }`);
     emit(`          break;`);
     emit(`        }`);
     emit(`        if (_e > pos) {`);

@@ -56,6 +56,23 @@ parse('raw and hole `<style>`, `<script>`, `<style/>`', C('<style>.a{}</style>; 
 reject('a hole `<style>` whose hole is not an expression', C('<style>{.a}</style>'));
 reject('a raw `<style>` with no close tag', C('<style>.a{}'));
 
+// ── comments in text (`textTokens`): `/*` anywhere, `//` at a run's start or after a blank ──
+section = 'comments';
+tokens('`/* */` inside a word ends the run: text, comment, text', C('<p>a/* c */b</p>'), ['Text"a"', 'Text"b"']);
+tokens('`//` after a blank is a comment to the end of the line', C('<p>hi // note\n x</p>'), ['Text"hi "', 'Text"\\n x"', 'CloseTag"</"']);
+tokens('`//` touching text is text (`a//b`, a URL)', C('<p>a//b https://x.dev</p>'), ['Text"a//b https://x.dev"']);
+tokens('`//` at the run\'s start, right after a tag, is a comment', C('<p><b>z</b>// n\n</p>'), ['\'">"', 'Text"\\n"', 'CloseTag"</"', 'Ident"p"']);
+tokens('`//` at the run\'s start, right after a hole, is a comment', C('<p>{a}// n\n</p>'), ['\'"}"', 'Text"\\n"']);
+tokens('a line comment swallows a close tag on its line', C('<p>a // </p>\n</p>'), ['Text"a "', 'Text"\\n"', 'CloseTag"</"']);
+tokens('an unterminated `/*` is text', C('<p>q /*</p>'), ['Text"q /*"', 'CloseTag"</"']);
+tokens('a comment that is the whole children leaves no text', C('<p>/* only */</p>'), ['\'">"', 'CloseTag"</"']);
+// after a text token a new run starts, so a `//` right after `*/` is at a run's start (the
+// evaluated dialect keeps `/* a */// b` as text: its block comment does not end the run)
+tokens('`//` right after a block comment starts a new run: a comment', C('<p>/* a */// b\n</p>'), ['\'">"', 'Text"\\n"']);
+tokens('code comments are unchanged', C('const b = 1; // c\n/* d */ return b;'), ['\'";"', 'Ident"return"']);
+parse('text with comments parses', C('<p>hi // note\n a/* c */b <b>z</b>// n\n a//b</p>;'));
+reject('a comment does not end an element: its close tag is commented out', C('<p>a // </p>'));
+
 // ── entry: where code enters an element (derived: `operand`, `<` is also relational) ──
 section = 'entry';
 parse('an element after `return`, `=`, `;` and `{`', C('<a/>; const b = <i/>; return <p/>;'));
