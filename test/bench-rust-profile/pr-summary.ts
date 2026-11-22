@@ -26,9 +26,22 @@ const faults: Record<string, Record<string, string>> = {};
 const acc: Record<string, string> = {};
 const crashes: string[] = [];
 const files: string[] = [];
+// The other targets (run.sh, "Go and TS targets"): `GOIR <v>.<fresh|reuse>.<file> <Ir> <verdict>`,
+// `TSBLK <v>.<ts-parse|js-fresh>.<file> <verdict> blocks=<n> functions=<k>`; v = A, M or M2 (M again).
+const work: Record<string, number> = {};
+const workVerdict: Record<string, string> = {};
 for (const line of readFileSync(resultsFile, 'utf8').split('\n')) {
   const p = line.trim().split(/\s+/);
   if (p[0] === 'IR') { if (p[2] === 'FAILED' || !/^\d+$/.test(p[2] ?? '')) irFailed.push(p[1]); else ir[p[1]] = +p[2]; continue; }
+  if (p[0] === 'GOIR' || p[0] === 'TSBLK') {
+    const [v, mode, ...rest] = p[1].split('.');
+    const key = `${v}.${p[0] === 'GOIR' ? 'go-' + mode : mode}.${rest.join('.')}`;
+    const n = p[0] === 'GOIR' ? p[2] : kv(line).blocks;
+    const verdict = p[0] === 'GOIR' ? p[3] : p[2];
+    if (/^\d+$/.test(n ?? '') && (verdict === 'ACCEPT' || verdict === 'REJECT')) { work[key] = +n!; workVerdict[key] = verdict; }
+    else irFailed.push(`${p[0]} ${p[1]}`);
+    continue;
+  }
   if (p[0] !== 'A' && p[0] !== 'M') continue;
   const v = p[0];
   if (p[1] === 'COUNT') count[`${v}.${p[2]}`] = kv(line);
@@ -94,6 +107,47 @@ for (const f of files) {
   workDiff.push([f, diffs.length ? diffs.join('; ') : 'identical']);
 }
 const workChanged = workDiff.some((r) => r[1] !== 'identical');
+
+// ---- every target side by side: Rust and Go instructions, TS-target and JS-target block executions
+// A column "moves" when |Δ| > 0.1%; it "stays" when |Δ| <= 0.01% (the determinism bound below). An
+// input on which one target moves and another stays is listed as single-target (reported, not failing).
+const MOVE = 0.1, STILL = 0.01;
+const cols: { target: string; head: string; get: (v: string, f: string) => number | undefined; key?: string }[] = [
+  { target: 'Rust', head: 'Rust Ir fresh', get: (v, f) => ir[`${v}.parse.${f}`] },
+  { target: 'Rust', head: 'Rust Ir reuse', get: (v, f) => ir[`${v}.parse-reuse.${f}`] },
+  ...([['Go', 'Go Ir fresh', 'go-fresh'], ['Go', 'Go Ir reuse', 'go-reuse'], ['TS', 'TS blocks', 'ts-parse'], ['JS', 'JS blocks', 'js-fresh']] as const)
+    .map(([target, head, key]) => ({ target, head, key, get: (v: string, f: string) => work[`${v}.${key}.${f}`] })),
+];
+const repeated = Object.keys(work).some((k) => k.startsWith('M2.'));
+// The inputs the other targets were measured on (run.sh: its main inputs); each needs every cell.
+const tfiles = files.filter((f) => Object.keys(work).some((k) => k.endsWith('.' + f)));
+if (tfiles.length === 0) notRun.push('the Go, TS and JS targets were measured on no input');
+let repeatMax = 0;
+for (const f of tfiles) for (const c of cols.slice(2)) {
+  for (const v of ['A', 'M']) need(`${v} ${c.head} ${f}`, c.get(v, f));
+  if (repeated) {
+    const m = c.get('M', f), m2 = c.get('M2', f);
+    need(`M2 ${c.head} ${f}`, m2);
+    const d = Math.abs(pct(m!, m2!));
+    if (Number.isFinite(d)) repeatMax = Math.max(repeatMax, d);
+    if (d > STILL) notRun.push(`${c.head} ${f}: M measured twice differs by ${fpct(d)} (${num(m)} / ${num(m2)}): the measure is not deterministic`);
+  }
+}
+const singleTarget: string[] = [];
+const sideRows: string[][] = [];
+for (const f of tfiles) {
+  const moved = new Map<string, string[]>(), still = new Set(cols.map((c) => c.target));
+  const cells = [f];
+  for (const c of cols) {
+    const d = pct(c.get('A', f)!, c.get('M', f)!);
+    cells.push(Number.isFinite(d) && d !== 0 ? (d > 0 ? '+' : '') + d.toFixed(3) + '%' : fpct(d));
+    if (!Number.isFinite(d)) { still.delete(c.target); continue; }
+    if (Math.abs(d) > STILL) still.delete(c.target);
+    if (Math.abs(d) > MOVE) moved.set(c.target, [...(moved.get(c.target) ?? []), `${c.head} ${fpct(d)}`]);
+  }
+  sideRows.push(cells);
+  if (moved.size && still.size) singleTarget.push(`${f}: ${[...moved.values()].flat().join(', ')}; unchanged: ${[...still].join(', ')}`);
+}
 const grammarChanged = process.env.GRAMMAR_CHANGED === '1';
 
 // ---- the report
@@ -101,8 +155,10 @@ const A = process.env.PROFILE_A_LABEL ?? 'A', M = process.env.PROFILE_M_LABEL ??
 say('## Rust parser profile: A = ' + A + ', M = ' + M);
 say();
 say('Deterministic measurements of the emitted Rust parser (typescript grammar): Callgrind instructions, work counters, allocator calls, page faults; and emitted sizes. ' +
-  'Instructions decide logic changes; allocator calls and page faults decide memory changes; no wall-clock time is measured here (on demand: the `measure-bench` workflow).');
+  'Instructions decide logic changes; allocator calls and page faults decide memory changes; no wall-clock time is measured here (on demand: the `measure-bench` workflow). ' +
+  'The Go target, the TS target and the emitted JS parser are measured on the same inputs beside it (section "Every target").');
 say();
+if (process.env.RUNNER_CPU) { say('Runner: ' + process.env.RUNNER_CPU); say(); }
 if (notRun.length) {
   say('### NOT RUN: the harness did not produce every measurement (this job fails)');
   for (const x of notRun) say('- ' + x);
@@ -113,6 +169,25 @@ if (regress.length) {
   say(`Thresholds: instructions +${IR_LIMIT}%, any rise in reuse-mode allocator calls per parse, emitted size +${SIZE_LIMIT}%.`);
   for (const x of regress) say('- **' + x + '**');
 } else say('### Regressions: none (instructions within +0.5%, reuse-mode allocator calls not up, emitted sizes within +1%)');
+say();
+say('### Every target, A → M');
+if (singleTarget.length) {
+  say(`**Single-target changes (reported, not failing): ${singleTarget.length}.** One target moves by more than ${MOVE}% while another stays within ${STILL}%: an improvement the other targets did not get, or a change that touched one printer only.`);
+  for (const x of singleTarget) say('- ' + x);
+} else say(`Single-target changes: none (no input where one target moves by more than ${MOVE}% while another stays within ${STILL}%).`);
+say();
+table(['input', ...cols.map((c) => c.head + ' Δ')], sideRows);
+say();
+say('Rust / Go: Callgrind instructions of one parse (Go: `ParseWith` into a new `CstBuilder` as the first parse of the process, or into the builder of a first parse; built with `-tags faketime`, run with `GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1`, the Go runtime\'s own work inside the parse included). ' +
+  'TS / JS: V8 block executions of one `parse(src)` of the TS target and one `createParser().parse(src)` of the emitted JS parser (precise block coverage with counts): they see control flow, not the cost inside a block. ' +
+  (repeated ? `M was measured twice for Go, TS and JS: the largest difference was ${fpct(repeatMax)}.` : 'M was measured once (PROFILE_TARGETS_REPEAT=0).'));
+say();
+say('<details><summary>Go, TS and JS counts A / M</summary>');
+say();
+table(['input', ...cols.slice(2).map((c) => c.head + ' A / M')], tfiles.map((f) => [f, ...cols.slice(2).map((c) =>
+  num(c.get('A', f)) + ' / ' + num(c.get('M', f)) + (workVerdict[`M.${c.key}.${f}`] === 'REJECT' ? ' (M rejects)' : ''))]));
+say();
+say('</details>');
 say();
 say('### Work counters');
 if (!workChanged) say('Identical on every input.');
