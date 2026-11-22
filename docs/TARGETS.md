@@ -39,7 +39,11 @@ and markup modes) carry the interpreter's lexer inlined into the module.
 The portable targets (`tsTarget` / `goTarget` / `rustTarget`) implement the token-stream and
 newline modes. They refuse indent and markup grammars (`buildIR` in
 [`src/emit-portable.ts`](../src/emit-portable.ts)) rather than emit a lexer that would
-mis-tokenize them. So YAML and HTML have the interpreter and `jsTarget` only.
+mis-tokenize them. So YAML and HTML have the interpreter and `jsTarget` only. They also refuse a
+grammar that declares element regions (`elements`: TSX and JSX) until the portable lexers carry
+the region frame stack (roadmap item 2's portable part); before regions existed they emitted a
+token-stream TSX / JSX parser that rejected text children with punctuation and lexed `</` and
+`/>` as tokens everywhere.
 
 What `jsTarget` has and the portable targets do not yet, the precondition for retiring it, is
 listed in [ROADMAP.md](ROADMAP.md#1-one-portable-engine-one-shared-runtime-description).

@@ -100,7 +100,7 @@ for (const c of par_fail) console.log('    DIVERGED from base (withJsx changed t
 // differs from tsc's parser-driven scanner (ElementRegion in src/types.ts). A row that starts
 // parsing fails the gate until it moves to corpus 1.
 const unsupported: [string, string][] = [
-  ['backslash at the end of a JSX attribute string', `let a = <a b="\\" c="d" />;`],
+  ['needs a tag-only attribute-string token in the region: backslash at the end of a JSX attribute string', `let a = <a b="\\" c="d" />;`],
 ];
 // Invalid JSX the element region must reject.
 const invalidJsx: string[] = [`const a = <p>a > b</p>;`, `const b = <p>a } b</p>;`, `const c = <a>x;`, `x = a </ b;`];

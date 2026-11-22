@@ -178,7 +178,7 @@ module.exports = grammar({
 
     jsxcontainer: $ => seq("{", optional("..."), optional($.expr), "}"),
 
-    jsxchild: $ => choice($.jsxelement, $.jsxcontainer, $.ident, $.number, $.string, choice(",", ".", ":", ";", "!", "?")),
+    jsxchild: $ => choice($.jsxelement, $.jsxcontainer, $.jsxtext),
 
     jsxelement: $ => choice(seq("<", $.jsxtag_name, repeat($.jsxattr), $.jsxself_close), seq("<", $.jsxtag_name, repeat($.jsxattr), ">", repeat($.jsxchild), $.jsxclose, optional($.jsxtag_name), ">"), seq("<", ">", repeat($.jsxchild), $.jsxclose, ">")),
 
@@ -209,6 +209,8 @@ module.exports = grammar({
     jsxself_close: $ => token(/\/>/),
 
     jsxclose: $ => token(/<\//),
+
+    jsxtext: $ => token(/[^{<>}]+/),
 
     decorator: $ => token(/@(?:(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[a-zA-Z0-9_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\}|\.)*)?/),
 

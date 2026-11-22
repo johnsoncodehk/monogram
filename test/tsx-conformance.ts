@@ -115,13 +115,16 @@ const tsStillWorks: [string, string][] = [
 // differently from tsc, whose scanner is driven by the parser (ElementRegion in src/types.ts) ──
 const unsupported: [string, string][] = [
   // a `<Name>` head whose `( … )` is followed by `:` reads as a type-parameter signature
-  ['text of an attribute-less element: a group then `:`', `const a = <li>(1): one</li>;`],
+  ['needs parser context: text of an attribute-less element: a group then `:`', `const a = <li>(1): one</li>;`],
   // a call signature without a return type: the `;` after the group is no signature end
-  ['call signature without a return type', `interface I { <T>(x: T); }`],
+  ['needs parser context: call signature without a return type', `interface I { <T>(x: T); }`],
   // the type-parameter head pattern does not skip comments
-  ['comment inside a type-parameter head', `const f = <T /* c */,>(x: T) => x;`],
+  ['needs parser context: comment inside a type-parameter head', `const f = <T /* c */,>(x: T) => x;`],
   // a JSX attribute string has no escapes; the tag lexes the base's string token
-  ['backslash at the end of a JSX attribute string', `let a = <a b="\\" c="d" />;`],
+  ['needs a tag-only attribute-string token in the region: backslash at the end of a JSX attribute string', `let a = <a b="\\" c="d" />;`],
+  // an element is entered where a regex may start: after a value ended by ASI it is a comparison
+  // (the same miss as `import a from "b"\n/re/.test(s)`)
+  ['needs parser context (the prevIsValue class): an element after a statement ended by ASI on a value', `import a from "b"\n<h>it's</h>;`],
 ];
 
 // ── Corpus 4: invalid TSX the element region must reject ──

@@ -64,6 +64,49 @@ reference takes the grammar's `expression` rule, and `withHoles(Template, rule)`
 reference with neither is a `defineGrammar` error; no engine guesses the rule from where the
 reference was reached ([`test/template-holes.ts`](../test/template-holes.ts)).
 
+## Element regions
+
+A token-stream grammar can contain markup elements whose children are text (JSX). The grammar
+declares the region as data, `elements` (`ElementRegion` in [`src/types.ts`](../src/types.ts));
+[`javascriptreact.ts`](../javascriptreact.ts) declares JSX's in `withJsx`:
+
+```ts
+elements: {
+  tagOpen: '<', tagClose: '>', closeMarker: '/',
+  text: 'JSXText',            // token(plus(noneOf('{', '<', '>', '}'))): its pattern is the text scan
+  closeTag: 'JSXClose',       // `</`, lexed only in children
+  selfClose: 'JSXSelfClose',  // `/>`, lexed only in a tag
+  hole: { open: '{', close: '}' },
+  typeParameters: { head: /* `<T,` `<T =` `<T extends U` */, signature: { open: '(', close: ')', then: ['=>', ':'] } },
+}
+```
+
+A `tagOpen` opens an element where a regex literal could start (the `regexContext` decision).
+In a tag the ordinary tokens are lexed; after an open tag the children are one text token per
+run, holes, and nested elements; `</` and `/>` are tokens only there. Element frames share the
+template literal's hole stack, so an incremental re-lex restarts outside every element as it
+restarts outside every template. `typeParameters` is TypeScript's: a `<` at an operand position
+that begins a type-parameter list (tsc's own JSX lookahead for `<T,` / `<T extends U`, and a
+`<T>(…)` signature, which the lexer decides by lexing the group and keeping or discarding it).
+A grammar that declares no `typeParameters` gets no such rewind.
+
+### What a lexer-local region cannot decide
+
+tsc's scanner is driven by its parser: the parser knows whether a `<` is in a type or an
+expression, and rescans children as text. Monogram's lexer runs before the parser and is a
+pure function of the text, so the region is entered from what the lexer sees. That is an
+approximation of a decision that belongs to the parser, and it differs from tsc on exactly
+these shapes. Each is an expected-fail row in [`test/tsx-conformance.ts`](../test/tsx-conformance.ts)
+whose cause is "needs parser context"; they are not to be shaved with more lexer heuristics:
+
+| Shape | Witness | Lexer reads | tsc reads |
+|---|---|---|---|
+| an attribute-less element whose text starts with `( … ):` | `<li>(1): one</li>` | a type-parameter signature | text |
+| a call signature with type parameters and no return type | `interface I { <T>(x: T); }` | an element | a signature |
+| a comment inside a type-parameter head | `<T /* c */,>(x: T) => x` | an element | type parameters |
+| an element right after a statement that ASI ends on a value | `import a from "b"`⏎`<h>it's</h>;` | a comparison (as for `/re/` there) | an element |
+| a backslash in a JSX attribute string | `<a b="\" c="d" />` | the base's string token, with escapes | a string without escapes |
+
 [`test/agnostic.ts`](../test/agnostic.ts) parses a toy grammar whose identifier token is
 `Word`, with no templates or regex, on the same engine. [`html.ts`](../html.ts) is markup and
 shares no token with TypeScript.
