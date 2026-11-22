@@ -22,7 +22,7 @@
 // operators. buildIR THROWS on a construct outside this set rather than emit a wrong
 // parser. This is enough to derive a real JavaScript-subset parser (test/fixtures/minijs.ts).
 import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
-import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
+import { KIND, analyzeGrammar, concreteFirst, findEntryRule } from './grammar-analysis.ts';
 import { nameRule, syntaxKey, type RuleNames } from './grammar-names.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { tokenPatternCharLoop, tokenPatternLiteralPrefix } from './token-pattern.ts';
@@ -810,6 +810,47 @@ function buildIR(grammar: CstGrammar): ParserIR {
   // literal text and no token kind, and neither begins with a literal some kind of the other's can
   // carry (`alt(['get', …], [Ident, …])` must try the second branch when the first fails on `get`).
   const kindsOf = literalKinds({ tokens, tpl, identToken, identLike, puncts });
+  // ── Refusal by the complement of FIRST ──
+  // A candidate whose FIRST the plain analysis does not know (a Pratt rule leads: Stmt's expression
+  // statement, a for-head's expression arms) has no `first` set, so it was tried at every token. Its
+  // FIRST over concrete symbols (grammar-analysis.ts concreteFirst: through prefix operators, with
+  // one-token `not` tests and reserved-word guards applied) is known, and so is the set of tokens
+  // that provably begin NO match of it: a literal outside that FIRST, and a kind outside it that
+  // no literal of it may carry (the lexer plan's literalKinds, a superset: a token of such a kind
+  // cannot be one of its literals, so it is not a member whatever its literal). That set is an
+  // ordinary token set; the guard refuses the token when it is IN it, a negative lead test, so the
+  // set test and its table are the ones every guard uses. It joins the candidate's own negative
+  // lead test when it has one (one set test for both), else stands before the others.
+  // It is emitted only where it can refuse a token the list is actually tried at: one that begins
+  // another candidate of the same list. A refusal no such token reaches would be a test with
+  // nothing to refute.
+  {
+    const concrete = concreteFirst(grammar, a, { kindsOf: (l) => [...kindsOf(l)], gtComps, maybeWords: CTX_WORDS });
+    const kinds = [...tokens.map((t) => t.name), ...(tpl ? ['$templateHead', '$templateMiddle', '$templateTail'] : [])];
+    const grammarLits = concrete.literals.filter((l) => !gtComps.includes(l));
+    for (const r of rules) {
+      if (r.kind !== 'rd' || r.alts.length < 2) continue;
+      const decl = grammar.rules.find((d) => d.name === r.name)!;
+      const items = decl.body.type === 'alt' ? decl.body.items : [decl.body];
+      const firsts = items.map((e) => concrete.first1(e));
+      r.altGuard = r.altGuard.map((g, i) => {
+        if (g !== null && g.first !== null) return g;
+        const f = firsts[i]!;
+        const litsIn = [...f].filter((x) => !x.startsWith(KIND));
+        const lits = grammarLits.filter((l) => !f.has(l));
+        const toks = kinds.filter((k) => !f.has(KIND + k) && !litsIn.some((l) => kindsOf(l).has(k)));
+        const refused = (x: string) => (x.startsWith(KIND) ? toks.includes(x.slice(KIND.length)) : lits.includes(x));
+        if (!firsts.some((o, j) => j !== i && [...o].some(refused))) return g;
+        const head = g?.lead[0];
+        if (head !== undefined && !head.is) {
+          const s = tokenSets[head.set]!;
+          return { ...g!, lead: [{ set: tokenSetOf({ lits: [...s.lits, ...lits], toks: [...s.toks, ...toks] }), is: false, ctx: head.ctx }, ...g!.lead.slice(1)] };
+        }
+        const set = tokenSetOf({ lits, toks });
+        return g === null ? { first: null, second: null, lead: [{ set, is: false, ctx: false }], skip: 0 } : { ...g, lead: [{ set, is: false, ctx: false }, ...g.lead] };
+      });
+    }
+  }
   const meets = (a: NonNullable<FirstSig>, b: NonNullable<FirstSig>): boolean =>
     a.lits.some((l) => b.lits.includes(l) || b.toks.some((k) => kindsOf(l).has(k))) || a.toks.some((k) => b.toks.includes(k));
   const disjoint = (a: FirstSig, b: FirstSig): boolean => a !== null && b !== null && !meets(a, b) && !meets(b, a);
