@@ -1986,7 +1986,7 @@ func (p *${recv}) peekW() *Tok {
 }
 ${lookRecordGo(recv)}
 func (p *${recv}) aheadW(k int, is bool) bool { t := p.peekW(); return (t != nil && inTokenSet(k, t)) == is }
-func (p *${recv}) ctxWord() bool { return p.ctx != 0 && p.pos < len(p.toks) && inCtxWords(p.ctx, &p.toks[p.pos]) }
+func (p *${recv}) ctxWord() bool { if p.ctx == 0 { return false }; t := p.peekW(); return t != nil && inCtxWords(p.ctx, t) }
 // secondInW: whether the token after the current one is in tokenSets[k] (a candidate's SECOND guard).
 func (p *${recv}) secondInW(k int) bool { i := p.pos + 1; if i >= p.maxLook { p.maxLook = i + 1 }; return i < len(p.toks) && inTokenSet(k, &p.toks[i]) }
 func (p *${recv}) offAtW(i int) int { if i < len(p.toks) { return int(p.toks[i].Off) }; return 0 }
@@ -3210,7 +3210,7 @@ ${lookRecordGo('engine')}
 ${tokenSetRuntimeGo(ir, ids)}
 func (p *engine) ahead(k int, is bool) bool { t := p.peek(); return (t != nil && inTokenSet(k, t)) == is }
 // ctxWord: whether the next token is a word the context in force reserves; outside every context it reads nothing.
-func (p *engine) ctxWord() bool { return p.ctx != 0 && p.pos < len(p.toks) && inCtxWords(p.ctx, &p.toks[p.pos]) }
+func (p *engine) ctxWord() bool { if p.ctx == 0 { return false }; t := p.peek(); return t != nil && inCtxWords(p.ctx, t) }
 // secondIn: whether the token after the current one is in tokenSets[k] (a candidate's SECOND guard).
 func (p *engine) secondIn(k int) bool { i := p.pos + 1; if i >= p.maxLook { p.maxLook = i + 1 }; return i < len(p.toks) && inTokenSet(k, &p.toks[i]) }
 func (p *engine) offAt(i int) int { if i < len(p.toks) { return int(p.toks[i].Off) }; return 0 }

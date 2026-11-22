@@ -2251,7 +2251,7 @@ impl<'a, B: Builder> Parser<'a, B> {
     #[inline(always)]
     #[allow(dead_code)]
     /// Whether the next token is a word the context in force reserves; outside every context it reads nothing.
-    fn ctx_word(&self) -> bool { self.ctx != 0 && match self.toks.get(self.pos) { Some(t) => in_ctx_words(self.ctx, t), None => false } }
+    fn ctx_word(&mut self) -> bool { self.ctx != 0 && match self.peek() { Some(t) => in_ctx_words(self.ctx, &t), None => false } }
     /// Whether the token after the current one is in token set k (a longest-match candidate's SECOND guard).
     #[inline(always)]
     #[allow(dead_code)]

@@ -3632,9 +3632,9 @@ function ahead(k: number, is: boolean): boolean {
 // Whether the next token is a word the context in force reserves (ParserIR.ctxWords): with the
 // \`ahead\` test of the guard's own set, an \`aheadCtx\` test. Outside every context it reads nothing.
 function ctxWord(): boolean {
-  if (_ctx === 0 || pos >= toks.length) return false;
-  const t = toks[pos]!;
-  return false${ctxWordLids(ir, ids).map((w) => ` || ((_ctx & ${w.bit}) !== 0 && t.lid === ${w.lid})`).join('')};
+  if (_ctx === 0) return false;
+  const t = peek();
+  return t !== null && (false${ctxWordLids(ir, ids).map((w) => ` || ((_ctx & ${w.bit}) !== 0 && t.lid === ${w.lid})`).join('')});
 }
 // Whether the token after the current one is in set k (a longest-match candidate's SECOND guard).
 function secondIn(k: number): boolean {
