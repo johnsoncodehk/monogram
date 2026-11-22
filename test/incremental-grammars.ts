@@ -238,7 +238,9 @@ const FRAME_DOCS: Record<string, string[]> = {
   ],
   javascriptreact: ['let s = `a${b}c${`${d}`}`;\nx = 1;', 'let a = <><p>It\'s</p>{`${<b/>}`}</>;\nx</*c*/y;'],
 };
-const FRAME_INS = ['`', '$', '{', '}', '(', ')', '<', '>', '/', ':', ',', 'x', ' ', '\n'];
+// (`"` and `\` make lex errors: inside an undecided type-parameter signature an error is the
+// signature's rewind verdict, in the strict and the recovering pass alike)
+const FRAME_INS = ['`', '$', '{', '}', '(', ')', '<', '>', '/', ':', ',', 'x', ' ', '\n', '"', '\\'];
 let frameSteps = 0;
 for (const [name, docs] of Object.entries(FRAME_DOCS)) {
   const em = (await import(`${TMP}/${name}.mts?v=` + process.pid)) as Em;
