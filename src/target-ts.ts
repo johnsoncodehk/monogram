@@ -1309,6 +1309,8 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
   let entries: EntryMeta[] = [];
   let entryHs: H[] = [];` : ''}
   let root: H | null = null;
+  // The Doc's re-scans so far (RESCAN in edit): fresh lexes that checked a relex, and those that replaced it.
+  let rescanChecks = 0, rescanRepairs = 0;
   {
     const got = parseWithMeta(src, prevToks, builder);
     root = got.root;${topReuse ? `
@@ -1323,23 +1325,29 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
     edit(edits: Edit[]): H | null {
       const oldText = text, oldToks = prevToks;
       let relexed = 0;
-      // The relexed stream equals a fresh lex by construction, so a lexer error here is the text's
-      // own: the text is rejected and the Doc keeps no token stream (the next edit relexes it all).
-      // The lexer reports an error by throwing, so the one throw caught is the relex's (owed: the
-      // lexer reports errors by return); a throw anywhere else in edit is a bug and surfaces.
+      // A lexer error in the relex: the text is rejected when a fresh lex refuses it too, and the
+      // Doc keeps no token stream (the next edit relexes it all). The lexer reports an error by
+      // throwing, so the one throw caught is the relex's (owed: the lexer reports errors by
+      // return); a throw anywhere else in edit is a bug and surfaces. The fresh lex is RESCAN.
       try {
         [text, prevToks, relexed] = relexEdits(oldText, oldToks, edits);
       } catch {
         text = applyEdits(oldText, edits);
-        prevToks = [];
-        root = null;${topReuse ? `
-        entries = [];
-        entryHs = [];` : ''}${shapeB ? `
-        segs = [];` : ''}
-        const lexReject = { oldN: oldToks.length, newN: 0, prefix: 0, suffix: 0, relexed: 0, reused: 0 };
-        // validate: no stream equals a fresh lex's, and no tree a fresh parse's, when a fresh lex fails too.
-        align = validate ? { ...lexReject, streamEq: lexFails(text), treeEq: isCst ? lexFails(text) : null } : lexReject;
-        return null;
+        rescanChecks++;
+        const fresh = lexOrNull(text);
+        if (fresh === null) {
+          prevToks = [];
+          root = null;${topReuse ? `
+          entries = [];
+          entryHs = [];` : ''}${shapeB ? `
+          segs = [];` : ''}
+          const lexReject = { oldN: oldToks.length, newN: 0, prefix: 0, suffix: 0, relexed: 0, reused: 0, rescanChecks, rescanRepairs };
+          align = validate ? { ...lexReject, streamEq: true, treeEq: isCst ? true : null } : lexReject;
+          return null;
+        }
+        rescanRepairs++;
+        prevToks = fresh;
+        relexed = fresh.length;
       }
       const core = { ...computeAlign(oldText, oldToks, text, prevToks), relexed };
       const byteDelta = text.length - oldText.length;
@@ -1357,7 +1365,20 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
         if (got) { next = got.root; segs = got.segs; entries = got.entries; entryHs = got.entryHs; reused = got.reused; }
       }` : ''}
       if (next === null) {
-        const got = parseWithMeta(text, prevToks, builder);
+        let got = parseWithMeta(text, prevToks, builder);
+        // RESCAN: the parse rejected. The relexed stream should equal a fresh lex by construction,
+        // but known relex defects break that (portable-targets: HOLE_EDIT_EXPECTED_FAIL), so a fresh
+        // lex checks it, and only a stream that differs is replaced and parsed again (counted in
+        // Align: rescanChecks, rescanRepairs; removed with the relex fix).
+        if (got.root === null) {
+          rescanChecks++;
+          if (!sameAsFreshLex(text, prevToks)) {
+            rescanRepairs++;
+            const fresh = lexOrNull(text);
+            prevToks = fresh ?? [];
+            if (fresh !== null) got = parseWithMeta(text, prevToks, builder);
+          }
+        }
         next = got.root;${topReuse ? `
         entries = got.entries;
         entryHs = got.entryHs as H[];` : ''}${shapeB ? `
@@ -1370,9 +1391,9 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
         try { streamEq = checkStreamEq(text, prevToks); } catch { streamEq = false; }
         // treeEq: the tree against a fresh parse's, with cstBuilder only; any other builder's
         // handles are opaque, so it reports null (rust SUPPORTS_TREE_EQ=false).
-        align = { ...core, reused, streamEq, treeEq: isCst ? checkTreeEq(text, root as unknown as Node | null) : null };
+        align = { ...core, reused, rescanChecks, rescanRepairs, streamEq, treeEq: isCst ? checkTreeEq(text, root as unknown as Node | null) : null };
       } else {
-        align = { ...core, reused };
+        align = { ...core, reused, rescanChecks, rescanRepairs };
       }
       return root;
     },
@@ -1400,9 +1421,13 @@ function checkTreeEq(text: string, root: Node | null): boolean {
     return cstJSON(root) === cstJSON(fresh as Cst);
   } catch { return root === null; }
 }
-// Whether a fresh lex of text fails (validate, after a relex reported a lexer error).
-function lexFails(text: string): boolean {
-  try { scanMeta(text); return false; } catch { return true; }
+// A fresh lex of text, or null when the lexer refuses it (edit's RESCAN).
+function lexOrNull(text: string): AlignMeta[] | null {
+  try { return scanMeta(text); } catch { return null; }
+}
+// Whether meta equals a fresh lex of text (false when the lexer refuses it).
+function sameAsFreshLex(text: string, meta: AlignMeta[]): boolean {
+  try { return checkStreamEq(text, meta); } catch { return false; }
 }
 ${topReuse ? `function shiftSubtree(n: Cst, byteDelta: number, tokDelta: number): void {
   n.offset += byteDelta;
@@ -1461,9 +1486,10 @@ function mk_align(off: number, end: number, kid: number, nl: boolean, fd: number
 function shift_align(m: AlignMeta, delta: number): AlignMeta {
   return { off: m.off + delta, end: m.end + delta, kid: m.kid, pd: m.pd, fd: m.fd, flags: m.flags, td: m.td };
 }
-type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed: number; reused: number; streamEq?: boolean; treeEq?: boolean | null };
+// rescanChecks / rescanRepairs: the Doc's totals since it was made (createDoc, RESCAN in edit).
+type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed: number; reused: number; rescanChecks: number; rescanRepairs: number; streamEq?: boolean; treeEq?: boolean | null };
 ${relexFamily}
-function computeAlign(oldText: string, oldToks: AlignMeta[], newText: string, newToks: AlignMeta[]): Omit<Align, 'relexed' | 'reused' | 'streamEq' | 'treeEq'> {
+function computeAlign(oldText: string, oldToks: AlignMeta[], newText: string, newToks: AlignMeta[]): Omit<Align, 'relexed' | 'reused' | 'rescanChecks' | 'rescanRepairs' | 'streamEq' | 'treeEq'> {
   const oldN = oldToks.length, newN = newToks.length;
   let prefix = 0;
   while (prefix < oldN && prefix < newN) {

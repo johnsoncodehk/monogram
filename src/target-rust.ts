@@ -1200,6 +1200,38 @@ function docEditBlockRust(ir: ParserIR, shared: SharedAlgorithms): string {
   const reuseInit = `${entriesInit}${segsInit}`;
   const relexFamily = `\n// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.relexFamily(ir)}\n`;
   const initToks = 'scan_meta(&text)';
+  const freshMeta = 'scan_meta(&self.text)';
+  // RESCAN: the parse rejected. The relexed stream should equal a fresh lex by construction, but
+  // known relex defects break that (portable-targets: HOLE_EDIT_EXPECTED_FAIL), so a fresh lex
+  // checks it, and only a stream that differs is replaced and parsed again (counted in Align:
+  // rescan_checks, rescan_repairs; removed with the relex fix).
+  const freshRetryRs = `        if self.root.is_none() {
+            self.rescan_checks += 1;
+            if !std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check_stream_eq(&self.text, &self.toks))).unwrap_or(false) {
+            self.rescan_repairs += 1;
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ${freshMeta})) {
+            Err(_) => { self.toks = Vec::new(); self.keep_toks(Vec::new()); }
+            Ok(fresh) => {
+            self.toks = fresh;
+            let text = self.text.clone();
+            let meta = self.toks.clone();
+            let ntoks = toks_from_meta(&text, &meta);
+            let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b: B::default(), scratch: Vec::new()${topReuse ? (shapeB ? ', entries: Vec::new(), segs: Vec::new()' : ', entries: Vec::new()') : ''} };
+            match p.parse_${ir.entry}() {
+                Some(fr) if p.pos == p.toks.len() => {
+                    self.root = Some(fr.root()); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
+                    self.b = p.b; self.scratch = p.scratch; self.keep_toks(p.toks);${topReuse ? (shapeB ? ' self.entries = p.entries; self.segs = p.segs;' : ' self.entries = p.entries;') : ''}
+                }
+                _ => {
+                    self.root = None; self.baseline = p.b.arena_len(); self.last_pos = p.pos;
+                    self.b = p.b; self.scratch = p.scratch; self.keep_toks(p.toks);${topReuse ? (shapeB ? ' self.entries = p.entries; self.segs = p.segs;' : ' self.entries = p.entries;') : ''}
+                }
+            }
+        }
+            }
+            }
+        }
+`;
   const reuseShared = topReuse ? `
 fn count_live(nodes: &[Node], kids: &[i32], id: i32) -> usize {
     let mut n = 1usize;
@@ -1638,11 +1670,11 @@ fn check_tree_eq_arena(text: &str, toks_a: &[Tok], nodes: &[Node], kids: &[i32],
             }
             reused = 0;
         }
-        let stream_eq = if self.validate { Some(check_stream_eq(&self.text, &self.toks)) } else { None };
+${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&self.text, &self.toks)) } else { None };
         let tree_eq = if self.validate && B::SUPPORTS_TREE_EQ {
             Some(self.b.check_tree_eq(&self.text, self.root))
         } else { None };
-        self.align = Some(Align { old_n, new_n, prefix, suffix, relexed, reused, stream_eq, tree_eq });`
+        self.align = Some(Align { old_n, new_n, prefix, suffix, relexed, reused, rescan_checks: self.rescan_checks, rescan_repairs: self.rescan_repairs, stream_eq, tree_eq });`
     : '';
   const editParseB = shapeB
     ? `        let byte_delta = self.text.len() as isize - old_text.len() as isize;
@@ -1693,11 +1725,11 @@ fn check_tree_eq_arena(text: &str, toks_a: &[Tok], nodes: &[Node], kids: &[i32],
             }
             reused = 0;
         }
-        let stream_eq = if self.validate { Some(check_stream_eq(&self.text, &self.toks)) } else { None };
+${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&self.text, &self.toks)) } else { None };
         let tree_eq = if self.validate && B::SUPPORTS_TREE_EQ {
             Some(self.b.check_tree_eq(&self.text, self.root))
         } else { None };
-        self.align = Some(Align { old_n, new_n, prefix, suffix, relexed, reused, stream_eq, tree_eq });`
+        self.align = Some(Align { old_n, new_n, prefix, suffix, relexed, reused, rescan_checks: self.rescan_checks, rescan_repairs: self.rescan_repairs, stream_eq, tree_eq });`
     : '';
   const docTakeReuse = topReuse
     ? (shapeB ? ' self.entries = p.entries; self.segs = p.segs;' : ' self.entries = p.entries;')
@@ -1721,11 +1753,11 @@ fn check_tree_eq_arena(text: &str, toks_a: &[Tok], nodes: &[Node], kids: &[i32],
             }
         }
         let reused = 0usize;
-        let stream_eq = if self.validate { Some(check_stream_eq(&self.text, &self.toks)) } else { None };
+${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&self.text, &self.toks)) } else { None };
         let tree_eq = if self.validate && B::SUPPORTS_TREE_EQ {
             Some(self.b.check_tree_eq(&self.text, self.root))
         } else { None };
-        self.align = Some(Align { old_n, new_n, prefix, suffix, relexed, reused, stream_eq, tree_eq });`;
+        self.align = Some(Align { old_n, new_n, prefix, suffix, relexed, reused, rescan_checks: self.rescan_checks, rescan_repairs: self.rescan_repairs, stream_eq, tree_eq });`;
   const docSegField = shapeB ? '\n    segs: Vec<Seg>,' : '';
   const docEntriesField = topReuse ? '\n    entries: Vec<EntryMeta>,' : '';
   const docSegInit = shapeB ? ', segs: Vec::new()' : '';
@@ -1748,7 +1780,8 @@ struct AlignMeta { off: u32, end: u32, kid: u16, pd: u16, fd: u16, flags: u8, td
 #[inline(always)] fn shift_align(m: &AlignMeta, delta: isize) -> AlignMeta {
     AlignMeta { off: (m.off as isize + delta) as u32, end: (m.end as isize + delta) as u32, kid: m.kid, pd: m.pd, fd: m.fd, flags: m.flags, td: m.td }
 }
-struct Align { old_n: usize, new_n: usize, prefix: usize, suffix: usize, relexed: usize, reused: usize, stream_eq: Option<bool>, tree_eq: Option<bool> }
+// rescan_checks / rescan_repairs: the Doc's totals since it was made (RESCAN in edit).
+struct Align { old_n: usize, new_n: usize, prefix: usize, suffix: usize, relexed: usize, reused: usize, rescan_checks: usize, rescan_repairs: usize, stream_eq: Option<bool>, tree_eq: Option<bool> }
 ${relexFamily}
 fn compute_align_core(old_text: &str, old_toks: &[AlignMeta], new_text: &str, new_toks: &[AlignMeta]) -> (usize, usize, usize, usize) {
     let old_n = old_toks.len();
@@ -1782,6 +1815,8 @@ ${treeEqFn}${reuseFns}pub struct Doc<B: Builder = CstBuilder> {
     toks: Vec<AlignMeta>,
     align: Option<Align>,
     validate: bool,
+    rescan_checks: usize,
+    rescan_repairs: usize,
     b: B,
     scratch: Vec<B::H>,${docExtraField}
     root: Option<B::H>,
@@ -1792,7 +1827,7 @@ impl<B: Builder + Default> Doc<B> {
     /// Explicit builder (handout Doc::new(src, builder) form — Rust has no arity overload).
     pub fn new_with(text: String, b: B) -> Doc<B> {
         let toks = ${initToks};
-        let mut d = Doc { text, toks, align: None, validate: false, b, scratch: Vec::new()${docExtraInit}, root: None, baseline: 0, last_pos: 0 };
+        let mut d = Doc { text, toks, align: None, validate: false, rescan_checks: 0, rescan_repairs: 0, b, scratch: Vec::new()${docExtraInit}, root: None, baseline: 0, last_pos: 0 };
         d.reparse_fresh();
         d
     }
@@ -1826,22 +1861,27 @@ impl<B: Builder + Default> Doc<B> {
     pub fn edit(&mut self, edits: &[Edit]) {
         let old_text = self.text.clone();
         let old_toks = self.toks.clone();
-        // The relexed stream equals a fresh lex by construction, so a lexer error here is the
-        // text's own: the text is rejected and the Doc keeps no token stream (the next edit relexes
-        // all of it). The lexer reports an error by panicking, so the one panic caught is the
-        // relex's (owed: the lexer reports errors by return); a panic anywhere else is a bug and
-        // propagates.
+        // RESCAN: a lexer error in the relex is the text's own when a fresh lex refuses it too: the
+        // text is rejected and the Doc keeps no token stream (the next edit relexes it all); a fresh
+        // lex that succeeds replaces the relexed stream (a relex defect repaired). The lexer reports
+        // an error by panicking, so the one panic caught is the relex's (owed: the lexer reports
+        // errors by return); a panic anywhere else in edit is a bug and propagates.
         let relexed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| relex_edits(&old_text, &old_toks, edits))) {
             Ok((text, toks, n)) => { self.text = text; self.toks = toks; n as usize }
             Err(_) => {
                 self.text = apply_edits(&old_text, edits);
-                self.toks = Vec::new();
-                self.root = None;
-                self.keep_toks(Vec::new());
-                // validate: no stream equals a fresh lex's (and no tree a fresh parse's) when a fresh lex fails too.
-                let fails = if self.validate { Some(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| { scan_meta(&self.text); })).is_err()) } else { None };
-                self.align = Some(Align { old_n: old_toks.len(), new_n: 0, prefix: 0, suffix: 0, relexed: 0, reused: 0, stream_eq: fails, tree_eq: if B::SUPPORTS_TREE_EQ { fails } else { None } });
-                return;
+                self.rescan_checks += 1;
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scan_meta(&self.text))) {
+                    Ok(fresh) => { self.rescan_repairs += 1; self.toks = fresh; self.toks.len() }
+                    Err(_) => {
+                        self.toks = Vec::new();
+                        self.root = None;
+                        self.keep_toks(Vec::new());
+                        let v = if self.validate { Some(true) } else { None };
+                        self.align = Some(Align { old_n: old_toks.len(), new_n: 0, prefix: 0, suffix: 0, relexed: 0, reused: 0, rescan_checks: self.rescan_checks, rescan_repairs: self.rescan_repairs, stream_eq: v, tree_eq: if B::SUPPORTS_TREE_EQ { v } else { None } });
+                        return;
+                    }
+                }
             }
         };
         let (old_n, new_n, prefix, suffix) = compute_align_core(&old_text, &old_toks, &self.text, &self.toks);
@@ -5573,10 +5613,10 @@ fn main() {
         }
         if let Some(a) = doc.alignment() {
             match (a.stream_eq, a.tree_eq) {
-                (Some(eq), Some(te)) => eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"reused\\":{},\\"streamEq\\":{},\\"treeEq\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, a.reused, eq, te),
-                (Some(eq), None) => eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"reused\\":{},\\"streamEq\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, a.reused, eq),
-                (None, Some(te)) => eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"reused\\":{},\\"treeEq\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, a.reused, te),
-                (None, None) => eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"reused\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, a.reused),
+                (Some(eq), Some(te)) => eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"reused\\":{},\\"rescanChecks\\":{},\\"rescanRepairs\\":{},\\"streamEq\\":{},\\"treeEq\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, a.reused, a.rescan_checks, a.rescan_repairs, eq, te),
+                (Some(eq), None) => eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"reused\\":{},\\"rescanChecks\\":{},\\"rescanRepairs\\":{},\\"streamEq\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, a.reused, a.rescan_checks, a.rescan_repairs, eq),
+                (None, Some(te)) => eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"reused\\":{},\\"rescanChecks\\":{},\\"rescanRepairs\\":{},\\"treeEq\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, a.reused, a.rescan_checks, a.rescan_repairs, te),
+                (None, None) => eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"reused\\":{},\\"rescanChecks\\":{},\\"rescanRepairs\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, a.reused, a.rescan_checks, a.rescan_repairs),
             }
         }
         match doc.cst_json() {
