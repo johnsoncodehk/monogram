@@ -26,6 +26,7 @@ import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { tokenPatternCharLoop, tokenPatternLiteralPrefix } from './token-pattern.ts';
 import { type TextUnits, firstUnit, oneUnit, unitLen } from './text-units.ts';
+import { scannedTokens, templateLiterals, tokenLiterals } from './lex-family.ts';
 
 // ── Intermediate representation (plain data; every Target renders THIS) ──
 
@@ -621,98 +622,6 @@ function buildIR(grammar: CstGrammar): ParserIR {
     throw new Error(`portable: entry rule ${entryDecl.name} has several alternatives and can match the empty input — not in scope (give it one alternative)`);
   }
 
-  // ── FIRST signatures + predictive flags ──
-  // Per-branch FIRST (literal texts + token kinds the branch can begin with, or null =
-  // unpredictable) feeds Phase 3's predictive switch dispatch. Computed conservatively from the
-  // Step IR: a branch is predictable iff its first CONSUMING step is a literal/token/altlit or a
-  // reference to an all-predictable rd rule. A leading zero-width guard (not/sameLine), a nullable
-  // quantifier (star/opt/sep), or a reference to a Pratt / mixed-alternative rule marks the branch
-  // unpredictable → backtracking fallback. `ruleLead` is the fixpoint of each rule's own leading
-  // FIRST (null if any alt is unpredictable); it resolves cross-rule references.
-  const ruleLead = new Map<string, FirstSig>();
-  const seqFirst = (steps: Step[]): FirstSig => {
-    if (steps.length === 0) return null;
-    const s = steps[0];
-    switch (s.t) {
-      case 'lit': return { lits: [gtComps.includes(s.value) ? '>' : s.value], toks: [] };   // a composed operator begins at a '>' token
-      case 'tok': return { lits: [], toks: [s.name] };
-      case 'altlit': return { lits: s.opts.map((o) => o.value), toks: [] };
-      case 'rule': case 'ruleBp': { const f = ruleLead.get(s.name); return f === undefined ? null : f; }
-      case 'alt': {
-        const lits = new Set<string>(); const toks = new Set<string>();
-        for (const b of s.branches) { const f = seqFirst(b); if (f === null) return null; f.lits.forEach((x) => lits.add(x)); f.toks.forEach((x) => toks.add(x)); }
-        return { lits: [...lits], toks: [...toks] };
-      }
-      case 'seq': return seqFirst(s.steps);
-      case 'suppress': case 'ctx': return seqFirst(s.steps);
-      case 'look': case 'ahead': case 'aheadCtx': case 'sameLine': case 'star': case 'opt': case 'sep': return null;   // zero-width / nullable leading → unpredictable
-    }
-    return null;
-  };
-  for (let changed = true, guard = 0; changed && guard <= rules.length + 2; guard++) {
-    changed = false;
-    for (const r of rules) {
-      if (r.kind === 'pratt') { if (!ruleLead.has(r.name)) { ruleLead.set(r.name, null); changed = true; } continue; }
-      const lits = new Set<string>(); const toks = new Set<string>(); let unpredictable = false;
-      for (const alt of r.alts) {
-        const f = seqFirst(alt);
-        if (f === null) { unpredictable = true; break; }
-        f.lits.forEach((x) => lits.add(x)); f.toks.forEach((x) => toks.add(x));
-      }
-      const next: FirstSig = unpredictable ? null : { lits: [...lits], toks: [...toks] };
-      const prev = ruleLead.get(r.name);
-      const same = prev === next
-        || (prev != null && next != null && prev.lits.length === next.lits.length && prev.toks.length === next.toks.length
-          && prev.lits.every((x) => next.lits.includes(x)) && prev.toks.every((x) => next.toks.includes(x)));
-      if (!same) { ruleLead.set(r.name, next); changed = true; }
-    }
-  }
-  // Two signatures are disjoint iff no token can begin both: they share no literal text and no
-  // token kind, and neither begins with a word literal where the other begins with the
-  // identifier token (a word such as `get` is lexed as that token, so `alt(['get', …], [Ident,
-  // …])` must try the second branch when the first fails on `get`).
-  const identKind = grammar.tokens.find((t) => t.identifier)?.name;
-  const wordVsIdent = (a: NonNullable<FirstSig>, b: NonNullable<FirstSig>): boolean =>
-    identKind !== undefined && a.lits.some(isKeywordLiteral) && b.toks.includes(identKind);
-  const disjoint = (a: FirstSig, b: FirstSig): boolean =>
-    a !== null && b !== null && a.lits.every((x) => !b.lits.includes(x)) && a.toks.every((x) => !b.toks.includes(x))
-    && !wordVsIdent(a, b) && !wordVsIdent(b, a);
-  const allDisjoint = (fs: FirstSig[]): boolean => {
-    for (let i = 0; i < fs.length; i++) if (fs[i] === null) return false;
-    for (let i = 0; i < fs.length; i++) for (let j = i + 1; j < fs.length; j++) if (!disjoint(fs[i], fs[j])) return false;
-    return true;
-  };
-  // Annotate each rule's alt-level FIRST + predictive flag, and walk nested Steps to annotate
-  // inline `alt` branches (used by Phase 3's nested switch dispatch).
-  const annotateSteps = (steps: Step[]): void => {
-    for (const s of steps) {
-      if (s.t === 'star') annotateSteps([s.step]);
-      else if (s.t === 'opt' || s.t === 'seq' || s.t === 'suppress' || s.t === 'ctx') annotateSteps(s.steps);
-      else if (s.t === 'sep') annotateSteps([s.elem]);
-      else if (s.t === 'alt') {
-        s.firsts = s.branches.map((b) => seqFirst(b));
-        s.predictive = allDisjoint(s.firsts);
-        s.branches.forEach(annotateSteps);
-      }
-    }
-  };
-  for (const r of rules) {
-    if (r.kind === 'rd') {
-      r.altFirst = r.alts.map((alt) => seqFirst(alt));
-      r.predictive = allDisjoint(r.altFirst);
-      if (!r.predictive && r.alts.length > 1) r.altDispatch = dispatchOf(r.altGuard.map((g) => g?.first ?? null));
-      r.alts.forEach(annotateSteps);
-    } else {
-      r.nudSeqPredictive = allDisjoint(r.nudSeqs.map((seq) => seqFirst(seq)));
-      r.nudSeqs.forEach(annotateSteps);
-      r.nudCapped.forEach((c) => annotateSteps(c.steps));
-      r.nudBrackets.forEach((b) => annotateSteps(b.steps));
-      r.leds.forEach((b) => annotateSteps(b.steps));
-      r.ledSuppressedIn = r.leds.map((b) => a.suppressedIn(b.first));
-    }
-  }
-  lookaheads.forEach(annotateSteps);
-
   // Regex-vs-division context (only if the grammar declares a regex token + config).
   let regexCtx: RegexCtx | null = null;
   const rxTok = grammar.tokens.find((t) => t.flags.includes('regex'));
@@ -759,6 +668,97 @@ function buildIR(grammar: CstGrammar): ParserIR {
     ...(identToken ? [identToken] : []),
     ...grammar.tokens.filter((t) => t.identifierPrefix).map((t) => t.name),
   ];
+  // ── FIRST signatures + predictive flags ──
+  // Per-branch FIRST (literal texts + token kinds the branch can begin with, or null =
+  // unpredictable) feeds Phase 3's predictive switch dispatch. Computed conservatively from the
+  // Step IR: a branch is predictable iff its first CONSUMING step is a literal/token/altlit or a
+  // reference to an all-predictable rd rule. A leading zero-width guard (not/sameLine), a nullable
+  // quantifier (star/opt/sep), or a reference to a Pratt / mixed-alternative rule marks the branch
+  // unpredictable → backtracking fallback. `ruleLead` is the fixpoint of each rule's own leading
+  // FIRST (null if any alt is unpredictable); it resolves cross-rule references.
+  const ruleLead = new Map<string, FirstSig>();
+  const seqFirst = (steps: Step[]): FirstSig => {
+    if (steps.length === 0) return null;
+    const s = steps[0];
+    switch (s.t) {
+      case 'lit': return { lits: [gtComps.includes(s.value) ? '>' : s.value], toks: [] };   // a composed operator begins at a '>' token
+      case 'tok': return { lits: [], toks: templateTokens.has(s.name) ? [s.name, '$templateHead'] : [s.name] };   // an interpolated template opens with its head
+      case 'altlit': return { lits: s.opts.map((o) => o.value), toks: [] };
+      case 'rule': case 'ruleBp': { const f = ruleLead.get(s.name); return f === undefined ? null : f; }
+      case 'alt': {
+        const lits = new Set<string>(); const toks = new Set<string>();
+        for (const b of s.branches) { const f = seqFirst(b); if (f === null) return null; f.lits.forEach((x) => lits.add(x)); f.toks.forEach((x) => toks.add(x)); }
+        return { lits: [...lits], toks: [...toks] };
+      }
+      case 'seq': return seqFirst(s.steps);
+      case 'suppress': case 'ctx': return seqFirst(s.steps);
+      case 'look': case 'ahead': case 'aheadCtx': case 'sameLine': case 'star': case 'opt': case 'sep': return null;   // zero-width / nullable leading → unpredictable
+    }
+    return null;
+  };
+  for (let changed = true, guard = 0; changed && guard <= rules.length + 2; guard++) {
+    changed = false;
+    for (const r of rules) {
+      if (r.kind === 'pratt') { if (!ruleLead.has(r.name)) { ruleLead.set(r.name, null); changed = true; } continue; }
+      const lits = new Set<string>(); const toks = new Set<string>(); let unpredictable = false;
+      for (const alt of r.alts) {
+        const f = seqFirst(alt);
+        if (f === null) { unpredictable = true; break; }
+        f.lits.forEach((x) => lits.add(x)); f.toks.forEach((x) => toks.add(x));
+      }
+      const next: FirstSig = unpredictable ? null : { lits: [...lits], toks: [...toks] };
+      const prev = ruleLead.get(r.name);
+      const same = prev === next
+        || (prev != null && next != null && prev.lits.length === next.lits.length && prev.toks.length === next.toks.length
+          && prev.lits.every((x) => next.lits.includes(x)) && prev.toks.every((x) => next.toks.includes(x)));
+      if (!same) { ruleLead.set(r.name, next); changed = true; }
+    }
+  }
+  // Two signatures are disjoint iff no token can begin both. A token is a kind and, when its text
+  // is a literal, that literal; which kinds can carry a literal is the lexer's (literalKinds), not
+  // the literal's spelling: `get` is an identifier, `@new` a decorator. So the signatures share no
+  // literal text and no token kind, and neither begins with a literal some kind of the other's can
+  // carry (`alt(['get', …], [Ident, …])` must try the second branch when the first fails on `get`).
+  const kindsOf = literalKinds({ tokens, tpl, identToken, identLike, puncts });
+  const meets = (a: NonNullable<FirstSig>, b: NonNullable<FirstSig>): boolean =>
+    a.lits.some((l) => b.lits.includes(l) || b.toks.some((k) => kindsOf(l).has(k))) || a.toks.some((k) => b.toks.includes(k));
+  const disjoint = (a: FirstSig, b: FirstSig): boolean => a !== null && b !== null && !meets(a, b) && !meets(b, a);
+  const allDisjoint = (fs: FirstSig[]): boolean => {
+    for (let i = 0; i < fs.length; i++) if (fs[i] === null) return false;
+    for (let i = 0; i < fs.length; i++) for (let j = i + 1; j < fs.length; j++) if (!disjoint(fs[i], fs[j])) return false;
+    return true;
+  };
+  // Annotate each rule's alt-level FIRST + predictive flag, and walk nested Steps to annotate
+  // inline `alt` branches (used by Phase 3's nested switch dispatch).
+  const annotateSteps = (steps: Step[]): void => {
+    for (const s of steps) {
+      if (s.t === 'star') annotateSteps([s.step]);
+      else if (s.t === 'opt' || s.t === 'seq' || s.t === 'suppress' || s.t === 'ctx') annotateSteps(s.steps);
+      else if (s.t === 'sep') annotateSteps([s.elem]);
+      else if (s.t === 'alt') {
+        s.firsts = s.branches.map((b) => seqFirst(b));
+        s.predictive = allDisjoint(s.firsts);
+        s.branches.forEach(annotateSteps);
+      }
+    }
+  };
+  for (const r of rules) {
+    if (r.kind === 'rd') {
+      r.altFirst = r.alts.map((alt) => seqFirst(alt));
+      r.predictive = allDisjoint(r.altFirst);
+      if (!r.predictive && r.alts.length > 1) r.altDispatch = dispatchOf(r.altGuard.map((g) => g?.first ?? null));
+      r.alts.forEach(annotateSteps);
+    } else {
+      r.nudSeqPredictive = allDisjoint(r.nudSeqs.map((seq) => seqFirst(seq)));
+      r.nudSeqs.forEach(annotateSteps);
+      r.nudCapped.forEach((c) => annotateSteps(c.steps));
+      r.nudBrackets.forEach((b) => annotateSteps(b.steps));
+      r.leds.forEach((b) => annotateSteps(b.steps));
+      r.ledSuppressedIn = r.leds.map((b) => a.suppressedIn(b.first));
+    }
+  }
+  lookaheads.forEach(annotateSteps);
+
   const shared = shareSteps([
     ...rules.flatMap(ruleBodies),
     ...lookaheads,
@@ -809,6 +809,144 @@ export type Forms = {
    *  context), so a target with several engine types may print them once, on the cursor. */
   cursorOnly: { rules: string[]; shared: boolean[]; looks: boolean[] };
 };
+// ── The step walk: one description of how a step runs, rendered by every target ──
+// What a step runs, and under which frame, is decided here once: a star / opt / sep body (a step
+// inside a body), an ordered choice (each branch in a BRANCH frame, tried under its FIRST set when
+// that is small enough to test: isFirstGuardable), a predictive choice (only the branch its FIRST
+// set selects), a suppress or ctx body (the state set around the body's conjunction), a shared
+// step (ParserIR.shared: its function's call), and every leaf test. A StepLowering spells each
+// piece in one target's language, for one engine form (building or recognizing, ParserIR.forms)
+// over one receiver; it holds only that spelling.
+export type StepLowering = {
+  inner(): StepLowering;                         // the lowering inside a body or a choice (a target whose closures take their own receiver)
+  shared(id: number): string;                    // a call of ParserIR.shared[id] in this form
+  lit(s: Step & { t: 'lit' }): string;
+  tok(name: string): string;
+  rule(name: string): string;
+  ruleBp(name: string, bp: number): string;      // only a Pratt rule is called at a binding power
+  star(body: string): string;                    // body: the inner step, as a boolean expression
+  opt(body: string): string;
+  sep(elem: string, delim: string): string;
+  altlit(values: string[]): string;
+  look(id: number, is: boolean): string;         // a lookahead runs in recognize form whatever the form around it
+  ahead(set: number, is: boolean): string;
+  aheadCtx(set: number, is: boolean): string;
+  sameLine(): string;
+  inPlace(kind: 'alt' | 'suppress' | 'ctx', stmts: string): string;  // the step's statements (stepStmts) run where the step is
+  ret(cond: string): string;                     // statements returning cond
+  suppress(set: number, cond: string): string;   // statements: cond with ParserIR.suppressSets[set] staged for the next Pratt call
+  ctx(ctx: Ctx, cond: string): string;           // statements: cond in context ctx, the one in force put back after
+  branch(cond: string): string;                  // a BRANCH frame: returns true when cond matched, else undoes it
+  guarded(first: NonNullable<FirstSig>, branch: string): string;   // the branch, tried only when the next token is in first
+  choice(peek: boolean, tries: string[]): string;                  // the tries in order, then false; peek: a guard reads the next token
+  predictive(arms: { first: NonNullable<FirstSig>; branch: string }[]): string;   // the one arm the next token selects, else false
+};
+const conjOf = (steps: Step[], L: StepLowering): string => (steps.length ? steps.map((x) => stepExpr(x, L)).join(' && ') : 'true');
+/** A step as a boolean expression: a shared step's call, else the step itself (stepBody). */
+export function stepExpr(s: Step, L: StepLowering): string {
+  if ('share' in s && s.share !== undefined) return L.shared(s.share);
+  return stepBody(s, L);
+}
+/** The step itself, printed in place (a shared step's function body; every other step's site). */
+export function stepBody(s: Step, L: StepLowering): string {
+  switch (s.t) {
+    case 'lit': return L.lit(s);
+    case 'tok': return L.tok(s.name);
+    case 'rule': return L.rule(s.name);
+    case 'ruleBp': return L.ruleBp(s.name, s.bp);
+    case 'star': return L.star(stepExpr(s.step, L.inner()));
+    case 'opt': { const I = L.inner(); return L.opt(s.steps.map((x) => stepExpr(x, I)).join(' && ')); }
+    case 'sep': return L.sep(stepExpr(s.elem, L.inner()), s.delim);
+    case 'altlit': return L.altlit(s.opts.map((o) => o.value));
+    case 'alt': return L.inPlace('alt', stepStmts(s, L.inner()));
+    case 'look': return L.look(s.id, s.is);
+    case 'ahead': return L.ahead(s.set, s.is);
+    case 'aheadCtx': return L.aheadCtx(s.set, s.is);
+    case 'seq': return `(${conjOf(s.steps, L)})`;
+    case 'sameLine': return L.sameLine();
+    case 'suppress': return L.inPlace('suppress', L.suppress(s.set, conjOf(s.steps, L)));
+    case 'ctx': return L.inPlace('ctx', L.ctx(s.ctx, conjOf(s.steps, L)));
+  }
+}
+/** The step as the statements of a function returning whether it matched (a shared step's body;
+ *  an `alt`, `suppress` or `ctx` step run in place). */
+export function stepStmts(s: Step, L: StepLowering): string {
+  switch (s.t) {
+    case 'alt': {
+      if (s.predictive) return L.predictive(s.branches.map((br, i) => ({ first: s.firsts![i]!, branch: L.branch(conjOf(br, L)) })));
+      const firsts = s.firsts ?? [];
+      const n = s.branches.length;
+      const tries = s.branches.map((br, i) => {
+        const b = L.branch(conjOf(br, L));
+        const f = firsts[i] ?? null;
+        return isFirstGuardable(f, n) ? L.guarded(f, b) : b;
+      });
+      return L.choice(s.branches.some((_, i) => isFirstGuardable(firsts[i] ?? null, n)), tries);
+    }
+    case 'suppress': return L.suppress(s.set, conjOf(s.steps, L));
+    case 'ctx': return L.ctx(s.ctx, conjOf(s.steps, L));
+    default: return L.ret(stepBody(s, L));
+  }
+}
+
+// ── The candidate dispatch: one walk over a Dispatch, rendered by every target ──
+// A DispatchLowering spells a `lid` / `kid` section's switch on the buffered token (each case: its
+// key and its candidates' statements, in order) and the test around it when that token may be
+// absent; `rest` sections are their candidates' statements in order.
+export type DispatchLowering = {
+  sw(by: 'lid' | 'kid', cases: { key: string; arms: string[] }[]): string;
+  nil(sw: string): string;                       // the switch, run only when there is a token
+};
+/** A candidate list's Dispatch: arm(i, keyed) is candidate i's statement (keyed: reached through
+ *  its key, which already tested the first token). nilable: the token may be absent. */
+export function dispatchWalk(d: Dispatch, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, D: DispatchLowering, nilable: boolean): string {
+  return d.sections.map((sec) => {
+    if (sec.by === 'rest') return sec.arms.map((i) => arm(i, false)).join('\n');
+    const id = (k: string) => String(sec.by === 'lid' ? lidOf(ids, k) : kidOf(ids, k));
+    const sw = D.sw(sec.by, sec.groups.map((g) => ({ key: id(g.key), arms: g.arms.map((i) => arm(i, true)) })));
+    return nilable ? D.nil(sw) : sw;
+  }).join('\n');
+}
+
+// ── The rule shell: how an rd rule's function runs, decided once ──
+// Three forms, from the rule's plan (RdRule): PREDICTIVE (the alternative the next token's FIRST
+// set selects, nothing else: no candidate frame, a commit), SINGLE (one alternative: nothing to
+// choose), LONGEST (every alternative its Dispatch admits, each in a CANDIDATE frame; the longest
+// wins, a tie the one declared first). A RuleLowering spells, for one rule in one engine form, the
+// function around the statements, the checkpoint and undo, how an alternative's match is accepted
+// (`accept(i)`: a node finished for alternative i, or only `true` when recognizing; the place a
+// per-alternative construction by a shape plan would go), the candidate frame and its guard.
+export type RuleLowering = {
+  steps: StepLowering;                           // the alternatives' steps
+  fn(lines: string[]): string;                   // the rule's function around its statements
+  ind: string;                                   // a statement's indentation
+  ifThen(test: string, then: string): string;    // `if test then` (no indentation)
+  first(f: FirstSig): string;                    // whether the buffered token starts an alternative (predictive)
+  accept(i: number): string;                     // the statement returning alternative i's match
+  open: string;                                  // PREDICTIVE / SINGLE: the checkpoint at entry
+  peekOrFail: string;                            // PREDICTIVE: buffer the next token; none: no match
+  armJoin: string;                               // between PREDICTIVE arms
+  fail: string;                                  // undo to the checkpoint; no match
+  openBest(d: Dispatch): string;                 // LONGEST: the checkpoint and the best so far
+  peekOpt: string;                               // LONGEST: buffer the next token (when a guard reads it)
+  cand(d: Dispatch, i: number, cond: string): string;      // the CANDIDATE frame of alternative i
+  guard(g: Guard, keyed: boolean, stmt: string): string;   // the candidate's statement under its Guard
+  dispatch: DispatchLowering;
+  closeBest: string;                             // LONGEST: go to the best's end; return it
+};
+/** An rd rule's function in the form `L` spells. */
+export function ruleShell(r: RdRule, ids: LexIdPlan, L: RuleLowering): string {
+  const cond = (steps: Step[]) => conjOf(steps, L.steps);
+  if (r.predictive) {
+    const arm = (steps: Step[], i: number) => `${L.ind}${i === 0 ? '' : 'else '}${L.ifThen(L.first(r.altFirst[i] ?? null), `{ ${L.ifThen(cond(steps), L.accept(i))} }`)}`;
+    return L.fn([L.open, L.peekOrFail, r.alts.map(arm).join(L.armJoin), L.fail]);
+  }
+  if (r.alts.length === 1) return L.fn([L.open, `${L.ind}${L.ifThen(cond(r.alts[0]!), L.accept(0))}`, L.fail]);
+  const arm = (i: number, keyed: boolean) => L.guard(r.altGuard[i]!, keyed, L.cand(r.altDispatch, i, cond(r.alts[i]!)));
+  const needPeek = r.altGuard.some((g) => g !== null);
+  return L.fn([L.openBest(r.altDispatch), ...(needPeek ? [L.peekOpt] : []), dispatchWalk(r.altDispatch, ids, arm, L.dispatch, true), L.closeBest]);
+}
+
 function formsOf(rules: RuleIR[], lookaheads: Alt[], nShared: number, entry: string): Forms {
   const byName = new Map(rules.map((r) => [r.name, r]));
   const build = new Set<string>(), recognize = new Set<string>();
@@ -1215,6 +1353,32 @@ export type LexIdPlan = {
   kwLid: number;
 };
 
+/**
+ * The token kinds that can carry a literal text, by the lexer's plan: `''` (punctuation) for a
+ * punctuation literal the lexer scans, each scanned kind whose shape admits the text
+ * (tokenLiterals: the literals a kind's token is looked up among), and the template pieces whose
+ * delimiters admit it (templateLiterals). A superset, as those are: a kind not listed never
+ * carries the literal, so a token with the literal's id has one of these kinds.
+ */
+export function literalKinds(ir: Pick<ParserIR, 'tokens' | 'tpl' | 'identToken' | 'identLike' | 'puncts'>): (text: string) => ReadonlySet<string> {
+  const memo = new Map<string, Set<string>>();
+  return (text) => {
+    let ks = memo.get(text);
+    if (ks === undefined) {
+      ks = new Set<string>();
+      if (ir.puncts.includes(text)) ks.add('');
+      for (const t of scannedTokens(ir)) if (tokenLiterals(ir, t, [text]).length) ks.add(t.name);
+      const tl = templateLiterals(ir, [text]);
+      if (ir.tpl && tl.whole.length) ks.add(ir.tpl.token);
+      if (tl.head.length) ks.add('$templateHead');
+      if (tl.middle.length) ks.add('$templateMiddle');
+      if (tl.tail.length) ks.add('$templateTail');
+      memo.set(text, ks);
+    }
+    return ks;
+  };
+}
+
 /** Collect every literal text that appears in the Step IR (match_lit / altlit / sep / suppress / FIRST / Pratt). */
 function collectStepLitTexts(steps: Step[], out: Set<string>): void {
   for (const s of steps) {
@@ -1440,7 +1604,16 @@ export function lidWordByte(b: number): boolean {
 export function sepDelimLid(plan: LexIdPlan, delim: string): number {
   const lid = lidOf(plan, delim);
   if (lid >= plan.kwLid) throw new Error(`sep delimiter ${JSON.stringify(delim)} is a word: the portable targets match a delimiter as punctuation`);
+  if (plan.gtComps.includes(delim)) throw new Error(`sep delimiter ${JSON.stringify(delim)} is a composed '>' literal: the portable targets match a delimiter as one token`);
   return lid;
+}
+/** Whether a literal step is a composed '>'-led literal (LexIdPlan.gtComps), decided at generation
+ *  time: it spans several tokens and is only a lookahead operand, so it is matched by the target's
+ *  composite reader and never becomes a tree leaf. */
+export function gtCompLit(plan: LexIdPlan, s: { value: string; ttype: string }): boolean {
+  if (!plan.gtComps.includes(s.value)) return false;
+  if (s.ttype !== '$punct') throw new Error(`composed literal ${JSON.stringify(s.value)} must be punctuation`);
+  return true;
 }
 export function kidOf(plan: LexIdPlan, kind: string): number {
   const i = plan.kids.indexOf(kind);
