@@ -1145,12 +1145,38 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   // is array-type then indexed-access): only the LAST arm of a group emits the
   // `break` (all arms for that lid failed ⇒ the expression ends).
   const binLids = new Set(r.binary.map((b) => lidOf(ids, b.op)));
-  const ledBody = (b: Bracket, form: number, closes: boolean, hasBin: boolean, isLast: boolean) => `{
+  // A LED whose steps run a lookahead is a speculative reading of its token (`<` as type arguments
+  // before the relational operator): its attempt is its own function, out of line, so the loop that
+  // every operand runs holds a call there and never the lookahead's code or its register needs. A
+  // LED without one commits on its token (member access, call, index) and stays in the loop.
+  const hasLook = (steps: Step[]): boolean => steps.some((s) => {
+    switch (s.t) {
+      case 'look': return true;
+      case 'star': return hasLook([s.step]);
+      case 'sep': return hasLook([s.elem]);
+      case 'opt': case 'seq': case 'suppress': case 'ctx': return hasLook(s.steps);
+      case 'alt': return s.branches.some(hasLook);
+      default: return false;
+    }
+  });
+  const ledOut = r.leds.map((b) => hasLook(b.steps));
+  const ledBody = (b: Bracket, i: number, form: number, closes: boolean, hasBin: boolean, isLast: boolean) => ledOut[i] ? `{
+                if let Some(n) = self.${r.name}_led_${i}(left) { left = n; form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }${hasBin ? '' : isLast ? ' break;' : ''}
+            }` : `{
                 let led_save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
                 self.scratch.push(left.h);
                 if ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { left = self.finish(${rid}, sb, left.off as usize, left.tok_start as usize); form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
                 self.back(led_save); self.scratch.truncate(sb); self.b.restore(ck);${hasBin ? '' : isLast ? ' break;' : ''}
             }`;
+  const ledFn = (b: Bracket, i: number) => !ledOut[i] ? '' : `
+    #[inline(never)]
+    fn ${r.name}_led_${i}(&mut self, left: Spanned<B::H>) -> Option<Spanned<B::H>> {
+        let led_save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
+        self.scratch.push(left.h);
+        if ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return Some(self.finish(${rid}, sb, left.off as usize, left.tok_start as usize)); }
+        self.back(led_save); self.scratch.truncate(sb); self.b.restore(ck);
+        None
+    }`;
   const ledMatch = (() => {
     if (r.leds.length === 0) return '';
     const groups = groupByPreserveOrder(r.leds, (b) => lidOf(ids, b.first));
@@ -1159,7 +1185,7 @@ ${groups.map((g) => {
   const lid = g.key as number;
   const hasBin = binLids.has(lid);
   const arms = g.members.map(({ item: b, index: i }, j) =>
-    `                ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, r.ledSuppressedIn[i]!)}${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!, hasBin, j === g.members.length - 1)}`);
+    `                ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, r.ledSuppressedIn[i]!)}${ledBody(b, i, r.ledForm[i]!, r.ledClosesTail[i]!, hasBin, j === g.members.length - 1)}`);
   return `                ${lid} => {\n${arms.join('\n')}\n                }`;
 }).join('\n')}
                 _ => {}
@@ -1211,7 +1237,7 @@ ${postfixTokMatch}
         }
         self.form = form;
         Some(left)
-    }
+    }${r.leds.map(ledFn).join('')}
     fn ${r.name}_nud(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {
         self.capped = false;
         let t = self.peek()?;
