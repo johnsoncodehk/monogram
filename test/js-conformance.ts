@@ -221,7 +221,7 @@ const newTargets: { accept: string[]; reject: string[]; tscDeparts: string[] } =
     'function f() { new new.target(); }', 'new a.b[c]`t`(1);', 'new new A()();', 'new class {}();',
   ],
   reject: ['new if();', 'new typeof x;', 'new a?.b();', 'new super();', 'new;', 'new class;', 'new x.y?.();'],
-  tscDeparts: [],
+  tscDeparts: ['new super();'],   // tsc parses a `super` call as a `new` callee and leaves it to the checker
 };
 
 // ── Class element words (15.7 ClassElement, MethodDefinition; decorators proposal) ──

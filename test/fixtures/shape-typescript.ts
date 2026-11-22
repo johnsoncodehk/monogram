@@ -214,6 +214,9 @@ export const typescriptShape: ShapeSpec = {
       kind: 'pratt',
       atom: { kind: 'keep' },
       group: { kind: 'inline' },
+      // The callee's identifier is reserved-guarded as Expr's is (`new if()` has no derivation),
+      // so it is a nudSeq, the same product as Expr's first nudSeq arm.
+      nudSeq: custom('estreeExprNudSeq', 'A guarded identifier callee is an Identifier, as on Expr.', { types: [{ passthrough: true }] }),
       led: custom('estreeNewTargetLed',
         'NewTarget LEDs (`.` Ident / `[` Expr `]`) produce MemberExpression vs ' +
         'the `new.target` meta special-case when the left root is the `new` `.` `target` ' +

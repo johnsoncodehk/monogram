@@ -334,8 +334,8 @@ async function main(): Promise<void> {
     // Each Pratt slot of the grammar, rendered once (the portable IR has one rule per grammar
     // rule; while it forked [Await]/[Yield] each count was four times this, one per family).
     const want: Record<string, number> = {
-      led: 31, nudSeq: 7, nudCapped: 4, postfix: 2, postfixTok: 3,
-      group: 55, prefix: 11, binary: 39, template: 2,
+      led: 31, nudSeq: 8, nudCapped: 4, postfix: 2, postfixTok: 3,
+      group: 69, prefix: 11, binary: 39, template: 2,
     };
     const got = tsMod.shapeCoverage.pratt;
     const prattOk = Object.keys(want).every((k) => got[k] === want[k]);
@@ -356,7 +356,7 @@ async function main(): Promise<void> {
       { label: 'C5 estreeExprNudSeq', src: 'foo;', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'Identifier', name: 'foo' } }] } },
       { label: 'C6 estreeArrow', src: 'x => x + 1;', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'ArrowFunctionExpression', params: [{ type: 'Identifier', name: 'x' }], body: { type: 'BinaryExpression', left: { type: 'Identifier', name: 'x' }, operator: '+', right: 1 }, async: false, expression: true } }] } },
       { label: 'C7 tsTypeLed', src: 'type U = A<B>;', expect: { type: 'Program', body: [{ type: 'TSTypeAliasDeclaration', id: 'U', typeParameters: null, typeAnnotation: { type: 'TSTypeReference', typeName: { type: 'Type', children: ['A'], headText: 'A' }, typeParameters: [{ type: 'Type', children: ['B'], headText: 'B' }], meta: { op: '<' } } }] } },
-      { label: 'C8 estreeNewTargetLed', src: 'new Foo.bar();', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'MemberExpression', object: 'Foo', property: { type: 'Identifier', name: 'bar' }, computed: false, optional: false } }] } },
+      { label: 'C8 estreeNewTargetLed', src: 'new Foo.bar();', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'MemberExpression', object: { type: 'Identifier', name: 'Foo' }, property: { type: 'Identifier', name: 'bar' }, computed: false, optional: false } }] } },
       { label: 'C9 estreeArrayPattern', src: 'const [a, , b] = arr;', expect: { type: 'Program', body: [{ type: 'VariableDeclaration', kind: 'const', declarations: [{ type: 'VariableDeclarator', id: { type: 'ArrayPattern', elements: [{ type: 'AssignmentPatternOrId', id: 'a', init: null }, null, { type: 'AssignmentPatternOrId', id: 'b', init: null }] }, typeAnnotation: null, init: { type: 'Identifier', name: 'arr' } }] }] } },
       { label: 'C10 estreeBindingProperty', src: 'const { a, b: c } = obj;', expect: { type: 'Program', body: [{ type: 'VariableDeclaration', kind: 'const', declarations: [{ type: 'VariableDeclarator', id: { type: 'ObjectPattern', properties: [{ type: 'Property', key: { type: 'Identifier', name: 'a' }, value: { type: 'Identifier', name: 'a' }, kind: 'init', method: false, shorthand: true, computed: false }, { type: 'Property', key: { type: 'Identifier', name: 'b' }, value: { type: 'AssignmentPatternOrId', id: 'c', init: null }, kind: 'init', method: false, shorthand: false, computed: false }] }, typeAnnotation: null, init: { type: 'Identifier', name: 'obj' } }] }] } },
       { label: 'C11 estreeParam', src: 'function g(this: T) {}', expect: { type: 'Program', body: [{ type: 'FunctionDeclaration', async: false, generator: false, id: 'g', typeParameters: null, params: [{ type: 'Identifier', name: 'this', typeAnnotation: { type: 'Type', children: ['T'], headText: 'T' } }], returnType: null, body: { type: 'BlockStatement', body: [] } }] } },
