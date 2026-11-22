@@ -425,7 +425,7 @@ else if (notRun.length === 0) {
   const a = recorded.split('\n'), b = text.split('\n');
   const gone = a.filter((l) => !b.includes(l)), added = b.filter((l) => !a.includes(l));
   check('docs/ALLOCATIONS.md is current (re-record with `node test/alloc-work.ts --write`)', recorded === text,
-    `\n    recorded:\n${gone.slice(0, 12).map((l) => '      - ' + l).join('\n')}\n    now:\n${added.slice(0, 12).map((l) => '      + ' + l).join('\n')}`);
+    `\n    recorded:\n${gone.slice(0, 150).map((l) => '      - ' + l).join('\n')}\n    now:\n${added.slice(0, 150).map((l) => '      + ' + l).join('\n')}`);
 } else {
   // Compare what ran: the record's lines of the targets that ran must be present unchanged.
   const ran = new Set(measures.map((x) => x.target));
