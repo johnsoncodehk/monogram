@@ -63,7 +63,6 @@ const tnl = (t: Ex): Expr => ({ k: 'tokNl', t: x(t) });
 const mtext = (text: Ex, m: Ex): Expr => ({ k: 'metaText', text: x(text), m: x(m) });
 const call = (fn: string, ...args: Ex[]): Expr & { k: 'call' } => ({ k: 'call', fn, args: args.map(x) });
 const newList = (ty: ListTy, cap?: Ex): Expr => ({ k: 'newList', ty, cap: cap === undefined ? undefined : x(cap) });
-const estList = (ty: ListTy, estimate: Ex): Expr => ({ k: 'newList', ty, estimate: x(estimate) });
 
 const let_ = (name: string, ty: Ty, init: Ex): Stmt => ({ k: 'let', name, ty, init: x(init) });
 const set = (name: string, e: Ex): Stmt => ({ k: 'set', name, e: x(e) });
@@ -163,12 +162,12 @@ function scanMetaToksFn(m: RelexMode): Fn {
   }
   return {
     name: 'scanMetaToks',
-    doc: `${doc} One lexFrom step per token so each meta records the lexer state after it.\nGrowth estimate len(src)/2 per list; sparse lists are trimmed because the Doc keeps them.`,
+    doc: `${doc} One lexFrom step per token so each meta records the lexer state after it.\nBoth lists grow as tokens are pushed: their length is known only once the scan ends.`,
     params: [{ name: 'src', ty: 'str' }],
     ret: ['metas', 'toks'],
     body: [
-      let_('toks', 'toks', estList('toks', shr(len('src'), I(1)))),
-      let_('meta', 'metas', estList('metas', shr(len('src'), I(1)))),
+      let_('toks', 'toks', newList('toks')),
+      let_('meta', 'metas', newList('metas')),
       let_('pos', 'int', I(0)),
       ...stateLets(m),
       while_(lt('pos', len('src')), [
@@ -178,8 +177,6 @@ function scanMetaToksFn(m: RelexMode): Fn {
         let_('t', 'tok', last('toks')),
         push('meta', metaOf(m, 't')),
       ]),
-      { k: 'shrink', list: 'toks' },
-      { k: 'shrink', list: 'meta' },
       ret('meta', 'toks'),
     ],
   };
