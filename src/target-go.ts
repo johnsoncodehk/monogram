@@ -1934,7 +1934,7 @@ ${topOneBodyW(plan)}
 }
 func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch)
-\tvar localE []EntryMeta
+\tlocalE := p.entries[:0] // a reused builder's Workspace list (ParseWith), else nil
 \tfor {
 \t\tsp := p.pos
 \t\tp.lookReset()
@@ -1951,7 +1951,7 @@ func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \t\t\tp.scratch = append(p.scratch, fr.h)
 \t\t}
 \t}
-\tp.entryHs = append([]int32(nil), p.scratch[sb:]...)
+\tp.entryHs = append(p.entryHs[:0], p.scratch[sb:]...) // DocWith copies it out (parseWithMetaW)
 \tp.entries = localE
 \treturn p.finishW(${rid}, sb, p.offAt(save), save), true
 }`;
@@ -2004,13 +2004,13 @@ function rdEntryWithReuseBW(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Are
 }
 func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch)
-\tvar localE []EntryMeta
+\tlocalE := p.entries[:0] // a reused builder's Workspace list (ParseWith), else nil
 ${headBlock}\tfor {
 \t\tm, ok := p.parseLoopSegW(sb)
 \t\tif !ok { break }
 \t\tlocalE = append(localE, m)
 \t}
-\tp.entryHs = append([]int32(nil), p.scratch[sb:]...)
+\tp.entryHs = append(p.entryHs[:0], p.scratch[sb:]...) // DocWith copies it out (parseWithMetaW)
 \tp.entries = localE
 \treturn p.finishW(${rid}, sb, p.offAt(save), save), true
 }`;
@@ -3009,10 +3009,23 @@ type CstBuilder struct {
 \tNodes []Node
 \tKids  []int32
 \tToks  []Tok
-\t// The engine's transient buffers, kept for the next ParseWith (emptied by it before use).
+\tws    Workspace
+}
+func (b *CstBuilder) Workspace() *Workspace { return &b.ws }
+
+// Workspace holds the engine's transient buffers between parses: the child scratch list${reuse ? ', the\n// top-level entry records' : ''}${reuse?.kind === 'B' ? ' and segments' : ''} and the lexer's stacks. ParseWith empties and reuses the
+// Workspace of a builder that has one (WorkspaceOwner), so a builder kept across parses does not
+// allocate them again: the Rust target's Builder::workspace_mut. Its fields are the engine's.
+type Workspace struct {
 \tscratch []int32
 ${reuse ? '\tentries []EntryMeta\n' : ''}${reuse?.kind === 'B' ? '\tsegs []Seg\n' : ''}\tlex     lexStacks
+\t// The builder engine's state, with its own scratch${reuse ? ' and entry lists' : ''}: kept here because Go's escape analysis
+\t// moves a parserW to the heap (one allocation per parse otherwise); emptied after each parse.
+\tw parserW
 }
+// WorkspaceOwner is the optional contract by which a builder keeps a Workspace (embed one and
+// return its address); without it every ParseWith starts from new buffers.
+type WorkspaceOwner interface { Workspace() *Workspace }
 
 func (b *CstBuilder) Checkpoint() (nb, kb int) { return len(b.Nodes), len(b.Kids) }
 func (b *CstBuilder) Restore(nb, kb int) { b.Nodes = b.Nodes[:nb]; b.Kids = b.Kids[:kb] }
@@ -3073,7 +3086,9 @@ type SlimBuilder struct {
 \tNodes []Node
 \tKids  []int32
 \tToks  []Tok
+\tws    Workspace
 }
+func (b *SlimBuilder) Workspace() *Workspace { return &b.ws }
 
 func (b *SlimBuilder) Checkpoint() (nb, kb int) { return len(b.Nodes), len(b.Kids) }
 func (b *SlimBuilder) Restore(nb, kb int) { b.Nodes = b.Nodes[:nb]; b.Kids = b.Kids[:kb] }
@@ -3123,17 +3138,27 @@ ${wMethods}
 // Keeps ParseWith(CstBuilder) within the additive-prefix / byte-equal contract
 // without paying for a second method-instantiation (Go GC-shape stenciling tax).
 func parseWithCst(src string, b *CstBuilder) (int32, bool) {
-\tp := &engine{nodes: b.Nodes[:0], kids: b.Kids[:0], scratch: b.scratch[:0]${reuse ? ', entries: b.entries[:0]' : ''}${reuse?.kind === 'B' ? ', segs: b.segs[:0]' : ''}}
-\th := p.parse(src, lexInto(src, b.Toks, &b.lex))
-\tb.Nodes, b.Kids, b.Toks, b.scratch = p.nodes, p.kids, p.toks, p.scratch${reuse ? '\n\tb.entries = p.entries' : ''}${reuse?.kind === 'B' ? '\n\tb.segs = p.segs' : ''}
+\tw := &b.ws
+\tp := &engine{nodes: b.Nodes[:0], kids: b.Kids[:0], scratch: w.scratch[:0]${reuse ? ', entries: w.entries[:0]' : ''}${reuse?.kind === 'B' ? ', segs: w.segs[:0]' : ''}}
+\th := p.parse(src, lexInto(src, b.Toks, &w.lex))
+\tb.Nodes, b.Kids, b.Toks, w.scratch = p.nodes, p.kids, p.toks, p.scratch${reuse ? '\n\tw.entries = p.entries' : ''}${reuse?.kind === 'B' ? '\n\tw.segs = p.segs' : ''}
 \tif h < 0 { return 0, false }
 \treturn h, true
 }
+// parseWithW: a builder that parsed before is reused as parse_with does in the Rust target: its
+// arena is emptied, its token buffer (the built-in builders') and Workspace are emptied and reused
+// (capacity kept), so nothing of the previous parse stays reachable and nothing is allocated again.
 func parseWithW(src string, b Builder) (int32, bool) {
-\tp := &parserW{cursor: cursor{toks: lex(src)}, src: src, b: b, scratch: nil}
+\tvar w *Workspace
+\tif o, is := b.(WorkspaceOwner); is { w = o.Workspace() } else { w = &Workspace{} }
+\tb.Restore(0, 0)
+\tp := &w.w
+\t*p = parserW{cursor: cursor{toks: lexInto(src, toksOf(b), &w.lex)}, src: src, b: b, scratch: p.scratch[:0]${reuse ? ', entries: p.entries[:0], entryHs: p.entryHs[:0]' : ''}}
 \tfr, ok := p.parse${ir.entry}W()
 \trecordToks(b, p.toks)
-\tif !ok || p.pos != len(p.toks) || !fr.present { return 0, false }
+\tok = ok && p.pos == len(p.toks) && fr.present
+\tp.cursor.toks, p.src, p.b = nil, "", nil // the workspace keeps buffers, not the input or the builder
+\tif !ok { return 0, false }
 \treturn fr.h, true
 }
 
@@ -3167,6 +3192,16 @@ func writeJSONWith(nodes []Node, kids []int32, toks []Tok, id int32, b *strings.
 
 ${docWithBlock}
 // recordToks hands the built-in builders the parse stream their leaves index.
+// toksOf: the token buffer of a built-in builder's last tree, which its next parse lexes into.
+func toksOf(b Builder) []Tok {
+\tswitch x := b.(type) {
+\tcase *CstBuilder:
+\t\treturn x.Toks
+\tcase *SlimBuilder:
+\t\treturn x.Toks
+\t}
+\treturn nil
+}
 func recordToks(b Builder, ts []Tok) {
 \tswitch x := b.(type) {
 \tcase *CstBuilder:

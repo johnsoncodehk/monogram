@@ -151,11 +151,16 @@ func profileBySite() map[string][2]int64 {
 	return out
 }
 
-func MeasureAllocs(src string, reuse bool) AllocOut {
-	kept := &CstBuilder{}
-	ParseWith(src, kept)
-	b := kept
-	if !reuse {
+// MeasureAllocs: mode fresh = a new CstBuilder after a first parse; reuse = the CstBuilder of a first
+// parse (the native engine); slim-reuse = the SlimBuilder of a first parse (the builder engine
+// behind the Builder interface).
+func MeasureAllocs(src string, mode string) AllocOut {
+	var b Builder = &CstBuilder{}
+	if mode == "slim-reuse" {
+		b = &SlimBuilder{}
+	}
+	ParseWith(src, b)
+	if mode == "fresh" {
 		b = &CstBuilder{}
 	}
 	// One P while measuring. An allocation under 16 B without pointers goes to its P's current
@@ -180,8 +185,17 @@ func MeasureAllocs(src string, reuse bool) AllocOut {
 			sites[k] = d
 		}
 	}
-	res := uint64(cap(b.Nodes))*uint64(unsafe.Sizeof(Node{})) + uint64(cap(b.Kids))*4 + uint64(cap(b.Toks))*uint64(unsafe.Sizeof(Tok{}))
-	return AllocOut{ok, len(b.Toks), len(b.Nodes), m1.Mallocs - m0.Mallocs, m1.TotalAlloc - m0.TotalAlloc, res, sites}
+	var nodes []Node
+	var kids []int32
+	var toks []Tok
+	switch x := b.(type) {
+	case *CstBuilder:
+		nodes, kids, toks = x.Nodes, x.Kids, x.Toks
+	case *SlimBuilder:
+		nodes, kids, toks = x.Nodes, x.Kids, x.Toks
+	}
+	res := uint64(cap(nodes))*uint64(unsafe.Sizeof(Node{})) + uint64(cap(kids))*4 + uint64(cap(toks))*uint64(unsafe.Sizeof(Tok{}))
+	return AllocOut{ok, len(toks), len(nodes), m1.Mallocs - m0.Mallocs, m1.TotalAlloc - m0.TotalAlloc, res, sites}
 }
 `;
 const GO_MAIN = `package main
@@ -203,8 +217,8 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		for _, mode := range []string{"fresh", "reuse"} {
-			o := parser.MeasureAllocs(string(b), mode == "reuse")
+		for _, mode := range []string{"fresh", "reuse", "slim-reuse"} {
+			o := parser.MeasureAllocs(string(b), mode)
 			type site struct {
 				Fn      string \`json:"fn"\`
 				Objects int64  \`json:"objects"\`
@@ -332,7 +346,7 @@ else if ((goVersion = execFileSync('go', ['version'], { encoding: 'utf8' }).trim
     const out = execFileSync(join(gdir, 'consumer'), files, { encoding: 'utf8', maxBuffer: 1 << 26 });
     const lines = out.trim().split('\n').map((l) => JSON.parse(l));
     GRAMMAR_INPUTS[gname]!.forEach((input, i) => {
-      for (const mode of ['fresh', 'reuse']) {
+      for (const mode of ['fresh', 'reuse', 'slim-reuse']) {
         const o = lines.find((x: any) => x.file === i && x.mode === mode);
         if (!o) { notRun.push(`go ${gname} ${input} ${mode}: no output`); continue; }
         if (!o.ok) throw new Error(`go ${gname} rejects ${input}`);
@@ -370,8 +384,8 @@ for (const [small, big] of LINEAR) for (const a of measures.filter((x) => x.inpu
     check(`${label}: modeled bytes within ${tol * 100}%`, bb <= ba * (1 + tol), `${ba.toFixed(1)} → ${bb.toFixed(1)} B per token`);
   }
 }
-for (const x of measures.filter((x) => x.target === 'go' && x.mode === 'reuse'))
-  check(`go ${x.grammar} ${x.input}: a reused builder allocates nothing`, x.allocs === 0 && x.allocBytes === 0, `${x.allocs} allocations, ${x.allocBytes} B`);
+for (const x of measures.filter((x) => x.target === 'go' && (x.mode === 'reuse' || x.mode === 'slim-reuse')))
+  check(`go ${x.grammar} ${x.input} ${x.mode}: a reused builder allocates nothing`, x.allocs === 0 && x.allocBytes === 0, `${x.allocs} allocations, ${x.allocBytes} B`);
 
 // ── the record ──
 function fmt(x: number): string { return Number.isFinite(x) ? Math.round(x).toLocaleString('en-US') : '-'; }
@@ -413,7 +427,7 @@ for (const x of measures) {
 say();
 // The per-site tables: the recorded input under the typescript grammar, and any Go parse with a
 // reused builder that allocates (it should allocate nothing).
-for (const x of measures.filter((x) => (x.input === SITES_FOR && x.grammar === 'typescript') || (x.target === 'go' && x.mode === 'reuse' && x.allocs > 0))) {
+for (const x of measures.filter((x) => (x.input === SITES_FOR && x.grammar === 'typescript') || (x.target === 'go' && x.mode !== 'fresh' && x.allocs > 0))) {
   const sorted = [...x.sites].sort((a, b) => b.bytes - a.bytes || b.n - a.n || a.text.localeCompare(b.text));
   say(`## Where: ${x.target} target, ${x.mode}, ${x.grammar} grammar, ${x.input} (top ${Math.min(TOP_SITES, sorted.length)} of ${sorted.length} sites by bytes)`);
   say();

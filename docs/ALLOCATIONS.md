@@ -56,18 +56,25 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | js | javascript | _tsserver.js ×4 | reuse | 19,712 | 13,037 | 1,245 | 0.06 | 0.10 | 59,744 | 3.0 | 4.6 | - | - | - |
 | go | typescript | acorn.js | fresh | 42,209 | 28,638 | 83 | 0.00 | 0.00 | 9,249,936 | 219.1 | 323.0 | 3 | 2,072,576 | 7,177,360 |
 | go | typescript | acorn.js | reuse | 42,209 | 28,638 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
+| go | typescript | acorn.js | slim-reuse | 42,209 | 11,490 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 | go | typescript | lib.es5.d.ts | fresh | 13,659 | 7,216 | 73 | 0.01 | 0.01 | 2,124,960 | 155.6 | 294.5 | 3 | 548,864 | 1,576,096 |
 | go | typescript | lib.es5.d.ts | reuse | 13,659 | 7,216 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
+| go | typescript | lib.es5.d.ts | slim-reuse | 13,659 | 3,112 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 | go | typescript | _tsserver.js | fresh | 4,932 | 3,182 | 60 | 0.01 | 0.02 | 719,008 | 145.8 | 226.0 | 3 | 225,280 | 493,728 |
 | go | typescript | _tsserver.js | reuse | 4,932 | 3,182 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
+| go | typescript | _tsserver.js | slim-reuse | 4,932 | 1,372 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 | go | typescript | _tsserver.js ×4 | fresh | 19,728 | 12,725 | 78 | 0.00 | 0.01 | 3,714,208 | 188.3 | 291.9 | 3 | 901,120 | 2,813,088 |
 | go | typescript | _tsserver.js ×4 | reuse | 19,728 | 12,725 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
+| go | typescript | _tsserver.js ×4 | slim-reuse | 19,728 | 5,485 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 | go | javascript | acorn.js | fresh | 42,051 | 28,638 | 83 | 0.00 | 0.00 | 9,249,936 | 220.0 | 323.0 | 3 | 2,072,576 | 7,177,360 |
 | go | javascript | acorn.js | reuse | 42,051 | 28,638 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
+| go | javascript | acorn.js | slim-reuse | 42,051 | 11,490 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 | go | javascript | _tsserver.js | fresh | 4,928 | 3,136 | 60 | 0.01 | 0.02 | 719,008 | 145.9 | 229.3 | 3 | 225,280 | 493,728 |
 | go | javascript | _tsserver.js | reuse | 4,928 | 3,136 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
+| go | javascript | _tsserver.js | slim-reuse | 4,928 | 1,367 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 | go | javascript | _tsserver.js ×4 | fresh | 19,712 | 12,541 | 78 | 0.00 | 0.01 | 3,714,208 | 188.4 | 296.2 | 3 | 901,120 | 2,813,088 |
 | go | javascript | _tsserver.js ×4 | reuse | 19,712 | 12,541 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
+| go | javascript | _tsserver.js ×4 | slim-reuse | 19,712 | 5,465 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 
 ## Where: ts target, parse, typescript grammar, acorn.js (top 15 of 61 sites by bytes)
 
@@ -160,6 +167,11 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | `(*engine).parseProgram` | 1 | 64 | 0.0% |
 
 ## Where: go target, reuse, typescript grammar, acorn.js (top 0 of 0 sites by bytes)
+
+| site (innermost function in the parser package) | allocations | bytes | share |
+|:--|--:|--:|--:|
+
+## Where: go target, slim-reuse, typescript grammar, acorn.js (top 0 of 0 sites by bytes)
 
 | site (innermost function in the parser package) | allocations | bytes | share |
 |:--|--:|--:|--:|
