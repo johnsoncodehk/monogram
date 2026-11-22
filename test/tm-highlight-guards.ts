@@ -61,6 +61,19 @@ const cases: Case[] = [
   { label: '#2 control: x! / y is division', scope: 'source.ts', lines: ['const z = x! / y'],
     checks: [{ line: 0, text: '/', scope: 'keyword.operator.arithmetic' },
              { line: 0, text: '/', scope: 'string.regexp', absent: true }] },
+  // A keyword is a regex position only where what follows it in the grammar can begin with a
+  // regex: after `new`, `const`, `var`, `let` or `extends` it cannot, so a `/` after such a word
+  // read as a property name is a division. `return`, `typeof` and `of` keep their regex.
+  ...['new', 'const', 'var', 'let', 'extends', 'class', 'get'].map((w) => ({
+    label: `a / after the property .${w} is division`, scope: 'source.ts', lines: [`x = o.${w} / 2 / y`],
+    checks: [{ line: 0, text: '/', scope: 'keyword.operator.arithmetic' },
+             { line: 0, text: '/', scope: 'string.regexp', absent: true }] })),
+  { label: 'return /re/ is a regex', scope: 'source.ts', lines: ['return /re/.test(s)'],
+    checks: [{ line: 0, text: 're', scope: 'string.regexp' }] },
+  { label: 'typeof /re/ is a regex', scope: 'source.ts', lines: ['x = typeof /re/'],
+    checks: [{ line: 0, text: 're', scope: 'string.regexp' }] },
+  { label: 'of /re/ is a regex', scope: 'source.ts', lines: ['for (x of /a/g.exec(s)) {}'],
+    checks: [{ line: 0, text: 'a', scope: 'string.regexp' }] },
 
   // ── #3: a generic-arrow `(` vs a generic-CALL / comparison `(` at end-of-line. PR #13
   // degraded the look-behind to `(?<=>)`, so multi-line `foo<Bar>(` / `a > (` were wrongly

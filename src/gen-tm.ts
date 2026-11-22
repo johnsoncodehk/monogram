@@ -2427,15 +2427,15 @@ function detectRegexLiteral(grammar: CstGrammar, tokenNames: Set<string>): Regex
   const flagChars = tokenPatternTrailingCharClass(regexToken);
   const flagsPattern = flagChars ? `[${flagChars}]*` : '[a-z]*';
 
-  // Collect keywords that can directly precede expressions
-  // Walk rules, find literal-string → Ref(grammar-rule) sequences
-  const exprRuleNames = new Set<string>();
-  for (const rule of grammar.rules) {
-    // Non-token rule names (grammar rules, not tokens)
-    if (!tokenNames.has(rule.name)) {
-      exprRuleNames.add(rule.name);
-    }
-  }
+  // Collect keywords that can directly precede a regex: a keyword followed by a reference to a
+  // rule that can BEGIN with the regex token (grammar-analysis FIRST; null = anything, as a Pratt
+  // expression rule is). A rule that cannot begin with one (a binding after `let` / `var`) does
+  // not make the keyword a regex position: `o.var / 2` stays a division.
+  const { exprFirst } = analyzeGrammar(grammar);
+  const beginsRegex = (ref: RuleExpr): boolean => {
+    const first = exprFirst(ref);
+    return first === null || first.has(regexToken.name);
+  };
 
   const preceedingKeywords: string[] = [];
   const prefixOps = new Set<string>();
@@ -2465,7 +2465,7 @@ function detectRegexLiteral(grammar: CstGrammar, tokenNames: Set<string>): Regex
       const b = unwrapRef(items[j]);
       // keyword Ref → keyword can precede an expression (and thus regex)
       if (a.type === 'literal' && isKeywordLiteral(a.value) &&
-          b.type === 'ref' && exprRuleNames.has(b.name) &&
+          b.type === 'ref' && !tokenNames.has(b.name) && beginsRegex(b) &&
           !preceedingKeywords.includes(a.value)) {
         preceedingKeywords.push(a.value);
       }
