@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -54,6 +54,25 @@ const dispatchGo = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, key
 const beatsGo = (d: Dispatch, pos: string, i: number) => d.ranked.includes(i) ? `(${pos} > bestPos || ${pos} == bestPos && ${i} < bi)` : `${pos} > bestPos`;
 const markGo = (d: Dispatch, i: number) => (d.ranked.length ? ` bi = ${i};` : '');
 const biGo = (d: Dispatch) => (d.ranked.length ? '; bi := -1' : '');
+// ── The two frames of a construct that may have to undo what it tried ──
+// Every one is printed by one of these, so what a frame costs in the output is decided here. The
+// checkpoint (position, scratch length, arena lengths) and the undo back to it, in the native
+// engine; the builder engine's checkpoint is the builder's (ckptGoW / undoGoW).
+const ckptGo = 'm := p.mark();';
+const undoGo = 'p.reset(m)';
+const ckptGoW = (_recv: string) => 'm := p.mark()';
+const undoGoW = (_recv: string) => 'p.back(m.pos); p.scratch = p.scratch[:m.sb]; p.b.Restore(m.nb, m.kb)';
+// BRANCH frame: one branch of an ordered choice (`alt`): it returns true from the choice when the
+// branch matched, and undoes it when it did not.
+const branchGo = (cond: string) => `{ ${ckptGo} if ${cond} { return true }; ${undoGo} }`;
+const branchGoW = (cond: string, recv: string) => `{ ${ckptGoW(recv)}; if ${cond} { return true }; ${undoGoW(recv)} }`;
+// CANDIDATE frame: one candidate of a longest-match list tried from `save`: when it matched and
+// beats the best so far it becomes the best (`win` records it and moves the arena checkpoint past
+// its node), else `lost` drops what it built; either way the position goes back to `save`.
+const lostGo = 'p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]';
+const lostGoW = (recv: string) => `p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}`;
+const candGo = (d: Dispatch, i: number, cond: string, win: string, lost: string) =>
+  `{ if ${cond} && ${beatsGo(d, 'p.pos', i)} { ${win} } else { ${lost} }; p.back(save) }`;
 
 /** Emit kid/lid lookup tables into generated lexer source. */
 function renderIdTablesGo(ids: LexIdPlan): string {
@@ -89,10 +108,14 @@ func mkTok(off, end int, nl bool, kid, lid uint16) Tok { return Tok{Off: uint32(
 }
 
 /** Emit TT_NAMES / RULE_NAMES lookup tables for arena slim encoding. */
-function renderArenaTablesGo(ar: ArenaIdPlan): string {
+function renderArenaTablesGo(ar: ArenaIdPlan, ids: LexIdPlan): string {
   return `var TT_NAMES = []string{${ar.ttNames.map(J).join(', ')}}
 var RULE_NAMES = []string{${ar.ruleNames.map(J).join(', ')}}
 const TT_SKIP_PUNCT = ${TT_SKIP_PUNCT}
+// lidKw: the first word lid (LexIdPlan.kwLid). A literal from here on is a $keyword leaf, one
+// before it a $punct (no leaf); litTt is its leaf type id.
+const lidKw = ${ids.kwLid}
+func litTt(lid uint16) uint16 { if lid >= lidKw { return ${ttIdOf(ar, '$keyword')} }; return TT_SKIP_PUNCT }
 `;
 }
 
@@ -214,7 +237,7 @@ const lidInterpClose uint16 = ${lidOf(ids, tpl.interpClose)}
   const rxModuleConsts = `${rxBitTables}${tplLidConsts}`;
   const rxState = rx ? `\tprevLid, prevKid, bpLid := uint16(0), uint16(0), uint16(0)
 \thasPrev, hasPrev2 := false, false
-\tparenHead := []bool{}
+\tparenHead := stk.parenHead[:0]
 \tlastClose, lastBang := false, false
 \tprevIsValue := func() bool {
 \t\tif !hasPrev { return false }
@@ -234,7 +257,7 @@ const lidInterpClose uint16 = ${lidOf(ids, tpl.interpClose)}
 \t}
 \t_ = scanTplSpan
 ` : '';
-  const tplState = tpl ? `\ttemplateStack := []int{}
+  const tplState = tpl ? `\ttemplateStack := stk.templateStack[:0]
 ${tplSpanFn}` : '';
   const emitHooks = [
     rx ? `\t\tif lid == lidLParen {
@@ -392,8 +415,14 @@ ${pushHooks}\t\t*acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendi
 ${nlWs}${tplDispatch}${cascade}
 ${uniIdentFallbackGo}${loopPanicGo}`;
   const idTables = renderIdTablesGo(ids);
+  // The lexer's bracket-head and template-depth stacks, bounded by nesting depth: lexInto reuses
+  // the capacity of the ones in stk (a reused builder's) and leaves them there.
+  const stkFields = [rx ? '\tparenHead []bool\n' : '', tpl ? '\ttemplateStack []int\n' : ''].join('');
+  const lexStacks = `// lexStacks are the lexer's transient stacks, kept across lexes by a reused builder.
+type lexStacks struct {${stkFields ? `\n${stkFields}` : ''}}
+`;
   if (rxOnly) {
-    return `${idTables}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool) {
+    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool) {
 \tn := len(src)
 ${rxStateFrom}${emitRxOnly}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -401,14 +430,17 @@ ${loopBody}
 \t}
 \treturn pos, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang
 }
-func lex(src string) []Tok {
-\tvar out []Tok
-\tlexFrom(src, 0, false, 0, 0, 0, false, false, nil, false, false, &out, 0)
+func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
+// likewise the stacks in stk.
+func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
+\tout := buf[:0]
+\t_, _, _, _, _, _, _, stk.parenHead, _, _ = lexFrom(src, 0, false, 0, 0, 0, false, false, stk.parenHead[:0], false, false, &out, 0)
 \treturn out
 }`;
   }
   if (tplOnly) {
-    return `${idTables}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, templateStack []int, acc *[]Tok, limit int) (int, bool, []int) {
+    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, templateStack []int, acc *[]Tok, limit int) (int, bool, []int) {
 \tn := len(src)
 ${tplStateFrom}${emitTplOnly}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -416,14 +448,17 @@ ${loopBody}
 \t}
 \treturn pos, pendingNl, templateStack
 }
-func lex(src string) []Tok {
-\tvar out []Tok
-\tlexFrom(src, 0, false, nil, &out, 0)
+func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
+// likewise the stacks in stk.
+func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
+\tout := buf[:0]
+\t_, _, stk.templateStack = lexFrom(src, 0, false, stk.templateStack[:0], &out, 0)
 \treturn out
 }`;
   }
   if (rxTpl) {
-    return `${idTables}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, templateStack []int, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool, []int) {
+    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, templateStack []int, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool, []int) {
 \tn := len(src)
 ${rxStateFrom}${tplStateFrom}${emitRxTpl}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -431,15 +466,21 @@ ${loopBody}
 \t}
 \treturn pos, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang, templateStack
 }
-func lex(src string) []Tok {
-\tvar out []Tok
-\tlexFrom(src, 0, false, 0, 0, 0, false, false, nil, false, false, nil, &out, 0)
+func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
+// likewise the stacks in stk.
+func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
+\tout := buf[:0]
+\t_, _, _, _, _, _, _, stk.parenHead, _, _, stk.templateStack = lexFrom(src, 0, false, 0, 0, 0, false, false, stk.parenHead[:0], false, false, stk.templateStack[:0], &out, 0)
 \treturn out
 }`;
   }
   if (rxOrTpl) {
-    return `${idTables}${lexGoHelpers}${rxModuleConsts}${scans}func lex(src string) []Tok {
-\tvar toks []Tok
+    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
+// likewise the stacks in stk.
+func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
+\ttoks := buf[:0]
 \tn := len(src)
 \tpos := 0
 \tpendingNl := false
@@ -447,11 +488,11 @@ func lex(src string) []Tok {
 ${rxState}${tplState}${nlState}${emitFn}${pushTokFn}\tfor pos < n {
 ${loopBody}
 \t}
-\treturn toks
+${rx ? '\tstk.parenHead = parenHead\n' : ''}${tpl ? '\tstk.templateStack = templateStack\n' : ''}\treturn toks
 }`;
   }
   if (newlineOnly) {
-    return `${idTables}${lexGoHelpers}${scans}func lexFrom(src string, pos int, pendingNl bool, flowDepth int, acc *[]Tok, limit int) (int, bool, int) {
+    return `${idTables}${lexStacks}${lexGoHelpers}${scans}func lexFrom(src string, pos int, pendingNl bool, flowDepth int, acc *[]Tok, limit int) (int, bool, int) {
 \tn := len(src)
 ${nlStateFrom}${pushTokAccFn}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -459,13 +500,16 @@ ${loopBody}
 \t}
 \treturn pos, pendingNl, flowDepth
 }
-func lex(src string) []Tok {
-\tvar out []Tok
+func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
+// likewise the stacks in stk.
+func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
+\tout := buf[:0]
 \tlexFrom(src, 0, false, 0, &out, 0)
 \treturn out
 }`;
   }
-  return `${idTables}${lexGoHelpers}${scans}func lexFrom(src string, pos int, pendingNl bool, acc *[]Tok, limit int) (int, bool) {
+  return `${idTables}${lexStacks}${lexGoHelpers}${scans}func lexFrom(src string, pos int, pendingNl bool, acc *[]Tok, limit int) (int, bool) {
 \tn := len(src)
 ${pushTokAccFn}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -473,8 +517,11 @@ ${loopBody}
 \t}
 \treturn pos, pendingNl
 }
-func lex(src string) []Tok {
-\tvar out []Tok
+func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
+// likewise the stacks in stk.
+func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
+\tout := buf[:0]
 \tlexFrom(src, 0, false, &out, 0)
 \treturn out
 }`;
@@ -506,7 +553,15 @@ func (p *${recv}) back(sp int) { if p.peekEnd > p.maxLook { p.maxLook = p.peekEn
 // lookEnd: one past the furthest token the current entry examined.
 func (p *${recv}) lookEnd() int { if p.peekEnd > p.maxLook { return p.peekEnd }; return p.maxLook }
 // lookReset starts recording an entry's extent.
-func (p *${recv}) lookReset() { p.maxLook = 0; p.peekEnd = 0 }`;
+func (p *${recv}) lookReset() { p.maxLook = 0; p.peekEnd = 0 }
+// mark: where a construct that may have to undo what it tries starts; ${recv === 'engine' ? 'reset undoes everything since (the position as back does, the scratch list and the arena).' : 'undoGoW undoes everything since.'}
+${recv === 'engine'
+  ? `func (p *engine) mark() mark { return mark{p.pos, len(p.scratch), len(p.nodes), len(p.kids)} }
+func (p *engine) reset(m mark) { p.back(m.pos); p.scratch = p.scratch[:m.sb]; p.nodes = p.nodes[:m.nb]; p.kids = p.kids[:m.kb] }`
+  // Written so that it fits Go's inlining budget (cost 77 of 80). A reset method around the
+  // builder's Restore cannot (cost 86 and more with every form tried), and a call where the undo
+  // was inline would be added work on every failed branch, so the undo stays printed in place.
+  : `func (p *${recv}) mark() (m mark) { m.nb, m.kb = p.b.Checkpoint(); m.pos, m.sb = p.pos, len(p.scratch); return }`}`;
 }
 // '>'-led composite operators (LexIdPlan.gtComps): the lexer scans every '>' alone. gtOp reads the
 // operator at ts[i]: a lone '>' extends over each adjacent single-character punct token after it
@@ -556,14 +611,14 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
 // The step itself, printed in place (a shared step's method body; every other step's site).
 function stepBody(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
   switch (s.t) {
-    case 'lit': return gtCompLit(ids, s) ? `p.matchComp(${lidOf(ids, s.value)})` : `p.matchLit(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
-    case 'tok': return `p.matchTok(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
+    case 'lit': return gtCompLit(ids, s) ? `p.matchComp(${lidOf(ids, s.value)})` : `p.matchLit(${lidOf(ids, s.value)})`;
+    case 'tok': return `p.matchTok(${kidOf(ids, s.name)})`;
     case 'rule': return `p.callRule(p.parse${s.name}())`;
     case 'ruleBp': return `p.callRule(p.bp_${s.name}(${s.bp}))`;
     case 'star': return `p.star(func() bool { return ${stepCond(s.step, ids, ar)} })`;
     case 'opt': return `p.opt(func() bool { return ${s.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} })`;
-    case 'sep': return `p.sepBy(func() bool { return ${stepCond(s.elem, ids, ar)} }, ${lidOf(ids, s.delim)})`;
-    case 'altlit': return `p.altLit([]struct{ Lid uint16; TtId uint8 }{${s.opts.map((o) => `{${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)}}`).join(', ')}})`;
+    case 'sep': return `p.sepBy(func() bool { return ${stepCond(s.elem, ids, ar)} }, ${sepDelimLid(ids, s.delim)})`;
+    case 'altlit': return `p.altLit([]uint16{${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}})`;
     case 'alt': return `func() bool { ${stepStmts(s, ids, ar)} }()`;
     case 'look': return `${s.is ? '' : '!'}p.look${s.id}()`;
     case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
@@ -587,7 +642,7 @@ function stepStmts(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
       const needPeek = s.branches.some((_, i) => isGuardable(firsts[i] ?? null, nAlts));
       const peekInit = needPeek ? `_ft := p.peek(); ` : '';
       const tries = s.branches.map((br, i) => {
-        const body = `{ save := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids); if ${br.length ? br.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'} { return true }; p.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb] }`;
+        const body = branchGo(br.length ? br.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true');
         const f = firsts[i] ?? null;
         if (!isGuardable(f, nAlts)) return body;
         return `if _ft != nil && ${firstCond(f, '_ft', ids)} ${body}`;
@@ -602,7 +657,7 @@ function stepStmts(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
 
 // ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
 function lookFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  return ir.lookaheads.map((body, id) => `func (p *engine) look${id}() bool { save := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids); m := ${body.map((x) => stepCond(x, ids, ar)).join(' && ')}; p.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; return m }\n`).join('');
+  return ir.lookaheads.map((body, id) => `func (p *engine) look${id}() bool { ${ckptGo} r := ${body.map((x) => stepCond(x, ids, ar)).join(' && ')}; ${undoGo}; return r }\n`).join('');
 }
 
 // ParserIR.shared, one method each: the step, run against the parser's scratch list. It undoes
@@ -615,7 +670,7 @@ function predAltBody(branches: Step[][], ids: LexIdPlan, firsts: FirstSig[] | un
   // FIRST dispatch still only tries the matching arm; on half-failure restore like non-pred alt.
   const arms = branches.map((br, i) => {
     const steps = br.length ? br.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true';
-    return `if ${firstCond(firsts![i], 't', ids)} { save := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids); if ${steps} { return true }; p.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb] }`;
+    return `if ${firstCond(firsts![i], 't', ids)} ${branchGo(steps)}`;
   }).join(' else ');
   return `t := p.peek(); if t == nil { return false }; ${arms}; return false`;
 }
@@ -688,7 +743,7 @@ ${r.alts.map(arm).join(' ')}
   // The alternatives are reached through the rule's Dispatch (emit-portable.ts, RdRule.altDispatch).
   const alt = (i: number, keyed: boolean) => {
     const cond = r.alts[i]!.map((x) => stepCond(x, ids, ar)).join(' && ');
-    const body = `{ if ${cond} && ${beatsGo(r.altDispatch, 'p.pos', i)} { best = p.finish(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save); bestPos = p.pos;${markGo(r.altDispatch, i)} nb = len(p.nodes); kb = len(p.kids) } else { p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb] }; p.back(save) }`;
+    const body = candGo(r.altDispatch, i, cond, `best = p.finish(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save); bestPos = p.pos;${markGo(r.altDispatch, i)} nb = len(p.nodes); kb = len(p.kids)`, lostGo);
     const g = guardCond(r.altGuard[i]!, '_ft', '', keyed);
     return ifGo(g.length && !keyed ? ['_ft != nil', ...g] : g, body);
   };
@@ -710,9 +765,7 @@ ${plan.topOneBody}
 }
 func (p *engine) parse${r.name}() int32 {
 \tsave := p.pos; sb := len(p.scratch)
-\tcapHint := (len(p.toks) - p.pos) / 2
-\tif capHint < 8 { capHint = 8 }
-\tlocalE := make([]EntryMeta, 0, capHint)
+\tlocalE := p.entries[:0]
 \tfor {
 \t\tsp := p.pos
 \t\tp.lookReset()
@@ -753,7 +806,7 @@ type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidStart, KidCount int 
 ${headFn}func (p *engine) parseLoopSeg(sb int) (Seg, EntryMeta, bool) {
 \tsp := p.pos; before := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \tp.lookReset()
-\tif !p.matchTok(${kidOf(ids, plan.loopTok)}, ${ttIdOf(ar, plan.loopTok)}) {
+\tif !p.matchTok(${kidOf(ids, plan.loopTok)}) {
 \t\tp.back(sp); p.scratch = p.scratch[:before]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]
 \t\treturn Seg{}, EntryMeta{}, false
 \t}
@@ -792,10 +845,8 @@ ${headFn}func (p *engine) parseLoopSeg(sb int) (Seg, EntryMeta, bool) {
 }
 func (p *engine) parse${r.name}() int32 {
 \tsave := p.pos; sb := len(p.scratch)
-\tcapHint := (len(p.toks) - p.pos) / 2
-\tif capHint < 8 { capHint = 8 }
-\tlocal := make([]Seg, 0, capHint)
-\tlocalE := make([]EntryMeta, 0, capHint)
+\tlocal := p.segs[:0]
+\tlocalE := p.entries[:0]
 ${headBlock}\tfor {
 \t\tif seg, m, ok := p.parseLoopSeg(sb); ok { local = append(local, seg); localE = append(localE, m) } else { break }
 \t}
@@ -816,10 +867,10 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   const rid = ruleIdOf(ar, r.name);
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
     `bestPos = p.pos;${markGo(r.nudDispatch, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; nb = len(p.nodes); kb = len(p.kids)`;
-  const lost = `p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]`;
+  const lost = lostGo;
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    `{ if ${stepsCond(steps)} && ${beatsGo(r.nudDispatch, 'p.pos', i)} { best = p.finish(${rid}, sb, p.offAt(save), save); ${won(i, '0', tail, capped)} } else { ${lost} }; p.back(save) }`;
+    candGo(r.nudDispatch, i, stepsCond(steps), `best = p.finish(${rid}, sb, p.offAt(save), save); ${won(i, '0', tail, capped)}`, lost);
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
     switch (a.kind) {
@@ -1427,10 +1478,8 @@ func newDocCst(src string, b *CstBuilder) *Doc {
 	var toks []Tok
 	d.toks, toks = scanMetaToks(src)
 	// A Doc owns its arena, so a new one starts empty; size it from the token count instead of
-	// growing it by repeated append copies (TS-family code runs ~0.6 nodes and ~1.1 kids per token).
-	// The token and meta slices are likewise sized from the source (len/2 covers dense code, where a
-	// token averages over two bytes): growth garbage is what drives GC cycles, since a dropped Doc
-	// leaves a small live heap.
+	// growing it by repeated append copies (TS-family code runs ~0.6 nodes and ~1.1 kids per token):
+	// growth garbage is what drives GC cycles, since a dropped Doc leaves a small live heap.
 	n := len(toks)
 	if cap(b.Nodes) < n*3/4 { b.Nodes = make([]Node, 0, n*3/4) }
 	if cap(b.Kids) < n*5/4 { b.Kids = make([]int32, 0, n*5/4) }
@@ -1515,14 +1564,14 @@ function stepCondW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
 }
 function stepBodyW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
   switch (s.t) {
-    case 'lit': return gtCompLit(ids, s) ? `p.matchCompW(${lidOf(ids, s.value)})` : `p.matchLitW(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
-    case 'tok': return `p.matchTokW(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
+    case 'lit': return gtCompLit(ids, s) ? `p.matchCompW(${lidOf(ids, s.value)})` : `p.matchLitW(${lidOf(ids, s.value)})`;
+    case 'tok': return `p.matchTokW(${kidOf(ids, s.name)})`;
     case 'rule': return `p.callRuleW((*${recv}).parse${s.name}W)`;
     case 'ruleBp': return `p.callRuleW(func(q *${recv}) (spanned, bool) { return q.bpW_${s.name}(${s.bp}) })`;
     case 'star': return `p.starW(func() bool { return ${stepCondW(s.step, ids, ar, recv)} })`;
     case 'opt': return `p.optW(func() bool { return ${s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} })`;
-    case 'sep': return `p.sepByW(func() bool { return ${stepCondW(s.elem, ids, ar, recv)} }, ${lidOf(ids, s.delim)})`;
-    case 'altlit': return `p.altLitW([]struct{ Lid, TtId uint16 }{${s.opts.map((o) => `{${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)}}`).join(', ')}})`;
+    case 'sep': return `p.sepByW(func() bool { return ${stepCondW(s.elem, ids, ar, recv)} }, ${sepDelimLid(ids, s.delim)})`;
+    case 'altlit': return `p.altLitW([]uint16{${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}})`;
     case 'alt': return `func() bool { ${stepStmtsW(s, ids, ar, recv)} }()`;
     case 'look': return `${s.is ? '' : '!'}p.look${s.id}W()`;
     case 'ahead': return `p.aheadW(${s.set}, ${s.is})`;
@@ -1547,7 +1596,7 @@ function altBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: F
   const needPeek = branches.some((_, i) => isGuardable(fs[i] ?? null, nAlts));
   const peekInit = needPeek ? `_ft := p.peekW(); ` : '';
   const tries = branches.map((br, i) => {
-    const body = `{ sp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}; if ${br.length ? br.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'} { return true }; p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)} }`;
+    const body = branchGoW(br.length ? br.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true', recv);
     const f = fs[i] ?? null;
     if (!isGuardable(f, nAlts)) return body;
     return `if _ft != nil && ${firstCond(f, '_ft', ids)} ${body}`;
@@ -1556,7 +1605,7 @@ function altBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: F
 }
 // ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
 function lookFnsW(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  return ir.lookaheads.map((body, id) => `func (p *${recv}) look${id}W() bool { sp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}; m := ${body.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')}; p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; return m }\n`).join('');
+  return ir.lookaheads.map((body, id) => `func (p *${recv}) look${id}W() bool { ${ckptGoW(recv)}; r := ${body.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')}; ${undoGoW(recv)}; return r }\n`).join('');
 }
 function sharedFnsW(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
   return ir.shared.map((s, id) => `func (p *${recv}) sub${id}W() bool { ${stepStmtsW(s, ids, ar, recv)} }\n`).join('');
@@ -1566,7 +1615,7 @@ function predAltBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, first
   // FIRST dispatch; restore pos/scratch/arena on arm half-failure (like altBodyW).
   const arms = branches.map((br, i) => {
     const steps = br.length ? br.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true';
-    return `if ${firstCond(firsts![i], 't', ids)} { sp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}; if ${steps} { return true }; p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)} }`;
+    return `if ${firstCond(firsts![i], 't', ids)} ${branchGoW(steps, recv)}`;
   }).join(' else ');
   return `t := p.peekW(); if t == nil { return false }; ${arms}; return false`;
 }
@@ -1596,7 +1645,7 @@ ${r.alts.map(arm).join(' ')}
   // Longest match over the alternatives through the rule's Dispatch — as rdRule.
   const alt = (i: number, keyed: boolean) => {
     const cond = r.alts[i]!.map((x) => stepCondW(x, ids, ar, recv)).join(' && ');
-    const body = `{ if ${cond} && ${beatsGo(r.altDispatch, 'p.pos', i)} { best = p.finishW(${rid}, sb, p.offAtW(save), save); found = true; bestPos = p.pos;${markGo(r.altDispatch, i)} ${arenaMark(recv)} } else { p.scratch = p.scratch[:sb]; ${arenaRestore(recv)} }; p.back(save) }`;
+    const body = candGo(r.altDispatch, i, cond, `best = p.finishW(${rid}, sb, p.offAtW(save), save); found = true; bestPos = p.pos;${markGo(r.altDispatch, i)} ${arenaMark(recv)}`, lostGoW(recv));
     const g = guardCond(r.altGuard[i]!, '_ft', 'W', keyed);
     return ifGo(g.length && !keyed ? ['_ft != nil', ...g] : g, body);
   };
@@ -1626,9 +1675,7 @@ ${topOneBodyW(plan)}
 }
 func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch)
-\tcapHint := (len(p.toks) - p.pos) / 2
-\tif capHint < 8 { capHint = 8 }
-\tlocalE := make([]EntryMeta, 0, capHint)
+\tvar localE []EntryMeta
 \tfor {
 \t\tsp := p.pos
 \t\tp.lookReset()
@@ -1676,7 +1723,7 @@ function rdEntryWithReuseBW(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Are
   return `${headFn}func (p *${recv}) parseLoopSegW(sb int) (EntryMeta, bool) {
 \tsp := p.pos; before := len(p.scratch); ${arenaCkpt(recv)}
 \tp.lookReset()
-\tif !p.matchTokW(${kidOf(ids, plan.loopTok)}, ${ttIdOf(ar, plan.loopTok)}) {
+\tif !p.matchTokW(${kidOf(ids, plan.loopTok)}) {
 \t\tp.back(sp); p.scratch = p.scratch[:before]; ${arenaRestore(recv)}
 \t\treturn EntryMeta{}, false
 \t}
@@ -1698,9 +1745,7 @@ function rdEntryWithReuseBW(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Are
 }
 func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch)
-\tcapHint := (len(p.toks) - p.pos) / 2
-\tif capHint < 8 { capHint = 8 }
-\tlocalE := make([]EntryMeta, 0, capHint)
+\tvar localE []EntryMeta
 ${headBlock}\tfor {
 \t\tm, ok := p.parseLoopSegW(sb)
 \t\tif !ok { break }
@@ -1721,10 +1766,10 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaI
   // The NUD arms: longest-match candidates through the rule's Dispatch, as in prattRule.
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
     `found = true; bestPos = p.pos;${markGo(r.nudDispatch, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; ${arenaMark(recv)}`;
-  const lost = `p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}`;
+  const lost = lostGoW(recv);
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    `{ if ${stepsCond(steps)} && ${beatsGo(r.nudDispatch, 'p.pos', i)} { best = p.finishW(${rid}, sb, p.offAtW(save), save); ${won(i, '0', tail, capped)} } else { ${lost} }; p.back(save) }`;
+    candGo(r.nudDispatch, i, stepsCond(steps), `best = p.finishW(${rid}, sb, p.offAtW(save), save); ${won(i, '0', tail, capped)}`, lost);
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
     switch (a.kind) {
@@ -1998,9 +2043,9 @@ func (p *${recv}) nllBlockedW(words []string, left spanned) bool {
 \tfor _, w := range words { if w == h { return true } }
 \treturn false
 }
-func (p *${recv}) matchLitW(lid, ttId uint16) bool {
+func (p *${recv}) matchLitW(lid uint16) bool {
 \tt := p.peekW()
-\tif t != nil && t.Lid == lid { p.pushLeafW(ttId, uint32(p.pos), t.Off, t.End); p.pos++; return true }
+\tif t != nil && t.Lid == lid { p.pushLeafW(litTt(lid), uint32(p.pos), t.Off, t.End); p.pos++; return true }
 \treturn false
 }
 func (p *${recv}) matchCompW(lid uint16) bool {
@@ -2010,9 +2055,9 @@ func (p *${recv}) matchCompW(lid uint16) bool {
 \tif e := p.pos + n + 1; e > p.maxLook { p.maxLook = e }
 \tp.pos += n; return true
 }
-func (p *${recv}) matchTokW(kid, ttId uint16) bool {
+func (p *${recv}) matchTokW(kid uint16) bool {
 \tt := p.peekW()
-\tif t != nil && t.Kid == kid { p.pushLeafW(ttId, uint32(p.pos), t.Off, t.End); p.pos++; return true }
+\tif t != nil && t.Kid == kid { p.pushLeafW(kid, uint32(p.pos), t.Off, t.End); p.pos++; return true }
 \treturn false
 }
 func (p *${recv}) callRuleW(fn func(*${recv}) (spanned, bool)) bool {
@@ -2038,14 +2083,14 @@ func (p *${recv}) sepByW(elem func() bool, delim uint16) bool {
 \tif !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; ${arenaRestore(recv).replace('nb', 'nb0').replace('kb', 'kb0')}; return true }
 \tfor {
 \t\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
-\t\tif !p.matchLitW(delim, TT_SKIP_PUNCT) { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; break }
+\t\tif !p.matchLitW(delim) { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; break }
 \t\tsp2 := p.pos; sb2 := len(p.scratch); ${arenaCkpt(recv).replace('nb, kb', 'nb2, kb2')}
 \t\tif !elem() { p.back(sp2); p.scratch = p.scratch[:sb2]; ${arenaRestore(recv).replace('nb', 'nb2').replace('kb', 'kb2')}; break }
 \t}
 \treturn true
 }
-func (p *${recv}) altLitW(opts []struct{ Lid, TtId uint16 }) bool {
-\tfor _, o := range opts { if p.matchLitW(o.Lid, o.TtId) { return true } }
+func (p *${recv}) altLitW(lids []uint16) bool {
+\tfor _, lid := range lids { if p.matchLitW(lid) { return true } }
 \treturn false
 }
 
@@ -2694,6 +2739,7 @@ func inCtxWords(ctx uint8, t *Tok) bool { return false${ctxWordLids(ir, ids).map
 }
 
 function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  const reuse = topReusePlan(ir);
   const dropTtIds = ['$punct', '$keyword', '$operator']
     .map((n) => {
       try { return ttIdOf(ar, n); } catch { return null; }
@@ -2779,6 +2825,9 @@ type CstBuilder struct {
 \tNodes []Node
 \tKids  []int32
 \tToks  []Tok
+\t// The engine's transient buffers, kept for the next ParseWith (emptied by it before use).
+\tscratch []int32
+${reuse ? '\tentries []EntryMeta\n' : ''}${reuse?.kind === 'B' ? '\tsegs []Seg\n' : ''}\tlex     lexStacks
 }
 
 func (b *CstBuilder) Checkpoint() (nb, kb int) { return len(b.Nodes), len(b.Kids) }
@@ -2890,9 +2939,9 @@ ${wMethods}
 // Keeps ParseWith(CstBuilder) within the additive-prefix / byte-equal contract
 // without paying for a second method-instantiation (Go GC-shape stenciling tax).
 func parseWithCst(src string, b *CstBuilder) (int32, bool) {
-\tp := &engine{nodes: b.Nodes[:0], kids: b.Kids[:0]}
-\th := p.parse(src, lex(src))
-\tb.Nodes, b.Kids, b.Toks = p.nodes, p.kids, p.toks
+\tp := &engine{nodes: b.Nodes[:0], kids: b.Kids[:0], scratch: b.scratch[:0]${reuse ? ', entries: b.entries[:0]' : ''}${reuse?.kind === 'B' ? ', segs: b.segs[:0]' : ''}}
+\th := p.parse(src, lexInto(src, b.Toks, &b.lex))
+\tb.Nodes, b.Kids, b.Toks, b.scratch = p.nodes, p.kids, p.toks, p.scratch${reuse ? '\n\tb.entries = p.entries' : ''}${reuse?.kind === 'B' ? '\n\tb.segs = p.segs' : ''}
 \tif h < 0 { return 0, false }
 \treturn h, true
 }
@@ -3040,10 +3089,7 @@ const goLowering: Lowering = {
       shiftMeta: (cx, m, d) => cx.atom(`shiftAlign(${m.c}, ${cx.coerce(d, 'int')})`, 'meta', 'meta'),
       metaEq: (_cx, a, b) => ({ c: `${a.c} == ${b.c}`, ty: 'bool', nat: 'bool', prec: GO_OPS.eq[1] }),
       splice: (cx, s, a, b, ins) => ({ c: `${goWrap(s, ATOM)}[:${cx.coerce(a, 'int')}] + ${ins.c} + ${goWrap(s, ATOM)}[${cx.coerce(b, 'int')}:]`, ty: 'str', nat: 'str', prec: GO_OPS.add[1] }),
-      newList: (cx, ty, cap, estimate) => {
-        const c = cap ?? estimate;
-        return cx.atom(c ? `make(${GO_TYPES[ty]}, 0, ${cx.coerce(c, 'int')})` : 'nil', ty, ty, { owned: true });
-      },
+      newList: (cx, ty, cap) => cx.atom(cap ? `make(${GO_TYPES[ty]}, 0, ${cx.coerce(cap, 'int')})` : 'nil', ty, ty, { owned: true }),
       falses: (cx, n) => cx.atom(`make([]bool, ${cx.coerce(n, 'int')})`, 'bools', 'bools', { owned: true }),
       prefix: (cx, l, n, estimate) => cx.atom(`append(make(${GO_TYPES[l.ty]}, 0, ${cx.coerce(estimate, 'int')}), ${goWrap(l, ATOM)}[:${cx.coerce(n, 'int')}]...)`, l.ty, l.ty, { owned: true }),
     },
@@ -3054,7 +3100,6 @@ const goLowering: Lowering = {
       forEach: (v, l, body) => [`for _, ${v} := range ${l} {`, ...goBlock(body), '}'],
       destructure: (_cx, s) => [`${s.ids.join(', ')} ${s.declare ? ':=' : '='} ${s.call}`],
       lexStep: (_cx, s) => [`${[s.pos, ...s.state].join(', ')} = lexFrom(${s.text.c}, ${s.pos}, ${[...s.state, `&${s.out}`].join(', ')}, 1)`],
-      shrink: (_cx, l, ty) => [`if cap(${l}) > 2*len(${l}) { ${l} = append(${GO_TYPES[ty]}(nil), ${l}...) }`],
     },
   },
 };
@@ -3130,6 +3175,9 @@ type postOp struct{ lbp int; tgt bool }
 // metadata. A Doc owns one for its lifetime; ParseWith uses a fresh one per call. Nothing the
 // parser or lexer mutates is package-level, so different Docs, ParseWith and Tokenize are
 // independent (and safe from concurrent goroutines); a single Doc is not safe for concurrent use.
+// mark: the position, scratch length and arena (or builder checkpoint) lengths a construct that
+// may have to undo what it tries starts from (engine.mark / reset, parserW.mark / reset).
+type mark struct{ pos, sb, nb, kb int }
 type engine struct {
 \ttoks []Tok
 \tpos, maxLook int
@@ -3147,7 +3195,7 @@ type engine struct {
 ${reuse ? '\tentries []EntryMeta\n' : ''}${reuse?.kind === 'B' ? '\tsegs []Seg\n' : ''}}
 const arenaCompactK = 4
 
-${renderArenaTablesGo(ar)}
+${renderArenaTablesGo(ar, ids)}
 
 ${lexer(ir, ids, shared)}
 
@@ -3241,19 +3289,20 @@ func (p *engine) finish(ruleId uint16, sb, fallbackOff, tokStart int) int32 {
 \tp.nodes = append(p.nodes, Node{RuleId: ruleId, KidStart: uint32(kidStart), KidCount: uint32(nn - sb), Offset: off, End: end, TokStart: uint32(tokStart), TokEnd: uint32(p.pos), Ext: 0})
 \treturn int32(len(p.nodes) - 1)
 }
-func (p *engine) matchLit(lid uint16, ttId uint8) bool {
+func (p *engine) matchLit(lid uint16) bool {
 \ti := p.pos
 \tp.peekEnd = i + 1 // the probe is a peek (TS/Rust matchLit go through peek())
 \tif i >= len(p.toks) || p.toks[i].Lid != lid { return false }
-\tif ttId != TT_SKIP_PUNCT { p.scratch = append(p.scratch, encodeLeaf(uint32(i), ttId)) }
+\tif lid >= lidKw { p.scratch = append(p.scratch, encodeLeaf(uint32(i), ${ttIdOf(ar, '$keyword')})) }
 \tp.pos = i + 1
 \treturn true
 }
-func (p *engine) matchTok(kid uint16, ttId uint8) bool {
+// A token kind's leaf type id is its kid (ArenaIdPlan: TT_NAMES starts with the kids).
+func (p *engine) matchTok(kid uint16) bool {
 \ti := p.pos
 \tp.peekEnd = i + 1
 \tif i >= len(p.toks) || p.toks[i].Kid != kid { return false }
-\tif ttId != TT_SKIP_PUNCT { p.scratch = append(p.scratch, encodeLeaf(uint32(i), ttId)) }
+\tp.scratch = append(p.scratch, encodeLeaf(uint32(i), uint8(kid)))
 \tp.pos = i + 1
 \treturn true
 }
@@ -3271,25 +3320,25 @@ func (p *engine) callRule(id int32) bool {
 \tp.scratch = append(p.scratch, id); return true
 }
 func (p *engine) star(once func() bool) bool {
-\tfor { sp := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids); if !once() { p.back(sp); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; break } }
+\tfor { m := p.mark(); if !once() { p.reset(m); break } }
 \treturn true
 }
 func (p *engine) opt(body func() bool) bool {
-\tsp := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids); if !body() { p.back(sp); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb] }; return true
+\tm := p.mark(); if !body() { p.reset(m) }; return true
 }
 func (p *engine) sepBy(elem func() bool, delimLid uint16) bool {
 \tsp0 := p.pos; sb0 := len(p.scratch); nb0 := len(p.nodes); kb0 := len(p.kids)
 \tif !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; p.nodes = p.nodes[:nb0]; p.kids = p.kids[:kb0]; return true }
 \tfor {
 \t\tsp := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
-\t\tif !p.matchLit(delimLid, TT_SKIP_PUNCT) { p.back(sp); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; break }
+\t\tif !p.matchLit(delimLid) { p.back(sp); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; break }
 \t\tsp2 := p.pos; sb2 := len(p.scratch); nb2 := len(p.nodes); kb2 := len(p.kids)
 \t\tif !elem() { p.back(sp2); p.scratch = p.scratch[:sb2]; p.nodes = p.nodes[:nb2]; p.kids = p.kids[:kb2]; break }   // trailing delim OK — keep delim
 \t}
 \treturn true
 }
-func (p *engine) altLit(opts []struct{ Lid uint16; TtId uint8 }) bool {
-\tfor _, o := range opts { if p.matchLit(o.Lid, o.TtId) { return true } }
+func (p *engine) altLit(lids []uint16) bool {
+\tfor _, lid := range lids { if p.matchLit(lid) { return true } }
 \treturn false
 }
 

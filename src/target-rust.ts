@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -63,6 +63,22 @@ const dispatchRs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, key
 const beatsRs = (d: Dispatch, pos: string, i: number) => d.ranked.includes(i) ? `(${pos} > best_pos || ${pos} == best_pos && ${i} < bi)` : `${pos} > best_pos`;
 const markRs = (d: Dispatch, i: number) => (d.ranked.length ? ` bi = ${i};` : '');
 const biRs = (d: Dispatch) => (d.ranked.length ? ' let mut bi: i32 = -1;' : '');
+// ── The two frames of a construct that may have to undo what it tried ──
+// Every one is printed by one of these, so what a frame costs in the output is decided here.
+// The checkpoint (position, scratch length, builder checkpoint) taken over the parser `p`, and the
+// undo back to it.
+const ckptRs = (p: string) => `let m = ${p}.mark();`;
+const undoRs = (p: string) => `${p}.reset(m);`;
+// BRANCH frame: one branch of an ordered choice (`alt`), over `p`: it returns true from the
+// choice when the branch matched, and undoes it when it did not.
+const branchRs = (cond: string) => `{ ${ckptRs('p')} if ${cond} { return true; } ${undoRs('p')} }`;
+// CANDIDATE frame: one candidate of a longest-match list (an rd rule's alternatives, a Pratt
+// rule's NUD arms) tried from `save`: when it matched and beats the best so far it becomes the
+// best (`win`: what records it; `ck` moves past its node), else what it built is dropped; either
+// way the position goes back to `save` for the next candidate.
+const lostRs = `self.scratch.truncate(sb); self.b.restore(ck);`;
+const candRs = (d: Dispatch, i: number, cond: string, win: string) =>
+  `{ if ${cond} && ${beatsRs(d, 'self.pos', i)} { ${win} } else { ${lostRs} } self.back(save); }`;
 // The typed-AST layer's form of a Guard over the token t: its parser keeps no lookahead mark, so
 // the second token is read directly. null: no guard.
 const astGuardRs = (g: Guard, t: string): string | null =>
@@ -86,6 +102,8 @@ function gtRuntimeRust(ids: LexIdPlan): string {
     return `(${a}, ${b}) => ${r}, `;
   }).join('');
   return `const GT_LID: u16 = ${ids.gtComps.length > 0 ? lidOf(ids, '>') : 'u16::MAX'};
+/// The first word lid (LexIdPlan.kwLid): a literal from here on is a \`$keyword\` leaf, one before it a \`$punct\` (no leaf).
+const LID_KW: u16 = ${ids.kwLid};
 #[inline(always)] fn gt_step(a: u16, b: u16) -> u16 { match (a, b) { ${arms}_ => 0 } }
 #[inline]
 fn gt_op(toks: &[Tok], i: usize) -> (u16, usize, u32) {
@@ -516,9 +534,23 @@ ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
     }
 }
 ` : '';
+  // The lexer's bracket-head and template-depth stacks, bounded by nesting depth. lex_into takes
+  // them from a LexStacks the caller keeps (a reused builder's Workspace), so a later lex reuses
+  // their capacity instead of allocating them again; each lex starts them empty. They travel
+  // through lex_from by value: kept in the scan's own struct, the hot emit path keeps them in
+  // registers, which a by-reference field costs about 14 instructions per token (Callgrind, CI:
+  // checker.ts lex 79.9M by value vs 84.7M by reference). The price: a lexer panic drops them, so
+  // the parse after one allocates them again (a few bytes, bounded by nesting depth).
+  const stkFields = [rx ? 'paren_head: Vec<bool>' : '', tpl ? 'template_stack: Vec<i64>' : ''].filter(Boolean);
+  const lexStacks = `/// The lexer's transient stacks (bracket heads, template depths), kept across lexes by a reused builder.
+#[derive(Default)]
+struct LexStacks {${stkFields.length ? ` ${stkFields.join(', ')} ` : ''}}
+`;
+  const stkParam = stkFields.length ? 'stk' : '_stk';
+  const takeStk = (f: string) => `{ let mut v = std::mem::take(&mut stk.${f}); v.clear(); v }`;
   const initFields = ['toks: Vec::new()', 'pending_nl: false',
-    rx ? 'prev_lid: 0, prev_kid: 0, bp_lid: 0, has_prev: false, has_prev2: false, paren_head: Vec::new(), last_close: false, last_bang: false' : '',
-    tpl ? 'template_stack: Vec::new()' : '',
+    rx ? `prev_lid: 0, prev_kid: 0, bp_lid: 0, has_prev: false, has_prev2: false, paren_head: ${takeStk('paren_head')}, last_close: false, last_bang: false` : '',
+    tpl ? `template_stack: ${takeStk('template_stack')}` : '',
     nlRs ? nlRs.init : ''].filter(Boolean).join(', ');
   const open = stateful ? `    let mut st = LexState { ${initFields} };` : `    let mut toks: Vec<Tok> = Vec::new();\n    let mut pending_nl = false;`;
   const nlWs = nlRs ? nlRs.ws : '';
@@ -529,7 +561,7 @@ ${uniIdentOrPanic}`;
     const rxLoopBody = `        let c = b[pos] as u32;
 ${nlWs}${cascade}
 ${uniIdentOrPanic}`;
-    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${rxScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool) {
+    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -540,13 +572,19 @@ ${rxLoopBody}
     (pos, st.pending_nl, st.prev_lid, st.prev_kid, st.bp_lid, st.has_prev, st.has_prev2, st.paren_head, st.last_close, st.last_bang)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::with_capacity(src.len() / 2 + 16);
-    lex_from(src, 0, false, 0, 0, 0, false, false, Vec::new(), false, false, &mut toks, 0);
+    let mut toks = Vec::new();
+    lex_into(src, &mut toks, &mut LexStacks::default());
     toks
+}
+/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer).
+fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) {
+    toks.clear();
+    let r = lex_from(src, 0, false, 0, 0, 0, false, false, ${takeStk('paren_head')}, false, false, toks, 0);
+    stk.paren_head = r.7;
 }`;
   }
   if (tplOnly) {
-    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${tplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, Vec<i64>) {
+    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${tplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, Vec<i64>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -557,13 +595,19 @@ ${loopBody}
     (pos, st.pending_nl, st.template_stack)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::with_capacity(src.len() / 2 + 16);
-    lex_from(src, 0, false, Vec::new(), &mut toks, 0);
+    let mut toks = Vec::new();
+    lex_into(src, &mut toks, &mut LexStacks::default());
     toks
+}
+/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer).
+fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) {
+    toks.clear();
+    let r = lex_from(src, 0, false, ${takeStk('template_stack')}, toks, 0);
+    stk.template_stack = r.2;
 }`;
   }
   if (rxTpl) {
-    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${rxTplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Vec<i64>) {
+    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxTplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Vec<i64>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -574,21 +618,34 @@ ${loopBody}
     (pos, st.pending_nl, st.prev_lid, st.prev_kid, st.bp_lid, st.has_prev, st.has_prev2, st.paren_head, st.last_close, st.last_bang, st.template_stack)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::with_capacity(src.len() / 2 + 16);
-    lex_from(src, 0, false, 0, 0, 0, false, false, Vec::new(), false, false, Vec::new(), &mut toks, 0);
+    let mut toks = Vec::new();
+    lex_into(src, &mut toks, &mut LexStacks::default());
     toks
+}
+/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer).
+fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) {
+    toks.clear();
+    let r = lex_from(src, 0, false, 0, 0, 0, false, false, ${takeStk('paren_head')}, false, false, ${takeStk('template_stack')}, toks, 0);
+    stk.paren_head = r.7; stk.template_stack = r.10;
 }`;
   }
   if (rxOrTpl) {
-    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${stateImpl}fn lex<'a>(src: &'a str) -> Vec<Tok> {
+    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${stateImpl}fn lex<'a>(src: &'a str) -> Vec<Tok> {
+    let mut toks = Vec::new();
+    lex_into(src, &mut toks, &mut LexStacks::default());
+    toks
+}
+/// Lexes src into out, replacing what it held and keeping its capacity (a reused builder's buffer).
+fn lex_into<'a>(src: &'a str, out: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) {
+    out.clear();
     let b = src.as_bytes();
     let n = b.len();
-${open}
+${open.replace('toks: Vec::new()', 'toks: std::mem::take(out)')}
     let mut pos = 0usize;
     while pos < n {
 ${loopBody}
     }
-    st.toks
+    *out = st.toks;${rx ? '\n    stk.paren_head = st.paren_head;' : ''}${tpl ? '\n    stk.template_stack = st.template_stack;' : ''}
 }`;
   }
   if (newlineOnly) {
@@ -601,7 +658,7 @@ ${loopBody}
     const nlLoopBody = `        let c = b[pos] as u32;
 ${nlRs!.wsFrom}${rustNlScan(cascade)}
 ${nlUniIdentOrPanic}`;
-    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}struct NlScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, flow_depth: i64 }
+    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}struct NlScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, flow_depth: i64 }
 impl<'a> NlScan<'a> {
     fn push_tok(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
 ${nlRs!.hooksFrom.replace(/flow_depth/g, 'self.flow_depth')}
@@ -619,12 +676,17 @@ ${nlLoopBody}
     (pos, st.pending_nl, st.flow_depth)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::with_capacity(src.len() / 2 + 16);
-    lex_from(src, 0, false, 0, &mut toks, 0);
+    let mut toks = Vec::new();
+    lex_into(src, &mut toks, &mut LexStacks::default());
     toks
+}
+/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer).
+fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) {
+    toks.clear();
+    lex_from(src, 0, false, 0, toks, 0);
 }`;
   }
-  return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool) {
+  return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -634,9 +696,14 @@ ${loopBody.replace(/pending_nl/g, 'pending_nl').replace(/toks\.push/g, 'acc.push
     (pos, pending_nl)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::with_capacity(src.len() / 2 + 16);
-    lex_from(src, 0, false, &mut toks, 0);
+    let mut toks = Vec::new();
+    lex_into(src, &mut toks, &mut LexStacks::default());
     toks
+}
+/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer).
+fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) {
+    toks.clear();
+    lex_from(src, 0, false, toks, 0);
 }`;
 }
 
@@ -689,14 +756,14 @@ function topReusePlan(ir: ParserIR): ReusePlan | null {
 function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
   if ('share' in s && s.share !== undefined) return `self.sub_${s.share}()`;
   switch (s.t) {
-    case 'lit': return gtCompLit(ids, s) ? `self.match_comp(${lidOf(ids, s.value)})` : `self.match_lit(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
-    case 'tok': return `self.match_tok(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
+    case 'lit': return gtCompLit(ids, s) ? `self.match_comp(${lidOf(ids, s.value)})` : `self.match_lit(${lidOf(ids, s.value)})`;
+    case 'tok': return `self.match_tok(${kidOf(ids, s.name)})`;
     case 'rule': return `self.call_rule(Parser::parse_${s.name})`;
     case 'ruleBp': return `self.call_rule(|p| p.${s.name}_bp(${s.bp}))`;
     case 'star': return `self.star(|p| ${stepCondP(s.step, ids, ar)})`;
     case 'opt': return `self.opt(|p| ${s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ')})`;
-    case 'sep': return `self.sep_by(|p| ${stepCondP(s.elem, ids, ar)}, ${lidOf(ids, s.delim)})`;
-    case 'altlit': return `self.alt_lit(&[${s.opts.map((o) => `(${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)})`).join(', ')}])`;
+    case 'sep': return `self.sep_by(|p| ${stepCondP(s.elem, ids, ar)}, ${sepDelimLid(ids, s.delim)})`;
+    case 'altlit': return `self.alt_lit(&[${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}])`;
     case 'alt': return s.predictive
       ? `(|p: &mut Parser<'a, B>| -> bool { ${predAltBody(s.branches, ids, ar, s.firsts)} })(self)`
       : `(|p: &mut Parser<'a, B>| -> bool { ${altBody(s.branches, ids, ar, s.firsts)} })(self)`;
@@ -717,14 +784,14 @@ function stepCondP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
 // The step itself over `p`, printed in place (a shared step's method body; every other step's site).
 function stepBodyP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
   switch (s.t) {
-    case 'lit': return gtCompLit(ids, s) ? `p.match_comp(${lidOf(ids, s.value)})` : `p.match_lit(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
-    case 'tok': return `p.match_tok(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
+    case 'lit': return gtCompLit(ids, s) ? `p.match_comp(${lidOf(ids, s.value)})` : `p.match_lit(${lidOf(ids, s.value)})`;
+    case 'tok': return `p.match_tok(${kidOf(ids, s.name)})`;
     case 'rule': return `p.call_rule(Parser::parse_${s.name})`;
     case 'ruleBp': return `p.call_rule(|p| p.${s.name}_bp(${s.bp}))`;
     case 'star': return `p.star(|p| ${stepCondP(s.step, ids, ar)})`;
     case 'opt': return `p.opt(|p| ${s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ')})`;
-    case 'sep': return `p.sep_by(|p| ${stepCondP(s.elem, ids, ar)}, ${lidOf(ids, s.delim)})`;
-    case 'altlit': return `p.alt_lit(&[${s.opts.map((o) => `(${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)})`).join(', ')}])`;
+    case 'sep': return `p.sep_by(|p| ${stepCondP(s.elem, ids, ar)}, ${sepDelimLid(ids, s.delim)})`;
+    case 'altlit': return `p.alt_lit(&[${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}])`;
     case 'alt': return `(|p: &mut Parser<'a, B>| -> bool { ${stepStmtsP(s, ids, ar)} })(p)`;
     case 'look': return `${s.is ? '' : '!'}p.look_${s.id}()`;
     case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
@@ -747,7 +814,7 @@ function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: F
   const needPeek = branches.some((_, i) => isGuardable(fs[i] ?? null, nAlts));
   const peekInit = needPeek ? `let _ft = p.peek(); ` : '';
   const tries = branches.map((br, i) => {
-    const body = `{ let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); if ${br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'} { return true; } p.back(sp); p.scratch.truncate(sb); p.b.restore(ck); }`;
+    const body = branchRs(br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true');
     const f = fs[i] ?? null;
     if (!isGuardable(f, nAlts)) return body;
     return `if let Some(t) = _ft { if ${firstCond(f, 't', ids)} ${body} }`;
@@ -756,7 +823,7 @@ function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: F
 }
 // ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
 function lookFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  return ir.lookaheads.map((body, id) => `    fn look_${id}(&mut self) -> bool { let p = self; let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); let m = ${body.map((x) => stepCondP(x, ids, ar)).join(' && ')}; p.back(sp); p.scratch.truncate(sb); p.b.restore(ck); m }\n`).join('');
+  return ir.lookaheads.map((body, id) => `    fn look_${id}(&mut self) -> bool { let p = self; ${ckptRs('p')} let r = ${body.map((x) => stepCondP(x, ids, ar)).join(' && ')}; ${undoRs('p')} r }\n`).join('');
 }
 // ParserIR.shared, one method each: the step, run against the parser's scratch list and builder.
 // It undoes nothing: a failed step leaves what it advanced and appended for the construct around
@@ -771,7 +838,7 @@ function predAltBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts
   // FIRST dispatch; restore pos/scratch/builder on arm half-failure (like altBody).
   const arms = branches.map((br, i) => {
     const steps = br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true';
-    return `        ${i === 0 ? 'if' : 'else if'} ${firstCond(firsts![i], 't', ids)} { let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); if ${steps} { return true; } p.back(sp); p.scratch.truncate(sb); p.b.restore(ck); }`;
+    return `        ${i === 0 ? 'if' : 'else if'} ${firstCond(firsts![i], 't', ids)} ${branchRs(steps)}`;
   }).join('\n');
   return `let t = match p.peek() { Some(t) => t, None => return false };\n${arms}\n        false`;
 }
@@ -802,7 +869,7 @@ ${r.alts.map(arm).join('\n')}
   // The alternatives are reached through the rule's Dispatch (emit-portable.ts, RdRule.altDispatch).
   const alt = (i: number, keyed: boolean) => {
     const cond = r.alts[i]!.map((x) => stepCond(x, ids, ar)).join(' && ');
-    const body = `{ if ${cond} && ${beatsRs(r.altDispatch, 'self.pos', i)} { best = Some(self.finish(${rid}, sb, self.off_at(save), save)); best_pos = self.pos;${markRs(r.altDispatch, i)} ck = self.b.checkpoint(); } else { self.scratch.truncate(sb); self.b.restore(ck); } self.back(save); }`;
+    const body = candRs(r.altDispatch, i, cond, `best = Some(self.finish(${rid}, sb, self.off_at(save), save)); best_pos = self.pos;${markRs(r.altDispatch, i)} ck = self.b.checkpoint();`);
     const g = guardCond(r.altGuard[i]!, 't', keyed);
     return g.length && !keyed ? `        if let Some(t) = _ft { if ${g.join(' && ')} ${body} }` : ifRs(g, body);
   };
@@ -831,7 +898,6 @@ ${plan.topOneBody}
     fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
         let save = self.pos; let sb = self.scratch.len();
         self.entries.clear();
-        self.entries.reserve((self.toks.len().saturating_sub(self.pos) / 2).max(8));
         loop {
             let sp = self.pos;
             self.look_reset();
@@ -877,7 +943,7 @@ function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Aren
   return `${headFn}    fn parse_loop_seg(&mut self, sb: usize) -> Option<(Seg, EntryMeta)> {
         let sp = self.pos; let before = self.scratch.len(); let ck = self.b.checkpoint();
         self.look_reset();
-        if !self.match_tok(${kidOf(ids, plan.loopTok)}, ${ttIdOf(ar, plan.loopTok)}) {
+        if !self.match_tok(${kidOf(ids, plan.loopTok)}) {
             self.back(sp); self.scratch.truncate(before); self.b.restore(ck);
             return None;
         }
@@ -898,8 +964,8 @@ function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Aren
     }
     fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
         let save = self.pos; let sb = self.scratch.len();
-        let mut local: Vec<Seg> = Vec::new();
-        let mut local_e: Vec<EntryMeta> = Vec::new();
+        let mut local = std::mem::take(&mut self.segs); local.clear();
+        let mut local_e = std::mem::take(&mut self.entries); local_e.clear();
 ${headBlock}        loop {
             match self.parse_loop_seg(sb) {
                 Some((seg, meta)) => { local.push(seg); local_e.push(meta); }
@@ -926,10 +992,10 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   // finished as the best so far and moves `ck` past it; `lost` drops what the arm built.
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
     `best_pos = self.pos;${markRs(r.nudDispatch, i)} bf = ${form}; bt = ${tail}; bc = ${capped}; ck = self.b.checkpoint();`;
-  const lost = `self.scratch.truncate(sb); self.b.restore(ck);`;
+  const lost = lostRs;
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    `{ if ${stepsCond(steps)} && ${beatsRs(r.nudDispatch, 'self.pos', i)} { best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won(i, '0', tail, capped)} } else { ${lost} } self.back(save); }`;
+    candRs(r.nudDispatch, i, stepsCond(steps), `best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won(i, '0', tail, capped)}`);
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
     switch (a.kind) {
@@ -1907,6 +1973,11 @@ ${shapeB ? `    #[inline(always)]
     fn toks(&self) -> Option<&Vec<Tok>> { None }
     #[inline(always)]
     fn toks_mut(&mut self) -> Option<&mut Vec<Tok>> { None }
+    /// Where the builder keeps the engine's transient buffers between parses (see Workspace).
+    /// parse_with takes them from here and puts them back, so a builder that returns one makes a
+    /// later parse reuse their capacity. Default: none kept (each parse allocates its own).
+    #[inline(always)]
+    fn workspace_mut(&mut self) -> Option<&mut Workspace<Self::H>> { None }
     fn leaf(&mut self, scratch: &mut Vec<Self::H>, tt_id: u16, tok_idx: u32, off: u32, end: u32) -> bool;
     /// Consume scratch[sb..] → 0..=n handles; return (primary H, off, present).
     /// Default: span_of + node (drop/splice via leftover scratch count). CstBuilder overrides
@@ -1958,15 +2029,33 @@ ${shapeB ? `    #[inline(always)]
     fn tok_range(&self, h: Self::H) -> (u32, u32);
 }
 
+/// The engine's transient buffers — the scratch stack of handles, the top-level entry list and the
+/// lexer's bracket / template stacks — kept by a builder between parses (Builder::workspace_mut).
+/// Opaque: only parse_with reads or writes it, and each parse starts every buffer empty, so what a
+/// previous parse (accepted, rejected or panicking) left in it is never observed. Generic over the
+/// builder's handle type because the scratch stack holds handles.
+pub struct Workspace<H> {
+    scratch: Vec<H>,${reuse ? '\n    entries: Vec<EntryMeta>,' : ''}${shapeB ? '\n    segs: Vec<Seg>,' : ''}
+    lex: LexStacks,
+}
+impl<H> Default for Workspace<H> {
+    fn default() -> Self { Workspace { scratch: Vec::new(),${reuse ? ' entries: Vec::new(),' : ''}${shapeB ? ' segs: Vec::new(),' : ''} lex: LexStacks::default() } }
+}
+
 /// Parser-side span+handle frame. Span fields are independent of H (Pratt never reads H for spans).
 #[derive(Clone, Copy)]
 struct Spanned<H: Copy> { h: H, off: u32, tok_start: u32, present: bool }
+/// Where a construct that may have to undo what it tries starts: the position, the scratch length
+/// and the builder's checkpoint. Parser::reset goes back to it.
+#[derive(Clone, Copy)]
+struct Mark { pos: usize, sb: usize, ck: (usize, usize) }
 
 #[derive(Default)]
 pub struct CstBuilder {
     pub nodes: Vec<Node>,
     pub kids: Vec<i32>,
     toks: Vec<Tok>,
+    ws: Workspace<i32>,
 }
 impl CstBuilder {
     pub fn new() -> Self { Self::default() }
@@ -1977,6 +2066,8 @@ impl Builder for CstBuilder {
     fn toks(&self) -> Option<&Vec<Tok>> { Some(&self.toks) }
     #[inline(always)]
     fn toks_mut(&mut self) -> Option<&mut Vec<Tok>> { Some(&mut self.toks) }
+    #[inline(always)]
+    fn workspace_mut(&mut self) -> Option<&mut Workspace<i32>> { Some(&mut self.ws) }
     const SUPPORTS_SHIFT: bool = ${reuse ? 'true' : 'false'};
     const SUPPORTS_TREE_EQ: bool = true;
     #[inline(always)]
@@ -2125,6 +2216,7 @@ pub struct SlimBuilder {
     pub nodes: Vec<Node>,
     pub kids: Vec<i32>,
     toks: Vec<Tok>,
+    ws: Workspace<i32>,
 }
 impl SlimBuilder {
     pub fn new() -> Self { Self::default() }
@@ -2135,6 +2227,8 @@ impl Builder for SlimBuilder {
     fn toks(&self) -> Option<&Vec<Tok>> { Some(&self.toks) }
     #[inline(always)]
     fn toks_mut(&mut self) -> Option<&mut Vec<Tok>> { Some(&mut self.toks) }
+    #[inline(always)]
+    fn workspace_mut(&mut self) -> Option<&mut Workspace<i32>> { Some(&mut self.ws) }
     #[inline(always)]
     fn dummy_h() -> i32 { 0 }
     #[inline(always)]
@@ -2246,6 +2340,11 @@ impl<'a, B: Builder> Parser<'a, B> {
     #[inline(always)]
     fn look_reset(&mut self) { self.max_look = 0; self.peek_end = 0; }
     #[inline(always)]
+    fn mark(&self) -> Mark { Mark { pos: self.pos, sb: self.scratch.len(), ck: self.b.checkpoint() } }
+    /// Undo everything since m: the position (as back), the scratch list and the builder.
+    #[inline(always)]
+    fn reset(&mut self, m: Mark) { self.back(m.pos); self.scratch.truncate(m.sb); self.b.restore(m.ck); }
+    #[inline(always)]
     #[allow(dead_code)]
     fn ahead(&mut self, k: usize, is: bool) -> bool { match self.peek() { Some(t) => in_token_set(k, &t) == is, None => !is } }
     #[inline(always)]
@@ -2285,9 +2384,9 @@ impl<'a, B: Builder> Parser<'a, B> {
         let h = self.head_leaf_text(left); words.iter().any(|w| *w == h)
     }
     #[inline(always)]
-    fn match_lit(&mut self, lid: u16, tt_id: u16) -> bool {
+    fn match_lit(&mut self, lid: u16) -> bool {
         match self.peek() {
-            Some(t) if t.lid == lid => { self.push_leaf(tt_id, self.pos as u32, t.off, t.end); self.pos += 1; true }
+            Some(t) if t.lid == lid => { self.push_leaf(if lid >= LID_KW { ${ttIdOf(ar, '$keyword')} } else { ${punctId} }, self.pos as u32, t.off, t.end); self.pos += 1; true }
             _ => false
         }
     }
@@ -2311,9 +2410,10 @@ impl<'a, B: Builder> Parser<'a, B> {
         r
     }
     #[inline(always)]
-    fn match_tok(&mut self, kid: u16, tt_id: u16) -> bool {
+    /// A token kind's leaf type id is its kid (ArenaIdPlan: TT_NAMES starts with the kids).
+    fn match_tok(&mut self, kid: u16) -> bool {
         match self.peek() {
-            Some(t) if t.kid == kid => { self.push_leaf(tt_id, self.pos as u32, t.off, t.end); self.pos += 1; true }
+            Some(t) if t.kid == kid => { self.push_leaf(kid, self.pos as u32, t.off, t.end); self.pos += 1; true }
             _ => false
         }
     }
@@ -2327,32 +2427,32 @@ impl<'a, B: Builder> Parser<'a, B> {
     #[inline(always)]
     fn star(&mut self, once: fn(&mut Parser<'a, B>) -> bool) -> bool {
         loop {
-            let sp = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
-            if !once(self) { self.back(sp); self.scratch.truncate(sb); self.b.restore(ck); break; }
+            let m = self.mark();
+            if !once(self) { self.reset(m); break; }
         }
         true
     }
     #[inline(always)]
     fn opt(&mut self, body: fn(&mut Parser<'a, B>) -> bool) -> bool {
-        let sp = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
-        if !body(self) { self.back(sp); self.scratch.truncate(sb); self.b.restore(ck); }
+        let m = self.mark();
+        if !body(self) { self.reset(m); }
         true
     }
     #[inline(always)]
     fn sep_by(&mut self, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
-        let sp0 = self.pos; let sb0 = self.scratch.len(); let ck0 = self.b.checkpoint();
-        if !elem(self) { self.back(sp0); self.scratch.truncate(sb0); self.b.restore(ck0); return true; }
+        let m0 = self.mark();
+        if !elem(self) { self.reset(m0); return true; }
         loop {
-            let sp = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
-            if !self.match_lit(delim, ${punctId}) { self.back(sp); self.scratch.truncate(sb); self.b.restore(ck); break; }
-            let sp2 = self.pos; let sb2 = self.scratch.len(); let ck2 = self.b.checkpoint();
-            if !elem(self) { self.back(sp2); self.scratch.truncate(sb2); self.b.restore(ck2); break; }
+            let m = self.mark();
+            if !self.match_lit(delim) { self.reset(m); break; }
+            let m2 = self.mark();
+            if !elem(self) { self.reset(m2); break; }
         }
         true
     }
     #[inline(always)]
-    fn alt_lit(&mut self, opts: &[(u16, u16)]) -> bool {
-        for (lid, tt) in opts { if self.match_lit(*lid, *tt) { return true; } }
+    fn alt_lit(&mut self, lids: &[u16]) -> bool {
+        for lid in lids { if self.match_lit(*lid) { return true; } }
         false
     }
 
@@ -2363,20 +2463,39 @@ ${matchTemplate}${lookFns(ir, ids, ar)}${sharedFns(ir, ids, ar)}${ruleFns}
 
 function emitParseWithHelpers(ir: ParserIR, shapeB: boolean): string {
   const reuse = !!topReusePlan(ir);
-  const reuseInit = `${reuse ? ', entries: Vec::new()' : ''}${shapeB ? ', segs: Vec::new()' : ''}`;
   return `
 pub fn parse_with<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> Option<B::H> {
-    let toks = lex(src);
-    let n = toks.len();
+    // A builder that parsed before is reused: its token buffer, arena and workspace are emptied
+    // (capacity kept), so nothing of the previous parse stays reachable and nothing is allocated
+    // again. The guard hands them back to the builder when the parse ends, also by a panic (input
+    // the lexer cannot tokenize), so a rejected parse does not cost the next one its buffers
+    // (except the lexer's two small stacks after a lexer panic: see LexStacks).
+    let toks = b.toks_mut().map(std::mem::take).unwrap_or_default();
+    let ws = b.workspace_mut().map(std::mem::take).unwrap_or_default();
+    b.restore((0, 0));
     let owned = std::mem::take(b);
-    let mut p = Parser { toks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src, b: owned, scratch: Vec::new()${reuseInit} };
+    let mut g = ParseGuard { home: b, lex: ws.lex, p: Parser { toks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src, b: owned, scratch: ws.scratch${reuse ? ', entries: ws.entries' : ''}${shapeB ? ', segs: ws.segs' : ''} } };
+    let p = &mut g.p;
+    lex_into(src, &mut p.toks, &mut g.lex);
+    p.scratch.clear();
     let root = match p.parse_${ir.entry}() {
         Some(fr) if p.pos == p.toks.len() && fr.present => Some(fr.h),
         _ => None,
     };
-    *b = p.b;
-    if let Some(t) = b.toks_mut() { *t = p.toks; }
     root
+}
+
+/// Returns a parse's buffers to the builder parse_with took them from, when the parse ends.
+struct ParseGuard<'x, 'a, B: Builder + Default> { home: &'x mut B, lex: LexStacks, p: Parser<'a, B> }
+impl<'x, 'a, B: Builder + Default> Drop for ParseGuard<'x, 'a, B> {
+    fn drop(&mut self) {
+        *self.home = std::mem::take(&mut self.p.b);
+        if let Some(t) = self.home.toks_mut() { *t = std::mem::take(&mut self.p.toks); }
+        if let Some(w) = self.home.workspace_mut() {
+            w.scratch = std::mem::take(&mut self.p.scratch);${reuse ? '\n            w.entries = std::mem::take(&mut self.p.entries);' : ''}${shapeB ? '\n            w.segs = std::mem::take(&mut self.p.segs);' : ''}
+            w.lex = std::mem::take(&mut self.lex);
+        }
+    }
 }
 
 pub fn cst_json_with(b: &CstBuilder, root: i32) -> String {
@@ -5011,8 +5130,7 @@ const rsWrap = (r: R, min: number): string => (r.prec < min ? `(${r.c})` : r.c);
 const rsBlock = (lines: string[]): string[] => lines.map((l) => RS_IND + l);
 
 // Shared-algorithm lowering: snake_case, `as` casts, owned String/Vec vs borrowed &str/&[T].
-// Growth estimates are not reserved (no GC to save; realloc growth matches the base allocation
-// pattern), so nothing is over-reserved and there is nothing to trim. Exact capacities are kept.
+// Lists without an exact capacity grow as they are pushed to. Exact capacities are kept.
 const rustLowering: Lowering = {
   units: UNITS,
   ident: snake,
@@ -5108,7 +5226,6 @@ const rustLowering: Lowering = {
         `${s.pos} = lexed.0 as isize;`,
         ...s.state.map((n, i) => `${n} = lexed.${i + 1};`),
       ],
-      shrink: () => [],
     },
   },
 };

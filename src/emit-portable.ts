@@ -1053,8 +1053,12 @@ function buildPratt(
 
 export type LexIdPlan = {
   kids: string[];   // kids[0]='' reserved for punct (kind=""); then tokens in decl order + engine-emitted (NEWLINE, $template*)
-  lids: string[];   // lids[0]='' = "not any literal"; then puncts (longest-first), then remaining texts lexicographically
+  lids: string[];   // lids[0]='' = "not any literal"; then puncts (longest-first), then the other non-word texts, then the words (each lexicographically)
   gtComps: string[];   // ir.gtComps: lids composed from single-character tokens, never lexed
+  /** The first word lid: a literal matched in the tree is a `$keyword` leaf exactly when its text
+   *  is a word (isKeywordLiteral; `$punct`, never a leaf, otherwise), and the words are the lids
+   *  from here on, so a target tells the two apart by its lid and no site passes the type. */
+  kwLid: number;
 };
 
 /** Collect every literal text that appears in the Step IR (match_lit / altlit / sep / suppress / FIRST / Pratt). */
@@ -1130,11 +1134,14 @@ export function buildLexIdPlan(ir: ParserIR): LexIdPlan {
     for (const x of ir.newlineCfg.flowClose) litTexts.add(x);
   }
 
-  // Stable order: puncts longest-first (ir.puncts), then remaining texts lexicographically
+  // Stable order: puncts longest-first (ir.puncts, never words), then the remaining non-word texts,
+  // then the words, each lexicographically: the words are one range from kwLid on.
   const punctSet = new Set(ir.puncts);
   const rest = [...litTexts].filter((t) => !punctSet.has(t)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  const lids: string[] = ['', ...ir.puncts, ...rest];
-  return { kids, lids, gtComps: ir.gtComps };
+  const lids: string[] = ['', ...ir.puncts, ...rest.filter((t) => !isKeywordLiteral(t)), ...rest.filter((t) => isKeywordLiteral(t))];
+  const kwLid = lids.findIndex((t, i) => i > 0 && isKeywordLiteral(t));
+  if (lids.some((t, i) => i > 0 && isKeywordLiteral(t) !== (kwLid >= 0 && i >= kwLid))) throw new Error('buildLexIdPlan: a punctuation literal is a word');
+  return { kids, lids, gtComps: ir.gtComps, kwLid: kwLid < 0 ? lids.length : kwLid };
 }
 
 /**
@@ -1226,6 +1233,14 @@ export function lidWordByte(b: number): boolean {
 }
 
 /** Resolve kid for a known kind; 0 if not in the plan. */
+/** The lid of a `sep` step's delimiter. A target matches it as a literal like any other, so it
+ *  is a `$punct` (never a leaf) because it is not a word; a word delimiter is refused here rather
+ *  than given a type of its own. */
+export function sepDelimLid(plan: LexIdPlan, delim: string): number {
+  const lid = lidOf(plan, delim);
+  if (lid >= plan.kwLid) throw new Error(`sep delimiter ${JSON.stringify(delim)} is a word: the portable targets match a delimiter as punctuation`);
+  return lid;
+}
 export function kidOf(plan: LexIdPlan, kind: string): number {
   const i = plan.kids.indexOf(kind);
   return i >= 0 ? i : 0;

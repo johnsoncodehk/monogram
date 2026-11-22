@@ -1,0 +1,160 @@
+name: measure profile
+
+# The deterministic profile of the emitted Rust parser, A against M (test/bench-rust-profile/run.sh):
+# Callgrind instructions per parse in both modes (a new CstBuilder per parse; one kept across
+# parses), the lexer alone, work counters, allocator calls and bytes, page faults, peak memory; and
+# emitParser sizes for both real grammars and every target (test/emit-sizes.ts). The report goes to
+# the job summary (test/bench-rust-profile/pr-summary.ts); the raw results are the run's artifact.
+#
+# - pull_request touching the parser sources, a grammar file or the harness: A = the merge base,
+#   M = the pull request's head, PROFILE_SCOPE=pr (no oxc, no wall-clock, no cache simulation).
+# - the label `measure-profile-full` on such a pull request: the same A and M, scope `full`: oxc
+#   beside them, the native timings, the phase regions, the annotations, the cache/branch simulation.
+# - workflow_dispatch: any two commits, either scope.
+# Failure policy: a harness failure fails the job (a missing measurement is NOT RUN, never a pass);
+# a regression is printed at the top of the summary and does not fail it (docs/MEASUREMENT.md).
+# The wall-clock comparison with oxc is the separate, on-demand measure-bench workflow.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - 'src/**'
+      - '*.ts'
+      - 'test/bench-rust-profile/**'
+      - 'test/bench-rust-oxc/**'
+      - 'test/oxc-parse-bench/**'
+      - 'test/emit-sizes.ts'
+      - '.github/workflows/measure-profile.yml'
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'M: the commit to measure (sha, branch or tag)'
+        required: true
+      baseline:
+        description: 'A: the commit to compare it with (default: its merge base with origin/master)'
+        required: false
+        default: ''
+      scope:
+        description: 'pr = deterministic A/M only (about 3.5 min); full = also oxc, native timings, regions, cache simulation (about 8 min)'
+        type: choice
+        options: [pr, full]
+        default: pr
+
+permissions:
+  contents: read
+
+concurrency:
+  group: measure-profile-${{ github.event.pull_request.number || github.run_id }}-${{ github.event.label.name || 'push' }}
+  cancel-in-progress: true
+
+# One pin for the TypeScript sources the harness downloads (same as ci.yml / readme-bench.yml).
+env:
+  TS_REPO_SHA: '6fbce89821d93a5b761581d9ac540455f38e9acb'
+
+jobs:
+  profile:
+    # A label other than measure-profile-full changes nothing measured.
+    if: github.event.action != 'labeled' || github.event.label.name == 'measure-profile-full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: sudo apt-get update -q && sudo apt-get install -y -q valgrind
+
+      - name: Choose A and M
+        id: am
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          IN_COMMIT: ${{ inputs.commit }}
+          IN_BASELINE: ${{ inputs.baseline }}
+          IN_SCOPE: ${{ inputs.scope }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'measure-profile-full') }}
+        run: |
+          set -euo pipefail
+          git fetch -q origin master
+          if [ "$EVENT" = pull_request ]; then
+            M=$PR_HEAD; A=$(git merge-base "$PR_BASE" "$PR_HEAD")
+            if [ "$FULL_LABEL" = true ]; then scope=full; else scope=pr; fi
+          else
+            git fetch -q origin "$IN_COMMIT" 2>/dev/null || true
+            M=$(git rev-parse "$IN_COMMIT^{commit}" 2>/dev/null || git rev-parse "origin/$IN_COMMIT^{commit}")
+            if [ -n "$IN_BASELINE" ]; then
+              git fetch -q origin "$IN_BASELINE" 2>/dev/null || true
+              A=$(git rev-parse "$IN_BASELINE^{commit}" 2>/dev/null || git rev-parse "origin/$IN_BASELINE^{commit}")
+            else
+              A=$(git merge-base origin/master "$M")
+            fi
+            scope=$IN_SCOPE
+          fi
+          if git diff --name-only "$A" "$M" | grep -qE '^[^/]+\.ts$'; then grammar=1; else grammar=0; fi
+          echo "A=$A" >> "$GITHUB_OUTPUT"; echo "M=$M" >> "$GITHUB_OUTPUT"
+          echo "scope=$scope" >> "$GITHUB_OUTPUT"; echo "grammar_changed=$grammar" >> "$GITHUB_OUTPUT"
+          echo "rustc=$(rustc -V | tr -c 'A-Za-z0-9.\n' '-')" >> "$GITHUB_OUTPUT"
+          echo "A = $(git log -1 --format='%h %s' "$A")"; echo "M = $(git log -1 --format='%h %s' "$M")"
+          echo "scope = $scope, grammar file changed = $grammar"
+
+      # The oxc crates (full scope only): the registry and their target directory, keyed on the
+      # lockfile and the compiler. A hit saves the cold build of oxc_parser and its dependencies.
+      - uses: actions/cache@v4
+        if: steps.am.outputs.scope == 'full'
+        with:
+          path: |
+            ~/.cargo/registry
+            ${{ runner.temp }}/oxc-target
+          key: oxc-profile-${{ runner.os }}-${{ hashFiles('test/oxc-parse-bench/Cargo.lock', 'test/bench-rust-profile/oxc-*/Cargo.toml') }}-${{ steps.am.outputs.rustc }}
+          restore-keys: |
+            oxc-profile-${{ runner.os }}-${{ hashFiles('test/oxc-parse-bench/Cargo.lock', 'test/bench-rust-profile/oxc-*/Cargo.toml') }}-
+
+      - run: npm ci
+
+      - name: Profile A and M
+        run: test/bench-rust-profile/run.sh
+        env:
+          PROFILE_WORK: ${{ runner.temp }}/prof-work
+          OXC_TARGET_DIR: ${{ runner.temp }}/oxc-target
+          PROFILE_A: ${{ steps.am.outputs.A }}
+          PROFILE_M: ${{ steps.am.outputs.M }}
+          PROFILE_SCOPE: ${{ steps.am.outputs.scope }}
+
+      - name: Emitted sizes of A and M
+        run: |
+          set -euo pipefail
+          W='${{ runner.temp }}/prof-work'
+          node test/emit-sizes.ts "$W/src-A" > "$W/out/emit-sizes-A.json"
+          node test/emit-sizes.ts "$W/src-M" > "$W/out/emit-sizes-M.json"
+
+      - name: Job summary
+        env:
+          GRAMMAR_CHANGED: ${{ steps.am.outputs.grammar_changed }}
+          A: ${{ steps.am.outputs.A }}
+          M: ${{ steps.am.outputs.M }}
+          SCOPE: ${{ steps.am.outputs.scope }}
+        run: |
+          set -euo pipefail
+          W='${{ runner.temp }}/prof-work'
+          export PROFILE_A_LABEL="$(git log -1 --format='`%h` %s' "$A")"
+          export PROFILE_M_LABEL="$(git log -1 --format='`%h` %s' "$M")"
+          node test/bench-rust-profile/pr-summary.ts "$W/out/results.txt" "$W/out/emit-sizes-A.json" "$W/out/emit-sizes-M.json" > "$W/out/summary.md" || status=$?
+          cat "$W/out/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$SCOPE" = full ]; then
+            { echo; echo '### Full profile (oxc beside A and M; test/bench-rust-profile/summarize.ts)'; echo '```'; cat "$W/out/summary.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "${status:-0}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rust-profile
+          path: ${{ runner.temp }}/prof-work/out
+          if-no-files-found: warn

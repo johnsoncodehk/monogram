@@ -1,0 +1,121 @@
+name: measure targets
+
+# On demand only: wall-clock A/B of the TS target, the emitted JS parser and the Go target at two
+# commits (D = baseline, E = commit), alternating in ONE job (test/bench-targets/run.sh), medians
+# and per-round E/D ratios in the job summary. Only ratios inside one job compare, and a move
+# under 5% is not evidence on its own: the deterministic counts are the alloc-work gate
+# (docs/ALLOCATIONS.md) in the CI job.
+#
+# - workflow_dispatch: commit, baseline, grammar, which target modes, rounds.
+# - a pull request labelled `measure-targets`: E = its head, D = its merge base, typescript
+#   grammar, every target mode, 9 rounds.
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'E: the commit to time (sha, branch or tag)'
+        required: true
+      baseline:
+        description: 'D: the commit to time it against (default: its merge base with origin/master)'
+        required: false
+        default: ''
+      grammar:
+        type: choice
+        options: [typescript, javascript]
+        default: typescript
+      only:
+        description: 'target modes, space-separated subset of: ts-parse ts-parseWith js-fresh js-reuse go-fresh go-reuse'
+        default: 'ts-parse ts-parseWith js-fresh js-reuse go-fresh go-reuse'
+      rounds:
+        default: '9'
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+env:
+  TS_REPO_SHA: '6fbce89821d93a5b761581d9ac540455f38e9acb'
+
+jobs:
+  targets:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'measure-targets'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Choose D and E
+        id: de
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          IN_COMMIT: ${{ inputs.commit }}
+          IN_BASELINE: ${{ inputs.baseline }}
+          IN_GRAMMAR: ${{ inputs.grammar }}
+          IN_ONLY: ${{ inputs.only }}
+          IN_ROUNDS: ${{ inputs.rounds }}
+        run: |
+          set -euo pipefail
+          git fetch -q origin master
+          resolve() { git fetch -q origin "$1" 2>/dev/null || true; git rev-parse "$1^{commit}" 2>/dev/null || git rev-parse "origin/$1^{commit}"; }
+          if [ "$EVENT" = pull_request ]; then
+            E=$PR_HEAD; D=$(git merge-base "$PR_BASE" "$PR_HEAD"); grammar=typescript; rounds=9
+            only='ts-parse ts-parseWith js-fresh js-reuse go-fresh go-reuse'
+          else
+            E=$(resolve "$IN_COMMIT")
+            if [ -n "$IN_BASELINE" ]; then D=$(resolve "$IN_BASELINE"); else D=$(git merge-base origin/master "$E"); fi
+            grammar=$IN_GRAMMAR; rounds=$IN_ROUNDS; only=$IN_ONLY
+          fi
+          case $rounds in ''|*[!0-9]*) echo "rounds must be a number"; exit 1;; esac
+          for m in $only; do case $m in ts-parse|ts-parseWith|js-fresh|js-reuse|go-fresh|go-reuse) ;; *) echo "unknown target mode $m"; exit 1;; esac; done
+          { echo "D=$D"; echo "E=$E"; echo "grammar=$grammar"; echo "rounds=$rounds"; echo "only=$only"; } >> "$GITHUB_OUTPUT"
+
+      - run: npm ci
+
+      - name: Time D and E
+        run: set -o pipefail; test/bench-targets/run.sh "$ROUNDS" | tee "${{ runner.temp }}/targets.log"
+        env:
+          ROUNDS: ${{ steps.de.outputs.rounds }}
+          TARGETS_WORK: ${{ runner.temp }}/targets-work
+          TARGETS_BASE: ${{ steps.de.outputs.D }}
+          TARGETS_COMMIT: ${{ steps.de.outputs.E }}
+          TARGETS_GRAMMAR: ${{ steps.de.outputs.grammar }}
+          TARGETS_ONLY: ${{ steps.de.outputs.only }}
+
+      - name: Job summary
+        env:
+          D: ${{ steps.de.outputs.D }}
+          E: ${{ steps.de.outputs.E }}
+          GRAMMAR: ${{ steps.de.outputs.grammar }}
+          ROUNDS: ${{ steps.de.outputs.rounds }}
+        run: |
+          set -euo pipefail
+          L='${{ runner.temp }}/targets.log'
+          {
+            echo "## TS / JS / Go targets wall-clock: E vs D, $GRAMMAR grammar, $ROUNDS alternating rounds"
+            echo
+            echo "- D = $(git log -1 --format='`%h` %s' "$D")"
+            echo "- E = $(git log -1 --format='`%h` %s' "$E")"
+            echo "- runner: $(lscpu | sed -n 's/^Model name: *//p'), node $(node --version), $(go version | cut -d' ' -f3)"
+            echo
+            echo 'Rows are `<target>-<mode>:<input>`; E/D is a time ratio (> 1 = E is slower), the median of per-round ratios with its range. Only ratios inside this job compare.'
+            echo
+            echo '```'
+            sed -n '/^### per-round time ratios/,$p' "$L"
+            echo '```'
+            echo
+            echo '<details><summary>per-round tables (ms/parse, MB/s)</summary>'
+            echo
+            echo '```'
+            sed -n '/^=== summary/,/^### per-round time ratios/p' "$L"
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
