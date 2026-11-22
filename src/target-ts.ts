@@ -51,19 +51,23 @@ const dispatchTs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, key
 const beatsTs = (d: Dispatch, pos: string, i: number) => d.ranked.includes(i) ? `(${pos} > bestPos || ${pos} === bestPos && ${i} < bi)` : `${pos} > bestPos`;
 const markTs = (d: Dispatch, i: number) => (d.ranked.length ? ` bi = ${i};` : '');
 const biTs = (d: Dispatch) => (d.ranked.length ? ', bi = -1' : '');
+// How a step is printed: 'c' builds the CST (into `kids`), 'w' builds through the builder (into
+// `kids` and `spans`), 'r' only recognizes (ParserIR.forms: advances, builds nothing).
+type Mode = 'c' | 'w' | 'r';
 // ── The two frames of a construct that may have to undo what it tried ──
 // Every one is printed by one of these, so what a frame costs in the output is decided here. The
-// checkpoint (position, children length; spans length in builder mode `w`) and the undo back to it.
-const ckptTs = (w: boolean) => `const sp = pos; const bk = kids.length;${w ? ' const bs = spans.length;' : ''}`;
-const undoTs = (w: boolean) => `back(sp); kids.length = bk;${w ? ' spans.length = bs;' : ''}`;
+// checkpoint (position; children length when building; spans length in builder mode) and the undo back to it.
+const ckptTs = (m: Mode) => `const sp = pos;${m !== 'r' ? ' const bk = kids.length;' : ''}${m === 'w' ? ' const bs = spans.length;' : ''}`;
+const undoTs = (m: Mode) => `back(sp);${m !== 'r' ? ' kids.length = bk;' : ''}${m === 'w' ? ' spans.length = bs;' : ''}`;
 // BRANCH frame: one branch of an ordered choice (`alt`): it returns true from the choice when the
 // branch matched, and undoes it when it did not.
-const branchTs = (cond: string, w: boolean) => `{ ${ckptTs(w)} if (${cond}) return true; ${undoTs(w)} }`;
+const branchTs = (cond: string, m: Mode) => `{ ${ckptTs(m)} if (${cond}) return true; ${undoTs(m)} }`;
 // CANDIDATE frame: one candidate of a longest-match list tried from `save` into its own children:
 // when it matched and beats the best so far, `win` records it; either way the position goes back
-// to `save` for the next candidate.
-const candTs = (d: Dispatch, i: number, w: boolean, cond: string, win: string) =>
-  `{ const kids: ${w ? 'any[] = []; const spans: BWSpan[] = [];' : 'Cst[] = [];'} if (${cond} && ${beatsTs(d, 'pos', i)}) { ${win} } back(save); }`;
+// to `save` for the next candidate. Recognized, it has no children, and only its end can win.
+const candTs = (d: Dispatch, i: number, m: Mode, cond: string, win: string) => m === 'r'
+  ? `{ if (${cond} && pos > bestPos) bestPos = pos; back(save); }`
+  : `{ const kids: ${m === 'w' ? 'any[] = []; const spans: BWSpan[] = [];' : 'Cst[] = [];'} if (${cond} && ${beatsTs(d, 'pos', i)}) { ${win} } back(save); }`;
 // The typed-AST layer tries an rd rule's alternatives in declaration order, each under its Guard.
 const astGuard = (r: RdRule, i: number): string => { const c = guardCond(r.altGuard[i]!, '_ft', false); return c.length ? `_ft !== null && ${c.join(' && ')}` : 'true'; };
 
@@ -93,15 +97,19 @@ function mk_tok(off: number, end: number, nl: boolean, kid: number, lid: number)
 `;
 }
 
+// The literal id of a token whose text is `text`, given the literals its kind can be
+// (shared.tokenLiterals): 0 when it can be none.
+const lidCallTs = (lits: string[], text: string): string => (lits.length === 0 ? '0' : `lid_of(${text})`);
+
 // One token at a dispatch site: the shared scanner says where it ends; the lexer records it.
-function scanTok(t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
+function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
   const name = t.name;
   // `emit(...)` threads the lexer state in stateful mode; a plain push otherwise. A skipped
   // token (comment) still records a newline it spans, so `sameLine` sees it.
   const kid = kidOf(ids, name);
   const push = t.skip
     ? `if (/[\\n\\r\\u2028\\u2029]/.test(src.slice(pos, e))) pendingNl = true; `
-    : `${stateful ? 'emit' : 'push'}(pos, e, ${kid}, lid_of(src.slice(pos, e))); `;
+    : `${stateful ? 'emit' : 'push'}(pos, e, ${kid}, ${lidCallTs(shared.tokenLiterals(ir, t, ids.lids.slice(1)), 'src.slice(pos, e)')}); `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
   const ext = identLike.has(name) ? 'e = lx_ext(src, e); ' : '';
@@ -117,7 +125,7 @@ function buildLexCandidates(
   const codes: string[] = [];
   const firsts: (LexFirstBytes | null)[] = [];
   for (const t of shared.scannedTokens(ir)) {
-    codes.push(scanTok(t, shared, stateful, ids, rxTok, identLike));
+    codes.push(scanTok(ir, t, shared, stateful, ids, rxTok, identLike));
     firsts.push(lexTokFirstBytes(t));
   }
   for (const p of ir.puncts) {
@@ -128,12 +136,17 @@ function buildLexCandidates(
 }
 
 /** Shared first-byte dispatch for all lexFrom variants in this target. */
-function renderLexByteDispatchTS(codes: string[], firsts: (LexFirstBytes | null)[], indent: string): string {
+// `heads`: per ASCII unit, code that runs first in that unit's arm (and nowhere else), for a test
+// only that unit can pass (it tests its own prefix, so an arm shared with other units is safe); a
+// unit no candidate starts with gets an arm of its own.
+function renderLexByteDispatchTS(codes: string[], firsts: (LexFirstBytes | null)[], indent: string, heads: Map<number, string> = new Map()): string {
   const { arms, fallbackIndices } = buildLexDispatchPlan(firsts);
   const fallback = fallbackIndices.map((i) => codes[i]).join('\n');
   let switchArms = '';
+  for (const [unit, code] of heads) if (!arms.some((a) => a.bytes.includes(unit))) switchArms += `${indent}    case ${unit}:\n${code}${indent}      break;\n`;
   for (const arm of arms) {
     switchArms += arm.bytes.map((b) => `${indent}    case ${b}:`).join('\n') + '\n';
+    for (const b of arm.bytes) switchArms += heads.get(b) ?? '';
     switchArms += arm.indices.map((i) => codes[i]).join('\n') + '\n';
     switchArms += `${indent}      break;\n`;
   }
@@ -154,7 +167,11 @@ function newlineParts(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state: 
     state: `  let flowDepth = 0;
 ${flowSets}`,
     stateFrom: flowSets,
-    ws: `    if (c === 32 || c === 9 || c === 11 || c === 12 || c === 160 || c === 5760 || (c >= 8192 && c <= 8202) || c === 8239 || c === 8287 || c === 12288 || c === 65279) { pos++; continue; }
+    ws: `    if (c === 32 || c === 9 || c === 11 || c === 12 || c === 160 || c === 5760 || (c >= 8192 && c <= 8202) || c === 8239 || c === 8287 || c === 12288 || c === 65279) {
+      pos++;
+      for (let d = src.charCodeAt(pos); d === 32 || d === 9 || d === 11 || d === 12 || d === 160 || d === 5760 || (d >= 8192 && d <= 8202) || d === 8239 || d === 8287 || d === 12288 || d === 65279; d = src.charCodeAt(pos)) pos++;
+      continue;
+    }
     if (c === 10 || c === 13) {   // LF/CR only — LS/PS fall through to the unexpected-character throw, matching the interpreter
       const s = pos;
       pos++; if (c === 13 && pos < n && src.charCodeAt(pos) === 10) pos++;
@@ -190,7 +207,6 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const punctLine = (p: string) =>
     `    if (src.startsWith(${J(p)}, pos)) { ${pushFn}(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)}); pos += ${tlen(p)}; continue; }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
-  const cascade = renderLexByteDispatchTS(lexCodes, lexFirsts, '    ');
   const rxBitTables = rx ? `${tsFlagTable('_divT', lidFlagTable(ids, rx.divisionTexts))}
 ${tsFlagTable('_divK', kidFlagTable(ids, rx.divisionTypes))}
 ${tsFlagTable('_rxT', lidFlagTable(ids, rx.regexTexts))}
@@ -271,21 +287,35 @@ ${emitHooks}
     bpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true;
   }
 ` : '';
-  // Template dispatch runs at the top of the loop, before token/punct scanning.
-  const tplDispatch = tpl ? `    if (templateStack.length > 0 && src.startsWith(${J(tpl.interpClose)}, pos) && templateStack[templateStack.length - 1] === 0) {
+  // The template tests can pass only at their delimiter's first unit: when that unit is ASCII
+  // (and not whitespace, which is consumed before the dispatch) the test is made in that unit's
+  // dispatch arm, before the arm's own candidates, not in every round.
+  const tplHeads = new Map<number, string>();
+  const tplLits = shared.templateLiterals(ir, ids.lids.slice(1));
+  const headUnit = (t: string) => { const u = t.charCodeAt(0); return u < 128 && ![9, 10, 11, 12, 13, 32].includes(u) ? u : null; };
+  const tplCloseTest = tpl ? `    if (templateStack.length > 0 && src.startsWith(${J(tpl.interpClose)}, pos) && templateStack[templateStack.length - 1] === 0) {
       templateStack.pop();
       const sp = scanTplSpan(pos + ${tlen(tpl.interpClose)}, false);
-      if (sp.interp) { const _tx = src.slice(pos, sp.end); emit(pos, sp.end, ${kidOf(ids, '$templateMiddle')}, lid_of(_tx)); templateStack.push(0); }
-      else { const _tx = src.slice(pos, sp.end); emit(pos, sp.end, ${kidOf(ids, '$templateTail')}, lid_of(_tx)); }
-      pos = sp.end; continue;
-    }
-    if (src.startsWith(${J(tpl.open)}, pos)) {
-      const sp = scanTplSpan(pos + ${tlen(tpl.open)}, ${rx ? '!prevIsValue()' : 'true'});
-      if (sp.interp) { const _tx = src.slice(pos, sp.end); emit(pos, sp.end, ${kidOf(ids, '$templateHead')}, lid_of(_tx)); templateStack.push(0); }
-      else { const _tx = src.slice(pos, sp.end); emit(pos, sp.end, ${kidOf(ids, tpl.token)}, lid_of(_tx)); }
+      if (sp.interp) { emit(pos, sp.end, ${kidOf(ids, '$templateMiddle')}, ${lidCallTs(tplLits.middle, 'src.slice(pos, sp.end)')}); templateStack.push(0); }
+      else { emit(pos, sp.end, ${kidOf(ids, '$templateTail')}, ${lidCallTs(tplLits.tail, 'src.slice(pos, sp.end)')}); }
       pos = sp.end; continue;
     }
 ` : '';
+  const tplOpenTest = tpl ? `    if (src.startsWith(${J(tpl.open)}, pos)) {
+      const sp = scanTplSpan(pos + ${tlen(tpl.open)}, ${rx ? '!prevIsValue()' : 'true'});
+      if (sp.interp) { emit(pos, sp.end, ${kidOf(ids, '$templateHead')}, ${lidCallTs(tplLits.head, 'src.slice(pos, sp.end)')}); templateStack.push(0); }
+      else { emit(pos, sp.end, ${kidOf(ids, tpl.token)}, ${lidCallTs(tplLits.whole, 'src.slice(pos, sp.end)')}); }
+      pos = sp.end; continue;
+    }
+` : '';
+  let tplDispatch = '';
+  if (tpl) for (const [t, code] of [[tpl.interpClose, tplCloseTest], [tpl.open, tplOpenTest]] as const) {
+    const hu = headUnit(t);
+    // Two tests at one unit keep their order; once one stays here, the next stays too.
+    if (hu !== null && tplDispatch === '') tplHeads.set(hu, (tplHeads.get(hu) ?? '') + code);
+    else tplDispatch += code;
+  }
+  const cascade = renderLexByteDispatchTS(lexCodes, lexFirsts, '    ', tplHeads);
   const identNameTs = ir.identToken;
   const identKidTs = identNameTs ? kidOf(ids, identNameTs) : 0;
   const lxExtConst = ir.identLike.length
@@ -310,8 +340,20 @@ function lx_ext(src: string, e: number): number {
     : '';
   const nlState = nl ? newlineParts(nl, stateful ? 'emit' : 'push', ids).state : '';
   const nlStateFrom = nl ? newlineParts(nl, 'push', ids).stateFrom : '';
-  const nlWs = nl ? newlineParts(nl, stateful ? 'emit' : 'push', ids).ws : `    if (c === 10 || c === 13 || c === 8232 || c === 8233) { pendingNl = true; pos++; continue; }
-    if (c === 32 || c === 9 || c === 11 || c === 12 || c === 160 || c === 5760 || (c >= 8192 && c <= 8202) || c === 8239 || c === 8287 || c === 12288 || c === 65279) { pos++; continue; }
+  // A whitespace run is consumed in one dispatch round (see the Rust target): per unit only "is it
+  // still whitespace"; a run after a line terminator also takes further terminators.
+  const isWs = (v: string) => `${v} === 32 || ${v} === 9 || ${v} === 11 || ${v} === 12 || ${v} === 160 || ${v} === 5760 || (${v} >= 8192 && ${v} <= 8202) || ${v} === 8239 || ${v} === 8287 || ${v} === 12288 || ${v} === 65279`;
+  const isNl = (v: string) => `${v} === 10 || ${v} === 13 || ${v} === 8232 || ${v} === 8233`;
+  const nlWs = nl ? newlineParts(nl, stateful ? 'emit' : 'push', ids).ws : `    if (${isNl('c')}) {
+      pendingNl = true; pos++;
+      for (let d = src.charCodeAt(pos); ${isWs('d')} || ${isNl('d')}; d = src.charCodeAt(pos)) pos++;
+      continue;
+    }
+    if (${isWs('c')}) {
+      pos++;
+      for (let d = src.charCodeAt(pos); ${isWs('d')}; d = src.charCodeAt(pos)) pos++;
+      continue;
+    }
 `;
   const pushHooks = nl && !stateful ? newlineParts(nl, 'push', ids).hooks : '';
   const pushFnDef = stateful ? '' : nl
@@ -411,51 +453,54 @@ function lex(src: string): Tok[] {
 }`;
 }
 
-// A Step as a boolean expression (appends to the in-scope `kids`).
-// When `w` is true, emit the builder-mode helpers (`matchLitW` …) that also maintain
-// a parallel `spans` array — span bookkeeping never reads consumer handles.
-function stepCond(s: Step, ids: LexIdPlan, w = false): string {
-  if ('share' in s && s.share !== undefined) return `sub${s.share}${w ? 'W' : ''}(${w ? 'kids, spans' : 'kids'})`;
-  return stepBody(s, ids, w);
+// A Step as a boolean expression (appends to the in-scope `kids`; in builder mode 'w' also to the
+// parallel `spans` array — span bookkeeping never reads consumer handles; recognized, to nothing).
+const SUFFIX: Record<Mode, string> = { c: '', w: 'W', r: 'R' };
+const ARGS: Record<Mode, string> = { c: 'kids', w: 'kids, spans', r: '' };
+function stepCond(s: Step, ids: LexIdPlan, m: Mode = 'c'): string {
+  if ('share' in s && s.share !== undefined) return `sub${s.share}${SUFFIX[m]}(${ARGS[m]})`;
+  return stepBody(s, ids, m);
 }
 // The step itself, printed in place (a shared step's function body; every other step's site).
-function stepBody(s: Step, ids: LexIdPlan, w: boolean): string {
-  const S = w ? 'W' : '';
-  const ks = w ? 'kids, spans' : 'kids';
-  const sc = (x: Step) => stepCond(x, ids, w);
+function stepBody(s: Step, ids: LexIdPlan, m: Mode): string {
+  const S = SUFFIX[m];
+  const ks = m === 'r' ? '' : `, ${ARGS[m]}`;
+  const sc = (x: Step) => stepCond(x, ids, m);
   switch (s.t) {
-    case 'lit': return `matchLit${S}(${lidOf(ids, s.value)}, ${ks})`;
-    case 'tok': return `matchTok${S}(${kidOf(ids, s.name)}, ${ks})`;
-    case 'rule': return `callRule${S}(parse${s.name}${S}, ${ks})`;
-    case 'ruleBp': return `callRule${S}(() => ${s.name}_bp${S}(${s.bp}), ${ks})`;
-  case 'star': return `star${S}(() => ${sc(s.step)}, ${ks})`;
-  case 'opt': return `opt${S}(() => ${s.steps.map(sc).join(' && ')}, ${ks})`;
-  case 'sep': return `sepBy${S}(() => ${sc(s.elem)}, ${sepDelimLid(ids, s.delim)}, ${ks})`;
-    case 'altlit': return `altLit${S}([${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}], ${ks})`;
-    case 'alt': return `(() => { ${stepStmts(s, ids, w)} })()`;
-    case 'look': return `${s.is ? '' : '!'}look${s.id}${S}(${ks})`;
+    case 'lit': return `matchLit${S}(${lidOf(ids, s.value)}${ks})`;
+    case 'tok': return `matchTok${S}(${kidOf(ids, s.name)}${ks})`;
+    case 'rule': return m === 'r' ? `parse${s.name}R()` : `callRule${S}(parse${s.name}${S}${ks})`;
+    // Only a Pratt rule is called at a binding power; it is recognized by its building form (ParserIR.forms).
+    case 'ruleBp': return m === 'r' ? `(${s.name}_bp(${s.bp}) !== null)` : `callRule${S}(() => ${s.name}_bp${S}(${s.bp})${ks})`;
+  case 'star': return `star${S}(() => ${sc(s.step)}${ks})`;
+  case 'opt': return `opt${S}(() => ${s.steps.map(sc).join(' && ')}${ks})`;
+  case 'sep': return `sepBy${S}(() => ${sc(s.elem)}, ${sepDelimLid(ids, s.delim)}${ks})`;
+    case 'altlit': return `altLit${S}([${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}]${ks})`;
+    case 'alt': return `(() => { ${stepStmts(s, ids, m)} })()`;
+    // A lookahead is recognized whatever the mode around it (lookFns).
+    case 'look': return `${s.is ? '' : '!'}look${s.id}()`;
     case 'ahead': return `ahead(${s.set}, ${s.is})`;
     case 'aheadCtx': return s.is ? `(ahead(${s.set}, true) || ctxWord())` : `(ahead(${s.set}, false) && !ctxWord())`;
     case 'seq': return `(${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'})`;
     case 'sameLine': return `(() => { const t = peek(); return t !== null && !t.nl; })()`;
-    case 'suppress': return `(() => { ${stepStmts(s, ids, w)} })()`;
-    case 'ctx': return `(() => { ${stepStmts(s, ids, w)} })()`;
+    case 'suppress': return `(() => { ${stepStmts(s, ids, m)} })()`;
+    case 'ctx': return `(() => { ${stepStmts(s, ids, m)} })()`;
   }
 }
 // The step as the statements of a function returning whether it matched: an `alt`, `suppress` or
 // `ctx` step needs statements, so in place it is printed as an immediately called function of these.
 // A `ctx` step puts the context it found back after its body, whether the body matched or not.
-function stepStmts(s: Step, ids: LexIdPlan, w: boolean): string {
-  const sc = (x: Step) => stepCond(x, ids, w);
+function stepStmts(s: Step, ids: LexIdPlan, m: Mode): string {
+  const sc = (x: Step) => stepCond(x, ids, m);
   switch (s.t) {
     case 'alt': {
-      if (s.predictive) return predAltBody(s.branches, ids, s.firsts, w);
+      if (s.predictive) return predAltBody(s.branches, ids, s.firsts, m);
       const firsts = s.firsts ?? [];
       const nAlts = s.branches.length;
       const needPeek = s.branches.some((_, i) => isGuardable(firsts[i] ?? null, nAlts));
       const peekInit = needPeek ? `const _ft = peek(); ` : '';
       const tries = s.branches.map((br, i) => {
-        const body = branchTs(br.length ? br.map(sc).join(' && ') : 'true', w);
+        const body = branchTs(br.length ? br.map(sc).join(' && ') : 'true', m);
         const f = firsts[i] ?? null;
         if (!isGuardable(f, nAlts)) return body;
         return `if (_ft !== null && ${firstCond(f, '_ft', ids)}) ${body}`;
@@ -464,28 +509,27 @@ function stepStmts(s: Step, ids: LexIdPlan, w: boolean): string {
     }
     case 'suppress': return `_suppressNext = ${s.set}; const _r = (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); _suppressNext = 0; return _r;`;
     case 'ctx': return `const _c = _ctx; _ctx = ${s.ctx}; const _r = (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); _ctx = _c; return _r;`;
-    default: return `return ${stepBody(s, ids, w)};`;
+    default: return `return ${stepBody(s, ids, m)};`;
   }
 }
 
-// ParserIR.lookaheads, one function each: whether the body matches here, undoing all it did.
-// It appends to the caller's children (and spans), as the step it stands for would.
-function lookFns(ir: ParserIR, ids: LexIdPlan, w = false): string {
-  return ir.lookaheads.map((body, id) => w
-    ? `function look${id}W(kids: any[], spans: BWSpan[]): boolean { ${ckptTs(true)} const m = ${body.map((x) => stepCond(x, ids, true)).join(' && ')}; ${undoTs(true)} return m; }\n`
-    : `function look${id}(kids: Cst[]): boolean { ${ckptTs(false)} const m = ${body.map((x) => stepCond(x, ids)).join(' && ')}; ${undoTs(false)} return m; }\n`).join('');
+// ParserIR.lookaheads, one function each, in recognize form (ParserIR.forms): whether the body
+// matches here; it undoes the position (a Pratt rule it runs leaves nothing behind: its node is
+// dropped, and both engines share the cursor), so the CST and the builder engine call the same one.
+function lookFns(ir: ParserIR, ids: LexIdPlan): string {
+  return ir.lookaheads.map((body, id) => `function look${id}(): boolean { ${ckptTs('r')} const m = ${body.map((x) => stepCond(x, ids, 'r')).join(' && ')}; ${undoTs('r')} return m; }\n`).join('');
 }
 
-// ParserIR.shared, one function each: the step, run against the caller's children (and spans).
-// It undoes nothing: a failed step leaves what it advanced and appended for the construct around
-// its site to undo, as the inlined step did.
-function sharedFns(ir: ParserIR, ids: LexIdPlan, w = false): string {
-  return ir.shared.map((s, id) => w
-    ? `function sub${id}W(kids: any[], spans: BWSpan[]): boolean { ${stepStmts(s, ids, true)} }\n`
-    : `function sub${id}(kids: Cst[]): boolean { ${stepStmts(s, ids, false)} }\n`).join('');
+// ParserIR.shared, one function per form it is printed in (ParserIR.forms): the step, run against
+// the caller's children (and spans; recognized, none). It undoes nothing: a failed step leaves what
+// it advanced and appended for the construct around its site to undo, as the inlined step did.
+const PARAMS: Record<Mode, string> = { c: 'kids: Cst[]', w: 'kids: any[], spans: BWSpan[]', r: '' };
+function sharedFns(ir: ParserIR, ids: LexIdPlan, m: Mode): string {
+  const has = m === 'r' ? ir.forms.recognizeShared : ir.forms.buildShared;
+  return ir.shared.map((s, id) => (has[id] ? `function sub${id}${SUFFIX[m]}(${PARAMS[m]}): boolean { ${stepStmts(s, ids, m)} }\n` : '')).join('');
 }
 
-function predAltBody(branches: Step[][], ids: LexIdPlan, firsts?: FirstSig[], w = false): string {
+function predAltBody(branches: Step[][], ids: LexIdPlan, firsts: FirstSig[] | undefined, w: Mode): string {
   const sc = (x: Step) => stepCond(x, ids, w);
   // FIRST dispatch still only tries the matching arm; on half-failure restore like non-pred altBody.
   const arms = branches.map((br, i) => {
@@ -562,7 +606,7 @@ ${r.alts.map(arm).join(' ')}
   }
   // Longest match over the alternatives, reached through the rule's Dispatch (emit-portable.ts, RdRule).
   const alt = (i: number, keyed: boolean) => {
-    const body = candTs(r.altDispatch, i, false, r.alts[i]!.map((x) => stepCond(x, ids)).join(' && '), `best = branch(${J(r.name)}, kids, save); bestPos = pos;${markTs(r.altDispatch, i)}`);
+    const body = candTs(r.altDispatch, i, 'c', r.alts[i]!.map((x) => stepCond(x, ids)).join(' && '), `best = branch(${J(r.name)}, kids, save); bestPos = pos;${markTs(r.altDispatch, i)}`);
     const g = guardCond(r.altGuard[i]!, '_ft', keyed);
     return ifTs(g.length && !keyed ? ['_ft !== null', ...g] : g, body);
   };
@@ -576,10 +620,49 @@ ${needPeek ? '  const _ft = peek();\n' : ''}${dispatchTs(r.altDispatch, '_ft', i
 }`;
 }
 
+// A rule in recognize form (ParserIR.forms): whether it matches here, advancing past it. An rd
+// rule has rdRule's control flow building nothing: its longest match compares end positions only
+// (a tie only chooses which node, and none is built). A Pratt rule runs its building form and
+// drops the node.
+function ruleR(r: RdRule | PrattRule, ids: LexIdPlan): string {
+  if (r.kind === 'pratt') return `function parse${r.name}R(): boolean { return parse${r.name}() !== null; }`;
+  const cond = (alt: Step[]) => alt.map((x) => stepCond(x, ids, 'r')).join(' && ');
+  if (r.predictive) {
+    const arm = (steps: Step[], i: number) => `  ${i === 0 ? 'if' : 'else if'} (${firstCond(r.altFirst[i], 't', ids)}) { if (${cond(steps)}) return true; }`;
+    return `function parse${r.name}R(): boolean {
+  const save = pos;
+  const t = peek(); if (t === null) return false;
+${r.alts.map(arm).join(' ')}
+  back(save);
+  return false;
+}`;
+  }
+  if (r.alts.length === 1) {
+    return `function parse${r.name}R(): boolean {
+  const save = pos;
+  if (${cond(r.alts[0]!)}) return true;
+  back(save);
+  return false;
+}`;
+  }
+  const alt = (i: number, keyed: boolean) => {
+    const g = guardCond(r.altGuard[i]!, '_ft', keyed);
+    return ifTs(g.length && !keyed ? ['_ft !== null', ...g] : g, candTs(r.altDispatch, i, 'r', cond(r.alts[i]!), ''));
+  };
+  const needPeek = r.altGuard.some((g) => g !== null);
+  return `function parse${r.name}R(): boolean {
+  const save = pos;
+  let bestPos = save;
+${needPeek ? '  const _ft = peek();\n' : ''}${dispatchTs(r.altDispatch, '_ft', ids, alt, true)}
+  pos = bestPos;
+  return bestPos > save;
+}`;
+}
+
 /** Builder-mode RD rule — same control flow as rdRule, returns Frame (span+handles). */
 function rdRuleW(r: RdRule, ids: LexIdPlan): string {
   if (r.predictive) {
-  const arm = (steps: Step[], i: number) => `  ${i === 0 ? 'if' : 'else if'} (${firstCond(r.altFirst[i], 't', ids)}) { const kids: any[] = []; const spans: BWSpan[] = []; if (${steps.map((x) => stepCond(x, ids, true)).join(' && ')}) return branchW(${J(r.name)}, kids, spans, save); }`;
+  const arm = (steps: Step[], i: number) => `  ${i === 0 ? 'if' : 'else if'} (${firstCond(r.altFirst[i], 't', ids)}) { const kids: any[] = []; const spans: BWSpan[] = []; if (${steps.map((x) => stepCond(x, ids, 'w')).join(' && ')}) return branchW(${J(r.name)}, kids, spans, save); }`;
   return `function parse${r.name}W(): Frame | null {
   const save = pos;
   const t = peek(); if (t === null) return null;
@@ -591,12 +674,12 @@ ${r.alts.map(arm).join(' ')}
   if (r.alts.length === 1) {
     return `function parse${r.name}W(): Frame | null {
   const save = pos;
-  { const kids: any[] = []; const spans: BWSpan[] = []; if (${r.alts[0]!.map((x) => stepCond(x, ids, true)).join(' && ')}) return branchW(${J(r.name)}, kids, spans, save); back(save); }
+  { const kids: any[] = []; const spans: BWSpan[] = []; if (${r.alts[0]!.map((x) => stepCond(x, ids, 'w')).join(' && ')}) return branchW(${J(r.name)}, kids, spans, save); back(save); }
   return null;
 }`;
   }
   const alt = (i: number, keyed: boolean) => {
-    const body = candTs(r.altDispatch, i, true, r.alts[i]!.map((x) => stepCond(x, ids, true)).join(' && '), `best = branchW(${J(r.name)}, kids, spans, save); bestPos = pos;${markTs(r.altDispatch, i)}`);
+    const body = candTs(r.altDispatch, i, 'w', r.alts[i]!.map((x) => stepCond(x, ids, 'w')).join(' && '), `best = branchW(${J(r.name)}, kids, spans, save); bestPos = pos;${markTs(r.altDispatch, i)}`);
     const g = guardCond(r.altGuard[i]!, '_ft', keyed);
     return ifTs(g.length && !keyed ? ['_ft !== null', ...g] : g, body);
   };
@@ -801,7 +884,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
     `best = ${nodeExpr}; bestPos = pos;${markTs(r.nudDispatch, i)} bf = ${form}; bt = ${tail}; bc = ${capped};`;
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids)).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    candTs(r.nudDispatch, i, false, stepsCond(steps), won(i, `branch(${J(r.name)}, kids, save)`, '0', tail, capped));
+    candTs(r.nudDispatch, i, 'c', stepsCond(steps), won(i, `branch(${J(r.name)}, kids, save)`, '0', tail, capped));
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
     switch (a.kind) {
@@ -950,9 +1033,9 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
   // The NUD arms: longest-match candidates through the rule's Dispatch, as in prattRule.
   const won = (i: number, frameExpr: string, form: string, tail: boolean, capped: boolean) =>
     `best = ${frameExpr}; bestPos = pos;${markTs(r.nudDispatch, i)} bf = ${form}; bt = ${tail}; bc = ${capped};`;
-  const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids, true)).join(' && ') : 'true');
+  const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids, 'w')).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    candTs(r.nudDispatch, i, true, stepsCond(steps), won(i, `branchW(${cn}, kids, spans, save)`, '0', tail, capped));
+    candTs(r.nudDispatch, i, 'w', stepsCond(steps), won(i, `branchW(${cn}, kids, spans, save)`, '0', tail, capped));
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
     switch (a.kind) {
@@ -1004,7 +1087,7 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
   const ledBody = (b: Bracket, form: number, closes: boolean, hasBin: boolean, isLast: boolean) => `{
       const ledSave = pos; const kids: any[] = []; const spans: BWSpan[] = [];
       absorbFrame(kids, spans, left);
-      if (${b.steps.map((x) => stepCond(x, ids, true)).join(' && ')}) { left = nodeW(${cn}, kids, spans); form = ${form};${closes ? ' tailClosed = true;' : ''} continue ledLoop; }
+      if (${b.steps.map((x) => stepCond(x, ids, 'w')).join(' && ')}) { left = nodeW(${cn}, kids, spans); form = ${form};${closes ? ' tailClosed = true;' : ''} continue ledLoop; }
       back(ledSave);${hasBin ? '' : isLast ? ' break ledLoop;' : ''}
     }`;
   const ledSwitch = (() => {
@@ -1101,7 +1184,7 @@ function emitBuilderAddon(ir: ParserIR, ids: LexIdPlan, doc: DocEditParts): stri
   const shapeB = doc.shapeB;
   const hasHeadB = doc.hasHeadB;
   const entryCst = doc.entryCst;
-  const ruleFnsW = ir.rules.map((r) => {
+  const ruleFnsW = ir.rules.filter((r) => ir.forms.buildRules.includes(r.name)).map((r) => {
     if (r.kind === 'pratt') return prattRuleW(r, ir.tpl, ids);
     if (reuse && r.name === ir.entry) return rdEntryWithReuseW(r, reuse, ids);
     return rdRuleW(r, ids);
@@ -1244,7 +1327,7 @@ function altLitW(lids: number[], kids: any[], spans: BWSpan[]): boolean {
   for (const lid of lids) if (matchLitW(lid, kids, spans)) return true;
   return false;
 }
-${matchTemplateW}${lookFns(ir, ids, true)}${sharedFns(ir, ids, true)}${ruleFnsW}
+${matchTemplateW}${sharedFns(ir, ids, 'w')}${ruleFnsW}
 
 /** Default CST builder — same object shape as parse(). */
 export const cstBuilder: Builder<Cst> = {
@@ -2458,7 +2541,7 @@ const astBestInit = (r: RdRule): string => (r.alts.length > 1 ? 'save' : 'save -
 // the best so far builds nothing, so no custom runs for it.
 const AST_NOT_BETTER = 'if (pos <= bestPos) return null;';
 
-function emitAstRdRule(r: RdRule, sir: ShapeIRRule, ids: LexIdPlan, shapeIR: ShapeIR, parentCtx: ShapeEmitCtx): string {
+function emitAstRdRule(r: RdRule, sir: ShapeIRRule, ids: LexIdPlan, shapeIR: ShapeIR, parentCtx: ShapeEmitCtx, built: boolean): string {
   const ctx = newShapeEmitCtx(r.name, parentCtx.look);
   const leaves = shapeIR.leaves;
   const spans = shapeIR.spans;
@@ -2469,6 +2552,14 @@ function emitAstRdRule(r: RdRule, sir: ShapeIRRule, ids: LexIdPlan, shapeIR: Sha
     return code;
   };
 
+  // A rule without a building form (ParserIR.forms) is reached only inside lookaheads, so its AST
+  // is only ever made inside a probe, which drops it: it is recognized instead (`true` stands for
+  // the value a probe drops).
+  if (!built && (shape.kind === 'drop' || shape.kind === 'keep')) {
+    return finalize(shape.kind === 'drop'
+      ? `function parseAst${r.name}(): null { const sp = pos; if (!parse${r.name}R()) pos = sp; return null; }`
+      : `function parseAst${r.name}(): unknown { return parse${r.name}R() ? true : null; }`);
+  }
   if (shape.kind === 'drop') {
     return finalize(`function parseAst${r.name}(): null { const sp = pos; if (parse${r.name}() === null) { pos = sp; return null; } return null; }`);
   }
@@ -3451,7 +3542,7 @@ function emitShapeAstAddon(ir: ParserIR, shapeIR: ShapeIR, ids: LexIdPlan): stri
     const r = ir.rules.find((x) => x.name === sir.name);
     if (!r) return '';
     if (r.kind === 'pratt') return emitAstPrattRule(r, sir, ids, shapeIR, cov, ir);
-    return emitAstRdRule(r, sir, ids, shapeIR, cov);
+    return emitAstRdRule(r, sir, ids, shapeIR, cov, ir.forms.buildRules.includes(r.name));
   }).filter(Boolean).join('\n\n');
 
   if (cov.unsupported.length > 0) {
@@ -3504,6 +3595,12 @@ const tsLowering: Lowering = {
   type: (t) => TS_TYPES[t],
   owns: false,
   charSet: (name, rs) => `const ${name} = /*#__PURE__*/ (() => { const a = new Uint8Array(256); for (const [lo, hi] of [${rs.map(([lo, hi]) => `[${lo},${hi}]`).join(', ')}]) for (let i = lo; i <= hi; i++) a[i] = 1; return a; })();`,
+  // A code unit past 255 indexes no table entry (undefined), so it ends the run.
+  runEndFn: `// The end of the run of code units in set from i: the first j >= i at which s ends or s[j] is not in it.
+function lexRunEnd(s: string, i: number, set: Uint8Array): number {
+  while (i < s.length && set[s.charCodeAt(i)] === 1) i++;
+  return i;
+}`,
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${tsWrap(r, ATOM)}`, prec: 90 }),
@@ -3518,6 +3615,7 @@ const tsLowering: Lowering = {
     code: (cx, s, i) => cx.atom(`${tsWrap(s, ATOM)}.charCodeAt(${i.c})`, 'int', 'number'),
     hasAt: (cx, s, i, lit) => cx.atom(`${tsWrap(s, ATOM)}.startsWith(${J(lit)}, ${i.c})`, 'bool', 'bool'),
     inSet: (_cx, set, c) => ({ c: `${set}[${c.c}] === 1`, ty: 'bool', nat: 'bool', prec: TS_OPS.eq[1] }),
+    runEnd: (cx, set, s, i) => cx.atom(`lexRunEnd(${s.c}, ${i.c}, ${set})`, 'int', 'number'),
     own: (_cx, r) => r,
   },
   stmt: {
@@ -3656,11 +3754,11 @@ function secondIn(k: number): boolean {
 
 function emitTsLibrary(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
     const reuse = topReusePlan(ir);
-    const ruleFns = ir.rules.map((r) => {
+    const ruleFns = [...ir.rules.filter((r) => ir.forms.buildRules.includes(r.name)).map((r) => {
       if (r.kind === 'pratt') return prattRule(r, ir.tpl, ids);
       if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids);
       return rdRule(r, ids);
-    }).join('\n\n');
+    }), ...ir.rules.filter((r) => ir.forms.recognizeRules.includes(r.name)).map((r) => ruleR(r, ids))].join('\n\n');
     const matchTemplate = ir.tpl ? `// interp: the rule that parses each \`\${…}\` hole — the one the matching reference declares
 // (the grammar's expression rule, or the rule a withHoles reference names).
 function matchTemplate(interp: () => Node | null): Cst | null {
@@ -3779,8 +3877,42 @@ function altLit(lids: number[], kids: Cst[]): boolean {
   for (const lid of lids) if (matchLit(lid, kids)) return true;
   return false;
 }
+// The recognize forms (ParserIR.forms): the same tokens examined, nothing built.
+function matchLitR(lid: number): boolean {
+  if (_GT_LIT[lid] !== 0) return _matchComp(lid);
+  const t = peek();
+  if (t === null || t.lid !== lid) return false;
+  pos++; return true;
+}
+function matchTokR(kid: number): boolean {
+  const t = peek();
+  if (t === null || t.kid !== kid) return false;
+  pos++; return true;
+}
+function starR(once: () => boolean): boolean {
+  for (;;) { const sp = pos; if (!once()) { back(sp); break; } }
+  return true;
+}
+function optR(body: () => boolean): boolean {
+  const sp = pos; if (!body()) back(sp); return true;
+}
+function sepByR(elem: () => boolean, delimLid: number): boolean {
+  const sp0 = pos;
+  if (!elem()) { back(sp0); return true; }
+  for (;;) {
+    const sp = pos;
+    if (!matchLitR(delimLid)) { back(sp); break; }
+    const sp2 = pos;
+    if (!elem()) { back(sp2); break; }
+  }
+  return true;
+}
+function altLitR(lids: number[]): boolean {
+  for (const lid of lids) if (matchLitR(lid)) return true;
+  return false;
+}
 
-${matchTemplate}${lookFns(ir, ids)}${sharedFns(ir, ids)}${ruleFns}
+${matchTemplate}${lookFns(ir, ids)}${sharedFns(ir, ids, 'c')}${sharedFns(ir, ids, 'r')}${ruleFns}
 
 // Library entry. tokenize(src) is the lexer alone: fresh Token objects the caller owns, and no
 // parser state touched. parse(src) lexes and parses; the CST is plain objects, independent of

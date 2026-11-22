@@ -20,7 +20,7 @@
 import type { LexTok, ParserIR } from './emit-portable.ts';
 import type { TokenCharClassItem, TokenPattern } from './types.ts';
 import { type CharSet, type CodeRange, type Expr, type Fn, type Lowering, type Stmt, inlineFn, printFns, printStmts } from './algo-ir.ts';
-import { ACCEPT, committed, contOf, exitsWhereBodyStops, info, oneChar, oneEnd } from './lex-match-plan.ts';
+import { ACCEPT, committed, contOf, exitsWhereBodyStops, info, mayMatchText, oneChar, oneEnd } from './lex-match-plan.ts';
 import { oneUnit } from './text-units.ts';
 
 type Ex = Expr | string;
@@ -75,7 +75,13 @@ const sig = (name: string, doc: string, body: Stmt[]): Fn => ({ name, doc, param
 class LexScan {
   sets: CharSet[] = [];
   fns: Fn[] = [];
+  runs = false;   // some scanner calls the target's runEnd routine
   private pats = new Map<string, string>();
+
+  runEnd(set: string, i: Ex): Expr {
+    this.runs = true;
+    return { k: 'runEnd', set, s: x('s'), i: x(i) };
+  }
 
   charSet(name: string, rs: CodeRange[]): string {
     this.sets.push({ name, ranges: rs.filter(([lo]) => lo <= 127).map(([lo, hi]) => [Math.max(0, lo), Math.min(127, hi)]) });
@@ -303,8 +309,7 @@ class LexScan {
           if_(ge('p', len('s')), [NONE]),
           let_('c', code('p')),
           if_(inSet(fs, 'c'), [
-            let_('e', add('p', I(1))),
-            while_(lt('e', len('s')), [if_(not(inSet(cs, code('e'))), [BREAK]), set('e', add('e', I(1)))]),
+            let_('e', this.runEnd(cs, add('p', I(1)))),
             if_(ge('e', len('s')), [ret('e')]),
             let_('d', code('e')),
             if_(not(bails('d', t.bail, t.bailNonAscii)), [ret('e')]),
@@ -358,22 +363,55 @@ export function scannedTokens(ir: ParserIR): LexTok[] {
   return ir.tokens.filter((t) => t.name !== ir.tpl?.token);
 }
 
-const families = new WeakMap<ParserIR, { sets: CharSet[]; fns: Fn[] }>();
-export function lexScanFamily(ir: ParserIR): { sets: CharSet[]; fns: Fn[] } {
+// The literals a token of `t` can be: those of `lits` its text may equal, by the token's shape (a
+// superset). An empty list proves the token's literal id is 0 whatever its text, so a lexer records
+// 0 for it without looking its text up. An identifier(-prefixed) token's text may go on past its
+// pattern with non-ASCII ID_Continue characters, so a literal with a non-ASCII character is kept.
+export function tokenLiterals(ir: ParserIR, t: LexTok, lits: readonly string[]): string[] {
+  const ext = t.name === ir.identToken || ir.identLike.includes(t.name);
+  const wide = (l: string) => [...l].some((c) => !oneUnit(c) || c.charCodeAt(0) > 127);
+  const inR = (rs: CodeRange[], c: number) => rs.some(([lo, hi]) => c >= lo && c <= hi);
+  const span = (l: string, open: string, close: string) => l.length >= open.length + close.length && l.startsWith(open) && l.endsWith(close);
+  const may = (l: string): boolean => {
+    if (ext && wide(l)) return true;
+    switch (t.kind) {
+      case 'run': return wide(l) || (l.length > 0 && inR(t.first, l.charCodeAt(0)) && [...l.slice(1)].every((c) => inR(t.cont, c.charCodeAt(0))));
+      case 'runBail': case 'pattern': return mayMatchText(t.pattern, l);
+      case 'string': return span(l, t.delim, t.delim);
+      case 'line': return l.startsWith(t.prefix);
+      case 'block': return span(l, t.open, t.close);
+    }
+  };
+  return lits.filter(may);
+}
+
+// The literals each piece of a template literal can be, by its delimiters (a superset, as
+// tokenLiterals): the whole literal and the head run from the opener, the middle and the tail
+// from a hole's closer; the whole literal and the tail end at the opener, the head and the middle
+// at a hole's opener.
+export function templateLiterals(ir: ParserIR, lits: readonly string[]): { whole: string[]; head: string[]; middle: string[]; tail: string[] } {
+  const t = ir.tpl;
+  if (!t) return { whole: [], head: [], middle: [], tail: [] };
+  const span = (open: string, close: string) => lits.filter((l) => l.length >= open.length + close.length && l.startsWith(open) && l.endsWith(close));
+  return { whole: span(t.open, t.open), head: span(t.open, t.interpOpen), middle: span(t.interpClose, t.interpOpen), tail: span(t.interpClose, t.open) };
+}
+
+const families = new WeakMap<ParserIR, { sets: CharSet[]; fns: Fn[]; runs: boolean }>();
+export function lexScanFamily(ir: ParserIR): { sets: CharSet[]; fns: Fn[]; runs: boolean } {
   let f = families.get(ir);
   if (!f) {
     const b = new LexScan();
     for (const t of scannedTokens(ir)) b.fns.push({ ...b.scanner(t), inline: true });
     if (ir.tpl) b.fns.push(b.tplSpan(ir.tpl));
-    f = { sets: b.sets, fns: b.fns };
+    f = { sets: b.sets, fns: b.fns, runs: b.runs };
     families.set(ir, f);
   }
   return f;
 }
 
 export function emitLexScan(ir: ParserIR, lowering: Lowering): string {
-  const { sets, fns } = lexScanFamily(ir);
-  return printFns(lowering, lowering.spliceInline ? fns.filter((f) => !f.inline) : fns, sets);
+  const { sets, fns, runs } = lexScanFamily(ir);
+  return [...(runs ? [lowering.runEndFn] : []), printFns(lowering, lowering.spliceInline ? fns.filter((f) => !f.inline) : fns, sets)].join('\n');
 }
 
 // Scanners return -1 or a position, never this.

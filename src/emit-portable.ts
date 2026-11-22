@@ -376,6 +376,7 @@ export type ParserIR = {
   ctxWords: string[];          // the operator word each context bit reserves in an `aheadCtx` test (ctxWords[i] for bit 1 << i); empty when no step tests one
   lookaheads: Alt[];           // the bodies `look` steps run, indexed by Step.id; a body names only lower ids
   shared: Step[];              // the steps printed once and called from each site, indexed by Step.share (see shareSteps)
+  forms: Forms;                // which rules and shared steps are printed in building and in recognize form (see Forms)
   suppressSets: string[][];    // the connector sets `suppress` steps disable, indexed by Step.set; [0] is the empty set
   regexCtx: RegexCtx | null;   // null unless the grammar has a regex token with context
   tpl: TplCfg | null;          // null unless the grammar has a template token
@@ -719,10 +720,131 @@ function buildIR(grammar: CstGrammar): ParserIR {
     ...grammar.tokens.filter((t) => t.identifierPrefix).map((t) => t.name),
   ];
   const shared = shareSteps([
-    ...rules.flatMap((r) => (r.kind === 'rd' ? r.alts : [...r.nudBrackets.map((b) => b.steps), ...r.nudSeqs, ...r.nudCapped.map((c) => c.steps), ...r.leds.map((b) => b.steps)])),
+    ...rules.flatMap(ruleBodies),
     ...lookaheads,
   ]);
-  return { grammarName: grammar.name ?? 'grammar', entry: findEntryRule(grammar), tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike };
+  const entry = findEntryRule(grammar);
+  const forms = formsOf(rules, lookaheads, shared.length, entry);
+  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike };
+}
+
+// The step lists a rule runs: an rd rule's alternatives, a Pratt rule's NUD and LED arms.
+const ruleBodies = (r: RuleIR): Step[][] => (r.kind === 'rd' ? r.alts : [...r.nudBrackets.map((b) => b.steps), ...r.nudSeqs, ...r.nudCapped.map((c) => c.steps), ...r.leds.map((b) => b.steps)]);
+// The steps directly inside a step (a `look` step's body is a lookahead of its own, not inside it).
+const stepKids = (s: Step): Step[] => {
+  switch (s.t) {
+    case 'star': return [s.step];
+    case 'sep': return [s.elem];
+    case 'opt': case 'seq': case 'suppress': case 'ctx': return s.steps;
+    case 'alt': return s.branches.flat();
+    default: return [];
+  }
+};
+
+// ── Forms: what is built, and what is only recognized ──
+// A lookahead runs its body and then undoes everything the body did (see `look`), so nothing the
+// body builds is ever seen: what it decides is only whether the body matches, and where it ends.
+// So a lookahead body is printed in RECOGNIZE form: each step advances and reports whether it
+// matched, and builds nothing — no leaf, no children list, no node, no builder call. It examines
+// exactly the tokens the building form examines (the same peeks, the same moves back, in the same
+// order), so an entry's extent (EntryMeta.ext) is unchanged, and it reads and restores the parser's
+// state (the suppress set, the [Await]/[Yield] context) exactly as the building form does.
+// A rule a recognize-form step calls is recognized too: an rd rule has a recognize form (its
+// longest match compares end positions only, since the node a tie would choose is never seen); a
+// Pratt rule does not, because what it accepts reads the nodes it built (the head leaf a led tests,
+// PrattRule.ledNotLeftLeaf), so its recognize form runs the building form and drops the node. A
+// lookahead whose body reaches such a call therefore builds, and undoes the builder as well as the
+// position (`lookBuilds`); every other lookahead undoes only the position.
+// Each rule and shared step is printed in the forms its call sites need: building where a
+// consuming position (the entry rule's parse, a template hole, a dropped Pratt parse) reaches it,
+// recognize where a lookahead body reaches it; a rule reached both ways has both.
+export type Forms = {
+  buildRules: string[];        // rules printed in building form
+  recognizeRules: string[];    // rules printed in recognize form
+  buildShared: boolean[];      // parallel to ParserIR.shared: printed in building form
+  recognizeShared: boolean[];  // parallel to ParserIR.shared: printed in recognize form
+  lookBuilds: boolean[];       // parallel to ParserIR.lookaheads: its body runs a Pratt rule's building form
+  /** The recognize-form functions that run no building form, directly or through anything they
+   *  call: they read and move the token cursor alone (position, tokens, look extent, suppress set,
+   *  context), so a target with several engine types may print them once, on the cursor. */
+  cursorOnly: { rules: string[]; shared: boolean[]; looks: boolean[] };
+};
+function formsOf(rules: RuleIR[], lookaheads: Alt[], nShared: number, entry: string): Forms {
+  const byName = new Map(rules.map((r) => [r.name, r]));
+  const build = new Set<string>(), recognize = new Set<string>();
+  const buildShared = new Array<boolean>(nShared).fill(false), recognizeShared = new Array<boolean>(nShared).fill(false);
+  const buildRule = (name: string): void => {
+    if (build.has(name)) return;
+    build.add(name);
+    const r = byName.get(name);
+    if (r === undefined) return;
+    for (const body of ruleBodies(r)) for (const s of body) buildStep(s);
+    if (r.kind === 'pratt') for (const h of [r.nudTplHole, r.postfixTplHole]) if (h !== undefined) buildRule(h);
+  };
+  const buildStep = (s: Step): void => {
+    if ('share' in s && s.share !== undefined) { if (buildShared[s.share]) return; buildShared[s.share] = true; }
+    if (s.t === 'rule' || s.t === 'ruleBp') buildRule(s.name);
+    for (const k of stepKids(s)) buildStep(k);
+  };
+  const recognizeRule = (name: string): void => {
+    const r = byName.get(name);
+    if (r === undefined || recognize.has(name)) return;
+    recognize.add(name);
+    if (r.kind === 'pratt') buildRule(name);   // recognized by its building form
+    else for (const alt of r.alts) for (const s of alt) recognizeStep(s);
+  };
+  const recognizeStep = (s: Step): void => {
+    if ('share' in s && s.share !== undefined) { if (recognizeShared[s.share]) return; recognizeShared[s.share] = true; }
+    if (s.t === 'rule') recognizeRule(s.name);
+    if (s.t === 'ruleBp') buildRule(s.name);   // only a Pratt rule is called at a binding power
+    for (const k of stepKids(s)) recognizeStep(k);
+  };
+  buildRule(entry);
+  for (const body of lookaheads) for (const s of body) recognizeStep(s);
+  // Whether a recognize-form step runs a building form (a Pratt rule's), directly or through the
+  // rd rules it recognizes (a fixed point over their recursion); a nested lookahead undoes its own.
+  const rdBuilds = new Set<string>();
+  const builds = (s: Step): boolean => s.t === 'ruleBp' || (s.t === 'rule' && (byName.get(s.name)?.kind === 'pratt' || rdBuilds.has(s.name))) || stepKids(s).some(builds);
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const name of recognize) {
+      const r = byName.get(name)!;
+      if (r.kind === 'rd' && !rdBuilds.has(name) && r.alts.some((alt) => alt.some(builds))) { rdBuilds.add(name); changed = true; }
+    }
+  }
+  // Which recognizers read the cursor alone: none of what they run, directly or through the rules,
+  // shared steps and lookaheads they call (nested lookaheads included, unlike `builds`), is a
+  // building form. A fixed point over rd rules and lookaheads together, which call each other.
+  const ruleCalls = new Set<string>(), lookCalls = new Array<boolean>(lookaheads.length).fill(false);
+  const callsBuild = (s: Step): boolean => s.t === 'ruleBp'
+    || (s.t === 'rule' && (byName.get(s.name)?.kind === 'pratt' || ruleCalls.has(s.name)))
+    || (s.t === 'look' && lookCalls[s.id]!) || stepKids(s).some(callsBuild);
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const name of recognize) {
+      const r = byName.get(name)!;
+      if (!ruleCalls.has(name) && (r.kind === 'pratt' || r.alts.some((alt) => alt.some(callsBuild)))) { ruleCalls.add(name); changed = true; }
+    }
+    lookaheads.forEach((body, id) => { if (!lookCalls[id] && body.some(callsBuild)) { lookCalls[id] = true; changed = true; } });
+  }
+  const sharedCalls = new Array<boolean>(nShared).fill(false);
+  const markShared = (s: Step): void => {
+    if ('share' in s && s.share !== undefined && recognizeShared[s.share] && callsBuild(s)) sharedCalls[s.share] = true;
+    stepKids(s).forEach(markShared);
+  };
+  for (const r of rules) for (const body of ruleBodies(r)) body.forEach(markShared);
+  lookaheads.forEach((body) => body.forEach(markShared));
+  return {
+    buildRules: rules.filter((r) => build.has(r.name)).map((r) => r.name),
+    recognizeRules: rules.filter((r) => recognize.has(r.name)).map((r) => r.name),
+    buildShared, recognizeShared,
+    lookBuilds: lookaheads.map((body) => body.some(builds)),
+    cursorOnly: {
+      rules: rules.filter((r) => recognize.has(r.name) && !ruleCalls.has(r.name)).map((r) => r.name),
+      shared: recognizeShared.map((rec, id) => rec && !sharedCalls[id]),
+      looks: lookCalls.map((c) => !c),
+    },
+  };
 }
 
 // ── Shared steps: a repeated step sequence is one function ──
@@ -749,15 +871,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
 function shareSteps(roots: Step[][]): Step[] {
   type Compound = Extract<Step, { share?: number }>;
   const isCompound = (s: Step): s is Compound => s.t === 'star' || s.t === 'opt' || s.t === 'sep' || s.t === 'alt' || s.t === 'seq' || s.t === 'suppress' || s.t === 'ctx';
-  const kids = (s: Step): Step[] => {
-    switch (s.t) {
-      case 'star': return [s.step];
-      case 'sep': return [s.elem];
-      case 'opt': case 'seq': case 'suppress': case 'ctx': return s.steps;
-      case 'alt': return s.branches.flat();
-      default: return [];
-    }
-  };
+  const kids = stepKids;
   // Each distinct compound step by its structure: its size (in steps, itself included), how often
   // each distinct compound child occurs in it, how often it stands directly in a root list, and
   // every occurrence.

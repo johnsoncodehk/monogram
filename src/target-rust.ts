@@ -11,7 +11,7 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
-import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
 import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
@@ -70,15 +70,29 @@ const biRs = (d: Dispatch) => (d.ranked.length ? ' let mut bi: i32 = -1;' : '');
 const ckptRs = (p: string) => `let m = ${p}.mark();`;
 const undoRs = (p: string) => `${p}.reset(m);`;
 // BRANCH frame: one branch of an ordered choice (`alt`), over `p`: it returns true from the
-// choice when the branch matched, and undoes it when it did not.
-const branchRs = (cond: string) => `{ ${ckptRs('p')} if ${cond} { return true; } ${undoRs('p')} }`;
+// choice when the branch matched, and undoes it when it did not (recognized, `r`: the position only).
+const branchRs = (cond: string, r = false) => r
+  ? `{ let sp = p.pos; if ${cond} { return true; } p.back(sp); }`
+  : `{ ${ckptRs('p')} if ${cond} { return true; } ${undoRs('p')} }`;
 // CANDIDATE frame: one candidate of a longest-match list (an rd rule's alternatives, a Pratt
-// rule's NUD arms) tried from `save`: when it matched and beats the best so far it becomes the
-// best (`win`: what records it; `ck` moves past its node), else what it built is dropped; either
-// way the position goes back to `save` for the next candidate.
+// rule's NUD arms) of rule `rid`, tried from `save`: when it matched and beats the best so far,
+// its node is finished as the best, `more` records its index / form, and `ck` moves past the node;
+// else what it built is dropped; either way the position goes back to `save` for the next
+// candidate. Printed as the `cand!` macro (CAND_MACRO_RS), which expands to exactly that frame.
 const lostRs = `self.scratch.truncate(sb); self.b.restore(ck);`;
-const candRs = (d: Dispatch, i: number, cond: string, win: string) =>
-  `{ if ${cond} && ${beatsRs(d, 'self.pos', i)} { ${win} } else { ${lostRs} } self.back(save); }`;
+const candRs = (d: Dispatch, i: number, cond: string, rid: number, more: string) =>
+  `{ cand!(self, sb, ck, save, best, best_pos, ${rid}, ${cond} && ${beatsRs(d, 'self.pos', i)}, {${more}}); }`;
+// The candidate frame as a macro, not a method: a helper over the list's state was measured to
+// cost instructions (+2 to +9%: LLVM does not treat the call as it treats the frame in place),
+// and a macro expands to the frame in place. The list's locals are passed by name (hygiene).
+const CAND_MACRO_RS = `/// A longest-match candidate (target-rust.ts candRs): if \`$c\` (it matched and beats the best so far),
+/// node \`$rid\` is finished as the best and the checkpoint moves past it, else what it built is dropped;
+/// then the position goes back to the list's start.
+macro_rules! cand {
+    ($p:ident, $sb:ident, $ck:ident, $save:ident, $best:ident, $best_pos:ident, $rid:expr, $c:expr, $more:block) => {
+        if $c { $best = Some($p.finish($rid, $sb, $p.off_at($save), $save)); $best_pos = $p.pos; $more $ck = $p.b.checkpoint(); } else { $p.scratch.truncate($sb); $p.b.restore($ck); } $p.back($save);
+    };
+}`;
 // The typed-AST layer's form of a Guard over the token t: its parser keeps no lookahead mark, so
 // the second token is read directly. null: no guard.
 const astGuardRs = (g: Guard, t: string): string | null =>
@@ -142,7 +156,7 @@ function renderIdTablesRust(ids: LexIdPlan): string {
   }
   const lenArmsOf = (byLen: Map<number, { text: string; id: number }[]>) =>
     [...byLen.entries()].sort((a, b) => a[0] - b[0]).map(([len, ents]) => {
-      const arms = ents.map((e) => `${J(e.text)} => ${e.id}`).join(', ');
+      const arms = ents.map((e) => `${rsByteStr(e.text)} => ${e.id}`).join(', ');
       return `        ${len} => match text { ${arms}, _ => 0 },`;
     }).join('\n');
   const kwArms = lenArmsOf(byLenKw);
@@ -166,25 +180,39 @@ const _LID_FIRST_BITS: &[u8] = &[${bitsLit}];
 #[inline(always)] fn tok_text<'a>(src: &'a str, t: &Tok) -> &'a str { &src[t.off as usize..t.end as usize] }
 #[inline(always)] fn mk_tok(off: usize, end: usize, nl: bool, kid: u16, lid: u16) -> Tok { Tok { off: off as u32, end: end as u32, kid, lid, nl } }
 fn kid_of(kind: &str) -> u16 { match kind { ${kidArms}, _ => 0 } }
-/// O(1) length×first-byte prefilter (its bits hold every literal's key), then the match table of
-/// the text's first-byte class: a word is compared with word literals only.
+/// O(1) length×first-byte prefilter: false when no literal has the text's key (its bits hold every
+/// literal's key).
 #[inline(always)]
-fn lid_of(text: &str) -> u16 {
+fn lid_key_is_literal(text: &[u8]) -> bool {
     let n = text.len();
-    if n == 0 || n > _LID_MAX_LEN { return 0; }
-    let b0 = text.as_bytes()[0] as usize;
-    if (_LID_FIRST_BITS[n * 32 + (b0 >> 3)] & (1u8 << (b0 & 7))) == 0 { return 0; }
-    if matches!(b0, ${wordBytes.join(' | ')}) { lid_of_kw(text, n) } else { lid_of_punct(text, n) }
+    if n == 0 || n > _LID_MAX_LEN { return false; }
+    let b0 = text[0] as usize;
+    (_LID_FIRST_BITS[n * 32 + (b0 >> 3)] & (1u8 << (b0 & 7))) != 0
+}
+/// The prefilter, then the match table of the text's first-byte class: a word is compared with
+/// word literals only. Over the text's bytes: a literal is compared byte for byte, so the lexer
+/// passes its token's bytes without the char boundary checks a \`&str\` slice makes.
+#[inline(always)]
+fn lid_of(text: &[u8]) -> u16 {
+    if !lid_key_is_literal(text) { return 0; }
+    if matches!(text[0], ${wordBytes.join(' | ')}) { lid_of_kw(text, text.len()) } else { lid_of_punct(text, text.len()) }
+}
+/// lid_of for a token whose kind can equal word literals only (the generator proved it from the
+/// kind's shape, tokenLiterals): the word table, without the first-byte routing.
+#[inline(always)]
+fn lid_of_word(text: &[u8]) -> u16 {
+    if !lid_key_is_literal(text) { return 0; }
+    lid_of_kw(text, text.len())
 }
 #[inline(never)]
-fn lid_of_kw(text: &str, n: usize) -> u16 {
+fn lid_of_kw(text: &[u8], n: usize) -> u16 {
     match n {
 ${kwArms || '        // no keyword lids'}
         _ => 0,
     }
 }
 #[inline(never)]
-fn lid_of_punct(text: &str, n: usize) -> u16 {
+fn lid_of_punct(text: &[u8], n: usize) -> u16 {
     match n {
 ${puArms || '        // no punct lids'}
         _ => 0,
@@ -205,21 +233,38 @@ const RULE_NAMES: &[&str] = &[${ar.ruleNames.map(J).join(', ')}];
 // returns the whole lexer state through memory.
 const LEX_FROM_ATTR = '#[inline(always)]\n';
 
+// The literal id of a token whose text is `bytes`, given the literals its kind can be
+// (shared.tokenLiterals): 0 when it can be none, the word table alone when it can be words only.
+function lidCall(lits: string[], bytes: string): string {
+  if (lits.length === 0) return '0';
+  return lits.every((l) => lidWordByte(firstUnit(l, UNITS))) ? `lid_of_word(${bytes})` : `lid_of(${bytes})`;
+}
+
 // One token at a dispatch site: the shared scanner says where it ends; the lexer records it.
-function scanTok(t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
+function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
   const name = t.name;
   const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
   const kid = kidOf(ids, name);
+  const lid = lidCall(shared.tokenLiterals(ir, t, ids.lids.slice(1)), '&b[pos..e]');
   const push = t.skip
     ? `if src[pos..e].chars().any(|c| matches!(c, '\\n' | '\\r' | '\\u{2028}' | '\\u{2029}')) { ${nlVar} = true; } `
     : stateful
-      ? `st.emit(pos, e, ${kid}, lid_of(&src[pos..e])); `
-      : `toks.push(mk_tok(pos, e, pending_nl, ${kid}, lid_of(&src[pos..e]))); pending_nl = false; `;
+      ? `st.emit(pos, e, ${kid}, ${lid}); `
+      : `toks.push(mk_tok(pos, e, pending_nl, ${kid}, ${lid})); pending_nl = false; `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
   const ext = identLike.has(name) ? 'let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(src, e) } else { e }; ' : '';
   const scan = `{ let e = ${shared.scanner(name)}(src, pos as isize); if e >= 0 { let e = e as usize; ${ext}${push}pos = e; continue; } }`;
   return rxTok !== undefined && name === rxTok ? `        if !st.prev_is_value() ${scan}` : `        ${scan}`;
+}
+
+/** A Rust byte-string literal of text's UTF-8 bytes (printable ASCII as is, the rest escaped). */
+function rsByteStr(text: string): string {
+  let out = 'b"';
+  for (const byte of Buffer.from(text, 'utf8')) {
+    out += byte >= 0x20 && byte < 0x7f && byte !== 0x22 && byte !== 0x5c ? String.fromCharCode(byte) : `\\x${byte.toString(16).padStart(2, '0')}`;
+  }
+  return out + '"';
 }
 
 function rustByteLit(b: number): string {
@@ -253,7 +298,7 @@ function buildLexCandidates(
   const codes: string[] = [];
   const firsts: (LexFirstBytes | null)[] = [];
   for (const t of shared.scannedTokens(ir)) {
-    codes.push(scanTok(t, shared, stateful, ids, rxTok, identLike));
+    codes.push(scanTok(ir, t, shared, stateful, ids, rxTok, identLike));
     firsts.push(lexTokFirstBytes(t));
   }
   for (const p of ir.puncts) {
@@ -264,12 +309,17 @@ function buildLexCandidates(
 }
 
 /** Shared first-byte dispatch for all lexFrom variants in this target. */
-function renderLexByteDispatchRust(codes: string[], firsts: (LexFirstBytes | null)[], indent: string, specialAsciiArms: string, nonAsciiWsCheck: string): string {
+// `armHead`: code that runs first in the arm of one ASCII byte (and nowhere else), for a test that
+// only that byte can pass.
+function renderLexByteDispatchRust(codes: string[], firsts: (LexFirstBytes | null)[], indent: string, specialAsciiArms: string, nonAsciiWsCheck: string, armHead: { byte: number; code: string } | null = null): string {
   const { arms, fallbackIndices } = buildLexDispatchPlan(firsts);
   const fallback = fallbackIndices.map((i) => codes[i]).join('\n');
   let matchArms = specialAsciiArms;
+  // A byte no candidate starts with gets an arm of its own for the head code.
+  if (armHead && !arms.some((a) => a.bytes.includes(armHead.byte))) matchArms += `${indent}        ${rustMatchLabels([armHead.byte])} => {\n${armHead.code}${indent}        }\n`;
   for (const arm of arms) {
     matchArms += `${indent}        ${rustMatchLabels(arm.bytes)} => {\n`;
+    if (armHead && arm.bytes.includes(armHead.byte)) matchArms += armHead.code;
     matchArms += arm.indices.map((i) => codes[i]).join('\n') + '\n';
     matchArms += `${indent}        }\n`;
   }
@@ -286,7 +336,7 @@ ${indent}        }`;
 function newlinePartsRs(nl: NewlineCfg, ids: LexIdPlan): { consts: string; fields: string; init: string; ws: string; hooks: string; wsFrom: string; hooksFrom: string } {
   // Byte-oriented: ASCII ws by lead byte; non-ASCII via UTF-8 decode (JS \\s set).
   // LS/PS excluded: they fall to the unexpected-character panic, matching the interpreter.
-  const ws = (push: string) => `        if c == 32 || c == 9 || c == 11 || c == 12 { pos += 1; continue; }
+  const ws = (push: string) => `        if c == 32 || c == 9 || c == 11 || c == 12 { pos += 1; while pos < n && matches!(b[pos], 9 | 11 | 12 | 32) { pos += 1; } continue; }
         if c == 10 || c == 13 {
             let s = pos;
             pos += 1; if c == 13 && pos < n && b[pos] == 10 { pos += 1; }
@@ -347,33 +397,44 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   // grammars keep the flow-aware whitespace arms (flow_depth) and do NOT use the folded arms.
   const nonAsciiWsCheck = nlRs ? '' : `        if c >= 0xC2 { if let Some((ch, w)) = _char_at(src, pos) { if _is_js_ws(ch) { if ch == '\\u{2028}' || ch == '\\u{2029}' { ${nlVar} = true; } pos += w; continue; } } }
 `;
-  const wsNlArms = nlRs ? '' : `        9 | 11 | 12 | 32 => { pos += 1; continue; }
-        10 | 13 => { ${nlVar} = true; pos += 1; continue; }
+  // A whitespace run is consumed in one dispatch round: per byte only "is it still whitespace"
+  // is asked; the round's own checks (the loop bound, the template `}` test, the byte match) run
+  // once per run. A run after a line break also takes further breaks: the flag is already set.
+  const wsNlArms = nlRs ? '' : `        9 | 11 | 12 | 32 => { pos += 1; while pos < n && matches!(b[pos], 9 | 11 | 12 | 32) { pos += 1; } continue; }
+        10 | 13 => { ${nlVar} = true; pos += 1; while pos < n && matches!(b[pos], 9..=13 | 32) { pos += 1; } continue; }
 `;
   const tplOpenByte = tpl && tlen(tpl.open) === 1 ? firstUnit(tpl.open, UNITS) : null;
+  const tplLits = shared.templateLiterals(ir, ids.lids.slice(1));
   const tplOpenArm = tplOpenByte !== null ? `        ${tplOpenByte} => {
             let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl!.open)}, ${rx ? '!st.prev_is_value()' : 'true'});
-            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl!.token)}, lid_of(&src[pos..e])); }
+            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, ${lidCall(tplLits.head, '&b[pos..e]')}); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl!.token)}, ${lidCall(tplLits.whole, '&b[pos..e]')}); }
             pos = e; continue;
         }
 ` : '';
   const tplOpenPreCheck = tpl && tplOpenByte === null ? `        if ${startByteEq('pos', tpl.open)} {
             let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.open)}, ${rx ? '!st.prev_is_value()' : 'true'});
-            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl.token)}, lid_of(&src[pos..e])); }
+            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, ${lidCall(tplLits.head, '&b[pos..e]')}); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl.token)}, ${lidCall(tplLits.whole, '&b[pos..e]')}); }
             pos = e; continue;
         }
 ` : '';
-  const tplDispatch = tpl ? `        if !st.template_stack.is_empty() && ${startByteEq('pos', tpl.interpClose)} && *st.template_stack.last().unwrap() == 0 {
+  // The template `}` test can pass only at the closer's first byte: when that byte is ASCII it is
+  // made in that byte's dispatch arm, before the arm's own candidates, not in every round.
+  const closeFirst = tpl ? firstUnit(tpl.interpClose, UNITS) : -1;
+  const specialBytes = [...(nlRs ? [] : [9, 10, 11, 12, 13, 32]), ...(tplOpenByte !== null ? [tplOpenByte] : [])];
+  const closeByte = tpl && closeFirst < 128 && !specialBytes.includes(closeFirst) ? closeFirst : null;
+  const tplCloseTest = tpl ? `        if !st.template_stack.is_empty() && ${startByteEq('pos', tpl.interpClose)} && *st.template_stack.last().unwrap() == 0 {
             st.template_stack.pop();
             let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.interpClose)}, false);
-            if interp { st.emit(pos, e, ${kidOf(ids, "$templateMiddle")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, "$templateTail")}, lid_of(&src[pos..e])); }
+            if interp { st.emit(pos, e, ${kidOf(ids, "$templateMiddle")}, ${lidCall(tplLits.middle, '&b[pos..e]')}); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, "$templateTail")}, ${lidCall(tplLits.tail, '&b[pos..e]')}); }
             pos = e; continue;
         }
-${tplOpenPreCheck}` : '';
+` : '';
+  const tplDispatch = tpl ? `${closeByte === null ? tplCloseTest : ''}${tplOpenPreCheck}` : '';
   const punctLine = (p: string) =>
     `        if ${startByteEq('pos', p)} { ${stateful ? `st.emit(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${tlen(p)}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${tlen(p)}; continue; }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
-  const cascade = renderLexByteDispatchRust(lexCodes, lexFirsts, '        ', `${wsNlArms}${tplOpenArm}`, nonAsciiWsCheck);
+  const cascade = renderLexByteDispatchRust(lexCodes, lexFirsts, '        ', `${wsNlArms}${tplOpenArm}`, nonAsciiWsCheck,
+    closeByte !== null ? { byte: closeByte, code: tplCloseTest } : null);
   // Struct fields / emit hooks / init are assembled per-feature so a grammar can have regex,
   // templates, or both share one LexState. Rx bookkeeping is fully integerized (lid/kid bit tables).
   const rxBitTables = rx ? `${rsBoolArr('_DIVT', lidFlagTable(ids, rx.divisionTexts))}
@@ -391,10 +452,12 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
 ` : '';
   const identName = ir.identToken;
   const identKid = identName ? kidOf(ids, identName) : 0;
+  const identTok = ir.tokens.find((t) => t.name === identName);
+  const identLid = identTok ? lidCall(shared.tokenLiterals(ir, identTok, ids.lids.slice(1)), '&b[pos..e]') : 'lid_of(&b[pos..e])';
   // Unicode ID_Start fallback (mirrors emit-lexer uniIdentReY) before unmatched-byte panic.
   const uniIdentEmit = stateful
-    ? `st.emit(pos, e, ${identKid}, lid_of(&src[pos..e]));`
-    : `toks.push(mk_tok(pos, e, pending_nl, ${identKid}, lid_of(&src[pos..e]))); pending_nl = false;`;
+    ? `st.emit(pos, e, ${identKid}, ${identLid});`
+    : `toks.push(mk_tok(pos, e, pending_nl, ${identKid}, ${identLid})); pending_nl = false;`;
   const uniIdentOrPanic = identName
     ? `        if c >= 0x80 { if let Some(e) = _scan_uni_ident(src, pos) { ${uniIdentEmit} pos = e; continue; } }
         panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`
@@ -457,30 +520,41 @@ fn _lx_ext(s: &str, e: usize) -> usize {
 }
 ` : '';
   const fields = ['toks: Vec<Tok>', 'pending_nl: bool',
-    rx ? 'prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool' : '',
+    rx ? 'base: usize, prev0: (bool, u16, u16), bp0: (bool, u16), paren_head: Vec<bool>, last_close: bool, last_bang: bool' : '',
     tpl ? 'template_stack: Vec<i64>' : '',
     nlRs ? nlRs.fields : ''].filter(Boolean).join(', ');
   // Force-inline bookkeeping into the lex cascade. Under rustc -O (no LTO), leaving
   // emit/prev_is_value as outlined calls flips full-parse I-cache layout so lex gains
   // reverse into a parse regress; LTO / codegen-units=1 hide it — #[inline(always)] fixes -O.
   const inlAlways = '    #[inline(always)]\n';
-  const prevIsValue = rx ? `${inlAlways}    fn prev_is_value(&self) -> bool {
-        if !self.has_prev { return false; }
-        if ${rsFlag('_PAV', 'self.prev_lid')} { return self.last_bang; }
-        let is_expr_kw = self.prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'self.prev_lid')};
-        let is_paren_head = self.prev_lid == _LID_RPAREN && self.last_close;
-        !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'self.prev_kid')} || ${rsFlag('_DIVT', 'self.prev_lid')})
+  const prevIsValue = rx ? `${inlAlways}    /// The previous token: (present, kid, lid). The tokens are their own record: the last one this
+    /// lex recorded, else the one before it began (prev0).
+    fn prev(&self) -> (bool, u16, u16) {
+        let n = self.toks.len();
+        if n > self.base { let t = &self.toks[n - 1]; (true, t.kid, t.lid) } else { self.prev0 }
+    }
+${inlAlways}    /// The token before the previous one: (present, lid).
+    fn prev2(&self) -> (bool, u16) {
+        let n = self.toks.len();
+        if n > self.base + 1 { (true, self.toks[n - 2].lid) } else if n == self.base + 1 { (self.prev0.0, self.prev0.2) } else { self.bp0 }
+    }
+${inlAlways}    fn prev_is_value(&self) -> bool {
+        let (has_prev, prev_kid, prev_lid) = self.prev();
+        if !has_prev { return false; }
+        if ${rsFlag('_PAV', 'prev_lid')} { return self.last_bang; }
+        let is_expr_kw = prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'prev_lid')};
+        let is_paren_head = prev_lid == _LID_RPAREN && self.last_close;
+        !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'prev_kid')} || ${rsFlag('_DIVT', 'prev_lid')})
     }
 ` : '';
   const emitHooks = [
-    rx ? `        if lid == _LID_LPAREN { let is_member = self.has_prev2 && ${rsFlag('_MEM', 'self.bp_lid')}; self.paren_head.push(!is_member && self.prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'self.prev_lid')}); }
+    rx ? `        if lid == _LID_LPAREN { let (has_prev2, bp_lid) = self.prev2(); let (_, prev_kid, prev_lid) = self.prev(); let is_member = has_prev2 && ${rsFlag('_MEM', 'bp_lid')}; self.paren_head.push(!is_member && prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'prev_lid')}); }
         else if lid == _LID_RPAREN { self.last_close = self.paren_head.pop().unwrap_or(false); }
         if ${pavHot} { self.last_bang = self.prev_is_value(); }` : '',
     tpl ? `        if !self.template_stack.is_empty() { if lid == _LID_BRACE_OPEN { *self.template_stack.last_mut().unwrap() += 1; } else if lid == _LID_INTERP_CLOSE { *self.template_stack.last_mut().unwrap() -= 1; } }` : '',
     nlRs ? nlRs.hooks : '',
   ].filter(Boolean).join('\n');
-  const emitTail = rx ? `
-        self.bp_lid = self.prev_lid; self.has_prev2 = self.has_prev; self.prev_kid = kid; self.prev_lid = lid; self.has_prev = true;` : '';
+  const emitTail = rx ? `` : '';
   const stateImpl = stateful ? `struct LexState { ${fields} }
 impl LexState {
 ${prevIsValue}${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
@@ -489,21 +563,32 @@ ${emitHooks}
     }
 }
 ` : '';
-  const rxScanImpl = rxOnly ? `struct RxScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool }
+  const rxScanImpl = rxOnly ? `struct RxScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, base: usize, prev0: (bool, u16, u16), bp0: (bool, u16), paren_head: Vec<bool>, last_close: bool, last_bang: bool }
 impl<'a> RxScan<'a> {
+${inlAlways}    /// The previous token: (present, kid, lid). The tokens are their own record: the last one this
+    /// lex recorded, else the one before it began (prev0).
+    fn prev(&self) -> (bool, u16, u16) {
+        let n = self.acc.len();
+        if n > self.base { let t = &self.acc[n - 1]; (true, t.kid, t.lid) } else { self.prev0 }
+    }
+${inlAlways}    /// The token before the previous one: (present, lid).
+    fn prev2(&self) -> (bool, u16) {
+        let n = self.acc.len();
+        if n > self.base + 1 { (true, self.acc[n - 2].lid) } else if n == self.base + 1 { (self.prev0.0, self.prev0.2) } else { self.bp0 }
+    }
 ${inlAlways}    fn prev_is_value(&self) -> bool {
-        if !self.has_prev { return false; }
-        if ${rsFlag('_PAV', 'self.prev_lid')} { return self.last_bang; }
-        let is_expr_kw = self.prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'self.prev_lid')};
-        let is_paren_head = self.prev_lid == _LID_RPAREN && self.last_close;
-        !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'self.prev_kid')} || ${rsFlag('_DIVT', 'self.prev_lid')})
+        let (has_prev, prev_kid, prev_lid) = self.prev();
+        if !has_prev { return false; }
+        if ${rsFlag('_PAV', 'prev_lid')} { return self.last_bang; }
+        let is_expr_kw = prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'prev_lid')};
+        let is_paren_head = prev_lid == _LID_RPAREN && self.last_close;
+        !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'prev_kid')} || ${rsFlag('_DIVT', 'prev_lid')})
     }
 ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
-        if lid == _LID_LPAREN { let is_member = self.has_prev2 && ${rsFlag('_MEM', 'self.bp_lid')}; self.paren_head.push(!is_member && self.prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'self.prev_lid')}); }
+        if lid == _LID_LPAREN { let (has_prev2, bp_lid) = self.prev2(); let (_, prev_kid, prev_lid) = self.prev(); let is_member = has_prev2 && ${rsFlag('_MEM', 'bp_lid')}; self.paren_head.push(!is_member && prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'prev_lid')}); }
         else if lid == _LID_RPAREN { self.last_close = self.paren_head.pop().unwrap_or(false); }
         if ${pavHot} { self.last_bang = self.prev_is_value(); }
         self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;
-        self.bp_lid = self.prev_lid; self.has_prev2 = self.has_prev; self.prev_kid = kid; self.prev_lid = lid; self.has_prev = true;
     }
 }
 ` : '';
@@ -515,22 +600,33 @@ ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
     }
 }
 ` : '';
-  const rxTplScanImpl = rxTpl ? `struct RxTplScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool, template_stack: Vec<i64> }
+  const rxTplScanImpl = rxTpl ? `struct RxTplScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, base: usize, prev0: (bool, u16, u16), bp0: (bool, u16), paren_head: Vec<bool>, last_close: bool, last_bang: bool, template_stack: Vec<i64> }
 impl<'a> RxTplScan<'a> {
+${inlAlways}    /// The previous token: (present, kid, lid). The tokens are their own record: the last one this
+    /// lex recorded, else the one before it began (prev0).
+    fn prev(&self) -> (bool, u16, u16) {
+        let n = self.acc.len();
+        if n > self.base { let t = &self.acc[n - 1]; (true, t.kid, t.lid) } else { self.prev0 }
+    }
+${inlAlways}    /// The token before the previous one: (present, lid).
+    fn prev2(&self) -> (bool, u16) {
+        let n = self.acc.len();
+        if n > self.base + 1 { (true, self.acc[n - 2].lid) } else if n == self.base + 1 { (self.prev0.0, self.prev0.2) } else { self.bp0 }
+    }
 ${inlAlways}    fn prev_is_value(&self) -> bool {
-        if !self.has_prev { return false; }
-        if ${rsFlag('_PAV', 'self.prev_lid')} { return self.last_bang; }
-        let is_expr_kw = self.prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'self.prev_lid')};
-        let is_paren_head = self.prev_lid == _LID_RPAREN && self.last_close;
-        !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'self.prev_kid')} || ${rsFlag('_DIVT', 'self.prev_lid')})
+        let (has_prev, prev_kid, prev_lid) = self.prev();
+        if !has_prev { return false; }
+        if ${rsFlag('_PAV', 'prev_lid')} { return self.last_bang; }
+        let is_expr_kw = prev_kid == _KID_IDENT && ${rsFlag('_RXT', 'prev_lid')};
+        let is_paren_head = prev_lid == _LID_RPAREN && self.last_close;
+        !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'prev_kid')} || ${rsFlag('_DIVT', 'prev_lid')})
     }
 ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
-        if lid == _LID_LPAREN { let is_member = self.has_prev2 && ${rsFlag('_MEM', 'self.bp_lid')}; self.paren_head.push(!is_member && self.prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'self.prev_lid')}); }
+        if lid == _LID_LPAREN { let (has_prev2, bp_lid) = self.prev2(); let (_, prev_kid, prev_lid) = self.prev(); let is_member = has_prev2 && ${rsFlag('_MEM', 'bp_lid')}; self.paren_head.push(!is_member && prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'prev_lid')}); }
         else if lid == _LID_RPAREN { self.last_close = self.paren_head.pop().unwrap_or(false); }
         if ${pavHot} { self.last_bang = self.prev_is_value(); }
         if !self.template_stack.is_empty() { if lid == _LID_BRACE_OPEN { *self.template_stack.last_mut().unwrap() += 1; } else if lid == _LID_INTERP_CLOSE { *self.template_stack.last_mut().unwrap() -= 1; } }
         self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;
-        self.bp_lid = self.prev_lid; self.has_prev2 = self.has_prev; self.prev_kid = kid; self.prev_lid = lid; self.has_prev = true;
     }
 }
 ` : '';
@@ -549,7 +645,7 @@ struct LexStacks {${stkFields.length ? ` ${stkFields.join(', ')} ` : ''}}
   const stkParam = stkFields.length ? 'stk' : '_stk';
   const takeStk = (f: string) => `{ let mut v = std::mem::take(&mut stk.${f}); v.clear(); v }`;
   const initFields = ['toks: Vec::new()', 'pending_nl: false',
-    rx ? `prev_lid: 0, prev_kid: 0, bp_lid: 0, has_prev: false, has_prev2: false, paren_head: ${takeStk('paren_head')}, last_close: false, last_bang: false` : '',
+    rx ? `base: 0, prev0: (false, 0, 0), bp0: (false, 0), paren_head: ${takeStk('paren_head')}, last_close: false, last_bang: false` : '',
     tpl ? `template_stack: ${takeStk('template_stack')}` : '',
     nlRs ? nlRs.init : ''].filter(Boolean).join(', ');
   const open = stateful ? `    let mut st = LexState { ${initFields} };` : `    let mut toks: Vec<Tok> = Vec::new();\n    let mut pending_nl = false;`;
@@ -561,15 +657,16 @@ ${uniIdentOrPanic}`;
     const rxLoopBody = `        let c = b[pos] as u32;
 ${nlWs}${cascade}
 ${uniIdentOrPanic}`;
-    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool) {
+    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
-    let mut st = RxScan { acc, pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, paren_head, last_close, last_bang };
+    let mut st = RxScan { acc, pending_nl, base, prev0: (has_prev, prev_kid, prev_lid), bp0: (has_prev2, bp_lid), paren_head, last_close, last_bang };
     while pos < n && (limit == 0 || st.acc.len() - base < limit) {
 ${rxLoopBody}
     }
-    (pos, st.pending_nl, st.prev_lid, st.prev_kid, st.bp_lid, st.has_prev, st.has_prev2, st.paren_head, st.last_close, st.last_bang)
+    let ((has_prev, prev_kid, prev_lid), (has_prev2, bp_lid)) = (st.prev(), st.prev2());
+    (pos, st.pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, st.paren_head, st.last_close, st.last_bang)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
@@ -607,15 +704,16 @@ fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) 
 }`;
   }
   if (rxTpl) {
-    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxTplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Vec<i64>) {
+    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxTplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Vec<i64>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
-    let mut st = RxTplScan { acc, pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, paren_head, last_close, last_bang, template_stack };
+    let mut st = RxTplScan { acc, pending_nl, base, prev0: (has_prev, prev_kid, prev_lid), bp0: (has_prev2, bp_lid), paren_head, last_close, last_bang, template_stack };
     while pos < n && (limit == 0 || st.acc.len() - base < limit) {
 ${loopBody}
     }
-    (pos, st.pending_nl, st.prev_lid, st.prev_kid, st.bp_lid, st.has_prev, st.has_prev2, st.paren_head, st.last_close, st.last_bang, st.template_stack)
+    let ((has_prev, prev_kid, prev_lid), (has_prev2, bp_lid)) = (st.prev(), st.prev2());
+    (pos, st.pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, st.paren_head, st.last_close, st.last_bang, st.template_stack)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
@@ -777,70 +875,122 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
     case 'ctx': return `{ let _c = self.ctx; self.ctx = ${s.ctx}; let _r = (${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}); self.ctx = _c; _r }`;
   }
 }
-function stepCondP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  if ('share' in s && s.share !== undefined) return `p.sub_${s.share}()`;
-  return stepBodyP(s, ids, ar);
+// Over `p`: a step inside a closure or a method that took `let p = self`. `r`: in recognize form
+// (ParserIR.forms): it advances and reports whether it matched, and builds nothing.
+function stepCondP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, r = false): string {
+  if ('share' in s && s.share !== undefined) return `p.sub_${s.share}${r ? '_r' : ''}()`;
+  return stepBodyP(s, ids, ar, r);
 }
 // The step itself over `p`, printed in place (a shared step's method body; every other step's site).
-function stepBodyP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
+function stepBodyP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, r: boolean): string {
+  const R = r ? '_r' : '';
+  const sc = (x: Step) => stepCondP(x, ids, ar, r);
   switch (s.t) {
-    case 'lit': return gtCompLit(ids, s) ? `p.match_comp(${lidOf(ids, s.value)})` : `p.match_lit(${lidOf(ids, s.value)})`;
-    case 'tok': return `p.match_tok(${kidOf(ids, s.name)})`;
-    case 'rule': return `p.call_rule(Parser::parse_${s.name})`;
-    case 'ruleBp': return `p.call_rule(|p| p.${s.name}_bp(${s.bp}))`;
-    case 'star': return `p.star(|p| ${stepCondP(s.step, ids, ar)})`;
-    case 'opt': return `p.opt(|p| ${s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ')})`;
-    case 'sep': return `p.sep_by(|p| ${stepCondP(s.elem, ids, ar)}, ${sepDelimLid(ids, s.delim)})`;
-    case 'altlit': return `p.alt_lit(&[${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}])`;
-    case 'alt': return `(|p: &mut Parser<'a, B>| -> bool { ${stepStmtsP(s, ids, ar)} })(p)`;
+    case 'lit': return gtCompLit(ids, s) ? `p.match_comp(${lidOf(ids, s.value)})` : `p.match_lit${R}(${lidOf(ids, s.value)})`;
+    case 'tok': return `p.match_tok${R}(${kidOf(ids, s.name)})`;
+    case 'rule': return r ? `p.rec_${s.name}()` : `p.call_rule(Parser::parse_${s.name})`;
+    // Only a Pratt rule is called at a binding power; it is recognized by its building form (ParserIR.forms).
+    case 'ruleBp': return r ? `p.${s.name}_bp(${s.bp}).is_some()` : `p.call_rule(|p| p.${s.name}_bp(${s.bp}))`;
+    case 'star': return `p.star${R}(|p| ${sc(s.step)})`;
+    case 'opt': return `p.opt${R}(|p| ${s.steps.map(sc).join(' && ')})`;
+    case 'sep': return `p.sep_by${R}(|p| ${sc(s.elem)}, ${sepDelimLid(ids, s.delim)})`;
+    case 'altlit': return `p.alt_lit${R}(&[${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}])`;
+    case 'alt': return `(|p: &mut Parser<'a, B>| -> bool { ${stepStmtsP(s, ids, ar, r)} })(p)`;
     case 'look': return `${s.is ? '' : '!'}p.look_${s.id}()`;
     case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
     case 'aheadCtx': return s.is ? `(p.ahead(${s.set}, true) || p.ctx_word())` : `(p.ahead(${s.set}, false) && !p.ctx_word())`;
-    case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'})`;
+    case 'seq': return `(${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(p.peek(), Some(t) if !t.nl)`;
-    case 'suppress': return `{ p.suppress_next = ${s.set}; let _r = (${s.steps.length ? s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'}); p.suppress_next = 0; _r }`;
-    case 'ctx': return `{ let _c = p.ctx; p.ctx = ${s.ctx}; let _r = (${s.steps.length ? s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'}); p.ctx = _c; _r }`;
+    case 'suppress': return `{ p.suppress_next = ${s.set}; let _r = (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); p.suppress_next = 0; _r }`;
+    case 'ctx': return `{ let _c = p.ctx; p.ctx = ${s.ctx}; let _r = (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); p.ctx = _c; _r }`;
   }
 }
 // The step over `p` as the body of a function returning whether it matched (an `alt` needs
 // statements, so in place it is printed as an immediately called closure of these).
-function stepStmtsP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  if (s.t === 'alt') return s.predictive ? predAltBody(s.branches, ids, ar, s.firsts) : altBody(s.branches, ids, ar, s.firsts);
-  return stepBodyP(s, ids, ar);
+function stepStmtsP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, r = false): string {
+  if (s.t === 'alt') return s.predictive ? predAltBody(s.branches, ids, ar, s.firsts, r) : altBody(s.branches, ids, ar, s.firsts, r);
+  return stepBodyP(s, ids, ar, r);
 }
-function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: FirstSig[]): string {
+function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: FirstSig[], r = false): string {
   const fs = firsts ?? [];
   const nAlts = branches.length;
   const needPeek = branches.some((_, i) => isGuardable(fs[i] ?? null, nAlts));
   const peekInit = needPeek ? `let _ft = p.peek(); ` : '';
   const tries = branches.map((br, i) => {
-    const body = branchRs(br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true');
+    const body = branchRs(br.length ? br.map((x) => stepCondP(x, ids, ar, r)).join(' && ') : 'true', r);
     const f = fs[i] ?? null;
     if (!isGuardable(f, nAlts)) return body;
     return `if let Some(t) = _ft { if ${firstCond(f, 't', ids)} ${body} }`;
   }).join(' ');
   return `${peekInit}${tries} false`;
 }
-// ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
+// ParserIR.lookaheads, one method each, in recognize form (ParserIR.forms): whether the body
+// matches here. It undoes the position, and the scratch list and the builder too when its body
+// runs a Pratt rule's building form (Forms.lookBuilds).
 function lookFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  return ir.lookaheads.map((body, id) => `    fn look_${id}(&mut self) -> bool { let p = self; ${ckptRs('p')} let r = ${body.map((x) => stepCondP(x, ids, ar)).join(' && ')}; ${undoRs('p')} r }\n`).join('');
+  return ir.lookaheads.map((body, id) => {
+    const builds = ir.forms.lookBuilds[id]!;
+    return `    fn look_${id}(&mut self) -> bool { let p = self; ${builds ? ckptRs('p') : 'let sp = p.pos;'} let r = ${body.map((x) => stepCondP(x, ids, ar, true)).join(' && ')}; ${builds ? undoRs('p') : 'p.back(sp);'} r }\n`;
+  }).join('');
 }
-// ParserIR.shared, one method each: the step, run against the parser's scratch list and builder.
-// It undoes nothing: a failed step leaves what it advanced and appended for the construct around
-// its site to undo, as the inlined step did. `#[inline]` is a hint only: a step printed at one
-// site was a closure with one caller, which LLVM always inlines; a shared step has several
-// callers, and the hint lets LLVM inline the small ones there (fewer instructions per parse than
-// no hint, measured; `#[inline(always)]` is no better and inlines the large ones too).
+// ParserIR.shared, one method per form it is printed in (ParserIR.forms): the step, run against
+// the parser's scratch list and builder (recognized: neither). It undoes nothing: a failed step
+// leaves what it advanced and appended for the construct around its site to undo, as the inlined
+// step did. `#[inline]` is a hint only: a step printed at one site was a closure with one caller,
+// which LLVM always inlines; a shared step has several callers, and the hint lets LLVM inline the
+// small ones there (fewer instructions per parse than no hint, measured; `#[inline(always)]` is no
+// better and inlines the large ones too).
 function sharedFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  return ir.shared.map((s, id) => `    #[inline]\n    fn sub_${id}(&mut self) -> bool { let p = self; ${stepStmtsP(s, ids, ar)} }\n`).join('');
+  return ir.shared.map((s, id) =>
+    (ir.forms.buildShared[id] ? `    #[inline]\n    fn sub_${id}(&mut self) -> bool { let p = self; ${stepStmtsP(s, ids, ar)} }\n` : '') +
+    (ir.forms.recognizeShared[id] ? `    #[inline]\n    fn sub_${id}_r(&mut self) -> bool { let p = self; ${stepStmtsP(s, ids, ar, true)} }\n` : '')).join('');
 }
-function predAltBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: FirstSig[]): string {
+function predAltBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: FirstSig[], r = false): string {
   // FIRST dispatch; restore pos/scratch/builder on arm half-failure (like altBody).
   const arms = branches.map((br, i) => {
-    const steps = br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true';
-    return `        ${i === 0 ? 'if' : 'else if'} ${firstCond(firsts![i], 't', ids)} ${branchRs(steps)}`;
+    const steps = br.length ? br.map((x) => stepCondP(x, ids, ar, r)).join(' && ') : 'true';
+    return `        ${i === 0 ? 'if' : 'else if'} ${firstCond(firsts![i], 't', ids)} ${branchRs(steps, r)}`;
   }).join('\n');
   return `let t = match p.peek() { Some(t) => t, None => return false };\n${arms}\n        false`;
+}
+
+// A rule in recognize form (ParserIR.forms): whether it matches here, advancing past it. An rd
+// rule has rdRule's control flow building nothing: its longest match compares end positions only
+// (a tie only chooses which node, and none is built). A Pratt rule runs its building form and
+// drops the node (the lookahead around it undoes the builder: Forms.lookBuilds).
+function ruleR(r: RuleIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  if (r.kind === 'pratt') return `    fn rec_${r.name}(&mut self) -> bool { self.parse_${r.name}().is_some() }`;
+  const cond = (alt: Step[]) => alt.map((x) => stepCondP(x, ids, ar, true)).join(' && ');
+  if (r.predictive) {
+    const arm = (steps: Step[], i: number) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${cond(steps)} { return true; } }`;
+    return `    fn rec_${r.name}(&mut self) -> bool {
+        let p = self; let save = p.pos;
+        let t = match p.peek() { Some(t) => t, None => return false };
+${r.alts.map(arm).join('\n')}
+        p.back(save);
+        false
+    }`;
+  }
+  if (r.alts.length === 1) {
+    return `    fn rec_${r.name}(&mut self) -> bool {
+        let p = self; let save = p.pos;
+        if ${cond(r.alts[0]!)} { return true; }
+        p.back(save);
+        false
+    }`;
+  }
+  const alt = (i: number, keyed: boolean) => {
+    const body = `{ if ${cond(r.alts[i]!)} && p.pos > best_pos { best_pos = p.pos; } p.back(save); }`;
+    const g = guardCond(r.altGuard[i]!, 't', keyed, 'p');
+    return g.length && !keyed ? `        if let Some(t) = _ft { if ${g.join(' && ')} ${body} }` : ifRs(g, body);
+  };
+  const needPeek = r.altGuard.some((g) => g !== null);
+  return `    fn rec_${r.name}(&mut self) -> bool {
+        let p = self; let save = p.pos; let mut best_pos = save;
+${needPeek ? '        let _ft = p.peek();\n' : ''}${dispatchRs(r.altDispatch, '_ft', ids, alt, true)}
+        p.pos = best_pos;
+        best_pos > save
+    }`;
 }
 
 function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
@@ -869,7 +1019,7 @@ ${r.alts.map(arm).join('\n')}
   // The alternatives are reached through the rule's Dispatch (emit-portable.ts, RdRule.altDispatch).
   const alt = (i: number, keyed: boolean) => {
     const cond = r.alts[i]!.map((x) => stepCond(x, ids, ar)).join(' && ');
-    const body = candRs(r.altDispatch, i, cond, `best = Some(self.finish(${rid}, sb, self.off_at(save), save)); best_pos = self.pos;${markRs(r.altDispatch, i)} ck = self.b.checkpoint();`);
+    const body = candRs(r.altDispatch, i, cond, rid, markRs(r.altDispatch, i));
     const g = guardCond(r.altGuard[i]!, 't', keyed);
     return g.length && !keyed ? `        if let Some(t) = _ft { if ${g.join(' && ')} ${body} }` : ifRs(g, body);
   };
@@ -995,7 +1145,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   const lost = lostRs;
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    candRs(r.nudDispatch, i, stepsCond(steps), `best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won(i, '0', tail, capped)}`);
+    candRs(r.nudDispatch, i, stepsCond(steps), rid, `${markRs(r.nudDispatch, i)} bf = 0; bt = ${tail}; bc = ${capped};`);
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
     switch (a.kind) {
@@ -1745,7 +1895,7 @@ fn compute_align_core(old_text: &str, old_toks: &[AlignMeta], new_text: &str, ne
     (old_n, new_n, prefix, suffix)
 }
 fn toks_from_meta(text: &str, meta: &[AlignMeta]) -> Vec<Tok> {
-    meta.iter().map(|m| { let tx = am_text(text, m); mk_tok(m.off as usize, m.end as usize, am_nl(m), m.kid, lid_of(tx)) }).collect()
+    meta.iter().map(|m| { let tx = am_text(text, m); mk_tok(m.off as usize, m.end as usize, am_nl(m), m.kid, lid_of(tx.as_bytes())) }).collect()
 }
 ${treeEqFn}${reuseFns}pub struct Doc<B: Builder = CstBuilder> {
     text: String,
@@ -1895,11 +2045,11 @@ function emitParserMachine(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shapeB
   const reuse = topReusePlan(ir);
   const entriesField = reuse ? '\n    entries: Vec<EntryMeta>,' : '';
   const segsField = shapeB ? '\n    segs: Vec<Seg>,' : '';
-  const ruleFns = ir.rules.map((r) => {
+  const ruleFns = [...ir.rules.filter((r) => ir.forms.buildRules.includes(r.name)).map((r) => {
     if (r.kind === 'pratt') return prattRule(r, ir.tpl, ids, ar);
     if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids, ar);
     return rdRule(r, ids, ar);
-  }).join('\n\n');
+  }), ...ir.rules.filter((r) => ir.forms.recognizeRules.includes(r.name)).map((r) => ruleR(r, ids, ar))].join('\n\n');
   const matchTemplate = ir.tpl ? `    // interp: the rule that parses each \`\${…}\` hole — the one the matching reference declares
     // (the grammar's expression rule, or the rule a withHoles reference names).
     fn match_template(&mut self, interp: fn(&mut Parser<'a, B>) -> Option<Spanned<B::H>>) -> Option<Spanned<B::H>> {
@@ -2049,6 +2199,20 @@ struct Spanned<H: Copy> { h: H, off: u32, tok_start: u32, present: bool }
 /// and the builder's checkpoint. Parser::reset goes back to it.
 #[derive(Clone, Copy)]
 struct Mark { pos: usize, sb: usize, ck: (usize, usize) }
+/// A node's children appended to the kids arena: a node has few (about two), so an element loop
+/// printed at each finish, never a call (a generic \`extend\` is inlined or called at LLVM's choice,
+/// which made each finish site's cost depend on the size of the function holding it).
+#[inline(always)]
+fn copy_kids(kids: &mut Vec<i32>, s: &[i32]) {
+    kids.reserve(s.len());
+    let n = kids.len();
+    unsafe {
+        let p = kids.as_mut_ptr().add(n);
+        for i in 0..s.len() { p.add(i).write(*s.get_unchecked(i)); }
+        kids.set_len(n + s.len());
+    }
+}
+${CAND_MACRO_RS}
 
 #[derive(Default)]
 pub struct CstBuilder {
@@ -2143,7 +2307,7 @@ ${shapeB ? `    #[inline(always)]
         } else {
             (fallback_off, fallback_off)
         };
-        self.kids.extend(scratch[sb..nn].iter().copied());
+        copy_kids(&mut self.kids, &scratch[sb..nn]);
         scratch.truncate(sb);
         self.nodes.push(Node { rule_id, kid_start: kid_start as u32, kid_count: (nn - sb) as u32, offset, end, tok_start, tok_end, ext: 0 });
         ((self.nodes.len() - 1) as i32, offset, true)
@@ -2152,7 +2316,7 @@ ${shapeB ? `    #[inline(always)]
     fn node(&mut self, scratch: &mut Vec<i32>, sb: usize, rule_id: u16, off: u32, end: u32, tok_start: u32, tok_end: u32) {
         let nn = scratch.len();
         let kid_start = self.kids.len();
-        self.kids.extend(scratch[sb..nn].iter().copied());
+        copy_kids(&mut self.kids, &scratch[sb..nn]);
         scratch.truncate(sb);
         self.nodes.push(Node { rule_id, kid_start: kid_start as u32, kid_count: (nn - sb) as u32, offset: off, end, tok_start, tok_end, ext: 0 });
         scratch.push((self.nodes.len() - 1) as i32);
@@ -2264,7 +2428,7 @@ impl Builder for SlimBuilder {
         if count == 1 { return; }
         if count == 0 { scratch.truncate(sb); return; }
         let kid_start = self.kids.len();
-        self.kids.extend(scratch[sb..nn].iter().copied());
+        copy_kids(&mut self.kids, &scratch[sb..nn]);
         scratch.truncate(sb);
         self.nodes.push(Node { rule_id, kid_start: kid_start as u32, kid_count: count as u32, offset: off, end, tok_start, tok_end, ext: 0 });
         scratch.push((self.nodes.len() - 1) as i32);
@@ -2453,6 +2617,47 @@ impl<'a, B: Builder> Parser<'a, B> {
     #[inline(always)]
     fn alt_lit(&mut self, lids: &[u16]) -> bool {
         for lid in lids { if self.match_lit(*lid) { return true; } }
+        false
+    }
+    // The recognize forms (ParserIR.forms): the same tokens examined, nothing built.
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn match_lit_r(&mut self, lid: u16) -> bool {
+        match self.peek() { Some(t) if t.lid == lid => { self.pos += 1; true } _ => false }
+    }
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn match_tok_r(&mut self, kid: u16) -> bool {
+        match self.peek() { Some(t) if t.kid == kid => { self.pos += 1; true } _ => false }
+    }
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn star_r(&mut self, once: fn(&mut Parser<'a, B>) -> bool) -> bool {
+        loop { let sp = self.pos; if !once(self) { self.back(sp); break; } }
+        true
+    }
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn opt_r(&mut self, body: fn(&mut Parser<'a, B>) -> bool) -> bool {
+        let sp = self.pos; if !body(self) { self.back(sp); } true
+    }
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn sep_by_r(&mut self, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
+        let sp0 = self.pos;
+        if !elem(self) { self.back(sp0); return true; }
+        loop {
+            let sp = self.pos;
+            if !self.match_lit_r(delim) { self.back(sp); break; }
+            let sp2 = self.pos;
+            if !elem(self) { self.back(sp2); break; }
+        }
+        true
+    }
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn alt_lit_r(&mut self, lids: &[u16]) -> bool {
+        for lid in lids { if self.match_lit_r(*lid) { return true; } }
         false
     }
 
@@ -5151,6 +5356,20 @@ const rustLowering: Lowering = {
     for (const [lo, hi] of rs) for (let c = lo; c <= hi; c++) a[c] = true;
     return `const ${name.toUpperCase()}: [bool; 256] = [${a.map((b) => (b ? 'true' : 'false')).join(', ')}];`;
   },
+  // Four bytes per round: one table test each, and one bounds test per round instead of per byte.
+  runEndFn: `/// The end of the run of bytes in \`set\` from i: the first j >= i at which b ends or b[j] is not in it.
+#[inline(always)]
+fn lex_run_end(b: &[u8], mut i: usize, set: &[bool; 256]) -> usize {
+    while let Some(w) = b.get(i..i + 4) {
+        if !set[w[0] as usize] { return i; }
+        if !set[w[1] as usize] { return i + 1; }
+        if !set[w[2] as usize] { return i + 2; }
+        if !set[w[3] as usize] { return i + 3; }
+        i += 4;
+    }
+    while i < b.len() && set[b[i] as usize] { i += 1; }
+    i
+}`,
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${rsWrap(r, ATOM)}`, prec: 90 }),
@@ -5165,6 +5384,7 @@ const rustLowering: Lowering = {
     code: (cx, s, i) => ({ c: `${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}] as u32`, ty: 'int', nat: 'u32', prec: RS_CAST }),
     hasAt: (cx, s, i, lit) => cx.atom(`${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}..].starts_with(${J(lit)}.as_bytes())`, 'bool', 'bool'),
     inSet: (cx, set, c) => cx.atom(`${set.toUpperCase()}[${cx.coerce(c, 'usize')}]`, 'bool', 'bool'),
+    runEnd: (cx, set, s, i) => cx.atom(`lex_run_end(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')}, &${set.toUpperCase()})`, 'int', 'usize'),
     own: (cx, r) => {
       if (r.ty === 'str') return cx.atom(`${rsWrap(r, ATOM)}.to_string()`, 'str', 'str', { owned: true });
       if (isList(r.ty)) return cx.atom(`${rsWrap(r, ATOM)}.to_vec()`, r.ty, r.ty, { owned: true });
@@ -5203,7 +5423,7 @@ const rustLowering: Lowering = {
       editText: (cx, e) => cx.atom(`${e.c}.text.as_str()`, 'str', 'str', { owned: false }),
       metaText: (cx, t, m) => cx.atom(`am_text(${cx.str(t)}, ${cx.ref(m)})`, 'str', 'str', { owned: false }),
       substr: (cx, s, a, b) => ({ c: `&${rsWrap(s, ATOM)}[${cx.coerce(a, 'usize')}..${cx.coerce(b, 'usize')}]`, ty: 'str', nat: 'str', prec: 90, owned: false }),
-      lidOf: (cx, s) => cx.atom(`lid_of(${cx.str(s)})`, 'lid', cx.nat('lid')),
+      lidOf: (cx, s) => cx.atom(`lid_of(${cx.str(s)}.as_bytes())`, 'lid', cx.nat('lid')),
       mkMeta: (cx, fs) => cx.atom(`mk_align(${fs.map(([f, r]) => cx.coerce(r, RS_MK[f])).join(', ')})`, 'meta', 'meta'),
       shiftMeta: (cx, m, d) => cx.atom(`shift_align(${cx.ref(m)}, ${cx.coerce(d, 'isize')})`, 'meta', 'meta'),
       metaEq: (_cx, a, b) => ({ c: `${a.c} == ${b.c}`, ty: 'bool', nat: 'bool', prec: RS_OPS.eq[1] }),
@@ -5532,7 +5752,7 @@ fn main() {
     // gives a token of that text when it rebuilds the token from its metadata.
     if args.get(1).map(|a| a.as_str()) == Some("lid-of") {
         let mut out = String::new();
-        for s in src.split('\\0') { out.push_str(&lid_of(s).to_string()); out.push('\\n'); }
+        for s in src.split('\\0') { out.push_str(&lid_of(s.as_bytes()).to_string()); out.push('\\n'); }
         print!("{}", out);
         return;
     }

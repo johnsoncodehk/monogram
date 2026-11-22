@@ -158,6 +158,13 @@ func MeasureAllocs(src string, reuse bool) AllocOut {
 	if !reuse {
 		b = &CstBuilder{}
 	}
+	// One P while measuring. An allocation under 16 B without pointers goes to its P's current
+	// 16 B tiny block, and the heap profile records a block, not each allocation in it. With
+	// several Ps a parse preempted on one P can resume on another, whose block is filled to another
+	// offset, so whether one allocation opens a block varied between runs (go fresh _tsserver.js:
+	// 60 or 61 allocations, 5 runs in 40). With one P the parse's tiny allocations fill blocks in
+	// its own order from the empty block ReadMemStats leaves (it flushes every P's cache).
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	old := debug.SetGCPercent(-1)
 	defer debug.SetGCPercent(old)
 	before := profileBySite()
@@ -303,10 +310,16 @@ for (const target of ['ts', 'js'] as const) for (const [gname, g] of Object.entr
 }
 
 // ── Go target ──
+// The Go rows are a function of the source AND the toolchain: the same commit attributed one 16 B
+// slice growth to (*engine).matchLit under go1.27.4 and to (*engine).finish under go1.26.11 (CI's
+// preinstalled Go then), the totals equal. The record names the toolchain it was
+// made with; another one is not compared (NOT RUN), and --write records the one that ran.
 let goVersion = '';
+const RECORDED_GO = /^Go rows measured with (go[0-9.]+)\./m.exec((() => { try { return readFileSync(RECORD, 'utf8'); } catch { return ''; } })())?.[1] ?? '';
 if (!have('go', 'version')) notRun.push('go: toolchain not found');
-else {
-  goVersion = execFileSync('go', ['version'], { encoding: 'utf8' }).trim().split(' ')[2]!;
+else if ((goVersion = execFileSync('go', ['version'], { encoding: 'utf8' }).trim().split(' ')[2]!) !== RECORDED_GO && !WRITE) {
+  notRun.push(`go: the record was made with ${RECORDED_GO || '(no recorded toolchain)'}, this toolchain is ${goVersion}; install ${RECORDED_GO} (CI pins it with actions/setup-go) or re-record with --write`);
+} else {
   for (const [gname, g] of Object.entries(grammars)) {
     const gdir = join(dir, 'go-' + gname);
     mkdirSync(join(gdir, 'parser'), { recursive: true });
@@ -376,6 +389,11 @@ say('TS target and emitted JS parser by instrumentation of the emitted module (t
 say('`runtime.MemStats` with the collector off. Bytes: Go exact (`TotalAlloc`); TS / JS modeled from V8\'s layout');
 say('(pointer compression; the model is in test/alloc-instrument.ts; the gate prints a measured `heapUsed` delta');
 say('beside it). One warm parse runs before the measured one; what a module builds once is not counted.');
+say();
+say(`Go rows measured with ${goVersion}. Which function an allocation is attributed to depends on the toolchain (one`);
+say('commit: a 16 B slice growth in `(*engine).matchLit` under go1.27.4, in `(*engine).finish` under go1.26.11), so the');
+say('rows hold for this toolchain only. CI installs it (`actions/setup-go`, .github/workflows/ci.yml); with another one');
+say('the Go rows are NOT RUN.');
 say();
 say(`Inputs (locked npm packages): \`acorn@${pkgVersion('acorn')}\` \`dist/acorn.js\`, \`typescript@${pkgVersion('typescript')}\` \`lib/lib.es5.d.ts\` and \`lib/_tsserver.js\` (also repeated 4×: per-token counts must not grow with size).`);
 say();

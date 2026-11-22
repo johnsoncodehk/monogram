@@ -80,16 +80,61 @@ for (let i = 0; i < 200; i++) {
 }
 const SESSIONS = [curated, random];
 
-// Dense '>' text: a fresh parse of DENSE_LINE × 4N lines costs about 4× that of N lines, not 16×.
+// Dense '>' text: the work of a fresh parse grows with the text, not faster. Composing '>'-led
+// operators from single '>' tokens replaced a token SPLICE (d1fd6c9): the parser split a '>>' the
+// lexer had scanned and inserted the remainder into its token array, a pass over the stream per
+// split, so dense type-argument closes made the parse quadratic. The checks count that work, not
+// time (a wall-clock ratio on a shared runner is noise by construction):
+//   • the parse reads the lexer's token stream unchanged: every leaf a parse builds is the lexer's
+//     token at its index (Go, Rust: the Builder's tokIdx; TS: the leaf's span), and in TS, whose
+//     token array the gate can wrap, no write reaches the array during the parse;
+//   • the work per token does not grow from N to 4N lines: TS token-array reads, Go / Rust
+//     builder nodes and leaves (losing attempts included), per lexer token, at most DENSE_GROWTH×.
 const DENSE_LINE = 'let v: A<B<C>> = f<D<E>>(x);\n';
-const DENSE_N = 2000;
-const denseCheck = (lang: string, small: number, big: number) =>
-  check(`${lang}: parse cost is linear in dense '>' text (4× the lines: ${(big / small).toFixed(1)}× the time)`, big < 8 * small, `${small.toFixed(2)} ms → ${big.toFixed(2)} ms`);
+const DENSE_N = 2000, DENSE_GROWTH = 1.25;
+type DenseWork = { toks: number; bad: number; writes?: number; work: Record<string, number> };
+const denseCheck = (lang: string, [small, big]: DenseWork[]) => {
+  for (const [n, w] of [[DENSE_N, small!], [4 * DENSE_N, big!]] as const) {
+    check(`${lang}: every leaf of the dense text (${n} lines) is the lexer's token at its index`, w.toks > 0 && w.bad === 0, `${w.bad} leaves are not (${w.toks} lexer tokens)`);
+    if (w.writes !== undefined) check(`${lang}: the parse writes nothing to the token array (${n} lines)`, w.writes === 0, `${w.writes} writes`);
+  }
+  for (const k of Object.keys(small!.work)) {
+    const a = small!.work[k]! / small!.toks, b = big!.work[k]! / big!.toks;
+    console.log(`  ${lang} dense '>' text: ${k} per token ${a.toFixed(3)} at ${DENSE_N} lines, ${b.toFixed(3)} at ${4 * DENSE_N}`);
+    check(`${lang}: ${k} per token does not grow in dense '>' text (4× the lines)`, a > 0 && b <= DENSE_GROWTH * a, `${a.toFixed(3)} → ${b.toFixed(3)} per token`);
+  }
+};
 {
-  const best = (src: string) => { let m = 1e18; for (let k = 0; k < 5; k++) { const t0 = performance.now(); ts.parse(src); m = Math.min(m, performance.now() - t0); } return m; };
-  const small = DENSE_LINE.repeat(DENSE_N), big = DENSE_LINE.repeat(4 * DENSE_N);
-  check('ts: tsTarget accepts the dense text', ref(small) !== '');
-  denseCheck('ts', best(small), best(big));
+  // parseTokens is the engine's entry over a token array (parse = parseTokens(lex(src))); the
+  // probe hands it the lexer's array behind a proxy that counts element reads and every write.
+  const probe = `
+export function __denseWork(src: string) {
+  _src = src;
+  const all = lex(src);
+  let reads = 0, writes = 0;
+  const idx = (k: string | symbol) => typeof k === 'string' && /^\\d+$/.test(k);
+  const counted = new Proxy(all, {
+    get(t, k, r) { if (idx(k)) reads++; return Reflect.get(t, k, r); },
+    set(t, k, v, r) { writes++; return Reflect.set(t, k, v, r); },
+    defineProperty(t, k, d) { writes++; return Reflect.defineProperty(t, k, d); },
+    deleteProperty(t, k) { writes++; return Reflect.deleteProperty(t, k); },
+  });
+  const spans = new Set(all.map((t) => t.off + ':' + t.end));
+  const lexed = all.length;
+  const root = parseTokens(counted);
+  let bad = 0;
+  const walk = (n: Cst): void => { if ('children' in n) n.children.forEach(walk); else if (!spans.has(n.offset + ':' + n.end)) bad++; };
+  if (root !== null) walk(root);
+  return root === null ? null : { toks: lexed, bad, writes, work: { 'token-array reads': reads } };
+}
+`;
+  const lib = emitParser(grammar, tsTarget);
+  if (!lib.includes('\nfunction parseTokens(tokens: Tok[]): Cst | null {')) throw new Error('dense probe: parseTokens not found in the TS target');
+  writeFileSync(join(dir, 'dense.ts'), lib + probe);
+  const m = (await import(join(dir, 'dense.ts'))) as { __denseWork(s: string): DenseWork | null };
+  const work = [DENSE_N, 4 * DENSE_N].map((n) => m.__denseWork(DENSE_LINE.repeat(n)));
+  check('ts: tsTarget accepts the dense text', work.every((w) => w !== null));
+  if (work.every((w) => w !== null)) denseCheck('ts', work as DenseWork[]);
 }
 
 const HARNESS = `package main
@@ -100,7 +145,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 )
 
 type lf struct{ tt uint16; off, end uint32 }
@@ -182,6 +226,30 @@ type step struct {
 	TreeEq                   bool
 }
 
+// denseB counts what a parse builds (losing attempts included) and checks every leaf against the
+// lexer's token at its index. Not *CstBuilder, so ParseWith drives it through the interface.
+type denseB struct {
+	*CstBuilder
+	lexed              []Token
+	leaves, nodes, bad int
+}
+
+func (b *denseB) Leaf(scratch *[]int32, ttId uint16, tokIdx, off, end uint32) bool {
+	b.leaves++
+	if int(tokIdx) >= len(b.lexed) || b.lexed[tokIdx].Off != int(off) || b.lexed[tokIdx].End != int(end) { b.bad++ }
+	return b.CstBuilder.Leaf(scratch, ttId, tokIdx, off, end)
+}
+func (b *denseB) Finish(scratch *[]int32, sb int, ruleId uint16, fallbackOff, tokStart, tokEnd uint32, toks []Tok) (int32, uint32, bool) {
+	b.nodes++
+	return b.CstBuilder.Finish(scratch, sb, ruleId, fallbackOff, tokStart, tokEnd, toks)
+}
+
+type denseWork struct {
+	Toks int            \`json:"toks"\`
+	Bad  int            \`json:"bad"\`
+	Work map[string]int \`json:"work"\`
+}
+
 func main() {
 	raw, _ := io.ReadAll(os.Stdin)
 	var in struct {
@@ -197,17 +265,15 @@ func main() {
 	var out struct {
 		Doc, ParseWith, Span []string
 		Sessions             [][]step
-		DenseMs              []float64
+		Dense                []denseWork
 	}
 	for _, n := range []int{in.DenseN, 4 * in.DenseN} {
 		src := strings.Repeat(in.Dense, n)
-		m := 1e18
-		for k := 0; k < 5; k++ {
-			t := time.Now()
-			if _, ok := ParseWith(src, &CstBuilder{}); !ok { os.Exit(3) }
-			if d := float64(time.Since(t).Nanoseconds()) / 1e6; d < m { m = d }
-		}
-		out.DenseMs = append(out.DenseMs, m)
+		lexed, err := Tokenize(src)
+		if err != nil { os.Exit(3) }
+		b := &denseB{CstBuilder: &CstBuilder{}, lexed: lexed}
+		if _, ok := ParseWith(src, b); !ok { os.Exit(3) }
+		out.Dense = append(out.Dense, denseWork{Toks: len(lexed), Bad: b.bad, Work: map[string]int{"builder nodes": b.nodes, "builder leaves": b.leaves}})
 	}
 	for _, s := range in.Samples {
 		out.Doc = append(out.Doc, NewDoc(s).CstJSON())
@@ -244,7 +310,7 @@ func main() {
 `;
 
 type Step = { Native: string; Validated: string; Span?: string; Fresh: string; NativeReused: number; SpanReused?: number; TreeEq: boolean };
-type Out = { Doc: string[]; ParseWith: string[]; Span?: string[]; Sessions: Step[][]; DenseMs: number[] };
+type Out = { Doc: string[]; ParseWith: string[]; Span?: string[]; Sessions: Step[][]; Dense: DenseWork[] };
 const verify = (lang: string, out: Out, names: { doc: string; parseWith: string }) => {
   SAMPLES.forEach((s, i) => {
     const tag = JSON.stringify(s.slice(0, 34));
@@ -283,7 +349,7 @@ const verify = (lang: string, out: Out, names: { doc: string; parseWith: string 
     }
     check(`${lang} ${ses.name}: validated Doc reports treeEq on every edit`, steps.every((s) => s.TreeEq), `${steps.filter((s) => !s.TreeEq).length} steps not treeEq`);
   });
-  denseCheck(lang, out.DenseMs[0]!, out.DenseMs[1]!);
+  denseCheck(lang, out.Dense);
 };
 const have = (cmd: string, arg: string) => { try { execFileSync(cmd, [arg], { stdio: 'pipe' }); return true; } catch { return false; } };
 
@@ -348,6 +414,35 @@ impl Builder for SpanB {
     fn head_span(&self, h: i32, toks: &[Tok]) -> (u32, u32) { let mut h = h; while h >= 0 && self.n[h as usize].2 > 0 { h = self.k[self.n[h as usize].1 as usize]; } self.span_of(h, toks) }
     fn tok_range(&self, h: i32) -> (u32, u32) { if h < 0 { let t = self.l[!h as usize].1; (t, t + 1) } else { let nd = self.n[h as usize]; (nd.5, nd.6) } }
 }
+// Counts what a parse builds (losing attempts included) and checks every leaf against the lexer's
+// token at its index.
+#[derive(Default)]
+struct DenseB { inner: CstBuilder, lexed: Vec<(u32, u32)>, leaves: u64, nodes: u64, bad: u64 }
+impl Builder for DenseB {
+    type H = i32;
+    fn dummy_h() -> i32 { 0 }
+    fn checkpoint(&self) -> (usize, usize) { self.inner.checkpoint() }
+    fn restore(&mut self, ck: (usize, usize)) { self.inner.restore(ck) }
+    fn leaf(&mut self, scratch: &mut Vec<i32>, tt: u16, ti: u32, off: u32, end: u32) -> bool {
+        self.leaves += 1;
+        if self.lexed.get(ti as usize) != Some(&(off, end)) { self.bad += 1; }
+        self.inner.leaf(scratch, tt, ti, off, end)
+    }
+    fn finish(&mut self, scratch: &mut Vec<i32>, sb: usize, rule_id: u16, fallback_off: u32, tok_start: u32, tok_end: u32, toks: &[Tok]) -> (i32, u32, bool) {
+        self.nodes += 1;
+        self.inner.finish(scratch, sb, rule_id, fallback_off, tok_start, tok_end, toks)
+    }
+    fn node(&mut self, scratch: &mut Vec<i32>, sb: usize, rule_id: u16, off: u32, end: u32, tok_start: u32, tok_end: u32) {
+        self.inner.node(scratch, sb, rule_id, off, end, tok_start, tok_end)
+    }
+    fn span_of(&self, h: i32, toks: &[Tok]) -> (u32, u32) { self.inner.span_of(h, toks) }
+    fn head_span(&self, h: i32, toks: &[Tok]) -> (u32, u32) { self.inner.head_span(h, toks) }
+    fn note_look(&mut self, h: i32, max_look: u32) { self.inner.note_look(h, max_look) }
+    fn entry_meta(&mut self, h: i32, max_look: u32, toks: &[Tok]) -> EntryMeta { self.inner.entry_meta(h, max_look, toks) }
+    fn tok_range(&self, h: i32) -> (u32, u32) { self.inner.tok_range(h) }
+    fn toks(&self) -> Option<&Vec<Tok>> { self.inner.toks() }
+    fn toks_mut(&mut self) -> Option<&mut Vec<Tok>> { self.inner.toks_mut() }
+}
 fn main() {
     let samples: &[&str] = &[${SAMPLES.map(rlit).join(', ')}];
     let sessions: &[(&str, &[(usize, usize, &str)])] = &[${SESSIONS.map((x) => `(${rlit(x.init)}, &[${x.edits.map((e) => `(${e.start}, ${e.end}, ${rlit(e.text)})`).join(', ')}])`).join(', ')}];
@@ -387,16 +482,11 @@ fn main() {
     let mut dense = Vec::new();
     for n in [${DENSE_N}, ${4 * DENSE_N}] {
         let src = ${rlit(DENSE_LINE)}.repeat(n);
-        let mut m = f64::MAX;
-        for _ in 0..5 {
-            let t = std::time::Instant::now();
-            let mut b = CstBuilder::default();
-            if parse_with(&src, &mut b).is_none() { std::process::exit(3); }
-            m = m.min(t.elapsed().as_secs_f64() * 1e3);
-        }
-        dense.push(format!("{}", m));
+        let mut b = DenseB { lexed: tokenize(&src).iter().map(|t| (t.off as u32, t.end as u32)).collect(), ..Default::default() };
+        if parse_with(&src, &mut b).is_none() { std::process::exit(3); }
+        dense.push(format!("{{\\"toks\\":{},\\"bad\\":{},\\"work\\":{{\\"builder nodes\\":{},\\"builder leaves\\":{}}}}}", b.lexed.len(), b.bad, b.nodes, b.leaves));
     }
-    println!("{{\\"Doc\\":[{}],\\"ParseWith\\":[{}],\\"Span\\":[{}],\\"Sessions\\":[{}],\\"DenseMs\\":[{}]}}", docs.join(","), pws.join(","), spans.join(","), ses.join(","), dense.join(","));
+    println!("{{\\"Doc\\":[{}],\\"ParseWith\\":[{}],\\"Span\\":[{}],\\"Sessions\\":[{}],\\"Dense\\":[{}]}}", docs.join(","), pws.join(","), spans.join(","), ses.join(","), dense.join(","));
 }
 `;
 

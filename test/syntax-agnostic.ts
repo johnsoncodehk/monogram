@@ -25,6 +25,7 @@ const sexpr: Lowering = {
   cast: (_cx, r, nat) => ({ ...r, c: form('as', nat, r.c), nat, prec: ATOM }),
   owns: false,
   charSet: (name, rs) => form('define-char-set', name, ...rs.map(([lo, hi]) => form(String(lo), String(hi)))),
+  runEndFn: form('define-runtime', 'run-end'),
   expr: {
     literal: (v) => at(typeof v === 'string' ? JSON.stringify(v) : typeof v === 'boolean' ? (v ? '#t' : '#f') : String(v)),
     not: (r) => at(form('not', r.c)),
@@ -35,6 +36,7 @@ const sexpr: Lowering = {
     code: (cx, s, i) => cx.atom(form('char-code', s.c, i.c), 'int', 'int'),
     hasAt: (cx, s, i, lit) => cx.atom(form('starts-at?', s.c, i.c, JSON.stringify(lit)), 'bool', 'bool'),
     inSet: (_cx, set, c) => at(form('in-set?', set, c.c)),
+    runEnd: (cx, set, s, i) => cx.atom(form('run-end', set, s.c, i.c), 'int', 'int'),
   },
   stmt: {
     comment: (text) => [`;; ${text}`],
@@ -109,6 +111,7 @@ function census(fns: Fn[]): Map<string, number> {
     if (e.k === 'code') bump('char-code');
     if (e.k === 'hasAt') bump('starts-at?');
     if (e.k === 'inSet') bump('in-set?');
+    if (e.k === 'runEnd') bump('run-end');
     for (const v of Object.values(e)) {
       if (Array.isArray(v)) v.forEach((y) => y && typeof y === 'object' && 'k' in y && ex(y as Expr));
       else if (v && typeof v === 'object' && 'k' in v) ex(v as Expr);
@@ -173,6 +176,7 @@ for (const path of FIXTURES) {
   try { heads = read(out); } catch (e) { fail(`${path}: ${(e as Error).message}`); continue; }
   const want = census(fns);
   want.set('define-char-set', lex.sets.length);
+  want.set('define-runtime', want.has('run-end') ? 1 : 0);
   for (const [k, n] of want) {
     const got = k.split('|').reduce((s, h) => s + (heads.get(h) ?? 0), 0);
     if (got !== n) fail(`${path}: ${k} printed ${got}×, IR holds ${n}`);
