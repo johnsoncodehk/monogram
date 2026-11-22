@@ -867,9 +867,11 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean): StepLowering {
     rule: (name) => (r ? `${recv}.rec_${name}()` : `${recv}.call_rule(Parser::parse_${name})`),
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (r ? `${recv}.${name}_bp(${bp}).is_some()` : `${recv}.call_rule(|p| p.${name}_bp(${bp}))`),
-    star: (body) => `${recv}.star${R}(|p| ${body})`,
-    opt: (body) => `${recv}.opt${R}(|p| ${body})`,
-    sep: (elem, delim) => `${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})`,
+    // A body guard (emit-portable.ts annotateSteps): opt / sep test it before their one attempt,
+    // star before each attempt, so a refused attempt takes no mark.
+    star: (body, g) => (g === null ? `${recv}.star${R}(|p| ${body})` : `${recv}.star_in${R}(${g}, |p| ${body})`),
+    opt: (body, g) => `${g === null ? '' : `(!${recv}.ahead(${g}, true) || `}${recv}.opt${R}(|p| ${body})${g === null ? '' : ')'}`,
+    sep: (elem, delim, g) => `${g === null ? '' : `(!${recv}.ahead(${g}, true) || `}${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})${g === null ? '' : ')'}`,
     altlit: (values) => `${recv}.alt_lit${R}(&[${values.map((v) => lidOf(ids, v)).join(', ')}])`,
     look: (id, is) => `${is ? '' : '!'}${recv}.look_${id}()`,
     ahead: (set, is) => `${recv}.ahead(${set}, ${is})`,
@@ -2495,6 +2497,15 @@ impl<'a, B: Builder> Parser<'a, B> {
         true
     }
     #[inline(always)]
+    #[allow(dead_code)]
+    fn star_in(&mut self, k: usize, once: fn(&mut Parser<'a, B>) -> bool) -> bool {
+        while self.ahead(k, true) {
+            let m = self.mark();
+            if !once(self) { self.reset(m); break; }
+        }
+        true
+    }
+    #[inline(always)]
     fn opt(&mut self, body: fn(&mut Parser<'a, B>) -> bool) -> bool {
         let m = self.mark();
         if !body(self) { self.reset(m); }
@@ -2532,6 +2543,12 @@ impl<'a, B: Builder> Parser<'a, B> {
     #[allow(dead_code)]
     fn star_r(&mut self, once: fn(&mut Parser<'a, B>) -> bool) -> bool {
         loop { let sp = self.pos; if !once(self) { self.back(sp); break; } }
+        true
+    }
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn star_in_r(&mut self, k: usize, once: fn(&mut Parser<'a, B>) -> bool) -> bool {
+        while self.ahead(k, true) { let sp = self.pos; if !once(self) { self.back(sp); break; } }
         true
     }
     #[inline(always)]

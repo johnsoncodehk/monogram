@@ -114,9 +114,9 @@ type StepOp =
   | { t: 'tok'; name: string; hole?: string }                   // match a token kind; a template kind (TplCfg) carries the rule that parses its `${…}` holes and also matches an interpolated template
   | { t: 'rule'; name: string }                                 // call a rule, append its node
   | { t: 'ruleBp'; name: string; bp: number }                   // call a Pratt rule at a given binding power (chain-rhs led trailing operand)
-  | { t: 'star'; step: Step; share?: number }                   // repeat inner 0+
-  | { t: 'opt'; steps: Step[]; share?: number }                 // optional sub-sequence
-  | { t: 'sep'; elem: Step; delim: string; share?: number }     // elem (delim elem)*
+  | { t: 'star'; step: Step; guard?: number; share?: number }                   // repeat inner 0+
+  | { t: 'opt'; steps: Step[]; guard?: number; share?: number }                 // optional sub-sequence
+  | { t: 'sep'; elem: Step; delim: string; guard?: number; share?: number }     // elem (delim elem)*
   | { t: 'altlit'; opts: Lit[] }                                // inline alternation of literals (fast path)
   | { t: 'alt'; branches: Step[][]; branchNames?: string[]; firsts?: FirstSig[]; predictive?: boolean; share?: number }            // inline alternation of sub-sequences (backtracking unless predictive)
   | { t: 'look'; id: number; is: boolean }                     // zero-width: whether ParserIR.lookaheads[id] matches here (is) or does not (!is)
@@ -864,11 +864,22 @@ function buildIR(grammar: CstGrammar): ParserIR {
   };
   // Annotate each rule's alt-level FIRST + predictive flag, and walk nested Steps to annotate
   // inline `alt` branches (used by Phase 3's nested switch dispatch).
+  // A star / opt / sep BODY GUARD (`guard`, a ParserIR.tokenSets id): the body's FIRST signature,
+  // when it is known (seqFirst: every way the body can match begins by consuming one of its
+  // tokens, so the body cannot match empty). Where the next token is outside it the body cannot
+  // match, so the step stops (star), matches nothing (opt) or matches no element (sep: its first
+  // element; after a delimiter the element must match anyway) without the body's attempt and the
+  // mark it is attempted under.
+  const bodyGuard = (body: Step[]): number | undefined => {
+    const f = seqFirst(body);
+    return f === null ? undefined : tokenSetOf(f);
+  };
   const annotateSteps = (steps: Step[]): void => {
     for (const s of steps) {
-      if (s.t === 'star') annotateSteps([s.step]);
-      else if (s.t === 'opt' || s.t === 'seq' || s.t === 'suppress' || s.t === 'ctx') annotateSteps(s.steps);
-      else if (s.t === 'sep') annotateSteps([s.elem]);
+      if (s.t === 'star') { annotateSteps([s.step]); const g = bodyGuard([s.step]); if (g !== undefined) s.guard = g; }
+      else if (s.t === 'opt') { annotateSteps(s.steps); const g = bodyGuard(s.steps); if (g !== undefined) s.guard = g; }
+      else if (s.t === 'seq' || s.t === 'suppress' || s.t === 'ctx') annotateSteps(s.steps);
+      else if (s.t === 'sep') { annotateSteps([s.elem]); const g = bodyGuard([s.elem]); if (g !== undefined) s.guard = g; }
       else if (s.t === 'alt') {
         s.firsts = s.branches.map((b) => seqFirst(b));
         s.predictive = allDisjoint(s.firsts);
@@ -960,9 +971,11 @@ export type StepLowering = {
   template(name: string, hole: string): string;  // the template kind `name`: its token, or an interpolated template whose holes `hole` parses (a building form, recognized or not: its node is dropped when recognizing)
   rule(name: string): string;
   ruleBp(name: string, bp: number): string;      // only a Pratt rule is called at a binding power
-  star(body: string): string;                    // body: the inner step, as a boolean expression
-  opt(body: string): string;
-  sep(elem: string, delim: string): string;
+  // body: the inner step, as a boolean expression; guard: the body is attempted only when the next
+  // token is in ParserIR.tokenSets[guard] (null: always attempted)
+  star(body: string, guard: number | null): string;
+  opt(body: string, guard: number | null): string;
+  sep(elem: string, delim: string, guard: number | null): string;   // guard: of the first element
   altlit(values: string[]): string;
   look(id: number, is: boolean): string;         // a lookahead runs in recognize form whatever the form around it
   ahead(set: number, is: boolean): string;
@@ -990,9 +1003,9 @@ export function stepBody(s: Step, L: StepLowering): string {
     case 'tok': return s.hole !== undefined ? L.template(s.name, s.hole) : L.tok(s.name);
     case 'rule': return L.rule(s.name);
     case 'ruleBp': return L.ruleBp(s.name, s.bp);
-    case 'star': return L.star(stepExpr(s.step, L.inner()));
-    case 'opt': { const I = L.inner(); return L.opt(s.steps.map((x) => stepExpr(x, I)).join(' && ')); }
-    case 'sep': return L.sep(stepExpr(s.elem, L.inner()), s.delim);
+    case 'star': return L.star(stepExpr(s.step, L.inner()), s.guard ?? null);
+    case 'opt': { const I = L.inner(); return L.opt(s.steps.map((x) => stepExpr(x, I)).join(' && '), s.guard ?? null); }
+    case 'sep': return L.sep(stepExpr(s.elem, L.inner()), s.delim, s.guard ?? null);
     case 'altlit': return L.altlit(s.opts.map((o) => o.value));
     case 'alt': return L.inPlace('alt', stepStmts(s, L.inner()));
     case 'look': return L.look(s.id, s.is);
