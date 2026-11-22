@@ -5378,7 +5378,9 @@ fn lex_find(b: &[u8], mut i: usize, lit: &[u8]) -> usize {
     fn: (f) => [
       ...f.doc.map((l) => `// ${l}`),
       ...(f.inline ? ['#[inline(always)]'] : []),
-      ...(f.cold ? ['#[cold] #[inline(never)]'] : []),
+      // Out of line only: `#[cold]` on the identifier escape scanners moved lex_from's register layout
+      // (+0.2% to +0.4% lexer instructions on real inputs, profile runs 45034540295 / 45035043707).
+      ...(f.cold ? ['#[inline(never)]'] : []),
       `fn ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}) -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`} {`,
       ...rsBlock(f.body),
       '}',

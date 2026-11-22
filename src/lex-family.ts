@@ -399,24 +399,17 @@ class LexScan {
         const fs = this.charSet(`lexFirst${tag}`, t.first), cs = this.charSet(`lexCont${tag}`, t.cont);
         const bails = (v: string, bs: number[], nonAscii: boolean): Expr => any([...bs.map((b) => eq(v, I(b))), ...(nonAscii ? [ge(v, I(128))] : [])]);
         const head = [...new Set([...t.bail, ...t.headBail])].sort((a, b) => a - b);
-        // A prefix literal is read first; the run's first character follows it at q.
-        const q = t.prefix ? 'q' : 'p';
-        const pre = t.prefix ? [if_(not(hasAt('p', t.prefix)), [NONE]), let_('q', add('p', litLen(t.prefix)))] : [];
-        return sig(name, t.prefix ? `${t.name}: its prefix literal, then an ASCII run while no bail character stops it, else the token pattern.` : `${t.name}: an ASCII run while no bail character stops it, else the token pattern.`, [
-          ...pre,
-          if_(ge(q, len('s')), [NONE]),
-          let_('c', code(q)),
-          // (A prefixed run may have no stop or head bail: the run alone is then the token.)
+        return sig(name, `${t.name}: an ASCII run while no bail character stops it, else the token pattern.`, [
+          if_(ge('p', len('s')), [NONE]),
+          let_('c', code('p')),
           if_(inSet(fs, 'c'), [
-            let_('e', this.runEnd(cs, add(q, I(1)))),
-            ...(t.bail.length || t.bailNonAscii ? [
-              if_(ge('e', len('s')), [ret('e')]),
-              let_('d', code('e')),
-              if_(not(bails('d', t.bail, t.bailNonAscii)), [ret('e')]),
-              ...this.fallback(m),
-            ] : [ret('e')]),
+            let_('e', this.runEnd(cs, add('p', I(1)))),
+            if_(ge('e', len('s')), [ret('e')]),
+            let_('d', code('e')),
+            if_(not(bails('d', t.bail, t.bailNonAscii)), [ret('e')]),
+            ...this.fallback(m),
           ]),
-          ...(head.length || t.bailNonAscii || t.headBailNonAscii ? [if_(bails('c', head, t.bailNonAscii || t.headBailNonAscii), this.nonEmpty(m))] : []),
+          if_(bails('c', head, t.bailNonAscii || t.headBailNonAscii), this.nonEmpty(m)),
           NONE,
         ]);
       }
