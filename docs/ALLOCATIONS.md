@@ -144,16 +144,15 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | array | `[source]` | 1 | 1 | 0.00 | 28 | 0.0% | - |
 | .slice() → array | `lexEmptyPops.slice()` | 1 | 1 | 0.00 | 16 | 0.0% | - |
 
-## Where: go target, fresh, typescript grammar, acorn.js (top 6 of 6 sites by bytes)
+## Where: go target, fresh, typescript grammar, acorn.js (top 5 of 5 sites by bytes)
 
 | site (innermost function in the parser package) | allocations | bytes | share |
 |:--|--:|--:|--:|
-| `(*engine).finish` | 46 | 5,829,072 | 63.0% |
+| `(*engine).finish` | 47 | 5,829,088 | 63.0% |
 | `lexFrom.func3` | 26 | 3,413,248 | 36.9% |
 | `(*engine).pushLeaf` | 6 | 7,424 | 0.1% |
 | `(*engine).matchTok` | 3 | 112 | 0.0% |
 | `(*engine).parseProgram` | 1 | 64 | 0.0% |
-| `(*engine).matchLit` | 1 | 16 | 0.0% |
 
 ## Where: go target, reuse, typescript grammar, acorn.js (top 0 of 0 sites by bytes)
 
