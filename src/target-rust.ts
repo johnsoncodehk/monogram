@@ -868,8 +868,8 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean): StepLowering {
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (r ? `${recv}.${name}_bp(${bp}).is_some()` : `${recv}.call_rule(|p| p.${name}_bp(${bp}))`),
     // A body guard (emit-portable.ts annotateSteps) is tested inside an out-of-line helper
-    // (`star_in` / `opt_in` / `sep_by_in`, `#[inline(never)]`) that takes the set id, so the
-    // function holding the step does not grow by the guarded attempt.
+    // (`star_in` / `opt_in` / `sep_by_in`, `#[inline(never)]`, generic over the body: one small
+    // function per site), so the function holding the step does not grow by the guarded attempt.
     star: (body, g) => (g === null ? `${recv}.star${R}(|p| ${body})` : `${recv}.star_in${R}(${g}, |p| ${body})`),
     opt: (body, g) => (g === null ? `${recv}.opt${R}(|p| ${body})` : `${recv}.opt_in${R}(${g}, |p| ${body})`),
     sep: (elem, delim, g) => (g === null ? `${recv}.sep_by${R}(|p| ${elem}, ${sepDelimLid(ids, delim)})` : `${recv}.sep_by_in${R}(${g}, |p| ${elem}, ${sepDelimLid(ids, delim)})`),
@@ -2522,10 +2522,11 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
         true
     }
-    // The guarded forms: the body is attempted only where the next token is in tokenSets[k].
+    // The guarded forms: the body is attempted only where the next token is in tokenSets[k]. Out of
+    // line and generic over the body, so each site is its own small function with the body inlined.
     #[inline(never)]
     #[allow(dead_code)]
-    fn star_in(&mut self, k: usize, once: fn(&mut Parser<'a, B>) -> bool) -> bool {
+    fn star_in<F: Fn(&mut Self) -> bool>(&mut self, k: usize, once: F) -> bool {
         while self.ahead(k, true) {
             let m = self.mark();
             if !once(self) { self.reset(m); break; }
@@ -2534,33 +2535,49 @@ impl<'a, B: Builder> Parser<'a, B> {
     }
     #[inline(never)]
     #[allow(dead_code)]
-    fn opt_in(&mut self, k: usize, body: fn(&mut Parser<'a, B>) -> bool) -> bool {
+    fn opt_in<F: Fn(&mut Self) -> bool>(&mut self, k: usize, body: F) -> bool {
         if self.ahead(k, true) { let m = self.mark(); if !body(self) { self.reset(m); } }
         true
     }
     #[inline(never)]
     #[allow(dead_code)]
-    fn sep_by_in(&mut self, k: usize, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
+    fn sep_by_in<F: Fn(&mut Self) -> bool>(&mut self, k: usize, elem: F, delim: u16) -> bool {
         if !self.ahead(k, true) { return true; }
-        self.sep_by(elem, delim)
+        let m0 = self.mark();
+        if !elem(self) { self.reset(m0); return true; }
+        loop {
+            let m = self.mark();
+            if !self.match_lit(delim) { self.reset(m); break; }
+            let m2 = self.mark();
+            if !elem(self) { self.reset(m2); break; }
+        }
+        true
     }
     #[inline(never)]
     #[allow(dead_code)]
-    fn star_in_r(&mut self, k: usize, once: fn(&mut Parser<'a, B>) -> bool) -> bool {
+    fn star_in_r<F: Fn(&mut Self) -> bool>(&mut self, k: usize, once: F) -> bool {
         while self.ahead(k, true) { let sp = self.pos; if !once(self) { self.back(sp); break; } }
         true
     }
     #[inline(never)]
     #[allow(dead_code)]
-    fn opt_in_r(&mut self, k: usize, body: fn(&mut Parser<'a, B>) -> bool) -> bool {
+    fn opt_in_r<F: Fn(&mut Self) -> bool>(&mut self, k: usize, body: F) -> bool {
         if self.ahead(k, true) { let sp = self.pos; if !body(self) { self.back(sp); } }
         true
     }
     #[inline(never)]
     #[allow(dead_code)]
-    fn sep_by_in_r(&mut self, k: usize, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
+    fn sep_by_in_r<F: Fn(&mut Self) -> bool>(&mut self, k: usize, elem: F, delim: u16) -> bool {
         if !self.ahead(k, true) { return true; }
-        self.sep_by_r(elem, delim)
+        let sp0 = self.pos;
+        if !elem(self) { self.back(sp0); return true; }
+        loop {
+            let sp = self.pos;
+            if !self.match_lit_r(delim) { self.back(sp); break; }
+            let sp2 = self.pos;
+            if !elem(self) { self.back(sp2); break; }
+        }
+        true
     }
     #[inline(always)]
     fn alt_lit(&mut self, lids: &[u16]) -> bool {
