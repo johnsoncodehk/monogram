@@ -648,14 +648,16 @@ const MemberName = rule($ => [
 export const memberStart = alt(Ident, PrivateField, String_, Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, '[', '*');
 export const memberAhead = not(not(memberStart));
 export const memberWordRules: Record<string, unknown[]> = { static: [], get: [not('*')], set: [not('*')] };
-export const memberWord = (words: string[], rules: Record<string, unknown[]>) => {
+// `ahead` is the follower test; TypeScript's parameter modifiers pass their own (a parameter may
+// also start with `{` or `...`).
+export const memberWord = (words: string[], rules: Record<string, unknown[]>, ahead: unknown = memberAhead) => {
   const sameLineWords = words.filter(w => !(w in rules));
   return alt([
     alt(
       ...words.filter(w => w in rules).map(w => [w, ...rules[w]]),
       ...(sameLineWords.length ? [[alt(...sameLineWords), sameLine]] : []),
     ),
-    memberAhead,
+    ahead,
   ]);
 };
 const staticWord = memberWord(['static'], memberWordRules);
