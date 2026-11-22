@@ -128,14 +128,16 @@ const branchGoR = (cond: string) => `{ sp := p.pos; if ${cond} { return true }; 
 // one recognizing ('R', ParserIR.forms; e: whose recognizers). Go: a body or a step's statements
 // are a func literal called in place.
 type GoForm = '' | 'W' | 'R';
-function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine): StepLowering {
+function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: ArenaIdPlan): StepLowering {
+  // A literal's leaf type (litTt, decided here): a word is a $keyword leaf, anything else $punct.
+  const litTt = (lid: number) => (lid >= ids.kwLid ? ttIdOf(ar!, '$keyword') : TT_SKIP_PUNCT);
   const fn = (cond: string) => `func() bool { return ${cond} }`;
   const L: StepLowering = {
     inner: () => L,
     shared: (id) => `p.sub${id}${f}()`,
-    lit: (s) => (gtCompLit(ids, s) ? `p.${e.matchComp}(${lidOf(ids, s.value)})` : f === 'W' ? `(p.litW(${lidOf(ids, s.value)}) && p.takeW(litTt(${lidOf(ids, s.value)})))` : `p.matchLit${f}(${lidOf(ids, s.value)})`),
-    tok: (name) => (f === 'W' ? `(p.tokW(${kidOf(ids, name)}) && p.takeW(${kidOf(ids, name)}))` : `p.matchTok${f}(${kidOf(ids, name)})`),
-    template: (name, hole) => `(${L.tok(name)} ||${f === 'R' ? e.template(hole) : f === 'W' ? `p.callRuleW(p.matchTemplateW_${hole}())` : `p.callRule(p.matchTemplate_${hole}())`})`,
+    lit: (s) => (gtCompLit(ids, s) ? `p.${e.matchComp}(${lidOf(ids, s.value)})` : f === 'W' ? `p.litW(${lidOf(ids, s.value)}) && p.takeW(${litTt(lidOf(ids, s.value))})` : `p.matchLit${f}(${lidOf(ids, s.value)})`),
+    tok: (name) => (f === 'W' ? `p.tokW(${kidOf(ids, name)}) && p.takeW(${kidOf(ids, name)})` : `p.matchTok${f}(${kidOf(ids, name)})`),
+    template: (name, hole) => `(${f === 'W' ? `(${L.tok(name)})` : L.tok(name)} || ${f === 'R' ? e.template(hole) : f === 'W' ? `p.callRuleW(p.matchTemplateW_${hole}())` : `p.callRule(p.matchTemplate_${hole}())`})`,
     rule: (name) => (f === 'R' ? `p.rec${name}()` : f === 'W' ? `p.callRuleW(p.parse${name}W())` : `p.callRule(p.parse${name}())`),
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (f === 'R' ? e.bpFound(name, bp) : f === 'W' ? `p.callRuleW(p.bpW_${name}(${bp}))` : `p.callRule(p.bp_${name}(${bp}))`),
@@ -1758,9 +1760,9 @@ const arenaMark = () => 'nb, kb = p.b.Checkpoint()';
 /** Undo to the checkpoint (Builder.Restore). */
 const arenaRestore = () => 'p.b.Restore(nb, kb)';
 
-const stepCondW = (s: Step, ids: LexIdPlan, _ar: ArenaIdPlan, recv: string): string => walkExpr(s, goSteps(ids, 'W', recv, ENGINE_GO_W));
+const stepCondW = (s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string => walkExpr(s, goSteps(ids, 'W', recv, ENGINE_GO_W, ar));
 function sharedFnsW(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  return ir.shared.map((s, id) => (ir.forms.buildShared[id] ? `func (p *${recv}) sub${id}W() bool { ${walkStmts(s, goSteps(ids, 'W', recv, ENGINE_GO_W))} }\n` : '')).join('');
+  return ir.shared.map((s, id) => (ir.forms.buildShared[id] ? `func (p *${recv}) sub${id}W() bool { ${walkStmts(s, goSteps(ids, 'W', recv, ENGINE_GO_W, ar))} }\n` : '')).join('');
 }
 
 function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
@@ -1768,7 +1770,7 @@ function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
   const open = `\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}`;
   return ruleShell(r, ids, {
     ...goRuleBase(r, ids, 'W'),
-    steps: goSteps(ids, 'W', recv, ENGINE_GO_W),
+    steps: goSteps(ids, 'W', recv, ENGINE_GO_W, ar),
     fn: (lines) => `func (p *${recv}) parse${r.name}W() (spanned, bool) {\n${lines.join('\n')}\n}`,
     accept: () => `{ return ${fin}, true }`,
     open,
@@ -1879,7 +1881,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
   const B = goPrattBase(r, (ws) => `!p.nllBlockedW(${ws}, left)`);
   const L: PrattLowering = {
     ...B,
-    steps: goSteps(ids, 'W', recv, ENGINE_GO_W),
+    steps: goSteps(ids, 'W', recv, ENGINE_GO_W, ar),
     nudGuard: (g, keyed) => guardCond(g, 't', 'W', keyed),
     nudLeaf: (i) => `{ p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; best = p.finishW(${rid}, sb, int(t.Off), save); ${won(i, '0', false, false)}; p.back(save) }`,
     nudTpl: (i, hole) => `\tif t.Kid == ${kidOf(ids, '$templateHead')} {
@@ -2035,9 +2037,9 @@ func (p *${recv}) nllBlockedW(words []string, left spanned) bool {
 }
 // litW / tokW test the token in place as the direct engine's matchLit / matchTok do (the probe is a
 // peek: peekEnd); takeW consumes the token they accepted and hands its leaf to the builder. A step
-// spells the two in a row (\`p.litW(l) && p.takeW(litTt(l))\`): Go's inliner charges a call 57 of
-// its budget of 80, so one function holding both the test and the builder call is not inlined
-// (cost 132), while each half is (litW 30, takeW 74). The builder call itself is out of line
+// spells the two in a row (\`p.litW(l) && p.takeW(tt)\`, tt the literal's litTt, a constant):
+// Go's inliner charges a call 57 of its budget of 80, so one function holding both the test and
+// the builder call is not inlined (cost 132), while each half is (litW 30, takeW 74). The builder call itself is out of line
 // (offerW): spelled inside takeW, the call's arguments put takeW over the budget (104), and a
 // leaf the builder drops (p.drops) makes no call at all.
 func (p *${recv}) litW(lid uint16) bool {
