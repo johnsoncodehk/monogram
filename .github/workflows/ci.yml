@@ -171,10 +171,11 @@ jobs:
           if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
             echo "value=true" >> "$GITHUB_OUTPUT"; echo "no usable base — running the gate"; exit 0
           fi
-          if git diff --name-only "$base" HEAD | grep -qE '^tree-sitter/'; then
-            echo "value=true" >> "$GITHUB_OUTPUT"; echo "tree-sitter/** changed — running the gate"
+          # tree-sitter/** (the generated packages), the tree-sitter gates themselves, or this workflow.
+          if git diff --name-only "$base" HEAD | grep -qE '^tree-sitter/|^test/(treesitter-|[a-z]+-treesitter\.ts)|^\.github/workflows/ci\.yml$'; then
+            echo "value=true" >> "$GITHUB_OUTPUT"; echo "tree-sitter inputs changed — running the gate"
           else
-            echo "value=false" >> "$GITHUB_OUTPUT"; echo "no tree-sitter/** change — skipping generate/build/bench"
+            echo "value=false" >> "$GITHUB_OUTPUT"; echo "no tree-sitter input change — skipping generate/build/bench"
           fi
 
       - uses: actions/setup-node@v4
@@ -195,13 +196,28 @@ jobs:
           langs=(typescript typescriptreact javascript javascriptreact html yaml)
           pids=()
           for g in "${langs[@]}"; do
-            ( cd "tree-sitter/$g" && npx tree-sitter generate ) >"/tmp/gen-$g.log" 2>&1 &
+            # /usr/bin/time records wall, CPU and peak memory per grammar (report-only: the jobs run
+            # in parallel on a 2-core runner, so wall time includes contention; CPU seconds less so).
+            ( cd "tree-sitter/$g" && /usr/bin/time -f '%e %U %S %M' -o "/tmp/time-$g.txt" npx tree-sitter generate ) >"/tmp/gen-$g.log" 2>&1 &
             pids+=($!)
           done
           fail=0
           for i in "${!langs[@]}"; do
             if wait "${pids[$i]}"; then echo "✓ ${langs[$i]}"; else echo "✗ ${langs[$i]}"; cat "/tmp/gen-${langs[$i]}.log"; fail=1; fi
           done
+          # Baseline numbers for the editor lane's tree-sitter changes: generate cost and parser size.
+          {
+            echo "### tree-sitter generate (report-only baseline)"
+            echo ""
+            echo "| grammar | wall s (parallel) | CPU user+sys s | peak RSS MB | STATE_COUNT | LARGE_STATE_COUNT | SYMBOL_COUNT | parser.c MB |"
+            echo "|---|---:|---:|---:|---:|---:|---:|---:|"
+            for g in "${langs[@]}"; do
+              read -r wall usr sys rss < "/tmp/time-$g.txt" || true
+              pc="tree-sitter/$g/src/parser.c"
+              def() { grep -m1 -oE "^#define $1 [0-9]+" "$pc" | awk '{print $3}'; }
+              echo "| $g | $wall | $(awk "BEGIN{print $usr+$sys}") | $((rss / 1024)) | $(def STATE_COUNT) | $(def LARGE_STATE_COUNT) | $(def SYMBOL_COUNT) | $(awk "BEGIN{printf \"%.1f\", $(stat -c %s "$pc")/1048576}") |"
+            done
+          } | tee -a "$GITHUB_STEP_SUMMARY"
           exit $fail
 
       # Build the gated wasms FROM the parser.c just generated (no re-generate) and run the accuracy
@@ -209,12 +225,16 @@ jobs:
       # indentation scanner compiles + links and runs a corpus-free verdict gate against the
       # interpreter; its accuracy bench needs the yaml-test-suite checkout, so it runs in the
       # readme-bench workflow.
-      - name: Build wasm + accuracy gate (typescript / html / yaml)
+      # tsx / js / jsx are built too: their queries are compiled against them (treesitter-queries)
+      # and tsx / jsx parse a corpus against the interpreter's verdicts (treesitter-jsx, report-only).
+      - name: Build wasm + accuracy gate (every grammar)
         if: steps.changed.outputs.value == 'true'
         run: |
-          ( cd tree-sitter/typescript && npx tree-sitter build --wasm . )
-          ( cd tree-sitter/html       && npx tree-sitter build --wasm . )
-          ( cd tree-sitter/yaml       && npx tree-sitter build --wasm . )
+          for g in typescript typescriptreact javascript javascriptreact html yaml; do
+            ( cd "tree-sitter/$g" && npx tree-sitter build --wasm . )
+          done
           node test/treesitter-bench.ts
           node test/html-treesitter.ts
           node test/yaml-treesitter.ts
+          node test/treesitter-queries.ts
+          node test/treesitter-jsx.ts
