@@ -360,6 +360,9 @@ export const typescriptShape: ShapeSpec = {
       'level — ForHead alone is not a single node. Mapping it to one node type lies; ' +
       'inlining into Stmt is what ESTree does. Shape for the helper rule is therefore custom ' +
       '(returns a tagged tuple the Stmt builder consumes).', { types: ['ForHead', 'ForHead', 'ForHead', 'ForHead'] }),
+    ForAwaitHead: custom('estreeForAwaitHead',
+      'The `for await` head: the `of` alts of ForHead (a declaration, a left-hand side), lowered ' +
+      'like those (same tagged tuple, same reason as ForHead).', { types: ['ForAwaitHead', 'ForAwaitHead'] }),
     SwitchCase: {
       ...custom('estreeSwitchCase',
       'SwitchCase alts are Case / Default / bare Stmt. Case is `case Expr star(, Expr) :` — ' +
@@ -479,7 +482,7 @@ export const typescriptShape: ShapeSpec = {
 export const EXPECTED_CST_NAMES = [
   'Type', 'TypeMember', 'DecoratorExpr', 'TypeofRef', 'Expr', 'Prop', 'MemberName',
   'NewTarget', 'ClassHeritage', 'Stmt', 'Block', 'BindingProperty', 'BindingElement',
-  'ArrayBindingElement', 'BindingPattern', 'Binding', 'ForBinding', 'Param', 'ForHead',
+  'ArrayBindingElement', 'BindingPattern', 'Binding', 'ForBinding', 'Param', 'ForHead', 'ForAwaitHead',
   'SwitchCase', 'TypeParams', 'TypeParam', 'Decl', 'ClassMember',
   'EnumMember', 'ImportClause', 'ImportSpecifier', 'ExportSpecifier', 'ModuleReference', 'Program',
 ] as const;
@@ -955,11 +958,29 @@ function estreeForHead(ctx: TsAstCustomCtx): unknown {
   // init = declarator kid list (arm 0) or null (arm 1); test = the test
   // expression (optFirst unwraps the `[expr, commaMany]` / packed-cTail opt
   // products); update = null (Rust's VSpec::Raw("null")).
-  if (arm === 0) return { type: 'ForHead', kind: 'classic', init: kDecl(ctx.kids[0]), test: optFirst(ctx.kids[1]), update: null };
+  if (arm === 0) return declaredForHead(ctx, true);
   if (arm === 1) return { type: 'ForHead', kind: 'classic', init: null, test: optFirst(ctx.kids[1]), update: null };
   if (arm === 2) return { type: 'ForHead', kind: 'in', left: ctx.kids[0], right: ctx.kids[1] };
   if (arm === 3) return { type: 'ForHead', kind: 'of', left: ctx.kids[0], right: ctx.kids[1], await: ctx.src.slice(ctx.off, ctx.off + 5).includes('await') };
   return unhandledCustom('estreeForHead', ctx);
+}
+
+// A declared head (`forDeclaration`): its first binding, then what follows it, by the tail alt
+// (altPath[2]): ForHead's C-style tail (alt 0) holds the further bindings, then the test and the
+// update; a `for await` head has no C-style tail.
+function declaredForHead(ctx: TsAstCustomCtx, cStyle: boolean): unknown {
+  const [first, tail] = ctx.kids[0] as [unknown, unknown[]];
+  if (!cStyle || ctx.altPath[2] !== 0) return { type: 'ForHead', kind: 'classic', init: kDecl(first), test: optFirst(tail), update: null };
+  const more = flatKids(tail[0]);
+  return { type: 'ForHead', kind: 'classic', init: kDecl(more.length ? [first, ...more] : first), test: optFirst(tail.slice(1)), update: null };
+}
+
+// The `for await` head's alts are ForHead's declared (0) and left-hand-side `of` (3) alts.
+function estreeForAwaitHead(ctx: TsAstCustomCtx): unknown {
+  const arm = ctx.altPath[0];
+  if (arm === 0) return declaredForHead(ctx, false);
+  if (arm === 1) return { type: 'ForHead', kind: 'of', left: ctx.kids[0], right: ctx.kids[1], await: true };
+  return unhandledCustom('estreeForAwaitHead', ctx);
 }
 
 function kDecl(v: unknown): unknown {
@@ -1127,6 +1148,7 @@ export const typescriptEstreeCustoms: TsAstCustoms = {
   estreeBindingProperty,
   estreeParam,
   estreeForHead,
+  estreeForAwaitHead,
   estreeSwitchCase,
   estreeDecorator,
   estreeClassMember,

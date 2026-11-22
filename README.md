@@ -66,9 +66,12 @@ This matters because `tsc`'s *parser* is not the same thing as the language. It 
 | Input | Monogram | `tsc` parser | V8 / Babel | Why |
 |---|---|:--:|:--:|---|
 | `obj?.#field` | accept | reject | accept | A private member in an optional chain is valid current ECMAScript — V8 and Babel both accept it; `tsc`'s parser is the lone rejecter. |
-| `using {a} = b` | reject | accept | reject | A `using` binding is a `BindingIdentifier` (`BindingList[~Pattern]`); the object pattern has no production. `using [a] = b` *is* valid — there `using` is an identifier and `[a]` is an element access. |
+| `using {a} = b` | reject | accept | reject | A `using` binding is a `BindingIdentifier` (`BindingList[~Pattern]`, and `ForBinding[~Pattern]` in a `for` head: `for (using {a} of b)`); the object pattern has no production. `using [a] = b` *is* valid — there `using` is an identifier and `[a]` is an element access, as in `for (using [a] of b)`. |
+| `for (var a, b of c)` | reject | accept | reject | Before `in` / `of` a declaration has one binding: `var ForBinding` and `ForDeclaration` (`LetOrConst ForBinding`) take a single one, where the C-style head takes a list (`for (var a, b;;)`). |
+| `for (async of x)` | reject | accept | reject | The for-of left side has `[lookahead ∉ { let, async of }]`, so `async of` can only begin an arrow, a C-style head (`for (async of => {};;)`); `for await (async of x)`, whose lookahead is `let` alone, *is* valid. |
+| `for (using x in y)` | reject | accept | reject | A `using` declaration has no for-in production: the for-in arm's ForDeclaration is `[~Using]`. `for (using in y)` *is* valid — there `using` is an identifier. |
 
-`tsc` rejecting the first and accepting the second (its parser doesn't enforce that production until the checker) is exactly why "match `tsc`" can't *be* the definition of correct — only the measurement oracle.
+`tsc` rejecting the first and accepting the others (its parser doesn't enforce those productions until the checker) is exactly why "match `tsc`" can't *be* the definition of correct — only the measurement oracle.
 
 ### Broad agreement vs the official grammar
 
@@ -77,7 +80,7 @@ This matters because `tsc`'s *parser* is not the same thing as the language. It 
 <!-- coverage:start -->
 | Grammar | Parser — agree · covered | Highlighter — Monogram vs official |
 |---|---|---|
-| TypeScript | 99.9% · 76.4% | 99.0% vs 99.3% |
+| TypeScript | 99.5% · 76.4% | 99.0% vs 99.3% |
 | JavaScript | 95.8% · 65.5% | 99.0% vs 83.6% |
 | JSX | 97.1% · 52.5% | 94.3% vs 94.3% |
 | TSX | 96.7% · 65.7% | 95.6% vs 95.4% |

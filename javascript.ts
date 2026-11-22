@@ -235,6 +235,55 @@ export const notReserved = not(alt(
 // and strict-mode-only words stay names (`function f(yield, let, of) {}`).
 export const bindingIdentifier = [notReserved, Ident];
 
+// ── The `for` statement (14.7.4 ForStatement, 14.7.5 ForInOfStatement) ──
+// Both grammars build their ForBinding, ForHead and ForAwaitHead rules and their `for` statement
+// from these, each with its own rules (TypeScript adds a binding's type annotation).
+//
+// A declaration in a head: `var`, `let` or `const` (ForBinding, a VariableDeclaration or
+// LexicalBinding), or `using` / `await using` (explicit resource management, ForDeclaration[+Using]),
+// then its bindings. A binding's initializer is Initializer[~In], so in `for (var a = 1 in xs)` the
+// `in` is the head's. A `using` binding is a BindingIdentifier (ForBinding[~Pattern]), so `for (using
+// [a] of b)` loops over `using[a]`, and there is no `using` for-in (that arm's ForDeclaration is
+// [~Using]). `for (using of of …)` has no parse tree: the `using` declaration is suppressed by the
+// spec's `[lookahead ≠ using of]` and `using` as an identifier then fails, so the guard is that
+// triple; `for (using of ;…)` (a binding named `of`) and `for (await using of of …)` stay valid.
+export const forBindingArms = (BindingPattern, Expr, annotation = []) => [
+  [alt(bindingIdentifier, BindingPattern), ...annotation, opt('=', exclude('in', Expr))],
+];
+// `tails` are what may follow the first binding of a `var` / `let` / `const` declaration and of a
+// `using` one: both grammars' heads parse it once and then branch.
+const forDeclaration = (ForBinding, tails, usingTails) => alt(
+  [alt('let', 'const', 'var'), ForBinding, alt(...tails)],
+  [not(['using', 'of', 'of']), alt('using', ['await', 'using']), not(alt('[', '{')), ForBinding, alt(...usingTails)],
+);
+// The head inside `for ( … )`:
+// - `for ( [lookahead ≠ let [] Expression[~In]opt ; Expression opt ; Expression opt )` and the
+//   declared C-style head: a first expression or initializer reads no `in` operator, so `for (a =
+//   b in c;;)` has no parse (each comma operand is its own [~In] Pratt call);
+// - `for ( [lookahead ≠ let [] LeftHandSideExpression in Expression )`: the left side reads no `in`
+//   either, so the `in` is the head's (`for (key in obj)`); the object is a full Expression;
+// - `for ( [lookahead ∉ { let, async of }] LeftHandSideExpression of AssignmentExpression )`: no
+//   comma after `of`; `for (async of => {};;)` is a C-style head;
+// - a declaration before `in` / `of` has one binding.
+export const forHeadArms = (Expr, ForBinding) => {
+  const cTail = [';', opt(Expr, many(',', Expr)), ';', opt(Expr, many(',', Expr))];   // `; cond ; update`
+  const cStyle = [many(',', ForBinding), ...cTail], forIn = ['in', Expr, many(',', Expr)], forOf = ['of', Expr];
+  return [
+    [forDeclaration(ForBinding, [cStyle, forIn, forOf], [cStyle, forOf])],
+    [not(['let', '[']), opt(exclude('in', Expr), many(',', exclude('in', Expr))), ...cTail],
+    [not(['let', '[']), exclude('in', Expr), ...forIn],
+    [not(alt('let', ['async', 'of'])), exclude('in', Expr), ...forOf],
+  ];
+};
+// The head inside `for await ( … )`: only the `of` forms, and its left side's lookahead is
+// `[lookahead ≠ let]` alone, so `for await (async of x)` is a loop over `x`.
+export const forAwaitHeadArms = (Expr, ForBinding) => [
+  [forDeclaration(ForBinding, [['of', Expr]], [['of', Expr]])],
+  [not('let'), exclude('in', Expr), 'of', Expr],
+];
+export const forStatement = ($, ForHead, ForAwaitHead) =>
+  ['for', alt(['(', ForHead, ')'], ['await', '(', ForAwaitHead, ')']), $];
+
 // A NARROWER guard for the *expression* identifier-NUD only. The full `notReserved`
 // set can NOT be used at expression position: most always-reserved words legitimately
 // begin an expression via their own dedicated forms (`new`/`new.target`, `class`/
@@ -511,12 +560,8 @@ const Binding = rule($ => [
   [alt(bindingIdentifier, BindingPattern), opt('=', Expr)],
 ]);
 
-// A binding in a for-head: identical to Binding except the initializer is a
-// no-`in` expression, so `for (var a = 1 in xs)` reads `a = 1` then the for-in
-// `in` (TS's [~In] grammar), rather than greedily parsing `1 in xs`.
-const ForBinding = rule($ => [
-  [alt(bindingIdentifier, BindingPattern), opt('=', exclude('in', Expr))],
-]);
+// A binding in a for-head (`forBindingArms`): Binding with a no-`in` initializer.
+const ForBinding = rule($ => forBindingArms(BindingPattern, Expr));
 
 // A parameter (FormalParameter) is a binding element: its name is a BindingIdentifier, so no
 // reserved word names a parameter (`function f(in) {}`, `(class) => 1`), `this` included (a
@@ -531,30 +576,8 @@ const Param = rule($ => {
   ];
 });
 
-const ForHead = rule($ => {
-  const cTail = [';', opt(Expr, many(',', Expr)), ';', opt(Expr, many(',', Expr))];  // `; cond ; update`
-  return [
-    // declared head: `let/const/var/using/await using <bindings>` then C-style or in/of.
-    // ForBinding gives a no-`in` initializer so `for (var a = 1 in xs)` parses.
-    // `for (using of of …)` has no parse tree (the using-DECL reading is suppressed by the
-    // spec `[lookahead != using of]` and `using` as an identifier then fails); guard the exact
-    // triple only, so `for (using of ;…)` and `for (await using of of …)` stay valid.
-    [not(['using', 'of', 'of']), alt('let', 'const', 'var', 'using', ['await', 'using']), sep(ForBinding, ','), alt(
-      cTail,
-      // the for-in OBJECT is a full Expression (comma included: `for (a in b, c)`);
-      // for-of takes an AssignmentExpression - no comma (tsc rejects `for (x of a, b)`)
-      ['in', Expr, many(',', Expr)],
-      ['of', Expr],
-    )],
-    [opt(Expr, many(',', Expr)), ...cTail],   // C-style, no declaration: `for (i=0; …; …)` / `for (;;)`
-    // for-in/of, no declaration: `for (x of xs)`. The target Expr parses in a no-`in`
-    // context (same exclude as binding initializers): the `in` belongs to the for-head,
-    // not to an in-LED inside the target — without it `for (key in obj)` swallowed the
-    // `in`, the arm failed, and the statement fell back to a CALL parse `for(...)`.
-    [exclude('in', Expr), 'in', Expr, many(',', Expr)],
-    [exclude('in', Expr), 'of', Expr],
-  ];
-});
+const ForHead = rule($ => forHeadArms(Expr, ForBinding));
+const ForAwaitHead = rule($ => forAwaitHeadArms(Expr, ForBinding));
 
 const SwitchCase = rule($ => [
   ['case', Expr, many(',', Expr), ':'],
@@ -566,7 +589,7 @@ const Stmt = rule($ => [
   Block,
   [alt('let', 'const', 'var'), sep(Binding, ','), asi()],
   ['if', '(', Expr, many(',', Expr), ')', $, opt('else', $)],
-  ['for', opt('await'), '(', ForHead, ')', $],
+  forStatement($, ForHead, ForAwaitHead),
   ['while', '(', Expr, many(',', Expr), ')', $],
   // A do-while's `;` is optional even on its line (12.10.1: a `;` is inserted after the `)`
   // that ends it), so `do x; while (y) z` is two statements.
@@ -865,7 +888,7 @@ export default defineGrammar({
     Expr, Prop, MemberName, NewTarget, ClassHeritage,
     Stmt, Block,
     BindingProperty, BindingElement, ArrayBindingElement, BindingPattern,
-    Binding, ForBinding, Param, ForHead, SwitchCase,
+    Binding, ForBinding, Param, ForHead, ForAwaitHead, SwitchCase,
     Decl, ClassMember,
     ImportClause, ImportSpecifier, ExportSpecifier,
     Program,

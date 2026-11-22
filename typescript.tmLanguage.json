@@ -450,7 +450,7 @@
     },
     "regex-literal-prefix-ops": {
       "name": "string.regexp.ts",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;])|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bis)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bunique)|(?<=\\bin)|(?<=\\bas)|(?<=\\bget)|(?<=\\bset)|(?<=\\bstatic)|(?<=\\bexport)|(?<=\\bconst)|(?<=\\bdefault)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\babstract)|(?<=\\boverride)|(?<=\\baccessor)|(?<=\\bdeclare)|(?<=\\bout)|(?<=\\basync)|(?<=\\b@new)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bof)|(?<=\\bcase)|(?<=\\busing)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bconstructor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\byield)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.logical.prefix.ts"
@@ -3247,7 +3247,7 @@
     },
     "regex": {
       "name": "string.regexp.ts",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;])|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bis)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bunique)|(?<=\\bin)|(?<=\\bas)|(?<=\\bget)|(?<=\\bset)|(?<=\\bstatic)|(?<=\\bexport)|(?<=\\bconst)|(?<=\\bdefault)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\babstract)|(?<=\\boverride)|(?<=\\baccessor)|(?<=\\bdeclare)|(?<=\\bout)|(?<=\\basync)|(?<=\\b@new)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bof)|(?<=\\bcase)|(?<=\\busing)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bconstructor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\byield)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "comment.block.ts"
