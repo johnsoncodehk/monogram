@@ -215,6 +215,54 @@ for (const name of ['javascript', 'typescript']) {
   }
 }
 
+// ── Lexer-frame edit class ──────────────────────────────────────────────────────────
+// A window re-lex restarts only at a token recorded outside every lexer frame (a template's
+// `${ … }` hole) and resyncs only there, so every token that opens, continues or sits in a
+// hole must record a non-zero depth. Every one-character insertion of the characters that
+// open, close or change a frame, and every one-character deletion, at every offset of
+// documents with holes (nested, sibling, adjacent to code): edited ≡ fresh, self-consistent.
+// The random mutator above reaches a hole only by chance.
+const FRAME_DOCS: Record<string, string[]> = {
+  javascript: ['f(a, `x${b + c}`);', 'let q = 1;\nf(`x${(b)}y${c}`);\ng`t${`u${v}`}w`;'],
+  typescript: ['let s: string = `a${b as T}c${{ d: 1 }.d}`;\nx = 1;'],
+  typescriptreact: ['let s = `a${b}c${{ d: 1 }.d}`;\nx = 1;'],
+  javascriptreact: ['let s = `a${b}c${`${d}`}`;\nx = 1;'],
+};
+const FRAME_INS = ['`', '$', '{', '}', '(', ')', 'x', ' ', '\n'];
+let frameSteps = 0;
+for (const [name, docs] of Object.entries(FRAME_DOCS)) {
+  const em = (await import(`${TMP}/${name}.mts?v=` + process.pid)) as Em;
+  const session = em.createParser();
+  const fresh = em.createParser();
+  for (const doc of docs) {
+    const edits: Edit[] = [];
+    for (let at = 0; at <= doc.length; at++) {
+      for (const ins of FRAME_INS) edits.push({ start: at, end: at, text: ins });
+      if (at < doc.length) edits.push({ start: at, end: at + 1, text: '' });
+    }
+    for (const edit of edits) {
+      const next = doc.slice(0, edit.start) + edit.text + doc.slice(edit.end);
+      totalSteps++; frameSteps++;
+      let cst: Cst, fc: Cst;
+      try { cst = session.parse(doc); session.edit(cst, [edit]); fc = fresh.parse(next); }
+      catch (e) { fails++; if (failures.length < 10) failures.push(`${name} frame ${JSON.stringify(edit)} on ${JSON.stringify(doc)}: THREW ${(e as Error).message.slice(0, 70)}`); continue; }
+      if (fc.errors.length > 0) totalErr++;
+      const a = JSON.stringify(objectify(fresh.tree, (fns) => fresh.visit(fc, fns))) + JSON.stringify(fc.errors);
+      const b = JSON.stringify(objectify(session.tree, (fns) => session.visit(cst, fns))) + JSON.stringify(cst.errors);
+      if (a !== b) {
+        fails++;
+        let i = 0; while (i < a.length && a[i] === b[i]) i++;
+        if (failures.length < 10) failures.push(`${name} frame ${JSON.stringify(edit)} on ${JSON.stringify(doc)}: edit ≠ fresh @${i}\n      fresh: …${a.slice(Math.max(0, i - 40), i + 60)}…\n      inc:   …${b.slice(Math.max(0, i - 40), i + 60)}…`);
+        continue;
+      }
+      const sc = selfConsistent(session, cst);
+      if (sc !== null) { fails++; if (failures.length < 10) failures.push(`${name} frame ${JSON.stringify(edit)}: SELF-INCONSISTENT ${sc}`); continue; }
+      totalEqual++;
+    }
+  }
+}
+console.log(`  lexer-frame edits: ${frameSteps} one-character edits over ${Object.values(FRAME_DOCS).flat().length} documents`);
+
 console.log(`incremental-grammars: ${totalEqual}/${totalSteps} steps equal+consistent across ${GRAMMARS.length} grammars (${totalErr} recovered with errors)`);
 for (const s of failures) console.log('  ✗ ' + s);
 if (fails > 0) {

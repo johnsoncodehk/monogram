@@ -12,6 +12,9 @@
 //   - the arms' FIRST sets are pairwise disjoint;
 //   - each arm's FIRST is inside what its signature admits (a token's literal among the signature's
 //     literals, or its kind among the signature's kinds), so the switch reaches the arm.
+// The same oracle checks every star / opt / sep BODY GUARD (the step's `guard`: the body is attempted
+// only where the next token is in that set): the body cannot match empty, and every token it can
+// begin with is in the set, so a refused attempt is one that could not match.
 // `@new` is the case that motivated it: the lexer makes it one Decorator token, so TypeScript's
 // DecoratorExpr arms `[Decorator, …]` and `['@new', NewTarget, …]` both begin with it.
 //
@@ -27,7 +30,7 @@ const paths = [
   ...['javascript', 'typescript', 'javascriptreact', 'typescriptreact'].map((g) => `${ROOT}${g}.ts`),
 ];
 
-let failures = 0, lists = 0, grammars = 0;
+let failures = 0, lists = 0, grammars = 0, bodies = 0;
 const fail = (msg: string) => { failures++; console.log(`  FAIL ${msg}`); };
 
 for (const path of paths) {
@@ -119,8 +122,17 @@ for (const path of paths) {
       }
     }
   };
+  const checkBody = (where: string, body: Step[], guard: number | undefined) => {
+    if (guard === undefined) return;
+    bodies++;
+    const f = seqF(body), set = ir.tokenSets[guard]!;
+    if (f.empty) fail(`${grammar.name}: ${where} has a body guard but its body can match nothing`);
+    const missed = [...f.syms].filter((x) => !admits(set, x));
+    if (missed.length) fail(`${grammar.name}: ${where} body can begin with ${missed.slice(0, 4).join(' ')} which its guard refuses`);
+  };
   const walk = (where: string, steps: Step[]): void => steps.forEach((s, i) => {
     const at = `${where}.${i}`;
+    if (s.t === 'star') checkBody(at, [s.step], s.guard); else if (s.t === 'sep') checkBody(at, [s.elem], s.guard); else if (s.t === 'opt') checkBody(at, s.steps, s.guard);
     if (s.t === 'alt') { if (s.predictive) check(`${at} (alt)`, s.branches, s.firsts ?? []); s.branches.forEach((b, j) => walk(`${at}|${j}`, b)); }
     else if (s.t === 'star') walk(at, [s.step]); else if (s.t === 'sep') walk(at, [s.elem]);
     else if (s.t === 'opt' || s.t === 'seq' || s.t === 'ctx' || s.t === 'suppress') walk(at, s.steps);
@@ -136,5 +148,5 @@ for (const path of paths) {
   }
   ir.lookaheads.forEach((b, i) => walk(`look${i}`, b));
 }
-console.log(`predictive-first: ${lists} predictive lists over ${grammars} grammars, ${failures} failures`);
+console.log(`predictive-first: ${lists} predictive lists and ${bodies} body guards over ${grammars} grammars, ${failures} failures`);
 if (failures) process.exit(1);

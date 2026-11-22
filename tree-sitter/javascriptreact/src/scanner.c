@@ -52,7 +52,7 @@ static inline void skip(TSLexer *lexer) { lexer->advance(lexer, true); }
 //
 // Regex flag characters (derived from the token pattern): "gimsuyd"
 // Division-after texts (informational; LR ctx handles these): ) ] ++ -- this super true false null undefined > }
-// Regex-after keywords (informational): in of instanceof typeof delete void await yield throw return case do else new
+// Regex-after keywords (informational): in of instanceof typeof delete void await yield throw return case do else new default
 static bool scan_regex(TSLexer *lexer) {
   if (lexer->lookahead != '/') return false;
   advance(lexer); // consume opening /
