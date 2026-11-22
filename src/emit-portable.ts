@@ -1117,7 +1117,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   }
 
   const shared = shareSteps([
-    ...rules.flatMap(ruleBodies),
+    ...rules.flatMap(printedBodies),
     ...lookaheads,
   ]);
   const entry = findEntryRule(grammar);
@@ -1128,6 +1128,19 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
 
 // The step lists a rule runs: an rd rule's alternatives, a Pratt rule's NUD and LED arms.
 const ruleBodies = (r: RuleIR): Step[][] => (r.kind === 'rd' ? r.alts : [...r.nudBrackets.map((b) => b.steps), ...r.nudSeqs, ...r.nudCapped.map((c) => c.steps), ...r.leds.map((b) => b.steps)]);
+// The step lists a rule's functions print, once per place they are printed at (what shareSteps
+// counts): a candidate of a list with a Commit once in its frame if the frame still reaches it
+// (frameDispatch), and once per commit of it the switch prints (commitPrinted).
+const dispatchArms = (d: Dispatch): Set<number> => new Set(d.sections.flatMap((s) => (s.by === 'rest' ? s.arms : s.groups.flatMap((g) => g.arms))));
+function printedBodies(r: RuleIR): Step[][] {
+  const c = r.kind === 'rd' ? r.altCommit : r.nudCommit;
+  if (c === undefined) return ruleBodies(r);
+  const times = (i: number, d: Dispatch) => (dispatchArms(d).has(i) ? 1 : 0) + commitPrinted(c).filter((a) => a.arm === i).length;
+  if (r.kind === 'rd') return r.alts.flatMap((alt, i) => Array<Step[]>(times(i, r.altDispatch)).fill(alt));
+  const arm = (kind: NudRef['kind'], index: number) => r.nudOrder.findIndex((n) => n.kind === kind && 'index' in n && n.index === index);
+  const each = (kind: NudRef['kind'], lists: Step[][]) => lists.flatMap((s, k) => Array<Step[]>(times(arm(kind, k), r.nudDispatch)).fill(s));
+  return [...each('bracket', r.nudBrackets.map((b) => b.steps)), ...each('seq', r.nudSeqs), ...each('capped', r.nudCapped.map((c) => c.steps)), ...r.leds.map((b) => b.steps)];
+}
 // The steps directly inside a step (a `look` step's body is a lookahead of its own, not inside it).
 const stepKids = (s: Step): Step[] => {
   switch (s.t) {
@@ -1342,9 +1355,17 @@ export const commitGuard = (g: Guard, t: CommitTest): Guard =>
   (g === null ? null : { first: t.first ? g.first : null, second: g.second, lead: t.lead.map((k) => g.lead[k]!), skip: g.skip });
 /** A Commit's switch: act(a) commits (or, null, fails); tests(t) are a candidate's run-time tests,
  *  each `unless` candidate's refusal a condition of its commit. */
+// A commit by what it runs (its arm and its own tests): the cases that run the same are one printing.
+const commitWhat = (a: CommitAct) => JSON.stringify({ ...a, unless: undefined });
+/** The commits a Commit's switch prints, once each (commitWalk): the arms whose steps it prints. */
+export function commitPrinted(c: Commit): CommitAct[] {
+  const out = new Map<string, CommitAct>();
+  for (const x of [...c.lid, ...c.kid]) if (x.act !== null && x.act !== 'frame' && !out.has(commitWhat(x.act))) out.set(commitWhat(x.act), x.act);
+  return [...out.values()];
+}
 export function commitWalk(c: Commit, ids: LexIdPlan, act: (a: CommitAct | null) => string, tests: (t: CommitTest) => string[], C: CommitLowering): string {
-  // A commit by what it runs (its arm and its own tests); shared by more than one case: picked.
-  const what = (a: CommitAct) => JSON.stringify({ ...a, unless: undefined });
+  // A commit shared by more than one case is picked.
+  const what = commitWhat;
   const uses = new Map<string, number>();
   for (const x of [...c.lid, ...c.kid]) if (x.act !== null && x.act !== 'frame') uses.set(what(x.act), (uses.get(what(x.act)) ?? 0) + 1);
   const shared = [...uses].filter(([, n]) => n > 1).map(([w]) => w);
