@@ -19,7 +19,7 @@ import type { CstGrammar, ElementRegion, IndentConfig, MarkupConfig, NewlineConf
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { UNI_ID_CONTINUE, UNI_ID_START } from './uni-ident.ts';
-import { type CSet, examinedUnits as examinedUnitsOf, failRead, overTrigger, readEndWalk } from './lex-match-plan.ts';
+import { type CSet, continuesAt, examinedUnits as examinedUnitsOf, failRead, failReadFirst, overTrigger, readEndWalk, union } from './lex-match-plan.ts';
 import {
   tokenBlockPatternFirstCharSet, tokenBlockPatternSource, tokenEscapeValidPatternSource, tokenPatternCharLoop,
   tokenPatternFirstCharSet, tokenPatternHasStartAnchor, tokenPatternSource,
@@ -213,12 +213,11 @@ function emitReadEnd(emit: (s?: string) => void, name: string, p: TokenPattern) 
   else { emit(`  while (q < s.length) { const c = s.charCodeAt(q); if (!${past}) break; q++; }`); emit(`  return q + 1;`); }
   emit(`}`);
 }
-// The over-read routine of a pattern's match ending at e: the exclusive end of what the match read
-// at or after e when the unit at e is one at which it can read more than one unit past e (through
-// the units the pattern examines, overTrigger), else e + 1.
+// The over-read routine of a pattern's match ending at e, called when the unit at e is one at which
+// it can read more than one unit past e (overTrigger): the exclusive end of what it read, through
+// the units the pattern examines.
 function emitOverEnd(emit: (s?: string) => void, name: string, p: TokenPattern) {
   emit(`function ${name}(s«: string», e«: number») {`);
-  emit(`  if (e >= s.length || !${unitIn('s.charCodeAt(e)', overTrigger(p))}) return e + 1;`);
   const past = unitIn('c', examinedUnitsOf(p));
   emit(past === 'true' ? `  return s.length + 1;` : `  let q = e; while (q < s.length) { const c = s.charCodeAt(q); if (!${past}) break; q++; } return q + 1;`);
   emit(`}`);
@@ -1121,7 +1120,8 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     groups.get(sig)!.ccs.push(cc);
   }
 
-  const emitMatcherTry = (m: M, re: string, ind: string) => {
+  // `ccs`: the first units of the dispatch arm (null: beyond ASCII), which bound a failed attempt's read
+  const emitMatcherTry = (m: M, re: string, ind: string, ccs: number[] | null) => {
     emit(`${ind}${re}.lastIndex = pos;`);
     emit(`${ind}{ const m = ${re}.exec(source);`);
     emit(`${ind}  if (m !== null) {`);
@@ -1169,7 +1169,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       emit(`${i2}  docLex.push({ offset: pos + lexSrcBase, end: pos + lexSrcBase + m[0].length, kind: 3, ch: m[0] });`);
       emit(`${i2}}`);
     }
-    if (m.overEnd) emit(`${i2}{ const r = ${m.overEnd}(source, pos + m[0].length); if (r > lxLookEnd) lxLookEnd = r; }`);
+    if (m.overEnd) emit(`${i2}{ const e = pos + m[0].length; if (e < n) { const c = source.charCodeAt(e); if (${unitIn('c', overTrigger(m.tokenPattern))}) { const r = ${m.overEnd}(source, e); if (r > lxLookEnd) lxLookEnd = r; } } }`);
     if (m.skip) {
       emit(`${i2}if (/[\\n\\r\\u2028\\u2029]/.test(m[0])) pendingNl = true;`);
       if (indentComment) emit(`${i2}if (m[0].startsWith(${J(indentComment)})) pendingComment = true;`);
@@ -1181,16 +1181,22 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       emit(`${i2}pos = _e;`);
     }
     emit(`${i2}${CONT}`);
-    emit(m.readEnd ? `${ind}  } else { const r = ${m.readEnd}(source, pos); if (r > lxLookEnd) lxLookEnd = r; } }` : `${ind}  } }`);
+    // a failed attempt from this arm's first units that can read past the end + 1 of the token decided after it
+    const recFail = m.readEnd !== null && (ccs === null ? failRead(m.tokenPattern) : Math.max(...ccs.map(c => failReadFirst(m.tokenPattern, c)))) > FREE_FAIL;
+    // ... and only when the unit after the first is one after which it can read on (continuesAt)
+    const cont = recFail && ccs !== null ? unitIn('c1', ccs.reduce<CSet>((a, c) => union(a, continuesAt(m.tokenPattern, c)), [])) : 'true';
+    emit(!recFail || cont === 'false' ? `${ind}  } }`
+      : cont === 'true' ? `${ind}  } else { const r = ${m.readEnd}(source, pos); if (r > lxLookEnd) lxLookEnd = r; } }`
+      : `${ind}  } else if (pos + 1 < n) { const c1 = source.charCodeAt(pos + 1); if (${cont}) { const r = ${m.readEnd}(source, pos); if (r > lxLookEnd) lxLookEnd = r; } } }`);
   };
-  const emitAct = (a: Act, ind: string) => {
+  const emitAct = (a: Act, ind: string, ccs: number[] | null) => {
     const reOf = (v: 'R' | 'B') => (v === 'B' ? a.m.blockRe! : a.m.re);
     const body = (v: 'R' | 'B', i: string) => {
       if (a.m.isRegex) {
         emit(`${i}if (!prevIsValue()) {`);
-        emitMatcherTry(a.m, reOf(v), i + '  ');
+        emitMatcherTry(a.m, reOf(v), i + '  ', ccs);
         emit(`${i}}`);
-      } else emitMatcherTry(a.m, reOf(v), i);
+      } else emitMatcherTry(a.m, reOf(v), i, ccs);
     };
     if (a.v0 === a.v1) { body(a.v0!, ind); return; }
     if (a.v0 && a.v1) {
@@ -1322,10 +1328,10 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     }
     if (needsLabel && g.acts.length > 0) {
       emit(`        mt: {`);
-      for (const a of g.acts) emitAct(a, '          ');
+      for (const a of g.acts) emitAct(a, '          ', g.ccs);
       emit(`        }`);
     } else {
-      for (const a of g.acts) emitAct(a, '        ');
+      for (const a of g.acts) emitAct(a, '        ', g.ccs);
     }
     emitPunctChain(g.ps, '        ');
     emit(`        break;`);
@@ -1338,7 +1344,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   if (defaultActs.length > 0) {
     emit(`        if (cc > 127) {`);
     if (needsLabel) emit(`        mt: {`);
-    for (const a of defaultActs) emitAct(a, '          ');
+    for (const a of defaultActs) emitAct(a, '          ', null);
     if (needsLabel) emit(`        }`);
     emit(`        }`);
   }
@@ -1773,7 +1779,7 @@ function emitElementHelpers(emit: (s?: string) => void, el: ElementRegion, enter
     emit(`  function lxOpensElement(p«: number») {`);
     // a head that begins type parameters decides the tagOpen by what its match read (a failed one
     // opens an element, whose frame holds every token its attempt read)
-    if (tp?.head) emit(`    LX_TP_HEAD.lastIndex = p + ${L}; if (LX_TP_HEAD.test(source)) { ${c.headOverEnd ? `const r = ${c.headOverEnd}(source, LX_TP_HEAD.lastIndex); if (r > lxLookEnd) lxLookEnd = r; ` : ''}return false; }`);
+    if (tp?.head) emit(`    LX_TP_HEAD.lastIndex = p + ${L}; if (LX_TP_HEAD.test(source)) { ${c.headOverEnd ? `const e = LX_TP_HEAD.lastIndex, c = e < source.length ? source.charCodeAt(e) : -1, r = c >= 0 && ${unitIn('c', overTrigger(tp!.head!))} ? ${c.headOverEnd}(source, e) : e + 1; if (r > lxLookEnd) lxLookEnd = r; ` : ''}return false; }`);
     if (tp?.signature) {
       emit(`    LX_TP_SIG.lastIndex = p + ${L};`);
       emit(`    if (LX_TP_SIG.test(source)) {`);

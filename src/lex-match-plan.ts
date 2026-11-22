@@ -187,6 +187,55 @@ export function failRead(p: TokenPattern): number {
   }
 }
 
+/** `failRead` of an attempt whose first unit is c (a lexer's dispatch arm knows it): an attempt
+ *  whose first consuming item cannot take c fails there, having read one unit. Conservative: a
+ *  shape this does not narrow (a leading lookahead, a nullable head) answers `failRead(p)`. */
+export function failReadFirst(p: TokenPattern, c: number): number {
+  if (typeof p === 'string') return p.length === 0 ? -1 : p.charCodeAt(0) === c ? p.length : 1;
+  switch (p.type) {
+    case 'anyChar': case 'charClass': return 1;
+    case 'alt': return p.items.some((i) => failRead(i) < 0) ? -1 : p.items.reduce((a, i) => Math.max(a, failReadFirst(i, c)), 0);
+    case 'seq': {
+      const head = p.items[0];
+      if (head === undefined || (typeof head !== 'string' && (head.type === 'lookahead' || head.type === 'lookbehind' || head.type === 'anchor')) || info(head).nullable) return failRead(p);
+      if (!subset(one(c), info(head).first)) return 1;
+      let before = maxUnits(head), most = failReadFirst(head, c);
+      for (const i of p.items.slice(1)) {
+        const f = failRead(i);
+        if (f >= 0) most = Math.max(most, before + f);
+        before += maxUnits(i);
+      }
+      return most;
+    }
+    case 'repeat': return p.min >= 1 && !info(p.body).nullable && !subset(one(c), info(p.body).first) ? 1 : failRead(p);
+    default: return failRead(p);
+  }
+}
+
+// Whether p's first consuming step is its first item: no zero-width test or empty path before it,
+// so its derivative by one unit is exact (`deriv` drops a leading lookahead).
+function leadClean(p: TokenPattern): boolean {
+  if (typeof p === 'string') return p !== '';
+  switch (p.type) {
+    case 'anyChar': case 'charClass': return true;
+    case 'seq': return p.items.length > 0 && leadClean(p.items[0]!) && !info(p.items[0]!).nullable;
+    case 'alt': return p.items.every(leadClean);
+    case 'repeat': return p.min >= 1 && leadClean(p.body) && !info(p.body).nullable;
+    default: return false;
+  }
+}
+
+/** The units at the second position of an attempt of p whose first unit is c after which it can
+ *  read on: at any other unit it has read two units at most (it fails there, or matched one).
+ *  ALL when not proven. */
+export function continuesAt(p: TokenPattern, c: number): CSet {
+  if (!leadClean(p)) return ALL;
+  const d0 = deriv(p, c);
+  const d = d0 === null ? null : simplify(d0);
+  if (d === null || d === '') return NONE;
+  return leadClean(d) && !info(d).nullable ? info(d).first : ALL;
+}
+
 /** Where a FAILED attempt of p at a position read to, as a walk: the fixed leading items of p (a
  *  literal, or a class of one-unit members), taken as the matcher takes them, so an attempt that
  *  failed among them read only up to the item that refused (as a whole literal); past them, it

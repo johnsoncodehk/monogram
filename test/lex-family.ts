@@ -563,9 +563,10 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
 
   // The same bounds proved on the regexes the interpreter's lexer runs (src/emit-lexer.ts records
   // them while lexing): every token of every grammar, a failed attempt bounded by its
-  // `readEndWalk`, a match by the unit after its end, or, at an `overTrigger` unit, by the first
+  // `readEndWalk` (or by two units where its first two rule a longer read out: `failReadFirst`,
+  // `continuesAt`), a match by the unit after its end, or, at an `overTrigger` unit, by the first
   // unit after the end outside `examinedUnits`, + 1. Lazy repeats (block comments) included.
-  const { readEndWalk } = await import('../src/lex-match-plan.ts');
+  const { readEndWalk, failReadFirst, continuesAt } = await import('../src/lex-match-plan.ts');
   const { tokenPatternSource } = await import('../src/token-pattern.ts');
   const walkEnd = (w: ReturnType<typeof readEndWalk>, s: string): number => {
     let q = 0;
@@ -589,7 +590,8 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
         for (const src of TAILS.map((tl) => base + tl)) {
           const e = run(src);
           let bound: number;
-          if (e < 0) bound = walkEnd(w, src);
+          // as the lexer bounds it: from the arm's first unit (failReadFirst, continuesAt), else the walk
+          if (e < 0) bound = src.length === 0 ? 1 : failReadFirst(d.pattern, src.charCodeAt(0)) <= 2 || src.length < 2 || !inC(src.charCodeAt(1), continuesAt(d.pattern, src.charCodeAt(0))) ? 2 : walkEnd(w, src);
           else if (e < src.length && inC(src.charCodeAt(e), trig)) { let q = e; while (q < src.length && inC(src.charCodeAt(q), ex)) q++; bound = q + 1; }
           else bound = e + 1;
           for (let c = Math.max(0, bound); c <= src.length; c++) {
