@@ -1752,12 +1752,8 @@ func newDocCst(src string, b *CstBuilder) *Doc {
 	defer d.publish()
 	var toks []Tok
 	d.toks, toks = scanMetaToks(src)
-	// A Doc owns its arena, so a new one starts empty; size it from the token count instead of
-	// growing it by repeated append copies (TS-family code runs ~0.6 nodes and ~1.1 kids per token):
-	// growth garbage is what drives GC cycles, since a dropped Doc leaves a small live heap.
-	n := len(toks)
-	if cap(b.Nodes) < n*3/4 { b.Nodes = make([]Node, 0, n*3/4) }
-	if cap(b.Kids) < n*5/4 { b.Kids = make([]int32, 0, n*5/4) }
+	// The arena grows as the parse fills it, as in ParseWith and in every target: a node or kid count
+	// estimated from the token count is neither a fit nor a bound (6183a29, PR #126).
 	d.e.nodes, d.e.kids = b.Nodes[:0], b.Kids[:0]
 	d.root = d.e.parse(src, toks)
 ${topReuse ? '\td.entries = append([]EntryMeta(nil), d.e.entries...)\n' : ''}\treturn d
