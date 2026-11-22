@@ -764,6 +764,10 @@ export type Forms = {
   buildShared: boolean[];      // parallel to ParserIR.shared: printed in building form
   recognizeShared: boolean[];  // parallel to ParserIR.shared: printed in recognize form
   lookBuilds: boolean[];       // parallel to ParserIR.lookaheads: its body runs a Pratt rule's building form
+  /** The recognize-form functions that run no building form, directly or through anything they
+   *  call: they read and move the token cursor alone (position, tokens, look extent, suppress set,
+   *  context), so a target with several engine types may print them once, on the cursor. */
+  cursorOnly: { rules: string[]; shared: boolean[]; looks: boolean[] };
 };
 function formsOf(rules: RuleIR[], lookaheads: Alt[], nShared: number, entry: string): Forms {
   const byName = new Map(rules.map((r) => [r.name, r]));
@@ -808,11 +812,38 @@ function formsOf(rules: RuleIR[], lookaheads: Alt[], nShared: number, entry: str
       if (r.kind === 'rd' && !rdBuilds.has(name) && r.alts.some((alt) => alt.some(builds))) { rdBuilds.add(name); changed = true; }
     }
   }
+  // Which recognizers read the cursor alone: none of what they run, directly or through the rules,
+  // shared steps and lookaheads they call (nested lookaheads included, unlike `builds`), is a
+  // building form. A fixed point over rd rules and lookaheads together, which call each other.
+  const ruleCalls = new Set<string>(), lookCalls = new Array<boolean>(lookaheads.length).fill(false);
+  const callsBuild = (s: Step): boolean => s.t === 'ruleBp'
+    || (s.t === 'rule' && (byName.get(s.name)?.kind === 'pratt' || ruleCalls.has(s.name)))
+    || (s.t === 'look' && lookCalls[s.id]!) || stepKids(s).some(callsBuild);
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const name of recognize) {
+      const r = byName.get(name)!;
+      if (!ruleCalls.has(name) && (r.kind === 'pratt' || r.alts.some((alt) => alt.some(callsBuild)))) { ruleCalls.add(name); changed = true; }
+    }
+    lookaheads.forEach((body, id) => { if (!lookCalls[id] && body.some(callsBuild)) { lookCalls[id] = true; changed = true; } });
+  }
+  const sharedCalls = new Array<boolean>(nShared).fill(false);
+  const markShared = (s: Step): void => {
+    if ('share' in s && s.share !== undefined && recognizeShared[s.share] && callsBuild(s)) sharedCalls[s.share] = true;
+    stepKids(s).forEach(markShared);
+  };
+  for (const r of rules) for (const body of ruleBodies(r)) body.forEach(markShared);
+  lookaheads.forEach((body) => body.forEach(markShared));
   return {
     buildRules: rules.filter((r) => build.has(r.name)).map((r) => r.name),
     recognizeRules: rules.filter((r) => recognize.has(r.name)).map((r) => r.name),
     buildShared, recognizeShared,
     lookBuilds: lookaheads.map((body) => body.some(builds)),
+    cursorOnly: {
+      rules: rules.filter((r) => recognize.has(r.name) && !ruleCalls.has(r.name)).map((r) => r.name),
+      shared: recognizeShared.map((rec, id) => rec && !sharedCalls[id]),
+      looks: lookCalls.map((c) => !c),
+    },
   };
 }
 

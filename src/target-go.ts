@@ -34,7 +34,7 @@ const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
 const guardCond = (g: Guard, t: string, w: '' | 'W', keyed: boolean): string[] => {
   if (g === null) return [];
   const parts = keyed ? [] : [`inTokenSet(${g.first.id}, ${t})`];
-  if (g.second !== null) parts.push(`p.secondIn${w}(${g.second.id})`);
+  if (g.second !== null) parts.push(`p.secondIn(${g.second.id})`);
   return parts;
 };
 // `if <conds> <body>` as one statement line (just the body when there is no condition).
@@ -91,9 +91,16 @@ const ENGINE_GO: GoEngine = {
   mark: ckptGo, reset: undoGo,
 };
 const ENGINE_GO_W: GoEngine = {
-  recv: 'parserW', w: 'W', peek: 'peekW', ahead: 'aheadW', matchComp: 'matchCompW',
+  recv: 'parserW', w: 'W', peek: 'peek', ahead: 'ahead', matchComp: 'matchComp',
   bpFound: (n, bp) => `parsedW(p.bpW_${n}(${bp}))`, parsed: (n) => `parsedW(p.parse${n}W())`,
   mark: `${ckptGoW('parserW')};`, reset: undoGoW('parserW'),
+};
+// The cursor's recognizers (Forms.cursorOnly) run no building form, so nothing here is called.
+const CURSOR_GO: GoEngine = {
+  recv: 'cursor', w: '', peek: 'peek', ahead: 'ahead', matchComp: 'matchComp',
+  bpFound: () => { throw new Error('goTarget: a cursor recognizer runs no Pratt rule'); },
+  parsed: () => { throw new Error('goTarget: a cursor recognizer runs no Pratt rule'); },
+  mark: '', reset: '',
 };
 const branchGoR = (cond: string) => `{ sp := p.pos; if ${cond} { return true }; p.back(sp) }`;
 function stepCondR(s: Step, ids: LexIdPlan, e: GoEngine): string {
@@ -146,14 +153,15 @@ function stepStmtsR(s: Step, ids: LexIdPlan, e: GoEngine): string {
 // ParserIR.lookaheads, one method each, in recognize form: whether the body matches here. It
 // undoes the position, and the scratch list and the arena / builder too when its body runs a
 // Pratt rule's building form (Forms.lookBuilds).
-function lookFnsR(ir: ParserIR, ids: LexIdPlan, e: GoEngine): string {
+function lookFnsR(ir: ParserIR, ids: LexIdPlan, e: GoEngine, onCursor: boolean): string {
   return ir.lookaheads.map((body, id) => {
+    if (ir.forms.cursorOnly.looks[id] !== onCursor) return '';
     const builds = ir.forms.lookBuilds[id]!;
     return `func (p *${e.recv}) look${id}() bool { ${builds ? e.mark : 'sp := p.pos;'} r := ${body.map((x) => stepCondR(x, ids, e)).join(' && ')}; ${builds ? e.reset : 'p.back(sp)'}; return r }\n`;
   }).join('');
 }
-function sharedFnsR(ir: ParserIR, ids: LexIdPlan, e: GoEngine): string {
-  return ir.shared.map((s, id) => (ir.forms.recognizeShared[id] ? `func (p *${e.recv}) sub${id}R() bool { ${stepStmtsR(s, ids, e)} }\n` : '')).join('');
+function sharedFnsR(ir: ParserIR, ids: LexIdPlan, e: GoEngine, onCursor: boolean): string {
+  return ir.shared.map((s, id) => (ir.forms.recognizeShared[id] && ir.forms.cursorOnly.shared[id] === onCursor ? `func (p *${e.recv}) sub${id}R() bool { ${stepStmtsR(s, ids, e)} }\n` : '')).join('');
 }
 // A rule in recognize form: whether it matches here, advancing past it. An rd rule has rdRule's
 // control flow building nothing: its longest match compares end positions only (a tie only
@@ -739,15 +747,48 @@ function gtOpRead(ids: LexIdPlan, withEnd: boolean): string {
 // is the furthest since the last move back: back() folds it into maxLook before the position
 // returns, and lookEnd() folds in the stretch since. Every move of the position to an earlier
 // token goes through back().
-function lookRecordGo(recv: string): string {
-  return `// back moves the position back to sp (sp <= pos), first folding the abandoned stretch's furthest
+// The token cursor: what every recognizer reads and moves (the position, the tokens, the look
+// extent, the suppress set and the context in force). Both engine types embed it, so the cursor's
+// helpers and every recognizer that runs no building form (Forms.cursorOnly) are printed once, as
+// its methods, and called through either engine (Go promotes the embedded methods).
+function cursorGo(ir: ParserIR, ids: LexIdPlan): string {
+  return `type cursor struct {
+\ttoks []Tok
+\tpos, maxLook int
+\tpeekEnd int // one past the token of the latest peek (see back)
+\tsuppressNext, suppressCur uint16 // indices into the grammar's suppress sets (ParserIR.suppressSets; 0 = none)
+\tctx uint8 // the [Await]/[Yield] context word in force (bit 1 await, bit 2 yield; see ParserIR's Ctx)
+}
+
+func (p *cursor) peek() *Tok {
+\tp.peekEnd = p.pos + 1
+\tif p.pos < len(p.toks) { return &p.toks[p.pos] }
+\treturn nil
+}
+// back moves the position back to sp (sp <= pos), first folding the abandoned stretch's furthest
 // peek into maxLook.
-func (p *${recv}) back(sp int) { if p.peekEnd > p.maxLook { p.maxLook = p.peekEnd }; p.pos = sp }
+func (p *cursor) back(sp int) { if p.peekEnd > p.maxLook { p.maxLook = p.peekEnd }; p.pos = sp }
 // lookEnd: one past the furthest token the current entry examined.
-func (p *${recv}) lookEnd() int { if p.peekEnd > p.maxLook { return p.peekEnd }; return p.maxLook }
+func (p *cursor) lookEnd() int { if p.peekEnd > p.maxLook { return p.peekEnd }; return p.maxLook }
 // lookReset starts recording an entry's extent.
-func (p *${recv}) lookReset() { p.maxLook = 0; p.peekEnd = 0 }
-// mark: where a construct that may have to undo what it tries starts; ${recv === 'engine' ? 'reset undoes everything since (the position as back does, the scratch list and the arena).' : 'undoGoW undoes everything since.'}
+func (p *cursor) lookReset() { p.maxLook = 0; p.peekEnd = 0 }
+func (p *cursor) ahead(k int, is bool) bool { t := p.peek(); return (t != nil && inTokenSet(k, t)) == is }
+// ctxWord: whether the next token is a word the context in force reserves; outside every context it reads nothing.
+func (p *cursor) ctxWord() bool { if p.ctx == 0 { return false }; t := p.peek(); return t != nil && inCtxWords(p.ctx, t) }
+// secondIn: whether the token after the current one is in tokenSets[k] (a candidate's SECOND guard).
+func (p *cursor) secondIn(k int) bool { i := p.pos + 1; if i >= p.maxLook { p.maxLook = i + 1 }; return i < len(p.toks) && inTokenSet(k, &p.toks[i]) }
+func (p *cursor) offAt(i int) int { if i < len(p.toks) { return int(p.toks[i].Off) }; return 0 }
+func (p *cursor) matchComp(lid uint16) bool {
+\tif p.peek() == nil { return false }
+\tc, n, _ := gtOp(p.toks, p.pos)
+\tif c != lid { return false }
+\tif e := p.pos + n + 1; e > p.maxLook { p.maxLook = e }
+\tp.pos += n; return true
+}
+${recognizeHelpersGo('cursor')}${lookFnsR(ir, ids, CURSOR_GO, true)}${sharedFnsR(ir, ids, CURSOR_GO, true)}${ir.rules.filter((r) => ir.forms.cursorOnly.rules.includes(r.name)).map((r) => ruleR(r as RdRule, ids, CURSOR_GO) + '\n').join('')}`;
+}
+function engineMarkGo(recv: string): string {
+  return `// mark: where a construct that may have to undo what it tries starts; ${recv === 'engine' ? 'reset undoes everything since (the position as back does, the scratch list and the arena).' : 'undoGoW undoes everything since.'}
 ${recv === 'engine'
   ? `func (p *engine) mark() mark { return mark{p.pos, len(p.scratch), len(p.nodes), len(p.kids)} }
 func (p *engine) reset(m mark) { p.back(m.pos); p.scratch = p.scratch[:m.sb]; p.nodes = p.nodes[:m.nb]; p.kids = p.kids[:m.kb] }`
@@ -1752,7 +1793,7 @@ function stepCondW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
 }
 function stepBodyW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
   switch (s.t) {
-    case 'lit': return gtCompLit(ids, s) ? `p.matchCompW(${lidOf(ids, s.value)})` : `p.matchLitW(${lidOf(ids, s.value)})`;
+    case 'lit': return gtCompLit(ids, s) ? `p.matchComp(${lidOf(ids, s.value)})` : `p.matchLitW(${lidOf(ids, s.value)})`;
     case 'tok': return `p.matchTokW(${kidOf(ids, s.name)})`;
     case 'rule': return `p.callRuleW((*${recv}).parse${s.name}W)`;
     case 'ruleBp': return `p.callRuleW(func(q *${recv}) (spanned, bool) { return q.bpW_${s.name}(${s.bp}) })`;
@@ -1762,10 +1803,10 @@ function stepBodyW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
     case 'altlit': return `p.altLitW([]uint16{${s.opts.map((o) => lidOf(ids, o.value)).join(', ')}})`;
     case 'alt': return `func() bool { ${stepStmtsW(s, ids, ar, recv)} }()`;
     case 'look': return `${s.is ? '' : '!'}p.look${s.id}()`;   // recognize form (lookFnsR)
-    case 'ahead': return `p.aheadW(${s.set}, ${s.is})`;
-    case 'aheadCtx': return s.is ? `(p.aheadW(${s.set}, true) || p.ctxWord())` : `(p.aheadW(${s.set}, false) && !p.ctxWord())`;
+    case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
+    case 'aheadCtx': return s.is ? `(p.ahead(${s.set}, true) || p.ctxWord())` : `(p.ahead(${s.set}, false) && !p.ctxWord())`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'})`;
-    case 'sameLine': return `func() bool { t := p.peekW(); return t != nil && !t.Nl }()`;
+    case 'sameLine': return `func() bool { t := p.peek(); return t != nil && !t.Nl }()`;
     case 'suppress': return `func() bool { ${stepStmtsW(s, ids, ar, recv)} }()`;
     case 'ctx': return `func() bool { ${stepStmtsW(s, ids, ar, recv)} }()`;
   }
@@ -1782,7 +1823,7 @@ function altBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: F
   const fs = firsts ?? [];
   const nAlts = branches.length;
   const needPeek = branches.some((_, i) => isGuardable(fs[i] ?? null, nAlts));
-  const peekInit = needPeek ? `_ft := p.peekW(); ` : '';
+  const peekInit = needPeek ? `_ft := p.peek(); ` : '';
   const tries = branches.map((br, i) => {
     const body = branchGoW(br.length ? br.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true', recv);
     const f = fs[i] ?? null;
@@ -1801,7 +1842,7 @@ function predAltBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, first
     const steps = br.length ? br.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true';
     return `if ${firstCond(firsts![i], 't', ids)} ${branchGoW(steps, recv)}`;
   }).join(' else ');
-  return `t := p.peekW(); if t == nil { return false }; ${arms}; return false`;
+  return `t := p.peek(); if t == nil { return false }; ${arms}; return false`;
 }
 
 function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
@@ -1809,10 +1850,10 @@ function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
   if (r.predictive) {
     // Join with space (not newline): Go ASI inserts ';' after '}' at EOL, which
     // breaks `} \\n else if` — native rdRule uses the same same-line join.
-    const arm = (steps: Step[], i: number) => `\t${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { return p.finishW(${rid}, sb, p.offAtW(save), save), true } }`;
+    const arm = (steps: Step[], i: number) => `\t${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { return p.finishW(${rid}, sb, p.offAt(save), save), true } }`;
     return `func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
-\tt := p.peekW(); if t == nil { return spanned{}, false }
+\tt := p.peek(); if t == nil { return spanned{}, false }
 ${r.alts.map(arm).join(' ')}
 \tp.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}
 \treturn spanned{}, false
@@ -1821,7 +1862,7 @@ ${r.alts.map(arm).join(' ')}
   if (r.alts.length === 1) {
     return `func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
-\tif ${r.alts[0]!.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { return p.finishW(${rid}, sb, p.offAtW(save), save), true }
+\tif ${r.alts[0]!.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { return p.finishW(${rid}, sb, p.offAt(save), save), true }
 \tp.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}
 \treturn spanned{}, false
 }`;
@@ -1829,7 +1870,7 @@ ${r.alts.map(arm).join(' ')}
   // Longest match over the alternatives through the rule's Dispatch — as rdRule.
   const alt = (i: number, keyed: boolean) => {
     const cond = r.alts[i]!.map((x) => stepCondW(x, ids, ar, recv)).join(' && ');
-    const body = candGo(r.altDispatch, i, cond, `best = p.finishW(${rid}, sb, p.offAtW(save), save); found = true; bestPos = p.pos;${markGo(r.altDispatch, i)} ${arenaMark(recv)}`, lostGoW(recv));
+    const body = candGo(r.altDispatch, i, cond, `best = p.finishW(${rid}, sb, p.offAt(save), save); found = true; bestPos = p.pos;${markGo(r.altDispatch, i)} ${arenaMark(recv)}`, lostGoW(recv));
     const g = guardCond(r.altGuard[i]!, '_ft', 'W', keyed);
     return ifGo(g.length && !keyed ? ['_ft != nil', ...g] : g, body);
   };
@@ -1837,7 +1878,7 @@ ${r.alts.map(arm).join(' ')}
   return `func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
 \tvar best spanned; found := false; bestPos := save${biGo(r.altDispatch)}
-${needPeek ? '\t_ft := p.peekW()\n' : ''}${dispatchGo(r.altDispatch, '_ft', ids, alt, true)}
+${needPeek ? '\t_ft := p.peek()\n' : ''}${dispatchGo(r.altDispatch, '_ft', ids, alt, true)}
 \tp.pos = bestPos
 \treturn best, found
 }`;
@@ -1878,7 +1919,7 @@ func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \t}
 \tp.entryHs = append([]int32(nil), p.scratch[sb:]...)
 \tp.entries = localE
-\treturn p.finishW(${rid}, sb, p.offAtW(save), save), true
+\treturn p.finishW(${rid}, sb, p.offAt(save), save), true
 }`;
 }
 
@@ -1937,7 +1978,7 @@ ${headBlock}\tfor {
 \t}
 \tp.entryHs = append([]int32(nil), p.scratch[sb:]...)
 \tp.entries = localE
-\treturn p.finishW(${rid}, sb, p.offAtW(save), save), true
+\treturn p.finishW(${rid}, sb, p.offAt(save), save), true
 }`;
 }
 
@@ -1953,7 +1994,7 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaI
   const lost = lostGoW(recv);
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    candGo(r.nudDispatch, i, stepsCond(steps), `best = p.finishW(${rid}, sb, p.offAtW(save), save); ${won(i, '0', tail, capped)}`, lost);
+    candGo(r.nudDispatch, i, stepsCond(steps), `best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, '0', tail, capped)}`, lost);
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
     switch (a.kind) {
@@ -1983,7 +2024,7 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaI
 \t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
 \t\toperand, ook := p.bpW_${r.name}(pbp.rbp)
 \t\tif ook && pbp.tgt && p.form != 0 { p.back(save); ${lost}; p.capped = false; return spanned{}, false }
-\t\tif ook && ${beatsGo(r.nudDispatch, 'p.pos', i)} { if operand.present { p.scratch = append(p.scratch, operand.h) }; best = p.finishW(${rid}, sb, p.offAtW(save), save); ${won(i, 'pbp.form', true, false)} } else { ${lost} }
+\t\tif ook && ${beatsGo(r.nudDispatch, 'p.pos', i)} { if operand.present { p.scratch = append(p.scratch, operand.h) }; best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, 'pbp.form', true, false)} } else { ${lost} }
 \t\tp.back(save)
 \t}`;
     }
@@ -2051,7 +2092,7 @@ func (p *${recv}) bpW_${r.name}(minBp int) (spanned, bool) {
 \tif p.capped { return left, true }
 \ttailClosed := p.tail
 ${needLedLoop ? 'LedLoop:\n' : ''}\tfor {
-\t\tt := p.peekW()
+\t\tt := p.peek()
 \t\tif t == nil { break }
 ${ledSwitch}
 ${postfixTokSwitch}
@@ -2078,7 +2119,7 @@ ${gtOpRead(ids, true)}
 }
 func (p *${recv}) nudW_${r.name}(minBp int) (spanned, bool) {
 \tp.capped = false
-\tt := p.peekW()
+\tt := p.peek()
 \tif t == nil { return spanned{}, false }
 \tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
 \tvar best spanned; found := false; bestPos := save${biGo(r.nudDispatch)}; bf, bt, bc := uint8(0), false, false
@@ -2102,11 +2143,11 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
     if (r.kind === 'pratt') return prattRuleW(r, ir.tpl, ids, ar, recv);
     if (reuse && r.name === ir.entry) return rdEntryWithReuseW(r, reuse, ids, ar, recv);
     return rdRuleW(r, ids, ar, recv);
-  }), ...ir.rules.filter((r) => ir.forms.recognizeRules.includes(r.name)).map((r) => ruleR(r, ids, ENGINE_GO_W))].join('\n\n');
+  }), ...ir.rules.filter((r) => ir.forms.recognizeRules.includes(r.name) && !ir.forms.cursorOnly.rules.includes(r.name)).map((r) => ruleR(r, ids, ENGINE_GO_W))].join('\n\n');
   // One template matcher per hole rule (tplHoleRules): the hole is parsed by the rule the
   // matching reference declares, called directly.
   const matchTemplateW = tplHoleRules(ir).map((hole) => `func (p *${recv}) matchTemplateW_${hole}() (spanned, bool) {
-\tt := p.peekW()
+\tt := p.peek()
 \tif t == nil || t.Kid != ${kidOf(ids, '$templateHead')} { return spanned{}, false }
 \tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
 \tp.pushLeafW(${ttIdOf(ar, '$templateHead')}, uint32(p.pos), t.Off, t.End); p.pos++
@@ -2114,13 +2155,13 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 \t\texpr, ok := p.parse${hole}W()
 \t\tif !ok { p.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; return spanned{}, false }
 \t\tif expr.present { p.scratch = append(p.scratch, expr.h) }
-\t\tnext := p.peekW()
+\t\tnext := p.peek()
 \t\tif next == nil { p.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; return spanned{}, false }
 \t\tif next.Kid == ${kidOf(ids, '$templateMiddle')} { p.pushLeafW(${ttIdOf(ar, '$templateMiddle')}, uint32(p.pos), next.Off, next.End); p.pos++; continue }
 \t\tif next.Kid == ${kidOf(ids, '$templateTail')} { p.pushLeafW(${ttIdOf(ar, '$templateTail')}, uint32(p.pos), next.Off, next.End); p.pos++; break }
 \t\tp.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; return spanned{}, false
 \t}
-\treturn p.finishW(${ruleIdOf(ar, '$template')}, sb, p.offAtW(save), save), true
+\treturn p.finishW(${ruleIdOf(ar, '$template')}, sb, p.offAt(save), save), true
 }
 `).join('');
   const cstDirect = recv === 'parserCst';
@@ -2182,26 +2223,18 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 \treturn ""
 }`;
   const structFields = cstDirect
-    ? `\ttoks []Tok
-\tpos, maxLook int
-\tpeekEnd int // one past the token of the latest peek (see back)
+    ? `\tcursor
 \tcapped bool
 \tform uint8 // assignment-target form of the node the last nud_/bp_ call returned
 \ttail bool  // whether the node the last nud_ call returned closes the access tail
-\tsuppressNext, suppressCur uint16 // indices into the grammar's suppress sets (ParserIR.suppressSets; 0 = none)
-\tctx uint8 // the [Await]/[Yield] context word in force (bit 1 await, bit 2 yield; see ParserIR's Ctx)
 \tsrc string
 \tNodes []Node
 \tKids []int32
 \tscratch []int32`
-    : `\ttoks []Tok
-\tpos, maxLook int
-\tpeekEnd int // one past the token of the latest peek (see back)
+    : `\tcursor
 \tcapped bool
 \tform uint8 // assignment-target form of the node the last nud_/bp_ call returned
 \ttail bool  // whether the node the last nud_ call returned closes the access tail
-\tsuppressNext, suppressCur uint16 // indices into the grammar's suppress sets (ParserIR.suppressSets; 0 = none)
-\tctx uint8 // the [Await]/[Yield] context word in force (bit 1 await, bit 2 yield; see ParserIR's Ctx)
 \tsrc string
 \tb Builder
 \tscratch []int32${entriesField}`;
@@ -2209,17 +2242,7 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 ${structFields}
 }
 
-func (p *${recv}) peekW() *Tok {
-\tp.peekEnd = p.pos + 1
-\tif p.pos < len(p.toks) { return &p.toks[p.pos] }
-\treturn nil
-}
-${lookRecordGo(recv)}
-func (p *${recv}) aheadW(k int, is bool) bool { t := p.peekW(); return (t != nil && inTokenSet(k, t)) == is }
-func (p *${recv}) ctxWord() bool { if p.ctx == 0 { return false }; t := p.peekW(); return t != nil && inCtxWords(p.ctx, t) }
-// secondInW: whether the token after the current one is in tokenSets[k] (a candidate's SECOND guard).
-func (p *${recv}) secondInW(k int) bool { i := p.pos + 1; if i >= p.maxLook { p.maxLook = i + 1 }; return i < len(p.toks) && inTokenSet(k, &p.toks[i]) }
-func (p *${recv}) offAtW(i int) int { if i < len(p.toks) { return int(p.toks[i].Off) }; return 0 }
+${engineMarkGo(recv)}
 ${pushLeafW}
 ${finishW}
 ${headLeafTextW}
@@ -2229,19 +2252,12 @@ func (p *${recv}) nllBlockedW(words []string, left spanned) bool {
 \treturn false
 }
 func (p *${recv}) matchLitW(lid uint16) bool {
-\tt := p.peekW()
+\tt := p.peek()
 \tif t != nil && t.Lid == lid { p.pushLeafW(litTt(lid), uint32(p.pos), t.Off, t.End); p.pos++; return true }
 \treturn false
 }
-func (p *${recv}) matchCompW(lid uint16) bool {
-\tif p.peekW() == nil { return false }
-\tc, n, _ := gtOp(p.toks, p.pos)
-\tif c != lid { return false }
-\tif e := p.pos + n + 1; e > p.maxLook { p.maxLook = e }
-\tp.pos += n; return true
-}
 func (p *${recv}) matchTokW(kid uint16) bool {
-\tt := p.peekW()
+\tt := p.peek()
 \tif t != nil && t.Kid == kid { p.pushLeafW(kid, uint32(p.pos), t.Off, t.End); p.pos++; return true }
 \treturn false
 }
@@ -2279,10 +2295,10 @@ func (p *${recv}) altLitW(lids []uint16) bool {
 \treturn false
 }
 
-${recognizeHelpersGo(recv)}// found: whether a builder-engine parse matched (its node dropped: a recognize form).
+// found: whether a builder-engine parse matched (its node dropped: a recognize form).
 func parsedW(_ spanned, ok bool) bool { return ok }
 
-${matchTemplateW}${lookFnsR(ir, ids, ENGINE_GO_W)}${sharedFnsW(ir, ids, ar, recv)}${sharedFnsR(ir, ids, ENGINE_GO_W)}${ruleFnsW}
+${matchTemplateW}${lookFnsR(ir, ids, ENGINE_GO_W, false)}${sharedFnsW(ir, ids, ar, recv)}${sharedFnsR(ir, ids, ENGINE_GO_W, false)}${ruleFnsW}
 `;
 }
 
@@ -2352,7 +2368,7 @@ func (b *CstBuilder) Shift(h int32, byteDelta, tokDelta int) int32 {
 
   const parseWithMetaW = `
 ${entryMetaType}func parseWithMetaW(text string, meta []alignMeta, b Builder) (h int32, entries []EntryMeta, entryHs []int32, ok bool) {
-	p := &parserW{toks: toksFromMeta(text, meta), src: text, b: b, scratch: nil}
+	p := &parserW{cursor: cursor{toks: toksFromMeta(text, meta)}, src: text, b: b, scratch: nil}
 	fr, pok := p.parse${entry}W()
 	recordToks(b, p.toks)
 	if !pok || p.pos != len(p.toks) || !fr.present {
@@ -2388,7 +2404,7 @@ func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, 
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
 	rel, minRel := tailRel(oldN, suffixMeta)
-	p := &parserW{toks: toksFromMeta(newText, newMeta), src: newText, b: b, scratch: nil}
+	p := &parserW{cursor: cursor{toks: toksFromMeta(newText, newMeta)}, src: newText, b: b, scratch: nil}
 	if prefixLen > 0 {
 		p.pos = prefixMeta[prefixLen-1].TokEnd
 	} else {
@@ -2529,7 +2545,7 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 		}
 	}
 	rel, minRel := tailRel(oldN, suffixMeta)
-	p := &parserW{toks: toksFromMeta(newText, newMeta), src: newText, b: b, scratch: nil}
+	p := &parserW{cursor: cursor{toks: toksFromMeta(newText, newMeta)}, src: newText, b: b, scratch: nil}
 	if prefixLen > 0 {
 		p.pos = prefixMeta[prefixLen-1].TokEnd
 	} else {
@@ -3134,7 +3150,7 @@ func parseWithCst(src string, b *CstBuilder) (int32, bool) {
 \treturn h, true
 }
 func parseWithW(src string, b Builder) (int32, bool) {
-\tp := &parserW{toks: lex(src), src: src, b: b, scratch: nil}
+\tp := &parserW{cursor: cursor{toks: lex(src)}, src: src, b: b, scratch: nil}
 \tfr, ok := p.parse${ir.entry}W()
 \trecordToks(b, p.toks)
 \tif !ok || p.pos != len(p.toks) || !fr.present { return 0, false }
@@ -3313,7 +3329,7 @@ export const goTarget = defineTarget({
       if (r.kind === 'pratt') return prattRule(r, ir.tpl, ids, ar);
       if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids, ar);
       return rdRule(r, ids, ar);
-    }), ...ir.rules.filter((r) => ir.forms.recognizeRules.includes(r.name)).map((r) => ruleR(r, ids, ENGINE_GO))].join('\n\n');
+    }), ...ir.rules.filter((r) => ir.forms.recognizeRules.includes(r.name) && !ir.forms.cursorOnly.rules.includes(r.name)).map((r) => ruleR(r, ids, ENGINE_GO))].join('\n\n');
     // One template matcher per hole rule (tplHoleRules): the hole is parsed by the rule the
     // matching reference declares, called directly.
     const matchTemplate = tplHoleRules(ir).map((hole) => `func (p *engine) matchTemplate_${hole}() int32 {
@@ -3375,15 +3391,11 @@ type postOp struct{ lbp int; tgt bool }
 // may have to undo what it tries starts from (engine.mark / reset, parserW.mark / reset).
 type mark struct{ pos, sb, nb, kb int }
 type engine struct {
-\ttoks []Tok
-\tpos, maxLook int
-\tpeekEnd int // one past the token of the latest peek (see back)
+\tcursor
 \tcapped bool
 \tform uint8 // assignment-target form of the node the last nud_/bp_ call returned
 \ttail bool  // whether the node the last nud_ call returned closes the access tail
 \tsrc string
-\tsuppressNext, suppressCur uint16 // indices into the grammar's suppress sets (ParserIR.suppressSets; 0 = none)
-\tctx uint8 // the [Await]/[Yield] context word in force (bit 1 await, bit 2 yield; see ParserIR's Ctx)
 \tnodes []Node
 \tkids []int32
 \tscratch []int32
@@ -3445,19 +3457,9 @@ func (p *engine) pushLeaf(ttId uint8, tokIdx uint32) {
 \tp.scratch = append(p.scratch, encodeLeaf(tokIdx, ttId))
 }
 
-func (p *engine) peek() *Tok {
-\tp.peekEnd = p.pos + 1
-\tif p.pos < len(p.toks) { return &p.toks[p.pos] }
-\treturn nil
-}
-${lookRecordGo('engine')}
 ${tokenSetRuntimeGo(ir, ids)}
-func (p *engine) ahead(k int, is bool) bool { t := p.peek(); return (t != nil && inTokenSet(k, t)) == is }
-// ctxWord: whether the next token is a word the context in force reserves; outside every context it reads nothing.
-func (p *engine) ctxWord() bool { if p.ctx == 0 { return false }; t := p.peek(); return t != nil && inCtxWords(p.ctx, t) }
-// secondIn: whether the token after the current one is in tokenSets[k] (a candidate's SECOND guard).
-func (p *engine) secondIn(k int) bool { i := p.pos + 1; if i >= p.maxLook { p.maxLook = i + 1 }; return i < len(p.toks) && inTokenSet(k, &p.toks[i]) }
-func (p *engine) offAt(i int) int { if i < len(p.toks) { return int(p.toks[i].Off) }; return 0 }
+${cursorGo(ir, ids)}
+${engineMarkGo('engine')}
 // Wrap the scratch entries [sb:] as one node's children (flattened into kids); truncate scratch.
 // tokStart is the parse-consumption start (entry pos / leftmost operand), tokEnd is pos at finish.
 func (p *engine) finish(ruleId uint16, sb, fallbackOff, tokStart int) int32 {
@@ -3503,13 +3505,6 @@ func (p *engine) matchTok(kid uint16) bool {
 \treturn true
 }
 // matchComp matches a composite '>'-led literal (a lookahead operand; never a tree leaf).
-func (p *engine) matchComp(lid uint16) bool {
-\tif p.peek() == nil { return false }
-\tc, n, _ := gtOp(p.toks, p.pos)
-\tif c != lid { return false }
-\tif e := p.pos + n + 1; e > p.maxLook { p.maxLook = e }
-\tp.pos += n; return true
-}
 // callRule pushes the node a rule call returned (id < 0: the rule did not match).
 func (p *engine) callRule(id int32) bool {
 \tif id < 0 { return false }
@@ -3538,8 +3533,7 @@ func (p *engine) altLit(lids []uint16) bool {
 \treturn false
 }
 
-${recognizeHelpersGo('engine')}
-${matchTemplate}${lookFnsR(ir, ids, ENGINE_GO)}${sharedFns(ir, ids, ar)}${sharedFnsR(ir, ids, ENGINE_GO)}${ruleFns}
+${matchTemplate}${lookFnsR(ir, ids, ENGINE_GO, false)}${sharedFns(ir, ids, ar)}${sharedFnsR(ir, ids, ENGINE_GO, false)}${ruleFns}
 
 func (p *engine) writeJSON(id int32, b *strings.Builder) { writeJSONWith(p.nodes, p.kids, p.toks, id, b) }
 
