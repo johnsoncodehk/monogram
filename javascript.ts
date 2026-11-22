@@ -149,7 +149,7 @@ const Regex_       = token(seq('/', regexFirstChar, star(regexChar), '/', star(i
   regexContext: {
     divisionAfterTypes: ['Ident', 'Number', 'String', 'Template', 'BigInt'],
     divisionAfterTexts: [')', ']', '++', '--', 'this', 'super', 'true', 'false', 'null', 'undefined'],
-    regexAfterTexts: ['in', 'of', 'instanceof', 'typeof', 'delete', 'void', 'await', 'yield', 'throw', 'return', 'case', 'do', 'else', 'new'],
+    regexAfterTexts: ['in', 'of', 'instanceof', 'typeof', 'delete', 'void', 'await', 'yield', 'throw', 'return', 'case', 'do', 'else', 'new', 'default'],
     // `kw ( … )` heads (control-flow): the closing `)` is a statement head, not a
     // value, so `if (a) /re/` parses `/re/` as a regex rather than division.
     regexAfterParenKeywords: ['if', 'while', 'for', 'with'],

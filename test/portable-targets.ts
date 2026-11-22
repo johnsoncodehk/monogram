@@ -563,6 +563,8 @@ const CASES: Case[] = [
       'do { x(); } while (y);', 'function* gen() { yield* o(); }', 'const { a, b: c, ...r } = o;',
       'const [p, , q, ...z] = arr;', 'label: for (;;) { break label; }', 'async function h() { await x; }',
       '(() => {})();', '(() => {})() + 1;', 'f(() => a, () => b);', 'let g = () => x => x + 1;',
+      // `export default` heads an expression: a `/` after `default` begins a regex (a division cannot follow it)
+      'export default /re/.test(x);', 'export default /=/;', 'switch (a) { default: /re/.test(x); }',
       'x.y.z++;', '(a++).b;', 'a++ instanceof B;', 'a++\n(x);',
       'for (a in b) c;',
       'for (a = x in b) c;',
@@ -679,6 +681,7 @@ const CASES: Case[] = [
     grammar: 'typescript', path: '../typescript.ts',
     accept: [
       ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...EXPORT_DECLS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
+      'export default /re/.test(x);', 'export default /=/;', 'switch (a) { default: /re/.test(x); }',
       ...CTX_CASES.typescript.accept, ...TS_DECORATORS.accept, ...TEMPLATE_STEPS.ts.accept, ...TS_MEMBER_DECORATORS.accept, ...TS_MODULES.accept, ...TRY_STATEMENTS.accept, ...TS_TRY.accept,
       // A class heritage is a LeftHandSideExpression (see the JavaScript cases).
       'f(class extends (a, b) {});', 'f(class extends a[0] {});', 'f(class extends a`t` {});', 'f(class extends a?.b() {});',
