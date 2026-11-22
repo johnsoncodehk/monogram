@@ -506,10 +506,17 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (m === 'r' ? `_drop(_n, ${name}_bpW(${bp}))` : `${name}_bpW(${bp})`),
     // A body guard (emit-portable.ts annotateSteps): opt / sep test it before their one attempt,
-    // star before each attempt, so a refused attempt takes no mark.
-    star: (body, g) => (g === null ? `star${S}(${fn(body)})` : `starIn${S}(${g}, ${fn(body)})`),
-    opt: (body, g) => (g === null ? `opt${S}(${fn(body)})` : `(!ahead(${g}, true) || opt${S}(${fn(body)}))`),
-    sep: (elem, delim, g) => (g === null ? `sepBy${S}(${fn(elem)}, ${sepDelimLid(ids, delim)})` : `(!ahead(${g}, true) || sepBy${S}(${fn(elem)}, ${sepDelimLid(ids, delim)}))`),
+    // star before each attempt, so a refused attempt takes no mark. A clean body (Step.clean) is
+    // attempted without a mark (starC / sepByC; an opt's attempt is the body itself).
+    star: (body, g, c) => (g === null ? `star${c ? 'C' : S}(${fn(body)})` : `starIn${c ? 'C' : S}(${g}, ${fn(body)})`),
+    opt: (body, g, c) => {
+      const attempt = c ? `${body} || true` : `opt${S}(${fn(body)})`;
+      return g === null ? (c ? `(${attempt})` : attempt) : `(!ahead(${g}, true) || ${attempt})`;
+    },
+    sep: (elem, delim, g, c) => {
+      const call = `sepBy${c ? 'C' : ''}${S}(${fn(elem)}, ${sepDelimLid(ids, delim)})`;
+      return g === null ? call : `(!ahead(${g}, true) || ${call})`;
+    },
     altlit: (values) => `altLit${S}([${values.map((v) => lidOf(ids, v)).join(', ')}])`,
     look: (id, is) => `${is ? '' : '!'}look${id}()`,
     ahead: (set, is) => `ahead(${set}, ${is})`,
@@ -946,6 +953,10 @@ function starInW(k: number, once: () => boolean): boolean {
   while (ahead(k, true)) { const sp = pos, bk = _n; if (!once()) { back(sp); _n = bk; break; } }
   return true;
 }
+// A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo.
+function starC(once: () => boolean): boolean { while (once()); return true; }
+function starInC(k: number, once: () => boolean): boolean { while (ahead(k, true) && once()); return true; }
+function sepByCW(elem: () => boolean, delimLid: number): boolean { if (elem()) while (matchLitW(delimLid) && elem()); return true; }
 function optW(body: () => boolean): boolean {
   const sp = pos, bk = _n; if (!body()) { back(sp); _n = bk; } return true;
 }
@@ -990,6 +1001,7 @@ function starInR(k: number, once: () => boolean): boolean {
 function optR(body: () => boolean): boolean {
   const sp = pos; if (!body()) back(sp); return true;
 }
+function sepByCR(elem: () => boolean, delimLid: number): boolean { if (elem()) while (matchLitR(delimLid) && elem()); return true; }
 function sepByR(elem: () => boolean, delimLid: number): boolean {
   const sp0 = pos;
   if (!elem()) { back(sp0); return true; }
