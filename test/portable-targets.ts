@@ -149,8 +149,10 @@ const TS_DECORATORS = {
   ],
 };
 // TypeScript decorators and modifiers of a parameter, as tsc's parser reads them
-// (parseModifiers: a second decorator run after `export` / `default`), and a class member's
-// decorators (the member's second run is owed: see ClassMember in typescript.ts).
+// (parseModifiers: a second decorator run after `export` / `default`, one `static` across both
+// runs; a function type's first parameter takes no decorator, isUnambiguouslyStartOfFunctionType),
+// of an object-literal member (a second run only: no member starts with `@`), and a class member's
+// (`async` a word of its run; the member's second run is owed: see ClassMember in typescript.ts).
 const TS_MEMBER_DECORATORS = {
   accept: [
     'function f(@a @b x) {}', 'class C { constructor(@a() @b() private x: T) {} }', 'class C { m(@a @b x) {} }',
@@ -161,6 +163,16 @@ const TS_MEMBER_DECORATORS = {
     'class C { export\n@d x() {} }', 'class C { default\n@d x() {} }', 'class C { @a @b x() {} }',
     'class C { @d static x() {} }', 'class C { static static() {} }',
     'class C { export\n@d static x() {} }', 'class C { async export\n@d x() {} }',
+    'type T = (x, @a y) => 1;', 'type T = <U>(@a x) => 1;', 'type T = new (@a x) => 1;',
+    'type T = (public x) => 1;', 'type T = { (@a x): void };', 'class C { async async x() {} }',
+    'class C { static async async *x() {} }', 'class C { async static async x() {} }',
+    'class C { async async; }', 'class C { async async get x() {} }',
+    'class C { async async [k: string]: 1 }', 'function f(export @d static x) {}',
+    'function f(@d export @e static x) {}', 'function f(export @d public static x) {}',
+    'class C { constructor(export @d static x) {} }', 'x = { export @d m() {} };',
+    'x = { static async export @d m() {} };', 'x = { export @d async static m() {} };',
+    'x = { default @d static m() {} };', 'x = { export @d [k]: 1 };', 'x = { export\n@d m() {} };',
+    'x = { async export @d async *m() {} };', 'x = { export @d async };', 'x = { export @d static: 1 };',
   ],
   reject: [
     'function f(public @d x) {}', 'function f(@a public @b x) {}', 'function f(static static x) {}',
@@ -170,6 +182,11 @@ const TS_MEMBER_DECORATORS = {
     'class C { public @d x() {} }', 'class C { default @d x() {} }', 'class C { async @d x() {} }',
     'class C { @d static static x() {} }',
     'class C { export @d static static x() {} }', 'class C { async export @d x() {} }',
+    'type T = (@a x) => 1;', 'type T = (export @a x) => 1;', 'let f: (@a x) => 1;',
+    'class C { async static async static x() {} }', 'function f(static export @d static x) {}',
+    'function f(export @d static static x) {}', 'x = { @d m() {} };', 'x = { export @d export @e m() {} };',
+    'x = { export @d static static m() {} };', 'x = { static export @d static m() {} };',
+    'x = { public @d m() {} };', 'x = { export @d };', 'x = { static\n@d m() {} };',
   ],
 };
 const EXPORT_DECLS = {

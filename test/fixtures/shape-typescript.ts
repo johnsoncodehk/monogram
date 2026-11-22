@@ -1101,7 +1101,7 @@ function tsTypeMember(ctx: TsAstCustomCtx): unknown {
 }
 
 // Prop's arms: 0 spread, 1 a modifier run (perhaps empty), then an accessor | `*` method |
-// method | value | shorthand. Arm 1 holds its member's kids as one pack (kids[0]), told apart by
+// method | value | shorthand. Arm 1 holds its run's slots, then its member's kids as one pack, told apart by
 // its shape: a shorthand's starts with its name's text; a method's or value's is 2 (the name,
 // then a method's 4-kid tail or the value); an accessor's and a `*` method's are 5 (name, type
 // parameters, parameters, return type, body), and a `*` method is the one whose modifier words
@@ -1115,7 +1115,12 @@ function estreeProp(ctx: TsAstCustomCtx): unknown {
   const k = ctx.kids;
   const keyed = (kk: readonly unknown[], computed: boolean) => ({ type: 'Property', key: typeof kk[0] === 'string' ? I(kk[0]) : kk[0], value: kk[1], kind: 'init', shorthand: false, computed, method: false });
   if (arm === 0) return keyed(k, false);
-  const pack = arm === 1 && Array.isArray(k[0]) ? k[0] as unknown[] : null;
+  // The run's slots (a list of its decorators, or a `null` for an absent `static`) come first, at
+  // every level of the run's nesting; the member's pack is what is left.
+  const runSlot = (x: unknown) => x === null || (Array.isArray(x) && x.every(d => (d as { type?: string })?.type === 'Decorator'));
+  const unwrap = (a: unknown): unknown => Array.isArray(a) && a.length >= 2 && a.slice(0, -1).every(runSlot) ? unwrap(a[a.length - 1]) : a;
+  const inner = arm === 1 ? unwrap(k) : null;
+  const pack = Array.isArray(inner) ? inner as unknown[] : null;
   if (pack && typeof pack[0] === 'string') return keyed(pack, false);
   if (pack && pack.length === 5) {
     return GENERATOR_MEMBER.test(ctx.src.slice(ctx.off, ctx.end))
