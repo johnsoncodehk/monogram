@@ -4,7 +4,7 @@
 // construct — literals, operators, grouping, calls, indexing, statements, blocks, comments,
 // function shells — to the lowering as already-printed children. Every branch and loop of the
 // algorithm comes from the IR; a lowering only spells it.
-import { type TextUnits, unitLen } from './text-units.ts';
+import { type TextUnits, utf8Of, unitLen } from './text-units.ts';
 
 export type Num = 'int' | 'lid' | 'depth';
 export type ListTy = 'metas' | 'toks' | 'bools' | 'depths' | 'edits';
@@ -61,7 +61,11 @@ export type Expr =
   | { k: 'runEnd'; set: string; s: Expr; i: Expr }
   // Where the literal (non-empty) next occurs in s from i (0 <= i <= len(s)): the first j >= i at
   // which s has it, or len(s) when there is none.
-  | { k: 'find'; s: Expr; i: Expr; lit: string };
+  | { k: 'find'; s: Expr; i: Expr; lit: string }
+  // Where any of the stops (characters of the Basic Multilingual Plane, no surrogate; sorted, no
+  // repeats) next occurs in s from i (0 <= i <= len(s)): the first j >= i at which s has one, or
+  // len(s) when there is none. A stop beyond ASCII is found at its first unit.
+  | { k: 'findAny'; s: Expr; i: Expr; stops: number[] };
 
 export type Stmt =
   | { k: 'let'; name: string; ty: Ty; init: Expr }
@@ -105,6 +109,39 @@ interface VarInfo { ty: Ty; owned: boolean }
 
 export const ATOM = 100;
 
+// The name of the routine that finds the first of `stops` (one per set of stops a family uses).
+export const findAnyName = (stops: readonly number[]): string => `lexFindAny${stops.map((c) => c.toString(16).toUpperCase()).join('_')}`;
+// A set of stops in UTF-8, for a lowering that scans bytes eight at a time. `masks`: the byte
+// tests one round ORs together, each flagging (at least) every byte that may begin a stop: `below`
+// n flags every byte < n (one test for several control-character stops; it also flags the other
+// bytes below n, which the confirmation rejects), `eq` b flags every byte equal to b. `confirm`:
+// at a flagged byte, the stops it may begin, by their bytes after the first: `one` the stops of
+// one byte, `wide` the longer ones grouped by their bytes before the last.
+export type StopBytes = {
+  masks: ({ below: number } | { eq: number })[];
+  one: number[];
+  wide: { head: number[]; last: number[] }[];
+};
+export function stopBytes(stops: readonly number[]): StopBytes {
+  const seqs = stops.map((c) => utf8Of(String.fromCharCode(c)));
+  const one = seqs.filter((q) => q.length === 1).map((q) => q[0]!);
+  const masks: StopBytes['masks'] = one.length > 1 && one.every((b) => b < 0x20) ? [{ below: Math.max(...one) + 1 }] : one.map((b) => ({ eq: b }));
+  const wide: StopBytes['wide'] = [];
+  for (const q of seqs.filter((q) => q.length > 1)) {
+    const head = q.slice(0, -1), g = wide.find((w) => w.head.join() === head.join());
+    if (g) g.last.push(q[q.length - 1]!); else wide.push({ head, last: [q[q.length - 1]!] });
+  }
+  for (const lead of [...new Set(wide.map((w) => w.head[0]!))]) masks.push({ eq: lead });
+  return { masks, one, wide };
+}
+export function checkStops(stops: readonly number[]): void {
+  if (stops.length === 0) throw new Error('algo-ir: findAny() of no stops');
+  stops.forEach((c, k) => {
+    if (!Number.isInteger(c) || c < 0 || c > 0xffff || (c >= 0xd800 && c <= 0xdfff)) throw new Error(`algo-ir: findAny() stop ${c} is not one BMP character`);
+    if (k > 0 && c <= stops[k - 1]!) throw new Error('algo-ir: findAny() stops are not sorted and distinct');
+  });
+}
+
 export type Role = 'param' | 'local' | 'ret';
 
 // Printer services a lowering can use on already-printed children.
@@ -141,6 +178,8 @@ export interface Lowering {
   // The runtime routines `runEnd` and `find` call, each printed once by a family that uses it.
   runEndFn: string;
   findFn: string;
+  // The routine `findAny` calls for one set of stops, named `findAnyName(stops)`.
+  findAnyFn(stops: number[]): string;
   expr: {
     literal(v: number | boolean | string): Printed;
     not(r: R): Printed;
@@ -152,6 +191,7 @@ export interface Lowering {
     inSet(cx: Cx, set: string, c: R): R;
     runEnd(cx: Cx, set: string, s: R, i: R): R;
     find(cx: Cx, s: R, i: R, lit: string): R;
+    findAny(cx: Cx, s: R, i: R, stops: number[]): R;
     // Required when `owns`: an owned copy of a borrowed value.
     own?(cx: Cx, r: R): R;
   };
@@ -310,6 +350,10 @@ class Printer implements Cx {
       case 'find': {
         if (e.lit === '') throw new Error('algo-ir: find() of the empty literal');
         return X.find(this, this.expr(e.s), this.expr(e.i), e.lit);
+      }
+      case 'findAny': {
+        checkStops(e.stops);
+        return X.findAny(this, this.expr(e.s), this.expr(e.i), e.stops);
       }
     }
   }

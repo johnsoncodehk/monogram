@@ -43,7 +43,8 @@ export type LexTok =
       headBail: number[]; headBailNonAscii: boolean;
       pattern: TokenPattern; skip: boolean }
   | { kind: 'string'; name: string; delim: string; skip: boolean }                        // delim..delim, `\` escapes next
-  | { kind: 'line'; name: string; prefix: string; skip: boolean }                         // prefix..end-of-line
+  // prefix, then every character up to the first stop (the class's excluded characters) or the end
+  | { kind: 'line'; name: string; prefix: string; stops: number[]; skip: boolean }
   // open..the first close after it; `guard`: zero-width tests right after the opener.
   | { kind: 'block'; name: string; open: string; close: string; guard: TokenPattern | null; skip: boolean }
   // The general case: the raw token-pattern AST, compiled to a backtracking-free matcher
@@ -452,9 +453,6 @@ export type ParserIR = {
   gtComps: string[];
   rules: RuleIR[];
   tokenSets: TokenSet[];       // the sets `ahead` steps test, indexed by Step.set
-  /** tokenSets[bodyGuardOnly..] are tested by star / opt / sep body guards (Step.guard) and by
-   *  nothing else, so a target that does not render body guards can leave them out of its table. */
-  bodyGuardOnly: number;
   ctxWords: string[];          // the operator word each context bit reserves in an `aheadCtx` test (ctxWords[i] for bit 1 << i); empty when no step tests one
   lookaheads: Alt[];           // the bodies `look` steps run, indexed by Step.id; a body names only lower ids
   shared: Step[];              // the steps printed once and called from each site, indexed by Step.share (see shareSteps)
@@ -493,6 +491,11 @@ function buildIR(grammar: CstGrammar): ParserIR {
   }
   if (grammar.markup) {
     throw new Error('portable: markup-mode grammars are out of scope (use jsTarget or the interpreter path)');
+  }
+  // The portable lexers have no element-region frame stack yet (ElementRegion, emit-lexer.ts):
+  // refused rather than lexed without the region, so no target diverges from the interpreter.
+  if (grammar.elements) {
+    throw new Error('portable: element-region grammars are out of scope until the portable lexers carry the frame stack (use jsTarget or the interpreter path)');
   }
 
   const a = analyzeGrammar(grammar);
@@ -890,7 +893,6 @@ function buildIR(grammar: CstGrammar): ParserIR {
       }
     }
   };
-  const bodyGuardOnly = tokenSets.length;   // annotateSteps's body guards are the last sets made
   for (const r of rules) {
     if (r.kind === 'rd') {
       r.altFirst = r.alts.map((alt) => seqFirst(alt));
@@ -915,7 +917,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
   const entry = findEntryRule(grammar);
   const forms = formsOf(rules, lookaheads, shared.length, entry);
   const identPrefix = Object.fromEntries(identLike.map((n) => [n, grammar.tokens.find((t) => t.name === n)?.identifierPrefix ?? '']));
-  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, bodyGuardOnly, ctxWords, lookaheads, shared, forms, reuse: reusePlanOf(rules, entry), suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike, identPrefix };
+  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse: reusePlanOf(rules, entry), suppressSets, regexCtx, tpl, newlineCfg, identToken, identLike, identPrefix };
 }
 
 // The step lists a rule runs: an rd rule's alternatives, a Pratt rule's NUD and LED arms.
@@ -1393,8 +1395,8 @@ function lexTok(t: TokenDecl): LexTok {
       pattern: t.pattern, skip,
     };
   }
-  const line = lineCommentShape(t.pattern);   // PRECISE: prefix-literal then star(non-newline)
-  if (line) return { kind: 'line', name: t.name, prefix: line, skip };
+  const line = lineCommentShape(t.pattern);
+  if (line) return { kind: 'line', name: t.name, ...line, skip };
   return { kind: 'pattern', name: t.name, pattern: t.pattern, skip };
 }
 
@@ -1440,16 +1442,25 @@ function blockShape(p: TokenPattern): { open: string; close: string; guard: Toke
   return { open, close, guard: guards.length === 0 ? null : guards.length === 1 ? guards[0] : { type: 'seq', items: guards } };
 }
 
-// A token is a line comment iff its pattern is `seq(<literal>, star(charClass excluding \n))`.
-function lineCommentShape(p: TokenPattern): string | null {
+// `<literal> [^stops]*`: a literal, then a greedy run of every character but a set of stops, each
+// one character of the Basic Multilingual Plane (not a surrogate), so a target finds it by its
+// UTF-16 unit or its UTF-8 bytes. The shape is the pattern exactly: the scanner runs to the first
+// stop, so the stops are all the class's characters. A class with a range is no line shape.
+function lineCommentShape(p: TokenPattern): { prefix: string; stops: number[] } | null {
   if (typeof p === 'string' || p.type !== 'seq' || p.items.length !== 2) return null;
   const [head, tail] = p.items;
-  if (typeof head !== 'string') return null;
-  if (typeof tail === 'string' || tail.type !== 'repeat' || tail.min !== 0) return null;
+  if (!isLit(head)) return null;
+  if (typeof tail === 'string' || tail.type !== 'repeat' || tail.min !== 0 || tail.max !== undefined || !tail.greedy) return null;
   const body = tail.body;
-  if (typeof body === 'string' || body.type !== 'charClass' || !body.negate) return null;
-  const excludesNl = body.items.some((it): boolean => it.type === 'char' && it.value === '\n');
-  return excludesNl ? head : null;
+  if (typeof body === 'string' || body.type !== 'charClass' || !body.negate || body.items.length === 0) return null;
+  const stops: number[] = [];
+  for (const it of body.items) {
+    if (it.type !== 'char' || it.value.length !== 1) return null;
+    const c = it.value.charCodeAt(0);
+    if (c >= 0xd800 && c <= 0xdfff) return null;
+    stops.push(c);
+  }
+  return { prefix: head, stops: [...new Set(stops)].sort((a, b) => a - b) };
 }
 
 function codesToRanges(codes: number[]): CharRange[] {

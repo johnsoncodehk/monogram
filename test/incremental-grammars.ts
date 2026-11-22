@@ -225,10 +225,20 @@ for (const name of ['javascript', 'typescript']) {
 const FRAME_DOCS: Record<string, string[]> = {
   javascript: ['f(a, `x${b + c}`);', 'let q = 1;\nf(`x${(b)}y${c}`);\ng`t${`u${v}`}w`;'],
   typescript: ['let s: string = `a${b as T}c${{ d: 1 }.d}`;\nx = 1;'],
-  typescriptreact: ['let s = `a${b}c${{ d: 1 }.d}`;\nx = 1;'],
-  javascriptreact: ['let s = `a${b}c${`${d}`}`;\nx = 1;'],
+  // element regions (JSX) share the frame stack: text, tags, holes, templates in holes, a
+  // type-parameter signature the lexer decides by rewinding, `</*` outside elements
+  typescriptreact: [
+    'let s = `a${b}c${{ d: 1 }.d}`;\nx = 1;',
+    'let a = <p>It\'s {x} 50%</p>;\nlet b = 1;',
+    'f(<a b={c > d}><i/>t</a>, `x${<b>y</b>}`);',
+    'type F = <T>(x: T) => T;\nlet g = <T,>(y: T) => <q>{y}</q>;',
+    // (not `</ 2`: a `/` that fails as a regex is a division decided by later text, a separate
+    // relex miss on master: `f() < / 2;` + `/`)
+    'let m = new Map</* c */string, X>();',
+  ],
+  javascriptreact: ['let s = `a${b}c${`${d}`}`;\nx = 1;', 'let a = <><p>It\'s</p>{`${<b/>}`}</>;\nx</*c*/y;'],
 };
-const FRAME_INS = ['`', '$', '{', '}', '(', ')', 'x', ' ', '\n'];
+const FRAME_INS = ['`', '$', '{', '}', '(', ')', '<', '>', '/', ':', ',', 'x', ' ', '\n'];
 let frameSteps = 0;
 for (const [name, docs] of Object.entries(FRAME_DOCS)) {
   const em = (await import(`${TMP}/${name}.mts?v=` + process.pid)) as Em;

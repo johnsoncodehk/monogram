@@ -271,6 +271,10 @@ export function tokenCensus(g: CstGrammar, tmJson: TmGrammarJson): TokenCensus {
       if (t.scope && !full.includes(t.scope)) { orphans.push(`${t.name}[markup-unmodeled:${t.scope}]`); continue; }
       bump('markup-region'); continue;
     }
+    // An element region's text token (ElementRegion.text) is lexed only inside the region; its
+    // children text is painted by the element patterns (today gen-tm's JSX repository, whose
+    // children region must exist; region-aware element patterns are the generators' item).
+    if (g.elements?.text === t.name && repo['jsx-children']) { bump('element-region'); continue; }
     const delim = tokenPatternLiteralText(t);                          // a region owns this token's delimiter?
     if (delim && full.includes(JSON.stringify(delim).slice(1, -1))) { bump('region-owned'); continue; }
     orphans.push(`${t.name}[${t.flags.join(',') || '-'}]`);

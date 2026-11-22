@@ -39,7 +39,11 @@ and markup modes) carry the interpreter's lexer inlined into the module.
 The portable targets (`tsTarget` / `goTarget` / `rustTarget`) implement the token-stream and
 newline modes. They refuse indent and markup grammars (`buildIR` in
 [`src/emit-portable.ts`](../src/emit-portable.ts)) rather than emit a lexer that would
-mis-tokenize them. So YAML and HTML have the interpreter and `jsTarget` only.
+mis-tokenize them. So YAML and HTML have the interpreter and `jsTarget` only. They also refuse a
+grammar that declares element regions (`elements`: TSX and JSX) until the portable lexers carry
+the region frame stack (roadmap item 2's portable part); before regions existed they emitted a
+token-stream TSX / JSX parser that rejected text children with punctuation and lexed `</` and
+`/>` as tokens everywhere.
 
 What `jsTarget` has and the portable targets do not yet, the precondition for retiring it, is
 listed in [ROADMAP.md](ROADMAP.md#1-one-portable-engine-one-shared-runtime-description).
@@ -68,6 +72,32 @@ listed in [ROADMAP.md](ROADMAP.md#1-one-portable-engine-one-shared-runtime-descr
   Rust's `cst_json_with` / `slim_json_with` read it from the builder).
 - Byte-based Go/Rust use UTF-8 offsets: identical to the JS interpreter's for ASCII; for
   non-ASCII text the offset units differ.
+
+## The builder contract
+
+Accepting or rejecting is the parser's verdict, never the builder's (#178). A builder must keep
+a node for the root, the entry rule, of every accepted parse. The built-in builders always do:
+`CstBuilder`, and `SlimBuilder`, which keeps the root even with no child. A builder that keeps
+nothing for the root is a programming error and fails loudly: Go panics (`errNoRoot`), Rust
+panics (`Spanned::root`), TS throws (`runW`). It is never reported as a reject. A rejected input
+still returns `ok == false` / `None` / `null`, whatever the builder.
+
+To ask only whether a text parses, no target has an entry that builds nothing. The cheapest
+existing way:
+
+- Go: `ParseWith(src, cst)` with one `*CstBuilder` kept across calls. It runs the direct
+  engine, not the `Builder` interface, and allocates nothing after warm-up. At #180 it was
+  182.7M instructions on checker.ts against 212.8M for a kept `SlimBuilder` (profile job, `Go
+  Ir reuse` and `Go Ir builder`). A lexer error panics with `*LexError`, so the caller
+  recovers it as "does not parse".
+- Rust: `parse_with(src, &mut b)` with one `CstBuilder` kept across calls; it allocates nothing
+  after warm-up. A lexer error panics.
+- TS: `parse(src) !== null`, which builds the plain-object CST. A lexer error throws.
+
+Owed: an `accepts(src)` entry per target that lexes and runs the recognize forms the engine
+already has for lookahead. It would keep no node, kid or scratch entry, take no checkpoint,
+return `false` on a lexer error, and cost below the direct engine's parse. It is not measured:
+the profile job would get it as a row.
 
 ## Builder reuse and the cost model
 

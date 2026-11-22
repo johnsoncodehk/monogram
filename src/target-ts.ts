@@ -13,7 +13,7 @@ import type {
 } from './shape-schema.ts';
 import { validateShapeOrThrow } from './shape-validate.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
-import { ATOM, COMPARISON, type BinOp, type Lowering, type R, type Ty } from './algo-ir.ts';
+import { ATOM, COMPARISON, findAnyName, type BinOp, type Lowering, type R, type Ty } from './algo-ir.ts';
 import { UNI_ID_CONTINUE, UNI_ID_START } from './uni-ident.ts';
 import { type TextUnits, unitLen } from './text-units.ts';
 
@@ -2995,6 +2995,15 @@ function lexFind(s: string, i: number, lit: string): number {
   const k = s.indexOf(lit, i);
   return k < 0 ? s.length : k;
 }`,
+  // One code unit per round, compared with each stop: no allocation, no regular expression.
+  findAnyFn: (stops) => `// Where the next of ${stops.map((c) => `U+${c.toString(16).toUpperCase().padStart(4, '0')}`).join(', ')} is in s from i, or s.length.
+function ${findAnyName(stops)}(s: string, i: number): number {
+  for (; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (${stops.map((c) => `c === ${c}`).join(' || ')}) return i;
+  }
+  return s.length;
+}`,
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${tsWrap(r, ATOM)}`, prec: 90 }),
@@ -3011,6 +3020,7 @@ function lexFind(s: string, i: number, lit: string): number {
     inSet: (_cx, set, c) => ({ c: `${set}[${c.c}] === 1`, ty: 'bool', nat: 'bool', prec: TS_OPS.eq[1] }),
     runEnd: (cx, set, s, i) => cx.atom(`lexRunEnd(${s.c}, ${i.c}, ${set})`, 'int', 'number'),
     find: (cx, s, i, lit) => cx.atom(`lexFind(${s.c}, ${i.c}, ${J(lit)})`, 'int', 'number'),
+    findAny: (cx, s, i, stops) => cx.atom(`${findAnyName(stops)}(${s.c}, ${i.c})`, 'int', 'number'),
     own: (_cx, r) => r,
   },
   stmt: {

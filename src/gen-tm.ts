@@ -4897,6 +4897,10 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       if (t === jsx.selfCloseTok || t === jsx.closeTok) jsxOwnedTokens.add(tok.name);
     }
   }
+  // An element region's text token is lexed only inside the region (ElementRegion): its pattern
+  // is no flat token match. (Region-aware element patterns are the generators' item; until then
+  // the children text is the fixed JSX repository's.)
+  if (grammar.elements) jsxOwnedTokens.add(grammar.elements.text);
 
   // ── 1b. Detect regex literal disambiguation ──
   const regexInfo = detectRegexLiteral(grammar, tokenNames);

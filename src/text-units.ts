@@ -26,3 +26,8 @@ export function firstUnit(text: string, units: TextUnits): number {
 export function oneUnit(text: string): boolean {
   return TEXT_UNITS.every((u) => unitLen(text, u) === 1);
 }
+
+/** The UTF-8 bytes of `text`. */
+export function utf8Of(text: string): number[] {
+  return [...Buffer.from(text, 'utf8')];
+}
