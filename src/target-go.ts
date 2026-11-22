@@ -9,7 +9,7 @@
 // stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
-import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
 import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, prattOpTables, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
@@ -941,47 +941,10 @@ function predAltBody(branches: Step[][], ids: LexIdPlan, firsts: FirstSig[] | un
   return `t := p.peek(); if t == nil { return false }; ${arms}; return false`;
 }
 
-type ReusePlanA = { kind: 'A'; topOneBody: string };
-type ReusePlanB = { kind: 'B'; hasHead: boolean; headRule: string | null; loopTok: string; loopRule: string };
-type ReusePlan = ReusePlanA | ReusePlanB;
-
-function matchLoopSeq(step: Step): { loopTok: string; loopRule: string } | null {
-  if (step.t !== 'seq' || step.steps.length !== 2) return null;
-  const [a, b] = step.steps;
-  if (a.t !== 'tok') return null;
-  if (b.t !== 'opt' || b.steps.length !== 1 || b.steps[0].t !== 'rule') return null;
-  return { loopTok: a.name, loopRule: (b.steps[0] as { t: 'rule'; name: string }).name };
-}
-
-function topReusePlan(ir: ParserIR): ReusePlan | null {
-  const entry = ir.rules.find((r) => r.name === ir.entry);
-  if (!entry || entry.kind !== 'rd' || entry.alts.length !== 1) return null;
-  const alt = entry.alts[0];
-  if (alt.length === 1 && alt[0].t === 'star') {
-    const step = alt[0].step;
-    if (step.t === 'rule') return { kind: 'A', topOneBody: `\treturn p.parse${step.name}()` };
-    if (step.t === 'alt') {
-      for (const br of step.branches) {
-        if (br.length !== 1 || br[0].t !== 'rule') return null;
-      }
-      const tries = step.branches.map((br) => {
-        const name = (br[0] as { t: 'rule'; name: string }).name;
-        return `\t{ sp := p.pos; n := p.parse${name}(); if n >= 0 { return n }; p.back(sp) }`;
-      }).join('\n');
-      return { kind: 'A', topOneBody: `${tries}\n\treturn -1` };
-    }
-    const loop = matchLoopSeq(step);
-    if (loop) return { kind: 'B', hasHead: false, headRule: null, ...loop };
-    return null;
-  }
-  if (alt.length === 2 && alt[0].t === 'opt' && alt[1].t === 'star') {
-    const hs = alt[0].steps;
-    if (hs.length !== 1 || hs[0].t !== 'rule') return null;
-    const loop = matchLoopSeq(alt[1].step);
-    if (!loop) return null;
-    return { kind: 'B', hasHead: true, headRule: hs[0].name, ...loop };
-  }
-  return null;
+// Shape A's one top-level entry: the first of its rules that matches (native engine).
+function topOneBody(plan: ReusePlanA): string {
+  if (plan.rules.length === 1) return `\treturn p.parse${plan.rules[0]}()`;
+  return `${plan.rules.map((n) => `\t{ sp := p.pos; n := p.parse${n}(); if n >= 0 { return n }; p.back(sp) }`).join('\n')}\n\treturn -1`;
 }
 
 function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
@@ -1027,7 +990,7 @@ ${needPeek ? '\t_ft := p.peek()\n' : ''}${dispatchGo(r.altDispatch, '_ft', ids, 
 function rdEntryWithReuseA(r: RdRule, plan: ReusePlanA, ar: ArenaIdPlan): string {
   return `type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidStart, KidCount int }
 func (p *engine) parseTopOne() int32 {
-${plan.topOneBody}
+${topOneBody(plan)}
 }
 func (p *engine) parse${r.name}() int32 {
 \tsave := p.pos; sb := len(p.scratch)
@@ -1291,7 +1254,7 @@ var post_${r.name} = [${ops.size}]postOp{${post}}`;
 const goEditBody = '\td.text, d.toks, relexed = relexEdits(oldText, oldToks, edits)';
 
 function docEditBlockGo(ir: ParserIR, shared: SharedAlgorithms): string {
-  const topReuse = topReusePlan(ir);
+  const topReuse = ir.reuse;
   const shapeA = topReuse?.kind === 'A';
   const shapeB = topReuse?.kind === 'B';
   const hasHeadB = !!(shapeB && topReuse.kind === 'B' && topReuse.hasHead);
@@ -1914,12 +1877,10 @@ ${needPeek ? '\t_ft := p.peek()\n' : ''}${dispatchGo(r.altDispatch, '_ft', ids, 
 }`;
 }
 
+// Shape A's one top-level entry in builder form.
 function topOneBodyW(plan: ReusePlanA): string {
-  return plan.topOneBody
-    .replace(/\{ sp := p\.pos; n := p\.parse([A-Za-z0-9_]+)\(\); if n >= 0 \{ return n \}; p\.back\(sp\) \}/g,
-      '{ sp := p.pos; fr, ok := p.parse$1W(); if ok { return fr, true }; p.back(sp) }')
-    .replace(/return p\.parse([A-Za-z0-9_]+)\(\)/g, 'return p.parse$1W()')
-    .replace(/return -1/g, 'return spanned{}, false');
+  if (plan.rules.length === 1) return `\treturn p.parse${plan.rules[0]}W()`;
+  return `${plan.rules.map((n) => `\t{ sp := p.pos; fr, ok := p.parse${n}W(); if ok { return fr, true }; p.back(sp) }`).join('\n')}\n\treturn spanned{}, false`;
 }
 
 function rdEntryWithReuseAW(r: RdRule, plan: ReusePlanA, ar: ArenaIdPlan, recv: string): string {
@@ -2164,7 +2125,7 @@ ${dispatchGo(r.nudDispatch, 't', ids, nudArm)}
 }
 
 function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  const reuse = topReusePlan(ir);
+  const reuse = ir.reuse;
   // entryHs: flat entry-level handles (shape-A kids / shape-B root kids), snapshotted
   // before finishW consumes scratch — DocWith reuse reads this, never Builder.Nodes.
   const entriesField = reuse ? '\n\tentries []EntryMeta\n\tentryHs []int32' : '';
@@ -2919,7 +2880,7 @@ func inCtxWords(ctx uint8, t *Tok) bool { return false${ctxWordLids(ir, ids).map
 }
 
 function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  const reuse = topReusePlan(ir);
+  const reuse = ir.reuse;
   const dropTtIds = ['$punct', '$keyword', '$operator']
     .map((n) => {
       try { return ttIdOf(ar, n); } catch { return null; }
@@ -2936,7 +2897,7 @@ function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): stri
   // (measured ~6–8ms / ~12–15% on 2MB TS). Hot path for *CstBuilder reuses
   // the native engine; other Builders use interface parserW.
   const wMethods = emitParserMethodsW('parserW', ir, ids, ar);
-  const topReuse = topReusePlan(ir);
+  const topReuse = ir.reuse;
   const shapeA = topReuse?.kind === 'A';
   const shapeB = topReuse?.kind === 'B';
   const hasHeadB = !!(shapeB && topReuse && topReuse.kind === 'B' && topReuse.hasHead);
@@ -3345,7 +3306,7 @@ export const goTarget = defineTarget({
     const ir = portableIR(grammar);
     const ids = buildLexIdPlan(ir);
     const ar = buildArenaIdPlan(ir, ids);
-    const reuse = topReusePlan(ir);
+    const reuse = ir.reuse;
     const ruleFns = [...ir.rules.filter((r) => ir.forms.buildRules.includes(r.name)).map((r) => {
       if (r.kind === 'pratt') return prattRule(r, ir.tpl, ids, ar);
       if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids, ar);

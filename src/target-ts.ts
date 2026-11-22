@@ -4,7 +4,7 @@
 // index LEDs), and a CST→JSON printer over stdin. It is the reference rendering — its CST
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
-import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlanA as PortableReusePlanA, type ReusePlanB } from './emit-portable.ts';
 import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
@@ -573,50 +573,17 @@ function predAltBody(branches: Step[][], ids: LexIdPlan, firsts: FirstSig[] | un
   return `const t = peek(); if (t === null) return false; ${arms} return false;`;
 }
 
-/** Shape A: star(rule|alt(rule…)). Shape B: [opt(rule)]? star(seq(tok, opt(rule))). */
-type ReusePlanA = { kind: 'A'; rules: string[]; topOneBody: string };
-type ReusePlanB = { kind: 'B'; hasHead: boolean; headRule: string | null; loopTok: string; loopRule: string };
+type ReusePlanA = PortableReusePlanA & { topOneBody: string };
 type ReusePlan = ReusePlanA | ReusePlanB;
 
-function matchLoopSeq(step: Step): { loopTok: string; loopRule: string } | null {
-  if (step.t !== 'seq' || step.steps.length !== 2) return null;
-  const [a, b] = step.steps;
-  if (a.t !== 'tok') return null;
-  if (b.t !== 'opt' || b.steps.length !== 1 || b.steps[0].t !== 'rule') return null;
-  return { loopTok: a.name, loopRule: (b.steps[0] as { t: 'rule'; name: string }).name };
-}
-
+// The entry rule's reuse plan (emit-portable ParserIR.reuse), with shape A's one top-level entry
+// printed for the direct engine.
 function topReusePlan(ir: ParserIR): ReusePlan | null {
-  const entry = ir.rules.find((r) => r.name === ir.entry);
-  if (!entry || entry.kind !== 'rd' || entry.alts.length !== 1) return null;
-  const alt = entry.alts[0];
-  // Shape A (unchanged): sole step star(rule) or star(alt(rule…))
-  if (alt.length === 1 && alt[0].t === 'star') {
-    const step = alt[0].step;
-    if (step.t === 'rule') return { kind: 'A', rules: [step.name], topOneBody: `  return parse${step.name}();` };
-    if (step.t === 'alt') {
-      for (const br of step.branches) {
-        if (br.length !== 1 || br[0].t !== 'rule') return null;
-      }
-      const tries = step.branches.map((br) => {
-        const name = (br[0] as { t: 'rule'; name: string }).name;
-        return `  { const sp = pos; const n = parse${name}(); if (n !== null) return n; back(sp); }`;
-      }).join('\n');
-      return { kind: 'A', rules: step.branches.map((br) => (br[0] as { t: 'rule'; name: string }).name), topOneBody: `${tries}\n  return null;` };
-    }
-    const loop = matchLoopSeq(step);
-    if (loop) return { kind: 'B', hasHead: false, headRule: null, ...loop };
-    return null;
-  }
-  // Shape B with optional head: [opt(rule R), star(seq(tok T, opt(rule R2)))]
-  if (alt.length === 2 && alt[0].t === 'opt' && alt[1].t === 'star') {
-    const hs = alt[0].steps;
-    if (hs.length !== 1 || hs[0].t !== 'rule') return null;
-    const loop = matchLoopSeq(alt[1].step);
-    if (!loop) return null;
-    return { kind: 'B', hasHead: true, headRule: hs[0].name, ...loop };
-  }
-  return null;
+  const r = ir.reuse;
+  if (r?.kind !== 'A') return r;
+  const topOneBody = r.rules.length === 1 ? `  return parse${r.rules[0]}();`
+    : `${r.rules.map((name) => `  { const sp = pos; const n = parse${name}(); if (n !== null) return n; back(sp); }`).join('\n')}\n  return null;`;
+  return { ...r, topOneBody };
 }
 
 function rdRule(r: RdRule, ids: LexIdPlan): string {
