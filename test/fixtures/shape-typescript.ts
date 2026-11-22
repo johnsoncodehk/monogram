@@ -354,6 +354,9 @@ export const typescriptShape: ShapeSpec = {
       'Modifier keywords are dropped leaves; accessibility/readonly/optional/`...`rest ' +
       'flags must be recovered from alt structure + remaining kids. Excessively branched ' +
       'for choice+node without a flag-from-alt primitive.', { types: ['Identifier', 'Identifier', 'Identifier'] }),
+    CatchParameter: custom('estreeCatchParam',
+      '2 alts: a binding identifier or a binding pattern, each with an optional type annotation. ' +
+      'Lowered to ESTree\'s CatchClause param: the Identifier, or the pattern itself.', { types: ['Identifier', 'Identifier'] }),
     ForHead: custom('estreeForHead',
       '4 alts (for-let/const/var/using ; for(;;) ; for-in ; for-of) are three different ' +
       'ESTree parents (ForStatement / ForInStatement / ForOfStatement) assembled at Stmt ' +
@@ -484,7 +487,7 @@ export const typescriptShape: ShapeSpec = {
 export const EXPECTED_CST_NAMES = [
   'Type', 'TypeMember', 'DecoratorExpr', 'TypeofRef', 'Expr', 'Prop', 'MemberName',
   'NewTarget', 'ClassHeritage', 'Stmt', 'Block', 'BindingProperty', 'BindingElement',
-  'ArrayBindingElement', 'BindingPattern', 'Binding', 'ForBinding', 'Param', 'ForHead', 'ForAwaitHead',
+  'ArrayBindingElement', 'BindingPattern', 'Binding', 'ForBinding', 'Param', 'CatchParameter', 'ForHead', 'ForAwaitHead',
   'SwitchCase', 'TypeParams', 'TypeParam', 'Decl', 'ClassMember',
   'EnumMember', 'ImportClause', 'ImportSpecifier', 'ExportSpecifier', 'ModuleReference', 'TypeStart', 'Program',
 ] as const;
@@ -954,6 +957,15 @@ function estreeParam(ctx: TsAstCustomCtx): unknown {
   return { type: 'Identifier', ...(typeof id === 'string' ? { name: id } : id as object), decorators: flatKids(k[0] ?? []), optional: arm === 1 };
 }
 
+// A catch parameter: arm 0 a name, arm 1 a pattern, each with an optional type annotation.
+function estreeCatchParam(ctx: TsAstCustomCtx): unknown {
+  const arm = ctx.altPath[0];
+  if (arm !== 0 && arm !== 1) return unhandledCustom('estreeCatchParam', ctx);
+  // ESTree's CatchClause param: the Identifier or the pattern itself.
+  const id = ctx.kids[0];
+  return typeof id === 'string' ? { type: 'Identifier', name: id } : id;
+}
+
 function estreeForHead(ctx: TsAstCustomCtx): unknown {
   const arm = ctx.altPath[0];
   // Classic heads (arms 0/1) mirror the Rust streaming SC_FORSTATEMENT schema:
@@ -1154,6 +1166,7 @@ export const typescriptEstreeCustoms: TsAstCustoms = {
   estreeArrayPattern,
   estreeBindingProperty,
   estreeParam,
+  estreeCatchParam,
   estreeForHead,
   estreeForAwaitHead,
   estreeSwitchCase,

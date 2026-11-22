@@ -667,6 +667,16 @@ const SwitchCase = rule($ => [
   Stmt,
 ]);
 
+// A catch clause's parameter (14.15 `CatchParameter : BindingIdentifier | BindingPattern`), not
+// a FormalParameter, with TypeScript's type annotation (tsc's parseCatchClause reads
+// parseVariableDeclaration: a name or pattern and a type, no `!`; which types are allowed is the
+// checker's). No initializer: the production has none, and tsc's parser takes one and leaves it
+// to the checker (docs/CORRECTNESS.md). No rest, `?`, `this`, decorator or modifier.
+const CatchParameter = rule($ => [
+  [...bindingIdentifier, opt(':', Type)],
+  [BindingPattern, opt(':', Type)],
+]);
+
 const Stmt = rule($ => [
   Block,
   [alt('let', 'const', 'var'), sep(Binding, ','), asi()],
@@ -684,7 +694,8 @@ const Stmt = rule($ => [
   // inside a switch eats `case` as the label and the whole switch cascades.
   ['break', opt(sameLine, notReserved, Ident), asi()],
   ['continue', opt(sameLine, notReserved, Ident), asi()],
-  ['try', Block, opt('catch', opt('(', alt(Param, BindingPattern), ')'), Block), opt('finally', Block)],
+  // TryStatement (14.15): a Catch, a Finally, or both, so `try {}` has no parse.
+  ['try', Block, not(not(alt('catch', 'finally'))), opt('catch', opt('(', CatchParameter, ')'), Block), opt('finally', Block)],
   [notReserved, Ident, ':', $],
   ';',
   ['debugger', asi()],
@@ -1174,7 +1185,7 @@ export default defineGrammar({
     Expr, Prop, MemberName, NewTarget, ClassHeritage,
     Stmt, Block,
     BindingProperty, BindingElement, ArrayBindingElement, BindingPattern,
-    Binding, ForBinding, Param, ForHead, ForAwaitHead, SwitchCase,
+    Binding, ForBinding, Param, CatchParameter, ForHead, ForAwaitHead, SwitchCase,
     TypeParams, TypeParam,
     Decl, ClassMember, EnumMember,
     ImportClause, ImportSpecifier, ExportSpecifier, ModuleReference,

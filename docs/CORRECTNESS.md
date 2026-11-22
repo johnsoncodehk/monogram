@@ -50,6 +50,7 @@ mean reproducing those quirks; instead it follows the productions:
 | `import x from "m"`⏎`with { type: "json" }` | accept | reject | accept (acorn) | `WithClause` has no `[no LineTerminator here]`; `tsc`'s parser reads `with` there only on the specifier's line. |
 | `import defer x from "m"`, `import defer { a } from "m"` | reject | accept | | The import-defer proposal defers a namespace import only (`import defer NameSpaceImport FromClause`). |
 | `import x = require("m")`, `x = import(a, b, c)`, `x = import(...a)` (JavaScript) | reject | accept | reject (acorn) | `import x = …` is TypeScript's. An ImportCall takes one or two AssignmentExpressions (`import ( AssignmentExpression , AssignmentExpression ,opt )`), and no spread. |
+| `try {} catch (e = 1) {}`, `try {} catch (e: T = 1) {}` | reject | accept | reject | A CatchParameter is a BindingIdentifier or a BindingPattern, with no Initializer; `tsc`'s parser reads a variable declaration there and leaves the initializer to the checker. |
 
 `tsc` rejecting the first and accepting the others (its parser doesn't enforce those
 productions until the checker) is exactly why "match `tsc`" can't *be* the definition of

@@ -26,19 +26,19 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 
 | target | grammar | input | mode | tokens | nodes | allocations | per token | per node | bytes | B per token | B per node | result allocs | result bytes | overhead bytes |
 |:--|:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
-| ts | typescript | acorn.js | parse | 42,209 | 28,638 | 196,485 | 4.66 | 6.86 | 7,206,604 | 170.7 | 251.6 | 79,491 | 2,058,124 | 5,148,480 |
+| ts | typescript | acorn.js | parse | 42,209 | 28,638 | 196,479 | 4.65 | 6.86 | 7,206,412 | 170.7 | 251.6 | 79,491 | 2,058,124 | 5,148,288 |
 | ts | typescript | acorn.js | parseWith | 42,209 | 28,638 | 143,009 | 3.39 | 4.99 | 4,717,632 | 111.8 | 164.7 | 79,491 | 2,313,619 | 2,404,013 |
 | ts | typescript | lib.es5.d.ts | parse | 13,659 | 7,165 | 68,271 | 5.00 | 9.53 | 2,536,788 | 185.7 | 354.1 | 20,279 | 488,576 | 2,048,212 |
 | ts | typescript | lib.es5.d.ts | parseWith | 13,659 | 7,165 | 45,296 | 3.32 | 6.32 | 1,543,864 | 113.0 | 215.5 | 20,279 | 590,445 | 953,419 |
-| ts | typescript | _tsserver.js | parse | 4,932 | 3,136 | 22,406 | 4.54 | 7.14 | 832,784 | 168.9 | 265.6 | 8,667 | 222,576 | 610,208 |
+| ts | typescript | _tsserver.js | parse | 4,932 | 3,136 | 22,400 | 4.54 | 7.14 | 832,592 | 168.8 | 265.5 | 8,667 | 222,576 | 610,016 |
 | ts | typescript | _tsserver.js | parseWith | 4,932 | 3,136 | 16,205 | 3.29 | 5.17 | 545,680 | 110.6 | 174.0 | 8,667 | 252,082 | 293,598 |
-| ts | typescript | _tsserver.js ×4 | parse | 19,728 | 12,541 | 89,541 | 4.54 | 7.14 | 3,285,780 | 166.6 | 262.0 | 34,662 | 890,172 | 2,395,608 |
+| ts | typescript | _tsserver.js ×4 | parse | 19,728 | 12,541 | 89,517 | 4.54 | 7.14 | 3,285,012 | 166.5 | 261.9 | 34,662 | 890,172 | 2,394,840 |
 | ts | typescript | _tsserver.js ×4 | parseWith | 19,728 | 12,541 | 64,741 | 3.28 | 5.16 | 2,137,180 | 108.3 | 170.4 | 34,662 | 1,008,192 | 1,128,988 |
-| ts | javascript | acorn.js | parse | 42,051 | 28,638 | 193,056 | 4.59 | 6.74 | 7,105,668 | 169.0 | 248.1 | 79,491 | 2,058,124 | 5,047,544 |
+| ts | javascript | acorn.js | parse | 42,051 | 28,638 | 193,052 | 4.59 | 6.74 | 7,105,540 | 169.0 | 248.1 | 79,491 | 2,058,124 | 5,047,416 |
 | ts | javascript | acorn.js | parseWith | 42,051 | 28,638 | 142,915 | 3.40 | 4.99 | 4,715,724 | 112.1 | 164.7 | 79,491 | 2,313,271 | 2,402,453 |
-| ts | javascript | _tsserver.js | parse | 4,928 | 3,136 | 21,851 | 4.43 | 6.97 | 817,972 | 166.0 | 260.8 | 8,667 | 222,576 | 595,396 |
+| ts | javascript | _tsserver.js | parse | 4,928 | 3,136 | 21,847 | 4.43 | 6.97 | 817,844 | 166.0 | 260.8 | 8,667 | 222,576 | 595,268 |
 | ts | javascript | _tsserver.js | parseWith | 4,928 | 3,136 | 16,297 | 3.31 | 5.20 | 548,208 | 111.2 | 174.8 | 8,667 | 251,964 | 296,244 |
-| ts | javascript | _tsserver.js ×4 | parse | 19,712 | 12,541 | 87,321 | 4.43 | 6.96 | 3,226,532 | 163.7 | 257.3 | 34,662 | 890,172 | 2,336,360 |
+| ts | javascript | _tsserver.js ×4 | parse | 19,712 | 12,541 | 87,305 | 4.43 | 6.96 | 3,226,020 | 163.7 | 257.2 | 34,662 | 890,172 | 2,335,848 |
 | ts | javascript | _tsserver.js ×4 | parseWith | 19,712 | 12,541 | 65,109 | 3.30 | 5.19 | 2,147,292 | 108.9 | 171.2 | 34,662 | 1,007,719 | 1,139,573 |
 | js | typescript | acorn.js | fresh | 42,209 | 28,813 | 5,109 | 0.12 | 0.18 | 13,844,124 | 328.0 | 480.5 | - | - | - |
 | js | typescript | acorn.js | reuse | 42,209 | 28,813 | 4,950 | 0.12 | 0.17 | 233,752 | 5.5 | 8.1 | - | - | - |
@@ -79,7 +79,7 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | array growth | `kids.push(n)` | 2 | 6,443 | 0.15 | 522,440 | 7.2% | 0 |
 | array growth | `kids.push({ tokenType: "…", offset: t.off, end: t.end })` | 1 | 5,996 | 0.14 | 455,696 | 6.3% | 0 |
 | object | `{ rule, children: kids, offset, end }` | 1 | 16,183 | 0.38 | 453,124 | 6.3% | 16,038 |
-| array | `[]` | 43 | 27,120 | 0.64 | 433,920 | 6.0% | 16,038 |
+| array | `[]` | 44 | 27,120 | 0.64 | 433,920 | 6.0% | 16,038 |
 | object | `{ tokenType: KIND_STR[kid]!, offset: t.off, end: t.end }` | 1 | 13,566 | 0.32 | 379,848 | 5.3% | 10,577 |
 | .slice() → string | `src.slice(pos, e)` | 1 | 16,248 | 0.38 | 300,424 | 4.2% | 0 |
 | array | `[left]` | 5 | 6,748 | 0.16 | 188,944 | 2.6% | 6,552 |
@@ -105,7 +105,7 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | .slice() → string | `_src.slice(_sp[b * _SW + N], _sp[b * _SW + N])` | 1 | 72 | 0.00 | 1,240 | 0.0% | 0 |
 | array growth | `localE.push({ tokStart: _sp[s + N]!, tokEnd: pos, ext: Math.max(pos...` | 1 | 1 | 0.00 | 76 | 0.0% | 0 |
 | array growth | `parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid])` | 1 | 1 | 0.00 | 76 | 0.0% | 0 |
-| array | `[]` | 43 | 4 | 0.00 | 64 | 0.0% | 0 |
+| array | `[]` | 44 | 4 | 0.00 | 64 | 0.0% | 0 |
 | array | `[N, N]` | 10 | 2 | 0.00 | 64 | 0.0% | 0 |
 | object | `{ pos, pendingNl, prevLid, prevKid, hasPrev, bpLid, hasPrev2, paren...` | 1 | 1 | 0.00 | 56 | 0.0% | 0 |
 

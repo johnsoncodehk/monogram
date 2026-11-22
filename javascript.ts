@@ -598,6 +598,14 @@ const SwitchCase = rule($ => [
   Stmt,
 ]);
 
+// A catch clause's parameter (14.15 `CatchParameter : BindingIdentifier | BindingPattern`), not
+// a FormalParameter: no initializer, rest or decorator (`catch (e = 1)`, `catch (...e)`, `catch
+// (@d e)` have no parse).
+const CatchParameter = rule($ => [
+  bindingIdentifier,
+  BindingPattern,
+]);
+
 const Stmt = rule($ => [
   Block,
   [alt('let', 'const', 'var'), sep(Binding, ','), asi()],
@@ -617,7 +625,8 @@ const Stmt = rule($ => [
   // inside a switch eats `case` as the label and the whole switch cascades.
   ['break', opt(sameLine, notReserved, Ident), asi()],
   ['continue', opt(sameLine, notReserved, Ident), asi()],
-  ['try', Block, opt('catch', opt('(', alt(Param, BindingPattern), ')'), Block), opt('finally', Block)],
+  // TryStatement (14.15): a Catch, a Finally, or both, so `try {}` has no parse.
+  ['try', Block, not(not(alt('catch', 'finally'))), opt('catch', opt('(', CatchParameter, ')'), Block), opt('finally', Block)],
   [notReserved, Ident, ':', $],
   ';',
   ['debugger', asi()],
@@ -928,7 +937,7 @@ export default defineGrammar({
     Expr, Prop, MemberName, NewTarget, ClassHeritage,
     Stmt, Block,
     BindingProperty, BindingElement, ArrayBindingElement, BindingPattern,
-    Binding, ForBinding, Param, ForHead, ForAwaitHead, SwitchCase,
+    Binding, ForBinding, Param, CatchParameter, ForHead, ForAwaitHead, SwitchCase,
     Decl, ClassMember,
     ImportClause, ImportSpecifier, ExportSpecifier,
     Program,
