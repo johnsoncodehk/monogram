@@ -21,13 +21,13 @@ import type { CstGrammar } from '../src/types.ts';
 
 const CLASSES: AssertionClass[] = ['lowered', 'vacuous', 'scanner', 'reserved', 'lookahead1', 'lookahead', 'left-context'];
 
-// Pinned on master f732d9d + this gate (item 1a of the editor lane's tree-sitter queue).
+// Pinned on master 5a6c557 (editor lane, tree-sitter item 1a: the ledger made visible; no rendering change).
 const PINNED: Record<string, Partial<Record<AssertionClass, number>>> = {
-  javascript: {},
-  typescript: {},
-  javascriptreact: {},
-  typescriptreact: {},
-  yaml: {},
+  javascript:      { vacuous: 6,  scanner: 27, reserved: 43, lookahead1: 37,  lookahead: 8 },
+  typescript:      { vacuous: 60, scanner: 92, reserved: 65, lookahead1: 133, lookahead: 69, 'left-context': 2 },
+  javascriptreact: { vacuous: 6,  scanner: 29, reserved: 43, lookahead1: 37,  lookahead: 8 },
+  typescriptreact: { vacuous: 60, scanner: 94, reserved: 65, lookahead1: 133, lookahead: 69, 'left-context': 2 },
+  yaml:            { lowered: 1,  scanner: 16, lookahead1: 6 },
 };
 
 const count = (rs: AssertionRecord[]) => {

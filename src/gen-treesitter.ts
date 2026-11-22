@@ -1,6 +1,6 @@
 import type { CstGrammar, RuleExpr, RuleDecl, TokenPattern } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
-import { tokenPatternIsNever, tokenPatternLiteralPrefix, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
+import { tokenPatternFirstCharSet, type TokenPatternFirstSet, tokenPatternIsNever, tokenPatternLiteralPrefix, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
 
 // ════════════════════════════════════════════════════════════════════════════
 // gen-treesitter — derive a tree-sitter parser package from one CstGrammar.
@@ -746,9 +746,31 @@ function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: 
   const word = identTok?.name;
   const identRe = identTok ? new RegExp(`^(?:${tokenPatternSource(identTok)})$`, 'u') : null;
   const wordShaped = (t: string) => t === word || (t.startsWith("'") && !!identRe && identRe.test(t.slice(1)));
-  // Could the text that lexes as `a` here be the text `b` stands for? Literals and tokens are
-  // distinct terminals except through keyword extraction (a word-shaped literal vs the word token).
-  const overlap = (a: string, b: string) => a === b || (wordShaped(a) && wordShaped(b) && (a === word || b === word));
+  // Could the text that lexes as `a` here start the way `b`'s text does? Two word-shaped terminals
+  // meet only through keyword extraction (one of them is the word token). Any other pair meets when
+  // their first characters can: tree-sitter's context-aware lexer may lex a prefix (`>` of `>>`)
+  // where the interpreter's lexer takes the longer token, so equal first characters count.
+  const firstChars = (t: string): TokenPatternFirstSet | null => {
+    if (t === EOF_TERMINAL) return { ascii: new Set(), nonAscii: false };
+    if (t.startsWith("'")) {
+      const c = t.codePointAt(1)!;
+      return c < 128 ? { ascii: new Set([c]), nonAscii: false } : null;
+    }
+    const tok = grammar.tokens.find(x => x.name === t);
+    return tok ? tokenPatternFirstCharSet(tok) : null;
+  };
+  const overlap = (a: string, b: string) => {
+    if (a === b) return true;
+    if (wordShaped(a) && wordShaped(b)) return a === word || b === word;
+    const fa = firstChars(a), fb = firstChars(b);
+    if (!fa || !fb) return true;
+    return (fa.nonAscii && fb.nonAscii) || [...fa.ascii].some(c => fb.ascii.has(c));
+  };
+  // A literal the CFG can see that the lexer could also cut from a longer literal (`>` from `>>`).
+  const literals = new Set<string>();
+  for (const r of grammar.rules) for (const l of collectLiterals(r.body)) literals.add(l);
+  for (const lvl of grammar.precs) for (const o of lvl.operators) literals.add(o.value);
+  const prefixOfLonger = (t: string) => t.startsWith("'") && !wordShaped(t) && [...literals].some(l => l.length > t.length - 1 && l.startsWith(t.slice(1)));
   const meets = (xs: Set<string>, ys: Set<string>) => [...xs].some(x => [...ys].some(y => overlap(x, y)));
   // The terminals of a one-token expression (literal / token / choice of them), else null.
   const tokSet = (e: RuleExpr): Set<string> | null => {
@@ -775,7 +797,7 @@ function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: 
       const S = tokSet(body.body);
       if (!S) return 'lookahead';
       // Exact when every terminal the CFG can see here is one Y matches.
-      const covered = [...P].every(p => S.has(p) || (word !== undefined && S.has(word) && wordShaped(p) && p !== word));
+      const covered = [...P].every(p => (S.has(p) || (word !== undefined && S.has(word) && wordShaped(p) && p !== word)) && !prefixOfLonger(p));
       return covered ? 'vacuous' : 'lookahead1';
     }
     if (ASSERTION_KINDS.has(body.type)) return 'lookahead';
