@@ -81,6 +81,7 @@ const GATES: Gate[] = [
   { group: 'highlighter', name: 'tm-modifier-follow', args: ['test/tm-modifier-follow.ts'] },
   { group: 'highlighter', name: 'tm-capture-patterns', args: ['test/tm-capture-patterns.ts'] },
   { group: 'highlighter', name: 'tm-dialect', args: ['test/tm-dialect.ts'] },
+  { group: 'highlighter', name: 'treesitter-assertions', args: ['test/treesitter-assertions.ts'] },
   { group: 'highlighter', name: 'angle-depth', args: ['test/angle-depth-probe.ts'] },
   { group: 'highlighter', name: 'html-monarch', args: ['test/html-monarch.ts'] },
   { group: 'highlighter', name: 'html-embed-js', args: ['test/html-embed-js.ts'] },

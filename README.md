@@ -163,13 +163,17 @@ cannot express: [docs/HIGHLIGHTER-EVIDENCE.md](docs/HIGHLIGHTER-EVIDENCE.md).
 ### Speed
 
 - The recorded comparison is Rust against [oxc](https://github.com/oxc-project/oxc) on the
-  same inputs, parsing as TypeScript, both in one CI job with alternating rounds. On monogram
-  `8d75e66`, oxc was faster on most inputs ([docs/MEASUREMENT.md](docs/MEASUREMENT.md#recorded-result-rust-against-oxc-2026-11-22-monogram-8d75e66)).
-- Monogram builds a CST and oxc an AST: not the same product.
-- The like-for-like mode is reuse: one kept `CstBuilder` against one oxc `Allocator` reset
-  before each parse. Fresh mode is reported beside it.
-- Later work on 2026-11-22 lowered the Rust parser's instruction count by roughly a fifth. No
-  wall-clock comparison has been recorded since; one depends on the runner's CPU.
+  same inputs, parsing as TypeScript, both in one CI job with alternating rounds
+  ([docs/MEASUREMENT.md](docs/MEASUREMENT.md#recorded-result-rust-against-oxc)).
+- Monogram builds a CST and oxc a typed AST: not the same product, and a CST is the cheaper one
+  to build. A like-for-like figure waits for a monogram parser that builds an AST.
+- On monogram `e6cc55c`, on two AMD EPYC runner models, a parse with a kept builder takes 6%
+  to 28% less time than oxc's on the eight timed inputs (9% less on the TypeScript compiler's
+  `checker.ts`) while executing 3% to 13% more instructions on seven of them. An earlier
+  comparison on another CPU ordered one input the other way: the ratio is not a property of the
+  parsers alone.
+- Before the lexer and decision work of 2026-11-22 the same comparison had oxc ahead on most
+  inputs, with monogram at 1.42 times oxc's instructions on `checker.ts`; it is 1.03 times now.
 - Every pull request that touches the parser is measured against its merge base on every
   target: Rust and Go instruction counts (Callgrind), TypeScript and JavaScript block-execution
   counts, allocator calls and page faults. A change that moves one target only is listed as

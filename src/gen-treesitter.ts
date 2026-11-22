@@ -1,6 +1,6 @@
 import type { CstGrammar, RuleExpr, RuleDecl, TokenPattern } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
-import { tokenPatternIsNever, tokenPatternLiteralPrefix, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
+import { tokenPatternFirstCharSet, type TokenPatternFirstSet, tokenPatternIsNever, tokenPatternLiteralPrefix, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
 
 // ════════════════════════════════════════════════════════════════════════════
 // gen-treesitter — derive a tree-sitter parser package from one CstGrammar.
@@ -29,6 +29,53 @@ export interface TreeSitterOutput {
   scannerC: string;
   /** names of the external tokens the scanner provides (empty if none needed) */
   externalTokens: string[];
+  /** Every zero-width assertion of the grammar's rule trees (as tree-sitter sees them: the relaxed
+   *  side of a tsRelax group), one record per occurrence, with how grammar.js renders it. A CFG has
+   *  no lookahead, so only `lowered` is rendered; every other class is dropped, and the class says
+   *  whether that drop is exact. See classifyAssertions. */
+  assertions: AssertionRecord[];
+}
+
+/** How grammar.js renders a zero-width assertion. Exact: `lowered` (rendered by a CFG rewrite),
+ *  `vacuous` (FIRST/FOLLOW prove the assertion holds wherever the CFG reaches it, so dropping it
+ *  changes nothing). Every other class is DROPPED and the generated grammar may accept more than the
+ *  grammar does; the class names the lowering that would make it exact:
+ *  - `scanner`: a line-terminator / comment / flow-state condition, lowerable to an external scanner
+ *    token that sees the skipped text (tree-sitter-javascript's `_automatic_semicolon` technique);
+ *  - `reserved`: one-token exclusion of identifier-shaped literals directly before the `word` token,
+ *    lowerable to a tree-sitter `reserved` word set on that token;
+ *  - `lookahead1`: one-token lookahead over any other continuation (no tree-sitter primitive; exact
+ *    only by a FIRST-restricted copy of the continuation);
+ *  - `lookahead`: a lookahead over more than one token or a nested assertion: not expressible;
+ *  - `left-context`: a predicate on the left operand's head leaf (notLeftLeaf): not expressible. */
+export type AssertionClass = 'lowered' | 'vacuous' | 'scanner' | 'reserved' | 'lookahead1' | 'lookahead' | 'left-context';
+export const EXACT_ASSERTION_CLASSES: readonly AssertionClass[] = ['lowered', 'vacuous'];
+export interface AssertionRecord {
+  /** grammar rule whose tree holds the assertion */
+  rule: string;
+  kind: 'not' | 'sameLine' | 'noCommentBefore' | 'noMultilineFlowBefore' | 'notLeftLeaf';
+  cls: AssertionClass;
+  /** the assertion, written compactly (`not("{" | Ident)`), cut at 160 characters */
+  text: string;
+}
+
+function assertionText(e: RuleExpr): string {
+  const f = (x: RuleExpr): string => {
+    switch (x.type) {
+      case 'literal': return JSON.stringify(x.value);
+      case 'ref': return x.name;
+      case 'seq': return x.items.length === 1 ? f(x.items[0]) : `[${x.items.map(f).join(' ')}]`;
+      case 'alt': return `(${x.items.map(f).join(' | ')})`;
+      case 'quantifier': return f(x.body) + x.kind;
+      case 'group': return f(x.tsRelaxed ?? x.body);
+      case 'sep': return `sep(${f(x.element)}, ${JSON.stringify(x.delimiter)})`;
+      case 'not': return `not(${f(x.body)})`;
+      case 'notLeftLeaf': return `notLeftLeaf(${x.words.join(' ')})`;
+      default: return x.type;
+    }
+  };
+  const t = f(e);
+  return t.length > 160 ? t.slice(0, 157) + '...' : t;
 }
 
 // ── Identifier / naming helpers ─────────────────────────────────────────────
@@ -181,6 +228,9 @@ interface GrammarJsContext {
    * uses no named tsRelax.
    */
   tsSharedRules: Map<string, RuleExpr>;
+  /** Every assertion node classifyAssertions saw. renderExpr refuses one it did not (an assertion
+   *  reached by no classified path would be dropped without a record). */
+  classifiedAssertions: Set<RuleExpr>;
 }
 
 function hasMarker(expr: RuleExpr): boolean {
@@ -223,8 +273,12 @@ function notLiteral(e: RuleExpr): string | null {
   return e.type === 'not' && e.body.type === 'literal' ? e.body.value : null;
 }
 function endsInNot(e: RuleExpr): string | null {
-  if (e.type === 'seq') return e.items.length ? endsInNot(e.items[e.items.length - 1]) : null;
-  return notLiteral(e);
+  const n = endingNot(e);
+  return n ? notLiteral(n) : null;
+}
+function endingNot(e: RuleExpr): RuleExpr | null {
+  if (e.type === 'seq') return e.items.length ? endingNot(e.items[e.items.length - 1]) : null;
+  return notLiteral(e) !== null ? e : null;
 }
 function startsWithLiteral(e: RuleExpr, lit: string): boolean {
   if (e.type === 'literal') return e.value === lit;
@@ -236,17 +290,20 @@ function startsWithLiteral(e: RuleExpr, lit: string): boolean {
 function optionalStartingWith(e: RuleExpr, lit: string): boolean {
   return e.type === 'quantifier' && e.kind !== '+' && startsWithLiteral(e.body, lit);
 }
-function lowerNotBeforeOptional(expr: RuleExpr & { type: 'seq' }): RuleExpr | null {
+/** `onGuard` receives each `not` node the lowering makes exact. */
+function lowerNotBeforeOptional(expr: RuleExpr & { type: 'seq' }, onGuard?: (guard: RuleExpr) => void): RuleExpr | null {
   const items = expr.items;
   for (let i = 0; i + 1 < items.length; i++) {
     const item = items[i], next = items[i + 1];
     const direct = notLiteral(item);
     if (direct !== null && optionalStartingWith(next, direct)) {
+      onGuard?.(item);
       return { type: 'seq', items: [...items.slice(0, i + 1), ...items.slice(i + 2)] };
     }
     if (item.type !== 'alt') continue;
     const guarded = item.items.filter(a => { const l = endsInNot(a); return l !== null && optionalStartingWith(next, l); });
     if (guarded.length === 0) continue;
+    for (const a of guarded) onGuard?.(endingNot(a)!);
     const plain = item.items.filter(a => !guarded.includes(a));
     const pre = items.slice(0, i);
     const guardedSeq: RuleExpr = { type: 'seq', items: [...pre, guarded.length === 1 ? guarded[0] : { type: 'alt', items: guarded }, ...items.slice(i + 2)] };
@@ -327,27 +384,14 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext): string {
       return renderExpr(relaxed, ctx);
     }
     case 'not':
-      // Zero-width negative lookahead: not expressible in a tree-sitter CFG, and
-      // it consumes nothing, so it drops to a no-op (the surrounding choice keeps
-      // the bare form, as the grammar did before the assertion was added).
-      return 'blank()';
     case 'sameLine':
-      // Zero-width "no LineTerminator here" assertion — tree-sitter handles this
-      // class of restriction with an external scanner, not the CFG; as a CFG node
-      // it consumes nothing, so render a no-op.
-      return 'blank()';
     case 'noCommentBefore':
-      // Zero-width "no comment before" assertion (YAML plain-scalar fold) — like `sameLine`,
-      // a scanner-level restriction; a no-op in the CFG.
-      return 'blank()';
     case 'noMultilineFlowBefore':
-      // Zero-width "preceding flow was single-line" assertion (YAML flow-as-block-key) — like
-      // `noCommentBefore`, a scanner-level restriction; a no-op in the CFG.
-      return 'blank()';
     case 'notLeftLeaf':
-      // Zero-width LEFT head-leaf guard — a left-operand predicate is not expressible in tree-sitter
-      // GLR; it consumes nothing, so it renders a no-op (the constrained LED is wrapped in tsRelax,
-      // so tree-sitter renders the UNCONSTRAINED `.` form and never reaches this case in practice).
+      // A zero-width assertion consumes nothing and a CFG has no lookahead, so it renders to a
+      // no-op. Never silently: classifyAssertions recorded it with whether the drop is exact (the
+      // `assertions` ledger of the output); one it did not reach is a generator defect.
+      if (!ctx.classifiedAssertions.has(expr)) throw new Error(`gen-treesitter: ${expr.type} assertion rendered without a classification (rule walk missed it)`);
       return 'blank()';
     case 'sep': {
       // sep(elem, ',') = optional(seq(elem, repeat(seq(',', elem)), optional(',')))
@@ -592,7 +636,7 @@ function buildRuleBody(rule: RuleDecl, ctx: GrammarJsContext): string {
 // within one alternative, but its outer ordered choices can still backtrack past it, which GLR
 // models and a fixed shift does not).
 
-type TerminalSets = { follow: Map<string, Set<string>>; firstOf: (e: RuleExpr) => Set<string> };
+type TerminalSets = { follow: Map<string, Set<string>>; firstOf: (e: RuleExpr) => Set<string>; nullable: (e: RuleExpr) => boolean };
 
 const EOF_TERMINAL = '$eof';
 
@@ -668,7 +712,7 @@ function computeTerminalSets(grammar: CstGrammar, tokenNames: Set<string>): Term
     grew = false;
     for (const r of grammar.rules) walk(r.body, follow.get(r.name)!);
   } while (grew);
-  return { follow, firstOf: (e) => fst(e, new Set()) };
+  return { follow, firstOf: (e) => fst(e, new Set()), nullable: nul };
 }
 
 /** The alternative ends in a greedy quantifier (after some consumed prefix) whose FIRST set meets
@@ -683,6 +727,127 @@ function greedyTail(alt: RuleExpr, follow: Set<string>, firstOf: TerminalSets['f
     : tail.type === 'sep' ? firstOf(tail).add(`'${tail.delimiter}`)   // sep may end in an optional delimiter
     : null;
   return !!starts && [...starts].some(t => follow.has(t));
+}
+
+// ── zero-width assertions: what grammar.js does with each ───────────────────
+//
+// The ledger is decided HERE, beside the rendering decision, so no assertion is dropped without a
+// record. Each assertion occurrence is classified against the terminals the CFG can see next at its
+// position (P: FIRST of the rest of its seq, plus the enclosing FOLLOW where that rest is nullable).
+// Keyword extraction is modelled: a `word`-shaped literal that is not valid in a state is lexed as
+// the word token, so a word-shaped literal and the word token stand for each other's text.
+
+const ASSERTION_KINDS = new Set<RuleExpr['type']>(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf']);
+
+function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: TerminalSets): { records: AssertionRecord[]; nodes: Set<RuleExpr> } {
+  const records: AssertionRecord[] = [];
+  const nodes = new Set<RuleExpr>();
+  const identTok = grammar.tokens.find(t => t.identifier);
+  const word = identTok?.name;
+  const identRe = identTok ? new RegExp(`^(?:${tokenPatternSource(identTok)})$`, 'u') : null;
+  const wordShaped = (t: string) => t === word || (t.startsWith("'") && !!identRe && identRe.test(t.slice(1)));
+  // Could the text that lexes as `a` here start the way `b`'s text does? Two word-shaped terminals
+  // meet only through keyword extraction (one of them is the word token). Any other pair meets when
+  // their first characters can: tree-sitter's context-aware lexer may lex a prefix (`>` of `>>`)
+  // where the interpreter's lexer takes the longer token, so equal first characters count.
+  const firstChars = (t: string): TokenPatternFirstSet | null => {
+    if (t === EOF_TERMINAL) return { ascii: new Set(), nonAscii: false };
+    if (t.startsWith("'")) {
+      const c = t.codePointAt(1)!;
+      return c < 128 ? { ascii: new Set([c]), nonAscii: false } : null;
+    }
+    const tok = grammar.tokens.find(x => x.name === t);
+    return tok ? tokenPatternFirstCharSet(tok) : null;
+  };
+  const overlap = (a: string, b: string) => {
+    if (a === b) return true;
+    if (wordShaped(a) && wordShaped(b)) return a === word || b === word;
+    const fa = firstChars(a), fb = firstChars(b);
+    if (!fa || !fb) return true;
+    return (fa.nonAscii && fb.nonAscii) || [...fa.ascii].some(c => fb.ascii.has(c));
+  };
+  // A literal the CFG can see that the lexer could also cut from a longer literal (`>` from `>>`).
+  const literals = new Set<string>();
+  for (const r of grammar.rules) for (const l of collectLiterals(r.body)) literals.add(l);
+  for (const lvl of grammar.precs) for (const o of lvl.operators) literals.add(o.value);
+  const prefixOfLonger = (t: string) => t.startsWith("'") && !wordShaped(t) && [...literals].some(l => l.length > t.length - 1 && l.startsWith(t.slice(1)));
+  const meets = (xs: Set<string>, ys: Set<string>) => [...xs].some(x => [...ys].some(y => overlap(x, y)));
+  // The terminals of a one-token expression (literal / token / choice of them), else null.
+  const tokSet = (e: RuleExpr): Set<string> | null => {
+    e = tsView(e);
+    if (e.type === 'literal') return new Set([`'${e.value}`]);
+    if (e.type === 'ref') return tokenNames.has(e.name) ? new Set([e.name]) : null;
+    if (e.type === 'seq' && e.items.length === 1) return tokSet(e.items[0]);
+    if (e.type === 'alt') {
+      const out = new Set<string>();
+      for (const i of e.items) { const s = tokSet(i); if (!s) return null; for (const t of s) out.add(t); }
+      return out;
+    }
+    return null;
+  };
+  const isWordRef = (e: RuleExpr | undefined) => { const v = e && tsView(e); return !!v && v.type === 'ref' && v.name === word; };
+
+  const classify = (e: RuleExpr, P: Set<string>, next: RuleExpr | undefined): AssertionClass => {
+    if (e.type === 'sameLine' || e.type === 'noCommentBefore' || e.type === 'noMultilineFlowBefore') return 'scanner';
+    if (e.type === 'notLeftLeaf') return 'left-context';
+    if (e.type !== 'not') throw new Error(`classifyAssertions: ${e.type} is not an assertion`);
+    const body = tsView(e.body);
+    if (body.type === 'sameLine') return 'scanner';                      // not(sameLine): a line terminator here
+    if (body.type === 'not') {                                           // positive lookahead not(not(Y))
+      const S = tokSet(body.body);
+      if (!S) return 'lookahead';
+      // Exact when every terminal the CFG can see here is one Y matches.
+      const covered = [...P].every(p => (S.has(p) || (word !== undefined && S.has(word) && wordShaped(p) && p !== word)) && !prefixOfLonger(p));
+      return covered ? 'vacuous' : 'lookahead1';
+    }
+    if (ASSERTION_KINDS.has(body.type)) return 'lookahead';
+    // Negative lookahead not(X): exact when X cannot start at any terminal the CFG sees here.
+    if (!sets.nullable(body) && !meets(sets.firstOf(body), P)) return 'vacuous';
+    const S = tokSet(body);
+    if (!S) return 'lookahead';
+    if ([...S].every(t => t !== word && wordShaped(t)) && ![...S].some(t => P.has(t)) && isWordRef(next)) return 'reserved';
+    return 'lookahead1';
+  };
+
+  const lowered = new Set<RuleExpr>();
+  let rule = '';
+  const visit = (e: RuleExpr, after: Set<string>, next?: RuleExpr): void => {
+    e = tsView(e);
+    if (ASSERTION_KINDS.has(e.type)) {
+      nodes.add(e);
+      records.push({ rule, kind: e.type as AssertionRecord['kind'], cls: lowered.has(e) ? 'lowered' : classify(e, after, next), text: assertionText(e) });
+      return;
+    }
+    switch (e.type) {
+      case 'seq': {
+        // Mirror renderExpr: a lowerable seq is walked in its lowered form.
+        const low = lowerNotBeforeOptional(e, g => lowered.add(g));
+        if (low) return visit(low, after, next);
+        let cur = after;
+        let nextItem = next;
+        for (let i = e.items.length - 1; i >= 0; i--) {
+          const item = e.items[i];
+          visit(item, cur, nextItem);
+          if (!ASSERTION_KINDS.has(tsView(item).type)) nextItem = item;
+          if (sets.nullable(item)) { const s = new Set(cur); for (const t of sets.firstOf(item)) s.add(t); cur = s; }
+          else cur = sets.firstOf(item);
+        }
+        return;
+      }
+      case 'alt': for (const i of e.items) visit(i, after, next); return;
+      case 'quantifier': {
+        if (e.kind === '?') return visit(e.body, after, next);
+        const s = new Set(after); for (const t of sets.firstOf(e.body)) s.add(t);
+        return visit(e.body, s, undefined);
+      }
+      case 'sep': {
+        const s = new Set(after); s.add(`'${e.delimiter}`);
+        return visit(e.element, s, undefined);
+      }
+    }
+  };
+  for (const r of grammar.rules) { rule = r.name; visit(r.body, sets.follow.get(r.name)!); }
+  return { records, nodes };
 }
 
 // ── Token rules ──────────────────────────────────────────────────────────────
@@ -1113,7 +1278,7 @@ ${rawNameRule}    text: $ => /[^${o}]+/,
     '',
   ].join('\n');
 
-  if (!hasRaw) return { grammarJs, highlightsScm, scannerC: '', externalTokens: [] };
+  if (!hasRaw) return { grammarJs, highlightsScm, scannerC: '', externalTokens: [], assertions: [] };
 
   // External scanner: scan a raw-text body to (not including) the next `</` followed by a
   // raw-text tag name. Stateless — the close is the next such delimiter (well-formed input).
@@ -1179,7 +1344,7 @@ bool tree_sitter_${grammarName}_external_scanner_scan(void *payload, TSLexer *le
 }
 `;
 
-  return { grammarJs, highlightsScm, scannerC, externalTokens: ['raw_text'] };
+  return { grammarJs, highlightsScm, scannerC, externalTokens: ['raw_text'], assertions: [] };
 }
 
 export function generateTreeSitter(grammar: CstGrammar, langName?: string): TreeSitterOutput {
@@ -1217,11 +1382,14 @@ export function generateTreeSitter(grammar: CstGrammar, langName?: string): Tree
   const flowLiteralTokens = new Map<string, string>();
   for (const { sym, char } of flowSyntheticTokens(grammar)) flowLiteralTokens.set(char, sym);
 
+  const terminalSets = computeTerminalSets(grammar, tokenNames);
+  const assertions = classifyAssertions(grammar, tokenNames, terminalSets);
   const ctx: GrammarJsContext = {
     grammar, tokenNames, ruleSnake, tokenSnake, prattRules, externalSnake, scannerTokenFor,
     flowLiteralTokens,
     nullableNonStart,
-    terminalSets: computeTerminalSets(grammar, tokenNames),
+    terminalSets,
+    classifiedAssertions: assertions.nodes,
     glrRules: new Set(),
     templatePlan,
     interpolationPlans,
@@ -1233,7 +1401,7 @@ export function generateTreeSitter(grammar: CstGrammar, langName?: string): Tree
   const highlightsScm = buildHighlightsScm(grammar, ctx, nameFields.byRule);
   const { scannerC, externalTokens } = buildScannerC(grammar, ctx, grammarName);
 
-  return { grammarJs, highlightsScm, scannerC, externalTokens };
+  return { grammarJs, highlightsScm, scannerC, externalTokens, assertions: assertions.records };
 }
 
 function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {

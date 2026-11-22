@@ -535,19 +535,19 @@ function lowerStmt(n: E): Ast {
   const c = kidsOf(n);
   switch (m.arm) {
     case 'block': return lowerBlock(m.block);
-    case 'let_': case 'await_': {
+    case 'variable': case 'using': {
       const decls = ('binding' in m ? m.binding : []).map(lowerBinding);
       const list = ast('VariableDeclarationList', off(n), decls.length ? decls[decls.length - 1].end : end(n), decls);
       return ast('VariableStatement', off(n), end(n), [list]);
     }
     case 'if_': {
-      const kids = [lowerExpr(m.expr), lowerStmt(m.stmt)];
-      if (m.stmt2 !== undefined) kids.push(lowerStmt(m.stmt2));
+      const kids = [lowerExpr(m.condition), lowerStmt(m.consequence)];
+      if (m.alternative !== undefined) kids.push(lowerStmt(m.alternative));
       return ast('IfStatement', off(n), end(n), kids);
     }
     case 'for_': return lowerFor(n, c);
-    case 'while_': return ast('WhileStatement', off(n), end(n), [lowerExpr(m.expr), lowerStmt(m.stmt)]);
-    case 'do_': return ast('DoStatement', off(n), end(n), [lowerStmt(m.stmt), lowerExpr(m.expr)]);
+    case 'while_': return ast('WhileStatement', off(n), end(n), [lowerExpr(m.condition), lowerStmt(m.body)]);
+    case 'do_': return ast('DoStatement', off(n), end(n), [lowerStmt(m.body), lowerExpr(m.condition)]);
     case 'switch_': {
       const disc = lowerExpr(m.expr);
       const clauses = groupSwitchClauses(m.switchCase);
@@ -555,28 +555,28 @@ function lowerStmt(n: E): Ast {
       const cb = ast('CaseBlock', caseBlockStart >= 0 ? off(c[caseBlockStart]) : off(n), end(n), clauses);
       return ast('SwitchStatement', off(n), end(n), [disc, cb]);
     }
-    case 'return_': return ast('ReturnStatement', off(n), end(n), m.expr !== undefined ? [lowerExpr(m.expr)] : []);
-    case 'throw_': return ast('ThrowStatement', off(n), end(n), [lowerExpr(m.expr)]);
-    case 'break_': return ast('BreakStatement', off(n), end(n), m.ident !== undefined ? [ast('Identifier', off(m.ident), end(m.ident))] : []);
-    case 'continue_': return ast('ContinueStatement', off(n), end(n), m.ident !== undefined ? [ast('Identifier', off(m.ident), end(m.ident))] : []);
+    case 'return_': return ast('ReturnStatement', off(n), end(n), m.argument !== undefined ? [lowerExpr(m.argument)] : []);
+    case 'throw_': return ast('ThrowStatement', off(n), end(n), [lowerExpr(m.argument)]);
+    case 'break_': return ast('BreakStatement', off(n), end(n), m.label !== undefined ? [ast('Identifier', off(m.label), end(m.label))] : []);
+    case 'continue_': return ast('ContinueStatement', off(n), end(n), m.label !== undefined ? [ast('Identifier', off(m.label), end(m.label))] : []);
     case 'try_': {
       // catchTok/finallyTok carry the keyword anchors (no children scan), and the
       // catch binding arrives as a tagged sub-union instead of flattened optionals.
-      const kids: Ast[] = [lowerBlock(m.block)];
-      if (m.catchTok !== undefined && m.block2 !== undefined) {
+      const kids: Ast[] = [lowerBlock(m.body)];
+      if (m.catchTok !== undefined && m.handler !== undefined) {
         const catchKids: Ast[] = [];
-        const target = m.catchParameter;   // a CatchParameter: a name or a pattern (then its type)
+        const target = m.parameter;   // a CatchParameter: a name or a pattern (then its type)
         if (target !== undefined) catchKids.push(ast('VariableDeclaration', off(target), end(target), [lowerBindingTarget(target)]));
-        catchKids.push(lowerBlock(m.block2));
-        kids.push(ast('CatchClause', off(m.catchTok), end(m.block2), catchKids));
+        catchKids.push(lowerBlock(m.handler));
+        kids.push(ast('CatchClause', off(m.catchTok), end(m.handler), catchKids));
       }
-      if (m.finallyTok !== undefined) kids.push(lowerBlock(m.block3 ?? m.block2!));   // finally block: block3 with a catch, block2 without
+      if (m.finalizer !== undefined) kids.push(lowerBlock(m.finalizer));
       return ast('TryStatement', off(n), end(n), kids);
     }
-    case 'ident': return ast('LabeledStatement', off(n), end(n), [ast('Identifier', off(m.ident), end(m.ident)), lowerStmt(m.stmt)]);
-    case 'semi': return ast('EmptyStatement', off(n), end(n));
+    case 'labelled': return ast('LabeledStatement', off(n), end(n), [ast('Identifier', off(m.label), end(m.label)), lowerStmt(m.body)]);
+    case 'empty': return ast('EmptyStatement', off(n), end(n));
     case 'debugger_': return ast('DebuggerStatement', off(n), end(n));
-    case 'with_': return ast('WithStatement', off(n), end(n), [lowerExpr(m.expr), lowerStmt(m.stmt)]);
+    case 'with_': return ast('WithStatement', off(n), end(n), [lowerExpr(m.object), lowerStmt(m.body)]);
     case 'decl': return lowerDecl(m.decl);
     case 'expr': return ast('ExpressionStatement', off(n), end(n), [lowerExpr(m.first)]);
     default: {
