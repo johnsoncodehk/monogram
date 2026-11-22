@@ -14,7 +14,7 @@ import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctF
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
-import { UNI_BLOCK_BITS, UNI_LEAF_BITS, uniIdentPlan } from './uni-ident.ts';
+import { UNI_SYM0, uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
@@ -320,23 +320,19 @@ func lexHasLineTerm(s string) bool {
 }
 `;
 
-/** Go's integer type for a table whose entries are below `max`. */
-const goUint = (max: number) => (max <= 0x100 ? 'uint8' : max <= 0x10000 ? 'uint16' : 'uint32');
 /** uni-ident.ts's identifier classes and their lookup. Go's `unicode` package has the general
- *  categories but no ID_Start / ID_Continue (Other_ID_Start, Pattern_Syntax), hence the table. */
+ *  categories but no ID_Start / ID_Continue (Other_ID_Start, Pattern_Syntax), hence the table;
+ *  a const string, since Go has no compile-time evaluation to decode a denser form into. */
 function goUniIdentTables(): string {
   const p = uniIdentPlan();
-  const nums = (xs: readonly (number | bigint)[], hex: boolean) => xs.map((x) => (hex ? `0x${x.toString(16)}` : String(x))).join(', ');
-  return `var _uniTop = [${p.top.length}]${goUint(p.blocks.length / (1 << UNI_BLOCK_BITS))}{${nums(p.top, false)}}
-var _uniBlk = [${p.blocks.length}]${goUint(p.start.length)}{${nums(p.blocks, false)}}
-var _uniStart = [${p.start.length}]uint64{${nums(p.start, true)}}
-var _uniCont = [${p.cont.length}]uint64{${nums(p.cont, true)}}
-// Whether r is in the class whose leaves are given (uni-ident.ts's three levels).
-func uniIn(leaves *[${p.start.length}]uint64, r rune) bool {
-	t := uint32(r) >> ${UNI_LEAF_BITS + UNI_BLOCK_BITS}
-	if t >= ${p.top.length} { return false }
-	leaf := _uniBlk[uint32(_uniTop[t])<<${UNI_BLOCK_BITS}|(uint32(r)>>${UNI_LEAF_BITS})&${(1 << UNI_BLOCK_BITS) - 1}]
-	return (leaves[leaf]>>(uint32(r)&${(1 << UNI_LEAF_BITS) - 1}))&1 != 0
+  const l = uniLookup(p, (k) => `(uint32(_uniT[${k}]) - ${UNI_SYM0})`);
+  return `const _uniT = "${p.data.replace(/\\/g, '\\\\')}"
+// uni-ident.ts's class of r: 0 neither, 1 IdentifierPart only, 2 IdentifierStart too.
+func uniClass(r rune) uint32 {
+	cp := uint32(r)
+	if ${l.top} >= ${p.topLen} { return 0 }
+	var i uint32
+${l.steps.map((e) => `\ti = ${e}\n`).join('')}\treturn ${l.result}
 }
 `;
 }
@@ -584,7 +580,7 @@ ${emitHooks}
 }
 ${goUniIdentTables()}func scanUniIdent(src string, pos int) (int, bool) {
 	r, w := utf8.DecodeRuneInString(src[pos:])
-	if !uniIn(&_uniStart, r) { return pos, false }
+	if uniClass(r) != 2 { return pos, false }
 	return lxExtRun(src, pos+w), true
 }
 // Extend an identifier token that the ASCII pattern cut short at a non-ASCII
@@ -596,7 +592,7 @@ func lxExt(src string, e int) int {
 func lxExtRun(src string, e int) int {
 	for e < len(src) {
 		r, w := utf8.DecodeRuneInString(src[e:])
-		if !uniIn(&_uniCont, r) { break }
+		if uniClass(r) == 0 { break }
 		e += w
 	}
 	return e
