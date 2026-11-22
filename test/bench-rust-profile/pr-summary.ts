@@ -26,7 +26,7 @@ const faults: Record<string, Record<string, string>> = {};
 const acc: Record<string, string> = {};
 const crashes: string[] = [];
 const files: string[] = [];
-// The other targets (run.sh, "Go and TS targets"): `GOIR <v>.<fresh|reuse>.<file> <verdict> ir=<n>
+// The other targets (run.sh, "Go and TS targets"): `GOIR <v>.<reuse|builder>.<file> <verdict> ir=<n>
 // total=<n> mapir=<n> mapcalls=<n>` (test/bench-targets/go-ir.ts), `TSBLK <v>.<ts-parse|js-fresh>.<file>
 // <verdict> blocks=<n> functions=<k>`; v = A, M or M2 (M again).
 const work: Record<string, number> = {};
@@ -126,7 +126,7 @@ const MOVE = 0.1, STILL = 0.01;
 const cols: { target: string; head: string; get: (v: string, f: string) => number | undefined; key?: string }[] = [
   { target: 'Rust', head: 'Rust Ir fresh', get: (v, f) => ir[`${v}.parse.${f}`] },
   { target: 'Rust', head: 'Rust Ir reuse', get: (v, f) => ir[`${v}.parse-reuse.${f}`] },
-  ...([['Go', 'Go Ir reuse', 'go-reuse'], ['TS', 'TS blocks', 'ts-parse'], ['TS', 'TS allocs', 'ts-parse-allocs'],
+  ...([['Go', 'Go Ir reuse', 'go-reuse'], ['Go', 'Go Ir builder', 'go-builder'], ['TS', 'TS blocks', 'ts-parse'], ['TS', 'TS allocs', 'ts-parse-allocs'],
     ['JS', 'JS blocks', 'js-fresh'], ['JS', 'JS allocs', 'js-fresh-allocs']] as const)
     .map(([target, head, key]) => ({ target, head, key, get: (v: string, f: string) => work[`${v}.${key}.${f}`] })),
 ];
@@ -146,7 +146,7 @@ for (const f of tfiles) for (const c of cols.slice(2)) {
     need(`M2 ${c.head} ${f}`, m2);
     const d = Math.abs(pct(m!, m2!));
     if (Number.isFinite(d)) repeatMax = Math.max(repeatMax, d);
-    const mc = c.key === 'go-reuse' ? goMap[`M.go-reuse.${f}`]?.mapcalls : undefined;
+    const mc = c.key!.startsWith('go-') ? goMap[`M.${c.key}.${f}`]?.mapcalls : undefined;
     if (d > STILL) {
       untrusted.push(`${c.head} ${f}: M measured twice differs by ${fpct(d)} (${num(m)} / ${num(m2)})` +
         (mc && mc !== '0' ? `: the parse makes ${num(mc)} calls into the Go map runtime, whose hash seed is random per process (read no map on the parse path)` : ''));
@@ -209,7 +209,7 @@ if (singleTarget.length) {
 say();
 table(['input', ...cols.map((c) => c.head + ' Δ'), 'Go map calls (A → M)'], sideRows);
 say();
-say('Rust / Go: Callgrind instructions of one parse (Go: `ParseWith` into the `CstBuilder` of a first parse, reuse mode only: a first parse into a new builder varies between runs in the page allocator; built with `-tags faketime`, run with `GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1`, the Go runtime\'s own work inside the parse included; the last column counts the calls from the parser\'s own code into the Go map runtime, which should be 0: a map\'s hash seed is random per process, so a parse that reads a map does not repeat its instruction count, and its Go cell becomes NOT RUN; the calling functions are in the artifact, `targets/*.map-callers.txt`). ' +
+say('Rust / Go: Callgrind instructions of one parse (Go reuse: `ParseWith` into the `CstBuilder` of a first parse, which runs the direct engine; Go builder: the same into a kept `SlimBuilder`, which runs the builder engine `parserW` through the `Builder` interface; reuse mode only: a first parse into a new builder varies between runs in the page allocator; built with `-tags faketime`, run with `GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1`, the Go runtime\'s own work inside the parse included; the last column counts the calls from the parser\'s own code into the Go map runtime, which should be 0: a map\'s hash seed is random per process, so a parse that reads a map does not repeat its instruction count, and its Go cell becomes NOT RUN; the calling functions are in the artifact, `targets/*.map-callers.txt`). ' +
   'TS / JS blocks: V8 block executions of one `parse(src)` of the TS target and one `createParser().parse(src)` of the emitted JS parser (precise block coverage with counts). **They detect a change of control flow, not its cost or its direction**: on PR #141 they rose 7-10% while time fell 10-28% and allocations fell 27%. TS / JS allocs: the exact allocations of the same parse (test/alloc-instrument.ts, the alloc-work gate\'s counting), the cost signal beside them. ' +
   (repeated ? `M was measured twice for Go, TS and JS: the largest difference was ${fpct(repeatMax)}.` : 'M was measured once (PROFILE_TARGETS_REPEAT=0).'));
 say();
