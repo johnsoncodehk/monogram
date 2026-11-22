@@ -27,7 +27,8 @@ const f0 = (x: number) => (Number.isFinite(x) ? x.toFixed(0) : '-');
 const f1 = (x: number) => (Number.isFinite(x) ? x.toFixed(1) : '-');
 const f2 = (x: number) => (Number.isFinite(x) ? x.toFixed(2) : '-');
 const M = (x: number) => (Number.isFinite(x) ? (x / 1e6).toFixed(1) + 'M' : '-');
-const row = (cells: string[], w: number[]) => console.log(cells.map((c, i) => (i === 0 ? c.padEnd(w[i]) : c.padStart(w[i]))).join(' '));
+// A missing cell (a reference crash on a pathological input leaves its counters absent) prints as '-'.
+const row = (cells: (string | undefined)[], w: number[]) => console.log(cells.map((c = '-', i) => (i === 0 ? c.padEnd(w[i]) : c.padStart(w[i]))).join(' '));
 
 console.log('\n## Instructions per parse (Callgrind Ir, one parse + drop of what it built)');
 console.log('tokens: each parser\'s own count (monogram: its token array; oxc: TokensParserConfig). per oxc-token: both sides over oxc\'s count.');
