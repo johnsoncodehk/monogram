@@ -1349,6 +1349,8 @@ const FRAME_EDIT_DOCS: Record<string, string[]> = {
     'f(<a b={c > d}><i/>t</a>, `x${<b>y</b>}`);',
     'type F = <T>(x: T) => T;\nlet g = <T,>(y: T) => <q>{y}</q>;',
     'let h = <T>(x: T) => x; z = 1;',
+    // a head veto decided by the characters after its tagOpen: an edit there can make it an element
+    'let a = <T,>x</T>;\nlet b = <T extends U>y</T>;',
     'let m = new Map</* c */string, X>();',
     'let a = <a b="\\" c=\'d\ne\'>t</a>;\nlet z = "q";',
   ],
