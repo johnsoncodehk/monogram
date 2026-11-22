@@ -73,43 +73,75 @@ The inputs are fixed: `checker.ts` and `parser.ts` of TypeScript at the reposito
 npm package, `gen-tm.ts` and `typescript.ts` of this repository as of `2632c2c`, a 2 MB synthetic
 file, a non-ASCII-heavy file and two dense one-byte-token files.
 
-## Recorded result: Rust against oxc (2026-11-22, monogram `8d75e66`)
+## Recorded result: Rust against oxc
 
 What is compared: monogram's Rust parser builds a **CST** (every token is a leaf) with the
-`typescript.ts` grammar; [oxc](https://github.com/oxc-project/oxc) builds an **AST**. They are
-not the same product, so the ratio compares two kinds of work on the same input, both parsing
-as TypeScript.
+`typescript.ts` grammar; [oxc](https://github.com/oxc-project/oxc) builds a typed **AST**. They
+are not the same product, so a ratio compares two kinds of work on the same input, both parsing
+as TypeScript. A CST costs less to build than a typed AST; a like-for-like figure needs a
+monogram parser that builds an AST, which does not exist yet (roadmap item 5).
 
-Measured on monogram `8d75e66` against `oxc_parser` 0.126.0 with
-[`test/bench-rust-oxc`](../test/bench-rust-oxc/run.sh): both parsers in one GitHub-hosted job,
-9 alternating rounds, the median of the per-round time ratios. Two runs per mode, each cell
-gives both: pull request #126's final runs, and this repository's `measure-bench` runs on pull
-request #131 (runner CPUs AMD EPYC 7763, except the second reuse run on an EPYC 9V74). Only
-ratios inside one job compare: the spread between the two runs is the runner's. Time per
-parse, monogram ÷ oxc (above 1: oxc is faster):
+Method: [`test/bench-rust-oxc`](../test/bench-rust-oxc/run.sh) against `oxc_parser` 0.126.0:
+both parsers in one GitHub-hosted job, 9 alternating rounds, the median of the per-round time
+ratios; instruction counts from [`test/bench-rust-profile`](../test/bench-rust-profile/run.sh)
+(Callgrind, one parse plus the drop of what it built). Only ratios inside one job compare.
+Reuse mode is the like-for-like mode for memory: one `CstBuilder` kept across parses
+(`parse_with`) against one oxc `Allocator` `reset()` before each parse; fresh mode is a new
+builder / allocator per parse.
+
+### monogram `e6cc55c` (2026-11-22)
+
+`measure-bench` run 45042153759 (reuse: AMD EPYC 9V45; fresh: AMD EPYC 9V74) and
+`measure-profile` full scope, run 45042161482. Time per parse and instructions per parse,
+monogram ÷ oxc (below 1: monogram takes less):
+
+| input | time, reuse (range over 9 rounds) | time, fresh | instructions |
+|:--|--:|--:|--:|
+| `checker.ts` (TypeScript compiler, 3.2 MB) | 0.908 (0.870-0.935) | 0.922 | 1.03 |
+| `typescript.js` (npm `typescript` 5.9.3, 9.1 MB) | 0.891 (0.868-0.917) | 0.872 | 1.04 |
+| `parser.ts` (TypeScript compiler) | 0.898 (0.863-0.912) | 0.914 | 1.04 |
+| `typescript.d.ts` (npm `typescript` 5.9.3) | 0.941 (0.915-0.982) | 0.839 | 1.13 |
+| 2 MB synthetic file | 0.916 (0.876-0.953) | 1.032 | 1.10 |
+| non-ASCII-heavy file | 0.733 (0.716-0.745) | 0.953 | 1.05 |
+| [`src/gen-tm.ts`](../src/gen-tm.ts) at `2632c2c` | 0.882 (0.873-0.904) | 1.048 | 1.04 |
+| [`typescript.ts`](../typescript.ts) at `2632c2c` | 0.723 (0.700-0.741) | 0.549 | 0.91 |
+| dense `;` (1 MB of empty statements) | not timed | not timed | 1.34 |
+| dense `a+a+…` (1 MB) | not timed | not timed | 0.99 |
+
+How to read it:
+
+- On these inputs and these two CPU models monogram's parse takes less time than oxc's in reuse
+  mode on every timed input, while executing 3% to 13% more instructions on seven of those eight. Both hold at
+  once because the cost per instruction differs; an earlier run of an older commit on an Intel
+  Xeon ordered one input the other way. The ratios are not a property of the parsers alone.
+- The products differ (CST against AST), as stated above. This is not a claim that monogram is
+  the faster parser.
+- Where monogram does more work: `typescript.d.ts` (type-declaration-heavy) and dense empty
+  statements.
+- On `checker.ts` monogram runs 120.2M instructions per parse (50.1M of them lexing), oxc
+  116.6M.
+
+### monogram `8d75e66` (2026-11-22, before the lexer and decision work)
+
+The same method, two runs per mode (runner CPUs AMD EPYC 7763, one reuse run on an EPYC 9V74).
+Time per parse, monogram ÷ oxc:
 
 | input | reuse mode | fresh mode |
 |:--|--:|--:|
-| `checker.ts` (TypeScript compiler, 3.2 MB) | 1.032 / 1.091 | 1.063 / 1.041 |
-| `typescript.js` (npm `typescript` 5.9.3, 9.1 MB) | 1.024 / 1.039 | 0.999 / 0.985 |
-| `parser.ts` (TypeScript compiler) | 1.030 / 1.074 | 1.048 / 1.052 |
-| `typescript.d.ts` (npm `typescript` 5.9.3) | 1.143 / 1.127 | 1.023 / 1.018 |
+| `checker.ts` | 1.032 / 1.091 | 1.063 / 1.041 |
+| `typescript.js` | 1.024 / 1.039 | 0.999 / 0.985 |
+| `parser.ts` | 1.030 / 1.074 | 1.048 / 1.052 |
+| `typescript.d.ts` | 1.143 / 1.127 | 1.023 / 1.018 |
 | 2 MB synthetic file | 1.150 / 1.117 | 1.159 / 1.159 |
 | non-ASCII-heavy file | 1.435 / 1.402 | 1.360 / 1.356 |
-| [`src/gen-tm.ts`](../src/gen-tm.ts) at `2632c2c` | 0.995 / 1.024 | 1.144 / 1.141 |
-| [`typescript.ts`](../typescript.ts) at `2632c2c` | 0.906 / 0.992 | 0.718 / 0.714 |
+| `src/gen-tm.ts` | 0.995 / 1.024 | 1.144 / 1.141 |
+| `typescript.ts` | 0.906 / 0.992 | 0.718 / 0.714 |
 
-Reuse mode is the like-for-like comparison: one `CstBuilder` kept across parses (`parse_with`)
-against one oxc `Allocator` `reset()` before each parse. There monogram makes no allocator call
-per parse and oxc 22 to 21,842; neither takes a page fault; oxc executes fewer instructions per
-parse, from 16% fewer (`typescript.ts`) to 39% (the non-ASCII file), 30% on `checker.ts`
-(Callgrind, [`test/bench-rust-profile`](../test/bench-rust-profile/run.sh)). Fresh mode is a
-new builder / allocator per parse.
+There monogram executed 26% to 69% more instructions per parse than oxc (1.42 times on
+`checker.ts`: 166.0M against 116.6M), measured again in the run above as its baseline.
 
-This table is hand-written from two on-demand `measure-bench` runs and is not regenerated.
-Later pull requests on 2026-11-22 (lexer and builder work) lowered the Rust parser's
-instruction count per parse by roughly a fifth, by the per-PR profile job; no wall-clock
-comparison with oxc has been recorded since, and a new one depends on the runner's CPU.
+These tables are hand-written from on-demand runs and are not regenerated. In reuse mode
+monogram makes no allocator call per parse and neither parser takes a page fault.
 
 The Go, TS and JS targets have not been compared with another parser on full TypeScript (an
 earlier Go-vs-tsgo comparison used the JavaScript grammar on repeated snippets, and its harness
