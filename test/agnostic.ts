@@ -169,6 +169,22 @@ check('gen-tm no-comma constraint keyword derived from type-param rule (subtypeo
   check('element region: parses on the shared engine', pr.parse("[p]it's (x)[q!][!p]").rule !== undefined);
   const lexSrc = emitTokenizerModule(lexSpecOf(gr));
   check('element region without typeParameters: no type-parameter rewind emitted', !lexSrc.includes('lxSpecRewind') && !lexSrc.includes('LX_TP_'));
+
+  // The same toy with CODE children: no text token, so an element's children are lexed by the
+  // ordinary scan (here `Word`s and `(…)` holes), while `[!` / `!]` stay region tokens.
+  const CElem = rule(() => [['[', Word, Solo], ['[', Word, ']', many(alt(CElem, RHole, Word)), Shut, Word, ']']]);
+  const CProg = rule(() => [[many(CElem)]]);
+  const gc = defineGrammar({
+    name: 'bracketcode', tokens: { Word, Shut, Solo }, rules: { RHole, CElem, CProg }, entry: CProg,
+    elements: { tagOpen: '[', tagClose: ']', closeMarker: '!', closeTag: 'Shut', selfClose: 'Solo', hole: { open: '(', close: ')' } },
+  });
+  const pc = createParser(gc);
+  const ctoks = pc.tokenize('[p] one two (x) [q!] [!p]');
+  check('element region, code children: children lexed by the ordinary scan', ctoks.filter((t) => t.type === 'Word').map((t) => t.text).join(' ') === 'p one two x q p');
+  check('element region, code children: close / self-close tokens by their declared names', ctoks.some((t) => t.type === 'Shut') && ctoks.some((t) => t.type === 'Solo'));
+  check('element region, code children: parses on the shared engine', pc.parse('[p] one (x) [q!] [!p]').rule !== undefined);
+  check('element region, code children: no text scan emitted', !emitTokenizerModule(lexSpecOf(gc)).includes('LX_EL_TEXT'));
+  check('element region, code children: `[!` outside an element is no token', (() => { try { pc.tokenize('[!p]'); return false; } catch { return true; } })());
 }
 
 console.log(fail === 0 ? `\n${ok}/${ok} agnosticism checks pass — engine has no TS-specific token assumptions` : `\n${fail} FAILED`);

@@ -66,9 +66,10 @@ reference was reached ([`test/template-holes.ts`](../test/template-holes.ts)).
 
 ## Element regions
 
-A token-stream grammar can contain markup elements whose children are text (JSX). The grammar
-declares the region as data, `elements` (`ElementRegion` in [`src/types.ts`](../src/types.ts));
-[`javascriptreact.ts`](../javascriptreact.ts) declares JSX's in `withJsx`:
+A token-stream grammar can contain markup elements whose children are text (JSX) or code. The
+grammar declares the region as data, `elements` (`ElementRegion` in [`src/types.ts`](../src/types.ts)).
+The design, its frame encoding, its relex rules and what is planned are in
+[`docs/REGIONS.md`](REGIONS.md). [`javascriptreact.ts`](../javascriptreact.ts) declares JSX's in `withJsx`:
 
 ```ts
 elements: {
@@ -81,9 +82,14 @@ elements: {
 }
 ```
 
-A `tagOpen` opens an element where a regex literal could start (the `regexContext` decision).
+How code enters an element is derived from the grammar (`tagOpenOnlyOpensTags` in
+[`src/grammar-analysis.ts`](../src/grammar-analysis.ts)). When the grammar uses `tagOpen` only to
+open tags (every `<` begins an element arm, no operator or other token begins with it), every
+`tagOpen` in code opens an element. JSX's `<` is also a comparison, so there a `tagOpen` opens an
+element only where a regex literal could start (the `regexContext` decision).
 In a tag the ordinary tokens are lexed; after an open tag the children are one text token per
-run, holes, and nested elements; `</` and `/>` are tokens only there. Element frames share the
+run (or, with no `text` token, code), holes, and nested elements; `</` and `/>` are tokens only
+there ([`test/fixtures/elementdialect.ts`](../test/fixtures/elementdialect.ts) has code children). Element frames share the
 template literal's hole stack, so an incremental re-lex restarts outside every element as it
 restarts outside every template. `typeParameters` is TypeScript's: a `<` at an operand position
 that begins a type-parameter list (tsc's own JSX lookahead for `<T,` / `<T extends U`, and a
@@ -105,7 +111,10 @@ whose cause is "needs parser context"; they are not to be shaved with more lexer
 | a call signature with type parameters and no return type | `interface I { <T>(x: T); }` | an element | a signature |
 | a comment inside a type-parameter head | `<T /* c */,>(x: T) => x` | an element | type parameters |
 | an element right after a statement that ASI ends on a value | `import a from "b"`⏎`<h>it's</h>;` | a comparison (as for `/re/` there) | an element |
-| a backslash in a JSX attribute string | `<a b="\" c="d" />` | the base's string token, with escapes | a string without escapes |
+
+(A backslash in an attribute string, once a fifth row, needed a tag-only string token, not
+parser context: `tagTokens` fixed it.) [`docs/REGIONS.md`](REGIONS.md) has the counts over the
+reachable real TSX and the cases planned regions add.
 
 [`test/agnostic.ts`](../test/agnostic.ts) parses a toy grammar whose identifier token is
 `Word`, with no templates or regex, on the same engine. [`html.ts`](../html.ts) is markup and
