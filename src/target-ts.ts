@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -3119,12 +3119,16 @@ function ${findAnyName(stops)}(s: string, i: number): number {
   },
 };
 
+// No callee-FIRST body guards: a JS rd call refused at its dispatch costs less than the guard's test
+// on every iteration (measured: TS blocks +0.19% to +0.53% on the real inputs with them).
+const FACTS: PortableFacts = { calleeFirstGuards: false };
+
 export const tsTarget = defineTarget({
   name: 'typescript',
   ext: 'ts',
   lowering: tsLowering,
   emitParser(grammar: CstGrammar, shared: SharedAlgorithms): string {
-    const ir = portableIR(grammar);
+    const ir = portableIR(grammar, FACTS);
     return emitTsLibrary(ir, buildLexIdPlan(ir), shared);
   },
   emitRunner,
@@ -3303,7 +3307,7 @@ if (_editFast || process.argv.includes('edit-session')) {
 
 /** Emit TS parser; optional shape appends AST types + specialized parseAst. Without shape, byte-identical to tsTarget.emitParser(grammar). */
 export function emitTs(grammar: CstGrammar, opts?: { shape?: ShapeSpec }): string {
-  const ir = portableIR(grammar);
+  const ir = portableIR(grammar, FACTS);
   const ids = buildLexIdPlan(ir);
   const base = emitTsLibrary(ir, ids, tsTarget.shared);
   if (!opts?.shape) return base;
