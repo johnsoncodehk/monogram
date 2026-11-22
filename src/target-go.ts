@@ -98,17 +98,20 @@ type GoEngine = {
   recv: string; w: '' | 'W';
   peek: string; ahead: string; matchComp: string;
   bpFound: (name: string, bp: number) => string;   // a Pratt rule parsed at bp, its node dropped
+  template: (hole: string) => string;              // an interpolated template matched, its node dropped
   parsed: (name: string) => string;                // a Pratt rule parsed, its node dropped
   mark: string; reset: string;                     // undo everything (a lookahead that builds: Forms.lookBuilds)
 };
 const ENGINE_GO: GoEngine = {
   recv: 'engine', w: '', peek: 'peek', ahead: 'ahead', matchComp: 'matchComp',
   bpFound: (n, bp) => `(p.bp_${n}(${bp}) >= 0)`, parsed: (n) => `p.parse${n}() >= 0`,
+  template: (h) => `(p.matchTemplate_${h}() >= 0)`,
   mark: ckptGo, reset: undoGo,
 };
 const ENGINE_GO_W: GoEngine = {
   recv: 'parserW', w: 'W', peek: 'peek', ahead: 'ahead', matchComp: 'matchComp',
   bpFound: (n, bp) => `parsedW(p.bpW_${n}(${bp}))`, parsed: (n) => `parsedW(p.parse${n}W())`,
+  template: (h) => `parsedW(p.matchTemplateW_${h}())`,
   mark: `${ckptGoW('parserW')};`, reset: undoGoW('parserW'),
 };
 // The cursor's recognizers (Forms.cursorOnly) run no building form, so nothing here is called.
@@ -116,6 +119,7 @@ const CURSOR_GO: GoEngine = {
   recv: 'cursor', w: '', peek: 'peek', ahead: 'ahead', matchComp: 'matchComp',
   bpFound: () => { throw new Error('goTarget: a cursor recognizer runs no Pratt rule'); },
   parsed: () => { throw new Error('goTarget: a cursor recognizer runs no Pratt rule'); },
+  template: () => { throw new Error('goTarget: a cursor recognizer matches no interpolated template'); },
   mark: '', reset: '',
 };
 const branchGoR = (cond: string) => `{ sp := p.pos; if ${cond} { return true }; p.back(sp) }`;
@@ -131,6 +135,7 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine): StepLowe
     shared: (id) => `p.sub${id}${f}()`,
     lit: (s) => (gtCompLit(ids, s) ? `p.${e.matchComp}(${lidOf(ids, s.value)})` : `p.matchLit${f}(${lidOf(ids, s.value)})`),
     tok: (name) => `p.matchTok${f}(${kidOf(ids, name)})`,
+    template: (name, hole) => `(p.matchTok${f}(${kidOf(ids, name)}) || ${f === 'R' ? e.template(hole) : f === 'W' ? `p.callRuleW((*${recv}).matchTemplateW_${hole})` : `p.callRule(p.matchTemplate_${hole}())`})`,
     rule: (name) => (f === 'R' ? `p.rec${name}()` : f === 'W' ? `p.callRuleW((*${recv}).parse${name}W)` : `p.callRule(p.parse${name}())`),
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (f === 'R' ? e.bpFound(name, bp) : f === 'W' ? `p.callRuleW(func(q *${recv}) (spanned, bool) { return q.bpW_${name}(${bp}) })` : `p.callRule(p.bp_${name}(${bp}))`),
