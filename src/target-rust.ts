@@ -518,14 +518,14 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
         || { let u = ch as u32; (0x2000..=0x200A).contains(&u) }
 }
 ${identName || ir.identLike.length ? `${rsUniIdentTables()}// Both out of line: inlined into the dispatch loop they cost every ASCII token (register layout).
-#[inline(never)] fn _scan_uni_ident(b: &[u8], pos: usize) -> Option<usize> {
+#[cold] #[inline(never)] fn _scan_uni_ident(b: &[u8], pos: usize) -> Option<usize> {
     let (cp, w) = _lx_cp(b, pos);
     if !_uni_in(&_UNI_START, cp) { return None; }
     Some(_lx_ext(b, pos + w))
 }
 // Extend an identifier token that the ASCII pattern cut short at a non-ASCII
 // ID_Continue char (caf|é → café), mirroring emit-lexer's uniIdentContReY extension.
-#[inline(never)] fn _lx_ext(b: &[u8], mut e: usize) -> usize {
+#[cold] #[inline(never)] fn _lx_ext(b: &[u8], mut e: usize) -> usize {
     while e < b.len() {
         let (cp, w) = _lx_cp(b, e);
         if !_uni_in(&_UNI_CONT, cp) { break; }
