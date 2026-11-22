@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isRec, isRecList, recName, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -434,6 +434,170 @@ function buildLexCandidates(
 /** Shared first-byte dispatch for all lexFrom variants in this target. */
 // `heads`: per ASCII byte, code that runs first in that byte's arm (and nowhere else), for a test
 // only that byte can pass; a byte no candidate starts with gets an arm of its own.
+// The lexer of a grammar with an element region (ElementPlan): the frame stack is the template
+// stack, and the frame decisions are the shared family's (lex-family.ts elementFns); what is here
+// is their placement in the dispatch loop, the token push, and the type-parameter signature's
+// speculation (lexed as code to its verdict, then rewound: docs/REGIONS.md).
+function elementLexerGo(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms, p: {
+  head: string; scans: string; rxStateFrom: string; tplSpanFn: string; nlWs: string; lexCodes: string[]; lexFirsts: (LexFirstBytes | null)[];
+  tplCloseTest: string; tplOpenTest: string; uniIdentFallbackGo: string; loopPanicGo: string; goBoolArr: (name: string, flags: boolean[]) => string;
+}): string {
+  const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0;
+  const operand = el.entry === 'operand';
+  if (operand && !rx) throw new Error('portable: an operand element entry needs the regex context (prevIsValue)');
+  const L = tlen(el.tagOpen);
+  const consts = `const lidElOpen uint16 = ${lidOf(ids, el.tagOpen)}
+const lidElClose uint16 = ${lidOf(ids, el.tagClose)}
+const lidHoleOpen uint16 = ${lidOf(ids, el.holeOpen)}
+const lidHoleClose uint16 = ${lidOf(ids, el.holeClose)}
+const lidEq uint16 = ${lidOf(ids, '=')}
+${sig ? `${p.goBoolArr('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
+  // prevIsValue: in a tag nothing is a regex; the token that ended an element is a value.
+  const prevIsValue = p.rxStateFrom.replace('\tprevIsValue := func() bool {\n', `\tprevIsValue := func() bool {
+\t\tif len(templateStack) > 0 { if f := templateStack[len(templateStack)-1]; f&3 == 2 && f&12 != 0 { return true } }
+\t\tif elEnded { return true }
+`);
+  const rxParams = rx ? 'prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, ' : '';
+  const rxRet = rx ? 'uint16, uint16, uint16, bool, bool, []bool, bool, bool, ' : '';
+  const rxNames = rx ? 'prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang, ' : '';
+  const rxInit = rx ? '0, 0, 0, false, false, stk.parenHead[:0], false, false, ' : '';
+  const rxBlank = rx ? '_, _, _, _, _, stk.parenHead, _, _, ' : '';
+  // Brace counting in the holes (kind 0 template, 1 element hole; step 4): a `{` deepens, a `}`
+  // at a count above 0 shallows; at 0 the closer is lexed by its own test.
+  const braces = [
+    tpl ? `if f&3 == 0 { if lid == lidBraceOpen { templateStack[len(templateStack)-1] = f + 4 } else if lid == lidInterpClose { templateStack[len(templateStack)-1] = f - 4 } }` : '',
+    `if f&3 == 1 { if lid == lidHoleOpen { templateStack[len(templateStack)-1] = f + 4 } else if lid == lidHoleClose { templateStack[len(templateStack)-1] = f - 4 } }`,
+  ].filter(Boolean).join(' else ');
+  const specState = sig ? `\t// A type-parameter signature being decided: the token index of its tagOpen (-1: none), the
+\t// state before it, how it was decided, and the decision kept for the tagOpen it rewinds to.
+\tspecTok, specBase, specClosedAt, specOff, specEnd, specAt := -1, 0, -1, 0, 0, -1
+\tspecDone, specFail, specThen, specKeep := false, false, false, false
+\tsvPos, svNl, svPrevLid, svPrevKid, svBpLid, svHasPrev, svHasPrev2, svLastClose, svLastBang, svElEnded, svAngle := 0, false, uint16(0), uint16(0), uint16(0), false, false, false, false, false, 0
+\tvar svParen []bool
+\tvar svStack []int
+\tspecRewind := func() {
+\t\tkeep := specDone && !specFail && specThen
+\t\tre := n + 1
+\t\tif specDone && !specFail { re = ${shared.elementFn('reach')}(src, specEnd) }
+\t\tif re > laEnd { laEnd = re }
+\t\tif keep { specUntil = specOff }
+\t\tspecAt = svPos; specKeep = keep
+\t\t*acc = (*acc)[:specTok]
+\t\tpos = svPos; pendingNl = svNl; prevLid = svPrevLid; prevKid = svPrevKid; bpLid = svBpLid; hasPrev = svHasPrev; hasPrev2 = svHasPrev2
+\t\tlastClose = svLastClose; lastBang = svLastBang; elEnded = svElEnded; tagAngle = svAngle
+\t\tparenHead = append(parenHead[:0], svParen...)
+\t\ttemplateStack = append(templateStack[:0], svStack...)
+\t\tspecTok = -1; specClosedAt = -1; specDone = false; specFail = false
+\t}
+` : '';
+  const emitFn = `\temit := func(off, end int, kid, lid uint16) {
+${rx ? `\t\tif lid == lidLParen {
+\t\t\tisMember := hasPrev2 && _mem[bpLid]
+\t\t\tparenHead = append(parenHead, !isMember && prevKid == kidIdent && _phK[prevLid])
+\t\t} else if lid == lidRParen {
+\t\t\tif len(parenHead) > 0 { lastClose = parenHead[len(parenHead)-1]; parenHead = parenHead[:len(parenHead)-1] } else { lastClose = false }${sig ? `
+\t\t\tif specTok >= 0 && len(*acc) > specTok+3 && len(parenHead) == specBase { specClosedAt = len(*acc) }` : ''}
+\t\t}
+\t\tif _pav[lid] { lastBang = prevIsValue() }
+` : ''}${sig ? `\t\t// the token after the signature group's closer decides it (a closer that leaves the bracket
+\t\t// stack at its base, even by popping an empty one, closes it again)
+\t\tif specClosedAt >= 0 && len(*acc) > specClosedAt { specClosedAt = -1; specDone = true; specThen = kid == 0 && _elThen[lid]; specOff = off; specEnd = end }
+` : ''}\t\tif len(templateStack) > 0 { f := templateStack[len(templateStack)-1]; ${braces} }
+\t\t*acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendingNl = false; elEnded = false${rx ? '\n\t\tbpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true' : ''}
+\t}
+\t_ = emit
+`;
+  // The entry from code, in the tagOpen byte's dispatch arm (outside element frames: inside one
+  // the frame step lexes every tagOpen).
+  const enter = `\t\t\ttemplateStack = append(templateStack, 6); emit(pos, pos + ${L}, 0, lidElOpen);${raw ? ' tagAt = append(tagAt, len(*acc)-1);' : ''} tagAngle = 0; pos += ${L}; continue\n`;
+  const entry = !operand ? `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)}) {\n${enter}\t\t}\n`
+    : !(el.head || sig) ? `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)}) && !prevIsValue() {\n${enter}\t\t}\n`
+    : `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)})${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue() {
+\t\t\top := 0
+\t\t\t${sig ? 'if pos == specAt { op = 1; if specKeep { op = 0 }; specAt = -1 } else ' : ''}{ o, re := ${shared.elementFn('opens')}(src, pos); op = o; if re > laEnd { laEnd = re } }
+\t\t\tif op == 1 {
+${enter}\t\t\t}
+${sig ? `\t\t\tif op == 2 {
+\t\t\t\tsvPos, svNl, svPrevLid, svPrevKid, svBpLid, svHasPrev, svHasPrev2 = pos, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2
+\t\t\t\tsvLastClose, svLastBang, svElEnded, svAngle = lastClose, lastBang, elEnded, tagAngle
+\t\t\t\tsvParen = append(svParen[:0], parenHead...)
+\t\t\t\tsvStack = append(svStack[:0], templateStack...)
+\t\t\t\tspecTok = len(*acc); specBase = len(parenHead); specClosedAt = -1; specDone = false; specFail = false
+\t\t\t}
+` : ''}\t\t}
+`;
+  // An element hole's closer at brace count 0 ends it (the closer is lexed inside the frame).
+  const holeClose = `\t\tif len(templateStack) > 0 && templateStack[len(templateStack)-1] == 1 && strings.HasPrefix(src[pos:], ${J(el.holeClose)}) {
+\t\t\temit(pos, pos + ${tlen(el.holeClose)}, 0, lidHoleClose); templateStack = templateStack[:len(templateStack)-1]; pos += ${tlen(el.holeClose)}; continue
+\t\t}
+`;
+  const heads = new Map<number, string>();
+  const headByte = (t: string) => { const b = Buffer.from(t, 'utf8')[0]!; return b < 128 && ![9, 10, 11, 12, 13, 32].includes(b) ? b : null; };
+  let pre = '';
+  const place = (lit: string, code: string) => { const u = headByte(lit); if (u === null) pre += code; else heads.set(u, (heads.get(u) ?? '') + code); };
+  place(el.tagOpen, entry);
+  place(el.holeClose, holeClose);
+  if (tpl) { place(tpl.interpClose, p.tplCloseTest); place(tpl.open, p.tplOpenTest); }
+  const cascade = renderLexByteDispatchGo(p.lexCodes, p.lexFirsts, '\t', heads);
+  const frameStep = `\t\tif len(templateStack) > 0 && templateStack[len(templateStack)-1]&3 == 2 {
+\t\t\tfr := templateStack[len(templateStack)-1]
+\t\t\tfe, fk, fl, ft, fp, fa, fla := ${shared.elementFn('frame')}(src, pos, fr, tagAngle, len(*acc) > 0 && (*acc)[len(*acc)-1].Lid == lidEq, laEnd)
+\t\t\tlaEnd = fla
+\t\t\tif fe >= 0 {
+\t\t\t\temit(pos, fe, uint16(fk), uint16(fl))
+${raw ? `\t\t\t\t// each element frame's current tag: the index of its tagOpen token (the name is the next)
+\t\t\t\tif uint16(fl) == lidElOpen { if fp == 6 { tagAt = append(tagAt, len(*acc)-1) } else if (fr>>2)&3 == 0 { tagAt[len(tagAt)-1] = len(*acc) - 1 } }
+` : ''}\t\t\t\tif ft < 0 { templateStack = templateStack[:len(templateStack)-1];${raw ? ' tagAt = tagAt[:len(tagAt)-1];' : ''} elEnded = true } else { templateStack[len(templateStack)-1] = ft }
+\t\t\t\tif fp != 0 { templateStack = append(templateStack, fp) }
+${raw ? `\t\t\t\t// an open tag ended: a raw-text name gives its body to a raw frame (kind 3), lexed next
+\t\t\t\tif uint16(fl) == lidElClose && (fr>>2)&3 == 1 && tagAngle == 0 {
+\t\t\t\t\tif i := tagAt[len(tagAt)-1] + 1; i < len(*acc)-1 {
+\t\t\t\t\t\tif re, rk := ${shared.elementFn('raw')}(src, int((*acc)[i].Off), int((*acc)[i].End), fe); rk != 0 && re > fe { templateStack = append(templateStack, 3) }
+\t\t\t\t\t}
+\t\t\t\t}
+` : ''}\t\t\t\ttagAngle = fa; pos = fe; continue
+\t\t\t}
+\t\t}
+${raw ? `\t\tif len(templateStack) > 0 && templateStack[len(templateStack)-1] == 3 {
+\t\t\ti := tagAt[len(tagAt)-1] + 1
+\t\t\tre, rk := ${shared.elementFn('raw')}(src, int((*acc)[i].Off), int((*acc)[i].End), pos)
+\t\t\temit(pos, re, uint16(rk), 0); templateStack = templateStack[:len(templateStack)-1]; pos = re; continue
+\t\t}
+` : ''}`;
+  const loopBody = `${sig ? '\t\tif specTok >= 0 && (specDone || specFail || pos >= n) { specRewind(); continue }\n' : ''}\t\tc := int(src[pos])
+${frameStep}${p.nlWs}${pre}${cascade}
+${p.uniIdentFallbackGo}${p.loopPanicGo}`;
+  const loop = `\tfor ${sig ? '(pos < n || specTok >= 0) && (limit <= 0 || len(*acc)-base < limit || specTok >= 0)' : 'pos < n && (limit <= 0 || len(*acc)-base < limit)'} {
+${loopBody}
+\t}
+`;
+  // A lex error while a signature is undecided decides it: the head was an element.
+  const body = sig ? `\trun := func() (failed bool) {
+\t\tdefer func() {
+\t\t\tif r := recover(); r != nil {
+\t\t\t\tif specTok < 0 { panic(r) }
+\t\t\t\tfailed = true
+\t\t\t}
+\t\t}()
+${loop.replace(/^/gm, '\t').replace(/\t$/, '')}\t\treturn false
+\t}
+\tfor run() { specFail = true }
+` : loop;
+  return `${p.head}${consts}${p.scans}func lexFrom(src string, pos int, pendingNl bool, ${rxParams}templateStack []int, elEnded bool, tagAngle, laEnd, specUntil int, ${raw ? 'tagAt []int, ' : ''}acc *[]Tok, limit int) (int, bool, ${rxRet}[]int, bool, int, int, int${raw ? ', []int' : ''}) {
+\tn := len(src)
+${prevIsValue}${p.tplSpanFn}${specState}${emitFn}\tbase := len(*acc)
+${body}\treturn pos, pendingNl, ${rxNames}templateStack, elEnded, tagAngle, laEnd, specUntil${raw ? ', tagAt' : ''}
+}
+func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
+// likewise the stacks in stk.
+func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
+\tout := buf[:0]
+\t_, _, ${rxBlank}stk.templateStack, _, _, _, _${raw ? ', _' : ''} = lexFrom(src, 0, false, ${rxInit}stk.templateStack[:0], false, 0, 0, 0, ${raw ? 'nil, ' : ''}&out, 0)
+\treturn out
+}`;
+}
+
 function renderLexByteDispatchGo(codes: string[], firsts: (LexFirstBytes | null)[], indent: string, heads: Map<number, string> = new Map()): string {
   const { arms, fallbackIndices } = buildLexDispatchPlan(firsts);
   const fallback = fallbackIndices.map((i) => codes[i]).join('\n');
@@ -494,7 +658,8 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const tplOnly = !!(tpl && !rx && !nl);
   const rxTpl = !!(rx && tpl && !nl);
   const rxOrTpl = !!(rx || tpl) && !rxOnly && !tplOnly && !rxTpl;
-  const stateful = !!(rx || tpl);
+  const el = ir.elements;
+  const stateful = !!(rx || tpl || el);
   const newlineOnly = !!(nl && !rx && !tpl);
   const pushPunct = stateful
     ? (p: string) => `emit(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)})`
@@ -722,10 +887,11 @@ ${uniIdentFallbackGo}${loopPanicGo}`;
   const idTables = renderIdTablesGo(ids);
   // The lexer's bracket-head and template-depth stacks, bounded by nesting depth: lexInto reuses
   // the capacity of the ones in stk (a reused builder's) and leaves them there.
-  const stkFields = [rx ? '\tparenHead []bool\n' : '', tpl ? '\ttemplateStack []int\n' : ''].join('');
+  const stkFields = [rx ? '\tparenHead []bool\n' : '', tpl || el ? '\ttemplateStack []int\n' : ''].join('');
   const lexStacks = `// lexStacks are the lexer's transient stacks, kept across lexes by a reused builder.
 type lexStacks struct {${stkFields ? `\n${stkFields}` : ''}}
 `;
+  if (el) return elementLexerGo(ir, ids, shared, { head: `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}`, scans, rxStateFrom, tplSpanFn, nlWs, lexCodes, lexFirsts, tplCloseTest, tplOpenTest, uniIdentFallbackGo, loopPanicGo, goBoolArr });
   if (rxOnly) {
     return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool) {
 \tn := len(src)
@@ -1596,7 +1762,7 @@ func toksFromMeta(text string, meta []alignMeta) []Tok {
 	t := make([]Tok, len(meta))
 	for i, m := range meta {
 		tx := amText(text, m)
-		t[i] = mkTok(int(m.Off), int(m.End), amNl(m), m.Kid, lidOf(tx))
+		t[i] = mkTok(int(m.Off), int(m.End), amNl(m), m.Kid, ${regionKids(ir, buildLexIdPlan(ir)).length ? `func() uint16 { if ${regionKids(ir, buildLexIdPlan(ir)).map((k) => `m.Kid == ${k}`).join(' || ')} { return 0 }; return lidOf(tx) }()` : 'lidOf(tx)'})
 	}
 	return t
 }
@@ -2883,6 +3049,8 @@ const goBlock = (lines: string[]): string[] => lines.map((l) => GO_IND + l);
 // Shared-algorithm lowering: explicit conversions, slices; a list with an exact final length is
 // made with that capacity, any other list grows by append (no estimate is reserved: 6183a29).
 const goType = (t: Ty): string => (isRecList(t) ? `[]${recName(t)}` : isRec(t) ? recName(t) : GO_TYPES[t]);
+// A Go string literal; Go rejects a byte order mark inside a source file, so it is an escape.
+const goLit = (v: string): string => JSON.stringify(v).replace(/\ufeff/g, '\\uFEFF');
 const goLowering: Lowering = {
   units: UNITS,
   ident: (n) => n,
@@ -2951,7 +3119,7 @@ ${[...ones, ...wides].join('\n')}
 }`;
   },
   expr: {
-    literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
+    literal: (v) => ({ c: typeof v === 'string' ? goLit(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${goWrap(r, ATOM)}`, prec: 90 }),
     bin: (op, a, b) => {
       const [sp, p] = GO_OPS[op];
@@ -2962,7 +3130,7 @@ ${[...ones, ...wides].join('\n')}
     call: (name, args) => `${name}(${args.join(', ')})`,
     len: (cx, l) => cx.atom(`len(${l.c})`, 'int', 'int'),
     code: (cx, s, i) => cx.atom(`int(${goWrap(s, ATOM)}[${i.c}])`, 'int', 'int'),
-    hasAt: (cx, s, i, lit) => cx.atom(`strings.HasPrefix(${goWrap(s, ATOM)}[${i.c}:], ${JSON.stringify(lit)})`, 'bool', 'bool'),
+    hasAt: (cx, s, i, lit) => cx.atom(`strings.HasPrefix(${goWrap(s, ATOM)}[${i.c}:], ${goLit(lit)})`, 'bool', 'bool'),
     inSet: (cx, set, c) => cx.atom(`${set}[${c.c}]`, 'bool', 'bool'),
     runEnd: (cx, set, s, i) => cx.atom(`lexRunEnd(${s.c}, ${i.c}, &${set})`, 'int', 'int'),
     find: (cx, s, i, lit) => cx.atom(`lexFind(${s.c}, ${i.c}, ${JSON.stringify(lit)})`, 'int', 'int'),

@@ -20,7 +20,7 @@
 //
 // Offsets are in the target's native string units; the family only does arithmetic on them.
 
-import { type LexTok, type ParserIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes } from './emit-portable.ts';
+import { type ElementPlan, type LexTok, type ParserIR, buildLexDispatchPlan, buildLexIdPlan, elementTokens, kidOf, lexTokFirstBytes, lidOf, punctFirstBytes } from './emit-portable.ts';
 import type { TokenCharClassItem, TokenPattern } from './types.ts';
 import { relexMode } from './relex-family.ts';
 import { type CharSet, type CodeRange, type Expr, type Fn, type Lowering, type Stmt, inlineFn, printFns, printStmts } from './algo-ir.ts';
@@ -31,6 +31,7 @@ type Ex = Expr | string;
 const x = (e: Ex): Expr => (typeof e === 'string' ? { k: 'var', name: e } : e);
 const I = (v: number): Expr => ({ k: 'int', v });
 const F: Expr = { k: 'bool', v: false };
+const T: Expr = { k: 'bool', v: true };
 const bin = (op: Extract<Expr, { k: 'bin' }>['op']) => (a: Ex, b: Ex): Expr => ({ k: 'bin', op, a: x(a), b: x(b) });
 const add = bin('add'), sub = bin('sub'), shl = bin('shl'), lt = bin('lt'), le = bin('le'), gt = bin('gt'), ge = bin('ge'), eq = bin('eq'), ne = bin('ne');
 const any = (es: Expr[]): Expr => (es.length ? es.reduce((a, b) => ({ k: 'bin', op: 'or', a, b })) : F);
@@ -333,6 +334,7 @@ class LexScan {
         const ex = examinedUnits({ type: 'seq', items: items.slice(k) });
         const stop = intersect(complement(ex), [[0, 0xffff]]);
         const stopUnits = stop.flatMap(([a, b]) => (b - a < 8 ? Array.from({ length: b - a + 1 }, (_, i) => a + i) : [-1]));
+        if (stop.length === 0 && k === 0) return mk([ret(end1)]);
         if (stop.length === 0) body.push(ret(end1));
         else if (stopUnits.length <= 4 && stopUnits.every((c) => c >= 0 && (c < 0xd800 || c > 0xdfff))) body.push(ret(add(this.findAny('q', stopUnits), I(1))));
         else {
@@ -595,9 +597,10 @@ export function lexLookPlan(ir: ParserIR): LookPlan {
 }
 
 // The scanned tokens: every lexer token except the template token, which the target's template
-// state machine scans.
-export function scannedTokens(ir: Pick<ParserIR, 'tokens' | 'tpl'>): LexTok[] {
-  return ir.tokens.filter((t) => t.name !== ir.tpl?.token);
+// state machine scans, and an element region's own tokens, which only its frames scan.
+export function scannedTokens(ir: Pick<ParserIR, 'tokens' | 'tpl'> & { elements?: ElementPlan | null }): LexTok[] {
+  const region = new Set(elementTokens(ir.elements ?? null));
+  return ir.tokens.filter((t) => t.name !== ir.tpl?.token && !region.has(t.name));
 }
 
 // The literals a token of `t` can be: those of `lits` its text may equal, by the token's shape (a
@@ -633,6 +636,168 @@ export function templateLiterals(ir: Pick<ParserIR, 'tpl'>, lits: readonly strin
   return { whole: span(t.open, t.open), head: span(t.open, t.interpOpen), middle: span(t.interpClose, t.interpOpen), tail: span(t.interpClose, t.open) };
 }
 
+// ---- element regions (ElementPlan; docs/REGIONS.md; the interpreter's emit-lexer.ts is the oracle) ----
+//
+// A frame on the lexer's frame stack (the template-hole stack of a grammar with elements) is one
+// int, low 2 bits its kind: 0 template hole and 1 element hole, each with its brace count in the
+// bits above (step 4); 2 element frame, with its sub-state in bits 2-3 (0 children, 1 open tag,
+// 2 close tag) and its open-element count above (step 16); 3 is free (raw text). An element
+// entered from code pushes 6 (an element frame in an open tag).
+export const EL_FRAME_FN = 'lexElFrame';
+export const EL_OPENS_FN = 'lexElOpens';
+export const EL_REACH_FN = 'lexElReach';
+export const EL_RAW_FN = 'lexElRaw';
+// What the type-parameter vetoes decide at a tagOpen at an operand position (EL_OPENS_FN).
+export const EL_NOT = 0, EL_OPEN = 1, EL_SPECULATE = 2;
+
+const shr = (a: Ex, b: Ex): Expr => ({ k: 'bin', op: 'shr', a: x(a), b: x(b) });
+const retN = (...es: Ex[]): Stmt => ({ k: 'return', es: es.map(x) });
+
+function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
+  const ids = buildLexIdPlan(ir);
+  const fns: Fn[] = [];
+  const tokOf = (name: string): LexTok => ir.tokens.find((t) => t.name === name)!;
+  // Called from the frame step only, so never spliced into a dispatch site.
+  for (const name of [...(e.text ? [e.text] : []), ...e.tagTokens]) fns.push(b.scanner(tokOf(name), null));
+  // A tag token whose failed attempt reads further than its decided successor's end + 1 widens the
+  // lexer's look end (the tokens before it record one level deeper: docs/REGIONS.md, Relex).
+  const tagLooks = e.tagTokens.map((name) => tokLook(tokOf(name)).failRead > FREE_FAIL);
+  e.tagTokens.forEach((name, i) => { if (tagLooks[i]) fns.push(b.readEnd(tokOf(name))); });
+  // Whether a token can begin at p (its first units; any beyond ASCII when it may begin there):
+  // an attempt where it cannot reads only the unit at p.
+  const mayBegin = (name: string): Expr => {
+    const fb = lexTokFirstBytes(tokOf(name));
+    if (!fb) return T;
+    return and(lt('p', len('s')), any([...fb.bytes.map((u) => eq(code('p'), I(u))), ...(fb.nonAscii ? [ge(code('p'), I(128))] : [])]));
+  };
+  const L = litLen(e.tagOpen);
+  // The frame step (the frame fr on top is an element frame): what the frame lexes at p, before
+  // the ordinary scan. Returns (end, kid, lid, frame, push, angle, look): end -1 when the frame
+  // lexes nothing there (the ordinary scan lexes p); else the token [p, end) of kind kid and
+  // literal lid, the top frame's new value (-1: pop it, after the token), a frame to push after
+  // it (0: none), the new type-argument depth in the tag, and the look end.
+  const NO = retN(I(-1), I(0), I(0), 'fr', I(0), 'angle', 'look');
+  const tagEnd = (self: boolean): Stmt[] => [
+    let_('count', shr('fr', I(4))),
+    ...(self ? [] : [if_(eq('sb', I(1)), [set('count', add('count', I(1)))], [set('count', sub('count', I(1)))])]),
+    if_(le('count', I(0)), [set('top', I(-1))], [set('top', add(shl('count', I(4)), I(2)))]),
+  ];
+  const tok = (end: Ex, kid: number, lid: number, top: Ex, push: number, angle: Ex): Stmt => retN(end, I(kid), I(lid), top, I(push), angle, 'look');
+  const kidE = (n: string) => kidOf(ids, n), lidE = (l: string) => lidOf(ids, l);
+  const children: Stmt[] = [
+    if_(hasAt('p', e.tagOpen), [
+      if_(hasAt(add('p', L), e.closeMarker), [tok(add(add('p', L), litLen(e.closeMarker)), kidE(e.closeTag), 0, add('fr', I(8)), 0, I(0))]),
+      tok(add('p', L), 0, lidE(e.tagOpen), add('fr', I(4)), 0, I(0)),
+    ]),
+    if_(hasAt('p', e.holeOpen), [tok(add('p', litLen(e.holeOpen)), 0, lidE(e.holeOpen), 'fr', 1, 'angle')]),
+  ];
+  if (e.text) children.push(let_('te', call(scannerName(e.text), 'p')), if_(gt('te', 'p'), [tok('te', kidE(e.text), 0, 'fr', 0, 'angle')]));
+  const tag: Stmt[] = [];
+  e.tagTokens.forEach((name, i) => tag.push(if_(eq('angle', I(0)), [
+    let_(`g${i}`, call(scannerName(name), 'p')),
+    if_(gt(`g${i}`, 'p'), [tok(`g${i}`, kidE(name), 0, 'fr', 0, 'angle')]),
+    ...(tagLooks[i] ? [if_(mayBegin(name), [let_(`r${i}`, call(readEndName(name), 'p')), if_(gt(`r${i}`, 'look'), [set('look', `r${i}`)])])] : []),
+  ])));
+  tag.push(
+    if_(and(and(eq('sb', I(1)), eq('angle', I(0))), hasAt('p', e.closeMarker + e.tagClose)), [
+      ...tagEnd(true), tok(add('p', litLen(e.closeMarker + e.tagClose)), kidE(e.selfClose), 0, 'top', 0, I(0)),
+    ]),
+    if_(hasAt('p', e.tagClose), [
+      if_(gt('angle', I(0)), [tok(add('p', litLen(e.tagClose)), 0, lidE(e.tagClose), 'fr', 0, sub('angle', I(1)))]),
+      ...tagEnd(false), tok(add('p', litLen(e.tagClose)), 0, lidE(e.tagClose), 'top', 0, I(0)),
+    ]),
+    // after the attribute assign an element is a value (`a=<b/>`); elsewhere type arguments
+    if_(hasAt('p', e.tagOpen), [
+      if_('afterEq', [tok(add('p', L), 0, lidE(e.tagOpen), 'fr', 6, I(0))]),
+      tok(add('p', L), 0, lidE(e.tagOpen), 'fr', 0, add('angle', I(1))),
+    ]),
+    if_(and(eq('angle', I(0)), hasAt('p', e.holeOpen)), [tok(add('p', litLen(e.holeOpen)), 0, lidE(e.holeOpen), 'fr', 1, 'angle')]),
+  );
+  fns.push({
+    name: EL_FRAME_FN,
+    doc: 'The element frame fr on top of the frame stack lexes at p: (end, kid, lid, frame, push, angle, look).',
+    params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }, { name: 'fr', ty: 'int' }, { name: 'angle', ty: 'int' }, { name: 'afterEq', ty: 'bool' }, { name: 'look0', ty: 'int' }],
+    ret: ['int', 'int', 'int', 'int', 'int', 'int', 'int'],
+    body: [
+      let_('look', 'look0'),
+      let_('top', 'fr'),
+      let_('sb', sub(shr('fr', I(2)), shl(shr('fr', I(4)), I(2)))),
+      if_(eq('sb', I(0)), [...children, NO]),
+      ...tag,
+      NO,
+    ],
+  });
+  if (e.entry === 'operand' && (e.head || e.signature)) {
+    // The type-parameter vetoes at a tagOpen at p where an operand may start: (EL_NOT: a type-
+    // parameter list | EL_OPEN: an element | EL_SPECULATE: a signature head, decided by lexing its
+    // group as code, and where what decided it was read to (exclusive, len + 1 at the end).
+    const body: Stmt[] = [let_('q', add('p', L)), let_('re', I(0))];
+    const look = (name: string, pat: Parameters<LexScan['pattern']>[0], verdict: number): void => {
+      const rd = b.readEnd({ kind: 'pattern', name, pattern: pat, skip: false });
+      fns.push(rd);
+      body.push(
+        let_(`r_${name}`, call(rd.name, 'q')), if_(gt(`r_${name}`, 're'), [set('re', `r_${name}`)]),
+        // the regex's own match (with its backtracking), as the interpreter's LX_TP_HEAD / LX_TP_SIG
+        if_(ge(call(b.exact(pat), 'q'), I(0)), [retN(I(verdict), 're')]),
+      );
+    };
+    if (e.head) look('ElHead', e.head, EL_NOT);
+    if (e.signature) look('ElSignature', e.signature.pre, EL_SPECULATE);
+    body.push(retN(I(EL_OPEN), 're'));
+    fns.push({ name: EL_OPENS_FN, doc: 'Whether a tagOpen at p where an operand may start opens an element, and how far that was read.', params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }], ret: ['int', 'int'], body });
+  }
+  if (e.rawText.length) {
+    // An open tag whose name token is s[a, b) ended at p: its raw body (end, kid), kid 0 when the
+    // name is no raw-text name. The body runs to tagOpen + closeMarker + name, or to the end.
+    const close = e.tagOpen + e.closeMarker;
+    const body: Stmt[] = [];
+    const lower = (c: string) => c.toLowerCase(), upper = (c: string) => c.toUpperCase();
+    const foldAt = (at: Ex, lit: string): Expr => and(le(add(at, litLen(lit)), len('s')), [...lit].reduce<Expr>((acc, ch, i) => {
+      const c = code(add(at, I(i)));
+      const one = lower(ch) === upper(ch) ? eq(c, I(ch.charCodeAt(0))) : or(eq(c, I(lower(ch).charCodeAt(0))), eq(c, I(upper(ch).charCodeAt(0))));
+      return i === 0 ? one : and(acc, one);
+    }, T));
+    for (const r of e.rawText) {
+      for (const tag of r.tags) {
+        if ([...tag].some((ch) => ch.charCodeAt(0) > 127)) throw new Error(`portable: elements.rawText: tag ${JSON.stringify(tag)} is not ASCII`);
+        const kid = I(kidOf(ids, r.token));
+        const named = and(eq(sub('b', 'a'), litLen(tag)), r.ignoreCase ? foldAt('a', tag) : hasAt('a', tag));
+        body.push(if_(named, r.ignoreCase ? [
+          let_('q', 'p'),
+          while_(and(lt('q', len('s')), not(and(hasAt('q', close), foldAt(add('q', litLen(close)), tag)))), [set('q', add('q', I(1)))]),
+          retN('q', kid),
+        ] : [retN(b.find('p', close + tag), kid)]));
+      }
+    }
+    body.push(retN(I(-1), I(0)));
+    fns.push({ name: EL_RAW_FN, doc: 'The raw body after an open tag named s[a, b) that ended at p: (end, kid), kid 0 when it has none.', params: [{ name: 's', ty: 'str' }, { name: 'a', ty: 'int' }, { name: 'b', ty: 'int' }, { name: 'p', ty: 'int' }], ret: ['int', 'int'], body });
+  }
+  if (e.signature) {
+    // A signature decided by the token ending at q was read through q + 1, and further by any
+    // read that passes q: through the units such a read can pass (LookPlan.reach), and the first
+    // unit it cannot, inclusive.
+    const reach = lexLookPlan(ir).reach;
+    const ascii = reach.filter(([a]) => a <= 127).map(([a, z]): CodeRange => [a, Math.min(127, z)]);
+    const wide = reach.some(([, z]) => z >= 128);
+    fns.push({
+      name: EL_REACH_FN,
+      doc: 'Where the reads that decided a type-parameter signature at the token ending at q end (exclusive).',
+      params: [{ name: 's', ty: 'str' }, { name: 'q', ty: 'int' }],
+      ret: ['int'],
+      body: [
+        let_('r', 'q'),
+        while_(lt('r', len('s')), [
+          let_('c', code('r')),
+          if_(not(any([inRanges('c', ascii), ...(wide ? [ge('c', I(128))] : [])])), [BREAK]),
+          set('r', add('r', I(1))),
+        ]),
+        ret(add('r', I(1))),
+      ],
+    });
+  }
+  return fns;
+}
+
 type Family = { sets: CharSet[]; fns: Fn[]; runs: boolean; finds: boolean; stopSets: number[][] };
 const families = new WeakMap<ParserIR, Family>();
 export function lexScanFamily(ir: ParserIR): Family {
@@ -646,6 +811,7 @@ export function lexScanFamily(ir: ParserIR): Family {
       b.fns.push(b.identEsc());
     }
     if (ir.tpl) b.fns.push(b.tplSpan(ir.tpl));
+    if (ir.elements) b.fns.push(...elementFns(ir, ir.elements, b));
     const noted = new Set(lexLookPlan(ir).arms.flatMap((a) => a.cands.filter((c) => c.readEnd).map((c) => c.tok!)));
     for (const t of scannedTokens(ir)) if (noted.has(t.name)) b.fns.push(b.readEnd(t));
     f = { sets: b.sets, fns: b.fns, runs: b.runs, finds: b.finds, stopSets: [...b.stopSets.values()] };
