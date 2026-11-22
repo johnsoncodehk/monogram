@@ -316,9 +316,6 @@
       "include": "#ident"
     },
     {
-      "include": "#jsxtext"
-    },
-    {
       "include": "#privatefield"
     },
     {
@@ -1752,10 +1749,6 @@
           ]
         }
       ]
-    },
-    "jsxtext": {
-      "name": "variable.other.tsx",
-      "match": "[^{<>}]+"
     },
     "decorator": {
       "name": "entity.name.function.decorator.tsx",
@@ -3602,9 +3595,6 @@
         },
         {
           "include": "#ident"
-        },
-        {
-          "include": "#jsxtext"
         },
         {
           "include": "#privatefield"
