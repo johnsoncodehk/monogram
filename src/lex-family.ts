@@ -646,6 +646,7 @@ export function templateLiterals(ir: Pick<ParserIR, 'tpl'>, lits: readonly strin
 export const EL_FRAME_FN = 'lexElFrame';
 export const EL_OPENS_FN = 'lexElOpens';
 export const EL_REACH_FN = 'lexElReach';
+export const EL_RAW_FN = 'lexElRaw';
 // What the type-parameter vetoes decide at a tagOpen at an operand position (EL_OPENS_FN).
 export const EL_NOT = 0, EL_OPEN = 1, EL_SPECULATE = 2;
 
@@ -743,6 +744,32 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
     if (e.signature) look('ElSignature', e.signature.pre, EL_SPECULATE);
     body.push(retN(I(EL_OPEN), 're'));
     fns.push({ name: EL_OPENS_FN, doc: 'Whether a tagOpen at p where an operand may start opens an element, and how far that was read.', params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }], ret: ['int', 'int'], body });
+  }
+  if (e.rawText.length) {
+    // An open tag whose name token is s[a, b) ended at p: its raw body (end, kid), kid 0 when the
+    // name is no raw-text name. The body runs to tagOpen + closeMarker + name, or to the end.
+    const close = e.tagOpen + e.closeMarker;
+    const body: Stmt[] = [];
+    const lower = (c: string) => c.toLowerCase(), upper = (c: string) => c.toUpperCase();
+    const foldAt = (at: Ex, lit: string): Expr => and(le(add(at, litLen(lit)), len('s')), [...lit].reduce<Expr>((acc, ch, i) => {
+      const c = code(add(at, I(i)));
+      const one = lower(ch) === upper(ch) ? eq(c, I(ch.charCodeAt(0))) : or(eq(c, I(lower(ch).charCodeAt(0))), eq(c, I(upper(ch).charCodeAt(0))));
+      return i === 0 ? one : and(acc, one);
+    }, T));
+    for (const r of e.rawText) {
+      for (const tag of r.tags) {
+        if ([...tag].some((ch) => ch.charCodeAt(0) > 127)) throw new Error(`portable: elements.rawText: tag ${JSON.stringify(tag)} is not ASCII`);
+        const kid = I(kidOf(ids, r.token));
+        const named = and(eq(sub('b', 'a'), litLen(tag)), r.ignoreCase ? foldAt('a', tag) : hasAt('a', tag));
+        body.push(if_(named, r.ignoreCase ? [
+          let_('q', 'p'),
+          while_(and(lt('q', len('s')), not(and(hasAt('q', close), foldAt(add('q', litLen(close)), tag)))), [set('q', add('q', I(1)))]),
+          retN('q', kid),
+        ] : [retN(b.find('p', close + tag), kid)]));
+      }
+    }
+    body.push(retN(I(-1), I(0)));
+    fns.push({ name: EL_RAW_FN, doc: 'The raw body after an open tag named s[a, b) that ended at p: (end, kid), kid 0 when it has none.', params: [{ name: 's', ty: 'str' }, { name: 'a', ty: 'int' }, { name: 'b', ty: 'int' }, { name: 'p', ty: 'int' }], ret: ['int', 'int'], body });
   }
   if (e.signature) {
     // A signature decided by the token ending at q was read through q + 1, and further by any

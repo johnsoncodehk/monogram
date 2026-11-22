@@ -501,6 +501,9 @@ export type ElementPlan = {
   text: string | null;        // the children text run's token; null: children are lexed as code
   closeTag: string; selfClose: string;
   tagTokens: string[];        // tried in a tag (outside type arguments) before the ordinary scan
+  // An open tag whose name is one of `tags` (ASCII case folded under `ignoreCase`) has a raw body:
+  // one `token` up to tagOpen + closeMarker + name (or the end), lexed in a raw frame (kind 3).
+  rawText: { tags: string[]; token: string; ignoreCase: boolean }[];
   // 'always': every tagOpen in code outside a tag opens an element (tagOpenOnlyOpensTags);
   // 'operand': only one where an operand may start, unless a veto below says otherwise.
   entry: 'always' | 'operand';
@@ -525,6 +528,8 @@ function elementPlanOf(grammar: CstGrammar, el: NonNullable<CstGrammar['elements
   const always = tagOpenOnlyOpensTags(grammar, el);
   const tp = el.typeParameters;
   if (always && tp) throw new Error(`portable: elements.typeParameters: this grammar uses '${el.tagOpen}' only to open tags`);
+  // The signature's rewind restores the frame stack, not the raw-text tag records.
+  if (tp?.signature && el.rawText?.length) throw new Error('portable: elements.rawText with typeParameters.signature is not supported');
   let signature: ElementPlan['signature'] = null;
   if (tp?.signature) {
     // The verdict is read off the bracket-head stack, which tracks `(` / `)` only.
@@ -540,6 +545,7 @@ function elementPlanOf(grammar: CstGrammar, el: NonNullable<CstGrammar['elements
     text: el.text === undefined ? null : tok(el.text, 'text'),
     closeTag: tok(el.closeTag, 'closeTag'), selfClose: tok(el.selfClose, 'selfClose'),
     tagTokens: (el.tagTokens ?? []).map((n) => tok(n, 'tagTokens')),
+    rawText: (el.rawText ?? []).map((r) => ({ tags: [...r.tags], token: tok(r.token, 'rawText.token'), ignoreCase: !!r.ignoreCase })),
     entry: always ? 'always' : 'operand',
     head: tp?.head ?? null,
     signature,
@@ -547,7 +553,7 @@ function elementPlanOf(grammar: CstGrammar, el: NonNullable<CstGrammar['elements
 }
 
 // The token names an element region lexes itself (never the ordinary scan).
-export const elementTokens = (e: ElementPlan | null): string[] => (e ? [...(e.text ? [e.text] : []), e.closeTag, e.selfClose, ...e.tagTokens] : []);
+export const elementTokens = (e: ElementPlan | null): string[] => (e ? [...(e.text ? [e.text] : []), e.closeTag, e.selfClose, ...e.tagTokens, ...e.rawText.map((r) => r.token)] : []);
 
 // ── buildIR: grammar + analysis → the target-agnostic parse plan ──
 

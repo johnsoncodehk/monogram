@@ -361,13 +361,14 @@ function elementLexerRust(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms
   head: string; scans: string; tplFn: string; lexCodes: string[]; lexFirsts: (LexFirstBytes | null)[]; specialArms: string; nonAscii: string;
   tplCloseTest: string; tplOpenPreCheck: string; closeByte: number | null; uniIdentOrPanic: string; pavHot: string; lexStacks: string; takeStk: (f: string) => string;
 }): string {
-  const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature;
+  const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0;
   const operand = el.entry === 'operand';
   if (operand && !rx) throw new Error('portable: an operand element entry needs the regex context (prevIsValue)');
   const L = tlen(el.tagOpen);
   // While a signature is undecided an error is its verdict: a sentinel from the error routines.
   const fail = (code: string) => (sig ? code.replace(/let \(interp, e\) = _scan_tpl_span\(([^;]*)\);/g, 'let (interp, e) = _scan_tpl_span($1); if e == usize::MAX { st.spec_fail = true; continue; }') : code);
   const consts = `const _LID_EL_OPEN: u16 = ${lidOf(ids, el.tagOpen)};
+const _LID_EL_CLOSE: u16 = ${lidOf(ids, el.tagClose)};
 const _LID_HOLE_OPEN: u16 = ${lidOf(ids, el.holeOpen)};
 const _LID_HOLE_CLOSE: u16 = ${lidOf(ids, el.holeClose)};
 const _LID_EQ: u16 = ${lidOf(ids, '=')};
@@ -376,7 +377,7 @@ thread_local! { static _LEX_SPEC: std::cell::Cell<bool> = const { std::cell::Cel
 #[inline(always)] fn _lex_spec() -> bool { _LEX_SPEC.with(|c| c.get()) }
 ` : ''}`;
   const rxFields = rx ? 'base: usize, prev0: (bool, u16, u16), bp0: (bool, u16), kid1: u16, lid1: u16, lid2: u16, paren_head: Vec<bool>, last_close: bool, last_bang: bool, ' : '';
-  const specFields = sig ? 'spec_tok: usize, spec_on: bool, spec_base: usize, spec_closed: bool, spec_done: bool, spec_fail: bool, spec_then: bool, spec_off: usize, spec_end: usize, spec_at: usize, spec_has_at: bool, spec_keep: bool, sv: (usize, bool, u16, u16, u16, bool, isize), sv_paren: Vec<bool>, sv_stack: Vec<i64>, ' : '';
+  const specFields = sig ? 'spec_tok: usize, spec_on: bool, spec_base: usize, spec_closed_at: usize, spec_closed: bool, spec_done: bool, spec_fail: bool, spec_then: bool, spec_off: usize, spec_end: usize, spec_at: usize, spec_has_at: bool, spec_keep: bool, sv: (usize, bool, u16, u16, u16, bool, isize), sv_paren: Vec<bool>, sv_stack: Vec<i64>, ' : '';
   const inl = '    #[inline(always)]\n';
   const braces = [
     tpl ? `if f & 3 == 0 { if lid == _LID_BRACE_OPEN { *self.template_stack.last_mut().unwrap() = f + 4; } else if lid == _LID_INTERP_CLOSE { *self.template_stack.last_mut().unwrap() = f - 4; } }` : '',
@@ -402,10 +403,12 @@ ${inl}    fn prev_is_value(&self) -> bool {
         !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'prev_kid')} || ${rsFlag('_DIVT', 'prev_lid')})
     }
 ` : ''}${inl}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
-${sig ? `        if self.spec_closed { self.spec_closed = false; self.spec_done = true; self.spec_then = kid == 0 && ${rsFlag('_EL_THEN', 'lid')}; self.spec_off = off; self.spec_end = end; }
-` : ''}${rx ? `        if lid == _LID_LPAREN { let (has_prev2, bp_lid) = self.prev2(); let (_, prev_kid, prev_lid) = self.prev(); let is_member = has_prev2 && ${rsFlag('_MEM', 'bp_lid')}; self.paren_head.push(!is_member && prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'prev_lid')}); }
-        else if lid == _LID_RPAREN { self.last_close = self.paren_head.pop().unwrap_or(false);${sig ? ' if self.spec_on && self.acc.len() > self.spec_tok + 3 && self.paren_head.len() == self.spec_base { self.spec_closed = true; }' : ''} }
+${rx ? `        if lid == _LID_LPAREN { let (has_prev2, bp_lid) = self.prev2(); let (_, prev_kid, prev_lid) = self.prev(); let is_member = has_prev2 && ${rsFlag('_MEM', 'bp_lid')}; self.paren_head.push(!is_member && prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'prev_lid')}); }
+        else if lid == _LID_RPAREN { self.last_close = self.paren_head.pop().unwrap_or(false);${sig ? ' if self.spec_on && self.acc.len() > self.spec_tok + 3 && self.paren_head.len() == self.spec_base { self.spec_closed = true; self.spec_closed_at = self.acc.len(); }' : ''} }
         if ${p.pavHot} { self.last_bang = self.prev_is_value(); }
+` : ''}${sig ? `        // the token after the signature group's closer decides it (a closer that leaves the bracket
+        // stack at its base, even by popping an empty one, closes it again)
+        if self.spec_closed && self.acc.len() > self.spec_closed_at { self.spec_closed = false; self.spec_done = true; self.spec_then = kid == 0 && ${rsFlag('_EL_THEN', 'lid')}; self.spec_off = off; self.spec_end = end; }
 ` : ''}        if let Some(&f) = self.template_stack.last() { ${braces} }
         self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false; self.el_ended = false;${rx ? ' self.lid2 = self.lid1; self.kid1 = kid; self.lid1 = lid;' : ''}
     }
@@ -436,11 +439,11 @@ ${sig ? `    #[cold] #[inline(never)]
         pos
     }
 ` : ''}`;
-  const struct = `struct ElScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, ${rxFields}template_stack: Vec<i64>, el_ended: bool, tag_angle: isize, la_end: isize, spec_until: isize, ${specFields}${sig ? 'sv_bang: (bool, bool), ' : ''}}
+  const struct = `struct ElScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, ${rxFields}template_stack: Vec<i64>, el_ended: bool, tag_angle: isize, la_end: isize, spec_until: isize, ${raw ? 'tag_at: Vec<i64>, ' : ''}${specFields}${sig ? 'sv_bang: (bool, bool), ' : ''}}
 impl<'a> ElScan<'a> {
 ${methods}}
 `;
-  const enter = `            st.template_stack.push(6); st.emit(pos, pos + ${L}, 0, _LID_EL_OPEN); st.tag_angle = 0; pos += ${L}; continue;\n`;
+  const enter = `            st.template_stack.push(6); st.emit(pos, pos + ${L}, 0, _LID_EL_OPEN);${raw ? ' st.tag_at.push(st.acc.len() as i64 - 1);' : ''} st.tag_angle = 0; pos += ${L}; continue;\n`;
   const at = (lit: string) => startByteEq('pos', lit);
   const entry = !operand ? `        if ${at(el.tagOpen)} {\n${enter}        }\n`
     : !(el.head || sig) ? `        if ${at(el.tagOpen)} && !st.prev_is_value() {\n${enter}        }\n`
@@ -468,12 +471,24 @@ ${sig ? '            if op == 2 { st.spec_begin(pos); }\n' : ''}        }
             st.la_end = fla;
             if fe >= 0 {
                 st.emit(pos, fe as usize, fk as u16, fl as u16);
-                if ft < 0 { st.template_stack.pop(); st.el_ended = true; } else { *st.template_stack.last_mut().unwrap() = ft as i64; }
+${raw ? `                // each element frame's current tag: the index of its tagOpen token (the name is the next)
+                if fl as u16 == _LID_EL_OPEN { let at = st.acc.len() as i64 - 1; if fp == 6 { st.tag_at.push(at); } else if (fr >> 2) & 3 == 0 { *st.tag_at.last_mut().unwrap() = at; } }
+` : ''}                if ft < 0 { st.template_stack.pop();${raw ? ' st.tag_at.pop();' : ''} st.el_ended = true; } else { *st.template_stack.last_mut().unwrap() = ft as i64; }
                 if fp != 0 { st.template_stack.push(fp as i64); }
-                st.tag_angle = fa; pos = fe as usize; continue;
+${raw ? `                // an open tag ended: a raw-text name gives its body to a raw frame (kind 3), lexed next
+                if fl as u16 == _LID_EL_CLOSE && (fr >> 2) & 3 == 1 && st.tag_angle == 0 {
+                    let i = (*st.tag_at.last().unwrap() + 1) as usize;
+                    if i + 1 < st.acc.len() { let t = st.acc[i]; let (re, rk) = ${shared.elementFn('raw')}(src, t.off as isize, t.end as isize, fe); if rk != 0 && re > fe { st.template_stack.push(3); } }
+                }
+` : ''}                st.tag_angle = fa; pos = fe as usize; continue;
             }
         } }
-`;
+${raw ? `        if st.template_stack.last() == Some(&3) {
+            let t = st.acc[(*st.tag_at.last().unwrap() + 1) as usize];
+            let (re, rk) = ${shared.elementFn('raw')}(src, t.off as isize, t.end as isize, pos as isize);
+            st.emit(pos, re as usize, rk as u16, 0); st.template_stack.pop(); pos = re as usize; continue;
+        }
+` : ''}`;
   const panicSite = sig ? p.uniIdentOrPanic.replace(/(\s*)panic!\("Unexpected character/, '$1if st.spec_on { st.spec_fail = true; continue; }$1panic!("Unexpected character') : p.uniIdentOrPanic;
   const loopBody = `${sig ? '        if st.spec_on && (st.spec_done || st.spec_fail || pos >= n) { pos = st.spec_rewind(src, n); continue; }\n' : ''}        let c = b[pos] as u32;
 ${frameStep}${pre}${cascade}
@@ -482,18 +497,18 @@ ${panicSite}`;
   const rxParams = rx ? 'prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool, ' : '';
   const rxTy = rx ? 'u16, u16, u16, bool, bool, Vec<bool>, bool, bool, ' : '';
   const rxInit = rx ? 'base, prev0: (has_prev, prev_kid, prev_lid), bp0: (has_prev2, bp_lid), kid1: prev_kid, lid1: prev_lid, lid2: bp_lid, paren_head, last_close, last_bang, ' : '';
-  const specInit = sig ? 'spec_tok: 0, spec_on: false, spec_base: 0, spec_closed: false, spec_done: false, spec_fail: false, spec_then: false, spec_off: 0, spec_end: 0, spec_at: 0, spec_has_at: false, spec_keep: false, sv: (0, false, 0, 0, 0, false, 0), sv_paren: Vec::new(), sv_stack: Vec::new(), sv_bang: (false, false), ' : '';
+  const specInit = sig ? 'spec_tok: 0, spec_on: false, spec_base: 0, spec_closed_at: 0, spec_closed: false, spec_done: false, spec_fail: false, spec_then: false, spec_off: 0, spec_end: 0, spec_at: 0, spec_has_at: false, spec_keep: false, sv: (0, false, 0, 0, 0, false, 0), sv_paren: Vec::new(), sv_stack: Vec::new(), sv_bang: (false, false), ' : '';
   const rxOut = rx ? 'let ((has_prev, prev_kid, prev_lid), (has_prev2, bp_lid)) = (st.prev(), st.prev2());\n    ' : '';
   const rxRet = rx ? 'prev_lid, prev_kid, bp_lid, has_prev, has_prev2, st.paren_head, st.last_close, st.last_bang, ' : '';
-  return `${p.head}${consts}${p.lexStacks}${p.scans}${p.tplFn}${struct}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, pending_nl: bool, ${rxParams}template_stack: Vec<i64>, el_ended: bool, tag_angle: isize, la_end: isize, spec_until: isize, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, ${rxTy}Vec<i64>, bool, isize, isize, isize) {
+  return `${p.head}${consts}${p.lexStacks}${p.scans}${p.tplFn}${struct}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, pending_nl: bool, ${rxParams}template_stack: Vec<i64>, el_ended: bool, tag_angle: isize, la_end: isize, spec_until: isize, ${raw ? 'tag_at: Vec<i64>, ' : ''}acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, ${rxTy}Vec<i64>, bool, isize, isize, isize${raw ? ', Vec<i64>' : ''}) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
-    let mut st = ElScan { acc, pending_nl, ${rxInit}template_stack, el_ended, tag_angle, la_end, spec_until, ${specInit}};
+    let mut st = ElScan { acc, pending_nl, ${rxInit}template_stack, el_ended, tag_angle, la_end, spec_until, ${raw ? 'tag_at, ' : ''}${specInit}};
     while ${cond} {
 ${loopBody}
     }
-    ${rxOut}(pos, st.pending_nl, ${rxRet}st.template_stack, st.el_ended, st.tag_angle, st.la_end, st.spec_until)
+    ${rxOut}(pos, st.pending_nl, ${rxRet}st.template_stack, st.el_ended, st.tag_angle, st.la_end, st.spec_until${raw ? ', st.tag_at' : ''})
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
@@ -503,7 +518,7 @@ fn lex<'a>(src: &'a str) -> Vec<Tok> {
 /// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer).
 fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, stk: &mut LexStacks) {
     toks.clear();
-    let r = lex_from(src, 0, false, ${rx ? `0, 0, 0, false, false, ${p.takeStk('paren_head')}, false, false, ` : ''}${p.takeStk('template_stack')}, false, 0, 0, 0, toks, 0);
+    let r = lex_from(src, 0, false, ${rx ? `0, 0, 0, false, false, ${p.takeStk('paren_head')}, false, false, ` : ''}${p.takeStk('template_stack')}, false, 0, 0, 0, ${raw ? 'Vec::new(), ' : ''}toks, 0);
     ${rx ? 'stk.paren_head = r.7; ' : ''}stk.template_stack = r.${rx ? 10 : 2};
 }`;
 }

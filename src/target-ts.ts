@@ -203,11 +203,12 @@ function elementLexerTS(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms, 
   scans: string; consts: string; rxStateFrom: string; tplSpanFn: string; nlWs: string; lexCodes: string[]; lexFirsts: (LexFirstBytes | null)[];
   tplCloseTest: string; tplOpenTest: string; uniIdentFallbackTs: string;
 }): string {
-  const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature;
+  const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0;
   const operand = el.entry === 'operand';
   if (operand && !rx) throw new Error('portable: an operand element entry needs the regex context (prevIsValue)');
   const L = tlen(el.tagOpen);
   const consts = `${p.consts}const LID_EL_OPEN = ${lidOf(ids, el.tagOpen)};
+const LID_EL_CLOSE = ${lidOf(ids, el.tagClose)};
 const LID_HOLE_OPEN = ${lidOf(ids, el.holeOpen)};
 const LID_HOLE_CLOSE = ${lidOf(ids, el.holeClose)};
 const LID_EQ = ${lidOf(ids, '=')};
@@ -248,17 +249,19 @@ ${sig ? `${tsFlagTable('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
   }
 ` : '';
   const emitFn = `  function emit(off: number, end: number, kid: number, lid: number): void {
-${sig ? `    if (specClosedAt >= 0) { specClosedAt = -1; specDone = true; specThen = kid === 0 && _elThen[lid] === 1; specOff = off; specEnd = end; }
-` : ''}${rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]; parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid]); }
+${rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]; parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid]); }
     else if (lid === LID_RPAREN) { lastClose = parenHead.pop() ?? false;${sig ? ' if (specTok >= 0 && toks.length > specTok + 3 && parenHead.length === specBase) specClosedAt = toks.length;' : ''} }
     if (_pav[lid]) lastBang = prevIsValue();
+` : ''}${sig ? `    // the token after the signature group's closer decides it (a closer that leaves the bracket
+    // stack at its base, even by popping an empty one, closes it again)
+    if (specClosedAt >= 0 && toks.length > specClosedAt) { specClosedAt = -1; specDone = true; specThen = kid === 0 && _elThen[lid] === 1; specOff = off; specEnd = end; }
 ` : ''}    if (templateStack.length > 0) { const f = templateStack[templateStack.length - 1]; ${braces} }
     toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = false; elEnded = false;${rx ? '\n    bpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true;' : ''}
   }
 `;
   // The entry from code, in the tagOpen unit's dispatch arm (outside element frames: inside one
   // the frame step lexes every tagOpen).
-  const enter = `      templateStack.push(6); emit(pos, pos + ${L}, 0, LID_EL_OPEN); tagAngle = 0; pos += ${L}; continue;\n`;
+  const enter = `      templateStack.push(6); emit(pos, pos + ${L}, 0, LID_EL_OPEN);${raw ? ' tagAt.push(toks.length - 1);' : ''} tagAngle = 0; pos += ${L}; continue;\n`;
   const entry = !operand ? `    if (src.startsWith(${J(el.tagOpen)}, pos)) {\n${enter}    }\n`
     : !(el.head || sig) ? `    if (src.startsWith(${J(el.tagOpen)}, pos) && !prevIsValue()) {\n${enter}    }\n`
     : `    if (src.startsWith(${J(el.tagOpen)}, pos)${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue()) {
@@ -289,16 +292,29 @@ ${sig ? `      if (op === 2) {
   if (tpl) { place(tpl.interpClose, p.tplCloseTest); place(tpl.open, p.tplOpenTest); }
   const cascade = renderLexByteDispatchTS(p.lexCodes, p.lexFirsts, '    ', heads);
   const frameStep = `    if (templateStack.length > 0 && (templateStack[templateStack.length - 1] & 3) === 2) {
-      const [fe, fk, fl, ft, fp, fa, fla] = ${shared.elementFn('frame')}(src, pos, templateStack[templateStack.length - 1], tagAngle, toks.length > 0 && toks[toks.length - 1].lid === LID_EQ, laEnd);
+      const fr = templateStack[templateStack.length - 1];
+      const [fe, fk, fl, ft, fp, fa, fla] = ${shared.elementFn('frame')}(src, pos, fr, tagAngle, toks.length > 0 && toks[toks.length - 1].lid === LID_EQ, laEnd);
       laEnd = fla;
       if (fe >= 0) {
         emit(pos, fe, fk, fl);
-        if (ft < 0) { templateStack.pop(); elEnded = true; } else templateStack[templateStack.length - 1] = ft;
+${raw ? `        // each element frame's current tag: the index of its tagOpen token (the name is the next)
+        if (fl === LID_EL_OPEN) { if (fp === 6) tagAt.push(toks.length - 1); else if (((fr >> 2) & 3) === 0) tagAt[tagAt.length - 1] = toks.length - 1; }
+` : ''}        if (ft < 0) { templateStack.pop();${raw ? ' tagAt.pop();' : ''} elEnded = true; } else templateStack[templateStack.length - 1] = ft;
         if (fp !== 0) templateStack.push(fp);
-        tagAngle = fa; pos = fe; continue;
+${raw ? `        // an open tag ended: a raw-text name gives its body to a raw frame (kind 3), lexed next
+        if (fl === LID_EL_CLOSE && ((fr >> 2) & 3) === 1 && tagAngle === 0) {
+          const i = tagAt[tagAt.length - 1] + 1;
+          if (i < toks.length - 1) { const [re, rk] = ${shared.elementFn('raw')}(src, toks[i].off, toks[i].end, fe); if (rk !== 0 && re > fe) templateStack.push(3); }
+        }
+` : ''}        tagAngle = fa; pos = fe; continue;
       }
     }
-`;
+${raw ? `    if (templateStack.length > 0 && templateStack[templateStack.length - 1] === 3) {
+      const i = tagAt[tagAt.length - 1] + 1;
+      const [re, rk] = ${shared.elementFn('raw')}(src, toks[i].off, toks[i].end, pos);
+      emit(pos, re, rk, 0); templateStack.pop(); pos = re; continue;
+    }
+` : ''}`;
   const loopBody = `${sig ? '    if (specTok >= 0 && (specDone || specFail || pos >= n)) { specRewind(); continue; }\n' : ''}    const c = src.charCodeAt(pos);
 ${frameStep}${p.nlWs}${pre}${cascade}
 ${p.uniIdentFallbackTs}    throw new Error('Unexpected character at offset ' + pos + ': \\'' + src[pos] + '\\'');`;
@@ -312,15 +328,15 @@ ${loop.replace(/^/gm, '    ')}
       break;
     } catch (e) { if (specTok < 0) throw e; specFail = true; }
   }` : loop;
-  return `${consts}${p.scans}function lexFrom(src: string, pos: number, pendingNl: boolean, ${rxParams}templateStack: number[], elEnded: boolean, tagAngle: number, laEnd: number, specUntil: number, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; ${rxRet}templateStack: number[]; elEnded: boolean; tagAngle: number; laEnd: number; specUntil: number } {
+  return `${consts}${p.scans}function lexFrom(src: string, pos: number, pendingNl: boolean, ${rxParams}templateStack: number[], elEnded: boolean, tagAngle: number, laEnd: number, specUntil: number, ${raw ? 'tagAt: number[], ' : ''}toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; ${rxRet}templateStack: number[]; elEnded: boolean; tagAngle: number; laEnd: number; specUntil: number${raw ? '; tagAt: number[]' : ''} } {
   const n = src.length;
   const base = toks.length;
 ${prevIsValue}${p.tplSpanFn}${specState}${emitFn}${body}
-  return { pos, pendingNl, ${rxNames}templateStack, elEnded, tagAngle, laEnd, specUntil };
+  return { pos, pendingNl, ${rxNames}templateStack, elEnded, tagAngle, laEnd, specUntil${raw ? ', tagAt' : ''} };
 }
 function lex(src: string): Tok[] {
   const toks: Tok[] = [];
-  lexFrom(src, 0, false, ${rxInit}[], false, 0, 0, 0, toks);
+  lexFrom(src, 0, false, ${rxInit}[], false, 0, 0, 0, ${raw ? '[], ' : ''}toks);
   return toks;
 }`;
 }

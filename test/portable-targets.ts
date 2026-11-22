@@ -1045,7 +1045,7 @@ const JSX_GRAMMARS = new Set(['typescriptreact', 'javascriptreact']);
 const JSX_CORPUS = '/tmp/ts-repo/tests/cases/conformance/jsx';
 function jsxCorpus(): string[] {
   if (!existsSync(JSX_CORPUS)) { console.log(`  (no ${JSX_CORPUS}: the JSX conformance parity inputs are skipped)`); return []; }
-  return readdirSync(JSX_CORPUS).sort().flatMap((f) => readFileSync(`${JSX_CORPUS}/${f}`, 'utf8').split(/^\/\/\s*@filename:.*$/im));
+  return readdirSync(JSX_CORPUS, { withFileTypes: true }).filter((f) => f.isFile()).map((f) => f.name).sort().flatMap((f) => readFileSync(`${JSX_CORPUS}/${f}`, 'utf8').split(/^\/\/\s*@filename:.*$/im));
 }
 const sortKeys = (o: unknown): unknown =>
   Array.isArray(o) ? o.map(sortKeys)

@@ -47,6 +47,8 @@ export interface RelexMode {
   // An element region: the template stack is the frame stack (it exists without a template
   // token too), and a token's depth also counts the lexer's element state (relexDepth).
   elements: boolean;
+  // Raw-text elements: the lexer keeps each element frame's tagOpen token index (tagAt).
+  raw: boolean;
   kidNl: number;
   lidLParen: number;
   // The lexer's reads past a token's end + 1 (anchor rule (ii)); token names resolved to kids.
@@ -65,6 +67,7 @@ export function relexMode(ir: ParserIR): RelexMode {
     regex,
     template: window && !!ir.tpl,
     elements: window && !!ir.elements,
+    raw: window && !!ir.elements?.rawText.length,
     kidNl: newline ? kidOf(ids, ir.newlineCfg!.token) : -1,
     lidLParen: regex ? lidOf(ids, '(') : -1,
     // lexLookPlan asks relexMode only for `window`: resolved lazily, after this returns.
@@ -139,6 +142,7 @@ export function lexState(m: RelexMode): StateField[] {
       { name: 'laEnd', ty: 'int', init: I(0) },
       { name: 'specUntil', ty: 'int', init: I(0) },
     );
+    if (m.raw) f.push({ name: 'tagAt', ty: 'depths', init: newList('depths') });
   }
   return f;
 }
@@ -202,7 +206,7 @@ function restoreFromAnchor(m: RelexMode): Stmt[] {
 // ---- functions ----
 
 function toMetaFn(): Fn {
-  const zero: RelexMode = { window: false, newline: false, regex: false, template: false, elements: false, kidNl: -1, lidLParen: -1, look: { arms: [], over: [], reach: [] }, kidOf: () => -1 };
+  const zero: RelexMode = { window: false, newline: false, regex: false, template: false, elements: false, raw: false, kidNl: -1, lidLParen: -1, look: { arms: [], over: [], reach: [] }, kidOf: () => -1 };
   return {
     name: 'toMeta',
     doc: 'Stateless meta for tokens of a lexer whose meta carries no lexer state.',
