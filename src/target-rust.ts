@@ -275,12 +275,17 @@ function buildLexCandidates(
 }
 
 /** Shared first-byte dispatch for all lexFrom variants in this target. */
-function renderLexByteDispatchRust(codes: string[], firsts: (LexFirstBytes | null)[], indent: string, specialAsciiArms: string, nonAsciiWsCheck: string): string {
+// `armHead`: code that runs first in the arm of one ASCII byte (and nowhere else), for a test that
+// only that byte can pass.
+function renderLexByteDispatchRust(codes: string[], firsts: (LexFirstBytes | null)[], indent: string, specialAsciiArms: string, nonAsciiWsCheck: string, armHead: { byte: number; code: string } | null = null): string {
   const { arms, fallbackIndices } = buildLexDispatchPlan(firsts);
   const fallback = fallbackIndices.map((i) => codes[i]).join('\n');
   let matchArms = specialAsciiArms;
+  // A byte no candidate starts with gets an arm of its own for the head code.
+  if (armHead && !arms.some((a) => a.bytes.includes(armHead.byte))) matchArms += `${indent}        ${rustMatchLabels([armHead.byte])} => {\n${armHead.code}${indent}        }\n`;
   for (const arm of arms) {
     matchArms += `${indent}        ${rustMatchLabels(arm.bytes)} => {\n`;
+    if (armHead && arm.bytes.includes(armHead.byte)) matchArms += armHead.code;
     matchArms += arm.indices.map((i) => codes[i]).join('\n') + '\n';
     matchArms += `${indent}        }\n`;
   }
@@ -377,17 +382,24 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
             pos = e; continue;
         }
 ` : '';
-  const tplDispatch = tpl ? `        if !st.template_stack.is_empty() && ${startByteEq('pos', tpl.interpClose)} && *st.template_stack.last().unwrap() == 0 {
+  // The template `}` test can pass only at the closer's first byte: when that byte is ASCII it is
+  // made in that byte's dispatch arm, before the arm's own candidates, not in every round.
+  const closeFirst = tpl ? firstUnit(tpl.interpClose, UNITS) : -1;
+  const specialBytes = [...(nlRs ? [] : [9, 10, 11, 12, 13, 32]), ...(tplOpenByte !== null ? [tplOpenByte] : [])];
+  const closeByte = tpl && closeFirst < 128 && !specialBytes.includes(closeFirst) ? closeFirst : null;
+  const tplCloseTest = tpl ? `        if !st.template_stack.is_empty() && ${startByteEq('pos', tpl.interpClose)} && *st.template_stack.last().unwrap() == 0 {
             st.template_stack.pop();
             let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.interpClose)}, false);
             if interp { st.emit(pos, e, ${kidOf(ids, "$templateMiddle")}, lid_of(&b[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, "$templateTail")}, lid_of(&b[pos..e])); }
             pos = e; continue;
         }
-${tplOpenPreCheck}` : '';
+` : '';
+  const tplDispatch = tpl ? `${closeByte === null ? tplCloseTest : ''}${tplOpenPreCheck}` : '';
   const punctLine = (p: string) =>
     `        if ${startByteEq('pos', p)} { ${stateful ? `st.emit(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${tlen(p)}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${tlen(p)}; continue; }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
-  const cascade = renderLexByteDispatchRust(lexCodes, lexFirsts, '        ', `${wsNlArms}${tplOpenArm}`, nonAsciiWsCheck);
+  const cascade = renderLexByteDispatchRust(lexCodes, lexFirsts, '        ', `${wsNlArms}${tplOpenArm}`, nonAsciiWsCheck,
+    closeByte !== null ? { byte: closeByte, code: tplCloseTest } : null);
   // Struct fields / emit hooks / init are assembled per-feature so a grammar can have regex,
   // templates, or both share one LexState. Rx bookkeeping is fully integerized (lid/kid bit tables).
   const rxBitTables = rx ? `${rsBoolArr('_DIVT', lidFlagTable(ids, rx.divisionTexts))}

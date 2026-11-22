@@ -128,12 +128,17 @@ function buildLexCandidates(
 }
 
 /** Shared first-byte dispatch for all lexFrom variants in this target. */
-function renderLexByteDispatchTS(codes: string[], firsts: (LexFirstBytes | null)[], indent: string): string {
+// `heads`: per ASCII unit, code that runs first in that unit's arm (and nowhere else), for a test
+// only that unit can pass (it tests its own prefix, so an arm shared with other units is safe); a
+// unit no candidate starts with gets an arm of its own.
+function renderLexByteDispatchTS(codes: string[], firsts: (LexFirstBytes | null)[], indent: string, heads: Map<number, string> = new Map()): string {
   const { arms, fallbackIndices } = buildLexDispatchPlan(firsts);
   const fallback = fallbackIndices.map((i) => codes[i]).join('\n');
   let switchArms = '';
+  for (const [unit, code] of heads) if (!arms.some((a) => a.bytes.includes(unit))) switchArms += `${indent}    case ${unit}:\n${code}${indent}      break;\n`;
   for (const arm of arms) {
     switchArms += arm.bytes.map((b) => `${indent}    case ${b}:`).join('\n') + '\n';
+    for (const b of arm.bytes) switchArms += heads.get(b) ?? '';
     switchArms += arm.indices.map((i) => codes[i]).join('\n') + '\n';
     switchArms += `${indent}      break;\n`;
   }
@@ -194,7 +199,6 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const punctLine = (p: string) =>
     `    if (src.startsWith(${J(p)}, pos)) { ${pushFn}(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)}); pos += ${tlen(p)}; continue; }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
-  const cascade = renderLexByteDispatchTS(lexCodes, lexFirsts, '    ');
   const rxBitTables = rx ? `${tsFlagTable('_divT', lidFlagTable(ids, rx.divisionTexts))}
 ${tsFlagTable('_divK', kidFlagTable(ids, rx.divisionTypes))}
 ${tsFlagTable('_rxT', lidFlagTable(ids, rx.regexTexts))}
@@ -275,21 +279,34 @@ ${emitHooks}
     bpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true;
   }
 ` : '';
-  // Template dispatch runs at the top of the loop, before token/punct scanning.
-  const tplDispatch = tpl ? `    if (templateStack.length > 0 && src.startsWith(${J(tpl.interpClose)}, pos) && templateStack[templateStack.length - 1] === 0) {
+  // The template tests can pass only at their delimiter's first unit: when that unit is ASCII
+  // (and not whitespace, which is consumed before the dispatch) the test is made in that unit's
+  // dispatch arm, before the arm's own candidates, not in every round.
+  const tplHeads = new Map<number, string>();
+  const headUnit = (t: string) => { const u = t.charCodeAt(0); return u < 128 && ![9, 10, 11, 12, 13, 32].includes(u) ? u : null; };
+  const tplCloseTest = tpl ? `    if (templateStack.length > 0 && src.startsWith(${J(tpl.interpClose)}, pos) && templateStack[templateStack.length - 1] === 0) {
       templateStack.pop();
       const sp = scanTplSpan(pos + ${tlen(tpl.interpClose)}, false);
       if (sp.interp) { const _tx = src.slice(pos, sp.end); emit(pos, sp.end, ${kidOf(ids, '$templateMiddle')}, lid_of(_tx)); templateStack.push(0); }
       else { const _tx = src.slice(pos, sp.end); emit(pos, sp.end, ${kidOf(ids, '$templateTail')}, lid_of(_tx)); }
       pos = sp.end; continue;
     }
-    if (src.startsWith(${J(tpl.open)}, pos)) {
+` : '';
+  const tplOpenTest = tpl ? `    if (src.startsWith(${J(tpl.open)}, pos)) {
       const sp = scanTplSpan(pos + ${tlen(tpl.open)}, ${rx ? '!prevIsValue()' : 'true'});
       if (sp.interp) { const _tx = src.slice(pos, sp.end); emit(pos, sp.end, ${kidOf(ids, '$templateHead')}, lid_of(_tx)); templateStack.push(0); }
       else { const _tx = src.slice(pos, sp.end); emit(pos, sp.end, ${kidOf(ids, tpl.token)}, lid_of(_tx)); }
       pos = sp.end; continue;
     }
 ` : '';
+  let tplDispatch = '';
+  if (tpl) for (const [t, code] of [[tpl.interpClose, tplCloseTest], [tpl.open, tplOpenTest]] as const) {
+    const hu = headUnit(t);
+    // Two tests at one unit keep their order; once one stays here, the next stays too.
+    if (hu !== null && tplDispatch === '') tplHeads.set(hu, (tplHeads.get(hu) ?? '') + code);
+    else tplDispatch += code;
+  }
+  const cascade = renderLexByteDispatchTS(lexCodes, lexFirsts, '    ', tplHeads);
   const identNameTs = ir.identToken;
   const identKidTs = identNameTs ? kidOf(ids, identNameTs) : 0;
   const lxExtConst = ir.identLike.length
