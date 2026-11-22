@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
+import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -141,26 +141,14 @@ function renderIdTablesRust(ids: LexIdPlan): string {
   const kidsLit = ids.kids.map(J).join(', ');
   const lidsLit = ids.lids.map(J).join(', ');
   const kidArms = ids.kids.map((k, i) => `${J(k)} => ${i}`).join(', ');
-  // Group lids[1..] by byte length, in two match tables split by the first-byte class
-  // lid_of routes a text by (lidWordByte), so each literal is in the table its own text reaches.
-  const byLenKw = new Map<number, { text: string; id: number }[]>();
-  const byLenPu = new Map<number, { text: string; id: number }[]>();
-  for (let i = 1; i < ids.lids.length; i++) {
-    const text = ids.lids[i]!;
-    const blen = tlen(text);
-    const ent = { text, id: i };
-    const map = lidWordByte(firstUnit(text, UNITS)) ? byLenKw : byLenPu;
-    const arr = map.get(blen) ?? [];
-    arr.push(ent);
-    map.set(blen, arr);
-  }
-  const lenArmsOf = (byLen: Map<number, { text: string; id: number }[]>) =>
-    [...byLen.entries()].sort((a, b) => a[0] - b[0]).map(([len, ents]) => {
+  const tables = buildLidTables(ids, UNITS);
+  const lenArmsOf = (byLen: [number, { text: string; id: number }[]][]) =>
+    byLen.map(([len, ents]) => {
       const arms = ents.map((e) => `${rsByteStr(e.text)} => ${e.id}`).join(', ');
       return `        ${len} => match text { ${arms}, _ => 0 },`;
     }).join('\n');
-  const kwArms = lenArmsOf(byLenKw);
-  const puArms = lenArmsOf(byLenPu);
+  const kwArms = lenArmsOf(tables.word);
+  const puArms = lenArmsOf(tables.rest);
   const pf = buildLidPrefilter(ids, UNITS);
   const bitsLit = [...pf.firstByLenBits].join(', ');
   // The byte pattern of lidWordByte, from the function itself (ranges of consecutive bytes).
@@ -229,6 +217,35 @@ const RULE_NAMES: &[&str] = &[${ar.ruleNames.map(J).join(', ')}];
 }
 
 
+// Whether a skipped token's bytes hold a line terminator (LF, CR, U+2028, U+2029), read as bytes:
+// eight per round test for LF, CR and E2 (the lead byte of U+2028 / U+2029: E2 80 A8 / A9); the
+// lowest flagged byte of a round is the first candidate (a zero-byte mask is exact at its lowest
+// bit), which is then checked whole, and the search goes on after it.
+const RS_HAS_LINE_TERM = `#[inline(never)]
+fn _lx_has_line_term(b: &[u8]) -> bool {
+    const L: u64 = 0x0101_0101_0101_0101;
+    let z = |v: u64| v.wrapping_sub(L) & !v & (L << 7);
+    let mut i = 0;
+    loop {
+        let c = match b.get(i..i + 8) {
+            Some(w) => {
+                let v = u64::from_le_bytes([w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]]);
+                let m = z(v ^ (L * 10)) | z(v ^ (L * 13)) | z(v ^ (L * 0xE2));
+                if m == 0 { i += 8; continue; }
+                i += (m.trailing_zeros() >> 3) as usize;
+                b[i]
+            }
+            None => match b.get(i) { Some(&c) => c, None => return false },
+        };
+        match c {
+            10 | 13 => return true,
+            0xE2 if b.get(i + 1) == Some(&0x80) && matches!(b.get(i + 2), Some(&(0xA8 | 0xA9))) => return true,
+            _ => i += 1,
+        }
+    }
+}
+`;
+
 // The relex family steps `lex_from` one token at a time; out of line, every step rebuilds and
 // returns the whole lexer state through memory.
 const LEX_FROM_ATTR = '#[inline(always)]\n';
@@ -247,7 +264,7 @@ function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: bo
   const kid = kidOf(ids, name);
   const lid = lidCall(shared.tokenLiterals(ir, t, ids.lids.slice(1)), '&b[pos..e]');
   const push = t.skip
-    ? `if src[pos..e].chars().any(|c| matches!(c, '\\n' | '\\r' | '\\u{2028}' | '\\u{2029}')) { ${nlVar} = true; } `
+    ? `if _lx_has_line_term(&b[pos..e]) { ${nlVar} = true; } `
     : stateful
       ? `st.emit(pos, e, ${kid}, ${lid}); `
       : `toks.push(mk_tok(pos, e, pending_nl, ${kid}, ${lid})); pending_nl = false; `;
@@ -464,7 +481,7 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
     : `        panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`;
   // The source is a &str, so the character at a position is std's own decode of it: one boundary
   // check and the character's bytes, none past it. None where pos is no character boundary.
-  const lexUtf8Helpers = `#[inline(always)] fn _char_at(s: &str, pos: usize) -> Option<(char, usize)> {
+  const lexUtf8Helpers = `${shared.scannedTokens(ir).some((t) => t.skip) ? RS_HAS_LINE_TERM : ''}#[inline(always)] fn _char_at(s: &str, pos: usize) -> Option<(char, usize)> {
     let ch = s.get(pos..)?.chars().next()?;
     Some((ch, ch.len_utf8()))
 }
@@ -520,7 +537,7 @@ fn _lx_ext(s: &str, e: usize) -> usize {
 }
 ` : '';
   const fields = ['toks: Vec<Tok>', 'pending_nl: bool',
-    rx ? 'base: usize, prev0: (bool, u16, u16), bp0: (bool, u16), paren_head: Vec<bool>, last_close: bool, last_bang: bool' : '',
+    rx ? 'base: usize, prev0: (bool, u16, u16), bp0: (bool, u16), kid1: u16, lid1: u16, lid2: u16, paren_head: Vec<bool>, last_close: bool, last_bang: bool' : '',
     tpl ? 'template_stack: Vec<i64>' : '',
     nlRs ? nlRs.fields : ''].filter(Boolean).join(', ');
   // Force-inline bookkeeping into the lex cascade. Under rustc -O (no LTO), leaving
@@ -531,12 +548,12 @@ fn _lx_ext(s: &str, e: usize) -> usize {
     /// lex recorded, else the one before it began (prev0).
     fn prev(&self) -> (bool, u16, u16) {
         let n = self.toks.len();
-        if n > self.base { let t = &self.toks[n - 1]; (true, t.kid, t.lid) } else { self.prev0 }
+        (n > self.base || self.prev0.0, self.kid1, self.lid1)
     }
 ${inlAlways}    /// The token before the previous one: (present, lid).
     fn prev2(&self) -> (bool, u16) {
         let n = self.toks.len();
-        if n > self.base + 1 { (true, self.toks[n - 2].lid) } else if n == self.base + 1 { (self.prev0.0, self.prev0.2) } else { self.bp0 }
+        (n > self.base + 1 || (n == self.base + 1 && self.prev0.0) || (n == self.base && self.bp0.0), self.lid2)
     }
 ${inlAlways}    fn prev_is_value(&self) -> bool {
         let (has_prev, prev_kid, prev_lid) = self.prev();
@@ -554,7 +571,7 @@ ${inlAlways}    fn prev_is_value(&self) -> bool {
     tpl ? `        if !self.template_stack.is_empty() { if lid == _LID_BRACE_OPEN { *self.template_stack.last_mut().unwrap() += 1; } else if lid == _LID_INTERP_CLOSE { *self.template_stack.last_mut().unwrap() -= 1; } }` : '',
     nlRs ? nlRs.hooks : '',
   ].filter(Boolean).join('\n');
-  const emitTail = rx ? `` : '';
+  const emitTail = rx ? ` self.lid2 = self.lid1; self.kid1 = kid; self.lid1 = lid;` : '';
   const stateImpl = stateful ? `struct LexState { ${fields} }
 impl LexState {
 ${prevIsValue}${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
@@ -563,18 +580,18 @@ ${emitHooks}
     }
 }
 ` : '';
-  const rxScanImpl = rxOnly ? `struct RxScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, base: usize, prev0: (bool, u16, u16), bp0: (bool, u16), paren_head: Vec<bool>, last_close: bool, last_bang: bool }
+  const rxScanImpl = rxOnly ? `struct RxScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, base: usize, prev0: (bool, u16, u16), bp0: (bool, u16), kid1: u16, lid1: u16, lid2: u16, paren_head: Vec<bool>, last_close: bool, last_bang: bool }
 impl<'a> RxScan<'a> {
 ${inlAlways}    /// The previous token: (present, kid, lid). The tokens are their own record: the last one this
     /// lex recorded, else the one before it began (prev0).
     fn prev(&self) -> (bool, u16, u16) {
         let n = self.acc.len();
-        if n > self.base { let t = &self.acc[n - 1]; (true, t.kid, t.lid) } else { self.prev0 }
+        (n > self.base || self.prev0.0, self.kid1, self.lid1)
     }
 ${inlAlways}    /// The token before the previous one: (present, lid).
     fn prev2(&self) -> (bool, u16) {
         let n = self.acc.len();
-        if n > self.base + 1 { (true, self.acc[n - 2].lid) } else if n == self.base + 1 { (self.prev0.0, self.prev0.2) } else { self.bp0 }
+        (n > self.base + 1 || (n == self.base + 1 && self.prev0.0) || (n == self.base && self.bp0.0), self.lid2)
     }
 ${inlAlways}    fn prev_is_value(&self) -> bool {
         let (has_prev, prev_kid, prev_lid) = self.prev();
@@ -588,7 +605,7 @@ ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
         if lid == _LID_LPAREN { let (has_prev2, bp_lid) = self.prev2(); let (_, prev_kid, prev_lid) = self.prev(); let is_member = has_prev2 && ${rsFlag('_MEM', 'bp_lid')}; self.paren_head.push(!is_member && prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'prev_lid')}); }
         else if lid == _LID_RPAREN { self.last_close = self.paren_head.pop().unwrap_or(false); }
         if ${pavHot} { self.last_bang = self.prev_is_value(); }
-        self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;
+        self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false; self.lid2 = self.lid1; self.kid1 = kid; self.lid1 = lid;
     }
 }
 ` : '';
@@ -600,18 +617,18 @@ ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
     }
 }
 ` : '';
-  const rxTplScanImpl = rxTpl ? `struct RxTplScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, base: usize, prev0: (bool, u16, u16), bp0: (bool, u16), paren_head: Vec<bool>, last_close: bool, last_bang: bool, template_stack: Vec<i64> }
+  const rxTplScanImpl = rxTpl ? `struct RxTplScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, base: usize, prev0: (bool, u16, u16), bp0: (bool, u16), kid1: u16, lid1: u16, lid2: u16, paren_head: Vec<bool>, last_close: bool, last_bang: bool, template_stack: Vec<i64> }
 impl<'a> RxTplScan<'a> {
 ${inlAlways}    /// The previous token: (present, kid, lid). The tokens are their own record: the last one this
     /// lex recorded, else the one before it began (prev0).
     fn prev(&self) -> (bool, u16, u16) {
         let n = self.acc.len();
-        if n > self.base { let t = &self.acc[n - 1]; (true, t.kid, t.lid) } else { self.prev0 }
+        (n > self.base || self.prev0.0, self.kid1, self.lid1)
     }
 ${inlAlways}    /// The token before the previous one: (present, lid).
     fn prev2(&self) -> (bool, u16) {
         let n = self.acc.len();
-        if n > self.base + 1 { (true, self.acc[n - 2].lid) } else if n == self.base + 1 { (self.prev0.0, self.prev0.2) } else { self.bp0 }
+        (n > self.base + 1 || (n == self.base + 1 && self.prev0.0) || (n == self.base && self.bp0.0), self.lid2)
     }
 ${inlAlways}    fn prev_is_value(&self) -> bool {
         let (has_prev, prev_kid, prev_lid) = self.prev();
@@ -626,7 +643,7 @@ ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
         else if lid == _LID_RPAREN { self.last_close = self.paren_head.pop().unwrap_or(false); }
         if ${pavHot} { self.last_bang = self.prev_is_value(); }
         if !self.template_stack.is_empty() { if lid == _LID_BRACE_OPEN { *self.template_stack.last_mut().unwrap() += 1; } else if lid == _LID_INTERP_CLOSE { *self.template_stack.last_mut().unwrap() -= 1; } }
-        self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;
+        self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false; self.lid2 = self.lid1; self.kid1 = kid; self.lid1 = lid;
     }
 }
 ` : '';
@@ -645,7 +662,7 @@ struct LexStacks {${stkFields.length ? ` ${stkFields.join(', ')} ` : ''}}
   const stkParam = stkFields.length ? 'stk' : '_stk';
   const takeStk = (f: string) => `{ let mut v = std::mem::take(&mut stk.${f}); v.clear(); v }`;
   const initFields = ['toks: Vec::new()', 'pending_nl: false',
-    rx ? `base: 0, prev0: (false, 0, 0), bp0: (false, 0), paren_head: ${takeStk('paren_head')}, last_close: false, last_bang: false` : '',
+    rx ? `base: 0, prev0: (false, 0, 0), bp0: (false, 0), kid1: 0, lid1: 0, lid2: 0, paren_head: ${takeStk('paren_head')}, last_close: false, last_bang: false` : '',
     tpl ? `template_stack: ${takeStk('template_stack')}` : '',
     nlRs ? nlRs.init : ''].filter(Boolean).join(', ');
   const open = stateful ? `    let mut st = LexState { ${initFields} };` : `    let mut toks: Vec<Tok> = Vec::new();\n    let mut pending_nl = false;`;
@@ -661,7 +678,7 @@ ${uniIdentOrPanic}`;
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
-    let mut st = RxScan { acc, pending_nl, base, prev0: (has_prev, prev_kid, prev_lid), bp0: (has_prev2, bp_lid), paren_head, last_close, last_bang };
+    let mut st = RxScan { acc, pending_nl, base, prev0: (has_prev, prev_kid, prev_lid), bp0: (has_prev2, bp_lid), kid1: prev_kid, lid1: prev_lid, lid2: bp_lid, paren_head, last_close, last_bang };
     while pos < n && (limit == 0 || st.acc.len() - base < limit) {
 ${rxLoopBody}
     }
@@ -708,7 +725,7 @@ fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) 
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
-    let mut st = RxTplScan { acc, pending_nl, base, prev0: (has_prev, prev_kid, prev_lid), bp0: (has_prev2, bp_lid), paren_head, last_close, last_bang, template_stack };
+    let mut st = RxTplScan { acc, pending_nl, base, prev0: (has_prev, prev_kid, prev_lid), bp0: (has_prev2, bp_lid), kid1: prev_kid, lid1: prev_lid, lid2: bp_lid, paren_head, last_close, last_bang, template_stack };
     while pos < n && (limit == 0 || st.acc.len() - base < limit) {
 ${loopBody}
     }
@@ -5370,6 +5387,30 @@ fn lex_run_end(b: &[u8], mut i: usize, set: &[bool; 256]) -> usize {
     while i < b.len() && set[b[i] as usize] { i += 1; }
     i
 }`,
+  // Eight bytes per round test for the literal's first byte (a zero-byte mask of the word XOR that
+  // byte: its lowest flagged byte is the first match); a match is then compared whole.
+  findFn: `/// Where lit next occurs in b from i: the first j >= i at which b has it, or b.len().
+#[inline(never)]
+fn lex_find(b: &[u8], mut i: usize, lit: &[u8]) -> usize {
+    const L: u64 = 0x0101_0101_0101_0101;
+    let k = L * lit[0] as u64;
+    loop {
+        match b.get(i..i + 8) {
+            Some(w) => {
+                let v = u64::from_le_bytes([w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]]) ^ k;
+                let m = v.wrapping_sub(L) & !v & (L << 7);
+                if m == 0 { i += 8; continue; }
+                i += (m.trailing_zeros() >> 3) as usize;
+            }
+            None => {
+                while i < b.len() && b[i] != lit[0] { i += 1; }
+                if i == b.len() { return i; }
+            }
+        }
+        if b[i..].starts_with(lit) { return i; }
+        i += 1;
+    }
+}`,
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${rsWrap(r, ATOM)}`, prec: 90 }),
@@ -5385,6 +5426,7 @@ fn lex_run_end(b: &[u8], mut i: usize, set: &[bool; 256]) -> usize {
     hasAt: (cx, s, i, lit) => cx.atom(`${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}..].starts_with(${J(lit)}.as_bytes())`, 'bool', 'bool'),
     inSet: (cx, set, c) => cx.atom(`${set.toUpperCase()}[${cx.coerce(c, 'usize')}]`, 'bool', 'bool'),
     runEnd: (cx, set, s, i) => cx.atom(`lex_run_end(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')}, &${set.toUpperCase()})`, 'int', 'usize'),
+    find: (cx, s, i, lit) => cx.atom(`lex_find(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')}, ${J(lit)}.as_bytes())`, 'int', 'usize'),
     own: (cx, r) => {
       if (r.ty === 'str') return cx.atom(`${rsWrap(r, ATOM)}.to_string()`, 'str', 'str', { owned: true });
       if (isList(r.ty)) return cx.atom(`${rsWrap(r, ATOM)}.to_vec()`, r.ty, r.ty, { owned: true });
