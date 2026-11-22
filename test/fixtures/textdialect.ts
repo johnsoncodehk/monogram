@@ -8,7 +8,9 @@
 //     `<{expr}>…</{expr}>`;
 //   • raw-text elements: `<script>` (any case) is always raw; `<style>` is raw unless its body's
 //     first non-blank character is the hole opener (`unlessBodyStarts`): `<style>{css}</style>`
-//     is an element with a hole.
+//     is an element with a hole;
+//   • comments in text (`textTokens`): `/* … */` anywhere in a run; `//` (to the end of the line)
+//     at a run's start or right after a blank: `a //b` is a comment, `a//b` and `https://x` text.
 // Program shape: `component Name(params) { statements }`; a statement is a declaration, a
 // return, or an element (render output). An element after a value is a comparison (`a <b`), as
 // after the close of another element on the same line: `<a/>; <b/>` separates two of them.
@@ -82,6 +84,7 @@ export default defineGrammar({
     // what can follow `<` in an element arm: a close marker, a fragment's `>`, a dynamic tag's
     // hole, an identifier's first character
     tagStart: oneOf('/', '>', '{', '$', '_', range('A', 'Z'), range('a', 'z')),
+    textTokens: [{ token: 'BlockComment' }, { token: 'LineComment', after: blank }],
     rawText: [
       { tags: ['style'], token: 'StyleBody', unlessBodyStarts: seq(star(blank), '{'), embed: { style: 'source.css' } },
       { tags: ['script'], token: 'ScriptBody', ignoreCase: true, embed: { script: 'source.js' } },
