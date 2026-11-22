@@ -175,8 +175,12 @@ const reuseSegEntries: Fn = {
 
 export const REUSE_FNS: Fn[] = [reuseBounds, reuseAdoptAt, reuseGaveUp, shiftEntryMeta, reuseEntries, reuseSpan, reuseSegEntries];
 
-// The family for a grammar whose entry rule records entries (`ir.reuse`); empty otherwise.
+// The functions a grammar's reuse plan uses: none without one; the segment list only for shape B.
+export function reuseFamilyFns(ir: ParserIR): Fn[] {
+  if (!ir.reuse) return [];
+  return REUSE_FNS.filter((f) => ir.reuse!.kind === 'B' || f !== reuseSegEntries);
+}
+
 export function emitReuseFamily(ir: ParserIR, lowering: Lowering): string {
-  if (!ir.reuse) return '';
-  return printFns(lowering, REUSE_FNS.filter((f) => ir.reuse!.kind === 'B' || f !== reuseSegEntries), [], [ENTRY_META, SEG]);
+  return ir.reuse ? printFns(lowering, reuseFamilyFns(ir), [], [ENTRY_META, SEG]) : '';
 }

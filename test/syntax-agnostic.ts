@@ -10,7 +10,7 @@ import { defineTarget } from '../src/define-target.ts';
 import { portableIR } from '../src/emit-portable.ts';
 import { relexFamilyFns, relexMode } from '../src/relex-family.ts';
 import { lexScanFamily } from '../src/lex-family.ts';
-import { REUSE_FNS } from '../src/reuse-family.ts';
+import { reuseFamilyFns } from '../src/reuse-family.ts';
 import { ATOM, type BinOp, type Expr, type Fn, type Lowering, type Stmt } from '../src/algo-ir.ts';
 
 const OP: Record<BinOp, string> = { add: '+', sub: '-', shr: 'shr', shl: 'shl', lt: '<', le: '<=', gt: '>', ge: '>=', eq: '=', ne: '/=', and: 'and', or: 'or' };
@@ -123,7 +123,7 @@ function census(fns: Fn[]): Map<string, number> {
     if (e.k === 'not') bump('not');
     if (e.k === 'at') bump('nth');
     if (e.k === 'field') bump('field');
-    if (e.k === 'mkRec') bump('make-record');
+    if (e.k === 'mkRec') { bump('make-record'); Object.values(e.fields).forEach(ex); }
     if (e.k === 'code') bump('char-code');
     if (e.k === 'hasAt') bump('starts-at?');
     if (e.k === 'inSet') bump('in-set?');
@@ -186,7 +186,7 @@ const fail = (msg: string) => { failures++; console.log(`  ✗ ${msg}`); };
 for (const path of FIXTURES) {
   const grammar = (await import(path)).default;
   const lex = lexScanFamily(portableIR(grammar));
-  const fns = [...lex.fns, ...relexFamilyFns(relexMode(portableIR(grammar))), ...(portableIR(grammar).reuse ? REUSE_FNS : [])];
+  const fns = [...lex.fns, ...relexFamilyFns(relexMode(portableIR(grammar))), ...reuseFamilyFns(portableIR(grammar))];
   const out = target.emitParser(grammar);
   const code = out.split('\n').filter((l) => !/^\s*;;/.test(l)).join('\n').replace(/"(?:[^"\\]|\\.)*"/g, '""');
   const bad = code.match(C_SURFACE);
