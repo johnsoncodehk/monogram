@@ -123,9 +123,7 @@ function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: bo
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
   const ext = identLike.has(name) ? 'e = lx_ext(src, e); ' : '';
-  // The scanner's match may hold a `\\u` escape (-2 - e): checked out of line (lex-family.ts).
-  const esc = identLike.has(name) ? `if (e < -1) e = lx_ident_esc(src, pos, -2 - e, ${shared.identEsc(ir, name).prefix}); ` : '';
-  const scan = `{ let e = ${shared.scanner(name)}(src, pos); ${esc}if (e >= 0) { ${ext}${push}pos = e; continue; } }`;
+  const scan = `{ let e = ${shared.scanner(name)}(src, pos); if (e >= 0) { ${ext}${push}pos = e; continue; } }`;
   return rxTok !== undefined && name === rxTok ? `    if (!prevIsValue()) ${scan}` : `    ${scan}`;
 }
 
@@ -336,10 +334,9 @@ function lx_ext(src: string, e: number): number {
   const m = LX_UNI_CONT.exec(src);
   return m ? e + m[0].length : e;
 }
-// An identifier whose match may hold an escape: its end, or the lexer error (lex-family.ts).
-function lx_ident_esc(src: string, pos: number, e: number, prefix: number): number {
-  if (${shared.identEsc(ir, ir.identLike[0]!).fn}(src, pos + prefix, e) < 0) throw new Error("Invalid identifier escape at offset " + pos + ": '" + src.slice(pos, e) + "'");
-  return e;
+// The lexer error of an identifier whose escapes spell no IdentifierName (lex-family.ts).
+function ${shared.identEscError()}(src: string, pos: number, e: number): number {
+  throw new Error("Invalid identifier escape at offset " + pos + ": '" + src.slice(pos, e) + "'");
 }
 // JavaScript has the classes natively (uni-ident.ts).
 const LX_ID_START = /^${UNI_ID_START}$/u, LX_ID_PART = /^${UNI_ID_CONTINUE}$/u;

@@ -5,11 +5,10 @@
 // target never authors or re-decides those algorithms. A target that embeds no shared algorithm
 // may omit the lowering; asking it for one is then an error.
 import type { Lowering } from './algo-ir.ts';
-import { unitLen } from './text-units.ts';
 import type { Target } from './emit.ts';
 import type { LexTok, ParserIR } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
-import { IDENT_ESC, TPL_SPAN, UNI_CLASS, emitLexScan, emitScanInline, scannedTokens, scannerName, templateLiterals, tokenLiterals } from './lex-family.ts';
+import { IDENT_ESC_ERR, TPL_SPAN, UNI_CLASS, emitLexScan, emitScanInline, scannedTokens, scannerName, templateLiterals, tokenLiterals } from './lex-family.ts';
 import { emitRelexFamily } from './relex-family.ts';
 
 // The shared algorithm families, printed for the defining target.
@@ -28,12 +27,11 @@ export interface SharedAlgorithms {
   // The printed name of the template span scanner, `(s, p, strict) -> int`: the position of the
   // delimiter that ends the span, -1 when unterminated, -2 - q for a malformed escape at q.
   tplSpan(): string;
-  // An identifier(-like) token's scanner returns -2 - e when its match may hold a `\u` escape
-  // (lex-family.ts); the dispatch site then calls `fn(s, p + prefix, e)`, which returns e when every
-  // escape spells an identifier character and -1 (the site's lexer error) otherwise. `uniClass`
-  // is the name the target prints its Unicode identifier class under (`(cp) -> int`).
-  identEsc(ir: ParserIR, token: string): { fn: string; prefix: number };
+  // The names the target prints two routines of the identifier escape check under (lex-family.ts):
+  // its Unicode identifier class, `(cp) -> int`, and its lexer error for an identifier s[p, e)
+  // whose escapes spell no IdentifierName, `(s, p, e) -> int`, which does not return.
   uniClass(): string;
+  identEscError(): string;
 }
 
 export interface TargetDefinition {
@@ -72,7 +70,7 @@ export function defineTarget(def: TargetDefinition): PortableTarget {
     tokenLiterals,
     templateLiterals,
     tplSpan: () => lowering().ident(TPL_SPAN),
-    identEsc: (ir, token) => ({ fn: lowering().ident(IDENT_ESC), prefix: unitLen(ir.identPrefix[token] ?? '', lowering().units) }),
+    identEscError: () => lowering().ident(IDENT_ESC_ERR),
     uniClass: () => lowering().ident(UNI_CLASS),
   };
   const target: PortableTarget = {

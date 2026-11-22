@@ -339,9 +339,7 @@ function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: bo
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
   const ext = identLike.has(name) ? 'e = lxExt(src, e); ' : '';
   const body = shared.scanInline(ir, name, { s: 'src', p: 'pos', out: 'e' });
-  // The scanner's match may hold a `\\u` escape (-2 - e): checked out of line (lex-family.ts).
-  const esc = identLike.has(name) ? [`if e < -1 { e = lxIdentEsc(src, pos, -2-e, ${shared.identEsc(ir, name).prefix}) }`] : [];
-  const scan = ['{', ...goBlock([...body, ...esc, `if e >= 0 { ${ext}${push}pos = e; continue }`]), '}'];
+  const scan = ['{', ...goBlock([...body, `if e >= 0 { ${ext}${push}pos = e; continue }`]), '}'];
   const lines = rxTok !== undefined && name === rxTok ? ['if !prevIsValue() {', ...goBlock(scan), '}'] : scan;
   return lines.map((l) => `\t\t${l}`).join('\n');
 }
@@ -575,12 +573,9 @@ ${goUniIdentTables()}func scanUniIdent(src string, pos int) (int, bool) {
 	if uniClass(r) != 2 { return pos, false }
 	return lxExtRun(src, pos+w), true
 }
-// An identifier whose match may hold an escape: its end, or the lexer error (lex-family.ts).
-func lxIdentEsc(src string, pos, e, prefix int) int {
-	if ${shared.identEsc(ir, ir.identLike[0]!).fn}(src, pos+prefix, e) < 0 {
-		panic(&LexError{Off: pos, Msg: fmt.Sprintf("Invalid identifier escape at offset %d: '%s'", pos, src[pos:e])})
-	}
-	return e
+// The lexer error of an identifier whose escapes spell no IdentifierName (lex-family.ts).
+func ${shared.identEscError()}(src string, pos, e int) int {
+	panic(&LexError{Off: pos, Msg: fmt.Sprintf("Invalid identifier escape at offset %d: '%s'", pos, src[pos:e])})
 }
 func ${shared.uniClass()}(cp int) int { return int(uniClass(rune(cp))) }
 // Extend an identifier token that the ASCII pattern cut short at a non-ASCII
@@ -3108,6 +3103,7 @@ func lexFind(s string, i int, lit string) int {
     return: (vals) => [`return ${vals.join(', ')}`],
     fn: (f) => [
       ...f.doc.map((l) => `// ${l}`),
+      ...(f.cold ? ['//go:noinline'] : []),
       `func ${f.name}(${f.params.map((p) => `${p.name} ${p.type}`).join(', ')}) ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`} {`,
       ...goBlock(f.body),
       '}',

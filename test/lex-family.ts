@@ -260,7 +260,10 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
     const gir = portableIR(g);
     const toks = tsTarget.shared.scannedTokens(gir);
     const f = join(dir, `regex${mod++}.ts`);
-    writeFileSync(f, `${tsTarget.shared.lexScan(gir)}\nexport { ${toks.map((t) => tsTarget.shared.scanner(t.name)).join(', ')} };\n`);
+    // The escape check's two target routines, as stubs that pass every escape: the scanner's end
+    // is the regex's either way (whether an escape is valid is portable-targets' corpus).
+    const stubs = gir.identLike.length ? `function ${tsTarget.shared.uniClass()}(cp: number): number { return 2; }\nfunction ${tsTarget.shared.identEscError()}(s: string, p: number, e: number): number { return e; }\n` : '';
+    writeFileSync(f, `${tsTarget.shared.lexScan(gir)}\n${stubs}export { ${toks.map((t) => tsTarget.shared.scanner(t.name)).join(', ')} };\n`);
     const scan = await import(pathToFileURL(f).href) as Record<string, (s: string, p: number) => number>;
     for (const t of toks) {
       const decl = g.tokens.find((d) => d.name === t.name)!;
@@ -272,10 +275,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
           re.lastIndex = 0;
           const m = re.exec(src);
           const want = m && m[0].length > 0 ? m[0].length : -1;
-          // An identifier(-like) token's match from its pattern comes back as -2 - end (the escape
-          // branch, which the dispatch site checks); its end is the same.
-          const raw = fn(src, 0);
-          const got = gir.identLike.includes(t.name) && raw < -1 ? -2 - raw : raw;
+          const got = fn(src, 0);
           checked++;
           if (got !== want && bad++ < 3) fail(`${g.name}/${t.name} (${t.kind}): ${JSON.stringify(src)} scans to ${got}, its regex to ${want}`);
         }

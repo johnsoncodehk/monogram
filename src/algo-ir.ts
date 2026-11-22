@@ -84,9 +84,11 @@ export type Stmt =
 export interface Param { name: string; ty: Ty }
 // `inline`: called once per token from a lexer's dispatch loop. A lowering may ask its compiler
 // to inline it, or splice it into its call sites at generation time (`spliceInline`).
+// `cold`: called only on a path normal input does not take (an error); a lowering keeps it out of
+// line.
 // `extern`: a signature only; the target prints the function itself (a runtime routine whose
 // data or spelling is the target's), so `printFns` skips it.
-export interface Fn { name: string; doc: string; params: Param[]; ret: Ty[]; body: Stmt[]; inline?: boolean; extern?: boolean }
+export interface Fn { name: string; doc: string; params: Param[]; ret: Ty[]; body: Stmt[]; inline?: boolean; cold?: boolean; extern?: boolean }
 export type CodeRange = [number, number];
 export interface CharSet { name: string; ranges: CodeRange[] }
 
@@ -162,7 +164,7 @@ export interface Lowering {
     while(c: string, body: Lines): Lines;
     break(): Lines;
     return(vals: string[]): Lines;
-    fn(s: { name: string; params: { name: string; type: string }[]; rets: string[]; doc: string[]; body: Lines; inline: boolean }): string;
+    fn(s: { name: string; params: { name: string; type: string }[]; rets: string[]; doc: string[]; body: Lines; inline: boolean; cold: boolean }): string;
   };
   // `inline` fns are not printed as functions; each call site prints `inlineFn` of the body
   // instead (for compilers that cannot be told to inline a function).
@@ -477,6 +479,7 @@ class Printer implements Cx {
       doc: f.doc.split('\n'),
       body: this.block(f.body, 1),
       inline: f.inline === true,
+      cold: f.cold === true,
     });
   }
 }

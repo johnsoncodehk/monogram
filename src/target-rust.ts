@@ -265,9 +265,7 @@ function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: bo
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
   const ext = identLike.has(name) ? 'let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(b, e) } else { e }; ' : '';
-  // The scanner's match may hold a `\\u` escape (-2 - e): checked out of line (lex-family.ts).
-  const esc = identLike.has(name) ? `if e < -1 { e = _lx_ident_esc(src, pos, -2 - e, ${shared.identEsc(ir, name).prefix}); } ` : '';
-  const scan = `{ let ${esc ? 'mut ' : ''}e = ${shared.scanner(name)}(src, pos as isize); ${esc}if e >= 0 { let e = e as usize; ${ext}${push}pos = e; continue; } }`;
+  const scan = `{ let e = ${shared.scanner(name)}(src, pos as isize); if e >= 0 { let e = e as usize; ${ext}${push}pos = e; continue; } }`;
   return rxTok !== undefined && name === rxTok ? `        if !st.prev_is_value() ${scan}` : `        ${scan}`;
 }
 
@@ -498,7 +496,7 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
 ` : '';
   const identName = ir.identToken;
   const identKid = identName ? kidOf(ids, identName) : 0;
-  const identEscRs = ir.identLike.length ? shared.identEsc(ir, ir.identLike[0]!).fn : '', uniClassRs = shared.uniClass();
+  const identEscErrRs = shared.identEscError(), uniClassRs = shared.uniClass();
   const identTok = ir.tokens.find((t) => t.name === identName);
   const identLid = identTok ? lidCall(shared.tokenLiterals(ir, identTok, ids.lids.slice(1)), '&b[pos..e]') : 'lid_of(&b[pos..e])';
   // Unicode ID_Start fallback (mirrors emit-lexer uniIdentReY) before unmatched-byte panic.
@@ -534,10 +532,9 @@ ${identName || ir.identLike.length ? `${rsUniIdentTables()}// Both out of line: 
     if let Some(e) = _scan_uni_ident(src.as_bytes(), pos) { return (e, 2); }
     panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(src.as_bytes()[pos] as char));
 }
-// An identifier whose match may hold an escape: its end, or the lexer error (lex-family.ts).
-#[cold] #[inline(never)] fn _lx_ident_esc(src: &str, pos: usize, e: isize, prefix: usize) -> isize {
-    if ${identEscRs}(src, (pos + prefix) as isize, e) < 0 { panic!("Invalid identifier escape at offset {}: '{}'", pos, &src[pos..e as usize]); }
-    e
+// The lexer error of an identifier whose escapes spell no IdentifierName (lex-family.ts).
+#[cold] #[inline(never)] fn ${identEscErrRs}(src: &str, pos: isize, e: isize) -> isize {
+    panic!("Invalid identifier escape at offset {}: '{}'", pos, &src[pos as usize..e as usize]);
 }
 #[inline(always)] fn ${uniClassRs}(cp: isize) -> isize { _uni_class(cp as u32) as isize }
 #[inline(never)] fn _lx_ext(b: &[u8], mut e: usize) -> usize {
@@ -5376,6 +5373,7 @@ fn lex_find(b: &[u8], mut i: usize, lit: &[u8]) -> usize {
     fn: (f) => [
       ...f.doc.map((l) => `// ${l}`),
       ...(f.inline ? ['#[inline(always)]'] : []),
+      ...(f.cold ? ['#[cold] #[inline(never)]'] : []),
       `fn ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}) -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`} {`,
       ...rsBlock(f.body),
       '}',
