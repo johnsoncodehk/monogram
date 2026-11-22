@@ -364,7 +364,7 @@ class LexScan {
 
 // The scanned tokens: every lexer token except the template token, which the target's template
 // state machine scans.
-export function scannedTokens(ir: ParserIR): LexTok[] {
+export function scannedTokens(ir: Pick<ParserIR, 'tokens' | 'tpl'>): LexTok[] {
   return ir.tokens.filter((t) => t.name !== ir.tpl?.token);
 }
 
@@ -372,7 +372,7 @@ export function scannedTokens(ir: ParserIR): LexTok[] {
 // superset). An empty list proves the token's literal id is 0 whatever its text, so a lexer records
 // 0 for it without looking its text up. An identifier(-prefixed) token's text may go on past its
 // pattern with non-ASCII ID_Continue characters, so a literal with a non-ASCII character is kept.
-export function tokenLiterals(ir: ParserIR, t: LexTok, lits: readonly string[]): string[] {
+export function tokenLiterals(ir: Pick<ParserIR, 'identToken' | 'identLike'>, t: LexTok, lits: readonly string[]): string[] {
   const ext = t.name === ir.identToken || ir.identLike.includes(t.name);
   const wide = (l: string) => [...l].some((c) => !oneUnit(c) || c.charCodeAt(0) > 127);
   const inR = (rs: CodeRange[], c: number) => rs.some(([lo, hi]) => c >= lo && c <= hi);
@@ -394,7 +394,7 @@ export function tokenLiterals(ir: ParserIR, t: LexTok, lits: readonly string[]):
 // tokenLiterals): the whole literal and the head run from the opener, the middle and the tail
 // from a hole's closer; the whole literal and the tail end at the opener, the head and the middle
 // at a hole's opener.
-export function templateLiterals(ir: ParserIR, lits: readonly string[]): { whole: string[]; head: string[]; middle: string[]; tail: string[] } {
+export function templateLiterals(ir: Pick<ParserIR, 'tpl'>, lits: readonly string[]): { whole: string[]; head: string[]; middle: string[]; tail: string[] } {
   const t = ir.tpl;
   if (!t) return { whole: [], head: [], middle: [], tail: [] };
   const span = (open: string, close: string) => lits.filter((l) => l.length >= open.length + close.length && l.startsWith(open) && l.endsWith(close));
