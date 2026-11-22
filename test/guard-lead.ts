@@ -6,7 +6,8 @@
 // zero-width test of the token at the candidate's start alone — an `ahead` or `aheadCtx` step, not a
 // shared step's call, not a `ctx` / `suppress` / `look` / `sameLine` step, nothing that consumes —
 // and (3) the lead tests (adjacent negative tests merged into one set) accept exactly the tokens
-// the steps accept, in every [Await] / [Yield] context. This checks all three for every candidate
+// the steps accept, in every [Await] / [Yield] context (or fewer: a lead test may also refuse by the
+// complement of the candidate's FIRST, which test/guard-refutation.ts proves). This checks all three for every candidate
 // of every portable grammar: (3) over every pair of literal id and kind id of the lexer plan (a
 // superset of the tokens a lexer can make) and every context, through the bit table every target
 // prints (tokenSetBits).
@@ -46,8 +47,8 @@ for (const path of paths) {
       : s.t === 'aheadCtx' ? (inSet(s.set, lid, kid) || ctxWord(ctx, lid)) === s.is
         : true;
   const check = (where: string, g: Guard, steps: Step[]) => {
-    if (g === null || g.skip === 0) {
-      if (g !== null && g.lead.length) fail(`${where}: lead tests without steps taken over`);
+    if (g === null || g.lead.length === 0) {
+      if (g !== null && g.skip !== 0) fail(`${where}: steps taken over without lead tests`);
       return;
     }
     sites++;
@@ -60,7 +61,9 @@ for (const path of paths) {
       checks++;
       const want = taken.every((s) => stepOk(s, lid, kid, ctx));
       const got = g.lead.every((l) => ((inSet(l.set, lid, kid) || (l.ctx && ctxWord(ctx, lid))) === l.is));
-      if (want !== got) { fail(`${where}: token (lid ${JSON.stringify(ids.lids[lid])}, kind ${JSON.stringify(ids.kids[kid])}) in context ${ctx}: steps ${want}, lead ${got}`); return; }
+      // A lead test may refuse MORE than the steps it took over (a refusal by the complement of the
+      // candidate's FIRST: test/guard-refutation.ts proves those); it must never admit what they refuse.
+      if (got && !want) { fail(`${where}: token (lid ${JSON.stringify(ids.lids[lid])}, kind ${JSON.stringify(ids.kids[kid])}) in context ${ctx}: steps ${want}, lead ${got}`); return; }
     }
   };
   for (const r of ir.rules) {
