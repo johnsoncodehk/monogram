@@ -715,7 +715,7 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
   );
   fns.push({
     name: EL_FRAME_FN,
-    doc: 'The element frame fr on top of the frame stack lexes at p: (end, kid, lid, frame, push, angle, look), see lex-family.ts.',
+    doc: 'The element frame fr on top of the frame stack lexes at p: (end, kid, lid, frame, push, angle, look).',
     params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }, { name: 'fr', ty: 'int' }, { name: 'angle', ty: 'int' }, { name: 'afterEq', ty: 'bool' }, { name: 'look0', ty: 'int' }],
     ret: ['int', 'int', 'int', 'int', 'int', 'int', 'int'],
     body: [
