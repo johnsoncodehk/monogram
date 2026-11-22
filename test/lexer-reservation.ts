@@ -161,8 +161,17 @@ else {
 
 import (
 	"runtime"
+	"runtime/debug"
 	"unsafe"
 )
+
+// noGC runs f with the collector off, so the Mallocs delta around it counts the parse's own
+// allocations, not the runtime's for a GC cycle that happens to start inside it.
+func noGC(f func()) {
+	old := debug.SetGCPercent(-1)
+	defer debug.SetGCPercent(old)
+	f()
+}
 
 // LexCounts lexes src and reports the token slice's length, capacity and element size, then the
 // allocations and bytes of a second ParseWith of src with the builder the first one used.
@@ -171,10 +180,12 @@ func LexCounts(src string) (int, int, int, uint64, uint64) {
 	b := &CstBuilder{}
 	ParseWith(src, b)
 	var m0, m1 runtime.MemStats
-	runtime.ReadMemStats(&m0)
-	ParseWith(src, b)
-	ParseWith(src, b)
-	runtime.ReadMemStats(&m1)
+	noGC(func() {
+		runtime.ReadMemStats(&m0)
+		ParseWith(src, b)
+		ParseWith(src, b)
+		runtime.ReadMemStats(&m1)
+	})
 	return len(t), cap(t), int(unsafe.Sizeof(Tok{})), m1.Mallocs - m0.Mallocs, m1.TotalAlloc - m0.TotalAlloc
 }
 
@@ -197,9 +208,11 @@ func AfterFail(good, bad string) (uint64, uint64, int) {
 	p := 0
 	if panicked { p = 1 }
 	var m0, m1 runtime.MemStats
-	runtime.ReadMemStats(&m0)
-	ParseWith(good, b)
-	runtime.ReadMemStats(&m1)
+	noGC(func() {
+		runtime.ReadMemStats(&m0)
+		ParseWith(good, b)
+		runtime.ReadMemStats(&m1)
+	})
 	return m1.Mallocs - m0.Mallocs, m1.TotalAlloc - m0.TotalAlloc, p
 }
 `);
