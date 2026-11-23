@@ -472,6 +472,15 @@ const lidElClose uint16 = ${lidOf(ids, el.tagClose)}
 const lidHoleOpen uint16 = ${lidOf(ids, el.holeOpen)}
 const lidHoleClose uint16 = ${lidOf(ids, el.holeClose)}
 const lidEq uint16 = ${lidOf(ids, '=')}
+// The frame stack's top: whether the loop head has work (an element or raw frame on top, or a
+// signature undecided), and to which token count the previous token is a value (in a tag: every;
+// else the token that ended an element, while it is the last).
+func elTop(stack []int, spec bool, ended int) (bool, int) {
+\ttop := 0
+\tif len(stack) > 0 { top = stack[len(stack)-1] }
+\tif top&3 == 2 && top&12 != 0 { return true, 1 << 62 }
+\treturn spec || top&2 != 0, ended
+}
 ${sig ? `${p.goBoolArr('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
   // prevIsValue: in a tag nothing is a regex; the token that ended an element is a value.
   const prevIsValue = p.rxStateFrom.replace('\tprevIsValue := func() bool {\n', `\tprevIsValue := func() bool {
@@ -488,17 +497,11 @@ ${sig ? `${p.goBoolArr('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
   const hotState = `\thot, elEndAt${rx ? ', valueTo' : ''} := false, -1${rx ? ', -1' : ''}
 \tif elEnded { elEndAt = len(*acc) }
 `;
-  // after the speculation's state (it reads specTok), before its rewind (which calls it)
-  // valueTo: to which token count the previous token is a value (in a tag: every; else the token
-  // that ended an element, while it is the last).
-  const refreshFn = `\trefresh := func() {
-\t\ttop := 0
-\t\tif len(templateStack) > 0 { top = templateStack[len(templateStack)-1] }
-\t\thot = ${sig ? 'specTok >= 0 || ' : ''}top&2 != 0
-${rx ? `\t\tvalueTo = elEndAt
-\t\tif top&3 == 2 && top&12 != 0 { valueTo = 1 << 62 }
-` : ''}\t}
-\trefresh()
+  // The frame top's facts, recomputed at every change of the top (and of the speculation) by a
+  // package function, not a closure: a variable a closure assigns is captured by reference and kept
+  // in memory, and the loop head tests hot every round (Callgrind: 6 instructions per round).
+  const refresh = `hot${rx ? ', valueTo' : ', _'} = elTop(templateStack, ${sig ? 'specTok >= 0' : 'false'}, elEndAt)`;
+  const refreshFn = `\t${refresh}
 `;
   const specState = sig ? `\t// A type-parameter signature being decided: the token index of its tagOpen (-1: none), the
 \t// state before it, how it was decided (a lexer error decides it: the head was an element), and
@@ -535,7 +538,6 @@ ${refreshFn}\t// Each token the speculation lexes, read at the next loop head (a
 \t\tparenHead = append(parenHead[:0], svParen...)
 \t\ttemplateStack = append(templateStack[:0], svStack...)
 \t\tspecTok = -1; specClosedAt = -1; specDone = false
-\t\trefresh()
 \t\treturn svPos
 \t}
 ` : '';
@@ -553,7 +555,7 @@ ${rx ? `\t\tif lid == lidLParen {
 `;
   // The entry from code, in the tagOpen byte's dispatch arm (outside element frames: inside one
   // the frame step lexes every tagOpen).
-  const enter = `\t\t\ttemplateStack = append(templateStack, 6); refresh(); emit(pos, pos + ${L}, 0, lidElOpen);${raw ? ' tagAt = append(tagAt, len(*acc)-1);' : ''} tagAngle = 0; pos += ${L}; continue\n`;
+  const enter = `\t\t\ttemplateStack = append(templateStack, 6); ${refresh}; emit(pos, pos + ${L}, 0, lidElOpen);${raw ? ' tagAt = append(tagAt, len(*acc)-1);' : ''} tagAngle = 0; pos += ${L}; continue\n`;
   const entry = !operand ? `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)}) {\n${enter}\t\t}\n`
     : !(el.head || sig) ? `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)}) && !prevIsValue() {\n${enter}\t\t}\n`
     : `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)})${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue() {
@@ -572,7 +574,7 @@ ${sig ? `\t\t\tif op == 2 {
 `;
   // An element hole's closer at brace count 0 ends it (the closer is lexed inside the frame).
   const holeClose = `\t\tif len(templateStack) > 0 && templateStack[len(templateStack)-1] == 1 && strings.HasPrefix(src[pos:], ${J(el.holeClose)}) {
-\t\t\temit(pos, pos + ${tlen(el.holeClose)}, 0, lidHoleClose); templateStack = templateStack[:len(templateStack)-1]; refresh(); pos += ${tlen(el.holeClose)}; continue
+\t\t\temit(pos, pos + ${tlen(el.holeClose)}, 0, lidHoleClose); templateStack = templateStack[:len(templateStack)-1]; ${refresh}; pos += ${tlen(el.holeClose)}; continue
 \t\t}
 `;
   const heads = new Map<number, string>();
@@ -599,20 +601,20 @@ ${raw ? `\t\t\t\t// an open tag ended: a raw-text name gives its body to a raw f
 \t\t\t\t\t\tif re, rk := ${shared.elementFn('raw')}(src, int((*acc)[i].Off), int((*acc)[i].End), fe); rk != 0 && re > fe { templateStack = append(templateStack, 3) }
 \t\t\t\t\t}
 \t\t\t\t}
-` : ''}\t\t\t\trefresh(); tagAngle = fa; pos = fe; continue
+` : ''}\t\t\t\t${refresh}; tagAngle = fa; pos = fe; continue
 \t\t\t}
 \t\t}
 ${raw ? `\t\tif len(templateStack) > 0 && templateStack[len(templateStack)-1] == 3 {
 \t\t\ti := tagAt[len(tagAt)-1] + 1
 \t\t\tre, rk := ${shared.elementFn('raw')}(src, int((*acc)[i].Off), int((*acc)[i].End), pos)
-\t\t\temit(pos, re, uint16(rk), 0); templateStack = templateStack[:len(templateStack)-1]; refresh(); pos = re; continue
+\t\t\temit(pos, re, uint16(rk), 0); templateStack = templateStack[:len(templateStack)-1]; ${refresh}; pos = re; continue
 \t\t}
 ` : ''}`;
   // Code outside element frames pays one test per round (hot); the loop condition is the plain
   // lexer's. A speculation lexes past the token limit to its verdict (the limit is tested first); one
   // that reaches the end of the input (or a lexer error, its verdict) is rewound after the loop.
   const loopBody = `\t\tif hot {
-${sig ? '\t\tif specTok >= 0 && specStep() { pos = specRewind(false); continue }\n' : ''}${frameStep}\t\t}
+${sig ? `\t\tif specTok >= 0 && specStep() { pos = specRewind(false); ${refresh}; continue }\n` : ''}${frameStep}\t\t}
 \t\tc := int(src[pos])
 ${p.nlWs}${pre}${cascade}
 ${p.uniIdentFallbackGo}${p.loopPanicGo}`;
@@ -624,7 +626,7 @@ ${loopBody}
   const loop = sig ? `lexLoop:
 \tfor {
 ${inner}\tif specTok < 0 { break }
-\tspecStep(); pos = specRewind(false)
+\tspecStep(); pos = specRewind(false); ${refresh}
 \t}
 ` : inner;
   return `${p.head}${consts}${p.scans}func lexFrom(src string, pos int, pendingNl bool, ${rxParams}templateStack []int, elEnded bool, tagAngle, laEnd, specUntil int, ${raw ? 'tagAt []int, ' : ''}acc *[]Tok, limit int) (int, bool, ${rxRet}[]int, bool, int, int, int${raw ? ', []int' : ''}, *lexErr) {
@@ -632,7 +634,7 @@ ${inner}\tif specTok < 0 { break }
 \tvar err *lexErr
 ${hotState}${prevIsValue}${sig ? '' : refreshFn}${specState}${emitFn}\tbase := len(*acc)
 ${loop}lexFail:
-${sig ? '\tif specTok >= 0 { specStep(); pos = specRewind(err != nil); err = nil; goto lexLoop }\n' : ''}\treturn pos, pendingNl, ${rxNames}templateStack, len(*acc) == elEndAt, tagAngle, laEnd, specUntil${raw ? ', tagAt' : ''}, err
+${sig ? `\tif specTok >= 0 { specStep(); pos = specRewind(err != nil); err = nil; ${refresh}; goto lexLoop }\n` : ''}\treturn pos, pendingNl, ${rxNames}templateStack, len(*acc) == elEndAt, tagAngle, laEnd, specUntil${raw ? ', tagAt' : ''}, err
 }
 func lexAll(src string) ([]Tok, *lexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
@@ -818,7 +820,7 @@ ${emitHooks}
   // The span itself is the shared family's scanner; this reads which delimiter ended it (or its
   // lexer error).
   // The element lexer keeps whether the frame stack's top has work (its refresh).
-  const elRefresh = ir.elements ? 'refresh(); ' : '';
+  const elRefresh = ir.elements ? `hot${rx ? ', valueTo' : ', _'} = elTop(templateStack, ${ir.elements.signature ? 'specTok >= 0' : 'false'}, elEndAt); ` : '';
   const tplSpanGo = (from: string, strict: string): string => `\t\t\tq := ${shared.tplSpan()}(src, ${from}, ${strict})
 \t\t\tif q < 0 { err = lexTplErr(q, n); goto lexFail }
 \t\t\tinterp, e := strings.HasPrefix(src[q:], ${J(tpl!.interpOpen)}), q + ${tlen(tpl!.open)}
