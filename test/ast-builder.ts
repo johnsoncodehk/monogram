@@ -536,7 +536,6 @@ impl Builder for MirrorBuilder {
     #[inline(always)] fn shift(&mut self, h: i32, bd: isize, td: isize) -> i32 { Builder::shift(&mut self.inner, h, bd, td) }
     #[inline(always)] fn should_reclaim(&self, root: i32, baseline: usize) -> bool { Builder::should_reclaim(&self.inner, root, baseline) }
     #[inline(always)] fn arena_len(&self) -> usize { Builder::arena_len(&self.inner) }
-    #[inline(always)] fn root_kids(&self, root: i32) -> Vec<i32> { Builder::root_kids(&self.inner, root) }
     #[inline(always)] fn root_kid_at(&self, root: i32, idx: usize) -> i32 { Builder::root_kid_at(&self.inner, root, idx) }
     #[inline(always)] fn rule_id_of(&self, h: i32) -> u16 { Builder::rule_id_of(&self.inner, h) }
     #[inline(always)] fn validate_entries(&self, e: &[EntryMeta], root: i32) { Builder::validate_entries(&self.inner, e, root) }

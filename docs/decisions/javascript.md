@@ -67,7 +67,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `[`: one token: committed to array (#17) (takes a mark: it can fail after `'['`)
   - `await`: two tokens: committed to prefixOp (#11), unless ident (#6), arrowIdentifier (#22) admit the token (then the frame) (takes a mark: its operand can fail after the operator)
   - `break`, `case`, `catch`, `const`, `continue`, `debugger`, `default`, `do` and 16 more: no candidate, the list fails
-  - `class`: two tokens: committed to decoratorExpr (#35), unless decoratorExpr2 (#36) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
+  - `class`: two tokens: committed to namedClass (#35), unless anonymousClass (#36) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
   - `import`: one token: committed to import_ (#25) (takes a mark: it can fail after `'import'`)
   - `super`: two tokens: committed to super_ (#5), unless arrowIdentifier (#22) admits the token (then the frame) (takes a mark: it can fail after `'super'`)
   - `{`: one token: committed to object (#18) (takes a mark: it can fail after `'{'`)
@@ -80,10 +80,10 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - <String>: one token: committed to string (#8)
   - <Template>: one token: committed to template (#9)
   - <Regex>: one token: committed to regex (#10)
-  - <Decorator>: two tokens: committed to decoratorExpr (#35), unless decoratorExpr2 (#36) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
+  - <Decorator>: two tokens: committed to namedClass (#35), unless anonymousClass (#36) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
   - <PrivateField>: one token: committed to privateField (#26)
   - <$templateMiddle>, <$templateTail>, punctuation: no candidate, the list fails
-  - two tokens (SECOND): asyncArrow (#19) only before '('; arrow (#20) only before ')'|'...'|'['|'{'|Decorator|Ident; asyncArrowIdentifier (#21) only before Ident; arrowIdentifier (#22) only before '=>'; decoratorExpr (#35) only before '('|'class'|Decorator|Ident; decoratorExpr2 (#36) only before '('|'class'|'extends'|'{'|Decorator
+  - two tokens (SECOND): asyncArrow (#19) only before '('; arrow (#20) only before ')'|'...'|'['|'{'|Decorator|Ident; asyncArrowIdentifier (#21) only before Ident; arrowIdentifier (#22) only before '=>'; namedClass (#35) only before '('|'class'|Decorator|Ident; anonymousClass (#36) only before '('|'class'|'extends'|'{'|Decorator
   - longest match: a candidate frame (a mark per new best) at `async`, `false`, `function`, `new`, `null`, `this`, `true`, `undefined` and 1 more, the keys above where an `unless` candidate admits the token, every token of a kind no case names, over true_ (#0), false_ (#1), null_ (#2), undefined (#3), this_ (#4), super_ (#5) and 19 more
 - Expr LED (7 connectors, 39 binary operators):
   - `(`: one token: led_paren (takes a builder checkpoint: led_paren: it can fail after `sep(Expr, ',')`)
@@ -98,12 +98,12 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Expr NUD / super_: `sep(Expr, ',')`: by attempt
 - Expr NUD / construct: `alt('(' sep(Expr, ',') ')' \| !{'?.'})`: by attempt; takes a mark: branch 0: it can fail after `'('`
 - Expr NUD / construct: `sep(Expr, ',')`: by attempt
-- Expr NUD / new_: `opt('extends' ClassHeritage)`: one token; takes a mark: it can fail after `'extends'`
-- Expr NUD / new_: `alt('(' sep(Expr, ',') ')' \| !{'?.'})`: by attempt; takes a mark: branch 0: it can fail after `'('`
-- Expr NUD / new_: `sep(Expr, ',')`: by attempt
-- Expr NUD / new_2: `opt('extends' ClassHeritage)`: one token; takes a mark: it can fail after `'extends'`
-- Expr NUD / new_2: `alt('(' sep(Expr, ',') ')' \| !{'?.'})`: by attempt; takes a mark: branch 0: it can fail after `'('`
-- Expr NUD / new_2: `sep(Expr, ',')`: by attempt
+- Expr NUD / newNamedClass: `opt('extends' ClassHeritage)`: one token; takes a mark: it can fail after `'extends'`
+- Expr NUD / newNamedClass: `alt('(' sep(Expr, ',') ')' \| !{'?.'})`: by attempt; takes a mark: branch 0: it can fail after `'('`
+- Expr NUD / newNamedClass: `sep(Expr, ',')`: by attempt
+- Expr NUD / newAnonymousClass: `opt('extends' ClassHeritage)`: one token; takes a mark: it can fail after `'extends'`
+- Expr NUD / newAnonymousClass: `alt('(' sep(Expr, ',') ')' \| !{'?.'})`: by attempt; takes a mark: branch 0: it can fail after `'('`
+- Expr NUD / newAnonymousClass: `sep(Expr, ',')`: by attempt
 - Expr NUD / array: `opt(Expr)`: by attempt; takes a mark: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr NUD / array: `opt(Expr)`: by attempt; takes a mark: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr NUD / yield_: `alt('*' Expr \| opt(Expr))`: by attempt; takes a mark: branch 0: it can fail after `'*'`
@@ -118,8 +118,8 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Expr NUD / asyncFunction: `sep(Param, ',')`: by attempt
 - Expr NUD / asyncGenerator: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
 - Expr NUD / asyncGenerator: `sep(Param, ',')`: by attempt
-- Expr NUD / decoratorExpr: `opt('extends' ClassHeritage)`: one token; takes a mark: it can fail after `'extends'`
-- Expr NUD / decoratorExpr2: `opt('extends' ClassHeritage)`: one token; takes a mark: it can fail after `'extends'`
+- Expr NUD / namedClass: `opt('extends' ClassHeritage)`: one token; takes a mark: it can fail after `'extends'`
+- Expr NUD / anonymousClass: `opt('extends' ClassHeritage)`: one token; takes a mark: it can fail after `'extends'`
 - Expr NUD / asyncArrow: `sep(Param, ',')`: by attempt
 - Expr NUD / asyncArrow: `alt(Block \| !{'{'} Expr)`: by attempt; takes a mark: branch 1: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr NUD / arrow: `alt(Block \| !{'{'} Expr)`: by attempt; takes a mark: branch 1: a call of Expr can fail after its operand (an operator that requires an assignment target)
@@ -459,37 +459,37 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 ### ClassMember
 
 - ClassMember (3 alternatives):
-  - `*`, `[`: one token: committed to seq (#2)
-  - `;`: one token: committed to semi (#0)
-  - `static`: two tokens: committed to seq (#2), unless static_ (#1) admits the token (then the frame)
-  - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <String>, <Decorator> and 1 more: one token: committed to seq (#2)
+  - `*`, `[`: one token: committed to member (#2)
+  - `;`: one token: committed to empty (#0)
+  - `static`: two tokens: committed to member (#2), unless staticBlock (#1) admits the token (then the frame)
+  - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <String>, <Decorator> and 1 more: one token: committed to member (#2)
   - <Template>, <Regex>, <$templateHead>, <$templateMiddle>, <$templateTail>, punctuation: no candidate, the list fails
-  - two tokens (pairs): static_ (#1) at `static` only before '{'
-  - two tokens (SECOND): static_ (#1) only before '{'
-  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over static_ (#1), seq (#2)
+  - two tokens (pairs): staticBlock (#1) at `static` only before '{'
+  - two tokens (SECOND): staticBlock (#1) only before '{'
+  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over staticBlock (#1), member (#2)
 - one token, no mark: 1 star, 1 opt
-- ClassMember / seq: `alt('constructor' '(' sep(Param, ',') ')' Block \| many(…`: by attempt; takes a mark: branch 0: it can fail after `'constructor'`; branch 1: it can fail after `many(DecoratorExpr)`
-- ClassMember / seq: `sep(Param, ',')`: by attempt
-- ClassMember / seq: `alt(('static') &{'*'\|'['\|BigInt\|BinaryNumber\|…6})`: one token; takes a mark: branch 0: it can fail after `('static')`
-- ClassMember / seq: `alt(alt(alt(('accessor') sameLine) &{'*'\|'['\|BigInt\|Bin…`: by attempt; takes a mark: branch 0: it can fail after `alt(alt(('accessor') sameLine) &{'*'\|'[…`; branch 1: it can fail after `alt(alt(('async') sameLine) &{'*'\|'['\|B…`; branch 2: it can fail after `'*'`; branch 3: it can fail after `alt(alt('get' !{'*'} \| 'set' !{'*'}) &{…`; branch 4: it can fail after `MemberName`
-- ClassMember / seq: `alt(alt(('accessor') sameLine) &{'*'\|'['\|BigInt\|BinaryN…`: one token; takes a mark: branch 0: it can fail after `alt(('accessor') sameLine)`
-- ClassMember / seq: `alt(('accessor') sameLine)`: one token; takes a mark: branch 0: it can fail after `('accessor')`
-- ClassMember / seq: `opt('=' Expr)`: one token; takes a mark: it can fail after `'='`
-- ClassMember / seq: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- ClassMember / seq: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
-- ClassMember / seq: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
-- ClassMember / seq: `alt('*' MemberName '(' sep(Param, ',') ')' Block \| Memb…`: one token; takes a mark: branch 0: it can fail after `'*'`; branch 1: it can fail after `MemberName`
-- ClassMember / seq: `sep(Param, ',')`: by attempt
-- ClassMember / seq: `sep(Param, ',')`: by attempt
-- ClassMember / seq: `sep(Param, ',')`: by attempt
-- ClassMember / seq: `alt(alt('get' !{'*'} \| 'set' !{'*'}) &{'*'\|'['\|BigInt\|B…`: one token; takes a mark: branch 0: it can fail after `alt('get' !{'*'} \| 'set' !{'*'})`
-- ClassMember / seq: `alt('get' !{'*'} \| 'set' !{'*'})`: one token; takes a mark: branch 0: it can fail after `'get'`; branch 1: it can fail after `'set'`
-- ClassMember / seq: `opt(sep(Param, ','))`: by attempt
-- ClassMember / seq: `sep(Param, ',')`: by attempt
-- ClassMember / seq: `alt('(' sep(Param, ',') ')' Block \| opt('=' Expr) alt('…`: by attempt; takes a mark: branch 0: it can fail after `'('`; branch 1: it can fail after `opt('=' Expr)`
-- ClassMember / seq: `sep(Param, ',')`: by attempt
-- ClassMember / seq: `opt('=' Expr)`: one token; takes a mark: it can fail after `'='`
-- ClassMember / seq: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- ClassMember / member: `alt('constructor' '(' sep(Param, ',') ')' Block \| many(…`: by attempt; takes a mark: branch 0: it can fail after `'constructor'`; branch 1: it can fail after `many(DecoratorExpr)`
+- ClassMember / member: `sep(Param, ',')`: by attempt
+- ClassMember / member: `alt(('static') &{'*'\|'['\|BigInt\|BinaryNumber\|…6})`: one token; takes a mark: branch 0: it can fail after `('static')`
+- ClassMember / member: `alt(alt(alt(('accessor') sameLine) &{'*'\|'['\|BigInt\|Bin…`: by attempt; takes a mark: branch 0: it can fail after `alt(alt(('accessor') sameLine) &{'*'\|'[…`; branch 1: it can fail after `alt(alt(('async') sameLine) &{'*'\|'['\|B…`; branch 2: it can fail after `'*'`; branch 3: it can fail after `alt(alt('get' !{'*'} \| 'set' !{'*'}) &{…`; branch 4: it can fail after `MemberName`
+- ClassMember / member: `alt(alt(('accessor') sameLine) &{'*'\|'['\|BigInt\|BinaryN…`: one token; takes a mark: branch 0: it can fail after `alt(('accessor') sameLine)`
+- ClassMember / member: `alt(('accessor') sameLine)`: one token; takes a mark: branch 0: it can fail after `('accessor')`
+- ClassMember / member: `opt('=' Expr)`: one token; takes a mark: it can fail after `'='`
+- ClassMember / member: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- ClassMember / member: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
+- ClassMember / member: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
+- ClassMember / member: `alt('*' MemberName '(' sep(Param, ',') ')' Block \| Memb…`: one token; takes a mark: branch 0: it can fail after `'*'`; branch 1: it can fail after `MemberName`
+- ClassMember / member: `sep(Param, ',')`: by attempt
+- ClassMember / member: `sep(Param, ',')`: by attempt
+- ClassMember / member: `sep(Param, ',')`: by attempt
+- ClassMember / member: `alt(alt('get' !{'*'} \| 'set' !{'*'}) &{'*'\|'['\|BigInt\|B…`: one token; takes a mark: branch 0: it can fail after `alt('get' !{'*'} \| 'set' !{'*'})`
+- ClassMember / member: `alt('get' !{'*'} \| 'set' !{'*'})`: one token; takes a mark: branch 0: it can fail after `'get'`; branch 1: it can fail after `'set'`
+- ClassMember / member: `opt(sep(Param, ','))`: by attempt
+- ClassMember / member: `sep(Param, ',')`: by attempt
+- ClassMember / member: `alt('(' sep(Param, ',') ')' Block \| opt('=' Expr) alt('…`: by attempt; takes a mark: branch 0: it can fail after `'('`; branch 1: it can fail after `opt('=' Expr)`
+- ClassMember / member: `sep(Param, ',')`: by attempt
+- ClassMember / member: `opt('=' Expr)`: one token; takes a mark: it can fail after `'='`
+- ClassMember / member: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
 
 ### ImportClause
 

@@ -23,7 +23,10 @@ import { isKeywordLiteral } from './grammar-utils.ts';
 const RESERVED = new Set(['arm', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger',
   'default', 'delete', 'do', 'else', 'enum', 'export', 'extends', 'false', 'finally', 'for', 'function',
   'if', 'import', 'in', 'instanceof', 'new', 'null', 'return', 'super', 'switch', 'this', 'throw',
-  'true', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield', 'let', 'static', 'await']);
+  'true', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield', 'let', 'static', 'await',
+  // not reserved words, but no strict-mode binding may be named so (the generated destructurers
+  // declare a local per name, in a module: `let arguments` is a SyntaxError there)
+  'arguments', 'eval']);
 
 const PUNCT_NAMES: Record<string, string> = {
   '(': 'paren', ')': 'parenClose', '[': 'bracket', ']': 'bracketClose', '{': 'brace', '}': 'braceClose',

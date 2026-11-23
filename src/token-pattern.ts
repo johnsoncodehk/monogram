@@ -749,6 +749,23 @@ function normalizeClassItems(items: TokenPattern[]): TokenCharClassItem[] {
   return out;
 }
 
+/** An ASCII-CASE-INSENSITIVE regex source matching `s` regardless of letter case (both the
+ *  Oniguruma and the JS dialect). Each cased letter becomes a two-char class (`s` → `[Ss]`); other
+ *  chars are escaped as usual. The explicit class rather than an inline `(?i:…)` flag is for
+ *  CORRECTNESS (issue #43): `(?i:)` in (vscode-)oniguruma applies full UNICODE case-folding
+ *  (`(?i:style)` also matches `ſtyle`, U+017F LONG S), while a tag name's case rule is ASCII only
+ *  (the lexer folds with `.toLowerCase()`, which leaves `ſ` alone), so the class matches exactly
+ *  the set the lexer folds (`<SCRIPT>` / `<Script>`, never `<ſcript>`). Used by every generator
+ *  for a raw-text element's open and close tag. */
+export function caseFoldLiteralSource(s: string): string {
+  let out = '';
+  for (const ch of s) {
+    const lo = ch.toLowerCase(), up = ch.toUpperCase();
+    out += lo !== up ? `[${escapeCharClassLiteral(up)}${escapeCharClassLiteral(lo)}]` : escapeRegexLiteral(ch);
+  }
+  return out;
+}
+
 function assertSingleChar(value: string, label: string): void {
   if ([...value].length !== 1) throw new Error(`${label} must be exactly one character, got ${JSON.stringify(value)}`);
 }
