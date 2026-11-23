@@ -1,38 +1,38 @@
 {
  "typescript": {
   "ts": 279638,
-  "ts+recovery": 282420,
+  "ts+recovery": 325325,
   "js": 1457249,
   "go": 510653,
-  "go+recovery": 513655,
+  "go+recovery": 556017,
   "rust": 367876,
-  "rust+recovery": 371399
+  "rust+recovery": 423384
  },
  "javascript": {
   "ts": 193077,
-  "ts+recovery": 195859,
+  "ts+recovery": 225771,
   "js": 849058,
   "go": 329679,
-  "go+recovery": 332681,
+  "go+recovery": 361265,
   "rust": 269937,
-  "rust+recovery": 273460
+  "rust+recovery": 312668
  },
  "typescriptreact": {
   "ts": 312425,
-  "ts+recovery": 315207,
+  "ts+recovery": 359178,
   "js": 1510611,
   "go": 545593,
-  "go+recovery": 548595,
+  "go+recovery": 592112,
   "rust": 404548,
-  "rust+recovery": 408071
+  "rust+recovery": 461115
  },
  "javascriptreact": {
   "ts": 208006,
-  "ts+recovery": 210788,
+  "ts+recovery": 241596,
   "js": 900916,
   "go": 349433,
-  "go+recovery": 352435,
+  "go+recovery": 382076,
   "rust": 285026,
-  "rust+recovery": 288549
+  "rust+recovery": 328651
  }
 }
