@@ -532,8 +532,11 @@ export const CASES: Case[] = [
     accept: [
       '', 'x: 1;', 'x:: a + 1;', 'if a;', 'if a + 1;', 'on x::1;', 'do x;', 'do x.y;', 'go a;', 'go a + b;', 'go a = b;',
       'at [a]!;', 'at [a + b]!;', 'in a;', 'in a + b;', 'x: a in b;', 'x: 1; if b; go c = d; at [e]!; do f.g;',
+      // A leftRec continuation ending in a positive lookahead leaves the tail open (the shape of
+      // python.ts's t_primary: `a.b.c[1] = x`).
+      'set a.x = 1;', 'set a[1] = 1;', 'set a.b.c[1] = x;', 'set a[1].b.c = x;', 'set a.b[2][3].c = x + 1;',
     ],
-    reject: ['if x: 1;', 'if x:: 1;', 'on x:1;', 'on x::y;', 'do 1;', 'do (x);', 'do x.;', 'go a = ;', 'at [a];', 'at [a]', 'in a in b;', 'x 1;'],
+    reject: ['if x: 1;', 'if x:: 1;', 'on x:1;', 'on x::y;', 'do 1;', 'do (x);', 'do x.;', 'go a = ;', 'at [a];', 'at [a]', 'in a in b;', 'x 1;', 'set a = x;', 'set a.b. = x;', 'set a.b.c = ;'],
   },
   {
     // Literals of every shape lid_of looks a text up by (see the fixture): a token of each must
