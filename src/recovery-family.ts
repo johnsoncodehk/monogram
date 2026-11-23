@@ -20,12 +20,14 @@ import { REC_RD, REC_N_TOK, REC_N_BRACKET, REC_N_SEQ, REC_N_CAPPED, REC_N_PREFIX
 
 export const DIAG: RecordDecl = {
   name: 'Diag',
-  fields: ['kind', 'off', 'end', 'arg'].map((name) => ({ name, ty: 'int' as const })),
+  fields: ['kind', 'off', 'end', 'relOff', 'relEnd', 'arg'].map((name) => ({ name, ty: 'int' as const })),
 };
-// The kinds of a diagnostic, one per repair: a literal (arg: its lid) or a token of a kind (arg:
+// The kinds of a diagnostic. One per repair: a literal (arg: its lid) or a token of a kind (arg:
 // its kid) the parse supplied where it was missing, a zero-width `$missing` node; tokens the parse
 // skipped, an `$error` node over them (arg: the end of its first token; at the end of input, off).
-export const DK_MISS_LIT = 0, DK_MISS_TOK = 1, DK_SKIP = 2;
+// The strict parse's error (stage 1, the interpreter's primary error): the entry rule failed at a
+// token; it failed with no token left; it matched and a token is left over.
+export const DK_MISS_LIT = 0, DK_MISS_TOK = 1, DK_SKIP = 2, DK_UNEXPECTED = 3, DK_EOF = 4, DK_LEFTOVER = 5;
 // The best candidate of a longest match so far (riCand): where it ended, its node's offset, whether
 // one won, the node's form, tail and capped flag, and where the repair memory stood when the
 // match began (h0) and where the best's repairs end (hb).
@@ -41,7 +43,7 @@ const bin = (op: (Expr & { k: 'bin' })['op'], a: Expr, b: Expr): Expr => ({ k: '
 const fld = (e: Expr, f: string): Expr => ({ k: 'field', e, f });
 const tok = (i: Expr, f: 'off' | 'end'): Expr => ({ k: 'tokInt', t: { k: 'at', list: v('toks'), i }, f });
 const ret = (...es: Expr[]): Stmt => ({ k: 'return', es });
-const diag = (kind: Expr, off: Expr, end: Expr, arg: Expr): Expr => ({ k: 'mkRec', rec: 'Diag', fields: { kind, off, end, arg } });
+const diag = (kind: Expr, off: Expr, end: Expr, relOff: Expr, relEnd: Expr, arg: Expr = n(0)): Expr => ({ k: 'mkRec', rec: 'Diag', fields: { kind, off, end, relOff, relEnd, arg } });
 
 // The message of a diagnostic of src.
 const diagMessage: Fn = {
@@ -52,10 +54,53 @@ const diagMessage: Fn = {
   body: [
     { k: 'if', c: bin('eq', fld(v('d'), 'kind'), n(DK_MISS_LIT)), then: [ret({ k: 'cat', parts: [s("expected '"), { k: 'call', fn: 'litText', args: [fld(v('d'), 'arg')] }, s("'")] })] },
     { k: 'if', c: bin('eq', fld(v('d'), 'kind'), n(DK_MISS_TOK)), then: [ret({ k: 'cat', parts: [s('expected '), { k: 'call', fn: 'kindText', args: [fld(v('d'), 'arg')] }] })] },
-    { k: 'if', c: bin('eq', fld(v('d'), 'arg'), fld(v('d'), 'off')), then: [ret(s('unexpected end of input'))] },
-    ret({ k: 'cat', parts: [s("unexpected '"), { k: 'substr', s: v('src'), a: fld(v('d'), 'off'), b: fld(v('d'), 'arg') }, s("'")] }),
+    { k: 'if', c: bin('eq', fld(v('d'), 'kind'), n(DK_SKIP)), then: [
+      { k: 'if', c: bin('eq', fld(v('d'), 'arg'), fld(v('d'), 'off')), then: [ret(s('unexpected end of input'))] },
+      ret({ k: 'cat', parts: [s("unexpected '"), { k: 'substr', s: v('src'), a: fld(v('d'), 'off'), b: fld(v('d'), 'arg') }, s("'")] }),
+    ] },
+    { k: 'if', c: bin('eq', fld(v('d'), 'kind'), n(DK_EOF)), then: [ret(s('unexpected end of input'))] },
+    { k: 'let', name: 'text', ty: 'str', init: { k: 'cat', parts: [s("unexpected '"), { k: 'substr', s: v('src'), a: fld(v('d'), 'off'), b: fld(v('d'), 'end') }, s("'")] } },
+    { k: 'if', c: bin('eq', fld(v('d'), 'kind'), n(DK_LEFTOVER)), then: [ret({ k: 'cat', parts: [v('text'), s(' after successful parse')] })] },
+    ret(v('text')),
   ],
 };
+
+// The message of a diagnostic's related location (relOff >= 0).
+const diagRelated: Fn = {
+  name: 'diagRelated',
+  doc: '',
+  params: [{ name: 'd', ty: 'rec_Diag' }],
+  ret: ['str'],
+  body: [ret(s('the parse reached this far'))],
+};
+
+// The primary error of a parse that rejected: the entry rule returned `entryOk` with the position
+// at `pos` (of `toks`), having examined the tokens before `look` (one past the furthest token a
+// read reached). The related location is the furthest examined token when it lies past pos (the
+// interpreter's farthest hint, which counts only tokens a match advanced past: a guard's read of
+// the token after the current one is examined, not advanced past, so the two can differ);
+// otherwise none (-1).
+const rejectDiag: Fn = {
+  name: 'rejectDiag',
+  doc: '',
+  params: [{ name: 'toks', ty: 'toks' }, { name: 'pos', ty: 'idx' }, { name: 'entryOk', ty: 'bool' }, { name: 'look', ty: 'idx' }],
+  ret: ['rec_Diag'],
+  body: [
+    { k: 'let', name: 'relOff', ty: 'int', init: n(-1) },
+    { k: 'let', name: 'relEnd', ty: 'int', init: n(-1) },
+    { k: 'if', c: bin('and', bin('gt', v('look'), bin('add', v('pos'), n(1))), bin('le', v('look'), { k: 'len', e: v('toks') })), then: [
+      { k: 'set', name: 'relOff', e: tok(bin('sub', v('look'), n(1)), 'off') },
+      { k: 'set', name: 'relEnd', e: tok(bin('sub', v('look'), n(1)), 'end') },
+    ] },
+    { k: 'if', c: bin('ge', v('pos'), { k: 'len', e: v('toks') }), then: [ret(diag(n(DK_EOF), n(0), n(0), v('relOff'), v('relEnd')))] },
+    { k: 'let', name: 'kind', ty: 'int', init: n(DK_UNEXPECTED) },
+    // A rule matches only when it consumes a token (longest match: gen-parser.ts parseNonRec); the
+    // reuse plan's entry shells return true for zero top-level entries.
+    { k: 'if', c: bin('and', v('entryOk'), bin('gt', v('pos'), n(0))), then: [{ k: 'set', name: 'kind', e: n(DK_LEFTOVER) }] },
+    ret(diag(v('kind'), tok(v('pos'), 'off'), tok(v('pos'), 'end'), v('relOff'), v('relEnd'))),
+  ],
+};
+
 
 // ── The strict interpreter (stage 2) ──
 // The parse plan's tables (emit-portable.ts recoveryTables, the int table `rt`) run over the
@@ -119,9 +164,9 @@ export const TEXT_EXTERNS: Fn[] = [textExt('litText'), textExt('kindText')];
 // required literal / token / NUD failed at in this attempt (-1: none); where the innermost probe
 // began (an optional, a repetition's element, an ordered branch: no repair before it consumed;
 // -1: none); the position and depth of the interpreted frames entered there with nothing consumed
-// (termination T2); the attempts made; the bars (strictly increasing, at most RM_MAX_BARS); then the
+// (termination T2); the attempts made, and the most one scope took; the bars (strictly increasing, at most RM_MAX_BARS); then the
 // repairs, three ints each (kind, token index, arg).
-export const RM_REC = 0, RM_FAIL = 1, RM_PROBE = 2, RM_SP = 3, RM_SD = 4, RM_ATT = 5, RM_NB = 6, RM_BARS = 7, RM_MAX_BARS = 32, RM_DIAGS = RM_BARS + RM_MAX_BARS;
+export const RM_REC = 0, RM_FAIL = 1, RM_PROBE = 2, RM_SP = 3, RM_SD = 4, RM_ATT = 5, RM_AMAX = 6, RM_NB = 7, RM_BARS = 8, RM_MAX_BARS = 32, RM_DIAGS = RM_BARS + RM_MAX_BARS;
 export const ST_CAPPED = 0, ST_FORM = 1, ST_TAIL = 2, ST_SUP_NEXT = 3, ST_SUP_CUR = 4, ST_CTX = 5;
 
 const T = (i: Expr): Expr => ({ k: 'tab', t: 'rt', i });
@@ -182,7 +227,7 @@ const riIn = method('riIn', [['l', 'int'], ['x', 'int']], ['bool'], [
 ]);
 // Whether Guard g admits the token at the position (-1: no guard). A guard that tests anything
 // refuses at the end of input, as the native candidate frame does.
-const riGuard = method('riGuard', [['g', 'int']], ['bool'], [
+const riGuardIn = method('riGuardIn', [['g', 'int']], ['bool'], [
   if_(lt(v('g'), n(0)), [ret(tru)]),
   if_(lt(call('enPeekKid'), n(0)), [ret(fls)]),
   if_(and(ge(at(v('g'), 0), n(0)), not(call('enAhead', at(v('g'), 0), tru))), [ret(fls)]),
@@ -206,6 +251,12 @@ const riGuard = method('riGuard', [['g', 'int']], ['bool'], [
   let_('fs', R(add(add(v('pb'), n(1)), add(v('np'), v('np'))))),
   if_(and(ge(v('fs'), n(0)), not(call('riSig', v('fs')))), [ret(fls)]),
   ret(tru),
+]);
+// Guard g refuses: a failure at the position (see guarded).
+const riGuard = method('riGuard', [['g', 'int']], ['bool'], [
+  if_(call('riGuardIn', v('g')), [ret(tru)]),
+  run('riFail', call('enPos')),
+  ret(fls),
 ]);
 // A rule (by id), interpreted with d levels left, or native at d = 0.
 const riRule = method('riRule', [['r', 'int'], ['d', 'int']], ['bool'], [
@@ -300,7 +351,9 @@ const probe = (pr: string, body: Stmt[]): Stmt[] => [
 ];
 const op = (k: number, body: Stmt[]): Stmt => if_(eq(v('op'), n(k)), body);
 const S1 = at(v('s'), 1), S2 = at(v('s'), 2), S3 = at(v('s'), 3), S1R = atR(v('s'), 1), S2R = atR(v('s'), 2), S3R = atR(v('s'), 3);
-const guarded = (body: Stmt[]): Stmt => if_(and(ge(S1, n(0)), not(call('enAhead', S1, tru))), body);
+// A body guard that refuses: a failure at the position, as the body's attempt would have been (a
+// plan with more guards records the same failures: the bars do not depend on the plan).
+const guarded = (body: Stmt[]): Stmt => if_(and(ge(S1, n(0)), not(call('enAhead', S1, tru))), [run('riFail', call('enPos')), ...body]);
 const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
   run('enTick'),
   let_('op', T(v('s'))),
@@ -353,7 +406,9 @@ const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
     while_(lt(v('i'), S2), [
       let_('a', add(add(v('s'), n(3)), add(v('i'), v('i')))),
       let_('f', atR(v('a'), 0)),
-      if_(or(lt(v('f'), n(0)), call('riSig', v('f'))), [
+      let_('adm', or(lt(v('f'), n(0)), call('riSig', v('f'))), 'bool'),
+      if_(not(v('adm')), [run('riFail', call('enPos'))]),
+      if_(v('adm'), [
         ...probe('pr', attempt('ok', call('riList', atR(v('a'), 1), v('d')))),
         if_(v('ok'), [ret(tru)]),
         if_(eq(S1, n(1)), [brk]),
@@ -678,9 +733,11 @@ const riUnit = method('riUnit', [['el', 'int'], ['upto', 'int']], ['bool'], [
 // (its nodes and repairs kept; a failed one undone).
 const riAttempts = method('riAttempts', [['el', 'int'], ['upto', 'int']], ['bool'], [
   run('enRmSet', n(RM_NB), n(0)),
+  let_('a0', rm(RM_ATT)),
   while_(tru, [
     run('enRmSet', n(RM_FAIL), n(-1)), run('enRmSet', n(RM_PROBE), n(-1)), run('enRmSet', n(RM_SP), n(-1)), run('enRmSet', n(RM_SD), n(0)),
     run('enRmSet', n(RM_ATT), add(rm(RM_ATT), n(1))),
+    if_(gt(sub(rm(RM_ATT), v('a0')), rm(RM_AMAX)), [run('enRmSet', n(RM_AMAX), sub(rm(RM_ATT), v('a0')))]),
     let_('k', call('enMark')),
     if_(call('riUnit', v('el'), v('upto')), [run('enUnmark', v('k')), ret(tru)]),
     run('enReset', v('k')), run('enUnmark', v('k')),
@@ -767,16 +824,16 @@ const repairDiag: Fn = {
   params: [{ name: 'toks', ty: 'toks' }, { name: 'kind', ty: 'int' }, { name: 't', ty: 'idx' }, { name: 'arg', ty: 'idx' }],
   ret: ['rec_Diag'],
   body: [
-    if_(and(eq(v('kind'), n(DK_SKIP)), gt(v('arg'), v('t'))), [ret(diag(v('kind'), tok(v('t'), 'off'), tok(sub(v('arg'), n(1)), 'end'), tok(v('t'), 'end')))]),
+    if_(and(eq(v('kind'), n(DK_SKIP)), gt(v('arg'), v('t'))), [ret(diag(v('kind'), tok(v('t'), 'off'), tok(sub(v('arg'), n(1)), 'end'), n(-1), n(-1), tok(v('t'), 'end')))]),
     let_('off', n(0)),
     if_(lt(v('t'), { k: 'len', e: v('toks') }), [set('off', tok(v('t'), 'off'))], [if_(gt(v('t'), n(0)), [set('off', tok(sub(v('t'), n(1)), 'end'))])]),
-    if_(eq(v('kind'), n(DK_SKIP)), [ret(diag(v('kind'), v('off'), v('off'), v('off')))]),
-    ret(diag(v('kind'), v('off'), v('off'), v('arg'))),
+    if_(eq(v('kind'), n(DK_SKIP)), [ret(diag(v('kind'), v('off'), v('off'), n(-1), n(-1), v('off')))]),
+    ret(diag(v('kind'), v('off'), v('off'), n(-1), n(-1), v('arg'))),
   ],
 };
 
 export function recoveryFamilyFns(): Fn[] {
-  return [repairDiag, diagMessage, riRef, riSig, riIn, riGuard, riRule, riCand, riRd, riRdIn, riList, riStep, riOperand, riOp, riNud, riBp, riBpIn,
+  return [rejectDiag, repairDiag, diagMessage, diagRelated, riRef, riSig, riIn, riGuard, riGuardIn, riRule, riCand, riRd, riRdIn, riList, riStep, riOperand, riOp, riNud, riBp, riBpIn,
     riRmDrop, riBarIn, riFail, riMatch, riMiss, riNat, riUnit, riAttempts, riSkip, riTotal, ...ENGINE_EXTERNS, ...TEXT_EXTERNS];
 }
 

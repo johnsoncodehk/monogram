@@ -183,7 +183,7 @@ export type TsLib = {
   parseTotal(src: string, builder: unknown): TsTotal;
   parseWith(src: string, builder: unknown): unknown;
   parseInterpreted(src: string, builder: unknown, depth: number): { root: unknown; steps: number };
-  lastTotalWork(): { steps: number; attempts: number };
+  lastTotalWork(): { steps: number; attempts: number; maxAttempts: number };
   cstBuilder: unknown;
 };
 // The gate's one addition to the imported ts library: its lid_of, which the runners' lid-of mode
@@ -294,7 +294,7 @@ export type Runner = {
 // diagnostic as [off, end, message, relOff, relEnd, relMessage] (relOff -1: no related location),
 // the tree (canonical CST JSON), and the work a recovery took (interpreted steps, attempts).
 export type DiagRow = [number, number, string, number, number, string];
-export type Total = { ok: boolean; root: boolean; errors: DiagRow[]; cst?: string; steps: number; attempts: number };
+export type Total = { ok: boolean; root: boolean; errors: DiagRow[]; cst?: string; steps: number; attempts: number; maxAttempts: number; strict: DiagRow | null };
 export function totalBatch(cmd: string, srcs: string[]): Total[] {
   const sent = srcs.filter((s) => !s.includes('\0'));
   const r = spawnSync(cmd, ['batch-total'], { input: sent.join('\0'), encoding: 'utf8', maxBuffer: 1 << 30 });
@@ -302,9 +302,9 @@ export function totalBatch(cmd: string, srcs: string[]): Total[] {
   if (r.status !== 0 || lines.length !== sent.length + 1) throw new Error(`${cmd} batch-total: exit ${r.status}, ${lines.length - 1} lines for ${sent.length} inputs\n${(r.stderr ?? '').slice(0, 2000)}`);
   let li = 0;
   return srcs.map((src): Total => {
-    if (src.includes('\0')) return { ok: false, root: false, errors: [[0, 0, 'NUL', -1, -1, '']], steps: 0, attempts: 0 };
-    const [root, errors, cst, steps, attempts] = JSON.parse(lines[li++]!) as [boolean, DiagRow[], string, number, number];
-    return { ok: root && errors.length === 0, root, errors, cst: root ? canon(JSON.parse(cst)) : undefined, steps, attempts };
+    if (src.includes('\0')) return { ok: false, root: false, errors: [[0, 0, 'NUL', -1, -1, '']], steps: 0, attempts: 0, maxAttempts: 0, strict: null };
+    const [root, errors, cst, steps, attempts, maxAttempts, strict] = JSON.parse(lines[li++]!) as [boolean, DiagRow[], string, number, number, number, DiagRow | null];
+    return { ok: root && errors.length === 0, root, errors, cst: root ? canon(JSON.parse(cst)) : undefined, steps, attempts, maxAttempts, strict: strict ?? null };
   });
 }
 // One interpreted parse: its verdict, its tree (the CST JSON, as `batch` gives it), the steps it
@@ -334,11 +334,13 @@ export function interpBatch(cmd: string, srcs: string[], depth: number): Interp[
     return ok ? { ok, steps, cst: canon(JSON.parse(cst)) } : { ok, steps };
   });
 }
-export type TsTotal = { root: unknown; errors: { offset: number; end: number; message: string; related?: { offset: number; end: number; message: string } }[] };
+type TsDiag = { offset: number; end: number; message: string; related?: { offset: number; end: number; message: string } };
+export type TsTotal = { root: unknown; errors: TsDiag[]; strict?: TsDiag };
 export function tsTotal(lib: TsLib, src: string): Total {
   const t = lib.parseTotal(src, lib.cstBuilder);
   const w = lib.lastTotalWork();
-  return { ok: t.root !== null && t.errors.length === 0, root: t.root !== null, cst: t.root === null ? undefined : canon(t.root), errors: t.errors.map((e): DiagRow => [e.offset, e.end, e.message, e.related?.offset ?? -1, e.related?.end ?? -1, e.related?.message ?? '']), steps: w.steps, attempts: w.attempts };
+  const row = (e: TsTotal['errors'][number]): DiagRow => [e.offset, e.end, e.message, e.related?.offset ?? -1, e.related?.end ?? -1, e.related?.message ?? ''];
+  return { ok: t.root !== null && t.errors.length === 0, root: t.root !== null, cst: t.root === null ? undefined : canon(t.root), errors: t.errors.map(row), steps: w.steps, attempts: w.attempts, maxAttempts: w.maxAttempts, strict: t.strict ? row(t.strict) : null };
 }
 // Every parser of this gate is emitted with total parsing (the emit option `recovery`), whose
 // region is appended to the default module and changes none of it: each module begins with the

@@ -16,7 +16,7 @@ import { blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKi
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
-import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT } from './recovery-family.ts';
+import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT, RM_AMAX } from './recovery-family.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, unitMask, isList, isNum, isOpt, isRec, isRecList, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
@@ -5857,7 +5857,7 @@ function recoveryRegionRust(ir: ParserIR, shared: SharedAlgorithms): string {
   return `
 // ---- recovery: the emit option { recovery: true }; generated from src/recovery-family.ts (shared by the TS / Go / Rust targets) ----
 #[derive(Clone, Copy)]
-struct Diag { kind: isize, off: isize, end: isize, arg: isize }
+struct Diag { kind: isize, off: isize, end: isize, rel_off: isize, rel_end: isize, arg: isize }
 // The recovery interpreter's best longest-match candidate so far (recovery-family.ts BEST).
 struct BestCand { pos: isize, off: isize, won: isize, form: isize, tail: isize, capped: isize, h0: isize, hb: isize }
 // The words of a repair's message: a literal's text (by lid), a token kind's name.
@@ -5873,30 +5873,40 @@ pub struct Diagnostic { pub off: usize, pub end: usize, pub message: String, pub
 #[derive(Debug, Clone, PartialEq)]
 pub struct Related { pub off: usize, pub end: usize, pub message: String }
 #[cold]
-fn diagnostic_of(src: &str, d: Diag) -> Diagnostic { Diagnostic { off: d.off as usize, end: d.end as usize, message: diag_message(src, d), related: None } }
+fn diagnostic_of(src: &str, d: Diag) -> Diagnostic {
+    let related = if d.rel_off >= 0 { Some(Related { off: d.rel_off as usize, end: d.rel_end as usize, message: diag_related(d) }) } else { None };
+    Diagnostic { off: d.off as usize, end: d.end as usize, message: diag_message(src, d), related }
+}
 
 /// parse_with that also parses a rejected text: an accepted text gives parse_with's root and no
 /// errors; a rejected one gives a tree all the same, with its repairs (recovery-family.ts):
 /// \`$missing\` nodes (zero-width, no children) where a literal or token the parse required is
-/// absent, \`$error\` nodes over tokens it skipped, and one diagnostic per repair, in order. A text
-/// the lexer refuses gives None and the lexer's error. It does not panic on input.
-pub fn parse_total<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> (Option<B::H>, Vec<Diagnostic>) {
-    let (h, errs, _) = parse_total_work(src, b);
-    (h, errs)
+/// absent, \`$error\` nodes over tokens it skipped, and one diagnostic per repair, in order; and the
+/// error of the strict parse (where it stopped: the interpreter's primary error, with the farthest
+/// token it examined as its related location; None for an accepted text). A repair is placed where
+/// the fix goes, which can lie before the place the strict parse noticed the error. A text the lexer
+/// refuses gives None and the lexer's error. It does not panic on input.
+pub fn parse_total<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> (Option<B::H>, Vec<Diagnostic>, Option<Diagnostic>) {
+    let (h, errs, strict, _) = parse_total_work(src, b);
+    (h, errs, strict)
 }
-/// parse_total and the work its recovery took: the steps it interpreted, the attempts it made.
-pub fn parse_total_work<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> (Option<B::H>, Vec<Diagnostic>, (usize, usize)) {
+/// parse_total and the work its recovery took: the steps it interpreted, the attempts it made, the
+/// most attempts one scope took.
+pub fn parse_total_work<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> (Option<B::H>, Vec<Diagnostic>, Option<Diagnostic>, (usize, usize, usize)) {
     let mut g = parse_begin(src, b);
     let p = &mut g.p;
     if let Some(e) = lex_into(src, &mut p.toks, &mut g.lex) {
         let end = if e.end > e.off { e.end as usize } else { e.off as usize };
         let le = lex_error(src, e);
-        return (None, vec![Diagnostic { off: le.off, end, message: le.msg, related: None }], (0, 0));
+        return (None, vec![Diagnostic { off: le.off, end, message: le.msg, related: None }], None, (0, 0, 0));
     }
     p.scratch.clear();
     let ck = p.b.checkpoint();
     let fr = p.parse_${ir.entry}();
-    if let Some(fr) = &fr { if p.pos == p.toks.len() { return (Some(fr.root()), Vec::new(), (0, 0)); } }
+    if let Some(fr) = &fr { if p.pos == p.toks.len() { return (Some(fr.root()), Vec::new(), None, (0, 0, 0)); } }
+    // The examined extent: the furthest of every top-level entry's (look_end holds the last one's).
+    let mut look = p.look_end();${ir.reuse ? '\n    for m in &p.entries { if m.ext as usize > look { look = m.ext as usize; } }' : ''}
+    let strict = diagnostic_of(src, reject_diag(&p.toks, p.pos, fr.is_some(), look));
     p.b.restore(ck);
     p.scratch.clear();
     p.pos = 0;
@@ -5910,7 +5920,7 @@ pub fn parse_total_work<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> (O
     let mut errs = Vec::new();
     let mut i = ${RM_DIAGS};
     while i + 2 < rv.rm.len() { errs.push(diagnostic_of(src, repair_diag(&rv.p.toks, rv.rm[i], rv.rm[i + 1] as usize, rv.rm[i + 2] as usize))); i += 3; }
-    (Some(root), errs, (rv.steps, rv.rm[${RM_ATT}] as usize))
+    (Some(root), errs, Some(strict), (rv.steps, rv.rm[${RM_ATT}] as usize, rv.rm[${RM_AMAX}] as usize))
 }
 `;
 }
@@ -5946,7 +5956,7 @@ const RS_BATCH_TOTAL = `    if args.get(1).map(|a| a.as_str()) == Some("batch-to
         let mut out = String::new();
         for s in src.split('\\0') {
             let mut b = CstBuilder::default();
-            let (root, errs, (steps, attempts)) = parse_total_work(s, &mut b);
+            let (root, errs, strict, (steps, attempts, amax)) = parse_total_work(s, &mut b);
             out.push_str(if root.is_some() { "[true,[" } else { "[false,[" });
             for (i, e) in errs.iter().enumerate() {
                 if i > 0 { out.push(','); }
@@ -5956,7 +5966,16 @@ const RS_BATCH_TOTAL = `    if args.get(1).map(|a| a.as_str()) == Some("batch-to
             }
             out.push_str("],");
             match root { Some(h) => js(&cst_json_with(&b, h), &mut out), None => out.push_str("\\"\\"") }
-            out.push_str(&format!(",{},{}]\\n", steps, attempts));
+            out.push_str(&format!(",{},{},{},", steps, attempts, amax));
+            match &strict {
+                Some(e) => {
+                    out.push_str(&format!("[{},{},", e.off, e.end)); js(&e.message, &mut out);
+                    match &e.related { Some(r) => { out.push_str(&format!(",{},{},", r.off, r.end)); js(&r.message, &mut out); } None => out.push_str(",-1,-1,\\"\\""), }
+                    out.push(']');
+                }
+                None => out.push_str("null"),
+            }
+            out.push_str("]\\n");
         }
         print!("{}", out);
         return;

@@ -6,7 +6,7 @@
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA } from './emit-portable.ts';
 import { blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
-import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_FAIL, RM_PROBE, RM_SP } from './recovery-family.ts';
+import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_AMAX, RM_FAIL, RM_PROBE, RM_SP } from './recovery-family.ts';
 import type { EmitOptions } from './target.ts';
 import type { CstGrammar } from './types.ts';
 import type {
@@ -3477,35 +3477,57 @@ export function parseInterpreted<H>(src: string, builder: Builder<H>, depth: num
 }
 
 function recoveryRegionTs(ir: ParserIR, shared: SharedAlgorithms): string {
+  const ext = ir.reuse ? '\n  for (const m of _entries) if (m.ext > look) look = m.ext;' : '';
   return `
 // ---- recovery: the emit option { recovery: true }; generated from src/recovery-family.ts (shared by the TS / Go / Rust targets) ----
-type Diag = { kind: number; off: number; end: number; arg: number };
+type Diag = { kind: number; off: number; end: number; relOff: number; relEnd: number; arg: number };
 // The recovery interpreter's best longest-match candidate so far (recovery-family.ts BEST).
 type BestCand = { pos: number; off: number; won: number; form: number; tail: number; capped: number; h0: number; hb: number };
 ${shared.recoveryFamily(ir)}
 ${recoveryEngineTs(ir)}
-/** A diagnostic: a span of the source, its message, and a related location (none yet). */
+/** A diagnostic: a span of the source, its message, and a related location (relOff >= 0). */
 export type Diagnostic = { offset: number; end: number; message: string; related?: { offset: number; end: number; message: string } };
-function diagnosticOf(src: string, d: Diag): Diagnostic { return { offset: d.off, end: d.end, message: diagMessage(src, d) }; }
-// The work of the last parseTotal (the gate's measurement): interpreted steps, attempts.
-let _rwork = [0, 0];
-/** The interpreted steps and the attempts the last parseTotal took (0, 0 for an accepted text). */
-export function lastTotalWork(): { steps: number; attempts: number } { return { steps: _rwork[0]!, attempts: _rwork[1]! }; }
+function diagnosticOf(src: string, d: Diag): Diagnostic {
+  const out: Diagnostic = { offset: d.off, end: d.end, message: diagMessage(src, d) };
+  if (d.relOff >= 0) out.related = { offset: d.relOff, end: d.relEnd, message: diagRelated(d) };
+  return out;
+}
+// The strict parse's error over toks: the entry rule run as runW runs it, and its diagnostic. The
+// examined extent is the furthest of every top-level entry's (lookEnd() holds the last one's).
+function rejectRun<H>(builder: Builder<H>): Diag {
+  pos = 0;
+  lookReset();
+  _builder = builder;
+  _n = 0;
+  const ok = parse${ir.entry}W();
+  let look = lookEnd();${ext}
+  _hs.fill(null);
+  return rejectDiag(toks, pos, ok, look);
+}
+// The work of the last parseTotal (the gate's measurement): interpreted steps, attempts, the most
+// attempts one scope took.
+let _rwork = [0, 0, 0];
+/** The interpreted steps, the attempts and the most attempts of one scope the last parseTotal took (0 for an accepted text). */
+export function lastTotalWork(): { steps: number; attempts: number; maxAttempts: number } { return { steps: _rwork[0]!, attempts: _rwork[1]!, maxAttempts: _rwork[2]! }; }
 /**
  * parseTotal: parseWith that also parses a rejected text. An accepted text gives parseWith's root
  * and no errors. A rejected one gives a tree all the same, with its repairs (recovery-family.ts):
  * \`$missing\` nodes (zero-width, no children) where a literal or token the parse required is
- * absent, \`$error\` nodes over tokens it skipped, and one diagnostic per repair, in order. A text
- * the lexer refuses gives no root and the lexer's error.
+ * absent, \`$error\` nodes over tokens it skipped, and one diagnostic per repair, in order; and
+ * \`strict\`, the error of the strict parse (where it stopped: the interpreter's primary error,
+ * with the farthest token it examined as its related location). A repair is placed where the fix
+ * goes, which can lie before the place the strict parse noticed the error. A text the lexer refuses
+ * gives no root and the lexer's error.
  */
-export function parseTotal<H>(src: string, builder: Builder<H>): { root: H | null; errors: Diagnostic[] } {
+export function parseTotal<H>(src: string, builder: Builder<H>): { root: H | null; errors: Diagnostic[]; strict?: Diagnostic } {
   _src = src;
-  _rwork = [0, 0];
+  _rwork = [0, 0, 0];
   const [ts, err] = lexAll(src);
   if (err !== null) return { root: null, errors: [{ offset: err.off, end: Math.max(err.off, err.end), message: lexError(src, err).message }] };
   toks = ts;
   const root = runW(builder);
   if (root !== null) return { root, errors: [] };
+  const strict = diagnosticOf(src, rejectRun(builder));
   if (_tab_rt.length === 0) _tab_rt = unpackInts(_TABS_rt);
   pos = 0;
   lookReset();
@@ -3522,8 +3544,8 @@ export function parseTotal<H>(src: string, builder: Builder<H>): { root: H | nul
   if (!sole) throw new Error('the builder kept no node for the root rule of a recovered parse (a Builder must return one for the entry rule)');
   const errors: Diagnostic[] = [];
   for (let i = ${RM_DIAGS}; i + 2 < _rm.length; i += 3) errors.push(diagnosticOf(src, repairDiag(toks, _rm[i]!, _rm[i + 1]!, _rm[i + 2]!)));
-  _rwork = [_rsteps, _rm[${RM_ATT}]!];
-  return { root: rec, errors };
+  _rwork = [_rsteps, _rm[${RM_ATT}]!, _rm[${RM_AMAX}]!];
+  return { root: rec, errors, strict };
 }
 `;
 }

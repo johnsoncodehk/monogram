@@ -14,7 +14,7 @@ import { blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKi
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
-import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT } from './recovery-family.ts';
+import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT, RM_AMAX } from './recovery-family.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, unitMask, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
@@ -3131,7 +3131,7 @@ const GO_BATCH_TOTAL = `	if len(os.Args) > 1 && os.Args[1] == "batch-total" {
 		var b strings.Builder
 		for _, s := range strings.Split(src, "\\x00") {
 			cb := &CstBuilder{}
-			h, ok, errs, w := ParseTotalWork(s, cb)
+			h, ok, errs, strict, w := ParseTotalWork(s, cb)
 			rows := make([][]interface{}, 0, len(errs))
 			for _, e := range errs {
 				row := []interface{}{e.Off, e.End, e.Message, -1, -1, ""}
@@ -3140,7 +3140,12 @@ const GO_BATCH_TOTAL = `	if len(os.Args) > 1 && os.Args[1] == "batch-total" {
 			}
 			cst := ""
 			if ok { cst = CstJSONWith(cb, h) }
-			line, _ := json.Marshal([]interface{}{ok, rows, cst, w.Steps, w.Attempts})
+			var srow []interface{}
+			if strict != nil {
+				srow = []interface{}{strict.Off, strict.End, strict.Message, -1, -1, ""}
+				if strict.Related != nil { srow[3], srow[4], srow[5] = strict.Related.Off, strict.Related.End, strict.Related.Message }
+			}
+			line, _ := json.Marshal([]interface{}{ok, rows, cst, w.Steps, w.Attempts, w.MaxAttempts, srow})
 			b.Write(line); b.WriteByte('\\n')
 		}
 		os.Stdout.WriteString(b.String())
@@ -3318,7 +3323,7 @@ function recoveryRegionGo(ir: ParserIR, shared: SharedAlgorithms): string {
   const ids = buildLexIdPlan(ir);
   return `
 // ---- recovery: the emit option { recovery: true }; generated from src/recovery-family.ts (shared by the TS / Go / Rust targets) ----
-type diag struct{ Kind, Off, End, Arg int }
+type diag struct{ Kind, Off, End, RelOff, RelEnd, Arg int }
 // The recovery interpreter's best longest-match candidate so far (recovery-family.ts BEST).
 type bestCand struct{ Pos, Off, Won, Form, Tail, Capped, H0, Hb int }
 // The words of a repair's message: a literal's text (by lid), a token kind's name.
@@ -3338,34 +3343,46 @@ type Related struct {
 \tOff, End int
 \tMessage  string
 }
-func diagnosticOf(src string, d diag) Diagnostic { return Diagnostic{Off: d.Off, End: d.End, Message: diagMessage(src, d)} }
+func diagnosticOf(src string, d diag) Diagnostic {
+	out := Diagnostic{Off: d.Off, End: d.End, Message: diagMessage(src, d)}
+	if d.RelOff >= 0 { out.Related = &Related{Off: d.RelOff, End: d.RelEnd, Message: diagRelated(d)} }
+	return out
+}
 
-// TotalWork is the work of a parse ParseTotalWork recovered: the steps it interpreted, the attempts it made.
-type TotalWork struct{ Steps, Attempts int }
+// TotalWork is the work of a parse ParseTotalWork recovered: the steps it interpreted, the attempts
+// it made, the most attempts one scope took.
+type TotalWork struct{ Steps, Attempts, MaxAttempts int }
 
 // ParseTotal is ParseWith that also parses a rejected text: an accepted text gives ParseWith's root
 // and no errors; a rejected one gives a tree all the same (ok), with its repairs (recovery-family.ts):
 // $missing nodes (zero-width, no children) where a literal or token the parse required is absent,
-// $error nodes over tokens it skipped, and one diagnostic per repair, in order. A text the lexer
-// refuses gives ok=false and the lexer's error. It does not panic on input.
-func ParseTotal(src string, b Builder) (h int32, ok bool, errs []Diagnostic) {
-	h, ok, errs, _ = ParseTotalWork(src, b)
+// $error nodes over tokens it skipped, and one diagnostic per repair, in order; and strict, the
+// error of the strict parse (where it stopped: the interpreter's primary error, with the farthest
+// token it examined as its related location; nil for an accepted text). A repair is placed where
+// the fix goes, which can lie before the place the strict parse noticed the error. A text the
+// lexer refuses gives ok=false and the lexer's error. It does not panic on input.
+func ParseTotal(src string, b Builder) (h int32, ok bool, errs []Diagnostic, strict *Diagnostic) {
+	h, ok, errs, strict, _ = ParseTotalWork(src, b)
 	return
 }
 
 // ParseTotalWork is ParseTotal and the work its recovery took (zero for an accepted text).
-func ParseTotalWork(src string, b Builder) (h int32, ok bool, errs []Diagnostic, w TotalWork) {
+func ParseTotalWork(src string, b Builder) (h int32, ok bool, errs []Diagnostic, strict *Diagnostic, w TotalWork) {
 	p, fr, entryOk, err := runW(src, b)
 	if err != nil {
 		end := err.End
 		if end < err.Off { end = err.Off }
-		return 0, false, []Diagnostic{{Off: err.Off, End: end, Message: lexError(src, err).Msg}}, w
+		return 0, false, []Diagnostic{{Off: err.Off, End: end, Message: lexError(src, err).Msg}}, nil, w
 	}
 	if entryOk && p.pos == len(p.toks) {
 		p.cursor.toks, p.src, p.b = nil, "", nil // the workspace keeps buffers, not the input or the builder
 		if !fr.present { panic(errNoRoot) }
-		return fr.h, true, nil, w
+		return fr.h, true, nil, nil, w
 	}
+	// The examined extent: the furthest of every top-level entry's (lookEnd holds the last one's).
+	look := p.lookEnd()${ir.reuse ? '\n\tfor _, m := range p.entries { if m.Ext > look { look = m.Ext } }' : ''}
+	sd := diagnosticOf(src, rejectDiag(p.toks, p.pos, entryOk, look))
+	strict = &sd
 	b.Restore(0, 0)
 	p.pos = 0
 	p.scratch = p.scratch[:0]
@@ -3376,9 +3393,9 @@ func ParseTotalWork(src string, b Builder) (h int32, ok bool, errs []Diagnostic,
 	if len(p.scratch) != 1 { panic(errNoRoot) }
 	h = p.scratch[0]
 	for i := ${RM_DIAGS}; i+2 < len(rv.rm); i += 3 { errs = append(errs, diagnosticOf(src, repairDiag(p.toks, rv.rm[i], rv.rm[i+1], rv.rm[i+2]))) }
-	w = TotalWork{Steps: rv.steps, Attempts: rv.rm[${RM_ATT}]}
+	w = TotalWork{Steps: rv.steps, Attempts: rv.rm[${RM_ATT}], MaxAttempts: rv.rm[${RM_AMAX}]}
 	p.cursor.toks, p.src, p.b = nil, "", nil
-	return h, true, errs, w
+	return h, true, errs, strict, w
 }
 `;
 }
