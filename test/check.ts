@@ -172,11 +172,13 @@ if (changedMode) {
     if (quickMode && !g.quick && !changed.has(script)) { notQuick.push(g); continue; }
     const { common, targets } = gateTargetDeps(script, g.reads);
     const size = common.size + [...targets.values()].reduce((n, t) => n + t.size, 0);
-    if (global.length || [...changed].some((f) => common.has(f))) { run.push(g); continue; }
     const hitTargets = [...targets].filter(([, fs]) => [...changed].some((f) => fs.has(f))).map(([t]) => t);
+    // the quick tier compiles a real grammar's Go parser when the Go target's own code changed
+    if (quickMode && g.quick && hitTargets.includes('go')) g.env = { ...g.env, CHECK_QUICK_GO: '1' };
+    if (global.length || [...changed].some((f) => common.has(f))) { run.push(g); continue; }
     if (!hitTargets.length) { skipped.push(`${label.padEnd(36)} none of its ${size} input file(s) changed`); continue; }
     // only target code changed: a gate that runs its targets apart runs those targets
-    run.push(g.targets && hitTargets.length < targets.size ? { ...g, env: { CHECK_TARGETS: hitTargets.join(',') } } : g);
+    run.push(g.targets && hitTargets.length < targets.size ? { ...g, env: { ...g.env, CHECK_TARGETS: hitTargets.join(',') } } : g);
   }
   for (const s of skipped) console.log(`    · skip ${s}`);
   // the gates --changed would run that the quick tier leaves out: they run in `--changed` and CI
@@ -232,7 +234,7 @@ async function worker(): Promise<void> {
     results.push(r);
     // CHECK_OUT_DIR (CI, uploaded as the job's `gate-output` artifact): every gate's whole output
     if (process.env.CHECK_OUT_DIR) { mkdirSync(process.env.CHECK_OUT_DIR, { recursive: true }); writeFileSync(join(process.env.CHECK_OUT_DIR, `${gate.group}-${gate.name}.txt`.replace(/[^A-Za-z0-9.-]/g, '_')), r.output); }
-    process.stdout.write(`    ${r.ok ? '✓' : '✗'} ${(r.gate.group + '/' + r.gate.name + (r.gate.env?.CHECK_TARGETS ? ` [${r.gate.env.CHECK_TARGETS}]` : '') + (r.gate.env?.CHECK_QUICK ? ' [quick]' : '')).padEnd(34)} ${String(r.ms).padStart(6)}ms  ${r.ok ? r.summary : ''}\n`);
+    process.stdout.write(`    ${r.ok ? '✓' : '✗'} ${(r.gate.group + '/' + r.gate.name + (r.gate.env?.CHECK_TARGETS ? ` [${r.gate.env.CHECK_TARGETS}]` : '') + (r.gate.env?.CHECK_QUICK ? (r.gate.env.CHECK_QUICK_GO ? ' [quick+go]' : ' [quick]') : '')).padEnd(34)} ${String(r.ms).padStart(6)}ms  ${r.ok ? r.summary : ''}\n`);
   }
 }
 await Promise.all(Array.from({ length: Math.min(POOL, gates.length) }, worker));

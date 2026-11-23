@@ -47,7 +47,7 @@ import { parityInputs, type Tok } from './parity-corpus.ts';
 import { goBuild, scratchDir } from './scratch.ts';
 import type { CstGrammar } from '../src/types.ts';
 import { CASES, type Case } from './portable-cases.ts';
-import { CHECK_TARGETS, QUICK } from './check-targets.ts';
+import { CHECK_TARGETS, QUICK, QUICK_GO } from './check-targets.ts';
 import { cachedEmit } from './emit-cache.ts';
 import { ROOT as ROOT_DIR } from './gate-deps.ts';
 import { buildAll, buildKey, GO_VERSION, RUSTC_PATH, RUSTC_PATH_FLAGS, RUSTC_VERSION, type Build } from './build-cache.ts';
@@ -482,13 +482,14 @@ const EXCEPT = process.argv.find((a) => a.startsWith('--grammars-except='))?.sli
 // The QUICK tier's sample (CHECK_QUICK=1, `check.ts --quick`): two small grammars and one real one,
 // unless --grammars names others.
 export const QUICK_GRAMMARS = ['calc', 'templatejs', 'javascript'];
-// ... and in it the real grammar runs the TypeScript target and, when the Go target runs, Go (a
-// compile of a real grammar's Go parser is a few seconds, and only a Go compile sees the commonest Go
-// printer mistake, a variable declared and not used, which the small grammars' parsers do not
-// reach: land/decisions-commit); not Rust (a debug compile of a real grammar's parser takes about a
-// minute on a 2-core box): the Rust parsers of the real grammars are `--changed`'s and CI's.
-const QUICK_TS_GO_ONLY = new Set(['javascript']);
-const nativeFor = (c: Case, t: 'go' | 'rust'): boolean => !c.tsOnly && !(QUICK && t === 'rust' && QUICK_TS_GO_ONLY.has(c.grammar));
+// ... and in it the real grammar runs the TypeScript target only, and Go too when the Go target's
+// own code changed (CHECK_QUICK_GO: the commonest Go printer mistake, a variable declared and not
+// used, is seen only by a Go compile, and a small grammar's parser may not reach the printed code
+// that has it: land/decisions-commit; the compile is a few seconds). Not Rust: a debug compile of a
+// real grammar's parser takes about a minute on a 2-core box; the native parsers of the real
+// grammars are `--changed`'s and CI's.
+const QUICK_TS_ONLY = new Set(['javascript']);
+const nativeFor = (c: Case, t: 'go' | 'rust'): boolean => !c.tsOnly && !(QUICK && QUICK_TS_ONLY.has(c.grammar) && !(t === 'go' && QUICK_GO));
 export const selectedCases = (): Case[] => CASES.filter((c) => (ONLY ? ONLY.includes(c.grammar) : !QUICK || QUICK_GRAMMARS.includes(c.grammar)) && !EXCEPT?.includes(c.grammar));
 
 /**
