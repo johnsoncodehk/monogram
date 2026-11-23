@@ -19,6 +19,7 @@ import { execFileSync } from 'node:child_process';
 import { readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { FETCH_HINT, haveCorpusCommit, REPO_CORPUS_AT } from './corpus-pin.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -191,16 +192,13 @@ export const CURATED_TS_INVALID: string[] = [
 // parsed by these gates until the pin moves; new SYNTAX is the conformance corpora's job (test262,
 // the tsc corpus, the curated lists above), not this one's. Move the pin (any commit of master)
 // when the corpus should see newer sources; the gates' counts in their output change then.
-// A checkout without the commit (CI's shallow clone) fetches it once (git fetch --depth 1); a
-// failure to get it fails the gate (no silent empty corpus).
-export const REPO_CORPUS_AT = '7b713ea0555571aa01950592125182c0d5012231';
+// The pin and its fetch live in test/corpus-pin.ts: the commit is fetched once, before any gate
+// runs (CI's workflow, test/check.ts); a gate that finds it missing fails (no silent empty corpus,
+// and no fetch racing another gate's).
+export { REPO_CORPUS_AT };
 const git = (args: string[], input?: string): Buffer => execFileSync('git', ['-C', ROOT, ...args], { input, maxBuffer: 1 << 28, stdio: ['pipe', 'pipe', 'pipe'] });
 function corpusCommit(): string {
-  try { git(['cat-file', '-e', `${REPO_CORPUS_AT}^{tree}`]); } catch {
-    try { git(['fetch', '-q', '--depth', '1', 'origin', REPO_CORPUS_AT]); } catch (e) {
-      throw new Error(`emit-corpus: the pinned commit ${REPO_CORPUS_AT} is not in this clone and \`git fetch --depth 1 origin ${REPO_CORPUS_AT}\` failed: ${String(e)}`);
-    }
-  }
+  if (!haveCorpusCommit()) throw new Error(`emit-corpus: ${FETCH_HINT}`);
   return REPO_CORPUS_AT;
 }
 
