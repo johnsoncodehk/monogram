@@ -582,15 +582,23 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
             if (!ok) { cleanChecked++; if (nodes.length !== n0) bad(`${r.name} led ${i} (${r.leds[i]!.first}): marked clean, it failed at ${at()} with ${nodes.length - n0} node(s) built`); }
             return ok;
           })() : runLed();
+          // Matched: capped by its trailing operand (PrattRule.ledCapsFromTail), the node returns at once, still capped.
           if (ledOk) {
-            left = finish(rid, sb); fm = r.ledForm[i]!; if (r.ledClosesTail[i]) tailClosed = true;
+            left = finish(rid, sb); fm = r.ledForm[i]!;
+            if (r.ledCapsFromTail[i] && capped) { form = fm; return left; }
+            if (r.ledClosesTail[i]) tailClosed = true;
             continue outer;
           }
           pos = ledSave; scratch.length = sb; restore(ck);
           const sep = r.ledRebind[i];
           if (sep != null) {
             scratch.push(left.h);
-            if (rebind(r.leds[i]!.steps, lidOf(sep))) { left = finish(rid, sb); fm = r.ledForm[i]!; if (r.ledClosesTail[i]) tailClosed = true; continue outer; }
+            if (rebind(r.leds[i]!.steps, lidOf(sep))) {
+              left = finish(rid, sb); fm = r.ledForm[i]!;
+              if (r.ledCapsFromTail[i] && capped) { form = fm; return left; }
+              if (r.ledClosesTail[i]) tailClosed = true;
+              continue outer;
+            }
             scratch.length = sb;
           }
           if (!hasBin && j === g.arms.length - 1) break outer;
@@ -636,10 +644,11 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
     const beats = (p: number, i: number) => (d.ranked.includes(i) ? (p > bestPos || (p === bestPos && i < bi)) : p > bestPos);
     const won = (i: number, f: number, tl: boolean, cp: boolean) => { bestPos = pos; bi = i; bf = f; bt = tl; bc = cp; ck = checkpoint(); bg = null; };
     const ends: Array<[number, number]> = [];
-    const seqArm = (i: number, steps: Step[], tl: boolean, cp: boolean, g: Guard) => {
+    // fromTail: the arm takes its trailing operand's capped flag (PrattRule.nudSeqCapsFromTail).
+    const seqArm = (i: number, steps: Step[], tl: boolean, cp: boolean, g: Guard, fromTail = false) => {
       const ok = all(steps, false);
       if (ok && pos > save) ends.push([i, pos]);
-      if (ok && beats(pos, i)) { best = finish(rid, sb); won(i, 0, tl, cp); bg = g; }
+      if (ok && beats(pos, i)) { best = finish(rid, sb); won(i, 0, tl, cp || (fromTail && capped)); bg = g; }
       else { scratch.length = sb; restore(ck); }
       pos = save;
     };
@@ -687,7 +696,7 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
             if ((act.clean && !act.nullable ? elided(`${r.name} NUD (committed to ${i}, clean)`, () => all(steps, false)) : all(steps, false)) && (!act.nullable || pos > save)) {
               res = finish(rid, sb);
               tl = a.kind === 'bracket' ? r.nudBracketClosesTail[a.index]! : a.kind === 'seq' ? r.nudSeqClosesTail[a.index]! : false;
-              cp = a.kind === 'capped';
+              cp = a.kind === 'capped' || capped && (a.kind === 'bracket' ? r.nudBracketCapsFromTail[a.index]! : a.kind === 'seq' && r.nudSeqCapsFromTail[a.index]!);
             }
           }
           if (res === null) { pos = save; scratch.length = sb; restore(ck); } else { end = pos; noteCommit(r.name, t, i, r.nudOrder.length); }
@@ -721,13 +730,13 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
         case 'bracket': {
           const b = r.nudBrackets[a.index]!;
           if (!keyed && t.lid !== lidOf(b.first)) break;
-          seqArm(i, b.steps, r.nudBracketClosesTail[a.index]!, false, null);
+          seqArm(i, b.steps, r.nudBracketClosesTail[a.index]!, false, null, r.nudBracketCapsFromTail[a.index]!);
           break;
         }
         case 'seq': {
           const g = r.nudSeqGuard[a.index]!;
           if (!guardOk(g, t, keyed)) { refused.push(i); break; }
-          seqArm(i, r.nudSeqs[a.index]!.slice(g?.skip ?? 0), r.nudSeqClosesTail[a.index]!, false, g);
+          seqArm(i, r.nudSeqs[a.index]!.slice(g?.skip ?? 0), r.nudSeqClosesTail[a.index]!, false, g, r.nudSeqCapsFromTail[a.index]!);
           break;
         }
         case 'capped': {
