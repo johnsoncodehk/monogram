@@ -614,8 +614,9 @@ class ArmCompiler {
   private iterations(s: CScope, over: string, out: Stmt[], each: (it: CScope, body: Stmt[]) => void): void {
     const r = this.resolve(s, over);
     const at = r.rest.map(isListQ).lastIndexOf(true);
-    if (at !== 0) no(at < 0 ? `iterations of ${over}, which repeats in no list` : `iterations of a nested repetition (${over})`);
-    const q = r.rest[0]!;
+    // Optionals around the repetition are fine: absent, it has no iteration (no marker).
+    if (at < 0 || r.rest.slice(0, at).some(isListQ)) no(at < 0 ? `iterations of ${over}, which repeats in no list` : `iterations of a nested repetition (${over})`);
+    const q = r.rest[at]!;
     const body = q.type === 'sep' ? q.element : (q as { body: RuleExpr }).body;
     if (!this.marked.has(body)) this.marked.set(body, -2 - this.marked.size);
     const mt = this.marked.get(body)!;
@@ -628,7 +629,7 @@ class ArmCompiler {
     ];
     const lo = this.tmp();
     loop.push({ k: 'let', name: lo, ty: 'idx', init: bin('add', v(m), int(1)) });
-    each({ info: r.scope.info, base: [...r.scope.base, q], lo, hi: ih, outer: s, vars: new Map(), arm: false }, loop);
+    each({ info: r.scope.info, base: [...r.scope.base, ...r.rest.slice(0, at + 1)], lo, hi: ih, outer: s, vars: new Map(), arm: false }, loop);
     loop.push({ k: 'set', name: m, e: v(nx) });
     out.push({ k: 'while', c: bin('ge', v(m), int(0)), body: loop });
   }
