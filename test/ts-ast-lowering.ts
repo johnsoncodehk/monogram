@@ -77,6 +77,14 @@ function lowerExpr(n: E): Ast {
   const c = kidsOf(n);
 
   // Single-child wrapper around a primary (Expr[Number] / Expr[Ident] / Expr[String] …).
+  // YieldExpression: the grammar's `yield` arm, a keyword leaf then nothing, an operand, or `*`
+  // and an operand (a `yield` that is an identifier is an Ident leaf, not a keyword).
+  if (isLeaf(c[0]) && tokTypeOf(c[0]) === '$keyword' && text(c[0]) === 'yield') {
+    if (c.length === 1) return ast('YieldExpression', off(n), end(n));
+    if (c.length === 2) return ast('YieldExpression', off(n), end(n), [lowerExpr(c[1]!)]);
+    return ast('YieldExpression', off(n), end(n), [ast('AsteriskToken', off(c[1]!), end(c[1]!)), lowerExpr(c[2]!)]);
+  }
+
   // PAIN(4): every primary is wrapped in an extra Expr node the AST must collapse.
   if (c.length === 1) {
     const k = c[0];
@@ -97,7 +105,6 @@ function lowerExpr(n: E): Ast {
     if (op === 'typeof') return ast('TypeOfExpression', off(n), end(n), [lowerExpr(c[1])]);
     if (op === 'void') return ast('VoidExpression', off(n), end(n), [lowerExpr(c[1])]);
     if (op === 'delete') return ast('DeleteExpression', off(n), end(n), [lowerExpr(c[1])]);
-    if (op === 'yield') return ast('YieldExpression', off(n), end(n), [lowerExpr(c[1])]);
     return ast('PrefixUnaryExpression', off(n), end(n), [lowerExpr(c[1])]);
   }
 

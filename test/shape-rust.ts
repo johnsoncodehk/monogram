@@ -775,7 +775,6 @@ async function main(): Promise<void> {
       'declare const g3: number; declare function h3(x: number): void; declare module "m" { const v: number; }',
     ],
     differs: [
-      'new `a${0}b`; new `abc`(1); new tag`x${y + 1}`(); new a.b`x`(1); new `x`.y(); new a`x`.b`y`(1); new new a`x`()();',
       'type Fn = <T>(x: T) => T; type Ctor = new (x: number) => Foo; type Idx = Obj["key"];',
     ],
   };

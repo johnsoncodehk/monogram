@@ -501,8 +501,8 @@ async function main(): Promise<void> {
     // Each Pratt slot of the grammar, rendered once (the portable IR has one rule per grammar
     // rule; while it forked [Await]/[Yield] each count was four times this, one per family).
     const want: Record<string, number> = {
-      led: 31, nudSeq: 8, nudCapped: 4, postfix: 2, postfixTok: 3,
-      atom: 5, group: 62, prefix: 11, binary: 39, template: 2,
+      led: 31, nudSeq: 8, nudCapped: 5, postfix: 2, postfixTok: 3,
+      atom: 5, group: 61, prefix: 10, binary: 39, template: 2,
     };
     const got = tsMod.shapeCoverage.pratt;
     const prattOk = Object.keys(want).every((k) => got[k] === want[k]);
