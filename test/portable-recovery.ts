@@ -28,19 +28,18 @@ import { FACTS as RS_FACTS } from '../src/target-rust.ts';
 const RECOVERY_MUTANTS = 3, RECOVERY_SEED = 20261123;
 // The farthest-hint agreement is a floor per grammar (the count of rejects whose related location
 // is the interpreter's farthest token): it may rise, never drop below what is recorded here.
+// The mutants are drawn from the accept lists (seeded), so a list entry added or removed draws
+// another set: the floor is re-measured then (typescript 5946 → 5925 when the cap-propagation accepts
+// came; the same run without them gives 5951).
 // javascript 5441 -> 5439 (land/shape-ident-reserved): `undefined` is no grammar literal any more, so the
 // mutation corpus (which substitutes grammar literals) holds other inputs (`with  undefined ) { }` mutants
 // become others): the disagreements fall 186 -> 182, the agreements 5,441 -> 5,439 (of 5,621 rejects now).
-const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5439, typescript: 5946 };
+const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5439, typescript: 5925 };
 // EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and
 // parseTotal alike) is not the oracle's. Not total parsing's property (parseTotal's verdict is its
 // own parse()'s, checked below); found by the mutation corpus, each owed as its own fix. When one
 // agrees again the gate fails until it is removed.
-const RECOVERY_VERDICT_EXPECTED_FAIL: Record<string, string[]> = {
-  // The interpreter accepts the reserved word `if` as a type (a TypeReference), the portable
-  // parsers refuse it: `T extends number ? if : "o"`.
-  typescript: ['type Cond<T> = T extends string ? "s" : T extends number ? if : "o";'],
-};
+const RECOVERY_VERDICT_EXPECTED_FAIL: Record<string, string[]> = {};
 const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // The UTF-16 offset of each UTF-8 byte offset of src that starts a character.
 function utf16Of(src: string): (b: number) => number {
