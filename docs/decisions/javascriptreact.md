@@ -62,7 +62,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `super`: one token: committed to super_ (#5) (takes a mark: it can fail after `'super'`)
   - `this`: one token: committed to this_ (#4)
   - `true`: one token: committed to true_ (#1)
-  - `yield`: two tokens: committed to ident (#6), unless arrowIdentifier (#22), seq (#23) admit the token (then the frame)
+  - `yield`: two tokens: committed to ident (#6), unless arrowIdentifier (#22), yield_ (#23) admit the token (then the frame)
   - `{`: one token: committed to object (#18) (takes a mark: it can fail after `'{'`)
   - <Ident>: two tokens: committed to ident (#6), unless arrowIdentifier (#22) admits the token (then the frame)
   - <HexNumber>: one token: committed to hexNumber (#27)
@@ -116,8 +116,8 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Expr NUD / arrow: `alt(Block \| !{'{'} Expr)`: by attempt; takes a mark: branch 1: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr NUD / asyncArrowIdentifier: `alt(Block \| !{'{'} Expr)`: by attempt; takes a mark: branch 1: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr NUD / arrowIdentifier: `alt(Block \| !{'{'} Expr)`: by attempt; takes a mark: branch 1: a call of Expr can fail after its operand (an operator that requires an assignment target)
-- Expr NUD / seq: `alt('*' Expr \| opt(Expr))`: by attempt; takes a mark: branch 0: it can fail after `'*'`
-- Expr NUD / seq: `opt(Expr)`: by attempt; takes a mark: a call of Expr can fail after its operand (an operator that requires an assignment target)
+- Expr NUD / yield_: `alt('*' Expr \| opt(Expr))`: by attempt; takes a mark: branch 0: it can fail after `'*'`
+- Expr NUD / yield_: `opt(Expr)`: by attempt; takes a mark: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr LED / led_paren: `sep(Expr, ',')`: by attempt
 - Expr LED / led_optChain: `alt(Ident \| PrivateField \| '(' sep(Expr, ',') ')' \| '['…`: one token; takes a mark: branch 2: it can fail after `'('`; branch 3: it can fail after `'['`
 - Expr LED / led_optChain: `sep(Expr, ',')`: by attempt
