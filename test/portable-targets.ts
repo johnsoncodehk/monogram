@@ -1340,7 +1340,7 @@ const envMultiBatches: EditBatch[] = [
   [[envReuseInit.indexOf('K5=') + 'K5='.length, envReuseInit.indexOf('K5=') + 'K5='.length + 1, '7']],
   [[envReuseLastEq, envReuseLastEq + 1, '8']],
 ];
-// Shape-B adopted Seg.Ext must shift with tokDelta: insert-front (adopt suffix) then poke a later
+// Shape-B adopted entry ext must shift with tokDelta: insert-front (adopt suffix) then poke a later
 // value whose align.prefix sits in the stale-ext..shifted-ext window — unshifted Ext over-reuses.
 const envSegExtInit = Array.from({ length: 8 }, (_, i) => `K${i}=${i}`).join('\n');
 const envSegExtIns = 'Z=9\n';
@@ -1485,7 +1485,7 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: 'A=1\n\nB=2', batches: [[[4, 4, '\n']]], minReused: 1 }, // blank-line expand
     { init: envFlowInit, batches: [[[envFlowEdit, envFlowEdit + 1, 'x']]], minReused: 2 }, // mid flow stmt; sides reused
     { init: envReuseInit, batches: envMultiBatches, longSession: true, minReused: 1 },
-    // Go adopted Seg.Ext + tokDelta (pre-fix: reused 9 from stale keep-prefix watermarks).
+    // Go adopted entry Ext + tokDelta (pre-fix: reused 9 from stale keep-prefix watermarks).
     { init: envSegExtInit, batches: [[[0, 0, envSegExtIns]], [[envSegExtPoke, envSegExtPoke + 1, '9']]], reused: 8 },
     // Dropping a flow `(`: later tokens change flowDepth, so equal-text old tokens are not adopted.
     { init: 'A=fn(1,\n2)\nB=3\nC=4', batches: [[[4, 5, '']]] },

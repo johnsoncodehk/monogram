@@ -104,7 +104,7 @@ else {
   writeFileSync(join(gdir, 'parser', 'parser.go'), goSrc);
   // The exported surface is the tokenizer, the Doc/builder API and the tables a custom
   // Builder needs — no generated rule helper or lexer constant.
-  const GO_API = new Set(['Tokenize', 'Token', 'LexError', 'Error', 'Tok', 'Node', 'Edit', 'Align', 'EntryMeta', 'Seg', 'Doc', 'NewDoc', 'DocWith', 'NewDocWith', 'Document',
+  const GO_API = new Set(['Tokenize', 'Token', 'LexError', 'Error', 'Tok', 'Node', 'Edit', 'Align', 'EntryMeta', 'Doc', 'NewDoc', 'DocWith', 'NewDocWith', 'Document',
     'SetValidate', 'Text', 'Root', 'Builder', 'Shifter', 'CstBuilder', 'SlimBuilder', 'Checkpoint', 'Restore', 'Leaf', 'Finish', 'SpanOf', 'HeadSpan', 'Shift',
     'ParseWith', 'CstJSONWith', 'SlimJSONWith', 'CstJSON', 'TT_NAMES', 'RULE_NAMES', 'TT_SKIP_PUNCT',
     // A builder that keeps the engine's buffers between parses (Rust: Builder::workspace_mut, Workspace).

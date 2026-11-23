@@ -784,7 +784,7 @@ function tsRules(r: RdRule, ids: LexIdPlan, m: Mode): RuleLowering {
 
 // The entry rule in builder form (emit-portable entryShell), recording what incremental reuse
 // needs: shape A one EntryMeta per top-level entry (kidStart: its slot under the root), shape B one
-// Seg + EntryMeta per segment (kidStart / kidCount: in handles). Engine-side metadata only (R2):
+// EntryMeta per segment (kidStart / kidCount: in handles). Engine-side metadata only (R2):
 // consumer handles are never read or mutated; _entryHs is a copy of the root's children.
 const ENTRY_META_TS = `type EntryMeta = { tokStart: number; tokEnd: number; ext: number; off: number; end: number; kidStart: number; kidCount: number };
 let _entries: EntryMeta[] = [];
@@ -814,7 +814,7 @@ function parse${r.name}W(): boolean {
   return true;
 }`,
     // A segment's head: the head rule's node, when it matched and the builder kept a handle of it.
-    headSeg: (rule) => `function parseHeadSegW(kidStart: number): { seg: Seg; meta: EntryMeta } | null {
+    headSeg: (rule) => `function parseHeadSegW(kidStart: number): EntryMeta | null {
   lookReset();
   const c = _n;
   optW(parse${rule}W);
@@ -822,19 +822,18 @@ function parse${r.name}W(): boolean {
   const s = c * _SW;
   const tokStart = _sp[s + 2]!, tokEnd = pos;
   const ext = Math.max(tokEnd, lookEnd());
-  const meta: EntryMeta = { tokStart, tokEnd, ext, off: _sp[s]!, end: _sp[(_n - 1) * _SW + 1]!, kidStart, kidCount: 1 };
-  return { seg: { kidStart, kidCount: 1, tokStart, tokEnd, ext }, meta };
+  return { tokStart, tokEnd, ext, off: _sp[s]!, end: _sp[(_n - 1) * _SW + 1]!, kidStart, kidCount: 1 };
 }
 `,
     headUse: `  {
-    const pair = parseHeadSegW(0);
-    if (pair) { segs.push(pair.seg); localE.push(pair.meta); }
+    const meta = parseHeadSegW(0);
+    if (meta) localE.push(meta);
   }
   let k = _count(b);
 `,
     // A loop segment: its leading token, then the loop rule when it follows; its span runs from
     // that token to the last child it left (the token itself when the builder dropped every child).
-    loopSeg: (kid, rule) => `function parseLoopSegW(kidStart: number): { seg: Seg; meta: EntryMeta } | null {
+    loopSeg: (kid, rule) => `function parseLoopSegW(kidStart: number): EntryMeta | null {
   const sp = pos, c = _n;
   lookReset();
   const t = peek();
@@ -843,25 +842,18 @@ function parse${r.name}W(): boolean {
   const tokStart = sp, tokEnd = pos;
   const end = _n > c ? _sp[(_n - 1) * _SW + 1]! : t.end;
   const ext = Math.max(tokEnd, lookEnd());
-  const kidCount = _count(c);
-  const meta: EntryMeta = { tokStart, tokEnd, ext, off: t.off, end, kidStart, kidCount };
-  return { seg: { kidStart, kidCount, tokStart, tokEnd, ext }, meta };
+  return { tokStart, tokEnd, ext, off: t.off, end, kidStart, kidCount: _count(c) };
 }`,
-    entryB: (headSeg, headUse, loopSeg) => `type Seg = { kidStart: number; kidCount: number; tokStart: number; tokEnd: number; ext: number };
-${ENTRY_META_TS}let _segs: Seg[] = [];
-${headSeg}${loopSeg}
+    entryB: (headSeg, headUse, loopSeg) => `${ENTRY_META_TS}${headSeg}${loopSeg}
 function parse${r.name}W(): boolean {
   const save = pos, b = _n;
-  const segs: Seg[] = [];
   const localE: EntryMeta[] = [];
 ${headUse || '  let k = 0;\n'}  for (;;) {
-    const pair = parseLoopSegW(k);
-    if (pair === null) break;
-    segs.push(pair.seg);
-    localE.push(pair.meta);
-    k += pair.meta.kidCount;
+    const meta = parseLoopSegW(k);
+    if (meta === null) break;
+    localE.push(meta);
+    k += meta.kidCount;
   }
-  _segs = segs;
   _entries = localE;
   _entryHs = _kids(b);
   finR(${J(r.name)}, b, save);
@@ -1289,16 +1281,15 @@ export function parseWith<H>(src: string, builder: Builder<H>): H | null {
 }
 
 /** Parse with builder over AlignMeta-backed toks (Doc.edit path; avoids relex). */
-function parseWithMeta<H>(text: string, meta: AlignMeta[], builder: Builder<H>): { root: H | null; entries: any[]; entryHs: any[]; segs: any[] } {
+function parseWithMeta<H>(text: string, meta: AlignMeta[], builder: Builder<H>): { root: H | null; entries: any[]; entryHs: any[] } {
   _src = text;
   toks = toksFromMeta(text, meta);
   const root = runW(builder);
-  if (root === null) return { root: null, entries: [], entryHs: [], segs: [] };
+  if (root === null) return { root: null, entries: [], entryHs: [] };
   return {
     root,
     entries: ${topReuse ? '_entries.slice()' : '[] as any[]'},
     entryHs: ${topReuse ? '_entryHs.slice()' : '[] as any[]'},
-    segs: ${shapeB ? '_segs.slice()' : '[] as any[]'},
   };
 }
 ${shapeA ? `
@@ -1357,15 +1348,13 @@ function tryReuseTopW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
   }
 }
 ` : ''}${shapeB ? `
-function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number) => H, oldRootHs: H[], oldSegs: Seg[], oldEntries: EntryMeta[], newText: string, newMeta: AlignMeta[], byteDelta: number, oldN: number, newN: number, prefix: number, suffix: number): { root: H; segs: Seg[]; entries: EntryMeta[]; entryHs: H[]; reused: number } | null {
-  if (oldSegs.length === 0) return null;
+function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number) => H, oldRootHs: H[], oldEntries: EntryMeta[], newText: string, newMeta: AlignMeta[], byteDelta: number, oldN: number, newN: number, prefix: number, suffix: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null {
+  if (oldEntries.length === 0) return null;
   const [prefixLen, suffixStart] = reuseBounds(oldEntries, prefix, oldN, suffix);
-  const prefixSegs = oldSegs.slice(0, prefixLen);
-  const suffixCand = oldSegs.slice(suffixStart);
   const prefixMeta = oldEntries.slice(0, prefixLen);
   const suffixMeta = oldEntries.slice(suffixStart);
   const prefixKids: H[] = [];
-  for (const s of prefixSegs) {
+  for (const s of prefixMeta) {
     for (let i = 0; i < s.kidCount; i++) prefixKids.push(oldRootHs[s.kidStart + i]!);
   }
   const tokDelta = newN - oldN;
@@ -1374,18 +1363,16 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
   pos = prefixLen > 0 ? prefixMeta[prefixLen - 1]!.tokEnd : 0;
   _builder = builder;
   const midKids: H[] = [];
-  const midSegs: Seg[] = [];
   const midMeta: EntryMeta[] = [];
-  const finish = (adoptFrom: number): { root: H; segs: Seg[]; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
-    const adoptedSegs = suffixCand.slice(adoptFrom);
+  const finish = (adoptFrom: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
     const adoptedKids: H[] = [];
-    for (const s of adoptedSegs) {
+    for (const s of suffixMeta.slice(adoptFrom)) {
       for (let i = 0; i < s.kidCount; i++) {
         adoptedKids.push(shift(oldRootHs[s.kidStart + i]!, byteDelta, tokDelta));
       }
     }
     const children: H[] = [...prefixKids, ...midKids, ...adoptedKids];
-    const [newSegs, newEntries] = reuseSegEntries(prefixSegs, prefixMeta, midSegs, midMeta, suffixCand, suffixMeta, adoptFrom, byteDelta, tokDelta);
+    const newEntries = reuseSegEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta);
     const [offset, end, tokStart, tokEnd] = reuseSpan(newEntries);
     _bSave = tokStart;
     const savePos = pos;
@@ -1393,9 +1380,9 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
     const r = builder.node(${J(entryCst)}, children, offset, end);
     pos = savePos;
     if (r === null || Array.isArray(r)) return null;
-    return { root: r as H, segs: newSegs, entries: newEntries, entryHs: children, reused: prefixSegs.length + adoptedSegs.length };
+    return { root: r as H, entries: newEntries, entryHs: children, reused: prefixLen + suffixMeta.length - adoptFrom };
   };
-  const tryHit = (): { root: H; segs: Seg[]; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
+  const tryHit = (): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
     const at = reuseAdoptAt(suffixMeta, oldN, suffix, newN - pos);
     return at >= 0 ? finish(at) : null;
   };
@@ -1406,12 +1393,11 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
   }
   ${hasHeadB ? `if (prefixLen === 0) {
     _n = 0;
-    const pair = parseHeadSegW(0);
+    const meta = parseHeadSegW(0);
     for (const h of _kids(0)) midKids.push(h);
     _hs.fill(null);
-    if (pair) {
-      midSegs.push({ kidStart: 0, kidCount: pair.seg.kidCount, tokStart: pair.seg.tokStart, tokEnd: pair.seg.tokEnd, ext: pair.seg.ext });
-      midMeta.push({ ...pair.meta, kidStart: 0 });
+    if (meta) {
+      midMeta.push({ ...meta, kidStart: 0 });
       const hit = tryHit();
       if (hit) return hit;
       if (reuseGaveUp(suffixMeta, oldN, newN - pos)) return null;
@@ -1423,14 +1409,13 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
     }
     const before = midKids.length;
     _n = 0;
-    const pair = parseLoopSegW(before);
+    const meta = parseLoopSegW(before);
     for (const h of _kids(0)) midKids.push(h);
     _hs.fill(null);
-    if (pair === null) {
+    if (meta === null) {
       return tryHit();
     }
-    midSegs.push({ kidStart: before, kidCount: midKids.length - before, tokStart: pair.seg.tokStart, tokEnd: pair.seg.tokEnd, ext: pair.seg.ext });
-    midMeta.push({ tokStart: pair.meta.tokStart, tokEnd: pair.meta.tokEnd, ext: pair.meta.ext, off: pair.meta.off, end: pair.meta.end, kidStart: 0, kidCount: midKids.length - before });
+    midMeta.push({ tokStart: meta.tokStart, tokEnd: meta.tokEnd, ext: meta.ext, off: meta.off, end: meta.end, kidStart: 0, kidCount: midKids.length - before });
     const hit = tryHit();
     if (hit) return hit;
     if (reuseGaveUp(suffixMeta, oldN, newN - pos)) return null;
@@ -1452,8 +1437,7 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
   let text = src;
   let [prevToks, lexErr] = scanMeta(src);
   if (lexErr !== null) throw lexError(src, lexErr);
-  let align: Align | null = null;${shapeB ? `
-  let segs: Seg[] = [];` : ''}${topReuse ? `
+  let align: Align | null = null;${topReuse ? `
   let entries: EntryMeta[] = [];
   let entryHs: H[] = [];` : ''}
   let root: H | null = null;
@@ -1461,8 +1445,7 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
     const got = parseWithMeta(src, prevToks, builder);
     root = got.root;${topReuse ? `
     entries = got.entries;
-    entryHs = got.entryHs as H[];` : ''}${shapeB ? `
-    segs = got.segs;` : ''}
+    entryHs = got.entryHs as H[];` : ''}
   }
   return {
     text(): string { return text; },
@@ -1478,8 +1461,7 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
         prevToks = [];
         root = null;${topReuse ? `
         entries = [];
-        entryHs = [];` : ''}${shapeB ? `
-        segs = [];` : ''}
+        entryHs = [];` : ''}
         const lexReject = { oldN: oldToks.length, newN: 0, prefix: 0, suffix: 0, relexed: 0, reused: 0 };
         align = validate ? { ...lexReject, streamEq: true, treeEq: isCst ? true : null } : lexReject;
         return null;
@@ -1495,17 +1477,16 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
         const got = tryReuseTopW(builder, shift!, entryHs, entries, text, prevToks, byteDelta, core.oldN, core.newN, core.prefix, core.suffix);
         if (got) { next = got.root; entries = got.entries; entryHs = got.entryHs; reused = got.reused; }
       }` : ''}${shapeB ? `
-      if (!forceFresh && segs.length > 0) {
-        if (validate && isCst) assertEntriesVsSegs(entries, segs, root as unknown as Node);
-        const got = tryReuseSegW(builder, shift!, entryHs, segs, entries, text, prevToks, byteDelta, core.oldN, core.newN, core.prefix, core.suffix);
-        if (got) { next = got.root; segs = got.segs; entries = got.entries; entryHs = got.entryHs; reused = got.reused; }
+      if (!forceFresh && entries.length > 0) {
+        if (validate && isCst) assertEntriesVsKids(entries, root as unknown as Node);
+        const got = tryReuseSegW(builder, shift!, entryHs, entries, text, prevToks, byteDelta, core.oldN, core.newN, core.prefix, core.suffix);
+        if (got) { next = got.root; entries = got.entries; entryHs = got.entryHs; reused = got.reused; }
       }` : ''}
       if (next === null) {
         const got = parseWithMeta(text, prevToks, builder);
         next = got.root;${topReuse ? `
         entries = got.entries;
-        entryHs = got.entryHs as H[];` : ''}${shapeB ? `
-        segs = got.segs;` : ''}
+        entryHs = got.entryHs as H[];` : ''}
         reused = 0;
       }
       root = next;
@@ -1561,19 +1542,12 @@ ${shapeA ? `function assertEntriesVsNodes(entries: EntryMeta[], oldRoot: Node): 
     if (e.end !== nd.end) throw new Error('end entry ' + i);
   }
 }
-` : ''}${shapeB ? `function assertEntriesVsSegs(entries: EntryMeta[], oldSegs: Seg[], oldRoot: Node): void {
-  if (entries.length !== oldSegs.length) throw new Error('entry count vs segs: ' + entries.length + ' vs ' + oldSegs.length);
+` : ''}${shapeB ? `function assertEntriesVsKids(entries: EntryMeta[], oldRoot: Node): void {
   const oldKids = oldRoot.children;
   for (let i = 0; i < entries.length; i++) {
     const e = entries[i]!;
-    const s = oldSegs[i]!;
-    if (e.tokStart !== s.tokStart) throw new Error('tok_start entry ' + i);
-    if (e.tokEnd !== s.tokEnd) throw new Error('tok_end entry ' + i);
-    if (e.ext !== s.ext) throw new Error('ext entry ' + i);
-    if (e.kidStart !== s.kidStart) throw new Error('kid_start entry ' + i);
-    if (e.kidCount !== s.kidCount) throw new Error('kid_count entry ' + i);
-    const first = oldKids[s.kidStart]!;
-    const last = oldKids[s.kidStart + s.kidCount - 1]!;
+    const first = oldKids[e.kidStart]!;
+    const last = oldKids[e.kidStart + e.kidCount - 1]!;
     if ('rule' in first && e.off !== first.offset) throw new Error('off entry ' + i);
     if ('rule' in last && e.end !== last.end) throw new Error('end entry ' + i);
   }
