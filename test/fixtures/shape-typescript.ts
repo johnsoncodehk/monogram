@@ -171,7 +171,7 @@ export const typescriptShape: ShapeSpec = {
       nudCapped: custom('estreeArrow',
         'nudCapped are ArrowFunctionExpression forms (async/params/return-type/body). ' +
         'Params are sep(Param) and body is Block|Expr alt; flag async from leading keyword ' +
-        '(dropped). Requires handwritten assembly.', { types: ['ArrowFunctionExpression', 'ArrowFunctionExpression', 'ArrowFunctionExpression', 'ArrowFunctionExpression'] }),
+        '(dropped). Requires handwritten assembly.', { types: ['ArrowFunctionExpression', 'ArrowFunctionExpression', 'ArrowFunctionExpression', 'ArrowFunctionExpression', 'UnaryExpression'] }),
       postfixTok: custom('estreeExprPostfixTok',
         'postfixTok Template on Expr is TaggedTemplateExpression (tag=left, quasi=TemplateLiteral); ' +
         'keep would leave a raw Expr children pair.', { types: ['TaggedTemplateExpression'] }),
@@ -876,6 +876,11 @@ function estreeExprNudSeq(ctx: TsAstCustomCtx): unknown {
 function estreeArrow(ctx: TsAstCustomCtx): unknown {
   const async = ctx.src.slice(ctx.off, ctx.end).trimStart().startsWith('async');
   const arm = ctx.altPath[0];
+  // v1 binds the capped arms by index: #4 is the `yield` arm (capped since it is an
+  // AssignmentExpression form). It keeps v1's former output for `yield e` (the prefix operator's
+  // UnaryExpression), which the Rust rebuild's SC_UNARY reproduces; its operand is the one kid left
+  // after the keyword and `*` drop.
+  if (arm === 4) return unaryExpr('yield', ctx.kids[0] ?? null);
   if (arm === undefined || arm < 0 || arm > 3) return unhandledCustom('estreeArrow', ctx);
   const params = arm === 1 || arm === 2
     ? flatKids(ctx.kids[1] ?? [])

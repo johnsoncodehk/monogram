@@ -199,7 +199,11 @@ class LexScan {
         const m = this.pattern(p.body);
         return [let_('r', call(m, 'p')), if_(p.negate ? lt('r', I(0)) : ge('r', I(0)), [ret('p')]), NONE];
       }
-      case 'anchor': return [if_(eq('p', p.kind === 'start' ? I(0) : len('s')), [ret('p')]), NONE];
+      case 'anchor':
+        // A line start would read the unit before p, and U+2028 / U+2029 are three units in UTF-8:
+        // no grammar the portable lexers take has one (YAML's markers are indent mode's).
+        if (p.kind === 'lineStart') throw new Error('lex-family: a lineStart() anchor has no portable scanner');
+        return [if_(eq('p', p.kind === 'start' ? I(0) : len('s')), [ret('p')]), NONE];
       default: throw new Error(`lex-family: pattern '${(p as { type: string }).type}' unsupported`);
     }
   }

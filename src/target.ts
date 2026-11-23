@@ -4,11 +4,14 @@
 // a gate's inputs from its imports, and a gate of one target must not depend on the others.
 // src/emit.ts is the public surface: this module and every target.
 import type { CstGrammar } from './types.ts';
+import type { Shape } from './shape2-eval.ts';
 
 // What a portable target emits beyond the default module. `recovery`: total parsing's entry
 // `parseTotal` (docs/TARGETS.md "Errors and tokens"); without it the module has no such symbol and
 // is byte-identical to the default emission.
-export interface EmitOptions { recovery?: boolean }
+// `shape`: a parser that builds the shape's values instead of the CST (src/shape-plan.ts; S1: the
+// TypeScript target only, its synthesized-only terms); the shape must be defined on `grammar`.
+export interface EmitOptions { recovery?: boolean; shape?: Shape }
 
 export interface Target {
   name: string;

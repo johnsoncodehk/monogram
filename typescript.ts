@@ -579,7 +579,7 @@ const Expr = rule($ => [
   // Without this arm the bare form only "parsed" by splitting into two statements.
   arm('asyncArrowIdentifier', capExpr('?', field('asyncKeyword', 'async'), sameLine, awaitCtx(notReservedExpr, field('parameter', Ident)), field('arrow', '=>'), awaitCtx(field('body', conciseBody(Block, $))))),
   arm('arrowIdentifier', capExpr('?', notReservedExpr, field('parameter', Ident), field('arrow', '=>'), resetCtx(field('body', conciseBody(Block, $))))),
-  ['yield', alt([field('asterisk', '*'), $], [opt($)])],   // yield e | yield* e (delegate) | yield
+  arm('yield_', capExpr('?', 'yield', alt([field('asterisk', '*'), $], [opt($)]))),   // yield e | yield* e (delegate) | yield: an AssignmentExpression, capped as javascript.ts's
   ['(', field('first', $), many(field('comma', ','), field('rest', $)), ')'],
   [$, 'satisfies', Type],
   arm('import_', field('importKeyword', 'import'), field('form', alt(arm('call', '(', field('source', $), ')'), arm('meta', '.', field('metaKeyword', alt('meta', 'defer', 'source'))), arm('typeArguments', ...typeArgsInExpr(), opt('(', sep($, ','), ')'))))),   // import(e) | import.meta | import.defer / import.source (tsc's parser reads `import.` and a name as a MetaProperty; a call after it is the call LED) | import<T>(args) (instantiation-expression; checker rejects)
@@ -1145,6 +1145,9 @@ const Program = rule($ => [
 export default defineGrammar({
   name: 'typescript',
   scopeName: 'source.ts',
+  // `>` closes type arguments (`f<A<B>>(x)`, `a as Map<K, V>>= b`), so `>>`, `>=` … are composed by
+  // the parser from single `>` tokens (tsc's reScanGreaterToken).
+  composeGt: true,
 
   tokens: {
     // Comments must come before Regex_ to avoid /** ... */ being matched as regex

@@ -18,11 +18,11 @@
 import type { CstGrammar, ElementRegion, IndentConfig, MarkupConfig, NewlineConfig, TokenDecl, TokenPattern } from './types.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { type Directives, directivesOf, tagOpenOnlyOpensTags } from './grammar-analysis.ts';
-import { UNI_ID_CONTINUE, UNI_ID_START } from './uni-ident.ts';
+import { identifierClassesOf } from './uni-ident.ts';
 import { type CSet, continuesAt, examinedUnits as examinedUnitsOf, failRead, failReadFirst, info as patternInfo, oneChar, overTrigger, readEndWalk, union } from './lex-match-plan.ts';
 import {
   tokenBlockPatternFirstCharSet, tokenBlockPatternSource, tokenEscapeValidPatternSource, tokenPatternCharLoop,
-  tokenPatternFirstCharSet, tokenPatternHasStartAnchor, tokenPatternSource,
+  tokenPatternAnchorKinds, tokenPatternFirstCharSet, tokenPatternSource,
 } from './token-pattern.ts';
 
 // The public token model: fresh objects owned by the caller.
@@ -362,6 +362,13 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     return cs.length ? `(${cs.map(c => `${v} === ${c}`).join(' || ')})` : 'false';
   };
 
+  // A regex's `^` is the start of the text (start()) without the multiline flag and the start of a
+  // line (lineStart()) with it; one regex cannot hold both.
+  const anchorFlags = (t: (typeof spec.tokens)[number]): string => {
+    const ks = tokenPatternAnchorKinds(t.pattern);
+    if (ks.has('start') && ks.has('lineStart')) throw new Error(`emit-lexer: token ${t.name} has both a start() and a lineStart() anchor`);
+    return ks.has('lineStart') ? 'ym' : 'y';
+  };
   // The scan matchers, in declaration order, with their baked regexes and per-matcher facts.
   const matchers = spec.tokens
     .filter(t => t.name !== templateToken?.name && !markupTokenNames.has(t.name) && !lineTokenNames.has(t.name) && !elTokenNames.has(t.name))
@@ -374,7 +381,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
         blockRe: blockPattern ? `LXRB_${id}` : null,
         pattern: tokenPatternSource(t),
         blockPattern,
-        flags: tokenPatternHasStartAnchor(t) ? 'ym' : 'y',
+        flags: anchorFlags(t),
         skip: t.flags.includes('skip'),
         isRegex: t.flags.includes('regex'),
         isString: !!t.string,
@@ -455,14 +462,15 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`  }`);
     emit(`}`);
   }
-  emit(`const LX_UNI_IDENT = /${UNI_ID_START}${UNI_ID_CONTINUE}*/uy;`);
+  const idc = identifierClassesOf(spec.tokens);   // the language's Unicode identifier characters
+  emit(`const LX_UNI_IDENT = /${idc.start}${idc.continue}*/uy;`);
   // The extension of an identifier the ASCII pattern cut short: it begins only at a unit BEYOND
   // ASCII (an ASCII unit the pattern leaves out where it stopped, `$` in `[A-Za-z_]\w*`, is not
   // part of the token: the token's own pattern decides ASCII), then takes the whole IdentifierPart
   // run, ASCII included (`na|ïve` is one identifier), as the portable lexers' lxExt does
   // (docs/TARGETS.md).
-  emit(`const LX_UNI_CONT = /(?![\\0-\\x7f])${UNI_ID_CONTINUE}+/uy;`);
-  emit(`const LX_UNI_FULL = /^${UNI_ID_START}${UNI_ID_CONTINUE}*/u;`);
+  emit(`const LX_UNI_CONT = /(?![\\0-\\x7f])${idc.continue}+/uy;`);
+  emit(`const LX_UNI_FULL = /^${idc.start}${idc.continue}*/u;`);
   emit(`const LX_DECODE_ESC = /\\\\u\\{([0-9a-fA-F]+)\\}|\\\\u([0-9a-fA-F]{4})/g;`);
   if (tplEscapeValid) emit(`const LX_TPL_ESC = new RegExp(${J(tplEscapeValid)}, 'y');`);
   // Regex-vs-division context tables (over interned k / t ints).

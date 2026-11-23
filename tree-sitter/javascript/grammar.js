@@ -33,11 +33,10 @@ module.exports = grammar({
     $.template_chars,
     $._same_line_1,
     $._same_line_2,
-    $._same_line_3,
     $._line_end_1,
+    $._same_line_3,
     $._same_line_4,
-    $._same_line_5,
-    $._same_line_6
+    $._same_line_5
   ],
 
   conflicts: $ => [
@@ -104,7 +103,6 @@ module.exports = grammar({
     [$._names_1, $.for_head],
     [$._names_1, $.prop],
     [$._names_1, $.stmt],
-    [$._names_6, $.decl],
   ],
 
   rules: {
@@ -127,14 +125,14 @@ module.exports = grammar({
       prec.left(24, seq($.expr, field('operator', choice("+", "-")), $.expr)),
       prec.left(26, seq($.expr, field('operator', choice("*", "/", "%")), $.expr)),
       prec.right(28, seq($.expr, field('operator', "**"), $.expr)),
-      prec.right(29, seq(field('operator', choice("!", "~", "+", "-", "typeof", "void", "delete", "await", "yield")), $.expr)),
+      prec.right(29, seq(field('operator', choice("!", "~", "+", "-", "typeof", "void", "delete", "await")), $.expr)),
       prec.right(31, seq(field('operator', choice("++", "--")), $.expr)),
       prec.left(34, seq($.expr, $._same_line_1, field('operator', choice("++", "--")))),
       "true",
       "false",
       "null",
       "this",
-      seq("super", choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq(".", choice(reserved("unreserved", $.ident), $.private_field)), seq("[", $.expr, repeat(seq(",", $.expr)), "]"))),
+      seq("super", choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq(".", choice(reserved("unreserved", $.ident), $.private_field)), seq("[", $.expr, "]"))),
       choice(reserved("reserved_1", $.ident), $._names_1),
       $.number,
       $.string,
@@ -144,7 +142,7 @@ module.exports = grammar({
       prec.left(36, seq($.expr, "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")),
       prec.left(36, seq($.expr, ".", choice(reserved("unreserved", $.ident), $.private_field))),
       prec.left(36, seq($.expr, "?.", choice(reserved("unreserved", $.ident), $.private_field, seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("[", $.expr, "]"), $.template))),
-      prec.left(36, seq($.expr, "[", $.expr, repeat(seq(",", $.expr)), "]")),
+      prec.left(36, seq($.expr, "[", $.expr, "]")),
       seq(prec.left(5, seq($.expr, "?", $.expr, ":")), $.expr),
       prec.left(20, seq($.expr, "instanceof", $.expr)),
       prec.left(20, seq($.expr, "in", $.expr)),
@@ -161,30 +159,29 @@ module.exports = grammar({
       seq(choice(reserved("reserved_1", $.ident), $._names_1), "=>", choice($.block, $.expr)),
       seq("yield", choice(seq("*", $.expr), optional(prec.dynamic(1, $.expr)))),
       seq("(", $.expr, repeat(seq(",", $.expr)), ")"),
-      seq("import", choice(seq("(", $.expr, optional(seq(",", optional(seq($.expr, optional(","))))), ")"), seq(".", choice("meta", seq(choice("defer", "source"), "(", $.expr, optional(seq(",", optional(seq($.expr, optional(","))))), ")"))))),
+      seq("import", choice(seq("(", $.expr, optional(seq(",", optional(seq($.expr, optional(","))))), ")"), seq(".", "meta"))),
       $.private_field,
       $.hex_number,
       $.octal_number,
       $.binary_number,
       $.big_int,
-      $.legacy_number,
       seq("function", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
       seq("function", "*", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
-      seq("async", $._same_line_3, "function", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
-      seq("async", $._same_line_3, "function", "*", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
+      seq("async", $._same_line_2, "function", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
+      seq("async", $._same_line_2, "function", "*", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
       seq(repeat($.decorator_expr), "class", field('name', reserved("reserved_1", $.ident)), optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}"),
       seq(repeat($.decorator_expr), "class", optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}")
     ),
 
     prop: $ => choice(seq("...", $.expr), seq(choice("get", "set"), $.member_name, "(", optional(optional(seq($.param, repeat(seq(",", $.param)), optional(",")))), ")", $.block), seq("async", "*", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("*", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($.member_name, ":", $.expr), seq("[", $.expr, repeat1(seq(",", $.expr)), "]", ":", $.expr), seq(choice(reserved("reserved_1", $.ident), $._names_1), choice(seq("=", $.expr), blank()))),
 
-    member_name: $ => choice(choice(reserved("unreserved", $.ident), $._names_2), $.private_field, $.string, $.number, $.hex_number, $.octal_number, $.binary_number, $.big_int, $.legacy_number, seq("[", $.expr, "]")),
+    member_name: $ => choice(choice(reserved("unreserved", $.ident), $._names_2), $.private_field, $.string, $.number, $.hex_number, $.octal_number, $.binary_number, $.big_int, seq("[", $.expr, "]")),
 
-    new_target: $ => choice("true", "false", "null", "this", choice(reserved("reserved_1", $.ident), $._names_3), $.number, $.hex_number, $.octal_number, $.binary_number, $.big_int, $.string, $.regex_literal, $.legacy_number, seq("super", choice(seq(".", reserved("unreserved", $.ident)), seq("[", $.expr, repeat(seq(",", $.expr)), "]"))), seq("new", ".", "target"), seq("import", ".", "meta"), prec.right(seq("new", $.new_target, optional(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")))), $.template, seq("[", optional($.expr), repeat(seq(",", optional($.expr))), "]"), seq("{", optional(seq($.prop, repeat(seq(",", $.prop)), optional(","))), "}"), seq("function", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("function", "*", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", $._same_line_3, "function", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", $._same_line_3, "function", "*", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($.new_target, ".", choice(reserved("unreserved", $.ident), $.private_field)), seq($.new_target, "[", $.expr, repeat(seq(",", $.expr)), "]"), seq($.new_target, $.template), seq("(", $.expr, repeat(seq(",", $.expr)), ")")),
+    new_target: $ => choice("true", "false", "null", "this", choice(reserved("reserved_1", $.ident), $._names_3), $.number, $.hex_number, $.octal_number, $.binary_number, $.big_int, $.string, $.regex_literal, seq("super", choice(seq(".", reserved("unreserved", $.ident)), seq("[", $.expr, "]"))), seq("new", ".", "target"), seq("import", ".", "meta"), prec.right(seq("new", $.new_target, optional(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")))), $.template, seq("[", optional($.expr), repeat(seq(",", optional($.expr))), "]"), seq("{", optional(seq($.prop, repeat(seq(",", $.prop)), optional(","))), "}"), seq("function", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("function", "*", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", $._same_line_2, "function", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", $._same_line_2, "function", "*", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($.new_target, ".", choice(reserved("unreserved", $.ident), $.private_field)), seq($.new_target, "[", $.expr, "]"), seq($.new_target, $.template), seq("(", $.expr, repeat(seq(",", $.expr)), ")")),
 
-    class_heritage: $ => choice($.new_target, seq("class", optional(field('name', reserved("reserved_1", $.ident))), optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}"), seq($.class_heritage, ".", choice(reserved("unreserved", $.ident), $.private_field)), seq($.class_heritage, "?.", choice(reserved("unreserved", $.ident), $.private_field, seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("[", $.expr, "]"), $.template)), seq($.class_heritage, "[", $.expr, repeat(seq(",", $.expr)), "]"), seq($.class_heritage, "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq($.class_heritage, $.template)),
+    class_heritage: $ => choice($.new_target, seq("class", optional(field('name', reserved("reserved_1", $.ident))), optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}"), seq($.class_heritage, ".", choice(reserved("unreserved", $.ident), $.private_field)), seq($.class_heritage, "?.", choice(reserved("unreserved", $.ident), $.private_field, seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("[", $.expr, "]"), $.template)), seq($.class_heritage, "[", $.expr, "]"), seq($.class_heritage, "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq($.class_heritage, $.template)),
 
-    stmt: $ => choice($.block, seq(choice("let", "const", "var"), $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), seq("if", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt, optional(seq("else", $.stmt))), seq("for", choice(seq("(", $.for_head, ")"), seq("await", "(", $.for_await_head, ")")), $.stmt), seq("while", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt), seq("do", $.stmt, "while", "(", $.expr, repeat(seq(",", $.expr)), ")", optional(";")), seq("switch", "(", $.expr, repeat(seq(",", $.expr)), ")", "{", repeat($.switch_case), "}"), seq("return", optional(seq($._same_line_4, $.expr, repeat(seq(",", $.expr)))), choice(";", $._line_end_1)), seq("throw", $.expr, repeat(seq(",", $.expr)), choice(";", $._line_end_1)), seq("break", optional(seq($._same_line_2, reserved("reserved_1", $.ident))), choice(";", $._line_end_1)), seq("continue", optional(seq($._same_line_2, reserved("reserved_1", $.ident))), choice(";", $._line_end_1)), seq("try", $.block, optional(seq("catch", optional(seq("(", $.catch_parameter, ")")), $.block)), optional(seq("finally", $.block))), seq(choice(reserved("reserved_1", $.ident), $._names_1), ":", $.stmt), ";", seq("debugger", choice(";", $._line_end_1)), seq("with", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt), seq(optional("await"), "using", $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), $.decl, seq($.expr, repeat(seq(",", $.expr)), choice(";", $._line_end_1))),
+    stmt: $ => choice($.block, seq(choice("let", "const", "var"), $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), seq("if", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt, optional(seq("else", $.stmt))), seq("for", choice(seq("(", $.for_head, ")"), seq("await", "(", $.for_await_head, ")")), $.stmt), seq("while", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt), seq("do", $.stmt, "while", "(", $.expr, repeat(seq(",", $.expr)), ")", optional(";")), seq("switch", "(", $.expr, repeat(seq(",", $.expr)), ")", "{", repeat($.switch_case), "}"), seq("return", optional(seq($._same_line_3, $.expr, repeat(seq(",", $.expr)))), choice(";", $._line_end_1)), seq("throw", $.expr, repeat(seq(",", $.expr)), choice(";", $._line_end_1)), seq("break", optional(seq($._same_line_2, reserved("reserved_1", $.ident))), choice(";", $._line_end_1)), seq("continue", optional(seq($._same_line_2, reserved("reserved_1", $.ident))), choice(";", $._line_end_1)), seq("try", $.block, optional(seq("catch", optional(seq("(", $.catch_parameter, ")")), $.block)), optional(seq("finally", $.block))), seq(choice(reserved("reserved_1", $.ident), $._names_1), ":", $.stmt), ";", seq("debugger", choice(";", $._line_end_1)), seq("with", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt), seq(optional("await"), "using", $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), $.decl, seq($.expr, repeat(seq(",", $.expr)), choice(";", $._line_end_1))),
 
     _stmt_first_1: $ => choice(seq(choice("let", "const", "var"), $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), seq(alias($._ident_names_1, $.ident), ":", $.stmt)),
 
@@ -192,7 +189,7 @@ module.exports = grammar({
 
     block: $ => seq("{", repeat($.stmt), "}"),
 
-    binding_property: $ => choice(seq(choice(reserved("unreserved", $.ident), $._names_2), ":", $.binding_element), seq(choice(reserved("reserved_1", $.ident), $._names_1), optional(seq("=", $.expr))), seq(choice($.string, $.number, $.hex_number, $.octal_number, $.binary_number, $.big_int, $.legacy_number, seq("[", $.expr, "]")), ":", $.binding_element), seq("...", choice(choice(reserved("reserved_1", $.ident), $._names_1), $.binding_pattern))),
+    binding_property: $ => choice(seq(choice(reserved("unreserved", $.ident), $._names_2), ":", $.binding_element), seq(choice(reserved("reserved_1", $.ident), $._names_1), optional(seq("=", $.expr))), seq(choice($.string, $.number, seq("[", $.expr, "]")), ":", $.binding_element), seq("...", choice(choice(reserved("reserved_1", $.ident), $._names_1), $.binding_pattern))),
 
     binding_element: $ => seq(choice(choice(reserved("reserved_1", $.ident), $._names_1), $.binding_pattern), optional(seq("=", $.expr))),
 
@@ -214,15 +211,15 @@ module.exports = grammar({
 
     switch_case: $ => choice(seq("case", $.expr, repeat(seq(",", $.expr)), ":"), seq("default", ":"), $.stmt),
 
-    decl: $ => choice(seq("function", field('name', reserved("reserved_1", $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("function", "*", field('name', reserved("reserved_1", $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", $._same_line_3, "function", field('name', reserved("reserved_1", $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", $._same_line_3, "function", "*", field('name', reserved("reserved_1", $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("class", field('name', reserved("reserved_1", $.ident)), optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}"), seq("export", choice($.decl, alias($._stmt_first_1, $.stmt))), seq(repeat1($.decorator_expr), choice(seq("class", field('name', reserved("reserved_1", $.ident)), optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}"), alias($._decl_first_1, $.decl))), seq("export", "default", choice(seq("function", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("function", "*", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", $._same_line_3, "function", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", $._same_line_3, "function", "*", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq(repeat($.decorator_expr), "class", field('name', reserved("reserved_1", $.ident)), optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}"), seq(repeat($.decorator_expr), "class", optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}"), seq($.expr, choice(";", $._line_end_1)))), seq("export", "*", choice(seq("from", $.string), seq("as", choice(reserved("unreserved", $.ident), $.string), "from", $.string)), choice(";", $._line_end_1)), seq("export", "{", optional(seq($.export_specifier, repeat(seq(",", $.export_specifier)), optional(","))), "}", optional(seq("from", $.string)), choice(";", $._line_end_1)), seq("import", choice(seq($.import_clause, "from", $.string), seq("source", choice(reserved("reserved_1", $.ident), $._names_5), "from", $.string), $.string), choice(";", $._line_end_1))),
+    decl: $ => choice(seq("function", field('name', reserved("reserved_1", $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("function", "*", field('name', reserved("reserved_1", $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", $._same_line_2, "function", field('name', reserved("reserved_1", $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", $._same_line_2, "function", "*", field('name', reserved("reserved_1", $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("class", field('name', reserved("reserved_1", $.ident)), optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}"), seq("export", choice($.decl, alias($._stmt_first_1, $.stmt))), seq(repeat1($.decorator_expr), choice(seq("class", field('name', reserved("reserved_1", $.ident)), optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}"), alias($._decl_first_1, $.decl))), seq("export", "default", choice(seq("function", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("function", "*", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", $._same_line_2, "function", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", $._same_line_2, "function", "*", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq(repeat($.decorator_expr), "class", field('name', reserved("reserved_1", $.ident)), optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}"), seq(repeat($.decorator_expr), "class", optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}"), seq($.expr, choice(";", $._line_end_1)))), seq("export", "*", choice(seq("from", $.string), seq("as", choice(reserved("unreserved", $.ident), $.string), "from", $.string)), choice(";", $._line_end_1)), seq("export", "{", optional(seq($.export_specifier, repeat(seq(",", $.export_specifier)), optional(","))), "}", optional(seq("from", $.string)), choice(";", $._line_end_1)), seq("import", choice(seq($.import_clause, "from", $.string), $.string), choice(";", $._line_end_1))),
 
     _decl_first_1: $ => choice(seq("export", alias($._decl_first_2, $.decl)), seq("export", alias($._stmt_first_2, $.stmt)), seq("export", "default", choice(seq("class", field('name', reserved("reserved_1", $.ident)), optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}"), seq("class", optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}")))),
 
     _decl_first_2: $ => seq("class", field('name', reserved("reserved_1", $.ident)), optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}"),
 
-    class_member: $ => choice(";", seq("static", $.block), choice(seq("constructor", "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq(repeat($.decorator_expr), optional(choice(choice("static"))), choice(seq(choice(choice(seq(choice("accessor"), $._same_line_5))), $.member_name, optional(seq("=", $.expr)), choice(";", $._line_end_1)), seq(choice(choice(seq(choice("async"), $._same_line_6))), choice(seq("*", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block))), seq("*", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq(choice(choice("get", "set")), $.member_name, "(", optional(optional(seq($.param, repeat(seq(",", $.param)), optional(",")))), ")", $.block), seq($.member_name, choice(seq("(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq(optional(seq("=", $.expr)), choice(";", $._line_end_1)))))))),
+    class_member: $ => choice(";", seq("static", $.block), choice(seq("constructor", "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq(repeat($.decorator_expr), optional(choice(choice("static"))), choice(seq(choice(choice(seq(choice("accessor"), $._same_line_4))), $.member_name, optional(seq("=", $.expr)), choice(";", $._line_end_1)), seq(choice(choice(seq(choice("async"), $._same_line_5))), choice(seq("*", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block))), seq("*", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq(choice(choice("get", "set")), $.member_name, "(", optional(optional(seq($.param, repeat(seq(",", $.param)), optional(",")))), ")", $.block), seq($.member_name, choice(seq("(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq(optional(seq("=", $.expr)), choice(";", $._line_end_1)))))))),
 
-    import_clause: $ => choice(seq("defer", "*", "as", reserved("reserved_1", $.ident)), seq(choice(reserved("reserved_1", $.ident), $._names_6), optional(seq(",", choice(seq("{", optional(seq($.import_specifier, repeat(seq(",", $.import_specifier)), optional(","))), "}"), seq("*", "as", reserved("reserved_1", $.ident)))))), seq("{", optional(seq($.import_specifier, repeat(seq(",", $.import_specifier)), optional(","))), "}"), seq("*", "as", reserved("reserved_1", $.ident))),
+    import_clause: $ => choice(seq(reserved("reserved_1", $.ident), optional(seq(",", choice(seq("{", optional(seq($.import_specifier, repeat(seq(",", $.import_specifier)), optional(","))), "}"), seq("*", "as", reserved("reserved_1", $.ident)))))), seq("{", optional(seq($.import_specifier, repeat(seq(",", $.import_specifier)), optional(","))), "}"), seq("*", "as", reserved("reserved_1", $.ident))),
 
     import_specifier: $ => choice(seq(reserved("unreserved", $.ident), "as", reserved("reserved_1", $.ident)), reserved("reserved_1", $.ident), seq($.string, "as", reserved("reserved_1", $.ident))),
 
@@ -248,15 +245,13 @@ module.exports = grammar({
 
     binary_number: $ => token(/0[bB][01]+(?:_[01]+)*n?/),
 
-    big_int: $ => token(/(?:0|[1-9][0-9]*(?:_[0-9]+)*)n/),
+    big_int: $ => token(/[0-9]+(?:_[0-9]+)*n/),
 
     number: $ => token(/(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\.[0-9]*(?:_[0-9]+)*)?|\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\-]?[0-9]+(?:_[0-9]+)*)?/),
 
-    legacy_number: $ => token(/0[0-7]*[89][0-9]*(?:\.[0-9]*(?:_[0-9]+)*)?(?:[eE][+\-]?[0-9]+(?:_[0-9]+)*)?|0[0-7]+/),
+    string: $ => token(/"(?:[^"\\]|\\(?:u\{0*(?:[0-9A-Fa-f]{1,5}|10[0-9A-Fa-f]{4})\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|[^ux]))*"|'(?:[^'\\]|\\(?:u\{0*(?:[0-9A-Fa-f]{1,5}|10[0-9A-Fa-f]{4})\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|[^ux]))*'/),
 
-    string: $ => token(/"(?:[^"\\\n\r]|\\(?:u\{0*(?:[0-9A-Fa-f]{1,5}|10[0-9A-Fa-f]{4})\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|\r\n|\r|[^ux\r]))*"|'(?:[^'\\\n\r]|\\(?:u\{0*(?:[0-9A-Fa-f]{1,5}|10[0-9A-Fa-f]{4})\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|\r\n|\r|[^ux\r]))*'/),
-
-    decorator: $ => token(/@(?:(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[a-zA-Z0-9_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\}|\.#(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})|\.)*)?/),
+    decorator: $ => token(/@(?:(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[a-zA-Z0-9_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\}|\.)*)?/),
 
     private_field: $ => token(/#(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[a-zA-Z0-9_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})*/),
 
@@ -275,10 +270,6 @@ module.exports = grammar({
     _names_3: $ => prec.dynamic(-1, alias("async", $.ident)),
 
     _names_4: $ => prec.dynamic(-1, alias("of", $.ident)),
-
-    _names_5: $ => prec.dynamic(-1, alias("from", $.ident)),
-
-    _names_6: $ => prec.dynamic(-1, alias(choice("defer", "source"), $.ident)),
 
     _reserved_enum: $ => token(prec(1, /enum/))
   }

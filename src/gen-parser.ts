@@ -324,8 +324,10 @@ export function createParser(grammar: CstGrammar) {
     // parse result + end position by start position, so backtracking doesn't
     // re-parse the same rule at the same spot. Sound because a rule's result is
     // a function of its start position alone (the suppressed and capped parses
-    // that are not bypass the memo — see parseRule).
-    const memo = new Map<string, Map<number, { node: CstNode | null; end: number }>>();
+    // that are not bypass the memo — see parseRule). The result includes the node's
+    // cap (`_prattCapped`): a hit restores it, so a construct that reads it after a
+    // trailing self operand (cap propagation) sees the same flag as a fresh parse.
+    const memo = new Map<string, Map<number, { node: CstNode | null; end: number; capped: boolean }>>();
 
     // Bounded-parse cap (token index). When >= 0, no token at index >= parseLimit
     // may be consumed — i.e. a sub-parse is forced to stop before that token. Used
@@ -476,7 +478,7 @@ export function createParser(grammar: CstGrammar) {
       let m = memo.get(name);
       if (!mySup && !capped) {
         const hit = m && m.get(start);
-        if (hit !== undefined) { pos = hit.end; return hit.node; }
+        if (hit !== undefined) { pos = hit.end; _prattCapped = hit.capped; return hit.node; }
       }
 
       const prevSup = suppressCur;
@@ -489,7 +491,7 @@ export function createParser(grammar: CstGrammar) {
       }
       if (!mySup && !capped) {
         if (!m) { m = new Map(); memo.set(name, m); }
-        m.set(start, { node: result, end: pos });
+        m.set(start, { node: result, end: pos, capped: isPratt && result !== null && _prattCapped });
       }
       return result;
     }
@@ -607,7 +609,10 @@ export function createParser(grammar: CstGrammar) {
       // LeftHandSideExpression: its MIDDLE child is an `$operator` leaf or a binary-connector
       // leaf. Member `a.b` / element `a[b]` / typed call `f<T>()` have a `$punct` leaf there, a
       // paren cover has a NODE child → those pass.
-      if (cs.length >= 3) {
+      // Only a LED builds such a node: its first child is the left operand, a node of this rule (a NUD
+      // never starts with one), so a NUD whose second child is a name spelled like a connector
+      // (`class as {}`) is decided by its construct, as the portable engine's ledForm decides it.
+      if (cs.length >= 3 && !('tokenType' in cs[0]) && cs[0].rule === node.rule) {
         const m = cs[1];
         if (m && 'tokenType' in m && (m.tokenType === '$operator' || binaryConnectors.has(source.slice(m.offset, m.end)))) return true;
       }
@@ -694,7 +699,9 @@ export function createParser(grammar: CstGrammar) {
           lhs = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
           bestNudPos = pos;
           nudClosed = selfRefName(items[items.length - 1], rule.name);
-          capped = capBp !== null;   // the LONGEST match wins; record whether it is capped
+          // The LONGEST match wins; record whether it is capped: a capped arm, or one whose
+          // trailing self operand returned capped (`...() => {}`: CAP PROPAGATION, below).
+          capped = capBp !== null || (nudClosed && _prattCapped);
         }
       }
       if (!lhs) return null;
@@ -764,6 +771,14 @@ export function createParser(grammar: CstGrammar) {
               offset: lhs.offset,
               end: children.length > 0 ? childEnd(children[children.length - 1]) : lhs.end,
             };
+            // CAP PROPAGATION through a trailing operand: a node whose rightmost child is a
+            // self operand parsed as a full expression that returned capped is itself capped
+            // (`a ? b : () => {} || x` rejects, as the binary RHS below). The operand was the
+            // last thing parsed, so `_prattCapped` is its flag (the memo restores it on a hit).
+            if (lp?.rhsBp == null && selfRefName(led.items[led.items.length - 1], rule.name) && _prattCapped) {
+              _prattCapped = true;
+              return lhs;
+            }
             if (tailClosingLeds.has(led)) tailClosed = true;
             matched = true;
             break;
@@ -878,11 +893,18 @@ export function createParser(grammar: CstGrammar) {
         }
         case 'quantifier':
           return matchQuantifier(expr.body, expr.kind);
-        case 'group':
+        case 'group': {
           // A `suppress`-carrying group disables the listed LED connectors for the
-          // rule it wraps: stage them for the next parseRule to pick up.
-          if (expr.suppress && expr.suppress.length) suppressNext = new Set(expr.suppress);
-          return matchExpr(expr.body);
+          // rule it wraps: stage them for the next parseRule to pick up. The staging ends with
+          // the group: a body that never enters that rule (its FIRST set refuses the token, so
+          // `exclude('in', Expr)` before a `;` matches nothing) leaves nothing staged for the
+          // NEXT rule after the group (`for (; a in b;)` reads its `in`).
+          if (!expr.suppress || !expr.suppress.length) return matchExpr(expr.body);
+          suppressNext = new Set(expr.suppress);
+          const r = matchExpr(expr.body);
+          suppressNext = null;
+          return r;
+        }
         case 'not': {
           // Zero-width negative lookahead: succeed (no children) iff the body
           // does NOT match here; never consume input either way.
