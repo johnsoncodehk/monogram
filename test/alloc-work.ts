@@ -37,7 +37,7 @@ import { jsTarget } from '../src/emit-parser.ts';
 import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
 import { instrument, type SiteInfo } from './alloc-instrument.ts';
-import { goBuild, scratchDir } from './scratch.ts';
+import { scratchDir } from './scratch.ts';
 
 const WRITE = process.argv.includes('--write');
 const HEAP_CHILD = process.argv.indexOf('--heap-child');
@@ -208,6 +208,7 @@ func MeasureAllocs(src string, mode string) AllocOut {
 const GO_MAIN = `package main
 
 import (
+import { cachedGoBuild } from './build-cache.ts';
 	"encoding/json"
 	"fmt"
 	"os"
@@ -346,7 +347,7 @@ else {
     writeFileSync(join(gdir, 'parser', 'parser.go'), emitParser(g, goTarget));
     writeFileSync(join(gdir, 'parser', 'allocwork.go'), GO_HELPER);
     writeFileSync(join(gdir, 'main.go'), GO_MAIN);
-    goBuild(['-o', 'consumer', '.'], { cwd: gdir });
+    cachedGoBuild(['-o', 'consumer', '.'], { cwd: gdir });
     const files = GRAMMAR_INPUTS[gname]!.map((input, i) => { const f = join(gdir, `in${i}.txt`); writeFileSync(f, INPUTS[input]!); return f; });
     const out = execFileSync(join(gdir, 'consumer'), files, { encoding: 'utf8', maxBuffer: 1 << 26 });
     const lines = out.trim().split('\n').map((l) => JSON.parse(l));

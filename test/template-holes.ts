@@ -30,7 +30,8 @@ import {
 import type { CstGrammar, RuleExpr } from '../src/types.ts';
 import { asGoMain } from './go-main.ts';
 import { objectify } from './emitted-obj.ts';
-import { goBuild, scratchDir } from './scratch.ts';
+import { scratchDir } from './scratch.ts';
+import { cachedGoBuild } from './build-cache.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean) => { if (cond) ok++; else { fail++; console.log('  ✗', label); } };
@@ -183,7 +184,7 @@ if (haveGo) {
   writeFileSync(join(gdir, 'parser.go'), asGoMain(emitParser(grammar, goTarget)));
   writeFileSync(join(gdir, 'runner.go'), goTarget.emitRunner?.() ?? '');
   writeFileSync(join(gdir, 'go.mod'), 'module p\n\ngo 1.21\n');
-  goBuild(['-o', join(gdir, 'p'), '.'], { cwd: gdir });
+  cachedGoBuild(['-o', join(gdir, 'p'), '.'], { cwd: gdir });
   verify('portable go', (src) => {
     const r = spawnSync(join(gdir, 'p'), [], { input: src, encoding: 'utf8' });
     return r.status === 0 ? JSON.parse(r.stdout) : null;

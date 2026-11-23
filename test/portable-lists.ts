@@ -13,6 +13,10 @@ import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
 import { objectify } from './emitted-obj.ts';
 import { runsTarget } from './check-targets.ts';
+import { cachedEmit } from './emit-cache.ts';
+import { ROOT } from './gate-deps.ts';
+import { relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { applyEdits, canon, errText, gate, finish, prepareAll, primaryLexMsg, runTokSpans, UNICODE_ACCEPT, skeleton, type EditBatch, type Outcome, type Runner } from './portable-harness.ts';
 
 /** Reject cases. `lexMsg` set ⇒ expect that primary lexer message (≡ oracle). */
@@ -158,6 +162,7 @@ for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll(
   // if contiguous ever fails here, partition by grammar with evidence rather than relaxing.
   {
     const spanRunners = runners.map((r) => ({ label: r.label, ...r.spans }));
+    const spansOf = (r: (typeof spanRunners)[number], src: string) => (r.run ? r.run(src) : runTokSpans(r.cmd, r.args, src));
 
     const parseSpans = (out: string) => {
       const lines = out.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trimEnd().split('\n').filter(Boolean);
@@ -204,7 +209,7 @@ for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll(
     for (const src of cases) {
       const outs: Array<{ label: string; out: string | null }> = spanRunners.map((r) => ({
         label: r.label,
-        out: runTokSpans(r.cmd, r.args, src),
+        out: spansOf(r, src),
       }));
       const ref = outs[0]!;
       if (ref.out === null) {
@@ -232,13 +237,13 @@ for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll(
 
     if (c.grammar === 'calc') {
       const src = 'let a=1;\n2+3;\nlet b=a;';
-      const out = runTokSpans(spanRunners[0]!.cmd, spanRunners[0]!.args, src);
+      const out = spansOf(spanRunners[0]!, src);
       if (out === null) {
         gate.failures++;
         console.log(`  calc: tok-spans reject on trailing-punct probe`);
       } else {
         for (const r of spanRunners.slice(1)) {
-          const o = runTokSpans(r.cmd, r.args, src);
+          const o = spansOf(r, src);
           if (o !== out) {
             gate.failures++;
             console.log(`  calc: tok-spans cross-target mismatch on trailing-punct probe (${r.label})`);
@@ -265,7 +270,7 @@ for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll(
   // different emitter, so they are checked here too.
   if (runsTarget('js')) {
     const jsFile = `${dir}/js.mts`;
-    writeFileSync(jsFile, emitParser(grammar, jsTarget));
+    writeFileSync(jsFile, cachedEmit(relative(ROOT, fileURLToPath(new URL(c.path, import.meta.url))), jsTarget.name, {}, () => emitParser(grammar, jsTarget), c.parts ?? null));
     const js = await import(jsFile);
     const jsOut = (src: string): Outcome => {
       try { const r = js.parse(src); return { ok: true, cst: canon(objectify(js.tree, (fns) => js.visit(r, fns))) }; } catch (e) { return { ok: false, err: errText(e) }; }
@@ -288,8 +293,13 @@ for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll(
 
   for (const r of runners) {
     let acc = 0, rej = 0, snap = 0;
-    for (const src of c.accept) {
-      const want = oracleOut(src), got = r.run(src);
+    // One process per target for the whole list (the runner's batch mode: the same parse as a
+    // process per input); a batch that dies (a crash on one input) falls back to one process per
+    // input, so the failure names its input.
+    const outs = (srcs: string[]): Outcome[] => { try { return r.batch(srcs); } catch { return srcs.map((src) => r.run(src)); } };
+    const accOut = outs(c.accept), rejOut = outs(c.reject);
+    for (const [i, src] of c.accept.entries()) {
+      const want = oracleOut(src), got = accOut[i]!;
       if (want.ok && got.ok) {
         acc++;
         // Shape snapshot on every accepted input: the rule-node skeleton (rule labels tree,
@@ -309,8 +319,8 @@ for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll(
       gate.failures++;
       console.log(`  ${c.grammar}/${r.label}: ACCEPT mismatch on ${JSON.stringify(src)} (oracle ok=${want.ok}, ${r.label} ok=${got.ok})`);
     }
-    for (const src of c.reject) {
-      const want = oracleOut(src), got = r.run(src);
+    for (const [i, src] of c.reject.entries()) {
+      const want = oracleOut(src), got = rejOut[i]!;
       if (!want.ok && !got.ok) { rej++; continue; }
       gate.failures++;
       console.log(`  ${c.grammar}/${r.label}: REJECT mismatch on ${JSON.stringify(src)} (oracle ok=${want.ok}, ${r.label} ok=${got.ok})`);
