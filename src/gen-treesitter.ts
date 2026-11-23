@@ -724,7 +724,33 @@ function ownWeight(e: RuleExpr, ctx: GrammarJsContext, asAlternative: boolean): 
 
 /** Whether a part below `e` in the same production carries a weight (a repetition's body is another
  *  production: an auxiliary rule; so is a named tsRelax group, a rule of its own). */
+/** Every weight at or below `e` in the same production. */
+function weightsOf(e: RuleExpr, ctx: GrammarJsContext, asAlternative: boolean): number[] {
+  const own = ownWeight(e, ctx, asAlternative);
+  const out = own !== 0 ? [own] : [];
+  const v = e.type === 'group' ? (e.tsRuleName ? null : e.tsRelaxed ?? e.body) : e;
+  if (!v) return out;
+  if (v !== e) return [...out, ...weightsOf(v, ctx, false)];
+  switch (v.type) {
+    case 'seq': { const low = lowerNotBeforeOptional(v); return [...out, ...(low ? weightsOf(low, ctx, false) : v.items.flatMap(i => weightsOf(i, ctx, false)))]; }
+    case 'alt': { const asAlt = !ctx.zeroWidth.tokenOf.has(v); return [...out, ...v.items.flatMap(i => weightsOf(i, ctx, asAlt))]; }
+    case 'quantifier': return v.kind === '?' ? [...out, ...weightsOf(v.body, ctx, false)] : out;
+    case 'sep': return [...out, ...weightsOf(v.element, ctx, false)];
+    default: return out;
+  }
+}
+
+const weightedBelowMemo = new WeakMap<GrammarJsContext, WeakMap<RuleExpr, boolean>>();
 function weightedBelow(e: RuleExpr, ctx: GrammarJsContext): boolean {
+  // Memoised outside renderGreedySuffix (whose marks are set for one arm's rendering only).
+  if (ctx.dynamicPrecedence) return weightedBelowOf(e, ctx);
+  let memo = weightedBelowMemo.get(ctx);
+  if (!memo) weightedBelowMemo.set(ctx, memo = new WeakMap());
+  let v = memo.get(e);
+  if (v === undefined) memo.set(e, v = weightedBelowOf(e, ctx));
+  return v;
+}
+function weightedBelowOf(e: RuleExpr, ctx: GrammarJsContext): boolean {
   const weighted = (x: RuleExpr, asAlternative: boolean) => ownWeight(x, ctx, asAlternative) !== 0 || weightedBelow(x, ctx);
   switch (e.type) {
     case 'group': return !e.tsRuleName && weighted(e.tsRelaxed ?? e.body, false);
@@ -825,10 +851,14 @@ function renderPlain(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuar
       });
       // The weight carried into the sequence goes to its one weighted part (renderWeighted).
       const weighted = expr.items.filter(i => ownWeight(i, ctx, false) !== 0 || weightedBelow(i, ctx));
-      if (weighted.length > 1) throw new Error(`gen-treesitter: a sequence with ${weighted.length} parts of their own dynamic precedence (their sums would need one production each)`);
+      // Two weighted parts in one production: tree-sitter keeps the weight of the larger magnitude, so
+      // their sum is not expressible. Where every weight below them is a dropped lookahead's (all
+      // negative, nothing carried in) the larger is still what the rule needs: the reading holds a
+      // dropped lookahead, so a reading without one wins. Any other mix fails loudly.
+      if (weighted.length > 1 && (ctx.carry !== 0 || weighted.some(w => weightsOf(w, ctx, false).some(x => x > 0)))) throw new Error(`gen-treesitter: a sequence with ${weighted.length} parts of their own dynamic precedence, not all a dropped lookahead's (their sums would need one production each): ${weighted.map(w => assertionText(w)).join(' ; ')}`);
       const parts = expr.items.map((item, i) => {
         const set = setAt.get(i);
-        const render = item === weighted[0] ? renderExpr : renderUncarried;
+        const render = weighted.length === 1 && item === weighted[0] ? renderExpr : renderUncarried;
         if (set === undefined) return render(item, ctx);
         const v = tsView(item);
         if (v !== item && item.type === 'group' && item.tsRuleName) throw new Error('gen-treesitter: a reserved-word guard before a named tsRelax group');
