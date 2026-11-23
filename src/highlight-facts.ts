@@ -14,6 +14,7 @@ import type { CstGrammar, RuleExpr, RuleDecl, TokenDecl } from './types.ts';
 import { collectLiterals, escapeRegex, isKeywordLiteral } from './grammar-utils.ts';
 import { analyzeGrammar } from './grammar-analysis.ts';
 import { expandArms } from './region-view.ts';
+import { armGraph, armOrderKey, compareArmOrder, findWindows, hasWindow, inArmOrder, reachable, reachesThrough, sortInArmOrder, type ArmGraph } from './arm-graph.ts';
 import { compileTokenizer, lexSpecOf } from './emit-lexer.ts';
 import { tokenPatternBlockDelimiterSources, tokenPatternBlockDelimiters, tokenPatternEqualsPattern, tokenPatternIsNever, tokenPatternLeadingSource, tokenPatternLiteralPrefix, tokenPatternNodeContainsLiteral, tokenPatternPrefixBeforeTrailingLookahead, tokenPatternQuoteDelimAndEscape, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
 
@@ -1287,6 +1288,8 @@ export function detectRegexLiteral(grammar: CstGrammar, tokenNames: Set<string>)
     walk(rule.body);
   }
 
+  same('regexPrecedingKeywords', grammar, regexPrecedingKeywords(grammar, beginsRegex), preceedingKeywords);
+
   // Also add alphabetic prefix operators (typeof, void, delete, await, etc.)
   for (const op of prefixOps) {
     if (!preceedingKeywords.includes(op)) {
@@ -2490,6 +2493,229 @@ export function alwaysBeforeString(grammar: CstGrammar): (lit: string) => boolea
   return alwaysBeforeString;
 }
 
+// ── Adjacency detectors over the arm graph (src/arm-graph.ts) ──
+// Each asks for a window of consecutive arm items, which the arm graph answers without expanding
+// the arms.
+
+const isRefItem = (e: RuleExpr) => e.type === 'ref';
+const isLit = (v: string) => (e: RuleExpr) => e.type === 'literal' && e.value === v;
+const isAnyLit = (e: RuleExpr) => e.type === 'literal';
+
+/** An `Expr '?' Expr ':' Expr` window: ref, `?`, ref, `:`, ref in a row. */
+export function hasTernary(grammar: CstGrammar): boolean {
+  return hasWindow(armGraph(grammar), [isRefItem, isLit('?'), isRefItem, isLit(':'), isRefItem]);
+}
+
+/** A ref directly followed by an item whose FIRST holds `(` (a call's argument list, written
+ *  inline or as a rule of its own). */
+export function hasCallExpression(grammar: CstGrammar): boolean {
+  const byName = new Map(grammar.rules.map(r => [r.name, r.body]));
+  return hasWindow(armGraph(grammar), [isRefItem, (e) => firstLiterals(e, byName).has('(')]);
+}
+
+/** `.` / `?.` directly followed by a token reference (a property name). */
+export function propertyAccess(grammar: CstGrammar): { hasDot: boolean; hasOptionalChain: boolean } {
+  const { tokenNames } = highlightFacts(grammar);
+  const tokenRef = (e: RuleExpr) => e.type === 'ref' && tokenNames.has(e.name);
+  const g = armGraph(grammar);
+  return { hasDot: hasWindow(g, [isLit('.'), tokenRef]), hasOptionalChain: hasWindow(g, [isLit('?.'), tokenRef]) };
+}
+
+/** A token reference directly followed by `=>` (a bare arrow parameter: `x => x + 1`). */
+export function hasBareArrowParam(grammar: CstGrammar): boolean {
+  const { tokenNames } = highlightFacts(grammar);
+  return hasWindow(armGraph(grammar), [(e) => e.type === 'ref' && tokenNames.has(e.name), isLit('=>')]);
+}
+
+// What may stand between an arrow's parameter list and its `=>`: anything but a literal other than
+// `:` / `?` (a return-type annotation).
+const betweenParamsAndArrow = (e: RuleExpr) => e.type !== 'literal' || e.value === ':' || e.value === '?';
+
+/** The `open middle close … '=>'` windows (an arrow's parameter list), each as its three
+ *  positions, in the order a scan of the expanded arms meets them. */
+function arrowParamWindows(grammar: CstGrammar, open: (e: RuleExpr) => boolean, middle: (e: RuleExpr) => boolean, close: (e: RuleExpr) => boolean): number[][] {
+  const g = armGraph(grammar);
+  return findWindows(g, [open, middle, close])
+    .filter(([, , c]) => reachesThrough(g, c, betweenParamsAndArrow, isLit('=>')))
+    .map(w => ({ w, key: armOrderKey(g, w) }))
+    .sort((a, b) => compareArmOrder(a.key, b.key))
+    .map(({ w }) => w);
+}
+
+/** A `'(' X ')' … '=>'` window: a parenthesised arrow parameter list (`(x, y) => x + y`). */
+export function hasParenArrowParams(grammar: CstGrammar): boolean {
+  return arrowParamWindows(grammar, isLit('('), () => true, isLit(')')).length > 0;
+}
+
+/** The two literals around the `sep` of the first `open sep(…) close … '=>'` window: the arrow
+ *  parameter list's delimiters, read from the grammar rather than assumed. */
+export function arrowParamDelims(grammar: CstGrammar): { open: string; close: string } | null {
+  const w = arrowParamWindows(grammar, isAnyLit, (e) => e.type === 'sep', isAnyLit)[0];
+  if (!w) return null;
+  const { node } = armGraph(grammar);
+  return { open: (node[w[0]] as { value: string }).value, close: (node[w[2]] as { value: string }).value };
+}
+
+const isKeywordItem = (e: RuleExpr): e is { type: 'literal'; value: string } => e.type === 'literal' && isKeywordLiteral(e.value);
+const ruleRoots = (g: ArmGraph) => (r: number) => g.rootKind[r] === 'rule';
+const rootOfRule = (g: ArmGraph, grammar: CstGrammar, name: string): number => {
+  const i = grammar.rules.findIndex(r => r.name === name);
+  return i < 0 ? -1 : g.rootKind.findIndex((k, r) => k === 'rule' && g.ruleIndex[r] === i);
+};
+
+/** The keywords directly followed by `(` whose scope is storage.type.function (`function (…)`), in
+ *  the order the arms meet them. */
+export function directParamKeywords(grammar: CstGrammar): { keyword: string; keywordScope: string }[] {
+  const g = armGraph(grammar);
+  const met = findWindows(g, [isKeywordItem, isLit('(')])
+    .filter(([k]) => getScope(grammar.scopeOverrides, (g.node[k] as { value: string }).value)?.startsWith('storage.type.function'))
+    .map(w => ({ value: (g.node[w[0]] as { value: string }).value, window: w }));
+  return inArmOrder(g, met).map(keyword => ({ keyword, keywordScope: getScope(grammar.scopeOverrides, keyword)! }));
+}
+
+/** Constructor-call keywords (`new NewTarget (…)`): a keyword scoped keyword.operator.expression,
+ *  directly followed by a rule reference (the callee) with a `(` later in the arm; each with the
+ *  rules that stand right after it (followed by anything), in the order a rule-body arm scan meets
+ *  them. Rule bodies only. */
+export function constructorKeywords(grammar: CstGrammar): { kw: string; callees: string[] }[] {
+  const g = armGraph(grammar);
+  const { tokenNames } = highlightFacts(grammar);
+  const kwThenRule = [isKeywordItem, (e: RuleExpr) => e.type === 'ref' && !tokenNames.has(e.name)];
+  const value = (p: number) => (g.node[p] as { value: string }).value;
+  const name = (p: number) => (g.node[p] as { name: string }).name;
+  const calleeWindows = findWindows(g, [...kwThenRule, () => true], ruleRoots(g));
+  const calleePairs = inArmOrder(g, calleeWindows.map(w => ({ value: `${value(w[0])}\0${name(w[1])}`, window: w })));
+  const met: { value: string; window: number[]; gapFree: boolean[] }[] = [];
+  for (const [k, b] of findWindows(g, kwThenRule, ruleRoots(g))) {
+    if (!getScope(grammar.scopeOverrides, value(k))?.startsWith('keyword.operator.expression')) continue;
+    for (const p of reachable(g, b, () => true, isLit('('))) met.push({ value: value(k), window: [k, b, p], gapFree: [false, true] });
+  }
+  return inArmOrder(g, met).map(kw => ({ kw, callees: calleePairs.filter(c => c.startsWith(`${kw}\0`)).map(c => c.slice(kw.length + 1)) }));
+}
+
+/** The keywords directly followed (past `sameLine` assertions) by a non-token rule reference that
+ *  `beginsRegex`, in the order the arms meet them. */
+export function regexPrecedingKeywords(grammar: CstGrammar, beginsRegex: (ref: RuleExpr) => boolean): string[] {
+  const g = armGraph(grammar);
+  const { tokenNames } = highlightFacts(grammar);
+  const met: { value: string; window: number[] }[] = [];
+  for (let k = 0; k < g.node.length; k++) {
+    const kw = g.node[k];
+    if (!isKeywordItem(kw)) continue;
+    const extend = (path: number[]): void => {
+      for (const n of g.follow[path[path.length - 1]]) {
+        const e = g.node[n];
+        if (e.type === 'sameLine') extend([...path, n]);
+        else if (e.type === 'ref' && !tokenNames.has(e.name) && beginsRegex(e)) met.push({ value: kw.value, window: [...path, n] });
+      }
+    };
+    extend([k]);
+  }
+  return inArmOrder(g, met);
+}
+
+/** Whether rule `name` (or a rule its arms begin with, recursively) can begin with an item `head`
+ *  matches. */
+export function ruleBeginsWith(grammar: CstGrammar, name: string, head: (e: RuleExpr) => boolean, seen = new Set<string>()): boolean {
+  if (seen.has(name)) return false;
+  seen.add(name);
+  const g = armGraph(grammar);
+  const r = rootOfRule(g, grammar, name);
+  if (r < 0) return false;
+  return g.first[r].some(p => head(g.node[p]) || (g.node[p].type === 'ref' && ruleBeginsWith(grammar, (g.node[p] as { name: string }).name, head, seen)));
+}
+
+/** importStar over the arm graph (see importStar): the same three answers. */
+export function importStarKeywords(grammar: CstGrammar): { importExportKws: Set<string>; starAllKws: Set<string>; phaseModsByKw: Map<string, string[]> } {
+  const g = armGraph(grammar);
+  const { scopeOverrides } = grammar;
+  const usedAsKeywordOnlyBeforeStar = (lit: string): boolean => {
+    let beforeStar = false, elsewhere = false;
+    const walk = (e: RuleExpr | undefined): void => {
+      if (!e) return;
+      if (e.type === 'seq') {
+        for (let i = 0; i < e.items.length; i++) {
+          const it = e.items[i];
+          if (it.type === 'literal' && it.value === lit) {
+            const nx = e.items[i + 1];
+            if (nx && nx.type === 'literal' && nx.value === '*') beforeStar = true; else elsewhere = true;
+          }
+          walk(it);
+        }
+      } else if (e.type === 'alt') e.items.forEach(walk);
+      else if (e.type === 'quantifier' || e.type === 'group') walk(e.body);
+      else if (e.type === 'sep') walk(e.element);
+    };
+    for (const r of grammar.rules) walk(r.body);
+    return beforeStar && !elsewhere;
+  };
+  const importExportKws = new Set<string>();
+  for (const [lit, scopes] of scopeOverrides) {
+    if (scopes.some(s => s.startsWith('keyword.control.import')) && !usedAsKeywordOnlyBeforeStar(lit)) importExportKws.add(lit);
+  }
+  // The `[K, '*']`-headed arms of a rule (K a keyword), through rule references at the head.
+  const phaseStarKws = (refName: string, seen: Set<string> = new Set()): string[] => {
+    if (seen.has(refName)) return [];
+    seen.add(refName);
+    const r = rootOfRule(g, grammar, refName);
+    if (r < 0) return [];
+    const heads: number[][] = [];
+    for (const h of g.first[r]) {
+      const e = g.node[h];
+      if (e.type === 'ref') heads.push([h]);
+      else if (isKeywordItem(e)) for (const n of g.follow[h]) if (isLit('*')(g.node[n])) heads.push([h, n]);
+    }
+    const out: string[] = [];
+    for (const w of heads.map(w => ({ w, key: armOrderKey(g, w, [], true) })).sort((a, b) => compareArmOrder(a.key, b.key)).map(({ w }) => w)) {
+      const e = g.node[w[0]];
+      if (e.type === 'ref') out.push(...phaseStarKws(e.name, seen)); else out.push((e as { value: string }).value);
+    }
+    return out;
+  };
+  const starAllKws = new Set<string>();
+  const phaseModsByKw = new Map<string, string[]>();
+  const kwFirst = (e: RuleExpr) => e.type === 'literal' && importExportKws.has(e.value);
+  for (const [a, b] of sortInArmOrder(g, findWindows(g, [kwFirst, (e) => isLit('*')(e) || e.type === 'ref']))) {
+    const kw = (g.node[a] as { value: string }).value, next = g.node[b];
+    if (next.type === 'literal' || (next.type === 'ref' && ruleBeginsWith(grammar, next.name, isLit('*')))) starAllKws.add(kw);
+    if (next.type === 'ref') {
+      const mods = phaseStarKws(next.name).filter(usedAsKeywordOnlyBeforeStar);
+      if (mods.length) {
+        starAllKws.add(kw);
+        const cur = phaseModsByKw.get(kw) ?? [];
+        for (const m of mods) if (!cur.includes(m)) cur.push(m);
+        phaseModsByKw.set(kw, cur);
+      }
+    }
+  }
+  return { importExportKws, starAllKws, phaseModsByKw };
+}
+
+/** defaultBindImportKeywords over the arm graph. */
+export function defaultBindKeywords(grammar: CstGrammar): Set<string> {
+  const g = armGraph(grammar);
+  const { identToken, importStar: { importExportKws } } = highlightFacts(grammar);
+  const out = new Set<string>();
+  if (!identToken) return out;
+  const startsWithIdent = (e: RuleExpr) => e.type === 'ref' && (e.name === identToken.name || ruleBeginsWith(grammar, e.name, (h) => h.type === 'ref' && h.name === identToken.name));
+  for (const [a] of sortInArmOrder(g, findWindows(g, [(e) => e.type === 'literal' && importExportKws.has(e.value), startsWithIdent]))) out.add((g.node[a] as { value: string }).value);
+  return out;
+}
+
+// TEMPORARY differential (removed once every grammar and fixture agrees): the arm-graph detector
+// against the expandArms one it replaces; a disagreement throws, naming the fact.
+function same<T>(fact: string, grammar: CstGrammar, next: T, prev: T): T {
+  if (JSON.stringify(next) !== JSON.stringify(prev)) throw new Error(`highlight-facts: ${fact} on ${grammar.name}: arm graph ${JSON.stringify(next)} != expandArms ${JSON.stringify(prev)}`);
+  return next;
+}
+
+// Sets and maps compare by their entries in order (JSON.stringify sees neither).
+function sameSets<T>(fact: string, grammar: CstGrammar, next: T, prev: T): T {
+  const flat = (v: unknown): unknown => v instanceof Set ? ['Set', ...[...v].map(flat)] : v instanceof Map ? ['Map', ...[...v].map(flat)] : Array.isArray(v) ? v.map(flat) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, flat(x)])) : v;
+  same(fact, grammar, flat(next), flat(prev));
+  return next;
+}
+
 // ── The facts object ──
 
 // One entry per fact: how it is computed from the grammar. A fact that needs another reads it
@@ -2512,7 +2738,7 @@ const FACTS = {
   contextualAccessibilityModifiers: (g: CstGrammar) => findContextualAccessibilityModifiers(g),
   angleBracket: (g: CstGrammar) => detectAngleBracketAmbiguity(g),
   angleBracketCast: (g: CstGrammar) => detectAngleBracketCast(g),
-  arrowParamDelims: (g: CstGrammar) => detectArrowParamDelims(g),
+  arrowParamDelims: (g: CstGrammar) => same('arrowParamDelims', g, arrowParamDelims(g), detectArrowParamDelims(g)),
   commentRepoKeys: (g: CstGrammar) => commentRepoKeys(g),
   blockCommentMatchers: (g: CstGrammar) => blockCommentMatchers(g),
   regexLiteral: (g: CstGrammar) => detectRegexLiteral(g, highlightFacts(g).tokenNames),
@@ -2527,18 +2753,18 @@ const FACTS = {
   conditionalType: (g: CstGrammar) => detectConditionalType(g),
   declarations: (g: CstGrammar) => detectDeclarations(g, highlightFacts(g).tokenNames),
   bindingCloseBrackets: (g: CstGrammar) => deriveBindingCloseBrackets(g, highlightFacts(g).identToken?.name),
-  directParamKeywords: (g: CstGrammar) => detectDirectParamKeywords(g, g.scopeOverrides),
+  directParamKeywords: (g: CstGrammar) => same('directParamKeywords', g, directParamKeywords(g), detectDirectParamKeywords(g, g.scopeOverrides)),
   reservedWords: (g: CstGrammar) => collectReservedWords(g),
   computedMemberCloseBrackets: (g: CstGrammar) => deriveComputedMemberCloseBrackets(g, highlightFacts(g).typeRuleNames),
   /** Every rule's keyword + identifier adjacencies, in rule order (duplicates kept). */
   contextualPatterns: (g: CstGrammar) => g.rules.flatMap(rule =>
     findContextualPatterns(rule.body, highlightFacts(g).tokenNames, g.scopeOverrides, g.rules, highlightFacts(g).identToken?.name ?? null)),
-  callExpression: (g: CstGrammar) => detectCallExpression(g),
-  constructorKeywords: (g: CstGrammar) => detectConstructorKeywords(g, highlightFacts(g).tokenNames, g.scopeOverrides),
-  propertyAccess: (g: CstGrammar) => detectPropertyAccess(g, highlightFacts(g).tokenNames),
-  bareArrowParam: (g: CstGrammar) => detectBareArrowParam(g, highlightFacts(g).tokenNames),
-  parenArrowParams: (g: CstGrammar) => detectParenArrowParams(g),
-  ternary: (g: CstGrammar) => detectTernary(g),
+  callExpression: (g: CstGrammar) => same('callExpression', g, hasCallExpression(g), detectCallExpression(g)),
+  constructorKeywords: (g: CstGrammar) => same('constructorKeywords', g, constructorKeywords(g), detectConstructorKeywords(g, highlightFacts(g).tokenNames, g.scopeOverrides)),
+  propertyAccess: (g: CstGrammar) => same('propertyAccess', g, propertyAccess(g), detectPropertyAccess(g, highlightFacts(g).tokenNames)),
+  bareArrowParam: (g: CstGrammar) => same('bareArrowParam', g, hasBareArrowParam(g), detectBareArrowParam(g, highlightFacts(g).tokenNames)),
+  parenArrowParams: (g: CstGrammar) => same('parenArrowParams', g, hasParenArrowParams(g), detectParenArrowParams(g)),
+  ternary: (g: CstGrammar) => same('ternary', g, hasTernary(g), detectTernary(g)),
   /** Keywords directly followed by a `@type` rule reference (none without `@type` rules). */
   typeKeywords: (g: CstGrammar) => highlightFacts(g).typeRuleNames.size > 0 ? findTypeKeywordPatterns(g, highlightFacts(g).typeRuleNames) : [],
   expressionKeywords: (g: CstGrammar) => expressionKeywords(g),
@@ -2551,8 +2777,8 @@ const FACTS = {
   typeLiterals: (g: CstGrammar) => typeLiterals(g),
   typeContextKeywords: (g: CstGrammar) => typeContextKeywords(g),
   statementStartKeywords: (g: CstGrammar) => statementStartKeywords(g),
-  importStar: (g: CstGrammar) => importStar(g),
-  defaultBindImportKeywords: (g: CstGrammar) => defaultBindImportKeywords(g),
+  importStar: (g: CstGrammar) => sameSets('importStar', g, importStarKeywords(g), importStar(g)),
+  defaultBindImportKeywords: (g: CstGrammar) => sameSets('defaultBindImportKeywords', g, defaultBindKeywords(g), defaultBindImportKeywords(g)),
   lexedByToken: (g: CstGrammar) => lexedByToken(g),
   alwaysBeforeString: (g: CstGrammar) => alwaysBeforeString(g),
 };
