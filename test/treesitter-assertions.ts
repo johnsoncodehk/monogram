@@ -27,11 +27,15 @@ const RENDERED: AssertionClass[] = ['lowered', 'reserved-set'];
 // Item 1b: reserved-word guards before the word token render as tree-sitter reserved word sets
 // (js / jsx 41 of 43, ts / tsx 63 of 65; the two left are `not("new")` / `not("super")`, sets that
 // are no subset of the chain).
+// `new` callees take every MemberExpression form (land/shape-newtarget): NewTarget's identifier arm
+// carries the expression NUD's guards (`not('super')`, `not('new')`: reserved +2; the reserved-word
+// guard: reserved-set +5, rendered) and its async function arms their `sameLine` (scanner +2); in
+// TypeScript a plain decorator is not `@new` (`not('@new')`: lookahead1 +1).
 const PINNED: Record<string, Partial<Record<AssertionClass, number>>> = {
-  javascript:      { vacuous: 6,  'reserved-set': 41, scanner: 27, reserved: 2, lookahead1: 37,  lookahead: 8 },
-  typescript:      { vacuous: 60, 'reserved-set': 63, scanner: 92, reserved: 2, lookahead1: 133, lookahead: 69, 'left-context': 2 },
-  javascriptreact: { vacuous: 6,  'reserved-set': 41, scanner: 29, reserved: 2, lookahead1: 37,  lookahead: 8 },
-  typescriptreact: { vacuous: 60, 'reserved-set': 63, scanner: 94, reserved: 2, lookahead1: 133, lookahead: 69, 'left-context': 2 },
+  javascript:      { vacuous: 6,  'reserved-set': 46, scanner: 29, reserved: 4, lookahead1: 37,  lookahead: 8 },
+  typescript:      { vacuous: 60, 'reserved-set': 68, scanner: 94, reserved: 4, lookahead1: 134, lookahead: 69, 'left-context': 2 },
+  javascriptreact: { vacuous: 6,  'reserved-set': 46, scanner: 31, reserved: 4, lookahead1: 37,  lookahead: 8 },
+  typescriptreact: { vacuous: 60, 'reserved-set': 68, scanner: 96, reserved: 4, lookahead1: 134, lookahead: 69, 'left-context': 2 },
   yaml:            { lowered: 1,  scanner: 16, lookahead1: 6 },
 };
 

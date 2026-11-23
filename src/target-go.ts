@@ -10,10 +10,10 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
-import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
+import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isRec, isRecList, recName, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 
@@ -61,6 +61,18 @@ const commitSwGo = (t: string): CommitLowering => ({
   pick: (n) => `{ _c = ${n} }`,
   picked: (cases) => `\tswitch _c {\n${cases.map((c) => `\tcase ${c.n}:\n\t${c.stmt}`).join('\n')}\n\t}`,
 });
+// A committed candidate's body in a building form: `cond` from here; matched, `ret` of its node
+// (`fin` over the scratch start and the start position), else undone (`undo`: the checkpoint taken,
+// the undo to it, and where it keeps the scratch start and the position; none when the candidate
+// fails clean, so none is taken). The native engine's is its mark / reset (both within Go's inline
+// budget); the builder engine's mark is not inlined around the builder's Checkpoint, so its
+// checkpoint and undo stay printed in place (measured: +0.27% builder instructions with mark()).
+type GoUndo = { take: string; undo: string; sb: string; save: string };
+const UNDO_GO: GoUndo = { take: 'm := p.mark()', undo: 'p.reset(m)', sb: 'm.sb', save: 'm.pos' };
+const undoGoWc = (recv: string): GoUndo => ({ take: `save := p.pos; sb := len(p.scratch); ${arenaCkpt()}`, undo: `p.back(save); ${lostGoW(recv)}`, sb: 'sb', save: 'save' });
+const commitBodyGo = (cond: string, undo: GoUndo | null, nullable: boolean, fin: (sb: string, save: string) => string, ret: (n: string) => string) => (undo !== null
+  ? `{ ${undo.take}; if ${cond}${nullable ? ` && p.pos > ${undo.save}` : ''} { ${ret(fin(undo.sb, undo.save))} }; ${undo.undo} }`
+  : `{ save := p.pos; sb := len(p.scratch); if ${cond} { ${ret(fin('sb', 'save'))} } }`);
 // A committed candidate's statement: `body` when conds hold, then `fail` (unless body always returns).
 const commitGo = (conds: string[], body: string, fail: string, returns = false) =>
   `{ ${conds.length ? `if ${conds.join(' && ')} ${body.startsWith('{') ? body : `{ ${body} }`}` : body}${conds.length || !returns ? `; ${fail}` : ''} }`;
@@ -422,6 +434,170 @@ function buildLexCandidates(
 /** Shared first-byte dispatch for all lexFrom variants in this target. */
 // `heads`: per ASCII byte, code that runs first in that byte's arm (and nowhere else), for a test
 // only that byte can pass; a byte no candidate starts with gets an arm of its own.
+// The lexer of a grammar with an element region (ElementPlan): the frame stack is the template
+// stack, and the frame decisions are the shared family's (lex-family.ts elementFns); what is here
+// is their placement in the dispatch loop, the token push, and the type-parameter signature's
+// speculation (lexed as code to its verdict, then rewound: docs/REGIONS.md).
+function elementLexerGo(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms, p: {
+  head: string; scans: string; rxStateFrom: string; tplSpanFn: string; nlWs: string; lexCodes: string[]; lexFirsts: (LexFirstBytes | null)[];
+  tplCloseTest: string; tplOpenTest: string; uniIdentFallbackGo: string; loopPanicGo: string; goBoolArr: (name: string, flags: boolean[]) => string;
+}): string {
+  const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0;
+  const operand = el.entry === 'operand';
+  if (operand && !rx) throw new Error('portable: an operand element entry needs the regex context (prevIsValue)');
+  const L = tlen(el.tagOpen);
+  const consts = `const lidElOpen uint16 = ${lidOf(ids, el.tagOpen)}
+const lidElClose uint16 = ${lidOf(ids, el.tagClose)}
+const lidHoleOpen uint16 = ${lidOf(ids, el.holeOpen)}
+const lidHoleClose uint16 = ${lidOf(ids, el.holeClose)}
+const lidEq uint16 = ${lidOf(ids, '=')}
+${sig ? `${p.goBoolArr('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
+  // prevIsValue: in a tag nothing is a regex; the token that ended an element is a value.
+  const prevIsValue = p.rxStateFrom.replace('\tprevIsValue := func() bool {\n', `\tprevIsValue := func() bool {
+\t\tif len(templateStack) > 0 { if f := templateStack[len(templateStack)-1]; f&3 == 2 && f&12 != 0 { return true } }
+\t\tif elEnded { return true }
+`);
+  const rxParams = rx ? 'prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, ' : '';
+  const rxRet = rx ? 'uint16, uint16, uint16, bool, bool, []bool, bool, bool, ' : '';
+  const rxNames = rx ? 'prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang, ' : '';
+  const rxInit = rx ? '0, 0, 0, false, false, stk.parenHead[:0], false, false, ' : '';
+  const rxBlank = rx ? '_, _, _, _, _, stk.parenHead, _, _, ' : '';
+  // Brace counting in the holes (kind 0 template, 1 element hole; step 4): a `{` deepens, a `}`
+  // at a count above 0 shallows; at 0 the closer is lexed by its own test.
+  const braces = [
+    tpl ? `if f&3 == 0 { if lid == lidBraceOpen { templateStack[len(templateStack)-1] = f + 4 } else if lid == lidInterpClose { templateStack[len(templateStack)-1] = f - 4 } }` : '',
+    `if f&3 == 1 { if lid == lidHoleOpen { templateStack[len(templateStack)-1] = f + 4 } else if lid == lidHoleClose { templateStack[len(templateStack)-1] = f - 4 } }`,
+  ].filter(Boolean).join(' else ');
+  const specState = sig ? `\t// A type-parameter signature being decided: the token index of its tagOpen (-1: none), the
+\t// state before it, how it was decided, and the decision kept for the tagOpen it rewinds to.
+\tspecTok, specBase, specClosedAt, specOff, specEnd, specAt := -1, 0, -1, 0, 0, -1
+\tspecDone, specFail, specThen, specKeep := false, false, false, false
+\tsvPos, svNl, svPrevLid, svPrevKid, svBpLid, svHasPrev, svHasPrev2, svLastClose, svLastBang, svElEnded, svAngle := 0, false, uint16(0), uint16(0), uint16(0), false, false, false, false, false, 0
+\tvar svParen []bool
+\tvar svStack []int
+\tspecRewind := func() {
+\t\tkeep := specDone && !specFail && specThen
+\t\tre := n + 1
+\t\tif specDone && !specFail { re = ${shared.elementFn('reach')}(src, specEnd) }
+\t\tif re > laEnd { laEnd = re }
+\t\tif keep { specUntil = specOff }
+\t\tspecAt = svPos; specKeep = keep
+\t\t*acc = (*acc)[:specTok]
+\t\tpos = svPos; pendingNl = svNl; prevLid = svPrevLid; prevKid = svPrevKid; bpLid = svBpLid; hasPrev = svHasPrev; hasPrev2 = svHasPrev2
+\t\tlastClose = svLastClose; lastBang = svLastBang; elEnded = svElEnded; tagAngle = svAngle
+\t\tparenHead = append(parenHead[:0], svParen...)
+\t\ttemplateStack = append(templateStack[:0], svStack...)
+\t\tspecTok = -1; specClosedAt = -1; specDone = false; specFail = false
+\t}
+` : '';
+  const emitFn = `\temit := func(off, end int, kid, lid uint16) {
+${rx ? `\t\tif lid == lidLParen {
+\t\t\tisMember := hasPrev2 && _mem[bpLid]
+\t\t\tparenHead = append(parenHead, !isMember && prevKid == kidIdent && _phK[prevLid])
+\t\t} else if lid == lidRParen {
+\t\t\tif len(parenHead) > 0 { lastClose = parenHead[len(parenHead)-1]; parenHead = parenHead[:len(parenHead)-1] } else { lastClose = false }${sig ? `
+\t\t\tif specTok >= 0 && len(*acc) > specTok+3 && len(parenHead) == specBase { specClosedAt = len(*acc) }` : ''}
+\t\t}
+\t\tif _pav[lid] { lastBang = prevIsValue() }
+` : ''}${sig ? `\t\t// the token after the signature group's closer decides it (a closer that leaves the bracket
+\t\t// stack at its base, even by popping an empty one, closes it again)
+\t\tif specClosedAt >= 0 && len(*acc) > specClosedAt { specClosedAt = -1; specDone = true; specThen = kid == 0 && _elThen[lid]; specOff = off; specEnd = end }
+` : ''}\t\tif len(templateStack) > 0 { f := templateStack[len(templateStack)-1]; ${braces} }
+\t\t*acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendingNl = false; elEnded = false${rx ? '\n\t\tbpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true' : ''}
+\t}
+\t_ = emit
+`;
+  // The entry from code, in the tagOpen byte's dispatch arm (outside element frames: inside one
+  // the frame step lexes every tagOpen).
+  const enter = `\t\t\ttemplateStack = append(templateStack, 6); emit(pos, pos + ${L}, 0, lidElOpen);${raw ? ' tagAt = append(tagAt, len(*acc)-1);' : ''} tagAngle = 0; pos += ${L}; continue\n`;
+  const entry = !operand ? `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)}) {\n${enter}\t\t}\n`
+    : !(el.head || sig) ? `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)}) && !prevIsValue() {\n${enter}\t\t}\n`
+    : `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)})${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue() {
+\t\t\top := 0
+\t\t\t${sig ? 'if pos == specAt { op = 1; if specKeep { op = 0 }; specAt = -1 } else ' : ''}{ o, re := ${shared.elementFn('opens')}(src, pos); op = o; if re > laEnd { laEnd = re } }
+\t\t\tif op == 1 {
+${enter}\t\t\t}
+${sig ? `\t\t\tif op == 2 {
+\t\t\t\tsvPos, svNl, svPrevLid, svPrevKid, svBpLid, svHasPrev, svHasPrev2 = pos, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2
+\t\t\t\tsvLastClose, svLastBang, svElEnded, svAngle = lastClose, lastBang, elEnded, tagAngle
+\t\t\t\tsvParen = append(svParen[:0], parenHead...)
+\t\t\t\tsvStack = append(svStack[:0], templateStack...)
+\t\t\t\tspecTok = len(*acc); specBase = len(parenHead); specClosedAt = -1; specDone = false; specFail = false
+\t\t\t}
+` : ''}\t\t}
+`;
+  // An element hole's closer at brace count 0 ends it (the closer is lexed inside the frame).
+  const holeClose = `\t\tif len(templateStack) > 0 && templateStack[len(templateStack)-1] == 1 && strings.HasPrefix(src[pos:], ${J(el.holeClose)}) {
+\t\t\temit(pos, pos + ${tlen(el.holeClose)}, 0, lidHoleClose); templateStack = templateStack[:len(templateStack)-1]; pos += ${tlen(el.holeClose)}; continue
+\t\t}
+`;
+  const heads = new Map<number, string>();
+  const headByte = (t: string) => { const b = Buffer.from(t, 'utf8')[0]!; return b < 128 && ![9, 10, 11, 12, 13, 32].includes(b) ? b : null; };
+  let pre = '';
+  const place = (lit: string, code: string) => { const u = headByte(lit); if (u === null) pre += code; else heads.set(u, (heads.get(u) ?? '') + code); };
+  place(el.tagOpen, entry);
+  place(el.holeClose, holeClose);
+  if (tpl) { place(tpl.interpClose, p.tplCloseTest); place(tpl.open, p.tplOpenTest); }
+  const cascade = renderLexByteDispatchGo(p.lexCodes, p.lexFirsts, '\t', heads);
+  const frameStep = `\t\tif len(templateStack) > 0 && templateStack[len(templateStack)-1]&3 == 2 {
+\t\t\tfr := templateStack[len(templateStack)-1]
+\t\t\tfe, fk, fl, ft, fp, fa, fla := ${shared.elementFn('frame')}(src, pos, fr, tagAngle, len(*acc) > 0 && (*acc)[len(*acc)-1].Lid == lidEq, laEnd)
+\t\t\tlaEnd = fla
+\t\t\tif fe >= 0 {
+\t\t\t\temit(pos, fe, uint16(fk), uint16(fl))
+${raw ? `\t\t\t\t// each element frame's current tag: the index of its tagOpen token (the name is the next)
+\t\t\t\tif uint16(fl) == lidElOpen { if fp == 6 { tagAt = append(tagAt, len(*acc)-1) } else if (fr>>2)&3 == 0 { tagAt[len(tagAt)-1] = len(*acc) - 1 } }
+` : ''}\t\t\t\tif ft < 0 { templateStack = templateStack[:len(templateStack)-1];${raw ? ' tagAt = tagAt[:len(tagAt)-1];' : ''} elEnded = true } else { templateStack[len(templateStack)-1] = ft }
+\t\t\t\tif fp != 0 { templateStack = append(templateStack, fp) }
+${raw ? `\t\t\t\t// an open tag ended: a raw-text name gives its body to a raw frame (kind 3), lexed next
+\t\t\t\tif uint16(fl) == lidElClose && (fr>>2)&3 == 1 && tagAngle == 0 {
+\t\t\t\t\tif i := tagAt[len(tagAt)-1] + 1; i < len(*acc)-1 {
+\t\t\t\t\t\tif re, rk := ${shared.elementFn('raw')}(src, int((*acc)[i].Off), int((*acc)[i].End), fe); rk != 0 && re > fe { templateStack = append(templateStack, 3) }
+\t\t\t\t\t}
+\t\t\t\t}
+` : ''}\t\t\t\ttagAngle = fa; pos = fe; continue
+\t\t\t}
+\t\t}
+${raw ? `\t\tif len(templateStack) > 0 && templateStack[len(templateStack)-1] == 3 {
+\t\t\ti := tagAt[len(tagAt)-1] + 1
+\t\t\tre, rk := ${shared.elementFn('raw')}(src, int((*acc)[i].Off), int((*acc)[i].End), pos)
+\t\t\temit(pos, re, uint16(rk), 0); templateStack = templateStack[:len(templateStack)-1]; pos = re; continue
+\t\t}
+` : ''}`;
+  const loopBody = `${sig ? '\t\tif specTok >= 0 && (specDone || specFail || pos >= n) { specRewind(); continue }\n' : ''}\t\tc := int(src[pos])
+${frameStep}${p.nlWs}${pre}${cascade}
+${p.uniIdentFallbackGo}${p.loopPanicGo}`;
+  const loop = `\tfor ${sig ? '(pos < n || specTok >= 0) && (limit <= 0 || len(*acc)-base < limit || specTok >= 0)' : 'pos < n && (limit <= 0 || len(*acc)-base < limit)'} {
+${loopBody}
+\t}
+`;
+  // A lex error while a signature is undecided decides it: the head was an element.
+  const body = sig ? `\trun := func() (failed bool) {
+\t\tdefer func() {
+\t\t\tif r := recover(); r != nil {
+\t\t\t\tif specTok < 0 { panic(r) }
+\t\t\t\tfailed = true
+\t\t\t}
+\t\t}()
+${loop.replace(/^/gm, '\t').replace(/\t$/, '')}\t\treturn false
+\t}
+\tfor run() { specFail = true }
+` : loop;
+  return `${p.head}${consts}${p.scans}func lexFrom(src string, pos int, pendingNl bool, ${rxParams}templateStack []int, elEnded bool, tagAngle, laEnd, specUntil int, ${raw ? 'tagAt []int, ' : ''}acc *[]Tok, limit int) (int, bool, ${rxRet}[]int, bool, int, int, int${raw ? ', []int' : ''}) {
+\tn := len(src)
+${prevIsValue}${p.tplSpanFn}${specState}${emitFn}\tbase := len(*acc)
+${body}\treturn pos, pendingNl, ${rxNames}templateStack, elEnded, tagAngle, laEnd, specUntil${raw ? ', tagAt' : ''}
+}
+func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+// lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
+// likewise the stacks in stk.
+func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
+\tout := buf[:0]
+\t_, _, ${rxBlank}stk.templateStack, _, _, _, _${raw ? ', _' : ''} = lexFrom(src, 0, false, ${rxInit}stk.templateStack[:0], false, 0, 0, 0, ${raw ? 'nil, ' : ''}&out, 0)
+\treturn out
+}`;
+}
+
 function renderLexByteDispatchGo(codes: string[], firsts: (LexFirstBytes | null)[], indent: string, heads: Map<number, string> = new Map()): string {
   const { arms, fallbackIndices } = buildLexDispatchPlan(firsts);
   const fallback = fallbackIndices.map((i) => codes[i]).join('\n');
@@ -482,7 +658,8 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const tplOnly = !!(tpl && !rx && !nl);
   const rxTpl = !!(rx && tpl && !nl);
   const rxOrTpl = !!(rx || tpl) && !rxOnly && !tplOnly && !rxTpl;
-  const stateful = !!(rx || tpl);
+  const el = ir.elements;
+  const stateful = !!(rx || tpl || el);
   const newlineOnly = !!(nl && !rx && !tpl);
   const pushPunct = stateful
     ? (p: string) => `emit(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)})`
@@ -710,10 +887,11 @@ ${uniIdentFallbackGo}${loopPanicGo}`;
   const idTables = renderIdTablesGo(ids);
   // The lexer's bracket-head and template-depth stacks, bounded by nesting depth: lexInto reuses
   // the capacity of the ones in stk (a reused builder's) and leaves them there.
-  const stkFields = [rx ? '\tparenHead []bool\n' : '', tpl ? '\ttemplateStack []int\n' : ''].join('');
+  const stkFields = [rx ? '\tparenHead []bool\n' : '', tpl || el ? '\ttemplateStack []int\n' : ''].join('');
   const lexStacks = `// lexStacks are the lexer's transient stacks, kept across lexes by a reused builder.
 type lexStacks struct {${stkFields ? `\n${stkFields}` : ''}}
 `;
+  if (el) return elementLexerGo(ir, ids, shared, { head: `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}`, scans, rxStateFrom, tplSpanFn, nlWs, lexCodes, lexFirsts, tplCloseTest, tplOpenTest, uniIdentFallbackGo, loopPanicGo, goBoolArr });
   if (rxOnly) {
     return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool) {
 \tn := len(src)
@@ -877,11 +1055,14 @@ function engineMarkGo(recv: string): string {
   return `// mark: where a construct that may have to undo what it tries starts; ${recv === 'engine' ? 'reset undoes everything since (the position as back does, the scratch list and the arena).' : 'undoGoW undoes everything since.'}
 ${recv === 'engine'
   ? `func (p *engine) mark() mark { return mark{p.pos, len(p.scratch), len(p.nodes), len(p.kids)} }
-func (p *engine) reset(m mark) { p.back(m.pos); p.scratch = p.scratch[:m.sb]; p.nodes = p.nodes[:m.nb]; p.kids = p.kids[:m.kb] }`
+func (p *engine) reset(m mark) { p.back(m.pos); p.scratch = p.scratch[:m.sb]; p.nodes = p.nodes[:m.nb]; p.kids = p.kids[:m.kb] }
+// nudNone: a NUD that matched nothing, from its commit switch: the state its frame leaves then.
+func (p *engine) nudNone() int32 { p.capped = false; p.form = 0; p.tail = false; return -1 }`
   // Written so that it fits Go's inlining budget (cost 77 of 80). A reset method around the
   // builder's Restore cannot (cost 86 and more with every form tried), and a call where the undo
   // was inline would be added work on every failed branch, so the undo stays printed in place.
-  : `func (p *${recv}) mark() (m mark) { m.nb, m.kb = p.b.Checkpoint(); m.pos, m.sb = p.pos, len(p.scratch); return }`}`;
+  : `func (p *${recv}) mark() (m mark) { m.nb, m.kb = p.b.Checkpoint(); m.pos, m.sb = p.pos, len(p.scratch); return }
+func (p *${recv}) nudNone() (spanned, bool) { p.capped = false; p.form = 0; p.tail = false; return spanned{}, false }`}`;
 }
 // '>'-led composite operators (LexIdPlan.gtComps): the lexer scans every '>' alone. gtOp reads the
 // operator at ts[i]: a lone '>' extends over each adjacent single-character punct token after it
@@ -951,7 +1132,7 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
     cand: (d, i, cond) => candGo(d, i, cond, `best = ${fin}; bestPos = p.pos;${markGo(d, i)} nb = len(p.nodes); kb = len(p.kids)`, lostGo),
     closeBest: '\tp.pos = bestPos\n\treturn best',
     commitPeek: '\t_ft := p.peek()',
-    commit: (_i, conds, cond, undo, nullable) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch);${undo ? ' nb := len(p.nodes); kb := len(p.kids);' : ''} if ${cond}${nullable ? ' && p.pos > save' : ''} { return ${fin} };${undo ? ` p.back(save); ${lostGo}` : ''} }`, 'return -1'),
+    commit: (_i, conds, cond, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, (sb, save) => `p.finish(${ruleIdOf(ar, r.name)}, ${sb}, p.offAt(${save}), ${save})`, (n) => `return ${n}`), 'return -1'),
     commitFail: '{ return -1 }',
   });
 }
@@ -1099,13 +1280,13 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   const lost = lostGo;
   const fin = `p.finish(${rid}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart))`;
   const B = goPrattBase(r, (ws) => `!_inW(${ws}, p.headLeafText(left))`);
-  const fail = '{ p.capped = false; p.form = 0; p.tail = false; return -1 }';
+  const fail = '{ return p.nudNone() }';
   const L: PrattLowering = {
     ...B,
     // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node, form,
     // tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (_i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; n := p.finish(${rid}, sb, int(t.Off), save); p.form = 0; p.tail = false; return n }`, fail, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch);${undo ? ' nb := len(p.nodes); kb := len(p.kids);' : ''} if ${cond}${nullable ? ' && p.pos > save' : ''} { n := p.finish(${rid}, sb, p.offAt(save), save); p.form = 0; p.tail = ${tail}; p.capped = ${capped}; return n };${undo ? ` p.back(save); ${lost}` : ''} }`, fail),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, (sb, save) => `p.finish(${rid}, ${sb}, p.offAt(${save}), ${save})`, (n) => `n := ${n}; p.form = 0; p.tail = ${tail}; p.capped = ${capped}; return n`), fail),
     commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \t\tp.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
@@ -1253,6 +1434,7 @@ function docEditBlockGo(ir: ParserIR, shared: SharedAlgorithms): string {
   const shapeB = topReuse?.kind === 'B';
   const hasHeadB = !!(shapeB && topReuse.kind === 'B' && topReuse.hasHead);
   const relexFamily = `\n// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.relexFamily(ir)}\n`;
+  const reuseFamily = `\n// ---- reuse family: generated from src/reuse-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.reuseFamily(ir)}\n`;
   const editBody = goEditBody('\t\td.root = -1', true);
   const parseFresh = `\td.root = p.parse(d.text, toksFromMeta(d.text, d.toks))`;
   const reuseFns = topReuse ? `
@@ -1292,13 +1474,6 @@ func (p *engine) shiftSubtree(id int32, byteDelta, tokDelta int) {
 		}
 	}
 }
-func shiftEntryMeta(m *EntryMeta, byteDelta, tokDelta int) {
-	m.TokStart += tokDelta
-	m.TokEnd += tokDelta
-	m.Ext += tokDelta
-	m.Off += byteDelta
-	m.End += byteDelta
-}
 ${shapeA ? `func (p *engine) assertEntriesVsNodes(oldEntries []EntryMeta, oldRoot int32) {
 	old := p.nodes[oldRoot]
 	if len(oldEntries) != int(old.KidCount) {
@@ -1319,22 +1494,11 @@ func (p *engine) tryReuseTop(oldRoot int32, oldEntries []EntryMeta, newText stri
 	old := p.nodes[oldRoot]
 	oldKids := make([]int32, old.KidCount)
 	for i := uint32(0); i < old.KidCount; i++ { oldKids[i] = p.kids[old.KidStart+i] }
-	prefixLen := 0
-	for prefixLen < len(oldEntries) {
-		if oldEntries[prefixLen].Ext <= prefix { prefixLen++ } else { break }
-	}
-	suffixStart := len(oldEntries)
-	for i := len(oldEntries) - 1; i >= prefixLen; i-- {
-		if oldEntries[i].TokStart >= oldN-suffix { suffixStart = i } else { break }
-	}
+	prefixLen, suffixStart := reuseBounds(oldEntries, prefix, oldN, suffix)
 	prefixKids := oldKids[:prefixLen]
 	suffixCand := oldKids[suffixStart:]
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
-	// minRel: the tokens from the last suffix entry's start to the old end (entries ascend, so the
-	// fewest of any entry): with fewer tokens left than that, no entry can be adopted.
-	minRel := -1
-	if len(suffixMeta) > 0 { minRel = oldN - suffixMeta[len(suffixMeta)-1].TokStart }
 	p.src = newText
 	p.toks = toksFromMeta(newText, newMeta)
 	if prefixLen > 0 { p.pos = prefixMeta[prefixLen-1].TokEnd } else { p.pos = 0 }
@@ -1353,21 +1517,8 @@ func (p *engine) tryReuseTop(oldRoot int32, oldEntries []EntryMeta, newText stri
 		children = append(children, prefixKids...)
 		children = append(children, mid...)
 		children = append(children, adopted...)
-		adoptedMeta := append([]EntryMeta(nil), suffixMeta[adoptFrom:]...)
-		newEntries := make([]EntryMeta, 0, len(prefixMeta)+len(midMeta)+len(adoptedMeta))
-		newEntries = append(newEntries, prefixMeta...)
-		newEntries = append(newEntries, midMeta...)
-		for i := range adoptedMeta {
-			shiftEntryMeta(&adoptedMeta[i], byteDelta, tokDelta)
-			newEntries = append(newEntries, adoptedMeta[i])
-		}
-		off, end, tokStart, tokEnd := 0, 0, 0, 0
-		if len(newEntries) > 0 {
-			off = newEntries[0].Off
-			end = newEntries[len(newEntries)-1].End
-			tokStart = newEntries[0].TokStart
-			tokEnd = newEntries[len(newEntries)-1].TokEnd
-		}
+		newEntries := reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta)
+		off, end, tokStart, tokEnd := reuseSpan(newEntries)
 		kidStart := len(p.kids)
 		p.kids = append(p.kids, children...)
 		p.nodes = append(p.nodes, Node{RuleId: old.RuleId, KidStart: uint32(kidStart), KidCount: uint32(len(children)), Offset: uint32(off), End: uint32(end), TokStart: uint32(tokStart), TokEnd: uint32(tokEnd)})
@@ -1376,22 +1527,14 @@ func (p *engine) tryReuseTop(oldRoot int32, oldEntries []EntryMeta, newText stri
 		return int32(len(p.nodes) - 1), len(prefixKids) + len(adopted)
 	}
 	tryHit := func() (int32, int, bool) {
-		if len(p.toks)-p.pos > suffix { return -1, 0, false }
-		if len(suffixCand) == 0 {
-			if p.pos == len(p.toks) { r, n := finishHit(0); return r, n, true }
-			return -1, 0, false
-		}
-		for i := range suffixMeta {
-			if oldN-suffixMeta[i].TokStart == len(p.toks)-p.pos { r, n := finishHit(i); return r, n, true }
-		}
+		if at := reuseAdoptAt(suffixMeta, oldN, suffix, len(p.toks)-p.pos); at >= 0 { r, n := finishHit(at); return r, n, true }
 		return -1, 0, false
 	}
-	passed := func() bool { return len(suffixCand) > 0 && minRel >= 0 && len(p.toks)-p.pos < minRel }
+	passed := func() bool { return reuseGaveUp(suffixMeta, oldN, len(p.toks)-p.pos) }
 	if r, n, ok := tryHit(); ok { return r, n }
 	if passed() { return -1, 0 }
 	for {
 		if p.pos >= len(p.toks) {
-			if len(suffixCand) == 0 && p.pos == len(p.toks) { return finishHit(0) }
 			if r, n, ok := tryHit(); ok { return r, n }
 			return -1, 0
 		}
@@ -1434,14 +1577,7 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMet
 	if oldRoot < 0 || len(oldSegs) == 0 { return -1, 0 }
 	if validate { p.assertEntriesVsSegs(oldEntries, oldSegs, oldRoot) }
 	old := p.nodes[oldRoot]
-	prefixLen := 0
-	for prefixLen < len(oldEntries) {
-		if oldEntries[prefixLen].Ext <= prefix { prefixLen++ } else { break }
-	}
-	suffixStart := len(oldEntries)
-	for i := len(oldEntries) - 1; i >= prefixLen; i-- {
-		if oldEntries[i].TokStart >= oldN-suffix { suffixStart = i } else { break }
-	}
+	prefixLen, suffixStart := reuseBounds(oldEntries, prefix, oldN, suffix)
 	prefixSegs := oldSegs[:prefixLen]
 	suffixCand := oldSegs[suffixStart:]
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
@@ -1450,10 +1586,6 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMet
 	for _, s := range prefixSegs {
 		for i := 0; i < s.KidCount; i++ { prefixKids = append(prefixKids, p.kids[old.KidStart+uint32(s.KidStart+i)]) }
 	}
-	// minRel: the tokens from the last suffix entry's start to the old end (entries ascend, so the
-	// fewest of any entry): with fewer tokens left than that, no entry can be adopted.
-	minRel := -1
-	if len(suffixMeta) > 0 { minRel = oldN - suffixMeta[len(suffixMeta)-1].TokStart }
 	p.src = newText
 	p.toks = toksFromMeta(newText, newMeta)
 	if prefixLen > 0 { p.pos = prefixMeta[prefixLen-1].TokEnd } else { p.pos = 0 }
@@ -1485,39 +1617,8 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMet
 		children = append(children, prefixKids...)
 		children = append(children, midKids...)
 		children = append(children, adoptedKids...)
-		newSegs := make([]Seg, 0, len(prefixSegs)+len(midSegs)+len(adoptedSegs))
-		newEntries := make([]EntryMeta, 0, len(prefixMeta)+len(midMeta)+len(suffixMeta)-adoptFrom)
-		kOff := 0
-		for i, s := range prefixSegs {
-			em := prefixMeta[i]
-			em.KidStart = kOff
-			newSegs = append(newSegs, Seg{kOff, s.KidCount, s.TokStart, s.TokEnd, s.Ext})
-			newEntries = append(newEntries, em)
-			kOff += s.KidCount
-		}
-		for i, s := range midSegs {
-			em := midMeta[i]
-			em.KidStart = kOff
-			newSegs = append(newSegs, Seg{kOff, s.KidCount, s.TokStart, s.TokEnd, s.Ext})
-			newEntries = append(newEntries, em)
-			kOff += s.KidCount
-		}
-		adoptedMeta := append([]EntryMeta(nil), suffixMeta[adoptFrom:]...)
-		for i, s := range adoptedSegs {
-			em := adoptedMeta[i]
-			shiftEntryMeta(&em, byteDelta, tokDelta)
-			em.KidStart = kOff
-			newSegs = append(newSegs, Seg{kOff, s.KidCount, s.TokStart + tokDelta, s.TokEnd + tokDelta, s.Ext + tokDelta})
-			newEntries = append(newEntries, em)
-			kOff += s.KidCount
-		}
-		off, end, tokStart, tokEnd := 0, 0, 0, 0
-		if len(newEntries) > 0 {
-			off = newEntries[0].Off
-			end = newEntries[len(newEntries)-1].End
-			tokStart = newEntries[0].TokStart
-			tokEnd = newEntries[len(newEntries)-1].TokEnd
-		}
+		newSegs, newEntries := reuseSegEntries(prefixSegs, prefixMeta, midSegs, midMeta, suffixCand, suffixMeta, adoptFrom, byteDelta, tokDelta)
+		off, end, tokStart, tokEnd := reuseSpan(newEntries)
 		kidStart := len(p.kids)
 		p.kids = append(p.kids, children...)
 		p.nodes = append(p.nodes, Node{RuleId: old.RuleId, KidStart: uint32(kidStart), KidCount: uint32(len(children)), Offset: uint32(off), End: uint32(end), TokStart: uint32(tokStart), TokEnd: uint32(tokEnd)})
@@ -1527,17 +1628,10 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMet
 		return int32(len(p.nodes) - 1), len(prefixSegs) + len(adoptedSegs)
 	}
 	tryHit := func() (int32, int, bool) {
-		if len(p.toks)-p.pos > suffix { return -1, 0, false }
-		if len(suffixCand) == 0 {
-			if p.pos == len(p.toks) { r, n := finishHit(0); return r, n, true }
-			return -1, 0, false
-		}
-		for i := range suffixMeta {
-			if oldN-suffixMeta[i].TokStart == len(p.toks)-p.pos { r, n := finishHit(i); return r, n, true }
-		}
+		if at := reuseAdoptAt(suffixMeta, oldN, suffix, len(p.toks)-p.pos); at >= 0 { r, n := finishHit(at); return r, n, true }
 		return -1, 0, false
 	}
-	passed := func() bool { return len(suffixCand) > 0 && minRel >= 0 && len(p.toks)-p.pos < minRel }
+	passed := func() bool { return reuseGaveUp(suffixMeta, oldN, len(p.toks)-p.pos) }
 	if r, n, ok := tryHit(); ok { return r, n }
 	if passed() { return -1, 0 }
 	${hasHeadB ? `if prefixLen == 0 {
@@ -1555,14 +1649,12 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMet
 	}
 	` : ''}for {
 		if p.pos >= len(p.toks) {
-			if len(suffixCand) == 0 && p.pos == len(p.toks) { return finishHit(0) }
 			if r, n, ok := tryHit(); ok { return r, n }
 			return -1, 0
 		}
 		sb := len(p.scratch)
 		seg, m, ok := p.parseLoopSeg(sb)
 		if !ok {
-			if len(suffixCand) == 0 && p.pos == len(p.toks) { return finishHit(0) }
 			if r, n, hit := tryHit(); hit { return r, n }
 			return -1, 0
 		}
@@ -1665,30 +1757,12 @@ type Align struct {
 	StreamEq *bool \`json:"streamEq,omitempty"\`
 	TreeEq   *bool \`json:"treeEq,omitempty"\`
 }
-${relexFamily}
-func computeAlignCore(oldText string, oldToks []alignMeta, newText string, newToks []alignMeta) (oldN, newN, prefix, suffix int) {
-	oldN, newN = len(oldToks), len(newToks)
-	for prefix < oldN && prefix < newN {
-		o, n := oldToks[prefix], newToks[prefix]
-		if o.Kid != n.Kid || o.Off != n.Off || o.End != n.End || amNl(o) != amNl(n) { break }
-		if amText(oldText, o) != amText(newText, n) { break }
-		prefix++
-	}
-	delta := len(newText) - len(oldText)
-	minN := oldN; if newN < minN { minN = newN }
-	for prefix+suffix < minN {
-		o, n := oldToks[oldN-1-suffix], newToks[newN-1-suffix]
-		if o.Kid != n.Kid || amNl(o) != amNl(n) || n.Off != o.Off+int32(delta) || n.End != o.End+int32(delta) { break }
-		if amText(oldText, o) != amText(newText, n) { break }
-		suffix++
-	}
-	return
-}
+${relexFamily}${reuseFamily}
 func toksFromMeta(text string, meta []alignMeta) []Tok {
 	t := make([]Tok, len(meta))
 	for i, m := range meta {
 		tx := amText(text, m)
-		t[i] = mkTok(int(m.Off), int(m.End), amNl(m), m.Kid, lidOf(tx))
+		t[i] = mkTok(int(m.Off), int(m.End), amNl(m), m.Kid, ${regionKids(ir, buildLexIdPlan(ir)).length ? `func() uint16 { if ${regionKids(ir, buildLexIdPlan(ir)).map((k) => `m.Kid == ${k}`).join(' || ')} { return 0 }; return lidOf(tx) }()` : 'lidOf(tx)'})
 	}
 	return t
 }
@@ -1770,7 +1844,7 @@ function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
     cand: (d, i, cond) => candGo(d, i, cond, `best = ${fin}; found = true; bestPos = p.pos;${markGo(d, i)} ${arenaMark()}`, lostGoW(recv)),
     closeBest: '\tp.pos = bestPos\n\treturn best, found',
     commitPeek: '\t_ft := p.peek()',
-    commit: (_i, conds, cond, undo, nullable) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch);${undo ? ` ${arenaCkpt()};` : ''} if ${cond}${nullable ? ' && p.pos > save' : ''} { return ${fin}, true };${undo ? ` p.back(save); ${lostGoW(recv)}` : ''} }`, 'return spanned{}, false'),
+    commit: (_i, conds, cond, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? undoGoWc(recv) : null, nullable, (sb, save) => `p.finishW(${ruleIdOf(ar, r.name)}, ${sb}, p.offAt(${save}), ${save})`, (n) => `return ${n}, true`), 'return spanned{}, false'),
     commitFail: '{ return spanned{}, false }',
   });
 }
@@ -1871,11 +1945,11 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
   const lost = lostGoW(recv);
   const fin = `p.finishW(${rid}, sb, int(left.off), int(left.tokStart))`;
   const B = goPrattBase(r, (ws) => `!p.nllBlockedW(${ws}, left)`);
-  const fail = '{ p.capped = false; p.form = 0; p.tail = false; return spanned{}, false }';
+  const fail = '{ return p.nudNone() }';
   const L: PrattLowering = {
     ...B,
     commitLeaf: (_i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; n := p.finishW(${rid}, sb, int(t.Off), save); p.form = 0; p.tail = false; return n, true }`, fail, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch);${undo ? ` ${arenaCkpt()};` : ''} if ${cond}${nullable ? ' && p.pos > save' : ''} { n := p.finishW(${rid}, sb, p.offAt(save), save); p.form = 0; p.tail = ${tail}; p.capped = ${capped}; return n, true };${undo ? ` p.back(save); ${lost}` : ''} }`, fail),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? undoGoWc(recv) : null, nullable, (sb, save) => `p.finishW(${rid}, ${sb}, p.offAt(${save}), ${save})`, (n) => `n := ${n}; p.form = 0; p.tail = ${tail}; p.capped = ${capped}; return n, true`), fail),
     commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
@@ -2214,30 +2288,11 @@ ${topReuse
   const tryReuseTopW = shapeA
     ? `
 func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, newText string, newMeta []alignMeta, byteDelta, oldN, prefix, suffix int) (root int32, newEntries []EntryMeta, newHs []int32, reused int, ok bool) {
-	prefixLen := 0
-	for prefixLen < len(oldEntries) {
-		if oldEntries[prefixLen].Ext <= prefix {
-			prefixLen++
-		} else {
-			break
-		}
-	}
-	suffixStart := len(oldEntries)
-	for i := len(oldEntries) - 1; i >= prefixLen; i-- {
-		if oldEntries[i].TokStart >= oldN-suffix {
-			suffixStart = i
-		} else {
-			break
-		}
-	}
+	prefixLen, suffixStart := reuseBounds(oldEntries, prefix, oldN, suffix)
 	prefixKids := append([]int32(nil), oldHs[:prefixLen]...)
 	suffixCand := append([]int32(nil), oldHs[suffixStart:]...)
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
-	// minRel: the tokens from the last suffix entry's start to the old end (entries ascend, so the
-	// fewest of any entry): with fewer tokens left than that, no entry can be adopted.
-	minRel := -1
-	if len(suffixMeta) > 0 { minRel = oldN - suffixMeta[len(suffixMeta)-1].TokStart }
 	p := &parserW{cursor: cursor{toks: toksFromMeta(newText, newMeta)}, src: newText, b: b, drops: dropsOf(b), scratch: nil}
 	if prefixLen > 0 {
 		p.pos = prefixMeta[prefixLen-1].TokEnd
@@ -2260,21 +2315,8 @@ func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, 
 		children = append(children, prefixKids...)
 		children = append(children, mid...)
 		children = append(children, adopted...)
-		adoptedMeta := append([]EntryMeta(nil), suffixMeta[adoptFrom:]...)
-		outE := make([]EntryMeta, 0, len(prefixMeta)+len(midMeta)+len(adoptedMeta))
-		outE = append(outE, prefixMeta...)
-		outE = append(outE, midMeta...)
-		for i := range adoptedMeta {
-			shiftEntryMeta(&adoptedMeta[i], byteDelta, tokDelta)
-			outE = append(outE, adoptedMeta[i])
-		}
-		off, end, tokStart, tokEnd := 0, 0, 0, 0
-		if len(outE) > 0 {
-			off = outE[0].Off
-			end = outE[len(outE)-1].End
-			tokStart = outE[0].TokStart
-			tokEnd = outE[len(outE)-1].TokEnd
-		}
+		outE := reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta)
+		off, end, tokStart, tokEnd := reuseSpan(outE)
 		scratch := append([]int32(nil), children...)
 		b.Node(&scratch, 0, ${entryRid}, uint32(off), uint32(end), uint32(tokStart), uint32(tokEnd))
 		if len(scratch) != 1 {
@@ -2284,33 +2326,19 @@ func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, 
 		return scratch[0], outE, children, len(prefixKids) + len(adopted), true
 	}
 	tryHit := func() (int32, []EntryMeta, []int32, int, bool) {
-		if len(p.toks)-p.pos > suffix {
-			return 0, nil, nil, 0, false
-		}
-		if len(suffixCand) == 0 {
-			if p.pos == len(p.toks) {
-				return finishHit(0)
-			}
-			return 0, nil, nil, 0, false
-		}
-		for i := range suffixMeta {
-			if oldN-suffixMeta[i].TokStart == len(p.toks)-p.pos {
-				return finishHit(i)
-			}
+		if at := reuseAdoptAt(suffixMeta, oldN, suffix, len(p.toks)-p.pos); at >= 0 {
+			return finishHit(at)
 		}
 		return 0, nil, nil, 0, false
 	}
 	if r, e, hs, n, hit := tryHit(); hit {
 		return r, e, hs, n, true
 	}
-	if len(suffixCand) > 0 && minRel >= 0 && len(p.toks)-p.pos < minRel {
+	if reuseGaveUp(suffixMeta, oldN, len(p.toks)-p.pos) {
 		return 0, nil, nil, 0, false
 	}
 	for {
 		if p.pos >= len(p.toks) {
-			if len(suffixCand) == 0 && p.pos == len(p.toks) {
-				return finishHit(0)
-			}
 			if r, e, hs, n, hit := tryHit(); hit {
 				return r, e, hs, n, true
 			}
@@ -2338,7 +2366,7 @@ func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, 
 		if r, e, hs, n, hit := tryHit(); hit {
 			return r, e, hs, n, true
 		}
-		if len(suffixCand) > 0 && minRel >= 0 && len(p.toks)-p.pos < minRel {
+		if reuseGaveUp(suffixMeta, oldN, len(p.toks)-p.pos) {
 			return 0, nil, nil, 0, false
 		}
 	}
@@ -2352,22 +2380,7 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 	if len(oldSegs) == 0 {
 		return 0, nil, nil, nil, 0, false
 	}
-	prefixLen := 0
-	for prefixLen < len(oldEntries) {
-		if oldEntries[prefixLen].Ext <= prefix {
-			prefixLen++
-		} else {
-			break
-		}
-	}
-	suffixStart := len(oldEntries)
-	for i := len(oldEntries) - 1; i >= prefixLen; i-- {
-		if oldEntries[i].TokStart >= oldN-suffix {
-			suffixStart = i
-		} else {
-			break
-		}
-	}
+	prefixLen, suffixStart := reuseBounds(oldEntries, prefix, oldN, suffix)
 	prefixSegs := append([]Seg(nil), oldSegs[:prefixLen]...)
 	suffixCand := append([]Seg(nil), oldSegs[suffixStart:]...)
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
@@ -2378,10 +2391,6 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 			prefixKids = append(prefixKids, oldRootHs[s.KidStart+i])
 		}
 	}
-	// minRel: the tokens from the last suffix entry's start to the old end (entries ascend, so the
-	// fewest of any entry): with fewer tokens left than that, no entry can be adopted.
-	minRel := -1
-	if len(suffixMeta) > 0 { minRel = oldN - suffixMeta[len(suffixMeta)-1].TokStart }
 	p := &parserW{cursor: cursor{toks: toksFromMeta(newText, newMeta)}, src: newText, b: b, drops: dropsOf(b), scratch: nil}
 	if prefixLen > 0 {
 		p.pos = prefixMeta[prefixLen-1].TokEnd
@@ -2408,39 +2417,8 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 		children = append(children, prefixKids...)
 		children = append(children, midKids...)
 		children = append(children, adoptedKids...)
-		outSegs := make([]Seg, 0, len(prefixSegs)+len(midSegs)+len(adoptedSegs))
-		outE := make([]EntryMeta, 0, len(prefixMeta)+len(midMeta)+len(suffixMeta)-adoptFrom)
-		kOff := 0
-		for i, s := range prefixSegs {
-			em := prefixMeta[i]
-			em.KidStart = kOff
-			outSegs = append(outSegs, Seg{kOff, s.KidCount, s.TokStart, s.TokEnd, s.Ext})
-			outE = append(outE, em)
-			kOff += s.KidCount
-		}
-		for i, s := range midSegs {
-			em := midMeta[i]
-			em.KidStart = kOff
-			outSegs = append(outSegs, Seg{kOff, s.KidCount, s.TokStart, s.TokEnd, s.Ext})
-			outE = append(outE, em)
-			kOff += s.KidCount
-		}
-		adoptedMeta := append([]EntryMeta(nil), suffixMeta[adoptFrom:]...)
-		for i, s := range adoptedSegs {
-			em := adoptedMeta[i]
-			shiftEntryMeta(&em, byteDelta, tokDelta)
-			em.KidStart = kOff
-			outSegs = append(outSegs, Seg{kOff, s.KidCount, s.TokStart + tokDelta, s.TokEnd + tokDelta, s.Ext + tokDelta})
-			outE = append(outE, em)
-			kOff += s.KidCount
-		}
-		off, end, tokStart, tokEnd := 0, 0, 0, 0
-		if len(outE) > 0 {
-			off = outE[0].Off
-			end = outE[len(outE)-1].End
-			tokStart = outE[0].TokStart
-			tokEnd = outE[len(outE)-1].TokEnd
-		}
+		outSegs, outE := reuseSegEntries(prefixSegs, prefixMeta, midSegs, midMeta, suffixCand, suffixMeta, adoptFrom, byteDelta, tokDelta)
+		off, end, tokStart, tokEnd := reuseSpan(outE)
 		scratch := append([]int32(nil), children...)
 		b.Node(&scratch, 0, ${entryRid}, uint32(off), uint32(end), uint32(tokStart), uint32(tokEnd))
 		if len(scratch) != 1 {
@@ -2450,26 +2428,15 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 		return scratch[0], outSegs, outE, children, len(prefixSegs) + len(adoptedSegs), true
 	}
 	tryHit := func() (int32, []Seg, []EntryMeta, []int32, int, bool) {
-		if len(p.toks)-p.pos > suffix {
-			return 0, nil, nil, nil, 0, false
-		}
-		if len(suffixCand) == 0 {
-			if p.pos == len(p.toks) {
-				return finishHit(0)
-			}
-			return 0, nil, nil, nil, 0, false
-		}
-		for i := range suffixMeta {
-			if oldN-suffixMeta[i].TokStart == len(p.toks)-p.pos {
-				return finishHit(i)
-			}
+		if at := reuseAdoptAt(suffixMeta, oldN, suffix, len(p.toks)-p.pos); at >= 0 {
+			return finishHit(at)
 		}
 		return 0, nil, nil, nil, 0, false
 	}
 	if r, sg, e, hs, n, hit := tryHit(); hit {
 		return r, sg, e, hs, n, true
 	}
-	if len(suffixCand) > 0 && minRel >= 0 && len(p.toks)-p.pos < minRel {
+	if reuseGaveUp(suffixMeta, oldN, len(p.toks)-p.pos) {
 		return 0, nil, nil, nil, 0, false
 	}
 	${hasHeadB
@@ -2486,7 +2453,7 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 			if r, sg, e, hs, n, hit := tryHit(); hit {
 				return r, sg, e, hs, n, true
 			}
-			if len(suffixCand) > 0 && minRel >= 0 && len(p.toks)-p.pos < minRel {
+			if reuseGaveUp(suffixMeta, oldN, len(p.toks)-p.pos) {
 				return 0, nil, nil, nil, 0, false
 			}
 		}
@@ -2494,9 +2461,6 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 `
     : ''}for {
 		if p.pos >= len(p.toks) {
-			if len(suffixCand) == 0 && p.pos == len(p.toks) {
-				return finishHit(0)
-			}
 			if r, sg, e, hs, n, hit := tryHit(); hit {
 				return r, sg, e, hs, n, true
 			}
@@ -2505,9 +2469,6 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 		sb := len(p.scratch)
 		m, pok := p.parseLoopSegW(sb)
 		if !pok {
-			if len(suffixCand) == 0 && p.pos == len(p.toks) {
-				return finishHit(0)
-			}
 			if r, sg, e, hs, n, hit := tryHit(); hit {
 				return r, sg, e, hs, n, true
 			}
@@ -2522,7 +2483,7 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 		if r, sg, e, hs, n, hit := tryHit(); hit {
 			return r, sg, e, hs, n, true
 		}
-		if len(suffixCand) > 0 && minRel >= 0 && len(p.toks)-p.pos < minRel {
+		if reuseGaveUp(suffixMeta, oldN, len(p.toks)-p.pos) {
 			return 0, nil, nil, nil, 0, false
 		}
 	}
@@ -3070,7 +3031,7 @@ func SlimJSONWith(b *SlimBuilder, root int32) string {
 }
 
 const GO_TYPES: Record<Ty, string> = {
-  int: 'int', lid: 'uint16', depth: 'int', bool: 'bool', str: 'string', meta: 'alignMeta', tok: 'Tok', edit: 'Edit',
+  int: 'int', lid: 'uint16', depth: 'int', pos: 'int', idx: 'int', bool: 'bool', str: 'string', meta: 'alignMeta', tok: 'Tok', edit: 'Edit',
   metas: '[]alignMeta', toks: '[]Tok', bools: '[]bool', depths: '[]int', edits: '[]Edit',
 };
 const GO_META: Record<MetaInt, string> = { off: 'int32', end: 'int32', kid: 'uint16', pd: 'uint16', fd: 'uint16', td: 'uint8' };
@@ -3087,11 +3048,14 @@ const goBlock = (lines: string[]): string[] => lines.map((l) => GO_IND + l);
 
 // Shared-algorithm lowering: explicit conversions, slices; a list with an exact final length is
 // made with that capacity, any other list grows by append (no estimate is reserved: 6183a29).
+const goType = (t: Ty): string => (isRecList(t) ? `[]${recName(t)}` : isRec(t) ? recName(t) : GO_TYPES[t]);
+// A Go string literal; Go rejects a byte order mark inside a source file, so it is an escape.
+const goLit = (v: string): string => JSON.stringify(v).replace(/\ufeff/g, '\\uFEFF');
 const goLowering: Lowering = {
   units: UNITS,
   ident: (n) => n,
-  num: { int: 'int', lid: 'uint16', depth: 'int' },
-  type: (t) => GO_TYPES[t],
+  num: { int: 'int', lid: 'uint16', depth: 'int', pos: 'int', idx: 'int' },
+  type: (t) => goType(t),
   cast: (_cx, r, nat) => ({ ...r, c: `${nat}(${r.c})`, nat, prec: ATOM }),
   owns: false,
   spliceInline: true,
@@ -3155,7 +3119,7 @@ ${[...ones, ...wides].join('\n')}
 }`;
   },
   expr: {
-    literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
+    literal: (v) => ({ c: typeof v === 'string' ? goLit(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${goWrap(r, ATOM)}`, prec: 90 }),
     bin: (op, a, b) => {
       const [sp, p] = GO_OPS[op];
@@ -3166,7 +3130,7 @@ ${[...ones, ...wides].join('\n')}
     call: (name, args) => `${name}(${args.join(', ')})`,
     len: (cx, l) => cx.atom(`len(${l.c})`, 'int', 'int'),
     code: (cx, s, i) => cx.atom(`int(${goWrap(s, ATOM)}[${i.c}])`, 'int', 'int'),
-    hasAt: (cx, s, i, lit) => cx.atom(`strings.HasPrefix(${goWrap(s, ATOM)}[${i.c}:], ${JSON.stringify(lit)})`, 'bool', 'bool'),
+    hasAt: (cx, s, i, lit) => cx.atom(`strings.HasPrefix(${goWrap(s, ATOM)}[${i.c}:], ${goLit(lit)})`, 'bool', 'bool'),
     inSet: (cx, set, c) => cx.atom(`${set}[${c.c}]`, 'bool', 'bool'),
     runEnd: (cx, set, s, i) => cx.atom(`lexRunEnd(${s.c}, ${i.c}, &${set})`, 'int', 'int'),
     find: (cx, s, i, lit) => cx.atom(`lexFind(${s.c}, ${i.c}, ${JSON.stringify(lit)})`, 'int', 'int'),
@@ -3190,11 +3154,12 @@ ${[...ones, ...wides].join('\n')}
     },
     while: (c, body) => [`for ${c} {`, ...goBlock(body), '}'],
     break: () => ['break'],
+    run: (call) => call,
     return: (vals) => [`return ${vals.join(', ')}`],
     fn: (f) => [
       ...f.doc.map((l) => `// ${l}`),
       ...(f.cold ? ['//go:noinline'] : []),
-      `func ${f.name}(${f.params.map((p) => `${p.name} ${p.type}`).join(', ')}) ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`} {`,
+      `func ${f.name}(${f.params.map((p) => `${p.name} ${p.type}`).join(', ')}) ${f.rets.length === 0 ? '' : f.rets.length === 1 ? `${f.rets[0]} ` : `(${f.rets.join(', ')}) `}{`,
       ...goBlock(f.body),
       '}',
     ].join('\n'),
@@ -3216,9 +3181,9 @@ ${[...ones, ...wides].join('\n')}
       shiftMeta: (cx, m, d) => cx.atom(`shiftAlign(${m.c}, ${cx.coerce(d, 'int')})`, 'meta', 'meta'),
       metaEq: (_cx, a, b) => ({ c: `${a.c} == ${b.c}`, ty: 'bool', nat: 'bool', prec: GO_OPS.eq[1] }),
       splice: (cx, s, a, b, ins) => ({ c: `${goWrap(s, ATOM)}[:${cx.coerce(a, 'int')}] + ${ins.c} + ${goWrap(s, ATOM)}[${cx.coerce(b, 'int')}:]`, ty: 'str', nat: 'str', prec: GO_OPS.add[1] }),
-      newList: (cx, ty, cap) => cx.atom(cap ? `make(${GO_TYPES[ty]}, 0, ${cx.coerce(cap, 'int')})` : 'nil', ty, ty, { owned: true }),
+      newList: (cx, ty, cap) => cx.atom(cap ? `make(${goType(ty)}, 0, ${cx.coerce(cap, 'int')})` : 'nil', ty, ty, { owned: true }),
       falses: (cx, n) => cx.atom(`make([]bool, ${cx.coerce(n, 'int')})`, 'bools', 'bools', { owned: true }),
-      prefix: (cx, l, n, estimate) => cx.atom(`append(make(${GO_TYPES[l.ty]}, 0, ${cx.coerce(estimate, 'int')}), ${goWrap(l, ATOM)}[:${cx.coerce(n, 'int')}]...)`, l.ty, l.ty, { owned: true }),
+      prefix: (cx, l, n, estimate) => cx.atom(`append(make(${goType(l.ty)}, 0, ${cx.coerce(estimate, 'int')}), ${goWrap(l, ATOM)}[:${cx.coerce(n, 'int')}]...)`, l.ty, l.ty, { owned: true }),
     },
     stmt: {
       setAt: (id, i, val) => [`${id}[${i}] = ${val}`],
@@ -3228,6 +3193,14 @@ ${[...ones, ...wides].join('\n')}
       destructure: (_cx, s) => [`${s.ids.join(', ')} ${s.declare ? ':=' : '='} ${s.call}`],
       lexStep: (_cx, s) => [`${[s.pos, ...s.state].join(', ')} = lexFrom(${s.text.c}, ${s.pos}, ${[...s.state, `&${s.out}`].join(', ')}, 1)`],
     },
+  },
+  record: {
+    field: (cx, r, _rec, f, ty, nat) => cx.atom(`${goWrap(r, ATOM)}.${exported(f)}`, ty, nat),
+    setField: (id, f, val) => [`${id}.${exported(f)} = ${val}`],
+    make: (cx, rec, fs) => cx.atom(`${rec}{${fs.map(([f, v]) => `${exported(f)}: ${v}`).join(', ')}}`, `rec_${rec}`, `rec_${rec}`, { owned: true }),
+    refType: (rec) => `*${rec}`,
+    refArg: (r) => `&${r.c}`,
+    extend: (_cx, l, from) => [`${l} = append(${l}, ${from.c}...)`],
   },
 };
 

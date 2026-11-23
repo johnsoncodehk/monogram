@@ -24,7 +24,8 @@
 // parser must reproduce its CST byte-for-byte.
 
 import type { CstGrammar, RuleExpr, RuleDecl } from './types.ts';
-import { gtComposites, isKeywordLiteral } from './grammar-utils.ts';
+import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
+import { tokenPatternSource } from './token-pattern.ts';
 import { analyzeGrammar, findEntryRule, markupContainerOf, type MarkupContainer, type Sec } from './grammar-analysis.ts';
 import { emitLexer, emitTokenColumns, lexSpecOf } from './emit-lexer.ts';
 import type { Target } from './emit.ts';
@@ -148,11 +149,30 @@ function analyze(grammar: CstGrammar) {
     if (!qualKeys.has(key)) qualKeys.set(key, { tok, except: new Set(sorted) });
     return key;
   }
+  // A qualified key is admitted by text (t=0 plus the keyword texts outside the guard: see
+  // firstSetOnes), which over-admits every other token kind's plain (t=0) members. That is the
+  // price of excluding keyword texts the token class CARRIES (an identifier key under
+  // `not(alt('if', …))`, where `async` / `of` stay admitted). A guard that excludes every
+  // keyword text a token class carries (`not('@new')` before a Decorator: `@new` is the only
+  // keyword-class text a Decorator lexes as) leaves nothing to admit by text: the token's own
+  // kind bit is the tighter sound key (it over-admits only the excluded texts).
+  const keywordTexts = [...new Set(grammar.rules.flatMap((r) => collectLiterals(r.body)))].filter(isKeywordLiteral);
+  const carried = new Map<string, string[]>();
+  function carriedKeywords(tok: string): string[] {
+    let c = carried.get(tok);
+    if (!c) {
+      const decl = grammar.tokens.find((t) => t.name === tok);
+      const re = decl ? new RegExp(`^(?:${tokenPatternSource(decl)})$`) : null;
+      c = re ? keywordTexts.filter((w) => re.test(w)) : keywordTexts;
+      carried.set(tok, c);
+    }
+    return c;
+  }
   // null = the key is guarded out entirely (a keyword literal inside its own not-class).
   function excludeKey(k: string, pending: Set<string>): string | null {
     const q = qualKeys.get(k);
     if (q) return qualKey(q.tok, new Set([...q.except, ...pending]));
-    if (tokenNames.has(k)) return qualKey(k, pending);
+    if (tokenNames.has(k)) return carriedKeywords(k).some((w) => !pending.has(w)) ? qualKey(k, pending) : k;
     if (pending.has(k)) return null;
     return k;
   }
@@ -3794,7 +3814,7 @@ function editCore(entryRule: string | undefined, edits?: Edit[]) {
     let lo = 0, hi = r0;
     while (lo < hi) { const mid = (lo + hi) >> 1; if (toff(mid) < cs) lo = mid + 1; else hi = mid; }
     let m = 0x7fffffff;
-    for (let i = lo; i < r0; i++) if (tkPd[i] < m) m = tkPd[i];
+    for (let i = lo; i < r0; i++) { const q = ${e.statefulLexer ? 'tkPd[i]' : 'lxPdBefore(tkK[i], tkT[i], tkPd[i])'}; if (q < m) m = q; }
     wndOldMin0 = m;
   }
   // Lex the window into the spare buffers (the old stream stays live for resync).

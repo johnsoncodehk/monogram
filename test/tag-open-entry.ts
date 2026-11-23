@@ -16,6 +16,7 @@ import typescript from '../typescript.ts';
 import javascriptreact from '../javascriptreact.ts';
 import typescriptreact from '../typescriptreact.ts';
 import dialect from './fixtures/elementdialect.ts';
+import textDialect from './fixtures/textdialect.ts';
 
 let ok = 0, fail = 0;
 const row = (id: string, got: boolean, want: boolean) => {
@@ -29,6 +30,7 @@ row('typescript: `<` is a relational operator and opens type arguments', tagOpen
 row('javascriptreact: `<` is a relational operator', tagOpenOnlyOpensTags(javascriptreact, javascriptreact.elements!), false);
 row('typescriptreact: `<` is a relational operator and opens type arguments', tagOpenOnlyOpensTags(typescriptreact, typescriptreact.elements!), false);
 row('elementdialect: `<` begins only element arms', tagOpenOnlyOpensTags(dialect, dialect.elements!), true);
+row('textdialect: `<` is also a relational operator', tagOpenOnlyOpensTags(textDialect, textDialect.elements!), false);
 
 // Toys: a minimal element grammar, then one change per clause.
 const Ident = token(seq(oneOf(range('a', 'z')), star(oneOf(range('a', 'z')))), { identifier: true });
