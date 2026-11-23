@@ -224,6 +224,42 @@ const newTargets: { accept: string[]; reject: string[]; tscDeparts: string[] } =
   tscDeparts: ['new super();'],   // tsc parses a `super` call as a `new` callee and leaves it to the checker
 };
 
+// ── Class heritage (15.7 `ClassHeritage : extends LeftHandSideExpression`) ──
+// One `extends`, one LeftHandSideExpression: a NewExpression (a MemberExpression, or `new` without
+// Arguments), a CallExpression or an OptionalExpression. No list, no second `extends`, no empty
+// heritage, no operator expression. acorn agrees with every verdict (checked below); `tscDeparts`
+// names the cases tsc's JS-mode parser takes and leaves to its checker.
+const classHeritage: { accept: string[]; reject: string[]; tscDeparts: string[] } = {
+  accept: [
+    'class A extends B {}', 'class A extends function () {} {}', 'class A extends new B {}', 'class A extends new B() {}',
+    'class A extends [].x {}', 'class A extends {} {}', 'class A extends {}.x {}', 'class A extends {x} {}', 'class A extends this.x {}',
+    'class A extends B.c().d {}', 'class A extends B?.c {}', 'class A extends (B, C) {}', 'class A extends class {} {}',
+    'class A extends f`t` {}', 'class A extends 1 {}', 'x = class extends function () {} {};', 'x = class extends new B {};',
+    'function f() { class A extends new.target {} }', 'class A extends B { m() { class C extends super.x {} } }',
+  ],
+  reject: [
+    'class A extends B, C {}', 'class A extends B extends C {}', 'class A extends {}', 'class A extends {} ', 'class A extends a ? b : c {}',
+    'class A extends async () => {} {}', 'class A extends x = y {}', 'class A extends if {}', 'x = class extends B, C {};',
+    'class A extends !B {}', 'class A extends B++ {}', 'export default class extends B, C {}',
+  ],
+  // tsc reads `{}` before `.` as the class body (isValidHeritageClauseObjectLiteral), so `extends {}.x` has no base there.
+  tscDeparts: ['class A extends {}.x {}', 'class A extends B, C {}', 'class A extends B extends C {}', 'class A extends {}', 'class A extends {} ', 'x = class extends B, C {};', 'export default class extends B, C {}'],
+};
+// TypeScript keeps tsc's parse (heritage is a clause list there: `extends` and `implements`, each a
+// comma list, repeated in any order, the checker judging the rest), with the same elements: any
+// LeftHandSideExpression with optional type arguments; an empty object literal is an element only
+// before `,` / `{` / `extends` / `implements` (tsc's isValidHeritageClauseObjectLiteral), so in
+// `class A extends {}` it is the body. Interfaces read the same clauses. tsc is the oracle here.
+const tsHeritage: { accept: string[]; reject: string[] } = {
+  accept: [
+    'class A extends B, C {}', 'class A extends B extends C {}', 'class A extends {}', 'class A extends {} {}', 'class A extends {}, B {}',
+    'class A extends {} implements I {}', 'class A extends {x} {}', 'class A extends function () {} {}', 'class A extends new B {}',
+    'class A extends [].x {}', 'class A extends B<T> {}', 'class A<T> extends B<T> implements C<T>, D {}', 'class A implements I, J {}',
+    'class A extends B implements I extends C {}', 'interface I extends A, B {}', 'interface I extends {} {}', 'x = class extends {} {};',
+  ],
+  reject: ['class A extends {x}', 'class A extends {}.x {}', 'class A extends a ? b : c {}', 'class A extends async () => {} {}', 'class A extends x = y {}', 'class A extends if {}'],
+};
+
 // ── Class element words (15.7 ClassElement, MethodDefinition; decorators proposal) ──
 // `static`, `async`, `accessor`, `get` and `set` are the element's keyword only where the rest
 // of that production follows; elsewhere the word is the element's name. `static` and `get` /
@@ -355,8 +391,34 @@ for (const [want, codes] of [[true, newTargets.accept], [false, newTargets.rejec
 console.log('\n── new targets ──');
 console.log(`  ${newTargets.accept.length + newTargets.reject.length - n_fail.length}/${newTargets.accept.length + newTargets.reject.length} as the productions (${newTargets.tscDeparts.length} where tsc departs)`);
 for (const c of n_fail) console.log('    - ' + c);
+const h_fail: string[] = [];
+{
+  const acorn = await import('acorn');
+  const acornAccepts = (code: string) => { try { acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module' }); return true; } catch { return false; } };
+  for (const [want, codes] of [[true, classHeritage.accept], [false, classHeritage.reject]] as const) {
+    for (const code of codes) {
+      const tscWant = classHeritage.tscDeparts.includes(code) ? !want : want;
+      if (jsAccepts(code) !== tscWant) h_fail.push(`tsc JS-mode ${tscWant ? 'rejects' : 'accepts'} ${JSON.stringify(code)}: fix the case or tscDeparts`);
+      if (acornAccepts(code) !== want) h_fail.push(`acorn ${want ? 'rejects' : 'accepts'} ${JSON.stringify(code)}: fix the case`);
+      if (weAccept(code) !== want) h_fail.push(`we ${want ? 'reject' : 'accept'} ${JSON.stringify(code)}`);
+    }
+  }
+  const tsParse = createParser((await import('../typescript.ts')).default).parse;
+  const tsWe = (code: string) => { try { tsParse(code); return true; } catch (e) { if (isInputError(e)) return false; throw e; } };
+  const tsAccepts = (code: string) => !((ts.createSourceFile('t.ts', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS) as any).parseDiagnostics?.length);
+  for (const [want, codes] of [[true, tsHeritage.accept], [false, tsHeritage.reject]] as const) {
+    for (const code of codes) {
+      if (tsAccepts(code) !== want) h_fail.push(`tsc ${want ? 'rejects' : 'accepts'} ${JSON.stringify(code)} (TypeScript): fix the case`);
+      if (tsWe(code) !== want) h_fail.push(`we ${want ? 'reject' : 'accept'} ${JSON.stringify(code)} (TypeScript)`);
+    }
+  }
+}
+const hN = classHeritage.accept.length + classHeritage.reject.length + tsHeritage.accept.length + tsHeritage.reject.length;
+console.log('\n── class heritage ──');
+console.log(`  ${hN - h_fail.length}/${hN} as the productions (JavaScript, acorn agreeing; ${classHeritage.tscDeparts.length} where tsc's JS mode departs) and tsc (TypeScript)`);
+for (const c of h_fail) console.log('    - ' + c);
 // Corpora 1, 2, the statement ends, the for heads, the class element words, the declaration
-// lists and the new targets are hard gates.
+// lists, the new targets and the class heritage are hard gates.
 // ── Expected-fail: inputs the productions reject that the grammar accepts today, each with its
 // cause. The gate fails when one of them is rejected (remove it then) or tsc stops rejecting it.
 const expectedFail: { code: string; reason: string }[] = [
@@ -375,5 +437,5 @@ for (const { code, reason } of expectedFail) {
 console.log('\n── expected-fail ──');
 console.log(`  ${expectedFail.length} accepted although the productions reject them (${new Set(expectedFail.map((e) => e.reason)).size} cause(s))${x_fail.length ? '' : ', as recorded'}`);
 for (const c of x_fail) console.log('    - ' + c);
-const gateFailed = v_fail.length + r_leak.length + s_fail.length + f_fail.length + c_fail.length + d_fail.length + n_fail.length + x_fail.length > 0;
+const gateFailed = v_fail.length + r_leak.length + s_fail.length + f_fail.length + c_fail.length + d_fail.length + n_fail.length + h_fail.length + x_fail.length > 0;
 if (gateFailed) process.exit(1);
