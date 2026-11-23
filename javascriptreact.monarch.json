@@ -778,7 +778,624 @@
         }
       ]
     ],
+    "jsx_hole": [
+      [
+        "\\}",
+        {
+          "token": "delimiter.bracket",
+          "next": "@pop"
+        }
+      ],
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "/\\*\\*(?!/)",
+        {
+          "token": "comment",
+          "next": "@comment_slashstarstar"
+        }
+      ],
+      [
+        "///.*$",
+        "comment"
+      ],
+      [
+        "//.*$",
+        "comment"
+      ],
+      [
+        "/\\*",
+        {
+          "token": "comment",
+          "next": "@comment_slashstar"
+        }
+      ],
+      [
+        "\"",
+        {
+          "token": "string",
+          "next": "@string_dquoteN"
+        }
+      ],
+      [
+        "'",
+        {
+          "token": "string",
+          "next": "@string_squoteN"
+        }
+      ],
+      [
+        "`",
+        {
+          "token": "string",
+          "next": "@templateN"
+        }
+      ],
+      [
+        "<",
+        {
+          "token": "delimiter.tag",
+          "next": "@jsx_open"
+        }
+      ],
+      [
+        "\\{",
+        {
+          "token": "delimiter.bracket",
+          "next": "@bracketCounting"
+        }
+      ],
+      {
+        "include": "@interpExprBody"
+      }
+    ],
+    "jsx_str_dquote": [
+      [
+        "[^\"]+",
+        "string"
+      ],
+      [
+        "\"",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "jsx_str_squote": [
+      [
+        "[^']+",
+        "string"
+      ],
+      [
+        "'",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "jsx_open": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "/\\*\\*(?!/)",
+        {
+          "token": "comment",
+          "next": "@comment_slashstarstar"
+        }
+      ],
+      [
+        "///.*$",
+        "comment"
+      ],
+      [
+        "//.*$",
+        "comment"
+      ],
+      [
+        "/\\*",
+        {
+          "token": "comment",
+          "next": "@comment_slashstar"
+        }
+      ],
+      [
+        ">",
+        {
+          "token": "delimiter.tag",
+          "switchTo": "@jsx_children"
+        }
+      ],
+      [
+        "((?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*))(:)",
+        [
+          "tag",
+          "delimiter"
+        ]
+      ],
+      [
+        "(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*\\.)",
+        "identifier"
+      ],
+      [
+        "\\.",
+        "delimiter"
+      ],
+      [
+        "(?=[a-z])(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?:-(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*))*",
+        {
+          "token": "tag",
+          "switchTo": "@jsx_tag"
+        }
+      ],
+      [
+        "(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?:-(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*))*",
+        {
+          "token": "type.identifier",
+          "switchTo": "@jsx_tag"
+        }
+      ],
+      [
+        "",
+        {
+          "token": "",
+          "switchTo": "@jsx_tag"
+        }
+      ]
+    ],
+    "jsx_tag": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "/\\*\\*(?!/)",
+        {
+          "token": "comment",
+          "next": "@comment_slashstarstar"
+        }
+      ],
+      [
+        "///.*$",
+        "comment"
+      ],
+      [
+        "//.*$",
+        "comment"
+      ],
+      [
+        "/\\*",
+        {
+          "token": "comment",
+          "next": "@comment_slashstar"
+        }
+      ],
+      [
+        "=(?=\\s*<)",
+        {
+          "token": "delimiter",
+          "next": "@jsx_eqel"
+        }
+      ],
+      [
+        "=",
+        "delimiter"
+      ],
+      [
+        "/>",
+        {
+          "token": "delimiter.tag",
+          "next": "@pop"
+        }
+      ],
+      [
+        ">",
+        {
+          "token": "delimiter.tag",
+          "switchTo": "@jsx_children"
+        }
+      ],
+      [
+        "((?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*))(:)",
+        [
+          "attribute.name",
+          "delimiter"
+        ]
+      ],
+      [
+        "(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?:(?:\\.|-)(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*))*",
+        "attribute.name"
+      ],
+      [
+        "\"",
+        {
+          "token": "string",
+          "next": "@jsx_str_dquote"
+        }
+      ],
+      [
+        "'",
+        {
+          "token": "string",
+          "next": "@jsx_str_squote"
+        }
+      ],
+      [
+        "\\{",
+        {
+          "token": "delimiter.bracket",
+          "next": "@jsx_hole"
+        }
+      ]
+    ],
+    "jsx_children": [
+      [
+        "</",
+        {
+          "token": "delimiter.tag",
+          "switchTo": "@jsx_close"
+        }
+      ],
+      [
+        "<",
+        {
+          "token": "delimiter.tag",
+          "next": "@jsx_open"
+        }
+      ],
+      [
+        "\\{",
+        {
+          "token": "delimiter.bracket",
+          "next": "@jsx_hole"
+        }
+      ],
+      [
+        "(&)(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*)(;)",
+        [
+          "delimiter",
+          "constant",
+          "delimiter"
+        ]
+      ],
+      [
+        "(?:(?!&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);)[^{<>}])+",
+        ""
+      ]
+    ],
+    "jsx_close": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "/\\*\\*(?!/)",
+        {
+          "token": "comment",
+          "next": "@comment_slashstarstar"
+        }
+      ],
+      [
+        "///.*$",
+        "comment"
+      ],
+      [
+        "//.*$",
+        "comment"
+      ],
+      [
+        "/\\*",
+        {
+          "token": "comment",
+          "next": "@comment_slashstar"
+        }
+      ],
+      [
+        "((?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*))(:)",
+        [
+          "tag",
+          "delimiter"
+        ]
+      ],
+      [
+        "(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*\\.)",
+        "identifier"
+      ],
+      [
+        "\\.",
+        "delimiter"
+      ],
+      [
+        "(?=[a-z])(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?:-(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*))*",
+        "tag"
+      ],
+      [
+        "(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?:-(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*))*",
+        "type.identifier"
+      ],
+      [
+        ">",
+        {
+          "token": "delimiter.tag",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "jsx_openT": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "/\\*\\*(?!/)",
+        {
+          "token": "comment",
+          "next": "@comment_slashstarstar"
+        }
+      ],
+      [
+        "///.*$",
+        "comment"
+      ],
+      [
+        "//.*$",
+        "comment"
+      ],
+      [
+        "/\\*",
+        {
+          "token": "comment",
+          "next": "@comment_slashstar"
+        }
+      ],
+      [
+        ">",
+        {
+          "token": "delimiter.tag",
+          "switchTo": "@jsx_childrenT"
+        }
+      ],
+      [
+        "((?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*))(:)",
+        [
+          "tag",
+          "delimiter"
+        ]
+      ],
+      [
+        "(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*\\.)",
+        "identifier"
+      ],
+      [
+        "\\.",
+        "delimiter"
+      ],
+      [
+        "(?=[a-z])(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?:-(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*))*",
+        {
+          "token": "tag",
+          "switchTo": "@jsx_tagT"
+        }
+      ],
+      [
+        "(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?:-(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*))*",
+        {
+          "token": "type.identifier",
+          "switchTo": "@jsx_tagT"
+        }
+      ],
+      [
+        "",
+        {
+          "token": "",
+          "switchTo": "@jsx_tagT"
+        }
+      ]
+    ],
+    "jsx_tagT": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "/\\*\\*(?!/)",
+        {
+          "token": "comment",
+          "next": "@comment_slashstarstar"
+        }
+      ],
+      [
+        "///.*$",
+        "comment"
+      ],
+      [
+        "//.*$",
+        "comment"
+      ],
+      [
+        "/\\*",
+        {
+          "token": "comment",
+          "next": "@comment_slashstar"
+        }
+      ],
+      [
+        "=(?=\\s*<)",
+        {
+          "token": "delimiter",
+          "next": "@jsx_eqel"
+        }
+      ],
+      [
+        "=",
+        "delimiter"
+      ],
+      [
+        "/>",
+        {
+          "token": "delimiter.tag",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        ">",
+        {
+          "token": "delimiter.tag",
+          "switchTo": "@jsx_childrenT"
+        }
+      ],
+      [
+        "((?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*))(:)",
+        [
+          "attribute.name",
+          "delimiter"
+        ]
+      ],
+      [
+        "(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?:(?:\\.|-)(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*))*",
+        "attribute.name"
+      ],
+      [
+        "\"",
+        {
+          "token": "string",
+          "next": "@jsx_str_dquote"
+        }
+      ],
+      [
+        "'",
+        {
+          "token": "string",
+          "next": "@jsx_str_squote"
+        }
+      ],
+      [
+        "\\{",
+        {
+          "token": "delimiter.bracket",
+          "next": "@jsx_hole"
+        }
+      ]
+    ],
+    "jsx_childrenT": [
+      [
+        "</",
+        {
+          "token": "delimiter.tag",
+          "switchTo": "@jsx_closeT"
+        }
+      ],
+      [
+        "<",
+        {
+          "token": "delimiter.tag",
+          "next": "@jsx_open"
+        }
+      ],
+      [
+        "\\{",
+        {
+          "token": "delimiter.bracket",
+          "next": "@jsx_hole"
+        }
+      ],
+      [
+        "(&)(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*)(;)",
+        [
+          "delimiter",
+          "constant",
+          "delimiter"
+        ]
+      ],
+      [
+        "(?:(?!&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);)[^{<>}])+",
+        ""
+      ]
+    ],
+    "jsx_closeT": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "/\\*\\*(?!/)",
+        {
+          "token": "comment",
+          "next": "@comment_slashstarstar"
+        }
+      ],
+      [
+        "///.*$",
+        "comment"
+      ],
+      [
+        "//.*$",
+        "comment"
+      ],
+      [
+        "/\\*",
+        {
+          "token": "comment",
+          "next": "@comment_slashstar"
+        }
+      ],
+      [
+        "((?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*))(:)",
+        [
+          "tag",
+          "delimiter"
+        ]
+      ],
+      [
+        "(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*\\.)",
+        "identifier"
+      ],
+      [
+        "\\.",
+        "delimiter"
+      ],
+      [
+        "(?=[a-z])(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?:-(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*))*",
+        "tag"
+      ],
+      [
+        "(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?:-(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*))*",
+        "type.identifier"
+      ],
+      [
+        ">",
+        {
+          "token": "delimiter.tag",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "jsx_eqel": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "<",
+        {
+          "token": "delimiter.tag",
+          "switchTo": "@jsx_open"
+        }
+      ]
+    ],
     "root": [
+      [
+        "<",
+        {
+          "token": "delimiter.tag",
+          "switchTo": "@jsx_openT"
+        }
+      ],
       {
         "include": "@exprBody"
       },
@@ -803,6 +1420,13 @@
       ]
     ],
     "interpExprBody": [
+      [
+        "<",
+        {
+          "token": "delimiter.tag",
+          "next": "@jsx_open"
+        }
+      ],
       [
         "0[xX][0-9A-Fa-f]+(?:_[0-9A-Fa-f]+)*n?(?![0-9A-Za-z_$\\\\])",
         "number.hex"
