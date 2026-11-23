@@ -566,9 +566,14 @@ function ${shared.uniClass()}(cp: number): number {
   const ch = String.fromCodePoint(cp);
   return LX_ID_START.test(ch) ? 2 : LX_ID_PART.test(ch) ? 1 : 0;
 }
-`
+${shared.uniIdent(ir) ? `function ${shared.uniIdent(ir)}(s: string, p: number): number {
+  LX_UNI_IDENT.lastIndex = p;
+  const m = LX_UNI_IDENT.exec(s);
+  return m ? p + m[0].length : -1;
+}
+` : ''}`
     : '';
-  const lxUniIdentConst = (nl ? newlineParts(nl, 'emit', ids).table : '') + (shared.scannedTokens(ir).some((t) => t.skip) ? TS_HAS_LINE_TERM : '') + (identNameTs
+  const lxUniIdentConst = (nl ? newlineParts(nl, 'emit', ids).table : '') + (shared.scannedTokens(ir).some((t) => t.skip) ? TS_HAS_LINE_TERM : '') + (identNameTs || shared.uniIdent(ir)
     ? `const LX_UNI_IDENT = /${UNI_ID_START}${UNI_ID_CONTINUE}*/uy;\n`
     : '') + lxExtConst;
   const uniIdentPushTs = stateful ? 'emit' : 'push';

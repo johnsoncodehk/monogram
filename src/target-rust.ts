@@ -855,7 +855,12 @@ ${identName || ir.identLike.length ? `${rsUniIdentTables()}// Both out of line: 
     (pos, 3)
 }
 #[inline(always)] fn ${uniClassRs}(cp: isize) -> isize { _uni_class(cp as u32) as isize }
-#[inline(never)] fn _lx_ext(b: &[u8], mut e: usize) -> usize {
+${shared.uniIdent(ir) ? `#[inline(never)] fn ${shared.uniIdent(ir)}(s: &str, p: isize) -> isize {
+    let (b, p) = (s.as_bytes(), p as usize);
+    if p >= b.len() { return -1; }
+    match _scan_uni_ident(b, p) { Some(e) => e as isize, None => -1 }
+}
+` : ''}#[inline(never)] fn _lx_ext(b: &[u8], mut e: usize) -> usize {
     while e < b.len() {
         let (cp, w) = _lx_cp(b, e);
         if _uni_class(cp) == 0 { break; }

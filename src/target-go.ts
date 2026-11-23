@@ -879,7 +879,12 @@ ${goUniIdentTables()}func scanUniIdent(src string, pos int) (int, bool) {
 	return lxExtRun(src, pos+w), true
 }
 func ${shared.uniClass()}(cp int) int { return int(uniClass(rune(cp))) }
-// Extend an identifier token that the ASCII pattern cut short at a non-ASCII
+${shared.uniIdent(ir) ? `func ${shared.uniIdent(ir)}(s string, p int) int {
+	if p >= len(s) { return -1 }
+	if e, ok := scanUniIdent(s, p); ok { return e }
+	return -1
+}
+` : ''}// Extend an identifier token that the ASCII pattern cut short at a non-ASCII
 // ID_Continue char (caf|é → café), mirroring emit-lexer's uniIdentContReY extension.
 func lxExt(src string, e int) int {
 	if e >= len(src) || src[e] < 0x80 { return e }
