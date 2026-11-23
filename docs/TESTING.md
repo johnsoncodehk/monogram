@@ -97,28 +97,62 @@ landing that introduced it for measured times).
 
 ### The tiers: `--quick`, `--changed`, CI
 
-Three tiers, each a subset of the next, all selected by the same derived inputs:
+Three tiers for three moments, each a subset of the next, all selected by the same derived inputs:
 
 | tier | command | what runs | when |
 |---|---|---|---|
-| quick | `node test/check.ts --quick` | the affected gates listed in `QUICK_GATES` (`test/check.ts`), each with `CHECK_QUICK=1`: its declared sample | while editing: after every change |
+| quick | `node test/check.ts --quick` | the affected gates listed in `QUICK_GATES` (`test/check.ts`), each with `CHECK_QUICK=1`: its declared sample | after every edit: it must stay in seconds |
 | inner | `node test/check.ts --changed` | every affected gate not of tier `ci`, whole | before pushing a `land/**` branch |
-| CI | `npm run check` (every push of `land/**`, master) | every gate, the `ci` tier included, whole; plus the other jobs (tree-sitter, engine parity over the full corpus) | always |
+| CI | `npm run check` (every push of `land/**`, master) | every gate, the `ci` tier included, whole; plus the other jobs (tree-sitter, engine parity over the full corpus, the artifacts' drift) | the truth |
+
+A red quick run is a real failure of the change (fix it before going on); a green quick run is
+NOT a green `--changed`, and a green `--changed` is not a green CI. The quick tier is not asked to
+catch everything: it is the part of `--changed` that fits in seconds.
 
 The quick tier's samples (`QUICK` in `test/check-targets.ts`): the portable-targets classes run
 three grammars (`calc`, `templatejs`, and `javascript` on the TypeScript target only:
-`QUICK_GRAMMARS` in `test/portable-harness.ts`); `emit-portable-library` runs its source checks of
-every target's emitted library (the exported surface, package-level state, imports) and the
-TypeScript target's runtime checks, not the Go / Rust build and run. A gate in `QUICK_GATES` without
-a sample runs whole (it costs about a second). `--quick` prints the affected gates it leaves out.
+`QUICK_GRAMMARS` in `test/portable-harness.ts`), and `javascript` on Go too when the Go target's own
+code changed (`CHECK_QUICK_GO=1`, set by `check.ts`: only a Go compile sees a variable declared and
+not used, the commonest Go printer mistake, and a small grammar's parser may not reach the code that
+has it); edits-small runs one in three of its exhaustive one-character edits (`QUICK_EDIT_STRIDE`,
+`test/portable-edits.ts`); `emit-portable-library` runs its source checks of every target's emitted library (the
+exported surface, package-level state, imports) and the TypeScript target's runtime checks, not the
+Go / Rust build and run. A gate in `QUICK_GATES` without a sample runs whole (it costs about a
+second). `--quick` prints the affected gates it leaves out.
 
-What `--quick` does NOT cover (each of these has let a real failure through it; `--changed` or CI
-catches them): a Go / Rust parser of a real grammar (the native targets run only on the small
-grammars), the Go / Rust library build and run, every `ci`-tier gate (the parity corpus, edits-1 /
-edits-2, recovery, wide, test262, look-extent, tm-mutation, ...), the native work and allocation
-gates (portable-work, lexer-work, lexer-reservation, builder-reuse, emit-portable-split, alloc-work),
-jsTarget's standalone type check (emit-standalone), and the generated artifacts' drift (CI runs
-`npm run gen` and diffs).
+Measured cost (`.github/workflows/measure-inner-loop.yml`, a 4-core runner, seconds, cold = empty
+build cache and Go cache / warm = the same command again; the change is the named commit's files):
+
+QUICK_TIMING_TABLE
+
+On the shared 2-core box (load about 5), warm: a Rust printer change QUICK_BOX_RUST s.
+
+What each tier catches, measured on the real failures of `land/**` branches (2026-11-22/23: the
+first failing head of each, put back onto the tree; `test/inner-loop-measure.sh catch`, judged by
+the failing gate and message of the original CI run): of the 12 that reproduce, `--quick` caught 7
+(a probable eighth), `--changed` 10, CI all 12. The quick tier's misses, by class:
+- a Go compile error in code only a real grammar's parser reaches (land/decisions-commit: `declared
+  and not used` in the javascript grammar's Go parser; `--changed` caught it in the native gates).
+  Since covered: `CHECK_QUICK_GO` compiles the javascript grammar's Go parser when the Go target's
+  code changed.
+- jsTarget's emitted code under `tsc --strict` (land/regions-spec-lex-error: `emit-standalone`, a
+  `--changed` gate). Left out of the quick tier on purpose: jsTarget is being retired.
+- inputs only the wide corpora hold (land/lexer-ident-ext, land/lexer-small-items: a Unicode
+  identifier and a lexer item seen only by the parity corpus / edits-2 / wide / test262, the `ci`
+  tier). `--changed` misses them too: only CI sees this class.
+
+What `--quick` does not run at all: a Rust parser of a real grammar, the Go parser of a real grammar
+unless the Go target changed, the Go / Rust library build and run, every `ci`-tier gate (the parity
+corpus, edits-1 / edits-2, recovery, wide, test262, look-extent, tm-mutation, ...), the native work
+and allocation gates (portable-work, lexer-work, lexer-reservation, builder-reuse,
+emit-portable-split, alloc-work), jsTarget's standalone type check (emit-standalone), and the
+generated artifacts' drift (CI runs `npm run gen` and diffs).
+
+The caches (`test/build-cache.ts`, `test/emit-cache.ts`): Go / Rust builds and emitted parsers are
+kept under `<os tmpdir>/monogram-build-cache/`, keyed by content (a changed input misses; nothing to
+invalidate by hand); entries older than a day, then the least recently used above 3 GB, are dropped.
+To clear: `rm -rf "$(node -p 'require("os").tmpdir()')/monogram-build-cache"`; to bypass the
+emission cache: `MONOGRAM_EMIT_CACHE=0`.
 
 ### Before adding a gate
 
