@@ -587,8 +587,10 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
       if (rhs === null) { pos = ledSave; scratch.length = sb; break; }
       scratch.push(rhs.h);
       left = finish(rid, sb);
+      if (capped) { form = 1; return left; }   // a capped right operand caps this node (PrattLowering.binary)
       fm = 1; tailClosed = true;
     }
+    capped = false;   // a sub-parse's capped flag is not this node's (PrattLowering.bpClose)
     form = fm;
     return left;
   }

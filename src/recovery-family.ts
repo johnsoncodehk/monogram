@@ -505,9 +505,14 @@ const riBp = method('riBp', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d
       let_('ls', call('enPos')),
       run('enLeafOpN'),
       if_(not(operand(at(v('b'), 2))), [run('enBack', v('ls')), run('enCut', v('hl')), brk]),
-      ...finLed(n(1)), set('tc', n(1)),
+      ...finLed(n(1)),
+      // A capped right operand caps this node: it returns at once, still capped (PrattLowering.binary).
+      if_(ne(call('enSt', n(ST_CAPPED)), n(0)), [run('enSetSt', n(ST_FORM), n(1)), ret(tru)]),
+      set('tc', n(1)),
     ]),
   ]),
+  // A sub-parse's capped flag is not this node's (PrattLowering.bpClose).
+  run('enSetSt', n(ST_CAPPED), n(0)),
   run('enSetSt', n(ST_FORM), v('fm')),
   ret(tru),
 ]);
