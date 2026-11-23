@@ -9,7 +9,7 @@
 // stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
-import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
+import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
 import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
@@ -1368,12 +1368,14 @@ ${cases.map((c) => `\t\tcase ${c.key}:\n${c.arms.map((a) => `\t\t\t${a}`).join('
   };
 };
 
+// A NUD arm's capped flag (emit-portable NodeCap): 'tail' is the flag its trailing operand left.
+const capGo = (cap: NodeCap): string => (cap === 'arm' ? 'true' : cap === 'tail' ? 'p.capped' : 'false');
 function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   // The native engine. `won` records the node just finished as the best so far and moves nb/kb
   // past it; `lost` drops what the arm built.
   const rid = ruleIdOf(ar, r.name);
   const d = r.nudDispatch;
-  const won = (i: number, form: string, tail: boolean, capped: boolean) =>
+  const won = (i: number, form: string, tail: boolean, capped: string) =>
     `bestPos = p.pos;${markGo(d, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; nb = len(p.nodes); kb = len(p.kids)`;
   const lost = lostGo;
   const fin = `p.finish(${rid}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart))`;
@@ -1384,7 +1386,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node, form,
     // tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (_i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; n := p.finish(${rid}, sb, int(t.Off), save); p.form = 0; p.tail = false; return n }`, fail, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, finGo(rid), (n) => `return p.nudOk(${n}, ${tail}, ${capped})`), fail),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, finGo(rid), (n) => `return p.nudOk(${n}, ${tail}, ${capGo(capped)})`), fail),
     commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \t\tp.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
@@ -1398,29 +1400,29 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     commitSw: commitSwGo('t'),
     steps: goSteps(ids, '', 'engine', ENGINE_GO),
     nudGuard: (g, keyed) => guardCond(g, 't', '', keyed),
-    nudLeaf: (i) => `{ p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, '0', false, false)}; p.back(save) }`,
+    nudLeaf: (i) => `{ p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, '0', false, 'false')}; p.back(save) }`,
     nudTpl: (i, hole) => `\tif t.Kid == ${kidOf(ids, '$templateHead')} {
 \t\tnode := p.matchTemplate_${hole}()
-\t\tif node >= 0 && ${beatsGo(d, 'p.pos', i)} { p.scratch = append(p.scratch, node); best = p.finish(${rid}, sb, int(p.nodes[node].Offset), int(p.nodes[node].TokStart)); ${won(i, '0', false, false)} } else { ${lost} }
+\t\tif node >= 0 && ${beatsGo(d, 'p.pos', i)} { p.scratch = append(p.scratch, node); best = p.finish(${rid}, sb, int(p.nodes[node].Offset), int(p.nodes[node].TokStart)); ${won(i, '0', false, 'false')} } else { ${lost} }
 \t\tp.back(save)
 \t}`,
-    nudSeq: (i, cond, tail, capped) => candGo(d, i, cond, `best = p.finish(${rid}, sb, p.offAt(save), save); ${won(i, '0', tail, capped)}`, lost),
+    nudSeq: (i, cond, tail, capped) => candGo(d, i, cond, `best = p.finish(${rid}, sb, p.offAt(save), save); ${won(i, '0', tail, capGo(capped))}`, lost),
     // An operand that parses but is not the target the operator requires fails the whole Pratt
     // call, whatever another arm matched.
     nudPrefix: (i) => `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tp.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
 \t\toperand := p.bp_${r.name}(pbp.rbp)
 \t\tif operand >= 0 && pbp.tgt && p.form != 0 { p.back(save); ${lost}; p.capped = false; return -1 }
-\t\tif operand >= 0 && ${beatsGo(d, 'p.pos', i)} { p.scratch = append(p.scratch, operand); best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, 'pbp.form', true, false)} } else { ${lost} }
+\t\tif operand >= 0 && ${beatsGo(d, 'p.pos', i)} { p.scratch = append(p.scratch, operand); best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, 'pbp.form', true, 'false')} } else { ${lost} }
 \t\tp.back(save)
 \t}`,
-    ledArm: (_i, cond, form, closes, exit, clean, rebind) => `{
+    ledArm: (_i, cond, form, closes, exit, clean, rebind, capsFromTail) => `{
 \t\t\tledSave := p.pos; sb := len(p.scratch)${clean ? '' : '; nb := len(p.nodes); kb := len(p.kids)'}
 \t\t\tp.scratch = append(p.scratch, left)
-\t\t\tif ${cond} { left = ${fin}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
+\t\t\tif ${cond} { left = ${fin};${capsFromTail ? ` if p.capped { p.form = ${form}; return left };` : ''} form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
 \t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]${clean ? '' : '; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]'}${rebind ? `
 \t\t\tp.scratch = append(p.scratch, left)
-\t\t\tif ${rebind} { left = ${fin}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
+\t\t\tif ${rebind} { left = ${fin};${capsFromTail ? ` if p.capped { p.form = ${form}; return left };` : ''} form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
 \t\t\tp.scratch = p.scratch[:sb]` : ''}${exit ? '; break LedLoop' : ''}
 \t\t}`,
     rebind: (p) => `p.rbScan(${rbSite(ids, 'engine', [p.open, p.operand, p.sep, p.rest])}, ${p.sepLid}, 0)`,
@@ -1984,7 +1986,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
   // The builder engine: as prattRule, over spanned handles and the builder's checkpoint.
   const rid = ruleIdOf(ar, r.name);
   const d = r.nudDispatch;
-  const won = (i: number, form: string, tail: boolean, capped: boolean) =>
+  const won = (i: number, form: string, tail: boolean, capped: string) =>
     `found = true; bestPos = p.pos;${markGo(d, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; ${arenaMark()}`;
   const lost = lostGoW(recv);
   const fin = `p.finishW(${rid}, sb, int(left.off), int(left.tokStart))`;
@@ -1993,7 +1995,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
   const L: PrattLowering = {
     ...B,
     commitLeaf: (_i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; n := p.finishW(${rid}, sb, int(t.Off), save); p.form = 0; p.tail = false; return n, true }`, fail, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? undoGoWc(recv) : null, nullable, (sb, save) => `p.finishW(${rid}, ${sb}, p.offAt(${save}), ${save})`, (n) => `return p.nudOk(${n}, ${tail}, ${capped})`), fail),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? undoGoWc(recv) : null, nullable, (sb, save) => `p.finishW(${rid}, ${sb}, p.offAt(${save}), ${save})`, (n) => `return p.nudOk(${n}, ${tail}, ${capGo(capped)})`), fail),
     commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
@@ -2007,27 +2009,27 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
     commitSw: commitSwGo('t'),
     steps: goSteps(ids, 'W', recv, ENGINE_GO_W, ar),
     nudGuard: (g, keyed) => guardCond(g, 't', 'W', keyed),
-    nudLeaf: (i) => `{ p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; best = p.finishW(${rid}, sb, int(t.Off), save); ${won(i, '0', false, false)}; p.back(save) }`,
+    nudLeaf: (i) => `{ p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; best = p.finishW(${rid}, sb, int(t.Off), save); ${won(i, '0', false, 'false')}; p.back(save) }`,
     nudTpl: (i, hole) => `\tif t.Kid == ${kidOf(ids, '$templateHead')} {
 \t\tn, ok := p.matchTemplateW_${hole}()
-\t\tif ok && ${beatsGo(d, 'p.pos', i)} { if n.present { p.scratch = append(p.scratch, n.h) }; best = p.finishW(${rid}, sb, int(n.off), int(n.tokStart)); ${won(i, '0', false, false)} } else { ${lost} }
+\t\tif ok && ${beatsGo(d, 'p.pos', i)} { if n.present { p.scratch = append(p.scratch, n.h) }; best = p.finishW(${rid}, sb, int(n.off), int(n.tokStart)); ${won(i, '0', false, 'false')} } else { ${lost} }
 \t\tp.back(save)
 \t}`,
-    nudSeq: (i, cond, tail, capped) => candGo(d, i, cond, `best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, '0', tail, capped)}`, lost),
+    nudSeq: (i, cond, tail, capped) => candGo(d, i, cond, `best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, '0', tail, capGo(capped))}`, lost),
     nudPrefix: (i) => `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
 \t\toperand, ook := p.bpW_${r.name}(pbp.rbp)
 \t\tif ook && pbp.tgt && p.form != 0 { p.back(save); ${lost}; p.capped = false; return spanned{}, false }
-\t\tif ook && ${beatsGo(d, 'p.pos', i)} { if operand.present { p.scratch = append(p.scratch, operand.h) }; best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, 'pbp.form', true, false)} } else { ${lost} }
+\t\tif ook && ${beatsGo(d, 'p.pos', i)} { if operand.present { p.scratch = append(p.scratch, operand.h) }; best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, 'pbp.form', true, 'false')} } else { ${lost} }
 \t\tp.back(save)
 \t}`,
-    ledArm: (_i, cond, form, closes, exit, clean, rebind) => `{
+    ledArm: (_i, cond, form, closes, exit, clean, rebind, capsFromTail) => `{
 \t\t\tledSave := p.pos; sb := len(p.scratch)${clean ? '' : `; ${arenaCkpt()}`}
 \t\t\tp.scratch = append(p.scratch, left.h)
-\t\t\tif ${cond} { left = ${fin}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
+\t\t\tif ${cond} { left = ${fin};${capsFromTail ? ` if p.capped { p.form = ${form}; return left, true };` : ''} form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
 \t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]${clean ? '' : `; ${arenaRestore()}`}${rebind ? `
 \t\t\tp.scratch = append(p.scratch, left.h)
-\t\t\tif ${rebind} { left = ${fin}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
+\t\t\tif ${rebind} { left = ${fin};${capsFromTail ? ` if p.capped { p.form = ${form}; return left, true };` : ''} form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
 \t\t\tp.scratch = p.scratch[:sb]` : ''}${exit ? '; break LedLoop' : ''}
 \t\t}`,
     rebind: (p) => `p.rbScan(${rbSite(ids, recv, [p.open, p.operand, p.sep, p.rest])}, ${p.sepLid}, 0)`,
