@@ -99,6 +99,7 @@ jobs:
           CHECK_OUT_DIR: /tmp/gate-output
         run: |
           echo "cores: $(nproc)"
+          git fetch -q --depth=300 origin master
           for c in 0142db5 f207ef1 de35876 fafd6af f9400ff; do s=$(date +%s); node test/check.ts --changed --commit=$c > /tmp/inner-$c.log 2>&1; echo "inner $c: $(( $(date +%s) - s ))s, $(grep -c '^    [✓✗]' /tmp/inner-$c.log) gates run, $(tail -n 30 /tmp/inner-$c.log | grep 'gates pass')"; done
           for c in 0142db5 de35876; do s=$(date +%s); CI= node test/check.ts --changed --commit=$c > /tmp/inner2-$c.log 2>&1; echo "inner (pool 2, as a dev box) $c: $(( $(date +%s) - s ))s"; done
       # every gate's whole output (check.ts prints only a passing gate's last line)
