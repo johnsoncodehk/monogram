@@ -30,13 +30,15 @@ case $SCOPE in full|pr) ;; *) echo "PROFILE_SCOPE must be full or pr, not $SCOPE
 OXC_TARGET=${OXC_TARGET_DIR:-$W/oxc-target}
 rm -rf "$W"; mkdir -p "$W/inputs" "$OUT/cg" "$OUT/annotate" "$OUT/regions" "$OUT/perf"
 R=$OUT/results.txt; : > "$R"
-# Every measured process runs under a time limit (PROFILE_CMD_TIMEOUT seconds, default 600; the
-# slowest single measurement, a Callgrind cache simulation of checker.ts, takes well under a minute
-# on the CI runner): a parser that does not terminate on an input is then ONE measurement recorded as
-# failed (exit 124: a CRASH / FAILED line, which the summary lists as NOT RUN), not a job cancelled at
-# its time limit with every measurement and the log lost (run 45222944792).
-CMD_TIMEOUT=${PROFILE_CMD_TIMEOUT:-600}
-lim() { timeout -k 10 "$CMD_TIMEOUT" "$@"; }
+# Every measured process runs under a time limit (PROFILE_CMD_TIMEOUT seconds, default 180; the
+# slowest single measurement on the CI runner takes under 40 s) and a node process under a heap
+# limit (PROFILE_NODE_HEAP_MB, default 6144 of the runner's 16 GB): a parser that does not terminate
+# on an input is then ONE measurement recorded as failed (a CRASH / FAILED line, which the summary
+# lists as NOT RUN), not a job that runs to its time limit (run 45222944792: an A older than the
+# element inputs, e6cc55c, never finished `js-fresh` on jsx-corpus.tsx; cancelled at 55 min, log
+# lost) or that exhausts the runner's memory (run 45236655409: the same parse, killed after 5 min).
+CMD_TIMEOUT=${PROFILE_CMD_TIMEOUT:-180}
+lim() { env NODE_OPTIONS="--max-old-space-size=${PROFILE_NODE_HEAP_MB:-6144} ${NODE_OPTIONS:-}" timeout -k 10 "$CMD_TIMEOUT" "$@"; }
 # Where the time goes: every phase's wall-clock seconds, printed when it ends and kept in phases.txt
 # (the job summary shows them).
 PH_NAME=''; PH_T=$SECONDS

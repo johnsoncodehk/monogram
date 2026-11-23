@@ -186,7 +186,7 @@ jobs:
           PROFILE_SCOPE: ${{ steps.am.outputs.scope }}
 
       - name: Emitted sizes of A and M
-        if: ${{ !cancelled() && steps.am.outcome == 'success' }}
+        if: ${{ always() && steps.am.outcome == 'success' }}
         run: |
           set -euo pipefail
           W='${{ runner.temp }}/prof-work'
@@ -194,7 +194,7 @@ jobs:
           node test/emit-sizes.ts "$W/src-M" > "$W/out/emit-sizes-M.json"
 
       - name: Job summary
-        if: ${{ !cancelled() && steps.am.outcome == 'success' }}
+        if: ${{ always() && steps.am.outcome == 'success' }}
         env:
           GRAMMAR_CHANGED: ${{ steps.am.outputs.grammar_changed }}
           A: ${{ steps.am.outputs.A }}
