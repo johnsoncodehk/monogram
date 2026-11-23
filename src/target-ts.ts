@@ -3133,6 +3133,8 @@ const tsBlock = (lines: string[]): string[] => lines.map((l) => TS_IND + l);
 const SHAPE_SLOT_TS: Record<string, (a: string[]) => string> = {
   slotVal: ([i]) => `_hs[${i}]`, slotTag: ([i]) => `_tg[${i}]!`, slotTop: () => '_n',
   slotOff: ([i]) => `_sp[(${i}) * _SW]!`, slotEnd: ([i]) => `_sp[(${i}) * _SW + 1]!`, srcText: ([a, b]) => `_src.slice(${a}, ${b})`,
+  // The one-slot check (its operands are an index expression and locals: evaluated more than once).
+  slotAt: ([i, lo, hi, t0, t1]) => `((${i}) >= ${lo} && (${i}) < ${hi} && _tg[${i}]! >= ${t0} && _tg[${i}]! <= ${t1} ? ${i} : -1)`,
 };
 const tsLowering: Lowering = {
   units: UNITS,
@@ -3146,9 +3148,10 @@ const tsLowering: Lowering = {
     vConst: (cx, val) => cx.atom(val === null ? 'null' : JSON.stringify(val), 'val_any', 'val_any'),
     vAbsent: (cx) => cx.atom('undefined', 'val_any', 'val_any'),
     vText: (cx, r) => cx.atom(r.c, 'val_any', 'val_any'),
-    // One object literal, its fields in the term's order, an absent one undefined (so every node
-    // of one arm has one hidden class; JSON leaves an undefined field out, as the evaluator does).
-    mkNode: (cx, kind, fields, start, end) => cx.atom(`{ kind: ${kind.c}, start: ${start.c}, end: ${end.c}, fields: { ${fields.map(([n, r]) => `${J(n)}: ${r.c}`).join(', ')} } }`, 'val_any', 'val_any'),
+    // ONE flat object literal: the shape's node keys (ShapePlan.nodeKeys), then the fields in the
+    // term's order, an absent one undefined (so every node of one arm has one hidden class; JSON
+    // leaves an undefined field out, as the evaluator does).
+    mkNode: (cx, kind, fields, start, end) => { const k = SHAPE!.nodeKeys; return cx.atom(`{ ${J(k.kind)}: ${kind.c}, ${J(k.start)}: ${start.c}, ${J(k.end)}: ${end.c}${fields.map(([n, r]) => `, ${J(n)}: ${r.c}`).join('')} }`, 'val_any', 'val_any'); },
     mkRecord: (cx, fields) => cx.atom(`{ record: { ${fields.map(([n, r]) => `${J(n)}: ${r.c}`).join(', ')} } }`, 'val_any', 'val_any'),
     vList: (cx, l) => cx.atom(l.c, 'val_any', 'val_any'),
     vItems: (cx, r) => cx.atom(`(${r.c} as ShapeValue[])`, 'vals_any', 'vals_any'),
@@ -3662,7 +3665,8 @@ export function emitTs(grammar: CstGrammar, opts?: { shape?: ShapeSpec }): strin
 const synKept = (plan: ShapePlan): number[] => plan.syn.flatMap((a, k) => (a.slotRead ? [k] : []));
 const shapeKeepTs = (plan: ShapePlan): string => ` _h1[b] = _h1[c];${synKept(plan).map((k) => ` _sy[${k}]![b] = _sy[${k}]![c];`).join('')}`;
 function shapeRuntimeTs(plan: ShapePlan): string {
-  return `export type ShapeNode = { kind: string; start: number; end: number; fields: Record<string, ShapeValue> };
+  const K = plan.nodeKeys;
+  return `export type ShapeNode = { [key: string]: ShapeValue };
 export type ShapeValue = ShapeNode | ShapeValue[] | string | number | boolean | null | { record: Record<string, ShapeValue> };
 /** A read of what the shape cannot give: an arm it leaves out ('unmapped') or one this parser's
  *  plan does not build yet ('unsupported'). */
@@ -3780,9 +3784,9 @@ function slotFindLast(lo: number, hi: number, t0: number, t1: number): number { 
 function slotAt(i: number, lo: number, hi: number, t0: number, t1: number): number { if (i < lo || i >= hi) return -1; const t = _tg[i]!; return t >= t0 && t <= t1 ? i : -1; }
 function namedEnd(lo: number, hi: number): number { for (let i = hi - 1; i >= lo; i--) { const t = _tg[i]!; if (t >= 0 && (t & 1) === 0) return _sp[i * _SW + 1]!; } return -1; }
 function srcText(a: number, b: number): string { return _src.slice(a, b); }
-const _isNode = (x: any): x is ShapeNode => x !== null && typeof x === 'object' && !Array.isArray(x) && 'kind' in x;
-function valStart(x: any, dflt: number): number { return _isNode(x) ? x.start : Array.isArray(x) && _isNode(x[0]) && _isNode(x[x.length - 1]) ? x[0].start : dflt; }
-function valEnd(x: any, dflt: number): number { return _isNode(x) ? x.end : Array.isArray(x) && _isNode(x[0]) && _isNode(x[x.length - 1]) ? x[x.length - 1].end : dflt; }
+const _isNode = (x: any): boolean => x !== null && typeof x === 'object' && !Array.isArray(x) && ${J(K.kind)} in x;
+function valStart(x: any, dflt: number): number { return _isNode(x) ? x[${J(K.start)}] : Array.isArray(x) && _isNode(x[0]) && _isNode(x[x.length - 1]) ? x[0][${J(K.start)}] : dflt; }
+function valEnd(x: any, dflt: number): number { return _isNode(x) ? x[${J(K.end)}] : Array.isArray(x) && _isNode(x[0]) && _isNode(x[x.length - 1]) ? x[x.length - 1][${J(K.end)}] : dflt; }
 // The cooking functions: src/shape-cook.ts, the evaluator's own definitions.
 type CookFn = string; type Scalar = string | number | boolean | null;
 ${cookTable.toString()}
