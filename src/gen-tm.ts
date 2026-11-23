@@ -1,7 +1,7 @@
 import type { CstGrammar, RuleExpr, RuleDecl, InjectClause, TokenDecl } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
 import { analyzeGrammar } from './grammar-analysis.ts';
-import { regionView, expandArms, type RegionView } from './region-view.ts';
+import { regionView, expandArms, operandEntry, type RegionView } from './region-view.ts';
 import { compileTokenizer, lexSpecOf } from './emit-lexer.ts';
 import {
   tokenEscapePatternSource,
@@ -194,10 +194,12 @@ function emitKeywordRegion(opts: {
   name?: string;                                         // optional region scope (emitted first)
   wordEnd?: boolean;                                     // append `\b` after the keyword (default false)
   guard?: string;                                        // extra begin suffix after the keyword (default '')
+  notAfter?: string[];                                   // texts the keyword may not follow (a member access: `o.new` names a property)
 }): TmPattern {
   const region: TmPattern = {};
   if (opts.name !== undefined) region.name = opts.name;
-  region.begin = `\\b(${escapeRegex(opts.kw)})${opts.wordEnd ? '\\b' : ''}${opts.guard ?? ''}`;
+  const notAfter = opts.notAfter?.length ? `(?<!${opts.notAfter.map(escapeRegex).join('|')})` : '';
+  region.begin = `${notAfter}\\b(${escapeRegex(opts.kw)})${opts.wordEnd ? '\\b' : ''}${opts.guard ?? ''}`;
   region.beginCaptures = { '1': { name: opts.kwScope } };
   region.end = opts.end;
   region.patterns = opts.patterns;
@@ -1334,17 +1336,22 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
     ? `(?!<(?=${disambig.topTypeParam})(?=${disambig.arrowEndConfirm}))`
     : '';
 
-  // Expression-start lookbehind (an operand-entry element's `<` is never preceded by a value
-  // operand), only for `entry: 'operand'`. Variable-length lookbehind is supported by
-  // Oniguruma. After `++`/`--` is excluded (those produce a value). Mirrors the official
-  // jsx-tag-in-expression. The lookbehind is ZERO-WIDTH and anchored on the operator/opener
+  // Expression-start lookbehind, only for `entry: 'operand'`: an element's `tagOpen` stands
+  // where an operand may start, which is where the LEXER enters the region: after a text that
+  // is not a value (`operandEntry`, src/region-view.ts: the complement of the lexer's
+  // regex / division decision, from the grammar's `regexContext`), or at a line start. Value
+  // texts that end with such a text (`++` after `+`) and a block comment's closer are excluded
+  // by a negative lookbehind. The lookbehind is ZERO-WIDTH and anchored on the operator/opener
   // BEFORE any leading comment, so the operand-vs-operator test is made at the real operator
   // — `a /**/ <b>` (an operand `a` precedes the comment) is NOT an element, while
-  // `= /**/ <b/>` (an operator precedes) is.
-  // (Owed: this operator list is the JS family's; it is to be derived from the lexer's
-  // operand-start table, the regex / division decision.)
-  const exprBehind = view.entry === 'operand'
-    ? `(?<!\\+\\+|--)(?<=[({\\[,?=:>&|]|&&|\\|\\||=>|\\breturn|\\byield|\\bdefault|\\bcase|^)`
+  // `= /**/ <b/>` (an operator precedes) is. A grammar with no `regexContext` has no value
+  // test in its lexer either (every `tagOpen` at an operand-entry position opens), so no
+  // lookbehind. What a text before the `tagOpen` cannot decide (`operandEntry().dropped`:
+  // a postfix-or-prefix `!`, a text whose last unit can end a value token) is left out.
+  const oe = view.entry === 'operand' ? operandEntry(grammar) : null;
+  const wordText = (t: string) => `${/^\w/.test(t) ? '\\b' : ''}${escapeRegex(t)}`;
+  const exprBehind = oe
+    ? `${oe.notAfter.length ? `(?<!${oe.notAfter.map(escapeRegex).join('|')})` : ''}(?<=${[...oe.after.map(wordText), '^'].join('|')})`
     : '';
   // The leading run skipped (inside a lookahead, so zero-width) between the
   // anchoring operator and the tag's `<`: whitespace plus any number of BLOCK
@@ -2310,6 +2317,9 @@ interface RegexLiteralInfo {
   // checks the context BEFORE the op-run. From the grammar's regexContext.postfixAfterValueTexts.
   postfixAmbiguousChars: string[];
   commentSecondChars: string[];  // chars after '/' that start comments (e.g., ['/', '*'])
+  // The member-access texts (`.`, `?.`: regexContext.memberAccessTexts): a keyword right after
+  // one is a property NAME, not the keyword, so it is no regex position (`o.new / 2` divides).
+  memberAccessTexts: string[];
   // Regex-escaped block-comment delimiter pairs that share the regex's `/` prefix
   // (e.g. `['\\/\\*', '\\*\\/']` for `/* … */`). A comment is transparent to the
   // regex-vs-division decision, so a regex literal may begin right after one.
@@ -2469,7 +2479,7 @@ function detectRegexLiteral(grammar: CstGrammar, tokenNames: Set<string>): Regex
     }
   }
 
-  return { flagsPattern, preceedingKeywords, precedingChars, postfixAmbiguousChars, commentSecondChars, blockComments };
+  return { flagsPattern, preceedingKeywords, precedingChars, postfixAmbiguousChars, commentSecondChars, blockComments, memberAccessTexts: regexCtx?.memberAccessTexts ?? [] };
 }
 
 /**
@@ -2499,8 +2509,12 @@ function generateRegexLiteralPatterns(
   const charEsc = info.precedingChars.map(escapeForCharClass).join('');
   const charLookbehind = charEsc ? `(?<=[${charEsc}])` : '(?<=[=])';
 
+  // A keyword is the keyword only where no member access precedes it (the lexer's LX_MEMBER
+  // rule): after `.` / `?.` the same word is a property name, and a `/` after it divides.
+  const notMember = (kw: string): string => info.memberAccessTexts.length
+    ? `(?<!${info.memberAccessTexts.map((t) => escapeRegex(t + kw)).join('|')})` : '';
   const keywordLookbehinds = info.preceedingKeywords
-    .map(kw => `(?<=\\b${escapeRegex(kw)})`)
+    .map(kw => `(?<=\\b${escapeRegex(kw)})${notMember(kw)}`)
     .join('|');
 
   // Also match at start of line
@@ -3798,18 +3812,22 @@ function detectConstructorKeywords(
   grammar: CstGrammar,
   tokenNames: Set<string>,
   scopeOverrides: Map<string, string[]>
-): string[] {
+): { kw: string; callees: string[] }[] {
   const keywords: string[] = [];
   const seen = new Set<string>();
+  // The rules each keyword's callee is (`new NewTarget (…)`): what the region may hold.
+  const callees = new Map<string, Set<string>>();
 
   function checkSeq(items: RuleExpr[]) {
     for (let i = 0; i < items.length - 2; i++) {
       const a = items[i];
-      if (a.type !== 'literal') continue;
-      if (!isKeywordLiteral(a.value) || seen.has(a.value)) continue;
+      if (a.type !== 'literal' || !isKeywordLiteral(a.value)) continue;
       const b = items[i + 1];
       if (b.type !== 'ref') continue;
       if (tokenNames.has(b.name)) continue;
+      if (!callees.has(a.value)) callees.set(a.value, new Set());
+      callees.get(a.value)!.add(b.name);
+      if (seen.has(a.value)) continue;
       for (let j = i + 2; j < items.length; j++) {
         if (items[j].type === 'literal' && (items[j] as { value: string }).value === '(') {
           const scope = getScope(scopeOverrides, a.value);
@@ -3829,7 +3847,7 @@ function detectConstructorKeywords(
     for (const seq of expandAlts(rule.body)) checkSeq(seq);
   }
 
-  return keywords;
+  return keywords.map((kw) => ({ kw, callees: [...callees.get(kw)!] }));
 }
 
 // ── Generator ──
@@ -7620,7 +7638,14 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
 
   // ── 4b1b. Constructor-call keywords (keyword + rule-ref + '(' → entity.name.function) ──
   const constructorKws = detectConstructorKeywords(grammar, tokenNames, scopeOverrides);
-  for (const kw of constructorKws) {
+  // A callee that can BEGIN with a regular expression (`new /re/()`: a MemberExpression is a
+  // PrimaryExpression, a regex literal among them) holds the regex literal pattern ahead of the
+  // name, so the `/` after the keyword opens a regex inside the region as it does outside.
+  const ctorFirst = analyzeGrammar(grammar).exprFirst;
+  const regexTok = grammar.tokens.find(t => t.flags.includes('regex'))?.name;
+  for (const { kw, callees } of constructorKws) {
+    const calleeRegex = regexTok !== undefined && repository['regex-literal'] !== undefined
+      && callees.some((r) => { const f = ctorFirst({ type: 'ref', name: r }); return f === null || f.has(regexTok); });
     const kwScope = getScope(scopeOverrides, kw)!;
     const ctorEndChars = new Set<string>();
     for (const ch of ['(', ')', '}', ']', ',', '=']) {
@@ -7636,8 +7661,10 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       kw,
       kwScope: `${kwScope}.${langName}`,
       wordEnd: true,
+      notAfter: grammar.tokens.find(t => t.regexContext)?.regexContext?.memberAccessTexts ?? [],
       end: ctorEnd,
       patterns: [
+        ...(calleeRegex ? [{ include: '#regex-literal' }] : []),
         {
           match: identPattern,
           name: `entity.name.function.${langName}`,

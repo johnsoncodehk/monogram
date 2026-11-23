@@ -62,12 +62,18 @@ const cases: Case[] = [
     checks: [{ line: 0, text: '/', scope: 'keyword.operator.arithmetic' },
              { line: 0, text: '/', scope: 'string.regexp', absent: true }] },
   // A keyword is a regex position only where what follows it in the grammar can begin with a
-  // regex: after `new`, `const`, `var`, `let` or `extends` it cannot, so a `/` after such a word
-  // read as a property name is a division. `return`, `typeof` and `of` keep their regex.
-  ...['new', 'const', 'var', 'let', 'extends', 'class', 'get'].map((w) => ({
+  // regex (after `const`, `var`, `let` or `extends` it cannot), and only where it IS the keyword:
+  // after a member access (`.`, `?.`) the same word is a property name, so a `/` after it is a
+  // division, also for the words that do take a regex (`new /re/`, `typeof /re/`).
+  ...['new', 'const', 'var', 'let', 'extends', 'class', 'get', 'typeof', 'in', 'delete', 'return'].map((w) => ({
     label: `a / after the property .${w} is division`, scope: 'source.ts', lines: [`x = o.${w} / 2 / y`],
     checks: [{ line: 0, text: '/', scope: 'keyword.operator.arithmetic' },
              { line: 0, text: '/', scope: 'string.regexp', absent: true }] })),
+  { label: 'a / after the property ?.new is division', scope: 'source.ts', lines: ['x = o?.new / 2 / y'],
+    checks: [{ line: 0, text: '/', scope: 'keyword.operator.arithmetic' },
+             { line: 0, text: '/', scope: 'string.regexp', absent: true }] },
+  { label: 'new /re/ is a regex (a MemberExpression callee)', scope: 'source.ts', lines: ['x = new /re/g()'],
+    checks: [{ line: 0, text: 're', scope: 'string.regexp' }] },
   { label: 'return /re/ is a regex', scope: 'source.ts', lines: ['return /re/.test(s)'],
     checks: [{ line: 0, text: 're', scope: 'string.regexp' }] },
   { label: 'typeof /re/ is a regex', scope: 'source.ts', lines: ['x = typeof /re/'],
@@ -114,6 +120,18 @@ const cases: Case[] = [
   { label: '#3 tsx JSX element is a tag, not arrow params', scope: 'source.tsx',
     lines: ['const e = <div>{x}</div>'],
     checks: [{ line: 0, text: 'div', scope: 'entity.name.tag' }] },
+
+  // ── .tsx: an element starts where the LEXER enters it, after a text that is no value (the
+  // derived operand-entry set, region-view.ts operandEntry). The hand list it replaced had no
+  // `+`, `??`, `;`, `else`, `typeof`, … so these were comparisons in the highlighter only.
+  ...([['a + <b/>', '+'], ['a ?? <b/>', '??'], ['f(); <b/>', ';'], ['typeof <b/>', 'typeof'], ['a !== <b/>', '!=='], ['a * <b/>', '*']] as const).map(([src, op]) => ({
+    label: `tsx element after \`${op}\` is a tag`, scope: 'source.tsx', lines: [`x = ${src}`],
+    checks: [{ line: 0, text: 'b', scope: 'entity.name.tag' }] })),
+  // ... and nowhere a value stands: after `++` (a value ending with the operator `+`), after an
+  // operand and a block comment, after an identifier.
+  ...(['a++ <b', 'a /**/ <b', 'a <b'] as const).map((src) => ({
+    label: `tsx \`${src}\` is a comparison`, scope: 'source.tsx', lines: [`x = ${src} > c`],
+    checks: [{ line: 0, text: 'b', scope: 'entity.name.tag', absent: true }] })),
 
   // ── Zero-width guards in the grammar (the `>>`/`>=` rescan between the type arguments and
   // their `>`, `not(…)` inside a `not(…)`) must not hide the generic call or make a contextual
