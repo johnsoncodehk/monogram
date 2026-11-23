@@ -25,6 +25,12 @@ export const DIAG: RecordDecl = {
 // The kinds of a diagnostic: the entry rule failed at a token; it failed with no token left; it
 // matched and a token is left over.
 export const DK_UNEXPECTED = 0, DK_EOF = 1, DK_LEFTOVER = 2;
+// The best candidate of a longest match so far (riCand): where it ended, its node's offset, whether
+// one won, and the node's form, tail and capped flag.
+const BEST: RecordDecl = {
+  name: 'Best',
+  fields: ['pos', 'off', 'won', 'form', 'tail', 'capped'].map((name) => ({ name, ty: 'int' as const })),
+};
 
 const v = (name: string): Expr => ({ k: 'var', name });
 const n = (k: number): Expr => ({ k: 'int', v: k });
@@ -225,16 +231,38 @@ const riRule = method('riRule', [['r', 'int'], ['d', 'int']], ['bool'], [
   run('enSetSt', n(ST_SUP_CUR), v('prev')),
   ret(v('ok')),
 ]);
+const newBest = (pos: Expr): Expr => ({ k: 'mkRec', rec: 'Best', fields: { pos, off: n(0), won: n(0), form: n(0), tail: n(0), capped: n(0) } });
+// The position after a longest match: where its best candidate ended (each candidate went back to save).
+const wonPos: Stmt[] = [if_(gt(fld(v('best'), 'won'), n(0)), [run('enSetPos', fld(v('best'), 'pos'))])];
+// A candidate of rule r's longest match tried from token `save` (the list from height sb), its
+// children from height c, under mark k, that matched (ok): when it ends past the best so far its
+// node replaces the list from sb and it is the best (with the node's form, tail and capped flag),
+// else it is undone. The position goes back to save either way.
+const riCand = method('riCand', [['r', 'int'], ['sb', 'int'], ['save', 'int'], ['c', 'int'], ['k', 'int'], ['ok', 'bool'], ['form', 'int'], ['tail', 'int'], ['capped', 'int']], [], [
+  if_(and(v('ok'), gt(call('enPos'), fld(v('best'), 'pos'))), [
+    run('enUnmark', v('k')),
+    run('enWin', v('r'), v('c'), v('save'), v('sb')),
+    { k: 'setField', name: 'best', f: 'pos', e: call('enPos') },
+    { k: 'setField', name: 'best', f: 'off', e: call('enFinOff') },
+    { k: 'setField', name: 'best', f: 'won', e: n(1) },
+    { k: 'setField', name: 'best', f: 'form', e: v('form') },
+    { k: 'setField', name: 'best', f: 'tail', e: v('tail') },
+    { k: 'setField', name: 'best', f: 'capped', e: v('capped') },
+  ], [run('enReset', v('k')), run('enUnmark', v('k'))]),
+  run('enBack', v('save')),
+]);
+riCand.params.push({ name: 'best', ty: 'rec_Best', ref: true });
 // An rd rule (record rec). The single and the predictive forms take their one admitted
 // alternative's match (an empty one too); a longest-match list keeps a candidate only when it
 // ends past the best so far (an earlier-declared one wins a tie).
+// (The single and predictive forms' best starts below save, so their one match wins even empty.)
 const riRd = method('riRd', [['r', 'int'], ['rec', 'int'], ['d', 'int']], ['bool'], [
   let_('na', at(v('rec'), 2)),
   let_('one', or(isT(v('rec'), 1), eq(v('na'), n(1))), 'bool'),
   let_('save', call('enPos')),
   let_('sb', call('enSh')),
-  let_('bestPos', v('save')),
-  let_('won', fls, 'bool'),
+  { k: 'let', name: 'best', ty: 'rec_Best', init: newBest(v('save')) },
+  if_(v('one'), [{ k: 'setField', name: 'best', f: 'pos', e: sub(v('save'), n(1)) }]),
   let_('i', n(0)),
   while_(lt(v('i'), v('na')), [
     let_('a', add(add(v('rec'), n(3)), add(v('i'), v('i')))),
@@ -242,19 +270,13 @@ const riRd = method('riRd', [['r', 'int'], ['rec', 'int'], ['d', 'int']], ['bool
       let_('c', call('enSh')),
       let_('k', call('enMark')),
       let_('ok', call('riList', atR(v('a'), 1), v('d')), 'bool'),
-      if_(and(v('ok'), or(v('one'), gt(call('enPos'), v('bestPos')))), [
-        run('enUnmark', v('k')),
-        run('enWin', v('r'), v('c'), v('save'), v('sb')),
-        set('bestPos', call('enPos')),
-        set('won', tru),
-      ], [run('enReset', v('k')), run('enUnmark', v('k'))]),
+      run('riCand', v('r'), v('sb'), v('save'), v('c'), v('k'), v('ok'), n(0), n(0), n(0), v('best')),
       if_(v('one'), [brk]),
-      run('enBack', v('save')),
     ]),
     inc('i'),
   ]),
-  run('enSetPos', v('bestPos')),
-  ret(v('won')),
+  ...wonPos,
+  ret(gt(fld(v('best'), 'won'), n(0))),
 ]);
 const riList = method('riList', [['l', 'int'], ['d', 'int']], ['bool'], [
   let_('nn', T(v('l'))),
@@ -372,19 +394,12 @@ const riOp = method('riOp', [['tb', 'int'], ['w', 'int'], ['lid', 'int']], ['int
   while_(lt(v('i'), T(v('tb'))), [if_(eq(T(v('x')), v('lid')), [ret(v('x'))]), inc('x', v('w')), inc('i')]),
   ret(n(-1)),
 ]);
-// A NUD arm that matched (ok) from `save`, its children from height c (mark k): past the best so
-// far it wins, with the node's form, tail and capped flag.
+// A NUD arm tried from `save` (its children from height c, mark k): riCand.
 const nudCand = (ok: Expr, form: Expr, tail: Expr, capped: Expr): Stmt[] => [
   let_('c', call('enSh')),
   let_('k', call('enMark')),
   let_('ok', ok, 'bool'),
-  if_(and(v('ok'), gt(call('enPos'), v('bestPos'))), [
-    run('enUnmark', v('k')),
-    run('enWin', v('r'), v('c'), v('save'), v('sb')),
-    set('bestPos', call('enPos')), set('boff', call('enFinOff')), set('won', tru),
-    set('bf', form), set('bt', tail), set('bc', capped),
-  ], [run('enReset', v('k')), run('enUnmark', v('k'))]),
-  run('enBack', v('save')),
+  run('riCand', v('r'), v('sb'), v('save'), v('c'), v('k'), v('ok'), form, tail, capped, v('best')),
 ];
 // The NUD: every arm a candidate of a longest match. It returns whether one matched and the
 // offset of its node, and leaves the node's capped flag, form and tail in the engine.
@@ -393,21 +408,19 @@ const riNud = method('riNud', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], [
   let_('kid', call('enPeekKid')),
   if_(lt(v('kid'), n(0)), [ret(fls, n(0))]),
   let_('lid', call('enPeekLid')),
-  let_('save', call('enPos')), let_('sb', call('enSh')), let_('bestPos', v('save')), let_('won', fls, 'bool'),
-  let_('bf', n(0)), let_('bt', n(0)), let_('bc', n(0)), let_('boff', n(0)),
+  let_('save', call('enPos')), let_('sb', call('enSh')),
+  { k: 'let', name: 'best', ty: 'rec_Best', init: newBest(v('save')) },
   let_('x', add(sec(P_ARMS), n(1))),
   let_('i', n(0)),
   while_(lt(v('i'), T(sec(P_ARMS))), [
     let_('tag', T(v('x'))),
     if_(eq(v('tag'), n(REC_N_TOK)), [
       // A token arm's leaf is offered only when its one-token match would win.
-      if_(and(eq(v('kid'), at(v('x'), 1)), gt(add(v('save'), n(1)), v('bestPos'))), [
+      if_(and(eq(v('kid'), at(v('x'), 1)), gt(add(v('save'), n(1)), fld(v('best'), 'pos'))), [
         let_('c', call('enSh')),
+        let_('k', call('enMark')),
         run('enLeafKid'),
-        run('enWin', v('r'), v('c'), v('save'), v('sb')),
-        set('bestPos', call('enPos')), set('boff', call('enFinOff')), set('won', tru),
-        set('bf', n(0)), set('bt', n(0)), set('bc', n(0)),
-        run('enBack', v('save')),
+        run('riCand', v('r'), v('sb'), v('save'), v('c'), v('k'), tru, n(0), n(0), n(0), v('best')),
       ]),
       if_(and(isT(v('x'), 2), eq(v('kid'), T(n(1)))), nudCand(call('enTpl', at(v('rec'), P_NUD_HOLE)), n(0), n(0), n(0))),
       inc('x', n(3)),
@@ -423,13 +436,8 @@ const riNud = method('riNud', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], [
           if_(and(v('ok'), isT(v('p'), 2), ne(call('enSt', n(ST_FORM)), n(0))), [
             run('enReset', v('k')), run('enUnmark', v('k')), run('enSetSt', n(ST_CAPPED), n(0)), ret(fls, n(0)),
           ]),
-          if_(and(v('ok'), gt(call('enPos'), v('bestPos'))), [
-            run('enUnmark', v('k')),
-            run('enWin', v('r'), v('c'), v('save'), v('sb')),
-            set('bestPos', call('enPos')), set('boff', call('enFinOff')), set('won', tru),
-            set('bf', at(v('p'), 3)), set('bt', n(1)), set('bc', n(0)),
-          ], [run('enReset', v('k')), run('enUnmark', v('k'))]),
-          run('enBack', v('save')),
+          let_('pf', at(v('p'), 3)),
+          run('riCand', v('r'), v('sb'), v('save'), v('c'), v('k'), v('ok'), v('pf'), n(1), n(0), v('best')),
         ]),
         inc('x', n(1)),
       ], [
@@ -448,9 +456,9 @@ const riNud = method('riNud', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], [
     inc('i'),
   ]),
   // A sub-parse may leave the capped flag set: only a capped arm that won makes this node capped.
-  run('enSetSt', n(ST_CAPPED), v('bc')), run('enSetSt', n(ST_FORM), v('bf')), run('enSetSt', n(ST_TAIL), v('bt')),
-  run('enSetPos', v('bestPos')),
-  ret(v('won'), v('boff')),
+  run('enSetSt', n(ST_CAPPED), fld(v('best'), 'capped')), run('enSetSt', n(ST_FORM), fld(v('best'), 'form')), run('enSetSt', n(ST_TAIL), fld(v('best'), 'tail')),
+  ...wonPos,
+  ret(gt(fld(v('best'), 'won'), n(0)), fld(v('best'), 'off')),
 ]);
 // The Pratt loop at minimum binding power minBp: the NUD, then continuations (mixfix leds,
 // postfix tokens and templates, postfix and binary operators) while one binds. The left operand
@@ -524,11 +532,11 @@ const riBp = method('riBp', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d
 ]);
 
 export function recoveryFamilyFns(): Fn[] {
-  return [rejectDiag, diagMessage, diagRelated, riRef, riSig, riIn, riGuard, riRule, riRd, riList, riStep, riOperand, riOp, riNud, riBp, ...ENGINE_EXTERNS];
+  return [rejectDiag, diagMessage, diagRelated, riRef, riSig, riIn, riGuard, riRule, riCand, riRd, riList, riStep, riOperand, riOp, riNud, riBp, ...ENGINE_EXTERNS];
 }
 
 // The family for a grammar: the functions, the record Diag and the plan's int table `rt`.
 // `methods`: print only the engine methods (true), only the free functions (false), or all.
 export function emitRecoveryFamily(L: Lowering, rt: number[], methods?: boolean): string {
-  return printFns(L, recoveryFamilyFns(), [], [DIAG], [{ name: 'rt', data: rt }], methods === undefined ? undefined : (f) => (f.method === true) === methods, methods !== true);
+  return printFns(L, recoveryFamilyFns(), [], [DIAG, BEST], [{ name: 'rt', data: rt }], methods === undefined ? undefined : (f) => (f.method === true) === methods, methods !== true);
 }
