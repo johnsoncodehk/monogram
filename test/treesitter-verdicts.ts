@@ -226,7 +226,21 @@ function operatorPairs(gr: { precs: { operators: { value: string; position: stri
 const TYPE_ARGUMENTS = [
   'f<T>(x);', 'x = f<T>(x);', 'f<T, U>(x);', 'f<T>();', 'f<string>(x);', 'a.b<T>(x);', 'new C<T>(x);', 'f<T>`t`;',
   'x = f<T>;', 'a + f<T>(x);', '-f<T>(x);', 'a < b > (c);', 'a < b;', 'a < b > c;', 'a - b < c;', 'a * b < c;',
+  'x = a < b, c > (d);', 'f<T>;', 'new C<T>;', 'a?.b<T>(x);', 'a?.<T>(x);', 'a.b<T>`t`;', 'f<T>(x).y<U>(z);', 'f<A<B>>(x);',
+  // a prefix or binary operator before the call; a bare instantiation the interpreter refuses before
+  // `+` (the relational reading); `new` with type arguments beside a relational `new C < d`.
+  'await f<T>(x);', '!f<T>(x);', 'a && f<T>(x);', 'f<T> + x;', 'new Map<K, V>();', 'new C < d;', 'import<T>(x);',
 ];
+// The same in TSX, beside JSX (`<T,>(x) => x` is a generic arrow, `<div/>` an element argument).
+const TSX_TYPE_ARGUMENTS = [...TYPE_ARGUMENTS, 'x = <T,>(x: T) => x;', 'f<T>(<div/>);', 'x = <div>{f<T>(y)}</div>;'];
+// An arm's optional arguments beside the call continuation on the arm without them (`new C(x)`, not
+// `(new C)(x)`), spans compared as for the operator pairs.
+const NEW_ARGUMENTS = [
+  'new C(x);', 'new C;', 'new C()();', 'new C(x)(y);', 'new class {}();', 'x = new C(x).y;', 'new C.d(x);', 'new C`t`;',
+  'new new C()();', 'new C < d;', 'yield(x);',
+];
+// The corpora whose trees are compared, not only their verdicts.
+const SPAN_CORPORA = new Set(['operator pairs', 'type arguments', 'new arguments']);
 const exprSpans = (n: any, out: string[] = []): string[] => {
   if (n.rule === 'Expr') out.push(`${n.offset}-${n.end}`);
   for (const c of n.children ?? []) if (c.rule) exprSpans(c, out);
@@ -297,10 +311,10 @@ let notRun = false;
 for (const { lang, mod, corpora, pairs } of [
   { lang: 'typescriptreact', mod: '../typescriptreact.ts', corpora: {
     'curated JSX': JSX_CASES, 'TSX issue cases': tsxIssueCases.map(c => c.src),
-    'TS issue cases': issueTests.map(t => t.input), 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, operands: OPERANDS } },
-  { lang: 'javascriptreact', mod: '../javascriptreact.ts', corpora: { 'curated JSX': JSX_CASES, 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS } },
-  { lang: 'typescript', mod: '../typescript.ts', corpora: { 'TS issue cases': issueTests.map(t => t.input), 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, operands: OPERANDS, 'type arguments': TYPE_ARGUMENTS }, pairs: true },
-  { lang: 'javascript', mod: '../javascript.ts', corpora: { 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS }, pairs: true },
+    'TS issue cases': issueTests.map(t => t.input), 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, operands: OPERANDS, 'type arguments': TSX_TYPE_ARGUMENTS, 'new arguments': NEW_ARGUMENTS } },
+  { lang: 'javascriptreact', mod: '../javascriptreact.ts', corpora: { 'curated JSX': JSX_CASES, 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, 'new arguments': NEW_ARGUMENTS } },
+  { lang: 'typescript', mod: '../typescript.ts', corpora: { 'TS issue cases': issueTests.map(t => t.input), 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, operands: OPERANDS, 'type arguments': TYPE_ARGUMENTS, 'new arguments': NEW_ARGUMENTS }, pairs: true },
+  { lang: 'javascript', mod: '../javascript.ts', corpora: { 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, 'new arguments': NEW_ARGUMENTS }, pairs: true },
 ] as { lang: string; mod: string; corpora: Record<string, string[]>; pairs?: boolean }[]) {
   const wasm = `tree-sitter/${lang}/tree-sitter-${lang}.wasm`;
   if (!existsSync(wasm)) { console.error(`✗ ${wasm} not found (build it: cd tree-sitter/${lang} && npx tree-sitter build --wasm .)`); notRun = true; continue; }
@@ -333,7 +347,7 @@ for (const { lang, mod, corpora, pairs } of [
       const ts = errorNodes(tree.rootNode) === 0;
       if (cst && ts) {
         r.bothAccept++;
-        if ((corpus === 'operator pairs' || corpus === 'type arguments') && exprSpans(cst).sort().join(' ') !== tsExprSpans(tree.rootNode).sort().join(' ')) {
+        if (SPAN_CORPORA.has(corpus) && exprSpans(cst).sort().join(' ') !== tsExprSpans(tree.rootNode).sort().join(' ')) {
           r.splitDiffers++;
           const k = key(lang, corpus, 'brackets', id);
           found.set(k, recorded.get(k) ?? 'unclassified');
