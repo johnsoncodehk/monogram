@@ -439,11 +439,11 @@ const ClassHeritage = rule($ => classHeritageArms($, Expr, NewTarget,
 // the list is a possibly-empty one where no such `{` starts, or one that starts with an element.
 // (Stated as one list followed by a guard on its emptiness, `alt([el, many(',', el), opt(',')],
 // not(...))`, the TextMate generator runs out of memory: 2 GB heap, `npm run gen`.) tree-sitter,
-// which renders no lookahead, keeps the plain list (tsRelax): the two branches would only be one
-// more conflict there.
+// which renders no lookahead, keeps the plain list of elements (tsRelax): the two branches and the
+// `{}` guard would only be one more conflict and dropped lookaheads there.
 const heritageFollowers = alt(',', '{', 'extends', 'implements');
 const heritageElement = alt([not(alt('extends', 'implements')), not(['{', '}', not(heritageFollowers)]), ClassHeritage]);
-const heritageList = [tsRelax(alt([not(alt(['{', not('}')], ['{', '}', heritageFollowers])), sep(heritageElement, ',')], [heritageElement, opt(',', sep(heritageElement, ','))]), sep(heritageElement, ','))];
+const heritageList = [tsRelax(alt([not(alt(['{', not('}')], ['{', '}', heritageFollowers])), sep(heritageElement, ',')], [heritageElement, opt(',', sep(heritageElement, ','))]), sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ','))];
 const heritageClauses = many(alt(
   ['extends', ...heritageList],
   ['implements', ...heritageList],
