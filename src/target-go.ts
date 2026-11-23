@@ -2796,6 +2796,16 @@ func parseWithCst(src string, b *CstBuilder) (int32, bool) {
 // arena is emptied, its token buffer (the built-in builders') and Workspace are emptied and reused
 // (capacity kept), so nothing of the previous parse stays reachable and nothing is allocated again.
 func parseWithW(src string, b Builder) (int32, bool) {
+\tp, fr, ok, err := runW(src, b)
+\tif err != nil { panic(lexError(src, err)) }
+\tok = ok && p.pos == len(p.toks)
+\tp.cursor.toks, p.src, p.b = nil, "", nil // the workspace keeps buffers, not the input or the builder
+\tif !ok { return 0, false }
+\tif !fr.present { panic(errNoRoot) }
+\treturn fr.h, true
+}
+// runW: one parse of src with b in b's workspace; the caller drops p's input and builder.
+func runW(src string, b Builder) (*parserW, spanned, bool, *lexErr) {
 \t// The built-in builders by concrete type: the runtime's interface assertion may allocate (dropsOf).
 \tvar w *Workspace
 \tif s, is := b.(*SlimBuilder); is {
@@ -2810,15 +2820,11 @@ func parseWithW(src string, b Builder) (int32, bool) {
 \tb.Restore(0, 0)
 \tp := &w.w
 \ttoks, err := lexInto(src, toksOf(b), &w.lex)
-\tif err != nil { panic(lexError(src, err)) }
+\tif err != nil { return p, spanned{}, false, err }
 \t*p = parserW{cursor: cursor{toks: toks}, src: src, b: b, drops: dropsOf(b), scratch: p.scratch[:0]${reuse ? ', entries: p.entries[:0], entryHs: p.entryHs[:0]' : ''}}
 \tfr, ok := p.parse${ir.entry}W()
 \trecordToks(b, p.toks)
-\tok = ok && p.pos == len(p.toks)
-\tp.cursor.toks, p.src, p.b = nil, "", nil // the workspace keeps buffers, not the input or the builder
-\tif !ok { return 0, false }
-\tif !fr.present { panic(errNoRoot) }
-\treturn fr.h, true
+\treturn p, fr, ok, nil
 }
 
 // errNoRoot: an accepted parse whose builder kept no node for the root (the entry rule). Accepting
