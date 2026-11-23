@@ -165,7 +165,24 @@ const FRAME_EDIT_DOCS: Record<string, (string | { doc: string; ins: string[] })[
     { doc: 'component C() { <p>/*</p>; const z = 1; }', ins: ['*/', '*', '/', ' ', 'x'] },
     { doc: 'component C(a) {\n  <p k="v">1 < 2 {a} <b/>x<9 <></></p>;\n  const z = a <b;\n  return <{a}>y</{a}>;\n}', ins: TEXT_INS },
   ],
-
+  // directives: edits that make and break an opener (`@if (` / `@iffy`), a head's parens and braces,
+  // a body's closer, a continuation; and an opener / a continuation made by closing a comment
+  // after the element (their tests read the comment to the end of the file)
+  'textdialect-dir': [
+    // a read through a line comment that ENDS (no failed attempt to record), past the element's
+    // close: only the opener's / continuation's own read (its far end) records it
+    { doc: 'component C(a) { <p>@if // x</p>\n; const z = 1; }', ins: ['(', '(a) {y}</p>', ' '] },
+    { doc: 'component C(a) { <p>@if (a) {y} @else // x</p>\n; const z = 1; }', ins: ['{', '{n}</p>', ' '] },
+    { doc: 'component C(a) { <p>@if /* (a) {y}</p>; const z = 1; }', ins: ['*/ (a) {y}</p>; ', '*/'] },
+    { doc: 'component C(a) { <p>@if (a) {y} @else /* {n}</p>; const z = 1; }', ins: ['*/ {n}</p>; ', '*/'] },
+  ],
+  textdialect: [
+    { doc: 'component C(a) {\n  <p>x @if (a) { y <b/> } @else if ({a}.a) {m} @else { n } z@for await (i of a) {{i}} @empty {e}</p>;\n}', ins: ['{', '}', '<', '/', ';', 'x', ' ', '\n', '@', '(', ')', 'e', 'f'] },
+    { doc: 'component C(a) { <p>@if /* (a) {y}</p>; const z = 1; }', ins: ['*/ (a) {y}</p>; ', '*/'] },
+    { doc: 'component C(a) { <p>@if (a) {y} @else /* {n}</p>; const z = 1; }', ins: ['*/ {n}</p>; ', '*/'] },
+    { doc: 'component C(a) {\n  <p>hi // n\n a/* c */b {a}// m\n</p>;\n  const z = 1; /* k */\n}', ins: [...TEXT_INS, '*'] },
+    { doc: 'component S() { <style>{a}</style>; <style> .x{}</style>; <script>a<b</script> }', ins: TEXT_INS },
+  ],
 };
 // Edits whose relexed stream is known to differ from a fresh lex, each with its cause; the gate
 // fails when one passes.

@@ -1079,4 +1079,45 @@ export const CASES: Case[] = [
     ],
     reject: ['component C(a) { <p>a // </p> }', 'component C(a) { <p>a /* </p> */ }', 'component C() { <p>a<//* c */b>x</b></p> }'],
   },
+  {
+    // the whole text dialect: and directives (derived openers, heads lexed as code, bodies lexed as
+    // children, continuations after a body; a code block): test/fixtures/textdialect.ts
+    grammar: 'textdialect', path: './fixtures/textdialect.ts',
+    accept: [
+      'component C(a) { <p>@if (a) {y}</p>; <p>@if x</p>; <p>@iffy (a)</p>; <p>a@if (a) {y}</p>; <p>x y@if (a) {z}</p>; }',
+      'component C(a) { <p>@for await (i of a) {y}</p>; <p>@for awaits (i)</p>; <p>@{ const q = 1; <b/> }</p>; }',
+      'component C(a) { <p>@if /* c */ (a) {y}</p>; <p>@if // c\n (a) {y}</p>; <p>a @else {b}</p>; }',
+      'component C(a) { <p>@if ({a}.a) { y }</p>; <p>@if ([{a}][0]) { y }</p>; }',
+      'component C(a) { <p>@if (a) {y} @else {n}</p>; <p>@if (a) {y} @else if (a) {m} @else {n}</p>; <p>@if (a) {y} @else x</p>; }',
+      'component C(a) { <p>@if (a) {y} @elsewhere {n}</p>; <p>@if (a) {y} t @else {n}</p>; <p>@else {n}</p>; }',
+      'component C(a) { <p>@for (i of a) {<i>{i}</i>} @empty {none} @try {t} @pending {p} @catch (e) {c} @try {t} @catch (e) {c}</p>; }',
+      'component C(a) { <p>@if (a) { <b>@for (i of a) { {i} // n\n }</b> } @else { /* c */ x }</p>; }',
+      'component C(a) { <p>@{ const q = 1; <b/> } x</p>; <p>x @if (a) { yes <b/> } @else if (a) {m} @else { no } z</p>; }',
+      'component C(a) { <p>@if (a) { <style>.a{}</style><style>{a}</style> } 1 < 2 /* c */ a // d\n</p>; }',
+      'component C(a) { <p>@if (a) {y} @else /* {n}</p>; }',
+    ],
+    reject: ['component C(a) { <p>@if (a) {y</p>; }', 'component C(a) { <p>@if (a) { </q> y }</p>; }', 'component C(a) { <p>a } b</p>; }',
+      'component C(a) { <p>@if (<b/>) {y}</p>; }'],
+  },
+  {
+    // directives without text tokens: an opener's or a continuation's read through a comment left
+    // open in its trivia is the only record of that read (with text tokens the comment is also a
+    // text token's failed attempt, recorded as its own)
+    grammar: 'textdialect-dir', path: './fixtures/textdialect.ts', parts: { textTokens: false, directives: true },
+    accept: [
+      'component C(a) { <p>@if (a) {y}</p>; <p>@if x</p>; <p>@iffy (a)</p>; <p>a@if (a) {y}</p>; <p>x y@if (a) {z}</p>; }',
+      'component C(a) { <p>@for await (i of a) {y}</p>; <p>@for awaits (i)</p>; <p>@{ const q = 1; <b/> }</p>; }',
+      'component C(a) { <p>@if /* c */ (a) {y}</p>; <p>@if // c\n (a) {y}</p>; <p>a @else {b}</p>; }',
+      'component C(a) { <p>@if ({a}.a) { y }</p>; <p>@if ([{a}][0]) { y }</p>; }',
+      'component C(a) { <p>@if (a) {y} @else {n}</p>; <p>@if (a) {y} @else if (a) {m} @else {n}</p>; <p>@if (a) {y} @else x</p>; }',
+      'component C(a) { <p>@if (a) {y} @elsewhere {n}</p>; <p>@if (a) {y} t @else {n}</p>; <p>@else {n}</p>; }',
+      'component C(a) { <p>@for (i of a) {<i>{i}</i>} @empty {none} @try {t} @pending {p} @catch (e) {c} @try {t} @catch (e) {c}</p>; }',
+      'component C(a) { <p>@if (a) { <b>@for (i of a) { {i} // n\n }</b> } @else { /* c */ x }</p>; }',
+      'component C(a) { <p>@{ const q = 1; <b/> } x</p>; <p>x @if (a) { yes <b/> } @else if (a) {m} @else { no } z</p>; }',
+      'component C(a) { <p>@if (a) { <style>.a{}</style><style>{a}</style> } 1 < 2 /* c */ a // d\n</p>; }',
+      'component C(a) { <p>@if (a) {y} @else /* {n}</p>; }',
+    ],
+    reject: ['component C(a) { <p>@if (a) {y</p>; }', 'component C(a) { <p>@if (a) { </q> y }</p>; }', 'component C(a) { <p>a } b</p>; }',
+      'component C(a) { <p>@if (<b/>) {y}</p>; }'],
+  },
 ];
