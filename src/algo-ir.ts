@@ -78,7 +78,9 @@ export type Expr =
   // Where any of the stops (characters of the Basic Multilingual Plane, no surrogate; sorted, no
   // repeats) next occurs in s from i (0 <= i <= len(s)): the first j >= i at which s has one, or
   // len(s) when there is none. A stop beyond ASCII is found at its first unit.
-  | { k: 'findAny'; s: Expr; i: Expr; stops: number[] };
+  | { k: 'findAny'; s: Expr; i: Expr; stops: number[] }
+  // The concatenation of two or more strings, a new string (for messages: a cold path).
+  | { k: 'cat'; parts: Expr[] };
 
 export type Stmt =
   | { k: 'let'; name: string; ty: Ty; init: Expr }
@@ -235,6 +237,9 @@ export interface Lowering {
     findAny(cx: Cx, s: R, i: R, stops: number[]): R;
     // Required when `owns`: an owned copy of a borrowed value.
     own?(cx: Cx, r: R): R;
+    // The concatenation of the strings `parts` (two or more), an owned string. Absent: a family
+    // that concatenates cannot be printed for the target.
+    cat?(cx: Cx, parts: R[]): R;
   };
   stmt: {
     comment(text: string): Lines;
@@ -488,6 +493,13 @@ class Printer implements Cx {
       case 'findAny': {
         checkStops(e.stops);
         return X.findAny(this, this.expr(e.s), this.expr(e.i), e.stops);
+      }
+      case 'cat': {
+        if (!X.cat) throw new Error('algo-ir: the lowering prints no string concatenation');
+        if (e.parts.length < 2) throw new Error('algo-ir: cat() of fewer than two strings');
+        const parts = e.parts.map((p) => this.expr(p));
+        if (parts.some((r) => r.ty !== 'str')) throw new Error('algo-ir: cat() of a non-string');
+        return { ...X.cat(this, parts), ty: 'str', nat: 'str', owned: true };
       }
     }
   }

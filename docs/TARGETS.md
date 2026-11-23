@@ -112,6 +112,20 @@ listed in [ROADMAP.md](ROADMAP.md#1-one-portable-engine-one-shared-runtime-descr
   panic with the `*LexError`, Rust `parse_with` / `parse` / `Doc::new` panic with the message.
   Inside the portable lexers an error is a returned value, never a throw or panic used for
   control flow.
+- Total parsing is an emit option: `emitParser(grammar, target, { recovery: true })` appends a
+  region to the module (the default emission is unchanged and is the module's prefix, byte for
+  byte; without the option the entry below does not exist). It adds TS
+  `parseTotal(src, builder) -> { root, errors }`, Go `ParseTotal(src, b) (h, ok, errs)`, Rust
+  `parse_total(src, &mut b) -> (Option<H>, Vec<Diagnostic>)`. It never throws or panics on input:
+  an accepted text gives `parseWith`'s root and no errors; a rejected one gives no root and one
+  diagnostic `{ offset, end, message, related? }`, either the lexer error or the parse's primary
+  error. The primary error is the interpreter's: the token where the entry rule stopped
+  (`unexpected 'x'`, with `after successful parse` when the entry rule consumed tokens and input
+  is left over). Its related location is the furthest token the parse examined, when that lies
+  past the error. That token is usually the interpreter's `[farthest: …]` token, but not always:
+  the interpreter counts the tokens a match advanced past, and the engine also counts a guard's
+  read of the next token. Messages come from one formatter (`src/recovery-family.ts`). Go and
+  Rust spans are byte offsets. Recovered trees (`$error` / `$missing`) are not there yet.
 - The `tsTarget` CST carries spans only: a leaf is located by its `offset`/`end`.
 - Lexers scan every `>` alone (so `>>` closing two type-argument lists is two tokens). At an
   operator site the parser composes `>>`, `>>>`, `>=`, `>>=`, `>>>=` from adjacent `>`, `>`

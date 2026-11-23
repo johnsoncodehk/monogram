@@ -41,6 +41,8 @@ import { parityInputs, type Tok } from './parity-corpus.ts';
 import { CTX_CASES, CTX_DOCS, ctxEdits } from './context-cases.ts';
 import { HOLE_EDIT_DOCS, LOOK_EDIT_DOCS } from './relex-edit-docs.ts';
 import { goBuild, scratchDir } from './scratch.ts';
+import { mutationCorpus } from './mutation-corpus.ts';
+import { CURATED_TS } from './emit-corpus.ts';
 import type { CstGrammar } from '../src/types.ts';
 
 // `parts`: the module's `textDialect(parts)` builds the grammar (a stage of the text dialect)
@@ -1249,6 +1251,8 @@ type TsLib = {
   createDoc(src: string, opts: { validate?: boolean; builder?: unknown }): TsDoc;
   /** The library's lid_of, exported by the gate (TS_LID_OF) — the id a Doc gives a rebuilt token. */
   __lid_of(text: string): number;
+  parseTotal(src: string, builder: unknown): TsTotal;
+  cstBuilder: unknown;
 };
 // The gate's one addition to the imported ts library: its lid_of, which the runners' lid-of mode
 // exposes for go / rust.
@@ -1345,7 +1349,34 @@ type Runner = {
   spans: { cmd: string; args: string[] };
   /** Doc.edit offsets are UTF-8 bytes (go/rust), not UTF-16 units (ts). */
   utf8Edits: boolean;
+  /** parseTotal over a whole corpus (the emit option `recovery`): its verdict and diagnostics, offsets in the target's units. */
+  total: (srcs: string[]) => Total[];
 };
+// One parseTotal outcome: accepted, and each diagnostic as [off, end, message, relOff, relEnd,
+// relMessage] (relOff -1: no related location).
+type DiagRow = [number, number, string, number, number, string];
+type Total = { ok: boolean; errors: DiagRow[]; cst?: string };
+function totalBatch(cmd: string, srcs: string[]): Total[] {
+  const sent = srcs.filter((s) => !s.includes('\0'));
+  const r = spawnSync(cmd, ['batch-total'], { input: sent.join('\0'), encoding: 'utf8', maxBuffer: 1 << 30 });
+  const lines = (r.stdout ?? '').split('\n');
+  if (r.status !== 0 || lines.length !== sent.length + 1) throw new Error(`${cmd} batch-total: exit ${r.status}, ${lines.length - 1} lines for ${sent.length} inputs\n${(r.stderr ?? '').slice(0, 2000)}`);
+  let li = 0;
+  return srcs.map((src): Total => {
+    if (src.includes('\0')) return { ok: false, errors: [[0, 0, 'NUL', -1, -1, '']] };
+    const [ok, errors] = JSON.parse(lines[li++]!) as [boolean, DiagRow[]];
+    return { ok, errors };
+  });
+}
+type TsTotal = { root: unknown; errors: { offset: number; end: number; message: string; related?: { offset: number; end: number; message: string } }[] };
+function tsTotal(lib: TsLib, src: string): Total {
+  const t = lib.parseTotal(src, lib.cstBuilder);
+  return { ok: t.root !== null, cst: t.root === null ? undefined : canon(t.root), errors: t.errors.map((e): DiagRow => [e.offset, e.end, e.message, e.related?.offset ?? -1, e.related?.end ?? -1, e.related?.message ?? '']) };
+}
+// Every parser of this gate is emitted with total parsing (the emit option `recovery`), whose
+// region is appended to the default module and changes none of it: each module begins with the
+// default emission, byte for byte.
+const RECOVERY = { recovery: true };
 
 type AlignMeta = { kind: string; off: number; end: number; nl: boolean };
 const oracleToks = (g: CstGrammar, src: string): AlignMeta[] => {
@@ -1872,6 +1903,114 @@ const CORPUS_EXPECTED_FAIL: ExpectedFail[] = [
 ];
 let corpusMs = 0, corpusInputs = 0;
 
+// ── The recovery class: total parsing, `parseTotal` (the emit option `recovery`) ──
+// On the parity corpus, the hand-written lists and a seeded MUTATION corpus (test/mutation-corpus.ts:
+// each accepted list input with one token deleted, inserted or replaced), for every runner:
+//   - the verdict is the oracle's, and errors are empty exactly when it accepts (and, in the TS
+//     target, the root is parse()'s CST byte for byte);
+//   - a reject gives one diagnostic (no recovery yet): a lexer error's message is the oracle
+//     lexer's, and a parser reject's primary error is the interpreter's message without its
+//     farthest hint (`Parse error at offset O: ` + message), exactly;
+//   - the related location (the farthest token the parse examined) is COUNTED against the
+//     interpreter's farthest hint, not pinned: the interpreter counts only tokens a match advanced
+//     past, the engine also those a guard read (recovery-family.ts);
+//   - Go and Rust give the TS target's diagnostics, their byte offsets mapped to UTF-16 units over
+//     the input itself, so non-ASCII inputs compare exactly too (a lexer message, whose text holds
+//     a byte offset, is compared on ASCII inputs only);
+//   - the TS target gives the same outcome twice.
+const RECOVERY_MUTANTS = 3, RECOVERY_SEED = 20261123;
+// The farthest-hint agreement is a floor per grammar (the count of rejects whose related location
+// is the interpreter's farthest token): it may rise, never drop below what is recorded here.
+const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5441, typescript: 5946 };
+// EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and
+// parseTotal alike) is not the oracle's. Not total parsing's property (parseTotal's verdict is its
+// own parse()'s, checked below); found by the mutation corpus, each owed as its own fix. When one
+// agrees again the gate fails until it is removed.
+const RECOVERY_VERDICT_EXPECTED_FAIL: Record<string, string[]> = {
+  // The interpreter accepts the reserved word `if` as a type (a TypeReference), the portable
+  // parsers refuse it: `T extends number ? if : "o"`.
+  typescript: ['type Cond<T> = T extends string ? "s" : T extends number ? if : "o";'],
+};
+const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
+// The UTF-16 offset of each UTF-8 byte offset of src that starts a character.
+function utf16Of(src: string): (b: number) => number {
+  const at = new Map<number, number>();
+  let b = 0, u = 0;
+  for (const ch of src) { at.set(b, u); b += Buffer.byteLength(ch); u += ch.length; }
+  at.set(b, u);
+  return (x) => { const y = at.get(x); if (y === undefined) throw new Error(`byte offset ${x} splits a character`); return y; };
+}
+function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOut: (src: string) => Outcome, base: string[], tokenize: (s: string) => Tok[]): void {
+  const mutants = mutationCorpus(grammar, (s) => tokenize(s).map((t) => ({ offset: t.offset, text: t.text })), [...c.accept, ...(c.grammar === 'typescript' ? CURATED_TS : [])], RECOVERY_MUTANTS, RECOVERY_SEED);
+  const srcs = [...new Set([...base, ...mutants])].filter((s) => !s.includes('\0'));
+  const want = srcs.map((s) => oracleOut(s));
+  const ascii = srcs.map((s) => /^[\x00-\x7f]*$/.test(s));
+  let ref: Total[] | null = null;
+  for (const r of runners) {
+    const raw = r.total(srcs);
+    const own = r.batch(srcs);
+    const known = RECOVERY_VERDICT_EXPECTED_FAIL[c.grammar] ?? [];
+    let knownHits = 0;
+    const got = r.utf8Edits ? raw.map((t, i): Total => {
+      const u = utf16Of(srcs[i]!);
+      return { ...t, errors: t.errors.map(([o, e, m, ro, re, rm]): DiagRow => [u(o), u(e), m, ro < 0 ? ro : u(ro), re < 0 ? re : u(re), rm]) };
+    }) : raw;
+    const bad: string[] = [];
+    let acc = 0, rej = 0, primary = 0, lexEq = 0, farEq = 0, farN = 0;
+    const at = (i: number) => JSON.stringify(srcs[i]!.length > 90 ? srcs[i]!.slice(0, 90) + '…' : srcs[i]);
+    got.forEach((g, i) => {
+      const w = want[i]!;
+      if ((w.err ?? '').includes('Maximum call stack')) return;
+      if (g.ok !== own[i]!.ok) { bad.push(`parse ${own[i]!.ok ? 'accepts' : 'rejects'}, parseTotal ${g.ok ? 'accepts' : 'rejects'} — ${at(i)}`); return; }
+      if (g.ok !== w.ok) {
+        if (known.includes(srcs[i]!)) { knownHits++; return; }
+        bad.push(`oracle ${w.ok ? 'accepts' : 'rejects'}, parseTotal ${g.ok ? 'accepts' : 'rejects'} — ${at(i)}`); return;
+      }
+      if (w.ok) {
+        if (g.errors.length) bad.push(`accepted with ${g.errors.length} error(s) — ${at(i)}`);
+        else acc++;
+        if (g.cst !== undefined) {
+          const p = r.run(srcs[i]!);
+          if (!p.ok || p.cst !== g.cst) bad.push(`parseTotal's root is not parse()'s — ${at(i)}`);
+        }
+        return;
+      }
+      rej++;
+      if (g.errors.length !== 1) { bad.push(`a reject gave ${g.errors.length} diagnostics, not 1 — ${at(i)}`); return; }
+      const [off, , msg, relOff] = g.errors[0]!;
+      const werr = w.err ?? '';
+      if (werr.startsWith('Parse error')) {
+        const mine = `Parse error at offset ${off}: ${msg}`;
+        if (mine !== werr.replace(FARTHEST_HINT, '')) bad.push(`primary error ${JSON.stringify(mine)}, the interpreter's ${JSON.stringify(werr)} — ${at(i)}`);
+        else primary++;
+        const far = FARTHEST_HINT.exec(werr);
+        farN++;
+        if ((far ? Number(far[1]) : -1) === relOff) farEq++;
+      } else if (!r.utf8Edits || ascii[i]) {
+        if (primaryLexMsg(werr) !== primaryLexMsg(msg)) bad.push(`lexer error ${JSON.stringify(msg)}, the oracle's ${JSON.stringify(werr)} — ${at(i)}`);
+        else lexEq++;
+      } else lexEq++;
+    });
+    if (r.label === 'typescript') {
+      const again = r.total(srcs);
+      got.forEach((g, i) => { if (JSON.stringify(g) !== JSON.stringify(again[i])) bad.push(`a second parseTotal differs — ${at(i)}`); });
+      ref = got;
+    } else if (ref !== null) {
+      got.forEach((g, i) => {
+        const t = ref![i]!;
+        const lexNonAscii = !ascii[i] && !(want[i]!.err ?? '').startsWith('Parse error');
+        const rows = (x: Total) => JSON.stringify(lexNonAscii ? x.errors.map((e) => [e[0], e[1]]) : x.errors);
+        if (g.ok !== t.ok || rows(g) !== rows(t)) bad.push(`diagnostics differ from the TS target's: ${JSON.stringify(g.errors)} vs ${JSON.stringify(t.errors)} — ${at(i)}`);
+      });
+    }
+    if (knownHits !== known.length) bad.push(`expected-fail: ${knownHits} of ${known.length} listed verdict divergences remain: remove the ones that agree now`);
+    if (farEq < (RECOVERY_FARTHEST_FLOOR[c.grammar] ?? 0)) bad.push(`farthest agreement ${farEq} dropped below its recorded floor ${RECOVERY_FARTHEST_FLOOR[c.grammar]}`);
+    console.log(`  ${c.grammar}/${r.label}: recovery ${bad.length ? `${bad.length} MISMATCH` : 'ok'} over ${srcs.length} inputs (${mutants.length} mutants): ${acc} accepted with no errors, ${rej} rejected: primary ≡ interpreter ${primary}, lexer ≡ oracle ${lexEq}; farthest ≡ the interpreter's hint on ${farEq}/${farN} (counted)`);
+    for (const smp of bad.slice(0, 10)) console.log(`      ${smp}`);
+    failures += bad.length;
+  }
+}
+
 let failures = 0;
 for (const c of CASES) {
   if (ONLY && !ONLY.includes(c.grammar)) continue;
@@ -1891,7 +2030,13 @@ for (const c of CASES) {
   // a SEPARATE runner.go in the same `package main` (its import rules forbid appending inline).
   // The ts library is also imported on its own; its CLI runner serves only tok-spans, which reads
   // the parser cursor from inside the module.
-  const tsLibSrc = emitParser(grammar, tsTarget);
+  const tsLibSrc = emitParser(grammar, tsTarget, RECOVERY);
+  const defaultPrefix = (label: string, def: string, rec: string) => {
+    if (rec.startsWith(def)) return;
+    failures++;
+    console.log(`  ${c.grammar}/${label}: the recovery emission does not begin with the default emission`);
+  };
+  defaultPrefix('typescript', emitParser(grammar, tsTarget), tsLibSrc);
   const tsFile = `${dir}/p.ts`;
   writeFileSync(tsFile, tsLibSrc + (tsTarget.emitRunner?.() ?? ''));
   writeFileSync(`${dir}/lib.ts`, tsLibSrc + TS_LID_OF);
@@ -1900,13 +2045,15 @@ for (const c of CASES) {
     label: 'typescript', run: (src) => tsRun(tsLib, src), batch: (srcs) => srcs.map((src) => tsRun(tsLib, src)), tokens: (srcs) => srcs.map((src) => tsTokens(tsLib, src)),
     doc: (srcs) => srcs.map((src) => tsDoc(tsLib, src, false) as Outcome), docBuilder: (srcs) => srcs.map((src) => tsDoc(tsLib, src, true).ok), lidOf: (texts) => texts.map((t) => tsLib.__lid_of(t)),
     edit: (json, fast) => tsEditSession(tsLib, json, fast),
-    spans: { cmd: 'node', args: [tsFile, 'tok-spans'] }, utf8Edits: false,
+    spans: { cmd: 'node', args: [tsFile, 'tok-spans'] }, utf8Edits: false, total: (srcs) => srcs.map((src) => tsTotal(tsLib, src)),
   });
 
   if (HAS_GO && !c.tsOnly && (!TARGETS_ONLY || TARGETS_ONLY.includes('go'))) {
     const gdir = `${dir}/go`; mkdirSync(gdir, { recursive: true });
-    writeFileSync(`${gdir}/parser.go`, asGoMain(emitParser(grammar, goTarget)));
-    writeFileSync(`${gdir}/runner.go`, goTarget.emitRunner?.() ?? '');
+    const goSrc = emitParser(grammar, goTarget, RECOVERY);
+    defaultPrefix('go', emitParser(grammar, goTarget), goSrc);
+    writeFileSync(`${gdir}/parser.go`, asGoMain(goSrc));
+    writeFileSync(`${gdir}/runner.go`, goTarget.emitRunner?.(RECOVERY) ?? '');
     writeFileSync(`${gdir}/go.mod`, 'module p\n\ngo 1.21\n');
     goBuild(['-o', `${gdir}/p`, '.'], { cwd: gdir });
     const bin = `${gdir}/p`;
@@ -1914,19 +2061,21 @@ for (const c of CASES) {
       label: 'go', run: (src) => runProc(bin, [], src), batch: (srcs) => runBatch(bin, srcs), tokens: (srcs) => tokBatch(bin, srcs),
       doc: (srcs) => docOutcomes(docBatch(bin, 'batch-doc', srcs)), docBuilder: (srcs) => verdicts(docBatch(bin, 'batch-doc-builder', srcs)), lidOf: (texts) => lidBatch(bin, texts),
       edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),
-      spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true,
+      spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true, total: (srcs) => totalBatch(bin, srcs),
     });
   }
   if (HAS_RUST && !c.tsOnly && (!TARGETS_ONLY || TARGETS_ONLY.includes('rust'))) {
     const rfile = `${dir}/main.rs`;
     const bin = `${dir}/pr`;
-    writeFileSync(rfile, emitParser(grammar, rustTarget) + (rustTarget.emitRunner?.() ?? ''));
+    const rsSrc = emitParser(grammar, rustTarget, RECOVERY);
+    defaultPrefix('rust', emitParser(grammar, rustTarget), rsSrc);
+    writeFileSync(rfile, rsSrc + (rustTarget.emitRunner?.(RECOVERY) ?? ''));
     execFileSync('rustc', ['-A', 'warnings', rfile, '-o', bin], { stdio: 'pipe' });
     runners.push({
       label: 'rust', run: (src) => runProc(bin, [], src), batch: (srcs) => runBatch(bin, srcs), tokens: (srcs) => tokBatch(bin, srcs),
       doc: (srcs) => docOutcomes(docBatch(bin, 'batch-doc', srcs)), lidOf: (texts) => lidBatch(bin, texts),
       edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),
-      spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true,
+      spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true, total: (srcs) => totalBatch(bin, srcs),
     });
   }
 
@@ -2308,6 +2457,7 @@ for (const c of CASES) {
     }
     corpusMs += Date.now() - t0;
     corpusInputs += inputs.length;
+    if (ECMASCRIPT.has(c.grammar)) recoveryClass(c, grammar, runners, oracleOut, [...inputs.map((i) => i.src), ...c.accept, ...c.reject, ...(c.grammar === 'typescript' ? CURATED_TS : [])], tokenize);
   }
 }
 console.log(`  parity corpus: ${corpusInputs} inputs over ${CASES.length} grammars, ${(corpusMs / 1000).toFixed(1)}s`);
