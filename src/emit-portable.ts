@@ -456,6 +456,14 @@ export type PrattRule = {
   // extend. Prefix and binary nodes always close the tail.
   nudBracketClosesTail: boolean[];                    // parallel to nudBrackets: ends in a fresh operand (`... $`)
   nudSeqClosesTail: boolean[];                        // parallel to nudSeqs: ends in a fresh operand
+  // CAP PROPAGATION through a trailing operand: a node whose rightmost child is a self operand
+  // parsed as a full expression (bp 0) takes that operand's cap, so `...() => {}` and
+  // `a ? b : () => {}` are capped and a trailing `|| x` / `? :` stays unconsumed (the binary
+  // operator's right operand does the same: PrattLowering.binary). False throughout in a rule with
+  // no capped arm, which never returns capped; a chain-rhs operand (at its level's bp, above every
+  // cap) is never capped either.
+  nudBracketCapsFromTail: boolean[];                  // parallel to nudBrackets
+  nudSeqCapsFromTail: boolean[];                      // parallel to nudSeqs
   nudSeqPredictive: boolean;                          // all nudSeqs non-null & pairwise disjoint → render a switch
   nudCapped: Array<{ steps: Step[]; capBp: number }>; // NUD: an assignment-level capped sequence (arrow function) — parsed only when minBp < capBp, admits no led
   nudOrder: NudRef[];                                 // every NUD arm above and the prefix arm, in declaration order: the longest-match candidates
@@ -477,6 +485,7 @@ export type PrattRule = {
   ledSuppressedIn: number[][];                        // parallel to leds: the ParserIR.suppressSets that hold its connector — the led is tried only while the set in force is none of them
   ledForm: AssignForm[];                              // parallel to leds: the built node's form (a binary-connector led, `a < T >`/`a as T`, is not a target)
   ledClosesTail: boolean[];                           // parallel to leds: not an access tail, or ends in a negative lookahead (`Foo<T>` then nothing)
+  ledCapsFromTail: boolean[];                         // parallel to leds: its trailing self operand's cap is the node's (see nudSeqCapsFromTail): the ternary's `: $`
   // parallel to leds: the MIXFIX OPERAND RE-BIND (the interpreter's matchMixfixLed). A led
   // `<L1> $ <L2> …` (its connector, then this rule, then a literal) whose greedy operand took the L2
   // it needs fails; the re-bind then retries the operand CAPPED at each depth-0 L2 token inside what
@@ -1816,6 +1825,10 @@ export type LedGuardLowering = {
   notSuppressed(set: number): string;            // the suppress set in force is not ParserIR.suppressSets[set]
   ifAll(parts: string[]): string;                // the `if` before the led's block ('' when nothing gates it)
 };
+// How a NUD arm's node is capped: never; always (a capExpr arm: an assignment-level arrow); or
+// iff its trailing self operand returned capped (PrattRule's cap propagation): the engine's
+// capped flag as that operand left it.
+export type NodeCap = 'none' | 'arm' | 'tail';
 export type PrattLowering = {
   steps: StepLowering;                           // the arms' steps
   ifAll(conds: string[], stmt: string): string;  // `if conds then stmt` as one statement (stmt alone when none)
@@ -1827,11 +1840,11 @@ export type PrattLowering = {
   leafEnd: string;                               // where a one-token arm ends
   nudLeaf(i: number): string;                    // the token arm i (after its tests): its node as the best
   nudTpl(i: number, hole: string): string;       // arm i's interpolated template, whose holes `hole` parses
-  nudSeq(i: number, cond: string, closesTail: boolean, capped: boolean): string;  // the CANDIDATE frame of a sequence arm
+  nudSeq(i: number, cond: string, closesTail: boolean, cap: NodeCap): string;  // the CANDIDATE frame of a sequence arm
   nudPrefix(i: number): string;                  // the prefix-operator arm
   dispatch: DispatchLowering;
   led: LedGuardLowering;
-  ledArm(i: number, cond: string, form: AssignForm, closesTail: boolean, exit: boolean, clean: boolean, rebind: string | null): string;  // rebind: the call of led i's re-bind (PrattRule.ledRebind), tried after cond failed and was undone; it undoes itself when it fails
+  ledArm(i: number, cond: string, form: AssignForm, closesTail: boolean, exit: boolean, clean: boolean, rebind: string | null, capsFromTail: boolean): string;  // capsFromTail: PrattRule.ledCapsFromTail (matched with the capped flag set, the node returns at once, still capped, with form: as `binary`); rebind: the call of led i's re-bind (PrattRule.ledRebind), tried after cond failed and was undone; it undoes itself when it fails
   // The call of a led's re-bind (PrattRule.ledRebind), the runtime's one re-bind function (its
   // spelling per target, rebindBrackets its bracket ids): open, operand, sep, rest are the led's
   // steps as conditions in the inner lowering (the connector, the self operand, L2, the rest), sepLid
@@ -1854,7 +1867,7 @@ export type PrattLowering = {
   // Each commit runs its arm when conds hold and returns its node, else fails (commitFail: no
   // match, with the state the frame leaves when nothing matched).
   commitLeaf(i: number, conds: string[]): string;                 // token arm i
-  commitSeq(i: number, conds: string[], cond: string, closesTail: boolean, capped: boolean, undo: boolean, nullable: boolean): string;  // a bracket / sequence / capped arm
+  commitSeq(i: number, conds: string[], cond: string, closesTail: boolean, cap: NodeCap, undo: boolean, nullable: boolean): string;  // a bracket / sequence / capped arm
   commitPrefix(i: number, conds: string[]): string;               // the prefix-operator arm
   commitFail: string;
   commitSw: CommitLowering;
@@ -1862,6 +1875,7 @@ export type PrattLowering = {
 /** A Pratt rule's functions in the form `L` spells. */
 export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | 'elements' | 'identToken' | 'identLike' | 'puncts' | 'gtComps'>, ids: LexIdPlan, L: PrattLowering): string {
   const cond = (steps: Step[]) => conjOf(steps, L.steps);
+  const tailCap = (fromTail: boolean): NodeCap => (fromTail ? 'tail' : 'none');
   const d = r.nudDispatch;
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
@@ -1873,16 +1887,16 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
       }
       case 'bracket': {
         const b = r.nudBrackets[a.index]!;
-        return L.ifAll(keyed ? [] : [L.lidIs(lidOf(ids, b.first))], L.nudSeq(i, cond(b.steps), r.nudBracketClosesTail[a.index]!, false));
+        return L.ifAll(keyed ? [] : [L.lidIs(lidOf(ids, b.first))], L.nudSeq(i, cond(b.steps), r.nudBracketClosesTail[a.index]!, tailCap(r.nudBracketCapsFromTail[a.index]!)));
       }
       case 'seq': {
         const g = r.nudSeqGuard[a.index]!;
-        return L.ifAll(L.nudGuard(g, keyed), L.nudSeq(i, cond(guardedSteps(g, r.nudSeqs[a.index]!)), r.nudSeqClosesTail[a.index]!, false));
+        return L.ifAll(L.nudGuard(g, keyed), L.nudSeq(i, cond(guardedSteps(g, r.nudSeqs[a.index]!)), r.nudSeqClosesTail[a.index]!, tailCap(r.nudSeqCapsFromTail[a.index]!)));
       }
       case 'capped': {
         const c = r.nudCapped[a.index]!;
         const g = r.nudCappedGuard[a.index]!;
-        return L.ifAll([L.capBelow(c.capBp), ...L.nudGuard(g, keyed)], L.nudSeq(i, cond(guardedSteps(g, c.steps)), false, true));
+        return L.ifAll([L.capBelow(c.capBp), ...L.nudGuard(g, keyed)], L.nudSeq(i, cond(guardedSteps(g, c.steps)), false, 'arm'));
       }
       case 'prefix': return L.nudPrefix(i);
     }
@@ -1912,7 +1926,7 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
   const leds = r.leds.length === 0 ? '' : L.ledSwitch(groupByPreserveOrder(r.leds, (b) => lidOf(ids, b.first)).map((g) => {
     const lid = g.key as number;
     return { key: lid, arms: g.members.map(({ item: b, index: i }, j) =>
-      `${ledIf(i)}${L.ledArm(i, cond(b.steps), r.ledForm[i]!, r.ledClosesTail[i]!, exits.has(lid) && j === g.members.length - 1, r.ledClean[i]!, rebinds[i] ?? null)}`) };
+      `${ledIf(i)}${L.ledArm(i, cond(b.steps), r.ledForm[i]!, r.ledClosesTail[i]!, exits.has(lid) && j === g.members.length - 1, r.ledClean[i]!, rebinds[i] ?? null, r.ledCapsFromTail[i]!)}`) };
   }));
   const postToks = r.postfixToks.length === 0 ? ''
     : L.postfixToks(groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok)).map((g) => g.key as number)) + (r.postfixTplHole !== undefined ? L.postfixTpl(r.postfixTplHole) : '');
@@ -1934,9 +1948,9 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
     const a = r.nudOrder[c.arm]!, undo = !c.clean || c.nullable;
     switch (a.kind) {
       case 'tok': return L.commitLeaf(c.arm, tests(c));
-      case 'bracket': return L.commitSeq(c.arm, tests(c), cond(r.nudBrackets[a.index]!.steps), r.nudBracketClosesTail[a.index]!, false, undo, c.nullable);
-      case 'seq': return L.commitSeq(c.arm, tests(c), cond(guardedSteps(r.nudSeqGuard[a.index]!, r.nudSeqs[a.index]!)), r.nudSeqClosesTail[a.index]!, false, undo, c.nullable);
-      case 'capped': return L.commitSeq(c.arm, tests(c), cond(guardedSteps(r.nudCappedGuard[a.index]!, r.nudCapped[a.index]!.steps)), false, true, undo, c.nullable);
+      case 'bracket': return L.commitSeq(c.arm, tests(c), cond(r.nudBrackets[a.index]!.steps), r.nudBracketClosesTail[a.index]!, tailCap(r.nudBracketCapsFromTail[a.index]!), undo, c.nullable);
+      case 'seq': return L.commitSeq(c.arm, tests(c), cond(guardedSteps(r.nudSeqGuard[a.index]!, r.nudSeqs[a.index]!)), r.nudSeqClosesTail[a.index]!, tailCap(r.nudSeqCapsFromTail[a.index]!), undo, c.nullable);
+      case 'capped': return L.commitSeq(c.arm, tests(c), cond(guardedSteps(r.nudCappedGuard[a.index]!, r.nudCapped[a.index]!.steps)), false, 'arm', undo, c.nullable);
       case 'prefix': return L.commitPrefix(c.arm, tests(c));
     }
   };
@@ -2343,6 +2357,10 @@ function buildPratt(
   const nudBracketClosesTail = nudBrackets.map((b) => endsInOperand(b.steps));
   const nudSeqClosesTail = nudSeqs.map(endsInOperand);
   const ledClosesTail = leds.map((l, i) => { const last = l.steps[l.steps.length - 1]?.t; return !ledAccessTail[i] || last === 'look' || last === 'ahead' || last === 'aheadCtx'; });
+  const capsFromTail = (steps: Step[]): boolean => nudCapped.length > 0 && endsInOperand(steps);
+  const nudBracketCapsFromTail = nudBrackets.map((b) => capsFromTail(b.steps));
+  const nudSeqCapsFromTail = nudSeqs.map(capsFromTail);
+  const ledCapsFromTail = leds.map((l) => capsFromTail(l.steps));
   // A template token arm also matches an interpolated template (its head token), so it is in `rest`.
   const nudDispatch = dispatchOf(nudOrder.map((a): TokenSet | null => {
     switch (a.kind) {
@@ -2353,7 +2371,7 @@ function buildPratt(
       case 'prefix': return null;
     }
   }));
-  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, nudSeqGuard, nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedGuard, nudOrder, nudNames, nudDispatch, prefix, binary, leds, ledNames, ledLeftNames, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledSuppressedIn: [], ledForm, ledClosesTail, ledRebind, ledClean: [], postfixToks, postfixTokNames, postfix, postfixSameLine, opNames: names.ops ?? null, ...(nudTplHole !== undefined ? { nudTplHole } : {}), ...(postfixTplHole !== undefined ? { postfixTplHole } : {}) };
+  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, nudSeqGuard, nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudBracketCapsFromTail, nudSeqCapsFromTail, nudCapped, nudCappedGuard, nudOrder, nudNames, nudDispatch, prefix, binary, leds, ledNames, ledLeftNames, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledSuppressedIn: [], ledForm, ledClosesTail, ledCapsFromTail, ledRebind, ledClean: [], postfixToks, postfixTokNames, postfix, postfixSameLine, opNames: names.ops ?? null, ...(nudTplHole !== undefined ? { nudTplHole } : {}), ...(postfixTplHole !== undefined ? { postfixTplHole } : {}) };
 }
 
 // ── Lex integer ids (kid = kind index, lid = text/literal index) ──
@@ -3079,11 +3097,11 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
   // A Pratt rule: [PRATT nudTplHole postfixTplHole postfixSameLine, then the offsets from the
   //   record's start of its six sections:
   //   nArms (tag operand*)*      NUD arms in declaration order: TOK kid isTemplateToken | BRACKET
-  //                              firstLid steps closesTail | SEQ guard steps closesTail | CAPPED
+  //                              firstLid steps closesTail capsFromTail | SEQ guard steps closesTail capsFromTail | CAPPED
   //                              guard steps capBp | PREFIX
   //   nPre (lid rbp requireTarget form)*  nBin (lid lbp rbp requireTarget noUnaryLhs)*
   //   nPost (lid lbp requireTarget)*
-  //   nLed (firstLid steps lbp sameLine accessTail closesTail form notLeftLeaf rebind nSupp set*)*
+  //   nLed (firstLid steps lbp sameLine accessTail closesTail capsFromTail form notLeftLeaf rebind nSupp set*)*
   //                              lbp -1: none; notLeftLeaf -1 or [n lid*]; rebind: the L2 lid of
   //                              its re-bind (PrattRule.ledRebind) or -1
   //   nPostTok kid*]
@@ -3091,8 +3109,8 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
     const arms = r.nudOrder.map((a): Cell[] => {
       switch (a.kind) {
         case 'tok': return [REC_N_TOK, kidOf(ids, r.nudToks[a.index]!), r.nudTplHole !== undefined && ir.tpl !== null && r.nudToks[a.index] === ir.tpl.token ? 1 : 0];
-        case 'bracket': return [REC_N_BRACKET, lid(r.nudBrackets[a.index]!.first), ref(list(r.nudBrackets[a.index]!.steps)), r.nudBracketClosesTail[a.index] ? 1 : 0];
-        case 'seq': { const g = r.nudSeqGuard[a.index]!; return [REC_N_SEQ, ref(guard(g)), ref(list(skip(g, r.nudSeqs[a.index]!))), r.nudSeqClosesTail[a.index] ? 1 : 0]; }
+        case 'bracket': return [REC_N_BRACKET, lid(r.nudBrackets[a.index]!.first), ref(list(r.nudBrackets[a.index]!.steps)), r.nudBracketClosesTail[a.index] ? 1 : 0, r.nudBracketCapsFromTail[a.index] ? 1 : 0];
+        case 'seq': { const g = r.nudSeqGuard[a.index]!; return [REC_N_SEQ, ref(guard(g)), ref(list(skip(g, r.nudSeqs[a.index]!))), r.nudSeqClosesTail[a.index] ? 1 : 0, r.nudSeqCapsFromTail[a.index] ? 1 : 0]; }
         case 'capped': { const g = r.nudCappedGuard[a.index]!, c = r.nudCapped[a.index]!; return [REC_N_CAPPED, ref(guard(g)), ref(list(skip(g, c.steps))), c.capBp]; }
         case 'prefix': return [REC_N_PREFIX];
       }
@@ -3100,7 +3118,7 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
     const ops = prattOpTables(r, ids);
     const leds = r.leds.map((b, i): Cell[] => {
       const nll = r.ledNotLeftLeaf[i];
-      return [lid(b.first), ref(list(b.steps)), r.ledLbp[i] ?? -1, r.ledSameLine[i] ? 1 : 0, r.ledAccessTail[i] ? 1 : 0, r.ledClosesTail[i] ? 1 : 0, r.ledForm[i]!,
+      return [lid(b.first), ref(list(b.steps)), r.ledLbp[i] ?? -1, r.ledSameLine[i] ? 1 : 0, r.ledAccessTail[i] ? 1 : 0, r.ledClosesTail[i] ? 1 : 0, r.ledCapsFromTail[i] ? 1 : 0, r.ledForm[i]!,
         ref(nll ? emit([nll.length, ...nll.map(lid)]) : -1), r.ledRebind[i] ? lid(r.ledRebind[i]!) : -1, r.ledSuppressedIn[i]!.length, ...r.ledSuppressedIn[i]!];
     });
     const sections: Cell[][] = [

@@ -49,7 +49,9 @@ const TOTAL_K = 3;
 // javascript 5441 -> 5439 (land/shape-ident-reserved): `undefined` is no grammar literal any more, so the
 // mutation corpus (which substitutes grammar literals) holds other inputs (`with  undefined ) { }` mutants
 // become others): the disagreements fall 186 -> 182, the agreements 5,441 -> 5,439 (of 5,621 rejects now).
-const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5439, typescript: 5950 };
+// typescript 5950 -> 5946 (land/sound-cap-tail): the cap-through-a-trailing-operand accepts
+// (`a ? b : () => {};`, `[...() => {}];`, …) draw another mutant set: 5,946 of 6,842 rejects agree.
+const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5439, typescript: 5946 };
 const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // P10 EXPECTED-FAIL on `$missing`-only repairs, by class. GREEDY CAPTURE: the repair is right by
 // position (each supplied token is where the derivation needs it), but the substituted token is
