@@ -149,11 +149,29 @@ How to read it:
   0.680 to 0.860 in reuse mode (run 45222935238; `checker.ts` 0.805). Compare time ratios only
   within one job; the instruction columns are the stable ones.
 - The products differ (CST against AST), as stated above; this is not a like-for-like claim.
-- Not in the table: the TSX and JSX inputs. The oxc side of the harness parsed every file as
-  plain TypeScript, so oxc rejected both, and a ratio printed for them would compare a parse
-  with a rejection. The harness is being changed to take the source type from the file
-  extension and to print a ratio only when both parsers accept; those rows are recorded after
-  that.
+#### The element inputs (TSX and JSX)
+
+`measure-profile` full scope, run 45276033027, monogram at `908ed1e` (with only the input change of
+the harness on top), AMD EPYC runner; Callgrind instructions per parse. The inputs
+([`element-inputs.ts`](../test/bench-rust-profile/element-inputs.ts)) are the tsc conformance
+corpus's element code filtered to the parts BOTH parsers accept (and tsc's parser): 319 TSX parts of
+the 425 that contain a tag (tsc's parser accepts 364, the interpreter 360 of those, oxc rejects 2 of
+them, 39 left out for repeating an earlier part's export), 67 JSX parts of the 366 that tsc's parser
+accepts (the interpreter 85, 18 left out for a repeated export); each input joins its parts. Both
+parsers accept every part and each joined input.
+
+| input | bytes | parts | oxc, reuse | monogram, reuse | ÷ oxc | oxc, fresh | monogram, fresh | ÷ oxc |
+|:--|--:|--:|--:|--:|--:|--:|--:|--:|
+| `jsx-corpus.tsx` (typescriptreact) | 168,466 | 319 | 10,380,015 | 13,982,077 | 1.347 | 10,366,486 | 14,436,673 | 1.393 |
+| `jsx-corpus.jsx` (javascriptreact) | 9,335 | 67 | 503,319 | 613,844 | 1.220 | 503,660 | 643,825 | 1.278 |
+
+On element code monogram executes 22% to 39% more instructions than oxc, where on plain TypeScript
+it executes fewer (the table above). Per token of `jsx-corpus.tsx` (33,089 tokens) monogram runs
+422.6 instructions (reuse) against 297.1 on `checker.ts` in the same run, oxc 313.7 against 334.5:
+monogram's cost per token rises by 42% on element code and oxc's falls by 6%. Of monogram's
++125.5 per token, the lexer alone accounts for +48.5 (190.8 against 142.3: the element frames,
+text runs and holes of the section "Recorded result: element dialects" below, where the same
+lexer figure was 203.7 on an earlier corpus), the rest is the parse.
 
 ### monogram `e6cc55c` (2026-11-22)
 
