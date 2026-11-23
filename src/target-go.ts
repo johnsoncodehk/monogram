@@ -626,7 +626,7 @@ ${inner}\tif specTok < 0 { break }
 \tspecStep(); pos = specRewind(false)
 \t}
 ` : inner;
-  return `${p.head}${consts}${p.scans}func lexFrom(src string, pos int, pendingNl bool, ${rxParams}templateStack []int, elEnded bool, tagAngle, laEnd, specUntil int, ${raw ? 'tagAt []int, ' : ''}acc *[]Tok, limit int) (int, bool, ${rxRet}[]int, bool, int, int, int${raw ? ', []int' : ''}, *LexErr) {
+  return `${p.head}${consts}${p.scans}func lexFrom(src string, pos int, pendingNl bool, ${rxParams}templateStack []int, elEnded bool, tagAngle, laEnd, specUntil int, ${raw ? 'tagAt []int, ' : ''}acc *[]Tok, limit int) (int, bool, ${rxRet}[]int, bool, int, int, int${raw ? ', []int' : ''}, *lexErr) {
 \tn := len(src)
 \tvar err *lexErr
 ${hotState}${prevIsValue}${sig ? '' : refreshFn}${specState}${emitFn}\tbase := len(*acc)
