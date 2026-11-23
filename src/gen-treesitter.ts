@@ -53,7 +53,9 @@ export interface TreeSitterOutput {
  *  - `reserved`: one-token exclusion of identifier-shaped literals before the `word` token that is
  *    not rendered as a reserved word set (see `reserved-set`);
  *  - `lookahead1`: one-token lookahead over any other continuation (no tree-sitter primitive; exact
- *    only by a FIRST-restricted copy of the continuation);
+ *    only by a FIRST-restricted copy of the continuation, which planFirstFilters builds for a
+ *    POSITIVE one; a negative one would copy nearly the whole continuation: every negative condition
+ *    copied measured JavaScript ×1.94 / TypeScript ×2.03 LALR table entries, so it stays dropped);
  *  - `lookahead`: a lookahead over more than one token or a nested assertion: not expressible;
  *  - `left-context`: a predicate on the left operand's head leaf (notLeftLeaf): not expressible. */
 export type AssertionClass = 'lowered' | 'vacuous' | 'reserved-set' | 'scanner' | 'reserved' | 'lookahead1' | 'lookahead' | 'left-context';
@@ -974,24 +976,31 @@ function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: 
   return { records, recordOf, nodes, reservedSets, isWordLiteral };
 }
 
-// ── One-token lookaheads as FIRST-filtered copies (planFirstFilters) ──────────
-// A CFG has no lookahead, but a lookahead on the NEXT token alone is a property of the strings that
-// follow: `not(X) R` derives exactly the strings of R whose first token is not in X, and
-// `not(not(Y)) R` the ones whose first token is in Y. So such a site renders exactly as a COPY of what
-// follows restricted by its first token: an alternative whose FIRST passes is kept, one whose FIRST
-// fails is dropped, and one with both is restricted in its left corner, recursively, so a rule met
-// there is copied too (one copy per rule and condition, shared by every site and every recursion with
-// that condition: left recursion maps to the copy itself, which is how a Pratt rule's operator
-// productions get their left operand). Copies are hidden rules rendered as `alias($._copy, $.rule)`, so
-// the tree is the one the uncopied rule gives. Keyword extraction is modelled as in classifyAssertions:
-// the word token stands for every word-shaped literal it can lex, so a positive condition on a word
-// keeps the word token only as that word (a NAMES rule of the words, aliased to the word token), and
-// a negative one on a word the step does not already reserve would need a reserved word set of its
-// own. What this cannot render stays dropped and keeps its class in the ledger (`residual`): a
-// condition on more than one token, a condition whose site's continuation may be empty (it would
-// restrict what follows the rule), a nullable rule in a left corner, a Pratt operator set the
-// condition splits, a word the condition reserves, a named tsRelax group in a left corner.
-type FirstFilter = { in: Set<string> | null; out: Set<string> };
+// ── Positive one-token lookaheads as FIRST-filtered copies (planFirstFilters) ──
+// A CFG has no lookahead, but a positive lookahead on the NEXT token is a property of the strings
+// that follow: `not(not(Y)) R` derives exactly the strings of R whose first token is in Y. Such a site
+// renders exactly as a COPY of R restricted by its first token: an alternative whose FIRST is inside Y
+// is kept (the same node), one whose FIRST is outside is dropped, and one with both is restricted in
+// its left corner, recursively, so a rule met there is copied too: one copy per rule and condition
+// (`_stmt_first_1`), shared by every site and every recursion with that condition (left recursion maps
+// to the copy itself). A copy is a hidden rule rendered as `alias($._stmt_first_1, $.stmt)`, so the
+// tree is the one the uncopied rule gives. Keyword extraction is modelled as in classifyAssertions: the
+// word token stands for the word-shaped literals it can lex, so a condition naming a word keeps the word
+// step only as that word: a NAMES rule of the words (`_ident_names_1`), aliased to the word token.
+// Only POSITIVE conditions: they keep the few alternatives that start as Y does. A negative one
+// (`not(X)`) keeps nearly everything, so its copy is nearly the whole continuation (measured with the
+// LALR entries model: the expression statement's `not('{' | 'function' | 'class' | Decorator)` +27% JS
+// table entries, the concise body's `not('{')` +34% JS, TypeScript's `not('static')` +26%; every
+// condition together doubles both grammars): they stay dropped, recorded in the ledger.
+// What a positive condition cannot render exactly stays recorded (the ledger keeps its class):
+// - a lookahead over token SEQUENCES (`'var' | ['await' 'using']`) renders as the condition on their
+//   first tokens, a superset of what it accepts;
+// - a Pratt rule reached in a left corner (only through a word the condition names, `export let = 1`,
+//   or a keyword prefix operator, TypeScript's `export await using`) would be copied whole for those:
+//   it is left out (the generated grammar already lexes that word as the keyword there);
+// - a condition that reaches past the end of its sequence (an optional item last) is the condition on
+//   what follows the rule: rendered only where no terminal of the rule's FOLLOW is in Y (the empty rest
+//   is dropped), else left dropped; likewise a nullable rule or a named tsRelax group in a left corner.
 interface FirstFilterPlan {
   /** The grammar as tree-sitter renders it: the sites rewritten, the copies after their originals. */
   grammar: CstGrammar;
@@ -999,7 +1008,7 @@ interface FirstFilterPlan {
   aliasOf: Map<string, string>;
   /** A copy rule → its hidden snake name. */
   snakeOf: Map<string, string>;
-  /** The assertion nodes every site of which renders as a copy (the ledger's `lowered`). */
+  /** The assertion nodes every site of which renders exactly (the ledger's `lowered`). */
   lowered: Set<RuleExpr>;
   /** A names reference → the word step it stands for (its `name` field, if it has one). */
   stepOf: Map<RuleExpr, RuleExpr>;
@@ -1027,9 +1036,8 @@ function planFirstFilters(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
   // The first tokens of a choice of token sequences (`"var" | ["await" "using"]`), else null.
   const firstTokens = (e: RuleExpr): Set<string> | null => {
     e = tsView(e);
-    const arms = e.type === 'alt' ? e.items : [e];
     const out = new Set<string>();
-    for (const a of arms) {
+    for (const a of e.type === 'alt' ? e.items : [e]) {
       const v = tsView(a);
       const s = tokSet(v.type === 'seq' && v.items.length ? v.items[0] : v);
       if (!s) return null;
@@ -1037,173 +1045,139 @@ function planFirstFilters(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
     }
     return out;
   };
-  // The one-token condition a `not` renders as, when the ledger left it dropped as `lookahead1`. A
-  // positive lookahead over token sequences (`lookahead`) renders as the condition on their first
-  // tokens: a superset of what it accepts, so it stays inexact (`approx`).
-  const approx = new Set<RuleExpr>();
+  // A site whose rendering accepts more than its condition (a sequence lookahead, a Pratt corner left
+  // out), noted while it is filtered; a copy remembers it for every later site that reuses it.
+  const inexact = new Set<RuleExpr>();
   let siteInexact = false;
-  const conditionOf = (e: RuleExpr): FirstFilter | null => {
+  // The tokens Y of a positive lookahead the ledger left dropped (`lookahead1`; `lookahead` over token
+  // sequences: their first tokens, inexact).
+  const conditionOf = (e: RuleExpr): Set<string> | null => {
     if (e.type !== 'not') return null;
-    const cls = (recordOf.get(e) ?? []).map(r => r.cls);
     const b = tsView(e.body);
-    if (cls.includes('lookahead1')) {
-      if (b.type === 'not') { const y = tokSet(b.body); return y ? { in: y, out: new Set() } : null; }
-      const x = tokSet(b);
-      return x ? { in: null, out: x } : null;
-    }
-    if (cls.includes('lookahead') && b.type === 'not') {
-      const y = firstTokens(b.body);
-      if (!y) return null;
-      approx.add(e);
-      return { in: y, out: new Set() };
-    }
-    return null;
+    if (b.type !== 'not') return null;
+    const cls = (recordOf.get(e) ?? []).map(r => r.cls);
+    if (cls.includes('lookahead1')) return tokSet(b.body);
+    if (!cls.includes('lookahead')) return null;
+    const y = firstTokens(b.body);
+    if (y) inexact.add(e);
+    return y;
   };
-  const meet = (a: FirstFilter, b: FirstFilter): FirstFilter => ({
-    in: a.in && b.in ? new Set([...a.in].filter(t => b.in!.has(t))) : a.in ?? b.in,
-    out: new Set([...a.out, ...b.out]),
-  });
-  const keyOf = (f: FirstFilter) => `${f.in ? [...f.in].sort().join(' ') : '*'}|${[...f.out].sort().join(' ')}`;
-  // A terminal against a condition: 'pass', 'fail', or, for the word token, the words it may only be.
-  const test = (t: string, f: FirstFilter, reservedHere: ReadonlySet<string>): 'pass' | 'fail' | string[] => {
-    if (t !== word) {
-      const viaWord = word !== undefined && isWordShaped(t);
-      if (f.out.has(t) || (viaWord && f.out.has(word!))) return 'fail';
-      return !f.in || f.in.has(t) || (viaWord && f.in.has(word!)) ? 'pass' : 'fail';
-    }
-    if (f.out.has(t)) return 'fail';
-    const excluded = [...f.out].filter(x => isWordShaped(x) && !reservedHere.has(x.slice(1)));
-    if (excluded.length) throw new FirstFilterResidual(`the condition reserves ${excluded.join(' ')} on the word token`);
-    if (!f.in || f.in.has(t)) return 'pass';
-    const words = [...f.in].filter(x => isWordShaped(x) && !reservedHere.has(x.slice(1))).map(x => x.slice(1)).sort();
-    return words.length ? words : 'fail';
+  const keyOf = (y: Set<string>) => [...y].sort().join(' ');
+  // A terminal against Y: does a token it stands for start as Y allows. A word-shaped literal passes
+  // where Y holds the word token; the word token passes where Y holds it, and otherwise may only be the
+  // words of Y that the step's own guards do not reserve.
+  const test = (t: string, y: Set<string>, reservedHere: ReadonlySet<string> = NO_WORDS): boolean | string[] => {
+    if (t !== word) return y.has(t) || (word !== undefined && isWordShaped(t) && y.has(word));
+    if (y.has(t)) return true;
+    const words = [...y].filter(x => isWordShaped(x) && !reservedHere.has(x.slice(1))).map(x => x.slice(1)).sort();
+    return words.length ? words : false;
   };
   const NO_WORDS: ReadonlySet<string> = new Set();
-  const copies = new Map<string, string | null>();          // `rule|condition` → copy name (null: in progress failed)
-  const copyBodies = new Map<string, RuleExpr>();           // copy name → body
+  const copies = new Map<string, string | null>();          // `rule|Y` → copy name (null: it cannot be built)
+  const copyBodies = new Map<string, RuleExpr>();           // copy (or names) rule → body
   const copiesOf = new Map<string, string[]>();             // rule → its copies, in order
-  const copyCount = new Map<string, number>();
-  const building = new Set<string>();
+  const inexactCopies = new Set<string>();
   const namesRules = new Map<string, string>();             // words → names rule
-  const snakeOfRule = (n: string) => toSnake(n);
-  const namesRef = (words: string[], step?: RuleExpr): RuleExpr => {
+  const namesRef = (words: string[], step: RuleExpr): RuleExpr => {
     const k = words.join(' ');
     let n = namesRules.get(k);
     if (!n) {
       n = `${word}$names${namesRules.size + 1}`;
       namesRules.set(k, n);
       plan.aliasOf.set(n, word!);
-      plan.snakeOf.set(n, `_${snakeOfRule(word!)}_names_${namesRules.size}`);
+      plan.snakeOf.set(n, `_${toSnake(word!)}_names_${namesRules.size}`);
       copyBodies.set(n, words.length === 1 ? { type: 'literal', value: words[0] } : { type: 'alt', items: words.map(w => ({ type: 'literal', value: w })) });
     }
     const ref: RuleExpr = { type: 'ref', name: n };
-    if (step) plan.stepOf.set(ref, step);
+    plan.stepOf.set(ref, step);
     return ref;
   };
-  const copyOf = (name: string, f: FirstFilter): string => {
-    const key = `${name}|${keyOf(f)}`;
+  const copyOf = (name: string, y: Set<string>): string => {
+    const key = `${name}|${keyOf(y)}`;
     const have = copies.get(key);
-    if (have && building.has(have) && process.env.FF_NOLEFTREC) throw new FirstFilterResidual(`left-recursive ${name}`);
-    if (have) return have;
-    if (have === null) throw new FirstFilterResidual(`${name} under ${keyOf(f)}`);
+    if (have === null) throw new FirstFilterResidual(`${name} under ${keyOf(y)}`);
+    if (have) { if (inexactCopies.has(have)) siteInexact = true; return have; }
     const list = copiesOf.get(name) ?? copiesOf.set(name, []).get(name)!;
-    const n = (copyCount.get(name) ?? 0) + 1;
-    copyCount.set(name, n);
-    const copy = `${name}$first${n}`;
+    const copy = `${name}$first${list.length + 1}`;
+    plan.snakeOf.set(copy, `_${toSnake(name)}_first_${list.length + 1}`);
     copies.set(key, copy);
     list.push(copy);
-    building.add(copy);
+    const outer = siteInexact;
+    siteInexact = false;
     try {
-      const body = filt(rules.get(name)!.body, f);
-      if (!body) throw new FirstFilterResidual(`${name} has no string under ${keyOf(f)}`);
+      const body = filt(rules.get(name)!.body, y);
+      if (!body) throw new FirstFilterResidual(`${name} has no string under ${keyOf(y)}`);
       copyBodies.set(copy, body);
       plan.aliasOf.set(copy, name);
-      plan.snakeOf.set(copy, `_${snakeOfRule(name)}_first_${n}`);
-      building.delete(copy);
+      if (siteInexact) inexactCopies.add(copy);
+      siteInexact ||= outer;
       return copy;
     } catch (err) {
       copies.set(key, null);
-      building.delete(copy);
-      list.splice(list.indexOf(copy), 1);
+      plan.snakeOf.delete(copy);
+      list.pop();
       throw err;
     }
   };
-  // Every non-empty string of `e` whose first token passes `f` (null: none); `e` itself when that is
-  // all of them.
-  const filt = (e: RuleExpr, f: FirstFilter): RuleExpr | null => {
+  // Every non-empty string of `e` whose first token passes Y (null: none); `e` itself when that is all
+  // of them.
+  const filt = (e: RuleExpr, y: Set<string>): RuleExpr | null => {
     switch (e.type) {
-      case 'literal': return test(`'${e.value}`, f, NO_WORDS) === 'pass' ? e : null;
+      case 'literal': return test(`'${e.value}`, y) === true ? e : null;
       case 'ref': {
-        if (e.hole !== undefined || tokenNames.has(e.name) || !rules.has(e.name)) {
-          const r = test(e.name, f, NO_WORDS);
-          return r === 'pass' ? e : r === 'fail' ? null : namesRef(r);
-        }
+        if (e.hole !== undefined || tokenNames.has(e.name) || !rules.has(e.name)) return test(e.name, y) === true ? e : null;
         if (sets.nullable(e)) throw new FirstFilterResidual(`nullable rule ${e.name} in a left corner`);
-        // The word token is decided at its step (its own guards may reserve what the condition excludes).
+        // The word token is decided at its step (by the words the step's guards reserve).
         let pass = 0, fail = 0, partial = 0;
-        for (const t of sets.firstOf(e)) {
-          if (t !== word) { if (test(t, f, NO_WORDS) === 'pass') pass++; else fail++; }
-          else if (f.out.has(t)) fail++;
-          else if ((!f.in || f.in.has(t)) && ![...f.out].some(isWordShaped)) pass++;
-          else partial++;
-        }
+        for (const t of sets.firstOf(e)) { const r = test(t, y); if (r === true) pass++; else if (r === false) fail++; else partial++; }
         if (!fail && !partial) return e;
         if (!pass && !partial) return null;
-        // A positive condition reaches a Pratt rule only through a word it names (`export let = 1`:
-        // the identifier `let` heading an expression) or a keyword prefix operator (TypeScript's
-        // `export await using`): a copy of the whole expression rule for those. It is left out, as
-        // tree-sitter's keyword extraction leaves the name reading out today (the keyword wins where
-        // it is valid), and the site stays recorded as inexact.
-        if (f.in && hasMarker(rules.get(e.name)!.body)) { siteInexact = true; return null; }
-        return { ...e, name: copyOf(e.name, f) };
+        if (hasMarker(rules.get(e.name)!.body)) { siteInexact = true; return null; }
+        return { ...e, name: copyOf(e.name, y) };
       }
       case 'group': {
         if (e.tsRuleName) throw new FirstFilterResidual('a named tsRelax group in a left corner');
         const v = e.tsRelaxed ?? e.body;
-        const r = filt(v, f);
+        const r = filt(v, y);
         return r === v ? e : r;
       }
       case 'seq': {
-        const alts = filtItems(e.items, 0, f);
+        const alts = filtItems(e.items, 0, y);
         if (!alts) return null;
         if (alts.length === 1 && alts[0].length === e.items.length && alts[0].every((x, i) => x === e.items[i])) return e;
         const seqs = alts.map(items => items.length === 1 ? items[0] : { type: 'seq' as const, items });
         return seqs.length === 1 ? seqs[0] : { type: 'alt', items: seqs };
       }
       case 'alt': {
-        const items = e.items.map(i => filt(i, f));
+        const items = e.items.map(i => filt(i, y));
         if (items.every((x, i) => x === e.items[i])) return e;
         const kept = items.filter((x): x is RuleExpr => x !== null);
         return kept.length === 0 ? null : kept.length === 1 ? kept[0] : { type: 'alt', items: kept };
       }
       case 'quantifier': {
-        const b = filt(e.body, f);
+        const b = filt(e.body, y);
         if (!b) return null;
         if (e.kind === '+' && b === e.body) return e;
         return e.kind === '?' ? b : { type: 'seq', items: [b, { type: 'quantifier', kind: '*', body: e.body }] };
       }
       case 'sep': {
-        const b = filt(e.element, f);
+        const b = filt(e.element, y);
         if (!b) return null;
         const d: RuleExpr = { type: 'literal', value: e.delimiter };
         return { type: 'seq', items: [b, { type: 'quantifier', kind: '*', body: { type: 'seq', items: [d, e.element] } }, { type: 'quantifier', kind: '?', body: d }] };
       }
-      case 'prefix': {
-        let pass = 0, fail = 0;
-        for (const t of sets.firstOf(e)) if (test(t, f, NO_WORDS) === 'pass') pass++; else fail++;
-        if (pass && fail) throw new FirstFilterResidual('a prefix operator set the condition splits');
-        return fail ? null : e;
-      }
-      case 'op': case 'postfix': throw new FirstFilterResidual(`a ${e.type} marker first`);
+      case 'prefix': case 'op': case 'postfix':
+        throw new FirstFilterResidual(`a Pratt ${e.type} marker in a left corner`);   // reached only through hasMarker above
       default: return null;                         // a zero-width assertion alone: no non-empty string
     }
   };
-  // The item lists (alternatives) of `items[i..]` restricted by `f` on their first token.
-  const filtItems = (items: RuleExpr[], i: number, f: FirstFilter, end: Set<string> | null = null): RuleExpr[][] | null => {
+  // The item lists (alternatives) of `items[i..]` restricted by Y on their first token; `end`: what may
+  // follow the list (its rule's FOLLOW, for an arm of the rule), else null.
+  const filtItems = (items: RuleExpr[], i: number, y: Set<string>, end: Set<string> | null = null): RuleExpr[][] | null => {
     if (i >= items.length) return null;
     const x = items[i], v = tsView(x);
     if (ASSERTION_KINDS.has(v.type)) {
-      const rest = filtItems(items, i + 1, f, end);
+      const rest = filtItems(items, i + 1, y, end);
       return rest && rest.map(r => [x, ...r]);
     }
     if (v.type === 'ref' && v.name === word) {
@@ -1213,22 +1187,20 @@ function planFirstFilters(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
         const ws = reservedGuardWords(items[j], x, word, isWordLiteral);
         if (ws) for (const w of ws) reservedHere.add(w);
       }
-      const r = test(word, f, reservedHere);
-      if (r === 'fail') return null;
-      return [[r === 'pass' ? x : namesRef(r, v), ...items.slice(i + 1)]];
+      const r = test(word, y, reservedHere);
+      if (r === false) return null;
+      return [[r === true ? x : namesRef(r, v), ...items.slice(i + 1)]];
     }
     const out: RuleExpr[][] = [];
-    const own = filt(x, f);
+    const own = filt(x, y);
     if (own) out.push([own, ...items.slice(i + 1)]);
     if (sets.nullable(x)) {
-      if (i + 1 >= items.length) {
-        // The empty rest: the condition is on what follows the sequence. Exact when none of that
-        // passes (the empty rest is dropped); a sequence whose end is not its rule's has no such set.
-        if (!end || [...end].some(t => t === word || test(t, f, NO_WORDS) === 'pass')) throw new FirstFilterResidual('the condition reaches past the end of its sequence');
-      } else {
-        const rest = filtItems(items, i + 1, f, end);
+      if (i + 1 < items.length) {
+        const rest = filtItems(items, i + 1, y, end);
         if (rest) out.push(...rest);
-      }
+      } else if (!end || [...end].some(t => test(t, y) !== false)) {
+        throw new FirstFilterResidual('the condition reaches past the end of its sequence');
+      }   // else: nothing that may follow passes, so the empty rest is dropped
     }
     return out.length ? out : null;
   };
@@ -1236,8 +1208,8 @@ function planFirstFilters(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
   const armEnds = new Map<RuleExpr, Set<string>>();
   for (const r of grammar.rules) for (const a of r.body.type === 'alt' ? r.body.items : [r.body]) if (a.type === 'seq') armEnds.set(a, sets.follow.get(r.name)!);
 
-  // ── the sites: a sequence's one-token conditions and the item they stand before ──
-  const triedNodes = new Map<RuleExpr, boolean>();           // condition node → lowered at every site so far
+  // ── the sites: a sequence's positive conditions and the item they stand before ──
+  const rendered = new Map<RuleExpr, boolean>();           // condition node → rendered at every site so far
   const memo = new Map<RuleExpr, RuleExpr>();
   const rw = (e: RuleExpr): RuleExpr => {
     const m = memo.get(e);
@@ -1248,28 +1220,26 @@ function planFirstFilters(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
         let items = e.items.map(rw);
         if (!lowerNotBeforeOptional(e)) {
           for (let i = 0; i < items.length; i++) {
-            const c0 = conditionOf(tsView(items[i]));
-            if (!c0) continue;
-            let f = c0, j = i + 1;
+            const y0 = conditionOf(tsView(items[i]));
+            if (!y0) continue;
+            // Every positive condition up to the next consuming item: Y is their intersection.
+            let y = y0, j = i + 1;
             const conds = [tsView(items[i])];
             for (; j < items.length && ASSERTION_KINDS.has(tsView(items[j]).type); j++) {
               const c = conditionOf(tsView(items[j]));
-              if (c) { f = meet(f, c); conds.push(tsView(items[j])); }
+              if (c) { y = new Set([...y].filter(t => c.has(t))); conds.push(tsView(items[j])); }
             }
             let alts: RuleExpr[][] | null = null;
             siteInexact = false;
-            try { alts = j < items.length ? filtItems(items, i, f, armEnds.get(e) ?? null) : null; } catch (err) { if (!(err instanceof FirstFilterResidual)) throw err; if (process.env.FF_DEBUG) console.error('residual', assertionText(conds[0]), '-', err.message); }
-            const ok = !!alts;
-            for (const c of conds) { triedNodes.set(c, (triedNodes.get(c) ?? true) && ok); if (siteInexact) approx.add(c); }
-            if (alts) {
-              const head = items.slice(0, i);
-              const tail = alts.length === 1 ? alts[0] : [{ type: 'alt' as const, items: alts.map(a => ({ type: 'seq' as const, items: a })) }];
-              items = [...head, ...tail];
-              i = head.length + (alts.length === 1 ? j - i : 0);
-            } else i = j - 1;
+            try { alts = j < items.length ? filtItems(items, i, y, armEnds.get(e) ?? null) : null; } catch (err) { if (!(err instanceof FirstFilterResidual)) throw err; }
+            for (const c of conds) { rendered.set(c, (rendered.get(c) ?? true) && !!alts); if (siteInexact) inexact.add(c); }
+            if (!alts) { i = j - 1; continue; }
+            const head = items.slice(0, i);
+            items = [...head, ...(alts.length === 1 ? alts[0] : [{ type: 'alt' as const, items: alts.map(a => ({ type: 'seq' as const, items: a })) }])];
+            i = alts.length === 1 ? head.length + (j - i) : items.length;
           }
         }
-        if (items.some((x, k) => x !== e.items[k]) || items.length !== e.items.length) out = { ...e, items };
+        if (items.length !== e.items.length || items.some((x, k) => x !== e.items[k])) out = { ...e, items };
         break;
       }
       case 'alt': { const items = e.items.map(rw); if (items.some((x, k) => x !== e.items[k])) out = { ...e, items }; break; }
@@ -1292,8 +1262,8 @@ function planFirstFilters(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
     changed = false;
     for (const [n, b] of copyBodies) { const r = rw(b); if (r !== b) { copyBodies.set(n, r); changed = true; } }
   }
-  for (const [n, ok] of triedNodes) if (ok && !approx.has(n)) plan.lowered.add(n);
-  // Only the copies a rendered rule reaches (a copy made for a site that then failed is not).
+  for (const [n, ok] of rendered) if (ok && !inexact.has(n)) plan.lowered.add(n);
+  // Only the copies a rendered rule reaches (one made for a site that then failed is not).
   const reached = new Set<string>();
   const reach = (e: RuleExpr): void => {
     switch (e.type) {
@@ -1306,17 +1276,13 @@ function planFirstFilters(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
   };
   for (const r of rewritten) reach(r.body);
   for (const n of [...copyBodies.keys()]) if (!reached.has(n)) { copyBodies.delete(n); plan.aliasOf.delete(n); plan.snakeOf.delete(n); }
-  for (const [r, list] of copiesOf) copiesOf.set(r, list.filter(c => reached.has(c)));
-  for (const [k, n] of namesRules) if (!reached.has(n)) namesRules.delete(k);
   if (!copyBodies.size) return plan;
   const out: RuleDecl[] = [];
   const entry = rewritten[rewritten.length - 1];
-  for (const r of rewritten.slice(0, -1)) {
-    out.push(r);
-    for (const c of copiesOf.get(r.name) ?? []) out.push({ ...r, name: c, body: copyBodies.get(c)! });
-  }
-  for (const c of copiesOf.get(entry.name) ?? []) out.push({ ...entry, name: c, body: copyBodies.get(c)! });
-  for (const n of namesRules.values()) out.push({ name: n, body: copyBodies.get(n)!, flags: [] });
+  const copiesFor = (r: RuleDecl) => (copiesOf.get(r.name) ?? []).filter(c => reached.has(c)).map(c => ({ ...r, name: c, body: copyBodies.get(c)! }));
+  for (const r of rewritten.slice(0, -1)) out.push(r, ...copiesFor(r));
+  out.push(...copiesFor(entry));
+  for (const n of namesRules.values()) if (reached.has(n)) out.push({ name: n, body: copyBodies.get(n)!, flags: [] });
   out.push(entry);
   plan.grammar = { ...grammar, rules: out };
   return plan;
