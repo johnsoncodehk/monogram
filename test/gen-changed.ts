@@ -18,7 +18,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { ROOT, gateDeps } from './gate-deps.ts';
+import { ROOT, edges, gateDeps } from './gate-deps.ts';
 
 // The committed outputs (ci.yml's `git diff --exit-code` pathspecs, as regular expressions).
 const ARTIFACT = /^(?:[^/]+\.(?:tmLanguage|language-configuration|monarch|contributes)\.json|tree-sitter\/.*|docs\/COMPLETENESS\.md|docs\/decisions\/.*|test\/fixtures\/decisionsjs\.decisions\.md)$/;
@@ -41,8 +41,10 @@ const steps: Step[] = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8
   const files = words.slice(1).filter((w) => !w.startsWith('-'));
   const script = files[0]!;
   const grammar = script === 'src/cli.ts' ? files[1] : undefined;
-  const inputs = gateDeps(script);
-  if (grammar) for (const f of gateDeps(grammar)) inputs.add(f);
+  // src/cli.ts names its outputs and its grammar through the grammar's name (`${langName}.cst-match.ts`),
+  // literals that would make every grammar an input of every step: its inputs are its own modules'
+  // and its one grammar's
+  const inputs = grammar ? new Set([script, ...edges(script).filter((f) => f.startsWith('src/')).flatMap((f) => [...gateDeps(f)]), ...gateDeps(grammar)]) : gateDeps(script);
   return { argv: words.slice(1), script, grammar, inputs };
 });
 
@@ -62,7 +64,8 @@ for (const [i, st] of steps.entries()) {
     execFileSync('node', [...(trace ? ['--import', './test/trace-reads.ts'] : []), ...st.argv], { cwd: ROOT, stdio: ['ignore', 'ignore', 'inherit'], env: { ...process.env, ...(trace ? { CHECK_TRACE: trace } : {}) } });
     if (trace) {
       // a gitignored <g>.cst-match.ts stands for its grammar <g>.ts (it is generated from it)
-      const extra = readFileSync(trace, 'utf8').split('\n').filter((f) => f && !st.inputs.has(f.replace(/\.cst-match\.ts$/, '.ts')));
+      // (the committed artifacts are outputs: the trace sees a write as an open)
+      const extra = readFileSync(trace, 'utf8').split('\n').filter((f) => f && !ARTIFACT.test(f) && !st.inputs.has(f.replace(/\.cst-match\.ts$/, '.ts')));
       for (const f of extra) untraced.push(`${label}: read ${f}, which is not among its ${st.inputs.size} derived inputs`);
     }
     console.log(`       ${((Date.now() - t0) / 1000).toFixed(1)} s`);
