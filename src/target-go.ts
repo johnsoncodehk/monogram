@@ -3666,6 +3666,36 @@ import (
 	"time"
 )
 
+// editSession runs one edit-session payload ({init, batches}): the Doc's alignment JSON (nil when
+// it has none), its CST JSON, and whether the edited Doc accepts.
+func editSession(data []byte, fast bool) ([]byte, string, bool) {
+\td, align := editSessionDoc(data, fast)
+\tif d.Root() < 0 { return align, "", false }
+\treturn align, d.CstJSON(), true
+}
+
+// editSessionDoc: the edited Doc of a payload and its alignment JSON. A payload that does not
+// decode ends the process with status 1.
+func editSessionDoc(data []byte, fast bool) (*Doc, []byte) {
+\tvar sess struct {
+\t\tInit    string              \`json:"init"\`
+\t\tBatches [][][3]interface{}   \`json:"batches"\`
+\t}
+\tif json.Unmarshal(data, &sess) != nil { os.Exit(1) }
+\td := NewDoc(sess.Init)
+\tif !fast { d.SetValidate(true) }
+\tfor _, batch := range sess.Batches {
+\t\tedits := make([]Edit, len(batch))
+\t\tfor i, t := range batch {
+\t\t\tedits[i] = Edit{Start: int(t[0].(float64)), End: int(t[1].(float64)), Text: t[2].(string)}
+\t\t}
+\t\td.Edit(edits)
+\t}
+\tvar align []byte
+\tif a := d.Align(); a != nil { align, _ = json.Marshal(a) }
+\treturn d, align
+}
+
 func main() {
 \tdata, _ := io.ReadAll(os.Stdin)
 \tsrc := string(data)
@@ -3683,23 +3713,29 @@ func main() {
 \t\t}
 \t}
 \tif editSess {
-\t\tvar sess struct {
-\t\t\tInit    string              \`json:"init"\`
-\t\t\tBatches [][][3]interface{}   \`json:"batches"\`
-\t\t}
-\t\tif json.Unmarshal(data, &sess) != nil { os.Exit(1) }
-\t\td := NewDoc(sess.Init)
-\t\tif !editFast { d.SetValidate(true) }
-\t\tfor _, batch := range sess.Batches {
-\t\t\tedits := make([]Edit, len(batch))
-\t\t\tfor i, t := range batch {
-\t\t\t\tedits[i] = Edit{Start: int(t[0].(float64)), End: int(t[1].(float64)), Text: t[2].(string)}
-\t\t\t}
-\t\t\td.Edit(edits)
-\t\t}
-\t\tif a := d.Align(); a != nil { b, _ := json.Marshal(a); os.Stderr.Write(append(b, '\\n')) }
+\t\t// the alignment is written before the tree is read: a panic there still reports it
+\t\td, align := editSessionDoc(data, editFast)
+\t\tif align != nil { os.Stderr.Write(append(align, '\\n')) }
 \t\tif d.Root() < 0 { fmt.Fprintln(os.Stderr, "parse error"); os.Exit(1) }
 \t\tos.Stdout.WriteString(d.CstJSON())
+\t\treturn
+\t}
+\t// batch-edit-session(-fast): NUL-separated edit-session payloads in, one line per session out:
+\t// its alignment JSON (empty when it has none), a tab, then its CST JSON, or "-" when the edited
+\t// Doc rejects; "!" for a session that panicked (the caller re-runs that one alone). One process
+\t// start for a whole set of sessions.
+\tif len(os.Args) > 1 && (os.Args[1] == "batch-edit-session" || os.Args[1] == "batch-edit-session-fast") {
+\t\tfast := os.Args[1] == "batch-edit-session-fast"
+\t\tvar b strings.Builder
+\t\tfor _, s := range strings.Split(src, "\\x00") {
+\t\t\tfunc() {
+\t\t\t\tdefer func() { if r := recover(); r != nil { b.WriteString("!\\n") } }()
+\t\t\t\talign, cst, ok := editSession([]byte(s), fast)
+\t\t\t\tif !ok { cst = "-" }
+\t\t\t\tb.WriteString(string(align) + "\\t" + cst + "\\n")
+\t\t\t}()
+\t\t}
+\t\tos.Stdout.WriteString(b.String())
 \t\treturn
 \t}
 ${opts.recovery ? GO_BATCH_TOTAL + GO_BATCH_INTERP : ''}\t// batch: NUL-separated inputs in, one line per input out — the CST JSON, "-" for an input

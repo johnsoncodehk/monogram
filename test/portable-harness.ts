@@ -140,6 +140,32 @@ export function runEditSession(cmd: string, args: string[], json: string): EditO
   } catch { return { ok: false, align, err: 'bad json' }; }
 }
 
+// A native runner's `batch-edit-session` mode: the payloads NUL-separated in, one line per session
+// out (its alignment JSON or nothing, a tab, its CST JSON or "-"). A session that panicked ("!")
+// runs again alone in the one-session mode, which reports it as it always did; so does every
+// session when the batch process itself fails. PORTABLE_EDIT_COMPARE=1 runs every session both
+// ways and throws on the first one whose outcome differs (the proof that batching changes nothing).
+export function editSessionBatch(cmd: string, jsons: string[], fast: boolean): EditOutcome[] {
+  const one = (json: string) => runEditSession(cmd, [fast ? 'edit-session-fast' : 'edit-session'], json);
+  const r = spawnSync(cmd, [fast ? 'batch-edit-session-fast' : 'batch-edit-session'], { input: jsons.join('\0'), encoding: 'utf8', maxBuffer: 1 << 30 });
+  const lines = (r.stdout ?? '').split('\n');
+  if (r.status !== 0 || lines.length !== jsons.length + 1) return jsons.map(one);
+  const out = jsons.map((json, i): EditOutcome => {
+    const line = lines[i]!;
+    if (line === '!') return one(json);
+    const tab = line.indexOf('\t');
+    const align = tab > 0 ? JSON.parse(line.slice(0, tab)) as Align : undefined;
+    const cst = line.slice(tab + 1);
+    return cst === '-' ? { ok: false, align } : { ok: true, cst: canon(JSON.parse(cst)), align };
+  });
+  if (process.env.PORTABLE_EDIT_COMPARE === '1') {
+    const key = (o: EditOutcome) => JSON.stringify([o.ok, o.ok ? o.cst : null, o.align ?? null]);
+    jsons.forEach((json, i) => { if (key(out[i]!) !== key(one(json))) throw new Error(`${cmd} batch-edit-session differs from edit-session on session ${i}: ${json.slice(0, 200)}`); });
+    console.log(`  (PORTABLE_EDIT_COMPARE: ${jsons.length} sessions of ${cmd} ≡ in both modes)`);
+  }
+  return out;
+}
+
 // The ts target's library runs in this process: one module load per grammar instead of one
 // node start per input. Go/Rust run their emitted CLI runner per input (a native start is ~1 ms).
 export type TsDoc = { edit(edits: { start: number; end: number; text: string }[]): unknown; align(): unknown; root(): unknown };
@@ -245,6 +271,8 @@ export type Runner = {
   /** The target's lid_of over texts. */
   lidOf: (texts: string[]) => number[];
   edit: (json: string, fast: boolean) => EditOutcome;
+  /** `edit` over many sessions: one outcome per payload, in order (Go / Rust: one process for all). */
+  editBatch: (jsons: string[], fast: boolean) => EditOutcome[];
   spans: { cmd: string; args: string[] };
   /** Doc.edit offsets are UTF-8 bytes (go/rust), not UTF-16 units (ts). */
   utf8Edits: boolean;
@@ -541,7 +569,7 @@ export async function prepareAll(cases: Case[] = selectedCases()): Promise<Prepa
     const runners: Runner[] = [{
       label: 'typescript', run: (src) => tsRun(tsLib, src), batch: (srcs) => srcs.map((src) => tsRun(tsLib, src)), tokens: (srcs) => srcs.map((src) => tsTokens(tsLib, src)),
       doc: (srcs) => srcs.map((src) => tsDoc(tsLib, src, false) as Outcome), docBuilder: (srcs) => srcs.map((src) => tsDoc(tsLib, src, true).ok), lidOf: (texts) => texts.map((t) => tsLib.__lid_of(t)),
-      edit: (json, fast) => tsEditSession(tsLib, json, fast),
+      edit: (json, fast) => tsEditSession(tsLib, json, fast), editBatch: (jsons, fast) => jsons.map((json) => tsEditSession(tsLib, json, fast)),
       spans: { cmd: 'node', args: [tsFile, 'tok-spans'] }, utf8Edits: false, total: (srcs) => srcs.map((src) => tsTotal(tsLib, src)),
     interp: (srcs, depth) => srcs.map((src) => tsInterp(tsLib, src, depth)),
     }];
@@ -585,12 +613,12 @@ export async function prepareAll(cases: Case[] = selectedCases()): Promise<Prepa
       p.runners.push(n.label === 'go' ? {
         label: 'go', run: (src) => runProc(bin, [], src), batch: (srcs) => runBatch(bin, srcs), tokens: (srcs) => tokBatch(bin, srcs),
         doc: (srcs) => docOutcomes(docBatch(bin, 'batch-doc', srcs)), docBuilder: (srcs) => verdicts(docBatch(bin, 'batch-doc-builder', srcs)), lidOf: (texts) => lidBatch(bin, texts),
-        edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),
+        edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json), editBatch: (jsons, fast) => editSessionBatch(bin, jsons, fast),
         spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true, total: (srcs) => totalBatch(bin, srcs), interp: (srcs, depth) => interpBatch(bin, srcs, depth),
       } : {
         label: 'rust', run: (src) => runProc(bin, [], src), batch: (srcs) => runBatch(bin, srcs), tokens: (srcs) => tokBatch(bin, srcs),
         doc: (srcs) => docOutcomes(docBatch(bin, 'batch-doc', srcs)), lidOf: (texts) => lidBatch(bin, texts),
-        edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),
+        edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json), editBatch: (jsons, fast) => editSessionBatch(bin, jsons, fast),
         spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true, total: (srcs) => totalBatch(bin, srcs), interp: (srcs, depth) => interpBatch(bin, srcs, depth),
       });
     }
