@@ -391,11 +391,12 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
     const gir = portableIR(g);
     const e = gir.elements!;
     const region = [...(e.text ? [e.text] : []), ...e.tagTokens];
-    const opens = e.entry === 'operand' && (e.head || e.signature) ? [EL_OPENS_FN] : [];
+    // the TS target returns the opens step's second value in a module slot (tsSlotted in src/target-ts.ts)
+    const opens = e.entry === 'operand' && (e.head || e.signature) ? [EL_OPENS_FN, `${EL_OPENS_FN}_r1`] : [];
     const f = join(dir, `el${mod++}.ts`);
     const stubs = gir.identLike.length ? `function ${tsTarget.shared.uniClass()}(cp: number): number { return 2; }\n` : '';
     writeFileSync(f, `${tsTarget.shared.lexScan(gir)}\n${stubs}export { ${[...region.map((n) => scannerName(n)), ...opens].join(', ')} };\n`);
-    const m = await import(pathToFileURL(f).href) as Record<string, (s: string, p: number) => number | number[]>;
+    const m = await import(pathToFileURL(f).href) as Record<string, (s: string, p: number) => number>;
     for (const name of region) {
       const decl = g.tokens.find((d) => d.name === name)!;
       const re = new RegExp(tokenPatternToRegex(decl.pattern), 'y');
@@ -423,7 +424,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
     const grow = (s: string, d: number): void => { texts.push(s); if (d < 4) for (const p of PIECES) grow(s + p, d + 1); };
     grow('<', 0);
     for (const s of texts) {
-      const [op, re] = m[EL_OPENS_FN]!(s, 0) as number[];
+      const op = m[EL_OPENS_FN]!(s, 0), re = m[`${EL_OPENS_FN}_r1`] as unknown as number;
       decided++;
       if (op !== want(s)) { fail(`${g.name}: ${EL_OPENS_FN}(${JSON.stringify(s)}) = ${op}, the interpreter's vetoes ${want(s)}`); continue; }
       // the read bound: past it nothing changes the decision
