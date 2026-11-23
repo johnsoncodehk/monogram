@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA } from './emit-portable.ts';
-import { portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -207,6 +207,152 @@ function newlineParts(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state: 
   };
 }
 
+// The lexer of a grammar with an element region (ElementPlan): the frame stack is the template
+// stack, and the frame decisions are the shared family's (lex-family.ts elementFns); what is here
+// is their placement in the dispatch loop, the token push, and the type-parameter signature's
+// speculation (lexed as code to its verdict, then rewound: docs/REGIONS.md).
+function elementLexerTS(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms, p: {
+  scans: string; consts: string; rxStateFrom: string; tplSpanFn: string; nlWs: string; lexCodes: string[]; lexFirsts: (LexFirstBytes | null)[];
+  tplCloseTest: string; tplOpenTest: string; uniIdentFallbackTs: string;
+}): string {
+  const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0;
+  const operand = el.entry === 'operand';
+  if (operand && !rx) throw new Error('portable: an operand element entry needs the regex context (prevIsValue)');
+  const L = tlen(el.tagOpen);
+  const consts = `${p.consts}const LID_EL_OPEN = ${lidOf(ids, el.tagOpen)};
+const LID_EL_CLOSE = ${lidOf(ids, el.tagClose)};
+const LID_HOLE_OPEN = ${lidOf(ids, el.holeOpen)};
+const LID_HOLE_CLOSE = ${lidOf(ids, el.holeClose)};
+const LID_EQ = ${lidOf(ids, '=')};
+${sig ? `${tsFlagTable('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
+  // prevIsValue: in a tag nothing is a regex; the token that ended an element is a value.
+  const prevIsValue = p.rxStateFrom.replace('function prevIsValue(): boolean {\n', `function prevIsValue(): boolean {
+    if (templateStack.length > 0) { const f = templateStack[templateStack.length - 1]; if ((f & 3) === 2 && (f & 12) !== 0) return true; }
+    if (elEnded) return true;
+`);
+  const rxParams = rx ? 'prevLid: number, prevKid: number, bpLid: number, hasPrev: boolean, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, ' : '';
+  const rxRet = rx ? 'prevLid: number; prevKid: number; hasPrev: boolean; bpLid: number; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean; ' : '';
+  const rxNames = rx ? 'prevLid, prevKid, hasPrev, bpLid, hasPrev2, parenHead, lastClose, lastBang, ' : '';
+  const rxInit = rx ? '0, 0, 0, false, false, [], false, false, ' : '';
+  // Brace counting in the holes (kind 0 template, 1 element hole; step 4): a `{` deepens, a `}`
+  // at a count above 0 shallows; at 0 the closer is lexed by its own test.
+  const braces = [
+    tpl ? `if ((f & 3) === 0) { if (lid === LID_BRACE_OPEN) templateStack[templateStack.length - 1] = f + 4; else if (lid === LID_INTERP_CLOSE) templateStack[templateStack.length - 1] = f - 4; }` : '',
+    `if ((f & 3) === 1) { if (lid === LID_HOLE_OPEN) templateStack[templateStack.length - 1] = f + 4; else if (lid === LID_HOLE_CLOSE) templateStack[templateStack.length - 1] = f - 4; }`,
+  ].filter(Boolean).join(' else ');
+  const specState = sig ? `  // A type-parameter signature being decided: the token index of its tagOpen (-1: none), the
+  // state before it, how it was decided, and the decision kept for the tagOpen it rewinds to.
+  let specTok = -1, specBase = 0, specClosedAt = -1, specDone = false, specFail = false, specThen = false, specOff = 0, specEnd = 0;
+  let specAt = -1, specKeep = false;
+  let svPos = 0, svNl = false, svPrevLid = 0, svPrevKid = 0, svBpLid = 0, svHasPrev = false, svHasPrev2 = false, svLastClose = false, svLastBang = false, svElEnded = false, svAngle = 0;
+  const svParen: boolean[] = [], svStack: number[] = [];
+  function specRewind(): void {
+    const keep = specDone && !specFail && specThen;
+    const re = specDone && !specFail ? ${shared.elementFn('reach')}(src, specEnd) : n + 1;
+    if (re > laEnd) laEnd = re;
+    if (keep) specUntil = specOff;
+    specAt = svPos; specKeep = keep;
+    toks.length = specTok;
+    pos = svPos; pendingNl = svNl; prevLid = svPrevLid; prevKid = svPrevKid; bpLid = svBpLid; hasPrev = svHasPrev; hasPrev2 = svHasPrev2;
+    lastClose = svLastClose; lastBang = svLastBang; elEnded = svElEnded; tagAngle = svAngle;
+    parenHead.length = 0; for (const b of svParen) parenHead.push(b);
+    templateStack.length = 0; for (const f of svStack) templateStack.push(f);
+    specTok = -1; specClosedAt = -1; specDone = false; specFail = false;
+  }
+` : '';
+  const emitFn = `  function emit(off: number, end: number, kid: number, lid: number): void {
+${rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]; parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid]); }
+    else if (lid === LID_RPAREN) { lastClose = parenHead.pop() ?? false;${sig ? ' if (specTok >= 0 && toks.length > specTok + 3 && parenHead.length === specBase) specClosedAt = toks.length;' : ''} }
+    if (_pav[lid]) lastBang = prevIsValue();
+` : ''}${sig ? `    // the token after the signature group's closer decides it (a closer that leaves the bracket
+    // stack at its base, even by popping an empty one, closes it again)
+    if (specClosedAt >= 0 && toks.length > specClosedAt) { specClosedAt = -1; specDone = true; specThen = kid === 0 && _elThen[lid] === 1; specOff = off; specEnd = end; }
+` : ''}    if (templateStack.length > 0) { const f = templateStack[templateStack.length - 1]; ${braces} }
+    toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = false; elEnded = false;${rx ? '\n    bpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true;' : ''}
+  }
+`;
+  // The entry from code, in the tagOpen unit's dispatch arm (outside element frames: inside one
+  // the frame step lexes every tagOpen).
+  const enter = `      templateStack.push(6); emit(pos, pos + ${L}, 0, LID_EL_OPEN);${raw ? ' tagAt.push(toks.length - 1);' : ''} tagAngle = 0; pos += ${L}; continue;\n`;
+  const entry = !operand ? `    if (src.startsWith(${J(el.tagOpen)}, pos)) {\n${enter}    }\n`
+    : !(el.head || sig) ? `    if (src.startsWith(${J(el.tagOpen)}, pos) && !prevIsValue()) {\n${enter}    }\n`
+    : `    if (src.startsWith(${J(el.tagOpen)}, pos)${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue()) {
+      let op: number;
+      ${sig ? 'if (pos === specAt) { op = specKeep ? 0 : 1; specAt = -1; } else ' : ''}{ const [o, re] = ${shared.elementFn('opens')}(src, pos); op = o; if (re > laEnd) laEnd = re; }
+      if (op === 1) {
+${enter}      }
+${sig ? `      if (op === 2) {
+        svPos = pos; svNl = pendingNl; svPrevLid = prevLid; svPrevKid = prevKid; svBpLid = bpLid; svHasPrev = hasPrev; svHasPrev2 = hasPrev2;
+        svLastClose = lastClose; svLastBang = lastBang; svElEnded = elEnded; svAngle = tagAngle;
+        svParen.length = 0; for (const b of parenHead) svParen.push(b);
+        svStack.length = 0; for (const f of templateStack) svStack.push(f);
+        specTok = toks.length; specBase = parenHead.length; specClosedAt = -1; specDone = false; specFail = false;
+      }
+` : ''}    }
+`;
+  // An element hole's closer at brace count 0 ends it (the closer is lexed inside the frame).
+  const holeClose = `    if (templateStack.length > 0 && templateStack[templateStack.length - 1] === 1 && src.startsWith(${J(el.holeClose)}, pos)) {
+      emit(pos, pos + ${tlen(el.holeClose)}, 0, LID_HOLE_CLOSE); templateStack.pop(); pos += ${tlen(el.holeClose)}; continue;
+    }
+`;
+  const heads = new Map<number, string>();
+  const headUnit = (t: string) => { const u = t.charCodeAt(0); return u < 128 && ![9, 10, 11, 12, 13, 32].includes(u) ? u : null; };
+  let pre = '';
+  const place = (lit: string, code: string) => { const u = headUnit(lit); if (u === null) pre += code; else heads.set(u, (heads.get(u) ?? '') + code); };
+  place(el.tagOpen, entry);
+  place(el.holeClose, holeClose);
+  if (tpl) { place(tpl.interpClose, p.tplCloseTest); place(tpl.open, p.tplOpenTest); }
+  const cascade = renderLexByteDispatchTS(p.lexCodes, p.lexFirsts, '    ', heads);
+  const frameStep = `    if (templateStack.length > 0 && (templateStack[templateStack.length - 1] & 3) === 2) {
+      const fr = templateStack[templateStack.length - 1];
+      const [fe, fk, fl, ft, fp, fa, fla] = ${shared.elementFn('frame')}(src, pos, fr, tagAngle, toks.length > 0 && toks[toks.length - 1].lid === LID_EQ, laEnd);
+      laEnd = fla;
+      if (fe >= 0) {
+        emit(pos, fe, fk, fl);
+${raw ? `        // each element frame's current tag: the index of its tagOpen token (the name is the next)
+        if (fl === LID_EL_OPEN) { if (fp === 6) tagAt.push(toks.length - 1); else if (((fr >> 2) & 3) === 0) tagAt[tagAt.length - 1] = toks.length - 1; }
+` : ''}        if (ft < 0) { templateStack.pop();${raw ? ' tagAt.pop();' : ''} elEnded = true; } else templateStack[templateStack.length - 1] = ft;
+        if (fp !== 0) templateStack.push(fp);
+${raw ? `        // an open tag ended: a raw-text name gives its body to a raw frame (kind 3), lexed next
+        if (fl === LID_EL_CLOSE && ((fr >> 2) & 3) === 1 && tagAngle === 0) {
+          const i = tagAt[tagAt.length - 1] + 1;
+          if (i < toks.length - 1) { const [re, rk] = ${shared.elementFn('raw')}(src, toks[i].off, toks[i].end, fe); if (rk !== 0 && re > fe) templateStack.push(3); }
+        }
+` : ''}        tagAngle = fa; pos = fe; continue;
+      }
+    }
+${raw ? `    if (templateStack.length > 0 && templateStack[templateStack.length - 1] === 3) {
+      const i = tagAt[tagAt.length - 1] + 1;
+      const [re, rk] = ${shared.elementFn('raw')}(src, toks[i].off, toks[i].end, pos);
+      emit(pos, re, rk, 0); templateStack.pop(); pos = re; continue;
+    }
+` : ''}`;
+  const loopBody = `${sig ? '    if (specTok >= 0 && (specDone || specFail || pos >= n)) { specRewind(); continue; }\n' : ''}    const c = src.charCodeAt(pos);
+${frameStep}${p.nlWs}${pre}${cascade}
+${p.uniIdentFallbackTs}    throw new Error('Unexpected character at offset ' + pos + ': \\'' + src[pos] + '\\'');`;
+  const loop = `  while (${sig ? '(pos < n || specTok >= 0) && (limit === undefined || toks.length - base < limit || specTok >= 0)' : 'pos < n && (limit === undefined || toks.length - base < limit)'}) {
+${loopBody}
+  }`;
+  // A lex error while a signature is undecided decides it: the head was an element.
+  const body = sig ? `  for (;;) {
+    try {
+${loop.replace(/^/gm, '    ')}
+      break;
+    } catch (e) { if (specTok < 0) throw e; specFail = true; }
+  }` : loop;
+  return `${consts}${p.scans}function lexFrom(src: string, pos: number, pendingNl: boolean, ${rxParams}templateStack: number[], elEnded: boolean, tagAngle: number, laEnd: number, specUntil: number, ${raw ? 'tagAt: number[], ' : ''}toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; ${rxRet}templateStack: number[]; elEnded: boolean; tagAngle: number; laEnd: number; specUntil: number${raw ? '; tagAt: number[]' : ''} } {
+  const n = src.length;
+  const base = toks.length;
+${prevIsValue}${p.tplSpanFn}${specState}${emitFn}${body}
+  return { pos, pendingNl, ${rxNames}templateStack, elEnded, tagAngle, laEnd, specUntil${raw ? ', tagAt' : ''} };
+}
+function lex(src: string): Tok[] {
+  const toks: Tok[] = [];
+  lexFrom(src, 0, false, ${rxInit}[], false, 0, 0, 0, ${raw ? '[], ' : ''}toks);
+  return toks;
+}`;
+}
+
 /** Emit a dense 0/1 number[] bit table (indexed by lid or kid). */
 function tsFlagTable(name: string, flags: boolean[]): string {
   return `const ${name}: number[] = [${flags.map((b) => (b ? 1 : 0)).join(', ')}];`;
@@ -222,7 +368,8 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const tplOnly = !!(tpl && !rx && !nl);
   const rxTpl = !!(rx && tpl && !nl);
   const rxOrTpl = !!(rx || tpl) && !rxOnly && !tplOnly && !rxTpl;
-  const stateful = !!(rx || tpl);
+  const el = ir.elements;
+  const stateful = !!(rx || tpl || el);
   const newlineOnly = !!(nl && !rx && !tpl);
   const pushFn = stateful ? 'emit' : 'push';
   const punctLine = (p: string) =>
@@ -397,6 +544,7 @@ ${pushHooks}    toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = fa
     // JS line terminators LF/CR/LS/PS set newline-before, matching the interpreter (emit-lexer.ts).
 ${nlWs}${tplDispatch}${cascade}
 ${uniIdentFallbackTs}    throw new Error('Unexpected character at offset ' + pos + ': \\'' + src[pos] + '\\'');`;
+  if (el) return elementLexerTS(ir, ids, shared, { scans, consts: `${renderIdTablesTS(ids)}${lxUniIdentConst}${rxModuleConsts}`, rxStateFrom, tplSpanFn, nlWs, lexCodes, lexFirsts, tplCloseTest, tplOpenTest, uniIdentFallbackTs });
   if (rxOnly) {
     return `${renderIdTablesTS(ids)}${lxUniIdentConst}${rxModuleConsts}${scans}function lexFrom(src: string, pos: number, pendingNl: boolean, prevLid: number, prevKid: number, bpLid: number, hasPrev: boolean, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevLid: number; prevKid: number; hasPrev: boolean; bpLid: number; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean } {
   const n = src.length;
@@ -1148,20 +1296,8 @@ function tryReuseTopW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
   const finish = (adoptFrom: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
     const adopted = suffixCand.slice(adoptFrom).map((h) => shift(h, byteDelta, tokDelta));
     const children: H[] = [...prefixKids, ...mid, ...adopted];
-    const adoptedMeta = suffixMeta.slice(adoptFrom);
-    const newEntries: EntryMeta[] = new Array(prefixMeta.length + midMeta.length + adoptedMeta.length);
-    let ei = 0;
-    for (let i = 0; i < prefixMeta.length; i++) newEntries[ei++] = prefixMeta[i]!;
-    for (let i = 0; i < midMeta.length; i++) newEntries[ei++] = midMeta[i]!;
-    for (let i = 0; i < adoptedMeta.length; i++) {
-      const m = { ...adoptedMeta[i]! };
-      shiftEntryMeta(m, byteDelta, tokDelta);
-      newEntries[ei++] = m;
-    }
-    const offset = newEntries.length > 0 ? newEntries[0]!.off : 0;
-    const end = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.end : offset;
-    const tokStart = newEntries.length > 0 ? newEntries[0]!.tokStart : 0;
-    const tokEnd = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.tokEnd : 0;
+    const newEntries = reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta);
+    const [offset, end, tokStart, tokEnd] = reuseSpan(newEntries);
     _bSave = tokStart;
     const savePos = pos;
     pos = tokEnd;
@@ -1227,37 +1363,8 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
       }
     }
     const children: H[] = [...prefixKids, ...midKids, ...adoptedKids];
-    const newSegs: Seg[] = [];
-    const newEntries: EntryMeta[] = [];
-    let kOff = 0;
-    for (let i = 0; i < prefixSegs.length; i++) {
-      const s = prefixSegs[i]!;
-      const m = { ...prefixMeta[i]!, kidStart: kOff };
-      newSegs.push({ kidStart: kOff, kidCount: s.kidCount, tokStart: s.tokStart, tokEnd: s.tokEnd, ext: s.ext });
-      newEntries.push(m);
-      kOff += s.kidCount;
-    }
-    for (let i = 0; i < midSegs.length; i++) {
-      const s = midSegs[i]!;
-      const m = { ...midMeta[i]!, kidStart: kOff };
-      newSegs.push({ kidStart: kOff, kidCount: s.kidCount, tokStart: s.tokStart, tokEnd: s.tokEnd, ext: s.ext });
-      newEntries.push(m);
-      kOff += s.kidCount;
-    }
-    const adoptedMeta = suffixMeta.slice(adoptFrom);
-    for (let i = 0; i < adoptedSegs.length; i++) {
-      const s = adoptedSegs[i]!;
-      const em = { ...adoptedMeta[i]! };
-      shiftEntryMeta(em, byteDelta, tokDelta);
-      em.kidStart = kOff;
-      newSegs.push({ kidStart: kOff, kidCount: s.kidCount, tokStart: s.tokStart + tokDelta, tokEnd: s.tokEnd + tokDelta, ext: s.ext + tokDelta });
-      newEntries.push(em);
-      kOff += s.kidCount;
-    }
-    const offset = newEntries.length > 0 ? newEntries[0]!.off : 0;
-    const end = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.end : offset;
-    const tokStart = newEntries.length > 0 ? newEntries[0]!.tokStart : 0;
-    const tokEnd = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.tokEnd : 0;
+    const [newSegs, newEntries] = reuseSegEntries(prefixSegs, prefixMeta, midSegs, midMeta, suffixCand, suffixMeta, adoptFrom, byteDelta, tokDelta);
+    const [offset, end, tokStart, tokEnd] = reuseSpan(newEntries);
     _bSave = tokStart;
     const savePos = pos;
     pos = tokEnd;
@@ -1355,7 +1462,8 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
         align = validate ? { ...lexReject, streamEq: true, treeEq: isCst ? true : null } : lexReject;
         return null;
       }
-      const core = { ...computeAlign(oldText, oldToks, text, prevToks), relexed };
+      const [oldN, newN, prefix, suffix] = computeAlignCore(oldText, oldToks, text, prevToks);
+      const core = { oldN, newN, prefix, suffix, relexed };
       const byteDelta = text.length - oldText.length;
       let reused = 0;
       let next: H | null = null;
@@ -1401,7 +1509,7 @@ function docEditBlock(ir: ParserIR, shared: SharedAlgorithms): string {
   const shapeA = topReuse?.kind === 'A';
   const shapeB = topReuse?.kind === 'B';
   const relexFamily = `\n// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.relexFamily(ir)}\n`;
-  const reuseFamily = topReuse ? `\n// ---- reuse family: generated from src/reuse-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.reuseFamily(ir)}\n` : '';
+  const reuseFamily = `\n// ---- reuse family: generated from src/reuse-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.reuseFamily(ir)}\n`;
   // validate with cstBuilder: the tree against a fresh parse's, and (reusing entries) the recorded
   // entries against the old tree.
   const reuseFns = `
@@ -1419,13 +1527,6 @@ ${topReuse ? `function shiftSubtree(n: Cst, byteDelta: number, tokDelta: number)
   n.offset += byteDelta;
   n.end += byteDelta;
   if ('children' in n) for (const c of n.children) shiftSubtree(c, byteDelta, tokDelta);
-}
-function shiftEntryMeta(m: EntryMeta, byteDelta: number, tokDelta: number): void {
-  m.tokStart += tokDelta;
-  m.tokEnd += tokDelta;
-  m.ext += tokDelta;
-  m.off += byteDelta;
-  m.end += byteDelta;
 }
 ${shapeA ? `function assertEntriesVsNodes(entries: EntryMeta[], oldRoot: Node): void {
   const oldKids = oldRoot.children as Node[];
@@ -1474,30 +1575,10 @@ function shift_align(m: AlignMeta, delta: number): AlignMeta {
 }
 type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed: number; reused: number; streamEq?: boolean; treeEq?: boolean | null };
 ${relexFamily}${reuseFamily}
-function computeAlign(oldText: string, oldToks: AlignMeta[], newText: string, newToks: AlignMeta[]): Omit<Align, 'relexed' | 'reused' | 'streamEq' | 'treeEq'> {
-  const oldN = oldToks.length, newN = newToks.length;
-  let prefix = 0;
-  while (prefix < oldN && prefix < newN) {
-    const o = oldToks[prefix], n = newToks[prefix];
-    if (o.kid !== n.kid || o.off !== n.off || o.end !== n.end || am_nl(o) !== am_nl(n)) break;
-    if (am_text(oldText, o) !== am_text(newText, n)) break;
-    prefix++;
-  }
-  const delta = newText.length - oldText.length;
-  const minN = Math.min(oldN, newN);
-  let suffix = 0;
-  while (prefix + suffix < minN) {
-    const o = oldToks[oldN - 1 - suffix], n = newToks[newN - 1 - suffix];
-    if (o.kid !== n.kid || am_nl(o) !== am_nl(n) || n.off !== o.off + delta || n.end !== o.end + delta) break;
-    if (am_text(oldText, o) !== am_text(newText, n)) break;
-    suffix++;
-  }
-  return { oldN, newN, prefix, suffix };
-}
 function toksFromMeta(text: string, meta: AlignMeta[]): Tok[] {
   return meta.map((m) => {
     const tx = am_text(text, m);
-    return mk_tok(m.off, m.end, am_nl(m), m.kid, lid_of(tx));
+    return mk_tok(m.off, m.end, am_nl(m), m.kid, ${regionKids(ir, buildLexIdPlan(ir)).length ? `${regionKids(ir, buildLexIdPlan(ir)).map((k) => `m.kid === ${k}`).join(' || ')} ? 0 : ` : ''}lid_of(tx));
   });
 }
 ${reuseFns}`;
@@ -2972,7 +3053,7 @@ export function parseAst(src: string, opts?: { customs?: AstCustoms }): ${rootTy
 }
 
 const TS_TYPES: Record<Ty, string> = {
-  int: 'number', lid: 'number', depth: 'number', pos: 'number', bool: 'boolean', str: 'string', meta: 'AlignMeta', tok: 'Tok', edit: 'Edit',
+  int: 'number', lid: 'number', depth: 'number', pos: 'number', idx: 'number', bool: 'boolean', str: 'string', meta: 'AlignMeta', tok: 'Tok', edit: 'Edit',
   metas: 'AlignMeta[]', toks: 'Tok[]', bools: 'boolean[]', depths: 'number[]', edits: 'Edit[]',
 };
 // Operator spelling and binding strength; unary is 90, a negative literal 7.
@@ -2987,7 +3068,7 @@ const tsBlock = (lines: string[]): string[] => lines.map((l) => TS_IND + l);
 const tsLowering: Lowering = {
   units: UNITS,
   ident: (n) => n,
-  num: { int: 'number', lid: 'number', depth: 'number', pos: 'number' },
+  num: { int: 'number', lid: 'number', depth: 'number', pos: 'number', idx: 'number' },
   type: (t) => (isRecList(t) ? `${recName(t)}[]` : isRec(t) ? recName(t) : TS_TYPES[t]),
   owns: false,
   charSet: (name, rs) => `const ${name} = /*#__PURE__*/ (() => { const a = new Uint8Array(256); for (const [lo, hi] of [${rs.map(([lo, hi]) => `[${lo},${hi}]`).join(', ')}]) for (let i = lo; i <= hi; i++) a[i] = 1; return a; })();`,
@@ -3043,10 +3124,11 @@ function ${findAnyName(stops)}(s: string, i: number): number {
     },
     while: (c, body) => [`while (${c}) {`, ...tsBlock(body), '}'],
     break: () => ['break;'],
+    run: (call) => `${call};`,
     return: (vals) => [`return ${vals.length === 1 ? vals[0] : `[${vals.join(', ')}]`};`],
     fn: (f) => [
       ...f.doc.map((l) => `// ${l}`),
-      `function ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): ${f.rets.length === 1 ? f.rets[0] : `[${f.rets.join(', ')}]`} {`,
+      `function ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): ${f.rets.length === 0 ? 'void' : f.rets.length === 1 ? f.rets[0] : `[${f.rets.join(', ')}]`} {`,
       ...tsBlock(f.body),
       '}',
     ].join('\n'),
@@ -3088,7 +3170,14 @@ function ${findAnyName(stops)}(s: string, i: number): number {
       lexStep: (_cx, s) => [`({ ${[s.posName === 'pos' ? 'pos' : `pos: ${s.posName}`, ...s.state].join(', ')} } = lexFrom(${s.text.c}, ${s.pos}, ${[...s.state, s.out].join(', ')}, 1));`],
     },
   },  record: {
-    field: (cx, r, _rec, f, ty) => cx.atom(`${tsWrap(r, ATOM)}.${f}`, ty === 'bool' ? 'bool' : 'int', cx.nat(ty)),
+    field: (cx, r, _rec, f, ty, nat) => cx.atom(`${tsWrap(r, ATOM)}.${f}`, ty, nat),
+    setField: (id, f, val) => [`${id}.${f} = ${val};`],
+    make: (cx, rec, fs) => cx.atom(`{ ${fs.map(([f, v]) => `${f}: ${v}`).join(', ')} }`, `rec_${rec}`, `rec_${rec}`, { owned: true }),
+    refType: (rec) => rec,
+    refArg: (r) => r.c,
+    copy: (cx, r) => cx.atom(`{ ...${r.c} }`, r.ty, r.nat, { owned: true }),
+    // One push per element: a spread passes one argument per element (the engine's argument limit).
+    extend: (_cx, l, from) => [`for (const el of ${from.c}) ${l}.push(el);`],
   },
 };
 
