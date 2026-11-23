@@ -81,6 +81,13 @@ any input whose instructions rise by more than 0.5%, any rise in allocator calls
 mode, any emitted size up by more than 1%; and, separately, every input on which one target moves by
 more than 0.1% while another stays within 0.01%.
 
+Emitted sizes also have a RECORD, `docs/emit-sizes.json` (grammar × target, an emit option as
+`<target>+<option>`), so that growth made of steps each under 1% accumulates visibly (Go +18% in
+two days, 0016998 → d326d65, was seen only afterwards). The gate `emit-size-record` fails when a
+size is more than ±0.25% from its record; `node test/emit-size-record.ts --write` re-records, and
+that diff is where a landing accepts the drift so far. The profile summary prints M against the
+record beside A → M, and lists a size past ±0.25% of it.
+
 The inputs are fixed: `checker.ts` and `parser.ts` of TypeScript at the repository's one pin
 (`TS_REPO_SHA` in the workflows), `typescript.js` / `typescript.d.ts` of the locked `typescript`
 npm package, `gen-tm.ts` and `typescript.ts` of this repository as of `2632c2c`, a 2 MB synthetic
