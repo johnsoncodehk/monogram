@@ -13,7 +13,8 @@
 //   node test/cst-match-totality.ts
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { emitParser, jsTarget } from '../src/emit.ts';
+import { emitParser } from '../src/target.ts';
+import { jsTarget } from '../src/emit-parser.ts';
 import { generateInputs } from './grammar-gen.ts';
 import { scratchDir } from './scratch.ts';
 

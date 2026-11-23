@@ -21,7 +21,10 @@ import { join } from 'node:path';
 // tier 'ci': the gate runs in CI (and with --all), not in the inner loop (`--changed`): a
 // whole-corpus cross or a gate of more than about ten seconds whose inputs rarely change.
 // reads: inputs the gate opens through a path test/gate-deps.ts cannot derive from its source.
-interface Gate { group: string; name: string; args: string[]; tier?: 'ci'; reads?: string[] }
+// targets: the gate runs each emit target's checks apart, honouring CHECK_TARGETS=js,ts,go,rust
+// (a target's checks use no other target's code, except the TypeScript target as a reference, which
+// always runs): `--changed` narrows it to the targets whose code changed (test/gate-deps.ts).
+interface Gate { group: string; name: string; args: string[]; tier?: 'ci'; reads?: string[]; targets?: true; env?: Record<string, string> }
 // The edits class's grammars in two shards of about equal time. Measured on CI (land/testinfra-batch-edit,
 // 45203634706, after the runners' batch-edit-session mode): the five former shards took 26.7 s
 // (typescriptreact), 31.4 (elementdialect, javascript, tagtokdialect), 30.2 (typescript,
@@ -145,7 +148,7 @@ let gates = filter ? GATES.filter((g) => (g.group + ' ' + g.name).includes(filte
 if (!gates.length) { console.error(`no gate matches "${filter}"`); process.exit(1); }
 
 if (changedMode) {
-  const { gateDeps } = await import('./gate-deps.ts');
+  const { gateTargetDeps } = await import('./gate-deps.ts');
   const git = (...a: string[]) => execFileSync('git', a, { encoding: 'utf8' }).split('\n').filter(Boolean);
   const changed = new Set(commit ? git('diff', '--name-only', `${commit}^`, commit) : [
     ...git('diff', '--name-only', `${git('merge-base', base, 'HEAD')[0]}`),
@@ -161,14 +164,17 @@ if (changedMode) {
     const script = g.args.find((a) => a.endsWith('.ts'))!;
     // a gate of the ci tier runs when its own script changed: the change is to that gate
     if (g.tier === 'ci' && !all && !changed.has(script)) { skipped.push(`${label.padEnd(36)} tier ci (runs in CI; --all runs it)`); continue; }
-    const deps = gateDeps(script, g.reads);
-    const hit = global.length ? global : [...changed].filter((f) => deps.has(f));
-    if (hit.length) run.push(g);
-    else skipped.push(`${label.padEnd(36)} none of its ${deps.size} input file(s) changed`);
+    const { common, targets } = gateTargetDeps(script, g.reads);
+    const size = common.size + [...targets.values()].reduce((n, t) => n + t.size, 0);
+    if (global.length || [...changed].some((f) => common.has(f))) { run.push(g); continue; }
+    const hitTargets = [...targets].filter(([, fs]) => [...changed].some((f) => fs.has(f))).map(([t]) => t);
+    if (!hitTargets.length) { skipped.push(`${label.padEnd(36)} none of its ${size} input file(s) changed`); continue; }
+    // only target code changed: a gate that runs its targets apart runs those targets
+    run.push(g.targets && hitTargets.length < targets.size ? { ...g, env: { CHECK_TARGETS: hitTargets.join(',') } } : g);
   }
   for (const s of skipped) console.log(`    · skip ${s}`);
   gates = run;
-  if (listOnly) { for (const g of gates) console.log(`    → run  ${g.group}/${g.name}`); console.log(`  ${gates.length} gate(s) to run, ${skipped.length} skipped`); process.exit(0); }
+  if (listOnly) { for (const g of gates) console.log(`    → run  ${g.group}/${g.name}${g.env ? `  (CHECK_TARGETS=${g.env.CHECK_TARGETS})` : ''}`); console.log(`  ${gates.length} gate(s) to run, ${skipped.length} skipped`); process.exit(0); }
   if (!gates.length) { console.log('\n  no gate is affected by the change ✓'); process.exit(0); }
 }
 
@@ -189,7 +195,7 @@ const traceFile = (gate: Gate) => join(TRACE!, `${gate.group}-${gate.name}`.repl
 function run(gate: Gate): Promise<Result> {
   const t0 = Date.now();
   const args = TRACE ? ['--import', './test/trace-reads.ts', ...gate.args] : gate.args;
-  const env = TRACE ? { ...process.env, CHECK_TRACE: traceFile(gate) } : process.env;
+  const env = { ...process.env, ...gate.env, ...(TRACE ? { CHECK_TRACE: traceFile(gate) } : {}) };
   return new Promise((resolve) => {
     execFile('node', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env }, (err, stdout, stderr) => {
       const output = (stdout ?? '') + (stderr ?? '');
@@ -211,7 +217,7 @@ async function worker(): Promise<void> {
     results.push(r);
     // CHECK_OUT_DIR (CI, uploaded as the job's `gate-output` artifact): every gate's whole output
     if (process.env.CHECK_OUT_DIR) { mkdirSync(process.env.CHECK_OUT_DIR, { recursive: true }); writeFileSync(join(process.env.CHECK_OUT_DIR, `${gate.group}-${gate.name}.txt`.replace(/[^A-Za-z0-9.-]/g, '_')), r.output); }
-    process.stdout.write(`    ${r.ok ? '✓' : '✗'} ${(r.gate.group + '/' + r.gate.name).padEnd(34)} ${String(r.ms).padStart(6)}ms  ${r.ok ? r.summary : ''}\n`);
+    process.stdout.write(`    ${r.ok ? '✓' : '✗'} ${(r.gate.group + '/' + r.gate.name + (r.gate.env ? ` [${r.gate.env.CHECK_TARGETS}]` : '')).padEnd(34)} ${String(r.ms).padStart(6)}ms  ${r.ok ? r.summary : ''}\n`);
   }
 }
 await Promise.all(Array.from({ length: Math.min(POOL, gates.length) }, worker));

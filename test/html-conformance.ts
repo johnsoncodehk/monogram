@@ -23,7 +23,8 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createParser } from '../src/gen-parser.ts';
-import { emitParser, jsTarget } from '../src/emit.ts';
+import { emitParser } from '../src/target.ts';
+import { jsTarget } from '../src/emit-parser.ts';
 import { objectify, type TreeView } from './emitted-obj.ts';
 import { parseFragment } from 'parse5';
 import { scratchDir } from './scratch.ts';
