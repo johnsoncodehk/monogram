@@ -38,6 +38,7 @@ import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
 import { instrument, type SiteInfo } from './alloc-instrument.ts';
 import { scratchDir } from './scratch.ts';
+import { cachedGoBuild } from './build-cache.ts';
 
 const WRITE = process.argv.includes('--write');
 const HEAP_CHILD = process.argv.indexOf('--heap-child');
@@ -208,7 +209,6 @@ func MeasureAllocs(src string, mode string) AllocOut {
 const GO_MAIN = `package main
 
 import (
-import { cachedGoBuild } from './build-cache.ts';
 	"encoding/json"
 	"fmt"
 	"os"

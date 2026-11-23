@@ -18,7 +18,8 @@ import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
 import { asGoMain } from './go-main.ts';
-import { goBuild, scratchDir } from './scratch.ts';
+import { scratchDir } from './scratch.ts';
+import { cachedGoBuild, cachedRustc } from './build-cache.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean, detail = '') => {
@@ -435,7 +436,7 @@ else {
   writeFileSync(join(gdir, 'parser.go'), asGoMain(emitParser(grammar, goTarget)));
   writeFileSync(join(gdir, 'main.go'), HARNESS);
   writeFileSync(join(gdir, 'go.mod'), 'module p\n\ngo 1.21\n');
-  goBuild(['-o', 'h', '.'], { cwd: gdir });
+  cachedGoBuild(['-o', 'h', '.'], { cwd: gdir });
   const out = JSON.parse(execFileSync(join(gdir, 'h'), {
     input: JSON.stringify({ Samples: SAMPLES, Dense: DENSE_LINE, DenseN: DENSE_N, Sessions: SESSIONS.map((x) => ({ Init: x.init, Edits: x.edits })) }), maxBuffer: 1 << 28,
   }).toString()) as Out;
@@ -569,7 +570,7 @@ else {
   const rdir = join(dir, 'rust');
   mkdirSync(rdir);
   writeFileSync(join(rdir, 'h.rs'), emitParser(grammar, rustTarget) + RUST_HARNESS);
-  execFileSync('rustc', ['-A', 'warnings', '--edition', '2021', 'h.rs', '-o', 'h'], { cwd: rdir, stdio: 'pipe' });
+  cachedRustc(['-A', 'warnings', '--edition', '2021', 'h.rs', '-o', 'h'], { cwd: rdir, stdio: 'pipe' });
   const out = JSON.parse(execFileSync(join(rdir, 'h'), { maxBuffer: 1 << 28 }).toString()) as Out;
   verify('rust', out, { doc: 'Doc::new', parseWith: 'parse_with(CstBuilder)' });
 }

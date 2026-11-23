@@ -100,10 +100,17 @@ export const GO_VERSION = toolVersion('go', ['version']), RUSTC_VERSION = toolVe
 // The Rust build reads the wrapper or toolchain `rustc` resolves to: its path is part of the key.
 export const RUSTC_PATH = toolVersion('sh', ['-c', 'command -v rustc']);
 
+/** rustc flags that make its output independent of the build's directories (see below). */
+export const RUSTC_PATH_FLAGS = (...dirs: string[]): string[] => [...new Set(dirs)].map((d) => `--remap-path-prefix=${d}=.`);
+
 // ── Drop-ins for a gate's own `go build` / `rustc` ──
-// The key holds every input file's path RELATIVE to the build's directory and its content, and the
-// arguments with each path made relative the same way (a gate builds in a fresh scratch directory
-// each run: an absolute path in the key would miss every time). The outputs (`-o <path>`, a lib
+// The key holds every input file's path RELATIVE to the build's directory (Go: its cwd; Rust: the
+// directory of its crate root, which a gate often names by an absolute path from the repository
+// root) and its content, and the arguments with each path made relative the same way (a gate builds
+// in a fresh scratch directory each run: an absolute path in the key would miss every time). So that
+// a hit is byte-for-byte the binary a cold build in the hit's own directory makes, the output must
+// not depend on that directory: Go builds with -trimpath (scratch.ts's goBuild), Rust with
+// --remap-path-prefix=<dir>=. (RUSTC_PATH_FLAGS; panic locations name the file relative to it). The outputs (`-o <path>`, a lib
 // crate's lib<name>.rlib) are stored by name and copied back on a hit. A rlib is an input of the
 // crate that links it by its bytes, so a rebuilt rlib with the same bytes keeps the consumer's key.
 const sourcesUnder = (dir: string, keep: (f: string) => boolean): string[] => {
@@ -112,8 +119,8 @@ const sourcesUnder = (dir: string, keep: (f: string) => boolean): string[] => {
   walk(dir);
   return out;
 };
-function cached(tool: string, args: string[], cwd: string, inputs: string[], outputs: string[], run: () => void): void {
-  const rel = (p: string) => relative(cwd, resolve(cwd, p));
+function cached(tool: string, args: string[], cwd: string, base: string, inputs: string[], outputs: string[], run: () => void): void {
+  const rel = (p: string) => relative(base, resolve(cwd, p));
   const key = buildKey(tool, tool === 'go' ? GO_VERSION : RUSTC_VERSION + RUSTC_PATH, ...args.map((a) => (a.startsWith('/') ? rel(a) : a)),
     ...inputs.flatMap((f) => [rel(f), readFileSync(f).toString('base64')]));
   let built = false;
@@ -139,7 +146,7 @@ export function cachedGoBuild(args: string[], opts: ExecFileSyncOptions = {}): v
   const inputs = named.length ? named : sourcesUnder(cwd, (f) => f.endsWith('.go') || f === 'go.mod' || f === 'go.sum');
   const outputs = outputOf(args);
   if (!outputs.length) throw new Error('cachedGoBuild: the build names no -o output');
-  cached('go', args, cwd, inputs, outputs, () => goBuild(args, opts));
+  cached('go', args, cwd, cwd, inputs, outputs, () => goBuild(args, opts));
 }
 /** execFileSync('rustc', args, opts) through the cache: the inputs are the .rs files beside each .rs argument and the rlibs of --extern. */
 export function cachedRustc(args: string[], opts: ExecFileSyncOptions = {}): void {
@@ -151,6 +158,7 @@ export function cachedRustc(args: string[], opts: ExecFileSyncOptions = {}): voi
   const lib = args.includes('--crate-type') && args[args.indexOf('--crate-type') + 1] === 'lib';
   const outputs = outputOf(args).length ? outputOf(args) : lib ? [`lib${args[args.indexOf('--crate-name') + 1]}.rlib`] : [];
   if (!outputs.length) throw new Error('cachedRustc: the build names no output');
-  cached('rustc', args, cwd, inputs, outputs, () => { execFileSync('rustc', args, { stdio: 'pipe', ...opts }); });
+  const base = roots.length ? dirname(roots[0]!) : cwd;
+  cached('rustc', args, cwd, base, inputs, outputs, () => { execFileSync('rustc', [...RUSTC_PATH_FLAGS(base, cwd), ...args], { stdio: 'pipe', ...opts }); });
 }
 

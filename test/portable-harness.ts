@@ -50,7 +50,7 @@ import { CASES, type Case } from './portable-cases.ts';
 import { CHECK_TARGETS } from './check-targets.ts';
 import { cachedEmit } from './emit-cache.ts';
 import { ROOT as ROOT_DIR } from './gate-deps.ts';
-import { buildAll, buildKey, GO_VERSION, RUSTC_PATH, RUSTC_VERSION, type Build } from './build-cache.ts';
+import { buildAll, buildKey, GO_VERSION, RUSTC_PATH, RUSTC_PATH_FLAGS, RUSTC_VERSION, type Build } from './build-cache.ts';
 export { buildAll, buildKey, type Build };
 
 export { CASES, type Case };
@@ -548,7 +548,7 @@ export async function prepareAll(cases: Case[] = selectedCases()): Promise<Prepa
         build: (out) => {
           const rfile = `${dir}/main.rs`;
           writeFileSync(rfile, main);
-          execFileSync('rustc', ['-A', 'warnings', rfile, '-o', `${out}/pr`], { stdio: 'pipe' });
+          execFileSync('rustc', [...RUSTC_PATH_FLAGS(dir, out), '-A', 'warnings', rfile, '-o', `${out}/pr`], { stdio: 'pipe' });
         },
       } });
     }

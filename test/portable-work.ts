@@ -28,6 +28,7 @@ import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
 import { scratchDir } from './scratch.ts';
+import { cachedGoBuild, cachedRustc } from './build-cache.ts';
 
 const DEEP = 8, GROWTH = 2;
 
@@ -274,7 +275,6 @@ async function measure(grammar: Parameters<typeof emitParser>[0], dir: string, i
     writeFileSync(join(gdir, 'main.go'), `package main
 
 import (
-import { cachedGoBuild, cachedRustc } from './build-cache.ts';
 	"fmt"
 	"os"
 
