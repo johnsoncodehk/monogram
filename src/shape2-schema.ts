@@ -221,12 +221,20 @@ export type NodesAttr<R extends string = string> = { type: 'nodes'; rules: ByRul
  * checked when the shape is loaded (`defineShape`). */
 export type ByRule<R extends string, X> = string extends R ? Record<string, X> : { [K in R]?: X };
 
+export type NodeKeys = { kind?: string; start?: string; end?: string };
+export const nodeKeysOf = (spec: { node?: NodeKeys }): { kind: string; start: string; end: string } =>
+  ({ kind: spec.node?.kind ?? 'kind', start: spec.node?.start ?? 'start', end: spec.node?.end ?? 'end' });
 export type ShapeSpec<R extends string = string> = {
   name: string;
   /** Every arm of every rule in `rules` must be mapped (an unmapped arm is a load error), and
    * every `branch` must have a case for each branch. Without it, evaluating an unmapped arm
    * throws `ShapeUnmapped` naming it. */
   total?: boolean;
+  /** The keys a node value holds its kind and span under, beside its fields, in this order (one
+   * flat object per node: `{ [kind]: …, [start]: …, [end]: …, ...fields }`). Default `kind`,
+   * `start`, `end`; ESTree's are `type`, `start`, `end`. A node term with a field of one of these
+   * names is a load error. */
+  node?: NodeKeys;
   /** rule -> arm name -> the arm's value. */
   rules: ByRule<R, Record<string, Term>>;
   synthesized?: Record<string, SynAttr<R>>;

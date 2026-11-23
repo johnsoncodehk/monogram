@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { createParser, type CstLeaf, type CstNode } from '../src/gen-parser.ts';
 import type { CstGrammar } from '../src/types.ts';
 import { armNameOf, dependencies, evaluateShape, evaluator, defineShape, ShapeSpecError, ShapeUnmapped, spineOf, type ShapeValue } from '../src/shape2-eval.ts';
+import { nodeKeysOf } from '../src/shape2-schema.ts';
 import {
   absent, and, armOf, branch, c, child, cook, fold, iff, inh, let_, list, map, match, node, not, or, orElse,
   dropLastIf, get, present, record, spread, syn, text, thread, typeByText, v, wrapIf, type ShapeSpec, type Term,
@@ -19,7 +20,7 @@ import calcExample from './fixtures/shape-namedcalc.ts';
 import { shapeCoverage, shapeSkeleton } from '../src/shape-coverage.ts';
 import { estreeExprShape } from './fixtures/shape-v2-estree-expr.ts';
 import { tscExprShape } from './fixtures/shape-v2-tsc-expr.ts';
-import { compareTrees, type NTree } from './shape-oracle.ts';
+import { compareTrees, nestValue, type NTree } from './shape-oracle.ts';
 import { normaliseEstree, parseEstree } from './shape-oracle-estree.ts';
 import { tscOracle } from './shape-oracle-tsc.ts';
 import javascript from '../javascript.ts';
@@ -31,7 +32,10 @@ const check = (name: string, fn: () => void): void => {
   try { fn(); passed++; } catch (e) { console.error(`FAIL ${name}\n${(e as Error).stack}`); process.exitCode = 1; }
 };
 const parse = (g: CstGrammar, src: string): CstNode => createParser(g).parse(src);
-const run = (g: CstGrammar, spec: ShapeSpec, src: string): ShapeValue | undefined => evaluateShape(defineShape(g, spec), parse(g, src), src);
+// The evaluator's value in the harness's nested form (shape-oracle.ts nestValue): the tests below
+// read `kind` / `fields` whatever node keys a shape declares.
+const nest = (spec: ShapeSpec, v: ShapeValue | undefined): ShapeValue | undefined => (v === undefined ? v : nestValue(v, nodeKeysOf(spec)) as ShapeValue);
+const run = (g: CstGrammar, spec: ShapeSpec, src: string): ShapeValue | undefined => nest(spec, evaluateShape(defineShape(g, spec), parse(g, src), src));
 const N = (kind: string, start: number, end: number, fields: Record<string, ShapeValue> = {}): ShapeValue => ({ kind, start, end, fields });
 
 // ── The calculus on namedcalc ──
@@ -147,7 +151,8 @@ check('calc: a threaded state across a list (each element sees the state its lef
   assert.deepEqual(body.map((x) => x.fields.lead), [undefined, true, undefined, false]);
   // the same value for one element evaluated on its own, in the context of its root
   const cst = parse(calc, src);
-  const at = evaluator(defineShape(calc, leadSpec), cst, src);
+  const at0 = evaluator(defineShape(calc, leadSpec), cst, src);
+  const at = (n: CstNode) => nest(leadSpec, at0(n));
   const stmts: CstNode[] = [];
   const walk = (x: CstNode | CstLeaf): void => { if ('tokenType' in x) return; if (x.rule === 'Stmt') stmts.push(x); x.children.forEach(walk); };
   walk(cst);
@@ -168,7 +173,7 @@ check('calc: dependencies of a thread (the element reads the state; the parent t
 // ── The calculus on the JavaScript expression rules ──
 
 const stmtOf = (src: string): CstNode => parse(javascript, src).children[0] as CstNode;
-const jsEval = (spec: ShapeSpec, src: string): ShapeValue | undefined => evaluateShape(defineShape(javascript, spec), stmtOf(src), src);
+const jsEval = (spec: ShapeSpec, src: string): ShapeValue | undefined => nest(spec, evaluateShape(defineShape(javascript, spec), stmtOf(src), src));
 
 // A left fold (tsc's comma BinaryExpression) and a list (ESTree's SequenceExpression), an inline
 // alternation (`.` Ident | PrivateField), named conditional children, the op-form children.
@@ -280,7 +285,8 @@ check('js: the directive prologue (threaded state, ESTree fixture)', () => {
   const src = `'a'; "b\\n"; ('c'); 'd'; function f() { 'x'; y; 'z'; } { 'no'; } (() => { 'arrow'; });\n'late';`;
   const loaded = estreeExprShape;
   const cst = parse(javascript, src);
-  const at = evaluator(loaded, cst, src);
+  const at0 = evaluator(loaded, cst, src);
+  const at = (n: CstNode) => nest(loaded.spec, at0(n));
   const got: [string, ShapeValue | undefined][] = [];
   const walk = (x: CstNode | CstLeaf): void => {
     if ('tokenType' in x) return;
@@ -461,7 +467,7 @@ check('a right-dependent equation equals the left evaluated in the context the l
     : v !== null && typeof v === 'object' && 'record' in v ? { record: Object.fromEntries(Object.entries(v.record).map(([k, x]) => [k, shift(x, by)])) } : v;
   const left = (src: string, at: string): ShapeValue => {
     const cst = parse(javascript, src);
-    const tree = evaluateShape(loaded, cst, src) as NTree;
+    const tree = nest(loaded.spec, evaluateShape(loaded, cst, src)) as NTree;
     const found: ShapeValue[] = [];
     const walk = (x: unknown): void => {
       if (x === null || typeof x !== 'object') return;
@@ -703,7 +709,7 @@ check('skeleton: every arm of calc / javascript / typescript maps to a term that
     const sk = (await import(at)).default;
     check('skeleton: the printed module imports and evaluates', () => {
       const text = 'let x = (1);';
-      assert.deepEqual(evaluateShape(sk, parse(calc, text), text), N('Program.program', 0, 12, {
+      assert.deepEqual(nest(sk.spec, evaluateShape(sk, parse(calc, text), text)), N('Program.program', 0, 12, {
         statement: [N('Stmt.letDeclaration', 0, 12, { binding: 'x', initializer: N('Expr.parenthesized', 8, 11, { expression: N('Expr.number', 9, 10, { number: '1' }) }) })],
       }));
     });

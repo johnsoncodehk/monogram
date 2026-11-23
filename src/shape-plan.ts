@@ -49,7 +49,7 @@ import type { Expr, Fn, Stmt } from './algo-ir.ts';
 import type { ParserIR, PrattRule, RdRule, RuleIR, ShapeInhVal, Step } from './emit-portable.ts';
 import type { RuleExpr } from './types.ts';
 import { cardOf, type ArmInfo, type ScopeInfo, type Shape, type Slot } from './shape2-eval.ts';
-import type { CookFn, InhEq, Scalar, Term, ThreadEq } from './shape2-schema.ts';
+import { nodeKeysOf, type CookFn, type InhEq, type Scalar, type Term, type ThreadEq } from './shape2-schema.ts';
 
 /** One engine arm: the rule, the engine's key for it, the grammar arm (null: none maps it). */
 export type EngineArm = { id: number; rule: string; key: string; arm: string };
@@ -80,6 +80,9 @@ export type ShapePlan = {
   tagStats: { sites: number; tagged: number };
   /** How the plans' slot reads are compiled (FUSED positions; counted per compiled read site). */
   reads: ReadStats;
+  /** The keys a node holds its kind and span under, before its fields (ShapeSpec.node): one flat
+   * object per node. */
+  nodeKeys: { kind: string; start: string; end: string };
 };
 
 /** The engine's key for each accept site of a rule: rd `alt<i>`; Pratt `nud<i>`, `led<i>`,
@@ -378,7 +381,7 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
   for (const k of cx.synSlotRead) syn[k]!.slotRead = true;
   fns.push(...EXTERNS, ...SPAN_FNS, ...ATTR_FNS, ...[...cooks].map(cookFn));
   return {
-    arms, fns, cooks: [...cooks], unsupported, syn, inh: scalarInh, variantBit, variantDefault, tagStats, reads: readStats,
+    arms, fns, cooks: [...cooks], unsupported, syn, inh: scalarInh, variantBit, variantDefault, tagStats, reads: readStats, nodeKeys: nodeKeysOf(spec),
     armId: (rule, key) => { const id = ids.get(`${rule}|${key}`); if (id === undefined) throw new Error(`planShape: no engine arm ${rule} ${key}`); return id; },
     ir: { ...ir, rules: newRules, reuse: null },
   };
