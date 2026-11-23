@@ -55,13 +55,15 @@ const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5439, type
 const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // P10 EXPECTED-FAIL on `$missing`-only repairs, by class. GREEDY CAPTURE: the repair is right by
 // position (each supplied token is where the derivation needs it), but the substituted token is
-// read by an operator loop that ended before it: in `for ((let) of x;` the parse supplies '=>'
+// read by an operator loop that ended before it: in `for (() of x);` the parse supplies '=>'
 // (an arrow, its body `of` ended at `x`) and then 'in' (a for-in over x); in the substituted text
-// `for ((let) => of in x);` the arrow body's operator loop takes `in x` (a binary `in`), so the
+// `for (() => of in x);` the arrow body's operator loop takes `in x` (a binary `in`), so the
 // for-in has nothing left. Still run and counted; when one holds again the gate fails until it is
 // removed.
+// The mutants are drawn from the accept lists (seeded), so the list is re-measured when they change.
 const P10_GREEDY_CAPTURE: Record<string, string[]> = {
-  javascript: ['for ((let) of x;', 'for ((asyncvar of y);'],
+  javascript: ['for (() of x);', 'for (() of y);'],
+  typescript: ['for ((async) from y);'],
 };
 // EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and
 // parseTotal alike) is not the oracle's. Not total parsing's property (parseTotal's verdict is its
