@@ -132,6 +132,11 @@ listed in [ROADMAP.md](ROADMAP.md#1-one-portable-engine-one-shared-runtime-descr
   the interpreter counts the tokens a match advanced past, and the engine also counts a guard's
   read of the next token. Messages come from one formatter (`src/recovery-family.ts`). Go and
   Rust spans are byte offsets. Recovered trees (`$error` / `$missing`) are not there yet.
+  The option also carries the parse plan as one int table (`emit-portable.ts` recoveryTables) and
+  ONE interpreter of it (`src/recovery-family.ts`, printed for each target), which later stages
+  make repair: TS `parseInterpreted(src, builder, depth)`, Go `ParseInterpreted`, Rust
+  `parse_interpreted` parse as `parseWith` does (the same verdict and tree) with `depth` rule
+  levels interpreted and the native functions below, and report the steps they interpreted.
 - The `tsTarget` CST carries spans only: a leaf is located by its `offset`/`end`.
 - Lexers scan every `>` alone (so `>>` closing two type-argument lists is two tokens). At an
   operator site the parser composes `>>`, `>>>`, `>=`, `>>=`, `>>>=` from adjacent `>`, `>`
