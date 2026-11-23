@@ -7,10 +7,17 @@ import { generateMonarch } from './gen-monarch.ts';
 import { generateCstMatch } from './gen-cst-match.ts';
 import type { CstGrammar, RuleExpr } from './types.ts';
 import { tokenPatternSource } from './token-pattern.ts';
+import { decisionReport } from './decision-report.ts';
 
-const file = process.argv[2];
+// `--decisions` also writes <name>.decisions.md: how the generated parser decides every choice
+// point, with the dead alternatives and declaration-order ties to act on (src/decision-report.ts).
+// It is a diagnostic for the grammar's author, not an artifact a consumer ships, so it is not in
+// the default output set that `npm run gen` commits.
+const args = process.argv.slice(2);
+const decisions = args.includes('--decisions');
+const file = args.find((a) => !a.startsWith('--'));
 if (!file) {
-  console.error('Usage: tsx src/cli.ts <grammar.ts>');
+  console.error('Usage: node src/cli.ts <grammar.ts> [--decisions]');
   process.exit(1);
 }
 
@@ -117,6 +124,13 @@ emit(`${langName}.monarch.json`, JSON.stringify(generateMonarch(grammar), null, 
 
 // Per-arm CST destructurers.
 emit(`${langName}.cst-match.ts`, generateCstMatch(grammar));
+
+// The decision report (on request).
+if (decisions) {
+  const { text, findings } = decisionReport(grammar, langName);
+  emit(`${langName}.decisions.md`, text);
+  console.log(`  ${findings.dead.length} dead alternatives, ${findings.ties.length} declaration-order ties, ${findings.unreached.length} unreached alternatives`);
+}
 
 function formatExpr(expr: RuleExpr): string {
   switch (expr.type) {

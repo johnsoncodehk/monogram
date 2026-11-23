@@ -480,7 +480,6 @@ TextMate grammar cannot express, each a limitation stated where the pattern is b
 
 | limitation | witness | TextMate reads | the lexer reads |
 |---|---|---|---|
-| a member keyword before a tag (the lookbehind sees `new`, not that a `.` precedes it) | `y = x.new <b> c` (TSX) | an element | a comparison |
 | a hole is balanced only as deep as the code grammar's own brace patterns, and a dynamic close tag's hole one level (an `end` is one regex) | `<{a[{b}]}>x</{a[{b}]}>` (text dialect, whose code has no brace pair) | the hole ends at the inner `}`; the element does not close | a dynamic element |
 | a directive's opener and its required literals must stand on one line (a `begin` is one line) | `@if`⏎`(x) { y }` | text, then a hole | a directive |
 | a continuation keyword is matched anywhere an opener is (no "after a body" state) | `<p>x @else { y }</p>` | a keyword | text |
@@ -552,6 +551,7 @@ Directive openers and continuations are derived from the grammar ("Directives").
 - In the portable lexers: `tagStart`, `unlessBodyStarts`, `textTokens`, directives and the root
   region, as they are built here (until then `buildIR` refuses a grammar that declares one of
   them, as out of scope); a raw-text grammar that also declares a type-parameter signature is
-  refused (the signature's rewind does not restore the raw-text tag records).
+  refused (the signature's rewind does not restore the raw-text tag records), and so is a
+  grammar that declares both elements and `newline` mode.
 - The root region: the build order above.
 - Re-measuring the five undecidable JSX shapes on a larger TSX corpus.
