@@ -195,19 +195,12 @@ export const CURATED_TS_INVALID: string[] = [
 // failure to get it fails the gate (no silent empty corpus).
 export const REPO_CORPUS_AT = '7b713ea0555571aa01950592125182c0d5012231';
 const git = (args: string[], input?: string): Buffer => execFileSync('git', ['-C', ROOT, ...args], { input, maxBuffer: 1 << 28, stdio: ['pipe', 'pipe', 'pipe'] });
-// Several gates run at once and each may fetch: two fetches into one shallow clone race ("shallow
-// file has changed since we read it", CI 45247019068), so a failed fetch is retried while the commit
-// is still missing (the other gate's fetch has usually brought it by then).
 function corpusCommit(): string {
-  const have = () => { try { git(['cat-file', '-e', `${REPO_CORPUS_AT}^{tree}`]); return true; } catch { return false; } };
-  let last: unknown;
-  for (let attempt = 0; attempt < 5 && !have(); attempt++) {
+  try { git(['cat-file', '-e', `${REPO_CORPUS_AT}^{tree}`]); } catch {
     try { git(['fetch', '-q', '--depth', '1', 'origin', REPO_CORPUS_AT]); } catch (e) {
-      last = e;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000 * (attempt + 1));
+      throw new Error(`emit-corpus: the pinned commit ${REPO_CORPUS_AT} is not in this clone and \`git fetch --depth 1 origin ${REPO_CORPUS_AT}\` failed: ${String(e)}`);
     }
   }
-  if (!have()) throw new Error(`emit-corpus: the pinned commit ${REPO_CORPUS_AT} is not in this clone and \`git fetch --depth 1 origin ${REPO_CORPUS_AT}\` failed: ${String(last)}`);
   return REPO_CORPUS_AT;
 }
 
