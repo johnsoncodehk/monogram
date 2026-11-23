@@ -1505,6 +1505,7 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
             let rhs = match self.${r.name}_bp(rbp) { Some(r) => r, None => { self.back(led_save); self.scratch.truncate(sb); break; } };
             if rhs.present { self.scratch.push(rhs.h); }
             left = ${fin};
+            if self.capped { self.form = 1; return Some(left); }
             form = 1; tail_closed = true;
         }`,
     entry: `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
@@ -1526,7 +1527,8 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
         let mut tail_closed = self.tail;
         loop {
             let t = match self.peek() { Some(t) => t, None => break };`,
-    bpClose: `        self.form = form;
+    bpClose: `        self.capped = false;
+        self.form = form;
         Some(left)
     }`,
     nudEnter: `    fn ${r.name}_nud(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {
@@ -4248,6 +4250,7 @@ function emitRustPrattMethod(
             self.vals.push(left);
             self.vals.push(_right);
             left = ${nodeFinish(rustShapeNodeObjectExpr(binarySlot as NodeShape, '_ab', '_op', shapeIR.spans, '_off', 'self.last_end(_off)', undefined), '_ab')};
+            if self.capped { self.form = 1; return Some(left); }
             form = 1; tail_closed = true;
             continue;
         }`;
@@ -4268,6 +4271,7 @@ function emitRustPrattMethod(
                 None => { self.pos = _save; break; }
             };
             left = ${customCall(bs.fn, '&[_right]', '[]', '_off', 'self.last_end(_off)', 'left', '_op', bs.folds)};
+            if self.capped { self.form = 1; return Some(left); }
             form = 1; tail_closed = true;
             continue;
         }`;
@@ -4291,6 +4295,7 @@ function emitRustPrattMethod(
             self.vals.push(SVal::Str(_op.0, _op.1));
             self.vals.push(_right);
             left = ${keepFinish('_ab', rule.name, '_off')};
+            if self.capped { self.form = 1; return Some(left); }
             form = 1; tail_closed = true;
             continue;
         }`;
@@ -4573,6 +4578,7 @@ function emitRustPrattMethod(
             ${postfixCode}
             ${binaryBody || (hasLoop ? 'break;' : '')}
         ${hasLoop ? '}' : ''}
+        self.capped = false;
         self.form = form;
         Some(left)
     }
@@ -4803,7 +4809,7 @@ ${arms.join('\n')}
     } else {
       // parenOrComma is a site-level decision for every arm — emit one branch.
       if (info.perArm.length === 1 && typeof info.perArm[0] === 'object' && info.perArm[0] !== null && 'parenOrComma' in (info.perArm[0] as object)) {
-        lines.push(`            ${JSON.stringify(fn)} => if arm == 7 { "MetaProperty" } else if kids.len() == 1 { kid_type(kids[0]) } else { "SequenceExpression" },`);
+        lines.push(`            ${JSON.stringify(fn)} => if arm == 6 { "MetaProperty" } else if kids.len() == 1 { kid_type(kids[0]) } else { "SequenceExpression" },`);
         continue;
       }
       const arms: string[] = [];
@@ -4813,7 +4819,7 @@ ${arms.join('\n')}
         if (typeof t === 'string') rhs = JSON.stringify(t);
         else if ('passthrough' in t) rhs = 'kid_type(kids.first().copied().unwrap_or(SVal::Null))';
         else if ('optionalChain' in t) rhs = 'optional_chain_type(kids)';
-        else rhs = 'if arm == 7 { "MetaProperty" } else if kids.len() == 1 { kid_type(kids[0]) } else { "SequenceExpression" }';
+        else rhs = 'if arm == 6 { "MetaProperty" } else if kids.len() == 1 { kid_type(kids[0]) } else { "SequenceExpression" }';
         arms.push(`                ${i} => ${rhs},`);
       });
       lines.push(`            ${JSON.stringify(fn)} => match arm {
