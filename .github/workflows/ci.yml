@@ -83,6 +83,23 @@ jobs:
           git -C /tmp/test262 fetch -q --depth 1 --filter=blob:none origin "$(cat test/test262.sha)"
           git -C /tmp/test262 checkout -q FETCH_HEAD
 
+      # conformance/cpython parses CPython's Lib/ (the standard library and its tests) at the pin in
+      # test/cpython.sha (v3.10.12) with python.ts and compares every verdict with ast.parse of the
+      # same Python version: the sources are data, parsed by both, never executed.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10.12'
+      - name: Clone the pinned CPython corpus
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/cpython; mkdir -p /tmp/cpython
+          git -C /tmp/cpython init -q
+          git -C /tmp/cpython remote add origin https://github.com/python/cpython
+          git -C /tmp/cpython config core.sparseCheckout true
+          printf 'Lib/\n' > /tmp/cpython/.git/info/sparse-checkout
+          git -C /tmp/cpython fetch -q --depth 1 --filter=blob:none origin "$(cat test/cpython.sha)"
+          git -C /tmp/cpython checkout -q FETCH_HEAD
+
       # Every correctness GATE through ONE runner — sanity / agnostic / conformance /
       # highlighter / yaml / the generative scope≡role check / the gap-ledger selftest
       # + --check (stale docs/KNOWN-GAPS.md fails). One ✓/✗ summary, one exit code. The comparative
