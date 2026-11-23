@@ -813,6 +813,14 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuard
  * the member/call/`<>` continuations) are emitted as ordinary choices, each
  * given a baseline precedence so atoms don't fight with operators.
  */
+// The shared analysis once per grammar (buildPrattRule runs for every Pratt rule and its copies).
+const bindingPowerCache = new WeakMap<CstGrammar, ReturnType<typeof analyzeGrammar>>();
+function bindingPowers(g: CstGrammar): ReturnType<typeof analyzeGrammar> {
+  let a = bindingPowerCache.get(g);
+  if (!a) bindingPowerCache.set(g, a = analyzeGrammar(g));
+  return a;
+}
+
 function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
   const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
   const branches: string[] = [];
@@ -823,7 +831,7 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
   // does (a higher number binds tighter, a tie goes by associativity).
   const levels = ctx.grammar.precs;
   const nLevels = levels.length;
-  const bp = analyzeGrammar(ctx.grammar);
+  const bp = bindingPowers(ctx.grammar);
   const levelNum = (lvl: CstGrammar['precs'][number], position: 'infix' | 'prefix' | 'postfix'): number => {
     const v = lvl.operators.find(o => o.position === position)!.value;
     const n = position === 'prefix' ? bp.prefixOps.get(v)?.rbp : bp.opTable.get(v)?.lbp;
