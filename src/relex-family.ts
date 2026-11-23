@@ -628,7 +628,8 @@ export function relexFamilyFns(m: RelexMode): Fn[] {
   return relexFamily(m).fns;
 }
 
-function relexFamily(m: RelexMode): { fns: Fn[]; sets: CharSet[] } {
+// The family's functions and the unit tables they test (printed with them).
+export function relexFamily(m: RelexMode): { fns: Fn[]; sets: CharSet[] } {
   const fns: Fn[] = [];
   const u = new UnitSets();
   if (!perToken(m)) fns.push(toMetaFn());
