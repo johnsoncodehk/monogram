@@ -578,7 +578,7 @@ const Expr = rule($ => [
   // Without this arm the bare form only "parsed" by splitting into two statements.
   arm('asyncArrowIdentifier', capExpr('?', field('asyncKeyword', 'async'), sameLine, awaitCtx(notReservedExpr, field('parameter', Ident)), field('arrow', '=>'), awaitCtx(field('body', conciseBody(Block, $))))),
   arm('arrowIdentifier', capExpr('?', notReservedExpr, field('parameter', Ident), field('arrow', '=>'), resetCtx(field('body', conciseBody(Block, $))))),
-  capExpr('?', 'yield', alt([field('asterisk', '*'), $], [opt($)])),   // yield e | yield* e (delegate) | yield: an AssignmentExpression, capped as javascript.ts's
+  arm('yield_', capExpr('?', 'yield', alt([field('asterisk', '*'), $], [opt($)]))),   // yield e | yield* e (delegate) | yield: an AssignmentExpression, capped as javascript.ts's
   ['(', field('first', $), many(field('comma', ','), field('rest', $)), ')'],
   [$, 'satisfies', Type],
   arm('import_', field('importKeyword', 'import'), field('form', alt(arm('call', '(', field('source', $), ')'), arm('meta', '.', field('metaKeyword', 'meta')), arm('typeArguments', ...typeArgsInExpr(), opt('(', sep($, ','), ')'))))),   // import(e) | import.meta | import<T>(args) (instantiation-expression; checker rejects)

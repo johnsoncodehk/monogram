@@ -199,6 +199,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `super`: one token: committed to super_ (#4) (takes a mark: it can fail after `'super'`)
   - `this`: one token: committed to this_ (#3)
   - `true`: one token: committed to true_ (#0)
+  - `yield`: two tokens: committed to ident (#5), unless arrowIdentifier (#21), seq (#22) admit the token (then the frame)
   - `{`: one token: committed to object (#17) (takes a mark: it can fail after `'{'`)
   - <Ident>: two tokens: committed to ident (#5), unless arrowIdentifier (#21) admits the token (then the frame)
   - <HexNumber>: one token: committed to hexNumber (#26)
@@ -213,7 +214,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - <PrivateField>: one token: committed to privateField (#25)
   - <$templateMiddle>, <$templateTail>, punctuation: no candidate, the list fails
   - two tokens (SECOND): asyncArrow (#18) only before '('|'<'; arrow (#19) only before ')'|'...'|'>'|'@new'|'['|'abstract'|…18; asyncArrowIdentifier (#20) only before Ident; arrowIdentifier (#21) only before '=>'; namedClass (#34) only before '!'|'('|'.'|'<'|'?.'|'@new'|…36; anonymousClass (#35) only before '!'|'('|'.'|'<'|'?.'|'@new'|…38
-  - longest match: a candidate frame (a mark per new best) at `async`, `function`, `import`, `new`, `yield`, the keys above where an `unless` candidate admits the token, every token of a kind no case names, over ident (#5), template (#8), prefixOp (#10), newDotTarget (#12), construct (#13), new_ (#14) and 15 more
+  - longest match: a candidate frame (a mark per new best) at `async`, `function`, `import`, `new`, the keys above where an `unless` candidate admits the token, every token of a kind no case names, over ident (#5), template (#8), prefixOp (#10), newDotTarget (#12), construct (#13), new_ (#14) and 15 more
 - Expr LED (11 connectors, 39 binary operators):
   - `<`: by attempt, in order: led_lt, led_lt2 then the binary operator (takes a builder checkpoint: led_lt: it can fail after `sep(Type, ',')`; led_lt2: it can fail after `sep(Type, ',')`)
   - `(`: one token: led_paren (takes a builder checkpoint: led_paren: it can fail after `sep(Expr, ',')`)
@@ -244,8 +245,6 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Expr NUD / new_2: `sep(Expr, ',')`: by attempt
 - Expr NUD / array: `opt(Expr)`: by attempt; takes a mark: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr NUD / array: `opt(Expr)`: by attempt; takes a mark: a call of Expr can fail after its operand (an operator that requires an assignment target)
-- Expr NUD / yield_: `alt('*' Expr \| opt(Expr))`: by attempt; takes a mark: branch 0: it can fail after `'*'`
-- Expr NUD / yield_: `opt(Expr)`: by attempt; takes a mark: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr NUD / paren: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
 - Expr NUD / import_: `alt('(' Expr ')' \| '.' 'meta' \| '<' sep(Type, ',') !(al…`: one token; takes a mark: branch 0: it can fail after `'('`; branch 1: it can fail after `'.'`; branch 2: it can fail after `'<'`
 - Expr NUD / import_: `sep(Type, ',')`: by attempt
@@ -333,6 +332,8 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Expr NUD / arrow: `alt(Block \| !{'{'} Expr)`: by attempt; takes a mark: branch 1: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr NUD / asyncArrowIdentifier: `alt(Block \| !{'{'} Expr)`: by attempt; takes a mark: branch 1: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr NUD / arrowIdentifier: `alt(Block \| !{'{'} Expr)`: by attempt; takes a mark: branch 1: a call of Expr can fail after its operand (an operator that requires an assignment target)
+- Expr NUD / seq: `alt('*' Expr \| opt(Expr))`: by attempt; takes a mark: branch 0: it can fail after `'*'`
+- Expr NUD / seq: `opt(Expr)`: by attempt; takes a mark: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr LED / led_lt: `sep(Type, ',')`: by attempt
 - Expr LED / led_lt: `alt('(' sep(Expr, ',') ')' \| Template)`: one token; takes a mark: branch 0: it can fail after `'('`
 - Expr LED / led_lt: `sep(Expr, ',')`: by attempt

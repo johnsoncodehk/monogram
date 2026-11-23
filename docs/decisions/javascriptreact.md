@@ -62,6 +62,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `super`: one token: committed to super_ (#5) (takes a mark: it can fail after `'super'`)
   - `this`: one token: committed to this_ (#4)
   - `true`: one token: committed to true_ (#1)
+  - `yield`: two tokens: committed to ident (#6), unless arrowIdentifier (#22), seq (#23) admit the token (then the frame)
   - `{`: one token: committed to object (#18) (takes a mark: it can fail after `'{'`)
   - <Ident>: two tokens: committed to ident (#6), unless arrowIdentifier (#22) admits the token (then the frame)
   - <HexNumber>: one token: committed to hexNumber (#27)
@@ -76,7 +77,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - <Decorator>: two tokens: committed to namedClass (#35), unless anonymousClass (#36) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
   - <PrivateField>: one token: committed to privateField (#26)
   - two tokens (SECOND): jSXElement (#0) only before '>'|Ident; asyncArrow (#19) only before '('; arrow (#20) only before ')'|'...'|'['|'{'|Decorator|Ident; asyncArrowIdentifier (#21) only before Ident; arrowIdentifier (#22) only before '=>'; namedClass (#35) only before '('|'class'|Decorator|Ident; anonymousClass (#36) only before '('|'class'|'extends'|'{'|Decorator
-  - longest match: a candidate frame (a mark per new best) at `async`, `function`, `new`, `yield`, the keys above where an `unless` candidate admits the token, every token of a kind no case names, over ident (#6), template (#9), prefixOp (#11), newDotTarget (#13), construct (#14), newNamedClass (#15) and 13 more
+  - longest match: a candidate frame (a mark per new best) at `async`, `function`, `new`, the keys above where an `unless` candidate admits the token, every token of a kind no case names, over ident (#6), template (#9), prefixOp (#11), newDotTarget (#13), construct (#14), newNamedClass (#15) and 13 more
 - Expr LED (7 connectors, 39 binary operators):
   - `(`: one token: led_paren (takes a builder checkpoint: led_paren: it can fail after `sep(Expr, ',')`)
   - `.`: one token: led_dot
@@ -98,8 +99,6 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Expr NUD / newAnonymousClass: `sep(Expr, ',')`: by attempt
 - Expr NUD / array: `opt(Expr)`: by attempt; takes a mark: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr NUD / array: `opt(Expr)`: by attempt; takes a mark: a call of Expr can fail after its operand (an operator that requires an assignment target)
-- Expr NUD / yield_: `alt('*' Expr \| opt(Expr))`: by attempt; takes a mark: branch 0: it can fail after `'*'`
-- Expr NUD / yield_: `opt(Expr)`: by attempt; takes a mark: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr NUD / paren: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
 - Expr NUD / import_: `alt('(' !{'...'} Expr opt(',' opt(!{'...'} Expr opt(…))…`: one token; takes a mark: branch 0: it can fail after `'('`; branch 1: it can fail after `'.'`
 - Expr NUD / import_: `opt(!{'...'} Expr opt(','))`: by attempt; takes a mark: it can fail after `Expr`
@@ -117,6 +116,8 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Expr NUD / arrow: `alt(Block \| !{'{'} Expr)`: by attempt; takes a mark: branch 1: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr NUD / asyncArrowIdentifier: `alt(Block \| !{'{'} Expr)`: by attempt; takes a mark: branch 1: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr NUD / arrowIdentifier: `alt(Block \| !{'{'} Expr)`: by attempt; takes a mark: branch 1: a call of Expr can fail after its operand (an operator that requires an assignment target)
+- Expr NUD / seq: `alt('*' Expr \| opt(Expr))`: by attempt; takes a mark: branch 0: it can fail after `'*'`
+- Expr NUD / seq: `opt(Expr)`: by attempt; takes a mark: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr LED / led_paren: `sep(Expr, ',')`: by attempt
 - Expr LED / led_optChain: `alt(Ident \| PrivateField \| '(' sep(Expr, ',') ')' \| '['…`: one token; takes a mark: branch 2: it can fail after `'('`; branch 3: it can fail after `'['`
 - Expr LED / led_optChain: `sep(Expr, ',')`: by attempt

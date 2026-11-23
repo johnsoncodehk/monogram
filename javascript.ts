@@ -539,7 +539,7 @@ const Expr = rule($ => [
   // the spec's [no LineTerminator here] between async and the binding identifier).
   arm('asyncArrowIdentifier', capExpr('?', field('asyncKeyword', 'async'), sameLine, awaitCtx(notReservedJsExpr, field('parameter', Ident)), field('arrow', '=>'), awaitCtx(field('body', conciseBody(Block, $))))),
   arm('arrowIdentifier', capExpr('?', notReservedJsExpr, field('parameter', Ident), field('arrow', '=>'), resetCtx(field('body', conciseBody(Block, $))))),
-  capExpr('?', 'yield', alt(['*', $], [opt($)])),   // yield e | yield* e (delegate) | yield
+  arm('yield_', capExpr('?', 'yield', alt(['*', $], [opt($)]))),   // yield e | yield* e (delegate) | yield
   ['(', field('first', $), many(field('comma', ','), field('rest', $)), ')'],
   // ImportCall: one or two AssignmentExpressions, no spread (the `...` arm is Arguments'), and ImportMeta
   arm('import_', field('importKeyword', 'import'), field('form', alt(arm('call', '(', not('...'), field('source', $), opt(',', opt(not('...'), field('options', $), opt(','))), ')'), arm('meta', '.', field('metaKeyword', 'meta'))))),
