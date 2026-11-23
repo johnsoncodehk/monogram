@@ -5673,7 +5673,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       // `:` introducer (a `…: ` / `…:`-EOL line ends/never-opens a fold) and the compact `-`/`?` arm.
       // The one site that still over-claimed was the explicit-key fold: `? k:` is a `?`-led key whose
       // TRAILING `:` (a value-position) opens a value block, yet the fold treated `k` as a foldable
-      // bare scalar and swallowed the value line `  - x` (depth-sites' explicit-key-value bug). The
+      // bare scalar and swallowed the value line `  - x` (the explicit-key-value bug of test/yaml-sites.ts's depth-sites). The
       // guard `keyColonGuard` — derived from the same kvSep value-position introducer — asserts a
       // plain scalar is NOT a `key:` (i.e. does NOT open a `:` value block); the explicit-key fold opens
       // only on a plain scalar that passes it, so a bare `? a\n  b` folds the key while `? k:\n  -` /
@@ -5789,7 +5789,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
         // `? k:\n  -` and `? k: v\n    more` are value-positions — the `?`-led key's trailing `:` opens
         // a value block, so this fold yields and the value line routes to the shared dispatch (the `-`
         // scoped punctuation) / the value-scoped #plain-continuation (`more` → string.unquoted). Before
-        // the guard this region swallowed `? k:`'s value line as the KEY scope (the depth-sites bug);
+        // the guard this region swallowed `? k:`'s value line as the KEY scope (the yaml-sites depth-sites bug);
         // the guard is the explicit-key instance of "a fold yields to a value-position".
         repository['explicit-key-continuation'] = emitIndentRegion({
           lookahead: `(?=${escapeRegex(ekFold.indicator)}[\\t ]+(?=${plainSrc})${keyColonGuard})`,
@@ -5878,7 +5878,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       // residual whitespace → fold; after `- - - - - a` (d=5, 4 frames carry to col 8) the col-8 dash sits
       // AT the carried cursor → punctuation. Both are correct at every depth because the carry is per-level
       // recursive, not a fixed-arity formula (verified d=1..12, uniform and mixed compaction, vs the eemeli
-      // CST oracle — test/yaml-deepest-sibling-probe.ts). A sibling-opened multi-line nest
+      // CST oracle — the deepest-sibling section of test/yaml-sites.ts). A sibling-opened multi-line nest
       // (`- - a\n  - - b\n    - c`) works the same way: each line re-anchors via the meta.stream wrapper and
       // the consume carries its column. The region RELEASES on a dedent or a non-dash line at the column, so
       // a column-0 `key:` after the sequence is not swallowed. Portable Oniguruma only — no variable-length

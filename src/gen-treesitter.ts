@@ -2,6 +2,7 @@ import type { CstGrammar, RuleExpr, RuleDecl, TokenPattern } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
 import { buildLr, END, type LeafGraph, type LrAnalysis } from './lr-automaton.ts';
 import { info as tokenPatternInfo, continuesAt, type CSet } from './lex-match-plan.ts';
+import { analyzeGrammar } from './grammar-analysis.ts';
 import { tokenPatternFirstCharSet, type TokenPatternFirstSet, tokenPatternIsNever, tokenPatternLiteralPrefix, tokenPatternLiteralPrefixes, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -812,14 +813,31 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuard
  * the member/call/`<>` continuations) are emitted as ordinary choices, each
  * given a baseline precedence so atoms don't fight with operators.
  */
+// The shared analysis once per grammar (buildPrattRule runs for every Pratt rule and its copies).
+const bindingPowerCache = new WeakMap<CstGrammar, ReturnType<typeof analyzeGrammar>>();
+function bindingPowers(g: CstGrammar): ReturnType<typeof analyzeGrammar> {
+  let a = bindingPowerCache.get(g);
+  if (!a) bindingPowerCache.set(g, a = analyzeGrammar(g));
+  return a;
+}
+
 function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
   const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
   const branches: string[] = [];
 
-  // Precedence number for each grammar level: later levels (deeper in the array)
-  // bind tighter, so index → number = index + 1.
+  // The precedence numbers are the binding powers of the shared analysis (grammar-analysis.ts
+  // analyzeGrammar: the table the interpreter and the portable printers read): an operator's lbp, a
+  // prefix operator's rbp, a ledPrec continuation's lbp; tree-sitter compares them as the Pratt loop
+  // does (a higher number binds tighter, a tie goes by associativity).
   const levels = ctx.grammar.precs;
   const nLevels = levels.length;
+  const bp = bindingPowers(ctx.grammar);
+  const levelNum = (lvl: CstGrammar['precs'][number], position: 'infix' | 'prefix' | 'postfix'): number => {
+    const v = lvl.operators.find(o => o.position === position)!.value;
+    const n = position === 'prefix' ? bp.prefixOps.get(v)?.rbp : bp.opTable.get(v)?.lbp;
+    if (n === undefined) throw new Error(`gen-treesitter: ${position} operator ${v} has no binding power in the shared analysis`);
+    return n;
+  };
 
   // Group operators of a position by their (num, assoc) so each precedence level
   // becomes one tree-sitter branch with the right prec wrapper.
@@ -829,7 +847,7 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
       const lvl = levels[i];
       const ops = lvl.operators.filter(o => o.position === position).map(o => o.value);
       if (ops.length === 0) continue;
-      byLevel.set(String(i), { num: i + 1, assoc: lvl.assoc, ops });
+      byLevel.set(String(i), { num: levelNum(lvl, position), assoc: lvl.assoc, ops });
     }
     // The operands as the marker arm writes them (a FIRST-filtered copy's left operand is the copy).
     const { left, right } = operands[position];
@@ -888,22 +906,32 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
   if (sawPrefix) emitOperatorBranches('prefix');
   if (sawPostfix) emitOperatorBranches('postfix');
 
-  // Atoms get a baseline prec of 0; the postfix/call/member continuations that
-  // are left-recursive get a HIGH prec so they bind tighter than binary ops
-  // (matches the Pratt parser's maxBp for non-operator LED patterns).
-  const high = nLevels + 1;
+  // Atoms get a baseline prec of 0. A left-recursive continuation binds at its connector's binding
+  // power: a ledPrec connector's (`?` below `??`, `in` / `instanceof` / `as` as `<`), else above every
+  // operator (member, call, index, tagged template: the Pratt loop's maxBp for a LED the ledPrec
+  // table does not name).
+  const high = Math.max(0, ...[...bp.opTable.values()].map(o => o.lbp), ...[...bp.prefixOps.values()].map(o => o.rbp)) + 2;
   const selfSnake = ctx.ruleSnake.get(rule.name);
   for (const [i, ab] of atomBranches.entries()) {
     // Heuristic: a branch that starts with the self-reference is a left-recursive
     // continuation (call/member/index/generic) — bind tight.
     if (ab.startsWith(`seq($.${selfSnake}`) || ab === `$.${selfSnake}` || ab.startsWith(`seq(alias($.${selfSnake}, `)) {
-      // The precedence decides at the continuation's operator; a continuation that ENDS in another
-      // rule's reference leaves that last step out of it (see openTail).
-      const tail = openTail(rule.name, atomAlts[i], ctx.grammar);
-      if (tail === null) { branches.push(`prec.left(${high}, ${ab})`); continue; }
+      const alt = atomAlts[i];
+      const connector = alt.type === 'seq' ? alt.items.slice(1).find(x => !ASSERTION_KINDS.has(x.type)) : undefined;
+      const led = connector?.type === 'literal' ? bp.ledPrecByConnector.get(connector.value) : undefined;
+      const num = led?.lbp ?? high;
+      // The precedence decides at the continuation's connector. Its last step keeps it when the
+      // trailing operand is read at that binding power (a ledPrec `chainRhs`: `in`, `instanceof`, a
+      // left-associative level); it carries none when the operand is read whole: another rule with
+      // continuations of its own (openTail: `as T[]`) or a full expression (the ternary's last
+      // branch, an AssignmentExpression: `a ? b : c = d`), so each operator after it shifts into it.
+      const last = alt.type === 'seq' ? alt.items[alt.items.length - 1] : null;
+      const wholeSelf = led !== undefined && led.rhsBp === null && last?.type === 'ref' && last.name === rule.name;
+      const tail = wholeSelf ? last : openTail(rule.name, alt, ctx.grammar);
+      if (tail === null) { branches.push(`prec.left(${num}, ${ab})`); continue; }
       const t = renderExpr(tail, ctx);
       if (!ab.endsWith(`, ${t})`)) throw new Error(`gen-treesitter: the continuation ${ab} does not end in its operand ${t}`);
-      branches.push(`seq(prec.left(${high}, ${ab.slice(0, ab.length - t.length - 3)})), ${t})`);
+      branches.push(`seq(prec.left(${num}, ${ab.slice(0, ab.length - t.length - 3)})), ${t})`);
     } else {
       branches.push(ab);
     }

@@ -11,6 +11,9 @@ name: README auto-regen
 #     `node test/coverage-table.ts --write` — Monogram's parser vs the OFFICIAL parser over a
 #     real corpus (agree · covered) plus the derived-vs-official highlighter axis. Needs the four
 #     pinned corpora below, cloned to the fixed /tmp paths the adapters hard-code.
+#   - docs/ALLOCATIONS.md, what one parse allocates per target (`node test/alloc-work.ts --write`):
+#     a report, not a gate (the gate alloc-work checks only its invariants), so no landing has to
+#     re-record it; this job keeps it current on master.
 #
 # Both grade against the official grammars, so every one must be present or the run refuses to
 # write (issue-table.ts aborts on a partial table; coverage-table.ts exits non-zero rather than
@@ -42,6 +45,8 @@ on:
       - 'test/src-coverage*.ts'
       - 'test/scope-gap*.ts'
       - 'test/coverage-table.ts'
+      - 'test/alloc-work.ts'
+      - 'test/alloc-instrument.ts'
       - '.github/workflows/readme-bench.yml'
   workflow_dispatch:
 
@@ -71,6 +76,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+
+      # The Go toolchain the allocation report's Go rows are measured with (the report names it).
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.4'
+          cache: false
 
       - run: npm ci
 
@@ -123,15 +134,18 @@ jobs:
           MONOGRAM_OFFICIAL_YAML: /tmp/redcmd-yaml/syntaxes/yaml.tmLanguage.json
         run: node test/coverage-table.ts --write
 
+      - name: Regenerate the allocation report (docs/ALLOCATIONS.md)
+        run: node test/alloc-work.ts --write
+
       - name: Commit the refreshed README (if it changed)
         run: |
           set -euo pipefail
-          if git diff --quiet -- README.md docs/HIGHLIGHTER-EVIDENCE.md; then
+          if git diff --quiet -- README.md docs/HIGHLIGHTER-EVIDENCE.md docs/ALLOCATIONS.md; then
             echo "README already current — nothing to commit."
             exit 0
           fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md docs/HIGHLIGHTER-EVIDENCE.md
-          git commit -m "chore: refresh README ledger + coverage table [skip ci]"
+          git add README.md docs/HIGHLIGHTER-EVIDENCE.md docs/ALLOCATIONS.md
+          git commit -m "chore: refresh README ledger + coverage table + allocation report [skip ci]"
           git push

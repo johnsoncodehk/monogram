@@ -14,6 +14,7 @@
 //      kinds (text, close tag, self-close, tag tokens) gets the Monarch token of its kind.
 //   2. DIALECTS: rows on the Monarch generated in memory for test/fixtures/elementdialect.ts and
 //      test/fixtures/textdialect.ts, mirroring tm-dialect's rows where Monarch can express them.
+//   2b. HTML: rows on the COMMITTED `html.monarch.json` (tags, attributes, comments, raw-text bodies).
 //   3. MONACO-COMPILE: the static checks of Monaco's Monarch compiler on every Monarch grammar.
 // Every row states the behaviour WANTED; `xfail` marks a row the generator does not meet yet, with
 // its reason. The gate fails when a `pass` row fails AND when an `xfail` row passes.
@@ -458,6 +459,35 @@ for (const [name, file, g] of [['jsx', 'javascriptreact.monarch.json', jsx], ['t
     if (raw.replace(/\s/g, '') !== want) bad.push(`Monarch embeds ${JSON.stringify(raw)}, the lexer's raw tokens are ${JSON.stringify(want)}`);
     return { ok: bad.length === 0 && n > 0, saw: bad.length ? bad.join('; ') : `${n} units` };
   } });
+}
+
+// ── 2b. HTML (the committed `html.monarch.json`, gen-monarch's markup path): tags, attributes,
+// comments and raw-text bodies; a `<` inside `<script>` / `<!-- -->` is content, never a tag
+// delimiter. A row holds when the tokenizer emits a token of exactly that text and that token.
+{
+  section = 'html';
+  const mon = monOf('html.monarch.json');
+  const has = (id: string, src: string, text: string, token: string, none = false) =>
+    rows.push({ section, id, status: 'pass', check: () => {
+      const toks = tokenize(mon(), src);
+      const hit = toks.some(t => t.text === text && t.token === token);
+      return { ok: hit !== none, saw: toks.map(t => `${JSON.stringify(t.text)}:${t.token || "''"}`).join(' ') };
+    } });
+  const div = '<div class="x">hi</div>';
+  has('`<` of a tag is a delimiter', div, '<', 'delimiter');
+  has('tag name `div`', div, 'div', 'tag');
+  has('attribute name `class`', div, 'class', 'attribute.name');
+  has('`=` of an attribute is a delimiter', div, '=', 'delimiter');
+  has('attribute value `x` is a string', div, 'x', 'string');
+  has('text content `hi` is the uncoloured root', div, 'hi', '');
+  has('tag name of a self-closing `<br/>`', '<br/>', 'br', 'tag');
+  has('`/>` is a delimiter', '<br/>', '/>', 'delimiter');
+  has('attribute value `/y` is a string', '<a href="/y">', '/y', 'string');
+  has('`<!--` opens a comment', '<!-- a < b -->', '<!--', 'comment');
+  has('a `<` inside a comment is no delimiter', '<!-- a < b -->', '<', 'delimiter', true);
+  has('tag name `script`', '<script>var a = 1 < 2;</script>', 'script', 'tag');
+  has('the `<` of `1 < 2` in a `<script>` body is source.js, not a tag delimiter', '<script>var a = 1 < 2;</script>', '<', 'source.js');
+  has('a `<style>` body is source.css', '<style>a > b{}</style>', 'a > b{}', 'source.css');
 }
 
 // ── 3. Monaco's compiler: the static checks its Monarch compiler (`monarchCompile.ts`) makes,
