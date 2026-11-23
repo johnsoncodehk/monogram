@@ -248,6 +248,9 @@ interface GrammarJsContext {
    *  grammar (tree-sitter: "Reserved word 'enum' must be a token"); a word no rule writes gets a
    *  token rule of its own (buildGrammarJs). */
   renderedLiterals: Set<string>;
+  /** The one-token lookaheads rendered as FIRST-filtered copies: a reference to a copy renders as
+   *  `alias($._copy, $.original)`. */
+  firstFilters: FirstFilterPlan;
 }
 
 function hasMarker(expr: RuleExpr): boolean {
@@ -365,6 +368,13 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordSet?: string): st
       // A token provided by the external scanner is referenced by its scanner
       // symbol name (e.g. `regex` → `regex_literal`), not its plain token snake.
       const scannerSym = ctx.scannerTokenFor.get(expr.name);
+      const aliased = ctx.firstFilters.aliasOf.get(expr.name);
+      if (aliased !== undefined) {
+        const as = ctx.tokenNames.has(aliased) ? ctx.tokenSnake.get(aliased)! : ctx.ruleSnake.get(aliased)!;
+        const copy = `alias($.${ctx.ruleSnake.get(expr.name)!}, $.${as})`;
+        const step = ctx.firstFilters.stepOf.get(expr);
+        return step && ctx.nameFieldNodes.has(step) ? `field('name', ${copy})` : copy;
+      }
       const ref = scannerSym
         ? `$.${scannerSym}`
         : ctx.tokenNames.has(expr.name)
@@ -498,14 +508,15 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
       if (ops.length === 0) continue;
       byLevel.set(String(i), { num: i + 1, assoc: lvl.assoc, ops });
     }
-    const selfRef = `$.${ctx.ruleSnake.get(rule.name)}`;
+    // The operands as the marker arm writes them (a FIRST-filtered copy's left operand is the copy).
+    const { left, right } = operands[position];
     for (const { num, assoc, ops } of byLevel.values()) {
       const opLits = ops.map(o => ruleLiteral(o, ctx));
       const opChoice = opLits.length === 1 ? opLits[0] : `choice(${opLits.join(', ')})`;
       let inner: string;
-      if (position === 'infix') inner = `seq(${selfRef}, field('operator', ${opChoice}), ${selfRef})`;
-      else if (position === 'prefix') inner = `seq(field('operator', ${opChoice}), ${selfRef})`;
-      else inner = `seq(${selfRef}, ${postfixBetween}field('operator', ${opChoice}))`;
+      if (position === 'infix') inner = `seq(${left}, field('operator', ${opChoice}), ${right})`;
+      else if (position === 'prefix') inner = `seq(field('operator', ${opChoice}), ${right})`;
+      else inner = `seq(${left}, ${postfixBetween}field('operator', ${opChoice}))`;
 
       const wrapper =
         position === 'prefix' ? 'prec.right' :
@@ -522,12 +533,17 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
   // What stands between the operand and a postfix operator (`[$, sameLine, postfix]`): a same-line
   // marker renders as its zero-width token, any other assertion as nothing.
   let postfixBetween = '';
+  const operands = { infix: { left: '', right: '' }, prefix: { left: '', right: '' }, postfix: { left: '', right: '' } };
 
   for (const alt of alts) {
     const items = alt.type === 'seq' ? alt.items : [alt];
     const markerPos = items.findIndex(i => i.type === 'op' || i.type === 'prefix' || i.type === 'postfix');
     if (markerPos !== -1) {
       const m = items[markerPos];
+      operands[m.type === 'op' ? 'infix' : m.type === 'prefix' ? 'prefix' : 'postfix'] = {
+        left: m.type === 'prefix' ? '' : renderExpr(items[0], ctx),
+        right: m.type === 'postfix' ? '' : renderExpr(items[markerPos + 1], ctx),
+      };
       if (m.type === 'op') sawInfix = true;
       else if (m.type === 'prefix') sawPrefix = true;
       else if (m.type === 'postfix') {
@@ -556,7 +572,7 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
   for (const ab of atomBranches) {
     // Heuristic: a branch that starts with the self-reference is a left-recursive
     // continuation (call/member/index/generic) — bind tight.
-    if (ab.startsWith(`seq($.${selfSnake}`) || ab === `$.${selfSnake}`) {
+    if (ab.startsWith(`seq($.${selfSnake}`) || ab === `$.${selfSnake}` || ab.startsWith(`seq(alias($.${selfSnake}, `)) {
       branches.push(`prec.left(${high}, ${ab})`);
     } else {
       branches.push(ab);
@@ -958,6 +974,326 @@ function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: 
   return { records, recordOf, nodes, reservedSets, isWordLiteral };
 }
 
+// ── One-token lookaheads as FIRST-filtered copies (planFirstFilters) ──────────
+// A CFG has no lookahead, but a lookahead on the NEXT token alone is a property of the strings that
+// follow: `not(X) R` derives exactly the strings of R whose first token is not in X, and
+// `not(not(Y)) R` the ones whose first token is in Y. So such a site renders exactly as a COPY of what
+// follows restricted by its first token: an alternative whose FIRST passes is kept, one whose FIRST
+// fails is dropped, and one with both is restricted in its left corner, recursively, so a rule met
+// there is copied too (one copy per rule and condition, shared by every site and every recursion with
+// that condition: left recursion maps to the copy itself, which is how a Pratt rule's operator
+// productions get their left operand). Copies are hidden rules rendered as `alias($._copy, $.rule)`, so
+// the tree is the one the uncopied rule gives. Keyword extraction is modelled as in classifyAssertions:
+// the word token stands for every word-shaped literal it can lex, so a positive condition on a word
+// keeps the word token only as that word (a NAMES rule of the words, aliased to the word token), and
+// a negative one on a word the step does not already reserve would need a reserved word set of its
+// own. What this cannot render stays dropped and keeps its class in the ledger (`residual`): a
+// condition on more than one token, a condition whose site's continuation may be empty (it would
+// restrict what follows the rule), a nullable rule in a left corner, a Pratt operator set the
+// condition splits, a word the condition reserves, a named tsRelax group in a left corner.
+type FirstFilter = { in: Set<string> | null; out: Set<string> };
+interface FirstFilterPlan {
+  /** The grammar as tree-sitter renders it: the sites rewritten, the copies after their originals. */
+  grammar: CstGrammar;
+  /** A copy rule → the rule (or, for a names rule, the word token) whose node it renders as. */
+  aliasOf: Map<string, string>;
+  /** A copy rule → its hidden snake name. */
+  snakeOf: Map<string, string>;
+  /** The assertion nodes every site of which renders as a copy (the ledger's `lowered`). */
+  lowered: Set<RuleExpr>;
+  /** A names reference → the word step it stands for (its `name` field, if it has one). */
+  stepOf: Map<RuleExpr, RuleExpr>;
+}
+class FirstFilterResidual extends Error {}
+
+function planFirstFilters(grammar: CstGrammar, tokenNames: Set<string>, sets: TerminalSets, word: string | undefined,
+  isWordLiteral: (text: string) => boolean, recordOf: Map<RuleExpr, AssertionRecord[]>): FirstFilterPlan {
+  const plan: FirstFilterPlan = { grammar, aliasOf: new Map(), snakeOf: new Map(), lowered: new Set(), stepOf: new Map() };
+  if (grammar.indent || grammar.newline) return plan;
+  const rules = new Map(grammar.rules.map(r => [r.name, r]));
+  const isWordShaped = (t: string) => t.startsWith("'") && isWordLiteral(t.slice(1));
+  const tokSet = (e: RuleExpr): Set<string> | null => {
+    e = tsView(e);
+    if (e.type === 'literal') return new Set([`'${e.value}`]);
+    if (e.type === 'ref') return tokenNames.has(e.name) ? new Set([e.name]) : null;
+    if (e.type === 'seq' && e.items.length === 1) return tokSet(e.items[0]);
+    if (e.type === 'alt') {
+      const out = new Set<string>();
+      for (const i of e.items) { const s = tokSet(i); if (!s) return null; for (const t of s) out.add(t); }
+      return out;
+    }
+    return null;
+  };
+  // The first tokens of a choice of token sequences (`"var" | ["await" "using"]`), else null.
+  const firstTokens = (e: RuleExpr): Set<string> | null => {
+    e = tsView(e);
+    const arms = e.type === 'alt' ? e.items : [e];
+    const out = new Set<string>();
+    for (const a of arms) {
+      const v = tsView(a);
+      const s = tokSet(v.type === 'seq' && v.items.length ? v.items[0] : v);
+      if (!s) return null;
+      for (const t of s) out.add(t);
+    }
+    return out;
+  };
+  // The one-token condition a `not` renders as, when the ledger left it dropped as `lookahead1`. A
+  // positive lookahead over token sequences (`lookahead`) renders as the condition on their first
+  // tokens: a superset of what it accepts, so it stays inexact (`approx`).
+  const approx = new Set<RuleExpr>();
+  const conditionOf = (e: RuleExpr): FirstFilter | null => {
+    if (e.type !== 'not') return null;
+    const cls = (recordOf.get(e) ?? []).map(r => r.cls);
+    const b = tsView(e.body);
+    if (cls.includes('lookahead1')) {
+      if (b.type === 'not') { const y = tokSet(b.body); return y ? { in: y, out: new Set() } : null; }
+      const x = tokSet(b);
+      return x ? { in: null, out: x } : null;
+    }
+    if (cls.includes('lookahead') && b.type === 'not') {
+      const y = firstTokens(b.body);
+      if (!y) return null;
+      approx.add(e);
+      return { in: y, out: new Set() };
+    }
+    return null;
+  };
+  const meet = (a: FirstFilter, b: FirstFilter): FirstFilter => ({
+    in: a.in && b.in ? new Set([...a.in].filter(t => b.in!.has(t))) : a.in ?? b.in,
+    out: new Set([...a.out, ...b.out]),
+  });
+  const keyOf = (f: FirstFilter) => `${f.in ? [...f.in].sort().join(' ') : '*'}|${[...f.out].sort().join(' ')}`;
+  // A terminal against a condition: 'pass', 'fail', or, for the word token, the words it may only be.
+  const test = (t: string, f: FirstFilter, reservedHere: ReadonlySet<string>): 'pass' | 'fail' | string[] => {
+    if (t !== word) {
+      const viaWord = word !== undefined && isWordShaped(t);
+      if (f.out.has(t) || (viaWord && f.out.has(word!))) return 'fail';
+      return !f.in || f.in.has(t) || (viaWord && f.in.has(word!)) ? 'pass' : 'fail';
+    }
+    if (f.out.has(t)) return 'fail';
+    const excluded = [...f.out].filter(x => isWordShaped(x) && !reservedHere.has(x.slice(1)));
+    if (excluded.length) throw new FirstFilterResidual(`the condition reserves ${excluded.join(' ')} on the word token`);
+    if (!f.in || f.in.has(t)) return 'pass';
+    const words = [...f.in].filter(x => isWordShaped(x) && !reservedHere.has(x.slice(1))).map(x => x.slice(1)).sort();
+    return words.length ? words : 'fail';
+  };
+  const NO_WORDS: ReadonlySet<string> = new Set();
+  const copies = new Map<string, string | null>();          // `rule|condition` → copy name (null: in progress failed)
+  const copyBodies = new Map<string, RuleExpr>();           // copy name → body
+  const copiesOf = new Map<string, string[]>();             // rule → its copies, in order
+  const copyCount = new Map<string, number>();
+  const namesRules = new Map<string, string>();             // words → names rule
+  const snakeOfRule = (n: string) => toSnake(n);
+  const namesRef = (words: string[], step?: RuleExpr): RuleExpr => {
+    const k = words.join(' ');
+    let n = namesRules.get(k);
+    if (!n) {
+      n = `${word}$names${namesRules.size + 1}`;
+      namesRules.set(k, n);
+      plan.aliasOf.set(n, word!);
+      plan.snakeOf.set(n, `_${snakeOfRule(word!)}_names_${namesRules.size}`);
+      copyBodies.set(n, words.length === 1 ? { type: 'literal', value: words[0] } : { type: 'alt', items: words.map(w => ({ type: 'literal', value: w })) });
+    }
+    const ref: RuleExpr = { type: 'ref', name: n };
+    if (step) plan.stepOf.set(ref, step);
+    return ref;
+  };
+  const copyOf = (name: string, f: FirstFilter): string => {
+    const key = `${name}|${keyOf(f)}`;
+    const have = copies.get(key);
+    if (have) return have;
+    if (have === null) throw new FirstFilterResidual(`${name} under ${keyOf(f)}`);
+    const list = copiesOf.get(name) ?? copiesOf.set(name, []).get(name)!;
+    const n = (copyCount.get(name) ?? 0) + 1;
+    copyCount.set(name, n);
+    const copy = `${name}$first${n}`;
+    copies.set(key, copy);
+    list.push(copy);
+    try {
+      const body = filt(rules.get(name)!.body, f);
+      if (!body) throw new FirstFilterResidual(`${name} has no string under ${keyOf(f)}`);
+      copyBodies.set(copy, body);
+      plan.aliasOf.set(copy, name);
+      plan.snakeOf.set(copy, `_${snakeOfRule(name)}_first_${n}`);
+      return copy;
+    } catch (err) {
+      copies.set(key, null);
+      list.splice(list.indexOf(copy), 1);
+      throw err;
+    }
+  };
+  // Every non-empty string of `e` whose first token passes `f` (null: none); `e` itself when that is
+  // all of them.
+  const filt = (e: RuleExpr, f: FirstFilter): RuleExpr | null => {
+    switch (e.type) {
+      case 'literal': return test(`'${e.value}`, f, NO_WORDS) === 'pass' ? e : null;
+      case 'ref': {
+        if (e.hole !== undefined || tokenNames.has(e.name) || !rules.has(e.name)) {
+          const r = test(e.name, f, NO_WORDS);
+          return r === 'pass' ? e : r === 'fail' ? null : namesRef(r);
+        }
+        if (sets.nullable(e)) throw new FirstFilterResidual(`nullable rule ${e.name} in a left corner`);
+        // The word token is decided at its step (its own guards may reserve what the condition excludes).
+        let pass = 0, fail = 0, partial = 0;
+        for (const t of sets.firstOf(e)) {
+          if (t !== word) { if (test(t, f, NO_WORDS) === 'pass') pass++; else fail++; }
+          else if (f.out.has(t)) fail++;
+          else if ((!f.in || f.in.has(t)) && ![...f.out].some(isWordShaped)) pass++;
+          else partial++;
+        }
+        if (!fail && !partial) return e;
+        if (!pass && !partial) return null;
+        return { ...e, name: copyOf(e.name, f) };
+      }
+      case 'group': {
+        if (e.tsRuleName) throw new FirstFilterResidual('a named tsRelax group in a left corner');
+        const v = e.tsRelaxed ?? e.body;
+        const r = filt(v, f);
+        return r === v ? e : r;
+      }
+      case 'seq': {
+        const alts = filtItems(e.items, 0, f);
+        if (!alts) return null;
+        if (alts.length === 1 && alts[0].length === e.items.length && alts[0].every((x, i) => x === e.items[i])) return e;
+        const seqs = alts.map(items => items.length === 1 ? items[0] : { type: 'seq' as const, items });
+        return seqs.length === 1 ? seqs[0] : { type: 'alt', items: seqs };
+      }
+      case 'alt': {
+        const items = e.items.map(i => filt(i, f));
+        if (items.every((x, i) => x === e.items[i])) return e;
+        const kept = items.filter((x): x is RuleExpr => x !== null);
+        return kept.length === 0 ? null : kept.length === 1 ? kept[0] : { type: 'alt', items: kept };
+      }
+      case 'quantifier': {
+        const b = filt(e.body, f);
+        if (!b) return null;
+        if (e.kind === '+' && b === e.body) return e;
+        return e.kind === '?' ? b : { type: 'seq', items: [b, { type: 'quantifier', kind: '*', body: e.body }] };
+      }
+      case 'sep': {
+        const b = filt(e.element, f);
+        if (!b) return null;
+        const d: RuleExpr = { type: 'literal', value: e.delimiter };
+        return { type: 'seq', items: [b, { type: 'quantifier', kind: '*', body: { type: 'seq', items: [d, e.element] } }, { type: 'quantifier', kind: '?', body: d }] };
+      }
+      case 'prefix': {
+        let pass = 0, fail = 0;
+        for (const t of sets.firstOf(e)) if (test(t, f, NO_WORDS) === 'pass') pass++; else fail++;
+        if (pass && fail) throw new FirstFilterResidual('a prefix operator set the condition splits');
+        return fail ? null : e;
+      }
+      case 'op': case 'postfix': throw new FirstFilterResidual(`a ${e.type} marker first`);
+      default: return null;                         // a zero-width assertion alone: no non-empty string
+    }
+  };
+  // The item lists (alternatives) of `items[i..]` restricted by `f` on their first token.
+  const filtItems = (items: RuleExpr[], i: number, f: FirstFilter, end: Set<string> | null = null): RuleExpr[][] | null => {
+    if (i >= items.length) return null;
+    const x = items[i], v = tsView(x);
+    if (ASSERTION_KINDS.has(v.type)) {
+      const rest = filtItems(items, i + 1, f, end);
+      return rest && rest.map(r => [x, ...r]);
+    }
+    if (v.type === 'ref' && v.name === word) {
+      // The word step: the words its own guards (the `not`s right before it) already reserve.
+      const reservedHere = new Set<string>();
+      for (let j = i - 1; j >= 0 && ASSERTION_KINDS.has(tsView(items[j]).type); j--) {
+        const ws = reservedGuardWords(items[j], x, word, isWordLiteral);
+        if (ws) for (const w of ws) reservedHere.add(w);
+      }
+      const r = test(word, f, reservedHere);
+      if (r === 'fail') return null;
+      return [[r === 'pass' ? x : namesRef(r, v), ...items.slice(i + 1)]];
+    }
+    const out: RuleExpr[][] = [];
+    const own = filt(x, f);
+    if (own) out.push([own, ...items.slice(i + 1)]);
+    if (sets.nullable(x)) {
+      if (i + 1 >= items.length) {
+        // The empty rest: the condition is on what follows the sequence. Exact when none of that
+        // passes (the empty rest is dropped); a sequence whose end is not its rule's has no such set.
+        if (!end || [...end].some(t => t === word || test(t, f, NO_WORDS) === 'pass')) throw new FirstFilterResidual('the condition reaches past the end of its sequence');
+      } else {
+        const rest = filtItems(items, i + 1, f, end);
+        if (rest) out.push(...rest);
+      }
+    }
+    return out.length ? out : null;
+  };
+  // What may follow a site's sequence, when that sequence is an arm of its rule.
+  const armEnds = new Map<RuleExpr, Set<string>>();
+  for (const r of grammar.rules) for (const a of r.body.type === 'alt' ? r.body.items : [r.body]) if (a.type === 'seq') armEnds.set(a, sets.follow.get(r.name)!);
+
+  // ── the sites: a sequence's one-token conditions and the item they stand before ──
+  const triedNodes = new Map<RuleExpr, boolean>();           // condition node → lowered at every site so far
+  const memo = new Map<RuleExpr, RuleExpr>();
+  const rw = (e: RuleExpr): RuleExpr => {
+    const m = memo.get(e);
+    if (m) return m;
+    let out: RuleExpr = e;
+    switch (e.type) {
+      case 'seq': {
+        let items = e.items.map(rw);
+        if (!lowerNotBeforeOptional(e)) {
+          for (let i = 0; i < items.length; i++) {
+            const c0 = conditionOf(tsView(items[i]));
+            if (!c0) continue;
+            let f = c0, j = i + 1;
+            const conds = [tsView(items[i])];
+            for (; j < items.length && ASSERTION_KINDS.has(tsView(items[j]).type); j++) {
+              const c = conditionOf(tsView(items[j]));
+              if (c) { f = meet(f, c); conds.push(tsView(items[j])); }
+            }
+            let alts: RuleExpr[][] | null = null;
+            try { alts = j < items.length ? filtItems(items, i, f, armEnds.get(e) ?? null) : null; } catch (err) { if (!(err instanceof FirstFilterResidual)) throw err; if (process.env.FF_DEBUG) console.error('residual', assertionText(conds[0]), '-', err.message); }
+            const ok = !!alts;
+            for (const c of conds) triedNodes.set(c, (triedNodes.get(c) ?? true) && ok);
+            if (alts) {
+              const head = items.slice(0, i);
+              const tail = alts.length === 1 ? alts[0] : [{ type: 'alt' as const, items: alts.map(a => ({ type: 'seq' as const, items: a })) }];
+              items = [...head, ...tail];
+              i = head.length + (alts.length === 1 ? j - i : 0);
+            } else i = j - 1;
+          }
+        }
+        if (items.some((x, k) => x !== e.items[k]) || items.length !== e.items.length) out = { ...e, items };
+        break;
+      }
+      case 'alt': { const items = e.items.map(rw); if (items.some((x, k) => x !== e.items[k])) out = { ...e, items }; break; }
+      case 'quantifier': { const b = rw(e.body); if (b !== e.body) out = { ...e, body: b }; break; }
+      case 'sep': { const el = rw(e.element); if (el !== e.element) out = { ...e, element: el }; break; }
+      case 'group': {
+        if (e.tsRuleName) break;
+        if (e.tsRelaxed) { const t = rw(e.tsRelaxed); if (t !== e.tsRelaxed) out = { ...e, tsRelaxed: t }; }
+        else { const b = rw(e.body); if (b !== e.body) out = { ...e, body: b }; }
+        break;
+      }
+    }
+    memo.set(e, out);
+    return out;
+  };
+  const rewritten = grammar.rules.map(r => { const b = rw(r.body); return b === r.body ? r : { ...r, body: b }; });
+  // A copy's body holds the original nodes, so a site inside it is the site of the original: rewrite
+  // the copies' bodies with the same memo (a copy made while rewriting one is rewritten in turn).
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const [n, b] of copyBodies) { const r = rw(b); if (r !== b) { copyBodies.set(n, r); changed = true; } }
+  }
+  for (const [n, ok] of triedNodes) if (ok && !approx.has(n)) plan.lowered.add(n);
+  if (!copyBodies.size) return plan;
+  const out: RuleDecl[] = [];
+  const entry = rewritten[rewritten.length - 1];
+  for (const r of rewritten.slice(0, -1)) {
+    out.push(r);
+    for (const c of copiesOf.get(r.name) ?? []) out.push({ ...r, name: c, body: copyBodies.get(c)! });
+  }
+  for (const c of copiesOf.get(entry.name) ?? []) out.push({ ...entry, name: c, body: copyBodies.get(c)! });
+  for (const n of namesRules.values()) out.push({ name: n, body: copyBodies.get(n)!, flags: [] });
+  out.push(entry);
+  plan.grammar = { ...grammar, rules: out };
+  return plan;
+}
+
 // ── The tree-sitter view as Glushkov positions ───────────────────────────────
 // What an LR question about the generated grammar is asked over (lr-automaton.ts): every literal /
 // token / rule reference of a rendered rule body is one leaf. It follows renderExpr: the tree-sitter
@@ -1035,16 +1371,17 @@ function treeSitterLeafGraph(grammar: CstGrammar, tokenNames: Set<string>, scann
     if (!r) return shared.get(name)!;
     if (!prattRules.has(name)) return r.body;
     const alts = r.body.type === 'alt' ? r.body.items : [r.body];
-    const self: RuleExpr = { type: 'ref', name };
     const itemsOf = (a: RuleExpr) => a.type === 'seq' ? a.items : [a];
     const out = alts.filter(a => !itemsOf(a).some(i => i.type === 'op' || i.type === 'prefix' || i.type === 'postfix'));
     for (const pos of ['op', 'prefix', 'postfix'] as const) {
       const arm = alts.find(a => itemsOf(a).some(i => i.type === pos));
       if (!arm) continue;
       const items = itemsOf(arm), at = items.findIndex(i => i.type === pos);
-      // What stands between the operand and the operator (a postfix operator's `sameLine`).
+      // What stands between the operand and the operator (a postfix operator's `sameLine`). The
+      // operands are the arm's own (a FIRST-filtered copy's left operand is the copy).
       const between = pos === 'prefix' ? [] : items.slice(1, at);
-      out.push({ type: 'seq', items: pos === 'op' ? [self, ...between, ops('infix'), self] : pos === 'prefix' ? [ops('prefix'), self] : [self, ...between, ops('postfix')] });
+      const left = items[0], right = items[at + 1];
+      out.push({ type: 'seq', items: pos === 'op' ? [left, ...between, ops('infix'), right] : pos === 'prefix' ? [ops('prefix'), right] : [left, ...between, ops('postfix')] });
     }
     return { type: 'alt', items: out };
   };
@@ -1390,6 +1727,22 @@ function deriveConflicts(ctx: GrammarJsContext): string[][] {
     const unknown = tuple.filter(r => !ruleSnakes.has(r) && !tokenSnakes.has(r) && !ctx.tsSharedRules.has(r) && !templateRules.has(r));
     if (unknown.length) throw new Error(`${g.name ?? 'grammar'}: treeSitterConflicts [${tuple.join(', ')}] names undefined symbol(s): ${unknown.join(', ')}`);
     push(tuple);
+  }
+
+  // A FIRST-filtered copy meets what its original meets: every tuple naming a copied rule is
+  // declared for each choice of the original or one of its copies in that place.
+  const copiesOf = new Map<string, string[]>();
+  for (const [copy, of] of ctx.firstFilters.aliasOf) {
+    if (ctx.tokenNames.has(of)) continue;
+    const o = ctx.ruleSnake.get(of)!;
+    (copiesOf.get(o) ?? copiesOf.set(o, []).get(o)!).push(ctx.ruleSnake.get(copy)!);
+  }
+  if (copiesOf.size) {
+    for (const tuple of [...conflicts]) {
+      let variants: string[][] = [[]];
+      for (const r of tuple) variants = variants.flatMap(v => [r, ...(copiesOf.get(r) ?? [])].map(x => [...v, x]));
+      for (const v of variants) push(v);
+    }
   }
 
   return conflicts;
@@ -1812,11 +2165,18 @@ function buildTreeSitterJson(grammar: CstGrammar, grammarName: string): string {
   }, null, 2);
 }
 
-function buildTokenTreeSitter(grammar: CstGrammar, grammarName: string): Omit<TreeSitterOutput, 'treeSitterJson'> {
-  const tokenNames = new Set(grammar.tokens.map(t => t.name));
+function buildTokenTreeSitter(source: CstGrammar, grammarName: string): Omit<TreeSitterOutput, 'treeSitterJson'> {
+  const tokenNames = new Set(source.tokens.map(t => t.name));
+  // The ledger is the source grammar's; the one-token lookaheads it leaves dropped render as
+  // FIRST-filtered copies (planFirstFilters), and everything below renders the grammar with them.
+  const assertions = classifyAssertions(source, tokenNames, computeTerminalSets(source, tokenNames));
+  const firstFilters = planFirstFilters(source, tokenNames, computeTerminalSets(source, tokenNames),
+    source.tokens.find(t => t.identifier)?.name, assertions.isWordLiteral, assertions.recordOf);
+  for (const n of firstFilters.lowered) for (const rec of assertions.recordOf.get(n)!) rec.cls = 'lowered';
+  const grammar = firstFilters.grammar;
   const ruleSnake = new Map<string, string>();
   const tokenSnake = new Map<string, string>();
-  for (const r of grammar.rules) ruleSnake.set(r.name, toSnake(r.name));
+  for (const r of grammar.rules) ruleSnake.set(r.name, firstFilters.snakeOf.get(r.name) ?? toSnake(r.name));
   for (const t of grammar.tokens) tokenSnake.set(t.name, toSnake(t.name));
 
   const prattRules = new Set<string>();
@@ -1832,7 +2192,7 @@ function buildTokenTreeSitter(grammar: CstGrammar, grammarName: string): Omit<Tr
   // Find the identifier nodes that follow a declaration keyword, so we can wrap
   // them in `field('name', …)` in grammar.js AND emit standard `name:` highlight
   // queries for them. Same shape rule gen-tm.ts uses (inferIdentScope).
-  const nameFields = collectNameFields(grammar);
+  const nameFields = collectNameFields(source);
 
   // ε-elimination set (see makeNonEmpty): the start rule is the entry rule, emitted FIRST below.
   const entryName = grammar.rules[grammar.rules.length - 1].name;
@@ -1843,7 +2203,6 @@ function buildTokenTreeSitter(grammar: CstGrammar, grammarName: string): Omit<Tr
   for (const { sym, char } of flowSyntheticTokens(grammar)) flowLiteralTokens.set(char, sym);
 
   const terminalSets = computeTerminalSets(grammar, tokenNames);
-  const assertions = classifyAssertions(grammar, tokenNames, terminalSets);
   const zeroWidth = planZeroWidth(grammar, tokenNames, new Set(scannerTokenFor.keys()), prattRules, assertions.isWordLiteral,
     new Set(assertions.reservedSets.sets[0]?.words ?? []));
   for (const n of zeroWidth.lowered) for (const rec of assertions.recordOf.get(n)!) rec.cls = 'lowered';
@@ -1861,10 +2220,11 @@ function buildTokenTreeSitter(grammar: CstGrammar, grammarName: string): Omit<Tr
     interpolationPlans,
     nameFieldNodes: nameFields.nodes,
     tsSharedRules: collectTsSharedRules(grammar),
+    firstFilters,
   };
 
   const grammarJs = buildGrammarJs(ctx, grammarName);
-  const highlightsScm = buildHighlightsScm(grammar, ctx, nameFields.byRule);
+  const highlightsScm = buildHighlightsScm(source, ctx, nameFields.byRule);
   const { scannerC, externalTokens } = buildScannerC(grammar, ctx, grammarName);
 
   return { grammarJs, highlightsScm, scannerC, externalTokens, assertions: assertions.records };
