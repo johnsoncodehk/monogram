@@ -200,12 +200,12 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 ### Expr
 
 - Expr NUD (38 NUD arms):
-  - `!`, `+`, `++`, `-`, `--`, `delete`, `typeof`, `void` and 1 more: one token: committed to prefixOp (#12) (takes a mark: it can fail)
+  - `!`, `+`, `++`, `-`, `--`, `delete`, `typeof`, `void` and 1 more: one token: committed to prefixOp (#12) (takes a mark: its operand can fail after the operator)
   - `(`: two tokens: committed to paren (#25), unless arrow (#21) admits the token (then the frame) (takes a mark: it can fail after `'('`)
   - `...`: one token: committed to spread (#13) (takes a mark: it can fail after `'...'`)
   - `<`: two tokens: committed to jSXElement (#0), unless arrow (#21) admits the token (then the frame)
   - `[`: one token: committed to array (#18) (takes a mark: it can fail after `'['`)
-  - `await`: two tokens: committed to prefixOp (#12), unless ident (#7), arrowIdentifier (#23) admit the token (then the frame) (takes a mark: it can fail)
+  - `await`: two tokens: committed to prefixOp (#12), unless ident (#7), arrowIdentifier (#23) admit the token (then the frame) (takes a mark: its operand can fail after the operator)
   - `break`, `case`, `catch`, `const`, `continue`, `debugger`, `default`, `do` and 16 more: no candidate, the list fails
   - `class`: two tokens: committed to seq (#36), unless seq2 (#37) admits the token (then the frame) (takes a mark: it can fail after `opt((DecoratorExpr many(DecoratorExpr))…`)
   - `super`: two tokens: committed to super_ (#6), unless arrowIdentifier (#23) admits the token (then the frame) (takes a mark: it can fail after `'super'`)

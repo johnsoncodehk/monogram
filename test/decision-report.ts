@@ -263,7 +263,7 @@ function listSite(ir: ParserIR, l: LM, kinds: string[]): Site & { lines: string[
       if (t2) two = true;
       if (!a.clean) marks.push(nm(a.arm));
       const unless = a.unless.length ? `, unless ${list(a.unless.map((u) => nm(u.arm)), 4)} ${a.unless.length > 1 ? 'admit' : 'admits'} the token (then the frame)` : '';
-      return `${keys}: ${t2 ? 'two tokens' : 'one token'}: committed to ${nm(a.arm)}${unless}${a.clean ? '' : ' (takes a mark: ' + dirtyAfter(ir, l.cands[a.arm]!.steps) + ')'}`;
+      return `${keys}: ${t2 ? 'two tokens' : 'one token'}: committed to ${nm(a.arm)}${unless}${a.clean ? '' : ' (takes a mark: ' + (l.cands[a.arm]!.kind === 'prefix' ? 'its operand can fail after the operator' : dirtyAfter(ir, l.cands[a.arm]!.steps)) + ')'}`;
     };
     for (const c of l.commit.lid) { const s = caseLine(c, true); if (s) lines.push(s); }
     for (const c of l.commit.kid) { const s = caseLine(c, false); if (s) lines.push(s); }

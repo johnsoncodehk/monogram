@@ -65,11 +65,11 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 ### Expr
 
 - Expr NUD (37 NUD arms):
-  - `!`, `+`, `++`, `-`, `--`, `delete`, `typeof`, `void` and 1 more: one token: committed to prefixOp (#11) (takes a mark: it can fail)
+  - `!`, `+`, `++`, `-`, `--`, `delete`, `typeof`, `void` and 1 more: one token: committed to prefixOp (#11) (takes a mark: its operand can fail after the operator)
   - `(`: two tokens: committed to paren (#24), unless arrow (#20) admits the token (then the frame) (takes a mark: it can fail after `'('`)
   - `...`: one token: committed to spread (#12) (takes a mark: it can fail after `'...'`)
   - `[`: one token: committed to array (#17) (takes a mark: it can fail after `'['`)
-  - `await`: two tokens: committed to prefixOp (#11), unless ident (#6), arrowIdentifier (#22) admit the token (then the frame) (takes a mark: it can fail)
+  - `await`: two tokens: committed to prefixOp (#11), unless ident (#6), arrowIdentifier (#22) admit the token (then the frame) (takes a mark: its operand can fail after the operator)
   - `break`, `case`, `catch`, `const`, `continue`, `debugger`, `default`, `do` and 16 more: no candidate, the list fails
   - `class`: two tokens: committed to decoratorExpr (#35), unless decoratorExpr2 (#36) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
   - `import`: one token: committed to import_ (#25) (takes a mark: it can fail after `'import'`)
