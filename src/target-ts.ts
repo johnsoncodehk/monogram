@@ -1303,8 +1303,8 @@ function tryReuseW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number)
   const midKids: H[] = [];
   const midMeta: EntryMeta[] = [];
   const finish = (adoptFrom: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
-    const [a, b] = reuseKids(suffixMeta, adoptFrom, suffixMeta.length);
-    const adoptedKids = oldRootHs.slice(a, b).map((h) => shift(h, byteDelta, tokDelta));
+    const [ka, kb] = reuseKids(suffixMeta, adoptFrom, suffixMeta.length);
+    const adoptedKids = oldRootHs.slice(ka, kb).map((h) => shift(h, byteDelta, tokDelta));
     const children: H[] = [...prefixKids, ...midKids, ...adoptedKids];
     const newEntries = reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta, prefixKids.length + midKids.length);
     const [offset, end, tokStart, tokEnd] = reuseSpan(newEntries);

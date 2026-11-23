@@ -1252,9 +1252,10 @@ function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaI
 ${topOne}
     }
     #[inline(always)]
-    fn push_entry_from_h(&mut self, h: B::H) {
+    fn push_entry_from_h(&mut self, h: B::H, sb: usize) {
         let look = self.look_end() as u32;
-        let meta = self.b.entry_meta(h, look, &self.toks);
+        let mut meta = self.b.entry_meta(h, look, &self.toks);
+        meta.kid_start = (self.scratch.len() - sb) as u32;
         self.entries.push(meta);
     }
     fn parse_top_entry(&mut self, sb: usize) -> Option<EntryMeta> {
@@ -1278,7 +1279,7 @@ ${topOne}
                 Some(fr) => {
                     if fr.present {
                         // Engine-side side table (decision input). CstBuilder.entry_meta also stamps Node.ext.
-                        self.push_entry_from_h(fr.h);
+                        self.push_entry_from_h(fr.h, sb);
                         self.scratch.push(fr.h);
                     }
                 }
@@ -1568,9 +1569,9 @@ ${shapeA ? `fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], ki
             let s = suffix_meta[adopt_from].tok_start as usize;
             tok_delta = self.pos as isize - s as isize;
         }
-        let (a, b) = reuse_kids(suffix_meta, adopt_from, suffix_meta.len());
-        let mut adopted_kids: Vec<B::H> = Vec::with_capacity(b - a);
-        for i in a..b {
+        let (ka, kb) = reuse_kids(suffix_meta, adopt_from, suffix_meta.len());
+        let mut adopted_kids: Vec<B::H> = Vec::with_capacity(kb - ka);
+        for i in ka..kb {
             let id = self.b.root_kid_at(old_root, i);
             adopted_kids.push(self.b.shift(id, byte_delta, tok_delta));
         }

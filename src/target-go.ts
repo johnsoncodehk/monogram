@@ -1525,9 +1525,9 @@ ${shapeA ? `func (p *engine) assertEntriesVsNodes(oldEntries []EntryMeta, oldRoo
 			s := suffixMeta[adoptFrom].TokStart
 			tokDelta = p.pos - s
 		}
-		a, b := reuseKids(suffixMeta, adoptFrom, len(suffixMeta))
-		adoptedKids := make([]int32, 0, b-a)
-		for _, id := range p.kids[old.KidStart+uint32(a) : old.KidStart+uint32(b)] {
+		ka, kb := reuseKids(suffixMeta, adoptFrom, len(suffixMeta))
+		adoptedKids := make([]int32, 0, kb-ka)
+		for _, id := range p.kids[old.KidStart+uint32(ka) : old.KidStart+uint32(kb)] {
 			if id < 0 {
 				ti, tt := decodeLeaf(id)
 				id = encodeLeaf(uint32(int32(ti)+int32(tokDelta)), tt)
@@ -2208,9 +2208,9 @@ func tryReuseW(b Builder, sh Shifter, oldRootHs []int32, oldEntries []EntryMeta,
 			s := suffixMeta[adoptFrom].TokStart
 			tokDelta = p.pos - s
 		}
-		a, b := reuseKids(suffixMeta, adoptFrom, len(suffixMeta))
-		adoptedKids := make([]int32, 0, b-a)
-		for _, s := range oldRootHs[a:b] {
+		ka, kb := reuseKids(suffixMeta, adoptFrom, len(suffixMeta))
+		adoptedKids := make([]int32, 0, kb-ka)
+		for _, s := range oldRootHs[ka:kb] {
 			adoptedKids = append(adoptedKids, sh.Shift(s, byteDelta, tokDelta))
 		}
 		children := make([]int32, 0, len(prefixKids)+len(midKids)+len(adoptedKids))
