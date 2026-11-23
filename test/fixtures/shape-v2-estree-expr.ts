@@ -430,8 +430,8 @@ export const estreeExprShape: Shape2Spec = {
       ...ARROW_RULES,
       namedClass: classNode('ClassExpression', idOf('name')),
       anonymousClass: classNode('ClassExpression', c(null)),
-      newNamedClass: node('NewExpression', { callee: classNode('ClassExpression', idOf('name'), { from: 'classKeyword', to: 'bodyClose' }), arguments: branch('arguments', { paren: child('argument'), none: list() }) }),
-      newAnonymousClass: node('NewExpression', { callee: classNode('ClassExpression', c(null), { from: 'classKeyword', to: 'bodyClose' }), arguments: branch('arguments', { paren: child('argument'), none: list() }) }),
+      newNamedClass: node('NewExpression', { callee: classNode('ClassExpression', idOf('name'), { from: 'classKeyword', to: 'bodyClose' }), arguments: branch('newArguments', { paren: child('argument'), none: list() }) }),
+      newAnonymousClass: node('NewExpression', { callee: classNode('ClassExpression', c(null), { from: 'classKeyword', to: 'bodyClose' }), arguments: branch('newArguments', { paren: child('argument'), none: list() }) }),
       postfixOp: node('UpdateExpression', { operator: text('op'), prefix: c(false), argument: child('operand') }),
     },
     // The callee of `new` (a MemberExpression, never a call).

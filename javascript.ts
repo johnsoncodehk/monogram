@@ -520,8 +520,8 @@ const Expr = rule($ => [
   // (tsc + V8 + babel all reject). `not('?.')` guards the no-call exit; `new a()?.b` chains via
   // the outer `?.` LED unchanged.
   arm('construct', 'new', not('<'), NewTarget, alt(['(', sep($, ','), ')'], not('?.'))),
-  arm('newNamedClass', 'new', field('classKeyword', 'class'), ...bindingName, opt('extends', field('superClass', ClassHeritage)), field('bodyOpen', '{'), many(field('member', ClassMember)), field('bodyClose', '}'), field('arguments', alt(arm('paren', '(', sep(field('argument', $), ','), ')'), arm('none', not('?.'))))),
-  arm('newAnonymousClass', 'new', field('classKeyword', 'class'), opt('extends', field('superClass', ClassHeritage)), field('bodyOpen', '{'), many(field('member', ClassMember)), field('bodyClose', '}'), field('arguments', alt(arm('paren', '(', sep(field('argument', $), ','), ')'), arm('none', not('?.'))))),
+  arm('newNamedClass', 'new', field('classKeyword', 'class'), ...bindingName, opt('extends', field('superClass', ClassHeritage)), field('bodyOpen', '{'), many(field('member', ClassMember)), field('bodyClose', '}'), field('newArguments', alt(arm('paren', '(', sep(field('argument', $), ','), ')'), arm('none', not('?.'))))),
+  arm('newAnonymousClass', 'new', field('classKeyword', 'class'), opt('extends', field('superClass', ClassHeritage)), field('bodyOpen', '{'), many(field('member', ClassMember)), field('bodyClose', '}'), field('newArguments', alt(arm('paren', '(', sep(field('argument', $), ','), ')'), arm('none', not('?.'))))),
   // array literal `[a, , ...b,]`: an element or a hole, then `,` and an element or a hole, the
   // ArrayBindingPattern's form. Each element is parsed once: `many(opt($), ','), opt($)` parsed
   // the last one in the repetition, found no `,`, and parsed it again (twice per nesting level).
