@@ -26,7 +26,9 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { emitParser, goTarget, rustTarget } from '../src/emit.ts';
+import { emitParser } from '../src/target.ts';
+import { goTarget } from '../src/target-go.ts';
+import { rustTarget } from '../src/target-rust.ts';
 import { goBuild, scratchDir } from './scratch.ts';
 
 const CAP_PER_TOKEN = 2, PEAK_PER_TOKEN = 3, MIN_TOKENS = 4, STACK_BYTES = 4096;

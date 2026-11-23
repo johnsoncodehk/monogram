@@ -13,7 +13,8 @@
 //   node test/emit-reentrancy.ts
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { emitParser, jsTarget } from '../src/emit.ts';
+import { emitParser } from '../src/target.ts';
+import { jsTarget } from '../src/emit-parser.ts';
 import type { CstGrammar } from '../src/types.ts';
 import { objectify, type TreeView } from './emitted-obj.ts';
 import { scratchDir } from './scratch.ts';
