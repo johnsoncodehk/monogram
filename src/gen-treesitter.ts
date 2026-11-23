@@ -406,7 +406,7 @@ interface ContextualPlan {
   plan: Map<RuleExpr, string[]>;
   /** The conflicts the name readings add, each sorted: `{ names: key }` a `_names_<n>` rule by its
    *  keyword set, `{ rule }` a rule of the generated grammar by its name in the leaf graph. */
-  conflicts: ({ names: string } | { rule: string })[][];
+  conflicts: ConflictVar[][];
 }
 
 function planContextualWords(grammar: CstGrammar, graph: TsLeafGraph, word: string, words: string[],
@@ -466,24 +466,28 @@ function planContextualWords(grammar: CstGrammar, graph: TsLeafGraph, word: stri
   const plan = new Map<RuleExpr, string[]>();
   for (const l of steps) if (graph.node[l]) plan.set(graph.node[l]!, [...allowed.get(l)!].sort());
 
-  return { plan, conflicts: contextualConflicts(graph, lr, isStep, l => plan.get(graph.node[l]!) ?? [], alsoShifts) };
+  // The conflicts the name readings add: those of the automaton with them that the automaton without
+  // them (the grammar as it was, whose conflicts the grammar declares) does not have.
+  const before = conflictTuples(graph, buildLr(graph), () => [], () => null);
+  const after = conflictTuples(graph, lr, alsoShifts, (l, w) => isStep[l] && allowed.get(l)!.has(w) ? namesKey([...allowed.get(l)!].sort()) : null);
+  return { plan, conflicts: [...after].filter(([k]) => !before.has(k)).sort((a, b) => a[0] < b[0] ? -1 : 1).map(([, t]) => t) };
 }
 
-// ── the conflicts of the name readings (contextualConflicts) ──
+// ── the conflicts of an automaton (conflictTuples) ──
 // tree-sitter names a conflict by the rules of its items: every item of the state that shifts the
 // lookahead (past its first step), and every item that reduces on it, a repetition's helper rule
 // counted as the rule that holds it; the grammar must declare exactly that set. A name reading adds
-// states of one shape: after a keyword K, the items that read K as the keyword (rule X, past K) and the
-// `_names_<n>` items that reduce K for the steps that read it as a name. For each such state of the
-// automaton and each lookahead, the shifting rules are exact (they follow from the item core) and the
-// reducing ones are the LALR(1) union over the LR(1) states of that core, where any part of them may
-// reduce on that lookahead: so every tuple of the shifting rules and a part of the reducing ones that
-// has a name reading and two actions is declared (a part tree-sitter does not meet is reported by it
-// as an unnecessary conflict, never missed).
-function contextualConflicts(graph: TsLeafGraph, lr: LrAnalysis, isStep: Uint8Array, setOf: (leaf: number) => string[],
-  alsoShifts: (leaf: number) => string[]): ({ names: string } | { rule: string })[][] {
-  // The terminals that may come next after a leaf in its rule (through nullable rules), and whether
-  // its rule may end there.
+// items of one shape: after a keyword K, `_names_<n>` items that reduce K for the steps that read it as
+// a name (`namesOf`: the set of a step leaf advanced by K, else null). For each state of the automaton
+// and each lookahead, the shifting rules are exact (they follow from the item core) and the reducing
+// ones are the LALR(1) union over the LR(1) states of that core, where any part of them may reduce on
+// that lookahead: so every tuple of the shifting rules and a part of the reducing ones with two actions
+// is listed (a part tree-sitter does not meet is reported by it as an unnecessary conflict, never
+// missed). Whether precedence resolves one is left to tree-sitter: it consults the declared conflicts
+// only for what precedence leaves.
+type ConflictVar = { names: string } | { rule: string };
+function conflictTuples(graph: TsLeafGraph, lr: LrAnalysis, alsoShifts: (leaf: number) => string[],
+  namesOf: (leaf: number, keyword: string) => string | null): Map<string, ConflictVar[]> {
   const firstOfRule = new Map<number, Set<string>>();
   const firstOf = (r: number): Set<string> => {
     let out = firstOfRule.get(r);
@@ -502,7 +506,12 @@ function contextualConflicts(graph: TsLeafGraph, lr: LrAnalysis, isStep: Uint8Ar
     go(graph.first[r]);
     return out;
   };
-  const nextOf = (l: number): { terms: Set<string>; end: boolean } => {
+  // The terminals that may come next after a leaf in its rule (through nullable rules), and whether
+  // its rule may end there.
+  const nextMemo = new Map<number, { terms: Set<string>; end: boolean }>();
+  const nextOf = (l: number) => {
+    let r = nextMemo.get(l);
+    if (r) return r;
     const terms = new Set<string>(); let end = graph.isLast[l];
     const seenL = new Set<number>();
     const go = (ls: number[]) => {
@@ -515,57 +524,60 @@ function contextualConflicts(graph: TsLeafGraph, lr: LrAnalysis, isStep: Uint8Ar
       }
     };
     go(graph.follow[l]);
-    return { terms, end };
+    nextMemo.set(l, r = { terms, end });
+    return r;
   };
-  const out = new Map<string, ({ names: string } | { rule: string })[]>();
-  const done = new Set<number>();
+  const out = new Map<string, ConflictVar[]>();
+  const done = new Set<string>();
+  const laMemo = new Map<number, Map<number, Set<string>>>();
   lr.states.forEach(st => {
     for (const [sym, to] of st.goto) {
-      if (!sym.startsWith("'") || done.has(to)) continue;
-      const w = sym.slice(1);
+      // A state is read once per kind of entry: by a keyword (its steps then reduce a `_names_<n>`), or
+      // by anything else.
+      const w = sym.startsWith("'") ? sym.slice(1) : null;
+      const key = `${to}|${w !== null && st.next.some(l => namesOf(l, w) !== null) ? w : ''}`;
+      if (done.has(key)) continue;
+      done.add(key);
       const target = lr.states[to];
-      // A state reached by K where some step reads K as a name.
-      const kernel = target.items.filter(it => it >= 0 && (graph.sym[it] === sym || (isStep[it] && setOf(it).includes(w))));
-      if (!kernel.some(it => isStep[it])) continue;
-      done.add(to);
-      const la = lr.itemLookaheads(to);
-      const laOf = new Map(target.items.map((it, i) => [it, la[i]]));
-      type Var = { key: string; v: { names: string } | { rule: string } };
-      const shifts = new Map<string, Var[]>();     // lookahead → the rules shifting it
-      const reduces = new Map<string, Var[]>();    // lookahead → the rules that may reduce on it
-      const add = (m: Map<string, Var[]>, t: string, v: Var) => { const a = m.get(t) ?? m.set(t, []).get(t)!; if (!a.some(x => x.key === v.key)) a.push(v); };
-      for (const it of kernel) {
+      let laOf = laMemo.get(to);
+      if (!laOf) { const la = lr.itemLookaheads(to); laMemo.set(to, laOf = new Map(target.items.map((it, i) => [it, la[i]]))); }
+      type Var = { key: string; v: ConflictVar };
+      const shifts = new Map<string, Map<string, Var>>();
+      const reduces = new Map<string, Map<string, Var>>();
+      const add = (m: Map<string, Map<string, Var>>, t: string, v: Var) => (m.get(t) ?? m.set(t, new Map()).get(t)!).set(v.key, v);
+      for (const it of target.items) {
+        if (it < 0) continue;
         const n = nextOf(it);
-        const reduceOn = new Set<string>();
-        if (n.end) for (const t of laOf.get(it)!) reduceOn.add(t);
-        if (isStep[it]) {
+        const names = w !== null && graph.sym[it] !== sym ? namesOf(it, w) : null;
+        if (names !== null) {
           // `_names_<n> → K •`: it reduces on whatever may follow the step.
-          const names = namesKey(setOf(it));
-          for (const t of [...n.terms, ...reduceOn]) add(reduces, t, { key: `#${names}`, v: { names } });
-        } else {
-          const rule = graph.ruleNames[graph.rule[it]];
-          for (const t of n.terms) add(shifts, t, { key: `@${rule}`, v: { rule } });
-          for (const t of reduceOn) add(reduces, t, { key: `@${rule}`, v: { rule } });
+          const v = { key: `#${names}`, v: { names } };
+          for (const t of n.terms) add(reduces, t, v);
+          if (n.end) for (const t of laOf.get(it)!) add(reduces, t, v);
+          continue;
         }
+        const rule = graph.ruleNames[graph.rule[it]];
+        const v = { key: `@${rule}`, v: { rule } };
+        for (const t of n.terms) add(shifts, t, v);
+        if (n.end) for (const t of laOf.get(it)!) add(reduces, t, v);
       }
-      for (const [t, rs] of reduces) {
-        if (!rs.some(r => r.key.startsWith('#'))) continue;
-        const sh = shifts.get(t) ?? [];
-        if (rs.length > 12) throw new Error(`gen-treesitter: ${rs.length} rules reduce ${w} on one lookahead; the conflict parts are enumerated`);
+      for (const [t, rm] of reduces) {
+        const rs = [...rm.values()];
+        const sh = [...(shifts.get(t)?.values() ?? [])];
+        if (!sh.length && rs.length < 2) continue;
+        if (rs.length > 12) throw new Error(`gen-treesitter: ${rs.length} rules reduce on one lookahead (${t}); the conflict parts are enumerated`);
         for (let m = 1; m < 1 << rs.length; m++) {
           const part = rs.filter((_, i) => (m >> i) & 1);
-          if (!part.some(r => r.key.startsWith('#'))) continue;
           if (!sh.length && part.length < 2) continue;
-          const vars = new Map<string, Var>();
-          for (const v of [...sh, ...part]) vars.set(v.key, v);
-          if (vars.size < 2) continue;
+          const vars = new Map<string, ConflictVar>();
+          for (const v of [...sh, ...part]) vars.set(v.key, v.v);
           const keys = [...vars.keys()].sort();
-          out.set(keys.join('\u0000'), keys.map(k => vars.get(k)!.v));
+          out.set(keys.join('\u0000'), keys.map(k => vars.get(k)!));
         }
       }
     }
   });
-  return [...out.keys()].sort().map(k => out.get(k)!);
+  return out;
 }
 
 /** Every word-shaped literal the rendered rules write (renderExpr's literal / sep / Pratt operator
