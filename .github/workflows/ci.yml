@@ -17,8 +17,7 @@ on:
 permissions:
   contents: read
 
-# The pinned TypeScript conformance corpus: the `test` job's conformance/js-corpus gate and the
-# emit-parity breadth gate read it at /tmp/ts-repo (same pin as the readme-bench workflow).
+# The pinned TypeScript conformance corpus: the emit-parity breadth gates (and others) read it at /tmp/ts-repo (same pin as the readme-bench workflow).
 env:
   TS_REPO_SHA: '6fbce89821d93a5b761581d9ac540455f38e9acb'
 
@@ -35,8 +34,8 @@ jobs:
         with:
           node-version: 24
 
-      # The Go toolchain the Go gates are recorded with: docs/ALLOCATIONS.md names it, and
-      # alloc-work compares its Go rows only under that version (not the image's preinstalled Go).
+      # One pinned Go toolchain for the Go gates (the same one docs/ALLOCATIONS.md's report is made
+      # with, not the image's preinstalled Go).
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.4'
@@ -58,8 +57,7 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
-      # conformance/js-corpus measures the JS grammar over this corpus; without it the gate
-      # says NOT RUN and fails.
+      # Gates that read this corpus say NOT RUN and fail without it.
       - name: Clone the pinned TS corpus
         run: |
           set -euo pipefail
@@ -147,8 +145,8 @@ jobs:
         with:
           node-version: 24
 
-      # The Go toolchain the Go gates are recorded with: docs/ALLOCATIONS.md names it, and
-      # alloc-work compares its Go rows only under that version (not the image's preinstalled Go).
+      # One pinned Go toolchain for the Go gates (the same one docs/ALLOCATIONS.md's report is made
+      # with, not the image's preinstalled Go).
       - uses: actions/setup-go@v5
         if: steps.changed.outputs.value == 'true'
         with:

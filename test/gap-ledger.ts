@@ -318,8 +318,8 @@ function renderMarkdown(gaps: Gap[], dropped: number, langCount: number): string
   return lines.join('\n') + '\n';
 }
 
-// re-exports so the ENGINE is reusable/testable without re-running the driver (gap-ledger-selftest.ts
-// asserts the oracle drop-path); the driver itself only runs when this file is the entry module.
+// re-exports so the ENGINE is reusable/testable without re-running the driver; the driver itself
+// only runs when this file is the entry module.
 export { runLang, minimize, reproStillDiverges, sig, fingerprint, normalizeRepro, loadTm, tmTokenize, LANGS };
 export type { LangCfg, Gap, Probe, LangResult };
 

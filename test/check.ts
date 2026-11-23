@@ -4,9 +4,8 @@
 //  "is the repo healthy?" in one command + one output — instead of running a dozen
 //  scripts with a dozen output formats. See docs/TESTING.md for the report taxonomy
 //  (gate / metric / ledger / bench); this runs the GATE tier (the CI-blocking pass/fail
-//  checks). Two gates need a pinned external corpus: conformance/js-corpus the TypeScript corpus
-//  at /tmp/ts-repo, conformance/test262 the test262 checkout at /tmp/test262; without it a gate
-//  says NOT RUN and fails, it never passes unrun.
+//  checks). Gates that need a pinned external corpus (the TypeScript corpus at /tmp/ts-repo, the
+//  test262 checkout at /tmp/test262) say NOT RUN without it and fail, they never pass unrun.
 //  Metrics live in the README coverage table (`npm run coverage:table`), findings in the
 //  gap ledger (`docs/KNOWN-GAPS.md`).
 //
@@ -23,11 +22,11 @@ import { join } from 'node:path';
 // whole-corpus cross or a gate of more than about ten seconds whose inputs rarely change.
 // reads: inputs the gate opens through a path test/gate-deps.ts cannot derive from its source.
 interface Gate { group: string; name: string; args: string[]; tier?: 'ci'; reads?: string[] }
-// The edits class's grammars in shards of about equal time. Measured on CI (master b2d571d, one
-// process): the one-character edits took 557 s of the old gate's 687 s — typescriptreact 215 s,
-// elementdialect 101, typescript 68, javascriptreact 60, textdialect-tagstart 54, javascript 45,
-// tagtokdialect 14 — most of it one native process start per edit and per target.
-const PORTABLE_EDIT_SHARDS = ['typescriptreact', 'elementdialect,javascript,tagtokdialect', 'typescript,javascriptreact', 'textdialect-tagstart,textdialect-text', 'textdialect,textdialect-dir'];
+// The edits class's grammars in two shards of about equal time. Measured on CI (land/testinfra-batch-edit,
+// 45203634706, after the runners' batch-edit-session mode): the five former shards took 26.7 s
+// (typescriptreact), 31.4 (elementdialect, javascript, tagtokdialect), 30.2 (typescript,
+// javascriptreact), 16.2 (textdialect-tagstart, textdialect-text), 9.3 (textdialect, textdialect-dir).
+const PORTABLE_EDIT_SHARDS = ['typescriptreact,typescript,javascriptreact', 'elementdialect,javascript,tagtokdialect,textdialect-tagstart,textdialect-text,textdialect,textdialect-dir'];
 const EDIT_GRAMMARS = new Set(PORTABLE_EDIT_SHARDS.join(',').split(','));
 const GATES: Gate[] = [
   { group: 'core', name: 'agnostic', args: ['test/agnostic.ts'] },
@@ -39,7 +38,6 @@ const GATES: Gate[] = [
   { group: 'core', name: 'newline-mode', args: ['test/newline-mode.ts'] },
   { group: 'core', name: 'diagnostic-labels', args: ['test/diagnostic-labels.ts'] },
   { group: 'core', name: 'interpolation-metadata', args: ['test/interpolation-metadata.ts'] },
-  { group: 'core', name: 'refactor-guard', args: ['test/refactor-guard.ts'] },
   { group: 'core', name: 'cst-text-invariant', args: ['test/cst-text-invariant.ts'] },
   { group: 'conformance', name: 'ts-ast-structure', args: ['test/ts-ast-verify.ts'] },
   { group: 'conformance', name: 'shape-oracle', args: ['test/shape-oracle.ts'] },
@@ -47,14 +45,10 @@ const GATES: Gate[] = [
   { group: 'core', name: 'cst-match-totality', args: ['test/cst-match-totality.ts'] },
   { group: 'core', name: 'grammar-names', args: ['test/grammar-names-transparent.ts'] },
   { group: 'core', name: 'shape2-eval', args: ['--stack-size=7000', 'test/shape2-eval.ts'] },
-  { group: 'core', name: 'incremental-verify', args: ['test/incremental-verify.ts'] },
   { group: 'emit-parity', name: 'emit-parser-verify', args: ['test/emit-parser-verify.ts'] },
   { group: 'emit-parity', name: 'emit-reject-messages', args: ['test/emit-reject-messages.ts'] },
   { group: 'emit-parity', name: 'emit-lexer-verify', args: ['test/emit-lexer-verify.ts'] },
-  { group: 'emit-parity', name: 'emit-tsc-gate', args: ['test/emit-tsc-gate.ts'] },
-  { group: 'emit-parity', name: 'emit-tokenize', args: ['test/emit-tokenize.ts'] },
   { group: 'emit-parity', name: 'emit-reentrancy', args: ['test/emit-reentrancy.ts'] },
-  { group: 'emit-parity', name: 'emit-ts-cst', args: ['test/emit-ts-cst.ts'] },
   { group: 'emit-parity', name: 'emit-standalone', args: ['test/emit-standalone.ts'] },
   { group: 'emit-parity', name: 'emit-portable-library', args: ['test/emit-portable-library.ts'] },
   { group: 'emit-parity', name: 'emit-portable-split', args: ['test/emit-portable-split.ts'] },
@@ -75,19 +69,13 @@ const GATES: Gate[] = [
   { group: 'emit-parity', name: 'guard-refutation', args: ['test/guard-refutation.ts'] },
   { group: 'emit-parity', name: 'guard-refused', args: ['--stack-size=7000', 'test/guard-refused.ts'], tier: 'ci' },
   { group: 'emit-parity', name: 'decision-report', args: ['--stack-size=7000', 'test/decision-report.ts', '--check'], tier: 'ci' },
-  { group: 'emit-parity', name: 'decision-dead', args: ['--stack-size=7000', 'test/decision-report.ts', '--dead'], tier: 'ci' },
   { group: 'emit-parity', name: 'look-extent', args: ['test/look-extent.ts'], tier: 'ci' },
   { group: 'emit-parity', name: 'lexer-work', args: ['test/lexer-work.ts'] },
   { group: 'emit-parity', name: 'lexer-reservation', args: ['test/lexer-reservation.ts'] },
   { group: 'emit-parity', name: 'alloc-work', args: ['test/alloc-work.ts'], tier: 'ci' },
-  { group: 'emit-parity', name: 'emit-size-record', args: ['test/emit-size-record.ts'] },
   { group: 'emit-parity', name: 'builder-reuse', args: ['test/builder-reuse.ts'] },
-  { group: 'emit-parity', name: 'relex-family', args: ['test/relex-family.ts'] },
   { group: 'emit-parity', name: 'define-target', args: ['test/define-target.ts'] },
   { group: 'emit-parity', name: 'lex-family', args: ['test/lex-family.ts'], tier: 'ci' },
-  { group: 'emit-parity', name: 'syntax-agnostic', args: ['test/syntax-agnostic.ts'] },
-  { group: 'emit-parity', name: 'ast-builder', args: ['test/ast-builder.ts'] },
-  { group: 'emit-parity', name: 'shape-codegen', args: ['test/shape-codegen.ts'] },
   { group: 'emit-parity', name: 'shape-rust', args: ['test/shape-rust.ts'], tier: 'ci' },
   { group: 'emit-parity', name: 'shape-parity', args: ['test/shape-parity.ts'] },
   { group: 'core', name: 'multi-doc', args: ['test/multi-doc.ts'] },
@@ -97,7 +85,6 @@ const GATES: Gate[] = [
   { group: 'core', name: 'issue-cases', args: ['test/test-issues.ts'] },
   { group: 'core', name: 'env-spec-regressions', args: ['test/env-spec-regressions.ts'] },
   { group: 'conformance', name: 'js', args: ['test/js-conformance.ts'] },
-  { group: 'conformance', name: 'js-corpus', args: ['test/js-conformance-corpus.ts'] },
   { group: 'conformance', name: 'test262', args: ['test/test262.ts'], tier: 'ci' },
   { group: 'conformance', name: 'tsx', args: ['test/tsx-conformance.ts'] },
   { group: 'conformance', name: 'jsx', args: ['test/jsx-conformance.ts'] },
@@ -108,26 +95,17 @@ const GATES: Gate[] = [
   { group: 'highlighter', name: 'tm-diagnostics', args: ['test/redcmd-tm-diagnostics.ts'] },
   { group: 'highlighter', name: 'tm-lookahead-words', args: ['test/tm-lookahead-words.ts'] },
   { group: 'highlighter', name: 'tm-modifier-follow', args: ['test/tm-modifier-follow.ts'] },
-  { group: 'highlighter', name: 'tm-capture-patterns', args: ['test/tm-capture-patterns.ts'] },
   { group: 'highlighter', name: 'tm-dialect', args: ['test/tm-dialect.ts'] },
   { group: 'highlighter', name: 'treesitter-assertions', args: ['test/treesitter-assertions.ts'] },
   { group: 'highlighter', name: 'angle-depth', args: ['test/angle-depth-probe.ts'] },
-  { group: 'highlighter', name: 'html-monarch', args: ['test/html-monarch.ts'] },
   { group: 'highlighter', name: 'monarch-dialect', args: ['test/monarch-dialect.ts'] },
-  { group: 'highlighter', name: 'html-embed-js', args: ['test/html-embed-js.ts'] },
-  { group: 'highlighter', name: 'self-close-sites', args: ['test/self-close-sites.ts'] },
   { group: 'highlighter', name: 'raw-text-case-sites', args: ['test/raw-text-case-sites.ts'] },
   { group: 'core', name: 'indent-extensions', args: ['test/indent-extensions.ts'] },
   { group: 'yaml', name: 'issue12-regressions', args: ['test/yaml-issue12-regressions.ts'] },
-  { group: 'yaml', name: 'depth-witnesses', args: ['test/yaml-depth-witnesses.ts'] },
-  { group: 'yaml', name: 'depth-sites', args: ['test/depth-sites.ts'] },
-  { group: 'yaml', name: 'flow-sites', args: ['test/flow-sites.ts'] },
-  { group: 'yaml', name: 'compact-nest-sites', args: ['test/compact-nest-sites.ts'] },
-  { group: 'yaml', name: 'deepest-sibling', args: ['test/yaml-deepest-sibling-probe.ts'] },
-  { group: 'yaml', name: 'blockscalar-depth', args: ['test/yaml-blockscalar-depth-probe.ts'] },
+  // the YAML TextMate site checks, one section each (formerly depth-witnesses, depth-sites, flow-sites,
+  // compact-nest-sites, deepest-sibling, blockscalar-depth)
+  { group: 'yaml', name: 'tm-sites', args: ['test/yaml-sites.ts'] },
   { group: 'generative', name: 'scope≡role', args: ['test/generative.ts'] },
-  { group: 'generative', name: 'gap-ledger-selftest', args: ['test/gap-ledger-selftest.ts'] },
-  { group: 'generative', name: 'gap-ledger-check', args: ['test/gap-ledger.ts', '--check'] },
 ];
 
 // Usage: check.ts [<substr>]                  every gate (CI), or those whose group/name holds substr

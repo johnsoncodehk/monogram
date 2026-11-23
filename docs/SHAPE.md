@@ -488,7 +488,7 @@ export const calcShape: ShapeSpec = {
 };
 ```
 
-Emit → load → parse (mirrors [`test/shape-codegen.ts`](../test/shape-codegen.ts)):
+Emit → load → parse (mirrors the calc shape-codegen section of [`test/shape-parity.ts`](../test/shape-parity.ts)):
 
 ```ts
 import calcGrammar from './test/fixtures/calc.ts';
@@ -514,7 +514,6 @@ No `customs` map — every product is declarative (`node` / `choice` / `pratt` /
 
 | Gate | Question |
 |---|---|
-| [`test/shape-codegen.ts`](../test/shape-codegen.ts) | `validateShape` on calc; no-shape byte identity vs `emitParser`; golden `parseAst` ASTs for calc (handwritten expects); perf smoke. |
-| [`test/shape-parity.ts`](../test/shape-parity.ts) | CST↔`parseAst` accept/reject parity (calc + toy corpora); custom/`parentFold` spots; TypeScript shape coverage + ESTree customs. |
+| [`test/shape-parity.ts`](../test/shape-parity.ts) | CST↔`parseAst` accept/reject parity (calc + toy corpora); custom/`parentFold` spots; TypeScript shape coverage + ESTree customs; no-shape byte identity vs `emitParser`; `validateShape` on calc and its negatives; golden `parseAst` ASTs for calc (handwritten expects); perf smoke. |
 
-Both run under `npm run check` (see [`docs/TESTING.md`](TESTING.md)).
+It runs under `npm run check` (see [`docs/TESTING.md`](TESTING.md)).

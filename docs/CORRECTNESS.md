@@ -59,9 +59,9 @@ correct, only the measurement oracle.
 
 ## Where the record of each file lives
 
-- JavaScript against `tsc`'s JS-mode parser, every single-file case of the pinned TypeScript
-  conformance corpus, cell by cell: [JS-CONFORMANCE.md](JS-CONFORMANCE.md) (gate
-  `conformance/js-corpus`, which fails when the record is stale).
+- JavaScript against its specification: test262's syntax tests, file by file:
+  [TEST262.md](TEST262.md) (gate `conformance/test262`). (The former record against `tsc`'s
+  JS-mode parser, `JS-CONFORMANCE.md`, was retired with its gate: test262 is the oracle.)
 - The productions the JavaScript grammar is held to, with the cases where `tsc` departs:
   gate `conformance/js` ([`test/js-conformance.ts`](../test/js-conformance.ts)).
 - The CST lowered to `tsc`'s AST and compared node by node (kind, start, end): gate
