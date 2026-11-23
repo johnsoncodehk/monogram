@@ -2041,7 +2041,8 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
     return null;
   };
   // ── candidates ──
-  type Cand = { node: RuleExpr; kind: ZeroWidthToken['kind']; lineBreak: boolean; ahead: string[]; asserts: RuleExpr[] };
+  type Cand = { node: RuleExpr; kind: ZeroWidthToken['kind']; lineBreak: boolean; ahead: string[]; asserts: RuleExpr[]; owner: string };
+  let owner = '';
   const cands: Cand[] = [];
   const seen = new Set<RuleExpr>();
   const armItems = (a: RuleExpr) => { const v = tsView(a); return (v.type === 'seq' ? v.items : [v]).map(tsView); };
@@ -2053,7 +2054,7 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
       case 'seq':
         for (const i of e.items) {
           const v = tsView(i);
-          if (v.type === 'sameLine') cands.push({ node: v, kind: 'same-line', lineBreak: false, ahead: [], asserts: [v] });
+          if (v.type === 'sameLine') cands.push({ node: v, kind: 'same-line', lineBreak: false, ahead: [], asserts: [v], owner });
           else walk(i);
         }
         return;
@@ -2069,7 +2070,7 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
           if (!y) { ok = false; break; }
           ahead.push(...y);
         }
-        if (ok && lineBreak) cands.push({ node: e, kind: 'line-end', lineBreak, ahead, asserts: pure.map(a => armItems(a)[0]) });
+        if (ok && lineBreak) cands.push({ node: e, kind: 'line-end', lineBreak, ahead, asserts: pure.map(a => armItems(a)[0]), owner });
         for (const a of e.items) walk(a);
         return;
       }
@@ -2077,8 +2078,8 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
       case 'sep': return walk(e.element);
     }
   };
-  for (const r of grammar.rules) walk(r.body);
-  for (const b of collectTsSharedRules(grammar).values()) walk(b);
+  for (const r of grammar.rules) { owner = r.name; walk(r.body); }
+  for (const [n, b] of collectTsSharedRules(grammar)) { owner = n; walk(b); }
   if (!cands.length) return plan;
 
   // ── AFTER / CONT of the live candidates, over the automaton where each is its own terminal and
@@ -2088,6 +2089,7 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
   const graph = treeSitterLeafGraph(grammar, tokenNames, scannerTokens, prattRules, termOf);
   const lr = buildLr(graph);
   const after = cands.map(() => new Set<string>()), cont = cands.map(() => new Set<string>());
+  const together: number[][] = [];   // the candidates valid in one state, per state where several are
   const afterGuards = cands.map(() => new Map<string, Set<string>>());
   const idOf = (t: string) => t.startsWith('@zw') ? +t.slice(3) : -1;
   const valid = lr.states.map((_, s) => lr.valid(s));
@@ -2122,11 +2124,14 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
     // token, so there the token wins.
     const extends_ = new Set<string>();
     for (const it of st.items) if (it >= 0 && graph.nt[it] >= 0) for (const t of firstAfter(it)) extends_.add(t);
+    const here: number[] = [];
     for (const t of valid[s]) {
       const i = idOf(t);
       if (i < 0) continue;
+      here.push(i);
       for (const u of extends_) if (idOf(u) < 0) cont[i].add(u);
     }
+    if (here.length > 1) together.push(here);
     for (const [sym, to] of st.goto) {
       const i = idOf(sym);
       if (i < 0) continue;
@@ -2141,7 +2146,7 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
       }
     }
   });
-  return { after, cont, afterGuards };
+  return { after, cont, afterGuards, together };
   };
   // A keyword the word token can also lex (one no reserved set excludes from it everywhere).
   const wordShaped = (t: string) => t === word || (t.startsWith("'") && isWordLiteral(t.slice(1)) && !reserved.has(t.slice(1)));
@@ -2159,7 +2164,27 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
     for (const i of out) live.delete(i);
     res = analyze(live);
   }
-  const { after, cont, afterGuards } = res;
+  const { after, cont, afterGuards, together } = res;
+  // Same-line markers of one rule valid in one state are ONE token: the scanner returns one zero-width symbol, so
+  // where two are valid it would commit to the first whose sets admit the next token, and the parse
+  // would follow that marker's arm alone (`private readonly x` in a class: the static-block arm's
+  // modifier marker admits `readonly` after `private`, and after `readonly` admits no member name).
+  // Only within a rule: markers of different rules met in one state (`async` before an arrow, a
+  // declaration and a property) are what keeps those rules' readings apart in the LR automaton.
+  const root = cands.map((_, i) => i);
+  const find = (i: number): number => root[i] === i ? i : (root[i] = find(root[i]));
+  for (const t of together) {
+    const sl = t.filter(i => live.has(i) && cands[i].kind === 'same-line');
+    for (const i of sl) { const j = sl.find(k => cands[k].owner === cands[i].owner)!; root[find(i)] = find(j); }
+  }
+  // and, as before, markers with the same sets are one token wherever they are valid
+  const bySets = new Map<string, number>();
+  cands.forEach((c, i) => {
+    if (!live.has(i) || c.kind !== 'same-line') return;
+    const k = [[...after[i]].sort().join(' '), [...cont[i]].sort().join(' ')].join('|');
+    const j = bySets.get(k);
+    if (j === undefined) bySets.set(k, i); else root[find(i)] = find(j);
+  });
   const byKey = new Map<string, ZeroWidthToken>();
   const counters = { 'line-end': 0, 'same-line': 0 };
   cands.forEach((c, i) => {
@@ -2174,7 +2199,7 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
     // their CONT differs in what must stay possible on the same line (`return x`).
     const key = c.kind === 'line-end'
       ? [c.kind, c.lineBreak, [...c.ahead].sort().join(' ')].join('|')
-      : [c.kind, [...after[i]].sort().join(' '), [...cont[i]].sort().join(' ')].join('|');
+      : [c.kind, find(i)].join('|');
     let tok = byKey.get(key);
     if (!tok) {
       tok = { snake: `_${c.kind === 'line-end' ? 'line_end' : 'same_line'}_${++counters[c.kind]}`, kind: c.kind, lineBreak: c.lineBreak, ahead: [...new Set(c.ahead)].sort(), after: new Set(), cont: new Set(), afterWordGuards: [] };
