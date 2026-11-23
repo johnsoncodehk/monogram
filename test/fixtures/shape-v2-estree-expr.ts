@@ -2,10 +2,10 @@
 // calculus only (src/shape2-schema.ts): the expressions below, the root, and the statements
 // (blocks, variable statements with identifier bindings, `if`, loops, `return`, `throw`, `break`,
 // `continue`, labelled, `try`, `with`, `debugger`, empty), functions, arrows and their parameters,
-// binding patterns, object / array literals, spread, templates and assignment patterns.
-// Checked against acorn by test/shape2-oracle.ts. Not total: an arm outside the subset (`switch`,
-// other declarations, classes, import / export) is unmapped,
-// and a unit that reaches one is reported as outside the subset, not compared.
+// binding patterns, object / array literals, spread, templates and assignment patterns, classes,
+// and modules (import / export declarations, `import()`, `import.meta`). Checked against acorn by
+// test/shape2-oracle.ts. Not total: an arm outside the subset (`switch`, a decorated declaration)
+// is unmapped, and a unit that reaches one is reported as outside the subset, not compared.
 import {
   absent, and, armOf, branch, c, child, cook, dropLastIf, fold, get, iff, inh, list, map, match, node, not, orElse, present, record,
   spread, syn, text, thread, v, wrapIf, type Shape2Spec, type Term,
@@ -16,6 +16,11 @@ const idOf = (leaf: string, name: Term = cook('identifierName', leaf)): Term => 
 const privateOf = (leaf: string): Term => node('PrivateIdentifier', { name: cook('privateName', leaf) }, { from: leaf, to: leaf });
 const literal = (value: Term, extra: Record<string, Term> = {}): Term => node('Literal', { value, raw: text(), ...extra });
 const property = (): Term => branch('alt', { ident: idOf('ident'), privateField: privateOf('privateField') });
+/** A Block child as ESTree's BlockStatement. The grammar has one Block rule for a block statement,
+ * a function body and a class static block; ESTree's StaticBlock holds the statements itself and
+ * spans from `static`, so Block is RECORD-VALUED (its `body`, the statement list) and each parent
+ * builds the node it needs. */
+const blockOf = (name: string): Term => node('BlockStatement', { body: get(name, 'body') }, { from: name, to: name });
 
 // A member / call link is the TOP of its chain unless it is the object / callee of another link
 // (inherited `chainTop`), and its chain holds a `?.` when it is one or its object / callee's chain
@@ -41,9 +46,9 @@ const ARROWS = ['arrow', 'asyncArrow', 'arrowIdentifier', 'asyncArrowIdentifier'
 const FUNCTION_BODIES: Record<string, Record<string, string>> = {
   Expr: { ...Object.fromEntries(FUNCTIONS.map((a) => [a, 'body'])), ...Object.fromEntries(ARROWS.map((a) => [a, 'block'])) },   // function expressions, arrows (a block body)
   NewTarget: Object.fromEntries(FUNCTIONS.map((a) => [a, 'body'])),                                                                    // a function expression as a `new` callee
-  Decl: { ...Object.fromEntries(FUNCTIONS.map((a) => [a, 'body'])), export_2: 'body' },                                        // declarations, `export default function`
+  Decl: { ...Object.fromEntries(FUNCTIONS.map((a) => [a, 'body'])), exportDefault: 'body' },                                        // declarations, `export default function`
   Prop: Object.fromEntries(['accessor', 'asyncGeneratorMethod', 'asyncMethod', 'generatorMethod', 'method'].map((a) => [a, 'body'])),   // object methods / accessors
-  ClassMember: { seq: 'block' },                                                                                                 // constructor, methods, accessors
+  ClassMember: { member: 'body' },                                                                                              // constructor, methods, accessors
 };
 const prologue = (init: Term) => thread(init, 'p', and(v('p'), syn('directive', 'stmt')));
 
@@ -113,15 +118,15 @@ const FOR_RULES: Shape2Spec['rules'] = {
 // Four arms per form (plain, generator, async, async generator: the grammar routes each one's
 // parameters and body to its [Await] / [Yield] family), so `generator` / `async` are the arm's.
 const FUNCTION_FLAGS: Record<(typeof FUNCTIONS)[number], [boolean, boolean]> = { function_: [false, false], generator: [true, false], asyncFunction: [false, true], asyncGenerator: [true, true] };
-const fn = (type: string, id: Term, generator: boolean, isAsync: boolean): Term =>
-  node(type, { id, expression: c(false), generator: c(generator), async: c(isAsync), params: child('parameter'), body: child('body') });
-const functionArms = (type: string, id: Term): Record<string, Term> =>
-  Object.fromEntries(FUNCTIONS.map((a) => [a, fn(type, id, ...FUNCTION_FLAGS[a])]));
+const fn = (type: string, id: Term, generator: boolean, isAsync: boolean, span?: { from: string; to: string }): Term =>
+  node(type, { id, expression: c(false), generator: c(generator), async: c(isAsync), params: child('parameter'), body: blockOf('body') }, span);
+const functionArms = (type: string, id: Term, span?: { from: string; to: string }): Record<string, Term> =>
+  Object.fromEntries(FUNCTIONS.map((a) => [a, fn(type, id, ...FUNCTION_FLAGS[a], span)]));
 /** An arrow: a parenthesised parameter list (`parameter` repeats) or one identifier; a block or
  * an expression body (ConciseBody). */
 const arrow = (isAsync: boolean, params: Term): Term => node('ArrowFunctionExpression', {
   id: c(null), expression: branch('body', { block: c(false), expression: c(true) }), generator: c(false), async: c(isAsync),
-  params, body: branch('body', { block: child('block'), expression: child('expr') }),
+  params, body: branch('body', { block: blockOf('block'), expression: child('expr') }),
 });
 const ARROW_RULES: Record<string, Term> = {
   arrow: arrow(false, child('parameter')),
@@ -201,7 +206,7 @@ const objectProperty = (value: Term, f: { kind?: Term; method?: boolean; shortha
 });
 /** A method's or accessor's function: from its `(` to its body. */
 const methodFunction = (generator: boolean, isAsync: boolean): Term => node('FunctionExpression', {
-  id: c(null), expression: c(false), generator: c(generator), async: c(isAsync), params: child('parameter'), body: child('body'),
+  id: c(null), expression: c(false), generator: c(generator), async: c(isAsync), params: child('parameter'), body: blockOf('body'),
 }, { from: 'paren', to: 'body' });
 const spreadOrRest = (argument: string): Term => node(iff(inPattern, c('RestElement'), c('SpreadElement')), { argument: child(argument) });
 const PROP_RULES: Shape2Spec['rules'] = {
@@ -232,9 +237,110 @@ const templateLiteral = (name: string): Term => branch(name, {
   }, { from: name, to: name }),
 });
 
+// ── Classes (ECMA-262 15.7) ──
+// A class: its name, its heritage (one LeftHandSideExpression), its body from `{` to `}`. A `;`
+// element is no ClassElement (acorn keeps none), so the body's list folds it away. A method's
+// FunctionExpression spans from its `(`; a field spans its element (its `;` included). A string
+// key "constructor" names the constructor as the identifier does (15.7.1 ClassElementKind:
+// PropName), unless the element is `static`. acorn takes neither decorators nor `accessor`: an
+// `accessor` field is unmapped, a decorator not read.
+const classBody: Term = node('ClassBody', {
+  body: fold('member', list(), 'acc', iff(match(armOf('member'), { empty: c(true) }, c(false)), v('acc'), list(spread(v('acc')), child('member')))),
+}, { from: 'bodyOpen', to: 'bodyClose' });
+const classNode = (type: string, id: Term, span?: { from: string; to: string }): Term =>
+  node(type, { id, superClass: orNull('superClass'), body: classBody }, span);
+const classId: Term = iff(present('name'), idOf('name'), c(null));
+const elementStatic: Term = present('staticWord');
+const methodDefinition = (kind: Term, generator: boolean, isAsync: boolean): Term => node('MethodDefinition', {
+  static: elementStatic, computed: computedKey, key: child('key'), kind, value: methodFunction(generator, isAsync),
+});
+const methodKind: Term = iff(and(not(elementStatic), syn('constructorName', 'key')), c('constructor'), c('method'));
+/** The element after its decorators (no ECMAScript: acorn rejects every file with one, so they are not read) and `static`. */
+const classElement: Term = branch('member', {
+  async: branch('form', { generatorMethod: methodDefinition(methodKind, true, true), method: methodDefinition(methodKind, false, true) }),
+  generatorMethod: methodDefinition(methodKind, true, false),
+  accessor: methodDefinition(text('kind'), false, false),
+  named: branch('tail', {
+    method: methodDefinition(methodKind, false, false),
+    field: node('PropertyDefinition', { static: elementStatic, computed: computedKey, key: child('key'), value: orNull('value') }),
+  }),
+});
+const CLASS_RULES: Shape2Spec['rules'] = {
+  ClassMember: {
+    empty: absent,
+    staticBlock: node('StaticBlock', { body: get('body', 'body') }),
+    member: branch('form', {
+      constructor: node('MethodDefinition', {
+        static: c(false), computed: c(false), key: idOf('constructorKeyword', c('constructor')), kind: c('constructor'), value: methodFunction(false, false),
+      }),
+      element: classElement,
+    }),
+  },
+};
+
+// ── Modules (ECMA-262 16.2) ──
+// A module specifier is a string Literal; its import attributes (`with { type: "json" }`) are
+// ImportAttribute nodes, key to value. A specifier's ModuleExportName is an identifier or a
+// string; an unrenamed specifier holds its one name twice (`imported` / `exported` and `local`).
+const stringLiteral = (leaf: string): Term => node('Literal', { value: cook('stringValue', leaf), raw: text(leaf) }, { from: leaf, to: leaf });
+const exportName = (name: string): Term => branch(name, { ident: idOf('ident'), string: stringLiteral('string') });
+const attribute = (key: string, value: string): Term => node('ImportAttribute', { key: exportName(key), value: stringLiteral(value) }, { from: key, to: value });
+/** A module specifier's fields (`moduleSpecifier`'s names). */
+const moduleFields: Record<string, Term> = {
+  source: stringLiteral('source'),
+  attributes: iff(present('attributeKey'), list(attribute('attributeKey', 'attributeValue'), spread(map('attributeKeyRest', attribute('attributeKeyRest', 'attributeValueRest')))), list()),
+};
+const namespaceSpecifier: Term = node('ImportNamespaceSpecifier', { local: idOf('namespace') }, { from: 'star', to: 'namespace' });
+/** An import clause is its specifier list (ImportDeclaration's `specifiers`). */
+const MODULE_RULES: Shape2Spec['rules'] = {
+  ImportClause: {
+    defaultBinding: list(
+      node('ImportDefaultSpecifier', { local: idOf('name') }, { from: 'name', to: 'name' }),
+      spread(iff(present('bindings'), branch('bindings', { named: child('specifier'), namespace: list(namespaceSpecifier) }), list())),
+    ),
+    named: child('specifier'),
+    namespace: list(namespaceSpecifier),
+  },
+  ImportSpecifier: {
+    renamed: node('ImportSpecifier', { imported: idOf('imported'), local: idOf('local') }),
+    plain: node('ImportSpecifier', { imported: idOf('local'), local: idOf('local') }),
+    stringRenamed: node('ImportSpecifier', { imported: stringLiteral('imported'), local: idOf('local') }),
+  },
+  ExportSpecifier: {
+    specifier: node('ExportSpecifier', { local: exportName('local'), exported: iff(present('exported'), exportName('exported'), exportName('local')) }),
+  },
+};
+/** The declaration an `export default` holds spans its own branch (`declaration`). */
+const ownSpan = { from: 'declaration', to: 'declaration' };
+const MODULE_DECLARATIONS: Record<string, Term> = {
+  exportDeclaration: node('ExportNamedDeclaration', {
+    declaration: branch('declaration', { decl: child('decl'), variable: child('stmt') }), specifiers: list(), source: c(null), attributes: list(),
+  }),
+  exportDefault: node('ExportDefaultDeclaration', {
+    declaration: branch('declaration', {
+      ...functionArms('FunctionDeclaration', iff(present('name'), idOf('name'), c(null)), ownSpan),
+      namedClass: classNode('ClassDeclaration', idOf('name'), ownSpan),
+      anonymousClass: classNode('ClassDeclaration', c(null), ownSpan),
+      expression: child('expr'),
+    }),
+  }),
+  exportAll: branch('form', {
+    plain: node('ExportAllDeclaration', { exported: c(null), ...moduleFields }),
+    aliased: node('ExportAllDeclaration', { exported: exportName('exported'), ...moduleFields }),
+  }),
+  exportNamed: node('ExportNamedDeclaration', {
+    declaration: c(null), specifiers: child('specifier'),
+    source: iff(present('source'), moduleFields.source, c(null)), attributes: iff(present('source'), moduleFields.attributes, list()),
+  }),
+  importDeclaration: branch('form', {
+    clause: node('ImportDeclaration', { specifiers: child('clause'), ...moduleFields }),
+    bare: node('ImportDeclaration', { specifiers: list(), ...moduleFields }),
+  }),
+};
+
 /** The statements (ECMA-262 14), one node per Stmt arm. */
 const STATEMENTS: Record<string, Term> = {
-  block: child('block'),
+  block: blockOf('block'),
   variable: node('VariableDeclaration', { declarations: bindings, kind: text('kind') }),
   using: node('VariableDeclaration', { declarations: bindings, kind: iff(present('awaitKeyword'), c('await using'), c('using')) }),
   if_: node('IfStatement', { test: sequenceOf('condition', 'conditionRest'), consequent: child('consequence'), alternate: orNull('alternative') }),
@@ -246,9 +352,9 @@ const STATEMENTS: Record<string, Term> = {
   continue_: node('ContinueStatement', { label }),
   // A Catch is not a rule of its own: the clause spans `catch` .. its block.
   try_: node('TryStatement', {
-    block: child('body'),
-    handler: iff(present('handler'), node('CatchClause', { param: orNull('parameter'), body: child('handler') }, { from: 'catchTok', to: 'handler' }), c(null)),
-    finalizer: orNull('finalizer'),
+    block: blockOf('body'),
+    handler: iff(present('handler'), node('CatchClause', { param: orNull('parameter'), body: blockOf('handler') }, { from: 'catchTok', to: 'handler' }), c(null)),
+    finalizer: iff(present('finalizer'), blockOf('finalizer'), c(null)),
   }),
   labelled: node('LabeledStatement', { body: child('body'), label: idOf('label') }),
   empty: node('EmptyStatement'),
@@ -280,7 +386,9 @@ export const estreeExprShape: Shape2Spec = {
   synthesized: {
     directive: { type: 'bool', default: false, rules: { Stmt: { expr: and(not(present('rest')), match(armOf('first'), { string: c(true) }, c(false))) } } },
     stringBody: { type: 'string', rules: { Expr: { string: cook('stringBody', 'string') } } },
-    optional: { type: 'bool', default: false, rules: { Expr: { led_optChain: c(true), led_dot: syn('optional', 'left'), led_bracket: syn('optional', 'left'), led_paren: syn('optional', 'left') } } },
+    optional: { type: 'bool', default: false, rules: Object.fromEntries(['Expr', 'ClassHeritage'].map((r) => [r, { led_optChain: c(true), led_dot: syn('optional', 'left'), led_bracket: syn('optional', 'left'), led_paren: syn('optional', 'left') }])) },
+    // A property key that names the constructor: the identifier or the string `constructor`.
+    constructorName: { type: 'bool', default: false, rules: { MemberName: { ident: match(cook('identifierName', 'ident'), { constructor: c(true) }, c(false)), string: match(cook('stringValue', 'string'), { constructor: c(true) }, c(false)) } } },
   },
   inherited: {
     pattern: {
@@ -303,20 +411,37 @@ export const estreeExprShape: Shape2Spec = {
         Block: { brace: { stmt: prologue(inh('functionBody')) } },
       },
     },
-    chainTop: { type: 'bool', default: true, rules: { Expr: Object.fromEntries(LINKS.map((a) => [a, { left: c(false) }])) } },
+    chainTop: { type: 'bool', default: true, rules: Object.fromEntries(['Expr', 'ClassHeritage'].map((r) => [r, Object.fromEntries(LINKS.map((a) => [a, { left: c(false) }]))])) },
   },
   rules: {
     // The root: its statement list. acorn's `sourceType` (the goal acorn was run with) and the
     // root's extent over trailing trivia are not produced (test/shape2-oracle.ts ROOT_NOT_COMPARED).
     Program: { decl: node('Program', { body: map('alt', branch('alt', { decl: child('decl'), stmt: child('stmt') })) }) },
     Stmt: { ...STATEMENTS, expr: node('ExpressionStatement', { expression: sequence, directive: iff(and(inh('prologue'), syn('directive')), syn('stringBody', 'first'), absent) }) },
-    Block: { brace: node('BlockStatement', { body: child('stmt') }) },
+    Block: { brace: record({ body: child('stmt') }) },
     // A binding: an identifier or a pattern.
     Binding: { seq: node('VariableDeclarator', { id: target('name'), init: orNull('value') }) },
     CatchParameter: { ident: idOf('ident'), bindingPattern: child('bindingPattern') },
     ...PARAM_RULES,
     ...PATTERN_RULES,
-    Decl: functionArms('FunctionDeclaration', idOf('name')),
+    Decl: { ...functionArms('FunctionDeclaration', idOf('name')), class_: classNode('ClassDeclaration', idOf('name')), ...MODULE_DECLARATIONS },
+    ...MODULE_RULES,
+    ...CLASS_RULES,
+    // A class heritage: a LeftHandSideExpression (the `new` callee rule, then the call and chain tails).
+    ClassHeritage: {
+      newTarget: child('newTarget'),
+      class_: classNode('ClassExpression', classId),
+      led_dot: chain(member(property(), false, false)),
+      led_bracket: chain(member(child('expr'), true, false)),
+      led_paren: chain(node('CallExpression', { callee: child('left'), arguments: child('expr'), optional: c(false) })),
+      led_optChain: chain(branch('alt', {
+        ident: member(idOf('ident'), false, true),
+        privateField: member(privateOf('privateField'), false, true),
+        paren: node('CallExpression', { callee: child('left'), arguments: child('expr'), optional: c(true) }),
+        bracket: member(child('expr'), true, true),
+      })),
+      led_template: node('TaggedTemplateExpression', { tag: child('left'), quasi: templateLiteral('template') }),
+    },
     ...FOR_RULES,
     ...KEY_RULES,
     ...PROP_RULES,
@@ -347,6 +472,10 @@ export const estreeExprShape: Shape2Spec = {
       led_in: node('BinaryExpression', { left: child('left'), operator: c('in'), right: child('expr') }),
       led_instanceof: node('BinaryExpression', { left: child('left'), operator: c('instanceof'), right: child('expr') }),
       newDotTarget: node('MetaProperty', { meta: idOf('newKeyword', c('new')), property: idOf('targetKeyword', c('target')) }),
+      import_: branch('form', {
+        call: node('ImportExpression', { source: child('source'), options: orNull('options') }),
+        meta: node('MetaProperty', { meta: idOf('importKeyword', c('import')), property: idOf('metaKeyword', c('meta')) }),
+      }),
       construct: node('NewExpression', { callee: child('newTarget'), arguments: branch('alt', { paren: child('expr'), empty: list() }) }),
       yield_: branch('alt', {
         star: node('YieldExpression', { delegate: c(true), argument: child('expr') }),
@@ -364,6 +493,10 @@ export const estreeExprShape: Shape2Spec = {
       }, node('UnaryExpression', { operator: text('op'), prefix: c(true), argument: child('operand') })),
       ...functionArms('FunctionExpression', iff(present('name'), idOf('name'), c(null))),
       ...ARROW_RULES,
+      namedClass: classNode('ClassExpression', idOf('name')),
+      anonymousClass: classNode('ClassExpression', c(null)),
+      newNamedClass: node('NewExpression', { callee: classNode('ClassExpression', idOf('name'), { from: 'classKeyword', to: 'bodyClose' }), arguments: branch('newArguments', { paren: child('argument'), none: list() }) }),
+      newAnonymousClass: node('NewExpression', { callee: classNode('ClassExpression', c(null), { from: 'classKeyword', to: 'bodyClose' }), arguments: branch('newArguments', { paren: child('argument'), none: list() }) }),
       postfixOp: node('UpdateExpression', { operator: text('op'), prefix: c(false), argument: child('operand') }),
     },
     // The callee of `new` (a MemberExpression, never a call).

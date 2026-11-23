@@ -1070,6 +1070,13 @@ const CASES: Case[] = [
     ],
     reject: ['component C() { /> }', 'component C() { </a> }', 'component C() { <a> }', 'component C() { <STYLE>x</STYLE> }', 'component C() { <style>x }'],
   },
+  {
+    // a tag token that fails where the ordinary scan then lexes (`'` with no closing quote on its
+    // line): its failed read is a read past the next tokens' ends (test/fixtures/tagtokdialect.ts)
+    grammar: 'tagtokdialect', path: './fixtures/tagtokdialect.ts',
+    accept: ["<a k='v w' m=n'/>\n<b/>", "<a k=n'>{x}</a>", '<a k="s"><b/>{(y)\'}</a>\n{z\'}'],
+    reject: ["<a k='v>", "<a k='v/>", "x'"],
+  },
 ];
 // The element-region grammars' cases may be run alone: PORTABLE_GRAMMARS=a,b (a development aid;
 // the gate runs every case).
@@ -1377,6 +1384,9 @@ const FRAME_EDIT_DOCS: Record<string, string[]> = {
     'let a = <a b="\\" c=\'d\ne\'>t</a>;\nlet z = "q";',
   ],
   javascriptreact: ['let s = `a${b}c${`${d}`}`;\nx = 1;', "let a = <><p>It's</p>{`${<b/>}`}</>;\nx</*c*/y;", 'x = <a/> / 2; y = <b c={1}>t</b>;'],
+  // an edit inside a failed attribute string's read, past the element's end (`{x}` → `{x'}`),
+  // makes it a string
+  tagtokdialect: ["<a k=n'/> {w} {x}\n<b m='n'>{y}</b>"],
   elementdialect: [
     'component C(a) {\n  <a k="v">@if (a) { <b/> } @else { "e" } {a}</a> "z" <c/>\n}',
     'component D() { <a><b>{1}</b><{t} id="d">"s"</{t}></a> }\ncomponent E() { "q" }',
@@ -1415,7 +1425,7 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: calcReuseInit, batches: [[[calcReuseMid, calcReuseMid + 1, '9']], [[calcReuseMid, calcReuseMid + 1, '8']]], minReused: 30 },
     // Boundary-hit must be exact (===): merging b;c via `;`→`+` lands on `d`; a `>=` mutant would adopt too early.
     { init: 'a;\nb;\nc;\nd;', batches: [[[4, 5, '+']]] },
-    // Mid overshoot past suffix candidates → tryReuseTop fails, full-parse fallback (reused:0) still ≡ fresh.
+    // Mid overshoot past suffix candidates → tryReuse fails, full-parse fallback (reused:0) still ≡ fresh.
     { init: 'a;\nb;\nc;\nd;', batches: [[[7, 8, '+']]], reused: 0 },
     // S7c long arena session: ≥20 continuous edits; each cumulative prefix treeEq + final ≡ fresh.
     { init: calcLongInit, batches: calcLongBatches, longSession: true, minReused: 1 },

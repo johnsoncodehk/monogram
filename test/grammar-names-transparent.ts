@@ -146,6 +146,15 @@ for (const name of ['javascript', 'typescript']) {
   try { nameRule(defineGrammar({ name: 'n3', tokens: { Id }, rules: { R } }).rules[0]); } catch (e) { err = (e as Error).message; }
   check(/equals an author-written name/.test(err), 'a derived name equal to a written one in its scope is an error (name it too)', err);
 }
+for (const bad of ['arguments', 'eval']) {
+  // A name is a local of the generated destructurers (a module: strict mode), so no strict-mode
+  // binding may be one.
+  const Id = token(seq(range('a', 'z'), star(range('a', 'z'))), { identifier: true });
+  const R = rule(() => [['x', field(bad, Id)]]);
+  let err = '';
+  try { nameRule(defineGrammar({ name: 'n4', tokens: { Id }, rules: { R } }).rules[0]); } catch (e) { err = (e as Error).message; }
+  check(/not identifier-safe/.test(err), `a written name \`${bad}\` is an error (no strict-mode binding has it)`, err);
+}
 {
   const Id = token(seq(range('a', 'z'), star(range('a', 'z'))), { identifier: true });
   const R = rule(() => [['x', alt(arm('one', 'a', Id), arm('two', 'b', Id)), opt('else', field('alternate', Id)), many(field('item', Id))]]);

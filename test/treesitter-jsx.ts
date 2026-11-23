@@ -65,11 +65,23 @@ const LINE_BREAKS = [
   'let x: T\nlet y', 'type A = B\ntype C = D', 'x!\n.y', 'x\n!y', 'let x: T\n[]', 'let x: A\n<B>(y)', 'interface I { a: T\n b: U }',
 ];
 
+// One-token lookaheads (`not(X)` / `not(not(Y))` before what follows): what `export` takes (a
+// declaration, never another statement), the starts an expression statement or an arrow's concise body
+// excludes (`{`, `function`, `class`), the for-head and `try` conditions; each beside the valid form.
+const LOOKAHEADS = [
+  'export x;', 'export if (a) {}', 'export { a };', 'export {};', 'export var a = 1;', 'export let x;', 'export let = 1;', 'export let;',
+  'export const a = 1;', 'export function f() {}', 'export { a } from "m";', 'export ;', 'export { a }.b;', 'export let[0] = 1;', 'export x = 1;',
+  'export async function f() {}', 'export class C {}',
+  '{}.b;', '{} .b', '({}).b;', 'function f() {}.x;', '(function () {}).x;', 'function f(){}\n(g)()', 'class C {}.x;', '(class {}).x;',
+  'x = () => {}.x;', 'x = () => ({}).x;', 'x = () => {};', 'x = async () => {}.y;', 'x = a => {}.y;',
+  'for (let [a] of b);', 'for ([a] of b);', 'for ({a} of b);', 'for (let in a);', 'for (let of a);', 'for (async of a);', 'try {}', 'try {} finally {}',
+];
+
 // Contextual keywords: every word-shaped literal the grammar writes (`static`, `type`, `of`, `if`, ...),
 // as a name in each position class: one class per word-token step of the JavaScript and TypeScript
-// grammars (the steps gen-treesitter's planContextualWords plans a keyword set for). The word list is
-// read from the grammar, not from the generator, so a keyword the plan leaves out of a step is still
-// tried there. Only the inputs the interpreter accepts are kept (reserved words drop out where the
+// grammars. The word list is
+// read from the grammar, not from the generator, so every keyword is tried in every position. Only
+// the inputs the interpreter accepts are kept (reserved words drop out where the
 // grammar excludes them), so the target is that every one parses.
 const CONTEXTUAL_POSITIONS = [
   (w: string) => `let ${w} = 1;`,                        // binding name
@@ -169,10 +181,10 @@ let loadFailed = false;
 for (const { lang, mod, corpora } of [
   { lang: 'typescriptreact', mod: '../typescriptreact.ts', corpora: {
     'curated JSX': JSX_CASES, 'TSX issue cases': tsxIssueCases.map(c => c.src),
-    'TS issue cases': issueTests.map(t => t.input), 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS } },
-  { lang: 'javascriptreact', mod: '../javascriptreact.ts', corpora: { 'curated JSX': JSX_CASES, 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS } },
-  { lang: 'typescript', mod: '../typescript.ts', corpora: { 'TS issue cases': issueTests.map(t => t.input), 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS } },
-  { lang: 'javascript', mod: '../javascript.ts', corpora: { 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS } },
+    'TS issue cases': issueTests.map(t => t.input), 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS } },
+  { lang: 'javascriptreact', mod: '../javascriptreact.ts', corpora: { 'curated JSX': JSX_CASES, 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS } },
+  { lang: 'typescript', mod: '../typescript.ts', corpora: { 'TS issue cases': issueTests.map(t => t.input), 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS } },
+  { lang: 'javascript', mod: '../javascript.ts', corpora: { 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS } },
 ]) {
   const wasm = `tree-sitter/${lang}/tree-sitter-${lang}.wasm`;
   if (!existsSync(wasm)) { console.error(`✗ ${wasm} not found (build it: cd tree-sitter/${lang} && npx tree-sitter build --wasm .)`); loadFailed = true; continue; }
@@ -220,4 +232,5 @@ if (process.env.GITHUB_STEP_SUMMARY) {
   appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### tree-sitter verdicts against the interpreter (report-only)\n\n${table}\n` +
     (disagreements.length ? `\n<details><summary>${disagreements.length} disagreement(s)</summary>\n\n${disagreements.map(d => '- `' + d.replace(/`/g, "'") + '`').join('\n')}\n</details>\n` : ''));
 }
+await import('./treesitter-realcode.ts');   // measurement branch only
 if (loadFailed) process.exit(1);

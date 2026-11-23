@@ -328,17 +328,23 @@ const modifierRun = (words: string[], opts: ModifierOpts & { treeSitterOmits?: s
   const rest = modifierWord(words.filter(w => w !== 'static'), opts);
   const shown = words.filter(w => !opts.treeSitterOmits?.includes(w));
   const tsAny = shown.length === words.length ? strictAny : modifierWord(shown, opts);
+  // The words are named: `modifier` before the `static` slot, `staticModifier`, `modifierAfterStatic`
+  // (`runNamed` names them otherwise, for a second run in one scope).
+  const runNamed = (m: string, s: string, a: string) => tsRelax([many(field(m, rest)), opt(field(s, stat), many(field(a, rest)))], many(tsAny));
   return {
-    any: tsAny === strictAny ? strictAny : tsRelax(strictAny, tsAny), stat, rest,
-    run: tsRelax([many(rest), opt(stat, many(rest))], many(tsAny)),
-    run1: tsRelax(alt([many1(rest), opt(stat, many(rest))], [stat, many(rest)]), many1(tsAny)),
+    any: tsAny === strictAny ? strictAny : tsRelax(strictAny, tsAny), stat, rest, runNamed,
+    run: runNamed('modifier', 'staticModifier', 'modifierAfterStatic'),
+    run1: tsRelax(alt(
+      arm('plain', many1(field('modifier', rest)), opt(field('staticModifier', stat), many(field('modifierAfterStatic', rest)))),
+      arm('static_', field('staticModifier', stat), many(field('modifierAfterStatic', rest))),
+    ), many1(tsAny)),
   };
 };
 
 // A class expression's decorators and modifiers (tsc's parseDecoratedExpression, entered at a
 // `@`): every modifier word but `const` (a modifier only before `enum`).
 const classExprMods = modifierRun(['abstract', 'accessor', 'async', 'declare', 'default', 'export', 'in', 'out', 'override', 'private', 'protected', 'public', 'readonly', 'static'], { secondRun: true });
-const classExprPrefix = opt(many1(DecoratorExpr), classExprMods.run, opt(many1(DecoratorExpr), classExprMods.run));
+const classExprPrefix = opt(many1(field('decorator', DecoratorExpr)), classExprMods.run, opt(many1(field('decoratorRest', DecoratorExpr)), classExprMods.runNamed('modifierRest', 'staticModifierRest', 'modifierRestAfterStatic')));
 
 // An object-literal member is tsc's parseObjectLiteralElement: a spread, or a modifier run
 // (parseModifiers) and then one member. The run is one list in which `async` is a word like the
@@ -442,12 +448,17 @@ const ClassHeritage = rule($ => classHeritageArms($, Expr, NewTarget,
 // which renders no lookahead, keeps the plain list of elements (tsRelax): the two branches and the
 // `{}` guard would only be one more conflict and dropped lookaheads there.
 const heritageFollowers = alt(',', '{', 'extends', 'implements');
-const heritageElement = alt([not(alt('extends', 'implements')), not(['{', '}', not(heritageFollowers)]), ClassHeritage]);
-const heritageList = [tsRelax(alt([not(alt(['{', not('}')], ['{', '}', heritageFollowers])), sep(heritageElement, ',')], [heritageElement, opt(',', sep(heritageElement, ','))]), sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ','))];
-const heritageClauses = many(alt(
-  ['extends', ...heritageList],
-  ['implements', ...heritageList],
-));
+// Named: each clause `heritage` (`extends_` / `implements`); its elements `element` (the first, in
+// the branch that starts with one) and `elementRest`; an element's expression `base`.
+const heritageElement = alt([not(alt('extends', 'implements')), not(['{', '}', not(heritageFollowers)]), field('base', ClassHeritage)]);
+const heritageList = [tsRelax(field('elements', alt(
+  arm('list', not(alt(['{', not('}')], ['{', '}', heritageFollowers])), sep(field('elementRest', heritageElement), ',')),
+  arm('first', field('element', heritageElement), opt(',', sep(field('elementRest', heritageElement), ','))),
+)), sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ','))];
+const heritageClauses = many(field('heritage', alt(
+  arm('extends_', field('keyword', 'extends'), ...heritageList),
+  arm('implements', field('keyword', 'implements'), ...heritageList),
+)));
 
 // The `new` callee forms are JavaScript's (`newTargetArms`, javascript.ts); a TypeScript `new`
 // may take type arguments, and so may a template's tag.
@@ -577,7 +588,7 @@ const Expr = rule($ => [
   ['yield', alt([field('asterisk', '*'), $], [opt($)])],   // yield e | yield* e (delegate) | yield
   ['(', field('first', $), many(field('comma', ','), field('rest', $)), ')'],
   [$, 'satisfies', Type],
-  ['import', alt(['(', $, ')'], ['.', 'meta'], [...typeArgsInExpr(), opt('(', sep($, ','), ')')])],   // import(e) | import.meta | import<T>(args) (instantiation-expression; checker rejects)
+  arm('import_', field('importKeyword', 'import'), field('form', alt(arm('call', '(', field('source', $), ')'), arm('meta', '.', field('metaKeyword', 'meta')), arm('typeArguments', ...typeArgsInExpr(), opt('(', sep($, ','), ')'))))),   // import(e) | import.meta | import<T>(args) (instantiation-expression; checker rejects)
   PrivateField,
   HexNumber, OctalNumber, BinaryNumber, BigInt_,
   ...tsFnArms([opt(...bindingName)], Block),
@@ -586,8 +597,8 @@ const Expr = rule($ => [
   // decorators, modifier words, a second decorator run after `export` / `default`, then `class`
   // (`x = @d @e class C {}`, `x = @d export @e class {}`, `x = @d abstract class {}`; without a
   // decorator a modifier word is an identifier, so `x = abstract class {}` has no parse).
-  [classExprPrefix, 'class', ...bindingIdentifier, opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],
-  [classExprPrefix, 'class', opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],
+  arm('namedClass', classExprPrefix, 'class', ...bindingName, opt(field('typeParameters', TypeParams)), heritageClauses, '{', many(field('member', ClassMember)), '}'),
+  arm('anonymousClass', classExprPrefix, 'class', opt(field('typeParameters', TypeParams)), heritageClauses, '{', many(field('member', ClassMember)), '}'),
   ['<', Type, '>', $],
 ]);
 
@@ -846,7 +857,7 @@ const indexSignatureStart = ['[', alt(
   [alt(modifierKindWord, bindingIdentifier), alt(':', ',', ['?', alt(':', ',', ']')])],
 )];
 const indexSignature = [not(not(indexSignatureStart)), '[', sep(typeFnParam(), ','), ']', opt(':', Type), typeMemberEnd()];
-const propertyOrMethodName = [not(indexSignatureStart), MemberName];
+const propertyOrMethodName = [not(indexSignatureStart), field('key', MemberName)];
 
 // Branched: parse the modifier list ONCE, then branch on the member kind, so a
 // member's shared `modifiers …` prefix isn't re-parsed per alternative. Inner
@@ -867,7 +878,7 @@ const accessorMod = modifierWord(['get', 'set']);
 // takes `async` as often as it can follow: `async async x() {}`, `static async async x() {}`).
 // (tree-sitter keeps its plain run of words: `async` there would be one more modifier-vs-name
 // decision against the method name `async` in its GLR table.)
-const asyncWords = tsRelax(many(alt(Modifier, asyncMod)), many(Modifier));
+const asyncWords = tsRelax(many(field('wordAfterAsync', alt(Modifier, asyncMod))), many(Modifier));
 // The single `static` slot spans the whole member, and the words go on after `async`
 // (`static async x`, `async static x`). `modRun` gives the leading run its shape; the words
 // after `async` are a plain repetition, because a second run shape there multiplies the
@@ -882,7 +893,7 @@ const staticTwice = [many(alt(classMods.rest, asyncMod)), classMods.stat, many(a
 // '@' as belonging to THIS property ("Decorators must precede the name and all keywords") —
 // `x @dec y()` and `x = 1 @dec y()` reject, `x; @dec` and newline accept. The `!` sits on the
 // name's line (tsc takes it only without a line break).
-const fieldTail = [opt(sameLine, '!'), opt('?'), opt(':', Type), opt('=', resetCtx(Expr)), asi()];
+const fieldTail = [opt(sameLine, field('exclamation', '!')), opt(field('question', '?')), opt(':', field('type', Type)), opt('=', resetCtx(field('value', Expr))), asi()];
 // Class member ( params ): T body, params+body routed to a [Await]/[Yield] family:
 // plain methods reset (a method body has its OWN, non-inherited context — the spec's
 // implicit function boundary), generators yield, async await, async-generators both.
@@ -891,10 +902,10 @@ const fieldTail = [opt(sameLine, '!'), opt('?'), opt(':', Type), opt('=', resetC
 // The body is a function declaration's (tsc's parseFunctionBlockOrSemicolon): a block, after
 // which nothing is needed (a `;` there is an empty class element of its own), or none, and
 // then the member ends as a statement does.
-const memTail = (ctx) => ['(', sep(ctx(Param), ','), ')', opt(":", ReturnType), ctx(fnBodyOrAsi())];
+const memTail = (ctx) => ['(', sep(ctx(field('parameter', Param)), ','), ')', opt(":", ReturnType), ctx(field('body', fnBodyOrAsi()))];
 const ClassMember = rule($ => [
-  ';',   // tsc's SemicolonClassElement: `class C { ; }` is parse-clean
-  [many(DecoratorExpr), many(Modifier), 'static', awaitCtx(Block)],   // static block body is [+Await] (await reserved); decorators/modifiers parse (SEMANTIC errors)
+  arm('empty', ';'),   // tsc's SemicolonClassElement: `class C { ; }` is parse-clean
+  arm('staticBlock', many(field('decorator', DecoratorExpr)), many(field('modifier', Modifier)), field('staticKeyword', 'static'), awaitCtx(field('block', Block))),   // static block body is [+Await] (await reserved); decorators/modifiers parse (SEMANTIC errors)
   // decorators PREFIX a member, before any modifier — tsc parse-rejects
   // `public @dec method()` ("Decorators are not valid here") and an orphan
   // `@dec` with no member, which a standalone sibling alternative tolerated.
@@ -903,23 +914,23 @@ const ClassMember = rule($ => [
   // takes no same-line `@` after modifier words none of which is a class-member modifier, unless
   // the member starts with a decorator) the TextMate generator runs out of memory (2 GB heap,
   // `npm run gen`), as with a second run shape after `async` (`staticTwice` below).
-  [
-    many(DecoratorExpr),
+  arm('member',
+    many(field('decorator', DecoratorExpr)),
     not(staticTwice),
     modRun,
-    alt(
+    field('form', alt(
       // `async` is order-free among modifiers (tsc parses any order; the checker
       // validates), so it carries its own inner modifier run and an async member's
       // body is [+Await]/[+Await,+Yield].
-      [asyncMod, asyncWords, '*', MemberName, opt('?'), opt(TypeParams), ...memTail(asyncGenCtx)],   // async generator method
-      [asyncMod, asyncWords, accessorMod, MemberName, opt(TypeParams), '(', opt(sep(awaitCtx(Param), ',')), ')', opt(":", ReturnType), awaitCtx(fnBodyOrAsi())],  // async accessor (semantic error; parses)
-      [asyncMod, asyncWords, 'static', awaitCtx(Block)],                              // `async static { }` (semantic error; parses)
-      [asyncMod, asyncWords, not(accessorMod), ...propertyOrMethodName, opt('?'), opt(TypeParams), ...memTail(awaitCtx)],   // async method
-      ['*', MemberName, opt('?'), opt(TypeParams), ...memTail(yieldCtx)],                // generator method
-      [accessorMod, MemberName, opt(TypeParams), '(', opt(sep(resetCtx(Param), ',')), ')', opt(":", ReturnType), resetCtx(fnBodyOrAsi())],  // accessor (type params parse; semantic error)
+      arm('asyncGeneratorMethod', field('asyncWord', asyncMod), asyncWords, field('asterisk', '*'), field('key', MemberName), opt(field('question', '?')), opt(field('typeParameters', TypeParams)), ...memTail(asyncGenCtx)),   // async generator method
+      arm('asyncAccessor', field('asyncWord', asyncMod), asyncWords, field('kind', accessorMod), field('key', MemberName), opt(field('typeParameters', TypeParams)), '(', opt(sep(awaitCtx(field('parameter', Param)), ',')), ')', opt(":", ReturnType), awaitCtx(field('body', fnBodyOrAsi()))),  // async accessor (semantic error; parses)
+      arm('asyncStaticBlock', field('asyncWord', asyncMod), asyncWords, field('staticKeyword', 'static'), awaitCtx(field('block', Block))),                              // `async static { }` (semantic error; parses)
+      arm('asyncMethod', field('asyncWord', asyncMod), asyncWords, not(accessorMod), ...propertyOrMethodName, opt(field('question', '?')), opt(field('typeParameters', TypeParams)), ...memTail(awaitCtx)),   // async method
+      arm('generatorMethod', field('asterisk', '*'), field('key', MemberName), opt(field('question', '?')), opt(field('typeParameters', TypeParams)), ...memTail(yieldCtx)),                // generator method
+      arm('accessor', field('kind', accessorMod), field('key', MemberName), opt(field('typeParameters', TypeParams)), '(', opt(sep(resetCtx(field('parameter', Param)), ',')), ')', opt(":", ReturnType), resetCtx(field('body', fnBodyOrAsi()))),  // accessor (type params parse; semantic error)
       // index signature, after any modifiers (`async` among them, as in tsc): the type member's
       // one form (`indexSignature`), so a bracket that starts one is no method or field name.
-      [opt(asyncMod, asyncWords), ...indexSignature],
+      arm('indexSignature', opt(field('asyncWord', asyncMod), asyncWords), ...indexSignature),
       // a bare identifier `constructor` member MUST be a call signature — tsc rejects a
       // `constructor` field/property ("'(' expected"): `constructor;`, `constructor = 1`,
       // `constructor: T`, even modified (`public constructor;`). TypeParams parse; `?`/`!`
@@ -927,18 +938,18 @@ const ClassMember = rule($ => [
       // so it stays a valid field (the `not('constructor')` generic arm below covers it).
       // Every constructor is this branch: bare (`constructor() {}`), decorated, modified or an
       // overload without a body.
-      ['constructor', opt(TypeParams), ...memTail(resetCtx)],
+      arm('constructor', field('constructorKeyword', 'constructor'), opt(field('typeParameters', TypeParams)), ...memTail(resetCtx)),
       // `get` / `set` before an accessor name IS the accessor keyword (tsc commits to the
       // accessor), so it is not available as a field name there: `get⏎x = 1` rejects.
-      [not('constructor'), not(accessorMod), ...propertyOrMethodName, alt(
-        [opt('?'), opt(TypeParams), ...memTail(resetCtx)],                       // method (requires `(`)
-        fieldTail,
-      )],
+      arm('named', not('constructor'), not(accessorMod), ...propertyOrMethodName, field('tail', alt(
+        arm('method', opt(field('question', '?')), opt(field('typeParameters', TypeParams)), ...memTail(resetCtx)),                       // method (requires `(`)
+        arm('field', ...fieldTail),
+      ))),
       // `async` is a modifier like any other to tsc, so it may also precede a field
       // (`async x;` parses; the checker rejects it).
-      [asyncMod, asyncWords, not('constructor'), not(accessorMod), ...propertyOrMethodName, ...fieldTail],
-    ),
-  ],
+      arm('asyncField', field('asyncWord', asyncMod), asyncWords, not('constructor'), not(accessorMod), ...propertyOrMethodName, ...fieldTail),
+    )),
+  ),
 ]);
 
 const EnumMember = rule($ => [
@@ -953,17 +964,17 @@ const EnumMember = rule($ => [
 // `as`). Otherwise it is the specifier's name: `{ type }`, `{ type, x }`, `{ type as x }`,
 // `{ type as as }` (`type` renamed to `as`).
 const moduleExportName = alt(Ident, String_);
-const typeMod = () => opt('type', not(not(alt([not('as'), moduleExportName], ['as', 'as', moduleExportName], ['as', not(moduleExportName)]))));
+const typeMod = () => opt(field('typeKeyword', 'type'), not(not(alt([not('as'), moduleExportName], ['as', 'as', moduleExportName], ['as', not(moduleExportName)]))));
 const ImportSpecifier = rule($ => [
   // A module-side name `as` a local name, or a local name alone. The local name is a binding
   // identifier; the name read from the module, before `as`, is an IdentifierName (tsc's
   // parseImportOrExportSpecifier): `{ if as x }`, not `{ if }` / `{ x as if }`.
-  [typeMod(), Ident, 'as', ...bindingIdentifier],
-  [typeMod(), ...bindingIdentifier],
+  arm('renamed', typeMod(), field('imported', Ident), 'as', notReserved, field('local', Ident)),
+  arm('plain', typeMod(), notReserved, field('local', Ident)),
   // arbitrary module namespace identifier (ES2022): `import { "str" as x }`. The
   // string form REQUIRES the rename (`{ "a" }` / `{ "a" as "b" }` are tsc parse
   // errors on the import side — the local binding must be an identifier).
-  [typeMod(), String_, 'as', ...bindingIdentifier],
+  arm('stringRenamed', typeMod(), field('imported', String_), 'as', notReserved, field('local', Ident)),
 ]);
 
 // Export specifiers are WIDER than import ones: a ModuleExportName (identifier or
@@ -974,24 +985,27 @@ const ExportSpecifier = rule($ => [
   // when followed by a real name that ISN'T `as` (arm 1), or by `as` that is itself the
   // name — `{ type as }`, no rename target after (arm 2). Otherwise `type` is the name:
   // `{ type }`, `{ type as B }` (renamed), `{ type, x }` all take arm 3.
-  ['type', not('as'), alt(Ident, String_), opt('as', alt(Ident, String_))],
+  arm('typed', field('typeKeyword', 'type'), not('as'), field('local', alt(Ident, String_)), opt('as', field('exported', alt(Ident, String_)))),
   // name is `as`: `{ type as }` (no rename) or `{ type as as Y }` (DOUBLE as = rename).
   // A single `{ type as Y }` is NOT this arm — the not(Ident/String) / second-`as` guard
   // rejects it so it falls to arm 3 as name=`type` renamed to Y.
-  ['type', 'as', alt([not(alt(Ident, String_))], ['as', alt(Ident, String_)])],
-  [alt(Ident, String_), opt('as', alt(Ident, String_))],
+  arm('typedAs', field('typeKeyword', 'type'), field('local', 'as'), field('rename', alt(arm('none', not(alt(Ident, String_))), arm('renamed', 'as', field('exported', alt(Ident, String_)))))),
+  arm('specifier', field('local', alt(Ident, String_)), opt('as', field('exported', alt(Ident, String_)))),
 ]);
 
+// `{ a, b as c }` (NamedImports) and `* as ns` (NamespaceImport), alone or after a default binding.
+const namedImports = () => [field('brace', '{'), sep(field('specifier', ImportSpecifier), ','), field('braceClose', '}')];
+const namespaceImport = () => [field('star', '*'), 'as', notReserved, field('namespace', Ident)];
 const ImportClause = rule($ => [
   // deferred import (TS 5.9): `import defer * as ns from "m"`. `defer` is a phase
   // modifier here, ONLY valid immediately before the namespace `* as`. As a keyword
   // literal it still lexes as an Ident, so `defer` stays an ordinary binding name in
   // every other position (`const defer = 1`, `import defer from "m"`, `defer()`).
-  ['defer', '*', 'as', ...bindingIdentifier],
+  arm('deferNamespace', field('deferKeyword', 'defer'), ...namespaceImport()),
   // default import, optionally followed by named `{…}` or namespace `* as x`
-  [...bindingIdentifier, opt(',', alt(['{', sep(ImportSpecifier, ','), '}'], ['*', 'as', ...bindingIdentifier]))],
-  ['{', sep(ImportSpecifier, ','), '}'],
-  ['*', 'as', ...bindingIdentifier],
+  arm('defaultBinding', notReserved, field('name', Ident), opt(',', field('bindings', alt(arm('named', ...namedImports()), arm('namespace', ...namespaceImport()))))),
+  arm('named', ...namedImports()),
+  arm('namespace', ...namespaceImport()),
 ]);
 
 // The right-hand side of an import-equals declaration (`import x = …`), tsc's
@@ -1004,8 +1018,8 @@ const ImportClause = rule($ => [
 // errors) or, when the first token is not a string, a full comma Expression
 // (`require(x)`, `require(1, 2)` parse; their wrongness is the checker's).
 const ModuleReference = rule($ => [
-  ['require', '(', alt(String_, [not(String_), Expr, many(',', Expr)]), ')'],
-  [notReserved, Ident, many('.', notReserved, Ident)],
+  arm('external', field('requireKeyword', 'require'), '(', field('argument', alt(arm('string', field('string', String_)), arm('expression', not(String_), field('expr', Expr), many(',', field('exprRest', Expr))))), field('parenClose', ')')),
+  arm('entityName', notReserved, field('first', Ident), many('.', notReserved, field('rest', Ident))),
 ]);
 
 // A class declaration from its `class` keyword on, named or NAMELESS: tsc parses `class { … }` at
@@ -1014,8 +1028,8 @@ const ModuleReference = rule($ => [
 // mirroring the class-expression pair. Decl writes them once bare and once after a declaration's
 // prefix (below); gen-tm expands them to recover the `class Ident … { … }` shape for highlighting.
 const classDecls = [
-  ['class', ...bindingIdentifier, opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],
-  ['class', opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],
+  arm('namedClass', 'class', ...bindingName, opt(field('typeParameters', TypeParams)), heritageClauses, '{', many(field('member', ClassMember)), '}'),
+  arm('anonymousClass', 'class', opt(field('typeParameters', TypeParams)), heritageClauses, '{', many(field('member', ClassMember)), '}'),
 ];
 // The modifier words of a declaration's prefix, each one a modifier only where `modifierWord`
 // says so (`public @d class C {}`, `abstract @d class C {}` have no parse); the `declare`,
@@ -1063,7 +1077,7 @@ const Decl = rule($ => [
   // is a contextual-keyword block, not a namespace name). tsc accepts both.
   ['declare', 'module', String_, asi()],
   ['declare', 'global', '{', many(Stmt), '}'],
-  ['declare', alt($, Stmt)],
+  arm('declared', field('declareKeyword', 'declare'), field('declaration', alt(arm('decl', field('decl', $)), arm('statement', field('stmt', Stmt))))),
   // A declaration's prefix: decorators, then modifier words, parsed ONCE; the declaration it
   // prefixes is chosen after it (tsc's parseDeclaration: decorators, modifiers, then the keyword).
   // A second decorator run follows `export` (the export arms read it, `@dec export @e class C
@@ -1079,12 +1093,12 @@ const Decl = rule($ => [
   // one or more declarations and no trailing comma (tsc's parser takes `var;` and `var a,` and its
   // checker reports them: docs/CORRECTNESS.md). The branches part at
   // the token after the prefix, so the first that matches is the only one.
-  [alt([many1(DecoratorExpr), decoratedMods.run], declMods.run1), alt(
+  arm('prefixed', field('prefix', alt(arm('decorated', many1(field('decorator', DecoratorExpr)), decoratedMods.run), arm('modified', declMods.run1))), field('declaration', alt(
     ...classDecls,
-    [not('static'), $],
+    arm('other', not('static'), field('decl', $)),
     [alt('let', 'const', 'var'), Binding, many(',', Binding), asi()],
     [opt('await'), 'using', not(alt('[', '{')), Binding, many(',', Binding), asi()],
-  )],
+  ))),
   // A leading `async` before a declaration other than a function: tsc's parser accepts it (the
   // checker rejects `async class`). `async function` MUST take the async-function arm so its
   // params/body carry the [Await] context — otherwise this lenient prefix would catch the async
@@ -1095,35 +1109,35 @@ const Decl = rule($ => [
   [modifierWord(['async']), not('function'), $],
   ['namespace', ...bindingIdentifier, many('.', Ident), '{', many(Stmt), '}'],   // dotted name: `namespace A.B.C { … }`
   ['module', alt([...bindingIdentifier, many('.', Ident)], String_), '{', many(Stmt), '}'],   // `module A.B.C { … }` | `module "x" { … }`
-  ['export', 'as', 'namespace', ...bindingIdentifier, asi()],   // UMD NamespaceExportDeclaration — BEFORE `exportDeclaration`
+  arm('exportAsNamespace', field('exportKeyword', 'export'), 'as', 'namespace', ...bindingName, asi()),   // UMD NamespaceExportDeclaration — BEFORE `exportDeclaration`
   exportDeclaration($, Stmt, ['var', 'let', 'const', 'using', ['await', 'using']]),
   // decorators may also sit BETWEEN `export` and `default` (`export @dec default
   // class C {}` — tsc parses the soup in either spot; ordering is a checker error). There
   // `default` is a modifier word, so a declaration follows it (`export @d default x;` has no
   // parse), and the decorators are the second run, so no third one follows (`export @d default
   // @e class C {}` has no parse; `export default @e class C {}` is one run).
-  ['export', alt([many1(DecoratorExpr), modifierWord(['default'], { secondRun: true }), not(Decorator)], 'default'), alt(
+  arm('exportDefault', field('exportKeyword', 'export'), field('defaultWord', alt(arm('decorated', many1(field('decorator', DecoratorExpr)), field('defaultKeyword', modifierWord(['default'], { secondRun: true })), not(Decorator)), arm('plain', field('defaultKeyword', 'default')))), field('declaration', alt(
     ...tsFnArms([opt(...bindingName)], fnBodyOrAsi()),  // function
-    [many(DecoratorExpr), opt('abstract'), 'class', ...bindingIdentifier, opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],  // named class
-    [many(DecoratorExpr), opt('abstract'), 'class', opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],          // anonymous class
+    arm('namedClass', many(field('decorator', DecoratorExpr)), opt(field('abstractKeyword', 'abstract')), 'class', ...bindingName, opt(field('typeParameters', TypeParams)), heritageClauses, '{', many(field('member', ClassMember)), '}'),  // named class
+    arm('anonymousClass', many(field('decorator', DecoratorExpr)), opt(field('abstractKeyword', 'abstract')), 'class', opt(field('typeParameters', TypeParams)), heritageClauses, '{', many(field('member', ClassMember)), '}'),          // anonymous class
     ['interface', ...bindingIdentifier, opt(TypeParams), heritageClauses, '{', many(TypeMember), '}'],   // export default interface (interface is not an Expr)
     // decorators after `default` prefix any declaration, as at a statement's start (tsc reads
     // `export default @d function f() {}` as one modifier list, then the keyword)
-    [not(not(Decorator)), $],
-    [Expr, asi()],   // catch-all: export default <expr>
-  )],
-  ['export', opt('type'), '*', opt('as', alt(Ident, String_)), 'from', ...moduleSpecifier, asi()],   // export (type)? * (as ns)? from "m" — alias is a ModuleExportName
-  ['export', '{', sep(ExportSpecifier, ','), '}', opt('from', ...moduleSpecifier), asi()],
-  ['export', '=', Expr, asi()],
-  ['export', 'type', '{', sep(ExportSpecifier, ','), '}', opt('from', ...moduleSpecifier), asi()],
+    arm('decorated', not(not(Decorator)), field('decl', $)),
+    arm('expression', field('expr', Expr), asi()),   // catch-all: export default <expr>
+  ))),
+  arm('exportAll', field('exportKeyword', 'export'), opt(field('typeKeyword', 'type')), field('star', '*'), opt('as', field('exported', alt(Ident, String_))), 'from', ...moduleSpecifier, asi()),   // export (type)? * (as ns)? from "m" — alias is a ModuleExportName
+  arm('exportNamed', field('exportKeyword', 'export'), field('brace', '{'), sep(field('specifier', ExportSpecifier), ','), field('braceClose', '}'), opt('from', ...moduleSpecifier), asi()),
+  arm('exportEquals', field('exportKeyword', 'export'), '=', field('expr', Expr), asi()),
+  arm('exportNamedType', field('exportKeyword', 'export'), field('typeKeyword', 'type'), field('brace', '{'), sep(field('specifier', ExportSpecifier), ','), field('braceClose', '}'), opt('from', ...moduleSpecifier), asi()),
   ['const', 'enum', ...bindingIdentifier, '{', sep(EnumMember, ','), '}'],
-  ['import', alt(
-    [ImportClause, 'from', ...moduleSpecifier],   // import X from "m"  (also `import type from "m"` = default named `type`)
-    ['type', ImportClause, 'from', ...moduleSpecifier],   // import type X from "m"
-    ['type', ...bindingIdentifier, '=', ModuleReference],    // import type X = require(…) / = ns.Foo (type-only import-equals)
-    [...bindingIdentifier, '=', ModuleReference],            // import x = require(…) / = ns.Foo  (also `import type = …` where `type` is the binding name)
-    moduleSpecifier,                          // import "m"
-  ), asi()],
+  arm('importDeclaration', field('importKeyword', 'import'), field('form', alt(
+    arm('clause', field('clause', ImportClause), 'from', ...moduleSpecifier),   // import X from "m"  (also `import type from "m"` = default named `type`)
+    arm('typeClause', field('typeKeyword', 'type'), field('clause', ImportClause), 'from', ...moduleSpecifier),   // import type X from "m"
+    arm('typeEquals', field('typeKeyword', 'type'), ...bindingName, '=', field('reference', ModuleReference)),    // import type X = require(…) / = ns.Foo (type-only import-equals)
+    arm('equals', ...bindingName, '=', field('reference', ModuleReference)),            // import x = require(…) / = ns.Foo  (also `import type = …` where `type` is the binding name)
+    arm('bare', ...moduleSpecifier),                          // import "m"
+  )), asi()),
 ]);
 
 // ── Entry ──

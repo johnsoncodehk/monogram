@@ -5,7 +5,8 @@
 // as Monaco's lexer runs it (per line, rules tried in order anchored at the cursor, `include`
 // expanded, `cases` dispatched on the matched text, one action per capture group, `next` /
 // `switchTo` / `@pop` on a state stack that persists across lines, a zero-width match only with a
-// state change).
+// state change, `@rematch`, an embedded language from `nextEmbedded` up to its state's `@pop`
+// rule). Monaco's own tokenizer is not run: these rows are the repo's runner's reading.
 //
 // Sections:
 //   1. JSX / TSX: rows on the COMMITTED `javascriptreact.monarch.json` / `typescriptreact.monarch.json`,
@@ -13,6 +14,7 @@
 //      kinds (text, close tag, self-close, tag tokens) gets the Monarch token of its kind.
 //   2. DIALECTS: rows on the Monarch generated in memory for test/fixtures/elementdialect.ts and
 //      test/fixtures/textdialect.ts, mirroring tm-dialect's rows where Monarch can express them.
+//   3. MONACO-COMPILE: the static checks of Monaco's Monarch compiler on every Monarch grammar.
 // Every row states the behaviour WANTED; `xfail` marks a row the generator does not meet yet, with
 // its reason. The gate fails when a `pass` row fails AND when an `xfail` row passes.
 //   node test/monarch-dialect.ts           run, print failures and the counts
@@ -33,7 +35,15 @@ function tokenize(mon: MonarchLanguage, src: string): Tok[] {
   const stack: string[] = ['root'];
   const flags = mon.ignoreCase ? 'i' : '';
   const cache = new Map<string, RegExp>();
-  const re = (s: string) => { let r = cache.get(s); if (!r) { r = new RegExp(`^(?:${s})`, flags); cache.set(s, r); } return r; };
+  // a rule's regex as Monaco's compiler reads it: `@@` is a literal `@`, `@name` the language
+  // attribute `name` (a string), else the compile throws
+  const monacoRegex = (s: string) => s.replace(/@@|@(\w+)/g, (m, a?: string) => {
+    if (m === '@@') return '@';
+    const v = (mon as unknown as Record<string, unknown>)[a!];
+    if (typeof v !== 'string') throw new Error(`/${s}/: the language has no attribute @${a}`);
+    return v ? `(?:${v})` : '';
+  });
+  const re = (s: string) => { let r = cache.get(s); if (!r) { r = new RegExp(`^(?:${monacoRegex(s)})`, flags); cache.set(s, r); } return r; };
   const rulesOf = (state: string, seen = new Set<string>()): [string, MonarchAction, string?][] => {
     const rs = mon.tokenizer[state];
     if (!rs) throw new Error(`no state \`${state}\``);
@@ -47,9 +57,31 @@ function tokenize(mon: MonarchLanguage, src: string): Tok[] {
     }
     return flat;
   };
+  // a `cases` key as Monaco's compiler reads it: `@default`, a word (exact text), else a regex
+  // over the whole text
+  const caseMatches = (key: string, text: string) =>
+    key === '@default' || (/^\w*$/.test(key) ? key === text : new RegExp(`^(?:${key})$`, flags).test(text));
   const resolve = (a: MonarchAction, text: string): MonarchAction => {
-    if (typeof a === 'object' && !Array.isArray(a) && 'cases' in a) return resolve(a.cases[text] ?? a.cases['@default'] ?? '', text);
+    if (typeof a === 'object' && !Array.isArray(a) && 'cases' in a) {
+      const k = Object.keys(a.cases).find(k => caseMatches(k, text));
+      return resolve(k === undefined ? '' : a.cases[k], text);
+    }
     return a;
+  };
+  // An embedded language (`nextEmbedded`) as Monaco runs it: the text up to the first match, on
+  // the line, of a rule of the current state whose action has `nextEmbedded: '@pop'` is the
+  // embedded language's (one token `embedded.<language>` here); there the outer rules go on.
+  let embedded: string | null = null;
+  const popOffset = (state: string, rest: string): number => {
+    let best = -1, found = false;
+    for (const [reSrc, a] of rulesOf(state)) {
+      if (typeof a !== 'object' || Array.isArray(a) || (a as { nextEmbedded?: string }).nextEmbedded !== '@pop') continue;
+      found = true;
+      const at = rest.search(new RegExp(monacoRegex(reSrc), flags));
+      if (at >= 0 && (best < 0 || at < best)) best = at;
+    }
+    if (!found) throw new Error(`no rule containing nextEmbedded: "@pop" in tokenizer embedded state: ${state}`);
+    return best;
   };
   let base = 0;
   for (const line of src.split('\n')) {
@@ -58,11 +90,18 @@ function tokenize(mon: MonarchLanguage, src: string): Tok[] {
     while (pos < line.length) {
       if (++guard > 100000) throw new Error('Monarch runaway');
       const state = stack[stack.length - 1];
+      if (embedded !== null) {
+        const off = popOffset(state, line.slice(pos));
+        const end = off < 0 ? line.length : pos + off;
+        if (end > pos) out.push({ start: base + pos, text: line.slice(pos, end), token: `embedded.${embedded}` });
+        pos = end;
+        if (pos >= line.length) break;
+      }
       let matched = false;
       for (const [reSrc, action0, third] of rulesOf(state)) {
         const m = re(reSrc).exec(line.slice(pos));
         if (!m) continue;
-        const text = m[0];
+        let text = m[0];
         const action = resolve(action0, text);
         if (Array.isArray(action)) {
           if (m.length - 1 !== action.length) throw new Error(`rule /${reSrc}/: ${m.length - 1} groups, ${action.length} actions`);
@@ -76,6 +115,14 @@ function tokenize(mon: MonarchLanguage, src: string): Tok[] {
           }
         } else {
           const token = typeof action === 'string' ? action : (action as { token: string }).token;
+          const emb = typeof action === 'object' ? (action as { nextEmbedded?: string }).nextEmbedded : undefined;
+          if (emb === '@pop') embedded = null;
+          else if (emb !== undefined) {
+            if (embedded !== null) throw new Error('cannot enter embedded language from within an embedded language');
+            embedded = emb;
+          }
+          // `@rematch`: nothing consumed; the state change applies and the text is matched again
+          if (token === '@rematch') text = '';
           if (text) out.push({ start: base + pos, text, token });
           const next = (typeof action === 'object' && ((action as { next?: string }).next)) || third;
           const sw = typeof action === 'object' ? (action as { switchTo?: string }).switchTo : undefined;
@@ -220,6 +267,9 @@ for (const [name, file, g] of [['jsx', 'javascriptreact.monarch.json', jsx], ['t
   tokRow('code children: a string child is a string', 'pass', undefined, mon, src, '"kid"', 0, is('string'));
   tokRow('a nested element in code children', 'pass', undefined, mon, src, 'b/>', 0, is('tag'));
   tokRow('the close tag', 'pass', undefined, mon, src, 'my-card', 1, is('tag'));
+  const rsrc = 'component C() {\n  <a><style>.a { color: red; }</style><b/></a>\n}';
+  tokRow('a `<style>` body is embedded CSS (rawText, code children)', 'pass', undefined, mon, rsrc, 'color', 0, is('embedded.css'));
+  tokRow('after the raw element the children are code again', 'pass', undefined, mon, rsrc, 'b/>', 0, is('tag'));
 }
 {
   section = 'textdialect';
@@ -239,10 +289,223 @@ for (const [name, file, g] of [['jsx', 'javascriptreact.monarch.json', jsx], ['t
   tokRow('dynamic close tag', 'pass', undefined, mon, src, 'tag}>', 0, is('identifier'));
   // the region features of later landings (each its own step, docs/REGIONS.md "Owed")
   const lsrc = 'component Page() { <main>a /* note */ @if (x) { y } <style>.a { color: red; }</style></main> }';
-  tokRow('`/* note */` in text is a comment (textTokens)', 'xfail', 'text tokens are not in the Monarch children yet', mon, lsrc, 'note', 0, is('comment'));
-  tokRow('`@if` in children is a directive keyword', 'xfail', 'directives are not in the Monarch children yet', mon, lsrc, '@if', 0, is('keyword'));
-  tokRow('a `<style>` body is raw: its `{` opens no hole (rawText)', 'xfail', 'raw text (`nextEmbedded`) is not in the Monarch element layer yet', mon, lsrc, '{ color', 0, t => t !== 'delimiter.bracket');
+  tokRow('`/* note */` in text is a comment (textTokens)', 'pass', undefined, mon, lsrc, 'note', 0, is('comment'));
+  // text tokens (`textTokens`): tried before the text run; a run stops before one, `//` only
+  // right after a blank (its `after` class) inside a run, anywhere at a run's start
+  const tsrc = [
+    'component Page() {',
+    '  <main>a /* note */ b a//b x // tail',
+    // a line comment in text runs to the end of the line, over a close tag too
+    '    <p>// lead </p> still the comment',
+    '    </p><p>{q}// hole',
+    '    </p><p>/* c */// both',
+    '    </p>',
+    '    <p>see https://x.y and 1 <-// not a tag</p>',
+    '    <p>m /* one',
+    '      two */ after</p>',
+    '  </main>',
+    '}',
+  ].join('\n');
+  tokRow('a block comment in a text run', 'pass', undefined, mon, tsrc, 'note', 0, is('comment'));
+  tokRow('text after a block comment', 'pass', undefined, mon, tsrc, ' b', 0, is(''));
+  tokRow('`a//b` is text (`//` only after a blank)', 'pass', undefined, mon, tsrc, '//b', 0, is(''));
+  tokRow('`x // tail`: `//` after a blank is a line comment', 'pass', undefined, mon, tsrc, 'tail', 0, is('comment'));
+  tokRow('`//` at the start of the children is a line comment', 'pass', undefined, mon, tsrc, 'lead', 0, is('comment'));
+  tokRow('a line comment in text runs to the end of the line, over `</p>`', 'pass', undefined, mon, tsrc, 'still', 0, is('comment'));
+  tokRow('the close tag on the line after a line comment in text', 'pass', undefined, mon, tsrc, '</p>', 1, is('delimiter.tag'));
+  tokRow('`//` right after a hole is a line comment (a new run)', 'pass', undefined, mon, tsrc, 'hole', 0, is('comment'));
+  tokRow('`//` right after a block comment is a line comment', 'pass', undefined, mon, tsrc, 'both', 0, is('comment'));
+  tokRow('`https://x.y` is text', 'pass', undefined, mon, tsrc, '//x', 0, is(''));
+  tokRow('`<-//`: a `<` that opens no tag is text, and `//` with no blank before it too', 'pass', undefined, mon, tsrc, '// not', 0, is(''));
+  tokRow('a block comment over lines in text', 'pass', undefined, mon, tsrc, 'two', 0, is('comment'));
+  tokRow('text after a block comment over lines', 'pass', undefined, mon, tsrc, 'after', 0, is(''));
+  tokRow('an unterminated `/*` in text is text', 'xfail', 'a block comment is a pushed state: an unterminated `/*` runs to the next `*/` or the end of the file (the lexer finds no end, so it is text)', mon, 'component C() {\n  <p>a /* b</p>\n  <p>c</p>\n}', 'c</p>', 0, is(''));
+  // the interpreter's stream drops skipped tokens: a comment is a non-blank unit between two
+  // tokens (in this source every other unit, text included, is in a token)
+  rows.push({ section, id: 'the units the interpreter skips as comments are exactly the Monarch comments', status: 'pass', check: () => {
+    const lex = createParser(textDialect).tokenize(tsrc) as { type: string; text: string; offset: number }[];
+    const skipped = new Set<number>();
+    let at = 0;
+    for (const t of [...lex, { offset: tsrc.length, text: '' }]) {
+      for (let i = at; i < t.offset; i++) if (!/\s/.test(tsrc[i])) skipped.add(i);
+      at = Math.max(at, t.offset + t.text.length);
+    }
+    const commented = new Set<number>();
+    for (const x of tokenize(mon(), tsrc)) if (x.token === 'comment') for (let i = 0; i < x.text.length; i++) if (!/\s/.test(x.text[i])) commented.add(x.start + i);
+    const only = (a: Set<number>, b: Set<number>) => [...a].filter(i => !b.has(i));
+    const show = (xs: number[]) => xs.length ? JSON.stringify(xs.map(i => tsrc[i]).join('')) : '';
+    const missing = only(skipped, commented), extra = only(commented, skipped);
+    const bad = [missing.length ? `not comments in Monarch: ${show(missing)}` : '', extra.length ? `comments only in Monarch: ${show(extra)}` : ''].filter(Boolean);
+    return { ok: bad.length === 0 && skipped.size > 0, saw: bad.length ? bad.join('; ') : `${skipped.size} units` };
+  } });
+  tokRow('`@if` in children is a directive keyword', 'pass', undefined, mon, lsrc, '@if', 0, is('keyword'));
+  // directives (derived: grammar-analysis.ts directivesOf): an opener and its required literals,
+  // a head `( … )` that is code, a body that is children, continuations only after a body
+  const dsrc = [
+    'component Page(items) {',
+    '  <main>',
+    '    @if (items.length) { <b>yes</b> } @else { none }',
+    '    @for (x of items) { <li>{x}</li> } @empty { empty }',
+    '    @for await (y of q) { w }',
+    '    say @iffy (q) and @if q (r) {zz}',
+    '    a@if (k) { inner } tail',
+    '    @if ({a}.a) { deep }',
+    '    @if (b) { one }',
+    '    @else if (c) { two }',
+    '    @try { t } @catch (e) { c } @pending { p }',
+    '    @{ const v = 1; }',
+    '    <p>x @else { y }</p>',
+    '    @if (s) { s1 } @elsewhere',
+    '  </main>',
+    '}',
+  ].join('\n');
+  const kw = is('keyword');
+  tokRow('an opener `@if`', 'pass', undefined, mon, dsrc, '@if (items', 0, kw);
+  tokRow('a directive head is code', 'pass', undefined, mon, dsrc, 'items.length', 0, is('identifier'));
+  tokRow('an element in a directive body', 'pass', undefined, mon, dsrc, 'b>yes', 0, is('tag'));
+  tokRow('a continuation `@else` after a body', 'pass', undefined, mon, dsrc, '@else', 0, kw);
+  tokRow('a continuation body is children: `none` is text', 'pass', undefined, mon, dsrc, 'none', 0, is(''));
+  tokRow('`@for` with a head', 'pass', undefined, mon, dsrc, '@for', 0, kw);
+  tokRow('a hole in a directive body', 'pass', undefined, mon, dsrc, 'x}', 0, is('identifier'));
+  tokRow('the continuation `@empty`', 'pass', undefined, mon, dsrc, '@empty', 0, kw);
+  tokRow('the opener\'s required literal `await` (`@for await (`)', 'pass', undefined, mon, dsrc, 'await', 0, kw);
+  tokRow('`@iffy (` is text: the opener ends at a word boundary', 'pass', undefined, mon, dsrc, '@iffy', 0, is(''));
+  tokRow('`@if q` is text: `@if` needs its `(`', 'pass', undefined, mon, dsrc, '@if q', 0, is(''));
+  tokRow('a hole after a plain `( … )` in text is a hole', 'pass', undefined, mon, dsrc, 'zz', 0, is('identifier'));
+  tokRow('an opener inside a text run (`a@if (`)', 'pass', undefined, mon, dsrc, '@if (k', 0, kw);
+  tokRow('text after a directive in a run', 'pass', undefined, mon, dsrc, 'tail', 0, is(''));
+  tokRow('a `{` inside the head\'s parentheses is code, the body opens after the `)`', 'pass', undefined, mon, dsrc, 'deep', 0, is(''));
+  tokRow('a continuation on the line after its body', 'pass', undefined, mon, dsrc, '@else if', 0, kw);
+  tokRow('`if` after `@else` is a required literal', 'pass', undefined, mon, dsrc, 'if (c', 0, kw);
+  tokRow('`@try` / `@catch` / `@pending`', 'pass', undefined, mon, dsrc, '@pending', 0, kw);
+  tokRow('the `@catch` head is code', 'pass', undefined, mon, dsrc, 'e)', 0, is('identifier'));
+  tokRow('a code block `@{ … }` is code', 'pass', undefined, mon, dsrc, 'const v', 0, kw);
+  tokRow('`@else` not after a body is text', 'pass', undefined, mon, dsrc, '@else { y', 0, is(''));
+  tokRow('`@elsewhere` after a body is text (a continuation ends at a word boundary)', 'pass', undefined, mon, dsrc, '@elsewhere', 0, is(''));
+  tokRow('the close tag after the directives', 'pass', undefined, mon, dsrc, 'main>', 1, is('tag'));
+  rows.push({ section, id: 'an opener `@if` is written `@@if` in its regex (Monaco reads `@name` as an attribute)', status: 'pass', check: () => {
+    const all = Object.values(mon().tokenizer).flat().filter(Array.isArray).map(r => r[0] as string);
+    const bare = all.filter(x => /(?<!@)@(?!@)\w/.test(x.replace(/@@/g, '')));
+    const ok = bare.length === 0 && all.some(x => x.startsWith('@@if'));
+    return { ok, saw: ok ? 'escaped' : `unescaped: ${bare.slice(0, 3).join(' | ')}` };
+  } });
+  tokRow('an opener and its required literal on two lines', 'xfail', 'the opener test is a lookahead, which sees one line', mon, 'component C() {\n  <p>@if\n  (x) { y }</p>\n}', '@if', 0, kw);
+  rows.push({ section, id: 'the interpreter\'s directive keywords (`AtWord`) are exactly the Monarch `@` keywords', status: 'pass', check: () => {
+    const lex = createParser(textDialect).tokenize(dsrc) as { type: string; text: string; offset: number }[];
+    const want = lex.filter(t => t.text.startsWith('@')).map(t => `${t.offset}:${t.text}`);
+    const saw = tokenize(mon(), dsrc).filter(t => t.token === 'keyword' && t.text.startsWith('@')).map(t => `${t.start}:${t.text}`);
+    const ok = JSON.stringify(want) === JSON.stringify(saw);
+    return { ok, saw: ok ? `${want.length} keywords` : `lexer ${want.join(' ')} | Monarch ${saw.join(' ')}` };
+  } });
+  tokRow('a `<style>` body is raw: its `{` opens no hole (rawText)', 'pass', undefined, mon, lsrc, '{ color', 0, t => t !== 'delimiter.bracket');
+  // raw text (`rawText`): the body is the declared embed's language (`nextEmbedded`), up to the
+  // first `</` + the tag name; `unlessBodyStarts` makes it children, over line breaks too
+  const rsrc = [
+    'component Page() {',
+    '  <main>',
+    '    <style>.a { color: red; }</style>',
+    '    <style>{css}</style>',
+    '    <style>',
+    '      {late}</style>',
+    '    <style>',
+    '      .b { x: 1 }',
+    '    </style>',
+    '    <SCRIPT>if (a<b) { go() }</SCRIPT>',
+    '    <style/> tail <style>a</STYLE>b</style>',
+    '    <p>after</p>',
+    '  </main>',
+    '}',
+  ].join('\n');
+  const emb = (lang: string) => is(`embedded.${lang}`);
+  tokRow('a `<style>` body is embedded CSS', 'pass', undefined, mon, rsrc, 'color', 0, emb('css'));
+  tokRow('the `</style>` after a raw body is a close tag', 'pass', undefined, mon, rsrc, 'style', 1, is('tag'));
+  tokRow('`<style>{css}`: the body starts with `{`, so it is a hole (unlessBodyStarts)', 'pass', undefined, mon, rsrc, 'css}', 0, is('identifier'));
+  tokRow('unlessBodyStarts over a line break: `<style>`⏎`{late}` is a hole', 'pass', undefined, mon, rsrc, 'late', 0, is('identifier'));
+  tokRow('a raw body on the lines after its open tag is embedded CSS', 'pass', undefined, mon, rsrc, '.b', 0, emb('css'));
+  tokRow('the close tag on its own line after a multi-line raw body', 'pass', undefined, mon, rsrc, 'style', 7, is('tag'));
+  tokRow('`<SCRIPT>` (any case: ignoreCase) body is embedded JS; its `<b` opens no element', 'pass', undefined, mon, rsrc, 'a<b', 0, emb('js'));
+  tokRow('the `</SCRIPT>` close tag is a tag', 'pass', undefined, mon, rsrc, 'SCRIPT', 1, is('tag'));
+  tokRow('a self-closing `<style/>` has no raw body: text after it', 'pass', undefined, mon, rsrc, 'tail', 0, is(''));
+  tokRow('a raw body ends only at `</style` (exact case: `</STYLE>` is body)', 'pass', undefined, mon, rsrc, 'STYLE>b', 0, emb('css'));
+  tokRow('children after the raw elements', 'pass', undefined, mon, rsrc, 'after', 0, is(''));
+  // a declaration without an embed: the body is the raw token's own scope
+  {
+    let m2: MonarchLanguage | null = null;
+    const el = textDialect.elements!;
+    const plain = () => (m2 ??= generateMonarch({ ...textDialect, elements: { ...el, rawText: [{ tags: ['style'], token: 'StyleBody' }, ...el.rawText!.slice(1)] } } as CstGrammar));
+    // the raw token's Monarch token, as the generator maps its scope (`meta.embedded.block.css`)
+    const bodyTok = () => tokenAt(plain(), rsrc, '.a', 0).token;
+    tokRow('without an embed a raw body is one token of the raw token\'s scope; its `{` opens no hole', 'pass', undefined, plain, rsrc, '{ color', 0, t => t === bodyTok() && !t.startsWith('embedded.') && t !== 'delimiter.bracket');
+    tokRow('without an embed the close tag after the raw body is a tag', 'pass', undefined, plain, rsrc, 'style', 1, is('tag'));
+  }
+  rows.push({ section, id: 'every raw-text token of the interpreter\'s stream is embedded in Monarch', status: 'pass', check: () => {
+    const lex = createParser(textDialect).tokenize(rsrc) as { type: string; text: string; offset: number }[];
+    const mt = tokenize(mon(), rsrc);
+    const bad: string[] = [];
+    let n = 0;
+    for (const t of lex) {
+      if (t.type !== 'StyleBody' && t.type !== 'ScriptBody') continue;
+      for (let k = 0; k < t.text.length; k++) {
+        if (/\s/.test(t.text[k])) continue;
+        n++;
+        const at = t.offset + k;
+        const m = mt.find(x => x.start <= at && at < x.start + x.text.length);
+        if (!m || !m.token.startsWith('embedded.')) { bad.push(`${t.type} ${JSON.stringify(t.text)} at ${k} -> ${m ? m.token || "''" : 'none'}`); break; }
+      }
+    }
+    const raw = mt.filter(x => x.token.startsWith('embedded.')).map(x => x.text).join('');
+    const want = lex.filter(t => t.type === 'StyleBody' || t.type === 'ScriptBody').map(t => t.text.replace(/\s/g, '')).join('');
+    if (raw.replace(/\s/g, '') !== want) bad.push(`Monarch embeds ${JSON.stringify(raw)}, the lexer's raw tokens are ${JSON.stringify(want)}`);
+    return { ok: bad.length === 0 && n > 0, saw: bad.length ? bad.join('; ') : `${n} units` };
+  } });
 }
+
+// ── 3. Monaco's compiler: the static checks its Monarch compiler (`monarchCompile.ts`) makes,
+// re-stated (Monaco is not a dependency), on every committed Monarch grammar and both dialects:
+// a regex's `@name` is replaced by the language attribute `name` (a string), else the compile
+// throws (`@@` is a literal `@`); `next` and `include` name a defined state (or `@pop`, `@push`,
+// `@popall`); a group action array has one action per capture group; every regex compiles with
+// the language's flags.
+function monacoCompileProblems(lang: MonarchLanguage): string[] {
+  const states = lang.tokenizer;
+  const attrs = lang as unknown as Record<string, unknown>;
+  const bad: string[] = [];
+  const exists = (s: string) => { let x: string | null = s.replace(/^@/, ''); while (x) { if (states[x]) return true; const i = x.lastIndexOf('.'); x = i < 0 ? null : x.slice(0, i); } return false; };
+  const expand = (str: string) => {
+    str = str.replace(/@@/g, '\x01');
+    for (let n = 0, had = true; had && n < 5; n++) {
+      had = false;
+      str = str.replace(/@(\w+)/g, (_s, a: string) => { had = true; const v = attrs[a]; if (typeof v !== 'string') { bad.push(`/${str}/ references the attribute @${a}, which is ${v === undefined ? 'not defined' : `a ${typeof v}`}`); return ''; } return v ? `(?:${v})` : ''; });
+    }
+    return str.replace(/\x01/g, '@');
+  };
+  const checkAction = (a: unknown, where: string): void => {
+    if (typeof a === 'string' || a == null) return;
+    if (Array.isArray(a)) { a.forEach(x => checkAction(x, where)); return; }
+    const o = a as Record<string, unknown>;
+    if (o.cases) { for (const v of Object.values(o.cases as object)) checkAction(v, where); return; }
+    const next = o.next as string | undefined;
+    if (next && !/^@(pop|push|popall)$/.test(next) && !exists(next)) bad.push(`${where}: next ${next} is not a state`);
+  };
+  for (const [st, rules] of Object.entries(states)) for (const r of rules) {
+    if (!Array.isArray(r)) { const inc = (r as { include: string }).include; if (!exists(inc)) bad.push(`${st}: include ${inc} is not a state`); continue; }
+    const [reSrc, action, next] = r as [string, unknown, string?];
+    let rx: RegExp;
+    try { rx = new RegExp(`^(?:${expand(reSrc)})`, lang.ignoreCase ? 'i' : ''); } catch (e) { bad.push(`${st}: /${reSrc}/ does not compile: ${(e as Error).message}`); continue; }
+    if (Array.isArray(action)) {
+      const groups = new RegExp(`${rx.source}|`).exec('')!.length - 1;
+      if (groups !== action.length) bad.push(`${st}: /${reSrc}/ has ${groups} groups, ${action.length} actions`);
+    }
+    checkAction(action, `${st} /${reSrc}/`);
+    if (next) checkAction({ next }, `${st} /${reSrc}/`);
+  }
+  return bad;
+}
+section = 'monaco-compile';
+for (const file of ['javascriptreact.monarch.json', 'typescriptreact.monarch.json', 'javascript.monarch.json', 'typescript.monarch.json', 'html.monarch.json', 'yaml.monarch.json'])
+  rows.push({ section, id: `${file} passes Monaco's compile checks`, status: 'pass', check: () => { const b = monacoCompileProblems(JSON.parse(readFileSync(file, 'utf8'))); return { ok: !b.length, saw: b.join('; ') || 'clean' }; } });
+for (const [name, g] of [['elementdialect', elementDialect], ['textdialect', textDialect]] as const)
+  rows.push({ section, id: `the ${name} Monarch passes Monaco's compile checks`, status: 'pass', check: () => { const b = monacoCompileProblems(generateMonarch(g)); return { ok: !b.length, saw: b.join('; ') || 'clean' }; } });
 
 const all = process.argv.includes('--all');
 let pass = 0, xfail = 0, regress = 0, flipped = 0;
