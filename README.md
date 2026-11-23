@@ -187,6 +187,9 @@ cannot express: [docs/HIGHLIGHTER-EVIDENCE.md](docs/HIGHLIGHTER-EVIDENCE.md).
   executes 12% fewer instructions on `checker.ts`: fewer on nine of the ten counted inputs, and
   0.5% more on `typescript.d.ts`. Time ratios move with the CPU model (the day before, an Intel
   runner gave 14% to 32% less for a nearby commit); instruction counts do not.
+- On element code it is the other way round: on TSX and JSX conformance code that both parsers
+  accept, monogram executes 22% to 39% more instructions than oxc (`908ed1e`;
+  [docs/MEASUREMENT.md](docs/MEASUREMENT.md#the-element-inputs-tsx-and-jsx)).
 - Three days earlier, before the lexer and decision work of 2026-11-22, the same comparison had
   oxc ahead on most inputs, with monogram at 1.42 times oxc's instructions on `checker.ts`.
 - Every pull request that touches the parser is measured against its merge base on every

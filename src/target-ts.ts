@@ -3128,6 +3128,12 @@ const tsWrap = (r: R, min: number): string => (r.prec < min ? `(${r.c})` : r.c);
 const tsBlock = (lines: string[]): string[] => lines.map((l) => TS_IND + l);
 
 // Shared-algorithm lowering: untyped numbers, GC-managed arrays (capacity is never reserved).
+// A construct plan's slot reads (shape-plan.ts EXTERNS) are this target's slot arrays: printed in
+// place, as the CST builder reads them (the slot layout, _hs / _sp / _tg, is this printer's).
+const SHAPE_SLOT_TS: Record<string, (a: string[]) => string> = {
+  slotVal: ([i]) => `_hs[${i}]`, slotTag: ([i]) => `_tg[${i}]!`, slotTop: () => '_n',
+  slotOff: ([i]) => `_sp[(${i}) * _SW]!`, slotEnd: ([i]) => `_sp[(${i}) * _SW + 1]!`, srcText: ([a, b]) => `_src.slice(${a}, ${b})`,
+};
 const tsLowering: Lowering = {
   units: UNITS,
   ident: (n) => n,
@@ -3140,8 +3146,10 @@ const tsLowering: Lowering = {
     vConst: (cx, val) => cx.atom(val === null ? 'null' : JSON.stringify(val), 'val_any', 'val_any'),
     vAbsent: (cx) => cx.atom('undefined', 'val_any', 'val_any'),
     vText: (cx, r) => cx.atom(r.c, 'val_any', 'val_any'),
-    mkNode: (cx, kind, fields, start, end) => cx.atom(`_mkNode(${kind.c}, ${start.c}, ${end.c}, ${J(fields.map(([n]) => n))}, [${fields.map(([, r]) => r.c).join(', ')}])`, 'val_any', 'val_any'),
-    mkRecord: (cx, fields) => cx.atom(`_mkRecord(${J(fields.map(([n]) => n))}, [${fields.map(([, r]) => r.c).join(', ')}])`, 'val_any', 'val_any'),
+    // One object literal, its fields in the term's order, an absent one undefined (so every node
+    // of one arm has one hidden class; JSON leaves an undefined field out, as the evaluator does).
+    mkNode: (cx, kind, fields, start, end) => cx.atom(`{ kind: ${kind.c}, start: ${start.c}, end: ${end.c}, fields: { ${fields.map(([n, r]) => `${J(n)}: ${r.c}`).join(', ')} } }`, 'val_any', 'val_any'),
+    mkRecord: (cx, fields) => cx.atom(`{ record: { ${fields.map(([n, r]) => `${J(n)}: ${r.c}`).join(', ')} } }`, 'val_any', 'val_any'),
     vList: (cx, l) => cx.atom(l.c, 'val_any', 'val_any'),
     vItems: (cx, r) => cx.atom(`(${r.c} as ShapeValue[])`, 'vals_any', 'vals_any'),
     vIs: (_cx, r, val) => ({ c: `${tsWrap(r, 4)} === ${val === null ? 'null' : JSON.stringify(val)}`, prec: 3 }),
@@ -3182,7 +3190,7 @@ function ${findAnyName(stops)}(s: string, i: number): number {
         (r.prec < p || (right && r.prec === p) || ((op === 'shr' || op === 'shl') && r.prec < ATOM) || (COMPARISON.has(op) && r.prec >= 3 && r.prec <= 4) ? `(${r.c})` : r.c);
       return { c: `${side(a, false)} ${sp} ${side(b, true)}`, prec: p };
     },
-    call: (name, args) => `${name}(${args.join(', ')})`,
+    call: (name, args) => (SHAPE && name in SHAPE_SLOT_TS ? SHAPE_SLOT_TS[name]!(args) : `${name}(${args.join(', ')})`),
     len: (cx, l) => cx.atom(`${tsWrap(l, ATOM)}.length`, 'int', 'number'),
     code: (cx, s, i) => cx.atom(`${tsWrap(s, ATOM)}.charCodeAt(${i.c})`, 'int', 'number'),
     hasAt: (cx, s, i, lit) => cx.atom(`${tsWrap(s, ATOM)}.startsWith(${J(lit)}, ${i.c})`, 'bool', 'bool'),
@@ -3696,7 +3704,8 @@ export function emitTs(grammar: CstGrammar, opts?: { shape?: ShapeSpec }): strin
 // out, or one the plan cannot build yet) fails only where it is read (`_need`).
 
 // _keep's copy of a slot's variant and synthesized attributes.
-const shapeKeepTs = (plan: ShapePlan): string => ` _h1[b] = _h1[c];${plan.syn.map((_, k) => ` _sy[${k}]![b] = _sy[${k}]![c];`).join('')}`;
+const synKept = (plan: ShapePlan): number[] => plan.syn.flatMap((a, k) => (a.slotRead ? [k] : []));
+const shapeKeepTs = (plan: ShapePlan): string => ` _h1[b] = _h1[c];${synKept(plan).map((k) => ` _sy[${k}]![b] = _sy[${k}]![c];`).join('')}`;
 function shapeRuntimeTs(plan: ShapePlan): string {
   return `export type ShapeNode = { kind: string; start: number; end: number; fields: Record<string, ShapeValue> };
 export type ShapeValue = ShapeNode | ShapeValue[] | string | number | boolean | null | { record: Record<string, ShapeValue> };
@@ -3713,8 +3722,9 @@ function _missing(where: string, why: string): any { return new _Missing(where, 
 function _need(v: any): any { if (v instanceof _Missing) throw v; return v; }
 // An arm's value (a variant arm's second variant in _alt), after its synthesized attributes (_ys).
 function _construct(id: number, b: number, off: number, end: number): any {
-  let v: any;${plan.syn.length ? `
-  _synAll(id, b, off, end);` : ''}
+  let v: any;${plan.syn.some((a) => a.fns.some((f) => f !== null)) ? `
+  const sf = _SYF[id]!;
+  if (sf !== null) sf(b, off, end);` : ''}
   _alt = undefined;
   try { v = _C[id]!(b, off, end); } catch (e) { if (!(e instanceof _Missing)) throw e; v = e; }
   if (v instanceof _Missing) _alt = v;
@@ -3743,33 +3753,27 @@ const _VB: number[] = ${J(plan.variantBit)};
 const _VD: boolean[] = ${J(plan.variantDefault)};
 function altVal(x: any): void { _alt = x; }
 function slotValV(i: number, m: number): any { const j = _VB[_ar[i]!]!; return j >= 0 && ((m >> j) & 1) !== 0 ? _h1[i] : _hs[i]; }
-// Synthesized attributes: per arm the function (or the default), computed before its value (_ys,
-// read as selfSyn) and kept per slot (_sy).
-${plan.syn.map((a, k) => `const _SY${k}: (((b: number, off: number, end: number) => any) | null)[] = [${a.fns.map((f) => f ?? 'null').join(', ')}];`).join('\n')}
+// Synthesized attributes: computed only by an arm with an equation, before its value (_SYF: per
+// arm the function setting its own, _ys, read as selfSyn; an arm without one reads its default as a
+// constant), and kept per slot (_sy) only for an attribute some arm reads off a child (slotSyn: the
+// default when the child's arm has no equation, _SYE).
 const _SYD: any[] = ${J(plan.syn.map((a) => a.dflt ?? null))};
 const _ys: any[] = _SYD.slice();
 const _sy: any[][] = _SYD.map(() => []);
-function _synAll(id: number, b: number, off: number, end: number): void {
-${plan.syn.map((_, k) => `  { const f = _SY${k}[id]; if (f === null) _ys[${k}] = _SYD[${k}]; else { try { _ys[${k}] = f(b, off, end); } catch (e) { if (!(e instanceof _Missing)) throw e; _ys[${k}] = e; } } }`).join('\n')}
+const _SYE: boolean[][] = ${J(plan.syn.map((a) => a.fns.map((f) => f !== null)))};
+function _syn1(f: (b: number, off: number, end: number) => any, b: number, off: number, end: number): any {
+  try { return f(b, off, end); } catch (e) { if (!(e instanceof _Missing)) throw e; return e; }
 }
+${plan.arms.filter((x) => plan.syn.some((a) => a.fns[x.id] !== null)).map((x) => `function _syA${x.id}(b: number, off: number, end: number): void {${plan.syn.map((a, k) => (a.fns[x.id] ? ` _ys[${k}] = _syn1(${a.fns[x.id]}, b, off, end);` : '')).join('')} }`).join('\n')}
+const _SYF: (((b: number, off: number, end: number) => void) | null)[] = [${plan.arms.map((x) => (plan.syn.some((a) => a.fns[x.id] !== null) ? `_syA${x.id}` : 'null')).join(', ')}];
 function selfSyn(k: number): any { return _need(_ys[k]); }
-function slotSyn(k: number, i: number): any { return _need(_sy[k]![i]); }
+function slotSyn(k: number, i: number): any { return _SYE[k]![_ar[i]!] ? _need(_sy[k]![i]) : _SYD[k]; }
 function recGet(x: any, f: string): any { return x.record[f]; }
 function vDropLast(x: any, c: boolean): any { return c && x.length > 0 ? x.slice(0, -1) : x; }
 // A test seam: every value the construct plans build (losing candidates' too), with its engine
 // arm (shapeArms[id]) and span; a missing one as its ShapeMissing.
 let _built: ((id: number, off: number, end: number, v: any) => void) | null = null;
 export function observeBuilt(f: ((id: number, off: number, end: number, v: any) => void) | null): void { _built = f; }
-function _mkNode(kind: any, start: number, end: number, names: string[], vals: any[]): ShapeNode {
-  const fields: Record<string, ShapeValue> = {};
-  for (let i = 0; i < names.length; i++) if (vals[i] !== undefined) fields[names[i]!] = vals[i];
-  return { kind, start, end, fields };
-}
-function _mkRecord(names: string[], vals: any[]): { record: Record<string, ShapeValue> } {
-  const record: Record<string, ShapeValue> = {};
-  for (let i = 0; i < names.length; i++) if (vals[i] !== undefined) record[names[i]!] = vals[i];
-  return { record };
-}
 let _tg: number[] = [];
 let _ar: number[] = [];
 // The slot the step just left gets tag t.
@@ -3780,7 +3784,7 @@ function _iter(mt: number, f: () => boolean): boolean {
   const c = _n;
   if (!f()) return false;
   _slot(null, 0, 0, 0, 0, 0, 0);
-  for (let i = _n - 1; i > c; i--) { _hs[i] = _hs[i - 1]; _tg[i] = _tg[i - 1]; _ar[i] = _ar[i - 1]; _h1[i] = _h1[i - 1];${plan.syn.map((_, k) => ` _sy[${k}]![i] = _sy[${k}]![i - 1];`).join('')} }
+  for (let i = _n - 1; i > c; i--) { _hs[i] = _hs[i - 1]; _tg[i] = _tg[i - 1]; _ar[i] = _ar[i - 1]; _h1[i] = _h1[i - 1];${synKept(plan).map((k) => ` _sy[${k}]![i] = _sy[${k}]![i - 1];`).join('')} }
   _sp.copyWithin((c + 1) * _SW, c * _SW, (_n - 1) * _SW);
   const s = c * _SW;
   if (_n - 1 > c) { _sp[s + 1] = _sp[s]!; } else { _sp[s] = 0; _sp[s + 1] = 0; _sp[s + 2] = pos; _sp[s + 3] = 0; _sp[s + 4] = 0; }
@@ -3799,7 +3803,7 @@ function finS(id: number, b: number, save: number): void {
   const v = _construct(id, b, off, end);
   _n = b;
   _slot(v, 1, off, end, save, ho, he);
-  _ar[b] = id; _h1[b] = _alt;${plan.syn.map((_, k) => ` _sy[${k}]![b] = _ys[${k}];`).join('')}
+  _ar[b] = id; _h1[b] = _alt;${synKept(plan).map((k) => ` if (_SYE[${k}]![id]) _sy[${k}]![b] = _ys[${k}];`).join('')}
 }
 function finPS(id: number, b: number): void {
   let off = 0, end = 0, ts = pos, ho = 0, he = 0;
@@ -3807,7 +3811,7 @@ function finPS(id: number, b: number): void {
   const v = _construct(id, b, off, end);
   _n = b;
   _slot(v, 1, off, end, ts, ho, he);
-  _ar[b] = id; _h1[b] = _alt;${plan.syn.map((_, k) => ` _sy[${k}]![b] = _ys[${k}];`).join('')}
+  _ar[b] = id; _h1[b] = _alt;${synKept(plan).map((k) => ` if (_SYE[${k}]![id]) _sy[${k}]![b] = _ys[${k}];`).join('')}
 }
 // The engine methods of the construct plans (src/shape-plan.ts EXTERNS).
 function slotTag(i: number): number { return _tg[i]!; }
@@ -3818,6 +3822,7 @@ function slotArmName(i: number): any { return _AN[_ar[i]!]; }
 function slotTop(): number { return _n; }
 function slotFind(lo: number, hi: number, t0: number, t1: number): number { for (let i = lo; i < hi; i++) { const t = _tg[i]!; if (t >= t0 && t <= t1) return i; } return -1; }
 function slotFindLast(lo: number, hi: number, t0: number, t1: number): number { for (let i = hi - 1; i >= lo; i--) { const t = _tg[i]!; if (t >= t0 && t <= t1) return i; } return -1; }
+function slotAt(i: number, lo: number, hi: number, t0: number, t1: number): number { if (i < lo || i >= hi) return -1; const t = _tg[i]!; return t >= t0 && t <= t1 ? i : -1; }
 function namedEnd(lo: number, hi: number): number { for (let i = hi - 1; i >= lo; i--) { const t = _tg[i]!; if (t >= 0 && (t & 1) === 0) return _sp[i * _SW + 1]!; } return -1; }
 function srcText(a: number, b: number): string { return _src.slice(a, b); }
 const _isNode = (x: any): x is ShapeNode => x !== null && typeof x === 'object' && !Array.isArray(x) && 'kind' in x;
@@ -3827,7 +3832,7 @@ function valEnd(x: any, dflt: number): number { return _isNode(x) ? x.end : Arra
 type CookFn = string; type Scalar = string | number | boolean | null;
 ${cookTable.toString()}
 const _COOK = cookTable();
-${plan.cooks.map((c) => `function cook_${c}(s: string): any { return _COOK[${J(c)}]!(s); }`).join('\n')}
+${plan.cooks.map((c) => `const cook_${c} = _COOK[${J(c)}]!;`).join('\n')}
 // The builder under the construct plans: every leaf is a slot (its span is what a plan reads); an
 // interpolated template's node is the one the engine still builds with it (S1: not built).
 const _shapeBuilder: Builder<any> = { leaf: () => 0, node: (rule) => _missing(rule, 'unsupported') };

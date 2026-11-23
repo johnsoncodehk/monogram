@@ -1,0 +1,132 @@
+name: measure inner loop
+
+# What the inner loop costs and what it catches, measured on a runner (never on the shared 2-core
+# dev box). Runs on a push to a `measure/inner-loop/**` branch (a workflow that is not on master
+# cannot be dispatched) and on dispatch.
+# - timing: five sample commits (docs, test-only, Rust printer, generator, grammar) x
+#   `check.ts --changed` / `--quick` x cold (the build cache and Go's cache empty) / warm (the
+#   same command again): gates run and seconds, in the job summary.
+# - catch: every real failure of a land/** branch (docs/TESTING.md, "The quick tier: its catch
+#   rate"): the failing head's change put back onto this tree, then `--quick` and `--changed`
+#   against it; caught / missed / not reproduced per failure, in the job summary.
+# - go-unused: a Go variable declared and not used in code only a real grammar's parser reaches,
+#   then `--quick` (it must fail, in the Go compile of the javascript grammar's parser).
+on:
+  push:
+    branches: ['measure/inner-loop/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TS_REPO_SHA: '6fbce89821d93a5b761581d9ac540455f38e9acb'
+
+jobs:
+  timing:
+    # a branch named measure/inner-loop/catch-* runs the catch job only, go-unused-* the go-unused job only
+    if: ${{ !contains(github.ref_name, 'catch') && !contains(github.ref_name, 'go-unused') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.4'
+          cache: false
+      - run: npm ci
+      - run: npm run gen
+      - name: Clone the pinned corpora
+        run: test/inner-loop-measure.sh corpora
+      - name: Five commits x (--changed, --quick) x (cold, warm)
+        run: test/inner-loop-measure.sh timing | tee /tmp/timing.log
+      - name: Two cold runs at once into one empty build / emission cache
+        run: test/inner-loop-measure.sh concurrent | tee /tmp/concurrent.log
+      - if: always()
+        name: Job summary
+        run: |
+          { echo '## Two cold runs at once into one empty cache'; echo; grep '^|' /tmp/concurrent.log || true; echo; echo '## Inner loop: gates run and seconds (runner: '"$(nproc)"' cores)'; echo; grep '^|' /tmp/timing.log || true; } >> "$GITHUB_STEP_SUMMARY"
+
+  go-unused:
+    # the quick tier against a Go printer mistake only a real grammar's parser reaches
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.4'
+          cache: false
+      - run: npm ci
+      - run: npm run gen
+      - name: A declared-and-not-used Go variable, then --quick
+        run: test/inner-loop-measure.sh go-unused | tee /tmp/go-unused.log
+      - if: always()
+        name: Job summary
+        run: grep '^|' /tmp/go-unused.log >> "$GITHUB_STEP_SUMMARY" || true
+
+  catch:
+    if: ${{ !contains(github.ref_name, 'go-unused') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        # <branch>:<failing head>: the first head of each branch whose CI failed for a real reason
+        # (failures-classified in the test-infrastructure lane's notes).
+        failure:
+          - lexer-laend:7b6452f3d7
+          - shared-runtime-go-leafdrop:c1067f7998
+          - regions-spec-lex-error:c80b35b6e8
+          - decisions-commit:0b46082f04
+          - shape-newtarget:947d1f23ba
+          - lexer-elements:1814ecd7e5
+          - runtime-lex-error-return:f807bcc493
+          - shape-class-heritage:6dcbdeeb91
+          - lexer-small-items:1429698e09
+          - lexer-relex-units:bd7616b566
+          - recovery-reject-diagnostics:2f4a1dccaf
+          - shape-ident-reserved:3adedb538b
+          - lexer-text-tokens:9b1814de7c
+          - lexer-relex-anchor:a5b961af3f
+          - recovery-interpreter:64984cce4e
+          - sound-cap-propagation:e61e8b2a53
+          - lexer-ident-ext:9f50f62c2a
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.4'
+          cache: false
+      - run: npm ci
+      - name: Clone the pinned corpora
+        run: test/inner-loop-measure.sh corpora
+      - name: Put the failure back, run --quick and --changed
+        run: test/inner-loop-measure.sh catch "${{ matrix.failure }}" | tee /tmp/catch.log
+      - if: always()
+        name: Job summary
+        run: grep '^|' /tmp/catch.log >> "$GITHUB_STEP_SUMMARY" || true
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: catch-${{ strategy.job-index }}
+          path: /tmp/catch-out
+          retention-days: 14
