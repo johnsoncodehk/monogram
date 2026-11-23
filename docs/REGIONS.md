@@ -466,6 +466,19 @@ Differences from the interpreter, none visible in the token stream:
 - Root region: today's markup TextMate output is that case; nothing changes unless `html.ts`
   moves.
 
+**TextMate: built** (`src/gen-tm.ts`, from `regionView` / `operandEntry` in `src/region-view.ts`
+and `directivesOf`): every item above except the root region, gated by `test/tm-dialect.ts` on
+the two dialect fixtures (every row passes; a dialect needs only its grammar file). What a
+TextMate grammar cannot express, each a limitation stated where the pattern is built:
+
+| limitation | witness | TextMate reads | the lexer reads |
+|---|---|---|---|
+| a member keyword before a tag (the lookbehind sees `new`, not that a `.` precedes it) | `x.new <b>` | an element | a comparison |
+| a dynamic close tag's hole is matched one brace level deep (an `end` is one regex) | `</{a[{b}]}>` | not a close tag | a close tag |
+| a directive body must start on the head's line (a `begin` is one line) | `@if (x)`⏎`{ … }` | the head, then text | the body |
+| a continuation keyword is matched anywhere an opener is (no "after a body" state) | `<p>x @else { y }</p>` | a keyword | text |
+| an unterminated `/*` in text runs to the end of the file | `<p>a /* b</p>` | a comment to EOF | text |
+
 ## Consumers (the evidence the model was built from)
 
 | consumer | where it starts | children / body | text versus code | raw text |
@@ -487,5 +500,5 @@ Directive openers and continuations are derived from the grammar ("Directives").
   refused (the signature's rewind does not restore the raw-text tag records).
 - The root region: the build order above.
 - Re-measuring the five undecidable JSX shapes on a larger TSX corpus.
-- The tm-dialect expected-fail rows are TextMate-side (children repository, dynamic tags, the
-  `<style>` embed, React vocabulary); they move with the generators.
+- Monarch: token-stream Monarch has no element layer yet (one Monarch state per lexer state,
+  from the same `region-view.ts`).
