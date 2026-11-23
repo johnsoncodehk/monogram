@@ -36,7 +36,6 @@ const WIDE_WRITE = process.argv.includes('--write');
 const WIDE_CAUSES: Record<string, string> = {
   'mixfix-rebind': 'the interpreter\'s mixfix operand re-bind (gen-parser.ts matchMixfixLed: a failed `<L1> $ <L2> …` led retries its operand capped at each depth-0 L2 inside it) has no counterpart in the portable engine',
   'private-name-unicode': 'a private name with a non-ASCII character (`#℘`, `#ZW_\\u200C_NJ` with the ZWNJ itself): the interpreter\'s lexer takes it as one PrivateField (its Unicode fallback knows the `#` prefix), the portable lexers stop at the `#` (`#\\u2118`, the escape, lexes in both)',
-  'hashbang-not-first': 'a `#!` after the start of the text: the interpreter\'s lexer takes it as a Shebang comment, the portable lexers do not (a HashbangComment begins the source text only, so the portable verdict is the spec\'s)',
 };
 const REBIND_FILES = new Set(['types/conditional/inferTypesWithExtends1.ts', 'types/conditional/inferTypesInvalidExtendsDeclaration.ts',
   ...[8, 9, 10, 11, 12].map((n) => `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression${n}.ts`)]);
@@ -44,7 +43,6 @@ const REBIND_FILES = new Set(['types/conditional/inferTypesWithExtends1.ts', 'ty
 function wideCause(grammar: string, file: string, src: string): string {
   if (grammar === 'typescript' && REBIND_FILES.has(file)) return 'mixfix-rebind';
   if (/#[^\x00-\x7f]/.test(src)) return 'private-name-unicode';
-  if (src.indexOf('#!', 1) > 0) return 'hashbang-not-first';
   return 'unknown';
 }
 type WideLine = { grammar: string; file: string; targets: string[]; cause: string };
