@@ -198,6 +198,22 @@ records, per grammar, `tree-sitter generate` wall and CPU time, peak memory and 
 `parser.c` state and symbol counts (report-only baselines for changes to the tree-sitter
 generator).
 
+Operator precedence: tree-sitter's precedence numbers are the binding powers of the shared analysis
+(`analyzeGrammar` in `src/grammar-analysis.ts`, the table the interpreter and the portable printers
+read): an operator's left binding power, a prefix operator's right one, and a `ledPrec` continuation
+(`?:`, `in`, `instanceof`, `as`, `satisfies`) its connector's; a continuation whose last operand is read
+whole (the conditional's last branch, `as T`'s type) leaves that step unprecedenced, so the operators
+after it shift into it. `test/treesitter-jsx.ts` parses `a OP1 c OP2 d` for one operator per level and
+every connector, nested both ways, with every prefix and postfix operator, and where both accept
+compares tree-sitter's expression spans with the interpreter's; the pairs still bracketed differently
+are pinned in [`test/treesitter-brackets-record.txt`](../test/treesitter-brackets-record.txt) (any
+movement fails). Two classes remain: `yield a OP c` (the precedence table's prefix `yield` beside the
+`yield` expression arm) and, in TypeScript, the type-argument `<` continuation taking `-a < c` and
+`a < c < d` from the relational reading. The same corpus records over-acceptances, not defects of the
+bracketing: an assignment whose target is not a LeftHandSideExpression (`a + c = d;`, `-a = c;`,
+`a++ ??= c;`) and a unary operand of `**` (`-a ** c;`) parse in tree-sitter (59 JavaScript and 63
+TypeScript pairs), since its CFG has no assignment-target or `noUnaryLhs` condition.
+
 A tree-sitter grammar is a CFG and has no lookahead, so the grammar's zero-width assertions
 (`not`, `sameLine`, `noCommentBefore`, `noMultilineFlowBefore`, `notLeftLeaf`) are rendered
 exactly only where a rewrite exists and are otherwise dropped. The generator records every
