@@ -70,7 +70,7 @@ go-unused)
   grep -E '^    [✓✗] |declared and not used' "$out/quick.txt" | head -20
   row ' mutation ' ' --quick exit ' ' failed gates ' ' Go compiler says '
   row '---' '---' '---' '---'
-  row ' declared-and-not-used in the relexable lexer's regex-context state ' " $rc " " $(failed_gates "$out/quick.txt") " " $(grep -m1 -o 'declared and not used: unusedProbe' "$out/quick.txt" || echo none) "
+  row ' declared-and-not-used in the relexable lexer regex-context state ' " $rc " " $(failed_gates "$out/quick.txt") " " $(grep -m1 -o 'declared and not used: unusedProbe' "$out/quick.txt" || echo none) "
   git reset -q --hard HEAD^
   ;;
 catch)
