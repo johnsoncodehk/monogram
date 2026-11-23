@@ -57,41 +57,75 @@ export interface RegionView {
 /** Flatten an expression into its item sequences: alt / group expanded, a repetition as zero or
  *  one occurrence (`+` as one), so adjacency scans see every combination. Bounded by 2^(opts) per
  *  alternative. The ONE expansion every generator's adjacency scan uses (gen-tm, gen-monarch,
- *  the region view): memoised per expression node, so a body is expanded once however many
- *  detectors read it; the result is shared, so it is frozen (outer and inner arrays): a caller
- *  that would mutate it throws instead.
+ *  the region view).
  *
- *  KNOWN COST (measured 2026-11-23): the expansion is the full cross product of a body's options,
- *  and the detectors match an adjacency by materialising it. TypeScript's rule bodies expand to
- *  6,668,459 arms (Expr 2,481,621 arms holding 42.8 M items; Prop 1,995,841; ClassMember
- *  1,787,551; Param 363,778) against JavaScript's 870 in all: generating typescript.ts takes about
- *  48 s and 2.7 GB, nearly all of it this. A few more optional items in Expr multiply it again.
- *  The redesign (owed): match adjacencies over the expression structure (the items that can
- *  follow an item) instead of over every expanded sequence. */
+ *  MEMORY: an expansion of at most MEMO_ARMS arms is built once per expression node and kept
+ *  (frozen, shared: a caller that would mutate it throws); a larger one is NOT kept: it is an
+ *  `Arms` view that streams its arms from its parts' expansions each time it is read, so only one
+ *  arm of it is alive at a time. TypeScript's bodies expand to 6,668,459 arms (Expr 2,481,621
+ *  holding 42.8 M items; Prop 1,995,841; ClassMember 1,787,551; Param 363,778): kept, they stayed
+ *  alive for the whole generator run, past node's default heap on a 7.8 GB machine. Streamed, a
+ *  scan re-derives them (young-generation garbage); everything below the limit (every rule of the
+ *  other five grammars, and the parts the giants are made of) stays memoised.
+ *
+ *  KNOWN COST: the expansion is the full cross product of a body's options, and the detectors
+ *  match an adjacency by walking it. The redesign (owed): match adjacencies over the expression
+ *  structure (the items that can follow an item) instead of over every expanded sequence. */
+export interface Arms extends Iterable<RuleExpr[]> {
+  readonly length: number;
+  some(f: (arm: RuleExpr[]) => boolean): boolean;
+  every(f: (arm: RuleExpr[]) => boolean): boolean;
+  find(f: (arm: RuleExpr[]) => boolean): RuleExpr[] | undefined;
+}
+const MEMO_ARMS = 50_000;
+const counts = new WeakMap<RuleExpr, number>();
+/** How many arms expandArms(expr) has, without building them. */
+function armCount(expr: RuleExpr): number {
+  let n = counts.get(expr);
+  if (n !== undefined) return n;
+  switch (expr.type) {
+    case 'seq': n = expr.items.reduce((a, it) => a * armCount(it), 1); break;
+    case 'alt': n = expr.items.reduce((a, it) => a + armCount(it), 0); break;
+    case 'group': n = armCount(expr.body); break;
+    case 'quantifier': n = armCount(expr.body) + (expr.kind === '+' ? 0 : 1); break;
+    default: n = 1;
+  }
+  counts.set(expr, n);
+  return n;
+}
+// The arms in order: a seq's earlier items vary slowest; an alt's alternatives in order; a `?` / `*`
+// first absent, then present.
+function* streamArms(expr: RuleExpr): Generator<RuleExpr[]> {
+  switch (expr.type) {
+    case 'seq': yield* seqArms(expr.items, 0, []); return;
+    case 'alt': for (const it of expr.items) yield* expandArms(it); return;
+    case 'group': yield* expandArms(expr.body); return;
+    case 'quantifier': if (expr.kind !== '+') yield []; yield* expandArms(expr.body); return;
+    case 'not': yield []; return;   // a negative lookahead consumes nothing: adjacency sees through it
+    default: yield [expr];   // literal, ref, sep, op, prefix, postfix
+  }
+}
+function* seqArms(items: RuleExpr[], i: number, prefix: RuleExpr[]): Generator<RuleExpr[]> {
+  if (i === items.length) { yield prefix; return; }
+  for (const b of expandArms(items[i]!)) yield* seqArms(items, i + 1, b.length ? Object.freeze([...prefix, ...b]) as RuleExpr[] : prefix);
+}
+class StreamedArms implements Arms {
+  private readonly expr: RuleExpr;
+  readonly length: number;
+  constructor(expr: RuleExpr, length: number) { this.expr = expr; this.length = length; }
+  [Symbol.iterator]() { return streamArms(this.expr); }
+  some(f: (arm: RuleExpr[]) => boolean) { for (const a of this) if (f(a)) return true; return false; }
+  every(f: (arm: RuleExpr[]) => boolean) { for (const a of this) if (!f(a)) return false; return true; }
+  find(f: (arm: RuleExpr[]) => boolean) { for (const a of this) if (f(a)) return a; return undefined; }
+}
 const expansions = new WeakMap<RuleExpr, RuleExpr[][]>();
-export function expandArms(expr: RuleExpr): RuleExpr[][] {
+export function expandArms(expr: RuleExpr): Arms {
   const hit = expansions.get(expr);
   if (hit) return hit;
-  let out: RuleExpr[][];
-  switch (expr.type) {
-    case 'seq': {
-      let acc: RuleExpr[][] = [[]];
-      for (const item of expr.items) {
-        const branches = expandArms(item);
-        const next: RuleExpr[][] = [];
-        for (const prefix of acc) for (const b of branches) next.push([...prefix, ...b]);
-        acc = next;
-      }
-      out = acc;
-      break;
-    }
-    case 'alt': out = expr.items.flatMap(expandArms); break;
-    case 'group': out = expandArms(expr.body); break;
-    case 'quantifier': { const present = expandArms(expr.body); out = expr.kind === '+' ? present : [[], ...present]; break; }
-    case 'not': out = [[]]; break;   // a negative lookahead consumes nothing: adjacency sees through it
-    default: out = [[expr]];   // literal, ref, sep, op, prefix, postfix
-  }
-  for (const arm of out) Object.freeze(arm);
+  const n = armCount(expr);
+  if (n > MEMO_ARMS) return new StreamedArms(expr, n);
+  const out: RuleExpr[][] = [];
+  for (const arm of streamArms(expr)) out.push(Object.freeze(arm) as RuleExpr[]);
   Object.freeze(out);
   expansions.set(expr, out);
   return out;
