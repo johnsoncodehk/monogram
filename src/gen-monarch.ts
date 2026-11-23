@@ -1,5 +1,7 @@
 import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
 import { regionView, type RegionView, type NameShape } from './region-view.ts';
+import { directivesOf } from './grammar-analysis.ts';
+import { info as patternInfo, type CSet } from './lex-match-plan.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
 import {
   caseFoldLiteralSource,
@@ -330,7 +332,21 @@ function generateMarkupMonarch(grammar: CstGrammar): MonarchLanguage {
 // ── Main generator ──
 
 export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
-  if (grammar.markup) return generateMarkupMonarch(grammar);
+  return monacoRegexes(grammar.markup ? generateMarkupMonarch(grammar) : generateTokenMonarch(grammar));
+}
+
+// Monaco's Monarch compiler reads `@name` in a rule's regex as a reference to the language
+// attribute `name` (and throws when there is none); `@@` is a literal `@`. The generator's
+// regexes mean every `@` literally, so an `@` before a word unit is written `@@`, once, here
+// (`@if` in a directive opener; a lone `@` before a non-word unit is left as it is).
+function monacoRegexes(lang: MonarchLanguage): MonarchLanguage {
+  // a copy of each rule: one rule object can stand in several states
+  const tokenizer = Object.fromEntries(Object.entries(lang.tokenizer).map(([k, rules]) =>
+    [k, rules.map(r => Array.isArray(r) ? [r[0].replace(/@(?=\w)/g, '@@'), ...r.slice(1)] as MonarchRule : r)]));
+  return { ...lang, tokenizer };
+}
+
+function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
   const { scopeOverrides } = grammar;
   const view = regionView(grammar);
 
@@ -791,6 +807,14 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
     ],
     braces: tokenizer['bracketCounting'] ? '@bracketCounting' : null,
     skipTokenRule,
+    identPattern: identToken?.pattern ?? null,
+    blockComments: grammar.tokens.flatMap(t => {
+      if (!t.flags.includes('skip')) return [];
+      const b = tokenPatternBlockDelimiters(t);
+      if (!b) return [];
+      const [a, z] = tokenPatternBlockDelimiterSources(t) ?? [escapeRegex(b[0]), escapeRegex(b[1])];
+      return [[anchoredSource(a), anchoredSource(z)] as [string, string]];
+    }),
   }) : null;
   if (el) Object.assign(tokenizer, el.states);
 
@@ -868,6 +892,10 @@ interface ElementCtx {
   codeBody: string | MonarchRule[];
   /** the brace-counting state (`@bracketCounting`), or null when the grammar has none */
   braces: string | null;
+  /** the identifier token's pattern (its units decide a word literal's boundary), if any */
+  identPattern: TokenPattern | null;
+  /** the skip tokens' block delimiters as regex sources ([open, close]) */
+  blockComments: [string, string][];
   /** a skip token's rule (the code's comment rules) and the regex of its start */
   skipTokenRule: (t: TokenDecl) => { rule: MonarchRule; start: string } | null;
 }
@@ -951,13 +979,74 @@ function elementLayer(view: RegionView, grammar: CstGrammar, cx: ElementCtx): El
 
   // ── the children: a text run (the `text` token's class, minus the `highlight.text` patterns'
   // starts) or code ──
+  // ── directives (derived: grammar-analysis.ts directivesOf; docs/REGIONS.md "Directives"), in
+  // text children only. An opener is tried where the lexer's opener test runs: in the children
+  // and a directive body, at a run's start and inside a run (the run stops before it). The test
+  // is a lookahead: the literal, a word boundary when it ends with an identifier unit, then one
+  // of its required literal sequences, each literal after trivia (whitespace and one-line block
+  // comments), a word literal again not running on; the lookahead sees one line. Then states,
+  // pushed from the children and popped after the last body, as the lexer's sub-state 3:
+  //   <name>_dlead   the required literals; a head's `(` (rematched in the head) or the body's
+  //                  `hole.open`;
+  //   <name>_dhead   the head: code, a `(` pushes `<name>_dparen` (code to its `)`, nested), and
+  //                  `hole.open` at the head's own depth opens the body;
+  //   <name>_dbody   children (text, text tokens, holes, elements, directives), a close tag a
+  //                  pushed close tag; `hole.close` ends it;
+  //   <name>_dcont   after a body: a continuation (its literal and a required sequence, blanks
+  //                  before it, over lines) goes back to `<name>_dlead`; anything else pops.
+  // A code block (`@{`) pushes a hole. A directive keyword's token is its literal's declared
+  // scope, else `keyword.control`.
+  const dirs = r.text !== undefined ? directivesOf(grammar, r) : null;
+  const dirMarks: string[] = [];
+  const dirRules: MonarchRule[] = [];
+  let dirCont: MonarchRule[] = [];
+  let dirLead: MonarchRule[] = [];
+  if (dirs && (dirs.openers.length || dirs.blocks.length)) {
+    if (!cx.identPattern) throw new Error('element region: directives need the identifier token (its units decide a word literal\'s boundary)');
+    const idc = csetClass(patternInfo(cx.identPattern).chars);
+    const isWord = (l: string) => new RegExp(`^${idc}$`, 'u').test(l[l.length - 1]);
+    const lit = (l: string) => `${escapeRegex(l)}${isWord(l) ? `(?!${idc})` : ''}`;
+    const gap = `(?:\\s|${cx.blockComments.map(([a, b]) => `${a}(?:(?!${b}).)*${b}`).join('|') || '(?!)'})*`;
+    const seqs = (nexts: string[][]) => `(?:${nexts.map(n => n.map(l => `${gap}${lit(l)}`).join('')).join('|')})`;
+    const kwTok = (l: string) => scopeToMonarch(grammar.scopeOverrides.get(l)?.[0] ?? 'keyword.control');
+    for (const d of dirs.openers) {
+      const test = `${lit(d.lit)}(?=${seqs(d.nexts)})`;
+      dirMarks.push(test);
+      dirRules.push([test, { token: kwTok(d.lit), next: at('dlead') }]);
+    }
+    for (const b of dirs.blocks) {
+      dirMarks.push(escapeRegex(b));
+      dirRules.push([escapeRegex(b), { token: kwTok(b), next: at('hole') }]);
+    }
+    // the required literals (every one but the last of a sequence), then the head or the body
+    const req = new Set<string>(), heads = new Set<string>();
+    for (const d of [...dirs.openers, ...dirs.continuations]) for (const n of d.nexts) {
+      n.slice(0, -1).forEach(l => req.add(l));
+      const last = n[n.length - 1];
+      if (last !== r.hole.open) heads.add(last);
+    }
+    for (const h of heads) if (h !== '(') throw new Error(`element region: a directive head opened by \`${h}\`: the Monarch element layer reads a parenthesised head`);
+    dirLead = [
+      ...trivia,
+      ...[...req].map(l => [lit(l), isWord(l) ? kwTok(l) : 'delimiter'] as MonarchRule),
+      ...heads.size ? [['\\(', { token: '@rematch', switchTo: at('dhead') }] as MonarchRule] : [],
+      [ho, { token: B, switchTo: at('dbody') }],
+    ];
+    const contTests = dirs.continuations.map(d => ({ d, test: `${lit(d.lit)}(?=${seqs(d.nexts)})` }));
+    dirCont = [
+      ...contTests.map(({ d, test }) => [test, { token: kwTok(d.lit), switchTo: at('dlead') }] as MonarchRule),
+      ...contTests.length ? [[`\\s+(?=${contTests.map(c => c.test).join('|')})|\\s+$`, ''] as MonarchRule] : [],
+      ['', { token: '', next: '@pop' }],
+    ];
+  }
+
   const textRules: MonarchRule[] = [];
   if (r.text !== undefined) {
     const textTok = grammar.tokens.find(t => t.name === r.text);
     const p = textTok?.pattern;
     if (!p || typeof p === 'string' || p.type !== 'repeat' || typeof p.body === 'string' || p.body.type !== 'charClass')
       throw new Error(`element region: the text token \`${r.text}\` must be a run of one character class for the Monarch element layer`);
-    const marks: string[] = [];
+    const marks: string[] = [...dirMarks];
     for (const h of view.highlight.text ?? []) {
       const m = h.match as TokenPattern;
       const parts = typeof m !== 'string' && m.type === 'seq' ? m.items : [];
@@ -1024,6 +1113,23 @@ function elementLayer(view: RegionView, grammar: CstGrammar, cx: ElementCtx): El
     return new RegExp(`^(?:${cls})$`).test('\n') ? [[`(?:${cls})+$`, '']] : [];
   };
 
+  // the children's items after the close tag: nested elements, holes, directives, text or code
+  const childItems: MonarchRule[] = [
+    [`${o}${tagStartLA}`, { token: D, next: at('open') }],
+    [ho, { token: B, next: at('hole') }],
+    ...dirRules,
+    ...r.text !== undefined ? textRules : [...codeRules, { include: codeBody }],
+  ];
+  if (dirLead.length) {
+    states[S('dlead')] = dirLead;
+    const paren: MonarchRule = ['\\(', { token: 'delimiter.parenthesis', next: at('dparen') }];
+    states[S('dhead')] = [[ho, { token: B, switchTo: at('dbody') }], paren, ...codeRules, { include: codeBody }];
+    states[S('dparen')] = [['\\)', { token: 'delimiter.parenthesis', next: '@pop' }], paren, ...codeRules, { include: codeBody }];
+    // a close tag in a body is pushed (it pops at its `tagClose`): the parser rejects a stray one
+    states[S('dbody')] = [[hc, { token: B, switchTo: at('dcont') }], [escapeRegex(view.closeTagText), { token: D, next: at('close') }], ...childItems];
+    states[S('dcont')] = dirCont;
+  }
+
   for (const top of [false, true]) {
     const end: MonarchAction = top ? { token: D, switchTo: '@value' } : { token: D, next: '@pop' };
     const toTag = (token: string): MonarchAction => raws.length
@@ -1073,9 +1179,7 @@ function elementLayer(view: RegionView, grammar: CstGrammar, cx: ElementCtx): El
     }
     states[S('children', top)] = [
       [escapeRegex(view.closeTagText), { token: D, switchTo: at('close', top) }],
-      [`${o}${tagStartLA}`, { token: D, next: at('open') }],
-      [ho, { token: B, next: at('hole') }],
-      ...r.text !== undefined ? textRules : [...codeRules, { include: codeBody }],
+      ...childItems,
     ];
     states[S('close', top)] = [
       ...trivia,
@@ -1087,6 +1191,14 @@ function elementLayer(view: RegionView, grammar: CstGrammar, cx: ElementCtx): El
   // `=` before a nested element: pushed, then switched into the nested element's open tag
   states[S('eqel')] = [cx.wsRule, [o, { token: D, switchTo: at('open') }]];
   return { states, entry: view.entry, entryTop, entryNested };
+}
+
+// A character class of a set of code-unit ranges (lex-match-plan.ts CSet), for a JS regex with
+// the `u` flag off: ranges above U+FFFF are cut at it (a word boundary reads one code unit).
+function csetClass(set: CSet): string {
+  const u = (c: number) => `\\u${c.toString(16).padStart(4, '0')}`;
+  const items = set.filter(([a]) => a >= 0 && a <= 0xffff).map(([a, b]) => a === b ? u(a) : `${u(a)}-${u(Math.min(b, 0xffff))}`);
+  return items.length ? `[${items.join('')}]` : '(?!)';
 }
 
 // The Monaco language an embed's TextMate scope names: `source.css` → `css`, `source.js` → `js`
