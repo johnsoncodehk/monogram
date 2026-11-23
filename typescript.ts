@@ -422,17 +422,22 @@ const ReturnType = tsRelax(field('returnType', alt([notReserved, Ident, sameLine
 // The heritage forms are JavaScript's (`classHeritageArms`, javascript.ts); TypeScript's class
 // expression carries type parameters and an `implements` clause, and a base may take type
 // arguments (`extends Base<T>`, tsc's ExpressionWithTypeArguments).
-const ClassHeritage = rule($ => classHeritageArms($, Expr,
+const ClassHeritage = rule($ => classHeritageArms($, Expr, NewTarget,
   ['class', opt(...bindingIdentifier), opt(TypeParams), opt('extends', $), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}'],
   [[$, '<', sep(Type, ','), '>']]));
 
 // Heritage clauses, shared by every class shape: tsc parses REPEATED and order-free
 // `extends`/`implements` clauses (`class D extends A extends B implements I`), each a
 // comma list; element parses stop at the next clause keyword (the not() guard), and a
-// clause may even be EMPTY (`class M extends { }` — tsc reads `{` as the body).
+// clause may even be EMPTY (`class M extends { }` — tsc reads `{` as the body). A heritage
+// element may be an object literal (a LeftHandSideExpression), and an empty one `{}` is that
+// element only where a `,`, `{`, `extends` or `implements` follows it (tsc's
+// isValidHeritageClauseObjectLiteral), so the class body is not read as a heritage element:
+// `class M extends {} {}` has the base `{}`, `class M extends {}` none.
+const heritageElement = alt([not(alt('extends', 'implements')), not(['{', '}', not(alt(',', '{', 'extends', 'implements'))]), ClassHeritage]);
 const heritageClauses = many(alt(
-  ['extends', sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ',')],
-  ['implements', sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ',')],
+  ['extends', sep(heritageElement, ',')],
+  ['implements', sep(heritageElement, ',')],
 ));
 
 // The `new` callee forms are JavaScript's (`newTargetArms`, javascript.ts); a TypeScript `new`
