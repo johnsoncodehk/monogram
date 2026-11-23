@@ -1,4 +1,5 @@
-import type { CstGrammar, RuleExpr, TokenDecl } from './types.ts';
+import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
+import { regionView, type RegionView, type NameShape } from './region-view.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
 import {
   tokenEscapePatternSource,
@@ -11,6 +12,7 @@ import {
   tokenPatternSource,
   tokenPatternStartsWithDecimal,
   tokenPatternStringDelimiters,
+  tokenPatternToRegex,
 } from './token-pattern.ts';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -53,7 +55,8 @@ import {
 export type MonarchAction =
   | string
   | { token: string; next?: string; switchTo?: string }
-  | { cases: Record<string, MonarchAction> };
+  | { cases: Record<string, MonarchAction> }
+  | MonarchAction[];   // one action per capture group (the groups cover the match)
 
 /** A single tokenizer rule. */
 export type MonarchRule =
@@ -328,6 +331,7 @@ function generateMarkupMonarch(grammar: CstGrammar): MonarchLanguage {
 export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
   if (grammar.markup) return generateMarkupMonarch(grammar);
   const { scopeOverrides } = grammar;
+  const view = regionView(grammar);
 
   // ── Identifier token: prefer the declared `identifier` hint (the lexer's own
   //    source of truth), else the token gen-tm would treat as the identifier. ──
@@ -769,12 +773,25 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
   ];
   tokenizer['exprBody'] = exprBody;
 
-  const root: MonarchRule[] = [{ include: '@exprBody' }];
+  // The element layer (docs/REGIONS.md): states from the declared region, null without one.
+  // Its code (holes, code children) is the single-mode interpolation body: `@interpExprBody`, or
+  // the same rules in a state of the layer's own when the grammar has no template.
+  const el = view ? elementLayer(view, grammar, {
+    identRegex, wsRule, commentRules, stringNestedRules, templateNestedRules, typeargs: !!angle,
+    codeBody: templateToken?.template ? '@interpExprBody' : [
+      ...numberRules.map(stripSwitch), ...otherTokenRules.map(stripSwitch), identRuleInterp, ...interpSlashRules, ...symbolRulesInterp,
+      ...angle ? [['[<>]', comparisonTok] as MonarchRule] : [],
+    ],
+    braces: tokenizer['bracketCounting'] ? '@bracketCounting' : null,
+  }) : null;
+  if (el) Object.assign(tokenizer, el.states);
+
+  const root: MonarchRule[] = [...el?.entryTop ?? [], { include: '@exprBody' }];
   if (regexToken) root.push(...exprSlashRules);
   if (angle) root.push(['<|>', toExpr(comparisonTok)]);   // expr-pos `<`/`>` = comparison
   tokenizer['root'] = root;
 
-  const value: MonarchRule[] = [];
+  const value: MonarchRule[] = [...el?.entry === 'always' ? el.entryTop : []];
   if (angle) {
     // `<` after a value opens generics ONLY when the bounded type-arg lookahead
     // succeeds (otherwise it stays a comparison via the `<|>` fallback below).
@@ -790,6 +807,7 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
   // (push/pop) variants, already injected by templateInterp/bracketCounting.
   if (templateToken?.template) {
     const interpExprBody: MonarchRule[] = [
+      ...el?.entryNested ?? [],
       ...numberRules.map(stripSwitch),
       ...otherTokenRules.map(stripSwitch),
       identRuleInterp,
@@ -807,6 +825,188 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
     brackets: bracketPairs,
     tokenizer,
   };
+}
+
+// ── Element layer (docs/REGIONS.md, "a region is a declared lexer state") ──
+// One Monarch state per lexer state of the region, every datum from `regionView` (region-view.ts,
+// shared with gen-tm / gen-treesitter):
+//   <name>_open   after `tagOpen`: the tag name (its name shape), a fragment's `tagClose`, a
+//                 dynamic tag's hole;
+//   <name>_tag    the open tag: attributes (their name shape), the assign literal, the tag tokens'
+//                 quoted forms, holes, tag type arguments (`typeargs`), the self-close token, and
+//                 `tagClose` into the children;
+//   <name>_children  text runs (the `text` token's class, `highlight.text` patterns) or, without a
+//                 `text` token, code; nested elements, holes, the close-tag token;
+//   <name>_close  the close tag's name (or hole) up to `tagClose`;
+//   <name>_hole   a hole: code up to `hole.close` at brace depth 0.
+// Monarch's state stack is the frame stack: a nested element is PUSHED and pops after its end,
+// so nesting needs no counter. An element entered from a base state (`root` / `value`) instead
+// SWITCHES into the `…T` variant of its states, whose end switches to `value`: an element is a
+// value, as the lexer's `prevIsValue` reads it. Entry: an `operand` region is entered only in the
+// operand-position state (`root`, the state where a regex literal may start: exactly the lexer's
+// `!prevIsValue()`), an `always` region in both base states; the `typeParameters` vetoes are
+// negative lookaheads on the entry (the signature veto only within the line). Inside holes and
+// template interpolations Monarch is single-mode (it does not track values there), so an element
+// is entered at every `tagOpen` the vetoes and `tagStart` allow (`{a <b}` reads an element).
+interface ElementCtx {
+  identRegex: string;
+  wsRule: MonarchRule;
+  commentRules: MonarchRule[];
+  stringNestedRules: MonarchRule[];
+  templateNestedRules: MonarchRule[];
+  /** the grammar has the type-argument state (`typeargs`) */
+  typeargs: boolean;
+  /** the single-mode code body (`@interpExprBody`), or its rules when the grammar has none */
+  codeBody: string | MonarchRule[];
+  /** the brace-counting state (`@bracketCounting`), or null when the grammar has none */
+  braces: string | null;
+}
+interface ElementLayer {
+  states: Record<string, MonarchRule[]>;
+  entry: 'always' | 'operand';
+  /** the entry rule in a base state (switches into the top-level variant) */
+  entryTop: MonarchRule[];
+  /** the entry rule inside a pushed frame (pushes the nested variant) */
+  entryNested: MonarchRule[];
+}
+
+// A Monarch token for an element-layer scope: Monaco's HTML vocabulary for tag and attribute
+// names (`tag`, `attribute.name`), the general mapping otherwise.
+function elementToken(scope: string): string {
+  if (scope.startsWith('entity.name.tag')) return 'tag';
+  if (scope.startsWith('entity.other.attribute-name')) return 'attribute.name';
+  return scopeToMonarch(scope);
+}
+
+function elementLayer(view: RegionView, grammar: CstGrammar, cx: ElementCtx): ElementLayer {
+  const r = view.region;
+  const n = view.name;
+  const S = (k: string, top = false) => `${n}_${k}${top ? 'T' : ''}`;
+  const at = (k: string, top = false) => `@${S(k, top)}`;
+  const o = escapeRegex(r.tagOpen), c = escapeRegex(r.tagClose);
+  const ho = escapeRegex(r.hole.open), hc = escapeRegex(r.hole.close);
+  const id = `(?:${anchoredSource(cx.identRegex)})`;
+  const D = 'delimiter.tag', B = 'delimiter.bracket';
+  const alt = (xs: string[]) => xs.length === 1 ? escapeRegex(xs[0]) : `(?:${xs.map(escapeRegex).join('|')})`;
+  const states: Record<string, MonarchRule[]> = {};
+  const trivia: MonarchRule[] = [cx.wsRule, ...cx.commentRules];
+
+  // ── entry ──
+  const tagStartLA = r.tagStart !== undefined ? `(?=${tokenPatternToRegex(r.tagStart)})` : '';
+  const tp = r.typeParameters;
+  const headVeto = tp?.head !== undefined ? `(?!${tokenPatternToRegex(tp.head)})` : '';
+  const sig = tp?.signature;
+  const sigVeto = sig
+    ? `(?!\\s*${id}\\s*${c}\\s*${escapeRegex(sig.open)}[^${escapeForCharClass(sig.close)}]*${escapeRegex(sig.close)}\\s*${alt(sig.then)})`
+    : '';
+  const entryRe = `${o}${tagStartLA}${headVeto}${sigVeto}`;
+  const entryTop: MonarchRule[] = [[entryRe, { token: D, switchTo: at('open', true) }]];
+  const entryNested: MonarchRule[] = [[entryRe, { token: D, next: at('open') }]];
+
+  // ── code inside a hole / code children: single-mode, with nested spans and elements ──
+  const codeBody = typeof cx.codeBody === 'string' ? cx.codeBody : `@${S('code')}`;
+  if (typeof cx.codeBody !== 'string') states[S('code')] = [...entryNested, ...cx.codeBody];
+  const braces = cx.braces ?? `@${S('braces')}`;
+  const codeRules: MonarchRule[] = [...trivia, ...cx.stringNestedRules, ...cx.templateNestedRules, ...entryNested, ['\\{', { token: B, next: braces }]];
+  if (!cx.braces) states[S('braces')] = [['\\}', { token: B, next: '@pop' }], ...codeRules, { include: codeBody }];
+  states[S('hole')] = [[hc, { token: B, next: '@pop' }], ...codeRules, { include: codeBody }];
+
+  // ── names (region-view.ts NameShape): prefix joiner, member accessors, joiners within ──
+  const nameBody = (shape: NameShape | null) => `${id}${shape?.within.length ? `(?:${alt(shape.within)}${id})*` : ''}`;
+  const ctxTagScope = view.tagName && (grammar.contextualScopes ?? []).find(s => s.within.includes(view.tagName!.rule))?.scope;
+  const tagNameRules = (act: (token: string) => MonarchAction): MonarchRule[] => {
+    const shape = view.tagName;
+    const out: MonarchRule[] = [];
+    if (shape?.prefix) out.push([`(${id})(${escapeRegex(shape.prefix.text)})`, ['tag', 'delimiter']]);
+    if (shape?.member.length) {
+      out.push([`${id}(?=\\s*${alt(shape.member)})`, 'identifier']);
+      out.push([alt(shape.member), 'delimiter']);
+    }
+    const entries = view.highlight.tagName ?? [];
+    for (const e of entries) out.push([`${e.match ? `(?=${tokenPatternToRegex(e.match)})` : ''}${nameBody(shape)}`, act(elementToken(e.scope))]);
+    if (!entries.length || entries[entries.length - 1].match) out.push([nameBody(shape), act(elementToken(ctxTagScope ?? 'entity.name.tag'))]);
+    return out;
+  };
+
+  // ── tag tokens: each quoted form a pushed span (no escapes: the lexer's tag token has none) ──
+  const tagTokenRules: MonarchRule[] = [];
+  for (const t of view.tagTokens) {
+    const tok = elementToken(t.scope ?? classifyTokenScope(t));
+    for (const q of tokenPatternStringDelimiters(t)) {
+      const st = S(`str_${delimStateSuffix(q)}`);
+      states[st] = [[`[^${escapeForCharClass(q)}]+`, tok], [escapeRegex(q), { token: tok, next: '@pop' }]];
+      tagTokenRules.push([escapeRegex(q), { token: tok, next: `@${st}` }]);
+    }
+  }
+
+  // ── the children: a text run (the `text` token's class, minus the `highlight.text` patterns'
+  // starts) or code ──
+  const textRules: MonarchRule[] = [];
+  if (r.text !== undefined) {
+    const textTok = grammar.tokens.find(t => t.name === r.text);
+    const p = textTok?.pattern;
+    if (!p || typeof p === 'string' || p.type !== 'repeat' || typeof p.body === 'string' || p.body.type !== 'charClass')
+      throw new Error(`element region: the text token \`${r.text}\` must be a run of one character class for the Monarch element layer`);
+    const marks: string[] = [];
+    for (const h of view.highlight.text ?? []) {
+      const m = h.match as TokenPattern;
+      const parts = typeof m !== 'string' && m.type === 'seq' ? m.items : [];
+      const first = parts[0], last = parts[parts.length - 1];
+      if (h.delimiters && parts.length >= 3 && typeof first === 'string' && typeof last === 'string') {
+        const mid = parts.slice(1, -1);
+        textRules.push([`(${escapeRegex(first)})(${tokenPatternToRegex(mid.length === 1 ? mid[0] : { type: 'seq', items: mid })})(${escapeRegex(last)})`,
+          [scopeToMonarch(h.delimiters), scopeToMonarch(h.scope), scopeToMonarch(h.delimiters)]]);
+      } else textRules.push([tokenPatternToRegex(m), scopeToMonarch(h.scope)]);
+      marks.push(tokenPatternToRegex(m));
+    }
+    const cls = tokenPatternToRegex(p.body);
+    textRules.push([marks.length ? `(?:(?!${marks.join('|')})${cls})+` : `${cls}+`, '']);
+    // with `tagStart`, a `tagOpen` the class does not allow after it is text
+    if (tagStartLA) textRules.push([o, '']);
+  }
+
+  for (const top of [false, true]) {
+    const end: MonarchAction = top ? { token: D, switchTo: '@value' } : { token: D, next: '@pop' };
+    states[S('open', top)] = [
+      ...trivia,
+      ...view.fragment ? [[c, { token: D, switchTo: at('children', top) }] as MonarchRule] : [],
+      ...view.dynamicTag ? [[ho, { token: B, switchTo: at('dyn', top) }] as MonarchRule] : [],
+      ...tagNameRules((token) => ({ token, switchTo: at('tag', top) })),
+      ['', { token: '', switchTo: at('tag', top) }],
+    ];
+    if (view.dynamicTag) states[S('dyn', top)] = [[hc, { token: B, switchTo: at('tag', top) }], ...codeRules, { include: codeBody }];
+    const attr = view.attr;
+    const assign = view.attrAssign;
+    states[S('tag', top)] = [
+      ...trivia,
+      ...assign !== null ? [
+        [`${escapeRegex(assign)}(?=\\s*${o})`, { token: 'delimiter', next: at('eqel') }] as MonarchRule,
+        [escapeRegex(assign), 'delimiter'] as MonarchRule,
+      ] : [],
+      ...cx.typeargs && view.typeArgRule ? [[o, { token: 'delimiter.angle', next: '@typeargs' }] as MonarchRule] : [],
+      [escapeRegex(view.selfCloseText), end],
+      [c, { token: D, switchTo: at('children', top) }],
+      ...attr?.prefix ? [[`(${id})(${escapeRegex(attr.prefix.text)})`, ['attribute.name', 'delimiter']] as MonarchRule] : [],
+      ...attr ? [[`${id}${attr.joiners.filter(j => j !== attr.prefix?.text).length ? `(?:${alt(attr.joiners.filter(j => j !== attr.prefix?.text))}${id})*` : ''}`, 'attribute.name'] as MonarchRule] : [],
+      ...tagTokenRules,
+      [ho, { token: B, next: at('hole') }],
+    ];
+    states[S('children', top)] = [
+      [escapeRegex(view.closeTagText), { token: D, switchTo: at('close', top) }],
+      [`${o}${tagStartLA}`, { token: D, next: at('open') }],
+      [ho, { token: B, next: at('hole') }],
+      ...r.text !== undefined ? textRules : [...codeRules, { include: codeBody }],
+    ];
+    states[S('close', top)] = [
+      ...trivia,
+      ...view.dynamicTag ? [[ho, { token: B, next: at('hole') }] as MonarchRule] : [],
+      ...tagNameRules((token) => token),
+      [c, end],
+    ];
+  }
+  // `=` before a nested element: pushed, then switched into the nested element's open tag
+  states[S('eqel')] = [cx.wsRule, [o, { token: D, switchTo: at('open') }]];
+  return { states, entry: view.entry, entryTop, entryNested };
 }
 
 /** Drop a `switchTo`/`next` mode flip from a rule's action, keeping just the

@@ -13,7 +13,7 @@ import type {
 } from './shape-schema.ts';
 import { validateShapeOrThrow } from './shape-validate.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
-import { ATOM, COMPARISON, findAnyName, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, type R, type Ty } from './algo-ir.ts';
+import { ATOM, COMPARISON, findAnyName, isNum, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, type R, type Ty } from './algo-ir.ts';
 import { UNI_ID_CONTINUE, UNI_ID_START } from './uni-ident.ts';
 import { type TextUnits, unitLen } from './text-units.ts';
 
@@ -319,7 +319,7 @@ ${rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]
     : !(el.head || sig) ? `    if (src.startsWith(${J(el.tagOpen)}, pos) && !prevIsValue()) {\n${enter}    }\n`
     : `    if (src.startsWith(${J(el.tagOpen)}, pos)${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue()) {
       let op: number;
-      ${sig ? 'if (pos === specAt) { op = specKeep ? 0 : 1; specAt = -1; } else ' : ''}{ const [o, re] = ${shared.elementFn('opens')}(src, pos); op = o; if (re > laEnd) laEnd = re; }
+      ${sig ? 'if (pos === specAt) { op = specKeep ? 0 : 1; specAt = -1; } else ' : ''}{ ${tsTake(['o', 're'], shared.elementFn('opens'), 'src, pos')} op = o; if (re > laEnd) laEnd = re; }
       if (op === 1) {
 ${enter}      }
 ${sig ? `      if (op === 2) {
@@ -346,7 +346,7 @@ ${sig ? `      if (op === 2) {
   const cascade = renderLexByteDispatchTS(p.lexCodes, p.lexFirsts, '    ', heads);
   const frameStep = `    if (templateStack.length > 0 && (templateStack[templateStack.length - 1] & 3) === 2) {
       const fr = templateStack[templateStack.length - 1];
-      const [fe, fk, fl, ft, fp, fa, fla] = ${shared.elementFn('frame')}(src, pos, fr, tagAngle, toks.length > 0 && toks[toks.length - 1].lid === LID_EQ, laEnd);
+      ${tsTake(['fe', 'fk', 'fl', 'ft', 'fp', 'fa', 'fla'], shared.elementFn('frame'), 'src, pos, fr, tagAngle, toks.length > 0 && toks[toks.length - 1].lid === LID_EQ, laEnd')}
       laEnd = fla;
       if (fe >= 0) {
         emit(pos, fe, fk, fl);
@@ -357,14 +357,14 @@ ${raw ? `        // each element frame's current tag: the index of its tagOpen t
 ${raw ? `        // an open tag ended: a raw-text name gives its body to a raw frame (kind 3), lexed next
         if (fl === LID_EL_CLOSE && ((fr >> 2) & 3) === 1 && tagAngle === 0) {
           const i = tagAt[tagAt.length - 1] + 1;
-          if (i < toks.length - 1) { const [re, rk] = ${shared.elementFn('raw')}(src, toks[i].off, toks[i].end, fe); if (rk !== 0 && re > fe) templateStack.push(3); }
+          if (i < toks.length - 1) { ${tsTake(['re', 'rk'], shared.elementFn('raw'), 'src, toks[i].off, toks[i].end, fe')} if (rk !== 0 && re > fe) templateStack.push(3); }
         }
 ` : ''}        refresh(); tagAngle = fa; pos = fe; continue;
       }
     }
 ${raw ? `    if (templateStack.length > 0 && templateStack[templateStack.length - 1] === 3) {
       const i = tagAt[tagAt.length - 1] + 1;
-      const [re, rk] = ${shared.elementFn('raw')}(src, toks[i].off, toks[i].end, pos);
+      ${tsTake(['re', 'rk'], shared.elementFn('raw'), 'src, toks[i].off, toks[i].end, pos')}
       emit(pos, re, rk, 0); templateStack.pop(); refresh(); pos = re; continue;
     }
 ` : ''}`;
@@ -1346,10 +1346,10 @@ function parseWithMeta<H>(text: string, meta: AlignMeta[], builder: Builder<H>):
 }
 ${topReuse ? `
 function tryReuseW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number) => H, oldRootHs: H[], oldEntries: EntryMeta[], newText: string, newMeta: AlignMeta[], byteDelta: number, oldN: number, newN: number, prefix: number, suffix: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null {
-  const [prefixLen, suffixStart] = reuseBounds(oldEntries, prefix, oldN, suffix);
+  ${tsTake(['prefixLen', 'suffixStart'], 'reuseBounds', 'oldEntries, prefix, oldN, suffix')}
   const prefixMeta = oldEntries.slice(0, prefixLen);
   const suffixMeta = oldEntries.slice(suffixStart);
-  const [, prefixEnd] = reuseKids(oldEntries, 0, prefixLen);
+  ${tsTake(['prefixStart', 'prefixEnd'], 'reuseKids', 'oldEntries, 0, prefixLen')}
   const prefixKids = oldRootHs.slice(0, prefixEnd);
   const tokDelta = newN - oldN;
   _src = newText;
@@ -1359,11 +1359,11 @@ function tryReuseW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number)
   const midKids: H[] = [];
   const midMeta: EntryMeta[] = [];
   const finish = (adoptFrom: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
-    const [ka, kb] = reuseKids(suffixMeta, adoptFrom, suffixMeta.length);
+    ${tsTake(['ka', 'kb'], 'reuseKids', 'suffixMeta, adoptFrom, suffixMeta.length')}
     const adoptedKids = oldRootHs.slice(ka, kb).map((h) => shift(h, byteDelta, tokDelta));
     const children: H[] = [...prefixKids, ...midKids, ...adoptedKids];
     const newEntries = reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta, prefixKids.length + midKids.length);
-    const [offset, end, tokStart, tokEnd] = reuseSpan(newEntries);
+    ${tsTake(['offset', 'end', 'tokStart', 'tokEnd'], 'reuseSpan', 'newEntries')}
     _bSave = tokStart;
     const savePos = pos;
     pos = tokEnd;
@@ -1456,7 +1456,7 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
         align = validate ? { ...lexReject, streamEq: true, treeEq: isCst ? true : null } : lexReject;
         return null;
       }
-      const [oldN, newN, prefix, suffix] = computeAlignCore(oldText, oldToks, text, prevToks);
+      ${tsTake(['oldN', 'newN', 'prefix', 'suffix'], 'computeAlignCore', 'oldText, oldToks, text, prevToks')}
       const core = { oldN, newN, prefix, suffix, relexed };
       const byteDelta = text.length - oldText.length;
       let reused = 0;
@@ -3106,10 +3106,22 @@ function ${findAnyName(stops)}(s: string, i: number): number {
     while: (c, body) => [`while (${c}) {`, ...tsBlock(body), '}'],
     break: () => ['break;'],
     run: (call) => `${call};`,
-    return: (vals) => [`return ${vals.length === 1 ? vals[0] : `[${vals.join(', ')}]`};`],
+    return: (vals, fn) => {
+      if (!tsSlotted(fn.ret)) return [`return ${vals.length === 1 ? vals[0] : `[${vals.join(', ')}]`};`];
+      // The first value is returned, the others are left in the function's slots. When a value
+      // calls a family function, every value is computed first, in order, as an array literal
+      // computes them: the call (this function again, or one that calls it) would otherwise run
+      // after a slot was stored and overwrite it. Without a call no order is observable.
+      const store = (v: (i: number) => string) => vals.slice(1).map((_, i) => `${fn.name}_r${i + 1} = ${v(i + 1)};`).join(' ');
+      if (fn.calls) return [`const ${vals.map((v, i) => `${fn.name}_t${i} = ${v}`).join(', ')};`, store((i) => `${fn.name}_t${i}`), `return ${fn.name}_t0;`];
+      return [store((i) => vals[i]), `return ${vals[0]};`];
+    },
     fn: (f) => [
+      ...(tsSlotted(f.retTys)
+        ? [`// ${f.name}'s values after the first (tsSlotted).`, `var ${f.rets.slice(1).map((t, i) => `${f.name}_r${i + 1}: ${t} = ${t === 'boolean' ? 'false' : '0'}`).join(', ')};`]
+        : []),
       ...f.doc.map((l) => `// ${l}`),
-      `function ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): ${f.rets.length === 0 ? 'void' : f.rets.length === 1 ? f.rets[0] : `[${f.rets.join(', ')}]`} {`,
+      `function ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): ${f.rets.length === 0 ? 'void' : f.rets.length === 1 || tsSlotted(f.retTys) ? f.rets[0] : `[${f.rets.join(', ')}]`} {`,
       ...tsBlock(f.body),
       '}',
     ].join('\n'),
@@ -3144,6 +3156,10 @@ function ${findAnyName(stops)}(s: string, i: number): number {
       for: (_cx, v, from, to, body) => [`for (let ${v} = ${from.c}; ${v} < ${to.c}; ${v}++) {`, ...tsBlock(body), '}'],
       forEach: (v, l, body) => [`for (const ${v} of ${l}) {`, ...tsBlock(body), '}'],
       destructure: (_cx, s) => {
+        if (tsSlotted(s.callee.ret)) {
+          const kw = s.declare ? (s.names.some((n) => s.reassigned(n)) ? 'let ' : 'const ') : '';
+          return s.names.map((n, i) => (n === '_' ? (i === 0 ? `${s.call};` : '') : `${kw}${s.ids[i]} = ${i === 0 ? s.call : `${s.callee.name}_r${i}`};`)).filter(Boolean);
+        }
         const pat = `[${s.names.map((n) => (n === '_' ? '' : n)).join(', ').replace(/(, )+$/, '')}]`;
         if (!s.declare) return [`${pat} = ${s.call};`];
         return [`${s.names.some((n) => s.reassigned(n)) ? 'let' : 'const'} ${pat} = ${s.call};`];
@@ -3165,6 +3181,19 @@ function ${findAnyName(stops)}(s: string, i: number): number {
     extend: (_cx, l, from) => [`for (const el of ${from.c}) ${l}.push(el);`],
   },
 };
+
+// A function of several numbers and booleans returns its first value and leaves the others in
+// module slots (`<fn>_r1` …, read by the caller right after the call): TypeScript has no multiple
+// return values, and an array per call is an allocation per call (the element lexer's frame step
+// runs once per element token). A slot is a `var` (no temporal-dead-zone check on each access). A
+// value that owns memory (a string, a list, a record) is returned in an array instead: a slot would
+// keep it alive past its caller.
+const tsSlotted = (ret: Ty[]): boolean => ret.length > 1 && ret.every((t) => isNum(t) || t === 'bool');
+// The same read, printed where the hand-written runtime calls a family function of several numbers:
+// the element lexer's opens / frame / raw steps (src/lex-family.ts), the Doc's reuse bounds and
+// span (src/reuse-family.ts) and its alignment core (src/relex-family.ts).
+const tsTake = (names: string[], fn: string, args: string): string =>
+  names.map((n, i) => `const ${n} = ${i === 0 ? `${fn}(${args})` : `${fn}_r${i}`};`).join(' ');
 
 // No callee-FIRST body guards: a JS rd call refused at its dispatch costs less than the guard's test
 // on every iteration (measured: TS blocks +0.19% to +0.53% on the real inputs with them).

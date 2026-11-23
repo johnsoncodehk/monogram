@@ -87,6 +87,7 @@ const GATES: Gate[] = [
   { group: 'highlighter', name: 'treesitter-assertions', args: ['test/treesitter-assertions.ts'] },
   { group: 'highlighter', name: 'angle-depth', args: ['test/angle-depth-probe.ts'] },
   { group: 'highlighter', name: 'html-monarch', args: ['test/html-monarch.ts'] },
+  { group: 'highlighter', name: 'monarch-dialect', args: ['test/monarch-dialect.ts'] },
   { group: 'highlighter', name: 'html-embed-js', args: ['test/html-embed-js.ts'] },
   { group: 'highlighter', name: 'self-close-sites', args: ['test/self-close-sites.ts'] },
   { group: 'highlighter', name: 'raw-text-case-sites', args: ['test/raw-text-case-sites.ts'] },
