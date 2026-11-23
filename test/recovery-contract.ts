@@ -1,6 +1,7 @@
 // The recovered-tree contract (recovery-1/DESIGN.md section 1), checked on one parseTotal outcome of
 // a rejected input, and its measurements. Used by the recovery class (test/portable-recovery.ts).
-//   P1 a root; P4 lossless: leaves in order, non-overlapping, each a token, every non-punctuation
+//   P1 a root; P4 lossless: leaves in order, non-overlapping, each a token (or the tokens of a composed
+//   operator), every non-punctuation
 //   token a leaf (the CST keeps no punctuation leaf outside an `$error`); a `$missing` is zero-width
 //   with no children; a node's span is its children's; P5 one diagnostic per repair node, in tree
 //   order, at its span (`expected …` for a `$missing`, `unexpected …` for an `$error`);
@@ -28,16 +29,16 @@ export function checkContract(src: string, toks: Tok[], root: Node | null, error
     ks.forEach(walk);
   };
   walk(root);
-  const byOff = new Map(toks.map((t) => [t.off, t]));
+  // A leaf is a token, or the adjacent tokens a composed operator spans (`>>>` read from three '>').
+  const starts = new Set(toks.map((t) => t.off)), ends = new Set(toks.map((t) => t.end));
   let last = -1;
   for (const l of leaves) {
-    const t = byOff.get(l.offset);
-    if (!t || t.end !== l.end) { bad.push(`P4: a leaf [${l.offset}, ${l.end}) is no token — ${at(src)}`); break; }
+    if (!starts.has(l.offset) || !ends.has(l.end)) { bad.push(`P4: a leaf [${l.offset}, ${l.end}) is no token — ${at(src)}`); break; }
     if (l.offset < last) { bad.push(`P4: leaves out of order at ${l.offset} — ${at(src)}`); break; }
     last = l.end;
   }
-  const leafAt = new Set(leaves.map((l) => l.offset));
-  const lost = toks.filter((t) => t.kind !== '' && !leafAt.has(t.off));
+  const covered = (t: Tok) => leaves.some((l) => l.offset <= t.off && t.end <= l.end);
+  const lost = toks.filter((t) => t.kind !== '' && !covered(t));
   if (lost.length) bad.push(`P4: token ${JSON.stringify(lost[0]!.text)} at ${lost[0]!.off} is no leaf — ${at(src)}`);
   // P5
   if (reps.length !== errors.length) bad.push(`P5: ${reps.length} repair nodes, ${errors.length} diagnostics — ${at(src)}`);
