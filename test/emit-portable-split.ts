@@ -13,7 +13,10 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { emitParser, goTarget, rustTarget, tsTarget } from '../src/emit.ts';
+import { emitParser } from '../src/target.ts';
+import { tsTarget } from '../src/target-ts.ts';
+import { goTarget } from '../src/target-go.ts';
+import { rustTarget } from '../src/target-rust.ts';
 import { asGoMain } from './go-main.ts';
 import { goBuild, scratchDir } from './scratch.ts';
 
