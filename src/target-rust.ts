@@ -15,6 +15,7 @@ import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, t
 import { blockBody, elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
+import type { EmitOptions } from './emit.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, unitMask, isList, isNum, isOpt, isRec, isRecList, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
@@ -554,9 +555,11 @@ ${methods}}
 ${spec}`;
   const enter = `            st.template_stack.push(6); st.refresh(); bound = 0; st.emit(pos, pos + ${L}, 0, _LID_EL_OPEN);${raw ? ' st.tag_at.push(st.acc.len() as i64 - 1);' : ''} st.tag_angle = 0; pos += ${L}; continue;\n`;
   const at = (lit: string) => startByteEq('pos', lit);
-  const entry = !operand ? `        if ${at(el.tagOpen)} {\n${enter}        }\n`
-    : !(el.head || sig) ? `        if ${at(el.tagOpen)} && !st.prev_is_value() {\n${enter}        }\n`
-    : `        if ${at(el.tagOpen)}${sig ? ' && !st.spec_on && pos as isize >= st.spec_until' : ''} && !st.prev_is_value() {
+  // a tagOpen that opens no tag (tagStart) is the ordinary scan's
+  const opensTag = `${at(el.tagOpen)}${el.tagStart ? ` && ${shared.elementFn('tagStart')}(src, (pos + ${L}) as isize)` : ''}`;
+  const entry = !operand ? `        if ${opensTag} {\n${enter}        }\n`
+    : !(el.head || sig) ? `        if ${opensTag} && !st.prev_is_value() {\n${enter}        }\n`
+    : `        if ${opensTag}${sig ? ' && !st.spec_on && pos as isize >= st.spec_until' : ''} && !st.prev_is_value() {
             let op;
             ${sig ? 'if sp.has_at && pos == sp.at { op = if sp.keep { 0 } else { 1 }; sp.has_at = false; } else ' : ''}{ let (o, re) = ${shared.elementFn('opens')}(src, pos as isize); op = o; if re > st.la_end { st.la_end = re; } }
             if op == 1 {
@@ -5510,6 +5513,8 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
     runEnd: (cx, set, s, i) => cx.atom(`lex_run_end(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')}, &${set.toUpperCase()})`, 'int', 'usize'),
     find: (cx, s, i, lit) => cx.atom(`lex_find(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')}, ${J(lit)}.as_bytes())`, 'int', 'usize'),
     findAny: (cx, s, i, stops) => cx.atom(`${findAnyName(stops)}(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')})`, 'int', 'usize'),
+    // One allocation: format! sizes the string from its arguments (&str or String alike).
+    cat: (cx, parts) => cx.atom(`format!("${'{}'.repeat(parts.length)}", ${parts.map((r) => r.c).join(', ')})`, 'str', 'str', { owned: true }),
     own: (cx, r) => {
       if (r.ty === 'str') return cx.atom(`${rsWrap(r, ATOM)}.to_string()`, 'str', 'str', { owned: true });
       if (isList(r.ty)) return cx.atom(`${rsWrap(r, ATOM)}.to_vec()`, r.ty, r.ty, { owned: true });
@@ -5600,11 +5605,11 @@ export const rustTarget = defineTarget({
   name: 'rust',
   ext: 'rs',
   lowering: rustLowering,
-  emitParser(grammar: CstGrammar, shared: SharedAlgorithms): string {
+  emitParser(grammar: CstGrammar, shared: SharedAlgorithms, opts: EmitOptions): string {
     const ir = portableIR(grammar, FACTS);
-    return emitRustLibrary(ir, buildLexIdPlan(ir), shared);
+    return emitRustLibrary(ir, buildLexIdPlan(ir), shared) + (opts.recovery ? recoveryRegionRust(ir, shared) : '');
   },
-  emitRunner,
+  emitRunner: (opts) => emitRunner(opts),
 });
 
 function emitRustLibrary(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
@@ -5707,7 +5712,80 @@ ${emitParseWithHelpers(ir, shapeB)}
 `;
 }
 
-function emitRunner(): string {
+// The emit option `recovery` (src/emit.ts): total parsing's entry, a region appended to the default
+// module and touching none of it. parse_total runs the entry rule as parse_with does (owed: one
+// shell for both once the default emission may change); on a reject the recovery family decides
+// the diagnostic from the position the entry stopped at and the tokens the parse examined.
+function recoveryRegionRust(ir: ParserIR, shared: SharedAlgorithms): string {
+  const reuse = !!ir.reuse;
+  return `
+// ---- recovery: the emit option { recovery: true }; generated from src/recovery-family.ts (shared by the TS / Go / Rust targets) ----
+#[derive(Clone, Copy)]
+struct Diag { kind: isize, off: isize, end: isize, rel_off: isize, rel_end: isize }
+${shared.recoveryFamily()}
+/// A diagnostic: a span of the source (byte offsets), its message, and a related location.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Diagnostic { pub off: usize, pub end: usize, pub message: String, pub related: Option<Related> }
+/// A diagnostic's related location.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Related { pub off: usize, pub end: usize, pub message: String }
+#[cold]
+fn diagnostic_of(src: &str, d: Diag) -> Diagnostic {
+    let related = if d.rel_off >= 0 { Some(Related { off: d.rel_off as usize, end: d.rel_end as usize, message: diag_related(d) }) } else { None };
+    Diagnostic { off: d.off as usize, end: d.end as usize, message: diag_message(src, d), related }
+}
+
+/// parse_with that also says why a text is rejected: an accepted text gives parse_with's root and
+/// no errors, a rejected one None and its errors (a lexer error, or the parse's primary error), each
+/// with its span in the source. It does not panic on input.
+pub fn parse_total<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> (Option<B::H>, Vec<Diagnostic>) {
+    let toks = b.toks_mut().map(std::mem::take).unwrap_or_default();
+    let ws = b.workspace_mut().map(std::mem::take).unwrap_or_default();
+    b.restore((0, 0));
+    let owned = std::mem::take(b);
+    let mut g = ParseGuard { home: b, lex: ws.lex, p: Parser { toks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src, b: owned, scratch: ws.scratch${reuse ? ', entries: ws.entries' : ''} } };
+    let p = &mut g.p;
+    if let Some(e) = lex_into(src, &mut p.toks, &mut g.lex) {
+        let end = if e.end > e.off { e.end as usize } else { e.off as usize };
+        let le = lex_error(src, e);
+        return (None, vec![Diagnostic { off: le.off, end, message: le.msg, related: None }]);
+    }
+    p.scratch.clear();
+    let fr = p.parse_${ir.entry}();
+    if let Some(fr) = &fr { if p.pos == p.toks.len() { return (Some(fr.root()), Vec::new()); } }
+    // The examined extent: the furthest of every top-level entry's (look_end holds the last one's).
+    let mut look = p.look_end();${reuse ? '\n    for m in &p.entries { if m.ext as usize > look { look = m.ext as usize; } }' : ''}
+    let d = reject_diag(&p.toks, p.pos, fr.is_some(), look);
+    (None, vec![diagnostic_of(src, d)])
+}
+`;
+}
+
+// The runner's batch-total mode (emit option `recovery`): NUL-separated inputs in, one line per
+// input out: [accepted, [[off, end, message, relOff, relEnd, relMessage], ...]] (relOff -1: none).
+const RS_BATCH_TOTAL = `    if args.get(1).map(|a| a.as_str()) == Some("batch-total") {
+        fn js(s: &str, out: &mut String) {
+            out.push('"');
+            for c in s.chars() { match c { '"' => out.push_str("\\\\\\""), '\\\\' => out.push_str("\\\\\\\\"), c if (c as u32) < 0x20 => out.push_str(&format!("\\\\u{:04x}", c as u32)), c => out.push(c) } }
+            out.push('"');
+        }
+        let mut out = String::new();
+        for s in src.split('\\0') {
+            let (root, errs) = parse_total(s, &mut CstBuilder::default());
+            out.push_str(if root.is_some() { "[true,[" } else { "[false,[" });
+            for (i, e) in errs.iter().enumerate() {
+                if i > 0 { out.push(','); }
+                out.push_str(&format!("[{},{},", e.off, e.end)); js(&e.message, &mut out);
+                match &e.related { Some(r) => { out.push_str(&format!(",{},{},", r.off, r.end)); js(&r.message, &mut out); } None => out.push_str(",-1,-1,\\"\\""), }
+                out.push(']');
+            }
+            out.push_str("]]\\n");
+        }
+        print!("{}", out);
+        return;
+    }
+`;
+function emitRunner(opts: EmitOptions = {}): string {
     return `
 // CLI runner (harness only): stdin -> CST JSON + a self-bench mode. Appended to the parser
 // library by the gate (same file/crate, so it calls \`parse\`/\`write_json\` directly); NOT part
@@ -5844,7 +5922,7 @@ fn main() {
         println!("{:.4}", t.elapsed().as_secs_f64() * 1000.0 / iters as f64);
         return;
     }
-    // batch: NUL-separated inputs in, one line per input out — the CST JSON, "-" for an input
+${opts.recovery ? RS_BATCH_TOTAL : ''}    // batch: NUL-separated inputs in, one line per input out — the CST JSON, "-" for an input
     // the parser rejects, or "!" and the message for one that panicked (a lexer error panics).
     // One process start for a whole corpus.
     if args.get(1).map(|a| a.as_str()) == Some("batch") {
