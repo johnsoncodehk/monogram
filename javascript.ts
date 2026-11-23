@@ -469,7 +469,7 @@ export const newTargetArms = ($, Expr, newArgs, { identGuard, Prop, fnExprArms, 
 ];
 
 const ClassHeritage = rule($ => classHeritageArms($, Expr, NewTarget,
-  ['class', opt(...bindingIdentifier), opt('extends', $), '{', many(ClassMember), '}']));
+  ['class', opt(...bindingName), opt('extends', field('superClass', $)), field('bodyOpen', '{'), many(field('member', ClassMember)), field('bodyClose', '}')]));
 
 const NewTarget = rule($ => newTargetArms($, Expr, opt('(', sep(Expr, ','), ')'),
   { identGuard: notReservedJsExpr, Prop, fnExprArms: fnArms([opt(...bindingName)], Block) }));
@@ -520,8 +520,8 @@ const Expr = rule($ => [
   // (tsc + V8 + babel all reject). `not('?.')` guards the no-call exit; `new a()?.b` chains via
   // the outer `?.` LED unchanged.
   arm('construct', 'new', not('<'), NewTarget, alt(['(', sep($, ','), ')'], not('?.'))),
-  ['new', 'class', ...bindingIdentifier, opt('extends', ClassHeritage), '{', many(ClassMember), '}', alt(['(', sep($, ','), ')'], not('?.'))],
-  ['new', 'class', opt('extends', ClassHeritage), '{', many(ClassMember), '}', alt(['(', sep($, ','), ')'], not('?.'))],
+  arm('newNamedClass', 'new', field('classKeyword', 'class'), ...bindingName, opt('extends', field('superClass', ClassHeritage)), field('bodyOpen', '{'), many(field('member', ClassMember)), field('bodyClose', '}'), field('arguments', alt(arm('paren', '(', sep(field('argument', $), ','), ')'), arm('none', not('?.'))))),
+  arm('newAnonymousClass', 'new', field('classKeyword', 'class'), opt('extends', field('superClass', ClassHeritage)), field('bodyOpen', '{'), many(field('member', ClassMember)), field('bodyClose', '}'), field('arguments', alt(arm('paren', '(', sep(field('argument', $), ','), ')'), arm('none', not('?.'))))),
   // array literal `[a, , ...b,]`: an element or a hole, then `,` and an element or a hole, the
   // ArrayBindingPattern's form. Each element is parsed once: `many(opt($), ','), opt($)` parsed
   // the last one in the repetition, found no `,`, and parsed it again (twice per nesting level).
@@ -556,8 +556,8 @@ const Expr = rule($ => [
   // named vs anonymous kept separate (greedy opt(Ident) would eat a leading
   // `extends`). A ClassExpression takes a DecoratorList, as a ClassDeclaration does: any number
   // of decorators (`x = @a @b class {}`).
-  [many(DecoratorExpr), 'class', ...bindingIdentifier, opt('extends', ClassHeritage), '{', many(ClassMember), '}'],
-  [many(DecoratorExpr), 'class', opt('extends', ClassHeritage), '{', many(ClassMember), '}'],
+  arm('namedClass', many(field('decorator', DecoratorExpr)), 'class', ...bindingName, opt('extends', field('superClass', ClassHeritage)), field('bodyOpen', '{'), many(field('member', ClassMember)), field('bodyClose', '}')),
+  arm('anonymousClass', many(field('decorator', DecoratorExpr)), 'class', opt('extends', field('superClass', ClassHeritage)), field('bodyOpen', '{'), many(field('member', ClassMember)), field('bodyClose', '}')),
 ]);
 
 // ── Statements ──
@@ -728,7 +728,7 @@ const getSetWord = memberWord(['get', 'set'], memberWordRules);
 // ENCLOSING context, so it must inherit, not reset.
 // A method, accessor or constructor has a body (MethodDefinition), after which nothing is
 // needed: a `;` there is an empty class element of its own. A field ends as a statement does.
-const memTail = (ctx) => ['(', sep(ctx(Param), ','), ')', ctx(Block)];
+const memTail = (ctx) => [field('paren', '('), sep(ctx(field('parameter', Param)), ','), ')', ctx(field('body', Block))];
 // A class element (15.7 ClassElement, with the decorators proposal's DecoratorList and
 // `accessor`): `;`, a static block, or a member's decorators, at most one `static`, and then one
 // production, each word of which is a keyword only where `memberWord` says so. Inner alt() is
@@ -737,28 +737,28 @@ const memTail = (ctx) => ['(', sep(ctx(Param), ','), ')', ctx(Block)];
 // `constructor` is the constructor (its keyword leaf); with a prefix it is a method named
 // `constructor`.
 const memberKinds = [
-  [accessorWord, MemberName, opt('=', resetCtx(Expr)), asi()],              // accessor field
-  [asyncWord, alt(
-    ['*', MemberName, ...memTail(asyncGenCtx)],                             // async generator method
-    [MemberName, ...memTail(awaitCtx)],                                     // async method
-  )],
-  ['*', MemberName, ...memTail(yieldCtx)],                                  // generator method
-  [getSetWord, MemberName, '(', opt(sep(resetCtx(Param), ',')), ')', resetCtx(Block)],  // accessor
+  arm('accessorField', field('accessorWord', accessorWord), field('key', MemberName), opt('=', resetCtx(field('value', Expr))), asi()),
+  arm('async', field('asyncWord', asyncWord), field('form', alt(
+    arm('generatorMethod', field('asterisk', '*'), field('key', MemberName), ...memTail(asyncGenCtx)),
+    arm('method', field('key', MemberName), ...memTail(awaitCtx)),
+  ))),
+  arm('generatorMethod', field('asterisk', '*'), field('key', MemberName), ...memTail(yieldCtx)),
+  arm('accessor', field('kind', getSetWord), field('key', MemberName), field('paren', '('), opt(sep(resetCtx(field('parameter', Param)), ',')), ')', resetCtx(field('body', Block))),
   // Where `get` / `set` is the accessor keyword it is no name (`get⏎x;` has no derivation; the
   // same-line words cannot end a field before a member start anyway).
-  [not(getSetWord), MemberName, alt(
-    [...memTail(resetCtx)],                                                 // method (requires `(`)
+  arm('named', not(getSetWord), field('key', MemberName), field('tail', alt(
+    arm('method', ...memTail(resetCtx)),                                    // method (requires `(`)
     // field; it ends as a statement does
-    [opt('=', resetCtx(Expr)), asi()],
-  )],
+    arm('field', opt('=', resetCtx(field('value', Expr))), asi()),
+  ))),
 ];
 const ClassMember = rule($ => [
-  ';',   // SemicolonClassElement: `class C { ; }`
-  ['static', awaitCtx(Block)],   // ClassStaticBlock: the body is [+Await] (await reserved)
-  [alt(
-    ['constructor', ...memTail(resetCtx)],
-    [many(DecoratorExpr), opt(staticWord), alt(...memberKinds)],
-  )],
+  arm('empty', ';'),   // SemicolonClassElement: `class C { ; }`
+  arm('staticBlock', 'static', awaitCtx(field('body', Block))),   // ClassStaticBlock: the body is [+Await] (await reserved)
+  arm('member', field('form', alt(
+    arm('constructor', field('constructorKeyword', 'constructor'), ...memTail(resetCtx)),
+    arm('element', many(field('decorator', DecoratorExpr)), opt(field('staticWord', staticWord)), field('member', alt(...memberKinds))),
+  ))),
 ]);
 
 const ImportSpecifier = rule($ => [
@@ -789,7 +789,7 @@ const ImportClause = rule($ => [
 // A class declaration from its `class` keyword on. Decl writes it once bare and once after a
 // declaration's decorators (below); gen-tm expands it to recover the `class Ident … { … }` shape
 // for highlighting.
-const classDecl = ['class', ...bindingIdentifier, opt('extends', ClassHeritage), '{', many(ClassMember), '}'];
+const classDecl = ['class', ...bindingName, opt('extends', field('superClass', ClassHeritage)), field('bodyOpen', '{'), many(field('member', ClassMember)), field('bodyClose', '}')];
 const Decl = rule($ => [
   // Function declarations live here (not in Stmt) so that at statement level a
   // leading `function` is preferred as a declaration over an IIFE expression-
@@ -814,8 +814,8 @@ const Decl = rule($ => [
   // the inline alt is ordered, so their arms come first), so `export default class {} g()` is two.
   ['export', 'default', alt(
     ...fnArms([opt(...bindingName)], Block),  // function
-    [many(DecoratorExpr), 'class', ...bindingIdentifier, opt('extends', ClassHeritage), '{', many(ClassMember), '}'],  // named class
-    [many(DecoratorExpr), 'class', opt('extends', ClassHeritage), '{', many(ClassMember), '}'],                          // anonymous class
+    arm('namedClass', many(field('decorator', DecoratorExpr)), 'class', ...bindingName, opt('extends', field('superClass', ClassHeritage)), field('bodyOpen', '{'), many(field('member', ClassMember)), field('bodyClose', '}')),  // named class
+    arm('anonymousClass', many(field('decorator', DecoratorExpr)), 'class', opt('extends', field('superClass', ClassHeritage)), field('bodyOpen', '{'), many(field('member', ClassMember)), field('bodyClose', '}')),                          // anonymous class
     [Expr, asi()],   // catch-all: export default <expr>
   )],
   ['export', '*', alt(['from', ...moduleSpecifier], ['as', alt(Ident, String_), 'from', ...moduleSpecifier]), asi()],   // the alias is a ModuleExportName
