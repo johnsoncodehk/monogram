@@ -7,9 +7,9 @@
 #     <sha> is a head of land/<branch> whose CI failed for a real reason. Its change is put back onto
 #     this tree: the difference from the branch's last head (origin/land/<branch>, what was fixed
 #     and landed) back to <sha>, over the files the branch itself changed; a file that no longer
-#     applies is left out and named. Then `--quick` and `--changed` run against that one change.
-#     caught: --quick fails; missed: --changed fails and --quick passes; not reproduced: --changed
-#     passes (the defect is not visible in the inner loop at all on this tree, or did not apply).
+#     applies is taken whole from <sha> and named. Then `--quick` and `--changed` run against that one change.
+#     caught: --quick fails; MISSED: --quick passes and --changed (or only `--changed --all`, the
+#     ci tier) fails; not reproduced: all three pass (not visible on this tree, or did not apply).
 set -uo pipefail
 cmd=${1:?usage: corpora | timing | catch <branch>:<sha>}
 row() { local IFS='|'; echo "|$*|"; }
@@ -70,21 +70,30 @@ catch)
   if [ ! -s "$out/unfix.diff" ]; then
     row " $B " " ${F:0:10} " ' no difference from the landed head ' '' '' ' not reproduced '; exit 0
   fi
-  if ! git apply -3 --index "$out/unfix.diff" 2> "$out/apply.log"; then
-    bad=$( (grep -oE '^error: patch failed: [^:]+' "$out/apply.log" | sed 's/^error: patch failed: //'; git diff --name-only --diff-filter=U) | sort -u)
-    git reset -q --hard HEAD
-    ex=(); for f in $bad; do ex+=("--exclude=$f"); done
-    skipped=$(echo $bad)
-    git apply -3 --index "${ex[@]}" "$out/unfix.diff" 2>> "$out/apply.log" || { row " $B " " ${F:0:10} " " does not apply: $skipped " '' '' ' not reproduced '; exit 0; }
-  fi
+  # file by file: a 3-way apply of that file's difference; where master moved the file too far for
+  # that, the file is taken whole from the failing head (named in the last column: master's later
+  # changes to it are then undone as well, so read that row's failing gates against the original)
+  for p in $(cat "$out/files.txt"); do
+    git diff "$L" "$F" -- "$p" > "$out/one.diff"
+    [ -s "$out/one.diff" ] || continue
+    if ! git apply -3 --index "$out/one.diff" 2>> "$out/apply.log"; then
+      if git cat-file -e "HEAD:$p" 2>/dev/null; then git checkout -q HEAD -- "$p"; else git rm -q -f --ignore-unmatch -- "$p"; rm -f -- "$p"; fi
+      if git cat-file -e "$F:$p" 2>/dev/null; then git checkout -q "$F" -- "$p"; else git rm -q -f --ignore-unmatch -- "$p"; fi
+      skipped="$skipped $p"
+    fi
+  done
+  git diff --cached --quiet && { row " $B " " ${F:0:10} " ' no difference from this tree ' '' '' ' not reproduced '; exit 0; }
   git commit -q -m "put back the failure of $B at $F"
   npm run gen > "$out/gen.txt" 2>&1 || echo "gen failed (the gates then fail on its absence)"
   t0=$(now); node test/check.ts --quick HEAD~1 > "$out/quick.txt" 2>&1; q=$?; t1=$(now)
   node test/check.ts --changed HEAD~1 > "$out/changed.txt" 2>&1; c=$?
-  if [ $c != 0 ] && [ $q != 0 ]; then v=caught; elif [ $c != 0 ]; then v=MISSED; elif [ $q != 0 ]; then v='quick only'; else v='not reproduced'; fi
-  row ' branch ' ' failing head ' ' --quick failed ' ' --changed failed ' ' quick s ' ' verdict ' ' files left out '
-  row '---' '---' '---' '---' '---:' '---' '---'
-  row " $B " " ${F:0:10} " " $(failed_gates "$out/quick.txt") " " $(failed_gates "$out/changed.txt") " " $(secs "$t0" "$t1") " " $v " " ${skipped:-none} "
+  # the ci tier too (corpus / edits / recovery classes, test262, ...): a failure only it shows is one
+  # the inner loop cannot catch at all
+  node test/check.ts --changed --all HEAD~1 > "$out/all.txt" 2>&1; a=$?
+  if [ $q != 0 ]; then v=caught; elif [ $c != 0 ]; then v='MISSED (--changed catches)'; elif [ $a != 0 ]; then v='MISSED (ci tier only)'; else v='not reproduced'; fi
+  row ' branch ' ' failing head ' ' --quick failed ' ' --changed failed ' ' --changed --all failed ' ' quick s ' ' verdict ' ' files taken whole '
+  row '---' '---' '---' '---' '---' '---:' '---' '---'
+  row " $B " " ${F:0:10} " " $(failed_gates "$out/quick.txt") " " $(failed_gates "$out/changed.txt") " " $(failed_gates "$out/all.txt") " " $(secs "$t0" "$t1") " " $v " " ${skipped:-none} "
   ;;
 *) echo "unknown command $cmd"; exit 1 ;;
 esac
