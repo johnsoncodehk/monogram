@@ -15,6 +15,13 @@ use oxc_parser::Parser;
 use oxc_parser::config::TokensParserConfig;
 use oxc_span::SourceType;
 
+// The source type the input's extension names, as the monogram side picks its grammar
+// (test/bench-rust-profile/run.sh grammar_of): .tsx -> TSX (typescriptreact), .jsx -> JSX
+// (javascriptreact), anything else -> TypeScript (the typescript grammar also reads the .js inputs).
+fn source_type_of(path: &str) -> SourceType {
+    if path.ends_with(".tsx") { SourceType::tsx() } else if path.ends_with(".jsx") { SourceType::jsx() } else { SourceType::ts() }
+}
+
 struct CountAlloc;
 static ARMED: AtomicBool = AtomicBool::new(false);
 static A_MALLOC: AtomicU64 = AtomicU64::new(0);
@@ -87,11 +94,11 @@ fn faults_main(mode: &str, path: &str) {
     let mut once = |reuse: bool| {
         if reuse {
             keep.reset();
-            let ret = Parser::new(&keep, &src, SourceType::ts()).parse();
+            let ret = Parser::new(&keep, &src, source_type_of(path)).parse();
             drop(std::hint::black_box(ret));
         } else {
             let allocator = Allocator::default();
-            let ret = Parser::new(&allocator, &src, SourceType::ts()).parse();
+            let ret = Parser::new(&allocator, &src, source_type_of(&path)).parse();
             drop(std::hint::black_box(ret));
             drop(std::hint::black_box(allocator));
         }
@@ -122,7 +129,7 @@ fn main() {
     ARMED.store(true, Relaxed);
     let allocator = Allocator::default();
     let (ok, used, cap) = {
-        let ret = Parser::new(&allocator, &src, SourceType::ts()).parse();
+        let ret = Parser::new(&allocator, &src, source_type_of(&path)).parse();
         (ret.errors.is_empty() && !ret.panicked, allocator.used_bytes(), allocator.capacity())
     };
     let retained = A_LIVE.load(Relaxed);
@@ -130,12 +137,12 @@ fn main() {
     ARMED.store(false, Relaxed);
     let tokens = {
         let allocator = Allocator::default();
-        let ret = Parser::new(&allocator, &src, SourceType::ts()).with_config(TokensParserConfig).parse();
+        let ret = Parser::new(&allocator, &src, source_type_of(&path)).with_config(TokensParserConfig).parse();
         ret.tokens.len()
     };
     let nodes = {
         let allocator = Allocator::default();
-        let ret = Parser::new(&allocator, &src, SourceType::ts()).parse();
+        let ret = Parser::new(&allocator, &src, source_type_of(&path)).parse();
         let mut v = NodeCount(0);
         v.visit_program(&ret.program);
         v.0

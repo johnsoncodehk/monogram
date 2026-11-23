@@ -6,6 +6,7 @@
 // and reports the sizes A / M / delta (test/bench-rust-profile/pr-summary.ts); the sha says whether
 // the emitted output is identical, which a size alone does not.
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -16,6 +17,8 @@ const TARGETS = ['tsTarget', 'jsTarget', 'goTarget', 'rustTarget'] as const;
 const out: Record<string, Record<string, { bytes: number; sha: string }>> = {};
 for (const path of ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'test/fixtures/textdialect']) {
   const g = path.split('/').pop()!;
+  // A grammar this tree does not have (an older A: test/fixtures/textdialect.ts came later): absent, said on stderr.
+  if (!existsSync(root + '/' + path + '.ts')) { console.error(`${g}: not in this tree`); continue; }
   const grammar = (await import(url(path + '.ts'))).default;
   out[g] = {};
   for (const t of TARGETS) {
