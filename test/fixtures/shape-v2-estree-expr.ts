@@ -483,8 +483,10 @@ export const estreeExprShape: Shape2Spec = {
       newDotTarget: node('MetaProperty', { meta: idOf('newKeyword', c('new')), property: idOf('targetKeyword', c('target')) }),
       import_: branch('form', {
         call: node('ImportExpression', { source: child('source'), options: orNull('options') }),
-        phaseCall: node('ImportExpression', { source: child('source'), options: orNull('options'), phase: text('phase') }),
-        meta: node('MetaProperty', { meta: idOf('importKeyword', c('import')), property: idOf('metaKeyword', c('meta')) }),
+        dot: branch('property', {
+          meta: node('MetaProperty', { meta: idOf('importKeyword', c('import')), property: idOf('metaKeyword', c('meta')) }),
+          phaseCall: node('ImportExpression', { source: child('source'), options: orNull('options'), phase: text('phase') }),
+        }),
       }),
       construct: node('NewExpression', { callee: child('newTarget'), arguments: branch('alt', { paren: child('expr'), empty: list() }) }),
       yield_: branch('alt', {

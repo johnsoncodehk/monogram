@@ -50,64 +50,22 @@ const says = (t: TestInfo, re: RegExp) => re.test(t.description);
 export const CLASSES: CauseClass[] = [
   // ── WE-REJECT: valid JavaScript the grammar refuses ──
   {
-    id: 'reject/stage3-import-defer', direction: 'we-reject', verdict: 'adding',
-    title: 'import defer (Stage 3)',
-    why: '`import defer * as ns from "m"` and `import.defer(…)`: the grammar has neither. Decided: add to the JavaScript grammar (TypeScript follows tsc).',
-    match: (t) => has(t, 'import-defer'),
-  },
-  {
-    id: 'reject/stage3-source-phase-imports', direction: 'we-reject', verdict: 'adding',
-    title: 'source phase imports (Stage 3)',
-    why: '`import source x from "m"` and `import.source(…)`: the grammar has neither. Decided: add to the JavaScript grammar.',
-    match: (t) => has(t, 'source-phase-imports'),
-  },
-  {
-    id: 'reject/annexb-legacy-numeric-literals', direction: 'we-reject', verdict: 'adding',
-    title: 'LegacyOctalIntegerLiteral / NonOctalDecimalIntegerLiteral (Annex B)',
-    why: '`01`, `08`, `019` in sloppy script code: the lexer has no such token, so `010` is refused outright. Decided: accept.',
-    match: (t) => inDir(t, /^test\/language\/literals\/numeric\/(legacy-octal-integer|non-octal-decimal-integer)\.js$/),
-  },
-  {
     id: 'reject/annexb-html-comments', direction: 'we-reject', verdict: 'needs-parameter',
     title: 'HTML-like comments (Annex B)',
     why: '`<!--` and a line-leading `-->` are comments in script code only; in module code they are not comments (`a <!--b` is `a < !--b` there). Without the script / module goal, accepting them changes the meaning of valid module code.',
     match: (t) => inDir(t, /^test\/annexB\/language\/comments\//),
   },
   {
-    id: 'reject/lexer-division-after-radix-number', direction: 'we-reject', verdict: 'grammar-bug',
-    title: 'a `/` after a hex / octal / binary number is lexed as a regular expression',
-    why: '`x = 0x10 / 1, \'a/b\'`: regexContext.divisionAfterTypes lists Number and BigInt, not HexNumber, OctalNumber or BinaryNumber (a hex BigInt lexes as HexNumber).',
-    match: (t) => inDir(t, /^test\/language\/expressions\/division\/bigint-/),
-  },
-  {
-    id: 'reject/member-bracket-comma-expression', direction: 'we-reject', verdict: 'grammar-bug',
-    title: 'a computed member access takes an Expression, comma included',
-    why: '`a[0, 1]`, `a?.[0, 1]`, `of[0, 1]`: MemberExpression `[ Expression ]` and OptionalChain `?. [ Expression ]`; the grammar reads one AssignmentExpression.',
-    match: (t) => inDir(t, /dynamic-import\/assignment-expression\/call-expr-expr\.js$/, /optional-chaining\/optional-chain-prod-expression\.js$/, /using\/syntax\/using-for-using-of-of\.js$/),
+    id: 'reject/lexer-division-after-object-literal', direction: 'we-reject', verdict: 'grammar-bug',
+    title: 'a `/` after an object literal\'s `}` is lexed as a regular expression',
+    why: '`f({ a: 1 } / 2n, "/")`: after a `}` the lexer reads `/` as a regular expression (a `}` that ends a block or a function body is followed by a regex), but this `}` ends an object literal, a value. Which `}` it is, is the parser\'s knowledge: the lexer\'s regex / division choice needs that context (the lexer lane\'s; the `/` after a hex / octal / binary number was the same class\'s other cause, fixed).',
+    match: (t) => inDir(t, /^test\/language\/expressions\/division\/bigint-(toprimitive|wrapped-values)\.js$/),
   },
   {
     id: 'reject/lexer-optional-chain-before-digit', direction: 'we-reject', verdict: 'grammar-bug',
     title: '`?.` before a decimal digit is `?` and a number',
     why: '`true ?.30 : false`: OptionalChainingPunctuator is `?. [lookahead ∉ DecimalDigit]`.',
     match: (t) => inDir(t, /optional-chaining\/punctuator-decimal-lookahead\.js$/),
-  },
-  {
-    id: 'reject/bigint-binding-property-key', direction: 'we-reject', verdict: 'grammar-bug',
-    title: 'a BigInt as a binding pattern\'s property name',
-    why: '`let { 1n: a } = {}`: a BindingProperty\'s PropertyName is a LiteralPropertyName, which includes NumericLiteral (a BigInt among them); the object literal `({ 1n: a })` already parses.',
-    match: (t) => inDir(t, /expressions\/object\/literal-property-name-bigint\.js$/),
-  },
-  {
-    id: 'reject/await-context-leaks-into-function', direction: 'we-reject', verdict: 'grammar-bug',
-    title: 'a class static block\'s [+Await] reaches a nested function\'s parameters',
-    why: '`class C { static { (function (x = await) {}) } }`: a function\'s FormalParameters and body are [~Await]; the parameters inherit the block\'s context instead.',
-    match: (t) => inDir(t, /expressions\/function\/static-init-await-reference\.js$/),
-  },
-  {
-    id: 'reject/decorator-private-member', direction: 'we-reject', verdict: 'grammar-bug',
-    title: 'a decorator member expression ending in a private name',
-    why: '`@C.#a class D {}` inside the class body: DecoratorMemberExpression `. PrivateIdentifier`.',
-    match: (t) => inDir(t, /decorator\/syntax\/class-valid\/decorator-member-expr-private-identifier\.js$/),
   },
 ];
 
@@ -184,22 +142,10 @@ const WE_ACCEPT: CauseClass[] = [
     match: (t) => says(t, /`yield` expressions (are not LogicalOrExpressions|bind weakly)|YieldExpression is not a valid LeftHandSideExpression/i),
   },
   {
-    id: 'accept/string-line-terminator', direction: 'we-accept', verdict: 'grammar-bug',
-    title: 'a raw LF / CR in a string literal',
-    why: 'DoubleStringCharacter / SingleStringCharacter exclude LF and CR. `String_` is shared with JSX attribute values, which may span lines (the expected-fail in test/js-conformance.ts).',
-    match: (t) => inDir(t, /^test\/language\/(line-terminators|literals\/string)\//) && says(t, /(LINE FEED|CARRIAGE RETURN|LineTerminator)/i) && says(t, /string/i),
-  },
-  {
     id: 'accept/switch-statement-outside-clause', direction: 'we-accept', verdict: 'grammar-bug',
     title: 'a statement in a switch body before any `case`',
     why: '`switch (x) { a = 2; case 0: }`: a CaseBlock holds CaseClauses and a DefaultClause only; the grammar\'s SwitchCase rule has a bare Stmt arm.',
     match: (t) => says(t, /not followed by "case"/i),
-  },
-  {
-    id: 'accept/numeric-literal-lexical', direction: 'we-accept', verdict: 'grammar-bug',
-    title: 'a numeric literal the lexical grammar does not derive',
-    why: '`01n` (no BigInt suffix on a legacy octal), a NumericLiteralSeparator in a legacy-octal-like literal or after a leading zero: the token reads them.',
-    match: (t) => inDir(t, /^test\/language\/literals\/(numeric|bigint)\//) && !flag(t, 'onlyStrict'),
   },
   // waiting on a parameter the engine lacks
   {

@@ -574,11 +574,13 @@ const Expr = rule($ => [
   // A phase import call (import defer and source phase imports, Stage 3: `ImportCall : import .
   // ImportPhase ( AssignmentExpression ,opt )`, and with options as ImportCall) takes the same
   // arguments; `import.defer` / `import.source` are no expression of their own (`typeof
-  // import.source`, `new import.defer(x)` have no parse).
+  // import.source`, `new import.defer(x)` have no parse). After `.` one token decides the form.
   arm('import_', field('importKeyword', 'import'), field('form', alt(
     arm('call', ...importCallArgs($)),
-    arm('phaseCall', '.', field('phase', alt('defer', 'source')), ...importCallArgs($)),
-    arm('meta', '.', field('metaKeyword', 'meta')),
+    arm('dot', '.', field('property', alt(
+      arm('meta', field('metaKeyword', 'meta')),
+      arm('phaseCall', field('phase', alt('defer', 'source')), ...importCallArgs($)),
+    ))),
   ))),
   PrivateField,
   HexNumber, OctalNumber, BinaryNumber, BigInt_, LegacyNumber,
