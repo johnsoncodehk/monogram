@@ -41,9 +41,6 @@ enum TokenType {
   _STARTS_11,
   _STARTS_12,
   _STARTS_13,
-  _STARTS_14,
-  _STARTS_15,
-  _STARTS_16,
 };
 
 // The scanner is stateless — tree-sitter's `valid_symbols` already encodes
@@ -2311,61 +2308,51 @@ static const ZeroWidth ZERO_WIDTH[] = {
 };
 typedef struct { int cond; int lit, tok, second; bool same_line; } StartPath;
 static const StartPath START_PATHS[] = {
-  { 0, 111, -1, -1, false },
-  { 0, 94, -1, -1, false },
-  { 1, 46, -1, -1, false },
-  { 2, 43, -1, -1, false },
-  { 3, 125, -1, -1, false },
-  { 4, 73, -1, -1, false },
-  { 4, 82, -1, -1, false },
-  { 5, 125, -1, -1, false },
-  { 5, 78, -1, -1, false },
-  { 5, 60, -1, -1, false },
-  { 5, -1, 13, -1, false },
-  { 5, 55, -1, 78, true },
-  { 5, 90, -1, 47, false },
-  { 6, 90, -1, 47, false },
-  { 7, 90, -1, -1, false },
-  { 7, 55, -1, 96, false },
-  { 8, 90, -1, -1, false },
-  { 9, 107, -1, -1, false },
-  { 10, 62, -1, -1, false },
-  { 11, -1, 6, -1, false },
+  { 0, 125, -1, -1, false },
+  { 1, 73, -1, -1, false },
+  { 1, 82, -1, -1, false },
+  { 2, 125, -1, -1, false },
+  { 2, 78, -1, -1, false },
+  { 2, 60, -1, -1, false },
+  { 2, -1, 13, -1, false },
+  { 2, 55, -1, 78, true },
+  { 2, 90, -1, 47, false },
+  { 3, 90, -1, 47, false },
+  { 4, 90, -1, -1, false },
+  { 4, 55, -1, 96, false },
+  { 5, 90, -1, -1, false },
+  { 6, 107, -1, -1, false },
+  { 7, 62, -1, -1, false },
+  { 8, -1, 6, -1, false },
 };
-typedef struct { int symbol; const int16_t *conds; unsigned count; uint32_t killed; } StartMarker;
+typedef struct { int symbol; int lit, tok; const int16_t *conds; unsigned count; uint32_t killed; } StartMarker;
 static const int16_t _STARTS_1_CONDS[] = { 0 };
-static const int16_t _STARTS_2_CONDS[] = { 0 };
-static const int16_t _STARTS_3_CONDS[] = { 1 };
-static const int16_t _STARTS_4_CONDS[] = { 3 };
-static const int16_t _STARTS_5_CONDS[] = { 5 };
-static const int16_t _STARTS_6_CONDS[] = { 5 };
-static const int16_t _STARTS_7_CONDS[] = { 5 };
-static const int16_t _STARTS_8_CONDS[] = { 5 };
-static const int16_t _STARTS_9_CONDS[] = { 5 };
-static const int16_t _STARTS_10_CONDS[] = { 5 };
-static const int16_t _STARTS_11_CONDS[] = { 6, 6, 7 };
-static const int16_t _STARTS_12_CONDS[] = { 6, 6, 7 };
-static const int16_t _STARTS_13_CONDS[] = { 6, 6, 7 };
-static const int16_t _STARTS_14_CONDS[] = { 8 };
-static const int16_t _STARTS_15_CONDS[] = { 10 };
-static const int16_t _STARTS_16_CONDS[] = { 11 };
+static const int16_t _STARTS_2_CONDS[] = { 2 };
+static const int16_t _STARTS_3_CONDS[] = { 2 };
+static const int16_t _STARTS_4_CONDS[] = { 2 };
+static const int16_t _STARTS_5_CONDS[] = { 2 };
+static const int16_t _STARTS_6_CONDS[] = { 2 };
+static const int16_t _STARTS_7_CONDS[] = { 2 };
+static const int16_t _STARTS_8_CONDS[] = { 3, 3, 4 };
+static const int16_t _STARTS_9_CONDS[] = { 3, 3, 4 };
+static const int16_t _STARTS_10_CONDS[] = { 3, 3, 4 };
+static const int16_t _STARTS_11_CONDS[] = { 5 };
+static const int16_t _STARTS_12_CONDS[] = { 7 };
+static const int16_t _STARTS_13_CONDS[] = { 8 };
 static const StartMarker START_MARKERS[] = {
-  { _STARTS_1, _STARTS_1_CONDS, 1, 1u },
-  { _STARTS_2, _STARTS_2_CONDS, 1, 1u },
-  { _STARTS_3, _STARTS_3_CONDS, 1, 1u },
-  { _STARTS_4, _STARTS_4_CONDS, 1, 1u },
-  { _STARTS_5, _STARTS_5_CONDS, 1, 1u },
-  { _STARTS_6, _STARTS_6_CONDS, 1, 1u },
-  { _STARTS_7, _STARTS_7_CONDS, 1, 1u },
-  { _STARTS_8, _STARTS_8_CONDS, 1, 1u },
-  { _STARTS_9, _STARTS_9_CONDS, 1, 1u },
-  { _STARTS_10, _STARTS_10_CONDS, 1, 1u },
-  { _STARTS_11, _STARTS_11_CONDS, 3, 4u },
-  { _STARTS_12, _STARTS_12_CONDS, 3, 7u },
-  { _STARTS_13, _STARTS_13_CONDS, 3, 4u },
-  { _STARTS_14, _STARTS_14_CONDS, 1, 1u },
-  { _STARTS_15, _STARTS_15_CONDS, 1, 1u },
-  { _STARTS_16, _STARTS_16_CONDS, 1, 1u },
+  { _STARTS_1, 125, -1, _STARTS_1_CONDS, 1, 1u },
+  { _STARTS_2, 125, -1, _STARTS_2_CONDS, 1, 1u },
+  { _STARTS_3, 78, -1, _STARTS_3_CONDS, 1, 1u },
+  { _STARTS_4, 60, -1, _STARTS_4_CONDS, 1, 1u },
+  { _STARTS_5, -1, 13, _STARTS_5_CONDS, 1, 1u },
+  { _STARTS_6, 55, -1, _STARTS_6_CONDS, 1, 1u },
+  { _STARTS_7, 90, -1, _STARTS_7_CONDS, 1, 1u },
+  { _STARTS_8, 90, -1, _STARTS_8_CONDS, 3, 4u },
+  { _STARTS_9, 90, -1, _STARTS_9_CONDS, 3, 7u },
+  { _STARTS_10, 55, -1, _STARTS_10_CONDS, 3, 4u },
+  { _STARTS_11, 90, -1, _STARTS_11_CONDS, 1, 1u },
+  { _STARTS_12, 62, -1, _STARTS_12_CONDS, 1, 1u },
+  { _STARTS_13, -1, 6, _STARTS_13_CONDS, 1, 1u },
 };
 // The literal after the first one (past whitespace and the comments skipped here); -1: none, or a
 // comment opener to defer (the parse is then the unmarked one).
@@ -2382,12 +2369,13 @@ static int zw_second_literal(TSLexer *lexer, bool *line_break) {
 // holds where one of its paths begins the input; a second literal is read only when one is asked.
 static int scan_starts(TSLexer *lexer, const bool *valid_symbols, int lit, uint64_t cand) {
   int lit2 = -3; bool line_break2 = false;
-  for (unsigned i = 0; i < 16; i++) {
+  for (unsigned i = 0; i < 13; i++) {
     const StartMarker *m = &START_MARKERS[i];
     if (!valid_symbols[m->symbol]) continue;
+    if (m->lit >= 0 ? m->lit != lit : (lit >= 0 || !((cand >> m->tok) & 1))) continue;   // its first token
     uint32_t held = 0;
     for (unsigned j = 0; j < m->count; j++)
-      for (unsigned k = 0; k < 20; k++) {
+      for (unsigned k = 0; k < 16; k++) {
         const StartPath *p = &START_PATHS[k];
         if (p->cond != m->conds[j]) continue;
         if (p->lit >= 0 ? p->lit != lit : (lit >= 0 || !((cand >> p->tok) & 1))) continue;
@@ -2455,7 +2443,7 @@ bool tree_sitter_typescriptreact_external_scanner_scan(void *payload, TSLexer *l
   }
 
   // Zero-width tokens (a line-end alternative, a same-line marker, a start marker) where one is valid.
-  if (valid_symbols[_SAME_LINE_1] || valid_symbols[_LINE_END_1] || valid_symbols[_SAME_LINE_2] || valid_symbols[_SAME_LINE_3] || valid_symbols[_SAME_LINE_4] || valid_symbols[_SAME_LINE_5] || valid_symbols[_SAME_LINE_6] || valid_symbols[_SAME_LINE_7] || valid_symbols[_SAME_LINE_8] || valid_symbols[_SAME_LINE_9] || valid_symbols[_SAME_LINE_10] || valid_symbols[_SAME_LINE_11] || valid_symbols[_SAME_LINE_12] || valid_symbols[_STARTS_1] || valid_symbols[_STARTS_2] || valid_symbols[_STARTS_3] || valid_symbols[_STARTS_4] || valid_symbols[_STARTS_5] || valid_symbols[_STARTS_6] || valid_symbols[_STARTS_7] || valid_symbols[_STARTS_8] || valid_symbols[_STARTS_9] || valid_symbols[_STARTS_10] || valid_symbols[_STARTS_11] || valid_symbols[_STARTS_12] || valid_symbols[_STARTS_13] || valid_symbols[_STARTS_14] || valid_symbols[_STARTS_15] || valid_symbols[_STARTS_16]) {
+  if (valid_symbols[_SAME_LINE_1] || valid_symbols[_LINE_END_1] || valid_symbols[_SAME_LINE_2] || valid_symbols[_SAME_LINE_3] || valid_symbols[_SAME_LINE_4] || valid_symbols[_SAME_LINE_5] || valid_symbols[_SAME_LINE_6] || valid_symbols[_SAME_LINE_7] || valid_symbols[_SAME_LINE_8] || valid_symbols[_SAME_LINE_9] || valid_symbols[_SAME_LINE_10] || valid_symbols[_SAME_LINE_11] || valid_symbols[_SAME_LINE_12] || valid_symbols[_STARTS_1] || valid_symbols[_STARTS_2] || valid_symbols[_STARTS_3] || valid_symbols[_STARTS_4] || valid_symbols[_STARTS_5] || valid_symbols[_STARTS_6] || valid_symbols[_STARTS_7] || valid_symbols[_STARTS_8] || valid_symbols[_STARTS_9] || valid_symbols[_STARTS_10] || valid_symbols[_STARTS_11] || valid_symbols[_STARTS_12] || valid_symbols[_STARTS_13]) {
     int zw = scan_zero_width(lexer, valid_symbols);
     if (zw == 1) return true;
     if (zw == 0) return false;

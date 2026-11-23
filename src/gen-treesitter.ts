@@ -2274,6 +2274,8 @@ export interface StartMarkerToken {
    *  (bit i: conds[i] holds): returned where exactly those hold. */
   conds: number[];
   killed: number;
+  /** The first token of the inputs it stands for. */
+  first: StartElem;
 }
 interface StartMarkerPlan {
   tokens: StartMarkerToken[];
@@ -2332,6 +2334,7 @@ function planStartMarkers(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
   const byKey = new Map<string, StartMarkerToken>();
   const condByKey = new Map<string, number>();
   const reported = new Set<RuleExpr>();
+  const unstartable = new Map<RuleExpr, string[]>();
   let owner = '';
   const visit = (alt: RuleExpr & { type: 'alt' }) => {
     // the conditions: per arm, its leading dropped negative lookaheads' paths
@@ -2351,7 +2354,14 @@ function planStartMarkers(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
       for (const n of nots) {
         const ps = pathsOf((n as RuleExpr & { type: 'not' }).body);
         if (typeof ps === 'string') { if (!reported.has(n)) { reported.add(n); plan.report.push({ rule: owner, text: assertionText(n), rendered: [], left: [ps], exact: false }); } continue; }
-        for (const p of ps) paths.push({ p, not: n });
+        // Only what the alternative itself can start with: a path it cannot (a lookahead before an
+        // arm that consumes nothing there, `[not('{'), asi()]`, `not('this' | 'new')` alone) guards
+        // its zero-width arms, which no start marker decides; it stays recorded.
+        for (const p of ps) {
+          if (startsWith(a, p.first)) paths.push({ p, not: n });
+          else unstartable.set(n, [...unstartable.get(n) ?? [], `${show(p)}: the alternative cannot start with it`]);
+        }
+        if (!paths.some(x => x.not === n) && !reported.has(n)) { reported.add(n); plan.report.push({ rule: owner, text: assertionText(n), rendered: [], left: unstartable.get(n)!, exact: false }); }
       }
       if (paths.length) conds.push({ arm: ai, nots, paths });
     });
@@ -2391,7 +2401,7 @@ function planStartMarkers(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
       const key = condIds.join(',') + '|' + killed + '|' + elemKey(cl.f);
       let tok = byKey.get(key);
       if (!tok) {
-        tok = { snake: `_starts_${byKey.size + 1}`, conds: condIds, killed };
+        tok = { snake: `_starts_${byKey.size + 1}`, conds: condIds, killed, first: cl.f };
         byKey.set(key, tok);
         plan.tokens.push(tok);
       }
@@ -2405,7 +2415,7 @@ function planStartMarkers(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
       if (reported.has(n)) continue;
       reported.add(n);
       const mine = c.paths.filter(x => x.not === n).map(x => x.p);
-      const left = mine.filter(p => !rendered.has(p)).map(p => `${show(p)}: no other alternative can start with it`);
+      const left = [...unstartable.get(n) ?? [], ...mine.filter(p => !rendered.has(p)).map(p => `${show(p)}: no other alternative can start with it`)];
       const exact = !left.length;
       if (exact) plan.lowered.add(n);
       plan.report.push({ rule: owner, text: assertionText(n), rendered: mine.filter(p => rendered.has(p)).map(show), left, exact });
@@ -4281,10 +4291,14 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
     H.push('static const StartPath START_PATHS[] = {');
     for (const p of startPaths) H.push(`  { ${p.cond}, ${p.lit}, ${p.tok}, ${p.second}, ${p.sameLine} },`);
     H.push('};');
-    H.push('typedef struct { int symbol; const int16_t *conds; unsigned count; uint32_t killed; } StartMarker;');
+    H.push('typedef struct { int symbol; int lit, tok; const int16_t *conds; unsigned count; uint32_t killed; } StartMarker;');
     for (const t of starts) H.push(`static const int16_t ${t.snake.toUpperCase()}_CONDS[] = { ${t.conds.join(', ')} };`);
     H.push('static const StartMarker START_MARKERS[] = {');
-    for (const t of starts) { const S = t.snake.toUpperCase(); H.push(`  { ${S}, ${S}_CONDS, ${t.conds.length}, ${t.killed >>> 0}u },`); }
+    for (const t of starts) {
+      const S = t.snake.toUpperCase();
+      const lit = 'lit' in t.first ? litId.get(t.first.lit)! : -1, tok = 'tok' in t.first ? kindTokens.indexOf(t.first.tok) : -1;
+      H.push(`  { ${S}, ${lit}, ${tok}, ${S}_CONDS, ${t.conds.length}, ${t.killed >>> 0}u },`);
+    }
     H.push('};');
     H.push('// The literal after the first one (past whitespace and the comments skipped here); -1: none, or a');
     H.push('// comment opener to defer (the parse is then the unmarked one).');
@@ -4304,6 +4318,7 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
     H.push(`  for (unsigned i = 0; i < ${starts.length}; i++) {`);
     H.push('    const StartMarker *m = &START_MARKERS[i];');
     H.push('    if (!valid_symbols[m->symbol]) continue;');
+    H.push('    if (m->lit >= 0 ? m->lit != lit : (lit >= 0 || !((cand >> m->tok) & 1))) continue;   // its first token');
     H.push('    uint32_t held = 0;');
     H.push('    for (unsigned j = 0; j < m->count; j++)');
     H.push(`      for (unsigned k = 0; k < ${startPaths.length}; k++) {`);

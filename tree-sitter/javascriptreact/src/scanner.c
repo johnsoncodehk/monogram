@@ -1659,43 +1659,42 @@ static const ZeroWidth ZERO_WIDTH[] = {
 };
 typedef struct { int cond; int lit, tok, second; bool same_line; } StartPath;
 static const StartPath START_PATHS[] = {
-  { 0, 43, -1, -1, false },
+  { 0, 100, -1, -1, false },
   { 1, 100, -1, -1, false },
-  { 2, 100, -1, -1, false },
-  { 2, 72, -1, -1, false },
-  { 2, 57, -1, -1, false },
-  { 2, -1, 13, -1, false },
-  { 2, 52, -1, 72, true },
+  { 1, 72, -1, -1, false },
+  { 1, 57, -1, -1, false },
+  { 1, -1, 13, -1, false },
+  { 1, 52, -1, 72, true },
+  { 1, 78, -1, 46, false },
   { 2, 78, -1, 46, false },
-  { 3, 78, -1, 46, false },
+  { 3, 78, -1, -1, false },
+  { 3, 52, -1, 82, false },
   { 4, 78, -1, -1, false },
-  { 4, 52, -1, 82, false },
-  { 5, 78, -1, -1, false },
 };
-typedef struct { int symbol; const int16_t *conds; unsigned count; uint32_t killed; } StartMarker;
-static const int16_t _STARTS_1_CONDS[] = { 1 };
-static const int16_t _STARTS_2_CONDS[] = { 2 };
-static const int16_t _STARTS_3_CONDS[] = { 2 };
-static const int16_t _STARTS_4_CONDS[] = { 2 };
-static const int16_t _STARTS_5_CONDS[] = { 2 };
-static const int16_t _STARTS_6_CONDS[] = { 2 };
-static const int16_t _STARTS_7_CONDS[] = { 2 };
-static const int16_t _STARTS_8_CONDS[] = { 3, 3, 4 };
-static const int16_t _STARTS_9_CONDS[] = { 3, 3, 4 };
-static const int16_t _STARTS_10_CONDS[] = { 3, 3, 4 };
-static const int16_t _STARTS_11_CONDS[] = { 5 };
+typedef struct { int symbol; int lit, tok; const int16_t *conds; unsigned count; uint32_t killed; } StartMarker;
+static const int16_t _STARTS_1_CONDS[] = { 0 };
+static const int16_t _STARTS_2_CONDS[] = { 1 };
+static const int16_t _STARTS_3_CONDS[] = { 1 };
+static const int16_t _STARTS_4_CONDS[] = { 1 };
+static const int16_t _STARTS_5_CONDS[] = { 1 };
+static const int16_t _STARTS_6_CONDS[] = { 1 };
+static const int16_t _STARTS_7_CONDS[] = { 1 };
+static const int16_t _STARTS_8_CONDS[] = { 2, 2, 3 };
+static const int16_t _STARTS_9_CONDS[] = { 2, 2, 3 };
+static const int16_t _STARTS_10_CONDS[] = { 2, 2, 3 };
+static const int16_t _STARTS_11_CONDS[] = { 4 };
 static const StartMarker START_MARKERS[] = {
-  { _STARTS_1, _STARTS_1_CONDS, 1, 1u },
-  { _STARTS_2, _STARTS_2_CONDS, 1, 1u },
-  { _STARTS_3, _STARTS_3_CONDS, 1, 1u },
-  { _STARTS_4, _STARTS_4_CONDS, 1, 1u },
-  { _STARTS_5, _STARTS_5_CONDS, 1, 1u },
-  { _STARTS_6, _STARTS_6_CONDS, 1, 1u },
-  { _STARTS_7, _STARTS_7_CONDS, 1, 1u },
-  { _STARTS_8, _STARTS_8_CONDS, 3, 4u },
-  { _STARTS_9, _STARTS_9_CONDS, 3, 7u },
-  { _STARTS_10, _STARTS_10_CONDS, 3, 4u },
-  { _STARTS_11, _STARTS_11_CONDS, 1, 1u },
+  { _STARTS_1, 100, -1, _STARTS_1_CONDS, 1, 1u },
+  { _STARTS_2, 100, -1, _STARTS_2_CONDS, 1, 1u },
+  { _STARTS_3, 72, -1, _STARTS_3_CONDS, 1, 1u },
+  { _STARTS_4, 57, -1, _STARTS_4_CONDS, 1, 1u },
+  { _STARTS_5, -1, 13, _STARTS_5_CONDS, 1, 1u },
+  { _STARTS_6, 52, -1, _STARTS_6_CONDS, 1, 1u },
+  { _STARTS_7, 78, -1, _STARTS_7_CONDS, 1, 1u },
+  { _STARTS_8, 78, -1, _STARTS_8_CONDS, 3, 4u },
+  { _STARTS_9, 78, -1, _STARTS_9_CONDS, 3, 7u },
+  { _STARTS_10, 52, -1, _STARTS_10_CONDS, 3, 4u },
+  { _STARTS_11, 78, -1, _STARTS_11_CONDS, 1, 1u },
 };
 // The literal after the first one (past whitespace and the comments skipped here); -1: none, or a
 // comment opener to defer (the parse is then the unmarked one).
@@ -1715,9 +1714,10 @@ static int scan_starts(TSLexer *lexer, const bool *valid_symbols, int lit, uint6
   for (unsigned i = 0; i < 11; i++) {
     const StartMarker *m = &START_MARKERS[i];
     if (!valid_symbols[m->symbol]) continue;
+    if (m->lit >= 0 ? m->lit != lit : (lit >= 0 || !((cand >> m->tok) & 1))) continue;   // its first token
     uint32_t held = 0;
     for (unsigned j = 0; j < m->count; j++)
-      for (unsigned k = 0; k < 12; k++) {
+      for (unsigned k = 0; k < 11; k++) {
         const StartPath *p = &START_PATHS[k];
         if (p->cond != m->conds[j]) continue;
         if (p->lit >= 0 ? p->lit != lit : (lit >= 0 || !((cand >> p->tok) & 1))) continue;
