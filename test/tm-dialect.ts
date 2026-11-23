@@ -237,6 +237,36 @@ const textSrc = [
   const bsrc = '[note]"hi"[/note]';
   scopeRow('`[note]`: the declared tag-name scope reaches a bracket-delimited tag', 'pass', undefined, bg, bsrc, 'note', 0, s => inner(s).startsWith('entity.name.tag'));
   scopeRow('`[/note]`: the declared tag-name scope reaches the close tag', 'pass', undefined, bg, bsrc, 'note', 1, s => inner(s).startsWith('entity.name.tag'));
+
+  // Name joiners: what a joiner means comes from the grammar. A prefix joiner only when the
+  // region declares it (`highlight.nameJoiners`), a member accessor only when it is one of the
+  // grammar's `memberAccessTexts` (this toy has no regexContext), else it joins within one name.
+  const JName = token(seq(oneOf(range('a', 'z'), range('A', 'Z')), star(oneOf(range('a', 'z'), range('A', 'Z')))), { identifier: true });
+  const JClose = token(seq('<', '/'));
+  const JSolo = token(seq('/', '>'));
+  const JTag = rule(() => [[JName, many(alt('.', ':'), JName)]]);
+  const JAttr = rule(() => [[JName, opt(':', JName)]]);
+  const JElem = rule(() => [['<', JTag, many(JAttr), JSolo]]);
+  const JDoc = rule(() => [many(JElem)]);
+  const joinerGrammar = (nameJoiners?: { text: string; scope: string; prefix: string }[]) => defineGrammar({
+    name: 'joinmarkup', scopeName: 'source.joinmarkup',
+    tokens: { JName, JClose, JSolo },
+    elements: { tagOpen: '<', tagClose: '>', closeMarker: '/', closeTag: 'JClose', selfClose: 'JSolo', hole: { open: '{', close: '}' }, ...nameJoiners ? { highlight: { nameJoiners } } : {} },
+    rules: { JTag, JAttr, JElem, JDoc },
+  });
+  const jsrc = '<svg:rect xlink:href/>\n<a.b/>';
+  const { grammar: jPlain } = await load(joinerGrammar());
+  scopeRow('no `nameJoiners`: `svg` in `svg:rect` is part of the tag name, not a namespace', 'pass', undefined, jPlain, jsrc, 'svg', 0, s => inner(s).startsWith('entity.name.tag') && !inner(s).includes('namespace'));
+  scopeRow('no `nameJoiners`: `xlink` in `xlink:href` is part of the attribute name', 'pass', undefined, jPlain, jsrc, 'xlink', 0, s => inner(s).startsWith('entity.other.attribute-name') && !inner(s).includes('namespace'));
+  scopeRow('no `memberAccessTexts`: `a` in `a.b` is part of the tag name, not an object', 'pass', undefined, jPlain, jsrc, 'a.b', 0, s => inner(s).startsWith('entity.name.tag'));
+  const { grammar: jNs } = await load(joinerGrammar([{ text: ':', scope: 'punctuation.separator.ns', prefix: 'ns' }]));
+  scopeRow('declared `:` joiner: `svg` is the tag name\'s prefix (`entity.name.tag.ns`)', 'pass', undefined, jNs, jsrc, 'svg', 0, s => inner(s).startsWith('entity.name.tag.ns'));
+  scopeRow('declared `:` joiner: the `:` takes the declared scope', 'pass', undefined, jNs, jsrc, ':rect', 0, s => inner(s).startsWith('punctuation.separator.ns'));
+  scopeRow('declared `:` joiner: `xlink` is the attribute name\'s prefix', 'pass', undefined, jNs, jsrc, 'xlink', 0, s => inner(s).startsWith('entity.other.attribute-name.ns'));
+  scopeRow('declared `:` joiner: `rect` is the tag name', 'pass', undefined, jNs, jsrc, 'rect', 0, s => inner(s).startsWith('entity.name.tag') && !inner(s).includes('.ns'));
+  const throwsRow = (id: string, f: () => unknown, want: RegExp) => rows.push({ section, id, status: 'pass', check: () => { try { f(); return { ok: false, saw: 'did not throw' }; } catch (e) { const m = (e as Error).message; return { ok: want.test(m), saw: m }; } } });
+  throwsRow('a declared joiner that joins no name is refused by name', () => generateTmLanguage(joinerGrammar([{ text: '-', scope: 'x', prefix: 'y' }])), /declares `-`, which joins no tag or attribute name/);
+  throwsRow('two declared prefix joiners are refused', () => generateTmLanguage(joinerGrammar([{ text: ':', scope: 'x', prefix: 'y' }, { text: '.', scope: 'x', prefix: 'y' }])), /at most one prefix joiner/);
 }
 
 // ── 3. the interpreter parses the dialect (its element region: code children, derived entry) ──

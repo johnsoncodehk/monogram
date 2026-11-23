@@ -9,8 +9,19 @@ import { tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { tokenPatternLiteralText } from './token-pattern.ts';
 
 /** The shape of a tag or attribute NAME: the identifier token at its head, and the literals that
- *  join further identifiers to it (`.` / `:` / `-` in JSX's `a.b`, `svg:rect`, `data-id`), in rule order. */
-export interface NameShape { rule: string; joiners: string[] }
+ *  join further identifiers to it (`.` / `:` / `-` in JSX's `a.b`, `svg:rect`, `data-id`), in rule order.
+ *  Each joiner is one of three kinds, read from the grammar:
+ *   - `prefix`: the joiner the region declares in `highlight.nameJoiners` (an XML namespace `:`);
+ *   - `member`: a joiner that is one of the grammar's `regexContext.memberAccessTexts` (`.`: the
+ *     same datum the lexer reads for "an identifier after this is a property name");
+ *   - `within`: any other joiner, joining within one name (`-` in `data-id`). */
+export interface NameShape {
+  rule: string;
+  joiners: string[];
+  prefix: { text: string; scope: string; prefix: string } | null;
+  member: string[];
+  within: string[];
+}
 
 export interface RegionView {
   region: ElementRegion;
@@ -83,6 +94,9 @@ export function regionView(grammar: CstGrammar): RegionView | null {
   const arms: RuleExpr[][] = [];
   for (const r of grammar.rules) for (const a of expandArms(r.body)) if (isLit(a[0], region.tagOpen) && refsCloser(a)) arms.push(a);
 
+  const nameJoiners = region.highlight?.nameJoiners ?? [];
+  if (nameJoiners.length > 1) throw new Error(`element region: \`highlight.nameJoiners\` declares ${nameJoiners.length} joiners; a name has at most one prefix joiner`);
+  const memberAccess = grammar.tokens.find((t) => t.regexContext)?.regexContext?.memberAccessTexts ?? [];
   // The identifier token a name rule begins with, through rule references at its head.
   const identTokens = new Set(grammar.tokens.filter((t) => t.identifier).map((t) => t.name));
   const nameShape = (ruleName: string): NameShape | null => {
@@ -106,7 +120,10 @@ export function regionView(grammar: CstGrammar): RegionView | null {
             if (j.type === 'literal' && n.type === 'ref' && identTokens.has(n.name) && !joiners.includes(j.value)) joiners.push(j.value);
           }
         }
-        return { rule: cur, joiners };
+        const prefix = nameJoiners.find((j) => joiners.includes(j.text)) ?? null;
+        const member = joiners.filter((j) => j !== prefix?.text && memberAccess.includes(j));
+        const within = joiners.filter((j) => j !== prefix?.text && !member.includes(j));
+        return { rule: cur, joiners, prefix, member, within };
       }
       cur = head.name;
     }
@@ -144,6 +161,8 @@ export function regionView(grammar: CstGrammar): RegionView | null {
       }
     }
   }
+  for (const j of nameJoiners) if (!tagName?.joiners.includes(j.text) && !attr?.joiners.includes(j.text))
+    throw new Error(`element region: \`highlight.nameJoiners\` declares \`${j.text}\`, which joins no tag or attribute name in the rules`);
   const tagTokens = (region.tagTokens ?? []).map((n) => tok(n)).filter((t): t is TokenDecl => !!t);
   return {
     region,
