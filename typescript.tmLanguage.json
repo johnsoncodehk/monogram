@@ -1463,6 +1463,15 @@
       "end": "(?=[{;]|=>)",
       "patterns": [
         {
+          "begin": "(?<=[:|&])(?=\\s*\\{)",
+          "end": "(?<=\\})",
+          "patterns": [
+            {
+              "include": "#type-object"
+            }
+          ]
+        },
+        {
           "include": "#type"
         }
       ]
@@ -2513,6 +2522,15 @@
       },
       "end": "(?=[{;]|=>)",
       "patterns": [
+        {
+          "begin": "(?<=[:|&])(?=\\s*\\{)",
+          "end": "(?<=\\})",
+          "patterns": [
+            {
+              "include": "#type-object"
+            }
+          ]
+        },
         {
           "include": "#type"
         }

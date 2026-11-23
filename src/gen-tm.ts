@@ -4309,6 +4309,20 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
 
   if (hasTypeAnnotations) repository['type-inner'] = { patterns: typeInnerPats };
 
+  // A return-type region ends before the body's `{`, but a `{` where a type OPERAND begins (right
+  // after the annotation's `:` or a union / intersection operator) opens an object type:
+  // `f(): { a: number } { … }`. Without this the object type was read as the body and the body as
+  // a class member (every statement of it a method). A zero-width region entered at that position,
+  // before the end's lookahead can fire on the `{`, holds the object type.
+  const returnTypePatterns: (TmPattern | { include: string })[] = [
+    ...repository['type-object-type'] ? [{
+      begin: `(?<=[${[':', ...typeUnionOps].map(escapeForCharClass).join('')}])(?=\\s*\\{)`,
+      end: '(?<=\\})',
+      patterns: [{ include: '#type-object-type' }],
+    }] : [],
+    { include: '#type-inner' },
+  ];
+
   // Wire up deferred type-paren pattern (basic wiring; patched after type injections)
   if (repository['type-paren']) {
     repository['type-paren'].patterns = [{ include: '#type-inner' }];
@@ -4577,7 +4591,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
             '1': { name: `keyword.operator.type.annotation.${langName}` },
           },
           end: '(?=[{;]|=>)',
-          patterns: [{ include: '#type-inner' }],
+          patterns: returnTypePatterns,
         };
       }
 
@@ -5723,7 +5737,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
           '1': { name: `keyword.operator.type.annotation.${langName}` },
         },
         end: '(?=[{;]|=>)',
-        patterns: [{ include: '#type-inner' }],
+        patterns: returnTypePatterns,
       };
       topPatterns.push({ include: '#type-annotation-return' });
     }
