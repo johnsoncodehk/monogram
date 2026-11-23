@@ -146,7 +146,10 @@ throughout: read the rows against each other, not as absolutes.) Cold includes G
 emptied; in the loop of edits the Go cache is warm and only the changed parser is compiled, so a Go
 printer edit costs between the two columns. A test script that changed runs whole, whatever its tier (here a 13 s gate).
 
-On the shared 2-core box (load about 5), warm: a Rust printer change QUICK_BOX_RUST s.
+On the shared 2-core dev box the same Rust printer change took 17.5 s warm at a load of 5.6 to 6.5
+(three other agents' heavy commands beside it; each of its four gates 4 to 9 s, four to six times
+the runner): on a box that oversubscribed the quick tier does not reach 10 s, and the number moves
+with the load more than with the tier.
 
 What each tier catches, measured on the real failures of `land/**` branches (2026-11-22/23: the
 first failing head of each, put back onto the tree; `test/inner-loop-measure.sh catch`, judged by
