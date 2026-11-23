@@ -1041,6 +1041,7 @@ function planFirstFilters(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
   // positive lookahead over token sequences (`lookahead`) renders as the condition on their first
   // tokens: a superset of what it accepts, so it stays inexact (`approx`).
   const approx = new Set<RuleExpr>();
+  let siteInexact = false;
   const conditionOf = (e: RuleExpr): FirstFilter | null => {
     if (e.type !== 'not') return null;
     const cls = (recordOf.get(e) ?? []).map(r => r.cls);
@@ -1082,6 +1083,7 @@ function planFirstFilters(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
   const copyBodies = new Map<string, RuleExpr>();           // copy name → body
   const copiesOf = new Map<string, string[]>();             // rule → its copies, in order
   const copyCount = new Map<string, number>();
+  const building = new Set<string>();
   const namesRules = new Map<string, string>();             // words → names rule
   const snakeOfRule = (n: string) => toSnake(n);
   const namesRef = (words: string[], step?: RuleExpr): RuleExpr => {
@@ -1101,6 +1103,7 @@ function planFirstFilters(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
   const copyOf = (name: string, f: FirstFilter): string => {
     const key = `${name}|${keyOf(f)}`;
     const have = copies.get(key);
+    if (have && building.has(have) && process.env.FF_NOLEFTREC) throw new FirstFilterResidual(`left-recursive ${name}`);
     if (have) return have;
     if (have === null) throw new FirstFilterResidual(`${name} under ${keyOf(f)}`);
     const list = copiesOf.get(name) ?? copiesOf.set(name, []).get(name)!;
@@ -1109,15 +1112,18 @@ function planFirstFilters(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
     const copy = `${name}$first${n}`;
     copies.set(key, copy);
     list.push(copy);
+    building.add(copy);
     try {
       const body = filt(rules.get(name)!.body, f);
       if (!body) throw new FirstFilterResidual(`${name} has no string under ${keyOf(f)}`);
       copyBodies.set(copy, body);
       plan.aliasOf.set(copy, name);
       plan.snakeOf.set(copy, `_${snakeOfRule(name)}_first_${n}`);
+      building.delete(copy);
       return copy;
     } catch (err) {
       copies.set(key, null);
+      building.delete(copy);
       list.splice(list.indexOf(copy), 1);
       throw err;
     }
@@ -1143,6 +1149,12 @@ function planFirstFilters(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
         }
         if (!fail && !partial) return e;
         if (!pass && !partial) return null;
+        // A positive condition reaches a Pratt rule only through a word it names (`export let = 1`:
+        // the identifier `let` heading an expression) or a keyword prefix operator (TypeScript's
+        // `export await using`): a copy of the whole expression rule for those. It is left out, as
+        // tree-sitter's keyword extraction leaves the name reading out today (the keyword wins where
+        // it is valid), and the site stays recorded as inexact.
+        if (f.in && hasMarker(rules.get(e.name)!.body)) { siteInexact = true; return null; }
         return { ...e, name: copyOf(e.name, f) };
       }
       case 'group': {
@@ -1245,9 +1257,10 @@ function planFirstFilters(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
               if (c) { f = meet(f, c); conds.push(tsView(items[j])); }
             }
             let alts: RuleExpr[][] | null = null;
+            siteInexact = false;
             try { alts = j < items.length ? filtItems(items, i, f, armEnds.get(e) ?? null) : null; } catch (err) { if (!(err instanceof FirstFilterResidual)) throw err; if (process.env.FF_DEBUG) console.error('residual', assertionText(conds[0]), '-', err.message); }
             const ok = !!alts;
-            for (const c of conds) triedNodes.set(c, (triedNodes.get(c) ?? true) && ok);
+            for (const c of conds) { triedNodes.set(c, (triedNodes.get(c) ?? true) && ok); if (siteInexact) approx.add(c); }
             if (alts) {
               const head = items.slice(0, i);
               const tail = alts.length === 1 ? alts[0] : [{ type: 'alt' as const, items: alts.map(a => ({ type: 'seq' as const, items: a })) }];
@@ -1280,6 +1293,21 @@ function planFirstFilters(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
     for (const [n, b] of copyBodies) { const r = rw(b); if (r !== b) { copyBodies.set(n, r); changed = true; } }
   }
   for (const [n, ok] of triedNodes) if (ok && !approx.has(n)) plan.lowered.add(n);
+  // Only the copies a rendered rule reaches (a copy made for a site that then failed is not).
+  const reached = new Set<string>();
+  const reach = (e: RuleExpr): void => {
+    switch (e.type) {
+      case 'ref': if (copyBodies.has(e.name) && !reached.has(e.name)) { reached.add(e.name); reach(copyBodies.get(e.name)!); } return;
+      case 'seq': case 'alt': e.items.forEach(reach); return;
+      case 'quantifier': reach(e.body); return;
+      case 'sep': reach(e.element); return;
+      case 'group': reach(e.tsRelaxed ?? e.body); return;
+    }
+  };
+  for (const r of rewritten) reach(r.body);
+  for (const n of [...copyBodies.keys()]) if (!reached.has(n)) { copyBodies.delete(n); plan.aliasOf.delete(n); plan.snakeOf.delete(n); }
+  for (const [r, list] of copiesOf) copiesOf.set(r, list.filter(c => reached.has(c)));
+  for (const [k, n] of namesRules) if (!reached.has(n)) namesRules.delete(k);
   if (!copyBodies.size) return plan;
   const out: RuleDecl[] = [];
   const entry = rewritten[rewritten.length - 1];
