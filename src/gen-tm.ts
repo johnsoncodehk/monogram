@@ -233,48 +233,6 @@ function buildIdentLookbehind(identToken: TokenDecl | undefined): string {
     return `(?<=[\\w${extra}\\]\\)])`;
 }
 
-/**
- * Expand a rule expression into the set of concrete top-level item sequences,
- * resolving `?` (opt) into present/absent branches and `alt` into its branches.
- * `*`/`+` quantifiers, `sep`, refs and literals are kept as opaque items
- * (their internals are still reachable via recursive walks).
- *
- * This lets the shape/adjacency matchers below see the same flattened forms
- * they'd see if every optional combination were written out by hand — so the
- * grammar can use opt()/alt() for brevity without hiding patterns from gen-tm.
- *
- * Bounded by 2^(opts) per alternative; alternatives have few opts in practice.
- */
-function expandAlts(expr: RuleExpr): RuleExpr[][] {
-  switch (expr.type) {
-    case 'seq': {
-      let acc: RuleExpr[][] = [[]];
-      for (const item of expr.items) {
-        const branches = expandAlts(item);
-        const next: RuleExpr[][] = [];
-        for (const prefix of acc) for (const b of branches) next.push([...prefix, ...b]);
-        acc = next;
-      }
-      return acc;
-    }
-    case 'alt':
-      return expr.items.flatMap(expandAlts);
-    case 'group':
-      return expandAlts(expr.body);
-    case 'quantifier': {
-      // For shape/adjacency matching, "zero or one occurrence" captures every
-      // adjacency a repetition can produce. `?`/`*` may be absent; `+` is always
-      // present (one occurrence is enough to expose its inner adjacencies).
-      const present = expandAlts(expr.body);
-      return expr.kind === '+' ? present : [[], ...present];
-    }
-    case 'not':
-      return [[]];   // a negative lookahead consumes nothing: adjacency sees through it
-    default:
-      return [[expr]];   // literal, ref, sep, op, prefix, postfix
-  }
-}
-
 interface ContextualPattern {
   keyword: string;
   identScope: string;
@@ -336,7 +294,7 @@ function ruleStartsWithIdent(
   seen.add(refName);
   const rule = rules.find(r => r.name === refName);
   if (!rule) return false;
-  for (const alt of expandAlts(rule.body)) {
+  for (const alt of expandArms(rule.body)) {
     const head = alt[0];
     if (!head) continue;
     if (head.type === 'ref' && ruleStartsWithIdent(head.name, identTokenName, rules, seen)) return true;
@@ -1084,10 +1042,10 @@ function detectTypeParamConstraintKeywords(grammar: CstGrammar, typeArgRule: str
       }
     }
   };
-  for (const rule of grammar.rules) for (const seq of expandAlts(rule.body)) scanForTypeParamSep(seq);
+  for (const rule of grammar.rules) for (const seq of expandArms(rule.body)) scanForTypeParamSep(seq);
 
   // In each such rule, find the constraint keyword: the WORD literal that BEGINS an OPTIONAL
-  // `[keyword, type…]` segment. "Optional" is read structurally from expandAlts(body): the constraint
+  // `[keyword, type…]` segment. "Optional" is read structurally from expandArms(body): the constraint
   // is exactly the segment by which one branch EXTENDS a prefix-shorter sibling — so `opt(kw, type)`
   // (a `?` body), a separate alt branch `alt([…, kw, type], […])`, and a `sep`-wrapped type ALL reduce
   // to "branch B = branch A ++ [kw, …]". The keyword is `B[len(A)]` when it is a word literal. This
@@ -1106,7 +1064,7 @@ function detectTypeParamConstraintKeywords(grammar: CstGrammar, typeArgRule: str
     : e.type;
   for (const rule of grammar.rules) {
     if (!sepElementRules.has(rule.name)) continue;
-    const branches = expandAlts(rule.body);
+    const branches = expandArms(rule.body);
     for (const a of branches) for (const b of branches) {
       if (b.length <= a.length) continue;
       if (!a.every((it, i) => sig(it) === sig(b[i]))) continue;   // a is a strict prefix of b
@@ -1865,7 +1823,7 @@ function detectAngleBracketAmbiguity(grammar: CstGrammar): AngleBracketAmbiguity
   // Expand opt()/alt() so the confirm token after `>` is visible even when the
   // alternative is written `[$, '<', sep, '>', opt(alt(['(', …], Template))]`.
   for (const rule of grammar.rules) {
-    for (const seq of expandAlts(rule.body)) walkSeq(seq);
+    for (const seq of expandArms(rule.body)) walkSeq(seq);
   }
 
   if (innerRuleName && confirmTokens.length > 0) {
@@ -1902,7 +1860,7 @@ function detectAngleBracketCast(grammar: CstGrammar): string | null {
   const ruleByName = new Map(grammar.rules.map(r => [r.name, r] as const));
   // a "cast head" is a rule whose EVERY expanded branch is exactly `'<' <typeRef> '>'` — the author
   // factored the angle-cast prefix into its own rule. Recover the type name (null if not that shape).
-  // Memoized per rule: expandAlts is exponential in a body's opts, and the same rule is
+  // Memoized per rule: expandArms is exponential in a body's opts, and the same rule is
   // referenced from many expanded sequences.
   const castHeadMemo = new Map<string, string | null>();
   const castHeadType = (name: string): string | null => {
@@ -1911,7 +1869,7 @@ function detectAngleBracketCast(grammar: CstGrammar): string | null {
     return ty;
   };
   const castHeadShape = (body: RuleExpr): string | null => {
-    const branches = expandAlts(body);
+    const branches = expandArms(body);
     if (!branches.length) return null;
     let ty: string | null = null;
     for (const items of branches) {
@@ -1945,7 +1903,7 @@ function detectAngleBracketCast(grammar: CstGrammar): string | null {
     }
   };
   for (const rule of grammar.rules) {
-    for (const seq of expandAlts(rule.body)) walkSeq(seq);
+    for (const seq of expandArms(rule.body)) walkSeq(seq);
   }
   return found;
 }
@@ -2196,7 +2154,7 @@ function detectCallExpression(grammar: CstGrammar): boolean {
   }
 
   function walk(expr: RuleExpr): boolean {
-    if (expandAlts(expr).some(checkSeq)) return true;   // normalized factorings (opt/alt/group)
+    if (expandArms(expr).some(checkSeq)) return true;   // normalized factorings (opt/alt/group)
     if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(walk);
     if (expr.type === 'quantifier' || expr.type === 'group') return walk(expr.body);
     if (expr.type === 'sep') return walk(expr.element);
@@ -2233,7 +2191,7 @@ function detectPropertyAccess(
   }
 
   function walk(expr: RuleExpr): void {
-    for (const items of expandAlts(expr)) checkSeq(items);   // normalized factorings
+    for (const items of expandArms(expr)) checkSeq(items);   // normalized factorings
     if (expr.type === 'seq' || expr.type === 'alt') expr.items.forEach(walk);
     else if (expr.type === 'quantifier' || expr.type === 'group') walk(expr.body);
     else if (expr.type === 'sep') walk(expr.element);
@@ -2263,7 +2221,7 @@ function detectBareArrowParam(grammar: CstGrammar, tokenNames: Set<string>): boo
   }
 
   function walk(expr: RuleExpr): boolean {
-    if (expandAlts(expr).some(checkSeq)) return true;   // normalized factorings (opt-tail / alt / group)
+    if (expandArms(expr).some(checkSeq)) return true;   // normalized factorings (opt-tail / alt / group)
     if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(walk);
     if (expr.type === 'quantifier' || expr.type === 'group') return walk(expr.body);
     if (expr.type === 'sep') return walk(expr.element);
@@ -2296,7 +2254,7 @@ function detectParenArrowParams(grammar: CstGrammar): boolean {
   }
 
   function walk(expr: RuleExpr): boolean {
-    if (expandAlts(expr).some(checkSeq)) return true;   // normalized factorings (opt-tail / alt / group)
+    if (expandArms(expr).some(checkSeq)) return true;   // normalized factorings (opt-tail / alt / group)
     if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(walk);
     if (expr.type === 'quantifier' || expr.type === 'group') return walk(expr.body);
     if (expr.type === 'sep') return walk(expr.element);
@@ -2343,7 +2301,7 @@ function detectArrowParamDelims(grammar: CstGrammar): { open: string; close: str
     return false;
   }
   function walk(expr: RuleExpr): boolean {
-    if (expandAlts(expr).some(checkSeq)) return true;   // normalized factorings (opt-tail / alt / group)
+    if (expandArms(expr).some(checkSeq)) return true;   // normalized factorings (opt-tail / alt / group)
     if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(walk);
     if (expr.type === 'quantifier' || expr.type === 'group') return walk(expr.body);
     if (expr.type === 'sep') return walk(expr.element);
@@ -2372,12 +2330,12 @@ function detectTernary(grammar: CstGrammar): boolean {
     return false;
   }
 
-  // Match on the NORMALIZED forms (expandAlts canonicalises equivalent factorings — an
+  // Match on the NORMALIZED forms (expandArms canonicalises equivalent factorings — an
   // `opt('?', $, ':', $)` tail, an alt-split, a group — into the same flat adjacency), plus a
-  // recurse into `sep` elements (expandAlts treats `sep` as opaque). So a ternary written any of
+  // recurse into `sep` elements (expandArms treats `sep` as opaque). So a ternary written any of
   // those equivalent ways is detected, not only the one flat 5-window factoring.
   function walk(expr: RuleExpr): boolean {
-    if (expandAlts(expr).some(checkSeq)) return true;
+    if (expandArms(expr).some(checkSeq)) return true;
     if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(walk);
     if (expr.type === 'quantifier' || expr.type === 'group') return walk(expr.body);
     if (expr.type === 'sep') return walk(expr.element);
@@ -2427,9 +2385,9 @@ function detectConditionalType(grammar: CstGrammar): string | null {
 
   function walk(expr: RuleExpr): void {
     if (connector) return;
-    // run the 7-window over the NORMALISED branches (mirrors detectTernary): expandAlts
+    // run the 7-window over the NORMALISED branches (mirrors detectTernary): expandArms
     // canonicalises an opt-tail / grouped / alt-split conditional `?:` into the flat adjacency.
-    for (const items of expandAlts(expr)) { checkSeq(items); if (connector) return; }
+    for (const items of expandArms(expr)) { checkSeq(items); if (connector) return; }
     if (expr.type === 'seq' || expr.type === 'alt') expr.items.forEach(walk);
     else if (expr.type === 'quantifier' || expr.type === 'group') walk(expr.body);
     else if (expr.type === 'sep') walk(expr.element);
@@ -2473,7 +2431,7 @@ function detectDirectParamKeywords(
   }
 
   function walk(expr: RuleExpr): void {
-    for (const items of expandAlts(expr)) checkSeq(items);   // normalized factorings
+    for (const items of expandArms(expr)) checkSeq(items);   // normalized factorings
     if (expr.type === 'seq' || expr.type === 'alt') expr.items.forEach(walk);
     else if (expr.type === 'quantifier' || expr.type === 'group') walk(expr.body);
     else if (expr.type === 'sep') walk(expr.element);
@@ -2575,14 +2533,14 @@ function detectRegexLiteral(grammar: CstGrammar, tokenNames: Set<string>): Regex
   }
 
   // Walk every expression body, checking each flattened alternative for a
-  // keyword→expr-ref adjacency. `expandAlts` resolves `alt`/`opt`/`group` so a
+  // keyword→expr-ref adjacency. `expandArms` resolves `alt`/`opt`/`group` so a
   // keyword tucked inside an alternative (e.g. `alt('in','of') Expr` in a for-head)
   // is seen adjacent to the following ref — without it, only keywords written as a
   // bare literal directly before the ref (`'in' Expr` as an infix op) are collected,
   // so `of` would be missed. `sep`/quantifier inner bodies stay opaque to
-  // `expandAlts`, so recurse into them to keep nested adjacencies reachable.
+  // `expandArms`, so recurse into them to keep nested adjacencies reachable.
   function walk(expr: RuleExpr) {
-    for (const seq of expandAlts(expr)) checkSeq(seq);
+    for (const seq of expandArms(expr)) checkSeq(seq);
     if (expr.type === 'alt' || expr.type === 'seq') expr.items.forEach(walk);
     if (expr.type === 'quantifier' || expr.type === 'group') walk(expr.body);
     if (expr.type === 'sep') walk(expr.element);
@@ -3299,9 +3257,9 @@ interface DeclInfo {
 
 function isAngleBracketSepRule(body: RuleExpr): boolean {
   // Match on the NORMALIZED forms so an equivalent factoring — a trailing `opt(',')`, an
-  // alt-split, a group wrapper — reduces to the same `'<' sep '>'` adjacency. expandAlts keeps
+  // alt-split, a group wrapper — reduces to the same `'<' sep '>'` adjacency. expandArms keeps
   // `sep` opaque (it is in its default case), so the sep node survives the expansion.
-  return expandAlts(body).some(items => {
+  return expandArms(body).some(items => {
     if (items.length !== 3) return false;
     const [first, second, third] = items;
     return first.type === 'literal' && first.value === '<' &&
@@ -3316,7 +3274,7 @@ function getTypeParamElementKeywords(body: RuleExpr, grammar: CstGrammar): strin
   // the element's keywords. Without this the keyword sub-pattern (the `\bextends\b` scoping inside
   // `<…>`) is dropped for those equivalent factorings even though the region itself is still emitted.
   let elementBody: RuleExpr | null = null;
-  for (const items of expandAlts(body)) {
+  for (const items of expandArms(body)) {
     const i = items.findIndex(x => x.type === 'literal' && (x as { value: string }).value === '<');
     if (i >= 0 && items[i + 1]?.type === 'sep' && items[i + 2]?.type === 'literal' && (items[i + 2] as { value: string }).value === '>') {
       elementBody = (items[i + 1] as { element: RuleExpr }).element; break;
@@ -3359,7 +3317,7 @@ function getTypeParamElementKeywords(body: RuleExpr, grammar: CstGrammar): strin
 function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclInfo[] {
   const results: DeclInfo[] = [];
 
-  // Memoized per rule: expandAlts is exponential in a body's opts, and analyzeSeq asks about
+  // Memoized per rule: expandArms is exponential in a body's opts, and analyzeSeq asks about
   // the same refs from every expanded sequence.
   const blockRuleMemo = new Map<string, boolean>();
   function isBlockRule(name: string): boolean {
@@ -3374,7 +3332,7 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
     // ALWAYS a brace block. `.some` would over-match a rule that is only SOMETIMES a block (a
     // `Type` whose value can be an inline object type), mis-classifying a `type X = …` alias as a
     // brace-body declaration. `.every` recovers the alt-of-blocks factoring without that regression.
-    const branches = expandAlts(rule.body);
+    const branches = expandArms(rule.body);
     return branches.length > 0 && branches.every(items =>
       items.length >= 2 &&
       items[0].type === 'literal' && (items[0] as { value: string }).value === '{' &&
@@ -3436,7 +3394,7 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
     // Dotted EntityName: the name is immediately followed by a `('.' Ident)*`
     // repetition (e.g. `namespace A.B.C { … }`, `module A.B { … }`). The whole
     // dotted path names the declaration, so the trailing segments must read as
-    // the name scope — not fall through to value member-access. expandAlts() has
+    // the name scope — not fall through to value member-access. expandArms() has
     // already flattened the `*` quantifier to a single occurrence here, so the
     // tail surfaces as the literal `.` + Ident token-ref pair directly.
     const dot = items[nameIdx + 1];
@@ -3525,7 +3483,7 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
   // `[opt('async'),'function',opt('*'),Ident,...]` is seen in its concrete forms
   // (the all-optionals-absent branch yields the same shape as a hand-written one).
   for (const rule of grammar.rules) {
-    for (const seq of expandAlts(rule.body)) analyzeSeq(seq);
+    for (const seq of expandArms(rule.body)) analyzeSeq(seq);
   }
 
   return results;
@@ -3835,7 +3793,7 @@ function detectBlockSequence(grammar: CstGrammar): { indicator: string } | null 
     if (e.type === 'seq') {
       // `[…, item, (Newline item)*, …]`: an item ADJACENT to a `*`/`+` over a `[Newline, item]` seq.
       // Scanned pairwise (any k, not only items[0]/items[1]) so a leading element before the
-      // sequence pattern does not hide it. NOT routed through expandAlts on purpose — that would
+      // sequence pattern does not hide it. NOT routed through expandArms on purpose — that would
       // expand the `(Newline item)*` quantifier this match depends on.
       for (let k = 0; k + 1 < e.items.length; k++) {
         const head = e.items[k];
@@ -4023,7 +3981,7 @@ function detectConstructorKeywords(
   // Expand opt()/alt() so `new NewTarget (…)` is seen even when the call args
   // are folded into `opt(alt(['<'…], ['('…]))`.
   for (const rule of grammar.rules) {
-    for (const seq of expandAlts(rule.body)) checkSeq(seq);
+    for (const seq of expandArms(rule.body)) checkSeq(seq);
   }
 
   return keywords.map((kw) => ({ kw, callees: [...callees.get(kw)!] }));
@@ -7556,7 +7514,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
     seen.add(refName);
     const rule = grammar.rules.find(r => r.name === refName);
     if (!rule) return false;
-    for (const alt of expandAlts(rule.body)) {
+    for (const alt of expandArms(rule.body)) {
       const head = alt[0];
       if (!head) continue;
       if (head.type === 'literal' && head.value === '*') return true;
@@ -7575,7 +7533,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
     const rule = grammar.rules.find(r => r.name === refName);
     if (!rule) return [];
     const out: string[] = [];
-    for (const alt of expandAlts(rule.body)) {
+    for (const alt of expandArms(rule.body)) {
       const head = alt[0], next = alt[1];
       if (head?.type === 'literal' && isKeywordLiteral(head.value) && next?.type === 'literal' && next.value === '*') out.push(head.value);
       else if (head?.type === 'ref') out.push(...phaseStarKws(head.name, seen));
@@ -7589,7 +7547,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
   {
     const walk = (e: RuleExpr | undefined): void => {
       if (!e) return;
-      for (const alt of expandAlts(e)) {
+      for (const alt of expandArms(e)) {
         for (let i = 0; i < alt.length - 1; i++) {
           const a = alt[i], b = alt[i + 1];
           if (a.type !== 'literal' || !importExportKws.has(a.value)) continue;
@@ -7711,7 +7669,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       identToken ? ruleStartsWithIdent(refName, identToken.name, grammar.rules) : false;
     const walk = (e: RuleExpr | undefined): void => {
       if (!e) return;
-      for (const alt of expandAlts(e)) {
+      for (const alt of expandArms(e)) {
         for (let i = 0; i < alt.length - 1; i++) {
           const a = alt[i], b = alt[i + 1];
           if (a.type !== 'literal' || !importExportKws.has(a.value)) continue;
