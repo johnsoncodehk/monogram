@@ -667,6 +667,8 @@ export const CASES: Case[] = [
     reject: ['function (', 'a +;', 'if x {}', '{ a: }', 'for (;;', 'a ? b ;',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;', 'let[0] = 1;', '(async\nfunction f() {});',
+      // a HashbangComment begins the text only (start()), never a later line
+      '//\n#!x', 'a;\n#!x',
       ...JS_DECORATORS.reject, ...JS_MODULES.reject, ...TRY_STATEMENTS.reject,
       // ... so no parameter list takes a reserved word as a name, `this` included (a `this`
       // parameter is TypeScript's).

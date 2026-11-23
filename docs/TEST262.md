@@ -20,7 +20,7 @@ a test that test262 runs both sloppy and strict, or only in one mode, or as a mo
 first run's text: `"use strict";` prepended for `onlyStrict`). What depends on the goal or the mode is a class
 of its own below (`needs-parameter`).
 
-**21325 of 24677 agree (86.4%).**
+**21329 of 24677 agree (86.4%).**
 
 ## Scoreboard
 
@@ -29,7 +29,7 @@ of its own below (`needs-parameter`).
 | `arguments-object` | 263 | 262 | 0 | 1 | 0 | 0 |
 | `asi` | 102 | 67 | 34 | 1 | 0 | 0 |
 | `block-scope` | 145 | 43 | 4 | 98 | 0 | 0 |
-| `comments` | 52 | 27 | 21 | 4 | 0 | 0 |
+| `comments` | 52 | 27 | 25 | 0 | 0 | 0 |
 | `computed-property-names` | 48 | 48 | 0 | 0 | 0 | 0 |
 | `destructuring` | 19 | 19 | 0 | 0 | 0 | 0 |
 | `directive-prologue` | 62 | 51 | 0 | 11 | 0 | 0 |
@@ -61,7 +61,7 @@ of its own below (`needs-parameter`).
 | `annexB/global-code` | 153 | 153 | 0 | 0 | 0 | 0 |
 | `annexB/literals` | 8 | 8 | 0 | 0 | 0 | 0 |
 | `annexB/statements` | 22 | 16 | 0 | 6 | 0 | 0 |
-| **total** | **24677** | **19938** | **1387** | **3090** | **262** | **0** |
+| **total** | **24677** | **19938** | **1391** | **3086** | **262** | **0** |
 
 WE-ACCEPT: test262 says SyntaxError, the grammar parses. WE-REJECT: test262 parses, the grammar rejects.
 
@@ -123,7 +123,6 @@ run); where it does not, the rule is outside even its syntactic layer.
 | `accept/using-binding-pattern`: a binding pattern in a `using` / `await using` declaration list | 7 | 7 | grammar bug: fix | `language/statements/await-using/syntax/await-using-invalid-arraybindingpattern-after-bindingidentifier.js`<br>`language/statements/await-using/syntax/await-using-invalid-objectbindingpattern.js`<br>`language/statements/using/syntax/using-invalid-arraybindingpattern.js` |
 | `accept/string-line-terminator`: a raw LF / CR in a string literal | 6 | 6 | grammar bug: fix | `language/line-terminators/S7.3_A2.1_T2.js`<br>`language/line-terminators/invalid-string-cr.js`<br>`language/literals/string/S7.8.4_A1.1_T2.js` |
 | `accept/coalesce-mixed-with-logical`: `??` mixed with `&&` / `\|\|` without parentheses | 4 | 4 | grammar bug: fix | `language/expressions/coalesce/cannot-chain-head-with-logical-and.js`<br>`language/expressions/coalesce/cannot-chain-head-with-logical-or.js`<br>`language/expressions/coalesce/cannot-chain-tail-with-logical-and.js` |
-| `accept/hashbang-position`: a hashbang comment that does not start the source text | 4 | 4 | grammar bug: fix | `language/comments/hashbang/preceding-directive-prologue-sc.js`<br>`language/comments/hashbang/preceding-directive-prologue.js`<br>`language/comments/hashbang/preceding-hashbang.js` |
 | `accept/accessor-parameters`: a getter with a parameter | 3 | 3 | grammar bug: fix | `language/expressions/class/getter-param-dflt.js`<br>`language/expressions/object/getter-param-dflt.js`<br>`language/statements/class/getter-param-dflt.js` |
 | `accept/in-operator-in-for-init`: `in` inside a for-statement initializer's nested expression | 3 | 3 | grammar bug: fix | `language/expressions/conditional/in-branch-2.js`<br>`language/expressions/yield/in-iteration-stmt.js`<br>`language/expressions/yield/star-in-iteration-stmt.js` |
 | `accept/switch-statement-outside-clause`: a statement in a switch body before any `case` | 1 | 1 | grammar bug: fix | `language/statements/switch/S12.11_A3_T5.js` |
@@ -152,7 +151,7 @@ run); where it does not, the rule is outside even its syntactic layer.
 
 | verdict | files |
 |---|---:|
-| grammar bug: fix | 714 |
+| grammar bug: fix | 710 |
 | needs a parameterised production the engine lacks (roadmap item 4) | 436 |
 | early error: a checker over the tree, not the grammar: not built | 1940 |
 
@@ -167,7 +166,6 @@ run); where it does not, the rule is outside even its syntactic layer.
 - `accept/using-binding-pattern` — `using x = 1, [a] = b`: a `using` LexicalBinding is a BindingIdentifier (`BindingList[~Pattern]`); only a leading `using [` is an expression (element access).
 - `accept/string-line-terminator` — DoubleStringCharacter / SingleStringCharacter exclude LF and CR. `String_` is shared with JSX attribute values, which may span lines (the expected-fail in test/js-conformance.ts).
 - `accept/coalesce-mixed-with-logical` — `0 && 0 ?? true`, `a ?? b || c`: CoalesceExpression's operands are BitwiseORExpressions, so neither side may be a bare `&&` / `||`.
-- `accept/hashbang-position` — `x⏎#!/y`: a HashbangComment is the first thing in a Script or Module only. The Shebang token's start() anchor admits any line start.
 - `accept/accessor-parameters` — `get x(a) {}`: a getter's parameter list is `( )`; a setter has exactly one PropertySetParameterList.
 - `accept/in-operator-in-for-init` — `for (true ? 0 : 0 in {};;)`: the initializer is an Expression[~In] and ConditionalExpression passes ?In to both branches.
 - `accept/switch-statement-outside-clause` — `switch (x) { a = 2; case 0: }`: a CaseBlock holds CaseClauses and a DefaultClause only; the grammar's SwitchCase rule has a bare Stmt arm.
@@ -261,9 +259,9 @@ declarations, labels, which tsc reports outside its parser; it includes TypeScri
 
 | parser | right | of 24677 | on the 20200 valid tests | on the 4477 parse-negative tests |
 |---|---:|---:|---:|---:|
-| `javascript.ts` (interpreter) | 21325 | 86.4% | 19938 (98.7%) | 1387 (31.0%) |
+| `javascript.ts` (interpreter) | 21329 | 86.4% | 19938 (98.7%) | 1391 (31.1%) |
 | acorn 8.16.0 | 24394 | 98.9% | 19926 (98.6%) | 4468 (99.8%) |
 | tsc 5.9.3 parser | 21391 | 86.7% | 20123 (99.6%) | 1268 (28.3%) |
 | tsc 5.9.3 parser + binder | 21829 | 88.5% | 19934 (98.7%) | 1895 (42.3%) |
 
-Of the 3090 WE-ACCEPT files, acorn also accepts 7 (in every run), tsc's parser 2701, tsc's parser + binder 2074.
+Of the 3086 WE-ACCEPT files, acorn also accepts 7 (in every run), tsc's parser 2701, tsc's parser + binder 2074.

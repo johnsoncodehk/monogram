@@ -22,7 +22,7 @@ import { identifierClassesOf } from './uni-ident.ts';
 import { type CSet, continuesAt, examinedUnits as examinedUnitsOf, failRead, failReadFirst, info as patternInfo, oneChar, overTrigger, readEndWalk, union } from './lex-match-plan.ts';
 import {
   tokenBlockPatternFirstCharSet, tokenBlockPatternSource, tokenEscapeValidPatternSource, tokenPatternCharLoop,
-  tokenPatternFirstCharSet, tokenPatternHasStartAnchor, tokenPatternSource,
+  tokenPatternAnchorKinds, tokenPatternFirstCharSet, tokenPatternSource,
 } from './token-pattern.ts';
 
 // The public token model: fresh objects owned by the caller.
@@ -362,6 +362,13 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     return cs.length ? `(${cs.map(c => `${v} === ${c}`).join(' || ')})` : 'false';
   };
 
+  // A regex's `^` is the start of the text (start()) without the multiline flag and the start of a
+  // line (lineStart()) with it; one regex cannot hold both.
+  const anchorFlags = (t: (typeof spec.tokens)[number]): string => {
+    const ks = tokenPatternAnchorKinds(t.pattern);
+    if (ks.has('start') && ks.has('lineStart')) throw new Error(`emit-lexer: token ${t.name} has both a start() and a lineStart() anchor`);
+    return ks.has('lineStart') ? 'ym' : 'y';
+  };
   // The scan matchers, in declaration order, with their baked regexes and per-matcher facts.
   const matchers = spec.tokens
     .filter(t => t.name !== templateToken?.name && !markupTokenNames.has(t.name) && !lineTokenNames.has(t.name) && !elTokenNames.has(t.name))
@@ -374,7 +381,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
         blockRe: blockPattern ? `LXRB_${id}` : null,
         pattern: tokenPatternSource(t),
         blockPattern,
-        flags: tokenPatternHasStartAnchor(t) ? 'ym' : 'y',
+        flags: anchorFlags(t),
         skip: t.flags.includes('skip'),
         isRegex: t.flags.includes('regex'),
         isString: !!t.string,
