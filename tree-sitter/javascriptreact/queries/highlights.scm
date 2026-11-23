@@ -57,6 +57,8 @@
   (#any-of? @property.builtin "length" "prototype" "constructor"))
 
 ;; Builtin / global / constant identifier names.
+((ident) @constant.builtin
+  (#any-of? @constant.builtin "undefined"))
 ((ident) @variable.builtin
   (#any-of? @variable.builtin "console" "window" "document" "process" "module" "require" "exports" "global" "globalThis"))
 
@@ -86,7 +88,7 @@
   "instanceof" "delete" "typeof" "void" "new"
 ] @keyword.operator
 [
-  "undefined" "false" "true" "null"
+  "false" "true" "null"
 ] @constant.builtin
 [
   "super" "this"

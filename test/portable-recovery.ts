@@ -31,7 +31,10 @@ const RECOVERY_MUTANTS = 3, RECOVERY_SEED = 20261123;
 // The mutants are drawn from the accept lists (seeded), so a list entry added or removed draws
 // another set: the floor is re-measured then (typescript 5946 → 5925 when the cap-propagation accepts
 // came; the same run without them gives 5951; 5950 with the re-bind's accepts).
-const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5441, typescript: 5950 };
+// javascript 5441 -> 5439 (land/shape-ident-reserved): `undefined` is no grammar literal any more, so the
+// mutation corpus (which substitutes grammar literals) holds other inputs (`with  undefined ) { }` mutants
+// become others): the disagreements fall 186 -> 182, the agreements 5,441 -> 5,439 (of 5,621 rejects now).
+const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5439, typescript: 5950 };
 // EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and
 // parseTotal alike) is not the oracle's. Not total parsing's property (parseTotal's verdict is its
 // own parse()'s, checked below); found by the mutation corpus, each owed as its own fix. When one

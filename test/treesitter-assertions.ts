@@ -42,11 +42,14 @@ const RENDERED: AssertionClass[] = ['lowered', 'reserved-set'];
 // Positive lookaheads render as FIRST-filtered copies (planFirstFilters): TypeScript's `not(not(Decorator))`
 // is exact (lookahead1 -1, lowered +1); `export`'s declaration start and the decorated `export default?
 // class` render too, but leave out the expression statement's Pratt corner, so they stay inexact.
+// The expression identifier refuses every reserved word (land/shape-ident-reserved): the
+// `not('super')` / `not('new')` beside its reserved-word guard (Expr and NewTarget) are gone, those
+// words now in the guard's set (reserved -4; the set stays rendered).
 const PINNED: Record<string, Partial<Record<AssertionClass, number>>> = {
-  javascript:      { lowered: 43,  vacuous: 6,  'reserved-set': 45, scanner: 0,  reserved: 4, lookahead1: 17, lookahead: 8 },
-  typescript:      { lowered: 133, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 4, lookahead1: 88, lookahead: 69, 'left-context': 2 },
-  javascriptreact: { lowered: 45,  vacuous: 6,  'reserved-set': 45, scanner: 0,  reserved: 4, lookahead1: 17, lookahead: 8 },
-  typescriptreact: { lowered: 135, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 4, lookahead1: 88, lookahead: 69, 'left-context': 2 },
+  javascript:      { lowered: 43,  vacuous: 6,  'reserved-set': 45, scanner: 0,  reserved: 0, lookahead1: 17, lookahead: 8 },
+  typescript:      { lowered: 133, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 0, lookahead1: 88, lookahead: 69, 'left-context': 2 },
+  javascriptreact: { lowered: 45,  vacuous: 6,  'reserved-set': 45, scanner: 0,  reserved: 0, lookahead1: 17, lookahead: 8 },
+  typescriptreact: { lowered: 135, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 0, lookahead1: 88, lookahead: 69, 'left-context': 2 },
   yaml:            { lowered: 1,  scanner: 16, lookahead1: 6 },
 };
 
