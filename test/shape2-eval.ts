@@ -716,7 +716,8 @@ check('skeleton: every arm of calc / javascript / typescript maps to a term that
 // in `x! y` the arm `short` of S is accepted at `x` (its node built) and then beaten by the longer
 // `long`; that node is built (observeBuilt sees it) and is in no value the parse returns.
 {
-  const { emitParser, tsTarget } = await import('../src/emit.ts');
+  const { emitParser } = await import('../src/target.ts');
+  const { tsTarget } = await import('../src/target-ts.ts');
   const { token, rule, defineGrammar, many, plus, oneOf, range, arm, field } = await import('../src/api.ts');
   const { child, node, text } = await import('../src/shape2-schema.ts');
   const at = join(tmpdir(), `shape2-built-${process.pid}`);
