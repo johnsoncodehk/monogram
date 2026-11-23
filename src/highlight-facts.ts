@@ -2236,7 +2236,51 @@ export function defaultBindImportKeywords(grammar: CstGrammar): Set<string> {
   return out;
 }
 
+/** The connector keyword of a conditional type (`A extends B ? C : D`): the first `ref kw ref '?'
+ *  ref ':' ref` window of a @type rule, in arm order. */
+export function conditionalTypeConnector(grammar: CstGrammar): string | null {
+  const g = armGraph(grammar);
+  const typeRoot = (r: number) => grammar.rules[g.ruleIndex[r]].flags.includes('type');
+  const w = sortInArmOrder(g, findWindows(g, [isRefItem, isKeywordItem, isRefItem, isLit('?'), isRefItem, isLit(':'), isRefItem], typeRoot))[0];
+  return w ? (g.node[w[1]] as { value: string }).value : null;
+}
 
+/** The generic-argument ambiguity of `<`: a rule-body window `'<' sep(Inner) '>' X` where X is a
+ *  literal or a string-delimited token (what confirms a type-argument list); the inner rule and
+ *  separator of the last window that added a new confirming character. */
+export function angleBracketAmbiguity(grammar: CstGrammar): AngleBracketAmbiguity | null {
+  const precOps = new Set(grammar.precs.flatMap(l => l.operators.map(o => o.value)));
+  if (!precOps.has('<') || !precOps.has('>')) return null;
+  const confirmChar = (item: RuleExpr): string | null => {
+    if (item.type === 'literal') return item.value;
+    if (item.type === 'ref') {
+      const token = grammar.tokens.find(t => t.name === item.name);
+      const delimiter = token ? tokenPatternStringDelimiters(token)[0] : undefined;
+      if (delimiter && /^[`'"]/.test(delimiter)) return delimiter[0];
+    }
+    return null;
+  };
+  const g = armGraph(grammar);
+  const sepOfRef = (e: RuleExpr) => e.type === 'sep' && e.element.type === 'ref';
+  let innerRuleName: string | null = null, separator: string | null = null;
+  const confirmTokens: string[] = [];
+  for (const [, s, , x] of sortInArmOrder(g, findWindows(g, [isLit('<'), sepOfRef, isLit('>'), () => true], ruleRoots(g)))) {
+    const ch = confirmChar(g.node[x]);
+    if (!ch || confirmTokens.includes(ch)) continue;
+    const sep = g.node[s] as { element: { name: string }; delimiter: string };
+    innerRuleName = sep.element.name;
+    separator = sep.delimiter;
+    confirmTokens.push(ch);
+  }
+  return innerRuleName && confirmTokens.length > 0 ? { innerRuleName, confirmTokens, separator: separator ?? ',' } : null;
+}
+
+// TEMPORARY differential (removed once every grammar and fixture agrees): the arm-graph detector
+// against the expandArms one it replaces; a disagreement throws, naming the fact.
+function same<T>(fact: string, grammar: CstGrammar, next: T, prev: T): T {
+  if (JSON.stringify(next) !== JSON.stringify(prev)) throw new Error(`highlight-facts: ${fact} on ${grammar.name}: arm graph ${JSON.stringify(next)} != expandArms ${JSON.stringify(prev)}`);
+  return next;
+}
 
 // ── The facts object ──
 
@@ -2258,7 +2302,7 @@ const FACTS = {
   regexTokenName: (g: CstGrammar) => g.tokens.find(t => t.flags.includes('regex'))?.name,
   contextualOperatorKeywords: (g: CstGrammar) => findContextualOperatorKeywords(g),
   contextualAccessibilityModifiers: (g: CstGrammar) => findContextualAccessibilityModifiers(g),
-  angleBracket: (g: CstGrammar) => detectAngleBracketAmbiguity(g),
+  angleBracket: (g: CstGrammar) => same('angleBracket', g, angleBracketAmbiguity(g), detectAngleBracketAmbiguity(g)),
   angleBracketCast: (g: CstGrammar) => detectAngleBracketCast(g),
   arrowParamDelims: (g: CstGrammar) => arrowParamDelims(g),
   commentRepoKeys: (g: CstGrammar) => commentRepoKeys(g),
@@ -2272,7 +2316,7 @@ const FACTS = {
   flowCollections: (g: CstGrammar) => detectFlowCollections(g),
   /** A `:` type annotation exists (some `':' <@type rule>` adjacency). */
   typeAnnotations: (g: CstGrammar) => highlightFacts(g).typeRuleNames.size > 0 && hasColonTypeAnnotation(g, highlightFacts(g).typeRuleNames),
-  conditionalType: (g: CstGrammar) => detectConditionalType(g),
+  conditionalType: (g: CstGrammar) => same('conditionalType', g, conditionalTypeConnector(g), detectConditionalType(g)),
   declarations: (g: CstGrammar) => detectDeclarations(g, highlightFacts(g).tokenNames),
   bindingCloseBrackets: (g: CstGrammar) => deriveBindingCloseBrackets(g, highlightFacts(g).identToken?.name),
   directParamKeywords: (g: CstGrammar) => directParamKeywords(g),
