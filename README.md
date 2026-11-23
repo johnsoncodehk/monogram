@@ -249,7 +249,10 @@ runs a grammar with none of them; [`html.ts`](html.ts) is markup on the same eng
 
 1. **Write the grammar** with [`src/api.ts`](src/api.ts): tokens, precedence, rules. Rules
    choose by longest match; only the entry rule may match the empty string. The full rules:
-   [docs/GRAMMAR.md](docs/GRAMMAR.md).
+   [docs/GRAMMAR.md](docs/GRAMMAR.md). `node src/cli.ts <grammar.ts> --decisions` also writes
+   `<name>.decisions.md`: how the generated parser decides each choice point, and the dead
+   alternatives and declaration-order ties to fix, each with its action (example:
+   [test/fixtures/decisionsjs.decisions.md](test/fixtures/decisionsjs.decisions.md)).
 2. **Check it as a parser** against the language's own test suite, in both directions: accept
    what the reference accepts, reject what it rejects.
 3. **Compare the highlighter** with the official TextMate grammar as the baseline.

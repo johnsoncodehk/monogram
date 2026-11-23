@@ -52,7 +52,32 @@ The loader classifies every equation (`LoadedShape2.rightDependent`):
 | spec | right-dependent equations |
 |---|---|
 | ESTree | `Expr.binaryOp.left` → `pattern`, read from the operator leaf `op` (`=`) |
-| tsc | none (the gate `shape2-eval` asserts it); its inherited equations are `chainTop` and `heritageElement`, constants |
+| tsc | none (the gate `shape2-eval` asserts it); its inherited equations are `chainTop` and `heritageElement`, constants, and `modifiers`, node-valued (below) |
+
+A **node-valued** inherited attribute (`type: 'nodes'`, `NodesAttr` in `src/shape2-schema.ts`) is
+the one attribute type that is not a scalar: an immutable list of nodes, default the empty list.
+- **What it is for.** tsc puts the `export` / `declare` words and the outer decorators on the
+  INNER declaration node (`export declare function f(): void;` is one FunctionDeclaration whose
+  modifiers are [ExportKeyword, DeclareKeyword]; `@d export class C {}` is one ClassDeclaration at
+  0 whose modifiers are [Decorator, ExportKeyword]), while in the grammar those words sit in the
+  Decl arms that wrap the declaration. A scalar label cannot carry nodes with their own spans.
+- **Its equations.** A value term (list, spread, child, inh, node, a leaf's token, and the
+  scalar operators over leaves; no `syn`, `get`, `fold`, `let`) that reads only children strictly
+  to the LEFT of the child it feeds. The loader rejects a read at or to the right of it (a branch
+  that holds the child counts as "at"), so every such equation is **L-attributed by construction**
+  and is never on the right-dependent list.
+- **Immutable.** `inh` of it, and a `let` variable bound to it, appears only as a `spread` item of
+  a list, a span endpoint, or under `present` (whether it is non-empty). Anything else (a field, a
+  condition, a scalar equation) is a load error.
+- **The receiver says where it starts.** A list-valued variable spans its first element's start to
+  its last element's end, as a list-valued child does, so a receiver writes "I start at the first
+  inherited node when there is one" itself: `let_('m', inh('modifiers'), iff(present('m'),
+  node(T, { modifiers: list(spread(v('m')), …) }, { from: 'm', to: … }), node(T, …)))`.
+- **Placed or loud.** A node handed a non-empty list whose arm does not read it is outside the
+  subset (`Stmt.expr (handed modifiers)`: tsc's `declare x;`), never a node without them.
+- **Reuse.** A receiver's node depends on the nodes its wrappers built to its left: `dependencies`
+  marks every receiver (and every arm that hands the list on) context-dependent, so it is reused
+  only where its inherited list is unchanged.
 
 ESTree's `pattern` is the cover grammar. A literal on the left of `=`, or in a `for … in / of`
 head's left (a constant equation, so L-attributed), is an assignment pattern there:
@@ -77,10 +102,23 @@ the shape's.
   default. A method named `constructor` (the identifier, or a string with that value) is tsc's
   Constructor: synthesized `constructorName` on MemberName. A modifier word is its keyword token
   (`match` on the word's text), and `modifiers` is absent when it would be empty.
-- **Not yet in the subset (tsc).** A class an `export` / `declare` / outer prefix arm wraps: those
-  words sit in the outer Decl arm and need a node-valued inherited attribute (approved; it lands
-  with import / export). Also: decorators (DecoratorExpr), index signatures, types, the `new
-  class` arms, and a class expression as a heritage base.
+- **Not yet in the subset (tsc).** Decorators (DecoratorExpr), index signatures, types, the `new
+  class` arms, and a class expression as a heritage base. A class an `export` / `declare` / modifier
+  prefix arm wraps is in it (the `modifiers` attribute, below).
+
+### Modules
+
+- **ESTree.** ImportDeclaration (ImportDefaultSpecifier, ImportSpecifier, ImportNamespaceSpecifier;
+  an import clause is its specifier list), ExportNamedDeclaration (of a declaration, or of
+  specifiers with or without a source), ExportDefaultDeclaration (a function / class declaration
+  spans its own branch; an expression is itself), ExportAllDeclaration, ImportAttribute,
+  ImportExpression and `import.meta` (MetaProperty). An unrenamed specifier holds its one name twice.
+- **tsc.** ImportDeclaration with ImportClause (RECORD-VALUED in the grammar's ImportClause rule:
+  tsc's node also spans a `type` that the Decl arm reads), NamedImports / NamespaceImport, the
+  `type` / `defer` phases, ImportEqualsDeclaration (ExternalModuleReference, QualifiedName chains),
+  ExportDeclaration (NamedExports, NamespaceExport, `isTypeOnly`), ExportAssignment (`export =`,
+  `export default x`), NamespaceExportDeclaration, ImportAttributes. The `export` / `declare` /
+  prefix arms are pass-through; they hand `modifiers` down.
 
 ### What a generated parser must have at hand, per operator (the parser-emit table)
 
@@ -97,6 +135,8 @@ the shape's.
 | template parts (`noSubstitution` / `substitution`) | the head / middle / tail leaves the parser consumes; a hole's value is built by the hole rule's function, called with the default context |
 | span `{ inside: X }` | X's offsets, and the static widths of its part kind's delimiters (from the token's template config at generation time) |
 | an L-attributed inherited equation | its scalar, computed at the call site from leaves already consumed and the parent's attributes |
+| a node-valued inherited attribute | a handle to an immutable list of nodes already built to the child's left, passed as a parameter of the child's rule function; the receiving arm places it and takes its span start from its first element. Arena: the nodes precede the child's mark, so a losing candidate's reset never frees them |
+| `present(v)` of a nodes variable, a span endpoint at it | the handle's length; its first node's start |
 | a right-dependent inherited equation | the child is built in its default reading. When the deciding leaf arrives, the parser rewrites it, walking only the spine (the arms that read the attribute, reached through the children it is copied into). It never descends below a node whose arm does not pass the attribute on |
 
 A **shape** maps a grammar's concrete syntax tree (CST) into a consumer AST

@@ -72,6 +72,9 @@ const tsInputs: Input[] = [
   ...corpus,
 ];
 const jsInputs: Input[] = [
+  // A repetition body under a full mark that fails with a node built (`return`'s opt(Expr): `a + 1`
+  // is built, then `=` needs a target): the leaves-only mark's mutation proof. A rejected input.
+  { name: 'javascript#0', text: 'function f() { return a + 1 = 2; }' },
   `${NM}/acorn/dist/acorn.mjs`,
   ...filesUnder(`${NM}/parse5/dist`, /\.js$/), ...filesUnder(`${NM}/entities/dist`, /\.js$/), ...filesUnder(`${NM}/yaml/dist`, /\.js$/),
   ...corpus,
@@ -112,6 +115,10 @@ const GRAMMARS: Array<[string, Input[]]> = [
 
 let failures = 0;
 const t0 = Date.now();
+// The leaves-only mark's mutation proof needs a repetition body that failed with a node built under
+// a full mark; most grammars' inputs have none (javascript's), and the check is one engine for every
+// grammar, so the proof is required once over the run, not per grammar.
+let leavesProved = 0;
 const dir = scratchDir('guard-refused');
 for (const [g, inputs] of GRAMMARS) {
   const grammar: CstGrammar = (await import(`${ROOT}${g}.ts`)).default;
@@ -120,9 +127,9 @@ for (const [g, inputs] of GRAMMARS) {
   writeFileSync(file, emitParser(grammar, tsTarget));
   const lib = await import(file) as { tokenize(s: string): Tok[]; parse(s: string): unknown };
   const run = engine(ir);
-  let n = 0, accepted = 0, checks = 0, cleanChecks = 0, drift = 0, bad = 0;
+  let n = 0, accepted = 0, checks = 0, cleanChecks = 0, leavesChecks = 0, drift = 0, bad = 0;
   type Proof = { at: string; tokens: Tok[]; text: string; m: Mutation };
-  const proof: { body?: Proof; cand?: Proof; commit?: Proof; clean?: Proof; pair?: Proof } = {};
+  const proof: { body?: Proof; cand?: Proof; commit?: Proof; clean?: Proof; leaves?: Proof; pair?: Proof } = {};
   for (const input of inputs) {
     const text = typeof input === 'string' ? readFileSync(input, 'utf8') : input.text;
     let tokens: Tok[];
@@ -130,7 +137,7 @@ for (const [g, inputs] of GRAMMARS) {
     n++;
     const want = lib.parse(text);
     const got = run(tokens, text);
-    checks += got.checked; cleanChecks += got.cleanChecked;
+    checks += got.checked; cleanChecks += got.cleanChecked; leavesChecks += got.leavesChecked;
     if (got.accept) accepted++;
     const name = typeof input !== 'string' ? input.name : input.startsWith(ROOT) ? input.slice(ROOT.length) : input.slice(CORPUS.length - 'conformance'.length);
     if (got.accept !== (want !== null) || (got.accept && JSON.stringify(got.tree) !== JSON.stringify(canon(want)))) {
@@ -142,28 +149,33 @@ for (const [g, inputs] of GRAMMARS) {
     if (!proof.cand && got.found.cand) proof.cand = { at: name, tokens, text, m: { guard: got.found.cand.guard, lid: got.found.cand.lid, pos: got.found.cand.pos } };
     if (!proof.pair && got.found.pair) proof.pair = { at: name, tokens, text, m: { lid: got.found.pair.lid, pair: { guard: got.found.pair.guard, pos: got.found.pair.pos } } };
     if (!proof.clean && got.found.dirty) proof.clean = { at: name, tokens, text, m: { lid: 0, clean: got.found.dirty } };
+    if (!proof.leaves && got.found.built) proof.leaves = { at: name, tokens, text, m: { lid: 0, leaves: got.found.built.step } };
     if (!proof.commit && got.found.commit) { const c = got.found.commit; proof.commit = { at: name, tokens, text, m: { lid: c.lid, commit: { list: c.list, kid: c.kid, arm: c.arm } } }; }
   }
   // The mutation proof: a body guard, then a candidate guard, made to refuse a literal it admitted
   // where its body / candidate matched; the gate must report it on that input.
   const ids = buildLexIdPlan(ir);
-  const what = { body: 'guarded body matched from a literal', cand: 'guarded candidate matched from a literal', commit: 'committed choice matched from a literal', clean: 'branch or repetition body failed dirty', pair: 'candidate admitted by a pair test won' } as const;
-  for (const kind of ['body', 'cand', 'commit', 'clean', 'pair'] as const) {
+  const what = { body: 'guarded body matched from a literal', cand: 'guarded candidate matched from a literal', commit: 'committed choice matched from a literal', clean: 'branch or repetition body failed dirty', leaves: 'repetition body under a full mark failed with a node built', pair: 'candidate admitted by a pair test won' } as const;
+  for (const kind of ['body', 'cand', 'commit', 'clean', 'leaves', 'pair'] as const) {
     const p = proof[kind];
     // A grammar whose plan has no pair (Guard.pairs) has none to mutate.
     if (!p && kind === 'pair' && !ir.rules.some((r) => r.kind === 'rd' && r.altGuard.some((g) => g?.pairs))) continue;
+    if (!p && kind === 'leaves') { console.log(`  ${g}: no ${what[kind]} (the leaves-only mark's proof is required once over the run)`); continue; }
     if (!p) { console.log(`  FAIL ${g}: no ${what[kind]}: the mutation proof has nothing to mutate`); failures++; continue; }
     const caught = engine(ir, p.m)(p.tokens, p.text).unsound.length;
-    const did = kind === 'pair' ? `the pair tests that admitted ${JSON.stringify(ids.lids[p.m!.lid])} in ${p.at} made to refuse the second token` : kind === 'clean' ? `${p.m!.clean!.i < 0 ? `the ${p.m!.clean!.step.t} body` : `branch ${p.m!.clean!.i} of a choice`} that failed dirty in ${p.at} taken for clean`
+    const did = kind === 'pair' ? `the pair tests that admitted ${JSON.stringify(ids.lids[p.m!.lid])} in ${p.at} made to refuse the second token` : kind === 'leaves' ? `the ${p.m!.leaves!.t} body that failed with a node built in ${p.at} taken to fail with leaves only` : kind === 'clean' ? `${p.m!.clean!.i < 0 ? `the ${p.m!.clean!.step.t} body` : `branch ${p.m!.clean!.i} of a choice`} that failed dirty in ${p.at} taken for clean`
       : kind === 'commit' ? `the ${p.m!.commit!.list} list that committed at ${JSON.stringify(ids.lids[p.m!.lid])} in ${p.at} made to commit to its candidate ${p.m!.commit!.arm}`
       : `the ${kind === 'body' ? 'body guard' : 'candidate guard'} that admitted ${JSON.stringify(ids.lids[p.m!.lid])} in ${p.at} made to refuse it`;
-    console.log(`  ${g}: mutation: ${did}: ${caught} unsound ${kind === 'clean' ? 'elided mark(s)' : 'refusal(s)'} reported`);
-    if (caught === 0) { console.log(`  FAIL ${g}: the mutated ${kind === 'clean' ? 'frame' : 'guard'} was not caught`); failures++; }
+    console.log(`  ${g}: mutation: ${did}: ${caught} unsound ${kind === 'clean' || kind === 'leaves' ? 'elided mark(s)' : 'refusal(s)'} reported`);
+    if (kind === 'leaves' && caught > 0) leavesProved++;
+    if (caught === 0) { console.log(`  FAIL ${g}: the mutated ${kind === 'clean' || kind === 'leaves' ? 'frame' : 'guard'} was not caught`); failures++; }
   }
   failures += drift + bad;
-  console.log(`  ${g}: ${n} inputs (${accepted} accepted), ${checks} refusals attempted, ${cleanChecks} failures where a mark is elided, ${bad} would have changed the parse, ${drift} differ from the TS target`);
+  console.log(`  ${g}: ${n} inputs (${accepted} accepted), ${checks} refusals attempted, ${cleanChecks} failures where a mark is elided, ${leavesChecks} where the mark is the position and the scratch list only, ${bad} would have changed the parse, ${drift} differ from the TS target`);
   if (checks === 0) { console.log(`  FAIL ${g}: no refusal was attempted: the gate checks nothing`); failures++; }
   if (cleanChecks === 0) { console.log(`  FAIL ${g}: no body failed where a mark is elided: the gate checks nothing there`); failures++; }
+  if (leavesChecks === 0 && JSON.stringify(ir.rules).includes('"leaves":true')) { console.log(`  FAIL ${g}: no body failed under a leaves-only mark: the gate checks nothing there`); failures++; }
 }
+if (leavesProved === 0) { console.log('  FAIL: no grammar had a repetition body that failed with a node built: the leaves-only mark\'s mutation proof has nothing to mutate'); failures++; }
 console.log(`guard-refused: ${((Date.now() - t0) / 1000).toFixed(1)}s, ${failures} failures`);
 process.exit(failures ? 1 : 0);

@@ -732,13 +732,17 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
     ruleBp: (name, bp) => (m === 'r' ? `_drop(_n, ${name}_bpW(${bp}))` : `${name}_bpW(${bp})`),
     // A body guard (emit-portable.ts annotateSteps): opt / sep test it before their one attempt,
     // star before each attempt, so a refused attempt takes no mark. A clean body (Step.clean) is
-    // attempted without a mark (starC / sepByC; an opt's attempt is the body itself).
-    star: (body, g, c) => (g === null ? `star${c ? 'C' : S}(${fn(body)})` : `starIn${c ? 'C' : S}(${g}, ${fn(body)})`),
-    opt: (body, g, c) => {
+    // attempted without a mark (starC / sepByC; an opt's attempt is the body itself). A body that
+    // fails with leaves only (MarkForm 'leaves') takes the full mark: this target's mark is already
+    // the position and the stack height (`_n`, its scratch list); it has no builder checkpoint.
+    star: (body, g, mk) => { const c = mk === 'none'; return g === null ? `star${c ? 'C' : S}(${fn(body)})` : `starIn${c ? 'C' : S}(${g}, ${fn(body)})`; },
+    opt: (body, g, mk) => {
+      const c = mk === 'none';
       const attempt = c ? `${body} || true` : `opt${S}(${fn(body)})`;
       return g === null ? (c ? `(${attempt})` : attempt) : `(!ahead(${g}, true) || ${attempt})`;
     },
-    sep: (elem, delim, g, c) => {
+    sep: (elem, delim, g, mk) => {
+      const c = mk === 'none';
       const call = `sepBy${c ? 'C' : ''}${S}(${fn(elem)}, ${sepDelimLid(ids, delim)})`;
       return g === null ? call : `(!ahead(${g}, true) || ${call})`;
     },

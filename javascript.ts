@@ -210,7 +210,7 @@ export const conciseBody = (Block, Expr) => alt(arm('block', Block), arm('expres
 // declaration is `Decl` (`$`) or one of the statements that declare (`var` / `let` / `const`, and
 // in TypeScript `using`, which tsc's parser takes there; `declarationWords`).
 export const exportDeclaration = ($, Stmt, declarationWords) =>
-  ['export', alt($, [not(not(alt(...declarationWords))), Stmt])];
+  arm('exportDeclaration', field('exportKeyword', 'export'), field('declaration', alt(arm('decl', field('decl', $)), arm('variable', not(not(alt(...declarationWords))), field('stmt', Stmt)))));
 // A module specifier and its import attributes (16.2.2 `FromClause : from ModuleSpecifier`,
 // `WithClause : with { } | with { WithEntries ,opt }`, `WithEntries : AttributeKey : StringLiteral`,
 // `AttributeKey : IdentifierName | StringLiteral`): the specifier and every attribute value are
@@ -219,8 +219,8 @@ export const exportDeclaration = ($, Stmt, declarationWords) =>
 // `with`, and no `with` past a line break (docs/CORRECTNESS.md).
 // tree-sitter renders no attributes: after a specifier, `with` would also begin a `with`
 // statement past an inserted `;`, which a CFG without lookahead cannot tell apart.
-const withEntry = [alt(Ident, String_), ':', String_];
-export const moduleSpecifier = [String_, tsRelax(opt('with', '{', opt(...withEntry, many(',', ...withEntry), opt(',')), '}'), [])];
+const withEntry = (rest = '') => [field(`attributeKey${rest}`, alt(Ident, String_)), ':', field(`attributeValue${rest}`, String_)];
+export const moduleSpecifier = [field('source', String_), tsRelax(opt(field('withKeyword', 'with'), '{', opt(...withEntry(), many(',', ...withEntry('Rest')), opt(',')), field('attributesClose', '}')), [])];
 
 // ── Always-reserved words ──
 // The `Ident` token deliberately swallows keywords (they lex as identifiers), so
@@ -548,7 +548,7 @@ const Expr = rule($ => [
   ['yield', alt(['*', $], [opt($)])],   // yield e | yield* e (delegate) | yield
   ['(', field('first', $), many(field('comma', ','), field('rest', $)), ')'],
   // ImportCall: one or two AssignmentExpressions, no spread (the `...` arm is Arguments'), and ImportMeta
-  ['import', alt(['(', not('...'), $, opt(',', opt(not('...'), $, opt(','))), ')'], ['.', 'meta'])],
+  arm('import_', field('importKeyword', 'import'), field('form', alt(arm('call', '(', not('...'), field('source', $), opt(',', opt(not('...'), field('options', $), opt(','))), ')'), arm('meta', '.', field('metaKeyword', 'meta'))))),
   PrivateField,
   HexNumber, OctalNumber, BinaryNumber, BigInt_,
   // function expression, 4-way split on async × generator (see fnArms).
@@ -765,25 +765,28 @@ const ImportSpecifier = rule($ => [
   // The spec's two arms: ModuleExportName `as` ImportedBinding | ImportedBinding. The local name
   // is a BindingIdentifier; the name read from the module, before `as`, is an IdentifierName:
   // `import { if as x }`, not `import { if }` / `{ x as if }`.
-  [Ident, 'as', ...bindingIdentifier],
-  bindingIdentifier,
+  arm('renamed', field('imported', Ident), 'as', notReserved, field('local', Ident)),
+  arm('plain', notReserved, field('local', Ident)),
   // arbitrary module namespace identifier (ES2022): `import { "str" as x }` — the
   // string form requires the rename (the local binding must be an identifier).
-  [String_, 'as', ...bindingIdentifier],
+  arm('stringRenamed', field('imported', String_), 'as', notReserved, field('local', Ident)),
 ]);
 
 // Export specifiers are WIDER than import ones: a ModuleExportName (identifier or
 // string) is valid on BOTH sides and may stand alone (`export { x as "s" }`,
 // `export { "a" as "b" } from "m"`).
 const ExportSpecifier = rule($ => [
-  [alt(Ident, String_), opt('as', alt(Ident, String_))],
+  arm('specifier', field('local', alt(Ident, String_)), opt('as', field('exported', alt(Ident, String_)))),
 ]);
 
+// `{ a, b as c }` (NamedImports) and `* as ns` (NameSpaceImport), alone or after a default binding.
+const namedImports = () => [field('brace', '{'), sep(field('specifier', ImportSpecifier), ','), field('braceClose', '}')];
+const namespaceImport = () => [field('star', '*'), 'as', notReserved, field('namespace', Ident)];
 const ImportClause = rule($ => [
   // default import, optionally followed by named `{…}` or namespace `* as x`
-  [...bindingIdentifier, opt(',', alt(['{', sep(ImportSpecifier, ','), '}'], ['*', 'as', ...bindingIdentifier]))],
-  ['{', sep(ImportSpecifier, ','), '}'],
-  ['*', 'as', ...bindingIdentifier],
+  arm('defaultBinding', notReserved, field('name', Ident), opt(',', field('bindings', alt(arm('named', ...namedImports()), arm('namespace', ...namespaceImport()))))),
+  arm('named', ...namedImports()),
+  arm('namespace', ...namespaceImport()),
 ]);
 
 // A class declaration from its `class` keyword on. Decl writes it once bare and once after a
@@ -807,23 +810,23 @@ const Decl = rule($ => [
   // f() {}`, `@dec export var x`, `@dec export { a }`, `@dec export default x`, `@dec export
   // @dec class C {}` have no parse). The inline alt is ordered, so a class is the first branch
   // and the only one that parses it.
-  [many1(DecoratorExpr), alt(classDecl, [not(not(['export', opt('default'), 'class'])), $])],
+  arm('decorated', many1(field('decorator', DecoratorExpr)), field('declaration', alt(arm('class_', ...classDecl), arm('export_', not(not(['export', opt('default'), 'class'])), field('decl', $))))),
   // A declaration that ends in a block needs nothing after it; every other one ends as a
   // statement does. After `default`, `function` and `class` start a declaration
   // (`export default [lookahead ∉ { function, async function, class }] AssignmentExpression`;
   // the inline alt is ordered, so their arms come first), so `export default class {} g()` is two.
-  ['export', 'default', alt(
+  arm('exportDefault', field('exportKeyword', 'export'), field('defaultKeyword', 'default'), field('declaration', alt(
     ...fnArms([opt(...bindingName)], Block),  // function
     arm('namedClass', many(field('decorator', DecoratorExpr)), 'class', ...bindingName, opt('extends', field('superClass', ClassHeritage)), field('bodyOpen', '{'), many(field('member', ClassMember)), field('bodyClose', '}')),  // named class
     arm('anonymousClass', many(field('decorator', DecoratorExpr)), 'class', opt('extends', field('superClass', ClassHeritage)), field('bodyOpen', '{'), many(field('member', ClassMember)), field('bodyClose', '}')),                          // anonymous class
-    [Expr, asi()],   // catch-all: export default <expr>
-  )],
-  ['export', '*', alt(['from', ...moduleSpecifier], ['as', alt(Ident, String_), 'from', ...moduleSpecifier]), asi()],   // the alias is a ModuleExportName
-  ['export', '{', sep(ExportSpecifier, ','), '}', opt('from', ...moduleSpecifier), asi()],
-  ['import', alt(
-    [ImportClause, 'from', ...moduleSpecifier],   // import X from "m"
-    moduleSpecifier,                              // import "m"
-  ), asi()],
+    arm('expression', field('expr', Expr), asi()),   // catch-all: export default <expr>
+  ))),
+  arm('exportAll', field('exportKeyword', 'export'), field('star', '*'), field('form', alt(arm('plain', 'from', ...moduleSpecifier), arm('aliased', 'as', field('exported', alt(Ident, String_)), 'from', ...moduleSpecifier))), asi()),   // the alias is a ModuleExportName
+  arm('exportNamed', field('exportKeyword', 'export'), field('brace', '{'), sep(field('specifier', ExportSpecifier), ','), field('braceClose', '}'), opt('from', ...moduleSpecifier), asi()),
+  arm('importDeclaration', field('importKeyword', 'import'), field('form', alt(
+    arm('clause', field('clause', ImportClause), 'from', ...moduleSpecifier),   // import X from "m"
+    arm('bare', ...moduleSpecifier),                                            // import "m"
+  )), asi()),
 ]);
 
 // ── Entry ──
