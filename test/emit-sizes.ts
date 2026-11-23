@@ -1,5 +1,6 @@
 // node test/emit-sizes.ts [<monogram source tree>=.]: the byte size and a short sha256 of
-// emitParser(<grammar>, <target>) (and with each emit option, `<target>+<option>`) for the real grammars typescript, javascript and their element dialects and every emit target that tree exports,
+// emitParser(<grammar>, <target>) (and with each emit option, `<target>+<option>`) for the real grammars typescript, javascript and their element dialects, and the
+// text dialect fixture (test/fixtures/textdialect.ts: the region features JSX lacks), and every emit target that tree exports,
 // as one JSON object { "<grammar>": { "<target>": { bytes, sha } } } on stdout. The measurement
 // workflow (.github/workflows/measure-profile.yml) runs it on a pull request's merge base and head
 // and reports the sizes A / M / delta (test/bench-rust-profile/pr-summary.ts); the sha says whether
@@ -13,8 +14,9 @@ const url = (p: string) => pathToFileURL(root + '/' + p).href;
 const emit = await import(url('src/emit.ts'));
 const TARGETS = ['tsTarget', 'jsTarget', 'goTarget', 'rustTarget'] as const;
 const out: Record<string, Record<string, { bytes: number; sha: string }>> = {};
-for (const g of ['typescript', 'javascript', 'typescriptreact', 'javascriptreact']) {
-  const grammar = (await import(url(g + '.ts'))).default;
+for (const path of ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'test/fixtures/textdialect']) {
+  const g = path.split('/').pop()!;
+  const grammar = (await import(url(path + '.ts'))).default;
   out[g] = {};
   for (const t of TARGETS) {
     if (!emit[t]) continue; // a target this tree does not have yet: absent, not zero
