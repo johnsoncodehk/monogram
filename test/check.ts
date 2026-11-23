@@ -119,7 +119,7 @@ const GATES: Gate[] = [
 const QUICK_GATES = new Set([
   'emit-parity/portable-targets/lists', 'emit-parity/portable-targets/edits-small', 'emit-parity/define-target',
   'emit-parity/shape-parity', 'emit-parity/guard-refutation', 'emit-parity/guard-lead', 'emit-parity/predictive-first',
-  'emit-parity/emit-reentrancy', 'core/recovery', 'core/template-holes', 'core/diagnostic-labels', 'core/issue-cases',
+  'emit-parity/emit-reentrancy', 'emit-parity/emit-portable-library', 'core/recovery', 'core/template-holes', 'core/diagnostic-labels', 'core/issue-cases',
   'core/env-spec-regressions', 'core/nullable-rules', 'core/agnostic', 'core/tag-open-entry', 'core/left-recursion',
   'core/indent-extensions', 'core/text-dialect', 'conformance/js', 'conformance/tsx', 'conformance/jsx', 'conformance/html',
   'conformance/ts-ast-structure', 'highlighter/tm-guards', 'highlighter/treesitter-assertions', 'highlighter/tm-dialect',
