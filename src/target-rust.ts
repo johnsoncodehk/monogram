@@ -5437,11 +5437,9 @@ const rustLowering: Lowering = {
   borrowStr: (r) => (!r.owned ? r.c : /^\w+$/.test(r.c) ? `${r.c}.as_str()` : `(${r.c}).as_str()`),
   borrowList: (r) => (r.owned ? `&${r.c}` : r.c),
   borrowVal: (r) => `&${r.c}`,
-  charSet: (name, rs) => {
-    const a = Array<boolean>(256).fill(false);
-    for (const [lo, hi] of rs) for (let c = lo; c <= hi; c++) a[c] = true;
-    return `const ${name.toUpperCase()}: [bool; 256] = [${a.map((b) => (b ? 'true' : 'false')).join(', ')}];`;
-  },
+  // Rust spelling: the table is built from its ranges by a const block, evaluated at compile time
+  // (the same [bool; 256] constant as its 256 literals, a tenth of their bytes).
+  charSet: (name, rs) => `const ${name.toUpperCase()}: [bool; 256] = { let r: &[(usize, usize)] = &[${rs.map(([lo, hi]) => `(${lo}, ${hi})`).join(', ')}]; let mut a = [false; 256]; let mut i = 0; while i < r.len() { let mut c = r[i].0; while c <= r[i].1 { a[c] = true; c += 1; } i += 1; } a };`,
   // Four bytes per round: one table test each, and one bounds test per round instead of per byte.
   runEndFn: `/// The end of the run of bytes in \`set\` from i: the first j >= i at which b ends or b[j] is not in it.
 #[inline(always)]
