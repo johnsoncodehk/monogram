@@ -238,8 +238,11 @@ export interface Lowering {
     break(): Lines;
     // A call statement (its value, if any, unused).
     run(call: string): string;
-    return(vals: string[]): Lines;
-    fn(s: { name: string; params: { name: string; type: string }[]; rets: string[]; doc: string[]; body: Lines; inline: boolean; cold: boolean }): string;
+    // `fn`: the function returning: its printed name, its return types, and whether a returned
+    // value calls a family function (for a lowering whose language has no multiple return values
+    // and stores them where a nested call could overwrite them). Go and Rust ignore it.
+    return(vals: string[], fn: { name: string; ret: Ty[]; calls: boolean }): Lines;
+    fn(s: { name: string; params: { name: string; type: string }[]; rets: string[]; retTys: Ty[]; doc: string[]; body: Lines; inline: boolean; cold: boolean }): string;
   };
   // `inline` fns are not printed as functions; each call site prints `inlineFn` of the body
   // instead (for compilers that cannot be told to inline a function).
@@ -300,10 +303,18 @@ export interface RelexLowering {
     push(cx: Cx, list: string, r: R): Lines;
     for(cx: Cx, v: string, from: R, to: R, body: Lines): Lines;
     forEach(v: string, list: string, body: Lines): Lines;
-    destructure(cx: Cx, s: { declare: boolean; names: string[]; ids: string[]; call: string; mutable: (n: string) => boolean; reassigned: (n: string) => boolean }): Lines;
+    // `callee`: the called function's printed name and return types.
+    destructure(cx: Cx, s: { declare: boolean; names: string[]; ids: string[]; call: string; callee: { name: string; ret: Ty[] }; mutable: (n: string) => boolean; reassigned: (n: string) => boolean }): Lines;
     lexStep(cx: Cx, s: { text: R; posName: string; pos: string; out: string; state: string[]; err: string }): Lines;
     lexAll(cx: Cx, s: { text: R; out: string; err: string; mutable: boolean }): Lines;
   };
+}
+
+// Whether e calls a family function (in any sub-expression: arguments, operands, record fields).
+function hasCall(e: unknown): boolean {
+  if (typeof e !== 'object' || e === null) return false;
+  if ((e as Expr).k === 'call') return true;
+  return Object.values(e).some(hasCall);
 }
 
 function refs(e: Expr, out = new Set<string>()): Set<string> {
@@ -623,7 +634,7 @@ class Printer implements Cx {
           if (L.owns && isList(t) && !r.owned) throw new Error(`algo-ir: return of borrowed list in ${fn.name}`);
           return r.c;
         });
-        return S.return(vals);
+        return S.return(vals, { name: this.id(fn.name), ret: fn.ret, calls: s.es.some(hasCall) });
       }
       case 'letCall': case 'setCall': {
         const fn = this.sigs.get(s.call.fn);
@@ -632,7 +643,7 @@ class Printer implements Cx {
         if (s.k === 'letCall') s.names.forEach((n, i) => { if (n !== '_') this.env.set(n, { ty: fn.ret[i], owned: true }); });
         else s.names.forEach((n, i) => { if (n !== '_' && this.env.get(n)?.ty !== fn.ret[i]) throw new Error(`algo-ir: setCall type of ${n}`); });
         return this.rx().stmt.destructure(this, {
-          declare: s.k === 'letCall', names: s.names, ids: s.names.map((n) => this.id(n)), call,
+          declare: s.k === 'letCall', names: s.names, ids: s.names.map((n) => this.id(n)), call, callee: { name: this.id(fn.name), ret: fn.ret },
           mutable: (n) => this.mutable.has(n), reassigned: (n) => this.reassigned.has(n),
         });
       }
@@ -672,6 +683,7 @@ class Printer implements Cx {
     f.ret.forEach((t) => this.checkTy(t));
     return this.L.stmt.fn({
       name: this.id(f.name),
+      retTys: f.ret,
       params: f.params.map((p) => {
         if (p.ref && !isRec(p.ty)) throw new Error(`algo-ir: ${f.name}: only a record is passed by reference`);
         return { name: this.id(p.name), type: p.ref ? this.recL().refType(recName(p.ty as RecTy)) : this.type(p.ty, 'param') };
