@@ -1,5 +1,5 @@
 // Lexer scan family: how far each token of a grammar extends from a position, authored once and
-// printed for each target through the `Lowering` it registers with `defineTarget`.
+// printed for each target through the `Lowering` it registers with `defineParserTarget`.
 //
 // Every scanner is `(s, p) -> end`, with end > p for a match and -1 for none (a negative p never
 // matches); an identifier whose escapes spell no IdentifierName is the lexer error -2 - e, for the

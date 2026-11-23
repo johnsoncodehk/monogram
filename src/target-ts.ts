@@ -14,7 +14,7 @@ import type {
   RuleShape, TokenLeafPolicy, ShapeIRRule, CustomShape, KeepShape,
 } from './shape-schema.ts';
 import { validateShapeOrThrow } from './shape-validate.ts';
-import { defineTarget, type SharedAlgorithms } from './define-target.ts';
+import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, findAnyName, isNum, isOpt, isRec, isRecList, isValList, isValTy, recName, type BinOp, type Lowering, type R, type Ty } from './algo-ir.ts';
 import type { ShapePlan } from './shape-plan.ts';
 import { cookTable } from './shape-cook.ts';
@@ -3258,7 +3258,7 @@ const tsTake = (names: string[], fn: string, args: string): string =>
 // on every iteration (measured: TS blocks +0.19% to +0.53% on the real inputs with them).
 export const FACTS: PortableFacts = { calleeFirstGuards: false };
 
-export const tsTarget = defineTarget({
+export const tsTarget = defineParserTarget({
   name: 'typescript',
   ext: 'ts',
   lowering: tsLowering,
