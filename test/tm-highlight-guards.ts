@@ -115,6 +115,18 @@ const cases: Case[] = [
     lines: ['const e = <div>{x}</div>'],
     checks: [{ line: 0, text: 'div', scope: 'entity.name.tag' }] },
 
+  // ── .tsx: an element starts where the LEXER enters it, after a text that is no value (the
+  // derived operand-entry set, region-view.ts operandEntry). The hand list it replaced had no
+  // `+`, `??`, `;`, `else`, `typeof`, … so these were comparisons in the highlighter only.
+  ...([['a + <b/>', '+'], ['a ?? <b/>', '??'], ['f(); <b/>', ';'], ['typeof <b/>', 'typeof'], ['a !== <b/>', '!=='], ['a * <b/>', '*']] as const).map(([src, op]) => ({
+    label: `tsx element after \`${op}\` is a tag`, scope: 'source.tsx', lines: [`x = ${src}`],
+    checks: [{ line: 0, text: 'b', scope: 'entity.name.tag' }] })),
+  // ... and nowhere a value stands: after `++` (a value ending with the operator `+`), after an
+  // operand and a block comment, after an identifier.
+  ...(['a++ <b', 'a /**/ <b', 'a <b'] as const).map((src) => ({
+    label: `tsx \`${src}\` is a comparison`, scope: 'source.tsx', lines: [`x = ${src} > c`],
+    checks: [{ line: 0, text: 'b', scope: 'entity.name.tag', absent: true }] })),
+
   // ── Zero-width guards in the grammar (the `>>`/`>=` rescan between the type arguments and
   // their `>`, `not(…)` inside a `not(…)`) must not hide the generic call or make a contextual
   // keyword look reserved.
