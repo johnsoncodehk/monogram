@@ -311,6 +311,46 @@
         "include": "@interpExprBody"
       }
     ],
+    "member": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "",
+        {
+          "token": "",
+          "switchTo": "@root"
+        }
+      ]
+    ],
+    "memberN": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
+        {
+          "token": "identifier",
+          "next": "@pop"
+        }
+      ],
+      [
+        "",
+        {
+          "token": "",
+          "next": "@pop"
+        }
+      ]
+    ],
     "exprBody": [
       [
         "[ \\t\\r\\n]+",
@@ -719,6 +759,20 @@
               "switchTo": "@value"
             }
           }
+        }
+      ],
+      [
+        "\\?\\.(?=\\s*(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+        {
+          "token": "delimiter",
+          "switchTo": "@member"
+        }
+      ],
+      [
+        "\\.(?=\\s*(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+        {
+          "token": "delimiter",
+          "switchTo": "@member"
         }
       ],
       [
@@ -1550,6 +1604,20 @@
       [
         "/=|/",
         "operator"
+      ],
+      [
+        "\\?\\.(?=\\s*(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+        {
+          "token": "delimiter",
+          "next": "@memberN"
+        }
+      ],
+      [
+        "\\.(?=\\s*(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+        {
+          "token": "delimiter",
+          "next": "@memberN"
+        }
       ],
       [
         "\\(|\\)",

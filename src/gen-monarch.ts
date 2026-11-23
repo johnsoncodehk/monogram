@@ -3,6 +3,7 @@ import { regionView, type RegionView, type NameShape } from './region-view.ts';
 import { directivesOf } from './grammar-analysis.ts';
 import { armGraph, findWindows, hasWindow, inArmOrder } from './arm-graph.ts';
 import { classifyTokenScope, scopeToMonarch } from './highlight-roles.ts';
+import { highlightFacts } from './highlight-facts.ts';
 import { info as patternInfo, type CSet } from './lex-match-plan.ts';
 import { collectLiterals, escapeRegex, isKeywordLiteral } from './grammar-utils.ts';
 import {
@@ -621,6 +622,23 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
   const symbolRules = buildSymbolRules(true);          // top-level (mode-flipping)
   const symbolRulesInterp = buildSymbolRules(false);   // inside holes (no mode flip)
 
+  // ── A name after a member-access text is a property (highlight-facts' memberAccessTexts, the
+  // lexer's LX_MEMBER rule): `e.type`, `m.get(…)` are names, not the keywords `type` / `get`.
+  // Monarch sees nothing before a rule's match, so the accessor itself enters a state where the
+  // next word is read as a name: switched into from a base state (the name is a value), pushed
+  // inside a hole (popped after the name). The accessor rule fires only when a word follows on
+  // the line (a lookahead), so `?.(` / `...` / a number's `.5` keep their rules.
+  const memberTexts = highlightFacts(grammar).memberAccessTexts.filter(t => allLiterals.has(t)).sort((a, b) => b.length - a.length);
+  const memberEntry = (nested: boolean): MonarchRule[] => memberTexts.map(t =>
+    [`${escapeRegex(t)}(?=\\s*${anchoredSource(identRegex)})`, nested
+      ? { token: symbolToken.get(t) ?? 'delimiter', next: '@memberN' }
+      : { token: symbolToken.get(t) ?? 'delimiter', switchTo: '@member' }] as MonarchRule);
+  const memberRules = memberEntry(false), memberRulesInterp = memberEntry(true);
+  if (memberTexts.length) {
+    tokenizer['member'] = [wsRule, [anchoredSource(identRegex), toValue('identifier')], ['', { token: '', switchTo: '@root' }]];
+    tokenizer['memberN'] = [wsRule, [anchoredSource(identRegex), { token: 'identifier', next: '@pop' }], ['', { token: '', next: '@pop' }]];
+  }
+
   // ── The `/` rules (only ambiguous when a regex token exists) ──
   const exprSlashRules: MonarchRule[] = [];
   const valueSlashRules: MonarchRule[] = [];
@@ -680,6 +698,7 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
     ...numberRules,
     ...otherTokenRules,
     identRule,
+    ...memberRules,
     ...symbolRules,
   ];
   tokenizer['exprBody'] = exprBody;
@@ -690,7 +709,7 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
   const el = view ? elementLayer(view, grammar, {
     identRegex, wsRule, commentRules, stringNestedRules, templateNestedRules, typeargs: !!angle,
     codeBody: templateToken?.template ? '@interpExprBody' : [
-      ...numberRules.map(stripSwitch), ...otherTokenRules.map(stripSwitch), identRuleInterp, ...interpSlashRules, ...symbolRulesInterp,
+      ...numberRules.map(stripSwitch), ...otherTokenRules.map(stripSwitch), identRuleInterp, ...interpSlashRules, ...memberRulesInterp, ...symbolRulesInterp,
       ...angle ? [['[<>]', comparisonTok] as MonarchRule] : [],
     ],
     braces: tokenizer['bracketCounting'] ? '@bracketCounting' : null,
@@ -732,6 +751,7 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
       ...otherTokenRules.map(stripSwitch),
       identRuleInterp,
       ...interpSlashRules,
+      ...memberRulesInterp,
       ...symbolRulesInterp,
     ];
     if (angle) interpExprBody.push(['[<>]', comparisonTok]);

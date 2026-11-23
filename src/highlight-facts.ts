@@ -894,7 +894,7 @@ export function detectRegexLiteral(grammar: CstGrammar, tokenNames: Set<string>)
     }
   }
 
-  return { flagsPattern, preceedingKeywords, precedingChars, postfixAmbiguousChars, commentSecondChars, blockComments, memberAccessTexts: regexCtx?.memberAccessTexts ?? [] };
+  return { flagsPattern, preceedingKeywords, precedingChars, postfixAmbiguousChars, commentSecondChars, blockComments, memberAccessTexts: highlightFacts(grammar).memberAccessTexts };
 }
 
 // ── Declaration pattern detection ──
@@ -2016,6 +2016,9 @@ const FACTS = {
   identToken: (g: CstGrammar): TokenDecl | undefined => g.tokens.find(t => t.identifier)
     ?? g.tokens.find(t => classifyToken(t, { explicitScope: false }).scope === 'variable.other'
       && classifyToken(t).scope === 'variable.other'),
+  /** The member-access texts (`.`, `?.`: the lexer's `regexContext.memberAccessTexts`): a word
+   *  right after one is a property name, never a keyword (the lexer's LX_MEMBER rule). */
+  memberAccessTexts: (g: CstGrammar): string[] => g.tokens.find(t => t.regexContext)?.regexContext?.memberAccessTexts ?? [],
   /** The `@regex` token's name, if any. */
   regexTokenName: (g: CstGrammar) => g.tokens.find(t => t.flags.includes('regex'))?.name,
   contextualOperatorKeywords: (g: CstGrammar) => findContextualOperatorKeywords(g),

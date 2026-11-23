@@ -271,6 +271,9 @@
       "include": "#property-access"
     },
     {
+      "include": "#optional-property-access"
+    },
+    {
       "include": "#operator-overrides"
     },
     {
@@ -2315,6 +2318,32 @@
         }
       }
     },
+    "optional-property-access": {
+      "patterns": [
+        {
+          "match": "(?<=[\\w$\\]\\)])(\\?\\.)\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*\\()",
+          "captures": {
+            "1": {
+              "name": "punctuation.accessor.optional.ts"
+            },
+            "2": {
+              "name": "entity.name.function.ts"
+            }
+          }
+        },
+        {
+          "match": "(?<=[\\w$\\]\\)])(\\?\\.)\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+          "captures": {
+            "1": {
+              "name": "punctuation.accessor.optional.ts"
+            },
+            "2": {
+              "name": "variable.other.readwrite.ts"
+            }
+          }
+        }
+      ]
+    },
     "arrow-parameter": {
       "match": "\\b((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)\\s*(?==>)",
       "captures": {
@@ -3088,6 +3117,9 @@
         },
         {
           "include": "#property-access"
+        },
+        {
+          "include": "#optional-property-access"
         },
         {
           "include": "#operator-overrides"

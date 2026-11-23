@@ -586,7 +586,7 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
   // lexer's LX_MEMBER rule, as for keywords): after `.` / `?.` the same word is a property name,
   // a value, so `x.new <b> c` is no element. Oniguruma's lookbehind takes alternatives of
   // different lengths only at its top level, so each (accessor, word) pair is an alternative.
-  const members: string[] = grammar.tokens.find(t => t.regexContext)?.regexContext?.memberAccessTexts ?? [];
+  const members: string[] = highlightFacts(grammar).memberAccessTexts;
   const afterWords = oe ? oe.after.filter(t => /^\w/.test(t)) : [];
   const exprBehind = !oe ? '' : `${oe.notAfter.length ? `(?<!${oe.notAfter.map(escapeRegex).join('|')})` : ''}` + (members.length && afterWords.length
     ? `(?:(?<=${[...oe.after.filter(t => !/^\w/.test(t)).map(wordText), '^'].join('|')})|(?<=${afterWords.map(wordText).join('|')})(?<!${afterWords.flatMap(w => members.map(m => escapeRegex(m + w))).join('|')}))`
@@ -5469,7 +5469,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       kw,
       kwScope: `${kwScope}.${langName}`,
       wordEnd: true,
-      notAfter: grammar.tokens.find(t => t.regexContext)?.regexContext?.memberAccessTexts ?? [],
+      notAfter: facts.memberAccessTexts,
       end: ctorEnd,
       patterns: [
         ...(calleeRegex ? [{ include: '#regex-literal' }] : []),
@@ -5542,6 +5542,22 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
         },
       };
       topPatterns.push({ include: '#property-access' });
+    }
+
+    // A word after any other member-access text (`?.`: highlight-facts' memberAccessTexts, the
+    // lexer's LX_MEMBER rule) is a name, never a keyword (`a?.type`, `m?.get(k)`): scoped as the
+    // name it is everywhere else after `?.` (a call's callee as a function, else a plain
+    // variable), the contract the note below keeps.
+    const otherMembers = facts.memberAccessTexts.filter(t => t !== '.' && allLiterals.has(t));
+    if (otherMembers.length) {
+      const accScope = (t: string) => { const sc = getScope(scopeOverrides, t) ?? `punctuation.accessor.${langName}`; return sc.includes(langName) ? sc : `${sc}.${langName}`; };
+      repository['optional-property-access'] = {
+        patterns: otherMembers.flatMap(t => [
+          { match: `${propLookbehind}(${escapeRegex(t)})\\s*(${identPattern})(?=\\s*\\()`, captures: { '1': { name: accScope(t) }, '2': { name: `entity.name.function.${langName}` } } },
+          { match: `${propLookbehind}(${escapeRegex(t)})\\s*(${identPattern})`, captures: { '1': { name: accScope(t) }, '2': { name: `variable.other.readwrite.${langName}` } } },
+        ]),
+      };
+      topPatterns.push({ include: '#optional-property-access' });
     }
 
     // NOTE: no dedicated optional-chain ('?.') mint. The detector's direct-ref shape
