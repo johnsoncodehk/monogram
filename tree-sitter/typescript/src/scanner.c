@@ -15,6 +15,30 @@
 enum TokenType {
   REGEX_LITERAL,
   TEMPLATE_CHARS,
+  _SAME_LINE_1,
+  _LINE_END_1,
+  _SAME_LINE_2,
+  _SAME_LINE_3,
+  _SAME_LINE_4,
+  _SAME_LINE_5,
+  _SAME_LINE_6,
+  _SAME_LINE_7,
+  _SAME_LINE_8,
+  _SAME_LINE_9,
+  _SAME_LINE_10,
+  _SAME_LINE_11,
+  _SAME_LINE_12,
+  _SAME_LINE_13,
+  _SAME_LINE_14,
+  _SAME_LINE_15,
+  _SAME_LINE_16,
+  _SAME_LINE_17,
+  _SAME_LINE_18,
+  _SAME_LINE_19,
+  _SAME_LINE_20,
+  _SAME_LINE_21,
+  _SAME_LINE_22,
+  _SAME_LINE_23,
 };
 
 // The scanner is stateless — tree-sitter's `valid_symbols` already encodes
@@ -69,8 +93,7 @@ static bool scan_regex(TSLexer *lexer) {
     advance(lexer);
   }
   // Trailing flag characters.
-  const char *flags = "gimsuyd";
-  while (lexer->lookahead != 0 && strchr(flags, (char)lexer->lookahead) != NULL) advance(lexer);
+  while (!lexer->eof(lexer) && (lexer->lookahead == 36 || (lexer->lookahead >= 48 && lexer->lookahead <= 57) || (lexer->lookahead >= 65 && lexer->lookahead <= 90) || lexer->lookahead == 92 || lexer->lookahead == 95 || (lexer->lookahead >= 97 && lexer->lookahead <= 123) || lexer->lookahead == 125)) advance(lexer);
   lexer->result_symbol = REGEX_LITERAL;
   lexer->mark_end(lexer);
   return true;
@@ -120,6 +143,2094 @@ static bool scan_template_chars(TSLexer *lexer) {
   return true; // token end already frozen by the last mark_end
 }
 
+// ── Zero-width tokens: line-end alternatives and same-line markers (planZeroWidth) ──
+static bool zw_line_terminator(int32_t c) { return c == '\n' || c == '\r' || c == 0x2028 || c == 0x2029; }
+static bool zw_word_char(int32_t c) { return c == 36 || (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || c == 92 || c == 95 || (c >= 97 && c <= 123) || c == 125; }
+// The non-literal tokens the next character may start, one bit each:
+//   0: Ident
+//   1: HexNumber
+//   2: OctalNumber
+//   3: BinaryNumber
+//   4: BigInt
+//   5: Number
+//   6: String
+//   7: Template
+//   8: Regex
+//   9: Decorator
+//   10: PrivateField
+static uint64_t zw_token_candidates(int32_t c) {
+  uint64_t m = 0;
+  if (c == 36 || (c >= 65 && c <= 90) || c == 92 || c == 95 || (c >= 97 && c <= 122)) m |= (uint64_t)1 << 0;
+  if (c == 48) m |= (uint64_t)1 << 1;
+  if (c == 48) m |= (uint64_t)1 << 2;
+  if (c == 48) m |= (uint64_t)1 << 3;
+  if ((c >= 48 && c <= 57)) m |= (uint64_t)1 << 4;
+  if (c == 46 || (c >= 48 && c <= 57)) m |= (uint64_t)1 << 5;
+  if (c == 34 || c == 39) m |= (uint64_t)1 << 6;
+  if (c == 96) m |= (uint64_t)1 << 7;
+  if (c == 47) m |= (uint64_t)1 << 8;
+  if (c == 64) m |= (uint64_t)1 << 9;
+  if (c == 35) m |= (uint64_t)1 << 10;
+  return m;
+}
+// The literals, by id: 0 "!", 1 "!=", 2 "!==", 3 "%", 4 "%=", 5 "&", 6 "&&", 7 "&&=", 8 "&=", 9 "(", 10 ")", 11 "*", 12 "**", 13 "**=", 14 "*=", 15 "+", 16 "++", 17 "+=", 18 ",", 19 "-", 20 "--", 21 "-=", 22 ".", 23 "...", 24 "/", 25 "/=", 26 ":", 27 ";", 28 "<", 29 "<<", 30 "<<=", 31 "<=", 32 "=", 33 "==", 34 "===", 35 "=>", 36 ">", 37 ">=", 38 ">>", 39 ">>=", 40 ">>>", 41 ">>>=", 42 "?", 43 "?.", 44 "??", 45 "??=", 46 "@new", 47 "[", 48 "]", 49 "^", 50 "^=", 51 "abstract", 52 "accessor", 53 "as", 54 "asserts", 55 "async", 56 "await", 57 "break", 58 "case", 59 "catch", 60 "class", 61 "const", 62 "constructor", 63 "continue", 64 "debugger", 65 "declare", 66 "default", 67 "defer", 68 "delete", 69 "do", 70 "else", 71 "enum", 72 "export", 73 "extends", 74 "false", 75 "finally", 76 "for", 77 "from", 78 "function", 79 "get", 80 "global", 81 "if", 82 "implements", 83 "import", 84 "in", 85 "infer", 86 "instanceof", 87 "interface", 88 "is", 89 "keyof", 90 "let", 91 "meta", 92 "module", 93 "namespace", 94 "new", 95 "null", 96 "of", 97 "out", 98 "override", 99 "private", 100 "protected", 101 "public", 102 "readonly", 103 "require", 104 "return", 105 "satisfies", 106 "set", 107 "static", 108 "super", 109 "switch", 110 "target", 111 "this", 112 "throw", 113 "true", 114 "try", 115 "type", 116 "typeof", 117 "undefined", 118 "unique", 119 "using", 120 "var", 121 "void", 122 "while", 123 "with", 124 "yield", 125 "{", 126 "|", 127 "|=", 128 "||", 129 "||=", 130 "}", 131 "~"
+// The skip tokens skipped here: 0 "#!" to the line end, 1 "//" to the line end, 2 "/*" to "*/"
+static bool zw_skip_comment(TSLexer *lexer, int k, bool *line_break) {   // past its end; false at an unterminated one
+  switch (k) {
+    case 0: while (!lexer->eof(lexer) && !zw_line_terminator(lexer->lookahead)) skip(lexer); return true;
+    case 1: while (!lexer->eof(lexer) && !zw_line_terminator(lexer->lookahead)) skip(lexer); return true;
+    case 2: { static const int32_t close[] = { 42, 47 }; unsigned at = 0;
+      while (!lexer->eof(lexer)) {
+        int32_t c = lexer->lookahead;
+        if (zw_line_terminator(c)) *line_break = true;
+        skip(lexer);
+        if (c == close[at]) { if (++at == 2) return true; } else at = c == close[0] ? 1 : 0;
+      }
+      return false; }
+  }
+  return false;
+}
+static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: skip token k; -2: an opener to defer; -1: none
+  int best = -1;
+  switch (lexer->lookahead) {
+    case 33:
+      skip(lexer);
+      best = 0;
+      switch (lexer->lookahead) {
+        case 61:
+          skip(lexer);
+          best = 1;
+          switch (lexer->lookahead) {
+            case 61:
+              skip(lexer);
+              best = 2;
+              break;
+          }
+          break;
+      }
+      break;
+    case 35:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 33:
+          skip(lexer);
+          best = -10;
+          break;
+      }
+      break;
+    case 37:
+      skip(lexer);
+      best = 3;
+      switch (lexer->lookahead) {
+        case 61:
+          skip(lexer);
+          best = 4;
+          break;
+      }
+      break;
+    case 38:
+      skip(lexer);
+      best = 5;
+      switch (lexer->lookahead) {
+        case 38:
+          skip(lexer);
+          best = 6;
+          switch (lexer->lookahead) {
+            case 61:
+              skip(lexer);
+              best = 7;
+              break;
+          }
+          break;
+        case 61:
+          skip(lexer);
+          best = 8;
+          break;
+      }
+      break;
+    case 40:
+      skip(lexer);
+      best = 9;
+      break;
+    case 41:
+      skip(lexer);
+      best = 10;
+      break;
+    case 42:
+      skip(lexer);
+      best = 11;
+      switch (lexer->lookahead) {
+        case 42:
+          skip(lexer);
+          best = 12;
+          switch (lexer->lookahead) {
+            case 61:
+              skip(lexer);
+              best = 13;
+              break;
+          }
+          break;
+        case 61:
+          skip(lexer);
+          best = 14;
+          break;
+      }
+      break;
+    case 43:
+      skip(lexer);
+      best = 15;
+      switch (lexer->lookahead) {
+        case 43:
+          skip(lexer);
+          best = 16;
+          break;
+        case 61:
+          skip(lexer);
+          best = 17;
+          break;
+      }
+      break;
+    case 44:
+      skip(lexer);
+      best = 18;
+      break;
+    case 45:
+      skip(lexer);
+      best = 19;
+      switch (lexer->lookahead) {
+        case 45:
+          skip(lexer);
+          best = 20;
+          break;
+        case 61:
+          skip(lexer);
+          best = 21;
+          break;
+      }
+      break;
+    case 46:
+      skip(lexer);
+      best = 22;
+      switch (lexer->lookahead) {
+        case 46:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 46:
+              skip(lexer);
+              best = 23;
+              break;
+          }
+          break;
+      }
+      break;
+    case 47:
+      skip(lexer);
+      best = 24;
+      switch (lexer->lookahead) {
+        case 42:
+          skip(lexer);
+          best = -12;
+          break;
+        case 47:
+          skip(lexer);
+          best = -11;
+          break;
+        case 61:
+          skip(lexer);
+          best = 25;
+          break;
+      }
+      break;
+    case 58:
+      skip(lexer);
+      best = 26;
+      break;
+    case 59:
+      skip(lexer);
+      best = 27;
+      break;
+    case 60:
+      skip(lexer);
+      best = 28;
+      switch (lexer->lookahead) {
+        case 60:
+          skip(lexer);
+          best = 29;
+          switch (lexer->lookahead) {
+            case 61:
+              skip(lexer);
+              best = 30;
+              break;
+          }
+          break;
+        case 61:
+          skip(lexer);
+          best = 31;
+          break;
+      }
+      break;
+    case 61:
+      skip(lexer);
+      best = 32;
+      switch (lexer->lookahead) {
+        case 61:
+          skip(lexer);
+          best = 33;
+          switch (lexer->lookahead) {
+            case 61:
+              skip(lexer);
+              best = 34;
+              break;
+          }
+          break;
+        case 62:
+          skip(lexer);
+          best = 35;
+          break;
+      }
+      break;
+    case 62:
+      skip(lexer);
+      best = 36;
+      switch (lexer->lookahead) {
+        case 61:
+          skip(lexer);
+          best = 37;
+          break;
+        case 62:
+          skip(lexer);
+          best = 38;
+          switch (lexer->lookahead) {
+            case 61:
+              skip(lexer);
+              best = 39;
+              break;
+            case 62:
+              skip(lexer);
+              best = 40;
+              switch (lexer->lookahead) {
+                case 61:
+                  skip(lexer);
+                  best = 41;
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+    case 63:
+      skip(lexer);
+      best = 42;
+      switch (lexer->lookahead) {
+        case 46:
+          skip(lexer);
+          best = 43;
+          break;
+        case 63:
+          skip(lexer);
+          best = 44;
+          switch (lexer->lookahead) {
+            case 61:
+              skip(lexer);
+              best = 45;
+              break;
+          }
+          break;
+      }
+      break;
+    case 64:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 110:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 101:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 119:
+                  skip(lexer);
+                  best = 46;
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+    case 91:
+      skip(lexer);
+      best = 47;
+      break;
+    case 93:
+      skip(lexer);
+      best = 48;
+      break;
+    case 94:
+      skip(lexer);
+      best = 49;
+      switch (lexer->lookahead) {
+        case 61:
+          skip(lexer);
+          best = 50;
+          break;
+      }
+      break;
+    case 97:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 98:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 115:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 116:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 114:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 97:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 99:
+                              skip(lexer);
+                              switch (lexer->lookahead) {
+                                case 116:
+                                  skip(lexer);
+                                  if (!zw_word_char(lexer->lookahead)) best = 51;
+                                  break;
+                              }
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+        case 99:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 99:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 101:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 115:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 115:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 111:
+                              skip(lexer);
+                              switch (lexer->lookahead) {
+                                case 114:
+                                  skip(lexer);
+                                  if (!zw_word_char(lexer->lookahead)) best = 52;
+                                  break;
+                              }
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+        case 115:
+          skip(lexer);
+          if (!zw_word_char(lexer->lookahead)) best = 53;
+          switch (lexer->lookahead) {
+            case 115:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 101:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 114:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 116:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 115:
+                              skip(lexer);
+                              if (!zw_word_char(lexer->lookahead)) best = 54;
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+            case 121:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 110:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 99:
+                      skip(lexer);
+                      if (!zw_word_char(lexer->lookahead)) best = 55;
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+        case 119:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 97:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 105:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 116:
+                      skip(lexer);
+                      if (!zw_word_char(lexer->lookahead)) best = 56;
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+    case 98:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 114:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 101:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 97:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 107:
+                      skip(lexer);
+                      if (!zw_word_char(lexer->lookahead)) best = 57;
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+    case 99:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 97:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 115:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 101:
+                  skip(lexer);
+                  if (!zw_word_char(lexer->lookahead)) best = 58;
+                  break;
+              }
+              break;
+            case 116:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 99:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 104:
+                      skip(lexer);
+                      if (!zw_word_char(lexer->lookahead)) best = 59;
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+        case 108:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 97:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 115:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 115:
+                      skip(lexer);
+                      if (!zw_word_char(lexer->lookahead)) best = 60;
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+        case 111:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 110:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 115:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 116:
+                      skip(lexer);
+                      if (!zw_word_char(lexer->lookahead)) best = 61;
+                      switch (lexer->lookahead) {
+                        case 114:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 117:
+                              skip(lexer);
+                              switch (lexer->lookahead) {
+                                case 99:
+                                  skip(lexer);
+                                  switch (lexer->lookahead) {
+                                    case 116:
+                                      skip(lexer);
+                                      switch (lexer->lookahead) {
+                                        case 111:
+                                          skip(lexer);
+                                          switch (lexer->lookahead) {
+                                            case 114:
+                                              skip(lexer);
+                                              if (!zw_word_char(lexer->lookahead)) best = 62;
+                                              break;
+                                          }
+                                          break;
+                                      }
+                                      break;
+                                  }
+                                  break;
+                              }
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+                case 116:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 105:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 110:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 117:
+                              skip(lexer);
+                              switch (lexer->lookahead) {
+                                case 101:
+                                  skip(lexer);
+                                  if (!zw_word_char(lexer->lookahead)) best = 63;
+                                  break;
+                              }
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+    case 100:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 101:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 98:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 117:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 103:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 103:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 101:
+                              skip(lexer);
+                              switch (lexer->lookahead) {
+                                case 114:
+                                  skip(lexer);
+                                  if (!zw_word_char(lexer->lookahead)) best = 64;
+                                  break;
+                              }
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+            case 99:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 108:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 97:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 114:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 101:
+                              skip(lexer);
+                              if (!zw_word_char(lexer->lookahead)) best = 65;
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+            case 102:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 97:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 117:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 108:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 116:
+                              skip(lexer);
+                              if (!zw_word_char(lexer->lookahead)) best = 66;
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+                case 101:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 114:
+                      skip(lexer);
+                      if (!zw_word_char(lexer->lookahead)) best = 67;
+                      break;
+                  }
+                  break;
+              }
+              break;
+            case 108:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 101:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 116:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 101:
+                          skip(lexer);
+                          if (!zw_word_char(lexer->lookahead)) best = 68;
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+        case 111:
+          skip(lexer);
+          if (!zw_word_char(lexer->lookahead)) best = 69;
+          break;
+      }
+      break;
+    case 101:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 108:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 115:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 101:
+                  skip(lexer);
+                  if (!zw_word_char(lexer->lookahead)) best = 70;
+                  break;
+              }
+              break;
+          }
+          break;
+        case 110:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 117:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 109:
+                  skip(lexer);
+                  if (!zw_word_char(lexer->lookahead)) best = 71;
+                  break;
+              }
+              break;
+          }
+          break;
+        case 120:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 112:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 111:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 114:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 116:
+                          skip(lexer);
+                          if (!zw_word_char(lexer->lookahead)) best = 72;
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+            case 116:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 101:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 110:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 100:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 115:
+                              skip(lexer);
+                              if (!zw_word_char(lexer->lookahead)) best = 73;
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+    case 102:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 97:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 108:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 115:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 101:
+                      skip(lexer);
+                      if (!zw_word_char(lexer->lookahead)) best = 74;
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+        case 105:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 110:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 97:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 108:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 108:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 121:
+                              skip(lexer);
+                              if (!zw_word_char(lexer->lookahead)) best = 75;
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+        case 111:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 114:
+              skip(lexer);
+              if (!zw_word_char(lexer->lookahead)) best = 76;
+              break;
+          }
+          break;
+        case 114:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 111:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 109:
+                  skip(lexer);
+                  if (!zw_word_char(lexer->lookahead)) best = 77;
+                  break;
+              }
+              break;
+          }
+          break;
+        case 117:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 110:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 99:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 116:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 105:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 111:
+                              skip(lexer);
+                              switch (lexer->lookahead) {
+                                case 110:
+                                  skip(lexer);
+                                  if (!zw_word_char(lexer->lookahead)) best = 78;
+                                  break;
+                              }
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+    case 103:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 101:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 116:
+              skip(lexer);
+              if (!zw_word_char(lexer->lookahead)) best = 79;
+              break;
+          }
+          break;
+        case 108:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 111:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 98:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 97:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 108:
+                          skip(lexer);
+                          if (!zw_word_char(lexer->lookahead)) best = 80;
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+    case 105:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 102:
+          skip(lexer);
+          if (!zw_word_char(lexer->lookahead)) best = 81;
+          break;
+        case 109:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 112:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 108:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 101:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 109:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 101:
+                              skip(lexer);
+                              switch (lexer->lookahead) {
+                                case 110:
+                                  skip(lexer);
+                                  switch (lexer->lookahead) {
+                                    case 116:
+                                      skip(lexer);
+                                      switch (lexer->lookahead) {
+                                        case 115:
+                                          skip(lexer);
+                                          if (!zw_word_char(lexer->lookahead)) best = 82;
+                                          break;
+                                      }
+                                      break;
+                                  }
+                                  break;
+                              }
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+                case 111:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 114:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 116:
+                          skip(lexer);
+                          if (!zw_word_char(lexer->lookahead)) best = 83;
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+        case 110:
+          skip(lexer);
+          if (!zw_word_char(lexer->lookahead)) best = 84;
+          switch (lexer->lookahead) {
+            case 102:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 101:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 114:
+                      skip(lexer);
+                      if (!zw_word_char(lexer->lookahead)) best = 85;
+                      break;
+                  }
+                  break;
+              }
+              break;
+            case 115:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 116:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 97:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 110:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 99:
+                              skip(lexer);
+                              switch (lexer->lookahead) {
+                                case 101:
+                                  skip(lexer);
+                                  switch (lexer->lookahead) {
+                                    case 111:
+                                      skip(lexer);
+                                      switch (lexer->lookahead) {
+                                        case 102:
+                                          skip(lexer);
+                                          if (!zw_word_char(lexer->lookahead)) best = 86;
+                                          break;
+                                      }
+                                      break;
+                                  }
+                                  break;
+                              }
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+            case 116:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 101:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 114:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 102:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 97:
+                              skip(lexer);
+                              switch (lexer->lookahead) {
+                                case 99:
+                                  skip(lexer);
+                                  switch (lexer->lookahead) {
+                                    case 101:
+                                      skip(lexer);
+                                      if (!zw_word_char(lexer->lookahead)) best = 87;
+                                      break;
+                                  }
+                                  break;
+                              }
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+        case 115:
+          skip(lexer);
+          if (!zw_word_char(lexer->lookahead)) best = 88;
+          break;
+      }
+      break;
+    case 107:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 101:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 121:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 111:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 102:
+                      skip(lexer);
+                      if (!zw_word_char(lexer->lookahead)) best = 89;
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+    case 108:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 101:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 116:
+              skip(lexer);
+              if (!zw_word_char(lexer->lookahead)) best = 90;
+              break;
+          }
+          break;
+      }
+      break;
+    case 109:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 101:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 116:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 97:
+                  skip(lexer);
+                  if (!zw_word_char(lexer->lookahead)) best = 91;
+                  break;
+              }
+              break;
+          }
+          break;
+        case 111:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 100:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 117:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 108:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 101:
+                          skip(lexer);
+                          if (!zw_word_char(lexer->lookahead)) best = 92;
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+    case 110:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 97:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 109:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 101:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 115:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 112:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 97:
+                              skip(lexer);
+                              switch (lexer->lookahead) {
+                                case 99:
+                                  skip(lexer);
+                                  switch (lexer->lookahead) {
+                                    case 101:
+                                      skip(lexer);
+                                      if (!zw_word_char(lexer->lookahead)) best = 93;
+                                      break;
+                                  }
+                                  break;
+                              }
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+        case 101:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 119:
+              skip(lexer);
+              if (!zw_word_char(lexer->lookahead)) best = 94;
+              break;
+          }
+          break;
+        case 117:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 108:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 108:
+                  skip(lexer);
+                  if (!zw_word_char(lexer->lookahead)) best = 95;
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+    case 111:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 102:
+          skip(lexer);
+          if (!zw_word_char(lexer->lookahead)) best = 96;
+          break;
+        case 117:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 116:
+              skip(lexer);
+              if (!zw_word_char(lexer->lookahead)) best = 97;
+              break;
+          }
+          break;
+        case 118:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 101:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 114:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 114:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 105:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 100:
+                              skip(lexer);
+                              switch (lexer->lookahead) {
+                                case 101:
+                                  skip(lexer);
+                                  if (!zw_word_char(lexer->lookahead)) best = 98;
+                                  break;
+                              }
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+    case 112:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 114:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 105:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 118:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 97:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 116:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 101:
+                              skip(lexer);
+                              if (!zw_word_char(lexer->lookahead)) best = 99;
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+            case 111:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 116:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 101:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 99:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 116:
+                              skip(lexer);
+                              switch (lexer->lookahead) {
+                                case 101:
+                                  skip(lexer);
+                                  switch (lexer->lookahead) {
+                                    case 100:
+                                      skip(lexer);
+                                      if (!zw_word_char(lexer->lookahead)) best = 100;
+                                      break;
+                                  }
+                                  break;
+                              }
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+        case 117:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 98:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 108:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 105:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 99:
+                          skip(lexer);
+                          if (!zw_word_char(lexer->lookahead)) best = 101;
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+    case 114:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 101:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 97:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 100:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 111:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 110:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 108:
+                              skip(lexer);
+                              switch (lexer->lookahead) {
+                                case 121:
+                                  skip(lexer);
+                                  if (!zw_word_char(lexer->lookahead)) best = 102;
+                                  break;
+                              }
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+            case 113:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 117:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 105:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 114:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 101:
+                              skip(lexer);
+                              if (!zw_word_char(lexer->lookahead)) best = 103;
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+            case 116:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 117:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 114:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 110:
+                          skip(lexer);
+                          if (!zw_word_char(lexer->lookahead)) best = 104;
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+    case 115:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 97:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 116:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 105:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 115:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 102:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 105:
+                              skip(lexer);
+                              switch (lexer->lookahead) {
+                                case 101:
+                                  skip(lexer);
+                                  switch (lexer->lookahead) {
+                                    case 115:
+                                      skip(lexer);
+                                      if (!zw_word_char(lexer->lookahead)) best = 105;
+                                      break;
+                                  }
+                                  break;
+                              }
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+        case 101:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 116:
+              skip(lexer);
+              if (!zw_word_char(lexer->lookahead)) best = 106;
+              break;
+          }
+          break;
+        case 116:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 97:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 116:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 105:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 99:
+                          skip(lexer);
+                          if (!zw_word_char(lexer->lookahead)) best = 107;
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+        case 117:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 112:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 101:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 114:
+                      skip(lexer);
+                      if (!zw_word_char(lexer->lookahead)) best = 108;
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+        case 119:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 105:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 116:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 99:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 104:
+                          skip(lexer);
+                          if (!zw_word_char(lexer->lookahead)) best = 109;
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+    case 116:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 97:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 114:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 103:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 101:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 116:
+                          skip(lexer);
+                          if (!zw_word_char(lexer->lookahead)) best = 110;
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+        case 104:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 105:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 115:
+                  skip(lexer);
+                  if (!zw_word_char(lexer->lookahead)) best = 111;
+                  break;
+              }
+              break;
+            case 114:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 111:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 119:
+                      skip(lexer);
+                      if (!zw_word_char(lexer->lookahead)) best = 112;
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+        case 114:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 117:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 101:
+                  skip(lexer);
+                  if (!zw_word_char(lexer->lookahead)) best = 113;
+                  break;
+              }
+              break;
+            case 121:
+              skip(lexer);
+              if (!zw_word_char(lexer->lookahead)) best = 114;
+              break;
+          }
+          break;
+        case 121:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 112:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 101:
+                  skip(lexer);
+                  if (!zw_word_char(lexer->lookahead)) best = 115;
+                  switch (lexer->lookahead) {
+                    case 111:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 102:
+                          skip(lexer);
+                          if (!zw_word_char(lexer->lookahead)) best = 116;
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+    case 117:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 110:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 100:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 101:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 102:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 105:
+                          skip(lexer);
+                          switch (lexer->lookahead) {
+                            case 110:
+                              skip(lexer);
+                              switch (lexer->lookahead) {
+                                case 101:
+                                  skip(lexer);
+                                  switch (lexer->lookahead) {
+                                    case 100:
+                                      skip(lexer);
+                                      if (!zw_word_char(lexer->lookahead)) best = 117;
+                                      break;
+                                  }
+                                  break;
+                              }
+                              break;
+                          }
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+            case 105:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 113:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 117:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 101:
+                          skip(lexer);
+                          if (!zw_word_char(lexer->lookahead)) best = 118;
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+        case 115:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 105:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 110:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 103:
+                      skip(lexer);
+                      if (!zw_word_char(lexer->lookahead)) best = 119;
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+    case 118:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 97:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 114:
+              skip(lexer);
+              if (!zw_word_char(lexer->lookahead)) best = 120;
+              break;
+          }
+          break;
+        case 111:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 105:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 100:
+                  skip(lexer);
+                  if (!zw_word_char(lexer->lookahead)) best = 121;
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+    case 119:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 104:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 105:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 108:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 101:
+                      skip(lexer);
+                      if (!zw_word_char(lexer->lookahead)) best = 122;
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+        case 105:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 116:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 104:
+                  skip(lexer);
+                  if (!zw_word_char(lexer->lookahead)) best = 123;
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+    case 121:
+      skip(lexer);
+      switch (lexer->lookahead) {
+        case 105:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 101:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 108:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 100:
+                      skip(lexer);
+                      if (!zw_word_char(lexer->lookahead)) best = 124;
+                      break;
+                  }
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+    case 123:
+      skip(lexer);
+      best = 125;
+      break;
+    case 124:
+      skip(lexer);
+      best = 126;
+      switch (lexer->lookahead) {
+        case 61:
+          skip(lexer);
+          best = 127;
+          break;
+        case 124:
+          skip(lexer);
+          best = 128;
+          switch (lexer->lookahead) {
+            case 61:
+              skip(lexer);
+              best = 129;
+              break;
+          }
+          break;
+      }
+      break;
+    case 125:
+      skip(lexer);
+      best = 130;
+      break;
+    case 126:
+      skip(lexer);
+      best = 131;
+      break;
+  }
+  return best;
+}
+typedef struct { int symbol; bool line_end; bool line_break; bool after_end; uint64_t after_tok, cont_tok, ahead_tok; const bool *after_exact, *after_lit, *cont_lit, *ahead_lit; } ZeroWidth;
+static const bool _SAME_LINE_1_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_1_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_1_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_1_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _LINE_END_1_AFTER_EXACT[] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1 };
+static const bool _LINE_END_1_AFTER[] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1 };
+static const bool _LINE_END_1_CONT[] = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0 };
+static const bool _LINE_END_1_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0 };
+static const bool _SAME_LINE_2_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_2_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_2_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_2_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_3_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_3_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_3_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_3_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_4_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_4_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_4_CONT[] = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0 };
+static const bool _SAME_LINE_4_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_5_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_5_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_5_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_5_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_6_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_6_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_6_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_6_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_7_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_7_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_7_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_7_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_8_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_8_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_8_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_8_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_9_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_9_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_9_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_9_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_10_AFTER_EXACT[] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1 };
+static const bool _SAME_LINE_10_AFTER[] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1 };
+static const bool _SAME_LINE_10_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_10_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_11_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_11_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_11_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_11_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_12_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_12_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_12_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_12_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_13_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_13_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_13_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_13_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_14_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_14_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_14_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_14_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_15_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_15_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_15_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_15_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_16_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_16_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_16_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_16_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_17_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_17_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_17_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_17_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_18_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_18_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_18_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_18_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_19_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_19_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_19_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_19_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_20_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_20_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_20_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_20_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_21_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_21_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_21_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_21_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_22_AFTER_EXACT[] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_22_AFTER[] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_22_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_22_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_23_AFTER_EXACT[] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_23_AFTER[] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_23_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_23_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const ZeroWidth ZERO_WIDTH[] = {
+  { _SAME_LINE_1, false, false, false, 0x0ull, 0x0ull, 0x0ull, _SAME_LINE_1_AFTER_EXACT, _SAME_LINE_1_AFTER, _SAME_LINE_1_CONT, _SAME_LINE_1_AHEAD },
+  { _LINE_END_1, true, true, true, 0x7ffull, 0x80ull, 0x0ull, _LINE_END_1_AFTER_EXACT, _LINE_END_1_AFTER, _LINE_END_1_CONT, _LINE_END_1_AHEAD },
+  { _SAME_LINE_2, false, false, false, 0x47full, 0x0ull, 0x0ull, _SAME_LINE_2_AFTER_EXACT, _SAME_LINE_2_AFTER, _SAME_LINE_2_CONT, _SAME_LINE_2_AHEAD },
+  { _SAME_LINE_3, false, false, false, 0x0ull, 0x0ull, 0x0ull, _SAME_LINE_3_AFTER_EXACT, _SAME_LINE_3_AFTER, _SAME_LINE_3_CONT, _SAME_LINE_3_AHEAD },
+  { _SAME_LINE_4, false, false, false, 0x0ull, 0x80ull, 0x0ull, _SAME_LINE_4_AFTER_EXACT, _SAME_LINE_4_AFTER, _SAME_LINE_4_CONT, _SAME_LINE_4_AHEAD },
+  { _SAME_LINE_5, false, false, false, 0x1ull, 0x0ull, 0x0ull, _SAME_LINE_5_AFTER_EXACT, _SAME_LINE_5_AFTER, _SAME_LINE_5_CONT, _SAME_LINE_5_AHEAD },
+  { _SAME_LINE_6, false, false, false, 0x0ull, 0x0ull, 0x0ull, _SAME_LINE_6_AFTER_EXACT, _SAME_LINE_6_AFTER, _SAME_LINE_6_CONT, _SAME_LINE_6_AHEAD },
+  { _SAME_LINE_7, false, false, false, 0x200ull, 0x0ull, 0x0ull, _SAME_LINE_7_AFTER_EXACT, _SAME_LINE_7_AFTER, _SAME_LINE_7_CONT, _SAME_LINE_7_AHEAD },
+  { _SAME_LINE_8, false, false, false, 0x0ull, 0x0ull, 0x0ull, _SAME_LINE_8_AFTER_EXACT, _SAME_LINE_8_AFTER, _SAME_LINE_8_CONT, _SAME_LINE_8_AHEAD },
+  { _SAME_LINE_9, false, false, false, 0x47full, 0x0ull, 0x0ull, _SAME_LINE_9_AFTER_EXACT, _SAME_LINE_9_AFTER, _SAME_LINE_9_CONT, _SAME_LINE_9_AHEAD },
+  { _SAME_LINE_10, false, false, false, 0x7ffull, 0x0ull, 0x0ull, _SAME_LINE_10_AFTER_EXACT, _SAME_LINE_10_AFTER, _SAME_LINE_10_CONT, _SAME_LINE_10_AHEAD },
+  { _SAME_LINE_11, false, false, false, 0x201ull, 0x0ull, 0x0ull, _SAME_LINE_11_AFTER_EXACT, _SAME_LINE_11_AFTER, _SAME_LINE_11_CONT, _SAME_LINE_11_AHEAD },
+  { _SAME_LINE_12, false, false, false, 0x1ull, 0x0ull, 0x0ull, _SAME_LINE_12_AFTER_EXACT, _SAME_LINE_12_AFTER, _SAME_LINE_12_CONT, _SAME_LINE_12_AHEAD },
+  { _SAME_LINE_13, false, false, false, 0x200ull, 0x0ull, 0x0ull, _SAME_LINE_13_AFTER_EXACT, _SAME_LINE_13_AFTER, _SAME_LINE_13_CONT, _SAME_LINE_13_AHEAD },
+  { _SAME_LINE_14, false, false, false, 0x200ull, 0x0ull, 0x0ull, _SAME_LINE_14_AFTER_EXACT, _SAME_LINE_14_AFTER, _SAME_LINE_14_CONT, _SAME_LINE_14_AHEAD },
+  { _SAME_LINE_15, false, false, false, 0x200ull, 0x0ull, 0x0ull, _SAME_LINE_15_AFTER_EXACT, _SAME_LINE_15_AFTER, _SAME_LINE_15_CONT, _SAME_LINE_15_AHEAD },
+  { _SAME_LINE_16, false, false, false, 0x0ull, 0x0ull, 0x0ull, _SAME_LINE_16_AFTER_EXACT, _SAME_LINE_16_AFTER, _SAME_LINE_16_CONT, _SAME_LINE_16_AHEAD },
+  { _SAME_LINE_17, false, false, false, 0x47full, 0x0ull, 0x0ull, _SAME_LINE_17_AFTER_EXACT, _SAME_LINE_17_AFTER, _SAME_LINE_17_CONT, _SAME_LINE_17_AHEAD },
+  { _SAME_LINE_18, false, false, false, 0x0ull, 0x0ull, 0x0ull, _SAME_LINE_18_AFTER_EXACT, _SAME_LINE_18_AFTER, _SAME_LINE_18_CONT, _SAME_LINE_18_AHEAD },
+  { _SAME_LINE_19, false, false, false, 0x0ull, 0x0ull, 0x0ull, _SAME_LINE_19_AFTER_EXACT, _SAME_LINE_19_AFTER, _SAME_LINE_19_CONT, _SAME_LINE_19_AHEAD },
+  { _SAME_LINE_20, false, false, false, 0x47full, 0x0ull, 0x0ull, _SAME_LINE_20_AFTER_EXACT, _SAME_LINE_20_AFTER, _SAME_LINE_20_CONT, _SAME_LINE_20_AHEAD },
+  { _SAME_LINE_21, false, false, false, 0x0ull, 0x0ull, 0x0ull, _SAME_LINE_21_AFTER_EXACT, _SAME_LINE_21_AFTER, _SAME_LINE_21_CONT, _SAME_LINE_21_AHEAD },
+  { _SAME_LINE_22, false, false, false, 0x0ull, 0x0ull, 0x0ull, _SAME_LINE_22_AFTER_EXACT, _SAME_LINE_22_AFTER, _SAME_LINE_22_CONT, _SAME_LINE_22_AHEAD },
+  { _SAME_LINE_23, false, false, false, 0x0ull, 0x0ull, 0x0ull, _SAME_LINE_23_AFTER_EXACT, _SAME_LINE_23_AFTER, _SAME_LINE_23_CONT, _SAME_LINE_23_AHEAD },
+};
+// A line-end token where its assertion holds (a line break or the end of the input, or a lookahead
+// arm's token next); a same-line marker where no line break comes first. Either only when the next
+// token may follow it (AFTER) and does not continue what precedes it (CONT).
+// 1: returned; 0: declined; 2: declined before anything but whitespace was read, `/` next (regex).
+static int scan_zero_width(TSLexer *lexer, const bool *valid_symbols) {
+  lexer->mark_end(lexer);
+  bool line_break = false, end;
+  uint64_t cand; int lit;
+  for (;;) {
+    while (iswspace(lexer->lookahead)) { if (zw_line_terminator(lexer->lookahead)) line_break = true; skip(lexer); }
+    if (valid_symbols[REGEX_LITERAL] && lexer->lookahead == '/') return 2;
+    end = lexer->eof(lexer);
+    cand = 0; lit = -1;
+    if (!end) { cand = zw_token_candidates(lexer->lookahead); lit = zw_literal(lexer); }
+    if (lit > -10) break;
+    if (!zw_skip_comment(lexer, -10 - lit, &line_break)) return 0;
+  }
+  if (lit == -2) return 0;
+  // Two passes: a keyword the token names itself first, then a keyword read as the word token.
+  for (int pass = 0; pass < 2; pass++)
+  for (unsigned i = 0; i < 24; i++) {
+    const ZeroWidth *z = &ZERO_WIDTH[i];
+    if (!valid_symbols[z->symbol]) continue;
+    bool ahead = !end && (lit >= 0 ? z->ahead_lit[lit] : (cand & z->ahead_tok) != 0);
+    bool holds = z->line_end ? ((z->line_break && (line_break || end)) || ahead) : (!line_break && !end);
+    if (!holds) continue;
+    bool after = end ? z->after_end : lit >= 0 ? (pass == 0 ? z->after_exact[lit] : z->after_lit[lit]) : (cand & z->after_tok) != 0;
+    bool cont = !end && (lit >= 0 ? z->cont_lit[lit] : (cand & z->cont_tok) != 0);
+    if (after && !cont) { lexer->result_symbol = z->symbol; return 1; }
+  }
+  return 0;
+}
+
 bool tree_sitter_typescript_external_scanner_scan(void *payload, TSLexer *lexer,
                                                           const bool *valid_symbols) {
   (void)payload;
@@ -134,6 +2245,13 @@ bool tree_sitter_typescript_external_scanner_scan(void *payload, TSLexer *lexer,
   // so it must NOT be skipped (unlike the regex path below).
   if (valid_symbols[TEMPLATE_CHARS]) {
     if (scan_template_chars(lexer)) return true;
+  }
+
+  // Zero-width tokens (a line-end alternative, a same-line marker) where one is valid.
+  if (valid_symbols[_SAME_LINE_1] || valid_symbols[_LINE_END_1] || valid_symbols[_SAME_LINE_2] || valid_symbols[_SAME_LINE_3] || valid_symbols[_SAME_LINE_4] || valid_symbols[_SAME_LINE_5] || valid_symbols[_SAME_LINE_6] || valid_symbols[_SAME_LINE_7] || valid_symbols[_SAME_LINE_8] || valid_symbols[_SAME_LINE_9] || valid_symbols[_SAME_LINE_10] || valid_symbols[_SAME_LINE_11] || valid_symbols[_SAME_LINE_12] || valid_symbols[_SAME_LINE_13] || valid_symbols[_SAME_LINE_14] || valid_symbols[_SAME_LINE_15] || valid_symbols[_SAME_LINE_16] || valid_symbols[_SAME_LINE_17] || valid_symbols[_SAME_LINE_18] || valid_symbols[_SAME_LINE_19] || valid_symbols[_SAME_LINE_20] || valid_symbols[_SAME_LINE_21] || valid_symbols[_SAME_LINE_22] || valid_symbols[_SAME_LINE_23]) {
+    int zw = scan_zero_width(lexer, valid_symbols);
+    if (zw == 1) return true;
+    if (zw == 0) return false;
   }
 
   // Skip leading whitespace (the regular lexer normally does this, but the
