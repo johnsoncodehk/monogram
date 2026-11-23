@@ -1434,7 +1434,7 @@ function docEditBlockGo(ir: ParserIR, shared: SharedAlgorithms): string {
   const shapeB = topReuse?.kind === 'B';
   const hasHeadB = !!(shapeB && topReuse.kind === 'B' && topReuse.hasHead);
   const relexFamily = `\n// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.relexFamily(ir)}\n`;
-  const reuseFamily = topReuse ? `\n// ---- reuse family: generated from src/reuse-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.reuseFamily(ir)}\n` : '';
+  const reuseFamily = `\n// ---- reuse family: generated from src/reuse-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.reuseFamily(ir)}\n`;
   const editBody = goEditBody('\t\td.root = -1', true);
   const parseFresh = `\td.root = p.parse(d.text, toksFromMeta(d.text, d.toks))`;
   const reuseFns = topReuse ? `
@@ -1473,13 +1473,6 @@ func (p *engine) shiftSubtree(id int32, byteDelta, tokDelta int) {
 			p.shiftSubtree(cid, byteDelta, tokDelta)
 		}
 	}
-}
-func shiftEntryMeta(m *EntryMeta, byteDelta, tokDelta int) {
-	m.TokStart += tokDelta
-	m.TokEnd += tokDelta
-	m.Ext += tokDelta
-	m.Off += byteDelta
-	m.End += byteDelta
 }
 ${shapeA ? `func (p *engine) assertEntriesVsNodes(oldEntries []EntryMeta, oldRoot int32) {
 	old := p.nodes[oldRoot]
@@ -1524,21 +1517,8 @@ func (p *engine) tryReuseTop(oldRoot int32, oldEntries []EntryMeta, newText stri
 		children = append(children, prefixKids...)
 		children = append(children, mid...)
 		children = append(children, adopted...)
-		adoptedMeta := append([]EntryMeta(nil), suffixMeta[adoptFrom:]...)
-		newEntries := make([]EntryMeta, 0, len(prefixMeta)+len(midMeta)+len(adoptedMeta))
-		newEntries = append(newEntries, prefixMeta...)
-		newEntries = append(newEntries, midMeta...)
-		for i := range adoptedMeta {
-			shiftEntryMeta(&adoptedMeta[i], byteDelta, tokDelta)
-			newEntries = append(newEntries, adoptedMeta[i])
-		}
-		off, end, tokStart, tokEnd := 0, 0, 0, 0
-		if len(newEntries) > 0 {
-			off = newEntries[0].Off
-			end = newEntries[len(newEntries)-1].End
-			tokStart = newEntries[0].TokStart
-			tokEnd = newEntries[len(newEntries)-1].TokEnd
-		}
+		newEntries := reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta)
+		off, end, tokStart, tokEnd := reuseSpan(newEntries)
 		kidStart := len(p.kids)
 		p.kids = append(p.kids, children...)
 		p.nodes = append(p.nodes, Node{RuleId: old.RuleId, KidStart: uint32(kidStart), KidCount: uint32(len(children)), Offset: uint32(off), End: uint32(end), TokStart: uint32(tokStart), TokEnd: uint32(tokEnd)})
@@ -1637,39 +1617,8 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMet
 		children = append(children, prefixKids...)
 		children = append(children, midKids...)
 		children = append(children, adoptedKids...)
-		newSegs := make([]Seg, 0, len(prefixSegs)+len(midSegs)+len(adoptedSegs))
-		newEntries := make([]EntryMeta, 0, len(prefixMeta)+len(midMeta)+len(suffixMeta)-adoptFrom)
-		kOff := 0
-		for i, s := range prefixSegs {
-			em := prefixMeta[i]
-			em.KidStart = kOff
-			newSegs = append(newSegs, Seg{kOff, s.KidCount, s.TokStart, s.TokEnd, s.Ext})
-			newEntries = append(newEntries, em)
-			kOff += s.KidCount
-		}
-		for i, s := range midSegs {
-			em := midMeta[i]
-			em.KidStart = kOff
-			newSegs = append(newSegs, Seg{kOff, s.KidCount, s.TokStart, s.TokEnd, s.Ext})
-			newEntries = append(newEntries, em)
-			kOff += s.KidCount
-		}
-		adoptedMeta := append([]EntryMeta(nil), suffixMeta[adoptFrom:]...)
-		for i, s := range adoptedSegs {
-			em := adoptedMeta[i]
-			shiftEntryMeta(&em, byteDelta, tokDelta)
-			em.KidStart = kOff
-			newSegs = append(newSegs, Seg{kOff, s.KidCount, s.TokStart + tokDelta, s.TokEnd + tokDelta, s.Ext + tokDelta})
-			newEntries = append(newEntries, em)
-			kOff += s.KidCount
-		}
-		off, end, tokStart, tokEnd := 0, 0, 0, 0
-		if len(newEntries) > 0 {
-			off = newEntries[0].Off
-			end = newEntries[len(newEntries)-1].End
-			tokStart = newEntries[0].TokStart
-			tokEnd = newEntries[len(newEntries)-1].TokEnd
-		}
+		newSegs, newEntries := reuseSegEntries(prefixSegs, prefixMeta, midSegs, midMeta, suffixCand, suffixMeta, adoptFrom, byteDelta, tokDelta)
+		off, end, tokStart, tokEnd := reuseSpan(newEntries)
 		kidStart := len(p.kids)
 		p.kids = append(p.kids, children...)
 		p.nodes = append(p.nodes, Node{RuleId: old.RuleId, KidStart: uint32(kidStart), KidCount: uint32(len(children)), Offset: uint32(off), End: uint32(end), TokStart: uint32(tokStart), TokEnd: uint32(tokEnd)})
@@ -1809,24 +1758,6 @@ type Align struct {
 	TreeEq   *bool \`json:"treeEq,omitempty"\`
 }
 ${relexFamily}${reuseFamily}
-func computeAlignCore(oldText string, oldToks []alignMeta, newText string, newToks []alignMeta) (oldN, newN, prefix, suffix int) {
-	oldN, newN = len(oldToks), len(newToks)
-	for prefix < oldN && prefix < newN {
-		o, n := oldToks[prefix], newToks[prefix]
-		if o.Kid != n.Kid || o.Off != n.Off || o.End != n.End || amNl(o) != amNl(n) { break }
-		if amText(oldText, o) != amText(newText, n) { break }
-		prefix++
-	}
-	delta := len(newText) - len(oldText)
-	minN := oldN; if newN < minN { minN = newN }
-	for prefix+suffix < minN {
-		o, n := oldToks[oldN-1-suffix], newToks[newN-1-suffix]
-		if o.Kid != n.Kid || amNl(o) != amNl(n) || n.Off != o.Off+int32(delta) || n.End != o.End+int32(delta) { break }
-		if amText(oldText, o) != amText(newText, n) { break }
-		suffix++
-	}
-	return
-}
 func toksFromMeta(text string, meta []alignMeta) []Tok {
 	t := make([]Tok, len(meta))
 	for i, m := range meta {
@@ -2384,21 +2315,8 @@ func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, 
 		children = append(children, prefixKids...)
 		children = append(children, mid...)
 		children = append(children, adopted...)
-		adoptedMeta := append([]EntryMeta(nil), suffixMeta[adoptFrom:]...)
-		outE := make([]EntryMeta, 0, len(prefixMeta)+len(midMeta)+len(adoptedMeta))
-		outE = append(outE, prefixMeta...)
-		outE = append(outE, midMeta...)
-		for i := range adoptedMeta {
-			shiftEntryMeta(&adoptedMeta[i], byteDelta, tokDelta)
-			outE = append(outE, adoptedMeta[i])
-		}
-		off, end, tokStart, tokEnd := 0, 0, 0, 0
-		if len(outE) > 0 {
-			off = outE[0].Off
-			end = outE[len(outE)-1].End
-			tokStart = outE[0].TokStart
-			tokEnd = outE[len(outE)-1].TokEnd
-		}
+		outE := reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta)
+		off, end, tokStart, tokEnd := reuseSpan(outE)
 		scratch := append([]int32(nil), children...)
 		b.Node(&scratch, 0, ${entryRid}, uint32(off), uint32(end), uint32(tokStart), uint32(tokEnd))
 		if len(scratch) != 1 {
@@ -2499,39 +2417,8 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 		children = append(children, prefixKids...)
 		children = append(children, midKids...)
 		children = append(children, adoptedKids...)
-		outSegs := make([]Seg, 0, len(prefixSegs)+len(midSegs)+len(adoptedSegs))
-		outE := make([]EntryMeta, 0, len(prefixMeta)+len(midMeta)+len(suffixMeta)-adoptFrom)
-		kOff := 0
-		for i, s := range prefixSegs {
-			em := prefixMeta[i]
-			em.KidStart = kOff
-			outSegs = append(outSegs, Seg{kOff, s.KidCount, s.TokStart, s.TokEnd, s.Ext})
-			outE = append(outE, em)
-			kOff += s.KidCount
-		}
-		for i, s := range midSegs {
-			em := midMeta[i]
-			em.KidStart = kOff
-			outSegs = append(outSegs, Seg{kOff, s.KidCount, s.TokStart, s.TokEnd, s.Ext})
-			outE = append(outE, em)
-			kOff += s.KidCount
-		}
-		adoptedMeta := append([]EntryMeta(nil), suffixMeta[adoptFrom:]...)
-		for i, s := range adoptedSegs {
-			em := adoptedMeta[i]
-			shiftEntryMeta(&em, byteDelta, tokDelta)
-			em.KidStart = kOff
-			outSegs = append(outSegs, Seg{kOff, s.KidCount, s.TokStart + tokDelta, s.TokEnd + tokDelta, s.Ext + tokDelta})
-			outE = append(outE, em)
-			kOff += s.KidCount
-		}
-		off, end, tokStart, tokEnd := 0, 0, 0, 0
-		if len(outE) > 0 {
-			off = outE[0].Off
-			end = outE[len(outE)-1].End
-			tokStart = outE[0].TokStart
-			tokEnd = outE[len(outE)-1].TokEnd
-		}
+		outSegs, outE := reuseSegEntries(prefixSegs, prefixMeta, midSegs, midMeta, suffixCand, suffixMeta, adoptFrom, byteDelta, tokDelta)
+		off, end, tokStart, tokEnd := reuseSpan(outE)
 		scratch := append([]int32(nil), children...)
 		b.Node(&scratch, 0, ${entryRid}, uint32(off), uint32(end), uint32(tokStart), uint32(tokEnd))
 		if len(scratch) != 1 {
@@ -3144,7 +3031,7 @@ func SlimJSONWith(b *SlimBuilder, root int32) string {
 }
 
 const GO_TYPES: Record<Ty, string> = {
-  int: 'int', lid: 'uint16', depth: 'int', pos: 'int', bool: 'bool', str: 'string', meta: 'alignMeta', tok: 'Tok', edit: 'Edit',
+  int: 'int', lid: 'uint16', depth: 'int', pos: 'int', idx: 'int', bool: 'bool', str: 'string', meta: 'alignMeta', tok: 'Tok', edit: 'Edit',
   metas: '[]alignMeta', toks: '[]Tok', bools: '[]bool', depths: '[]int', edits: '[]Edit',
 };
 const GO_META: Record<MetaInt, string> = { off: 'int32', end: 'int32', kid: 'uint16', pd: 'uint16', fd: 'uint16', td: 'uint8' };
@@ -3161,13 +3048,14 @@ const goBlock = (lines: string[]): string[] => lines.map((l) => GO_IND + l);
 
 // Shared-algorithm lowering: explicit conversions, slices; a list with an exact final length is
 // made with that capacity, any other list grows by append (no estimate is reserved: 6183a29).
+const goType = (t: Ty): string => (isRecList(t) ? `[]${recName(t)}` : isRec(t) ? recName(t) : GO_TYPES[t]);
 // A Go string literal; Go rejects a byte order mark inside a source file, so it is an escape.
 const goLit = (v: string): string => JSON.stringify(v).replace(/\ufeff/g, '\\uFEFF');
 const goLowering: Lowering = {
   units: UNITS,
   ident: (n) => n,
-  num: { int: 'int', lid: 'uint16', depth: 'int', pos: 'int' },
-  type: (t) => (isRecList(t) ? `[]${recName(t)}` : isRec(t) ? recName(t) : GO_TYPES[t]),
+  num: { int: 'int', lid: 'uint16', depth: 'int', pos: 'int', idx: 'int' },
+  type: (t) => goType(t),
   cast: (_cx, r, nat) => ({ ...r, c: `${nat}(${r.c})`, nat, prec: ATOM }),
   owns: false,
   spliceInline: true,
@@ -3266,11 +3154,12 @@ ${[...ones, ...wides].join('\n')}
     },
     while: (c, body) => [`for ${c} {`, ...goBlock(body), '}'],
     break: () => ['break'],
+    run: (call) => call,
     return: (vals) => [`return ${vals.join(', ')}`],
     fn: (f) => [
       ...f.doc.map((l) => `// ${l}`),
       ...(f.cold ? ['//go:noinline'] : []),
-      `func ${f.name}(${f.params.map((p) => `${p.name} ${p.type}`).join(', ')}) ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`} {`,
+      `func ${f.name}(${f.params.map((p) => `${p.name} ${p.type}`).join(', ')}) ${f.rets.length === 0 ? '' : f.rets.length === 1 ? `${f.rets[0]} ` : `(${f.rets.join(', ')}) `}{`,
       ...goBlock(f.body),
       '}',
     ].join('\n'),
@@ -3292,9 +3181,9 @@ ${[...ones, ...wides].join('\n')}
       shiftMeta: (cx, m, d) => cx.atom(`shiftAlign(${m.c}, ${cx.coerce(d, 'int')})`, 'meta', 'meta'),
       metaEq: (_cx, a, b) => ({ c: `${a.c} == ${b.c}`, ty: 'bool', nat: 'bool', prec: GO_OPS.eq[1] }),
       splice: (cx, s, a, b, ins) => ({ c: `${goWrap(s, ATOM)}[:${cx.coerce(a, 'int')}] + ${ins.c} + ${goWrap(s, ATOM)}[${cx.coerce(b, 'int')}:]`, ty: 'str', nat: 'str', prec: GO_OPS.add[1] }),
-      newList: (cx, ty, cap) => cx.atom(cap ? `make(${GO_TYPES[ty]}, 0, ${cx.coerce(cap, 'int')})` : 'nil', ty, ty, { owned: true }),
+      newList: (cx, ty, cap) => cx.atom(cap ? `make(${goType(ty)}, 0, ${cx.coerce(cap, 'int')})` : 'nil', ty, ty, { owned: true }),
       falses: (cx, n) => cx.atom(`make([]bool, ${cx.coerce(n, 'int')})`, 'bools', 'bools', { owned: true }),
-      prefix: (cx, l, n, estimate) => cx.atom(`append(make(${GO_TYPES[l.ty]}, 0, ${cx.coerce(estimate, 'int')}), ${goWrap(l, ATOM)}[:${cx.coerce(n, 'int')}]...)`, l.ty, l.ty, { owned: true }),
+      prefix: (cx, l, n, estimate) => cx.atom(`append(make(${goType(l.ty)}, 0, ${cx.coerce(estimate, 'int')}), ${goWrap(l, ATOM)}[:${cx.coerce(n, 'int')}]...)`, l.ty, l.ty, { owned: true }),
     },
     stmt: {
       setAt: (id, i, val) => [`${id}[${i}] = ${val}`],
@@ -3306,7 +3195,12 @@ ${[...ones, ...wides].join('\n')}
     },
   },
   record: {
-    field: (cx, r, _rec, f, ty) => cx.atom(`${goWrap(r, ATOM)}.${exported(f)}`, ty === 'bool' ? 'bool' : 'int', cx.nat(ty)),
+    field: (cx, r, _rec, f, ty, nat) => cx.atom(`${goWrap(r, ATOM)}.${exported(f)}`, ty, nat),
+    setField: (id, f, val) => [`${id}.${exported(f)} = ${val}`],
+    make: (cx, rec, fs) => cx.atom(`${rec}{${fs.map(([f, v]) => `${exported(f)}: ${v}`).join(', ')}}`, `rec_${rec}`, `rec_${rec}`, { owned: true }),
+    refType: (rec) => `*${rec}`,
+    refArg: (r) => `&${r.c}`,
+    extend: (_cx, l, from) => [`${l} = append(${l}, ${from.c}...)`],
   },
 };
 

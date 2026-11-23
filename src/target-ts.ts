@@ -1296,20 +1296,8 @@ function tryReuseTopW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
   const finish = (adoptFrom: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
     const adopted = suffixCand.slice(adoptFrom).map((h) => shift(h, byteDelta, tokDelta));
     const children: H[] = [...prefixKids, ...mid, ...adopted];
-    const adoptedMeta = suffixMeta.slice(adoptFrom);
-    const newEntries: EntryMeta[] = new Array(prefixMeta.length + midMeta.length + adoptedMeta.length);
-    let ei = 0;
-    for (let i = 0; i < prefixMeta.length; i++) newEntries[ei++] = prefixMeta[i]!;
-    for (let i = 0; i < midMeta.length; i++) newEntries[ei++] = midMeta[i]!;
-    for (let i = 0; i < adoptedMeta.length; i++) {
-      const m = { ...adoptedMeta[i]! };
-      shiftEntryMeta(m, byteDelta, tokDelta);
-      newEntries[ei++] = m;
-    }
-    const offset = newEntries.length > 0 ? newEntries[0]!.off : 0;
-    const end = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.end : offset;
-    const tokStart = newEntries.length > 0 ? newEntries[0]!.tokStart : 0;
-    const tokEnd = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.tokEnd : 0;
+    const newEntries = reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta);
+    const [offset, end, tokStart, tokEnd] = reuseSpan(newEntries);
     _bSave = tokStart;
     const savePos = pos;
     pos = tokEnd;
@@ -1375,37 +1363,8 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
       }
     }
     const children: H[] = [...prefixKids, ...midKids, ...adoptedKids];
-    const newSegs: Seg[] = [];
-    const newEntries: EntryMeta[] = [];
-    let kOff = 0;
-    for (let i = 0; i < prefixSegs.length; i++) {
-      const s = prefixSegs[i]!;
-      const m = { ...prefixMeta[i]!, kidStart: kOff };
-      newSegs.push({ kidStart: kOff, kidCount: s.kidCount, tokStart: s.tokStart, tokEnd: s.tokEnd, ext: s.ext });
-      newEntries.push(m);
-      kOff += s.kidCount;
-    }
-    for (let i = 0; i < midSegs.length; i++) {
-      const s = midSegs[i]!;
-      const m = { ...midMeta[i]!, kidStart: kOff };
-      newSegs.push({ kidStart: kOff, kidCount: s.kidCount, tokStart: s.tokStart, tokEnd: s.tokEnd, ext: s.ext });
-      newEntries.push(m);
-      kOff += s.kidCount;
-    }
-    const adoptedMeta = suffixMeta.slice(adoptFrom);
-    for (let i = 0; i < adoptedSegs.length; i++) {
-      const s = adoptedSegs[i]!;
-      const em = { ...adoptedMeta[i]! };
-      shiftEntryMeta(em, byteDelta, tokDelta);
-      em.kidStart = kOff;
-      newSegs.push({ kidStart: kOff, kidCount: s.kidCount, tokStart: s.tokStart + tokDelta, tokEnd: s.tokEnd + tokDelta, ext: s.ext + tokDelta });
-      newEntries.push(em);
-      kOff += s.kidCount;
-    }
-    const offset = newEntries.length > 0 ? newEntries[0]!.off : 0;
-    const end = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.end : offset;
-    const tokStart = newEntries.length > 0 ? newEntries[0]!.tokStart : 0;
-    const tokEnd = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.tokEnd : 0;
+    const [newSegs, newEntries] = reuseSegEntries(prefixSegs, prefixMeta, midSegs, midMeta, suffixCand, suffixMeta, adoptFrom, byteDelta, tokDelta);
+    const [offset, end, tokStart, tokEnd] = reuseSpan(newEntries);
     _bSave = tokStart;
     const savePos = pos;
     pos = tokEnd;
@@ -1503,7 +1462,8 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
         align = validate ? { ...lexReject, streamEq: true, treeEq: isCst ? true : null } : lexReject;
         return null;
       }
-      const core = { ...computeAlign(oldText, oldToks, text, prevToks), relexed };
+      const [oldN, newN, prefix, suffix] = computeAlignCore(oldText, oldToks, text, prevToks);
+      const core = { oldN, newN, prefix, suffix, relexed };
       const byteDelta = text.length - oldText.length;
       let reused = 0;
       let next: H | null = null;
@@ -1549,7 +1509,7 @@ function docEditBlock(ir: ParserIR, shared: SharedAlgorithms): string {
   const shapeA = topReuse?.kind === 'A';
   const shapeB = topReuse?.kind === 'B';
   const relexFamily = `\n// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.relexFamily(ir)}\n`;
-  const reuseFamily = topReuse ? `\n// ---- reuse family: generated from src/reuse-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.reuseFamily(ir)}\n` : '';
+  const reuseFamily = `\n// ---- reuse family: generated from src/reuse-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.reuseFamily(ir)}\n`;
   // validate with cstBuilder: the tree against a fresh parse's, and (reusing entries) the recorded
   // entries against the old tree.
   const reuseFns = `
@@ -1567,13 +1527,6 @@ ${topReuse ? `function shiftSubtree(n: Cst, byteDelta: number, tokDelta: number)
   n.offset += byteDelta;
   n.end += byteDelta;
   if ('children' in n) for (const c of n.children) shiftSubtree(c, byteDelta, tokDelta);
-}
-function shiftEntryMeta(m: EntryMeta, byteDelta: number, tokDelta: number): void {
-  m.tokStart += tokDelta;
-  m.tokEnd += tokDelta;
-  m.ext += tokDelta;
-  m.off += byteDelta;
-  m.end += byteDelta;
 }
 ${shapeA ? `function assertEntriesVsNodes(entries: EntryMeta[], oldRoot: Node): void {
   const oldKids = oldRoot.children as Node[];
@@ -1622,26 +1575,6 @@ function shift_align(m: AlignMeta, delta: number): AlignMeta {
 }
 type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed: number; reused: number; streamEq?: boolean; treeEq?: boolean | null };
 ${relexFamily}${reuseFamily}
-function computeAlign(oldText: string, oldToks: AlignMeta[], newText: string, newToks: AlignMeta[]): Omit<Align, 'relexed' | 'reused' | 'streamEq' | 'treeEq'> {
-  const oldN = oldToks.length, newN = newToks.length;
-  let prefix = 0;
-  while (prefix < oldN && prefix < newN) {
-    const o = oldToks[prefix], n = newToks[prefix];
-    if (o.kid !== n.kid || o.off !== n.off || o.end !== n.end || am_nl(o) !== am_nl(n)) break;
-    if (am_text(oldText, o) !== am_text(newText, n)) break;
-    prefix++;
-  }
-  const delta = newText.length - oldText.length;
-  const minN = Math.min(oldN, newN);
-  let suffix = 0;
-  while (prefix + suffix < minN) {
-    const o = oldToks[oldN - 1 - suffix], n = newToks[newN - 1 - suffix];
-    if (o.kid !== n.kid || am_nl(o) !== am_nl(n) || n.off !== o.off + delta || n.end !== o.end + delta) break;
-    if (am_text(oldText, o) !== am_text(newText, n)) break;
-    suffix++;
-  }
-  return { oldN, newN, prefix, suffix };
-}
 function toksFromMeta(text: string, meta: AlignMeta[]): Tok[] {
   return meta.map((m) => {
     const tx = am_text(text, m);
@@ -3120,7 +3053,7 @@ export function parseAst(src: string, opts?: { customs?: AstCustoms }): ${rootTy
 }
 
 const TS_TYPES: Record<Ty, string> = {
-  int: 'number', lid: 'number', depth: 'number', pos: 'number', bool: 'boolean', str: 'string', meta: 'AlignMeta', tok: 'Tok', edit: 'Edit',
+  int: 'number', lid: 'number', depth: 'number', pos: 'number', idx: 'number', bool: 'boolean', str: 'string', meta: 'AlignMeta', tok: 'Tok', edit: 'Edit',
   metas: 'AlignMeta[]', toks: 'Tok[]', bools: 'boolean[]', depths: 'number[]', edits: 'Edit[]',
 };
 // Operator spelling and binding strength; unary is 90, a negative literal 7.
@@ -3135,7 +3068,7 @@ const tsBlock = (lines: string[]): string[] => lines.map((l) => TS_IND + l);
 const tsLowering: Lowering = {
   units: UNITS,
   ident: (n) => n,
-  num: { int: 'number', lid: 'number', depth: 'number', pos: 'number' },
+  num: { int: 'number', lid: 'number', depth: 'number', pos: 'number', idx: 'number' },
   type: (t) => (isRecList(t) ? `${recName(t)}[]` : isRec(t) ? recName(t) : TS_TYPES[t]),
   owns: false,
   charSet: (name, rs) => `const ${name} = /*#__PURE__*/ (() => { const a = new Uint8Array(256); for (const [lo, hi] of [${rs.map(([lo, hi]) => `[${lo},${hi}]`).join(', ')}]) for (let i = lo; i <= hi; i++) a[i] = 1; return a; })();`,
@@ -3191,10 +3124,11 @@ function ${findAnyName(stops)}(s: string, i: number): number {
     },
     while: (c, body) => [`while (${c}) {`, ...tsBlock(body), '}'],
     break: () => ['break;'],
+    run: (call) => `${call};`,
     return: (vals) => [`return ${vals.length === 1 ? vals[0] : `[${vals.join(', ')}]`};`],
     fn: (f) => [
       ...f.doc.map((l) => `// ${l}`),
-      `function ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): ${f.rets.length === 1 ? f.rets[0] : `[${f.rets.join(', ')}]`} {`,
+      `function ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): ${f.rets.length === 0 ? 'void' : f.rets.length === 1 ? f.rets[0] : `[${f.rets.join(', ')}]`} {`,
       ...tsBlock(f.body),
       '}',
     ].join('\n'),
@@ -3236,7 +3170,14 @@ function ${findAnyName(stops)}(s: string, i: number): number {
       lexStep: (_cx, s) => [`({ ${[s.posName === 'pos' ? 'pos' : `pos: ${s.posName}`, ...s.state].join(', ')} } = lexFrom(${s.text.c}, ${s.pos}, ${[...s.state, s.out].join(', ')}, 1));`],
     },
   },  record: {
-    field: (cx, r, _rec, f, ty) => cx.atom(`${tsWrap(r, ATOM)}.${f}`, ty === 'bool' ? 'bool' : 'int', cx.nat(ty)),
+    field: (cx, r, _rec, f, ty, nat) => cx.atom(`${tsWrap(r, ATOM)}.${f}`, ty, nat),
+    setField: (id, f, val) => [`${id}.${f} = ${val};`],
+    make: (cx, rec, fs) => cx.atom(`{ ${fs.map(([f, v]) => `${f}: ${v}`).join(', ')} }`, `rec_${rec}`, `rec_${rec}`, { owned: true }),
+    refType: (rec) => rec,
+    refArg: (r) => r.c,
+    copy: (cx, r) => cx.atom(`{ ...${r.c} }`, r.ty, r.nat, { owned: true }),
+    // One push per element: a spread passes one argument per element (the engine's argument limit).
+    extend: (_cx, l, from) => [`for (const el of ${from.c}) ${l}.push(el);`],
   },
 };
 

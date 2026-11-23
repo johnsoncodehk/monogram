@@ -1456,7 +1456,7 @@ function docEditBlockRust(ir: ParserIR, shared: SharedAlgorithms): string {
   const segsInit = shapeB ? ', segs: Vec::new()' : '';
   const reuseInit = `${entriesInit}${segsInit}`;
   const relexFamily = `\n// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.relexFamily(ir)}\n`;
-  const reuseFamily = topReuse ? `\n// ---- reuse family: generated from src/reuse-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.reuseFamily(ir)}\n` : '';
+  const reuseFamily = `\n// ---- reuse family: generated from src/reuse-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.reuseFamily(ir)}\n`;
   const initToks = 'scan_meta(&text)';
   const reuseShared = topReuse ? `
 fn count_live(nodes: &[Node], kids: &[i32], id: i32) -> usize {
@@ -1497,14 +1497,6 @@ fn shift_subtree(nodes: &mut [Node], kids: &mut [i32], id: i32, byte_delta: isiz
         }
     }
 }
-#[inline(always)]
-fn shift_entry_meta(m: &mut EntryMeta, byte_delta: isize, tok_delta: isize) {
-    m.tok_start = (m.tok_start as isize + tok_delta) as u32;
-    m.tok_end = (m.tok_end as isize + tok_delta) as u32;
-    m.ext = (m.ext as isize + tok_delta) as u32;
-    m.off = (m.off as isize + byte_delta) as u32;
-    m.end = (m.end as isize + byte_delta) as u32;
-}
 fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], old_root: i32) {
     let old = &nodes[old_root as usize];
     assert_eq!(entries.len(), old.kid_count as usize, "entry count vs root kids");
@@ -1537,21 +1529,8 @@ fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], 
         children.extend_from_slice(prefix_kids);
         children.extend_from_slice(mid);
         children.extend_from_slice(&adopted_hs);
-        let mut new_entries: Vec<EntryMeta> = Vec::with_capacity(prefix_meta.len() + mid_meta.len() + suffix_meta.len().saturating_sub(adopt_from));
-        new_entries.extend_from_slice(prefix_meta);
-        new_entries.extend_from_slice(mid_meta);
-        for m in &suffix_meta[adopt_from..] {
-            let mut em = *m;
-            shift_entry_meta(&mut em, byte_delta, tok_delta);
-            new_entries.push(em);
-        }
-        let (off, end, tok_start, tok_end) = if new_entries.is_empty() {
-            (0u32, 0u32, 0u32, 0u32)
-        } else {
-            let first = &new_entries[0];
-            let last = new_entries.last().unwrap();
-            (first.off, last.end, first.tok_start, last.tok_end)
-        };
+        let new_entries = reuse_entries(prefix_meta, mid_meta, suffix_meta, adopt_from, byte_delta, tok_delta);
+        let (off, end, tok_start, tok_end) = reuse_span(&new_entries);
         let sb = self.scratch.len();
         self.scratch.extend_from_slice(&children);
         self.b.node(&mut self.scratch, sb, rule_id, off, end, tok_start, tok_end);
@@ -1563,8 +1542,7 @@ fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], 
     fn try_reuse_top(&mut self, old_root: B::H, old_entries: &[EntryMeta], new_toks: Vec<Tok>, byte_delta: isize, old_n: usize, prefix: usize, suffix: usize, validate: bool) -> Option<(B::H, usize)> {
         if validate { self.b.validate_entries(old_entries, old_root); }
         let old_kids = self.b.root_kids(old_root);
-        let (prefix_len, suffix_start) = reuse_bounds(old_entries, prefix as isize, old_n as isize, suffix as isize);
-        let (prefix_len, suffix_start) = (prefix_len as usize, suffix_start as usize);
+        let (prefix_len, suffix_start) = reuse_bounds(old_entries, prefix, old_n, suffix);
         let prefix_kids = old_kids[..prefix_len].to_vec();
         let suffix_cand = old_kids[suffix_start..].to_vec();
         let prefix_meta = &old_entries[..prefix_len];
@@ -1576,11 +1554,11 @@ fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], 
         let mut mid_meta: Vec<EntryMeta> = Vec::new();
         let rule_id = self.b.rule_id_of(old_root);
         let try_hit = |p: &mut Parser<'a, B>, mid: &[B::H], mid_meta: &[EntryMeta]| -> Option<(B::H, usize)> {
-            let at = reuse_adopt_at(suffix_meta, old_n as isize, suffix as isize, (p.toks.len() - p.pos) as isize);
+            let at = reuse_adopt_at(suffix_meta, old_n, suffix, p.toks.len() - p.pos);
             if at < 0 { return None; }
             Some(p.finish_reuse(rule_id, &prefix_kids, mid, &suffix_cand, prefix_meta, mid_meta, suffix_meta, at as usize, byte_delta))
         };
-        let passed = |p: &Parser<'a, B>| reuse_gave_up(suffix_meta, old_n as isize, (p.toks.len() - p.pos) as isize);
+        let passed = |p: &Parser<'a, B>| reuse_gave_up(suffix_meta, old_n, p.toks.len() - p.pos);
         if let Some(hit) = try_hit(self, &mid, &mid_meta) { return Some(hit); }
         if passed(self) { return None; }
         loop {
@@ -1643,38 +1621,8 @@ impl<'a, B: Builder> Parser<'a, B> {
         children.extend_from_slice(prefix_kids);
         children.extend_from_slice(mid_kids);
         children.extend_from_slice(&adopted_kids);
-        let mut new_segs: Vec<Seg> = Vec::with_capacity(prefix_segs.len() + mid_segs.len() + adopted_segs.len());
-        let mut new_entries: Vec<EntryMeta> = Vec::with_capacity(prefix_meta.len() + mid_meta.len() + suffix_meta.len().saturating_sub(adopt_from));
-        let mut k_off = 0usize;
-        for (s, m) in prefix_segs.iter().zip(prefix_meta.iter()) {
-            new_segs.push(Seg { kid_start: k_off, kid_count: s.kid_count, tok_start: s.tok_start, tok_end: s.tok_end, ext: s.ext });
-            let mut em = *m;
-            em.kid_start = k_off as u32;
-            new_entries.push(em);
-            k_off += s.kid_count;
-        }
-        for (s, m) in mid_segs.iter().zip(mid_meta.iter()) {
-            new_segs.push(Seg { kid_start: k_off, kid_count: s.kid_count, tok_start: s.tok_start, tok_end: s.tok_end, ext: s.ext });
-            let mut em = *m;
-            em.kid_start = k_off as u32;
-            new_entries.push(em);
-            k_off += s.kid_count;
-        }
-        for (s, m) in adopted_segs.iter().zip(suffix_meta[adopt_from..].iter()) {
-            new_segs.push(Seg { kid_start: k_off, kid_count: s.kid_count, tok_start: (s.tok_start as isize + tok_delta) as usize, tok_end: (s.tok_end as isize + tok_delta) as usize, ext: (s.ext as isize + tok_delta) as usize });
-            let mut em = *m;
-            shift_entry_meta(&mut em, byte_delta, tok_delta);
-            em.kid_start = k_off as u32;
-            new_entries.push(em);
-            k_off += s.kid_count;
-        }
-        let (off, end, tok_start, tok_end) = if new_entries.is_empty() {
-            (0u32, 0u32, 0u32, 0u32)
-        } else {
-            let first = &new_entries[0];
-            let last = new_entries.last().unwrap();
-            (first.off, last.end, first.tok_start, last.tok_end)
-        };
+        let (new_segs, new_entries) = reuse_seg_entries(prefix_segs, prefix_meta, mid_segs, mid_meta, suffix_cand, suffix_meta, adopt_from, byte_delta, tok_delta);
+        let (off, end, tok_start, tok_end) = reuse_span(&new_entries);
         let sb = self.scratch.len();
         self.scratch.extend_from_slice(&children);
         self.b.node(&mut self.scratch, sb, rule_id, off, end, tok_start, tok_end);
@@ -1687,8 +1635,7 @@ impl<'a, B: Builder> Parser<'a, B> {
     fn try_reuse_seg(&mut self, old_root: B::H, old_segs: &[Seg], old_entries: &[EntryMeta], new_toks: Vec<Tok>, byte_delta: isize, old_n: usize, prefix: usize, suffix: usize, validate: bool) -> Option<(B::H, usize)> {
         if old_segs.is_empty() { return None; }
         if validate { self.b.validate_entry_segs(old_entries, old_segs, old_root); }
-        let (prefix_len, suffix_start) = reuse_bounds(old_entries, prefix as isize, old_n as isize, suffix as isize);
-        let (prefix_len, suffix_start) = (prefix_len as usize, suffix_start as usize);
+        let (prefix_len, suffix_start) = reuse_bounds(old_entries, prefix, old_n, suffix);
         let prefix_segs = &old_segs[..prefix_len];
         let suffix_cand = &old_segs[suffix_start..];
         let prefix_meta = &old_entries[..prefix_len];
@@ -1707,11 +1654,11 @@ impl<'a, B: Builder> Parser<'a, B> {
         let mut mid_meta: Vec<EntryMeta> = Vec::new();
         let rule_id = self.b.rule_id_of(old_root);
         let try_hit = |p: &mut Parser<'a, B>, mid_kids: &[B::H], mid_segs: &[Seg], mid_meta: &[EntryMeta]| -> Option<(B::H, usize)> {
-            let at = reuse_adopt_at(suffix_meta, old_n as isize, suffix as isize, (p.toks.len() - p.pos) as isize);
+            let at = reuse_adopt_at(suffix_meta, old_n, suffix, p.toks.len() - p.pos);
             if at < 0 { return None; }
             Some(p.finish_reuse_seg(rule_id, prefix_segs, &prefix_kids, mid_segs, mid_kids, suffix_cand, prefix_meta, mid_meta, suffix_meta, old_root, at as usize, byte_delta))
         };
-        let passed = |p: &Parser<'a, B>| reuse_gave_up(suffix_meta, old_n as isize, (p.toks.len() - p.pos) as isize);
+        let passed = |p: &Parser<'a, B>| reuse_gave_up(suffix_meta, old_n, p.toks.len() - p.pos);
         if let Some(hit) = try_hit(self, &mid_kids, &mid_segs, &mid_meta) { return Some(hit); }
         if passed(self) { return None; }
         ${hasHeadB ? `if prefix_len == 0 {
@@ -1950,30 +1897,6 @@ struct AlignMeta { off: u32, end: u32, kid: u16, pd: u16, fd: u16, flags: u8, td
 }
 struct Align { old_n: usize, new_n: usize, prefix: usize, suffix: usize, relexed: usize, reused: usize, stream_eq: Option<bool>, tree_eq: Option<bool> }
 ${relexFamily}${reuseFamily}
-fn compute_align_core(old_text: &str, old_toks: &[AlignMeta], new_text: &str, new_toks: &[AlignMeta]) -> (usize, usize, usize, usize) {
-    let old_n = old_toks.len();
-    let new_n = new_toks.len();
-    let mut prefix = 0usize;
-    while prefix < old_n && prefix < new_n {
-        let o = &old_toks[prefix];
-        let n = &new_toks[prefix];
-        if o.kid != n.kid || o.off != n.off || o.end != n.end || am_nl(o) != am_nl(n) { break; }
-        if am_text(old_text, o) != am_text(new_text, n) { break; }
-        prefix += 1;
-    }
-    let delta = new_text.len() as isize - old_text.len() as isize;
-    let min_n = old_n.min(new_n);
-    let mut suffix = 0usize;
-    while prefix + suffix < min_n {
-        let o = &old_toks[old_n - 1 - suffix];
-        let n = &new_toks[new_n - 1 - suffix];
-        if o.kid != n.kid || am_nl(o) != am_nl(n) { break; }
-        if n.off != (o.off as isize + delta) as u32 || n.end != (o.end as isize + delta) as u32 { break; }
-        if am_text(old_text, o) != am_text(new_text, n) { break; }
-        suffix += 1;
-    }
-    (old_n, new_n, prefix, suffix)
-}
 fn toks_from_meta(text: &str, meta: &[AlignMeta]) -> Vec<Tok> {
     meta.iter().map(|m| { let tx = am_text(text, m); mk_tok(m.off as usize, m.end as usize, am_nl(m), m.kid, ${regionKids(ir, buildLexIdPlan(ir)).length ? `if ${regionKids(ir, buildLexIdPlan(ir)).map((k) => `m.kid == ${k}`).join(' || ')} { 0 } else { lid_of(tx.as_bytes()) }` : 'lid_of(tx.as_bytes())'}) }).collect()
 }
@@ -5475,7 +5398,7 @@ pub fn parse_ast(src: &str) -> Option<AstRoot<'_>> {
 }
 
 const RS_ELEM: Record<Exclude<ListTy, `recs_${string}`>, string> = { metas: 'AlignMeta', toks: 'Tok', bools: 'bool', depths: 'i64', edits: 'Edit' };
-const RS_SCALAR: Record<string, string> = { int: 'isize', lid: 'u16', depth: 'i64', pos: 'u32', bool: 'bool', meta: 'AlignMeta', tok: 'Tok' };
+const RS_SCALAR: Record<string, string> = { int: 'isize', lid: 'u16', depth: 'i64', pos: 'u32', idx: 'usize', bool: 'bool', meta: 'AlignMeta', tok: 'Tok' };
 const RS_META: Record<MetaInt, string> = { off: 'u32', end: 'u32', kid: 'u16', pd: 'u16', fd: 'u16', td: 'u8' };
 const RS_TOK: Record<TokInt, string> = { off: 'u32', end: 'u32', kid: 'u16', lid: 'u16' };
 const RS_MK: Record<keyof MkMeta, string> = { off: 'u32', end: 'u32', kid: 'u16', nl: 'bool', fd: 'u16', pd: 'u16', lc: 'bool', lb: 'bool', hd: 'bool', td: 'u8' };
@@ -5495,7 +5418,7 @@ const rsBlock = (lines: string[]): string[] => lines.map((l) => RS_IND + l);
 const rustLowering: Lowering = {
   units: UNITS,
   ident: snake,
-  num: { int: 'isize', lid: 'u16', depth: 'i64', pos: 'u32' },
+  num: { int: 'isize', lid: 'u16', depth: 'i64', pos: 'u32', idx: 'usize' },
   type: (t, role, owned) => {
     if (isList(t)) {
       const el = isRecList(t) ? recName(t) : RS_ELEM[t];
@@ -5625,6 +5548,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
     },
     while: (c, body) => [`while ${c} {`, ...rsBlock(body), '}'],
     break: () => ['break;'],
+    run: (call) => `${call};`,
     return: (vals) => [`return ${vals.length === 1 ? vals[0] : `(${vals.join(', ')})`};`],
     fn: (f) => [
       ...f.doc.map((l) => `// ${l}`),
@@ -5632,7 +5556,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
       // Out of line only: `#[cold]` on the identifier escape scanners moved lex_from's register layout
       // (+0.2% to +0.4% lexer instructions on real inputs, profile runs 45034540295 / 45035043707).
       ...(f.cold ? ['#[inline(never)]'] : []),
-      `fn ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}) -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`} {`,
+      `fn ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')})${f.rets.length === 0 ? '' : ` -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`}`} {`,
       ...rsBlock(f.body),
       '}',
     ].join('\n'),
@@ -5675,7 +5599,14 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
     },
   },
   record: {
-    field: (cx, r, _rec, f, ty) => cx.atom(`${rsWrap(r, ATOM)}.${snake(f)}`, ty === 'bool' ? 'bool' : 'int', cx.nat(ty)),
+    field: (cx, r, _rec, f, ty, nat) => cx.atom(`${rsWrap(r, ATOM)}.${snake(f)}`, ty, nat),
+    setField: (id, f, val) => [`${id}.${snake(f)} = ${val};`],
+    // A Seg's fields index the kid and token Vecs directly.
+    nat: (rec) => (rec === 'Seg' ? 'usize' : undefined),
+    make: (cx, rec, fs) => cx.atom(`${rec} { ${fs.map(([f, v]) => `${snake(f)}: ${v}`).join(', ')} }`, `rec_${rec}`, `rec_${rec}`, { owned: true }),
+    refType: (rec) => `&mut ${rec}`,
+    refArg: (r) => `&mut ${r.c}`,
+    extend: (_cx, l, from) => [`${l}.extend_from_slice(${from.owned ? `&${from.c}` : from.c});`],
   },
 };
 

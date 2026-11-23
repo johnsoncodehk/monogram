@@ -7,7 +7,8 @@
 import { type TextUnits, utf8Of, unitLen } from './text-units.ts';
 
 // `pos`: a token index or text offset held in a record field (a lowering may store it narrow).
-export type Num = 'int' | 'lid' | 'depth' | 'pos';
+// `idx`: a count or list index, never negative (a lowering may give it its unsigned size type).
+export type Num = 'int' | 'lid' | 'depth' | 'pos' | 'idx';
 // A record a family declares (`RecordDecl`), and a list of such records.
 export type RecTy = `rec_${string}`;
 export type RecListTy = `recs_${string}`;
@@ -39,8 +40,9 @@ export type Expr =
   | { k: 'editInt'; e: Expr; f: 'start' | 'end' }
   | { k: 'editText'; e: Expr }
   | { k: 'metaText'; text: Expr; m: Expr }
-  // A field of a record the family declares.
+  // A field of a record the family declares; a new record of it, every field given.
   | { k: 'field'; e: Expr; f: string }
+  | { k: 'mkRec'; rec: string; fields: Record<string, Expr> }
   | { k: 'substr'; s: Expr; a: Expr; b: Expr }
   | { k: 'lidOf'; s: Expr }
   | ({ k: 'mkMeta' } & MkMeta)
@@ -78,6 +80,12 @@ export type Stmt =
   | { k: 'set'; name: string; e: Expr }
   | { k: 'setAt'; list: string; i: Expr; e: Expr }
   | { k: 'push'; list: string; e: Expr }
+  // Every element of a list (of the same type) pushed onto a local list, in order.
+  | { k: 'extend'; list: string; from: Expr }
+  // A field of a local record (a copy the function owns) or of a by-reference record parameter.
+  | { k: 'setField'; name: string; f: string; e: Expr }
+  // A call of a function that returns nothing, for its effect.
+  | { k: 'run'; call: Expr & { k: 'call' } }
   | { k: 'if'; c: Expr; then: Stmt[]; else?: Stmt[] }
   | { k: 'while'; c: Expr; body: Stmt[] }
   | { k: 'for'; v: string; from: Expr; to: Expr; body: Stmt[] }
@@ -91,7 +99,8 @@ export type Stmt =
   | { k: 'lexStep'; text: Expr; pos: string; out: string; state: string[] }
   | { k: 'comment'; text: string };
 
-export interface Param { name: string; ty: Ty }
+// `ref`: a record the function writes, passed by reference (the caller's local is changed).
+export interface Param { name: string; ty: Ty; ref?: boolean }
 // `inline`: called once per token from a lexer's dispatch loop. A lowering may ask its compiler
 // to inline it, or splice it into its call sites at generation time (`spliceInline`).
 // `cold`: called only on a path normal input does not take (an error); a lowering keeps it out of
@@ -106,7 +115,7 @@ export interface RecordDecl { name: string; fields: { name: string; ty: Num | 'b
 export interface CharSet { name: string; ranges: CodeRange[] }
 
 export const ELEM: Record<Exclude<ListTy, RecListTy>, Ty> = { metas: 'meta', toks: 'tok', bools: 'bool', depths: 'depth', edits: 'edit' };
-export const isNum = (t: Ty): t is Num => t === 'int' || t === 'lid' || t === 'depth' || t === 'pos';
+export const isNum = (t: Ty): t is Num => t === 'int' || t === 'lid' || t === 'depth' || t === 'pos' || t === 'idx';
 export const isRec = (t: Ty): t is RecTy => t.startsWith('rec_');
 export const isRecList = (t: Ty): t is RecListTy => t.startsWith('recs_');
 export const isList = (t: Ty): t is ListTy => t in ELEM || isRecList(t);
@@ -217,6 +226,8 @@ export interface Lowering {
     if(s: { c: string; then: Lines; else?: Lines; inline?: string; depth: number }): Lines;
     while(c: string, body: Lines): Lines;
     break(): Lines;
+    // A call statement (its value, if any, unused).
+    run(call: string): string;
     return(vals: string[]): Lines;
     fn(s: { name: string; params: { name: string; type: string }[]; rets: string[]; doc: string[]; body: Lines; inline: boolean; cold: boolean }): string;
   };
@@ -230,8 +241,22 @@ export interface Lowering {
 }
 
 export interface RecordLowering {
-  // The read of field `f` (of type `ty`) of record `r`, a record of type `rec`.
-  field(cx: Cx, r: R, rec: string, f: string, ty: Num | 'bool'): R;
+  // The read of field `f` (of type `ty`, stored as `nat`) of record `r`, a record of type `rec`.
+  field(cx: Cx, r: R, rec: string, f: string, ty: Num | 'bool', nat: string): R;
+  // The native type a numeric field is stored as, when not its kind's (`num`): a layout choice.
+  nat?(rec: string, f: string, ty: Num): string | undefined;
+  // The write of field `f` of the record variable `id`; `val` is already of the field's type.
+  setField(id: string, f: string, val: string): Lines;
+  // A new record; `fields` in declaration order, each already of its field's type.
+  make(cx: Cx, rec: string, fields: [string, string][]): R;
+  // The type of a by-reference record parameter, and the argument passing local `r` to one.
+  refType(rec: string): string;
+  refArg(r: R): string;
+  // `list` (a local list) extended by every element of `from`.
+  extend(cx: Cx, list: string, from: R): Lines;
+  // A target whose records are references: a copy of the record `r`, for a local the function
+  // writes (a record local is a value).
+  copy?(cx: Cx, r: R): R;
 }
 
 export interface RelexLowering {
@@ -290,6 +315,23 @@ class Printer implements Cx {
     this.recs = new Map(records.map((r) => [r.name, r]));
   }
 
+  private recL(): RecordLowering {
+    if (!this.L.record) throw new Error('algo-ir: the lowering prints no records');
+    return this.L.record;
+  }
+
+  // A value stored into a field of type `ty`: converted to the field's native type.
+  private fieldVal(r: R, rec: string, f: string, ty: Num | 'bool'): string { return isNum(ty) ? this.coerce(r, this.fieldNat(rec, f, ty)) : r.c; }
+  private fieldNat(rec: string, f: string, ty: Num | 'bool'): string { return isNum(ty) ? this.L.record?.nat?.(rec, f, ty) ?? this.nat(ty) : 'bool'; }
+
+  private fieldOf(name: string, f: string): Num | 'bool' {
+    const v = this.env.get(name);
+    if (!v || !isRec(v.ty)) throw new Error(`algo-ir: setField on non-record ${name}`);
+    const fd = this.recs.get(recName(v.ty))?.fields.find((x) => x.name === f);
+    if (!fd) throw new Error(`algo-ir: record ${v.ty} has no field ${f}`);
+    return fd.ty;
+  }
+
   private checkTy(t: Ty): void {
     if ((isRec(t) || isRecList(t)) && !this.recs.has(recName(t))) throw new Error(`algo-ir: undeclared record ${t}`);
   }
@@ -342,13 +384,20 @@ class Printer implements Cx {
       case 'editInt': return RX().editInt(this, this.expr(e.e), e.f);
       case 'editText': return RX().editText(this, this.expr(e.e));
       case 'metaText': return RX().metaText(this, this.expr(e.text), this.expr(e.m));
+      case 'mkRec': {
+        const d = this.recs.get(e.rec);
+        if (!d) throw new Error(`algo-ir: undeclared record ${e.rec}`);
+        const given = Object.keys(e.fields);
+        if (given.length !== d.fields.length || d.fields.some((f) => !(f.name in e.fields))) throw new Error(`algo-ir: ${e.rec} needs exactly its fields`);
+        return this.recL().make(this, e.rec, d.fields.map((f) => [f.name, this.fieldVal(this.expr(e.fields[f.name]), e.rec, f.name, f.ty)]));
+      }
       case 'field': {
         const r = this.expr(e.e);
         if (!isRec(r.ty)) throw new Error(`algo-ir: field ${e.f} of non-record`);
         const rec = recName(r.ty), fd = this.recs.get(rec)?.fields.find((x) => x.name === e.f);
         if (!fd) throw new Error(`algo-ir: record ${rec} has no field ${e.f}`);
         if (!this.L.record) throw new Error('algo-ir: the lowering prints no records');
-        return this.L.record.field(this, r, rec, e.f, fd.ty);
+        return this.L.record.field(this, r, rec, e.f, fd.ty, this.fieldNat(rec, e.f, fd.ty));
       }
       case 'substr': return RX().substr(this, this.expr(e.s), this.expr(e.a), this.expr(e.b));
       case 'lidOf': return RX().lidOf(this, this.expr(e.s));
@@ -404,12 +453,16 @@ class Printer implements Cx {
     if (op === 'and' || op === 'or') return res(a, b, 'bool', 'bool');
     if (isNum(a.ty) && isNum(b.ty)) {
       let [ca, cb, nat] = [a, b, a.lit ? b.nat : a.nat];
+      // Counts, indices and record positions (idx, pos) stay unsigned together: their arithmetic
+      // is in idx, and a subtraction among them must not go below zero.
+      const uns = (r: R): boolean => r.ty === 'idx' || r.ty === 'pos' || !!r.lit;
+      const ty: Num = uns(a) && uns(b) && !(a.lit && b.lit) ? 'idx' : 'int';
       if (!(a.lit || b.lit || a.nat === b.nat)) {
-        nat = this.nat('int');
+        nat = this.nat(ty);
         ca = this.coerceR(a, nat);
         cb = this.coerceR(b, nat);
       }
-      return { ...res(ca, cb, cmp ? 'bool' : 'int', cmp ? 'bool' : nat), lit: !cmp && a.lit && b.lit };
+      return { ...res(ca, cb, cmp ? 'bool' : ty, cmp ? 'bool' : nat), lit: !cmp && a.lit && b.lit };
     }
     if (a.ty === 'str' && b.ty === 'str') return res({ ...a, c: this.str(a) }, { ...b, c: this.str(b) }, 'bool', 'bool');
     if (a.ty === 'bool' && b.ty === 'bool') return res(a, b, 'bool', 'bool');
@@ -424,6 +477,10 @@ class Printer implements Cx {
       if (isNum(pt)) return this.coerce(r, this.nat(pt));
       if (pt === 'str') return this.str(r);
       if (isList(pt)) return this.list(r);
+      if (fn.params[i].ref) {
+        if (a.k !== 'var') throw new Error(`algo-ir: ${e.fn} takes ${fn.params[i].name} by reference: pass a variable`);
+        return this.recL().refArg(r);
+      }
       return r.c;
     });
     return this.L.expr.call(this.id(e.fn), args);
@@ -434,7 +491,13 @@ class Printer implements Cx {
       switch (s.k) {
         case 'set': this.mutable.add(s.name); this.reassigned.add(s.name); break;
         case 'setCall': for (const n of s.names) { this.mutable.add(n); this.reassigned.add(n); } break;
-        case 'setAt': case 'push': this.mutable.add(s.list); break;
+        case 'setAt': case 'push': case 'extend': this.mutable.add(s.list); break;
+        case 'setField': this.mutable.add(s.name); break;
+        case 'run': {
+          const fn = this.sigs.get(s.call.fn);
+          s.call.args.forEach((a, i) => { if (fn?.params[i]?.ref && a.k === 'var') this.mutable.add(a.name); });
+          break;
+        }
         case 'lexStep':
           for (const n of [s.pos, ...s.state]) { this.mutable.add(n); this.reassigned.add(n); }
           this.mutable.add(s.out);
@@ -455,7 +518,8 @@ class Printer implements Cx {
       case 'comment': return S.comment(s.text);
       case 'let': {
         this.checkTy(s.ty);
-        const r = this.expr(s.init);
+        let r = this.expr(s.init);
+        if (isRec(s.ty) && !r.owned && this.mutable.has(s.name) && this.L.record?.copy) r = this.L.record.copy(this, r);
         const owned = s.ty === 'str' ? !!r.owned : isList(s.ty);
         if (L.owns && isList(s.ty) && !r.owned) throw new Error(`algo-ir: let ${s.name} needs an owned list`);
         this.env.set(s.name, { ty: s.ty, owned });
@@ -480,6 +544,20 @@ class Printer implements Cx {
         return this.rx().stmt.setAt(this.id(s.list), this.coerce(i, this.rx().index), val);
       }
       case 'push': return this.rx().stmt.push(this, this.id(s.list), this.expr(s.e));
+      case 'extend': {
+        const v = this.env.get(s.list), r = this.expr(s.from);
+        if (!v || !isList(v.ty) || r.ty !== v.ty) throw new Error(`algo-ir: extend ${s.list} by ${r.ty}`);
+        return this.recL().extend(this, this.id(s.list), r);
+      }
+      case 'setField': {
+        const ty = this.fieldOf(s.name, s.f);
+        return this.recL().setField(this.id(s.name), s.f, this.fieldVal(this.expr(s.e), recName(this.env.get(s.name)!.ty as RecTy), s.f, ty));
+      }
+      case 'run': {
+        const fn = this.sigs.get(s.call.fn);
+        if (!fn || fn.ret.length !== 0) throw new Error(`algo-ir: run of ${s.call.fn}, which returns a value`);
+        return [L.stmt.run(this.callCode(s.call))];
+      }
       case 'if': {
         const c = this.expr(s.c).c;
         let inline: string | undefined;
@@ -555,9 +633,13 @@ class Printer implements Cx {
     f.ret.forEach((t) => this.checkTy(t));
     return this.L.stmt.fn({
       name: this.id(f.name),
-      params: f.params.map((p) => ({ name: this.id(p.name), type: this.type(p.ty, 'param') })),
+      params: f.params.map((p) => {
+        if (p.ref && !isRec(p.ty)) throw new Error(`algo-ir: ${f.name}: only a record is passed by reference`);
+        return { name: this.id(p.name), type: p.ref ? this.recL().refType(recName(p.ty as RecTy)) : this.type(p.ty, 'param') };
+      }),
       rets: f.ret.map((t) => this.type(t, 'ret')),
-      doc: f.doc.split('\n'),
+      // An empty doc prints no comment.
+      doc: f.doc === '' ? [] : f.doc.split('\n'),
       body: this.block(f.body, 1),
       inline: f.inline === true,
       cold: f.cold === true,
