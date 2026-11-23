@@ -180,7 +180,7 @@ const grammarChanged = process.env.GRAMMAR_CHANGED === '1';
 const A = process.env.PROFILE_A_LABEL ?? 'A', M = process.env.PROFILE_M_LABEL ?? 'M';
 say('## Rust parser profile: A = ' + A + ', M = ' + M);
 say();
-say('Deterministic measurements of the emitted Rust parser (typescript grammar): Callgrind instructions, work counters, allocator calls, page faults; and emitted sizes. ' +
+say('Deterministic measurements of the emitted Rust parser (typescript grammar; `jsx-corpus.tsx` by typescriptreact, `jsx-corpus.jsx` by javascriptreact: the element code of the pinned tsc corpus, test/bench-rust-profile/element-inputs.ts): Callgrind instructions, work counters, allocator calls, page faults; and emitted sizes. ' +
   'Instructions decide logic changes; allocator calls and page faults decide memory changes; no wall-clock time is measured here (on demand: the `measure-bench` workflow). ' +
   'The Go target, the TS target and the emitted JS parser are measured on the same inputs beside it (section "Every target").');
 say();
