@@ -1,8 +1,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  cpython.ts — the Python grammar (`python.ts`, run by the interpreter) against the reference
 //  parser, over CPython's own Lib/ (the standard library and its test suite) at the pin in
-//  test/cpython.sha (v3.10.12). CI clones it; locally run ~/.cache/monogram-agents/restore-cpython.sh
-//  <repo>. The sources are DATA: parsed, never executed, never copied into this repository.
+//  test/cpython.sha (v3.10.12). Not a gate of test/check.ts: the CI job `python` (.github/workflows/
+//  ci.yml) installs the oracle, clones the corpus and runs it; locally run
+//  ~/.cache/monogram-agents/restore-cpython.sh <repo> first. The sources are DATA: parsed, never
+//  executed, never copied into this repository.
 //
 //  The oracle is `ast.parse` of Python 3.10.12 (the tokenizer, the PEG parser and the string
 //  actions; never `compile()`, whose symbol-table and compiler errors are not syntax), given the
@@ -12,7 +14,7 @@
 //  class (`accept/unknown`, `reject/unknown`). docs/SECOND-LANGUAGE.md quotes the counts.
 //
 //  Run (bare node):
-//    node test/cpython.ts            # gate: fail if the record is stale
+//    node test/cpython.ts            # check: fail if the record is stale
 //    node test/cpython.ts --write    # (re)write test/cpython-record.txt
 // ─────────────────────────────────────────────────────────────────────────────
 import { execFileSync } from 'node:child_process';

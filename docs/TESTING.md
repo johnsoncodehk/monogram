@@ -16,13 +16,13 @@ The suite produces **four kinds of report**, each answering a different question
 
 The CI-blocking pass/fail checks. One runner, one ✓/✗ table, one
 exit code — instead of a dozen scripts with a dozen formats. Covers: sanity / agnostic /
-issue-cases · conformance (js, tsx, jsx, html, test262, cpython) · highlighter guards + RedCMD
+issue-cases · conformance (js, tsx, jsx, html, test262) · highlighter guards + RedCMD
 diagnostics + Monarch + HTML embed/lexer · YAML issue-12 + the TextMate site checks · the
 generative **scope≡role** check (with its detector's mutation proof). `node test/check.ts <substr>`
 runs a subset (e.g. `… yaml`).
 
 Gates that need an external corpus (the TypeScript conformance corpus at `/tmp/ts-repo`, test262 at
-`/tmp/test262`, CPython's `Lib/` at `/tmp/cpython`; CI clones all three) say NOT RUN without it and fail.
+`/tmp/test262`; CI clones both) say NOT RUN without it and fail.
 
 ### Records that are not gates
 
@@ -69,9 +69,10 @@ from its front matter. Every disagreement carries a cause class (`test/test262-c
 are pinned in `test/test262-record.txt` and the scoreboard in the generated `docs/TEST262.md`
 (regenerate: `node test/test262.ts --write`). A file moving in either direction fails it until recorded.
 
-`conformance/cpython` measures `python.ts` (interpreter) against `ast.parse` of Python 3.10.12 over every
-`.py` file of CPython's `Lib/` at the pin in `test/cpython.sha` (CI clones it and installs that Python;
-locally `~/.cache/monogram-agents/restore-cpython.sh <repo>`; another Python is NOT RUN). Every
+`conformance/cpython` (`node test/cpython.ts`; not a gate of `check.ts` but the CI job `python`, which
+installs the oracle) measures `python.ts` (interpreter) against `ast.parse` of Python 3.10.12 over every
+`.py` file of CPython's `Lib/` at the pin in `test/cpython.sha` (the job clones it; locally
+`~/.cache/monogram-agents/restore-cpython.sh <repo>`; another Python is NOT RUN). Every
 disagreement carries a cause class (in `test/cpython.ts`); the files are pinned in
 `test/cpython-record.txt` (regenerate: `node test/cpython.ts --write`). It is the second language's
 oracle: [docs/SECOND-LANGUAGE.md](SECOND-LANGUAGE.md).
