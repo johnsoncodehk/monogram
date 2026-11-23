@@ -926,7 +926,8 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   // itself, a kind l has); unknown when one is not known or a match of one token begins there. A
   // candidate gets the pair (l, its SECOND) where some other candidate admits l and can continue
   // with a token outside it (unknown included): there the pair refuses it at a second token the
-  // other may take. Literals with the same SECOND are one pair. Sound as Guard.second is: every
+  // other may take, and the pair decides the list there (`decides`). Literals with the same SECOND
+  // are one pair. Sound as Guard.second is: every
   // match beginning with l continues with a token of the set.
   const rdItems = new Map<string, RuleExpr[]>();   // an rd rule's alternatives, for its pairs (pairsOf, once kindsOf is known)
   const kindsOfKey = (l: string) => kindsOf(gtComps.includes(l) ? '>' : l);
@@ -951,7 +952,16 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
       for (const k of keys) { const x = m.get(k)!; if (x.s === null || x.len1) return null; for (const y of x.s) s.add(y); }
       return s.size ? keySet(s) : null;
     };
-    const lits = [...new Set(gs.flatMap((g) => g?.first?.lits ?? []))].sort();
+    // A pair pays only where it decides the list: at some kind of second token (a name, a
+    // number: what code mostly continues with) exactly one candidate can continue. Elsewhere
+    // (`<` of the JSX elements: two candidates continue with a name) it adds a test of the second
+    // token to every attempt and decides nothing.
+    const decides = (l: string): boolean => {
+      const ss = gs.flatMap((h, j) => (admitsLit(h, l) ? [secAt(j, l)] : []));
+      const kinds = [...new Set(ss.flatMap((x) => x?.toks ?? []))];
+      return kinds.some((k) => ss.filter((x) => x === null || x.toks.includes(k)).length === 1);
+    };
+    const lits = [...new Set(gs.flatMap((g) => g?.first?.lits ?? []))].sort().filter(decides);
     return gs.map((g, i) => {
       if (g === null || g.first === null) return g;
       const at = new Map<string, { sec: TokenSet; lits: string[] }>();
