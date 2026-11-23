@@ -15,7 +15,9 @@
 // GRAMMAR_CHANGED=1 in the environment says the pull request touches a grammar file.
 import { readFileSync } from 'node:fs';
 
-const [resultsFile, sizesA, sizesM] = process.argv.slice(2);
+// An optional fourth argument, M's size record (docs/emit-sizes.json), adds the drift of M against
+// it: a size past test/emit-size-record.ts's tolerance is listed (that gate fails on it too).
+const [resultsFile, sizesA, sizesM, sizeRecord] = process.argv.slice(2);
 if (!resultsFile || !sizesA || !sizesM) throw new Error('usage: pr-summary.ts <results.txt> <emit-sizes-A.json> <emit-sizes-M.json>');
 const kv = (s: string) => Object.fromEntries([...s.matchAll(/(\w+)=(\S+)/g)].map((m) => [m[1], m[2]]));
 
@@ -98,11 +100,20 @@ for (const f of files) {
 const sa = JSON.parse(readFileSync(sizesA, 'utf8')) as Record<string, Record<string, { bytes: number; sha: string }>>;
 const sm = JSON.parse(readFileSync(sizesM, 'utf8')) as Record<string, Record<string, { bytes: number; sha: string }>>;
 const sizeRows: string[][] = [];
+const RECORD_TOLERANCE = 0.25; // test/emit-size-record.ts's
+const rec: Record<string, Record<string, number>> | null = sizeRecord ? (() => { try { return JSON.parse(readFileSync(sizeRecord, 'utf8')); } catch { return {}; } })() : null;
 for (const g of Object.keys(sm)) for (const t of Object.keys(sm[g])) {
   const a = sa[g]?.[t], m = sm[g][t];
   const d = a ? pct(a.bytes, m.bytes) : NaN;
   if (d > SIZE_LIMIT) regress.push(`emitted size, ${g} ${t}: ${fpct(d)} (${num(a!.bytes)} → ${num(m.bytes)} bytes)`);
-  sizeRows.push([g, t, a ? num(a.bytes) : '(absent)', num(m.bytes), fpct(d), a && a.sha === m.sha ? 'identical' : 'differs']);
+  const row = [g, t, a ? num(a.bytes) : '(absent)', num(m.bytes), fpct(d), a && a.sha === m.sha ? 'identical' : 'differs'];
+  if (rec) {
+    const r = rec[g]?.[t];
+    const dr = r === undefined ? NaN : pct(r, m.bytes);
+    if (!(Math.abs(dr) <= RECORD_TOLERANCE)) regress.push(`emitted size against the record, ${g} ${t}: ${r === undefined ? 'not recorded' : `${fpct(dr)} (${num(r)} → ${num(m.bytes)} bytes)`}`);
+    row.push(r === undefined ? '(absent)' : num(r), fpct(dr));
+  }
+  sizeRows.push(row);
 }
 for (const g of Object.keys(sa)) for (const t of Object.keys(sa[g])) if (!sm[g]?.[t]) notRun.push(`emitted size ${g} ${t} missing for M`);
 
@@ -199,9 +210,9 @@ if (untrusted.length) {
 }
 if (regress.length) {
   say(`### Regressions (reported, not failing): ${regress.length}`);
-  say(`Thresholds: instructions +${IR_LIMIT}%, any rise in reuse-mode allocator calls per parse, emitted size +${SIZE_LIMIT}%.`);
+  say(`Thresholds: instructions +${IR_LIMIT}%, any rise in reuse-mode allocator calls per parse, emitted size +${SIZE_LIMIT}% against A${rec ? ` and beyond ±${RECORD_TOLERANCE}% against the record` : ""}.`);
   for (const x of regress) say('- **' + x + '**');
-} else say('### Regressions: none (instructions within +0.5%, reuse-mode allocator calls not up, emitted sizes within +1%)');
+} else say('### Regressions: none (instructions within +0.5%, reuse-mode allocator calls not up, emitted sizes within +1% of A and ±0.25% of the record)');
 say();
 say('### Every target, A → M');
 if (singleTarget.length) {
@@ -266,7 +277,8 @@ say('### Lexer alone (Callgrind, `lex(src)`)');
 table(['input', 'Ir A', 'Ir M', 'Ir Δ'], files.map((f) => [f, num(ir[`A.lex.${f}`]), num(ir[`M.lex.${f}`]), fpct(pct(ir[`A.lex.${f}`], ir[`M.lex.${f}`]))]));
 say();
 say('### Emitted parser sizes (`emitParser`, bytes)');
-table(["grammar", "target", "A", "M", "Δ", "output A vs M"], sizeRows);
+table(["grammar", "target", "A", "M", "Δ", "output A vs M", ...(rec ? ['record', 'M vs record'] : [])], sizeRows);
+if (rec) say(`The record is docs/emit-sizes.json of M; the gate emit-size-record fails beyond ±${RECORD_TOLERANCE}% of it (re-record with \`node test/emit-size-record.ts --write\`).`);
 say();
 console.log(out.join('\n'));
 if (notRun.length) { console.error('NOT RUN: ' + notRun.join('; ')); process.exit(1); }
