@@ -1656,6 +1656,57 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
     (result[K('children')].patterns as { include: string }[]).splice(1, 0, { include: `#${K('dynamic-element')}` });
   }
 
+  // ── <name>-raw-element: an element whose tag name a `rawText` declaration lists. Its open tag
+  // ends with `tagClose`, then the body up to the close tag `tagOpen closeMarker name` is ONE
+  // token for the lexer: here a region whose content is the declaration's embedded language
+  // (`embed[name]`), else the raw token's own scope. A declaration's `unlessBodyStarts` is a
+  // negative lookahead on the body's begin: when the body starts with it, the element takes
+  // the ordinary children instead. Tried before the ordinary element in the children and the
+  // triggers. Case: `ignoreCase` folds the name in the open and the close tag, as the lexer does.
+  const rawKeys: string[] = [];
+  const scopeOfName = (lit: string): string => {
+    for (const e of nameEntries) if (!e.match || new RegExp(`^(?:${tokenPatternToRegex(e.match)})`).test(lit)) return `${e.scope}.${langName}`;
+    return `${ctxTagScope ?? 'entity.name.tag'}.${langName}`;
+  };
+  for (const decl of region.rawText ?? []) {
+    const tok = grammar.tokens.find(t => t.name === decl.token);
+    for (const tag of decl.tags) {
+      const tagRe = decl.ignoreCase ? caseFoldLiteral(tag) : escapeRegex(tag);
+      const emb = decl.embed?.[tag];
+      const embedScope = typeof emb === 'string' ? emb : emb?.default;
+      const nameScope = scopeOfName(tag);
+      const key = K(`raw-element-${tag}`);
+      const unless = decl.unlessBodyStarts !== undefined ? `(?!${tokenPatternToRegex(decl.unlessBodyStarts)})` : '';
+      result[key] = {
+        name: `meta.tag.${langName}`,
+        begin: `(?=(${o})\\s*(${tagRe})${tagFollow})`,
+        end: `(${selfCloseTok})|(${closeTok})\\s*(${tagRe})\\s*(${c})`,
+        endCaptures: { '1': { name: tagEnd }, '2': { name: tagBegin }, '3': { name: nameScope }, '4': { name: tagEnd } },
+        patterns: [
+          {
+            begin: `(${o})\\s*(${tagRe})`,
+            beginCaptures: { '1': { name: tagBegin }, '2': { name: nameScope } },
+            end: tagEndAhead,
+            patterns: [{ include: `#${K('attributes')}` }],
+          },
+          {
+            begin: `(${c})${unless}`,
+            beginCaptures: { '1': { name: tagEnd } },
+            end: `(?=${closeTok}\\s*${tagRe})`,
+            contentName: embedScope ?? (tok?.scope ? `${tok.scope}.${langName}` : undefined),
+            patterns: embedScope ? [{ include: embedScope }] : [],
+          },
+          ...unless ? [childrenRegion(`(${c})`, { '1': { name: tagEnd } })] : [],
+        ],
+      };
+      rawKeys.push(key);
+    }
+  }
+  if (rawKeys.length) {
+    (result[K('children')].patterns as { include: string }[]).unshift(...rawKeys.map(k => ({ include: `#${k}` })));
+    (result[K('element-in-expression')].patterns as { include: string }[]).splice(commentIncludes.length, 0, ...rawKeys.map(k => ({ include: `#${k}` })));
+  }
+
   return result;
 }
 
