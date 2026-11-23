@@ -18,6 +18,7 @@ await loadWASM(wasmBin.buffer.slice(wasmBin.byteOffset, wasmBin.byteOffset + was
 const grammarFiles: Record<string, string> = {
   'source.ts': 'typescript.tmLanguage.json',
   'source.tsx': 'typescriptreact.tmLanguage.json',
+  'source.js.jsx': 'javascriptreact.tmLanguage.json',
 };
 
 function makeRegistry(): InstanceType<typeof Registry> {
@@ -143,6 +144,21 @@ const cases: Case[] = [
     checks: [{ line: 0, text: '<', scope: 'punctuation.definition.typeparameters.begin' }] },
   { label: 'satisfies is contextual', scope: 'source.ts', lines: ['const satisfies = 1'],
     checks: [{ line: 0, text: 'satisfies', scope: 'keyword.operator', absent: true }] },
+  // ── An element is entered only at an operand position (the lexer's `!prevIsValue()`): after
+  // an expression-head keyword (`new`, `return`, …), but not when a member access precedes that
+  // word, where it is a property name and so a value (`x.new <b> c` is two comparisons).
+  ...(['source.tsx', 'source.js.jsx'] as const).flatMap(scope => [
+    { label: `${scope}: \`x.new <b> c\` is no element`, scope, lines: ['y = x.new <b> c;'],
+      checks: [{ line: 0, text: 'b', scope: 'entity.name.tag', absent: true }] },
+    { label: `${scope}: \`x?.new <b> c\` is no element`, scope, lines: ['y = x?.new <b> c;'],
+      checks: [{ line: 0, text: 'b', scope: 'entity.name.tag', absent: true }] },
+    { label: `${scope}: \`x.return <b> c\` is no element`, scope, lines: ['y = x.return <b> c;'],
+      checks: [{ line: 0, text: 'b', scope: 'entity.name.tag', absent: true }] },
+    { label: `${scope}: \`return <b/>\` is an element`, scope, lines: ['return <b/>;'],
+      checks: [{ line: 0, text: 'b', scope: 'entity.name.tag' }] },
+    { label: `${scope}: \`renew <b/>\` is no element (a word, not \`new\`)`, scope, lines: ['y = renew <b> c;'],
+      checks: [{ line: 0, text: 'b', scope: 'entity.name.tag', absent: true }] },
+  ]),
 ];
 
 let passed = 0;
