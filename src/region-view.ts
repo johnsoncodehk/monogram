@@ -7,6 +7,7 @@
 import type { CstGrammar, ElementRegion, ElementHighlight, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
 import { tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { tokenPatternLiteralText } from './token-pattern.ts';
+import { armGraph, armsFrom } from './arm-graph.ts';
 
 /** The shape of a tag or attribute NAME: the identifier token at its head, and the literals that
  *  join further identifiers to it (`.` / `:` / `-` in JSX's `a.b`, `svg:rect`, `data-id`), in rule order.
@@ -54,28 +55,15 @@ export interface RegionView {
   highlight: ElementHighlight;
 }
 
-/** Flatten an expression into its item sequences: alt / group expanded, a repetition as zero or
- *  one occurrence (`+` as one), so adjacency scans see every combination. Bounded by 2^(opts) per
- *  alternative. The ONE expansion every generator's adjacency scan uses (gen-tm, gen-monarch,
- *  the region view).
- *
- *  MEMORY: every expansion is built once per expression node and kept. One of at most MEMO_ARMS
- *  arms is kept as frozen arrays (shared: a caller that would mutate one throws); a larger one is
- *  kept PACKED (PackedArms: item indices in one Int32Array) and gives each reader fresh frozen
- *  arrays. TypeScript's bodies expand to 6,668,459 arms (Expr 2,481,621 holding 42.8 M items; Prop
- *  1,995,841; ClassMember 1,787,551; Param 363,778): kept as arrays they held about 2 GB for the
- *  whole generator run, past node's default heap on a 7.8 GB machine; packed, about 4 bytes an item.
- *
- *  KNOWN COST: the expansion is the full cross product of a body's options, and the detectors
- *  match an adjacency by walking it. The redesign (owed): match adjacencies over the expression
- *  structure (the items that can follow an item) instead of over every expanded sequence. */
-export interface Arms extends Iterable<RuleExpr[]> {
-  readonly length: number;
-  some(f: (arm: RuleExpr[]) => boolean): boolean;
-  every(f: (arm: RuleExpr[]) => boolean): boolean;
-  find(f: (arm: RuleExpr[]) => boolean): RuleExpr[] | undefined;
-}
-const MEMO_ARMS = 50_000;
+/** Flatten a SMALL expression into its item sequences: alt / group expanded, a repetition as zero
+ *  or one occurrence (`+` as one), a `not` as nothing. The arms are the full cross product of a
+ *  body's options (TypeScript's rule bodies have 6,668,459: Expr 2,481,620, Prop 1,995,841,
+ *  ClassMember 1,787,551), so a question about a whole grammar's adjacencies is asked of the arm
+ *  graph (src/arm-graph.ts: windows, folds, whole-arm paths) instead; this expansion is kept for the
+ *  few small bodies a detector reads arm by arm (a tag or attribute name rule, a type-parameter
+ *  rule) and refuses a body of more than MAX_ARMS arms, loudly, so the cross product cannot come
+ *  back unnoticed. Each expansion is built once per expression node and kept, its arms frozen. */
+const MAX_ARMS = 1000;
 const counts = new WeakMap<RuleExpr, number>();
 /** How many arms expandArms(expr) has, without building them. */
 function armCount(expr: RuleExpr): number {
@@ -96,65 +84,24 @@ function armCount(expr: RuleExpr): number {
 function* streamArms(expr: RuleExpr): Generator<RuleExpr[]> {
   switch (expr.type) {
     case 'seq': yield* seqArms(expr.items, 0, []); return;
-    case 'alt': for (const it of expr.items) yield* expandArms(it); return;
-    case 'group': yield* expandArms(expr.body); return;
-    case 'quantifier': if (expr.kind !== '+') yield []; yield* expandArms(expr.body); return;
+    case 'alt': for (const it of expr.items) yield* streamArms(it); return;
+    case 'group': yield* streamArms(expr.body); return;
+    case 'quantifier': if (expr.kind !== '+') yield []; yield* streamArms(expr.body); return;
     case 'not': yield []; return;   // a negative lookahead consumes nothing: adjacency sees through it
     default: yield [expr];   // literal, ref, sep, op, prefix, postfix
   }
 }
 function* seqArms(items: RuleExpr[], i: number, prefix: RuleExpr[]): Generator<RuleExpr[]> {
   if (i === items.length) { yield prefix; return; }
-  for (const b of expandArms(items[i]!)) yield* seqArms(items, i + 1, b.length ? Object.freeze([...prefix, ...b]) as RuleExpr[] : prefix);
+  for (const b of streamArms(items[i]!)) yield* seqArms(items, i + 1, b.length ? [...prefix, ...b] : prefix);
 }
-// A large expansion, built once and kept PACKED: every arm's items as indices into the expansion's
-// own item table (an Int32Array of all arms back to back, and each arm's end), about 4 bytes per
-// item instead of an array object per arm holding pointers. Reading it builds each arm's array
-// afresh: short-lived garbage, collected young.
-class PackedArms implements Arms {
-  private readonly table: RuleExpr[] = [];
-  private items = new Int32Array(1 << 16);
-  private ends: Int32Array;
-  readonly length: number;
-  constructor(expr: RuleExpr, length: number) {
-    this.length = length;
-    this.ends = new Int32Array(length);
-    const index = new Map<RuleExpr, number>();
-    let used = 0, k = 0;
-    for (const arm of streamArms(expr)) {
-      if (used + arm.length > this.items.length) { const grown = new Int32Array(Math.max(this.items.length * 2, used + arm.length)); grown.set(this.items.subarray(0, used)); this.items = grown; }
-      for (const e of arm) {
-        let i = index.get(e);
-        if (i === undefined) { index.set(e, (i = this.table.length)); this.table.push(e); }
-        this.items[used++] = i;
-      }
-      this.ends[k++] = used;
-    }
-    this.items = this.items.slice(0, used);
-  }
-  private arm(k: number): RuleExpr[] {
-    const from = k ? this.ends[k - 1]! : 0, to = this.ends[k]!;
-    const a = new Array<RuleExpr>(to - from);
-    for (let i = from; i < to; i++) a[i - from] = this.table[this.items[i]!]!;
-    return Object.freeze(a) as RuleExpr[];
-  }
-  *[Symbol.iterator]() { for (let k = 0; k < this.length; k++) yield this.arm(k); }
-  some(f: (arm: RuleExpr[]) => boolean) { for (let k = 0; k < this.length; k++) if (f(this.arm(k))) return true; return false; }
-  every(f: (arm: RuleExpr[]) => boolean) { for (let k = 0; k < this.length; k++) if (!f(this.arm(k))) return false; return true; }
-  find(f: (arm: RuleExpr[]) => boolean) { for (let k = 0; k < this.length; k++) { const a = this.arm(k); if (f(a)) return a; } return undefined; }
-}
-const expansions = new WeakMap<RuleExpr, Arms>();
-export function expandArms(expr: RuleExpr): Arms {
+const expansions = new WeakMap<RuleExpr, readonly RuleExpr[][]>();
+export function expandArms(expr: RuleExpr): readonly RuleExpr[][] {
   const hit = expansions.get(expr);
   if (hit) return hit;
   const n = armCount(expr);
-  let out: Arms;
-  if (n > MEMO_ARMS) out = new PackedArms(expr, n);
-  else {
-    const arms: RuleExpr[][] = [];
-    for (const arm of streamArms(expr)) arms.push(Object.freeze(arm) as RuleExpr[]);
-    out = Object.freeze(arms);
-  }
+  if (n > MAX_ARMS) throw new Error(`expandArms: a body of ${n} arms (more than ${MAX_ARMS}); ask the arm graph (src/arm-graph.ts) instead`);
+  const out = Object.freeze([...streamArms(expr)].map(a => Object.freeze(a) as RuleExpr[]));
   expansions.set(expr, out);
   return out;
 }
@@ -174,8 +121,11 @@ export function regionView(grammar: CstGrammar): RegionView | null {
   const rules = new Map(grammar.rules.map((r) => [r.name, r]));
   const closers = new Set([region.closeTag, region.selfClose]);
   const refsCloser = (items: RuleExpr[]) => items.some((x) => x.type === 'ref' && closers.has(x.name));
+  // The element arms: every rule-body arm that begins with the tag opener and references a closer.
+  const g = armGraph(grammar);
   const arms: RuleExpr[][] = [];
-  for (const r of grammar.rules) for (const a of expandArms(r.body)) if (isLit(a[0], region.tagOpen) && refsCloser(a)) arms.push(a);
+  for (let r = 0; r < g.body.length; r++) if (g.rootKind[r] === 'rule')
+    for (const w of armsFrom(g, g.first[r].filter(p => isLit(g.node[p], region.tagOpen)))) { const a = w.map(p => g.node[p]); if (refsCloser(a)) arms.push(a); }
 
   const nameJoiners = region.highlight?.nameJoiners ?? [];
   if (nameJoiners.length > 1) throw new Error(`element region: \`highlight.nameJoiners\` declares ${nameJoiners.length} joiners; a name has at most one prefix joiner`);
