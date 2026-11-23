@@ -59,7 +59,6 @@ for (const [i, st] of steps.entries()) {
   if (hit) {
     console.log(`  run  ${label}   (${hit === global[0] ? hit : `input ${hit}`})`);
     if (listOnly) continue;
-    const t0 = Date.now();
     const trace = TRACE ? join(TRACE, String(i)) : null;
     // under /usr/bin/time where it exists: `generate <command>: wall, CPU, peak memory` (CI reads it)
     const node = ['node', ...(trace ? ['--import', './test/trace-reads.ts'] : []), ...st.argv];
@@ -71,7 +70,6 @@ for (const [i, st] of steps.entries()) {
       const extra = readFileSync(trace, 'utf8').split('\n').filter((f) => f && !ARTIFACT.test(f) && !st.inputs.has(f.replace(/\.cst-match\.ts$/, '.ts')));
       for (const f of extra) untraced.push(`${label}: read ${f}, which is not among its ${st.inputs.size} derived inputs`);
     }
-    console.log(`       ${((Date.now() - t0) / 1000).toFixed(1)} s`);
     // what this step wrote is an input of the steps after it (tm-completeness reads the TextMate grammars)
     if (!all) changed = new Set([...changed, ...changedNow()]);
     continue;
