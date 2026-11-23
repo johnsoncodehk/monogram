@@ -1,4 +1,5 @@
-import type { CstGrammar, RuleExpr, TokenDecl } from './types.ts';
+import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
+import { regionView, type RegionView, type NameShape } from './region-view.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
 import {
   tokenEscapePatternSource,
@@ -11,6 +12,7 @@ import {
   tokenPatternSource,
   tokenPatternStartsWithDecimal,
   tokenPatternStringDelimiters,
+  tokenPatternToRegex,
 } from './token-pattern.ts';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -53,7 +55,8 @@ import {
 export type MonarchAction =
   | string
   | { token: string; next?: string; switchTo?: string }
-  | { cases: Record<string, MonarchAction> };
+  | { cases: Record<string, MonarchAction> }
+  | MonarchAction[];   // one action per capture group (the groups cover the match)
 
 /** A single tokenizer rule. */
 export type MonarchRule =
@@ -328,6 +331,7 @@ function generateMarkupMonarch(grammar: CstGrammar): MonarchLanguage {
 export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
   if (grammar.markup) return generateMarkupMonarch(grammar);
   const { scopeOverrides } = grammar;
+  const view = regionView(grammar);
 
   // ── Identifier token: prefer the declared `identifier` hint (the lexer's own
   //    source of truth), else the token gen-tm would treat as the identifier. ──
@@ -769,12 +773,20 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
   ];
   tokenizer['exprBody'] = exprBody;
 
-  const root: MonarchRule[] = [{ include: '@exprBody' }];
+  // The element layer (docs/REGIONS.md): states from the declared region, null without one.
+  const el = view ? elementLayer(view, grammar, {
+    identRegex, wsRule, commentRules, stringNestedRules, templateNestedRules, typeargs: !!angle,
+    holeBody: templateToken?.template ? '@interpExprBody' : null,
+    braces: tokenizer['bracketCounting'] ? '@bracketCounting' : null,
+  }) : null;
+  if (el) Object.assign(tokenizer, el.states);
+
+  const root: MonarchRule[] = [...el?.entryTop ?? [], { include: '@exprBody' }];
   if (regexToken) root.push(...exprSlashRules);
   if (angle) root.push(['<|>', toExpr(comparisonTok)]);   // expr-pos `<`/`>` = comparison
   tokenizer['root'] = root;
 
-  const value: MonarchRule[] = [];
+  const value: MonarchRule[] = [...el?.entry === 'always' ? el.entryTop : []];
   if (angle) {
     // `<` after a value opens generics ONLY when the bounded type-arg lookahead
     // succeeds (otherwise it stays a comparison via the `<|>` fallback below).
@@ -790,6 +802,7 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
   // (push/pop) variants, already injected by templateInterp/bracketCounting.
   if (templateToken?.template) {
     const interpExprBody: MonarchRule[] = [
+      ...el?.entryNested ?? [],
       ...numberRules.map(stripSwitch),
       ...otherTokenRules.map(stripSwitch),
       identRuleInterp,
