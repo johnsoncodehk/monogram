@@ -1421,7 +1421,8 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
   // children. An opener (or continuation) literal, then its required literals up to the head's
   // `(` or the body's `hole.open`: a keyword (its scope the grammar's `scopes` declaration, else
   // `keyword.control`). A head `( … )` is code; a body `hole.open … hole.close` is children
-  // (it follows the head's `)` on the same line: a TextMate begin is one line); a code block
+  // (after the head's `)`, on its line or the next when the `)` ends its line). The opener and its
+  // required literals must stand on one line (a TextMate begin is one line); a code block
   // `@{ … }` is code. A continuation keyword is matched wherever an opener is: TextMate cannot
   // tell that it follows a body.
   const directiveKeys: string[] = [];

@@ -473,11 +473,14 @@ TextMate grammar cannot express, each a limitation stated where the pattern is b
 
 | limitation | witness | TextMate reads | the lexer reads |
 |---|---|---|---|
-| a member keyword before a tag (the lookbehind sees `new`, not that a `.` precedes it) | `x.new <b>` | an element | a comparison |
-| a dynamic close tag's hole is matched one brace level deep (an `end` is one regex) | `</{a[{b}]}>` | not a close tag | a close tag |
-| a directive body must start on the head's line (a `begin` is one line) | `@if (x)`⏎`{ … }` | the head, then text | the body |
+| a member keyword before a tag (the lookbehind sees `new`, not that a `.` precedes it) | `y = x.new <b> c` (TSX) | an element | a comparison |
+| a hole is balanced only as deep as the code grammar's own brace patterns, and a dynamic close tag's hole one level (an `end` is one regex) | `<{a[{b}]}>x</{a[{b}]}>` (text dialect, whose code has no brace pair) | the hole ends at the inner `}`; the element does not close | a dynamic element |
+| a directive's opener and its required literals must stand on one line (a `begin` is one line) | `@if`⏎`(x) { y }` | text, then a hole | a directive |
 | a continuation keyword is matched anywhere an opener is (no "after a body" state) | `<p>x @else { y }</p>` | a keyword | text |
 | an unterminated `/*` in text runs to the end of the file | `<p>a /* b</p>` | a comment to EOF | text |
+
+Each row was run on the text dialect fixture (`test/fixtures/textdialect.ts`) and the committed
+TSX grammar, against the interpreter's token stream.
 
 ## Consumers (the evidence the model was built from)
 
