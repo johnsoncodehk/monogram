@@ -11,17 +11,17 @@
   "corpus": "node_modules",
   "view": "top-level statement",
   "units": 2478,
-  "compared": 1892,
-  "identical": 1892,
-  "outOfSubset": 586
+  "compared": 2340,
+  "identical": 2340,
+  "outOfSubset": 138
  },
  "estree node_modules file": {
   "corpus": "node_modules",
   "view": "file",
   "units": 186,
-  "compared": 55,
-  "identical": 55,
-  "outOfSubset": 131
+  "compared": 129,
+  "identical": 129,
+  "outOfSubset": 57
  },
  "tsc conformance/expressions expression statement": {
   "corpus": "conformance/expressions",
@@ -35,9 +35,9 @@
   "corpus": "conformance/expressions",
   "view": "top-level statement",
   "units": 9208,
-  "compared": 6340,
-  "identical": 6339,
-  "outOfSubset": 2866
+  "compared": 6346,
+  "identical": 6345,
+  "outOfSubset": 2860
  },
  "tsc conformance/expressions file": {
   "corpus": "conformance/expressions",

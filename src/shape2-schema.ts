@@ -16,6 +16,10 @@
 //   that flows down, decided by the parent's ARM and the child's NAME; it never carries a value
 //   or a subtree. That is the declared, limited use of outer context, and it is what tells the
 //   generator which nodes depend on where they sit (see `dependencies` in shape2-eval.ts).
+// - One inherited attribute type is not a scalar: a NODE-VALUED attribute (`NodesAttr`), an
+//   immutable list of nodes built from children to the LEFT of the child it feeds (tsc's
+//   `modifiers`, which the arms wrapping a declaration hand the declaration). It is L-attributed
+//   by construction and placed only, never inspected.
 // - One list-level construct, THREADED state (`thread`), is the only way a node's context can
 //   depend on its SIBLINGS: a parent arm, for a repeated child, threads one scalar left to right
 //   across the repetition's iterations (the ELEMENTS): element k receives state k as the
@@ -193,7 +197,24 @@ export type InhEq = Term | ThreadEq;
 /** An inherited scalar attribute: per (rule, arm, child name) an equation (InhEq); every other
  * child, and the root, gets `default`. An arm holding a thread for the attribute has no other
  * equation for it. */
-export type InhAttr = { type: ScalarType; default: Scalar; rules: Record<string, Record<string, Record<string, InhEq>>> };
+export type InhAttr =
+  | { type: ScalarType; default: Scalar; rules: Record<string, Record<string, Record<string, InhEq>>> }
+  | NodesAttr;
+/** A NODE-VALUED inherited attribute: an immutable list of nodes a parent arm builds from what
+ * sits to the LEFT of the child it hands them to, and that child's arm places in its own node.
+ * tsc's `modifiers`: the `export` / `declare` words and the outer decorators sit in the Decl arms
+ * that wrap a declaration, and tsc puts them on the inner declaration node (`export declare
+ * function f(): void;` is one FunctionDeclaration whose modifiers are [ExportKeyword,
+ * DeclareKeyword]). Its default, at the root and for every child without an equation, is the
+ * empty list. An equation is a value term (list / spread / child / inh / node / ..., no `syn`,
+ * `get`, `fold`, `let`) that reads only children strictly to the LEFT of the child it feeds, so
+ * it is L-attributed by construction. The attribute is IMMUTABLE: `inh` of it (and a `let`
+ * variable bound to it) appears only as a `spread` item of a list, a span endpoint, or under
+ * `present` (non-empty); anything else is a load error. A list-valued variable spans its first
+ * element's start to its last element's end, as a list-valued child does, so a receiver that
+ * starts at its first inherited node says so: `let_('m', inh('modifiers'), iff(present('m'),
+ * node(T, {...}, { from: 'm', to: … }), node(T, {...})))`. */
+export type NodesAttr = { type: 'nodes'; rules: Record<string, Record<string, Record<string, Term>>> };
 
 export type Shape2Spec = {
   name: string;
