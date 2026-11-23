@@ -131,6 +131,43 @@ export function reachable(g: ArmGraph, from: number, through: (e: RuleExpr) => b
   return [...out].sort((a, b) => a - b);
 }
 
+/** A FOLD over the rest of every arm through position `from`: `step` folds each item from `from`
+ *  (inclusive) to the arm's end into a state (null: the arm is rejected), and the distinct end
+ *  states are returned. Computed once per (position, state), so the cost is positions times the
+ *  states a fold distinguishes (`key`), not the number of arms: the whole-arm properties a detector
+ *  reads (an arm that holds a `{`, or a `(` somewhere after its name) without expanding them. */
+export function foldArmsFrom<S>(g: ArmGraph, from: number, init: S, step: (s: S, e: RuleExpr) => S | null, key: (s: S) => string): S[] {
+  const memo = new Map<string, Map<string, S>>();
+  const visit = (p: number, s: S): Map<string, S> => {
+    const s1 = step(s, g.node[p]);
+    if (s1 === null) return new Map();
+    const k = `${p}\0${key(s1)}`;
+    const hit = memo.get(k);
+    if (hit) return hit;
+    const out = new Map<string, S>();
+    memo.set(k, out);
+    if (g.isLast[p]) out.set(key(s1), s1);
+    for (const n of g.follow[p]) for (const [kk, v] of visit(n, s1)) out.set(kk, v);
+    return out;
+  };
+  return [...visit(from, init).values()];
+}
+
+/** Every whole arm that begins at one of `starts` (first positions of one root), as position paths
+ *  sorted in arm order. For the few arms a detector needs whole (an element's tag arms): it refuses
+ *  more than `limit`, loudly, rather than become the cross product again. */
+export function armsFrom(g: ArmGraph, starts: number[], limit = 10_000): number[][] {
+  const out: number[][] = [];
+  const extend = (path: number[]): void => {
+    const p = path[path.length - 1];
+    if (g.isLast[p]) out.push(path);
+    if (out.length > limit) throw new Error(`arm-graph: more than ${limit} arms from position ${path[0]} (${JSON.stringify(g.node[path[0]])}); ask for a window or a fold instead`);
+    for (const n of g.follow[p]) extend([...path, n]);
+  };
+  for (const s of starts) extend([s]);
+  return out.map(w => ({ w, key: armOrderKey(g, w, [], true, { atEnd: true }) })).sort((a, b) => compareArmOrder(a.key, b.key)).map(({ w }) => w);
+}
+
 /** Items in the order a scan of the expanded arms first meets them: each candidate is a value with
  *  the window (and gaps) where it was met; a value met several times takes its earliest. */
 export function inArmOrder<T>(g: ArmGraph, met: { value: T; window: number[]; gapFree?: boolean[]; atStart?: boolean }[]): T[] {
@@ -150,13 +187,15 @@ export function inArmOrder<T>(g: ArmGraph, met: { value: T; window: number[]; ga
  *  that keeps its positions present and the positions between them absent. Sorting windows by this
  *  key puts them in the order a scan of the expanded arms first meets them. `gapFree[i]` lets other
  *  items stand between window[i] and window[i + 1] (a pattern `a … b` rather than `a b`); `atStart`
- *  asks for an arm that BEGINS with the window. */
-export function armOrderKey(g: ArmGraph, window: number[], gapFree: boolean[] = [], atStart = false): number[] {
+ *  asks for an arm that BEGINS with the window, `atEnd` for one that ENDS with it (both: the window
+ *  is a whole arm). `last` asks for the LAST such arm instead of the first (at every choice the
+ *  latest option that keeps the window): a detector that keeps the last match it meets. */
+export function armOrderKey(g: ArmGraph, window: number[], gapFree: boolean[] = [], atStart = false, { atEnd = false, last = false } = {}): number[] {
   const r = g.root[window[0]];
   const on = new Set(window);
-  const lo = window[0];
+  const lo = window[0], hi = window[window.length - 1];
   // Whether a position lies strictly inside a gap that must hold nothing.
-  const between = (id: number) => (atStart && id < lo) || window.some((w, i) => i + 1 < window.length && !gapFree[i] && id > w && id < window[i + 1]);
+  const between = (id: number) => (atStart && id < lo) || (atEnd && id > hi) || window.some((w, i) => i + 1 < window.length && !gapFree[i] && id > w && id < window[i + 1]);
   // A root's positions are numbered consecutively in the build's traversal order, so walking the
   // root in that order numbers each leaf again.
   let next = g.rootFrom[r];
@@ -178,7 +217,8 @@ export function armOrderKey(g: ArmGraph, window: number[], gapFree: boolean[] = 
       case 'alt': {
         const parts = e.items.map(walk);
         const from = parts[0]?.from ?? next, to = next;
-        for (let i = 0; i < parts.length; i++) {
+        for (let k = 0; k < parts.length; k++) {
+          const i = last ? parts.length - 1 - k : k;
           const p = parts[i];
           // The window's positions inside this alt must all be in the alternative taken.
           if (p.v && window.every(w => w < from || w >= to || (w >= p.from && w < p.to))) return [i, ...p.v];
@@ -189,7 +229,7 @@ export function armOrderKey(g: ArmGraph, window: number[], gapFree: boolean[] = 
       case 'quantifier': {
         const p = walk(e.body);
         if (e.kind === '+') return p.v;
-        if (!holds(p.from, p.to)) return [0];
+        if (!holds(p.from, p.to)) return last && p.v ? [1, ...p.v] : [0];
         return p.v ? [1, ...p.v] : null;
       }
       case 'not': return [];
