@@ -86,6 +86,15 @@ const COMMENTS = [
   '/* a */ x */ y;', '/* a */ ) /* b */', 'x = /* a */ 1 */ 2;',
 ];
 
+// A binding pattern as a type-position parameter's name (function and constructor types, signatures):
+// tree-sitter's lean pattern, two deep, without defaults (`({ a = 1 }: T) => void` is its recorded
+// over-rejection: tsc's parser reads the default, its checker rejects it).
+const TYPE_PARAM_PATTERNS = [
+  'interface I { next(...[value]: [] | [T]): R; }', 'interface I { m({a, b}: T): R; }', 'type F = ({a}: T) => void;',
+  'type F = ([a]: T) => void;', 'let f: new ({a}: T) => X;', 'interface I { ({a}: T): R; }', 'interface I { new ({a}: T): R; }',
+  'type F = ({a: {b}, ...c}: T, [d, , ...e]: U) => void;', 'type F = ({"a": b, 1: c}: T) => void;', 'type F = ({a = 1}: T) => void;',
+];
+
 // Contextual keywords: every word-shaped literal the grammar writes (`static`, `type`, `of`, `if`, ...),
 // as a name in each position class: one class per word-token step of the JavaScript and TypeScript
 // grammars. The word list is
@@ -190,9 +199,9 @@ let loadFailed = false;
 for (const { lang, mod, corpora } of [
   { lang: 'typescriptreact', mod: '../typescriptreact.ts', corpora: {
     'curated JSX': JSX_CASES, 'TSX issue cases': tsxIssueCases.map(c => c.src),
-    'TS issue cases': issueTests.map(t => t.input), 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS } },
+    'TS issue cases': issueTests.map(t => t.input), 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, 'type-position patterns': TYPE_PARAM_PATTERNS } },
   { lang: 'javascriptreact', mod: '../javascriptreact.ts', corpora: { 'curated JSX': JSX_CASES, 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS } },
-  { lang: 'typescript', mod: '../typescript.ts', corpora: { 'TS issue cases': issueTests.map(t => t.input), 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS } },
+  { lang: 'typescript', mod: '../typescript.ts', corpora: { 'TS issue cases': issueTests.map(t => t.input), 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, 'type-position patterns': TYPE_PARAM_PATTERNS } },
   { lang: 'javascript', mod: '../javascript.ts', corpora: { 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS } },
 ]) {
   const wasm = `tree-sitter/${lang}/tree-sitter-${lang}.wasm`;

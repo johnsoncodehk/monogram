@@ -98,7 +98,18 @@ const DecoratorExpr = rule($ => [
 // would then mis-scope a function-type PARAMETER NAME as a type. A visible `type_fn_param`
 // node keeps the param name out of `type`'s direct children (→ @variable), while the `: T`
 // annotation stays a nested `type` node (→ `T` still @type).
-const typeFnParam = () => tsRelax(Param, [opt('...'), Ident, opt('?'), opt(':', Type)], 'type_fn_param');
+//
+// Its name may be a binding pattern (`({ a, b: c }: T) => void`, `m(...[x]: T): R`): tree-sitter's
+// form is a LEAN pattern, nested two deep (`{ a: [b] }`; a deeper one is an ERROR), with no `= Expr`
+// default and no computed `[e]:` key, the two places a pattern holds an expression: expressions stay
+// out of the type partition (issue #46). tsc's parser reads a default there (its checker rejects it:
+// "A parameter initializer is only allowed in a function or constructor implementation"), so
+// tree-sitter rejecting `({ a = 1 }: T) => void` is a recorded divergence (docs/TREE-SITTER.md).
+const leanBindingPattern = (element: unknown) => alt(
+  ['{', sep(alt(['...', Ident], [alt(Ident, String_, Number_), opt(':', element)]), ','), '}'],
+  ['[', opt(alt(element, ['...', element])), many(',', opt(alt(element, ['...', element]))), ']'],
+);
+const typeFnParam = () => tsRelax(Param, [opt('...'), alt(Ident, leanBindingPattern(alt(Ident, leanBindingPattern(Ident)))), opt('?'), opt(':', Type)], 'type_fn_param');
 
 // tsc's isStartOfType: whether the token here can begin a type, read from the tokens alone. It is
 // what decides a `T?` (parsePostfixTypeOrHigher): before a type start the `?` is a conditional
