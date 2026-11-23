@@ -422,17 +422,31 @@ const ReturnType = tsRelax(field('returnType', alt([notReserved, Ident, sameLine
 // The heritage forms are JavaScript's (`classHeritageArms`, javascript.ts); TypeScript's class
 // expression carries type parameters and an `implements` clause, and a base may take type
 // arguments (`extends Base<T>`, tsc's ExpressionWithTypeArguments).
-const ClassHeritage = rule($ => classHeritageArms($, Expr,
+const ClassHeritage = rule($ => classHeritageArms($, Expr, NewTarget,
   ['class', opt(...bindingIdentifier), opt(TypeParams), opt('extends', $), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}'],
   [[$, '<', sep(Type, ','), '>']]));
 
 // Heritage clauses, shared by every class shape: tsc parses REPEATED and order-free
 // `extends`/`implements` clauses (`class D extends A extends B implements I`), each a
 // comma list; element parses stop at the next clause keyword (the not() guard), and a
-// clause may even be EMPTY (`class M extends { }` — tsc reads `{` as the body).
+// clause may even be EMPTY (`class M extends { }` — tsc reads `{` as the body). A heritage
+// element may be an object literal (a LeftHandSideExpression), and an empty one `{}` is that
+// element only where a `,`, `{`, `extends` or `implements` follows it (tsc's
+// isValidHeritageClauseObjectLiteral), so the class body is not read as a heritage element:
+// `class M extends {} {}` has the base `{}`, `class M extends {}` none. Where a `{` starts such an
+// element (any `{` but a `{}` that none of those follows), tsc parses the element there, so the
+// list is not empty: `class M extends { a: T; } {}` has no parse (the `{` is no class body). So
+// the list is a possibly-empty one where no such `{` starts, or one that starts with an element.
+// (Stated as one list followed by a guard on its emptiness, `alt([el, many(',', el), opt(',')],
+// not(...))`, the TextMate generator runs out of memory: 2 GB heap, `npm run gen`.) tree-sitter,
+// which renders no lookahead, keeps the plain list of elements (tsRelax): the two branches and the
+// `{}` guard would only be one more conflict and dropped lookaheads there.
+const heritageFollowers = alt(',', '{', 'extends', 'implements');
+const heritageElement = alt([not(alt('extends', 'implements')), not(['{', '}', not(heritageFollowers)]), ClassHeritage]);
+const heritageList = [tsRelax(alt([not(alt(['{', not('}')], ['{', '}', heritageFollowers])), sep(heritageElement, ',')], [heritageElement, opt(',', sep(heritageElement, ','))]), sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ','))];
 const heritageClauses = many(alt(
-  ['extends', sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ',')],
-  ['implements', sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ',')],
+  ['extends', ...heritageList],
+  ['implements', ...heritageList],
 ));
 
 // The `new` callee forms are JavaScript's (`newTargetArms`, javascript.ts); a TypeScript `new`
@@ -1183,6 +1197,11 @@ export default defineGrammar({
     // parseModuleSpecifier); the `not(String_)` that keeps the two apart has no tree-sitter
     // counterpart, so `require("m")` is both until the `)`.
     ['expr', 'module_reference'],
+    // A heritage base (a NewTarget) after `extends f <`: the element's type arguments
+    // (`extends f<T> {}`) or a typed tagged template (`extends f<T>`x` {}`); only the token after
+    // `>` decides, and tsc accepts both. And, as in JavaScript, a member tail after the base
+    // (`extends a.b {}`): NewTarget's own `.b`, or the heritage's `.b` on the base `a`.
+    ['new_target', 'class_heritage'],
     // `{ readonly [` starts a mapped type, a type member with a `readonly` modifier, or (after a
     // `<` that may open type arguments or compare) an object literal's member, until `in` / `:`.
     ['type', 'type_member', 'prop'],
