@@ -48,6 +48,10 @@ interface TokenOptions {
   // can match a non-ASCII `prefix`-name (`#℘`, `#<ZWNJ>`) the ASCII token pattern misses —
   // the same fallback the bare `identifier` token gets, just behind the prefix.
   identifierPrefix?: string;
+  // On the identifier token: the language's Unicode identifier characters, as two RegExp classes
+  // (`\p{…}` allowed), which the lexer's fallback for characters beyond the ASCII pattern uses.
+  // Absent: ECMAScript's (`$`, `_`, ZWNJ / ZWJ, ID_Start / ID_Continue). See IdentifierClasses.
+  identifierClasses?: { start: string; continue: string };
   // A template-literal token: the engine tokenizes its `interpOpen … interpClose` holes. The rule
   // that parses a hole belongs to each REFERENCE of the token, not to the token (TypeScript's
   // template-literal type and its template-literal expression share one token): a bare reference
@@ -690,6 +694,7 @@ export function defineGrammar<const R extends Record<string, RuleRef>>(config: G
       embed: tok.opts.embed,
       identifier: tok.opts.identifier,
       identifierPrefix: tok.opts.identifierPrefix,
+      ...(tok.opts.identifierClasses ? { identifierClasses: { ...tok.opts.identifierClasses } } : {}),
       template: tok.opts.template,
       regexContext: tok.opts.regexContext && {
         divisionAfterTypes: tok.opts.regexContext.divisionAfterTypes ?? [],
