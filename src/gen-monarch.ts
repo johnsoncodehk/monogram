@@ -452,9 +452,10 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
   // ── Comments (mode-preserving spans: push/pop, never change expr/value mode) ──
   // A comment is whitespace-like, so after it we keep whatever mode we were in →
   // it must NOT use switchTo. Block comments span lines via a pushed state.
-  const commentRules: MonarchRule[] = [];
-  for (const t of grammar.tokens) {
-    if (!t.flags.includes('skip')) continue;
+  // One skip token's rule, with the regex of its start: a block (open / close delimiters) pushes a
+  // state that spans lines; a token with a literal prefix runs to the end of the line. Shared by
+  // the code (`commentRules`) and an element region's text tokens.
+  const skipTokenRule = (t: TokenDecl): { rule: MonarchRule; start: string } | null => {
     const scope = classifyTokenScope(t);
     const tok = scopeToMonarch(scope);
     const block = tokenPatternBlockDelimiters(t);
@@ -462,7 +463,6 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
       const [openLit, closeLit] = block;
       const [openRe, closeRe] = tokenPatternBlockDelimiterSources(t) ?? [escapeRegex(openLit), escapeRegex(closeLit)];
       const state = `comment_${delimStateSuffix(openLit)}`;
-      commentRules.push([anchoredSource(openRe), { token: tok, next: `@${state}` }]);
       if (!tokenizer[state]) {
         const closeFirst = closeLit[0] ?? '*';
         tokenizer[state] = [
@@ -471,11 +471,17 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
           ['.', tok],
         ];
       }
-    } else {
-      if (tokenPatternHasStartAnchor(t)) continue;
-      const prefix = tokenPatternLiteralPrefix(t);
-      if (prefix) commentRules.push([`${escapeRegex(prefix)}.*$`, tok]);
+      return { rule: [anchoredSource(openRe), { token: tok, next: `@${state}` }], start: anchoredSource(openRe) };
     }
+    if (tokenPatternHasStartAnchor(t)) return null;
+    const prefix = tokenPatternLiteralPrefix(t);
+    return prefix ? { rule: [`${escapeRegex(prefix)}.*$`, tok], start: escapeRegex(prefix) } : null;
+  };
+  const commentRules: MonarchRule[] = [];
+  for (const t of grammar.tokens) {
+    if (!t.flags.includes('skip')) continue;
+    const r = skipTokenRule(t);
+    if (r) commentRules.push(r.rule);
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -784,6 +790,7 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
       ...angle ? [['[<>]', comparisonTok] as MonarchRule] : [],
     ],
     braces: tokenizer['bracketCounting'] ? '@bracketCounting' : null,
+    skipTokenRule,
   }) : null;
   if (el) Object.assign(tokenizer, el.states);
 
@@ -861,6 +868,8 @@ interface ElementCtx {
   codeBody: string | MonarchRule[];
   /** the brace-counting state (`@bracketCounting`), or null when the grammar has none */
   braces: string | null;
+  /** a skip token's rule (the code's comment rules) and the regex of its start */
+  skipTokenRule: (t: TokenDecl) => { rule: MonarchRule; start: string } | null;
 }
 interface ElementLayer {
   states: Record<string, MonarchRule[]>;
@@ -960,8 +969,28 @@ function elementLayer(view: RegionView, grammar: CstGrammar, cx: ElementCtx): El
       } else textRules.push([tokenPatternToRegex(m), scopeToMonarch(h.scope)]);
       marks.push(tokenPatternToRegex(m));
     }
+    // text tokens (`textTokens`), tried before the run: at a run's start always; inside the run
+    // the run stops before one, or, with an `after` class, only right after a unit of that class:
+    // a lookbehind WITHIN the run's own match (Monarch sees nothing before a rule's match, and a
+    // run's first unit has already been tried by the token rules)
+    const stops: string[] = [];
+    for (const tt of r.textTokens ?? []) {
+      const t = grammar.tokens.find(x => x.name === tt.token);
+      if (!t) throw new Error(`element region: the text token \`${tt.token}\` is not a token`);
+      const re = tokenPatternToRegex(t.pattern);
+      const { rule, start } = cx.skipTokenRule(t) ?? { rule: [re, scopeToMonarch(classifyTokenScope(t))] as MonarchRule, start: re };
+      textRules.push(rule);
+      if (tt.after === undefined) marks.push(start);
+      else {
+        // a `highlight.text` match ends a Monarch rule inside the lexer's run: the unit before a
+        // text token right after it would not be seen
+        if (view.highlight.text?.length) throw new Error(`element region: a text token with an \`after\` class (\`${tt.token}\`) and \`highlight.text\` patterns: the Monarch element layer cannot see the unit before a text token that follows a highlight.text match`);
+        stops.push(`(?<=${tokenPatternToRegex(tt.after)})${start}`);
+      }
+    }
     const cls = tokenPatternToRegex(p.body);
-    textRules.push([marks.length ? `(?:(?!${marks.join('|')})${cls})+` : `${cls}+`, '']);
+    const not = [...marks, ...stops];
+    textRules.push([not.length ? `(?:(?!${not.join('|')})${cls})+` : `${cls}+`, '']);
     // with `tagStart`, a `tagOpen` the class does not allow after it is text
     if (tagStartLA) textRules.push([o, '']);
   }
