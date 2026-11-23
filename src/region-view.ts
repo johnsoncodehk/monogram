@@ -59,7 +59,15 @@ export interface RegionView {
  *  alternative. The ONE expansion every generator's adjacency scan uses (gen-tm, gen-monarch,
  *  the region view): memoised per expression node, so a body is expanded once however many
  *  detectors read it; the result is shared, so it is frozen (outer and inner arrays): a caller
- *  that would mutate it throws instead. */
+ *  that would mutate it throws instead.
+ *
+ *  KNOWN COST (measured 2026-11-23): the expansion is the full cross product of a body's options,
+ *  and the detectors match an adjacency by materialising it. TypeScript's rule bodies expand to
+ *  6,668,459 arms (Expr 2,481,621 arms holding 42.8 M items; Prop 1,995,841; ClassMember
+ *  1,787,551; Param 363,778) against JavaScript's 870 in all: generating typescript.ts takes about
+ *  48 s and 2.7 GB, nearly all of it this. A few more optional items in Expr multiply it again.
+ *  The redesign (owed): match adjacencies over the expression structure (the items that can
+ *  follow an item) instead of over every expanded sequence. */
 const expansions = new WeakMap<RuleExpr, RuleExpr[][]>();
 export function expandArms(expr: RuleExpr): RuleExpr[][] {
   const hit = expansions.get(expr);
