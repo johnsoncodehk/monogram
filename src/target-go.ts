@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, rebindBrackets, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './emit.ts';
@@ -1409,12 +1409,16 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
 \t\tif operand >= 0 && ${beatsGo(d, 'p.pos', i)} { p.scratch = append(p.scratch, operand); best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, 'pbp.form', true, false)} } else { ${lost} }
 \t\tp.back(save)
 \t}`,
-    ledArm: (_i, cond, form, closes, exit, clean) => `{
+    ledArm: (_i, cond, form, closes, exit, clean, rebind) => `{
 \t\t\tledSave := p.pos; sb := len(p.scratch)${clean ? '' : '; nb := len(p.nodes); kb := len(p.kids)'}
 \t\t\tp.scratch = append(p.scratch, left)
 \t\t\tif ${cond} { left = ${fin}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
-\t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]${clean ? '' : '; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]'}${exit ? '; break LedLoop' : ''}
+\t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]${clean ? '' : '; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]'}${rebind ? `
+\t\t\tp.scratch = append(p.scratch, left)
+\t\t\tif ${rebind} { left = ${fin}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
+\t\t\tp.scratch = p.scratch[:sb]` : ''}${exit ? '; break LedLoop' : ''}
 \t\t}`,
+    rebind: (p) => `p.rebind(func() bool { return ${p.open} }, func() bool { return ${p.operand} }, ${p.sepLid}, func() bool { return ${p.sep} }, func() bool { return ${p.rest} })`,
     postfixToks: (kids) => `\t\tswitch t.Kid {
 ${kids.map((k) => `\t\tcase ${k}:
 \t\t\tif !tailClosed {
@@ -1798,6 +1802,44 @@ ${editParse}
 // are byte-identical to pre-addon emit; this block is appended only.
 
 /** The builder engine's arena checkpoint (Builder.Checkpoint). */
+// The mixfix operand re-bind (emit-portable.ts PrattRule.ledRebind), one method per engine form:
+// open, operand, sep and rest are a led's steps (its connector, its operand, L2, the rest), sepLid
+// is L2. It runs where the led failed, and undoes itself when it fails (mark / reset: the form's).
+// The cap is the token stream ending at the candidate: p.toks resliced, then put back.
+function rebindRuntimeGo(recv: string, ir: ParserIR, ids: LexIdPlan): string {
+  if (!hasRebind(ir)) return '';
+  const { opens, closes } = rebindBrackets(ids);
+  const any = (xs: number[]) => xs.map((x) => `l == ${x}`).join(' || ') || 'false';
+  const reset = (m: string) => (recv === 'engine' ? `p.reset(${m})` : `p.back(${m}.pos); p.scratch = p.scratch[:${m}.sb]; p.b.Restore(${m}.nb, ${m}.kb)`);
+  return `
+func (p *${recv}) rebind(open, operand func() bool, sepLid uint16, sep, rest func() bool) bool {
+\tm := p.mark()
+\tif open() {
+\t\ta := p.mark()
+\t\tif operand() && !sep() {
+\t\t\tg := p.pos
+\t\t\tdepth := 0
+\t\t\tfor i := a.pos; i < g; i++ {
+\t\t\t\tl := p.toks[i].Lid
+\t\t\t\tif ${any(opens)} {
+\t\t\t\t\tdepth++
+\t\t\t\t} else if ${any(closes)} {
+\t\t\t\t\tdepth--
+\t\t\t\t} else if depth == 0 && l == sepLid {
+\t\t\t\t\t${reset('a')}
+\t\t\t\t\tfull := p.toks
+\t\t\t\t\tp.toks = full[:i]
+\t\t\t\t\tok := operand()
+\t\t\t\t\tp.toks = full
+\t\t\t\t\tif ok && p.pos == i && sep() && rest() { return true }
+\t\t\t\t}
+\t\t\t}
+\t\t}
+\t}
+\t${reset('m')}
+\treturn false
+}`;
+}
 const arenaCkpt = () => 'nb, kb := p.b.Checkpoint()';
 /** Move the checkpoint past what was just built (the best alternative so far stays). */
 const arenaMark = () => 'nb, kb = p.b.Checkpoint()';
@@ -1972,12 +2014,16 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
 \t\tif ook && ${beatsGo(d, 'p.pos', i)} { if operand.present { p.scratch = append(p.scratch, operand.h) }; best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, 'pbp.form', true, false)} } else { ${lost} }
 \t\tp.back(save)
 \t}`,
-    ledArm: (_i, cond, form, closes, exit, clean) => `{
+    ledArm: (_i, cond, form, closes, exit, clean, rebind) => `{
 \t\t\tledSave := p.pos; sb := len(p.scratch)${clean ? '' : `; ${arenaCkpt()}`}
 \t\t\tp.scratch = append(p.scratch, left.h)
 \t\t\tif ${cond} { left = ${fin}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
-\t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]${clean ? '' : `; ${arenaRestore()}`}${exit ? '; break LedLoop' : ''}
+\t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]${clean ? '' : `; ${arenaRestore()}`}${rebind ? `
+\t\t\tp.scratch = append(p.scratch, left.h)
+\t\t\tif ${rebind} { left = ${fin}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
+\t\t\tp.scratch = p.scratch[:sb]` : ''}${exit ? '; break LedLoop' : ''}
 \t\t}`,
+    rebind: (p) => `p.rebind(func() bool { return ${p.open} }, func() bool { return ${p.operand} }, ${p.sepLid}, func() bool { return ${p.sep} }, func() bool { return ${p.rest} })`,
     postfixToks: (kids) => `\t\tswitch t.Kid {
 ${kids.map((k) => `\t\tcase ${k}:
 \t\t\tif !tailClosed {
@@ -2103,7 +2149,7 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 ${structFields}
 }
 
-${engineMarkGo(recv)}
+${engineMarkGo(recv)}${rebindRuntimeGo(recv, ir, ids)}
 ${pushLeafW}
 ${finishW}
 ${headLeafTextW}
@@ -3487,7 +3533,7 @@ func (p *engine) pushLeaf(ttId uint8, tokIdx uint32) {
 
 ${tokenSetRuntimeGo(ir, ids)}
 ${cursorGo(ir, ids)}
-${engineMarkGo('engine')}
+${engineMarkGo('engine')}${rebindRuntimeGo('engine', ir, ids)}
 // Wrap the scratch entries [sb:] as one node's children (flattened into kids); truncate scratch.
 // tokStart is the parse-consumption start (entry pos / leftmost operand), tokEnd is pos at finish.
 func (p *engine) finish(ruleId uint16, sb, fallbackOff, tokStart int) int32 {

@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, rebindBrackets, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './emit.ts';
@@ -1403,6 +1403,41 @@ ${headUse}        loop {
 }
 // A NUD that matched nothing: the state its frame leaves when no arm won (prattRule's nudClose).
 const NUD_FAIL_RS = 'return self.nud_none();';
+// The mixfix operand re-bind (emit-portable.ts PrattRule.ledRebind), one method: open, operand, sep
+// and rest are a led's steps (its connector, its operand, L2, the rest), sepLid is L2. It runs where
+// the led failed, and undoes itself when it fails. The cap is the token stream ending at the
+// candidate: the tail split off, then appended back (linear in the tail, on the failure path).
+// `dyn` so that one body serves every led (no copy per closure type).
+function rebindRuntimeRs(ir: ParserIR, ids: LexIdPlan): string {
+  if (!hasRebind(ir)) return '';
+  const { opens, closes } = rebindBrackets(ids);
+  const any = (xs: number[]) => xs.map((x) => `l == ${x}`).join(' || ') || 'false';
+  return `
+    fn rebind(&mut self, open: &mut dyn FnMut(&mut Self) -> bool, operand: &mut dyn FnMut(&mut Self) -> bool, sep_lid: u16, sep: &mut dyn FnMut(&mut Self) -> bool, rest: &mut dyn FnMut(&mut Self) -> bool) -> bool {
+        let s = self.pos; let ss = self.scratch.len(); let cs = self.b.checkpoint();
+        if open(self) {
+            let a = self.pos; let sa = self.scratch.len(); let ca = self.b.checkpoint();
+            if operand(self) && !sep(self) {
+                let g = self.pos;
+                let mut depth = 0i32;
+                for i in a..g {
+                    let l = self.toks[i].lid;
+                    if ${any(opens)} { depth += 1; }
+                    else if ${any(closes)} { depth -= 1; }
+                    else if depth == 0 && l == sep_lid {
+                        self.back(a); self.scratch.truncate(sa); self.b.restore(ca);
+                        let mut tail = self.toks.split_off(i);
+                        let ok = operand(self);
+                        self.toks.append(&mut tail);
+                        if ok && self.pos == i && sep(self) && rest(self) { return true; }
+                    }
+                }
+            }
+        }
+        self.back(s); self.scratch.truncate(ss); self.b.restore(cs);
+        false
+    }`;
+}
 function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
   const d = r.nudDispatch;
@@ -1472,12 +1507,16 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
       notSuppressed: (set) => `self.suppress_cur != ${set}`,
       ifAll: (parts) => (parts.length ? `if ${parts.join(' && ')} ` : ''),
     },
-    ledArm: (_i, cond, form, closes, exit, clean) => `{
+    ledArm: (_i, cond, form, closes, exit, clean, rebind) => `{
                 let led_save = self.pos; let sb = self.scratch.len();${clean ? '' : ' let ck = self.b.checkpoint();'}
                 self.scratch.push(left.h);
                 if ${cond} { left = ${fin}; form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
-                self.back(led_save); self.scratch.truncate(sb);${clean ? '' : ' self.b.restore(ck);'}${exit ? ' break;' : ''}
+                self.back(led_save); self.scratch.truncate(sb);${clean ? '' : ' self.b.restore(ck);'}${rebind ? `
+                self.scratch.push(left.h);
+                if ${rebind} { left = ${fin}; form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
+                self.scratch.truncate(sb);` : ''}${exit ? ' break;' : ''}
             }`,
+    rebind: (p) => `self.rebind(&mut |p: &mut Self| ${p.open}, &mut |p: &mut Self| ${p.operand}, ${p.sepLid}, &mut |p: &mut Self| ${p.sep}, &mut |p: &mut Self| ${p.rest})`,
     ledSwitch: (cases) => `            match t.lid {
 ${cases.map((c) => `                ${c.key} => {\n${c.arms.map((a) => `                ${a}`).join('\n')}\n                }`).join('\n')}
                 _ => {}
@@ -2415,7 +2454,7 @@ impl<'a, B: Builder> Parser<'a, B> {
     /// A NUD that matched nothing, from its commit switch: the state its frame leaves then (prattRule's nudClose).
     #[inline(always)]
     #[allow(dead_code)]
-    fn nud_none(&mut self) -> Option<Spanned<B::H>> { self.capped = false; self.form = 0; self.tail = false; None }
+    fn nud_none(&mut self) -> Option<Spanned<B::H>> { self.capped = false; self.form = 0; self.tail = false; None }${rebindRuntimeRs(ir, ids)}
     #[inline(always)]
     fn mark(&self) -> Mark { Mark { pos: self.pos, sb: self.scratch.len(), ck: self.b.checkpoint() } }
     /// Undo everything since m: the position (as back), the scratch list and the builder.
