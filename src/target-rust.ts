@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { blockBody, elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isList, isNum, isOpt, isRec, isRecList, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -62,9 +62,21 @@ const dispatchRsL = (t: string, opt: boolean): DispatchLowering => ({
 });
 const dispatchRs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, opt = false): string =>
   dispatchWalk(d, ids, arm, dispatchRsL(t, opt), opt);
+// A match arm's keys (numeric ids), a run of three or more consecutive ones as one range pattern
+// (Rust syntax; the same arm).
+const keysRs = (keys: string[]): string => {
+  const ks = keys.map(Number).sort((a, b) => a - b), out: string[] = [];
+  for (let i = 0; i < ks.length;) {
+    let j = i;
+    while (j + 1 < ks.length && ks[j + 1] === ks[j]! + 1) j++;
+    if (j - i >= 2) out.push(`${ks[i]}..=${ks[j]}`); else for (let k = i; k <= j; k++) out.push(String(ks[k]));
+    i = j + 1;
+  }
+  return out.join(' | ');
+};
 // A Commit's switch (emit-portable.ts commitWalk) over the buffered token t.
 const commitSwRs: CommitLowering = {
-  sw: (by, cases, dflt) => `        match t.${by} {\n${cases.map((c) => `        ${c.keys.join(' | ')} => {${c.stmt ? `\n${c.stmt}\n        ` : ''}}`).join('\n')}\n        _ => {${dflt ? `\n${dflt}\n        ` : ''}}\n        }`,
+  sw: (by, cases, dflt) => `        match t.${by} {\n${cases.map((c) => `        ${keysRs(c.keys)} => {${c.stmt ? `\n${c.stmt}\n        ` : ''}}`).join('\n')}\n        _ => {${dflt ? `\n${dflt}\n        ` : ''}}\n        }`,
   ifAll: ifRs,
   notAll: (conds) => `!(${conds.join(' && ')})`,
   pickDecl: '        let mut _c = 0u8;',
@@ -72,8 +84,9 @@ const commitSwRs: CommitLowering = {
   picked: (cases) => `        match _c {\n${cases.map((c) => `        ${c.n} => ${c.stmt}`).join('\n')}\n        _ => {}\n        }`,
 };
 // A committed candidate's statement: `body` when conds hold, then `fail` (unless body always returns).
+// With no condition the body's block is the statement's own (blockBody).
 const commitRs = (conds: string[], body: string, fail: string, returns = false) =>
-  `{ ${conds.length ? `if ${conds.join(' && ')} ${body.startsWith('{') ? body : `{ ${body} }`}` : body}${conds.length || !returns ? ` ${fail}` : ''} }`;
+  `{ ${conds.length ? `if ${conds.join(' && ')} ${body.startsWith('{') ? body : `{ ${body} }`}` : blockBody(body) ?? body}${conds.length || !returns ? ` ${fail}` : ''} }`;
 // Whether candidate i, just ended at pos, beats the best so far: it ends past it, or — a Dispatch
 // `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is kept only
 // in a list that has ranked candidates.
@@ -116,12 +129,14 @@ macro_rules! cand {
 /// nothing to undo, so none is taken) and the statement after the macro runs.
 #[allow(unused_macros)]
 macro_rules! commit {
+    ($p:ident, $rid:expr, $c:expr, $m:ident, nud $t:tt $cp:tt) => { commit!($p, $rid, $c, $m, { $p.form = 0; $p.tail = $t; $p.capped = $cp; }) };
     ($p:ident, $rid:expr, $c:expr, undo, { $($set:tt)* }) => {{ let m = $p.mark(); if $c { let n = $p.finish($rid, m.sb, $p.off_at(m.pos), m.pos); $($set)* return Some(n); } $p.reset(m); }};
     ($p:ident, $rid:expr, $c:expr, undo_ne, { $($set:tt)* }) => {{ let m = $p.mark(); if $c && $p.pos > m.pos { let n = $p.finish($rid, m.sb, $p.off_at(m.pos), m.pos); $($set)* return Some(n); } $p.reset(m); }};
     ($p:ident, $rid:expr, $c:expr, clean, { $($set:tt)* }) => {{ let save = $p.pos; let sb = $p.scratch.len(); if $c { let n = $p.finish($rid, sb, $p.off_at(save), save); $($set)* return Some(n); } }};
 }`;
-// A committed candidate's body in the building form: the \`commit!\` macro (as \`cand!\`: expanded in place).
-const commitBodyRs = (rid: number, cond: string, undo: boolean, nullable: boolean, set = '') => `commit!(self, ${rid}, ${cond}, ${nullable ? 'undo_ne' : undo ? 'undo' : 'clean'}, {${set}});`;
+// A committed candidate's body in the building form: the \`commit!\` macro (as \`cand!\`: expanded in place);
+// \`set\`: the statements after its node is made (\`nud <tail> <capped>\`: a NUD arm's state, spelled by the macro).
+const commitBodyRs = (rid: number, cond: string, undo: boolean, nullable: boolean, set = '{}') => `commit!(self, ${rid}, ${cond}, ${nullable ? 'undo_ne' : undo ? 'undo' : 'clean'}, ${set});`;
 // The typed-AST layer's form of a Guard over the token t: its parser keeps no lookahead mark, so
 // the second token is read directly. null: no guard.
 const astGuardRs = (g: Guard, t: string): string | null =>
@@ -281,10 +296,12 @@ function lidCall(lits: string[], bytes: string): string {
 }
 
 // One token at a dispatch site: the shared scanner says where it ends; the lexer records it.
-// A lexer error (relex-family.ts LexErr): recorded in the lexer's `err`, and the step ends the lex:
-// pos is the end of input, so the loop exits (with a type-parameter signature undecided, its head
-// rewinds it).
-const rsFail = (kind: string, off: string, end: string): string => `err = Some(LexErr { kind: ${kind}, off: ${off}, end: ${end} }); pos = n; continue;`;
+// A lexer error (relex-family.ts LexErr): recorded in the lexer's error (`at`: a local `err`, or
+// the element scan's field, which its loop head reads: a local there would be carried around every
+// iteration, +1.2% lex instructions on the TSX inputs, profile run 45113125143), and the step ends
+// the lex: pos is the end of input, so the loop exits (with a type-parameter signature undecided,
+// its head rewinds it).
+const rsFail = (at: string, kind: string, off: string, end: string): string => `${at} = Some(LexErr { kind: ${kind}, off: ${off}, end: ${end} }); pos = n; continue;`;
 const RS_LEX_ERR = `/// A lexer error (relex-family.ts LexErr): its kind, offset and end; lex_error spells its message.
 #[derive(Clone, Copy)]
 struct LexErr { kind: isize, off: isize, end: isize }
@@ -321,9 +338,9 @@ const RS_LEX_FN = `fn lex_all<'a>(src: &'a str) -> (Vec<Tok>, Option<LexErr>) {
     (toks, err)
 }
 `;
-const RS_UNEXPECTED = `        ${rsFail('0', 'pos as isize', 'pos as isize')}`;
+const rsUnexpected = (at: string): string => `        ${rsFail(at, '0', 'pos as isize', 'pos as isize')}`;
 
-function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
+function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>, errAt: string): string {
   const name = t.name;
   const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
   const kid = kidOf(ids, name);
@@ -337,7 +354,7 @@ function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: bo
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
   const ext = identLike.has(name) ? 'let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(b, e) } else { e }; ' : '';
   // An identifier whose escapes spell no IdentifierName is the lexer error -2 - e (lex-family.ts).
-  const escErr = identLike.has(name) ? ` if e < -1 { ${rsFail('1', 'pos as isize', '-2 - e')} }` : '';
+  const escErr = identLike.has(name) ? ` if e < -1 { ${rsFail(errAt, '1', 'pos as isize', '-2 - e')} }` : '';
   const scan = `{ let e = ${shared.scanner(name)}(src, pos as isize); if e >= 0 { let e = e as usize; ${ext}${push}pos = e; continue; }${escErr} }`;
   return rxTok !== undefined && name === rxTok ? `        if !st.prev_is_value() ${scan}` : `        ${scan}`;
 }
@@ -376,13 +393,13 @@ function rustMatchLabels(bytes: number[]): string {
 
 function buildLexCandidates(
   ir: ParserIR, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined,
-  punctLine: (p: string) => string,
+  punctLine: (p: string) => string, errAt: string,
 ): { codes: string[]; firsts: (LexFirstBytes | null)[] } {
   const identLike = new Set(ir.identLike);
   const codes: string[] = [];
   const firsts: (LexFirstBytes | null)[] = [];
   for (const t of shared.scannedTokens(ir)) {
-    codes.push(scanTok(ir, t, shared, stateful, ids, rxTok, identLike));
+    codes.push(scanTok(ir, t, shared, stateful, ids, rxTok, identLike, errAt));
     firsts.push(lexTokFirstBytes(t));
   }
   for (const p of ir.puncts) {
@@ -529,7 +546,7 @@ impl Spec {
     }
 }
 ` : '';
-  const struct = `struct ElScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, ${rxFields}template_stack: Vec<i64>, hot: bool, el_end_at: isize, ${rx ? 'value_to: isize, ' : ''}tag_angle: isize, la_end: isize, spec_until: isize, ${raw ? 'tag_at: Vec<i64>, ' : ''}${specFields}}
+  const struct = `struct ElScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, err: Option<LexErr>, ${rxFields}template_stack: Vec<i64>, hot: bool, el_end_at: isize, ${rx ? 'value_to: isize, ' : ''}tag_angle: isize, la_end: isize, spec_until: isize, ${raw ? 'tag_at: Vec<i64>, ' : ''}${specFields}}
 impl<'a> ElScan<'a> {
 ${methods}}
 ${spec}`;
@@ -594,7 +611,7 @@ ${p.uniIdentOrPanic}`;
 ${loopBody}
     }
     if !st.spec_on { break; }
-    st.spec_step(&mut sp); pos = st.spec_rewind(&mut sp, src, n, err.is_some()); err = None;
+    st.spec_step(&mut sp); pos = st.spec_rewind(&mut sp, src, n, st.err.is_some()); st.err = None;
     }` : `    while pos < n && (limit == 0 || st.acc.len() - base < limit) {
 ${loopBody}
     }`;
@@ -608,12 +625,11 @@ ${loopBody}
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
-    let mut err: Option<LexErr> = None;
     // el_end_at: the token count after the token that ended an element (-1: none)
-    let mut st = ElScan { acc, pending_nl, ${rxInit}template_stack, hot: false, el_end_at: if el_ended { base as isize } else { -1 }, ${rx ? 'value_to: -1, ' : ''}tag_angle, la_end, spec_until, ${raw ? 'tag_at, ' : ''}${specInit}};
+    let mut st = ElScan { acc, pending_nl, err: None, ${rxInit}template_stack, hot: false, el_end_at: if el_ended { base as isize } else { -1 }, ${rx ? 'value_to: -1, ' : ''}tag_angle, la_end, spec_until, ${raw ? 'tag_at, ' : ''}${specInit}};
     st.refresh();
 ${sig ? '    let mut sp = Spec { tok: 0, seen: 0, base: 0, closed: false, closed_at: 0, done: false, then: false, off: 0, end: 0, at: 0, has_at: false, keep: false, sv: (0, false, 0, 0, 0, 0, 0, false, false), sv_paren: Vec::new(), sv_stack: Vec::new() };\n' : ''}${loop}
-    ${rxOut}(pos, st.pending_nl, ${rxRet}st.template_stack, st.acc.len() as isize == st.el_end_at, st.tag_angle, st.la_end, st.spec_until${raw ? ', st.tag_at' : ''}, err)
+    ${rxOut}(pos, st.pending_nl, ${rxRet}st.template_stack, st.acc.len() as isize == st.el_end_at, st.tag_angle, st.la_end, st.spec_until${raw ? ', st.tag_at' : ''}, st.err)
 }
 ${RS_LEX_FN}/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer);
 /// the lexer error, if any.
@@ -709,6 +725,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const stateful = !!(rx || tpl || el);
   const newlineOnly = !!(nl && !rx && !tpl);
   const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
+  const errAt = el ? 'st.err' : 'err';
   // Byte-class dispatch folds whitespace/newline/template-open into the match's jump table so
   // the hot loop does one load + one match, instead of a chain of pre-checks per byte. Newline-mode
   // grammars keep the flow-aware whitespace arms (flow_depth) and do NOT use the folded arms.
@@ -716,7 +733,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const identTok0 = ir.tokens.find((t) => t.name === ir.identToken);
   const identLid0 = identTok0 ? lidCall(shared.tokenLiterals(ir, identTok0, ids.lids.slice(1)), '&b[pos..e]') : 'lid_of(&b[pos..e])';
   const nonAsciiColdCall = `        let (e, k) = _lex_non_ascii(src, pos);
-        if k == 2 { ${stateful ? `st.emit(pos, e, ${identKid0}, ${identLid0});` : `toks.push(mk_tok(pos, e, pending_nl, ${identKid0}, ${identLid0})); pending_nl = false;`} } else if k == 1 { ${nlVar} = true; } else if k == 3 { ${rsFail('0', 'pos as isize', 'pos as isize')} }
+        if k == 2 { ${stateful ? `st.emit(pos, e, ${identKid0}, ${identLid0});` : `toks.push(mk_tok(pos, e, pending_nl, ${identKid0}, ${identLid0})); pending_nl = false;`} } else if k == 1 { ${nlVar} = true; } else if k == 3 { ${rsFail(errAt, '0', 'pos as isize', 'pos as isize')} }
         pos = e; continue;
 `;
   const nonAsciiWsCheck = nlRs ? '' : `        if c >= 0xC2 { if let Some((ch, w)) = _char_at(src, pos) { if _is_js_ws(ch) { if ch == '\\u{2028}' || ch == '\\u{2029}' { ${nlVar} = true; } pos += w; continue; } } }
@@ -732,13 +749,13 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const elRefresh = el ? ' st.refresh();' : '';
   const tplLits = shared.templateLiterals(ir, ids.lids.slice(1));
   const tplOpenArm = tplOpenByte !== null ? `        ${tplOpenByte} => {
-            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl!.open)}, ${rx ? '!st.prev_is_value()' : 'true'}); if e < 0 { err = Some(_lex_tpl_err(e, n)); pos = n; continue; } let e = e as usize;
+            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl!.open)}, ${rx ? '!st.prev_is_value()' : 'true'}); if e < 0 { ${errAt} = Some(_lex_tpl_err(e, n)); pos = n; continue; } let e = e as usize;
             if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, ${lidCall(tplLits.head, '&b[pos..e]')}); st.template_stack.push(0);${elRefresh} } else { st.emit(pos, e, ${kidOf(ids, tpl!.token)}, ${lidCall(tplLits.whole, '&b[pos..e]')}); }
             pos = e; continue;
         }
 ` : '';
   const tplOpenPreCheck = tpl && tplOpenByte === null ? `        if ${startByteEq('pos', tpl.open)} {
-            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.open)}, ${rx ? '!st.prev_is_value()' : 'true'}); if e < 0 { err = Some(_lex_tpl_err(e, n)); pos = n; continue; } let e = e as usize;
+            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.open)}, ${rx ? '!st.prev_is_value()' : 'true'}); if e < 0 { ${errAt} = Some(_lex_tpl_err(e, n)); pos = n; continue; } let e = e as usize;
             if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, ${lidCall(tplLits.head, '&b[pos..e]')}); st.template_stack.push(0);${elRefresh} } else { st.emit(pos, e, ${kidOf(ids, tpl.token)}, ${lidCall(tplLits.whole, '&b[pos..e]')}); }
             pos = e; continue;
         }
@@ -750,7 +767,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const closeByte = tpl && closeFirst < 128 && !specialBytes.includes(closeFirst) ? closeFirst : null;
   const tplCloseTest = tpl ? `        if !st.template_stack.is_empty() && ${startByteEq('pos', tpl.interpClose)} && *st.template_stack.last().unwrap() == 0 {
             st.template_stack.pop();
-            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.interpClose)}, false); if e < 0 { err = Some(_lex_tpl_err(e, n)); pos = n; continue; } let e = e as usize;
+            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.interpClose)}, false); if e < 0 { ${errAt} = Some(_lex_tpl_err(e, n)); pos = n; continue; } let e = e as usize;
             if interp { st.emit(pos, e, ${kidOf(ids, "$templateMiddle")}, ${lidCall(tplLits.middle, '&b[pos..e]')}); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, "$templateTail")}, ${lidCall(tplLits.tail, '&b[pos..e]')}); }${elRefresh}
             pos = e; continue;
         }
@@ -764,7 +781,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   };
   const punctLine = (p: string) =>
     `        if ${startByteEq('pos', p)} { ${braceStep(p)}${stateful ? `st.emit(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${tlen(p)}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${tlen(p)}; continue; }`;
-  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
+  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine, errAt);
   // Where no candidate can begin at a non-ASCII byte, the byte is whitespace, an identifier or an
   // error: one cold call decides, so the dispatch loop holds no Unicode code (register layout).
   const nonAsciiCold = !nlRs && !!ir.identToken && buildLexDispatchPlan(lexFirsts).fallbackIndices.length === 0;
@@ -796,8 +813,8 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
     : `toks.push(mk_tok(pos, e, pending_nl, ${identKid}, ${identLid})); pending_nl = false;`;
   const uniIdentOrPanic = identName && !nonAsciiCold
     ? `        if c >= 0x80 { if let Some(e) = _scan_uni_ident(b, pos) { ${uniIdentEmit} pos = e; continue; } }
-${RS_UNEXPECTED}`
-    : RS_UNEXPECTED;
+${rsUnexpected(errAt)}`
+    : rsUnexpected(errAt);
   // The source is a &str, so the character at a position is std's own decode of it: one boundary
   // check and the character's bytes, none past it. None where pos is no character boundary.
   const lexUtf8Helpers = `${shared.scannedTokens(ir).some((t) => t.skip) ? RS_HAS_LINE_TERM : ''}#[inline(always)] fn _char_at(s: &str, pos: usize) -> Option<(char, usize)> {
@@ -960,8 +977,8 @@ ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
   // their capacity instead of allocating them again; each lex starts them empty. They travel
   // through lex_from by value: kept in the scan's own struct, the hot emit path keeps them in
   // registers, which a by-reference field costs about 14 instructions per token (Callgrind, CI:
-  // checker.ts lex 79.9M by value vs 84.7M by reference). The price: a lexer panic drops them, so
-  // the parse after one allocates them again (a few bytes, bounded by nesting depth).
+  // checker.ts lex 79.9M by value vs 84.7M by reference). A lexer error is returned, so they come
+  // back after one too.
   const stkFields = [rx ? 'paren_head: Vec<bool>' : '', tpl || el ? 'template_stack: Vec<i64>' : ''].filter(Boolean);
   const lexStacks = `/// The lexer's transient stacks (bracket heads, template depths), kept across lexes by a reused builder.
 #[derive(Default)]
@@ -1075,7 +1092,7 @@ ${loopBody}
       .replace(/pending_nl/g, 'st.pending_nl');
     const nlUniIdentOrPanic = identName
       ? rustNlScan(uniIdentOrPanic)
-      : RS_UNEXPECTED;
+      : rsUnexpected('err');
     const nlLoopBody = `        let c = b[pos] as u32;
 ${nlRs!.wsFrom}${rustNlScan(cascade)}
 ${nlUniIdentOrPanic}`;
@@ -1269,7 +1286,7 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
     openBest: (d) => `        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();\n        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(d)}`,
     cand: (d, i, cond) => candRs(d, i, cond, rid, markRs(d, i)),
     closeBest: '        self.pos = best_pos;\n        best',
-    commit: (_i, conds, cond, undo, nullable) => commitRs(conds, `{ ${commitBodyRs(rid, cond, undo, nullable)} }`, 'return None;'),
+    commit: (_i, conds, cond, undo, nullable) => commitRs(conds, commitBodyRs(rid, cond, undo, nullable), 'return None;'),
     commitFail: '{ return None; }',
   });
 }
@@ -1368,7 +1385,7 @@ ${headUse}        loop {
   });
 }
 // A NUD that matched nothing: the state its frame leaves when no arm won (prattRule's nudClose).
-const NUD_FAIL_RS = '{ return self.nud_none(); }';
+const NUD_FAIL_RS = 'return self.nud_none();';
 function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
   const d = r.nudDispatch;
@@ -1417,7 +1434,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node, form,
     // tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (_i, conds) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len(); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; let n = self.finish(${rid}, sb, t.off as usize, save); self.form = 0; self.tail = false; return Some(n); }`, NUD_FAIL_RS, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitRs(conds, `{ ${commitBodyRs(rid, cond, undo, nullable, ` self.form = 0; self.tail = ${tail}; self.capped = ${capped}; `)} }`, NUD_FAIL_RS),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitRs(conds, commitBodyRs(rid, cond, undo, nullable, `nud ${tail} ${capped}`), NUD_FAIL_RS),
     commitPrefix: (_i, conds) => commitRs(conds, `if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
             let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;

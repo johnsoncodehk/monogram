@@ -207,6 +207,23 @@ const declarationLists: { accept: string[]; reject: string[]; tscDeparts: string
   tscDeparts: ['var;', 'const;', 'var a,', 'var a,;', 'let a,;', 'const a = 1,;', 'var\n;'],
 };
 
+// ── `new` targets (13.3 MemberExpression) ──
+// After `new` comes a MemberExpression: a PrimaryExpression (`this`, a literal, an identifier that
+// is not a reserved word, an array or object literal, a function or class expression, a template,
+// a parenthesised expression), a SuperProperty, a MetaProperty, `new MemberExpression Arguments`,
+// or a member / private-member / tagged-template form of one. `new null()` and `new 1` are syntax
+// (they throw at run time); `new if()` and `new typeof x` have no derivation.
+const newTargets: { accept: string[]; reject: string[]; tscDeparts: string[] } = {
+  accept: [
+    'new this();', 'new this.x();', 'new null();', 'new true;', 'new 1;', 'new 0x1();', 'new "s";', 'new /r/g;', 'new `t`;',
+    'new [a];', 'new {a}.b();', 'new function () {}();', 'new function* () {};', 'new async function () {};', 'new (a, b)();',
+    'class A extends B { m() { new super.x(); new super[x](); } }', 'class A { #f; m() { new A.#f(); new this.#f.g(); } }',
+    'function f() { new new.target(); }', 'new a.b[c]`t`(1);', 'new new A()();', 'new class {}();',
+  ],
+  reject: ['new if();', 'new typeof x;', 'new a?.b();', 'new super();', 'new;', 'new class;', 'new x.y?.();'],
+  tscDeparts: ['new super();'],   // tsc parses a `super` call as a `new` callee and leaves it to the checker
+};
+
 // ── Class element words (15.7 ClassElement, MethodDefinition; decorators proposal) ──
 // `static`, `async`, `accessor`, `get` and `set` are the element's keyword only where the rest
 // of that production follows; elsewhere the word is the element's name. `static` and `get` /
@@ -327,8 +344,19 @@ for (const [want, codes] of [[true, declarationLists.accept], [false, declaratio
 console.log('\n── declaration lists and with ──');
 console.log(`  ${declarationLists.accept.length + declarationLists.reject.length - d_fail.length}/${declarationLists.accept.length + declarationLists.reject.length} as the productions (${declarationLists.tscDeparts.length} where tsc departs)`);
 for (const c of d_fail) console.log('    - ' + c);
-// Corpora 1, 2, the statement ends, the for heads, the class element words and the declaration
-// lists are hard gates.
+const n_fail: string[] = [];
+for (const [want, codes] of [[true, newTargets.accept], [false, newTargets.reject]] as const) {
+  for (const code of codes) {
+    const tscWant = newTargets.tscDeparts.includes(code) ? !want : want;
+    if (jsAccepts(code) !== tscWant) n_fail.push(`tsc JS-mode ${tscWant ? 'rejects' : 'accepts'} ${JSON.stringify(code)}: fix the case or tscDeparts`);
+    if (weAccept(code) !== want) n_fail.push(`we ${want ? 'reject' : 'accept'} ${JSON.stringify(code)}`);
+  }
+}
+console.log('\n── new targets ──');
+console.log(`  ${newTargets.accept.length + newTargets.reject.length - n_fail.length}/${newTargets.accept.length + newTargets.reject.length} as the productions (${newTargets.tscDeparts.length} where tsc departs)`);
+for (const c of n_fail) console.log('    - ' + c);
+// Corpora 1, 2, the statement ends, the for heads, the class element words, the declaration
+// lists and the new targets are hard gates.
 // ── Expected-fail: inputs the productions reject that the grammar accepts today, each with its
 // cause. The gate fails when one of them is rejected (remove it then) or tsc stops rejecting it.
 const expectedFail: { code: string; reason: string }[] = [
@@ -347,5 +375,5 @@ for (const { code, reason } of expectedFail) {
 console.log('\n── expected-fail ──');
 console.log(`  ${expectedFail.length} accepted although the productions reject them (${new Set(expectedFail.map((e) => e.reason)).size} cause(s))${x_fail.length ? '' : ', as recorded'}`);
 for (const c of x_fail) console.log('    - ' + c);
-const gateFailed = v_fail.length + r_leak.length + s_fail.length + f_fail.length + c_fail.length + d_fail.length + x_fail.length > 0;
+const gateFailed = v_fail.length + r_leak.length + s_fail.length + f_fail.length + c_fail.length + d_fail.length + n_fail.length + x_fail.length > 0;
 if (gateFailed) process.exit(1);

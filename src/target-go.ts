@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { blockBody, elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -70,12 +70,16 @@ const commitSwGo = (t: string): CommitLowering => ({
 type GoUndo = { take: string; undo: string; sb: string; save: string };
 const UNDO_GO: GoUndo = { take: 'm := p.mark()', undo: 'p.reset(m)', sb: 'm.sb', save: 'm.pos' };
 const undoGoWc = (recv: string): GoUndo => ({ take: `save := p.pos; sb := len(p.scratch); ${arenaCkpt()}`, undo: `p.back(save); ${lostGoW(recv)}`, sb: 'sb', save: 'save' });
+// The direct engine's node over a commit's extent (finish is not inlined: a helper around it
+// would add a call, measured by -gcflags=-m: over Go's inlining budget).
+const finGo = (rid: number) => (sb: string, save: string) => `p.finish(${rid}, ${sb}, p.offAt(${save}), ${save})`;
 const commitBodyGo = (cond: string, undo: GoUndo | null, nullable: boolean, fin: (sb: string, save: string) => string, ret: (n: string) => string) => (undo !== null
   ? `{ ${undo.take}; if ${cond}${nullable ? ` && p.pos > ${undo.save}` : ''} { ${ret(fin(undo.sb, undo.save))} }; ${undo.undo} }`
   : `{ save := p.pos; sb := len(p.scratch); if ${cond} { ${ret(fin('sb', 'save'))} } }`);
 // A committed candidate's statement: `body` when conds hold, then `fail` (unless body always returns).
+// With no condition the body's block is the statement's own (blockBody).
 const commitGo = (conds: string[], body: string, fail: string, returns = false) =>
-  `{ ${conds.length ? `if ${conds.join(' && ')} ${body.startsWith('{') ? body : `{ ${body} }`}` : body}${conds.length || !returns ? `; ${fail}` : ''} }`;
+  `{ ${conds.length ? `if ${conds.join(' && ')} ${body.startsWith('{') ? body : `{ ${body} }`}` : blockBody(body) ?? body}${conds.length || !returns ? `; ${fail}` : ''} }`;
 // Whether the candidate i that just ended at pos beats the best so far: it ends past it, or — a
 // Dispatch `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is
 // kept only in a list that has ranked candidates.
@@ -396,17 +400,19 @@ ${l.steps.map((e) => `\ti = ${e}\n\tif i < ${l.uniform} { return i }\n`).join(''
 `;
 }
 
-const GO_LEX_ERR = `// LexErr is a lexer error (relex-family.ts): its kind, offset and end; lexError spells its message.
-type LexErr struct { Kind, Off, End int }
+const GO_LEX_ERR = `// lexErr is a lexer error (relex-family.ts): its kind, offset and end; lexError spells its message.
+type lexErr struct { Kind, Off, End int }
 // lexTplErr is the lexer error of a template span (-1 unterminated, -2 - q an invalid escape at q).
-func lexTplErr(q, n int) *LexErr {
-\tif q == -1 { return &LexErr{Kind: 2, Off: n} }
-\treturn &LexErr{Kind: 3, Off: -2 - q}
+func lexTplErr(q, n int) *lexErr {
+\tif q == -1 { return &lexErr{Kind: 2, Off: n} }
+\treturn &lexErr{Kind: 3, Off: -2 - q}
 }
 `;
-// A lexer error (relex-family.ts LexErr): recorded, and the step ends the lex: pos is the end of
-// input, so the loop exits (with a type-parameter signature undecided, its head rewinds it).
-const goFail = (kind: string, off: string, end: string): string => `err = &LexErr{Kind: ${kind}, Off: ${off}, End: ${end}}; pos = n; continue`;
+// A lexer error (relex-family.ts LexErr): recorded, and the lex ends: a jump to the loop's exit,
+// `lexFail` (with a type-parameter signature undecided, the exit returns to the loop, whose head
+// rewinds it). Go: an error path that continued the loop would carry err around every iteration
+// (a loop phi); the jump leaves the loop's own state as it was.
+const goFail = (kind: string, off: string, end: string): string => `err = &lexErr{Kind: ${kind}, Off: ${off}, End: ${end}}; goto lexFail`;
 
 // One token at a dispatch site: the shared scanner, spliced in, says where it ends; the lexer
 // records it.
@@ -516,7 +522,7 @@ ${refreshFn}\t// Each token the speculation lexes, read at the next loop head (a
 \tspecRewind := func() int {
 \t\tkeep := specDone && err == nil && specThen
 \t\tre := n + 1
-\t\tif specDone && err == nil { re = ${shared.elementFn('reach')}(src, specEnd) }
+\t\tif specDone && !failed { re = ${shared.elementFn('reach')}(src, specEnd) }
 \t\tif re > laEnd { laEnd = re }
 \t\tif keep { specUntil = specOff }
 \t\tspecAt = svPos; specKeep = keep
@@ -525,7 +531,7 @@ ${refreshFn}\t// Each token the speculation lexes, read at the next loop head (a
 \t\tlastClose = svLastClose; lastBang = svLastBang; elEndAt = svElEndAt; tagAngle = svAngle
 \t\tparenHead = append(parenHead[:0], svParen...)
 \t\ttemplateStack = append(templateStack[:0], svStack...)
-\t\tspecTok = -1; specClosedAt = -1; specDone = false; err = nil
+\t\tspecTok = -1; specClosedAt = -1; specDone = false
 \t\trefresh()
 \t\treturn svPos
 \t}
@@ -603,7 +609,7 @@ ${raw ? `\t\tif len(templateStack) > 0 && templateStack[len(templateStack)-1] ==
   // lexer's. A speculation lexes past the token limit to its verdict (the limit is tested first); one
   // that reaches the end of the input (or a lexer error, its verdict) is rewound after the loop.
   const loopBody = `\t\tif hot {
-${sig ? '\t\tif specTok >= 0 && specStep() { pos = specRewind(); continue }\n' : ''}${frameStep}\t\t}
+${sig ? '\t\tif specTok >= 0 && specStep() { pos = specRewind(false); continue }\n' : ''}${frameStep}\t\t}
 \t\tc := int(src[pos])
 ${p.nlWs}${pre}${cascade}
 ${p.uniIdentFallbackGo}${p.loopPanicGo}`;
@@ -611,23 +617,26 @@ ${p.uniIdentFallbackGo}${p.loopPanicGo}`;
 ${loopBody}
 \t}
 `;
-  const loop = sig ? `\tfor {
+  // A lexer error jumps to lexFail (goFail); with a signature undecided it is the verdict.
+  const loop = sig ? `lexLoop:
+\tfor {
 ${inner}\tif specTok < 0 { break }
-\tspecStep(); pos = specRewind()
+\tspecStep(); pos = specRewind(false)
 \t}
 ` : inner;
   return `${p.head}${consts}${p.scans}func lexFrom(src string, pos int, pendingNl bool, ${rxParams}templateStack []int, elEnded bool, tagAngle, laEnd, specUntil int, ${raw ? 'tagAt []int, ' : ''}acc *[]Tok, limit int) (int, bool, ${rxRet}[]int, bool, int, int, int${raw ? ', []int' : ''}, *LexErr) {
 \tn := len(src)
-\tvar err *LexErr
+\tvar err *lexErr
 ${hotState}${prevIsValue}${sig ? '' : refreshFn}${specState}${emitFn}\tbase := len(*acc)
-${loop}\treturn pos, pendingNl, ${rxNames}templateStack, len(*acc) == elEndAt, tagAngle, laEnd, specUntil${raw ? ', tagAt' : ''}, err
+${loop}lexFail:
+${sig ? '\tif specTok >= 0 { specStep(); pos = specRewind(err != nil); err = nil; goto lexLoop }\n' : ''}\treturn pos, pendingNl, ${rxNames}templateStack, len(*acc) == elEndAt, tagAngle, laEnd, specUntil${raw ? ', tagAt' : ''}, err
 }
-func lexAll(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
+func lexAll(src string) ([]Tok, *lexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
-func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *LexErr) {
+func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *lexErr) {
 \tout := buf[:0]
-\tvar err *LexErr
+\tvar err *lexErr
 \t_, _, ${rxBlank}stk.templateStack, _, _, _, _${raw ? ', _' : ''}, err = lexFrom(src, 0, false, ${rxInit}stk.templateStack[:0], false, 0, 0, 0, ${raw ? 'nil, ' : ''}&out, 0)
 \treturn out, err
 }`;
@@ -808,7 +817,7 @@ ${emitHooks}
   // The element lexer keeps whether the frame stack's top has work (its refresh).
   const elRefresh = ir.elements ? 'refresh(); ' : '';
   const tplSpanGo = (from: string, strict: string): string => `\t\t\tq := ${shared.tplSpan()}(src, ${from}, ${strict})
-\t\t\tif q < 0 { err = lexTplErr(q, n); pos = n; continue }
+\t\t\tif q < 0 { err = lexTplErr(q, n); goto lexFail }
 \t\t\tinterp, e := strings.HasPrefix(src[q:], ${J(tpl!.interpOpen)}), q + ${tlen(tpl!.open)}
 \t\t\tif interp { e = q + ${tlen(tpl!.interpOpen)} }
 `;
@@ -925,114 +934,120 @@ type lexStacks struct {${stkFields ? `\n${stkFields}` : ''}}
 ${GO_LEX_ERR}`;
   if (el) return elementLexerGo(ir, ids, shared, { head: `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}`, scans, rxStateFrom, nlWs, lexCodes, lexFirsts, tplCloseTest, tplOpenTest, uniIdentFallbackGo, loopPanicGo, goBoolArr });
   if (rxOnly) {
-    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool, *LexErr) {
+    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool, *lexErr) {
 \tn := len(src)
-\tvar err *LexErr
+\tvar err *lexErr
 ${rxStateFrom}${emitRxOnly}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
 ${loopBody}
 \t}
+lexFail:
 \treturn pos, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang, err
 }
-func lexAll(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
+func lexAll(src string) ([]Tok, *lexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
-func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *LexErr) {
+func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *lexErr) {
 \tout := buf[:0]
-\tvar err *LexErr
+\tvar err *lexErr
 \t_, _, _, _, _, _, _, stk.parenHead, _, _, err = lexFrom(src, 0, false, 0, 0, 0, false, false, stk.parenHead[:0], false, false, &out, 0)
 \treturn out, err
 }`;
   }
   if (tplOnly) {
-    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, templateStack []int, acc *[]Tok, limit int) (int, bool, []int, *LexErr) {
+    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, templateStack []int, acc *[]Tok, limit int) (int, bool, []int, *lexErr) {
 \tn := len(src)
-\tvar err *LexErr
+\tvar err *lexErr
 ${emitTplOnly}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
 ${loopBody}
 \t}
+lexFail:
 \treturn pos, pendingNl, templateStack, err
 }
-func lexAll(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
+func lexAll(src string) ([]Tok, *lexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
-func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *LexErr) {
+func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *lexErr) {
 \tout := buf[:0]
-\tvar err *LexErr
+\tvar err *lexErr
 \t_, _, stk.templateStack, err = lexFrom(src, 0, false, stk.templateStack[:0], &out, 0)
 \treturn out, err
 }`;
   }
   if (rxTpl) {
-    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, templateStack []int, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool, []int, *LexErr) {
+    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, templateStack []int, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool, []int, *lexErr) {
 \tn := len(src)
-\tvar err *LexErr
+\tvar err *lexErr
 ${rxStateFrom}${emitRxTpl}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
 ${loopBody}
 \t}
+lexFail:
 \treturn pos, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang, templateStack, err
 }
-func lexAll(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
+func lexAll(src string) ([]Tok, *lexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
-func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *LexErr) {
+func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *lexErr) {
 \tout := buf[:0]
-\tvar err *LexErr
+\tvar err *lexErr
 \t_, _, _, _, _, _, _, stk.parenHead, _, _, stk.templateStack, err = lexFrom(src, 0, false, 0, 0, 0, false, false, stk.parenHead[:0], false, false, stk.templateStack[:0], &out, 0)
 \treturn out, err
 }`;
   }
   if (rxOrTpl) {
-    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexAll(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
+    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexAll(src string) ([]Tok, *lexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
-func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *LexErr) {
+func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *lexErr) {
 \ttoks := buf[:0]
 \tn := len(src)
 \tpos := 0
 \tpendingNl := false
 \t_ = pendingNl
-\tvar err *LexErr
+\tvar err *lexErr
 ${rxState}${tplState}${nlState}${emitFn}${pushTokFn}\tfor pos < n {
 ${loopBody}
 \t}
+lexFail:
 ${rx ? '\tstk.parenHead = parenHead\n' : ''}${tpl ? '\tstk.templateStack = templateStack\n' : ''}\treturn toks, err
 }`;
   }
   if (newlineOnly) {
-    return `${idTables}${lexStacks}${lexGoHelpers}${scans}func lexFrom(src string, pos int, pendingNl bool, flowDepth int, acc *[]Tok, limit int) (int, bool, int, *LexErr) {
+    return `${idTables}${lexStacks}${lexGoHelpers}${scans}func lexFrom(src string, pos int, pendingNl bool, flowDepth int, acc *[]Tok, limit int) (int, bool, int, *lexErr) {
 \tn := len(src)
-\tvar err *LexErr
+\tvar err *lexErr
 ${nlStateFrom}${pushTokAccFn}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
 ${loopBody}
 \t}
+lexFail:
 \treturn pos, pendingNl, flowDepth, err
 }
-func lexAll(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
+func lexAll(src string) ([]Tok, *lexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
-func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *LexErr) {
+func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *lexErr) {
 \tout := buf[:0]
 \t_, _, _, err := lexFrom(src, 0, false, 0, &out, 0)
 \treturn out, err
 }`;
   }
-  return `${idTables}${lexStacks}${lexGoHelpers}${scans}func lexFrom(src string, pos int, pendingNl bool, acc *[]Tok, limit int) (int, bool, *LexErr) {
+  return `${idTables}${lexStacks}${lexGoHelpers}${scans}func lexFrom(src string, pos int, pendingNl bool, acc *[]Tok, limit int) (int, bool, *lexErr) {
 \tn := len(src)
-\tvar err *LexErr
+\tvar err *lexErr
 ${pushTokAccFn}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
 ${loopBody}
 \t}
+lexFail:
 \treturn pos, pendingNl, err
 }
-func lexAll(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
+func lexAll(src string) ([]Tok, *lexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
-func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *LexErr) {
+func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *lexErr) {
 \tout := buf[:0]
 \t_, _, err := lexFrom(src, 0, false, &out, 0)
 \treturn out, err
@@ -1098,12 +1113,15 @@ ${recv === 'engine'
   ? `func (p *engine) mark() mark { return mark{p.pos, len(p.scratch), len(p.nodes), len(p.kids)} }
 func (p *engine) reset(m mark) { p.back(m.pos); p.scratch = p.scratch[:m.sb]; p.nodes = p.nodes[:m.nb]; p.kids = p.kids[:m.kb] }
 // nudNone: a NUD that matched nothing, from its commit switch: the state its frame leaves then.
-func (p *engine) nudNone() int32 { p.capped = false; p.form = 0; p.tail = false; return -1 }`
+func (p *engine) nudNone() int32 { p.capped = false; p.form = 0; p.tail = false; return -1 }
+// nudOk: a committed NUD arm's node n, with the state its frame leaves for it (inlined).
+func (p *engine) nudOk(n int32, tail, capped bool) int32 { p.form = 0; p.tail = tail; p.capped = capped; return n }`
   // Written so that it fits Go's inlining budget (cost 77 of 80). A reset method around the
   // builder's Restore cannot (cost 86 and more with every form tried), and a call where the undo
   // was inline would be added work on every failed branch, so the undo stays printed in place.
   : `func (p *${recv}) mark() (m mark) { m.nb, m.kb = p.b.Checkpoint(); m.pos, m.sb = p.pos, len(p.scratch); return }
-func (p *${recv}) nudNone() (spanned, bool) { p.capped = false; p.form = 0; p.tail = false; return spanned{}, false }`}`;
+func (p *${recv}) nudNone() (spanned, bool) { p.capped = false; p.form = 0; p.tail = false; return spanned{}, false }
+func (p *${recv}) nudOk(n spanned, tail, capped bool) (spanned, bool) { p.form = 0; p.tail = tail; p.capped = capped; return n, true }`}`;
 }
 // '>'-led composite operators (LexIdPlan.gtComps): the lexer scans every '>' alone. gtOp reads the
 // operator at ts[i]: a lone '>' extends over each adjacent single-character punct token after it
@@ -1173,7 +1191,7 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
     cand: (d, i, cond) => candGo(d, i, cond, `best = ${fin}; bestPos = p.pos;${markGo(d, i)} nb = len(p.nodes); kb = len(p.kids)`, lostGo),
     closeBest: '\tp.pos = bestPos\n\treturn best',
     commitPeek: '\t_ft := p.peek()',
-    commit: (_i, conds, cond, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, (sb, save) => `p.finish(${ruleIdOf(ar, r.name)}, ${sb}, p.offAt(${save}), ${save})`, (n) => `return ${n}`), 'return -1'),
+    commit: (_i, conds, cond, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, finGo(ruleIdOf(ar, r.name)), (n) => `return ${n}`), 'return -1'),
     commitFail: '{ return -1 }',
   });
 }
@@ -1327,7 +1345,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node, form,
     // tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (_i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; n := p.finish(${rid}, sb, int(t.Off), save); p.form = 0; p.tail = false; return n }`, fail, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, (sb, save) => `p.finish(${rid}, ${sb}, p.offAt(${save}), ${save})`, (n) => `n := ${n}; p.form = 0; p.tail = ${tail}; p.capped = ${capped}; return n`), fail),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, finGo(rid), (n) => `return p.nudOk(${n}, ${tail}, ${capped})`), fail),
     commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \t\tp.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
@@ -1444,9 +1462,9 @@ var post_${r.name} = [${ops.size}]postOp{${post}}`;
 // The relex of an edit (both Docs). A lexer error in the relex is the text's own (the relexed
 // stream equals a fresh lex: relex-family.ts): the text is rejected with no token stream, after
 // `clear` empties what the Doc keeps of its tree.
-const goEditBody = (clear: string, treeEq: boolean) => `\ttext, toks, relexed, lexErr := relexEdits(oldText, oldToks, edits)
+const goEditBody = (clear: string, treeEq: boolean) => `\ttext, toks, relexed, lerr := relexEdits(oldText, oldToks, edits)
 \td.text = text
-\tif lexErr != nil {
+\tif lerr != nil {
 \t\td.text = applyEdits(oldText, edits)
 ${clear}
 \t\td.toks = nil
@@ -1807,7 +1825,7 @@ func newDocCst(src string, b *CstBuilder) *Doc {
 	d := &Doc{text: src, b: b}
 	defer d.publish()
 	var toks []Tok
-	var err *LexErr
+	var err *lexErr
 	d.toks, toks, err = scanMetaToks(src)
 	if err != nil { panic(lexError(src, err)) }
 	// The arena grows as the parse fills it, as in ParseWith and in every target: a node or kid count
@@ -1982,7 +2000,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
   const L: PrattLowering = {
     ...B,
     commitLeaf: (_i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; n := p.finishW(${rid}, sb, int(t.Off), save); p.form = 0; p.tail = false; return n, true }`, fail, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? undoGoWc(recv) : null, nullable, (sb, save) => `p.finishW(${rid}, ${sb}, p.offAt(${save}), ${save})`, (n) => `n := ${n}; p.form = 0; p.tail = ${tail}; p.capped = ${capped}; return n, true`), fail),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? undoGoWc(recv) : null, nullable, (sb, save) => `p.finishW(${rid}, ${sb}, p.offAt(${save}), ${save})`, (n) => `return p.nudOk(${n}, ${tail}, ${capped})`), fail),
     commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
@@ -2661,7 +2679,7 @@ func NewDocWith(src string, b Builder) Document {
 
 func newDocWith(src string, b Builder) *DocWith {
 	d := &DocWith{text: src, b: b}
-	var err *LexErr
+	var err *lexErr
 	d.toks, err = ${initToks}
 	if err != nil { panic(lexError(src, err)) }
 	${topReuse ? 'h, entries, entryHs, ok' : 'h, _, _, ok'} := parseWithMetaW(src, d.toks, b)
@@ -3084,7 +3102,11 @@ const goBlock = (lines: string[]): string[] => lines.map((l) => GO_IND + l);
 
 // Shared-algorithm lowering: explicit conversions, slices; a list with an exact final length is
 // made with that capacity, any other list grows by append (no estimate is reserved: 6183a29).
-const goType = (t: Ty): string => (isRecList(t) ? `[]${recName(t)}` : isRec(t) ? recName(t) : isOpt(t) ? `*${recName(t)}` : GO_TYPES[t]);
+// Go: a type's export is its spelling, so a record outside the package API (the Doc's EntryMeta
+// and Seg are in it) is spelled unexported.
+const GO_API_RECORDS = new Set(['EntryMeta', 'Seg']);
+const goRec = (r: string): string => (GO_API_RECORDS.has(r) ? r : r[0]!.toLowerCase() + r.slice(1));
+const goType = (t: Ty): string => (isRecList(t) ? `[]${goRec(recName(t))}` : isRec(t) ? goRec(recName(t)) : isOpt(t) ? `*${goRec(recName(t))}` : GO_TYPES[t]);
 // A Go string literal; Go rejects a byte order mark inside a source file, so it is an escape.
 const goLit = (v: string): string => JSON.stringify(v).replace(/\ufeff/g, '\\uFEFF');
 const goLowering: Lowering = {
@@ -3234,12 +3256,12 @@ ${[...ones, ...wides].join('\n')}
   record: {
     field: (cx, r, _rec, f, ty, nat) => cx.atom(`${goWrap(r, ATOM)}.${exported(f)}`, ty, nat),
     setField: (id, f, val) => [`${id}.${exported(f)} = ${val}`],
-    make: (cx, rec, fs) => cx.atom(`${rec}{${fs.map(([f, v]) => `${exported(f)}: ${v}`).join(', ')}}`, `rec_${rec}`, `rec_${rec}`, { owned: true }),
-    refType: (rec) => `*${rec}`,
+    make: (cx, rec, fs) => cx.atom(`${goRec(rec)}{${fs.map(([f, v]) => `${exported(f)}: ${v}`).join(', ')}}`, `rec_${rec}`, `rec_${rec}`, { owned: true }),
+    refType: (rec) => `*${goRec(rec)}`,
     refArg: (r) => `&${r.c}`,
     extend: (_cx, l, from) => [`${l} = append(${l}, ${from.c}...)`],
     // A typed nil: it declares a local (:=) of the optional's type.
-    none: (cx, rec) => cx.atom(`(*${rec})(nil)`, `opt_${rec}`, `opt_${rec}`),
+    none: (cx, rec) => cx.atom(`(*${goRec(rec)})(nil)`, `opt_${rec}`, `opt_${rec}`),
     some: (cx, rec, r) => cx.atom(`&${goWrap(r, ATOM)}`, `opt_${rec}`, `opt_${rec}`),
     isSome: (_cx, r) => ({ c: `${goWrap(r, 4)} != nil`, prec: 3 }),
   },
@@ -3354,7 +3376,7 @@ type LexError struct {
 func (e *LexError) Error() string { return e.Msg }
 
 // lexError is the LexError of the lexer's error e in src.
-func lexError(src string, e *LexErr) *LexError {
+func lexError(src string, e *lexErr) *LexError {
 \tswitch e.Kind {
 \tcase 0:
 \t\tr, _ := utf8.DecodeRuneInString(src[e.Off:])
