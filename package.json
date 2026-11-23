@@ -11,7 +11,7 @@
     "./grammars/html": "./html.ts"
   },
   "scripts": {
-    "gen": "node src/cli.ts typescript.ts && node src/cli.ts javascript.ts && node src/cli.ts typescriptreact.ts && node src/cli.ts javascriptreact.ts && node src/cli.ts html.ts && node src/cli.ts yaml.ts",
+    "gen": "node src/cli.ts typescript.ts && node src/cli.ts javascript.ts && node src/cli.ts typescriptreact.ts && node src/cli.ts javascriptreact.ts && node src/cli.ts html.ts && node src/cli.ts yaml.ts && node test/tm-completeness.ts --gen && node --stack-size=7000 test/decision-report.ts --gen",
     "test": "node test/check.ts",
     "check": "node test/check.ts",
     "gate:generative": "node test/generative.ts",
@@ -46,8 +46,6 @@
     "ledger": "node test/gap-ledger.ts --write",
     "ledger:check": "node test/gap-ledger.ts --check",
     "completeness": "node test/tm-completeness.ts",
-    "completeness:check": "node test/tm-completeness.ts --check",
-    "completeness:write": "node test/tm-completeness.ts --write",
     "completeness:mutation": "node test/tm-mutation.ts",
     "ledger:issues": "node test/gap-issues.ts",
     "ledger:issues:dry": "node test/gap-issues.ts --dry-run",

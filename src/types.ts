@@ -50,6 +50,8 @@ export interface TokenDecl {
                                  // Unicode-identifier fallback and regex division-after context.
   identifierPrefix?: string;     // a prefixed-identifier token (e.g. `#name`): the engine's Unicode
                                  // ID fallback also matches `<prefix>`+non-ASCII-identifier under this name.
+  identifierClasses?: IdentifierClasses; // on the identifier token: the language's Unicode identifier
+                                 // characters (uni-ident.ts); absent: ECMAScript's.
   template?: TemplateDelimiters; // a template-literal token: engine tokenizes interpolation holes.
   regexContext?: RegexContext;   // a `regex`-flagged token: when `/` is a regex vs division.
   string?: boolean;              // a string-literal token: its delimiters drive editor auto-close/surround.
@@ -82,6 +84,14 @@ export interface StringInterpolation {
   contentScope?: string;  // body / container scope (without language suffix)
   include?: string;       // TextMate include inside the body (default '$self')
 }
+
+/**
+ * The Unicode identifier characters of a language, as two RegExp character classes evaluated
+ * with the `u` flag (`\p{…}` properties allowed): `start` begins an identifier, `continue`
+ * extends one (a superset of `start`). ECMAScript's are `[$_\p{ID_Start}]` and
+ * `[$\u200c\u200d\p{ID_Continue}]`; Python's `[_\p{XID_Start}]` and `[\p{XID_Continue}]`.
+ */
+export interface IdentifierClasses { start: string; continue: string }
 
 /** Delimiters an interpolated template literal is made of (e.g. JS: `` ` ``, `${`, `}`). */
 export interface TemplateDelimiters {
