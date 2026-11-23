@@ -413,26 +413,71 @@ function planContextualWords(grammar: CstGrammar, graph: TsLeafGraph, word: stri
   isWordLiteral: (text: string) => boolean): ContextualPlan {
   // The words a guard before each word step excludes (reservedGuardWords), keyed by the step's node.
   const exclOf = new Map<RuleExpr, Set<string>>();
+  const exclude = (node: RuleExpr, ws: Iterable<string>) => { const s = exclOf.get(node) ?? exclOf.set(node, new Set()).get(node)!; for (const w of ws) s.add(w); };
+  // A step that is a whole alternative by itself (zero-width guards, then the word token) never reads a
+  // keyword K that an EARLIER alternative of the same choice always matches alone (`'K'`, or `'K'`
+  // with only optional parts after it): the interpreter's choice keeps the earlier one, by longest
+  // match (it is at least as long; a tie goes to the earlier) or by ordered choice (it matches first).
+  // So `this` / `true` / … listed before the identifier atom are never an identifier there. A node
+  // the grammar shares between several places is shadowed only by what every place shadows, and not
+  // at all when one of its places is no such alternative.
+  const shadowedAt = new Map<RuleExpr, Map<RuleExpr, Set<string>>>();
+  const parents = new Map<RuleExpr, Set<RuleExpr>>();
+  const noteParent = (child: RuleExpr, parent: RuleExpr) => { const c = tsView(child); (parents.get(c) ?? parents.set(c, new Set()).get(c)!).add(parent); };
+  const wordStep = (e: RuleExpr): RuleExpr | null => {
+    const v = tsView(e);
+    if (v.type === 'ref') return v.name === word && v.hole === undefined ? v : null;
+    if (v.type !== 'seq' || !v.items.length) return null;
+    const last = tsView(v.items[v.items.length - 1]);
+    return last.type === 'ref' && last.name === word && v.items.slice(0, -1).every(i => ASSERTION_KINDS.has(tsView(i).type)) ? last : null;
+  };
+  const matchesWordAlone = (e: RuleExpr): string[] => {
+    const v = tsView(e);
+    if (v.type === 'literal') return isWordLiteral(v.value) ? [v.value] : [];
+    if (v.type === 'alt') return v.items.flatMap(matchesWordAlone);
+    if (v.type !== 'seq' || !v.items.length) return [];
+    const first = tsView(v.items[0]);
+    const optionalRest = v.items.slice(1).every(i => { const t = tsView(i); return t.type === 'quantifier' && t.kind !== '+'; });
+    return first.type === 'literal' && isWordLiteral(first.value) && optionalRest ? [first.value] : [];
+  };
   const seen = new Set<RuleExpr>();
   const markGuards = (e: RuleExpr): void => {
     e = tsView(e);
     if (seen.has(e)) return;
     seen.add(e);
+    if (e.type === 'seq' || e.type === 'alt') for (const i of e.items) noteParent(i, e);
+    else if (e.type === 'quantifier') noteParent(e.body, e);
+    else if (e.type === 'sep') noteParent(e.element, e);
     if (e.type === 'seq') {
       e.items.forEach((item, i) => {
         if (item.type !== 'not') return;
         let j = i + 1;
         while (j < e.items.length && ASSERTION_KINDS.has(tsView(e.items[j]).type)) j++;
         const ws = reservedGuardWords(item, e.items[j], word, isWordLiteral);
-        if (ws) exclOf.set(tsView(e.items[j]), new Set(ws));
+        if (ws) exclude(tsView(e.items[j]), ws);
       });
       e.items.forEach(markGuards);
-    } else if (e.type === 'alt') e.items.forEach(markGuards);
-    else if (e.type === 'quantifier') markGuards(e.body);
+    } else if (e.type === 'alt') {
+      const earlier = new Set<string>();
+      for (const item of e.items) {
+        const step = wordStep(item);
+        if (step) (shadowedAt.get(step) ?? shadowedAt.set(step, new Map()).get(step)!).set(e, new Set(earlier));
+        for (const w of matchesWordAlone(item)) earlier.add(w);
+      }
+      e.items.forEach(markGuards);
+    } else if (e.type === 'quantifier') markGuards(e.body);
     else if (e.type === 'sep') markGuards(e.element);
   };
   for (const r of grammar.rules) markGuards(r.body);
   for (const b of collectTsSharedRules(grammar).values()) markGuards(b);
+  for (const [step, byAlt] of shadowedAt) {
+    // The step's places: its choices directly, or through the one guard sequence that holds it.
+    const ps = [...parents.get(step) ?? []];
+    const places = ps.length === 1 && ps[0].type === 'seq' ? [...parents.get(ps[0]) ?? []] : ps;
+    if (!places.length || !places.every(p => byAlt.has(p))) continue;
+    const sets = places.map(p => byAlt.get(p)!);
+    exclude(step, [...sets[0]].filter(w => sets.every(s => s.has(w))));
+  }
   const steps: number[] = [];
   for (let l = 0; l < graph.sym.length; l++) if (graph.sym[l] === word && graph.nt[l] < 0) steps.push(l);
   const isStep = new Uint8Array(graph.sym.length);
