@@ -3403,6 +3403,8 @@ export const goTarget = defineParserTarget({
   lowering: goLowering,
   emitParser(grammar: CstGrammar, shared: SharedAlgorithms, opts: EmitOptions): string {
     const ir = portableIR(grammar, FACTS);
+    // A shape-building parser needs Lowering.shape, which this target does not have yet: refused.
+    if (opts.shape) shared.shapeFamily(shared.shapePlan(opts.shape, ir));
     const ids = buildLexIdPlan(ir);
     const lexText = lexer(ir, ids, shared);
     const ar = buildArenaIdPlan(ir, ids);
