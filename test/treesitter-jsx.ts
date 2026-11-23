@@ -77,6 +77,15 @@ const LOOKAHEADS = [
   'for (let [a] of b);', 'for ([a] of b);', 'for ({a} of b);', 'for (let in a);', 'for (let of a);', 'for (async of a);', 'try {}', 'try {} finally {}',
 ];
 
+// Block comments: two comments with code between them are two comments (tree-sitter's lexer takes the
+// longest token, so a comment token must not run past its first `*/`), beside the near misses a
+// comment that swallowed code would accept.
+const COMMENTS = [
+  '/** a */\ninterface P {\n    /** b */\n}', '/* a */\nclass P {\n    /* b */\n}', '/** a */\nfunction f() {\n    /** b */\n}',
+  '/** a */ x = { /** b */ };', 'x = 1 /* a */ + /* b */ 2;', '/***/ x;', '/**/ x;', '/* a **/ x; /** b ***/ y;', '/* a * / b */ x;',
+  '/* a */ x */ y;', '/* a */ ) /* b */', 'x = /* a */ 1 */ 2;',
+];
+
 // Contextual keywords: every word-shaped literal the grammar writes (`static`, `type`, `of`, `if`, ...),
 // as a name in each position class: one class per word-token step of the JavaScript and TypeScript
 // grammars. The word list is
@@ -181,10 +190,10 @@ let loadFailed = false;
 for (const { lang, mod, corpora } of [
   { lang: 'typescriptreact', mod: '../typescriptreact.ts', corpora: {
     'curated JSX': JSX_CASES, 'TSX issue cases': tsxIssueCases.map(c => c.src),
-    'TS issue cases': issueTests.map(t => t.input), 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS } },
-  { lang: 'javascriptreact', mod: '../javascriptreact.ts', corpora: { 'curated JSX': JSX_CASES, 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS } },
-  { lang: 'typescript', mod: '../typescript.ts', corpora: { 'TS issue cases': issueTests.map(t => t.input), 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS } },
-  { lang: 'javascript', mod: '../javascript.ts', corpora: { 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS } },
+    'TS issue cases': issueTests.map(t => t.input), 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS } },
+  { lang: 'javascriptreact', mod: '../javascriptreact.ts', corpora: { 'curated JSX': JSX_CASES, 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS } },
+  { lang: 'typescript', mod: '../typescript.ts', corpora: { 'TS issue cases': issueTests.map(t => t.input), 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS } },
+  { lang: 'javascript', mod: '../javascript.ts', corpora: { 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS } },
 ]) {
   const wasm = `tree-sitter/${lang}/tree-sitter-${lang}.wasm`;
   if (!existsSync(wasm)) { console.error(`✗ ${wasm} not found (build it: cd tree-sitter/${lang} && npx tree-sitter build --wasm .)`); loadFailed = true; continue; }
