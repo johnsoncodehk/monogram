@@ -15,7 +15,7 @@ import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, t
 import { blockBody, elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
-import { ATOM, COMPARISON, findAnyName, stopBytes, isList, isNum, isOpt, isRec, isRecList, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
+import { ATOM, COMPARISON, findAnyName, stopBytes, unitMask, isList, isNum, isOpt, isRec, isRecList, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 import type {
@@ -5407,8 +5407,9 @@ const rustLowering: Lowering = {
   borrowList: (r) => (r.owned ? `&${r.c}` : r.c),
   borrowVal: (r) => `&${r.c}`,
   // Rust spelling: the table is built from its ranges by a const block, evaluated at compile time
-  // (the same [bool; 256] constant as its 256 literals, a tenth of their bytes).
-  charSet: (name, rs) => `const ${name.toUpperCase()}: [bool; 256] = { let r: &[(usize, usize)] = &[${rs.map(([lo, hi]) => `(${lo}, ${hi})`).join(', ')}]; let mut a = [false; 256]; let mut i = 0; while i < r.len() { let mut c = r[i].0; while c <= r[i].1 { a[c] = true; c += 1; } i += 1; } a };`,
+  // (the same [bool; 256] constant as its 256 literals, a tenth of their bytes); a cold table
+  // (tested off the hot path) is a 128-bit mask, a shift and a mask per test.
+  charSet: (name, rs, cold) => cold ? `const ${name.toUpperCase()}: [u64; 2] = [${unitMask(rs, 0)}, ${unitMask(rs, 64)}];` : `const ${name.toUpperCase()}: [bool; 256] = { let r: &[(usize, usize)] = &[${rs.map(([lo, hi]) => `(${lo}, ${hi})`).join(', ')}]; let mut a = [false; 256]; let mut i = 0; while i < r.len() { let mut c = r[i].0; while c <= r[i].1 { a[c] = true; c += 1; } i += 1; } a };`,
   // Four bytes per round: one table test each, and one bounds test per round instead of per byte.
   runEndFn: `/// The end of the run of bytes in \`set\` from i: the first j >= i at which b ends or b[j] is not in it.
 #[inline(always)]
@@ -5497,7 +5498,11 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
     len: (cx, l) => cx.atom(`${rsWrap(l, ATOM)}.len()`, 'int', 'usize'),
     code: (cx, s, i) => ({ c: `${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}] as u32`, ty: 'int', nat: 'u32', prec: RS_CAST }),
     hasAt: (cx, s, i, lit) => cx.atom(`${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}..].starts_with(${J(lit)}.as_bytes())`, 'bool', 'bool'),
-    inSet: (cx, set, c) => cx.atom(`${set.toUpperCase()}[${cx.coerce(c, 'usize')}]`, 'bool', 'bool'),
+    inSet: (cx, set, c, cold) => {
+      if (!cold) return cx.atom(`${set.toUpperCase()}[${cx.coerce(c, 'usize')}]`, 'bool', 'bool');
+      const u = cx.coerce(c, 'usize');
+      return cx.atom(`(${u} < 128 && ${set.toUpperCase()}[${u} >> 6] >> (${u} & 63) & 1 != 0)`, 'bool', 'bool');
+    },
     runEnd: (cx, set, s, i) => cx.atom(`lex_run_end(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')}, &${set.toUpperCase()})`, 'int', 'usize'),
     find: (cx, s, i, lit) => cx.atom(`lex_find(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')}, ${J(lit)}.as_bytes())`, 'int', 'usize'),
     findAny: (cx, s, i, stops) => cx.atom(`${findAnyName(stops)}(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')})`, 'int', 'usize'),

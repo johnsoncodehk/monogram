@@ -416,6 +416,16 @@ class UnitSets {
   }
 }
 
+// Sorted units as ranges of consecutive ones.
+const unitRuns = (us: number[]): CSet => {
+  const out: [number, number][] = [];
+  for (const b of [...us].sort((p, q) => p - q)) {
+    const last = out[out.length - 1];
+    if (last && last[1] + 1 === b) last[1] = b; else out.push([b, b]);
+  }
+  return out;
+};
+
 const readsBeforeFn = (m: RelexMode): Fn => {
   const body: Stmt[] = m.look.arms.length ? [let_('r', 'int', I(0)), if_(ge('off', len('text')), [ret('r')]), let_('u', 'int', code('text', 'off'))] : [let_('r', 'int', I(0))];
   m.look.arms.forEach((arm, ai) => {
@@ -424,7 +434,7 @@ const readsBeforeFn = (m: RelexMode): Fn => {
       if (c.tok !== null) steps.push(if_(eq('kid', I(m.kidOf(c.tok))), [ret('r')]));
       if (c.readEnd) steps.push(let_(`e${ai}_${k}`, 'int', call(c.readEnd, 'text', 'off')), if_(gt(`e${ai}_${k}`, 'r'), [set('r', `e${ai}_${k}`)]));
     });
-    const test = arm.units === null ? ge('u', I(128)) : inUnits('u', arm.units.map((b): [number, number] => [b, b]));
+    const test = arm.units === null ? ge('u', I(128)) : inUnits('u', unitRuns(arm.units));
     body.push(if_(test, [...steps, ret('r')]));
   });
   body.push(ret('r'));
