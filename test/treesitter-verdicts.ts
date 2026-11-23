@@ -216,6 +216,11 @@ function operatorPairs(gr: { precs: { operators: { value: string; position: stri
   for (const p of pre) for (const f of forms) out.add(f(/\w$/.test(p) ? `${p} a` : `${p}a`, 'c') + ';');
   for (const p of post) for (const f of forms) out.add(f(`a${p}`, 'c') + ';');
   for (const f of forms) { out.add(`x = y => ${f('a', 'c')};`); out.add(`x = ${f('a', 'c')};`); out.add(`x = a ? ${f('b', 'c')} : d;`); }
+  // `yield` is a capped NUD arm (an AssignmentExpression form), not a prefix of the table, so the
+  // loop above does not draw it: its operand must still span every operator form (`yield (a + c)`),
+  // a comma must end it (`x = (yield a), b`) and it must nest in itself.
+  for (const f of forms) out.add(`yield ${f('a', 'c')};`);
+  out.add('x = yield a, b;'); out.add('yield yield a;');
   return [...out];
 }
 // Type arguments in expressions (TypeScript): a call or tagged template with type arguments, an
