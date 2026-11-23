@@ -2821,13 +2821,14 @@ func (b *SlimBuilder) dropsLeaves() (t [256]bool) {
 \t${slimDropIdList.map((id) => `t[${id}]`).join(', ')} = ${slimDropIdList.map(() => 'true').join(', ')}
 \treturn
 }
-// leafDropper: a built-in builder that declares the leaf types it never keeps, read once per parse
-// (dropsOf), so that the builder engine does not offer them: a Leaf call through the Builder
-// interface is a dynamic call in Go (Rust's builder engine is monomorphised and inlines the test).
-// Any other Builder is offered every leaf.
-type leafDropper interface{ dropsLeaves() [256]bool }
+// dropsOf: the leaf types the builder never keeps, read once per parse, so that the builder engine
+// does not offer them: a Leaf call through the Builder interface is a dynamic call in Go (Rust's
+// builder engine is monomorphised and inlines the test). Any other Builder is offered every leaf.
+// The test is on the concrete type, not an interface: Go asserts an interface type in the runtime,
+// which fills that call site's cache on a random call (about 1 in 1024) with a heap allocation, so
+// a parse on a reused builder sometimes allocated (docs/ALLOCATIONS.md slim-reuse rows).
 func dropsOf(b Builder) [256]bool {
-\tif d, ok := b.(leafDropper); ok { return d.dropsLeaves() }
+\tif s, ok := b.(*SlimBuilder); ok { return s.dropsLeaves() }
 \treturn [256]bool{}
 }
 // Finish is builderFinishDefault with the spans read in place and Node's collapse inline, decided
@@ -2902,8 +2903,17 @@ func parseWithCst(src string, b *CstBuilder) (int32, bool) {
 // arena is emptied, its token buffer (the built-in builders') and Workspace are emptied and reused
 // (capacity kept), so nothing of the previous parse stays reachable and nothing is allocated again.
 func parseWithW(src string, b Builder) (int32, bool) {
+\t// The built-in builders by concrete type: the runtime's interface assertion may allocate (dropsOf).
 \tvar w *Workspace
-\tif o, is := b.(WorkspaceOwner); is { w = o.Workspace() } else { w = &Workspace{} }
+\tif s, is := b.(*SlimBuilder); is {
+\t\tw = &s.ws
+\t} else if c, is := b.(*CstBuilder); is {
+\t\tw = &c.ws
+\t} else if o, is := b.(WorkspaceOwner); is {
+\t\tw = o.Workspace()
+\t} else {
+\t\tw = &Workspace{}
+\t}
 \tb.Restore(0, 0)
 \tp := &w.w
 \ttoks, err := lexInto(src, toksOf(b), &w.lex)
