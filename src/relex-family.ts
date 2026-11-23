@@ -35,7 +35,7 @@
 // only the unchanged text after them, so resync needs only the lexer state to match. Nothing of
 // this is recorded by the lexer: the lexers pay nothing for it.
 
-import { type ParserIR, buildLexIdPlan, kidOf, lidOf, regionKids } from './emit-portable.ts';
+import { type ParserIR, buildLexIdPlan, kidOf, lidOf, regionKids, tplEndKids } from './emit-portable.ts';
 import { type LookPlan, lexLookPlan } from './lex-family.ts';
 import type { CSet } from './lex-match-plan.ts';
 import { type CharSet, type Expr, type Fn, type ListTy, type Lowering, type MetaFlag, type MetaInt, type RecordDecl, type Stmt, type TokInt, type Ty, printFns } from './algo-ir.ts';
@@ -84,7 +84,7 @@ export function relexMode(ir: ParserIR): RelexMode {
     raw: window && !!ir.elements?.rawText.length,
     regionKids: regionKids(ir, ids),
     kidNl: newline ? kidOf(ids, ir.newlineCfg!.token) : -1,
-    kidTpl: ir.tpl ? [kidOf(ids, ir.tpl.token), kidOf(ids, '$templateTail')] : [],
+    kidTpl: tplEndKids(ir, ids),
     lidLParen: regex ? lidOf(ids, '(') : -1,
     // lexLookPlan asks relexMode only for `window`: resolved lazily, after this returns.
     get look() { return lexLookPlan(ir); },
