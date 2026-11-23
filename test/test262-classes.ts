@@ -154,12 +154,6 @@ const WE_ACCEPT: CauseClass[] = [
     match: (t) => inDir(t, /^test\/annexB\/language\/statements\/for-in\//, /for-in\/disallow-initialization-assignment\.js$/) || says(t, /for-in (heads|initiali[sz]ers)|Initializer is not allowed in head|does not (allow|support an) initiali[sz]er/i),
   },
   {
-    id: 'accept/hashbang-position', direction: 'we-accept', verdict: 'grammar-bug',
-    title: 'a hashbang comment that does not start the source text',
-    why: '`x⏎#!/y`: a HashbangComment is the first thing in a Script or Module only. The Shebang token\'s start() anchor admits any line start.',
-    match: (t) => inDir(t, /^test\/language\/comments\/hashbang\//),
-  },
-  {
     id: 'accept/accessor-parameters', direction: 'we-accept', verdict: 'grammar-bug',
     title: 'a getter with a parameter',
     why: '`get x(a) {}`: a getter\'s parameter list is `( )`; a setter has exactly one PropertySetParameterList.',
