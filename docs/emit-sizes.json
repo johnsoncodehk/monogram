@@ -34,5 +34,14 @@
   "go+recovery": 352019,
   "rust": 284868,
   "rust+recovery": 287985
+ },
+ "textdialect": {
+  "ts": 103964,
+  "ts+recovery": 106746,
+  "js": 184785,
+  "go": 146770,
+  "go+recovery": 149312,
+  "rust": 168592,
+  "rust+recovery": 171709
  }
 }
