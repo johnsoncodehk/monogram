@@ -78,6 +78,8 @@ catch)
   three() { # <file> <base rev> <theirs rev>: merge into the working file; 1 if it conflicted
     local f=$1 bf=$out/m-base tf=$out/m-theirs of=$out/m-ours n=0
     blob "$2" "$f" > "$bf"; local hb=$?; blob "$3" "$f" > "$tf"; local ht=$?
+    # a file master deleted since the base (this tree lacks it, the base has it): nothing runs it
+    if [ ! -e "$f" ] && [ $hb = 0 ]; then return 0; fi
     if [ -e "$f" ]; then cp "$f" "$of"; else : > "$of"; fi
     if [ $ht != 0 ]; then # the change deletes the file: delete it if this tree's equals the base
       if [ $hb = 0 ] && cmp -s "$of" "$bf"; then rm -f -- "$f"; return 0; fi
