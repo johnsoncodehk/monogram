@@ -6,7 +6,7 @@
 // may omit the lowering; asking it for one is then an error.
 import type { Lowering } from './algo-ir.ts';
 import type { EmitOptions, Target } from './emit.ts';
-import type { LexTok, ParserIR } from './emit-portable.ts';
+import { type LexTok, type ParserIR, buildArenaIdPlan, buildLexIdPlan, recoveryTables } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { EL_FRAME_FN, EL_OPENS_FN, EL_RAW_FN, EL_REACH_FN, EL_TAG_START_FN, TPL_SPAN, UNI_CLASS, emitLexScan, emitScanInline, scannedTokens, scannerName, templateLiterals, tokenLiterals } from './lex-family.ts';
 import { emitRelexFamily } from './relex-family.ts';
@@ -20,7 +20,10 @@ export interface SharedAlgorithms {
   reuseFamily(ir: ParserIR): string;
   // Total parsing's diagnostics and their one formatter (src/recovery-family.ts), for the emit
   // option `recovery`.
-  recoveryFamily(): string;
+  // With the strict interpreter over the parse plan's table (emit-portable recoveryTables);
+  // `methods`: only its engine methods (true) or only the free functions (false), for a target
+  // that prints its engine's methods inside the receiver's declaration.
+  recoveryFamily(ir: ParserIR, methods?: boolean): string;
   // The token scanners, the tokens they cover, and the printed name of the scanner a dispatch
   // site calls for a token. A lowering with `spliceInline` gets the scanner's statements for its
   // dispatch site instead (`out` declared and holding the scanner's result).
@@ -73,9 +76,10 @@ export function defineTarget(def: TargetDefinition): PortableTarget {
       if (!lowering().record) throw new Error(`defineTarget: target ${def.name} supplies no record Lowering for the reuse family`);
       return emitReuseFamily(ir, lowering());
     },
-    recoveryFamily: () => {
+    recoveryFamily: (ir, methods) => {
       if (!lowering().record || !lowering().relex) throw new Error(`defineTarget: target ${def.name} supplies no record and token-stream Lowering for the recovery family`);
-      return emitRecoveryFamily(lowering());
+      const ids = buildLexIdPlan(ir);
+      return emitRecoveryFamily(lowering(), recoveryTables(ir, ids, buildArenaIdPlan(ir, ids)).data, methods);
     },
     lexScan: (ir) => emitLexScan(ir, lowering()),
     scannedTokens,
