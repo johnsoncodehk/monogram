@@ -2,10 +2,10 @@
 // calculus only (src/shape2-schema.ts): the expressions below, the root, and the statements
 // (blocks, variable statements with identifier bindings, `if`, loops, `return`, `throw`, `break`,
 // `continue`, labelled, `try`, `with`, `debugger`, empty), functions, arrows and their parameters,
-// binding patterns, object / array literals, spread, templates and assignment patterns.
-// Checked against acorn by test/shape2-oracle.ts. Not total: an arm outside the subset (`switch`,
-// other declarations, classes, import / export) is unmapped,
-// and a unit that reaches one is reported as outside the subset, not compared.
+// binding patterns, object / array literals, spread, templates and assignment patterns, classes,
+// and modules (import / export declarations, `import()`, `import.meta`). Checked against acorn by
+// test/shape2-oracle.ts. Not total: an arm outside the subset (`switch`, a decorated declaration)
+// is unmapped, and a unit that reaches one is reported as outside the subset, not compared.
 import {
   absent, and, armOf, branch, c, child, cook, dropLastIf, fold, get, iff, inh, list, map, match, node, not, orElse, present, record,
   spread, syn, text, thread, v, wrapIf, type Shape2Spec, type Term,
@@ -46,7 +46,7 @@ const ARROWS = ['arrow', 'asyncArrow', 'arrowIdentifier', 'asyncArrowIdentifier'
 const FUNCTION_BODIES: Record<string, Record<string, string>> = {
   Expr: { ...Object.fromEntries(FUNCTIONS.map((a) => [a, 'body'])), ...Object.fromEntries(ARROWS.map((a) => [a, 'block'])) },   // function expressions, arrows (a block body)
   NewTarget: Object.fromEntries(FUNCTIONS.map((a) => [a, 'body'])),                                                                    // a function expression as a `new` callee
-  Decl: { ...Object.fromEntries(FUNCTIONS.map((a) => [a, 'body'])), export_2: 'body' },                                        // declarations, `export default function`
+  Decl: { ...Object.fromEntries(FUNCTIONS.map((a) => [a, 'body'])), exportDefault: 'body' },                                        // declarations, `export default function`
   Prop: Object.fromEntries(['accessor', 'asyncGeneratorMethod', 'asyncMethod', 'generatorMethod', 'method'].map((a) => [a, 'body'])),   // object methods / accessors
   ClassMember: { member: 'body' },                                                                                              // constructor, methods, accessors
 };
@@ -118,10 +118,10 @@ const FOR_RULES: Shape2Spec['rules'] = {
 // Four arms per form (plain, generator, async, async generator: the grammar routes each one's
 // parameters and body to its [Await] / [Yield] family), so `generator` / `async` are the arm's.
 const FUNCTION_FLAGS: Record<(typeof FUNCTIONS)[number], [boolean, boolean]> = { function_: [false, false], generator: [true, false], asyncFunction: [false, true], asyncGenerator: [true, true] };
-const fn = (type: string, id: Term, generator: boolean, isAsync: boolean): Term =>
-  node(type, { id, expression: c(false), generator: c(generator), async: c(isAsync), params: child('parameter'), body: blockOf('body') });
-const functionArms = (type: string, id: Term): Record<string, Term> =>
-  Object.fromEntries(FUNCTIONS.map((a) => [a, fn(type, id, ...FUNCTION_FLAGS[a])]));
+const fn = (type: string, id: Term, generator: boolean, isAsync: boolean, span?: { from: string; to: string }): Term =>
+  node(type, { id, expression: c(false), generator: c(generator), async: c(isAsync), params: child('parameter'), body: blockOf('body') }, span);
+const functionArms = (type: string, id: Term, span?: { from: string; to: string }): Record<string, Term> =>
+  Object.fromEntries(FUNCTIONS.map((a) => [a, fn(type, id, ...FUNCTION_FLAGS[a], span)]));
 /** An arrow: a parenthesised parameter list (`parameter` repeats) or one identifier; a block or
  * an expression body (ConciseBody). */
 const arrow = (isAsync: boolean, params: Term): Term => node('ArrowFunctionExpression', {
@@ -278,6 +278,66 @@ const CLASS_RULES: Shape2Spec['rules'] = {
   },
 };
 
+// ── Modules (ECMA-262 16.2) ──
+// A module specifier is a string Literal; its import attributes (`with { type: "json" }`) are
+// ImportAttribute nodes, key to value. A specifier's ModuleExportName is an identifier or a
+// string; an unrenamed specifier holds its one name twice (`imported` / `exported` and `local`).
+const stringLiteral = (leaf: string): Term => node('Literal', { value: cook('stringValue', leaf), raw: text(leaf) }, { from: leaf, to: leaf });
+const exportName = (name: string): Term => branch(name, { ident: idOf('ident'), string: stringLiteral('string') });
+const attribute = (key: string, value: string): Term => node('ImportAttribute', { key: exportName(key), value: stringLiteral(value) }, { from: key, to: value });
+/** A module specifier's fields (`moduleSpecifier`'s names). */
+const moduleFields: Record<string, Term> = {
+  source: stringLiteral('source'),
+  attributes: iff(present('attributeKey'), list(attribute('attributeKey', 'attributeValue'), spread(map('attributeKeyRest', attribute('attributeKeyRest', 'attributeValueRest')))), list()),
+};
+const namespaceSpecifier: Term = node('ImportNamespaceSpecifier', { local: idOf('namespace') }, { from: 'star', to: 'namespace' });
+/** An import clause is its specifier list (ImportDeclaration's `specifiers`). */
+const MODULE_RULES: Shape2Spec['rules'] = {
+  ImportClause: {
+    defaultBinding: list(
+      node('ImportDefaultSpecifier', { local: idOf('name') }, { from: 'name', to: 'name' }),
+      spread(iff(present('bindings'), branch('bindings', { named: child('specifier'), namespace: list(namespaceSpecifier) }), list())),
+    ),
+    named: child('specifier'),
+    namespace: list(namespaceSpecifier),
+  },
+  ImportSpecifier: {
+    renamed: node('ImportSpecifier', { imported: idOf('imported'), local: idOf('local') }),
+    plain: node('ImportSpecifier', { imported: idOf('local'), local: idOf('local') }),
+    stringRenamed: node('ImportSpecifier', { imported: stringLiteral('imported'), local: idOf('local') }),
+  },
+  ExportSpecifier: {
+    specifier: node('ExportSpecifier', { local: exportName('local'), exported: iff(present('exported'), exportName('exported'), exportName('local')) }),
+  },
+};
+/** The declaration an `export default` holds spans its own branch (`declaration`). */
+const ownSpan = { from: 'declaration', to: 'declaration' };
+const MODULE_DECLARATIONS: Record<string, Term> = {
+  exportDeclaration: node('ExportNamedDeclaration', {
+    declaration: branch('declaration', { decl: child('decl'), variable: child('stmt') }), specifiers: list(), source: c(null), attributes: list(),
+  }),
+  exportDefault: node('ExportDefaultDeclaration', {
+    declaration: branch('declaration', {
+      ...functionArms('FunctionDeclaration', iff(present('name'), idOf('name'), c(null)), ownSpan),
+      namedClass: classNode('ClassDeclaration', idOf('name'), ownSpan),
+      anonymousClass: classNode('ClassDeclaration', c(null), ownSpan),
+      expression: child('expr'),
+    }),
+  }),
+  exportAll: branch('form', {
+    plain: node('ExportAllDeclaration', { exported: c(null), ...moduleFields }),
+    aliased: node('ExportAllDeclaration', { exported: exportName('exported'), ...moduleFields }),
+  }),
+  exportNamed: node('ExportNamedDeclaration', {
+    declaration: c(null), specifiers: child('specifier'),
+    source: iff(present('source'), moduleFields.source, c(null)), attributes: iff(present('source'), moduleFields.attributes, list()),
+  }),
+  importDeclaration: branch('form', {
+    clause: node('ImportDeclaration', { specifiers: child('clause'), ...moduleFields }),
+    bare: node('ImportDeclaration', { specifiers: list(), ...moduleFields }),
+  }),
+};
+
 /** The statements (ECMA-262 14), one node per Stmt arm. */
 const STATEMENTS: Record<string, Term> = {
   block: blockOf('block'),
@@ -364,7 +424,8 @@ export const estreeExprShape: Shape2Spec = {
     CatchParameter: { ident: idOf('ident'), bindingPattern: child('bindingPattern') },
     ...PARAM_RULES,
     ...PATTERN_RULES,
-    Decl: { ...functionArms('FunctionDeclaration', idOf('name')), class_: classNode('ClassDeclaration', idOf('name')) },
+    Decl: { ...functionArms('FunctionDeclaration', idOf('name')), class_: classNode('ClassDeclaration', idOf('name')), ...MODULE_DECLARATIONS },
+    ...MODULE_RULES,
     ...CLASS_RULES,
     // A class heritage: a LeftHandSideExpression (the `new` callee rule, then the call and chain tails).
     ClassHeritage: {
@@ -411,6 +472,10 @@ export const estreeExprShape: Shape2Spec = {
       led_in: node('BinaryExpression', { left: child('left'), operator: c('in'), right: child('expr') }),
       led_instanceof: node('BinaryExpression', { left: child('left'), operator: c('instanceof'), right: child('expr') }),
       newDotTarget: node('MetaProperty', { meta: idOf('newKeyword', c('new')), property: idOf('targetKeyword', c('target')) }),
+      import_: branch('form', {
+        call: node('ImportExpression', { source: child('source'), options: orNull('options') }),
+        meta: node('MetaProperty', { meta: idOf('importKeyword', c('import')), property: idOf('metaKeyword', c('meta')) }),
+      }),
       construct: node('NewExpression', { callee: child('newTarget'), arguments: branch('alt', { paren: child('expr'), empty: list() }) }),
       yield_: branch('alt', {
         star: node('YieldExpression', { delegate: c(true), argument: child('expr') }),
