@@ -51,7 +51,11 @@ jobs:
       # tree-sitter packages.
       - name: Generate editor artifacts (committed ones must be in sync)
         run: |
-          npm run gen
+          # `npm run gen`, each grammar under /usr/bin/time (report-only): wall and CPU seconds and
+          # peak memory per grammar, the generators' cost (read with `gh run view <id> --log | grep 'generate '`).
+          for g in $(node -p "require('./package.json').scripts.gen.match(/cli\.ts \S+/g).map(c => c.slice(7)).join(' ')"); do
+            /usr/bin/time -f "generate $g: %e s wall, %U s user, %M KB peak" node src/cli.ts "$g"
+          done
           git diff --exit-code -- '*.tmLanguage.json' '*.language-configuration.json' '*.monarch.json' '*.contributes.json' tree-sitter
 
       - name: Typecheck
