@@ -907,8 +907,8 @@ ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
   // their capacity instead of allocating them again; each lex starts them empty. They travel
   // through lex_from by value: kept in the scan's own struct, the hot emit path keeps them in
   // registers, which a by-reference field costs about 14 instructions per token (Callgrind, CI:
-  // checker.ts lex 79.9M by value vs 84.7M by reference). The price: a lexer panic drops them, so
-  // the parse after one allocates them again (a few bytes, bounded by nesting depth).
+  // checker.ts lex 79.9M by value vs 84.7M by reference). A lexer error is returned, so they come
+  // back after one too.
   const stkFields = [rx ? 'paren_head: Vec<bool>' : '', tpl || el ? 'template_stack: Vec<i64>' : ''].filter(Boolean);
   const lexStacks = `/// The lexer's transient stacks (bracket heads, template depths), kept across lexes by a reused builder.
 #[derive(Default)]
