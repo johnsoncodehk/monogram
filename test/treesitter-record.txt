@@ -781,6 +781,11 @@ javascript | test262 | rejects | unclassified | test/language/white-space/after-
 javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-three-per-em-space.js
 javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-zwnbsp.js
 javascript | test262 | rejects | unclassified | test/language/white-space/between-nbsp.js
+javascript | test262 | spans | arrow-body-as-object-literal | files 9
+javascript | test262 | spans | block-as-object-literal | files 85
+javascript | test262 | spans | declaration-as-expression-statement | files 6651
+javascript | test262 | spans | other | files 55
+javascript | test262 | spans | totals | span-equal 15780 of 22580, interpreter spans missing 46, extra tree-sitter spans 8189
 javascriptreact | line breaks | accepts | unclassified | "x = async\nfunction () {}"
 javascriptreact | line breaks | rejects | unclassified | "function f() { return\n/a/ }"
 javascriptreact | lookaheads | accepts | unclassified | "class C {}.x;"
@@ -814,6 +819,11 @@ typescript | TypeScript src | rejects | unclassified | src/lib/es2018.asyncgener
 typescript | TypeScript src | rejects | unclassified | src/lib/es2018.asynciterable.d.ts
 typescript | TypeScript src | rejects | unclassified | src/lib/es5.d.ts
 typescript | TypeScript src | rejects | unclassified | src/services/codefixes/generateAccessors.ts
+typescript | TypeScript src | spans | arrow-body-as-object-literal | files 2
+typescript | TypeScript src | spans | block-as-object-literal | files 9
+typescript | TypeScript src | spans | declaration-as-expression-statement | files 363
+typescript | TypeScript src | spans | other | files 3
+typescript | TypeScript src | spans | totals | span-equal 314 of 691, interpreter spans missing 1346, extra tree-sitter spans 7582
 typescript | contextual keywords | rejects | unclassified | "abstract: for (;;) continue abstract;"
 typescript | contextual keywords | rejects | unclassified | "abstract: while (1) break abstract;"
 typescript | contextual keywords | rejects | unclassified | "accessor: for (;;) continue accessor;"
