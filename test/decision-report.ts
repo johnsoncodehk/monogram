@@ -246,7 +246,7 @@ function analyze(ir: ParserIR): Report {
 type Mode = 'one' | 'two' | 'attempt' | 'frame';
 type Site = { kind: string; where: string; text: string; mode: Mode; mark: boolean; why: string };
 const MODE_TEXT: Record<Mode, string> = { one: 'one token', two: 'two tokens', attempt: 'by attempt', frame: 'longest match' };
-function listSite(ir: ParserIR, l: LM): Site & { lines: string[] } {
+function listSite(ir: ParserIR, l: LM, kinds: string[]): Site & { lines: string[] } {
   const lines: string[] = [];
   const nm = (i: number) => `${l.cands[i]!.name} (#${i})`;
   if (l.predictive) return { kind: 'rule alternatives', where: l.list, text: `${l.cands.length} alternatives`, mode: 'one', mark: false, why: '', lines: [`one token: a switch on each alternative's FIRST set (no two share a token)`] };
@@ -274,7 +274,10 @@ function listSite(ir: ParserIR, l: LM): Site & { lines: string[] } {
   const seconds = l.cands.flatMap((x, i) => (x.guard?.second ? [`${nm(i)} only before ${setText(x.guard.second, 6)}`] : []));
   if (seconds.length) { two = true; lines.push(`two tokens (SECOND): ${seconds.join('; ')}`); }
   if (inFrame.length) {
-    const where = l.commit ? (frameKeys.length ? `at ${list(frameKeys)}${l.commit.kid.length < 1 ? '' : ''} and every token no case names` : 'at every token no case names') : 'at every token';
+    const named = new Set(l.commit?.kid.flatMap((c) => c.keys) ?? []);
+    const unnamed = kinds.some((k) => !named.has(k));
+    const hasUnless = commitActs(l.commit).some((a) => a.unless.length > 0);
+    const where = !l.commit ? 'at every token' : `at ${[...(frameKeys.length ? [list(frameKeys)] : []), ...(hasUnless ? ['the keys above where an `unless` candidate admits the token'] : []), ...(unnamed ? ['every token of a kind no case names'] : [])].join(', ') || 'no token'}`;
     lines.push(`longest match: a candidate frame (a mark per new best) ${where}, over ${list(inFrame.map(nm), 6)}`);
   }
   const mode: Mode = inFrame.length ? 'frame' : two ? 'two' : 'one';
@@ -391,7 +394,8 @@ async function page(g: string): Promise<{ text: string; report: Report; failures
   const sites: Array<Site & { lines?: string[] }> = [];
   const byRule = new Map<string, Array<Site & { lines?: string[] }>>();
   const add = (rule: string, s: Site & { lines?: string[] }) => { sites.push(s); const a = byRule.get(rule); if (a) a.push(s); else byRule.set(rule, [s]); };
-  for (const l of rep.lists) add(l.rule, listSite(ir, l));
+  const kinds = [...new Set(classesOf(ir).all.map((c) => c.kind))];
+  for (const l of rep.lists) add(l.rule, listSite(ir, l, kinds));
   ir.rules.forEach((r, k) => {
     if (r.kind === 'pratt') { const s = ledSite(ir, r); if (s) add(r.name, s); }
     for (const s of stepSites(ir, irGoTs, r, irGoTs.rules[k]!)) add(r.name, s);
