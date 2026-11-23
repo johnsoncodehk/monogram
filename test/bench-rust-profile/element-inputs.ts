@@ -25,11 +25,16 @@ import { createParser } from '../../src/gen-parser.ts';
 
 // The parts oxc (oxc_parser 0.126, test/oxc-parse-bench/Cargo.lock) rejects although tsc's parser
 // and the interpreter accept them: key (the test file relative to tests/cases, then `:` and the
-// `@filename` of the part when the test has several) -> oxc's first error. These are not monogram
-// defects; they are left out so the profile's element rows compare the two parsers on code both
-// accept.
+// `@filename` of the part when the test has several) -> oxc's first error. They are left out so the
+// profile's element rows compare the two parsers on code both accept.
 const OXC_REJECTS: Record<'.tsx' | '.jsx', Record<string, string>> = {
-  '.tsx': {},
+  // `<div<>>`, `<MyComp<> a={10} …>`: an empty type-argument list on a tag. TypeArgumentList has at
+  // least one type, so oxc is right; tsc's parser takes it (its checker reports it) and so does
+  // typescriptreact.ts: an over-acceptance of the interpreter, owed to the grammar lane
+  '.tsx': {
+    'compiler/jsxIntrinsicElementsTypeArgumentErrors.tsx': 'Type argument list cannot be empty.',
+    'conformance/jsx/tsxTypeArgumentResolution.tsx:file.tsx': 'Type argument list cannot be empty.',
+  },
   '.jsx': {},
 };
 
@@ -62,7 +67,7 @@ const oxcVerdicts = (dir: string, ext: string, texts: string[]): (string | null)
     const lines = execFileSync(oxcCheck!, files.slice(i, i + 500), { encoding: 'utf8', maxBuffer: 1 << 28 }).split('\n');
     lines.forEach((l, j) => {
       const m = /^REJECT (\S+)/.exec(l);
-      if (m) res[files.indexOf(m[1]!)] = (lines[j + 1] ?? '').replace(/^\s*error:\s*/, '').slice(0, 160) || 'rejected';
+      if (m) res[files.indexOf(m[1]!)] = /message: "((?:[^"\\]|\\.)*)"/.exec(lines[j + 1] ?? '')?.[1] ?? 'rejected';
     });
   }
   rmSync(dir, { recursive: true, force: true });
