@@ -15,8 +15,13 @@ export type RecListTy = `recs_${string}`;
 // An optional record: one record of a declared type, or none.
 export type OptTy = `opt_${string}`;
 // `ints`: a list of plain ints (an int stack, a decoded int table).
-export type ListTy = 'metas' | 'toks' | 'bools' | 'depths' | 'ints' | 'edits' | RecListTy;
-export type Ty = Num | 'bool' | 'str' | 'meta' | 'tok' | 'edit' | RecTy | OptTy | ListTy;
+// A SHAPE VALUE (the AST a shape builds, src/shape-plan.ts): `val_any` is the uniform handle (a
+// node, a list, a record, a scalar, or absent); `vals_any` a list of them. The suffix leaves room
+// for typed handles (`val_<Kind>`).
+export type ValTy = `val_${string}`;
+export type ValListTy = `vals_${string}`;
+export type ListTy = 'metas' | 'toks' | 'bools' | 'depths' | 'ints' | 'edits' | RecListTy | ValListTy;
+export type Ty = Num | 'bool' | 'str' | 'meta' | 'tok' | 'edit' | RecTy | OptTy | ListTy | ValTy;
 export type MetaInt = 'off' | 'end' | 'kid' | 'pd' | 'fd' | 'td';
 export type MetaFlag = 'nl' | 'lc' | 'lb' | 'hd';
 export type TokInt = 'off' | 'end' | 'kid' | 'lid';
@@ -83,7 +88,26 @@ export type Expr =
   // The concatenation of two or more strings, a new string (for messages: a cold path).
   | { k: 'cat'; parts: Expr[] }
   // Element i of a declared constant int table (`IntTable`), an int; 0 <= i < its length.
-  | { k: 'tab'; t: string; i: Expr };
+  | { k: 'tab'; t: string; i: Expr }
+  // ── Shape values (src/shape-plan.ts: a shape's construct plans), printed by Lowering.shape ──
+  // A scalar constant; no value (a node field holding it is omitted, a list element is null); the
+  // text of a string; a node of kind `kind` (a string value) spanning start..end, its fields in
+  // order (an absent one omitted); a plain record; a list value of a value list.
+  | { k: 'vConst'; v: string | number | boolean | null }
+  | { k: 'vAbsent' }
+  | { k: 'vText'; e: Expr }
+  | { k: 'mkNode'; kind: Expr; fields: { name: string; e: Expr }[]; start: Expr; end: Expr }
+  | { k: 'mkRecord'; fields: { name: string; e: Expr }[] }
+  | { k: 'vList'; e: Expr }
+  // The elements of a list value (a value list; a spread item reads it).
+  | { k: 'vItems'; e: Expr }
+  // Whether a value is the scalar v (bool); whether it is a value at all (not absent).
+  | { k: 'vIs'; e: Expr; v: string | number | boolean | null }
+  | { k: 'vPresent'; e: Expr }
+  // A value read as a child: e, failing loudly when e is a MISSING value (an arm the shape does
+  // not map, or one outside what the printer's plan supports); a missing value itself.
+  | { k: 'vNeed'; e: Expr }
+  | { k: 'vMissing'; where: string; why: 'unmapped' | 'unsupported' };
 
 export type Stmt =
   | { k: 'let'; name: string; ty: Ty; init: Expr }
@@ -111,7 +135,9 @@ export type Stmt =
   // The whole text lexed: new locals `out` (the tokens) and `err` (`opt_LexErr`: the lexer's error,
   // or none; with an error the tokens are unspecified).
   | { k: 'lexAll'; text: Expr; out: string; err: string }
-  | { k: 'comment'; text: string };
+  | { k: 'comment'; text: string }
+  // A case on a string shape value (`vConst` strings): the first case equal to it, else `else`.
+  | { k: 'switch'; on: Expr; cases: { v: string; body: Stmt[] }[]; else: Stmt[] };
 
 // `ref`: a record the function writes, passed by reference (the caller's local is changed).
 export interface Param { name: string; ty: Ty; ref?: boolean }
@@ -193,9 +219,11 @@ export const isNum = (t: Ty): t is Num => t === 'int' || t === 'lid' || t === 'd
 export const isRec = (t: Ty): t is RecTy => t.startsWith('rec_');
 export const isRecList = (t: Ty): t is RecListTy => t.startsWith('recs_');
 export const isOpt = (t: Ty): t is OptTy => t.startsWith('opt_');
-export const isList = (t: Ty): t is ListTy => t in ELEM || isRecList(t);
+export const isValTy = (t: Ty): t is ValTy => t.startsWith('val_');
+export const isValList = (t: Ty): t is ValListTy => t.startsWith('vals_');
+export const isList = (t: Ty): t is ListTy => t in ELEM || isRecList(t) || isValList(t);
 // The element type of a list type; the record name of a record or record-list type.
-export const elemOf = (t: ListTy): Ty => (isRecList(t) ? `rec_${t.slice(5)}` : ELEM[t]);
+export const elemOf = (t: ListTy): Ty => (isRecList(t) ? `rec_${t.slice(5)}` : isValList(t) ? `val_${t.slice(5)}` : ELEM[t as Exclude<ListTy, RecListTy | ValListTy>]);
 export const recName = (t: RecTy | RecListTy | OptTy): string => t.slice(t.indexOf('_') + 1);
 
 // Printed expression: `c` has native type `nat`. `prec` is the lowering's own binding strength
@@ -326,6 +354,24 @@ export interface Lowering {
   relex?: RelexLowering;
   // Family-declared records (`RecordDecl`): `type` spells `rec_` / `recs_` types too.
   record?: RecordLowering;
+  // Shape values (`val_` / `vals_` types and the shape constructs). Absent: a shape-building plan
+  // cannot be printed for the target, and the printer says so (it never guesses a spelling).
+  shape?: ShapeLowering;
+}
+
+export interface ShapeLowering {
+  vConst(cx: Cx, v: string | number | boolean | null): R;
+  vAbsent(cx: Cx): R;
+  vText(cx: Cx, s: R): R;
+  mkNode(cx: Cx, kind: R, fields: [string, R][], start: R, end: R): R;
+  mkRecord(cx: Cx, fields: [string, R][]): R;
+  vList(cx: Cx, l: R): R;
+  vItems(cx: Cx, e: R): R;
+  vIs(cx: Cx, e: R, v: string | number | boolean | null): Printed;
+  vPresent(cx: Cx, e: R): Printed;
+  vNeed(cx: Cx, e: R): R;
+  vMissing(cx: Cx, where: string, why: 'unmapped' | 'unsupported'): R;
+  switch(cx: Cx, on: R, cases: { v: string; body: Lines }[], dflt: Lines): Lines;
 }
 
 export interface RecordLowering {
@@ -436,7 +482,18 @@ class Printer implements Cx {
     return fd.ty;
   }
 
+  private shapeL(): ShapeLowering {
+    if (!this.L.shape) throw new Error('algo-ir: the lowering prints no shape values (a shape-building parser is printed only for a target whose Lowering has `shape`)');
+    return this.L.shape;
+  }
+  private valR(e: Expr): R {
+    const r = this.expr(e);
+    if (!isValTy(r.ty)) throw new Error(`algo-ir: a shape value expected, not ${r.ty}`);
+    return r;
+  }
+
   private checkTy(t: Ty): void {
+    if (isValTy(t) || isValList(t)) this.shapeL();
     if ((isRec(t) || isRecList(t) || isOpt(t)) && !this.recs.has(recName(t))) throw new Error(`algo-ir: undeclared record ${t}`);
   }
 
@@ -565,6 +622,29 @@ class Printer implements Cx {
         if (parts.some((r) => r.ty !== 'str')) throw new Error('algo-ir: cat() of a non-string');
         return { ...X.cat(this, parts), ty: 'str', nat: 'str', owned: true };
       }
+      case 'vConst': return this.shapeL().vConst(this, e.v);
+      case 'vAbsent': return this.shapeL().vAbsent(this);
+      case 'vText': {
+        const r = this.expr(e.e);
+        if (r.ty !== 'str') throw new Error('algo-ir: vText of a non-string');
+        return this.shapeL().vText(this, r);
+      }
+      case 'mkNode': {
+        const kind = this.valR(e.kind), start = this.expr(e.start), end = this.expr(e.end);
+        if (!isNum(start.ty) || !isNum(end.ty)) throw new Error('algo-ir: mkNode span of a non-number');
+        return this.shapeL().mkNode(this, kind, e.fields.map((f) => [f.name, this.valR(f.e)]), start, end);
+      }
+      case 'mkRecord': return this.shapeL().mkRecord(this, e.fields.map((f) => [f.name, this.valR(f.e)]));
+      case 'vList': {
+        const l = this.expr(e.e);
+        if (!isValList(l.ty)) throw new Error('algo-ir: vList of a non-value list');
+        return this.shapeL().vList(this, l);
+      }
+      case 'vItems': return this.shapeL().vItems(this, this.valR(e.e));
+      case 'vIs': return { ...this.shapeL().vIs(this, this.valR(e.e), e.v), ty: 'bool', nat: 'bool' };
+      case 'vPresent': return { ...this.shapeL().vPresent(this, this.valR(e.e)), ty: 'bool', nat: 'bool' };
+      case 'vNeed': return this.shapeL().vNeed(this, this.valR(e.e));
+      case 'vMissing': return this.shapeL().vMissing(this, e.where, e.why);
       case 'tab': {
         if (!X.tab) throw new Error('algo-ir: the lowering prints no int tables');
         if (!this.tabs.has(e.t)) throw new Error(`algo-ir: undeclared int table ${e.t}`);
@@ -641,6 +721,7 @@ class Printer implements Cx {
           break;
         case 'if': this.scan(s.then); if (s.else) this.scan(s.else); break;
         case 'while': case 'for': case 'forEach': this.scan(s.body); break;
+        case 'switch': for (const c of s.cases) this.scan(c.body); this.scan(s.else); break;
       }
     }
   }
@@ -653,6 +734,11 @@ class Printer implements Cx {
     const L = this.L, S = L.stmt;
     switch (s.k) {
       case 'comment': return S.comment(s.text);
+      case 'switch': {
+        const on = this.valR(s.on);
+        if (new Set(s.cases.map((c) => c.v)).size !== s.cases.length) throw new Error('algo-ir: a switch repeats a case');
+        return this.shapeL().switch(this, on, s.cases.map((c) => ({ v: c.v, body: this.block(c.body, d + 1) })), this.block(s.else, d + 1));
+      }
       case 'let': {
         this.checkTy(s.ty);
         let r = this.expr(s.init);
