@@ -486,8 +486,10 @@ export const CASES: Case[] = [
       'for (x in y) z;', 'x in y;', 'for (a.b in c) d;', 'a in b in c;',
       'for ((x) in y) z;', 'for (x in y) a in b;', 'for (x in a in b) z;',
       '(a in b);', 'for (a in b) for (c in d) e;',
+      // a staged suppress set ends with its group, entered or not
+      'for (; a in b) z;', 'for (x; a in b) z;', 'for (; a) z;', 'for (;) z;',
     ],
-    reject: ['for (x y) z;', 'for x in y;', 'for (in y) z;', 'for (x in) z;'],
+    reject: ['for (x y) z;', 'for x in y;', 'for (in y) z;', 'for (x in) z;', 'for (x in y; a) z;'],
   },
   {
     // Longest match among a rule's alternatives, the earliest-declared on a tie
