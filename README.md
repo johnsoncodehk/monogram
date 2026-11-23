@@ -179,9 +179,11 @@ cannot express: [docs/HIGHLIGHTER-EVIDENCE.md](docs/HIGHLIGHTER-EVIDENCE.md).
   same inputs, parsing as TypeScript, both in one CI job with alternating rounds
   ([docs/MEASUREMENT.md](docs/MEASUREMENT.md#recorded-result-rust-against-oxc)).
 - Monogram builds a CST and oxc a typed AST: not the same product, so this is not yet a
-  like-for-like figure. Which of the two costs more to build has not been measured here; a
-  monogram parser that builds an AST directly (generated from a `defineShape` shape) is in
-  progress and will give that figure.
+  like-for-like figure. Building an AST directly (a parser generated from a `defineShape`
+  shape) against building the CST is measured for the TypeScript target only, on the part of real
+  inputs the two oracle shapes cover: it allocates 0.4% to 10.5% fewer objects and executes 3.6%
+  to 7.8% more V8 blocks ([docs/MEASUREMENT.md](docs/MEASUREMENT.md#building-the-ast-directly-against-building-the-cst));
+  the Rust form, which the oxc comparison needs, is not measured yet.
 - On monogram `bf18adc` (AMD EPYC 9V74), a parse with a kept builder takes 19% to 36% less time
   than oxc's on the eight timed inputs (22% less on the TypeScript compiler's `checker.ts`), and
   executes 12% fewer instructions on `checker.ts`: fewer on nine of the ten counted inputs, and

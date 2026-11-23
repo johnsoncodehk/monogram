@@ -209,6 +209,34 @@ There monogram executed 26% to 69% more instructions per parse than oxc (1.42 ti
 These tables are hand-written from on-demand runs and are not regenerated. In reuse mode
 monogram makes no allocator call per parse and neither parser takes a page fault.
 
+## Building the AST directly against building the CST
+
+TypeScript target; 2026-11-24; measured on the part of each real input that the shape covers: the
+outermost expression statements the shape builds, concatenated: checker.ts 11.4% and parser.ts
+8.8% under the tsc expression shape, typescript.js 17.2% under the ESTree shape; V8 precise block
+counts of one parse (test/bench-targets/blocks.ts) and exact allocation counts (alloc-instrument).
+The fused shape-building parser (a construct plan per arm, slot positions fixed at generation time,
+one flat object literal per node under the keys the shape declares) allocates fewer objects than
+the CST build: checker.ts 159,507 against 177,232 (-10%, 5.52 against 6.15 MB), parser.ts 26,166
+against 29,229 (-10.5%), typescript.js 868,500 against 871,876 (-0.4%, 27.1 against 28.9 MB). It
+still executes 3.6% (checker.ts), 3.8% (parser.ts) and 7.8% (typescript.js) more V8 blocks: the
+engine's share is the same, and the builder's share is 631k blocks against the CST builder's 474k
+on checker.ts. Part of that gap belongs to the slot-stack form: slot tags and iteration markers,
+and a missing-value check on each child read, which a partial shape needs and a total one does
+not. The rest is work an AST has and a CST does not: cooked strings (names and values; about 22k
+objects on checker.ts), attribute equations (tsc `optional` / `constructorName`; ESTree
+`directive`, `optional`, `stringBody`, `constructorName`), and, under ESTree's `chainTop`, one of
+the two variants built for each chain link and then discarded (64,555 pairs on typescript.js, 103
+on checker.ts with the tsc shape). For comparison, before the fused plan (the uniform
+intermediate, S2) the shape build cost 24-36% more blocks and about twice the allocations. The
+like-for-like comparison with oxc (typed structs in arenas) is the Rust printer's.
+
+| input (shape) | CST nodes + leaves | shape nodes + lists | allocations CST -> shape | bytes CST -> shape | V8 blocks CST -> shape |
+| --- | --- | --- | --- | --- | --- |
+| checker.ts, covered (tsc) | 36,260 + 25,736 | 45,216 + 5,011 | 177,232 -> 159,507 (-10.0%) | 6.15 -> 5.52 MB | 4,139,750 -> 4,288,390 (+3.6%) |
+| parser.ts, covered (tsc) | 6,103 + 4,039 | 7,388 + 969 | 29,229 -> 26,166 (-10.5%) | 0.99 -> 0.87 MB | 658,496 -> 683,626 (+3.8%) |
+| typescript.js, covered (ESTree) | 182,718 + 128,787 | 202,392 + 22,745 | 871,876 -> 868,500 (-0.4%) | 28.9 -> 27.1 MB | 19,949,949 -> 21,506,871 (+7.8%) |
+
 ## Recorded result: element dialects (TSX and JSX)
 
 `measure-profile` run 45129600578 (AMD EPYC 7763), M = master `d326d65`. Per token: Rust and Go
