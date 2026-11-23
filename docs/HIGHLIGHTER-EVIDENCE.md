@@ -230,7 +230,7 @@ conflicts (call / instantiation / binary / unary) and no scanner token: it reads
 corpus, `type arguments`, compares the spans of calls with type arguments beside the relational
 readings; two more classes are recorded there, both wrong trees without an ERROR: a call read as two
 relational operators (`f<T>(x);` as `(f < T) > (x)`, also `a.b<T>(x)`, `new C<T>(x)`), and a call
-read as an instantiation expression then a call (`x = f<T>(x)`, `f<T>()`, `f<T>\`t\``). The same corpus records over-acceptances, not defects of the
+read as an instantiation expression then a call (`x = f<T>(x)`, `f<T>()`, ``f<T>`t` ``). The same corpus records over-acceptances, not defects of the
 bracketing: an assignment whose target is not a LeftHandSideExpression (`a + c = d;`, `-a = c;`,
 `a++ ??= c;`) and a unary operand of `**` (`-a ** c;`) parse in tree-sitter (59 JavaScript and 63
 TypeScript pairs), since its CFG has no assignment-target or `noUnaryLhs` condition.
