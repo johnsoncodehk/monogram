@@ -34,10 +34,16 @@ fn mono_prof_lex(src: &str) -> usize {
     n
 }
 
+// The token count of what tokenize returns: a Vec before the lexer reported its errors by return,
+// a Result after (the tail is compiled against both sides of a profile).
+trait TokCount { fn tok_count(&self) -> usize; }
+impl<'a> TokCount for Vec<Token<'a>> { fn tok_count(&self) -> usize { self.len() } }
+impl<'a, E> TokCount for Result<Vec<Token<'a>>, E> { fn tok_count(&self) -> usize { self.as_ref().map_or(0, |t| t.len()) } }
+
 #[inline(never)]
 fn mono_prof_tokenize(src: &str) -> usize {
     let t = tokenize(src);
-    let n = t.len();
+    let n = t.tok_count();
     drop(std::hint::black_box(t));
     n
 }
