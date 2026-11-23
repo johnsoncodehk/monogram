@@ -59,7 +59,7 @@ jobs:
           if [ "${{ github.ref }}" = refs/heads/master ] || [ "${{ github.event_name }}" = schedule ] || [ "${{ github.event_name }}" = workflow_dispatch ]; then
             GEN_TRACE_DEPS=1 node test/gen-changed.ts --all
           else
-            git fetch -q --filter=blob:none --unshallow origin master
+            git fetch -q --filter=blob:none --unshallow origin master || git fetch -q origin master
             GEN_TRACE_DEPS=1 node test/gen-changed.ts origin/master
           fi
           git diff --exit-code -- '*.tmLanguage.json' '*.language-configuration.json' '*.monarch.json' '*.contributes.json' tree-sitter docs/COMPLETENESS.md docs/decisions test/fixtures/decisionsjs.decisions.md

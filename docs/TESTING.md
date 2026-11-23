@@ -93,7 +93,10 @@ derived inputs. It does NOT run the `ci` tier (whole-corpus crosses and gates of
 seconds: the portable-targets corpus / edits / recovery classes, test262, tm-mutation, look-extent,
 …): those run in CI on every `land/**` push and on master, `--changed --all` runs them too, and a
 `ci`-tier gate whose own script changed runs in the inner loop (the change is to that gate). It
-assumes the generated artifacts are current (`npm run gen`). Inputs are split BY TARGET: each emit
+assumes the generated artifacts are current: `node test/gen-changed.ts` runs only the `npm run gen`
+steps whose derived inputs changed since the merge base (seconds when no grammar or generator
+changed; a skipped grammar still gets its gitignored `*.cst-match.ts`), `--list` says which and why;
+CI's artifact drift step runs it the same way on `land/**`, and every step on master pushes. Inputs are split BY TARGET: each emit
 target's module (`src/emit-parser.ts`, `src/target-ts.ts`, `src/target-go.ts`, `src/target-rust.ts`)
 imports only the core `src/target.ts`, never another target (`src/emit.ts`, the public surface,
 re-exports all four: a gate that imports it depends on every target), so a gate of one target does
