@@ -293,6 +293,20 @@ if (import.meta.main) {
         if (r.compared - r.identical > was.compared - was.identical) problems.push(`${keyOf(r)}: diverged ${was.compared - was.identical} -> ${r.compared - r.identical}`);
       }
     }
+    // The emitted shape-building parser (TypeScript) must build exactly the evaluator's values:
+    // any divergence fails; fewer statements compared than recorded is a regression of what the
+    // construct plans cover.
+    {
+      const b = await runBuilt(await shapeOf('estree'), CI_CORPUS.estree!, corpusPaths(CI_CORPUS.estree!), 4);
+      console.log(formatBuilt(b));
+      const key = `estree ${b.corpus} built`;
+      next[key] = { corpus: b.corpus, view: 'expression statement', units: b.units, compared: b.compared, identical: b.identical, outOfSubset: b.unsupported };
+      if (b.identical !== b.compared) problems.push(`${key}: ${b.compared - b.identical} statements built differently from the evaluator`);
+      if (b.notBuilt) problems.push(`${key}: ${b.notBuilt} statements the evaluator gives a value the parser did not build`);
+      const was = record[key];
+      if (!was) problems.push(`${key}: no record (run with --check --write)`);
+      else if (b.compared < was.compared) problems.push(`${key}: compared ${was.compared} -> ${b.compared}`);
+    }
     if (write) { writeFileSync(RECORD, JSON.stringify(next, null, 1) + '\n'); console.log(`recorded ${RECORD.pathname}`); }
     else if (problems.length) { console.error(`shape2-oracle: REGRESSION against the record:\n  ${problems.join('\n  ')}`); process.exit(1); }
     else console.log('shape2-oracle: no regression against the record');
