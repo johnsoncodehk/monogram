@@ -6,7 +6,7 @@
 # per-round E/D ratios by test/bench-rust-oxc/summarize.ts. Only ratios inside one job compare.
 # Usage (repo root, full history):
 #   TARGETS_BASE=<commit> TARGETS_COMMIT=<commit> test/bench-targets/run.sh [rounds=9]
-# TARGETS_GRAMMAR = typescript (default) | javascript. TARGETS_ONLY = a space-separated subset of
+# TARGETS_GRAMMAR = typescript (default) | javascript | typescriptreact | javascriptreact. TARGETS_ONLY = a space-separated subset of
 # "ts-parse ts-parseWith js-fresh js-reuse go-fresh go-reuse" (default all).
 set -euo pipefail
 ROUNDS=${1:-9}
@@ -41,7 +41,16 @@ cp "$REPO/node_modules/typescript/lib/typescript.d.ts" "$W/inputs/typescript.d.t
 curl -fsSL "https://raw.githubusercontent.com/microsoft/TypeScript/$TS_REPO_SHA/src/compiler/checker.ts" -o "$W/inputs/checker.ts"
 git show 2632c2c:src/gen-tm.ts > "$W/inputs/gen-tm.ts"
 cp "$REPO/node_modules/acorn/dist/acorn.js" "$W/inputs/acorn.js"
-if [ "$GRAMMAR" = typescript ]; then INPUTS="checker.ts typescript.d.ts gen-tm.ts acorn.js"; else INPUTS="acorn.js"; fi
+case $GRAMMAR in
+  typescript) INPUTS="checker.ts typescript.d.ts gen-tm.ts acorn.js";;
+  javascript) INPUTS="acorn.js";;
+  # The element dialects: the element code of the pinned tsc corpus (TS_CASES = its tests/cases;
+  # test/bench-rust-profile/element-inputs.ts says how it is chosen), and acorn.js as plain code.
+  typescriptreact|javascriptreact)
+    node "$REPO/test/bench-rust-profile/element-inputs.ts" "${TS_CASES:-/tmp/ts-repo/tests/cases}" "$W/inputs"
+    if [ "$GRAMMAR" = typescriptreact ]; then INPUTS="jsx-corpus.tsx acorn.js"; else INPUTS="jsx-corpus.jsx acorn.js"; fi;;
+  *) echo "TARGETS_GRAMMAR must be typescript, javascript, typescriptreact or javascriptreact, not $GRAMMAR"; exit 1;;
+esac
 (cd "$W/inputs" && wc -c $INPUTS)
 
 run1() { # <variant> <target-mode> <file>: one measurement, "ms n"

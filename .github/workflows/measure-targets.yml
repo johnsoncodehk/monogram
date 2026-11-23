@@ -21,7 +21,7 @@ on:
         default: ''
       grammar:
         type: choice
-        options: [typescript, javascript]
+        options: [typescript, javascript, typescriptreact, javascriptreact]
         default: typescript
       only:
         description: 'target modes, space-separated subset of: ts-parse ts-parseWith js-fresh js-reuse go-fresh go-reuse'
@@ -79,6 +79,20 @@ jobs:
           { echo "D=$D"; echo "E=$E"; echo "grammar=$grammar"; echo "rounds=$rounds"; echo "only=$only"; } >> "$GITHUB_OUTPUT"
 
       - run: npm ci
+
+      # The element grammars' input (jsx-corpus.tsx / .jsx) is built from its tests/cases
+      # (test/bench-rust-profile/element-inputs.ts); the same sparse clone as ci.yml.
+      - name: Clone the pinned TS corpus
+        if: steps.de.outputs.grammar == 'typescriptreact' || steps.de.outputs.grammar == 'javascriptreact'
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/ts-repo; mkdir -p /tmp/ts-repo
+          git -C /tmp/ts-repo init -q
+          git -C /tmp/ts-repo remote add origin https://github.com/microsoft/TypeScript
+          git -C /tmp/ts-repo config core.sparseCheckout true
+          printf 'tests/cases/\n' > /tmp/ts-repo/.git/info/sparse-checkout
+          git -C /tmp/ts-repo fetch -q --depth 1 --filter=blob:none origin "$TS_REPO_SHA"
+          git -C /tmp/ts-repo checkout -q FETCH_HEAD
 
       - name: Time D and E
         run: set -o pipefail; test/bench-targets/run.sh "$ROUNDS" | tee "${{ runner.temp }}/targets.log"
