@@ -1,0 +1,31 @@
+name: probe (editor11, measurement only)
+on:
+  push:
+    branches: ['editor11/probe']
+permissions:
+  contents: read
+jobs:
+  variants:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        v: [typescript-va, typescript-vb, typescript-vc, typescript-vd, typescript-ve, typescript-vf]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: generate + build
+        run: |
+          cd probe/${{ matrix.v }}
+          /usr/bin/time -f '%e s %M KB' npx tree-sitter generate 2>&1 | tail -30
+          echo "STATE_COUNT $(grep -m1 -oE '^#define STATE_COUNT [0-9]+' src/parser.c) LARGE $(grep -m1 -oE '^#define LARGE_STATE_COUNT [0-9]+' src/parser.c) bytes $(stat -c %s src/parser.c)" | tee -a "$GITHUB_STEP_SUMMARY"
+          npx tree-sitter build --wasm .
+          mkdir -p /tmp/out/${{ matrix.v }} && cp tree-sitter-*.wasm /tmp/out/${{ matrix.v }}/ && grep -m1 -E '^#define STATE_COUNT' src/parser.c > /tmp/out/${{ matrix.v }}/states.txt && stat -c %s src/parser.c >> /tmp/out/${{ matrix.v }}/states.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-${{ matrix.v }}
+          retention-days: 5
+          path: /tmp/out/${{ matrix.v }}
