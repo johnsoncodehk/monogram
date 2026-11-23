@@ -52,7 +52,7 @@ type Tok = { kid: number; lid: number; off: number; end: number; nl: boolean };
 type Cst = { rule: string; children: Cst[] } | { tokenType: string; offset: number; end: number };
 // A guard that admitted a literal where what it guards then matched (and won): the gate's own
 // proof that it detects a wrong refusal is to refuse that literal there and see it reported.
-type Found = { body?: { step: Step; lid: number }; cand?: { guard: NonNullable<Guard>; lid: number; pos: number }; commit?: { list: string; lid: number; kid: number; arm: number }; dirty?: { step: Step; i: number } };
+type Found = { body?: { step: Step; lid: number }; cand?: { guard: NonNullable<Guard>; lid: number; pos: number }; commit?: { list: string; lid: number; kid: number; arm: number }; dirty?: { step: Step; i: number }; pair?: { guard: NonNullable<Guard>; pos: number; lid: number } };
 type Outcome = { accept: boolean; tree: Cst | null; checked: number; cleanChecked: number; unsound: string[]; found: Found };
 // The mutation: one body guard (by step) or one candidate guard (by identity, at the one list start
 // `pos` where it won: refused at every token with that literal, a nested element of the same
@@ -60,7 +60,9 @@ type Outcome = { accept: boolean; tree: Cst | null; checked: number; cleanChecke
 // or one list commits, at one token (lid and kid), to another candidate than its plan's (`commit`).
 // Or (`clean`) one frame whose body is not clean is taken for clean: a branch (`i`) of an ordered or
 // predictive choice, or a star / opt / sep body (`i` -1).
-type Mutation = { step?: Step; guard?: NonNullable<Guard>; lid: number; pos?: number; commit?: { list: string; kid: number; arm: number }; clean?: { step: Step; i: number } } | null;
+type Mutation = { step?: Step; guard?: NonNullable<Guard>; lid: number; pos?: number; commit?: { list: string; kid: number; arm: number }; clean?: { step: Step; i: number }; pair?: { guard: NonNullable<Guard>; pos: number } } | null;
+// Or (`pair`) one guard's pair tests (Guard.pairs) refuse at the one list start where they admitted the
+// candidate that won.
 
 // ── The engine ──
 // One interpreter per grammar; run(toks) parses a token list from the entry rule.
@@ -337,14 +339,17 @@ function engine(ir: ParserIR, mut: Mutation = null) {
 
   // ── guards and dispatch ──
   // A pair test (Guard.pairs): where the first token is in `when`, the token after it in `second`.
-  const pairOk = (x: { when: { id: number }; second: { id: number } }, t: Tok | null) => t === null || !inSet(x.when.id, t) || (pos + 1 < toks.length && inSet(x.second.id, toks[pos + 1]!));
+  const pairOk = (x: { when: { id: number }; second: { id: number } }, t: Tok | null, g?: Guard) => t === null || !inSet(x.when.id, t)
+    || (!(mut?.pair && mut.pair.guard === g && mut.pair.pos === pos) && pos + 1 < toks.length && inSet(x.second.id, toks[pos + 1]!));
+  // A winner admitted by one of its pair tests (its first token in the pair's `when`): noted for the mutation proof.
+  const notePair = (g: Guard, t: Tok | null) => { if (g !== null && g.pairs && !checking && found.pair === undefined && t !== null && g.pairs.some((x) => inSet(x.when.id, t))) found.pair = { guard: g, pos, lid: t.lid }; };
   const guardOk = (g: Guard, t: Tok | null, keyed: boolean): boolean => {
     if (g === null) return true;
     if (mut?.guard === g && t !== null && t.lid === mut.lid && pos === mut.pos) return false;
     if (!keyed && g.first) { if (t === null || !inSet(g.first.id, t)) return false; }
     if (g.second !== null) { const i = pos + 1; if (!(i < toks.length && inSet(g.second.id, toks[i]!))) return false; }
     for (const l of g.lead) { if (t === null) return false; const x = inSet(l.set, t) || (l.ctx && ctxWordT(t)); if (x !== l.is) return false; }
-    for (const x of g.pairs ?? []) if (!pairOk(x, t)) return false;
+    for (const x of g.pairs ?? []) if (!pairOk(x, t, g)) return false;
     return true;
   };
   // The candidates a Dispatch reaches for token t, in trying order, each with whether it was keyed.
@@ -361,7 +366,7 @@ function engine(ir: ParserIR, mut: Mutation = null) {
   }
   // A guarded candidate that won its list from a literal (the list's winner, not a best that a
   // later candidate beat: refusing that one changes nothing) is noted for the mutation proof.
-  const note = (g: Guard, t: Tok | null) => { if (g !== null && !checking && found.cand === undefined && t !== null && t.lid !== 0) found.cand = { guard: g, lid: t.lid, pos }; };
+  const note = (g: Guard, t: Tok | null) => { notePair(g, t); if (g !== null && !checking && found.cand === undefined && t !== null && t.lid !== 0) found.cand = { guard: g, lid: t.lid, pos }; };
   // The longest-match candidates the guards refused (or the Dispatch never reached) at a list's
   // start: each, attempted unguarded from the list's start state, must not have won.
   function candidatesRefused(where: string, refused: number[], run: (i: number) => boolean, bestPos: number, bi: number, save: number) {
@@ -392,7 +397,7 @@ function engine(ir: ParserIR, mut: Mutation = null) {
     if (x.first && !inSet(g.first!.id, t)) return false;
     if (g.second !== null) { const i = pos + 1; if (!(i < toks.length && inSet(g.second.id, toks[i]!))) return false; }
     for (const k of x.lead) { const l = g.lead[k]!; const v = inSet(l.set, t) || (l.ctx && ctxWordT(t)); if (v !== l.is) return false; }
-    for (const k of x.pairs ?? []) if (!pairOk(g.pairs![k]!, t)) return false;
+    for (const k of x.pairs ?? []) if (!pairOk(g.pairs![k]!, t, g)) return false;
     return true;
   };
   const noteCommit = (list: string, t: Tok, arm: number, n: number) => {
@@ -448,7 +453,7 @@ function engine(ir: ParserIR, mut: Mutation = null) {
         if (rdTest(g, act, t0)) {
           const ck = checkpoint();
           const run = () => all(rule.alts[i]!.slice(g?.skip ?? 0), r);
-          if ((act.clean && !act.nullable ? elided(`${rule.name} (committed to ${i}, clean)`, run) : run()) && (!act.nullable || pos > save)) { res = won(); end = pos; noteCommit(rule.name, t0, i, rule.alts.length); }
+          if ((act.clean && !act.nullable ? elided(`${rule.name} (committed to ${i}, clean)`, run) : run()) && (!act.nullable || pos > save)) { res = won(); end = pos; noteCommit(rule.name, t0, i, rule.alts.length); const p = pos; pos = save; notePair(g, t0); pos = p; }
           else { pos = save; scratch.length = sb; restore(ck); }
         }
         pos = save;
@@ -828,7 +833,7 @@ for (const [g, inputs] of GRAMMARS) {
   const run = engine(ir);
   let n = 0, accepted = 0, checks = 0, cleanChecks = 0, drift = 0, bad = 0;
   type Proof = { at: string; tokens: Tok[]; text: string; m: Mutation };
-  const proof: { body?: Proof; cand?: Proof; commit?: Proof; clean?: Proof } = {};
+  const proof: { body?: Proof; cand?: Proof; commit?: Proof; clean?: Proof; pair?: Proof } = {};
   for (const input of inputs) {
     const text = typeof input === 'string' ? readFileSync(input, 'utf8') : input.text;
     let tokens: Tok[];
@@ -846,18 +851,21 @@ for (const [g, inputs] of GRAMMARS) {
     for (const u of got.unsound) { bad++; if (bad <= 12) console.log(`  FAIL ${g} ${name}: ${u}`); }
     if (!proof.body && got.found.body) proof.body = { at: name, tokens, text, m: { step: got.found.body.step, lid: got.found.body.lid } };
     if (!proof.cand && got.found.cand) proof.cand = { at: name, tokens, text, m: { guard: got.found.cand.guard, lid: got.found.cand.lid, pos: got.found.cand.pos } };
+    if (!proof.pair && got.found.pair) proof.pair = { at: name, tokens, text, m: { lid: got.found.pair.lid, pair: { guard: got.found.pair.guard, pos: got.found.pair.pos } } };
     if (!proof.clean && got.found.dirty) proof.clean = { at: name, tokens, text, m: { lid: 0, clean: got.found.dirty } };
     if (!proof.commit && got.found.commit) { const c = got.found.commit; proof.commit = { at: name, tokens, text, m: { lid: c.lid, commit: { list: c.list, kid: c.kid, arm: c.arm } } }; }
   }
   // The mutation proof: a body guard, then a candidate guard, made to refuse a literal it admitted
   // where its body / candidate matched; the gate must report it on that input.
   const ids = buildLexIdPlan(ir);
-  const what = { body: 'guarded body matched from a literal', cand: 'guarded candidate matched from a literal', commit: 'committed choice matched from a literal', clean: 'branch or repetition body failed dirty' } as const;
-  for (const kind of ['body', 'cand', 'commit', 'clean'] as const) {
+  const what = { body: 'guarded body matched from a literal', cand: 'guarded candidate matched from a literal', commit: 'committed choice matched from a literal', clean: 'branch or repetition body failed dirty', pair: 'candidate admitted by a pair test won' } as const;
+  for (const kind of ['body', 'cand', 'commit', 'clean', 'pair'] as const) {
     const p = proof[kind];
+    // A grammar whose plan has no pair (Guard.pairs) has none to mutate.
+    if (!p && kind === 'pair' && !ir.rules.some((r) => r.kind === 'rd' && r.altGuard.some((g) => g?.pairs))) continue;
     if (!p) { console.log(`  FAIL ${g}: no ${what[kind]}: the mutation proof has nothing to mutate`); failures++; continue; }
     const caught = engine(ir, p.m)(p.tokens, p.text).unsound.length;
-    const did = kind === 'clean' ? `${p.m!.clean!.i < 0 ? `the ${p.m!.clean!.step.t} body` : `branch ${p.m!.clean!.i} of a choice`} that failed dirty in ${p.at} taken for clean`
+    const did = kind === 'pair' ? `the pair tests that admitted ${JSON.stringify(ids.lids[p.m!.lid])} in ${p.at} made to refuse the second token` : kind === 'clean' ? `${p.m!.clean!.i < 0 ? `the ${p.m!.clean!.step.t} body` : `branch ${p.m!.clean!.i} of a choice`} that failed dirty in ${p.at} taken for clean`
       : kind === 'commit' ? `the ${p.m!.commit!.list} list that committed at ${JSON.stringify(ids.lids[p.m!.lid])} in ${p.at} made to commit to its candidate ${p.m!.commit!.arm}`
       : `the ${kind === 'body' ? 'body guard' : 'candidate guard'} that admitted ${JSON.stringify(ids.lids[p.m!.lid])} in ${p.at} made to refuse it`;
     console.log(`  ${g}: mutation: ${did}: ${caught} unsound ${kind === 'clean' ? 'elided mark(s)' : 'refusal(s)'} reported`);
