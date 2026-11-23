@@ -1309,10 +1309,10 @@ function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaI
 ${topOne}
     }
     #[inline(always)]
-    fn push_entry_from_h(&mut self, h: B::H, sb: usize) {
+    fn push_entry_from_h(&mut self, h: B::H) {
         let look = self.look_end() as u32;
         let mut meta = self.b.entry_meta(h, look, &self.toks);
-        meta.kid_start = (self.scratch.len() - sb) as u32;
+        meta.kid_start = self.entries.len() as u32;
         self.entries.push(meta);
     }
     fn parse_top_entry(&mut self, sb: usize) -> Option<EntryMeta> {
@@ -1336,7 +1336,7 @@ ${topOne}
                 Some(fr) => {
                     if fr.present {
                         // Engine-side side table (decision input). CstBuilder.entry_meta also stamps Node.ext.
-                        self.push_entry_from_h(fr.h, sb);
+                        self.push_entry_from_h(fr.h);
                         self.scratch.push(fr.h);
                     }
                 }

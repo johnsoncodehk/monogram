@@ -1212,16 +1212,6 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
  *  top-level entry (+ the Node.ext oracle) via parseTopOne (shape A), or per segment (shape B). */
 function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
-  // Both shapes: the entry's segments, parsed one by one by \`seg\` (shape A: one top-level entry).
-  const entryLoop = (seg: string, headUse: string): string => `func (p *engine) parse${r.name}() int32 {
-\tsave := p.pos; sb := len(p.scratch)
-\tlocalE := p.entries[:0]
-${headUse}\tfor {
-\t\tif m, ok := p.${seg}(sb); ok { localE = append(localE, m) } else { break }
-\t}
-\tp.entries = localE
-\treturn p.finish(${rid}, sb, p.offAt(save), save)
-}`;
   return entryShell(plan, ids, {
     topCall: (n) => `\treturn p.parse${n}()`,
     topTry: (n) => `\t{ sp := p.pos; n := p.parse${n}(); if n >= 0 { return n }; p.back(sp) }`,
@@ -1241,7 +1231,23 @@ func (p *engine) parseTopEntry(sb int) (EntryMeta, bool) {
 \tp.scratch = append(p.scratch, n)
 \treturn EntryMeta{int(p.nodes[n].TokStart), int(p.nodes[n].TokEnd), int(ext), int(p.nodes[n].Offset), int(p.nodes[n].End), len(p.scratch) - 1 - sb, 1}, true
 }
-${entryLoop('parseTopEntry', '')}`,
+func (p *engine) parse${r.name}() int32 {
+\tsave := p.pos; sb := len(p.scratch)
+\tlocalE := p.entries[:0]
+\tfor {
+\t\tsp := p.pos
+\t\tp.lookReset()
+\t\tn := p.parseTopOne()
+\t\tif n < 0 { p.back(sp); break }
+\t\text := p.nodes[n].TokEnd
+\t\tif l := uint32(p.lookEnd()); l > ext { ext = l }
+\t\tp.nodes[n].Ext = ext // CST oracle for validate assert; reuse decisions read p.entries
+\t\tlocalE = append(localE, EntryMeta{int(p.nodes[n].TokStart), int(p.nodes[n].TokEnd), int(ext), int(p.nodes[n].Offset), int(p.nodes[n].End), len(p.scratch) - sb, 1})
+\t\tp.scratch = append(p.scratch, n)
+\t}
+\tp.entries = localE
+\treturn p.finish(${rid}, sb, p.offAt(save), save)
+}`,
     headSeg: (rule) => `func (p *engine) parseHeadSeg(sb int) (EntryMeta, bool) {
 \tp.lookReset()
 \tbefore := len(p.scratch)
@@ -1296,7 +1302,15 @@ ${entryLoop('parseTopEntry', '')}`,
 }`,
     entryB: (headSeg, headUse, loopSeg) => `type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidStart, KidCount int }
 ${headSeg}${loopSeg}
-${entryLoop('parseLoopSeg', headUse)}`,
+func (p *engine) parse${r.name}() int32 {
+\tsave := p.pos; sb := len(p.scratch)
+\tlocalE := p.entries[:0]
+${headUse}\tfor {
+\t\tif m, ok := p.parseLoopSeg(sb); ok { localE = append(localE, m) } else { break }
+\t}
+\tp.entries = localE
+\treturn p.finish(${rid}, sb, p.offAt(save), save)
+}`,
   });
 }
 

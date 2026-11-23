@@ -834,26 +834,12 @@ let _entries: EntryMeta[] = [];
 let _entryHs: any[] = [];
 `;
 function rdEntryWithReuseW(r: RdRule, plan: ReusePlan, ids: LexIdPlan): string {
-  // Both shapes: the entry's segments, parsed one by one by \`seg\` (after the head, \`headUse\`).
-  const entryLoop = (seg: string, headUse: string): string => `function parse${r.name}W(): boolean {
-  const save = pos, b = _n;
-  const localE: EntryMeta[] = [];
-${headUse}  for (;;) {
-    const meta = ${seg}(k);
-    if (meta === null) break;
-    localE.push(meta);
-    k += meta.kidCount;
-  }
-  _entries = localE;
-  _entryHs = _kids(b);
-  finR(${J(r.name)}, b, save);
-  return true;
-}`;
   return entryShell(plan, ids, {
     topCall: (n) => `  return parse${n}W();`,
     topTry: (n) => `  { const sp = pos; if (parse${n}W()) return true; back(sp); }`,
     topFail: '  return false;',
-    // Shape A's segment: one top-level entry.
+    // Shape A's segment for the reuse driver: one top-level entry. The fresh loop keeps it inline
+    // (a call per entry is measurable on inputs of many small entries).
     entryA: (topOne) => `${ENTRY_META_TS}function parseTopOneW(): boolean {
 ${topOne}
 }
@@ -864,7 +850,21 @@ function parseTopEntryW(kidStart: number): EntryMeta | null {
   const s = c * _SW;
   return { tokStart: _sp[s + 2]!, tokEnd: pos, ext: Math.max(pos, lookEnd()), off: _sp[s]!, end: _sp[s + 1]!, kidStart, kidCount: _count(c) };
 }
-${entryLoop('parseTopEntryW', '  let k = 0;\n')}`,
+function parse${r.name}W(): boolean {
+  const save = pos, b = _n;
+  const localE: EntryMeta[] = [];
+  for (;;) {
+    const sp = pos, c = _n;
+    lookReset();
+    if (!parseTopOneW()) { back(sp); _n = c; break; }
+    const s = c * _SW;
+    localE.push({ tokStart: _sp[s + 2]!, tokEnd: pos, ext: Math.max(pos, lookEnd()), off: _sp[s]!, end: _sp[s + 1]!, kidStart: c - b, kidCount: 1 });
+  }
+  _entries = localE;
+  _entryHs = _kids(b);
+  finR(${J(r.name)}, b, save);
+  return true;
+}`,
     // A segment's head: the head rule's node, when it matched and the builder kept a handle of it.
     headSeg: (rule) => `function parseHeadSegW(kidStart: number): EntryMeta | null {
   lookReset();
@@ -897,7 +897,20 @@ ${entryLoop('parseTopEntryW', '  let k = 0;\n')}`,
   return { tokStart, tokEnd, ext, off: t.off, end, kidStart, kidCount: _count(c) };
 }`,
     entryB: (headSeg, headUse, loopSeg) => `${ENTRY_META_TS}${headSeg}${loopSeg}
-${entryLoop('parseLoopSegW', headUse || '  let k = 0;\n')}`,
+function parse${r.name}W(): boolean {
+  const save = pos, b = _n;
+  const localE: EntryMeta[] = [];
+${headUse || '  let k = 0;\n'}  for (;;) {
+    const meta = parseLoopSegW(k);
+    if (meta === null) break;
+    localE.push(meta);
+    k += meta.kidCount;
+  }
+  _entries = localE;
+  _entryHs = _kids(b);
+  finR(${J(r.name)}, b, save);
+  return true;
+}`,
   });
 }
 
