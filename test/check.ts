@@ -59,6 +59,7 @@ const GATES: Gate[] = [
   { group: 'emit-parity', name: 'lexer-work', args: ['test/lexer-work.ts'] },
   { group: 'emit-parity', name: 'lexer-reservation', args: ['test/lexer-reservation.ts'] },
   { group: 'emit-parity', name: 'alloc-work', args: ['test/alloc-work.ts'] },
+  { group: 'emit-parity', name: 'emit-size-record', args: ['test/emit-size-record.ts'] },
   { group: 'emit-parity', name: 'builder-reuse', args: ['test/builder-reuse.ts'] },
   { group: 'emit-parity', name: 'relex-family', args: ['test/relex-family.ts'] },
   { group: 'emit-parity', name: 'define-target', args: ['test/define-target.ts'] },
