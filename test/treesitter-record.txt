@@ -823,16 +823,7 @@ typescript | TypeScript src | rejects | unclassified | src/compiler/transformers
 typescript | TypeScript src | rejects | unclassified | src/compiler/transformers/utilities.ts
 typescript | TypeScript src | rejects | unclassified | src/compiler/types.ts
 typescript | TypeScript src | rejects | unclassified | src/compiler/utilities.ts
-typescript | TypeScript src | rejects | unclassified | src/harness/collectionsImpl.ts
-typescript | TypeScript src | rejects | unclassified | src/harness/compilerImpl.ts
-typescript | TypeScript src | rejects | unclassified | src/harness/documentsUtil.ts
 typescript | TypeScript src | rejects | unclassified | src/harness/evaluatorImpl.ts
-typescript | TypeScript src | rejects | unclassified | src/harness/fakesHosts.ts
-typescript | TypeScript src | rejects | unclassified | src/harness/fourslashImpl.ts
-typescript | TypeScript src | rejects | unclassified | src/harness/fourslashInterfaceImpl.ts
-typescript | TypeScript src | rejects | unclassified | src/harness/harnessLanguageService.ts
-typescript | TypeScript src | rejects | unclassified | src/harness/runnerbase.ts
-typescript | TypeScript src | rejects | unclassified | src/harness/vfsUtil.ts
 typescript | TypeScript src | rejects | unclassified | src/lib/decorators.d.ts
 typescript | TypeScript src | rejects | unclassified | src/lib/dom.generated.d.ts
 typescript | TypeScript src | rejects | unclassified | src/lib/es2015.generator.d.ts
@@ -840,24 +831,7 @@ typescript | TypeScript src | rejects | unclassified | src/lib/es2015.iterable.d
 typescript | TypeScript src | rejects | unclassified | src/lib/es2018.asyncgenerator.d.ts
 typescript | TypeScript src | rejects | unclassified | src/lib/es2018.asynciterable.d.ts
 typescript | TypeScript src | rejects | unclassified | src/lib/es5.d.ts
-typescript | TypeScript src | rejects | unclassified | src/server/editorServices.ts
-typescript | TypeScript src | rejects | unclassified | src/server/project.ts
-typescript | TypeScript src | rejects | unclassified | src/server/scriptVersionCache.ts
-typescript | TypeScript src | rejects | unclassified | src/server/session.ts
-typescript | TypeScript src | rejects | unclassified | src/server/typingInstallerAdapter.ts
-typescript | TypeScript src | rejects | unclassified | src/server/utilities.ts
 typescript | TypeScript src | rejects | unclassified | src/services/codefixes/generateAccessors.ts
-typescript | TypeScript src | rejects | unclassified | src/services/findAllReferences.ts
-typescript | TypeScript src | rejects | unclassified | src/services/textChanges.ts
-typescript | TypeScript src | rejects | unclassified | src/testRunner/compilerRunner.ts
-typescript | TypeScript src | rejects | unclassified | src/testRunner/parallel/host.ts
-typescript | TypeScript src | rejects | unclassified | src/testRunner/projectsRunner.ts
-typescript | TypeScript src | rejects | unclassified | src/testRunner/unittests/helpers/tsserver.ts
-typescript | TypeScript src | rejects | unclassified | src/testRunner/unittests/helpers/typingsInstaller.ts
-typescript | TypeScript src | rejects | unclassified | src/testRunner/unittests/helpers/virtualFileSystemWithWatch.ts
-typescript | TypeScript src | rejects | unclassified | src/tsserver/nodeServer.ts
-typescript | TypeScript src | rejects | unclassified | src/typingsInstaller/nodeTypingsInstaller.ts
-typescript | TypeScript src | rejects | unclassified | src/typingsInstallerCore/typingsInstaller.ts
 typescript | contextual keywords | rejects | unclassified | "abstract: for (;;) continue abstract;"
 typescript | contextual keywords | rejects | unclassified | "abstract: while (1) break abstract;"
 typescript | contextual keywords | rejects | unclassified | "accessor: for (;;) continue accessor;"
