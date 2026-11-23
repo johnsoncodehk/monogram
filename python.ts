@@ -88,9 +88,11 @@ const Integer = token(altPattern(
   seq(plus('0'), star(seq(optPattern('_'), '0'))),
 ), { scope: 'constant.numeric' });
 
-// NAME: ASCII here; a literal beyond ASCII goes through the lexer's Unicode fallback, which is
-// ECMAScript's ID_Start / ID_Continue today, not Python's XID classes (mechanism 3).
-const Name = token(seq(oneOf(range('a', 'z'), range('A', 'Z'), '_'), star(oneOf(range('a', 'z'), range('A', 'Z'), digit, '_'))), { identifier: true });
+// NAME (2.3): ASCII here; a character beyond ASCII goes through the lexer's Unicode fallback, which
+// reads Python's classes as declared: `_` + XID_Start, then XID_Continue (no `$`, no ZWNJ / ZWJ).
+const Name = token(seq(oneOf(range('a', 'z'), range('A', 'Z'), '_'), star(oneOf(range('a', 'z'), range('A', 'Z'), digit, '_'))), {
+  identifier: true, identifierClasses: { start: '[_\\p{XID_Start}]', continue: '[\\p{XID_Continue}]' },
+});
 
 // ── Keywords (2.3.1). Soft keywords (`match`, `case`, `_`) are names everywhere but where an arm
 // spells them. ──
