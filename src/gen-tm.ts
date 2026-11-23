@@ -441,7 +441,14 @@ function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: s
  * identifier, so it never matches either. With `entry: 'always'` (a `tagOpen` only ever opens a
  * tag) there is no lookbehind.
  */
-function generateElementPatterns(langName: string, identRegex: string, view: RegionView, grammar: CstGrammar, disambig: JsxDisambigDelims | null, commentKeys: string[] = [], blockCommentPats: string[] = []): Record<string, TmPattern> {
+// The literals of each scope (a scope's literals in the `scopes` section's order).
+function byScopeLiterals(overrides: Map<string, string[]>): Map<string, string[]> {
+  const byScope = new Map<string, string[]>();
+  for (const [lit, scopes] of overrides) for (const s of scopes) (byScope.get(s) ?? byScope.set(s, []).get(s)!).push(lit);
+  return byScope;
+}
+
+function generateElementPatterns(langName: string, identRegex: string, view: RegionView, grammar: CstGrammar, disambig: JsxDisambigDelims | null, commentKeys: string[] = [], blockCommentPats: string[] = [], holeBraces: { include: string }[] = []): Record<string, TmPattern> {
   const result: Record<string, TmPattern> = {};
   const K = (s: string) => `${view.name}-${s}`;
   const region = view.region;
@@ -742,7 +749,7 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
     beginCaptures: { '0': { name: embeddedBegin } },
     end: escapeRegex(region.hole.close),
     endCaptures: { '0': { name: embeddedEnd } },
-    patterns: [{ include: '$self' }],
+    patterns: [...holeBraces, { include: '$self' }],
   };
 
   // ── <name>-string-*: the tag tokens' quoted forms (own scope, no escapes / interpolation) ──
@@ -2751,10 +2758,34 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
   // they get no flat token match in Section 2: the element patterns scope them.
   const regionOwnedTokens = view?.ownTokens ?? new Set<string>();
   const elementTriggerKeys = new Map<string, number>();
+  // A code hole (a template literal's interpolation, an element region's hole) ends at its closer
+  // at bracket depth 0: an object literal or block inside it (`${f({ a: 1 })}`, `${xs.map(x => {
+  // … })}`) must not end it at its own `}`. The bracket pair whose close is the hole's closer (a
+  // `punctuation.bracket.*` scope naming exactly two literals, the pairs Monarch's `brackets`
+  // read) becomes a region nested in itself, listed before `$self`; no pair, no region.
+  const holeBraceKeys = new Map<string, string>();
+  const holeBraces = (close: string): { include: string }[] => {
+    let key = holeBraceKeys.get(close);
+    if (!key) {
+      const pair = [...byScopeLiterals(scopeOverrides)].find(([sc, lits]) => sc.startsWith('punctuation.bracket.') && lits.length === 2 && lits[1] === close);
+      if (!pair) return [];
+      const [scope, [open]] = pair;
+      key = `hole-brackets${holeBraceKeys.size ? `-${holeBraceKeys.size + 1}` : ''}`;
+      holeBraceKeys.set(close, key);
+      repository[key] = {
+        begin: escapeRegex(open),
+        beginCaptures: { '0': { name: `${scope}.${langName}` } },
+        end: escapeRegex(close),
+        endCaptures: { '0': { name: `${scope}.${langName}` } },
+        patterns: [{ include: `#${key}` }, { include: '$self' }],
+      };
+    }
+    return [{ include: `#${key}` }];
+  };
   if (view) {
     // The grammar's comment repo keys (derived, not hardcoded) so a `//` / `/* */`
     // comment is recognised inside an open tag — legal between attributes (#585).
-    const elPatterns = generateElementPatterns(langName, identPattern, view, grammar, angleDisambig, facts.commentRepoKeys, facts.blockCommentMatchers);
+    const elPatterns = generateElementPatterns(langName, identPattern, view, grammar, angleDisambig, facts.commentRepoKeys, facts.blockCommentMatchers, holeBraces(view.region.hole.close));
     for (const [key, pattern] of Object.entries(elPatterns)) repository[key] = pattern;
     // The disambiguated, expression-position triggers go at the very top (before
     // #generic-call / #comparison): a `<` at expression-start with a tag-shaped
@@ -2843,7 +2874,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
           end: escapeRegex(tok.template.interpClose),
           endCaptures: { '0': { name: `punctuation.definition.template-expression.end.${langName}` } },
           name: `meta.embedded.expression.${langName}`,
-          patterns: [{ include: '$self' }],
+          patterns: [...holeBraces(tok.template.interpClose), { include: '$self' }],
         });
       }
       repository[key] = {

@@ -454,6 +454,28 @@
       "match": "[<>]",
       "name": "keyword.operator.relational.tsx"
     },
+    "hole-brackets": {
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.bracket.curly.tsx"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.bracket.curly.tsx"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#hole-brackets"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
     "jsx-children": {
       "patterns": [
         {
@@ -488,6 +510,9 @@
         }
       },
       "patterns": [
+        {
+          "include": "#hole-brackets"
+        },
         {
           "include": "$self"
         }
@@ -1744,6 +1769,9 @@
           "name": "meta.embedded.expression.tsx",
           "patterns": [
             {
+              "include": "#hole-brackets"
+            },
+            {
               "include": "$self"
             }
           ]
@@ -1967,6 +1995,15 @@
       },
       "end": "(?=[{;]|=>)",
       "patterns": [
+        {
+          "begin": "(?<=[:|&])(?=\\s*\\{)",
+          "end": "(?<=\\})",
+          "patterns": [
+            {
+              "include": "#type-object"
+            }
+          ]
+        },
         {
           "include": "#type"
         }
@@ -3018,6 +3055,15 @@
       },
       "end": "(?=[{;]|=>)",
       "patterns": [
+        {
+          "begin": "(?<=[:|&])(?=\\s*\\{)",
+          "end": "(?<=\\})",
+          "patterns": [
+            {
+              "include": "#type-object"
+            }
+          ]
+        },
         {
           "include": "#type"
         }

@@ -236,6 +236,28 @@
     }
   ],
   "repository": {
+    "hole-brackets": {
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.bracket.curly.js.jsx"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.bracket.curly.js.jsx"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#hole-brackets"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
     "jsx-children": {
       "patterns": [
         {
@@ -270,6 +292,9 @@
         }
       },
       "patterns": [
+        {
+          "include": "#hole-brackets"
+        },
         {
           "include": "$self"
         }
@@ -1496,6 +1521,9 @@
           },
           "name": "meta.embedded.expression.js.jsx",
           "patterns": [
+            {
+              "include": "#hole-brackets"
+            },
             {
               "include": "$self"
             }

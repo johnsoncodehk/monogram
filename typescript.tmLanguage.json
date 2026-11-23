@@ -1204,6 +1204,28 @@
       "name": "constant.numeric.decimal.ts",
       "match": "(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\\.[0-9]*(?:_[0-9]+)*)?|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])"
     },
+    "hole-brackets": {
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.bracket.curly.ts"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.bracket.curly.ts"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#hole-brackets"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
     "template": {
       "name": "string.quoted.other.template.ts",
       "begin": "`",
@@ -1238,6 +1260,9 @@
           },
           "name": "meta.embedded.expression.ts",
           "patterns": [
+            {
+              "include": "#hole-brackets"
+            },
             {
               "include": "$self"
             }
