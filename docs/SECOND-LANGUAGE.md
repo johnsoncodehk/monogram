@@ -7,9 +7,10 @@ no kinship to tsc. This file counts every place where the ENGINE had to change a
 where the grammar had to work AROUND the engine. The workarounds count as findings about the
 model as much as the engine changes do.
 
-**Count: engine mechanisms needed 3 (all 3 general: none is Python-specific); landed 0. Grammar
-workarounds 3. Engine behaviours that turned out to be one language's, found by the second: 2
-(indent mode was YAML's; the `>` re-scan is TypeScript's).**
+**Count: engine mechanisms needed 5 (all 5 general: none is Python-specific); landed 0, in the
+landing queue 2 (M3, M4). Grammar workarounds 3, of which 2 are removed by M4 (W1, W2) and 1 (W3) is
+owed to M5. Engine behaviours that turned out to be one language's, found by the second: 2 (indent
+mode was YAML's; the `>` re-scan was TypeScript's, guessed from a `>` literal).**
 
 The definition is CPython 3.10's `Grammar/python.gram` and its tokenizer. The oracle is `ast.parse`
 of Python 3.10.12, never `compile()`: compile adds symbol-table and compiler errors (`return`
@@ -115,9 +116,22 @@ of the causes above are that transcription, not Python:
   reference (below). `Atom` / `Primary` as rules separate from the Pratt rule are this grammar's
   layout choice; `typescript.ts` folds them into `Expr`.
 
-Transcribed: **10.3 rule invocations per token**. Written for this engine (M4, the target shape, the
-entry levels): estimated 3.5 to 4 (10.32 less 3.51, 2.22 and most of 1.27), to be measured, not
-claimed, when the grammar is rewritten. What is left is the language and the grammar's layout:
+Transcribed: **10.3 rule invocations per token**. With M4 (the ladder as one Pratt rule, the
+conditional a mixfix led, `lambda` a capped nud, the starred and comprehension contexts read
+`atLevel`): **5.63** on the same 603426 tokens, measured:
+
+| cause (with M4) | per token | share |
+|---|---:|---:|
+| the assignment head parsed as targets (W3, owed to M5) | 2.22 | 39.4% |
+| the expression entry layers | 1.26 | 22.5% |
+| atoms, displays, arguments, patterns | 1.24 | 22.1% |
+| statement dispatch | 0.58 | 10.2% |
+| the Pratt expression (`Primary`; `Expression` counts as an entry) | 0.33 | 5.8% |
+
+The entry layers left are real contexts: the comma lists, `StarExpression` (`*` admits a
+bitwise-or only), `NamedExpression` (`:=` takes a name on its left). Each is one frame per
+expression over the one Pratt rule; the ladder frames are gone. With M5 (the head parsed once, the
+targets family gone) the estimate is about 3.4, to be measured. What is left is the language and the grammar's layout:
 statements, atoms, displays, arguments, and the Pratt loop.
 
 ## The table
@@ -126,12 +140,14 @@ statements, atoms, displays, arguments, and the Pratt loop.
 |---|---|---|---|---|---|
 | L1 | engine behaviour that was one language's (owed to M1) | the indent mechanism was YAML's, not general: three behaviours defaulted into every indent grammar. (1) A `#` opens a comment only after whitespace (YAML §6.6), so `x=1#c` does not lex: 82 files. (2) Leading whitespace counts spaces only, so a form feed (which Python's tokenizer reads as a column reset) is content: 18 files. A tab is YAML's §6.1 error or skipped, never measured. (3) A bracket opened after `:` must indent its lines (YAML §7.4), so `if x: [\n1]` throws. `keyValueSeparator` also defaults to `:` and feeds YAML's tab sniffs | indent mode (`IndentConfig`, `src/emit-lexer.ts`) has no declaration for any of them | general: every indent grammar | 100 of 1731 files rejected wrongly; no `TabError` |
 | L2 | engine behaviour that was one language's (owed to M3) | `x = $` accepts: `$` is an identifier character | the Unicode identifier fallback is ECMAScript's (`src/uni-ident.ts`: `$`, ZWNJ / ZWJ, ID_Start / ID_Continue); Python's is `_` + XID_Start / XID_Continue | general: Go, Rust, Java each differ | accepts invalid code |
-| W1 | workaround | `not`, `and`, `or` are rules (python.gram's layers), not Pratt levels | an engine prefix operator binds with lbp 0 (`src/grammar-analysis.ts`), so a Pratt `not` would be admitted as the operand of a tighter infix: `a == not b` would parse | general: any language with a prefix operator looser than an infix (SQL `NOT`, Haskell's `-`) | two rule levels and a rule-call per operand that one Pratt frame would not need (rule calls per token: below) |
-| W2 | workaround, around a TypeScript behaviour | comparisons are a Pratt level, so `a < b < c` is left-nested binary operators, not python.gram's one n-ary `Compare` | written as a rule level, `>=` and `>>=` become rule literals next to `>`, and `gtComposites` (`src/grammar-utils.ts`) infers TypeScript's re-scan of `>` from `>` being a rule literal: every `>`-led punctuator is then composed from single `>` tokens, and a `>`-led rule literal is refused | the inference is TypeScript's; what it should be is a declaration (Rust, C++, Java and C# close generics with `>>` too) | a shape that wants one comparison node flattens the chain; and the comparisons sit inside `BitwiseOr`, so a context that admits a bitwise-or only (`'*' BitwiseOr`, `'**' BitwiseOr`) admits a comparison: `[*a == b]` and `{**a == b}` parse, `ast.parse` rejects both (not in the corpus, which is valid code) |
+| W1 | workaround (removed by M4) | `not`, `and`, `or` are rules (python.gram's layers), not Pratt levels | an engine prefix operator binds with lbp 0 (`src/grammar-analysis.ts`), so a Pratt `not` would be admitted as the operand of a tighter infix: `a == not b` would parse | general: any language with a prefix operator looser than an infix (SQL `NOT`, Haskell's `-`) | two rule levels and a rule-call per operand that one Pratt frame would not need (rule calls per token: below) |
+| W2 | workaround, around a TypeScript behaviour (removed by M4; the inference itself becomes a declaration: `composeGt`, its own landing) | comparisons are a Pratt level, so `a < b < c` is left-nested binary operators, not python.gram's one n-ary `Compare` | written as a rule level, `>=` and `>>=` become rule literals next to `>`, and `gtComposites` (`src/grammar-utils.ts`) infers TypeScript's re-scan of `>` from `>` being a rule literal: every `>`-led punctuator is then composed from single `>` tokens, and a `>`-led rule literal is refused | the inference is TypeScript's; what it should be is a declaration (Rust, C++, Java and C# close generics with `>>` too) | a shape that wants one comparison node flattens the chain; and the comparisons sit inside `BitwiseOr`, so a context that admits a bitwise-or only (`'*' BitwiseOr`, `'**' BitwiseOr`) admits a comparison: `[*a == b]` and `{**a == b}` parse, `ast.parse` rejects both (not in the corpus, which is valid code) |
 | W3 | workaround (python.gram's own method) | an assignment's head is parsed as targets (`t_primary` arms end in `&t_lookahead`, written `not(not(…))`), and the same text as an expression by the expression-statement arm | no cover grammar: the grammar says targets and expressions separately, as python.gram does; `f().x = 1` assigns, `f() = 1` has no derivation | the cover-grammar mechanism (roadmap) would serve every language with destructuring | the head of an expression statement is parsed twice: 2.22 rule invocations per token, 21.5% (Work per token, where JavaScript's `lhsTarget` is measured against it and found short) |
 | M1 | mechanism (approved; design agreed) | the offside layer: a core (column stack, Indent / Dedent / Newline, bracket suspension, blank and comment-only lines, a declared tab and form-feed policy, a loud error on a dedent to an unknown column) with YAML's behaviours as declared extensions; interpreter first, then a portable line-start step | indent mode is YAML's (L1) and interpreter-only (`src/emit-portable.ts` refuses it) | general: Python, YAML, F#, Nim, CoffeeScript, Sass, Pug | |
 | M2 | mechanism (approved; design pending) | templates generalised for f-strings: several template tokens, an open distinct from the close with a prefix class, `{{` / `}}` escapes, a hole tail with a format-spec text mode and nested holes; 3.10's "a hole may not hold the closing quote" as a per-token option | one template token per grammar, whose `open` both opens and closes it | general: C# interpolated strings, Kotlin, Swift, Scala | |
-| M3 | mechanism (approved) | the identifier token's Unicode classes declared on the grammar (L2) | `src/uni-ident.ts` hard-codes ECMAScript's | general | |
+| M3 | mechanism (in the landing queue) | the identifier token's Unicode classes declared on the grammar (L2) | `src/uni-ident.ts` hard-codes ECMAScript's | general | |
+| M4 | mechanism (this landing) | `cappedPrefix(...)`: a prefix operator that begins an operand only at its own level or a looser one; `atLevel(op, Rule)`: a Pratt rule read at an operator's level (docs/GRAMMAR.md). The interpreter tests the cap in its prefix nud and reads `atLevel` through `parsePratt`; the portable engine lowers a capped operator to a sequence arm `op operand` under the existing `capBelow` guard and `atLevel` to the existing `ruleBp` step, so no printer changed and every shipped grammar's emitted parser is byte-identical | a prefix operator bound at every operand position (W1), and no reference could name a level (`'*' bitwise_or`) | general: SQL `NOT`, Haskell's `-`, any ladder whose contexts start at different levels | none for grammars that do not use it; for Python 10.32 -> 5.63 rule invocations per token, and `[*a == b]`, `{**a == b}`, `a if b if c else d else e`, `a if lambda: b else c`, `[x for x in lambda: y]` now reject, as `ast.parse` does (the corpus record does not move: Lib/ holds none of them) |
+| M5 | mechanism (design approved; one point open) | a declared target shape: contexts over stable arm names (leaves, containers recursed through named children, `last` arms) and a zero-width `target(ctx)` marker after the reference it checks, so an assignment's head is parsed once and checked only when the `=` tail is taken. JavaScript needs it too: the AssignmentPattern refinement (rest last, no getter or method in a pattern object: about 27 test262 files) is the spec's supplemental grammar, i.e. syntax; AssignmentTargetType of a leaf stays an early error | W3; JavaScript's `lhsTarget` is shallow and negative | general | |
 
 `\` line joining needed nothing: it is a skip token (`LineJoin`). Soft keywords (`match`, `case`,
 `_`), the conditional expression (a mixfix led, like `?:`), `lambda` (an arm that admits no led), the
