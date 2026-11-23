@@ -18,6 +18,7 @@
 //   (B) the CLOSE-TAG NAME must be `entity.name.tag` (a raw-text close, not an attribute name).
 // The LOWERCASE form is the by-construction-correct PRESERVE baseline; every cased variant must match
 // it on both roles. Self-contained pass/fail; the official VS Code HTML grammar is shown for context.
+// A second section checks the <script> body is delegated to Monogram's own JavaScript grammar.
 //
 // Run: node test/raw-text-case-sites.ts
 import { readFileSync, existsSync } from 'node:fs';
@@ -102,5 +103,75 @@ for (const tag of rawTags) {
   }
 }
 console.log(`\n  ${cells} raw-text-case cells · ${cells - wrong} ok · ${wrong} wrong${official ? '' : '  (Monogram-only — official oracle absent)'}`);
-if (wrong) { console.error(`\n  RAW-TEXT-CASE REGRESSION — mixed-case raw-text element tokenised as markup: ${fails.join(' · ')}`); process.exit(1); }
-console.log('  ✓ every raw-text element (all casings) keeps its body raw (no invented tag) and its close name a tag — matching the lexer\'s case fold.');
+
+// ── the <script> body is Monogram's own JavaScript grammar (source.js) ──
+// The HTML grammar loaded with Monogram's javascript.tmLanguage.json registered as `source.js` (and a
+// CSS stub): the body is delegated to it, JS strings / comments inside it stay JS (no false boundary),
+// and `</script>` returns to HTML. With the official VS Code HTML grammar present (readme-bench sets
+// MONOGRAM_OFFICIAL_HTML) the script-region BOUNDARY is compared with it, both embedding Monogram's JS.
+const cssStub = JSON.stringify({ scopeName: 'source.css', patterns: [{ match: '[^<]+', name: 'source.css' }] });
+const loadEmbedding = (htmlPath: string) => new Registry({
+  onigLib: Promise.resolve({ createOnigScanner: (p: string[]) => new OnigScanner(p), createOnigString: (s: string) => new OnigString(s) }),
+  loadGrammar: async (sn: string) => {
+    if (sn === 'text.html.basic') return parseRawGrammar(readFileSync(htmlPath, 'utf8'), 'html.json');
+    if (sn === 'source.js') return parseRawGrammar(readFileSync('javascript.tmLanguage.json', 'utf8'), 'js.json');
+    if (sn === 'source.css') return parseRawGrammar(cssStub, 'css.json');
+    return null;
+  },
+}).loadGrammar('text.html.basic');
+const embed = (await loadEmbedding('html.tmLanguage.json'))!;
+let embedChecks = 0;
+const embedFails: string[] = [];
+const embedCheck = (label: string, cond: boolean) => { embedChecks++; if (!cond) { embedFails.push(label); console.log(`  ✗ ${label}`); } };
+// the tokens of `src` as [text, joined scopes]
+const embedToks = (src: string) => { const out: { text: string; scopes: string }[] = []; for (const t of tokenize(embed, src)) { const text = src.slice(t.start, t.end); if (text) out.push({ text, scopes: t.scopes.join(' ') }); } return out; };
+const findTok = (toks: { text: string; scopes: string }[], text: string, pred: (s: string) => boolean) => toks.find(t => t.text === text && pred(t.scopes));
+{
+  const toks = embedToks('<script>const x = 1 < 2;</script>');
+  embedCheck('<script>: `const` is JS storage.type (delegated to source.js)', !!findTok(toks, 'const', s => s.includes('source.js') && s.includes('storage.type')));
+  embedCheck('<script>: the `<` of `1 < 2` is a JS keyword.operator inside source.js, not an HTML tag', !!findTok(toks, '<', s => s.includes('source.js') && s.includes('keyword.operator')));
+  embedCheck('<script>: a `script` tag name is HTML (entity.name.tag.html), outside source.js', !!findTok(toks, 'script', s => s.includes('entity.name.tag.html') && !s.includes('source.js')));
+}
+embedCheck('<script>: `//` inside a JS string is string content, not a comment or a boundary',
+  !!findTok(embedToks('<script>var u = "http://example.com";</script>'), 'http://example.com', s => s.includes('source.js') && s.includes('string')));
+embedCheck('<script>: `</div>` inside a JS string does not end the embed',
+  embedToks('<script>let s = "</div> ok";</script>').some(t => t.text.includes('div') && t.scopes.includes('source.js') && t.scopes.includes('string')));
+{
+  const toks = embedToks('<script>\n// a line comment\nlet y = 3;\n</script>');
+  embedCheck('<script>: a `//` line comment is a JS comment', toks.some(t => t.text.includes('line comment') && t.scopes.includes('source.js') && t.scopes.includes('comment')));
+  embedCheck('<script>: JS after the comment still highlights (`let` storage.type)', !!findTok(toks, 'let', s => s.includes('source.js') && s.includes('storage.type')));
+}
+if (official) {
+  const off = (await loadEmbedding(officialPath))!;
+  // per-character mask: is this offset inside an embedded source.js region (robust to the two
+  // grammars splitting tokens differently)? <script> only: both embed `source.js` there.
+  const jsMask = (g: vsctm.IGrammar, src: string): boolean[] => {
+    const mask: boolean[] = [];
+    for (const t of tokenize(g, src)) { const e = t.scopes.some(s => s.startsWith('source.js')); for (let i = t.start; i < t.end; i++) mask[i] = e; }
+    return mask;
+  };
+  const cases = [
+    '<script>const x = 1 < 2;</script>',
+    '<script>var u = "http://example.com";</script>',
+    '<script>let s = "</div> ok";</script>',
+    '<script type="module">import x from "y"; x < 2;</script>',
+    '<script>\nfunction f(a) { return a < 10; }\n</script>',
+  ];
+  let agree = 0, total = 0;
+  for (const src of cases) {
+    const mm = jsMask(embed, src), om = jsMask(off, src);
+    for (let i = 0; i < src.length; i++) { if (src[i] === '\n') continue; total++; if (!!mm[i] === !!om[i]) agree++; }
+  }
+  console.log(`  <script> boundary vs official (both embedding Monogram's JS): ${agree}/${total} chars delegated identically`);
+  // the known divergences: 5 chars where the official grammar starts source.js right after
+  // `<script ...>` while Monogram starts at the first token
+  embedCheck(`official-boundary ratchet (${agree}/${total} ≥ 216/221)`, agree >= 216 && total === 221);
+}
+console.log(`  ${embedChecks} <script>-embed checks · ${embedChecks - embedFails.length} ok`);
+
+if (wrong || embedFails.length) {
+  if (wrong) console.error(`\n  RAW-TEXT-CASE REGRESSION — mixed-case raw-text element tokenised as markup: ${fails.join(' · ')}`);
+  if (embedFails.length) console.error(`\n  <script> EMBED REGRESSION: ${embedFails.join(' · ')}`);
+  process.exit(1);
+}
+console.log('  ✓ every raw-text element (all casings) keeps its body raw (no invented tag) and its close name a tag — matching the lexer\'s case fold; a <script> body is Monogram\'s JS.');
