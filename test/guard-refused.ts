@@ -41,11 +41,13 @@ type Tok = { kid: number; lid: number; off: number; end: number; nl: boolean };
 type Cst = { rule: string; children: Cst[] } | { tokenType: string; offset: number; end: number };
 // A guard that admitted a literal where what it guards then matched (and won): the gate's own
 // proof that it detects a wrong refusal is to refuse that literal there and see it reported.
-type Found = { body?: { step: Step; lid: number }; cand?: { guard: NonNullable<Guard>; lid: number }; commit?: { list: string; lid: number; kid: number; arm: number } };
+type Found = { body?: { step: Step; lid: number }; cand?: { guard: NonNullable<Guard>; lid: number; pos: number }; commit?: { list: string; lid: number; kid: number; arm: number } };
 type Outcome = { accept: boolean; tree: Cst | null; checked: number; unsound: string[]; found: Found };
-// The mutation: one body guard (by step) or one candidate guard (by identity) also refuses a literal,
+// The mutation: one body guard (by step) or one candidate guard (by identity, at the one list start
+// `pos` where it won: refused at every token with that literal, a nested element of the same
+// list would also be refused inside the check's own attempt) also refuses a literal,
 // or one list commits, at one token (lid and kid), to another candidate than its plan's (`commit`).
-type Mutation = { step?: Step; guard?: NonNullable<Guard>; lid: number; commit?: { list: string; kid: number; arm: number } } | null;
+type Mutation = { step?: Step; guard?: NonNullable<Guard>; lid: number; pos?: number; commit?: { list: string; kid: number; arm: number } } | null;
 
 // ── The engine ──
 // One interpreter per grammar; run(toks) parses a token list from the entry rule.
@@ -264,7 +266,7 @@ function engine(ir: ParserIR, mut: Mutation = null) {
   // ── guards and dispatch ──
   const guardOk = (g: Guard, t: Tok | null, keyed: boolean): boolean => {
     if (g === null) return true;
-    if (mut?.guard === g && t !== null && t.lid === mut.lid) return false;
+    if (mut?.guard === g && t !== null && t.lid === mut.lid && pos === mut.pos) return false;
     if (!keyed && g.first) { if (t === null || !inSet(g.first.id, t)) return false; }
     if (g.second !== null) { const i = pos + 1; if (!(i < toks.length && inSet(g.second.id, toks[i]!))) return false; }
     for (const l of g.lead) { if (t === null) return false; const x = inSet(l.set, t) || (l.ctx && ctxWordT(t)); if (x !== l.is) return false; }
@@ -282,8 +284,9 @@ function engine(ir: ParserIR, mut: Mutation = null) {
     }
     return out;
   }
-  // A guarded candidate that won from a literal is noted for the mutation proof.
-  const note = (g: Guard, t: Tok | null) => { if (g !== null && !checking && found.cand === undefined && t !== null && t.lid !== 0) found.cand = { guard: g, lid: t.lid }; };
+  // A guarded candidate that won its list from a literal (the list's winner, not a best that a
+  // later candidate beat: refusing that one changes nothing) is noted for the mutation proof.
+  const note = (g: Guard, t: Tok | null) => { if (g !== null && !checking && found.cand === undefined && t !== null && t.lid !== 0) found.cand = { guard: g, lid: t.lid, pos }; };
   // The longest-match candidates the guards refused (or the Dispatch never reached) at a list's
   // start: each, attempted unguarded from the list's start state, must not have won.
   function candidatesRefused(where: string, refused: number[], run: (i: number) => boolean, bestPos: number, bi: number, save: number) {
@@ -379,7 +382,7 @@ function engine(ir: ParserIR, mut: Mutation = null) {
     }
     const d = rule.altDispatch;
     let ck = checkpoint();
-    let best: Sp | null = null, bestPos = save, bi = -1;
+    let best: Sp | null = null, bestPos = save, bi = -1, bg: Guard = null;
     const ft = rule.altGuard.some((g) => g !== null) ? peek() : null;
     const reached = new Set<number>(), refused: number[] = [];
     for (const { i, keyed } of dispatchOrder(d, ft)) {
@@ -389,11 +392,12 @@ function engine(ir: ParserIR, mut: Mutation = null) {
       if (!guardOk(g, ft, keyed)) { refused.push(i); continue; }
       const ok = all(rule.alts[i]!.slice(g?.skip ?? 0), r);
       const beats = d.ranked.includes(i) ? (pos > bestPos || (pos === bestPos && i < bi)) : pos > bestPos;
-      if (ok && beats) { best = won(); bestPos = pos; bi = i; ck = checkpoint(); note(g, ft); }
+      if (ok && beats) { best = won(); bestPos = pos; bi = i; ck = checkpoint(); bg = g; }
       else { scratch.length = sb; restore(ck); }
       pos = save;
     }
     rule.alts.forEach((_, i) => { if (!reached.has(i) && rule.altGuard[i] !== null) refused.push(i); });
+    if (best !== null) note(bg, ft);
     candidatesRefused(rule.name, refused, (i) => all(rule.alts[i]!, r), bestPos, bi, save);
     pos = bestPos;
     return best;
@@ -516,12 +520,12 @@ function engine(ir: ParserIR, mut: Mutation = null) {
     const t = peek(); if (t === null) return null;
     const d = r.nudDispatch;
     const save = pos, sb = scratch.length; let ck = checkpoint();
-    let best: Sp | null = null, bestPos = save, bi = -1, bf = 0, bt = false, bc = false;
+    let best: Sp | null = null, bestPos = save, bi = -1, bf = 0, bt = false, bc = false, bg: Guard = null;
     const beats = (p: number, i: number) => (d.ranked.includes(i) ? (p > bestPos || (p === bestPos && i < bi)) : p > bestPos);
-    const won = (i: number, f: number, tl: boolean, cp: boolean) => { bestPos = pos; bi = i; bf = f; bt = tl; bc = cp; ck = checkpoint(); };
+    const won = (i: number, f: number, tl: boolean, cp: boolean) => { bestPos = pos; bi = i; bf = f; bt = tl; bc = cp; ck = checkpoint(); bg = null; };
     const seqArm = (i: number, steps: Step[], tl: boolean, cp: boolean, g: Guard) => {
       const ok = all(steps, false);
-      if (ok && beats(pos, i)) { best = finish(rid, sb); won(i, 0, tl, cp); note(g, t); }
+      if (ok && beats(pos, i)) { best = finish(rid, sb); won(i, 0, tl, cp); bg = g; }
       else { scratch.length = sb; restore(ck); }
       pos = save;
     };
@@ -639,6 +643,7 @@ function engine(ir: ParserIR, mut: Mutation = null) {
       if (a.kind === 'capped' && minBp < r.nudCapped[a.index]!.capBp && r.nudCappedGuard[a.index] !== null) refused.push(i);
     });
     const armSteps = (i: number): Step[] => { const a = r.nudOrder[i]!; return a.kind === 'seq' ? r.nudSeqs[a.index]! : r.nudCapped[(a as { index: number }).index]!.steps; };
+    if (best !== null) note(bg, t);
     candidatesRefused(`${r.name} NUD`, refused, (i) => all(armSteps(i), false), bestPos, bi, save);
     capped = bc; form = bf; tail = bt;
     pos = bestPos;
@@ -675,36 +680,70 @@ function filesUnder(dir: string, ext: RegExp): string[] {
   return out;
 }
 const stride = <T>(xs: T[], n: number): T[] => (xs.length <= n ? xs : xs.filter((_, i) => i % Math.ceil(xs.length / n) === 0));
-const corpus = stride(filesUnder(CORPUS, /\.tsx?$/).filter((f) => !f.endsWith('.tsx') && statSync(f).size < 20000), SAMPLE);
+const tsCorpus = filesUnder(CORPUS, /\.tsx?$/).filter((f) => statSync(f).size < 20000);
+const corpus = stride(tsCorpus.filter((f) => !f.endsWith('.tsx')), SAMPLE);
 if (corpus.length === 0) { console.log(`guard-refused: NOT RUN: the conformance corpus ${CORPUS} is missing`); process.exit(1); }
+const tsxCorpus = tsCorpus.filter((f) => f.endsWith('.tsx'));
 const NM = `${ROOT}node_modules`;
-const tsInputs = [
+// An input: a file, or a text written here (named by its grammar and index).
+type Input = string | { name: string; text: string };
+const tsInputs: Input[] = [
   ...readdirSync(`${ROOT}src`).filter((f) => f.endsWith('.ts')).map((f) => `${ROOT}src/${f}`),
   ...readdirSync(ROOT).filter((f) => f.endsWith('.ts')).map((f) => `${ROOT}${f}`),
   `${NM}/typescript/lib/typescript.d.ts`, `${NM}/typescript/lib/lib.es5.d.ts`,
   ...corpus,
 ];
-const jsInputs = [
+const jsInputs: Input[] = [
   `${NM}/acorn/dist/acorn.mjs`,
   ...filesUnder(`${NM}/parse5/dist`, /\.js$/), ...filesUnder(`${NM}/entities/dist`, /\.js$/), ...filesUnder(`${NM}/yaml/dist`, /\.js$/),
   ...corpus,
+];
+// JSX written here: elements, fragments, attributes, spreads, holes, text, elements inside holes,
+// relational `<` next to elements. The corpus has no .jsx file; its .tsx files are also fed to the
+// JavaScript dialect, which accepts the ones with no type syntax.
+const jsxTexts = [
+  'const a = <div className="x" {...rest}>Hello {name}, <b>welcome</b></div>;',
+  'const l = <><span>1</span><span>2</span></>;\nconst m = <ul>{items.map((x) => <li key={x.id}>{x.name}</li>)}</ul>;',
+  'function Card({ title }) {\n  return <section className="card"><h2>{title}</h2>{/* c */}</section>;\n}',
+  'const q = ok ? <Yes /> : <No />;\nrender(<App config={cfg} a-b={`${t}`} />, root);\nlet z = a < b > c;',
+  'const s = <Foo.Bar baz={1}>{cond && <i>t</i>}&nbsp;x</Foo.Bar>;\nx = y < z;',
+];
+const tsxTexts = [
+  ...jsxTexts,
+  'const g = <T,>(y: T) => <q>{y}</q>;\nfunction F<P extends object>(p: P): JSX.Element { return <div {...p} />; }',
+  'let m = new Map<string, X>();\nconst e = <C<number> a={1} />;\ntype F = <T>(x: T) => T;',
+];
+// The element dialect's own inputs (the shapes test/incremental-grammars.ts edits).
+const dialectTexts = [
+  'component C(a) {\n  <a k="v">@if (a) { <b/> } @else { "e" } {a}</a> "z" <c/>\n}',
+  'component D() { <a><b>{1}</b><{t} id="d">"s"</{t}></a> }\ncomponent E() { "q" }',
+  'component S() { <a><style k="v">.a { b: "c" } <i></style>"t"</a> <style></style> }',
+  '@x @y component L(a, b) { @each (i of a.b(1, 2)) { <my-card on:click={!a == b}/> } @empty { "none" } <p {k}>{a + b - 1}</p> }',
+];
+const texts = (g: string, xs: string[]): Input[] => xs.map((text, i) => ({ name: `${g}#${i}`, text }));
+const GRAMMARS: Array<[string, Input[]]> = [
+  ['typescript', tsInputs],
+  ['javascript', jsInputs],
+  ['typescriptreact', [...texts('typescriptreact', tsxTexts), ...tsxCorpus]],
+  ['javascriptreact', [...texts('javascriptreact', jsxTexts), ...jsInputs, ...tsxCorpus]],
+  ['test/fixtures/elementdialect', texts('elementdialect', dialectTexts)],
 ];
 
 let failures = 0;
 const t0 = Date.now();
 const dir = scratchDir('guard-refused');
-for (const [g, inputs] of [['typescript', tsInputs], ['javascript', jsInputs]] as const) {
+for (const [g, inputs] of GRAMMARS) {
   const grammar: CstGrammar = (await import(`${ROOT}${g}.ts`)).default;
   const ir = portableIR(grammar);
-  const file = `${dir}/${g}.ts`;
+  const file = `${dir}/${g.replace(/\//g, '_')}.ts`;
   writeFileSync(file, emitParser(grammar, tsTarget));
   const lib = await import(file) as { tokenize(s: string): Tok[]; parse(s: string): unknown };
   const run = engine(ir);
   let n = 0, accepted = 0, checks = 0, drift = 0, bad = 0;
   type Proof = { at: string; tokens: Tok[]; text: string; m: Mutation };
   const proof: { body?: Proof; cand?: Proof; commit?: Proof } = {};
-  for (const path of inputs) {
-    const text = readFileSync(path, 'utf8');
+  for (const input of inputs) {
+    const text = typeof input === 'string' ? readFileSync(input, 'utf8') : input.text;
     let tokens: Tok[];
     try { tokens = lib.tokenize(text).map((t) => ({ kid: t.kid, lid: t.lid, off: t.off, end: t.end, nl: t.nl })); } catch { continue; }
     n++;
@@ -712,14 +751,14 @@ for (const [g, inputs] of [['typescript', tsInputs], ['javascript', jsInputs]] a
     const got = run(tokens, text);
     checks += got.checked;
     if (got.accept) accepted++;
-    const name = path.startsWith(ROOT) ? path.slice(ROOT.length) : path.slice(CORPUS.length - 'conformance'.length);
+    const name = typeof input !== 'string' ? input.name : input.startsWith(ROOT) ? input.slice(ROOT.length) : input.slice(CORPUS.length - 'conformance'.length);
     if (got.accept !== (want !== null) || (got.accept && JSON.stringify(got.tree) !== JSON.stringify(canon(want)))) {
       drift++;
       if (drift <= 5) console.log(`  DRIFT ${g} ${name}: the engine ${got.accept ? 'accepts' : 'rejects'}, the TS target ${want !== null ? 'accepts' : 'rejects'}${got.accept && want !== null ? ' with another tree' : ''}`);
     }
     for (const u of got.unsound) { bad++; if (bad <= 12) console.log(`  FAIL ${g} ${name}: ${u}`); }
     if (!proof.body && got.found.body) proof.body = { at: name, tokens, text, m: { step: got.found.body.step, lid: got.found.body.lid } };
-    if (!proof.cand && got.found.cand) proof.cand = { at: name, tokens, text, m: { guard: got.found.cand.guard, lid: got.found.cand.lid } };
+    if (!proof.cand && got.found.cand) proof.cand = { at: name, tokens, text, m: { guard: got.found.cand.guard, lid: got.found.cand.lid, pos: got.found.cand.pos } };
     if (!proof.commit && got.found.commit) { const c = got.found.commit; proof.commit = { at: name, tokens, text, m: { lid: c.lid, commit: { list: c.list, kid: c.kid, arm: c.arm } } }; }
   }
   // The mutation proof: a body guard, then a candidate guard, made to refuse a literal it admitted
