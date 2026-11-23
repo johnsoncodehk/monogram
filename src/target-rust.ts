@@ -2726,7 +2726,9 @@ ${matchTemplate}${lookFns(ir, ids, ar)}${sharedFns(ir, ids, ar)}${ruleFns}
 function emitParseWithHelpers(ir: ParserIR, shapeB: boolean): string {
   const reuse = !!ir.reuse;
   return `
-pub fn parse_with<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> Option<B::H> {
+// Inlined: built in the caller's frame, so the parser is never moved.
+#[inline(always)]
+fn parse_begin<'x, 'a, B: Builder + Default>(src: &'a str, b: &'x mut B) -> ParseGuard<'x, 'a, B> {
     // A builder that parsed before is reused: its token buffer, arena and workspace are emptied
     // (capacity kept), so nothing of the previous parse stays reachable and nothing is allocated
     // again. The guard hands them back to the builder when the parse ends, also by a panic (input
@@ -2736,7 +2738,11 @@ pub fn parse_with<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> Option<B
     let ws = b.workspace_mut().map(std::mem::take).unwrap_or_default();
     b.restore((0, 0));
     let owned = std::mem::take(b);
-    let mut g = ParseGuard { home: b, lex: ws.lex, p: Parser { toks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src, b: owned, scratch: ws.scratch${reuse ? ', entries: ws.entries' : ''} } };
+    ParseGuard { home: b, lex: ws.lex, p: Parser { toks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src, b: owned, scratch: ws.scratch${reuse ? ', entries: ws.entries' : ''} } }
+}
+
+pub fn parse_with<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> Option<B::H> {
+    let mut g = parse_begin(src, b);
     let p = &mut g.p;
     if let Some(e) = lex_into(src, &mut p.toks, &mut g.lex) { panic!("{}", lex_error(src, e).msg); }
     p.scratch.clear();
@@ -5713,9 +5719,9 @@ ${emitParseWithHelpers(ir, shapeB)}
 }
 
 // The emit option `recovery` (src/emit.ts): total parsing's entry, a region appended to the default
-// module and touching none of it. parse_total runs the entry rule as parse_with does (owed: one
-// shell for both once the default emission may change); on a reject the recovery family decides
-// the diagnostic from the position the entry stopped at and the tokens the parse examined.
+// module and touching none of it. parse_total runs the entry rule as parse_with does (parse_begin
+// its setup); on a reject the recovery family decides the diagnostic from the position the entry
+// stopped at and the tokens the parse examined.
 function recoveryRegionRust(ir: ParserIR, shared: SharedAlgorithms): string {
   const reuse = !!ir.reuse;
   return `
@@ -5739,11 +5745,7 @@ fn diagnostic_of(src: &str, d: Diag) -> Diagnostic {
 /// no errors, a rejected one None and its errors (a lexer error, or the parse's primary error), each
 /// with its span in the source. It does not panic on input.
 pub fn parse_total<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> (Option<B::H>, Vec<Diagnostic>) {
-    let toks = b.toks_mut().map(std::mem::take).unwrap_or_default();
-    let ws = b.workspace_mut().map(std::mem::take).unwrap_or_default();
-    b.restore((0, 0));
-    let owned = std::mem::take(b);
-    let mut g = ParseGuard { home: b, lex: ws.lex, p: Parser { toks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src, b: owned, scratch: ws.scratch${reuse ? ', entries: ws.entries' : ''} } };
+    let mut g = parse_begin(src, b);
     let p = &mut g.p;
     if let Some(e) = lex_into(src, &mut p.toks, &mut g.lex) {
         let end = if e.end > e.off { e.end as usize } else { e.off as usize };
