@@ -22,6 +22,7 @@
 // Offsets are in the target's native string units; the family only does arithmetic on them.
 
 import { type ElementPlan, type LexTok, type ParserIR, buildLexDispatchPlan, buildLexIdPlan, elementTokens, kidOf, lexTokFirstBytes, lidOf, punctFirstBytes } from './emit-portable.ts';
+import { tokenPatternLiteralRuns } from './token-pattern.ts';
 import type { TokenCharClassItem, TokenPattern } from './types.ts';
 import { relexMode } from './relex-family.ts';
 import { type CharSet, type CodeRange, type Expr, type Fn, type Lowering, type Stmt, inlineFn, printFns, printStmts } from './algo-ir.ts';
@@ -80,6 +81,10 @@ export const IDENT_ESC = 'lexIdentEsc';
 // The target's Unicode identifier class of a code point, (cp) -> int: 0 neither, 1
 // IdentifierPart only, 2 IdentifierStart too (uni-ident.ts). The target prints it.
 export const UNI_CLASS = 'lexUniClass';
+// The target's Unicode IdentifierName at a position, (s, p) -> int: the end of an IdentifierStart
+// then IdentifierPart run beginning at p (uni-ident.ts), or -1; the interpreter's LX_UNI_IDENT.
+// The target prints it.
+export const UNI_IDENT = 'lexUniIdent';
 /** The template span scanner (see `tplSpan`). */
 export const TPL_SPAN = 'lexTplSpan';
 
@@ -385,13 +390,19 @@ class LexScan {
   // The identifier prefix of the token being scanned (null: not identifier-like), and its name.
   private esc: string | null = null;
   private escTok = '';
+  // A prefixed identifier (`#name`) whose pattern does not match: the prefix then a Unicode
+  // IdentifierName (`#℘`), as the interpreter's prefixed fallback (emit-lexer.ts), which it takes
+  // where no token matches; here it is taken in the token's own scanner, before the dispatch tries
+  // a later candidate, so uniPrefixAlone proves that no other token or punct can match there.
   private escScan(m: string): string {
     const name = `${scannerName(this.escTok)}Esc`, q = this.esc ? add('p', litLen(this.esc)) : x('p');
     if (!this.fns.some((f) => f.name === name)) {
+      const uni: Stmt[] = this.esc ? [if_(hasAt('p', this.esc), [ret(call4(UNI_IDENT, 's', q))])] : [];
+      const orUni = this.esc ? `; else ${this.esc} then a Unicode IdentifierName` : '';
       this.fns.push({
-        name, cold: true, doc: `${this.escTok}: its token pattern's match, whose escapes must spell IdentifierName characters.`,
+        name, cold: true, doc: `${this.escTok}: its token pattern's match, whose escapes must spell IdentifierName characters${orUni}.`,
         params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }], ret: ['int'],
-        body: [let_('e', call(m, 'p')), if_(gt('e', 'p'), [ret(call4(IDENT_ESC, 's', 'p', q, 'e'))]), NONE],
+        body: [let_('e', call(m, 'p')), if_(gt('e', 'p'), [ret(call4(IDENT_ESC, 's', 'p', q, 'e'))]), ...uni, NONE],
       });
     }
     return name;
@@ -996,6 +1007,41 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
   return fns;
 }
 
+// Whether some identifier-like token has a prefix (`#name`): its scanner falls back to the prefix
+// then a Unicode IdentifierName (UNI_IDENT, which the target then prints).
+export const hasUniPrefix = (ir: Pick<ParserIR, 'identLike' | 'identPrefix'>): boolean => ir.identLike.some((n) => ir.identPrefix[n]);
+
+// The prefixed fallback is taken in tok's scanner (escScan), where the interpreter takes it after
+// every token and punct failed. The two agree when no other token and no punct can match a text
+// that begins with the prefix and then a unit beyond ASCII (every IdentifierStart the fallback
+// takes is one): each must begin with a literal run that leaves the prefix within ASCII (`#!`
+// against `#`). Anything else is refused here, loudly, rather than lexed in another order.
+function uniPrefixAlone(ir: ParserIR, tok: string, prefix: string): void {
+  // a match that begins with run r may begin with prefix + a unit beyond ASCII
+  const may = (r: string): boolean => {
+    const n = Math.min(r.length, prefix.length);
+    if (r.slice(0, n) !== prefix.slice(0, n)) return false;
+    return r.length <= prefix.length || r.charCodeAt(prefix.length) >= 128;
+  };
+  const c0 = prefix.charCodeAt(0);
+  const reaches = (fb: { bytes: number[]; nonAscii: boolean } | null): boolean => fb === null || (c0 < 128 ? fb.bytes.includes(c0) : fb.nonAscii);
+  // the literal runs a match of t begins with ('' when it may begin with no literal)
+  const runsOf = (t: LexTok): string[] => {
+    switch (t.kind) {
+      case 'string': return [t.delim];
+      case 'line': return [t.prefix];
+      case 'block': return [t.open];
+      case 'run': return [''];
+      case 'runBail': case 'pattern': return tokenPatternLiteralRuns(t.pattern);
+    }
+  };
+  const clash = [
+    ...scannedTokens(ir).filter((t) => t.name !== tok && reaches(lexTokFirstBytes(t)) && runsOf(t).some(may)).map((t) => `token ${t.name}`),
+    ...ir.puncts.filter((v) => reaches(punctFirstBytes(v)) && may(v)).map((v) => `punct ${JSON.stringify(v)}`),
+  ];
+  if (clash.length) throw new Error(`lex-family: ${tok}'s Unicode fallback (${JSON.stringify(prefix)} then an IdentifierName beyond ASCII) is taken in its scanner, but ${clash.join(', ')} may also match there; the interpreter would try it first`);
+}
+
 type Family = { sets: CharSet[]; fns: Fn[]; runs: boolean; finds: boolean; stopSets: number[][] };
 const families = new WeakMap<ParserIR, Family>();
 export function lexScanFamily(ir: ParserIR): Family {
@@ -1006,6 +1052,10 @@ export function lexScanFamily(ir: ParserIR): Family {
     if (ir.identLike.length) {
       b.fns.push({ name: UNI_CLASS, doc: '', params: [{ name: 'cp', ty: 'int' }], ret: ['int'], body: [], extern: true });
       b.fns.push(b.identEsc());
+    }
+    if (hasUniPrefix(ir)) {
+      for (const n of ir.identLike) if (ir.identPrefix[n]) uniPrefixAlone(ir, n, ir.identPrefix[n]!);
+      b.fns.push({ name: UNI_IDENT, doc: '', params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }], ret: ['int'], body: [], extern: true });
     }
     if (ir.tpl) b.fns.push(b.tplSpan(ir.tpl));
     if (ir.elements) b.fns.push(...elementFns(ir, ir.elements, b));
