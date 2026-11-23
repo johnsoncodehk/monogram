@@ -183,7 +183,7 @@ cannot express: [docs/HIGHLIGHTER-EVIDENCE.md](docs/HIGHLIGHTER-EVIDENCE.md).
   target: Rust and Go instruction counts (Callgrind), TypeScript and JavaScript block-execution
   counts, allocator calls and page faults. A change that moves one target only is listed as
   such ([docs/MEASUREMENT.md](docs/MEASUREMENT.md)).
-- TSX and JSX through the portable parsers, on `25b9ec7` (AMD EPYC 9V45): plain TypeScript
+- TSX and JSX through the portable parsers, on `d326d65` (AMD EPYC 7763): plain TypeScript
   parsed by the TSX parser costs 1.4% more Rust instructions per parse than by the TypeScript
   parser (Go +1.6% direct, -0.7% builder engine; TS +0.06% blocks); a token of tsc's JSX
   conformance code costs the Rust lexer 203.7 instructions against 142.3 on `checker.ts`
@@ -194,15 +194,15 @@ cannot express: [docs/HIGHLIGHTER-EVIDENCE.md](docs/HIGHLIGHTER-EVIDENCE.md).
 - With a kept builder, a Go parse allocates nothing (0 allocations per parse in reuse mode,
   pinned for each input in [docs/ALLOCATIONS.md](docs/ALLOCATIONS.md), gate `alloc-work`);
   the same record pins the TS and JS targets.
-- Emitted parser sizes (`node test/emit-sizes.ts` on the content of `25b9ec7`, recorded by the
-  profile run 45126133065):
+- Emitted parser sizes (`node test/emit-sizes.ts` on `d326d65`, recorded by the profile run
+  45129600578):
 
 | grammar | TypeScript | Go | Rust | emitted JS (`jsTarget`) |
 |---|--:|--:|--:|--:|
-| `typescript.ts` | 274,580 B | 500,572 B | 365,570 B | 1,462,627 B |
-| `javascript.ts` | 192,305 B | 328,191 B | 271,577 B | 869,603 B |
-| `typescriptreact.ts` | 305,275 B | 535,519 B | 402,273 B | 1,516,020 B |
-| `javascriptreact.ts` | 205,095 B | 347,484 B | 286,596 B | 921,558 B |
+| `typescript.ts` | 279,033 B | 510,353 B | 371,413 B | 1,462,627 B |
+| `javascript.ts` | 193,639 B | 331,230 B | 273,387 B | 869,603 B |
+| `typescriptreact.ts` | 309,794 B | 545,370 B | 408,054 B | 1,516,020 B |
+| `javascriptreact.ts` | 206,830 B | 350,928 B | 288,389 B | 921,558 B |
 
 ## Design
 

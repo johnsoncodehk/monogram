@@ -63,13 +63,13 @@ Parity (`test/portable-targets.ts`, every CI run; the same counts for TypeScript
 Every corpus input also gives the same tree through an incremental `Doc` as through a fresh
 parse.
 
-Emitted sizes (`node test/emit-sizes.ts`, recorded by the profile run 45126133065 on the
-content of master 25b9ec7):
+Emitted sizes (`node test/emit-sizes.ts`, recorded by the profile run 45129600578 on master
+d326d65):
 
 | grammar | TypeScript | Go | Rust |
 |---|--:|--:|--:|
-| `typescriptreact.ts` | 305,275 B | 535,519 B | 402,273 B |
-| `javascriptreact.ts` | 205,095 B | 347,484 B | 286,596 B |
+| `typescriptreact.ts` | 309,794 B | 545,370 B | 408,054 B |
+| `javascriptreact.ts` | 206,830 B | 350,928 B | 288,389 B |
 
 Speed, from the same run ([MEASUREMENT.md](MEASUREMENT.md#recorded-result-element-dialects-tsx-and-jsx)
 has the table): a token of tsc's JSX conformance code costs the Rust lexer 203.7 instructions,
