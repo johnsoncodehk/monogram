@@ -14,10 +14,21 @@
 //  Run:  node test/check.ts            # all gates
 //        node test/check.ts yaml       # only gates whose group/name contains "yaml"
 // ─────────────────────────────────────────────────────────────────────────────
-import { execFile } from 'node:child_process';
-import { cpus } from 'node:os';
+import { execFile, execFileSync } from 'node:child_process';
+import { cpus, tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
-interface Gate { group: string; name: string; args: string[] }
+// tier 'ci': the gate runs in CI (and with --all), not in the inner loop (`--changed`): a
+// whole-corpus cross or a gate of more than about ten seconds whose inputs rarely change.
+// reads: inputs the gate opens through a path test/gate-deps.ts cannot derive from its source.
+interface Gate { group: string; name: string; args: string[]; tier?: 'ci'; reads?: string[] }
+// The edits class's grammars in shards of about equal time. Measured on CI (master b2d571d, one
+// process): the one-character edits took 557 s of the old gate's 687 s — typescriptreact 215 s,
+// elementdialect 101, typescript 68, javascriptreact 60, textdialect-tagstart 54, javascript 45,
+// tagtokdialect 14 — most of it one native process start per edit and per target.
+const PORTABLE_EDIT_SHARDS = ['typescriptreact', 'elementdialect,javascript,tagtokdialect', 'typescript,javascriptreact', 'textdialect-tagstart,textdialect-text', 'textdialect,textdialect-dir'];
+const EDIT_GRAMMARS = new Set(PORTABLE_EDIT_SHARDS.join(',').split(','));
 const GATES: Gate[] = [
   { group: 'core', name: 'agnostic', args: ['test/agnostic.ts'] },
   { group: 'core', name: 'tag-open-entry', args: ['test/tag-open-entry.ts'] },
@@ -32,7 +43,7 @@ const GATES: Gate[] = [
   { group: 'core', name: 'cst-text-invariant', args: ['test/cst-text-invariant.ts'] },
   { group: 'conformance', name: 'ts-ast-structure', args: ['test/ts-ast-verify.ts'] },
   { group: 'conformance', name: 'shape-oracle', args: ['test/shape-oracle.ts'] },
-  { group: 'conformance', name: 'shape2-oracle', args: ['--stack-size=7000', 'test/shape2-oracle.ts', '--check'] },
+  { group: 'conformance', name: 'shape2-oracle', args: ['--stack-size=7000', 'test/shape2-oracle.ts', '--check'], tier: 'ci' },
   { group: 'core', name: 'cst-match-totality', args: ['test/cst-match-totality.ts'] },
   { group: 'core', name: 'grammar-names', args: ['test/grammar-names-transparent.ts'] },
   { group: 'core', name: 'shape2-eval', args: ['--stack-size=7000', 'test/shape2-eval.ts'] },
@@ -47,43 +58,51 @@ const GATES: Gate[] = [
   { group: 'emit-parity', name: 'emit-standalone', args: ['test/emit-standalone.ts'] },
   { group: 'emit-parity', name: 'emit-portable-library', args: ['test/emit-portable-library.ts'] },
   { group: 'emit-parity', name: 'emit-portable-split', args: ['test/emit-portable-split.ts'] },
-  { group: 'emit-parity', name: 'portable-targets', args: ['test/portable-targets.ts'] },
+  // The portable targets ≡ the interpreter, one gate per class (test/portable-harness.ts); the
+  // edits class is sharded by grammar (PORTABLE_EDIT_SHARDS). The Go / Rust builds are shared through the
+  // harness's build cache, so the shards build each grammar once between them.
+  { group: 'emit-parity', name: 'portable-targets/lists', args: ['test/portable-lists.ts'] },
+  ...PORTABLE_EDIT_SHARDS.map((gs, i): Gate => ({ group: 'emit-parity', name: `portable-targets/edits-${i + 1}`, args: ['test/portable-edits.ts', `--grammars=${gs}`], tier: 'ci' })),
+  // the grammars of no shard: their edit sessions (calc, envspec, …: a few seconds)
+  { group: 'emit-parity', name: 'portable-targets/edits-small', args: ['test/portable-edits.ts', `--grammars-except=${[...EDIT_GRAMMARS].join(',')}`] },
+  { group: 'emit-parity', name: 'portable-targets/corpus', args: ['test/portable-corpus.ts'], tier: 'ci' },
+  { group: 'emit-parity', name: 'portable-targets/recovery', args: ['test/portable-recovery.ts'], tier: 'ci' },
   { group: 'emit-parity', name: 'portable-work', args: ['test/portable-work.ts'] },
   { group: 'emit-parity', name: 'predictive-first', args: ['test/predictive-first.ts'] },
   { group: 'emit-parity', name: 'guard-lead', args: ['test/guard-lead.ts'] },
   { group: 'emit-parity', name: 'guard-refutation', args: ['test/guard-refutation.ts'] },
-  { group: 'emit-parity', name: 'guard-refused', args: ['--stack-size=7000', 'test/guard-refused.ts'] },
-  { group: 'emit-parity', name: 'decision-report', args: ['--stack-size=7000', 'test/decision-report.ts', '--check'] },
-  { group: 'emit-parity', name: 'decision-dead', args: ['--stack-size=7000', 'test/decision-report.ts', '--dead'] },
-  { group: 'emit-parity', name: 'look-extent', args: ['test/look-extent.ts'] },
+  { group: 'emit-parity', name: 'guard-refused', args: ['--stack-size=7000', 'test/guard-refused.ts'], tier: 'ci' },
+  { group: 'emit-parity', name: 'decision-report', args: ['--stack-size=7000', 'test/decision-report.ts', '--check'], tier: 'ci' },
+  { group: 'emit-parity', name: 'decision-dead', args: ['--stack-size=7000', 'test/decision-report.ts', '--dead'], tier: 'ci' },
+  { group: 'emit-parity', name: 'look-extent', args: ['test/look-extent.ts'], tier: 'ci' },
   { group: 'emit-parity', name: 'lexer-work', args: ['test/lexer-work.ts'] },
   { group: 'emit-parity', name: 'lexer-reservation', args: ['test/lexer-reservation.ts'] },
-  { group: 'emit-parity', name: 'alloc-work', args: ['test/alloc-work.ts'] },
+  { group: 'emit-parity', name: 'alloc-work', args: ['test/alloc-work.ts'], tier: 'ci' },
   { group: 'emit-parity', name: 'emit-size-record', args: ['test/emit-size-record.ts'] },
   { group: 'emit-parity', name: 'builder-reuse', args: ['test/builder-reuse.ts'] },
   { group: 'emit-parity', name: 'relex-family', args: ['test/relex-family.ts'] },
   { group: 'emit-parity', name: 'define-target', args: ['test/define-target.ts'] },
-  { group: 'emit-parity', name: 'lex-family', args: ['test/lex-family.ts'] },
+  { group: 'emit-parity', name: 'lex-family', args: ['test/lex-family.ts'], tier: 'ci' },
   { group: 'emit-parity', name: 'syntax-agnostic', args: ['test/syntax-agnostic.ts'] },
   { group: 'emit-parity', name: 'ast-builder', args: ['test/ast-builder.ts'] },
   { group: 'emit-parity', name: 'shape-codegen', args: ['test/shape-codegen.ts'] },
-  { group: 'emit-parity', name: 'shape-rust', args: ['test/shape-rust.ts'] },
+  { group: 'emit-parity', name: 'shape-rust', args: ['test/shape-rust.ts'], tier: 'ci' },
   { group: 'emit-parity', name: 'shape-parity', args: ['test/shape-parity.ts'] },
   { group: 'core', name: 'multi-doc', args: ['test/multi-doc.ts'] },
   { group: 'core', name: 'recovery', args: ['test/recovery.ts'] },
-  { group: 'core', name: 'incremental-grammars', args: ['test/incremental-grammars.ts'] },
-  { group: 'core', name: 'exhaustive-edits', args: ['test/exhaustive-edits.ts'] },
+  { group: 'core', name: 'incremental-grammars', args: ['test/incremental-grammars.ts'], tier: 'ci' },
+  { group: 'core', name: 'exhaustive-edits', args: ['test/exhaustive-edits.ts'], tier: 'ci' },
   { group: 'core', name: 'issue-cases', args: ['test/test-issues.ts'] },
   { group: 'core', name: 'env-spec-regressions', args: ['test/env-spec-regressions.ts'] },
   { group: 'conformance', name: 'js', args: ['test/js-conformance.ts'] },
   { group: 'conformance', name: 'js-corpus', args: ['test/js-conformance-corpus.ts'] },
-  { group: 'conformance', name: 'test262', args: ['test/test262.ts'] },
+  { group: 'conformance', name: 'test262', args: ['test/test262.ts'], tier: 'ci' },
   { group: 'conformance', name: 'tsx', args: ['test/tsx-conformance.ts'] },
   { group: 'conformance', name: 'jsx', args: ['test/jsx-conformance.ts'] },
   { group: 'conformance', name: 'html', args: ['test/html-conformance.ts'] },
   { group: 'highlighter', name: 'tm-guards', args: ['test/tm-highlight-guards.ts'] },
   { group: 'highlighter', name: 'tm-completeness', args: ['test/tm-completeness.ts', '--check'] },
-  { group: 'highlighter', name: 'tm-mutation', args: ['test/tm-mutation.ts'] },
+  { group: 'highlighter', name: 'tm-mutation', args: ['test/tm-mutation.ts'], tier: 'ci' },
   { group: 'highlighter', name: 'tm-diagnostics', args: ['test/redcmd-tm-diagnostics.ts'] },
   { group: 'highlighter', name: 'tm-lookahead-words', args: ['test/tm-lookahead-words.ts'] },
   { group: 'highlighter', name: 'tm-modifier-follow', args: ['test/tm-modifier-follow.ts'] },
@@ -109,9 +128,55 @@ const GATES: Gate[] = [
   { group: 'generative', name: 'gap-ledger-check', args: ['test/gap-ledger.ts', '--check'] },
 ];
 
-const filter = process.argv[2];
-const gates = filter ? GATES.filter((g) => (g.group + ' ' + g.name).includes(filter)) : GATES;
+// Usage: check.ts [<substr>]                  every gate (CI), or those whose group/name holds substr
+//        check.ts --changed [<base>] [<substr>] the INNER LOOP: the gates of tier other than 'ci'
+//                                               whose inputs changed since <base> (default
+//                                               origin/master: committed, staged, unstaged and
+//                                               untracked changes); prints what it skips and why
+//        check.ts --all ...                     with --changed: the 'ci' tier too
+const argv = process.argv.slice(2);
+//        check.ts --changed --list ...          only print what would run and what is skipped
+//        check.ts --changed --commit=<rev> ...  the files <rev> changed (its diff from its parent)
+//                                               instead of the working tree's: how long the inner
+//                                               loop takes for a past commit
+const changedMode = argv.includes('--changed');
+const all = argv.includes('--all');
+const listOnly = argv.includes('--list');
+const commit = argv.find((a) => a.startsWith('--commit='))?.slice('--commit='.length);
+const rest = argv.filter((a) => a !== '--changed' && a !== '--all' && a !== '--list' && !a.startsWith('--commit='));
+let base = 'origin/master';
+if (changedMode && rest.length && !GATES.some((g) => (g.group + ' ' + g.name).includes(rest[0]!)) && !rest[0]!.startsWith('-')) base = rest.shift()!;
+const filter = rest[0];
+let gates = filter ? GATES.filter((g) => (g.group + ' ' + g.name).includes(filter)) : GATES;
 if (!gates.length) { console.error(`no gate matches "${filter}"`); process.exit(1); }
+
+if (changedMode) {
+  const { gateDeps } = await import('./gate-deps.ts');
+  const git = (...a: string[]) => execFileSync('git', a, { encoding: 'utf8' }).split('\n').filter(Boolean);
+  const changed = new Set(commit ? git('diff', '--name-only', `${commit}^`, commit) : [
+    ...git('diff', '--name-only', `${git('merge-base', base, 'HEAD')[0]}`),
+    ...git('ls-files', '--others', '--exclude-standard'),
+  ]);
+  // A change to the runner, the package manifest or the TypeScript setup can affect every gate.
+  const GLOBAL = ['test/check.ts', 'package.json', 'package-lock.json', 'tsconfig.json'];
+  const global = GLOBAL.filter((f) => changed.has(f));
+  console.log(`  --changed: ${changed.size} file(s) changed ${commit ? `by ${commit}` : `since ${base}`}${global.length ? ` (global: ${global.join(', ')})` : ''}`);
+  const run: Gate[] = [], skipped: string[] = [];
+  for (const g of gates) {
+    const label = `${g.group}/${g.name}`;
+    const script = g.args.find((a) => a.endsWith('.ts'))!;
+    // a gate of the ci tier runs when its own script changed: the change is to that gate
+    if (g.tier === 'ci' && !all && !changed.has(script)) { skipped.push(`${label.padEnd(36)} tier ci (runs in CI; --all runs it)`); continue; }
+    const deps = gateDeps(script, g.reads);
+    const hit = global.length ? global : [...changed].filter((f) => deps.has(f));
+    if (hit.length) run.push(g);
+    else skipped.push(`${label.padEnd(36)} none of its ${deps.size} input file(s) changed`);
+  }
+  for (const s of skipped) console.log(`    · skip ${s}`);
+  gates = run;
+  if (listOnly) { for (const g of gates) console.log(`    → run  ${g.group}/${g.name}`); console.log(`  ${gates.length} gate(s) to run, ${skipped.length} skipped`); process.exit(0); }
+  if (!gates.length) { console.log('\n  no gate is affected by the change ✓'); process.exit(0); }
+}
 
 const lastLine = (s: string): string => { const ls = s.trimEnd().split('\n').filter((l) => l.trim()); return ls.length ? ls[ls.length - 1].trim().slice(0, 70) : ''; };
 
@@ -123,30 +188,54 @@ interface Result { gate: Gate; ok: boolean; ms: number; summary: string; output:
 // is safe — within one invocation and across concurrent ones — and turns the
 // wall-clock from sum-of-gates into ~max(sum/pool, slowest-gate). Results stream as each
 // finishes (completion order); the final summary is printed in gate order.
+// With CHECK_TRACE_DEPS=1 (CI) each gate runs with test/trace-reads.ts preloaded, which lists the
+// repository files it opened; a file test/gate-deps.ts does not derive for it fails the run below.
+const TRACE = process.env.CHECK_TRACE_DEPS === '1' ? mkdtempSync(join(tmpdir(), 'monogram-check-trace-')) : null;
+const traceFile = (gate: Gate) => join(TRACE!, `${gate.group}-${gate.name}`.replace(/[^A-Za-z0-9.-]/g, '_'));
 function run(gate: Gate): Promise<Result> {
   const t0 = Date.now();
+  const args = TRACE ? ['--import', './test/trace-reads.ts', ...gate.args] : gate.args;
+  const env = TRACE ? { ...process.env, CHECK_TRACE: traceFile(gate) } : process.env;
   return new Promise((resolve) => {
-    execFile('node', gate.args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile('node', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env }, (err, stdout, stderr) => {
       const output = (stdout ?? '') + (stderr ?? '');
       resolve({ gate, ok: !err, ms: Date.now() - t0, summary: lastLine(output), output });
     });
   });
 }
 
-const POOL = Math.max(2, cpus().length - 2);
+// CI runs a gate per core (a GitHub runner: 4 cores, 16 GB); a developer box keeps two cores free.
+const POOL = process.env.CI ? cpus().length : Math.max(2, cpus().length - 2);
 const results: Result[] = [];
 let next = 0;
+// The 'ci' tier holds the long gates: they start first, so the slowest one is not the last to begin.
+const queue = [...gates.filter((g) => g.tier === 'ci'), ...gates.filter((g) => g.tier !== 'ci')];
 async function worker(): Promise<void> {
-  while (next < gates.length) {
-    const gate = gates[next++];
+  while (next < queue.length) {
+    const gate = queue[next++];
     const r = await run(gate);
     results.push(r);
+    // CHECK_OUT_DIR (CI, uploaded as the job's `gate-output` artifact): every gate's whole output
+    if (process.env.CHECK_OUT_DIR) { mkdirSync(process.env.CHECK_OUT_DIR, { recursive: true }); writeFileSync(join(process.env.CHECK_OUT_DIR, `${gate.group}-${gate.name}.txt`.replace(/[^A-Za-z0-9.-]/g, '_')), r.output); }
     process.stdout.write(`    ${r.ok ? '✓' : '✗'} ${(r.gate.group + '/' + r.gate.name).padEnd(34)} ${String(r.ms).padStart(6)}ms  ${r.ok ? r.summary : ''}\n`);
   }
 }
 await Promise.all(Array.from({ length: Math.min(POOL, gates.length) }, worker));
 
 const ordered = gates.map((g) => results.find((r) => r.gate === g)!);
+if (TRACE) {
+  const { gateDeps } = await import('./gate-deps.ts');
+  for (const r of ordered) {
+    let traced: string[] = [];
+    try { traced = readFileSync(traceFile(r.gate), 'utf8').split('\n').filter(Boolean); } catch { continue; }
+    const deps = gateDeps(r.gate.args.find((a) => a.endsWith('.ts'))!, r.gate.reads);
+    const missing = traced.filter((f) => !deps.has(f));
+    if (!missing.length) continue;
+    r.ok = false;
+    r.output += `\n✗ gate-deps: the gate opened ${missing.length} repository file(s) test/gate-deps.ts does not derive for it, so \`check.ts --changed\` could skip it wrongly: ${missing.join(', ')}\n  name each in the gate's \`reads\` (test/check.ts), or make the path a literal in the gate's source`;
+  }
+  rmSync(TRACE, { recursive: true, force: true });
+}
 const failed = ordered.filter((r) => !r.ok);
 console.log(`\n${'─'.repeat(70)}`);
 console.log(`  ${ordered.length - failed.length}/${ordered.length} gates pass` + (failed.length ? `  — FAILED: ${failed.map((f) => f.gate.name).join(', ')}` : ' ✓'));

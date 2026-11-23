@@ -946,6 +946,9 @@ export default defineGrammar({
   prec: ecmaPrec,
   ledPrec: jsLedPrecs,
 
+  // Every keyword the grammar lets be a name is also a name in the tree-sitter grammar (`get` as a
+  // property key, `of` as a binding): the name readings cost about 3 MB of parser.c in all.
+  treeSitterContextualNames: 'all',
   // tree-sitter GLR conflicts: the fixpoint of `tree-sitter generate`'s own LR(1) analysis of this
   // grammar (`node test/collect-conflicts.ts`), minus the tuples it reports as unnecessary. ECMAScript
   // genuinely needs them: `(a, b)` is a parenthesised expression or arrow params until `=>`, `{` opens a
