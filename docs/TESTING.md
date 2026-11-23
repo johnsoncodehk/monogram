@@ -27,6 +27,13 @@ step is in the CI workflow). Its result is pinned in the generated record `docs/
 (regenerate: `node test/js-conformance-corpus.ts --write`), so any file moving between cells fails
 it until recorded. Without the corpus the gate says NOT RUN and fails.
 
+`conformance/test262` measures the JS grammar against test262, JavaScript's own conformance suite: every
+test under `test/language/` and `test/annexB/language/` of the checkout at `/tmp/test262` (pin:
+`test/test262.sha`, the one place it is stated; CI clones it), each test's expected parse verdict read
+from its front matter. Every disagreement carries a cause class (`test/test262-classes.ts`); the files
+are pinned in `test/test262-record.txt` and the scoreboard in the generated `docs/TEST262.md`
+(regenerate: `node test/test262.ts --write`). A file moving in either direction fails it until recorded.
+
 A gate is binary and authoritative: if `npm run check` is green, every guaranteed property holds.
 
 ## 2. Metrics — `npm run coverage:table`

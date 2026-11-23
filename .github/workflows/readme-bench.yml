@@ -55,9 +55,9 @@ concurrency:
 env:
   # Pinned VS Code tag whose bundled grammars are the "official" baseline (TS/TSX/HTML/CSS/JS/JSX).
   OFFICIAL_TM_TAG: '1.96.0'
-  # Corpus pins (commits) for the coverage table's parser axis. Bump to re-baseline.
+  # Corpus pins (commits) for the coverage table's parser axis. Bump to re-baseline. test262's pin
+  # is test/test262.sha, the one place it is stated (ci.yml's test262 gate reads it too).
   TS_REPO_SHA: '6fbce89821d93a5b761581d9ac540455f38e9acb'
-  TEST262_SHA: '05bb032907160d66c212589d345fa0e335e2738c'
   YAML_SUITE_SHA: 'da267a5c4782e7361e82889e76c0dc7df0e1e870'
   REDCMD_SHA: '1ae4e9d32f42878270b7c8593d18bee7d618e59f'
 
@@ -100,7 +100,7 @@ jobs:
             git -C "$1" checkout -q FETCH_HEAD
           }
           pinclone /tmp/ts-repo         https://github.com/microsoft/TypeScript           "$TS_REPO_SHA"    tests/cases
-          pinclone /tmp/test262         https://github.com/tc39/test262                   "$TEST262_SHA"    test/language
+          pinclone /tmp/test262         https://github.com/tc39/test262                   "$(cat test/test262.sha)" test/language
           pinclone /tmp/yaml-test-suite https://github.com/yaml/yaml-test-suite           "$YAML_SUITE_SHA" src
           pinclone /tmp/redcmd-yaml     https://github.com/RedCMD/YAML-Syntax-Highlighter "$REDCMD_SHA"     syntaxes
 
