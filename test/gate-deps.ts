@@ -88,7 +88,20 @@ export function literals(src: string): string[] {
 }
 const globRe = (pattern: string) => new RegExp('^' + pattern.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*') + '$');
 
+let selfExports: Map<string, string> | undefined;
+/** The file a SELF-REFERENCE names (`'monogram/shape'`: the package's own name, resolved through
+ * its package.json `exports`, as Node resolves it from inside the package). */
+function selfReference(literal: string): string | undefined {
+  if (!selfExports) {
+    const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name: string; exports?: Record<string, string> };
+    selfExports = new Map(Object.entries(pkg.exports ?? {}).map(([k, v]) => [pkg.name + k.slice(1), relative(ROOT, resolve(ROOT, v)).split(sep).join('/')]));
+  }
+  return selfExports.get(literal);
+}
+
 export function candidates(literal: string, fromDir: string): string[] {
+  const self = selfReference(literal);
+  if (self) return [self];
   let text = literal.replace(/\$\{[^}]*\}/g, '*');
   if (!(/[./]/.test(text) || /^\*[A-Za-z]/.test(text)) || !/[A-Za-z]/.test(text) || text.length > 200 || text.includes('\n')) return [];
   const out: string[] = [];

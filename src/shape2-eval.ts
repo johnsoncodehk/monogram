@@ -5,48 +5,72 @@
 // first arm that consumes every child wins: the parser's own tie-break), and every name comes
 // from the one deriver (src/grammar-names.ts).
 //
-//   loadShape2(grammar, spec)   type-checks the spec against the grammar and rejects anything
-//                               outside the calculus (Shape2SpecError lists every problem)
-//   evaluate(loaded, cst, src)  the value of a CST node (a Program, or any node: e.g. a Stmt)
-//   dependencies(loaded)        per (rule, arm): which inherited attributes its value reads
+//   defineShape(grammar, spec)     type-checks the spec against the grammar and rejects anything
+//                                  outside the calculus (ShapeSpecError lists every problem)
+//   evaluateShape(shape, cst, src) the value of a CST node (a Program, or any node: e.g. a Stmt)
+//   shapeCoverage(shape)           which (rule, arm) pairs the spec maps; what a left-out one does
+//   dependencies(shape)            per (rule, arm): which inherited attributes its value reads
 import type { CstChild, CstLeaf, CstNode } from './gen-parser.ts';
 import type { CstGrammar, RuleDecl, RuleExpr, TemplateDelimiters } from './types.ts';
 import { isKeywordLiteral } from './grammar-utils.ts';
 import { nameRule, OP_FORM_CHILDREN, type RuleNames } from './grammar-names.ts';
-import { COOK_FNS, OPERATORS, type CookFn, type TermTag, type InhAttr, type InhEq, type Scalar, type Shape2Spec, type Span, type Term, type ThreadEq } from './shape2-schema.ts';
+import { COOK_FNS, OPERATORS, type CookFn, type TermTag, type InhAttr, type InhEq, type Scalar, type ShapeSpec, type Span, type Term, type ThreadEq } from './shape2-schema.ts';
 
 // ── Values ──
 
 /** A node value: the same plain-data form the oracle harness compares (test/shape-oracle.ts). */
-export type S2Node = { kind: string; start: number; end: number; fields: Record<string, S2Value> };
-export type S2Value = S2Node | S2Value[] | Scalar | { record: Record<string, S2Value> };
+export type ShapeNode = { kind: string; start: number; end: number; fields: Record<string, ShapeValue> };
+export type ShapeValue = ShapeNode | ShapeValue[] | Scalar | { record: Record<string, ShapeValue> };
 
-export class Shape2SpecError extends Error {
+/** The spec is outside the calculus or not typed against the grammar: every problem, each
+ * `<where>: <what>` (where = the spec table, the rule.arm, and the path into the term). */
+export class ShapeSpecError extends Error {
   readonly problems: string[];
-  constructor(problems: string[]) { super(`shape2 spec rejected:\n  ${problems.join('\n  ')}`); this.problems = problems; }
+  constructor(shape: string, grammar: string, problems: string[]) {
+    super(`shape ${JSON.stringify(shape)} does not fit grammar ${JSON.stringify(grammar)} (${problems.length} problem${problems.length > 1 ? 's' : ''}):\n  ${problems.join('\n  ')}`);
+    this.problems = problems;
+  }
 }
 /** Evaluation reached an arm the (non-total) spec does not map. */
-export class Shape2Unmapped extends Error {
+export class ShapeUnmapped extends Error {
   readonly rule: string;
   readonly arm: string;
-  constructor(rule: string, arm: string) { super(`shape2: ${rule}.${arm} is not mapped`); this.rule = rule; this.arm = arm; }
+  constructor(rule: string, arm: string) { super(`shape: ${rule}.${arm} is not mapped (map it, or see shapeCoverage for every arm left out)`); this.rule = rule; this.arm = arm; }
+}
+
+/** `name` is not among `names`: the names, in full when they are few, else the nearest ones. */
+export function nearest(names: Iterable<string>, name: string): string {
+  const all = [...names];
+  if (all.length === 0) return 'there are none';
+  if (all.length <= 16) return `${all.length === 1 ? 'the only one is' : 'they are'}: ${all.join(', ')}`;
+  const near = all.map((n) => [n, editDistance(n.toLowerCase(), name.toLowerCase())] as const).sort((a, b) => a[1] - b[1]).slice(0, 5).map(([n]) => n);
+  return `nearest: ${near.join(', ')} (of ${all.length})`;
+}
+function editDistance(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
 }
 
 // ── The static view of an arm: its named children ──
 
-type SlotKind = 'node' | 'leaf' | 'branch';
-type Card = 'one' | 'opt' | 'many';
+export type SlotKind = 'node' | 'leaf' | 'branch';
+export type Card = 'one' | 'opt' | 'many';
 /** A named child. `quants`: the repetitions / optionals around it inside its scope, outer first.
  * `delims`: a template part's opening and closing delimiters (the `{ inside }` span). */
-type Slot = { name: string; kind: SlotKind; rule?: string; node: RuleExpr; quants: RuleExpr[]; branches?: Map<string, ScopeInfo>; delims?: [string, string] };
-type ScopeInfo = { where: string; slots: Map<string, Slot> };
-type ArmInfo = ScopeInfo & { rule: string; arm: string; form?: 'binary' | 'prefix' | 'postfix'; items?: RuleExpr[] };
+export type Slot = { name: string; kind: SlotKind; rule?: string; node: RuleExpr; quants: RuleExpr[]; branches?: Map<string, ScopeInfo>; delims?: [string, string] };
+export type ScopeInfo = { where: string; slots: Map<string, Slot> };
+export type ArmInfo = ScopeInfo & { rule: string; arm: string; form?: 'binary' | 'prefix' | 'postfix'; items?: RuleExpr[] };
 
 const ZERO_WIDTH = new Set(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf']);
 const isList = (q: RuleExpr): boolean => q.type === 'sep' || (q.type === 'quantifier' && q.kind !== '?');
-const cardOf = (quants: RuleExpr[]): Card => (quants.some(isList) ? 'many' : quants.length ? 'opt' : 'one');
+export const cardOf = (quants: RuleExpr[]): Card => (quants.some(isList) ? 'many' : quants.length ? 'opt' : 'one');
 
-type GrammarView = {
+export type GrammarView = {
   rules: Map<string, RuleDecl>; tokens: Set<string>; templates: Map<string, TemplateDelimiters>; arms: Map<string, ArmInfo[]>;
   names: Map<string, RuleNames>;
   /** Each structural alternation's branch scopes, in branch order. */
@@ -363,7 +387,10 @@ function collect(f: Frame, quants: RuleExpr[], node: RuleExpr): (Item | undefine
  * L-attributed): a parser that builds nodes as it goes has built that child before it reads the
  * deciding leaf. `reads`: those leaves. */
 export type RightDependent = { rule: string; arm: string; child: string; attr: string; reads: string[] };
-export type LoadedShape2 = { spec: Shape2Spec; grammar: GrammarView; rightDependent: RightDependent[] };
+/** A shape: its spec, checked once against its grammar (`defineShape`). Every consumer (the
+ * evaluator, coverage, the dependency analysis, and the emitted builders next) reads this, never
+ * an unchecked spec. */
+export type Shape = { spec: ShapeSpec; source: CstGrammar; grammar: GrammarView; rightDependent: RightDependent[] };
 
 /** A static scope: an arm, a branch, or one iteration (`base`: the repetitions consumed to reach
  * it), with the variables bound around it. */
@@ -375,13 +402,26 @@ function resolveStatic(s: SScope, name: string): { slot: Slot; card: Card; scope
   if (slot && startsWith(slot.quants, s.base)) return { slot, card: cardOf(slot.quants.slice(s.base.length)), scope: s };
   return s.outer ? resolveStatic(s.outer, name) : undefined;
 }
+/** The child names a term in scope `s` can read: its own, then the enclosing scopes'. */
+function visibleNames(s: SScope): string[] {
+  const out: string[] = [];
+  for (let x: SScope | undefined = s; x; x = x.outer) for (const [n, sl] of x.info.slots) if (startsWith(sl.quants, x.base) && !out.includes(n)) out.push(n);
+  return out;
+}
 const hasVar = (s: SScope, name: string): boolean => s.vars.has(name) || (s.outer ? hasVar(s.outer, name) : false);
 /** Whether `name` is bound (innermost binding first) to a nodes attribute. */
 const hasNodesVar = (s: SScope, name: string): boolean => s.vars.has(name) ? (s.nodeVars?.has(name) ?? false) : (s.outer ? hasNodesVar(s.outer, name) : false);
 
 type Ty = 'string' | 'number' | 'bool' | 'null' | 'node' | 'list' | 'nodes' | 'record' | 'any';
 
-export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 {
+/** Check `spec` against `grammar` and return the shape. The grammar's TYPE carries its rule names
+ * (`Grammar<R>` from defineGrammar), so a rule key that is not one is a TypeScript error; every
+ * other name (arm, child, attribute, field) and every term is checked here, and every problem is
+ * reported at once (ShapeSpecError). An arm the spec leaves out is UNMAPPED: evaluating it throws
+ * ShapeUnmapped (it is never passed through implicitly: a pass-through is written `child(x)`);
+ * with `total: true` a left-out arm of a mapped rule is a load error instead. */
+export function defineShape<const R extends string>(grammar: CstGrammar & { rules: readonly { name: R }[] }, spec: ShapeSpec<NoInfer<R>>): Shape;
+export function defineShape(grammar: CstGrammar, spec: ShapeSpec): Shape {
   const g = viewOf(grammar);
   const problems: string[] = [];
   const err = (where: string, msg: string): void => { problems.push(`${where}: ${msg}`); };
@@ -407,11 +447,11 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
   // Every rule / arm key must exist; under `total` every arm of a mapped rule must be mapped.
   const eachArmKey = (where: string, table: Record<string, Record<string, unknown>>, visit: (a: ArmInfo, v: unknown, w: string) => void): void => {
     for (const [rule, arms] of Object.entries(table)) {
-      if (!g.arms.has(rule)) { err(`${where} ${rule}`, `the grammar has no rule ${rule}`); continue; }
+      if (!g.arms.has(rule)) { err(`${where} ${rule}`, `the grammar has no rule ${rule} (${nearest(g.arms.keys(), rule)})`); continue; }
       if (arms === null || typeof arms !== 'object') { err(`${where} ${rule}`, 'must map arm names to terms'); continue; }
       for (const [arm, v] of Object.entries(arms)) {
         const a = armIn(rule, arm);
-        if (!a) { err(`${where} ${rule}.${arm}`, `${rule} has no arm ${arm} (its arms: ${g.arms.get(rule)!.map((x) => x.arm).join(', ')})`); continue; }
+        if (!a) { err(`${where} ${rule}.${arm}`, `${rule} has no arm ${arm} (its arms: ${nearest(g.arms.get(rule)!.map((x) => x.arm), arm)})`); continue; }
         visit(a, v, `${where} ${rule}.${arm}`);
       }
     }
@@ -437,7 +477,7 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
       for (const [kid, eq] of eqs) {
         if (eq?.t === 'thread') { threadEq(a, kid, eq, d, `${w}.${kid}`); continue; }
         const r = findSlotAnywhere(a, kid);
-        if (!r) err(`${w}.${kid}`, `${a.where} has no child ${kid}`);
+        if (!r) err(`${w}.${kid}`, `${a.where} has no child ${kid} (its children: ${nearest(slotOrder(a).keys(), kid)})`);
         else if (r.kind !== 'node') err(`${w}.${kid}`, `the child ${kid} is a ${r.kind}; only a rule node has inherited attributes`);
         const e = eq as Term;
         if (e?.t === 'const') { if (!scalarOk(constTy(e.value), d.type)) err(`${w}.${kid}`, `a ${d.type} attribute's equation is ${JSON.stringify(e.value)}`); }
@@ -459,8 +499,8 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
   }
   // A scalar attribute's `inh` copy or thread init of a nodes attribute fails the type check above
   // (`copies modifiers (nodes) into a bool attribute`).
-  if (problems.length) throw new Shape2SpecError(problems);
-  return { spec, grammar: g, rightDependent };
+  if (problems.length) throw new ShapeSpecError(spec.name, grammar.name ?? '(unnamed)', problems);
+  return { spec, source: grammar, grammar: g, rightDependent };
 
   /** A node-valued attribute (NodesAttr): every equation is a list built from children strictly
    * to the LEFT of the child it feeds (so L-attributed by construction: never right-dependent). */
@@ -473,7 +513,7 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
         const at = `${w}.${kid}`;
         if (eq?.t === 'thread') { err(at, `a nodes attribute is not threaded (its equation is a list built from the children left of ${kid})`); continue; }
         const r = findSlotAnywhere(a, kid);
-        if (!r) { err(at, `${a.where} has no child ${kid}`); continue; }
+        if (!r) { err(at, `${a.where} has no child ${kid} (its children: ${nearest(slotOrder(a).keys(), kid)})`); continue; }
         if (r.kind !== 'node') { err(at, `the child ${kid} is a ${r.kind}; only a rule node has inherited attributes`); continue; }
         const reads = new Set<Slot>();
         const ty = term(eq, { info: a, base: [], vars: new Set() }, at, 'nodeseq', a, undefined, reads);
@@ -492,7 +532,7 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
   function threadEq(a: ArmInfo, kid: string, eq: ThreadEq, d: InhAttr, w: string): void {
     const slot = a.slots.get(kid);
     const at = slot ? slot.quants.map(isList).lastIndexOf(true) : -1;
-    if (!slot) { err(w, `thread: ${a.where} has no child ${kid} of its own (a thread runs over a repetition of the arm itself)`); return; }
+    if (!slot) { err(w, `thread: ${a.where} has no child ${kid} of its own (a thread runs over a repetition of the arm itself; its children: ${nearest(a.slots.keys(), kid)})`); return; }
     if (at < 0) { err(w, `thread: ${kid} is not repeated; a thread runs over the elements of a repetition`); return; }
     if (slot.kind !== 'node' && slot.kind !== 'branch') err(w, `thread: ${kid} is a ${slot.kind}; the elements must hold rule nodes`);
     const init = eq.init as Term;
@@ -552,7 +592,7 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
       if (typeof name !== 'string') { err(w, `${op}: a child name is a string`); return undefined; }
       const r = resolveStatic(s, name);
       if (!r && ctx === 'thread' && findSlotAnywhere(arm, name)) err(w, `${op}(${name}): ${name} is not in the element: a thread's next state reads only the element's own children (no other sibling)`);
-      else if (!r) err(w, `${op}(${name}): ${s.info.where} has no child ${name} (its children: ${[...s.info.slots.keys()].join(', ') || 'none'})`);
+      else if (!r) err(w, `${op}(${name}): ${s.info.where} has no child ${name} (its children: ${nearest(visibleNames(s), name)})`);
       if (r) slotReads?.add(r.slot);
       return r;
     };
@@ -608,7 +648,7 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
       }
       case 'syn': {
         const d = syns[e.attr];
-        if (!d) { err(w, `syn: no synthesized attribute ${e.attr}`); return 'any'; }
+        if (!d) { err(w, `syn: no synthesized attribute ${e.attr} (the spec's: ${nearest(Object.keys(syns), e.attr)})`); return 'any'; }
         if (e.name === undefined) {
           if (ctx === 'syn') err(w, `syn(${e.attr}) of the node itself inside an equation is a cycle`);
           if (ctx === 'thread') err(w, `syn(${e.attr}) of the parent inside a thread's next state: the next state reads the element's own children only`);
@@ -621,7 +661,7 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
       }
       case 'inh': {
         const d = inhs[e.attr];
-        if (!d) { err(w, `inh: no inherited attribute ${e.attr}`); return 'any'; }
+        if (!d) { err(w, `inh: no inherited attribute ${e.attr} (the spec's: ${nearest(Object.keys(inhs), e.attr)})`); return 'any'; }
         return d.type;
       }
       case 'node': {
@@ -666,7 +706,7 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
         const tys: Ty[] = [];
         for (const [bn, x] of Object.entries(e.cases ?? {})) {
           const info = r.slot.branches!.get(bn);
-          if (!info) { err(w, `branch(${e.name}): no branch ${bn} (its branches: ${[...r.slot.branches!.keys()].join(', ')})`); continue; }
+          if (!info) { err(w, `branch(${e.name}): no branch ${bn} (its branches: ${nearest(r.slot.branches!.keys(), bn)})`); continue; }
           tys.push(sub(x, `case ${bn}`, { info, base: [], outer: s, vars: new Set() }));
         }
         if (spec.total) for (const bn of r.slot.branches!.keys()) if (!(bn in (e.cases ?? {}))) err(w, `branch(${e.name}): branch ${bn} not mapped (the spec is total)`);
@@ -702,7 +742,7 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
       if (typeof nm !== 'string') { err(w, 'span.inside is a child name'); return; }
       const r = resolveStatic(s, nm);
       if (r) slotReads?.add(r.slot);
-      if (!r) err(w, `span.inside: ${s.info.where} has no child ${nm}`);
+      if (!r) err(w, `span.inside: ${s.info.where} has no child ${nm} (its children: ${nearest(visibleNames(s), nm)})`);
       else if (!r.slot.delims) err(w, `span.inside: ${nm} is not a delimited template part (a template's quasi / head / literal)`);
       else if (r.card !== 'one') err(w, `span.inside: ${nm} is ${r.card === 'opt' ? 'optional' : 'a list'}`);
       return;
@@ -713,7 +753,7 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
       if (hasVar(s, nm)) return;
       const r = resolveStatic(s, nm);
       if (r) slotReads?.add(r.slot);
-      if (!r) err(w, `span.after: ${s.info.where} has no child or variable ${nm}`);
+      if (!r) err(w, `span.after: ${s.info.where} has no child or variable ${nm} (its children: ${nearest(visibleNames(s), nm)})`);
       else if (r.card !== 'one') err(w, `span.after: ${nm} is ${r.card === 'opt' ? 'optional' : 'a list'}, so it can be absent: a zero-width node sits after a token that is always there`);
       return;
     }
@@ -723,7 +763,7 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
       if (hasVar(s, nm)) continue;
       const r = resolveStatic(s, nm);
       if (r) slotReads?.add(r.slot);
-      else err(w, `span.${k}: ${s.info.where} has no child or variable ${nm}`);
+      else err(w, `span.${k}: ${s.info.where} has no child or variable ${nm} (its children: ${nearest(visibleNames(s), nm)})`);
     }
   }
 }
@@ -776,20 +816,20 @@ const join = (tys: Ty[]): Ty => (tys.length && tys.every((t) => t === tys[0]) ? 
 // ── Evaluation ──
 
 /** A node's inherited attributes: scalars, and the node lists of the nodes attributes. */
-type Inh = Record<string, Scalar | S2Value[]>;
+type Inh = Record<string, Scalar | ShapeValue[]>;
 /** A run-time scope: what `SScope` is statically, over a matched frame. */
 type RScope = { info: ScopeInfo; base: RuleExpr[]; frame: Frame; outer?: RScope; vars: Map<string, Bound>; m: Matched; node: CstNode; inh: Inh };
-type Bound = { value: S2Value | undefined; start: number; end: number };
+type Bound = { value: ShapeValue | undefined; start: number; end: number };
 
 /** The value of `cst` (the root: its context is every inherited attribute's default). */
-export function evaluate(loaded: LoadedShape2, cst: CstNode, src: string): S2Value | undefined {
+export function evaluateShape(loaded: Shape, cst: CstNode, src: string): ShapeValue | undefined {
   return evaluator(loaded, cst, src)(cst);
 }
 
 /** An evaluator over one tree: the value of any node under `root`, in the context its
  * ancestors (and, through a thread, its left siblings) give it. Matches and attributes are
  * memoised across calls. */
-export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n: CstNode) => S2Value | undefined {
+export function evaluator(loaded: Shape, root: CstNode, src: string): (n: CstNode) => ShapeValue | undefined {
   const { spec, grammar: g } = loaded;
   const matches = new WeakMap<CstNode, Matched>();
   const synMemo = new WeakMap<CstNode, Map<string, Scalar>>();
@@ -801,7 +841,7 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
   const kidNames = new WeakMap<CstNode, Map<CstNode, string>>();
   let parents: WeakMap<CstNode, CstNode> | undefined;
   const inhs = spec.inherited ?? {};
-  const defaultOf = (d: InhAttr): Scalar | S2Value[] => (d.type === 'nodes' ? [] : d.default);
+  const defaultOf = (d: InhAttr): Scalar | ShapeValue[] => (d.type === 'nodes' ? [] : d.default);
   const rootInh: Inh = Object.fromEntries(Object.entries(inhs).map(([k, d]) => [k, defaultOf(d)]));
 
   function matched(n: CstNode): Matched {
@@ -813,15 +853,15 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
     const m = matched(n);
     return { info: m.info, base: [], frame: m.frame, vars: new Map(), m, node: n, inh };
   }
-  function valueOf(n: CstNode, inh: Inh): S2Value | undefined {
+  function valueOf(n: CstNode, inh: Inh): ShapeValue | undefined {
     const s = scopeOf(n, inh);
     const t = spec.rules[n.rule]?.[s.m.info.arm];
-    if (t === undefined) throw new Shape2Unmapped(n.rule, s.m.info.arm);
+    if (t === undefined) throw new ShapeUnmapped(n.rule, s.m.info.arm);
     const val = ev(t, s);
     // A node handed a non-empty nodes attribute must PLACE it (read it, or hand it on): an arm
     // that drops it would build a node without them. Such a node is outside the mapped subset.
     for (const attr of nodesAttrs) {
-      if ((inh[attr] as S2Value[]).length > 0 && !placed.get(n)?.has(attr)) throw new Shape2Unmapped(n.rule, `${s.m.info.arm} (handed ${attr})`);
+      if ((inh[attr] as ShapeValue[]).length > 0 && !placed.get(n)?.has(attr)) throw new ShapeUnmapped(n.rule, `${s.m.info.arm} (handed ${attr})`);
     }
     return val;
   }
@@ -852,7 +892,7 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
         continue;
       }
       const eq = eqs?.[name] as Term | undefined;
-      out[attr] = eq === undefined ? defaultOf(d) : (ev(eq, s) as Scalar | S2Value[]);
+      out[attr] = eq === undefined ? defaultOf(d) : (ev(eq, s) as Scalar | ShapeValue[]);
     }
     return out;
   }
@@ -940,7 +980,7 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
   const one = (s: RScope, name: string): Item | undefined => resolve(s, name).items[0];
   const textOf = (it: Item): string => { const sp = spanOfItem(it); return src.slice(sp.start, sp.end); };
   /** The value of one child item, seen from the scope that holds it. */
-  function itemValue(it: Item | undefined, holder: RScope, name: string): S2Value | undefined {
+  function itemValue(it: Item | undefined, holder: RScope, name: string): ShapeValue | undefined {
     if (it === undefined) return undefined;
     if (it.k !== 'node') throw new Error(`shape2: child ${name} is a ${it.k}`);
     return valueOf(it.node, it.hole ? rootInh : inhFor(holder, name, it.node));
@@ -953,7 +993,7 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
     return spanOfItem(edge === 'start' ? items[0] : items[items.length - 1])[edge];
   }
 
-  function ev(t: Term, s: RScope): S2Value | undefined {
+  function ev(t: Term, s: RScope): ShapeValue | undefined {
     switch (t.t) {
       case 'const': return t.value;
       case 'absent': return undefined;
@@ -973,7 +1013,7 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
       }
       case 'present': {
         const b = lookupVar(s, t.name);
-        if (b) return (b.value as S2Value[]).length > 0;   // a nodes variable: non-empty
+        if (b) return (b.value as ShapeValue[]).length > 0;   // a nodes variable: non-empty
         return resolve(s, t.name).items.some((x) => x !== undefined);
       }
       case 'armOf': {
@@ -988,15 +1028,15 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
       }
       case 'inh': {
         if (nodesAttrs.includes(t.attr)) { if (!placed.has(s.node)) placed.set(s.node, new Set()); placed.get(s.node)!.add(t.attr); }
-        return s.inh[t.attr] as S2Value;
+        return s.inh[t.attr] as ShapeValue;
       }
       case 'get': {
         const r = resolve(s, t.name);
-        const rec = itemValue(r.items[0], r.scope, t.name) as { record: Record<string, S2Value> } | undefined;
+        const rec = itemValue(r.items[0], r.scope, t.name) as { record: Record<string, ShapeValue> } | undefined;
         return rec === undefined ? undefined : rec.record[t.field];
       }
       case 'node': {
-        const fields: Record<string, S2Value> = {};
+        const fields: Record<string, ShapeValue> = {};
         for (const [k, x] of Object.entries(t.fields)) {
           const val = ev(x, s);
           if (val !== undefined) fields[k] = val;
@@ -1014,20 +1054,20 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
         return { kind: ev(t.type, s) as string, start, end, fields };
       }
       case 'record': {
-        const record: Record<string, S2Value> = {};
+        const record: Record<string, ShapeValue> = {};
         for (const [k, x] of Object.entries(t.fields)) { const val = ev(x, s); if (val !== undefined) record[k] = val; }
         return { record };
       }
       case 'list': {
-        const out: S2Value[] = [];
+        const out: ShapeValue[] = [];
         for (const x of t.items) {
-          if ('spread' in x) out.push(...(ev(x.spread, s) as S2Value[]));
+          if ('spread' in x) out.push(...(ev(x.spread, s) as ShapeValue[]));
           else out.push(ev(x, s) ?? null);
         }
         return out;
       }
       case 'dropLastIf': {
-        const l = ev(t.list, s) as S2Value[];
+        const l = ev(t.list, s) as ShapeValue[];
         return ev(t.cond, s) === true && l.length > 0 ? l.slice(0, -1) : l;
       }
       case 'match': {
@@ -1045,7 +1085,7 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
         const it = one(s, t.name) as Extract<Item, { k: 'branch' }> | undefined;
         if (it === undefined) return undefined;
         const c = t.cases[it.name];
-        if (c === undefined) throw new Shape2Unmapped(s.info.where, `${t.name}.${it.name}`);
+        if (c === undefined) throw new ShapeUnmapped(s.info.where, `${t.name}.${it.name}`);
         return ev(c, { info: it.info, base: [], frame: it.frame, outer: s, vars: new Map(), m: s.m, node: s.node, inh: s.inh });
       }
       case 'map': case 'fold': {
@@ -1086,7 +1126,7 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
 
   return (n) => valueOf(n, inhOf(n));
 }
-const isNode = (v: S2Value | undefined): v is S2Node => v !== null && typeof v === 'object' && !Array.isArray(v) && 'kind' in v;
+const isNode = (v: ShapeValue | undefined): v is ShapeNode => v !== null && typeof v === 'object' && !Array.isArray(v) && 'kind' in v;
 
 /** The end of the last item a frame (with its iterations) captured. */
 function frameEnd(f: Frame): number {
@@ -1120,7 +1160,7 @@ function iterFrames(f: Frame, quants: RuleExpr[]): Frame[] {
  * after an edited one are re-evaluated only while the recomputed state differs from the old one,
  * and reused from the first element whose incoming state is equal again. */
 export type ArmDeps = { inherited: string[]; threads?: { attr: string; over: string; reads: string[] }[] };
-export function dependencies(loaded: LoadedShape2): Record<string, ArmDeps> {
+export function dependencies(loaded: Shape): Record<string, ArmDeps> {
   const { spec, grammar: g } = loaded;
   const inhs = spec.inherited ?? {};
   const direct = new Map<string, Set<string>>();
@@ -1195,7 +1235,7 @@ export function dependencies(loaded: LoadedShape2): Record<string, ArmDeps> {
  * set a parser that builds as it goes must rewrite when the deciding leaf arrives: the nodes
  * reached from the decided child through `copies` whose arm is in `reads`, and nothing below a
  * node whose arm does not pass the attribute on. */
-export function spineOf(loaded: LoadedShape2, attr: string): { reads: string[]; copies: string[] } {
+export function spineOf(loaded: Shape, attr: string): { reads: string[]; copies: string[] } {
   const { spec } = loaded;
   const hasInh = (x: unknown): boolean => x !== null && typeof x === 'object' && (((x as Term).t === 'inh' && (x as { attr: string }).attr === attr) || Object.values(x).some(hasInh));
   const reads: string[] = [];
@@ -1209,7 +1249,7 @@ export function spineOf(loaded: LoadedShape2, attr: string): { reads: string[]; 
 }
 
 /** The arm name the reference matcher gives a CST node (for totality checks of the matcher). */
-export function armNameOf(loaded: LoadedShape2, n: CstNode, src: string): string {
+export function armNameOf(loaded: Shape, n: CstNode, src: string): string {
   return matchArm(loaded.grammar, n, src).info.arm;
 }
 

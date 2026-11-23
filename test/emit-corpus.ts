@@ -194,7 +194,7 @@ export const CURATED_TS_INVALID: string[] = [
 // A checkout without the commit (CI's shallow clone) fetches it once (git fetch --depth 1); a
 // failure to get it fails the gate (no silent empty corpus).
 export const REPO_CORPUS_AT = '7b713ea0555571aa01950592125182c0d5012231';
-const git = (args: string[], input?: string): Buffer => execFileSync('git', ['-C', ROOT, ...args], { input, maxBuffer: 1 << 28 });
+const git = (args: string[], input?: string): Buffer => execFileSync('git', ['-C', ROOT, ...args], { input, maxBuffer: 1 << 28, stdio: ['pipe', 'pipe', 'pipe'] });
 function corpusCommit(): string {
   try { git(['cat-file', '-e', `${REPO_CORPUS_AT}^{tree}`]); } catch {
     try { git(['fetch', '-q', '--depth', '1', 'origin', REPO_CORPUS_AT]); } catch (e) {
