@@ -107,7 +107,7 @@ writeFileSync('parser.rs', emitParser(grammar, rustTarget));  // of monogram
 | Output | How | Status |
 |---|---|---|
 | Interpreter parser (CST) | `createParser(grammar)`, [`src/gen-parser.ts`](src/gen-parser.ts) | The reference. Every other parser is gated against it. All six grammars. |
-| Portable parsers: TypeScript, Go, Rust | `emitParser(grammar, tsTarget \| goTarget \| rustTarget)` | Checked against the interpreter (accept/reject, and the rule tree when both accept) on every CI run, gate `portable-targets`: per grammar the parity corpus (generated inputs, their one-token mutants and the hand-written lists: about 11,300 inputs for TypeScript and JavaScript), a seeded mutation corpus, and every file of two external corpora: the tsc conformance corpus (5,695 files, TypeScript and JavaScript grammars) and test262 (24,677 tests, JavaScript grammar). Known disagreements, each owed and listed in [test/portable-wide-record.txt](test/portable-wide-record.txt): 7 tsc conformance files the portable parsers reject (`T extends infer U extends string ? U : never`, `b ? (c) : d => e`: the interpreter's mixfix operand re-bind), 1 they accept in both grammars (`a = () => {} \|\| a`), and 505 test262 files from two lexer differences (a private name with a non-ASCII character, `#℘`; a `#!` after the start of the text). Token-stream and newline grammars, and grammars with element regions: TSX, JSX and code-children dialects. Refused, never mis-lexed: indent (YAML) and markup (HTML) grammars, and the region features the portable lexers do not carry yet ([TARGETS](docs/TARGETS.md#what-each-target-accepts)). |
+| Portable parsers: TypeScript, Go, Rust | `emitParser(grammar, tsTarget \| goTarget \| rustTarget)` | Checked against the interpreter (accept/reject, and the rule tree when both accept) on every CI run, the gates `portable-targets/*`: per grammar the parity corpus (generated inputs, their one-token mutants and the hand-written lists: about 11,300 inputs for TypeScript and JavaScript), a seeded mutation corpus, and (`portable-targets/wide`) every file of two external corpora: the tsc conformance corpus (5,695 files, TypeScript and JavaScript grammars) and test262 (24,677 tests, JavaScript grammar). Known disagreements, each owed and listed in [test/portable-wide-record.txt](test/portable-wide-record.txt): 7 tsc conformance files the portable parsers reject (`T extends infer U extends string ? U : never`, `b ? (c) : d => e`: the interpreter's mixfix operand re-bind), 1 they accept in both grammars (`a = () => {} \|\| a`), and 505 test262 files from two lexer differences (a private name with a non-ASCII character, `#℘`; a `#!` after the start of the text). Token-stream and newline grammars, and grammars with element regions: TSX, JSX and code-children dialects. Refused, never mis-lexed: indent (YAML) and markup (HTML) grammars, and the region features the portable lexers do not carry yet ([TARGETS](docs/TARGETS.md#what-each-target-accepts)). |
 | Emitted JavaScript parser | `emitParser(grammar, jsTarget)` | All six grammars. To be retired once the portable TS target covers it ([ROADMAP](docs/ROADMAP.md)). |
 | Incremental `Doc` | TS `createDoc`, Go `NewDoc`, Rust `Doc`; `jsTarget`'s `createParser().edit` | Every edited re-parse equals a fresh parse, gated. |
 | Total parsing with diagnostics | `jsTarget`'s `createParser()`: a tree plus `errors` for every text | `jsTarget` only. The portable parsers reject without recovery. |
@@ -302,9 +302,12 @@ The generated Monarch grammar (Monaco) highlights tags, attributes, holes, text 
 dynamic tags, raw bodies in their embedded language, comments in text and directives from the
 same declaration.
 
+The portable parsers (TypeScript, Go, Rust) parse every one of these features: JSX, TSX and the
+text dialect fixture emit to all three, checked against the interpreter token for token and on
+every one-character edit.
+
 Not there yet: the tree-sitter generator still carries
-its own JSX vocabulary and reads none of the other region features; the portable parsers (TypeScript, Go, Rust) parse JSX and TSX but refuse a
-grammar that has directives (they carry `tagStart`, `unlessBodyStarts` and `textTokens`).
+its own JSX vocabulary and reads none of the other region features.
 
 **Changed behaviour:** a grammar that declares no region gets no element layer. Elements are no
 longer guessed from a `/>` token or a rule that starts with `<`.

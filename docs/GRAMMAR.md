@@ -178,6 +178,10 @@ once in a `scopes` map (`jsScopes` in [`javascript.ts`](../javascript.ts), which
 [`typescript.ts`](../typescript.ts) extends). TextMate *scopes* are the dot-separated labels
 (`entity.name.function`, `keyword.control`) that a theme maps to colours.
 
+## Keywords as names in the tree-sitter grammar
+
+`treeSitterContextualNames` (`'all'` or a list) says which keywords the generated tree-sitter grammar also reads as a name where the grammar allows one (`get` as a property key, `out` as a parameter). Each one trades parse-table size (parser.c) against ERRORs on valid code that uses that keyword as a name; a keyword left out is the keyword wherever it is valid. The shipped lists were chosen on real code: JavaScript takes every keyword (about 3 MB in all); TypeScript takes the words whose name use was the first ERROR of real files (lib .d.ts files and this repository), with each word's measured cost in the comment beside the list.
+
 ## Dialects
 
 A dialect (`.tsx`/`.jsx`, or a markup dialect on [`html.ts`](../html.ts)) reuses a base
