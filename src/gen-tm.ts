@@ -1384,9 +1384,39 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
     } else result[key] = { match: tokenPatternToRegex(m), name: `${t.scope}.${langName}` };
     textKeys.push(key);
   }
+  // ── text tokens (`textTokens`): scanned tokens tried in the children before the text run ──
+  // Each is the token's own pattern under its own scope. With an `after` class it stops a run
+  // only at the run's start or right after a unit of that class: a lookbehind of the class, of
+  // `tagClose` and `hole.close` (a run starts after a tag or a hole), and of the other text
+  // tokens' closing texts (or after another text token); a line start when the class holds `\n`.
+  const textTokenKeys: string[] = [];
+  for (const { token, after } of region.textTokens ?? []) {
+    const tok = grammar.tokens.find(t => t.name === token);
+    if (!tok) continue;
+    const scope = tok.scope ?? classifyToken(tok).scope;
+    let behind = '';
+    if (after !== undefined) {
+      const ends = [region.tagClose, region.hole.close];
+      for (const o of region.textTokens ?? []) {
+        const ot = o.token !== token ? grammar.tokens.find(t => t.name === o.token) : undefined;
+        const close = ot ? tokenPatternBlockDelimiters(ot)?.[1] : undefined;
+        if (close) ends.push(close);
+      }
+      const afterRe = tokenPatternToRegex(after);
+      const lineStart = new RegExp(`^(?:${afterRe})$`).test('\n');
+      behind = `(?:(?<=${afterRe})|${ends.map(e => `(?<=${escapeRegex(e)})`).join('|')}${lineStart ? '|^' : ''})`;
+    }
+    const block = tokenPatternBlockDelimiters(tok);
+    const key = K(`text-${tok.name.toLowerCase()}`);
+    result[key] = block && !behind
+      ? { name: `${scope}.${langName}`, begin: escapeRegex(block[0]), end: escapeRegex(block[1]) }
+      : { match: `${behind}${tokenPatternSource(tok)}`, name: `${scope}.${langName}` };
+    textTokenKeys.push(key);
+  }
   const childrenScope = hl.childrenScope ? `${hl.childrenScope}.${langName}` : undefined;
   result[K('children')] = {
     patterns: [
+      ...textTokenKeys.map(k => ({ include: `#${k}` })),
       // A child element — `#<name>-element` covers BOTH the self-closing `<br/>` and the
       // open `<span>…</span>` shape (its `end` matches `/>` OR `</name>`), so the
       // separate `#<name>-self-closing-element` is NOT listed here: that rule's begin
