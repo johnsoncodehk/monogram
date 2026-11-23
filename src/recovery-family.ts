@@ -168,6 +168,7 @@ export const TEXT_EXTERNS: Fn[] = [textExt('litText'), textExt('kindText')];
 // repairs, three ints each (kind, token index, arg).
 export const RM_REC = 0, RM_FAIL = 1, RM_PROBE = 2, RM_SP = 3, RM_SD = 4, RM_ATT = 5, RM_AMAX = 6, RM_NB = 7, RM_BARS = 8, RM_MAX_BARS = 32, RM_DIAGS = RM_BARS + RM_MAX_BARS;
 export const ST_CAPPED = 0, ST_FORM = 1, ST_TAIL = 2, ST_SUP_NEXT = 3, ST_SUP_CUR = 4, ST_CTX = 5;
+const ST_ALL = [ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, ST_CTX];
 
 const T = (i: Expr): Expr => ({ k: 'tab', t: 'rt', i });
 const add = (a: Expr, b: Expr): Expr => bin('add', a, b);
@@ -689,12 +690,16 @@ const riNat = method('riNat', [['r', 'int'], ['bp', 'int']], ['bool'], [
   let_('lk', call('enLookEnd')),
   run('enLookSet', n(0)),
   let_('k', call('enMark')),
+  // The engine's flags as the native call found them (it stages the suppress set it reads), put
+  // back when it is undone, so the interpreted frame starts where the native one did.
+  ...ST_ALL.map((st) => let_(`st${st}`, call('enSt', n(st)))),
   let_('ok', fls, 'bool'),
   if_(lt(v('bp'), n(0)), [set('ok', call('enRule', v('r')))], [set('ok', call('enBp', v('r'), v('bp')))]),
   let_('x', call('enLookEnd')),
   if_(gt(v('lk'), v('x')), [run('enLookSet', v('lk'))], [run('enLookSet', v('x'))]),
   if_(and(v('ok'), not(call('riBarIn', v('start'), add(v('x'), n(2))))), [run('enUnmark', v('k')), ret(tru)]),
   run('enReset', v('k')), run('enUnmark', v('k')),
+  ...ST_ALL.map((st) => run('enSetSt', n(st), v(`st${st}`))),
   ret(fls),
 ]);
 // Termination T2 (recovering only): the interpreted rd / Pratt frames entered at one position with
