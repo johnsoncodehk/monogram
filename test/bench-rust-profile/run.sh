@@ -126,8 +126,9 @@ node "$H/synth-nonascii.ts" "$W/inputs/nonascii.ts"
 node -e 'require("fs").writeFileSync(process.argv[1], ";".repeat(1 << 20))' "$W/inputs/dense-semi.ts"
 node -e 'require("fs").writeFileSync(process.argv[1], "a" + "+a".repeat(1 << 19) + ";")' "$W/inputs/dense-plus.ts"
 # The element inputs (TSX / JSX): the real element code of the pinned tsc corpus
-# (element-inputs.ts says how they are chosen); TS_CASES is its tests/cases directory.
-node "$H/element-inputs.ts" "${TS_CASES:-/tmp/ts-repo/tests/cases}" "$W/inputs"
+# (element-inputs.ts says how they are chosen); TS_CASES is its tests/cases directory. At full
+# scope oxc-check checks the pinned list of the parts oxc rejects (both scopes leave those out).
+node "$H/element-inputs.ts" "${TS_CASES:-/tmp/ts-repo/tests/cases}" "$W/inputs" ${HAVE_OXC:+$([ $HAVE_OXC = 1 ] && echo "--oxc-check=$OXC/oxc-check")}
 # The control: gen-tm.ts (plain TypeScript, no element) through the typescriptreact parser. Against
 # gen-tm.ts through the typescript one it is what the element machinery costs code outside elements.
 cp "$W/inputs/gen-tm.ts" "$W/inputs/gen-tm.tsx"
