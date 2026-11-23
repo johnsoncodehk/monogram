@@ -336,12 +336,15 @@ function engine(ir: ParserIR, mut: Mutation = null) {
   }
 
   // ── guards and dispatch ──
+  // A pair test (Guard.pairs): where the first token is in `when`, the token after it in `second`.
+  const pairOk = (x: { when: { id: number }; second: { id: number } }, t: Tok | null) => t === null || !inSet(x.when.id, t) || (pos + 1 < toks.length && inSet(x.second.id, toks[pos + 1]!));
   const guardOk = (g: Guard, t: Tok | null, keyed: boolean): boolean => {
     if (g === null) return true;
     if (mut?.guard === g && t !== null && t.lid === mut.lid && pos === mut.pos) return false;
     if (!keyed && g.first) { if (t === null || !inSet(g.first.id, t)) return false; }
     if (g.second !== null) { const i = pos + 1; if (!(i < toks.length && inSet(g.second.id, toks[i]!))) return false; }
     for (const l of g.lead) { if (t === null) return false; const x = inSet(l.set, t) || (l.ctx && ctxWordT(t)); if (x !== l.is) return false; }
+    for (const x of g.pairs ?? []) if (!pairOk(x, t)) return false;
     return true;
   };
   // The candidates a Dispatch reaches for token t, in trying order, each with whether it was keyed.
@@ -389,6 +392,7 @@ function engine(ir: ParserIR, mut: Mutation = null) {
     if (x.first && !inSet(g.first!.id, t)) return false;
     if (g.second !== null) { const i = pos + 1; if (!(i < toks.length && inSet(g.second.id, toks[i]!))) return false; }
     for (const k of x.lead) { const l = g.lead[k]!; const v = inSet(l.set, t) || (l.ctx && ctxWordT(t)); if (v !== l.is) return false; }
+    for (const k of x.pairs ?? []) if (!pairOk(g.pairs![k]!, t)) return false;
     return true;
   };
   const noteCommit = (list: string, t: Tok, arm: number, n: number) => {

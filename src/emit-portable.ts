@@ -285,7 +285,10 @@ export function sameAsEarlierOutside(e: RuleExpr, earlier: readonly RuleExpr[], 
 // refusal costs no frame and the candidate's statement runs only its steps after them
 // (`steps.slice(skip)`). Adjacent negative tests are one test of the union of their sets. A guard
 // with lead tests and no FIRST set has `first` null: it refuses only by its lead tests.
-export type Guard = { first: GuardSet | null; second: GuardSet | null; lead: LeadTest[]; skip: number } | null;
+// `pairs`: SECOND by first token (grammar-analysis.ts exprSecondBy): where the token at the start is
+// in `when` (literals), the token after it must be in `second` (no token there refuses). Absent: none.
+export type Guard = { first: GuardSet | null; second: GuardSet | null; lead: LeadTest[]; skip: number; pairs?: Pair[] } | null;
+export type Pair = { when: GuardSet; second: GuardSet };
 /** One test of the buffered token: whether it is in ParserIR.tokenSets[set] — or, with `ctx`, a
  *  word the context in force reserves (ParserIR.ctxWords) — compared with `is`. */
 export type LeadTest = { set: number; is: boolean; ctx: boolean };
@@ -327,14 +330,14 @@ export type GuardSet = TokenSet & { id: number };
 // token of the key passes it (`first`), and those of its lead tests (indices into Guard.lead) that
 // some token of the key fails or that read the context; a SECOND set and a capped arm's binding
 // power are always tested.
-export type CommitTest = { arm: number; first: boolean; lead: number[] };
+export type CommitTest = { arm: number; first: boolean; lead: number[]; pairs?: number[] };
 export type CommitAct = CommitTest & { nullable: boolean; clean: boolean; unless: CommitTest[] };
 export type CommitCase = { keys: string[]; act: CommitAct | null | 'frame' };
 export type Commit = { lid: CommitCase[]; kid: CommitCase[] };
 /** What the commit analysis reads of one candidate: its first-token set (null: any token), its lead
  *  tests, whether it has a test only the run decides, whether its steps can match nothing / fail
  *  clean, and the kinds at which it has no commit form (an interpolated template arm). */
-export type CommitCand = { first: TokenSet | null; lead: LeadTest[]; runtime: boolean; nullable: boolean; clean: boolean; frameAt?: string[] };
+export type CommitCand = { first: TokenSet | null; lead: LeadTest[]; runtime: boolean; nullable: boolean; clean: boolean; frameAt?: string[]; pairs?: TokenSet[] };
 type CommitTables = { kinds: string[]; puncts: string[]; kindsOf: (text: string) => ReadonlySet<string>; tokenSets: TokenSet[]; ctxWords: string[] };
 /** The frame's Dispatch once a Commit decides some keys: a `lid` / `kid` group whose every token the
  *  commit switch returns at (it fails there, or commits with no `unless`) is never reached by the
@@ -370,12 +373,19 @@ export function commitOf(cands: CommitCand[], P: CommitTables): Commit | undefin
   };
   const lead = (j: number, c: Cls) => { const r = cands[j]!.lead.map((l) => leadAt(l, c)); return r.includes('no') ? 'no' : r.includes('maybe') ? 'maybe' : 'yes'; };
   const viable = (j: number, c: Cls) => firstHolds(j, c) && lead(j, c) !== 'no';
-  const certain = (j: number, c: Cls) => firstHolds(j, c) && lead(j, c) === 'yes' && !cands[j]!.runtime;
-  const testAt = (j: number, cs: Cls[]): CommitTest => ({
-    arm: j,
-    first: !cs.every((c) => firstHolds(j, c)),
-    lead: cands[j]!.lead.flatMap((l, k) => (cs.every((c) => leadAt(l, c) === 'yes') ? [] : [k])),
-  });
+  // A pair test (Guard.pairs) reads the token after the first: only the run decides it, at the
+  // literals of its `when`.
+  const pairAt = (j: number, c: Cls) => (cands[j]!.pairs ?? []).some((w) => c.lit !== null && w.lits.includes(c.lit));
+  const certain = (j: number, c: Cls) => firstHolds(j, c) && lead(j, c) === 'yes' && !cands[j]!.runtime && !pairAt(j, c);
+  const testAt = (j: number, cs: Cls[]): CommitTest => {
+    const pairs = (cands[j]!.pairs ?? []).flatMap((w, k) => (cs.some((c) => c.lit !== null && w.lits.includes(c.lit)) ? [k] : []));
+    return {
+      arm: j,
+      first: !cs.every((c) => firstHolds(j, c)),
+      lead: cands[j]!.lead.flatMap((l, k) => (cs.every((c) => leadAt(l, c) === 'yes') ? [] : [k])),
+      ...(pairs.length ? { pairs } : {}),
+    };
+  };
   const actAt = (cs: Cls[]): CommitAct | null | 'frame' => {
     const V = cands.map((_, j) => j).filter((j) => cs.some((c) => viable(j, c)));
     if (V.length === 0) return null;
@@ -910,6 +920,54 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
     return g === null ? { first: null, second: null, lead, skip } : { ...g, lead, skip };
   };
 
+  // TWO-TOKEN PAIRS (Guard.pairs): at a literal the first tokens of several candidates share, the
+  // second token can separate them (`const x` is a variable statement, `const enum` a declaration).
+  // A candidate's SECOND at literal l is the union of exprSecondBy over its FIRST keys l matches (l
+  // itself, a kind l has); unknown when one is not known or a match of one token begins there. A
+  // candidate gets the pair (l, its SECOND) where some other candidate admits l and can continue
+  // with a token outside it (unknown included): there the pair refuses it at a second token the
+  // other may take. Literals with the same SECOND are one pair. Sound as Guard.second is: every
+  // match beginning with l continues with a token of the set.
+  const rdItems = new Map<string, RuleExpr[]>();   // an rd rule's alternatives, for its pairs (pairsOf, once kindsOf is known)
+  const kindsOfKey = (l: string) => kindsOf(gtComps.includes(l) ? '>' : l);
+  const subsetTok = (x: TokenSet, y: TokenSet) => x.toks.every((k) => y.toks.includes(k)) && x.lits.every((l) => y.lits.includes(l) || [...kindsOf(l)].some((k) => y.toks.includes(k)));
+  // Whether a candidate can be tried at a token with literal l: its first set and its lead tests
+  // (a context word: the context in force decides, so it can).
+  const admitsLit = (g: Guard, l: string): boolean => {
+    if (g === null) return true;
+    const ks = [...kindsOf(l)];
+    const inS = (s: TokenSet, k: string) => s.lits.includes(l) || s.toks.includes(k);
+    return ks.some((k) => (g.first === null || inS(g.first, k))
+      && g.lead.every((x) => inS(tokenSets[x.set]!, k) === x.is || (x.ctx && ctxWords.includes(l))));
+  };
+  const pairsOf = (items: RuleExpr[], gs: Guard[]): Guard[] => {
+    const by = items.map((e, i) => (gs[i]?.first && gs[i]!.first!.toks.every((k) => !templateTokens.has(k)) && !a.exprNullable(e) ? a.exprSecondBy(e) : null));
+    const secAt = (i: number, l: string): TokenSet | null => {
+      const m = by[i];
+      if (!m) return null;
+      const keys = [...m.keys()].filter((k) => k === l || (tokenNames.has(k) && kindsOfKey(l).has(k)));
+      if (keys.length === 0) return null;
+      const s = new Set<string>();
+      for (const k of keys) { const x = m.get(k)!; if (x.s === null || x.len1) return null; for (const y of x.s) s.add(y); }
+      return s.size ? keySet(s) : null;
+    };
+    const lits = [...new Set(gs.flatMap((g) => g?.first?.lits ?? []))].sort();
+    return gs.map((g, i) => {
+      if (g === null || g.first === null) return g;
+      const at = new Map<string, { sec: TokenSet; lits: string[] }>();
+      for (const l of lits) {
+        if (!g.first.lits.includes(l)) continue;
+        const sec = secAt(i, l);
+        if (sec === null) continue;
+        const others = gs.flatMap((h, j) => (j !== i && admitsLit(h, l) ? [secAt(j, l)] : []));
+        if (!others.some((o) => o === null || !subsetTok(o, sec))) continue;
+        const key = JSON.stringify(sec);
+        const e = at.get(key); if (e) e.lits.push(l); else at.set(key, { sec, lits: [l] });
+      }
+      if (at.size === 0) return g;
+      return { ...g, pairs: [...at.values()].map((x) => ({ when: guardSet({ lits: x.lits, toks: [] }), second: guardSet(x.sec) })) };
+    });
+  };
   const rules: RuleIR[] = grammar.rules.map((r) => {
     // Pratt rules AND left-recursive non-Pratt rules (e.g. NewTarget, TS Type) both parse as
     // atom-then-continuation: buildPratt detects `startsSelf` and splits accordingly, so routing
@@ -926,6 +984,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
     const alts = items.map(altSteps);
     // A single alternative is no candidate (ruleShell SINGLE): it has no guard to take tests over.
     const altGuards = items.map((e, i) => altGuard(e, items.slice(0, i)));
+    if (items.length > 1) rdItems.set(r.name, items);
     return { kind: 'rd', name: r.name, alts, altNames, altFirst: [], predictive: false, altGuard: items.length > 1 ? altGuards.map((g, i) => leadOf(g, alts[i]!)) : altGuards, altDispatch: { sections: [], ranked: [] }, clean: false };
   });
   // Longest match never picks an alternative that advances nothing, and only the entry rule
@@ -1077,6 +1136,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
       });
     }
   }
+  for (const r of rules) { const items = rdItems.get(r.name); if (r.kind === 'rd' && items) r.altGuard = pairsOf(items, r.altGuard); }
   const meets = (a: NonNullable<FirstSig>, b: NonNullable<FirstSig>): boolean =>
     a.lits.some((l) => b.lits.includes(l) || b.toks.some((k) => kindsOf(l).has(k))) || a.toks.some((k) => b.toks.includes(k));
   const disjoint = (a: FirstSig, b: FirstSig): boolean => a !== null && b !== null && !meets(a, b) && !meets(b, a);
@@ -1230,7 +1290,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
       if (r.kind === 'rd') {
         if (r.predictive || r.alts.length < 2) continue;
         const c = commitOf(r.altGuard.map((g, i) => ({
-          first: g?.first ?? null, lead: g?.lead ?? [], runtime: g !== null && g.second !== null,
+          first: g?.first ?? null, lead: g?.lead ?? [], runtime: g !== null && g.second !== null, ...(g?.pairs ? { pairs: g.pairs.map((x) => x.when) } : {}),
           nullable: nullableList(guardedSteps(g, r.alts[i]!)), clean: listFailsClean(guardedSteps(g, r.alts[i]!)),
         })), P);
         if (c) { r.altCommit = c; r.altDispatch = frameDispatch(r.altDispatch, c, kindsOf, kinds); }
@@ -1508,7 +1568,7 @@ export function blockBody(s: string): string | null {
 }
 /** The tests a run still makes of a candidate's Guard at a key (CommitTest). */
 export const commitGuard = (g: Guard, t: CommitTest): Guard =>
-  (g === null ? null : { first: t.first ? g.first : null, second: g.second, lead: t.lead.map((k) => g.lead[k]!), skip: g.skip });
+  (g === null ? null : { first: t.first ? g.first : null, second: g.second, lead: t.lead.map((k) => g.lead[k]!), skip: g.skip, ...(t.pairs ? { pairs: t.pairs.map((k) => g.pairs![k]!) } : {}) });
 /** A Commit's switch: act(a) commits (or, null, fails); tests(t) are a candidate's run-time tests,
  *  each `unless` candidate's refusal a condition of its commit. */
 // A commit by what it runs (its arm and its own tests): the cases that run the same are one printing.
