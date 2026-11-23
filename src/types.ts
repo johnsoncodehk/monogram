@@ -169,7 +169,20 @@ export interface ElementRegion {
   // usual. `ignoreCase`: the name and the close tag match case-insensitively (HTML `<SCRIPT>`).
   // `embed` (per tag name: the embedded language's scope) is highlighter data, as in
   // `MarkupConfig.rawText`; the lexer does not read it.
-  rawText?: { tags: string[]; token: string; ignoreCase?: boolean; embed?: Record<string, string | RawEmbed> }[];
+  //   unlessBodyStarts — the body is NOT raw when this pattern matches at its start (the unit after
+  //   the open tag's `tagClose`): the element then has ordinary children. E.g. a `<style>` whose
+  //   first non-blank character is the hole opener holds an expression, not CSS.
+  rawText?: { tags: string[]; token: string; ignoreCase?: boolean; unlessBodyStarts?: TokenPattern; embed?: Record<string, string | RawEmbed> }[];
+  // TAG START: a `tagOpen` opens a tag (open or close) only when the unit right after it is one
+  // of this one-unit class; any other `tagOpen` is not a tag: in the children it is TEXT (the text
+  // run goes on over it), in code it is lexed by the ordinary scan. ABSENT → every `tagOpen`
+  // opens a tag. (`MarkupConfig.tagOpenAfter` is the same fact for a markup file.)
+  tagStart?: TokenPattern;
+  // TEXT TOKENS: token TYPES tried, in order, in the children before the text run (needs `text`),
+  // e.g. comments in text. A text run stops where one of them matches: at the run's first unit
+  // always; further in the run only right after a unit of its `after` class, when it has one
+  // (`a//b` is text, `a //b` a comment). They keep their ordinary meaning in code.
+  textTokens?: { token: string; after?: TokenPattern }[];
   // A `tagOpen` at an operand position that begins a TYPE-PARAMETER list, not an element:
   //   head      — the characters right after `tagOpen` (e.g. `T,` / `T extends U`): never an element;
   //   signature — a head `tagOpen Name tagClose` followed by the bracket group `open … close`

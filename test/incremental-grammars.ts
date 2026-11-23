@@ -32,7 +32,7 @@ type Parser = { parse(s: string): Cst; edit(cst: Cst, edits: Edit[]): void; visi
 type Tok = { type: string; text: string; offset: number; newlineBefore: boolean; commentBefore: boolean; multilineFlowBefore: boolean };
 type Em = { createParser(): Parser & { tokenAt(cst: Cst, i: number): Tok }; tokenize(s: string): Tok[] };
 
-const GRAMMARS = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'yaml', 'html', 'test/fixtures/envspec', 'test/fixtures/elementdialect'];
+const GRAMMARS = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'yaml', 'html', 'test/fixtures/envspec', 'test/fixtures/elementdialect', 'test/fixtures/textdialect'];
 
 let seedState = 0x5EED1E55;
 const rand = () => ((seedState = (seedState * 48271) % 0x7fffffff) / 0x7fffffff);
@@ -227,6 +227,8 @@ for (const name of ['javascript', 'typescript']) {
 // decided by reading past their end + 1, each LOOK document with its own insertions (the relex
 // anchor rule, src/relex-family.ts).
 type FrameDoc = string | { doc: string; ins: string[] };
+// the text dialect's insertions: the frame characters, and a digit and `_` (a tag start or not)
+const TEXT_INS = ['{', '}', '<', '>', '/', ';', 'x', ' ', '\n', '9', '_', '.'];
 const FRAME_DOCS: Record<string, FrameDoc[]> = {
   javascript: ['f(a, `x${b + c}`);', 'let q = 1;\nf(`x${(b)}y${c}`);\ng`t${`u${v}`}w`;', ...HOLE_EDIT_DOCS, ...LOOK_EDIT_DOCS],
   typescript: ['let s: string = `a${b as T}c${{ d: 1 }.d}`;\nx = 1;', ...HOLE_EDIT_DOCS, ...LOOK_EDIT_DOCS],
@@ -253,6 +255,24 @@ const FRAME_DOCS: Record<string, FrameDoc[]> = {
     // a raw-text element (`rawText`): one body token up to `</style`; edits that break or make
     // the close tag, and an empty raw body
     'component S() { <a><style k="v">.a { b: "c" } <i></style>"t"</a> <style></style> }',
+  ],
+  // TEXT children (test/fixtures/textdialect.ts), an `operand` entry (`<` is also relational):
+  // edits that make or break a tag start (`<` before a blank, a digit, `<`, a letter, `{`), a
+  // comparison next to an element, and a `<style>` raw or not by the `{` after its open tag
+  'test/fixtures/textdialect': [
+    { doc: 'component C(a) {\n  <p k="v">1 < 2 {a} <b/>x<9 <></></p>;\n  const z = a <b;\n  return <{a}>y</{a}>;\n}', ins: TEXT_INS },
+    { doc: 'component S() { <style>{a}</style>; <style> .x{}</style>; <script>a<b</script> }', ins: TEXT_INS },
+    // comments in text (`textTokens`): edits that make or break `/*`, `*/`, `//` and the blank
+    // before it; an unterminated `/*` in text reads to the end of the file, past the element
+    { doc: 'component C(a) {\n  <p>hi // n\n a/* c */b {a}// m\n</p>;\n  const z = 1; /* k */\n}', ins: [...TEXT_INS, '*'] },
+    { doc: 'component C() { <p>q /*</p>; const z = 1; }', ins: ['*/', '*', '/', ' ', 'x'] },
+    // directives (derived openers, heads, bodies, continuations): edits that make and break an
+    // opener (`@if (` / `@iffy`), a head's parens and braces, a body's closer, a continuation;
+    // and an opener / a continuation made by closing a comment after the element (their tests
+    // read the comment to the end of the file)
+    { doc: 'component C(a) {\n  <p>x @if (a) { y <b/> } @else if ({a}.a) {m} @else { n } z@for await (i of a) {{i}} @empty {e}</p>;\n}', ins: ['{', '}', '<', '/', ';', 'x', ' ', '\n', '@', '(', ')', 'e', 'f'] },
+    { doc: 'component C(a) { <p>@if /* (a) {y}</p>; const z = 1; }', ins: ['*/ (a) {y}</p>; ', '*/'] },
+    { doc: 'component C(a) { <p>@if (a) {y} @else /* {n}</p>; const z = 1; }', ins: ['*/ {n}</p>; ', '*/'] },
   ],
 };
 // (`"` and `\` make lex errors: inside an undecided type-parameter signature an error is the
