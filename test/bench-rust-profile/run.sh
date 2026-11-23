@@ -111,8 +111,11 @@ node -e 'require("fs").writeFileSync(process.argv[1], "a" + "+a".repeat(1 << 19)
 # The element inputs (TSX / JSX): the real element code of the pinned tsc corpus
 # (element-inputs.ts says how they are chosen); TS_CASES is its tests/cases directory.
 node "$H/element-inputs.ts" "${TS_CASES:-/tmp/ts-repo/tests/cases}" "$W/inputs"
+# The control: gen-tm.ts (plain TypeScript, no element) through the typescriptreact parser. Against
+# gen-tm.ts through the typescript one it is what the element machinery costs code outside elements.
+cp "$W/inputs/gen-tm.ts" "$W/inputs/gen-tm.tsx"
 MAIN="checker.ts gen-tm.ts typescript.d.ts dense-semi.ts"
-ELEMENTS="jsx-corpus.tsx jsx-corpus.jsx"
+ELEMENTS="jsx-corpus.tsx jsx-corpus.jsx gen-tm.tsx"
 INPUTS="$MAIN typescript.js parser.ts synth2mb.ts typescript.ts nonascii.ts dense-plus.ts $ELEMENTS"
 (cd "$W/inputs" && wc -c $INPUTS && sha256sum $INPUTS)
 cd "$W/inputs"
