@@ -1197,6 +1197,10 @@ export default defineGrammar({
     // parseModuleSpecifier); the `not(String_)` that keeps the two apart has no tree-sitter
     // counterpart, so `require("m")` is both until the `)`.
     ['expr', 'module_reference'],
+    // A heritage base (a NewTarget) after `extends f <`: the element's type arguments
+    // (`extends f<T> {}`) or a typed tagged template (`extends f<T>`x` {}`); only the token after
+    // `>` decides, and tsc accepts both.
+    ['new_target', 'class_heritage'],
     // `{ readonly [` starts a mapped type, a type member with a `readonly` modifier, or (after a
     // `<` that may open type arguments or compare) an object literal's member, until `in` / `:`.
     ['type', 'type_member', 'prop'],
