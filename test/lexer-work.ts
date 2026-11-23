@@ -34,7 +34,7 @@ import { emitParser } from '../src/target.ts';
 import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
-import { goBuild, scratchDir } from './scratch.ts';
+import { scratchDir } from './scratch.ts';
 
 const SMALL = 64, LARGE = 8 * SMALL, GROWTH = 2;
 
@@ -176,6 +176,7 @@ func lwIndexByte(s string, c byte) int {
   writeFileSync(join(gdir, 'main.go'), `package main
 
 import (
+import { cachedGoBuild, cachedRustc } from './build-cache.ts';
 	"fmt"
 	"os"
 
@@ -198,7 +199,7 @@ func main() {
 	}
 }
 `);
-  goBuild(['-o', 'consumer', '.'], { cwd: gdir });
+  cachedGoBuild(['-o', 'consumer', '.'], { cwd: gdir });
   counts.set('go', readCounts(execFileSync(join(gdir, 'consumer'), files, { encoding: 'utf8' })));
 }
 
@@ -232,7 +233,7 @@ fn main() {
     }
 }
 `);
-  execFileSync('rustc', ['-A', 'warnings', rfile, '-o', join(dir, 'work')], { stdio: 'pipe' });
+  cachedRustc(['-A', 'warnings', rfile, '-o', join(dir, 'work')], { stdio: 'pipe' });
   counts.set('rust', readCounts(execFileSync(join(dir, 'work'), files, { encoding: 'utf8' })));
 }
 
