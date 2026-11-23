@@ -307,10 +307,11 @@ for (const { c, grammar, runners, oracleOut } of await prepareAll(selectedCases(
       const sessions = (HOLE_EDIT_GRAMMARS.has(c.grammar) ? [...HOLE_EDIT_DOCS.map((doc) => ({ doc, ins: undefined as string[] | undefined })), ...LOOK_EDIT_DOCS] : FRAME_EDIT_DOCS[c.grammar]!.map((d) => (typeof d === 'string' ? { doc: d, ins: FRAME_INS } : d)))
         .flatMap(({ doc: init, ins }) => oneCharEdits(init, ins).map((e) => ({ init, e, final: init.slice(0, e[0]) + e[2] + init.slice(e[1]) })));
       const fresh = r.batch(sessions.map((x) => x.final));
+      const edited = r.editBatch(sessions.map((x) => JSON.stringify({ init: x.init, batches: [[x.e]] })), false);
       const bad: string[] = [];
       let knownHit = 0;
       sessions.forEach((x, i) => {
-        const a = r.edit(JSON.stringify({ init: x.init, batches: [[x.e]] }), false), b = fresh[i]!;
+        const a = edited[i]!, b = fresh[i]!;
         // The relexed stream itself (before the Doc parses it) ≡ a fresh lex: its alignment with
         // the old stream is the oracle's.
         let want: Align | null = null;
