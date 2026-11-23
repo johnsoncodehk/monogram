@@ -6,7 +6,7 @@
 // may omit the lowering; asking it for one is then an error.
 import type { Lowering } from './algo-ir.ts';
 import type { EmitOptions, Target } from './emit.ts';
-import { type LexTok, type ParserIR, buildArenaIdPlan, buildLexIdPlan, recoveryTables } from './emit-portable.ts';
+import { type LexTok, type ParserIR, buildArenaIdPlan, buildLexIdPlan, hasRebind, recoveryTables } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { EL_FRAME_FN, EL_OPENS_FN, EL_RAW_FN, EL_REACH_FN, EL_TAG_START_FN, TPL_SPAN, UNI_CLASS, emitLexScan, emitScanInline, scannedTokens, scannerName, templateLiterals, tokenLiterals } from './lex-family.ts';
 import { emitRelexFamily } from './relex-family.ts';
@@ -85,7 +85,7 @@ export function defineTarget(def: TargetDefinition): PortableTarget {
     recoveryFamily: (ir, methods) => {
       if (!lowering().record || !lowering().relex) throw new Error(`defineTarget: target ${def.name} supplies no record and token-stream Lowering for the recovery family`);
       const ids = buildLexIdPlan(ir);
-      return emitRecoveryFamily(lowering(), recoveryTables(ir, ids, buildArenaIdPlan(ir, ids)).data, methods);
+      return emitRecoveryFamily(lowering(), recoveryTables(ir, ids, buildArenaIdPlan(ir, ids)).data, methods, hasRebind(ir), ids);
     },
     lexScan: (ir) => emitLexScan(ir, lowering()),
     scannedTokens,

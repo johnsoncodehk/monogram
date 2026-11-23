@@ -3460,7 +3460,7 @@ function enHeadLid(sb: number): number { return sb < _n ? lid_of(headLeafTextW(s
 function enSt(k: number): number { return k === ${ST_CAPPED} ? (_capped ? 1 : 0) : k === ${ST_FORM} ? _form : k === ${ST_TAIL} ? (_tail ? 1 : 0) : k === ${ST_SUP_NEXT} ? _suppressNext : k === ${ST_SUP_CUR} ? _suppressCur : _ctx; }
 function enSetSt(k: number, v: number): void { if (k === ${ST_CAPPED}) _capped = v !== 0; else if (k === ${ST_FORM}) _form = v; else if (k === ${ST_TAIL}) _tail = v !== 0; else if (k === ${ST_SUP_NEXT}) _suppressNext = v; else if (k === ${ST_SUP_CUR}) _suppressCur = v; else _ctx = v; }
 function enTick(): void { _rsteps++; }
-/**
+${hasRebind(ir) ? '// The re-bind\'s capped operand, interpreted (rebind-family.ts; the marks are the native forms\'): the cap is `toks` sliced for the call.\nfunction riRbCapped(led: number, i: number, d: number): boolean { const full = toks; toks = full.slice(0, i); const ok = riRbStep(led, 1, d); toks = full; return ok; }\n' : ''}/**
  * parseInterpreted: the strict interpreter of the parse plan (the recovery family) from the entry
  * rule, \`depth\` rule levels interpreted and the native functions below: parseWith's root and
  * verdict on every input. \`steps\`: the interpreted steps it took.

@@ -3308,7 +3308,13 @@ func (rv *recov) enSetSt(k, v int) {
 	}
 }
 func (rv *recov) enTick() { rv.steps++ }
-
+${hasRebind(ir) ? `// The re-bind (rebind-family.ts): the builder engine's marks and token read; the capped operand interpreted.
+func (rv *recov) rbMark() (int, int, int, int) { return rv.p.rbMark() }
+func (rv *recov) rbReset(q, sb, nb, kb int) { rv.p.rbReset(q, sb, nb, kb) }
+func (rv *recov) rbPos() int { return rv.p.pos }
+func (rv *recov) rbTokLid(i int) int { return int(rv.p.toks[i].Lid) }
+func (rv *recov) riRbCapped(led, i, d int) bool { full := rv.p.toks; rv.p.toks = full[:i]; ok := rv.riRbStep(led, 1, d); rv.p.toks = full; return ok }
+` : ''}
 // ParseInterpreted is the strict interpreter of the parse plan (the recovery family) from the entry
 // rule, depth rule levels interpreted and the native functions below: ParseWith's root and verdict
 // on every input. steps: the interpreted steps it took. The native parse runs first (runW: the
