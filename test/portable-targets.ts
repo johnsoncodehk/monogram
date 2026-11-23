@@ -1814,6 +1814,9 @@ let corpusMs = 0, corpusInputs = 0;
 //     a byte offset, is compared on ASCII inputs only);
 //   - the TS target gives the same outcome twice.
 const RECOVERY_MUTANTS = 3, RECOVERY_SEED = 20261123;
+// The farthest-hint agreement is a floor per grammar (the count of rejects whose related location
+// is the interpreter's farthest token): it may rise, never drop below what is recorded here.
+const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 0, typescript: 0 };
 const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // The UTF-16 offset of each UTF-8 byte offset of src that starts a character.
 function utf16Of(src: string): (b: number) => number {
@@ -1880,6 +1883,7 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
       });
     }
     console.log(`  ${c.grammar}/${r.label}: recovery ${bad.length ? `${bad.length} MISMATCH` : 'ok'} over ${srcs.length} inputs (${mutants.length} mutants): ${acc} accepted with no errors, ${rej} rejected: primary ≡ interpreter ${primary}, lexer ≡ oracle ${lexEq}; farthest ≡ the interpreter's hint on ${farEq}/${farN} (counted)`);
+    if (farEq < (RECOVERY_FARTHEST_FLOOR[c.grammar] ?? 0)) bad.push(`farthest agreement ${farEq} dropped below its recorded floor ${RECOVERY_FARTHEST_FLOOR[c.grammar]}`);
     for (const smp of bad.slice(0, 10)) console.log(`      ${smp}`);
     failures += bad.length;
   }
