@@ -3,36 +3,36 @@
   "ts": 279577,
   "ts+recovery": 282359,
   "js": 1457249,
-  "go": 510428,
-  "go+recovery": 513430,
-  "rust": 367502,
-  "rust+recovery": 371025
+  "go": 510697,
+  "go+recovery": 513239,
+  "rust": 367718,
+  "rust+recovery": 370835
  },
  "javascript": {
   "ts": 193016,
   "ts+recovery": 195798,
   "js": 849058,
-  "go": 329454,
-  "go+recovery": 332456,
-  "rust": 269563,
-  "rust+recovery": 273086
+  "go": 329723,
+  "go+recovery": 332265,
+  "rust": 269779,
+  "rust+recovery": 272896
  },
  "typescriptreact": {
   "ts": 312364,
   "ts+recovery": 315146,
   "js": 1510611,
-  "go": 545368,
-  "go+recovery": 548370,
-  "rust": 404174,
-  "rust+recovery": 407697
+  "go": 545637,
+  "go+recovery": 548179,
+  "rust": 404390,
+  "rust+recovery": 407507
  },
  "javascriptreact": {
   "ts": 207945,
   "ts+recovery": 210727,
   "js": 900916,
-  "go": 349208,
-  "go+recovery": 352210,
-  "rust": 284652,
-  "rust+recovery": 288175
+  "go": 349477,
+  "go+recovery": 352019,
+  "rust": 284868,
+  "rust+recovery": 287985
  }
 }
