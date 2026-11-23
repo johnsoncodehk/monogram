@@ -24,8 +24,8 @@ env:
 
 jobs:
   timing:
-    # a branch named measure/inner-loop/catch-* runs the catch job only
-    if: ${{ !contains(github.ref_name, 'catch') }}
+    # a branch named measure/inner-loop/catch-* runs the catch job only, go-unused-* the go-unused job only
+    if: ${{ !contains(github.ref_name, 'catch') && !contains(github.ref_name, 'go-unused') }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -78,6 +78,7 @@ jobs:
         run: grep '^|' /tmp/go-unused.log >> "$GITHUB_STEP_SUMMARY" || true
 
   catch:
+    if: ${{ !contains(github.ref_name, 'go-unused') }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:

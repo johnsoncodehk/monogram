@@ -5,8 +5,8 @@
 #   test/inner-loop-measure.sh timing             five sample commits x --changed / --quick x cold / warm
 #   test/inner-loop-measure.sh concurrent        two cold runs of a gate at once into one empty cache
 #   test/inner-loop-measure.sh go-unused          the quick tier against a Go printer mistake only a real
-#     grammar's parser reaches: a variable declared and not used in the lexer's regex-context state
-#     (printed for a grammar with a regex context: javascript, not calc / templatejs)
+#     grammar's parser reaches: a variable declared and not used in the relexable lexer's regex-context
+#     state (printed for a grammar with a regex context: javascript, not calc / templatejs)
 #   test/inner-loop-measure.sh catch <branch>:<sha>
 #     <sha> is a head of land/<branch> whose CI failed for a real reason. Its change is put back onto
 #     this tree: what the branch's last head (origin/land/<branch>, what was fixed and landed)
@@ -63,13 +63,14 @@ timing)
 go-unused)
   out=/tmp/go-unused; mkdir -p "$out"
   git config user.email ci@example.invalid; git config user.name ci
-  grep -q 'const rxState = rx ? `\\tprevLid, prevKid, bpLid := uint16(0), uint16(0), uint16(0)' src/target-go.ts || { echo "go-unused: the mutation site moved"; exit 1; }
-  sed -i 's/const rxState = rx ? `\\tprevLid, prevKid, bpLid := uint16(0), uint16(0), uint16(0)/&\\n\\tunusedProbe := 0/' src/target-go.ts
-  git diff --stat; git commit -qam 'go-unused probe'
+  grep -q 'const rxStateFrom = rx ? `\\tprevIsValue := func() bool {' src/target-go.ts || { echo "go-unused: the mutation site moved"; exit 1; }
+  sed -i 's/const rxStateFrom = rx ? `/&\\tunusedProbe := 0\\n/' src/target-go.ts
+  git diff | grep '^[-+] '; git commit -qam 'go-unused probe'
   node test/check.ts --quick --commit=HEAD > "$out/quick.txt" 2>&1; rc=$?
+  grep -E '^    [✓✗] |declared and not used' "$out/quick.txt" | head -20
   row ' mutation ' ' --quick exit ' ' failed gates ' ' Go compiler says '
   row '---' '---' '---' '---'
-  row ' declared-and-not-used in the regex-context lexer state ' " $rc " " $(failed_gates "$out/quick.txt") " " $(grep -m1 -o 'declared and not used: unusedProbe' "$out/quick.txt" || echo none) "
+  row ' declared-and-not-used in the relexable lexer's regex-context state ' " $rc " " $(failed_gates "$out/quick.txt") " " $(grep -m1 -o 'declared and not used: unusedProbe' "$out/quick.txt" || echo none) "
   git reset -q --hard HEAD^
   ;;
 catch)
