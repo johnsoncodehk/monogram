@@ -7,11 +7,30 @@
 // lexer (emit-lexer.ts) and the TS target compile them; Go and Rust print `uniIdentPlan()`,
 // a table derived from the same classes by Node's own Unicode property support at generation
 // time, so no character data is kept by hand and every target follows the interpreter's Unicode.
+// A grammar may declare other classes on its identifier token (`identifierClasses`, e.g. Python's
+// XID_Start / XID_Continue); every consumer takes them from identifierClassesOf.
+import type { IdentifierClasses, TokenDecl } from './types.ts';
 
 /** IdentifierStart's characters: ECMAScript's `$`, `_` and ID_Start. */
 export const UNI_ID_START = '[$_\\p{ID_Start}]';
 /** IdentifierPart's characters: ECMAScript's `$`, ZWNJ, ZWJ and ID_Continue (which holds `_`). */
 export const UNI_ID_CONTINUE = '[$\\u200c\\u200d\\p{ID_Continue}]';
+
+/** The classes a grammar gets when its identifier token declares none: ECMAScript's. */
+export const ECMASCRIPT_IDENTIFIER: IdentifierClasses = { start: UNI_ID_START, continue: UNI_ID_CONTINUE };
+
+/**
+ * A grammar's identifier classes: the ones its identifier token declares (`identifierClasses`), or
+ * ECMAScript's. A prefixed-identifier token (`identifierPrefix`) names the same IdentifierName
+ * behind its prefix, so it declares none of its own: one that does is refused.
+ */
+export function identifierClassesOf(tokens: readonly TokenDecl[]): IdentifierClasses {
+  const ident = tokens.find((t) => t.identifier);
+  for (const t of tokens) {
+    if (t.identifierClasses && !t.identifier) throw new Error(`token ${t.name}: identifierClasses belongs on the identifier token (a prefixed identifier takes the identifier's classes)`);
+  }
+  return ident?.identifierClasses ?? ECMASCRIPT_IDENTIFIER;
+}
 
 /**
  * Both classes over every code point as ONE three-valued class (IdentifierStart is a subset of
@@ -51,13 +70,16 @@ const UNIFORM = 3;
 /** The code points stored flat ahead of the trie. */
 const FLAT = 256;
 
-let plan: UniIdentPlan | undefined;
+const plans = new Map<string, UniIdentPlan>();
 
-/** The plan, derived at its first call (about 1 s: every code point is tested, then looked up). */
-export function uniIdentPlan(): UniIdentPlan {
-  if (plan) return plan;
-  const isStart = new RegExp(`^${UNI_ID_START}$`, 'u');
-  const isCont = new RegExp(`^${UNI_ID_CONTINUE}$`, 'u');
+/** The plan of the classes `c`, derived at its first call for them (about 1 s: every code point is
+ *  tested, then looked up). */
+export function uniIdentPlan(c: IdentifierClasses = ECMASCRIPT_IDENTIFIER): UniIdentPlan {
+  const key = `${c.start}\u0000${c.continue}`;
+  const known = plans.get(key);
+  if (known) return known;
+  const isStart = new RegExp(`^${c.start}$`, 'u');
+  const isCont = new RegExp(`^${c.continue}$`, 'u');
   const cls = new Uint8Array(0x110000);
   for (let cp = 0; cp < 0x110000; cp++) {
     if (cp >= 0xd800 && cp < 0xe000) continue; // a lone surrogate is no character
@@ -112,7 +134,7 @@ export function uniIdentPlan(): UniIdentPlan {
   let at = 0;
   for (const part of all) { ats.push(at); at += part.length; }
   const data = String.fromCharCode(...all.flat().map((v) => UNI_SYM0 + v));
-  plan = {
+  const plan: UniIdentPlan = {
     data,
     topLen: ids.length,
     levels: [{ at: 0, width: topWidth, shift: SHIFTS[0]!, fanBits: 0 }, ...nodes.map((n, k) => ({ at: ats[k + 1]!, width: n.width, shift: n.shift, fanBits: n.fanBits }))],
@@ -125,6 +147,7 @@ export function uniIdentPlan(): UniIdentPlan {
   const l = uniLookup(plan, (k) => `D.charCodeAt(${k})`);
   const classOf = new Function('D', `return (cp) => { let i; if (cp < ${plan.flatLen}) return ${l.flat}; if (${l.top} >= ${plan.topLen}) return 0; ${l.steps.map((e) => `i = ${e}; if (i < ${l.uniform}) return i;`).join(' ')} return ${l.result}; }`)(data) as (cp: number) => number;
   for (let cp = 0; cp < 0x110000; cp++) if (classOf(cp) !== cls[cp]) throw new Error(`uni-ident: the table misclassifies U+${cp.toString(16)}`);
+  plans.set(key, plan);
   return plan;
 }
 

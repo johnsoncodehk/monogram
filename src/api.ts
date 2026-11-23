@@ -48,6 +48,10 @@ interface TokenOptions {
   // can match a non-ASCII `prefix`-name (`#℘`, `#<ZWNJ>`) the ASCII token pattern misses —
   // the same fallback the bare `identifier` token gets, just behind the prefix.
   identifierPrefix?: string;
+  // On the identifier token: the language's Unicode identifier characters, as two RegExp classes
+  // (`\p{…}` allowed), which the lexer's fallback for characters beyond the ASCII pattern uses.
+  // Absent: ECMAScript's (`$`, `_`, ZWNJ / ZWJ, ID_Start / ID_Continue). See IdentifierClasses.
+  identifierClasses?: { start: string; continue: string };
   // A template-literal token: the engine tokenizes its `interpOpen … interpClose` holes. The rule
   // that parses a hole belongs to each REFERENCE of the token, not to the token (TypeScript's
   // template-literal type and its template-literal expression share one token): a bare reference
@@ -690,6 +694,7 @@ export function defineGrammar<const R extends Record<string, RuleRef>>(config: G
       embed: tok.opts.embed,
       identifier: tok.opts.identifier,
       identifierPrefix: tok.opts.identifierPrefix,
+      ...(tok.opts.identifierClasses ? { identifierClasses: { ...tok.opts.identifierClasses } } : {}),
       template: tok.opts.template,
       regexContext: tok.opts.regexContext && {
         divisionAfterTypes: tok.opts.regexContext.divisionAfterTypes ?? [],
@@ -744,12 +749,14 @@ export function defineGrammar<const R extends Record<string, RuleRef>>(config: G
     });
     return { token: tokenName, within, scope: entry.scope };
   });
-  const grammar = { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, rules, scopeOverrides, contextualScopes, markup: config.markup, elements: config.elements, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest, treeSitterConflicts: config.treeSitterConflicts, treeSitterContextualNames: config.treeSitterContextualNames };
+  const entryRule = config.entry ? names.get(config.entry) : undefined;   // `entry` may be omitted: findEntryRule then takes the last rule
+  if (config.entry && !entryRule) throw new Error('`entry` references an undeclared rule');
+  const grammar = { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, rules, entryRule, scopeOverrides, contextualScopes, markup: config.markup, elements: config.elements, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest, treeSitterConflicts: config.treeSitterConflicts, treeSitterContextualNames: config.treeSitterContextualNames };
 
   // Nullable NON-ENTRY rules are a definition error: the engine never returns an empty match for a
   // rule, so such a rule's empty case is unreachable and references to it fail silently where the
   // author expected an empty match.
-  const entryName = config.entry ? names.get(config.entry) : findEntryRule(grammar);   // `entry` may be omitted: the last rule is the entry
+  const entryName = findEntryRule(grammar);
   const nullable = [...computeNullableRules(grammar).nullableRules].filter((n) => n !== entryName);
   if (nullable.length > 0) {
     const list = nullable.map((n) => `'${n}'`).join(', ');
