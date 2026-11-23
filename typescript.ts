@@ -1243,6 +1243,11 @@ export default defineGrammar({
     // After `implements {` a type-literal index signature's parameter list and a class index
     // signature's `[k: T,` are the same tokens.
     ['type_fn_param', 'class_member'],
+    // A type-position parameter's lean binding pattern (typeFnParam) and what else `({ a` / `([a`
+    // opens there: an object type's member name, an object literal's property, a declaration's
+    // binding pattern (a function type, an arrow and a parenthesized type share `(`).
+    // (Fixpoint IN PROGRESS: tuples found by the local generate loop so far.)
+    ['type_fn_param', 'member_name'], ['type_fn_param', 'prop'], ['type_fn_param', 'binding_pattern'],
   ],
 
   rules: {
