@@ -292,7 +292,7 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
   }
   const variants = (rule: string): string[] => (kinds.get(rule) === 'pratt' ? reads.get(rule) ?? [] : []);
   const cx: AttrCx = { inhK, synK, scalarInh, nodesAttrs, variants, synDflt: syn.map((a) => a.dflt), synSlotRead: new Set() };
-  const readStats: ReadStats = { fixed: 0, checked: 0, scan: 0 };
+  const readStats: ReadStats = { fixed: 0, checked: 0, scan: 0, list: 0 };
   for (const r of ir.rules) {
     const view = shape.grammar.arms.get(r.name);
     const names = shape.grammar.names.get(r.name);
@@ -392,8 +392,9 @@ type AttrCx = {
 };
 /** How a plan's reads of slots are compiled: at a fixed position (fixed), a check of the one slot
  * at a fixed position (checked: an optional item, a branch, a marker), a scan of the scope's slots
- * (scan: what a repetition or an optional before the item makes dynamic). */
-export type ReadStats = { fixed: number; checked: number; scan: number };
+ * (scan: what a repetition or an optional before the item makes dynamic), a walk over a
+ * repetition's slots (list: a repeated child's items, a fold's iteration end). */
+export type ReadStats = { fixed: number; checked: number; scan: number; list: number };
 /** What an arm's call sites set: its equations, its children's names (by grammar node), its
  * threaded repetitions (by repetition node). */
 type ArmSites = { eqs: Eqs; childOf: Map<RuleExpr, string>; threads: Map<RuleExpr, { k: number; init: ShapeInhVal; next: string }>; readsTag?: (t: number) => boolean };
@@ -825,7 +826,7 @@ class ArmCompiler {
           const lastList = r.rest.map(isListQ).lastIndexOf(true);
           if (r.rest.slice(lastList + 1).some((q) => q.type === 'quantifier' && q.kind === '?')) return this.holes(s, t.name, out);
           const [t0] = this.range(r.slot);
-          this.reads.scan++;
+          this.reads.list++;
           const l = this.tmp(), i = this.tmp();
           out.push({ k: 'let', name: l, ty: VALS as never, init: { k: 'newList', ty: VALS as never } });
           out.push({ k: 'let', name: i, ty: 'idx', init: v(r.scope.lo) });
@@ -936,7 +937,7 @@ class ArmCompiler {
         this.iterations(s, t.over, out, (it, body) => {
           it.vars.set(t.acc, acc);
           const nv = this.val(t.body, it, body);
-          this.reads.scan++;
+          this.reads.list++;
           const fe = this.bindInt(call('namedEnd', v(it.lo), v(it.hi)), body);
           body.push({ k: 'set', name: init, e: nv });
           body.push({ k: 'if', c: bin('gt', v(fe), v(acc.end)), then: [{ k: 'set', name: acc.end, e: v(fe) }] });
@@ -945,7 +946,10 @@ class ArmCompiler {
       }
       case 'let': {
         const x = this.bindVal(this.val(t.value, s, out), out);
-        const st = this.bindInt(call('valStart', v(x), v('off')), out), en = this.bindInt(call('valEnd', v(x), v('end')), out);
+        // Its span only where the body reads it (a span endpoint naming it).
+        let spanRead = false;
+        eachTerm(t.body, (y) => { const sp = y.t === 'node' ? y.span as Record<string, unknown> | undefined : undefined; if (sp && Object.values(sp).includes(t.name)) spanRead = true; });
+        const st = spanRead ? this.bindInt(call('valStart', v(x), v('off')), out) : 'off', en = spanRead ? this.bindInt(call('valEnd', v(x), v('end')), out) : 'end';
         return this.val(t.body, { ...s, vars: new Map([...s.vars, [t.name, { val: x, start: st, end: en }]]) }, out);
       }
       case 'var': {
