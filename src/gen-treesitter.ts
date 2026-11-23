@@ -1,7 +1,7 @@
 import type { CstGrammar, RuleExpr, RuleDecl, TokenPattern } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
 import { buildLr, END, type LeafGraph, type LrAnalysis } from './lr-automaton.ts';
-import { info as tokenPatternInfo, type CSet } from './lex-match-plan.ts';
+import { info as tokenPatternInfo, continuesAt, type CSet } from './lex-match-plan.ts';
 import { analyzeGrammar } from './grammar-analysis.ts';
 import { tokenPatternFirstCharSet, type TokenPatternFirstSet, tokenPatternIsNever, tokenPatternLiteralPrefix, tokenPatternLiteralPrefixes, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
 
@@ -3744,8 +3744,8 @@ function cCharSetTest(set: CSet, v: string): string {
 // in the same state, now after it. A line break is one of the characters that set the lexer's
 // `newlineBefore` (src/emit-lexer.ts: \n \r U+2028 U+2029) in the whitespace before the next token.
 // What the scanner cannot see: a line break inside a skipped block comment (the comment is an extra
-// already consumed when it is asked again), and a literal that is the prefix of a longer non-literal
-// token (`.` before `.5`).
+// already consumed when it is asked again), and, for CONT, a literal that is the prefix of a longer
+// non-literal token (`.` before `.5`; AFTER reads both, see zw_lit_tokens).
 function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { helpers: string[]; call: string[] } {
   const { grammar } = ctx;
   const tokens = ctx.zeroWidth.tokens;
@@ -3856,6 +3856,40 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   const has = (set: Iterable<string>, kindLit: string) => { const s = new Set(set); return s.has(`'${kindLit}`) || (!!word && isWordLit(kindLit) && !reservedWords.has(kindLit) && s.has(word)); };
   const mask = (set: Iterable<string>) => { const s = new Set(set); let m = 0n; kindTokens.forEach((n, i) => { if (s.has(n)) m |= 1n << BigInt(i); }); return `0x${m.toString(16)}ull`; };
   const boolRow = (f: (l: string) => boolean) => `{ ${literals.map(l => (f(l) ? 1 : 0)).join(', ')} }`;
+  // A literal that a non-literal token can also begin (`/` a regex, `.` a number): which reading the
+  // lexer takes depends on the state after the zero-width token, so a token reading in AFTER lets the
+  // zero-width token hold too (`return /re/`: the division `/` follows no `return`, the regex does),
+  // where the token can go on with what follows the literal (`.5` is a number, `.x` is not: the
+  // number reading of `{ out.x }` would take `out` as a modifier). A literal of one character is
+  // tested on the character after it; a longer one on its own second character. The word token is
+  // not one of them: a keyword is read as a name by the AFTER_EXACT / AFTER passes.
+  const litTokens = literals.map(l => {
+    const reads: { bit: number; next: CSet | null }[] = [];
+    if (isWordLit(l)) return reads;
+    const c = l.codePointAt(0)!;
+    kindTokens.forEach((n, i) => {
+      if (n === word) return;
+      const p = grammar.tokens.find(t => t.name === n)!.pattern;
+      if (!tokenPatternInfo(p).first.some(([lo, hi]) => c >= lo && c <= hi)) return;
+      const second = continuesAt(p, c);
+      if (l.length === 1) reads.push({ bit: i, next: second });
+      else if (second.some(([lo, hi]) => l.charCodeAt(1) >= lo && l.charCodeAt(1) <= hi)) reads.push({ bit: i, next: null });
+    });
+    return reads;
+  });
+  H.push('// The tokens of AFTER a literal may begin instead, given the character after the literal (see above).');
+  H.push('static uint64_t zw_lit_tokens(int lit, int32_t c) {');
+  H.push('  uint64_t m = 0;');
+  H.push('  switch (lit) {');
+  litTokens.forEach((reads, lit) => {
+    if (!reads.length) return;
+    H.push(`    case ${lit}:`);
+    for (const r of reads) H.push(r.next === null ? `      m |= (uint64_t)1 << ${r.bit};` : `      if (${cRanges(r.next, 'c')}) m |= (uint64_t)1 << ${r.bit};`);
+    H.push('      break;');
+  });
+  H.push('  }');
+  H.push('  return m;');
+  H.push('}');
   H.push('typedef struct { int symbol; bool line_end; bool line_break; bool after_end; uint64_t after_tok, cont_tok, ahead_tok; const bool *after_exact, *after_lit, *cont_lit, *ahead_lit; } ZeroWidth;');
   tokens.forEach(t => {
     const S = t.snake.toUpperCase();
@@ -3896,7 +3930,7 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   H.push('    bool ahead = !end && (lit >= 0 ? z->ahead_lit[lit] : (cand & z->ahead_tok) != 0);');
   H.push('    bool holds = z->line_end ? ((z->line_break && (line_break || end)) || ahead) : (!line_break && !end);');
   H.push('    if (!holds) continue;');
-  H.push('    bool after = end ? z->after_end : lit >= 0 ? (pass == 0 ? z->after_exact[lit] : z->after_lit[lit]) : (cand & z->after_tok) != 0;');
+  H.push('    bool after = end ? z->after_end : lit >= 0 ? (pass == 0 ? z->after_exact[lit] : z->after_lit[lit]) || (zw_lit_tokens(lit, lexer->lookahead) & z->after_tok) != 0 : (cand & z->after_tok) != 0;');
   H.push('    bool cont = !end && (lit >= 0 ? z->cont_lit[lit] : (cand & z->cont_tok) != 0);');
   H.push('    if (after && !cont) { lexer->result_symbol = z->symbol; return 1; }');
   H.push('  }');

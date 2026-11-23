@@ -12,7 +12,7 @@ import { relexFamily, relexFamilyFns, relexMode } from '../src/relex-family.ts';
 import { lexScanFamily } from '../src/lex-family.ts';
 import { reuseFamilyFns } from '../src/reuse-family.ts';
 import { recoveryFamilyFns } from '../src/recovery-family.ts';
-import { ATOM, type BinOp, type Expr, type Fn, type Lowering, type Stmt } from '../src/algo-ir.ts';
+import { ATOM, type BinOp, type Expr, type Fn, type Lowering, type Stmt, UNPACK_INTS, packInts, printFns } from '../src/algo-ir.ts';
 
 const OP: Record<BinOp, string> = { add: '+', sub: '-', shr: 'shr', shl: 'shl', lt: '<', le: '<=', gt: '>', ge: '>=', eq: '=', ne: '/=', and: 'and', or: 'or' };
 const form = (...xs: string[]) => `(${xs.join(' ')})`;
@@ -34,7 +34,7 @@ const sexpr: Lowering = {
     literal: (v) => at(typeof v === 'string' ? JSON.stringify(v) : typeof v === 'boolean' ? (v ? '#t' : '#f') : String(v)),
     not: (r) => at(form('not', r.c)),
     bin: (op, a, b) => at(form(OP[op], a.c, b.c)),
-    call: (name, args) => form(name, ...args),
+    call: (name, args, method) => (method ? form('send', 'engine', name, ...args) : form(name, ...args)),
     len: (cx, l) => cx.atom(form('length', l.c), 'int', 'int'),
     own: (_cx, r) => r,
     code: (cx, s, i) => cx.atom(form('char-code', s.c, i.c), 'int', 'int'),
@@ -44,7 +44,9 @@ const sexpr: Lowering = {
     find: (cx, s, i, lit) => cx.atom(form('find', s.c, i.c, JSON.stringify(lit)), 'int', 'int'),
     findAny: (cx, s, i, stops) => cx.atom(form('find-any', s.c, i.c, form('stops', ...stops.map(String))), 'int', 'int'),
     cat: (cx, parts) => cx.atom(form('string-append', ...parts.map((r) => r.c)), 'str', 'str'),
+    tab: (cx, name, i) => cx.atom(form('table-ref', name, i.c), 'int', 'int'),
   },
+  intTable: (name, packed) => form('define-table', name, JSON.stringify(packed)),
   stmt: {
     comment: (text) => [`;; ${text}`],
     let: (_cx, s) => [form('define', s.id, s.r.c)],
@@ -58,7 +60,7 @@ const sexpr: Lowering = {
     return: (vals) => [form('return', ...vals)],
     fn: (f) => [
       ...f.doc.map((l) => `;; ${l}`),
-      `(defn ${f.name} (${f.params.map((p) => form(p.name, p.type)).join(' ')}) (returns ${f.rets.join(' ')})`,
+      `(${f.method ? 'defmethod' : 'defn'} ${f.name} (${f.params.map((p) => form(p.name, p.type)).join(' ')}) (returns ${f.rets.join(' ')})`,
       ...nest(f.body),
       ')',
     ].join('\n'),
@@ -112,7 +114,7 @@ const target = defineTarget({
   name: 'sexpr-syntax-probe',
   ext: 'scm',
   lowering: sexpr,
-  emitParser: (grammar, shared) => { const ir = portableIR(grammar); return shared.lexScan(ir) + '\n' + shared.relexFamily(ir) + '\n' + shared.reuseFamily(ir) + '\n' + shared.recoveryFamily(); },
+  emitParser: (grammar, shared) => { const ir = portableIR(grammar); return shared.lexScan(ir) + '\n' + shared.relexFamily(ir) + '\n' + shared.reuseFamily(ir) + '\n' + shared.recoveryFamily(ir); },
 });
 
 // IR census: what the printed forms must account for.
@@ -122,6 +124,7 @@ const HEAD: Partial<Record<Stmt['k'], string[]>> = {
   lexStep: ['lex-step!'], lexAll: ['lex-all!'], shrink: ['shrink!'], extend: ['extend!'], setField: ['set-field!'],
 };
 function census(fns: Fn[]): Map<string, number> {
+  const sigs = new Map(fns.map((f) => [f.name, f]));
   const n = new Map<string, number>();
   const bump = (k: string) => n.set(k, (n.get(k) ?? 0) + 1);
   const ex = (e: Expr): void => {
@@ -140,6 +143,8 @@ function census(fns: Fn[]): Map<string, number> {
     if (e.k === 'find') bump('find');
     if (e.k === 'findAny') { bump('find-any'); bump('stops'); }
     if (e.k === 'cat') bump('string-append');
+    if (e.k === 'tab') bump('table-ref');
+    if (e.k === 'call' && sigs.get(e.fn)?.method) bump('send');
     for (const v of Object.values(e)) {
       if (Array.isArray(v)) v.forEach((y) => y && typeof y === 'object' && 'k' in y && ex(y as Expr));
       else if (v && typeof v === 'object' && 'k' in v) ex(v as Expr);
@@ -155,7 +160,7 @@ function census(fns: Fn[]): Map<string, number> {
   };
   for (const f of fns) {
     if (f.extern) continue;   // a signature only: the target prints it (printFns skips it)
-    bump('defn');
+    bump(f.method ? 'defmethod' : 'defn');
     if (f.doc !== '') for (let i = 0; i < f.doc.split('\n').length; i++) bump(';;');
     f.body.forEach(st);
   }
@@ -196,7 +201,7 @@ const fail = (msg: string) => { failures++; console.log(`  ✗ ${msg}`); };
 for (const path of FIXTURES) {
   const grammar = (await import(path)).default;
   const lex = lexScanFamily(portableIR(grammar));
-  const fns = [...lex.fns, ...relexFamilyFns(relexMode(portableIR(grammar))), ...reuseFamilyFns(portableIR(grammar)), ...recoveryFamilyFns()];
+  const fns = [...lex.fns, ...relexFamilyFns(relexMode(portableIR(grammar))), ...reuseFamilyFns(portableIR(grammar)), ...recoveryFamilyFns(), UNPACK_INTS];
   const out = target.emitParser(grammar);
   const code = out.split('\n').filter((l) => !/^\s*;;/.test(l)).join('\n').replace(/"(?:[^"\\]|\\.)*"/g, '""');
   const bad = code.match(C_SURFACE);
@@ -205,6 +210,7 @@ for (const path of FIXTURES) {
   try { heads = read(out); } catch (e) { fail(`${path}: ${(e as Error).message}`); continue; }
   const want = census(fns);
   want.set('define-char-set', lex.sets.length + relexFamily(relexMode(portableIR(grammar))).sets.length);
+  want.set('define-table', 1);
   want.set('define-runtime', (want.has('run-end') ? 1 : 0) + (want.has('find') ? 1 : 0) + lex.stopSets.length);
   for (const [k, n] of want) {
     const got = k.split('|').reduce((s, h) => s + (heads.get(h) ?? 0), 0);
@@ -212,6 +218,29 @@ for (const path of FIXTURES) {
   }
   if (!lex.fns.length) fail(`${path}: no token scanners printed`);
   console.log(`  ${path}: ${fns.length} functions, ${[...want.values()].reduce((a, b) => a + b, 0)} IR constructs ≡ printed forms`);
+}
+
+// Int tables and engine methods (algo-ir `tab`, `ints`, Fn.method): a method reading a packed table
+// into an int stack, calling an extern method and the shared decoder's printed form.
+{
+  const v = (name: string): Expr => ({ k: 'var', name });
+  const ext: Fn = { name: 'enginePos', doc: '', params: [], ret: ['int'], body: [], extern: true, method: true };
+  const probe: Fn = { name: 'tableProbe', doc: '', params: [{ name: 'i', ty: 'int' }], ret: ['ints'], method: true, body: [
+    { k: 'let', name: 'out', ty: 'ints', init: { k: 'newList', ty: 'ints' } },
+    { k: 'push', list: 'out', e: { k: 'bin', op: 'add', a: { k: 'tab', t: 'probe', i: v('i') }, b: { k: 'call', fn: 'enginePos', args: [] } } },
+    { k: 'return', es: [v('out')] },
+  ] };
+  const data = [-1, 0, 31, 32, 1023, 1024, 70000];
+  const out = printFns(sexpr, [probe, ext], [], [], [{ name: 'probe', data }]);
+  const heads = read(out);
+  const want = census([probe, ext, UNPACK_INTS]);
+  want.set('define-table', 1);
+  for (const [k, n] of want) { const got = k.split('|').reduce((s, h) => s + (heads.get(h) ?? 0), 0); if (got !== n) fail(`int table probe: ${k} printed ${got}×, IR holds ${n}`); }
+  // The packing round-trips through the decoder's arithmetic.
+  const s = packInts(data), dec: number[] = [];
+  for (let i = 0, val = 0, sh = 0; i < s.length; i++) { const d = s.charCodeAt(i) - 48; if (d >= 32) { val += (d - 32) << sh; sh += 5; } else { dec.push(val + (d << sh) - 1); val = 0; sh = 0; } }
+  if (dec.join() !== data.join()) fail(`packInts: ${data} decodes as ${dec}`);
+  console.log(`  int table probe: ${[...want.values()].reduce((a, b) => a + b, 0)} IR constructs ≡ printed forms`);
 }
 
 if (failures > 0) {
