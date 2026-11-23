@@ -434,11 +434,11 @@ async function page(g: string): Promise<{ text: string; report: Report; failures
   else {
     L.push('It always matches exactly one token, and at every token it admits a candidate declared before it is surely tried and matches at least that token: the earlier one wins the tie, so this one never wins. `node test/decision-report.ts --dead` removes each from the grammar and requires that no tree on the corpora changes.');
     L.push('');
-    L.push('| list | dead alternative | taken by | at | witness |');
-    L.push('|:--|:--|:--|:--|:--|');
+    L.push('| list | dead alternative | taken by | at | witness | action |');
+    L.push('|:--|:--|:--|:--|:--|:--|');
     for (const d of rep.dead) {
       const t = rep.ties.find((x) => x.list === d.list && x.loser === d.arm && x.witness !== undefined);
-      L.push(`| ${d.list} | ${d.name} (#${d.arm}) | ${d.by.join(', ')} | ${list(tokensText(d.tokens), 4)} | ${t ? `${code(t.witness!)} as ${d.rule}` : ''} |`);
+      L.push(`| ${d.list} | ${d.name} (#${d.arm}) | ${d.by.join(', ')} | ${list(tokensText(d.tokens), 4)} | ${t ? `${code(t.witness!)} as ${d.rule}` : ''} | remove the arm: ${d.by.join(', ')}, declared before it, ${d.by.length > 1 ? 'take' : 'takes'} every input it could match |`);
     }
   }
   L.push('');
@@ -448,9 +448,9 @@ async function page(g: string): Promise<{ text: string; report: Report; failures
   else {
     L.push('Two candidates of one list match the same input to the same end; the one declared first wins. Where the later one is meant to win there, the grammar must say so (reorder, or refuse the token in the earlier one). "One token": both can match exactly one token at these tokens (the witness is that token parsed as the rule, where the engine observes the tie). "Observed": a frame on the pinned inputs where they tied (how often, and the first place).');
     L.push('');
-    L.push('| list | wins (declared first) | loses | one token | observed | witness |');
-    L.push('|:--|:--|:--|:--|--:|:--|');
-    for (const t of tiesLive) L.push(`| ${t.list} | ${t.wName} (#${t.winner}) | ${t.lName} (#${t.loser}) | ${t.tokens.length ? list(tokensText(t.tokens), 4) : ''} | ${t.observed?.n ?? ''} | ${t.observed ? t.observed.at : t.witness !== undefined ? `${code(t.witness)} as ${t.rule}` : ''} |`);
+    L.push('| list | wins (declared first) | loses | one token | observed | witness | action |');
+    L.push('|:--|:--|:--|:--|--:|:--|:--|');
+    for (const t of tiesLive) L.push(`| ${t.list} | ${t.wName} (#${t.winner}) | ${t.lName} (#${t.loser}) | ${t.tokens.length ? list(tokensText(t.tokens), 4) : ''} | ${t.observed?.n ?? ''} | ${t.observed ? t.observed.at : t.witness !== undefined ? `${code(t.witness)} as ${t.rule}` : ''} | reorder or guard: the tie of ${t.wName} and ${t.lName} is resolved only by declaration order (${t.wName} wins) |`);
   }
   L.push('');
   L.push('### Alternatives no token reaches');

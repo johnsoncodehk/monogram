@@ -32,22 +32,22 @@ None.
 
 Two candidates of one list match the same input to the same end; the one declared first wins. Where the later one is meant to win there, the grammar must say so (reorder, or refuse the token in the earlier one). "One token": both can match exactly one token at these tokens (the witness is that token parsed as the rule, where the engine observes the tie). "Observed": a frame on the pinned inputs where they tied (how often, and the first place).
 
-| list | wins (declared first) | loses | one token | observed | witness |
-|:--|:--|:--|:--|--:|:--|
-| ClassHeritage NUD | true_ (#2) | ident (#6) | `true` |  | `true` as ClassHeritage |
-| ClassHeritage NUD | false_ (#3) | ident (#6) | `false` |  | `false` as ClassHeritage |
-| ClassHeritage NUD | null_ (#4) | ident (#6) | `null` |  | `null` as ClassHeritage |
-| ClassHeritage NUD | undefined (#5) | ident (#6) | `undefined` |  | `undefined` as ClassHeritage |
-| Expr NUD | true_ (#0) | ident (#6) | `true` | 326 | acorn/dist/acorn.mjs:54: `true }` |
-| Expr NUD | false_ (#1) | ident (#6) | `false` | 292 | acorn/dist/acorn.mjs:52: `false }` |
-| Expr NUD | null_ (#2) | ident (#6) | `null` | 158 | acorn/dist/acorn.mjs:119: `null;` |
-| Expr NUD | undefined (#3) | ident (#6) | `undefined` | 15 | acorn/dist/acorn.mjs:3575: `undefined, useStrict && !oldStrict);` |
-| Expr NUD | this_ (#4) | ident (#6) | `this` | 3723 | acorn/dist/acorn.mjs:111: `this.label = label;` |
-| NewTarget NUD | true_ (#0) | ident (#5) | `true` |  | `true` as NewTarget |
-| NewTarget NUD | false_ (#1) | ident (#5) | `false` |  | `false` as NewTarget |
-| NewTarget NUD | null_ (#2) | ident (#5) | `null` |  | `null` as NewTarget |
-| NewTarget NUD | undefined (#3) | ident (#5) | `undefined` |  | `undefined` as NewTarget |
-| NewTarget NUD | this_ (#4) | ident (#5) | `this` | 5 | acorn/dist/acorn.mjs:672: `this(options, input).parse()` |
+| list | wins (declared first) | loses | one token | observed | witness | action |
+|:--|:--|:--|:--|--:|:--|:--|
+| ClassHeritage NUD | true_ (#2) | ident (#6) | `true` |  | `true` as ClassHeritage | reorder or guard: the tie of true_ and ident is resolved only by declaration order (true_ wins) |
+| ClassHeritage NUD | false_ (#3) | ident (#6) | `false` |  | `false` as ClassHeritage | reorder or guard: the tie of false_ and ident is resolved only by declaration order (false_ wins) |
+| ClassHeritage NUD | null_ (#4) | ident (#6) | `null` |  | `null` as ClassHeritage | reorder or guard: the tie of null_ and ident is resolved only by declaration order (null_ wins) |
+| ClassHeritage NUD | undefined (#5) | ident (#6) | `undefined` |  | `undefined` as ClassHeritage | reorder or guard: the tie of undefined and ident is resolved only by declaration order (undefined wins) |
+| Expr NUD | true_ (#0) | ident (#6) | `true` | 326 | acorn/dist/acorn.mjs:54: `true }` | reorder or guard: the tie of true_ and ident is resolved only by declaration order (true_ wins) |
+| Expr NUD | false_ (#1) | ident (#6) | `false` | 292 | acorn/dist/acorn.mjs:52: `false }` | reorder or guard: the tie of false_ and ident is resolved only by declaration order (false_ wins) |
+| Expr NUD | null_ (#2) | ident (#6) | `null` | 158 | acorn/dist/acorn.mjs:119: `null;` | reorder or guard: the tie of null_ and ident is resolved only by declaration order (null_ wins) |
+| Expr NUD | undefined (#3) | ident (#6) | `undefined` | 15 | acorn/dist/acorn.mjs:3575: `undefined, useStrict && !oldStrict);` | reorder or guard: the tie of undefined and ident is resolved only by declaration order (undefined wins) |
+| Expr NUD | this_ (#4) | ident (#6) | `this` | 3723 | acorn/dist/acorn.mjs:111: `this.label = label;` | reorder or guard: the tie of this_ and ident is resolved only by declaration order (this_ wins) |
+| NewTarget NUD | true_ (#0) | ident (#5) | `true` |  | `true` as NewTarget | reorder or guard: the tie of true_ and ident is resolved only by declaration order (true_ wins) |
+| NewTarget NUD | false_ (#1) | ident (#5) | `false` |  | `false` as NewTarget | reorder or guard: the tie of false_ and ident is resolved only by declaration order (false_ wins) |
+| NewTarget NUD | null_ (#2) | ident (#5) | `null` |  | `null` as NewTarget | reorder or guard: the tie of null_ and ident is resolved only by declaration order (null_ wins) |
+| NewTarget NUD | undefined (#3) | ident (#5) | `undefined` |  | `undefined` as NewTarget | reorder or guard: the tie of undefined and ident is resolved only by declaration order (undefined wins) |
+| NewTarget NUD | this_ (#4) | ident (#5) | `this` | 5 | acorn/dist/acorn.mjs:672: `this(options, input).parse()` | reorder or guard: the tie of this_ and ident is resolved only by declaration order (this_ wins) |
 
 ### Alternatives no token reaches
 

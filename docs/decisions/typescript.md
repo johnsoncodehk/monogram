@@ -28,37 +28,37 @@ Every choice point of the grammar and how the generated parser (the portable pla
 
 It always matches exactly one token, and at every token it admits a candidate declared before it is surely tried and matches at least that token: the earlier one wins the tie, so this one never wins. `node test/decision-report.ts --dead` removes each from the grammar and requires that no tree on the corpora changes.
 
-| list | dead alternative | taken by | at | witness |
-|:--|:--|:--|:--|:--|
-| Type NUD | true_ (#20) | ident (#0) | `true` | `true` as Type |
-| Type NUD | false_ (#21) | ident (#0) | `false` | `false` as Type |
-| Type NUD | null_ (#22) | ident (#0) | `null` | `null` as Type |
-| Type NUD | undefined (#23) | ident (#0) | `undefined` | `undefined` as Type |
-| Type NUD | void_ (#24) | ident (#0) | `void` | `void` as Type |
+| list | dead alternative | taken by | at | witness | action |
+|:--|:--|:--|:--|:--|:--|
+| Type NUD | true_ (#20) | ident (#0) | `true` | `true` as Type | remove the arm: ident (#0), declared before it, takes every input it could match |
+| Type NUD | false_ (#21) | ident (#0) | `false` | `false` as Type | remove the arm: ident (#0), declared before it, takes every input it could match |
+| Type NUD | null_ (#22) | ident (#0) | `null` | `null` as Type | remove the arm: ident (#0), declared before it, takes every input it could match |
+| Type NUD | undefined (#23) | ident (#0) | `undefined` | `undefined` as Type | remove the arm: ident (#0), declared before it, takes every input it could match |
+| Type NUD | void_ (#24) | ident (#0) | `void` | `void` as Type | remove the arm: ident (#0), declared before it, takes every input it could match |
 
 ### Ties decided by declaration order
 
 Two candidates of one list match the same input to the same end; the one declared first wins. Where the later one is meant to win there, the grammar must say so (reorder, or refuse the token in the earlier one). "One token": both can match exactly one token at these tokens (the witness is that token parsed as the rule, where the engine observes the tie). "Observed": a frame on the pinned inputs where they tied (how often, and the first place).
 
-| list | wins (declared first) | loses | one token | observed | witness |
-|:--|:--|:--|:--|--:|:--|
-| ClassHeritage NUD | true_ (#2) | ident (#6) | `true` |  | `true` as ClassHeritage |
-| ClassHeritage NUD | false_ (#3) | ident (#6) | `false` |  | `false` as ClassHeritage |
-| ClassHeritage NUD | null_ (#4) | ident (#6) | `null` |  | `null` as ClassHeritage |
-| ClassHeritage NUD | undefined (#5) | ident (#6) | `undefined` |  | `undefined` as ClassHeritage |
-| Decl | declare (#9) | declare4 (#12) |  | 11 | typescript/lib/lib.es5.d.ts:33: `declare function eval(x: string): any;` |
-| Expr NUD | true_ (#0) | ident (#6) | `true` | 326 | acorn/dist/acorn.mjs:54: `true }` |
-| Expr NUD | false_ (#1) | ident (#6) | `false` | 292 | acorn/dist/acorn.mjs:52: `false }` |
-| Expr NUD | null_ (#2) | ident (#6) | `null` | 158 | acorn/dist/acorn.mjs:119: `null;` |
-| Expr NUD | undefined (#3) | ident (#6) | `undefined` | 15 | acorn/dist/acorn.mjs:3575: `undefined, useStrict && !oldStrict);` |
-| Expr NUD | this_ (#4) | ident (#6) | `this` | 3723 | acorn/dist/acorn.mjs:111: `this.label = label;` |
-| NewTarget NUD | true_ (#0) | ident (#5) | `true` |  | `true` as NewTarget |
-| NewTarget NUD | false_ (#1) | ident (#5) | `false` |  | `false` as NewTarget |
-| NewTarget NUD | null_ (#2) | ident (#5) | `null` |  | `null` as NewTarget |
-| NewTarget NUD | undefined (#3) | ident (#5) | `undefined` |  | `undefined` as NewTarget |
-| NewTarget NUD | this_ (#4) | ident (#5) | `this` | 5 | acorn/dist/acorn.mjs:672: `this(options, input).parse()` |
-| Type NUD | ident (#0) | this_ (#25) | `this` | 189 | typescript/lib/typescript.d.ts:9338: `this;` |
-| TypeMember | new_ (#0) | seq2 (#2) |  | 70 | typescript/lib/lib.es5.d.ts:156: `new (value?: any): Object;` |
+| list | wins (declared first) | loses | one token | observed | witness | action |
+|:--|:--|:--|:--|--:|:--|:--|
+| ClassHeritage NUD | true_ (#2) | ident (#6) | `true` |  | `true` as ClassHeritage | reorder or guard: the tie of true_ and ident is resolved only by declaration order (true_ wins) |
+| ClassHeritage NUD | false_ (#3) | ident (#6) | `false` |  | `false` as ClassHeritage | reorder or guard: the tie of false_ and ident is resolved only by declaration order (false_ wins) |
+| ClassHeritage NUD | null_ (#4) | ident (#6) | `null` |  | `null` as ClassHeritage | reorder or guard: the tie of null_ and ident is resolved only by declaration order (null_ wins) |
+| ClassHeritage NUD | undefined (#5) | ident (#6) | `undefined` |  | `undefined` as ClassHeritage | reorder or guard: the tie of undefined and ident is resolved only by declaration order (undefined wins) |
+| Decl | declare (#9) | declare4 (#12) |  | 11 | typescript/lib/lib.es5.d.ts:33: `declare function eval(x: string): any;` | reorder or guard: the tie of declare and declare4 is resolved only by declaration order (declare wins) |
+| Expr NUD | true_ (#0) | ident (#6) | `true` | 326 | acorn/dist/acorn.mjs:54: `true }` | reorder or guard: the tie of true_ and ident is resolved only by declaration order (true_ wins) |
+| Expr NUD | false_ (#1) | ident (#6) | `false` | 292 | acorn/dist/acorn.mjs:52: `false }` | reorder or guard: the tie of false_ and ident is resolved only by declaration order (false_ wins) |
+| Expr NUD | null_ (#2) | ident (#6) | `null` | 158 | acorn/dist/acorn.mjs:119: `null;` | reorder or guard: the tie of null_ and ident is resolved only by declaration order (null_ wins) |
+| Expr NUD | undefined (#3) | ident (#6) | `undefined` | 15 | acorn/dist/acorn.mjs:3575: `undefined, useStrict && !oldStrict);` | reorder or guard: the tie of undefined and ident is resolved only by declaration order (undefined wins) |
+| Expr NUD | this_ (#4) | ident (#6) | `this` | 3723 | acorn/dist/acorn.mjs:111: `this.label = label;` | reorder or guard: the tie of this_ and ident is resolved only by declaration order (this_ wins) |
+| NewTarget NUD | true_ (#0) | ident (#5) | `true` |  | `true` as NewTarget | reorder or guard: the tie of true_ and ident is resolved only by declaration order (true_ wins) |
+| NewTarget NUD | false_ (#1) | ident (#5) | `false` |  | `false` as NewTarget | reorder or guard: the tie of false_ and ident is resolved only by declaration order (false_ wins) |
+| NewTarget NUD | null_ (#2) | ident (#5) | `null` |  | `null` as NewTarget | reorder or guard: the tie of null_ and ident is resolved only by declaration order (null_ wins) |
+| NewTarget NUD | undefined (#3) | ident (#5) | `undefined` |  | `undefined` as NewTarget | reorder or guard: the tie of undefined and ident is resolved only by declaration order (undefined wins) |
+| NewTarget NUD | this_ (#4) | ident (#5) | `this` | 5 | acorn/dist/acorn.mjs:672: `this(options, input).parse()` | reorder or guard: the tie of this_ and ident is resolved only by declaration order (this_ wins) |
+| Type NUD | ident (#0) | this_ (#25) | `this` | 189 | typescript/lib/typescript.d.ts:9338: `this;` | reorder or guard: the tie of ident and this_ is resolved only by declaration order (ident wins) |
+| TypeMember | new_ (#0) | seq2 (#2) |  | 70 | typescript/lib/lib.es5.d.ts:156: `new (value?: any): Object;` | reorder or guard: the tie of new_ and seq2 is resolved only by declaration order (new_ wins) |
 
 ### Alternatives no token reaches
 
