@@ -683,10 +683,9 @@ class Emitter {
         // A suppress-carrying group stages the LED-connector exclusion for the next
         // parseRule (the index of its connector set, grammar-analysis suppressSets), then
         // matches its body (same as matchExpr 'group').
-        const pre = (expr.suppress && expr.suppress.length)
-          ? `suppressNext = ${this.a.suppressSetOf(expr.suppress)};`
-          : ``;
-        return [pre, this.matchInto(expr.body, onFail)].filter(Boolean).join('\n');
+        // The staging ends with the group, matched or not (gen-parser.ts matchExpr 'group').
+        if (!expr.suppress || !expr.suppress.length) return this.matchInto(expr.body, onFail);
+        return [`suppressNext = ${this.a.suppressSetOf(expr.suppress)};`, this.matchInto(expr.body, `{ suppressNext = 0; ${onFail} }`), `suppressNext = 0;`].join('\n');
       }
       case 'not': {
         // Zero-width negative lookahead: succeed (no children) iff body does NOT match.
