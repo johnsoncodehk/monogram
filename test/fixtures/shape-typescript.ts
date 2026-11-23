@@ -171,7 +171,7 @@ export const typescriptShape: ShapeSpec = {
       nudCapped: custom('estreeArrow',
         'nudCapped are ArrowFunctionExpression forms (async/params/return-type/body). ' +
         'Params are sep(Param) and body is Block|Expr alt; flag async from leading keyword ' +
-        '(dropped). Requires handwritten assembly.', { types: ['ArrowFunctionExpression', 'ArrowFunctionExpression', 'ArrowFunctionExpression', 'ArrowFunctionExpression'] }),
+        '(dropped). Requires handwritten assembly.', { types: ['ArrowFunctionExpression', 'ArrowFunctionExpression', 'ArrowFunctionExpression', 'ArrowFunctionExpression', 'YieldExpression'] }),
       postfixTok: custom('estreeExprPostfixTok',
         'postfixTok Template on Expr is TaggedTemplateExpression (tag=left, quasi=TemplateLiteral); ' +
         'keep would leave a raw Expr children pair.', { types: ['TaggedTemplateExpression'] }),
@@ -876,6 +876,9 @@ function estreeExprNudSeq(ctx: TsAstCustomCtx): unknown {
 function estreeArrow(ctx: TsAstCustomCtx): unknown {
   const async = ctx.src.slice(ctx.off, ctx.end).trimStart().startsWith('async');
   const arm = ctx.altPath[0];
+  // v1 binds the capped arms by index: #4 is the `yield` arm (capped since it is an
+  // AssignmentExpression form); its operand is the one kid left after the keyword and `*` drop.
+  if (arm === 4) return { type: 'YieldExpression', argument: ctx.kids[0] ?? null, delegate: /^\s*yield\s*\*/.test(ctx.src.slice(ctx.off, ctx.end)) };
   if (arm === undefined || arm < 0 || arm > 3) return unhandledCustom('estreeArrow', ctx);
   const params = arm === 1 || arm === 2
     ? flatKids(ctx.kids[1] ?? [])
