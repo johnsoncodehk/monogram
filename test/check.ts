@@ -112,6 +112,22 @@ const GATES: Gate[] = [
   { group: 'yaml', name: 'tm-sites', args: ['test/yaml-sites.ts'] },
   { group: 'generative', name: 'scope≡role', args: ['test/generative.ts'] },
 ];
+// The QUICK tier (`--quick`, the loop of seconds): the affected gates of this list run (sampled where
+// a gate has a sample: CHECK_QUICK=1); every other affected gate is printed as left to `--changed` /
+// CI. Chosen from the real failures of land/** branches (2026-11-22/23: which gates caught them) and
+// the CI times (each about 3 s or less there, or sampled to that).
+const QUICK_GATES = new Set([
+  'emit-parity/portable-targets/lists', 'emit-parity/portable-targets/edits-small', 'emit-parity/define-target',
+  'emit-parity/shape-parity', 'emit-parity/guard-refutation', 'emit-parity/guard-lead', 'emit-parity/predictive-first',
+  'emit-parity/emit-reentrancy', 'core/recovery', 'core/template-holes', 'core/diagnostic-labels', 'core/issue-cases',
+  'core/env-spec-regressions', 'core/nullable-rules', 'core/agnostic', 'core/tag-open-entry', 'core/left-recursion',
+  'core/indent-extensions', 'core/text-dialect', 'conformance/js', 'conformance/tsx', 'conformance/jsx', 'conformance/html',
+  'conformance/ts-ast-structure', 'highlighter/tm-guards', 'highlighter/treesitter-assertions', 'highlighter/tm-dialect',
+  'highlighter/tm-diagnostics', 'highlighter/angle-depth', 'highlighter/monarch-dialect', 'highlighter/raw-text-case-sites',
+  'highlighter/tm-lookahead-words', 'highlighter/tm-modifier-follow', 'yaml/tm-sites', 'yaml/issue12-regressions',
+]);
+for (const g of GATES) if (QUICK_GATES.has(`${g.group}/${g.name}`)) g.quick = true;
+if (QUICK_GATES.size !== GATES.filter((g) => g.quick).length) throw new Error('check.ts: a QUICK_GATES name names no gate');
 
 // Usage: check.ts [<substr>]                  every gate (CI), or those whose group/name holds substr
 //        check.ts --changed [<base>] [<substr>] the INNER LOOP: the gates of tier other than 'ci'
