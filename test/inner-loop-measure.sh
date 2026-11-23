@@ -67,10 +67,10 @@ go-unused)
   sed -i 's/const rxStateFrom = rx ? `/&\\tunusedProbe := 0\\n/' src/target-go.ts
   git diff | grep '^[-+] '; git commit -qam 'go-unused probe'
   node test/check.ts --quick --commit=HEAD > "$out/quick.txt" 2>&1; rc=$?
-  grep -E '^    [✓✗] |declared and not used' "$out/quick.txt" | head -20
+  grep -E '^    [✓✗] ' "$out/quick.txt"; grep -A12 -E '^── ✗' "$out/quick.txt" | head -40
   row ' mutation ' ' --quick exit ' ' failed gates ' ' Go compiler says '
   row '---' '---' '---' '---'
-  row ' declared-and-not-used in the relexable lexer regex-context state ' " $rc " " $(failed_gates "$out/quick.txt") " " $(grep -m1 -o 'declared and not used: unusedProbe' "$out/quick.txt" || echo none) "
+  row ' declared-and-not-used in the relexable lexer regex-context state ' " $rc " " $(failed_gates "$out/quick.txt") " " $(grep -m1 -o 'declared and not used[^|]*' "$out/quick.txt" || echo none) "
   git reset -q --hard HEAD^
   ;;
 catch)
