@@ -288,8 +288,8 @@ region cannot decide, and the generators' limits with a witness each:
 [docs/REGIONS.md](docs/REGIONS.md).
 
 The generated Monarch grammar (Monaco) highlights tags, attributes, holes, text or code children,
-dynamic tags and raw bodies in their embedded language from the same declaration; its comments in
-text and directives are not there yet.
+dynamic tags, raw bodies in their embedded language, comments in text and directives from the
+same declaration.
 
 Not there yet: the tree-sitter generator still carries
 its own JSX vocabulary and reads none of the other region features; the portable parsers (TypeScript, Go, Rust) parse JSX and TSX but refuse a

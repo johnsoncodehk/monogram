@@ -1176,17 +1176,19 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
     // dense-plus is +0.43%. PR #184 has the variants and their profile runs. The guard only skips
     // attempts that cannot match, so leaving it out is sound.
     // A clean body (Step.clean) is attempted without a mark: the `_c` forms (no state to undo, so
-    // star / opt have one form for building and recognizing).
-    star: (body, g, c) => {
-      const C = c ? '_c' : R;
+    // star / opt have one form for building and recognizing). A body that fails with leaves only
+    // (MarkForm 'leaves') takes the `_l` forms when building: the position and the scratch list,
+    // no builder checkpoint; recognizing, every mark is the position alone already (`_r`).
+    star: (body, g, mk) => {
+      const C = mk === 'none' ? '_c' : mk === 'leaves' && !r ? '_l' : R;
       return g === null || !guards ? `${recv}.star${C}(|p| ${body})` : `${recv}.star_in${C}(${g}, |p| ${body})`;
     },
-    opt: (body, g, c) => {
-      const C = c ? '_c' : R;
+    opt: (body, g, mk) => {
+      const C = mk === 'none' ? '_c' : mk === 'leaves' && !r ? '_l' : R;
       return g === null || !guards ? `${recv}.opt${C}(|p| ${body})` : `(!${recv}.ahead(${g}, true) || ${recv}.opt_out${C}(|p| ${body}))`;
     },
-    sep: (elem, delim, g, c) => {
-      const C = c ? `_c${R}` : R;
+    sep: (elem, delim, g, mk) => {
+      const C = mk === 'none' ? `_c${R}` : mk === 'leaves' && !r ? '_l' : R;
       return g === null || !guards ? `${recv}.sep_by${C}(|p| ${elem}, ${sepDelimLid(ids, delim)})` : `(!${recv}.ahead(${g}, true) || ${recv}.sep_by_out${C}(|p| ${elem}, ${sepDelimLid(ids, delim)}))`;
     },
     altlit: (values) => `${recv}.alt_lit${R}(&[${values.map((v) => lidOf(ids, v)).join(', ')}])`,
@@ -2610,6 +2612,54 @@ impl<'a, B: Builder> Parser<'a, B> {
     fn alt_lit(&mut self, lids: &[u16]) -> bool {
         for lid in lids { if self.match_lit(*lid) { return true; } }
         false
+    }
+    // A body that fails with leaves only (Step.leaves) changes nothing but the position and the
+    // scratch list when it fails: its mark is those two, with no builder checkpoint.
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn star_l(&mut self, once: fn(&mut Parser<'a, B>) -> bool) -> bool {
+        loop { let sp = self.pos; let sb = self.scratch.len(); if !once(self) { self.back(sp); self.scratch.truncate(sb); break; } }
+        true
+    }
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn opt_l(&mut self, body: fn(&mut Parser<'a, B>) -> bool) -> bool {
+        let sp = self.pos; let sb = self.scratch.len(); if !body(self) { self.back(sp); self.scratch.truncate(sb); } true
+    }
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn sep_by_l(&mut self, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
+        let sp0 = self.pos; let sb0 = self.scratch.len();
+        if !elem(self) { self.back(sp0); self.scratch.truncate(sb0); return true; }
+        loop {
+            if !self.match_lit(delim) { break; } // a failed delimiter match changes nothing: no mark before it
+            let sp2 = self.pos; let sb2 = self.scratch.len();
+            if !elem(self) { self.back(sp2); self.scratch.truncate(sb2); break; }
+        }
+        true
+    }
+    #[inline(never)]
+    #[allow(dead_code)]
+    fn star_in_l<F: Fn(&mut Self) -> bool>(&mut self, k: usize, once: F) -> bool {
+        while self.ahead(k, true) { let sp = self.pos; let sb = self.scratch.len(); if !once(self) { self.back(sp); self.scratch.truncate(sb); break; } }
+        true
+    }
+    #[inline(never)]
+    #[allow(dead_code)]
+    fn opt_out_l<F: Fn(&mut Self) -> bool>(&mut self, body: F) -> bool {
+        let sp = self.pos; let sb = self.scratch.len(); if !body(self) { self.back(sp); self.scratch.truncate(sb); } true
+    }
+    #[inline(never)]
+    #[allow(dead_code)]
+    fn sep_by_out_l<F: Fn(&mut Self) -> bool>(&mut self, elem: F, delim: u16) -> bool {
+        let sp0 = self.pos; let sb0 = self.scratch.len();
+        if !elem(self) { self.back(sp0); self.scratch.truncate(sb0); return true; }
+        loop {
+            if !self.match_lit(delim) { break; } // a failed delimiter match changes nothing: no mark before it
+            let sp2 = self.pos; let sb2 = self.scratch.len();
+            if !elem(self) { self.back(sp2); self.scratch.truncate(sb2); break; }
+        }
+        true
     }
     // The recognize forms (ParserIR.forms): the same tokens examined, nothing built.
     #[inline(always)]
