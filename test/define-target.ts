@@ -20,7 +20,7 @@ import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
 import { defineParserTarget, registeredTargets } from '../src/define-target.ts';
-import { portableIR } from '../src/emit-portable.ts';
+import { buildLexIdPlan, hasRebind, portableIR } from '../src/emit-portable.ts';
 import { relexFamily, relexFamilyFns, relexMode } from '../src/relex-family.ts';
 import { lexScanFamily } from '../src/lex-family.ts';
 import { reuseFamilyFns } from '../src/reuse-family.ts';
@@ -72,7 +72,8 @@ for (const f of ['emit.ts', 'emit-portable.ts', 'emit-parser.ts', ...CORE, ...TA
 for (const t of TARGETS) {
   const s = code(src(t.file));
   if (defineCalls.get(t.file) !== 1) fail(`${t.file}: ${defineCalls.get(t.file) ?? 0} defineParserTarget calls, want 1`);
-  if (!/^const \w+Lowering: Lowering = \{/m.test(s)) fail(`${t.file}: defines no Lowering of its own`);
+  // (a lowering per receiver, `xLoweringFor = (…): Lowering => ({`, counts: Go spells a method's receiver per engine form)
+  if (!/^const \w+Lowering(?:: Lowering = \{|For = \([^)]*\): Lowering => \(\{)/m.test(s)) fail(`${t.file}: defines no Lowering of its own`);
   for (const i of imports(s)) {
     if (/\/target-/.test(i)) fail(`${t.file}: imports another target module ${i}`);
     if (/(relex|lex|reuse)-family/.test(i)) fail(`${t.file}: imports an algorithm family directly (${i}); use shared`);
@@ -292,7 +293,7 @@ const FIXTURES = ['./fixtures/calc.ts', './fixtures/envspec.ts', './fixtures/reg
 for (const path of FIXTURES) {
   const grammar = (await import(path)).default;
   const lex = lexScanFamily(portableIR(grammar));
-  const fns = [...lex.fns, ...relexFamilyFns(relexMode(portableIR(grammar))), ...reuseFamilyFns(portableIR(grammar)), ...recoveryFamilyFns(), UNPACK_INTS];
+  const fns = [...lex.fns, ...relexFamilyFns(relexMode(portableIR(grammar))), ...reuseFamilyFns(portableIR(grammar)), ...recoveryFamilyFns(hasRebind(portableIR(grammar)), buildLexIdPlan(portableIR(grammar))).filter((f) => f.name !== 'rbBracket'), UNPACK_INTS];
   const out = target.emitParser(grammar);
   const code = out.split('\n').filter((l) => !/^\s*;;/.test(l)).join('\n').replace(/"(?:[^"\\]|\\.)*"/g, '""');
   const bad = code.match(C_SURFACE);
