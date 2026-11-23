@@ -3,6 +3,7 @@ import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
 import { buildLr, END, type LeafGraph, type LrAnalysis } from './lr-automaton.ts';
 import { info as tokenPatternInfo, continuesAt, type CSet } from './lex-match-plan.ts';
 import { analyzeGrammar } from './grammar-analysis.ts';
+import { scopeToCapture, tokenCapture } from './highlight-roles.ts';
 import { tokenPatternFirstCharSet, type TokenPatternFirstSet, tokenPatternIsNever, tokenPatternLiteralPrefix, tokenPatternLiteralPrefixes, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -3094,92 +3095,6 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
 // (tree-sitter's standard capture vocabulary).
 // ════════════════════════════════════════════════════════════════════════════
 
-/**
- * Map a TextMate scope (the same scopes the DSL `scopes` section uses, and the
- * same ones gen-tm.ts infers) to a tree-sitter highlight capture name.
- * Falls back conservatively. Language-agnostic: keyed on scope PREFIX families,
- * not on specific keywords.
- */
-function scopeToCapture(scope: string): string | null {
-  // A space-separated scope is `ancestor… leaf` (e.g. `string.unquoted constant.numeric` for a
-  // plain scalar that resolves to a number); a single tree-sitter capture wants the LEAF — the
-  // semantic type — not the string ancestor that only supplies context for the TextMate chain.
-  if (scope.includes(' ')) scope = scope.slice(scope.lastIndexOf(' ') + 1);
-  // Ordered most-specific-first.
-  const table: [string, string][] = [
-    ['comment.block.documentation', '@comment.documentation'],
-    ['comment', '@comment'],
-    ['constant.numeric', '@number'],
-    ['constant.language.boolean', '@constant.builtin'],
-    ['constant.language', '@constant.builtin'],
-    ['constant.character.escape', '@string.escape'],
-    ['constant.other', '@constant'],
-    ['string.regexp', '@string.regexp'],
-    ['string', '@string'],
-    ['entity.name.function.decorator', '@function.macro'],
-    ['entity.name.function', '@function'],
-    ['entity.name.type', '@type'],
-    ['entity.name', '@constructor'],
-    ['entity.other.attribute-name', '@attribute'],
-    ['entity.other.document', '@punctuation.delimiter'],  // YAML --- / ... markers
-    ['entity.other.property', '@property'],
-    ['support.type.primitive', '@type.builtin'],
-    ['support.type', '@type.builtin'],
-    ['support.class', '@type'],
-    ['support.variable.property', '@property.builtin'],
-    ['support.variable', '@variable.builtin'],
-    ['support.function', '@function.builtin'],
-    ['variable.language', '@variable.builtin'],
-    ['variable.parameter', '@variable.parameter'],
-    ['variable.other.property', '@property'],
-    ['variable.object.property', '@property'],
-    ['variable.other', '@variable'],
-    ['variable', '@variable'],
-    ['storage.type.function.arrow', '@keyword.function'],
-    ['storage.type.function', '@keyword.function'],
-    ['storage.type', '@keyword'],
-    ['storage.modifier', '@keyword'],
-    ['keyword.control.import', '@keyword.import'],
-    ['keyword.control.conditional', '@keyword.conditional'],
-    ['keyword.control.loop', '@keyword.repeat'],
-    ['keyword.control.flow', '@keyword.return'],
-    ['keyword.control.trycatch', '@keyword.exception'],
-    ['keyword.control', '@keyword'],
-    ['keyword.operator.expression', '@keyword.operator'],
-    ['keyword.operator', '@operator'],
-    ['keyword.other', '@keyword'],
-    ['keyword', '@keyword'],
-    ['punctuation.terminator', '@punctuation.delimiter'],
-    ['punctuation.separator', '@punctuation.delimiter'],
-    ['punctuation.accessor', '@punctuation.delimiter'],
-    ['punctuation.bracket', '@punctuation.bracket'],
-    ['punctuation', '@punctuation.delimiter'],
-  ];
-  for (const [prefix, cap] of table) {
-    if (scope === prefix || scope.startsWith(prefix + '.')) return cap;
-  }
-  return null;
-}
-
-/**
- * Infer the capture for a token (by its classification), independent of the
- * `scopes` section — for numbers/strings/comments that don't appear there.
- * Mirrors gen-tm.ts's classifyToken families but emits captures.
- */
-function tokenCapture(token: CstGrammar['tokens'][number]): string | null {
-  if (token.scope) {
-    const cap = scopeToCapture(token.scope);
-    if (cap) return cap;
-  }
-  if (token.flags.includes('skip')) {
-    return '@comment';
-  }
-  if (token.flags.includes('regex')) return '@string.regexp';
-  if (tokenPatternStartsWithDecimal(token)) return '@number';
-  const delimiters = tokenPatternStringDelimiters(token);
-  if (token.string || delimiters.includes('"') || delimiters.includes("'") || delimiters.includes('`')) return '@string';
-  return null;
-}
 
 interface ScmRule {
   /** s-expression query text (without the trailing capture) */
