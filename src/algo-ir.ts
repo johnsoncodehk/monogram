@@ -614,6 +614,10 @@ class Printer implements Cx {
       return r.c;
     });
     if (fn.method && this.cur !== null && !this.cur.method) throw new Error(`algo-ir: ${this.cur.name} calls the engine method ${e.fn} but is no method`);
+    // The engine is borrowed whole by a method call (Rust's &mut self), so an argument cannot call
+    // another method: the family binds it to a local first.
+    const callsMethod = (x: unknown): boolean => typeof x === 'object' && x !== null && (((x as Expr).k === 'call' && this.sigs.get((x as Expr & { k: 'call' }).fn)?.method === true) || Object.values(x).some(callsMethod));
+    if (fn.method && e.args.some(callsMethod)) throw new Error(`algo-ir: an argument of the engine method ${e.fn} calls an engine method: bind it to a local first`);
     return this.L.expr.call(this.id(e.fn), args, fn.method === true);
   }
 

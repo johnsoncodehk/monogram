@@ -209,7 +209,8 @@ const riRule = method('riRule', [['r', 'int'], ['d', 'int']], ['bool'], [
   if_(eq(T(v('rec')), n(REC_RD)), [ret(call('riRd', v('r'), v('rec'), sub(v('d'), n(1))))]),
   // A Pratt rule called fresh: the suppress set staged for it becomes the one in force.
   let_('prev', call('enSt', n(ST_SUP_CUR))),
-  run('enSetSt', n(ST_SUP_CUR), call('enSt', n(ST_SUP_NEXT))),
+  let_('next', call('enSt', n(ST_SUP_NEXT))),
+  run('enSetSt', n(ST_SUP_CUR), v('next')),
   run('enSetSt', n(ST_SUP_NEXT), n(0)),
   let_('ok', call('riBp', v('r'), v('rec'), n(0), sub(v('d'), n(1))), 'bool'),
   run('enSetSt', n(ST_SUP_CUR), v('prev')),
@@ -447,8 +448,8 @@ const ledOk = (x: Expr): Expr => and(
   not(and(isT(x, 4), eq(v('tc'), n(1)))),
   or(lt(at(x, 2), n(0)), gt(at(x, 2), v('minBp'))),
   not(and(isT(x, 3), v('nl'))),
-  or(lt(at(x, 7), n(0)), not(call('riIn', at(x, 7), call('enHeadLid', v('sb'))))),
-  not(call('riIn', add(x, n(8)), call('enSt', n(ST_SUP_CUR)))),
+  or(lt(at(x, 7), n(0)), not(call('riIn', at(x, 7), v('head')))),
+  not(call('riIn', add(x, n(8)), v('sup'))),
 );
 const finLed = (form: Expr): Stmt[] => [
   run('enFinLed', v('r'), v('sb'), v('leftOff'), v('start')), set('leftOff', call('enFinOff')), set('hl', call('enSh')), set('fm', form), set('prog', tru),
@@ -468,6 +469,9 @@ const riBp = method('riBp', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d
     let_('lid', call('enPeekLid')),
     let_('nl', call('enPeekNl'), 'bool'),
     let_('prog', fls, 'bool'),
+    // What the led tests read of the engine: the left operand's first leaf, the suppress set in force.
+    let_('head', call('enHeadLid', v('sb'))),
+    let_('sup', call('enSt', n(ST_SUP_CUR))),
     let_('j', n(0)),
     let_('x', add(sec(P_LED), n(1))),
     while_(and(lt(v('j'), T(sec(P_LED))), not(v('prog'))), [
@@ -494,7 +498,8 @@ const riBp = method('riBp', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d
       ]),
     ]),
     if_(not(v('prog')), [
-      let_('b', call('riOp', sec(P_BIN), n(5), call('enOpLid'))),
+      let_('opl', call('enOpLid')),
+      let_('b', call('riOp', sec(P_BIN), n(5), v('opl'))),
       if_(or(lt(v('b'), n(0)), bin('le', at(v('b'), 1), v('minBp'))), [brk]),
       if_(or(and(isT(v('b'), 3), ne(v('fm'), n(0))), and(isT(v('b'), 4), eq(v('fm'), n(2)))), [ret(fls)]),
       let_('ls', call('enPos')),
