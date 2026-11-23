@@ -66,8 +66,14 @@ export function notPrecededBy(body: TokenPattern): TokenPattern {
   return { type: 'lookbehind', body, negate: true };
 }
 
+// The start of the text (offset 0), as a HashbangComment begins it.
 export function start(): TokenPattern {
   return { type: 'anchor', kind: 'start' };
+}
+
+// The start of a line: offset 0 or right after a line terminator (YAML's column-0 `---`).
+export function lineStart(): TokenPattern {
+  return { type: 'anchor', kind: 'lineStart' };
 }
 
 export function end(): TokenPattern {
@@ -170,8 +176,25 @@ export function tokenPatternBlockDelimiterSources(token: Pick<TokenDecl, 'patter
   return begin && end ? [begin, end] : null;
 }
 
+// Whether the token begins at a start anchor: of the text (start) or of a line (lineStart).
 export function tokenPatternHasStartAnchor(token: Pick<TokenDecl, 'pattern'>): boolean {
   return hasLeadingStartAnchor(token.pattern);
+}
+
+// The anchors of the pattern's kinds, wherever they are.
+export function tokenPatternAnchorKinds(pattern: TokenPattern): Set<'start' | 'lineStart' | 'end'> {
+  const out = new Set<'start' | 'lineStart' | 'end'>();
+  const walk = (p: TokenPattern): void => {
+    if (typeof p === 'string') return;
+    switch (p.type) {
+      case 'anchor': out.add(p.kind); return;
+      case 'seq': case 'alt': p.items.forEach(walk); return;
+      case 'repeat': case 'lookahead': case 'lookbehind': walk(p.body); return;
+      default: return;
+    }
+  };
+  walk(pattern);
+  return out;
 }
 
 export function tokenPatternStartsWithDecimal(token: Pick<TokenDecl, 'pattern'>): boolean {
@@ -326,7 +349,7 @@ function emit(pattern: TokenPattern, parentPrec: Prec): string {
     }
     case 'lookahead': return `(?${pattern.negate ? '!' : '='}${emit(pattern.body, Prec.Alt)})`;
     case 'lookbehind': return `(?<${pattern.negate ? '!' : '='}${emit(pattern.body, Prec.Alt)})`;
-    case 'anchor': return pattern.kind === 'start' ? '^' : '$';
+    case 'anchor': return pattern.kind === 'end' ? '$' : '^';
     case 'never': return '(?!)';
   }
 }
@@ -579,7 +602,7 @@ function combineRuns(left: string[], right: string[]): string[] {
 function hasLeadingStartAnchor(pattern: TokenPattern): boolean {
   if (typeof pattern === 'string') return false;
   switch (pattern.type) {
-    case 'anchor': return pattern.kind === 'start';
+    case 'anchor': return pattern.kind !== 'end';
     case 'seq': return pattern.items.some(item => isZeroWidth(item) ? hasLeadingStartAnchor(item) : false);
     case 'alt': return pattern.items.some(hasLeadingStartAnchor);
     default: return false;

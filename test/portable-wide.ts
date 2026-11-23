@@ -34,11 +34,9 @@ const WIDE_CHUNK = 2000;
 const WIDE_RECORD = new URL('./portable-wide-record.txt', import.meta.url).pathname;
 const WIDE_WRITE = process.argv.includes('--write');
 const WIDE_CAUSES: Record<string, string> = {
-  'hashbang-not-first': 'a `#!` after the start of the text: the interpreter\'s lexer takes it as a Shebang comment, the portable lexers do not (a HashbangComment begins the source text only, so the portable verdict is the spec\'s)',
 };
 // The cause of one disagreement, from what the file is ('unknown' when no class explains it).
 function wideCause(grammar: string, file: string, src: string): string {
-  if (src.indexOf('#!', 1) > 0) return 'hashbang-not-first';
   return 'unknown';
 }
 type WideLine = { grammar: string; file: string; targets: string[]; cause: string };
