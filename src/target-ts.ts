@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA } from './emit-portable.ts';
-import { elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -256,14 +256,6 @@ ${sig ? `${tsFlagTable('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
   const rxRet = rx ? 'prevLid: number; prevKid: number; hasPrev: boolean; bpLid: number; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean; ' : '';
   const rxNames = rx ? 'prevLid, prevKid, hasPrev, bpLid, hasPrev2, parenHead, lastClose, lastBang, ' : '';
   const rxInit = rx ? '0, 0, 0, false, false, [], false, false, ' : '';
-  // Brace counting in the holes (kind 0 template, 1 element hole; step 4): a `{` deepens, a `}`
-  // at a count above 0 shallows; at 0 the closer is lexed by its own test.
-  // A template hole and an element hole count the same braces when their lids agree (JSX: `{` `}`).
-  const oneBraces = !!tpl && lidOf(ids, tpl.braceOpen) === lidOf(ids, el.holeOpen) && lidOf(ids, tpl.interpClose) === lidOf(ids, el.holeClose);
-  const braces = oneBraces ? `if ((f & 2) === 0) { if (lid === LID_HOLE_OPEN) templateStack[templateStack.length - 1] = f + 4; else if (lid === LID_HOLE_CLOSE) templateStack[templateStack.length - 1] = f - 4; }` : [
-    tpl ? `if ((f & 3) === 0) { if (lid === LID_BRACE_OPEN) templateStack[templateStack.length - 1] = f + 4; else if (lid === LID_INTERP_CLOSE) templateStack[templateStack.length - 1] = f - 4; }` : '',
-    `if ((f & 3) === 1) { if (lid === LID_HOLE_OPEN) templateStack[templateStack.length - 1] = f + 4; else if (lid === LID_HOLE_CLOSE) templateStack[templateStack.length - 1] = f - 4; }`,
-  ].filter(Boolean).join(' else ');
   const specState = sig ? `  // A type-parameter signature being decided: the token index of its tagOpen (-1: none), the
   // state before it, how it was decided (a lexer error decides it: the head was an element), and
   // the decision kept for the tagOpen it rewinds to.
@@ -316,8 +308,7 @@ ${sig ? `${tsFlagTable('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
 ${rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]; parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid]); }
     else if (lid === LID_RPAREN) { lastClose = parenHead.pop() ?? false; }
     if (_pav[lid]) lastBang = prevIsValue();
-` : ''}    if (templateStack.length > 0) { const f = templateStack[templateStack.length - 1]; ${braces} }
-    toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = false;${rx ? '\n    bpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true;' : ''}
+` : ''}    toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = false;${rx ? '\n    bpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true;' : ''}
   }
 `;
   // The entry from code, in the tagOpen unit's dispatch arm (outside element frames: inside one
@@ -426,8 +417,14 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const stateful = !!(rx || tpl || el);
   const newlineOnly = !!(nl && !rx && !tpl);
   const pushFn = stateful ? 'emit' : 'push';
+  // An element grammar's hole braces count where they are lexed as punctuation (elementBraceSteps).
+  const braceSteps = el ? elementBraceSteps(ir) : new Map<string, { delta: number; kinds: number[] }>();
+  const braceStep = (p: string): string => {
+    const b = braceSteps.get(p);
+    return b ? `if (templateStack.length > 0 && ${b.kinds.length === 2 ? '(templateStack[templateStack.length - 1] & 2) === 0' : `(templateStack[templateStack.length - 1] & 3) === ${b.kinds[0]}`}) templateStack[templateStack.length - 1] ${b.delta > 0 ? '+=' : '-='} ${Math.abs(b.delta)}; ` : '';
+  };
   const punctLine = (p: string) =>
-    `    if (src.startsWith(${J(p)}, pos)) { ${pushFn}(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)}); pos += ${tlen(p)}; continue; }`;
+    `    if (src.startsWith(${J(p)}, pos)) { ${braceStep(p)}${pushFn}(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)}); pos += ${tlen(p)}; continue; }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
   const rxBitTables = rx ? `${tsFlagTable('_divT', lidFlagTable(ids, rx.divisionTexts))}
 ${tsFlagTable('_divK', kidFlagTable(ids, rx.divisionTypes))}

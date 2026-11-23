@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -475,14 +475,6 @@ ${sig ? `${p.goBoolArr('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
   const rxNames = rx ? 'prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang, ' : '';
   const rxInit = rx ? '0, 0, 0, false, false, stk.parenHead[:0], false, false, ' : '';
   const rxBlank = rx ? '_, _, _, _, _, stk.parenHead, _, _, ' : '';
-  // Brace counting in the holes (kind 0 template, 1 element hole; step 4): a `{` deepens, a `}`
-  // at a count above 0 shallows; at 0 the closer is lexed by its own test.
-  // A template hole and an element hole count the same braces when their lids agree (JSX: `{` `}`).
-  const oneBraces = !!tpl && lidOf(ids, tpl.braceOpen) === lidOf(ids, el.holeOpen) && lidOf(ids, tpl.interpClose) === lidOf(ids, el.holeClose);
-  const braces = oneBraces ? `if f&2 == 0 { if lid == lidHoleOpen { templateStack[len(templateStack)-1] = f + 4 } else if lid == lidHoleClose { templateStack[len(templateStack)-1] = f - 4 } }` : [
-    tpl ? `if f&3 == 0 { if lid == lidBraceOpen { templateStack[len(templateStack)-1] = f + 4 } else if lid == lidInterpClose { templateStack[len(templateStack)-1] = f - 4 } }` : '',
-    `if f&3 == 1 { if lid == lidHoleOpen { templateStack[len(templateStack)-1] = f + 4 } else if lid == lidHoleClose { templateStack[len(templateStack)-1] = f - 4 } }`,
-  ].filter(Boolean).join(' else ');
   // hot: whether the loop head has work (an element or raw frame on top of the frame stack${sig ? ', or a
   // signature undecided' : ''}), kept by every change of the stack's top${sig ? ' and of the speculation' : ''}; elEndAt: the token
   // count after the token that ended an element (that token is a value).
@@ -546,8 +538,7 @@ ${rx ? `\t\tif lid == lidLParen {
 \t\t\tif len(parenHead) > 0 { lastClose = parenHead[len(parenHead)-1]; parenHead = parenHead[:len(parenHead)-1] } else { lastClose = false }
 \t\t}
 \t\tif _pav[lid] { lastBang = prevIsValue() }
-` : ''}\t\tif len(templateStack) > 0 { f := templateStack[len(templateStack)-1]; ${braces} }
-\t\t*acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendingNl = false${rx ? '\n\t\tbpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true' : ''}
+` : ''}\t\t*acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendingNl = false${rx ? '\n\t\tbpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true' : ''}
 \t}
 \t_ = emit
 `;
@@ -708,8 +699,14 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const pushPunct = stateful
     ? (p: string) => `emit(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)})`
     : (p: string) => `pushTok(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)})`;
+  // An element grammar's hole braces count where they are lexed as punctuation (elementBraceSteps).
+  const braceSteps = el ? elementBraceSteps(ir) : new Map<string, { delta: number; kinds: number[] }>();
+  const braceStep = (p: string): string => {
+    const b = braceSteps.get(p);
+    return b ? `if k := len(templateStack) - 1; k >= 0 && ${b.kinds.length === 2 ? 'templateStack[k]&2 == 0' : `templateStack[k]&3 == ${b.kinds[0]}`} { templateStack[k] ${b.delta > 0 ? '+=' : '-='} ${Math.abs(b.delta)} }; ` : '';
+  };
   const punctLine = (p: string) =>
-    `\t\tif strings.HasPrefix(src[pos:], ${J(p)}) { ${pushPunct(p)}; pos += ${tlen(p)}; continue }`;
+    `\t\tif strings.HasPrefix(src[pos:], ${J(p)}) { ${braceStep(p)}${pushPunct(p)}; pos += ${tlen(p)}; continue }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
   const goBoolArr = (name: string, flags: boolean[]) =>
     `var ${name} = []bool{${flags.map((b) => (b ? 'true' : 'false')).join(', ')}}`;

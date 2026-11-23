@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isList, isNum, isOpt, isRec, isRecList, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -445,12 +445,6 @@ ${sig ? `${rsBoolArr('_EL_THEN', lidFlagTable(ids, sig.then))}
   // instructions per token of loads and stores, attributed to no line).
   const specFields = sig ? 'spec_on: bool, ' : '';
   const inl = '    #[inline(always)]\n';
-  // A template hole and an element hole count the same braces when their lids agree (JSX: `{` `}`).
-  const oneBraces = !!tpl && lidOf(ids, tpl.braceOpen) === lidOf(ids, el.holeOpen) && lidOf(ids, tpl.interpClose) === lidOf(ids, el.holeClose);
-  const braces = oneBraces ? `if f & 2 == 0 { if lid == _LID_HOLE_OPEN { *self.template_stack.last_mut().unwrap() = f + 4; } else if lid == _LID_HOLE_CLOSE { *self.template_stack.last_mut().unwrap() = f - 4; } }` : [
-    tpl ? `if f & 3 == 0 { if lid == _LID_BRACE_OPEN { *self.template_stack.last_mut().unwrap() = f + 4; } else if lid == _LID_INTERP_CLOSE { *self.template_stack.last_mut().unwrap() = f - 4; } }` : '',
-    `if f & 3 == 1 { if lid == _LID_HOLE_OPEN { *self.template_stack.last_mut().unwrap() = f + 4; } else if lid == _LID_HOLE_CLOSE { *self.template_stack.last_mut().unwrap() = f - 4; } }`,
-  ].filter(Boolean).join(' else ');
   const methods = `${rx ? `${inl}    fn prev(&self) -> (bool, u16, u16) {
         let n = self.acc.len();
         (n > self.base || self.prev0.0, self.kid1, self.lid1)
@@ -473,8 +467,7 @@ ${inl}    fn prev_is_value(&self) -> bool {
 ${rx ? `        if lid == _LID_LPAREN { let (has_prev2, bp_lid) = self.prev2(); let (_, prev_kid, prev_lid) = self.prev(); let is_member = has_prev2 && ${rsFlag('_MEM', 'bp_lid')}; self.paren_head.push(!is_member && prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'prev_lid')}); }
         else if lid == _LID_RPAREN { self.last_close = self.paren_head.pop().unwrap_or(false); }
         if ${p.pavHot} { self.last_bang = self.prev_is_value(); }
-` : ''}        if let Some(&f) = self.template_stack.last() { ${braces} }
-        self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;${rx ? ' self.lid2 = self.lid1; self.kid1 = kid; self.lid1 = lid;' : ''}
+` : ''}        self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;${rx ? ' self.lid2 = self.lid1; self.kid1 = kid; self.lid1 = lid;' : ''}
     }
     /// The frame stack's top changed: whether the loop head has work (an element or raw frame on
     /// top${sig ? ', or a signature undecided' : ''}), and to which token count the previous token is a
@@ -764,8 +757,14 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
         }
 ` : '';
   const tplDispatch = tpl ? `${closeByte === null ? tplCloseTest : ''}${tplOpenPreCheck}` : '';
+  // An element grammar's hole braces count where they are lexed as punctuation (elementBraceSteps).
+  const braceSteps = el ? elementBraceSteps(ir) : new Map<string, { delta: number; kinds: number[] }>();
+  const braceStep = (p: string): string => {
+    const b = braceSteps.get(p);
+    return b ? `if let Some(f) = st.template_stack.last_mut() { if ${b.kinds.length === 2 ? '*f & 2 == 0' : `*f & 3 == ${b.kinds[0]}`} { *f ${b.delta > 0 ? '+=' : '-='} ${Math.abs(b.delta)}; } } ` : '';
+  };
   const punctLine = (p: string) =>
-    `        if ${startByteEq('pos', p)} { ${stateful ? `st.emit(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${tlen(p)}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${tlen(p)}; continue; }`;
+    `        if ${startByteEq('pos', p)} { ${braceStep(p)}${stateful ? `st.emit(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${tlen(p)}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${tlen(p)}; continue; }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
   // Where no candidate can begin at a non-ASCII byte, the byte is whitespace, an identifier or an
   // error: one cold call decides, so the dispatch loop holds no Unicode code (register layout).
