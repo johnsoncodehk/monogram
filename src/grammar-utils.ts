@@ -61,15 +61,18 @@ function lookaheadLiterals(expr: RuleExpr, out: Set<string>, inNot = false): voi
 
 /**
  * The `>`-led operators (`>>`, `>=`, `>>>=`, …) composed from single-character tokens, longest
- * first; empty unless `>` is also a rule literal (it closes type arguments). Then the lexer scans
- * every `>` alone and an operator is composed where one is read from the run of adjacent
- * single-character tokens that follows (tsc's reScanGreaterToken), so no token is ever split.
- * A composite must therefore be an infix operator; one that is a rule literal is rejected.
+ * first; empty unless the grammar declares the re-scan (`composeGt`: `>` closes a bracket, such as
+ * type arguments or a JSX tag, where a `>`-led operator could begin). Then the lexer scans every `>`
+ * alone and an operator is composed where one is read from the run of adjacent single-character
+ * tokens that follows (tsc's reScanGreaterToken), so no token is ever split. A composite must
+ * therefore be an infix operator; one that is a rule literal is rejected. The re-scan used to be
+ * INFERRED from `>` being a rule literal, which imposed TypeScript's lexing on any grammar that
+ * spells `>` in a rule (docs/SECOND-LANGUAGE.md, W2).
  */
 export function gtComposites(grammar: CstGrammar): string[] {
+  if (!grammar.composeGt) return [];
   const ruleLits = new Set<string>();
   for (const r of grammar.rules) for (const l of collectLiterals(r.body)) ruleLits.add(l);
-  if (!ruleLits.has('>')) return [];
   const gtLed = (l: string) => l.length > 1 && l.charCodeAt(0) === 62;
   for (const l of ruleLits) {
     if (gtLed(l)) throw new Error(`'${l}' is a rule literal, but '>'-led punctuators are composed from single '>' tokens and can only be operators`);

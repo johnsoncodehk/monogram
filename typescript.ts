@@ -1144,6 +1144,9 @@ const Program = rule($ => [
 export default defineGrammar({
   name: 'typescript',
   scopeName: 'source.ts',
+  // `>` closes type arguments (`f<A<B>>(x)`, `a as Map<K, V>>= b`), so `>>`, `>=` … are composed by
+  // the parser from single `>` tokens (tsc's reScanGreaterToken).
+  composeGt: true,
 
   tokens: {
     // Comments must come before Regex_ to avoid /** ... */ being matched as regex
