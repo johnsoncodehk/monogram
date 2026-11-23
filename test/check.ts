@@ -27,7 +27,7 @@ interface Gate { group: string; name: string; args: string[]; tier?: 'ci'; reads
 // process): the one-character edits took 557 s of the old gate's 687 s — typescriptreact 215 s,
 // elementdialect 101, typescript 68, javascriptreact 60, textdialect-tagstart 54, javascript 45,
 // tagtokdialect 14 — most of it one native process start per edit and per target.
-const PORTABLE_EDIT_SHARDS = ['typescriptreact', 'elementdialect,javascript,tagtokdialect', 'typescript,javascriptreact', 'textdialect-tagstart'];
+const PORTABLE_EDIT_SHARDS = ['typescriptreact', 'elementdialect,javascript,tagtokdialect', 'typescript,javascriptreact', 'textdialect-tagstart,textdialect-text'];
 const EDIT_GRAMMARS = new Set(PORTABLE_EDIT_SHARDS.join(',').split(','));
 const GATES: Gate[] = [
   { group: 'core', name: 'agnostic', args: ['test/agnostic.ts'] },

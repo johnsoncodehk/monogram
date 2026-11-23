@@ -662,6 +662,9 @@ export const EL_OPENS_FN = 'lexElOpens';
 export const EL_REACH_FN = 'lexElReach';
 export const EL_RAW_FN = 'lexElRaw';
 export const EL_TAG_START_FN = 'lexElTagStart';
+export const EL_TEXT_STOP_FN = 'lexElTextStop';
+// The kid the frame step returns for a skipped text token (a comment in text): no token is pushed.
+export const EL_SKIP = -1;
 // What the type-parameter vetoes decide at a tagOpen at an operand position (EL_OPENS_FN).
 export const EL_NOT = 0, EL_OPEN = 1, EL_SPECULATE = 2;
 
@@ -695,6 +698,34 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
     params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }], ret: ['bool'],
     body: [if_(ge('p', len('s')), [{ k: 'return', es: [F] }]), let_('c', code('p')), { k: 'return', es: [inRanges('c', e.tagStart)] }],
   });
+  // The children's text tokens (ElementPlan.textTokens): each its scanner's own copy (a scanned
+  // token's scanner may be spliced into the dispatch, unprinted); a failed attempt that reads past
+  // the end + 1 of the token decided after it, and a match that reads past its own end + 1, are
+  // recorded in the look end (an unterminated block comment in text reads to the end of the file).
+  const tts = e.textTokens.map(({ token, after }, i) => {
+    const t = tokOf(token), l = tokLook(t);
+    if (!scannedTokens(ir).some((s) => s.name === token)) throw new Error(`portable: elements.textTokens: '${token}' is not a scanned token`);
+    if (l.over > FREE_OVER && l.trig.length > 0) throw new Error(`portable: elements.textTokens: '${token}' reads past its end + 1 when it matches (no record of that read yet)`);
+    const fb = lexTokFirstBytes(t);
+    if (!fb || fb.nonAscii) throw new Error(`portable: elements.textTokens: '${token}' may begin beyond ASCII (a run is tested at every unit)`);
+    const name = `lexElTextTok${i}`;
+    fns.push({ ...b.scanner(t, null), name, inline: false });
+    const rd = l.failRead > FREE_FAIL ? readEndName(token) : null;
+    if (rd && !fns.some((f) => f.name === rd)) fns.push(b.readEnd(t));
+    return { name, kid: kidOf(ids, token), skip: t.skip, after, rd, begin: (at: Ex) => and(lt(at, len('s')), any(fb.bytes.map((u) => eq(code(at), I(u))))) };
+  });
+  const ttFail = (t: (typeof tts)[number], at: Ex, k: string): Stmt[] => (t.rd ? [let_(k, call(t.rd, at)), if_(gt(k, 'look'), [set('look', k)])] : []);
+  if (tts.length) {
+    // Inside a run (q past its first unit): whether a text token starts at q (its `after` class
+    // permitting), so the run stops before it; its match is lexed at the next run's start.
+    const body: Stmt[] = [let_('look', 'look0')];
+    tts.forEach((t, i) => body.push(if_(t.after ? and(t.begin('q'), inRanges(code(sub('q', I(1))), t.after)) : t.begin('q'), [
+      if_(gt(call(t.name, 'q'), 'q'), [retN(I(1), 'look')]), ...ttFail(t, 'q', `r${i}`),
+    ])));
+    body.push(retN(I(0), 'look'));
+    fns.push({ name: EL_TEXT_STOP_FN, doc: 'Whether a text token starts at q inside a text run (1), and the look end.', params: [{ name: 's', ty: 'str' }, { name: 'q', ty: 'int' }, { name: 'look0', ty: 'int' }], ret: ['int', 'int'], body });
+  }
+  const stopAt = (at: Ex): Stmt => ({ k: 'setCall', names: ['hit', 'look'], call: { k: 'call', fn: EL_TEXT_STOP_FN, args: [x('s'), x(at), x('look')] } });
   // The frame step (the frame fr on top is an element frame): what the frame lexes at p, before
   // the ordinary scan. Returns (end, kid, lid, frame, push, angle, look): end -1 when the frame
   // lexes nothing there (the ordinary scan lexes p); else the token [p, end) of kind kid and
@@ -715,7 +746,31 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
     ]),
     if_(hasAt('p', e.holeOpen), [tok(add('p', litLen(e.holeOpen)), 0, lidE(e.holeOpen), 'fr', 1, 'angle')]),
   ];
-  if (e.text) {
+  tts.forEach((t, i) => children.push(if_(t.begin('p'), [
+    let_(`x${i}`, call(t.name, 'p')),
+    if_(gt(`x${i}`, 'p'), [t.skip ? retN(`x${i}`, I(EL_SKIP), I(0), 'fr', I(0), 'angle', 'look') : tok(`x${i}`, t.kid, 0, 'fr', 0, 'angle')]),
+    ...ttFail(t, 'p', `y${i}`),
+  ])));
+  if (e.text && tts.length) {
+    // the run: the text token's class runs (joined by every tagOpen that opens no tag), up to the
+    // first unit past its first where a text token starts (the interpreter's lxTextStopAt)
+    const join = e.tagStart ? [
+      if_(and(hasAt('te', e.tagOpen), not(opensTag('te'))), [
+        set('hit', I(0)), if_(gt('te', 'p'), [stopAt('te')]),
+        if_(eq('hit', I(0)), [set('te', add('te', L)), set('more', I(1))]),
+      ]),
+    ] : [];
+    children.push(let_('te', 'p'), let_('more', I(1)), let_('hit', I(0)), while_(ne('more', I(0)), [
+      set('more', I(0)),
+      let_('tm', call(scannerName(e.text), 'te')),
+      let_('tr', 'te'), if_(gt('tm', 'te'), [set('tr', 'tm')]),
+      let_('q', 'te'), if_(eq('te', 'p'), [set('q', add('p', I(1)))]),
+      set('hit', I(0)),
+      while_(and(lt('q', 'tr'), eq('hit', I(0))), [stopAt('q'), if_(eq('hit', I(0)), [set('q', add('q', I(1)))])]),
+      if_(lt('q', 'tr'), [set('te', 'q')], [set('te', 'tr'), ...join]),
+    ]));
+    children.push(if_(gt('te', 'p'), [tok('te', kidE(e.text), 0, 'fr', 0, 'angle')]));
+  } else if (e.text) {
     children.push(let_('te', call(scannerName(e.text), 'p')));
     // with tagStart the run goes on over every tagOpen that opens no tag
     if (e.tagStart) children.push(if_(lt('te', 'p'), [set('te', 'p')]), while_(and(hasAt('te', e.tagOpen), not(opensTag('te'))), [
@@ -845,7 +900,8 @@ export function lexScanFamily(ir: ParserIR): Family {
     if (ir.tpl) b.fns.push(b.tplSpan(ir.tpl));
     if (ir.elements) b.fns.push(...elementFns(ir, ir.elements, b));
     const noted = new Set(lexLookPlan(ir).arms.flatMap((a) => a.cands.filter((c) => c.readEnd).map((c) => c.tok!)));
-    for (const t of scannedTokens(ir)) if (noted.has(t.name)) b.fns.push(b.readEnd(t));
+    // (a text token's read-end routine may be the frame step's already)
+    for (const t of scannedTokens(ir)) if (noted.has(t.name) && !b.fns.some((f) => f.name === readEndName(t.name))) b.fns.push(b.readEnd(t));
     f = { sets: b.sets, fns: b.fns, runs: b.runs, finds: b.finds, stopSets: [...b.stopSets.values()] };
     families.set(ir, f);
   }

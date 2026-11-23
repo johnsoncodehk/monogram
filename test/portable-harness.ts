@@ -4,6 +4,11 @@
 // grammar of test/portable-cases.ts is rendered to TypeScript, Go, and Rust; the Go/Rust sources
 // are COMPILED and RUN, and each parser's outcome is compared against the createParser oracle.
 //
+// The gates check ACCEPT/REJECT PARITY, not byte-identical CST: the portable targets are free to
+// use a different internal node shape (arena, compressed CST) as long as they agree with the
+// oracle on what parses and what fails; a rule-skeleton snapshot of each accepted input guards
+// against semantic drift.
+//
 // The checks are split into classes, one gate (one process) each, run in parallel by
 // test/check.ts; this module is what they share:
 //   - test/portable-lists.ts     the hand-written accept/reject lists (and the jsTarget parser on

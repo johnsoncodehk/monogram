@@ -1066,4 +1066,17 @@ export const CASES: Case[] = [
     ],
     reject: ['component C(a) { const b = < p/>; }', 'component C(a) { const b = < 1; }', 'component C(a) { <a/> <b/> }', 'component C() { <style>{.a}</style> }', 'component C() { <style>.a{}', 'component C(a) { <p k=< b>x</p> }', 'component C(a) { <p k=<b/>/> }'],
   },
+  {
+    // and comments in text (`textTokens`): `/* */` anywhere in a run, `//` at a run's start or after
+    // a blank; an unterminated `/*` is text (its failed attempt reads to the end: a recorded read)
+    grammar: 'textdialect-text', path: './fixtures/textdialect.ts', parts: { textTokens: true, directives: false },
+    accept: [
+      'component C(a) { <p>a/* c */b</p>; <p>hi // note\n x</p>; <p>a//b https://x.dev</p>; }',
+      'component C(a) { <p><b>z</b>// n\n</p>; <p>{a}// n\n</p>; <p>a // </p>\n</p>; <p>q /*</p>; }',
+      'component C(a) { <p>/* only */</p>; <p>/* a */// b\n</p>; const b = 1; // c\n/* d */ return b; }',
+      'component C(a) { <p>hi // note\n a/* c */b <b>z</b>// n\n a//b</p>; <p>1 < 2 /* x */ <b/>a<9</p>; }',
+      'component C() { <style>/* c */{a}</style>; }',
+    ],
+    reject: ['component C(a) { <p>a // </p> }', 'component C(a) { <p>a /* </p> */ }', 'component C() { <p>a<//* c */b>x</b></p> }'],
+  },
 ];
