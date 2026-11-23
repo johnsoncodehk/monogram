@@ -4,7 +4,7 @@
 // binds normally. The portable parser threads a suppressed-connector set into the led loop.
 import {
   token, rule, defineGrammar, left, op, exclude,
-  seq, oneOf, range, star, many,
+  seq, oneOf, range, star, many, opt,
 } from '../../src/api.ts';
 
 const idStart = oneOf(range('a', 'z'), range('A', 'Z'), '_', '$');
@@ -21,7 +21,12 @@ const Expr = rule(($) => [
   [$, 'in', $],
   [$, '.', Ident],
 ]);
-const ForHead = rule(($) => [['for', '(', exclude('in', Expr), 'in', Expr, ')', Stmt]]);
+// The C-style head stages the suppress set for an init that may be absent: when the init never
+// starts (`for (; a in b)`), the staging ends with its group, so the test after `;` reads `in`.
+const ForHead = rule(($) => [
+  ['for', '(', exclude('in', Expr), 'in', Expr, ')', Stmt],
+  ['for', '(', opt(exclude('in', Expr)), ';', opt(Expr), ')', Stmt],
+]);
 const Stmt = rule(($) => [ForHead, [Expr, ';']]);
 const Program = rule(($) => [many(Stmt)]);
 
