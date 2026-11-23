@@ -33,6 +33,15 @@ const f1 = (x: number) => (Number.isFinite(x) ? x.toFixed(1) : '-');
 const f2 = (x: number) => (Number.isFinite(x) ? x.toFixed(2) : '-');
 const M = (x: number) => (Number.isFinite(x) ? (x / 1e6).toFixed(1) + 'M' : '-');
 // A missing cell (a reference crash on a pathological input leaves its counters absent) prints as '-'.
+// A comparison with oxc is printed only for an input BOTH parsers accepted (oxc: no error and not
+// panicked, oxc-once's ACCEPT; monogram: ACCEPT): a rejection is a different amount of work (oxc
+// stops or recovers early), so its ratio is not a comparison. Otherwise the cell says which parser
+// rejected it (a missing verdict, a crash, counts as not accepted).
+const NAME: Record<string, string> = { C: 'oxc', A: 'A', M: 'M' };
+const rejectedBy = (f: string, ...vs: string[]): string | undefined => {
+  const r = vs.filter((v) => acc[`${v}.${f}`] !== 'ACCEPT').map((v) => NAME[v]);
+  return r.length ? `REJECTED BY ${r.join(' + ')}` : undefined;
+};
 const row = (cells: (string | undefined)[], w: number[]) => console.log(cells.map((c = '-', i) => (i === 0 ? c.padEnd(w[i]) : c.padStart(w[i]))).join(' '));
 
 console.log('\n## Instructions per parse (Callgrind Ir, one parse + drop of what it built)');
@@ -45,7 +54,9 @@ for (const f of files) {
   for (const v of ['C', 'A', 'M']) {
     const t = v === 'C' ? otok : +(count[`${v}.${f}`]?.tokens ?? NaN);
     const p = ir[`${v}.parse.${f}`], l = ir[`${v}.lex.${f}`];
-    row([f, v, acc[`${v}.${f}`] ?? '-', f0(t), M(p), f1(p / bytes[f]), f1(p / t), f1(p / otok), M(l), f1(l / t), f0((100 * l) / p) + '%', M(p - l), f1((p - l) / t), f2(p / cIr)], W1);
+    const rej = rejectedBy(f, v, 'C');
+    if (v === 'C' && rej) { row([f, v, acc[`${v}.${f}`] ?? '-', rej], W1); continue; }
+    row([f, v, acc[`${v}.${f}`] ?? '-', f0(t), M(p), f1(p / bytes[f]), f1(p / t), rej ? '-' : f1(p / otok), M(l), f1(l / t), f0((100 * l) / p) + '%', M(p - l), f1((p - l) / t), rej ?? f2(p / cIr)], W1);
   }
 }
 console.log('C lex = oxc Lexer alone (oxc-lex; no parser, so no regex/template re-lex). A/M lex = lex(src) alone, the token array parse_with builds first.');
@@ -55,6 +66,7 @@ console.log('\n## Native time (profiled build, one bench loop each; indicative) 
 row(['input', 'p', 'ms', 'lex ms', 'Ir/ns'], [16, 4, 9, 9, 7]);
 for (const f of files) for (const v of ['C', 'A', 'M']) {
   const ms = time[`${v}.parse.${f}`]; if (!ms) continue;
+  if (v === 'C' && rejectedBy(f, 'C')) { row([f, v, rejectedBy(f, 'C')], [16, 4, 9, 9, 7]); continue; }
   row([f, v, f2(ms), f2(time[`${v}.lex.${f}`]), f2(ir[`${v}.parse.${f}`] / (ms * 1e6))], [16, 4, 9, 9, 7]);
 }
 
@@ -75,7 +87,8 @@ const W3 = [16, 3, 9, 9, 9, 12, 9, 12, 10, 12];
 row(['input', 'p', 'malloc', 'realloc', 'free', 'alloc B', 'B/byte', 'peak live B', 'peak/byte', 'arena/out B'], W3);
 for (const f of files) {
   const o = oxc[f];
-  if (o) row([f, 'C', o.malloc, o.realloc, o.free, o.alloc_bytes, f1(+o.alloc_bytes / bytes[f]), o.peak_live_bytes, f1(+o.peak_live_bytes / bytes[f]), o.arena_used_bytes], W3);
+  if (o && rejectedBy(f, 'C')) row([f, 'C', rejectedBy(f, 'C')], W3);
+  else if (o) row([f, 'C', o.malloc, o.realloc, o.free, o.alloc_bytes, f1(+o.alloc_bytes / bytes[f]), o.peak_live_bytes, f1(+o.peak_live_bytes / bytes[f]), o.arena_used_bytes], W3);
   for (const v of ['A', 'M']) {
     const c = count[`${v}.${f}`]; if (!c) continue;
     row([f, v, c.malloc, c.realloc, c.free, c.alloc_bytes, f1(+c.alloc_bytes / bytes[f]), c.peak_live_bytes, f1(+c.peak_live_bytes / bytes[f]), c.arena_capacity_bytes], W3);
@@ -99,8 +112,19 @@ for (const mode of ['fresh', 'reuse']) {
       const c = v === 'C' ? oxc[f] : count[`${v}.${f}`];
       if (c) { allocs = f0(+c.malloc + +c.realloc); ab = c.alloc_bytes; peak = c.peak_live_bytes; }
     } else if (fl) { allocs = fl.allocs_per_parse; ab = fl.alloc_bytes_per_parse; peak = fl.maxrss_kb ? `${fl.maxrss_kb}KiB rss` : undefined; }
+    if (v === 'C' && rejectedBy(f, 'C')) { row([f, mode, v, rejectedBy(f, 'C')], W4); continue; }
     row([f, mode, v, M(irv), fl?.minflt_per_parse, allocs, ab, peak], W4);
   }
+}
+
+console.log('\n## monogram ÷ oxc: Callgrind instructions per parse (only inputs both parsers accept)');
+const W5 = [16, 6, 14, 14, 9, 14, 9];
+row(['input', 'mode', 'oxc Ir', 'M Ir', 'M ÷ oxc', 'A Ir', 'A ÷ oxc'], W5);
+for (const mode of ['reuse', 'fresh']) for (const f of files) {
+  const k = (v: string) => ir[`${v}.${mode === 'fresh' ? 'parse' : 'parse-reuse'}.${f}`];
+  const c = k('C');
+  const cell = (v: string) => rejectedBy(f, v, 'C') ?? (Number.isFinite(k(v) / c) ? (k(v) / c).toFixed(3) : '-');
+  row([f, mode, rejectedBy(f, 'C') ?? String(c ?? '-'), String(k('M') ?? '-'), cell('M'), String(k('A') ?? '-'), cell('A')], W5);
 }
 
 console.log('\n## oxc counts');

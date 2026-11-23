@@ -34,13 +34,9 @@ const WIDE_CHUNK = 2000;
 const WIDE_RECORD = new URL('./portable-wide-record.txt', import.meta.url).pathname;
 const WIDE_WRITE = process.argv.includes('--write');
 const WIDE_CAUSES: Record<string, string> = {
-  'mixfix-rebind': 'the interpreter\'s mixfix operand re-bind (gen-parser.ts matchMixfixLed: a failed `<L1> $ <L2> …` led retries its operand capped at each depth-0 L2 inside it) has no counterpart in the portable engine',
 };
-const REBIND_FILES = new Set(['types/conditional/inferTypesWithExtends1.ts', 'types/conditional/inferTypesInvalidExtendsDeclaration.ts',
-  ...[8, 9, 10, 11, 12].map((n) => `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression${n}.ts`)]);
 // The cause of one disagreement, from what the file is ('unknown' when no class explains it).
 function wideCause(grammar: string, file: string, src: string): string {
-  if (grammar === 'typescript' && REBIND_FILES.has(file)) return 'mixfix-rebind';
   return 'unknown';
 }
 type WideLine = { grammar: string; file: string; targets: string[]; cause: string };
