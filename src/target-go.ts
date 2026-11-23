@@ -9,7 +9,7 @@
 // stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
-import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
+import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
 import { blockBody, elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
@@ -40,7 +40,9 @@ const guardCond = (g: Guard, t: string, w: '' | 'W', keyed: boolean): string[] =
     const inS = l.ctx ? `(inTokenSet(${l.set}, ${t}) || (p.ctx != 0 && inCtxWords(p.ctx, ${t})))` : `inTokenSet(${l.set}, ${t})`;
     parts.push(l.is ? inS : `!${inS}`);
   }
-  for (const x of g.pairs ?? []) parts.push(`(!inTokenSet(${x.when.id}, ${t}) || p.secondIn(${x.second.id}))`);   // Guard.pairs
+  // Guard.pairs. Spelled in place, not as a pairIn helper as the other targets do: such a helper is
+  // over Go's inline budget (go build -gcflags=-m: not inlinable), so each test would become a call.
+  for (const x of g.pairs ?? []) parts.push(`(!inTokenSet(${x.when.id}, ${t}) || p.secondIn(${x.second.id}))`);
   return parts;
 };
 // `if <conds> <body>` as one statement line (just the body when there is no condition).
@@ -159,6 +161,7 @@ const branchGoR = (cond: string) => `{ sp := p.pos; if ${cond} { return true }; 
 // one recognizing ('R', ParserIR.forms; e: whose recognizers). Go: a body or a step's statements
 // are a func literal called in place.
 type GoForm = '' | 'W' | 'R';
+const markSuffixGo = (mk: MarkForm, f: GoForm): string => (mk === 'none' ? 'C' : mk === 'leaves' && f !== 'R' ? 'L' : '');
 function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: ArenaIdPlan): StepLowering {
   // A literal's leaf type (litTt, decided here): a word is a $keyword leaf, anything else $punct.
   const litTt = (lid: number) => (lid >= ids.kwLid ? ttIdOf(ar!, '$keyword') : TT_SKIP_PUNCT);
@@ -174,14 +177,16 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: Aren
     ruleBp: (name, bp) => (f === 'R' ? e.bpFound(name, bp) : f === 'W' ? `p.callRuleW(p.bpW_${name}(${bp}))` : `p.callRule(p.bp_${name}(${bp}))`),
     // A body guard (emit-portable.ts annotateSteps): opt / sep test it before their one attempt,
     // star before each attempt, so a refused attempt takes no mark. A clean body (Step.clean) is
-    // attempted without a mark (starC / optC / sepByC).
-    star: (body, g, c) => (g === null ? `p.star${c ? 'C' : ''}${f}(${fn(body)})` : `p.starIn${c ? 'C' : ''}${f}(${g}, ${fn(body)})`),
-    opt: (body, g, c) => {
-      const attempt = `p.opt${c ? 'C' : ''}${f}(${fn(body)})`;
+    // attempted without a mark (starC / optC / sepByC). A body that fails with leaves only
+    // (MarkForm 'leaves') takes the L forms when building: the position and the scratch list, no
+    // arena or builder checkpoint; recognizing, every mark is the position alone already.
+    star: (body, g, mk) => { const c = markSuffixGo(mk, f); return g === null ? `p.star${c}${f}(${fn(body)})` : `p.starIn${c}${f}(${g}, ${fn(body)})`; },
+    opt: (body, g, mk) => {
+      const attempt = `p.opt${markSuffixGo(mk, f)}${f}(${fn(body)})`;
       return g === null ? attempt : `(!p.${e.ahead}(${g}, true) || ${attempt})`;
     },
-    sep: (elem, delim, g, c) => {
-      const call = `p.sepBy${c ? 'C' : ''}${f}(${fn(elem)}, ${sepDelimLid(ids, delim)})`;
+    sep: (elem, delim, g, mk) => {
+      const call = `p.sepBy${markSuffixGo(mk, f)}${f}(${fn(elem)}, ${sepDelimLid(ids, delim)})`;
       return g === null ? call : `(!p.${e.ahead}(${g}, true) || ${call})`;
     },
     altlit: (values) => `p.altLit${f}([]uint16{${values.map((v) => lidOf(ids, v)).join(', ')}})`,
@@ -1220,6 +1225,17 @@ function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaI
 func (p *engine) parseTopOne() int32 {
 ${topOne}
 }
+func (p *engine) parseTopEntry(sb int) (EntryMeta, bool) {
+\tsp := p.pos
+\tp.lookReset()
+\tn := p.parseTopOne()
+\tif n < 0 { p.back(sp); return EntryMeta{}, false }
+\text := p.nodes[n].TokEnd
+\tif l := uint32(p.lookEnd()); l > ext { ext = l }
+\tp.nodes[n].Ext = ext // CST oracle for validate assert; reuse decisions read p.entries
+\tp.scratch = append(p.scratch, n)
+\treturn EntryMeta{int(p.nodes[n].TokStart), int(p.nodes[n].TokEnd), int(ext), int(p.nodes[n].Offset), int(p.nodes[n].End), len(p.scratch) - 1 - sb, 1}, true
+}
 func (p *engine) parse${r.name}() int32 {
 \tsave := p.pos; sb := len(p.scratch)
 \tlocalE := p.entries[:0]
@@ -1542,69 +1558,6 @@ ${shapeA ? `func (p *engine) assertEntriesVsNodes(oldEntries []EntryMeta, oldRoo
 		if e.End != int(nd.End) { panic("end entry " + fmt.Sprintf("%d", i)) }
 	}
 }
-func (p *engine) tryReuseTop(oldRoot int32, oldEntries []EntryMeta, newText string, newMeta []alignMeta, byteDelta, oldN, prefix, suffix int, validate bool) (int32, int) {
-	if oldRoot < 0 { return -1, 0 }
-	if validate { p.assertEntriesVsNodes(oldEntries, oldRoot) }
-	old := p.nodes[oldRoot]
-	oldKids := make([]int32, old.KidCount)
-	for i := uint32(0); i < old.KidCount; i++ { oldKids[i] = p.kids[old.KidStart+i] }
-	prefixLen, suffixStart := reuseBounds(oldEntries, prefix, oldN, suffix)
-	prefixKids := oldKids[:prefixLen]
-	suffixCand := oldKids[suffixStart:]
-	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
-	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
-	p.src = newText
-	p.toks = toksFromMeta(newText, newMeta)
-	if prefixLen > 0 { p.pos = prefixMeta[prefixLen-1].TokEnd } else { p.pos = 0 }
-	p.scratch = p.scratch[:0]
-	mid := make([]int32, 0)
-	midMeta := make([]EntryMeta, 0)
-	finishHit := func(adoptFrom int) (int32, int) {
-		adopted := suffixCand[adoptFrom:]
-		tokDelta := 0
-		if len(adopted) > 0 {
-			s := suffixMeta[adoptFrom].TokStart
-			tokDelta = p.pos - s
-		}
-		for _, s := range adopted { p.shiftSubtree(s, byteDelta, tokDelta) }
-		children := make([]int32, 0, len(prefixKids)+len(mid)+len(adopted))
-		children = append(children, prefixKids...)
-		children = append(children, mid...)
-		children = append(children, adopted...)
-		newEntries := reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta)
-		off, end, tokStart, tokEnd := reuseSpan(newEntries)
-		kidStart := len(p.kids)
-		p.kids = append(p.kids, children...)
-		p.nodes = append(p.nodes, Node{RuleId: old.RuleId, KidStart: uint32(kidStart), KidCount: uint32(len(children)), Offset: uint32(off), End: uint32(end), TokStart: uint32(tokStart), TokEnd: uint32(tokEnd)})
-		p.entries = newEntries
-		p.pos = len(p.toks)
-		return int32(len(p.nodes) - 1), len(prefixKids) + len(adopted)
-	}
-	tryHit := func() (int32, int, bool) {
-		if at := reuseAdoptAt(suffixMeta, oldN, suffix, len(p.toks)-p.pos); at >= 0 { r, n := finishHit(at); return r, n, true }
-		return -1, 0, false
-	}
-	passed := func() bool { return reuseGaveUp(suffixMeta, oldN, len(p.toks)-p.pos) }
-	if r, n, ok := tryHit(); ok { return r, n }
-	if passed() { return -1, 0 }
-	for {
-		if p.pos >= len(p.toks) {
-			if r, n, ok := tryHit(); ok { return r, n }
-			return -1, 0
-		}
-		p.lookReset()
-		sp := p.pos
-		n := p.parseTopOne()
-		if n < 0 { p.back(sp); return -1, 0 }
-		ext := p.nodes[n].TokEnd
-		if l := uint32(p.lookEnd()); l > ext { ext = l }
-		p.nodes[n].Ext = ext
-		midMeta = append(midMeta, EntryMeta{int(p.nodes[n].TokStart), int(p.nodes[n].TokEnd), int(ext), int(p.nodes[n].Offset), int(p.nodes[n].End), 0, 1})
-		mid = append(mid, n)
-		if r, rn, ok := tryHit(); ok { return r, rn }
-		if passed() { return -1, 0 }
-	}
-}
 ` : ''}${shapeB ? `func (p *engine) assertEntriesVsKids(oldEntries []EntryMeta, oldRoot int32) {
 	old := p.nodes[oldRoot]
 	for i, e := range oldEntries {
@@ -1618,17 +1571,15 @@ func (p *engine) tryReuseTop(oldRoot int32, oldEntries []EntryMeta, newText stri
 		}
 	}
 }
-func (p *engine) tryReuseSeg(oldRoot int32, oldEntries []EntryMeta, newText string, newMeta []alignMeta, byteDelta, oldN, prefix, suffix int, validate bool) (int32, int) {
-	if oldRoot < 0 || len(oldEntries) == 0 { return -1, 0 }
-	if validate { p.assertEntriesVsKids(oldEntries, oldRoot) }
+` : ''}func (p *engine) tryReuse(oldRoot int32, oldEntries []EntryMeta, newText string, newMeta []alignMeta, byteDelta, oldN, prefix, suffix int, validate bool) (int32, int) {
+	if oldRoot < 0${shapeB ? ' || len(oldEntries) == 0' : ''} { return -1, 0 }
+	if validate { p.assertEntriesVs${shapeA ? 'Nodes' : 'Kids'}(oldEntries, oldRoot) }
 	old := p.nodes[oldRoot]
 	prefixLen, suffixStart := reuseBounds(oldEntries, prefix, oldN, suffix)
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
-	prefixKids := make([]int32, 0)
-	for _, s := range prefixMeta {
-		for i := 0; i < s.KidCount; i++ { prefixKids = append(prefixKids, p.kids[old.KidStart+uint32(s.KidStart+i)]) }
-	}
+	_, prefixEnd := reuseKids(oldEntries, 0, prefixLen)
+	prefixKids := append([]int32(nil), p.kids[old.KidStart:old.KidStart+uint32(prefixEnd)]...)
 	p.src = newText
 	p.toks = toksFromMeta(newText, newMeta)
 	if prefixLen > 0 { p.pos = prefixMeta[prefixLen-1].TokEnd } else { p.pos = 0 }
@@ -1642,24 +1593,22 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldEntries []EntryMeta, newText stri
 			s := suffixMeta[adoptFrom].TokStart
 			tokDelta = p.pos - s
 		}
-		adoptedKids := make([]int32, 0)
-		for _, s := range adoptedSegs {
-			for i := 0; i < s.KidCount; i++ {
-				id := p.kids[old.KidStart+uint32(s.KidStart+i)]
-				if id < 0 {
-					ti, tt := decodeLeaf(id)
-					id = encodeLeaf(uint32(int32(ti)+int32(tokDelta)), tt)
-				} else {
-					p.shiftSubtree(id, byteDelta, tokDelta)
-				}
-				adoptedKids = append(adoptedKids, id)
+		ka, kb := reuseKids(suffixMeta, adoptFrom, len(suffixMeta))
+		adoptedKids := make([]int32, 0, kb-ka)
+		for _, id := range p.kids[old.KidStart+uint32(ka) : old.KidStart+uint32(kb)] {
+			if id < 0 {
+				ti, tt := decodeLeaf(id)
+				id = encodeLeaf(uint32(int32(ti)+int32(tokDelta)), tt)
+			} else {
+				p.shiftSubtree(id, byteDelta, tokDelta)
 			}
+			adoptedKids = append(adoptedKids, id)
 		}
 		children := make([]int32, 0, len(prefixKids)+len(midKids)+len(adoptedKids))
 		children = append(children, prefixKids...)
 		children = append(children, midKids...)
 		children = append(children, adoptedKids...)
-		newEntries := reuseSegEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta)
+		newEntries := reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta, len(prefixKids)+len(midKids))
 		off, end, tokStart, tokEnd := reuseSpan(newEntries)
 		kidStart := len(p.kids)
 		p.kids = append(p.kids, children...)
@@ -1692,27 +1641,27 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldEntries []EntryMeta, newText stri
 			return -1, 0
 		}
 		sb := len(p.scratch)
-		m, ok := p.parseLoopSeg(sb)
+		m, ok := p.${shapeA ? 'parseTopEntry' : 'parseLoopSeg'}(sb)
 		if !ok {
 			if r, n, hit := tryHit(); hit { return r, n }
 			return -1, 0
 		}
+		m.KidStart = len(prefixKids) + len(midKids)
 		midKids = append(midKids, p.scratch[sb:]...)
 		p.scratch = p.scratch[:sb]
-		m.KidStart = 0
 		midMeta = append(midMeta, m)
 		if r, rn, hit := tryHit(); hit { return r, rn }
 		if passed() { return -1, 0 }
 	}
 }
-` : ''}` : '';
+` : '';
   const editParse = topReuse
     ? `\tbyteDelta := len(d.text) - len(oldText)
 \treused := 0
 \tforceFresh := d.root < 0 || p.shouldReclaim(d.root)
 \tif !forceFresh {
 \t\toldEntries := append([]EntryMeta(nil), d.entries...)
-\t\tif got, n := p.tryReuse${shapeA ? 'Top' : 'Seg'}(d.root, oldEntries, d.text, d.toks, byteDelta, oldN, prefix, suffix, d.validate); got >= 0 {
+\t\tif got, n := p.tryReuse(d.root, oldEntries, d.text, d.toks, byteDelta, oldN, prefix, suffix, d.validate); got >= 0 {
 \t\t\td.root = got
 \t\t\td.entries = append([]EntryMeta(nil), p.entries...)
 \t\t\treused = n
@@ -1883,6 +1832,18 @@ function rdEntryWithReuseW(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: Arena
     topFail: '\treturn spanned{}, false',
     entryA: (topOne) => `func (p *${recv}) parseTopOneW() (spanned, bool) {
 ${topOne}
+}
+func (p *${recv}) parseTopEntryW(sb int) (EntryMeta, bool) {
+\tsp := p.pos
+\tp.lookReset()
+\tfr, ok := p.parseTopOneW()
+\tif !ok || !fr.present { p.back(sp); return EntryMeta{}, false }
+\ttokEnd := p.pos
+\text := tokEnd
+\tif l := p.lookEnd(); l > ext { ext = l }
+\t_, end := p.b.SpanOf(fr.h, p.toks)
+\tp.scratch = append(p.scratch, fr.h)
+\treturn EntryMeta{int(fr.tokStart), tokEnd, ext, int(fr.off), int(end), len(p.scratch) - 1 - sb, 1}, true
 }
 func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch)
@@ -2179,6 +2140,34 @@ func (p *${recv}) starInW(k int, once func() bool) bool {
 	}
 	return true
 }
+// A body that fails with leaves only (Step.leaves) changes nothing but the position and the
+// scratch list when it fails: its mark is those two, no builder checkpoint. Out of line, as the
+// direct engine's are (go:noinline).
+//go:noinline
+func (p *${recv}) starLW(once func() bool) bool {
+	for { sp, sb := p.pos, len(p.scratch); if !once() { p.back(sp); p.scratch = p.scratch[:sb]; break } }
+	return true
+}
+//go:noinline
+func (p *${recv}) starInLW(k int, once func() bool) bool {
+	for p.ahead(k, true) { sp, sb := p.pos, len(p.scratch); if !once() { p.back(sp); p.scratch = p.scratch[:sb]; break } }
+	return true
+}
+//go:noinline
+func (p *${recv}) optLW(body func() bool) bool {
+	sp, sb := p.pos, len(p.scratch); if !body() { p.back(sp); p.scratch = p.scratch[:sb] }; return true
+}
+//go:noinline
+func (p *${recv}) sepByLW(elem func() bool, delim uint16) bool {
+	sp0, sb0 := p.pos, len(p.scratch)
+	if !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; return true }
+	for {
+		if !(p.litW(delim) && p.takeW(litTt(delim))) { break } // a failed delimiter match changes nothing: no mark before it
+		sp2, sb2 := p.pos, len(p.scratch)
+		if !elem() { p.back(sp2); p.scratch = p.scratch[:sb2]; break }
+	}
+	return true
+}
 // A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo. Kept out of
 // line (go:noinline), as the marked forms already are by Go's inline budget: inlined, these small
 // helpers and their closures grew the frames of the large rule functions, and every call of those
@@ -2292,110 +2281,14 @@ ${topReuse
 }
 `;
 
-  const tryReuseTopW = shapeA
+  const tryReuseW = topReuse
     ? `
-func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, newText string, newMeta []alignMeta, byteDelta, oldN, prefix, suffix int) (root int32, newEntries []EntryMeta, newHs []int32, reused int, ok bool) {
-	prefixLen, suffixStart := reuseBounds(oldEntries, prefix, oldN, suffix)
-	prefixKids := append([]int32(nil), oldHs[:prefixLen]...)
-	suffixCand := append([]int32(nil), oldHs[suffixStart:]...)
-	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
-	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
-	p := &parserW{cursor: cursor{toks: toksFromMeta(newText, newMeta)}, src: newText, b: b, drops: dropsOf(b), scratch: nil}
-	if prefixLen > 0 {
-		p.pos = prefixMeta[prefixLen-1].TokEnd
-	} else {
-		p.pos = 0
-	}
-	mid := make([]int32, 0)
-	midMeta := make([]EntryMeta, 0)
-	finishHit := func(adoptFrom int) (int32, []EntryMeta, []int32, int, bool) {
-		tokDelta := 0
-		if adoptFrom < len(suffixMeta) {
-			s := suffixMeta[adoptFrom].TokStart
-			tokDelta = p.pos - s
-		}
-		adopted := make([]int32, 0, len(suffixCand)-adoptFrom)
-		for _, s := range suffixCand[adoptFrom:] {
-			adopted = append(adopted, sh.Shift(s, byteDelta, tokDelta))
-		}
-		children := make([]int32, 0, len(prefixKids)+len(mid)+len(adopted))
-		children = append(children, prefixKids...)
-		children = append(children, mid...)
-		children = append(children, adopted...)
-		outE := reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta)
-		off, end, tokStart, tokEnd := reuseSpan(outE)
-		scratch := append([]int32(nil), children...)
-		b.Node(&scratch, 0, ${entryRid}, uint32(off), uint32(end), uint32(tokStart), uint32(tokEnd))
-		if len(scratch) != 1 {
-			return 0, nil, nil, 0, false
-		}
-		recordToks(b, p.toks)
-		return scratch[0], outE, children, len(prefixKids) + len(adopted), true
-	}
-	tryHit := func() (int32, []EntryMeta, []int32, int, bool) {
-		if at := reuseAdoptAt(suffixMeta, oldN, suffix, len(p.toks)-p.pos); at >= 0 {
-			return finishHit(at)
-		}
-		return 0, nil, nil, 0, false
-	}
-	if r, e, hs, n, hit := tryHit(); hit {
-		return r, e, hs, n, true
-	}
-	if reuseGaveUp(suffixMeta, oldN, len(p.toks)-p.pos) {
-		return 0, nil, nil, 0, false
-	}
-	for {
-		if p.pos >= len(p.toks) {
-			if r, e, hs, n, hit := tryHit(); hit {
-				return r, e, hs, n, true
-			}
-			return 0, nil, nil, 0, false
-		}
-		p.lookReset()
-		sp := p.pos
-		fr, pok := p.parseTopOneW()
-		if !pok {
-			p.back(sp)
-			return 0, nil, nil, 0, false
-		}
-		tokEnd := p.pos
-		ext := tokEnd
-		if l := p.lookEnd(); l > ext {
-			ext = l
-		}
-		end := int(fr.off)
-		if fr.present {
-			_, e1 := b.SpanOf(fr.h, p.toks)
-			end = int(e1)
-		}
-		midMeta = append(midMeta, EntryMeta{int(fr.tokStart), tokEnd, ext, int(fr.off), end, 0, 1})
-		mid = append(mid, fr.h)
-		if r, e, hs, n, hit := tryHit(); hit {
-			return r, e, hs, n, true
-		}
-		if reuseGaveUp(suffixMeta, oldN, len(p.toks)-p.pos) {
-			return 0, nil, nil, 0, false
-		}
-	}
-}
-`
-    : '';
-
-  const tryReuseSegW = shapeB
-    ? `
-func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldEntries []EntryMeta, newText string, newMeta []alignMeta, byteDelta, oldN, prefix, suffix int) (root int32, newEntries []EntryMeta, newHs []int32, reused int, ok bool) {
-	if len(oldEntries) == 0 {
-		return 0, nil, nil, 0, false
-	}
+func tryReuseW(b Builder, sh Shifter, oldRootHs []int32, oldEntries []EntryMeta, newText string, newMeta []alignMeta, byteDelta, oldN, prefix, suffix int) (root int32, newEntries []EntryMeta, newHs []int32, reused int, ok bool) {
 	prefixLen, suffixStart := reuseBounds(oldEntries, prefix, oldN, suffix)
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
-	prefixKids := make([]int32, 0)
-	for _, s := range prefixMeta {
-		for i := 0; i < s.KidCount; i++ {
-			prefixKids = append(prefixKids, oldRootHs[s.KidStart+i])
-		}
-	}
+	_, prefixEnd := reuseKids(oldEntries, 0, prefixLen)
+	prefixKids := append([]int32(nil), oldRootHs[:prefixEnd]...)
 	p := &parserW{cursor: cursor{toks: toksFromMeta(newText, newMeta)}, src: newText, b: b, drops: dropsOf(b), scratch: nil}
 	if prefixLen > 0 {
 		p.pos = prefixMeta[prefixLen-1].TokEnd
@@ -2411,17 +2304,16 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldEntries []EntryMe
 			s := suffixMeta[adoptFrom].TokStart
 			tokDelta = p.pos - s
 		}
-		adoptedKids := make([]int32, 0)
-		for _, s := range adoptedSegs {
-			for i := 0; i < s.KidCount; i++ {
-				adoptedKids = append(adoptedKids, sh.Shift(oldRootHs[s.KidStart+i], byteDelta, tokDelta))
-			}
+		ka, kb := reuseKids(suffixMeta, adoptFrom, len(suffixMeta))
+		adoptedKids := make([]int32, 0, kb-ka)
+		for _, s := range oldRootHs[ka:kb] {
+			adoptedKids = append(adoptedKids, sh.Shift(s, byteDelta, tokDelta))
 		}
 		children := make([]int32, 0, len(prefixKids)+len(midKids)+len(adoptedKids))
 		children = append(children, prefixKids...)
 		children = append(children, midKids...)
 		children = append(children, adoptedKids...)
-		outE := reuseSegEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta)
+		outE := reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta, len(prefixKids)+len(midKids))
 		off, end, tokStart, tokEnd := reuseSpan(outE)
 		scratch := append([]int32(nil), children...)
 		b.Node(&scratch, 0, ${entryRid}, uint32(off), uint32(end), uint32(tokStart), uint32(tokEnd))
@@ -2469,16 +2361,16 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldEntries []EntryMe
 			return 0, nil, nil, 0, false
 		}
 		sb := len(p.scratch)
-		m, pok := p.parseLoopSegW(sb)
+		m, pok := p.${shapeA ? 'parseTopEntryW' : 'parseLoopSegW'}(sb)
 		if !pok {
 			if r, e, hs, n, hit := tryHit(); hit {
 				return r, e, hs, n, true
 			}
 			return 0, nil, nil, 0, false
 		}
+		m.KidStart = len(prefixKids) + len(midKids)
 		midKids = append(midKids, p.scratch[sb:]...)
 		p.scratch = p.scratch[:sb]
-		m.KidStart = 0
 		midMeta = append(midMeta, m)
 		if r, e, hs, n, hit := tryHit(); hit {
 			return r, e, hs, n, true
@@ -2498,7 +2390,7 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldEntries []EntryMe
 \tforceFresh := !hasShift || d.root < 0${shapeB ? ' || len(d.entries) == 0' : ''}
 \tif !forceFresh {
 \t\tsh := d.b.(Shifter)
-\t\tif got, ne, nhs, n, hit := tryReuse${shapeA ? 'Top' : 'Seg'}W(d.b, sh, d.entryHs, d.entries, d.text, d.toks, byteDelta, oldN, prefix, suffix); hit {
+\t\tif got, ne, nhs, n, hit := tryReuseW(d.b, sh, d.entryHs, d.entries, d.text, d.toks, byteDelta, oldN, prefix, suffix); hit {
 \t\t\td.root = got
 \t\t\td.entries = ne
 \t\t\td.entryHs = nhs
@@ -2549,7 +2441,7 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldEntries []EntryMe
 \t\td.entryHs = entryHs`
     : `\t\td.root = h`;
 
-  return `${shiftHandleFn}${parseWithMetaW}${tryReuseTopW}${tryReuseSegW}
+  return `${shiftHandleFn}${parseWithMetaW}${tryReuseW}
 // Document is the shared surface of NewDoc (*Doc) and NewDocWith (*DocWith).
 type Document interface {
 	SetValidate(v bool)
@@ -3393,6 +3285,35 @@ func (p *engine) star(once func() bool) bool {
 }
 func (p *engine) starIn(k int, once func() bool) bool {
 	for p.ahead(k, true) { m := p.mark(); if !once() { p.reset(m); break } }
+	return true
+}
+// A body that fails with leaves only (Step.leaves) changes nothing but the position and the
+// scratch list when it fails: its mark is those two, not the arena's lengths. Out of line
+// (go:noinline) as the clean forms are: small enough to inline, they grew the frames of the large
+// rule functions (jsx-corpus.jsx, direct engine: +7.1% instructions inlined).
+//go:noinline
+func (p *engine) starL(once func() bool) bool {
+	for { sp, sb := p.pos, len(p.scratch); if !once() { p.back(sp); p.scratch = p.scratch[:sb]; break } }
+	return true
+}
+//go:noinline
+func (p *engine) starInL(k int, once func() bool) bool {
+	for p.ahead(k, true) { sp, sb := p.pos, len(p.scratch); if !once() { p.back(sp); p.scratch = p.scratch[:sb]; break } }
+	return true
+}
+//go:noinline
+func (p *engine) optL(body func() bool) bool {
+	sp, sb := p.pos, len(p.scratch); if !body() { p.back(sp); p.scratch = p.scratch[:sb] }; return true
+}
+//go:noinline
+func (p *engine) sepByL(elem func() bool, delimLid uint16) bool {
+	sp0, sb0 := p.pos, len(p.scratch)
+	if !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; return true }
+	for {
+		if !p.matchLit(delimLid) { break } // a failed delimiter match changes nothing: no mark before it
+		sp2, sb2 := p.pos, len(p.scratch)
+		if !elem() { p.back(sp2); p.scratch = p.scratch[:sb2]; break }
+	}
 	return true
 }
 // A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo. Kept out of

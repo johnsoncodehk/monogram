@@ -480,7 +480,6 @@ TextMate grammar cannot express, each a limitation stated where the pattern is b
 
 | limitation | witness | TextMate reads | the lexer reads |
 |---|---|---|---|
-| a member keyword before a tag (the lookbehind sees `new`, not that a `.` precedes it) | `y = x.new <b> c` (TSX) | an element | a comparison |
 | a hole is balanced only as deep as the code grammar's own brace patterns, and a dynamic close tag's hole one level (an `end` is one regex) | `<{a[{b}]}>x</{a[{b}]}>` (text dialect, whose code has no brace pair) | the hole ends at the inner `}`; the element does not close | a dynamic element |
 | a directive's opener and its required literals must stand on one line (a `begin` is one line) | `@if`⏎`(x) { y }` | text, then a hole | a directive |
 | a continuation keyword is matched anywhere an opener is (no "after a body" state) | `<p>x @else { y }</p>` | a keyword | text |
@@ -501,15 +500,38 @@ An `operand` region is entered only in the operand-position state `root` (where 
 may start: the lexer's `!prevIsValue()`), so Monarch needs no lookbehind; an `always` region in
 both base states; the `typeParameters` vetoes are negative lookaheads on the entry. Gated by
 `test/monarch-dialect.ts` (the committed JSX / TSX artifacts, cross-checked against the
-interpreter's token stream, and the two dialect fixtures in memory). Not built yet, each its own
-step: raw text (`nextEmbedded`), `textTokens`, directives. What Monarch cannot express, each an
-expected-fail row of that gate:
+interpreter's token stream, and the two dialect fixtures in memory). Raw text: a tag name a
+`rawText` declaration lists (a `cases` dispatch on the name, ASCII case-folded under
+`ignoreCase`) has its own tag state, whose `tagClose` enters the body in the declared embed's
+language (`nextEmbedded`: the embed scope's language, `source.css` → `css`; Monaco ends the
+embedded text at the first close tag `tagOpen closeMarker name` on the line, as the lexer ends
+the raw token), or without an embed one token of the raw token's scope; `unlessBodyStarts`
+decides in a state of its own, over line breaks when the pattern begins with a repetition of a
+class holding one (`star(blank)`). The same gate re-states the static checks of Monaco's Monarch
+compiler on every Monarch grammar (Monaco itself is not run). Text tokens: tried in the
+children before the text run (a block comment the code's pushed comment state, a line comment to
+the end of the line); the run stops before one, and before one with an `after` class only right
+after a unit of that class, a lookbehind within the run's own match (a run's first unit has been
+tried by the token rules already; a dialect that also declares `highlight.text` is refused, since
+a match of one ends a Monarch rule inside the lexer's run). Directives (derived, `directivesOf`):
+the opener test is a lookahead (the literal, a word boundary from the identifier token's units,
+a required literal sequence after whitespace or one-line block comments) tried in the children and
+in a body, at a run's start and inside a run; then states pushed from the children, as the
+lexer's sub-state 3: the required literals, the head (code; a `(` pushes a nested parenthesis
+state, so `hole.open` opens the body only at the head's own depth), the body (children; a close
+tag is pushed and pops at its `tagClose`), and after the body's closer the continuation test,
+over lines, back to the required literals, or a pop. Unlike TextMate, a continuation is read
+only after a body (`<p>x @else { y }</p>` is text). Monaco reads `@name` in a regex as an
+attribute reference: every `@` before a word unit is written `@@` (`monacoRegexes`). What
+Monarch cannot express, each an expected-fail row of that gate:
 
 | limitation | witness | Monarch reads | the lexer reads |
 |---|---|---|---|
 | inside a pushed frame (a hole) Monarch is single-mode: it does not track values there | `z = <p>{a <b}</p>` | an element | a comparison |
 | a member keyword before a tag: the base states read `new` as an expression head whatever precedes it (JSX; TSX's Monarch reads `.new` as a member) | `y = x.new <b> c` | an element | a comparison |
 | the signature veto is a lookahead, which sees one line | `type G = <T>(`⏎`x: T) => T` | an element | a signature |
+| a directive's opener and its required literals must stand on one line (the opener test is a lookahead) | `@if`⏎`(x) { y }` (text dialect) | text, then a hole | a directive |
+| a block comment in text is a pushed state: an unterminated `/*` runs to the next `*/` or the end of the file | `<p>a /* b</p>`⏎`<p>c</p>` (text dialect) | a comment over both lines | text |
 
 ## Consumers (the evidence the model was built from)
 
@@ -529,8 +551,7 @@ Directive openers and continuations are derived from the grammar ("Directives").
 - In the portable lexers: `tagStart`, `unlessBodyStarts`, `textTokens`, directives and the root
   region, as they are built here (until then `buildIR` refuses a grammar that declares one of
   them, as out of scope); a raw-text grammar that also declares a type-parameter signature is
-  refused (the signature's rewind does not restore the raw-text tag records).
+  refused (the signature's rewind does not restore the raw-text tag records), and so is a
+  grammar that declares both elements and `newline` mode.
 - The root region: the build order above.
 - Re-measuring the five undecidable JSX shapes on a larger TSX corpus.
-- Monarch: raw text (`nextEmbedded` at the open tag's end, `@pop` at the close tag), `textTokens`
-  and directives in the element layer.

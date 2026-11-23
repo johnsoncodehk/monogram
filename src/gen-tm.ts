@@ -4,6 +4,7 @@ import { analyzeGrammar, directivesOf } from './grammar-analysis.ts';
 import { regionView, expandArms, operandEntry, type RegionView } from './region-view.ts';
 import { compileTokenizer, lexSpecOf } from './emit-lexer.ts';
 import {
+  caseFoldLiteralSource,
   tokenEscapePatternSource,
   tokenBlockPatternSource,
   tokenPatternBlockDelimiterSources,
@@ -89,25 +90,6 @@ function keywordAlternation(lits: string[]): string {
  *  Inside `[...]`, the special chars are `[` (nested class in Oniguruma), `]`, `\\`, `^` (at start), and `-` (as range). */
 function escapeForCharClass(s: string): string {
   return s.replace(/[\[\]\\^-]/g, '\\$&');
-}
-
-/** An ASCII-CASE-INSENSITIVE pattern matching `s` regardless of letter case. Each cased letter
- *  becomes a two-char class (`s` → `[Ss]`); other chars are escaped as usual. We keep the explicit
- *  char-class rather than an inline `(?i:…)` flag for CORRECTNESS, not byte-thrift (issue #43): both
- *  engines compile `(?i:)`, but `(?i:)` in (vscode-)oniguruma applies full UNICODE case-folding —
- *  `(?i:style)` also matches `ſtyle` (U+017F LONG S ≡ s), `(?i:k)` matches the Kelvin sign U+212A, etc.
- *  HTML tag-name matching is ASCII-case-insensitive ONLY (the spec ASCII-lowercases names, and our
- *  lexer folds via `.toLowerCase()`, which leaves `ſ` alone), so `(?i:style)` would OVER-match a
- *  non-style element `<ſtyle>` and wrongly embed CSS. The per-char class matches EXACTLY the set the
- *  lexer folds (`<SCRIPT>`/`<Script>` but never `<ſcript>`) — keeping the highlighter consistent with
- *  the parser by construction. Used by the markup emitter for every raw-text element/close tag. */
-function caseFoldLiteral(s: string): string {
-  let out = '';
-  for (const ch of s) {
-    const lo = ch.toLowerCase(), up = ch.toUpperCase();
-    out += lo !== up ? `[${escapeForCharClass(up)}${escapeForCharClass(lo)}]` : escapeRegex(ch);
-  }
-  return out;
 }
 
 // An INDENT-BOUNDED region: capture the line's leading indent into `\1`, then stay open while each
@@ -1354,9 +1336,15 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
   // a postfix-or-prefix `!`, a text whose last unit can end a value token) is left out.
   const oe = view.entry === 'operand' ? operandEntry(grammar) : null;
   const wordText = (t: string) => `${/^\w/.test(t) ? '\\b' : ''}${escapeRegex(t)}`;
-  const exprBehind = oe
-    ? `${oe.notAfter.length ? `(?<!${oe.notAfter.map(escapeRegex).join('|')})` : ''}(?<=${[...oe.after.map(wordText), '^'].join('|')})`
-    : '';
+  // A word text (`new`, `return`) is an operator only where no member access precedes it (the
+  // lexer's LX_MEMBER rule, as for keywords): after `.` / `?.` the same word is a property name,
+  // a value, so `x.new <b> c` is no element. Oniguruma's lookbehind takes alternatives of
+  // different lengths only at its top level, so each (accessor, word) pair is an alternative.
+  const members: string[] = grammar.tokens.find(t => t.regexContext)?.regexContext?.memberAccessTexts ?? [];
+  const afterWords = oe ? oe.after.filter(t => /^\w/.test(t)) : [];
+  const exprBehind = !oe ? '' : `${oe.notAfter.length ? `(?<!${oe.notAfter.map(escapeRegex).join('|')})` : ''}` + (members.length && afterWords.length
+    ? `(?:(?<=${[...oe.after.filter(t => !/^\w/.test(t)).map(wordText), '^'].join('|')})|(?<=${afterWords.map(wordText).join('|')})(?<!${afterWords.flatMap(w => members.map(m => escapeRegex(m + w))).join('|')}))`
+    : `(?<=${[...oe.after.map(wordText), '^'].join('|')})`);
   // The leading run skipped (inside a lookahead, so zero-width) between the
   // anchoring operator and the tag's `<`: whitespace plus any number of BLOCK
   // comments — an element may legally follow a `/* … */` on the same line
@@ -1772,7 +1760,7 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
   for (const decl of region.rawText ?? []) {
     const tok = grammar.tokens.find(t => t.name === decl.token);
     for (const tag of decl.tags) {
-      const tagRe = decl.ignoreCase ? caseFoldLiteral(tag) : escapeRegex(tag);
+      const tagRe = decl.ignoreCase ? caseFoldLiteralSource(tag) : escapeRegex(tag);
       const emb = decl.embed?.[tag];
       const embedScope = typeof emb === 'string' ? emb : emb?.default;
       const nameScope = scopeOfName(tag);
@@ -4174,7 +4162,7 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
     // through to the generic #tag rule and the highlighter invents tags inside it (bug). We
     // case-fold the tag literal per-character (`script`→`[Ss][Cc]…`, Onigmo-portable, no `(?i)`)
     // for every MATCH; repository keys and meta `name`s stay the canonical lowercase `tag`.
-    const tagRe = caseFoldLiteral(tag);
+    const tagRe = caseFoldLiteralSource(tag);
     // The `lang="<val>"` matcher CAPTURES the open quote and BACK-REFERENCES it for the close, so
     // the two quotes MUST be the same char — a malformed `lang="ts'` / `lang='ts"` is NOT a match
     // (two independent `["']` classes would accept the mismatched pair). The quote opens its OWN
@@ -4328,7 +4316,7 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
   const emitRawMultiline = (tag: string, spec: string | { default: string; lang?: Record<string, string> }) => {
     const defaultEmbed = typeof spec === 'string' ? spec : spec.default;
     const langs = typeof spec === 'string' ? [] : Object.entries(spec.lang ?? {});
-    const tagRe = caseFoldLiteral(tag);   // case-insensitive tag-name pattern (see emitRaw)
+    const tagRe = caseFoldLiteralSource(tag);   // case-insensitive tag-name pattern (see emitRaw)
     const closeAhead = `${o}${slash}${tagRe}(?:[\\s${ccClose}]|$)`;      // `</tag` then ws / `>` / EOL (a DEFERRED `>` on a later line, tmbundle#97)
     const content = (embed: string): TmPattern[] => [                 // body after `>`, bounded at `</tag>`
       { begin: `(?<=${c})(?=[^\\n]*${closeAhead})`, end: `(?=${closeAhead})`, contentName: embed, patterns: [{ include: embed }] },
