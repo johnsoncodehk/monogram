@@ -514,14 +514,24 @@ children before the text run (a block comment the code's pushed comment state, a
 the end of the line); the run stops before one, and before one with an `after` class only right
 after a unit of that class, a lookbehind within the run's own match (a run's first unit has been
 tried by the token rules already; a dialect that also declares `highlight.text` is refused, since
-a match of one ends a Monarch rule inside the lexer's run). Not built yet: directives. What Monarch
-cannot express, each an expected-fail row of that gate:
+a match of one ends a Monarch rule inside the lexer's run). Directives (derived, `directivesOf`):
+the opener test is a lookahead (the literal, a word boundary from the identifier token's units,
+a required literal sequence after whitespace or one-line block comments) tried in the children and
+in a body, at a run's start and inside a run; then states pushed from the children, as the
+lexer's sub-state 3: the required literals, the head (code; a `(` pushes a nested parenthesis
+state, so `hole.open` opens the body only at the head's own depth), the body (children; a close
+tag is pushed and pops at its `tagClose`), and after the body's closer the continuation test,
+over lines, back to the required literals, or a pop. Unlike TextMate, a continuation is read
+only after a body (`<p>x @else { y }</p>` is text). Monaco reads `@name` in a regex as an
+attribute reference: every `@` before a word unit is written `@@` (`monacoRegexes`). What
+Monarch cannot express, each an expected-fail row of that gate:
 
 | limitation | witness | Monarch reads | the lexer reads |
 |---|---|---|---|
 | inside a pushed frame (a hole) Monarch is single-mode: it does not track values there | `z = <p>{a <b}</p>` | an element | a comparison |
 | a member keyword before a tag: the base states read `new` as an expression head whatever precedes it (JSX; TSX's Monarch reads `.new` as a member) | `y = x.new <b> c` | an element | a comparison |
 | the signature veto is a lookahead, which sees one line | `type G = <T>(`⏎`x: T) => T` | an element | a signature |
+| a directive's opener and its required literals must stand on one line (the opener test is a lookahead) | `@if`⏎`(x) { y }` (text dialect) | text, then a hole | a directive |
 | a block comment in text is a pushed state: an unterminated `/*` runs to the next `*/` or the end of the file | `<p>a /* b</p>`⏎`<p>c</p>` (text dialect) | a comment over both lines | text |
 
 ## Consumers (the evidence the model was built from)
@@ -545,4 +555,3 @@ Directive openers and continuations are derived from the grammar ("Directives").
   refused (the signature's rewind does not restore the raw-text tag records).
 - The root region: the build order above.
 - Re-measuring the five undecidable JSX shapes on a larger TSX corpus.
-- Monarch: directives in the element layer.
