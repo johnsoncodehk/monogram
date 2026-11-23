@@ -4,7 +4,7 @@
 // index LEDs), and a CST→JSON printer over stdin. It is the reference rendering — its CST
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
-import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA, type ShapeInhVal } from './emit-portable.ts';
 import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR } from './recovery-family.ts';
 import type { EmitOptions } from './target.ts';
@@ -786,9 +786,16 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
     choice: (peek, tries) => `${peek ? 'const _ft = peek(); ' : ''}${tries.join(' ')} return false;`,
     predictive: (arms) => `const t = peek(); if (t === null) return false; ${arms.map((a) => `if (${firstCond(a.first, 't', ids)}) ${a.branch}`).join(' else ')} return false;`,
     // A shape's step: its slot tagged; a marked body's slots preceded by the iteration marker.
+    // A call of an rd rule that reads inherited attributes sets each (restored after the call); a
+    // threaded repetition starts from its state; a threaded body computes the next one.
     ...(SHAPE && m === 'w' ? { shaped: (s: Step, body: string) => {
-      const tagged = s.tag !== undefined ? `(${body} && _tag(${s.tag}))` : body;
-      return s.mark !== undefined ? `_iter(${s.mark}, ${fn(tagged)})` : tagged;
+      const iv = (x: ShapeInhVal) => ('copy' in x ? `_iv[${x.copy}]` : J(x.c));
+      let core = body;
+      for (const { k, v } of s.inh ?? []) core = `_ipop(${k}, _ipush(${k}, ${iv(v)}), ${core})`;
+      if (s.threadInit) core = `_ipop(${s.threadInit.k}, _ipush(${s.threadInit.k}, ${iv(s.threadInit.v)}), ${core})`;
+      const tagged = s.tag !== undefined ? `(${core} && _tag(${s.tag}))` : core;
+      if (s.mark === undefined) return tagged;
+      return s.thread ? `_iterT(${s.mark}, ${fn(tagged)}, ${s.thread.next}, ${s.thread.k})` : `_iter(${s.mark}, ${fn(tagged)})`;
     } } : {}),
   };
   return L;
@@ -1235,7 +1242,7 @@ function finP(rule: string, b: number): void {
 function _keep(b: number, c: number): void {
   if (c === b) return;
   _hs[b] = _hs[c];${SHAPE ? `
-  _tg[b] = _tg[c]; _ar[b] = _ar[c];` : ''}
+  _tg[b] = _tg[c]; _ar[b] = _ar[c];${shapeKeepTs(SHAPE)}` : ''}
   _sp.copyWithin(b * _SW, c * _SW, c * _SW + _SW);
   _n = b + 1;
 }
@@ -3434,6 +3441,7 @@ ${SHAPE ? `// A shape-building parser: parse(src) is the shape's value of the te
 // null when the grammar rejects the text; reading an arm the shape leaves out throws.
 export function parse(src: string): ShapeValue | null {
   _src = src;
+  _iv = _IV0.slice();
   toks = lex(src);
   const root = runW(_shapeBuilder);
   if (root instanceof _Missing) throw new ShapeMissing(root.where, root.why);
@@ -3637,6 +3645,8 @@ export function emitTs(grammar: CstGrammar, opts?: { shape?: ShapeSpec }): strin
 // are the evaluator's (src/shape2-eval.ts ShapeValue); a MISSING value (an arm the shape leaves
 // out, or one the plan cannot build yet) fails only where it is read (`_need`).
 
+// _keep's copy of a slot's variant and synthesized attributes.
+const shapeKeepTs = (plan: ShapePlan): string => ` _h1[b] = _h1[c];${plan.syn.map((_, k) => ` _sy[${k}]![b] = _sy[${k}]![c];`).join('')}`;
 function shapeRuntimeTs(plan: ShapePlan): string {
   return `export type ShapeNode = { kind: string; start: number; end: number; fields: Record<string, ShapeValue> };
 export type ShapeValue = ShapeNode | ShapeValue[] | string | number | boolean | null | { record: Record<string, ShapeValue> };
@@ -3651,12 +3661,51 @@ function _missing(where: string, why: string): any { return new _Missing(where, 
 // A child read that is missing makes the reading arm's value missing too (finS catches it): only the
 // root's read, parse(), throws, as the evaluator throws when a unit's evaluation reads one.
 function _need(v: any): any { if (v instanceof _Missing) throw v; return v; }
+// An arm's value (a variant arm's second variant in _alt), after its synthesized attributes (_ys).
 function _construct(id: number, b: number, off: number, end: number): any {
-  let v: any;
+  let v: any;${plan.syn.length ? `
+  _synAll(id, b, off, end);` : ''}
+  _alt = undefined;
   try { v = _C[id]!(b, off, end); } catch (e) { if (!(e instanceof _Missing)) throw e; v = e; }
-  if (_built !== null) _built(id, off, end, v instanceof _Missing ? new ShapeMissing(v.where, v.why) : v);
+  if (v instanceof _Missing) _alt = v;
+  if (_built !== null) { const w = _VB[id]! >= 0 && _VD[id] ? _alt : v; _built(id, off, end, w instanceof _Missing ? new ShapeMissing(w.where, w.why) : w); }
   return v;
 }
+// Inherited context attributes (an rd rule's: Step.inh sets them around its calls), their values
+// now; _ipush sets one and returns what it was, _ipop restores it and passes the call's result on.
+const _IV0: any[] = ${J(plan.inh.map((a) => a.dflt))};
+let _iv: any[] = _IV0.slice();
+function _ipush(k: number, v: any): any { const o = _iv[k]; _iv[k] = v; return o; }
+function _ipop(k: number, o: any, r: boolean): boolean { _iv[k] = o; return r; }
+function inhVar(k: number): any { return _need(_iv[k]); }
+// One iteration of a threaded repetition: the state after it (over its slots, past the marker).
+function _iterT(mt: number, f: () => boolean, next: (lo: number, hi: number) => any, k: number): boolean {
+  const c = _n;
+  if (!_iter(mt, f)) return false;
+  try { _iv[k] = next(c + 1, _n); } catch (e) { if (!(e instanceof _Missing)) throw e; _iv[k] = e; }
+  return true;
+}
+// Variants (shape-plan.ts): a variant arm's value under its attribute = true, beside the false one;
+// per arm, the variant bit (-1: none) and whether the attribute's default is true.
+let _alt: any = undefined;
+let _h1: any[] = [];
+const _VB: number[] = ${J(plan.variantBit)};
+const _VD: boolean[] = ${J(plan.variantDefault)};
+function altVal(x: any): void { _alt = x; }
+function slotValV(i: number, m: number): any { const j = _VB[_ar[i]!]!; return j >= 0 && ((m >> j) & 1) !== 0 ? _h1[i] : _hs[i]; }
+// Synthesized attributes: per arm the function (or the default), computed before its value (_ys,
+// read as selfSyn) and kept per slot (_sy).
+${plan.syn.map((a, k) => `const _SY${k}: (((b: number, off: number, end: number) => any) | null)[] = [${a.fns.map((f) => f ?? 'null').join(', ')}];`).join('\n')}
+const _SYD: any[] = ${J(plan.syn.map((a) => a.dflt ?? null))};
+const _ys: any[] = _SYD.slice();
+const _sy: any[][] = _SYD.map(() => []);
+function _synAll(id: number, b: number, off: number, end: number): void {
+${plan.syn.map((_, k) => `  { const f = _SY${k}[id]; if (f === null) _ys[${k}] = _SYD[${k}]; else { try { _ys[${k}] = f(b, off, end); } catch (e) { if (!(e instanceof _Missing)) throw e; _ys[${k}] = e; } } }`).join('\n')}
+}
+function selfSyn(k: number): any { return _need(_ys[k]); }
+function slotSyn(k: number, i: number): any { return _need(_sy[k]![i]); }
+function recGet(x: any, f: string): any { return x.record[f]; }
+function vDropLast(x: any, c: boolean): any { return c && x.length > 0 ? x.slice(0, -1) : x; }
 // A test seam: every value the construct plans build (losing candidates' too), with its engine
 // arm (shapeArms[id]) and span; a missing one as its ShapeMissing.
 let _built: ((id: number, off: number, end: number, v: any) => void) | null = null;
@@ -3681,7 +3730,7 @@ function _iter(mt: number, f: () => boolean): boolean {
   const c = _n;
   if (!f()) return false;
   _slot(null, 0, 0, 0, 0, 0, 0);
-  for (let i = _n - 1; i > c; i--) { _hs[i] = _hs[i - 1]; _tg[i] = _tg[i - 1]; _ar[i] = _ar[i - 1]; }
+  for (let i = _n - 1; i > c; i--) { _hs[i] = _hs[i - 1]; _tg[i] = _tg[i - 1]; _ar[i] = _ar[i - 1]; _h1[i] = _h1[i - 1];${plan.syn.map((_, k) => ` _sy[${k}]![i] = _sy[${k}]![i - 1];`).join('')} }
   _sp.copyWithin((c + 1) * _SW, c * _SW, (_n - 1) * _SW);
   const s = c * _SW;
   if (_n - 1 > c) { _sp[s + 1] = _sp[s]!; } else { _sp[s] = 0; _sp[s + 1] = 0; _sp[s + 2] = pos; _sp[s + 3] = 0; _sp[s + 4] = 0; }
@@ -3700,7 +3749,7 @@ function finS(id: number, b: number, save: number): void {
   const v = _construct(id, b, off, end);
   _n = b;
   _slot(v, 1, off, end, save, ho, he);
-  _ar[b] = id;
+  _ar[b] = id; _h1[b] = _alt;${plan.syn.map((_, k) => ` _sy[${k}]![b] = _ys[${k}];`).join('')}
 }
 function finPS(id: number, b: number): void {
   let off = 0, end = 0, ts = pos, ho = 0, he = 0;
@@ -3708,7 +3757,7 @@ function finPS(id: number, b: number): void {
   const v = _construct(id, b, off, end);
   _n = b;
   _slot(v, 1, off, end, ts, ho, he);
-  _ar[b] = id;
+  _ar[b] = id; _h1[b] = _alt;${plan.syn.map((_, k) => ` _sy[${k}]![b] = _ys[${k}];`).join('')}
 }
 // The engine methods of the construct plans (src/shape-plan.ts EXTERNS).
 function slotTag(i: number): number { return _tg[i]!; }
