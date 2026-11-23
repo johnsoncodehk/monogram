@@ -1117,15 +1117,20 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   // it matches, a zero-width test never moves, an rd rule's function undoes itself on every form's
   // failure (ruleShell: the checkpoint at entry), an inline choice's branches each run in a BRANCH
   // frame, and a star / opt / sep never fails. A step list fails clean when everything before its
-  // last step is a zero-width test and its last step fails clean. Not clean: a Pratt rule's call (it
-  // can fail after its NUD matched: an operator whose operand must be a target), and any list whose
+  // last step is a zero-width test and its last step fails clean. A Pratt rule's call fails clean
+  // when no operator of it can fail the call after its NUD matched: a NUD that matches nothing
+  // leaves the state as it found it (each arm's frame or commit undoes itself), a led or a binary
+  // operand that fails is undone by its own block and ends the loop, so the call's only failure
+  // after its NUD is an operator whose operand must be a target (requireTarget / noUnaryLhs: a
+  // binary or postfix operator returns with the left operand built; a prefix one in the NUD frame
+  // returns with the best so far built). Not clean: such a Pratt rule's call, and any list whose
   // later step can fail after an earlier one consumed.
   const zeroWidth = (s: Step): boolean => s.t === 'ahead' || s.t === 'aheadCtx' || s.t === 'sameLine' || s.t === 'look';
-  const rdRules = new Set(rules.filter((r) => r.kind === 'rd').map((r) => r.name));
+  const cleanRules = new Set(rules.filter((r) => r.kind === 'rd' || (!r.binary.some((b) => b.requireTarget || b.noUnaryLhs) && !r.postfix.some((o) => o.requireTarget) && !r.prefix.some((o) => o.requireTarget))).map((r) => r.name));
   const failsClean = (s: Step): boolean => {
     switch (s.t) {
       case 'lit': case 'tok': case 'altlit': case 'alt': case 'star': case 'opt': case 'sep': return true;
-      case 'rule': return rdRules.has(s.name);
+      case 'rule': case 'ruleBp': return cleanRules.has(s.name);
       case 'seq': case 'suppress': case 'ctx': return listFailsClean(s.steps);
       default: return zeroWidth(s);
     }
