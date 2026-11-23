@@ -220,4 +220,4 @@ that regex would ([`src/lex-match-plan.ts`](../src/lex-match-plan.ts)), and
 `emitRust(grammar, { shape })` ([`src/target-rust.ts`](../src/target-rust.ts)) append a
 declarative AST layer (`parseAst`) to the CST parser. The Go target has none. Spec format,
 primitives and contracts: [SHAPE.md](SHAPE.md). Gates: `shape-codegen`, `shape-rust`,
-`shape-parity`, `ast-builder`.
+`shape-parity`, `builder-reuse`.
