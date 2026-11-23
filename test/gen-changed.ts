@@ -15,7 +15,7 @@
 // when the step read a repository file that is not among its derived inputs: the check that keeps a
 // skip sound, exercised on every step by the full regeneration of each master push.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { ROOT, edges, gateDeps } from './gate-deps.ts';
@@ -61,7 +61,10 @@ for (const [i, st] of steps.entries()) {
     if (listOnly) continue;
     const t0 = Date.now();
     const trace = TRACE ? join(TRACE, String(i)) : null;
-    execFileSync('node', [...(trace ? ['--import', './test/trace-reads.ts'] : []), ...st.argv], { cwd: ROOT, stdio: ['ignore', 'ignore', 'inherit'], env: { ...process.env, ...(trace ? { CHECK_TRACE: trace } : {}) } });
+    // under /usr/bin/time where it exists: `generate <command>: wall, CPU, peak memory` (CI reads it)
+    const node = ['node', ...(trace ? ['--import', './test/trace-reads.ts'] : []), ...st.argv];
+    const cmd = existsSync('/usr/bin/time') ? ['/usr/bin/time', '-f', `generate node ${st.argv.join(' ')}: %e s wall, %U s user, %M KB peak`, ...node] : node;
+    execFileSync(cmd[0]!, cmd.slice(1), { cwd: ROOT, stdio: ['ignore', 'ignore', 'inherit'], env: { ...process.env, ...(trace ? { CHECK_TRACE: trace } : {}) } });
     if (trace) {
       // a gitignored <g>.cst-match.ts stands for its grammar <g>.ts (it is generated from it)
       // (the committed artifacts are outputs: the trace sees a write as an open)
@@ -74,6 +77,7 @@ for (const [i, st] of steps.entries()) {
     continue;
   }
   console.log(`  skip ${label}   (none of its ${st.inputs.size} input file(s) changed)`);
+  if (!listOnly) console.log(`generate node ${st.argv.join(' ')}: skipped`);
   if (st.grammar && !listOnly) {
     // the gitignored per-arm destructurers the gates import, as src/cli.ts names and writes them
     const { generateCstMatch } = await import('../src/gen-cst-match.ts');

@@ -56,6 +56,10 @@ jobs:
         # dispatch regenerate everything. Every step that runs is traced: one that reads a file its
         # derived inputs lack fails the step (what keeps a skip sound).
         run: |
+          # Each step that runs is timed (report-only: wall and CPU seconds and peak memory per step,
+          # the generators' cost; a skipped step prints "skipped"); read with
+          # `gh run view <id> --log | grep 'generate '` (the CPU line says which runner it was).
+          echo "generate runner CPU:$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2), $(nproc) cores"
           if [ "${{ github.ref }}" = refs/heads/master ] || [ "${{ github.event_name }}" = schedule ] || [ "${{ github.event_name }}" = workflow_dispatch ]; then
             GEN_TRACE_DEPS=1 node test/gen-changed.ts --all
           else
