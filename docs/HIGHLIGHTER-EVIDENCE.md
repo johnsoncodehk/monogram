@@ -226,11 +226,28 @@ a scanner cannot run the Type grammar, and an approximate scan is not taken. A b
 (`a - b < c`, `a * b < c`) forks the same way, but there the tie-break happens to pick the
 interpreter's tree. The official `tree-sitter-typescript` (0.23.2) declares the same kind of GLR
 conflicts (call / instantiation / binary / unary) and no scanner token: it reads `-a < c` right, but
-`a < c < d` and `a in c < d` wrongly as ours does, and `a + f<T>(x)` as `(a + f)<T>(x)`. A second
-corpus, `type arguments`, compares the spans of calls with type arguments beside the relational
-readings; two more classes are recorded there, both wrong trees without an ERROR: a call read as two
-relational operators (`f<T>(x);` as `(f < T) > (x)`, also `a.b<T>(x)`, `new C<T>(x)`), and a call
-read as an instantiation expression then a call (`x = f<T>(x)`, `f<T>()`, ``f<T>`t` ``). The same corpus records over-acceptances, not defects of the
+`a < c < d` and `a in c < d` wrongly as ours does, and `a + f<T>(x)` as `(a + f)<T>(x)`.
+
+Overlapping readings: two more corpora compare spans, `type arguments` (calls with type arguments
+beside the relational readings, TypeScript and TSX) and `new arguments` (an arm's optional arguments
+beside a call on the arm without them, every JS / TS dialect). Where two readings of the same tokens
+overlap, the generator renders the interpreter's order (`overlapOrder` in `src/gen-treesitter.ts`):
+the LED loop tries the continuations in grammar order before any operator, the first that matches
+winning, and a NUD takes its longest match. So a continuation that is a strict prefix of an earlier one
+(the instantiation `f<T>` beside the typed call `f<T>(x)`), whose own lookahead excludes every token
+the earlier one continues with, is right-associative: the shift into the earlier one wins (left, it
+reduced before `(` and built `(f<T>)(x)`). A continuation whose connector is also an operator (`<`) and
+that ends in no dropped lookahead carries dynamic precedence 1, so where GLR also reads the operator
+(`f<T>(x)` as `(f < T) > (x)`) the continuation wins; the instantiation, whose lookahead the rendering
+drops, gets none (`f<T> + x` stays relational, as the interpreter reads it). And an arm's trailing
+optional part that can begin like a continuation carries more dynamic precedence than any
+continuation, nested parts adding up, so the arm's longest match outweighs the arm without it
+followed by that continuation: `new C(x)` (it was `(new C)(x)` at statement level, `x = new C(x).y`
+in JavaScript), `new C<T>(x)`, `new C<T>`, `new class {}()`, `import<T>(x)`. A static shift would be
+wrong there: `new C < d` is `(new C) < d` (the official grammar reads it with a MISSING `>`). Two
+entries remain: `new new C()()`, whose inner `new` is an arm of the `new` target rule, outside the
+Pratt rule, so its arguments and the outer call tie and the tie-break gives them to the call; and in
+TSX `a?.<T>(x)`, which tree-sitter parses and the interpreter rejects. The `operator pairs` corpus records over-acceptances, not defects of the
 bracketing: an assignment whose target is not a LeftHandSideExpression (`a + c = d;`, `-a = c;`,
 `a++ ??= c;`) and a unary operand of `**` (`-a ** c;`) parse in tree-sitter (59 JavaScript and 63
 TypeScript pairs), since its CFG has no assignment-target or `noUnaryLhs` condition.
