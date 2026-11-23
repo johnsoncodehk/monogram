@@ -481,8 +481,10 @@ const startsExprNotBinary = alt(
   Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, String_, PrivateField, Decorator,
   '[', '{', '!', '~', '++', '--',
 );
+// A lone `<` only: `<` is scanned alone too (composeLt), and tsc's `<=`, `<<`, `<<=` are binary
+// operators that end it.
 const instantiationEnd = not(alt(
-  '<', '>', '>=', '>>', '>>=', '>>>', '>>>=', '+', '-', '(', Template,
+  [not(alt('<=', '<<', '<<=')), '<'], '>', '>=', '>>', '>>=', '>>>', '>>>=', '+', '-', '(', Template,
   [sameLine, startsExprNotBinary],
 ));
 

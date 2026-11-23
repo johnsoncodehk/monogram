@@ -43,7 +43,7 @@ Two candidates of one list match the same input to the same end; the one declare
 | list | wins (declared first) | loses | one token | observed | witness | action |
 |:--|:--|:--|:--|--:|:--|:--|
 | Decl | declare (#9) | declared (#12) |  | 11 | typescript/lib/lib.es5.d.ts:33: `declare function eval(x: string): any;` | reorder, or guard `declare`: the tie of declare and declared is resolved only by declaration order (declare wins) |
-| Type NUD | ident (#0) | this_ (#25) | `this` | 189 | typescript/lib/typescript.d.ts:9338: `this;` | reorder, or guard `ident`: the tie of ident and this_ on `this` is resolved only by declaration order (ident wins) |
+| Type NUD | ident (#0) | this_ (#25) | `this` | 175 | typescript/lib/typescript.d.ts:9338: `this;` | reorder, or guard `ident`: the tie of ident and this_ on `this` is resolved only by declaration order (ident wins) |
 | TypeMember | new_ (#0) | seq2 (#2) |  | 70 | typescript/lib/lib.es5.d.ts:156: `new (value?: any): Object;` | reorder, or guard `new_`: the tie of new_ and seq2 is resolved only by declaration order (new_ wins) |
 
 ### Alternatives no token reaches
