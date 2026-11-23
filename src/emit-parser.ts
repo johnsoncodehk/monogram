@@ -93,7 +93,7 @@ function analyze(grammar: CstGrammar) {
         const wordConnector = conn?.type === 'literal' && /^[A-Za-z]/.test(conn.value);
         if (!lastIsOperand && !wordConnector) isAccessTail = true;
         // Only an access tail extends an access tail; a lookahead-ended LED closes it too.
-        if (!isAccessTail || last.type === 'not') isTailClosing = true;
+        if (!isAccessTail || (last.type === 'not' && last.body.type !== 'not')) isTailClosing = true;   // a NEGATIVE lookahead (gen-parser.ts negativeLook)
       }
       accessTail.push(isAccessTail);
       tailClosing.push(isTailClosing);
@@ -2013,7 +2013,7 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
     const last = it[it.length - 1];
     const lastIsOperand = selfRef(last);
     const access = !lastIsOperand && !(conn?.type === 'literal' && /^[A-Za-z]/.test(conn.value));
-    return { access, closing: !access || last.type === 'not' };
+    return { access, closing: !access || (last.type === 'not' && last.body.type !== 'not') };
   };
   e.emit(`  let node = -1; let bestAtomPos = saved; let tailClosed = false;`);
   const atomDispatch = e.altMaskDispatch(atoms, '_am');

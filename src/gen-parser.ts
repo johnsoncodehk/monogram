@@ -206,6 +206,7 @@ export function createParser(grammar: CstGrammar) {
   // are LEDs of the same kind and close the same way (`keyof void.x` is no `(keyof void).x`);
   // the connector is the first item after a leading `sameLine` (`[$, sameLine, '<' …]`).
   const tailClosingLeds = new Set<object>();
+  const negativeLook = (e: RuleExpr): boolean => e.type === 'not' && e.body.type !== 'not';
   const classifyTail = (it: RuleExpr[], ruleName: string): void => {
     if (it.length === 0) return;
     if (it[0].type === 'op' || it[0].type === 'postfix') return;   // operator LEDs, not tails
@@ -214,7 +215,10 @@ export function createParser(grammar: CstGrammar) {
     const lastIsOperand = selfRefName(last, ruleName);                // open binary/ternary operand
     const wordConnector = conn?.type === 'literal' && /^[A-Za-z]/.test(conn.value);
     if (!lastIsOperand && !wordConnector) accessTailLeds.add(it);
-    if (lastIsOperand || wordConnector || last.type === 'not') tailClosingLeds.add(it);
+    // A trailing NEGATIVE lookahead closes the tail: the construct asserts that nothing of its kind
+    // follows (`Foo<T>` then no `(`). A positive one (`not(not(X))`, Python's `&t_lookahead`) asserts
+    // that a continuation DOES follow, so it leaves the tail open.
+    if (lastIsOperand || wordConnector || negativeLook(last)) tailClosingLeds.add(it);
   };
   for (const [ruleName, { leds }] of prattClassified.entries()) for (const led of leds) classifyTail(led.items, ruleName);
   for (const [ruleName, { continuations }] of leftRecClassified.entries()) for (const cont of continuations) classifyTail(cont, ruleName);
