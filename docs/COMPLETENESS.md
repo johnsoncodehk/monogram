@@ -260,15 +260,15 @@ Written by `npm run gen` (`node test/tm-completeness.ts --gen`); CI's artifact d
 
 | Grammar | Tokens | Keyword literals | Repo keys (reachable) | Leaf cross-check (corpus) |
 |---|---:|---:|---:|---:|
-| typescript | 11/11 | 74/74 | 160/160 | 89/89 |
-| javascript | 11/11 | 50/50 | 104/104 | 72/72 |
-| typescriptreact | 15/15 | 74/74 | 173/173 | 95/95 |
-| javascriptreact | 15/15 | 50/50 | 117/117 | 84/84 |
+| typescript | 11/11 | 74/74 | 163/163 | 89/89 |
+| javascript | 11/11 | 50/50 | 107/107 | 72/72 |
+| typescriptreact | 15/15 | 74/74 | 176/176 | 95/95 |
+| javascriptreact | 15/15 | 50/50 | 120/120 | 84/84 |
 | html | 7/7 | 0/0 | 28/28 | 175/175 |
 | yaml | 19/19 | 0/0 | 54/54 | 1541/1541 |
-| **total** | **78/78** | **248/248** | **636/636** | **2056/2056** |
+| **total** | **78/78** | **248/248** | **648/648** | **2056/2056** |
 
-**Decidable completeness: 962/962 = 100.00%** (token discharge 78/78 · keyword-literal discharge 248/248 · repository reachability 636/636) — a structural check on the emitted artifact, no corpus. Leaf cross-check (corpus, redundant): 2056/2056. **0 open completeness gaps.**
+**Decidable completeness: 974/974 = 100.00%** (token discharge 78/78 · keyword-literal discharge 248/248 · repository reachability 648/648) — a structural check on the emitted artifact, no corpus. Leaf cross-check (corpus, redundant): 2056/2056. **0 open completeness gaps.**
 
 <!-- COMPLETENESS-LEDGER:END -->
 

@@ -1,3 +1,4 @@
+import { identifierClassesOf } from './uni-ident.ts';
 import type { CstGrammar, RuleExpr, InjectClause, TokenDecl } from './types.ts';
 import { collectLiterals, escapeRegex, isKeywordLiteral } from './grammar-utils.ts';
 import { analyzeGrammar, directivesOf } from './grammar-analysis.ts';
@@ -187,10 +188,21 @@ function identExtraClass(token: TokenDecl | undefined): string {
   return token ? [...tokenPatternIdentifierExtraChars(token)].map(escapeForCharClass).join('') : '';
 }
 
-// Unicode identifier classes (the same set the parser's lexer accepts for non-ASCII
-// identifiers): `\p{L}\p{Nl}` start, plus `\p{Nd}\p{Mn}\p{Mc}\p{Pc}` continue.
-const UNICODE_ID_START = '\\p{L}\\p{Nl}';
-const UNICODE_ID_CONTINUE = '\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}';
+// Unicode identifier classes, as Oniguruma class CONTENTS (start; continue): the lexer's own
+// (uni-ident.ts identifierClassesOf: the identifier token's declared classes, else ECMAScript's
+// ID_Start / ID_Continue with `$`, `_`, ZWNJ, ZWJ) when the grammar declares an identifier token.
+// A grammar without one has no Unicode identifier in its lexer; its name tokens are widened by the
+// older letter classes (`\p{L}\p{Nl}`, `+ \p{Nd}\p{Mn}\p{Mc}\p{Pc}`), a TextMate convention.
+function unicodeIdentClasses(grammar: CstGrammar): { start: string; cont: string } {
+  if (!grammar.tokens.some(t => t.identifier)) return { start: '\\p{L}\\p{Nl}', cont: '\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}' };
+  const c = identifierClassesOf(grammar.tokens);
+  const inner = (cls: string) => {
+    const m = /^\[([^\]]*)\]$/.exec(cls);
+    if (!m || m[1].startsWith('^')) throw new Error(`identifier class ${cls}: TextMate widens a name class by the contents of one positive class`);
+    return m[1];
+  };
+  return { start: inner(c.start), cont: inner(c.continue) };
+}
 
 /**
  * Widen an ASCII-only identifier regex so the emitted TextMate (Oniguruma) pattern
@@ -207,10 +219,11 @@ const UNICODE_ID_CONTINUE = '\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}';
  * ONLY the TextMate emitter, never the lexer (which compiles the original ASCII token
  * pattern). If no identifier class is found, the pattern is returned unchanged.
  */
-function unicodeWidenIdentPattern(identRegex: string): string {
+function unicodeWidenIdentPattern(identRegex: string, grammar: CstGrammar): string {
+  const uni = unicodeIdentClasses(grammar);
   return identRegex.replace(/\[[^\]]*\]/g, cls => {
     if (!/[_$]/.test(cls)) return cls;                   // not an identifier class (e.g. hex) — leave alone
-    const add = /0-9/.test(cls) ? UNICODE_ID_CONTINUE : UNICODE_ID_START;
+    const add = /0-9/.test(cls) ? uni.cont : uni.start;
     return cls.slice(0, -1) + add + ']';                 // insert before the closing `]`
   });
 }
@@ -1091,7 +1104,7 @@ function generateAngleBracketPatterns(
   // discrimination identical to the recursive form (verified), only the depth cap is gone.
   const idExtra = identExtraClass(identToken);
   const sepClass = escapeForCharClass(ambiguity.separator);
-  const typeArgScanClass = `[\\w${idExtra}${UNICODE_ID_CONTINUE}<>${sepClass}\\s]`;
+  const typeArgScanClass = `[\\w${idExtra}${unicodeIdentClasses(grammar).cont}<>${sepClass}\\s]`;
   const typeArgConfirm = `${typeArgScanClass}*>`;
 
   // Lookbehind: generic '<' must follow identifier / ] / )
@@ -1955,7 +1968,7 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
 
   // Tag / attribute name pattern = the grammar's identifier token (widened for Unicode).
   const identTok = grammar.tokens.find(t => t.identifier);
-  const namePat = identTok ? unicodeWidenIdentPattern(tokenPatternSource(identTok)) : '[a-zA-Z][\\w:.-]*';
+  const namePat = identTok ? unicodeWidenIdentPattern(tokenPatternSource(identTok), grammar) : '[a-zA-Z][\\w:.-]*';
 
   // Punctuation scope for the tag delimiters is declared in the grammar (`<`,`>`,`/` →
   // punctuation.definition.tag); begin/end leaves follow the TextMate convention.
@@ -2664,7 +2677,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
   // Widen the identifier pattern so non-ASCII names (`Ω`, Cyrillic `А`) are scoped,
   // matching the parser lexer's Unicode fallback. This widened form is used only in
   // TextMate (Oniguruma) output, never by the lexer.
-  const identPattern = identToken ? unicodeWidenIdentPattern(tokenPatternSource(identToken)) : '[a-zA-Z_]\\w*';
+  const identPattern = identToken ? unicodeWidenIdentPattern(tokenPatternSource(identToken), grammar) : '[a-zA-Z_]\\w*';
 
   // Contextual operator keywords (e.g. `as`/`keyof`/`is`/`satisfies`/`infer`):
   // keyword.operator.expression words that double as identifiers, so they are a
@@ -3166,8 +3179,9 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
         // scalar that resolves to a constant) becomes a multi-scope TM name — each part namespaced
         // with `langName` independently. No-op for the common single-scope case.
         name: emittedScope.split(' ').map(s => `${s}.${langName}`).join(' '),
-        // The bare-identifier rule must scope non-ASCII names too (`Ω`, Cyrillic `А`).
-        match: tok === identToken ? identPattern : tokenPatternSource(tok),
+        // The bare-identifier rule must scope non-ASCII names too (`Ω`, Cyrillic `А`), and so must a
+        // prefixed identifier (`#℘`: `identifierPrefix`, whose name the lexer reads as the identifier).
+        match: tok === identToken ? identPattern : tok.identifierPrefix ? unicodeWidenIdentPattern(tokenPatternSource(tok), grammar) : tokenPatternSource(tok),
       };
       topPatterns.push({ include: `#${key}` });
       // Numeric-literal tokens (decimal/hex/octal/binary/bigint) land here — record
@@ -3554,7 +3568,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       const kvSepIsValuePos = !!vps?.some(v => v.source === 'keyValueSeparator');
       const keyScope = facts.explicitKey?.keyScope;
       const blockKeyTok = grammar.tokens.find(t => t.scope === keyScope && !t.string && t.blockPattern && tokenPatternPrefixBeforeTrailingLookahead(t));
-      const keyBlockMatch = blockKeyTok ? unicodeWidenIdentPattern(tokenBlockPatternSource(blockKeyTok)!) : undefined;
+      const keyBlockMatch = blockKeyTok ? unicodeWidenIdentPattern(tokenBlockPatternSource(blockKeyTok)!, grammar) : undefined;
       const keyColonGuard = (kvSepIsValuePos && keyBlockMatch) ? `(?!${keyBlockMatch})` : '';
       // Value-position lookahead: after the node indent is stripped, the line must carry an INLINE
       // BLOCK plain value — either `<key>: <plain>` (mapping value) or a `-`/`?` indicator + `<plain>`

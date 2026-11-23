@@ -4,6 +4,7 @@ import { directivesOf } from './grammar-analysis.ts';
 import { armGraph, findWindows, hasWindow, inArmOrder } from './arm-graph.ts';
 import { classifyTokenScope, scopeToMonarch } from './highlight-roles.ts';
 import { highlightFacts } from './highlight-facts.ts';
+import { identifierClassesOf } from './uni-ident.ts';
 import { info as patternInfo, type CSet } from './lex-match-plan.ts';
 import { collectLiterals, escapeRegex, isKeywordLiteral } from './grammar-utils.ts';
 import {
@@ -72,6 +73,8 @@ export interface MonarchLanguage {
   defaultToken: string;
   tokenPostfix: string;
   ignoreCase: boolean;
+  /** Every regex is compiled with the `u` flag (Monaco's `unicode` option). */
+  unicode?: boolean;
   /** Bracket pairs for Monaco bracket matching / colorization. */
   brackets: { open: string; close: string; token: string }[];
   /** The tokenizer state machine. */
@@ -239,12 +242,19 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
   const { scopeOverrides } = grammar;
   const view = regionView(grammar);
 
-  // ── Identifier token: prefer the declared `identifier` hint (the lexer's own
-  //    source of truth), else the token gen-tm would treat as the identifier. ──
-  const identToken =
-    grammar.tokens.find(t => t.identifier) ??
-    grammar.tokens.find(t => classifyTokenScope(t) === 'variable.other');
-  const identRegex = identToken ? tokenPatternSource(identToken) : '[a-zA-Z_]\\w*';
+  // ── Identifier token: the one TextMate reads (highlight-facts' identToken: the declared
+  //    `identifier` token, else the bare `variable.other` token). ──
+  const identToken = highlightFacts(grammar).identToken;
+  // A declared identifier token's run is the lexer's: its ASCII pattern or a run starting at a
+  // Unicode IdentifierStart character, extended by IdentifierPart characters (uni-ident.ts
+  // identifierClassesOf, the classes the lexer compiles). The classes are `\p{…}` properties, so
+  // the language is compiled in u-mode (`unicode: true`): EVERY regex of it must then be valid
+  // under the `u` flag (no identity escape of a non-syntax character, no lone `{`), which
+  // test/monarch-dialect.ts's compile section checks.
+  const uniIdent = identToken?.identifier ? identifierClassesOf(grammar.tokens) : null;
+  const identRegex = !identToken ? '[a-zA-Z_]\\w*'
+    : uniIdent ? `(?:${anchoredSource(tokenPatternSource(identToken))}|${uniIdent.start})${uniIdent.continue}*`
+    : tokenPatternSource(identToken);
 
   // ── Every literal from rules + prec ops (the lexer's punctuation universe) ──
   const allLiterals = new Set<string>();
@@ -304,6 +314,11 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
   }
   for (const [word, scopes] of scopeOverrides) {
     if (!isKeywordLiteral(word) || word.startsWith('.') || allLiterals.has(word)) continue;
+    // A `support.class` word (`Set`, `Error`, `Array`) is an identifier: in an expression state it
+    // is a VALUE name (`new Set()`, `Array.isArray(v)`, `throw new Error(…)`: the parser reads an
+    // identifier reference there), so it keeps the identifier token; in a type state (`typeargs`)
+    // every name is a type anyway.
+    if (scopes[0] === 'support.class' || scopes[0].startsWith('support.class.')) continue;
     addWord(word, scopes[0]);
   }
   for (const txt of regexCtx?.divisionAfterTexts ?? [])
@@ -563,7 +578,10 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
     if (t.flags.includes('skip') || t.flags.includes('regex') || t.template || t === identToken) continue;
     if (t.name === grammar.elements?.text || grammar.elements?.tagTokens?.includes(t.name) || grammar.elements?.rawText?.some(r => r.token === t.name)) continue;  // an element region's own tokens exist only inside the region
     if (t.string) continue;  // handled as a string span above
-    const pattern = tokenPatternSource(t);
+    // a prefixed identifier (`#name`: `identifierPrefix`) reads its name as the identifier does
+    const pattern = t.identifierPrefix && uniIdent
+      ? `(?:${anchoredSource(tokenPatternSource(t))}|${escapeRegex(t.identifierPrefix)}${uniIdent.start})${uniIdent.continue}*`
+      : tokenPatternSource(t);
     const scope = classifyTokenScope(t);
     if (scope.startsWith('string') || scope.startsWith('constant.numeric')) continue;
     otherTokenRules.push([anchoredSource(pattern), toValue(scopeToMonarch(scope))]);
@@ -778,6 +796,7 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
     defaultToken: 'invalid',
     tokenPostfix: `.${(grammar as { name?: string }).name ?? 'lang'}`,
     ignoreCase: false,
+    ...uniIdent ? { unicode: true } : {},
     brackets: bracketPairs,
     tokenizer,
   };
