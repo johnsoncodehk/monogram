@@ -176,13 +176,14 @@ export function editSessionBatch(cmd: string, jsons: string[], fast: boolean): E
 // node start per input. Go/Rust run their emitted CLI runner per input (a native start is ~1 ms).
 export type TsDoc = { edit(edits: { start: number; end: number; text: string }[]): unknown; align(): unknown; root(): unknown };
 export type TsLib = {
-  parse(src: string): unknown; tokenize(src: string): { kind: string; text: string; nl: boolean; lid: number }[];
+  parse(src: string): unknown; tokenize(src: string): { kind: string; text: string; nl: boolean; lid: number; off: number; end: number }[];
   createDoc(src: string, opts: { validate?: boolean; builder?: unknown }): TsDoc;
   /** The library's lid_of, exported by the gate (TS_LID_OF) — the id a Doc gives a rebuilt token. */
   __lid_of(text: string): number;
   parseTotal(src: string, builder: unknown): TsTotal;
   parseWith(src: string, builder: unknown): unknown;
   parseInterpreted(src: string, builder: unknown, depth: number): { root: unknown; steps: number };
+  lastTotalWork(): { steps: number; attempts: number };
   cstBuilder: unknown;
 };
 // The gate's one addition to the imported ts library: its lid_of, which the runners' lid-of mode
@@ -286,11 +287,14 @@ export type Runner = {
   total: (srcs: string[]) => Total[];
   /** The strict interpreter (recovery-family.ts) over a whole corpus, `depth` rule levels interpreted. */
   interp: (srcs: string[], depth: number) => Interp[];
+  /** (TS target) the target's tokens of src (kind '' for punctuation; lid 0: no literal), or null on a lexer error. */
+  lexToks?: (src: string) => { off: number; end: number; kind: string; text: string; lid: number }[] | null;
 };
-// One parseTotal outcome: accepted, and each diagnostic as [off, end, message, relOff, relEnd,
-// relMessage] (relOff -1: no related location).
+// One parseTotal outcome: accepted (a tree and no diagnostic), whether it gave a tree, each
+// diagnostic as [off, end, message, relOff, relEnd, relMessage] (relOff -1: no related location),
+// the tree (canonical CST JSON), and the work a recovery took (interpreted steps, attempts).
 export type DiagRow = [number, number, string, number, number, string];
-export type Total = { ok: boolean; errors: DiagRow[]; cst?: string };
+export type Total = { ok: boolean; root: boolean; errors: DiagRow[]; cst?: string; steps: number; attempts: number };
 export function totalBatch(cmd: string, srcs: string[]): Total[] {
   const sent = srcs.filter((s) => !s.includes('\0'));
   const r = spawnSync(cmd, ['batch-total'], { input: sent.join('\0'), encoding: 'utf8', maxBuffer: 1 << 30 });
@@ -298,9 +302,9 @@ export function totalBatch(cmd: string, srcs: string[]): Total[] {
   if (r.status !== 0 || lines.length !== sent.length + 1) throw new Error(`${cmd} batch-total: exit ${r.status}, ${lines.length - 1} lines for ${sent.length} inputs\n${(r.stderr ?? '').slice(0, 2000)}`);
   let li = 0;
   return srcs.map((src): Total => {
-    if (src.includes('\0')) return { ok: false, errors: [[0, 0, 'NUL', -1, -1, '']] };
-    const [ok, errors] = JSON.parse(lines[li++]!) as [boolean, DiagRow[]];
-    return { ok, errors };
+    if (src.includes('\0')) return { ok: false, root: false, errors: [[0, 0, 'NUL', -1, -1, '']], steps: 0, attempts: 0 };
+    const [root, errors, cst, steps, attempts] = JSON.parse(lines[li++]!) as [boolean, DiagRow[], string, number, number];
+    return { ok: root && errors.length === 0, root, errors, cst: root ? canon(JSON.parse(cst)) : undefined, steps, attempts };
   });
 }
 // One interpreted parse: its verdict, its tree (the CST JSON, as `batch` gives it), the steps it
@@ -333,7 +337,8 @@ export function interpBatch(cmd: string, srcs: string[], depth: number): Interp[
 export type TsTotal = { root: unknown; errors: { offset: number; end: number; message: string; related?: { offset: number; end: number; message: string } }[] };
 export function tsTotal(lib: TsLib, src: string): Total {
   const t = lib.parseTotal(src, lib.cstBuilder);
-  return { ok: t.root !== null, cst: t.root === null ? undefined : canon(t.root), errors: t.errors.map((e): DiagRow => [e.offset, e.end, e.message, e.related?.offset ?? -1, e.related?.end ?? -1, e.related?.message ?? '']) };
+  const w = lib.lastTotalWork();
+  return { ok: t.root !== null && t.errors.length === 0, root: t.root !== null, cst: t.root === null ? undefined : canon(t.root), errors: t.errors.map((e): DiagRow => [e.offset, e.end, e.message, e.related?.offset ?? -1, e.related?.end ?? -1, e.related?.message ?? '']), steps: w.steps, attempts: w.attempts };
 }
 // Every parser of this gate is emitted with total parsing (the emit option `recovery`), whose
 // region is appended to the default module and changes none of it: each module begins with the
@@ -578,6 +583,7 @@ export async function prepareAll(cases: Case[] = selectedCases()): Promise<Prepa
       edit: (json, fast) => tsEditSession(tsLib, json, fast), editBatch: (jsons, fast) => jsons.map((json) => tsEditSession(tsLib, json, fast)),
       spans: { cmd: 'node', args: [tsFile, 'tok-spans'] }, utf8Edits: false, total: (srcs) => srcs.map((src) => tsTotal(tsLib, src)),
     interp: (srcs, depth) => srcs.map((src) => tsInterp(tsLib, src, depth)),
+    lexToks: (src) => { try { return tsLib.tokenize(src).map((t) => ({ off: t.off, end: t.end, kind: t.kind, text: t.text, lid: t.lid })); } catch { return null; } },
     }];
     const native: Pending['native'] = [];
     if (HAS_GO && !c.tsOnly && (!TARGETS_ONLY || TARGETS_ONLY.includes('go'))) {

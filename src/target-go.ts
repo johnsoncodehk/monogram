@@ -10,11 +10,11 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
-import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR } from './recovery-family.ts';
+import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT } from './recovery-family.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, unitMask, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
@@ -3130,14 +3130,17 @@ const GO_BATCH_INTERP = `	if len(os.Args) > 2 && os.Args[1] == "batch-interp" {
 const GO_BATCH_TOTAL = `	if len(os.Args) > 1 && os.Args[1] == "batch-total" {
 		var b strings.Builder
 		for _, s := range strings.Split(src, "\\x00") {
-			_, ok, errs := ParseTotal(s, &CstBuilder{})
+			cb := &CstBuilder{}
+			h, ok, errs, w := ParseTotalWork(s, cb)
 			rows := make([][]interface{}, 0, len(errs))
 			for _, e := range errs {
 				row := []interface{}{e.Off, e.End, e.Message, -1, -1, ""}
 				if e.Related != nil { row[3], row[4], row[5] = e.Related.Off, e.Related.End, e.Related.Message }
 				rows = append(rows, row)
 			}
-			line, _ := json.Marshal([]interface{}{ok, rows})
+			cst := ""
+			if ok { cst = CstJSONWith(cb, h) }
+			line, _ := json.Marshal([]interface{}{ok, rows, cst, w.Steps, w.Attempts})
 			b.Write(line); b.WriteByte('\\n')
 		}
 		os.Stdout.WriteString(b.String())
@@ -3164,9 +3167,17 @@ function recoveryEngineGo(ir: ParserIR): string {
 type recov struct {
 	p *parserW
 	marks []mark
+	rmh []int
+	rm []int
 	tabrt []int
 	finOff, opN, steps int
 	opEnd uint32
+}
+// A fresh repair memory (recovery-family.ts RM_*): not recovering, no failure, no probe, no frame.
+func newRecov(p *parserW) *recov {
+	rm := make([]int, ${RM_DIAGS}, ${RM_DIAGS} + 64)
+	rm[${RM_FAIL}], rm[${RM_PROBE}], rm[${RM_SP}] = -1, -1, -1
+	return &recov{p: p, rm: rm, tabrt: unpackInts(tabSrt)}
 }
 func (rv *recov) enPos() int { return rv.p.pos }
 func (rv *recov) enSetPos(q int) { rv.p.pos = q }
@@ -3197,9 +3208,24 @@ func (rv *recov) enTpl(hole int) bool {
 }
 func (rv *recov) enSh() int { return len(rv.p.scratch) }
 func (rv *recov) enCut(h int) { rv.p.scratch = rv.p.scratch[:h] }
-func (rv *recov) enMark() int { rv.marks = append(rv.marks, rv.p.mark()); return len(rv.marks) - 1 }
-func (rv *recov) enReset(k int) { m := rv.marks[k]; rv.p.back(m.pos); rv.p.scratch = rv.p.scratch[:m.sb]; rv.p.b.Restore(m.nb, m.kb) }
-func (rv *recov) enUnmark(k int) { rv.marks = rv.marks[:k] }
+func (rv *recov) enMark() int { rv.marks = append(rv.marks, rv.p.mark()); rv.rmh = append(rv.rmh, len(rv.rm)); return len(rv.marks) - 1 }
+func (rv *recov) enReset(k int) { m := rv.marks[k]; rv.p.back(m.pos); rv.p.scratch = rv.p.scratch[:m.sb]; rv.p.b.Restore(m.nb, m.kb); rv.rm = rv.rm[:rv.rmh[k]] }
+func (rv *recov) enUnmark(k int) { rv.marks = rv.marks[:k]; rv.rmh = rv.rmh[:k] }
+func (rv *recov) enMarkDrop(k int) { rv.marks = append(rv.marks[:k], rv.marks[k+1:]...); rv.rmh = append(rv.rmh[:k], rv.rmh[k+1:]...) }
+func (rv *recov) enRm(i int) int { return rv.rm[i] }
+func (rv *recov) enRmSet(i, v int) { rv.rm[i] = v }
+func (rv *recov) enRmLen() int { return len(rv.rm) }
+func (rv *recov) enRmPush(v int) { rv.rm = append(rv.rm, v) }
+func (rv *recov) enRmCut(n int) { rv.rm = rv.rm[:n] }
+func (rv *recov) enMiss(r int) {
+	p := rv.p
+	off := 0
+	if p.pos < len(p.toks) { off = int(p.toks[p.pos].Off) } else if p.pos > 0 { off = int(p.toks[p.pos-1].End) }
+	n := p.finishW(uint16(r), len(p.scratch), off, p.pos)
+	if n.present { p.scratch = append(p.scratch, n.h) }
+}
+func (rv *recov) enLookEnd() int { return rv.p.lookEnd() }
+func (rv *recov) enLookSet(e int) { rv.p.maxLook, rv.p.peekEnd = e, 0 }
 func (rv *recov) enWin(r, c, save, sb int) {
 	n := rv.p.finishW(uint16(r), c, rv.p.offAt(save), save)
 	rv.p.scratch = rv.p.scratch[:sb]
@@ -3275,7 +3301,7 @@ func ParseInterpreted(src string, b Builder, depth int) (h int32, ok bool, steps
 	p.scratch = p.scratch[:0]
 	p.lookReset()
 	p.capped, p.form, p.tail, p.suppressNext, p.suppressCur, p.ctx = false, 0, false, 0, 0, 0
-	rv := &recov{p: p, tabrt: unpackInts(tabSrt)}
+	rv := newRecov(p)
 	ok = rv.riRule(${ruleIdOf(ar, ir.entry)}, depth) && p.pos == len(p.toks)
 	var fr int32
 	present := len(p.scratch) == 1
@@ -3289,12 +3315,16 @@ func ParseInterpreted(src string, b Builder, depth int) (h int32, ok bool, steps
 }
 
 function recoveryRegionGo(ir: ParserIR, shared: SharedAlgorithms): string {
-  const reuse = !!ir.reuse;
+  const ids = buildLexIdPlan(ir);
   return `
 // ---- recovery: the emit option { recovery: true }; generated from src/recovery-family.ts (shared by the TS / Go / Rust targets) ----
-type diag struct{ Kind, Off, End, RelOff, RelEnd int }
+type diag struct{ Kind, Off, End, Arg int }
 // The recovery interpreter's best longest-match candidate so far (recovery-family.ts BEST).
-type bestCand struct{ Pos, Off, Won, Form, Tail, Capped int }
+type bestCand struct{ Pos, Off, Won, Form, Tail, Capped, H0, Hb int }
+// The words of a repair's message: a literal's text (by lid), a token kind's name.
+var lidTexts = []string{${ids.lids.map(J).join(', ')}}
+func litText(x int) string { return lidTexts[x] }
+func kindText(x int) string { return kindStr[x] }
 ${shared.recoveryFamily(ir)}
 ${recoveryEngineGo(ir)}
 // Diagnostic is a span of the source (byte offsets), its message, and a related location or nil.
@@ -3308,32 +3338,47 @@ type Related struct {
 \tOff, End int
 \tMessage  string
 }
-func diagnosticOf(src string, d diag) Diagnostic {
-\tout := Diagnostic{Off: d.Off, End: d.End, Message: diagMessage(src, d)}
-\tif d.RelOff >= 0 { out.Related = &Related{Off: d.RelOff, End: d.RelEnd, Message: diagRelated(d)} }
-\treturn out
+func diagnosticOf(src string, d diag) Diagnostic { return Diagnostic{Off: d.Off, End: d.End, Message: diagMessage(src, d)} }
+
+// TotalWork is the work of a parse ParseTotalWork recovered: the steps it interpreted, the attempts it made.
+type TotalWork struct{ Steps, Attempts int }
+
+// ParseTotal is ParseWith that also parses a rejected text: an accepted text gives ParseWith's root
+// and no errors; a rejected one gives a tree all the same (ok), with its repairs (recovery-family.ts):
+// $missing nodes (zero-width, no children) where a literal or token the parse required is absent,
+// $error nodes over tokens it skipped, and one diagnostic per repair, in order. A text the lexer
+// refuses gives ok=false and the lexer's error. It does not panic on input.
+func ParseTotal(src string, b Builder) (h int32, ok bool, errs []Diagnostic) {
+	h, ok, errs, _ = ParseTotalWork(src, b)
+	return
 }
 
-// ParseTotal is ParseWith that also says why a text is rejected: an accepted text gives ParseWith's
-// root and no errors, a rejected one ok=false and its errors (a lexer error, or the parse's primary
-// error), each with its span in the source. It does not panic on input.
-func ParseTotal(src string, b Builder) (h int32, ok bool, errs []Diagnostic) {
-\tp, fr, entryOk, err := runW(src, b)
-\tif err != nil {
-\t\tend := err.End
-\t\tif end < err.Off { end = err.Off }
-\t\treturn 0, false, []Diagnostic{{Off: err.Off, End: end, Message: lexError(src, err).Msg}}
-\t}
-\tok = entryOk && p.pos == len(p.toks)
-\tif !ok {
-\t\t// The examined extent: the furthest of every top-level entry's (lookEnd holds the last one's).
-\t\tlook := p.lookEnd()${reuse ? '\n\t\tfor _, m := range p.entries { if m.Ext > look { look = m.Ext } }' : ''}
-\t\terrs = []Diagnostic{diagnosticOf(src, rejectDiag(p.toks, p.pos, entryOk, look))}
-\t}
-\tp.cursor.toks, p.src, p.b = nil, "", nil // the workspace keeps buffers, not the input or the builder
-\tif !ok { return 0, false, errs }
-\tif !fr.present { panic(errNoRoot) }
-\treturn fr.h, true, nil
+// ParseTotalWork is ParseTotal and the work its recovery took (zero for an accepted text).
+func ParseTotalWork(src string, b Builder) (h int32, ok bool, errs []Diagnostic, w TotalWork) {
+	p, fr, entryOk, err := runW(src, b)
+	if err != nil {
+		end := err.End
+		if end < err.Off { end = err.Off }
+		return 0, false, []Diagnostic{{Off: err.Off, End: end, Message: lexError(src, err).Msg}}, w
+	}
+	if entryOk && p.pos == len(p.toks) {
+		p.cursor.toks, p.src, p.b = nil, "", nil // the workspace keeps buffers, not the input or the builder
+		if !fr.present { panic(errNoRoot) }
+		return fr.h, true, nil, w
+	}
+	b.Restore(0, 0)
+	p.pos = 0
+	p.scratch = p.scratch[:0]
+	p.lookReset()
+	p.capped, p.form, p.tail, p.suppressNext, p.suppressCur, p.ctx = false, 0, false, 0, 0, 0
+	rv := newRecov(p)
+	rv.riTotal()
+	if len(p.scratch) != 1 { panic(errNoRoot) }
+	h = p.scratch[0]
+	for i := ${RM_DIAGS}; i+2 < len(rv.rm); i += 3 { errs = append(errs, diagnosticOf(src, repairDiag(p.toks, rv.rm[i], rv.rm[i+1], rv.rm[i+2]))) }
+	w = TotalWork{Steps: rv.steps, Attempts: rv.rm[${RM_ATT}]}
+	p.cursor.toks, p.src, p.b = nil, "", nil
+	return h, true, errs, w
 }
 `;
 }
@@ -3421,7 +3466,7 @@ type engine struct {
 ${reuse ? '\tentries []EntryMeta\n' : ''}}
 const arenaCompactK = 4
 
-${renderArenaTablesGo(ar, ids)}
+${renderArenaTablesGo(opts.recovery ? withReservedRules(ar) : ar, ids)}
 
 ${lexText}
 

@@ -304,9 +304,9 @@ const guarded = (body: Stmt[]): Stmt => if_(and(ge(S1, n(0)), not(call('enAhead'
 const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
   run('enTick'),
   let_('op', T(v('s'))),
-  op(REC_S_LIT, [ret(or(call('enLit', S1), call('riMiss', n(DK_MISS_LIT), S1)))]),
-  op(REC_S_COMP, [ret(or(call('enComp', S1), call('riMiss', n(DK_MISS_LIT), S1)))]),
-  op(REC_S_TOK, [ret(or(call('enTok', S1), call('riMiss', n(DK_MISS_TOK), S1)))]),
+  op(REC_S_LIT, [ret(or(call('enLit', S1), call('riMiss', n(REC_S_LIT), S1)))]),
+  op(REC_S_COMP, [ret(or(call('enComp', S1), call('riMiss', n(REC_S_COMP), S1)))]),
+  op(REC_S_TOK, [ret(or(call('enTok', S1), call('riMiss', n(REC_S_TOK), S1)))]),
   op(REC_S_TPLTOK, [ret(or(call('enTok', S1), call('enTpl', S2)))]),
   op(REC_S_RULE, [ret(call('riRule', S1, v('d')))]),
   op(REC_S_RULEBP, [
@@ -594,15 +594,36 @@ const riBarIn = method('riBarIn', [['lo', 'int'], ['hi', 'int']], ['bool'], [
 ]);
 // A required match failed at token p: the attempt's farthest failure.
 const riFail = method('riFail', [['p', 'int']], [], [if_(gt(v('p'), rm(RM_FAIL)), [run('enRmSet', n(RM_FAIL), v('p'))])]);
-// A required literal (kind DK_MISS_LIT, arg its lid) or token (DK_MISS_TOK, arg its kid) is not at
-// the position: supplied (a `$missing` node and its repair) when a bar is near and no probe is
-// still unconsumed; else a failure.
-const riMiss = method('riMiss', [['kind', 'int'], ['arg', 'int']], ['bool'], [
+// The match of step op (REC_S_LIT / COMP: a literal, lid x; REC_S_TOK: a token of kind x).
+const riMatch = method('riMatch', [['op', 'int'], ['x', 'int']], ['bool'], [
+  if_(eq(v('op'), n(REC_S_LIT)), [ret(call('enLit', v('x')))]),
+  if_(eq(v('op'), n(REC_S_COMP)), [ret(call('enComp', v('x')))]),
+  ret(call('enTok', v('x'))),
+]);
+// A required literal or token (step op, x its lid / kid) is not at the position. When a bar is near
+// and no probe is still unconsumed it is repaired: when it is the token after, the token at the
+// position is extra (an `$error` node over it, then the match); else it is supplied (a `$missing`
+// node). Otherwise a failure.
+const riMiss = method('riMiss', [['op', 'int'], ['x', 'int']], ['bool'], [
   let_('p', call('enPos')),
   let_('pr', rm(RM_PROBE)),
   if_(or(and(ge(v('pr'), n(0)), bin('le', v('p'), v('pr'))), not(call('riBarIn', v('p'), add(v('p'), n(2))))), [run('riFail', v('p')), ret(fls)]),
+  if_(ge(call('enPeekKid'), n(0)), [
+    let_('k', call('enMark')),
+    let_('c', call('enSh')),
+    run('enLeafKid'),
+    run('enFinLed', T(TR(0)), v('c'), n(0), v('p')),
+    if_(call('riMatch', v('op'), v('x')), [
+      run('enUnmark', v('k')),
+      run('enRmPush', n(DK_SKIP)), run('enRmPush', v('p')), run('enRmPush', add(v('p'), n(1))),
+      ret(tru),
+    ]),
+    run('enReset', v('k')), run('enUnmark', v('k')),
+  ]),
   run('enMiss', T(TR(1))),
-  run('enRmPush', v('kind')), run('enRmPush', v('p')), run('enRmPush', v('arg')),
+  let_('kind', n(DK_MISS_LIT)),
+  if_(eq(v('op'), n(REC_S_TOK)), [set('kind', n(DK_MISS_TOK))]),
+  run('enRmPush', v('kind')), run('enRmPush', v('p')), run('enRmPush', v('x')),
   ret(tru),
 ]);
 // Native-first (recovering only): rule r (bp < 0) or Pratt rule r at bp, natively; kept when it
@@ -672,15 +693,26 @@ const riAttempts = method('riAttempts', [['el', 'int'], ['upto', 'int']], ['bool
   ]),
   ret(fls),
 ]);
-// The totality fallback: the token at the position and the ones after it up to the next that can
-// begin a top-level entry (FIRST signature sync; -1: unknown, one token; all: every token left)
-// become one `$error` node and its repair. At the end of input: a `$error` node with no children.
-const riSkip = method('riSkip', [['sync', 'int'], ['all', 'bool']], [], [
+// The totality fallback: the token at the position and the ones after it up to the next where a
+// top-level entry el parses strictly (one that can begin one: FIRST signature sync, -1 unknown;
+// el < 0: every token left) become one `$error` node and its repair. At the end of input: an
+// `$error` node with no children.
+const riSkip = method('riSkip', [['el', 'int'], ['sync', 'int']], [], [
   let_('p0', call('enPos')),
   let_('c', call('enSh')),
   if_(lt(call('enPeekKid'), n(0)), [run('enMiss', T(TR(0))), run('enRmPush', n(DK_SKIP)), run('enRmPush', v('p0')), run('enRmPush', v('p0')), ret()]),
   run('enLeafKid'),
-  while_(and(ge(call('enPeekKid'), n(0)), or(v('all'), and(ge(v('sync'), n(0)), not(call('riSig', v('sync')))))), [run('enLeafKid')]),
+  while_(ge(call('enPeekKid'), n(0)), [
+    if_(and(ge(v('el'), n(0)), or(lt(v('sync'), n(0)), call('riSig', v('sync')))), [
+      let_('p1', call('enPos')),
+      let_('k', call('enMark')),
+      let_('ok', call('riStep', v('el'), n(0)), 'bool'),
+      let_('p2', call('enPos')),
+      run('enReset', v('k')), run('enUnmark', v('k')),
+      if_(and(v('ok'), gt(v('p2'), v('p1'))), [brk]),
+    ]),
+    run('enLeafKid'),
+  ]),
   run('enFinLed', T(TR(0)), v('c'), n(0), v('p0')),
   run('enRmPush', n(DK_SKIP)), run('enRmPush', v('p0')), run('enRmPush', call('enPos')),
 ]);
@@ -699,7 +731,7 @@ const riTotal = method('riTotal', [], [], [
   let_('sync', R(TR(4))),
   let_('sb', call('enSh')),
   if_(lt(v('el'), n(0)), [
-    if_(not(call('riAttempts', n(-1), n(0))), [run('riSkip', n(-1), tru), run('enWin', v('entry'), v('sb'), n(0), v('sb'))]),
+    if_(not(call('riAttempts', n(-1), n(0))), [run('riSkip', n(-1), n(-1)), run('enWin', v('entry'), v('sb'), n(0), v('sb'))]),
   ], [
     let_('pp', n(-1)),
     while_(ge(call('enPeekKid'), n(0)), [
@@ -718,7 +750,7 @@ const riTotal = method('riTotal', [], [], [
           if_(not(v('ok')), [run('enSetPos', v('pp')), if_(not(call('riAttempts', v('el'), v('pp'))), [])]),
           run('enUnmark', n(0)),
         ]),
-        if_(not(v('ok')), [run('riSkip', v('sync'), fls)]),
+        if_(not(v('ok')), [run('riSkip', v('el'), v('sync'))]),
         set('pp', n(-1)),
       ]),
     ]),
@@ -745,7 +777,7 @@ const repairDiag: Fn = {
 
 export function recoveryFamilyFns(): Fn[] {
   return [repairDiag, diagMessage, riRef, riSig, riIn, riGuard, riRule, riCand, riRd, riRdIn, riList, riStep, riOperand, riOp, riNud, riBp, riBpIn,
-    riRmDrop, riBarIn, riFail, riMiss, riNat, riUnit, riAttempts, riSkip, riTotal, ...ENGINE_EXTERNS, ...TEXT_EXTERNS];
+    riRmDrop, riBarIn, riFail, riMatch, riMiss, riNat, riUnit, riAttempts, riSkip, riTotal, ...ENGINE_EXTERNS, ...TEXT_EXTERNS];
 }
 
 // The family for a grammar: the functions, the record Diag and the plan's int table `rt`.
