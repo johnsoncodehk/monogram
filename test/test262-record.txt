@@ -811,11 +811,6 @@ annexB/language/statements/for-in/let-initializer.js
 annexB/language/statements/for-in/strict-initializer.js
 annexB/language/statements/for-in/var-arraybindingpattern-initializer.js
 annexB/language/statements/for-in/var-objectbindingpattern-initializer.js
-## accept/hashbang-position
-language/comments/hashbang/preceding-directive-prologue-sc.js
-language/comments/hashbang/preceding-directive-prologue.js
-language/comments/hashbang/preceding-hashbang.js
-language/comments/hashbang/preceding-line-comment.js
 ## accept/accessor-parameters
 language/expressions/class/getter-param-dflt.js
 language/expressions/object/getter-param-dflt.js

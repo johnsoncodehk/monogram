@@ -3,12 +3,12 @@ import { computeNullableRules, findEntryRule } from './grammar-analysis.ts';
 import {
   altPattern, anyChar, followedBy, never, noneOf, notFollowedBy,
   notPrecededBy, oneOf, optPattern, plus, precededBy, range, repeat,
-  seq, star, start, end,
+  seq, star, start, lineStart, end,
 } from './token-pattern.ts';
 
 export {
   altPattern, anyChar, followedBy, never, noneOf, notFollowedBy, notPrecededBy, oneOf,
-  optPattern, plus, precededBy, range, repeat, seq, star, start, end,
+  optPattern, plus, precededBy, range, repeat, seq, star, start, lineStart, end,
 };
 
 // ── Token ──
