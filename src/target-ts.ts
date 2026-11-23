@@ -3558,7 +3558,7 @@ export function parseTotal<H>(src: string, builder: Builder<H>): { root: H | nul
 function emitRunner(): string {
     return `// CLI runner (harness only): stdin → CST JSON. Appended to the parser library by the gate;
 // NOT part of the emitted parser. The import is hoisted, so it may follow the library code.
-import { cookTable } from './shape-cook.ts';
+import { readFileSync } from 'node:fs';
 const _raw = readFileSync(0, 'utf8');
 const _editFast = process.argv.includes('edit-session-fast');
 const _cstJSON = (n: Cst) => JSON.stringify(n);

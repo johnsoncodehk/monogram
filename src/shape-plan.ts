@@ -60,10 +60,13 @@ export function armKeys(r: RuleIR): { key: string; arm: string }[] {
   r.nudOrder.forEach((_, i) => out.push({ key: `nud${i}`, arm: r.nudNames[i]! }));
   r.leds.forEach((_, i) => out.push({ key: `led${i}`, arm: r.ledNames[i]! }));
   r.postfixToks.forEach((_, i) => out.push({ key: `post${i}`, arm: r.postfixTokNames[i]! }));
-  if (r.opNames) { out.push({ key: 'bin', arm: r.opNames.binary }); out.push({ key: 'postop', arm: r.opNames.postfix }); }
+  // The operator sites are printed for every Pratt rule; one without operator arms (a left-recursive
+  // rule) never reaches them: no arm (NO_ARM), a plan that is never run.
+  out.push({ key: 'bin', arm: r.opNames?.binary ?? NO_ARM }); out.push({ key: 'postop', arm: r.opNames?.postfix ?? NO_ARM });
   return out;
 }
 
+export const NO_ARM = '(no arm)';
 class Unsupported extends Error {}
 const no = (why: string): never => { throw new Unsupported(why); };
 
@@ -132,6 +135,11 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
       const id = arms.length;
       arms.push({ id, rule: r.name, key, arm });
       ids.set(`${r.name}|${key}`, id);
+      if (arm === NO_ARM) {
+        tagsByKey.set(key, numberArm([], named));
+        fns.push({ name: `construct${id}`, doc: `${r.name} ${key}: no such arm`, params: [{ name: 'b', ty: 'idx' }, { name: 'off', ty: 'pos' }, { name: 'end', ty: 'pos' }], ret: [VAL as never], body: [{ k: 'return', es: [{ k: 'vMissing', where: `${r.name} ${key}`, why: 'unmapped' }] }], method: true, reads: true });
+        continue;
+      }
       const info = view.find((a) => a.arm === arm);
       if (!info) throw new Error(`planShape: ${r.name}: the engine arm ${key} names the arm ${arm}, which the shape's grammar view does not have`);
       const num = numberArm(info.items ?? [], named);
