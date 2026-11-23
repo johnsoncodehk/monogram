@@ -1097,6 +1097,19 @@ const CASES: Case[] = [
     ],
     reject: ['component C(a) { const b = < p/>; }', 'component C(a) { const b = < 1; }', 'component C(a) { <a/> <b/> }', 'component C() { <style>{.a}</style> }', 'component C() { <style>.a{}', 'component C(a) { <p k=< b>x</p> }', 'component C(a) { <p k=<b/>/> }'],
   },
+  {
+    // and comments in text (`textTokens`): `/* */` anywhere in a run, `//` at a run's start or after
+    // a blank; an unterminated `/*` is text (its failed attempt reads to the end: a recorded read)
+    grammar: 'textdialect-text', path: './fixtures/textdialect.ts', parts: { textTokens: true, directives: false },
+    accept: [
+      'component C(a) { <p>a/* c */b</p>; <p>hi // note\n x</p>; <p>a//b https://x.dev</p>; }',
+      'component C(a) { <p><b>z</b>// n\n</p>; <p>{a}// n\n</p>; <p>a // </p>\n</p>; <p>q /*</p>; }',
+      'component C(a) { <p>/* only */</p>; <p>/* a */// b\n</p>; const b = 1; // c\n/* d */ return b; }',
+      'component C(a) { <p>hi // note\n a/* c */b <b>z</b>// n\n a//b</p>; <p>1 < 2 /* x */ <b/>a<9</p>; }',
+      'component C() { <style>/* c */{a}</style>; }',
+    ],
+    reject: ['component C(a) { <p>a // </p> }', 'component C(a) { <p>a /* </p> */ }', 'component C() { <p>a<//* c */b>x</b></p> }'],
+  },
 ];
 // The element-region grammars' cases may be run alone: PORTABLE_GRAMMARS=a,b (a development aid;
 // the gate runs every case).
@@ -1453,6 +1466,15 @@ const FRAME_EDIT_DOCS: Record<string, (string | { doc: string; ins: string[] })[
   'textdialect-tagstart': [
     { doc: 'component C(a) {\n  <p k="v">1 < 2 {a} <b/>x<9 <></></p>;\n  const z = a <b;\n  return <{a}>y</{a}>;\n}', ins: TEXT_INS },
     { doc: 'component S() { <style>{a}</style>; <style> .x{}</style>; <script>a<b</script> }', ins: TEXT_INS },
+  ],
+  // comments in text: edits that make or break `/*`, `*/`, `//` and the blank before it; an
+  // unterminated `/*` in text reads to the end of the file, past the element
+  'textdialect-text': [
+    { doc: 'component C(a) {\n  <p>hi // n\n a/* c */b {a}// m\n</p>;\n  const z = 1; /* k */\n}', ins: [...TEXT_INS, '*'] },
+    { doc: 'component C() { <p>q /*</p>; const z = 1; }', ins: ['*/', '*', '/', ' ', 'x'] },
+    // the same at a run's start: the text token's failed attempt there is the read's only record
+    { doc: 'component C() { <p>/*</p>; const z = 1; }', ins: ['*/', '*', '/', ' ', 'x'] },
+    { doc: 'component C(a) {\n  <p k="v">1 < 2 {a} <b/>x<9 <></></p>;\n  const z = a <b;\n  return <{a}>y</{a}>;\n}', ins: TEXT_INS },
   ],
 };
 // Edits whose relexed stream is known to differ from a fresh lex, each with its cause; the gate
