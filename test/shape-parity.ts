@@ -933,7 +933,8 @@ async function main(): Promise<void> {
     }
     check(extraFailLoudOk === 4, `typescript Pratt subslot fallback fail-loud ${extraFailLoudOk}/4`);
 
-    // Independent cross-validation against test/ast-builder.ts demoBuilder semantics.
+    // Independent cross-validation against the demo ESTree-ish builder semantics (drop punct / keyword /
+    // operator leaves, splice single-child chains, Program / ExpressionStatement / BinaryExpression renames).
     const demoMod = await emitLoadNoShape('javascript-demo-xval', javascriptGrammar);
     const DROP = new Set(['$punct', '$keyword', '$operator', '$templateHead', '$templateMiddle', '$templateTail']);
     const demoBuilder = (src: string) => ({

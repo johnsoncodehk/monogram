@@ -1,7 +1,7 @@
 /**
  * typescript grammar — ESTree-ish declarative shape sample.
  *
- * Aligns with test/ast-builder.ts demoBuilder where that demo has an opinion
+ * Aligns with the demoBuilder in test/shape-parity.ts where that demo has an opinion
  * (drop punct/keyword/ops; Program.body; BlockStatement; ExpressionStatement;
  * BinaryExpression heuristics). Rules the demo never touches get a reasoned
  * mapping (node/list/choice/pratt/keep/custom) — NEVER silent custom without
