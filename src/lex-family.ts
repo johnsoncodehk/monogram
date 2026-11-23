@@ -661,6 +661,15 @@ export const EL_FRAME_FN = 'lexElFrame';
 export const EL_OPENS_FN = 'lexElOpens';
 export const EL_REACH_FN = 'lexElReach';
 export const EL_RAW_FN = 'lexElRaw';
+export const EL_TAG_START_FN = 'lexElTagStart';
+export const EL_TEXT_STOP_FN = 'lexElTextStop';
+export const EL_TRIVIA_FN = 'lexElTrivia';
+export const EL_DIR_OPEN_FN = 'lexElDirOpen';
+export const EL_DIR_CONT_FN = 'lexElDirCont';
+// A directive frame (an element frame in sub-state 3) with its head's paren depth d: count d + 1.
+// A body is count 0 (14). The frame step's `frame` -2: pop the frame, which ended no element.
+// The kid the frame step returns for a skipped text token (a comment in text): no token is pushed.
+export const EL_SKIP = -1;
 // What the type-parameter vetoes decide at a tagOpen at an operand position (EL_OPENS_FN).
 export const EL_NOT = 0, EL_OPEN = 1, EL_SPECULATE = 2;
 
@@ -685,6 +694,105 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
     return and(lt('p', len('s')), any([...fb.bytes.map((u) => eq(code('p'), I(u))), ...(fb.nonAscii ? [ge(code('p'), I(128))] : [])]));
   };
   const L = litLen(e.tagOpen);
+  // Whether a tagOpen at p opens a tag (tagStart: the unit after it is in the class); every place
+  // that opens one tests it, the entry from code included (the printers call it there).
+  const opensTag = (at: Ex): Expr => (e.tagStart ? and(hasAt(at, e.tagOpen), { k: 'call', fn: EL_TAG_START_FN, args: [x('s'), add(at, L)] }) : hasAt(at, e.tagOpen));
+  if (e.tagStart) fns.push({
+    name: EL_TAG_START_FN,
+    doc: 'Whether the unit at p may follow a tagOpen that opens a tag (elements.tagStart).',
+    params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }], ret: ['bool'],
+    body: [if_(ge('p', len('s')), [{ k: 'return', es: [F] }]), let_('c', code('p')), { k: 'return', es: [inRanges('c', e.tagStart)] }],
+  });
+  // The children's text tokens (ElementPlan.textTokens): each its scanner's own copy (a scanned
+  // token's scanner may be spliced into the dispatch, unprinted); a failed attempt that reads past
+  // the end + 1 of the token decided after it, and a match that reads past its own end + 1, are
+  // recorded in the look end (an unterminated block comment in text reads to the end of the file).
+  const copies = new Map<string, { name: string; rd: string | null; begin: (at: Ex) => Expr }>();
+  const scanCopy = (token: string, role: string) => {
+    let c = copies.get(token);
+    if (c) return c;
+    const t = tokOf(token), l = tokLook(t);
+    if (!scannedTokens(ir).some((s) => s.name === token)) throw new Error(`portable: ${role}: '${token}' is not a scanned token`);
+    if (l.over > FREE_OVER && l.trig.length > 0) throw new Error(`portable: ${role}: '${token}' reads past its end + 1 when it matches (no record of that read yet)`);
+    const fb = lexTokFirstBytes(t);
+    if (!fb || fb.nonAscii) throw new Error(`portable: ${role}: '${token}' may begin beyond ASCII (a run is tested at every unit)`);
+    const name = `lexElScan${ident(token)}`;
+    fns.push({ ...b.scanner(t, null), name, inline: false });
+    const rd = l.failRead > FREE_FAIL ? readEndName(token) : null;
+    if (rd && !fns.some((f) => f.name === rd)) fns.push(b.readEnd(t));
+    c = { name, rd, begin: (at: Ex) => and(lt(at, len('s')), any(fb.bytes.map((u) => eq(code(at), I(u))))) };
+    copies.set(token, c);
+    return c;
+  };
+  const tts = e.textTokens.map(({ token, after }) => ({ ...scanCopy(token, 'text token'), kid: kidOf(ids, token), skip: tokOf(token).skip, after }));
+  const ttFail = (t: (typeof tts)[number], at: Ex, k: string): Stmt[] => (t.rd ? [let_(k, call(t.rd, at)), if_(gt(k, 'look'), [set('look', k)])] : []);
+  const D = e.directives;
+  if (D && !ir.regexCtx) throw new Error('portable: element directives need the regex context');
+  const dirBegin = (at: Ex): Expr => and(lt(at, len('s')), any([...new Set(D!.open.map((r) => r.lit.charCodeAt(0)))].map((u) => eq(code(at), I(u)))));
+  const callLook = (names: [string, string], fn: string, at: Ex): Stmt => ({ k: 'setCall', names, call: { k: 'call', fn, args: [x('s'), x(at), x('look')] } });
+  if (D) {
+    // Code trivia after a directive literal: whitespace and the grammar's skip tokens (a failed
+    // skip attempt's read recorded, as the scan matcher's).
+    const ws = b.exact(D.ws);
+    const skips = scannedTokens(ir).filter((t) => t.skip).map((t) => scanCopy(t.name, 'directive trivia'));
+    const body: Stmt[] = [let_('look', 'look0'), let_('p', 'p0'), let_('more', I(1)), while_(ne('more', I(0)), [
+      set('more', I(0)), set('p', call(ws, 'p')),
+      if_(lt('p', len('s')), [
+        let_('moved', I(0)),
+        ...skips.map((k, i) => if_(and(eq('moved', I(0)), k.begin('p')), [
+          let_(`m${i}`, call(k.name, 'p')),
+          if_(gt(`m${i}`, 'p'), [set('p', `m${i}`), set('moved', I(1))], k.rd ? [let_(`r${i}`, call(k.rd, 'p')), if_(gt(`r${i}`, 'look'), [set('look', `r${i}`)])] : undefined),
+        ])),
+        if_(ne('moved', I(0)), [set('more', I(1))]),
+      ]),
+    ]), retN('p', 'look')];
+    fns.push({ name: EL_TRIVIA_FN, doc: 'Where code trivia (whitespace, skip tokens) from p0 ends, and the look end.', params: [{ name: 's', ty: 'str' }, { name: 'p0', ty: 'int' }, { name: 'look0', ty: 'int' }], ret: ['int', 'int'], body });
+    // A directive literal of a table at q (after whitespace, for a continuation), not running on
+    // into an identifier, followed by one of its required literal sequences (trivia between): its
+    // row, or -1; what it read is recorded (a comment in the trivia can reach the end of the file).
+    const idc = (at: Ex): Expr => and(lt(at, len('s')), inRanges(code(at), D.idCont));
+    const table = (name: string, rows: typeof D.open, lead: boolean): void => {
+      const body: Stmt[] = [let_('look', 'look0'), let_('p0', lead ? call(ws, 'q') : 'q'), let_('far', add('p0', I(1))), let_('hit', I(-1))];
+      rows.forEach((r, i) => {
+        const e0 = `e${i}`;
+        const seqs: Stmt[] = r.nexts.map((nx, j) => {
+          const pv = `p${i}_${j}`, ok = `ok${i}_${j}`;
+          if (!nx.length) return if_(lt('hit', I(0)), [set('hit', I(i))]);
+          return if_(lt('hit', I(0)), [
+            let_(pv, e0), let_(ok, I(1)),
+            ...nx.map((l) => if_(ne(ok, I(0)), [
+              { k: 'setCall', names: [pv, 'look'], call: { k: 'call', fn: EL_TRIVIA_FN, args: [x('s'), x(pv), x('look')] } } as Stmt,
+              if_(gt(add(add(pv, litLen(l.lit)), I(1)), 'far'), [set('far', add(add(pv, litLen(l.lit)), I(1)))]),
+              if_(l.word ? or(not(hasAt(pv, l.lit)), idc(add(pv, litLen(l.lit)))) : not(hasAt(pv, l.lit)), [set(ok, I(0))], [set(pv, add(pv, litLen(l.lit)))]),
+            ])),
+            if_(ne(ok, I(0)), [set('hit', I(i))]),
+          ]);
+        });
+        body.push(if_(and(lt('hit', I(0)), hasAt('p0', r.lit)), [
+          let_(e0, add('p0', litLen(r.lit))),
+          if_(gt(add(e0, I(1)), 'far'), [set('far', add(e0, I(1)))]),
+          ...(r.word ? [if_(not(idc(e0)), seqs)] : seqs),
+        ]));
+      });
+      body.push(if_(gt('far', 'look'), [set('look', 'far')]), retN('hit', 'look'));
+      fns.push({ name, doc: `The ${lead ? 'continuation' : 'opener'} row at q (-1: none), and the look end.`, params: [{ name: 's', ty: 'str' }, { name: 'q', ty: 'int' }, { name: 'look0', ty: 'int' }], ret: ['int', 'int'], body });
+    };
+    table(EL_DIR_OPEN_FN, D.open, false);
+    if (D.cont.length) table(EL_DIR_CONT_FN, D.cont, true);
+  }
+  if (tts.length || D) {
+    // Inside a run (q past its first unit): whether a text token starts at q (its `after` class
+    // permitting), or a directive opener does, so the run stops before it; its match is lexed at
+    // the next run's start.
+    const body: Stmt[] = [let_('look', 'look0')];
+    tts.forEach((t, i) => body.push(if_(t.after ? and(t.begin('q'), inRanges(code(sub('q', I(1))), t.after)) : t.begin('q'), [
+      if_(gt(call(t.name, 'q'), 'q'), [retN(I(1), 'look')]), ...ttFail(t, 'q', `r${i}`),
+    ])));
+    if (D) body.push(if_(dirBegin('q'), [let_('d', I(0)), callLook(['d', 'look'], EL_DIR_OPEN_FN, 'q'), if_(ge('d', I(0)), [retN(I(1), 'look')])]));
+    body.push(retN(I(0), 'look'));
+    fns.push({ name: EL_TEXT_STOP_FN, doc: 'Whether a text token starts at q inside a text run (1), and the look end.', params: [{ name: 's', ty: 'str' }, { name: 'q', ty: 'int' }, { name: 'look0', ty: 'int' }], ret: ['int', 'int'], body });
+  }
+  const stopAt = (at: Ex): Stmt => ({ k: 'setCall', names: ['hit', 'look'], call: { k: 'call', fn: EL_TEXT_STOP_FN, args: [x('s'), x(at), x('look')] } });
   // The frame step (the frame fr on top is an element frame): what the frame lexes at p, before
   // the ordinary scan. Returns (end, kid, lid, frame, push, angle, look): end -1 when the frame
   // lexes nothing there (the ordinary scan lexes p); else the token [p, end) of kind kid and
@@ -698,14 +806,72 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
   ];
   const tok = (end: Ex, kid: number, lid: number, top: Ex, push: number, angle: Ex): Stmt => retN(end, I(kid), I(lid), top, I(push), angle, 'look');
   const kidE = (n: string) => kidOf(ids, n), lidE = (l: string) => lidOf(ids, l);
+  // a directive frame for the head beginning here (its paren depth + 1 in the count)
+  const headFrame = add(shl(add('depth', I(1)), I(4)), I(14));
   const children: Stmt[] = [
-    if_(hasAt('p', e.tagOpen), [
+    if_(opensTag('p'), [
+      // in a directive body a tag opens a frame of its own; a close tag closes none of the body's
+      ...(D ? [if_(eq('sb', I(3)), [
+        if_(hasAt(add('p', L), e.closeMarker), [tok(add(add('p', L), litLen(e.closeMarker)), kidE(e.closeTag), 0, 'fr', 10, I(0))]),
+        tok(add('p', L), 0, lidE(e.tagOpen), 'fr', 6, I(0)),
+      ])] : []),
       if_(hasAt(add('p', L), e.closeMarker), [tok(add(add('p', L), litLen(e.closeMarker)), kidE(e.closeTag), 0, add('fr', I(8)), 0, I(0))]),
       tok(add('p', L), 0, lidE(e.tagOpen), add('fr', I(4)), 0, I(0)),
     ]),
     if_(hasAt('p', e.holeOpen), [tok(add('p', litLen(e.holeOpen)), 0, lidE(e.holeOpen), 'fr', 1, 'angle')]),
   ];
-  if (e.text) children.push(let_('te', call(scannerName(e.text), 'p')), if_(gt('te', 'p'), [tok('te', kidE(e.text), 0, 'fr', 0, 'angle')]));
+  if (D) {
+    const LC = litLen(e.holeClose);
+    // a body's closer: then a continuation (the frame is a head again) or the directive's end
+    children.push(if_(and(eq('sb', I(3)), hasAt('p', e.holeClose)), [
+      let_('c', I(-1)),
+      ...(D.cont.length ? [callLook(['c', 'look'], EL_DIR_CONT_FN, add('p', LC))] : []),
+      if_(ge('c', I(0)), [retN(add('p', LC), I(0), I(lidE(e.holeClose)), headFrame, I(0), 'angle', 'look')]),
+      retN(add('p', LC), I(0), I(lidE(e.holeClose)), I(-2), I(0), 'angle', 'look'),
+    ]));
+    // an opener: its frame is pushed before its token (end p: no token), which the ordinary scan
+    // then lexes inside it; a code block opener pushes an element hole
+    const nOpen = D.open.filter((r) => !r.block).length;
+    children.push(if_(dirBegin('p'), [
+      let_('o', I(0)), callLook(['o', 'look'], EL_DIR_OPEN_FN, 'p'),
+      if_(ge('o', I(0)), [
+        ...(nOpen < D.open.length ? [if_(ge('o', I(nOpen)), [retN('p', I(0), I(0), 'fr', I(1), 'angle', 'look')])] : []),
+        retN('p', I(0), I(0), 'fr', headFrame, 'angle', 'look'),
+      ]),
+    ]));
+  }
+  tts.forEach((t, i) => children.push(if_(t.begin('p'), [
+    let_(`x${i}`, call(t.name, 'p')),
+    if_(gt(`x${i}`, 'p'), [t.skip ? retN(`x${i}`, I(EL_SKIP), I(0), 'fr', I(0), 'angle', 'look') : tok(`x${i}`, t.kid, 0, 'fr', 0, 'angle')]),
+    ...ttFail(t, 'p', `y${i}`),
+  ])));
+  if (e.text && (tts.length || D)) {
+    // the run: the text token's class runs (joined by every tagOpen that opens no tag), up to the
+    // first unit past its first where a text token starts (the interpreter's lxTextStopAt)
+    const join = e.tagStart ? [
+      if_(and(hasAt('te', e.tagOpen), not(opensTag('te'))), [
+        set('hit', I(0)), if_(gt('te', 'p'), [stopAt('te')]),
+        if_(eq('hit', I(0)), [set('te', add('te', L)), set('more', I(1))]),
+      ]),
+    ] : [];
+    children.push(let_('te', 'p'), let_('more', I(1)), let_('hit', I(0)), while_(ne('more', I(0)), [
+      set('more', I(0)),
+      let_('tm', call(scannerName(e.text), 'te')),
+      let_('tr', 'te'), if_(gt('tm', 'te'), [set('tr', 'tm')]),
+      let_('q', 'te'), if_(eq('te', 'p'), [set('q', add('p', I(1)))]),
+      set('hit', I(0)),
+      while_(and(lt('q', 'tr'), eq('hit', I(0))), [stopAt('q'), if_(eq('hit', I(0)), [set('q', add('q', I(1)))])]),
+      if_(lt('q', 'tr'), [set('te', 'q')], [set('te', 'tr'), ...join]),
+    ]));
+    children.push(if_(gt('te', 'p'), [tok('te', kidE(e.text), 0, 'fr', 0, 'angle')]));
+  } else if (e.text) {
+    children.push(let_('te', call(scannerName(e.text), 'p')));
+    // with tagStart the run goes on over every tagOpen that opens no tag
+    if (e.tagStart) children.push(if_(lt('te', 'p'), [set('te', 'p')]), while_(and(hasAt('te', e.tagOpen), not(opensTag('te'))), [
+      set('te', add('te', L)), let_('tm', call(scannerName(e.text), 'te')), if_(gt('tm', 'te'), [set('te', 'tm')]),
+    ]));
+    children.push(if_(gt('te', 'p'), [tok('te', kidE(e.text), 0, 'fr', 0, 'angle')]));
+  }
   const tag: Stmt[] = [];
   e.tagTokens.forEach((name, i) => tag.push(if_(eq('angle', I(0)), [
     let_(`g${i}`, call(scannerName(name), 'p')),
@@ -721,7 +887,7 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
       ...tagEnd(false), tok(add('p', litLen(e.tagClose)), 0, lidE(e.tagClose), 'top', 0, I(0)),
     ]),
     // after the attribute assign an element is a value (`a=<b/>`); elsewhere type arguments
-    if_(hasAt('p', e.tagOpen), [
+    if_(opensTag('p'), [
       if_('afterEq', [tok(add('p', L), 0, lidE(e.tagOpen), 'fr', 6, I(0))]),
       tok(add('p', L), 0, lidE(e.tagOpen), 'fr', 0, add('angle', I(1))),
     ]),
@@ -730,13 +896,25 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
   fns.push({
     name: EL_FRAME_FN,
     doc: 'The element frame fr on top of the frame stack lexes at p: (end, kid, lid, frame, push, angle, look).',
-    params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }, { name: 'fr', ty: 'int' }, { name: 'angle', ty: 'int' }, { name: 'afterEq', ty: 'bool' }, { name: 'look0', ty: 'int' }],
+    params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }, { name: 'fr', ty: 'int' }, { name: 'angle', ty: 'int' }, { name: 'afterEq', ty: 'bool' }, { name: 'look0', ty: 'int' }, ...(D ? [{ name: 'depth', ty: 'int' as const }] : [])],
     ret: ['int', 'int', 'int', 'int', 'int', 'int', 'int'],
     body: [
       let_('look', 'look0'),
       let_('top', 'fr'),
       let_('sb', sub(shr('fr', I(2)), shl(shr('fr', I(4)), I(2)))),
-      if_(eq('sb', I(0)), [...children, NO]),
+      ...(D ? [
+        // children, or a directive body (sub-state 3, count 0)
+        if_(or(eq('sb', I(0)), and(eq('sb', I(3)), eq(shr('fr', I(4)), I(0)))), [...children, NO]),
+        // a directive head (count = its paren depth + 1): code, by the ordinary scan; a hole opener
+        // at that depth opens the body, a deeper one an element hole
+        if_(eq('sb', I(3)), [
+          if_(hasAt('p', e.holeOpen), [
+            if_(eq('depth', sub(shr('fr', I(4)), I(1))), [retN(add('p', litLen(e.holeOpen)), I(0), I(lidE(e.holeOpen)), I(14), I(0), 'angle', 'look')]),
+            tok(add('p', litLen(e.holeOpen)), 0, lidE(e.holeOpen), 'fr', 1, 'angle'),
+          ]),
+          NO,
+        ]),
+      ] : [if_(eq('sb', I(0)), [...children, NO])]),
       ...tag,
       NO,
     ],
@@ -776,11 +954,13 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
         if ([...tag].some((ch) => ch.charCodeAt(0) > 127)) throw new Error(`portable: elements.rawText: tag ${JSON.stringify(tag)} is not ASCII`);
         const kid = I(kidOf(ids, r.token));
         const named = and(eq(sub('b', 'a'), litLen(tag)), r.ignoreCase ? foldAt('a', tag) : hasAt('a', tag));
-        body.push(if_(named, r.ignoreCase ? [
+        // the body condition: when it matches at the body's start the children are ordinary
+        const unless = r.unless === null ? [] : [if_(ge(call(b.exact(r.unless), 'p'), I(0)), [retN(I(-1), I(0))])];
+        body.push(if_(named, [...unless, ...(r.ignoreCase ? [
           let_('q', 'p'),
           while_(and(lt('q', len('s')), not(and(hasAt('q', close), foldAt(add('q', litLen(close)), tag)))), [set('q', add('q', I(1)))]),
           retN('q', kid),
-        ] : [retN(b.find('p', close + tag), kid)]));
+        ] : [retN(b.find('p', close + tag), kid)])]));
       }
     }
     body.push(retN(I(-1), I(0)));
@@ -826,7 +1006,8 @@ export function lexScanFamily(ir: ParserIR): Family {
     if (ir.tpl) b.fns.push(b.tplSpan(ir.tpl));
     if (ir.elements) b.fns.push(...elementFns(ir, ir.elements, b));
     const noted = new Set(lexLookPlan(ir).arms.flatMap((a) => a.cands.filter((c) => c.readEnd).map((c) => c.tok!)));
-    for (const t of scannedTokens(ir)) if (noted.has(t.name)) b.fns.push(b.readEnd(t));
+    // (a text token's read-end routine may be the frame step's already)
+    for (const t of scannedTokens(ir)) if (noted.has(t.name) && !b.fns.some((f) => f.name === readEndName(t.name))) b.fns.push(b.readEnd(t));
     f = { sets: b.sets, fns: b.fns, runs: b.runs, finds: b.finds, stopSets: [...b.stopSets.values()] };
     families.set(ir, f);
   }

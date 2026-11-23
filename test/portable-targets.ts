@@ -45,7 +45,9 @@ import { mutationCorpus } from './mutation-corpus.ts';
 import { CURATED_TS } from './emit-corpus.ts';
 import type { CstGrammar } from '../src/types.ts';
 
-type Case = { grammar: string; path: string; accept: string[]; reject: string[]; tsOnly?: boolean };
+// `parts`: the module's `textDialect(parts)` builds the grammar (a stage of the text dialect)
+// instead of its default export.
+type Case = { grammar: string; path: string; parts?: Record<string, boolean>; accept: string[]; reject: string[]; tsOnly?: boolean };
 // A for-head's no-`in` region (`exclude('in', Expr)`, a `suppress` step): it holds for the Pratt call
 // it wraps, a nested call (parentheses, arguments, an object, array or template, a function or arrow
 // block body) has `in` again, and every alternative of the head that fails inside or after it backs
@@ -1079,6 +1081,76 @@ const CASES: Case[] = [
     accept: ["<a k='v w' m=n'/>\n<b/>", "<a k=n'>{x}</a>", '<a k="s"><b/>{(y)\'}</a>\n{z\'}'],
     reject: ["<a k='v>", "<a k='v/>", "x'"],
   },
+  {
+    // the text dialect's tag start (`<` opens a tag only before a tagStart unit: in text any other
+    // is text, in code the operator) and raw text whose body condition (`unlessBodyStarts`) makes
+    // `<style>{a}</style>` an element with a hole (test/fixtures/textdialect.ts, without its text
+    // tokens and directives)
+    grammar: 'textdialect-tagstart', path: './fixtures/textdialect.ts', parts: { textTokens: false, directives: false },
+    accept: [
+      'component C(a) { <p>1 < 2 > 0</p>; <p>a<9 a <</p>; <p>< b</p>; }', 'component C(a) { <p>1<b/>2<>3</><{a}>x</{a}><_a/><$b/></p> }',
+      'component C(a) { const c = a <c; return <p>x</p>; }', 'component C(a) { <p>1 < 2 <b>x</b> a<9 <></> <{a}>y</{a}></p>; }',
+      'component C(a) { <p k={<b/>} m={a}/>; }',
+      'component C() { <style>.a { b: c } <i></style>; <style>{a}</style>; <style> \n\t{a}</style>; <style>x{a}</style> }',
+      'component C() { <style>/* c */{a}</style>; <style>  </style>; <script>{a}</script>; <SCRIPT>if (a<b) x</Script> }',
+      'component C() { <STYLE>{a}</STYLE>; <STYLE>.a</STYLE>; <style></style>; <style/>; <p><style>{a}</style></p> }',
+    ],
+    reject: ['component C(a) { const b = < p/>; }', 'component C(a) { const b = < 1; }', 'component C(a) { <a/> <b/> }', 'component C() { <style>{.a}</style> }', 'component C() { <style>.a{}', 'component C(a) { <p k=< b>x</p> }', 'component C(a) { <p k=<b/>/> }'],
+  },
+  {
+    // and comments in text (`textTokens`): `/* */` anywhere in a run, `//` at a run's start or after
+    // a blank; an unterminated `/*` is text (its failed attempt reads to the end: a recorded read)
+    grammar: 'textdialect-text', path: './fixtures/textdialect.ts', parts: { textTokens: true, directives: false },
+    accept: [
+      'component C(a) { <p>a/* c */b</p>; <p>hi // note\n x</p>; <p>a//b https://x.dev</p>; }',
+      'component C(a) { <p><b>z</b>// n\n</p>; <p>{a}// n\n</p>; <p>a // </p>\n</p>; <p>q /*</p>; }',
+      'component C(a) { <p>/* only */</p>; <p>/* a */// b\n</p>; const b = 1; // c\n/* d */ return b; }',
+      'component C(a) { <p>hi // note\n a/* c */b <b>z</b>// n\n a//b</p>; <p>1 < 2 /* x */ <b/>a<9</p>; }',
+      'component C() { <style>/* c */{a}</style>; }',
+    ],
+    reject: ['component C(a) { <p>a // </p> }', 'component C(a) { <p>a /* </p> */ }', 'component C() { <p>a<//* c */b>x</b></p> }'],
+  },
+  {
+    // the whole text dialect: and directives (derived openers, heads lexed as code, bodies lexed as
+    // children, continuations after a body; a code block): test/fixtures/textdialect.ts
+    grammar: 'textdialect', path: './fixtures/textdialect.ts',
+    accept: [
+      'component C(a) { <p>@if (a) {y}</p>; <p>@if x</p>; <p>@iffy (a)</p>; <p>a@if (a) {y}</p>; <p>x y@if (a) {z}</p>; }',
+      'component C(a) { <p>@for await (i of a) {y}</p>; <p>@for awaits (i)</p>; <p>@{ const q = 1; <b/> }</p>; }',
+      'component C(a) { <p>@if /* c */ (a) {y}</p>; <p>@if // c\n (a) {y}</p>; <p>a @else {b}</p>; }',
+      'component C(a) { <p>@if ({a}.a) { y }</p>; <p>@if ([{a}][0]) { y }</p>; }',
+      'component C(a) { <p>@if (a) {y} @else {n}</p>; <p>@if (a) {y} @else if (a) {m} @else {n}</p>; <p>@if (a) {y} @else x</p>; }',
+      'component C(a) { <p>@if (a) {y} @elsewhere {n}</p>; <p>@if (a) {y} t @else {n}</p>; <p>@else {n}</p>; }',
+      'component C(a) { <p>@for (i of a) {<i>{i}</i>} @empty {none} @try {t} @pending {p} @catch (e) {c} @try {t} @catch (e) {c}</p>; }',
+      'component C(a) { <p>@if (a) { <b>@for (i of a) { {i} // n\n }</b> } @else { /* c */ x }</p>; }',
+      'component C(a) { <p>@{ const q = 1; <b/> } x</p>; <p>x @if (a) { yes <b/> } @else if (a) {m} @else { no } z</p>; }',
+      'component C(a) { <p>@if (a) { <style>.a{}</style><style>{a}</style> } 1 < 2 /* c */ a // d\n</p>; }',
+      'component C(a) { <p>@if (a) {y} @else /* {n}</p>; }',
+    ],
+    reject: ['component C(a) { <p>@if (a) {y</p>; }', 'component C(a) { <p>@if (a) { </q> y }</p>; }', 'component C(a) { <p>a } b</p>; }',
+      'component C(a) { <p>@if (<b/>) {y}</p>; }'],
+  },
+  {
+    // directives without text tokens: an opener's or a continuation's read through a comment left
+    // open in its trivia is the only record of that read (with text tokens the comment is also a
+    // text token's failed attempt, recorded as its own)
+    grammar: 'textdialect-dir', path: './fixtures/textdialect.ts', parts: { textTokens: false, directives: true },
+    accept: [
+      'component C(a) { <p>@if (a) {y}</p>; <p>@if x</p>; <p>@iffy (a)</p>; <p>a@if (a) {y}</p>; <p>x y@if (a) {z}</p>; }',
+      'component C(a) { <p>@for await (i of a) {y}</p>; <p>@for awaits (i)</p>; <p>@{ const q = 1; <b/> }</p>; }',
+      'component C(a) { <p>@if /* c */ (a) {y}</p>; <p>@if // c\n (a) {y}</p>; <p>a @else {b}</p>; }',
+      'component C(a) { <p>@if ({a}.a) { y }</p>; <p>@if ([{a}][0]) { y }</p>; }',
+      'component C(a) { <p>@if (a) {y} @else {n}</p>; <p>@if (a) {y} @else if (a) {m} @else {n}</p>; <p>@if (a) {y} @else x</p>; }',
+      'component C(a) { <p>@if (a) {y} @elsewhere {n}</p>; <p>@if (a) {y} t @else {n}</p>; <p>@else {n}</p>; }',
+      'component C(a) { <p>@for (i of a) {<i>{i}</i>} @empty {none} @try {t} @pending {p} @catch (e) {c} @try {t} @catch (e) {c}</p>; }',
+      'component C(a) { <p>@if (a) { <b>@for (i of a) { {i} // n\n }</b> } @else { /* c */ x }</p>; }',
+      'component C(a) { <p>@{ const q = 1; <b/> } x</p>; <p>x @if (a) { yes <b/> } @else if (a) {m} @else { no } z</p>; }',
+      'component C(a) { <p>@if (a) { <style>.a{}</style><style>{a}</style> } 1 < 2 /* c */ a // d\n</p>; }',
+      'component C(a) { <p>@if (a) {y} @else /* {n}</p>; }',
+    ],
+    reject: ['component C(a) { <p>@if (a) {y</p>; }', 'component C(a) { <p>@if (a) { </q> y }</p>; }', 'component C(a) { <p>a } b</p>; }',
+      'component C(a) { <p>@if (<b/>) {y}</p>; }'],
+  },
 ];
 // The element-region grammars' cases may be run alone: PORTABLE_GRAMMARS=a,b (a development aid;
 // the gate runs every case).
@@ -1402,8 +1474,11 @@ const HOLE_EDIT_GRAMMARS = new Set(['javascript', 'typescript']);
 // Element regions share the frame stack: text, tags, holes, templates in holes, a type-parameter
 // signature decided by lexing its group (an edit can flip it), an attribute string, `</*` outside
 // elements, code children with directives and a dynamic tag (as test/incremental-grammars.ts).
+// the text dialect's (test/incremental-grammars.ts TEXT_INS)
+const TEXT_INS = ['{', '}', '<', '>', '/', ';', 'x', ' ', '\n', '9', '_', '.'];
 const FRAME_INS = ['`', '$', '{', '}', '(', ')', '<', '>', '/', ':', ',', '=', 'x', ' ', '\n', '"', "'", '\\'];
-const FRAME_EDIT_DOCS: Record<string, string[]> = {
+// A document is its text, or its text with the insertions it is edited with (FRAME_INS otherwise).
+const FRAME_EDIT_DOCS: Record<string, (string | { doc: string; ins: string[] })[]> = {
   typescriptreact: [
     "let a = <p>It's {x} 50%</p>;\nlet b = 1;",
     'f(<a b={c > d}><i/>t</a>, `x${<b>y</b>}`);',
@@ -1417,12 +1492,48 @@ const FRAME_EDIT_DOCS: Record<string, string[]> = {
   javascriptreact: ['let s = `a${b}c${`${d}`}`;\nx = 1;', "let a = <><p>It's</p>{`${<b/>}`}</>;\nx</*c*/y;", 'x = <a/> / 2; y = <b c={1}>t</b>;'],
   // an edit inside a failed attribute string's read, past the element's end (`{x}` → `{x'}`),
   // makes it a string
-  tagtokdialect: ["<a k=n'/> {w} {x}\n<b m='n'>{y}</b>"],
+  // and a token at depth 0 right after the read's end (`ab`, past the line the failed attempt read):
+  // an edit right after it (`ab c` → `abc`) must not keep it as the restart anchor
+  tagtokdialect: ["<a k=n'/> {w} {x}\n<b m='n'>{y}</b>", "<a k=n'/>\nab c"],
   elementdialect: [
     'component C(a) {\n  <a k="v">@if (a) { <b/> } @else { "e" } {a}</a> "z" <c/>\n}',
     'component D() { <a><b>{1}</b><{t} id="d">"s"</{t}></a> }\ncomponent E() { "q" }',
     // a raw-text element: one body token up to its close tag; edits that break or make the close tag, an empty body
     'component S() { <a><style k="v">.a { b: "c" } <i></style>"t"</a> <style></style> }',
+  ],
+  // a tag start made or broken (`<` before a blank, a digit, `<`, a letter, `{`), a comparison
+  // next to an element, a `<style>` raw or not by the `{` after its open tag (as the
+  // interpreter's test/incremental-grammars.ts)
+  'textdialect-tagstart': [
+    { doc: 'component C(a) {\n  <p k="v">1 < 2 {a} <b/>x<9 <></></p>;\n  const z = a <b;\n  return <{a}>y</{a}>;\n}', ins: TEXT_INS },
+    { doc: 'component S() { <style>{a}</style>; <style> .x{}</style>; <script>a<b</script> }', ins: TEXT_INS },
+  ],
+  // comments in text: edits that make or break `/*`, `*/`, `//` and the blank before it; an
+  // unterminated `/*` in text reads to the end of the file, past the element
+  'textdialect-text': [
+    { doc: 'component C(a) {\n  <p>hi // n\n a/* c */b {a}// m\n</p>;\n  const z = 1; /* k */\n}', ins: [...TEXT_INS, '*'] },
+    { doc: 'component C() { <p>q /*</p>; const z = 1; }', ins: ['*/', '*', '/', ' ', 'x'] },
+    // the same at a run's start: the text token's failed attempt there is the read's only record
+    { doc: 'component C() { <p>/*</p>; const z = 1; }', ins: ['*/', '*', '/', ' ', 'x'] },
+    { doc: 'component C(a) {\n  <p k="v">1 < 2 {a} <b/>x<9 <></></p>;\n  const z = a <b;\n  return <{a}>y</{a}>;\n}', ins: TEXT_INS },
+  ],
+  // directives: edits that make and break an opener (`@if (` / `@iffy`), a head's parens and braces,
+  // a body's closer, a continuation; and an opener / a continuation made by closing a comment
+  // after the element (their tests read the comment to the end of the file)
+  'textdialect-dir': [
+    // a read through a line comment that ENDS (no failed attempt to record), past the element's
+    // close: only the opener's / continuation's own read (its far end) records it
+    { doc: 'component C(a) { <p>@if // x</p>\n; const z = 1; }', ins: ['(', '(a) {y}</p>', ' '] },
+    { doc: 'component C(a) { <p>@if (a) {y} @else // x</p>\n; const z = 1; }', ins: ['{', '{n}</p>', ' '] },
+    { doc: 'component C(a) { <p>@if /* (a) {y}</p>; const z = 1; }', ins: ['*/ (a) {y}</p>; ', '*/'] },
+    { doc: 'component C(a) { <p>@if (a) {y} @else /* {n}</p>; const z = 1; }', ins: ['*/ {n}</p>; ', '*/'] },
+  ],
+  textdialect: [
+    { doc: 'component C(a) {\n  <p>x @if (a) { y <b/> } @else if ({a}.a) {m} @else { n } z@for await (i of a) {{i}} @empty {e}</p>;\n}', ins: ['{', '}', '<', '/', ';', 'x', ' ', '\n', '@', '(', ')', 'e', 'f'] },
+    { doc: 'component C(a) { <p>@if /* (a) {y}</p>; const z = 1; }', ins: ['*/ (a) {y}</p>; ', '*/'] },
+    { doc: 'component C(a) { <p>@if (a) {y} @else /* {n}</p>; const z = 1; }', ins: ['*/ {n}</p>; ', '*/'] },
+    { doc: 'component C(a) {\n  <p>hi // n\n a/* c */b {a}// m\n</p>;\n  const z = 1; /* k */\n}', ins: [...TEXT_INS, '*'] },
+    { doc: 'component S() { <style>{a}</style>; <style> .x{}</style>; <script>a<b</script> }', ins: TEXT_INS },
   ],
 };
 // Edits whose relexed stream is known to differ from a fresh lex, each with its cause; the gate
@@ -1909,7 +2020,7 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
 let failures = 0;
 for (const c of CASES) {
   if (ONLY && !ONLY.includes(c.grammar)) continue;
-  const grammar: CstGrammar = (await import(c.path)).default;
+  const grammar: CstGrammar = c.parts ? (await import(c.path)).textDialect(c.parts) : (await import(c.path)).default;
   const oracle = createParser(grammar);
   const oracleOut = (src: string): Outcome => {
     try { return { ok: true, cst: canon(oracle.parse(src)) }; } catch (e) { return { ok: false, err: errText(e) }; }
@@ -2146,7 +2257,7 @@ for (const c of CASES) {
     // against a fresh lex and parse) holds. Exhaustive, not random: a random edit rarely lands
     // inside a hole, where the relex window must not restart.
     if (HOLE_EDIT_GRAMMARS.has(c.grammar) || FRAME_EDIT_DOCS[c.grammar]) {
-      const sessions = (HOLE_EDIT_GRAMMARS.has(c.grammar) ? [...HOLE_EDIT_DOCS.map((doc) => ({ doc, ins: undefined as string[] | undefined })), ...LOOK_EDIT_DOCS] : FRAME_EDIT_DOCS[c.grammar]!.map((doc) => ({ doc, ins: FRAME_INS })))
+      const sessions = (HOLE_EDIT_GRAMMARS.has(c.grammar) ? [...HOLE_EDIT_DOCS.map((doc) => ({ doc, ins: undefined as string[] | undefined })), ...LOOK_EDIT_DOCS] : FRAME_EDIT_DOCS[c.grammar]!.map((d) => (typeof d === 'string' ? { doc: d, ins: FRAME_INS } : d)))
         .flatMap(({ doc: init, ins }) => oneCharEdits(init, ins).map((e) => ({ init, e, final: init.slice(0, e[0]) + e[2] + init.slice(e[1]) })));
       const fresh = r.batch(sessions.map((x) => x.final));
       const bad: string[] = [];

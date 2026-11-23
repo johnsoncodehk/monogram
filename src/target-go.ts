@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { blockBody, elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './emit.ts';
@@ -470,7 +470,7 @@ function elementLexerGo(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms, 
   head: string; scans: string; rxStateFrom: string; nlWs: string; lexCodes: string[]; lexFirsts: (LexFirstBytes | null)[];
   tplCloseTest: string; tplOpenTest: string; uniIdentFallbackGo: string; loopPanicGo: string; goBoolArr: (name: string, flags: boolean[]) => string;
 }): string {
-  const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0;
+  const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0, dirs = !!el.directives;
   const operand = el.entry === 'operand';
   if (operand && !rx) throw new Error('portable: an operand element entry needs the regex context (prevIsValue)');
   const L = tlen(el.tagOpen);
@@ -503,7 +503,7 @@ ${sig ? `${p.goBoolArr('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
 \t\tif len(templateStack) > 0 { top = templateStack[len(templateStack)-1] }
 \t\thot = ${sig ? 'specTok >= 0 || ' : ''}top&2 != 0
 ${rx ? `\t\tvalueTo = elEndAt
-\t\tif top&3 == 2 && top&12 != 0 { valueTo = 1 << 62 }
+\t\tif top&3 == 2 && top&12 != 0${dirs ? ' && top&12 != 12' : ''} { valueTo = 1 << 62 }
 ` : ''}\t}
 \trefresh()
 `;
@@ -561,9 +561,12 @@ ${rx ? `\t\tif lid == lidLParen {
   // The entry from code, in the tagOpen byte's dispatch arm (outside element frames: inside one
   // the frame step lexes every tagOpen).
   const enter = `\t\t\ttemplateStack = append(templateStack, 6); refresh(); bound = 0; emit(pos, pos + ${L}, 0, lidElOpen);${raw ? ' tagAt = append(tagAt, len(*acc)-1);' : ''} tagAngle = 0; pos += ${L}; continue\n`;
-  const entry = !operand ? `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)}) {\n${enter}\t\t}\n`
-    : !(el.head || sig) ? `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)}) && !prevIsValue() {\n${enter}\t\t}\n`
-    : `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)})${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue() {
+  // a tagOpen that opens no tag (tagStart) is the ordinary scan's
+  // (in a directive head, code inside an element frame, a tagOpen opens no element)
+  const opensTag = `strings.HasPrefix(src[pos:], ${J(el.tagOpen)})${el.tagStart ? ` && ${shared.elementFn('tagStart')}(src, pos + ${L})` : ''}${dirs ? ' && (len(templateStack) == 0 || templateStack[len(templateStack)-1]&3 != 2)' : ''}`;
+  const entry = !operand ? `\t\tif ${opensTag} {\n${enter}\t\t}\n`
+    : !(el.head || sig) ? `\t\tif ${opensTag} && !prevIsValue() {\n${enter}\t\t}\n`
+    : `\t\tif ${opensTag}${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue() {
 \t\t\top := 0
 \t\t\t${sig ? 'if pos == specAt { op = 1; if specKeep { op = 0 }; specAt = -1 } else ' : ''}{ o, re := ${shared.elementFn('opens')}(src, pos); op = o; if re > laEnd { laEnd = re } }
 \t\t\tif op == 1 {
@@ -592,13 +595,17 @@ ${sig ? `\t\t\tif op == 2 {
   const cascade = renderLexByteDispatchGo(p.lexCodes, p.lexFirsts, '\t', heads);
   const frameStep = `\t\tif len(templateStack) > 0 && templateStack[len(templateStack)-1]&3 == 2 {
 \t\t\tfr := templateStack[len(templateStack)-1]
-\t\t\tfe, fk, fl, ft, fp, fa, fla := ${shared.elementFn('frame')}(src, pos, fr, tagAngle, len(*acc) > 0 && (*acc)[len(*acc)-1].Lid == lidEq, laEnd)
+\t\t\tfe, fk, fl, ft, fp, fa, fla := ${shared.elementFn('frame')}(src, pos, fr, tagAngle, len(*acc) > 0 && (*acc)[len(*acc)-1].Lid == lidEq, laEnd${dirs ? ', len(parenHead)' : ''})
 \t\t\tlaEnd = fla
 \t\t\tif fe >= 0 {
-\t\t\t\temit(pos, fe, uint16(fk), uint16(fl))
+${dirs ? `\t\t\t\t// a directive opener: its frame (or a code block's hole) is pushed before its token
+\t\t\t\tif fe == pos { templateStack = append(templateStack, fp);${raw ? ' if fp&3 == 2 { tagAt = append(tagAt, -1) };' : ''} refresh(); continue }
+` : ''}${elementSkipsText(ir) ? `\t\t\t\t// a skipped text token (a comment in text): no token
+\t\t\t\tif fk < 0 { if lexHasLineTerm(src[pos:fe]) { pendingNl = true }; pos = fe; continue }
+` : ''}\t\t\t\temit(pos, fe, uint16(fk), uint16(fl))
 ${raw ? `\t\t\t\t// each element frame's current tag: the index of its tagOpen token (the name is the next)
 \t\t\t\tif uint16(fl) == lidElOpen { if fp == 6 { tagAt = append(tagAt, len(*acc)-1) } else if (fr>>2)&3 == 0 { tagAt[len(tagAt)-1] = len(*acc) - 1 } }
-` : ''}\t\t\t\tif ft < 0 { templateStack = templateStack[:len(templateStack)-1];${raw ? ' tagAt = tagAt[:len(tagAt)-1];' : ''} elEndAt = len(*acc) } else { templateStack[len(templateStack)-1] = ft }
+${dirs ? '\t\t\t\tif fp == 10 { tagAt = append(tagAt, -1) }\n' : ''}` : ''}\t\t\t\tif ft < 0 { templateStack = templateStack[:len(templateStack)-1];${raw ? ' tagAt = tagAt[:len(tagAt)-1];' : ''}${dirs ? ' if ft == -1 { elEndAt = len(*acc) }' : ' elEndAt = len(*acc)'} } else { templateStack[len(templateStack)-1] = ft }
 \t\t\t\tif fp != 0 { templateStack = append(templateStack, fp) }
 ${raw ? `\t\t\t\t// an open tag ended: a raw-text name gives its body to a raw frame (kind 3), lexed next
 \t\t\t\tif uint16(fl) == lidElClose && (fr>>2)&3 == 1 && tagAngle == 0 {
@@ -1222,11 +1229,13 @@ function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaI
     topCall: (n) => `\treturn p.parse${n}()`,
     topTry: (n) => `\t{ sp := p.pos; n := p.parse${n}(); if n >= 0 { return n }; p.back(sp) }`,
     topFail: '\treturn -1',
-    entryA: (topOne) => `type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidStart, KidCount int }
+    // Shape A's segment for the reuse driver: one top-level entry. The fresh loop keeps it inline:
+    // a call per entry measured +11% Go instructions on dense-semi.ts (1325b4d).
+    entryA: (topOne) => `type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidCount int }
 func (p *engine) parseTopOne() int32 {
 ${topOne}
 }
-func (p *engine) parseTopEntry(sb int) (EntryMeta, bool) {
+func (p *engine) parseTopEntry() (EntryMeta, bool) {
 \tsp := p.pos
 \tp.lookReset()
 \tn := p.parseTopOne()
@@ -1235,7 +1244,7 @@ func (p *engine) parseTopEntry(sb int) (EntryMeta, bool) {
 \tif l := uint32(p.lookEnd()); l > ext { ext = l }
 \tp.nodes[n].Ext = ext // CST oracle for validate assert; reuse decisions read p.entries
 \tp.scratch = append(p.scratch, n)
-\treturn EntryMeta{int(p.nodes[n].TokStart), int(p.nodes[n].TokEnd), int(ext), int(p.nodes[n].Offset), int(p.nodes[n].End), len(p.scratch) - 1 - sb, 1}, true
+\treturn EntryMeta{int(p.nodes[n].TokStart), int(p.nodes[n].TokEnd), int(ext), int(p.nodes[n].Offset), int(p.nodes[n].End), 1}, true
 }
 func (p *engine) parse${r.name}() int32 {
 \tsave := p.pos; sb := len(p.scratch)
@@ -1248,13 +1257,13 @@ func (p *engine) parse${r.name}() int32 {
 \t\text := p.nodes[n].TokEnd
 \t\tif l := uint32(p.lookEnd()); l > ext { ext = l }
 \t\tp.nodes[n].Ext = ext // CST oracle for validate assert; reuse decisions read p.entries
-\t\tlocalE = append(localE, EntryMeta{int(p.nodes[n].TokStart), int(p.nodes[n].TokEnd), int(ext), int(p.nodes[n].Offset), int(p.nodes[n].End), len(p.scratch) - sb, 1})
+\t\tlocalE = append(localE, EntryMeta{int(p.nodes[n].TokStart), int(p.nodes[n].TokEnd), int(ext), int(p.nodes[n].Offset), int(p.nodes[n].End), 1})
 \t\tp.scratch = append(p.scratch, n)
 \t}
 \tp.entries = localE
 \treturn p.finish(${rid}, sb, p.offAt(save), save)
 }`,
-    headSeg: (rule) => `func (p *engine) parseHeadSeg(sb int) (EntryMeta, bool) {
+    headSeg: (rule) => `func (p *engine) parseHeadSeg() (EntryMeta, bool) {
 \tp.lookReset()
 \tbefore := len(p.scratch)
 \tp.opt(func() bool { return p.callRule(p.parse${rule}()) })
@@ -1262,12 +1271,12 @@ func (p *engine) parse${r.name}() int32 {
 \tn := p.scratch[before]
 \text := p.nodes[n].TokEnd
 \tif l := uint32(p.lookEnd()); l > ext { ext = l }
-\treturn EntryMeta{int(p.nodes[n].TokStart), int(p.nodes[n].TokEnd), int(ext), int(p.nodes[n].Offset), int(p.nodes[n].End), before - sb, 1}, true
+\treturn EntryMeta{int(p.nodes[n].TokStart), int(p.nodes[n].TokEnd), int(ext), int(p.nodes[n].Offset), int(p.nodes[n].End), 1}, true
 }
 `,
-    headUse: `\tif m, ok := p.parseHeadSeg(sb); ok { localE = append(localE, m) }
+    headUse: `\tif m, ok := p.parseHeadSeg(); ok { localE = append(localE, m) }
 `,
-    loopSeg: (kid, rule) => `func (p *engine) parseLoopSeg(sb int) (EntryMeta, bool) {
+    loopSeg: (kid, rule) => `func (p *engine) parseLoopSeg() (EntryMeta, bool) {
 \tsp := p.pos; before := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \tp.lookReset()
 \tif !p.matchTok(${kid}) {
@@ -1304,15 +1313,15 @@ func (p *engine) parse${r.name}() int32 {
 \t}
 \text := tokEnd
 \tif l := uint32(p.lookEnd()); l > ext { ext = l }
-\treturn EntryMeta{int(tokStart), int(tokEnd), int(ext), int(off), int(end), before - sb, count}, true
+\treturn EntryMeta{int(tokStart), int(tokEnd), int(ext), int(off), int(end), count}, true
 }`,
-    entryB: (headSeg, headUse, loopSeg) => `type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidStart, KidCount int }
+    entryB: (headSeg, headUse, loopSeg) => `type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidCount int }
 ${headSeg}${loopSeg}
 func (p *engine) parse${r.name}() int32 {
 \tsave := p.pos; sb := len(p.scratch)
 \tlocalE := p.entries[:0]
 ${headUse}\tfor {
-\t\tif m, ok := p.parseLoopSeg(sb); ok { localE = append(localE, m) } else { break }
+\t\tif m, ok := p.parseLoopSeg(); ok { localE = append(localE, m) } else { break }
 \t}
 \tp.entries = localE
 \treturn p.finish(${rid}, sb, p.offAt(save), save)
@@ -1561,9 +1570,11 @@ ${shapeA ? `func (p *engine) assertEntriesVsNodes(oldEntries []EntryMeta, oldRoo
 }
 ` : ''}${shapeB ? `func (p *engine) assertEntriesVsKids(oldEntries []EntryMeta, oldRoot int32) {
 	old := p.nodes[oldRoot]
+	k := old.KidStart
 	for i, e := range oldEntries {
-		first := p.kids[old.KidStart+uint32(e.KidStart)]
-		last := p.kids[old.KidStart+uint32(e.KidStart+e.KidCount-1)]
+		first := p.kids[k]
+		k += uint32(e.KidCount)
+		last := p.kids[k-1]
 		if first >= 0 {
 			if e.Off != int(p.nodes[first].Offset) { panic("off entry " + fmt.Sprintf("%d", i)) }
 		}
@@ -1576,10 +1587,9 @@ ${shapeA ? `func (p *engine) assertEntriesVsNodes(oldEntries []EntryMeta, oldRoo
 	if oldRoot < 0${shapeB ? ' || len(oldEntries) == 0' : ''} { return -1, 0 }
 	if validate { p.assertEntriesVs${shapeA ? 'Nodes' : 'Kids'}(oldEntries, oldRoot) }
 	old := p.nodes[oldRoot]
-	prefixLen, suffixStart := reuseBounds(oldEntries, prefix, oldN, suffix)
+	prefixLen, suffixStart, prefixEnd := reuseBounds(oldEntries, prefix, oldN, suffix)
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
-	_, prefixEnd := reuseKids(oldEntries, 0, prefixLen)
 	prefixKids := append([]int32(nil), p.kids[old.KidStart:old.KidStart+uint32(prefixEnd)]...)
 	p.src = newText
 	p.toks = toksFromMeta(newText, newMeta)
@@ -1594,9 +1604,10 @@ ${shapeA ? `func (p *engine) assertEntriesVsNodes(oldEntries []EntryMeta, oldRoo
 			s := suffixMeta[adoptFrom].TokStart
 			tokDelta = p.pos - s
 		}
-		ka, kb := reuseKids(suffixMeta, adoptFrom, len(suffixMeta))
-		adoptedKids := make([]int32, 0, kb-ka)
-		for _, id := range p.kids[old.KidStart+uint32(ka) : old.KidStart+uint32(kb)] {
+		newEntries, adopted := reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta)
+		ka := reuseKids(oldEntries, prefixLen, prefixEnd, suffixStart+adoptFrom)
+		adoptedKids := make([]int32, 0, adopted)
+		for _, id := range p.kids[old.KidStart+uint32(ka) : old.KidStart+uint32(ka+adopted)] {
 			if id < 0 {
 				ti, tt := decodeLeaf(id)
 				id = encodeLeaf(uint32(int32(ti)+int32(tokDelta)), tt)
@@ -1609,7 +1620,6 @@ ${shapeA ? `func (p *engine) assertEntriesVsNodes(oldEntries []EntryMeta, oldRoo
 		children = append(children, prefixKids...)
 		children = append(children, midKids...)
 		children = append(children, adoptedKids...)
-		newEntries := reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta, len(prefixKids)+len(midKids))
 		off, end, tokStart, tokEnd := reuseSpan(newEntries)
 		kidStart := len(p.kids)
 		p.kids = append(p.kids, children...)
@@ -1627,8 +1637,7 @@ ${shapeA ? `func (p *engine) assertEntriesVsNodes(oldEntries []EntryMeta, oldRoo
 	if passed() { return -1, 0 }
 	${hasHeadB ? `if prefixLen == 0 {
 		sb := len(p.scratch)
-		if m, ok := p.parseHeadSeg(sb); ok {
-			m.KidStart = 0
+		if m, ok := p.parseHeadSeg(); ok {
 			midKids = append(midKids, p.scratch[sb:]...)
 			p.scratch = p.scratch[:sb]
 			midMeta = append(midMeta, m)
@@ -1642,12 +1651,11 @@ ${shapeA ? `func (p *engine) assertEntriesVsNodes(oldEntries []EntryMeta, oldRoo
 			return -1, 0
 		}
 		sb := len(p.scratch)
-		m, ok := p.${shapeA ? 'parseTopEntry' : 'parseLoopSeg'}(sb)
+		m, ok := p.${shapeA ? 'parseTopEntry' : 'parseLoopSeg'}()
 		if !ok {
 			if r, n, hit := tryHit(); hit { return r, n }
 			return -1, 0
 		}
-		m.KidStart = len(prefixKids) + len(midKids)
 		midKids = append(midKids, p.scratch[sb:]...)
 		p.scratch = p.scratch[:sb]
 		midMeta = append(midMeta, m)
@@ -1831,10 +1839,12 @@ function rdEntryWithReuseW(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: Arena
     topCall: (n) => `\treturn p.parse${n}W()`,
     topTry: (n) => `\t{ sp := p.pos; fr, ok := p.parse${n}W(); if ok { return fr, true }; p.back(sp) }`,
     topFail: '\treturn spanned{}, false',
+    // The fresh loop keeps shape A's segment inline, as in the native engine (+11% Go instructions
+    // on dense-semi.ts through the call, 1325b4d).
     entryA: (topOne) => `func (p *${recv}) parseTopOneW() (spanned, bool) {
 ${topOne}
 }
-func (p *${recv}) parseTopEntryW(sb int) (EntryMeta, bool) {
+func (p *${recv}) parseTopEntryW() (EntryMeta, bool) {
 \tsp := p.pos
 \tp.lookReset()
 \tfr, ok := p.parseTopOneW()
@@ -1844,7 +1854,7 @@ func (p *${recv}) parseTopEntryW(sb int) (EntryMeta, bool) {
 \tif l := p.lookEnd(); l > ext { ext = l }
 \t_, end := p.b.SpanOf(fr.h, p.toks)
 \tp.scratch = append(p.scratch, fr.h)
-\treturn EntryMeta{int(fr.tokStart), tokEnd, ext, int(fr.off), int(end), len(p.scratch) - 1 - sb, 1}, true
+\treturn EntryMeta{int(fr.tokStart), tokEnd, ext, int(fr.off), int(end), 1}, true
 }
 func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch)
@@ -1861,12 +1871,12 @@ func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \t\tif fr.present {
 \t\t\t_, e1 := p.b.SpanOf(fr.h, p.toks)
 \t\t\tend = int(e1)
-\t\t\tlocalE = append(localE, EntryMeta{int(fr.tokStart), tokEnd, ext, int(fr.off), end, len(p.scratch) - sb, 1})
+\t\t\tlocalE = append(localE, EntryMeta{int(fr.tokStart), tokEnd, ext, int(fr.off), end, 1})
 \t\t\tp.scratch = append(p.scratch, fr.h)
 \t\t}
 \t}
 ${close}`,
-    headSeg: (rule) => `func (p *${recv}) parseHeadSegW(sb int) (EntryMeta, bool) {
+    headSeg: (rule) => `func (p *${recv}) parseHeadSegW() (EntryMeta, bool) {
 \tp.lookReset()
 \tbefore := len(p.scratch)
 \ttokStart := p.pos
@@ -1877,12 +1887,12 @@ ${close}`,
 \ttokEnd := p.pos
 \text := tokEnd
 \tif l := p.lookEnd(); l > ext { ext = l }
-\treturn EntryMeta{tokStart, tokEnd, ext, int(o0), int(e1), before - sb, 1}, true
+\treturn EntryMeta{tokStart, tokEnd, ext, int(o0), int(e1), 1}, true
 }
 `,
-    headUse: `\tif m, ok := p.parseHeadSegW(sb); ok { localE = append(localE, m) }
+    headUse: `\tif m, ok := p.parseHeadSegW(); ok { localE = append(localE, m) }
 `,
-    loopSeg: (kid, rule) => `func (p *${recv}) parseLoopSegW(sb int) (EntryMeta, bool) {
+    loopSeg: (kid, rule) => `func (p *${recv}) parseLoopSegW() (EntryMeta, bool) {
 \tsp := p.pos; before := len(p.scratch); ${arenaCkpt()}
 \tp.lookReset()
 \tif !(p.tokW(${kid}) && p.takeW(${kid})) {
@@ -1903,14 +1913,14 @@ ${close}`,
 \ttokEnd := p.pos
 \text := tokEnd
 \tif l := p.lookEnd(); l > ext { ext = l }
-\treturn EntryMeta{tokStart, tokEnd, ext, int(o0), int(end), before - sb, count}, true
+\treturn EntryMeta{tokStart, tokEnd, ext, int(o0), int(end), count}, true
 }`,
     entryB: (headSeg, headUse, loopSeg) => `${headSeg}${loopSeg}
 func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch)
 \tlocalE := p.entries[:0] // a reused builder's Workspace list (ParseWith), else nil
 ${headUse}\tfor {
-\t\tm, ok := p.parseLoopSegW(sb)
+\t\tm, ok := p.parseLoopSegW()
 \t\tif !ok { break }
 \t\tlocalE = append(localE, m)
 \t}
@@ -2264,7 +2274,7 @@ func (b *CstBuilder) Shift(h int32, byteDelta, tokDelta int) int32 {
 
   // EntryMeta is part of parseWithMetaW's signature always; reuse paths define it via
   // rdEntryWithReuse{A,B}. Non-reuse grammars (e.g. toy) still emit DocWith and need the type.
-  const entryMetaType = topReuse ? '' : `type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidStart, KidCount int }
+  const entryMetaType = topReuse ? '' : `type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidCount int }
 `;
 
   const parseWithMetaW = `
@@ -2285,10 +2295,9 @@ ${topReuse
   const tryReuseW = topReuse
     ? `
 func tryReuseW(b Builder, sh Shifter, oldRootHs []int32, oldEntries []EntryMeta, newText string, newMeta []alignMeta, byteDelta, oldN, prefix, suffix int) (root int32, newEntries []EntryMeta, newHs []int32, reused int, ok bool) {
-	prefixLen, suffixStart := reuseBounds(oldEntries, prefix, oldN, suffix)
+	prefixLen, suffixStart, prefixEnd := reuseBounds(oldEntries, prefix, oldN, suffix)
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
-	_, prefixEnd := reuseKids(oldEntries, 0, prefixLen)
 	prefixKids := append([]int32(nil), oldRootHs[:prefixEnd]...)
 	p := &parserW{cursor: cursor{toks: toksFromMeta(newText, newMeta)}, src: newText, b: b, drops: dropsOf(b), scratch: nil}
 	if prefixLen > 0 {
@@ -2305,16 +2314,16 @@ func tryReuseW(b Builder, sh Shifter, oldRootHs []int32, oldEntries []EntryMeta,
 			s := suffixMeta[adoptFrom].TokStart
 			tokDelta = p.pos - s
 		}
-		ka, kb := reuseKids(suffixMeta, adoptFrom, len(suffixMeta))
-		adoptedKids := make([]int32, 0, kb-ka)
-		for _, s := range oldRootHs[ka:kb] {
+		outE, adopted := reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta)
+		ka := reuseKids(oldEntries, prefixLen, prefixEnd, suffixStart+adoptFrom)
+		adoptedKids := make([]int32, 0, adopted)
+		for _, s := range oldRootHs[ka : ka+adopted] {
 			adoptedKids = append(adoptedKids, sh.Shift(s, byteDelta, tokDelta))
 		}
 		children := make([]int32, 0, len(prefixKids)+len(midKids)+len(adoptedKids))
 		children = append(children, prefixKids...)
 		children = append(children, midKids...)
 		children = append(children, adoptedKids...)
-		outE := reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta, len(prefixKids)+len(midKids))
 		off, end, tokStart, tokEnd := reuseSpan(outE)
 		scratch := append([]int32(nil), children...)
 		b.Node(&scratch, 0, ${entryRid}, uint32(off), uint32(end), uint32(tokStart), uint32(tokEnd))
@@ -2339,10 +2348,9 @@ func tryReuseW(b Builder, sh Shifter, oldRootHs []int32, oldEntries []EntryMeta,
 	${hasHeadB
     ? `if prefixLen == 0 {
 		sb := len(p.scratch)
-		if m, pok := p.parseHeadSegW(sb); pok {
+		if m, pok := p.parseHeadSegW(); pok {
 			midKids = append(midKids, p.scratch[sb:]...)
 			p.scratch = p.scratch[:sb]
-			m.KidStart = 0
 			m.KidCount = len(midKids)
 			midMeta = append(midMeta, m)
 			if r, e, hs, n, hit := tryHit(); hit {
@@ -2362,14 +2370,13 @@ func tryReuseW(b Builder, sh Shifter, oldRootHs []int32, oldEntries []EntryMeta,
 			return 0, nil, nil, 0, false
 		}
 		sb := len(p.scratch)
-		m, pok := p.${shapeA ? 'parseTopEntryW' : 'parseLoopSegW'}(sb)
+		m, pok := p.${shapeA ? 'parseTopEntryW' : 'parseLoopSegW'}()
 		if !pok {
 			if r, e, hs, n, hit := tryHit(); hit {
 				return r, e, hs, n, true
 			}
 			return 0, nil, nil, 0, false
 		}
-		m.KidStart = len(prefixKids) + len(midKids)
 		midKids = append(midKids, p.scratch[sb:]...)
 		p.scratch = p.scratch[:sb]
 		midMeta = append(midMeta, m)
@@ -2797,6 +2804,16 @@ func parseWithCst(src string, b *CstBuilder) (int32, bool) {
 // arena is emptied, its token buffer (the built-in builders') and Workspace are emptied and reused
 // (capacity kept), so nothing of the previous parse stays reachable and nothing is allocated again.
 func parseWithW(src string, b Builder) (int32, bool) {
+\tp, fr, ok, err := runW(src, b)
+\tif err != nil { panic(lexError(src, err)) }
+\tok = ok && p.pos == len(p.toks)
+\tp.cursor.toks, p.src, p.b = nil, "", nil // the workspace keeps buffers, not the input or the builder
+\tif !ok { return 0, false }
+\tif !fr.present { panic(errNoRoot) }
+\treturn fr.h, true
+}
+// runW: one parse of src with b in b's workspace; the caller drops p's input and builder.
+func runW(src string, b Builder) (*parserW, spanned, bool, *lexErr) {
 \t// The built-in builders by concrete type: the runtime's interface assertion may allocate (dropsOf).
 \tvar w *Workspace
 \tif s, is := b.(*SlimBuilder); is {
@@ -2811,15 +2828,11 @@ func parseWithW(src string, b Builder) (int32, bool) {
 \tb.Restore(0, 0)
 \tp := &w.w
 \ttoks, err := lexInto(src, toksOf(b), &w.lex)
-\tif err != nil { panic(lexError(src, err)) }
+\tif err != nil { return p, spanned{}, false, err }
 \t*p = parserW{cursor: cursor{toks: toks}, src: src, b: b, drops: dropsOf(b), scratch: p.scratch[:0]${reuse ? ', entries: p.entries[:0], entryHs: p.entryHs[:0]' : ''}}
 \tfr, ok := p.parse${ir.entry}W()
 \trecordToks(b, p.toks)
-\tok = ok && p.pos == len(p.toks)
-\tp.cursor.toks, p.src, p.b = nil, "", nil // the workspace keeps buffers, not the input or the builder
-\tif !ok { return 0, false }
-\tif !fr.present { panic(errNoRoot) }
-\treturn fr.h, true
+\treturn p, fr, ok, nil
 }
 
 // errNoRoot: an accepted parse whose builder kept no node for the root (the entry rule). Accepting
@@ -3101,10 +3114,9 @@ const GO_BATCH_TOTAL = `	if len(os.Args) > 1 && os.Args[1] == "batch-total" {
 	}
 `;
 // The emit option `recovery` (src/emit.ts): total parsing's entry, a region appended to the default
-// module and touching none of it. ParseTotal runs the entry rule as parseWithW does, on the builder
-// engine for every builder (owed: one shell for both once the default emission may change); on a
-// reject the recovery family decides the diagnostic from the position the entry stopped at and the
-// tokens the parse examined.
+// module and touching none of it. ParseTotal runs the entry rule as parseWithW does (runW, the
+// builder engine, for every builder); on a reject the recovery family decides the diagnostic from
+// the position the entry stopped at and the tokens the parse examined.
 function recoveryRegionGo(ir: ParserIR, shared: SharedAlgorithms): string {
   const reuse = !!ir.reuse;
   return `
@@ -3132,27 +3144,12 @@ func diagnosticOf(src string, d diag) Diagnostic {
 // root and no errors, a rejected one ok=false and its errors (a lexer error, or the parse's primary
 // error), each with its span in the source. It does not panic on input.
 func ParseTotal(src string, b Builder) (h int32, ok bool, errs []Diagnostic) {
-\tvar w *Workspace
-\tif s, is := b.(*SlimBuilder); is {
-\t\tw = &s.ws
-\t} else if c, is := b.(*CstBuilder); is {
-\t\tw = &c.ws
-\t} else if o, is := b.(WorkspaceOwner); is {
-\t\tw = o.Workspace()
-\t} else {
-\t\tw = &Workspace{}
-\t}
-\tb.Restore(0, 0)
-\tp := &w.w
-\ttoks, err := lexInto(src, toksOf(b), &w.lex)
+\tp, fr, entryOk, err := runW(src, b)
 \tif err != nil {
 \t\tend := err.End
 \t\tif end < err.Off { end = err.Off }
 \t\treturn 0, false, []Diagnostic{{Off: err.Off, End: end, Message: lexError(src, err).Msg}}
 \t}
-\t*p = parserW{cursor: cursor{toks: toks}, src: src, b: b, drops: dropsOf(b), scratch: p.scratch[:0]${reuse ? ', entries: p.entries[:0], entryHs: p.entryHs[:0]' : ''}}
-\tfr, entryOk := p.parse${ir.entry}W()
-\trecordToks(b, p.toks)
 \tok = entryOk && p.pos == len(p.toks)
 \tif !ok {
 \t\t// The examined extent: the furthest of every top-level entry's (lookEnd holds the last one's).

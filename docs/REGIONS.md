@@ -41,7 +41,7 @@ Not built, in this order (each its own change with its gate):
    otherwise markup mode stays and the blocking difference is recorded here.
 
 The portable lexers (TypeScript, Go, Rust) carry the same frames (below, "The portable lexers"):
-JSX, TSX and the dialect fixture have portable parsers, checked against the interpreter by
+JSX, TSX and both dialect fixtures have portable parsers, checked against the interpreter by
 `test/portable-targets.ts`.
 
 ## The model: a region is a declared lexer state
@@ -392,7 +392,18 @@ Built from one plan (`ElementPlan`, `src/emit-portable.ts`) and one family of sh
   frame to push, type-argument depth, look end);
 - the type-parameter vetoes (`lexElOpens`): the head and signature patterns matched as the
   interpreter's regexes match them, and how far they read;
-- the raw body (`lexElRaw`) and the read end of a signature's decision (`lexElReach`).
+- the raw body (`lexElRaw`) and the read end of a signature's decision (`lexElReach`);
+- a text dialect's tests: the tag start (`lexElTagStart`, called by the printers at the entry from
+  code too), the stop of a text run inside it (`lexElTextStop`: a text token, its `after` class
+  permitting, or a directive opener), code trivia (`lexElTrivia`), and the opener and continuation
+  tests (`lexElDirOpen` / `lexElDirCont`, each table unrolled at generation). Their reads (a text
+  token's or a skip token's failed attempt, the furthest unit a directive test compared) widen the
+  look end, as the interpreter's `lxLookEnd`.
+In a directive the frame step needs the head's paren depth (the paren-head stack's length, a
+parameter only then). It reports an opener as an empty token (end = p): the printer pushes the frame
+(a head, or a code block's element hole) and the ordinary scan lexes the opener inside it; a body
+closer with no continuation pops with frame -2, which ends no element (the closer is no value);
+`prevIsValue` treats sub-state 3 as code, and a tagOpen in a head opens no element.
 The printers place these in the dispatch loop and keep the state: the frame stack (the template
 stack, with element holes counting braces as template holes do), whether the last token ended an
 element, the type-argument depth, the look end, where a kept signature ends, and (raw text) each
@@ -548,9 +559,10 @@ Directive openers and continuations are derived from the grammar ("Directives").
 
 ## Owed
 
-- In the portable lexers: `tagStart`, `unlessBodyStarts`, `textTokens`, directives and the root
-  region, as they are built here (until then `buildIR` refuses a grammar that declares one of
-  them, as out of scope); a raw-text grammar that also declares a type-parameter signature is
+- In the portable lexers: the root region, as it is built here (until then `buildIR` refuses
+  markup mode, as out of scope). Every other region feature is carried (`ElementPlan`:
+  `tagStart`, `rawText[].unless`, `textTokens`, `directives`; the shared routines
+  `lexElTagStart`, `lexElTextStop`, `lexElTrivia`, `lexElDirOpen` / `lexElDirCont`); a raw-text grammar that also declares a type-parameter signature is
   refused (the signature's rewind does not restore the raw-text tag records), and so is a
   grammar that declares both elements and `newline` mode.
 - The root region: the build order above.

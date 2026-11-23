@@ -28,6 +28,8 @@ import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils
 import { tokenPatternCharLoop, tokenPatternLiteralPrefix } from './token-pattern.ts';
 import { type TextUnits, firstUnit, oneUnit, unitLen } from './text-units.ts';
 import { scannedTokens, templateLiterals, tokenLiterals } from './lex-family.ts';
+import { info, oneChar } from './lex-match-plan.ts';
+import type { CodeRange } from './algo-ir.ts';
 
 // ── Intermediate representation (plain data; every Target renders THIS) ──
 
@@ -647,7 +649,23 @@ export type ElementPlan = {
   tagTokens: string[];        // tried in a tag (outside type arguments) before the ordinary scan
   // An open tag whose name is one of `tags` (ASCII case folded under `ignoreCase`) has a raw body:
   // one `token` up to tagOpen + closeMarker + name (or the end), lexed in a raw frame (kind 3).
-  rawText: { tags: string[]; token: string; ignoreCase: boolean }[];
+  // `unless`: a pattern tested at the body's first unit; when it matches the body is ordinary
+  // children (no raw frame). Exact-case declarations come first (the interpreter's lookup order).
+  rawText: { tags: string[]; token: string; ignoreCase: boolean; unless: TokenPattern | null }[];
+  // A tagOpen opens a tag (from code, in the children, after `=` in a tag) only when the unit
+  // after it is in these ranges (ASCII); null: always.
+  tagStart: CodeRange[] | null;
+  // Tried in the children, in order, before the text run (each a scanned token; a skip token is
+  // skipped); a run stops before one that matches, inside a run only right after a unit of its
+  // `after` class (ASCII) when it has one.
+  textTokens: { token: string; after: CodeRange[] | null }[];
+  // The derived directives (grammar-analysis.ts directivesOf), as the interpreter's tables: the
+  // openers then the code-block openers (`block`: an element hole, no head), the continuations;
+  // a literal is a word when its last unit is an identifier unit (`idCont`: it must not run on into
+  // one); `ws`: JavaScript's whitespace run (trivia is that and the scanned skip tokens). null: none.
+  directives: {
+    open: ElDirRow[]; cont: ElDirRow[]; idCont: CodeRange[]; ws: TokenPattern;
+  } | null;
   // 'always': every tagOpen in code outside a tag opens an element (tagOpenOnlyOpensTags);
   // 'operand': only one where an operand may start, unless a veto below says otherwise.
   entry: 'always' | 'operand';
@@ -657,11 +675,22 @@ export type ElementPlan = {
   signature: { pre: TokenPattern; then: string[] } | null;
 };
 
+export type ElDirRow = { lit: string; word: boolean; block: boolean; nexts: { lit: string; word: boolean }[][] };
+
 // JavaScript's \s (the interpreter's signature regex is built with it).
 const JS_WS: TokenPattern = { type: 'charClass', negate: false, items: [
   { type: 'range', from: '\t', to: '\r' }, ...[' ', '\u00a0', '\u1680'].map((value) => ({ type: 'char' as const, value })),
   ...Array.from({ length: 11 }, (_, i) => ({ type: 'char' as const, value: String.fromCharCode(0x2000 + i) })), ...['\u2028', '\u2029', '\u202f', '\u205f', '\u3000', '\ufeff'].map((value) => ({ type: 'char' as const, value })),
 ] };
+
+// A one-unit class as ASCII ranges: a unit beyond ASCII is more than one unit in a UTF-8 target,
+// so a class holding one has no one-unit test there (refused, not narrowed).
+function unitClassOf(p: TokenPattern, role: string): CodeRange[] {
+  if (!oneChar(p)) throw new Error(`portable: ${role}: must be a one-unit class`);
+  const rs = info(p).first;
+  if (rs.some(([, hi]) => hi > 127)) throw new Error(`portable: ${role}: a class beyond ASCII is out of scope (no one-unit test in a UTF-8 target)`);
+  return rs.map(([lo, hi]): CodeRange => [lo, hi]);
+}
 
 function elementPlanOf(grammar: CstGrammar, el: NonNullable<CstGrammar['elements']>, identToken: string | null): ElementPlan {
   const tok = (name: string, role: string): string => {
@@ -673,11 +702,29 @@ function elementPlanOf(grammar: CstGrammar, el: NonNullable<CstGrammar['elements
   const tp = el.typeParameters;
   if (always && tp) throw new Error(`portable: elements.typeParameters: this grammar uses '${el.tagOpen}' only to open tags`);
   // Not built in the portable lexers yet: refused, not lexed without them (docs/REGIONS.md, Owed).
-  if (el.tagStart) throw new Error('portable: elements.tagStart is out of scope until the portable lexers carry it');
-  if (el.textTokens?.length) throw new Error('portable: elements.textTokens is out of scope until the portable lexers carry it');
   const dir = directivesOf(grammar, el);
-  if (dir && (dir.openers.length || dir.continuations.length || dir.blocks.length)) throw new Error('portable: element directives are out of scope until the portable lexers carry them');
-  if (el.rawText?.some((r) => r.unlessBodyStarts)) throw new Error('portable: elements.rawText[].unlessBodyStarts is out of scope until the portable lexers carry it');
+  let directives: ElementPlan['directives'] = null;
+  if (dir && (dir.openers.length || dir.continuations.length || dir.blocks.length)) {
+    if (dir.refused.length) throw new Error(`portable: element directives refused: ${dir.refused.map((r) => `${r.arm} (${r.reason})`).join('; ')}`);
+    // The paren-head stack (the regex context's) gives a head's depth; the speculation's rewind
+    // does not restore directive frames' records.
+    if (!grammar.tokens.some((t) => t.regexContext)) throw new Error('portable: element directives need the regex context (its paren-head stack is a head\'s depth)');
+    if (tp?.signature) throw new Error('portable: element directives with typeParameters.signature are out of scope');
+    const ident = grammar.tokens.find((t) => t.name === identToken);
+    const idc = ident ? info(ident.pattern).chars.filter(([, hi]) => hi >= 0) : [];
+    if (idc.some(([, hi]) => hi > 127)) throw new Error('portable: element directives: an identifier beyond ASCII is out of scope (the word test is one unit)');
+    const word = (l: string) => { const u = l.charCodeAt(l.length - 1); return idc.some(([a, b]) => u >= a && u <= b); };
+    const row = (d: { lit: string; nexts: string[][] }, block: boolean): ElDirRow => {
+      if (d.lit.charCodeAt(0) > 127) throw new Error(`portable: element directives: ${JSON.stringify(d.lit)} begins beyond ASCII`);
+      return { lit: d.lit, word: !block && word(d.lit), block, nexts: d.nexts.map((n) => n.map((l) => ({ lit: l, word: word(l) }))) };
+    };
+    directives = {
+      open: [...dir.openers.map((d) => row(d, false)), ...dir.blocks.map((b) => row({ lit: b, nexts: [[]] }, true))],
+      cont: dir.continuations.map((d) => row(d, false)),
+      idCont: idc.map(([a, b]): CodeRange => [a, b]),
+      ws: { type: 'repeat', body: JS_WS, min: 0, greedy: true },
+    };
+  }
   // The signature's rewind restores the frame stack, not the raw-text tag records.
   if (tp?.signature && el.rawText?.length) throw new Error('portable: elements.rawText with typeParameters.signature is out of scope');
   let signature: ElementPlan['signature'] = null;
@@ -695,13 +742,26 @@ function elementPlanOf(grammar: CstGrammar, el: NonNullable<CstGrammar['elements
     text: el.text === undefined ? null : tok(el.text, 'text'),
     closeTag: tok(el.closeTag, 'closeTag'), selfClose: tok(el.selfClose, 'selfClose'),
     tagTokens: (el.tagTokens ?? []).map((n) => tok(n, 'tagTokens')),
-    rawText: (el.rawText ?? []).map((r) => ({ tags: [...r.tags], token: tok(r.token, 'rawText.token'), ignoreCase: !!r.ignoreCase })),
+    rawText: [...(el.rawText ?? [])].sort((a, b) => Number(!!a.ignoreCase) - Number(!!b.ignoreCase))
+      .map((r) => ({ tags: [...r.tags], token: tok(r.token, 'rawText.token'), ignoreCase: !!r.ignoreCase, unless: r.unlessBodyStarts ?? null })),
+    tagStart: el.tagStart === undefined ? null : unitClassOf(el.tagStart, 'elements.tagStart'),
+    directives,
+    textTokens: (el.textTokens ?? []).map((t) => {
+      if (el.text === undefined) throw new Error('portable: elements.textTokens: needs a text token (elements.text)');
+      return { token: tok(t.token, 'textTokens'), after: t.after === undefined ? null : unitClassOf(t.after, `elements.textTokens '${t.token}'.after`) };
+    }),
     entry: always ? 'always' : 'operand',
     head: tp?.head ?? null,
     signature,
   };
 }
 
+// Whether a text token of the region is a skip token (the frame step then returns EL_SKIP for it:
+// the printers skip its span, recording a line terminator in it).
+export const elementSkipsText = (ir: ParserIR): boolean => !!ir.elements?.textTokens.some((t) => ir.tokens.find((x) => x.name === t.token)?.skip);
+// The kinds of a template literal that end at its closing delimiter: the whole literal and its
+// tail (none without templates).
+export const tplEndKids = (ir: ParserIR, ids: LexIdPlan): number[] => (ir.tpl ? [kidOf(ids, ir.tpl.token), kidOf(ids, '$templateTail')] : []);
 // The kinds of an element region's own tokens. They carry no literal id (0), whatever their text:
 // the parser matches a literal by its id alone, and a region token is never a literal (the
 // interpreter's lexer records 0 for them too). A Doc that rebuilds ids from text tests this class.
