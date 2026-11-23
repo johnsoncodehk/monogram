@@ -27,6 +27,7 @@ import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
 import { goldenStream } from './golden-lexer.ts';
 import { scratchDir } from './scratch.ts';
+import { cachedGoBuild, cachedRustc } from './build-cache.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean, detail = '') => {
@@ -227,7 +228,6 @@ func main() {
   writeFileSync(join(gdir, 'reenter', 'main.go'), `package main
 
 import (
-import { cachedGoBuild, cachedRustc } from './build-cache.ts';
 \t"encoding/json"
 \t"os"
 \t"reflect"

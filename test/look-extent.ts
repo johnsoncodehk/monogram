@@ -35,6 +35,7 @@ import { asGoMain } from './go-main.ts';
 import { parityInputs, type Tok } from './parity-corpus.ts';
 import { scratchDir } from './scratch.ts';
 import type { CstGrammar } from '../src/types.ts';
+import { cachedGoBuild, cachedRustc } from './build-cache.ts';
 
 const TMP = scratchDir('look-extent');
 const ROOT = new URL('..', import.meta.url).pathname;
@@ -134,7 +135,6 @@ function tsProbeSource(lib: string): string {
 const GO_PROBE = `package main
 
 import (
-import { cachedGoBuild, cachedRustc } from './build-cache.ts';
 	"encoding/json"
 	"fmt"
 	"io"

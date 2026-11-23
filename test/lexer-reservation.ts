@@ -30,6 +30,7 @@ import { emitParser } from '../src/target.ts';
 import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
 import { scratchDir } from './scratch.ts';
+import { cachedGoBuild, cachedRustc } from './build-cache.ts';
 
 const CAP_PER_TOKEN = 2, PEAK_PER_TOKEN = 3, MIN_TOKENS = 4, STACK_BYTES = 4096;
 const DENSE = 1 << 16;
@@ -183,7 +184,6 @@ func LexShape(src string) (int, int, int) {
   writeFileSync(join(gdir, 'main.go'), `package main
 
 import (
-import { cachedGoBuild, cachedRustc } from './build-cache.ts';
 	"fmt"
 	"os"
 	"runtime"

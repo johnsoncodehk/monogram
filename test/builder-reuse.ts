@@ -38,7 +38,8 @@ import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
 import { asGoMain } from './go-main.ts';
-import { goBuild, scratchDir } from './scratch.ts';
+import { scratchDir } from './scratch.ts';
+import { cachedGoBuild, cachedRustc } from './build-cache.ts';
 import { createParser } from '../src/gen-parser.ts';
 import type { CstGrammar } from '../src/types.ts';
 
@@ -197,7 +198,7 @@ func main() {
 	}
 }
 `);
-  goBuild(['-o', 'consumer', '.'], { cwd: gdir });
+  cachedGoBuild(['-o', 'consumer', '.'], { cwd: gdir });
   for (const [label, b] of [['go', 'cst'], ['go SlimBuilder', 'slim']] as const)
     results.set(label, readPairs(execFileSync(join(gdir, 'consumer'), [b, ...seqFiles.map((fs) => fs.join(','))], { encoding: 'utf8', maxBuffer: 1 << 28 })));
   checkDropped('go', execFileSync(join(gdir, 'consumer'), ['drop', ...seqFiles.flat()], { encoding: 'utf8', maxBuffer: 1 << 28 }));
@@ -264,7 +265,7 @@ fn main() {
     }
 }
 `);
-  execFileSync('rustc', ['-A', 'warnings', rfile, '-o', join(dir, 'reuse')], { stdio: 'pipe' });
+  cachedRustc(['-A', 'warnings', rfile, '-o', join(dir, 'reuse')], { stdio: 'pipe' });
   for (const [label, b] of [['rust', 'cst'], ['rust SlimBuilder', 'slim']] as const)
     results.set(label, readPairs(execFileSync(join(dir, 'reuse'), [b, ...seqFiles.map((fs) => fs.join(','))], { encoding: 'utf8', maxBuffer: 1 << 28 })));
   checkDropped('rust', execFileSync(join(dir, 'reuse'), ['drop', ...seqFiles.flat()], { encoding: 'utf8', maxBuffer: 1 << 28 }));
@@ -866,7 +867,7 @@ if (!haveRustc()) {
     const bin = `${RUST_TMP}/${c.grammar}`;
     writeFileSync(rfile, emitParser(grammar, rustTarget) + rustHarness);
     try {
-      execFileSync('rustc', ['-A', 'warnings', rfile, '-o', bin], { stdio: 'pipe', timeout: 120_000 });
+      cachedRustc(['-A', 'warnings', rfile, '-o', bin], { stdio: 'pipe', timeout: 120_000 });
     } catch (e) {
       check(`rustc ${c.grammar}`, false, String(e).slice(0, 200));
       continue;
@@ -1247,7 +1248,7 @@ if (!haveGo()) {
     writeFileSync(gfile, asGoMain(emitParser(grammar, goTarget)));
     writeFileSync(hfile, goHarness);
     try {
-      goBuild(['-o', bin, gfile, hfile], { timeout: 180_000 });
+      cachedGoBuild(['-o', bin, gfile, hfile], { cwd: GO_TMP, timeout: 180_000 });
     } catch (e) {
       check(`go build ${c.grammar}`, false, String(e).slice(0, 200));
       continue;

@@ -35,6 +35,7 @@ import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
 import { scratchDir } from './scratch.ts';
+import { cachedGoBuild, cachedRustc } from './build-cache.ts';
 
 const SMALL = 64, LARGE = 8 * SMALL, GROWTH = 2;
 
@@ -176,7 +177,6 @@ func lwIndexByte(s string, c byte) int {
   writeFileSync(join(gdir, 'main.go'), `package main
 
 import (
-import { cachedGoBuild, cachedRustc } from './build-cache.ts';
 	"fmt"
 	"os"
 
