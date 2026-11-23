@@ -486,12 +486,13 @@ function windowRelexStepFn(m: RelexMode): Fn {
   ];
   if (frames(m)) {
     anchorSearch.push(
-      { k: 'comment', text: 'Template depth cannot be restored from meta: resume only after a td == 0 token.' },
+      { k: 'comment', text: 'Template depth cannot be restored from meta: resume only after a td == 0 token, one that ends before the edit.' },
       if_(ge('rb', I(0)), [
         let_('rb0', 'int', 'rb'),
         set('rb', I(-1)),
         for_('i', 'rb0', len('oldToks'), [
-          if_(gt(mi(at('oldToks', 'i'), 'end'), 'start'), [BREAK]),
+          // a token ending at the edit start was decided by reading the unit there (its end + 1)
+          if_(ge(mi(at('oldToks', 'i'), 'end'), 'start'), [BREAK]),
           if_(eq(mi(at('oldToks', 'i'), 'td'), I(0)), [set('rb', 'i'), BREAK]),
         ]),
       ]),

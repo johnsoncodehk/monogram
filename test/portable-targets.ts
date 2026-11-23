@@ -1438,7 +1438,9 @@ const FRAME_EDIT_DOCS: Record<string, (string | { doc: string; ins: string[] })[
   javascriptreact: ['let s = `a${b}c${`${d}`}`;\nx = 1;', "let a = <><p>It's</p>{`${<b/>}`}</>;\nx</*c*/y;", 'x = <a/> / 2; y = <b c={1}>t</b>;'],
   // an edit inside a failed attribute string's read, past the element's end (`{x}` → `{x'}`),
   // makes it a string
-  tagtokdialect: ["<a k=n'/> {w} {x}\n<b m='n'>{y}</b>"],
+  // and a token at depth 0 right after the read's end (`ab`, past the line the failed attempt read):
+  // an edit right after it (`ab c` → `abc`) must not keep it as the restart anchor
+  tagtokdialect: ["<a k=n'/> {w} {x}\n<b m='n'>{y}</b>", "<a k=n'/>\nab c"],
   elementdialect: [
     'component C(a) {\n  <a k="v">@if (a) { <b/> } @else { "e" } {a}</a> "z" <c/>\n}',
     'component D() { <a><b>{1}</b><{t} id="d">"s"</{t}></a> }\ncomponent E() { "q" }',
