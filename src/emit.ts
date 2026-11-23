@@ -13,17 +13,24 @@
 // own module through `defineTarget` (define-target.ts) with the Lowering of the shared algorithms.
 import type { CstGrammar } from './types.ts';
 
+// What a portable target emits beyond the default module. `recovery`: total parsing's entry
+// `parseTotal` (docs/TARGETS.md "Errors and tokens"); without it the module has no such symbol and
+// is byte-identical to the default emission.
+export interface EmitOptions { recovery?: boolean }
+
 export interface Target {
   name: string;
   ext: string;                                    // emitted file extension (no dot)
-  emitParser(grammar: CstGrammar): string;        // the module: lexer + parser library, no I/O
+  emitParser(grammar: CstGrammar, opts?: EmitOptions): string;   // the module: lexer + parser library, no I/O
   // A CLI harness (stdin → CST JSON) the verification gates APPEND to the library to make it
   // executable (Go: a separate runner.go). Not part of the parser.
-  emitRunner?(): string;
+  // With `opts.recovery` the runner also has the mode `batch-total` (the module must be emitted
+  // with the same option).
+  emitRunner?(opts?: EmitOptions): string;
 }
 
-export function emitParser(grammar: CstGrammar, target: Target): string {
-  return target.emitParser(grammar);
+export function emitParser(grammar: CstGrammar, target: Target, opts: EmitOptions = {}): string {
+  return target.emitParser(grammar, opts);
 }
 
 export { jsTarget } from './emit-parser.ts';
