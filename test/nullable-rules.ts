@@ -13,7 +13,8 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createParser } from '../src/gen-parser.ts';
 import { computeNullableRules } from '../src/grammar-analysis.ts';
-import { emitParser, jsTarget } from '../src/emit.ts';
+import { emitParser, jsTarget, tsTarget } from '../src/emit.ts';
+import { defineShape, shapeCoverage, child, node } from '../src/shape.ts';
 import { token, rule, defineGrammar, many, opt, plus, oneOf, range } from '../src/api.ts';
 import type { RuleExpr } from '../src/types.ts';
 import { scratchDir } from './scratch.ts';
@@ -70,6 +71,34 @@ check('the inlined form parses what the filler form silently rejected', (() => {
     defineGrammar({ name: 'implicit2', tokens: { WS, IDENT, NL }, rules: { Filler, Program } } as any);
   } catch { implicitBad = true; }
   check('with `entry` omitted, a nullable non-last rule is still rejected', implicitBad);
+}
+
+// A DECLARED `entry` that is not the last rule: every engine starts from it (not from the last
+// rule), and the nullable exemption follows it. Before the entry was stored on the grammar, this
+// grammar was rejected (nullable `Program` read as a non-entry rule) and, with the exemption
+// lifted, parsed from `Item` in every target.
+{
+  const Program = rule(() => [[many(Item)]]);                     // nullable, declared FIRST
+  const Item = rule(() => [[IDENT, opt(',', IDENT)]]);
+  let g: any = null;
+  try { g = defineGrammar({ name: 'entryfirst', tokens: { WS, IDENT, NL }, rules: { Program, Item }, entry: Program }); } catch { /* checked below */ }
+  check('a nullable entry declared before other rules is accepted (the exemption follows `entry`)', g !== null);
+  if (g) {
+    const src = 'a,b c';   // two Items: only the entry Program derives it
+    let iRule = '';
+    try { iRule = createParser(g).parse(src).rule; } catch { /* rejected */ }
+    check('the interpreter starts from the declared entry', iRule === 'Program');
+    const file = join(scratchDir('nullable-rules'), 'entryfirst.ts');
+    writeFileSync(file, emitParser(g, tsTarget));
+    const m = await import(file + '?v=' + Date.now());
+    let pRule: unknown = null;
+    try { const r = m.parseWith(src, m.cstBuilder); pRule = r?.rule; } catch { /* rejected */ }
+    check('the portable TS parser starts from the declared entry', pRule === 'Program');
+    // shapeCoverage reaches rules from the declared entry: mapping only Program's arm reaches Item.
+    const cov = shapeCoverage(defineShape(g, { name: 'entryfirst-ast', rules: { Program: { item: node('Program', { items: child('item') }) } } }));
+    check('shapeCoverage reports the declared entry', cov.entry === 'Program');
+    check('shapeCoverage reaches the rules the entry reads', cov.arms.some((a) => a.rule === 'Item' && a.reached));
+  }
 }
 
 // ── 3. There is no opt-out: the former `allowNullableRules` key is not honoured ──
