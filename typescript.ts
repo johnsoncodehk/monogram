@@ -1174,6 +1174,13 @@ export default defineGrammar({
   // structurally when a type rule exists; these are the rest.
   // The `type_fn_param` tuples (issue #46) are the residual `(` boundary where a param could still be
   // value-context after the type-only fn param decoupled types from `expr`.
+  // The keywords the tree-sitter grammar also reads as names: the ones real code uses as names (measured
+  // on the first ERROR of real files, TypeScript's lib .d.ts files and this repository: `out` 28 files,
+  // `set` 10, `default` 6, `this` 5, `namespace` 3, `get`, `private`, `async`, `type` 1 each; `public`
+  // beside `private`), each costing parse-table size (LALR entries: async 2.4k, get / set 2.0k, out 1.8k,
+  // private / public 1.7k, default 1.6k, this 1.2k, type 1.0k, namespace 1.0k; `static` 3.1k and no file:
+  // left out). Any other keyword is the keyword wherever it is valid, as without the option.
+  treeSitterContextualNames: ['async', 'default', 'get', 'namespace', 'out', 'private', 'public', 'set', 'this', 'type'],
   treeSitterConflicts: [
     // `export { a }`: an export list, or `export` + an expression statement `{ a }` (the guard against
     // a statement that starts with `{` is a dropped lookahead); with the statement's end a token of
