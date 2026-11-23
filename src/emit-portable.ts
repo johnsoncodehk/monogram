@@ -115,7 +115,14 @@ export function groupByPreserveOrder<T>(
 // `src`: the grammar node the step was lowered from (NAMES data, like `field`). `tag` / `mark`: set
 // only on a shape plan's copy of the steps (src/shape-plan.ts): the slot tag a building step gives
 // the child it leaves, and the iteration marker a repetition's body inserts before its children.
-export type Step = StepOp & { field?: string; src?: RuleExpr; tag?: number; mark?: number };
+// `inh` / `threadInit` / `thread` (shape plans only): the inherited context a rule call sets (each
+// attribute k to a constant or a copy of attribute `copy`, restored after the call), the state a
+// threaded repetition starts from, and the function giving the next state after each iteration.
+export type ShapeInhVal = { c: string | number | boolean | null } | { copy: number };
+export type Step = StepOp & {
+  field?: string; src?: RuleExpr; tag?: number; mark?: number;
+  inh?: { k: number; v: ShapeInhVal }[]; threadInit?: { k: number; v: ShapeInhVal }; thread?: { k: number; next: string };
+};
 type StepOp =
   | { t: 'lit'; value: string; ttype: '$keyword' | '$punct' }   // match a literal by text
   | { t: 'tok'; name: string; hole?: string }                   // match a token kind; a template kind (TplCfg) carries the rule that parses its `${…}` holes and also matches an interpolated template
@@ -1568,7 +1575,7 @@ const conjOf = (steps: Step[], L: StepLowering): string => (steps.length ? steps
 /** A step as a boolean expression: a shared step's call, else the step itself (stepBody). */
 export function stepExpr(s: Step, L: StepLowering): string {
   if ('share' in s && s.share !== undefined) return L.shared(s.share);
-  if ((s.tag !== undefined || s.mark !== undefined) && L.shaped) return L.shaped(s, stepBody(s, L));
+  if ((s.tag !== undefined || s.mark !== undefined || s.inh !== undefined || s.threadInit !== undefined) && L.shaped) return L.shaped(s, stepBody(s, L));
   return stepBody(s, L);
 }
 /** The step itself, printed in place (a shared step's function body; every other step's site). */
