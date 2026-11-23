@@ -684,6 +684,11 @@ export interface CstGrammar {
   tokens: TokenDecl[];
   precs: PrecLevel[];
   ledPrecs?: LedPrec[];
+  // The `>` re-scan, DECLARED: `>` closes a bracket (TypeScript's type arguments, a JSX tag) where
+  // a `>`-led operator could also begin, so the lexer scans every `>` alone and the parser composes
+  // `>>`, `>=`, `>>>=` … from adjacent single `>` tokens where it reads an operator (tsc's
+  // reScanGreaterToken). Absent: `>` is an ordinary punctuator and `>=` one token. See gtComposites.
+  composeGt?: true;
   rules: RuleDecl[];
   entryRule?: string;  // the rule a parse starts from (`defineGrammar`'s `entry`); absent → the last declared rule. Read it through findEntryRule, never by position
   scopeOverrides: Map<string, string[]>;

@@ -61,6 +61,8 @@ export default defineGrammar({
   scopeName: 'source.unilits',
   tokens: { Ident, Number: Number_, Str, Template, Deg, LineComment, BlockComment },
   prec,
+  // `>` is a statement's leading literal as well as an operator: the composed-`>` path, declared.
+  composeGt: true,
   rules: { Expr, Stmt, Program },
   expression: Expr,
 });
