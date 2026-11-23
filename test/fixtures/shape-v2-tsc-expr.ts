@@ -323,7 +323,6 @@ const PRIMARY: Record<string, Term> = {
   false_: node('FalseKeyword'),
   null_: node('NullKeyword'),
   this_: node('ThisKeyword'),
-  undefined: node('Identifier', { text: c('undefined') }),
   ident: node('Identifier', { text: cook('identifierName', 'ident') }),
   number: numeric('number'),
   hexNumber: numeric('hexNumber'),

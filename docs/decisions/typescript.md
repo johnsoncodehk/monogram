@@ -19,7 +19,7 @@ Every choice point of the grammar and how the generated parser (the portable pla
 | finding | count |
 |:--|--:|
 | dead alternatives (never win) | 5 |
-| ties decided by declaration order (one token: 16; observed on the pinned inputs: 14) | 18 |
+| ties decided by declaration order (one token: 6; observed on the pinned inputs: 8) | 8 |
 | alternatives no token reaches | 0 |
 
 ## Findings
@@ -43,16 +43,6 @@ Two candidates of one list match the same input to the same end; the one declare
 | list | wins (declared first) | loses | one token | observed | witness | action |
 |:--|:--|:--|:--|--:|:--|:--|
 | Decl | declare (#9) | declared (#12) |  | 11 | typescript/lib/lib.es5.d.ts:33: `declare function eval(x: string): any;` | reorder, or guard `declare`: the tie of declare and declared is resolved only by declaration order (declare wins) |
-| Expr NUD | true_ (#0) | ident (#6) | `true` | 326 | acorn/dist/acorn.mjs:54: `true }` | reorder, or guard `true_`: the tie of true_ and ident on `true` is resolved only by declaration order (true_ wins) |
-| Expr NUD | false_ (#1) | ident (#6) | `false` | 292 | acorn/dist/acorn.mjs:52: `false }` | reorder, or guard `false_`: the tie of false_ and ident on `false` is resolved only by declaration order (false_ wins) |
-| Expr NUD | null_ (#2) | ident (#6) | `null` | 158 | acorn/dist/acorn.mjs:119: `null;` | reorder, or guard `null_`: the tie of null_ and ident on `null` is resolved only by declaration order (null_ wins) |
-| Expr NUD | undefined (#3) | ident (#6) | `undefined` | 15 | acorn/dist/acorn.mjs:3575: `undefined, useStrict && !oldStrict);` | reorder, or guard `undefined`: the tie of undefined and ident on `undefined` is resolved only by declaration order (undefined wins) |
-| Expr NUD | this_ (#4) | ident (#6) | `this` | 3723 | acorn/dist/acorn.mjs:111: `this.label = label;` | reorder, or guard `this_`: the tie of this_ and ident on `this` is resolved only by declaration order (this_ wins) |
-| NewTarget NUD | true_ (#0) | ident (#5) | `true` |  | `true` as NewTarget | reorder, or guard `true_`: the tie of true_ and ident on `true` is resolved only by declaration order (true_ wins) |
-| NewTarget NUD | false_ (#1) | ident (#5) | `false` |  | `false` as NewTarget | reorder, or guard `false_`: the tie of false_ and ident on `false` is resolved only by declaration order (false_ wins) |
-| NewTarget NUD | null_ (#2) | ident (#5) | `null` |  | `null` as NewTarget | reorder, or guard `null_`: the tie of null_ and ident on `null` is resolved only by declaration order (null_ wins) |
-| NewTarget NUD | undefined (#3) | ident (#5) | `undefined` |  | `undefined` as NewTarget | reorder, or guard `undefined`: the tie of undefined and ident on `undefined` is resolved only by declaration order (undefined wins) |
-| NewTarget NUD | this_ (#4) | ident (#5) | `this` | 5 | acorn/dist/acorn.mjs:672: `this(options, input).parse()` | reorder, or guard `this_`: the tie of this_ and ident on `this` is resolved only by declaration order (this_ wins) |
 | Type NUD | ident (#0) | this_ (#25) | `this` | 189 | typescript/lib/typescript.d.ts:9338: `this;` | reorder, or guard `ident`: the tie of ident and this_ on `this` is resolved only by declaration order (ident wins) |
 | TypeMember | new_ (#0) | seq2 (#2) |  | 70 | typescript/lib/lib.es5.d.ts:156: `new (value?: any): Object;` | reorder, or guard `new_`: the tie of new_ and seq2 is resolved only by declaration order (new_ wins) |
 
@@ -173,7 +163,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `@new`: two tokens: committed to _new (#1) (takes a mark: it can fail after `'@new'`)
   - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <String>, <Template> and 6 more: no candidate, the list fails
   - <Decorator>: one token: committed to decorator (#0)
-  - two tokens (SECOND): _new (#1) only before '('|'['|'async'|'false'|'function'|'import'|…17
+  - two tokens (SECOND): _new (#1) only before '('|'['|'async'|'false'|'function'|'import'|…16
 - one token, no mark: 1 inline choice, 1 star
 - DecoratorExpr / decorator: `alt('(' sep(Expr, ',') ')' \| '<' sep(Type, ',') !(alt('…`: one token; takes a mark: branch 0: it can fail after `'('`; branch 1: it can fail after `'<'`; branch 3: it can fail after `'.'`; branch 4: it can fail after `'?.'`
 - DecoratorExpr / decorator: `sep(Expr, ',')`: by attempt
@@ -195,31 +185,35 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 
 ### Expr
 
-- Expr NUD (38 NUD arms):
-  - `!`, `+`, `++`, `-`, `--`, `delete`, `typeof`, `void` and 1 more: one token: committed to prefixOp (#11) (takes a mark: its operand can fail after the operator)
-  - `(`: two tokens: committed to paren (#24), unless arrow (#20) admits the token (then the frame) (takes a mark: it can fail after `'('`)
-  - `...`: one token: committed to spread (#12) (takes a mark: it can fail after `'...'`)
-  - `<`: two tokens: committed to lt (#37), unless arrow (#20) admits the token (then the frame) (takes a mark: it can fail after `'<'`)
-  - `[`: one token: committed to array (#17) (takes a mark: it can fail after `'['`)
-  - `await`: two tokens: committed to prefixOp (#11), unless ident (#6), arrowIdentifier (#22) admit the token (then the frame) (takes a mark: its operand can fail after the operator)
+- Expr NUD (37 NUD arms):
+  - `!`, `+`, `++`, `-`, `--`, `delete`, `typeof`, `void` and 1 more: one token: committed to prefixOp (#10) (takes a mark: its operand can fail after the operator)
+  - `(`: two tokens: committed to paren (#23), unless arrow (#19) admits the token (then the frame) (takes a mark: it can fail after `'('`)
+  - `...`: one token: committed to spread (#11) (takes a mark: it can fail after `'...'`)
+  - `<`: two tokens: committed to lt (#36), unless arrow (#19) admits the token (then the frame) (takes a mark: it can fail after `'<'`)
+  - `[`: one token: committed to array (#16) (takes a mark: it can fail after `'['`)
+  - `await`: two tokens: committed to prefixOp (#10), unless ident (#5), arrowIdentifier (#21) admit the token (then the frame) (takes a mark: its operand can fail after the operator)
   - `break`, `case`, `catch`, `const`, `continue`, `debugger`, `default`, `do` and 16 more: no candidate, the list fails
-  - `class`: two tokens: committed to namedClass (#35), unless anonymousClass (#36) admits the token (then the frame) (takes a mark: it can fail after `opt((DecoratorExpr many(DecoratorExpr))…`)
-  - `super`: two tokens: committed to super_ (#5), unless arrowIdentifier (#22) admits the token (then the frame) (takes a mark: it can fail after `'super'`)
-  - `{`: one token: committed to object (#18) (takes a mark: it can fail after `'{'`)
-  - <Ident>: two tokens: committed to ident (#6), unless arrowIdentifier (#22) admits the token (then the frame)
-  - <HexNumber>: one token: committed to hexNumber (#27)
-  - <OctalNumber>: one token: committed to octalNumber (#28)
-  - <BinaryNumber>: one token: committed to binaryNumber (#29)
-  - <BigInt>: one token: committed to bigInt (#30)
-  - <Number>: one token: committed to number (#7)
-  - <String>: one token: committed to string (#8)
-  - <Template>: one token: committed to template (#9)
-  - <Regex>: one token: committed to regex (#10)
-  - <Decorator>: two tokens: committed to namedClass (#35), unless anonymousClass (#36) admits the token (then the frame) (takes a mark: it can fail after `opt((DecoratorExpr many(DecoratorExpr))…`)
-  - <PrivateField>: one token: committed to privateField (#26)
+  - `class`: two tokens: committed to namedClass (#34), unless anonymousClass (#35) admits the token (then the frame) (takes a mark: it can fail after `opt((DecoratorExpr many(DecoratorExpr))…`)
+  - `false`: one token: committed to false_ (#1)
+  - `null`: one token: committed to null_ (#2)
+  - `super`: one token: committed to super_ (#4) (takes a mark: it can fail after `'super'`)
+  - `this`: one token: committed to this_ (#3)
+  - `true`: one token: committed to true_ (#0)
+  - `{`: one token: committed to object (#17) (takes a mark: it can fail after `'{'`)
+  - <Ident>: two tokens: committed to ident (#5), unless arrowIdentifier (#21) admits the token (then the frame)
+  - <HexNumber>: one token: committed to hexNumber (#26)
+  - <OctalNumber>: one token: committed to octalNumber (#27)
+  - <BinaryNumber>: one token: committed to binaryNumber (#28)
+  - <BigInt>: one token: committed to bigInt (#29)
+  - <Number>: one token: committed to number (#6)
+  - <String>: one token: committed to string (#7)
+  - <Template>: one token: committed to template (#8)
+  - <Regex>: one token: committed to regex (#9)
+  - <Decorator>: two tokens: committed to namedClass (#34), unless anonymousClass (#35) admits the token (then the frame) (takes a mark: it can fail after `opt((DecoratorExpr many(DecoratorExpr))…`)
+  - <PrivateField>: one token: committed to privateField (#25)
   - <$templateMiddle>, <$templateTail>, punctuation: no candidate, the list fails
-  - two tokens (SECOND): asyncArrow (#19) only before '('|'<'; arrow (#20) only before ')'|'...'|'>'|'@new'|'['|'abstract'|…18; asyncArrowIdentifier (#21) only before Ident; arrowIdentifier (#22) only before '=>'; namedClass (#35) only before '!'|'('|'.'|'<'|'?.'|'@new'|…37; anonymousClass (#36) only before '!'|'('|'.'|'<'|'?.'|'@new'|…39
-  - longest match: a candidate frame (a mark per new best) at `async`, `false`, `function`, `import`, `new`, `null`, `this`, `true` and 2 more, the keys above where an `unless` candidate admits the token, every token of a kind no case names, over true_ (#0), false_ (#1), null_ (#2), undefined (#3), this_ (#4), super_ (#5) and 21 more
+  - two tokens (SECOND): asyncArrow (#18) only before '('|'<'; arrow (#19) only before ')'|'...'|'>'|'@new'|'['|'abstract'|…18; asyncArrowIdentifier (#20) only before Ident; arrowIdentifier (#21) only before '=>'; namedClass (#34) only before '!'|'('|'.'|'<'|'?.'|'@new'|…36; anonymousClass (#35) only before '!'|'('|'.'|'<'|'?.'|'@new'|…38
+  - longest match: a candidate frame (a mark per new best) at `async`, `function`, `import`, `new`, `yield`, the keys above where an `unless` candidate admits the token, every token of a kind no case names, over ident (#5), template (#8), prefixOp (#10), newDotTarget (#12), construct (#13), new_ (#14) and 15 more
 - Expr LED (11 connectors, 39 binary operators):
   - `<`: by attempt, in order: led_lt, led_lt2 then the binary operator (takes a builder checkpoint: led_lt: it can fail after `sep(Type, ',')`; led_lt2: it can fail after `sep(Type, ',')`)
   - `(`: one token: led_paren (takes a builder checkpoint: led_paren: it can fail after `sep(Expr, ',')`)
@@ -477,24 +471,28 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 
 ### NewTarget
 
-- NewTarget NUD (25 NUD arms):
-  - `(`: one token: committed to paren (#24) (takes a mark: it can fail after `'('`)
-  - `[`: one token: committed to array (#18) (takes a mark: it can fail after `'['`)
-  - `await`, `yield`: one token: committed to ident (#5)
+- NewTarget NUD (24 NUD arms):
+  - `(`: one token: committed to paren (#23) (takes a mark: it can fail after `'('`)
+  - `[`: one token: committed to array (#17) (takes a mark: it can fail after `'['`)
+  - `await`, `yield`: one token: committed to ident (#4)
   - `break`, `case`, `catch`, `class`, `const`, `continue`, `debugger`, `default` and 20 more: no candidate, the list fails
-  - `super`: one token: committed to superMember (#13) (takes a mark: it can fail after `'super'`)
-  - `{`: one token: committed to object (#19) (takes a mark: it can fail after `'{'`)
-  - <Ident>: one token: committed to ident (#5)
-  - <HexNumber>: one token: committed to hexNumber (#7)
-  - <OctalNumber>: one token: committed to octalNumber (#8)
-  - <BinaryNumber>: one token: committed to binaryNumber (#9)
-  - <BigInt>: one token: committed to bigInt (#10)
-  - <Number>: one token: committed to number (#6)
-  - <String>: one token: committed to string (#11)
-  - <Template>: one token: committed to template (#17)
-  - <Regex>: one token: committed to regex (#12)
+  - `false`: one token: committed to false_ (#1)
+  - `null`: one token: committed to null_ (#2)
+  - `super`: one token: committed to superMember (#12) (takes a mark: it can fail after `'super'`)
+  - `this`: one token: committed to this_ (#3)
+  - `true`: one token: committed to true_ (#0)
+  - `{`: one token: committed to object (#18) (takes a mark: it can fail after `'{'`)
+  - <Ident>: one token: committed to ident (#4)
+  - <HexNumber>: one token: committed to hexNumber (#6)
+  - <OctalNumber>: one token: committed to octalNumber (#7)
+  - <BinaryNumber>: one token: committed to binaryNumber (#8)
+  - <BigInt>: one token: committed to bigInt (#9)
+  - <Number>: one token: committed to number (#5)
+  - <String>: one token: committed to string (#10)
+  - <Template>: one token: committed to template (#16)
+  - <Regex>: one token: committed to regex (#11)
   - <Decorator>, <PrivateField>, <$templateMiddle>, <$templateTail>, punctuation: no candidate, the list fails
-  - longest match: a candidate frame (a mark per new best) at `async`, `false`, `function`, `import`, `new`, `null`, `this`, `true` and 1 more, every token of a kind no case names, over true_ (#0), false_ (#1), null_ (#2), undefined (#3), this_ (#4), ident (#5) and 8 more
+  - longest match: a candidate frame (a mark per new best) at `async`, `function`, `import`, `new`, every token of a kind no case names, over ident (#4), newDotTarget (#13), importMeta (#14), new_ (#15), template (#16), function_ (#19) and 3 more
 - NewTarget LED (3 connectors, 0 binary operators):
   - `.`: one token: led_dot
   - `[`: one token: led_bracket (takes a builder checkpoint: led_bracket: it can fail after `Expr`)
@@ -679,8 +677,8 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - <Ident>: one token: committed to plain (#2) (takes a mark: it can fail after `many(DecoratorExpr)`)
   - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <String>, <Template>, <Regex> and 5 more: no candidate, the list fails
   - <Decorator>: two tokens: committed to plain (#2), unless modified (#1) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
-  - two tokens (pairs): modified (#1) at `@new` only before '!'|'('|'.'|'<'|'?.'|'@new'|…36; modified (#1) at `abstract`, `accessor`, `async`, `declare` and 9 more only before '...'|'@new'|'['|'abstract'|'accessor'|'async'|…14; modified (#1) at `static` only before '...'|'@new'|'['|'abstract'|'accessor'|'async'|…13
-  - two tokens (SECOND): modified (#1) only before '!'|'('|'.'|'...'|'<'|'?.'|…37
+  - two tokens (pairs): modified (#1) at `@new` only before '!'|'('|'.'|'<'|'?.'|'@new'|…35; modified (#1) at `abstract`, `accessor`, `async`, `declare` and 9 more only before '...'|'@new'|'['|'abstract'|'accessor'|'async'|…14; modified (#1) at `static` only before '...'|'@new'|'['|'abstract'|'accessor'|'async'|…13
+  - two tokens (SECOND): modified (#1) only before '!'|'('|'.'|'...'|'<'|'?.'|…36
   - longest match: a candidate frame (a mark per new best) at `this`, the keys above where an `unless` candidate admits the token, over thisParameter (#0), modified (#1), plain (#2)
 - one token, no mark: 10 star, 5 opt
 - Param / thisParameter: `opt(':' Type)`: one token; takes a mark: it can fail after `':'`
@@ -841,7 +839,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <String>, <Template> and 6 more: no candidate, the list fails
   - <Decorator>: two tokens: committed to prefixed (#13) (takes a mark: it can fail after `alt((DecoratorExpr many(DecoratorExpr))…`)
   - two tokens (pairs): function_ (#0) at `function` only before Ident; generator (#1) at `function` only before '*'; asyncFunction (#2) at `async` only before 'function'; asyncGenerator (#3) at `async` only before 'function'; namedClass (#6) at `class` only before Ident; anonymousClass (#7) at `class` only before '<'|'extends'|'implements'|'{'; declare (#9) at `declare` only before 'function'; declare2 (#10) at `declare` only before 'module'; declare3 (#11) at `declare` only before 'global'; exportAsNamespace (#17) at `export` only before 'as'; exportDefault (#19) at `export` only before '@new'|'default'|Decorator; exportAll (#20) at `export` only before '*'|'type'; exportNamed (#21) at `export` only before '{'; exportEquals (#22) at `export` only before '='; exportNamedType (#23) at `export` only before 'type'
-  - two tokens (SECOND): function_ (#0) only before Ident; generator (#1) only before '*'; asyncFunction (#2) only before 'function'; asyncGenerator (#3) only before 'function'; interface (#4) only before Ident; type (#5) only before Ident; namedClass (#6) only before Ident; anonymousClass (#7) only before '<'|'extends'|'implements'|'{'; enum_ (#8) only before Ident; declare (#9) only before 'function'; declare2 (#10) only before 'module'; declare3 (#11) only before 'global'; prefixed (#13) only before '!'|'('|'.'|'<'|'?.'|'@new'|…46; seq (#14) only before '@new'|'abstract'|'accessor'|'async'|'class'|'const'|…16; namespace (#15) only before Ident; module (#16) only before Ident|String; exportAsNamespace (#17) only before 'as'; exportDefault (#19) only before '@new'|'default'|Decorator; exportAll (#20) only before '*'|'type'; exportNamed (#21) only before '{'; exportEquals (#22) only before '='; exportNamedType (#23) only before 'type'; const_ (#24) only before 'enum'; importDeclaration (#25) only before '*'|'defer'|'type'|'{'|Ident|String
+  - two tokens (SECOND): function_ (#0) only before Ident; generator (#1) only before '*'; asyncFunction (#2) only before 'function'; asyncGenerator (#3) only before 'function'; interface (#4) only before Ident; type (#5) only before Ident; namedClass (#6) only before Ident; anonymousClass (#7) only before '<'|'extends'|'implements'|'{'; enum_ (#8) only before Ident; declare (#9) only before 'function'; declare2 (#10) only before 'module'; declare3 (#11) only before 'global'; prefixed (#13) only before '!'|'('|'.'|'<'|'?.'|'@new'|…45; seq (#14) only before '@new'|'abstract'|'accessor'|'async'|'class'|'const'|…16; namespace (#15) only before Ident; module (#16) only before Ident|String; exportAsNamespace (#17) only before 'as'; exportDefault (#19) only before '@new'|'default'|Decorator; exportAll (#20) only before '*'|'type'; exportNamed (#21) only before '{'; exportEquals (#22) only before '='; exportNamedType (#23) only before 'type'; const_ (#24) only before 'enum'; importDeclaration (#25) only before '*'|'defer'|'type'|'{'|Ident|String
   - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over function_ (#0), generator (#1), asyncFunction (#2), asyncGenerator (#3), namedClass (#6), anonymousClass (#7) and 13 more
 - one token, no mark: 14 inline choices, 28 star, 47 opt, 7 sep
 - Decl / function_: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
@@ -1067,8 +1065,8 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <String>, <PrivateField>: one token: committed to member (#2) (takes a mark: it can fail after `many(DecoratorExpr)`)
   - <Template>, <Regex>, <$templateHead>, <$templateMiddle>, <$templateTail>, punctuation: no candidate, the list fails
   - <Decorator>: two tokens: committed to member (#2), unless staticBlock (#1) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
-  - two tokens (pairs): staticBlock (#1) at `@new` only before '!'|'('|'.'|'<'|'?.'|'@new'|…37; staticBlock (#1) at `abstract`, `accessor`, `const`, `declare` and 9 more only before 'abstract'|'accessor'|'const'|'declare'|'default'|'export'|…8; staticBlock (#1) at `static` only before 'abstract'|'accessor'|'const'|'declare'|'default'|'export'|…9
-  - two tokens (SECOND): staticBlock (#1) only before '!'|'('|'.'|'<'|'?.'|'@new'|…37
+  - two tokens (pairs): staticBlock (#1) at `@new` only before '!'|'('|'.'|'<'|'?.'|'@new'|…36; staticBlock (#1) at `abstract`, `accessor`, `const`, `declare` and 9 more only before 'abstract'|'accessor'|'const'|'declare'|'default'|'export'|…8; staticBlock (#1) at `static` only before 'abstract'|'accessor'|'const'|'declare'|'default'|'export'|…9
+  - two tokens (SECOND): staticBlock (#1) only before '!'|'('|'.'|'<'|'?.'|'@new'|…36
   - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over staticBlock (#1), member (#2)
 - one token, no mark: 6 inline choices, 11 star, 15 opt, 1 sep
 - ClassMember / staticBlock: `alt(alt('static' \| 'export' !{'*'\|'as'} !('default' !(……`: one token; takes a mark: branch 0: it can fail after `alt('static' \| 'export' !{'*'\|'as'} !('…`

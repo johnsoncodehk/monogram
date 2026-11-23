@@ -19,7 +19,7 @@ Every choice point of the grammar and how the generated parser (the portable pla
 | finding | count |
 |:--|--:|
 | dead alternatives (never win) | 0 |
-| ties decided by declaration order (one token: 10; observed on the pinned inputs: 6) | 10 |
+| ties decided by declaration order (one token: 0; observed on the pinned inputs: 0) | 0 |
 | alternatives no token reaches | 0 |
 
 ## Findings
@@ -30,20 +30,7 @@ None.
 
 ### Ties decided by declaration order
 
-Two candidates of one list match the same input to the same end; the one declared first wins. Where the later one is meant to win there, the grammar must say so (reorder, or refuse the token in the earlier one). "One token": both can match exactly one token at these tokens (the witness is that token parsed as the rule, where the engine observes the tie). "Observed": a frame on the pinned inputs where they tied (how often, and the first place).
-
-| list | wins (declared first) | loses | one token | observed | witness | action |
-|:--|:--|:--|:--|--:|:--|:--|
-| Expr NUD | true_ (#1) | ident (#7) | `true` | 326 | acorn/dist/acorn.mjs:54: `true }` | reorder, or guard `true_`: the tie of true_ and ident on `true` is resolved only by declaration order (true_ wins) |
-| Expr NUD | false_ (#2) | ident (#7) | `false` | 292 | acorn/dist/acorn.mjs:52: `false }` | reorder, or guard `false_`: the tie of false_ and ident on `false` is resolved only by declaration order (false_ wins) |
-| Expr NUD | null_ (#3) | ident (#7) | `null` | 158 | acorn/dist/acorn.mjs:119: `null;` | reorder, or guard `null_`: the tie of null_ and ident on `null` is resolved only by declaration order (null_ wins) |
-| Expr NUD | undefined (#4) | ident (#7) | `undefined` | 15 | acorn/dist/acorn.mjs:3575: `undefined, useStrict && !oldStrict);` | reorder, or guard `undefined`: the tie of undefined and ident on `undefined` is resolved only by declaration order (undefined wins) |
-| Expr NUD | this_ (#5) | ident (#7) | `this` | 3723 | acorn/dist/acorn.mjs:111: `this.label = label;` | reorder, or guard `this_`: the tie of this_ and ident on `this` is resolved only by declaration order (this_ wins) |
-| NewTarget NUD | true_ (#0) | ident (#5) | `true` |  | `true` as NewTarget | reorder, or guard `true_`: the tie of true_ and ident on `true` is resolved only by declaration order (true_ wins) |
-| NewTarget NUD | false_ (#1) | ident (#5) | `false` |  | `false` as NewTarget | reorder, or guard `false_`: the tie of false_ and ident on `false` is resolved only by declaration order (false_ wins) |
-| NewTarget NUD | null_ (#2) | ident (#5) | `null` |  | `null` as NewTarget | reorder, or guard `null_`: the tie of null_ and ident on `null` is resolved only by declaration order (null_ wins) |
-| NewTarget NUD | undefined (#3) | ident (#5) | `undefined` |  | `undefined` as NewTarget | reorder, or guard `undefined`: the tie of undefined and ident on `undefined` is resolved only by declaration order (undefined wins) |
-| NewTarget NUD | this_ (#4) | ident (#5) | `this` | 5 | acorn/dist/acorn.mjs:672: `this(options, input).parse()` | reorder, or guard `this_`: the tie of this_ and ident on `this` is resolved only by declaration order (this_ wins) |
+None besides the dead alternatives.
 
 ### Alternatives no token reaches
 
@@ -60,32 +47,36 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 
 ### Expr
 
-- Expr NUD (38 NUD arms):
-  - `!`, `+`, `++`, `-`, `--`, `delete`, `typeof`, `void` and 1 more: one token: committed to prefixOp (#12) (takes a mark: its operand can fail after the operator)
-  - `(`: two tokens: committed to paren (#25), unless arrow (#21) admits the token (then the frame) (takes a mark: it can fail after `'('`)
-  - `...`: one token: committed to spread (#13) (takes a mark: it can fail after `'...'`)
+- Expr NUD (37 NUD arms):
+  - `!`, `+`, `++`, `-`, `--`, `delete`, `typeof`, `void` and 1 more: one token: committed to prefixOp (#11) (takes a mark: its operand can fail after the operator)
+  - `(`: two tokens: committed to paren (#24), unless arrow (#20) admits the token (then the frame) (takes a mark: it can fail after `'('`)
+  - `...`: one token: committed to spread (#12) (takes a mark: it can fail after `'...'`)
   - `<`: two tokens: committed to jSXElement (#0)
-  - `[`: one token: committed to array (#18) (takes a mark: it can fail after `'['`)
-  - `await`: two tokens: committed to prefixOp (#12), unless ident (#7), arrowIdentifier (#23) admit the token (then the frame) (takes a mark: its operand can fail after the operator)
+  - `[`: one token: committed to array (#17) (takes a mark: it can fail after `'['`)
+  - `await`: two tokens: committed to prefixOp (#11), unless ident (#6), arrowIdentifier (#22) admit the token (then the frame) (takes a mark: its operand can fail after the operator)
   - `break`, `case`, `catch`, `const`, `continue`, `debugger`, `default`, `do` and 16 more: no candidate, the list fails
-  - `class`: two tokens: committed to namedClass (#36), unless anonymousClass (#37) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
-  - `import`: one token: committed to import_ (#26) (takes a mark: it can fail after `'import'`)
-  - `super`: two tokens: committed to super_ (#6), unless arrowIdentifier (#23) admits the token (then the frame) (takes a mark: it can fail after `'super'`)
-  - `{`: one token: committed to object (#19) (takes a mark: it can fail after `'{'`)
-  - <Ident>: two tokens: committed to ident (#7), unless arrowIdentifier (#23) admits the token (then the frame)
-  - <HexNumber>: one token: committed to hexNumber (#28)
-  - <OctalNumber>: one token: committed to octalNumber (#29)
-  - <BinaryNumber>: one token: committed to binaryNumber (#30)
-  - <BigInt>: one token: committed to bigInt (#31)
-  - <Number>: one token: committed to number (#8)
-  - <String>: one token: committed to string (#9)
-  - <Template>: one token: committed to template (#10)
+  - `class`: two tokens: committed to namedClass (#35), unless anonymousClass (#36) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
+  - `false`: one token: committed to false_ (#2)
+  - `import`: one token: committed to import_ (#25) (takes a mark: it can fail after `'import'`)
+  - `null`: one token: committed to null_ (#3)
+  - `super`: one token: committed to super_ (#5) (takes a mark: it can fail after `'super'`)
+  - `this`: one token: committed to this_ (#4)
+  - `true`: one token: committed to true_ (#1)
+  - `{`: one token: committed to object (#18) (takes a mark: it can fail after `'{'`)
+  - <Ident>: two tokens: committed to ident (#6), unless arrowIdentifier (#22) admits the token (then the frame)
+  - <HexNumber>: one token: committed to hexNumber (#27)
+  - <OctalNumber>: one token: committed to octalNumber (#28)
+  - <BinaryNumber>: one token: committed to binaryNumber (#29)
+  - <BigInt>: one token: committed to bigInt (#30)
+  - <Number>: one token: committed to number (#7)
+  - <String>: one token: committed to string (#8)
+  - <Template>: one token: committed to template (#9)
   - <JSXSelfClose>, <JSXClose>, <JSXText>, <JSXString>, <$templateMiddle>, <$templateTail>, punctuation: no candidate, the list fails
-  - <Regex>: one token: committed to regex (#11)
-  - <Decorator>: two tokens: committed to namedClass (#36), unless anonymousClass (#37) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
-  - <PrivateField>: one token: committed to privateField (#27)
-  - two tokens (SECOND): jSXElement (#0) only before '>'|Ident; asyncArrow (#20) only before '('; arrow (#21) only before ')'|'...'|'['|'{'|Decorator|Ident; asyncArrowIdentifier (#22) only before Ident; arrowIdentifier (#23) only before '=>'; namedClass (#36) only before '('|'class'|Decorator|Ident; anonymousClass (#37) only before '('|'class'|'extends'|'{'|Decorator
-  - longest match: a candidate frame (a mark per new best) at `async`, `false`, `function`, `new`, `null`, `this`, `true`, `undefined` and 1 more, the keys above where an `unless` candidate admits the token, every token of a kind no case names, over true_ (#1), false_ (#2), null_ (#3), undefined (#4), this_ (#5), super_ (#6) and 19 more
+  - <Regex>: one token: committed to regex (#10)
+  - <Decorator>: two tokens: committed to namedClass (#35), unless anonymousClass (#36) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
+  - <PrivateField>: one token: committed to privateField (#26)
+  - two tokens (SECOND): jSXElement (#0) only before '>'|Ident; asyncArrow (#19) only before '('; arrow (#20) only before ')'|'...'|'['|'{'|Decorator|Ident; asyncArrowIdentifier (#21) only before Ident; arrowIdentifier (#22) only before '=>'; namedClass (#35) only before '('|'class'|Decorator|Ident; anonymousClass (#36) only before '('|'class'|'extends'|'{'|Decorator
+  - longest match: a candidate frame (a mark per new best) at `async`, `function`, `new`, `yield`, the keys above where an `unless` candidate admits the token, every token of a kind no case names, over ident (#6), template (#9), prefixOp (#11), newDotTarget (#13), construct (#14), newNamedClass (#15) and 13 more
 - Expr LED (7 connectors, 39 binary operators):
   - `(`: one token: led_paren (takes a builder checkpoint: led_paren: it can fail after `sep(Expr, ',')`)
   - `.`: one token: led_dot
@@ -155,25 +146,29 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 
 ### NewTarget
 
-- NewTarget NUD (25 NUD arms):
-  - `(`: one token: committed to paren (#24) (takes a mark: it can fail after `'('`)
-  - `[`: one token: committed to array (#18) (takes a mark: it can fail after `'['`)
-  - `await`, `yield`: one token: committed to ident (#5)
+- NewTarget NUD (24 NUD arms):
+  - `(`: one token: committed to paren (#23) (takes a mark: it can fail after `'('`)
+  - `[`: one token: committed to array (#17) (takes a mark: it can fail after `'['`)
+  - `await`, `yield`: one token: committed to ident (#4)
   - `break`, `case`, `catch`, `class`, `const`, `continue`, `debugger`, `default` and 20 more: no candidate, the list fails
-  - `import`: one token: committed to importMeta (#15) (takes a mark: it can fail after `'import'`)
-  - `super`: one token: committed to superMember (#13) (takes a mark: it can fail after `'super'`)
-  - `{`: one token: committed to object (#19) (takes a mark: it can fail after `'{'`)
-  - <Ident>: one token: committed to ident (#5)
-  - <HexNumber>: one token: committed to hexNumber (#7)
-  - <OctalNumber>: one token: committed to octalNumber (#8)
-  - <BinaryNumber>: one token: committed to binaryNumber (#9)
-  - <BigInt>: one token: committed to bigInt (#10)
-  - <Number>: one token: committed to number (#6)
-  - <String>: one token: committed to string (#11)
-  - <Template>: one token: committed to template (#17)
+  - `false`: one token: committed to false_ (#1)
+  - `import`: one token: committed to importMeta (#14) (takes a mark: it can fail after `'import'`)
+  - `null`: one token: committed to null_ (#2)
+  - `super`: one token: committed to superMember (#12) (takes a mark: it can fail after `'super'`)
+  - `this`: one token: committed to this_ (#3)
+  - `true`: one token: committed to true_ (#0)
+  - `{`: one token: committed to object (#18) (takes a mark: it can fail after `'{'`)
+  - <Ident>: one token: committed to ident (#4)
+  - <HexNumber>: one token: committed to hexNumber (#6)
+  - <OctalNumber>: one token: committed to octalNumber (#7)
+  - <BinaryNumber>: one token: committed to binaryNumber (#8)
+  - <BigInt>: one token: committed to bigInt (#9)
+  - <Number>: one token: committed to number (#5)
+  - <String>: one token: committed to string (#10)
+  - <Template>: one token: committed to template (#16)
   - <JSXSelfClose>, <JSXClose>, <JSXText>, <JSXString>, <Decorator>, <PrivateField>, <$templateMiddle>, <$templateTail> and 1 more: no candidate, the list fails
-  - <Regex>: one token: committed to regex (#12)
-  - longest match: a candidate frame (a mark per new best) at `async`, `false`, `function`, `new`, `null`, `this`, `true`, `undefined`, every token of a kind no case names, over true_ (#0), false_ (#1), null_ (#2), undefined (#3), this_ (#4), ident (#5) and 7 more
+  - <Regex>: one token: committed to regex (#11)
+  - longest match: a candidate frame (a mark per new best) at `async`, `function`, `new`, every token of a kind no case names, over ident (#4), newDotTarget (#13), new_ (#15), template (#16), function_ (#19), generator (#20) and 2 more
 - NewTarget LED (2 connectors, 0 binary operators):
   - `.`: one token: led_dot
   - `[`: one token: led_bracket (takes a builder checkpoint: led_bracket: it can fail after `Expr`)

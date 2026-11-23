@@ -3153,6 +3153,9 @@ function buildHighlightsScm(
   // value-position uses (e.g. `Array.from`), so those are left to the structural
   // type-reference capture below; only position-independent vocabulary (globals,
   // constants) is emitted as an #any-of? identifier predicate.
+  // A `constant.language*` word that the identifier admits (no always-reserved word: JavaScript's
+  // `undefined`, an identifier whose value the runtime provides) is such a name too.
+  const alwaysReserved = new Set(ctx.reserved.plan.sets[0]?.words ?? []);
   const identNameHints: { lit: string; cap: string }[] = [];
   for (const [lit, scopes] of scopeOverrides) {
     if (lit.startsWith('.')) continue; // property-name overrides handled separately
@@ -3160,7 +3163,7 @@ function buildHighlightsScm(
       const cap = scopeToCapture(scopes[0]);
       if (cap) add(cap, lit);
     }
-    const nameScope = scopes.find(s => s === 'support' || s.startsWith('support.'));
+    const nameScope = scopes.find(s => s === 'support' || s.startsWith('support.') || ((s === 'constant.language' || s.startsWith('constant.language.')) && !alwaysReserved.has(lit)));
     const nameCap = nameScope && scopeToCapture(nameScope);
     if (nameCap && nameCap !== '@type' && nameCap !== '@type.builtin') identNameHints.push({ lit, cap: nameCap });
   }
