@@ -591,7 +591,7 @@ export const tscExprShape = defineShape(typescript, {
         ident: node('PropertyAccessExpression', { expression: child('left'), questionDotToken: token('QuestionDotToken', 'questionDot'), name: idOf('ident'), flags: c('OptionalChain') }),
         privateField: node('PropertyAccessExpression', { expression: child('left'), questionDotToken: token('QuestionDotToken', 'questionDot'), name: privateOf('privateField'), flags: c('OptionalChain') }),
         paren: node('CallExpression', { expression: child('left'), questionDotToken: token('QuestionDotToken', 'questionDot'), arguments: child('expr'), flags: c('OptionalChain') }),
-        bracket: node('ElementAccessExpression', { expression: child('left'), questionDotToken: token('QuestionDotToken', 'questionDot'), argumentExpression: commaOf('expr', 'exprComma', 'exprRest'), flags: c('OptionalChain') }),
+        bracket: node('ElementAccessExpression', { expression: child('left'), questionDotToken: token('QuestionDotToken', 'questionDot'), argumentExpression: child('expr'), flags: c('OptionalChain') }),
       }),
       led_bang: node('NonNullExpression', { expression: child('left'), flags: iff(and(syn('optional'), not(inh('chainTop'))), c('OptionalChain'), absent) }),
       led_question: node('ConditionalExpression', {

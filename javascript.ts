@@ -105,9 +105,11 @@ const expTail = seq(oneOf('e', 'E'), optPattern(oneOf('+', '-')), digits);
 // the lexer rejects it (tsc's scanner behavior). fracTail/expTail keep `digits` (leading
 // zeros legal there: `0.012`, `1e007`).
 const intPart = altPattern('0', seq(range('1', '9'), star(digit), star(seq('_', plus(digit)))));
-// An integer part not followed by its fraction is not followed by `.` either: the literal is the
-// longest one, so `1._5` and `0.n` are `1.` / `0.` and an IdentifierStart (no token), not `1` `._5`.
-const Number_      = token(seq(altPattern(seq(intPart, altPattern(fracTail, notFollowedBy('.'))), seq('.', digits)), optPattern(expTail), numericTailGuard), { scope: 'constant.numeric.decimal' });
+// Owed: `1._5` and `0.n` are `1.` / `0.` and an IdentifierStart (the longest literal, then no token),
+// but the token backs up to `1` and `._5`; refusing that (an integer part not followed by `.`) makes
+// those inputs lex errors, after which the portable lexers' relex of an edit before them (`.1._x`)
+// keeps the error (portable-targets/edits: edited rejects, fresh accepts): the lexer lane's.
+const Number_      = token(seq(altPattern(seq(intPart, optPattern(fracTail)), seq('.', digits)), optPattern(expTail), numericTailGuard), { scope: 'constant.numeric.decimal' });
 // A decimal BigInt (`DecimalBigIntegerLiteral : 0 BigIntLiteralSuffix | NonZeroDigit DecimalDigits? BigIntLiteralSuffix`):
 // the integer part of a decimal literal, so no leading zero (`010n`, `00n` match no token).
 const BigInt_      = token(seq(intPart, 'n', numericTailGuard), { scope: 'constant.numeric.bigint' });
@@ -116,7 +118,7 @@ const BigInt_      = token(seq(intPart, 'n', numericTailGuard), { scope: 'consta
 // or `9` (`08`, `019`), which is a DecimalIntegerLiteral and so takes a fraction and an exponent
 // (`08.5`, `09e1`). Neither has separators. Both are refused in strict mode code (an early error).
 const LegacyNumber = token(altPattern(
-  seq('0', star(range('0', '7')), oneOf('8', '9'), star(digit), altPattern(fracTail, notFollowedBy('.')), optPattern(expTail), numericTailGuard),
+  seq('0', star(range('0', '7')), oneOf('8', '9'), star(digit), optPattern(fracTail), optPattern(expTail), numericTailGuard),
   seq('0', plus(range('0', '7')), numericTailGuard),
 ), { scope: 'constant.numeric.decimal' });
 // A well-formed JS escape, used in the string-body pattern below. `\u`/`\x` must

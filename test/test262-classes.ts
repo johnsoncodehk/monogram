@@ -147,6 +147,12 @@ const WE_ACCEPT: CauseClass[] = [
     why: '`switch (x) { a = 2; case 0: }`: a CaseBlock holds CaseClauses and a DefaultClause only; the grammar\'s SwitchCase rule has a bare Stmt arm.',
     match: (t) => says(t, /not followed by "case"/i),
   },
+  {
+    id: 'accept/numeric-literal-lexical', direction: 'we-accept', verdict: 'grammar-bug',
+    title: 'a numeric literal the lexical grammar does not derive',
+    why: '`1._5`, `1._e1`: the literal is the longest one (`1.`), and an IdentifierStart may not follow it; the token backs up to `1` and lexes `._5` as a member. Refusing the back-up makes these lex errors, after which the portable lexers\' relex of an edit before the error keeps it (`x = 1._x;` with `.` inserted: edited rejects, fresh accepts): owed to the lexer lane.',
+    match: (t) => inDir(t, /^test\/language\/literals\/(numeric|bigint)\//) && !flag(t, 'onlyStrict'),
+  },
   // waiting on a parameter the engine lacks
   {
     id: 'accept/use-strict-with-non-simple-parameters', direction: 'we-accept', verdict: 'early-error',

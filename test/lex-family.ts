@@ -567,7 +567,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
     // (a lazy repeat is bounded as the regex runs it: a block comment reads nothing past its `*/`)
     Shebang: [2, 1, true], JSDoc: [Infinity, 0, true], TripleSlash: [Infinity, 1, true], LineComment: [2, 1, true],
     BlockComment: [Infinity, 0, true], Ident: [Infinity, Infinity, false], HexNumber: [Infinity, 2, false],
-    OctalNumber: [Infinity, 2, false], BinaryNumber: [Infinity, 2, false], BigInt: [Infinity, 1, true], Number: [Infinity, Infinity, false],
+    OctalNumber: [Infinity, 2, false], BinaryNumber: [Infinity, 2, false], BigInt: [Infinity, 1, true], Number: [Infinity, Infinity, false], LegacyNumber: [Infinity, Infinity, false],
     String: [Infinity, Infinity, true], Template: [Infinity, 0, true], Regex: [Infinity, Infinity, false], Decorator: [1, Infinity, false],
     PrivateField: [Infinity, Infinity, false],
   };
@@ -605,7 +605,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   const noted = [...new Set(jplan.arms.flatMap((a) => a.cands.filter((c) => c.readEnd).map((c) => c.tok)))].sort();
   const overToks = jplan.over.map((o) => o.tok).sort();
   if (JSON.stringify(noted) !== JSON.stringify(['BigInt', 'BinaryNumber', 'BlockComment', 'HexNumber', 'JSDoc', 'Number', 'OctalNumber', 'Regex', 'TripleSlash'])) fail(`javascript: failed attempts checked ${JSON.stringify(noted)}`);
-  if (JSON.stringify(overToks) !== JSON.stringify(['Decorator', 'Ident', 'Number', 'PrivateField', 'Regex'])) fail(`javascript: matches checked ${JSON.stringify(overToks)}`);
+  if (JSON.stringify(overToks) !== JSON.stringify(['Decorator', 'Ident', 'LegacyNumber', 'Number', 'PrivateField', 'Regex'])) fail(`javascript: matches checked ${JSON.stringify(overToks)}`);
   console.log(`  ${rows} tokens of 6 grammars: read bounds consistent; javascript's pinned; its relex checks the failed attempts of ${noted.length} tokens and the matches of ${overToks.length}`);
 
   // Proved on the printed scanners.
