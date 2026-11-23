@@ -11,7 +11,8 @@
 // Run with: node test/diagnostic-labels.ts
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { emitParser, jsTarget } from '../src/emit.ts';
+import { emitParser } from '../src/target.ts';
+import { jsTarget } from '../src/emit-parser.ts';
 import { createParser } from '../src/gen-parser.ts';
 import { objectify } from './emitted-obj.ts';
 import { token, rule, defineGrammar, many, opt, plus, oneOf, range } from '../src/api.ts';
