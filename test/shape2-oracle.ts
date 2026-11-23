@@ -24,8 +24,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createParser, type CstLeaf, type CstNode } from '../src/gen-parser.ts';
 import type { CstGrammar } from '../src/types.ts';
-import { armNameOf, evaluator, loadShape2, Shape2Unmapped, type LoadedShape2, type S2Node } from '../src/shape2-eval.ts';
-import type { Shape2Spec } from '../src/shape2-schema.ts';
+import { armNameOf, evaluator, ShapeUnmapped, type Shape, type ShapeNode } from '../src/shape2-eval.ts';
 import { compareTrees, conformanceFiles, type Divergence, type NTree, type NValue } from './shape-oracle.ts';
 
 export const REALJS_LIST = '/home/linuxuser/.cache/monogram-agents/scratch/fix-grammar-queue-2/realjs-files.txt';
@@ -34,14 +33,14 @@ const RECORD = new URL('./shape2-oracle-record.json', import.meta.url);
  * (PACKAGES) for acorn, the pinned TypeScript checkout's expression cases for tsc. */
 const CI_CORPUS: Record<string, string> = { estree: 'node_modules', tsc: 'conformance/expressions' };
 
-type Shape = { name: 'estree' | 'tsc'; grammar: CstGrammar; spec: Shape2Spec; oracle: (src: string, path: string) => NTree | string };
+type OracleShape = { name: 'estree' | 'tsc'; grammar: CstGrammar; shape: Shape; oracle: (src: string, path: string) => NTree | string };
 
-async function shapeOf(name: string): Promise<Shape> {
+async function shapeOf(name: string): Promise<OracleShape> {
   if (name === 'estree') {
     const { parseEstree, normaliseEstree } = await import('./shape-oracle-estree.ts');
     const { estreeExprShape } = await import('./fixtures/shape-v2-estree-expr.ts');
     return {
-      name, grammar: (await import('../javascript.ts')).default, spec: estreeExprShape,
+      name, grammar: (await import('../javascript.ts')).default, shape: estreeExprShape,
       oracle: (src) => { const r = parseEstree(src); return r ? normaliseEstree(r.tree) : 'acorn rejects it'; },
     };
   }
@@ -49,7 +48,7 @@ async function shapeOf(name: string): Promise<Shape> {
     const { tscOracle } = await import('./shape-oracle-tsc.ts');
     const { tscExprShape } = await import('./fixtures/shape-v2-tsc-expr.ts');
     return {
-      name, grammar: (await import('../typescript.ts')).default, spec: tscExprShape,
+      name, grammar: (await import('../typescript.ts')).default, shape: tscExprShape,
       oracle: (src, path) => { const r = tscOracle(src, path); return 'tree' in r ? r.tree : 'skip' in r ? r.skip : r.fail; },
     };
   }
@@ -118,8 +117,8 @@ const rootView = (o: NTree, got: NTree): [NTree, NTree] => [
  * - top-level statement: every element of the root's statement list (ESTree `body`, tsc
  *   `statements`), against the root's CST children;
  * - file: the root (see ROOT_NOT_COMPARED). A file is outside the subset when any of it is. */
-export function runShape(shape: Shape, corpus: string, paths: string[], samples = 12): Scoreboard[] {
-  const loaded: LoadedShape2 = loadShape2(shape.grammar, shape.spec);
+export function runShape(shape: OracleShape, corpus: string, paths: string[], samples = 12): Scoreboard[] {
+  const loaded: Shape = shape.shape;
   const parser = createParser(shape.grammar);
   const boards = Object.fromEntries(VIEWS.map((view): [View, Scoreboard] => [view, {
     shape: shape.name, corpus, view, files: paths.length, filesSkipped: 0, filesRejected: 0, units: 0, unpaired: 0, outOfSubset: 0, evalErrors: 0,
@@ -138,8 +137,8 @@ export function runShape(shape: Shape, corpus: string, paths: string[], samples 
       r.units++;
       if (!n) { r.unpaired++; return; }
       let value;
-      try { value = valueAt(n) as S2Node; } catch (e) {
-        if (e instanceof Shape2Unmapped) { r.outOfSubset++; bump(r.unmapped, `${e.rule}.${e.arm}`); return; }
+      try { value = valueAt(n) as ShapeNode; } catch (e) {
+        if (e instanceof ShapeUnmapped) { r.outOfSubset++; bump(r.unmapped, `${e.rule}.${e.arm}`); return; }
         r.evalErrors++; bump(r.unmapped, `ERROR ${(e as Error).message.slice(0, 80)}`); return;
       }
       r.compared++;

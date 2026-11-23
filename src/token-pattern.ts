@@ -102,6 +102,12 @@ export function tokenPatternLiteralPrefixes(token: Pick<TokenDecl, 'pattern'>): 
   return unique(literalPrefixInfo(token.pattern).runs.filter(Boolean));
 }
 
+// Every literal run a match of the pattern begins with, '' among them when a match may begin with
+// no literal (a class, a repeat): a sound over-approximation of how a match can begin.
+export function tokenPatternLiteralRuns(pattern: TokenPattern): string[] {
+  return unique(literalPrefixInfo(pattern).runs);
+}
+
 export function tokenPatternLiteralPrefix(token: Pick<TokenDecl, 'pattern'>): string | undefined {
   return tokenPatternLiteralPrefixes(token)[0];
 }

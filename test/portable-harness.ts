@@ -37,12 +37,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createParser } from '../src/gen-parser.ts';
 import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
-import { emitParser, tsTarget, goTarget, rustTarget } from '../src/emit.ts';
+import { emitParser } from '../src/target.ts';
+import { tsTarget } from '../src/target-ts.ts';
+import { goTarget } from '../src/target-go.ts';
+import { rustTarget } from '../src/target-rust.ts';
 import { asGoMain } from './go-main.ts';
 import { parityInputs, type Tok } from './parity-corpus.ts';
 import { goBuild, scratchDir } from './scratch.ts';
 import type { CstGrammar } from '../src/types.ts';
 import { CASES, type Case } from './portable-cases.ts';
+import { CHECK_TARGETS } from './check-targets.ts';
 
 export { CASES, type Case };
 
@@ -52,8 +56,10 @@ export const gate = { failures: 0 };
 // The element-region grammars' cases may be run alone: --grammars=a,b or PORTABLE_GRAMMARS=a,b;
 // check.ts shards a class this way; without it a class runs every case).
 export const ONLY = (process.argv.find((a) => a.startsWith('--grammars='))?.slice('--grammars='.length) ?? process.env.PORTABLE_GRAMMARS)?.split(',');
-// Likewise PORTABLE_TARGETS=go,rust: which compiled targets run (TypeScript always does).
-export const TARGETS_ONLY = process.env.PORTABLE_TARGETS?.split(',');
+// Likewise PORTABLE_TARGETS=go,rust: which compiled targets run (TypeScript always does); and
+// CHECK_TARGETS (test/check-targets.ts), set by `check.ts --changed`, narrows them further.
+const PORTABLE_ONLY = process.env.PORTABLE_TARGETS?.split(',');
+export const TARGETS_ONLY = PORTABLE_ONLY || CHECK_TARGETS ? ['go', 'rust'].filter((t) => (!PORTABLE_ONLY || PORTABLE_ONLY.includes(t)) && (!CHECK_TARGETS || CHECK_TARGETS.includes(t))) : undefined;
 
 // tsc's JSX conformance cases (each `// @filename` part one input), when the pinned corpus is present.
 export const JSX_GRAMMARS = new Set(['typescriptreact', 'javascriptreact']);

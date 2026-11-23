@@ -1,0 +1,1345 @@
+# tree-sitter against the interpreter: every disagreement (test/treesitter-verdicts.ts --write)
+# grammar | corpus | rejects (tree-sitter ERROR, interpreter accepts) or accepts (the reverse) | class | input
+javascript | line breaks | accepts | unclassified | "x = async\nfunction () {}"
+javascript | line breaks | rejects | unclassified | "function f() { return\n/a/ }"
+javascript | lookaheads | accepts | unclassified | "class C {}.x;"
+javascript | lookaheads | accepts | unclassified | "for (let of a);"
+javascript | lookaheads | accepts | unclassified | "function f() {}.x;"
+javascript | lookaheads | accepts | unclassified | "try {}"
+javascript | lookaheads | accepts | unclassified | "x = () => {}.x;"
+javascript | lookaheads | accepts | unclassified | "x = a => {}.y;"
+javascript | lookaheads | accepts | unclassified | "x = async () => {}.y;"
+javascript | lookaheads | accepts | unclassified | "{} .b"
+javascript | lookaheads | accepts | unclassified | "{}.b;"
+javascript | lookaheads | rejects | unclassified | "export let = 1;"
+javascript | lookaheads | rejects | unclassified | "export let;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "!a = c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "!a ??= c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "++a = c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "++a ??= c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "+a = c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "+a ??= c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "--a = c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "--a ??= c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "-a = c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "-a ??= c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a & c = d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a & c ??= d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a && c = d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a && c ??= d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a * c = d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a * c ??= d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a ** c = d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a ** c ??= d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a + c = d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a + c ??= d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a < c = d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a < c ??= d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a << c = d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a << c ??= d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a == c = d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a == c ??= d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a ?? c = d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a ?? c ??= d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a ??= c = d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a ^ c = d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a ^ c ??= d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a in c = d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a in c ??= d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a instanceof c = d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a instanceof c ??= d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a | c = d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a | c ??= d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a || c = d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a || c ??= d;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a++ = c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "a++ ??= c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "await a = c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "await a ??= c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "delete a = c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "delete a ??= c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "typeof a = c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "typeof a ??= c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "void a = c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "void a ??= c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "~a = c;"
+javascript | operator pairs | accepts | assignment-target-not-checked | "~a ??= c;"
+javascript | operator pairs | accepts | unary-lhs-of-** | "!a ** c;"
+javascript | operator pairs | accepts | unary-lhs-of-** | "+a ** c;"
+javascript | operator pairs | accepts | unary-lhs-of-** | "-a ** c;"
+javascript | operator pairs | accepts | unary-lhs-of-** | "await a ** c;"
+javascript | operator pairs | accepts | unary-lhs-of-** | "delete a ** c;"
+javascript | operator pairs | accepts | unary-lhs-of-** | "typeof a ** c;"
+javascript | operator pairs | accepts | unary-lhs-of-** | "void a ** c;"
+javascript | operator pairs | accepts | unary-lhs-of-** | "~a ** c;"
+javascript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a & c;"
+javascript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a && c;"
+javascript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a * c;"
+javascript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a ** c;"
+javascript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a + c;"
+javascript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a < c;"
+javascript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a << c;"
+javascript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a = c;"
+javascript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a == c;"
+javascript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a ? b : c;"
+javascript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a ?? c;"
+javascript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a ??= c;"
+javascript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a ^ c;"
+javascript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a in c;"
+javascript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a instanceof c;"
+javascript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a | c;"
+javascript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a || c;"
+javascript | reserved words | accepts | unclassified | "const { default } = o;"
+javascript | reserved words | accepts | unclassified | "import { if } from \"m\";"
+javascript | test262 | rejects | unclassified | test/annexB/language/statements/for-in/bare-initializer.js
+javascript | test262 | rejects | unclassified | test/annexB/language/statements/for-in/const-initializer.js
+javascript | test262 | rejects | unclassified | test/annexB/language/statements/for-in/let-initializer.js
+javascript | test262 | rejects | unclassified | test/annexB/language/statements/for-in/nonstrict-initializer.js
+javascript | test262 | rejects | unclassified | test/annexB/language/statements/for-in/strict-initializer.js
+javascript | test262 | rejects | unclassified | test/annexB/language/statements/for-in/var-arraybindingpattern-initializer.js
+javascript | test262 | rejects | unclassified | test/annexB/language/statements/for-in/var-objectbindingpattern-initializer.js
+javascript | test262 | rejects | unclassified | test/language/block-scope/syntax/for-in/disallow-initialization-assignment.js
+javascript | test262 | rejects | unclassified | test/language/comments/hashbang/line-terminator-line-separator.js
+javascript | test262 | rejects | unclassified | test/language/comments/hashbang/line-terminator-paragraph-separator.js
+javascript | test262 | rejects | unclassified | test/language/expressions/assignment/white-space.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-gen-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-gen-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-gen-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-gen-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-gen-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-gen-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-gen-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-gen-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-gen-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-gen-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-gen-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-gen-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-gen-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-gen-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-method-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-method-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-method-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-method-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-method-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-method-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-method-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-method-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-method-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-method-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-method-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-method-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-method-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-method-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-gen-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-gen-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-gen-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-gen-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-gen-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-gen-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-gen-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-gen-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-gen-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-gen-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-gen-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-gen-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-gen-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-gen-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-method-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-method-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-method-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-method-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-method-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-method-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-method-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-method-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-method-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-method-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-method-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-method-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-method-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-async-method-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-gen-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-gen-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-gen-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-gen-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-gen-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-gen-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-gen-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-gen-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-gen-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-gen-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-gen-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-gen-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-gen-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-gen-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-method-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-method-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-method-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-method-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-method-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-method-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-method-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-method-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-method-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-method-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-method-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-method-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-method-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-static-method-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/escaped-accessor-field-asi-before-computed-field.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/escaped-accessor-field-asi-before-generator.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/escaped-async-field-asi-before-computed-field.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/escaped-async-field-asi-before-generator.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/escaped-get-field-asi-before-computed-field.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/escaped-get-field-asi-before-generator.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/escaped-set-field-asi-before-computed-field.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/escaped-set-field-asi-before-generator.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/escaped-static-field-asi-before-computed-field.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/escaped-static-field-asi-before-generator.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-definitions-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-definitions-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-definitions-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-definitions-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-definitions-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-definitions-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-definitions-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-definitions-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-definitions-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-definitions-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-definitions-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-definitions-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-definitions-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-definitions-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-stacked-definitions-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-stacked-definitions-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-stacked-definitions-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-stacked-definitions-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-stacked-definitions-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-stacked-definitions-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-stacked-definitions-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-stacked-definitions-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-stacked-definitions-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-stacked-definitions-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-stacked-definitions-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-stacked-definitions-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-stacked-definitions-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/multiple-stacked-definitions-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-no-sc-line-method-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-no-sc-line-method-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-no-sc-line-method-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-no-sc-line-method-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-no-sc-line-method-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-no-sc-line-method-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-no-sc-line-method-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-no-sc-line-method-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-no-sc-line-method-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-no-sc-line-method-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-no-sc-line-method-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-no-sc-line-method-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-no-sc-line-method-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-no-sc-line-method-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-gen-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-gen-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-gen-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-gen-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-gen-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-gen-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-gen-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-gen-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-gen-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-gen-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-gen-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-gen-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-gen-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-gen-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-method-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-method-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-method-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-method-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-method-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-method-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-method-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-method-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-method-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-method-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-method-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-method-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-method-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/new-sc-line-method-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/private-accessor-name/inst-private-escape-sequence-ZWJ.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/private-accessor-name/inst-private-escape-sequence-ZWNJ.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/private-accessor-name/inst-private-escape-sequence-u2118.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/private-accessor-name/inst-private-name-ZWJ.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/private-accessor-name/inst-private-name-ZWNJ.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/private-accessor-name/inst-private-name-u2118.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/private-accessor-name/static-private-escape-sequence-ZWJ.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/private-accessor-name/static-private-escape-sequence-ZWNJ.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/private-accessor-name/static-private-escape-sequence-u2118.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/private-accessor-name/static-private-name-ZWJ.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/private-accessor-name/static-private-name-ZWNJ.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/private-accessor-name/static-private-name-u2118.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/regular-definitions-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/regular-definitions-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/regular-definitions-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/regular-definitions-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/regular-definitions-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/regular-definitions-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/regular-definitions-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/regular-definitions-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/regular-definitions-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/regular-definitions-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/regular-definitions-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/regular-definitions-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/regular-definitions-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/regular-definitions-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-gen-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-gen-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-gen-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-gen-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-gen-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-gen-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-gen-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-gen-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-gen-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-gen-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-gen-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-gen-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-gen-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-gen-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-method-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-method-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-method-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-method-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-method-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-method-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-method-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-method-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-method-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-method-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-method-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-method-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-method-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-async-method-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-gen-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-gen-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-gen-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-gen-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-gen-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-gen-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-gen-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-gen-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-gen-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-gen-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-gen-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-gen-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-gen-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-gen-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-method-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-method-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-method-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-method-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-method-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-method-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-method-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-method-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-method-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-method-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-method-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-method-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-method-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/same-line-method-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/syntax/valid/grammar-field-classelementname-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/syntax/valid/grammar-field-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/syntax/valid/grammar-privatename-classelementname-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/wrapped-in-sc-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/wrapped-in-sc-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/wrapped-in-sc-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/wrapped-in-sc-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/wrapped-in-sc-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/wrapped-in-sc-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/wrapped-in-sc-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/wrapped-in-sc-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/wrapped-in-sc-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/wrapped-in-sc-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/wrapped-in-sc-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/wrapped-in-sc-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/wrapped-in-sc-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/wrapped-in-sc-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/expressions/compound-assignment/add-whitespace.js
+javascript | test262 | rejects | unclassified | test/language/expressions/compound-assignment/and-whitespace.js
+javascript | test262 | rejects | unclassified | test/language/expressions/compound-assignment/div-whitespace.js
+javascript | test262 | rejects | unclassified | test/language/expressions/compound-assignment/lshift-whitespace.js
+javascript | test262 | rejects | unclassified | test/language/expressions/compound-assignment/mod-whitespace.js
+javascript | test262 | rejects | unclassified | test/language/expressions/compound-assignment/mult-whitespace.js
+javascript | test262 | rejects | unclassified | test/language/expressions/compound-assignment/or-whitespace.js
+javascript | test262 | rejects | unclassified | test/language/expressions/compound-assignment/srshift-whitespace.js
+javascript | test262 | rejects | unclassified | test/language/expressions/compound-assignment/sub-whitespace.js
+javascript | test262 | rejects | unclassified | test/language/expressions/compound-assignment/urshift-whitespace.js
+javascript | test262 | rejects | unclassified | test/language/expressions/compound-assignment/xor-whitespace.js
+javascript | test262 | rejects | unclassified | test/language/expressions/delete/white-space-line-terminator-between-delete-unaryexpression-allowed.js
+javascript | test262 | rejects | unclassified | test/language/expressions/dynamic-import/namespace/own-keys-sort_FIXTURE.js
+javascript | test262 | rejects | unclassified | test/language/expressions/logical-assignment/lgcl-and-whitespace.js
+javascript | test262 | rejects | unclassified | test/language/expressions/logical-assignment/lgcl-nullish-whitespace.js
+javascript | test262 | rejects | unclassified | test/language/expressions/logical-assignment/lgcl-or-whitespace.js
+javascript | test262 | rejects | unclassified | test/language/expressions/postfix-decrement/whitespace.js
+javascript | test262 | rejects | unclassified | test/language/expressions/postfix-increment/whitespace.js
+javascript | test262 | rejects | unclassified | test/language/expressions/prefix-decrement/whitespace.js
+javascript | test262 | rejects | unclassified | test/language/expressions/prefix-increment/whitespace.js
+javascript | test262 | rejects | unclassified | test/language/expressions/template-literal/tv-null-character-escape-sequence.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/other_id_continue.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/other_id_start.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-10.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-10.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-11.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-11.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-12.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-12.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-13.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-13.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-14.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-14.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-15.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-15.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-15.1.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-15.1.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-16.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-16.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-17.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-17.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-5.2.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-5.2.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-6.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-6.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-6.1.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-6.1.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-7.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-7.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-8.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-8.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-9.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/part-unicode-9.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-10.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-10.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-11.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-11.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-12.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-12.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-13.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-13.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-14.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-14.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-15.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-15.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-15.1.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-15.1.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-16.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-16.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-17.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-17.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-5.2.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-5.2.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-6.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-6.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-6.1.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-6.1.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-7.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-7.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-8.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-8.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-9.0.0-class.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/start-unicode-9.0.0.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/vals-cjk-escaped.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/vals-cjk.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/vals-rus-alpha-lower-via-escape-hex.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/vals-rus-alpha-lower-via-escape-hex4.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/vals-rus-alpha-lower.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/vals-rus-alpha-upper-via-escape-hex.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/vals-rus-alpha-upper-via-escape-hex4.js
+javascript | test262 | rejects | unclassified | test/language/identifiers/vals-rus-alpha-upper.js
+javascript | test262 | rejects | unclassified | test/language/import/import-attributes/json-extensibility-array.js
+javascript | test262 | rejects | unclassified | test/language/import/import-attributes/json-extensibility-object.js
+javascript | test262 | rejects | unclassified | test/language/import/import-attributes/json-idempotency-indirect_FIXTURE.js
+javascript | test262 | rejects | unclassified | test/language/import/import-attributes/json-idempotency.js
+javascript | test262 | rejects | unclassified | test/language/import/import-attributes/json-invalid.js
+javascript | test262 | rejects | unclassified | test/language/import/import-attributes/json-named-bindings.js
+javascript | test262 | rejects | unclassified | test/language/import/import-attributes/json-value-array.js
+javascript | test262 | rejects | unclassified | test/language/import/import-attributes/json-value-boolean.js
+javascript | test262 | rejects | unclassified | test/language/import/import-attributes/json-value-null.js
+javascript | test262 | rejects | unclassified | test/language/import/import-attributes/json-value-number.js
+javascript | test262 | rejects | unclassified | test/language/import/import-attributes/json-value-object.js
+javascript | test262 | rejects | unclassified | test/language/import/import-attributes/json-value-string.js
+javascript | test262 | rejects | unclassified | test/language/import/import-attributes/json-via-namespace.js
+javascript | test262 | rejects | unclassified | test/language/import/import-attributes/text-empty.js
+javascript | test262 | rejects | unclassified | test/language/import/import-attributes/text-javascript.js
+javascript | test262 | rejects | unclassified | test/language/import/import-attributes/text-self.js
+javascript | test262 | rejects | unclassified | test/language/import/import-attributes/text-string.js
+javascript | test262 | rejects | unclassified | test/language/import/import-attributes/text-via-namespace.js
+javascript | test262 | rejects | unclassified | test/language/import/import-bytes/bytes-from-empty.js
+javascript | test262 | rejects | unclassified | test/language/import/import-bytes/bytes-from-js.js
+javascript | test262 | rejects | unclassified | test/language/import/import-bytes/bytes-from-json.js
+javascript | test262 | rejects | unclassified | test/language/import/import-bytes/bytes-from-png.js
+javascript | test262 | rejects | unclassified | test/language/import/import-bytes/bytes-from-txt.js
+javascript | test262 | rejects | unclassified | test/language/line-terminators/between-tokens-ls.js
+javascript | test262 | rejects | unclassified | test/language/line-terminators/between-tokens-ps.js
+javascript | test262 | rejects | unclassified | test/language/line-terminators/comment-single-ls.js
+javascript | test262 | rejects | unclassified | test/language/line-terminators/comment-single-ps.js
+javascript | test262 | rejects | unclassified | test/language/literals/numeric/numeric-separators/numeric-separator-literal-dil-dot-nsl-ep-err.js
+javascript | test262 | rejects | unclassified | test/language/literals/numeric/numeric-separators/numeric-separator-literal-dil-dot-nsl-err.js
+javascript | test262 | rejects | unclassified | test/language/literals/regexp/early-err-arithmetic-modifiers-other-code-point-non-display-1.js
+javascript | test262 | rejects | unclassified | test/language/literals/regexp/early-err-arithmetic-modifiers-reverse-other-code-point-non-display-1.js
+javascript | test262 | rejects | unclassified | test/language/literals/regexp/early-err-modifiers-other-code-point-non-display-1.js
+javascript | test262 | rejects | unclassified | test/language/module-code/import-attributes/allow-nlt-before-with.js
+javascript | test262 | rejects | unclassified | test/language/module-code/import-attributes/early-dup-attribute-key-export.js
+javascript | test262 | rejects | unclassified | test/language/module-code/import-attributes/early-dup-attribute-key-import-nobinding.js
+javascript | test262 | rejects | unclassified | test/language/module-code/import-attributes/early-dup-attribute-key-import-withbinding.js
+javascript | test262 | rejects | unclassified | test/language/module-code/import-attributes/import-attribute-empty.js
+javascript | test262 | rejects | unclassified | test/language/module-code/import-attributes/import-attribute-key-identifiername.js
+javascript | test262 | rejects | unclassified | test/language/module-code/import-attributes/import-attribute-key-string-double.js
+javascript | test262 | rejects | unclassified | test/language/module-code/import-attributes/import-attribute-key-string-single.js
+javascript | test262 | rejects | unclassified | test/language/module-code/import-attributes/import-attribute-many.js
+javascript | test262 | rejects | unclassified | test/language/module-code/import-attributes/import-attribute-newlines.js
+javascript | test262 | rejects | unclassified | test/language/module-code/import-attributes/import-attribute-trlng-comma.js
+javascript | test262 | rejects | unclassified | test/language/module-code/import-attributes/import-attribute-value-string-double.js
+javascript | test262 | rejects | unclassified | test/language/module-code/import-attributes/import-attribute-value-string-single.js
+javascript | test262 | rejects | unclassified | test/language/module-code/namespace/internals/own-property-keys-sort.js
+javascript | test262 | rejects | unclassified | test/language/module-code/parse-export-empty.js
+javascript | test262 | rejects | unclassified | test/language/statements/break/line-terminators.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-gen-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-gen-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-gen-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-gen-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-gen-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-gen-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-gen-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-gen-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-gen-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-gen-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-gen-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-gen-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-gen-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-gen-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-method-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-method-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-method-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-method-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-method-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-method-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-method-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-method-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-method-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-method-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-method-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-method-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-method-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-method-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-gen-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-gen-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-gen-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-gen-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-gen-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-gen-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-gen-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-gen-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-gen-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-gen-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-gen-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-gen-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-gen-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-gen-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-method-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-method-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-method-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-method-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-method-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-method-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-method-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-method-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-method-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-method-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-method-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-method-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-method-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-async-method-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-gen-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-gen-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-gen-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-gen-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-gen-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-gen-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-gen-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-gen-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-gen-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-gen-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-gen-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-gen-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-gen-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-gen-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-method-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-method-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-method-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-method-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-method-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-method-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-method-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-method-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-method-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-method-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-method-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-method-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-method-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-static-method-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/escaped-accessor-field-asi-before-computed-field.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/escaped-accessor-field-asi-before-generator.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/escaped-async-field-asi-before-computed-field.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/escaped-async-field-asi-before-generator.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/escaped-get-field-asi-before-computed-field.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/escaped-get-field-asi-before-generator.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/escaped-set-field-asi-before-computed-field.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/escaped-set-field-asi-before-generator.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/escaped-static-field-asi-before-computed-field.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/escaped-static-field-asi-before-generator.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-definitions-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-definitions-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-definitions-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-definitions-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-definitions-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-definitions-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-definitions-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-definitions-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-definitions-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-definitions-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-definitions-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-definitions-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-definitions-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-definitions-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-stacked-definitions-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-stacked-definitions-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-stacked-definitions-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-stacked-definitions-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-stacked-definitions-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-stacked-definitions-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-stacked-definitions-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-stacked-definitions-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-stacked-definitions-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-stacked-definitions-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-stacked-definitions-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-stacked-definitions-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-stacked-definitions-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/multiple-stacked-definitions-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-no-sc-line-method-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-no-sc-line-method-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-no-sc-line-method-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-no-sc-line-method-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-no-sc-line-method-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-no-sc-line-method-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-no-sc-line-method-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-no-sc-line-method-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-no-sc-line-method-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-no-sc-line-method-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-no-sc-line-method-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-no-sc-line-method-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-no-sc-line-method-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-no-sc-line-method-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-gen-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-gen-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-gen-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-gen-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-gen-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-gen-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-gen-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-gen-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-gen-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-gen-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-gen-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-gen-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-gen-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-gen-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-method-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-method-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-method-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-method-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-method-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-method-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-method-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-method-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-method-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-method-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-method-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-method-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-method-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/new-sc-line-method-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/private-accessor-name/inst-private-escape-sequence-ZWJ.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/private-accessor-name/inst-private-escape-sequence-ZWNJ.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/private-accessor-name/inst-private-escape-sequence-u2118.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/private-accessor-name/inst-private-name-ZWJ.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/private-accessor-name/inst-private-name-ZWNJ.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/private-accessor-name/inst-private-name-u2118.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/private-accessor-name/static-private-escape-sequence-ZWJ.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/private-accessor-name/static-private-escape-sequence-ZWNJ.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/private-accessor-name/static-private-escape-sequence-u2118.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/private-accessor-name/static-private-name-ZWJ.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/private-accessor-name/static-private-name-ZWNJ.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/private-accessor-name/static-private-name-u2118.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/regular-definitions-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/regular-definitions-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/regular-definitions-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/regular-definitions-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/regular-definitions-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/regular-definitions-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/regular-definitions-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/regular-definitions-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/regular-definitions-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/regular-definitions-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/regular-definitions-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/regular-definitions-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/regular-definitions-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/regular-definitions-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-gen-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-gen-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-gen-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-gen-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-gen-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-gen-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-gen-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-gen-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-gen-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-gen-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-gen-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-gen-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-gen-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-gen-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-method-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-method-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-method-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-method-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-method-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-method-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-method-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-method-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-method-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-method-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-method-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-method-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-method-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-async-method-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-gen-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-gen-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-gen-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-gen-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-gen-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-gen-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-gen-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-gen-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-gen-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-gen-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-gen-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-gen-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-gen-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-gen-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-method-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-method-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-method-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-method-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-method-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-method-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-method-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-method-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-method-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-method-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-method-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-method-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-method-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/same-line-method-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/syntax/valid/grammar-field-classelementname-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/syntax/valid/grammar-field-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/syntax/valid/grammar-field-named-get-followed-by-generator-asi.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/syntax/valid/grammar-field-named-set-followed-by-generator-asi.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/syntax/valid/grammar-privatename-classelementname-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/wrapped-in-sc-grammar-privatename-identifier-semantics-stringvalue.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/wrapped-in-sc-rs-private-getter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/wrapped-in-sc-rs-private-method-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/wrapped-in-sc-rs-private-setter-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/wrapped-in-sc-rs-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/wrapped-in-sc-rs-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/wrapped-in-sc-rs-static-async-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/wrapped-in-sc-rs-static-async-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/wrapped-in-sc-rs-static-generator-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/wrapped-in-sc-rs-static-method-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/wrapped-in-sc-rs-static-privatename-identifier-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/wrapped-in-sc-rs-static-privatename-identifier-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/wrapped-in-sc-rs-static-privatename-identifier-initializer-alt-by-classname.js
+javascript | test262 | rejects | unclassified | test/language/statements/class/elements/wrapped-in-sc-rs-static-privatename-identifier-initializer-alt.js
+javascript | test262 | rejects | unclassified | test/language/statements/continue/12.7-1.js
+javascript | test262 | rejects | unclassified | test/language/statements/continue/line-terminators.js
+javascript | test262 | rejects | unclassified | test/language/statements/for-await-of/head-lhs-async.js
+javascript | test262 | rejects | unclassified | test/language/statements/for-in/head-expr-expr.js
+javascript | test262 | rejects | unclassified | test/language/statements/for-in/var-arguments-fn-strict-init.js
+javascript | test262 | rejects | unclassified | test/language/statements/for-in/var-arguments-strict-init.js
+javascript | test262 | rejects | unclassified | test/language/statements/for-in/var-eval-strict-init.js
+javascript | test262 | rejects | unclassified | test/language/statements/function/line-terminator.js
+javascript | test262 | rejects | unclassified | test/language/statements/generators/yield-as-generator-declaration-binding-identifier.js
+javascript | test262 | rejects | unclassified | test/language/statements/return/line-terminators.js
+javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-em-quad.js
+javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-em-space.js
+javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-en-quad.js
+javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-en-space.js
+javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-figure-space.js
+javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-four-per-em-space.js
+javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-hair-space.js
+javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-ideographic-space.js
+javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-line-separator.js
+javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-medium-mathematical-space.js
+javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-nbsp.js
+javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-nnbsp.js
+javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-ogham-space.js
+javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-paragraph-separator.js
+javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-punctuation-space.js
+javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-six-per-em-space.js
+javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-thin-space.js
+javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-three-per-em-space.js
+javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-zwnbsp.js
+javascript | test262 | rejects | unclassified | test/language/white-space/between-nbsp.js
+javascriptreact | line breaks | accepts | unclassified | "x = async\nfunction () {}"
+javascriptreact | line breaks | rejects | unclassified | "function f() { return\n/a/ }"
+javascriptreact | lookaheads | accepts | unclassified | "class C {}.x;"
+javascriptreact | lookaheads | accepts | unclassified | "for (let of a);"
+javascriptreact | lookaheads | accepts | unclassified | "function f() {}.x;"
+javascriptreact | lookaheads | accepts | unclassified | "try {}"
+javascriptreact | lookaheads | accepts | unclassified | "x = () => {}.x;"
+javascriptreact | lookaheads | accepts | unclassified | "x = a => {}.y;"
+javascriptreact | lookaheads | accepts | unclassified | "x = async () => {}.y;"
+javascriptreact | lookaheads | accepts | unclassified | "{} .b"
+javascriptreact | lookaheads | accepts | unclassified | "{}.b;"
+javascriptreact | lookaheads | rejects | unclassified | "export let = 1;"
+javascriptreact | lookaheads | rejects | unclassified | "export let;"
+javascriptreact | reserved words | accepts | unclassified | "const { default } = o;"
+javascriptreact | reserved words | accepts | unclassified | "import { if } from \"m\";"
+typescript | TypeScript src | rejects | unclassified | src/compiler/checker.ts
+typescript | TypeScript src | rejects | unclassified | src/compiler/commandLineParser.ts
+typescript | TypeScript src | rejects | unclassified | src/compiler/expressionToTypeNode.ts
+typescript | TypeScript src | rejects | unclassified | src/compiler/factory/emitHelpers.ts
+typescript | TypeScript src | rejects | unclassified | src/compiler/scanner.ts
+typescript | TypeScript src | rejects | unclassified | src/compiler/transformers/esDecorators.ts
+typescript | TypeScript src | rejects | unclassified | src/compiler/transformers/utilities.ts
+typescript | TypeScript src | rejects | unclassified | src/compiler/types.ts
+typescript | TypeScript src | rejects | unclassified | src/compiler/utilities.ts
+typescript | TypeScript src | rejects | unclassified | src/harness/collectionsImpl.ts
+typescript | TypeScript src | rejects | unclassified | src/harness/compilerImpl.ts
+typescript | TypeScript src | rejects | unclassified | src/harness/documentsUtil.ts
+typescript | TypeScript src | rejects | unclassified | src/harness/evaluatorImpl.ts
+typescript | TypeScript src | rejects | unclassified | src/harness/fakesHosts.ts
+typescript | TypeScript src | rejects | unclassified | src/harness/fourslashImpl.ts
+typescript | TypeScript src | rejects | unclassified | src/harness/fourslashInterfaceImpl.ts
+typescript | TypeScript src | rejects | unclassified | src/harness/harnessLanguageService.ts
+typescript | TypeScript src | rejects | unclassified | src/harness/runnerbase.ts
+typescript | TypeScript src | rejects | unclassified | src/harness/vfsUtil.ts
+typescript | TypeScript src | rejects | unclassified | src/lib/decorators.d.ts
+typescript | TypeScript src | rejects | unclassified | src/lib/dom.generated.d.ts
+typescript | TypeScript src | rejects | unclassified | src/lib/es2015.generator.d.ts
+typescript | TypeScript src | rejects | unclassified | src/lib/es2015.iterable.d.ts
+typescript | TypeScript src | rejects | unclassified | src/lib/es2018.asyncgenerator.d.ts
+typescript | TypeScript src | rejects | unclassified | src/lib/es2018.asynciterable.d.ts
+typescript | TypeScript src | rejects | unclassified | src/lib/es5.d.ts
+typescript | TypeScript src | rejects | unclassified | src/server/editorServices.ts
+typescript | TypeScript src | rejects | unclassified | src/server/project.ts
+typescript | TypeScript src | rejects | unclassified | src/server/scriptVersionCache.ts
+typescript | TypeScript src | rejects | unclassified | src/server/session.ts
+typescript | TypeScript src | rejects | unclassified | src/server/typingInstallerAdapter.ts
+typescript | TypeScript src | rejects | unclassified | src/server/utilities.ts
+typescript | TypeScript src | rejects | unclassified | src/services/codefixes/generateAccessors.ts
+typescript | TypeScript src | rejects | unclassified | src/services/findAllReferences.ts
+typescript | TypeScript src | rejects | unclassified | src/services/textChanges.ts
+typescript | TypeScript src | rejects | unclassified | src/testRunner/compilerRunner.ts
+typescript | TypeScript src | rejects | unclassified | src/testRunner/parallel/host.ts
+typescript | TypeScript src | rejects | unclassified | src/testRunner/projectsRunner.ts
+typescript | TypeScript src | rejects | unclassified | src/testRunner/unittests/helpers/tsserver.ts
+typescript | TypeScript src | rejects | unclassified | src/testRunner/unittests/helpers/typingsInstaller.ts
+typescript | TypeScript src | rejects | unclassified | src/testRunner/unittests/helpers/virtualFileSystemWithWatch.ts
+typescript | TypeScript src | rejects | unclassified | src/tsserver/nodeServer.ts
+typescript | TypeScript src | rejects | unclassified | src/typingsInstaller/nodeTypingsInstaller.ts
+typescript | TypeScript src | rejects | unclassified | src/typingsInstallerCore/typingsInstaller.ts
+typescript | contextual keywords | rejects | unclassified | "abstract: for (;;) continue abstract;"
+typescript | contextual keywords | rejects | unclassified | "abstract: while (1) break abstract;"
+typescript | contextual keywords | rejects | unclassified | "accessor: for (;;) continue accessor;"
+typescript | contextual keywords | rejects | unclassified | "accessor: while (1) break accessor;"
+typescript | contextual keywords | rejects | unclassified | "await: for (;;) continue await;"
+typescript | contextual keywords | rejects | unclassified | "await: while (1) break await;"
+typescript | contextual keywords | rejects | unclassified | "class C extends import {}"
+typescript | contextual keywords | rejects | unclassified | "class C implements import {}"
+typescript | contextual keywords | rejects | unclassified | "class C { [await: string]: any }"
+typescript | contextual keywords | rejects | unclassified | "class C { [yield: string]: any }"
+typescript | contextual keywords | rejects | unclassified | "class C { abstract() {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { accessor() {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { const() {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { constructor(public abstract) {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { constructor(public accessor) {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { constructor(public declare) {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { constructor(public override) {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { constructor(public protected) {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { constructor(public readonly) {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { constructor(public static) {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { declare() {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { export() {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { in() {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { override() {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { protected() {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { readonly() {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { static abstract() {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { static accessor() {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { static const() {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { static declare() {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { static export() {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { static in() {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { static override() {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { static protected() {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { static readonly() {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { static static() {} }"
+typescript | contextual keywords | rejects | unclassified | "class C { static() {} }"
+typescript | contextual keywords | rejects | unclassified | "declare module in {}"
+typescript | contextual keywords | rejects | unclassified | "declare module instanceof {}"
+typescript | contextual keywords | rejects | unclassified | "declare: for (;;) continue declare;"
+typescript | contextual keywords | rejects | unclassified | "declare: while (1) break declare;"
+typescript | contextual keywords | rejects | unclassified | "function f(abstract) {}"
+typescript | contextual keywords | rejects | unclassified | "function f(accessor) {}"
+typescript | contextual keywords | rejects | unclassified | "function f(declare) {}"
+typescript | contextual keywords | rejects | unclassified | "function f(override) {}"
+typescript | contextual keywords | rejects | unclassified | "function f(protected) {}"
+typescript | contextual keywords | rejects | unclassified | "function f(readonly) {}"
+typescript | contextual keywords | rejects | unclassified | "function f(static) {}"
+typescript | contextual keywords | rejects | unclassified | "function f(x): abstract is string {}"
+typescript | contextual keywords | rejects | unclassified | "function f(x): asserts is string {}"
+typescript | contextual keywords | rejects | unclassified | "function f(x): infer is string {}"
+typescript | contextual keywords | rejects | unclassified | "function f(x): keyof is string {}"
+typescript | contextual keywords | rejects | unclassified | "function f(x): readonly is string {}"
+typescript | contextual keywords | rejects | unclassified | "function f(x): undefined is string {}"
+typescript | contextual keywords | rejects | unclassified | "function f(x): unique is string {}"
+typescript | contextual keywords | rejects | unclassified | "function f<const protected>() {}"
+typescript | contextual keywords | rejects | unclassified | "function f<const readonly>() {}"
+typescript | contextual keywords | rejects | unclassified | "function f<protected>() {}"
+typescript | contextual keywords | rejects | unclassified | "function f<readonly>() {}"
+typescript | contextual keywords | rejects | unclassified | "import defer = require(\"m\");"
+typescript | contextual keywords | rejects | unclassified | "import defer from \"m\";"
+typescript | contextual keywords | rejects | unclassified | "import x = require.y;"
+typescript | contextual keywords | rejects | unclassified | "import { type as } from \"m\";"
+typescript | contextual keywords | rejects | unclassified | "interface I { [await: string]: 1 }"
+typescript | contextual keywords | rejects | unclassified | "interface I { [yield: string]: 1 }"
+typescript | contextual keywords | rejects | unclassified | "interface I { abstract: 1 }"
+typescript | contextual keywords | rejects | unclassified | "interface I { accessor: 1 }"
+typescript | contextual keywords | rejects | unclassified | "interface I { declare: 1 }"
+typescript | contextual keywords | rejects | unclassified | "interface I { export: 1 }"
+typescript | contextual keywords | rejects | unclassified | "interface I { in: 1 }"
+typescript | contextual keywords | rejects | unclassified | "interface I { new: 1 }"
+typescript | contextual keywords | rejects | unclassified | "interface I { override: 1 }"
+typescript | contextual keywords | rejects | unclassified | "interface I { protected: 1 }"
+typescript | contextual keywords | rejects | unclassified | "interface I { readonly: 1 }"
+typescript | contextual keywords | rejects | unclassified | "interface I { static: 1 }"
+typescript | contextual keywords | rejects | unclassified | "interface in {}"
+typescript | contextual keywords | rejects | unclassified | "interface instanceof {}"
+typescript | contextual keywords | rejects | unclassified | "interface: for (;;) continue interface;"
+typescript | contextual keywords | rejects | unclassified | "interface: while (1) break interface;"
+typescript | contextual keywords | rejects | unclassified | "let f: (abstract: number) => void;"
+typescript | contextual keywords | rejects | unclassified | "let f: (asserts: number) => void;"
+typescript | contextual keywords | rejects | unclassified | "let f: (infer: number) => void;"
+typescript | contextual keywords | rejects | unclassified | "let f: (keyof: number) => void;"
+typescript | contextual keywords | rejects | unclassified | "let f: (readonly: number) => void;"
+typescript | contextual keywords | rejects | unclassified | "let f: (undefined: number) => void;"
+typescript | contextual keywords | rejects | unclassified | "let f: (unique: number) => void;"
+typescript | contextual keywords | rejects | unclassified | "let x = <abstract>y;"
+typescript | contextual keywords | rejects | unclassified | "let x = <asserts>y;"
+typescript | contextual keywords | rejects | unclassified | "let x = <const>y;"
+typescript | contextual keywords | rejects | unclassified | "let x = <function>y;"
+typescript | contextual keywords | rejects | unclassified | "let x = <import>y;"
+typescript | contextual keywords | rejects | unclassified | "let x = <in>y;"
+typescript | contextual keywords | rejects | unclassified | "let x = <infer>y;"
+typescript | contextual keywords | rejects | unclassified | "let x = <keyof>y;"
+typescript | contextual keywords | rejects | unclassified | "let x = <new>y;"
+typescript | contextual keywords | rejects | unclassified | "let x = <protected>y;"
+typescript | contextual keywords | rejects | unclassified | "let x = <readonly>y;"
+typescript | contextual keywords | rejects | unclassified | "let x = <typeof>y;"
+typescript | contextual keywords | rejects | unclassified | "let x = <unique>y;"
+typescript | contextual keywords | rejects | unclassified | "let x: [abstract: string];"
+typescript | contextual keywords | rejects | unclassified | "let x: [asserts: string];"
+typescript | contextual keywords | rejects | unclassified | "let x: [false: string];"
+typescript | contextual keywords | rejects | unclassified | "let x: [function: string];"
+typescript | contextual keywords | rejects | unclassified | "let x: [import: string];"
+typescript | contextual keywords | rejects | unclassified | "let x: [infer: string];"
+typescript | contextual keywords | rejects | unclassified | "let x: [keyof: string];"
+typescript | contextual keywords | rejects | unclassified | "let x: [new: string];"
+typescript | contextual keywords | rejects | unclassified | "let x: [null: string];"
+typescript | contextual keywords | rejects | unclassified | "let x: [readonly: string];"
+typescript | contextual keywords | rejects | unclassified | "let x: [true: string];"
+typescript | contextual keywords | rejects | unclassified | "let x: [typeof: string];"
+typescript | contextual keywords | rejects | unclassified | "let x: [undefined: string];"
+typescript | contextual keywords | rejects | unclassified | "let x: [unique: string];"
+typescript | contextual keywords | rejects | unclassified | "let x: [void: string];"
+typescript | contextual keywords | rejects | unclassified | "let x: abstract.T;"
+typescript | contextual keywords | rejects | unclassified | "let x: abstract;"
+typescript | contextual keywords | rejects | unclassified | "let x: asserts.T;"
+typescript | contextual keywords | rejects | unclassified | "let x: asserts;"
+typescript | contextual keywords | rejects | unclassified | "let x: function.T;"
+typescript | contextual keywords | rejects | unclassified | "let x: function;"
+typescript | contextual keywords | rejects | unclassified | "let x: import.T;"
+typescript | contextual keywords | rejects | unclassified | "let x: import;"
+typescript | contextual keywords | rejects | unclassified | "let x: infer.T;"
+typescript | contextual keywords | rejects | unclassified | "let x: infer;"
+typescript | contextual keywords | rejects | unclassified | "let x: keyof.T;"
+typescript | contextual keywords | rejects | unclassified | "let x: keyof;"
+typescript | contextual keywords | rejects | unclassified | "let x: new.T;"
+typescript | contextual keywords | rejects | unclassified | "let x: new;"
+typescript | contextual keywords | rejects | unclassified | "let x: readonly.T;"
+typescript | contextual keywords | rejects | unclassified | "let x: readonly;"
+typescript | contextual keywords | rejects | unclassified | "let x: typeof import;"
+typescript | contextual keywords | rejects | unclassified | "let x: typeof.T;"
+typescript | contextual keywords | rejects | unclassified | "let x: typeof;"
+typescript | contextual keywords | rejects | unclassified | "let x: unique.T;"
+typescript | contextual keywords | rejects | unclassified | "let x: unique;"
+typescript | contextual keywords | rejects | unclassified | "let: for (;;) continue let;"
+typescript | contextual keywords | rejects | unclassified | "let: while (1) break let;"
+typescript | contextual keywords | rejects | unclassified | "module: for (;;) continue module;"
+typescript | contextual keywords | rejects | unclassified | "module: while (1) break module;"
+typescript | contextual keywords | rejects | unclassified | "o.abstract = { abstract: 1 };"
+typescript | contextual keywords | rejects | unclassified | "o.accessor = { accessor: 1 };"
+typescript | contextual keywords | rejects | unclassified | "o.declare = { declare: 1 };"
+typescript | contextual keywords | rejects | unclassified | "o.export = { export: 1 };"
+typescript | contextual keywords | rejects | unclassified | "o.in = { in: 1 };"
+typescript | contextual keywords | rejects | unclassified | "o.override = { override: 1 };"
+typescript | contextual keywords | rejects | unclassified | "o.protected = { protected: 1 };"
+typescript | contextual keywords | rejects | unclassified | "o.readonly = { readonly: 1 };"
+typescript | contextual keywords | rejects | unclassified | "o.static = { static: 1 };"
+typescript | contextual keywords | rejects | unclassified | "override: for (;;) continue override;"
+typescript | contextual keywords | rejects | unclassified | "override: while (1) break override;"
+typescript | contextual keywords | rejects | unclassified | "protected: for (;;) continue protected;"
+typescript | contextual keywords | rejects | unclassified | "protected: while (1) break protected;"
+typescript | contextual keywords | rejects | unclassified | "readonly: for (;;) continue readonly;"
+typescript | contextual keywords | rejects | unclassified | "readonly: while (1) break readonly;"
+typescript | contextual keywords | rejects | unclassified | "static: for (;;) continue static;"
+typescript | contextual keywords | rejects | unclassified | "static: while (1) break static;"
+typescript | contextual keywords | rejects | unclassified | "type T<in protected> = 1;"
+typescript | contextual keywords | rejects | unclassified | "type T<in readonly> = 1;"
+typescript | contextual keywords | rejects | unclassified | "type as = 1;"
+typescript | contextual keywords | rejects | unclassified | "type satisfies = 1;"
+typescript | contextual keywords | rejects | unclassified | "using: for (;;) continue using;"
+typescript | contextual keywords | rejects | unclassified | "using: while (1) break using;"
+typescript | contextual keywords | rejects | unclassified | "x = await => 1;"
+typescript | contextual keywords | rejects | unclassified | "x = await.y;"
+typescript | contextual keywords | rejects | unclassified | "x = import + 1;"
+typescript | contextual keywords | rejects | unclassified | "x = import => 1;"
+typescript | contextual keywords | rejects | unclassified | "x = import.y;"
+typescript | contextual keywords | rejects | unclassified | "x = yield => 1;"
+typescript | contextual keywords | rejects | unclassified | "x = { abstract };"
+typescript | contextual keywords | rejects | unclassified | "x = { accessor };"
+typescript | contextual keywords | rejects | unclassified | "x = { declare };"
+typescript | contextual keywords | rejects | unclassified | "x = { override };"
+typescript | contextual keywords | rejects | unclassified | "x = { protected };"
+typescript | contextual keywords | rejects | unclassified | "x = { readonly };"
+typescript | contextual keywords | rejects | unclassified | "x = { static };"
+typescript | contextual keywords | rejects | unclassified | "yield: for (;;) continue yield;"
+typescript | contextual keywords | rejects | unclassified | "yield: while (1) break yield;"
+typescript | line breaks | accepts | unclassified | "x = async\nfunction () {}"
+typescript | line breaks | rejects | unclassified | "function f() { return\n/a/ }"
+typescript | line breaks | rejects | unclassified | "let x: A\n<B>(y)"
+typescript | line breaks | rejects | unclassified | "x\n!y"
+typescript | line breaks | splits | unclassified | "let x: T\n[]"
+typescript | lookaheads | accepts | unclassified | "class C {}.x;"
+typescript | lookaheads | accepts | unclassified | "function f() {}.x;"
+typescript | lookaheads | accepts | unclassified | "try {}"
+typescript | lookaheads | accepts | unclassified | "x = () => {}.x;"
+typescript | lookaheads | accepts | unclassified | "x = a => {}.y;"
+typescript | lookaheads | accepts | unclassified | "x = async () => {}.y;"
+typescript | lookaheads | accepts | unclassified | "{} .b"
+typescript | lookaheads | accepts | unclassified | "{}.b;"
+typescript | lookaheads | rejects | unclassified | "export let = 1;"
+typescript | lookaheads | rejects | unclassified | "export let;"
+typescript | lookaheads | rejects | unclassified | "for (let in a);"
+typescript | operands | accepts | unclassified | "x as T < b > c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "!a = c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "!a ??= c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "++a = c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "++a ??= c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "+a = c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "+a ??= c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "--a = c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "--a ??= c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "-a = c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "-a ??= c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a & c = d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a & c ??= d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a && c = d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a && c ??= d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a * c = d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a * c ??= d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a ** c = d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a ** c ??= d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a + c = d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a + c ??= d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a < c = d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a < c ??= d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a << c = d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a << c ??= d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a == c = d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a == c ??= d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a ?? c = d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a ?? c ??= d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a ??= c = d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a ^ c = d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a ^ c ??= d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a as T = d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a as T ??= d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a in c = d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a in c ??= d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a instanceof c = d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a instanceof c ??= d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a satisfies T = d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a satisfies T ??= d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a | c = d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a | c ??= d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a || c = d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a || c ??= d;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a++ = c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "a++ ??= c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "await a = c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "await a ??= c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "delete a = c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "delete a ??= c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "typeof a = c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "typeof a ??= c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "void a = c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "void a ??= c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "~a = c;"
+typescript | operator pairs | accepts | assignment-target-not-checked | "~a ??= c;"
+typescript | operator pairs | accepts | unary-lhs-of-** | "!a ** c;"
+typescript | operator pairs | accepts | unary-lhs-of-** | "+a ** c;"
+typescript | operator pairs | accepts | unary-lhs-of-** | "-a ** c;"
+typescript | operator pairs | accepts | unary-lhs-of-** | "await a ** c;"
+typescript | operator pairs | accepts | unary-lhs-of-** | "delete a ** c;"
+typescript | operator pairs | accepts | unary-lhs-of-** | "typeof a ** c;"
+typescript | operator pairs | accepts | unary-lhs-of-** | "void a ** c;"
+typescript | operator pairs | accepts | unary-lhs-of-** | "~a ** c;"
+typescript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a & c;"
+typescript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a && c;"
+typescript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a * c;"
+typescript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a ** c;"
+typescript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a + c;"
+typescript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a << c;"
+typescript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a = c;"
+typescript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a == c;"
+typescript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a ? b : c;"
+typescript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a ?? c;"
+typescript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a ??= c;"
+typescript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a ^ c;"
+typescript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a as T;"
+typescript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a in c;"
+typescript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a instanceof c;"
+typescript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a satisfies T;"
+typescript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a | c;"
+typescript | operator pairs | brackets | prefix-yield-beside-yield-arm | "yield a || c;"
+typescript | operator pairs | brackets | type-arguments-lt-over-relational | "!a < c;"
+typescript | operator pairs | brackets | type-arguments-lt-over-relational | "++a < c;"
+typescript | operator pairs | brackets | type-arguments-lt-over-relational | "+a < c;"
+typescript | operator pairs | brackets | type-arguments-lt-over-relational | "--a < c;"
+typescript | operator pairs | brackets | type-arguments-lt-over-relational | "-a < c;"
+typescript | operator pairs | brackets | type-arguments-lt-over-relational | "a < c < d;"
+typescript | operator pairs | brackets | type-arguments-lt-over-relational | "a in c < d;"
+typescript | operator pairs | brackets | type-arguments-lt-over-relational | "a instanceof c < d;"
+typescript | operator pairs | brackets | type-arguments-lt-over-relational | "await a < c;"
+typescript | operator pairs | brackets | type-arguments-lt-over-relational | "delete a < c;"
+typescript | operator pairs | brackets | type-arguments-lt-over-relational | "typeof a < c;"
+typescript | operator pairs | brackets | type-arguments-lt-over-relational | "void a < c;"
+typescript | operator pairs | brackets | type-arguments-lt-over-relational | "~a < c;"
+typescript | reserved words | accepts | unclassified | "import { if } from \"m\";"
+typescript | reserved words | accepts | unclassified | "x = { if };"
+typescript | reserved words | rejects | unclassified | "class C { static() {} }"
+typescript | type arguments | brackets | type-arguments-call-as-instantiation-then-call | "-f<T>(x);"
+typescript | type arguments | brackets | type-arguments-call-as-instantiation-then-call | "a + f<T>(x);"
+typescript | type arguments | brackets | type-arguments-call-as-instantiation-then-call | "f<T, U>(x);"
+typescript | type arguments | brackets | type-arguments-call-as-instantiation-then-call | "f<T>();"
+typescript | type arguments | brackets | type-arguments-call-as-instantiation-then-call | "f<T>`t`;"
+typescript | type arguments | brackets | type-arguments-call-as-instantiation-then-call | "x = f<T>(x);"
+typescript | type arguments | brackets | type-arguments-call-read-as-relational | "a < b > (c);"
+typescript | type arguments | brackets | type-arguments-call-read-as-relational | "a.b<T>(x);"
+typescript | type arguments | brackets | type-arguments-call-read-as-relational | "f<T>(x);"
+typescript | type arguments | brackets | type-arguments-call-read-as-relational | "f<string>(x);"
+typescript | type arguments | brackets | type-arguments-call-read-as-relational | "new C<T>(x);"
+typescriptreact | contextual keywords | rejects | unclassified | "abstract: for (;;) continue abstract;"
+typescriptreact | contextual keywords | rejects | unclassified | "abstract: while (1) break abstract;"
+typescriptreact | contextual keywords | rejects | unclassified | "accessor: for (;;) continue accessor;"
+typescriptreact | contextual keywords | rejects | unclassified | "accessor: while (1) break accessor;"
+typescriptreact | contextual keywords | rejects | unclassified | "await: for (;;) continue await;"
+typescriptreact | contextual keywords | rejects | unclassified | "await: while (1) break await;"
+typescriptreact | contextual keywords | rejects | unclassified | "class C extends import {}"
+typescriptreact | contextual keywords | rejects | unclassified | "class C implements import {}"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { [await: string]: any }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { [yield: string]: any }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { abstract() {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { accessor() {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { const() {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { constructor(public abstract) {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { constructor(public accessor) {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { constructor(public declare) {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { constructor(public override) {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { constructor(public protected) {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { constructor(public readonly) {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { constructor(public static) {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { declare() {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { export() {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { in() {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { override() {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { protected() {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { readonly() {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { static abstract() {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { static accessor() {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { static const() {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { static declare() {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { static export() {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { static in() {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { static override() {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { static protected() {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { static readonly() {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { static static() {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "class C { static() {} }"
+typescriptreact | contextual keywords | rejects | unclassified | "declare module in {}"
+typescriptreact | contextual keywords | rejects | unclassified | "declare module instanceof {}"
+typescriptreact | contextual keywords | rejects | unclassified | "declare: for (;;) continue declare;"
+typescriptreact | contextual keywords | rejects | unclassified | "declare: while (1) break declare;"
+typescriptreact | contextual keywords | rejects | unclassified | "function f(abstract) {}"
+typescriptreact | contextual keywords | rejects | unclassified | "function f(accessor) {}"
+typescriptreact | contextual keywords | rejects | unclassified | "function f(declare) {}"
+typescriptreact | contextual keywords | rejects | unclassified | "function f(override) {}"
+typescriptreact | contextual keywords | rejects | unclassified | "function f(protected) {}"
+typescriptreact | contextual keywords | rejects | unclassified | "function f(readonly) {}"
+typescriptreact | contextual keywords | rejects | unclassified | "function f(static) {}"
+typescriptreact | contextual keywords | rejects | unclassified | "function f(x): abstract is string {}"
+typescriptreact | contextual keywords | rejects | unclassified | "function f(x): asserts is string {}"
+typescriptreact | contextual keywords | rejects | unclassified | "function f(x): infer is string {}"
+typescriptreact | contextual keywords | rejects | unclassified | "function f(x): keyof is string {}"
+typescriptreact | contextual keywords | rejects | unclassified | "function f(x): readonly is string {}"
+typescriptreact | contextual keywords | rejects | unclassified | "function f(x): undefined is string {}"
+typescriptreact | contextual keywords | rejects | unclassified | "function f(x): unique is string {}"
+typescriptreact | contextual keywords | rejects | unclassified | "function f<const protected>() {}"
+typescriptreact | contextual keywords | rejects | unclassified | "function f<const readonly>() {}"
+typescriptreact | contextual keywords | rejects | unclassified | "function f<protected>() {}"
+typescriptreact | contextual keywords | rejects | unclassified | "function f<readonly>() {}"
+typescriptreact | contextual keywords | rejects | unclassified | "import defer = require(\"m\");"
+typescriptreact | contextual keywords | rejects | unclassified | "import defer from \"m\";"
+typescriptreact | contextual keywords | rejects | unclassified | "import x = require.y;"
+typescriptreact | contextual keywords | rejects | unclassified | "import { type as } from \"m\";"
+typescriptreact | contextual keywords | rejects | unclassified | "interface I { [await: string]: 1 }"
+typescriptreact | contextual keywords | rejects | unclassified | "interface I { [yield: string]: 1 }"
+typescriptreact | contextual keywords | rejects | unclassified | "interface I { abstract: 1 }"
+typescriptreact | contextual keywords | rejects | unclassified | "interface I { accessor: 1 }"
+typescriptreact | contextual keywords | rejects | unclassified | "interface I { declare: 1 }"
+typescriptreact | contextual keywords | rejects | unclassified | "interface I { export: 1 }"
+typescriptreact | contextual keywords | rejects | unclassified | "interface I { in: 1 }"
+typescriptreact | contextual keywords | rejects | unclassified | "interface I { new: 1 }"
+typescriptreact | contextual keywords | rejects | unclassified | "interface I { override: 1 }"
+typescriptreact | contextual keywords | rejects | unclassified | "interface I { protected: 1 }"
+typescriptreact | contextual keywords | rejects | unclassified | "interface I { readonly: 1 }"
+typescriptreact | contextual keywords | rejects | unclassified | "interface I { static: 1 }"
+typescriptreact | contextual keywords | rejects | unclassified | "interface in {}"
+typescriptreact | contextual keywords | rejects | unclassified | "interface instanceof {}"
+typescriptreact | contextual keywords | rejects | unclassified | "interface: for (;;) continue interface;"
+typescriptreact | contextual keywords | rejects | unclassified | "interface: while (1) break interface;"
+typescriptreact | contextual keywords | rejects | unclassified | "let f: (abstract: number) => void;"
+typescriptreact | contextual keywords | rejects | unclassified | "let f: (asserts: number) => void;"
+typescriptreact | contextual keywords | rejects | unclassified | "let f: (infer: number) => void;"
+typescriptreact | contextual keywords | rejects | unclassified | "let f: (keyof: number) => void;"
+typescriptreact | contextual keywords | rejects | unclassified | "let f: (readonly: number) => void;"
+typescriptreact | contextual keywords | rejects | unclassified | "let f: (undefined: number) => void;"
+typescriptreact | contextual keywords | rejects | unclassified | "let f: (unique: number) => void;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: [abstract: string];"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: [asserts: string];"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: [false: string];"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: [function: string];"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: [import: string];"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: [infer: string];"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: [keyof: string];"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: [new: string];"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: [null: string];"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: [readonly: string];"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: [true: string];"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: [typeof: string];"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: [undefined: string];"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: [unique: string];"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: [void: string];"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: abstract.T;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: abstract;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: asserts.T;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: asserts;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: function.T;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: function;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: import.T;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: import;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: infer.T;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: infer;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: keyof.T;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: keyof;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: new.T;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: new;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: readonly.T;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: readonly;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: typeof import;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: typeof.T;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: typeof;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: unique.T;"
+typescriptreact | contextual keywords | rejects | unclassified | "let x: unique;"
+typescriptreact | contextual keywords | rejects | unclassified | "let: for (;;) continue let;"
+typescriptreact | contextual keywords | rejects | unclassified | "let: while (1) break let;"
+typescriptreact | contextual keywords | rejects | unclassified | "module: for (;;) continue module;"
+typescriptreact | contextual keywords | rejects | unclassified | "module: while (1) break module;"
+typescriptreact | contextual keywords | rejects | unclassified | "o.abstract = { abstract: 1 };"
+typescriptreact | contextual keywords | rejects | unclassified | "o.accessor = { accessor: 1 };"
+typescriptreact | contextual keywords | rejects | unclassified | "o.declare = { declare: 1 };"
+typescriptreact | contextual keywords | rejects | unclassified | "o.export = { export: 1 };"
+typescriptreact | contextual keywords | rejects | unclassified | "o.in = { in: 1 };"
+typescriptreact | contextual keywords | rejects | unclassified | "o.override = { override: 1 };"
+typescriptreact | contextual keywords | rejects | unclassified | "o.protected = { protected: 1 };"
+typescriptreact | contextual keywords | rejects | unclassified | "o.readonly = { readonly: 1 };"
+typescriptreact | contextual keywords | rejects | unclassified | "o.static = { static: 1 };"
+typescriptreact | contextual keywords | rejects | unclassified | "override: for (;;) continue override;"
+typescriptreact | contextual keywords | rejects | unclassified | "override: while (1) break override;"
+typescriptreact | contextual keywords | rejects | unclassified | "protected: for (;;) continue protected;"
+typescriptreact | contextual keywords | rejects | unclassified | "protected: while (1) break protected;"
+typescriptreact | contextual keywords | rejects | unclassified | "readonly: for (;;) continue readonly;"
+typescriptreact | contextual keywords | rejects | unclassified | "readonly: while (1) break readonly;"
+typescriptreact | contextual keywords | rejects | unclassified | "static: for (;;) continue static;"
+typescriptreact | contextual keywords | rejects | unclassified | "static: while (1) break static;"
+typescriptreact | contextual keywords | rejects | unclassified | "type T<in protected> = 1;"
+typescriptreact | contextual keywords | rejects | unclassified | "type T<in readonly> = 1;"
+typescriptreact | contextual keywords | rejects | unclassified | "type as = 1;"
+typescriptreact | contextual keywords | rejects | unclassified | "type satisfies = 1;"
+typescriptreact | contextual keywords | rejects | unclassified | "using: for (;;) continue using;"
+typescriptreact | contextual keywords | rejects | unclassified | "using: while (1) break using;"
+typescriptreact | contextual keywords | rejects | unclassified | "x = await => 1;"
+typescriptreact | contextual keywords | rejects | unclassified | "x = await.y;"
+typescriptreact | contextual keywords | rejects | unclassified | "x = import + 1;"
+typescriptreact | contextual keywords | rejects | unclassified | "x = import => 1;"
+typescriptreact | contextual keywords | rejects | unclassified | "x = import.y;"
+typescriptreact | contextual keywords | rejects | unclassified | "x = yield => 1;"
+typescriptreact | contextual keywords | rejects | unclassified | "x = { abstract };"
+typescriptreact | contextual keywords | rejects | unclassified | "x = { accessor };"
+typescriptreact | contextual keywords | rejects | unclassified | "x = { declare };"
+typescriptreact | contextual keywords | rejects | unclassified | "x = { override };"
+typescriptreact | contextual keywords | rejects | unclassified | "x = { protected };"
+typescriptreact | contextual keywords | rejects | unclassified | "x = { readonly };"
+typescriptreact | contextual keywords | rejects | unclassified | "x = { static };"
+typescriptreact | contextual keywords | rejects | unclassified | "yield: for (;;) continue yield;"
+typescriptreact | contextual keywords | rejects | unclassified | "yield: while (1) break yield;"
+typescriptreact | line breaks | accepts | unclassified | "x = async\nfunction () {}"
+typescriptreact | line breaks | rejects | unclassified | "function f() { return\n/a/ }"
+typescriptreact | line breaks | rejects | unclassified | "x\n!y"
+typescriptreact | line breaks | splits | unclassified | "let x: T\n[]"
+typescriptreact | lookaheads | accepts | unclassified | "class C {}.x;"
+typescriptreact | lookaheads | accepts | unclassified | "function f() {}.x;"
+typescriptreact | lookaheads | accepts | unclassified | "try {}"
+typescriptreact | lookaheads | accepts | unclassified | "x = () => {}.x;"
+typescriptreact | lookaheads | accepts | unclassified | "x = a => {}.y;"
+typescriptreact | lookaheads | accepts | unclassified | "x = async () => {}.y;"
+typescriptreact | lookaheads | accepts | unclassified | "{} .b"
+typescriptreact | lookaheads | accepts | unclassified | "{}.b;"
+typescriptreact | lookaheads | rejects | unclassified | "export let = 1;"
+typescriptreact | lookaheads | rejects | unclassified | "export let;"
+typescriptreact | lookaheads | rejects | unclassified | "for (let in a);"
+typescriptreact | operands | accepts | unclassified | "x as T < b > c;"
+typescriptreact | reserved words | accepts | unclassified | "import { if } from \"m\";"
+typescriptreact | reserved words | accepts | unclassified | "x = { if };"
+typescriptreact | reserved words | rejects | unclassified | "class C { static() {} }"
