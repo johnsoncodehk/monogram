@@ -3170,11 +3170,9 @@ function ${findAnyName(stops)}(s: string, i: number): number {
       // calls a family function, every value is computed first, in order, as an array literal
       // computes them: the call (this function again, or one that calls it) would otherwise run
       // after a slot was stored and overwrite it. Without a call no order is observable.
-      if (fn.calls) {
-        return [`const ${vals.map((v, i) => `${fn.name}_t${i} = ${v}`).join(', ')};`,
-          ...vals.slice(1).map((_, i) => `${fn.name}_r${i + 1} = ${fn.name}_t${i + 1};`), `return ${fn.name}_t0;`];
-      }
-      return [...vals.slice(1).map((v, i) => `${fn.name}_r${i + 1} = ${v};`), `return ${vals[0]};`];
+      const store = (v: (i: number) => string) => vals.slice(1).map((_, i) => `${fn.name}_r${i + 1} = ${v(i + 1)};`).join(' ');
+      if (fn.calls) return [`const ${vals.map((v, i) => `${fn.name}_t${i} = ${v}`).join(', ')};`, store((i) => `${fn.name}_t${i}`), `return ${fn.name}_t0;`];
+      return [store((i) => vals[i]), `return ${vals[0]};`];
     },
     fn: (f) => [
       ...(tsSlotted(f.retTys)
