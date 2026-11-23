@@ -47,7 +47,7 @@ const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
 // keyed: the candidate is reached through its Dispatch key, which already tested the first token.
 const guardCond = (g: Guard, t: string, keyed: boolean, recv = 'self'): string[] =>
   g === null ? [] : [...(keyed || g.first === null ? [] : [`in_token_set(${g.first.id}, &${t})`]), ...(g.second !== null ? [`${recv}.second_in(${g.second.id})`] : []), ...g.lead.map((l) => leadRs(l, t, recv)),
-    ...(g.pairs ?? []).map((x) => `(!in_token_set(${x.when.id}, &${t}) || ${recv}.second_in(${x.second.id}))`)];
+    ...(g.pairs ?? []).map((x) => `${recv}.pair_in(${x.when.id}, &${t}, ${x.second.id})`)];
 // A guard's lead test (emit-portable.ts LeadTest) on the buffered token t.
 const leadRs = (l: LeadTest, t: string, recv: string): string => {
   const inS = l.ctx ? `(in_token_set(${l.set}, &${t}) || (${recv}.ctx != 0 && in_ctx_words(${recv}.ctx, &${t})))` : `in_token_set(${l.set}, &${t})`;
@@ -2434,6 +2434,10 @@ impl<'a, B: Builder> Parser<'a, B> {
         if i + 1 > self.max_look { self.max_look = i + 1; }
         i < self.toks.len() && in_token_set(k, &self.toks[i])
     }
+    /// A pair test (Guard.pairs): when t is in tokenSets[w], the token after it must be in tokenSets[s].
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn pair_in(&mut self, w: usize, t: &Tok, s: usize) -> bool { !in_token_set(w, t) || self.second_in(s) }
     #[inline(always)]
     fn off_at(&self, i: usize) -> usize { if i < self.toks.len() { self.toks[i].off as usize } else { 0 } }
     #[inline(always)]
