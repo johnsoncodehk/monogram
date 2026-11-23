@@ -107,7 +107,7 @@ writeFileSync('parser.rs', emitParser(grammar, rustTarget));  // of monogram
 | Output | How | Status |
 |---|---|---|
 | Interpreter parser (CST) | `createParser(grammar)`, [`src/gen-parser.ts`](src/gen-parser.ts) | The reference. Every other parser is gated against it. All six grammars. |
-| Portable parsers: TypeScript, Go, Rust | `emitParser(grammar, tsTarget \| goTarget \| rustTarget)` | Checked against the interpreter (accept/reject, and the rule tree when both accept) on every CI run, the gates `portable-targets/*`: per grammar the parity corpus (generated inputs, their one-token mutants and the hand-written lists: about 11,300 inputs for TypeScript and JavaScript), a seeded mutation corpus, and (`portable-targets/wide`) every file of two external corpora: the tsc conformance corpus (5,695 files, TypeScript and JavaScript grammars) and test262 (24,677 tests, JavaScript grammar). Known disagreements, each owed and listed in [test/portable-wide-record.txt](test/portable-wide-record.txt): 7 tsc conformance files the portable parsers reject (`T extends infer U extends string ? U : never`, `b ? (c) : d => e`: the interpreter's mixfix operand re-bind), 1 they accept in both grammars (`a = () => {} \|\| a`), and 505 test262 files from two lexer differences (a private name with a non-ASCII character, `#℘`; a `#!` after the start of the text). Token-stream and newline grammars, and grammars with element regions: TSX, JSX and code-children dialects. Refused, never mis-lexed: indent (YAML) and markup (HTML) grammars, and the region features the portable lexers do not carry yet ([TARGETS](docs/TARGETS.md#what-each-target-accepts)). |
+| Portable parsers: TypeScript, Go, Rust | `emitParser(grammar, tsTarget \| goTarget \| rustTarget)` | Checked against the interpreter (accept/reject, and the rule tree when both accept) on every CI run, the gates `portable-targets/*`: per grammar the parity corpus (generated inputs, their one-token mutants and the hand-written lists: about 11,300 inputs for TypeScript and JavaScript), a seeded mutation corpus, and (`portable-targets/wide`) every file of two external corpora: the tsc conformance corpus (5,695 files, TypeScript and JavaScript grammars) and test262 (24,677 tests, JavaScript grammar). Known disagreements, each owed and listed in [test/portable-wide-record.txt](test/portable-wide-record.txt): 7 tsc conformance files the portable parsers reject (`T extends infer U extends string ? U : never`, `b ? (c) : d => e`: the interpreter's mixfix operand re-bind), and 505 test262 files from two lexer differences (a private name with a non-ASCII character, `#℘`; a `#!` after the start of the text). Token-stream and newline grammars, and grammars with element regions: TSX, JSX and code-children dialects. Refused, never mis-lexed: indent (YAML) and markup (HTML) grammars, and the region features the portable lexers do not carry yet ([TARGETS](docs/TARGETS.md#what-each-target-accepts)). |
 | Emitted JavaScript parser | `emitParser(grammar, jsTarget)` | All six grammars. To be retired once the portable TS target covers it ([ROADMAP](docs/ROADMAP.md)). |
 | Incremental `Doc` | TS `createDoc`, Go `NewDoc`, Rust `Doc`; `jsTarget`'s `createParser().edit` | Every edited re-parse equals a fresh parse, gated. |
 | Total parsing with diagnostics | `jsTarget`'s `createParser()`: a tree plus `errors` for every text | `jsTarget` only. The portable parsers reject without recovery. |
@@ -132,8 +132,8 @@ cost model: [docs/TARGETS.md](docs/TARGETS.md). Total parsing: [docs/TOTAL-PARSI
 - **TypeScript**: the CST lowered to `tsc`'s AST equals it node by node (kind, start, end)
   on the gate's battery (`conformance/ts-ast-structure`, [`test/ts-ast-verify.ts`](test/ts-ast-verify.ts)).
 - **JavaScript**: against `tsc`'s JS-mode parser on every single-file case of the pinned
-  TypeScript conformance corpus, 4428 of 4462 files agree; the record lists every other file
-  ([docs/JS-CONFORMANCE.md](docs/JS-CONFORMANCE.md), gate `conformance/js-corpus`).
+  TypeScript conformance corpus, 4428 of 4462 files agree (measured on `c16935d`; the gate and its
+  record were retired: test262 is JavaScript's oracle, below).
 - **JavaScript against test262**: JavaScript is checked against test262, the language's conformance
   suite (24,677 syntax tests, gate `conformance/test262`, [docs/TEST262.md](docs/TEST262.md)). 98.7%
   of the 20,200 valid tests parse. 30.2% of the 4,477 invalid ones are rejected; the rest are early
@@ -200,8 +200,8 @@ cannot express: [docs/HIGHLIGHTER-EVIDENCE.md](docs/HIGHLIGHTER-EVIDENCE.md).
 ### Allocations and sizes
 
 - With a kept builder, a Go parse allocates nothing (0 allocations per parse in reuse mode,
-  pinned for each input in [docs/ALLOCATIONS.md](docs/ALLOCATIONS.md), gate `alloc-work`);
-  the same record pins the TS and JS targets.
+  checked by the gate `alloc-work`; the counts for each input are in
+  [docs/ALLOCATIONS.md](docs/ALLOCATIONS.md), a report regenerated on master, with the TS and JS targets'.
 - Emitted parser sizes (`node test/emit-sizes.ts` on `d326d65`, recorded by the profile run
   45129600578):
 

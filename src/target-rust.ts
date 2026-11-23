@@ -1500,6 +1500,7 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
             let rhs = match self.${r.name}_bp(rbp) { Some(r) => r, None => { self.back(led_save); self.scratch.truncate(sb); break; } };
             if rhs.present { self.scratch.push(rhs.h); }
             left = ${fin};
+            if self.capped { self.form = 1; return Some(left); }
             form = 1; tail_closed = true;
         }`,
     entry: `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
@@ -1521,7 +1522,8 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
         let mut tail_closed = self.tail;
         loop {
             let t = match self.peek() { Some(t) => t, None => break };`,
-    bpClose: `        self.form = form;
+    bpClose: `        self.capped = false;
+        self.form = form;
         Some(left)
     }`,
     nudEnter: `    fn ${r.name}_nud(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {
@@ -4243,6 +4245,7 @@ function emitRustPrattMethod(
             self.vals.push(left);
             self.vals.push(_right);
             left = ${nodeFinish(rustShapeNodeObjectExpr(binarySlot as NodeShape, '_ab', '_op', shapeIR.spans, '_off', 'self.last_end(_off)', undefined), '_ab')};
+            if self.capped { self.form = 1; return Some(left); }
             form = 1; tail_closed = true;
             continue;
         }`;
@@ -4263,6 +4266,7 @@ function emitRustPrattMethod(
                 None => { self.pos = _save; break; }
             };
             left = ${customCall(bs.fn, '&[_right]', '[]', '_off', 'self.last_end(_off)', 'left', '_op', bs.folds)};
+            if self.capped { self.form = 1; return Some(left); }
             form = 1; tail_closed = true;
             continue;
         }`;
@@ -4286,6 +4290,7 @@ function emitRustPrattMethod(
             self.vals.push(SVal::Str(_op.0, _op.1));
             self.vals.push(_right);
             left = ${keepFinish('_ab', rule.name, '_off')};
+            if self.capped { self.form = 1; return Some(left); }
             form = 1; tail_closed = true;
             continue;
         }`;
@@ -4568,6 +4573,7 @@ function emitRustPrattMethod(
             ${postfixCode}
             ${binaryBody || (hasLoop ? 'break;' : '')}
         ${hasLoop ? '}' : ''}
+        self.capped = false;
         self.form = form;
         Some(left)
     }
@@ -5519,8 +5525,10 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
     findAny: (cx, s, i, stops) => cx.atom(`${findAnyName(stops)}(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')})`, 'int', 'usize'),
     // One allocation: format! sizes the string from its arguments (&str or String alike).
     cat: (cx, parts) => cx.atom(`format!("${'{}'.repeat(parts.length)}", ${parts.map((r) => r.c).join(', ')})`, 'str', 'str', { owned: true }),
-    // The decoded table is a field of the recovery engine (a slice of a table decoded once, OnceLock).
-    tab: (cx, name, i) => cx.atom(`self.tab_${snake(name)}[${cx.coerce(i, 'usize')}]`, 'int', 'isize'),
+    // The decoded table is a field of the recovery engine (a slice of a table decoded once, OnceLock),
+    // read through its one-line accessor (recoveryEngineRust): Rust indexes by usize, so a read
+    // spelled in place carries the cast at every use.
+    tab: (cx, name, i) => cx.atom(`self.t_${snake(name)}(${cx.coerce(i, 'isize')})`, 'int', 'isize'),
     own: (cx, r) => {
       if (r.ty === 'str') return cx.atom(`${rsWrap(r, ATOM)}.to_string()`, 'str', 'str', { owned: true });
       if (isList(r.ty)) return cx.atom(`${rsWrap(r, ATOM)}.to_vec()`, r.ty, r.ty, { owned: true });
@@ -5546,7 +5554,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
       // Out of line only: `#[cold]` on the identifier escape scanners moved lex_from's register layout
       // (+0.2% to +0.4% lexer instructions on real inputs, profile runs 45034540295 / 45035043707).
       ...(f.cold ? ['#[inline(never)]'] : []),
-      `fn ${f.name}(${[...(f.method ? ['&mut self'] : []), ...f.params.map((p) => `${p.name}: ${p.type}`)].join(', ')})${f.rets.length === 0 ? '' : ` -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`}`} {`,
+      `fn ${f.name}(${[...(f.method ? [f.reads ? '&self' : '&mut self'] : []), ...f.params.map((p) => `${p.name}: ${p.type}`)].join(', ')})${f.rets.length === 0 ? '' : ` -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`}`} {`,
       ...rsBlock(f.body),
       '}',
     ].join('\n'),
@@ -5740,6 +5748,8 @@ struct Recov<'r, 'a, B: Builder> { p: &'r mut Parser<'a, B>, marks: Vec<Mark>, t
 /// The plan's table, decoded once, at the first interpreted parse.
 static TAB_RT: std::sync::OnceLock<Vec<isize>> = std::sync::OnceLock::new();
 impl<'r, 'a, B: Builder> Recov<'r, 'a, B> {
+    #[inline(always)]
+    fn t_rt(&self, i: isize) -> isize { self.tab_rt[i as usize] }
 ${shared.recoveryFamily(ir, true).split('\n').map((l) => (l ? `    ${l}` : l)).join('\n')}
     fn en_pos(&mut self) -> isize { self.p.pos as isize }
     fn en_set_pos(&mut self, q: isize) { self.p.pos = q as usize; }
@@ -5827,6 +5837,8 @@ function recoveryRegionRust(ir: ParserIR, shared: SharedAlgorithms): string {
 // ---- recovery: the emit option { recovery: true }; generated from src/recovery-family.ts (shared by the TS / Go / Rust targets) ----
 #[derive(Clone, Copy)]
 struct Diag { kind: isize, off: isize, end: isize, rel_off: isize, rel_end: isize }
+// The recovery interpreter's best longest-match candidate so far (recovery-family.ts BEST).
+struct BestCand { pos: isize, off: isize, won: isize, form: isize, tail: isize, capped: isize }
 ${shared.recoveryFamily(ir, false)}
 ${recoveryEngineRust(ir, shared)}
 /// A diagnostic: a span of the source (byte offsets), its message, and a related location.

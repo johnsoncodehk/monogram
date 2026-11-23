@@ -3,8 +3,8 @@ name: measure targets
 # On demand only: wall-clock A/B of the TS target, the emitted JS parser and the Go target at two
 # commits (D = baseline, E = commit), alternating in ONE job (test/bench-targets/run.sh), medians
 # and per-round E/D ratios in the job summary. Only ratios inside one job compare, and a move
-# under 5% is not evidence on its own: the deterministic counts are the alloc-work gate
-# (docs/ALLOCATIONS.md) in the CI job.
+# under 5% is not evidence on its own: the deterministic counts are the profile job's allocator
+# counters and the allocation report docs/ALLOCATIONS.md (test/alloc-work.ts --write).
 #
 # - workflow_dispatch: commit, baseline, grammar, which target modes, rounds.
 # - a pull request labelled `measure-targets`: E = its head, D = its merge base, typescript

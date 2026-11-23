@@ -1807,11 +1807,11 @@ export type PrattLowering = {
   postfixToks(kids: number[]): string;           // the postfix tokens, by the token's kid
   postfixTpl(hole: string): string;              // the postfix interpolated template
   postfixOp: string;                             // the postfix operator
-  binary: string;                                // the binary operator, its right operand at rbp
+  binary: string;                                // the binary operator, its right operand at rbp; a CAPPED right operand (an assignment-level arrow) caps the node: it returns at once, still capped, so no further led or operator takes it, here or in an enclosing call (`a = () => {} || x` rejects: the interpreter's cap propagation)
   leftDone?: string;                             // after the loop: the left operand's finishing step (none for the CST)
   entry: string;                                 // the entry function (and the operator tables, where the target prints them beside it)
   bpOpen(label: boolean): string;                // `bp` up to the loop's buffered token (label: a led continues the loop by name)
-  bpClose: string;
+  bpClose: string;                               // `bp`'s normal return: the node is not capped (a sub-parse's capped flag, an arrow inside a call's arguments, is not its own)
   nudEnter: string;                              // `nud` up to its buffered token `t` (none: no match)
   nudOpen: string;                               // `nud`'s candidate frame, up to its candidates
   nudClose: string;
@@ -2921,7 +2921,9 @@ export function formatFirstBytes(fb: LexFirstBytes | null): string {
 // function of the ParserIR and its id plans; nothing here is a target's. Everything is an int:
 // a rule id is its ArenaIdPlan id, a literal / kind its LexIdPlan lid / kid, a token set its
 // ParserIR.tokenSets index, a lookahead its ParserIR.lookaheads index; -1 is "none". A record is
-// addressed by its index in the table. The plan's choices that exist only to skip work (Dispatch
+// addressed by its index in the table: [2 + rid] holds it, and every other reference (a record is
+// appended after every record it refers to) holds the distance back from the cell that holds it to
+// the record (>= 1; -1 none), so most fit in one or two packed digits. The plan's choices that exist only to skip work (Dispatch
 // order, Commit, elided marks) are not encoded: the interpreter tries a longest-match list's
 // candidates in declaration order, each where its Guard admits the token, which is the same match
 // (emit-portable "LONGEST MATCH"); FIRST-set guards are kept, so the candidates tried are the
@@ -2948,56 +2950,66 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
   const data: number[] = [];
   const rid = (name: string) => ruleIdOf(ar, name);
   const lid = (text: string) => { const l = lidOf(ids, text); if (l === 0) throw new Error(`recoveryTables: ${JSON.stringify(text)} has no lid`); return l; };
-  // A record appended later than its referrer: the referrer holds a slot patched with its index.
-  const emit = (xs: number[]): number => { const at = data.length; data.push(...xs); return at; };
+  // A cell is an int or a reference to a record already appended (-1: none), held relative.
+  type Cell = number | { ref: number };
+  const ref = (at: number): Cell => ({ ref: at });
+  const emit = (xs: Cell[]): number => {
+    const at = data.length;
+    xs.forEach((x, j) => {
+      if (typeof x === 'number') { data.push(x); return; }
+      if (x.ref >= at + j) throw new Error('recoveryTables: a reference to a record not yet appended');
+      data.push(x.ref < 0 ? -1 : at + j - x.ref);
+    });
+    return at;
+  };
   const firstSig = (f: FirstSig): number => (f === null ? -1 : emit([f.lits.length, ...f.lits.map((l) => lidOf(ids, l)), f.toks.length, ...f.toks.map((k) => kidOf(ids, k))]));
   const guard = (g: Guard, sig: FirstSig = null): number => {
     if (g === null && sig === null) return -1;
     const fs = firstSig(sig);
     const gg = g ?? { first: null, second: null, lead: [], skip: 0, pairs: [] };
     return emit([gg.first?.id ?? -1, gg.second?.id ?? -1, gg.lead.length, ...gg.lead.flatMap((l) => [l.set, l.is ? 1 : 0, l.ctx ? 1 : 0]),
-      (gg.pairs ?? []).length, ...(gg.pairs ?? []).flatMap((p) => [p.when.id, p.second.id]), fs]);
+      (gg.pairs ?? []).length, ...(gg.pairs ?? []).flatMap((p) => [p.when.id, p.second.id]), ref(fs)]);
   };
   const shared = new Map<number, number>();
-  const list = (steps: Step[]): number => { const offs = steps.map(step); return emit([offs.length, ...offs]); };
+  const list = (steps: Step[]): number => { const offs = steps.map(step); return emit([offs.length, ...offs.map(ref)]); };
   function step(s: Step): number {
     const sh = 'share' in s ? s.share : undefined;
     if (sh !== undefined) {
       let body = shared.get(sh);
       if (body === undefined) { const { share: _, ...plain } = s as Step & { share: number }; body = step(plain as Step); shared.set(sh, body); }
-      return emit([REC_S_SHARED, sh, ir.forms.buildShared[sh] ? 1 : 0, body]);
+      return emit([REC_S_SHARED, sh, ir.forms.buildShared[sh] ? 1 : 0, ref(body)]);
     }
     switch (s.t) {
       case 'lit': return gtCompLit(ids, s) ? emit([REC_S_COMP, lid(s.value)]) : emit([REC_S_LIT, lid(s.value)]);
       case 'tok': return s.hole === undefined ? emit([REC_S_TOK, kidOf(ids, s.name)]) : emit([REC_S_TPLTOK, kidOf(ids, s.name), rid(s.hole)]);
       case 'rule': return emit([REC_S_RULE, rid(s.name)]);
       case 'ruleBp': return emit([REC_S_RULEBP, rid(s.name), s.bp]);
-      case 'star': { const b = step(s.step); return emit([REC_S_STAR, s.guard ?? -1, b]); }
-      case 'opt': { const b = list(s.steps); return emit([REC_S_OPT, s.guard ?? -1, b]); }
-      case 'sep': { const b = step(s.elem); return emit([REC_S_SEP, s.guard ?? -1, b, sepDelimLid(ids, s.delim)]); }
+      case 'star': { const b = step(s.step); return emit([REC_S_STAR, s.guard ?? -1, ref(b)]); }
+      case 'opt': { const b = list(s.steps); return emit([REC_S_OPT, s.guard ?? -1, ref(b)]); }
+      case 'sep': { const b = step(s.elem); return emit([REC_S_SEP, s.guard ?? -1, ref(b), sepDelimLid(ids, s.delim)]); }
       case 'altlit': return emit([REC_S_ALTLIT, s.opts.length, ...s.opts.map((o) => lid(o.value))]);
       case 'alt': {
         const n = s.branches.length, fs = s.firsts ?? [];
-        const arms = s.branches.map((b, i) => {
+        const arms = s.branches.map((b, i): Cell[] => {
           const f = fs[i] ?? null;
-          return [s.predictive || isFirstGuardable(f, n) ? firstSig(f) : -1, list(b)];
+          return [ref(s.predictive || isFirstGuardable(f, n) ? firstSig(f) : -1), ref(list(b))];
         });
         return emit([REC_S_ALT, s.predictive ? 1 : 0, n, ...arms.flat()]);
       }
       case 'look': return emit([REC_S_LOOK, s.id, s.is ? 1 : 0]);
       case 'ahead': return emit([REC_S_AHEAD, s.set, s.is ? 1 : 0]);
       case 'aheadCtx': return emit([REC_S_AHEADCTX, s.set, s.is ? 1 : 0]);
-      case 'seq': { const b = list(s.steps); return emit([REC_S_SEQ, b]); }
+      case 'seq': { const b = list(s.steps); return emit([REC_S_SEQ, ref(b)]); }
       case 'sameLine': return emit([REC_S_SAMELINE]);
-      case 'suppress': { const b = list(s.steps); return emit([REC_S_SUPPRESS, s.set, b]); }
-      case 'ctx': { const b = list(s.steps); return emit([REC_S_CTX, s.ctx, b]); }
+      case 'suppress': { const b = list(s.steps); return emit([REC_S_SUPPRESS, s.set, ref(b)]); }
+      case 'ctx': { const b = list(s.steps); return emit([REC_S_CTX, s.ctx, ref(b)]); }
     }
   }
   const skip = (g: Guard, steps: Step[]) => guardedSteps(g, steps);
   function rd(r: RdRule): number {
     // The single form runs its alternative whole and unguarded; the predictive one by FIRST
     // signature; a longest-match list each candidate after the lead tests its guard took over.
-    const alts = r.alts.map((a, i) => (r.predictive ? [guard(null, r.altFirst[i]!), list(a)] : r.alts.length === 1 ? [-1, list(a)] : [guard(r.altGuard[i]!), list(skip(r.altGuard[i]!, a))]));
+    const alts = r.alts.map((a, i) => (r.predictive ? [guard(null, r.altFirst[i]!), list(a)] : r.alts.length === 1 ? [-1, list(a)] : [guard(r.altGuard[i]!), list(skip(r.altGuard[i]!, a))]).map(ref));
     return emit([REC_RD, r.predictive ? 1 : 0, r.alts.length, ...alts.flat()]);
   }
   // A Pratt rule: [PRATT nudTplHole postfixTplHole postfixSameLine, then the offsets from the
@@ -3011,22 +3023,22 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
   //                              lbp -1: none; notLeftLeaf -1 or [n lid*]
   //   nPostTok kid*]
   function pratt(r: PrattRule): number {
-    const arms = r.nudOrder.map((a): number[] => {
+    const arms = r.nudOrder.map((a): Cell[] => {
       switch (a.kind) {
         case 'tok': return [REC_N_TOK, kidOf(ids, r.nudToks[a.index]!), r.nudTplHole !== undefined && ir.tpl !== null && r.nudToks[a.index] === ir.tpl.token ? 1 : 0];
-        case 'bracket': return [REC_N_BRACKET, lid(r.nudBrackets[a.index]!.first), list(r.nudBrackets[a.index]!.steps), r.nudBracketClosesTail[a.index] ? 1 : 0];
-        case 'seq': { const g = r.nudSeqGuard[a.index]!; return [REC_N_SEQ, guard(g), list(skip(g, r.nudSeqs[a.index]!)), r.nudSeqClosesTail[a.index] ? 1 : 0]; }
-        case 'capped': { const g = r.nudCappedGuard[a.index]!, c = r.nudCapped[a.index]!; return [REC_N_CAPPED, guard(g), list(skip(g, c.steps)), c.capBp]; }
+        case 'bracket': return [REC_N_BRACKET, lid(r.nudBrackets[a.index]!.first), ref(list(r.nudBrackets[a.index]!.steps)), r.nudBracketClosesTail[a.index] ? 1 : 0];
+        case 'seq': { const g = r.nudSeqGuard[a.index]!; return [REC_N_SEQ, ref(guard(g)), ref(list(skip(g, r.nudSeqs[a.index]!))), r.nudSeqClosesTail[a.index] ? 1 : 0]; }
+        case 'capped': { const g = r.nudCappedGuard[a.index]!, c = r.nudCapped[a.index]!; return [REC_N_CAPPED, ref(guard(g)), ref(list(skip(g, c.steps))), c.capBp]; }
         case 'prefix': return [REC_N_PREFIX];
       }
     });
     const ops = prattOpTables(r, ids);
-    const leds = r.leds.map((b, i) => {
+    const leds = r.leds.map((b, i): Cell[] => {
       const nll = r.ledNotLeftLeaf[i];
-      return [lid(b.first), list(b.steps), r.ledLbp[i] ?? -1, r.ledSameLine[i] ? 1 : 0, r.ledAccessTail[i] ? 1 : 0, r.ledClosesTail[i] ? 1 : 0, r.ledForm[i]!,
-        nll ? emit([nll.length, ...nll.map(lid)]) : -1, r.ledSuppressedIn[i]!.length, ...r.ledSuppressedIn[i]!];
+      return [lid(b.first), ref(list(b.steps)), r.ledLbp[i] ?? -1, r.ledSameLine[i] ? 1 : 0, r.ledAccessTail[i] ? 1 : 0, r.ledClosesTail[i] ? 1 : 0, r.ledForm[i]!,
+        ref(nll ? emit([nll.length, ...nll.map(lid)]) : -1), r.ledSuppressedIn[i]!.length, ...r.ledSuppressedIn[i]!];
     });
-    const sections = [
+    const sections: Cell[][] = [
       [arms.length, ...arms.flat()],
       [ops.pre.length, ...ops.pre.flatMap((p) => [p.lid, p.rbp, p.tgt ? 1 : 0, p.form])],
       [ops.bin.length, ...ops.bin.flatMap((b) => [b.lid, b.lbp, b.rbp, b.tgt ? 1 : 0, b.noUnary ? 1 : 0])],
