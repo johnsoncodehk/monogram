@@ -1456,11 +1456,11 @@
     },
     "bigint": {
       "name": "constant.numeric.bigint.js.jsx",
-      "match": "[0-9]+(?:_[0-9]+)*n(?![0-9A-Za-z_$\\\\])"
+      "match": "(?:0|[1-9][0-9]*(?:_[0-9]+)*)n(?![0-9A-Za-z_$\\\\])"
     },
     "number": {
       "name": "constant.numeric.decimal.js.jsx",
-      "match": "(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\\.[0-9]*(?:_[0-9]+)*)?|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])"
+      "match": "(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\\.(?:[0-9]+(?:_[0-9]+)*)?|(?!\\.))|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])"
     },
     "template": {
       "name": "string.quoted.other.template.js.jsx",
@@ -1505,7 +1505,7 @@
     },
     "decorator": {
       "name": "entity.name.function.decorator.js.jsx",
-      "match": "@(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\}|\\.)*)?"
+      "match": "@(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\}|\\.#(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})|\\.)*)?"
     },
     "privatefield": {
       "name": "variable.other.property.js.jsx",
@@ -2019,12 +2019,15 @@
       ]
     },
     "import-export-all": {
-      "match": "\\b(import)\\s+(\\*)",
+      "match": "\\b(?:(import)\\s+(?:(defer)\\s+)?(\\*))",
       "captures": {
         "1": {
           "name": "keyword.control.import.js.jsx"
         },
         "2": {
+          "name": "keyword.control.import.phase.js.jsx"
+        },
+        "3": {
           "name": "constant.language.import-export-all.js.jsx"
         }
       }
@@ -2168,7 +2171,7 @@
       "name": "keyword.control.loop.js.jsx"
     },
     "scope-keyword-other": {
-      "match": "\\b(target|meta|as)\\b",
+      "match": "\\b(target|source|meta|as)\\b",
       "name": "keyword.other.js.jsx"
     },
     "scope-storage-type-class": {
@@ -2410,7 +2413,7 @@
       "name": "keyword.control.flow.js.jsx"
     },
     "expr-scope-keyword-other": {
-      "match": "\\b(target|meta)\\b",
+      "match": "\\b(target|source|meta)\\b",
       "name": "keyword.other.js.jsx"
     },
     "expression": {

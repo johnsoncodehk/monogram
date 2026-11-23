@@ -110,6 +110,14 @@ const Number_      = token(seq(altPattern(seq(intPart, altPattern(fracTail, notF
 // A decimal BigInt (`DecimalBigIntegerLiteral : 0 BigIntLiteralSuffix | NonZeroDigit DecimalDigits? BigIntLiteralSuffix`):
 // the integer part of a decimal literal, so no leading zero (`010n`, `00n` match no token).
 const BigInt_      = token(seq(intPart, 'n', numericTailGuard), { scope: 'constant.numeric.bigint' });
+// Annex B.1.1 (JavaScript only: TypeScript's scanner refuses both): LegacyOctalIntegerLiteral
+// `0 OctalDigit+` (`010` is 8) and NonOctalDecimalIntegerLiteral, a `0`-led digit run with an `8`
+// or `9` (`08`, `019`), which is a DecimalIntegerLiteral and so takes a fraction and an exponent
+// (`08.5`, `09e1`). Neither has separators. Both are refused in strict mode code (an early error).
+const LegacyNumber = token(altPattern(
+  seq('0', star(range('0', '7')), oneOf('8', '9'), star(digit), altPattern(fracTail, notFollowedBy('.')), optPattern(expTail), numericTailGuard),
+  seq('0', plus(range('0', '7')), numericTailGuard),
+), { scope: 'constant.numeric.decimal' });
 // A well-formed JS escape, used in the string-body pattern below. `\u`/`\x` must
 // match their strict forms — a `\u{cp}` with cp ≤ 0x10FFFF, a 4-hex `\uXXXX`, or a
 // 2-hex `\xXX` — while `\` + any *other* char (\n, \\, \q non-escape, line
@@ -155,7 +163,7 @@ const regexFirstChar = altPattern(noneOf('/', '\\', '[', '*', lineTerminator), r
 const Regex_       = token(seq('/', regexFirstChar, star(regexChar), '/', star(identPart)), {   // flags: maximal-munch any IdentifierPart run (tsc lexes flags leniently; validity is a checker rule)
   regex: true,
   regexContext: {
-    divisionAfterTypes: ['Ident', 'Number', 'HexNumber', 'OctalNumber', 'BinaryNumber', 'String', 'Template', 'BigInt', 'PrivateField'],
+    divisionAfterTypes: ['Ident', 'Number', 'LegacyNumber', 'HexNumber', 'OctalNumber', 'BinaryNumber', 'String', 'Template', 'BigInt', 'PrivateField'],
     divisionAfterTexts: [')', ']', '++', '--', 'this', 'super', 'true', 'false', 'null', 'undefined'],
     regexAfterTexts: ['in', 'of', 'instanceof', 'typeof', 'delete', 'void', 'await', 'yield', 'throw', 'return', 'case', 'do', 'else', 'new', 'default'],
     // `kw ( … )` heads (control-flow): the closing `)` is a statement head, not a
@@ -466,10 +474,10 @@ export const classHeritageArms = ($, Expr, NewTarget, classExpression, typeArgs 
 //   expression rule's own `new class …` arms.
 // - SuperProperty (`new super.x()`, `new super[x]`), MetaProperty (`new new.target()`, `new
 //   import.meta.x()`), and the member forms, a private name included (`new X.#f()`).
-export const newTargetArms = ($, Expr, newArgs, { identGuard, Prop, fnExprArms, taggedTemplate = [] }) => [
+export const newTargetArms = ($, Expr, newArgs, { identGuard, Prop, fnExprArms, taggedTemplate = [], literals = [] }) => [
   'true', 'false', 'null', 'this',
   arm('ident', identGuard, Ident),
-  Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, String_, Regex_,
+  Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, String_, Regex_, ...literals,
   arm('superMember', field('superKeyword', 'super'), alt(['.', Ident], bracketIndex(Expr))),
   arm('newDotTarget', field('newKeyword', 'new'), '.', field('targetKeyword', 'target')),
   arm('importMeta', 'import', '.', 'meta'),
@@ -489,7 +497,7 @@ const ClassHeritage = rule($ => classHeritageArms($, Expr, NewTarget,
   ['class', opt(...bindingName), opt('extends', field('superClass', $)), field('bodyOpen', '{'), many(field('member', ClassMember)), field('bodyClose', '}')]));
 
 const NewTarget = rule($ => newTargetArms($, Expr, opt('(', sep(Expr, ','), ')'),
-  { identGuard: notReservedJsExpr, Prop, fnExprArms: fnArms([opt(...bindingName)], Block) }));
+  { identGuard: notReservedJsExpr, Prop, fnExprArms: fnArms([opt(...bindingName)], Block), literals: [LegacyNumber] }));
 
 const Expr = rule($ => [
   // The keyword-valued literals and `this` (reserved words, so the identifier below refuses
@@ -571,7 +579,7 @@ const Expr = rule($ => [
     arm('meta', '.', field('metaKeyword', 'meta')),
   ))),
   PrivateField,
-  HexNumber, OctalNumber, BinaryNumber, BigInt_,
+  HexNumber, OctalNumber, BinaryNumber, BigInt_, LegacyNumber,
   // function expression, 4-way split on async × generator (see fnArms).
   ...fnArms([opt(...bindingName)], Block),
   // named vs anonymous kept separate (greedy opt(Ident) would eat a leading
@@ -596,7 +604,7 @@ const BindingProperty = rule($ => [
   // shorthand `a` / shorthand-with-default `a = 1` — the name is a BindingIdentifier,
   // so a reserved word is invalid (`{ while }`, `{ class }`).
   arm('shorthand', ...bindingName, opt('=', field('value', Expr))),
-  arm('pair', field('key', alt(String_, Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, arm('computed', field('bracket', '['), field('expr', Expr), field('bracketClose', ']')))), ':', field('value', BindingElement)),  // "s"/0/0x1/1n/[e]: elem (a LiteralPropertyName or a ComputedPropertyName)
+  arm('pair', field('key', alt(String_, Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, LegacyNumber, arm('computed', field('bracket', '['), field('expr', Expr), field('bracketClose', ']')))), ':', field('value', BindingElement)),  // "s"/0/0x1/1n/[e]: elem (a LiteralPropertyName or a ComputedPropertyName)
   arm('rest', field('ellipsis', '...'), field('argument', alt(bindingIdentifier, BindingPattern))),    // ...rest | ...{ a }
 ]);
 
@@ -703,6 +711,7 @@ const MemberName = rule($ => [
   OctalNumber,
   BinaryNumber,
   BigInt_,
+  LegacyNumber,
   arm('computed', field('bracket', '['), field('expr', Expr), field('bracketClose', ']')),
 ]);
 
@@ -961,7 +970,7 @@ export const jsBaseCanonical: Record<string, string | string[]> = {
   comment: ['jsdoc', 'tripleslash', 'linecomment', 'blockcomment'],
   string: ['string-single', 'string-double', 'template'],
   'boolean-literal': ['scope-constant-language-boolean-true', 'scope-constant-language-boolean-false'],
-  'numeric-literal': ['hexnumber', 'binarynumber', 'octalnumber', 'number', 'bigint'],
+  'numeric-literal': ['hexnumber', 'binarynumber', 'octalnumber', 'number', 'legacynumber', 'bigint'],
 };
 
 // ── Grammar ──
@@ -974,7 +983,7 @@ export default defineGrammar({
     // Comments must come before Regex_ to avoid /** ... */ being matched as regex
     Shebang, JSDoc, TripleSlash, LineComment, BlockComment,
     Ident, HexNumber, OctalNumber, BinaryNumber, BigInt: BigInt_,
-    Number: Number_, String: String_, Template, Regex: Regex_,
+    Number: Number_, LegacyNumber, String: String_, Template, Regex: Regex_,
     Decorator, PrivateField,
   },
 
