@@ -28,7 +28,7 @@ export const DK_UNEXPECTED = 0, DK_EOF = 1, DK_LEFTOVER = 2;
 // The best candidate of a longest match so far (riCand): where it ended, its node's offset, whether
 // one won, and the node's form, tail and capped flag.
 const BEST: RecordDecl = {
-  name: 'Best',
+  name: 'BestCand',
   fields: ['pos', 'off', 'won', 'form', 'tail', 'capped'].map((name) => ({ name, ty: 'int' as const })),
 };
 
@@ -231,7 +231,7 @@ const riRule = method('riRule', [['r', 'int'], ['d', 'int']], ['bool'], [
   run('enSetSt', n(ST_SUP_CUR), v('prev')),
   ret(v('ok')),
 ]);
-const newBest = (pos: Expr): Expr => ({ k: 'mkRec', rec: 'Best', fields: { pos, off: n(0), won: n(0), form: n(0), tail: n(0), capped: n(0) } });
+const newBest = (pos: Expr): Expr => ({ k: 'mkRec', rec: 'BestCand', fields: { pos, off: n(0), won: n(0), form: n(0), tail: n(0), capped: n(0) } });
 // The position after a longest match: where its best candidate ended (each candidate went back to save).
 const wonPos: Stmt[] = [if_(gt(fld(v('best'), 'won'), n(0)), [run('enSetPos', fld(v('best'), 'pos'))])];
 // A candidate of rule r's longest match tried from token `save` (the list from height sb), its
@@ -251,7 +251,7 @@ const riCand = method('riCand', [['r', 'int'], ['sb', 'int'], ['save', 'int'], [
   ], [run('enReset', v('k')), run('enUnmark', v('k'))]),
   run('enBack', v('save')),
 ]);
-riCand.params.push({ name: 'best', ty: 'rec_Best', ref: true });
+riCand.params.push({ name: 'best', ty: 'rec_BestCand', ref: true });
 // An rd rule (record rec). The single and the predictive forms take their one admitted
 // alternative's match (an empty one too); a longest-match list keeps a candidate only when it
 // ends past the best so far (an earlier-declared one wins a tie).
@@ -261,7 +261,7 @@ const riRd = method('riRd', [['r', 'int'], ['rec', 'int'], ['d', 'int']], ['bool
   let_('one', or(isT(v('rec'), 1), eq(v('na'), n(1))), 'bool'),
   let_('save', call('enPos')),
   let_('sb', call('enSh')),
-  { k: 'let', name: 'best', ty: 'rec_Best', init: newBest(v('save')) },
+  { k: 'let', name: 'best', ty: 'rec_BestCand', init: newBest(v('save')) },
   if_(v('one'), [{ k: 'setField', name: 'best', f: 'pos', e: sub(v('save'), n(1)) }]),
   let_('i', n(0)),
   while_(lt(v('i'), v('na')), [
@@ -409,7 +409,7 @@ const riNud = method('riNud', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], [
   if_(lt(v('kid'), n(0)), [ret(fls, n(0))]),
   let_('lid', call('enPeekLid')),
   let_('save', call('enPos')), let_('sb', call('enSh')),
-  { k: 'let', name: 'best', ty: 'rec_Best', init: newBest(v('save')) },
+  { k: 'let', name: 'best', ty: 'rec_BestCand', init: newBest(v('save')) },
   let_('x', add(sec(P_ARMS), n(1))),
   let_('i', n(0)),
   while_(lt(v('i'), T(sec(P_ARMS))), [
