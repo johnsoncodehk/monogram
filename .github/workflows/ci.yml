@@ -91,6 +91,11 @@ jobs:
       # CHECK_TRACE_DEPS: every gate also lists the repository files it opened, and the run fails
       # when one is not among the inputs test/gate-deps.ts derives for it (what `check.ts --changed`
       # trusts to skip a gate). nproc: the runner pool takes one gate per core.
+      # The commit test/emit-corpus.ts reads the repository's own sources from (test/corpus-pin.ts),
+      # fetched once here, before the gates: gates running at once must not each fetch into this clone.
+      - name: Fetch the pinned in-repo corpus commit
+        run: node test/corpus-pin.ts --fetch
+
       - name: Test
         env:
           CHECK_TRACE_DEPS: '1'
@@ -172,6 +177,7 @@ jobs:
       - name: Engine-parity over the full corpus
         if: steps.changed.outputs.value == 'true'
         run: |
+          node test/corpus-pin.ts --fetch
           node test/emit-parser-verify.ts all
           node test/emit-reject-messages.ts
           node test/emit-lexer-verify.ts
