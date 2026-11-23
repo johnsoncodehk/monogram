@@ -165,6 +165,10 @@ module.exports = grammar({
     [$.type_member, $.prop, $._decl_first_2],
     [$.type_member, $._decl_first_1],
     [$.type_member, $._decl_first_2],
+    [$.decl, $._decl_first_1],
+    [$.decl, $._decl_first_2],
+    [$.stmt, $._stmt_first_1],
+    [$.decorator_expr, $._decorator_expr_first_1],
   ],
 
   rules: {

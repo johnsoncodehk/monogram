@@ -93,6 +93,10 @@ module.exports = grammar({
     [$.expr, $.block, $._decl_first_1],
     [$._stmt_first_1, $.param],
     [$._stmt_first_2, $.param],
+    [$.stmt, $._stmt_first_1],
+    [$.stmt, $._stmt_first_2],
+    [$.decl, $._decl_first_2],
+    [$.decl, $._decl_first_1],
   ],
 
   rules: {

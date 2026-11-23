@@ -1809,7 +1809,10 @@ function deriveConflicts(ctx: GrammarJsContext): string[][] {
   }
 
   // A FIRST-filtered copy meets what its original meets: every tuple naming a copied rule is
-  // declared for each choice of the original or one of its copies in that place.
+  // declared for each choice of the original or one of its copies in that place; and a copy meets its
+  // original where the grammar had two alternatives over the same strings, which one rule kept as one
+  // item (TypeScript's `export default @d class`: the decorated-declaration arm reads its decorators
+  // through the copy, the class arm through the original).
   const copiesOf = new Map<string, string[]>();
   for (const [copy, of] of ctx.firstFilters.aliasOf) {
     if (ctx.tokenNames.has(of)) continue;
@@ -1822,6 +1825,7 @@ function deriveConflicts(ctx: GrammarJsContext): string[][] {
       for (const r of tuple) variants = variants.flatMap(v => [r, ...(copiesOf.get(r) ?? [])].map(x => [...v, x]));
       for (const v of variants) push(v);
     }
+    for (const [o, cs] of copiesOf) for (const c of cs) push([o, c]);
   }
 
   return conflicts;
