@@ -26,20 +26,20 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 
 | target | grammar | input | mode | tokens | nodes | allocations | per token | per node | bytes | B per token | B per node | result allocs | result bytes | overhead bytes |
 |:--|:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
-| ts | typescript | acorn.js | parse | 42,209 | 28,638 | 142,392 | 3.37 | 4.97 | 4,694,832 | 111.2 | 163.9 | 79,491 | 2,313,619 | 2,381,213 |
-| ts | typescript | acorn.js | parseWith | 42,209 | 28,638 | 142,392 | 3.37 | 4.97 | 4,694,832 | 111.2 | 163.9 | 79,491 | 2,313,619 | 2,381,213 |
-| ts | typescript | lib.es5.d.ts | parse | 13,659 | 7,182 | 43,954 | 3.22 | 6.12 | 1,441,312 | 105.5 | 200.7 | 20,313 | 591,395 | 849,917 |
-| ts | typescript | lib.es5.d.ts | parseWith | 13,659 | 7,182 | 43,954 | 3.22 | 6.12 | 1,441,312 | 105.5 | 200.7 | 20,313 | 591,395 | 849,917 |
-| ts | typescript | _tsserver.js | parse | 4,932 | 3,139 | 16,056 | 3.26 | 5.12 | 540,652 | 109.6 | 172.2 | 8,673 | 252,250 | 288,402 |
-| ts | typescript | _tsserver.js | parseWith | 4,932 | 3,139 | 16,056 | 3.26 | 5.12 | 540,652 | 109.6 | 172.2 | 8,673 | 252,250 | 288,402 |
-| ts | typescript | _tsserver.js ×4 | parse | 19,728 | 12,553 | 64,145 | 3.25 | 5.11 | 2,117,056 | 107.3 | 168.6 | 34,686 | 1,008,865 | 1,108,191 |
-| ts | typescript | _tsserver.js ×4 | parseWith | 19,728 | 12,553 | 64,145 | 3.25 | 5.11 | 2,117,056 | 107.3 | 168.6 | 34,686 | 1,008,865 | 1,108,191 |
-| ts | javascript | acorn.js | parse | 42,051 | 28,638 | 142,372 | 3.39 | 4.97 | 4,696,156 | 111.7 | 164.0 | 79,491 | 2,313,271 | 2,382,885 |
-| ts | javascript | acorn.js | parseWith | 42,051 | 28,638 | 142,372 | 3.39 | 4.97 | 4,696,156 | 111.7 | 164.0 | 79,491 | 2,313,271 | 2,382,885 |
-| ts | javascript | _tsserver.js | parse | 4,928 | 3,139 | 16,155 | 3.28 | 5.15 | 543,444 | 110.3 | 173.1 | 8,673 | 252,132 | 291,312 |
-| ts | javascript | _tsserver.js | parseWith | 4,928 | 3,139 | 16,155 | 3.28 | 5.15 | 543,444 | 110.3 | 173.1 | 8,673 | 252,132 | 291,312 |
-| ts | javascript | _tsserver.js ×4 | parse | 19,712 | 12,553 | 64,541 | 3.27 | 5.14 | 2,128,224 | 108.0 | 169.5 | 34,686 | 1,008,393 | 1,119,831 |
-| ts | javascript | _tsserver.js ×4 | parseWith | 19,712 | 12,553 | 64,541 | 3.27 | 5.14 | 2,128,224 | 108.0 | 169.5 | 34,686 | 1,008,393 | 1,119,831 |
+| ts | typescript | acorn.js | parse | 42,209 | 28,638 | 142,392 | 3.37 | 4.97 | 4,694,828 | 111.2 | 163.9 | 79,491 | 2,313,619 | 2,381,209 |
+| ts | typescript | acorn.js | parseWith | 42,209 | 28,638 | 142,392 | 3.37 | 4.97 | 4,694,828 | 111.2 | 163.9 | 79,491 | 2,313,619 | 2,381,209 |
+| ts | typescript | lib.es5.d.ts | parse | 13,659 | 7,182 | 43,954 | 3.22 | 6.12 | 1,440,724 | 105.5 | 200.6 | 20,313 | 591,395 | 849,329 |
+| ts | typescript | lib.es5.d.ts | parseWith | 13,659 | 7,182 | 43,954 | 3.22 | 6.12 | 1,440,724 | 105.5 | 200.6 | 20,313 | 591,395 | 849,329 |
+| ts | typescript | _tsserver.js | parse | 4,932 | 3,139 | 16,056 | 3.26 | 5.12 | 540,532 | 109.6 | 172.2 | 8,673 | 252,250 | 288,282 |
+| ts | typescript | _tsserver.js | parseWith | 4,932 | 3,139 | 16,056 | 3.26 | 5.12 | 540,532 | 109.6 | 172.2 | 8,673 | 252,250 | 288,282 |
+| ts | typescript | _tsserver.js ×4 | parse | 19,728 | 12,553 | 64,145 | 3.25 | 5.11 | 2,116,576 | 107.3 | 168.6 | 34,686 | 1,008,865 | 1,107,711 |
+| ts | typescript | _tsserver.js ×4 | parseWith | 19,728 | 12,553 | 64,145 | 3.25 | 5.11 | 2,116,576 | 107.3 | 168.6 | 34,686 | 1,008,865 | 1,107,711 |
+| ts | javascript | acorn.js | parse | 42,051 | 28,638 | 142,372 | 3.39 | 4.97 | 4,696,152 | 111.7 | 164.0 | 79,491 | 2,313,271 | 2,382,881 |
+| ts | javascript | acorn.js | parseWith | 42,051 | 28,638 | 142,372 | 3.39 | 4.97 | 4,696,152 | 111.7 | 164.0 | 79,491 | 2,313,271 | 2,382,881 |
+| ts | javascript | _tsserver.js | parse | 4,928 | 3,139 | 16,155 | 3.28 | 5.15 | 543,324 | 110.3 | 173.1 | 8,673 | 252,132 | 291,192 |
+| ts | javascript | _tsserver.js | parseWith | 4,928 | 3,139 | 16,155 | 3.28 | 5.15 | 543,324 | 110.3 | 173.1 | 8,673 | 252,132 | 291,192 |
+| ts | javascript | _tsserver.js ×4 | parse | 19,712 | 12,553 | 64,541 | 3.27 | 5.14 | 2,127,744 | 107.9 | 169.5 | 34,686 | 1,008,393 | 1,119,351 |
+| ts | javascript | _tsserver.js ×4 | parseWith | 19,712 | 12,553 | 64,541 | 3.27 | 5.14 | 2,127,744 | 107.9 | 169.5 | 34,686 | 1,008,393 | 1,119,351 |
 | js | typescript | acorn.js | fresh | 42,209 | 28,813 | 5,109 | 0.12 | 0.18 | 13,844,124 | 328.0 | 480.5 | - | - | - |
 | js | typescript | acorn.js | reuse | 42,209 | 28,813 | 4,950 | 0.12 | 0.17 | 233,752 | 5.5 | 8.1 | - | - | - |
 | js | typescript | lib.es5.d.ts | fresh | 13,659 | 7,694 | 7,434 | 0.54 | 0.97 | 2,781,480 | 203.6 | 361.5 | - | - | - |
@@ -54,25 +54,25 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | js | javascript | _tsserver.js | reuse | 4,928 | 3,263 | 318 | 0.06 | 0.10 | 15,176 | 3.1 | 4.7 | - | - | - |
 | js | javascript | _tsserver.js ×4 | fresh | 19,712 | 13,049 | 1,362 | 0.07 | 0.10 | 4,788,556 | 242.9 | 367.0 | - | - | - |
 | js | javascript | _tsserver.js ×4 | reuse | 19,712 | 13,049 | 1,245 | 0.06 | 0.10 | 59,744 | 3.0 | 4.6 | - | - | - |
-| go | typescript | acorn.js | fresh | 42,209 | 28,638 | 83 | 0.00 | 0.00 | 9,249,936 | 219.1 | 323.0 | 3 | 2,072,576 | 7,177,360 |
+| go | typescript | acorn.js | fresh | 42,209 | 28,638 | 83 | 0.00 | 0.00 | 9,249,920 | 219.1 | 323.0 | 3 | 2,072,576 | 7,177,344 |
 | go | typescript | acorn.js | reuse | 42,209 | 28,638 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 | go | typescript | acorn.js | slim-reuse | 42,209 | 11,490 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
-| go | typescript | lib.es5.d.ts | fresh | 13,659 | 7,233 | 73 | 0.01 | 0.01 | 2,124,960 | 155.6 | 293.8 | 3 | 548,864 | 1,576,096 |
+| go | typescript | lib.es5.d.ts | fresh | 13,659 | 7,233 | 73 | 0.01 | 0.01 | 2,117,280 | 155.0 | 292.7 | 3 | 548,864 | 1,568,416 |
 | go | typescript | lib.es5.d.ts | reuse | 13,659 | 7,233 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 | go | typescript | lib.es5.d.ts | slim-reuse | 13,659 | 3,112 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
-| go | typescript | _tsserver.js | fresh | 4,932 | 3,185 | 60 | 0.01 | 0.02 | 719,008 | 145.8 | 225.7 | 3 | 225,280 | 493,728 |
+| go | typescript | _tsserver.js | fresh | 4,932 | 3,185 | 60 | 0.01 | 0.02 | 718,496 | 145.7 | 225.6 | 3 | 225,280 | 493,216 |
 | go | typescript | _tsserver.js | reuse | 4,932 | 3,185 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 | go | typescript | _tsserver.js | slim-reuse | 4,932 | 1,372 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
-| go | typescript | _tsserver.js ×4 | fresh | 19,728 | 12,737 | 78 | 0.00 | 0.01 | 3,714,208 | 188.3 | 291.6 | 3 | 901,120 | 2,813,088 |
+| go | typescript | _tsserver.js ×4 | fresh | 19,728 | 12,737 | 78 | 0.00 | 0.01 | 3,710,624 | 188.1 | 291.3 | 3 | 901,120 | 2,809,504 |
 | go | typescript | _tsserver.js ×4 | reuse | 19,728 | 12,737 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 | go | typescript | _tsserver.js ×4 | slim-reuse | 19,728 | 5,485 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
-| go | javascript | acorn.js | fresh | 42,051 | 28,638 | 83 | 0.00 | 0.00 | 9,249,936 | 220.0 | 323.0 | 3 | 2,072,576 | 7,177,360 |
+| go | javascript | acorn.js | fresh | 42,051 | 28,638 | 83 | 0.00 | 0.00 | 9,249,920 | 220.0 | 323.0 | 3 | 2,072,576 | 7,177,344 |
 | go | javascript | acorn.js | reuse | 42,051 | 28,638 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 | go | javascript | acorn.js | slim-reuse | 42,051 | 11,490 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
-| go | javascript | _tsserver.js | fresh | 4,928 | 3,139 | 60 | 0.01 | 0.02 | 719,008 | 145.9 | 229.1 | 3 | 225,280 | 493,728 |
+| go | javascript | _tsserver.js | fresh | 4,928 | 3,139 | 60 | 0.01 | 0.02 | 718,496 | 145.8 | 228.9 | 3 | 225,280 | 493,216 |
 | go | javascript | _tsserver.js | reuse | 4,928 | 3,139 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 | go | javascript | _tsserver.js | slim-reuse | 4,928 | 1,367 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
-| go | javascript | _tsserver.js ×4 | fresh | 19,712 | 12,553 | 78 | 0.00 | 0.01 | 3,714,208 | 188.4 | 295.9 | 3 | 901,120 | 2,813,088 |
+| go | javascript | _tsserver.js ×4 | fresh | 19,712 | 12,553 | 78 | 0.00 | 0.01 | 3,710,624 | 188.2 | 295.6 | 3 | 901,120 | 2,809,504 |
 | go | javascript | _tsserver.js ×4 | reuse | 19,712 | 12,553 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 | go | javascript | _tsserver.js ×4 | slim-reuse | 19,712 | 5,465 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 
@@ -92,7 +92,7 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | array growth | `parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid])` | 1 | 1 | 0.00 | 76 | 0.0% | 0 |
 | array | `[]` | 10 | 4 | 0.00 | 64 | 0.0% | 0 |
 | object | `{ pos, pendingNl, prevLid, prevKid, hasPrev, bpLid, hasPrev2, paren...` | 1 | 1 | 0.00 | 60 | 0.0% | 0 |
-| object | `{ tokStart: _sp[s + N]!, tokEnd: pos, ext: Math.max(pos, lookEnd())...` | 1 | 1 | 0.00 | 40 | 0.0% | 0 |
+| object | `{ tokStart: _sp[s + N]!, tokEnd: pos, ext: Math.max(pos, lookEnd())...` | 1 | 1 | 0.00 | 36 | 0.0% | 0 |
 | array | `[toks, lexFrom(src, N, false, N, N, N, false, false, [], false, fal...` | 1 | 1 | 0.00 | 32 | 0.0% | 0 |
 | closure | `emit` | 1 | 1 | 0.00 | 32 | 0.0% | 0 |
 
@@ -112,7 +112,7 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | array growth | `parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid])` | 1 | 1 | 0.00 | 76 | 0.0% | 0 |
 | array | `[]` | 10 | 4 | 0.00 | 64 | 0.0% | 0 |
 | object | `{ pos, pendingNl, prevLid, prevKid, hasPrev, bpLid, hasPrev2, paren...` | 1 | 1 | 0.00 | 60 | 0.0% | 0 |
-| object | `{ tokStart: _sp[s + N]!, tokEnd: pos, ext: Math.max(pos, lookEnd())...` | 1 | 1 | 0.00 | 40 | 0.0% | 0 |
+| object | `{ tokStart: _sp[s + N]!, tokEnd: pos, ext: Math.max(pos, lookEnd())...` | 1 | 1 | 0.00 | 36 | 0.0% | 0 |
 | array | `[toks, lexFrom(src, N, false, N, N, N, false, false, [], false, fal...` | 1 | 1 | 0.00 | 32 | 0.0% | 0 |
 | closure | `emit` | 1 | 1 | 0.00 | 32 | 0.0% | 0 |
 
@@ -164,7 +164,7 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | `lexFrom.func2` | 26 | 3,413,248 | 36.9% |
 | `(*engine).pushLeaf` | 6 | 7,424 | 0.1% |
 | `(*engine).matchTok` | 3 | 112 | 0.0% |
-| `(*engine).parseProgram` | 1 | 64 | 0.0% |
+| `(*engine).parseProgram` | 1 | 48 | 0.0% |
 
 ## Where: go target, reuse, typescript grammar, acorn.js (top 0 of 0 sites by bytes)
 

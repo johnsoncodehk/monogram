@@ -317,13 +317,13 @@ module.exports = grammar({
 
     shebang: $ => token(/#![^\n\r\u2028\u2029]*/),
 
-    jsdoc: $ => token(/\/\*\*(?:[\s\S])*?\*\//),
+    jsdoc: $ => token(/\/\*\*(?:[^*]|\*+[^*\/])*\*+\//),
 
     triple_slash: $ => token(/\/\/\/[ \t]*<[^\n\r\u2028\u2029]*/),
 
     line_comment: $ => token(/\/\/[^\n\r\u2028\u2029]*/),
 
-    block_comment: $ => token(/\/\*(?:[\s\S])*?\*\//),
+    block_comment: $ => token(/\/\*(?:[^*]|\*+[^*\/])*\*+\//),
 
     ident: $ => token(/(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[a-zA-Z0-9_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})*/),
 

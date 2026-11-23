@@ -548,9 +548,11 @@ Directive openers and continuations are derived from the grammar ("Directives").
 
 ## Owed
 
-- In the portable lexers: `tagStart`, `unlessBodyStarts`, `textTokens`, directives and the root
-  region, as they are built here (until then `buildIR` refuses a grammar that declares one of
-  them, as out of scope); a raw-text grammar that also declares a type-parameter signature is
+- In the portable lexers: directives and the root region, as they are built here (until then
+  `buildIR` refuses a grammar that declares one of them, as out of scope; `tagStart`,
+  `unlessBodyStarts` and `textTokens` are carried: `ElementPlan.tagStart`, `rawText[].unless`,
+  `textTokens`, the shared routines `lexElTagStart` and `lexElTextStop`, a text token's failed
+  attempt recorded in the look end); a raw-text grammar that also declares a type-parameter signature is
   refused (the signature's rewind does not restore the raw-text tag records), and so is a
   grammar that declares both elements and `newline` mode.
 - The root region: the build order above.
