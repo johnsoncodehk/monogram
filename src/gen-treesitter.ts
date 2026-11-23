@@ -1,7 +1,7 @@
 import type { CstGrammar, RuleExpr, RuleDecl, TokenPattern } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
 import { buildLr, END, type LeafGraph, type LrAnalysis } from './lr-automaton.ts';
-import { info as tokenPatternInfo, type CSet } from './lex-match-plan.ts';
+import { info as tokenPatternInfo, continuesAt, type CSet } from './lex-match-plan.ts';
 import { tokenPatternFirstCharSet, type TokenPatternFirstSet, tokenPatternIsNever, tokenPatternLiteralPrefix, tokenPatternLiteralPrefixes, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -852,7 +852,7 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
   }
 
   let sawInfix = false, sawPrefix = false, sawPostfix = false;
-  const atomBranches: string[] = [];
+  const atomBranches: string[] = [], atomAlts: RuleExpr[] = [];
   // What stands between the operand and a postfix operator (`[$, sameLine, postfix]`): a same-line
   // marker renders as its zero-width token, any other assertion as nothing.
   let postfixBetween = '';
@@ -881,6 +881,7 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
     // (member access `[$, '.', Ident]`, call `[$, '(', …, ')']`, generics, etc.).
     // Render as-is; give it a baseline precedence so it doesn't outrank operators.
     atomBranches.push(renderExpr(alt, ctx));
+    atomAlts.push(alt);
   }
 
   if (sawInfix) emitOperatorBranches('infix');
@@ -892,17 +893,73 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
   // (matches the Pratt parser's maxBp for non-operator LED patterns).
   const high = nLevels + 1;
   const selfSnake = ctx.ruleSnake.get(rule.name);
-  for (const ab of atomBranches) {
+  for (const [i, ab] of atomBranches.entries()) {
     // Heuristic: a branch that starts with the self-reference is a left-recursive
     // continuation (call/member/index/generic) — bind tight.
     if (ab.startsWith(`seq($.${selfSnake}`) || ab === `$.${selfSnake}` || ab.startsWith(`seq(alias($.${selfSnake}, `)) {
-      branches.push(`prec.left(${high}, ${ab})`);
+      // The precedence decides at the continuation's operator; a continuation that ENDS in another
+      // rule's reference leaves that last step out of it (see openTail).
+      const tail = openTail(rule.name, atomAlts[i], ctx.grammar);
+      if (tail === null) { branches.push(`prec.left(${high}, ${ab})`); continue; }
+      const t = renderExpr(tail, ctx);
+      if (!ab.endsWith(`, ${t})`)) throw new Error(`gen-treesitter: the continuation ${ab} does not end in its operand ${t}`);
+      branches.push(`seq(prec.left(${high}, ${ab.slice(0, ab.length - t.length - 3)})), ${t})`);
     } else {
       branches.push(ab);
     }
   }
 
   return `choice(\n      ${branches.join(',\n      ')}\n    )`;
+}
+
+/**
+ * The operand a Pratt continuation ends in, when that operand is ANOTHER rule with continuations of
+ * its own (TypeScript's `[$, 'as', Type]`: Type continues with `[ ]`, `|`, `&`, `<`, `.`, `?` …).
+ *
+ * tree-sitter takes a production's reduce precedence and associativity from its LAST step. Under
+ * the continuation's high left precedence, `x as T` reduced before any of Type's own continuation
+ * tokens could shift (Type's productions have the default precedence), so `x as T[]` became
+ * `(x as T)[` and an ERROR. The interpreter reads the operand like any rule: whole, greedily,
+ * falling back to the shorter operand only where the longer one fails (`x as T < b`: no type
+ * arguments close, so `<` compares). The generator's rule: a continuation's precedence decides at
+ * its operator, so it covers the steps up to the operand (`seq(prec.left(N, seq($.expr, "as")),
+ * $.type)`: the shift of `as` against the other operators reads the first step); the last step,
+ * a reference to another rule that has continuations, carries neither precedence nor
+ * associativity (a nested `prec` would still inherit the outer `left`), so after the operand each
+ * token that continues the operand AND can follow the expression is an LR conflict between the two
+ * readings, declared (deriveConflicts) and kept by GLR, which drops the one that fails as the
+ * interpreter's fallback does. A token that only one reading takes needs no conflict.
+ * An operand that is itself a precedence-climbing rule would carry its own levels: not modelled,
+ * so it fails loudly.
+ */
+function openTail(self: string, alt: RuleExpr, grammar: CstGrammar): RuleExpr | null {
+  const leftRecursive = (e: RuleExpr, name: string) => {
+    const v = tsView(e);
+    const head = (v.type === 'seq' ? v.items : [v]).find(i => !ASSERTION_KINDS.has(i.type));
+    return head?.type === 'ref' && head.name === name;
+  };
+  if (alt.type !== 'seq' || !leftRecursive(alt, self)) return null;
+  const last = alt.items[alt.items.length - 1];
+  if (last.type !== 'ref' || last.name === self) return null;
+  const r = grammar.rules.find(x => x.name === last.name);
+  if (!r) return null;
+  const open = (r.body.type === 'alt' ? r.body.items : [r.body]).some(a => leftRecursive(a, r.name));
+  if (!open) return null;
+  if (hasMarker(r.body)) throw new Error(`gen-treesitter: the continuation of ${self} ends in ${r.name}, a precedence-climbing rule; its levels are not rendered on the last step`);
+  return last;
+}
+
+/** The [rule, operand] pairs whose continuations meet after an openTail operand (deriveConflicts). */
+function openTailConflicts(ctx: GrammarJsContext): string[][] {
+  const out: string[][] = [];
+  for (const name of ctx.prattRules) {
+    const rule = ctx.grammar.rules.find(r => r.name === name)!;
+    for (const alt of rule.body.type === 'alt' ? rule.body.items : [rule.body]) {
+      const tail = openTail(name, alt, ctx.grammar);
+      if (tail?.type === 'ref') out.push([ctx.ruleSnake.get(name)!, ctx.ruleSnake.get(tail.name)!]);
+    }
+  }
+  return out;
 }
 
 // ── Nullable-rule elimination (ε-elimination) ────────────────────────────────
@@ -2135,7 +2192,10 @@ function deriveConflicts(ctx: GrammarJsContext): string[][] {
     }
   }
 
-  // 3. The tuples the grammar declares. A symbol may be a RULE, a TOKEN (YAML's `key`/`plain` are
+  // 3. A continuation that ends in another rule meets that rule's continuations (openTail).
+  for (const c of openTailConflicts(ctx)) push(c);
+
+  // 4. The tuples the grammar declares. A symbol may be a RULE, a TOKEN (YAML's `key`/`plain` are
   //    tokens that conflict on a trailing `:`), or a shared hidden tsRelax rule (`type_fn_param`);
   //    all three are valid `$.<name>` conflict symbols. A name the grammar does not define is a
   //    declaration error, not a tuple to skip.
@@ -3667,8 +3727,8 @@ function cCharSetTest(set: CSet, v: string): string {
 // in the same state, now after it. A line break is one of the characters that set the lexer's
 // `newlineBefore` (src/emit-lexer.ts: \n \r U+2028 U+2029) in the whitespace before the next token.
 // What the scanner cannot see: a line break inside a skipped block comment (the comment is an extra
-// already consumed when it is asked again), and a literal that is the prefix of a longer non-literal
-// token (`.` before `.5`).
+// already consumed when it is asked again), and, for CONT, a literal that is the prefix of a longer
+// non-literal token (`.` before `.5`; AFTER reads both, see zw_lit_tokens).
 function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { helpers: string[]; call: string[] } {
   const { grammar } = ctx;
   const tokens = ctx.zeroWidth.tokens;
@@ -3779,6 +3839,40 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   const has = (set: Iterable<string>, kindLit: string) => { const s = new Set(set); return s.has(`'${kindLit}`) || (!!word && isWordLit(kindLit) && !reservedWords.has(kindLit) && s.has(word)); };
   const mask = (set: Iterable<string>) => { const s = new Set(set); let m = 0n; kindTokens.forEach((n, i) => { if (s.has(n)) m |= 1n << BigInt(i); }); return `0x${m.toString(16)}ull`; };
   const boolRow = (f: (l: string) => boolean) => `{ ${literals.map(l => (f(l) ? 1 : 0)).join(', ')} }`;
+  // A literal that a non-literal token can also begin (`/` a regex, `.` a number): which reading the
+  // lexer takes depends on the state after the zero-width token, so a token reading in AFTER lets the
+  // zero-width token hold too (`return /re/`: the division `/` follows no `return`, the regex does),
+  // where the token can go on with what follows the literal (`.5` is a number, `.x` is not: the
+  // number reading of `{ out.x }` would take `out` as a modifier). A literal of one character is
+  // tested on the character after it; a longer one on its own second character. The word token is
+  // not one of them: a keyword is read as a name by the AFTER_EXACT / AFTER passes.
+  const litTokens = literals.map(l => {
+    const reads: { bit: number; next: CSet | null }[] = [];
+    if (isWordLit(l)) return reads;
+    const c = l.codePointAt(0)!;
+    kindTokens.forEach((n, i) => {
+      if (n === word) return;
+      const p = grammar.tokens.find(t => t.name === n)!.pattern;
+      if (!tokenPatternInfo(p).first.some(([lo, hi]) => c >= lo && c <= hi)) return;
+      const second = continuesAt(p, c);
+      if (l.length === 1) reads.push({ bit: i, next: second });
+      else if (second.some(([lo, hi]) => l.charCodeAt(1) >= lo && l.charCodeAt(1) <= hi)) reads.push({ bit: i, next: null });
+    });
+    return reads;
+  });
+  H.push('// The tokens of AFTER a literal may begin instead, given the character after the literal (see above).');
+  H.push('static uint64_t zw_lit_tokens(int lit, int32_t c) {');
+  H.push('  uint64_t m = 0;');
+  H.push('  switch (lit) {');
+  litTokens.forEach((reads, lit) => {
+    if (!reads.length) return;
+    H.push(`    case ${lit}:`);
+    for (const r of reads) H.push(r.next === null ? `      m |= (uint64_t)1 << ${r.bit};` : `      if (${cRanges(r.next, 'c')}) m |= (uint64_t)1 << ${r.bit};`);
+    H.push('      break;');
+  });
+  H.push('  }');
+  H.push('  return m;');
+  H.push('}');
   H.push('typedef struct { int symbol; bool line_end; bool line_break; bool after_end; uint64_t after_tok, cont_tok, ahead_tok; const bool *after_exact, *after_lit, *cont_lit, *ahead_lit; } ZeroWidth;');
   tokens.forEach(t => {
     const S = t.snake.toUpperCase();
@@ -3819,7 +3913,7 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   H.push('    bool ahead = !end && (lit >= 0 ? z->ahead_lit[lit] : (cand & z->ahead_tok) != 0);');
   H.push('    bool holds = z->line_end ? ((z->line_break && (line_break || end)) || ahead) : (!line_break && !end);');
   H.push('    if (!holds) continue;');
-  H.push('    bool after = end ? z->after_end : lit >= 0 ? (pass == 0 ? z->after_exact[lit] : z->after_lit[lit]) : (cand & z->after_tok) != 0;');
+  H.push('    bool after = end ? z->after_end : lit >= 0 ? (pass == 0 ? z->after_exact[lit] : z->after_lit[lit]) || (zw_lit_tokens(lit, lexer->lookahead) & z->after_tok) != 0 : (cand & z->after_tok) != 0;');
   H.push('    bool cont = !end && (lit >= 0 ? z->cont_lit[lit] : (cand & z->cont_tok) != 0);');
   H.push('    if (after && !cont) { lexer->result_symbol = z->symbol; return 1; }');
   H.push('  }');

@@ -14,7 +14,8 @@ export type RecTy = `rec_${string}`;
 export type RecListTy = `recs_${string}`;
 // An optional record: one record of a declared type, or none.
 export type OptTy = `opt_${string}`;
-export type ListTy = 'metas' | 'toks' | 'bools' | 'depths' | 'edits' | RecListTy;
+// `ints`: a list of plain ints (an int stack, a decoded int table).
+export type ListTy = 'metas' | 'toks' | 'bools' | 'depths' | 'ints' | 'edits' | RecListTy;
 export type Ty = Num | 'bool' | 'str' | 'meta' | 'tok' | 'edit' | RecTy | OptTy | ListTy;
 export type MetaInt = 'off' | 'end' | 'kid' | 'pd' | 'fd' | 'td';
 export type MetaFlag = 'nl' | 'lc' | 'lb' | 'hd';
@@ -80,7 +81,9 @@ export type Expr =
   // len(s) when there is none. A stop beyond ASCII is found at its first unit.
   | { k: 'findAny'; s: Expr; i: Expr; stops: number[] }
   // The concatenation of two or more strings, a new string (for messages: a cold path).
-  | { k: 'cat'; parts: Expr[] };
+  | { k: 'cat'; parts: Expr[] }
+  // Element i of a declared constant int table (`IntTable`), an int; 0 <= i < its length.
+  | { k: 'tab'; t: string; i: Expr };
 
 export type Stmt =
   | { k: 'let'; name: string; ty: Ty; init: Expr }
@@ -118,7 +121,11 @@ export interface Param { name: string; ty: Ty; ref?: boolean }
 // line.
 // `extern`: a signature only; the target prints the function itself (a runtime routine whose
 // data or spelling is the target's), so `printFns` skips it.
-export interface Fn { name: string; doc: string; params: Param[]; ret: Ty[]; body: Stmt[]; inline?: boolean; cold?: boolean; extern?: boolean }
+// `method`: a function of the target's engine (a receiver the lowering names: the state a family
+// reads and writes through its extern methods, such as a parser's position and builder). It is
+// printed and called as the lowering spells a method; a method calls any function, a non-method
+// only non-methods.
+export interface Fn { name: string; doc: string; params: Param[]; ret: Ty[]; body: Stmt[]; inline?: boolean; cold?: boolean; extern?: boolean; method?: boolean }
 export type CodeRange = [number, number];
 // A record type a family declares: its fields in declaration order. The lowering spells the
 // record's type and its field reads; a field's type is a number kind or bool.
@@ -133,7 +140,54 @@ export function unitMask(rs: CodeRange[], base: number): string {
   return `0x${m.toString(16)}`;
 }
 
-export const ELEM: Record<Exclude<ListTy, RecListTy>, Ty> = { metas: 'meta', toks: 'tok', bools: 'bool', depths: 'depth', edits: 'edit' };
+export const ELEM: Record<Exclude<ListTy, RecListTy>, Ty> = { metas: 'meta', toks: 'tok', bools: 'bool', depths: 'depth', ints: 'int', edits: 'edit' };
+
+// A constant int table a family reads (`tab`): its values, each >= -1. It is printed PACKED (one
+// string literal, `packInts`) and decoded by the shared `unpackInts` when the target's engine first
+// needs it; where the decoded table lives and when it is decoded is the target's (`Lowering.tab`).
+export interface IntTable { name: string; data: number[] }
+// The packing: each value v >= -1 as v + 1 in base 32, low digits first, one character per digit:
+// a digit d is the character 48 + d on the last digit of a value and 80 + d before it (ASCII
+// '0'..'o', so the literal is printable in every target; '\\' is the one character a target escapes).
+export function packInts(data: readonly number[]): string {
+  let out = '';
+  for (const v of data) {
+    if (!Number.isInteger(v) || v < -1) throw new Error(`algo-ir: an int table holds integers >= -1, not ${v}`);
+    let u = v + 1;
+    while (u >= 32) { out += String.fromCharCode(80 + (u % 32)); u = Math.floor(u / 32); }
+    out += String.fromCharCode(48 + u);
+  }
+  return out;
+}
+const iv = (name: string): Expr => ({ k: 'var', name });
+const ib = (op: BinOp, a: Expr, b: Expr): Expr => ({ k: 'bin', op, a, b });
+const ii = (v: number): Expr => ({ k: 'int', v });
+// The decoding of packInts, printed with every family that declares a table.
+export const UNPACK_INTS: Fn = {
+  name: 'unpackInts',
+  doc: 'The int table packed in s (algo-ir packInts).',
+  params: [{ name: 's', ty: 'str' }],
+  ret: ['ints'],
+  body: [
+    { k: 'let', name: 'out', ty: 'ints', init: { k: 'newList', ty: 'ints' } },
+    { k: 'let', name: 'v', ty: 'int', init: ii(0) },
+    { k: 'let', name: 'sh', ty: 'int', init: ii(0) },
+    { k: 'let', name: 'i', ty: 'int', init: ii(0) },
+    { k: 'while', c: ib('lt', iv('i'), { k: 'len', e: iv('s') }), body: [
+      { k: 'let', name: 'd', ty: 'int', init: ib('sub', { k: 'code', s: iv('s'), i: iv('i') }, ii(48)) },
+      { k: 'if', c: ib('ge', iv('d'), ii(32)), then: [
+        { k: 'set', name: 'v', e: ib('add', iv('v'), ib('shl', ib('sub', iv('d'), ii(32)), iv('sh'))) },
+        { k: 'set', name: 'sh', e: ib('add', iv('sh'), ii(5)) },
+      ], else: [
+        { k: 'push', list: 'out', e: ib('sub', ib('add', iv('v'), ib('shl', iv('d'), iv('sh'))), ii(1)) },
+        { k: 'set', name: 'v', e: ii(0) },
+        { k: 'set', name: 'sh', e: ii(0) },
+      ] },
+      { k: 'set', name: 'i', e: ib('add', iv('i'), ii(1)) },
+    ] },
+    { k: 'return', es: [iv('out')] },
+  ],
+};
 export const isNum = (t: Ty): t is Num => t === 'int' || t === 'lid' || t === 'depth' || t === 'pos' || t === 'idx';
 export const isRec = (t: Ty): t is RecTy => t.startsWith('rec_');
 export const isRecList = (t: Ty): t is RecListTy => t.startsWith('recs_');
@@ -227,7 +281,8 @@ export interface Lowering {
     literal(v: number | boolean | string): Printed;
     not(r: R): Printed;
     bin(op: BinOp, a: R, b: R): Printed;
-    call(name: string, args: string[]): string;
+    // `method`: the callee is an engine method (Fn.method).
+    call(name: string, args: string[], method?: boolean): string;
     len(cx: Cx, l: R): R;
     code(cx: Cx, s: R, i: R): R;
     hasAt(cx: Cx, s: R, i: R, lit: string): R;
@@ -240,7 +295,13 @@ export interface Lowering {
     // The concatenation of the strings `parts` (two or more), an owned string. Absent: a family
     // that concatenates cannot be printed for the target.
     cat?(cx: Cx, parts: R[]): R;
+    // Element i of the int table `name` (an int). Absent: a family that reads a table cannot be
+    // printed for the target.
+    tab?(cx: Cx, name: string, i: R): R;
   };
+  // The module-level declaration of an int table: its packed literal (`packInts`), which the
+  // target decodes with `unpackInts` where and when its engine first needs the table.
+  intTable?(name: string, packed: string): string;
   stmt: {
     comment(text: string): Lines;
     let(cx: Cx, s: { id: string; ty: Ty; r: R; owned: boolean; mutable: boolean; reassigned: boolean; emptyList: boolean }): Lines;
@@ -255,7 +316,7 @@ export interface Lowering {
     // value calls a family function (for a lowering whose language has no multiple return values
     // and stores them where a nested call could overwrite them). Go and Rust ignore it.
     return(vals: string[], fn: { name: string; ret: Ty[]; calls: boolean }): Lines;
-    fn(s: { name: string; params: { name: string; type: string }[]; rets: string[]; retTys: Ty[]; doc: string[]; body: Lines; inline: boolean; cold: boolean }): string;
+    fn(s: { name: string; params: { name: string; type: string }[]; rets: string[]; retTys: Ty[]; doc: string[]; body: Lines; inline: boolean; cold: boolean; method: boolean }): string;
   };
   // `inline` fns are not printed as functions; each call site prints `inlineFn` of the body
   // instead (for compilers that cannot be told to inline a function).
@@ -346,13 +407,15 @@ class Printer implements Cx {
   private sigs: Map<string, Fn>;
   private sets: Map<string, CharSet>;
   private recs: Map<string, RecordDecl>;
+  private tabs: Set<string>;
   private L: Lowering;
 
-  constructor(lowering: Lowering, fns: Fn[], sets: CharSet[], records: RecordDecl[] = []) {
+  constructor(lowering: Lowering, fns: Fn[], sets: CharSet[], records: RecordDecl[] = [], tables: IntTable[] = []) {
     this.L = lowering;
     this.sigs = new Map(fns.map((f) => [f.name, f]));
     this.sets = new Map(sets.map((c) => [c.name, c]));
     this.recs = new Map(records.map((r) => [r.name, r]));
+    this.tabs = new Set(tables.map((t) => t.name));
   }
 
   private recL(): RecordLowering {
@@ -501,6 +564,11 @@ class Printer implements Cx {
         if (parts.some((r) => r.ty !== 'str')) throw new Error('algo-ir: cat() of a non-string');
         return { ...X.cat(this, parts), ty: 'str', nat: 'str', owned: true };
       }
+      case 'tab': {
+        if (!X.tab) throw new Error('algo-ir: the lowering prints no int tables');
+        if (!this.tabs.has(e.t)) throw new Error(`algo-ir: undeclared int table ${e.t}`);
+        return { ...X.tab(this, e.t, this.expr(e.i)), ty: 'int', nat: this.nat('int') };
+      }
     }
   }
 
@@ -545,7 +613,12 @@ class Printer implements Cx {
       }
       return r.c;
     });
-    return this.L.expr.call(this.id(e.fn), args);
+    if (fn.method && this.cur !== null && !this.cur.method) throw new Error(`algo-ir: ${this.cur.name} calls the engine method ${e.fn} but is no method`);
+    // The engine is borrowed whole by a method call (Rust's &mut self), so an argument cannot call
+    // another method: the family binds it to a local first.
+    const callsMethod = (x: unknown): boolean => typeof x === 'object' && x !== null && (((x as Expr).k === 'call' && this.sigs.get((x as Expr & { k: 'call' }).fn)?.method === true) || Object.values(x).some(callsMethod));
+    if (fn.method && e.args.some(callsMethod)) throw new Error(`algo-ir: an argument of the engine method ${e.fn} calls an engine method: bind it to a local first`);
+    return this.L.expr.call(this.id(e.fn), args, fn.method === true);
   }
 
   private scan(body: Stmt[]): void {
@@ -717,6 +790,7 @@ class Printer implements Cx {
       body: this.block(f.body, 1),
       inline: f.inline === true,
       cold: f.cold === true,
+      method: f.method === true,
     });
   }
 }
@@ -806,7 +880,17 @@ export function inlineFn(f: Fn, args: string[], out: string, unset: number): Stm
   return [{ k: 'let', name: out, ty: f.ret[0], init: { k: 'int', v: unset } }, ...go(f.body, false)];
 }
 
-export function printFns(lowering: Lowering, fns: Fn[], sets: CharSet[] = [], records: RecordDecl[] = []): string {
-  const p = new Printer(lowering, fns, sets, records);
-  return [...sets.map((c) => lowering.charSet(lowering.ident(c.name), c.ranges, c.cold === true)), ...fns.filter((f) => !f.extern).map((f) => p.fn(f))].join('\n');
+// `tables`: the int tables the functions read; they and `unpackInts` are printed with them.
+// `only`: print only these of `fns` (all are callable): a target that prints its engine methods
+// apart from the free functions (inside its receiver's declaration) prints a family twice;
+// `decls`: whether this print also declares the sets and tables (once per family).
+export function printFns(lowering: Lowering, fns: Fn[], sets: CharSet[] = [], records: RecordDecl[] = [], tables: IntTable[] = [], only?: (f: Fn) => boolean, decls = true): string {
+  const all = tables.length && !fns.some((f) => f.name === UNPACK_INTS.name) ? [...fns, UNPACK_INTS] : fns;
+  const p = new Printer(lowering, all, sets, records, tables);
+  const decl = (t: IntTable): string => {
+    if (!lowering.intTable) throw new Error('algo-ir: the lowering prints no int tables');
+    return lowering.intTable(t.name, packInts(t.data));
+  };
+  const head = !decls ? [] : [...sets.map((c) => lowering.charSet(lowering.ident(c.name), c.ranges, c.cold === true)), ...tables.map(decl)];
+  return [...head, ...all.filter((f) => !f.extern && (only ? only(f) : true)).map((f) => p.fn(f))].join('\n');
 }

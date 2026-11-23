@@ -2074,6 +2074,25 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
   }
   return best;
 }
+// The tokens of AFTER a literal may begin instead, given the character after the literal (see above).
+static uint64_t zw_lit_tokens(int lit, int32_t c) {
+  uint64_t m = 0;
+  switch (lit) {
+    case 22:
+      if ((c >= 48 && c <= 57)) m |= (uint64_t)1 << 5;
+      break;
+    case 24:
+      if ((c >= 0 && c <= 9) || (c >= 11 && c <= 12) || (c >= 14 && c <= 41) || (c >= 43 && c <= 46) || (c >= 48 && c <= 8231) || (c >= 8234 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 8;
+      break;
+    case 25:
+      m |= (uint64_t)1 << 8;
+      break;
+    case 46:
+      m |= (uint64_t)1 << 9;
+      break;
+  }
+  return m;
+}
 typedef struct { int symbol; bool line_end; bool line_break; bool after_end; uint64_t after_tok, cont_tok, ahead_tok; const bool *after_exact, *after_lit, *cont_lit, *ahead_lit; } ZeroWidth;
 static const bool _SAME_LINE_1_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 static const bool _SAME_LINE_1_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
@@ -2218,7 +2237,7 @@ static int scan_zero_width(TSLexer *lexer, const bool *valid_symbols) {
     bool ahead = !end && (lit >= 0 ? z->ahead_lit[lit] : (cand & z->ahead_tok) != 0);
     bool holds = z->line_end ? ((z->line_break && (line_break || end)) || ahead) : (!line_break && !end);
     if (!holds) continue;
-    bool after = end ? z->after_end : lit >= 0 ? (pass == 0 ? z->after_exact[lit] : z->after_lit[lit]) : (cand & z->after_tok) != 0;
+    bool after = end ? z->after_end : lit >= 0 ? (pass == 0 ? z->after_exact[lit] : z->after_lit[lit]) || (zw_lit_tokens(lit, lexer->lookahead) & z->after_tok) != 0 : (cand & z->after_tok) != 0;
     bool cont = !end && (lit >= 0 ? z->cont_lit[lit] : (cand & z->cont_tok) != 0);
     if (after && !cont) { lexer->result_symbol = z->symbol; return 1; }
   }

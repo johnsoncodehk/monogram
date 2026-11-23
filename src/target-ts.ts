@@ -5,7 +5,8 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA } from './emit-portable.ts';
-import { blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR } from './recovery-family.ts';
 import type { EmitOptions } from './emit.ts';
 import type { CstGrammar } from './types.ts';
 import type {
@@ -3047,7 +3048,7 @@ export function parseAst(src: string, opts?: { customs?: AstCustoms }): ${rootTy
 
 const TS_TYPES: Record<Ty, string> = {
   int: 'number', lid: 'number', depth: 'number', pos: 'number', idx: 'number', bool: 'boolean', str: 'string', meta: 'AlignMeta', tok: 'Tok', edit: 'Edit',
-  metas: 'AlignMeta[]', toks: 'Tok[]', bools: 'boolean[]', depths: 'number[]', edits: 'Edit[]',
+  metas: 'AlignMeta[]', toks: 'Tok[]', bools: 'boolean[]', depths: 'number[]', ints: 'number[]', edits: 'Edit[]',
 };
 // Operator spelling and binding strength; unary is 90, a negative literal 7.
 const TS_OPS: Record<BinOp, [string, number]> = {
@@ -3106,7 +3107,10 @@ function ${findAnyName(stops)}(s: string, i: number): number {
     findAny: (cx, s, i, stops) => cx.atom(`${findAnyName(stops)}(${s.c}, ${i.c})`, 'int', 'number'),
     own: (_cx, r) => r,
     cat: (_cx, parts) => ({ c: parts.map((r) => tsWrap(r, TS_OPS.add[1] + 1)).join(' + '), ty: 'str', nat: 'str', prec: TS_OPS.add[1] }),
+    // The decoded table is a module variable (the engine is the module), decoded once on first use.
+    tab: (cx, name, i) => cx.atom(`_tab_${name}[${i.c}]`, 'int', 'number'),
   },
+  intTable: (name, packed) => `const _TABS_${name} = ${J(packed)};\nlet _tab_${name}: number[] = [];`,
   stmt: {
     comment: (text) => [`// ${text}`],
     let: (cx, s) => [`${s.reassigned ? 'let' : 'const'} ${s.id}: ${cx.type(s.ty, 'local')} = ${s.r.c};`],
@@ -3210,7 +3214,7 @@ const tsTake = (names: string[], fn: string, args: string): string =>
 
 // No callee-FIRST body guards: a JS rd call refused at its dispatch costs less than the guard's test
 // on every iteration (measured: TS blocks +0.19% to +0.53% on the real inputs with them).
-const FACTS: PortableFacts = { calleeFirstGuards: false };
+export const FACTS: PortableFacts = { calleeFirstGuards: false };
 
 export const tsTarget = defineTarget({
   name: 'typescript',
@@ -3365,12 +3369,96 @@ ${liftedFns(ids)}`;
 // The emit option `recovery` (src/emit.ts): total parsing's entry, a region appended to the default
 // module and touching none of it. A rejected parse is run again for its reject facts (the cold path:
 // valid input is runW's parse alone); the recovery family decides the diagnostic and its words.
+// The interpreter's engine (src/recovery-family.ts ENGINE_EXTERNS) over this module's parse state:
+// each a call of what the native functions do. The module is the engine, so they are module
+// functions; the native dispatch by id is a switch over the plan's ids (ParserIR.forms says which
+// functions exist in building form).
+function recoveryEngineTs(ir: ParserIR): string {
+  const ids = buildLexIdPlan(ir), ar = buildArenaIdPlan(ir, ids);
+  const sw = (on: string, cases: [number, string][]) => `switch (${on}) {${cases.map(([k, c]) => ` case ${k}: return ${c};`).join('')} }\n  throw new Error('recovery: no native function ' + ${on});`;
+  const build = ir.rules.filter((r) => ir.forms.buildRules.includes(r.name));
+  const holes = ir.tpl ? tplHoleRules(ir) : [];
+  return `const _RNAMES: string[] = ${J(ar.ruleNames)};
+// The marks (position, children height) the interpreter takes, in pairs; the offset of the node
+// last finished; the interpreted steps of the run.
+let _rmarks: number[] = [];
+let _rfinOff = 0, _rsteps = 0, _ropLid = 0;
+function enPos(): number { return pos; }
+function enSetPos(p: number): void { pos = p; }
+function enBack(p: number): void { back(p); }
+function enPeekKid(): number { const t = peek(); return t === null ? -1 : t.kid; }
+function enPeekLid(): number { const t = peek(); return t === null ? -1 : t.lid; }
+function enPeekNl(): boolean { const t = peek(); return t !== null && t.nl; }
+function enLit(l: number): boolean { return matchLitW(l); }
+function enComp(l: number): boolean { return _matchComp(l); }
+function enTok(k: number): boolean { return matchTokW(k); }
+function enAhead(set: number, is: boolean): boolean { return ahead(set, is); }
+function enCtxWord(): boolean { return ctxWord(); }
+function enSecondIn(set: number): boolean { return secondIn(set); }
+function enLook(id: number): boolean {
+  ${sw('id', ir.lookaheads.map((_, i) => [i, `look${i}()`]))}
+}
+function enRule(r: number): boolean {
+  ${sw('r', build.map((r) => [ar.ruleNames.indexOf(r.name), `parse${r.name}W()`]))}
+}
+function enBp(r: number, bp: number): boolean {
+  ${sw('r', build.filter((r) => r.kind === 'pratt').map((r) => [ar.ruleNames.indexOf(r.name), `${r.name}_bpW(bp)`]))}
+}
+function enShared(i: number): boolean {
+  ${sw('i', ir.shared.flatMap((_, i): [number, string][] => (ir.forms.buildShared[i] ? [[i, `sub${i}W()`]] : [])))}
+}
+function enTpl(hole: number): boolean {
+  ${sw('hole', holes.map((h) => [ar.ruleNames.indexOf(h), `matchTemplateW(parse${h}W)`]))}
+}
+function enSh(): number { return _n; }
+function enCut(h: number): void { _n = h; }
+function enMark(): number { _rmarks.push(pos, _n); return _rmarks.length / 2 - 1; }
+function enReset(k: number): void { back(_rmarks[2 * k]!); _n = _rmarks[2 * k + 1]!; }
+function enUnmark(k: number): void { _rmarks.length = 2 * k; }
+function enWin(r: number, c: number, save: number, sb: number): void { finR(_RNAMES[r]!, c, save); _rfinOff = _sp[c * _SW]!; _keep(sb, c); }
+function enFinLed(r: number, sb: number, _off: number, _tok: number): void { finP(_RNAMES[r]!, sb); _rfinOff = _sp[sb * _SW]!; }
+function enFinOff(): number { return _rfinOff; }
+function enOpLid(): number { _ropLid = _opLid(peek()!); return _ropLid; }
+function enLeafOpN(): void { opLeafW(peek()!, _ropLid); pos += _opN; }
+function enLeafOp(): void { leafSlotW('$operator', peek()!); pos++; }
+function enLeafKid(): void { const t = peek()!; leafSlotW(tok_kind(t), t); pos++; }
+function enHeadLid(sb: number): number { return sb < _n ? lid_of(headLeafTextW(sb)) : 0; }
+function enSt(k: number): number { return k === ${ST_CAPPED} ? (_capped ? 1 : 0) : k === ${ST_FORM} ? _form : k === ${ST_TAIL} ? (_tail ? 1 : 0) : k === ${ST_SUP_NEXT} ? _suppressNext : k === ${ST_SUP_CUR} ? _suppressCur : _ctx; }
+function enSetSt(k: number, v: number): void { if (k === ${ST_CAPPED}) _capped = v !== 0; else if (k === ${ST_FORM}) _form = v; else if (k === ${ST_TAIL}) _tail = v !== 0; else if (k === ${ST_SUP_NEXT}) _suppressNext = v; else if (k === ${ST_SUP_CUR}) _suppressCur = v; else _ctx = v; }
+function enTick(): void { _rsteps++; }
+/**
+ * parseInterpreted: the strict interpreter of the parse plan (the recovery family) from the entry
+ * rule, \`depth\` rule levels interpreted and the native functions below: parseWith's root and
+ * verdict on every input. \`steps\`: the interpreted steps it took.
+ */
+export function parseInterpreted<H>(src: string, builder: Builder<H>, depth: number): { root: H | null; steps: number } {
+  _src = src;
+  const [ts, err] = lexAll(src);
+  if (err !== null) return { root: null, steps: 0 };
+  toks = ts;
+  if (_tab_rt.length === 0) _tab_rt = unpackInts(_TABS_rt);
+  pos = 0;
+  lookReset();
+  _builder = builder;
+  _n = 0;
+  _rmarks = [];
+  _rsteps = 0;
+  const ok = riRule(${ar.ruleNames.indexOf(ir.entry)}, depth) && pos === toks.length;
+  const sole = ok && _soleOk(0);
+  const root = sole ? _sole(0) as H : null;
+  _hs.fill(null);
+  if (ok && !sole) throw new Error('the builder kept no node for the root rule of an accepted parse (a Builder must return one for the entry rule)');
+  return { root, steps: _rsteps };
+}`;
+}
+
 function recoveryRegionTs(ir: ParserIR, shared: SharedAlgorithms): string {
   const ext = ir.reuse ? '\n  for (const m of _entries) if (m.ext > look) look = m.ext;' : '';
   return `
 // ---- recovery: the emit option { recovery: true }; generated from src/recovery-family.ts (shared by the TS / Go / Rust targets) ----
 type Diag = { kind: number; off: number; end: number; relOff: number; relEnd: number };
-${shared.recoveryFamily()}
+${shared.recoveryFamily(ir)}
+${recoveryEngineTs(ir)}
 /** A diagnostic: a span of the source, its message, and a related location (relOff >= 0). */
 export type Diagnostic = { offset: number; end: number; message: string; related?: { offset: number; end: number; message: string } };
 function diagnosticOf(src: string, d: Diag): Diagnostic {
