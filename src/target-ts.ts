@@ -656,7 +656,19 @@ function lift(ids: LexIdPlan, body: string): string {
   return name;
 }
 function liftedFns(ids: LexIdPlan): string {
-  return [...(LIFTED.get(ids) ?? new Map<string, string>())].map(([body, name]) => `function ${name}(): boolean { ${body} }\n`).join('');
+  return [...(LIFTED.get(ids) ?? new Map<string, string>())].map(([body, name]) => `function ${name}(): boolean { ${body} }\n`).join('')
+    + [...(CONSTS.get(ids) ?? new Map<string, string>())].map(([lit, name]) => `const ${name} = ${lit};\n`).join('');
+}
+// An array a step tests against (an inline alternation's literals, a led's left-leaf words) is a
+// module constant, each distinct one once: an array literal at its site would be allocated at every
+// call. (Go passes a slice literal that does not escape and Rust a promoted `&[..]`: neither allocates.)
+const CONSTS = new WeakMap<LexIdPlan, Map<string, string>>();
+function liftConst(ids: LexIdPlan, lit: string): string {
+  let m = CONSTS.get(ids);
+  if (m === undefined) CONSTS.set(ids, (m = new Map()));
+  let name = m.get(lit);
+  if (name === undefined) m.set(lit, (name = `_arr${m.size}`));
+  return name;
 }
 // The step walk's TS spelling (emit-portable.ts, StepLowering), building ('w': children onto the
 // child stack) or recognizing ('r': nothing built). TS: a body or a step's statements are a lifted
@@ -687,7 +699,7 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
       const call = `sepBy${c ? 'C' : ''}${S}(${fn(elem)}, ${sepDelimLid(ids, delim)})`;
       return g === null ? call : `(!ahead(${g}, true) || ${call})`;
     },
-    altlit: (values) => `altLit${S}([${values.map((v) => lidOf(ids, v)).join(', ')}])`,
+    altlit: (values) => `altLit${S}(${liftConst(ids, `[${values.map((v) => lidOf(ids, v)).join(', ')}]`)})`,
     look: (id, is) => `${is ? '' : '!'}look${id}()`,
     ahead: (set, is) => `ahead(${set}, ${is})`,
     aheadCtx: (set, is) => (is ? `(ahead(${set}, true) || ctxWord())` : `(ahead(${set}, false) && !ctxWord())`),
@@ -926,7 +938,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
       tailOpen: '!tailClosed',
       lbpAbove: (lbp) => `${lbp} > minBp`,
       sameLine: '!t.nl',
-      notLeftLeaf: (words) => `!${J(words)}.includes(headLeafTextW(b))`,
+      notLeftLeaf: (words) => `!${liftConst(ids, J(words))}.includes(headLeafTextW(b))`,
       notSuppressed: (set) => `_suppressCur !== ${set}`,
       ifAll: (parts) => (parts.length ? `if (${parts.join(' && ')}) ` : ''),
     },
