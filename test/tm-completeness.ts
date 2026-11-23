@@ -542,6 +542,7 @@ function tpcGrammar(
     tokens: { SelfEnd, CloseTg, Id }, prec: [none('<', '>')],
     scopes: { 'storage.type.function': ['fn'], 'keyword.operator.expression.extends': ['extends'] },
     rules: { Type, CType, TParam, TP, Param, Decl, Arrow, Call, Attr, Elem, E, S, Prog }, entry: Prog,
+    elements: { tagOpen: '<', tagClose: '>', closeMarker: '/', closeTag: 'CloseTg', selfClose: 'SelfEnd', hole: { open: '{', close: '}' }, name: 'jsx' },  // the declared element region
   };
 }
 
@@ -727,15 +728,15 @@ function checkShapeRobustness(): void {
         { label: "alt-split (open/self-close/close element)", build: () => { const Id = token(plus(range('a', 'z')), { identifier: true }); const Text = token(never(), { scope: 'text' }); const SelfEnd = token(seq('/', '>')); const CloseTg = token(seq('<', '/')); const Tag = rule(() => [['<', Id, alt(SelfEnd, ['>', CloseTg, Id, '>'])]]); const Doc = rule(() => [[many(alt(Tag, Id))]]); return { name: 'mkB', scopeName: 'text.mkB', tokens: { SelfEnd, CloseTg, Id, Text }, markup: { textToken: 'Text', tagOpen: '<', tagClose: '>', closeMarker: '/' }, rules: { Tag, Doc }, entry: Doc }; } },
       ],
     },
-    // ── jsx-element (detectJsx, key #jsx-element-in-expression) ──
-    // an element shape `'<' Id … ('/>' | '>' '</' Id '>')`. detectJsx's hasElementShape walks
-    // expandAlts branches for the `<`+ref lead, so the attribute list written inline or wrapped in
-    // an `opt`/`alt` still surfaces the element. ROBUST.
+    // ── jsx-element (a declared element region, key #jsx-element-in-expression) ──
+    // an element arm `'<' Id … ('/>' | '>' '</' Id '>')`. region-view.ts reads the arms from
+    // expanded branches, so the attribute list written inline or wrapped in an `opt`/`alt` still
+    // surfaces the element. ROBUST.
     {
       name: 'jsx-element', observable: (tm: any) => !!tm.repository['jsx-element-in-expression'],
       factorings: [
-        { label: 'canonical', build: () => { const Attr = rule(() => [[Id, opt('=', Id)]]); const Elem = rule(() => [['<', Id, many(Attr), alt(SelfEnd, ['>', CloseTg, Id, '>'])]]); const E = rule(() => [Id, Elem]); const P = rule(() => [[many(E)]]); return { name: 'jx1', scopeName: 'source.jx1', tokens: { SelfEnd, CloseTg, Id }, prec: [none('<', '>')], rules: { Attr, Elem, E, P }, entry: P }; } },
-        { label: 'opt-attrs', build: () => { const Attr = rule(() => [[Id, opt('=', Id)]]); const Elem = rule(() => [['<', Id, opt(many(Attr)), alt(SelfEnd, ['>', CloseTg, Id, '>'])]]); const E = rule(() => [Id, Elem]); const P = rule(() => [[many(E)]]); return { name: 'jx2', scopeName: 'source.jx2', tokens: { SelfEnd, CloseTg, Id }, prec: [none('<', '>')], rules: { Attr, Elem, E, P }, entry: P }; } },
+        { label: 'canonical', build: () => { const Attr = rule(() => [[Id, opt('=', Id)]]); const Elem = rule(() => [['<', Id, many(Attr), alt(SelfEnd, ['>', CloseTg, Id, '>'])]]); const E = rule(() => [Id, Elem]); const P = rule(() => [[many(E)]]); return { name: 'jx1', scopeName: 'source.jx1', tokens: { SelfEnd, CloseTg, Id }, prec: [none('<', '>')], elements: { tagOpen: '<', tagClose: '>', closeMarker: '/', closeTag: 'CloseTg', selfClose: 'SelfEnd', hole: { open: '{', close: '}' }, name: 'jsx' }, rules: { Attr, Elem, E, P }, entry: P }; } },
+        { label: 'opt-attrs', build: () => { const Attr = rule(() => [[Id, opt('=', Id)]]); const Elem = rule(() => [['<', Id, opt(many(Attr)), alt(SelfEnd, ['>', CloseTg, Id, '>'])]]); const E = rule(() => [Id, Elem]); const P = rule(() => [[many(E)]]); return { name: 'jx2', scopeName: 'source.jx2', tokens: { SelfEnd, CloseTg, Id }, prec: [none('<', '>')], elements: { tagOpen: '<', tagClose: '>', closeMarker: '/', closeTag: 'CloseTg', selfClose: 'SelfEnd', hole: { open: '{', close: '}' }, name: 'jsx' }, rules: { Attr, Elem, E, P }, entry: P }; } },
       ],
     },
   ];

@@ -35,6 +35,13 @@ git fetch -q origin master
 A_SHA=$(git rev-parse "${PROFILE_A:-cbb58a0}")
 M_SHA=$(git rev-parse "${PROFILE_M:-fa2ac4b}")
 VARIANTS="A:$A_SHA M:$M_SHA"
+# Each input is parsed by its own grammar's parser: .tsx by typescriptreact, .jsx by
+# javascriptreact, the rest by typescript. A build of another grammar than typescript lives beside
+# typescript's with the grammar as a suffix (mono-prof-M-typescriptreact, targets-M-javascriptreact).
+GRAMMARS="typescript typescriptreact javascriptreact"
+grammar_of() { case $1 in *.tsx) echo typescriptreact;; *.jsx) echo javascriptreact;; *) echo typescript;; esac; }
+sfx() { [ "$1" = typescript ] || echo "-$1"; }
+mono() { echo "$W/mono-$1-$2$(sfx "$3")/target/release/mono-$1-$2$(sfx "$3")"; } # <prof|count> <variant> <grammar>
 
 echo "=== environment"
 lscpu | grep -E '^(Model name|Architecture|CPU\(s\)|Thread\(s\) per core|Core\(s\) per socket|L2 cache|L3 cache|CPU max MHz)' || true
@@ -50,18 +57,21 @@ for kv in $VARIANTS; do
   v=${kv%%:*}; c=${kv#*:}
   git worktree add -q --detach "$W/src-$v" "$c"
   (cd "$W/src-$v" && npm ci --silent --no-audit --no-fund)
-  node "$HB/emit.ts" "$W/src-$v" "$W/parser-$v.rs"
-  sha256sum "$W/parser-$v.rs"
-  for kind in prof count; do
-    d=$W/mono-$kind-$v; mkdir -p "$d/src"
-    printf '[package]\nname = "mono-%s-%s"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\n\n[profile.release]\ndebug = %s\n' \
-      "$kind" "$v" "$([ $kind = prof ] && echo true || echo false)" > "$d/Cargo.toml"
+  for g in $GRAMMARS; do
+    n=$v$(sfx "$g")
+    node "$HB/emit.ts" "$W/src-$v" "$W/parser-$n.rs" "$g"
+    sha256sum "$W/parser-$n.rs"
+    for kind in prof count; do
+      d=$W/mono-$kind-$n; mkdir -p "$d/src"
+      printf '[package]\nname = "mono-%s-%s"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\n\n[profile.release]\ndebug = %s\n' \
+        "$kind" "$n" "$([ $kind = prof ] && echo true || echo false)" > "$d/Cargo.toml"
+    done
+    cat "$W/parser-$n.rs" "$H/prof-tail.rs" > "$W/mono-prof-$n/src/main.rs"
+    node "$H/patch-count.ts" "$W/parser-$n.rs" "$W/parser-$n.count.rs"
+    cat "$W/parser-$n.count.rs" "$H/count-tail.rs" > "$W/mono-count-$n/src/main.rs"
+    for kind in prof count; do (cd "$W/mono-$kind-$n" && RUSTFLAGS="-A warnings" cargo build --release -q); done
+    cp "$W/mono-prof-$n/src/main.rs" "$OUT/main-$n.rs"
   done
-  cat "$W/parser-$v.rs" "$H/prof-tail.rs" > "$W/mono-prof-$v/src/main.rs"
-  node "$H/patch-count.ts" "$W/parser-$v.rs" "$W/parser-$v.count.rs"
-  cat "$W/parser-$v.count.rs" "$H/count-tail.rs" > "$W/mono-count-$v/src/main.rs"
-  for kind in prof count; do (cd "$W/mono-$kind-$v" && RUSTFLAGS="-A warnings" cargo build --release -q); done
-  cp "$W/mono-prof-$v/src/main.rs" "$OUT/main-$v.rs"
 done
 echo "note: RUSTFLAGS='-A warnings' on the monogram crates only silences lints; it does not affect codegen."
 
@@ -98,8 +108,15 @@ node "$H/synth-nonascii.ts" "$W/inputs/nonascii.ts"
 # Dense one-byte tokens with no trivia: one token per input byte, the most a lexer can emit.
 node -e 'require("fs").writeFileSync(process.argv[1], ";".repeat(1 << 20))' "$W/inputs/dense-semi.ts"
 node -e 'require("fs").writeFileSync(process.argv[1], "a" + "+a".repeat(1 << 19) + ";")' "$W/inputs/dense-plus.ts"
+# The element inputs (TSX / JSX): the real element code of the pinned tsc corpus
+# (element-inputs.ts says how they are chosen); TS_CASES is its tests/cases directory.
+node "$H/element-inputs.ts" "${TS_CASES:-/tmp/ts-repo/tests/cases}" "$W/inputs"
+# The control: gen-tm.ts (plain TypeScript, no element) through the typescriptreact parser. Against
+# gen-tm.ts through the typescript one it is what the element machinery costs code outside elements.
+cp "$W/inputs/gen-tm.ts" "$W/inputs/gen-tm.tsx"
 MAIN="checker.ts gen-tm.ts typescript.d.ts dense-semi.ts"
-INPUTS="$MAIN typescript.js parser.ts synth2mb.ts typescript.ts nonascii.ts dense-plus.ts"
+ELEMENTS="jsx-corpus.tsx jsx-corpus.jsx gen-tm.tsx"
+INPUTS="$MAIN typescript.js parser.ts synth2mb.ts typescript.ts nonascii.ts dense-plus.ts $ELEMENTS"
 (cd "$W/inputs" && wc -c $INPUTS && sha256sum $INPUTS)
 cd "$W/inputs"
 
@@ -110,8 +127,8 @@ for f in $INPUTS; do
   # the reference, not a reason to lose the whole profile, so a crash here is recorded and the run goes on.
   [ $HAVE_OXCCOUNT = 1 ] && { "$OXC/oxc-count" "$f" || echo "OXCCOUNT $f crashed (exit $?)"; } | tee -a "$R"
   for v in A M; do
-    "$W/mono-prof-$v/target/release/mono-prof-$v" --once "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v CRASH $f" | tee -a "$R"
-    "$W/mono-count-$v/target/release/mono-count-$v" "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v COUNTCRASH $f" | tee -a "$R"
+    "$(mono prof $v "$(grammar_of "$f")")" --once "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v CRASH $f" | tee -a "$R"
+    "$(mono count $v "$(grammar_of "$f")")" "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v COUNTCRASH $f" | tee -a "$R"
   done
 done
 
@@ -119,7 +136,7 @@ echo "=== page faults per parse (count builds, getrusage): first parse in a fres
 for f in $INPUTS; do
   for v in A M; do
     for m in cold warm reuse; do
-      "$W/mono-count-$v/target/release/mono-count-$v" --faults-$m "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v FAULTSCRASH $m $f" | tee -a "$R"
+      "$(mono count $v "$(grammar_of "$f")")" --faults-$m "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v FAULTSCRASH $m $f" | tee -a "$R"
     done
   done
   # oxc in both modes (fresh Allocator per parse; one Allocator reset between parses). A crash of the
@@ -162,7 +179,7 @@ for f in $INPUTS; do
   fi
   [ $HAVE_LEX = 1 ] && cg_run "C.lex.$f" '*oxc_prof_lex*' "$OXC/oxc-lex" --once "$f" && cat "$OUT/cg/C.lex.$f.stdout" | tee -a "$R"
   for v in A M; do
-    b=$W/mono-prof-$v/target/release/mono-prof-$v
+    b=$(mono prof $v "$(grammar_of "$f")")
     grep -qF "$v ACCEPT $f " "$R" || { echo "$v rejects $f: profiled anyway (the parse fails late or early; see its tables)"; }
     cg_run "$v.parse.$f" '*mono_prof_parse*' "$b" --once "$f"
     cg_run "$v.lex.$f" '*mono_prof_lex*' "$b" --lex-once "$f"
@@ -185,15 +202,19 @@ mkdir -p "$OUT/targets"
 go version
 T0=$SECONDS
 for v in A M; do
-  node "$REPO/test/bench-targets/emit.ts" "$W/src-$v" "$W/targets-$v" typescript
-  (cd "$W/targets-$v/go" && go build -trimpath -tags faketime -o count .)
-  sha256sum "$W/targets-$v/ts.mts" "$W/targets-$v/js.mts" "$W/targets-$v/go/parser/parser.go"
+  for g in $GRAMMARS; do
+    d=$W/targets-$v$(sfx "$g")
+    node "$REPO/test/bench-targets/emit.ts" "$W/src-$v" "$d" "$g"
+    (cd "$d/go" && go build -trimpath -tags faketime -o count .)
+    sha256sum "$d/ts.mts" "$d/js.mts" "$d/go/parser/parser.go"
+  done
 done
 TVARIANTS="A M"; [ "${PROFILE_TARGETS_REPEAT:-1}" = 1 ] && TVARIANTS="A M M2"
-# The main inputs only: under Callgrind the Go parse costs about 3x the Rust one.
-for f in $MAIN; do
+# The main inputs and the element inputs only: under Callgrind the Go parse costs about 3x the Rust one.
+TINPUTS="$MAIN $ELEMENTS"
+for f in $TINPUTS; do
   for v in $TVARIANTS; do
-    t=${v%2} # M2 runs M's build
+    t=${v%2}$(sfx "$(grammar_of "$f")") # M2 runs M's build
     # reuse: into a kept CstBuilder (the direct engine); builder: into a kept SlimBuilder (the
     # builder engine parserW, through the Builder interface).
     for gm in reuse builder; do
@@ -219,12 +240,16 @@ done
 # Allocations of the TS / JS parse: exact counts, so A and M once (test/bench-targets/allocs.ts;
 # one process per module: instrumenting it is most of the cost).
 for v in A M; do
-  for tm in ts-parse js-fresh; do
-    if out=$(node "$REPO/test/bench-targets/allocs.ts" "$W/targets-$v/${tm%%-*}.mts" "$tm" "$W/targets-$v/alloc" $MAIN); then
-      while read -r f rest; do echo "TSALLOC $v.$tm.$f $rest" | tee -a "$R"; done <<< "$out"
-    else
-      echo "TSALLOC $v.$tm.all FAILED" | tee -a "$R"
-    fi
+  for g in $GRAMMARS; do
+    d=$W/targets-$v$(sfx "$g")
+    gf=$(for f in $TINPUTS; do if [ "$(grammar_of "$f")" = "$g" ]; then echo "$f"; fi; done)
+    for tm in ts-parse js-fresh; do
+      if out=$(node "$REPO/test/bench-targets/allocs.ts" "$d/${tm%%-*}.mts" "$tm" "$d/alloc" $gf); then
+        while read -r f rest; do echo "TSALLOC $v.$tm.$f $rest" | tee -a "$R"; done <<< "$out"
+      else
+        echo "TSALLOC $v.$tm.$g FAILED" | tee -a "$R"
+      fi
+    done
   done
 done
 echo "Go and TS targets: $((SECONDS - T0)) s (emit, build and measure)"
@@ -242,8 +267,7 @@ for out in "$OUT"/cg/*.out; do
   callgrind_annotate --inclusive=no --threshold=99.9 "$out" > "$OUT/annotate/$tag.exclusive.txt" 2>&1 || true
   case $tag in
     C.*) node "$H/regions.ts" oxc "$out" > "$OUT/regions/$tag.txt" 2>&1 || true ;;
-    A.*) node "$H/regions.ts" mono "$out" "$OUT/main-A.rs" > "$OUT/regions/$tag.txt" 2>&1 || true ;;
-    M.*) node "$H/regions.ts" mono "$out" "$OUT/main-M.rs" > "$OUT/regions/$tag.txt" 2>&1 || true ;;
+    A.*|M.*) rest=${tag#*.}; node "$H/regions.ts" mono "$out" "$OUT/main-${tag%%.*}$(sfx "$(grammar_of "${rest#*.}")").rs" > "$OUT/regions/$tag.txt" 2>&1 || true ;;
   esac
 done
 for f in $MAIN; do

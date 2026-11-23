@@ -60,11 +60,34 @@ const typeParameterHead = seq(
   ws, optPattern(seq('const', plus(oneOf(' ', '\t', '\n', '\r')))), idStart, star(idCont), ws,
   altPattern(',', seq('=', notFollowedBy(oneOf('=', '>'))), seq('extends', notFollowedBy(idCont), ws, notFollowedBy(oneOf('=', '>', '/')))),
 );
+// React's highlighting vocabulary, as highlighter data on the region (the lexer does not read it;
+// docs/REGIONS.md, "Highlighter data"):
+//   • a tag name whose first character is a lowercase ASCII letter is an intrinsic element (tsc's
+//     `isIntrinsicJsxName` reads the same range) → `entity.name.tag`; any other is a component →
+//     `support.class.component`, as the official TypeScriptReact grammar scopes them;
+//   • an HTML character entity in text (`&amp;`, `&#123;`, `&#x1F600;`): one scope-only pattern,
+//     its `&` and `;` the entity punctuation (tsc does not decode entities; the text token keeps them);
+//   • the children carry `meta.jsx.children`.
+const alnum = oneOf(range('a', 'z'), range('A', 'Z'), range('0', '9'));
+const hex = oneOf(range('0', '9'), range('a', 'f'), range('A', 'F'));
+const JSX_HIGHLIGHT = {
+  tagName: [
+    { match: range('a', 'z'), scope: 'entity.name.tag' },
+    { scope: 'support.class.component' },
+  ],
+  text: [{
+    match: seq('&', altPattern(seq('#', plus(range('0', '9'))), seq('#', oneOf('x', 'X'), plus(hex)), seq(oneOf(range('a', 'z'), range('A', 'Z')), star(alnum))), ';'),
+    scope: 'constant.character.entity', delimiters: 'punctuation.definition.entity',
+  }],
+  childrenScope: 'meta.jsx.children',
+};
 const ELEMENTS = (hasTypes: boolean): ElementRegion => ({
   tagOpen: '<', tagClose: '>', closeMarker: '/',
   text: 'JSXText', closeTag: 'JSXClose', selfClose: 'JSXSelfClose',
   hole: { open: '{', close: '}' },
   tagTokens: ['JSXString'],
+  name: 'jsx',
+  highlight: JSX_HIGHLIGHT,
   ...hasTypes ? { typeParameters: { head: typeParameterHead, signature: { open: '(', close: ')', then: ['=>', ':'] } } } : {},
 });
 
