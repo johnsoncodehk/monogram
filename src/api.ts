@@ -734,12 +734,14 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
     });
     return { token: tokenName, within, scope: entry.scope };
   });
-  const grammar = { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, rules, scopeOverrides, contextualScopes, markup: config.markup, elements: config.elements, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest, treeSitterConflicts: config.treeSitterConflicts, treeSitterContextualNames: config.treeSitterContextualNames };
+  const entryRule = config.entry ? names.get(config.entry) : undefined;   // `entry` may be omitted: findEntryRule then takes the last rule
+  if (config.entry && !entryRule) throw new Error('`entry` references an undeclared rule');
+  const grammar = { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, rules, entryRule, scopeOverrides, contextualScopes, markup: config.markup, elements: config.elements, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest, treeSitterConflicts: config.treeSitterConflicts, treeSitterContextualNames: config.treeSitterContextualNames };
 
   // Nullable NON-ENTRY rules are a definition error: the engine never returns an empty match for a
   // rule, so such a rule's empty case is unreachable and references to it fail silently where the
   // author expected an empty match.
-  const entryName = config.entry ? names.get(config.entry) : findEntryRule(grammar);   // `entry` may be omitted: the last rule is the entry
+  const entryName = findEntryRule(grammar);
   const nullable = [...computeNullableRules(grammar).nullableRules].filter((n) => n !== entryName);
   if (nullable.length > 0) {
     const list = nullable.map((n) => `'${n}'`).join(', ');
