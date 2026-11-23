@@ -114,7 +114,7 @@ else {
   check('go: package parser exports only its API', extra.length === 0, extra.slice(0, 12).join(' '));
   // Parser/lexer state lives on a per-call engine (a Doc owns its own): the only package-level
   // vars are read-only tables, and nothing is serialized behind a lock.
-  const GO_TABLE = /^(?:_|RULE_NAMES|TT_NAMES|kindStr|_lids|_lidFirstBits|_flowD|_tokenSets|_divT|_divK|_rxT|_phK|_mem|_pav|lex(?:First|Cont)\w+|(?:atom|bin|pre|post)_\w+)$/;
+  const GO_TABLE = /^(?:_|RULE_NAMES|TT_NAMES|kindStr|_lids|_lidFirstBits|_flowD|_tokenSets|_divT|_divK|_rxT|_phK|_mem|_pav|lex(?:First|Cont|Units)\w+|relexUnits\d+|(?:atom|bin|pre|post)_\w+)$/;
   const pkgVars = [...goSrc.matchAll(/^var (\w+)/gm)].map((x) => x[1]!).filter((x) => !GO_TABLE.test(x));
   check('go: no package-level mutable parser/lexer state', pkgVars.length === 0 && !/^var \($/m.test(goSrc), pkgVars.slice(0, 12).join(' '));
   check('go: package parser does not import sync', !/^\s*"sync"$/m.test(goSrc));

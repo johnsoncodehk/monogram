@@ -113,6 +113,19 @@ class LexScan {
     return name;
   }
 
+  // The table of a set of ASCII units a read-end routine runs over: one per distinct set, cold.
+  private units = new Map<string, string>();
+  unitSet(rs: CodeRange[]): string {
+    const key = JSON.stringify(rs);
+    let name = this.units.get(key);
+    if (!name) {
+      name = `lexUnits${this.units.size}`;
+      this.units.set(key, name);
+      this.sets.push({ name, ranges: rs.map(([lo, hi]) => [Math.max(0, lo), Math.min(127, hi)]), cold: true });
+    }
+    return name;
+  }
+
   // The matcher fn for a token pattern; sub-patterns come first, so every callee precedes its caller.
   pattern(p: TokenPattern): string {
     const key = JSON.stringify(p);
@@ -336,12 +349,15 @@ class LexScan {
         if (stop.length === 0) body.push(ret(end1));
         else if (stopUnits.length <= 4 && stopUnits.every((c) => c >= 0 && (c < 0xd800 || c > 0xdfff))) body.push(ret(add(this.findAny('q', stopUnits), I(1))));
         else {
-          // Past a unit beyond ASCII only when some path can take one (each of its units is >= 128).
+          // The run of the units it can pass: an ASCII unit by its table (one per distinct set, shared
+          // by the tokens that read alike), a unit beyond ASCII only when some path can take one
+          // (each of its units is >= 128).
           const ascii = intersect(ex, [[0, 127]]), wide = intersect(ex, [[128, 0x10ffff]]).length > 0;
+          const units = this.unitSet(ascii);
           body.push(
             while_(lt('q', len('s')), [
               let_('c', code('q')),
-              if_(lt('c', I(128)), [if_(not(inRanges('c', ascii)), [BREAK])], wide ? [] : [BREAK]),
+              if_(not(wide ? or(inSet(units, 'c'), ge('c', I(128))) : inSet(units, 'c')), [BREAK]),
               set('q', add('q', I(1))),
             ]),
             ret(add('q', I(1))),
