@@ -219,10 +219,11 @@ const isListQ = (q: RuleExpr): boolean => q.type === 'sep' || (q.type === 'quant
 
 class ArmCompiler {
   private n = 0;
-  constructor(
-    private shape: Shape, private info: ArmInfo, private num: Numbering, private pos: Map<RuleExpr, number>, private lo0: number,
-    private marked: Map<RuleExpr, number>, private cooks: Set<CookFn>,
-  ) {}
+  private shape: Shape; private info: ArmInfo; private num: Numbering; private pos: Map<RuleExpr, number>; private lo0: number;
+  private marked: Map<RuleExpr, number>; private cooks: Set<CookFn>;
+  constructor(shape: Shape, info: ArmInfo, num: Numbering, pos: Map<RuleExpr, number>, lo0: number, marked: Map<RuleExpr, number>, cooks: Set<CookFn>) {
+    this.shape = shape; this.info = info; this.num = num; this.pos = pos; this.lo0 = lo0; this.marked = marked; this.cooks = cooks;
+  }
   private tmp(): string { return `t${this.n++}`; }
 
   compile(term: Term): Stmt[] {

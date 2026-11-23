@@ -12,11 +12,14 @@
 // `tsTarget`/`goTarget`/`rustTarget` (emit-portable.ts + target-*.ts), each registered by its
 // own module through `defineTarget` (define-target.ts) with the Lowering of the shared algorithms.
 import type { CstGrammar } from './types.ts';
+import type { Shape } from './shape2-eval.ts';
 
 // What a portable target emits beyond the default module. `recovery`: total parsing's entry
 // `parseTotal` (docs/TARGETS.md "Errors and tokens"); without it the module has no such symbol and
 // is byte-identical to the default emission.
-export interface EmitOptions { recovery?: boolean }
+// `shape`: a parser that builds the shape's values instead of the CST (src/shape-plan.ts; S1: the
+// TypeScript target only, its synthesized-only terms); the shape must be defined on `grammar`.
+export interface EmitOptions { recovery?: boolean; shape?: Shape }
 
 export interface Target {
   name: string;
