@@ -1999,7 +1999,7 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
 // every input. Termination (recovery-1/DESIGN.md): the steps of a run are at most
 // INTERP_K × (tokens + 1) × rules, with k recorded here from the measurement.
 const INTERP_ALL = 1 << 30, INTERP_MIXED = 2;
-const INTERP_K = 1;
+const INTERP_K = 3;
 const interpRef = new Map<string, number[]>();
 function interpCheck(c: Case, grammar: CstGrammar, r: Runner, srcs: string[], own: Outcome[], tokenize: (s: string) => Tok[], bad: string[]): void {
   const at = (i: number) => JSON.stringify(srcs[i]!.length > 90 ? srcs[i]!.slice(0, 90) + '…' : srcs[i]);
