@@ -2,7 +2,7 @@ import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
 import { regionView, expandArms, type RegionView, type NameShape } from './region-view.ts';
 import { directivesOf } from './grammar-analysis.ts';
 import { info as patternInfo, type CSet } from './lex-match-plan.ts';
-import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
+import { collectLiterals, escapeRegex, isKeywordLiteral } from './grammar-utils.ts';
 import {
   caseFoldLiteralSource,
   tokenEscapePatternSource,
@@ -78,10 +78,6 @@ export interface MonarchLanguage {
 }
 
 // ── Regex helpers (JS RegExp dialect) ──
-
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 /** Escape a char for use inside a `[...]` class (JS dialect specials). */
 function escapeForCharClass(s: string): string {

@@ -476,6 +476,15 @@ export type PrattRule = {
   ledSuppressedIn: number[][];                        // parallel to leds: the ParserIR.suppressSets that hold its connector — the led is tried only while the set in force is none of them
   ledForm: AssignForm[];                              // parallel to leds: the built node's form (a binary-connector led, `a < T >`/`a as T`, is not a target)
   ledClosesTail: boolean[];                           // parallel to leds: not an access tail, or ends in a negative lookahead (`Foo<T>` then nothing)
+  // parallel to leds: the MIXFIX OPERAND RE-BIND (the interpreter's matchMixfixLed). A led
+  // `<L1> $ <L2> …` (its connector, then this rule, then a literal) whose greedy operand took the L2
+  // it needs fails; the re-bind then retries the operand CAPPED at each depth-0 L2 token inside what
+  // the greedy operand took (brackets `( [ {` counted), in order, and takes the first where the
+  // operand ends exactly at that token and L2 and the rest match. The cap is the token stream ending
+  // there: a capped parse is a parse of a shorter input. The re-bind runs on the led's failure path
+  // only, and undoes itself when it fails. The L2 text when the led has the shape and L2 is
+  // punctuation (a word L2 is no punctuation token, so it has no candidate), else null.
+  ledRebind: Array<string | null>;
   ledClean: boolean[];                                // parallel to leds: its steps after the connector fail clean (Step.clean), so a failed attempt has built no node: its block undoes the position and the scratch list only, with no builder checkpoint
   postfixToks: string[];                              // LED: a postfix token `$ X` (e.g. a tagged template), tried like a mixfix led (also an access tail)
   postfixTokNames: string[];                          // parallel to postfixToks: each arm's name
@@ -1810,7 +1819,12 @@ export type PrattLowering = {
   nudPrefix(i: number): string;                  // the prefix-operator arm
   dispatch: DispatchLowering;
   led: LedGuardLowering;
-  ledArm(i: number, cond: string, form: AssignForm, closesTail: boolean, exit: boolean, clean: boolean): string;  // led i's block: its node over the left operand, else undone (and the loop left when exit; clean: PrattRule.ledClean, no builder checkpoint)
+  ledArm(i: number, cond: string, form: AssignForm, closesTail: boolean, exit: boolean, clean: boolean, rebind: string | null): string;  // rebind: the call of led i's re-bind (PrattRule.ledRebind), tried after cond failed and was undone; it undoes itself when it fails
+  // The call of a led's re-bind (PrattRule.ledRebind), the runtime's one re-bind function (its
+  // spelling per target, rebindBrackets its bracket ids): open, operand, sep, rest are the led's
+  // steps as conditions in the inner lowering (the connector, the self operand, L2, the rest), sepLid
+  // is L2's literal id.
+  rebind(p: { open: string; operand: string; sep: string; rest: string; sepLid: number }): string;  // led i's block: its node over the left operand, else undone (and the loop left when exit; clean: PrattRule.ledClean, no builder checkpoint)
   ledSwitch(cases: { key: number; arms: string[] }[]): string;      // the led groups, by the token's lid
   postfixToks(kids: number[]): string;           // the postfix tokens, by the token's kid
   postfixTpl(hole: string): string;              // the postfix interpolated template
@@ -1874,10 +1888,19 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
     return G.ifAll(parts);
   };
   const exits = prattLedExits(r, ir, ids);
+  // The re-bind's steps are the cases of the engine's one step method (rebind-family.ts rbStep),
+  // so they are spelled in the lowering of the method's body (not a closure's).
+  const outer = L.steps;
+  const rebinds = r.leds.map((b, i) => {
+    const sep = r.ledRebind[i];
+    if (sep === null || sep === undefined) return null;
+    const st = b.steps;
+    return L.rebind({ open: stepExpr(st[0]!, outer), operand: stepExpr(st[1]!, outer), sep: stepExpr(st[2]!, outer), rest: conjOf(st.slice(3), outer), sepLid: lidOf(ids, sep) });
+  });
   const leds = r.leds.length === 0 ? '' : L.ledSwitch(groupByPreserveOrder(r.leds, (b) => lidOf(ids, b.first)).map((g) => {
     const lid = g.key as number;
     return { key: lid, arms: g.members.map(({ item: b, index: i }, j) =>
-      `${ledIf(i)}${L.ledArm(i, cond(b.steps), r.ledForm[i]!, r.ledClosesTail[i]!, exits.has(lid) && j === g.members.length - 1, r.ledClean[i]!)}`) };
+      `${ledIf(i)}${L.ledArm(i, cond(b.steps), r.ledForm[i]!, r.ledClosesTail[i]!, exits.has(lid) && j === g.members.length - 1, r.ledClean[i]!, rebinds[i] ?? null)}`) };
   }));
   const postToks = r.postfixToks.length === 0 ? ''
     : L.postfixToks(groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok)).map((g) => g.key as number)) + (r.postfixTplHole !== undefined ? L.postfixTpl(r.postfixTplHole) : '');
@@ -2186,6 +2209,7 @@ function buildPratt(
   const nudWritten: RuleExpr[] = [];
   let sawPrefix = false, sawBinary = false, sawPostfix = false, postfixSameLine = false;
   const leds: Bracket[] = [];
+  const ledRebind: Array<string | null> = [];
   const ledAccessTail: boolean[] = [];
   const ledLbp: Array<number | null> = [];
   const ledSameLine: boolean[] = [];
@@ -2256,6 +2280,10 @@ function buildPratt(
       if (prec && prec.rhsBp !== null && lastIsOperand) steps[steps.length - 1] = { t: 'ruleBp', name, bp: prec.rhsBp, ...(last.field !== undefined ? { field: last.field } : {}), src: last.src };   // keeps the operand's names
       const wordConnector = /^[A-Za-z]/.test(conn);                                           // `in`/`instanceof`/`as` — not a tail
       leds.push({ first: conn, steps });
+      // The interpreter's mixfixOf reads the items after the self `$` as written (a leading
+      // `sameLine` is one of them, so such a led has no re-bind).
+      const r1 = restAll[1], r2 = restAll[2];
+      ledRebind.push(restAll.length >= 4 && restAll[0]!.type === 'literal' && r1?.type === 'ref' && r1.name === name && r2?.type === 'literal' && litTtype(r2.value) === '$punct' ? r2.value : null);
       ledNames.push(armName(alt)); ledLeftNames.push(names.childOf.get(items[0])!.name);
       ledAccessTail.push(!lastIsOperand && !wordConnector);
       ledLbp.push(prec ? prec.lbp : null);
@@ -2313,7 +2341,7 @@ function buildPratt(
       case 'prefix': return null;
     }
   }));
-  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, nudSeqGuard, nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedGuard, nudOrder, nudNames, nudDispatch, prefix, binary, leds, ledNames, ledLeftNames, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledSuppressedIn: [], ledForm, ledClosesTail, ledClean: [], postfixToks, postfixTokNames, postfix, postfixSameLine, opNames: names.ops ?? null, ...(nudTplHole !== undefined ? { nudTplHole } : {}), ...(postfixTplHole !== undefined ? { postfixTplHole } : {}) };
+  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, nudSeqGuard, nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedGuard, nudOrder, nudNames, nudDispatch, prefix, binary, leds, ledNames, ledLeftNames, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledSuppressedIn: [], ledForm, ledClosesTail, ledRebind, ledClean: [], postfixToks, postfixTokNames, postfix, postfixSameLine, opNames: names.ops ?? null, ...(nudTplHole !== undefined ? { nudTplHole } : {}), ...(postfixTplHole !== undefined ? { postfixTplHole } : {}) };
 }
 
 // ── Lex integer ids (kid = kind index, lid = text/literal index) ──
@@ -2490,6 +2518,15 @@ export function lidOf(plan: LexIdPlan, text: string): number {
   return i >= 0 ? i : 0;
 }
 
+/** Whether some led of the grammar has a re-bind (PrattRule.ledRebind): the runtime then has the
+ *  one re-bind function. */
+export const hasRebind = (ir: Pick<ParserIR, 'rules'>): boolean => ir.rules.some((r) => r.kind === 'pratt' && r.ledRebind.some((x) => x !== null));
+/** The re-bind's brackets (the interpreter's matchMixfixLed counts `( [ {` against `) ] }`): the
+ *  literal ids of those that are the grammar's literals (a text no literal has is no token's). */
+export function rebindBrackets(ids: LexIdPlan): { opens: number[]; closes: number[] } {
+  const of = (texts: string[]) => texts.map((x) => lidOf(ids, x)).filter((x) => x !== 0);
+  return { opens: of(['(', '[', '{']), closes: of([')', ']', '}']) };
+}
 /** A Pratt rule's operator tables keyed by literal id: the one description of the binding-power
  *  lookups (binary LED, prefix NUD, postfix LED) that every printer renders as its lookup (a
  *  `match`, a lid-indexed array, a record). Entries in the rule's declaration order, at most one
@@ -3027,8 +3064,9 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
   //                              guard steps capBp | PREFIX
   //   nPre (lid rbp requireTarget form)*  nBin (lid lbp rbp requireTarget noUnaryLhs)*
   //   nPost (lid lbp requireTarget)*
-  //   nLed (firstLid steps lbp sameLine accessTail closesTail form notLeftLeaf nSupp set*)*
-  //                              lbp -1: none; notLeftLeaf -1 or [n lid*]
+  //   nLed (firstLid steps lbp sameLine accessTail closesTail form notLeftLeaf rebind nSupp set*)*
+  //                              lbp -1: none; notLeftLeaf -1 or [n lid*]; rebind: the L2 lid of
+  //                              its re-bind (PrattRule.ledRebind) or -1
   //   nPostTok kid*]
   function pratt(r: PrattRule): number {
     const arms = r.nudOrder.map((a): Cell[] => {
@@ -3044,7 +3082,7 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
     const leds = r.leds.map((b, i): Cell[] => {
       const nll = r.ledNotLeftLeaf[i];
       return [lid(b.first), ref(list(b.steps)), r.ledLbp[i] ?? -1, r.ledSameLine[i] ? 1 : 0, r.ledAccessTail[i] ? 1 : 0, r.ledClosesTail[i] ? 1 : 0, r.ledForm[i]!,
-        ref(nll ? emit([nll.length, ...nll.map(lid)]) : -1), r.ledSuppressedIn[i]!.length, ...r.ledSuppressedIn[i]!];
+        ref(nll ? emit([nll.length, ...nll.map(lid)]) : -1), r.ledRebind[i] ? lid(r.ledRebind[i]!) : -1, r.ledSuppressedIn[i]!.length, ...r.ledSuppressedIn[i]!];
     });
     const sections: Cell[][] = [
       [arms.length, ...arms.flat()],

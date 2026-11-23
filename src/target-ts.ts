@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA } from './emit-portable.ts';
-import { blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR } from './recovery-family.ts';
 import type { EmitOptions } from './target.ts';
 import type { CstGrammar } from './types.ts';
@@ -1028,11 +1028,12 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
       notSuppressed: (set) => `_suppressCur !== ${set}`,
       ifAll: (parts) => (parts.length ? `if (${parts.join(' && ')}) ` : ''),
     },
-    ledArm: (i, cond, form, closes, exit) => `{
+    ledArm: (i, cond, form, closes, exit, _clean, rebind) => `{
       const ledSave = pos;
       if (${cond}) { ${finPTs(r.name, `led${i}`, 'b')}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue ledLoop; }
-      back(ledSave); _n = b + 1;${exit ? ' break ledLoop;' : ''}
+      back(ledSave); _n = b + 1;${rebind ? `\n      if (${rebind}) { ${finPTs(r.name, `led${i}`, 'b')}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue ledLoop; }` : ''}${exit ? ' break ledLoop;' : ''}
     }`,
+    rebind: (p) => `rbScan(${rbSite(ids, [p.open, p.operand, p.sep, p.rest])}, ${p.sepLid}, 0)`,
     ledSwitch: (cases) => `    switch (t.lid) {
 ${cases.map((c) => `      case ${c.key}:\n${c.arms.map((a) => `      ${a}`).join('\n')}\n        break;`).join('\n')}
     }`,
@@ -1101,6 +1102,36 @@ function parse${r.name}W(): boolean {
 /** The parse engine: the builder protocol, the child stack, the step helpers in building and
  *  recognize form, and every rule in the forms its call sites need (ParserIR.forms). parse() runs
  *  it with cstBuilder, parseWith() with the caller's builder. */
+// The mixfix operand re-bind (rebind-family.ts, the one `rbScan`): each led that has one is a site,
+// its four steps (connector, operand, L2, the rest) the cases of `rbStep`. The engine's part: a mark
+// is the position and the child stack's height, the cap `toks` sliced and put back (linear, on the
+// failure path only).
+const RB_SITES = new WeakMap<LexIdPlan, string[][]>();
+function rbSite(ids: LexIdPlan, steps: string[]): number {
+  let m = RB_SITES.get(ids);
+  if (m === undefined) RB_SITES.set(ids, (m = []));
+  m.push(steps);
+  return m.length - 1;
+}
+function rebindRuntimeTs(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
+  if (!hasRebind(ir)) return '';
+  const sites = RB_SITES.get(ids) ?? [];
+  return `
+let rbMark_r1 = 0, rbMark_r2 = 0, rbMark_r3 = 0;
+function rbMark(): number { rbMark_r1 = _n; return pos; }
+function rbReset(p: number, s: number, _c: number, _e: number): void { back(p); _n = s; }
+function rbPos(): number { return pos; }
+function rbTokLid(i: number): number { return toks[i]!.lid; }
+function rbCapped(led: number, i: number, d: number): boolean { const full = toks; toks = full.slice(0, i); const ok = rbStep(led, 1, d); toks = full; return ok; }
+function rbStep(led: number, k: number, _d: number): boolean {
+  switch (led * 4 + k) {
+${sites.flatMap((st, i) => st.map((c, k) => `    case ${i * 4 + k}: return ${c};`)).join('\n')}
+  }
+  return false;
+}
+${shared.rebindFamily(ir, 'free')}
+${shared.rebindFamily(ir, 'methods')}`;
+}
 function engineRuntime(ir: ParserIR, ids: LexIdPlan): string {
   const reuse = ir.reuse;
   const ruleFns = [...ir.rules.filter((r) => ir.forms.buildRules.includes(r.name)).map((r) => {
@@ -3392,7 +3423,7 @@ function lookEnd(): number { return peekEnd > maxLook ? peekEnd : maxLook; }
 function lookReset(): void { maxLook = 0; peekEnd = 0; }
 ${tokenSetRuntime(ir, ids)}
 ${gtRuntime(ir, ids)}
-${engineRuntime(ir, ids)}
+${engineRuntime(ir, ids)}${rebindRuntimeTs(ir, ids, shared)}
 // Library entry. tokenize(src) is the lexer alone: fresh Token objects the caller owns, and no
 // parser state touched. parse(src) lexes and parses; the CST is plain objects, independent of
 // any later call. No I/O — see emitRunner() for the stdin → JSON wrapper.
@@ -3484,7 +3515,7 @@ function enHeadLid(sb: number): number { return sb < _n ? lid_of(headLeafTextW(s
 function enSt(k: number): number { return k === ${ST_CAPPED} ? (_capped ? 1 : 0) : k === ${ST_FORM} ? _form : k === ${ST_TAIL} ? (_tail ? 1 : 0) : k === ${ST_SUP_NEXT} ? _suppressNext : k === ${ST_SUP_CUR} ? _suppressCur : _ctx; }
 function enSetSt(k: number, v: number): void { if (k === ${ST_CAPPED}) _capped = v !== 0; else if (k === ${ST_FORM}) _form = v; else if (k === ${ST_TAIL}) _tail = v !== 0; else if (k === ${ST_SUP_NEXT}) _suppressNext = v; else if (k === ${ST_SUP_CUR}) _suppressCur = v; else _ctx = v; }
 function enTick(): void { _rsteps++; }
-/**
+${hasRebind(ir) ? '// The re-bind\'s capped operand, interpreted (rebind-family.ts; the marks are the native forms\'): the cap is `toks` sliced for the call.\nfunction riRbCapped(led: number, i: number, d: number): boolean { const full = toks; toks = full.slice(0, i); const ok = riRbStep(led, 1, d); toks = full; return ok; }\n' : ''}/**
  * parseInterpreted: the strict interpreter of the parse plan (the recovery family) from the entry
  * rule, \`depth\` rule levels interpreted and the native functions below: parseWith's root and
  * verdict on every input. \`steps\`: the interpreted steps it took.
