@@ -17,7 +17,7 @@ import { validateShapeOrThrow } from './shape-validate.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, findAnyName, isNum, isOpt, isRec, isRecList, isValList, isValTy, recName, type BinOp, type Lowering, type R, type Ty } from './algo-ir.ts';
 import type { ShapePlan } from './shape-plan.ts';
-import { readFileSync } from 'node:fs';
+import { cookTable } from './shape-cook.ts';
 import { UNI_ID_CONTINUE, UNI_ID_START } from './uni-ident.ts';
 import { type TextUnits, unitLen } from './text-units.ts';
 
@@ -3558,7 +3558,7 @@ export function parseTotal<H>(src: string, builder: Builder<H>): { root: H | nul
 function emitRunner(): string {
     return `// CLI runner (harness only): stdin → CST JSON. Appended to the parser library by the gate;
 // NOT part of the emitted parser. The import is hoisted, so it may follow the library code.
-import { readFileSync } from 'node:fs';
+import { cookTable } from './shape-cook.ts';
 const _raw = readFileSync(0, 'utf8');
 const _editFast = process.argv.includes('edit-session-fast');
 const _cstJSON = (n: Cst) => JSON.stringify(n);
@@ -3605,8 +3605,7 @@ export function emitTs(grammar: CstGrammar, opts?: { shape?: ShapeSpec }): strin
 // finPS are finR / finP with the arm's construct plan in place of the builder's node. The values
 // are the evaluator's (src/shape2-eval.ts ShapeValue); a MISSING value (an arm the shape leaves
 // out, or one the plan cannot build yet) fails only where it is read (`_need`).
-const COOK_SOURCE = readFileSync(new URL('./shape-cook.ts', import.meta.url), 'utf8')
-  .split('\n').filter((l) => !/^import /.test(l)).join('\n').replace(/^export /gm, '');
+
 function shapeRuntimeTs(plan: ShapePlan): string {
   return `export type ShapeNode = { kind: string; start: number; end: number; fields: Record<string, ShapeValue> };
 export type ShapeValue = ShapeNode | ShapeValue[] | string | number | boolean | null | { record: Record<string, ShapeValue> };
@@ -3695,11 +3694,9 @@ const _isNode = (x: any): x is ShapeNode => x !== null && typeof x === 'object' 
 function valStart(x: any, dflt: number): number { return _isNode(x) ? x.start : Array.isArray(x) && _isNode(x[0]) && _isNode(x[x.length - 1]) ? x[0].start : dflt; }
 function valEnd(x: any, dflt: number): number { return _isNode(x) ? x.end : Array.isArray(x) && _isNode(x[0]) && _isNode(x[x.length - 1]) ? x[x.length - 1].end : dflt; }
 // The cooking functions: src/shape-cook.ts, the evaluator's own definitions.
-const _COOK = (() => {
 type CookFn = string; type Scalar = string | number | boolean | null;
-${COOK_SOURCE}
-return COOK;
-})();
+${cookTable.toString()}
+const _COOK = cookTable();
 ${plan.cooks.map((c) => `function cook_${c}(s: string): any { return _COOK[${J(c)}]!(s); }`).join('\n')}
 // The builder under the construct plans: every leaf is a slot (its span is what a plan reads); an
 // interpolated template's node is the one the engine still builds with it (S1: not built).

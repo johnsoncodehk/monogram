@@ -22,6 +22,8 @@ import { rustTarget } from '../src/target-rust.ts';
 import { defineTarget, registeredTargets } from '../src/define-target.ts';
 import { portableIR } from '../src/emit-portable.ts';
 import { planShape } from '../src/shape-plan.ts';
+import namedcalcShape from './fixtures/shape-namedcalc.ts';
+import { estreeExprShape } from './fixtures/shape-v2-estree-expr.ts';
 import { relexFamily, relexFamilyFns, relexMode } from '../src/relex-family.ts';
 import { lexScanFamily } from '../src/lex-family.ts';
 import { reuseFamilyFns } from '../src/reuse-family.ts';
@@ -356,9 +358,7 @@ for (const path of FIXTURES) {
 
 // A shape's construct plans (src/shape-plan.ts, algo-ir's shape-value section): the namedcalc
 // shape and the S1-supported part of the ESTree expression shape, every construct printed once.
-for (const path of ['./fixtures/shape-namedcalc.ts', './fixtures/shape-v2-estree-expr.ts']) {
-  const mod = await import(path);
-  const shape = mod.default ?? mod.estreeExprShape;
+for (const [path, shape] of [['./fixtures/shape-namedcalc.ts', namedcalcShape], ['./fixtures/shape-v2-estree-expr.ts', estreeExprShape]] as const) {
   const plan = planShape(shape, portableIR(shape.source));
   const out = printFns(sexpr, plan.fns);
   const code = out.split('\n').filter((l) => !/^\s*;;/.test(l)).join('\n').replace(/"(?:[^"\\]|\\.)*"/g, '""');
