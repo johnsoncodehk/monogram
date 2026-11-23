@@ -2,7 +2,7 @@ import type { CstGrammar, RuleExpr, RuleDecl, TokenPattern } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
 import { buildLr, END, type LeafGraph, type LrAnalysis } from './lr-automaton.ts';
 import { info as tokenPatternInfo, continuesAt, type CSet } from './lex-match-plan.ts';
-import { analyzeGrammar } from './grammar-analysis.ts';
+import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
 import { tokenPatternFirstCharSet, type TokenPatternFirstSet, tokenPatternIsNever, tokenPatternLiteralPrefix, tokenPatternLiteralPrefixes, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1290,7 +1290,7 @@ function computeTerminalSets(grammar: CstGrammar, tokenNames: Set<string>): Term
       case 'sep': walk(e.element, union(new Set([`'${e.delimiter}`]), after)); break;
     }
   };
-  follow.get(grammar.rules[grammar.rules.length - 1].name)!.add(EOF_TERMINAL);
+  follow.get(findEntryRule(grammar))!.add(EOF_TERMINAL);
   do {
     grew = false;
     for (const r of grammar.rules) walk(r.body, follow.get(r.name)!);
@@ -1978,7 +1978,7 @@ function treeSitterLeafGraph(grammar: CstGrammar, tokenNames: Set<string>, scann
     for (const l of g.last) isLast[l] = true;
     first[i] = g.first; nullable[i] = g.nullable;
   }
-  return { sym, nt, rule, follow, isLast, first, nullable, entry: ruleOf(grammar.rules[grammar.rules.length - 1].name), node, ruleNames };
+  return { sym, nt, rule, follow, isLast, first, nullable, entry: ruleOf(findEntryRule(grammar)), node, ruleNames };
 }
 
 // ── Zero-width tokens: `sameLine` and the line-end alternatives (planZeroWidth) ──
@@ -2804,7 +2804,7 @@ function buildTokenTreeSitter(source: CstGrammar, grammarName: string): Omit<Tre
   const nameFields = collectNameFields(source);
 
   // ε-elimination set (see makeNonEmpty): the start rule is the entry rule, emitted FIRST below.
-  const entryName = grammar.rules[grammar.rules.length - 1].name;
+  const entryName = findEntryRule(grammar);
   const isTerminalName = (n: string) => tokenNames.has(n) || scannerTokenFor.has(n);
   const nullableNonStart = computeNullableNonStart(grammar, entryName, isTerminalName);
 
@@ -2919,12 +2919,11 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
 
   lines.push('  rules: {');
 
-  // The FIRST rule in tree-sitter is the start symbol. Our entry rule is the last
-  // declared one (findEntryRule). Put it first so tree-sitter uses it as start.
-  const entryName = grammar.rules[grammar.rules.length - 1].name;
+  // The FIRST rule in tree-sitter is the start symbol: put our entry rule (findEntryRule) first.
+  const entryName = findEntryRule(grammar);
   const orderedRules = [
-    grammar.rules[grammar.rules.length - 1],
-    ...grammar.rules.slice(0, grammar.rules.length - 1),
+    ...grammar.rules.filter((r) => r.name === entryName),
+    ...grammar.rules.filter((r) => r.name !== entryName),
   ];
 
   const ruleEntries: string[] = [];
