@@ -254,7 +254,7 @@ module.exports = grammar({
       seq("yield", choice(seq("*", $.expr), optional($.expr))),
       seq("(", $.expr, repeat(seq(",", $.expr)), ")"),
       seq(prec.left(18, seq($.expr, "satisfies")), $.type),
-      seq("import", choice(seq("(", $.expr, ")"), seq(".", "meta"), seq("<", optional(seq($.type, repeat(seq(",", $.type)), optional(","))), ">", optional(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"))))),
+      seq("import", choice(seq("(", $.expr, ")"), seq(".", choice("meta", "defer", "source")), seq("<", optional(seq($.type, repeat(seq(",", $.type)), optional(","))), ">", optional(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"))))),
       $.private_field,
       $.hex_number,
       $.octal_number,
@@ -283,7 +283,7 @@ module.exports = grammar({
 
     block: $ => seq("{", repeat($.stmt), "}"),
 
-    binding_property: $ => choice(seq(choice(reserved("unreserved", $.ident), $._names_1), ":", $.binding_element), seq(choice(reserved("reserved_1", $.ident), $._names_2), optional(seq("=", $.expr))), seq(choice($.string, $.number, seq("[", $.expr, "]")), ":", $.binding_element), seq("...", choice(choice(reserved("reserved_1", $.ident), $._names_2), $.binding_pattern), optional(seq(":", $.binding_element)), optional(seq("=", $.expr)))),
+    binding_property: $ => choice(seq(choice(reserved("unreserved", $.ident), $._names_1), ":", $.binding_element), seq(choice(reserved("reserved_1", $.ident), $._names_2), optional(seq("=", $.expr))), seq(choice($.string, $.number, $.hex_number, $.octal_number, $.binary_number, $.big_int, seq("[", $.expr, "]")), ":", $.binding_element), seq("...", choice(choice(reserved("reserved_1", $.ident), $._names_2), $.binding_pattern), optional(seq(":", $.binding_element)), optional(seq("=", $.expr)))),
 
     binding_element: $ => seq(choice(choice(reserved("reserved_1", $.ident), $._names_2), $.binding_pattern), optional(seq("=", $.expr))),
 
@@ -349,13 +349,13 @@ module.exports = grammar({
 
     binary_number: $ => token(/0[bB][01]+(?:_[01]+)*n?/),
 
-    big_int: $ => token(/[0-9]+(?:_[0-9]+)*n/),
+    big_int: $ => token(/(?:0|[1-9][0-9]*(?:_[0-9]+)*)n/),
 
-    number: $ => token(/(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\.[0-9]*(?:_[0-9]+)*)?|\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\-]?[0-9]+(?:_[0-9]+)*)?/),
+    number: $ => token(/(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\.(?:[0-9]+(?:_[0-9]+)*)?|)|\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\-]?[0-9]+(?:_[0-9]+)*)?/),
 
-    string: $ => token(/"(?:[^"\\]|\\(?:u\{0*(?:[0-9A-Fa-f]{1,5}|10[0-9A-Fa-f]{4})\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|[^ux]))*"|'(?:[^'\\]|\\(?:u\{0*(?:[0-9A-Fa-f]{1,5}|10[0-9A-Fa-f]{4})\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|[^ux]))*'/),
+    string: $ => token(/"(?:[^"\\\n\r]|\\(?:u\{0*(?:[0-9A-Fa-f]{1,5}|10[0-9A-Fa-f]{4})\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|\r\n|[^ux]))*"|'(?:[^'\\\n\r]|\\(?:u\{0*(?:[0-9A-Fa-f]{1,5}|10[0-9A-Fa-f]{4})\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|\r\n|[^ux]))*'/),
 
-    decorator: $ => token(/@(?:(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[a-zA-Z0-9_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\}|\.)*)?/),
+    decorator: $ => token(/@(?:(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[a-zA-Z0-9_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\}|\.#(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})|\.)*)?/),
 
     private_field: $ => token(/#(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[a-zA-Z0-9_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})*/),
 

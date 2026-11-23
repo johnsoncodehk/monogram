@@ -259,7 +259,7 @@ module.exports = grammar({
       seq("yield", choice(seq("*", $.expr), optional($.expr))),
       seq("(", $.expr, repeat(seq(",", $.expr)), ")"),
       seq(prec.left(18, seq($.expr, "satisfies")), $.type),
-      seq("import", choice(seq("(", $.expr, ")"), seq(".", "meta"), seq("<", optional(seq($.type, repeat(seq(",", $.type)), optional(","))), ">", optional(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"))))),
+      seq("import", choice(seq("(", $.expr, ")"), seq(".", choice("meta", "defer", "source")), seq("<", optional(seq($.type, repeat(seq(",", $.type)), optional(","))), ">", optional(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"))))),
       $.private_field,
       $.hex_number,
       $.octal_number,

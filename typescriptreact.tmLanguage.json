@@ -3072,7 +3072,7 @@
       "name": "support.type.primitive.tsx"
     },
     "scope-keyword-other": {
-      "match": "\\b(unique|out|target|meta)\\b",
+      "match": "\\b(unique|out|target|meta|source)\\b",
       "name": "keyword.other.tsx"
     },
     "scope-keyword-control-import": {
@@ -3332,7 +3332,7 @@
       "name": "keyword.control.flow.tsx"
     },
     "expr-scope-keyword-other": {
-      "match": "\\b(out|target|meta)\\b",
+      "match": "\\b(out|target|meta|source)\\b",
       "name": "keyword.other.tsx"
     },
     "expr-scope-storage-type-namespace-decl": {

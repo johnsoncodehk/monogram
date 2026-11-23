@@ -42,6 +42,7 @@
 (binary_number) @number
 (big_int) @number
 (number) @number
+(legacy_number) @number
 (string) @string
 (template_chars) @string
 (jsxstring) @string

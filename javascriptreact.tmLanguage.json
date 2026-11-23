@@ -103,6 +103,9 @@
       "include": "#number"
     },
     {
+      "include": "#legacynumber"
+    },
+    {
       "include": "#scope-keyword-operator-expression"
     },
     {
@@ -1462,6 +1465,10 @@
       "name": "constant.numeric.decimal.js.jsx",
       "match": "(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\\.(?:[0-9]+(?:_[0-9]+)*)?|(?!\\.))|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])"
     },
+    "legacynumber": {
+      "name": "constant.numeric.decimal.js.jsx",
+      "match": "0[0-7]*[89][0-9]*(?:\\.(?:[0-9]+(?:_[0-9]+)*)?|(?!\\.))(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])|0[0-7]+(?![0-9A-Za-z_$\\\\])"
+    },
     "template": {
       "name": "string.quoted.other.template.js.jsx",
       "begin": "`",
@@ -2506,6 +2513,9 @@
           "include": "#number"
         },
         {
+          "include": "#legacynumber"
+        },
+        {
           "include": "#scope-keyword-operator-expression"
         },
         {
@@ -2800,6 +2810,9 @@
         },
         {
           "include": "#number"
+        },
+        {
+          "include": "#legacynumber"
         },
         {
           "include": "#bigint"

@@ -399,6 +399,8 @@
             "yield": "keyword",
             "satisfies": "operator",
             "meta": "keyword",
+            "defer": "keyword",
+            "source": "keyword",
             "let": "keyword",
             "var": "keyword",
             "if": "keyword",
@@ -427,7 +429,6 @@
             "namespace": "keyword",
             "from": "keyword",
             "constructor": "keyword",
-            "defer": "keyword",
             "delete": "operator",
             "string": "keyword",
             "number": "keyword",
@@ -761,6 +762,14 @@
               "token": "keyword",
               "switchTo": "@root"
             },
+            "defer": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "source": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
             "let": {
               "token": "keyword",
               "switchTo": "@root"
@@ -874,10 +883,6 @@
               "switchTo": "@root"
             },
             "constructor": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
-            "defer": {
               "token": "keyword",
               "switchTo": "@root"
             },
@@ -1828,6 +1833,8 @@
             "yield": "keyword",
             "satisfies": "operator",
             "meta": "keyword",
+            "defer": "keyword",
+            "source": "keyword",
             "let": "keyword",
             "var": "keyword",
             "if": "keyword",
@@ -1857,7 +1864,6 @@
             "namespace": "keyword",
             "from": "keyword",
             "constructor": "keyword",
-            "defer": "keyword",
             "require": "variable",
             "delete": "operator",
             "string": "keyword",

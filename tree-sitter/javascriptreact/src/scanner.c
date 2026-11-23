@@ -137,15 +137,16 @@ static bool zw_word_char(int32_t c) { return c == 36 || (c >= 48 && c <= 57) || 
 //   3: BinaryNumber
 //   4: BigInt
 //   5: Number
-//   6: String
-//   7: Template
-//   8: JSXSelfClose
-//   9: JSXClose
-//   10: JSXText
-//   11: JSXString
-//   12: Regex
-//   13: Decorator
-//   14: PrivateField
+//   6: LegacyNumber
+//   7: String
+//   8: Template
+//   9: JSXSelfClose
+//   10: JSXClose
+//   11: JSXText
+//   12: JSXString
+//   13: Regex
+//   14: Decorator
+//   15: PrivateField
 static uint64_t zw_token_candidates(int32_t c) {
   uint64_t m = 0;
   if (c == 36 || (c >= 65 && c <= 90) || c == 92 || c == 95 || (c >= 97 && c <= 122)) m |= (uint64_t)1 << 0;
@@ -154,15 +155,16 @@ static uint64_t zw_token_candidates(int32_t c) {
   if (c == 48) m |= (uint64_t)1 << 3;
   if ((c >= 48 && c <= 57)) m |= (uint64_t)1 << 4;
   if (c == 46 || (c >= 48 && c <= 57)) m |= (uint64_t)1 << 5;
-  if (c == 34 || c == 39) m |= (uint64_t)1 << 6;
-  if (c == 96) m |= (uint64_t)1 << 7;
-  if (c == 47) m |= (uint64_t)1 << 8;
-  if (c == 60) m |= (uint64_t)1 << 9;
-  if ((c >= 0 && c <= 59) || c == 61 || (c >= 63 && c <= 122) || c == 124 || (c >= 126 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
-  if (c == 34 || c == 39) m |= (uint64_t)1 << 11;
-  if (c == 47) m |= (uint64_t)1 << 12;
-  if (c == 64) m |= (uint64_t)1 << 13;
-  if (c == 35) m |= (uint64_t)1 << 14;
+  if (c == 48) m |= (uint64_t)1 << 6;
+  if (c == 34 || c == 39) m |= (uint64_t)1 << 7;
+  if (c == 96) m |= (uint64_t)1 << 8;
+  if (c == 47) m |= (uint64_t)1 << 9;
+  if (c == 60) m |= (uint64_t)1 << 10;
+  if ((c >= 0 && c <= 59) || c == 61 || (c >= 63 && c <= 122) || c == 124 || (c >= 126 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
+  if (c == 34 || c == 39) m |= (uint64_t)1 << 12;
+  if (c == 47) m |= (uint64_t)1 << 13;
+  if (c == 64) m |= (uint64_t)1 << 14;
+  if (c == 35) m |= (uint64_t)1 << 15;
   return m;
 }
 // The literals, by id: 0 "!", 1 "!=", 2 "!==", 3 "%", 4 "%=", 5 "&", 6 "&&", 7 "&&=", 8 "&=", 9 "(", 10 ")", 11 "*", 12 "**", 13 "**=", 14 "*=", 15 "+", 16 "++", 17 "+=", 18 ",", 19 "-", 20 "--", 21 "-=", 22 ".", 23 "...", 24 "/", 25 "/=", 26 ":", 27 ";", 28 "<", 29 "<<", 30 "<<=", 31 "<=", 32 "=", 33 "==", 34 "===", 35 "=>", 36 ">", 37 ">=", 38 ">>", 39 ">>=", 40 ">>>", 41 ">>>=", 42 "?", 43 "?.", 44 "??", 45 "??=", 46 "[", 47 "]", 48 "^", 49 "^=", 50 "accessor", 51 "as", 52 "async", 53 "await", 54 "break", 55 "case", 56 "catch", 57 "class", 58 "const", 59 "constructor", 60 "continue", 61 "debugger", 62 "default", 63 "defer", 64 "delete", 65 "do", 66 "else", 67 "export", 68 "extends", 69 "false", 70 "finally", 71 "for", 72 "from", 73 "function", 74 "get", 75 "if", 76 "import", 77 "in", 78 "instanceof", 79 "let", 80 "meta", 81 "new", 82 "null", 83 "of", 84 "return", 85 "set", 86 "source", 87 "static", 88 "super", 89 "switch", 90 "target", 91 "this", 92 "throw", 93 "true", 94 "try", 95 "typeof", 96 "using", 97 "var", 98 "void", 99 "while", 100 "with", 101 "yield", 102 "{", 103 "|", 104 "|=", 105 "||", 106 "||=", 107 "}", 108 "~"
@@ -1498,146 +1500,146 @@ static uint64_t zw_lit_tokens(int lit, int32_t c) {
   uint64_t m = 0;
   switch (lit) {
     case 0:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 1:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 2:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 3:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 4:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 5:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 6:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 7:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 8:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 9:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 10:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 11:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 12:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 13:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 14:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 15:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 16:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 17:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 18:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 19:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 20:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 21:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 22:
       if ((c >= 48 && c <= 57)) m |= (uint64_t)1 << 5;
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 23:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 24:
-      if (c == 62) m |= (uint64_t)1 << 8;
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
-      if ((c >= 0 && c <= 9) || (c >= 11 && c <= 12) || (c >= 14 && c <= 41) || (c >= 43 && c <= 46) || (c >= 48 && c <= 8231) || (c >= 8234 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 12;
+      if (c == 62) m |= (uint64_t)1 << 9;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
+      if ((c >= 0 && c <= 9) || (c >= 11 && c <= 12) || (c >= 14 && c <= 41) || (c >= 43 && c <= 46) || (c >= 48 && c <= 8231) || (c >= 8234 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 13;
       break;
     case 25:
-      m |= (uint64_t)1 << 10;
-      m |= (uint64_t)1 << 12;
+      m |= (uint64_t)1 << 11;
+      m |= (uint64_t)1 << 13;
       break;
     case 26:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 27:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 28:
-      if (c == 47) m |= (uint64_t)1 << 9;
+      if (c == 47) m |= (uint64_t)1 << 10;
       break;
     case 32:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 33:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 34:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 35:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 42:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 43:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 44:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 45:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 46:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 47:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 48:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 49:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 103:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 104:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 105:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 106:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 108:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
   }
   return m;
@@ -1676,13 +1678,13 @@ static const bool _SAME_LINE_7_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 static const bool _SAME_LINE_7_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 static const bool _SAME_LINE_7_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 static const ZeroWidth ZERO_WIDTH[] = {
-  { _SAME_LINE_1, false, false, false, 0x0ull, 0x80ull, 0x0ull, _SAME_LINE_1_AFTER_EXACT, _SAME_LINE_1_AFTER, _SAME_LINE_1_CONT, _SAME_LINE_1_AHEAD },
+  { _SAME_LINE_1, false, false, false, 0x0ull, 0x100ull, 0x0ull, _SAME_LINE_1_AFTER_EXACT, _SAME_LINE_1_AFTER, _SAME_LINE_1_CONT, _SAME_LINE_1_AHEAD },
   { _SAME_LINE_2, false, false, false, 0x1ull, 0x0ull, 0x0ull, _SAME_LINE_2_AFTER_EXACT, _SAME_LINE_2_AFTER, _SAME_LINE_2_CONT, _SAME_LINE_2_AHEAD },
   { _SAME_LINE_3, false, false, false, 0x0ull, 0x0ull, 0x0ull, _SAME_LINE_3_AFTER_EXACT, _SAME_LINE_3_AFTER, _SAME_LINE_3_CONT, _SAME_LINE_3_AHEAD },
-  { _LINE_END_1, true, true, true, 0x70ffull, 0x80ull, 0x0ull, _LINE_END_1_AFTER_EXACT, _LINE_END_1_AFTER, _LINE_END_1_CONT, _LINE_END_1_AHEAD },
-  { _SAME_LINE_4, false, false, false, 0x70ffull, 0x0ull, 0x0ull, _SAME_LINE_4_AFTER_EXACT, _SAME_LINE_4_AFTER, _SAME_LINE_4_CONT, _SAME_LINE_4_AHEAD },
-  { _SAME_LINE_5, false, false, false, 0x407full, 0x0ull, 0x0ull, _SAME_LINE_5_AFTER_EXACT, _SAME_LINE_5_AFTER, _SAME_LINE_5_CONT, _SAME_LINE_5_AHEAD },
-  { _SAME_LINE_6, false, false, false, 0x407full, 0x0ull, 0x0ull, _SAME_LINE_6_AFTER_EXACT, _SAME_LINE_6_AFTER, _SAME_LINE_6_CONT, _SAME_LINE_6_AHEAD },
+  { _LINE_END_1, true, true, true, 0xe1ffull, 0x100ull, 0x0ull, _LINE_END_1_AFTER_EXACT, _LINE_END_1_AFTER, _LINE_END_1_CONT, _LINE_END_1_AHEAD },
+  { _SAME_LINE_4, false, false, false, 0xe1ffull, 0x0ull, 0x0ull, _SAME_LINE_4_AFTER_EXACT, _SAME_LINE_4_AFTER, _SAME_LINE_4_CONT, _SAME_LINE_4_AHEAD },
+  { _SAME_LINE_5, false, false, false, 0x80ffull, 0x0ull, 0x0ull, _SAME_LINE_5_AFTER_EXACT, _SAME_LINE_5_AFTER, _SAME_LINE_5_CONT, _SAME_LINE_5_AHEAD },
+  { _SAME_LINE_6, false, false, false, 0x80ffull, 0x0ull, 0x0ull, _SAME_LINE_6_AFTER_EXACT, _SAME_LINE_6_AFTER, _SAME_LINE_6_CONT, _SAME_LINE_6_AHEAD },
   { _SAME_LINE_7, false, false, false, 0x0ull, 0x0ull, 0x0ull, _SAME_LINE_7_AFTER_EXACT, _SAME_LINE_7_AFTER, _SAME_LINE_7_CONT, _SAME_LINE_7_AHEAD },
 };
 // A line-end token where its assertion holds (a line break or the end of the input, or a lookahead
