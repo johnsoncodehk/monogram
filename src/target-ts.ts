@@ -3214,7 +3214,7 @@ const tsTake = (names: string[], fn: string, args: string): string =>
 
 // No callee-FIRST body guards: a JS rd call refused at its dispatch costs less than the guard's test
 // on every iteration (measured: TS blocks +0.19% to +0.53% on the real inputs with them).
-const FACTS: PortableFacts = { calleeFirstGuards: false };
+export const FACTS: PortableFacts = { calleeFirstGuards: false };
 
 export const tsTarget = defineTarget({
   name: 'typescript',

@@ -4,7 +4,10 @@ import { mutationCorpus } from './mutation-corpus.ts';
 import { CURATED_TS } from './emit-corpus.ts';
 import { ECMASCRIPT, finish, gate, parityCorpus, prepareAll, selectedCases, primaryLexMsg, type Case, type DiagRow, type Outcome, type Runner, type Total, type Interp } from './portable-harness.ts';
 import type { Tok } from './parity-corpus.ts';
-import { portableIR } from '../src/emit-portable.ts';
+import { portableIR, type PortableFacts } from '../src/emit-portable.ts';
+import { FACTS as TS_FACTS } from '../src/target-ts.ts';
+import { FACTS as GO_FACTS } from '../src/target-go.ts';
+import { FACTS as RS_FACTS } from '../src/target-rust.ts';
 
 
 // ── The recovery class: total parsing, `parseTotal` (the emit option `recovery`) ──
@@ -123,20 +126,22 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
 // the same verdict and the same tree; in the TS target the same leaves offered to the builder (the
 // candidates tried are the native ones: the interpreter takes them in declaration order where
 // their guards admit the token; the nodes a longest match finishes depend on that order, so they
-// are reported, not compared). Go and Rust interpret exactly as TS does: the same step count on
-// every input. Termination (recovery-1/DESIGN.md): the steps of a run are at most
+// are reported, not compared). The targets interpret alike: two targets whose parse plans are one
+// (the same PortableFacts, so the same table) take the same step count on every input (a plan with
+// more guards takes fewer steps). Termination (recovery-1/DESIGN.md): the steps of a run are at most
 // INTERP_K × (tokens + 1) × rules, with k recorded here from the measurement.
 const INTERP_ALL = 1 << 30, INTERP_MIXED = 2;
 const INTERP_K = 3;
 const interpRef = new Map<string, number[]>();
+const FACTS_OF: Record<string, PortableFacts> = { typescript: TS_FACTS, go: GO_FACTS, rust: RS_FACTS };
 function interpCheck(c: Case, grammar: CstGrammar, r: Runner, srcs: string[], own: Outcome[], tokenize: (s: string) => Tok[], bad: string[]): void {
   const at = (i: number) => JSON.stringify(srcs[i]!.length > 90 ? srcs[i]!.slice(0, 90) + '…' : srcs[i]);
   const nRules = portableIR(grammar).rules.length;
   for (const depth of [INTERP_ALL, INTERP_MIXED]) {
     const got = r.interp(srcs, depth);
-    const key = `${c.grammar}/${depth}`;
+    const key = `${c.grammar}/${depth}/${JSON.stringify(FACTS_OF[r.label])}`;
     const ref = interpRef.get(key);
-    if (r.label === 'typescript') interpRef.set(key, got.map((g) => g.steps));
+    if (!ref) interpRef.set(key, got.map((g) => g.steps));
     let ok = 0, rej = 0, leafEq = 0, maxK = 0;
     got.forEach((g, i) => {
       const o = own[i]!;
@@ -144,14 +149,14 @@ function interpCheck(c: Case, grammar: CstGrammar, r: Runner, srcs: string[], ow
       if (g.ok && g.cst !== o.cst) { bad.push(`interpreter (depth ${depth}): a tree other than the native parse's — ${at(i)}`); return; }
       if (g.ok) ok++; else rej++;
       if (g.leaves) { if (g.leaves[0] === g.leaves[1]) leafEq++; else bad.push(`interpreter (depth ${depth}): ${g.leaves[1]} leaves offered, the native parse ${g.leaves[0]} — ${at(i)}`); }
-      if (ref && ref[i] !== g.steps) bad.push(`interpreter (depth ${depth}): ${g.steps} steps, the TS target ${ref[i]} — ${at(i)}`);
+      if (ref && ref[i] !== g.steps) bad.push(`interpreter (depth ${depth}): ${g.steps} steps, a target of the same plan ${ref[i]} — ${at(i)}`);
       let nTok = 0;
       try { nTok = tokenize(srcs[i]!).length; } catch { /* a lexer error: the interpreter takes no step */ }
       const bound = (nTok + 1) * nRules;
       maxK = Math.max(maxK, g.steps / bound);
       if (g.steps > INTERP_K * bound) bad.push(`interpreter (depth ${depth}): ${g.steps} steps, over the bound ${INTERP_K} × (tokens + 1) × ${nRules} rules — ${at(i)}`);
     });
-    console.log(`  ${c.grammar}/${r.label}: interpreter ${depth === INTERP_ALL ? 'forced (every level)' : `${depth} levels`} ≡ native: ${ok} accepted, ${rej} rejected${r.label === 'typescript' ? `, leaves equal on ${leafEq}` : ', steps ≡ TS'}; steps ≤ ${maxK.toFixed(3)} × (tokens + 1) × rules`);
+    console.log(`  ${c.grammar}/${r.label}: interpreter ${depth === INTERP_ALL ? 'forced (every level)' : `${depth} levels`} ≡ native: ${ok} accepted, ${rej} rejected${r.label === 'typescript' ? `, leaves equal on ${leafEq}` : (ref ? ', steps ≡ the target of the same plan' : ', the first of its plan')}; steps ≤ ${maxK.toFixed(3)} × (tokens + 1) × rules`);
   }
 }
 

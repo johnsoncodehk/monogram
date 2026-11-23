@@ -5606,7 +5606,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
 
 // Callee-FIRST body guards: a Rust rd call runs its prologue before the dispatch that refuses (40-48
 // instructions per refused call, PR #184), more than the guard's test on each iteration.
-const FACTS: PortableFacts = { calleeFirstGuards: true };
+export const FACTS: PortableFacts = { calleeFirstGuards: true };
 
 export const rustTarget = defineTarget({
   name: 'rust',

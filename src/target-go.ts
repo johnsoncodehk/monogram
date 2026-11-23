@@ -3098,7 +3098,7 @@ ${[...ones, ...wides].join('\n')}
 
 // No callee-FIRST body guards: a Go rd call refused at its dispatch costs less than the guard's test
 // on every iteration (measured: starInC 35 -> 48 instructions per call, typescript.d.ts +0.46% reuse).
-const FACTS: PortableFacts = { calleeFirstGuards: false };
+export const FACTS: PortableFacts = { calleeFirstGuards: false };
 
 // The runner's batch-total mode (emit option `recovery`): NUL-separated inputs in, one line per
 // input out: [accepted, [[off, end, message, relOff, relEnd, relMessage], ...]] (relOff -1: none).
