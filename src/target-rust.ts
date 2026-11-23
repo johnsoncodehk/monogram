@@ -5762,12 +5762,12 @@ ${shared.recoveryFamily(ir, true).split('\n').map((l) => (l ? `    ${l}` : l)).j
     fn en_look(&mut self, id: isize) -> bool { ${sw('id', ir.lookaheads.map((_, i) => [i, `self.p.look_${i}()`]))} }
     fn en_rule(&mut self, r: isize) -> bool { ${sw('r', build.map((r) => [ruleIdOf(ar, r.name), `self.p.call_rule(Parser::parse_${r.name})`]))} }
     fn en_bp(&mut self, r: isize, bp: isize) -> bool {
-        let n = ${sw('r', build.filter((r) => r.kind === 'pratt').map((r) => [ruleIdOf(ar, r.name), `self.p.${r.name}_bp(bp as i64)`]))};
+        let n: Option<Spanned<B::H>> = ${sw('r', build.filter((r) => r.kind === 'pratt').map((r) => [ruleIdOf(ar, r.name), `self.p.${r.name}_bp(bp as i64)`]))};
         match n { Some(fr) => { if fr.present { self.p.scratch.push(fr.h); } true } None => false }
     }
     fn en_shared(&mut self, i: isize) -> bool { ${sw('i', ir.shared.flatMap((_, i): [number, string][] => (ir.forms.buildShared[i] ? [[i, `self.p.sub_${i}()`]] : [])))} }
     fn en_tpl(&mut self, hole: isize) -> bool {
-        let n = ${holes.length ? sw('hole', holes.map((h) => [ruleIdOf(ar, h), `self.p.match_template(Parser::parse_${h})`])) : '{ let _ = hole; panic!("recovery: no template") }'};
+        let n: Option<Spanned<B::H>> = ${holes.length ? sw('hole', holes.map((h) => [ruleIdOf(ar, h), `self.p.match_template(Parser::parse_${h})`])) : '{ let _ = hole; panic!("recovery: no template") }'};
         match n { Some(fr) => { if fr.present { self.p.scratch.push(fr.h); } true } None => false }
     }
     fn en_sh(&mut self) -> isize { self.p.scratch.len() as isize }
