@@ -134,6 +134,12 @@ cost model: [docs/TARGETS.md](docs/TARGETS.md). Total parsing: [docs/TOTAL-PARSI
 - **JavaScript**: against `tsc`'s JS-mode parser on every single-file case of the pinned
   TypeScript conformance corpus, 4428 of 4462 files agree; the record lists every other file
   ([docs/JS-CONFORMANCE.md](docs/JS-CONFORMANCE.md), gate `conformance/js-corpus`).
+- **JavaScript against test262**: JavaScript is checked against test262, the language's conformance
+  suite (24,677 syntax tests, gate `conformance/test262`, [docs/TEST262.md](docs/TEST262.md)). 98.7%
+  of the 20,200 valid tests parse. 30.2% of the 4,477 invalid ones are rejected; the rest are early
+  errors for a checker over the tree, not built yet (1,940), rules that need the script / module goal
+  or strict mode (436), and grammar bugs being fixed (747). The TypeScript grammar parses 99.9% of
+  the valid tests; the 10 it rejects, tsc rejects too.
 - **Where Monogram departs from `tsc` on purpose**, following the ECMAScript productions:
   [docs/CORRECTNESS.md](docs/CORRECTNESS.md).
 
