@@ -34,10 +34,11 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createParser } from '../src/gen-parser.ts';
 import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
-import { emitParser } from '../src/target.ts';
+import { emitParser, type EmitOptions, type Target } from '../src/target.ts';
 import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
@@ -47,6 +48,10 @@ import { goBuild, scratchDir } from './scratch.ts';
 import type { CstGrammar } from '../src/types.ts';
 import { CASES, type Case } from './portable-cases.ts';
 import { CHECK_TARGETS } from './check-targets.ts';
+import { cachedEmit } from './emit-cache.ts';
+import { ROOT as ROOT_DIR } from './gate-deps.ts';
+import { buildAll, buildKey, GO_VERSION, RUSTC_PATH, RUSTC_VERSION, type Build } from './build-cache.ts';
+export { buildAll, buildKey, type Build };
 
 export { CASES, type Case };
 
@@ -180,12 +185,33 @@ export type TsLib = {
   createDoc(src: string, opts: { validate?: boolean; builder?: unknown }): TsDoc;
   /** The library's lid_of, exported by the gate (TS_LID_OF) — the id a Doc gives a rebuilt token. */
   __lid_of(text: string): number;
+  /** tok-spans in process (TS_TOK_SPANS). */
+  __tok_spans(src: string): string | null;
   parseTotal(src: string, builder: unknown): TsTotal;
   cstBuilder: unknown;
 };
 // The gate's one addition to the imported ts library: its lid_of, which the runners' lid-of mode
 // exposes for go / rust.
 export const TS_LID_OF = '\nexport const __lid_of = lid_of;\n';
+// tok-spans in process: the same builder as the TS runner's `tok-spans` mode (reading the parser
+// cursor, pos / _bSave, from inside the module), returning what that mode prints, or null where it
+// fails; so the TypeScript target needs no node process per input.
+export const TS_TOK_SPANS = `
+export const __tok_spans = (src: string): string | null => {
+  type _Span = { name: string; s: number; e: number; kids: _Span[] };
+  let _root: _Span | null;
+  try {
+    _root = parseWith<_Span>(src, {
+      leaf: (tokenType) => (tokenType === '$punct' ? null : { name: tokenType, s: pos, e: pos + 1, kids: [] }),
+      node: (rule, children) => ({ name: rule, s: _bSave, e: pos, kids: children }),
+    });
+  } catch { return null; }
+  if (_root === null) return null;
+  let out = '';
+  for (const k of _root.kids) out += k.name + '\\t' + k.s + '\\t' + k.e + '\\n';
+  return out + 'total\\t0\\t' + pos + '\\n';
+};
+`;
 // A builder that keeps nothing but shifts, so a ts Doc given it takes the builder engine.
 export const TS_PROBE_BUILDER = { leaf: () => 1, node: () => 1, shift: (h: number) => h };
 export const errText = (e: unknown) => String((e as Error)?.message ?? e);
@@ -277,7 +303,8 @@ export type Runner = {
   edit: (json: string, fast: boolean) => EditOutcome;
   /** `edit` over many sessions: one outcome per payload, in order (Go / Rust: one process for all). */
   editBatch: (jsons: string[], fast: boolean) => EditOutcome[];
-  spans: { cmd: string; args: string[] };
+  /** tok-spans: the runner's process mode, or `run` in process (TypeScript). */
+  spans: { cmd: string; args: string[]; run?: (src: string) => string | null };
   /** Doc.edit offsets are UTF-8 bytes (go/rust), not UTF-16 units (ts). */
   utf8Edits: boolean;
   /** parseTotal over a whole corpus (the emit option `recovery`): its verdict and diagnostics, offsets in the target's units. */
@@ -407,91 +434,7 @@ export function primaryLexMsg(err?: string): string | null {
 // The grammars the refused-operand matrix is written for.
 export const ECMASCRIPT = new Set(['javascript', 'typescript']);
 
-// ── The build cache ──
-// One directory per entry under `<tmpdir>/monogram-build-cache/`, named by the sha-256 of the
-// build's inputs; an entry holds only its outputs and is complete once its `ok` marker exists
-// (an entry is built in a private directory and renamed into place, so a reader never sees half
-// of one). Lifetime: content-addressed entries are never stale, only unused, so every use touches
-// the marker, and the first cache access of a process removes the entries no process has used for
-// CACHE_TTL_H hours, then the least recently used ones while the cache is above CACHE_MAX_MB.
-// A lock (`<key>.lock`, a directory holding the owner's pid) belongs to a running process; one
-// whose owner is gone is taken over.
-const CACHE = join(tmpdir(), 'monogram-build-cache');
-const CACHE_TTL_H = 24, CACHE_MAX_MB = 3072;
-const alive = (pid: number): boolean => {
-  try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; }
-};
-const sleepMs = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-let cacheSwept = false;
-function sweepCache(): void {
-  cacheSwept = true;
-  mkdirSync(CACHE, { recursive: true });
-  const now = Date.now();
-  const entries: { dir: string; used: number; bytes: number }[] = [];
-  for (const n of readdirSync(CACHE)) {
-    const dir = join(CACHE, n);
-    if (n.endsWith('.lock') || n.includes('.tmp-')) {
-      const pid = Number((n.endsWith('.lock') ? safeRead(join(dir, 'pid')) : n.split('.tmp-')[1]) ?? NaN);
-      if (Number.isFinite(pid) && !alive(pid)) rmSync(dir, { recursive: true, force: true });
-      continue;
-    }
-    let used: number, bytes = 0;
-    try { used = statSync(join(dir, 'ok')).mtimeMs; for (const f of readdirSync(dir)) bytes += statSync(join(dir, f)).size; } catch { rmSync(dir, { recursive: true, force: true }); continue; }
-    entries.push({ dir, used, bytes });
-  }
-  entries.sort((a, b) => a.used - b.used);
-  let total = entries.reduce((s, e) => s + e.bytes, 0);
-  for (const e of entries) {
-    if (now - e.used < CACHE_TTL_H * 3600e3 && total < CACHE_MAX_MB * 1048576) break;
-    rmSync(e.dir, { recursive: true, force: true });
-    total -= e.bytes;
-  }
-}
-function safeRead(f: string): string | undefined { try { return readFileSync(f, 'utf8'); } catch { return undefined; } }
-
-/** A build: its inputs (hashed into the key) and the function that builds `outputs` into a directory. */
-export type Build = { key: string; build: (dir: string) => void };
-export const buildKey = (...parts: string[]): string => {
-  const h = createHash('sha256');
-  for (const p of parts) h.update(String(p.length)).update(':').update(p);
-  return h.digest('hex').slice(0, 40);
-};
-function tryBuild(b: Build): 'done' | 'busy' {
-  if (!cacheSwept) sweepCache();
-  const dir = join(CACHE, b.key);
-  if (existsSync(join(dir, 'ok'))) { const t = new Date(); utimesSync(join(dir, 'ok'), t, t); return 'done'; }
-  const lock = `${dir}.lock`;
-  try { mkdirSync(lock); } catch {
-    const pid = Number(safeRead(join(lock, 'pid')) ?? NaN);
-    // a lock without its pid file yet is being taken right now; one whose owner died is free
-    if (!Number.isFinite(pid) || alive(pid)) return 'busy';
-    rmSync(lock, { recursive: true, force: true });
-    return tryBuild(b);
-  }
-  writeFileSync(join(lock, 'pid'), String(process.pid));
-  try {
-    if (!existsSync(join(dir, 'ok'))) {
-      const tmp = `${dir}.tmp-${process.pid}`;
-      rmSync(tmp, { recursive: true, force: true });
-      mkdirSync(tmp, { recursive: true });
-      b.build(tmp);
-      writeFileSync(join(tmp, 'ok'), '');
-      renameSync(tmp, dir);
-    }
-  } finally { rmSync(lock, { recursive: true, force: true }); }
-  return 'done';
-}
-/** Builds (or finds) every entry, taking first the ones no other process is building; returns their directories. */
-export function buildAll(builds: Build[]): string[] {
-  let pending = builds.filter((b) => tryBuild(b) === 'busy');
-  while (pending.length) { sleepMs(250); pending = pending.filter((b) => tryBuild(b) === 'busy'); }
-  return builds.map((b) => join(CACHE, b.key));
-}
-
-const toolVersion = (cmd: string, args: string[]) => { try { return execFileSync(cmd, args, { encoding: 'utf8' }); } catch { return ''; } };
-const GO_VERSION = toolVersion('go', ['version']), RUSTC_VERSION = toolVersion('rustc', ['-vV']);
-// The Rust build reads the wrapper or toolchain `rustc` resolves to: its path is part of the key.
-const RUSTC_PATH = toolVersion('sh', ['-c', 'command -v rustc']);
+// The build cache (Build, buildKey, buildAll) and the toolchains' versions: test/build-cache.ts.
 
 // ── One grammar, ready to run: the oracle and a runner per target ──
 export type Prepared = {
@@ -535,22 +478,25 @@ export async function prepareAll(cases: Case[] = selectedCases()): Promise<Prepa
     // a SEPARATE runner.go in the same `package main` (its import rules forbid appending inline).
     // The ts library is also imported on its own; its CLI runner serves only tok-spans, which reads
     // the parser cursor from inside the module.
-    const tsLibSrc = emitParser(grammar, tsTarget, RECOVERY);
-    const emitted: Prepared['emitted'] = [{ label: 'typescript', def: () => emitParser(grammar, tsTarget), rec: tsLibSrc }];
+    // every emission through the emission cache (test/emit-cache.ts): keyed by the grammar's and the target's code
+    const gfile = relative(ROOT_DIR, fileURLToPath(new URL(c.path, import.meta.url)));
+    const emit = (t: Target, opts: EmitOptions = {}) => cachedEmit(gfile, t.name, opts, () => emitParser(grammar, t, opts), c.parts ?? null);
+    const tsLibSrc = emit(tsTarget, RECOVERY);
+    const emitted: Prepared['emitted'] = [{ label: 'typescript', def: () => emit(tsTarget), rec: tsLibSrc }];
     const tsFile = `${dir}/p.ts`;
     writeFileSync(tsFile, tsLibSrc + (tsTarget.emitRunner?.() ?? ''));
-    writeFileSync(`${dir}/lib.ts`, tsLibSrc + TS_LID_OF);
+    writeFileSync(`${dir}/lib.ts`, tsLibSrc + TS_LID_OF + TS_TOK_SPANS);
     const tsLib = await import(`${dir}/lib.ts`) as TsLib;
     const runners: Runner[] = [{
       label: 'typescript', run: (src) => tsRun(tsLib, src), batch: (srcs) => srcs.map((src) => tsRun(tsLib, src)), tokens: (srcs) => srcs.map((src) => tsTokens(tsLib, src)),
       doc: (srcs) => srcs.map((src) => tsDoc(tsLib, src, false) as Outcome), docBuilder: (srcs) => srcs.map((src) => tsDoc(tsLib, src, true).ok), lidOf: (texts) => texts.map((t) => tsLib.__lid_of(t)),
       edit: (json, fast) => tsEditSession(tsLib, json, fast), editBatch: (jsons, fast) => jsons.map((json) => tsEditSession(tsLib, json, fast)),
-      spans: { cmd: 'node', args: [tsFile, 'tok-spans'] }, utf8Edits: false, total: (srcs) => srcs.map((src) => tsTotal(tsLib, src)),
+      spans: { cmd: 'node', args: [tsFile, 'tok-spans'], run: (src) => tsLib.__tok_spans(src) }, utf8Edits: false, total: (srcs) => srcs.map((src) => tsTotal(tsLib, src)),
     }];
     const native: Pending['native'] = [];
     if (HAS_GO && !c.tsOnly && (!TARGETS_ONLY || TARGETS_ONLY.includes('go'))) {
-      const goSrc = emitParser(grammar, goTarget, RECOVERY);
-      emitted.push({ label: 'go', def: () => emitParser(grammar, goTarget), rec: goSrc });
+      const goSrc = emit(goTarget, RECOVERY);
+      emitted.push({ label: 'go', def: () => emit(goTarget), rec: goSrc });
       const files: Record<string, string> = { 'parser.go': asGoMain(goSrc), 'runner.go': goTarget.emitRunner?.(RECOVERY) ?? '', 'go.mod': 'module p\n\ngo 1.21\n' };
       native.push({ label: 'go', build: {
         key: buildKey('go', GO_VERSION, ...Object.entries(files).flat()),
@@ -562,8 +508,8 @@ export async function prepareAll(cases: Case[] = selectedCases()): Promise<Prepa
       } });
     }
     if (HAS_RUST && !c.tsOnly && (!TARGETS_ONLY || TARGETS_ONLY.includes('rust'))) {
-      const rsSrc = emitParser(grammar, rustTarget, RECOVERY);
-      emitted.push({ label: 'rust', def: () => emitParser(grammar, rustTarget), rec: rsSrc });
+      const rsSrc = emit(rustTarget, RECOVERY);
+      emitted.push({ label: 'rust', def: () => emit(rustTarget), rec: rsSrc });
       const main = rsSrc + (rustTarget.emitRunner?.(RECOVERY) ?? '');
       native.push({ label: 'rust', build: {
         key: buildKey('rust', RUSTC_VERSION, RUSTC_PATH, main),

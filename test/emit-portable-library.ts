@@ -26,7 +26,7 @@ import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
 import { goldenStream } from './golden-lexer.ts';
-import { goBuild, scratchDir } from './scratch.ts';
+import { scratchDir } from './scratch.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean, detail = '') => {
@@ -201,8 +201,8 @@ func main() {
 `);
   try {
     let race = true;
-    try { goBuild(['-race', '-o', 'consumer', '.'], { cwd: gdir }); }
-    catch { race = false; goBuild(['-o', 'consumer', '.'], { cwd: gdir }); }
+    try { cachedGoBuild(['-race', '-o', 'consumer', '.'], { cwd: gdir }); }
+    catch { race = false; cachedGoBuild(['-o', 'consumer', '.'], { cwd: gdir }); }
     const out = JSON.parse(execFileSync(join(gdir, 'consumer'), { encoding: 'utf8' }));
     const lower = (ts: { Kind: string; Text: string; Off: number; End: number; Nl: boolean }[]) =>
       ts.map((t) => ({ kind: t.Kind, text: t.Text, off: t.Off, end: t.End, nl: t.Nl }));
@@ -227,6 +227,7 @@ func main() {
   writeFileSync(join(gdir, 'reenter', 'main.go'), `package main
 
 import (
+import { cachedGoBuild, cachedRustc } from './build-cache.ts';
 \t"encoding/json"
 \t"os"
 \t"reflect"
@@ -286,8 +287,8 @@ func main() {
 `);
   try {
     let race = true;
-    try { goBuild(['-race', '-o', 'reenter-consumer', './reenter'], { cwd: gdir }); }
-    catch { race = false; goBuild(['-o', 'reenter-consumer', './reenter'], { cwd: gdir }); }
+    try { cachedGoBuild(['-race', '-o', 'reenter-consumer', './reenter'], { cwd: gdir }); }
+    catch { race = false; cachedGoBuild(['-o', 'reenter-consumer', './reenter'], { cwd: gdir }); }
     const out = JSON.parse(execFileSync(join(gdir, 'reenter-consumer'), { encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] }));
     check(`go: Tokenize / ParseWith / NewDoc+Edit from inside a Builder callback ≡ standalone (race detector ${race ? 'on' : 'unavailable'})`,
       out.outer === true && out.docOk === true && out.nParse > 0 && out.nEdit > 0 && out.bad === 0, json(out));
@@ -329,8 +330,8 @@ fn main() {
 }
 `);
   try {
-    execFileSync('rustc', ['-A', 'warnings', '--crate-type', 'lib', '--crate-name', 'parser', 'parser.rs'], { cwd: rdir, stdio: 'pipe' });
-    execFileSync('rustc', ['--edition', '2021', 'main.rs', '--extern', 'parser=libparser.rlib', '-o', 'consumer'], { cwd: rdir, stdio: 'pipe' });
+    cachedRustc(['-A', 'warnings', '--crate-type', 'lib', '--crate-name', 'parser', 'parser.rs'], { cwd: rdir, stdio: 'pipe' });
+    cachedRustc(['--edition', '2021', 'main.rs', '--extern', 'parser=libparser.rlib', '-o', 'consumer'], { cwd: rdir, stdio: 'pipe' });
     const out = JSON.parse(execFileSync(join(rdir, 'consumer'), { encoding: 'utf8' }));
     check('rust: external crate links against parser::tokenize / parser::Doc', true);
     check('rust: tokenize ≡ lexer golden', json(out.tokensA) === json(ref(A)));
