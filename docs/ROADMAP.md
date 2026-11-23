@@ -57,7 +57,7 @@ two, and the copies drift.
 
 Who depends on `jsTarget` in this repository: the gates `recovery`, `multi-doc`,
 `incremental-verify`, `incremental-grammars`, `exhaustive-edits`, `diagnostic-labels`,
-`emit-parser-verify`, `emit-reject-messages`, `emit-tsc-gate`, `emit-tokenize`,
+`emit-parser-verify`, `emit-reject-messages`,
 `emit-reentrancy`, `emit-standalone`, `cst-match-totality`, `template-holes`,
 `nullable-rules`, `conformance/html` (engine parity), the JS rows of `alloc-work`, and the
 benches `test/head-to-head.ts` and `test/recovery-conformance.ts`. The project listed under
