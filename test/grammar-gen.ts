@@ -35,6 +35,7 @@
 import type { CstGrammar, RuleExpr, RuleDecl, TokenDecl, TokenPattern, TokenCharClassItem } from '../src/types.ts';
 import { tokenPatternStartsWithDecimal, tokenPatternHasStartAnchor, tokenPatternBlockDelimiters } from '../src/token-pattern.ts';
 import { createParser } from '../src/gen-parser.ts';
+import { findEntryRule } from '../src/grammar-analysis.ts';
 
 // Max emissions in one derivation. A deep tree of 2-rep quantifiers grows the list multiplicatively;
 // copying huge lists (not the call count) is what makes a naive enumerator hang — cap it.
@@ -1202,7 +1203,7 @@ export function generateInputs(grammar: CstGrammar, opts: GenOptions = {}): GenI
 
   const mode: MatOptions['mode'] = grammar.indent ? 'indent' : grammar.markup ? 'markup' : 'token-stream';
   const matOpts: MatOptions = { mode, indentStep: 2 };
-  const entry = grammar.rules[grammar.rules.length - 1];
+  const entry = grammar.rules.find((r) => r.name === findEntryRule(grammar))!;
 
   // NO wall-clock budget: every strategy below is bounded by DETERMINISTIC work caps
   // (enumTop's budgetCalls, coverRounds, maxInputs, per-token sample counts), and the

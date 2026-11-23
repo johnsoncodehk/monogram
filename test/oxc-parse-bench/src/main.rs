@@ -6,6 +6,13 @@ use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 
+// The source type the input's extension names, as the monogram side picks its grammar
+// (test/bench-rust-profile/run.sh grammar_of): .tsx -> TSX (typescriptreact), .jsx -> JSX
+// (javascriptreact), anything else -> TypeScript (the typescript grammar also reads the .js inputs).
+fn source_type_of(path: &str) -> SourceType {
+    if path.ends_with(".tsx") { SourceType::tsx() } else if path.ends_with(".jsx") { SourceType::jsx() } else { SourceType::ts() }
+}
+
 // BENCH_MODE=reuse: one Allocator for the warm-up and every timed iteration, reset() before each
 // parse (oxc_allocator 0.126: rewinds its last, biggest chunk and frees the others). Default fresh:
 // a new Allocator per iteration, dropped at its end.
@@ -15,12 +22,12 @@ fn bench_one(path: &str, src: &str) {
     let mut once = |kept: &mut Allocator| {
         if reuse {
             kept.reset();
-            let ret = Parser::new(kept, src, SourceType::ts()).parse();
+            let ret = Parser::new(kept, src, source_type_of(path)).parse();
             black_box(ret.program);
             black_box(ret.errors);
         } else {
             let allocator = Allocator::default();
-            let ret = Parser::new(&allocator, src, SourceType::ts()).parse();
+            let ret = Parser::new(&allocator, src, source_type_of(path)).parse();
             black_box(ret.program);
             black_box(ret.errors);
         }
