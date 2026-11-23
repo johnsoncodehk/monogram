@@ -7,7 +7,7 @@
 //
 //   node test/syntax-agnostic.ts
 import { defineTarget } from '../src/define-target.ts';
-import { portableIR } from '../src/emit-portable.ts';
+import { buildLexIdPlan, hasRebind, portableIR } from '../src/emit-portable.ts';
 import { relexFamily, relexFamilyFns, relexMode } from '../src/relex-family.ts';
 import { lexScanFamily } from '../src/lex-family.ts';
 import { reuseFamilyFns } from '../src/reuse-family.ts';
@@ -201,7 +201,7 @@ const fail = (msg: string) => { failures++; console.log(`  ✗ ${msg}`); };
 for (const path of FIXTURES) {
   const grammar = (await import(path)).default;
   const lex = lexScanFamily(portableIR(grammar));
-  const fns = [...lex.fns, ...relexFamilyFns(relexMode(portableIR(grammar))), ...reuseFamilyFns(portableIR(grammar)), ...recoveryFamilyFns(false), UNPACK_INTS];
+  const fns = [...lex.fns, ...relexFamilyFns(relexMode(portableIR(grammar))), ...reuseFamilyFns(portableIR(grammar)), ...recoveryFamilyFns(hasRebind(portableIR(grammar)), buildLexIdPlan(portableIR(grammar))).filter((f) => f.name !== 'rbBracket'), UNPACK_INTS];
   const out = target.emitParser(grammar);
   const code = out.split('\n').filter((l) => !/^\s*;;/.test(l)).join('\n').replace(/"(?:[^"\\]|\\.)*"/g, '""');
   const bad = code.match(C_SURFACE);
