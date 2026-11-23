@@ -95,6 +95,31 @@ only them (the TypeScript target, their reference, always runs). A test-only or 
 seconds; a grammar or generator change runs most of the inner tier (see the commit message of the
 landing that introduced it for measured times).
 
+### The tiers: `--quick`, `--changed`, CI
+
+Three tiers, each a subset of the next, all selected by the same derived inputs:
+
+| tier | command | what runs | when |
+|---|---|---|---|
+| quick | `node test/check.ts --quick` | the affected gates listed in `QUICK_GATES` (`test/check.ts`), each with `CHECK_QUICK=1`: its declared sample | while editing: after every change |
+| inner | `node test/check.ts --changed` | every affected gate not of tier `ci`, whole | before pushing a `land/**` branch |
+| CI | `npm run check` (every push of `land/**`, master) | every gate, the `ci` tier included, whole; plus the other jobs (tree-sitter, engine parity over the full corpus) | always |
+
+The quick tier's samples (`QUICK` in `test/check-targets.ts`): the portable-targets classes run
+three grammars (`calc`, `templatejs`, and `javascript` on the TypeScript target only:
+`QUICK_GRAMMARS` in `test/portable-harness.ts`); `emit-portable-library` runs its source checks of
+every target's emitted library (the exported surface, package-level state, imports) and the
+TypeScript target's runtime checks, not the Go / Rust build and run. A gate in `QUICK_GATES` without
+a sample runs whole (it costs about a second). `--quick` prints the affected gates it leaves out.
+
+What `--quick` does NOT cover (each of these has let a real failure through it; `--changed` or CI
+catches them): a Go / Rust parser of a real grammar (the native targets run only on the small
+grammars), the Go / Rust library build and run, every `ci`-tier gate (the parity corpus, edits-1 /
+edits-2, recovery, wide, test262, look-extent, tm-mutation, ...), the native work and allocation
+gates (portable-work, lexer-work, lexer-reservation, builder-reuse, emit-portable-split, alloc-work),
+jsTarget's standalone type check (emit-standalone), and the generated artifacts' drift (CI runs
+`npm run gen` and diffs).
+
 ### Before adding a gate
 
 Name the real failure it would catch that no existing gate catches. Prefer widening the inputs of an
