@@ -1130,6 +1130,27 @@ const CASES: Case[] = [
     reject: ['component C(a) { <p>@if (a) {y</p>; }', 'component C(a) { <p>@if (a) { </q> y }</p>; }', 'component C(a) { <p>a } b</p>; }',
       'component C(a) { <p>@if (<b/>) {y}</p>; }'],
   },
+  {
+    // directives without text tokens: an opener's or a continuation's read through a comment left
+    // open in its trivia is the only record of that read (with text tokens the comment is also a
+    // text token's failed attempt, recorded as its own)
+    grammar: 'textdialect-dir', path: './fixtures/textdialect.ts', parts: { textTokens: false, directives: true },
+    accept: [
+      'component C(a) { <p>@if (a) {y}</p>; <p>@if x</p>; <p>@iffy (a)</p>; <p>a@if (a) {y}</p>; <p>x y@if (a) {z}</p>; }',
+      'component C(a) { <p>@for await (i of a) {y}</p>; <p>@for awaits (i)</p>; <p>@{ const q = 1; <b/> }</p>; }',
+      'component C(a) { <p>@if /* c */ (a) {y}</p>; <p>@if // c\n (a) {y}</p>; <p>a @else {b}</p>; }',
+      'component C(a) { <p>@if ({a}.a) { y }</p>; <p>@if ([{a}][0]) { y }</p>; }',
+      'component C(a) { <p>@if (a) {y} @else {n}</p>; <p>@if (a) {y} @else if (a) {m} @else {n}</p>; <p>@if (a) {y} @else x</p>; }',
+      'component C(a) { <p>@if (a) {y} @elsewhere {n}</p>; <p>@if (a) {y} t @else {n}</p>; <p>@else {n}</p>; }',
+      'component C(a) { <p>@for (i of a) {<i>{i}</i>} @empty {none} @try {t} @pending {p} @catch (e) {c} @try {t} @catch (e) {c}</p>; }',
+      'component C(a) { <p>@if (a) { <b>@for (i of a) { {i} // n\n }</b> } @else { /* c */ x }</p>; }',
+      'component C(a) { <p>@{ const q = 1; <b/> } x</p>; <p>x @if (a) { yes <b/> } @else if (a) {m} @else { no } z</p>; }',
+      'component C(a) { <p>@if (a) { <style>.a{}</style><style>{a}</style> } 1 < 2 /* c */ a // d\n</p>; }',
+      'component C(a) { <p>@if (a) {y} @else /* {n}</p>; }',
+    ],
+    reject: ['component C(a) { <p>@if (a) {y</p>; }', 'component C(a) { <p>@if (a) { </q> y }</p>; }', 'component C(a) { <p>a } b</p>; }',
+      'component C(a) { <p>@if (<b/>) {y}</p>; }'],
+  },
 ];
 // The element-region grammars' cases may be run alone: PORTABLE_GRAMMARS=a,b (a development aid;
 // the gate runs every case).
@@ -1499,6 +1520,10 @@ const FRAME_EDIT_DOCS: Record<string, (string | { doc: string; ins: string[] })[
   // directives: edits that make and break an opener (`@if (` / `@iffy`), a head's parens and braces,
   // a body's closer, a continuation; and an opener / a continuation made by closing a comment
   // after the element (their tests read the comment to the end of the file)
+  'textdialect-dir': [
+    { doc: 'component C(a) { <p>@if /* (a) {y}</p>; const z = 1; }', ins: ['*/ (a) {y}</p>; ', '*/'] },
+    { doc: 'component C(a) { <p>@if (a) {y} @else /* {n}</p>; const z = 1; }', ins: ['*/ {n}</p>; ', '*/'] },
+  ],
   textdialect: [
     { doc: 'component C(a) {\n  <p>x @if (a) { y <b/> } @else if ({a}.a) {m} @else { n } z@for await (i of a) {{i}} @empty {e}</p>;\n}', ins: ['{', '}', '<', '/', ';', 'x', ' ', '\n', '@', '(', ')', 'e', 'f'] },
     { doc: 'component C(a) { <p>@if /* (a) {y}</p>; const z = 1; }', ins: ['*/ (a) {y}</p>; ', '*/'] },
