@@ -196,7 +196,21 @@ every TS / JS dialect parses its corpora, synthetic and real code (TypeScript's 
 pinned `TS_REPO_SHA`, test262's syntax tests at `test/test262.sha`), against the interpreter's
 verdicts, with every disagreement and its class pinned in
 [`test/treesitter-record.txt`](../test/treesitter-record.txt)
-([`test/treesitter-verdicts.ts`](../test/treesitter-verdicts.ts); any movement fails); and the job summary
+([`test/treesitter-verdicts.ts`](../test/treesitter-verdicts.ts); any movement fails). On the real code
+the trees are compared too: in every file both parse without ERROR, tree-sitter's expression spans
+against the interpreter's, recorded per corpus as totals and as the differing files by the class of
+their first difference (`spans` entries: a wrong tree with no ERROR, which no verdict sees). On
+`2896c53`: TypeScript `src` 314 of 691 files span-equal (1,346 interpreter spans missing, 7,582
+extra), test262 15,780 of 22,580 (46 missing, 8,189 extra); the first difference is a declaration
+built as an expression statement in 363 and 6,651 files, a block built as an object literal in 9 and
+85, an arrow body built as one in 2 and 9. Both come from the zero-width line-end token
+(`asi()`'s `}` / end-of-input / line-break arms): in the state after `function f() {}` it is valid for
+the expression-statement reading, the scanner returns it, and with it as the lookahead the
+declaration has no action, so the choice is made by the lexer and GLR never sees two readings.
+Negative dynamic precedence on every alternative holding a dropped lookahead was measured against
+this (CI, 2026-11-23) and dropped: it moved TypeScript `src` from 308 to 310 span-equal files, cost
++7.7% states (9,993 to 10,765) and +1.2 MB of `parser.c`, and built four operator pairs wrongly
+(`a as T | d`: the union arm's dropped `not('|')` lost to bitwise `|`). And the job summary
 records, per grammar, `tree-sitter generate` wall and CPU time, peak memory and the
 `parser.c` state and symbol counts (report-only baselines for changes to the tree-sitter
 generator).
