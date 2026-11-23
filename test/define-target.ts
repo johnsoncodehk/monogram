@@ -204,11 +204,16 @@ const sexpr: Lowering = {
   },
 };
 
+// The IR of each fixture is built once (portableIR is a pure function of the grammar): the checks
+// below and the probe target's printing read the same one.
+const irs = new Map<object, ReturnType<typeof portableIR>>();
+const irOf = (g: Parameters<typeof portableIR>[0]) => { let ir = irs.get(g); if (!ir) irs.set(g, (ir = portableIR(g))); return ir; };
+
 const target = defineParserTarget({
   name: 'sexpr-syntax-probe',
   ext: 'scm',
   lowering: sexpr,
-  emitParser: (grammar, shared) => { const ir = portableIR(grammar); return shared.lexScan(ir) + '\n' + shared.relexFamily(ir) + '\n' + shared.reuseFamily(ir) + '\n' + shared.recoveryFamily(ir); },
+  emitParser: (grammar, shared) => { const ir = irOf(grammar); return shared.lexScan(ir) + '\n' + shared.relexFamily(ir) + '\n' + shared.reuseFamily(ir) + '\n' + shared.recoveryFamily(ir); },
 });
 
 // IR census: what the printed forms must account for.
@@ -291,8 +296,9 @@ const FIXTURES = ['./fixtures/calc.ts', './fixtures/envspec.ts', './fixtures/reg
 
 for (const path of FIXTURES) {
   const grammar = (await import(path)).default;
-  const lex = lexScanFamily(portableIR(grammar));
-  const fns = [...lex.fns, ...relexFamilyFns(relexMode(portableIR(grammar))), ...reuseFamilyFns(portableIR(grammar)), ...recoveryFamilyFns(), UNPACK_INTS];
+  const ir = irOf(grammar);
+  const lex = lexScanFamily(ir);
+  const fns = [...lex.fns, ...relexFamilyFns(relexMode(ir)), ...reuseFamilyFns(ir), ...recoveryFamilyFns(), UNPACK_INTS];
   const out = target.emitParser(grammar);
   const code = out.split('\n').filter((l) => !/^\s*;;/.test(l)).join('\n').replace(/"(?:[^"\\]|\\.)*"/g, '""');
   const bad = code.match(C_SURFACE);
@@ -300,7 +306,7 @@ for (const path of FIXTURES) {
   let heads: Map<string, number>;
   try { heads = read(out); } catch (e) { fail(`${path}: ${(e as Error).message}`); continue; }
   const want = census(fns);
-  want.set('define-char-set', lex.sets.length + relexFamily(relexMode(portableIR(grammar))).sets.length);
+  want.set('define-char-set', lex.sets.length + relexFamily(relexMode(ir)).sets.length);
   want.set('define-table', 1);
   want.set('define-runtime', (want.has('run-end') ? 1 : 0) + (want.has('find') ? 1 : 0) + lex.stopSets.length);
   for (const [k, n] of want) {
