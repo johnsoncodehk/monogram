@@ -439,11 +439,11 @@ const _LID_EQ: u16 = ${lidOf(ids, '=')};
 ${sig ? `${rsBoolArr('_EL_THEN', lidFlagTable(ids, sig.then))}
 ` : ''}`;
   const rxFields = rx ? 'base: usize, prev0: (bool, u16, u16), bp0: (bool, u16), kid1: u16, lid1: u16, lid2: u16, paren_head: Vec<bool>, last_close: bool, last_bang: bool, ' : '';
-  // The speculation's state the token loop reads (the closer test in emit, the entry test) is the
-  // scan's; the rest is its own Spec, so the cold calls take that and never the scan itself: a
-  // scan passed by reference to a call that is not inlined keeps every field of it in memory
-  // (Callgrind: about 20 instructions per token of loads and stores, attributed to no line).
-  const specFields = sig ? 'spec_tok: usize, spec_on: bool, spec_base: usize, spec_closed_at: usize, spec_closed: bool, ' : '';
+  // Whether a signature is undecided is the scan's (the entry and the loop head read it); the rest
+  // is its own Spec, so the cold calls take that and never the scan itself: a scan passed by
+  // reference to a call that is not inlined keeps every field of it in memory (Callgrind: about 20
+  // instructions per token of loads and stores, attributed to no line).
+  const specFields = sig ? 'spec_on: bool, ' : '';
   const inl = '    #[inline(always)]\n';
   // A template hole and an element hole count the same braces when their lids agree (JSX: `{` `}`).
   const oneBraces = !!tpl && lidOf(ids, tpl.braceOpen) === lidOf(ids, el.holeOpen) && lidOf(ids, tpl.interpClose) === lidOf(ids, el.holeClose);
@@ -461,8 +461,7 @@ ${inl}    fn prev2(&self) -> (bool, u16) {
     }
 ${inl}    fn prev_is_value(&self) -> bool {
         // in a tag nothing is a regex; the token that ended an element is a value
-        if self.hot { if let Some(&f) = self.template_stack.last() { if f & 3 == 2 && f & 12 != 0 { return true; } } }
-        if self.acc.len() == self.el_end_at { return true; }
+        if self.acc.len() as isize <= self.value_to { return true; }
         let (has_prev, prev_kid, prev_lid) = self.prev();
         if !has_prev { return false; }
         if ${rsFlag('_PAV', 'prev_lid')} { return self.last_bang; }
@@ -472,49 +471,61 @@ ${inl}    fn prev_is_value(&self) -> bool {
     }
 ` : ''}${inl}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
 ${rx ? `        if lid == _LID_LPAREN { let (has_prev2, bp_lid) = self.prev2(); let (_, prev_kid, prev_lid) = self.prev(); let is_member = has_prev2 && ${rsFlag('_MEM', 'bp_lid')}; self.paren_head.push(!is_member && prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'prev_lid')}); }
-        else if lid == _LID_RPAREN { self.last_close = self.paren_head.pop().unwrap_or(false);${sig ? ' if self.spec_on && self.acc.len() > self.spec_tok + 3 && self.paren_head.len() == self.spec_base { self.spec_closed = true; self.spec_closed_at = self.acc.len(); }' : ''} }
+        else if lid == _LID_RPAREN { self.last_close = self.paren_head.pop().unwrap_or(false); }
         if ${p.pavHot} { self.last_bang = self.prev_is_value(); }
 ` : ''}        if let Some(&f) = self.template_stack.last() { ${braces} }
         self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;${rx ? ' self.lid2 = self.lid1; self.kid1 = kid; self.lid1 = lid;' : ''}
     }
     /// The frame stack's top changed: whether the loop head has work (an element or raw frame on
-    /// top${sig ? ', or a signature undecided' : ''}).
-${inl}    fn refresh(&mut self) { self.hot = ${sig ? 'self.spec_on || ' : ''}matches!(self.template_stack.last(), Some(&f) if f & 2 != 0); }
+    /// top${sig ? ', or a signature undecided' : ''}), and to which token count the previous token is a
+    /// value (in a tag: every; else the token that ended an element, if it is the last).
+${inl}    fn refresh(&mut self) {
+        let top = self.template_stack.last().copied().unwrap_or(0);
+        self.hot = ${sig ? 'self.spec_on || ' : ''}top & 2 != 0;
+        self.value_to = if top & 3 == 2 && top & 12 != 0 { isize::MAX } else { self.el_end_at };
+    }
 ${sig ? `${inl}    fn spec_begin(&mut self, sp: &mut Spec, pos: usize) {
         sp.save((pos, self.pending_nl, self.kid1, self.lid1, self.lid2, self.el_end_at, self.tag_angle, self.last_close, self.last_bang), &self.paren_head[..], &self.template_stack[..]);
-        self.spec_tok = self.acc.len(); self.spec_on = true; self.spec_base = self.paren_head.len(); self.spec_closed = false; self.hot = true;
+        sp.tok = self.acc.len(); sp.seen = sp.tok; sp.base = self.paren_head.len(); self.spec_on = true; self.hot = true;
     }
-    // The token after the signature group's closer decides it (a closer that leaves the bracket
-    // stack at its base, even by popping an empty one, closes it again): whether it is decided.
-${inl}    fn spec_verdict(&mut self, sp: &mut Spec) -> bool {
-        if self.spec_closed && self.acc.len() > self.spec_closed_at + 1 { self.spec_closed = false; sp.decide(self.acc[self.spec_closed_at + 1]); }
+    // Each token the speculation lexes, read at the next loop head (a round lexes one token at
+    // most): whether the signature is decided.
+${inl}    fn spec_step(&mut self, sp: &mut Spec) -> bool {
+        let n = self.acc.len();
+        if n > sp.seen { sp.seen = n; sp.next(self.acc[n - 1], n - 1, self.paren_head.len()); }
         sp.done
     }
     // The rewind to the signature's tagOpen: its position.
 ${inl}    fn spec_rewind(&mut self, sp: &mut Spec, src: &str, n: usize, failed: bool) -> usize {
         let (la, until) = sp.verdict(src, n, failed, self.la_end, self.spec_until); self.la_end = la; self.spec_until = until;
-        self.acc.truncate(self.spec_tok);
+        self.acc.truncate(sp.tok);
         let (pos, nl, kid1, lid1, lid2, ended, angle, close, bang) = sp.sv;
         self.pending_nl = nl; self.kid1 = kid1; self.lid1 = lid1; self.lid2 = lid2; self.el_end_at = ended; self.tag_angle = angle; self.last_close = close; self.last_bang = bang;
         self.paren_head.clear(); self.paren_head.extend_from_slice(&sp.sv_paren);
         self.template_stack.clear(); self.template_stack.extend_from_slice(&sp.sv_stack);
-        self.spec_on = false; self.spec_closed = false;
+        self.spec_on = false;
         self.refresh();
         pos
     }
 ` : ''}`;
   // The signature's saved state (the scan's before its tagOpen), its decision, and the decision
   // kept for the tagOpen it rewinds to.
-  const spec = sig ? `struct Spec { done: bool, then: bool, off: usize, end: usize, at: usize, has_at: bool, keep: bool, sv: (usize, bool, u16, u16, u16, usize, isize, bool, bool), sv_paren: Vec<bool>, sv_stack: Vec<i64> }
+  const spec = sig ? `struct Spec { tok: usize, seen: usize, base: usize, closed: bool, closed_at: usize, done: bool, then: bool, off: usize, end: usize, at: usize, has_at: bool, keep: bool, sv: (usize, bool, u16, u16, u16, isize, isize, bool, bool), sv_paren: Vec<bool>, sv_stack: Vec<i64> }
 impl Spec {
     #[cold] #[inline(never)]
-    fn save(&mut self, sv: (usize, bool, u16, u16, u16, usize, isize, bool, bool), paren: &[bool], stack: &[i64]) {
-        self.sv = sv; self.done = false;
+    fn save(&mut self, sv: (usize, bool, u16, u16, u16, isize, isize, bool, bool), paren: &[bool], stack: &[i64]) {
+        self.sv = sv; self.done = false; self.closed = false;
         self.sv_paren.clear(); self.sv_paren.extend_from_slice(paren);
         self.sv_stack.clear(); self.sv_stack.extend_from_slice(stack);
     }
+    // The token t at index i, the bracket stack depth after it: a closer that leaves the stack at
+    // the signature's base (even by popping an empty one) closes the group, again if it was closed;
+    // the token after the closer decides.
     #[cold] #[inline(never)]
-    fn decide(&mut self, t: Tok) { self.done = true; self.then = t.kid == 0 && ${rsFlag('_EL_THEN', 't.lid')}; self.off = t.off as usize; self.end = t.end as usize; }
+    fn next(&mut self, t: Tok, i: usize, depth: usize) {
+        if t.lid == _LID_RPAREN && i > self.tok + 3 && depth == self.base { self.closed = true; self.closed_at = i; }
+        else if self.closed && i > self.closed_at { self.closed = false; self.done = true; self.then = t.kid == 0 && ${rsFlag('_EL_THEN', 't.lid')}; self.off = t.off as usize; self.end = t.end as usize; }
+    }
     // What the verdict leaves: the look end (the signature's read past its deciding token) and the
     // position below which no tagOpen is tried again; the decision is kept for the tagOpen.
     #[cold] #[inline(never)]
@@ -526,11 +537,11 @@ impl Spec {
     }
 }
 ` : '';
-  const struct = `struct ElScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, ${rxFields}template_stack: Vec<i64>, hot: bool, el_end_at: usize, tag_angle: isize, la_end: isize, spec_until: isize, ${raw ? 'tag_at: Vec<i64>, ' : ''}${specFields}}
+  const struct = `struct ElScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, ${rxFields}template_stack: Vec<i64>, hot: bool, el_end_at: isize, value_to: isize, tag_angle: isize, la_end: isize, spec_until: isize, ${raw ? 'tag_at: Vec<i64>, ' : ''}${specFields}}
 impl<'a> ElScan<'a> {
 ${methods}}
 ${spec}`;
-  const enter = `            st.template_stack.push(6); st.hot = true; st.emit(pos, pos + ${L}, 0, _LID_EL_OPEN);${raw ? ' st.tag_at.push(st.acc.len() as i64 - 1);' : ''} st.tag_angle = 0; pos += ${L}; continue;\n`;
+  const enter = `            st.template_stack.push(6); st.refresh(); st.emit(pos, pos + ${L}, 0, _LID_EL_OPEN);${raw ? ' st.tag_at.push(st.acc.len() as i64 - 1);' : ''} st.tag_angle = 0; pos += ${L}; continue;\n`;
   const at = (lit: string) => startByteEq('pos', lit);
   const entry = !operand ? `        if ${at(el.tagOpen)} {\n${enter}        }\n`
     : !(el.head || sig) ? `        if ${at(el.tagOpen)} && !st.prev_is_value() {\n${enter}        }\n`
@@ -560,7 +571,7 @@ ${sig ? '            if op == 2 { st.spec_begin(&mut sp, pos); limit = 0; }\n' :
                 st.emit(pos, fe as usize, fk as u16, fl as u16);
 ${raw ? `                // each element frame's current tag: the index of its tagOpen token (the name is the next)
                 if fl as u16 == _LID_EL_OPEN { let at = st.acc.len() as i64 - 1; if fp == 6 { st.tag_at.push(at); } else if (fr >> 2) & 3 == 0 { *st.tag_at.last_mut().unwrap() = at; } }
-` : ''}                if ft < 0 { st.template_stack.pop();${raw ? ' st.tag_at.pop();' : ''} st.el_end_at = st.acc.len(); } else { *st.template_stack.last_mut().unwrap() = ft as i64; }
+` : ''}                if ft < 0 { st.template_stack.pop();${raw ? ' st.tag_at.pop();' : ''} st.el_end_at = st.acc.len() as isize; } else { *st.template_stack.last_mut().unwrap() = ft as i64; }
                 if fp != 0 { st.template_stack.push(fp as i64); }
 ${raw ? `                // an open tag ended: a raw-text name gives its body to a raw frame (kind 3), lexed next
                 if fl as u16 == _LID_EL_CLOSE && (fr >> 2) & 3 == 1 && st.tag_angle == 0 {
@@ -579,7 +590,7 @@ ${raw ? `        if st.template_stack.last() == Some(&3) {
   // Code outside element frames pays one test per round (\`hot\`, kept by every change of the
   // frame stack's top${sig ? ' and of the speculation' : ''}); the loop condition is the plain lexer's.
   const loopBody = `        if st.hot {
-${sig ? '        if st.spec_on && st.spec_verdict(&mut sp) { pos = st.spec_rewind(&mut sp, src, n, false); limit = limit0; continue; }\n' : ''}${frameStep}        }
+${sig ? '        if st.spec_on && st.spec_step(&mut sp) { pos = st.spec_rewind(&mut sp, src, n, false); limit = limit0; continue; }\n' : ''}${frameStep}        }
         let c = b[pos] as u32;
 ${pre}${cascade}
 ${p.uniIdentOrPanic}`;
@@ -591,14 +602,14 @@ ${p.uniIdentOrPanic}`;
 ${loopBody}
     }
     if !st.spec_on { break; }
-    st.spec_verdict(&mut sp); pos = st.spec_rewind(&mut sp, src, n, err.is_some()); err = None; limit = limit0;
+    st.spec_step(&mut sp); pos = st.spec_rewind(&mut sp, src, n, err.is_some()); err = None; limit = limit0;
     }` : `    while pos < n && (limit == 0 || st.acc.len() - base < limit) {
 ${loopBody}
     }`;
   const rxParams = rx ? 'prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool, ' : '';
   const rxTy = rx ? 'u16, u16, u16, bool, bool, Vec<bool>, bool, bool, ' : '';
   const rxInit = rx ? 'base, prev0: (has_prev, prev_kid, prev_lid), bp0: (has_prev2, bp_lid), kid1: prev_kid, lid1: prev_lid, lid2: bp_lid, paren_head, last_close, last_bang, ' : '';
-  const specInit = sig ? 'spec_tok: 0, spec_on: false, spec_base: 0, spec_closed_at: 0, spec_closed: false, ' : '';
+  const specInit = sig ? 'spec_on: false, ' : '';
   const rxOut = rx ? 'let ((has_prev, prev_kid, prev_lid), (has_prev2, bp_lid)) = (st.prev(), st.prev2());\n    ' : '';
   const rxRet = rx ? 'prev_lid, prev_kid, bp_lid, has_prev, has_prev2, st.paren_head, st.last_close, st.last_bang, ' : '';
   return `${p.head}${consts}${p.lexStacks}${p.scans}${p.tplFn}${struct}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, pending_nl: bool, ${rxParams}template_stack: Vec<i64>, el_ended: bool, tag_angle: isize, la_end: isize, spec_until: isize, ${raw ? 'tag_at: Vec<i64>, ' : ''}acc: &mut Vec<Tok>, ${sig ? 'mut ' : ''}limit: usize) -> (usize, bool, ${rxTy}Vec<i64>, bool, isize, isize, isize${raw ? ', Vec<i64>' : ''}, Option<LexErr>) {
@@ -606,11 +617,11 @@ ${loopBody}
     let n = b.len();
     let base = acc.len();
     let mut err: Option<LexErr> = None;
-    // el_end_at: the token count after the token that ended an element (that token is a value)
-    let mut st = ElScan { acc, pending_nl, ${rxInit}template_stack, hot: false, el_end_at: if el_ended { base } else { usize::MAX }, tag_angle, la_end, spec_until, ${raw ? 'tag_at, ' : ''}${specInit}};
+    // el_end_at: the token count after the token that ended an element (-1: none)
+    let mut st = ElScan { acc, pending_nl, ${rxInit}template_stack, hot: false, el_end_at: if el_ended { base as isize } else { -1 }, value_to: -1, tag_angle, la_end, spec_until, ${raw ? 'tag_at, ' : ''}${specInit}};
     st.refresh();
-${sig ? '    let mut sp = Spec { done: false, then: false, off: 0, end: 0, at: 0, has_at: false, keep: false, sv: (0, false, 0, 0, 0, 0, 0, false, false), sv_paren: Vec::new(), sv_stack: Vec::new() };\n' : ''}${loop}
-    ${rxOut}(pos, st.pending_nl, ${rxRet}st.template_stack, st.acc.len() == st.el_end_at, st.tag_angle, st.la_end, st.spec_until${raw ? ', st.tag_at' : ''}, err)
+${sig ? '    let mut sp = Spec { tok: 0, seen: 0, base: 0, closed: false, closed_at: 0, done: false, then: false, off: 0, end: 0, at: 0, has_at: false, keep: false, sv: (0, false, 0, 0, 0, 0, 0, false, false), sv_paren: Vec::new(), sv_stack: Vec::new() };\n' : ''}${loop}
+    ${rxOut}(pos, st.pending_nl, ${rxRet}st.template_stack, st.acc.len() as isize == st.el_end_at, st.tag_angle, st.la_end, st.spec_until${raw ? ', st.tag_at' : ''}, err)
 }
 ${RS_LEX_FN}/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer);
 /// the lexer error, if any.

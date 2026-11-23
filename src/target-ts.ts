@@ -250,8 +250,7 @@ const LID_EQ = ${lidOf(ids, '=')};
 ${sig ? `${tsFlagTable('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
   // prevIsValue: in a tag nothing is a regex; the token that ended an element is a value.
   const prevIsValue = p.rxStateFrom.replace('function prevIsValue(): boolean {\n', `function prevIsValue(): boolean {
-    if (hot && templateStack.length > 0) { const f = templateStack[templateStack.length - 1]; if ((f & 3) === 2 && (f & 12) !== 0) return true; }
-    if (toks.length === elEndAt) return true;
+    if (toks.length <= valueTo) return true;
 `);
   const rxParams = rx ? 'prevLid: number, prevKid: number, bpLid: number, hasPrev: boolean, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, ' : '';
   const rxRet = rx ? 'prevLid: number; prevKid: number; hasPrev: boolean; bpLid: number; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean; ' : '';
@@ -268,16 +267,20 @@ ${sig ? `${tsFlagTable('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
   const specState = sig ? `  // A type-parameter signature being decided: the token index of its tagOpen (-1: none), the
   // state before it, how it was decided (a lexer error decides it: the head was an element), and
   // the decision kept for the tagOpen it rewinds to.
-  let specTok = -1, specBase = 0, specClosedAt = -1, specDone = false, specThen = false, specOff = 0, specEnd = 0;
+  let specTok = -1, specSeen = 0, specBase = 0, specClosedAt = -1, specDone = false, specThen = false, specOff = 0, specEnd = 0;
   let specAt = -1, specKeep = false;
   let svPos = 0, svNl = false, svPrevLid = 0, svPrevKid = 0, svBpLid = 0, svHasPrev = false, svHasPrev2 = false, svLastClose = false, svLastBang = false, svElEndAt = -1, svAngle = 0;
   const svParen: boolean[] = [], svStack: number[] = [];
-  // The token after the signature group's closer decides it (a closer that leaves the bracket
-  // stack at its base, even by popping an empty one, closes it again): whether it is decided.
-  function specVerdict(): boolean {
-    if (specClosedAt >= 0 && toks.length > specClosedAt + 1) {
-      const t = toks[specClosedAt + 1];
-      specClosedAt = -1; specDone = true; specThen = t.kid === 0 && _elThen[t.lid] === 1; specOff = t.off; specEnd = t.end;
+  // Each token the speculation lexes, read at the next loop head (a round lexes one token at most):
+  // a closer that leaves the bracket stack at the signature's base (even by popping an empty one)
+  // closes the group, again if it was closed; the token after the closer decides. Whether decided.
+  function specStep(): boolean {
+    const i = toks.length - 1;
+    if (i >= specSeen) {
+      specSeen = i + 1;
+      const t = toks[i];
+      if (t.lid === LID_RPAREN && i > specTok + 3 && parenHead.length === specBase) specClosedAt = i;
+      else if (specClosedAt >= 0 && i > specClosedAt) { specClosedAt = -1; specDone = true; specThen = t.kid === 0 && _elThen[t.lid] === 1; specOff = t.off; specEnd = t.end; }
     }
     return specDone;
   }
@@ -300,13 +303,18 @@ ${sig ? `${tsFlagTable('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
 ` : '';
   // hot: whether the loop head has work (an element or raw frame on top of the frame stack${sig ? ', or a
   // signature undecided' : ''}), kept by every change of the stack's top${sig ? ' and of the speculation' : ''}; elEndAt: the token
-  // count after the token that ended an element (that token is a value).
-  const hotState = `  let hot = false, elEndAt = elEnded ? toks.length : -1;
-  function refresh(): void { hot = ${sig ? 'specTok >= 0 || ' : ''}(templateStack.length > 0 && (templateStack[templateStack.length - 1] & 2) !== 0); }
+  // count after the token that ended an element (-1: none); valueTo: to which token count the
+  // previous token is a value (in a tag: every; else the token that ended an element, while last).
+  const hotState = `  let hot = false, elEndAt = elEnded ? toks.length : -1, valueTo = -1;
+  function refresh(): void {
+    const top = templateStack.length > 0 ? templateStack[templateStack.length - 1] : 0;
+    hot = ${sig ? 'specTok >= 0 || ' : ''}(top & 2) !== 0;
+    valueTo = (top & 3) === 2 && (top & 12) !== 0 ? 0x3fffffff : elEndAt;
+  }
 `;
   const emitFn = `  function emit(off: number, end: number, kid: number, lid: number): void {
 ${rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]; parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid]); }
-    else if (lid === LID_RPAREN) { lastClose = parenHead.pop() ?? false;${sig ? ' if (specTok >= 0 && toks.length > specTok + 3 && parenHead.length === specBase) specClosedAt = toks.length;' : ''} }
+    else if (lid === LID_RPAREN) { lastClose = parenHead.pop() ?? false; }
     if (_pav[lid]) lastBang = prevIsValue();
 ` : ''}    if (templateStack.length > 0) { const f = templateStack[templateStack.length - 1]; ${braces} }
     toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = false;${rx ? '\n    bpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true;' : ''}
@@ -314,7 +322,7 @@ ${rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]
 `;
   // The entry from code, in the tagOpen unit's dispatch arm (outside element frames: inside one
   // the frame step lexes every tagOpen).
-  const enter = `      templateStack.push(6); hot = true; emit(pos, pos + ${L}, 0, LID_EL_OPEN);${raw ? ' tagAt.push(toks.length - 1);' : ''} tagAngle = 0; pos += ${L}; continue;\n`;
+  const enter = `      templateStack.push(6); refresh(); emit(pos, pos + ${L}, 0, LID_EL_OPEN);${raw ? ' tagAt.push(toks.length - 1);' : ''} tagAngle = 0; pos += ${L}; continue;\n`;
   const entry = !operand ? `    if (src.startsWith(${J(el.tagOpen)}, pos)) {\n${enter}    }\n`
     : !(el.head || sig) ? `    if (src.startsWith(${J(el.tagOpen)}, pos) && !prevIsValue()) {\n${enter}    }\n`
     : `    if (src.startsWith(${J(el.tagOpen)}, pos)${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue()) {
@@ -327,7 +335,7 @@ ${sig ? `      if (op === 2) {
         svLastClose = lastClose; svLastBang = lastBang; svElEndAt = elEndAt; svAngle = tagAngle;
         svParen.length = 0; for (const b of parenHead) svParen.push(b);
         svStack.length = 0; for (const f of templateStack) svStack.push(f);
-        specTok = toks.length; specBase = parenHead.length; specClosedAt = -1; specDone = false; hot = true; limit = undefined;
+        specTok = toks.length; specSeen = specTok; specBase = parenHead.length; specClosedAt = -1; specDone = false; hot = true; limit = undefined;
       }
 ` : ''}    }
 `;
@@ -372,7 +380,7 @@ ${raw ? `    if (templateStack.length > 0 && templateStack[templateStack.length 
   // lexer's. A speculation lexes past the token limit to its verdict (no limit while it runs); one
   // that reaches the end of the input (or a lexer error, its verdict) is rewound after the loop.
   const loopBody = `    if (hot) {
-${sig ? '    if (specTok >= 0 && specVerdict()) { pos = specRewind(); limit = limit0; continue; }\n' : ''}${frameStep}    }
+${sig ? '    if (specTok >= 0 && specStep()) { pos = specRewind(); limit = limit0; continue; }\n' : ''}${frameStep}    }
     const c = src.charCodeAt(pos);
 ${p.nlWs}${pre}${cascade}
 ${p.uniIdentFallbackTs}${TS_UNEXPECTED}`;
@@ -383,7 +391,7 @@ ${loopBody}
   for (;;) {
 ${inner}
   if (specTok < 0) break;
-  specVerdict(); pos = specRewind(); limit = limit0;
+  specStep(); pos = specRewind(); limit = limit0;
   }` : inner;
   return `${consts}${p.scans}function lexFrom(src: string, pos: number, pendingNl: boolean, ${rxParams}templateStack: number[], elEnded: boolean, tagAngle: number, laEnd: number, specUntil: number, ${raw ? 'tagAt: number[], ' : ''}toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; ${rxRet}templateStack: number[]; elEnded: boolean; tagAngle: number; laEnd: number; specUntil: number${raw ? '; tagAt: number[]' : ''}; err: LexErr | null } {
   const n = src.length;

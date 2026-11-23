@@ -468,8 +468,7 @@ const lidEq uint16 = ${lidOf(ids, '=')}
 ${sig ? `${p.goBoolArr('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
   // prevIsValue: in a tag nothing is a regex; the token that ended an element is a value.
   const prevIsValue = p.rxStateFrom.replace('\tprevIsValue := func() bool {\n', `\tprevIsValue := func() bool {
-\t\tif hot && len(templateStack) > 0 { if f := templateStack[len(templateStack)-1]; f&3 == 2 && f&12 != 0 { return true } }
-\t\tif len(*acc) == elEndAt { return true }
+\t\tif len(*acc) <= valueTo { return true }
 `);
   const rxParams = rx ? 'prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, ' : '';
   const rxRet = rx ? 'uint16, uint16, uint16, bool, bool, []bool, bool, bool, ' : '';
@@ -487,27 +486,37 @@ ${sig ? `${p.goBoolArr('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
   // hot: whether the loop head has work (an element or raw frame on top of the frame stack${sig ? ', or a
   // signature undecided' : ''}), kept by every change of the stack's top${sig ? ' and of the speculation' : ''}; elEndAt: the token
   // count after the token that ended an element (that token is a value).
-  const hotState = `\thot, elEndAt := false, -1
+  const hotState = `\thot, elEndAt, valueTo := false, -1, -1
 \tif elEnded { elEndAt = len(*acc) }
 `;
   // after the speculation's state (it reads specTok), before its rewind (which calls it)
-  const refreshFn = `\trefresh := func() { hot = ${sig ? 'specTok >= 0 || ' : ''}(len(templateStack) > 0 && templateStack[len(templateStack)-1]&2 != 0) }
+  // valueTo: to which token count the previous token is a value (in a tag: every; else the token
+  // that ended an element, while it is the last).
+  const refreshFn = `\trefresh := func() {
+\t\ttop := 0
+\t\tif len(templateStack) > 0 { top = templateStack[len(templateStack)-1] }
+\t\thot = ${sig ? 'specTok >= 0 || ' : ''}top&2 != 0
+\t\tvalueTo = elEndAt
+\t\tif top&3 == 2 && top&12 != 0 { valueTo = 1 << 62 }
+\t}
 \trefresh()
 ${sig ? '\tlimit0 := limit\n' : ''}`;
   const specState = sig ? `\t// A type-parameter signature being decided: the token index of its tagOpen (-1: none), the
 \t// state before it, how it was decided (a lexer error decides it: the head was an element), and
 \t// the decision kept for the tagOpen it rewinds to.
-\tspecTok, specBase, specClosedAt, specOff, specEnd, specAt := -1, 0, -1, 0, 0, -1
+\tspecTok, specSeen, specBase, specClosedAt, specOff, specEnd, specAt := -1, 0, 0, -1, 0, 0, -1
 \tspecDone, specThen, specKeep := false, false, false
 \tsvPos, svNl, svPrevLid, svPrevKid, svBpLid, svHasPrev, svHasPrev2, svLastClose, svLastBang, svElEndAt, svAngle := 0, false, uint16(0), uint16(0), uint16(0), false, false, false, false, -1, 0
 \tvar svParen []bool
 \tvar svStack []int
-${refreshFn}\t// The token after the signature group's closer decides it (a closer that leaves the bracket
-\t// stack at its base, even by popping an empty one, closes it again): whether it is decided.
-\tspecVerdict := func() bool {
-\t\tif specClosedAt >= 0 && len(*acc) > specClosedAt+1 {
-\t\t\tt := (*acc)[specClosedAt+1]
-\t\t\tspecClosedAt = -1; specDone = true; specThen = t.Kid == 0 && _elThen[t.Lid]; specOff = int(t.Off); specEnd = int(t.End)
+${refreshFn}\t// Each token the speculation lexes, read at the next loop head (a round lexes one token at most):
+\t// a closer that leaves the bracket stack at the signature's base (even by popping an empty one)
+\t// closes the group, again if it was closed; the token after the closer decides. Whether decided.
+\tspecStep := func() bool {
+\t\tif i := len(*acc) - 1; i >= specSeen {
+\t\t\tspecSeen = i + 1
+\t\t\tt := (*acc)[i]
+\t\t\tif t.Lid == lidRParen && i > specTok+3 && len(parenHead) == specBase { specClosedAt = i } else if specClosedAt >= 0 && i > specClosedAt { specClosedAt = -1; specDone = true; specThen = t.Kid == 0 && _elThen[t.Lid]; specOff = int(t.Off); specEnd = int(t.End) }
 \t\t}
 \t\treturn specDone
 \t}
@@ -534,8 +543,7 @@ ${rx ? `\t\tif lid == lidLParen {
 \t\t\tisMember := hasPrev2 && _mem[bpLid]
 \t\t\tparenHead = append(parenHead, !isMember && prevKid == kidIdent && _phK[prevLid])
 \t\t} else if lid == lidRParen {
-\t\t\tif len(parenHead) > 0 { lastClose = parenHead[len(parenHead)-1]; parenHead = parenHead[:len(parenHead)-1] } else { lastClose = false }${sig ? `
-\t\t\tif specTok >= 0 && len(*acc) > specTok+3 && len(parenHead) == specBase { specClosedAt = len(*acc) }` : ''}
+\t\t\tif len(parenHead) > 0 { lastClose = parenHead[len(parenHead)-1]; parenHead = parenHead[:len(parenHead)-1] } else { lastClose = false }
 \t\t}
 \t\tif _pav[lid] { lastBang = prevIsValue() }
 ` : ''}\t\tif len(templateStack) > 0 { f := templateStack[len(templateStack)-1]; ${braces} }
@@ -545,7 +553,7 @@ ${rx ? `\t\tif lid == lidLParen {
 `;
   // The entry from code, in the tagOpen byte's dispatch arm (outside element frames: inside one
   // the frame step lexes every tagOpen).
-  const enter = `\t\t\ttemplateStack = append(templateStack, 6); hot = true; emit(pos, pos + ${L}, 0, lidElOpen);${raw ? ' tagAt = append(tagAt, len(*acc)-1);' : ''} tagAngle = 0; pos += ${L}; continue\n`;
+  const enter = `\t\t\ttemplateStack = append(templateStack, 6); refresh(); emit(pos, pos + ${L}, 0, lidElOpen);${raw ? ' tagAt = append(tagAt, len(*acc)-1);' : ''} tagAngle = 0; pos += ${L}; continue\n`;
   const entry = !operand ? `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)}) {\n${enter}\t\t}\n`
     : !(el.head || sig) ? `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)}) && !prevIsValue() {\n${enter}\t\t}\n`
     : `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)})${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue() {
@@ -558,7 +566,7 @@ ${sig ? `\t\t\tif op == 2 {
 \t\t\t\tsvLastClose, svLastBang, svElEndAt, svAngle = lastClose, lastBang, elEndAt, tagAngle
 \t\t\t\tsvParen = append(svParen[:0], parenHead...)
 \t\t\t\tsvStack = append(svStack[:0], templateStack...)
-\t\t\t\tspecTok = len(*acc); specBase = len(parenHead); specClosedAt = -1; specDone = false; hot = true; limit = 0
+\t\t\t\tspecTok = len(*acc); specSeen = specTok; specBase = len(parenHead); specClosedAt = -1; specDone = false; hot = true; limit = 0
 \t\t\t}
 ` : ''}\t\t}
 `;
@@ -604,7 +612,7 @@ ${raw ? `\t\tif len(templateStack) > 0 && templateStack[len(templateStack)-1] ==
   // lexer's. A speculation lexes past the token limit to its verdict (no limit while it runs); one
   // that reaches the end of the input (or a lexer error, its verdict) is rewound after the loop.
   const loopBody = `\t\tif hot {
-${sig ? '\t\tif specTok >= 0 && specVerdict() { pos = specRewind(); limit = limit0; continue }\n' : ''}${frameStep}\t\t}
+${sig ? '\t\tif specTok >= 0 && specStep() { pos = specRewind(); limit = limit0; continue }\n' : ''}${frameStep}\t\t}
 \t\tc := int(src[pos])
 ${p.nlWs}${pre}${cascade}
 ${p.uniIdentFallbackGo}${p.loopPanicGo}`;
@@ -614,7 +622,7 @@ ${loopBody}
 `;
   const loop = sig ? `\tfor {
 ${inner}\tif specTok < 0 { break }
-\tspecVerdict(); pos = specRewind(); limit = limit0
+\tspecStep(); pos = specRewind(); limit = limit0
 \t}
 ` : inner;
   return `${p.head}${consts}${p.scans}func lexFrom(src string, pos int, pendingNl bool, ${rxParams}templateStack []int, elEnded bool, tagAngle, laEnd, specUntil int, ${raw ? 'tagAt []int, ' : ''}acc *[]Tok, limit int) (int, bool, ${rxRet}[]int, bool, int, int, int${raw ? ', []int' : ''}, *LexErr) {
