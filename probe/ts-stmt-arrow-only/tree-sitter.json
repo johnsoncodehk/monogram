@@ -1,0 +1,14 @@
+{
+  "grammars": [
+    {
+      "name": "typescript",
+      "scope": "source.ts",
+      "path": ".",
+      "highlights": "queries/highlights.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.0.0",
+    "license": "MIT"
+  }
+}
