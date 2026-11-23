@@ -1773,11 +1773,11 @@ export type PrattLowering = {
   postfixToks(kids: number[]): string;           // the postfix tokens, by the token's kid
   postfixTpl(hole: string): string;              // the postfix interpolated template
   postfixOp: string;                             // the postfix operator
-  binary: string;                                // the binary operator, its right operand at rbp
+  binary: string;                                // the binary operator, its right operand at rbp; a CAPPED right operand (an assignment-level arrow) caps the node: it returns at once, still capped, so no further led or operator takes it, here or in an enclosing call (`a = () => {} || x` rejects: the interpreter's cap propagation)
   leftDone?: string;                             // after the loop: the left operand's finishing step (none for the CST)
   entry: string;                                 // the entry function (and the operator tables, where the target prints them beside it)
   bpOpen(label: boolean): string;                // `bp` up to the loop's buffered token (label: a led continues the loop by name)
-  bpClose: string;
+  bpClose: string;                               // `bp`'s normal return: the node is not capped (a sub-parse's capped flag, an arrow inside a call's arguments, is not its own)
   nudEnter: string;                              // `nud` up to its buffered token `t` (none: no match)
   nudOpen: string;                               // `nud`'s candidate frame, up to its candidates
   nudClose: string;

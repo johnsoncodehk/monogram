@@ -52,6 +52,14 @@ type Case = { grammar: string; path: string; parts?: Record<string, boolean>; ac
 // it wraps, a nested call (parentheses, arguments, an object, array or template, a function or arrow
 // block body) has `in` again, and every alternative of the head that fails inside or after it backs
 // out of it. Each verdict is tsc's parser's too.
+// Cap propagation (the interpreter's, gen-parser.ts): an ArrowFunction is an AssignmentExpression,
+// so it admits no operator after it, and an operator whose right operand is an arrow admits none
+// either (`x = () => {} || a` is no derivation); a parenthesized or nested arrow (an argument, an
+// element) does not cap what holds it. Each verdict is the productions'.
+const CAP_PROPAGATION = {
+  accept: ['x = (() => {}) || a;', 'x = f(() => {}) || a;', 'x = a || f(() => {}) || c;', 'x = [() => {}] || a;', 'x = a ? () => {} : b || c;', 'x = () => {}, y;'],
+  reject: ['x = () => {} || a;', 'x = y => {} || a;', 'x = async () => {} || a;', 'x = () => {} ? a : b;', 'b = a = () => {} || c;'],
+};
 const NO_IN_HEADS = {
   accept: [
     'for (var a = (b in c) in d);', 'for (a = (b in c) in d);', 'for (x = (y = (a in b)) in c);',
@@ -596,7 +604,7 @@ const CASES: Case[] = [
       'for (a in b) { d = c in e; }',
       'new a.b();', '((((x))));',
       'for (a = x + y in b) c;',
-      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...CALL_ARGS.accept, ...EXPORT_DECLS.accept,
+      ...CAP_PROPAGATION.accept, ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...CALL_ARGS.accept, ...EXPORT_DECLS.accept,
       ...CTX_CASES.javascript.accept, ...JS_DECORATORS.accept, ...TEMPLATE_STEPS.js.accept, ...JS_MODULES.accept, ...TRY_STATEMENTS.accept,
       // An assignment / update operand needs only a LeftHandSideExpression's shape; target validity is a consumer's.
       '-x++;', '(a) = 1;', 'a = b = c;', '1 = 2;', '1++;', '++1;', 'f() = 1;', 'f()++;', '++f();', 'this = 1;',
@@ -679,7 +687,7 @@ const CASES: Case[] = [
       'x\n++;', 'x\n--', '(x\n++);', 'a = [x\n++];', 'x\n++\n-y;', 'x\n++\ny++;', 'x\n++ ++y;', 'class C { p = x\n++ }', 'class C { p = x\n++\ny }',
       'for (a = (x in b)) c;',
       'for (a = b ? x in c : y in d) e;',
-      ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...CALL_ARGS.reject, ...EXPORT_DECLS.reject,
+      ...CAP_PROPAGATION.reject, ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...CALL_ARGS.reject, ...EXPORT_DECLS.reject,
       ...CTX_CASES.javascript.reject, ...TEMPLATE_STEPS.js.reject,
       // An assignment / update operand (prefix ++/-- included) without a LeftHandSideExpression's shape has no parse.
       'a + b = c;', 'a++ = 1;', '-a = 1;', '++ -x;', '++x++;', '++ ++x;',
@@ -705,7 +713,7 @@ const CASES: Case[] = [
     // agnostic emitter (types, generics, interfaces, enums, assertions, variance). ASCII.
     grammar: 'typescript', path: '../typescript.ts',
     accept: [
-      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...CALL_ARGS.accept, ...EXPORT_DECLS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
+      ...CAP_PROPAGATION.accept, ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...CALL_ARGS.accept, ...EXPORT_DECLS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
       'export default /re/.test(x);', 'export default /=/;', 'switch (a) { default: /re/.test(x); }',
       // ... but as a member name a keyword is a value and a `/` after it divides, as after a private name
       // after a template's tail a `/` divides, as after a template with no substitution
@@ -896,7 +904,7 @@ const CASES: Case[] = [
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
       'type T = | | A;', 'type T = A | | B;', 'type T = A & | B;', 'type T = & & A;', 'type T = & | A;', 'f<| | A>();', 'let x: [| | A];',
-      'const f = <>() => 1;', 'const f = async <>(a) => 1;', 'const f = <in T>() => 1;', 'f(<in out T>(a) => a);', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...CALL_ARGS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, ...TS_DECORATORS.reject, ...TEMPLATE_STEPS.ts.reject, ...TS_MEMBER_DECORATORS.reject, ...TS_MODULES.reject, ...TRY_STATEMENTS.reject, ...TS_TRY.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
+      'const f = <>() => 1;', 'const f = async <>(a) => 1;', 'const f = <in T>() => 1;', 'f(<in out T>(a) => a);', ...CAP_PROPAGATION.reject, ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...CALL_ARGS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, ...TS_DECORATORS.reject, ...TEMPLATE_STEPS.ts.reject, ...TS_MEMBER_DECORATORS.reject, ...TS_MODULES.reject, ...TRY_STATEMENTS.reject, ...TS_TRY.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '{ b(); }.x;', '{ static x }.y;', '{ static x }', '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;',
       'let[0] = 1;', '(async\nfunction f() {});',
@@ -1988,17 +1996,14 @@ const WIDE_RECORD = new URL('./portable-wide-record.txt', import.meta.url).pathn
 const WIDE_WRITE = WIDE_ONLY && process.argv.includes('--write');
 const WIDE_CAUSES: Record<string, string> = {
   'mixfix-rebind': 'the interpreter\'s mixfix operand re-bind (gen-parser.ts matchMixfixLed: a failed `<L1> $ <L2> …` led retries its operand capped at each depth-0 L2 inside it) has no counterpart in the portable engine',
-  'cap-propagation': 'the interpreter\'s cap propagation (gen-parser.ts: an operator whose right operand is a capped arrow returns at once, so `a = () => {} || x` rejects) has no counterpart in the portable binary block',
   'private-name-unicode': 'a private name with a non-ASCII character (`#℘`, `#ZW_\\u200C_NJ` with the ZWNJ itself): the interpreter\'s lexer takes it as one PrivateField (its Unicode fallback knows the `#` prefix), the portable lexers stop at the `#` (`#\\u2118`, the escape, lexes in both)',
   'hashbang-not-first': 'a `#!` after the start of the text: the interpreter\'s lexer takes it as a Shebang comment, the portable lexers do not (a HashbangComment begins the source text only, so the portable verdict is the spec\'s)',
 };
 const REBIND_FILES = new Set(['types/conditional/inferTypesWithExtends1.ts', 'types/conditional/inferTypesInvalidExtendsDeclaration.ts',
   ...[8, 9, 10, 11, 12].map((n) => `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression${n}.ts`)]);
-const CAP_FILES = new Set(['parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression2.ts']);
 // The cause of one disagreement, from what the file is ('unknown' when no class explains it).
 function wideCause(grammar: string, file: string, src: string): string {
   if (grammar === 'typescript' && REBIND_FILES.has(file)) return 'mixfix-rebind';
-  if (CAP_FILES.has(file)) return 'cap-propagation';
   if (/#[^\x00-\x7f]/.test(src)) return 'private-name-unicode';
   if (src.indexOf('#!', 1) > 0) return 'hashbang-not-first';
   return 'unknown';

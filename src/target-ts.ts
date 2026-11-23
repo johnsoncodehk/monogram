@@ -1032,6 +1032,7 @@ ${kids.map((k) => `      case ${k}:
     pos += _opN;
     if (!${r.name}_bpW(info.rbp)) { back(ledSave); _n = b + 1; break; }
     finP(${cn}, b);
+    if (_capped) { _form = 1; return true; }   // a capped right operand caps this node: no further led (PrattLowering.binary)
     form = 1; tailClosed = true;
   }`,
     entry: `${tsPrattOpTables(r, ids)}
@@ -1050,7 +1051,8 @@ function parse${r.name}W(): boolean {
   ${label ? 'ledLoop: ' : ''}for (;;) {
     const t = peek();
     if (t === null) break;`,
-    bpClose: `  _form = form;
+    bpClose: `  _capped = false;   // a sub-parse's capped flag is not this node's (PrattLowering.bpClose)
+  _form = form;
   return true;
 }`,
     nudEnter: `function ${r.name}_nudW(minBp: number): boolean {
@@ -2781,8 +2783,9 @@ function parseAst${r.name}_bp(minBp: number): ${retType} | null {
 ${ledSwitch}
 ${postfixTokSwitch}
 ${postfixCode}
-${binaryCode}${binarySlot ? '\n    form = 1; tailClosed = true;' : ''}
+${binaryCode}${binarySlot ? '\n    if (_capped) { _form = 1; return left; }   // a capped right operand caps this node (PrattLowering.binary)\n    form = 1; tailClosed = true;' : ''}
   }
+  _capped = false;
   _form = form;
   return left;
 }
