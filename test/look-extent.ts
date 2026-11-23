@@ -82,7 +82,7 @@ function oracleSource(lib: string, shapeB: boolean): string {
   const stray = left.filter((x) => !READS.has(x));
   if (stray.length) throw new Error(`oracle: unguarded token-array access in the parse engine: ${[...new Set(stray)].join(', ')}`);
   const reruns = shapeB
-    ? `const n = (e.tokStart === 0 && e.kidStart === 0 && __isHead() ? parseHeadSegW(0) : parseLoopSegW(0)) !== null;`
+    ? `const n = (e === ents[0] && __isHead() ? parseHeadSegW() : parseLoopSegW()) !== null;`
     : `const n = parseTopOneW();`;
   return `${lib.slice(0, a)}
 let _seen = 0;
@@ -280,7 +280,7 @@ for (const g of GRAMMARS) {
   const shapeB = /\nfunction parseLoopSegW\(/.test(lib);
   let oracleSrc = oracleSource(lib, shapeB);
   if (shapeB) {
-    const m = lib.match(/function parseLoopSegW\(kidStart: number\)[^]*?!matchTokW\((\d+)\)/);
+    const m = lib.match(/function parseLoopSegW\(\)[^]*?!matchTokW\((\d+)\)/);
     if (!m) throw new Error('oracle: shape-B loop token not found');
     oracleSrc = oracleSrc.replace('__LOOP_KID__', m[1]!);
   }

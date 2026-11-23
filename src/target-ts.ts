@@ -244,7 +244,7 @@ function elementLexerTS(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms, 
   scans: string; consts: string; rxStateFrom: string; nlWs: string; lexCodes: string[]; lexFirsts: (LexFirstBytes | null)[];
   tplCloseTest: string; tplOpenTest: string; uniIdentFallbackTs: string;
 }): string {
-  const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0;
+  const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0, dirs = !!el.directives;
   const operand = el.entry === 'operand';
   if (operand && !rx) throw new Error('portable: an operand element entry needs the regex context (prevIsValue)');
   const L = tlen(el.tagOpen);
@@ -307,7 +307,7 @@ ${sig ? `${tsFlagTable('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
   function refresh(): void {
     const top = templateStack.length > 0 ? templateStack[templateStack.length - 1] : 0;
     hot = ${sig ? 'specTok >= 0 || ' : ''}(top & 2) !== 0;
-${rx ? '    valueTo = (top & 3) === 2 && (top & 12) !== 0 ? 0x3fffffff : elEndAt;\n' : ''}  }
+${rx ? `    valueTo = (top & 3) === 2 && (top & 12) !== 0${dirs ? ' && (top & 12) !== 12' : ''} ? 0x3fffffff : elEndAt;\n` : ''}  }
 `;
   const emitFn = `  function emit(off: number, end: number, kid: number, lid: number): void {
 ${rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]; parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid]); }
@@ -320,7 +320,8 @@ ${rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]
   // the frame step lexes every tagOpen).
   const enter = `      templateStack.push(6); refresh(); bound = 0; emit(pos, pos + ${L}, 0, LID_EL_OPEN);${raw ? ' tagAt.push(toks.length - 1);' : ''} tagAngle = 0; pos += ${L}; continue;\n`;
   // a tagOpen that opens no tag (tagStart) is the ordinary scan's
-  const opensTag = `src.startsWith(${J(el.tagOpen)}, pos)${el.tagStart ? ` && ${shared.elementFn('tagStart')}(src, pos + ${L})` : ''}`;
+  // (in a directive head, code inside an element frame, a tagOpen opens no element)
+  const opensTag = `src.startsWith(${J(el.tagOpen)}, pos)${el.tagStart ? ` && ${shared.elementFn('tagStart')}(src, pos + ${L})` : ''}${dirs ? ' && (templateStack.length === 0 || (templateStack[templateStack.length - 1] & 3) !== 2)' : ''}`;
   const entry = !operand ? `    if (${opensTag}) {\n${enter}    }\n`
     : !(el.head || sig) ? `    if (${opensTag} && !prevIsValue()) {\n${enter}    }\n`
     : `    if (${opensTag}${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue()) {
@@ -352,15 +353,17 @@ ${sig ? `      if (op === 2) {
   const cascade = renderLexByteDispatchTS(p.lexCodes, p.lexFirsts, '    ', heads);
   const frameStep = `    if (templateStack.length > 0 && (templateStack[templateStack.length - 1] & 3) === 2) {
       const fr = templateStack[templateStack.length - 1];
-      ${tsTake(['fe', 'fk', 'fl', 'ft', 'fp', 'fa', 'fla'], shared.elementFn('frame'), 'src, pos, fr, tagAngle, toks.length > 0 && toks[toks.length - 1].lid === LID_EQ, laEnd')}
+      ${tsTake(['fe', 'fk', 'fl', 'ft', 'fp', 'fa', 'fla'], shared.elementFn('frame'), `src, pos, fr, tagAngle, toks.length > 0 && toks[toks.length - 1].lid === LID_EQ, laEnd${dirs ? ', parenHead.length' : ''}`)}
       laEnd = fla;
       if (fe >= 0) {
-${elementSkipsText(ir) ? `        // a skipped text token (a comment in text): no token
+${dirs ? `        // a directive opener: its frame (or a code block's hole) is pushed before its token
+        if (fe === pos) { templateStack.push(fp);${raw ? ' if ((fp & 3) === 2) tagAt.push(-1);' : ''} refresh(); continue; }
+` : ''}${elementSkipsText(ir) ? `        // a skipped text token (a comment in text): no token
         if (fk < 0) { if (lexHasLineTerm(src, pos, fe)) pendingNl = true; pos = fe; continue; }
 ` : ''}        emit(pos, fe, fk, fl);
 ${raw ? `        // each element frame's current tag: the index of its tagOpen token (the name is the next)
         if (fl === LID_EL_OPEN) { if (fp === 6) tagAt.push(toks.length - 1); else if (((fr >> 2) & 3) === 0) tagAt[tagAt.length - 1] = toks.length - 1; }
-` : ''}        if (ft < 0) { templateStack.pop();${raw ? ' tagAt.pop();' : ''} elEndAt = toks.length; } else templateStack[templateStack.length - 1] = ft;
+${dirs ? '        if (fp === 10) tagAt.push(-1);\n' : ''}` : ''}        if (ft < 0) { templateStack.pop();${raw ? ' tagAt.pop();' : ''}${dirs ? ' if (ft === -1)' : ''} elEndAt = toks.length; } else templateStack[templateStack.length - 1] = ft;
         if (fp !== 0) templateStack.push(fp);
 ${raw ? `        // an open tag ended: a raw-text name gives its body to a raw frame (kind 3), lexed next
         if (fl === LID_EL_CLOSE && ((fr >> 2) & 3) === 1 && tagAngle === 0) {
@@ -838,10 +841,10 @@ function tsRules(r: RdRule, ids: LexIdPlan, m: Mode): RuleLowering {
 }
 
 // The entry rule in builder form (emit-portable entryShell), recording what incremental reuse
-// needs: shape A one EntryMeta per top-level entry (kidStart: its slot under the root), shape B one
-// EntryMeta per segment (kidStart / kidCount: in handles). Engine-side metadata only (R2):
-// consumer handles are never read or mutated; _entryHs is a copy of the root's children.
-const ENTRY_META_TS = `type EntryMeta = { tokStart: number; tokEnd: number; ext: number; off: number; end: number; kidStart: number; kidCount: number };
+// needs: shape A one EntryMeta per top-level entry, shape B one EntryMeta per segment (kidCount:
+// its root kids, in handles). Engine-side metadata only (R2): consumer handles are never read or
+// mutated; _entryHs is a copy of the root's children.
+const ENTRY_META_TS = `type EntryMeta = { tokStart: number; tokEnd: number; ext: number; off: number; end: number; kidCount: number };
 let _entries: EntryMeta[] = [];
 let _entryHs: any[] = [];
 `;
@@ -850,17 +853,17 @@ function rdEntryWithReuseW(r: RdRule, plan: ReusePlan, ids: LexIdPlan): string {
     topCall: (n) => `  return parse${n}W();`,
     topTry: (n) => `  { const sp = pos; if (parse${n}W()) return true; back(sp); }`,
     topFail: '  return false;',
-    // Shape A's segment for the reuse driver: one top-level entry. The fresh loop keeps it inline
-    // (a call per entry is measurable on inputs of many small entries).
+    // Shape A's segment for the reuse driver: one top-level entry. The fresh loop keeps it inline:
+    // a call per entry measured +9% TS blocks on dense-semi.ts (1325b4d).
     entryA: (topOne) => `${ENTRY_META_TS}function parseTopOneW(): boolean {
 ${topOne}
 }
-function parseTopEntryW(kidStart: number): EntryMeta | null {
+function parseTopEntryW(): EntryMeta | null {
   const sp = pos, c = _n;
   lookReset();
   if (!parseTopOneW()) { back(sp); _n = c; return null; }
   const s = c * _SW, tokStart = _sp[s + 2]!;
-  return { tokStart, tokEnd: pos, ext: Math.max(pos, lookEnd()), off: _sp[s]!, end: _sp[s + 1]!, kidStart, kidCount: _count(c) };
+  return { tokStart, tokEnd: pos, ext: Math.max(pos, lookEnd()), off: _sp[s]!, end: _sp[s + 1]!, kidCount: _count(c) };
 }
 function parse${r.name}W(): boolean {
   const save = pos, b = _n;
@@ -870,7 +873,7 @@ function parse${r.name}W(): boolean {
     lookReset();
     if (!parseTopOneW()) { back(sp); _n = c; break; }
     const s = c * _SW;
-    localE.push({ tokStart: _sp[s + 2]!, tokEnd: pos, ext: Math.max(pos, lookEnd()), off: _sp[s]!, end: _sp[s + 1]!, kidStart: c - b, kidCount: 1 });
+    localE.push({ tokStart: _sp[s + 2]!, tokEnd: pos, ext: Math.max(pos, lookEnd()), off: _sp[s]!, end: _sp[s + 1]!, kidCount: 1 });
   }
   _entries = localE;
   _entryHs = _kids(b);
@@ -878,7 +881,7 @@ function parse${r.name}W(): boolean {
   return true;
 }`,
     // A segment's head: the head rule's node, when it matched and the builder kept a handle of it.
-    headSeg: (rule) => `function parseHeadSegW(kidStart: number): EntryMeta | null {
+    headSeg: (rule) => `function parseHeadSegW(): EntryMeta | null {
   lookReset();
   const c = _n;
   optW(parse${rule}W);
@@ -886,18 +889,17 @@ function parse${r.name}W(): boolean {
   const s = c * _SW;
   const tokStart = _sp[s + 2]!, tokEnd = pos;
   const ext = Math.max(tokEnd, lookEnd());
-  return { tokStart, tokEnd, ext, off: _sp[s]!, end: _sp[(_n - 1) * _SW + 1]!, kidStart, kidCount: 1 };
+  return { tokStart, tokEnd, ext, off: _sp[s]!, end: _sp[(_n - 1) * _SW + 1]!, kidCount: 1 };
 }
 `,
     headUse: `  {
-    const meta = parseHeadSegW(0);
+    const meta = parseHeadSegW();
     if (meta) localE.push(meta);
   }
-  let k = _count(b);
 `,
     // A loop segment: its leading token, then the loop rule when it follows; its span runs from
     // that token to the last child it left (the token itself when the builder dropped every child).
-    loopSeg: (kid, rule) => `function parseLoopSegW(kidStart: number): EntryMeta | null {
+    loopSeg: (kid, rule) => `function parseLoopSegW(): EntryMeta | null {
   const sp = pos, c = _n;
   lookReset();
   const t = peek();
@@ -906,17 +908,16 @@ function parse${r.name}W(): boolean {
   const tokStart = sp, tokEnd = pos;
   const end = _n > c ? _sp[(_n - 1) * _SW + 1]! : t.end;
   const ext = Math.max(tokEnd, lookEnd());
-  return { tokStart, tokEnd, ext, off: t.off, end, kidStart, kidCount: _count(c) };
+  return { tokStart, tokEnd, ext, off: t.off, end, kidCount: _count(c) };
 }`,
     entryB: (headSeg, headUse, loopSeg) => `${ENTRY_META_TS}${headSeg}${loopSeg}
 function parse${r.name}W(): boolean {
   const save = pos, b = _n;
   const localE: EntryMeta[] = [];
-${headUse || '  let k = 0;\n'}  for (;;) {
-    const meta = parseLoopSegW(k);
+${headUse}  for (;;) {
+    const meta = parseLoopSegW();
     if (meta === null) break;
     localE.push(meta);
-    k += meta.kidCount;
   }
   _entries = localE;
   _entryHs = _kids(b);
@@ -1358,10 +1359,9 @@ function parseWithMeta<H>(text: string, meta: AlignMeta[], builder: Builder<H>):
 }
 ${topReuse ? `
 function tryReuseW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number) => H, oldRootHs: H[], oldEntries: EntryMeta[], newText: string, newMeta: AlignMeta[], byteDelta: number, oldN: number, newN: number, prefix: number, suffix: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null {
-  ${tsTake(['prefixLen', 'suffixStart'], 'reuseBounds', 'oldEntries, prefix, oldN, suffix')}
+  ${tsTake(['prefixLen', 'suffixStart', 'prefixEnd'], 'reuseBounds', 'oldEntries, prefix, oldN, suffix')}
   const prefixMeta = oldEntries.slice(0, prefixLen);
   const suffixMeta = oldEntries.slice(suffixStart);
-  ${tsTake(['prefixStart', 'prefixEnd'], 'reuseKids', 'oldEntries, 0, prefixLen')}
   const prefixKids = oldRootHs.slice(0, prefixEnd);
   const tokDelta = newN - oldN;
   _src = newText;
@@ -1371,10 +1371,10 @@ function tryReuseW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number)
   const midKids: H[] = [];
   const midMeta: EntryMeta[] = [];
   const finish = (adoptFrom: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
-    ${tsTake(['ka', 'kb'], 'reuseKids', 'suffixMeta, adoptFrom, suffixMeta.length')}
-    const adoptedKids = oldRootHs.slice(ka, kb).map((h) => shift(h, byteDelta, tokDelta));
+    ${tsTake(['newEntries', 'adopted'], 'reuseEntries', 'prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta')}
+    const ka = reuseKids(oldEntries, prefixLen, prefixEnd, suffixStart + adoptFrom);
+    const adoptedKids = oldRootHs.slice(ka, ka + adopted).map((h) => shift(h, byteDelta, tokDelta));
     const children: H[] = [...prefixKids, ...midKids, ...adoptedKids];
-    const newEntries = reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta, prefixKids.length + midKids.length);
     ${tsTake(['offset', 'end', 'tokStart', 'tokEnd'], 'reuseSpan', 'newEntries')}
     _bSave = tokStart;
     const savePos = pos;
@@ -1395,7 +1395,7 @@ function tryReuseW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number)
   }
   ${hasHeadB ? `if (prefixLen === 0) {
     _n = 0;
-    const meta = parseHeadSegW(0);
+    const meta = parseHeadSegW();
     for (const h of _kids(0)) midKids.push(h);
     _hs.fill(null);
     if (meta) {
@@ -1409,9 +1409,8 @@ function tryReuseW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number)
     if (pos >= toks.length) {
       return tryHit();
     }
-    const before = midKids.length;
     _n = 0;
-    const meta = ${shapeA ? 'parseTopEntryW' : 'parseLoopSegW'}(prefixKids.length + before);
+    const meta = ${shapeA ? 'parseTopEntryW' : 'parseLoopSegW'}();
     for (const h of _kids(0)) midKids.push(h);
     _hs.fill(null);
     if (meta === null) {
@@ -1541,10 +1540,12 @@ ${shapeA ? `function assertEntriesVsNodes(entries: EntryMeta[], oldRoot: Node): 
 }
 ` : ''}${shapeB ? `function assertEntriesVsKids(entries: EntryMeta[], oldRoot: Node): void {
   const oldKids = oldRoot.children;
+  let k = 0;
   for (let i = 0; i < entries.length; i++) {
     const e = entries[i]!;
-    const first = oldKids[e.kidStart]!;
-    const last = oldKids[e.kidStart + e.kidCount - 1]!;
+    const first = oldKids[k]!;
+    k += e.kidCount;
+    const last = oldKids[k - 1]!;
     if ('rule' in first && e.off !== first.offset) throw new Error('off entry ' + i);
     if ('rule' in last && e.end !== last.end) throw new Error('end entry ' + i);
   }
@@ -3198,13 +3199,13 @@ function ${findAnyName(stops)}(s: string, i: number): number {
   },
 };
 
-// A function of several numbers and booleans returns its first value and leaves the others in
-// module slots (`<fn>_r1` …, read by the caller right after the call): TypeScript has no multiple
-// return values, and an array per call is an allocation per call (the element lexer's frame step
-// runs once per element token). A slot is a `var` (no temporal-dead-zone check on each access). A
-// value that owns memory (a string, a list, a record) is returned in an array instead: a slot would
-// keep it alive past its caller.
-const tsSlotted = (ret: Ty[]): boolean => ret.length > 1 && ret.every((t) => isNum(t) || t === 'bool');
+// A function of several values whose values after the first are numbers and booleans returns its
+// first value and leaves the others in module slots (`<fn>_r1` …, read by the caller right after
+// the call): TypeScript has no multiple return values, and an array per call is an allocation per
+// call (the element lexer's frame step runs once per element token). A slot is a `var` (no
+// temporal-dead-zone check on each access). A later value that owns memory (a string, a list, a
+// record) is returned in an array instead: a slot would keep it alive past its caller.
+const tsSlotted = (ret: Ty[]): boolean => ret.length > 1 && ret.slice(1).every((t) => isNum(t) || t === 'bool');
 // The same read, printed where the hand-written runtime calls a family function of several numbers:
 // the element lexer's opens / frame / raw steps (src/lex-family.ts), the Doc's reuse bounds and
 // span (src/reuse-family.ts) and its alignment core (src/relex-family.ts).

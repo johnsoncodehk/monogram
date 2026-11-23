@@ -386,7 +386,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
 {
   const { scannerName, EL_OPENS_FN, EL_NOT, EL_OPEN, EL_SPECULATE } = await import('../src/lex-family.ts');
   let scanned = 0, decided = 0;
-  for (const path of ['../typescriptreact.ts', '../javascriptreact.ts', './fixtures/elementdialect.ts']) {
+  for (const path of ['../typescriptreact.ts', '../javascriptreact.ts', './fixtures/elementdialect.ts', './fixtures/textdialect.ts']) {
     const g = (await import(path)).default as CstGrammar;
     const gir = portableIR(g);
     const e = gir.elements!;
@@ -407,6 +407,34 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
         const got = m[scannerName(name)]!(src, 0);
         scanned++;
         if (got !== want) fail(`${g.name}/${name}: ${JSON.stringify(src)} scans to ${got}, its regex to ${want}`);
+      }
+    }
+    // A text dialect's directive tests and text-run stop: what each decides at q is decided within
+    // the read it reports (the look end): an insertion at or past it never changes the decision.
+    // (The reported read may pass the end: a literal compared there counts its length.)
+    if (e.directives) {
+      const { EL_DIR_OPEN_FN, EL_DIR_CONT_FN, EL_TEXT_STOP_FN } = await import('../src/lex-family.ts');
+      const fdir = join(dir, `el${mod++}.ts`);
+      const fnsOf = [EL_DIR_OPEN_FN, EL_DIR_CONT_FN, EL_TEXT_STOP_FN];
+      writeFileSync(fdir, `${tsTarget.shared.lexScan(gir)}\n${stubs}export { ${fnsOf.flatMap((n) => [n, `${n}_r1`]).join(', ')} };\n`);
+      const dm = await import(pathToFileURL(fdir).href) as Record<string, unknown>;
+      const PIECES = ['@if', '@for', '@else', '@try', '@{', '@empty', ' ', '(', '{', 'await', 'if', 'x', '/*', '*/', '//', '\n'];
+      const texts: string[] = [];
+      const grow = (t: string, d: number): void => { texts.push(t); if (d < 3) for (const q of PIECES) grow(t + q, d + 1); };
+      grow('', 0);
+      for (const fn of fnsOf) {
+        const call = (t: string): [number, number] => { const h = (dm[fn] as (s: string, q: number, look: number) => number)(`a${t}`, 1, 0); return [h, dm[`${fn}_r1`] as number]; };
+        for (const t of texts) {
+          const [h, re] = call(t);
+          decided++;
+          // a text-run stop that holds is the token lexed next at q: its match is that token's
+          if (fn === EL_TEXT_STOP_FN && h !== 0) continue;
+          // (q + 1 is within the end + 1 of the token decided at q, which takes q: always free)
+          for (let at = Math.max(re - 1, 2); at <= t.length; at++) for (const tail of ['x', ' ', '(', '{', '*/', ')']) {
+            const u = t.slice(0, at) + tail + t.slice(at);
+            if (call(u)[0] !== h) { fail(`${g.name}: ${fn}(${JSON.stringify(t)}) = ${h} read to ${re}, but ${JSON.stringify(u)} decides ${call(u)[0]}`); break; }
+          }
+        }
       }
     }
     if (!opens.length) continue;

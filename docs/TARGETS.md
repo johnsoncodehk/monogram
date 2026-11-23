@@ -44,13 +44,17 @@ mis-tokenize them. So YAML and HTML have the interpreter and `jsTarget` only.
 They parse grammars with element regions (`elements`, [docs/REGIONS.md](REGIONS.md)): the
 portable lexers carry the region's frame stack (a3fb3a9), so
 [`typescriptreact.ts`](../typescriptreact.ts) (TSX), [`javascriptreact.ts`](../javascriptreact.ts)
-(JSX) and the code-children fixture [`test/fixtures/elementdialect.ts`](../test/fixtures/elementdialect.ts)
-emit to all three. What a region may declare that the portable lexers do not carry yet is
-refused when the parser is emitted (`buildIR`), not mis-lexed: directives in children, `rawText`
-together with a type-parameter `signature`, and elements in a newline-mode grammar. A tag start
-(`tagStart`), a raw-text body condition (`unlessBodyStarts`) and text tokens (`textTokens`) are
-carried: the text dialect fixture without its directives (`textDialect`, the cases
-`textdialect-tagstart` and `textdialect-text` of `test/portable-targets.ts`) emits to all three.
+(JSX), the code-children fixture [`test/fixtures/elementdialect.ts`](../test/fixtures/elementdialect.ts)
+and the text dialect fixture [`test/fixtures/textdialect.ts`](../test/fixtures/textdialect.ts)
+(text children with a tag start, raw text with a body condition, comments in text, derived
+directives) emit to all three. What a region may declare that the portable lexers do not carry yet is
+refused when the parser is emitted (`buildIR`), not mis-lexed: `rawText` together with a
+type-parameter `signature`, directives together with a `signature` or without the regex context
+(a head's depth is the paren-head stack's), a class beyond ASCII where one unit is tested
+(`tagStart`, an `after` class, an identifier for the directive word test), a text token that may
+begin beyond ASCII, and elements in a newline-mode grammar. The text dialect's stages
+(`textDialect(parts)`: without text tokens or directives) are cases of their own in
+`test/portable-targets.ts`.
 
 Known difference between the interpreter's lexer and the portable lexers (owed): an
 `identifier` token whose own pattern does not take an ASCII member of IdentifierPart

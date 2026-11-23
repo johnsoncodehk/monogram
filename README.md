@@ -302,9 +302,12 @@ The generated Monarch grammar (Monaco) highlights tags, attributes, holes, text 
 dynamic tags, raw bodies in their embedded language, comments in text and directives from the
 same declaration.
 
+The portable parsers (TypeScript, Go, Rust) parse every one of these features: JSX, TSX and the
+text dialect fixture emit to all three, checked against the interpreter token for token and on
+every one-character edit.
+
 Not there yet: the tree-sitter generator still carries
-its own JSX vocabulary and reads none of the other region features; the portable parsers (TypeScript, Go, Rust) parse JSX and TSX but refuse a
-grammar that has directives (they carry `tagStart`, `unlessBodyStarts` and `textTokens`).
+its own JSX vocabulary and reads none of the other region features.
 
 **Changed behaviour:** a grammar that declares no region gets no element layer. Elements are no
 longer guessed from a `/>` token or a rule that starts with `<`.
