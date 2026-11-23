@@ -7,6 +7,7 @@
 import type { CstGrammar, ElementRegion, ElementHighlight, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
 import { tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { tokenPatternLiteralText } from './token-pattern.ts';
+import { armGraph, armsFrom } from './arm-graph.ts';
 
 /** The shape of a tag or attribute NAME: the identifier token at its head, and the literals that
  *  join further identifiers to it (`.` / `:` / `-` in JSX's `a.b`, `svg:rect`, `data-id`), in rule order.
@@ -174,8 +175,18 @@ export function regionView(grammar: CstGrammar): RegionView | null {
   const rules = new Map(grammar.rules.map((r) => [r.name, r]));
   const closers = new Set([region.closeTag, region.selfClose]);
   const refsCloser = (items: RuleExpr[]) => items.some((x) => x.type === 'ref' && closers.has(x.name));
+  // The element arms: every rule-body arm that begins with the tag opener and references a closer.
+  const g = armGraph(grammar);
   const arms: RuleExpr[][] = [];
-  for (const r of grammar.rules) for (const a of expandArms(r.body)) if (isLit(a[0], region.tagOpen) && refsCloser(a)) arms.push(a);
+  for (let r = 0; r < g.body.length; r++) if (g.rootKind[r] === 'rule')
+    for (const w of armsFrom(g, g.first[r].filter(p => isLit(g.node[p], region.tagOpen)))) { const a = w.map(p => g.node[p]); if (refsCloser(a)) arms.push(a); }
+  {
+    const old: RuleExpr[][] = [];
+    for (const r of grammar.rules) for (const a of expandArms(r.body)) if (isLit(a[0], region.tagOpen) && refsCloser(a)) old.push(a);
+    // TEMPORARY differential: duplicates of an arm (two derivations of one word) are one path.
+    const dedup = old.filter((a, i) => old.findIndex(b => b.length === a.length && b.every((x, k) => x === a[k])) === i);
+    if (dedup.length !== arms.length || dedup.some((a, i) => a.length !== arms[i].length || a.some((x, k) => x !== arms[i][k]))) throw new Error(`region-view: element arms on ${grammar.name}: arm graph ${arms.length} != expandArms ${dedup.length}`);
+  }
 
   const nameJoiners = region.highlight?.nameJoiners ?? [];
   if (nameJoiners.length > 1) throw new Error(`element region: \`highlight.nameJoiners\` declares ${nameJoiners.length} joiners; a name has at most one prefix joiner`);

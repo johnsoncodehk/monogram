@@ -18,7 +18,7 @@ import {
   tokenPatternStringDelimiters,
   tokenPatternToRegex,
 } from './token-pattern.ts';
-import { type ContextualPattern, getScope, quoteScope, classifyToken, detectTypeParamConstraintKeywords, type AngleBracketAmbiguity, type RegexLiteralInfo, highlightFacts } from './highlight-facts.ts';
+import { type ContextualPattern, getScope, quoteScope, classifyToken, checkedConstraintKeywords, type AngleBracketAmbiguity, type RegexLiteralInfo, highlightFacts } from './highlight-facts.ts';
 
 interface TmPattern {
   name?: string;
@@ -385,7 +385,7 @@ function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: s
   // is `\b`-bounded so it doesn't match inside a longer identifier. A grammar with no
   // such constraint keyword yields `topTypeParam === topComma` (comma-only) — output
   // unchanged for those (e.g. the agnostic test's bare `<T,>` generics).
-  const constraintKeywords = detectTypeParamConstraintKeywords(grammar, typeArgRule);
+  const constraintKeywords = checkedConstraintKeywords(grammar, typeArgRule);
   const constraintAlts = constraintKeywords.map(kw => `${skip}\\b${escapeRegex(kw)}\\b\\s*(?!=)`);
   const topTypeParam = constraintAlts.length ? `(?:${topComma}|${constraintAlts.join('|')})` : topComma;
   // Arrow-shaped param list after `>`: the `(`/`)` are the arrow rule's own param

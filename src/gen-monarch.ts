@@ -1,6 +1,8 @@
 import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
 import { regionView, expandArms, type RegionView, type NameShape } from './region-view.ts';
 import { directivesOf } from './grammar-analysis.ts';
+import { armGraph, findWindows, hasWindow, inArmOrder } from './arm-graph.ts';
+import { same } from './highlight-facts.ts';
 import { info as patternInfo, type CSet } from './lex-match-plan.ts';
 import { collectLiterals, escapeRegex, isKeywordLiteral } from './grammar-utils.ts';
 import {
@@ -216,7 +218,17 @@ function detectAngleBrackets(grammar: CstGrammar): AngleInfo | null {
       }
     }
   }
-  return found ? { confirmChars: [...confirm] } : null;
+  const old = found ? { confirmChars: [...confirm] } : null;
+  // The same windows asked of the arm graph: `'<' sep '>'` in a rule-body arm, and the confirming
+  // characters of the items after it, in the order the arms meet them.
+  const g = armGraph(grammar);
+  const isLit = (v: string) => (e: RuleExpr) => e.type === 'literal' && e.value === v;
+  const steps = [isLit('<'), (e: RuleExpr) => e.type === 'sep', isLit('>')];
+  const rules = (r: number) => g.rootKind[r] === 'rule';
+  const next = hasWindow(g, steps, rules) ? {
+    confirmChars: inArmOrder(g, findWindows(g, [...steps, () => true], rules).flatMap(w => { const ch = confirmCharOf(g.node[w[3]]); return ch && ch.length === 1 ? [{ value: ch, window: w }] : []; })),
+  } : null;
+  return same('monarch angleBrackets', grammar, next, old);
 }
 
 // ── Markup tokenizer (HTML/Vue) ──
