@@ -12,6 +12,8 @@ annexB/language/comments/single-line-html-open.js
 ## reject/lexer-division-after-object-literal
 language/expressions/division/bigint-toprimitive.js
 language/expressions/division/bigint-wrapped-values.js
+## reject/optional-chain-bracket-comma-expression
+language/expressions/optional-chaining/optional-chain-prod-expression.js
 ## reject/lexer-optional-chain-before-digit
 language/expressions/optional-chaining/punctuator-decimal-lookahead.js
 ## accept/declaration-in-statement-position
@@ -3174,6 +3176,5 @@ annexB/language/comments/single-line-html-open.js
 ## ts/as-javascript
 language/expressions/division/bigint-toprimitive.js
 language/expressions/division/bigint-wrapped-values.js
-language/expressions/optional-chaining/punctuator-decimal-lookahead.js
-## ts/unknown
 language/expressions/optional-chaining/optional-chain-prod-expression.js
+language/expressions/optional-chaining/punctuator-decimal-lookahead.js

@@ -20,7 +20,7 @@ a test that test262 runs both sloppy and strict, or only in one mode, or as a mo
 first run's text: `"use strict";` prepended for `onlyStrict`). What depends on the goal or the mode is a class
 of its own below (`needs-parameter`).
 
-**21557 of 24677 agree (87.4%).**
+**21556 of 24677 agree (87.4%).**
 
 ## Scoreboard
 
@@ -35,7 +35,7 @@ of its own below (`needs-parameter`).
 | `directive-prologue` | 62 | 51 | 0 | 11 | 0 | 0 |
 | `eval-code` | 347 | 347 | 0 | 0 | 0 | 0 |
 | `export` | 3 | 0 | 3 | 0 | 0 | 0 |
-| `expressions` | 11156 | 9111 | 720 | 1322 | 3 | 0 |
+| `expressions` | 11156 | 9110 | 720 | 1322 | 4 | 0 |
 | `function-code` | 217 | 217 | 0 | 0 | 0 | 0 |
 | `future-reserved-words` | 55 | 29 | 8 | 18 | 0 | 0 |
 | `global-code` | 42 | 28 | 0 | 14 | 0 | 0 |
@@ -61,7 +61,7 @@ of its own below (`needs-parameter`).
 | `annexB/global-code` | 153 | 153 | 0 | 0 | 0 | 0 |
 | `annexB/literals` | 8 | 8 | 0 | 0 | 0 | 0 |
 | `annexB/statements` | 22 | 16 | 0 | 6 | 0 | 0 |
-| **total** | **24677** | **20189** | **1368** | **3109** | **11** | **0** |
+| **total** | **24677** | **20188** | **1368** | **3109** | **12** | **0** |
 
 WE-ACCEPT: test262 says SyntaxError, the grammar parses. WE-REJECT: test262 parses, the grammar rejects.
 
@@ -82,15 +82,17 @@ run); where it does not, the rule is outside even its syntactic layer.
 |---|---:|---:|---|---|
 | `reject/lexer-division-after-object-literal`: a `/` after an object literal's `}` is lexed as a regular expression | 2 | 2 | grammar bug: fix | `language/expressions/division/bigint-toprimitive.js`<br>`language/expressions/division/bigint-wrapped-values.js` |
 | `reject/lexer-optional-chain-before-digit`: `?.` before a decimal digit is `?` and a number | 1 | 1 | grammar bug: fix | `language/expressions/optional-chaining/punctuator-decimal-lookahead.js` |
+| `reject/optional-chain-bracket-comma-expression`: an optional chain's computed member takes an Expression, comma included | 1 | 1 | grammar bug: fix | `language/expressions/optional-chaining/optional-chain-prod-expression.js` |
 | `reject/annexb-html-comments`: HTML-like comments (Annex B) | 8 | 8 | needs a parameterised production the engine lacks (roadmap item 4) | `annexB/language/comments/multi-line-html-close.js`<br>`annexB/language/comments/single-line-html-close-first-line-1.js`<br>`annexB/language/comments/single-line-html-close-unicode-separators.js` |
 
 | verdict | files |
 |---|---:|
-| grammar bug: fix | 3 |
+| grammar bug: fix | 4 |
 | needs a parameterised production the engine lacks (roadmap item 4) | 8 |
 
 - `reject/lexer-division-after-object-literal` — `f({ a: 1 } / 2n, "/")`: after a `}` the lexer reads `/` as a regular expression (a `}` that ends a block or a function body is followed by a regex), but this `}` ends an object literal, a value. Which `}` it is, is the parser's knowledge: the lexer's regex / division choice needs that context (the lexer lane's; the `/` after a hex / octal / binary number was the same class's other cause, fixed).
 - `reject/lexer-optional-chain-before-digit` — `true ?.30 : false`: OptionalChainingPunctuator is `?. [lookahead ∉ DecimalDigit]`.
+- `reject/optional-chain-bracket-comma-expression` — `a?.[0, 1]`: OptionalChain `?. [ Expression ]`. Every other computed member takes the comma list (bracketIndex); this one waits on TypeScript's v1 ESTree shape (test/fixtures/shape-typescript.ts estreeOptionalChain and its Rust stream type), which tells the branch from a call by its kids.
 - `reject/annexb-html-comments` — `<!--` and a line-leading `-->` are comments in script code only; in module code they are not comments (`a <!--b` is `a < !--b` there). Without the script / module goal, accepting them changes the meaning of valid module code.
 
 ### WE-ACCEPT: SyntaxErrors the grammar parses
@@ -188,7 +190,7 @@ class, not classed again. A rejection tsc does not share and the JavaScript gram
 TypeScript grammar bug with no class yet (`ts/unknown`), and fails the gate. The negative tests are not asked of
 the TypeScript grammar; there it is held to tsc's parser ([CORRECTNESS.md](CORRECTNESS.md)).
 
-**20186 of 20200 valid tests parse (99.9%)** · by design 10 · as in JavaScript 3 · unclassified 1 · crash 0
+**20186 of 20200 valid tests parse (99.9%)** · by design 10 · as in JavaScript 4 · unclassified 0 · crash 0
 
 | cell | cause | files | witness | evidence |
 |---|---|---:|---|---|
@@ -198,7 +200,7 @@ the TypeScript grammar; there it is held to tsc's parser ([CORRECTNESS.md](CORRE
 | `ts/by-design` | TypeScript rejects it (JavaScript class `reject/annexb-html-comments`) | 1 | `annexB/language/comments/single-line-html-open.js` | tsc TS1110: Type expected. |
 | `ts/as-javascript` | the JavaScript class `reject/lexer-division-after-object-literal` | 2 | `language/expressions/division/bigint-toprimitive.js` | tsc's .ts parser accepts it |
 | `ts/as-javascript` | the JavaScript class `reject/lexer-optional-chain-before-digit` | 1 | `language/expressions/optional-chaining/punctuator-decimal-lookahead.js` | tsc's .ts parser accepts it |
-| `ts/unknown` | tsc accepts it, javascript.ts accepts it | 1 | `language/expressions/optional-chaining/optional-chain-prod-expression.js` | tsc accepts it, javascript.ts accepts it |
+| `ts/as-javascript` | the JavaScript class `reject/optional-chain-bracket-comma-expression` | 1 | `language/expressions/optional-chaining/optional-chain-prod-expression.js` | tsc's .ts parser accepts it |
 
 ## Early errors: a checker over the tree, not the grammar: not built
 
@@ -243,7 +245,7 @@ declarations, labels, which tsc reports outside its parser; it includes TypeScri
 
 | parser | right | of 24677 | on the 20200 valid tests | on the 4477 parse-negative tests |
 |---|---:|---:|---:|---:|
-| `javascript.ts` (interpreter) | 21557 | 87.4% | 20189 (99.9%) | 1368 (30.6%) |
+| `javascript.ts` (interpreter) | 21556 | 87.4% | 20188 (99.9%) | 1368 (30.6%) |
 | acorn 8.16.0 | 24394 | 98.9% | 19926 (98.6%) | 4468 (99.8%) |
 | tsc 5.9.3 parser | 21391 | 86.7% | 20123 (99.6%) | 1268 (28.3%) |
 | tsc 5.9.3 parser + binder | 21829 | 88.5% | 19934 (98.7%) | 1895 (42.3%) |

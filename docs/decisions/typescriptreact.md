@@ -12,7 +12,7 @@ Every choice point of the grammar and how the generated parser (the portable pla
 | NUD arms | 5 | 0 | 0 | 0 | 5 | 5 |
 | LED connectors | 5 | 3 | 0 | 2 | 0 | 4 |
 | inline choice | 487 | 214 | 0 | 273 | 0 | 270 |
-| star | 143 | 134 | 0 | 9 | 0 | 45 |
+| star | 142 | 133 | 0 | 9 | 0 | 44 |
 | opt | 316 | 274 | 0 | 42 | 0 | 136 |
 | sep | 130 | 19 | 0 | 111 | 0 | 0 |
 
@@ -550,7 +550,6 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - ClassHeritage NUD / class_: `sep(Type, ',')`: by attempt
 - ClassHeritage LED / led_optChain: `alt(Ident \| PrivateField \| '(' sep(Expr, ',') ')' \| '['…`: one token; takes a mark: branch 2: it can fail after `'('`; branch 3: it can fail after `'['`
 - ClassHeritage LED / led_optChain: `sep(Expr, ',')`: by attempt
-- ClassHeritage LED / led_optChain: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
 - ClassHeritage LED / led_bracket: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
 - ClassHeritage LED / led_lt: `sep(Type, ',')`: by attempt
 - ClassHeritage LED / led_paren: `sep(Expr, ',')`: by attempt

@@ -12,7 +12,7 @@ Every choice point of the grammar and how the generated parser (the portable pla
 | NUD arms | 3 | 0 | 0 | 0 | 3 | 3 |
 | LED connectors | 3 | 3 | 0 | 0 | 0 | 3 |
 | inline choice | 84 | 41 | 0 | 43 | 0 | 42 |
-| star | 59 | 58 | 0 | 1 | 0 | 38 |
+| star | 57 | 56 | 0 | 1 | 0 | 36 |
 | opt | 86 | 54 | 0 | 32 | 0 | 53 |
 | sep | 45 | 7 | 0 | 38 | 0 | 0 |
 
@@ -124,7 +124,6 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Expr LED / led_paren: `sep(Expr, ',')`: by attempt
 - Expr LED / led_optChain: `alt(Ident \| PrivateField \| '(' sep(Expr, ',') ')' \| '['…`: one token; takes a mark: branch 2: it can fail after `'('`; branch 3: it can fail after `'['`
 - Expr LED / led_optChain: `sep(Expr, ',')`: by attempt
-- Expr LED / led_optChain: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
 - Expr LED / led_bracket: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
 
 ### Prop
@@ -214,7 +213,6 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - ClassHeritage NUD / class_: `opt('extends' ClassHeritage)`: one token; takes a mark: it can fail after `'extends'`
 - ClassHeritage LED / led_optChain: `alt(Ident \| PrivateField \| '(' sep(Expr, ',') ')' \| '['…`: one token; takes a mark: branch 2: it can fail after `'('`; branch 3: it can fail after `'['`
 - ClassHeritage LED / led_optChain: `sep(Expr, ',')`: by attempt
-- ClassHeritage LED / led_optChain: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
 - ClassHeritage LED / led_bracket: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
 - ClassHeritage LED / led_paren: `sep(Expr, ',')`: by attempt
 
