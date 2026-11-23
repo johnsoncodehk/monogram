@@ -409,10 +409,40 @@ interface ContextualPlan {
   conflicts: ConflictVar[][];
 }
 
+/** Per word-token step node: the words the guards right before it exclude (reservedGuardWords of every
+ *  `not` in front of it, through the other zero-width items there). A step without one is absent. */
+function wordStepGuards(grammar: CstGrammar, word: string | undefined, isWordLiteral: (text: string) => boolean): Map<RuleExpr, Set<string>> {
+  const out = new Map<RuleExpr, Set<string>>();
+  const seen = new Set<RuleExpr>();
+  const walk = (e: RuleExpr): void => {
+    e = tsView(e);
+    if (seen.has(e)) return;
+    seen.add(e);
+    if (e.type === 'seq') {
+      e.items.forEach((item, i) => {
+        if (item.type !== 'not') return;
+        let j = i + 1;
+        while (j < e.items.length && ASSERTION_KINDS.has(tsView(e.items[j]).type)) j++;
+        const ws = reservedGuardWords(item, e.items[j], word, isWordLiteral);
+        if (!ws) return;
+        const step = tsView(e.items[j]);
+        const s = out.get(step) ?? out.set(step, new Set()).get(step)!;
+        for (const w of ws) s.add(w);
+      });
+      e.items.forEach(walk);
+    } else if (e.type === 'alt') e.items.forEach(walk);
+    else if (e.type === 'quantifier') walk(e.body);
+    else if (e.type === 'sep') walk(e.element);
+  };
+  for (const r of grammar.rules) walk(r.body);
+  for (const b of collectTsSharedRules(grammar).values()) walk(b);
+  return out;
+}
+
 function planContextualWords(grammar: CstGrammar, graph: TsLeafGraph, word: string, words: string[],
   isWordLiteral: (text: string) => boolean): ContextualPlan {
-  // The words a guard before each word step excludes (reservedGuardWords), keyed by the step's node.
-  const exclOf = new Map<RuleExpr, Set<string>>();
+  // The words a guard before each word step excludes (wordStepGuards), keyed by the step's node.
+  const exclOf = new Map<RuleExpr, Set<string>>([...wordStepGuards(grammar, word, isWordLiteral)].map(([n, ws]) => [n, new Set(ws)]));
   const exclude = (node: RuleExpr, ws: Iterable<string>) => { const s = exclOf.get(node) ?? exclOf.set(node, new Set()).get(node)!; for (const w of ws) s.add(w); };
   // A step that is a whole alternative by itself (zero-width guards, then the word token) never reads a
   // keyword K that an EARLIER alternative of the same choice always matches alone (`'K'`, or `'K'`
@@ -448,16 +478,8 @@ function planContextualWords(grammar: CstGrammar, graph: TsLeafGraph, word: stri
     if (e.type === 'seq' || e.type === 'alt') for (const i of e.items) noteParent(i, e);
     else if (e.type === 'quantifier') noteParent(e.body, e);
     else if (e.type === 'sep') noteParent(e.element, e);
-    if (e.type === 'seq') {
-      e.items.forEach((item, i) => {
-        if (item.type !== 'not') return;
-        let j = i + 1;
-        while (j < e.items.length && ASSERTION_KINDS.has(tsView(e.items[j]).type)) j++;
-        const ws = reservedGuardWords(item, e.items[j], word, isWordLiteral);
-        if (ws) exclude(tsView(e.items[j]), ws);
-      });
-      e.items.forEach(markGuards);
-    } else if (e.type === 'alt') {
+    if (e.type === 'seq') e.items.forEach(markGuards);
+    else if (e.type === 'alt') {
       const earlier = new Set<string>();
       for (const item of e.items) {
         const step = wordStep(item);
@@ -1390,6 +1412,9 @@ export interface ZeroWidthToken {
   ahead: string[];
   after: Set<string>;
   cont: Set<string>;
+  /** The keywords a word-token step right after the token reads as the word token (no guard before
+   *  it excludes them): AFTER holds them though AFTER names only the word token. */
+  afterWords: Set<string>;
 }
 interface ZeroWidthPlan {
   tokens: ZeroWidthToken[];
@@ -1405,6 +1430,8 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
   // A grammar with its own line handling (NEWLINE tokens, indentation) has its own scanner rules.
   if (grammar.indent || grammar.newline) return plan;
   const word = grammar.tokens.find(t => t.identifier)?.name;
+  const guards = wordStepGuards(grammar, word, isWordLiteral);
+  const words = word ? collectWordLiterals(grammar, isWordLiteral) : [];
   const tokSet = (e: RuleExpr): string[] | null => {
     e = tsView(e);
     if (e.type === 'literal') return [`'${e.value}`];
@@ -1461,6 +1488,7 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
   const graph = treeSitterLeafGraph(grammar, tokenNames, scannerTokens, prattRules, termOf);
   const lr = buildLr(graph);
   const after = cands.map(() => new Set<string>()), cont = cands.map(() => new Set<string>());
+  const afterWords = cands.map(() => new Set<string>());
   const idOf = (t: string) => t.startsWith('@zw') ? +t.slice(3) : -1;
   const valid = lr.states.map((_, s) => lr.valid(s));
   // The terminals that may come first after a leaf in its rule (through nullable rules).
@@ -1501,10 +1529,19 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
     }
     for (const [sym, to] of st.goto) {
       const i = idOf(sym);
-      if (i >= 0) for (const u of valid[to]) if (idOf(u) < 0) after[i].add(u);
+      if (i < 0) continue;
+      for (const u of valid[to]) if (idOf(u) < 0) after[i].add(u);
+      // A keyword is the word token after the token where a word step comes next whose guard does
+      // not exclude it (`async` ⏎-less `true => 1`: the async arrow's parameter guard lets `true` be
+      // a name there; the largest reserved set would not).
+      for (const l of lr.states[to].next) {
+        if (graph.sym[l] !== word || graph.nt[l] >= 0) continue;
+        const ex = graph.node[l] ? guards.get(graph.node[l]!) : undefined;
+        for (const w of words) if (!ex?.has(w)) afterWords[i].add(w);
+      }
     }
   });
-  return { after, cont };
+  return { after, cont, afterWords };
   };
   // A keyword the word token can also lex (one no reserved set excludes from it everywhere).
   const wordShaped = (t: string) => t === word || (t.startsWith("'") && isWordLiteral(t.slice(1)) && !reserved.has(t.slice(1)));
@@ -1522,7 +1559,7 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
     for (const i of out) live.delete(i);
     res = analyze(live);
   }
-  const { after, cont } = res;
+  const { after, cont, afterWords } = res;
   const byKey = new Map<string, ZeroWidthToken>();
   const counters = { 'line-end': 0, 'same-line': 0 };
   cands.forEach((c, i) => {
@@ -1540,12 +1577,13 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
       : [c.kind, [...after[i]].sort().join(' '), [...cont[i]].sort().join(' ')].join('|');
     let tok = byKey.get(key);
     if (!tok) {
-      tok = { snake: `_${c.kind === 'line-end' ? 'line_end' : 'same_line'}_${++counters[c.kind]}`, kind: c.kind, lineBreak: c.lineBreak, ahead: [...new Set(c.ahead)].sort(), after: new Set(), cont: new Set() };
+      tok = { snake: `_${c.kind === 'line-end' ? 'line_end' : 'same_line'}_${++counters[c.kind]}`, kind: c.kind, lineBreak: c.lineBreak, ahead: [...new Set(c.ahead)].sort(), after: new Set(), cont: new Set(), afterWords: new Set() };
       byKey.set(key, tok);
       plan.tokens.push(tok);
     }
     for (const x of after[i]) tok.after.add(x);
     for (const x of cont[i]) tok.cont.add(x);
+    for (const x of afterWords[i]) tok.afterWords.add(x);
     plan.tokenOf.set(c.node, tok);
     for (const a of c.asserts) plan.lowered.add(a);
   });
@@ -3245,7 +3283,7 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   tokens.forEach(t => {
     const S = t.snake.toUpperCase();
     H.push(`static const bool ${S}_AFTER_EXACT[] = ${boolRow(l => exact(t.after, l))};`);
-    H.push(`static const bool ${S}_AFTER[] = ${boolRow(l => has(t.after, l))};`);
+    H.push(`static const bool ${S}_AFTER[] = ${boolRow(l => has(t.after, l) || t.afterWords.has(l))};`);
     H.push(`static const bool ${S}_CONT[] = ${boolRow(l => has(t.cont, l))};`);
     H.push(`static const bool ${S}_AHEAD[] = ${boolRow(l => t.ahead.includes(`'${l}`))};`);
   });
