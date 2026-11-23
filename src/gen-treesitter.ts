@@ -912,10 +912,21 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
   // table does not name).
   const high = Math.max(0, ...[...bp.opTable.values()].map(o => o.lbp), ...[...bp.prefixOps.values()].map(o => o.rbp)) + 2;
   const selfSnake = ctx.ruleSnake.get(rule.name);
+  // Heuristic: a branch that starts with the self-reference is a left-recursive
+  // continuation (call/member/index/generic) — bind tight.
+  const isContinuation = (ab: string) => ab.startsWith(`seq($.${selfSnake}`) || ab === `$.${selfSnake}` || ab.startsWith(`seq(alias($.${selfSnake}, `);
+  // Where several readings of the same tokens survive a GLR fork, the Pratt loop's choice decides:
+  // it tries the continuations in grammar order before any binary operator, and the first that
+  // parses wins (gen-parser.ts, the LED loop). So each continuation carries a dynamic precedence
+  // larger than the sum of every later one's, and operators carry none: a tree built with an
+  // earlier continuation outweighs any reading of the same tokens through later continuations
+  // and operators (`f<T>(x)` is the typed call, not the instantiation `f<T>` called, nor
+  // `(f < T) > (x)`). Static precedence still decides every conflict it can.
+  const continuations = atomBranches.filter(isContinuation).length;
+  let contIndex = 0;
+  const dyn = (b: string) => `prec.dynamic(${2 ** (continuations - 1 - contIndex++)}, ${b})`;
   for (const [i, ab] of atomBranches.entries()) {
-    // Heuristic: a branch that starts with the self-reference is a left-recursive
-    // continuation (call/member/index/generic) — bind tight.
-    if (ab.startsWith(`seq($.${selfSnake}`) || ab === `$.${selfSnake}` || ab.startsWith(`seq(alias($.${selfSnake}, `)) {
+    if (isContinuation(ab)) {
       const alt = atomAlts[i];
       const connector = alt.type === 'seq' ? alt.items.slice(1).find(x => !ASSERTION_KINDS.has(x.type)) : undefined;
       const led = connector?.type === 'literal' ? bp.ledPrecByConnector.get(connector.value) : undefined;
@@ -928,10 +939,10 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
       const last = alt.type === 'seq' ? alt.items[alt.items.length - 1] : null;
       const wholeSelf = led !== undefined && led.rhsBp === null && last?.type === 'ref' && last.name === rule.name;
       const tail = wholeSelf ? last : openTail(rule.name, alt, ctx.grammar);
-      if (tail === null) { branches.push(`prec.left(${num}, ${ab})`); continue; }
+      if (tail === null) { branches.push(dyn(`prec.left(${num}, ${ab})`)); continue; }
       const t = renderExpr(tail, ctx);
       if (!ab.endsWith(`, ${t})`)) throw new Error(`gen-treesitter: the continuation ${ab} does not end in its operand ${t}`);
-      branches.push(`seq(prec.left(${num}, ${ab.slice(0, ab.length - t.length - 3)})), ${t})`);
+      branches.push(dyn(`seq(prec.left(${num}, ${ab.slice(0, ab.length - t.length - 3)})), ${t})`));
     } else {
       branches.push(ab);
     }

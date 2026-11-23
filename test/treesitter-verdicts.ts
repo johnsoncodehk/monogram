@@ -226,7 +226,10 @@ function operatorPairs(gr: { precs: { operators: { value: string; position: stri
 const TYPE_ARGUMENTS = [
   'f<T>(x);', 'x = f<T>(x);', 'f<T, U>(x);', 'f<T>();', 'f<string>(x);', 'a.b<T>(x);', 'new C<T>(x);', 'f<T>`t`;',
   'x = f<T>;', 'a + f<T>(x);', '-f<T>(x);', 'a < b > (c);', 'a < b;', 'a < b > c;', 'a - b < c;', 'a * b < c;',
+  'x = a < b, c > (d);', 'f<T>;', 'new C<T>;', 'a?.b<T>(x);', 'a?.<T>(x);', 'a.b<T>`t`;', 'f<T>(x).y<U>(z);', 'f<A<B>>(x);',
 ];
+// The same in TSX, beside JSX (`<T,>(x) => x` is a generic arrow, `<div/>` an element argument).
+const TSX_TYPE_ARGUMENTS = [...TYPE_ARGUMENTS, 'x = <T,>(x: T) => x;', 'f<T>(<div/>);', 'x = <div>{f<T>(y)}</div>;'];
 const exprSpans = (n: any, out: string[] = []): string[] => {
   if (n.rule === 'Expr') out.push(`${n.offset}-${n.end}`);
   for (const c of n.children ?? []) if (c.rule) exprSpans(c, out);
@@ -297,7 +300,7 @@ let notRun = false;
 for (const { lang, mod, corpora, pairs } of [
   { lang: 'typescriptreact', mod: '../typescriptreact.ts', corpora: {
     'curated JSX': JSX_CASES, 'TSX issue cases': tsxIssueCases.map(c => c.src),
-    'TS issue cases': issueTests.map(t => t.input), 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, operands: OPERANDS } },
+    'TS issue cases': issueTests.map(t => t.input), 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, operands: OPERANDS, 'type arguments': TSX_TYPE_ARGUMENTS } },
   { lang: 'javascriptreact', mod: '../javascriptreact.ts', corpora: { 'curated JSX': JSX_CASES, 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS } },
   { lang: 'typescript', mod: '../typescript.ts', corpora: { 'TS issue cases': issueTests.map(t => t.input), 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, operands: OPERANDS, 'type arguments': TYPE_ARGUMENTS }, pairs: true },
   { lang: 'javascript', mod: '../javascript.ts', corpora: { 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS }, pairs: true },
