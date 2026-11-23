@@ -1942,7 +1942,8 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
     return null;
   };
   // ── candidates ──
-  type Cand = { node: RuleExpr; kind: ZeroWidthToken['kind']; lineBreak: boolean; ahead: string[]; asserts: RuleExpr[] };
+  type Cand = { node: RuleExpr; kind: ZeroWidthToken['kind']; lineBreak: boolean; ahead: string[]; asserts: RuleExpr[]; owner: string };
+  let owner = '';
   const cands: Cand[] = [];
   const seen = new Set<RuleExpr>();
   const armItems = (a: RuleExpr) => { const v = tsView(a); return (v.type === 'seq' ? v.items : [v]).map(tsView); };
@@ -1954,7 +1955,7 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
       case 'seq':
         for (const i of e.items) {
           const v = tsView(i);
-          if (v.type === 'sameLine') cands.push({ node: v, kind: 'same-line', lineBreak: false, ahead: [], asserts: [v] });
+          if (v.type === 'sameLine') cands.push({ node: v, kind: 'same-line', lineBreak: false, ahead: [], asserts: [v], owner });
           else walk(i);
         }
         return;
@@ -1970,7 +1971,7 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
           if (!y) { ok = false; break; }
           ahead.push(...y);
         }
-        if (ok && lineBreak) cands.push({ node: e, kind: 'line-end', lineBreak, ahead, asserts: pure.map(a => armItems(a)[0]) });
+        if (ok && lineBreak) cands.push({ node: e, kind: 'line-end', lineBreak, ahead, asserts: pure.map(a => armItems(a)[0]), owner });
         for (const a of e.items) walk(a);
         return;
       }
@@ -1978,8 +1979,8 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
       case 'sep': return walk(e.element);
     }
   };
-  for (const r of grammar.rules) walk(r.body);
-  for (const b of collectTsSharedRules(grammar).values()) walk(b);
+  for (const r of grammar.rules) { owner = r.name; walk(r.body); }
+  for (const [n, b] of collectTsSharedRules(grammar)) { owner = n; walk(b); }
   if (!cands.length) return plan;
 
   // ── AFTER / CONT of the live candidates, over the automaton where each is its own terminal and
@@ -2065,15 +2066,17 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
     res = analyze(live);
   }
   const { after, cont, afterGuards, together } = res;
-  // Same-line markers valid in one state are ONE token: the scanner returns one zero-width symbol, so
+  // Same-line markers of one rule valid in one state are ONE token: the scanner returns one zero-width symbol, so
   // where two are valid it would commit to the first whose sets admit the next token, and the parse
   // would follow that marker's arm alone (`private readonly x` in a class: the static-block arm's
   // modifier marker admits `readonly` after `private`, and after `readonly` admits no member name).
+  // Only within a rule: markers of different rules met in one state (`async` before an arrow, a
+  // declaration and a property) are what keeps those rules' readings apart in the LR automaton.
   const root = cands.map((_, i) => i);
   const find = (i: number): number => root[i] === i ? i : (root[i] = find(root[i]));
   for (const t of together) {
     const sl = t.filter(i => live.has(i) && cands[i].kind === 'same-line');
-    for (const i of sl.slice(1)) root[find(i)] = find(sl[0]);
+    for (const i of sl) { const j = sl.find(k => cands[k].owner === cands[i].owner)!; root[find(i)] = find(j); }
   }
   // and, as before, markers with the same sets are one token wherever they are valid
   const bySets = new Map<string, number>();
