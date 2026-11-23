@@ -52,7 +52,7 @@ jobs:
       - name: Generate editor artifacts (committed ones must be in sync)
         run: |
           npm run gen
-          git diff --exit-code -- '*.tmLanguage.json' '*.language-configuration.json' '*.monarch.json' '*.contributes.json' tree-sitter
+          git diff --exit-code -- '*.tmLanguage.json' '*.language-configuration.json' '*.monarch.json' '*.contributes.json' tree-sitter docs/COMPLETENESS.md docs/decisions test/fixtures/decisionsjs.decisions.md
 
       - name: Typecheck
         run: npx tsc --noEmit

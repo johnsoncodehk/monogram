@@ -55,7 +55,7 @@ The old gates map to new ones as follows. Cases are each gate's own count line, 
 | highlighter/self-close-sites | generative/scope≡role | 6 languages, 32 cells → same |
 | generative/gap-ledger-selftest | generative/scope≡role (its mutation proof and classifier locks) | 13 → 6 moved, 7 ledger-only dropped |
 | yaml/depth-witnesses, depth-sites, flow-sites, compact-nest-sites, deepest-sibling, blockscalar-depth | yaml/tm-sites (`test/yaml-sites.ts`) | 22 + 16 + 8 + 57 + 576 + 72 → 751 |
-| emit-parity/decision-dead | emit-parity/decision-report (`--check` runs both halves) | unchanged |
+| emit-parity/decision-dead | emit-parity/decision-report (the witnesses, then the dead alternatives; the pages are `npm run gen` outputs) | unchanged |
 | emit-parity/portable-targets/edits-1 … edits-5 | edits-1, edits-2 | unchanged (grammars regrouped) |
 | conformance/js-corpus | deleted, with `docs/JS-CONFORMANCE.md` (test262 is JavaScript's oracle) | |
 | generative/gap-ledger-check | deleted (`npm run ledger:check` remains, for gap-issues.yml) | |
