@@ -196,6 +196,8 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: Aren
     ahead: (set, is) => `p.${e.ahead}(${set}, ${is})`,
     aheadCtx: (set, is) => (is ? `(p.${e.ahead}(${set}, true) || p.ctxWord())` : `(p.${e.ahead}(${set}, false) && !p.ctxWord())`),
     sameLine: () => `func() bool { t := p.${e.peek}(); return t != nil && !t.Nl }()`,
+    // MEASUREMENT BRANCH ONLY (M5 prototype): target contexts not printed; the parse is the base's.
+    acc: (call) => call, accSep: () => 'true', accRun: (cond) => cond,
     inPlace: (_kind, stmts) => `func() bool { ${stmts} }()`,
     ret: (cond) => `return ${cond}`,
     // A `ctx` step's body is a boolean expression: no return path leaves between the two assignments.

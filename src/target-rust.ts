@@ -1210,6 +1210,8 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
     ahead: (set, is) => `${recv}.ahead(${set}, ${is})`,
     aheadCtx: (set, is) => (is ? `(${recv}.ahead(${set}, true) || ${recv}.ctx_word())` : `(${recv}.ahead(${set}, false) && !${recv}.ctx_word())`),
     sameLine: () => `matches!(${recv}.peek(), Some(t) if !t.nl)`,
+    // MEASUREMENT BRANCH ONLY (M5 prototype): target contexts not printed; the parse is the base's.
+    acc: (call) => call, accSep: () => 'true', accRun: (cond) => cond,
     inPlace: (kind, stmts) => (kind === 'alt' ? `(|p: &mut Parser<'a, B>| -> bool { ${stmts} })(${recv})` : stmts),
     ret: (cond) => cond,
     suppress: (set, cond) => `{ ${recv}.suppress_next = ${set}; let _r = (${cond}); ${recv}.suppress_next = 0; _r }`,
