@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { blockBody, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { blockBody, elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isList, isNum, isOpt, isRec, isRecList, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -458,12 +458,12 @@ const _LID_EQ: u16 = ${lidOf(ids, '=')};
 ${sig ? `${rsBoolArr('_EL_THEN', lidFlagTable(ids, sig.then))}
 ` : ''}`;
   const rxFields = rx ? 'base: usize, prev0: (bool, u16, u16), bp0: (bool, u16), kid1: u16, lid1: u16, lid2: u16, paren_head: Vec<bool>, last_close: bool, last_bang: bool, ' : '';
-  const specFields = sig ? 'spec_tok: usize, spec_on: bool, spec_base: usize, spec_closed_at: usize, spec_closed: bool, spec_done: bool, spec_then: bool, spec_off: usize, spec_end: usize, spec_at: usize, spec_has_at: bool, spec_keep: bool, sv: (usize, bool, u16, u16, u16, bool, isize), sv_paren: Vec<bool>, sv_stack: Vec<i64>, ' : '';
+  // Whether a signature is undecided is the scan's (the entry and the loop head read it); the rest
+  // is its own Spec, so the cold calls take that and never the scan itself: a scan passed by
+  // reference to a call that is not inlined keeps every field of it in memory (Callgrind: about 20
+  // instructions per token of loads and stores, attributed to no line).
+  const specFields = sig ? 'spec_on: bool, ' : '';
   const inl = '    #[inline(always)]\n';
-  const braces = [
-    tpl ? `if f & 3 == 0 { if lid == _LID_BRACE_OPEN { *self.template_stack.last_mut().unwrap() = f + 4; } else if lid == _LID_INTERP_CLOSE { *self.template_stack.last_mut().unwrap() = f - 4; } }` : '',
-    `if f & 3 == 1 { if lid == _LID_HOLE_OPEN { *self.template_stack.last_mut().unwrap() = f + 4; } else if lid == _LID_HOLE_CLOSE { *self.template_stack.last_mut().unwrap() = f - 4; } }`,
-  ].filter(Boolean).join(' else ');
   const methods = `${rx ? `${inl}    fn prev(&self) -> (bool, u16, u16) {
         let n = self.acc.len();
         (n > self.base || self.prev0.0, self.kid1, self.lid1)
@@ -474,8 +474,7 @@ ${inl}    fn prev2(&self) -> (bool, u16) {
     }
 ${inl}    fn prev_is_value(&self) -> bool {
         // in a tag nothing is a regex; the token that ended an element is a value
-        if let Some(&f) = self.template_stack.last() { if f & 3 == 2 && f & 12 != 0 { return true; } }
-        if self.el_ended { return true; }
+        if self.acc.len() as isize <= self.value_to { return true; }
         let (has_prev, prev_kid, prev_lid) = self.prev();
         if !has_prev { return false; }
         if ${rsFlag('_PAV', 'prev_lid')} { return self.last_bang; }
@@ -485,57 +484,87 @@ ${inl}    fn prev_is_value(&self) -> bool {
     }
 ` : ''}${inl}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
 ${rx ? `        if lid == _LID_LPAREN { let (has_prev2, bp_lid) = self.prev2(); let (_, prev_kid, prev_lid) = self.prev(); let is_member = has_prev2 && ${rsFlag('_MEM', 'bp_lid')}; self.paren_head.push(!is_member && prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'prev_lid')}); }
-        else if lid == _LID_RPAREN { self.last_close = self.paren_head.pop().unwrap_or(false);${sig ? ' if self.spec_on && self.acc.len() > self.spec_tok + 3 && self.paren_head.len() == self.spec_base { self.spec_closed = true; self.spec_closed_at = self.acc.len(); }' : ''} }
+        else if lid == _LID_RPAREN { self.last_close = self.paren_head.pop().unwrap_or(false); }
         if ${p.pavHot} { self.last_bang = self.prev_is_value(); }
-` : ''}${sig ? `        // the token after the signature group's closer decides it (a closer that leaves the bracket
-        // stack at its base, even by popping an empty one, closes it again)
-        if self.spec_closed && self.acc.len() > self.spec_closed_at { self.spec_closed = false; self.spec_done = true; self.spec_then = kid == 0 && ${rsFlag('_EL_THEN', 'lid')}; self.spec_off = off; self.spec_end = end; }
-` : ''}        if let Some(&f) = self.template_stack.last() { ${braces} }
-        self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false; self.el_ended = false;${rx ? ' self.lid2 = self.lid1; self.kid1 = kid; self.lid1 = lid;' : ''}
+` : ''}        self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;${rx ? ' self.lid2 = self.lid1; self.kid1 = kid; self.lid1 = lid;' : ''}
     }
-${sig ? `    #[cold] #[inline(never)]
-    fn spec_begin(&mut self, pos: usize) {
-        self.sv = (pos, self.pending_nl, self.kid1, self.lid1, self.lid2, self.el_ended, self.tag_angle);
-        self.sv_paren.clear(); self.sv_paren.extend_from_slice(&self.paren_head);
-        self.sv_stack.clear(); self.sv_stack.extend_from_slice(&self.template_stack);
-        self.spec_tok = self.acc.len(); self.spec_on = true; self.spec_base = self.paren_head.len(); self.spec_closed = false; self.spec_done = false;
-        self.sv_bang = (self.last_close, self.last_bang);
+    /// The frame stack's top changed: whether the loop head has work (an element or raw frame on
+    /// top${sig ? ', or a signature undecided' : ''}), and to which token count the previous token is a
+    /// value (in a tag: every; else the token that ended an element, if it is the last).
+${inl}    fn refresh(&mut self) {
+        let top = self.template_stack.last().copied().unwrap_or(0);
+        self.hot = ${sig ? 'self.spec_on || ' : ''}top & 2 != 0;
+${rx ? '        self.value_to = if top & 3 == 2 && top & 12 != 0 { isize::MAX } else { self.el_end_at };\n' : ''}    }
+${sig ? `${inl}    fn spec_begin(&mut self, sp: &mut Spec, pos: usize) {
+        sp.save((pos, self.pending_nl, self.kid1, self.lid1, self.lid2, self.el_end_at, self.tag_angle, self.last_close, self.last_bang), &self.paren_head[..], &self.template_stack[..]);
+        sp.tok = self.acc.len(); sp.seen = sp.tok; sp.base = self.paren_head.len(); self.spec_on = true; self.hot = true;
     }
-    #[cold] #[inline(never)]
-    fn spec_rewind(&mut self, src: &str, n: usize) -> usize {
-        let failed = self.err.is_some();
-        let keep = self.spec_done && !failed && self.spec_then;
-        let re = if self.spec_done && !failed { ${shared.elementFn('reach')}(src, self.spec_end as isize) } else { n as isize + 1 };
-        if re > self.la_end { self.la_end = re; }
-        if keep { self.spec_until = self.spec_off as isize; }
-        self.spec_at = self.sv.0; self.spec_has_at = true; self.spec_keep = keep;
-        self.acc.truncate(self.spec_tok);
-        let (pos, nl, kid1, lid1, lid2, ended, angle) = self.sv;
-        self.pending_nl = nl; self.kid1 = kid1; self.lid1 = lid1; self.lid2 = lid2; self.el_ended = ended; self.tag_angle = angle;
-        self.last_close = self.sv_bang.0; self.last_bang = self.sv_bang.1;
-        self.paren_head.clear(); self.paren_head.extend_from_slice(&self.sv_paren);
-        self.template_stack.clear(); self.template_stack.extend_from_slice(&self.sv_stack);
-        self.spec_on = false; self.spec_closed = false; self.spec_done = false; self.err = None;
+    // Each token the speculation lexes, read at the next loop head (a round lexes one token at
+    // most): whether the signature is decided.
+${inl}    fn spec_step(&mut self, sp: &mut Spec) -> bool {
+        let n = self.acc.len();
+        if n > sp.seen { sp.seen = n; sp.next(self.acc[n - 1], n - 1, self.paren_head.len()); }
+        sp.done
+    }
+    // The rewind to the signature's tagOpen: its position.
+${inl}    fn spec_rewind(&mut self, sp: &mut Spec, src: &str, n: usize, failed: bool) -> usize {
+        let (la, until) = sp.verdict(src, n, failed, self.la_end, self.spec_until); self.la_end = la; self.spec_until = until;
+        self.acc.truncate(sp.tok);
+        let (pos, nl, kid1, lid1, lid2, ended, angle, close, bang) = sp.sv;
+        self.pending_nl = nl; self.kid1 = kid1; self.lid1 = lid1; self.lid2 = lid2; self.el_end_at = ended; self.tag_angle = angle; self.last_close = close; self.last_bang = bang;
+        self.paren_head.clear(); self.paren_head.extend_from_slice(&sp.sv_paren);
+        self.template_stack.clear(); self.template_stack.extend_from_slice(&sp.sv_stack);
+        self.spec_on = false;
+        self.refresh();
         pos
     }
 ` : ''}`;
-  const struct = `struct ElScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, err: Option<LexErr>, ${rxFields}template_stack: Vec<i64>, el_ended: bool, tag_angle: isize, la_end: isize, spec_until: isize, ${raw ? 'tag_at: Vec<i64>, ' : ''}${specFields}${sig ? 'sv_bang: (bool, bool), ' : ''}}
+  // The signature's saved state (the scan's before its tagOpen), its decision, and the decision
+  // kept for the tagOpen it rewinds to.
+  const spec = sig ? `struct Spec { tok: usize, seen: usize, base: usize, closed: bool, closed_at: usize, done: bool, then: bool, off: usize, end: usize, at: usize, has_at: bool, keep: bool, sv: (usize, bool, u16, u16, u16, isize, isize, bool, bool), sv_paren: Vec<bool>, sv_stack: Vec<i64> }
+impl Spec {
+    #[cold] #[inline(never)]
+    fn save(&mut self, sv: (usize, bool, u16, u16, u16, isize, isize, bool, bool), paren: &[bool], stack: &[i64]) {
+        self.sv = sv; self.done = false; self.closed = false;
+        self.sv_paren.clear(); self.sv_paren.extend_from_slice(paren);
+        self.sv_stack.clear(); self.sv_stack.extend_from_slice(stack);
+    }
+    // The token t at index i, the bracket stack depth after it: a closer that leaves the stack at
+    // the signature's base (even by popping an empty one) closes the group, again if it was closed;
+    // the token after the closer decides.
+    #[cold] #[inline(never)]
+    fn next(&mut self, t: Tok, i: usize, depth: usize) {
+        if t.lid == _LID_RPAREN && i > self.tok + 3 && depth == self.base { self.closed = true; self.closed_at = i; }
+        else if self.closed && i > self.closed_at { self.closed = false; self.done = true; self.then = t.kid == 0 && ${rsFlag('_EL_THEN', 't.lid')}; self.off = t.off as usize; self.end = t.end as usize; }
+    }
+    // What the verdict leaves: the look end (the signature's read past its deciding token) and the
+    // position below which no tagOpen is tried again; the decision is kept for the tagOpen.
+    #[cold] #[inline(never)]
+    fn verdict(&mut self, src: &str, n: usize, failed: bool, la_end: isize, spec_until: isize) -> (isize, isize) {
+        let keep = self.done && !failed && self.then;
+        let re = if self.done && !failed { ${shared.elementFn('reach')}(src, self.end as isize) } else { n as isize + 1 };
+        self.at = self.sv.0; self.has_at = true; self.keep = keep; self.done = false;
+        (if re > la_end { re } else { la_end }, if keep { self.off as isize } else { spec_until })
+    }
+}
+` : '';
+  const struct = `struct ElScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, err: Option<LexErr>, ${rxFields}template_stack: Vec<i64>, hot: bool, el_end_at: isize, ${rx ? 'value_to: isize, ' : ''}tag_angle: isize, la_end: isize, spec_until: isize, ${raw ? 'tag_at: Vec<i64>, ' : ''}${specFields}}
 impl<'a> ElScan<'a> {
 ${methods}}
-`;
-  const enter = `            st.template_stack.push(6); st.emit(pos, pos + ${L}, 0, _LID_EL_OPEN);${raw ? ' st.tag_at.push(st.acc.len() as i64 - 1);' : ''} st.tag_angle = 0; pos += ${L}; continue;\n`;
+${spec}`;
+  const enter = `            st.template_stack.push(6); st.refresh(); bound = 0; st.emit(pos, pos + ${L}, 0, _LID_EL_OPEN);${raw ? ' st.tag_at.push(st.acc.len() as i64 - 1);' : ''} st.tag_angle = 0; pos += ${L}; continue;\n`;
   const at = (lit: string) => startByteEq('pos', lit);
   const entry = !operand ? `        if ${at(el.tagOpen)} {\n${enter}        }\n`
     : !(el.head || sig) ? `        if ${at(el.tagOpen)} && !st.prev_is_value() {\n${enter}        }\n`
     : `        if ${at(el.tagOpen)}${sig ? ' && !st.spec_on && pos as isize >= st.spec_until' : ''} && !st.prev_is_value() {
             let op;
-            ${sig ? 'if st.spec_has_at && pos == st.spec_at { op = if st.spec_keep { 0 } else { 1 }; st.spec_has_at = false; } else ' : ''}{ let (o, re) = ${shared.elementFn('opens')}(src, pos as isize); op = o; if re > st.la_end { st.la_end = re; } }
+            ${sig ? 'if sp.has_at && pos == sp.at { op = if sp.keep { 0 } else { 1 }; sp.has_at = false; } else ' : ''}{ let (o, re) = ${shared.elementFn('opens')}(src, pos as isize); op = o; if re > st.la_end { st.la_end = re; } }
             if op == 1 {
 ${enter}            }
-${sig ? '            if op == 2 { st.spec_begin(pos); }\n' : ''}        }
+${sig ? '            if op == 2 { st.spec_begin(&mut sp, pos); bound = 0; }\n' : ''}        }
 `;
   const holeClose = `        if st.template_stack.last() == Some(&1) && ${at(el.holeClose)} {
-            st.emit(pos, pos + ${tlen(el.holeClose)}, 0, _LID_HOLE_CLOSE); st.template_stack.pop(); pos += ${tlen(el.holeClose)}; continue;
+            st.emit(pos, pos + ${tlen(el.holeClose)}, 0, _LID_HOLE_CLOSE); st.template_stack.pop(); st.refresh(); if st.hot { bound = 0; } pos += ${tlen(el.holeClose)}; continue;
         }
 `;
   const heads = new Map<number, string>();
@@ -553,41 +582,58 @@ ${sig ? '            if op == 2 { st.spec_begin(pos); }\n' : ''}        }
                 st.emit(pos, fe as usize, fk as u16, fl as u16);
 ${raw ? `                // each element frame's current tag: the index of its tagOpen token (the name is the next)
                 if fl as u16 == _LID_EL_OPEN { let at = st.acc.len() as i64 - 1; if fp == 6 { st.tag_at.push(at); } else if (fr >> 2) & 3 == 0 { *st.tag_at.last_mut().unwrap() = at; } }
-` : ''}                if ft < 0 { st.template_stack.pop();${raw ? ' st.tag_at.pop();' : ''} st.el_ended = true; } else { *st.template_stack.last_mut().unwrap() = ft as i64; }
+` : ''}                if ft < 0 { st.template_stack.pop();${raw ? ' st.tag_at.pop();' : ''} st.el_end_at = st.acc.len() as isize; } else { *st.template_stack.last_mut().unwrap() = ft as i64; }
                 if fp != 0 { st.template_stack.push(fp as i64); }
 ${raw ? `                // an open tag ended: a raw-text name gives its body to a raw frame (kind 3), lexed next
                 if fl as u16 == _LID_EL_CLOSE && (fr >> 2) & 3 == 1 && st.tag_angle == 0 {
                     let i = (*st.tag_at.last().unwrap() + 1) as usize;
                     if i + 1 < st.acc.len() { let t = st.acc[i]; let (re, rk) = ${shared.elementFn('raw')}(src, t.off as isize, t.end as isize, fe); if rk != 0 && re > fe { st.template_stack.push(3); } }
                 }
-` : ''}                st.tag_angle = fa; pos = fe as usize; continue;
+` : ''}                st.refresh(); st.tag_angle = fa; pos = fe as usize; continue;
             }
         } }
 ${raw ? `        if st.template_stack.last() == Some(&3) {
             let t = st.acc[(*st.tag_at.last().unwrap() + 1) as usize];
             let (re, rk) = ${shared.elementFn('raw')}(src, t.off as isize, t.end as isize, pos as isize);
-            st.emit(pos, re as usize, rk as u16, 0); st.template_stack.pop(); pos = re as usize; continue;
+            st.emit(pos, re as usize, rk as u16, 0); st.template_stack.pop(); st.refresh(); pos = re as usize; continue;
         }
 ` : ''}`;
-  const loopBody = `${sig ? '        if st.spec_on && (st.spec_done || st.err.is_some() || pos >= n) { pos = st.spec_rewind(src, n); continue; }\n' : ''}        let c = b[pos] as u32;
-${frameStep}${pre}${cascade}
-${p.uniIdentOrPanic}`;
-  const cond = sig ? '(pos < n || st.spec_on) && (limit == 0 || st.acc.len() - base < limit || st.spec_on)' : 'pos < n && (limit == 0 || st.acc.len() - base < limit)';
+  // The plain rounds (code outside element frames) are the inner loop, whose only bound is
+  // \`bound\`: the input's end while no element work is pending, so its condition is the plain
+  // lexer's; one round (pos + 1) after the frame step lexed nothing; 0 once a round makes work (an
+  // element entered or back on top${sig ? ', a signature begun' : ''}). The work (\`hot\`, kept by every change of the
+  // frame stack's top${sig ? ' and of the speculation' : ''}) is the outer loop's, so no plain round tests it.
+  // ${sig ? 'A speculation lexes past the token limit to its verdict (the limit is tested first); one that\n  // reaches the end of the input (or a lexer error, its verdict) is rewound at the head.' : ''}
+  const more = `pos < n && (limit == 0 || st.acc.len() - base < limit${sig ? ' || st.spec_on' : ''})`;
+  const loop = `    loop {
+        if !(${more}) {
+${sig ? '            if st.spec_on { st.spec_step(&mut sp); pos = st.spec_rewind(&mut sp, src, n, st.err.is_some()); st.err = None; continue; }\n' : ''}            break;
+        }
+        let mut bound = n;
+        if st.hot {
+${sig ? '        if st.spec_on && st.spec_step(&mut sp) { pos = st.spec_rewind(&mut sp, src, n, false); continue; }\n' : ''}${frameStep}        bound = pos + 1;
+        }
+    while pos < bound && (limit == 0 || st.acc.len() - base < limit${sig ? ' || st.spec_on' : ''}) {
+        let c = b[pos] as u32;
+${pre}${cascade}
+${p.uniIdentOrPanic}
+    }
+    }`;
   const rxParams = rx ? 'prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool, ' : '';
   const rxTy = rx ? 'u16, u16, u16, bool, bool, Vec<bool>, bool, bool, ' : '';
   const rxInit = rx ? 'base, prev0: (has_prev, prev_kid, prev_lid), bp0: (has_prev2, bp_lid), kid1: prev_kid, lid1: prev_lid, lid2: bp_lid, paren_head, last_close, last_bang, ' : '';
-  const specInit = sig ? 'spec_tok: 0, spec_on: false, spec_base: 0, spec_closed_at: 0, spec_closed: false, spec_done: false, spec_then: false, spec_off: 0, spec_end: 0, spec_at: 0, spec_has_at: false, spec_keep: false, sv: (0, false, 0, 0, 0, false, 0), sv_paren: Vec::new(), sv_stack: Vec::new(), sv_bang: (false, false), ' : '';
+  const specInit = sig ? 'spec_on: false, ' : '';
   const rxOut = rx ? 'let ((has_prev, prev_kid, prev_lid), (has_prev2, bp_lid)) = (st.prev(), st.prev2());\n    ' : '';
   const rxRet = rx ? 'prev_lid, prev_kid, bp_lid, has_prev, has_prev2, st.paren_head, st.last_close, st.last_bang, ' : '';
   return `${p.head}${consts}${p.lexStacks}${p.scans}${p.tplFn}${struct}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, pending_nl: bool, ${rxParams}template_stack: Vec<i64>, el_ended: bool, tag_angle: isize, la_end: isize, spec_until: isize, ${raw ? 'tag_at: Vec<i64>, ' : ''}acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, ${rxTy}Vec<i64>, bool, isize, isize, isize${raw ? ', Vec<i64>' : ''}, Option<LexErr>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
-    let mut st = ElScan { acc, pending_nl, err: None, ${rxInit}template_stack, el_ended, tag_angle, la_end, spec_until, ${raw ? 'tag_at, ' : ''}${specInit}};
-    while ${cond} {
-${loopBody}
-    }
-    ${rxOut}(pos, st.pending_nl, ${rxRet}st.template_stack, st.el_ended, st.tag_angle, st.la_end, st.spec_until${raw ? ', st.tag_at' : ''}, st.err)
+    // el_end_at: the token count after the token that ended an element (-1: none)
+    let mut st = ElScan { acc, pending_nl, err: None, ${rxInit}template_stack, hot: false, el_end_at: if el_ended { base as isize } else { -1 }, ${rx ? 'value_to: -1, ' : ''}tag_angle, la_end, spec_until, ${raw ? 'tag_at, ' : ''}${specInit}};
+    st.refresh();
+${sig ? '    let mut sp = Spec { tok: 0, seen: 0, base: 0, closed: false, closed_at: 0, done: false, then: false, off: 0, end: 0, at: 0, has_at: false, keep: false, sv: (0, false, 0, 0, 0, 0, 0, false, false), sv_paren: Vec::new(), sv_stack: Vec::new() };\n' : ''}${loop}
+    ${rxOut}(pos, st.pending_nl, ${rxRet}st.template_stack, st.acc.len() as isize == st.el_end_at, st.tag_angle, st.la_end, st.spec_until${raw ? ', st.tag_at' : ''}, st.err)
 }
 ${RS_LEX_FN}/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer);
 /// the lexer error, if any.
@@ -703,16 +749,20 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
         10 | 13 => { ${nlVar} = true; pos += 1; while pos < n && matches!(b[pos], 9..=13 | 32) { pos += 1; } continue; }
 `;
   const tplOpenByte = tpl && tlen(tpl.open) === 1 ? firstUnit(tpl.open, UNITS) : null;
+  // The element lexer keeps whether the frame stack's top has work (ElScan::refresh).
+  const elRefresh = el ? ' st.refresh();' : '';
+  // a closer can bring an element frame back on top: the round ends the plain rounds (bound)
+  const elRefreshClose = el ? ' st.refresh(); if st.hot { bound = 0; }' : '';
   const tplLits = shared.templateLiterals(ir, ids.lids.slice(1));
   const tplOpenArm = tplOpenByte !== null ? `        ${tplOpenByte} => {
             let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl!.open)}, ${rx ? '!st.prev_is_value()' : 'true'}); if e < 0 { ${errAt} = Some(_lex_tpl_err(e, n)); pos = n; continue; } let e = e as usize;
-            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, ${lidCall(tplLits.head, '&b[pos..e]')}); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl!.token)}, ${lidCall(tplLits.whole, '&b[pos..e]')}); }
+            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, ${lidCall(tplLits.head, '&b[pos..e]')}); st.template_stack.push(0);${elRefresh} } else { st.emit(pos, e, ${kidOf(ids, tpl!.token)}, ${lidCall(tplLits.whole, '&b[pos..e]')}); }
             pos = e; continue;
         }
 ` : '';
   const tplOpenPreCheck = tpl && tplOpenByte === null ? `        if ${startByteEq('pos', tpl.open)} {
             let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.open)}, ${rx ? '!st.prev_is_value()' : 'true'}); if e < 0 { ${errAt} = Some(_lex_tpl_err(e, n)); pos = n; continue; } let e = e as usize;
-            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, ${lidCall(tplLits.head, '&b[pos..e]')}); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl.token)}, ${lidCall(tplLits.whole, '&b[pos..e]')}); }
+            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, ${lidCall(tplLits.head, '&b[pos..e]')}); st.template_stack.push(0);${elRefresh} } else { st.emit(pos, e, ${kidOf(ids, tpl.token)}, ${lidCall(tplLits.whole, '&b[pos..e]')}); }
             pos = e; continue;
         }
 ` : '';
@@ -724,13 +774,19 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const tplCloseTest = tpl ? `        if !st.template_stack.is_empty() && ${startByteEq('pos', tpl.interpClose)} && *st.template_stack.last().unwrap() == 0 {
             st.template_stack.pop();
             let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.interpClose)}, false); if e < 0 { ${errAt} = Some(_lex_tpl_err(e, n)); pos = n; continue; } let e = e as usize;
-            if interp { st.emit(pos, e, ${kidOf(ids, "$templateMiddle")}, ${lidCall(tplLits.middle, '&b[pos..e]')}); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, "$templateTail")}, ${lidCall(tplLits.tail, '&b[pos..e]')}); }
+            if interp { st.emit(pos, e, ${kidOf(ids, "$templateMiddle")}, ${lidCall(tplLits.middle, '&b[pos..e]')}); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, "$templateTail")}, ${lidCall(tplLits.tail, '&b[pos..e]')}); }${elRefreshClose}
             pos = e; continue;
         }
 ` : '';
   const tplDispatch = tpl ? `${closeByte === null ? tplCloseTest : ''}${tplOpenPreCheck}` : '';
+  // An element grammar's hole braces count where they are lexed as punctuation (elementBraceSteps).
+  const braceSteps = el ? elementBraceSteps(ir) : new Map<string, { delta: number; kinds: number[] }>();
+  const braceStep = (p: string): string => {
+    const b = braceSteps.get(p);
+    return b ? `if let Some(f) = st.template_stack.last_mut() { if ${b.kinds.length === 2 ? '*f & 2 == 0' : `*f & 3 == ${b.kinds[0]}`} { *f ${b.delta > 0 ? '+=' : '-='} ${Math.abs(b.delta)}; } } ` : '';
+  };
   const punctLine = (p: string) =>
-    `        if ${startByteEq('pos', p)} { ${stateful ? `st.emit(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${tlen(p)}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${tlen(p)}; continue; }`;
+    `        if ${startByteEq('pos', p)} { ${braceStep(p)}${stateful ? `st.emit(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${tlen(p)}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${tlen(p)}; continue; }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine, errAt);
   // Where no candidate can begin at a non-ASCII byte, the byte is whitespace, an identifier or an
   // error: one cold call decides, so the dispatch loop holds no Unicode code (register layout).

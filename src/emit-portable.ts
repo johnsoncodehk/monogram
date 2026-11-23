@@ -707,6 +707,24 @@ function elementPlanOf(grammar: CstGrammar, el: NonNullable<CstGrammar['elements
 // interpreter's lexer records 0 for them too). A Doc that rebuilds ids from text tests this class.
 export const regionKids = (ir: ParserIR, ids: LexIdPlan): number[] => elementTokens(ir.elements).map((n) => kidOf(ids, n));
 // The token names an element region lexes itself (never the ordinary scan).
+// The brace counting of an element lexer's holes (frame kinds 0 template hole, 1 element hole):
+// per punctuation literal, the frame kinds whose count it changes and by how much (a count sits
+// in the bits above the kind: 4 per brace). The count changes where the literal is lexed as
+// punctuation (its punct line): there the top frame is a hole or not; a closer at count 0 is the
+// hole's own closer, lexed by its own test before the punct line. Elsewhere a brace literal is an
+// element frame's own token (a hole opener in children or a tag), which counts nothing.
+export function elementBraceSteps(ir: ParserIR): Map<string, { delta: number; kinds: number[] }> {
+  const e = ir.elements!, steps = new Map<string, { delta: number; kinds: number[] }>();
+  const add = (lit: string, delta: number, kind: number) => {
+    if (!ir.puncts.includes(lit)) throw new Error(`portable: the hole brace ${JSON.stringify(lit)} is not a punctuation literal, so no punct line counts it`);
+    const s = steps.get(lit) ?? { delta, kinds: [] };
+    if (s.delta !== delta) throw new Error(`portable: ${JSON.stringify(lit)} both opens and closes a hole's braces`);
+    s.kinds.push(kind); steps.set(lit, s);
+  };
+  if (ir.tpl) { add(ir.tpl.braceOpen, 4, 0); add(ir.tpl.interpClose, -4, 0); }
+  add(e.holeOpen, 4, 1); add(e.holeClose, -4, 1);
+  return steps;
+}
 export const elementTokens = (e: ElementPlan | null): string[] => (e ? [...(e.text ? [e.text] : []), e.closeTag, e.selfClose, ...e.tagTokens, ...e.rawText.map((r) => r.token)] : []);
 
 // ── buildIR: grammar + analysis → the target-agnostic parse plan ──

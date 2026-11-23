@@ -466,6 +466,22 @@ Differences from the interpreter, none visible in the token stream:
 - Root region: today's markup TextMate output is that case; nothing changes unless `html.ts`
   moves.
 
+**TextMate: built** (`src/gen-tm.ts`, from `regionView` / `operandEntry` in `src/region-view.ts`
+and `directivesOf`): every item above except the root region, gated by `test/tm-dialect.ts` on
+the two dialect fixtures (every row passes; a dialect needs only its grammar file). What a
+TextMate grammar cannot express, each a limitation stated where the pattern is built:
+
+| limitation | witness | TextMate reads | the lexer reads |
+|---|---|---|---|
+| a member keyword before a tag (the lookbehind sees `new`, not that a `.` precedes it) | `y = x.new <b> c` (TSX) | an element | a comparison |
+| a hole is balanced only as deep as the code grammar's own brace patterns, and a dynamic close tag's hole one level (an `end` is one regex) | `<{a[{b}]}>x</{a[{b}]}>` (text dialect, whose code has no brace pair) | the hole ends at the inner `}`; the element does not close | a dynamic element |
+| a directive's opener and its required literals must stand on one line (a `begin` is one line) | `@if`⏎`(x) { y }` | text, then a hole | a directive |
+| a continuation keyword is matched anywhere an opener is (no "after a body" state) | `<p>x @else { y }</p>` | a keyword | text |
+| an unterminated `/*` in text runs to the end of the file | `<p>a /* b</p>` | a comment to EOF | text |
+
+Each row was run on the text dialect fixture (`test/fixtures/textdialect.ts`) and the committed
+TSX grammar, against the interpreter's token stream.
+
 ## Consumers (the evidence the model was built from)
 
 | consumer | where it starts | children / body | text versus code | raw text |
@@ -487,5 +503,5 @@ Directive openers and continuations are derived from the grammar ("Directives").
   refused (the signature's rewind does not restore the raw-text tag records).
 - The root region: the build order above.
 - Re-measuring the five undecidable JSX shapes on a larger TSX corpus.
-- The tm-dialect expected-fail rows are TextMate-side (children repository, dynamic tags, the
-  `<style>` embed, React vocabulary); they move with the generators.
+- Monarch: token-stream Monarch has no element layer yet (one Monarch state per lexer state,
+  from the same `region-view.ts`).

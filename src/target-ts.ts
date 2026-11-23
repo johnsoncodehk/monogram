@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA } from './emit-portable.ts';
-import { blockBody, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { blockBody, elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -252,54 +252,69 @@ const LID_EQ = ${lidOf(ids, '=')};
 ${sig ? `${tsFlagTable('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
   // prevIsValue: in a tag nothing is a regex; the token that ended an element is a value.
   const prevIsValue = p.rxStateFrom.replace('function prevIsValue(): boolean {\n', `function prevIsValue(): boolean {
-    if (templateStack.length > 0) { const f = templateStack[templateStack.length - 1]; if ((f & 3) === 2 && (f & 12) !== 0) return true; }
-    if (elEnded) return true;
+    if (toks.length <= valueTo) return true;
 `);
   const rxParams = rx ? 'prevLid: number, prevKid: number, bpLid: number, hasPrev: boolean, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, ' : '';
   const rxRet = rx ? 'prevLid: number; prevKid: number; hasPrev: boolean; bpLid: number; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean; ' : '';
   const rxNames = rx ? 'prevLid, prevKid, hasPrev, bpLid, hasPrev2, parenHead, lastClose, lastBang, ' : '';
   const rxInit = rx ? '0, 0, 0, false, false, [], false, false, ' : '';
-  // Brace counting in the holes (kind 0 template, 1 element hole; step 4): a `{` deepens, a `}`
-  // at a count above 0 shallows; at 0 the closer is lexed by its own test.
-  const braces = [
-    tpl ? `if ((f & 3) === 0) { if (lid === LID_BRACE_OPEN) templateStack[templateStack.length - 1] = f + 4; else if (lid === LID_INTERP_CLOSE) templateStack[templateStack.length - 1] = f - 4; }` : '',
-    `if ((f & 3) === 1) { if (lid === LID_HOLE_OPEN) templateStack[templateStack.length - 1] = f + 4; else if (lid === LID_HOLE_CLOSE) templateStack[templateStack.length - 1] = f - 4; }`,
-  ].filter(Boolean).join(' else ');
   const specState = sig ? `  // A type-parameter signature being decided: the token index of its tagOpen (-1: none), the
   // state before it, how it was decided (a lexer error decides it: the head was an element), and
   // the decision kept for the tagOpen it rewinds to.
-  let specTok = -1, specBase = 0, specClosedAt = -1, specDone = false, specThen = false, specOff = 0, specEnd = 0;
+  let specTok = -1, specSeen = 0, specBase = 0, specClosedAt = -1, specDone = false, specThen = false, specOff = 0, specEnd = 0;
   let specAt = -1, specKeep = false;
-  let svPos = 0, svNl = false, svPrevLid = 0, svPrevKid = 0, svBpLid = 0, svHasPrev = false, svHasPrev2 = false, svLastClose = false, svLastBang = false, svElEnded = false, svAngle = 0;
+  let svPos = 0, svNl = false, svPrevLid = 0, svPrevKid = 0, svBpLid = 0, svHasPrev = false, svHasPrev2 = false, svLastClose = false, svLastBang = false, svElEndAt = -1, svAngle = 0;
   const svParen: boolean[] = [], svStack: number[] = [];
-  function specRewind(): void {
+  // Each token the speculation lexes, read at the next loop head (a round lexes one token at most):
+  // a closer that leaves the bracket stack at the signature's base (even by popping an empty one)
+  // closes the group, again if it was closed; the token after the closer decides. Whether decided.
+  function specStep(): boolean {
+    const i = toks.length - 1;
+    if (i >= specSeen) {
+      specSeen = i + 1;
+      const t = toks[i];
+      if (t.lid === LID_RPAREN && i > specTok + 3 && parenHead.length === specBase) specClosedAt = i;
+      else if (specClosedAt >= 0 && i > specClosedAt) { specClosedAt = -1; specDone = true; specThen = t.kid === 0 && _elThen[t.lid] === 1; specOff = t.off; specEnd = t.end; }
+    }
+    return specDone;
+  }
+  // The rewind to the signature's tagOpen: its position (pos and limit stay the loop's own locals).
+  function specRewind(): number {
     const keep = specDone && err === null && specThen;
     const re = specDone && err === null ? ${shared.elementFn('reach')}(src, specEnd) : n + 1;
     if (re > laEnd) laEnd = re;
     if (keep) specUntil = specOff;
     specAt = svPos; specKeep = keep;
     toks.length = specTok;
-    pos = svPos; pendingNl = svNl; prevLid = svPrevLid; prevKid = svPrevKid; bpLid = svBpLid; hasPrev = svHasPrev; hasPrev2 = svHasPrev2;
-    lastClose = svLastClose; lastBang = svLastBang; elEnded = svElEnded; tagAngle = svAngle;
+    pendingNl = svNl; prevLid = svPrevLid; prevKid = svPrevKid; bpLid = svBpLid; hasPrev = svHasPrev; hasPrev2 = svHasPrev2;
+    lastClose = svLastClose; lastBang = svLastBang; elEndAt = svElEndAt; tagAngle = svAngle;
     parenHead.length = 0; for (const b of svParen) parenHead.push(b);
     templateStack.length = 0; for (const f of svStack) templateStack.push(f);
     specTok = -1; specClosedAt = -1; specDone = false; err = null;
+    refresh();
+    return svPos;
   }
 ` : '';
+  // hot: whether the loop head has work (an element or raw frame on top of the frame stack${sig ? ', or a
+  // signature undecided' : ''}), kept by every change of the stack's top${sig ? ' and of the speculation' : ''}; elEndAt: the token
+  // count after the token that ended an element (-1: none); valueTo: to which token count the
+  // previous token is a value (in a tag: every; else the token that ended an element, while last).
+  const hotState = `  let hot = false, elEndAt = elEnded ? toks.length : -1${rx ? ', valueTo = -1' : ''};
+  function refresh(): void {
+    const top = templateStack.length > 0 ? templateStack[templateStack.length - 1] : 0;
+    hot = ${sig ? 'specTok >= 0 || ' : ''}(top & 2) !== 0;
+${rx ? '    valueTo = (top & 3) === 2 && (top & 12) !== 0 ? 0x3fffffff : elEndAt;\n' : ''}  }
+`;
   const emitFn = `  function emit(off: number, end: number, kid: number, lid: number): void {
 ${rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]; parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid]); }
-    else if (lid === LID_RPAREN) { lastClose = parenHead.pop() ?? false;${sig ? ' if (specTok >= 0 && toks.length > specTok + 3 && parenHead.length === specBase) specClosedAt = toks.length;' : ''} }
+    else if (lid === LID_RPAREN) { lastClose = parenHead.pop() ?? false; }
     if (_pav[lid]) lastBang = prevIsValue();
-` : ''}${sig ? `    // the token after the signature group's closer decides it (a closer that leaves the bracket
-    // stack at its base, even by popping an empty one, closes it again)
-    if (specClosedAt >= 0 && toks.length > specClosedAt) { specClosedAt = -1; specDone = true; specThen = kid === 0 && _elThen[lid] === 1; specOff = off; specEnd = end; }
-` : ''}    if (templateStack.length > 0) { const f = templateStack[templateStack.length - 1]; ${braces} }
-    toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = false; elEnded = false;${rx ? '\n    bpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true;' : ''}
+` : ''}    toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = false;${rx ? '\n    bpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true;' : ''}
   }
 `;
   // The entry from code, in the tagOpen unit's dispatch arm (outside element frames: inside one
   // the frame step lexes every tagOpen).
-  const enter = `      templateStack.push(6); emit(pos, pos + ${L}, 0, LID_EL_OPEN);${raw ? ' tagAt.push(toks.length - 1);' : ''} tagAngle = 0; pos += ${L}; continue;\n`;
+  const enter = `      templateStack.push(6); refresh(); bound = 0; emit(pos, pos + ${L}, 0, LID_EL_OPEN);${raw ? ' tagAt.push(toks.length - 1);' : ''} tagAngle = 0; pos += ${L}; continue;\n`;
   const entry = !operand ? `    if (src.startsWith(${J(el.tagOpen)}, pos)) {\n${enter}    }\n`
     : !(el.head || sig) ? `    if (src.startsWith(${J(el.tagOpen)}, pos) && !prevIsValue()) {\n${enter}    }\n`
     : `    if (src.startsWith(${J(el.tagOpen)}, pos)${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue()) {
@@ -309,16 +324,16 @@ ${rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]
 ${enter}      }
 ${sig ? `      if (op === 2) {
         svPos = pos; svNl = pendingNl; svPrevLid = prevLid; svPrevKid = prevKid; svBpLid = bpLid; svHasPrev = hasPrev; svHasPrev2 = hasPrev2;
-        svLastClose = lastClose; svLastBang = lastBang; svElEnded = elEnded; svAngle = tagAngle;
+        svLastClose = lastClose; svLastBang = lastBang; svElEndAt = elEndAt; svAngle = tagAngle;
         svParen.length = 0; for (const b of parenHead) svParen.push(b);
         svStack.length = 0; for (const f of templateStack) svStack.push(f);
-        specTok = toks.length; specBase = parenHead.length; specClosedAt = -1; specDone = false;
+        specTok = toks.length; specSeen = specTok; specBase = parenHead.length; specClosedAt = -1; specDone = false; hot = true; bound = 0;
       }
 ` : ''}    }
 `;
   // An element hole's closer at brace count 0 ends it (the closer is lexed inside the frame).
   const holeClose = `    if (templateStack.length > 0 && templateStack[templateStack.length - 1] === 1 && src.startsWith(${J(el.holeClose)}, pos)) {
-      emit(pos, pos + ${tlen(el.holeClose)}, 0, LID_HOLE_CLOSE); templateStack.pop(); pos += ${tlen(el.holeClose)}; continue;
+      emit(pos, pos + ${tlen(el.holeClose)}, 0, LID_HOLE_CLOSE); templateStack.pop(); refresh(); if (hot) bound = 0; pos += ${tlen(el.holeClose)}; continue;
     }
 `;
   const heads = new Map<number, string>();
@@ -337,34 +352,51 @@ ${sig ? `      if (op === 2) {
         emit(pos, fe, fk, fl);
 ${raw ? `        // each element frame's current tag: the index of its tagOpen token (the name is the next)
         if (fl === LID_EL_OPEN) { if (fp === 6) tagAt.push(toks.length - 1); else if (((fr >> 2) & 3) === 0) tagAt[tagAt.length - 1] = toks.length - 1; }
-` : ''}        if (ft < 0) { templateStack.pop();${raw ? ' tagAt.pop();' : ''} elEnded = true; } else templateStack[templateStack.length - 1] = ft;
+` : ''}        if (ft < 0) { templateStack.pop();${raw ? ' tagAt.pop();' : ''} elEndAt = toks.length; } else templateStack[templateStack.length - 1] = ft;
         if (fp !== 0) templateStack.push(fp);
 ${raw ? `        // an open tag ended: a raw-text name gives its body to a raw frame (kind 3), lexed next
         if (fl === LID_EL_CLOSE && ((fr >> 2) & 3) === 1 && tagAngle === 0) {
           const i = tagAt[tagAt.length - 1] + 1;
           if (i < toks.length - 1) { const [re, rk] = ${shared.elementFn('raw')}(src, toks[i].off, toks[i].end, fe); if (rk !== 0 && re > fe) templateStack.push(3); }
         }
-` : ''}        tagAngle = fa; pos = fe; continue;
+` : ''}        refresh(); tagAngle = fa; pos = fe; continue;
       }
     }
 ${raw ? `    if (templateStack.length > 0 && templateStack[templateStack.length - 1] === 3) {
       const i = tagAt[tagAt.length - 1] + 1;
       const [re, rk] = ${shared.elementFn('raw')}(src, toks[i].off, toks[i].end, pos);
-      emit(pos, re, rk, 0); templateStack.pop(); pos = re; continue;
+      emit(pos, re, rk, 0); templateStack.pop(); refresh(); pos = re; continue;
     }
 ` : ''}`;
-  const loopBody = `${sig ? '    if (specTok >= 0 && (specDone || err !== null || pos >= n)) { specRewind(); continue; }\n' : ''}    const c = src.charCodeAt(pos);
-${frameStep}${p.nlWs}${pre}${cascade}
-${p.uniIdentFallbackTs}${TS_UNEXPECTED}`;
-  const loop = `  while (${sig ? '(pos < n || specTok >= 0) && (limit === undefined || toks.length - base < limit || specTok >= 0)' : 'pos < n && (limit === undefined || toks.length - base < limit)'}) {
-${loopBody}
+  // The plain rounds (code outside element frames) are the inner loop, whose only bound is
+  // \`bound\`: the input's end while no element work is pending, so its condition is the plain
+  // lexer's; one round (pos + 1) after the frame step lexed nothing; 0 once a round makes work (an
+  // element entered or back on top${sig ? ', a signature begun' : ''}). The work (hot, kept by every change of the
+  // frame stack's top${sig ? ' and of the speculation' : ''}) is the outer loop's, so no plain round tests it.${sig ? `
+  // A speculation lexes past the token limit to its verdict (the limit is tested first); one that
+  // reaches the end of the input (or a lexer error, its verdict) is rewound at the head.` : ''}
+  const more = `pos < n && (limit === undefined || toks.length - base < limit${sig ? ' || specTok >= 0' : ''})`;
+  const loop = `  for (;;) {
+    if (!(${more})) {
+${sig ? '      if (specTok >= 0) { specStep(); pos = specRewind(); continue; }\n' : ''}      break;
+    }
+    let bound = n;
+    if (hot) {
+${sig ? '    if (specTok >= 0 && specStep()) { pos = specRewind(); continue; }\n' : ''}${frameStep}    bound = pos + 1;
+    }
+  while (pos < bound && (limit === undefined || toks.length - base < limit${sig ? ' || specTok >= 0' : ''})) {
+    const c = src.charCodeAt(pos);
+${p.nlWs}${pre}${cascade}
+${p.uniIdentFallbackTs}${TS_UNEXPECTED}
+  }
   }`;
   return `${consts}${p.scans}function lexFrom(src: string, pos: number, pendingNl: boolean, ${rxParams}templateStack: number[], elEnded: boolean, tagAngle: number, laEnd: number, specUntil: number, ${raw ? 'tagAt: number[], ' : ''}toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; ${rxRet}templateStack: number[]; elEnded: boolean; tagAngle: number; laEnd: number; specUntil: number${raw ? '; tagAt: number[]' : ''}; err: LexErr | null } {
   const n = src.length;
   const base = toks.length;
   let err: LexErr | null = null;
-${prevIsValue}${specState}${emitFn}${loop}
-  return { pos, pendingNl, ${rxNames}templateStack, elEnded, tagAngle, laEnd, specUntil${raw ? ', tagAt' : ''}, err };
+${prevIsValue}${hotState}${specState}${emitFn}  refresh();
+${loop}
+  return { pos, pendingNl, ${rxNames}templateStack, elEnded: toks.length === elEndAt, tagAngle, laEnd, specUntil${raw ? ', tagAt' : ''}, err };
 }
 function lexAll(src: string): [Tok[], LexErr | null] {
   const toks: Tok[] = [];
@@ -391,8 +423,14 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const stateful = !!(rx || tpl || el);
   const newlineOnly = !!(nl && !rx && !tpl);
   const pushFn = stateful ? 'emit' : 'push';
+  // An element grammar's hole braces count where they are lexed as punctuation (elementBraceSteps).
+  const braceSteps = el ? elementBraceSteps(ir) : new Map<string, { delta: number; kinds: number[] }>();
+  const braceStep = (p: string): string => {
+    const b = braceSteps.get(p);
+    return b ? `if (templateStack.length > 0 && ${b.kinds.length === 2 ? '(templateStack[templateStack.length - 1] & 2) === 0' : `(templateStack[templateStack.length - 1] & 3) === ${b.kinds[0]}`}) templateStack[templateStack.length - 1] ${b.delta > 0 ? '+=' : '-='} ${Math.abs(b.delta)}; ` : '';
+  };
   const punctLine = (p: string) =>
-    `    if (src.startsWith(${J(p)}, pos)) { ${pushFn}(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)}); pos += ${tlen(p)}; continue; }`;
+    `    if (src.startsWith(${J(p)}, pos)) { ${braceStep(p)}${pushFn}(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)}); pos += ${tlen(p)}; continue; }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
   const rxBitTables = rx ? `${tsFlagTable('_divT', lidFlagTable(ids, rx.divisionTexts))}
 ${tsFlagTable('_divK', kidFlagTable(ids, rx.divisionTypes))}
@@ -473,6 +511,10 @@ ${emitHooks}
   const headUnit = (t: string) => { const u = t.charCodeAt(0); return u < 128 && ![9, 10, 11, 12, 13, 32].includes(u) ? u : null; };
   // The span itself is the shared family's scanner; this reads which delimiter ended it (or its
   // lexer error).
+  // The element lexer keeps whether the frame stack's top has work (its refresh()).
+  const elRefresh = ir.elements ? 'refresh(); ' : '';
+  // a closer can bring an element frame back on top: the round ends the plain rounds (bound)
+  const elRefreshClose = ir.elements ? 'refresh(); if (hot) bound = 0; ' : '';
   const tplSpanTs = (from: string, strict: string): string => `      const q = ${shared.tplSpan()}(src, ${from}, ${strict});
       if (q < 0) { err = lexTplErr(q, n); pos = n; continue; }
       const interp = src.startsWith(${J(tpl!.interpOpen)}, q), e = interp ? q + ${tlen(tpl!.interpOpen)} : q + ${tlen(tpl!.open)};
@@ -481,13 +523,13 @@ ${emitHooks}
       templateStack.pop();
 ${tplSpanTs('pos + ' + tlen(tpl.interpClose), 'false')}      if (interp) { emit(pos, e, ${kidOf(ids, '$templateMiddle')}, ${lidCallTs(tplLits.middle, 'src.slice(pos, e)')}); templateStack.push(0); }
       else { emit(pos, e, ${kidOf(ids, '$templateTail')}, ${lidCallTs(tplLits.tail, 'src.slice(pos, e)')}); }
-      pos = e; continue;
+      ${elRefreshClose}pos = e; continue;
     }
 ` : '';
   const tplOpenTest = tpl ? `    if (src.startsWith(${J(tpl.open)}, pos)) {
 ${tplSpanTs('pos + ' + tlen(tpl.open), rx ? '!prevIsValue()' : 'true')}      if (interp) { emit(pos, e, ${kidOf(ids, '$templateHead')}, ${lidCallTs(tplLits.head, 'src.slice(pos, e)')}); templateStack.push(0); }
       else { emit(pos, e, ${kidOf(ids, tpl.token)}, ${lidCallTs(tplLits.whole, 'src.slice(pos, e)')}); }
-      pos = e; continue;
+      ${elRefresh}pos = e; continue;
     }
 ` : '';
   let tplDispatch = '';
