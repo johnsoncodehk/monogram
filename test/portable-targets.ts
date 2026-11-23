@@ -1070,6 +1070,13 @@ const CASES: Case[] = [
     ],
     reject: ['component C() { /> }', 'component C() { </a> }', 'component C() { <a> }', 'component C() { <STYLE>x</STYLE> }', 'component C() { <style>x }'],
   },
+  {
+    // a tag token that fails where the ordinary scan then lexes (`'` before a `>`): its failed read
+    // is a read past the next token's end (test/fixtures/tagtokdialect.ts)
+    grammar: 'tagtokdialect', path: './fixtures/tagtokdialect.ts',
+    accept: ["<a k='v w' m=n'/>", "<a k='>'</a> {x'}", '<a k="s"><b/>{(y)\'\'}</a>'],
+    reject: ["<a k='v>", "<a k='v/>", "x'"],
+  },
 ];
 // The element-region grammars' cases may be run alone: PORTABLE_GRAMMARS=a,b (a development aid;
 // the gate runs every case).
@@ -1377,6 +1384,8 @@ const FRAME_EDIT_DOCS: Record<string, string[]> = {
     'let a = <a b="\\" c=\'d\ne\'>t</a>;\nlet z = "q";',
   ],
   javascriptreact: ['let s = `a${b}c${`${d}`}`;\nx = 1;', "let a = <><p>It's</p>{`${<b/>}`}</>;\nx</*c*/y;", 'x = <a/> / 2; y = <b c={1}>t</b>;'],
+  // an edit inside a failed attribute string's read (`'v w>` → `'v' w>`) makes it a string
+  tagtokdialect: ["<a k='v w>x</a> <b m='n'/> {y'}"],
   elementdialect: [
     'component C(a) {\n  <a k="v">@if (a) { <b/> } @else { "e" } {a}</a> "z" <c/>\n}',
     'component D() { <a><b>{1}</b><{t} id="d">"s"</{t}></a> }\ncomponent E() { "q" }',

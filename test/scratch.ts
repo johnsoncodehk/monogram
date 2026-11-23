@@ -31,7 +31,11 @@ function sweepOrphans(): void {
   swept = true;
   for (const n of readdirSync(tmpdir())) {
     const m = OWNED.exec(n);
-    if (m && !alive(Number(m[1]))) rmSync(join(tmpdir(), n), { recursive: true, force: true });
+    if (!m || alive(Number(m[1]))) continue;
+    // another user's directory (a shared tmpdir) is theirs to remove: a dead pid of ours never is
+    try { rmSync(join(tmpdir(), n), { recursive: true, force: true }); } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EACCES' && (e as NodeJS.ErrnoException).code !== 'EPERM') throw e;
+    }
   }
 }
 
