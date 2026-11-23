@@ -11,8 +11,9 @@
 //   • `--dead`: each dead alternative is removed from the grammar and no tree on the corpora changes
 //     (with a mutation proof: removing a tie loser that is not dead must change some input).
 //
-//   node test/decision-report.ts --write    # (re)write docs/decisions/*.md and the example page
-//   node test/decision-report.ts --check    # gate: the pages are what the plan gives (drift), and --dead
+//   node test/decision-report.ts --gen      # `npm run gen`'s step: (re)write docs/decisions/*.md and the
+//                                           # example page (CI's artifact drift step checks them)
+//   node test/decision-report.ts            # the gate: every static tie's witness shows the tie, and --dead
 //   node test/decision-report.ts --dead     # only: every dead alternative is dead on the corpora
 //   node test/decision-report.ts --observe <grammar.ts> <input>...   # any grammar: its page with the ties observed on those inputs (stdout)
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
@@ -113,7 +114,7 @@ async function page(g: string): Promise<{ text: string; report: DecisionFindings
   const rep = analyzeDecisions(ir);
   const failures = witnessFailures(g, ir, lib, rep);
   addObserved(rep, await observe(ir, lib, PINNED[g]!, (f) => f.slice(NM.length + 1)));
-  const text = renderDecisions(g, ir, portableIR(grammar, { calleeFirstGuards: false }), rep, { command: 'node test/decision-report.ts --write', observed: 'the pinned inputs' });
+  const text = renderDecisions(g, ir, portableIR(grammar, { calleeFirstGuards: false }), rep, { command: 'npm run gen', observed: 'the pinned inputs' });
   return { text, report: rep, failures };
 }
 // The example: exactly what the CLI writes next to the grammar, plus its witnesses checked.
@@ -196,25 +197,30 @@ if (argv[0] === '--observe') {
   process.stdout.write(renderDecisions(name, ir, portableIR(grammar, { calleeFirstGuards: false }), rep, { command: `node test/decision-report.ts --observe ${name}.ts <inputs>`, observed: `${inputs.length} given input${inputs.length > 1 ? 's' : ''}` }));
   process.exit(0);
 }
-const mode = argv.includes('--write') ? 'write' : argv.includes('--dead') ? 'dead' : 'check';
+const mode = argv.includes('--gen') ? 'gen' : argv.includes('--dead') ? 'dead' : 'check';
 const t0 = Date.now();
 let failures = 0;
-// The gate (--check) runs both halves: the page drift and the witness checks, then the dead
-// alternatives (formerly the gate decision-dead: one process, the grammars' IR built once each).
+// The gate runs the witness checks, then the dead alternatives (formerly the gate decision-dead:
+// one process, the grammars' IR built once each). Whether the committed pages are current is the
+// artifact drift step's question (`npm run gen` writes them; CI fails on a diff), not the gate's.
 if (mode === 'dead') failures += await deadGate();
 else {
-  if (mode === 'write') mkdirSync(OUT, { recursive: true });
+  if (mode === 'gen') mkdirSync(OUT, { recursive: true });
   const pages: Array<{ file: string; text: string; report: DecisionFindings; failures: string[] }> = [];
   for (const g of GRAMMARS) pages.push({ file: `${OUT}/${g}.md`, ...(await page(g)) });
   pages.push(await examplePage());
   for (const { file, text, report, failures: f } of pages) {
-    for (const x of f) { console.log(`  FAIL ${x}`); failures++; }
     const rel = file.slice(ROOT.length);
-    const old = existsSync(file) ? readFileSync(file, 'utf8') : null;
     const counts = `${report.dead.length} dead, ${report.ties.length} ties, ${report.unreached.length} unreached`;
-    if (mode === 'write') { if (old !== text) writeFileSync(file, text); console.log(`  ${old === text ? '· unchanged' : '✓ wrote'} ${rel}: ${counts}`); }
-    else if (old !== text) { console.log(`  FAIL ${rel} is not what the plan gives: run \`node test/decision-report.ts --write\` and commit it`); failures++; }
-    else console.log(`  ${rel}: current (${counts})`);
+    if (mode === 'gen') {
+      // the page is written whatever the witnesses say: the gate reports them
+      const old = existsSync(file) ? readFileSync(file, 'utf8') : null;
+      if (old !== text) writeFileSync(file, text);
+      console.log(`  ${old === text ? '· unchanged' : '✓ wrote'} ${rel}: ${counts}`);
+      continue;
+    }
+    for (const x of f) { console.log(`  FAIL ${x}`); failures++; }
+    console.log(`  ${rel}: ${f.length ? f.length + ' witness failure(s)' : 'witnesses hold'} (${counts})`);
   }
   if (mode === 'check') failures += await deadGate();
 }
