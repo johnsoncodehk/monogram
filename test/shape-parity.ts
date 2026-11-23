@@ -335,7 +335,7 @@ async function main(): Promise<void> {
     // rule; while it forked [Await]/[Yield] each count was four times this, one per family).
     const want: Record<string, number> = {
       led: 31, nudSeq: 8, nudCapped: 4, postfix: 2, postfixTok: 3,
-      group: 69, prefix: 11, binary: 39, template: 2,
+      atom: 5, group: 64, prefix: 11, binary: 39, template: 2,
     };
     const got = tsMod.shapeCoverage.pratt;
     const prattOk = Object.keys(want).every((k) => got[k] === want[k]);
