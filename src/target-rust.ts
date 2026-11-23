@@ -1496,7 +1496,7 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
             let rhs = match self.${r.name}_bp(rbp) { Some(r) => r, None => { self.back(led_save); self.scratch.truncate(sb); break; } };
             if rhs.present { self.scratch.push(rhs.h); }
             left = ${fin};
-            if self.capped { self.form = 1; return Some(left); }   // a capped right operand caps this node: no further led (PrattLowering.binary)
+            if self.capped { self.form = 1; return Some(left); }
             form = 1; tail_closed = true;
         }`,
     entry: `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
@@ -4241,7 +4241,7 @@ function emitRustPrattMethod(
             self.vals.push(left);
             self.vals.push(_right);
             left = ${nodeFinish(rustShapeNodeObjectExpr(binarySlot as NodeShape, '_ab', '_op', shapeIR.spans, '_off', 'self.last_end(_off)', undefined), '_ab')};
-            if self.capped { self.form = 1; return Some(left); }   // a capped right operand caps this node (PrattLowering.binary)
+            if self.capped { self.form = 1; return Some(left); }
             form = 1; tail_closed = true;
             continue;
         }`;
@@ -4262,7 +4262,7 @@ function emitRustPrattMethod(
                 None => { self.pos = _save; break; }
             };
             left = ${customCall(bs.fn, '&[_right]', '[]', '_off', 'self.last_end(_off)', 'left', '_op', bs.folds)};
-            if self.capped { self.form = 1; return Some(left); }   // a capped right operand caps this node (PrattLowering.binary)
+            if self.capped { self.form = 1; return Some(left); }
             form = 1; tail_closed = true;
             continue;
         }`;
@@ -4286,7 +4286,7 @@ function emitRustPrattMethod(
             self.vals.push(SVal::Str(_op.0, _op.1));
             self.vals.push(_right);
             left = ${keepFinish('_ab', rule.name, '_off')};
-            if self.capped { self.form = 1; return Some(left); }   // a capped right operand caps this node (PrattLowering.binary)
+            if self.capped { self.form = 1; return Some(left); }
             form = 1; tail_closed = true;
             continue;
         }`;

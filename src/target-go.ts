@@ -1439,7 +1439,7 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\tif rhs < 0 { p.back(ledSave); p.scratch = p.scratch[:sb]; break }
 \t\tp.scratch = append(p.scratch, rhs)
 \t\tleft = ${fin}
-\t\tif p.capped { p.form = 1; return left }   // a capped right operand caps this node: no further led (PrattLowering.binary)
+\t\tif p.capped { p.form = 1; return left }
 \t\tform = 1; tailClosed = true
 \t}`,
     entry: `${goPrattOpTables(r, ids)}
@@ -2006,7 +2006,7 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\tif !rok { p.back(ledSave); p.scratch = p.scratch[:sb]; break }
 \t\tif rhs.present { p.scratch = append(p.scratch, rhs.h) }
 \t\tleft = ${fin}
-\t\tif p.capped { p.form = 1; return left, true }   // a capped right operand caps this node: no further led (PrattLowering.binary)
+\t\tif p.capped { p.form = 1; return left, true }
 \t\tform = 1; tailClosed = true
 \t}`,
     entry: `func (p *${recv}) parse${r.name}W() (spanned, bool) {
