@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA } from './emit-portable.ts';
-import { blockBody, elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -353,7 +353,9 @@ ${sig ? `      if (op === 2) {
       ${tsTake(['fe', 'fk', 'fl', 'ft', 'fp', 'fa', 'fla'], shared.elementFn('frame'), 'src, pos, fr, tagAngle, toks.length > 0 && toks[toks.length - 1].lid === LID_EQ, laEnd')}
       laEnd = fla;
       if (fe >= 0) {
-        emit(pos, fe, fk, fl);
+${elementSkipsText(ir) ? `        // a skipped text token (a comment in text): no token
+        if (fk < 0) { if (lexHasLineTerm(src, pos, fe)) pendingNl = true; pos = fe; continue; }
+` : ''}        emit(pos, fe, fk, fl);
 ${raw ? `        // each element frame's current tag: the index of its tagOpen token (the name is the next)
         if (fl === LID_EL_OPEN) { if (fp === 6) tagAt.push(toks.length - 1); else if (((fr >> 2) & 3) === 0) tagAt[tagAt.length - 1] = toks.length - 1; }
 ` : ''}        if (ft < 0) { templateStack.pop();${raw ? ' tagAt.pop();' : ''} elEndAt = toks.length; } else templateStack[templateStack.length - 1] = ft;
