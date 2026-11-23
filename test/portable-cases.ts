@@ -558,6 +558,13 @@ export const CASES: Case[] = [
       '¦unterminated;', '«open a;', '‖a¤⟨x‖;', '^;', '^°°;;', '°;', '^° °° ;'],
   },
   {
+    // An identifier token that declares Python's Unicode classes (see the fixture): the lexer's
+    // fallback beyond ASCII uses them, not ECMAScript's, in every target.
+    grammar: 'xidjs', path: './fixtures/xidjs.ts',
+    accept: ['℘ = a;', 'ℕ = a℘;', 'aำ = b;', 'a = bำc;', '_ำ = x;'],
+    reject: ['ͺ = a;', 'aͺ = b;', '$ = a;', 'é$ = a;', 'ำ = a;'],
+  },
+  {
     // The REAL javascript.ts grammar — the proof
     // that the target-agnostic emitter handles a full language end-to-end in ts/go/rust.
     // ASCII corpus only (byte-based go/rust use UTF-8 offsets, identical to the JS oracle's
@@ -604,10 +611,12 @@ export const CASES: Case[] = [
       'new (a)`x`();', 'new a`x${new b`y${0}`}`();', 'new a`x`()`y`;', 'new a`x`().b;', 'new a`x`()?.b;',
       'async function f() { new a`x${await b}`(); }',
       // The longest alternative wins, wherever it is declared: `export default …` over
-      // `export <statement>`, an expression statement over a `let` with no binding, the
-      // `yield` form over the prefix operator when it reaches farther.
+      // `export <statement>`, an expression statement over a `let` with no binding. A
+      // YieldExpression is an AssignmentExpression: its operand is one, and it is capped as an
+      // arrow is (no operator takes it as an operand, here or after it).
       'export default function () {}', 'export default function f() {}', 'export default class {}',
       'export default 1 + 2;', 'let * aa;', 'let => aa;', 'function* g() { yield a + b; yield; yield* o; yield x++; }',
+      'function* g() { x = yield a; f(yield, yield a); a ? yield : yield b; yield yield a; x ||= yield; (yield) ** 2; }',
       // A parameter name is a BindingIdentifier: any identifier but a reserved word. Contextual
       // and strict-mode-only words stay names; a reserved word is fine as a pattern's key or a
       // default's value, and as a prefix of a longer name.
@@ -659,9 +668,10 @@ export const CASES: Case[] = [
       'import a, * as for from "m";', 'import { "a" as class } from "m";',
       // A `new` with no Arguments is not an optional-chain base, template callee or not.
       'new a`x`?.b;', 'new `x`?.b;', 'new a?.`x`;', 'new `a${}b`;', 'async function f() { new a`x${await}`(); }',
-      // … and on a tie the earliest-declared: `yield x++` is the prefix operator's node, which no
-      // postfix or `**` may take as its operand.
+      // … and a YieldExpression is no operand and no assignment target (it is capped): no postfix,
+      // `**`, binary operator or `=` takes it, before or after it.
       'function* g() { yield x++ ++; }', 'function* g() { yield x++ --; }', 'function* g() { yield -x ** 2; }',
+      'function* g() { yield ** 2; }', 'function* g() { x = yield = 1; }', 'function* g() { a + yield b; }',
       '1 + () => 2;', 'a++.b;', 'f(a, b,',
       // … so nothing after a line break is a postfix operator: `x\n++\n++\ny` is `x; ++ ++y`,
       // `x\n++` is `x; ++`, and `(x\n++)` leaves `++` with no operand.

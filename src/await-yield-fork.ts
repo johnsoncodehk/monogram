@@ -140,10 +140,10 @@ export function withAwaitYield(grammar: CstGrammar): CstGrammar {
   // marker stay plain. ──
   const baseRewritten: RuleDecl[] = grammar.rules.map(r => ({ ...r, body: rewrite(r.body, null) }));
 
-  // Insert the forks BEFORE the entry rule (the last rule — findEntryRule reads
-  // rules[length-1]) so the entry stays last. Existing rids shift only for the entry,
-  // which is looked up by position consistently everywhere; forks (body-internal
-  // rules) are never the entry.
+  // Insert the forks BEFORE the last rule, so a grammar that omits `entry` (findEntryRule
+  // then reads the last rule) keeps its entry; a declared entry is looked up by name.
+  // Existing rids shift only for the last rule; forks (body-internal rules) are never
+  // the entry.
   if (forks.length === 0) return { ...grammar, rules: baseRewritten };
   const entry = baseRewritten[baseRewritten.length - 1];
   return { ...grammar, rules: [...baseRewritten.slice(0, -1), ...forks, entry] };

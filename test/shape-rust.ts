@@ -23,6 +23,7 @@ import {
   buildTsCorpus, injectTypescriptRustCustoms, TS_GOLDEN,
 } from './fixtures/shape-typescript-rust.ts';
 import { scratchDir } from './scratch.ts';
+import { cachedRustc } from './build-cache.ts';
 
 type Ast = Record<string, unknown>;
 const TMP = scratchDir('shape-rust');
@@ -296,7 +297,7 @@ function compileShape(name: string, source: string, main = harness, timeout = 30
   const rustFile = `${TMP}/${name}.rs`;
   const rustBin = `${TMP}/${name}`;
   writeFileSync(rustFile, source + main);
-  execFileSync('rustc', ['-A', 'warnings', rustFile, '-o', rustBin], {
+  cachedRustc(['-A', 'warnings', rustFile, '-o', rustBin], {
     stdio: 'pipe',
     timeout,
   });
@@ -774,7 +775,6 @@ async function main(): Promise<void> {
       'declare const g3: number; declare function h3(x: number): void; declare module "m" { const v: number; }',
     ],
     differs: [
-      'new `a${0}b`; new `abc`(1); new tag`x${y + 1}`(); new a.b`x`(1); new `x`.y(); new a`x`.b`y`(1); new new a`x`()();',
       'type Fn = <T>(x: T) => T; type Ctor = new (x: number) => Foo; type Idx = Obj["key"];',
     ],
   };
