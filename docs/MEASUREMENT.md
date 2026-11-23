@@ -84,7 +84,13 @@ more than 0.1% while another stays within 0.01%.
 The inputs are fixed: `checker.ts` and `parser.ts` of TypeScript at the repository's one pin
 (`TS_REPO_SHA` in the workflows), `typescript.js` / `typescript.d.ts` of the locked `typescript`
 npm package, `gen-tm.ts` and `typescript.ts` of this repository as of `2632c2c`, a 2 MB synthetic
-file, a non-ASCII-heavy file and two dense one-byte-token files.
+file, a non-ASCII-heavy file and two dense one-byte-token files. Three element inputs
+([`test/bench-rust-profile/element-inputs.ts`](../test/bench-rust-profile/element-inputs.ts)):
+`jsx-corpus.tsx` and `jsx-corpus.jsx`, the element code of the pinned tsc corpus's JSX
+conformance cases, parsed by typescriptreact and javascriptreact; and `gen-tm.tsx`, the text of
+`gen-tm.ts` parsed by typescriptreact, the control: the same tokens and tree as `gen-tm.ts`
+through typescript, so its difference is what the element machinery costs code outside any
+element.
 
 ## Recorded result: Rust against oxc
 
@@ -155,6 +161,34 @@ There monogram executed 26% to 69% more instructions per parse than oxc (1.42 ti
 
 These tables are hand-written from on-demand runs and are not regenerated. In reuse mode
 monogram makes no allocator call per parse and neither parser takes a page fault.
+
+## Recorded result: element dialects (TSX and JSX)
+
+`measure-profile` run 45126133065 (AMD EPYC 9V45), M = the content of master `25b9ec7` (the
+run's head `dad8182` differs from it only in the TextMate generator, its test and docs/REGIONS.md). Per token: Rust and Go
+Callgrind instructions of one parse (reuse mode) and of the Rust `lex(src)` alone; TS: V8 block
+executions of one `parse(src)`.
+
+| input (grammar) | tokens | Rust lexer | Rust parse | Go direct | Go builder | TS blocks |
+|:--|--:|--:|--:|--:|--:|--:|
+| `checker.ts` (typescript) | 348,866 | 142.3 | 301.1 | 466.1 | 495.0 | 88.1 |
+| `gen-tm.ts` (typescript) | 50,156 | 158.6 | 332.5 | 529.7 | 562.2 | 115.2 |
+| `jsx-corpus.tsx` (typescriptreact) | 37,054 | 203.7 | 434.9 | 755.8 | 785.0 | 131.1 |
+| control: `gen-tm.tsx` (typescriptreact) | 50,156 | 163.5 | 337.2 | 538.0 | 558.2 | 115.3 |
+| control against `gen-tm.ts` | | +3.1% | +1.4% | +1.6% | -0.7% | +0.06% |
+
+How to read it:
+
+- A TSX token costs the Rust lexer 45 instructions more than a `gen-tm.ts` token; about 5 of
+  them are the element machinery's overhead on code (the control) and the rest is the token
+  mix: text runs, tags and holes, which the frame step lexes.
+- The control's Rust lexer +3.1% is no element work: Callgrind's per-line attribution puts it on
+  register moves at the merges of the lexer's loops, not on an element line. Before the plain
+  rounds ran in an inner loop of their own (`25b9ec7`), the control cost +18.1% Rust lexer,
+  +8.6% Rust parse, +25.1% Go direct and +21.5% Go builder (the A side of the same run).
+- That loop's one known cost: on element-dense JSX (`jsx-corpus.jsx`) an ordinary-scan round
+  inside an element goes from the element loop to one plain round and back: +1.2% Rust lexer,
+  +0.5% Rust parse against the single-loop lexer (the same run).
 
 The Go, TS and JS targets have not been compared with another parser on full TypeScript (an
 earlier Go-vs-tsgo comparison used the JavaScript grammar on repeated snippets, and its harness

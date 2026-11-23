@@ -25,7 +25,7 @@ const cst    = parse(src);      // lex + parse; null when the input is rejected
 | `jsTarget` | one `.ts` module | `tokenize(src): Token[]` (`type, text, offset, k, t, newlineBefore, commentBefore, multilineFlowBefore`) | arena parser: `parse(src)` → node handle (`visit` / `tree` / `tokenAt`), incremental `parseEdited`, isolated documents via `createParser()` (`parse` / `edit` / `visit` / `tree` / `tokenAt(handle, i)`) |
 | `tsTarget` | one `.ts` module | `tokenize(src): Token[]` | `parse(src)` → plain-object CST of spans (`Leaf { tokenType, offset, end }`, `Node { rule, children, offset, end }`), `parseWith`, `createDoc` (incremental) |
 | `goTarget` | `package parser` | `Tokenize(src) ([]Token, error)` — a `*LexError` on malformed input | `ParseWith`, `NewDoc` (incremental; each `Doc` owns its tree, read via `CstJSON`; different `Doc`s may be used from concurrent goroutines) |
-| `rustTarget` | one library crate file | `tokenize(src) -> Vec<Token>` — panics on malformed input (documented `# Panics`) | `parse_with`, `Doc` (incremental) |
+| `rustTarget` | one library crate file | `tokenize(src) -> Result<Vec<Token>, LexError>` — `Err` on malformed input (`LexError { off, msg }`, a `std::error::Error`); since f5a1c3e, before which it panicked | `parse_with`, `Doc` (incremental) |
 
 `tokenize` never touches parser state: its result is independent of every tree, handle and
 earlier result, and a parse is unaffected by any tokenize call before or after it.
@@ -39,11 +39,45 @@ and markup modes) carry the interpreter's lexer inlined into the module.
 The portable targets (`tsTarget` / `goTarget` / `rustTarget`) implement the token-stream and
 newline modes. They refuse indent and markup grammars (`buildIR` in
 [`src/emit-portable.ts`](../src/emit-portable.ts)) rather than emit a lexer that would
-mis-tokenize them. So YAML and HTML have the interpreter and `jsTarget` only. They also refuse a
-grammar that declares element regions (`elements`: TSX and JSX) until the portable lexers carry
-the region frame stack (roadmap item 2's portable part); before regions existed they emitted a
-token-stream TSX / JSX parser that rejected text children with punctuation and lexed `</` and
-`/>` as tokens everywhere.
+mis-tokenize them. So YAML and HTML have the interpreter and `jsTarget` only.
+
+They parse grammars with element regions (`elements`, [docs/REGIONS.md](REGIONS.md)): the
+portable lexers carry the region's frame stack (a3fb3a9), so
+[`typescriptreact.ts`](../typescriptreact.ts) (TSX), [`javascriptreact.ts`](../javascriptreact.ts)
+(JSX) and the code-children fixture [`test/fixtures/elementdialect.ts`](../test/fixtures/elementdialect.ts)
+emit to all three. What a region may declare that the portable lexers do not carry yet is
+refused when the parser is emitted (`buildIR`), not mis-lexed: `tagStart`, `textTokens`,
+`rawText[].unlessBodyStarts`, directives in children, `rawText` together with a type-parameter
+`signature`, and elements in a newline-mode grammar.
+
+### Element dialects: evidence and cost
+
+Parity (`test/portable-targets.ts`, every CI run; the same counts for TypeScript, Go and Rust):
+
+| grammar | accept / reject ≡ interpreter | one-character edits ≡ fresh parse | parity corpus ≡ interpreter (verdict, rule skeleton, token stream) |
+|---|---|---|---|
+| typescriptreact | 35 / 13 | 5,731 | 11,346 (generated, plus tsc's JSX conformance cases) |
+| javascriptreact | 19 / 9 | 2,182 | 11,427 |
+| elementdialect | 7 / 5 | 4,557 | 2,133 |
+
+Every corpus input also gives the same tree through an incremental `Doc` as through a fresh
+parse.
+
+Emitted sizes (`node test/emit-sizes.ts`, recorded by the profile run 45126133065 on the
+content of master 25b9ec7):
+
+| grammar | TypeScript | Go | Rust |
+|---|--:|--:|--:|
+| `typescriptreact.ts` | 305,275 B | 535,519 B | 402,273 B |
+| `javascriptreact.ts` | 205,095 B | 347,484 B | 286,596 B |
+
+Speed, from the same run ([MEASUREMENT.md](MEASUREMENT.md#recorded-result-element-dialects-tsx-and-jsx)
+has the table): a token of tsc's JSX conformance code costs the Rust lexer 203.7 instructions,
+against 142.3 on `checker.ts` and 158.6 on `gen-tm.ts` through the typescript parser; the
+difference is the token mix (text runs, tags and holes). Plain TypeScript through the
+typescriptreact parser costs, against the typescript parser, +3.1% Rust lexer, +1.4% Rust parse,
++1.6% Go (direct engine), -0.7% Go (builder engine), +0.06% TS blocks; the Rust lexer's +3.1% is
+register moves at the lexer loop's merges, not element work.
 
 What `jsTarget` has and the portable targets do not yet, the precondition for retiring it, is
 listed in [ROADMAP.md](ROADMAP.md#1-one-portable-engine-one-shared-runtime-description).
@@ -60,9 +94,12 @@ listed in [ROADMAP.md](ROADMAP.md#1-one-portable-engine-one-shared-runtime-descr
 
 ## Errors and tokens
 
-- Lexical errors follow each language's mechanism: the JS/TS lexers throw, Go's `Tokenize`
-  returns the error (`ParseWith` and the `Doc` constructors panic with the same `*LexError`),
-  Rust panics.
+- Lexical errors: the JS/TS `tokenize` throws; Go's `Tokenize` returns a `*LexError`; Rust's
+  `tokenize` returns `Err(LexError)` (since f5a1c3e; it panicked before). The parse entry points
+  keep their form: TS `parse` / `createDoc` throw, Go `ParseWith` and the `Doc` constructors
+  panic with the `*LexError`, Rust `parse_with` / `parse` / `Doc::new` panic with the message.
+  Inside the portable lexers an error is a returned value, never a throw or panic used for
+  control flow.
 - The `tsTarget` CST carries spans only: a leaf is located by its `offset`/`end`.
 - Lexers scan every `>` alone (so `>>` closing two type-argument lists is two tokens). At an
   operator site the parser composes `>>`, `>>>`, `>=`, `>>=`, `>>>=` from adjacent `>`, `>`
@@ -107,8 +144,8 @@ emptied with their capacity kept: the scratch stack, the top-level entry list, t
 bracket and template stacks (Rust: the builder's `Workspace`, which a custom builder can hand
 over through `Builder::workspace_mut`).
 
-This holds also after a rejected parse or a lexer error, except that after a Rust lexer panic
-the next parse allocates the lexer's two small stacks again. The CST of the earlier parse is
+This holds also after a rejected parse or a lexer error (since f5a1c3e also in Rust, where a
+lexer panic used to drop the lexer's two small stacks). The CST of the earlier parse is
 gone: its handles must not be read after the new parse.
 
 Cost model:
