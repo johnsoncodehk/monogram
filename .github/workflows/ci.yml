@@ -99,7 +99,7 @@ jobs:
           CHECK_OUT_DIR: /tmp/gate-output
         run: |
           echo "cores: $(nproc)"
-          npm run check
+          PORTABLE_EDIT_COMPARE=1 node test/check.ts portable-targets/edits
       # every gate's whole output (check.ts prints only a passing gate's last line)
       - if: always()
         uses: actions/upload-artifact@v4
