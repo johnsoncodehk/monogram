@@ -3,6 +3,7 @@
 # the shared dev box). From the repository root, full history fetched:
 #   test/inner-loop-measure.sh corpora            clone the pinned TS and test262 corpora (as ci.yml)
 #   test/inner-loop-measure.sh timing             five sample commits x --changed / --quick x cold / warm
+#   test/inner-loop-measure.sh concurrent        two cold runs of a gate at once into one empty cache
 #   test/inner-loop-measure.sh catch <branch>:<sha>
 #     <sha> is a head of land/<branch> whose CI failed for a real reason. Its change is put back onto
 #     this tree: the difference from the branch's last head (origin/land/<branch>, what was fixed
@@ -94,6 +95,23 @@ catch)
   row ' branch ' ' failing head ' ' --quick failed ' ' --changed failed ' ' --changed --all failed ' ' quick s ' ' verdict ' ' files taken whole '
   row '---' '---' '---' '---' '---' '---:' '---' '---'
   row " $B " " ${F:0:10} " " $(failed_gates "$out/quick.txt") " " $(failed_gates "$out/changed.txt") " " $(failed_gates "$out/all.txt") " " $(secs "$t0" "$t1") " " $v " " ${skipped:-none} "
+  ;;
+concurrent)
+  # Two gates building the same keys at once into one EMPTY build / emission cache (a fresh TMPDIR):
+  # both must pass, every key must end as one complete entry (its `ok` marker), no lock or private
+  # build directory may be left, and a third (warm) run must pass from the entries alone.
+  T=$(mktemp -d); C=$T/monogram-build-cache
+  row ' gate ' ' run 1 ' ' run 2 ' ' warm run ' ' entries ' ' complete ' ' locks left ' ' tmp left '
+  row '---' '---' '---' '---' '---:' '---:' '---:' '---:'
+  for g in "test/portable-lists.ts --grammars=calc,templatejs" "test/emit-portable-library.ts"; do
+    rm -rf "$C"
+    TMPDIR=$T node $g > /tmp/cc-1.txt 2>&1 & p1=$!
+    TMPDIR=$T node $g > /tmp/cc-2.txt 2>&1 & p2=$!
+    wait $p1; r1=$?; wait $p2; r2=$?
+    TMPDIR=$T node $g > /tmp/cc-3.txt 2>&1; r3=$?
+    row " $g " " exit $r1 " " exit $r2 " " exit $r3 " " $(ls "$C" | grep -vcE '\.lock$|\.tmp-') " " $(ls "$C"/*/ok 2>/dev/null | wc -l) " " $(ls -d "$C"/*.lock 2>/dev/null | wc -l) " " $(ls -d "$C"/*.tmp-* 2>/dev/null | wc -l) "
+    [ $r1 = 0 ] && [ $r2 = 0 ] && [ $r3 = 0 ] || tail -n 20 /tmp/cc-1.txt /tmp/cc-2.txt /tmp/cc-3.txt >&2
+  done
   ;;
 *) echo "unknown command $cmd"; exit 1 ;;
 esac

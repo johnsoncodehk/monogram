@@ -42,10 +42,12 @@ jobs:
         run: test/inner-loop-measure.sh corpora
       - name: Five commits x (--changed, --quick) x (cold, warm)
         run: test/inner-loop-measure.sh timing | tee /tmp/timing.log
+      - name: Two cold runs at once into one empty build / emission cache
+        run: test/inner-loop-measure.sh concurrent | tee /tmp/concurrent.log
       - if: always()
         name: Job summary
         run: |
-          { echo '## Inner loop: gates run and seconds (runner: '"$(nproc)"' cores)'; echo; grep '^|' /tmp/timing.log || true; } >> "$GITHUB_STEP_SUMMARY"
+          { echo '## Two cold runs at once into one empty cache'; echo; grep '^|' /tmp/concurrent.log || true; echo; echo '## Inner loop: gates run and seconds (runner: '"$(nproc)"' cores)'; echo; grep '^|' /tmp/timing.log || true; } >> "$GITHUB_STEP_SUMMARY"
 
   catch:
     runs-on: ubuntu-latest
