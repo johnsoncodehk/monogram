@@ -55,8 +55,16 @@ export interface RegionView {
 }
 
 /** Flatten an expression into its item sequences: alt / group expanded, a repetition as zero or
- *  one occurrence (`+` as one), so adjacency scans see every combination. */
+ *  one occurrence (`+` as one), so adjacency scans see every combination. Bounded by 2^(opts) per
+ *  alternative. The ONE expansion every generator's adjacency scan uses (gen-tm, gen-monarch,
+ *  the region view): memoised per expression node, so a body is expanded once however many
+ *  detectors read it; the result is shared, so it is frozen (outer and inner arrays): a caller
+ *  that would mutate it throws instead. */
+const expansions = new WeakMap<RuleExpr, RuleExpr[][]>();
 export function expandArms(expr: RuleExpr): RuleExpr[][] {
+  const hit = expansions.get(expr);
+  if (hit) return hit;
+  let out: RuleExpr[][];
   switch (expr.type) {
     case 'seq': {
       let acc: RuleExpr[][] = [[]];
@@ -66,14 +74,19 @@ export function expandArms(expr: RuleExpr): RuleExpr[][] {
         for (const prefix of acc) for (const b of branches) next.push([...prefix, ...b]);
         acc = next;
       }
-      return acc;
+      out = acc;
+      break;
     }
-    case 'alt': return expr.items.flatMap(expandArms);
-    case 'group': return expandArms(expr.body);
-    case 'quantifier': { const present = expandArms(expr.body); return expr.kind === '+' ? present : [[], ...present]; }
-    case 'not': return [[]];
-    default: return [[expr]];
+    case 'alt': out = expr.items.flatMap(expandArms); break;
+    case 'group': out = expandArms(expr.body); break;
+    case 'quantifier': { const present = expandArms(expr.body); out = expr.kind === '+' ? present : [[], ...present]; break; }
+    case 'not': out = [[]]; break;   // a negative lookahead consumes nothing: adjacency sees through it
+    default: out = [[expr]];   // literal, ref, sep, op, prefix, postfix
   }
+  for (const arm of out) Object.freeze(arm);
+  Object.freeze(out);
+  expansions.set(expr, out);
+  return out;
 }
 
 const isLit = (e: RuleExpr | undefined, v: string): boolean => e?.type === 'literal' && e.value === v;
