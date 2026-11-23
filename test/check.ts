@@ -67,6 +67,8 @@ const GATES: Gate[] = [
   { group: 'emit-parity', name: 'portable-targets/edits-small', args: ['test/portable-edits.ts', `--grammars-except=${[...EDIT_GRAMMARS].join(',')}`] },
   { group: 'emit-parity', name: 'portable-targets/corpus', args: ['test/portable-corpus.ts'], tier: 'ci' },
   { group: 'emit-parity', name: 'portable-targets/recovery', args: ['test/portable-recovery.ts'], tier: 'ci' },
+  // every file of the tsc conformance corpus and test262 (the pinned corpora at /tmp): about a minute
+  { group: 'emit-parity', name: 'portable-targets/wide', args: ['test/portable-wide.ts'], tier: 'ci' },
   { group: 'emit-parity', name: 'portable-work', args: ['test/portable-work.ts'] },
   { group: 'emit-parity', name: 'predictive-first', args: ['test/predictive-first.ts'] },
   { group: 'emit-parity', name: 'guard-lead', args: ['test/guard-lead.ts'] },
