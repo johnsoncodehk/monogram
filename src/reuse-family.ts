@@ -21,13 +21,6 @@ export const ENTRY_META: RecordDecl = {
   fields: ['tokStart', 'tokEnd', 'ext', 'off', 'end', 'kidStart', 'kidCount'].map((name) => ({ name, ty: 'pos' as const })),
 };
 const ENTRIES = 'recs_EntryMeta' as const;
-// A segment of the root's kids (shape B: an entry may own several root kids).
-export const SEG: RecordDecl = {
-  name: 'Seg',
-  fields: ['kidStart', 'kidCount', 'tokStart', 'tokEnd', 'ext'].map((name) => ({ name, ty: 'pos' as const })),
-};
-const SEGS = 'recs_Seg' as const;
-
 const v = (name: string): Expr => ({ k: 'var', name });
 const n = (k: number): Expr => ({ k: 'int', v: k });
 const bin = (op: (Expr & { k: 'bin' })['op'], a: Expr, b: Expr): Expr => ({ k: 'bin', op, a, b });
@@ -138,38 +131,29 @@ const reuseSpan: Fn = {
   ],
 };
 
-// Shape B's new segments and entries: the kept prefix, the re-parsed middle and the adopted suffix
-// from adoptFrom (moved by the edit), each entry's kids placed after the ones before it.
-const segPart = (segs: string, metas: string, from: Expr, shift: boolean): Stmt => ({
-  k: 'for', v: 'i', from, to: len(v(segs)), body: [
-    { k: 'let', name: 's', ty: 'rec_Seg', init: { k: 'at', list: v(segs), i: v('i') } },
+// Shape B's new entries: the kept prefix, the re-parsed middle and the adopted suffix from
+// adoptFrom (moved by the edit), each entry's kids placed after the ones before it.
+const segPart = (metas: string, from: Expr, shift: boolean): Stmt => ({
+  k: 'for', v: 'i', from, to: len(v(metas)), body: [
     { k: 'let', name: 'em', ty: ENTRY, init: { k: 'at', list: v(metas), i: v('i') } },
     ...(shift ? [{ k: 'run', call: call('shiftEntryMeta', v('em'), v('byteDelta'), v('tokDelta')) } as Stmt] : []),
     { k: 'setField', name: 'em', f: 'kidStart', e: v('kOff') },
-    { k: 'push', list: 'outSegs', e: { k: 'mkRec', rec: 'Seg', fields: {
-      kidStart: v('kOff'), kidCount: recField(v('s'), 'kidCount'),
-      ...Object.fromEntries(['tokStart', 'tokEnd', 'ext'].map((f) => [f, shift ? bin('add', recField(v('s'), f), v('tokDelta')) : recField(v('s'), f)])),
-    } } },
     { k: 'push', list: 'outE', e: v('em') },
-    { k: 'set', name: 'kOff', e: bin('add', v('kOff'), recField(v('s'), 'kidCount')) },
+    { k: 'set', name: 'kOff', e: bin('add', v('kOff'), recField(v('em'), 'kidCount')) },
   ],
 });
 const reuseSegEntries: Fn = {
   name: 'reuseSegEntries',
   doc: '',
-  params: [
-    { name: 'prefixSegs', ty: SEGS }, { name: 'prefixMeta', ty: ENTRIES }, { name: 'midSegs', ty: SEGS }, { name: 'midMeta', ty: ENTRIES },
-    { name: 'suffixSegs', ty: SEGS }, { name: 'suffixMeta', ty: ENTRIES }, { name: 'adoptFrom', ty: 'idx' }, { name: 'byteDelta', ty: 'int' }, { name: 'tokDelta', ty: 'int' },
-  ],
-  ret: [SEGS, ENTRIES],
+  params: [{ name: 'prefixMeta', ty: ENTRIES }, { name: 'midMeta', ty: ENTRIES }, { name: 'suffixMeta', ty: ENTRIES }, { name: 'adoptFrom', ty: 'idx' }, { name: 'byteDelta', ty: 'int' }, { name: 'tokDelta', ty: 'int' }],
+  ret: [ENTRIES],
   body: [
-    { k: 'let', name: 'outSegs', ty: SEGS, init: { k: 'newList', ty: SEGS, cap: bin('sub', bin('add', bin('add', len(v('prefixSegs')), len(v('midSegs'))), len(v('suffixSegs'))), v('adoptFrom')) } },
     { k: 'let', name: 'outE', ty: ENTRIES, init: { k: 'newList', ty: ENTRIES, cap: bin('sub', bin('add', bin('add', len(v('prefixMeta')), len(v('midMeta'))), len(v('suffixMeta'))), v('adoptFrom')) } },
     { k: 'let', name: 'kOff', ty: 'idx', init: n(0) },
-    segPart('prefixSegs', 'prefixMeta', n(0), false),
-    segPart('midSegs', 'midMeta', n(0), false),
-    segPart('suffixSegs', 'suffixMeta', v('adoptFrom'), true),
-    ret(v('outSegs'), v('outE')),
+    segPart('prefixMeta', n(0), false),
+    segPart('midMeta', n(0), false),
+    segPart('suffixMeta', v('adoptFrom'), true),
+    ret(v('outE')),
   ],
 };
 
@@ -226,5 +210,5 @@ export function reuseFamilyFns(ir: ParserIR): Fn[] {
 }
 
 export function emitReuseFamily(ir: ParserIR, lowering: Lowering): string {
-  return printFns(lowering, reuseFamilyFns(ir), [], [ENTRY_META, SEG]);
+  return printFns(lowering, reuseFamilyFns(ir), [], [ENTRY_META]);
 }
