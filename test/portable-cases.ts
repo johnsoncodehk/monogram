@@ -486,8 +486,10 @@ export const CASES: Case[] = [
       'for (x in y) z;', 'x in y;', 'for (a.b in c) d;', 'a in b in c;',
       'for ((x) in y) z;', 'for (x in y) a in b;', 'for (x in a in b) z;',
       '(a in b);', 'for (a in b) for (c in d) e;',
+      // a staged suppress set ends with its group, entered or not
+      'for (; a in b) z;', 'for (x; a in b) z;', 'for (; a) z;', 'for (;) z;',
     ],
-    reject: ['for (x y) z;', 'for x in y;', 'for (in y) z;', 'for (x in) z;'],
+    reject: ['for (x y) z;', 'for x in y;', 'for (in y) z;', 'for (x in) z;', 'for (x in y; a) z;'],
   },
   {
     // Longest match among a rule's alternatives, the earliest-declared on a tie
@@ -611,10 +613,12 @@ export const CASES: Case[] = [
       'new (a)`x`();', 'new a`x${new b`y${0}`}`();', 'new a`x`()`y`;', 'new a`x`().b;', 'new a`x`()?.b;',
       'async function f() { new a`x${await b}`(); }',
       // The longest alternative wins, wherever it is declared: `export default …` over
-      // `export <statement>`, an expression statement over a `let` with no binding, the
-      // `yield` form over the prefix operator when it reaches farther.
+      // `export <statement>`, an expression statement over a `let` with no binding. A
+      // YieldExpression is an AssignmentExpression: its operand is one, and it is capped as an
+      // arrow is (no operator takes it as an operand, here or after it).
       'export default function () {}', 'export default function f() {}', 'export default class {}',
       'export default 1 + 2;', 'let * aa;', 'let => aa;', 'function* g() { yield a + b; yield; yield* o; yield x++; }',
+      'function* g() { x = yield a; f(yield, yield a); a ? yield : yield b; yield yield a; x ||= yield; (yield) ** 2; }',
       // A parameter name is a BindingIdentifier: any identifier but a reserved word. Contextual
       // and strict-mode-only words stay names; a reserved word is fine as a pattern's key or a
       // default's value, and as a prefix of a longer name.
@@ -668,9 +672,10 @@ export const CASES: Case[] = [
       'import a, * as for from "m";', 'import { "a" as class } from "m";',
       // A `new` with no Arguments is not an optional-chain base, template callee or not.
       'new a`x`?.b;', 'new `x`?.b;', 'new a?.`x`;', 'new `a${}b`;', 'async function f() { new a`x${await}`(); }',
-      // … and on a tie the earliest-declared: `yield x++` is the prefix operator's node, which no
-      // postfix or `**` may take as its operand.
+      // … and a YieldExpression is no operand and no assignment target (it is capped): no postfix,
+      // `**`, binary operator or `=` takes it, before or after it.
       'function* g() { yield x++ ++; }', 'function* g() { yield x++ --; }', 'function* g() { yield -x ** 2; }',
+      'function* g() { yield ** 2; }', 'function* g() { x = yield = 1; }', 'function* g() { a + yield b; }',
       '1 + () => 2;', 'a++.b;', 'f(a, b,',
       // … so nothing after a line break is a postfix operator: `x\n++\n++\ny` is `x; ++ ++y`,
       // `x\n++` is `x; ++`, and `(x\n++)` leaves `++` with no operand.

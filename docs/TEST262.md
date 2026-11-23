@@ -20,7 +20,7 @@ a test that test262 runs both sloppy and strict, or only in one mode, or as a mo
 first run's text: `"use strict";` prepended for `onlyStrict`). What depends on the goal or the mode is a class
 of its own below (`needs-parameter`).
 
-**21296 of 24677 agree (86.3%).**
+**21329 of 24677 agree (86.4%).**
 
 ## Scoreboard
 
@@ -35,7 +35,7 @@ of its own below (`needs-parameter`).
 | `directive-prologue` | 62 | 51 | 0 | 11 | 0 | 0 |
 | `eval-code` | 347 | 347 | 0 | 0 | 0 | 0 |
 | `export` | 3 | 0 | 3 | 0 | 0 | 0 |
-| `expressions` | 11156 | 8952 | 720 | 1322 | 162 | 0 |
+| `expressions` | 11156 | 8952 | 739 | 1303 | 162 | 0 |
 | `function-code` | 217 | 217 | 0 | 0 | 0 | 0 |
 | `future-reserved-words` | 55 | 29 | 8 | 18 | 0 | 0 |
 | `global-code` | 42 | 28 | 0 | 14 | 0 | 0 |
@@ -51,7 +51,7 @@ of its own below (`needs-parameter`).
 | `rest-parameters` | 11 | 10 | 0 | 1 | 0 | 0 |
 | `source-text` | 1 | 1 | 0 | 0 | 0 | 0 |
 | `statementList` | 80 | 80 | 0 | 0 | 0 | 0 |
-| `statements` | 9399 | 7883 | 316 | 1198 | 2 | 0 |
+| `statements` | 9399 | 7883 | 330 | 1184 | 2 | 0 |
 | `types` | 113 | 102 | 7 | 4 | 0 | 0 |
 | `white-space` | 67 | 61 | 6 | 0 | 0 | 0 |
 | `annexB/comments` | 8 | 0 | 0 | 0 | 8 | 0 |
@@ -61,7 +61,7 @@ of its own below (`needs-parameter`).
 | `annexB/global-code` | 153 | 153 | 0 | 0 | 0 | 0 |
 | `annexB/literals` | 8 | 8 | 0 | 0 | 0 | 0 |
 | `annexB/statements` | 22 | 16 | 0 | 6 | 0 | 0 |
-| **total** | **24677** | **19938** | **1358** | **3119** | **262** | **0** |
+| **total** | **24677** | **19938** | **1391** | **3086** | **262** | **0** |
 
 WE-ACCEPT: test262 says SyntaxError, the grammar parses. WE-REJECT: test262 parses, the grammar rejects.
 
@@ -115,12 +115,11 @@ run); where it does not, the rule is outside even its syntactic layer.
 | `accept/rest-element-shape`: a rest element with an initializer, a trailing comma, or a follower | 345 | 345 | grammar bug: fix | `language/expressions/arrow-function/dflt-params-rest.js`<br>`language/expressions/class/gen-method-static/rest-params-trailing-comma-early-error.js`<br>`language/statements/class/dstr/meth-static-dflt-ary-ptrn-rest-not-final-obj.js` |
 | `accept/declaration-in-statement-position`: a declaration where only a Statement may stand | 129 | 122 | grammar bug: fix | `language/block-scope/syntax/function-declarations/in-statement-position-do-statement-while-expression.js`<br>`language/statements/for-in/decl-gen.js`<br>`language/statements/labeled/decl-const.js` |
 | `accept/import-export-not-top-level`: an import / export declaration inside a statement or expression | 86 | 86 | grammar bug: fix | `language/module-code/parse-err-decl-pos-export-arrow-function.js`<br>`language/module-code/parse-err-decl-pos-export-if-else.js`<br>`language/module-code/parse-err-decl-pos-import-for-in-let.js` |
-| `accept/await-yield-identifier-reference`: `await` / `yield` as an identifier reference or a label where the context forbids it | 77 | 77 | grammar bug: fix | `language/expressions/assignment/dstr/obj-id-identifier-yield-expr.js`<br>`language/expressions/class/elements/async-private-method/await-as-label-identifier.js`<br>`language/statements/class/async-gen-method-static/yield-as-label-identifier.js` |
+| `accept/await-yield-identifier-reference`: `await` / `yield` as an identifier reference or a label where the context forbids it | 53 | 53 | grammar bug: fix | `language/expressions/assignment/dstr/obj-id-identifier-yield-expr.js`<br>`language/expressions/class/elements/async-gen-private-method/yield-as-label-identifier.js`<br>`language/statements/class/async-gen-method-static/yield-as-label-identifier.js` |
 | `accept/for-in-of-initializer`: an initializer in a for-in / for-of head | 32 | 32 | grammar bug: fix | `language/block-scope/syntax/for-in/disallow-initialization-assignment.js`<br>`language/statements/for-await-of/head-let-init.js`<br>`language/statements/for-of/head-await-using-init.js` |
 | `accept/numeric-literal-lexical`: a numeric literal the lexical grammar does not derive | 21 | 21 | grammar bug: fix | `language/literals/bigint/legacy-octal-like-invalid-00n.js`<br>`language/literals/bigint/numeric-separators/numeric-separator-literal-lol-00-err.js`<br>`language/literals/bigint/numeric-separators/numeric-separator-literal-nonoctal-09-err.js` |
 | `accept/restricted-production-line-break`: a line break where a production says [no LineTerminator here] | 11 | 11 | grammar bug: fix | `language/asi/S7.9_A4.js`<br>`language/expressions/arrow-function/syntax/early-errors/asi-restriction-invalid.js`<br>`language/expressions/object/method-definition/early-errors-object-method-async-lineterminator.js` |
 | `accept/let-bracket-lookahead`: `let` ⏎ `[` in statement position | 9 | 9 | grammar bug: fix | `language/statements/do-while/let-array-with-newline.js`<br>`language/statements/for-of/let-array-with-newline.js`<br>`language/statements/labeled/let-array-with-newline.js` |
-| `accept/yield-precedence`: `yield` parsed as a prefix operator | 9 | 9 | grammar bug: fix | `language/expressions/generators/yield-as-logical-or-expression.js`<br>`language/expressions/object/method-definition/yield-weak-binding.js`<br>`language/statements/class/definition/methods-gen-yield-weak-binding.js` |
 | `accept/using-binding-pattern`: a binding pattern in a `using` / `await using` declaration list | 7 | 7 | grammar bug: fix | `language/statements/await-using/syntax/await-using-invalid-arraybindingpattern-after-bindingidentifier.js`<br>`language/statements/await-using/syntax/await-using-invalid-objectbindingpattern.js`<br>`language/statements/using/syntax/using-invalid-arraybindingpattern.js` |
 | `accept/string-line-terminator`: a raw LF / CR in a string literal | 6 | 6 | grammar bug: fix | `language/line-terminators/S7.3_A2.1_T2.js`<br>`language/line-terminators/invalid-string-cr.js`<br>`language/literals/string/S7.8.4_A1.1_T2.js` |
 | `accept/coalesce-mixed-with-logical`: `??` mixed with `&&` / `\|\|` without parentheses | 4 | 4 | grammar bug: fix | `language/expressions/coalesce/cannot-chain-head-with-logical-and.js`<br>`language/expressions/coalesce/cannot-chain-head-with-logical-or.js`<br>`language/expressions/coalesce/cannot-chain-tail-with-logical-and.js` |
@@ -152,7 +151,7 @@ run); where it does not, the rule is outside even its syntactic layer.
 
 | verdict | files |
 |---|---:|
-| grammar bug: fix | 743 |
+| grammar bug: fix | 710 |
 | needs a parameterised production the engine lacks (roadmap item 4) | 436 |
 | early error: a checker over the tree, not the grammar: not built | 1940 |
 
@@ -164,7 +163,6 @@ run); where it does not, the rule is outside even its syntactic layer.
 - `accept/numeric-literal-lexical` — `01n` (no BigInt suffix on a legacy octal), a NumericLiteralSeparator in a legacy-octal-like literal or after a leading zero: the token reads them.
 - `accept/restricted-production-line-break` — `throw⏎1`, `x⏎=> 1`, `async x⏎=> 1`: the restricted productions forbid the line break, and no ASI applies.
 - `accept/let-bracket-lookahead` — `for (;;) let⏎[a] = 0;`: an ExpressionStatement may not begin with `let [`, and a LexicalDeclaration is no Statement, so no production derives it.
-- `accept/yield-precedence` — `yield 3 + yield 4`, `yield ? a : b`, `yield = 1` in a generator: YieldExpression is an AssignmentExpression alternative, not a UnaryExpression; the grammar lists `yield` with the prefix operators.
 - `accept/using-binding-pattern` — `using x = 1, [a] = b`: a `using` LexicalBinding is a BindingIdentifier (`BindingList[~Pattern]`); only a leading `using [` is an expression (element access).
 - `accept/string-line-terminator` — DoubleStringCharacter / SingleStringCharacter exclude LF and CR. `String_` is shared with JSX attribute values, which may span lines (the expected-fail in test/js-conformance.ts).
 - `accept/coalesce-mixed-with-logical` — `0 && 0 ?? true`, `a ?? b || c`: CoalesceExpression's operands are BitwiseORExpressions, so neither side may be a bare `&&` / `||`.
@@ -261,9 +259,9 @@ declarations, labels, which tsc reports outside its parser; it includes TypeScri
 
 | parser | right | of 24677 | on the 20200 valid tests | on the 4477 parse-negative tests |
 |---|---:|---:|---:|---:|
-| `javascript.ts` (interpreter) | 21296 | 86.3% | 19938 (98.7%) | 1358 (30.3%) |
+| `javascript.ts` (interpreter) | 21329 | 86.4% | 19938 (98.7%) | 1391 (31.1%) |
 | acorn 8.16.0 | 24394 | 98.9% | 19926 (98.6%) | 4468 (99.8%) |
 | tsc 5.9.3 parser | 21391 | 86.7% | 20123 (99.6%) | 1268 (28.3%) |
 | tsc 5.9.3 parser + binder | 21829 | 88.5% | 19934 (98.7%) | 1895 (42.3%) |
 
-Of the 3119 WE-ACCEPT files, acorn also accepts 7 (in every run), tsc's parser 2701, tsc's parser + binder 2074.
+Of the 3086 WE-ACCEPT files, acorn also accepts 7 (in every run), tsc's parser 2701, tsc's parser + binder 2074.
