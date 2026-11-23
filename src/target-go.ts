@@ -509,7 +509,8 @@ ${refreshFn}\t// The token after the signature group's closer decides it (a clos
 \t\t}
 \t\treturn specDone
 \t}
-\tspecRewind := func() {
+\t// The rewind to the signature's tagOpen: its position (pos and limit stay the loop's own locals).
+\tspecRewind := func() int {
 \t\tkeep := specDone && err == nil && specThen
 \t\tre := n + 1
 \t\tif specDone && err == nil { re = ${shared.elementFn('reach')}(src, specEnd) }
@@ -517,12 +518,13 @@ ${refreshFn}\t// The token after the signature group's closer decides it (a clos
 \t\tif keep { specUntil = specOff }
 \t\tspecAt = svPos; specKeep = keep
 \t\t*acc = (*acc)[:specTok]
-\t\tpos = svPos; pendingNl = svNl; prevLid = svPrevLid; prevKid = svPrevKid; bpLid = svBpLid; hasPrev = svHasPrev; hasPrev2 = svHasPrev2
+\t\tpendingNl = svNl; prevLid = svPrevLid; prevKid = svPrevKid; bpLid = svBpLid; hasPrev = svHasPrev; hasPrev2 = svHasPrev2
 \t\tlastClose = svLastClose; lastBang = svLastBang; elEndAt = svElEndAt; tagAngle = svAngle
 \t\tparenHead = append(parenHead[:0], svParen...)
 \t\ttemplateStack = append(templateStack[:0], svStack...)
-\t\tspecTok = -1; specClosedAt = -1; specDone = false; err = nil; limit = limit0
+\t\tspecTok = -1; specClosedAt = -1; specDone = false; err = nil
 \t\trefresh()
+\t\treturn svPos
 \t}
 ` : '';
   const emitFn = `\temit := func(off, end int, kid, lid uint16) {
@@ -600,7 +602,7 @@ ${raw ? `\t\tif len(templateStack) > 0 && templateStack[len(templateStack)-1] ==
   // lexer's. A speculation lexes past the token limit to its verdict (no limit while it runs); one
   // that reaches the end of the input (or a lexer error, its verdict) is rewound after the loop.
   const loopBody = `\t\tif hot {
-${sig ? '\t\tif specTok >= 0 && specVerdict() { specRewind(); continue }\n' : ''}${frameStep}\t\t}
+${sig ? '\t\tif specTok >= 0 && specVerdict() { pos = specRewind(); limit = limit0; continue }\n' : ''}${frameStep}\t\t}
 \t\tc := int(src[pos])
 ${p.nlWs}${pre}${cascade}
 ${p.uniIdentFallbackGo}${p.loopPanicGo}`;
@@ -610,7 +612,7 @@ ${loopBody}
 `;
   const loop = sig ? `\tfor {
 ${inner}\tif specTok < 0 { break }
-\tspecVerdict(); specRewind()
+\tspecVerdict(); pos = specRewind(); limit = limit0
 \t}
 ` : inner;
   return `${p.head}${consts}${p.scans}func lexFrom(src string, pos int, pendingNl bool, ${rxParams}templateStack []int, elEnded bool, tagAngle, laEnd, specUntil int, ${raw ? 'tagAt []int, ' : ''}acc *[]Tok, limit int) (int, bool, ${rxRet}[]int, bool, int, int, int${raw ? ', []int' : ''}, *LexErr) {

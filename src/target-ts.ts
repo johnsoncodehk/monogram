@@ -279,19 +279,21 @@ ${sig ? `${tsFlagTable('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
     }
     return specDone;
   }
-  function specRewind(): void {
+  // The rewind to the signature's tagOpen: its position (pos and limit stay the loop's own locals).
+  function specRewind(): number {
     const keep = specDone && err === null && specThen;
     const re = specDone && err === null ? ${shared.elementFn('reach')}(src, specEnd) : n + 1;
     if (re > laEnd) laEnd = re;
     if (keep) specUntil = specOff;
     specAt = svPos; specKeep = keep;
     toks.length = specTok;
-    pos = svPos; pendingNl = svNl; prevLid = svPrevLid; prevKid = svPrevKid; bpLid = svBpLid; hasPrev = svHasPrev; hasPrev2 = svHasPrev2;
+    pendingNl = svNl; prevLid = svPrevLid; prevKid = svPrevKid; bpLid = svBpLid; hasPrev = svHasPrev; hasPrev2 = svHasPrev2;
     lastClose = svLastClose; lastBang = svLastBang; elEndAt = svElEndAt; tagAngle = svAngle;
     parenHead.length = 0; for (const b of svParen) parenHead.push(b);
     templateStack.length = 0; for (const f of svStack) templateStack.push(f);
-    specTok = -1; specClosedAt = -1; specDone = false; err = null; limit = limit0;
+    specTok = -1; specClosedAt = -1; specDone = false; err = null;
     refresh();
+    return svPos;
   }
 ` : '';
   // hot: whether the loop head has work (an element or raw frame on top of the frame stack${sig ? ', or a
@@ -368,7 +370,7 @@ ${raw ? `    if (templateStack.length > 0 && templateStack[templateStack.length 
   // lexer's. A speculation lexes past the token limit to its verdict (no limit while it runs); one
   // that reaches the end of the input (or a lexer error, its verdict) is rewound after the loop.
   const loopBody = `    if (hot) {
-${sig ? '    if (specTok >= 0 && specVerdict()) { specRewind(); continue; }\n' : ''}${frameStep}    }
+${sig ? '    if (specTok >= 0 && specVerdict()) { pos = specRewind(); limit = limit0; continue; }\n' : ''}${frameStep}    }
     const c = src.charCodeAt(pos);
 ${p.nlWs}${pre}${cascade}
 ${p.uniIdentFallbackTs}${TS_UNEXPECTED}`;
@@ -379,7 +381,7 @@ ${loopBody}
   for (;;) {
 ${inner}
   if (specTok < 0) break;
-  specVerdict(); specRewind();
+  specVerdict(); pos = specRewind(); limit = limit0;
   }` : inner;
   return `${consts}${p.scans}function lexFrom(src: string, pos: number, pendingNl: boolean, ${rxParams}templateStack: number[], elEnded: boolean, tagAngle: number, laEnd: number, specUntil: number, ${raw ? 'tagAt: number[], ' : ''}toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; ${rxRet}templateStack: number[]; elEnded: boolean; tagAngle: number; laEnd: number; specUntil: number${raw ? '; tagAt: number[]' : ''}; err: LexErr | null } {
   const n = src.length;
