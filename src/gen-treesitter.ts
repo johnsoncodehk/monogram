@@ -2586,11 +2586,20 @@ function buildTokenTreeSitter(source: CstGrammar, grammarName: string): Omit<Tre
   for (const t of zeroWidth.tokens) externalSnake.add(t.snake);
   const wordTok = grammar.tokens.find(t => t.identifier)?.name;
   const wordLiterals = wordTok ? collectWordLiterals(grammar, assertions.isWordLiteral) : [];
-  const contextual = wordTok && wordLiterals.length
+  // The keywords given a name reading: the grammar's declared subset (`treeSitterContextualNames`), or
+  // every keyword. A listed word that is no keyword some step reads as a name is a declaration error.
+  const declared = grammar.treeSitterContextualNames;
+  const names = declared === undefined || declared === 'all' ? wordLiterals : declared;
+  const contextual = wordTok && names.length
     ? planContextualWords(grammar,
       treeSitterLeafGraph(grammar, tokenNames, new Set(scannerTokenFor.keys()), prattRules, new Map([...zeroWidth.tokenOf].map(([n, t]) => [n, t.snake]))),
-      wordTok, wordLiterals, assertions.isWordLiteral)
+      wordTok, names, assertions.isWordLiteral)
     : null;
+  if (Array.isArray(declared)) {
+    const read = new Set([...contextual?.plan.values() ?? []].flat());
+    const idle = declared.filter(w => !read.has(w));
+    if (idle.length) throw new Error(`${grammar.name ?? 'grammar'}: treeSitterContextualNames lists ${idle.join(', ')}, which no word step reads as a name`);
+  }
   const ctx: GrammarJsContext = {
     grammar, tokenNames, ruleSnake, tokenSnake, prattRules, externalSnake, scannerTokenFor, zeroWidth,
     flowLiteralTokens,
