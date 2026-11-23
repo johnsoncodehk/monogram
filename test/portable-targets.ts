@@ -85,6 +85,21 @@ const FOR_HEADS = {
     'async function f() { for await (let.x of y); }', 'async function f() { for await (let of y); }',
   ],
 };
+// A repetition whose element is one Pratt call and whose next step refuses every token a dirty
+// failure of the call stops at (emit-portable.ts, `doomed`: an argument list `(` sep(Expr) `)`)
+// takes no mark per element: an element that fails after its NUD matched (an operator that needs a
+// target) leaves the list to fail at `)`, and the call's frame undoes it. Each verdict is the
+// productions'; the rejected ones are each such a failure, in one argument or a later one.
+const CALL_ARGS = {
+  accept: [
+    'f();', 'f(a,);', 'f(a, b,);', 'f(a = b, c += d);', 'f(a)(b)(c, d);', 'new C(a, ...b);', 'f(...a, b);',
+    'f(a ? b : c, d => e, [f] = g);', 'f((a + b));', 'f(a)[b] = c;',
+  ],
+  reject: [
+    'f(a + b = c);', 'f(a, b + c = d);', 'f(a++ = b);', 'f(a, b * c = d);', 'f(-a ** b);', 'new C(a + b = c);',
+    'f(a, b, c + d += e);', 'f(a)(b + c = d);', 'f(a, b++ ++);', 'f(a + b = c,);',
+  ],
+};
 // An IdentifierReference is no reserved word: a reserved word with no expression form of its own
 // is no expression, in both grammars (`notReservedExpr`).
 const RESERVED_EXPRS = {
@@ -577,7 +592,7 @@ const CASES: Case[] = [
       'for (a in b) { d = c in e; }',
       'new a.b();', '((((x))));',
       'for (a = x + y in b) c;',
-      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...EXPORT_DECLS.accept,
+      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...CALL_ARGS.accept, ...EXPORT_DECLS.accept,
       ...CTX_CASES.javascript.accept, ...JS_DECORATORS.accept, ...TEMPLATE_STEPS.js.accept, ...JS_MODULES.accept, ...TRY_STATEMENTS.accept,
       // An assignment / update operand needs only a LeftHandSideExpression's shape; target validity is a consumer's.
       '-x++;', '(a) = 1;', 'a = b = c;', '1 = 2;', '1++;', '++1;', 'f() = 1;', 'f()++;', '++f();', 'this = 1;',
@@ -660,7 +675,7 @@ const CASES: Case[] = [
       'x\n++;', 'x\n--', '(x\n++);', 'a = [x\n++];', 'x\n++\n-y;', 'x\n++\ny++;', 'x\n++ ++y;', 'class C { p = x\n++ }', 'class C { p = x\n++\ny }',
       'for (a = (x in b)) c;',
       'for (a = b ? x in c : y in d) e;',
-      ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject,
+      ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...CALL_ARGS.reject, ...EXPORT_DECLS.reject,
       ...CTX_CASES.javascript.reject, ...TEMPLATE_STEPS.js.reject,
       // An assignment / update operand (prefix ++/-- included) without a LeftHandSideExpression's shape has no parse.
       'a + b = c;', 'a++ = 1;', '-a = 1;', '++ -x;', '++x++;', '++ ++x;',
@@ -686,7 +701,7 @@ const CASES: Case[] = [
     // agnostic emitter (types, generics, interfaces, enums, assertions, variance). ASCII.
     grammar: 'typescript', path: '../typescript.ts',
     accept: [
-      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...EXPORT_DECLS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
+      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...CALL_ARGS.accept, ...EXPORT_DECLS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
       'export default /re/.test(x);', 'export default /=/;', 'switch (a) { default: /re/.test(x); }',
       // ... but as a member name a keyword is a value and a `/` after it divides, as after a private name
       // after a template's tail a `/` divides, as after a template with no substitution
@@ -877,7 +892,7 @@ const CASES: Case[] = [
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
       'type T = | | A;', 'type T = A | | B;', 'type T = A & | B;', 'type T = & & A;', 'type T = & | A;', 'f<| | A>();', 'let x: [| | A];',
-      'const f = <>() => 1;', 'const f = async <>(a) => 1;', 'const f = <in T>() => 1;', 'f(<in out T>(a) => a);', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, ...TS_DECORATORS.reject, ...TEMPLATE_STEPS.ts.reject, ...TS_MEMBER_DECORATORS.reject, ...TS_MODULES.reject, ...TRY_STATEMENTS.reject, ...TS_TRY.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
+      'const f = <>() => 1;', 'const f = async <>(a) => 1;', 'const f = <in T>() => 1;', 'f(<in out T>(a) => a);', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...CALL_ARGS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, ...TS_DECORATORS.reject, ...TEMPLATE_STEPS.ts.reject, ...TS_MEMBER_DECORATORS.reject, ...TS_MODULES.reject, ...TRY_STATEMENTS.reject, ...TS_TRY.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '{ b(); }.x;', '{ static x }.y;', '{ static x }', '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;',
       'let[0] = 1;', '(async\nfunction f() {});',

@@ -4,7 +4,84 @@
 > NAMES (`arm` / `field`, `src/grammar-names.ts`) instead of positions, and is a closed calculus
 > with no `custom` escape: [`src/shape2-schema.ts`](../src/shape2-schema.ts) defines it,
 > [`src/shape2-eval.ts`](../src/shape2-eval.ts) is its reference interpreter (gate `shape2-eval`).
-> No printer renders v2 yet; this document describes v1.
+> No printer renders v2 yet; this document describes v1, except the section "v2: the parts
+> the fused end state needs" right below.
+
+## v2: the parts the fused end state needs
+
+The two v2 specs are `test/fixtures/shape-v2-estree-expr.ts` (ESTree, against acorn) and
+`test/fixtures/shape-v2-tsc-expr.ts` (tsc's AST, against tsc). Both are built from the same
+grammar names.
+
+### Template literals
+
+A template reference (a `template` token) is read as a fixed inline alternation. It is a
+structure the calculus reads, not a new operator (`TemplateView` in `src/shape2-eval.ts`):
+
+| branch | children |
+|---|---|
+| `noSubstitution` | `quasi`: the whole token (a leaf) |
+| `substitution` | `head` (a leaf), then one iteration per hole: `expr` (the hole's rule node) and `part`, an alternation `middle` / `tail`, each holding the leaf `literal` |
+
+- **A template hole is a fresh expression context.** Its node takes every inherited
+  attribute's DEFAULT, whatever the arm holding the template hands its other children.
+- The hole's rule is the reference's `withHoles` rule, else the grammar's expression rule.
+- A part's values come from five cooking functions over the part's token text:
+  `templateCooked`, `templateRaw`, `tsTemplateText`, `tsTemplateRawText`, `tsTemplateFlags`.
+  `hasExtendedUnicodeEscape` reads a valid `\u{…}` in a part as it does in a string.
+- The span `{ inside: X }` is the part X without its delimiters (ESTree's TemplateElement). The
+  delimiters come from the token's `template` config when the spec is loaded. X must be a
+  template part; any other leaf is a load error.
+
+### Inherited equations: what they may read, and which are right-dependent
+
+An inherited equation (the context a parent arm hands a named child) is one of:
+- a constant;
+- a copy of the parent's own attribute (`inh`);
+- a scalar over the parent arm's own LEAVES (`text`, `cook`, `present`, and `armOf` / `branch`
+  of an alternation of leaves) and the parent's inherited attributes, combined with `match` /
+  `if` / `and` / `or` / `not` / `orElse`.
+
+It never reads `syn` of a sibling node, or anything else inside a sibling subtree. So at worst,
+ONE LEAF to the right of the child decides the child's context.
+
+The loader classifies every equation (`LoadedShape2.rightDependent`):
+- **L-attributed**: it reads nothing to the right of the child it feeds;
+- **RIGHT-DEPENDENT**: it reads a leaf that comes after the child.
+
+| spec | right-dependent equations |
+|---|---|
+| ESTree | `Expr.binaryOp.left` → `pattern`, read from the operator leaf `op` (`=`) |
+| tsc | none (the gate `shape2-eval` asserts it) |
+
+ESTree's `pattern` is the cover grammar. A literal on the left of `=`, or in a `for … in / of`
+head's left (a constant equation, so L-attributed), is an assignment pattern there:
+ArrayPattern / ObjectPattern / RestElement / AssignmentPattern. tsc keeps the literal as it is.
+
+The SPINE of `pattern` is derived by `spineOf`:
+- arms that read it: `Expr.array`, `Expr.binaryOp`, `Expr.object`, `Expr.spread`, `Prop.spread`;
+- children it is copied into: `Expr.array.element` / `elementRest`, `Expr.object.property`,
+  `Expr.spread.expr`, `Prop.init.value`, `Prop.spread.argument`.
+
+Whether a pattern is VALID (`[a + b] = c`) is the grammar's or the early errors' business, not
+the shape's.
+
+### What a generated parser must have at hand, per operator (the parser-emit table)
+
+| operator | at the construct site |
+|---|---|
+| `child`, `get`, `present`, `armOf`, `branch` | the arm's named finish sites; a record-valued rule's function returns a value struct with no node and no builder call |
+| `text`, `cook`, span endpoints | the named leaf's offsets (and its text for `cook`) |
+| `syn` | a scalar returned beside the node |
+| `inh` | a scalar parameter of the rule function |
+| `thread` | a loop-local scalar |
+| `map`, `fold` | the repetition's loop; a fold's accumulator is a loop-local |
+| `dropLastIf(cond, list)` | one loop-local "last element was a hole" bit (the fold), and a conditional pop at the loop's end |
+| span `{ after: X }` | the end offset of the consumed leaf X, which the parser holds when it consumes it |
+| template parts (`noSubstitution` / `substitution`) | the head / middle / tail leaves the parser consumes; a hole's value is built by the hole rule's function, called with the default context |
+| span `{ inside: X }` | X's offsets, and the static widths of its part kind's delimiters (from the token's template config at generation time) |
+| an L-attributed inherited equation | its scalar, computed at the call site from leaves already consumed and the parent's attributes |
+| a right-dependent inherited equation | the child is built in its default reading. When the deciding leaf arrives, the parser rewrites it, walking only the spine (the arms that read the attribute, reached through the children it is copied into). It never descends below a node whose arm does not pass the attribute on |
 
 A **shape** maps a grammar's concrete syntax tree (CST) into a consumer AST
 (types + builders). You declare the mapping once as a `ShapeSpec`;

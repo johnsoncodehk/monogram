@@ -105,11 +105,13 @@ const dialectSrc = [
   scopeRow('custom-element tag name `my-card`', 'pass', undefined, g, src, 'my-card', 0, s => inner(s).startsWith('entity.name.tag'));
   scopeRow('namespaced attribute name `on:click`', 'pass', undefined, g, src, 'click', 0, s => inner(s).startsWith('entity.other.attribute-name'));
   scopeRow('shorthand attribute `{item}` is an embedded expression', 'pass', undefined, g, src, '{item}', 0, has('meta.embedded.expression'));
-  const children = 'element children are a fixed JSX-children repository (`generateJsxPatterns`) that reads no grammar rule, so a directive inside an element is plain child text (items 2 and 6)';
-  scopeRow('`@if` inside element children is a keyword', 'xfail', children, g, src, '@if', 2, s => inner(s).startsWith('keyword.control.conditional'));
-  scopeRow('`@empty` inside element children is a keyword', 'xfail', children, g, src, '@empty', 0, s => inner(s).startsWith('keyword.control.loop'));
-  scopeRow('`of` inside element children is a keyword', 'xfail', children, g, src, 'of item', 1, s => inner(s).startsWith('keyword.control.loop'));
-  scopeRow('a directive region `{` in children is not an expression container', 'xfail', children, g, src, '{', 4, s => !has('meta.embedded.expression')(s));
+  scopeRow('`@if` inside element children is a keyword', 'pass', undefined, g, src, '@if', 2, s => inner(s).startsWith('keyword.control.conditional'));
+  scopeRow('`@empty` inside element children is a keyword', 'pass', undefined, g, src, '@empty', 0, s => inner(s).startsWith('keyword.control.loop'));
+  scopeRow('`of` inside element children is a keyword', 'pass', undefined, g, src, 'of item', 1, s => inner(s).startsWith('keyword.control.loop'));
+  // the `{` after `@if (show)` on the line after `<my-card …>` (occurrence 6: 0-3 are before the
+  // element, 4 and 5 are its attribute holes)
+  scopeRow('a directive region `{` in children is not an expression container', 'pass', undefined, g, src, '{', 6, s => !has('meta.embedded.expression')(s));
+  scopeRow('control: an attribute hole `{` is an expression container', 'pass', undefined, g, src, '{', 4, has('meta.embedded.expression'));
   scopeRow('an element inside a directive region keeps tag scopes', 'pass', undefined, g, src, 'span', 0, s => inner(s).startsWith('entity.name.tag'));
   const dyn = 'the tag-open pattern requires a name after `<`; the grammar\'s `TagName` arm `{ Expr }` is not read (item 6: rule-driven element patterns)';
   scopeRow('dynamic tag `<{…}` opens a tag', 'xfail', dyn, g, src, '<{item.tag}', 0, s => inner(s).startsWith('punctuation.definition.tag.begin'));
