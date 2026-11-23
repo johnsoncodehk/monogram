@@ -133,7 +133,7 @@ const textSrc = [
   '  <main class="m">Hello & 1 < 2 {items.length} /* note */ a//b // tail',
   '    @if (items.length) { <b>yes</b> } @else { none }',
   '    @for (x of items) { <li>{x}</li> } @empty { empty }',
-  '    say @iffy (q) and @if q',
+  '    say @iffy (q) and @if q (r) {zz}',
   '    <style>{css}</style>',
   '    <style>.a { color: red; }</style>',
   '    <SCRIPT>let a = 1;</SCRIPT>',
@@ -165,6 +165,7 @@ const textSrc = [
   scopeRow('`of` in an `@for` head is a keyword', 'pass', undefined, g, src, 'of items', 0, s => inner(s).startsWith('keyword.control'));
   scopeRow('`@iffy (` is text: the opener ends at a word boundary', 'pass', undefined, g, src, '@iffy', 0, s => !s.some(x => x.startsWith('keyword')));
   scopeRow('`@if q` is text: `@if` needs its `(`', 'pass', undefined, g, src, '@if q', 0, s => !s.some(x => x.startsWith('keyword')));
+  scopeRow('a hole after a plain `( … )` in text is a hole, not a directive body', 'pass', undefined, g, src, 'zz', 0, has('meta.embedded.expression'));
   scopeRow('`@empty` continuation is a keyword', 'pass', undefined, g, src, '@empty', 0, s => inner(s).startsWith('keyword.control'));
   scopeRow('`<style>{css}`: the body starts with `{`, so it is a hole (unlessBodyStarts)', 'pass', undefined, g, src, 'css}', 0, s => has('meta.embedded.expression')(s) && !has('source.css')(s));
   scopeRow('`<style>.a {…}` body is embedded CSS', 'pass', undefined, g, src, 'color', 0, has('source.css'));

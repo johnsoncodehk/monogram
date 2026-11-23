@@ -1445,20 +1445,25 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
         if (last === region.hole.open) {
           result[key] = bodyRegion(`${lead}\\s*(${ho})`, { ...caps, [String(lits.length + 1)]: { name: embeddedBegin } });
         } else {
+          // the directive: its head `( … )` (code), then its body; it ends after the body's
+          // closer, or after the head when no body opener follows on the line
           result[key] = {
-            begin: `${lead}\\s*(${escapeRegex(last)})`,
-            beginCaptures: { ...caps, [String(lits.length + 1)]: { name: `meta.brace.round.${langName}` } },
-            end: '(\\))', endCaptures: { '1': { name: `meta.brace.round.${langName}` } },
-            patterns: [{ include: '$self' }],
+            begin: `(?=${lead}\\s*${escapeRegex(last)})`,
+            end: `(?<=${hc})|(?<=\\))(?!\\s*(?:${ho}|$))`,
+            patterns: [
+              {
+                begin: `${lead}\\s*(${escapeRegex(last)})`,
+                beginCaptures: { ...caps, [String(lits.length + 1)]: { name: `meta.brace.round.${langName}` } },
+                end: '(\\))', endCaptures: { '1': { name: `meta.brace.round.${langName}` } },
+                patterns: [{ include: '$self' }],
+              },
+              bodyRegion(`(${ho})`, { '1': { name: embeddedBegin } }),
+            ],
           };
         }
         directiveKeys.push(key);
       }
     }
-    // the body after a head's `)` (the `)` ends the head region; the body begins after it)
-    const bodyKey = K('directive-body');
-    result[bodyKey] = bodyRegion(`(?<=\\))\\s*(${ho})`, { '1': { name: embeddedBegin } });
-    directiveKeys.push(bodyKey);
     for (const b of dirs.blocks) {
       const key = K(`directive-block-${n++}`);
       result[key] = {
