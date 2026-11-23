@@ -130,7 +130,7 @@ interface PostfixSlot {
   readonly __kind: 'postfix';
   (...ops: string[]): PostfixOps;
 }
-interface PrefixOps { readonly __kind: 'prefix-ops'; ops: string[]; requireTarget?: boolean }
+interface PrefixOps { readonly __kind: 'prefix-ops'; ops: string[]; requireTarget?: boolean; capped?: boolean }
 interface PostfixOps { readonly __kind: 'postfix-ops'; ops: string[]; requireTarget?: boolean }
 interface NoUnaryLhsOps { readonly __kind: 'no-unary-lhs-ops'; ops: string[] }
 interface LhsTargetOps { readonly __kind: 'lhs-target-ops'; ops: string[] }
@@ -204,6 +204,13 @@ export const postfixTarget = (...ops: string[]): PostfixOps => ({ __kind: 'postf
 // are syntax errors. Distinct from `prefix(...)` (the pure-unary `-`/`!`/`typeof`/… take
 // ANY operand, including an update: `-x++`, `void ++x` are fine).
 export const prefixTarget = (...ops: string[]): PrefixOps => ({ __kind: 'prefix-ops' as const, ops, requireTarget: true });
+
+// Prefix operators CAPPED at their own level: such an operator may begin an operand only where an
+// operator of its level or a looser one could stand, never as the operand of a tighter operator.
+// Python's `not`, a level between `and` and the comparisons: `a and not b` and `not a == b`
+// (`not (a == b)`) parse, `a == not b` and `-not x` do not. A plain `prefix(...)` binds at any
+// operand position (`2 ** -1`), which is right for a tight unary and wrong for a loose one.
+export const cappedPrefix = (...ops: string[]): PrefixOps => ({ __kind: 'prefix-ops' as const, ops, capped: true });
 
 // ── Combinators ──
 
@@ -292,6 +299,14 @@ class RelaxNode {
   constructor(strict: Element[], relaxed: Element[], ruleName?: string) { this.strict = strict; this.relaxed = relaxed; this.ruleName = ruleName; }
 }
 
+class AtLevelNode {
+  // See atLevel(). Lowered to a transparent `group` carrying `atLevel`.
+  readonly __kind = 'at-level' as const;
+  readonly operator: string;
+  readonly rule: RuleRef;
+  constructor(operator: string, rule: RuleRef) { this.operator = operator; this.rule = rule; }
+}
+
 class CapExprNode {
   // Wrap a NUD alternative that is a complete assignment-level expression — an
   // ArrowFunction, the LOWEST-precedence ECMAScript AssignmentExpression. `below` names
@@ -344,7 +359,7 @@ class FieldNode {
   constructor(name: string, item: Element) { this.name = name; this.item = item; }
 }
 
-type Combinator = HolesNode | SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode | NotNode | CtxNode | RelaxNode | CapExprNode | FieldNode;
+type Combinator = HolesNode | SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode | NotNode | CtxNode | RelaxNode | CapExprNode | AtLevelNode | FieldNode;
 
 /** A named alternative (see ArmNode). */
 export function arm(name: string, ...items: Element[]): ArmNode {
@@ -405,6 +420,13 @@ export function capExpr(below: string, ...items: Element[]): CapExprNode {
   return new CapExprNode(below, items);
 }
 
+// A reference to a Pratt rule read at the named operator's level: only that level's operators and
+// tighter ones continue it, as they would the operand of an operator of that level. Python's
+// `'*' bitwise_or` is `['*', atLevel('|', Expression)]`: `[*a | b]` parses, `[*a == b]` does not.
+export function atLevel(operator: string, rule: RuleRef): AtLevelNode {
+  return new AtLevelNode(operator, rule);
+}
+
 // Mark items as await / yield / async-generator context (see CtxNode). Wrap an
 // async arm's body and params in awaitCtx(...), a generator arm's in yieldCtx(...),
 // an async-generator's in asyncGenCtx(...).
@@ -445,7 +467,7 @@ function buildPrecOps(ops: OpSpec[]): PrecOperator[] {
     if (typeof o === 'string') {
       result.push({ value: o, position: 'infix' });
     } else if (o.__kind === 'prefix-ops') {
-      for (const v of o.ops) result.push({ value: v, position: 'prefix', requireTarget: o.requireTarget });
+      for (const v of o.ops) result.push({ value: v, position: 'prefix', requireTarget: o.requireTarget, ...(o.capped ? { capped: true } : {}) });
     } else if (o.__kind === 'postfix-ops') {
       for (const v of o.ops) result.push({ value: v, position: 'postfix', requireTarget: o.requireTarget });
     } else if (o.__kind === 'lhs-target-ops') {
@@ -558,6 +580,7 @@ function toRuleExpr(el: Element, names: Lowering): RuleExpr {
       : { type: 'seq', items: items.map(i => toRuleExpr(i, names)) };
     return { type: 'group', body: build(el.strict), tsRelaxed: build(el.relaxed), tsRuleName: el.ruleName };
   }
+  if (el instanceof AtLevelNode) return { type: 'group', body: toRuleExpr(el.rule, names), atLevel: el.operator };
   if (el instanceof CapExprNode) {
     // Reuse the transparent `group` node (every walker recurses into `body`); `capBelow`
     // is read only by the expression engine's Pratt core.

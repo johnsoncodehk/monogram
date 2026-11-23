@@ -551,6 +551,17 @@ export const CASES: Case[] = [
     reject: ['ͺ = a;', 'aͺ = b;', '$ = a;', 'é$ = a;', 'ำ = a;'],
   },
   {
+    // A capped prefix (`not`) and atLevel references (see the fixture): `not` is never the operand
+    // of a tighter operator, a level-read operand admits only its level and tighter ones.
+    grammar: 'cappedcalc', path: './fixtures/cappedcalc.ts',
+    accept: [
+      'not a;', 'not not a;', 'not a == b;', 'a and not b;', 'a or not b and c;', 'not a or b;', 'not -a;',
+      '- -a;', 'a if b else c;', 'a if b or c else d;', 'a if b else c if d else e;', 'not a if b else c;',
+      '*a | b;', '*a + b;', '*(a == b);',
+    ],
+    reject: ['a == not b;', '-not a;', 'a + not b;', '*a == b;', '*not a;', 'a if b if c else d else e;', 'a if b else;'],
+  },
+  {
     // The REAL javascript.ts grammar — the proof
     // that the target-agnostic emitter handles a full language end-to-end in ts/go/rust.
     // ASCII corpus only (byte-based go/rust use UTF-8 offsets, identical to the JS oracle's

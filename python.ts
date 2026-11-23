@@ -18,7 +18,7 @@
 
 import {
   token, rule, defineGrammar,
-  left, right, op, prefix,
+  left, right, op, prefix, cappedPrefix, atLevel, capExpr,
   opt, many, many1, alt, not,
   altPattern, optPattern, seq, oneOf, noneOf, range, anyChar, star, plus, never, notFollowedBy,
 } from './src/api.ts';
@@ -106,19 +106,20 @@ const NAME = () => [notKw, Name] as const;
 const tLookahead = alt('(', '[', '.');
 const followedByTrailer = not(not(tLookahead));
 
-// ── Expressions (python.gram "EXPRESSIONS"). `not` / `and` / `or` are RULES, as python.gram
-// writes them, not Pratt levels: an engine prefix operator binds with lbp 0, so a Pratt `not` would
-// admit `a == not b`, which python.gram's `inversion` does not derive. The comparisons ARE a Pratt
-// level (python.gram's `comparison` is one n-ary node; here `a < b < c` is left-nested binary
-// operators, the same verdict): written as a rule level, `>=` and `>>=` become rule literals while
-// `>` is one, and the engine then composes every `>`-led punctuator from single `>` tokens
-// (TypeScript's type-argument re-scan, inferred from `>` being a rule literal) and refuses them
-// (docs/SECOND-LANGUAGE.md). ──
-
-// comparison .. await_primary. `**` binds tighter than a unary prefix on its left (`-x ** y` is
-// `-(x ** y)`) and takes a unary on its right (`2 ** -1`); `await` takes a primary only. The
-// two-word operators are led arms at the comparison level (ledPrec).
-const BitwiseOr = rule(($) => [
+// ── Expressions (python.gram "EXPRESSIONS"): ONE Pratt rule from `lambda` down to `await`.
+// python.gram's levels (expression, disjunction, conjunction, inversion, comparison, bitwise_or …)
+// are binding powers here. `not` is a CAPPED prefix (cappedPrefix): it begins an operand only at
+// its own level or a looser one, so `a and not b` parses and `a == not b`, `-not x` do not. A
+// context that python.gram writes with a lower level's rule reads this rule at that level
+// (atLevel): `'*' bitwise_or` is `['*', atLevel('|', Expression)]`, a comprehension's iterable
+// and condition are disjunctions (`atLevel('or', …)`). The conditional is a mixfix led below `or`
+// whose condition is a disjunction; `lambda` is a capped nud (capExpr) below the conditional: no
+// operator takes it as an operand and nothing continues it. The comparisons are left-nested
+// binary operators (python.gram's `comparison` is one n-ary node; the verdict is the same). The
+// two-word operators are led arms at the comparison level (ledPrec). `**` binds tighter than a
+// unary prefix on its left (`-x ** y` is `-(x ** y)`) and takes a unary on its right (`2 ** -1`);
+// `await` takes a primary only. ──
+const Expression = rule(($) => [
   Primary,
   ['await', Primary],
   [$, 'not', 'in', $],
@@ -127,25 +128,18 @@ const BitwiseOr = rule(($) => [
   [$, 'is', $],
   [$, op, $],
   [prefix, $],
+  [$, 'if', atLevel('or', Expression), 'else', $],
+  capExpr('if', 'lambda', opt(LambdaParameters), ':', $),
 ]);
-
-const Inversion = rule(($) => [['not', $], BitwiseOr]);
-const Conjunction = rule(() => [[Inversion, many('and', Inversion)]]);
-const Disjunction = rule(() => [[Conjunction, many('or', Conjunction)]]);
-
-// expression: the conditional is a mixfix whose condition is a disjunction; a lambda is lowest.
-const Expression = rule(($) => [
-  [Disjunction, 'if', Disjunction, 'else', $],
-  Disjunction,
-  Lambdef,
-]);
+const Disjunction = () => atLevel('or', Expression);
+const BitwiseOr = () => atLevel('|', Expression);
 const Expressions = rule(() => [[Expression, many(',', Expression), opt(',')]]);
 
 const AssignmentExpression = rule(() => [[...NAME(), ':=', Expression]]);
 const NamedExpression = rule(() => [AssignmentExpression, [Expression, not(':=')]]);
-const StarExpression = rule(() => [['*', BitwiseOr], Expression]);
+const StarExpression = rule(() => [['*', BitwiseOr()], Expression]);
 const StarExpressions = rule(() => [[StarExpression, many(',', StarExpression), opt(',')]]);
-const StarNamedExpression = rule(() => [['*', BitwiseOr], NamedExpression]);
+const StarNamedExpression = rule(() => [['*', BitwiseOr()], NamedExpression]);
 const StarNamedExpressions = rule(() => [[StarNamedExpression, many(',', StarNamedExpression), opt(',')]]);
 const YieldExpr = rule(() => [['yield', 'from', Expression], ['yield', opt(StarExpressions)]]);
 
@@ -178,9 +172,9 @@ const Tuple = rule(() => [['(', opt(StarNamedExpression, ',', opt(StarNamedExpre
 const List = rule(() => [['[', opt(StarNamedExpressions), ']']]);
 const Set = rule(() => [['{', StarNamedExpressions, '}']]);
 const Kvpair = rule(() => [[Expression, ':', Expression]]);
-const DoubleStarredKvpair = rule(() => [['**', BitwiseOr], Kvpair]);
+const DoubleStarredKvpair = rule(() => [['**', BitwiseOr()], Kvpair]);
 const Dict = rule(() => [['{', opt(DoubleStarredKvpair, many(',', DoubleStarredKvpair), opt(',')), '}']]);
-const ForIfClause = rule(() => [[opt('async'), 'for', StarTargets, 'in', Disjunction, many('if', Disjunction)]]);
+const ForIfClause = rule(() => [[opt('async'), 'for', StarTargets, 'in', Disjunction(), many('if', Disjunction())]]);
 const ForIfClauses = rule(() => [[many1(ForIfClause)]]);
 const Listcomp = rule(() => [['[', NamedExpression, ForIfClauses, ']']]);
 const Setcomp = rule(() => [['{', NamedExpression, ForIfClauses, '}']]);
@@ -227,7 +221,6 @@ function paramForms(param: () => unknown[], close: string) {
 }
 const Parameters = rule(() => paramForms(() => [...NAME(), opt(':', Expression)], ')'));
 const LambdaParameters = rule(() => paramForms(() => [...NAME()], ':'));
-const Lambdef = rule(() => [['lambda', opt(LambdaParameters), ':', Expression]]);
 
 // ── Targets (python.gram "TARGETS"). A t_primary arm holds only when another trailer follows
 // (`&t_lookahead`), so the LAST `.name` / `[…]` of a chain is the target's: `f().x = 1` assigns,
@@ -391,6 +384,9 @@ export default defineGrammar({
   scopeName: 'source.python',
   tokens: { Comment, LineJoin, RawBytes, Bytes, RawString, String: String_, Imaginary, Float, Integer, Name, Indent, Dedent, Newline },
   prec: [
+    left('or'),
+    left('and'),
+    right(cappedPrefix('not')),
     left('==', '!=', '<', '<=', '>', '>='),
     left('|'),
     left('^'),
@@ -402,12 +398,12 @@ export default defineGrammar({
     right('**'),
   ],
   rules: {
-    BitwiseOr, Inversion, Conjunction, Disjunction, Expression, Expressions,
+    Expression, Expressions,
     AssignmentExpression, NamedExpression, StarExpression, StarExpressions, StarNamedExpression, StarNamedExpressions, YieldExpr,
     Primary, Slice, Slices, Strings, Atom, Group, Tuple, List, Set, Kvpair, DoubleStarredKvpair, Dict,
     ForIfClause, ForIfClauses, Listcomp, Setcomp, Dictcomp, Genexp,
     KwargOrStarred, KwargOrDoubleStarred, Kwargs, PositionalArg, Args, Arguments,
-    Parameters, LambdaParameters, Lambdef,
+    Parameters, LambdaParameters,
     TPrimary, SingleSubscriptAttributeTarget, SingleTarget, TargetWithStarAtom, StarTarget, StarTargets, StarAtom, DelTarget, DelTargets,
     Assignment, DottedName, DottedAsName, ImportFromAsName, ImportStmt, SimpleStmt, SimpleStmts,
     Block, ElifStmt, IfStmt, WhileStmt, ForStmt, WithItem, WithStmt, ExceptBlock, TryStmt, FunctionDef, ClassDef,
@@ -416,6 +412,7 @@ export default defineGrammar({
     CompoundStmt, Statement, Statements, File,
   },
   ledPrec: [
+    { connector: 'if', below: 'or' },
     { connector: 'not', sameAs: '<', chainRhs: true },
     { connector: 'in', sameAs: '<', chainRhs: true },
     { connector: 'is', sameAs: '<', chainRhs: true },

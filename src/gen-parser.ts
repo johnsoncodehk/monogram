@@ -56,7 +56,7 @@ export function createParser(grammar: CstGrammar) {
 
   const {
     opTable, prefixOps, noUnaryLhsOps, postfixOpValues,
-    ledPrecByConnector, binaryConnectors, nudCapOf,
+    ledPrecByConnector, binaryConnectors, nudCapOf, atLevelBp,
     prattRules, prattClassified, leftRecClassified, leftRecSet, ruleByName,
     nullableRules, exprNullable, maxBp, templateTokenName, templateTokenNames,
     firstSets, exprFirst, exprSecond,
@@ -669,9 +669,17 @@ export function createParser(grammar: CstGrammar) {
           if (tok) {
             const key = tok.text;
             const info = prefixOps.get(key);
-            if (info) {
-              if (++pos > maxPos) maxPos = pos;
-              const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
+            // A capped prefix (Python `not`) begins an operand only below its own level.
+            if (info && (info.capBp === undefined || minBp < info.capBp)) {
+              // A capped prefix's node is the sequence `op $` (its operator a literal leaf), as
+              // the portable engine lowers it; an ordinary prefix's operator is an `$operator` leaf.
+              let opLeaf: CstLeaf | null;
+              if (info.capBp !== undefined) opLeaf = matchLiteral(key);
+              else {
+                if (++pos > maxPos) maxPos = pos;
+                opLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
+              }
+              if (!opLeaf) continue;
               const rhs = parsePratt(rule, info.rbp);
               // A target-requiring prefix (`++`/`--`) operand must be a LeftHandSideExpression
               // (`++-x`, `++ ++x`, `++x--` are syntax errors). Fail hard like noUnaryLhs.
@@ -878,11 +886,21 @@ export function createParser(grammar: CstGrammar) {
         }
         case 'quantifier':
           return matchQuantifier(expr.body, expr.kind);
-        case 'group':
+        case 'group': {
+          // atLevel(op, R): the Pratt rule R read at op's level (no memo: the memo is keyed by
+          // position only, as for every operand parsePratt reads at a binding power).
+          const lvl = atLevelBp(expr);
+          if (lvl !== null) {
+            const r = (expr.body as { name: string }).name;
+            if (!ruleMightStart(r, peek())) return null;
+            const node = parsePratt(ruleByName.get(r)!, lvl);
+            return node ? [node] : null;
+          }
           // A `suppress`-carrying group disables the listed LED connectors for the
           // rule it wraps: stage them for the next parseRule to pick up.
           if (expr.suppress && expr.suppress.length) suppressNext = new Set(expr.suppress);
           return matchExpr(expr.body);
+        }
         case 'not': {
           // Zero-width negative lookahead: succeed (no children) iff the body
           // does NOT match here; never consume input either way.
