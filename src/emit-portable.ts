@@ -655,6 +655,10 @@ export type ElementPlan = {
   // A tagOpen opens a tag (from code, in the children, after `=` in a tag) only when the unit
   // after it is in these ranges (ASCII); null: always.
   tagStart: CodeRange[] | null;
+  // Tried in the children, in order, before the text run (each a scanned token; a skip token is
+  // skipped); a run stops before one that matches, inside a run only right after a unit of its
+  // `after` class (ASCII) when it has one.
+  textTokens: { token: string; after: CodeRange[] | null }[];
   // 'always': every tagOpen in code outside a tag opens an element (tagOpenOnlyOpensTags);
   // 'operand': only one where an operand may start, unless a veto below says otherwise.
   entry: 'always' | 'operand';
@@ -689,7 +693,6 @@ function elementPlanOf(grammar: CstGrammar, el: NonNullable<CstGrammar['elements
   const tp = el.typeParameters;
   if (always && tp) throw new Error(`portable: elements.typeParameters: this grammar uses '${el.tagOpen}' only to open tags`);
   // Not built in the portable lexers yet: refused, not lexed without them (docs/REGIONS.md, Owed).
-  if (el.textTokens?.length) throw new Error('portable: elements.textTokens is out of scope until the portable lexers carry it');
   const dir = directivesOf(grammar, el);
   if (dir && (dir.openers.length || dir.continuations.length || dir.blocks.length)) throw new Error('portable: element directives are out of scope until the portable lexers carry them');
   // The signature's rewind restores the frame stack, not the raw-text tag records.
@@ -712,12 +715,19 @@ function elementPlanOf(grammar: CstGrammar, el: NonNullable<CstGrammar['elements
     rawText: [...(el.rawText ?? [])].sort((a, b) => Number(!!a.ignoreCase) - Number(!!b.ignoreCase))
       .map((r) => ({ tags: [...r.tags], token: tok(r.token, 'rawText.token'), ignoreCase: !!r.ignoreCase, unless: r.unlessBodyStarts ?? null })),
     tagStart: el.tagStart === undefined ? null : unitClassOf(el.tagStart, 'elements.tagStart'),
+    textTokens: (el.textTokens ?? []).map((t) => {
+      if (el.text === undefined) throw new Error('portable: elements.textTokens: needs a text token (elements.text)');
+      return { token: tok(t.token, 'textTokens'), after: t.after === undefined ? null : unitClassOf(t.after, `elements.textTokens '${t.token}'.after`) };
+    }),
     entry: always ? 'always' : 'operand',
     head: tp?.head ?? null,
     signature,
   };
 }
 
+// Whether a text token of the region is a skip token (the frame step then returns EL_SKIP for it:
+// the printers skip its span, recording a line terminator in it).
+export const elementSkipsText = (ir: ParserIR): boolean => !!ir.elements?.textTokens.some((t) => ir.tokens.find((x) => x.name === t.token)?.skip);
 // The kinds of an element region's own tokens. They carry no literal id (0), whatever their text:
 // the parser matches a literal by its id alone, and a region token is never a literal (the
 // interpreter's lexer records 0 for them too). A Doc that rebuilds ids from text tests this class.
