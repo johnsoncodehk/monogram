@@ -9,7 +9,7 @@ export type TokenPattern =
   | { type: 'repeat'; body: TokenPattern; min: number; max?: number; greedy: boolean }
   | { type: 'lookahead'; body: TokenPattern; negate: boolean }
   | { type: 'lookbehind'; body: TokenPattern; negate: boolean }
-  | { type: 'anchor'; kind: 'start' | 'end' }
+  | { type: 'anchor'; kind: 'start' | 'lineStart' | 'end' }   // start / end: of the text; lineStart: of a line
   | { type: 'never' };
 
 export type TokenCharClassItem =
