@@ -1336,9 +1336,15 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
   // a postfix-or-prefix `!`, a text whose last unit can end a value token) is left out.
   const oe = view.entry === 'operand' ? operandEntry(grammar) : null;
   const wordText = (t: string) => `${/^\w/.test(t) ? '\\b' : ''}${escapeRegex(t)}`;
-  const exprBehind = oe
-    ? `${oe.notAfter.length ? `(?<!${oe.notAfter.map(escapeRegex).join('|')})` : ''}(?<=${[...oe.after.map(wordText), '^'].join('|')})`
-    : '';
+  // A word text (`new`, `return`) is an operator only where no member access precedes it (the
+  // lexer's LX_MEMBER rule, as for keywords): after `.` / `?.` the same word is a property name,
+  // a value, so `x.new <b> c` is no element. Oniguruma's lookbehind takes alternatives of
+  // different lengths only at its top level, so each (accessor, word) pair is an alternative.
+  const members: string[] = grammar.tokens.find(t => t.regexContext)?.regexContext?.memberAccessTexts ?? [];
+  const afterWords = oe ? oe.after.filter(t => /^\w/.test(t)) : [];
+  const exprBehind = !oe ? '' : `${oe.notAfter.length ? `(?<!${oe.notAfter.map(escapeRegex).join('|')})` : ''}` + (members.length && afterWords.length
+    ? `(?:(?<=${[...oe.after.filter(t => !/^\w/.test(t)).map(wordText), '^'].join('|')})|(?<=${afterWords.map(wordText).join('|')})(?<!${afterWords.flatMap(w => members.map(m => escapeRegex(m + w))).join('|')}))`
+    : `(?<=${[...oe.after.map(wordText), '^'].join('|')})`);
   // The leading run skipped (inside a lookahead, so zero-width) between the
   // anchoring operator and the tag's `<`: whitespace plus any number of BLOCK
   // comments — an element may legally follow a `/* … */` on the same line
