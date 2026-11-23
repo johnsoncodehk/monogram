@@ -1146,6 +1146,10 @@ export default defineGrammar({
   // The `type_fn_param` tuples (issue #46) are the residual `(` boundary where a param could still be
   // value-context after the type-only fn param decoupled types from `expr`.
   treeSitterConflicts: [
+    // `export { a }`: an export list, or `export` + an expression statement `{ a }` (the guard against
+    // a statement that starts with `{` is a dropped lookahead); with the statement's end a token of
+    // its own (the line-end token), both readings meet at `a` before `}`.
+    ['prop', 'export_specifier'],
     ['expr'], ['stmt'], ['stmt', 'decl'], ['expr', 'decl'], ['program', 'stmt'], ['new_target'],
     ['type', 'type_param'], ['type_param'], ['expr', 'param'], ['expr', 'new_target'],
     ['expr', 'block'], ['expr', 'member_name'], ['expr', 'prop'], ['member_name', 'stmt'], ['decl'],

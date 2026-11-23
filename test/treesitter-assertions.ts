@@ -27,15 +27,19 @@ const RENDERED: AssertionClass[] = ['lowered', 'reserved-set'];
 // Item 1b: reserved-word guards before the word token render as tree-sitter reserved word sets
 // (js / jsx 41 of 43, ts / tsx 63 of 65; the two left are `not("new")` / `not("super")`, sets that
 // are no subset of the chain).
+// Item 2: the line-end alternatives (`asi()`: its `not(sameLine)` and `not(not("}"))` arms) and the
+// `sameLine` items render as zero-width external tokens (planZeroWidth): js 41, jsx 43, ts 131, tsx 133
+// lowered (every scanner-class assertion of js / jsx); the 6 `sameLine` left in ts / tsx are the ones
+// whose AFTER meets their CONT.
 // `new` callees take every MemberExpression form (land/shape-newtarget): NewTarget's identifier arm
 // carries the expression NUD's guards (`not('super')`, `not('new')`: reserved +2; the reserved-word
 // guard: reserved-set +5, rendered) and its async function arms their `sameLine` (scanner +2); in
 // TypeScript a plain decorator is not `@new` (`not('@new')`: lookahead1 +1).
 const PINNED: Record<string, Partial<Record<AssertionClass, number>>> = {
-  javascript:      { vacuous: 6,  'reserved-set': 46, scanner: 29, reserved: 4, lookahead1: 37,  lookahead: 8 },
-  typescript:      { vacuous: 60, 'reserved-set': 68, scanner: 94, reserved: 4, lookahead1: 134, lookahead: 69, 'left-context': 2 },
-  javascriptreact: { vacuous: 6,  'reserved-set': 46, scanner: 31, reserved: 4, lookahead1: 37,  lookahead: 8 },
-  typescriptreact: { vacuous: 60, 'reserved-set': 68, scanner: 96, reserved: 4, lookahead1: 134, lookahead: 69, 'left-context': 2 },
+  javascript:      { lowered: 41,  vacuous: 6,  'reserved-set': 41, scanner: 0,  reserved: 2, lookahead1: 23, lookahead: 8 },
+  typescript:      { lowered: 131, vacuous: 60, 'reserved-set': 63, scanner: 6,  reserved: 2, lookahead1: 88, lookahead: 69, 'left-context': 2 },
+  javascriptreact: { lowered: 43,  vacuous: 6,  'reserved-set': 41, scanner: 0,  reserved: 2, lookahead1: 23, lookahead: 8 },
+  typescriptreact: { lowered: 133, vacuous: 60, 'reserved-set': 63, scanner: 6,  reserved: 2, lookahead1: 88, lookahead: 69, 'left-context': 2 },
   yaml:            { lowered: 1,  scanner: 16, lookahead1: 6 },
 };
 

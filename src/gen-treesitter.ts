@@ -1,6 +1,8 @@
 import type { CstGrammar, RuleExpr, RuleDecl, TokenPattern } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
-import { tokenPatternFirstCharSet, type TokenPatternFirstSet, tokenPatternIsNever, tokenPatternLiteralPrefix, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
+import { buildLr, END, type LeafGraph } from './lr-automaton.ts';
+import { info as tokenPatternInfo, type CSet } from './lex-match-plan.ts';
+import { tokenPatternFirstCharSet, type TokenPatternFirstSet, tokenPatternIsNever, tokenPatternLiteralPrefix, tokenPatternLiteralPrefixes, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
 
 // ════════════════════════════════════════════════════════════════════════════
 // gen-treesitter — derive a tree-sitter parser package from one CstGrammar.
@@ -194,6 +196,8 @@ interface GrammarJsContext {
   prattRules: Set<string>;
   /** external token names provided by the scanner (snake_case) */
   externalSnake: Set<string>;
+  /** planZeroWidth: the line-break assertions rendered as zero-width external tokens. */
+  zeroWidth: ZeroWidthPlan;
   /** original token name → external scanner token name (snake) if scanner-provided */
   scannerTokenFor: Map<string, string>;
   /** flow-delimiter LITERAL char (`[` `]` `{` `}`) → synthetic external scanner token (snake). These
@@ -401,7 +405,11 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordSet?: string): st
       return `seq(${parts.join(', ')})`;
     }
     case 'alt': {
-      const parts = expr.items.map(i => renderExpr(i, ctx));
+      // A line-end alternative: its arms that consume nothing are its zero-width token (planZeroWidth).
+      const zw = ctx.zeroWidth.tokenOf.get(expr);
+      const parts = zw
+        ? [...expr.items.filter(i => { const v = tsView(i); return !(v.type === 'seq' ? v.items : [v]).every(x => ASSERTION_KINDS.has(tsView(x).type)); }).map(i => renderExpr(i, ctx)), `$.${zw.snake}`]
+        : expr.items.map(i => renderExpr(i, ctx));
       return `choice(${parts.join(', ')})`;
     }
     case 'quantifier': {
@@ -423,8 +431,13 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordSet?: string): st
       }
       return renderExpr(relaxed, ctx);
     }
+    case 'sameLine': {
+      // A same-line marker rendered as its zero-width token (planZeroWidth).
+      const zw = ctx.zeroWidth.tokenOf.get(expr);
+      if (zw) return `$.${zw.snake}`;
+    }
+    // falls through
     case 'not':
-    case 'sameLine':
     case 'noCommentBefore':
     case 'noMultilineFlowBefore':
     case 'notLeftLeaf':
@@ -492,7 +505,7 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
       let inner: string;
       if (position === 'infix') inner = `seq(${selfRef}, field('operator', ${opChoice}), ${selfRef})`;
       else if (position === 'prefix') inner = `seq(field('operator', ${opChoice}), ${selfRef})`;
-      else inner = `seq(${selfRef}, field('operator', ${opChoice}))`;
+      else inner = `seq(${selfRef}, ${postfixBetween}field('operator', ${opChoice}))`;
 
       const wrapper =
         position === 'prefix' ? 'prec.right' :
@@ -506,6 +519,9 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
 
   let sawInfix = false, sawPrefix = false, sawPostfix = false;
   const atomBranches: string[] = [];
+  // What stands between the operand and a postfix operator (`[$, sameLine, postfix]`): a same-line
+  // marker renders as its zero-width token, any other assertion as nothing.
+  let postfixBetween = '';
 
   for (const alt of alts) {
     const items = alt.type === 'seq' ? alt.items : [alt];
@@ -514,7 +530,10 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
       const m = items[markerPos];
       if (m.type === 'op') sawInfix = true;
       else if (m.type === 'prefix') sawPrefix = true;
-      else if (m.type === 'postfix') sawPostfix = true;
+      else if (m.type === 'postfix') {
+        sawPostfix = true;
+        for (const b of items.slice(1, markerPos)) { const r = renderExpr(b, ctx); if (r !== 'blank()') postfixBetween += `${r}, `; }
+      }
       // Operator branches are emitted from the prec table below (one per level),
       // not from this skeletal `[$, op, $]` alternative.
       continue;
@@ -819,8 +838,9 @@ function planReservedSets(guards: string[][]): ReservedSets {
 
 const ASSERTION_KINDS = new Set<RuleExpr['type']>(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf']);
 
-function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: TerminalSets): { records: AssertionRecord[]; nodes: Set<RuleExpr>; reservedSets: ReservedSets; isWordLiteral: (text: string) => boolean } {
+function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: TerminalSets): { records: AssertionRecord[]; recordOf: Map<RuleExpr, AssertionRecord[]>; nodes: Set<RuleExpr>; reservedSets: ReservedSets; isWordLiteral: (text: string) => boolean } {
   const records: AssertionRecord[] = [];
+  const recordOf = new Map<RuleExpr, AssertionRecord[]>();
   const nodes = new Set<RuleExpr>();
   const identTok = grammar.tokens.find(t => t.identifier);
   const word = identTok?.name;
@@ -901,6 +921,7 @@ function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: 
       const words = rec.cls === 'reserved' ? reservedGuardWords(e, nextInSeq, word, isWordLiteral) : null;
       if (words) guardWords.set(rec, words);
       records.push(rec);
+      (recordOf.get(e) ?? recordOf.set(e, []).get(e)!).push(rec);
       return;
     }
     switch (e.type) {
@@ -934,7 +955,300 @@ function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: 
   for (const r of grammar.rules) { rule = r.name; visit(r.body, sets.follow.get(r.name)!); }
   const reservedSets = planReservedSets([...guardWords.values()]);
   for (const [rec, words] of guardWords) if (reservedSets.nameOf(words)) rec.cls = 'reserved-set';
-  return { records, nodes, reservedSets, isWordLiteral };
+  return { records, recordOf, nodes, reservedSets, isWordLiteral };
+}
+
+// ── The tree-sitter view as Glushkov positions ───────────────────────────────
+// What an LR question about the generated grammar is asked over (lr-automaton.ts): every literal /
+// token / rule reference of a rendered rule body is one leaf. It follows renderExpr: the tree-sitter
+// view of each group (a named tsRelax group is its own rule), the lowered `not` before an optional,
+// zero-width assertions dropped except the ones a plan renders as a zero-width external token
+// (`zeroWidth`: a `sameLine` node, or an `alt` whose pure-assertion arms become one token), and a
+// Pratt rule as its operator productions (one choice of operators per position, as buildPrattRule
+// renders them; what stands between the operand and a postfix operator is kept).
+interface TsLeafGraph extends LeafGraph {
+  /** Per leaf: the RuleExpr it was built from (null for a synthesized one). */
+  node: (RuleExpr | null)[];
+  ruleNames: string[];
+}
+
+function treeSitterLeafGraph(grammar: CstGrammar, tokenNames: Set<string>, scannerTokens: Set<string>, prattRules: Set<string>,
+  zeroWidth: Map<RuleExpr, string>): TsLeafGraph {
+  const sym: string[] = [], nt: number[] = [], rule: number[] = [], follow: number[][] = [], isLast: boolean[] = [];
+  const node: (RuleExpr | null)[] = [];
+  const ruleNames: string[] = [];
+  const ruleIdx = new Map<string, number>();
+  const ruleOf = (name: string) => { let i = ruleIdx.get(name); if (i === undefined) { i = ruleNames.length; ruleNames.push(name); ruleIdx.set(name, i); } return i; };
+  for (const r of grammar.rules) ruleOf(r.name);
+  const shared = collectTsSharedRules(grammar);
+  type G = { first: number[]; last: number[]; nullable: boolean };
+  const EMPTY: G = { first: [], last: [], nullable: true };
+  let cur = 0;
+  const leaf = (s: string, n: RuleExpr | null, ref: number): G => {
+    const id = sym.length;
+    sym.push(s); nt.push(ref); rule.push(cur); follow.push([]); isLast.push(false); node.push(n);
+    return { first: [id], last: [id], nullable: false };
+  };
+  const link = (from: number[], to: number[]) => { for (const f of from) for (const t of to) follow[f].push(t); };
+  const seq = (gs: G[]): G => gs.reduce((a, b) => {
+    link(a.last, b.first);
+    return { first: a.nullable ? [...a.first, ...b.first] : a.first, last: b.nullable ? [...a.last, ...b.last] : b.last, nullable: a.nullable && b.nullable };
+  }, EMPTY);
+  const alt = (gs: G[]): G => ({ first: gs.flatMap(g => g.first), last: gs.flatMap(g => g.last), nullable: gs.length === 0 || gs.some(g => g.nullable) });
+  const star = (g: G): G => { link(g.last, g.first); return { ...g, nullable: true }; };
+  const pureAssertion = (e: RuleExpr) => { const v = tsView(e); return (v.type === 'seq' ? v.items : [v]).every(i => ASSERTION_KINDS.has(tsView(i).type)); };
+  const build = (e: RuleExpr): G => {
+    e = tsView(e);
+    switch (e.type) {
+      case 'literal': return leaf(`'${e.value}`, e, -1);
+      case 'ref':
+        if (e.hole !== undefined || tokenNames.has(e.name) || scannerTokens.has(e.name)) return leaf(e.name, e, -1);
+        return leaf(e.name, e, ruleOf(e.name));
+      case 'group': return e.tsRuleName ? leaf(e.tsRuleName, null, ruleOf(e.tsRuleName)) : build(e.body);
+      case 'seq': {
+        const low = lowerNotBeforeOptional(e);
+        if (low) return build(low);
+        return seq(e.items.map(i => {
+          const z = zeroWidth.get(tsView(i));
+          if (z) return leaf(z, tsView(i), -1);
+          return ASSERTION_KINDS.has(tsView(i).type) ? EMPTY : build(i);
+        }));
+      }
+      case 'alt': {
+        const z = zeroWidth.get(e);
+        if (!z) return alt(e.items.map(build));
+        return alt([...e.items.filter(i => !pureAssertion(i)).map(build), leaf(z, e, -1)]);
+      }
+      case 'sameLine': { const z = zeroWidth.get(e); return z ? leaf(z, e, -1) : EMPTY; }
+      case 'quantifier': { const g = build(e.body); if (e.kind === '?') return { ...g, nullable: true }; const s = star(g); return e.kind === '+' ? { ...s, nullable: g.nullable } : s; }
+      case 'sep': {
+        const el = build(e.element);
+        const tail = star(seq([leaf(`'${e.delimiter}`, null, -1), build(e.element)]));
+        return { ...seq([el, tail, { ...leaf(`'${e.delimiter}`, null, -1), nullable: true }]), nullable: true };
+      }
+      default: return EMPTY;
+    }
+  };
+  const ops = (pos: 'infix' | 'prefix' | 'postfix'): RuleExpr => ({ type: 'alt', items: grammar.precs.flatMap(l => l.operators.filter(o => (o.position === 'prefix' || o.position === 'postfix' ? o.position : 'infix') === pos).map(o => ({ type: 'literal' as const, value: o.value }))) });
+  const bodyOf = (name: string): RuleExpr => {
+    const r = grammar.rules.find(x => x.name === name);
+    if (!r) return shared.get(name)!;
+    if (!prattRules.has(name)) return r.body;
+    const alts = r.body.type === 'alt' ? r.body.items : [r.body];
+    const self: RuleExpr = { type: 'ref', name };
+    const itemsOf = (a: RuleExpr) => a.type === 'seq' ? a.items : [a];
+    const out = alts.filter(a => !itemsOf(a).some(i => i.type === 'op' || i.type === 'prefix' || i.type === 'postfix'));
+    for (const pos of ['op', 'prefix', 'postfix'] as const) {
+      const arm = alts.find(a => itemsOf(a).some(i => i.type === pos));
+      if (!arm) continue;
+      const items = itemsOf(arm), at = items.findIndex(i => i.type === pos);
+      // What stands between the operand and the operator (a postfix operator's `sameLine`).
+      const between = pos === 'prefix' ? [] : items.slice(1, at);
+      out.push({ type: 'seq', items: pos === 'op' ? [self, ...between, ops('infix'), self] : pos === 'prefix' ? [ops('prefix'), self] : [self, ...between, ops('postfix')] });
+    }
+    return { type: 'alt', items: out };
+  };
+  const first: number[][] = [], nullable: boolean[] = [];
+  for (let i = 0; i < ruleNames.length; i++) {   // ruleNames grows while tsRelax rules are met
+    cur = i;
+    const g = build(bodyOf(ruleNames[i]));
+    for (const l of g.last) isLast[l] = true;
+    first[i] = g.first; nullable[i] = g.nullable;
+  }
+  return { sym, nt, rule, follow, isLast, first, nullable, entry: ruleOf(grammar.rules[grammar.rules.length - 1].name), node, ruleNames };
+}
+
+// ── Zero-width tokens: `sameLine` and the line-end alternatives (planZeroWidth) ──
+// A CFG cannot see a line break. Two shapes of the grammar's line-break assertions are rendered as
+// zero-width EXTERNAL tokens, which the generated scanner returns by looking at the input:
+//   - a line-end alternative: an `alt` whose arms that consume nothing are `not(sameLine)` (a line
+//     break before the next token, or the end of the input) or a positive one-token lookahead
+//     `not(not(Y))` (JavaScript's asi(): `;`, or a line break, or `}`). Its token stands for those arms.
+//   - a same-line marker: a `sameLine` item of a sequence (a restricted production: `return` and its
+//     argument, a postfix `++`, `async` and `function`). Its token stands where the assertion is.
+// The scanner cannot see the parse state, only which external tokens it holds valid. So each token
+// carries two sets of terminals, both derived from the LR automaton of the generated grammar
+// (lr-automaton.ts) over every state where the token is valid:
+//   - AFTER: what may come right after the token (the terminals valid once it is shifted);
+//   - CONT: what the same states can take WITHOUT the token (a continuation of what precedes it:
+//     an infix operator after an expression, `(` of a call).
+// The token is returned when its assertion holds, the next token is in AFTER and it is not in CONT:
+// a continuation wins, as in the interpreter, where what precedes the assertion has already consumed
+// every token it can (`a \n (b)` is a call, `a \n ++b` two statements, since the postfix `++` is
+// behind its own same-line marker and so in no CONT). A same-line marker whose AFTER meets its CONT
+// would lose the tokens they share, so it stays dropped (recorded as before); a line-end alternative
+// whose CONT holds the word token (every word after a line break would continue) likewise.
+// Tokens with the same assertion and the same two sets are one external token.
+export interface ZeroWidthToken {
+  snake: string;
+  /** A line-end alternative (its arms below) or a same-line marker. */
+  kind: 'line-end' | 'same-line';
+  /** line-end: a `not(sameLine)` arm (a line break before the next token, or the end of the input). */
+  lineBreak: boolean;
+  /** line-end: the terminals of its `not(not(Y))` arms. */
+  ahead: string[];
+  after: Set<string>;
+  cont: Set<string>;
+}
+interface ZeroWidthPlan {
+  tokens: ZeroWidthToken[];
+  /** The rendered node (a `sameLine`, or an `alt` with line-end arms) → its token. */
+  tokenOf: Map<RuleExpr, ZeroWidthToken>;
+  /** The assertion nodes the tokens render (the ledger's `lowered`). */
+  lowered: Set<RuleExpr>;
+}
+
+function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerTokens: Set<string>, prattRules: Set<string>,
+  isWordLiteral: (text: string) => boolean, reserved: Set<string>): ZeroWidthPlan {
+  const plan: ZeroWidthPlan = { tokens: [], tokenOf: new Map(), lowered: new Set() };
+  // A grammar with its own line handling (NEWLINE tokens, indentation) has its own scanner rules.
+  if (grammar.indent || grammar.newline) return plan;
+  const word = grammar.tokens.find(t => t.identifier)?.name;
+  const tokSet = (e: RuleExpr): string[] | null => {
+    e = tsView(e);
+    if (e.type === 'literal') return [`'${e.value}`];
+    if (e.type === 'ref') return tokenNames.has(e.name) ? [e.name] : null;
+    if (e.type === 'seq' && e.items.length === 1) return tokSet(e.items[0]);
+    if (e.type === 'alt') { const out: string[] = []; for (const i of e.items) { const s = tokSet(i); if (!s) return null; out.push(...s); } return out; }
+    return null;
+  };
+  // ── candidates ──
+  type Cand = { node: RuleExpr; kind: ZeroWidthToken['kind']; lineBreak: boolean; ahead: string[]; asserts: RuleExpr[] };
+  const cands: Cand[] = [];
+  const seen = new Set<RuleExpr>();
+  const armItems = (a: RuleExpr) => { const v = tsView(a); return (v.type === 'seq' ? v.items : [v]).map(tsView); };
+  const walk = (e: RuleExpr): void => {
+    e = tsView(e);
+    if (seen.has(e)) return;
+    seen.add(e);
+    switch (e.type) {
+      case 'seq':
+        for (const i of e.items) {
+          const v = tsView(i);
+          if (v.type === 'sameLine') cands.push({ node: v, kind: 'same-line', lineBreak: false, ahead: [], asserts: [v] });
+          else walk(i);
+        }
+        return;
+      case 'alt': {
+        const pure = e.items.filter(a => armItems(a).every(i => ASSERTION_KINDS.has(i.type)));
+        let lineBreak = false; const ahead: string[] = []; let ok = pure.length > 0 && pure.length < e.items.length;
+        for (const a of pure) {
+          const items = armItems(a);
+          if (items.length !== 1 || items[0].type !== 'not') { ok = false; break; }
+          const body = tsView((items[0] as RuleExpr & { type: 'not' }).body);
+          if (body.type === 'sameLine') { lineBreak = true; continue; }
+          const y = body.type === 'not' ? tokSet(body.body) : null;
+          if (!y) { ok = false; break; }
+          ahead.push(...y);
+        }
+        if (ok && lineBreak) cands.push({ node: e, kind: 'line-end', lineBreak, ahead, asserts: pure.map(a => armItems(a)[0]) });
+        for (const a of e.items) walk(a);
+        return;
+      }
+      case 'quantifier': return walk(e.body);
+      case 'sep': return walk(e.element);
+    }
+  };
+  for (const r of grammar.rules) walk(r.body);
+  for (const b of collectTsSharedRules(grammar).values()) walk(b);
+  if (!cands.length) return plan;
+
+  // ── AFTER / CONT of the live candidates, over the automaton where each is its own terminal and
+  // every other candidate renders as nothing (as a dropped one will) ──
+  const analyze = (live: Set<number>) => {
+  const termOf = new Map(cands.flatMap((c, i) => live.has(i) ? [[c.node, `@zw${i}`] as [RuleExpr, string]] : []));
+  const graph = treeSitterLeafGraph(grammar, tokenNames, scannerTokens, prattRules, termOf);
+  const lr = buildLr(graph);
+  const after = cands.map(() => new Set<string>()), cont = cands.map(() => new Set<string>());
+  const idOf = (t: string) => t.startsWith('@zw') ? +t.slice(3) : -1;
+  const valid = lr.states.map((_, s) => lr.valid(s));
+  // The terminals that may come first after a leaf in its rule (through nullable rules).
+  const firstMemo = new Map<number, Set<string>>();
+  const firstAfter = (l: number): Set<string> => {
+    let out = firstMemo.get(l);
+    if (out) return out;
+    firstMemo.set(l, out = new Set());
+    const seenL = new Set<number>();
+    const go = (ls: number[]) => {
+      for (const x of ls) {
+        if (seenL.has(x)) continue; seenL.add(x);
+        const n = graph.nt[x];
+        if (n < 0) { out!.add(graph.sym[x]); continue; }
+        go(graph.first[n]);
+        if (graph.nullable[n]) go(graph.follow[x]);
+      }
+    };
+    go(graph.follow[l]);
+    return out;
+  };
+  lr.states.forEach((st, s) => {
+    // CONT: the terminals SHIFTED where the token is valid (a reduction's lookahead is no
+    // continuation: the `)` after `(a` is valid after `a` in no state that also ends a statement;
+    // the shift sets are exact per LR(0) core, the lookaheads a union over its contexts), and of
+    // those only the ones that EXTEND a construct already complete (an item after a rule reference:
+    // the operator after an expression, the `(` of a call, `[`, a template, `of`). A terminal that
+    // starts an operand after a terminal (the optional argument of `yield`, `=>` after a parameter
+    // name, a prefix `++` after `yield`) is where the grammar would need a line-break restriction of
+    // its own; the scanner cannot tell that state from the many where the same terminal follows the
+    // token, so there the token wins.
+    const extends_ = new Set<string>();
+    for (const it of st.items) if (it >= 0 && graph.nt[it] >= 0) for (const t of firstAfter(it)) extends_.add(t);
+    for (const t of valid[s]) {
+      const i = idOf(t);
+      if (i < 0) continue;
+      for (const u of extends_) if (idOf(u) < 0) cont[i].add(u);
+    }
+    for (const [sym, to] of st.goto) {
+      const i = idOf(sym);
+      if (i >= 0) for (const u of valid[to]) if (idOf(u) < 0) after[i].add(u);
+    }
+  });
+  return { after, cont };
+  };
+  // A keyword the word token can also lex (one no reserved set excludes from it everywhere).
+  const wordShaped = (t: string) => t === word || (t.startsWith("'") && isWordLiteral(t.slice(1)) && !reserved.has(t.slice(1)));
+  const meets = (a: Set<string>, b: Set<string>) =>
+    [...a].some(t => b.has(t)) || (!!word && ((a.has(word) && [...b].some(wordShaped)) || (b.has(word) && [...a].some(wordShaped))));
+  const rejects = (i: number, r: ReturnType<typeof analyze>) =>
+    !r.after[i].size || (cands[i].kind === 'same-line' ? meets(r.after[i], r.cont[i]) : (!!word && r.cont[i].has(word)));
+  // A dropped candidate renders as nothing, which changes what the others can see (a postfix `!`
+  // whose marker is dropped is a direct continuation): analyze again until nothing more drops.
+  const live = new Set(cands.map((_, i) => i));
+  let res = analyze(live);
+  for (;;) {
+    const out = [...live].filter(i => rejects(i, res));
+    if (!out.length) break;
+    for (const i of out) live.delete(i);
+    res = analyze(live);
+  }
+  const { after, cont } = res;
+  const byKey = new Map<string, ZeroWidthToken>();
+  const counters = { 'line-end': 0, 'same-line': 0 };
+  cands.forEach((c, i) => {
+    if (!live.has(i)) return;
+    // Line-end alternatives with the same arms are ONE token whose sets are the union over its uses:
+    // a token per statement kind would keep tree-sitter from sharing the states of an expression's
+    // end between the statements it can end (JavaScript, measured locally: 2,462 states with four
+    // line-end tokens, 1,818 with one; master 1,812). The price: the scanner reads one CONT for every
+    // use, so a token that continues only some statement (an operator after an expression) also keeps
+    // a line break from ending the others (`break\n(x)` is `break (x)`, an ERROR, where the grammar
+    // ends `break` at the line break). Same-line markers keep one token per distinct pair of sets:
+    // their CONT differs in what must stay possible on the same line (`return x`).
+    const key = c.kind === 'line-end'
+      ? [c.kind, c.lineBreak, [...c.ahead].sort().join(' ')].join('|')
+      : [c.kind, [...after[i]].sort().join(' '), [...cont[i]].sort().join(' ')].join('|');
+    let tok = byKey.get(key);
+    if (!tok) {
+      tok = { snake: `_${c.kind === 'line-end' ? 'line_end' : 'same_line'}_${++counters[c.kind]}`, kind: c.kind, lineBreak: c.lineBreak, ahead: [...new Set(c.ahead)].sort(), after: new Set(), cont: new Set() };
+      byKey.set(key, tok);
+      plan.tokens.push(tok);
+    }
+    for (const x of after[i]) tok.after.add(x);
+    for (const x of cont[i]) tok.cont.add(x);
+    plan.tokenOf.set(c.node, tok);
+    for (const a of c.asserts) plan.lowered.add(a);
+  });
+  return plan;
 }
 
 // ── Token rules ──────────────────────────────────────────────────────────────
@@ -1286,6 +1600,7 @@ function externalSymbols(ctx: GrammarJsContext): string[] {
   const syms = [...ctx.scannerTokenFor.values()];
   if (ctx.templatePlan) syms.push(ctx.templatePlan.charsSnake);
   for (const ip of ctx.interpolationPlans) syms.push(ip.charsSnake);
+  for (const t of ctx.zeroWidth.tokens) syms.push(t.snake);
   return syms;
 }
 
@@ -1484,8 +1799,12 @@ function buildTokenTreeSitter(grammar: CstGrammar, grammarName: string): Omit<Tr
 
   const terminalSets = computeTerminalSets(grammar, tokenNames);
   const assertions = classifyAssertions(grammar, tokenNames, terminalSets);
+  const zeroWidth = planZeroWidth(grammar, tokenNames, new Set(scannerTokenFor.keys()), prattRules, assertions.isWordLiteral,
+    new Set(assertions.reservedSets.sets[0]?.words ?? []));
+  for (const n of zeroWidth.lowered) for (const rec of assertions.recordOf.get(n)!) rec.cls = 'lowered';
+  for (const t of zeroWidth.tokens) externalSnake.add(t.snake);
   const ctx: GrammarJsContext = {
-    grammar, tokenNames, ruleSnake, tokenSnake, prattRules, externalSnake, scannerTokenFor,
+    grammar, tokenNames, ruleSnake, tokenSnake, prattRules, externalSnake, scannerTokenFor, zeroWidth,
     flowLiteralTokens,
     nullableNonStart,
     terminalSets,
@@ -2451,6 +2770,197 @@ function bindingKeyRules(grammar: CstGrammar, identName: string): Map<string, st
 // ════════════════════════════════════════════════════════════════════════════
 
 /** Emit a C string-literal initializer for the chars of `s` (e.g. "${" → {'$','{'}). */
+/** A C condition: `v` (a code point) is in the set (UTF-16 units; a set holding surrogates holds the
+ *  non-BMP characters). */
+function cCharSetTest(set: CSet, v: string): string {
+  const parts: string[] = [];
+  for (const [lo, hi] of set) {
+    const a = Math.max(lo, 0), b = hi;
+    if (b < a) continue;
+    parts.push(a === b ? `${v} == ${a}` : `(${v} >= ${a} && ${v} <= ${b})`);
+    if (a <= 0xdfff && b >= 0xd800) parts.push(`${v} > 0xffff`);
+  }
+  return parts.length ? parts.join(' || ') : 'false';
+}
+
+// ── The scanner of the zero-width tokens (planZeroWidth) ──
+// Every table here is derived: the literals are the generated grammar's, matched longest-first (a
+// word-shaped one only when no word character follows, the word token's own characters); a token
+// that is no literal is known by its first character; a skip token's opening literal (`//`, `/*`)
+// defers the decision: the scanner declines, tree-sitter lexes the comment as an extra and asks again
+// in the same state, now after it. A line break is one of the characters that set the lexer's
+// `newlineBefore` (src/emit-lexer.ts: \n \r U+2028 U+2029) in the whitespace before the next token.
+// What the scanner cannot see: a line break inside a skipped block comment (the comment is an extra
+// already consumed when it is asked again), and a literal that is the prefix of a longer non-literal
+// token (`.` before `.5`).
+function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { helpers: string[]; call: string[] } {
+  const { grammar } = ctx;
+  const tokens = ctx.zeroWidth.tokens;
+  if (!tokens.length) return { helpers: [], call: [] };
+  const word = ctx.reserved.word;
+  const isWordLit = ctx.reserved.isWordLiteral;
+  // ── kinds: literals (longest match), skip openers, tokens by first character ──
+  const lits = new Set<string>([...ctx.renderedLiterals]);
+  for (const t of tokens) for (const s of [t.after, t.cont, t.ahead]) for (const x of s) if (x.startsWith("'")) lits.add(x.slice(1));
+  const literals = [...lits].sort();
+  const litId = new Map(literals.map((l, i) => [l, i]));
+  const SKIP = -2;
+  // A skip token the scanner skips itself (so a line break inside or after it is seen): its opening
+  // literal, and how it ends: a closing literal (the last item of its sequence) or the line (a final
+  // run of characters that excludes the line terminator). Any other skip token's opener defers.
+  type Skip = { opener: string; closer: string | null };
+  const skips: Skip[] = [];
+  const deferOpeners = new Set<string>();
+  for (const t of grammar.tokens) {
+    if (!t.flags.includes('skip')) continue;
+    const p = t.pattern;
+    const last = typeof p !== 'string' && p.type === 'seq' ? p.items[p.items.length - 1] : null;
+    const closer = typeof last === 'string' ? last
+      : last && last.type === 'repeat' && typeof last.body !== 'string' && last.body.type === 'charClass' && last.body.negate
+        && last.body.items.some(it => it.type === 'char' && it.value === '\n') ? null : undefined;
+    for (const o of tokenPatternLiteralPrefixes(t)) {
+      if (closer === undefined) deferOpeners.add(o);
+      else if (!skips.some(k => k.opener === o)) skips.push({ opener: o, closer });
+    }
+  }
+  // An opener that extends another one with the same end (`/**` of `/*`, `///` of `//`) is read as
+  // that one: the shorter opener's body takes the rest (`/**/` closes at its `*/`).
+  for (let i = skips.length - 1; i >= 0; i--)
+    if (skips.some(k => k !== skips[i] && k.closer === skips[i].closer && skips[i].opener.startsWith(k.opener))) skips.splice(i, 1);
+  const kindTokens = grammar.tokens.filter(t => !t.flags.includes('skip') && !tokenPatternIsNever(t)).map(t => t.name);
+  if (kindTokens.length > 64) throw new Error(`gen-treesitter: ${kindTokens.length} non-literal tokens; the zero-width scanner's token mask holds 64`);
+  const cRanges = cCharSetTest;
+  const H: string[] = [];
+  H.push('// ── Zero-width tokens: line-end alternatives and same-line markers (planZeroWidth) ──');
+  H.push('static bool zw_line_terminator(int32_t c) { return c == \'\\n\' || c == \'\\r\' || c == 0x2028 || c == 0x2029; }');
+  const wordTok = word ? grammar.tokens.find(t => t.name === word) : undefined;
+  H.push(`static bool zw_word_char(int32_t c) { return ${wordTok ? cRanges(tokenPatternInfo(wordTok.pattern).chars, 'c') : 'false'}; }`);
+  H.push('// The non-literal tokens the next character may start, one bit each:');
+  kindTokens.forEach((n, i) => H.push(`//   ${i}: ${n}`));
+  H.push('static uint64_t zw_token_candidates(int32_t c) {');
+  H.push('  uint64_t m = 0;');
+  kindTokens.forEach((n, i) => {
+    const tok = grammar.tokens.find(t => t.name === n)!;
+    H.push(`  if (${cRanges(tokenPatternInfo(tok.pattern).first, 'c')}) m |= (uint64_t)1 << ${i};`);
+  });
+  H.push('  return m;');
+  H.push('}');
+  // The longest literal (or skip opener) at the input, as a trie of nested switches.
+  type Node = { kids: Map<number, Node>; lit?: number; skip?: number };
+  const root: Node = { kids: new Map() };
+  const insert = (text: string, mark: (n: Node) => void) => {
+    let n = root;
+    for (const ch of text) { const c = ch.codePointAt(0)!; if (!n.kids.has(c)) n.kids.set(c, { kids: new Map() }); n = n.kids.get(c)!; }
+    mark(n);
+  };
+  literals.forEach((l, i) => insert(l, n => { n.lit = i; }));
+  for (const o of deferOpeners) insert(o, n => { n.skip = SKIP; });
+  skips.forEach((k, i) => insert(k.opener, n => { n.skip = -10 - i; }));
+  H.push(`// The literals, by id: ${literals.map((l, i) => `${i} ${JSON.stringify(l)}`).join(', ')}`);
+  H.push(`// The skip tokens skipped here: ${skips.map((k, i) => `${i} ${JSON.stringify(k.opener)} to ${k.closer === null ? 'the line end' : JSON.stringify(k.closer)}`).join(', ')}`);
+  H.push('static bool zw_skip_comment(TSLexer *lexer, int k, bool *line_break) {   // past its end; false at an unterminated one');
+  H.push('  switch (k) {');
+  skips.forEach((k, i) => {
+    if (k.closer === null) { H.push(`    case ${i}: while (!lexer->eof(lexer) && !zw_line_terminator(lexer->lookahead)) skip(lexer); return true;`); return; }
+    const cs = [...k.closer].map(c => c.codePointAt(0)!);
+    H.push(`    case ${i}: { static const int32_t close[] = { ${cs.join(', ')} }; unsigned at = 0;`);
+    H.push('      while (!lexer->eof(lexer)) {');
+    H.push('        int32_t c = lexer->lookahead;');
+    H.push('        if (zw_line_terminator(c)) *line_break = true;');
+    H.push('        skip(lexer);');
+    H.push(`        if (c == close[at]) { if (++at == ${cs.length}) return true; } else at = c == close[0] ? 1 : 0;`);
+    H.push('      }');
+    H.push('      return false; }');
+  });
+  H.push('  }');
+  H.push('  return false;');
+  H.push('}');
+  H.push(`static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: skip token k; ${SKIP}: an opener to defer; -1: none`);
+  H.push('  int best = -1;');
+  const emit = (n: Node, depth: number, text: string) => {
+    const pad = '  '.repeat(depth + 1);
+    if (!n.kids.size) return;
+    H.push(`${pad}switch (lexer->lookahead) {`);
+    for (const [c, k] of [...n.kids].sort((a, b) => a[0] - b[0])) {
+      const t = text + String.fromCodePoint(c);
+      H.push(`${pad}  case ${c}:`);
+      H.push(`${pad}    skip(lexer);`);
+      if (k.skip !== undefined) H.push(`${pad}    best = ${k.skip};`);
+      else if (k.lit !== undefined) H.push(isWordLit(t) ? `${pad}    if (!zw_word_char(lexer->lookahead)) best = ${k.lit};` : `${pad}    best = ${k.lit};`);
+      emit(k, depth + 2, t);
+      H.push(`${pad}    break;`);
+    }
+    H.push(`${pad}}`);
+  };
+  emit(root, 0, '');
+  H.push('  return best;');
+  H.push('}');
+  // Per token: is a literal / a token / the end of the input in AFTER, in CONT, in its lookahead arms.
+  // A word-shaped literal is also the word token where the set has that (keyword extraction lexes it
+  // as the word token where the keyword itself is not valid).
+  const exact = (set: Iterable<string>, kindLit: string) => new Set(set).has(`'${kindLit}`);
+  const reservedWords = new Set(ctx.reserved.plan.sets[0]?.words ?? []);
+  const has = (set: Iterable<string>, kindLit: string) => { const s = new Set(set); return s.has(`'${kindLit}`) || (!!word && isWordLit(kindLit) && !reservedWords.has(kindLit) && s.has(word)); };
+  const mask = (set: Iterable<string>) => { const s = new Set(set); let m = 0n; kindTokens.forEach((n, i) => { if (s.has(n)) m |= 1n << BigInt(i); }); return `0x${m.toString(16)}ull`; };
+  const boolRow = (f: (l: string) => boolean) => `{ ${literals.map(l => (f(l) ? 1 : 0)).join(', ')} }`;
+  H.push('typedef struct { int symbol; bool line_end; bool line_break; bool after_end; uint64_t after_tok, cont_tok, ahead_tok; const bool *after_exact, *after_lit, *cont_lit, *ahead_lit; } ZeroWidth;');
+  tokens.forEach(t => {
+    const S = t.snake.toUpperCase();
+    H.push(`static const bool ${S}_AFTER_EXACT[] = ${boolRow(l => exact(t.after, l))};`);
+    H.push(`static const bool ${S}_AFTER[] = ${boolRow(l => has(t.after, l))};`);
+    H.push(`static const bool ${S}_CONT[] = ${boolRow(l => has(t.cont, l))};`);
+    H.push(`static const bool ${S}_AHEAD[] = ${boolRow(l => t.ahead.includes(`'${l}`))};`);
+  });
+  H.push('static const ZeroWidth ZERO_WIDTH[] = {');
+  for (const t of tokens) {
+    const S = t.snake.toUpperCase();
+    H.push(`  { ${S}, ${t.kind === 'line-end'}, ${t.lineBreak}, ${t.after.has(END)}, ${mask(t.after)}, ${mask(t.cont)}, ${mask(t.ahead)}, ${S}_AFTER_EXACT, ${S}_AFTER, ${S}_CONT, ${S}_AHEAD },`);
+  }
+  H.push('};');
+  H.push('// A line-end token where its assertion holds (a line break or the end of the input, or a lookahead');
+  H.push('// arm\'s token next); a same-line marker where no line break comes first. Either only when the next');
+  H.push('// token may follow it (AFTER) and does not continue what precedes it (CONT).');
+  H.push('// 1: returned; 0: declined; 2: declined before anything but whitespace was read, `/` next (regex).');
+  H.push('static int scan_zero_width(TSLexer *lexer, const bool *valid_symbols) {');
+  H.push('  lexer->mark_end(lexer);');
+  H.push('  bool line_break = false, end;');
+  H.push('  uint64_t cand; int lit;');
+  H.push('  for (;;) {');
+  H.push('    while (iswspace(lexer->lookahead)) { if (zw_line_terminator(lexer->lookahead)) line_break = true; skip(lexer); }');
+  if (regexSym) H.push(`    if (valid_symbols[${regexSym}] && lexer->lookahead == '/') return 2;`);
+  H.push('    end = lexer->eof(lexer);');
+  H.push('    cand = 0; lit = -1;');
+  H.push('    if (!end) { cand = zw_token_candidates(lexer->lookahead); lit = zw_literal(lexer); }');
+  H.push('    if (lit > -10) break;');
+  H.push('    if (!zw_skip_comment(lexer, -10 - lit, &line_break)) return 0;');
+  H.push('  }');
+  H.push(`  if (lit == ${SKIP}) return 0;`);
+  H.push('  // Two passes: a keyword the token names itself first, then a keyword read as the word token.');
+  H.push('  for (int pass = 0; pass < 2; pass++)');
+  H.push(`  for (unsigned i = 0; i < ${tokens.length}; i++) {`);
+  H.push('    const ZeroWidth *z = &ZERO_WIDTH[i];');
+  H.push('    if (!valid_symbols[z->symbol]) continue;');
+  H.push('    bool ahead = !end && (lit >= 0 ? z->ahead_lit[lit] : (cand & z->ahead_tok) != 0);');
+  H.push('    bool holds = z->line_end ? ((z->line_break && (line_break || end)) || ahead) : (!line_break && !end);');
+  H.push('    if (!holds) continue;');
+  H.push('    bool after = end ? z->after_end : lit >= 0 ? (pass == 0 ? z->after_exact[lit] : z->after_lit[lit]) : (cand & z->after_tok) != 0;');
+  H.push('    bool cont = !end && (lit >= 0 ? z->cont_lit[lit] : (cand & z->cont_tok) != 0);');
+  H.push('    if (after && !cont) { lexer->result_symbol = z->symbol; return 1; }');
+  H.push('  }');
+  H.push('  return 0;');
+  H.push('}');
+  H.push('');
+  const C: string[] = [];
+  C.push('  // Zero-width tokens (a line-end alternative, a same-line marker) where one is valid.');
+  C.push(`  if (${tokens.map(t => `valid_symbols[${t.snake.toUpperCase()}]`).join(' || ')}) {`);
+  C.push('    int zw = scan_zero_width(lexer, valid_symbols);');
+  C.push('    if (zw == 1) return true;');
+  C.push('    if (zw == 0) return false;');
+  C.push('  }');
+  C.push('');
+  return { helpers: H, call: C };
+}
+
 function cCharList(s: string): string {
   return [...s].map(c => `'${c === '\\' || c === "'" ? '\\' + c : c}'`).join(', ');
 }
@@ -3210,6 +3720,12 @@ function buildScannerC(
   if (regexTok) {
     // Derive the regex literal scan from the token pattern + hints.
     const flagChars = tokenPatternTrailingCharClass(regexTok) ?? 'gimsuyd';
+    // The flags: the token's final run (`star(identPart)` in JavaScript: any identifier character, as
+    // tsc lexes them; `/foo/v` is a regex with the `v` flag). Its characters when the run is no plain
+    // class; the fixed list only for a pattern with no final run.
+    const rp = regexTok.pattern;
+    const lastItem = typeof rp !== 'string' && rp.type === 'seq' ? rp.items[rp.items.length - 1] : null;
+    const flagRun = lastItem && typeof lastItem !== 'string' && lastItem.type === 'repeat' && lastItem.min === 0 && lastItem.max === undefined ? lastItem.body : null;
     const rc = regexTok.regexContext;
     const divTexts = rc?.divisionAfterTexts ?? [];
     const regexAfter = rc?.regexAfterTexts ?? [];
@@ -3242,8 +3758,12 @@ function buildScannerC(
     L.push('    advance(lexer);');
     L.push('  }');
     L.push('  // Trailing flag characters.');
-    L.push(`  const char *flags = ${jsString(flagChars)};`);
-    L.push('  while (lexer->lookahead != 0 && strchr(flags, (char)lexer->lookahead) != NULL) advance(lexer);');
+    if (flagRun && tokenPatternTrailingCharClass(regexTok) === null) {
+      L.push(`  while (!lexer->eof(lexer) && (${cCharSetTest(tokenPatternInfo(flagRun).chars, 'lexer->lookahead')})) advance(lexer);`);
+    } else {
+      L.push(`  const char *flags = ${jsString(flagChars)};`);
+      L.push('  while (lexer->lookahead != 0 && strchr(flags, (char)lexer->lookahead) != NULL) advance(lexer);');
+    }
     L.push(`  lexer->result_symbol = ${regexSym};`);
     L.push('  lexer->mark_end(lexer);');
     L.push('  return true;');
@@ -3354,6 +3874,9 @@ function buildScannerC(
     }
   }
 
+  const zw = zeroWidthScannerC(ctx, regexTok ? ctx.scannerTokenFor.get(regexTok.name)!.toUpperCase() : null);
+  L.push(...zw.helpers);
+
   // ── scan() entry ──
   L.push('bool tree_sitter_' + grammarName + '_external_scanner_scan(void *payload, TSLexer *lexer,');
   L.push('                                                          const bool *valid_symbols) {');
@@ -3384,6 +3907,7 @@ function buildScannerC(
     L.push('  }');
     L.push('');
   }
+  L.push(...zw.call);
   if (regexTok) {
     const regexSym = ctx.scannerTokenFor.get(regexTok.name)!.toUpperCase();
     L.push('  // Skip leading whitespace (the regular lexer normally does this, but the');

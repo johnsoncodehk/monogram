@@ -959,6 +959,10 @@ export default defineGrammar({
     ['expr', 'array_binding_element'], ['expr', 'binding_property'], ['prop', 'member_name'],
     ['prop', 'member_name', 'binding_property'], ['stmt', 'param'], ['class_member'],
     ['expr', 'prop', 'export_specifier'], ['expr', 'export_specifier'],
+    // `export { a }` is an export list or `export` + an expression statement `{ a }` (the guard that
+    // keeps a statement from starting with `{` is a lookahead tree-sitter drops); with the statement's
+    // end a token of its own (the line-end token), both readings meet at `a` before `}`.
+    ['prop', 'export_specifier'],
   ],
 
   rules: {
