@@ -518,9 +518,11 @@ ${refreshFn}\t// Each token the speculation lexes, read at the next loop head (a
 \t\t}
 \t\treturn specDone
 \t}
-\t// The rewind to the signature's tagOpen: its position (pos and limit stay the loop's own locals).
-\tspecRewind := func() int {
-\t\tkeep := specDone && err == nil && specThen
+\t// The rewind to the signature's tagOpen: its position (pos and limit stay the loop's own locals;
+\t// failed: a lexer error decided it; err is the loop's, not captured here: a captured variable is
+\t// not kept in a register).
+\tspecRewind := func(failed bool) int {
+\t\tkeep := specDone && !failed && specThen
 \t\tre := n + 1
 \t\tif specDone && !failed { re = ${shared.elementFn('reach')}(src, specEnd) }
 \t\tif re > laEnd { laEnd = re }
