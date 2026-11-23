@@ -201,7 +201,7 @@ jobs:
           export PROFILE_A_LABEL="$(git log -1 --format='`%h` %s' "$A")"
           export PROFILE_M_LABEL="$(git log -1 --format='`%h` %s' "$M")"
           export RUNNER_CPU="$(lscpu | sed -n 's/^Model name: *//p'), $(nproc) CPUs"
-          node test/bench-rust-profile/pr-summary.ts "$W/out/results.txt" "$W/out/emit-sizes-A.json" "$W/out/emit-sizes-M.json" > "$W/out/summary.md" || status=$?
+          node test/bench-rust-profile/pr-summary.ts "$W/out/results.txt" "$W/out/emit-sizes-A.json" "$W/out/emit-sizes-M.json" "$W/src-M/docs/emit-sizes.json" > "$W/out/summary.md" || status=$?
           cat "$W/out/summary.md" >> "$GITHUB_STEP_SUMMARY"
           if [ "$SCOPE" = full ]; then
             { echo; echo '### Full profile (oxc beside A and M; test/bench-rust-profile/summarize.ts)'; echo '```'; cat "$W/out/summary.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
