@@ -59,14 +59,12 @@ export interface RegionView {
  *  alternative. The ONE expansion every generator's adjacency scan uses (gen-tm, gen-monarch,
  *  the region view).
  *
- *  MEMORY: an expansion of at most MEMO_ARMS arms is built once per expression node and kept
- *  (frozen, shared: a caller that would mutate it throws); a larger one is NOT kept: it is an
- *  `Arms` view that streams its arms from its parts' expansions each time it is read, so only one
- *  arm of it is alive at a time. TypeScript's bodies expand to 6,668,459 arms (Expr 2,481,621
- *  holding 42.8 M items; Prop 1,995,841; ClassMember 1,787,551; Param 363,778): kept, they stayed
- *  alive for the whole generator run, past node's default heap on a 7.8 GB machine. Streamed, a
- *  scan re-derives them (young-generation garbage); everything below the limit (every rule of the
- *  other five grammars, and the parts the giants are made of) stays memoised.
+ *  MEMORY: every expansion is built once per expression node and kept. One of at most MEMO_ARMS
+ *  arms is kept as frozen arrays (shared: a caller that would mutate one throws); a larger one is
+ *  kept PACKED (PackedArms: item indices in one Int32Array) and gives each reader fresh frozen
+ *  arrays. TypeScript's bodies expand to 6,668,459 arms (Expr 2,481,621 holding 42.8 M items; Prop
+ *  1,995,841; ClassMember 1,787,551; Param 363,778): kept as arrays they held about 2 GB for the
+ *  whole generator run, past node's default heap on a 7.8 GB machine; packed, about 4 bytes an item.
  *
  *  KNOWN COST: the expansion is the full cross product of a body's options, and the detectors
  *  match an adjacency by walking it. The redesign (owed): match adjacencies over the expression
@@ -109,24 +107,54 @@ function* seqArms(items: RuleExpr[], i: number, prefix: RuleExpr[]): Generator<R
   if (i === items.length) { yield prefix; return; }
   for (const b of expandArms(items[i]!)) yield* seqArms(items, i + 1, b.length ? Object.freeze([...prefix, ...b]) as RuleExpr[] : prefix);
 }
-class StreamedArms implements Arms {
-  private readonly expr: RuleExpr;
+// A large expansion, built once and kept PACKED: every arm's items as indices into the expansion's
+// own item table (an Int32Array of all arms back to back, and each arm's end), about 4 bytes per
+// item instead of an array object per arm holding pointers. Reading it builds each arm's array
+// afresh: short-lived garbage, collected young.
+class PackedArms implements Arms {
+  private readonly table: RuleExpr[] = [];
+  private items = new Int32Array(1 << 16);
+  private ends: Int32Array;
   readonly length: number;
-  constructor(expr: RuleExpr, length: number) { this.expr = expr; this.length = length; }
-  [Symbol.iterator]() { return streamArms(this.expr); }
-  some(f: (arm: RuleExpr[]) => boolean) { for (const a of this) if (f(a)) return true; return false; }
-  every(f: (arm: RuleExpr[]) => boolean) { for (const a of this) if (!f(a)) return false; return true; }
-  find(f: (arm: RuleExpr[]) => boolean) { for (const a of this) if (f(a)) return a; return undefined; }
+  constructor(expr: RuleExpr, length: number) {
+    this.length = length;
+    this.ends = new Int32Array(length);
+    const index = new Map<RuleExpr, number>();
+    let used = 0, k = 0;
+    for (const arm of streamArms(expr)) {
+      if (used + arm.length > this.items.length) { const grown = new Int32Array(Math.max(this.items.length * 2, used + arm.length)); grown.set(this.items.subarray(0, used)); this.items = grown; }
+      for (const e of arm) {
+        let i = index.get(e);
+        if (i === undefined) { index.set(e, (i = this.table.length)); this.table.push(e); }
+        this.items[used++] = i;
+      }
+      this.ends[k++] = used;
+    }
+    this.items = this.items.slice(0, used);
+  }
+  private arm(k: number): RuleExpr[] {
+    const from = k ? this.ends[k - 1]! : 0, to = this.ends[k]!;
+    const a = new Array<RuleExpr>(to - from);
+    for (let i = from; i < to; i++) a[i - from] = this.table[this.items[i]!]!;
+    return Object.freeze(a) as RuleExpr[];
+  }
+  *[Symbol.iterator]() { for (let k = 0; k < this.length; k++) yield this.arm(k); }
+  some(f: (arm: RuleExpr[]) => boolean) { for (let k = 0; k < this.length; k++) if (f(this.arm(k))) return true; return false; }
+  every(f: (arm: RuleExpr[]) => boolean) { for (let k = 0; k < this.length; k++) if (!f(this.arm(k))) return false; return true; }
+  find(f: (arm: RuleExpr[]) => boolean) { for (let k = 0; k < this.length; k++) { const a = this.arm(k); if (f(a)) return a; } return undefined; }
 }
-const expansions = new WeakMap<RuleExpr, RuleExpr[][]>();
+const expansions = new WeakMap<RuleExpr, Arms>();
 export function expandArms(expr: RuleExpr): Arms {
   const hit = expansions.get(expr);
   if (hit) return hit;
   const n = armCount(expr);
-  if (n > MEMO_ARMS) return new StreamedArms(expr, n);
-  const out: RuleExpr[][] = [];
-  for (const arm of streamArms(expr)) out.push(Object.freeze(arm) as RuleExpr[]);
-  Object.freeze(out);
+  let out: Arms;
+  if (n > MEMO_ARMS) out = new PackedArms(expr, n);
+  else {
+    const arms: RuleExpr[][] = [];
+    for (const arm of streamArms(expr)) arms.push(Object.freeze(arm) as RuleExpr[]);
+    out = Object.freeze(arms);
+  }
   expansions.set(expr, out);
   return out;
 }
