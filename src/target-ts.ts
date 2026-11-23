@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA } from './emit-portable.ts';
-import { hasRebind, rebindBrackets, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR } from './recovery-family.ts';
 import type { EmitOptions } from './emit.ts';
 import type { CstGrammar } from './types.ts';
@@ -1012,7 +1012,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
       if (${cond}) { finP(${cn}, b); form = ${form};${closes ? ' tailClosed = true;' : ''} continue ledLoop; }
       back(ledSave); _n = b + 1;${rebind ? `\n      if (${rebind}) { finP(${cn}, b); form = ${form};${closes ? ' tailClosed = true;' : ''} continue ledLoop; }` : ''}${exit ? ' break ledLoop;' : ''}
     }`,
-    rebind: (p) => `_rebind(${lift(ids, `return ${p.open};`)}, ${lift(ids, `return ${p.operand};`)}, ${p.sepLid}, ${lift(ids, `return ${p.sep};`)}, ${lift(ids, `return ${p.rest};`)})`,
+    rebind: (p) => `rbScan(${rbSite(ids, [p.open, p.operand, p.sep, p.rest])}, ${p.sepLid}, 0)`,
     ledSwitch: (cases) => `    switch (t.lid) {
 ${cases.map((c) => `      case ${c.key}:\n${c.arms.map((a) => `      ${a}`).join('\n')}\n        break;`).join('\n')}
     }`,
@@ -1081,40 +1081,35 @@ function parse${r.name}W(): boolean {
 /** The parse engine: the builder protocol, the child stack, the step helpers in building and
  *  recognize form, and every rule in the forms its call sites need (ParserIR.forms). parse() runs
  *  it with cstBuilder, parseWith() with the caller's builder. */
-// The mixfix operand re-bind (emit-portable.ts PrattRule.ledRebind), one function for every led that
-// has one: open, operand, sep and rest are the led's steps (its connector, its operand, L2, the
-// rest), sepLid is L2. It runs where the led failed, and undoes itself when it fails. The cap is the
-// token stream ending at the candidate: `toks` sliced, then put back (linear, on the failure path).
-// Its candidate scan reads tokens below the greedy operand's end, which that operand examined.
-function rebindRuntimeTs(ir: ParserIR, ids: LexIdPlan): string {
+// The mixfix operand re-bind (rebind-family.ts, the one `rbScan`): each led that has one is a site,
+// its four steps (connector, operand, L2, the rest) the cases of `rbStep`. The engine's part: a mark
+// is the position and the child stack's height, the cap `toks` sliced and put back (linear, on the
+// failure path only).
+const RB_SITES = new WeakMap<LexIdPlan, string[][]>();
+function rbSite(ids: LexIdPlan, steps: string[]): number {
+  let m = RB_SITES.get(ids);
+  if (m === undefined) RB_SITES.set(ids, (m = []));
+  m.push(steps);
+  return m.length - 1;
+}
+function rebindRuntimeTs(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   if (!hasRebind(ir)) return '';
-  const { opens, closes } = rebindBrackets(ids);
-  const any = (xs: number[]) => xs.map((x) => `l === ${x}`).join(' || ') || 'false';
+  const sites = RB_SITES.get(ids) ?? [];
   return `
-function _rebind(open: () => boolean, operand: () => boolean, sepLid: number, sep: () => boolean, rest: () => boolean): boolean {
-  const s = pos, n0 = _n;
-  if (open()) {
-    const a = pos, na = _n;
-    if (operand() && !sep()) {
-      const g = pos;
-      for (let i = a, depth = 0; i < g; i++) {
-        const l = toks[i]!.lid;
-        if (${any(opens)}) depth++;
-        else if (${any(closes)}) depth--;
-        else if (depth === 0 && l === sepLid) {
-          back(a); _n = na;
-          const full = toks;
-          toks = full.slice(0, i);
-          const ok = operand();
-          toks = full;
-          if (ok && pos === i && sep() && rest()) return true;
-        }
-      }
-    }
+let rbMark_r1 = 0, rbMark_r2 = 0, rbMark_r3 = 0;
+function rbMark(): number { rbMark_r1 = _n; return pos; }
+function rbReset(p: number, s: number, _c: number, _e: number): void { back(p); _n = s; }
+function rbPos(): number { return pos; }
+function rbTokLid(i: number): number { return toks[i]!.lid; }
+function rbCapped(led: number, i: number, d: number): boolean { const full = toks; toks = full.slice(0, i); const ok = rbStep(led, 1, d); toks = full; return ok; }
+function rbStep(led: number, k: number, _d: number): boolean {
+  switch (led * 4 + k) {
+${sites.flatMap((st, i) => st.map((c, k) => `    case ${i * 4 + k}: return ${c};`)).join('\n')}
   }
-  back(s); _n = n0;
   return false;
-}`;
+}
+${shared.rebindFamily(ir, 'free')}
+${shared.rebindFamily(ir, 'methods')}`;
 }
 function engineRuntime(ir: ParserIR, ids: LexIdPlan): string {
   const reuse = ir.reuse;
@@ -3382,7 +3377,7 @@ function lookEnd(): number { return peekEnd > maxLook ? peekEnd : maxLook; }
 function lookReset(): void { maxLook = 0; peekEnd = 0; }
 ${tokenSetRuntime(ir, ids)}
 ${gtRuntime(ir, ids)}
-${engineRuntime(ir, ids)}${rebindRuntimeTs(ir, ids)}
+${engineRuntime(ir, ids)}${rebindRuntimeTs(ir, ids, shared)}
 // Library entry. tokenize(src) is the lexer alone: fresh Token objects the caller owns, and no
 // parser state touched. parse(src) lexes and parses; the CST is plain objects, independent of
 // any later call. No I/O — see emitRunner() for the stdin → JSON wrapper.

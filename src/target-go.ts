@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { hasRebind, rebindBrackets, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './emit.ts';
@@ -1418,7 +1418,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
 \t\t\tif ${rebind} { left = ${fin}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
 \t\t\tp.scratch = p.scratch[:sb]` : ''}${exit ? '; break LedLoop' : ''}
 \t\t}`,
-    rebind: (p) => `p.rebind(func() bool { return ${p.open} }, func() bool { return ${p.operand} }, ${p.sepLid}, func() bool { return ${p.sep} }, func() bool { return ${p.rest} })`,
+    rebind: (p) => `p.rbScan(${rbSite(ids, 'engine', [p.open, p.operand, p.sep, p.rest])}, ${p.sepLid}, 0)`,
     postfixToks: (kids) => `\t\tswitch t.Kid {
 ${kids.map((k) => `\t\tcase ${k}:
 \t\t\tif !tailClosed {
@@ -1802,43 +1802,45 @@ ${editParse}
 // are byte-identical to pre-addon emit; this block is appended only.
 
 /** The builder engine's arena checkpoint (Builder.Checkpoint). */
-// The mixfix operand re-bind (emit-portable.ts PrattRule.ledRebind), one method per engine form:
-// open, operand, sep and rest are a led's steps (its connector, its operand, L2, the rest), sepLid
-// is L2. It runs where the led failed, and undoes itself when it fails (mark / reset: the form's).
-// The cap is the token stream ending at the candidate: p.toks resliced, then put back.
-function rebindRuntimeGo(recv: string, ir: ParserIR, ids: LexIdPlan): string {
+// The mixfix operand re-bind (rebind-family.ts, the one `rbScan`), per engine form: each led that has
+// one is a site, its four steps (connector, operand, L2, the rest) the cases of the form's `rbStep`.
+// The form's part: a mark is the form's mark() as four ints; the cap is `p.toks` resliced for the
+// operand's call (O(1)).
+const RB_SITES = new WeakMap<LexIdPlan, Map<string, Map<string, number>>>();
+function rbSite(ids: LexIdPlan, recv: string, steps: string[]): number {
+  let m = RB_SITES.get(ids);
+  if (m === undefined) RB_SITES.set(ids, (m = new Map()));
+  let f = m.get(recv);
+  if (f === undefined) m.set(recv, (f = new Map()));
+  const key = JSON.stringify(steps);
+  let i = f.get(key);
+  if (i === undefined) f.set(key, (i = f.size));
+  return i;
+}
+function rebindRuntimeGo(recv: string, ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   if (!hasRebind(ir)) return '';
-  const { opens, closes } = rebindBrackets(ids);
-  const any = (xs: number[]) => xs.map((x) => `l == ${x}`).join(' || ') || 'false';
-  const reset = (m: string) => (recv === 'engine' ? `p.reset(${m})` : `p.back(${m}.pos); p.scratch = p.scratch[:${m}.sb]; p.b.Restore(${m}.nb, ${m}.kb)`);
+  const sites = [...(RB_SITES.get(ids)?.get(recv) ?? new Map<string, number>()).keys()].map((k) => JSON.parse(k) as string[]);
+  const reset = recv === 'engine' ? 'p.reset(mark{q, sb, nb, kb})' : 'p.back(q); p.scratch = p.scratch[:sb]; p.b.Restore(nb, kb)';
   return `
-func (p *${recv}) rebind(open, operand func() bool, sepLid uint16, sep, rest func() bool) bool {
-\tm := p.mark()
-\tif open() {
-\t\ta := p.mark()
-\t\tif operand() && !sep() {
-\t\t\tg := p.pos
-\t\t\tdepth := 0
-\t\t\tfor i := a.pos; i < g; i++ {
-\t\t\t\tl := p.toks[i].Lid
-\t\t\t\tif ${any(opens)} {
-\t\t\t\t\tdepth++
-\t\t\t\t} else if ${any(closes)} {
-\t\t\t\t\tdepth--
-\t\t\t\t} else if depth == 0 && l == sepLid {
-\t\t\t\t\t${reset('a')}
-\t\t\t\t\tfull := p.toks
-\t\t\t\t\tp.toks = full[:i]
-\t\t\t\t\tok := operand()
-\t\t\t\t\tp.toks = full
-\t\t\t\t\tif ok && p.pos == i && sep() && rest() { return true }
-\t\t\t\t}
-\t\t\t}
-\t\t}
+func (p *${recv}) rbMark() (int, int, int, int) { m := p.mark(); return m.pos, m.sb, m.nb, m.kb }
+func (p *${recv}) rbReset(q, sb, nb, kb int) { ${reset} }
+func (p *${recv}) rbCapped(led, i, d int) bool { full := p.toks; p.toks = full[:i]; ok := p.rbStep(led, 1, d); p.toks = full; return ok }
+func (p *${recv}) rbStep(led, k, _ int) bool {
+\tswitch led*4 + k {
+${sites.flatMap((st, i) => st.map((c, k) => `\tcase ${i * 4 + k}:\n\t\treturn ${c}`)).join('\n')}
 \t}
-\t${reset('m')}
 \treturn false
-}`;
+}
+${shared.rebindFamily(ir, 'methods', goLoweringFor('p', recv))}`;
+}
+// The re-bind's part every engine form shares (rebind-family.ts): the cursor's position and token
+// read, and rbBracket.
+function rebindCursorGo(ir: ParserIR, shared: SharedAlgorithms): string {
+  if (!hasRebind(ir)) return '';
+  return `
+func (p *cursor) rbPos() int { return p.pos }
+func (p *cursor) rbTokLid(i int) int { return int(p.toks[i].Lid) }
+${shared.rebindFamily(ir, 'free')}`;
 }
 const arenaCkpt = () => 'nb, kb := p.b.Checkpoint()';
 /** Move the checkpoint past what was just built (the best alternative so far stays). */
@@ -2023,7 +2025,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
 \t\t\tif ${rebind} { left = ${fin}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
 \t\t\tp.scratch = p.scratch[:sb]` : ''}${exit ? '; break LedLoop' : ''}
 \t\t}`,
-    rebind: (p) => `p.rebind(func() bool { return ${p.open} }, func() bool { return ${p.operand} }, ${p.sepLid}, func() bool { return ${p.sep} }, func() bool { return ${p.rest} })`,
+    rebind: (p) => `p.rbScan(${rbSite(ids, recv, [p.open, p.operand, p.sep, p.rest])}, ${p.sepLid}, 0)`,
     postfixToks: (kids) => `\t\tswitch t.Kid {
 ${kids.map((k) => `\t\tcase ${k}:
 \t\t\tif !tailClosed {
@@ -2093,7 +2095,7 @@ ${B.nudPeek}
   return prattShell(r, ir, ids, L);
 }
 
-function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
+function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shared: SharedAlgorithms): string {
   const reuse = ir.reuse;
   // entryHs: flat entry-level handles (shape-A kids / shape-B root kids), snapshotted
   // before finishW consumes scratch — DocWith reuse reads this, never Builder.Nodes.
@@ -2149,7 +2151,7 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 ${structFields}
 }
 
-${engineMarkGo(recv)}${rebindRuntimeGo(recv, ir, ids)}
+${engineMarkGo(recv)}${rebindRuntimeGo(recv, ir, ids, shared)}
 ${pushLeafW}
 ${finishW}
 ${headLeafTextW}
@@ -2582,7 +2584,7 @@ func inTokenSet(k int, t *Tok) bool {
 func inCtxWords(ctx uint8, t *Tok) bool { return false${ctxWordLids(ir, ids).map((w) => ` || (ctx&${w.bit} != 0 && t.Lid == ${w.lid})`).join('')} }`;
 }
 
-function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
+function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shared: SharedAlgorithms): string {
   const reuse = ir.reuse;
   const dropTtIds = ['$punct', '$keyword', '$operator']
     .map((n) => {
@@ -2605,7 +2607,7 @@ function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): stri
   // interface and about 25 are parserW's own steps (leaf push through peek + Builder.Leaf, the
   // spanned return of every rule, a builder checkpoint per mark): one engine is not taken until
   // parserW is rebuilt on the direct engine's steps and the interface's ~9% is measured again.
-  const wMethods = emitParserMethodsW('parserW', ir, ids, ar);
+  const wMethods = emitParserMethodsW('parserW', ir, ids, ar, shared);
   const topReuse = ir.reuse;
   const shapeA = topReuse?.kind === 'A';
   const shapeB = topReuse?.kind === 'B';
@@ -2977,7 +2979,9 @@ const goRec = (r: string): string => (GO_API_RECORDS.has(r) ? r : r[0]!.toLowerC
 const goType = (t: Ty): string => (isRecList(t) ? `[]${goRec(recName(t))}` : isRec(t) ? goRec(recName(t)) : isOpt(t) ? `*${goRec(recName(t))}` : GO_TYPES[t]);
 // A Go string literal; Go rejects a byte order mark inside a source file, so it is an escape.
 const goLit = (v: string): string => JSON.stringify(v).replace(/\ufeff/g, '\\uFEFF');
-const goLowering: Lowering = {
+// `rv` / `rt`: an engine method's receiver and its type (the recovery interpreter's; the re-bind
+// family's is each engine form's: goLoweringFor).
+const goLoweringFor = (rv: string, rt: string): Lowering => ({
   units: UNITS,
   ident: (n) => n,
   num: { int: 'int', lid: 'uint16', depth: 'int', pos: 'int', idx: 'int' },
@@ -3057,7 +3061,7 @@ ${[...ones, ...wides].join('\n')}
       return { c: `${side(a, false)} ${sp} ${side(b, true)}`, prec: p };
     },
     // An engine method is one of the recovery engine `rv *recov`.
-    call: (name, args, method) => `${method ? 'rv.' : ''}${name}(${args.join(', ')})`,
+    call: (name, args, method) => `${method ? `${rv}.` : ''}${name}(${args.join(', ')})`,
     len: (cx, l) => cx.atom(`len(${l.c})`, 'int', 'int'),
     code: (cx, s, i) => cx.atom(`int(${goWrap(s, ATOM)}[${i.c}])`, 'int', 'int'),
     hasAt: (cx, s, i, lit) => cx.atom(`strings.HasPrefix(${goWrap(s, ATOM)}[${i.c}:], ${goLit(lit)})`, 'bool', 'bool'),
@@ -3095,7 +3099,7 @@ ${[...ones, ...wides].join('\n')}
     fn: (f) => [
       ...f.doc.map((l) => `// ${l}`),
       ...(f.cold ? ['//go:noinline'] : []),
-      `func ${f.method ? '(rv *recov) ' : ''}${f.name}(${f.params.map((p) => `${p.name} ${p.type}`).join(', ')}) ${f.rets.length === 0 ? '' : f.rets.length === 1 ? `${f.rets[0]} ` : `(${f.rets.join(', ')}) `}{`,
+      `func ${f.method ? `(${rv} *${rt}) ` : ''}${f.name}(${f.params.map((p) => `${p.name} ${p.type}`).join(', ')}) ${f.rets.length === 0 ? '' : f.rets.length === 1 ? `${f.rets[0]} ` : `(${f.rets.join(', ')}) `}{`,
       ...goBlock(f.body),
       '}',
     ].join('\n'),
@@ -3144,7 +3148,8 @@ ${[...ones, ...wides].join('\n')}
     some: (cx, rec, r) => cx.atom(`&${goWrap(r, ATOM)}`, `opt_${rec}`, `opt_${rec}`),
     isSome: (_cx, r) => ({ c: `${goWrap(r, 4)} != nil`, prec: 3 }),
   },
-};
+});
+const goLowering: Lowering = goLoweringFor('rv', 'recov');
 
 // No callee-FIRST body guards: a Go rd call refused at its dispatch costs less than the guard's test
 // on every iteration (measured: starInC 35 -> 48 instructions per call, typescript.d.ts +0.46% reuse).
@@ -3531,7 +3536,7 @@ func (p *engine) pushLeaf(ttId uint8, tokIdx uint32) {
 
 ${tokenSetRuntimeGo(ir, ids)}
 ${cursorGo(ir, ids)}
-${engineMarkGo('engine')}${rebindRuntimeGo('engine', ir, ids)}
+${engineMarkGo('engine')}${rebindRuntimeGo('engine', ir, ids, shared)}${rebindCursorGo(ir, shared)}
 // Wrap the scratch entries [sb:] as one node's children (flattened into kids); truncate scratch.
 // tokStart is the parse-consumption start (entry pos / leftmost operand), tokEnd is pos at finish.
 func (p *engine) finish(ruleId uint16, sb, fallbackOff, tokStart int) int32 {
@@ -3697,7 +3702,7 @@ func (p *engine) parse(src string, t []Tok) int32 {
 }
 
 ${docEditBlockGo(ir, shared)}
-${emitBuilderAddonGo(ir, ids, ar)}
+${emitBuilderAddonGo(ir, ids, ar, shared)}
 ${opts.recovery ? recoveryRegionGo(ir, shared) : ''}`;
   },
   emitRunner(opts: EmitOptions = {}): string {
