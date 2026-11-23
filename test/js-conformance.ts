@@ -260,6 +260,24 @@ const tsHeritage: { accept: string[]; reject: string[] } = {
   reject: ['class A extends {x}', 'class A extends { a: T; } {}', 'class A extends {}.x {}', 'class A extends a ? b : c {}', 'class A extends async () => {} {}', 'class A extends x = y {}', 'class A extends if {}'],
 };
 
+// ── Identifier references (13.1 IdentifierReference, BindingIdentifier : Identifier, and
+// Identifier : IdentifierName but not ReservedWord) ──
+// `true`, `false`, `null`, `this`, `super` and `new` are reserved words: each begins an expression
+// of its own and is never an identifier, so never an arrow's parameter either. `undefined` is no
+// reserved word: an ordinary identifier (a property of the global object), so a name, a parameter
+// and a callee. Both grammars; JavaScript against acorn and tsc's JS mode, TypeScript against tsc.
+const identifierReferences: { accept: string[]; reject: string[] } = {
+  accept: [
+    'x = undefined;', 'undefined;', 'undefined => 1;', 'async undefined => 1;', 'new undefined();', 'undefined.x = undefined[0];',
+    'var undefined = 1;', 'function undefined(undefined) {}', 'x = true, y = false, z = null, w = this;', 'new this();', 'new true;',
+    'x = async => 1;', 'x = async;',
+  ],
+  reject: [
+    'true => 1;', 'false => 1;', 'null => 1;', 'this => 1;', 'super => 1;', 'new => 1;', 'async true => 1;', 'async false => 1;',
+    'async null => 1;', 'async this => 1;', 'async super => 1;', 'x = (true) => 1;',
+  ],
+};
+
 // ── Class element words (15.7 ClassElement, MethodDefinition; decorators proposal) ──
 // `static`, `async`, `accessor`, `get` and `set` are the element's keyword only where the rest
 // of that production follows; elsewhere the word is the element's name. `static` and `get` /
@@ -417,8 +435,29 @@ const hN = classHeritage.accept.length + classHeritage.reject.length + tsHeritag
 console.log('\n── class heritage ──');
 console.log(`  ${hN - h_fail.length}/${hN} as the productions (JavaScript, acorn agreeing; ${classHeritage.tscDeparts.length} where tsc's JS mode departs) and tsc (TypeScript)`);
 for (const c of h_fail) console.log('    - ' + c);
+const i_fail: string[] = [];
+{
+  const acorn = await import('acorn');
+  const acornAccepts = (code: string) => { try { acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'script' }); return true; } catch { return false; } };
+  const tsParse = createParser((await import('../typescript.ts')).default).parse;
+  const tsWe = (code: string) => { try { tsParse(code); return true; } catch (e) { if (isInputError(e)) return false; throw e; } };
+  const tsAccepts = (code: string) => !((ts.createSourceFile('t.ts', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS) as any).parseDiagnostics?.length);
+  for (const [want, codes] of [[true, identifierReferences.accept], [false, identifierReferences.reject]] as const) {
+    for (const code of codes) {
+      if (jsAccepts(code) !== want) i_fail.push(`tsc JS-mode ${want ? 'rejects' : 'accepts'} ${JSON.stringify(code)}: fix the case`);
+      if (acornAccepts(code) !== want) i_fail.push(`acorn ${want ? 'rejects' : 'accepts'} ${JSON.stringify(code)}: fix the case`);
+      if (tsAccepts(code) !== want) i_fail.push(`tsc ${want ? 'rejects' : 'accepts'} ${JSON.stringify(code)} (TypeScript): fix the case`);
+      if (weAccept(code) !== want) i_fail.push(`we ${want ? 'reject' : 'accept'} ${JSON.stringify(code)}`);
+      if (tsWe(code) !== want) i_fail.push(`we ${want ? 'reject' : 'accept'} ${JSON.stringify(code)} (TypeScript)`);
+    }
+  }
+}
+const iN = identifierReferences.accept.length + identifierReferences.reject.length;
+console.log('\n── identifier references ──');
+console.log(`  ${iN - new Set(i_fail.map((f) => f.replace(/ \(TypeScript\)$/, ''))).size}/${iN} as the productions (JavaScript: acorn and tsc's JS mode agreeing; TypeScript: tsc)`);
+for (const c of i_fail) console.log('    - ' + c);
 // Corpora 1, 2, the statement ends, the for heads, the class element words, the declaration
-// lists, the new targets and the class heritage are hard gates.
+// lists, the new targets, the class heritage and the identifier references are hard gates.
 // ── Expected-fail: inputs the productions reject that the grammar accepts today, each with its
 // cause. The gate fails when one of them is rejected (remove it then) or tsc stops rejecting it.
 const expectedFail: { code: string; reason: string }[] = [
@@ -437,5 +476,5 @@ for (const { code, reason } of expectedFail) {
 console.log('\n── expected-fail ──');
 console.log(`  ${expectedFail.length} accepted although the productions reject them (${new Set(expectedFail.map((e) => e.reason)).size} cause(s))${x_fail.length ? '' : ', as recorded'}`);
 for (const c of x_fail) console.log('    - ' + c);
-const gateFailed = v_fail.length + r_leak.length + s_fail.length + f_fail.length + c_fail.length + d_fail.length + n_fail.length + h_fail.length + x_fail.length > 0;
+const gateFailed = v_fail.length + r_leak.length + s_fail.length + f_fail.length + c_fail.length + d_fail.length + n_fail.length + h_fail.length + i_fail.length + x_fail.length > 0;
 if (gateFailed) process.exit(1);

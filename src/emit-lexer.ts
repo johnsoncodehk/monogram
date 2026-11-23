@@ -463,7 +463,12 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`}`);
   }
   emit(`const LX_UNI_IDENT = /${UNI_ID_START}${UNI_ID_CONTINUE}*/uy;`);
-  emit(`const LX_UNI_CONT = /${UNI_ID_CONTINUE}+/uy;`);
+  // The extension of an identifier the ASCII pattern cut short: it begins only at a unit BEYOND
+  // ASCII (an ASCII unit the pattern leaves out where it stopped, `$` in `[A-Za-z_]\w*`, is not
+  // part of the token: the token's own pattern decides ASCII), then takes the whole IdentifierPart
+  // run, ASCII included (`na|ïve` is one identifier), as the portable lexers' lxExt does
+  // (docs/TARGETS.md).
+  emit(`const LX_UNI_CONT = /(?![\\0-\\x7f])${UNI_ID_CONTINUE}+/uy;`);
   emit(`const LX_UNI_FULL = /^${UNI_ID_START}${UNI_ID_CONTINUE}*/u;`);
   emit(`const LX_DECODE_ESC = /\\\\u\\{([0-9a-fA-F]+)\\}|\\\\u([0-9a-fA-F]{4})/g;`);
   if (tplEscapeValid) emit(`const LX_TPL_ESC = new RegExp(${J(tplEscapeValid)}, 'y');`);
