@@ -2253,7 +2253,7 @@ function buildPratt(
       const last = steps[steps.length - 1];
       const lastIsOperand = last !== undefined && last.t === 'rule' && last.name === name;   // open binary/ternary operand
       // chain-rhs (`in`/`instanceof`): the trailing self-operand parses at the level's bp (left-chain).
-      if (prec && prec.rhsBp !== null && lastIsOperand) steps[steps.length - 1] = { t: 'ruleBp', name, bp: prec.rhsBp };
+      if (prec && prec.rhsBp !== null && lastIsOperand) steps[steps.length - 1] = { t: 'ruleBp', name, bp: prec.rhsBp, ...(last.field !== undefined ? { field: last.field } : {}), src: last.src };   // keeps the operand's names
       const wordConnector = /^[A-Za-z]/.test(conn);                                           // `in`/`instanceof`/`as` — not a tail
       leds.push({ first: conn, steps });
       ledNames.push(armName(alt)); ledLeftNames.push(names.childOf.get(items[0])!.name);

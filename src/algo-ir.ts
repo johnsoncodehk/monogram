@@ -99,6 +99,8 @@ export type Expr =
   | { k: 'mkNode'; kind: Expr; fields: { name: string; e: Expr }[]; start: Expr; end: Expr }
   | { k: 'mkRecord'; fields: { name: string; e: Expr }[] }
   | { k: 'vList'; e: Expr }
+  // The elements of a list value (a value list; a spread item reads it).
+  | { k: 'vItems'; e: Expr }
   // Whether a value is the scalar v (bool); whether it is a value at all (not absent).
   | { k: 'vIs'; e: Expr; v: string | number | boolean | null }
   | { k: 'vPresent'; e: Expr }
@@ -364,6 +366,7 @@ export interface ShapeLowering {
   mkNode(cx: Cx, kind: R, fields: [string, R][], start: R, end: R): R;
   mkRecord(cx: Cx, fields: [string, R][]): R;
   vList(cx: Cx, l: R): R;
+  vItems(cx: Cx, e: R): R;
   vIs(cx: Cx, e: R, v: string | number | boolean | null): Printed;
   vPresent(cx: Cx, e: R): Printed;
   vNeed(cx: Cx, e: R): R;
@@ -637,6 +640,7 @@ class Printer implements Cx {
         if (!isValList(l.ty)) throw new Error('algo-ir: vList of a non-value list');
         return this.shapeL().vList(this, l);
       }
+      case 'vItems': return this.shapeL().vItems(this, this.valR(e.e));
       case 'vIs': return { ...this.shapeL().vIs(this, this.valR(e.e), e.v), ty: 'bool', nat: 'bool' };
       case 'vPresent': return { ...this.shapeL().vPresent(this, this.valR(e.e)), ty: 'bool', nat: 'bool' };
       case 'vNeed': return this.shapeL().vNeed(this, this.valR(e.e));
