@@ -35,7 +35,15 @@ function tokenize(mon: MonarchLanguage, src: string): Tok[] {
   const stack: string[] = ['root'];
   const flags = mon.ignoreCase ? 'i' : '';
   const cache = new Map<string, RegExp>();
-  const re = (s: string) => { let r = cache.get(s); if (!r) { r = new RegExp(`^(?:${s})`, flags); cache.set(s, r); } return r; };
+  // a rule's regex as Monaco's compiler reads it: `@@` is a literal `@`, `@name` the language
+  // attribute `name` (a string), else the compile throws
+  const monacoRegex = (s: string) => s.replace(/@@|@(\w+)/g, (m, a?: string) => {
+    if (m === '@@') return '@';
+    const v = (mon as unknown as Record<string, unknown>)[a!];
+    if (typeof v !== 'string') throw new Error(`/${s}/: the language has no attribute @${a}`);
+    return v ? `(?:${v})` : '';
+  });
+  const re = (s: string) => { let r = cache.get(s); if (!r) { r = new RegExp(`^(?:${monacoRegex(s)})`, flags); cache.set(s, r); } return r; };
   const rulesOf = (state: string, seen = new Set<string>()): [string, MonarchAction, string?][] => {
     const rs = mon.tokenizer[state];
     if (!rs) throw new Error(`no state \`${state}\``);
@@ -69,7 +77,7 @@ function tokenize(mon: MonarchLanguage, src: string): Tok[] {
     for (const [reSrc, a] of rulesOf(state)) {
       if (typeof a !== 'object' || Array.isArray(a) || (a as { nextEmbedded?: string }).nextEmbedded !== '@pop') continue;
       found = true;
-      const at = rest.search(new RegExp(reSrc, flags));
+      const at = rest.search(new RegExp(monacoRegex(reSrc), flags));
       if (at >= 0 && (best < 0 || at < best)) best = at;
     }
     if (!found) throw new Error(`no rule containing nextEmbedded: "@pop" in tokenizer embedded state: ${state}`);
@@ -281,8 +289,114 @@ for (const [name, file, g] of [['jsx', 'javascriptreact.monarch.json', jsx], ['t
   tokRow('dynamic close tag', 'pass', undefined, mon, src, 'tag}>', 0, is('identifier'));
   // the region features of later landings (each its own step, docs/REGIONS.md "Owed")
   const lsrc = 'component Page() { <main>a /* note */ @if (x) { y } <style>.a { color: red; }</style></main> }';
-  tokRow('`/* note */` in text is a comment (textTokens)', 'xfail', 'text tokens are not in the Monarch children yet', mon, lsrc, 'note', 0, is('comment'));
-  tokRow('`@if` in children is a directive keyword', 'xfail', 'directives are not in the Monarch children yet', mon, lsrc, '@if', 0, is('keyword'));
+  tokRow('`/* note */` in text is a comment (textTokens)', 'pass', undefined, mon, lsrc, 'note', 0, is('comment'));
+  // text tokens (`textTokens`): tried before the text run; a run stops before one, `//` only
+  // right after a blank (its `after` class) inside a run, anywhere at a run's start
+  const tsrc = [
+    'component Page() {',
+    '  <main>a /* note */ b a//b x // tail',
+    // a line comment in text runs to the end of the line, over a close tag too
+    '    <p>// lead </p> still the comment',
+    '    </p><p>{q}// hole',
+    '    </p><p>/* c */// both',
+    '    </p>',
+    '    <p>see https://x.y and 1 <-// not a tag</p>',
+    '    <p>m /* one',
+    '      two */ after</p>',
+    '  </main>',
+    '}',
+  ].join('\n');
+  tokRow('a block comment in a text run', 'pass', undefined, mon, tsrc, 'note', 0, is('comment'));
+  tokRow('text after a block comment', 'pass', undefined, mon, tsrc, ' b', 0, is(''));
+  tokRow('`a//b` is text (`//` only after a blank)', 'pass', undefined, mon, tsrc, '//b', 0, is(''));
+  tokRow('`x // tail`: `//` after a blank is a line comment', 'pass', undefined, mon, tsrc, 'tail', 0, is('comment'));
+  tokRow('`//` at the start of the children is a line comment', 'pass', undefined, mon, tsrc, 'lead', 0, is('comment'));
+  tokRow('a line comment in text runs to the end of the line, over `</p>`', 'pass', undefined, mon, tsrc, 'still', 0, is('comment'));
+  tokRow('the close tag on the line after a line comment in text', 'pass', undefined, mon, tsrc, '</p>', 1, is('delimiter.tag'));
+  tokRow('`//` right after a hole is a line comment (a new run)', 'pass', undefined, mon, tsrc, 'hole', 0, is('comment'));
+  tokRow('`//` right after a block comment is a line comment', 'pass', undefined, mon, tsrc, 'both', 0, is('comment'));
+  tokRow('`https://x.y` is text', 'pass', undefined, mon, tsrc, '//x', 0, is(''));
+  tokRow('`<-//`: a `<` that opens no tag is text, and `//` with no blank before it too', 'pass', undefined, mon, tsrc, '// not', 0, is(''));
+  tokRow('a block comment over lines in text', 'pass', undefined, mon, tsrc, 'two', 0, is('comment'));
+  tokRow('text after a block comment over lines', 'pass', undefined, mon, tsrc, 'after', 0, is(''));
+  tokRow('an unterminated `/*` in text is text', 'xfail', 'a block comment is a pushed state: an unterminated `/*` runs to the next `*/` or the end of the file (the lexer finds no end, so it is text)', mon, 'component C() {\n  <p>a /* b</p>\n  <p>c</p>\n}', 'c</p>', 0, is(''));
+  // the interpreter's stream drops skipped tokens: a comment is a non-blank unit between two
+  // tokens (in this source every other unit, text included, is in a token)
+  rows.push({ section, id: 'the units the interpreter skips as comments are exactly the Monarch comments', status: 'pass', check: () => {
+    const lex = createParser(textDialect).tokenize(tsrc) as { type: string; text: string; offset: number }[];
+    const skipped = new Set<number>();
+    let at = 0;
+    for (const t of [...lex, { offset: tsrc.length, text: '' }]) {
+      for (let i = at; i < t.offset; i++) if (!/\s/.test(tsrc[i])) skipped.add(i);
+      at = Math.max(at, t.offset + t.text.length);
+    }
+    const commented = new Set<number>();
+    for (const x of tokenize(mon(), tsrc)) if (x.token === 'comment') for (let i = 0; i < x.text.length; i++) if (!/\s/.test(x.text[i])) commented.add(x.start + i);
+    const only = (a: Set<number>, b: Set<number>) => [...a].filter(i => !b.has(i));
+    const show = (xs: number[]) => xs.length ? JSON.stringify(xs.map(i => tsrc[i]).join('')) : '';
+    const missing = only(skipped, commented), extra = only(commented, skipped);
+    const bad = [missing.length ? `not comments in Monarch: ${show(missing)}` : '', extra.length ? `comments only in Monarch: ${show(extra)}` : ''].filter(Boolean);
+    return { ok: bad.length === 0 && skipped.size > 0, saw: bad.length ? bad.join('; ') : `${skipped.size} units` };
+  } });
+  tokRow('`@if` in children is a directive keyword', 'pass', undefined, mon, lsrc, '@if', 0, is('keyword'));
+  // directives (derived: grammar-analysis.ts directivesOf): an opener and its required literals,
+  // a head `( … )` that is code, a body that is children, continuations only after a body
+  const dsrc = [
+    'component Page(items) {',
+    '  <main>',
+    '    @if (items.length) { <b>yes</b> } @else { none }',
+    '    @for (x of items) { <li>{x}</li> } @empty { empty }',
+    '    @for await (y of q) { w }',
+    '    say @iffy (q) and @if q (r) {zz}',
+    '    a@if (k) { inner } tail',
+    '    @if ({a}.a) { deep }',
+    '    @if (b) { one }',
+    '    @else if (c) { two }',
+    '    @try { t } @catch (e) { c } @pending { p }',
+    '    @{ const v = 1; }',
+    '    <p>x @else { y }</p>',
+    '    @if (s) { s1 } @elsewhere',
+    '  </main>',
+    '}',
+  ].join('\n');
+  const kw = is('keyword');
+  tokRow('an opener `@if`', 'pass', undefined, mon, dsrc, '@if (items', 0, kw);
+  tokRow('a directive head is code', 'pass', undefined, mon, dsrc, 'items.length', 0, is('identifier'));
+  tokRow('an element in a directive body', 'pass', undefined, mon, dsrc, 'b>yes', 0, is('tag'));
+  tokRow('a continuation `@else` after a body', 'pass', undefined, mon, dsrc, '@else', 0, kw);
+  tokRow('a continuation body is children: `none` is text', 'pass', undefined, mon, dsrc, 'none', 0, is(''));
+  tokRow('`@for` with a head', 'pass', undefined, mon, dsrc, '@for', 0, kw);
+  tokRow('a hole in a directive body', 'pass', undefined, mon, dsrc, 'x}', 0, is('identifier'));
+  tokRow('the continuation `@empty`', 'pass', undefined, mon, dsrc, '@empty', 0, kw);
+  tokRow('the opener\'s required literal `await` (`@for await (`)', 'pass', undefined, mon, dsrc, 'await', 0, kw);
+  tokRow('`@iffy (` is text: the opener ends at a word boundary', 'pass', undefined, mon, dsrc, '@iffy', 0, is(''));
+  tokRow('`@if q` is text: `@if` needs its `(`', 'pass', undefined, mon, dsrc, '@if q', 0, is(''));
+  tokRow('a hole after a plain `( … )` in text is a hole', 'pass', undefined, mon, dsrc, 'zz', 0, is('identifier'));
+  tokRow('an opener inside a text run (`a@if (`)', 'pass', undefined, mon, dsrc, '@if (k', 0, kw);
+  tokRow('text after a directive in a run', 'pass', undefined, mon, dsrc, 'tail', 0, is(''));
+  tokRow('a `{` inside the head\'s parentheses is code, the body opens after the `)`', 'pass', undefined, mon, dsrc, 'deep', 0, is(''));
+  tokRow('a continuation on the line after its body', 'pass', undefined, mon, dsrc, '@else if', 0, kw);
+  tokRow('`if` after `@else` is a required literal', 'pass', undefined, mon, dsrc, 'if (c', 0, kw);
+  tokRow('`@try` / `@catch` / `@pending`', 'pass', undefined, mon, dsrc, '@pending', 0, kw);
+  tokRow('the `@catch` head is code', 'pass', undefined, mon, dsrc, 'e)', 0, is('identifier'));
+  tokRow('a code block `@{ … }` is code', 'pass', undefined, mon, dsrc, 'const v', 0, kw);
+  tokRow('`@else` not after a body is text', 'pass', undefined, mon, dsrc, '@else { y', 0, is(''));
+  tokRow('`@elsewhere` after a body is text (a continuation ends at a word boundary)', 'pass', undefined, mon, dsrc, '@elsewhere', 0, is(''));
+  tokRow('the close tag after the directives', 'pass', undefined, mon, dsrc, 'main>', 1, is('tag'));
+  rows.push({ section, id: 'an opener `@if` is written `@@if` in its regex (Monaco reads `@name` as an attribute)', status: 'pass', check: () => {
+    const all = Object.values(mon().tokenizer).flat().filter(Array.isArray).map(r => r[0] as string);
+    const bare = all.filter(x => /(?<!@)@(?!@)\w/.test(x.replace(/@@/g, '')));
+    const ok = bare.length === 0 && all.some(x => x.startsWith('@@if'));
+    return { ok, saw: ok ? 'escaped' : `unescaped: ${bare.slice(0, 3).join(' | ')}` };
+  } });
+  tokRow('an opener and its required literal on two lines', 'xfail', 'the opener test is a lookahead, which sees one line', mon, 'component C() {\n  <p>@if\n  (x) { y }</p>\n}', '@if', 0, kw);
+  rows.push({ section, id: 'the interpreter\'s directive keywords (`AtWord`) are exactly the Monarch `@` keywords', status: 'pass', check: () => {
+    const lex = createParser(textDialect).tokenize(dsrc) as { type: string; text: string; offset: number }[];
+    const want = lex.filter(t => t.text.startsWith('@')).map(t => `${t.offset}:${t.text}`);
+    const saw = tokenize(mon(), dsrc).filter(t => t.token === 'keyword' && t.text.startsWith('@')).map(t => `${t.start}:${t.text}`);
+    const ok = JSON.stringify(want) === JSON.stringify(saw);
+    return { ok, saw: ok ? `${want.length} keywords` : `lexer ${want.join(' ')} | Monarch ${saw.join(' ')}` };
+  } });
   tokRow('a `<style>` body is raw: its `{` opens no hole (rawText)', 'pass', undefined, mon, lsrc, '{ color', 0, t => t !== 'delimiter.bracket');
   // raw text (`rawText`): the body is the declared embed's language (`nextEmbedded`), up to the
   // first `</` + the tag name; `unlessBodyStarts` makes it children, over line breaks too
