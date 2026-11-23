@@ -296,7 +296,8 @@ same declaration.
 
 Not there yet: the tree-sitter generator still carries
 its own JSX vocabulary and reads none of the other region features; the portable parsers (TypeScript, Go, Rust) parse JSX and TSX but refuse a
-grammar that declares `tagStart`, `unlessBodyStarts`, `textTokens` or has directives.
+grammar that declares `textTokens` or has directives (they carry `tagStart` and
+`unlessBodyStarts`).
 
 **Changed behaviour:** a grammar that declares no region gets no element layer. Elements are no
 longer guessed from a `/>` token or a rule that starts with `<`.
