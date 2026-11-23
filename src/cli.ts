@@ -13,11 +13,19 @@ import { decisionReport } from './decision-report.ts';
 // point, with the dead alternatives and declaration-order ties to act on (src/decision-report.ts).
 // It is a diagnostic for the grammar's author, not an artifact a consumer ships, so it is not in
 // the default output set that `npm run gen` commits.
+//
+// `--shape <shape.ts>` checks a shape (the module's default export, a `defineShape` result: see
+// docs/SHAPE.md) against the grammar and prints its coverage: every arm mapped, left out and
+// reached from the entry rule (with a term to start from), or left out and not reached.
+// `--shape-skeleton` prints a complete shape module mapping every arm to a node of its named
+// children: the file to start a shape from. Both write no artifact.
 const args = process.argv.slice(2);
 const decisions = args.includes('--decisions');
-const file = args.find((a) => !a.startsWith('--'));
-if (!file) {
-  console.error('Usage: node src/cli.ts <grammar.ts> [--decisions]');
+const shapeAt = args.indexOf('--shape');
+const shapeFile = shapeAt >= 0 ? args[shapeAt + 1] : undefined;
+const file = args.find((a, i) => !a.startsWith('--') && (shapeAt < 0 || i !== shapeAt + 1));
+if (!file || (shapeAt >= 0 && (!shapeFile || shapeFile.startsWith('--')))) {
+  console.error('Usage: node src/cli.ts <grammar.ts> [--decisions] | <grammar.ts> --shape <shape.ts> | <grammar.ts> --shape-skeleton');
   process.exit(1);
 }
 
@@ -27,6 +35,23 @@ const grammar = mod.default as CstGrammar & { name?: string };
 // have one source of truth (gen-tm reads `grammar.name` rather than taking a name parameter).
 const langName = grammar.name ?? basename(file, '.ts');
 grammar.name = langName;
+
+if (args.includes('--shape-skeleton')) {
+  const { shapeSkeleton } = await import('./shape-coverage.ts');
+  console.log(shapeSkeleton(grammar, `./${basename(file)}`));
+  process.exit(0);
+}
+if (shapeFile) {
+  const { shapeCoverage, coverageReport } = await import('./shape-coverage.ts');
+  // Loading the module runs defineShape: a spec that does not fit throws ShapeSpecError here.
+  const shape = (await import(resolve(shapeFile))).default as import('./shape2-eval.ts').Shape;
+  if (shape?.source !== grammar) {
+    console.error(`${shapeFile}: its default export is not a shape defined on ${file} (export default defineShape(grammar, { ... }) with grammar imported from ${file})`);
+    process.exit(1);
+  }
+  console.log(coverageReport(shapeCoverage(shape)));
+  process.exit(0);
+}
 
 console.log(`Parsed ${file}:`);
 console.log(`  ${grammar.tokens.length} tokens`);

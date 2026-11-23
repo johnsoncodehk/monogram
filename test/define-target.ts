@@ -5,7 +5,7 @@
 //      target, keep no host switch, and none of their string literals carries punctuation —
 //      every operator, delimiter, comment marker and keyword comes from a target's Lowering
 //      (point 4 prints the families through a non-C lowering);
-//   2. exactly one `defineTarget(...)` call per target module (target-ts / target-go /
+//   2. exactly one `defineParserTarget(...)` call per target module (target-ts / target-go /
 //      target-rust), each with its own `Lowering`; no target module imports another target
 //      module, an algorithm family, or the IR printer — families arrive via `shared`;
 //   3. the registry holds exactly those three targets, each the module's exported target,
@@ -16,8 +16,10 @@
 //
 //   node test/define-target.ts
 import { readFileSync } from 'node:fs';
-import { tsTarget, goTarget, rustTarget } from '../src/emit.ts';
-import { defineTarget, registeredTargets } from '../src/define-target.ts';
+import { tsTarget } from '../src/target-ts.ts';
+import { goTarget } from '../src/target-go.ts';
+import { rustTarget } from '../src/target-rust.ts';
+import { defineParserTarget, registeredTargets } from '../src/define-target.ts';
 import { portableIR } from '../src/emit-portable.ts';
 import { relexFamily, relexFamilyFns, relexMode } from '../src/relex-family.ts';
 import { lexScanFamily } from '../src/lex-family.ts';
@@ -41,7 +43,7 @@ const imports = (s: string) => [...s.matchAll(/^import [^;]*? from '([^']+)'/gms
 // String literals with interpolations removed; import paths and error messages skipped.
 const literals = (s: string) => [...s.matchAll(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g)]
   .map((m) => { let l = m[0]; while (/\$\{[^{}]*\}/.test(l)) l = l.replace(/\$\{[^{}]*\}/g, ''); return l; })
-  .filter((l) => !/^.\.\//.test(l) && !/^.(algo-ir|defineTarget|relex-family|lex-family):/.test(l));
+  .filter((l) => !/^.\.\//.test(l) && !/^.(algo-ir|defineParserTarget|relex-family|lex-family):/.test(l));
 
 const TARGET_NAMES = /\b(ts|go|rust|typescript|golang|TS|Go|Rust|TypeScript|Golang)\b/;
 const HOST_SWITCH = /\b(host|Host|HOSTS)\b/;
@@ -64,12 +66,12 @@ for (const f of CORE) {
 
 const defineCalls = new Map<string, number>();
 for (const f of ['emit.ts', 'emit-portable.ts', 'emit-parser.ts', ...CORE, ...TARGETS.map((t) => t.file)]) {
-  const n = (code(src(f)).match(/(?<!function )\bdefineTarget\(/g) ?? []).length;
+  const n = (code(src(f)).match(/(?<!function )\bdefineParserTarget\(/g) ?? []).length;
   if (n) defineCalls.set(f, n);
 }
 for (const t of TARGETS) {
   const s = code(src(t.file));
-  if (defineCalls.get(t.file) !== 1) fail(`${t.file}: ${defineCalls.get(t.file) ?? 0} defineTarget calls, want 1`);
+  if (defineCalls.get(t.file) !== 1) fail(`${t.file}: ${defineCalls.get(t.file) ?? 0} defineParserTarget calls, want 1`);
   if (!/^const \w+Lowering: Lowering = \{/m.test(s)) fail(`${t.file}: defines no Lowering of its own`);
   for (const i of imports(s)) {
     if (/\/target-/.test(i)) fail(`${t.file}: imports another target module ${i}`);
@@ -77,7 +79,7 @@ for (const t of TARGETS) {
   }
   if (/\b(printFns|emitRelexFamily|emitLexScan|lexScanFamily)\b/.test(s)) fail(`${t.file}: prints shared algorithms itself; use shared`);
 }
-for (const [f] of defineCalls) if (!TARGETS.some((t) => t.file === f)) fail(`${f}: defineTarget called outside a target module`);
+for (const [f] of defineCalls) if (!TARGETS.some((t) => t.file === f)) fail(`${f}: defineParserTarget called outside a target module`);
 
 const reg = registeredTargets();
 const names = reg.map((t) => t.name).sort();
@@ -88,10 +90,10 @@ for (const t of TARGETS) {
 }
 if (new Set(reg.map((t) => t.lowering)).size !== reg.length) fail('targets share a Lowering object');
 try {
-  defineTarget({ name: 'go', ext: 'go', lowering: goTarget.lowering, emitParser: () => '' });
-  fail('a second defineTarget("go") was accepted');
+  defineParserTarget({ name: 'go', ext: 'go', lowering: goTarget.lowering, emitParser: () => '' });
+  fail('a second defineParserTarget("go") was accepted');
 } catch { /* expected */ }
-const bare = defineTarget({ name: 'no-lowering-probe', ext: 'txt', emitParser: (_g, shared) => shared.relexFamily({} as never) });
+const bare = defineParserTarget({ name: 'no-lowering-probe', ext: 'txt', emitParser: (_g, shared) => shared.relexFamily({} as never) });
 try {
   bare.emitParser({} as never);
   fail('a target without a Lowering was handed shared algorithms');
@@ -100,7 +102,7 @@ try {
 }
 
 // ── 4. the core carries no surface syntax, shown by printing it (formerly syntax-agnostic) ──
-// A test-only target registered with `defineTarget` (after the registry checks above, which it
+// A test-only target registered with `defineParserTarget` (after the registry checks above, which it
 // would otherwise join) prints the lex-scan and relex families — with the reuse and recovery
 // families — as S-expressions: prefix operators, no braces, semicolons, brackets, infix or C
 // comments, for every lexer mode; the printed forms are counted against the IR: every statement,
@@ -202,7 +204,7 @@ const sexpr: Lowering = {
   },
 };
 
-const target = defineTarget({
+const target = defineParserTarget({
   name: 'sexpr-syntax-probe',
   ext: 'scm',
   lowering: sexpr,
@@ -333,7 +335,7 @@ for (const path of FIXTURES) {
 }
 
 if (failures > 0) {
-  console.error(`\n✗ defineTarget: ${failures} problem(s)`);
+  console.error(`\n✗ defineParserTarget: ${failures} problem(s)`);
   process.exit(1);
 }
-console.log('✓ defineTarget: target-agnostic core (it prints as S-expressions through a test-only target, every IR construct accounted for); typescript / go / rust each registered once from its own module');
+console.log('✓ defineParserTarget: target-agnostic core (it prints as S-expressions through a test-only target, every IR construct accounted for); typescript / go / rust each registered once from its own module');

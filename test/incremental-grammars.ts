@@ -16,7 +16,8 @@
 //
 //   node test/incremental-grammars.ts
 import { readFileSync, writeFileSync } from 'node:fs';
-import { emitParser, jsTarget } from '../src/emit.ts';
+import { emitParser } from '../src/target.ts';
+import { jsTarget } from '../src/emit-parser.ts';
 import { generateInputs } from './grammar-gen.ts';
 import { objectify } from './emitted-obj.ts';
 import { scratchDir } from './scratch.ts';

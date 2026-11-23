@@ -11,8 +11,10 @@
 // included) is not produced (the harness compares it only when both sides carry it).
 import {
   absent, and, branch, c, child, cook, dropLastIf, fold, get, iff, inh, let_, map, match, node, not, or, orElse, present, record, syn, text, v, list, spread,
-  type Shape2Spec, type Term,
+  type ShapeSpec, type Term,
 } from '../../src/shape2-schema.ts';
+import { defineShape } from '../../src/shape2-eval.ts';
+import typescript from '../../typescript.ts';
 
 /** A token node (tsc's `operatorToken`, `questionDotToken`, ...) over a named leaf. */
 const token = (kind: string | Term, leaf: string): Term => node(kind, {}, { from: leaf, to: leaf });
@@ -100,7 +102,7 @@ const forStatement = (awaitModifier: Term): Term => match(get('head', 'kind'), {
   in: node('ForInStatement', { initializer: get('head', 'initializer'), expression: get('head', 'expression'), statement: child('body') }),
   of: node('ForOfStatement', { awaitModifier, initializer: get('head', 'initializer'), expression: get('head', 'expression'), statement: child('body') }),
 });
-const FOR_RULES: Shape2Spec['rules'] = {
+const FOR_RULES: ShapeSpec['rules'] = {
   ForHead: {
     declaration: declarationHead(['classic', 'in_', 'of'], ['classic', 'of']),
     classic: head({ kind: c('for'), initializer: optComma('initializer'), condition: optComma('condition'), incrementor: optComma('increment') }),
@@ -192,7 +194,7 @@ const omitted = (after: string): Term => node('OmittedExpression', {}, { after }
 const finalHole = (first: string, over: string, rest: string): Term => fold(over, not(present(first)), 'h', not(present(rest)));
 const fromElement = (extra: Record<string, Term>, element = 'value'): Term =>
   node('BindingElement', { ...extra, name: get(element, 'name'), initializer: get(element, 'initializer') });
-const PATTERN_RULES: Shape2Spec['rules'] = {
+const PATTERN_RULES: ShapeSpec['rules'] = {
   BindingPattern: {
     object: node('ObjectBindingPattern', { elements: child('property') }),
     array: node('ArrayBindingPattern', {
@@ -235,7 +237,7 @@ const parameter = (rest: boolean): Term => node('Parameter', {
   questionToken: iff(present('question'), token('QuestionToken', 'question'), absent),
   type: child('type'), initializer: child('value'),
 });
-const PARAM_RULES: Shape2Spec['rules'] = {
+const PARAM_RULES: ShapeSpec['rules'] = {
   Param: {
     thisParameter: node('Parameter', { name: idOf('thisKeyword', c('this')), type: child('type') }),
     plain: branch('binding', { single: parameter(false), rest: parameter(true) }),
@@ -249,7 +251,7 @@ const chainFlags: Term = iff(syn('optional'), c('OptionalChain'), absent);
 // tsc keeps an object / array literal on the left of `=` as it is (no pattern reinterpretation),
 // so this shape has no right-dependent equation.
 /** A property name (MemberName); a computed one holds a comma list (a checker error, parsed). */
-const KEY_RULES: Shape2Spec['rules'] = {
+const KEY_RULES: ShapeSpec['rules'] = {
   MemberName: {
     ident: idOf('ident'),
     privateField: privateOf('privateField'),
@@ -288,7 +290,7 @@ const objectMember = (isAsync: boolean): Term => {
     }),
   });
 };
-const PROP_RULES: Shape2Spec['rules'] = {
+const PROP_RULES: ShapeSpec['rules'] = {
   Prop: {
     spread: node('SpreadAssignment', { expression: child('argument') }),
     member: without('word', branch('form', {
@@ -389,7 +391,7 @@ const constructorOf = (isAsync: boolean): Term => node('Constructor', { modifier
  * unless a `*` precedes it). */
 const methodOrConstructor = (isAsync: boolean): Term => iff(syn('constructorName', 'key'), constructorOf(isAsync), method(isAsync, false));
 const accessor = (isAsync: boolean): Term => node(match(text('kind'), { get: c('GetAccessor'), set: c('SetAccessor') }), { modifiers: memberModifiers(isAsync), name: child('key'), ...memberSig });
-const CLASS_RULES: Shape2Spec['rules'] = {
+const CLASS_RULES: ShapeSpec['rules'] = {
   ClassMember: {
     empty: node('SemicolonClassElement'),
     staticBlock: node('ClassStaticBlockDeclaration', { modifiers: modifiersOf(['decorator', 'modifier'], [spread(child('decorator')), spread(map('modifier', keyword('modifier')))]), body: child('block') }),
@@ -461,7 +463,7 @@ const exportKeyword: Term = token('ExportKeyword', 'exportKeyword');
 const typeOnly: Term = present('typeKeyword');
 /** An import clause's parts. tsc's ImportClause also spans a `type` that the Decl arm reads, so
  * ImportClause is RECORD-VALUED and the import arm builds the node. */
-const MODULE_RULES: Shape2Spec['rules'] = {
+const MODULE_RULES: ShapeSpec['rules'] = {
   ImportClause: {
     deferNamespace: record({ name: absent, namedBindings: namespaceImport, phaseModifier: c('DeferKeyword') }),
     defaultBinding: record({ name: idOf('name'), namedBindings: iff(present('bindings'), branch('bindings', { named: namedImports, namespace: namespaceImport }), absent), phaseModifier: absent }),
@@ -522,7 +524,7 @@ const MODULE_DECLARATIONS: Record<string, Term> = {
   }),
 };
 
-export const tscExprShape: Shape2Spec = {
+export const tscExprShape = defineShape(typescript, {
   name: 'tsc-expr',
   synthesized: {
     optional: { type: 'bool', default: false, rules: { Expr: { led_optChain: c(true), led_dot: syn('optional', 'left'), led_bracket: syn('optional', 'left'), led_paren: syn('optional', 'left'), led_bang: syn('optional', 'left') } } },
@@ -636,4 +638,4 @@ export const tscExprShape: Shape2Spec = {
     ...KEY_RULES,
     ...PROP_RULES,
   },
-};
+});

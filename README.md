@@ -178,15 +178,17 @@ cannot express: [docs/HIGHLIGHTER-EVIDENCE.md](docs/HIGHLIGHTER-EVIDENCE.md).
 - The recorded comparison is Rust against [oxc](https://github.com/oxc-project/oxc) on the
   same inputs, parsing as TypeScript, both in one CI job with alternating rounds
   ([docs/MEASUREMENT.md](docs/MEASUREMENT.md#recorded-result-rust-against-oxc)).
-- Monogram builds a CST and oxc a typed AST: not the same product, and a CST is the cheaper one
-  to build. A like-for-like figure waits for a monogram parser that builds an AST.
-- On monogram `e6cc55c`, on two AMD EPYC runner models, a parse with a kept builder takes 6%
-  to 28% less time than oxc's on the eight timed inputs (9% less on the TypeScript compiler's
-  `checker.ts`) while executing 3% to 13% more instructions on seven of them. An earlier
-  comparison on another CPU ordered one input the other way: the ratio is not a property of the
-  parsers alone.
-- Before the lexer and decision work of 2026-11-22 the same comparison had oxc ahead on most
-  inputs, with monogram at 1.42 times oxc's instructions on `checker.ts`; it is 1.03 times now.
+- Monogram builds a CST and oxc a typed AST: not the same product, so this is not yet a
+  like-for-like figure. Which of the two costs more to build has not been measured here; a
+  monogram parser that builds an AST directly (generated from a `defineShape` shape) is in
+  progress and will give that figure.
+- On monogram `bf18adc` (AMD EPYC 9V74), a parse with a kept builder takes 19% to 36% less time
+  than oxc's on the eight timed inputs (22% less on the TypeScript compiler's `checker.ts`), and
+  executes 12% fewer instructions on `checker.ts`: fewer on nine of the ten counted inputs, and
+  0.5% more on `typescript.d.ts`. Time ratios move with the CPU model (the day before, an Intel
+  runner gave 14% to 32% less for a nearby commit); instruction counts do not.
+- Three days earlier, before the lexer and decision work of 2026-11-22, the same comparison had
+  oxc ahead on most inputs, with monogram at 1.42 times oxc's instructions on `checker.ts`.
 - Every pull request that touches the parser is measured against its merge base on every
   target: Rust and Go instruction counts (Callgrind), TypeScript and JavaScript block-execution
   counts, allocator calls and page faults. A change that moves one target only is listed as
@@ -252,6 +254,73 @@ targets, checker rules) are a consumer's job, not the parser's ([docs/CORRECTNES
 **The engine knows no language.** Keywords, the identifier token, template delimiters and the
 regex-versus-division decision are declared on the grammar's tokens. [`test/agnostic.ts`](test/agnostic.ts)
 runs a grammar with none of them; [`html.ts`](html.ts) is markup on the same engine.
+
+## What languages it fits
+
+Monogram's parsing model is **recursive descent with ordered choice**: a rule tries its
+alternatives, the longest match wins and declaration order breaks a tie, operators are parsed by
+precedence climbing, and a small set of declared mechanisms covers what plain alternatives cannot
+say (line-break sensitivity, regex versus division, template holes, element regions, a capped or
+re-bound operand). It is the model most hand-written parsers of the last twenty years use
+(`tsc`, Go, Rust, Swift, C#, `javac`; CPython's grammar has been a PEG since 3.9), so a language
+whose reference parser is written that way, and that can be parsed without knowing what its
+names mean, is expected to fit.
+
+**Honest status:** every mechanism so far was added for JavaScript and TypeScript. That the
+model carries over to an unrelated language is an expectation, not a measurement; Python is the
+second language being written to measure it (how many engine changes it needs, and which of them
+are general).
+
+What it handles today, and what it does not:
+
+| | status |
+|:--|:--|
+| JavaScript, TypeScript, JSX, TSX | shipped; checked against tsc, acorn and test262 ([Conformance](#conformance)) |
+| A template dialect with JSX-like elements over a host language | one grammar file ([A dialect with elements](#a-dialect-with-elements)) |
+| HTML (markup mode), YAML (indentation) | reference parser and highlighters; the portable TypeScript / Go / Rust parsers do not have these two mechanisms yet |
+| Parameterised productions (strict mode, module goal, `[Yield]`, `[Await]`, `[Return]`) | not yet: a grammar cannot say "this rule, in this context" |
+| Early errors and other static semantics | out of scope for the parser ([docs/CORRECTNESS.md](docs/CORRECTNESS.md)) |
+
+What the model **cannot** express, and a grammar file should not be expected to:
+
+- **Parsing that depends on what a name was declared as.** C's `T * x;` is a declaration or a
+  multiplication depending on an earlier `typedef`; C++ is the same problem at scale. This needs
+  a symbol table fed back into the parser.
+- **A grammar that changes while it is being read.** Operators whose precedence and
+  associativity are declared in the source (Haskell, Prolog, Agda), reader macros (Lisp), macro
+  systems that introduce syntax, TeX.
+- **Input rewritten before or during parsing.** The C preprocessor.
+- **Layout rules defined by parse errors.** Haskell's layout rule inserts a closing brace
+  "where the parse would otherwise fail". Plain indentation (Python, YAML) is a different,
+  finite mechanism and is in reach.
+- **Delimiters named by the text itself**, such as a here-document ending at an arbitrary
+  earlier identifier (shell, Ruby, Perl): not expressible today; it needs a "remember this
+  captured text" mechanism that does not exist.
+- **Languages that need every parse.** Ordered choice returns one tree. Where a language is
+  truly ambiguous until types are known, there is nothing to choose with.
+- **Perl**, whose parsing depends on running the program.
+
+Two properties of the model to know about, because they are costs rather than limits:
+
+- **Ordered choice hides ambiguity.** When two alternatives match the same text, the model
+  silently takes one. `--decisions` reports every such tie and every alternative that can never
+  win ([Adding a language](#adding-a-language)); a grammar is not finished while it has any.
+- **A committed choice is not revisited.** If an inner rule greedily takes a token an outer rule
+  needed, plain ordered choice fails where a general parser would succeed. Where a language
+  needs it (TypeScript's `T extends infer U extends X ? A : B`), the reference parser has a
+  declared, bounded retry, and the portable parsers are gaining the same one (see the known
+  disagreements under [What you get](#what-you-get)); the generated parsers' backtracking is
+  counted and gated ([Speed](#speed)).
+
+**The tree-sitter grammar is a rendering into a weaker model.** tree-sitter is GLR with static
+and dynamic precedence. It is exact where only one reading parses, and can prefer one reading
+where the two trees differ in their productions. Where two readings both parse and differ only
+in structure (TypeScript's `-a < c`, where `<` may open type arguments), no precedence can
+choose; the upstream tree-sitter grammar for TypeScript has the same class of case and trades
+it differently. So the generated tree-sitter grammar aims for: no ERROR on valid code, the
+reference parser's tree wherever the model allows it, and every remaining difference recorded
+with its reason ([docs/HIGHLIGHTER-EVIDENCE.md](docs/HIGHLIGHTER-EVIDENCE.md)). It is not
+equivalent to the reference parser and is not claimed to be.
 
 ## Adding a language
 

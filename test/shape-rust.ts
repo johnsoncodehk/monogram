@@ -4,7 +4,8 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { emitParser, rustTarget } from '../src/emit.ts';
+import { emitParser } from '../src/target.ts';
+import { rustTarget } from '../src/target-rust.ts';
 import { emitRust } from '../src/target-rust.ts';
 import { emitTs } from '../src/target-ts.ts';
 import {

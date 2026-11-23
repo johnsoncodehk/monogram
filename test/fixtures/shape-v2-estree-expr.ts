@@ -8,8 +8,10 @@
 // is unmapped, and a unit that reaches one is reported as outside the subset, not compared.
 import {
   absent, and, armOf, branch, c, child, cook, dropLastIf, fold, get, iff, inh, list, map, match, node, not, orElse, present, record,
-  spread, syn, text, thread, v, wrapIf, type Shape2Spec, type Term,
+  spread, syn, text, thread, v, wrapIf, type ShapeSpec, type Term,
 } from '../../src/shape2-schema.ts';
+import { defineShape } from '../../src/shape2-eval.ts';
+import javascript from '../../javascript.ts';
 
 /** An Identifier node from a named leaf (a property name, `new` / `target`). */
 const idOf = (leaf: string, name: Term = cook('identifierName', leaf)): Term => node('Identifier', { name }, { from: leaf, to: leaf });
@@ -100,7 +102,7 @@ const forStatement = (isAwait: boolean): Term => match(get('head', 'kind'), {
   in: node('ForInStatement', { left: get('head', 'left'), right: get('head', 'right'), body: child('body') }),
   of: node('ForOfStatement', { await: c(isAwait), left: get('head', 'left'), right: get('head', 'right'), body: child('body') }),
 });
-const FOR_RULES: Shape2Spec['rules'] = {
+const FOR_RULES: ShapeSpec['rules'] = {
   ForHead: {
     declaration: declarationHead(['classic', 'in_', 'of'], ['classic', 'of']),
     classic: head({ kind: c('for'), init: optSequence('initializer', 'initializerRest'), test: optSequence('condition', 'conditionRest'), update: optSequence('increment', 'incrementRest') }),
@@ -145,7 +147,7 @@ const literalKey = (leaf: string, value: Term, extra: Record<string, Term> = {})
 /** `[ E? (, E?)* ]`: whether the final element is a hole (absent): the first one when there is
  * no `,`, else the last iteration's. Both oracles drop that final hole (`[a,]` has one element). */
 export const finalHole = (first: string, over: string, rest: string): Term => fold(over, not(present(first)), 'h', not(present(rest)));
-const PATTERN_RULES: Shape2Spec['rules'] = {
+const PATTERN_RULES: ShapeSpec['rules'] = {
   BindingPattern: {
     object: node('ObjectPattern', { properties: child('property') }),
     array: node('ArrayPattern', { elements: dropLastIf(finalHole('element', 'comma', 'elementRest'), list(child('element'), spread(child('elementRest')))) }),
@@ -173,7 +175,7 @@ const PATTERN_RULES: Shape2Spec['rules'] = {
  * (RestElement). A decorator on a parameter is no ECMAScript (acorn rejects it), so it is not
  * read. */
 const bindingName: Term = target('name');
-const PARAM_RULES: Shape2Spec['rules'] = {
+const PARAM_RULES: ShapeSpec['rules'] = {
   Param: {
     plain: branch('binding', {
       single: iff(present('value'), node('AssignmentPattern', { left: bindingName, right: child('value') }), bindingName),
@@ -192,7 +194,7 @@ const PARAM_RULES: Shape2Spec['rules'] = {
 // (`[a + b] = c`) is the grammar's business, not the shape's.
 const inPattern = inh('pattern');
 /** A property key (MemberName): computed when it is `[ e ]`. */
-const KEY_RULES: Shape2Spec['rules'] = {
+const KEY_RULES: ShapeSpec['rules'] = {
   MemberName: {
     ident: idOf('ident'),
     privateField: privateOf('privateField'),
@@ -215,7 +217,7 @@ const methodFunction = (generator: boolean, isAsync: boolean): Term => node('Fun
   id: c(null), expression: c(false), generator: c(generator), async: c(isAsync), params: child('parameter'), body: blockOf('body'),
 }, { from: 'paren', to: 'body' });
 const spreadOrRest = (argument: string): Term => node(iff(inPattern, c('RestElement'), c('SpreadElement')), { argument: child(argument) });
-const PROP_RULES: Shape2Spec['rules'] = {
+const PROP_RULES: ShapeSpec['rules'] = {
   Prop: {
     spread: spreadOrRest('argument'),
     accessor: objectProperty(methodFunction(false, false), { kind: text('kind') }),
@@ -271,7 +273,7 @@ const classElement: Term = branch('member', {
     field: node('PropertyDefinition', { static: elementStatic, computed: computedKey, key: child('key'), value: orNull('value') }),
   }),
 });
-const CLASS_RULES: Shape2Spec['rules'] = {
+const CLASS_RULES: ShapeSpec['rules'] = {
   ClassMember: {
     empty: absent,
     staticBlock: node('StaticBlock', { body: get('body', 'body') }),
@@ -298,7 +300,7 @@ const moduleFields: Record<string, Term> = {
 };
 const namespaceSpecifier: Term = node('ImportNamespaceSpecifier', { local: idOf('namespace') }, { from: 'star', to: 'namespace' });
 /** An import clause is its specifier list (ImportDeclaration's `specifiers`). */
-const MODULE_RULES: Shape2Spec['rules'] = {
+const MODULE_RULES: ShapeSpec['rules'] = {
   ImportClause: {
     defaultBinding: list(
       node('ImportDefaultSpecifier', { local: idOf('name') }, { from: 'name', to: 'name' }),
@@ -390,7 +392,7 @@ const PRIMARY: Record<string, Term> = {
   regex: literal(c(null), { regex: record({ pattern: cook('regexPattern', 'regex'), flags: cook('regexFlags', 'regex') }) }),
 };
 
-export const estreeExprShape: Shape2Spec = {
+export const estreeExprShape = defineShape(javascript, {
   name: 'estree-expr',
   synthesized: {
     directive: { type: 'bool', default: false, rules: { Stmt: { expr: and(not(present('rest')), match(armOf('first'), { string: c(true) }, c(false))) } } },
@@ -531,4 +533,4 @@ export const estreeExprShape: Shape2Spec = {
       led_template: node('TaggedTemplateExpression', { tag: child('left'), quasi: templateLiteral('template') }),
     },
   },
-};
+});

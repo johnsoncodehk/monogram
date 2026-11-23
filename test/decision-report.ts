@@ -19,7 +19,8 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSy
 import { join, basename, resolve } from 'node:path';
 import { portableIR, type ParserIR } from '../src/emit-portable.ts';
 import { analyzeDecisions, renderDecisions, decisionReport, type DecisionFindings } from '../src/decision-report.ts';
-import { emitParser, tsTarget } from '../src/emit.ts';
+import { emitParser } from '../src/target.ts';
+import { tsTarget } from '../src/target-ts.ts';
 import { nameRule } from '../src/grammar-names.ts';
 import { engine, canon, type Tok } from './ir-engine.ts';
 import { scratchDir } from './scratch.ts';

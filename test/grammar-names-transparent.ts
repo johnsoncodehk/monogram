@@ -12,7 +12,11 @@
 //      `opNames`, a step's `field`, an inline alternation's `branchNames`, each the deriver's; with
 //      them dropped, the IR of a named grammar equals the unnamed one's.
 import { createHash } from 'node:crypto';
-import { emitParser, tsTarget, jsTarget, goTarget, rustTarget } from '../src/emit.ts';
+import { emitParser } from '../src/target.ts';
+import { jsTarget } from '../src/emit-parser.ts';
+import { tsTarget } from '../src/target-ts.ts';
+import { goTarget } from '../src/target-go.ts';
+import { rustTarget } from '../src/target-rust.ts';
 import { createParser } from '../src/gen-parser.ts';
 import { generateCstMatch } from '../src/gen-cst-match.ts';
 import { nameReport, nameRule } from '../src/grammar-names.ts';
