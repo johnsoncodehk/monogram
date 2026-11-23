@@ -847,8 +847,8 @@ function parseTopEntryW(kidStart: number): EntryMeta | null {
   const sp = pos, c = _n;
   lookReset();
   if (!parseTopOneW()) { back(sp); _n = c; return null; }
-  const s = c * _SW;
-  return { tokStart: _sp[s + 2]!, tokEnd: pos, ext: Math.max(pos, lookEnd()), off: _sp[s]!, end: _sp[s + 1]!, kidStart, kidCount: _count(c) };
+  const s = c * _SW, tokStart = _sp[s + 2]!;
+  return { tokStart, tokEnd: pos, ext: Math.max(pos, lookEnd()), off: _sp[s]!, end: _sp[s + 1]!, kidStart, kidCount: _count(c) };
 }
 function parse${r.name}W(): boolean {
   const save = pos, b = _n;
