@@ -5,7 +5,8 @@
 // file, or a `// @filename: x.tsx` part of a test) outside fourslash that contains a tag, which
 // tsc's parser (ScriptKind TSX), this tree's interpreter (typescriptreact.ts) AND oxc (source type
 // TSX) all accept, in path order, joined by `\n;\n` (an empty statement, so no part's last token
-// joins the next part's first by ASI); likewise for javascriptreact.ts (ScriptKind JSX, oxc JSX)
+// joins the next part's first by ASI), less any part that exports a name an earlier one exported (the
+// joined text is one module); likewise for javascriptreact.ts (ScriptKind JSX, oxc JSX)
 // every `.jsx` or `.tsx` part that is JavaScript (the `.jsx` parts alone are 2.4 KB; most of the
 // JSX tests are `.tsx` files written without type syntax). Writes <out>/jsx-corpus.tsx and
 // <out>/jsx-corpus.jsx and prints one line per input. The joined text is checked once more: an
@@ -74,6 +75,27 @@ const oxcVerdicts = (dir: string, ext: string, texts: string[]): (string | null)
   return res;
 };
 
+// The names a module part exports (tsc's AST): `default` for a default export, the bound names of
+// an exported declaration, the exported names of an export clause (`export * as ns` included).
+function exportedNames(sf: ts.SourceFile): string[] {
+  const out: string[] = [];
+  const bound = (n: ts.BindingName) => { if (ts.isIdentifier(n)) out.push(n.text); else for (const e of n.elements) if (!ts.isOmittedExpression(e)) bound(e.name); };
+  for (const st of sf.statements) {
+    if (ts.isExportAssignment(st)) { out.push('default'); continue; }
+    if (ts.isExportDeclaration(st)) {
+      if (st.exportClause && ts.isNamedExports(st.exportClause)) for (const e of st.exportClause.elements) out.push(e.name.text);
+      else if (st.exportClause) out.push(st.exportClause.name.text);
+      continue;
+    }
+    const mods = ts.canHaveModifiers(st) ? ts.getModifiers(st) ?? [] : [];
+    if (!mods.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) continue;
+    if (mods.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword)) { out.push('default'); continue; }
+    if (ts.isVariableStatement(st)) for (const d of st.declarationList.declarations) bound(d.name);
+    else if ('name' in st && st.name && ts.isIdentifier(st.name as ts.Node)) out.push((st.name as ts.Identifier).text);
+  }
+  return out;
+}
+
 let pinStale = false;
 for (const [ext, kind, gname, from] of [['.tsx', ts.ScriptKind.TSX, 'typescriptreact', ['.tsx']], ['.jsx', ts.ScriptKind.JSX, 'javascriptreact', ['.jsx', '.tsx']]] as const) {
   const { parse } = createParser((await import(`../../${gname}.ts`)).default);
@@ -92,7 +114,17 @@ for (const [ext, kind, gname, from] of [['.tsx', ts.ScriptKind.TSX, 'typescriptr
       for (const [k, why] of [...now].sort()) console.log(`    ${JSON.stringify(k)}: ${JSON.stringify(why)},`);
     }
   }
-  const all3 = both.filter((p) => !(p.key in pin));
+  // Joined, the parts are one module: a part that exports a name an earlier part exported (`export
+  // const a`, a second `export default`) is left out, or the joined text has a duplicated export,
+  // which oxc reports (as an early error of the module) where the parts alone pass.
+  const exported = new Set<string>();
+  let dupExports = 0;
+  const all3 = both.filter((p) => !(p.key in pin)).filter((p) => {
+    const names = exportedNames(ts.createSourceFile('t' + ext, p.src, ts.ScriptTarget.Latest, true, kind));
+    if (names.some((n) => exported.has(n))) { dupExports++; return false; }
+    for (const n of names) exported.add(n);
+    return true;
+  });
   const text = all3.map((p) => p.src).join('\n;\n');
   if (!ok(text)) throw new Error(`jsx-corpus${ext}: the joined parts are rejected by ${gname}.ts`);
   if (oxcCheck && !pinStale) {
@@ -100,6 +132,6 @@ for (const [ext, kind, gname, from] of [['.tsx', ts.ScriptKind.TSX, 'typescriptr
     if (why !== null) throw new Error(`jsx-corpus${ext}: the joined parts are rejected by oxc: ${why}`);
   }
   writeFileSync(`${out}/jsx-corpus${ext}`, text);
-  console.log(`jsx-corpus${ext}: ${all3.length} parts (of ${sel.length} with a tag; tsc accepts ${tscOk.length}, and the interpreter ${both.length}; oxc rejects ${Object.keys(pin).length} of those${oxcCheck ? ', checked' : ', pinned'}), ${Buffer.byteLength(text)} bytes`);
+  console.log(`jsx-corpus${ext}: ${all3.length} parts (of ${sel.length} with a tag; tsc accepts ${tscOk.length}, and the interpreter ${both.length}; oxc rejects ${Object.keys(pin).length} of those${oxcCheck ? ', checked' : ', pinned'}; ${dupExports} left out for an export an earlier part made), ${Buffer.byteLength(text)} bytes`);
 }
 if (pinStale) process.exit(1);
