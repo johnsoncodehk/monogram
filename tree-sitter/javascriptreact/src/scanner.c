@@ -1591,8 +1591,11 @@ static uint64_t zw_lit_tokens(int lit, int32_t c) {
     case 49:
       m |= (uint64_t)1 << 10;
       break;
-    case 102:
+    case 101:
       if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      break;
+    case 102:
+      m |= (uint64_t)1 << 10;
       break;
     case 103:
       m |= (uint64_t)1 << 10;
@@ -1600,10 +1603,7 @@ static uint64_t zw_lit_tokens(int lit, int32_t c) {
     case 104:
       m |= (uint64_t)1 << 10;
       break;
-    case 105:
-      m |= (uint64_t)1 << 10;
-      break;
-    case 107:
+    case 106:
       if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
       break;
   }
