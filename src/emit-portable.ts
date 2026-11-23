@@ -2363,9 +2363,12 @@ function buildPratt(
     ? [...a.opTable.entries()].filter(([, info]) => info.position === 'postfix').map(([op, info]) => ({ op, lbp: info.lbp, requireTarget: !!info.requireTarget }))
     : [];
   const ledForm = leds.map((l): AssignForm => a.binaryConnectors.has(l.first) ? FORM_NOT_TARGET : FORM_TARGET);
-  const endsInOperand = (steps: Step[]): boolean => { const l = steps[steps.length - 1]; return l !== undefined && (l.t === 'rule' || l.t === 'ruleBp') && l.name === name; };
+  const endsInOperand = (steps: Step[]): boolean => { const l = steps[steps.length - 1]; return l !== undefined && l.t === 'rule' && l.name === name; };
   const nudBracketClosesTail = nudBrackets.map((b) => endsInOperand(b.steps));
-  const nudSeqClosesTail = nudSeqs.map(endsInOperand);
+  // A capped prefix operator's arm (`op operand`, the operand a ruleBp step) closes the tail, as
+  // the prefix arm does.
+  const cappedSeqs = new Set(nudOrder.flatMap((a) => (a.kind === 'seq' && a.capBp !== undefined ? [a.index] : [])));
+  const nudSeqClosesTail = nudSeqs.map((st, i) => cappedSeqs.has(i) || endsInOperand(st));
   const ledClosesTail = leds.map((l, i) => { const last = l.steps[l.steps.length - 1]?.t; return !ledAccessTail[i] || last === 'look' || last === 'ahead' || last === 'aheadCtx'; });
   const capsFromTail = (steps: Step[]): boolean => nudCapped.length > 0 && endsInOperand(steps);
   const nudBracketCapsFromTail = nudBrackets.map((b) => capsFromTail(b.steps));
