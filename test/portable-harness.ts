@@ -47,7 +47,7 @@ import { parityInputs, type Tok } from './parity-corpus.ts';
 import { goBuild, scratchDir } from './scratch.ts';
 import type { CstGrammar } from '../src/types.ts';
 import { CASES, type Case } from './portable-cases.ts';
-import { CHECK_TARGETS } from './check-targets.ts';
+import { CHECK_TARGETS, QUICK } from './check-targets.ts';
 import { cachedEmit } from './emit-cache.ts';
 import { ROOT as ROOT_DIR } from './gate-deps.ts';
 import { buildAll, buildKey, GO_VERSION, RUSTC_PATH, RUSTC_VERSION, type Build } from './build-cache.ts';
@@ -448,7 +448,10 @@ export type Prepared = {
 
 // --grammars-except=a,b: every grammar but those (check.ts: the grammars no shard of a class names).
 const EXCEPT = process.argv.find((a) => a.startsWith('--grammars-except='))?.slice('--grammars-except='.length).split(',');
-export const selectedCases = (): Case[] => CASES.filter((c) => (!ONLY || ONLY.includes(c.grammar)) && !EXCEPT?.includes(c.grammar));
+// The QUICK tier's sample (CHECK_QUICK=1, `check.ts --quick`): two small grammars and one real one,
+// unless --grammars names others.
+export const QUICK_GRAMMARS = ['calc', 'templatejs', 'javascript'];
+export const selectedCases = (): Case[] => CASES.filter((c) => (ONLY ? ONLY.includes(c.grammar) : !QUICK || QUICK_GRAMMARS.includes(c.grammar)) && !EXCEPT?.includes(c.grammar));
 
 /**
  * Every selected grammar emitted for the three targets (with total parsing, RECOVERY) and its Go

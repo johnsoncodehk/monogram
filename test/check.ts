@@ -24,7 +24,9 @@ import { join } from 'node:path';
 // targets: the gate runs each emit target's checks apart, honouring CHECK_TARGETS=js,ts,go,rust
 // (a target's checks use no other target's code, except the TypeScript target as a reference, which
 // always runs): `--changed` narrows it to the targets whose code changed (test/gate-deps.ts).
-interface Gate { group: string; name: string; args: string[]; tier?: 'ci'; reads?: string[]; targets?: true; env?: Record<string, string> }
+// quick: the gate is in the QUICK tier (`--quick`): it runs whole (it costs about a second), or its
+// declared sample when it is given CHECK_QUICK=1 (test/check-targets.ts).
+interface Gate { group: string; name: string; args: string[]; tier?: 'ci'; reads?: string[]; targets?: true; quick?: true; env?: Record<string, string> }
 // The edits class's grammars in two shards of about equal time. Measured on CI (land/testinfra-batch-edit,
 // 45203634706, after the runners' batch-edit-session mode): the five former shards took 26.7 s
 // (typescriptreact), 31.4 (elementdialect, javascript, tagtokdialect), 30.2 (typescript,
@@ -136,11 +138,12 @@ const argv = process.argv.slice(2);
 //        check.ts --changed --commit=<rev> ...  the files <rev> changed (its diff from its parent)
 //                                               instead of the working tree's: how long the inner
 //                                               loop takes for a past commit
-const changedMode = argv.includes('--changed');
+const quickMode = argv.includes('--quick');
+const changedMode = argv.includes('--changed') || quickMode;
 const all = argv.includes('--all');
 const listOnly = argv.includes('--list');
 const commit = argv.find((a) => a.startsWith('--commit='))?.slice('--commit='.length);
-const rest = argv.filter((a) => a !== '--changed' && a !== '--all' && a !== '--list' && !a.startsWith('--commit='));
+const rest = argv.filter((a) => a !== '--changed' && a !== '--quick' && a !== '--all' && a !== '--list' && !a.startsWith('--commit='));
 let base = 'origin/master';
 if (changedMode && rest.length && !GATES.some((g) => (g.group + ' ' + g.name).includes(rest[0]!)) && !rest[0]!.startsWith('-')) base = rest.shift()!;
 const filter = rest[0];
@@ -148,7 +151,7 @@ let gates = filter ? GATES.filter((g) => (g.group + ' ' + g.name).includes(filte
 if (!gates.length) { console.error(`no gate matches "${filter}"`); process.exit(1); }
 
 if (changedMode) {
-  const { gateTargetDeps } = await import('./gate-deps.ts');
+  const { gateTargetDeps, gateDeps } = await import('./gate-deps.ts');
   const git = (...a: string[]) => execFileSync('git', a, { encoding: 'utf8' }).split('\n').filter(Boolean);
   const changed = new Set(commit ? git('diff', '--name-only', `${commit}^`, commit) : [
     ...git('diff', '--name-only', `${git('merge-base', base, 'HEAD')[0]}`),
@@ -158,12 +161,13 @@ if (changedMode) {
   const GLOBAL = ['test/check.ts', 'package.json', 'package-lock.json', 'tsconfig.json'];
   const global = GLOBAL.filter((f) => changed.has(f));
   console.log(`  --changed: ${changed.size} file(s) changed ${commit ? `by ${commit}` : `since ${base}`}${global.length ? ` (global: ${global.join(', ')})` : ''}`);
-  const run: Gate[] = [], skipped: string[] = [];
+  const run: Gate[] = [], skipped: string[] = [], notQuick: Gate[] = [];
   for (const g of gates) {
     const label = `${g.group}/${g.name}`;
     const script = g.args.find((a) => a.endsWith('.ts'))!;
     // a gate of the ci tier runs when its own script changed: the change is to that gate
     if (g.tier === 'ci' && !all && !changed.has(script)) { skipped.push(`${label.padEnd(36)} tier ci (runs in CI; --all runs it)`); continue; }
+    if (quickMode && !g.quick && !changed.has(script)) { notQuick.push(g); continue; }
     const { common, targets } = gateTargetDeps(script, g.reads);
     const size = common.size + [...targets.values()].reduce((n, t) => n + t.size, 0);
     if (global.length || [...changed].some((f) => common.has(f))) { run.push(g); continue; }
@@ -173,8 +177,11 @@ if (changedMode) {
     run.push(g.targets && hitTargets.length < targets.size ? { ...g, env: { CHECK_TARGETS: hitTargets.join(',') } } : g);
   }
   for (const s of skipped) console.log(`    · skip ${s}`);
-  gates = run;
-  if (listOnly) { for (const g of gates) console.log(`    → run  ${g.group}/${g.name}${g.env ? `  (CHECK_TARGETS=${g.env.CHECK_TARGETS})` : ''}`); console.log(`  ${gates.length} gate(s) to run, ${skipped.length} skipped`); process.exit(0); }
+  // the gates --changed would run that the quick tier leaves out: they run in `--changed` and CI
+  const affected = notQuick.filter((g) => [...changed].some((f) => gateDeps(g.args.find((a) => a.endsWith('.ts'))!, g.reads).has(f)) || global.length);
+  if (affected.length) console.log(`    · not in the quick tier (\`--changed\` and CI run them): ${affected.map((g) => `${g.group}/${g.name}`).join(', ')}`);
+  gates = quickMode ? run.map((g) => (g.quick ? { ...g, env: { ...g.env, CHECK_QUICK: '1' } } : g)) : run;
+  if (listOnly) { for (const g of gates) console.log(`    → run  ${g.group}/${g.name}${g.env ? `  (${Object.entries(g.env).map(([k, v]) => `${k}=${v}`).join(' ')})` : ''}`); console.log(`  ${gates.length} gate(s) to run, ${skipped.length} skipped`); process.exit(0); }
   if (!gates.length) { console.log('\n  no gate is affected by the change ✓'); process.exit(0); }
 }
 
@@ -217,7 +224,7 @@ async function worker(): Promise<void> {
     results.push(r);
     // CHECK_OUT_DIR (CI, uploaded as the job's `gate-output` artifact): every gate's whole output
     if (process.env.CHECK_OUT_DIR) { mkdirSync(process.env.CHECK_OUT_DIR, { recursive: true }); writeFileSync(join(process.env.CHECK_OUT_DIR, `${gate.group}-${gate.name}.txt`.replace(/[^A-Za-z0-9.-]/g, '_')), r.output); }
-    process.stdout.write(`    ${r.ok ? '✓' : '✗'} ${(r.gate.group + '/' + r.gate.name + (r.gate.env ? ` [${r.gate.env.CHECK_TARGETS}]` : '')).padEnd(34)} ${String(r.ms).padStart(6)}ms  ${r.ok ? r.summary : ''}\n`);
+    process.stdout.write(`    ${r.ok ? '✓' : '✗'} ${(r.gate.group + '/' + r.gate.name + (r.gate.env?.CHECK_TARGETS ? ` [${r.gate.env.CHECK_TARGETS}]` : '') + (r.gate.env?.CHECK_QUICK ? ' [quick]' : '')).padEnd(34)} ${String(r.ms).padStart(6)}ms  ${r.ok ? r.summary : ''}\n`);
   }
 }
 await Promise.all(Array.from({ length: Math.min(POOL, gates.length) }, worker));
