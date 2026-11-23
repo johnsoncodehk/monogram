@@ -192,6 +192,12 @@ function run(gate: Gate): Promise<Result> {
 
 // CI runs a gate per core (a GitHub runner: 4 cores, 16 GB); a developer box keeps two cores free.
 const POOL = process.env.CI ? cpus().length : Math.max(2, cpus().length - 2);
+// Shared prerequisites are brought in HERE, serially, before any gate runs: a gate never fetches
+// into the clone while another gate may be doing the same (test/corpus-pin.ts).
+{
+  const { fetchCorpusCommit } = await import('./corpus-pin.ts');
+  fetchCorpusCommit();
+}
 const results: Result[] = [];
 let next = 0;
 // The 'ci' tier holds the long gates: they start first, so the slowest one is not the last to begin.
