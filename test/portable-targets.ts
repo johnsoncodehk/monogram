@@ -60,6 +60,20 @@ const CAP_PROPAGATION = {
   accept: ['x = (() => {}) || a;', 'x = f(() => {}) || a;', 'x = a || f(() => {}) || c;', 'x = [() => {}] || a;', 'x = a ? () => {} : b || c;', 'x = () => {}, y;'],
   reject: ['x = () => {} || a;', 'x = y => {} || a;', 'x = async () => {} || a;', 'x = () => {} ? a : b;', 'b = a = () => {} || c;'],
 };
+// The mixfix operand re-bind (the interpreter's matchMixfixLed, PrattRule.ledRebind): a led
+// `<L1> $ <L2> …` whose greedy operand took the L2 it needs is retried with the operand capped at
+// each depth-0 L2 inside it. TypeScript: an `infer` constraint takes the conditional's `?`
+// (`infer U extends string ? U : never`, TS 4.7), a parenthesized arrow with a return type takes the
+// ternary's `:` (`b ? (c) : d => e`), a postfix `T?` takes the conditional's `?` before a word that
+// begins no type (`? if :`). The rejects miss the rest after the re-bound operand.
+const REBIND = {
+  ts: {
+    accept: ['type X<T> = T extends infer U extends string ? U : never;', 'type X<T> = T extends (infer U extends number ? 1 : 0) ? U : never;',
+      'type C<T> = T extends number ? if : "o";', 'type C<T> = T extends number[] ? if : "o";', 'let v = b ? (c) : d => e;', 'let v = a ? (b) => (c): d => e;',
+      'let v = x ? y => ({ y }) : z => ({ z });', 'let v = a ? b ? c : (d) : e => f;', 'let v = a ? (b) : c => (d) : e => f;'],
+    reject: ['type X<T> = T extends infer U extends string ? U;', 'type X<T> = T extends infer U extends string ? : never;', 'let v = b ? (c) : d =>;'],
+  },
+};
 const NO_IN_HEADS = {
   accept: [
     'for (var a = (b in c) in d);', 'for (a = (b in c) in d);', 'for (x = (y = (a in b)) in c);',
@@ -713,7 +727,7 @@ const CASES: Case[] = [
     // agnostic emitter (types, generics, interfaces, enums, assertions, variance). ASCII.
     grammar: 'typescript', path: '../typescript.ts',
     accept: [
-      ...CAP_PROPAGATION.accept, ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...CALL_ARGS.accept, ...EXPORT_DECLS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
+      ...CAP_PROPAGATION.accept, ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...CALL_ARGS.accept, ...EXPORT_DECLS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);', ...REBIND.ts.accept,
       'export default /re/.test(x);', 'export default /=/;', 'switch (a) { default: /re/.test(x); }',
       // ... but as a member name a keyword is a value and a `/` after it divides, as after a private name
       // after a template's tail a `/` divides, as after a template with no substitution
@@ -904,7 +918,7 @@ const CASES: Case[] = [
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
       'type T = | | A;', 'type T = A | | B;', 'type T = A & | B;', 'type T = & & A;', 'type T = & | A;', 'f<| | A>();', 'let x: [| | A];',
-      'const f = <>() => 1;', 'const f = async <>(a) => 1;', 'const f = <in T>() => 1;', 'f(<in out T>(a) => a);', ...CAP_PROPAGATION.reject, ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...CALL_ARGS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, ...TS_DECORATORS.reject, ...TEMPLATE_STEPS.ts.reject, ...TS_MEMBER_DECORATORS.reject, ...TS_MODULES.reject, ...TRY_STATEMENTS.reject, ...TS_TRY.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
+      'const f = <>() => 1;', 'const f = async <>(a) => 1;', 'const f = <in T>() => 1;', 'f(<in out T>(a) => a);', ...REBIND.ts.reject, ...CAP_PROPAGATION.reject, ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...CALL_ARGS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, ...TS_DECORATORS.reject, ...TEMPLATE_STEPS.ts.reject, ...TS_MEMBER_DECORATORS.reject, ...TS_MODULES.reject, ...TRY_STATEMENTS.reject, ...TS_TRY.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '{ b(); }.x;', '{ static x }.y;', '{ static x }', '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;',
       'let[0] = 1;', '(async\nfunction f() {});',
@@ -1879,11 +1893,7 @@ const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5441, type
 // parseTotal alike) is not the oracle's. Not total parsing's property (parseTotal's verdict is its
 // own parse()'s, checked below); found by the mutation corpus, each owed as its own fix. When one
 // agrees again the gate fails until it is removed.
-const RECOVERY_VERDICT_EXPECTED_FAIL: Record<string, string[]> = {
-  // The interpreter accepts the reserved word `if` as a type (a TypeReference), the portable
-  // parsers refuse it: `T extends number ? if : "o"`.
-  typescript: ['type Cond<T> = T extends string ? "s" : T extends number ? if : "o";'],
-};
+const RECOVERY_VERDICT_EXPECTED_FAIL: Record<string, string[]> = {};
 const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // The UTF-16 offset of each UTF-8 byte offset of src that starts a character.
 function utf16Of(src: string): (b: number) => number {
@@ -1995,15 +2005,11 @@ const WIDE_ONLY = process.argv.includes('--wide');
 const WIDE_RECORD = new URL('./portable-wide-record.txt', import.meta.url).pathname;
 const WIDE_WRITE = WIDE_ONLY && process.argv.includes('--write');
 const WIDE_CAUSES: Record<string, string> = {
-  'mixfix-rebind': 'the interpreter\'s mixfix operand re-bind (gen-parser.ts matchMixfixLed: a failed `<L1> $ <L2> …` led retries its operand capped at each depth-0 L2 inside it) has no counterpart in the portable engine',
   'private-name-unicode': 'a private name with a non-ASCII character (`#℘`, `#ZW_\\u200C_NJ` with the ZWNJ itself): the interpreter\'s lexer takes it as one PrivateField (its Unicode fallback knows the `#` prefix), the portable lexers stop at the `#` (`#\\u2118`, the escape, lexes in both)',
   'hashbang-not-first': 'a `#!` after the start of the text: the interpreter\'s lexer takes it as a Shebang comment, the portable lexers do not (a HashbangComment begins the source text only, so the portable verdict is the spec\'s)',
 };
-const REBIND_FILES = new Set(['types/conditional/inferTypesWithExtends1.ts', 'types/conditional/inferTypesInvalidExtendsDeclaration.ts',
-  ...[8, 9, 10, 11, 12].map((n) => `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression${n}.ts`)]);
 // The cause of one disagreement, from what the file is ('unknown' when no class explains it).
 function wideCause(grammar: string, file: string, src: string): string {
-  if (grammar === 'typescript' && REBIND_FILES.has(file)) return 'mixfix-rebind';
   if (/#[^\x00-\x7f]/.test(src)) return 'private-name-unicode';
   if (src.indexOf('#!', 1) > 0) return 'hashbang-not-first';
   return 'unknown';
