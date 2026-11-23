@@ -409,16 +409,19 @@ const Prop = rule($ => {
 // built from them. A rule binds the rules it names when it is defined, so each grammar builds
 // its own rule from these arms with its own `Expr` (and passes the forms its type layer adds).
 //
-// Heritage: `extends` takes a LeftHandSideExpression, not an operator expression. Its forms:
-// a literal or a non-reserved identifier (a literal base parses; rejecting it is a checker's
-// job), a parenthesised expression, a class expression (`classExpression`, which carries the
-// grammar's own class body), and the member, optional-chain, call and tagged-template tails.
-// The identifier is reserved-guarded as the expression NUD is (`extends if {}` has no base).
-// Literals come first so a tie keeps their leaf scope.
-export const classHeritageArms = ($, Expr, classExpression, typeArgs = []) => [
-  Number_, String_, 'true', 'false', 'null', 'undefined',
-  [notReservedExpr, Ident],
-  ['(', Expr, many(',', Expr), ')'],
+// Heritage: `extends` takes a LeftHandSideExpression (15.7 `ClassHeritage : extends
+// LeftHandSideExpression`), not an operator expression: a NewExpression or a CallExpression or an
+// OptionalExpression. A NewExpression is a MemberExpression or `new NewExpression`, which is the
+// grammar's `new` callee rule (`NewTarget`: every primary expression but a class expression,
+// `super.x`, `new.target`, `import.meta`, the member and tagged-template forms, and `new` with or
+// without Arguments: `extends function(){}`, `extends new B`, `extends [].x`, `extends {}`); a
+// class expression (`classExpression`, which carries the grammar's own class body) is the rule's
+// own arm, as it is the expression rule's. After it come the call tail and, past a call, the
+// member, optional-chain and tagged-template tails (`extends f().x`, `extends a?.b`). A literal
+// base parses; rejecting it is a checker's job. An arrow, a conditional or a binary operator
+// is no LeftHandSideExpression (`extends a ? b : c {}` has no parse).
+export const classHeritageArms = ($, Expr, NewTarget, classExpression, typeArgs = []) => [
+  NewTarget,
   classExpression,
   [$, '.', alt(Ident, PrivateField)],
   [$, '?.', alt(Ident, PrivateField, ['(', sep(Expr, ','), ')'], ['[', Expr, ']'], Template)],
@@ -465,7 +468,7 @@ export const newTargetArms = ($, Expr, newArgs, { identGuard, Prop, fnExprArms, 
   ['(', field('first', Expr), many(field('comma', ','), field('rest', Expr)), ')'],
 ];
 
-const ClassHeritage = rule($ => classHeritageArms($, Expr,
+const ClassHeritage = rule($ => classHeritageArms($, Expr, NewTarget,
   ['class', opt(...bindingIdentifier), opt('extends', $), '{', many(ClassMember), '}']));
 
 const NewTarget = rule($ => newTargetArms($, Expr, opt('(', sep(Expr, ','), ')'),
@@ -553,8 +556,8 @@ const Expr = rule($ => [
   // named vs anonymous kept separate (greedy opt(Ident) would eat a leading
   // `extends`). A ClassExpression takes a DecoratorList, as a ClassDeclaration does: any number
   // of decorators (`x = @a @b class {}`).
-  [many(DecoratorExpr), 'class', ...bindingIdentifier, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
-  [many(DecoratorExpr), 'class', many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
+  [many(DecoratorExpr), 'class', ...bindingIdentifier, opt('extends', ClassHeritage), '{', many(ClassMember), '}'],
+  [many(DecoratorExpr), 'class', opt('extends', ClassHeritage), '{', many(ClassMember), '}'],
 ]);
 
 // ── Statements ──
@@ -786,7 +789,7 @@ const ImportClause = rule($ => [
 // A class declaration from its `class` keyword on. Decl writes it once bare and once after a
 // declaration's decorators (below); gen-tm expands it to recover the `class Ident … { … }` shape
 // for highlighting.
-const classDecl = ['class', ...bindingIdentifier, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'];
+const classDecl = ['class', ...bindingIdentifier, opt('extends', ClassHeritage), '{', many(ClassMember), '}'];
 const Decl = rule($ => [
   // Function declarations live here (not in Stmt) so that at statement level a
   // leading `function` is preferred as a declaration over an IIFE expression-
@@ -811,8 +814,8 @@ const Decl = rule($ => [
   // the inline alt is ordered, so their arms come first), so `export default class {} g()` is two.
   ['export', 'default', alt(
     ...fnArms([opt(...bindingName)], Block),  // function
-    [many(DecoratorExpr), 'class', ...bindingIdentifier, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],  // named class
-    [many(DecoratorExpr), 'class', many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],                          // anonymous class
+    [many(DecoratorExpr), 'class', ...bindingIdentifier, opt('extends', ClassHeritage), '{', many(ClassMember), '}'],  // named class
+    [many(DecoratorExpr), 'class', opt('extends', ClassHeritage), '{', many(ClassMember), '}'],                          // anonymous class
     [Expr, asi()],   // catch-all: export default <expr>
   )],
   ['export', '*', alt(['from', ...moduleSpecifier], ['as', alt(Ident, String_), 'from', ...moduleSpecifier]), asi()],   // the alias is a ModuleExportName
@@ -963,6 +966,10 @@ export default defineGrammar({
     // keeps a statement from starting with `{` is a lookahead tree-sitter drops); with the statement's
     // end a token of its own (the line-end token), both readings meet at `a` before `}`.
     ['prop', 'export_specifier'],
+    // A heritage's member tail after its NewTarget base (`extends a.b {}`): NewTarget's own `.b`, or
+    // the heritage's `.b` on the base `a`; the interpreter's NewTarget takes it (longest match), and
+    // the heritage's tails are for a call's or class expression's result (`extends f().b`).
+    ['new_target', 'class_heritage'],
   ],
 
   rules: {

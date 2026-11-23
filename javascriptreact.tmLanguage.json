@@ -708,7 +708,7 @@
     },
     "regex-literal-prefix-ops": {
       "name": "string.regexp.js.jsx",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~(,.\\[?:{;])|(?<=\\binstanceof)(?<!\\.instanceof|\\?\\.instanceof)|(?<=\\bin)(?<!\\.in|\\?\\.in)|(?<=\\bnew)(?<!\\.new|\\?\\.new)|(?<=\\byield)(?<!\\.yield|\\?\\.yield)|(?<=\\belse)(?<!\\.else|\\?\\.else)|(?<=\\bdo)(?<!\\.do|\\?\\.do)|(?<=\\breturn)(?<!\\.return|\\?\\.return)|(?<=\\bthrow)(?<!\\.throw|\\?\\.throw)|(?<=\\bof)(?<!\\.of|\\?\\.of)|(?<=\\bcase)(?<!\\.case|\\?\\.case)|(?<=\\bexport)(?<!\\.export|\\?\\.export)|(?<=\\bdefault)(?<!\\.default|\\?\\.default)|(?<=\\btypeof)(?<!\\.typeof|\\?\\.typeof)|(?<=\\bvoid)(?<!\\.void|\\?\\.void)|(?<=\\bdelete)(?<!\\.delete|\\?\\.delete)|(?<=\\bawait)(?<!\\.await|\\?\\.await)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~(,.\\[?:{;])|(?<=\\binstanceof)(?<!\\.instanceof|\\?\\.instanceof)|(?<=\\bin)(?<!\\.in|\\?\\.in)|(?<=\\bnew)(?<!\\.new|\\?\\.new)|(?<=\\bextends)(?<!\\.extends|\\?\\.extends)|(?<=\\byield)(?<!\\.yield|\\?\\.yield)|(?<=\\belse)(?<!\\.else|\\?\\.else)|(?<=\\bdo)(?<!\\.do|\\?\\.do)|(?<=\\breturn)(?<!\\.return|\\?\\.return)|(?<=\\bthrow)(?<!\\.throw|\\?\\.throw)|(?<=\\bof)(?<!\\.of|\\?\\.of)|(?<=\\bcase)(?<!\\.case|\\?\\.case)|(?<=\\bexport)(?<!\\.export|\\?\\.export)|(?<=\\bdefault)(?<!\\.default|\\?\\.default)|(?<=\\btypeof)(?<!\\.typeof|\\?\\.typeof)|(?<=\\bvoid)(?<!\\.void|\\?\\.void)|(?<=\\bdelete)(?<!\\.delete|\\?\\.delete)|(?<=\\bawait)(?<!\\.await|\\?\\.await)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.logical.prefix.js.jsx"
@@ -2665,7 +2665,7 @@
     },
     "regex": {
       "name": "string.regexp.js.jsx",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~(,.\\[?:{;])|(?<=\\binstanceof)(?<!\\.instanceof|\\?\\.instanceof)|(?<=\\bin)(?<!\\.in|\\?\\.in)|(?<=\\bnew)(?<!\\.new|\\?\\.new)|(?<=\\byield)(?<!\\.yield|\\?\\.yield)|(?<=\\belse)(?<!\\.else|\\?\\.else)|(?<=\\bdo)(?<!\\.do|\\?\\.do)|(?<=\\breturn)(?<!\\.return|\\?\\.return)|(?<=\\bthrow)(?<!\\.throw|\\?\\.throw)|(?<=\\bof)(?<!\\.of|\\?\\.of)|(?<=\\bcase)(?<!\\.case|\\?\\.case)|(?<=\\bexport)(?<!\\.export|\\?\\.export)|(?<=\\bdefault)(?<!\\.default|\\?\\.default)|(?<=\\btypeof)(?<!\\.typeof|\\?\\.typeof)|(?<=\\bvoid)(?<!\\.void|\\?\\.void)|(?<=\\bdelete)(?<!\\.delete|\\?\\.delete)|(?<=\\bawait)(?<!\\.await|\\?\\.await)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~(,.\\[?:{;])|(?<=\\binstanceof)(?<!\\.instanceof|\\?\\.instanceof)|(?<=\\bin)(?<!\\.in|\\?\\.in)|(?<=\\bnew)(?<!\\.new|\\?\\.new)|(?<=\\bextends)(?<!\\.extends|\\?\\.extends)|(?<=\\byield)(?<!\\.yield|\\?\\.yield)|(?<=\\belse)(?<!\\.else|\\?\\.else)|(?<=\\bdo)(?<!\\.do|\\?\\.do)|(?<=\\breturn)(?<!\\.return|\\?\\.return)|(?<=\\bthrow)(?<!\\.throw|\\?\\.throw)|(?<=\\bof)(?<!\\.of|\\?\\.of)|(?<=\\bcase)(?<!\\.case|\\?\\.case)|(?<=\\bexport)(?<!\\.export|\\?\\.export)|(?<=\\bdefault)(?<!\\.default|\\?\\.default)|(?<=\\btypeof)(?<!\\.typeof|\\?\\.typeof)|(?<=\\bvoid)(?<!\\.void|\\?\\.void)|(?<=\\bdelete)(?<!\\.delete|\\?\\.delete)|(?<=\\bawait)(?<!\\.await|\\?\\.await)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "comment.block.js.jsx"
