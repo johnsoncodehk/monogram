@@ -728,6 +728,9 @@ function elementPlanOf(grammar: CstGrammar, el: NonNullable<CstGrammar['elements
 // Whether a text token of the region is a skip token (the frame step then returns EL_SKIP for it:
 // the printers skip its span, recording a line terminator in it).
 export const elementSkipsText = (ir: ParserIR): boolean => !!ir.elements?.textTokens.some((t) => ir.tokens.find((x) => x.name === t.token)?.skip);
+// The kinds of a template literal that end at its closing delimiter: the whole literal and its
+// tail (none without templates).
+export const tplEndKids = (ir: ParserIR, ids: LexIdPlan): number[] => (ir.tpl ? [kidOf(ids, ir.tpl.token), kidOf(ids, '$templateTail')] : []);
 // The kinds of an element region's own tokens. They carry no literal id (0), whatever their text:
 // the parser matches a literal by its id alone, and a region token is never a literal (the
 // interpreter's lexer records 0 for them too). A Doc that rebuilds ids from text tests this class.
