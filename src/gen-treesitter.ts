@@ -221,9 +221,9 @@ interface GrammarJsContext {
   /** While one Pratt arm renders (renderGreedySuffix): the parts that carry dynamic precedence, each
    *  its own weight (renderWeighted adds the weights of nested parts up). */
   dynamicPrecedence?: Map<RuleExpr, number>;
-  /** The production being rendered: the sum of the dynamic precedence wrappers above the current
-   *  part, and the largest magnitude among them (renderWeighted). */
-  dynamicPath: { sum: number; maxAbs: number };
+  /** The weight of the parts above the one being rendered in the same production, written at the
+   *  deepest part that decides between productions (renderWeighted). */
+  carry: number;
   /**
    * The negative lookaheads (`not(X)`, a positive one `not(not(Y))` included) the rendering drops
    * (their class is neither exact nor rendered): there tree-sitter also reads the alternative where
@@ -716,31 +716,57 @@ function droppedLookaheadWeight(alt: RuleExpr, ctx: GrammarJsContext): number {
   return widensByDroppedLookahead(alt, ctx) ? DROPPED_LOOKAHEAD_WEIGHT : 0;
 }
 
-/**
- * `expr` rendered with `extra` dynamic precedence of its own (a dropped lookahead's weight) besides
- * the weight renderGreedySuffix gives its parts. tree-sitter gives a production ONE dynamic
- * precedence: of the `prec.dynamic` wrappers on its path, the one of the largest magnitude (the first
- * on a tie); a tree's is the sum over its nodes. So the weights of one production's nested parts are
- * written cumulatively (each wrapper says the sum from the production's root down to it), and a part
- * whose sum does not exceed in magnitude every wrapper above it would be lost: that fails loudly. A
- * repetition's body is a production of its own (an auxiliary rule): its sums start again at 0.
- */
-function renderWeighted(expr: RuleExpr, ctx: GrammarJsContext, extra: number, wordGuard?: WordGuard): string {
-  const own = extra + (ctx.dynamicPrecedence?.get(expr) ?? 0);
-  if (own === 0) return renderPlain(expr, ctx, wordGuard);
-  const outer = ctx.dynamicPath;
-  const sum = outer.sum + own;
-  if (Math.abs(sum) <= outer.maxAbs) throw new Error(`gen-treesitter: a part's dynamic precedence ${own} inside a production already weighted ${outer.sum} (largest ${outer.maxAbs}) adds up to ${sum}, which tree-sitter's one-weight-per-production would lose`);
-  ctx.dynamicPath = { sum, maxAbs: Math.abs(sum) };
-  try { return `prec.dynamic(${sum}, ${renderPlain(expr, ctx, wordGuard)})`; } finally { ctx.dynamicPath = outer; }
+/** The weight a part carries itself: a dropped lookahead's, as an alternative of a choice, and the
+ *  one renderGreedySuffix gives it. */
+function ownWeight(e: RuleExpr, ctx: GrammarJsContext, asAlternative: boolean): number {
+  return (asAlternative ? droppedLookaheadWeight(e, ctx) : 0) + (ctx.dynamicPrecedence?.get(e) ?? 0);
 }
 
-/** A repetition's body: a production of its own, so the weights of its parts start again at 0. */
-function renderOwnProduction(expr: RuleExpr, ctx: GrammarJsContext): string {
-  const outer = ctx.dynamicPath;
-  ctx.dynamicPath = { sum: 0, maxAbs: 0 };
-  try { return renderExpr(expr, ctx); } finally { ctx.dynamicPath = outer; }
+/** Whether a part below `e` in the same production carries a weight (a repetition's body is another
+ *  production: an auxiliary rule; so is a named tsRelax group, a rule of its own). */
+function weightedBelow(e: RuleExpr, ctx: GrammarJsContext): boolean {
+  const weighted = (x: RuleExpr, asAlternative: boolean) => ownWeight(x, ctx, asAlternative) !== 0 || weightedBelow(x, ctx);
+  switch (e.type) {
+    case 'group': return !e.tsRuleName && weighted(e.tsRelaxed ?? e.body, false);
+    case 'seq': { const low = lowerNotBeforeOptional(e); return low ? weighted(low, false) : e.items.some(i => weighted(i, false)); }
+    case 'alt': { const asAlternative = !ctx.zeroWidth.tokenOf.has(e); return e.items.some(i => weighted(i, asAlternative)); }
+    case 'quantifier': return e.kind === '?' && weighted(e.body, false);
+    case 'sep': return weighted(e.element, false);
+    default: return false;
+  }
 }
+
+/**
+ * `expr` rendered with `extra` weight of its own (a dropped lookahead's) besides the one
+ * renderGreedySuffix gives it, `ctx.carry` being the weight of the parts above it in the same
+ * production. tree-sitter gives a production ONE dynamic precedence: of the `prec.dynamic` wrappers
+ * on its path, the one of the largest magnitude; a tree's is the sum over its nodes. So nested
+ * weights do not add up by nesting wrappers: the sum is carried down to the deepest part that still
+ * decides between productions (every alternative of a weighted choice, the empty side of an optional
+ * too) and written there once. A sequence with two weighted parts (their sums multiply out into
+ * productions no single wrapper describes) fails loudly.
+ */
+function renderWeighted(expr: RuleExpr, ctx: GrammarJsContext, extra: number, wordGuard?: WordGuard): string {
+  const outer = ctx.carry;
+  const sum = outer + extra + (ctx.dynamicPrecedence?.get(expr) ?? 0);
+  const below = weightedBelow(expr, ctx);
+  ctx.carry = below ? sum : 0;
+  try {
+    const out = renderPlain(expr, ctx, wordGuard);
+    return !below && sum !== 0 ? `prec.dynamic(${sum}, ${out})` : out;
+  } finally { ctx.carry = outer; }
+}
+
+/** `expr` with no weight carried into it: a repetition's body (its own production), or a part of a
+ *  sequence beside the one weighted part. */
+function renderUncarried(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuard): string {
+  const outer = ctx.carry;
+  ctx.carry = 0;
+  try { return renderExpr(expr, ctx, wordGuard); } finally { ctx.carry = outer; }
+}
+
+/** The empty side of an optional part, carrying the production's weight when one is carried. */
+const carriedBlank = (ctx: GrammarJsContext) => ctx.carry !== 0 ? `prec.dynamic(${ctx.carry}, blank())` : null;
 
 function renderPlain(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuard): string {
   switch (expr.type) {
@@ -797,12 +823,16 @@ function renderPlain(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuar
         const words = reservedGuardWords(item, expr.items[j], ctx.reserved.word, ctx.reserved.isWordLiteral);
         if (words) setAt.set(j, { set: ctx.reserved.plan.nameOf(words), words });
       });
+      // The weight carried into the sequence goes to its one weighted part (renderWeighted).
+      const weighted = expr.items.filter(i => ownWeight(i, ctx, false) !== 0 || weightedBelow(i, ctx));
+      if (weighted.length > 1) throw new Error(`gen-treesitter: a sequence with ${weighted.length} parts of their own dynamic precedence (their sums would need one production each)`);
       const parts = expr.items.map((item, i) => {
         const set = setAt.get(i);
-        if (set === undefined) return renderExpr(item, ctx);
+        const render = item === weighted[0] ? renderExpr : renderUncarried;
+        if (set === undefined) return render(item, ctx);
         const v = tsView(item);
         if (v !== item && item.type === 'group' && item.tsRuleName) throw new Error('gen-treesitter: a reserved-word guard before a named tsRelax group');
-        return renderExpr(v, ctx, set);
+        return render(v, ctx, set);
       }).filter(p => p !== 'blank()');
       if (parts.length === 0) return 'blank()';
       if (parts.length === 1) return parts[0];
@@ -812,13 +842,14 @@ function renderPlain(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuar
       // A line-end alternative: its arms that consume nothing are its zero-width token (planZeroWidth).
       const zw = ctx.zeroWidth.tokenOf.get(expr);
       const parts = zw
-        ? [...expr.items.filter(i => { const v = tsView(i); return !(v.type === 'seq' ? v.items : [v]).every(x => ASSERTION_KINDS.has(tsView(x).type)); }).map(i => renderExpr(i, ctx)), `$.${zw.snake}`]
+        ? [...expr.items.filter(i => { const v = tsView(i); return !(v.type === 'seq' ? v.items : [v]).every(x => ASSERTION_KINDS.has(tsView(x).type)); }).map(i => renderExpr(i, ctx)), ctx.carry !== 0 ? `prec.dynamic(${ctx.carry}, $.${zw.snake})` : `$.${zw.snake}`]
         : expr.items.map(i => renderWeighted(i, ctx, droppedLookaheadWeight(i, ctx)));
       return `choice(${parts.join(', ')})`;
     }
     case 'quantifier': {
-      const body = expr.kind === '?' ? renderExpr(expr.body, ctx) : renderOwnProduction(expr.body, ctx);
-      if (expr.kind === '?') return `optional(${body})`;
+      const body = expr.kind === '?' ? renderExpr(expr.body, ctx) : renderUncarried(expr.body, ctx);
+      const empty = carriedBlank(ctx);
+      if (expr.kind === '?') return empty ? `choice(${body}, ${empty})` : `optional(${body})`;
       if (expr.kind === '*') return `repeat(${body})`;
       return `repeat1(${body})`;
     }
@@ -856,7 +887,9 @@ function renderPlain(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuar
       // The repeated element is the repetition's production, so its weights start again at 0.
       const elem = renderExpr(expr.element, ctx);
       const delim = ruleLiteral(expr.delimiter, ctx);
-      return `optional(seq(${elem}, repeat(seq(${delim}, ${renderOwnProduction(expr.element, ctx)})), optional(${delim})))`;
+      const list = `seq(${elem}, repeat(seq(${delim}, ${renderUncarried(expr.element, ctx)})), optional(${delim}))`;
+      const empty = carriedBlank(ctx);
+      return empty ? `choice(${list}, ${empty})` : `optional(${list})`;
     }
     case 'op':
     case 'prefix':
@@ -988,19 +1021,19 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
   const isContinuation = (ab: string) => ab.startsWith(`seq($.${selfSnake}`) || ab === `$.${selfSnake}` || ab.startsWith(`seq(alias($.${selfSnake}, `);
   const order = overlapOrder(rule, atomAlts, atomBranches.map(isContinuation), ctx);
   for (const [i, plain] of atomBranches.entries()) {
-    // The branch's own dynamic precedence: overlapOrder's where it decided one (against the competing
-    // reading of the same tokens), else a dropped lookahead's weight. The parts below add to it.
-    const weight = order.dynamic.get(i) ?? droppedLookaheadWeight(atomAlts[i], ctx);
-    const outer = ctx.dynamicPath;
-    if (weight !== 0) ctx.dynamicPath = { sum: weight, maxAbs: Math.abs(weight) };
-    try {
-    const ab = weight !== 0 ? renderExpr(atomAlts[i], ctx) : plain;
+    const alt = atomAlts[i];
+    // The branch's own weight: overlapOrder's where it decided one (against the competing reading of
+    // the same tokens), else a dropped lookahead's. Where a part of the branch carries a weight too,
+    // the branch's is carried down into it (renderWeighted) instead of wrapping the branch.
+    const weight = order.dynamic.get(i) ?? droppedLookaheadWeight(alt, ctx);
+    const carried = (render: () => string) => { const outer = ctx.carry; ctx.carry = weight; try { return render(); } finally { ctx.carry = outer; } };
     if (isContinuation(plain)) {
-      const alt = atomAlts[i];
+      const below = weightedBelow(alt, ctx);
+      const ab = below ? carried(() => renderExpr(alt, ctx)) : plain;
       const connector = alt.type === 'seq' ? alt.items.slice(1).find(x => !ASSERTION_KINDS.has(x.type)) : undefined;
       const led = connector?.type === 'literal' ? bp.ledPrecByConnector.get(connector.value) : undefined;
       const num = led?.lbp ?? high;
-      const dyn = (b: string) => weight !== 0 ? `prec.dynamic(${weight}, ${b})` : b;
+      const dyn = (b: string) => !below && weight !== 0 ? `prec.dynamic(${weight}, ${b})` : b;
       if (order.yields.has(i)) {
         if (led !== undefined || openTail(rule.name, alt, ctx.grammar) !== null) throw new Error(`gen-treesitter: the continuation ${ab} yields to an earlier one but carries an operand tail`);
         branches.push(dyn(`prec.right(${num}, ${ab})`));
@@ -1019,10 +1052,8 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
       if (!ab.endsWith(`, ${t})`)) throw new Error(`gen-treesitter: the continuation ${ab} does not end in its operand ${t}`);
       branches.push(dyn(`seq(prec.left(${num}, ${ab.slice(0, ab.length - t.length - 3)})), ${t})`));
     } else {
-      const b = order.suffixWeight > 0 ? renderGreedySuffix(atomAlts[i], order, ctx) ?? ab : ab;
-      branches.push(weight !== 0 ? `prec.dynamic(${weight}, ${b})` : b);
+      branches.push(carried(() => (order.suffixWeight > 0 ? renderGreedySuffix(alt, order, ctx) : null) ?? renderExpr(alt, ctx)));
     }
-    } finally { ctx.dynamicPath = outer; }
   }
 
   return `choice(\n      ${branches.join(',\n      ')}\n    )`;
@@ -2915,7 +2946,7 @@ function buildTokenTreeSitter(source: CstGrammar, grammarName: string): Omit<Tre
     terminalSets,
     classifiedAssertions: assertions.nodes,
     droppedLookaheads: new Set([...assertions.recordOf].filter(([n, recs]) => n.type === 'not' && recs.some(r => !EXACT_ASSERTION_CLASSES.includes(r.cls) && !RENDERED_ASSERTION_CLASSES.includes(r.cls))).map(([n]) => n)),
-    dynamicPath: { sum: 0, maxAbs: 0 },
+    carry: 0,
     reserved: { word: grammar.tokens.find(t => t.identifier)?.name, isWordLiteral: assertions.isWordLiteral, plan: assertions.reservedSets },
     renderedLiterals: new Set(),
     namesRules: new Map(),
