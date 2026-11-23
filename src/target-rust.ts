@@ -542,7 +542,7 @@ ${spec}`;
             ${sig ? 'if sp.has_at && pos == sp.at { op = if sp.keep { 0 } else { 1 }; sp.has_at = false; } else ' : ''}{ let (o, re) = ${shared.elementFn('opens')}(src, pos as isize); op = o; if re > st.la_end { st.la_end = re; } }
             if op == 1 {
 ${enter}            }
-${sig ? '            if op == 2 { st.spec_begin(&mut sp, pos); limit = 0; }\n' : ''}        }
+${sig ? '            if op == 2 { st.spec_begin(&mut sp, pos); }\n' : ''}        }
 `;
   const holeClose = `        if st.template_stack.last() == Some(&1) && ${at(el.holeClose)} {
             st.emit(pos, pos + ${tlen(el.holeClose)}, 0, _LID_HOLE_CLOSE); st.template_stack.pop(); st.refresh(); pos += ${tlen(el.holeClose)}; continue;
@@ -582,19 +582,19 @@ ${raw ? `        if st.template_stack.last() == Some(&3) {
   // Code outside element frames pays one test per round (\`hot\`, kept by every change of the
   // frame stack's top${sig ? ' and of the speculation' : ''}); the loop condition is the plain lexer's.
   const loopBody = `        if st.hot {
-${sig ? '        if st.spec_on && st.spec_step(&mut sp) { pos = st.spec_rewind(&mut sp, src, n, false); limit = limit0; continue; }\n' : ''}${frameStep}        }
+${sig ? '        if st.spec_on && st.spec_step(&mut sp) { pos = st.spec_rewind(&mut sp, src, n, false); continue; }\n' : ''}${frameStep}        }
         let c = b[pos] as u32;
 ${pre}${cascade}
 ${p.uniIdentOrPanic}`;
-  // A speculation lexes past the token limit to its verdict (limit 0 while it runs); one that
-  // reaches the end of the input (or a lexer error, its verdict) is rewound after the loop.
-  const loop = sig ? `    let limit0 = limit;
-    loop {
-    while pos < n && (limit == 0 || st.acc.len() - base < limit) {
+  // A speculation lexes past the token limit to its verdict (the limit stays the loop's invariant,
+  // so a whole-input lex tests it once, as the plain lexer does); one that reaches the end of the
+  // input (or a lexer error, its verdict) is rewound after the loop.
+  const loop = sig ? `    loop {
+    while pos < n && (limit == 0 || st.acc.len() - base < limit || st.spec_on) {
 ${loopBody}
     }
     if !st.spec_on { break; }
-    st.spec_step(&mut sp); pos = st.spec_rewind(&mut sp, src, n, err.is_some()); err = None; limit = limit0;
+    st.spec_step(&mut sp); pos = st.spec_rewind(&mut sp, src, n, err.is_some()); err = None;
     }` : `    while pos < n && (limit == 0 || st.acc.len() - base < limit) {
 ${loopBody}
     }`;
@@ -604,7 +604,7 @@ ${loopBody}
   const specInit = sig ? 'spec_on: false, ' : '';
   const rxOut = rx ? 'let ((has_prev, prev_kid, prev_lid), (has_prev2, bp_lid)) = (st.prev(), st.prev2());\n    ' : '';
   const rxRet = rx ? 'prev_lid, prev_kid, bp_lid, has_prev, has_prev2, st.paren_head, st.last_close, st.last_bang, ' : '';
-  return `${p.head}${consts}${p.lexStacks}${p.scans}${p.tplFn}${struct}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, pending_nl: bool, ${rxParams}template_stack: Vec<i64>, el_ended: bool, tag_angle: isize, la_end: isize, spec_until: isize, ${raw ? 'tag_at: Vec<i64>, ' : ''}acc: &mut Vec<Tok>, ${sig ? 'mut ' : ''}limit: usize) -> (usize, bool, ${rxTy}Vec<i64>, bool, isize, isize, isize${raw ? ', Vec<i64>' : ''}, Option<LexErr>) {
+  return `${p.head}${consts}${p.lexStacks}${p.scans}${p.tplFn}${struct}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, pending_nl: bool, ${rxParams}template_stack: Vec<i64>, el_ended: bool, tag_angle: isize, la_end: isize, spec_until: isize, ${raw ? 'tag_at: Vec<i64>, ' : ''}acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, ${rxTy}Vec<i64>, bool, isize, isize, isize${raw ? ', Vec<i64>' : ''}, Option<LexErr>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();

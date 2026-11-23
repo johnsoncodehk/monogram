@@ -325,7 +325,7 @@ ${sig ? `      if (op === 2) {
         svLastClose = lastClose; svLastBang = lastBang; svElEndAt = elEndAt; svAngle = tagAngle;
         svParen.length = 0; for (const b of parenHead) svParen.push(b);
         svStack.length = 0; for (const f of templateStack) svStack.push(f);
-        specTok = toks.length; specSeen = specTok; specBase = parenHead.length; specClosedAt = -1; specDone = false; hot = true; limit = undefined;
+        specTok = toks.length; specSeen = specTok; specBase = parenHead.length; specClosedAt = -1; specDone = false; hot = true;
       }
 ` : ''}    }
 `;
@@ -367,21 +367,20 @@ ${raw ? `    if (templateStack.length > 0 && templateStack[templateStack.length 
     }
 ` : ''}`;
   // Code outside element frames pays one test per round (hot); the loop condition is the plain
-  // lexer's. A speculation lexes past the token limit to its verdict (no limit while it runs); one
+  // lexer's. A speculation lexes past the token limit to its verdict (the limit is tested first); one
   // that reaches the end of the input (or a lexer error, its verdict) is rewound after the loop.
   const loopBody = `    if (hot) {
-${sig ? '    if (specTok >= 0 && specStep()) { pos = specRewind(); limit = limit0; continue; }\n' : ''}${frameStep}    }
+${sig ? '    if (specTok >= 0 && specStep()) { pos = specRewind(); continue; }\n' : ''}${frameStep}    }
     const c = src.charCodeAt(pos);
 ${p.nlWs}${pre}${cascade}
 ${p.uniIdentFallbackTs}${TS_UNEXPECTED}`;
-  const inner = `  while (pos < n && (limit === undefined || toks.length - base < limit)) {
+  const inner = `  while (pos < n && (limit === undefined || toks.length - base < limit${sig ? ' || specTok >= 0' : ''})) {
 ${loopBody}
   }`;
-  const loop = sig ? `  const limit0 = limit;
-  for (;;) {
+  const loop = sig ? `  for (;;) {
 ${inner}
   if (specTok < 0) break;
-  specStep(); pos = specRewind(); limit = limit0;
+  specStep(); pos = specRewind();
   }` : inner;
   return `${consts}${p.scans}function lexFrom(src: string, pos: number, pendingNl: boolean, ${rxParams}templateStack: number[], elEnded: boolean, tagAngle: number, laEnd: number, specUntil: number, ${raw ? 'tagAt: number[], ' : ''}toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; ${rxRet}templateStack: number[]; elEnded: boolean; tagAngle: number; laEnd: number; specUntil: number${raw ? '; tagAt: number[]' : ''}; err: LexErr | null } {
   const n = src.length;

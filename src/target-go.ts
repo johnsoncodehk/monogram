@@ -492,7 +492,7 @@ ${rx ? `\t\tvalueTo = elEndAt
 \t\tif top&3 == 2 && top&12 != 0 { valueTo = 1 << 62 }
 ` : ''}\t}
 \trefresh()
-${sig ? '\tlimit0 := limit\n' : ''}`;
+`;
   const specState = sig ? `\t// A type-parameter signature being decided: the token index of its tagOpen (-1: none), the
 \t// state before it, how it was decided (a lexer error decides it: the head was an element), and
 \t// the decision kept for the tagOpen it rewinds to.
@@ -557,7 +557,7 @@ ${sig ? `\t\t\tif op == 2 {
 \t\t\t\tsvLastClose, svLastBang, svElEndAt, svAngle = lastClose, lastBang, elEndAt, tagAngle
 \t\t\t\tsvParen = append(svParen[:0], parenHead...)
 \t\t\t\tsvStack = append(svStack[:0], templateStack...)
-\t\t\t\tspecTok = len(*acc); specSeen = specTok; specBase = len(parenHead); specClosedAt = -1; specDone = false; hot = true; limit = 0
+\t\t\t\tspecTok = len(*acc); specSeen = specTok; specBase = len(parenHead); specClosedAt = -1; specDone = false; hot = true
 \t\t\t}
 ` : ''}\t\t}
 `;
@@ -600,20 +600,20 @@ ${raw ? `\t\tif len(templateStack) > 0 && templateStack[len(templateStack)-1] ==
 \t\t}
 ` : ''}`;
   // Code outside element frames pays one test per round (hot); the loop condition is the plain
-  // lexer's. A speculation lexes past the token limit to its verdict (no limit while it runs); one
+  // lexer's. A speculation lexes past the token limit to its verdict (the limit is tested first); one
   // that reaches the end of the input (or a lexer error, its verdict) is rewound after the loop.
   const loopBody = `\t\tif hot {
-${sig ? '\t\tif specTok >= 0 && specStep() { pos = specRewind(); limit = limit0; continue }\n' : ''}${frameStep}\t\t}
+${sig ? '\t\tif specTok >= 0 && specStep() { pos = specRewind(); continue }\n' : ''}${frameStep}\t\t}
 \t\tc := int(src[pos])
 ${p.nlWs}${pre}${cascade}
 ${p.uniIdentFallbackGo}${p.loopPanicGo}`;
-  const inner = `\tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
+  const inner = `\tfor pos < n && (limit <= 0 || len(*acc)-base < limit${sig ? ' || specTok >= 0' : ''}) {
 ${loopBody}
 \t}
 `;
   const loop = sig ? `\tfor {
 ${inner}\tif specTok < 0 { break }
-\tspecStep(); pos = specRewind(); limit = limit0
+\tspecStep(); pos = specRewind()
 \t}
 ` : inner;
   return `${p.head}${consts}${p.scans}func lexFrom(src string, pos int, pendingNl bool, ${rxParams}templateStack []int, elEnded bool, tagAngle, laEnd, specUntil int, ${raw ? 'tagAt []int, ' : ''}acc *[]Tok, limit int) (int, bool, ${rxRet}[]int, bool, int, int, int${raw ? ', []int' : ''}, *LexErr) {
