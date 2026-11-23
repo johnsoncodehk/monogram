@@ -2,7 +2,8 @@
 // printed for each target through the `Lowering` it registers with `defineTarget`.
 //
 // Every scanner is `(s, p) -> end`, with end > p for a match and -1 for none (a negative p never
-// matches). An identifier(-like) token's scanner checks a match that came from the token pattern
+// matches); an identifier whose escapes spell no IdentifierName is the lexer error -2 - e, for the
+// token s[p, e) (as the template span reports its errors). An identifier(-like) token's scanner checks a match that came from the token pattern
 // rather than the ASCII run (the branch that can take a `\u` escape) with `IDENT_ESC`, out of
 // line, so an ASCII-run identifier pays nothing. A token pattern means what its regex means (the
 // interpreter's lexer runs that regex):
@@ -76,9 +77,6 @@ const ident = (t: string): string => t.replace(/[^A-Za-z0-9]/g, '_');
 export const scannerName = (tok: string): string => `lexScan${ident(tok)}`;
 // An identifier's escape check, (s, p, q, e) -> int (see identEsc).
 export const IDENT_ESC = 'lexIdentEsc';
-// The target's identifier escape error, (s, p, e) -> int: it raises the lexer error for the token
-// s[p, e) and does not return. The target prints it.
-export const IDENT_ESC_ERR = 'lexIdentEscError';
 // The target's Unicode identifier class of a code point, (cp) -> int: 0 neither, 1
 // IdentifierPart only, 2 IdentifierStart too (uni-ident.ts). The target prints it.
 export const UNI_CLASS = 'lexUniClass';
@@ -394,7 +392,7 @@ class LexScan {
   // an IdentifierName: every `\u` escape decodes to an IdentifierStart (the first character) or an
   // IdentifierPart character. As the interpreter's lexIdentValid, which matches the decoded text,
   // a high-surrogate escape followed by a low-surrogate escape is the one character they spell.
-  // Returns e; when the text is no IdentifierName, the target's lexer error for s[p, e).
+  // Returns e; when the text is no IdentifierName, the lexer error -2 - e.
   // Cold: only a token whose pattern match went past the ASCII run calls it.
   identEsc(): Fn {
     // The escape at i (`\uXXXX` or `\u{X...}`, as the token pattern matched it) into v; i moves
@@ -415,10 +413,10 @@ class LexScan {
       ], [let_('n', add('i', I(4))), while_(lt('i', 'n'), hex(v))]),
     ];
     const inR = (v: string, lo: number, hi: number) => and(ge(v, I(lo)), le(v, I(hi)));
-    const BAD = ret({ k: 'call', fn: IDENT_ESC_ERR, args: [x('s'), x('p'), x('e')] });
+    const BAD = ret(sub(I(-2), 'e'));
     return {
       name: IDENT_ESC, cold: true,
-      doc: 'Whether an identifier spells its escapes as IdentifierName characters: e, else the lexer error.',
+      doc: 'Whether an identifier spells its escapes as IdentifierName characters: e, else the lexer error -2 - e.',
       params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }, { name: 'q', ty: 'int' }, { name: 'e', ty: 'int' }],
       ret: ['int'],
       body: [
@@ -807,7 +805,6 @@ export function lexScanFamily(ir: ParserIR): Family {
     for (const t of scannedTokens(ir)) b.fns.push({ ...b.scanner(t, ir.identLike.includes(t.name) ? ir.identPrefix[t.name] ?? '' : null), inline: true });
     if (ir.identLike.length) {
       b.fns.push({ name: UNI_CLASS, doc: '', params: [{ name: 'cp', ty: 'int' }], ret: ['int'], body: [], extern: true });
-      b.fns.push({ name: IDENT_ESC_ERR, doc: '', params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }, { name: 'e', ty: 'int' }], ret: ['int'], body: [], extern: true });
       b.fns.push(b.identEsc());
     }
     if (ir.tpl) b.fns.push(b.tplSpan(ir.tpl));

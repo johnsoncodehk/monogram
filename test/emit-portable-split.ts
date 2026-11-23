@@ -482,7 +482,7 @@ fn main() {
     let mut dense = Vec::new();
     for n in [${DENSE_N}, ${4 * DENSE_N}] {
         let src = ${rlit(DENSE_LINE)}.repeat(n);
-        let mut b = DenseB { lexed: tokenize(&src).iter().map(|t| (t.off as u32, t.end as u32)).collect(), ..Default::default() };
+        let mut b = DenseB { lexed: tokenize(&src).unwrap().iter().map(|t| (t.off as u32, t.end as u32)).collect(), ..Default::default() };
         if parse_with(&src, &mut b).is_none() { std::process::exit(3); }
         dense.push(format!("{{\\"toks\\":{},\\"bad\\":{},\\"work\\":{{\\"builder nodes\\":{},\\"builder leaves\\":{}}}}}", b.lexed.len(), b.bad, b.nodes, b.leaves));
     }

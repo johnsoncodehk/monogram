@@ -224,7 +224,7 @@ fn main() {
     for f in std::env::args().skip(1) {
         let src = std::fs::read_to_string(&f).unwrap();
         LW_WORK.store(0, std::sync::atomic::Ordering::Relaxed);
-        let n = tokenize(&src).len();
+        let n = tokenize(&src).unwrap().len();
         println!("{}\\t{}\\t{}", n, src.len(), LW_WORK.load(std::sync::atomic::Ordering::Relaxed));
     }
 }

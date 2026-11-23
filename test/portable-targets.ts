@@ -1037,7 +1037,10 @@ const CASES: Case[] = [
       "x = <a>if (x) {'{'}</a>;", 'x = <a>return</a>;', 'x = <a>function</a>;', 'x = <a>;</a>;', 'x = <a>class</a>;',
       'x = <a>{b}if{c}</a>;', 'x = <a><b>{c};</b>)</a>;', 'x = <a>as</a> as T;', 'x = <a>,</a>, 1;',
     ],
-    reject: ['x = <a>=></a>;', 'x = <a x=<b/> />;', 'x = <a>}</a>;', 'x = <a>></a>;', 'x = <b>{x}</b>\n/re/.test(y);', 'x = <a/>\n<b/>;', 'x = <a>;', 'x = </a>;'],
+    reject: ['x = <a>=></a>;', 'x = <a x=<b/> />;', 'x = <a>}</a>;', 'x = <a>></a>;', 'x = <b>{x}</b>\n/re/.test(y);', 'x = <a/>\n<b/>;', 'x = <a>;', 'x = </a>;',
+      // lexer errors: at the last character, inside a template hole inside an element hole, inside
+      // an undecided type-parameter signature, and inside one nested in another (the outer's verdict)
+      'x = <a/>;#', 'x = <a>{`${<b>{`${"}`}</b>}`}</a>;', 'f = <T,>(x: #', 'f = <T,>(x: <U,>(#', 'f = <T,>(x: <U,>(y: `${#'],
   },
   {
     grammar: 'javascriptreact', path: '../javascriptreact.ts',
@@ -1050,7 +1053,8 @@ const CASES: Case[] = [
       "x = <a>if (x) {'{'}</a>;", 'x = <a>return</a>;', 'x = <a>function</a>;', 'x = <a>;</a>;', 'x = <a>class</a>;',
       'x = <a>{b}if{c}</a>;', 'x = <a><b>{c};</b>)</a>;', 'x = <a>,</a>, 1;',
     ],
-    reject: ['x = <a>}</a>;', 'x = <a>;', 'x = </a>;', 'f = <T,>(x) => x;', 'x = <a>=></a>;', 'x = <a>as</a> as T;'],
+    reject: ['x = <a>}</a>;', 'x = <a>;', 'x = </a>;', 'f = <T,>(x) => x;', 'x = <a>=></a>;', 'x = <a>as</a> as T;',
+      'x = <a/>;#', 'x = <a>{`${<b>{`${"}`}</b>}`}</a>;', 'x = <a b={`${#`}/>;'],
   },
   {
     // code children, and the derived entry: every `<` in code opens an element
@@ -1601,6 +1605,13 @@ const UNICODE_REJECT: { src: string; lexMsg: string | null }[] = [
   { src: "'abc", lexMsg: "Unexpected character at offset 0: '''" },
   { src: 'const x = `cafe', lexMsg: 'Unterminated template literal at offset 15' },
   { src: 'const x = "abc', lexMsg: 'Unexpected character at offset 10: \'"\'' },
+  // each lexer error kind, and an error at the last character (an error ends the lex)
+  { src: 'x = 1;"', lexMsg: 'Unexpected character at offset 6: \'"\'' },
+  { src: 'a\\u002e = 1;', lexMsg: "Invalid identifier escape at offset 0: 'a\\u002e'" },
+  { src: 'x = a\\u002e', lexMsg: "Invalid identifier escape at offset 4: 'a\\u002e'" },
+  { src: 'x = `a\\xg`;', lexMsg: 'Invalid escape sequence in template at offset 6' },
+  { src: 'x = `${a}` + `\\u{`', lexMsg: 'Invalid escape sequence in template at offset 14' },
+  { src: 'x = `${`${"}`}`', lexMsg: 'Unexpected character at offset 10: \'"\'' },
   // emoji is not ID_Start; ZWSP is not JS \s — all targets must reject (messages differ in
   // encoding of the offending char across targets, so no lexMsg pin)
   { src: 'const \u{1F600} = 1;', lexMsg: null },
@@ -1623,7 +1634,7 @@ const UNICODE_EDITS: { name: string; init: string; batches: EditBatch[]; restore
 /** Primary lexer-error text shared with the generated lexer (emit-lexer.ts). */
 function primaryLexMsg(err?: string): string | null {
   if (!err) return null;
-  const u = err.match(/Unterminated template literal at offset \d+/);
+  const u = err.match(/Unterminated template literal at offset \d+|Invalid escape sequence in template at offset \d+|Invalid identifier escape at offset \d+: '[^']*'/);
   if (u) return u[0];
   const c = err.match(/Unexpected character at offset \d+: '[\s\S]'/);
   return c ? c[0] : null;

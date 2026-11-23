@@ -7,6 +7,8 @@
 // module and is NOT part of this family. The family depends on it through exactly two
 // calls — `lex(text)` and one `lexFrom(text, pos, ...state, out, 1)` step — whose state
 // parameter order is `lexState(mode)` below; every target's lexFrom follows that order.
+// A lexer error is a value (`LexErr`, below) each call returns beside its tokens: the family
+// tests it right after the call, before it uses a token, and returns it to its caller.
 //
 // Offsets are in the target's native string units (whatever its lexer reports, e.g. UTF-16
 // code units or UTF-8 bytes); the family only does arithmetic on them.
@@ -36,7 +38,13 @@
 import { type ParserIR, buildLexIdPlan, kidOf, lidOf, regionKids } from './emit-portable.ts';
 import { type LookPlan, lexLookPlan } from './lex-family.ts';
 import type { CSet } from './lex-match-plan.ts';
-import { type Expr, type Fn, type ListTy, type Lowering, type MetaFlag, type MetaInt, type Stmt, type TokInt, type Ty, printFns } from './algo-ir.ts';
+import { type Expr, type Fn, type ListTy, type Lowering, type MetaFlag, type MetaInt, type RecordDecl, type Stmt, type TokInt, type Ty, printFns } from './algo-ir.ts';
+
+// A lexer error: its kind (0 an unexpected character at off, 1 an identifier whose escapes spell
+// no IdentifierName, s[off, end), 2 an unterminated template literal, 3 an invalid escape sequence
+// in a template at off). Each target's lexer records it, and spells its message from it.
+export const LEX_ERR: RecordDecl = { name: 'LexErr', fields: [{ name: 'kind', ty: 'int' }, { name: 'off', ty: 'int' }, { name: 'end', ty: 'int' }] };
+const ERR: Ty = 'opt_LexErr';
 
 export interface RelexMode {
   // Windowed relex (resync + suffix adoption); otherwise every edit re-lexes the whole text.
@@ -114,6 +122,8 @@ const while_ = (c: Ex, body: Stmt[]): Stmt => ({ k: 'while', c: x(c), body });
 const for_ = (v: string, from: Ex, to: Ex, body: Stmt[]): Stmt => ({ k: 'for', v, from: x(from), to: x(to), body });
 const push = (list: string, e: Ex): Stmt => ({ k: 'push', list, e: x(e) });
 const ret = (...es: Ex[]): Stmt => ({ k: 'return', es: es.map(x) });
+const NO_ERR: Expr = { k: 'none', rec: 'LexErr' };
+const failed = (v: string): Expr => ({ k: 'isSome', e: x(v) });
 const BREAK: Stmt = { k: 'break' };
 
 // ---- lexer state: the lexFrom contract, in parameter order ----
@@ -152,7 +162,7 @@ export function lexState(m: RelexMode): StateField[] {
 
 const stateLets = (m: RelexMode): Stmt[] => lexState(m).map((f) => let_(f.name, f.ty, f.init));
 const lexStep = (m: RelexMode, text: string, pos: string, out: string): Stmt =>
-  ({ k: 'lexStep', text: x(text), pos, out, state: lexState(m).map((f) => f.name) });
+  ({ k: 'lexStep', text: x(text), pos, out, state: lexState(m).map((f) => f.name), err: 'err' });
 
 // Meta for a freshly lexed token: the token plus the lexer state right after it.
 function metaOf(m: RelexMode, t: string): Expr {
@@ -231,38 +241,40 @@ function scanMetaToksFn(m: RelexMode): Fn {
   const doc = 'Fresh lex of src: (meta, tokens).';
   if (!perToken(m)) {
     return {
-      name: 'scanMetaToks', doc, params: [{ name: 'src', ty: 'str' }], ret: ['metas', 'toks'],
-      body: [let_('toks', 'toks', { k: 'lexAll', text: x('src') }), ret(call('toMeta', 'toks'), 'toks')],
+      name: 'scanMetaToks', doc, params: [{ name: 'src', ty: 'str' }], ret: ['metas', 'toks', ERR],
+      body: [{ k: 'lexAll', text: x('src'), out: 'toks', err: 'err' }, ret(call('toMeta', 'toks'), 'toks', 'err')],
     };
   }
   return {
     name: 'scanMetaToks',
     doc: `${doc} One lexFrom step per token so each meta records the lexer state after it.\nBoth lists grow as tokens are pushed: their length is known only once the scan ends.`,
     params: [{ name: 'src', ty: 'str' }],
-    ret: ['metas', 'toks'],
+    ret: ['metas', 'toks', ERR],
     body: [
       let_('toks', 'toks', newList('toks')),
       let_('meta', 'metas', newList('metas')),
       let_('pos', 'int', I(0)),
+      let_('err', ERR, NO_ERR),
       ...stateLets(m),
       while_(lt('pos', len('src')), [
         let_('before', 'int', len('toks')),
         lexStep(m, 'src', 'pos', 'toks'),
+        if_(failed('err'), [ret('meta', 'toks', 'err')]),
         if_(eq(len('toks'), 'before'), [BREAK]),
         let_('t', 'tok', last('toks')),
         push('meta', metaOf(m, 't')),
       ]),
-      ret('meta', 'toks'),
+      ret('meta', 'toks', 'err'),
     ],
   };
 }
 
 const scanMetaFn = (): Fn => ({
   name: 'scanMeta',
-  doc: 'Fresh meta stream of src.',
+  doc: 'Fresh meta stream of src, and the lexer error (none when src lexes).',
   params: [{ name: 'src', ty: 'str' }],
-  ret: ['metas'],
-  body: [{ k: 'letCall', names: ['meta', '_'], call: call('scanMetaToks', 'src') }, ret('meta')],
+  ret: ['metas', ERR],
+  body: [{ k: 'letCall', names: ['meta', '_', 'err'], call: call('scanMetaToks', 'src') }, ret('meta', 'err')],
 });
 
 const checkStreamEqFn = (): Fn => ({
@@ -271,7 +283,8 @@ const checkStreamEqFn = (): Fn => ({
   params: [{ name: 'text', ty: 'str' }, { name: 'meta', ty: 'metas' }],
   ret: ['bool'],
   body: [
-    let_('fresh', 'metas', call('scanMeta', 'text')),
+    { k: 'letCall', names: ['fresh', 'err'], call: call('scanMeta', 'text') },
+    if_(failed('err'), [ret(F)]),
     if_(ne(len('fresh'), len('meta')), [ret(F)]),
     for_('i', I(0), len('fresh'), [
       let_('f', 'meta', at('fresh', 'i')),
@@ -496,7 +509,7 @@ function windowRelexStepFn(m: RelexMode): Fn {
   }
   const adopt: Stmt[] = [
     for_('j', add('oIdx', I(1)), len('oldToks'), [push('out', { k: 'shiftMeta', m: at('oldToks', 'j'), delta: x('delta') })]),
-    ret('out', 'relexed'),
+    ret('out', 'relexed', NO_ERR),
   ];
   const onCandidate: Stmt[] = m.regex
     ? [if_(and(...same), [let_('oldStack', 'bools', call('reconstructParens', 'oldToks', 'oldText', 'oIdx')), if_(call('parenStacksEq', 'oldStack', 'parenHead'), adopt)])]
@@ -505,12 +518,12 @@ function windowRelexStepFn(m: RelexMode): Fn {
   return {
     name: 'windowRelexStep',
     doc: 'One edit: keep tokens before the anchor, relex from the anchor with restored lexer state,\n' +
-      'and adopt the shifted old suffix at the first token past the edit whose state matches.\nReturns (new meta, tokens relexed).',
+      'and adopt the shifted old suffix at the first token past the edit whose state matches.\nReturns (new meta, tokens relexed, the lexer error or none).',
     params: [
       { name: 'oldText', ty: 'str' }, { name: 'oldToks', ty: 'metas' }, { name: 'newText', ty: 'str' },
       { name: 'start', ty: 'int' }, { name: 'end', ty: 'int' }, { name: 'ins', ty: 'str' },
     ],
-    ret: ['metas', 'int'],
+    ret: ['metas', 'int', ERR],
     body: [
       let_('delta', 'int', sub(len('ins'), sub('end', 'start'))),
       let_('editEnd', 'int', add('start', len('ins'))),
@@ -522,9 +535,11 @@ function windowRelexStepFn(m: RelexMode): Fn {
       if_(ge('rb', I(0)), [let_('anchor', 'meta', at('oldToks', 'rb')), ...restoreFromAnchor(m)]),
       let_('scratch', 'toks', newList('toks')),
       let_('relexed', 'int', I(0)),
+      let_('err', ERR, NO_ERR),
       while_(lt('scanOff', len('newText')), [
         let_('before', 'int', len('scratch')),
         lexStep(m, 'newText', 'scanOff', 'scratch'),
+        if_(failed('err'), [ret('out', 'relexed', 'err')]),
         if_(eq(len('scratch'), 'before'), [BREAK]),
         let_('t', 'tok', last('scratch')),
         push('out', metaOf(m, 't')),
@@ -534,27 +549,27 @@ function windowRelexStepFn(m: RelexMode): Fn {
           if_(ge('oIdx', I(0)), [let_('o', 'meta', at('oldToks', 'oIdx')), ...pre, ...onCandidate]),
         ]),
       ]),
-      ret('out', 'relexed'),
+      ret('out', 'relexed', 'err'),
     ],
   };
 }
 
 function relexEditsFn(m: RelexMode): Fn {
-  const doc = 'Apply edits to (text, meta): returns (new text, new meta, tokens relexed).';
+  const doc = 'Apply edits to (text, meta): returns (new text, new meta, tokens relexed, the lexer error or none).\nWith a lexer error the text and meta are unspecified.';
   const params = [{ name: 'text', ty: 'str' as Ty }, { name: 'toks', ty: 'metas' as Ty }, { name: 'edits', ty: 'edits' as Ty }];
   if (!m.window) {
     return {
-      name: 'relexEdits', doc: `${doc}\nThis lexer mode has no windowed relex: the whole text is re-lexed.`, params, ret: ['str', 'metas', 'int'],
+      name: 'relexEdits', doc: `${doc}\nThis lexer mode has no windowed relex: the whole text is re-lexed.`, params, ret: ['str', 'metas', 'int', ERR],
       body: [
         let_('next', 'str', call('applyEdits', 'text', 'edits')),
-        let_('meta', 'metas', call('scanMeta', 'next')),
+        { k: 'letCall', names: ['meta', 'err'], call: call('scanMeta', 'next') },
         let_('n', 'int', len('meta')),
-        ret('next', 'meta', 'n'),
+        ret('next', 'meta', 'n', 'err'),
       ],
     };
   }
   return {
-    name: 'relexEdits', doc, params, ret: ['str', 'metas', 'int'],
+    name: 'relexEdits', doc, params, ret: ['str', 'metas', 'int', ERR],
     body: [
       let_('curText', 'str', { k: 'own', e: x('text') }),
       let_('curToks', 'metas', { k: 'own', e: x('toks') }),
@@ -563,12 +578,13 @@ function relexEditsFn(m: RelexMode): Fn {
         { k: 'letCall', names: ['start', 'end'], call: call('editRange', len('curText'), 'e') },
         let_('ins', 'str', { k: 'editText', e: x('e') }),
         let_('next', 'str', { k: 'splice', s: x('curText'), a: x('start'), b: x('end'), ins: x('ins') }),
-        { k: 'letCall', names: ['stepToks', 'stepRelexed'], call: call('windowRelexStep', 'curText', 'curToks', 'next', 'start', 'end', 'ins') },
+        { k: 'letCall', names: ['stepToks', 'stepRelexed', 'err'], call: call('windowRelexStep', 'curText', 'curToks', 'next', 'start', 'end', 'ins') },
+        if_(failed('err'), [ret('next', 'stepToks', 'relexed', 'err')]),
         set('curText', 'next'),
         set('curToks', 'stepToks'),
         set('relexed', add('relexed', 'stepRelexed')),
       ] },
-      ret('curText', 'curToks', 'relexed'),
+      ret('curText', 'curToks', 'relexed', NO_ERR),
     ],
   };
 }
@@ -595,5 +611,5 @@ export function relexFamilyFns(m: RelexMode): Fn[] {
 }
 
 export function emitRelexFamily(ir: ParserIR, lowering: Lowering): string {
-  return printFns(lowering, relexFamilyFns(relexMode(ir)));
+  return printFns(lowering, relexFamilyFns(relexMode(ir)), [], [LEX_ERR]);
 }

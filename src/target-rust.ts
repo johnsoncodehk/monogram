@@ -15,7 +15,7 @@ import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, t
 import { blockBody, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
-import { ATOM, COMPARISON, findAnyName, stopBytes, isList, isNum, isRec, isRecList, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
+import { ATOM, COMPARISON, findAnyName, stopBytes, isList, isNum, isOpt, isRec, isRecList, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 import type {
@@ -297,7 +297,51 @@ function lidCall(lits: string[], bytes: string): string {
 }
 
 // One token at a dispatch site: the shared scanner says where it ends; the lexer records it.
-function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
+// A lexer error (relex-family.ts LexErr): recorded in the lexer's error (`at`: a local `err`, or
+// the element scan's field, which its loop head reads: a local there would be carried around every
+// iteration, +1.2% lex instructions on the TSX inputs, profile run 45113125143), and the step ends
+// the lex: pos is the end of input, so the loop exits (with a type-parameter signature undecided,
+// its head rewinds it).
+const rsFail = (at: string, kind: string, off: string, end: string): string => `${at} = Some(LexErr { kind: ${kind}, off: ${off}, end: ${end} }); pos = n; continue;`;
+const RS_LEX_ERR = `/// A lexer error (relex-family.ts LexErr): its kind, offset and end; lex_error spells its message.
+#[derive(Clone, Copy)]
+struct LexErr { kind: isize, off: isize, end: isize }
+/// The lexer error of a template span (-1 unterminated, -2 - q an invalid escape at q).
+#[cold] #[inline(never)] fn _lex_tpl_err(q: isize, n: usize) -> LexErr {
+    if q == -1 { LexErr { kind: 2, off: n as isize, end: 0 } } else { LexErr { kind: 3, off: -2 - q, end: 0 } }
+}
+/// Input the lexer cannot tokenize: where, and the message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LexError { pub off: usize, pub msg: String }
+impl std::fmt::Display for LexError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(&self.msg) }
+}
+impl std::error::Error for LexError {}
+/// The LexError of the lexer's error e in src.
+#[cold] #[inline(never)] fn lex_error(src: &str, e: LexErr) -> LexError {
+    let off = e.off as usize;
+    let msg = match e.kind {
+        0 => format!("Unexpected character at offset {}: '{}'", off, _char_at(src, off).map(|(ch, _)| ch).unwrap_or(src.as_bytes()[off] as char)),
+        1 => format!("Invalid identifier escape at offset {}: '{}'", off, &src[off..e.end as usize]),
+        2 => format!("Unterminated template literal at offset {}", off),
+        _ => format!("Invalid escape sequence in template at offset {}", off),
+    };
+    LexError { off, msg }
+}
+/// The tokens of src; a lexer error panics with its message.
+fn lex(src: &str) -> Vec<Tok> {
+    match lex_all(src) { (toks, None) => toks, (_, Some(e)) => panic!("{}", lex_error(src, e).msg) }
+}
+`;
+const RS_LEX_FN = `fn lex_all<'a>(src: &'a str) -> (Vec<Tok>, Option<LexErr>) {
+    let mut toks = Vec::new();
+    let err = lex_into(src, &mut toks, &mut LexStacks::default());
+    (toks, err)
+}
+`;
+const rsUnexpected = (at: string): string => `        ${rsFail(at, '0', 'pos as isize', 'pos as isize')}`;
+
+function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>, errAt: string): string {
   const name = t.name;
   const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
   const kid = kidOf(ids, name);
@@ -310,7 +354,9 @@ function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: bo
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
   const ext = identLike.has(name) ? 'let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(b, e) } else { e }; ' : '';
-  const scan = `{ let e = ${shared.scanner(name)}(src, pos as isize); if e >= 0 { let e = e as usize; ${ext}${push}pos = e; continue; } }`;
+  // An identifier whose escapes spell no IdentifierName is the lexer error -2 - e (lex-family.ts).
+  const escErr = identLike.has(name) ? ` if e < -1 { ${rsFail(errAt, '1', 'pos as isize', '-2 - e')} }` : '';
+  const scan = `{ let e = ${shared.scanner(name)}(src, pos as isize); if e >= 0 { let e = e as usize; ${ext}${push}pos = e; continue; }${escErr} }`;
   return rxTok !== undefined && name === rxTok ? `        if !st.prev_is_value() ${scan}` : `        ${scan}`;
 }
 
@@ -348,13 +394,13 @@ function rustMatchLabels(bytes: number[]): string {
 
 function buildLexCandidates(
   ir: ParserIR, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined,
-  punctLine: (p: string) => string,
+  punctLine: (p: string) => string, errAt: string,
 ): { codes: string[]; firsts: (LexFirstBytes | null)[] } {
   const identLike = new Set(ir.identLike);
   const codes: string[] = [];
   const firsts: (LexFirstBytes | null)[] = [];
   for (const t of shared.scannedTokens(ir)) {
-    codes.push(scanTok(ir, t, shared, stateful, ids, rxTok, identLike));
+    codes.push(scanTok(ir, t, shared, stateful, ids, rxTok, identLike, errAt));
     firsts.push(lexTokFirstBytes(t));
   }
   for (const p of ir.puncts) {
@@ -393,10 +439,8 @@ ${indent}        }`;
 // The lexer of a grammar with an element region (ElementPlan): the frame stack is the template
 // stack, and the frame decisions are the shared family's (lex-family.ts elementFns); what is here
 // is their placement in the dispatch loop, the token push, and the type-parameter signature's
-// speculation (lexed as code to its verdict, then rewound: docs/REGIONS.md). Rust has no
-// catchable lexer error, so while a signature is undecided the lexer's errors are values: the
-// error routines read `_LEX_SPEC` (a thread's flag, set only during the speculation) and return
-// a sentinel the loop turns into the verdict.
+// speculation (lexed as code to its verdict, then rewound: docs/REGIONS.md). A lexer error while a
+// signature is undecided is its verdict (the head was an element): the loop head rewinds.
 function elementLexerRust(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms, p: {
   head: string; scans: string; tplFn: string; lexCodes: string[]; lexFirsts: (LexFirstBytes | null)[]; specialArms: string; nonAscii: string;
   tplCloseTest: string; tplOpenPreCheck: string; closeByte: number | null; uniIdentOrPanic: string; pavHot: string; lexStacks: string; takeStk: (f: string) => string;
@@ -405,19 +449,15 @@ function elementLexerRust(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms
   const operand = el.entry === 'operand';
   if (operand && !rx) throw new Error('portable: an operand element entry needs the regex context (prevIsValue)');
   const L = tlen(el.tagOpen);
-  // While a signature is undecided an error is its verdict: a sentinel from the error routines.
-  const fail = (code: string) => (sig ? code.replace(/let \(interp, e\) = _scan_tpl_span\(([^;]*)\);/g, 'let (interp, e) = _scan_tpl_span($1); if e == usize::MAX { st.spec_fail = true; continue; }') : code);
   const consts = `const _LID_EL_OPEN: u16 = ${lidOf(ids, el.tagOpen)};
 const _LID_EL_CLOSE: u16 = ${lidOf(ids, el.tagClose)};
 const _LID_HOLE_OPEN: u16 = ${lidOf(ids, el.holeOpen)};
 const _LID_HOLE_CLOSE: u16 = ${lidOf(ids, el.holeClose)};
 const _LID_EQ: u16 = ${lidOf(ids, '=')};
 ${sig ? `${rsBoolArr('_EL_THEN', lidFlagTable(ids, sig.then))}
-thread_local! { static _LEX_SPEC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
-#[inline(always)] fn _lex_spec() -> bool { _LEX_SPEC.with(|c| c.get()) }
 ` : ''}`;
   const rxFields = rx ? 'base: usize, prev0: (bool, u16, u16), bp0: (bool, u16), kid1: u16, lid1: u16, lid2: u16, paren_head: Vec<bool>, last_close: bool, last_bang: bool, ' : '';
-  const specFields = sig ? 'spec_tok: usize, spec_on: bool, spec_base: usize, spec_closed_at: usize, spec_closed: bool, spec_done: bool, spec_fail: bool, spec_then: bool, spec_off: usize, spec_end: usize, spec_at: usize, spec_has_at: bool, spec_keep: bool, sv: (usize, bool, u16, u16, u16, bool, isize), sv_paren: Vec<bool>, sv_stack: Vec<i64>, ' : '';
+  const specFields = sig ? 'spec_tok: usize, spec_on: bool, spec_base: usize, spec_closed_at: usize, spec_closed: bool, spec_done: bool, spec_then: bool, spec_off: usize, spec_end: usize, spec_at: usize, spec_has_at: bool, spec_keep: bool, sv: (usize, bool, u16, u16, u16, bool, isize), sv_paren: Vec<bool>, sv_stack: Vec<i64>, ' : '';
   const inl = '    #[inline(always)]\n';
   const braces = [
     tpl ? `if f & 3 == 0 { if lid == _LID_BRACE_OPEN { *self.template_stack.last_mut().unwrap() = f + 4; } else if lid == _LID_INTERP_CLOSE { *self.template_stack.last_mut().unwrap() = f - 4; } }` : '',
@@ -457,14 +497,14 @@ ${sig ? `    #[cold] #[inline(never)]
         self.sv = (pos, self.pending_nl, self.kid1, self.lid1, self.lid2, self.el_ended, self.tag_angle);
         self.sv_paren.clear(); self.sv_paren.extend_from_slice(&self.paren_head);
         self.sv_stack.clear(); self.sv_stack.extend_from_slice(&self.template_stack);
-        self.spec_tok = self.acc.len(); self.spec_on = true; self.spec_base = self.paren_head.len(); self.spec_closed = false; self.spec_done = false; self.spec_fail = false;
+        self.spec_tok = self.acc.len(); self.spec_on = true; self.spec_base = self.paren_head.len(); self.spec_closed = false; self.spec_done = false;
         self.sv_bang = (self.last_close, self.last_bang);
-        _LEX_SPEC.with(|c| c.set(true));
     }
     #[cold] #[inline(never)]
     fn spec_rewind(&mut self, src: &str, n: usize) -> usize {
-        let keep = self.spec_done && !self.spec_fail && self.spec_then;
-        let re = if self.spec_done && !self.spec_fail { ${shared.elementFn('reach')}(src, self.spec_end as isize) } else { n as isize + 1 };
+        let failed = self.err.is_some();
+        let keep = self.spec_done && !failed && self.spec_then;
+        let re = if self.spec_done && !failed { ${shared.elementFn('reach')}(src, self.spec_end as isize) } else { n as isize + 1 };
         if re > self.la_end { self.la_end = re; }
         if keep { self.spec_until = self.spec_off as isize; }
         self.spec_at = self.sv.0; self.spec_has_at = true; self.spec_keep = keep;
@@ -474,12 +514,11 @@ ${sig ? `    #[cold] #[inline(never)]
         self.last_close = self.sv_bang.0; self.last_bang = self.sv_bang.1;
         self.paren_head.clear(); self.paren_head.extend_from_slice(&self.sv_paren);
         self.template_stack.clear(); self.template_stack.extend_from_slice(&self.sv_stack);
-        self.spec_on = false; self.spec_closed = false; self.spec_done = false; self.spec_fail = false;
-        _LEX_SPEC.with(|c| c.set(false));
+        self.spec_on = false; self.spec_closed = false; self.spec_done = false; self.err = None;
         pos
     }
 ` : ''}`;
-  const struct = `struct ElScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, ${rxFields}template_stack: Vec<i64>, el_ended: bool, tag_angle: isize, la_end: isize, spec_until: isize, ${raw ? 'tag_at: Vec<i64>, ' : ''}${specFields}${sig ? 'sv_bang: (bool, bool), ' : ''}}
+  const struct = `struct ElScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, err: Option<LexErr>, ${rxFields}template_stack: Vec<i64>, el_ended: bool, tag_angle: isize, la_end: isize, spec_until: isize, ${raw ? 'tag_at: Vec<i64>, ' : ''}${specFields}${sig ? 'sv_bang: (bool, bool), ' : ''}}
 impl<'a> ElScan<'a> {
 ${methods}}
 `;
@@ -503,8 +542,8 @@ ${sig ? '            if op == 2 { st.spec_begin(pos); }\n' : ''}        }
   const place = (lit: string, code: string) => { const u = Buffer.from(lit, 'utf8')[0]!; if (u >= 128 || [9, 10, 11, 12, 13, 32].includes(u)) pre += code; else heads.set(u, (heads.get(u) ?? '') + code); };
   place(el.tagOpen, entry);
   place(el.holeClose, holeClose);
-  if (tpl) { if (p.closeByte !== null) place(tpl.interpClose, fail(p.tplCloseTest)); else pre += fail(p.tplCloseTest); pre += fail(p.tplOpenPreCheck); }
-  const cascade = renderLexByteDispatchRust(p.lexCodes, p.lexFirsts, '        ', fail(p.specialArms), sig ? p.nonAscii.replace('pos = e; continue;', 'if k == 3 { st.spec_fail = true; continue; } pos = e; continue;') : p.nonAscii, null, heads);
+  if (tpl) { if (p.closeByte !== null) place(tpl.interpClose, p.tplCloseTest); else pre += p.tplCloseTest; pre += p.tplOpenPreCheck; }
+  const cascade = renderLexByteDispatchRust(p.lexCodes, p.lexFirsts, '        ', p.specialArms, p.nonAscii, null, heads);
   const frameStep = `        if let Some(&fr) = st.template_stack.last() { if fr & 3 == 2 {
             let after_eq = st.acc.last().map_or(false, |t| t.lid == _LID_EQ);
             let (fe, fk, fl, ft, fp, fa, fla) = ${shared.elementFn('frame')}(src, pos as isize, fr as isize, st.tag_angle, after_eq, st.la_end);
@@ -529,37 +568,33 @@ ${raw ? `        if st.template_stack.last() == Some(&3) {
             st.emit(pos, re as usize, rk as u16, 0); st.template_stack.pop(); pos = re as usize; continue;
         }
 ` : ''}`;
-  const panicSite = sig ? p.uniIdentOrPanic.replace(/(\s*)panic!\("Unexpected character/, '$1if st.spec_on { st.spec_fail = true; continue; }$1panic!("Unexpected character') : p.uniIdentOrPanic;
-  const loopBody = `${sig ? '        if st.spec_on && (st.spec_done || st.spec_fail || pos >= n) { pos = st.spec_rewind(src, n); continue; }\n' : ''}        let c = b[pos] as u32;
+  const loopBody = `${sig ? '        if st.spec_on && (st.spec_done || st.err.is_some() || pos >= n) { pos = st.spec_rewind(src, n); continue; }\n' : ''}        let c = b[pos] as u32;
 ${frameStep}${pre}${cascade}
-${panicSite}`;
+${p.uniIdentOrPanic}`;
   const cond = sig ? '(pos < n || st.spec_on) && (limit == 0 || st.acc.len() - base < limit || st.spec_on)' : 'pos < n && (limit == 0 || st.acc.len() - base < limit)';
   const rxParams = rx ? 'prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool, ' : '';
   const rxTy = rx ? 'u16, u16, u16, bool, bool, Vec<bool>, bool, bool, ' : '';
   const rxInit = rx ? 'base, prev0: (has_prev, prev_kid, prev_lid), bp0: (has_prev2, bp_lid), kid1: prev_kid, lid1: prev_lid, lid2: bp_lid, paren_head, last_close, last_bang, ' : '';
-  const specInit = sig ? 'spec_tok: 0, spec_on: false, spec_base: 0, spec_closed_at: 0, spec_closed: false, spec_done: false, spec_fail: false, spec_then: false, spec_off: 0, spec_end: 0, spec_at: 0, spec_has_at: false, spec_keep: false, sv: (0, false, 0, 0, 0, false, 0), sv_paren: Vec::new(), sv_stack: Vec::new(), sv_bang: (false, false), ' : '';
+  const specInit = sig ? 'spec_tok: 0, spec_on: false, spec_base: 0, spec_closed_at: 0, spec_closed: false, spec_done: false, spec_then: false, spec_off: 0, spec_end: 0, spec_at: 0, spec_has_at: false, spec_keep: false, sv: (0, false, 0, 0, 0, false, 0), sv_paren: Vec::new(), sv_stack: Vec::new(), sv_bang: (false, false), ' : '';
   const rxOut = rx ? 'let ((has_prev, prev_kid, prev_lid), (has_prev2, bp_lid)) = (st.prev(), st.prev2());\n    ' : '';
   const rxRet = rx ? 'prev_lid, prev_kid, bp_lid, has_prev, has_prev2, st.paren_head, st.last_close, st.last_bang, ' : '';
-  return `${p.head}${consts}${p.lexStacks}${p.scans}${p.tplFn}${struct}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, pending_nl: bool, ${rxParams}template_stack: Vec<i64>, el_ended: bool, tag_angle: isize, la_end: isize, spec_until: isize, ${raw ? 'tag_at: Vec<i64>, ' : ''}acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, ${rxTy}Vec<i64>, bool, isize, isize, isize${raw ? ', Vec<i64>' : ''}) {
+  return `${p.head}${consts}${p.lexStacks}${p.scans}${p.tplFn}${struct}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, pending_nl: bool, ${rxParams}template_stack: Vec<i64>, el_ended: bool, tag_angle: isize, la_end: isize, spec_until: isize, ${raw ? 'tag_at: Vec<i64>, ' : ''}acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, ${rxTy}Vec<i64>, bool, isize, isize, isize${raw ? ', Vec<i64>' : ''}, Option<LexErr>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
-    let mut st = ElScan { acc, pending_nl, ${rxInit}template_stack, el_ended, tag_angle, la_end, spec_until, ${raw ? 'tag_at, ' : ''}${specInit}};
+    let mut st = ElScan { acc, pending_nl, err: None, ${rxInit}template_stack, el_ended, tag_angle, la_end, spec_until, ${raw ? 'tag_at, ' : ''}${specInit}};
     while ${cond} {
 ${loopBody}
     }
-    ${rxOut}(pos, st.pending_nl, ${rxRet}st.template_stack, st.el_ended, st.tag_angle, st.la_end, st.spec_until${raw ? ', st.tag_at' : ''})
+    ${rxOut}(pos, st.pending_nl, ${rxRet}st.template_stack, st.el_ended, st.tag_angle, st.la_end, st.spec_until${raw ? ', st.tag_at' : ''}, st.err)
 }
-fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::new();
-    lex_into(src, &mut toks, &mut LexStacks::default());
-    toks
-}
-/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer).
-fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, stk: &mut LexStacks) {
+${RS_LEX_FN}/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer);
+/// the lexer error, if any.
+fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, stk: &mut LexStacks) -> Option<LexErr> {
     toks.clear();
     let r = lex_from(src, 0, false, ${rx ? `0, 0, 0, false, false, ${p.takeStk('paren_head')}, false, false, ` : ''}${p.takeStk('template_stack')}, false, 0, 0, 0, ${raw ? 'Vec::new(), ' : ''}toks, 0);
     ${rx ? 'stk.paren_head = r.7; ' : ''}stk.template_stack = r.${rx ? 10 : 2};
+    r.${(rx ? 15 : 7) + (raw ? 1 : 0)}
 }`;
 }
 
@@ -647,6 +682,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const stateful = !!(rx || tpl || el);
   const newlineOnly = !!(nl && !rx && !tpl);
   const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
+  const errAt = el ? 'st.err' : 'err';
   // Byte-class dispatch folds whitespace/newline/template-open into the match's jump table so
   // the hot loop does one load + one match, instead of a chain of pre-checks per byte. Newline-mode
   // grammars keep the flow-aware whitespace arms (flow_depth) and do NOT use the folded arms.
@@ -654,7 +690,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const identTok0 = ir.tokens.find((t) => t.name === ir.identToken);
   const identLid0 = identTok0 ? lidCall(shared.tokenLiterals(ir, identTok0, ids.lids.slice(1)), '&b[pos..e]') : 'lid_of(&b[pos..e])';
   const nonAsciiColdCall = `        let (e, k) = _lex_non_ascii(src, pos);
-        if k == 2 { ${stateful ? `st.emit(pos, e, ${identKid0}, ${identLid0});` : `toks.push(mk_tok(pos, e, pending_nl, ${identKid0}, ${identLid0})); pending_nl = false;`} } else if k == 1 { ${nlVar} = true; }
+        if k == 2 { ${stateful ? `st.emit(pos, e, ${identKid0}, ${identLid0});` : `toks.push(mk_tok(pos, e, pending_nl, ${identKid0}, ${identLid0})); pending_nl = false;`} } else if k == 1 { ${nlVar} = true; } else if k == 3 { ${rsFail(errAt, '0', 'pos as isize', 'pos as isize')} }
         pos = e; continue;
 `;
   const nonAsciiWsCheck = nlRs ? '' : `        if c >= 0xC2 { if let Some((ch, w)) = _char_at(src, pos) { if _is_js_ws(ch) { if ch == '\\u{2028}' || ch == '\\u{2029}' { ${nlVar} = true; } pos += w; continue; } } }
@@ -668,13 +704,13 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const tplOpenByte = tpl && tlen(tpl.open) === 1 ? firstUnit(tpl.open, UNITS) : null;
   const tplLits = shared.templateLiterals(ir, ids.lids.slice(1));
   const tplOpenArm = tplOpenByte !== null ? `        ${tplOpenByte} => {
-            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl!.open)}, ${rx ? '!st.prev_is_value()' : 'true'});
+            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl!.open)}, ${rx ? '!st.prev_is_value()' : 'true'}); if e < 0 { ${errAt} = Some(_lex_tpl_err(e, n)); pos = n; continue; } let e = e as usize;
             if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, ${lidCall(tplLits.head, '&b[pos..e]')}); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl!.token)}, ${lidCall(tplLits.whole, '&b[pos..e]')}); }
             pos = e; continue;
         }
 ` : '';
   const tplOpenPreCheck = tpl && tplOpenByte === null ? `        if ${startByteEq('pos', tpl.open)} {
-            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.open)}, ${rx ? '!st.prev_is_value()' : 'true'});
+            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.open)}, ${rx ? '!st.prev_is_value()' : 'true'}); if e < 0 { ${errAt} = Some(_lex_tpl_err(e, n)); pos = n; continue; } let e = e as usize;
             if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, ${lidCall(tplLits.head, '&b[pos..e]')}); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl.token)}, ${lidCall(tplLits.whole, '&b[pos..e]')}); }
             pos = e; continue;
         }
@@ -686,7 +722,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const closeByte = tpl && closeFirst < 128 && !specialBytes.includes(closeFirst) ? closeFirst : null;
   const tplCloseTest = tpl ? `        if !st.template_stack.is_empty() && ${startByteEq('pos', tpl.interpClose)} && *st.template_stack.last().unwrap() == 0 {
             st.template_stack.pop();
-            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.interpClose)}, false);
+            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.interpClose)}, false); if e < 0 { ${errAt} = Some(_lex_tpl_err(e, n)); pos = n; continue; } let e = e as usize;
             if interp { st.emit(pos, e, ${kidOf(ids, "$templateMiddle")}, ${lidCall(tplLits.middle, '&b[pos..e]')}); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, "$templateTail")}, ${lidCall(tplLits.tail, '&b[pos..e]')}); }
             pos = e; continue;
         }
@@ -694,7 +730,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const tplDispatch = tpl ? `${closeByte === null ? tplCloseTest : ''}${tplOpenPreCheck}` : '';
   const punctLine = (p: string) =>
     `        if ${startByteEq('pos', p)} { ${stateful ? `st.emit(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${tlen(p)}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${tlen(p)}; continue; }`;
-  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
+  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine, errAt);
   // Where no candidate can begin at a non-ASCII byte, the byte is whitespace, an identifier or an
   // error: one cold call decides, so the dispatch loop holds no Unicode code (register layout).
   const nonAsciiCold = !nlRs && !!ir.identToken && buildLexDispatchPlan(lexFirsts).fallbackIndices.length === 0;
@@ -717,7 +753,7 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
 ` : '';
   const identName = ir.identToken;
   const identKid = identName ? kidOf(ids, identName) : 0;
-  const identEscErrRs = shared.identEscError(), uniClassRs = shared.uniClass();
+  const uniClassRs = shared.uniClass();
   const identTok = ir.tokens.find((t) => t.name === identName);
   const identLid = identTok ? lidCall(shared.tokenLiterals(ir, identTok, ids.lids.slice(1)), '&b[pos..e]') : 'lid_of(&b[pos..e])';
   // Unicode ID_Start fallback (mirrors emit-lexer uniIdentReY) before unmatched-byte panic.
@@ -726,8 +762,8 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
     : `toks.push(mk_tok(pos, e, pending_nl, ${identKid}, ${identLid})); pending_nl = false;`;
   const uniIdentOrPanic = identName && !nonAsciiCold
     ? `        if c >= 0x80 { if let Some(e) = _scan_uni_ident(b, pos) { ${uniIdentEmit} pos = e; continue; } }
-        panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`
-    : `        panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`;
+${rsUnexpected(errAt)}`
+    : rsUnexpected(errAt);
   // The source is a &str, so the character at a position is std's own decode of it: one boundary
   // check and the character's bytes, none past it. None where pos is no character boundary.
   const lexUtf8Helpers = `${shared.scannedTokens(ir).some((t) => t.skip) ? RS_HAS_LINE_TERM : ''}#[inline(always)] fn _char_at(s: &str, pos: usize) -> Option<(char, usize)> {
@@ -747,15 +783,11 @@ ${identName || ir.identLike.length ? `${rsUniIdentTables()}// Both out of line: 
 // Extend an identifier token that the ASCII pattern cut short at a non-ASCII
 // ID_Continue char (caf|é → café), mirroring emit-lexer's uniIdentContReY extension.
 // A non-ASCII byte no candidate begins with: (end, 0) whitespace, (end, 1) a line-terminating
-// whitespace, (end, 2) an identifier; anything else is the unexpected-character error.
+// whitespace, (end, 2) an identifier; (pos, 3) the unexpected-character error.
 #[cold] #[inline(never)] fn _lex_non_ascii(src: &str, pos: usize) -> (usize, u8) {
     if let Some((ch, w)) = _char_at(src, pos) { if _is_js_ws(ch) { return (pos + w, (ch == '\\u{2028}' || ch == '\\u{2029}') as u8); } }
     if let Some(e) = _scan_uni_ident(src.as_bytes(), pos) { return (e, 2); }
-    panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(src.as_bytes()[pos] as char));
-}
-// The lexer error of an identifier whose escapes spell no IdentifierName (lex-family.ts).
-#[cold] #[inline(never)] fn ${identEscErrRs}(src: &str, pos: isize, e: isize) -> isize {
-    panic!("Invalid identifier escape at offset {}: '{}'", pos, &src[pos as usize..e as usize]);
+    (pos, 3)
 }
 #[inline(always)] fn ${uniClassRs}(cp: isize) -> isize { _uni_class(cp as u32) as isize }
 #[inline(never)] fn _lx_ext(b: &[u8], mut e: usize) -> usize {
@@ -767,15 +799,14 @@ ${identName || ir.identLike.length ? `${rsUniIdentTables()}// Both out of line: 
     e
 }
 ` : ''}`;
-  const rxConsts = `${lexUtf8Helpers}${rxBitTables}${tplLidConsts}${nlRs ? nlRs.consts : ''}`;
+  const rxConsts = `${RS_LEX_ERR}${lexUtf8Helpers}${rxBitTables}${tplLidConsts}${nlRs ? nlRs.consts : ''}`;
   const pavHot = rx ? rsLidAny(ids, rx.postfixAfterValue, 'lid') : 'false';
   // The span itself is the shared family's scanner; this reads which delimiter ended it.
-  const tplFn = tpl ? `fn _scan_tpl_span(s: &str, p: usize, strict: bool) -> (bool, usize) {
+  // (interp, end), or the span's lexer error: (false, q) with q < 0 (_lex_tpl_err).
+  const tplFn = tpl ? `fn _scan_tpl_span(s: &str, p: usize, strict: bool) -> (bool, isize) {
     let q = ${shared.tplSpan()}(s, p as isize, strict);
-    if q == -1 { panic!("Unterminated template literal at offset {}", s.len()); }
-    if q < -1 { panic!("Invalid escape sequence in template at offset {}", -2 - q); }
-    let q = q as usize;
-    if s.as_bytes()[q..].starts_with(${J(tpl.interpOpen)}.as_bytes()) { return (true, q + ${tlen(tpl.interpOpen)}); }
+    if q < 0 { return (false, q); }
+    if s.as_bytes()[q as usize..].starts_with(${J(tpl.interpOpen)}.as_bytes()) { return (true, q + ${tlen(tpl.interpOpen)}); }
     (false, q + ${tlen(tpl.open)})
 }
 ` : '';
@@ -895,8 +926,8 @@ ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
   // their capacity instead of allocating them again; each lex starts them empty. They travel
   // through lex_from by value: kept in the scan's own struct, the hot emit path keeps them in
   // registers, which a by-reference field costs about 14 instructions per token (Callgrind, CI:
-  // checker.ts lex 79.9M by value vs 84.7M by reference). The price: a lexer panic drops them, so
-  // the parse after one allocates them again (a few bytes, bounded by nesting depth).
+  // checker.ts lex 79.9M by value vs 84.7M by reference). A lexer error is returned, so they come
+  // back after one too.
   const stkFields = [rx ? 'paren_head: Vec<bool>' : '', tpl || el ? 'template_stack: Vec<i64>' : ''].filter(Boolean);
   const lexStacks = `/// The lexer's transient stacks (bracket heads, template depths), kept across lexes by a reused builder.
 #[derive(Default)]
@@ -914,14 +945,8 @@ struct LexStacks {${stkFields.length ? ` ${stkFields.join(', ')} ` : ''}}
 ${nlWs}${tplDispatch}${cascade}
 ${uniIdentOrPanic}`;
   if (el) {
-    // While a type-parameter signature is undecided the error routines return their sentinel.
-    const spec = (code: string, at: RegExp, guard: string) => (el.signature ? code.replace(at, (m) => guard + m) : code);
-    const errs = (code: string) => spec(spec(spec(code,
-      /    if q == -1 \{ panic!/, '    if q < 0 && _lex_spec() { return (false, usize::MAX); }\n'),
-      /    panic!\("Unexpected character at offset \{\}: '\{\}'", pos, _char_at\(src, pos\)\.map\(\|\(ch, _\)\| ch\)\.unwrap_or\(src\.as_bytes\(\)\[pos\] as char\)\);\n\}/, '    if _lex_spec() { return (pos + 1, 3); }\n'),
-      /    panic!\("Invalid identifier escape/, '    if _lex_spec() { return -1; }\n');
     return elementLexerRust(ir, ids, shared, {
-      head: `${renderIdTablesRust(ids)}${errs(rxConsts)}`, scans, tplFn: errs(tplFn), lexCodes, lexFirsts, specialArms: `${wsNlArms}${tplOpenArm}`,
+      head: `${renderIdTablesRust(ids)}${rxConsts}`, scans, tplFn, lexCodes, lexFirsts, specialArms: `${wsNlArms}${tplOpenArm}`,
       nonAscii: nonAsciiCold ? nonAsciiColdCall : nonAsciiWsCheck, tplCloseTest, tplOpenPreCheck, closeByte, uniIdentOrPanic, pavHot, lexStacks, takeStk,
     });
   }
@@ -929,93 +954,85 @@ ${uniIdentOrPanic}`;
     const rxLoopBody = `        let c = b[pos] as u32;
 ${nlWs}${cascade}
 ${uniIdentOrPanic}`;
-    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool) {
+    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Option<LexErr>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
+    let mut err: Option<LexErr> = None;
     let mut st = RxScan { acc, pending_nl, base, prev0: (has_prev, prev_kid, prev_lid), bp0: (has_prev2, bp_lid), kid1: prev_kid, lid1: prev_lid, lid2: bp_lid, paren_head, last_close, last_bang };
     while pos < n && (limit == 0 || st.acc.len() - base < limit) {
 ${rxLoopBody}
     }
     let ((has_prev, prev_kid, prev_lid), (has_prev2, bp_lid)) = (st.prev(), st.prev2());
-    (pos, st.pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, st.paren_head, st.last_close, st.last_bang)
+    (pos, st.pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, st.paren_head, st.last_close, st.last_bang, err)
 }
-fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::new();
-    lex_into(src, &mut toks, &mut LexStacks::default());
-    toks
-}
-/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer).
-fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) {
+${RS_LEX_FN}/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer);
+/// the lexer error, if any.
+fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) -> Option<LexErr> {
     toks.clear();
     let r = lex_from(src, 0, false, 0, 0, 0, false, false, ${takeStk('paren_head')}, false, false, toks, 0);
     stk.paren_head = r.7;
+    r.10
 }`;
   }
   if (tplOnly) {
-    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${tplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, Vec<i64>) {
+    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${tplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, Vec<i64>, Option<LexErr>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
+    let mut err: Option<LexErr> = None;
     let mut st = TplScan { acc, pending_nl, template_stack };
     while pos < n && (limit == 0 || st.acc.len() - base < limit) {
 ${loopBody}
     }
-    (pos, st.pending_nl, st.template_stack)
+    (pos, st.pending_nl, st.template_stack, err)
 }
-fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::new();
-    lex_into(src, &mut toks, &mut LexStacks::default());
-    toks
-}
-/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer).
-fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) {
+${RS_LEX_FN}/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer);
+/// the lexer error, if any.
+fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) -> Option<LexErr> {
     toks.clear();
     let r = lex_from(src, 0, false, ${takeStk('template_stack')}, toks, 0);
     stk.template_stack = r.2;
+    r.3
 }`;
   }
   if (rxTpl) {
-    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxTplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Vec<i64>) {
+    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxTplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Vec<i64>, Option<LexErr>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
+    let mut err: Option<LexErr> = None;
     let mut st = RxTplScan { acc, pending_nl, base, prev0: (has_prev, prev_kid, prev_lid), bp0: (has_prev2, bp_lid), kid1: prev_kid, lid1: prev_lid, lid2: bp_lid, paren_head, last_close, last_bang, template_stack };
     while pos < n && (limit == 0 || st.acc.len() - base < limit) {
 ${loopBody}
     }
     let ((has_prev, prev_kid, prev_lid), (has_prev2, bp_lid)) = (st.prev(), st.prev2());
-    (pos, st.pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, st.paren_head, st.last_close, st.last_bang, st.template_stack)
+    (pos, st.pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, st.paren_head, st.last_close, st.last_bang, st.template_stack, err)
 }
-fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::new();
-    lex_into(src, &mut toks, &mut LexStacks::default());
-    toks
-}
-/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer).
-fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) {
+${RS_LEX_FN}/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer);
+/// the lexer error, if any.
+fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) -> Option<LexErr> {
     toks.clear();
     let r = lex_from(src, 0, false, 0, 0, 0, false, false, ${takeStk('paren_head')}, false, false, ${takeStk('template_stack')}, toks, 0);
     stk.paren_head = r.7; stk.template_stack = r.10;
+    r.11
 }`;
   }
   if (rxOrTpl) {
-    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${stateImpl}fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::new();
-    lex_into(src, &mut toks, &mut LexStacks::default());
-    toks
-}
-/// Lexes src into out, replacing what it held and keeping its capacity (a reused builder's buffer).
-fn lex_into<'a>(src: &'a str, out: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) {
+    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${stateImpl}${RS_LEX_FN}/// Lexes src into out, replacing what it held and keeping its capacity (a reused builder's buffer);
+/// the lexer error, if any.
+fn lex_into<'a>(src: &'a str, out: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) -> Option<LexErr> {
     out.clear();
     let b = src.as_bytes();
     let n = b.len();
 ${open.replace('toks: Vec::new()', 'toks: std::mem::take(out)')}
     let mut pos = 0usize;
+    let mut err: Option<LexErr> = None;
     while pos < n {
 ${loopBody}
     }
     *out = st.toks;${rx ? '\n    stk.paren_head = st.paren_head;' : ''}${tpl ? '\n    stk.template_stack = st.template_stack;' : ''}
+    err
 }`;
   }
   if (newlineOnly) {
@@ -1024,7 +1041,7 @@ ${loopBody}
       .replace(/pending_nl/g, 'st.pending_nl');
     const nlUniIdentOrPanic = identName
       ? rustNlScan(uniIdentOrPanic)
-      : `        panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`;
+      : rsUnexpected('err');
     const nlLoopBody = `        let c = b[pos] as u32;
 ${nlRs!.wsFrom}${rustNlScan(cascade)}
 ${nlUniIdentOrPanic}`;
@@ -1035,45 +1052,39 @@ ${nlRs!.hooksFrom.replace(/flow_depth/g, 'self.flow_depth')}
         self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;
     }
 }
-${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, pending_nl: bool, flow_depth: i64, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, i64) {
+${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, pending_nl: bool, flow_depth: i64, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, i64, Option<LexErr>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
+    let mut err: Option<LexErr> = None;
     let mut st = NlScan { acc, pending_nl, flow_depth };
     while pos < n && (limit == 0 || st.acc.len() - base < limit) {
 ${nlLoopBody}
     }
-    (pos, st.pending_nl, st.flow_depth)
+    (pos, st.pending_nl, st.flow_depth, err)
 }
-fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::new();
-    lex_into(src, &mut toks, &mut LexStacks::default());
-    toks
-}
-/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer).
-fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) {
+${RS_LEX_FN}/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer);
+/// the lexer error, if any.
+fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) -> Option<LexErr> {
     toks.clear();
-    lex_from(src, 0, false, 0, toks, 0);
+    lex_from(src, 0, false, 0, toks, 0).3
 }`;
   }
-  return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool) {
+  return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, Option<LexErr>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
+    let mut err: Option<LexErr> = None;
     while pos < n && (limit == 0 || acc.len() - base < limit) {
 ${loopBody.replace(/pending_nl/g, 'pending_nl').replace(/toks\.push/g, 'acc.push')}
     }
-    (pos, pending_nl)
+    (pos, pending_nl, err)
 }
-fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::new();
-    lex_into(src, &mut toks, &mut LexStacks::default());
-    toks
-}
-/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer).
-fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) {
+${RS_LEX_FN}/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer);
+/// the lexer error, if any.
+fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) -> Option<LexErr> {
     toks.clear();
-    lex_from(src, 0, false, toks, 0);
+    lex_from(src, 0, false, toks, 0).2
 }`;
 }
 
@@ -1930,7 +1941,7 @@ ${treeEqFn}${reuseFns}pub struct Doc<B: Builder = CstBuilder> {
 impl<B: Builder + Default> Doc<B> {
     /// Explicit builder (handout Doc::new(src, builder) form — Rust has no arity overload).
     pub fn new_with(text: String, b: B) -> Doc<B> {
-        let toks = ${initToks};
+        let toks = match ${initToks} { (toks, None) => toks, (_, Some(e)) => panic!("{}", lex_error(&text, e).msg) };
         let mut d = Doc { text, toks, align: None, validate: false, b, scratch: Vec::new()${docExtraInit}, root: None, baseline: 0, last_pos: 0 };
         d.reparse_fresh();
         d
@@ -1967,12 +1978,10 @@ impl<B: Builder + Default> Doc<B> {
         let old_toks = self.toks.clone();
         // A lexer error in the relex is the text's own (the relexed stream equals a fresh lex:
         // relex-family.ts): the text is rejected and the Doc keeps no token stream (the next edit
-        // relexes it all). The lexer reports an error by panicking, so the one panic caught is the
-        // relex's (owed: the lexer reports errors by return); a panic anywhere else in edit is a bug
-        // and propagates.
-        let relexed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| relex_edits(&old_text, &old_toks, edits))) {
-            Ok((text, toks, n)) => { self.text = text; self.toks = toks; n as usize }
-            Err(_) => {
+        // relexes it all).
+        let relexed = match relex_edits(&old_text, &old_toks, edits) {
+            (text, toks, n, None) => { self.text = text; self.toks = toks; n as usize }
+            (_, _, _, Some(_)) => {
                 self.text = apply_edits(&old_text, edits);
                 self.toks = Vec::new();
                 self.root = None;
@@ -2776,7 +2785,7 @@ pub fn parse_with<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> Option<B
     let owned = std::mem::take(b);
     let mut g = ParseGuard { home: b, lex: ws.lex, p: Parser { toks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src, b: owned, scratch: ws.scratch${reuse ? ', entries: ws.entries' : ''}${shapeB ? ', segs: ws.segs' : ''} } };
     let p = &mut g.p;
-    lex_into(src, &mut p.toks, &mut g.lex);
+    if let Some(e) = lex_into(src, &mut p.toks, &mut g.lex) { panic!("{}", lex_error(src, e).msg); }
     p.scratch.clear();
     let root = match p.parse_${ir.entry}() {
         Some(fr) if p.pos == p.toks.len() => Some(fr.root()),
@@ -5441,6 +5450,7 @@ const rustLowering: Lowering = {
       return role === 'param' ? `&[${el}]` : `Vec<${el}>`;
     }
     if (isRec(t)) return recName(t);
+    if (isOpt(t)) return `Option<${recName(t)}>`;
     if (t === 'str') return role === 'param' || !owned ? '&str' : 'String';
     if (t === 'edit') return '&Edit';
     return RS_SCALAR[t];
@@ -5611,7 +5621,9 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
         `let lexed = lex_from(${cx.str(s.text)}, ${s.pos} as usize, ${[...s.state, `&mut ${s.out}`].join(', ')}, 1);`,
         `${s.pos} = lexed.0 as isize;`,
         ...s.state.map((n, i) => `${n} = lexed.${i + 1};`),
+        `${s.err} = lexed.${s.state.length + 1};`,
       ],
+      lexAll: (cx, s) => [`let (${s.mutable ? 'mut ' : ''}${s.out}, ${s.err}) = lex_all(${cx.str(s.text)});`],
     },
   },
   record: {
@@ -5623,6 +5635,9 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
     refType: (rec) => `&mut ${rec}`,
     refArg: (r) => `&mut ${r.c}`,
     extend: (_cx, l, from) => [`${l}.extend_from_slice(${from.owned ? `&${from.c}` : from.c});`],
+    none: (cx, rec) => cx.atom('None', `opt_${rec}`, `opt_${rec}`),
+    some: (cx, rec, r) => cx.atom(`Some(${r.c})`, `opt_${rec}`, `opt_${rec}`),
+    isSome: (_cx, r) => ({ c: `${rsWrap(r, ATOM)}.is_some()`, prec: ATOM }),
   },
 };
 
@@ -5653,7 +5668,7 @@ function emitRustLibrary(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms)
       : '';
     const arenaIdTables = renderArenaIdTablesRust(ar);
     return `// GENERATED by emit-portable.ts (rustTarget) — parser library for grammar "${ir.grammarName}".
-// Public API: tokenize(src) -> Vec<Token> (the lexer alone; tokens borrow only src), parse_with /
+// Public API: tokenize(src) -> Result<Vec<Token>, LexError> (the lexer alone; tokens borrow only src), parse_with /
 // Doc (CST). Compile as a library (rustc --crate-type lib) or include via \`mod\`.
 #![allow(non_snake_case)]
 
@@ -5720,15 +5735,14 @@ fn write_json(p: &Parser<'_>, id: i32, out: &mut String) {
 
 /// A token of the public tokenizer: owned fields plus a text slice borrowed from the source.
 pub struct Token<'a> { pub kind: &'static str, pub text: &'a str, pub off: usize, pub end: usize, pub nl: bool, pub kid: u16, pub lid: u16 }
-/// The lexer alone: a fresh Vec the caller owns (Rust keeps no globals, so nothing else is touched).
-///
-/// # Panics
-///
-/// On input the lexer cannot tokenize, with the lexer's message ("Unexpected character at
-/// offset …", "Unterminated template literal at offset …") — the crate's lexical error
-/// mechanism, shared with \`parse_with\` and \`Doc::new\`.
-pub fn tokenize<'a>(src: &'a str) -> Vec<Token<'a>> {
-    lex(src).into_iter().map(|t| Token { kind: tok_kind(&t), text: tok_text(src, &t), off: t.off as usize, end: t.end as usize, nl: t.nl, kid: t.kid, lid: t.lid }).collect()
+/// The lexer alone: a fresh Vec the caller owns (Rust keeps no globals, so nothing else is touched),
+/// or the error of input the lexer cannot tokenize (its offset and message: "Unexpected character
+/// at offset …", "Unterminated template literal at offset …").
+pub fn tokenize<'a>(src: &'a str) -> Result<Vec<Token<'a>>, LexError> {
+    match lex_all(src) {
+        (toks, None) => Ok(toks.into_iter().map(|t| Token { kind: tok_kind(&t), text: tok_text(src, &t), off: t.off as usize, end: t.end as usize, nl: t.nl, kid: t.kid, lid: t.lid }).collect()),
+        (_, Some(e)) => Err(lex_error(src, e)),
+    }
 }
 // The CST over a fresh arena that lives in the returned Parser (serialize with write_json).
 // Library callers use parse_with / Doc.
@@ -5954,22 +5968,16 @@ fn main() {
         };
         let mut out = String::new();
         for s in src.split('\\0') {
-            let line = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let mut one = String::from("[");
-                for (i, t) in tokenize(s).iter().enumerate() {
-                    if i > 0 { one.push(','); }
-                    one.push('['); js(t.kind, &mut one); one.push(','); js(t.text, &mut one); one.push_str(if t.nl { ",true," } else { ",false," }); one.push_str(&t.lid.to_string()); one.push(']');
+            match tokenize(s) {
+                Ok(toks) => {
+                    out.push('[');
+                    for (i, t) in toks.iter().enumerate() {
+                        if i > 0 { out.push(','); }
+                        out.push('['); js(t.kind, &mut out); out.push(','); js(t.text, &mut out); out.push_str(if t.nl { ",true," } else { ",false," }); out.push_str(&t.lid.to_string()); out.push(']');
+                    }
+                    out.push(']');
                 }
-                one.push(']');
-                one
-            }));
-            match line {
-                Ok(l) => out.push_str(&l),
-                Err(e) => {
-                    out.push('!');
-                    if let Some(m) = e.downcast_ref::<String>() { out.push_str(&m.replace('\\n', " ")); }
-                    else if let Some(m) = e.downcast_ref::<&str>() { out.push_str(&m.replace('\\n', " ")); }
-                }
+                Err(e) => { out.push('!'); out.push_str(&e.msg.replace('\\n', " ")); }
             }
             out.push('\\n');
         }
