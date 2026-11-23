@@ -608,6 +608,12 @@ function lineCommentScopeSuffix(prefix: string | undefined): string {
   return `.${parts.join('-')}`;
 }
 
+/** The TextMate scope of a string quoted by `delim`: `"` double, `'` single; null for any other
+ *  delimiter (each caller says what such a string takes). The one place this convention lives. */
+function quoteScope(delim: string): string | null {
+  return delim === '"' ? 'string.quoted.double' : delim === "'" ? 'string.quoted.single' : null;
+}
+
 function classifyToken(token: TokenDecl, opts?: { explicitScope?: boolean }): { scope: string; isBlock?: boolean } {
   const useExplicitScope = opts?.explicitScope ?? true;
   const commentLike = token.flags.includes('skip') || token.scope?.startsWith('comment.');
@@ -631,8 +637,7 @@ function classifyToken(token: TokenDecl, opts?: { explicitScope?: boolean }): { 
   }
 
   const delimiters = tokenPatternStringDelimiters(token);
-  if (delimiters.includes('"')) return { scope: 'string.quoted.double' };
-  if (delimiters.includes("'")) return { scope: 'string.quoted.single' };
+  for (const q of ['"', "'"]) if (delimiters.includes(q)) return { scope: quoteScope(q)! };
   if (delimiters.includes('`')) return { scope: 'string.quoted.other.template' };
 
   return { scope: 'variable.other' };
@@ -1232,8 +1237,6 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
   // TextMate scope conventions, namespaced by langName.
   const tagBegin = `punctuation.definition.tag.begin.${langName}`;
   const tagEnd = `punctuation.definition.tag.end.${langName}`;
-  const tagNs = `entity.name.tag.namespace.${langName}`;
-  const tagNsSep = `punctuation.separator.namespace.${langName}`;
   // A dotted member-expression tag name (`comps.MyComp`, `a.b.C`): the leading
   // qualifier segment(s) are an object/namespace reference, the `.` a member
   // accessor, and the final segment the referenced name. Mirrors how the
@@ -1242,7 +1245,6 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
   const tagObject = `variable.other.object.${langName}`;
   const tagAccessor = `punctuation.accessor.${langName}`;
   const attrName = `entity.other.attribute-name.${langName}`;
-  const attrNsName = `entity.other.attribute-name.namespace.${langName}`;
   const attrAssign = `keyword.operator.assignment.${langName}`;
   const embeddedBegin = `punctuation.section.embedded.begin.${langName}`;
   const embeddedEnd = `punctuation.section.embedded.end.${langName}`;
@@ -1275,17 +1277,18 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
   const tagEndAhead = `(?=${tagEndAlt})`;
 
   // A tag name, from the tag-name rule's NAME SHAPE (region-view.ts): its identifier, and the
-  // literals joining further identifiers. A `:` joiner is an XML-style namespace prefix, a `.`
-  // joiner a member expression (re-tokenized into object / accessor / name), the others join
-  // within one name. The name's scope: the first `highlight.tagName` entry whose pattern matches
-  // the whole name; without entries, `entity.name.tag` (or the `contextualScopes` scope declared
-  // for the tag-name rule). Captures, in order: [namespace, `:`], [dotted member], one per entry
-  // (or the one default).
-  const joiners = view.tagName?.joiners ?? [];
-  const hasNs = joiners.includes(':');
-  const hasMember = joiners.includes('.');
-  // joiners within one name segment (a `.` joiner forms the member alternative instead)
-  const inName = joiners.filter(j => j !== ':' && !(j === '.' && hasMember));
+  // literals joining further identifiers. The declared prefix joiner (`highlight.nameJoiners`, an
+  // XML namespace `:`) splits off a prefix; a member-access joiner (the grammar's
+  // `memberAccessTexts`, `.`) forms a member expression (re-tokenized into object / accessor /
+  // name); the others join within one name. The name's scope: the first `highlight.tagName` entry
+  // whose pattern matches the whole name; without entries, `entity.name.tag` (or the
+  // `contextualScopes` scope declared for the tag-name rule). Captures, in order: [prefix,
+  // joiner], [dotted member], one per entry (or the one default).
+  const tagShape = view.tagName;
+  const tagPrefix = tagShape?.prefix ?? null;
+  const memberJoiners = tagShape?.member ?? [];
+  const hasMember = memberJoiners.length > 0;
+  const inName = tagShape?.within ?? [];
   const nameBody = `${identRegex}${inName.length ? `(?:(?:${inName.map(escapeRegex).join('|')})${identRegex})*` : ''}`;
   const ctxTagScope = view.tagName && (grammar.contextualScopes ?? []).find(s => s.within.includes(view.tagName!.rule))?.scope;
   // One alternative per `highlight.tagName` entry, its `match` a test at the name's start (an
@@ -1294,23 +1297,24 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
   const nameEntries = hl.tagName ?? [];
   const nameAlts: { re: string; scope: string }[] = nameEntries.map(e => ({ re: `${e.match ? `(?=${tokenPatternToRegex(e.match)})` : ''}${nameBody}`, scope: `${e.scope}.${langName}` }));
   if (!nameEntries.length || nameEntries[nameEntries.length - 1].match) nameAlts.push({ re: nameBody, scope: `${ctxTagScope ?? 'entity.name.tag'}.${langName}` });
-  const memberNameRe = `${identRegex}(?:\\.${identRegex})+`;
+  const memberRe = memberJoiners.length === 1 ? escapeRegex(memberJoiners[0]) : `(?:${memberJoiners.map(escapeRegex).join('|')})`;
+  const memberNameRe = `${identRegex}(?:${memberRe}${identRegex})+`;
   const nameRe =
-    (hasNs ? `(?:(${identRegex})(:))?` : '') +
+    (tagPrefix ? `(?:(${identRegex})(${escapeRegex(tagPrefix.text)}))?` : '') +
     `(?:${hasMember ? `(${memberNameRe})|` : ''}${nameAlts.map(a => `(${a.re})`).join('|')})`;
-  const nameGroups = (hasNs ? 2 : 0) + (hasMember ? 1 : 0) + nameAlts.length;
+  const nameGroups = (tagPrefix ? 2 : 0) + (hasMember ? 1 : 0) + nameAlts.length;
   // Re-tokenize the dotted-member capture (#627): each qualifier segment before a
   // `.` is an object reference, each `.` an accessor, the trailing segment the
   // referenced name (scoped as the last name alternative: a component in JSX).
   const memberPatterns: TmPattern[] = [
-    { match: `${identRegex}(?=\\s*\\.)`, name: tagObject },
-    { match: '\\.', name: tagAccessor },
+    { match: `${identRegex}(?=\\s*${memberRe})`, name: tagObject },
+    { match: memberRe, name: tagAccessor },
     { match: identRegex, name: nameAlts[nameAlts.length - 1].scope },
   ];
   const nameCaptures = (base: number): Record<string, TmCapture> => {
     const caps: Record<string, TmCapture> = {};
     let i = base;
-    if (hasNs) { caps[String(i++)] = { name: tagNs }; caps[String(i++)] = { name: tagNsSep }; }
+    if (tagPrefix) { caps[String(i++)] = { name: `${ctxTagScope ?? 'entity.name.tag'}.${tagPrefix.prefix}.${langName}` }; caps[String(i++)] = { name: `${tagPrefix.scope}.${langName}` }; }
     if (hasMember) caps[String(i++)] = { patterns: memberPatterns };
     for (const a of nameAlts) caps[String(i++)] = { name: a.scope };
     return caps;
@@ -1515,14 +1519,16 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
   };
 
   // ── <name>-string-*: the tag tokens' quoted forms (own scope, no escapes / interpolation) ──
-  // One begin/end per delimiter of each `tagTokens` string token (JSX's `"…"` / `'…'`).
+  // One begin/end per delimiter of each `tagTokens` string token (JSX's `"…"` / `'…'`), each
+  // scoped by its quote (`quoteScope`, the convention code strings use; `string.quoted.other`
+  // for any other delimiter).
   const stringKeys: string[] = [];
-  const quoteName = (q: string) => (q === '"' ? 'double' : q === "'" ? 'single' : 'other');
   for (const t of view.tagTokens) {
     for (const q of tokenPatternStringDelimiters(t)) {
-      const key = K(`string-${quoteName(q)}-quoted`);
+      const qs = quoteScope(q) ?? 'string.quoted.other';
+      const key = K(`string-${qs.split('.').pop()}-quoted`);
       result[key] = {
-        name: `string.quoted.${quoteName(q)}.${langName}`,
+        name: `${qs}.${langName}`,
         begin: escapeRegex(q),
         beginCaptures: { '0': { name: strBegin } },
         end: escapeRegex(q),
@@ -1533,11 +1539,11 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
   }
 
   // ── <name>-attributes: name (assign value)? | a hole ──
-  // The attribute name from the attribute rule's NAME SHAPE (`:` a namespace prefix, the other
-  // joiners within the name); the assign literal and the value's openers from the rule.
-  const aj = view.attr?.joiners ?? [];
-  const aNs = aj.includes(':');
-  const aIn = aj.filter(j => j !== ':');
+  // The attribute name from the attribute rule's NAME SHAPE (the declared prefix joiner splits off
+  // a prefix; every other joiner, a member-access text too, joins within the name: an attribute
+  // name is never an expression); the assign literal and the value's openers from the rule.
+  const aPrefix = view.attr?.prefix ?? null;
+  const aIn = (view.attr?.joiners ?? []).filter(j => j !== aPrefix?.text);
   const attrNameRe = `${identRegex}${aIn.length ? `(?:(?:${aIn.map(escapeRegex).join('|')})${identRegex})*` : ''}`;
   const valueOpeners: string[] = [];
   const valueTokenKeys: string[] = [];
@@ -1569,9 +1575,9 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
   const attrPatterns: (TmPattern | { include: string })[] = [
     ...commentIncludes,
     {
-      match: `\\s*${aNs ? `(?:(${identRegex})(:))?` : ''}(${attrNameRe})(?=\\s|${view.attrAssign !== null ? `${escapeRegex(view.attrAssign)}|` : ''}${tagEndAlt}|$)`,
-      captures: aNs
-        ? { '1': { name: attrNsName }, '2': { name: tagNsSep }, '3': { name: attrName } }
+      match: `\\s*${aPrefix ? `(?:(${identRegex})(${escapeRegex(aPrefix.text)}))?` : ''}(${attrNameRe})(?=\\s|${view.attrAssign !== null ? `${escapeRegex(view.attrAssign)}|` : ''}${tagEndAlt}|$)`,
+      captures: aPrefix
+        ? { '1': { name: `entity.other.attribute-name.${aPrefix.prefix}.${langName}` }, '2': { name: `${aPrefix.scope}.${langName}` }, '3': { name: attrName } }
         : { '1': { name: attrName } },
     },
   ];
@@ -5089,7 +5095,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       // Drive the delimiter scope off the EXTRACTED delimiter generically: `"`/`'` keep their
       // canonical scopes; any other delimiter (e.g. a backtick string) takes the token's own scope
       // instead of the old loop's `"`-fallback (which mis-delimited backtick strings).
-      const scopeForDelim = (d: string) => d === '"' ? 'string.quoted.double' : d === "'" ? 'string.quoted.single' : scope;
+      const scopeForDelim = (d: string) => quoteScope(d) ?? scope;
       for (const delim of tokenPatternStringDelimiters(tok)) {
         delimiters.push([delim, scopeForDelim(delim)]);
       }
