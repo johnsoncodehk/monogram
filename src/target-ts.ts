@@ -3128,12 +3128,16 @@ function ${findAnyName(stops)}(s: string, i: number): number {
     return: (vals, fn) => {
       if (vals.length === 1) return [`return ${vals[0]};`];
       if (!tsSlotted(fn.ret)) return [`return [${vals.join(', ')}];`];
-      // The first value is returned, the others are left in the function's slots; the first is
-      // evaluated first, as an array literal would evaluate it, unless no value calls a function
-      // (then no order is observable: the slot stores change no local).
+      // The first value is returned, the others are left in the function's slots. When a value
+      // calls a function, every value is computed first, in order, as an array literal computes
+      // them: a call (this function again, or another that calls it) would otherwise run after
+      // a slot was stored and overwrite it. Without a call no order is observable.
       const calls = (v: string) => /[\w$\]]\s*\(/.test(v);
-      const first = vals.some(calls) ? [`const ${fn.name}_r0 = ${vals[0]};`] : [];
-      return [...first, ...vals.slice(1).map((v, i) => `${fn.name}_r${i + 1} = ${v};`), `return ${first.length ? `${fn.name}_r0` : vals[0]};`];
+      if (vals.some(calls)) {
+        return [`const ${vals.map((v, i) => `${fn.name}_t${i} = ${v}`).join(', ')};`,
+          ...vals.slice(1).map((_, i) => `${fn.name}_r${i + 1} = ${fn.name}_t${i + 1};`), `return ${fn.name}_t0;`];
+      }
+      return [...vals.slice(1).map((v, i) => `${fn.name}_r${i + 1} = ${v};`), `return ${vals[0]};`];
     },
     fn: (f) => [
       ...(f.rets.length > 1 && tsSlotted(f.retTys)
