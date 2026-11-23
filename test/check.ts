@@ -232,7 +232,7 @@ if (TRACE) {
     const missing = traced.filter((f) => !deps.has(f));
     if (!missing.length) continue;
     r.ok = false;
-    r.output += `\n✗ gate-deps: the gate opened ${missing.length} repository file(s) test/gate-deps.ts does not derive for it, so \`check.ts --changed\` could skip it wrongly: ${missing.slice(0, 20).join(', ')}\n  name each in the gate's \`reads\` (test/check.ts), or make the path a literal in the gate's source`;
+    r.output += `\n✗ gate-deps: the gate opened ${missing.length} repository file(s) test/gate-deps.ts does not derive for it, so \`check.ts --changed\` could skip it wrongly: ${missing.join(', ')}\n  name each in the gate's \`reads\` (test/check.ts), or make the path a literal in the gate's source`;
   }
   rmSync(TRACE, { recursive: true, force: true });
 }

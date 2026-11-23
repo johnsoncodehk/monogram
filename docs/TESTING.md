@@ -48,7 +48,8 @@ that no skipped gate of the inner tier could have seen the change: CI runs every
 `CHECK_TRACE_DEPS=1`, which traces the files each gate opens and fails when one is not among its
 derived inputs. It does NOT run the `ci` tier (whole-corpus crosses and gates of more than about ten
 seconds: the portable-targets corpus / edits / recovery classes, test262, tm-mutation, look-extent,
-…): those run in CI on every `land/**` push and on master, and `--changed --all` runs them too. It
+…): those run in CI on every `land/**` push and on master, `--changed --all` runs them too, and a
+`ci`-tier gate whose own script changed runs in the inner loop (the change is to that gate). It
 assumes the generated artifacts are current (`npm run gen`). A test-only or docs change takes
 seconds; a grammar or generator change runs most of the inner tier (see the commit message of the
 landing that introduced it for measured times).
