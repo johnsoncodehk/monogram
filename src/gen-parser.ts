@@ -202,19 +202,26 @@ export function createParser(grammar: CstGrammar) {
   // forbids from being followed by property access, TS1477). Closure is a property of
   // the node, so it is decided when the node is built — never by the frame that tries
   // the next tail, which would let an outer frame attach `.x` to `a = b++`.
+  // A left-recursive rule's continuations (`Type`'s `[$, '.', Ident]`, `[$, sameLine, '[', ']']`)
+  // are LEDs of the same kind and close the same way (`keyof void.x` is no `(keyof void).x`);
+  // the connector is the first item after a leading `sameLine` (`[$, sameLine, '<' …]`).
   const tailClosingLeds = new Set<object>();
-  for (const [ruleName, { leds }] of prattClassified.entries()) {
-    for (const led of leds) {
-      const it = led.items;
-      if (it.length === 0) continue;
-      if (it[0].type === 'op' || it[0].type === 'postfix') continue;   // operator LEDs, not tails
-      const last = it[it.length - 1];
-      const lastIsOperand = selfRefName(last, ruleName);                // open binary/ternary operand
-      const wordConnector = it[0].type === 'literal' && /^[A-Za-z]/.test(it[0].value);
-      if (!lastIsOperand && !wordConnector) accessTailLeds.add(led);
-      if (lastIsOperand || wordConnector || last.type === 'not') tailClosingLeds.add(led);
-    }
-  }
+  const negativeLook = (e: RuleExpr): boolean => e.type === 'not' && e.body.type !== 'not';
+  const classifyTail = (it: RuleExpr[], ruleName: string): void => {
+    if (it.length === 0) return;
+    if (it[0].type === 'op' || it[0].type === 'postfix') return;   // operator LEDs, not tails
+    const conn = it[0].type === 'sameLine' ? it[1] : it[0];
+    const last = it[it.length - 1];
+    const lastIsOperand = selfRefName(last, ruleName);                // open binary/ternary operand
+    const wordConnector = conn?.type === 'literal' && /^[A-Za-z]/.test(conn.value);
+    if (!lastIsOperand && !wordConnector) accessTailLeds.add(it);
+    // A trailing NEGATIVE lookahead closes the tail: the construct asserts that nothing of its kind
+    // follows (`Foo<T>` then no `(`). A positive one (`not(not(X))`, Python's `&t_lookahead`) asserts
+    // that a continuation DOES follow, so it leaves the tail open.
+    if (lastIsOperand || wordConnector || negativeLook(last)) tailClosingLeds.add(it);
+  };
+  for (const [ruleName, { leds }] of prattClassified.entries()) for (const led of leds) classifyTail(led.items, ruleName);
+  for (const [ruleName, { continuations }] of leftRecClassified.entries()) for (const cont of continuations) classifyTail(cont, ruleName);
 
   // FIRST sets (plain) and the SECOND-token dispatch are single-sourced in
   // grammar-analysis.ts and destructured above; ruleMightStart / altMightStart /
@@ -538,6 +545,9 @@ export function createParser(grammar: CstGrammar) {
       // Parse atom (longest match)
       let node: CstNode | null = null;
       let bestAtomPos = saved;
+      // As in prattCore: an atom ending in a fresh operand of this rule (`keyof $`) closes the
+      // access tail, and so does a tail-closing continuation; an access tail extends only an open one.
+      let tailClosed = false;
       const startTok = tokens[saved] ?? null;
       const startTok2 = (parseLimit >= 0 && saved + 1 >= parseLimit) ? null : (tokens[saved + 1] ?? null);
       for (const atom of atoms) {
@@ -550,6 +560,8 @@ export function createParser(grammar: CstGrammar) {
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
           node = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
           bestAtomPos = pos;
+          const items = atom.type === 'seq' ? atom.items : [atom];
+          tailClosed = selfRefName(items[items.length - 1], rule.name);
         }
       }
       if (!node) { pos = saved; return null; }
@@ -561,6 +573,7 @@ export function createParser(grammar: CstGrammar) {
         for (const cont of continuations) {
           // notLeftLeaf head-leaf gate: skip this continuation when the LEFT node's outermost (head)
           // leaf text is in its word set (e.g. `void`/`null`/`this` can't be `.`-qualified as a type).
+          if (tailClosed && accessTailLeds.has(cont)) continue;
           const nll = contNotLeftLeaf.get(cont);
           if (nll !== undefined && nll.has(headLeafText(node))) continue;
           pos = contSaved;
@@ -581,6 +594,7 @@ export function createParser(grammar: CstGrammar) {
               offset: node.offset,
               end: children.length > 0 ? childEnd(children[children.length - 1]) : node.end,
             };
+            if (tailClosingLeds.has(cont)) tailClosed = true;
             continue outer;
           }
         }
@@ -736,7 +750,7 @@ export function createParser(grammar: CstGrammar) {
         for (const led of leds) {
           if (led.items[0]?.type === 'op' || led.items[0]?.type === 'postfix') continue;
           if (maxBp <= minBp) continue;
-          if (tailClosed && accessTailLeds.has(led)) continue;   // no access tail after a postfix
+          if (tailClosed && accessTailLeds.has(led.items)) continue;   // no access tail after a postfix
           // Skip a LED whose connector is excluded in this context (e.g. `in` under
           // a no-`in` for-head) — it rebinds to the enclosing rule instead.
           if (suppressCur && led.items[0]?.type === 'literal' && suppressCur.has(led.items[0].value)) continue;
@@ -787,7 +801,7 @@ export function createParser(grammar: CstGrammar) {
               _prattCapped = true;
               return lhs;
             }
-            if (tailClosingLeds.has(led)) tailClosed = true;
+            if (tailClosingLeds.has(led.items)) tailClosed = true;
             matched = true;
             break;
           }

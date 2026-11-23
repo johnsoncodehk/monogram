@@ -2372,11 +2372,13 @@ function buildPratt(
   const ledForm = leds.map((l): AssignForm => a.binaryConnectors.has(l.first) ? FORM_NOT_TARGET : FORM_TARGET);
   const endsInOperand = (steps: Step[]): boolean => { const l = steps[steps.length - 1]; return l !== undefined && l.t === 'rule' && l.name === name; };
   const nudBracketClosesTail = nudBrackets.map((b) => endsInOperand(b.steps));
-  // A capped prefix operator's arm (`op operand`, the operand a ruleBp step) closes the tail, as
-  // the prefix arm does.
+  // A capped prefix operator's arm (`op operand`, the operand a ruleBp step) closes the tail by its
+  // own mark, as the prefix arm does (a NUD: ledClosesTail below decides only leds).
   const cappedSeqs = new Set(nudOrder.flatMap((a) => (a.kind === 'seq' && a.capBp !== undefined ? [a.index] : [])));
   const nudSeqClosesTail = nudSeqs.map((st, i) => cappedSeqs.has(i) || endsInOperand(st));
-  const ledClosesTail = leds.map((l, i) => { const last = l.steps[l.steps.length - 1]?.t; return !ledAccessTail[i] || last === 'look' || last === 'ahead' || last === 'aheadCtx'; });
+  // A trailing NEGATIVE lookahead closes the tail (`Foo<T>` then no `(`); a positive one asserts that a
+  // continuation follows (Python's `&t_lookahead`) and leaves it open (gen-parser.ts negativeLook).
+  const ledClosesTail = leds.map((l, i) => { const last = l.steps[l.steps.length - 1]; return !ledAccessTail[i] || ((last?.t === 'look' || last?.t === 'ahead' || last?.t === 'aheadCtx') && !last.is); });
   const capsFromTail = (steps: Step[]): boolean => nudCapped.length > 0 && endsInOperand(steps);
   const nudBracketCapsFromTail = nudBrackets.map((b) => capsFromTail(b.steps));
   const nudSeqCapsFromTail = nudSeqs.map(capsFromTail);
