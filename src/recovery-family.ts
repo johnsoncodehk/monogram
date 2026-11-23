@@ -475,7 +475,8 @@ const ledOk = (x: Expr): Expr => and(
 const finLed = (form: Expr): Stmt[] => [
   run('enFinLed', v('r'), v('sb'), v('leftOff'), v('start')), set('leftOff', call('enFinOff')), set('hl', call('enSh')), set('fm', form), set('prog', tru),
 ];
-const riBp = method('riBp', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d', 'int']], ['bool'], [
+// `rebind`: the grammar has a re-bind (rebind-family.ts), which a led tries where its match failed.
+const riBpOf = (rebind: boolean): Fn => method('riBp', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d', 'int']], ['bool'], [
   let_('start', call('enPos')),
   let_('sb', call('enSh')),
   { k: 'letCall', names: ['ok', 'leftOff'], call: call('riNud', v('r'), v('rec'), v('minBp'), v('d')) },
@@ -504,10 +505,9 @@ const riBp = method('riBp', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d
           if_(isT(v('x'), 5), [set('tc', n(1))]),
         ], [
           run('enReset', v('k')), run('enUnmark', v('k')),
-          // A led with a re-bind (rebind-family.ts) tries it where its own match failed.
-          if_(ge(at(v('x'), 8), n(0)), [
+          ...(rebind ? [if_(ge(at(v('x'), 8), n(0)), [
             if_(call('riRbScan', v('x'), at(v('x'), 8), v('d')), [...finLed(at(v('x'), 6)), if_(isT(v('x'), 5), [set('tc', n(1))])]),
-          ]),
+          ])] : []),
         ]),
       ]),
       inc('x', add(n(10), at(v('x'), 9))),
@@ -557,7 +557,7 @@ const riRbStep = method('riRbStep', [['x', 'int'], ['k', 'int'], ['d', 'int']], 
 // `rebind`: the grammar has a re-bind (the interpreter's then calls the engine's rbBracket and
 // marks, printed with the native forms).
 export function recoveryFamilyFns(rebind: boolean, ids?: LexIdPlan): Fn[] {
-  return [rejectDiag, diagMessage, diagRelated, riRef, riSig, riIn, riGuard, riRule, riCand, riRd, riList, riStep, riOperand, riOp, riNud, riBp, ...ENGINE_EXTERNS,
+  return [rejectDiag, diagMessage, diagRelated, riRef, riSig, riIn, riGuard, riRule, riCand, riRd, riList, riStep, riOperand, riOp, riNud, riBpOf(rebind), ...ENGINE_EXTERNS,
     ...(rebind ? [riRbStep, RI_RB_SCAN, rbBracketFn(ids!), ...REBIND_EXTERNS, ...RB_EXTERNS_INTERP] : [])];
 }
 

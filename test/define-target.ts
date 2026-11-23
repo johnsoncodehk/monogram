@@ -62,7 +62,8 @@ for (const f of ['emit.ts', 'emit-portable.ts', 'emit-parser.ts', ...CORE, ...TA
 for (const t of TARGETS) {
   const s = code(src(t.file));
   if (defineCalls.get(t.file) !== 1) fail(`${t.file}: ${defineCalls.get(t.file) ?? 0} defineTarget calls, want 1`);
-  if (!/^const \w+Lowering: Lowering = \{/m.test(s)) fail(`${t.file}: defines no Lowering of its own`);
+  // (a lowering per receiver, `xLoweringFor = (…): Lowering => ({`, counts: Go spells a method's receiver per engine form)
+  if (!/^const \w+Lowering(?:: Lowering = \{|For = \([^)]*\): Lowering => \(\{)/m.test(s)) fail(`${t.file}: defines no Lowering of its own`);
   for (const i of imports(s)) {
     if (/\/target-/.test(i)) fail(`${t.file}: imports another target module ${i}`);
     if (/(relex|lex|reuse)-family/.test(i)) fail(`${t.file}: imports an algorithm family directly (${i}); use shared`);
