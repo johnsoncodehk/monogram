@@ -189,6 +189,26 @@ export interface ElementRegion {
   //               whose closer is followed by one of `then` (`<T>(x: T) => T`, `<T>(x): T`):
   //               the lexer lexes the group as code and keeps those tokens.
   typeParameters?: { head?: TokenPattern; signature?: { open: string; close: string; then: string[] } };
+  // The region's NAME: the prefix of the editor generators' own names for it (TextMate repository
+  // keys `<name>-element`, …). Absent → the grammar's name. The lexer does not read it.
+  name?: string;
+  // HIGHLIGHTER DATA (the lexer does not read it): scopes a dialect gives its elements beyond
+  // what the rules say. A dialect that declares none gets none (no built-in default).
+  highlight?: ElementHighlight;
+}
+
+/** Scopes of an element region's highlighting (docs/REGIONS.md, "What the generators need").
+ *  Each `match` is a pattern over the text, in the grammar's own pattern language. */
+export interface ElementHighlight {
+  // A tag name's scope: the first entry whose `match` matches at the name's start wins (an entry
+  // without `match` takes every name); the name's extent is the tag-name rule's. A name no entry
+  // takes is `entity.name.tag` (or the `contextualScopes` scope declared for the tag-name rule).
+  tagName?: { match?: TokenPattern; scope: string }[];
+  // Scope-only patterns inside the children's text run (the lexer does not tokenize them, e.g. an
+  // `&entity;`). `delimiters`: a scope for the pattern's leading and trailing literal.
+  text?: { match: TokenPattern; scope: string; delimiters?: string }[];
+  // A scope over an element's children (the TextMate `contentName` of the children region).
+  childrenScope?: string;
 }
 
 /**
