@@ -104,6 +104,16 @@ const dialectTexts = [
   // continue) and a repetition body that fails dirty (`-` with no name after it): rejected inputs
   'component F() { <a>{f()}{g(a, b)}{a.b}</a> }', 'component G() { <a- /> }', 'component H() { {a.} }',
 ];
+// the text dialect (test/fixtures/textdialect.ts): text children with tag starts, raw text,
+// comments in text and directives; and rejected inputs
+const textDialectTexts = [
+  'component C(a) {\n  <p k="v">1 < 2 {a} <b/>x<9 <></></p>;\n  const z = a <b;\n  return <{a}>y</{a}>;\n}',
+  'component S() { <style>{a}</style>; <style> .x{}</style>; <script>a<b</script> }',
+  'component C(a) {\n  <p>hi // n\n a/* c */b {a}// m\n</p>;\n  const z = 1; /* k */\n}',
+  'component C(a) {\n  <p>x @if (a) { y <b/> } @else if ({a}.a) {m} @else { n } z@for await (i of a) {{i}} @empty {e}</p>;\n}',
+  'component C(a) { <p>@try {t} @pending {p} @catch (e) {c} @{ const q = 1; <b/> }</p>; }',
+  'component C(a) { <p>@if (a) {y</p>; }', 'component C(a) { <p k=< b>x</p> }', 'component C(a) { const b = < 1; }',
+];
 const texts = (g: string, xs: string[]): Input[] => xs.map((text, i) => ({ name: `${g}#${i}`, text }));
 const GRAMMARS: Array<[string, Input[]]> = [
   ['typescript', tsInputs],
@@ -111,6 +121,7 @@ const GRAMMARS: Array<[string, Input[]]> = [
   ['typescriptreact', [...texts('typescriptreact', tsxTexts), ...tsxCorpus]],
   ['javascriptreact', [...texts('javascriptreact', jsxTexts), ...jsInputs, ...tsxCorpus]],
   ['test/fixtures/elementdialect', texts('elementdialect', dialectTexts)],
+  ['test/fixtures/textdialect', texts('textdialect', textDialectTexts)],
 ];
 
 let failures = 0;
