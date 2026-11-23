@@ -133,6 +133,7 @@ const textSrc = [
   '  <main class="m">Hello & 1 < 2 {items.length} /* note */ a//b // tail',
   '    @if (items.length) { <b>yes</b> } @else { none }',
   '    @for (x of items) { <li>{x}</li> } @empty { empty }',
+  '    say @iffy (q) and @if q (r) {zz}',
   '    <style>{css}</style>',
   '    <style>.a { color: red; }</style>',
   '    <SCRIPT>let a = 1;</SCRIPT>',
@@ -156,14 +157,16 @@ const textSrc = [
   scopeRow('`/* note */` in text is a block comment (textTokens)', 'pass', undefined, g, src, 'note', 0, has('comment.block'));
   scopeRow('`a//b` in text is text (`//` only after a blank)', 'pass', undefined, g, src, '//b', 0, s => !has('comment')(s));
   scopeRow('`// tail` after a blank is a line comment (textTokens, `after`)', 'pass', undefined, g, src, 'tail', 0, has('comment.line'));
-  const dir = 'the children patterns do not include the derived directive openers yet (step e)';
-  scopeRow('`@if` in children is a directive keyword', 'xfail', dir, g, src, '@if', 0, s => inner(s).startsWith('keyword.control'));
-  scopeRow('the `@if` head is code: `items` is a variable', 'xfail', dir, g, src, 'items.length)', 0, s => s.some(x => x.startsWith('variable')));
-  scopeRow('`@else` continuation is a keyword', 'xfail', dir, g, src, '@else', 0, s => inner(s).startsWith('keyword.control'));
-  scopeRow('an `@else` body is children: `none` is text', 'xfail', dir, g, src, 'none', 0, s => !s.some(x => x.startsWith('variable')));
+  scopeRow('`@if` in children is a directive keyword', 'pass', undefined, g, src, '@if', 0, s => inner(s).startsWith('keyword.control'));
+  scopeRow('the `@if` head is code: `items` is a variable', 'pass', undefined, g, src, 'items.length)', 0, s => s.some(x => x.startsWith('variable')));
+  scopeRow('`@else` continuation is a keyword', 'pass', undefined, g, src, '@else', 0, s => inner(s).startsWith('keyword.control'));
+  scopeRow('an `@else` body is children: `none` is text', 'pass', undefined, g, src, 'none', 0, s => !s.some(x => x.startsWith('variable')));
   scopeRow('an element in a directive body keeps tag scopes', 'pass', undefined, g, src, 'b>yes', 0, s => inner(s).startsWith('entity.name.tag'));
-  scopeRow('`of` in an `@for` head is a keyword', 'xfail', dir, g, src, 'of items', 0, s => inner(s).startsWith('keyword.control'));
-  scopeRow('`@empty` continuation is a keyword', 'xfail', dir, g, src, '@empty', 0, s => inner(s).startsWith('keyword.control'));
+  scopeRow('`of` in an `@for` head is a keyword', 'pass', undefined, g, src, 'of items', 0, s => inner(s).startsWith('keyword.control'));
+  scopeRow('`@iffy (` is text: the opener ends at a word boundary', 'pass', undefined, g, src, '@iffy', 0, s => !s.some(x => x.startsWith('keyword')));
+  scopeRow('`@if q` is text: `@if` needs its `(`', 'pass', undefined, g, src, '@if q', 0, s => !s.some(x => x.startsWith('keyword')));
+  scopeRow('a hole after a plain `( … )` in text is a hole, not a directive body', 'pass', undefined, g, src, 'zz', 0, has('meta.embedded.expression'));
+  scopeRow('`@empty` continuation is a keyword', 'pass', undefined, g, src, '@empty', 0, s => inner(s).startsWith('keyword.control'));
   scopeRow('`<style>{css}`: the body starts with `{`, so it is a hole (unlessBodyStarts)', 'pass', undefined, g, src, 'css}', 0, s => has('meta.embedded.expression')(s) && !has('source.css')(s));
   scopeRow('`<style>.a {…}` body is embedded CSS', 'pass', undefined, g, src, 'color', 0, has('source.css'));
   scopeRow('`<SCRIPT>` (any case) body is embedded JS', 'pass', undefined, g, src, 'let', 0, has('source.js'));

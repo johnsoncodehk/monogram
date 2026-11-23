@@ -1,6 +1,6 @@
 import type { CstGrammar, RuleExpr, RuleDecl, InjectClause, TokenDecl } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
-import { analyzeGrammar } from './grammar-analysis.ts';
+import { analyzeGrammar, directivesOf } from './grammar-analysis.ts';
 import { regionView, expandArms, operandEntry, type RegionView } from './region-view.ts';
 import { compileTokenizer, lexSpecOf } from './emit-lexer.ts';
 import {
@@ -1416,9 +1416,72 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
     textTokenKeys.push(key);
   }
   const childrenScope = hl.childrenScope ? `${hl.childrenScope}.${langName}` : undefined;
+
+  // ── directives (derived: grammar-analysis.ts directivesOf): openers and continuations in the
+  // children. An opener (or continuation) literal, then its required literals up to the head's
+  // `(` or the body's `hole.open`: a keyword (its scope the grammar's `scopes` declaration, else
+  // `keyword.control`). A head `( … )` is code; a body `hole.open … hole.close` is children
+  // (after the head's `)`, on its line or the next when the `)` ends its line). The opener and its
+  // required literals must stand on one line (a TextMate begin is one line); a code block
+  // `@{ … }` is code. A continuation keyword is matched wherever an opener is: TextMate cannot
+  // tell that it follows a body.
+  const directiveKeys: string[] = [];
+  const dirs = region.text !== undefined ? directivesOf(grammar, region) : null;
+  if (dirs) {
+    const kwScope = (lit: string) => `${getScope(grammar.scopeOverrides, lit) ?? 'keyword.control'}.${langName}`;
+    const ho = escapeRegex(region.hole.open), hc = escapeRegex(region.hole.close);
+    const bodyRegion = (begin: string, beginCaptures: Record<string, TmCapture>): TmPattern => ({
+      begin, beginCaptures,
+      end: `(${hc})`, endCaptures: { '1': { name: embeddedEnd } },
+      ...childrenScope ? { contentName: childrenScope } : {},
+      patterns: [{ include: `#${K('children')}` }],
+    });
+    let n = 0;
+    for (const d of [...dirs.openers, ...dirs.continuations]) {
+      for (const next of d.nexts) {
+        const lits = [d.lit, ...next.slice(0, -1)];
+        const last = next[next.length - 1];
+        const lead = lits.map((l, i) => `(${boundedKeyword(l)})${i < lits.length - 1 ? '\\s*' : ''}`).join('');
+        const caps: Record<string, TmCapture> = {};
+        lits.forEach((l, i) => { caps[String(i + 1)] = { name: kwScope(l) }; });
+        const key = K(`directive-${n++}`);
+        if (last === region.hole.open) {
+          result[key] = bodyRegion(`${lead}\\s*(${ho})`, { ...caps, [String(lits.length + 1)]: { name: embeddedBegin } });
+        } else {
+          // the directive: its head `( … )` (code), then its body; it ends after the body's
+          // closer, or after the head when no body opener follows on the line
+          result[key] = {
+            begin: `(?=${lead}\\s*${escapeRegex(last)})`,
+            end: `(?<=${hc})|(?<=\\))(?!\\s*(?:${ho}|$))`,
+            patterns: [
+              {
+                begin: `${lead}\\s*(${escapeRegex(last)})`,
+                beginCaptures: { ...caps, [String(lits.length + 1)]: { name: `meta.brace.round.${langName}` } },
+                end: '(\\))', endCaptures: { '1': { name: `meta.brace.round.${langName}` } },
+                patterns: [{ include: '$self' }],
+              },
+              bodyRegion(`(${ho})`, { '1': { name: embeddedBegin } }),
+            ],
+          };
+        }
+        directiveKeys.push(key);
+      }
+    }
+    for (const b of dirs.blocks) {
+      const key = K(`directive-block-${n++}`);
+      result[key] = {
+        begin: `(${escapeRegex(b)})`, beginCaptures: { '1': { name: kwScope(b) } },
+        end: `(${hc})`, endCaptures: { '1': { name: embeddedEnd } },
+        patterns: [{ include: '$self' }],
+      };
+      directiveKeys.unshift(key);
+    }
+  }
+
   result[K('children')] = {
     patterns: [
       ...textTokenKeys.map(k => ({ include: `#${k}` })),
+      ...directiveKeys.map(k => ({ include: `#${k}` })),
       // A child element — `#<name>-element` covers BOTH the self-closing `<br/>` and the
       // open `<span>…</span>` shape (its `end` matches `/>` OR `</name>`), so the
       // separate `#<name>-self-closing-element` is NOT listed here: that rule's begin
