@@ -353,7 +353,7 @@ export const ecmaPrec = [
   left('+', '-'),
   left('*', '/', '%'),
   right(noUnaryLhs('**')),   // `-x ** y` is a syntax error: a unary-prefix expr can't be a `**` LHS
-  right(prefix('!', '~', '+', '-', 'typeof', 'void', 'delete', 'await', 'yield')),
+  right(prefix('!', '~', '+', '-', 'typeof', 'void', 'delete', 'await')),
   // prefix `++`/`--` (update prefixes): the spec operand is a UnaryExpression
   // (`UpdateExpression : ++ UnaryExpression`) whose AssignmentTargetType must be simple — an
   // early error, like `a + b = c`, enforced by the same target check: `++-x`, `++x++`,
