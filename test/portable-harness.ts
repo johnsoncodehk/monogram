@@ -47,7 +47,7 @@ import { parityInputs, type Tok } from './parity-corpus.ts';
 import { goBuild, scratchDir } from './scratch.ts';
 import type { CstGrammar } from '../src/types.ts';
 import { CASES, type Case } from './portable-cases.ts';
-import { CHECK_TARGETS } from './check-targets.ts';
+import { CHECK_TARGETS, QUICK, QUICK_GO } from './check-targets.ts';
 import { cachedEmit } from './emit-cache.ts';
 import { ROOT as ROOT_DIR } from './gate-deps.ts';
 import { buildAll, buildKey, GO_VERSION, RUSTC_PATH, RUSTC_PATH_FLAGS, RUSTC_VERSION, type Build } from './build-cache.ts';
@@ -486,7 +486,18 @@ export type Prepared = {
 
 // --grammars-except=a,b: every grammar but those (check.ts: the grammars no shard of a class names).
 const EXCEPT = process.argv.find((a) => a.startsWith('--grammars-except='))?.slice('--grammars-except='.length).split(',');
-export const selectedCases = (): Case[] => CASES.filter((c) => (!ONLY || ONLY.includes(c.grammar)) && !EXCEPT?.includes(c.grammar));
+// The QUICK tier's sample (CHECK_QUICK=1, `check.ts --quick`): two small grammars and one real one,
+// unless --grammars names others.
+export const QUICK_GRAMMARS = ['calc', 'templatejs', 'javascript'];
+// ... and in it the real grammar runs the TypeScript target only, and Go too when the Go target's
+// own code changed (CHECK_QUICK_GO: the commonest Go printer mistake, a variable declared and not
+// used, is seen only by a Go compile, and a small grammar's parser may not reach the printed code
+// that has it: land/decisions-commit; the compile is a few seconds). Not Rust: a debug compile of a
+// real grammar's parser takes about a minute on a 2-core box; the native parsers of the real
+// grammars are `--changed`'s and CI's.
+const QUICK_TS_ONLY = new Set(['javascript']);
+const nativeFor = (c: Case, t: 'go' | 'rust'): boolean => !c.tsOnly && !(QUICK && QUICK_TS_ONLY.has(c.grammar) && !(t === 'go' && QUICK_GO));
+export const selectedCases = (): Case[] => CASES.filter((c) => (ONLY ? ONLY.includes(c.grammar) : !QUICK || QUICK_GRAMMARS.includes(c.grammar)) && !EXCEPT?.includes(c.grammar));
 
 /**
  * Every selected grammar emitted for the three targets (with total parsing, RECOVERY) and its Go
@@ -534,7 +545,7 @@ export async function prepareAll(cases: Case[] = selectedCases()): Promise<Prepa
     lexToks: (src) => { try { return tsLib.tokenize(src).map((t) => ({ off: t.off, end: t.end, kind: t.kind, text: t.text, lid: t.lid })); } catch { return null; } },
     }];
     const native: Pending['native'] = [];
-    if (HAS_GO && !c.tsOnly && (!TARGETS_ONLY || TARGETS_ONLY.includes('go'))) {
+    if (HAS_GO && nativeFor(c, 'go') && (!TARGETS_ONLY || TARGETS_ONLY.includes('go'))) {
       const goSrc = emit(goTarget, RECOVERY);
       emitted.push({ label: 'go', def: () => emit(goTarget), rec: goSrc });
       const files: Record<string, string> = { 'parser.go': asGoMain(goSrc), 'runner.go': goTarget.emitRunner?.(RECOVERY) ?? '', 'go.mod': 'module p\n\ngo 1.21\n' };
@@ -547,7 +558,7 @@ export async function prepareAll(cases: Case[] = selectedCases()): Promise<Prepa
         },
       } });
     }
-    if (HAS_RUST && !c.tsOnly && (!TARGETS_ONLY || TARGETS_ONLY.includes('rust'))) {
+    if (HAS_RUST && nativeFor(c, 'rust') && (!TARGETS_ONLY || TARGETS_ONLY.includes('rust'))) {
       const rsSrc = emit(rustTarget, RECOVERY);
       emitted.push({ label: 'rust', def: () => emit(rustTarget), rec: rsSrc });
       const main = rsSrc + (rustTarget.emitRunner?.(RECOVERY) ?? '');
@@ -556,7 +567,8 @@ export async function prepareAll(cases: Case[] = selectedCases()): Promise<Prepa
         build: (out) => {
           const rfile = `${dir}/main.rs`;
           writeFileSync(rfile, main);
-          execFileSync('rustc', [...RUSTC_PATH_FLAGS(dir, out), '-A', 'warnings', rfile, '-o', `${out}/pr`], { stdio: 'pipe' });
+          try { execFileSync('rustc', [...RUSTC_PATH_FLAGS(dir, out), '-A', 'warnings', rfile, '-o', `${out}/pr`], { stdio: 'pipe' }); }
+          catch (e) { throw new Error(`rustc ${rfile} failed:\n${String((e as { stderr?: Buffer }).stderr ?? e)}`); }
         },
       } });
     }

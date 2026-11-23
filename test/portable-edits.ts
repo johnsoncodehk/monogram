@@ -8,6 +8,8 @@ import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
 import { HOLE_EDIT_DOCS, LOOK_EDIT_DOCS } from './relex-edit-docs.ts';
 import { CTX_DOCS, ctxEdits } from './context-cases.ts';
 import { applyEdits, finish, gate, prepareAll, selectedCases, type Align, type EditBatch } from './portable-harness.ts';
+import { QUICK } from './check-targets.ts';
+const QUICK_EDIT_STRIDE = 3;
 
 
 type AlignMeta = { kind: string; off: number; end: number; nl: boolean };
@@ -324,7 +326,10 @@ for (const { c, grammar, runners, oracleOut } of await prepareAll(selectedCases(
     // inside a hole, where the relex window must not restart.
     if (HOLE_EDIT_GRAMMARS.has(c.grammar) || FRAME_EDIT_DOCS[c.grammar]) {
       const sessions = (HOLE_EDIT_GRAMMARS.has(c.grammar) ? [...HOLE_EDIT_DOCS.map((doc) => ({ doc, ins: undefined as string[] | undefined })), ...LOOK_EDIT_DOCS] : FRAME_EDIT_DOCS[c.grammar]!.map((d) => (typeof d === 'string' ? { doc: d, ins: FRAME_INS } : d)))
-        .flatMap(({ doc: init, ins }) => oneCharEdits(init, ins).map((e) => ({ init, e, final: init.slice(0, e[0]) + e[2] + init.slice(e[1]) })));
+        .flatMap(({ doc: init, ins }) => oneCharEdits(init, ins).map((e) => ({ init, e, final: init.slice(0, e[0]) + e[2] + init.slice(e[1]) })))
+        // the quick tier's sample (CHECK_QUICK=1): one edit in QUICK_EDIT_STRIDE of the list, which runs
+        // offset by offset, so the sample moves across offsets and inserted characters alike
+        .filter((_, i) => !QUICK || i % QUICK_EDIT_STRIDE === 0);
       const fresh = r.batch(sessions.map((x) => x.final));
       const edited = r.editBatch(sessions.map((x) => JSON.stringify({ init: x.init, batches: [[x.e]] })), false);
       const bad: string[] = [];

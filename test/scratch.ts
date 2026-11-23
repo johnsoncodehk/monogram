@@ -47,5 +47,8 @@ export function scratchDir(name: string): string {
 }
 
 export function goBuild(args: string[], opts: ExecFileSyncOptions = {}): void {
-  execFileSync('go', ['build', '-trimpath', ...args], { stdio: 'pipe', ...opts });
+  // a failed build throws the compiler's message as text (the child-process error prints its
+  // output as raw bytes)
+  try { execFileSync('go', ['build', '-trimpath', ...args], { stdio: 'pipe', ...opts }); }
+  catch (e) { throw new Error(`go build ${args.join(' ')} failed:\n${String((e as { stderr?: Buffer }).stderr ?? e)}`); }
 }
