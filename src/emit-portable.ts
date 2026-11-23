@@ -1880,12 +1880,14 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
     return G.ifAll(parts);
   };
   const exits = prattLedExits(r, ir, ids);
-  const inner = L.steps.inner();
+  // The re-bind's steps are the cases of the engine's one step method (rebind-family.ts rbStep),
+  // so they are spelled in the lowering of the method's body (not a closure's).
+  const outer = L.steps;
   const rebinds = r.leds.map((b, i) => {
     const sep = r.ledRebind[i];
     if (sep === null || sep === undefined) return null;
     const st = b.steps;
-    return L.rebind({ open: stepExpr(st[0]!, inner), operand: stepExpr(st[1]!, inner), sep: stepExpr(st[2]!, inner), rest: conjOf(st.slice(3), inner), sepLid: lidOf(ids, sep) });
+    return L.rebind({ open: stepExpr(st[0]!, outer), operand: stepExpr(st[1]!, outer), sep: stepExpr(st[2]!, outer), rest: conjOf(st.slice(3), outer), sepLid: lidOf(ids, sep) });
   });
   const leds = r.leds.length === 0 ? '' : L.ledSwitch(groupByPreserveOrder(r.leds, (b) => lidOf(ids, b.first)).map((g) => {
     const lid = g.key as number;
@@ -3054,8 +3056,9 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
   //                              guard steps capBp | PREFIX
   //   nPre (lid rbp requireTarget form)*  nBin (lid lbp rbp requireTarget noUnaryLhs)*
   //   nPost (lid lbp requireTarget)*
-  //   nLed (firstLid steps lbp sameLine accessTail closesTail form notLeftLeaf nSupp set*)*
-  //                              lbp -1: none; notLeftLeaf -1 or [n lid*]
+  //   nLed (firstLid steps lbp sameLine accessTail closesTail form notLeftLeaf rebind nSupp set*)*
+  //                              lbp -1: none; notLeftLeaf -1 or [n lid*]; rebind: the L2 lid of
+  //                              its re-bind (PrattRule.ledRebind) or -1
   //   nPostTok kid*]
   function pratt(r: PrattRule): number {
     const arms = r.nudOrder.map((a): Cell[] => {
@@ -3071,7 +3074,7 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
     const leds = r.leds.map((b, i): Cell[] => {
       const nll = r.ledNotLeftLeaf[i];
       return [lid(b.first), ref(list(b.steps)), r.ledLbp[i] ?? -1, r.ledSameLine[i] ? 1 : 0, r.ledAccessTail[i] ? 1 : 0, r.ledClosesTail[i] ? 1 : 0, r.ledForm[i]!,
-        ref(nll ? emit([nll.length, ...nll.map(lid)]) : -1), r.ledSuppressedIn[i]!.length, ...r.ledSuppressedIn[i]!];
+        ref(nll ? emit([nll.length, ...nll.map(lid)]) : -1), r.ledRebind[i] ? lid(r.ledRebind[i]!) : -1, r.ledSuppressedIn[i]!.length, ...r.ledSuppressedIn[i]!];
     });
     const sections: Cell[][] = [
       [arms.length, ...arms.flat()],
