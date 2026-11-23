@@ -1439,6 +1439,20 @@ export type CommitLowering = {
   pick(n: number): string;
   picked(cases: { n: number; stmt: string }[]): string;
 };
+/** The statements of `s` when it is one block `{ … }` (its first brace closes at its end), else
+ *  null: for a printer that puts a block's statements into the block around it. A brace inside a
+ *  double-quoted string is text; the printers spell no other literal that can hold one. */
+export function blockBody(s: string): string | null {
+  if (!s.startsWith('{ ') || !s.endsWith(' }')) return null;
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '"') { for (i++; i < s.length && s[i] !== '"'; i++) if (s[i] === '\\') i++; }
+    else if (c === '{') depth++;
+    else if (c === '}' && --depth === 0 && i < s.length - 1) return null;
+  }
+  return depth === 0 ? s.slice(2, -2) : null;
+}
 /** The tests a run still makes of a candidate's Guard at a key (CommitTest). */
 export const commitGuard = (g: Guard, t: CommitTest): Guard =>
   (g === null ? null : { first: t.first ? g.first : null, second: g.second, lead: t.lead.map((k) => g.lead[k]!), skip: g.skip });
