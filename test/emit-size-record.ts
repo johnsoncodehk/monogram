@@ -11,6 +11,11 @@
 // acceptance of the growth so far is a diff of this file that its author and the lander see. The
 // profile summary prints the drift against the record on every landing (pr-summary.ts).
 //
+// Shape: { "<grammar>": { "<key>": bytes } }, the key being the target (`ts`, `js`, `go`, `rust`)
+// for the default emission, and `<target>+<option>` (options sorted, joined by `+`) for an emission
+// with emitParser options set, e.g. `rust+recovery` for `{ recovery: true }`: such a row is added by
+// test/emit-sizes.ts printing it, with no change to this file's format or this gate.
+//
 //   node test/emit-size-record.ts [--write]
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
