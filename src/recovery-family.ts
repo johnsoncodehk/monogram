@@ -721,10 +721,13 @@ const riErrNode = method('riErrNode', [['c', 'int'], ['p', 'int']], [], [
   run('enFinLed', T(TR(0)), v('c'), n(0), v('p')),
   run('enRmPush', n(DK_SKIP)), run('enRmPush', v('p')), run('enRmPush', call('enPos')),
 ]);
-// A zero-width node of rule r at the position, and its repair (kind, the position, arg).
+// A zero-width node of rule r at the position, and its repair (kind, the node's offset, arg). The
+// offset is the node's, not a token index: at the end of a capped operand's tokens (a re-bind's
+// cap) it lies after the cap's last token, which the token after it would not say.
 const riRepNode = method('riRepNode', [['r', 'int'], ['kind', 'int'], ['arg', 'int']], [], [
   run('enMiss', v('r')),
-  run('enRmPush', v('kind')), run('enRmPush', call('enPos')), run('enRmPush', v('arg')),
+  let_('o', call('enFinOff')),
+  run('enRmPush', v('kind')), run('enRmPush', v('o')), run('enRmPush', v('arg')),
 ]);
 // A required literal or token (step op, x its lid / kid) is not at the position. When a repair
 // fires it is repaired: when it is the token after, the token at the position is extra (an `$error`
@@ -825,7 +828,7 @@ const riAttempts = method('riAttempts', [['el', 'int'], ['upto', 'int']], ['bool
 const riSkip = method('riSkip', [['el', 'int'], ['sync', 'int']], [], [
   let_('p0', call('enPos')),
   let_('c', call('enSh')),
-  if_(lt(call('enPeekKid'), n(0)), [run('riRepNode', T(TR(0)), n(DK_SKIP), v('p0')), ret()]),
+  if_(lt(call('enPeekKid'), n(0)), [run('riRepNode', T(TR(0)), n(DK_SKIP), n(0)), ret()]),
   run('enLeafKid'),
   while_(ge(call('enPeekKid'), n(0)), [
     if_(and(ge(v('el'), n(0)), or(lt(v('sync'), n(0)), call('riSig', v('sync')))), [
@@ -883,19 +886,20 @@ const riTotal = method('riTotal', [], [], [
   ]),
   run('enRmSet', n(RM_REC), n(0)),
 ]);
-// A repair's diagnostic (kind, token index t, arg as riMiss / riSkip recorded it): a missing
-// literal or token is zero-width where its node is; a skip spans its tokens [t, arg).
+// A repair's diagnostic (kind, t, arg as riErrNode / riRepNode recorded them): a skip spans its
+// tokens [t, arg); a zero-width repair (a missing literal, token or operand; a skip at the end of
+// input, arg 0: a skip ends past its first token) is at its node's offset t.
 const repairDiag: Fn = {
   name: 'repairDiag',
   doc: '',
   params: [{ name: 'toks', ty: 'toks' }, { name: 'kind', ty: 'int' }, { name: 't', ty: 'idx' }, { name: 'arg', ty: 'idx' }],
   ret: ['rec_Diag'],
   body: [
-    if_(and(eq(v('kind'), n(DK_SKIP)), gt(v('arg'), v('t'))), [ret(diag(v('kind'), tok(v('t'), 'off'), tok(sub(v('arg'), n(1)), 'end'), n(-1), n(-1), tok(v('t'), 'end')))]),
-    let_('off', n(0)),
-    if_(lt(v('t'), { k: 'len', e: v('toks') }), [set('off', tok(v('t'), 'off'))], [if_(gt(v('t'), n(0)), [set('off', tok(sub(v('t'), n(1)), 'end'))])]),
-    if_(eq(v('kind'), n(DK_SKIP)), [ret(diag(v('kind'), v('off'), v('off'), n(-1), n(-1), v('off')))]),
-    ret(diag(v('kind'), v('off'), v('off'), n(-1), n(-1), v('arg'))),
+    if_(eq(v('kind'), n(DK_SKIP)), [
+      if_(gt(v('arg'), n(0)), [ret(diag(v('kind'), tok(v('t'), 'off'), tok(sub(v('arg'), n(1)), 'end'), n(-1), n(-1), tok(v('t'), 'end')))]),
+      ret(diag(v('kind'), v('t'), v('t'), n(-1), n(-1), v('t'))),
+    ]),
+    ret(diag(v('kind'), v('t'), v('t'), n(-1), n(-1), v('arg'))),
   ],
 };
 
