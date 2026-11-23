@@ -9,7 +9,7 @@ annexB/language/comments/single-line-html-close-first-line-3.js
 annexB/language/comments/single-line-html-close-unicode-separators.js
 annexB/language/comments/single-line-html-close.js
 annexB/language/comments/single-line-html-open.js
-## reject/lexer-division-after-radix-number
+## reject/lexer-division-after-object-literal
 language/expressions/division/bigint-toprimitive.js
 language/expressions/division/bigint-wrapped-values.js
 ## reject/lexer-optional-chain-before-digit

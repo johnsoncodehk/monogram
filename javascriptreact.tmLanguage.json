@@ -2178,7 +2178,7 @@
       "name": "keyword.control.loop.js.jsx"
     },
     "scope-keyword-other": {
-      "match": "\\b(target|source|meta|as)\\b",
+      "match": "\\b(target|meta|source|as)\\b",
       "name": "keyword.other.js.jsx"
     },
     "scope-storage-type-class": {
@@ -2420,7 +2420,7 @@
       "name": "keyword.control.flow.js.jsx"
     },
     "expr-scope-keyword-other": {
-      "match": "\\b(target|source|meta)\\b",
+      "match": "\\b(target|meta|source)\\b",
       "name": "keyword.other.js.jsx"
     },
     "expression": {

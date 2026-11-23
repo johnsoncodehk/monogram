@@ -475,15 +475,15 @@
               "token": "keyword",
               "switchTo": "@root"
             },
+            "meta": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
             "defer": {
               "token": "keyword",
               "switchTo": "@root"
             },
             "source": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
-            "meta": {
               "token": "keyword",
               "switchTo": "@root"
             },
@@ -854,9 +854,9 @@
             "async": "keyword",
             "yield": "keyword",
             "import": "keyword",
+            "meta": "keyword",
             "defer": "keyword",
             "source": "keyword",
-            "meta": "keyword",
             "function": "keyword",
             "get": "keyword",
             "set": "keyword",

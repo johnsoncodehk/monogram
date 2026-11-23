@@ -80,7 +80,7 @@ run); where it does not, the rule is outside even its syntactic layer.
 
 | class | files | acorn agrees | verdict | witnesses |
 |---|---:|---:|---|---|
-| `reject/lexer-division-after-radix-number`: a `/` after a hex / octal / binary number is lexed as a regular expression | 2 | 2 | grammar bug: fix | `language/expressions/division/bigint-toprimitive.js`<br>`language/expressions/division/bigint-wrapped-values.js` |
+| `reject/lexer-division-after-object-literal`: a `/` after an object literal's `}` is lexed as a regular expression | 2 | 2 | grammar bug: fix | `language/expressions/division/bigint-toprimitive.js`<br>`language/expressions/division/bigint-wrapped-values.js` |
 | `reject/lexer-optional-chain-before-digit`: `?.` before a decimal digit is `?` and a number | 1 | 1 | grammar bug: fix | `language/expressions/optional-chaining/punctuator-decimal-lookahead.js` |
 | `reject/annexb-html-comments`: HTML-like comments (Annex B) | 8 | 8 | needs a parameterised production the engine lacks (roadmap item 4) | `annexB/language/comments/multi-line-html-close.js`<br>`annexB/language/comments/single-line-html-close-first-line-1.js`<br>`annexB/language/comments/single-line-html-close-unicode-separators.js` |
 
@@ -89,7 +89,7 @@ run); where it does not, the rule is outside even its syntactic layer.
 | grammar bug: fix | 3 |
 | needs a parameterised production the engine lacks (roadmap item 4) | 8 |
 
-- `reject/lexer-division-after-radix-number` — `x = 0x10 / 1, 'a/b'`: regexContext.divisionAfterTypes lists Number and BigInt, not HexNumber, OctalNumber or BinaryNumber (a hex BigInt lexes as HexNumber).
+- `reject/lexer-division-after-object-literal` — `f({ a: 1 } / 2n, "/")`: after a `}` the lexer reads `/` as a regular expression (a `}` that ends a block or a function body is followed by a regex), but this `}` ends an object literal, a value. Which `}` it is, is the parser's knowledge: the lexer's regex / division choice needs that context (the lexer lane's; the `/` after a hex / octal / binary number was the same class's other cause, fixed).
 - `reject/lexer-optional-chain-before-digit` — `true ?.30 : false`: OptionalChainingPunctuator is `?. [lookahead ∉ DecimalDigit]`.
 - `reject/annexb-html-comments` — `<!--` and a line-leading `-->` are comments in script code only; in module code they are not comments (`a <!--b` is `a < !--b` there). Without the script / module goal, accepting them changes the meaning of valid module code.
 
@@ -194,7 +194,7 @@ the TypeScript grammar; there it is held to tsc's parser ([CORRECTNESS.md](CORRE
 | `ts/by-design` | TypeScript rejects it (JavaScript class `javascript.ts parses it`) | 1 | `language/literals/numeric/legacy-octal-integer.js` | tsc TS1121: Octal literals are not allowed. Use the syntax '0o0'. |
 | `ts/by-design` | TypeScript rejects it (JavaScript class `javascript.ts parses it`) | 1 | `language/literals/numeric/non-octal-decimal-integer.js` | tsc TS1489: Decimals with leading zeros are not allowed. |
 | `ts/by-design` | TypeScript rejects it (JavaScript class `reject/annexb-html-comments`) | 1 | `annexB/language/comments/single-line-html-open.js` | tsc TS1110: Type expected. |
-| `ts/as-javascript` | the JavaScript class `reject/lexer-division-after-radix-number` | 2 | `language/expressions/division/bigint-toprimitive.js` | tsc's .ts parser accepts it |
+| `ts/as-javascript` | the JavaScript class `reject/lexer-division-after-object-literal` | 2 | `language/expressions/division/bigint-toprimitive.js` | tsc's .ts parser accepts it |
 | `ts/as-javascript` | the JavaScript class `reject/lexer-optional-chain-before-digit` | 1 | `language/expressions/optional-chaining/punctuator-decimal-lookahead.js` | tsc's .ts parser accepts it |
 
 ## Early errors: a checker over the tree, not the grammar: not built

@@ -31,7 +31,13 @@ const RECOVERY_MUTANTS = 3, RECOVERY_SEED = 20261123;
 // javascript 5441 -> 5439 (land/shape-ident-reserved): `undefined` is no grammar literal any more, so the
 // mutation corpus (which substitutes grammar literals) holds other inputs (`with  undefined ) { }` mutants
 // become others): the disagreements fall 186 -> 182, the agreements 5,441 -> 5,439 (of 5,621 rejects now).
-const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5439, typescript: 5946 };
+// javascript 5439 -> 5314, typescript 5946 -> 5918 (land/shape-test262-valid): the literals `defer` and
+// `source` join the grammar, and the mutation corpus picks literals from the sorted list by a seeded index,
+// so it is another population (javascript rejects 5621 -> 5792). Of javascript's 478 disagreements 354 are
+// one pattern, `import` and a token neither `(` nor `.` (`import ?. ;`): the interpreter's farthest is
+// `import` itself (no hint), the engine's the token its form guard read; the other disagreements fall
+// 182 -> 124. The interpreter's message is unchanged on these inputs (master and this branch alike).
+const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5314, typescript: 5918 };
 // EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and
 // parseTotal alike) is not the oracle's. Not total parsing's property (parseTotal's verdict is its
 // own parse()'s, checked below); found by the mutation corpus, each owed as its own fix. When one
@@ -166,7 +172,8 @@ function interpCheck(c: Case, grammar: CstGrammar, r: Runner, srcs: string[], ow
 for (const p of await prepareAll(selectedCases().filter((c) => ECMASCRIPT.has(c.grammar)))) {
   if (!ECMASCRIPT.has(p.c.grammar)) continue;
   const { c, grammar, runners, oracleOut, tokenize } = p;
-  recoveryClass(c, grammar, runners, oracleOut, [...parityCorpus(p).map((i) => i.src), ...c.accept, ...c.reject, ...(c.grammar === 'typescript' ? CURATED_TS : [])], tokenize);
+  // The expected-fail inputs are run whatever the seeded mutants are (a new grammar literal reshuffles them).
+  recoveryClass(c, grammar, runners, oracleOut, [...parityCorpus(p).map((i) => i.src), ...c.accept, ...c.reject, ...(c.grammar === 'typescript' ? CURATED_TS : []), ...(RECOVERY_VERDICT_EXPECTED_FAIL[c.grammar] ?? [])], tokenize);
 }
 
 finish('total parsing (parseTotal) on the corpus, the lists and the mutation corpus');

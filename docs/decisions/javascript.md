@@ -11,7 +11,7 @@ Every choice point of the grammar and how the generated parser (the portable pla
 | rule alternatives | 14 | 2 | 3 | 0 | 9 | 11 |
 | NUD arms | 3 | 0 | 0 | 0 | 3 | 3 |
 | LED connectors | 3 | 3 | 0 | 0 | 0 | 3 |
-| inline choice | 83 | 39 | 0 | 44 | 0 | 41 |
+| inline choice | 84 | 41 | 0 | 43 | 0 | 42 |
 | star | 59 | 58 | 0 | 1 | 0 | 38 |
 | opt | 86 | 54 | 0 | 32 | 0 | 53 |
 | sep | 45 | 7 | 0 | 38 | 0 | 0 |
@@ -102,8 +102,9 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Expr NUD / yield_: `alt('*' Expr \| opt(Expr))`: by attempt; takes a mark: branch 0: it can fail after `'*'`
 - Expr NUD / yield_: `opt(Expr)`: by attempt; takes a mark: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr NUD / paren: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
-- Expr NUD / import_: `alt('(' !{'...'} Expr opt(',' opt(!{'...'} Expr opt(…))…`: by attempt; takes a mark: branch 0: it can fail after `'('`; branch 1: it can fail after `'.'`; branch 2: it can fail after `'.'`
+- Expr NUD / import_: `alt('(' !{'...'} Expr opt(',' opt(!{'...'} Expr opt(…))…`: one token; takes a mark: branch 0: it can fail after `'('`; branch 1: it can fail after `'.'`
 - Expr NUD / import_: `opt(!{'...'} Expr opt(','))`: by attempt; takes a mark: it can fail after `Expr`
+- Expr NUD / import_: `alt('meta' \| ('defer'\|'source') '(' !{'...'} Expr opt('…`: one token; takes a mark: branch 1: it can fail after `('defer'\|'source')`
 - Expr NUD / import_: `opt(!{'...'} Expr opt(','))`: by attempt; takes a mark: it can fail after `Expr`
 - Expr NUD / function_: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
 - Expr NUD / function_: `sep(Param, ',')`: by attempt
