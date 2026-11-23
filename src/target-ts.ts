@@ -1281,7 +1281,7 @@ function parseWithMeta<H>(text: string, meta: AlignMeta[], builder: Builder<H>):
 }
 ${shapeA ? `
 function tryReuseTopW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number) => H, oldHs: H[], oldEntries: EntryMeta[], newText: string, newMeta: AlignMeta[], byteDelta: number, oldN: number, newN: number, prefix: number, suffix: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null {
-  const [prefixLen, suffixStart] = reuseBounds(oldEntries, prefix, oldN, suffix);
+  ${tsTake(['prefixLen', 'suffixStart'], 'reuseBounds', 'oldEntries, prefix, oldN, suffix')}
   const prefixKids = oldHs.slice(0, prefixLen);
   const suffixCand = oldHs.slice(suffixStart);
   const prefixMeta = oldEntries.slice(0, prefixLen);
@@ -1297,7 +1297,7 @@ function tryReuseTopW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
     const adopted = suffixCand.slice(adoptFrom).map((h) => shift(h, byteDelta, tokDelta));
     const children: H[] = [...prefixKids, ...mid, ...adopted];
     const newEntries = reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta);
-    const [offset, end, tokStart, tokEnd] = reuseSpan(newEntries);
+    ${tsTake(['offset', 'end', 'tokStart', 'tokEnd'], 'reuseSpan', 'newEntries')}
     _bSave = tokStart;
     const savePos = pos;
     pos = tokEnd;
@@ -1337,7 +1337,7 @@ function tryReuseTopW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
 ` : ''}${shapeB ? `
 function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number) => H, oldRootHs: H[], oldSegs: Seg[], oldEntries: EntryMeta[], newText: string, newMeta: AlignMeta[], byteDelta: number, oldN: number, newN: number, prefix: number, suffix: number): { root: H; segs: Seg[]; entries: EntryMeta[]; entryHs: H[]; reused: number } | null {
   if (oldSegs.length === 0) return null;
-  const [prefixLen, suffixStart] = reuseBounds(oldEntries, prefix, oldN, suffix);
+  ${tsTake(['prefixLen', 'suffixStart'], 'reuseBounds', 'oldEntries, prefix, oldN, suffix')}
   const prefixSegs = oldSegs.slice(0, prefixLen);
   const suffixCand = oldSegs.slice(suffixStart);
   const prefixMeta = oldEntries.slice(0, prefixLen);
@@ -1364,7 +1364,7 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
     }
     const children: H[] = [...prefixKids, ...midKids, ...adoptedKids];
     const [newSegs, newEntries] = reuseSegEntries(prefixSegs, prefixMeta, midSegs, midMeta, suffixCand, suffixMeta, adoptFrom, byteDelta, tokDelta);
-    const [offset, end, tokStart, tokEnd] = reuseSpan(newEntries);
+    ${tsTake(['offset', 'end', 'tokStart', 'tokEnd'], 'reuseSpan', 'newEntries')}
     _bSave = tokStart;
     const savePos = pos;
     pos = tokEnd;
@@ -1462,7 +1462,7 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
         align = validate ? { ...lexReject, streamEq: true, treeEq: isCst ? true : null } : lexReject;
         return null;
       }
-      const [oldN, newN, prefix, suffix] = computeAlignCore(oldText, oldToks, text, prevToks);
+      ${tsTake(['oldN', 'newN', 'prefix', 'suffix'], 'computeAlignCore', 'oldText, oldToks, text, prevToks')}
       const core = { oldN, newN, prefix, suffix, relexed };
       const byteDelta = text.length - oldText.length;
       let reused = 0;
@@ -3140,7 +3140,7 @@ function ${findAnyName(stops)}(s: string, i: number): number {
         ? [`// ${f.name}'s values after the first (tsSlotted).`, `var ${f.rets.slice(1).map((t, i) => `${f.name}_r${i + 1}: ${t} = ${t === 'boolean' ? 'false' : '0'}`).join(', ')};`]
         : []),
       ...f.doc.map((l) => `// ${l}`),
-      `function ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): ${f.rets.length === 0 ? 'void' : f.rets.length === 1 ? f.rets[0] : `[${f.rets.join(', ')}]`} {`,
+      `function ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): ${f.rets.length === 0 ? 'void' : f.rets.length === 1 || tsSlotted(f.retTys) ? f.rets[0] : `[${f.rets.join(', ')}]`} {`,
       ...tsBlock(f.body),
       '}',
     ].join('\n'),
@@ -3203,8 +3203,9 @@ function ${findAnyName(stops)}(s: string, i: number): number {
 // slot is a `var` (no temporal-dead-zone check on each access). A value that owns memory (a string,
 // a list, a record) is returned in an array instead: a slot would keep it alive past its caller.
 const tsSlotted = (ret: Ty[]): boolean => ret.length > 1 && ret.every((t) => isNum(t) || t === 'bool');
-// The same read, printed by hand where the element lexer calls the family's frame step, vetoes and
-// raw body (src/lex-family.ts: each returns ints, so each is slotted).
+// The same read, printed by hand where the printed runtime calls a shared function of several ints:
+// the element lexer's frame step, vetoes and raw body (src/lex-family.ts), the Doc's reuse bounds and
+// span (src/reuse-family.ts) and its alignment core (src/relex-family.ts).
 const tsTake = (names: string[], fn: string, args: string): string =>
   names.map((n, i) => `const ${n} = ${i === 0 ? `${fn}(${args})` : `${fn}_r${i}`};`).join(' ');
 
