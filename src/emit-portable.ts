@@ -604,6 +604,9 @@ export type ParserIR = {
   shared: Step[];              // the steps printed once and called from each site, indexed by Step.share (see shareSteps)
   forms: Forms;                // which rules and shared steps are printed in building and in recognize form (see Forms)
   reuse: ReusePlan | null;     // how incremental reuse cuts the entry rule into top-level entries (see ReusePlan); null: no reuse
+  /** The tokens that can begin a top-level entry of a reuse plan A (FIRST over concrete symbols of
+   *  its rules), where total parsing's fallback resumes; null: none known. */
+  entrySync: FirstSig;
   suppressSets: string[][];    // the connector sets `suppress` steps disable, indexed by Step.set; [0] is the empty set
   regexCtx: RegexCtx | null;   // null unless the grammar has a regex token with context
   tpl: TplCfg | null;          // null unless the grammar has a template token
@@ -1437,7 +1440,13 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   const entry = findEntryRule(grammar);
   const forms = formsOf(rules, lookaheads, shared.length, entry);
   const identPrefix = Object.fromEntries(identLike.map((n) => [n, grammar.tokens.find((t) => t.name === n)?.identifierPrefix ?? '']));
-  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse: reusePlanOf(rules, entry), suppressSets, regexCtx, tpl, elements, newlineCfg, identToken, identLike, identPrefix };
+  const reuse = reusePlanOf(rules, entry);
+  let entrySync: FirstSig = null;
+  if (reuse?.kind === 'A' && !reuse.rules.some((r) => a.nullableRules.has(r))) {
+    const f = new Set(reuse.rules.flatMap((r) => [...concrete.first1({ type: 'ref', name: r })]));
+    entrySync = { lits: [...f].filter((x) => !x.startsWith(KIND)), toks: [...f].filter((x) => x.startsWith(KIND)).map((x) => x.slice(KIND.length)) };
+  }
+  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse, entrySync, suppressSets, regexCtx, tpl, elements, newlineCfg, identToken, identLike, identPrefix };
 }
 
 // The step lists a rule runs: an rd rule's alternatives, a Pratt rule's NUD and LED arms.
@@ -2946,6 +2955,13 @@ export const REC_S_LIT = 0, REC_S_COMP = 1, REC_S_TOK = 2, REC_S_TPLTOK = 3, REC
 // A Pratt rule's NUD arms (PrattRule.nudOrder), by tag.
 export const REC_N_TOK = 0, REC_N_BRACKET = 1, REC_N_SEQ = 2, REC_N_CAPPED = 3, REC_N_PREFIX = 4;
 export type RecoveryTables = { data: number[]; ruleAt: number[] };
+// The rule names total parsing reserves (emit option `recovery`): its repair nodes. Their ids come
+// after the grammar's (ArenaIdPlan.ruleNames) in a module emitted with the option; a builder is
+// offered them through node / finish like any rule's.
+export const RESERVED_RULES = ['$error', '$missing'] as const;
+export const reservedRuleIds = (ar: ArenaIdPlan): [number, number] => [ar.ruleNames.length, ar.ruleNames.length + 1];
+// The id plan of a module emitted with the option: the reserved names after the grammar's.
+export const withReservedRules = (ar: ArenaIdPlan): ArenaIdPlan => ({ ...ar, ruleNames: [...ar.ruleNames, ...RESERVED_RULES] });
 export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): RecoveryTables {
   const data: number[] = [];
   const rid = (name: string) => ruleIdOf(ar, name);
@@ -3053,12 +3069,26 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
     return emit([...head, ...sections.flat()]);
   }
   const n = ar.ruleNames.length;
-  data.push(n, ir.tpl ? kidOf(ids, '$templateHead') : -1, ...Array.from({ length: n }, () => -1));
+  data.push(n, ir.tpl ? kidOf(ids, '$templateHead') : -1, ...Array.from({ length: n }, () => -1), -1);
   const ruleAt = Array.from({ length: n }, () => -1);
   for (const r of ir.rules) {
     const at = r.kind === 'rd' ? rd(r) : pratt(r);
     ruleAt[rid(r.name)] = at;
     data[2 + rid(r.name)] = at;
   }
+  // The trailer ([2 + N] holds its index): the reserved rule ids, the entry rule, the top-level
+  // element and the FIRST signature that can begin one (recovery-family.ts riTotal).
+  const deref = (c: number): number => (data[c]! < 0 ? -1 : c - data[c]!);
+  let el = -1;
+  if (ir.reuse?.kind === 'A') {
+    const rec = ruleAt[rid(ir.entry)]!;
+    const lst = deref(rec + 4);
+    const star = deref(lst + 1);
+    if (data[rec] !== REC_RD || data[rec + 2] !== 1 || data[lst] !== 1 || data[star] !== REC_S_STAR) throw new Error('recoveryTables: the reuse plan\'s entry is not one repetition');
+    el = deref(star + 2);
+  }
+  const sync = ir.entrySync === null ? -1 : firstSig({ lits: ir.entrySync.lits.filter((l) => lidOf(ids, l) > 0), toks: ir.entrySync.toks });
+  const [errId, missId] = reservedRuleIds(ar);
+  data[2 + n] = emit([errId, missId, rid(ir.entry), ref(el), ref(sync)]);
   return { data, ruleAt };
 }
