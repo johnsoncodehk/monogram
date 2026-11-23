@@ -27,6 +27,7 @@ import { generateTmLanguage } from '../src/gen-tm.ts';
 import { createParser } from '../src/gen-parser.ts';
 import type { CstGrammar } from '../src/types.ts';
 import dialect from './fixtures/elementdialect.ts';
+import textDialect from './fixtures/textdialect.ts';
 
 const { INITIAL, Registry, parseRawGrammar } = vsctm;
 const require = createRequire(import.meta.url);
@@ -36,13 +37,15 @@ await onig.loadWASM(wasmBin.buffer.slice(wasmBin.byteOffset, wasmBin.byteOffset 
 // An embedded grammar the dialect's `<style>` body should delegate to. A stub is enough: a
 // row asks only whether the body lands under `source.css`.
 const cssStub = { scopeName: 'source.css', patterns: [{ match: '[a-z-]+(?=\\s*:)', name: 'support.type.property-name.css' }] };
+const jsStub = { scopeName: 'source.js', patterns: [{ match: '\\blet\\b', name: 'storage.type.js' }] };
 
 async function load(g: CstGrammar) {
   const tm = generateTmLanguage(g);
   const reg = new Registry({
     onigLib: Promise.resolve({ createOnigScanner: (p: string[]) => new onig.OnigScanner(p), createOnigString: (s: string) => new onig.OnigString(s) }),
     loadGrammar: async (sc: string) => sc === tm.scopeName ? parseRawGrammar(JSON.stringify(tm), 'g.json')
-      : sc === 'source.css' ? parseRawGrammar(JSON.stringify(cssStub), 'css.json') : null,
+      : sc === 'source.css' ? parseRawGrammar(JSON.stringify(cssStub), 'css.json')
+      : sc === 'source.js' ? parseRawGrammar(JSON.stringify(jsStub), 'js.json') : null,
   });
   const grammar = await reg.loadGrammar(tm.scopeName);
   if (!grammar) throw new Error(`failed to load ${tm.scopeName}`);
@@ -119,6 +122,57 @@ const dialectSrc = [
   scopeRow('`<style>` body is embedded CSS', 'pass', undefined, g, src, 'color', 0, has('source.css'));
   scopeRow('the `</style>` close tag is a tag, outside the embed', 'pass', undefined, g, src, 'style', 1, s => inner(s).startsWith('entity.name.tag') && !has('source.css')(s));
   scopeRow('after the raw element the children are code again', 'pass', undefined, g, src, 'my-card', 1, s => inner(s).startsWith('entity.name.tag') && !has('source.css')(s));
+}
+
+// ── 1b. the TEXT dialect (test/fixtures/textdialect.ts): text children, tag start, text tokens,
+//        directives, raw `<script>` (any case) and `<style>` unless its body starts with `{` ──
+// Each row is read from the fixture grammar's own rules and region declaration.
+const textSrc = [
+  'component Page(items) {',
+  '  const z = a <b;',
+  '  <main class="m">Hello & 1 < 2 {items.length} /* note */ a//b // tail',
+  '    @if (items.length) { <b>yes</b> } @else { none }',
+  '    @for (x of items) { <li>{x}</li> } @empty { empty }',
+  '    <style>{css}</style>',
+  '    <style>.a { color: red; }</style>',
+  '    <SCRIPT>let a = 1;</SCRIPT>',
+  '    <{tag} id="d">dyn</{tag}>',
+  '  </main>',
+  '}',
+].join('\n');
+{
+  section = 'textdialect';
+  const { grammar: g } = await load(textDialect);
+  const src = textSrc;
+  const noTag = (s: string[]) => !s.some(x => x.startsWith('entity.name.tag') || x.startsWith('punctuation.definition.tag'));
+  scopeRow('a `<` after a value in code is a comparison, not a tag', 'pass', undefined, g, src, 'b;', 0, noTag);
+  scopeRow('tag name `main`', 'pass', undefined, g, src, 'main', 0, s => inner(s).startsWith('entity.name.tag'));
+  scopeRow('attribute name `class`', 'pass', undefined, g, src, 'class', 0, s => inner(s).startsWith('entity.other.attribute-name'));
+  scopeRow('attribute string `"m"` is a string', 'pass', undefined, g, src, 'm"', 0, has('string.quoted'));
+  scopeRow('children text `Hello` is text, not code', 'pass', undefined, g, src, 'Hello', 0, s => !s.some(x => x.startsWith('variable')));
+  scopeRow('`&` in text is no operator', 'pass', undefined, g, src, '&', 0, s => !s.some(x => x.startsWith('keyword')));
+  scopeRow('`<` before a blank in text is text, not a tag (tagStart)', 'pass', undefined, g, src, '< 2', 0, noTag);
+  scopeRow('a hole in text is an embedded expression', 'pass', undefined, g, src, 'length}', 0, has('meta.embedded.expression'));
+  const tt = 'the children patterns do not include the region\'s `textTokens` yet (step d)';
+  scopeRow('`/* note */` in text is a block comment (textTokens)', 'xfail', tt, g, src, 'note', 0, has('comment.block'));
+  scopeRow('`a//b` in text is text (`//` only after a blank)', 'pass', undefined, g, src, '//b', 0, s => !has('comment')(s));
+  scopeRow('`// tail` after a blank is a line comment (textTokens, `after`)', 'xfail', tt, g, src, 'tail', 0, has('comment.line'));
+  const dir = 'the children patterns do not include the derived directive openers yet (step e)';
+  scopeRow('`@if` in children is a directive keyword', 'xfail', dir, g, src, '@if', 0, s => inner(s).startsWith('keyword.control'));
+  scopeRow('the `@if` head is code: `items` is a variable', 'xfail', dir, g, src, 'items.length)', 0, s => s.some(x => x.startsWith('variable')));
+  scopeRow('`@else` continuation is a keyword', 'xfail', dir, g, src, '@else', 0, s => inner(s).startsWith('keyword.control'));
+  scopeRow('an `@else` body is children: `none` is text', 'xfail', dir, g, src, 'none', 0, s => !s.some(x => x.startsWith('variable')));
+  scopeRow('an element in a directive body keeps tag scopes', 'pass', undefined, g, src, 'b>yes', 0, s => inner(s).startsWith('entity.name.tag'));
+  scopeRow('`of` in an `@for` head is a keyword', 'xfail', dir, g, src, 'of items', 0, s => inner(s).startsWith('keyword.control'));
+  scopeRow('`@empty` continuation is a keyword', 'xfail', dir, g, src, '@empty', 0, s => inner(s).startsWith('keyword.control'));
+  scopeRow('`<style>{css}`: the body starts with `{`, so it is a hole (unlessBodyStarts)', 'pass', undefined, g, src, 'css}', 0, s => has('meta.embedded.expression')(s) && !has('source.css')(s));
+  scopeRow('`<style>.a {…}` body is embedded CSS', 'pass', undefined, g, src, 'color', 0, has('source.css'));
+  scopeRow('`<SCRIPT>` (any case) body is embedded JS', 'pass', undefined, g, src, 'let', 0, has('source.js'));
+  scopeRow('the `</SCRIPT>` close tag is a tag', 'pass', undefined, g, src, 'SCRIPT', 1, s => inner(s).startsWith('entity.name.tag') && !has('source.js')(s));
+  scopeRow('dynamic tag `<{tag}` opens a tag', 'pass', undefined, g, src, '<{tag}', 0, s => inner(s).startsWith('punctuation.definition.tag.begin'));
+  scopeRow('dynamic close tag `</{tag}>` closes a tag', 'pass', undefined, g, src, '</{tag}', 0, s => inner(s).startsWith('punctuation.definition.tag.begin'));
+  scopeRow('`</main>` closes the element', 'pass', undefined, g, src, 'main', 1, s => inner(s).startsWith('entity.name.tag'));
+  rows.push({ section, id: 'the text dialect source parses', status: 'pass', check: () => { try { createParser(textDialect).parse(textSrc); return { ok: true, saw: 'parsed' }; } catch (e) { return { ok: false, saw: (e as Error).message.slice(0, 100) }; } } });
 }
 
 // ── 2. agnostic element syntax ──
@@ -225,7 +279,7 @@ for (const r of rows) {
   else xfail++;
   if (all) console.log(`  ${r.status === 'pass' ? (res.ok ? 'pass ' : 'FAIL ') : (res.ok ? 'XPASS' : 'xfail')} ${r.id}\n      saw: ${res.saw}${r.why && !res.ok ? `\n      why: ${r.why}` : ''}`);
 }
-for (const sec of ['dialect', 'agnostic', 'parse']) {
+for (const sec of ['dialect', 'textdialect', 'agnostic', 'parse']) {
   const rs = rows.filter(r => r.section === sec);
   console.log(`${sec}: ${rs.filter(r => r.status === 'pass').length} pass rows, ${rs.filter(r => r.status === 'xfail').length} expected-fail rows`);
 }
