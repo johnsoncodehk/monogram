@@ -2315,6 +2315,7 @@ function buildPratt(
   function stepOfPratt(e: RuleExpr): Step { return named(e, prattNode(e)); }
   function prattNode(e: RuleExpr): Step {
     if (e.type === 'ref' && e.name === name) return { t: 'rule', name };
+    if (e.type === 'group' && e.atLevel !== undefined) return stepOf(e);   // a ruleBp step (atLevel)
     if (e.type === 'seq') return { t: 'seq', steps: e.items.map(stepOfPratt) };
     if (e.type === 'sameLine') return { t: 'sameLine' };
     if (e.type === 'not') return (e.reservable ? reservableOf : notOf)((e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt));
