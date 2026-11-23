@@ -40,7 +40,9 @@ const guardCond = (g: Guard, t: string, w: '' | 'W', keyed: boolean): string[] =
     const inS = l.ctx ? `(inTokenSet(${l.set}, ${t}) || (p.ctx != 0 && inCtxWords(p.ctx, ${t})))` : `inTokenSet(${l.set}, ${t})`;
     parts.push(l.is ? inS : `!${inS}`);
   }
-  for (const x of g.pairs ?? []) parts.push(`(!inTokenSet(${x.when.id}, ${t}) || p.secondIn(${x.second.id}))`);   // Guard.pairs
+  // Guard.pairs. Spelled in place, not as a pairIn helper as the other targets do: such a helper is
+  // over Go's inline budget (go build -gcflags=-m: not inlinable), so each test would become a call.
+  for (const x of g.pairs ?? []) parts.push(`(!inTokenSet(${x.when.id}, ${t}) || p.secondIn(${x.second.id}))`);
   return parts;
 };
 // `if <conds> <body>` as one statement line (just the body when there is no condition).
