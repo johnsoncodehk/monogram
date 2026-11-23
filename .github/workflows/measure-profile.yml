@@ -209,6 +209,7 @@ jobs:
           node test/bench-rust-profile/pr-summary.ts "$W/out/results.txt" "$W/out/emit-sizes-A.json" "$W/out/emit-sizes-M.json" "$W/src-M/docs/emit-sizes.json" > "$W/out/summary.md" || status=$?
           cat "$W/out/summary.md" >> "$GITHUB_STEP_SUMMARY"
           { echo; echo '### Where the time went (run.sh phases, wall-clock seconds)'; echo '```'; cat "$W/out/phases.txt" 2>/dev/null || echo 'phases.txt missing: run.sh did not get past its first phase'; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          if [ -s "$W/out/skipped.txt" ]; then { echo; echo '### Not measured: a variant whose parser crashed on the input (NOT RUN above)'; echo '```'; cat "$W/out/skipped.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"; fi
           if [ "$SCOPE" = full ]; then
             { echo; echo '### Full profile (oxc beside A and M; test/bench-rust-profile/summarize.ts)'; echo '```'; cat "$W/out/summary.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           fi

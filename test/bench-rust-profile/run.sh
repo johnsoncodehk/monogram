@@ -149,9 +149,18 @@ for f in $INPUTS; do
   done
 done
 
+# A variant whose parser crashed on an input above (an A older than the input's syntax: e6cc55c on
+# the element inputs) is not measured on it again: its CRASH line already makes the input NOT RUN
+# for that variant in the summary, and its other parsers of that tree (the emitted JS parser in
+# particular) may not terminate or may exhaust the runner's memory on it (runs 45222944792,
+# 45236655409, 45239197173).
+crashed() { grep -qxF "${1%2} CRASH $2" "$R"; } # <variant> <file>; M2 is M
+skipped() { echo "SKIP $1 $2 (its parser crashed on it in the acceptance phase)" | tee -a "$OUT/skipped.txt"; }
+
 phase faults "page faults per parse (count builds, getrusage): first parse in a fresh process, and the warm bench loop"
 for f in $INPUTS; do
   for v in A M; do
+    if crashed $v "$f"; then skipped $v "$f"; continue; fi
     for m in cold warm reuse; do
       lim "$(mono count $v "$(grammar_of "$f")")" --faults-$m "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v FAULTSCRASH $m $f" | tee -a "$R"
     done
@@ -196,6 +205,7 @@ for f in $INPUTS; do
   fi
   [ $HAVE_LEX = 1 ] && cg_run "C.lex.$f" '*oxc_prof_lex*' "$OXC/oxc-lex" --once "$f" && cat "$OUT/cg/C.lex.$f.stdout" | tee -a "$R"
   for v in A M; do
+    if crashed $v "$f"; then skipped $v "$f"; continue; fi
     b=$(mono prof $v "$(grammar_of "$f")")
     grep -qF "$v ACCEPT $f " "$R" || { echo "$v rejects $f: profiled anyway (the parse fails late or early; see its tables)"; }
     cg_run "$v.parse.$f" '*mono_prof_parse*' "$b" --once "$f"
@@ -231,6 +241,7 @@ TVARIANTS="A M"; [ "${PROFILE_TARGETS_REPEAT:-1}" = 1 ] && TVARIANTS="A M M2"
 TINPUTS="$MAIN $ELEMENTS"
 for f in $TINPUTS; do
   for v in $TVARIANTS; do
+    if crashed $v "$f"; then skipped $v "$f"; continue; fi
     t=${v%2}$(sfx "$(grammar_of "$f")") # M2 runs M's build
     # reuse: into a kept CstBuilder (the direct engine); builder: into a kept SlimBuilder (the
     # builder engine parserW, through the Builder interface).
@@ -259,7 +270,8 @@ done
 for v in A M; do
   for g in $GRAMMARS; do
     d=$W/targets-$v$(sfx "$g")
-    gf=$(for f in $TINPUTS; do if [ "$(grammar_of "$f")" = "$g" ]; then echo "$f"; fi; done)
+    gf=$(for f in $TINPUTS; do if [ "$(grammar_of "$f")" = "$g" ] && ! crashed $v "$f"; then echo "$f"; fi; done)
+    [ -n "$gf" ] || continue
     for tm in ts-parse js-fresh; do
       if out=$(lim node "$REPO/test/bench-targets/allocs.ts" "$d/${tm%%-*}.mts" "$tm" "$d/alloc" $gf); then
         while read -r f rest; do echo "TSALLOC $v.$tm.$f $rest" | tee -a "$R"; done <<< "$out"
