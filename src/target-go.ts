@@ -13,6 +13,7 @@ import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NudRef,
 import { blockBody, elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
+import type { EmitOptions } from './emit.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
@@ -2997,6 +2998,7 @@ ${[...ones, ...wides].join('\n')}
     find: (cx, s, i, lit) => cx.atom(`lexFind(${s.c}, ${i.c}, ${JSON.stringify(lit)})`, 'int', 'int'),
     findAny: (cx, s, i, stops) => cx.atom(`${findAnyName(stops)}(${s.c}, ${i.c})`, 'int', 'int'),
     own: (_cx, r) => r,
+    cat: (cx, parts) => ({ ...cx.atom(parts.map((r) => goWrap(r, 7)).join(' + '), 'str', 'str'), prec: 6 }),
   },
   stmt: {
     comment: (text) => [`// ${text}`],
@@ -3074,11 +3076,97 @@ ${[...ones, ...wides].join('\n')}
 // on every iteration (measured: starInC 35 -> 48 instructions per call, typescript.d.ts +0.46% reuse).
 const FACTS: PortableFacts = { calleeFirstGuards: false };
 
+// The runner's batch-total mode (emit option `recovery`): NUL-separated inputs in, one line per
+// input out: [accepted, [[off, end, message, relOff, relEnd, relMessage], ...]] (relOff -1: none).
+const GO_BATCH_TOTAL = `	if len(os.Args) > 1 && os.Args[1] == "batch-total" {
+		var b strings.Builder
+		for _, s := range strings.Split(src, "\\x00") {
+			_, ok, errs := ParseTotal(s, &CstBuilder{})
+			rows := make([][]interface{}, 0, len(errs))
+			for _, e := range errs {
+				row := []interface{}{e.Off, e.End, e.Message, -1, -1, ""}
+				if e.Related != nil { row[3], row[4], row[5] = e.Related.Off, e.Related.End, e.Related.Message }
+				rows = append(rows, row)
+			}
+			line, _ := json.Marshal([]interface{}{ok, rows})
+			b.Write(line); b.WriteByte('\\n')
+		}
+		os.Stdout.WriteString(b.String())
+		return
+	}
+`;
+// The emit option `recovery` (src/emit.ts): total parsing's entry, a region appended to the default
+// module and touching none of it. ParseTotal runs the entry rule as parseWithW does, on the builder
+// engine for every builder (owed: one shell for both once the default emission may change); on a
+// reject the recovery family decides the diagnostic from the position the entry stopped at and the
+// tokens the parse examined.
+function recoveryRegionGo(ir: ParserIR, shared: SharedAlgorithms): string {
+  const reuse = !!ir.reuse;
+  return `
+// ---- recovery: the emit option { recovery: true }; generated from src/recovery-family.ts (shared by the TS / Go / Rust targets) ----
+type diag struct{ Kind, Off, End, RelOff, RelEnd int }
+${shared.recoveryFamily()}
+// Diagnostic is a span of the source (byte offsets), its message, and a related location or nil.
+type Diagnostic struct {
+\tOff, End int
+\tMessage  string
+\tRelated  *Related
+}
+// Related is a diagnostic's related location.
+type Related struct {
+\tOff, End int
+\tMessage  string
+}
+func diagnosticOf(src string, d diag) Diagnostic {
+\tout := Diagnostic{Off: d.Off, End: d.End, Message: diagMessage(src, d)}
+\tif d.RelOff >= 0 { out.Related = &Related{Off: d.RelOff, End: d.RelEnd, Message: diagRelated(d)} }
+\treturn out
+}
+
+// ParseTotal is ParseWith that also says why a text is rejected: an accepted text gives ParseWith's
+// root and no errors, a rejected one ok=false and its errors (a lexer error, or the parse's primary
+// error), each with its span in the source. It does not panic on input.
+func ParseTotal(src string, b Builder) (h int32, ok bool, errs []Diagnostic) {
+\tvar w *Workspace
+\tif s, is := b.(*SlimBuilder); is {
+\t\tw = &s.ws
+\t} else if c, is := b.(*CstBuilder); is {
+\t\tw = &c.ws
+\t} else if o, is := b.(WorkspaceOwner); is {
+\t\tw = o.Workspace()
+\t} else {
+\t\tw = &Workspace{}
+\t}
+\tb.Restore(0, 0)
+\tp := &w.w
+\ttoks, err := lexInto(src, toksOf(b), &w.lex)
+\tif err != nil {
+\t\tend := err.End
+\t\tif end < err.Off { end = err.Off }
+\t\treturn 0, false, []Diagnostic{{Off: err.Off, End: end, Message: lexError(src, err).Msg}}
+\t}
+\t*p = parserW{cursor: cursor{toks: toks}, src: src, b: b, drops: dropsOf(b), scratch: p.scratch[:0]${reuse ? ', entries: p.entries[:0], entryHs: p.entryHs[:0]' : ''}}
+\tfr, entryOk := p.parse${ir.entry}W()
+\trecordToks(b, p.toks)
+\tok = entryOk && p.pos == len(p.toks)
+\tif !ok {
+\t\t// The examined extent: the furthest of every top-level entry's (lookEnd holds the last one's).
+\t\tlook := p.lookEnd()${reuse ? '\n\t\tfor _, m := range p.entries { if m.Ext > look { look = m.Ext } }' : ''}
+\t\terrs = []Diagnostic{diagnosticOf(src, rejectDiag(p.toks, p.pos, entryOk, look))}
+\t}
+\tp.cursor.toks, p.src, p.b = nil, "", nil // the workspace keeps buffers, not the input or the builder
+\tif !ok { return 0, false, errs }
+\tif !fr.present { panic(errNoRoot) }
+\treturn fr.h, true, nil
+}
+`;
+}
+
 export const goTarget = defineTarget({
   name: 'go',
   ext: 'go',
   lowering: goLowering,
-  emitParser(grammar: CstGrammar, shared: SharedAlgorithms): string {
+  emitParser(grammar: CstGrammar, shared: SharedAlgorithms, opts: EmitOptions): string {
     const ir = portableIR(grammar, FACTS);
     const ids = buildLexIdPlan(ir);
     const lexText = lexer(ir, ids, shared);
@@ -3395,9 +3483,9 @@ func (p *engine) parse(src string, t []Tok) int32 {
 
 ${docEditBlockGo(ir, shared)}
 ${emitBuilderAddonGo(ir, ids, ar)}
-`;
+${opts.recovery ? recoveryRegionGo(ir, shared) : ''}`;
   },
-  emitRunner(): string {
+  emitRunner(opts: EmitOptions = {}): string {
     return `// CLI runner (harness only): stdin -> CST JSON + a self-bench mode. A SEPARATE file; the
 // gate writes it as runner.go next to the parser library with the library's package clause
 // set to main, so the two build into an executable. NOT part of the parser.
@@ -3449,7 +3537,7 @@ func main() {
 \t\tos.Stdout.WriteString(d.CstJSON())
 \t\treturn
 \t}
-\t// batch: NUL-separated inputs in, one line per input out — the CST JSON, "-" for an input
+${opts.recovery ? GO_BATCH_TOTAL : ''}\t// batch: NUL-separated inputs in, one line per input out — the CST JSON, "-" for an input
 \t// the parser rejects, or "!" and the message for a lexer error. One process start for a
 \t// whole corpus.
 \tif len(os.Args) > 1 && os.Args[1] == "batch" {
