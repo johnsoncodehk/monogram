@@ -301,7 +301,8 @@ function engine(ir: ParserIR, mut: Mutation = null) {
   type Act = CommitAct & { all?: true };
   function commitAct(list: string, c: Commit, t: Tok): Act | null | 'frame' {
     const lc = t.lid !== 0 ? c.lid.find((x) => x.keys.includes(ids.lids[t.lid]!)) : undefined;
-    const act = lc !== undefined ? lc.act : c.kid.find((x) => x.keys.includes(ids.kids[t.kid]!))?.act ?? 'frame';
+    const kc = lc !== undefined ? undefined : c.kid.find((x) => x.keys.includes(ids.kids[t.kid]!));
+    const act = lc !== undefined ? lc.act : kc !== undefined ? kc.act : 'frame';
     const m = mut?.commit;
     if (m && m.list === list && t.lid === mut!.lid && t.kid === m.kid && act !== null && act !== 'frame') return { arm: m.arm, first: true, lead: [], nullable: true, clean: false, unless: [], all: true };
     return act;

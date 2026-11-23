@@ -48,12 +48,12 @@ const dispatchTs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, key
   dispatchWalk(d, ids, arm, dispatchTsL(t), nilable);
 // A Commit's switch (emit-portable.ts commitWalk) over the buffered token t.
 const commitSwTs = (t: string): CommitLowering => ({
-  sw: (by, cases, dflt) => `  switch (${t}.${by}) {\n${cases.map((c) => `  ${c.keys.map((k) => `case ${k}:`).join(' ')}${c.stmt ? `\n${c.stmt}` : ''}\n  break;`).join('\n')}${dflt ? `\n  default:\n${dflt}` : ''}\n  }`,
+  sw: (by, cases, dflt) => `  switch (${t}.${by}) {\n${cases.map((c) => `  ${c.keys.map((k) => `case ${k}:`).join('')}${c.stmt ? `\n${c.stmt}` : ''}${c.ends ? '' : '\n  break;'}`).join('\n')}${dflt ? `\n  default:\n${dflt}` : ''}\n  }`,
   ifAll: ifTs,
   notAll: (conds) => `!(${conds.join(' && ')})`,
   pickDecl: '  let _c = 0;',
   pick: (n) => `{ _c = ${n}; }`,
-  picked: (cases) => `  switch (_c) {\n${cases.map((c) => `  case ${c.n}:\n  ${c.stmt}\n  break;`).join('\n')}\n  }`,
+  picked: (cases) => `  switch (_c) {\n${cases.map((c) => `  case ${c.n}:\n  ${c.stmt}`).join('\n')}\n  }`,
 });
 // A committed candidate's statement: `body` when conds hold, then `fail` (unless body always returns).
 const commitTs = (conds: string[], body: string, fail: string, returns = false) =>

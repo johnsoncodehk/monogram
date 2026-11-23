@@ -337,13 +337,16 @@ export type CommitCand = { first: TokenSet | null; lead: LeadTest[]; runtime: bo
 type CommitTables = { kinds: string[]; puncts: string[]; kindsOf: (text: string) => ReadonlySet<string>; tokenSets: TokenSet[]; ctxWords: string[] };
 /** The frame's Dispatch once a Commit decides some keys: a `lid` / `kid` group whose every token the
  *  commit switch returns at (it fails there, or commits with no `unless`) is never reached by the
- *  frame, so it is dropped (and `ranked` recomputed over the candidates left). */
-export function frameDispatch(d: Dispatch, c: Commit, kindsOf: (text: string) => ReadonlySet<string>): Dispatch {
+ *  frame, so it is dropped (and `ranked` recomputed over the candidates left). Where the switch
+ *  returns at every token (every literal it names and every kind a parser can buffer, `kinds`, and
+ *  punctuation), the frame is never reached at all: it has no candidate left. */
+export function frameDispatch(d: Dispatch, c: Commit, kindsOf: (text: string) => ReadonlySet<string>, kinds: readonly string[]): Dispatch {
   const decided = (a: CommitCase['act']) => a === null || (a !== 'frame' && a.unless.length === 0);
   const lidAct = (l: string) => c.lid.find((x) => x.keys.includes(l))?.act;
-  const kidAct = (k: string) => c.kid.find((x) => x.keys.includes(k))?.act ?? 'frame';
+  const kidAct = (k: string): CommitCase['act'] => { const x = c.kid.find((y) => y.keys.includes(k)); return x === undefined ? 'frame' : x.act; };
   const lidDead = (l: string) => { const a = lidAct(l); return a !== undefined ? decided(a) : [...kindsOf(l)].every((k) => decided(kidAct(k))); };
   const kidDead = (k: string) => decided(kidAct(k)) && c.lid.every((x) => decided(x.act) || !x.keys.some((l) => kindsOf(l).has(k)));
+  if (c.lid.every((x) => decided(x.act)) && ['', ...kinds].every((k) => decided(kidAct(k)))) return { sections: [], ranked: [] };
   let pruned = false;
   const sections = d.sections.flatMap((sec): DispatchSection[] => {
     if (sec.by === 'rest') return [sec];
@@ -1178,7 +1181,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
           first: g?.first ?? null, lead: g?.lead ?? [], runtime: g !== null && g.second !== null,
           nullable: nullableList(guardedSteps(g, r.alts[i]!)), clean: listFailsClean(guardedSteps(g, r.alts[i]!)),
         })), P);
-        if (c) { r.altCommit = c; r.altDispatch = frameDispatch(r.altDispatch, c, kindsOf); }
+        if (c) { r.altCommit = c; r.altDispatch = frameDispatch(r.altDispatch, c, kindsOf, kinds); }
       } else {
         const ops = [...new Set(r.prefix.map((p) => p.op))];
         const c = commitOf(r.nudOrder.map((n): CommitCand => {
@@ -1194,7 +1197,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
             case 'prefix': return { first: { lits: ops, toks: [] }, lead: [], runtime: false, nullable: false, clean: false };
           }
         }), P);
-        if (c) { r.nudCommit = c; r.nudDispatch = frameDispatch(r.nudDispatch, c, kindsOf); }
+        if (c) { r.nudCommit = c; r.nudDispatch = frameDispatch(r.nudDispatch, c, kindsOf, kinds); }
       }
     }
   }
@@ -1424,11 +1427,12 @@ export function ruleShell(r: RdRule, ids: LexIdPlan, L: RuleLowering): string {
 // A CommitLowering spells a switch on the buffered token's literal or kind (each case: its keys
 // and its statement, '' for one that goes on to the frame; `dflt`: every other key's statements),
 // and the run-time tests: `ifAll` (stmt under conds) and `notAll` (the negation of a conjunction).
+// A commit's statement and the failure always return; `picked` runs only commits.
 // A commit that several cases share (one arm, the same run-time tests, under different `unless`
 // sets) is printed once: those cases `pick` its number (from 1; `pickDecl` declares the variable,
 // 0: none picked) and `picked` runs the one picked after the switch.
 export type CommitLowering = {
-  sw(by: 'lid' | 'kid', cases: { keys: string[]; stmt: string }[], dflt: string): string;
+  sw(by: 'lid' | 'kid', cases: { keys: string[]; stmt: string; ends: boolean }[], dflt: string): string;   // ends: the statement always returns
   ifAll(conds: string[], stmt: string): string;
   notAll(conds: string[]): string;
   pickDecl: string;
@@ -1449,32 +1453,48 @@ export function commitPrinted(c: Commit): CommitAct[] {
   return [...out.values()];
 }
 export function commitWalk(c: Commit, ids: LexIdPlan, act: (a: CommitAct | null) => string, tests: (t: CommitTest) => string[], C: CommitLowering): string {
-  // A commit shared by more than one case is picked.
-  const what = commitWhat;
-  const uses = new Map<string, number>();
-  for (const x of [...c.lid, ...c.kid]) if (x.act !== null && x.act !== 'frame') uses.set(what(x.act), (uses.get(what(x.act)) ?? 0) + 1);
-  const shared = [...uses].filter(([, n]) => n > 1).map(([w]) => w);
-  const stmt = (a: CommitCase['act']): string => {
-    if (a === 'frame') return '';
-    if (a === null) return act(null);
-    const n = shared.indexOf(what(a)) + 1;
-    return C.ifAll(a.unless.map((u) => {
-      const t = tests(u);
-      if (t.length === 0) throw new Error('commitWalk: an unless candidate has no run-time test');
-      return C.notAll(t);
-    }), n > 0 ? C.pick(n) : act(a));
-  };
+  // Each case as it prints: its `unless` conditions and its commit's statement ('' for the frame,
+  // the failure for null). Commits are decided per arm, but what a target prints for two arms can
+  // be the same text (a token arm's leaf is the buffered token's, whatever its kind): cases of a
+  // section that print the same are one case, and a statement more than one case prints is picked.
+  const body = new Map<string, string>();
+  const bodyOf = (a: CommitAct): string => { const w = commitWhat(a); let s = body.get(w); if (s === undefined) { s = act(a); body.set(w, s); } return s; };
+  const conds = (a: CommitAct): string[] => a.unless.map((u) => {
+    const t = tests(u);
+    if (t.length === 0) throw new Error('commitWalk: an unless candidate has no run-time test');
+    return C.notAll(t);
+  });
   const id = (by: 'lid' | 'kid', k: string): string => {
     const n = by === 'lid' ? lidOf(ids, k) : kidOf(ids, k);
     if (n === 0 && !(by === 'kid' && k === '')) throw new Error(`commitWalk: ${by} key ${JSON.stringify(k)} has no id`);
     return String(n);
   };
-  const cases = (by: 'lid' | 'kid', cs: CommitCase[]) => cs.map((x) => ({ keys: x.keys.map((k) => id(by, k)), stmt: stmt(x.act) }));
-  const kid = c.kid.length ? C.sw('kid', cases('kid', c.kid), '') : '';
-  const sw = c.lid.length ? C.sw('lid', cases('lid', c.lid), kid) : kid;
+  type Printed = { keys: string[]; cond: string[]; stmt: string; commits: boolean };
+  const printed = (by: 'lid' | 'kid', cs: CommitCase[]): Printed[] => {
+    const out = new Map<string, Printed>();
+    for (const x of cs) {
+      const p: Printed = x.act === 'frame' ? { keys: [], cond: [], stmt: '', commits: false }
+        : x.act === null ? { keys: [], cond: [], stmt: act(null), commits: false }
+        : { keys: [], cond: conds(x.act), stmt: bodyOf(x.act), commits: true };
+      const k = JSON.stringify([p.cond, p.stmt, p.commits]);
+      const q = out.get(k) ?? p;
+      out.set(k, q);
+      q.keys.push(...x.keys.map((key) => id(by, key)));
+    }
+    return [...out.values()];
+  };
+  const lid = printed('lid', c.lid), kid = printed('kid', c.kid);
+  const uses = new Map<string, number>();
+  for (const p of [...lid, ...kid]) if (p.commits) uses.set(p.stmt, (uses.get(p.stmt) ?? 0) + 1);
+  const shared = [...uses].filter(([, n]) => n > 1).map(([s]) => s);
+  const cases = (ps: Printed[]) => ps.map((p) => {
+    const n = p.commits ? shared.indexOf(p.stmt) + 1 : 0;
+    return { keys: p.keys, stmt: p.commits ? C.ifAll(p.cond, n > 0 ? C.pick(n) : p.stmt) : p.stmt, ends: p.commits ? p.cond.length === 0 && n === 0 : p.stmt !== '' };
+  });
+  const kidSw = kid.length ? C.sw('kid', cases(kid), '') : '';
+  const sw = lid.length ? C.sw('lid', cases(lid), kidSw) : kidSw;
   if (shared.length === 0) return sw;
-  const acts = [...c.lid, ...c.kid].map((x) => x.act).filter((x): x is CommitAct => x !== null && x !== 'frame');
-  return [C.pickDecl, sw, C.picked(shared.map((w, k) => ({ n: k + 1, stmt: act(acts.find((x) => what(x) === w)!) })))].join('\n');
+  return [C.pickDecl, sw, C.picked(shared.map((stmt, k) => ({ n: k + 1, stmt })))].join('\n');
 }
 
 // ── The entry rule with reuse recording (ParserIR.reuse), decided once ──

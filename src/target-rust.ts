@@ -62,9 +62,21 @@ const dispatchRsL = (t: string, opt: boolean): DispatchLowering => ({
 });
 const dispatchRs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, opt = false): string =>
   dispatchWalk(d, ids, arm, dispatchRsL(t, opt), opt);
+// A match arm's keys (numeric ids), a run of three or more consecutive ones as one range pattern
+// (Rust syntax; the same arm).
+const keysRs = (keys: string[]): string => {
+  const ks = keys.map(Number).sort((a, b) => a - b), out: string[] = [];
+  for (let i = 0; i < ks.length;) {
+    let j = i;
+    while (j + 1 < ks.length && ks[j + 1] === ks[j]! + 1) j++;
+    if (j - i >= 2) out.push(`${ks[i]}..=${ks[j]}`); else for (let k = i; k <= j; k++) out.push(String(ks[k]));
+    i = j + 1;
+  }
+  return out.join(' | ');
+};
 // A Commit's switch (emit-portable.ts commitWalk) over the buffered token t.
 const commitSwRs: CommitLowering = {
-  sw: (by, cases, dflt) => `        match t.${by} {\n${cases.map((c) => `        ${c.keys.join(' | ')} => {${c.stmt ? `\n${c.stmt}\n        ` : ''}}`).join('\n')}\n        _ => {${dflt ? `\n${dflt}\n        ` : ''}}\n        }`,
+  sw: (by, cases, dflt) => `        match t.${by} {\n${cases.map((c) => `        ${keysRs(c.keys)} => {${c.stmt ? `\n${c.stmt}\n        ` : ''}}`).join('\n')}\n        _ => {${dflt ? `\n${dflt}\n        ` : ''}}\n        }`,
   ifAll: ifRs,
   notAll: (conds) => `!(${conds.join(' && ')})`,
   pickDecl: '        let mut _c = 0u8;',
