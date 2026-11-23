@@ -12,7 +12,7 @@ Every choice point of the grammar and how the generated parser (the portable pla
 | NUD arms | 5 | 0 | 0 | 0 | 5 | 5 |
 | LED connectors | 5 | 3 | 0 | 2 | 0 | 4 |
 | inline choice | 485 | 214 | 0 | 271 | 0 | 268 |
-| star | 138 | 131 | 0 | 7 | 0 | 46 |
+| star | 137 | 130 | 0 | 7 | 0 | 45 |
 | opt | 310 | 269 | 0 | 41 | 0 | 133 |
 | sep | 128 | 19 | 0 | 109 | 0 | 0 |
 
@@ -343,7 +343,6 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Expr LED / led_paren: `sep(Expr, ',')`: by attempt
 - Expr LED / led_optChain: `alt(Ident \| PrivateField \| '(' sep(Expr, ',') ')' \| '['…`: one token; takes a mark: branch 2: it can fail after `'('`; branch 3: it can fail after `'['`; branch 5: it can fail after `'<'`
 - Expr LED / led_optChain: `sep(Expr, ',')`: by attempt
-- Expr LED / led_optChain: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
 - Expr LED / led_optChain: `sep(Type, ',')`: by attempt
 - Expr LED / led_optChain: `sep(Expr, ',')`: by attempt
 - Expr LED / led_bracket: `many((',' Expr))`: one token; takes a mark: it can fail after `','`

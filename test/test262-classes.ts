@@ -62,6 +62,12 @@ export const CLASSES: CauseClass[] = [
     match: (t) => inDir(t, /^test\/language\/expressions\/division\/bigint-(toprimitive|wrapped-values)\.js$/),
   },
   {
+    id: 'reject/optional-chain-bracket-comma-expression', direction: 'we-reject', verdict: 'grammar-bug',
+    title: 'an optional chain\'s computed member takes an Expression, comma included',
+    why: '`a?.[0, 1]`: OptionalChain `?. [ Expression ]`. Every other computed member takes the comma list (bracketIndex); this one waits on TypeScript\'s v1 ESTree shape (test/fixtures/shape-typescript.ts estreeOptionalChain and its Rust stream type), which tells the branch from a call by its kids.',
+    match: (t) => inDir(t, /optional-chaining\/optional-chain-prod-expression\.js$/),
+  },
+  {
     id: 'reject/lexer-optional-chain-before-digit', direction: 'we-reject', verdict: 'grammar-bug',
     title: '`?.` before a decimal digit is `?` and a number',
     why: '`true ?.30 : false`: OptionalChainingPunctuator is `?. [lookahead ∉ DecimalDigit]`.',

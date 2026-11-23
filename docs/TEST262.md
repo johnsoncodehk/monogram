@@ -20,7 +20,7 @@ a test that test262 runs both sloppy and strict, or only in one mode, or as a mo
 first run's text: `"use strict";` prepended for `onlyStrict`). What depends on the goal or the mode is a class
 of its own below (`needs-parameter`).
 
-**21560 of 24677 agree (87.4%).**
+**21557 of 24677 agree (87.4%).**
 
 ## Scoreboard
 
@@ -44,7 +44,7 @@ of its own below (`needs-parameter`).
 | `import` | 129 | 119 | 9 | 1 | 0 | 0 |
 | `keywords` | 25 | 0 | 25 | 0 | 0 | 0 |
 | `line-terminators` | 41 | 24 | 17 | 0 | 0 | 0 |
-| `literals` | 536 | 215 | 122 | 199 | 0 | 0 |
+| `literals` | 536 | 215 | 119 | 202 | 0 | 0 |
 | `module-code` | 599 | 433 | 19 | 147 | 0 | 0 |
 | `punctuators` | 11 | 1 | 10 | 0 | 0 | 0 |
 | `reserved-words` | 27 | 14 | 6 | 7 | 0 | 0 |
@@ -61,7 +61,7 @@ of its own below (`needs-parameter`).
 | `annexB/global-code` | 153 | 153 | 0 | 0 | 0 | 0 |
 | `annexB/literals` | 8 | 8 | 0 | 0 | 0 | 0 |
 | `annexB/statements` | 22 | 16 | 0 | 6 | 0 | 0 |
-| **total** | **24677** | **20189** | **1371** | **3106** | **11** | **0** |
+| **total** | **24677** | **20189** | **1368** | **3109** | **11** | **0** |
 
 WE-ACCEPT: test262 says SyntaxError, the grammar parses. WE-REJECT: test262 parses, the grammar rejects.
 
@@ -110,6 +110,7 @@ run); where it does not, the rule is outside even its syntactic layer.
 | `accept/hashbang-position`: a hashbang comment that does not start the source text | 4 | 4 | grammar bug: fix | `language/comments/hashbang/preceding-directive-prologue-sc.js`<br>`language/comments/hashbang/preceding-directive-prologue.js`<br>`language/comments/hashbang/preceding-hashbang.js` |
 | `accept/accessor-parameters`: a getter with a parameter | 3 | 3 | grammar bug: fix | `language/expressions/class/getter-param-dflt.js`<br>`language/expressions/object/getter-param-dflt.js`<br>`language/statements/class/getter-param-dflt.js` |
 | `accept/in-operator-in-for-init`: `in` inside a for-statement initializer's nested expression | 3 | 3 | grammar bug: fix | `language/expressions/conditional/in-branch-2.js`<br>`language/expressions/yield/in-iteration-stmt.js`<br>`language/expressions/yield/star-in-iteration-stmt.js` |
+| `accept/numeric-literal-lexical`: a numeric literal the lexical grammar does not derive | 3 | 3 | grammar bug: fix | `language/literals/numeric/numeric-separators/numeric-separator-literal-dil-dot-nsl-dd-err.js`<br>`language/literals/numeric/numeric-separators/numeric-separator-literal-dil-dot-nsl-ep-err.js`<br>`language/literals/numeric/numeric-separators/numeric-separator-literal-dil-dot-nsl-err.js` |
 | `accept/switch-statement-outside-clause`: a statement in a switch body before any `case` | 1 | 1 | grammar bug: fix | `language/statements/switch/S12.11_A3_T5.js` |
 | `accept/strict-mode`: strict mode code | 397 | 397 | needs a parameterised production the engine lacks (roadmap item 4) | `language/arguments-object/10.5-1gs.js`<br>`language/expressions/function/name-arguments-strict.js`<br>`language/statements/class/elements/gen-private-method/yield-identifier-spread-strict.js` |
 | `accept/module-goal`: module code | 36 | 36 | needs a parameterised production the engine lacks (roadmap item 4) | `language/expressions/class/class-name-ident-await-module.js`<br>`language/module-code/early-undef-continue.js`<br>`language/module-code/parse-err-syntax-2.js` |
@@ -136,7 +137,7 @@ run); where it does not, the rule is outside even its syntactic layer.
 
 | verdict | files |
 |---|---:|
-| grammar bug: fix | 720 |
+| grammar bug: fix | 723 |
 | needs a parameterised production the engine lacks (roadmap item 4) | 446 |
 | early error: a checker over the tree, not the grammar: not built | 1940 |
 
@@ -153,6 +154,7 @@ run); where it does not, the rule is outside even its syntactic layer.
 - `accept/hashbang-position` — `x⏎#!/y`: a HashbangComment is the first thing in a Script or Module only. The Shebang token's start() anchor admits any line start.
 - `accept/accessor-parameters` — `get x(a) {}`: a getter's parameter list is `( )`; a setter has exactly one PropertySetParameterList.
 - `accept/in-operator-in-for-init` — `for (true ? 0 : 0 in {};;)`: the initializer is an Expression[~In] and ConditionalExpression passes ?In to both branches.
+- `accept/numeric-literal-lexical` — `1._5`, `1._e1`: the literal is the longest one (`1.`), and an IdentifierStart may not follow it; the token backs up to `1` and lexes `._5` as a member. Refusing the back-up makes these lex errors, after which the portable lexers' relex of an edit before the error keeps it (`x = 1._x;` with `.` inserted: edited rejects, fresh accepts): owed to the lexer lane.
 - `accept/switch-statement-outside-clause` — `switch (x) { a = 2; case 0: }`: a CaseBlock holds CaseClauses and a DefaultClause only; the grammar's SwitchCase rule has a bare Stmt arm.
 - `accept/strict-mode` — Valid in sloppy mode, an error in strict code (reserved words `let` / `static` / `implements` / `yield` …, `with`, legacy octal literals and escapes, `delete x`, `eval` / `arguments` as targets or bindings, duplicate parameters, Annex B's `if (x) function f() {}`; class bodies are strict). Without a strict mode switch the grammar accepts the sloppy reading.
 - `accept/module-goal` — Valid in a script, an error in module code: `await` as an identifier, module code is strict, top-level `new.target` / `super`, import / export / `import.meta` in a Script. Without the script / module goal the grammar accepts the script reading.
@@ -186,7 +188,7 @@ class, not classed again. A rejection tsc does not share and the JavaScript gram
 TypeScript grammar bug with no class yet (`ts/unknown`), and fails the gate. The negative tests are not asked of
 the TypeScript grammar; there it is held to tsc's parser ([CORRECTNESS.md](CORRECTNESS.md)).
 
-**20187 of 20200 valid tests parse (99.9%)** · by design 10 · as in JavaScript 3 · unclassified 0 · crash 0
+**20186 of 20200 valid tests parse (99.9%)** · by design 10 · as in JavaScript 3 · unclassified 1 · crash 0
 
 | cell | cause | files | witness | evidence |
 |---|---|---:|---|---|
@@ -196,6 +198,7 @@ the TypeScript grammar; there it is held to tsc's parser ([CORRECTNESS.md](CORRE
 | `ts/by-design` | TypeScript rejects it (JavaScript class `reject/annexb-html-comments`) | 1 | `annexB/language/comments/single-line-html-open.js` | tsc TS1110: Type expected. |
 | `ts/as-javascript` | the JavaScript class `reject/lexer-division-after-object-literal` | 2 | `language/expressions/division/bigint-toprimitive.js` | tsc's .ts parser accepts it |
 | `ts/as-javascript` | the JavaScript class `reject/lexer-optional-chain-before-digit` | 1 | `language/expressions/optional-chaining/punctuator-decimal-lookahead.js` | tsc's .ts parser accepts it |
+| `ts/unknown` | tsc accepts it, javascript.ts accepts it | 1 | `language/expressions/optional-chaining/optional-chain-prod-expression.js` | tsc accepts it, javascript.ts accepts it |
 
 ## Early errors: a checker over the tree, not the grammar: not built
 
@@ -240,9 +243,9 @@ declarations, labels, which tsc reports outside its parser; it includes TypeScri
 
 | parser | right | of 24677 | on the 20200 valid tests | on the 4477 parse-negative tests |
 |---|---:|---:|---:|---:|
-| `javascript.ts` (interpreter) | 21560 | 87.4% | 20189 (99.9%) | 1371 (30.6%) |
+| `javascript.ts` (interpreter) | 21557 | 87.4% | 20189 (99.9%) | 1368 (30.6%) |
 | acorn 8.16.0 | 24394 | 98.9% | 19926 (98.6%) | 4468 (99.8%) |
 | tsc 5.9.3 parser | 21391 | 86.7% | 20123 (99.6%) | 1268 (28.3%) |
 | tsc 5.9.3 parser + binder | 21829 | 88.5% | 19934 (98.7%) | 1895 (42.3%) |
 
-Of the 3106 WE-ACCEPT files, acorn also accepts 7 (in every run), tsc's parser 2701, tsc's parser + binder 2074.
+Of the 3109 WE-ACCEPT files, acorn also accepts 7 (in every run), tsc's parser 2701, tsc's parser + binder 2074.

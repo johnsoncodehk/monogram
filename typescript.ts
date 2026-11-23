@@ -529,9 +529,7 @@ const Expr = rule($ => [
   // being removed in TS#60263), so PrivateField stays — the CST producer models the syntax, not
   // a tsc-only restriction. Any "no private in optional chain" rule, were it real, would be a
   // Static-Semantics check in a CST consumer, never a parse-level exclusion here.
-  // Owed: `a?.[0, 1]` (OptionalChain `?. [ Expression ]`, tsc accepts): the v1 ESTree shape
-  // (test/fixtures/shape-typescript.ts estreeOptionalChain, its Rust stream table) tells this branch
-  // from the call by its kid count, so the index stays one expression here until that shape names it.
+  // Owed: `a?.[0, 1]` (tsc accepts): one expression here, as in JavaScript's Expr (the v1 shape).
   [$, field('questionDot', '?.'), alt(Ident, PrivateField, ['(', sep($, ','), ')'], ['[', $, ']'], Template, [...typeArgsInExpr(), '(', sep($, ','), ')'])],   // optional typed call `a?.<T>(args)`
   [$, ...bracketIndex($)],
   [$, sameLine, '!'],   // TS non-null assertion — RESTRICTED (no line break before `!`, like postfix ++/--); a LHS-chain tail (access can follow: `x!.y`, `x!()`)

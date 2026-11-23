@@ -453,7 +453,7 @@ export const classHeritageArms = ($, Expr, NewTarget, classExpression, typeArgs 
   NewTarget,
   classExpression,
   [$, '.', alt(Ident, PrivateField)],
-  [$, '?.', alt(Ident, PrivateField, ['(', sep(Expr, ','), ')'], bracketIndex(Expr), Template)],
+  [$, '?.', alt(Ident, PrivateField, ['(', sep(Expr, ','), ')'], ['[', Expr, ']'], Template)],   // `?.[` one expression: see Expr's
   [$, ...bracketIndex(Expr)],
   ...typeArgs,
   [$, '(', sep(Expr, ','), ')'],
@@ -530,7 +530,10 @@ const Expr = rule($ => [
   // valid current ECMAScript (V8 + Babel accept it; tsc's lone parse rejection is a bug being
   // removed in TS#60263) — so PrivateField stays. The CST producer models the syntax; it does
   // not adjudicate tsc-only restrictions.
-  [$, '?.', alt(Ident, PrivateField, ['(', sep($, ','), ')'], bracketIndex($), Template)],
+  // Owed: `a?.[0, 1]` (OptionalChain `?. [ Expression ]`): TypeScript's v1 ESTree shape
+  // (test/fixtures/shape-typescript.ts estreeOptionalChain and its Rust stream type) tells this branch
+  // from a call by its kids, so both grammars keep one expression here until that shape names it.
+  [$, '?.', alt(Ident, PrivateField, ['(', sep($, ','), ')'], ['[', $, ']'], Template)],
   [$, ...bracketIndex($)],
   [$, '?', field('then', $), ':', field('otherwise', $)],
   [$, 'instanceof', $],

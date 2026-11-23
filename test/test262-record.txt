@@ -583,6 +583,10 @@ language/statements/generators/yield-as-logical-or-expression.js
 language/statements/generators/yield-weak-binding.js
 ## accept/switch-statement-outside-clause
 language/statements/switch/S12.11_A3_T5.js
+## accept/numeric-literal-lexical
+language/literals/numeric/numeric-separators/numeric-separator-literal-dil-dot-nsl-dd-err.js
+language/literals/numeric/numeric-separators/numeric-separator-literal-dil-dot-nsl-ep-err.js
+language/literals/numeric/numeric-separators/numeric-separator-literal-dil-dot-nsl-err.js
 ## accept/use-strict-with-non-simple-parameters
 language/expressions/arrow-function/array-destructuring-param-strict-body.js
 language/expressions/arrow-function/object-destructuring-param-strict-body.js
@@ -3171,3 +3175,5 @@ annexB/language/comments/single-line-html-open.js
 language/expressions/division/bigint-toprimitive.js
 language/expressions/division/bigint-wrapped-values.js
 language/expressions/optional-chaining/punctuator-decimal-lookahead.js
+## ts/unknown
+language/expressions/optional-chaining/optional-chain-prod-expression.js
