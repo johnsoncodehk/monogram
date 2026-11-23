@@ -9,6 +9,8 @@ name: measure inner loop
 # - catch: every real failure of a land/** branch (docs/TESTING.md, "The quick tier: its catch
 #   rate"): the failing head's change put back onto this tree, then `--quick` and `--changed`
 #   against it; caught / missed / not reproduced per failure, in the job summary.
+# - go-unused: a Go variable declared and not used in code only a real grammar's parser reaches,
+#   then `--quick` (it must fail, in the Go compile of the javascript grammar's parser).
 on:
   push:
     branches: ['measure/inner-loop/**']
@@ -50,6 +52,30 @@ jobs:
         name: Job summary
         run: |
           { echo '## Two cold runs at once into one empty cache'; echo; grep '^|' /tmp/concurrent.log || true; echo; echo '## Inner loop: gates run and seconds (runner: '"$(nproc)"' cores)'; echo; grep '^|' /tmp/timing.log || true; } >> "$GITHUB_STEP_SUMMARY"
+
+  go-unused:
+    # the quick tier against a Go printer mistake only a real grammar's parser reaches
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.4'
+          cache: false
+      - run: npm ci
+      - run: npm run gen
+      - name: A declared-and-not-used Go variable, then --quick
+        run: test/inner-loop-measure.sh go-unused | tee /tmp/go-unused.log
+      - if: always()
+        name: Job summary
+        run: grep '^|' /tmp/go-unused.log >> "$GITHUB_STEP_SUMMARY" || true
 
   catch:
     runs-on: ubuntu-latest
