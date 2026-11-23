@@ -661,6 +661,7 @@ export const EL_FRAME_FN = 'lexElFrame';
 export const EL_OPENS_FN = 'lexElOpens';
 export const EL_REACH_FN = 'lexElReach';
 export const EL_RAW_FN = 'lexElRaw';
+export const EL_TAG_START_FN = 'lexElTagStart';
 // What the type-parameter vetoes decide at a tagOpen at an operand position (EL_OPENS_FN).
 export const EL_NOT = 0, EL_OPEN = 1, EL_SPECULATE = 2;
 
@@ -685,6 +686,15 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
     return and(lt('p', len('s')), any([...fb.bytes.map((u) => eq(code('p'), I(u))), ...(fb.nonAscii ? [ge(code('p'), I(128))] : [])]));
   };
   const L = litLen(e.tagOpen);
+  // Whether a tagOpen at p opens a tag (tagStart: the unit after it is in the class); every place
+  // that opens one tests it, the entry from code included (the printers call it there).
+  const opensTag = (at: Ex): Expr => (e.tagStart ? and(hasAt(at, e.tagOpen), { k: 'call', fn: EL_TAG_START_FN, args: [x('s'), add(at, L)] }) : hasAt(at, e.tagOpen));
+  if (e.tagStart) fns.push({
+    name: EL_TAG_START_FN,
+    doc: 'Whether the unit at p may follow a tagOpen that opens a tag (elements.tagStart).',
+    params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }], ret: ['bool'],
+    body: [if_(ge('p', len('s')), [{ k: 'return', es: [F] }]), let_('c', code('p')), { k: 'return', es: [inRanges('c', e.tagStart)] }],
+  });
   // The frame step (the frame fr on top is an element frame): what the frame lexes at p, before
   // the ordinary scan. Returns (end, kid, lid, frame, push, angle, look): end -1 when the frame
   // lexes nothing there (the ordinary scan lexes p); else the token [p, end) of kind kid and
@@ -699,13 +709,20 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
   const tok = (end: Ex, kid: number, lid: number, top: Ex, push: number, angle: Ex): Stmt => retN(end, I(kid), I(lid), top, I(push), angle, 'look');
   const kidE = (n: string) => kidOf(ids, n), lidE = (l: string) => lidOf(ids, l);
   const children: Stmt[] = [
-    if_(hasAt('p', e.tagOpen), [
+    if_(opensTag('p'), [
       if_(hasAt(add('p', L), e.closeMarker), [tok(add(add('p', L), litLen(e.closeMarker)), kidE(e.closeTag), 0, add('fr', I(8)), 0, I(0))]),
       tok(add('p', L), 0, lidE(e.tagOpen), add('fr', I(4)), 0, I(0)),
     ]),
     if_(hasAt('p', e.holeOpen), [tok(add('p', litLen(e.holeOpen)), 0, lidE(e.holeOpen), 'fr', 1, 'angle')]),
   ];
-  if (e.text) children.push(let_('te', call(scannerName(e.text), 'p')), if_(gt('te', 'p'), [tok('te', kidE(e.text), 0, 'fr', 0, 'angle')]));
+  if (e.text) {
+    children.push(let_('te', call(scannerName(e.text), 'p')));
+    // with tagStart the run goes on over every tagOpen that opens no tag
+    if (e.tagStart) children.push(if_(lt('te', 'p'), [set('te', 'p')]), while_(and(hasAt('te', e.tagOpen), not(opensTag('te'))), [
+      set('te', add('te', L)), let_('tm', call(scannerName(e.text), 'te')), if_(gt('tm', 'te'), [set('te', 'tm')]),
+    ]));
+    children.push(if_(gt('te', 'p'), [tok('te', kidE(e.text), 0, 'fr', 0, 'angle')]));
+  }
   const tag: Stmt[] = [];
   e.tagTokens.forEach((name, i) => tag.push(if_(eq('angle', I(0)), [
     let_(`g${i}`, call(scannerName(name), 'p')),
@@ -721,7 +738,7 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
       ...tagEnd(false), tok(add('p', litLen(e.tagClose)), 0, lidE(e.tagClose), 'top', 0, I(0)),
     ]),
     // after the attribute assign an element is a value (`a=<b/>`); elsewhere type arguments
-    if_(hasAt('p', e.tagOpen), [
+    if_(opensTag('p'), [
       if_('afterEq', [tok(add('p', L), 0, lidE(e.tagOpen), 'fr', 6, I(0))]),
       tok(add('p', L), 0, lidE(e.tagOpen), 'fr', 0, add('angle', I(1))),
     ]),
@@ -776,11 +793,13 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
         if ([...tag].some((ch) => ch.charCodeAt(0) > 127)) throw new Error(`portable: elements.rawText: tag ${JSON.stringify(tag)} is not ASCII`);
         const kid = I(kidOf(ids, r.token));
         const named = and(eq(sub('b', 'a'), litLen(tag)), r.ignoreCase ? foldAt('a', tag) : hasAt('a', tag));
-        body.push(if_(named, r.ignoreCase ? [
+        // the body condition: when it matches at the body's start the children are ordinary
+        const unless = r.unless === null ? [] : [if_(ge(call(b.exact(r.unless), 'p'), I(0)), [retN(I(-1), I(0))])];
+        body.push(if_(named, [...unless, ...(r.ignoreCase ? [
           let_('q', 'p'),
           while_(and(lt('q', len('s')), not(and(hasAt('q', close), foldAt(add('q', litLen(close)), tag)))), [set('q', add('q', I(1)))]),
           retN('q', kid),
-        ] : [retN(b.find('p', close + tag), kid)]));
+        ] : [retN(b.find('p', close + tag), kid)])]));
       }
     }
     body.push(retN(I(-1), I(0)));

@@ -8,7 +8,7 @@ import type { Lowering } from './algo-ir.ts';
 import type { EmitOptions, Target } from './emit.ts';
 import type { LexTok, ParserIR } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
-import { EL_FRAME_FN, EL_OPENS_FN, EL_RAW_FN, EL_REACH_FN, TPL_SPAN, UNI_CLASS, emitLexScan, emitScanInline, scannedTokens, scannerName, templateLiterals, tokenLiterals } from './lex-family.ts';
+import { EL_FRAME_FN, EL_OPENS_FN, EL_RAW_FN, EL_REACH_FN, EL_TAG_START_FN, TPL_SPAN, UNI_CLASS, emitLexScan, emitScanInline, scannedTokens, scannerName, templateLiterals, tokenLiterals } from './lex-family.ts';
 import { emitRelexFamily } from './relex-family.ts';
 import { emitReuseFamily } from './reuse-family.ts';
 import { emitRecoveryFamily } from './recovery-family.ts';
@@ -38,8 +38,9 @@ export interface SharedAlgorithms {
   // (lex-family.ts), `(cp) -> int`.
   uniClass(): string;
   // The printed names of an element region's routines (lex-family.ts elementFns): the frame
-  // step, the type-parameter vetoes, and the read end of a signature's decision.
-  elementFn(which: 'frame' | 'opens' | 'reach' | 'raw'): string;
+  // step, the type-parameter vetoes, the read end of a signature's decision, the raw body, and
+  // whether a tagOpen opens a tag (tagStart).
+  elementFn(which: 'frame' | 'opens' | 'reach' | 'raw' | 'tagStart'): string;
 }
 
 export interface TargetDefinition {
@@ -87,7 +88,7 @@ export function defineTarget(def: TargetDefinition): PortableTarget {
     templateLiterals,
     tplSpan: () => lowering().ident(TPL_SPAN),
     uniClass: () => lowering().ident(UNI_CLASS),
-    elementFn: (which) => lowering().ident({ frame: EL_FRAME_FN, opens: EL_OPENS_FN, reach: EL_REACH_FN, raw: EL_RAW_FN }[which]),
+    elementFn: (which) => lowering().ident({ frame: EL_FRAME_FN, opens: EL_OPENS_FN, reach: EL_REACH_FN, raw: EL_RAW_FN, tagStart: EL_TAG_START_FN }[which]),
   };
   const target: PortableTarget = {
     name: def.name,
