@@ -1415,7 +1415,7 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: calcReuseInit, batches: [[[calcReuseMid, calcReuseMid + 1, '9']], [[calcReuseMid, calcReuseMid + 1, '8']]], minReused: 30 },
     // Boundary-hit must be exact (===): merging b;c via `;`→`+` lands on `d`; a `>=` mutant would adopt too early.
     { init: 'a;\nb;\nc;\nd;', batches: [[[4, 5, '+']]] },
-    // Mid overshoot past suffix candidates → tryReuseTop fails, full-parse fallback (reused:0) still ≡ fresh.
+    // Mid overshoot past suffix candidates → tryReuse fails, full-parse fallback (reused:0) still ≡ fresh.
     { init: 'a;\nb;\nc;\nd;', batches: [[[7, 8, '+']]], reused: 0 },
     // S7c long arena session: ≥20 continuous edits; each cumulative prefix treeEq + final ≡ fresh.
     { init: calcLongInit, batches: calcLongBatches, longSession: true, minReused: 1 },

@@ -501,15 +501,28 @@ An `operand` region is entered only in the operand-position state `root` (where 
 may start: the lexer's `!prevIsValue()`), so Monarch needs no lookbehind; an `always` region in
 both base states; the `typeParameters` vetoes are negative lookaheads on the entry. Gated by
 `test/monarch-dialect.ts` (the committed JSX / TSX artifacts, cross-checked against the
-interpreter's token stream, and the two dialect fixtures in memory). Not built yet, each its own
-step: raw text (`nextEmbedded`), `textTokens`, directives. What Monarch cannot express, each an
-expected-fail row of that gate:
+interpreter's token stream, and the two dialect fixtures in memory). Raw text: a tag name a
+`rawText` declaration lists (a `cases` dispatch on the name, ASCII case-folded under
+`ignoreCase`) has its own tag state, whose `tagClose` enters the body in the declared embed's
+language (`nextEmbedded`: the embed scope's language, `source.css` → `css`; Monaco ends the
+embedded text at the first close tag `tagOpen closeMarker name` on the line, as the lexer ends
+the raw token), or without an embed one token of the raw token's scope; `unlessBodyStarts`
+decides in a state of its own, over line breaks when the pattern begins with a repetition of a
+class holding one (`star(blank)`). The same gate re-states the static checks of Monaco's Monarch
+compiler on every Monarch grammar (Monaco itself is not run). Text tokens: tried in the
+children before the text run (a block comment the code's pushed comment state, a line comment to
+the end of the line); the run stops before one, and before one with an `after` class only right
+after a unit of that class, a lookbehind within the run's own match (a run's first unit has been
+tried by the token rules already; a dialect that also declares `highlight.text` is refused, since
+a match of one ends a Monarch rule inside the lexer's run). Not built yet: directives. What Monarch
+cannot express, each an expected-fail row of that gate:
 
 | limitation | witness | Monarch reads | the lexer reads |
 |---|---|---|---|
 | inside a pushed frame (a hole) Monarch is single-mode: it does not track values there | `z = <p>{a <b}</p>` | an element | a comparison |
 | a member keyword before a tag: the base states read `new` as an expression head whatever precedes it (JSX; TSX's Monarch reads `.new` as a member) | `y = x.new <b> c` | an element | a comparison |
 | the signature veto is a lookahead, which sees one line | `type G = <T>(`⏎`x: T) => T` | an element | a signature |
+| a block comment in text is a pushed state: an unterminated `/*` runs to the next `*/` or the end of the file | `<p>a /* b</p>`⏎`<p>c</p>` (text dialect) | a comment over both lines | text |
 
 ## Consumers (the evidence the model was built from)
 
@@ -532,5 +545,4 @@ Directive openers and continuations are derived from the grammar ("Directives").
   refused (the signature's rewind does not restore the raw-text tag records).
 - The root region: the build order above.
 - Re-measuring the five undecidable JSX shapes on a larger TSX corpus.
-- Monarch: raw text (`nextEmbedded` at the open tag's end, `@pop` at the close tag), `textTokens`
-  and directives in the element layer.
+- Monarch: directives in the element layer.
