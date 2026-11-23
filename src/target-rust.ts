@@ -5891,31 +5891,65 @@ fn parse_edit_session(s: &str) -> Option<(String, Vec<Vec<(usize, usize, String)
     Some((init?, batches?))
 }
 
+// One edit-session payload ({init, batches}): the alignment JSON (None when it has none) and the
+// CST JSON (None when the edited Doc rejects). A payload that does not decode panics.
+fn edit_session(src: &str, fast: bool) -> (Option<String>, Option<String>) {
+    let (doc, align) = edit_session_doc(src, fast);
+    (align, doc.cst_json())
+}
+// The edited Doc of a payload and its alignment JSON.
+fn edit_session_doc(src: &str, fast: bool) -> (Doc, Option<String>) {
+    let (init, batches) = parse_edit_session(src).unwrap();
+    let mut doc = Doc::new(init);
+    if !fast { doc.set_validate(true); }
+    for batch in &batches {
+        let edits: Vec<Edit> = batch.iter().map(|&(s, e, ref t)| Edit { start: s, end: e, text: t.clone() }).collect();
+        doc.edit(&edits);
+    }
+    let align = doc.alignment().map(|a| match (a.stream_eq, a.tree_eq) {
+        (Some(eq), Some(te)) => format!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"reused\\":{},\\"streamEq\\":{},\\"treeEq\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, a.reused, eq, te),
+        (Some(eq), None) => format!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"reused\\":{},\\"streamEq\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, a.reused, eq),
+        (None, Some(te)) => format!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"reused\\":{},\\"treeEq\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, a.reused, te),
+        (None, None) => format!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"reused\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, a.reused),
+    });
+    (doc, align)
+}
+
 fn main() {
     use std::io::Read;
     let mut src = String::new();
     std::io::stdin().read_to_string(&mut src).unwrap();
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 && (args[1] == "edit-session" || args[1] == "edit-session-fast") {
-        let (init, batches) = parse_edit_session(&src).unwrap();
-        let mut doc = Doc::new(init);
-        if args[1] == "edit-session" { doc.set_validate(true); }
-        for batch in &batches {
-            let edits: Vec<Edit> = batch.iter().map(|&(s, e, ref t)| Edit { start: s, end: e, text: t.clone() }).collect();
-            doc.edit(&edits);
-        }
-        if let Some(a) = doc.alignment() {
-            match (a.stream_eq, a.tree_eq) {
-                (Some(eq), Some(te)) => eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"reused\\":{},\\"streamEq\\":{},\\"treeEq\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, a.reused, eq, te),
-                (Some(eq), None) => eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"reused\\":{},\\"streamEq\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, a.reused, eq),
-                (None, Some(te)) => eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"reused\\":{},\\"treeEq\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, a.reused, te),
-                (None, None) => eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"reused\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, a.reused),
-            }
-        }
+        // the alignment is written before the CST is: a panic while writing the CST still reports it
+        let (doc, align) = edit_session_doc(&src, args[1] == "edit-session-fast");
+        if let Some(a) = align { eprintln!("{}", a); }
         match doc.cst_json() {
             Some(out) => print!("{}", out),
             None => { eprintln!("parse error"); std::process::exit(1); }
         }
+        return;
+    }
+    // batch-edit-session(-fast): NUL-separated edit-session payloads in, one line per session out:
+    // its alignment JSON (empty when it has none), a tab, then its CST JSON, or "-" when the edited
+    // Doc rejects; "!" for a session that panicked (the caller re-runs that one alone). One process
+    // start for a whole set of sessions.
+    if args.len() > 1 && (args[1] == "batch-edit-session" || args[1] == "batch-edit-session-fast") {
+        std::panic::set_hook(Box::new(|_| {}));
+        let fast = args[1] == "batch-edit-session-fast";
+        let mut out = String::new();
+        for s in src.split('\\0') {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| edit_session(s, fast))) {
+                Ok((align, cst)) => {
+                    out.push_str(align.as_deref().unwrap_or(""));
+                    out.push('\\t');
+                    out.push_str(cst.as_deref().unwrap_or("-"));
+                }
+                Err(_) => out.push('!'),
+            }
+            out.push('\\n');
+        }
+        print!("{}", out);
         return;
     }
     // Self-bench: a numeric arg N times the lex+parse loop and prints ms/iteration.
