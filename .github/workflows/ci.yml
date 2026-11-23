@@ -355,7 +355,26 @@ jobs:
       # interpreter; its accuracy bench needs the yaml-test-suite checkout, so it runs in the
       # readme-bench workflow.
       # tsx / js / jsx are built too: their queries are compiled against them (treesitter-queries)
-      # and tsx / jsx parse a corpus against the interpreter's verdicts (treesitter-jsx, report-only).
+      # and every TS / JS dialect parses its corpora against the interpreter (treesitter-verdicts).
+      # The real-code corpora of treesitter-verdicts: TypeScript's own src/ at TS_REPO_SHA and test262's
+      # syntax tests at test/test262.sha, the pins the test job's conformance gates clone.
+      - name: Clone the pinned real-code corpora (TypeScript src, test262)
+        if: steps.changed.outputs.value == 'true'
+        run: |
+          rm -rf /tmp/ts-repo; mkdir -p /tmp/ts-repo
+          git -C /tmp/ts-repo init -q
+          git -C /tmp/ts-repo remote add origin https://github.com/microsoft/TypeScript
+          git -C /tmp/ts-repo config core.sparseCheckout true
+          printf 'src/\n' > /tmp/ts-repo/.git/info/sparse-checkout
+          git -C /tmp/ts-repo fetch -q --depth 1 --filter=blob:none origin "$TS_REPO_SHA"
+          git -C /tmp/ts-repo checkout -q FETCH_HEAD
+          rm -rf /tmp/test262; mkdir -p /tmp/test262
+          git -C /tmp/test262 init -q
+          git -C /tmp/test262 remote add origin https://github.com/tc39/test262
+          git -C /tmp/test262 config core.sparseCheckout true
+          printf 'test/language/\ntest/annexB/language/\n' > /tmp/test262/.git/info/sparse-checkout
+          git -C /tmp/test262 fetch -q --depth 1 --filter=blob:none origin "$(cat test/test262.sha)"
+          git -C /tmp/test262 checkout -q FETCH_HEAD
       - name: Build wasm + accuracy gate (every grammar)
         if: steps.changed.outputs.value == 'true'
         run: |
@@ -366,4 +385,13 @@ jobs:
           node test/html-treesitter.ts
           node test/yaml-treesitter.ts
           node test/treesitter-queries.ts
-          node test/treesitter-jsx.ts
+          node test/treesitter-verdicts.ts
+      # The wasms, for attributing a disagreement locally (delta debugging needs the built parser; the
+      # dev box has no wasm toolchain).
+      - name: Upload the wasms
+        if: always() && steps.changed.outputs.value == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm
+          retention-days: 7
+          path: tree-sitter/*/tree-sitter-*.wasm

@@ -192,8 +192,11 @@ official tree-sitter grammar. Last run (CI on `3a18a69`): Monogram 96.3%, offici
 
 The other derived packages are checked in the same job: every `queries/*.scm` of every
 grammar must compile against its wasm ([`test/treesitter-queries.ts`](../test/treesitter-queries.ts));
-the TSX and JSX grammars parse a corpus whose verdicts are compared with the interpreter's
-([`test/treesitter-jsx.ts`](../test/treesitter-jsx.ts), report-only); and the job summary
+every TS / JS dialect parses its corpora, synthetic and real code (TypeScript's own `src/` at the
+pinned `TS_REPO_SHA`, test262's syntax tests at `test/test262.sha`), against the interpreter's
+verdicts, with every disagreement and its class pinned in
+[`test/treesitter-record.txt`](../test/treesitter-record.txt)
+([`test/treesitter-verdicts.ts`](../test/treesitter-verdicts.ts); any movement fails); and the job summary
 records, per grammar, `tree-sitter generate` wall and CPU time, peak memory and the
 `parser.c` state and symbol counts (report-only baselines for changes to the tree-sitter
 generator).
@@ -203,11 +206,10 @@ Operator precedence: tree-sitter's precedence numbers are the binding powers of 
 read): an operator's left binding power, a prefix operator's right one, and a `ledPrec` continuation
 (`?:`, `in`, `instanceof`, `as`, `satisfies`) its connector's; a continuation whose last operand is read
 whole (the conditional's last branch, `as T`'s type) leaves that step unprecedenced, so the operators
-after it shift into it. `test/treesitter-jsx.ts` parses `a OP1 c OP2 d` for one operator per level and
+after it shift into it. `test/treesitter-verdicts.ts` parses `a OP1 c OP2 d` for one operator per level and
 every connector, nested both ways, with every prefix and postfix operator, and where both accept
 compares tree-sitter's expression spans with the interpreter's; the pairs still bracketed differently
-are pinned in [`test/treesitter-brackets-record.txt`](../test/treesitter-brackets-record.txt) (any
-movement fails). Two classes remain: `yield a OP c` (the precedence table's prefix `yield` beside the
+are recorded as `brackets` entries. Two classes remain: `yield a OP c` (the precedence table's prefix `yield` beside the
 `yield` expression arm) and, in TypeScript, the type-argument `<` continuation taking `-a < c` and
 `a < c < d` from the relational reading. The same corpus records over-acceptances, not defects of the
 bracketing: an assignment whose target is not a LeftHandSideExpression (`a + c = d;`, `-a = c;`,
@@ -230,7 +232,7 @@ tree-sitter `reserved` word set on that token. tree-sitter applies one set per p
 highest id), so the sets are a chain from most to least reserving and every unguarded word
 position carries the empty last set. Where a guarded and a less guarded position share a state,
 the less reserving reading wins, so the rendering never rejects more than the grammar; it is
-exact in every other state, and so not counted exact: on CI's reserved-word corpus (`test/treesitter-jsx.ts`)
+exact in every other state, and so not counted exact: on CI's reserved-word corpus (`test/treesitter-verdicts.ts`)
 the shared-state witnesses `x = { if };` (beside `x = { if: 1 }`), `import { if } from "m";` (beside
 `import { if as x }`) and `const { default } = o;` (beside `{ default: d }`) stay accepted, while
 `var if`, `function return() {}`, `catch (this)`, `x = y + break;` and the rest are rejected. Reserved
