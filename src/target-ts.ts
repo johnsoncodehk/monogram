@@ -317,9 +317,11 @@ ${rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]
   // The entry from code, in the tagOpen unit's dispatch arm (outside element frames: inside one
   // the frame step lexes every tagOpen).
   const enter = `      templateStack.push(6); refresh(); bound = 0; emit(pos, pos + ${L}, 0, LID_EL_OPEN);${raw ? ' tagAt.push(toks.length - 1);' : ''} tagAngle = 0; pos += ${L}; continue;\n`;
-  const entry = !operand ? `    if (src.startsWith(${J(el.tagOpen)}, pos)) {\n${enter}    }\n`
-    : !(el.head || sig) ? `    if (src.startsWith(${J(el.tagOpen)}, pos) && !prevIsValue()) {\n${enter}    }\n`
-    : `    if (src.startsWith(${J(el.tagOpen)}, pos)${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue()) {
+  // a tagOpen that opens no tag (tagStart) is the ordinary scan's
+  const opensTag = `src.startsWith(${J(el.tagOpen)}, pos)${el.tagStart ? ` && ${shared.elementFn('tagStart')}(src, pos + ${L})` : ''}`;
+  const entry = !operand ? `    if (${opensTag}) {\n${enter}    }\n`
+    : !(el.head || sig) ? `    if (${opensTag} && !prevIsValue()) {\n${enter}    }\n`
+    : `    if (${opensTag}${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue()) {
       let op: number;
       ${sig ? 'if (pos === specAt) { op = specKeep ? 0 : 1; specAt = -1; } else ' : ''}{ ${tsTake(['o', 're'], shared.elementFn('opens'), 'src, pos')} op = o; if (re > laEnd) laEnd = re; }
       if (op === 1) {

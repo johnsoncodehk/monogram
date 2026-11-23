@@ -554,9 +554,11 @@ ${methods}}
 ${spec}`;
   const enter = `            st.template_stack.push(6); st.refresh(); bound = 0; st.emit(pos, pos + ${L}, 0, _LID_EL_OPEN);${raw ? ' st.tag_at.push(st.acc.len() as i64 - 1);' : ''} st.tag_angle = 0; pos += ${L}; continue;\n`;
   const at = (lit: string) => startByteEq('pos', lit);
-  const entry = !operand ? `        if ${at(el.tagOpen)} {\n${enter}        }\n`
-    : !(el.head || sig) ? `        if ${at(el.tagOpen)} && !st.prev_is_value() {\n${enter}        }\n`
-    : `        if ${at(el.tagOpen)}${sig ? ' && !st.spec_on && pos as isize >= st.spec_until' : ''} && !st.prev_is_value() {
+  // a tagOpen that opens no tag (tagStart) is the ordinary scan's
+  const opensTag = `${at(el.tagOpen)}${el.tagStart ? ` && ${shared.elementFn('tagStart')}(src, (pos + ${L}) as isize)` : ''}`;
+  const entry = !operand ? `        if ${opensTag} {\n${enter}        }\n`
+    : !(el.head || sig) ? `        if ${opensTag} && !st.prev_is_value() {\n${enter}        }\n`
+    : `        if ${opensTag}${sig ? ' && !st.spec_on && pos as isize >= st.spec_until' : ''} && !st.prev_is_value() {
             let op;
             ${sig ? 'if sp.has_at && pos == sp.at { op = if sp.keep { 0 } else { 1 }; sp.has_at = false; } else ' : ''}{ let (o, re) = ${shared.elementFn('opens')}(src, pos as isize); op = o; if re > st.la_end { st.la_end = re; } }
             if op == 1 {
