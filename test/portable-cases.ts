@@ -814,6 +814,9 @@ export const CASES: Case[] = [
       'var x: this is this is T;', 'var x: asserts y is this is T;', 'function f(x: any): x is this is T { }',
       'function f(x: any): (this is T) { }', 'type F = (x: any) => x is T;', 'var v = (x: any): x is T => true;',
       'var x: this is\n string;', 'class C { p: this\n is: number }', 'class C { m(x): x\n is: string }', 'type A = this[];',
+      // An assignment target's shape is decided by the construct that built the node: a class
+      // expression named like a connector is a PrimaryExpression, not an `as` / `satisfies` node.
+      'x = class as {} = 1;', 'x = class satisfies {} = 1;', 'x = class as extends B {} = 1;',
       // A template's holes are parsed by the rule its reference declares: types in a
       // template-literal type, expressions everywhere else — the `new` callee included.
       'type X = `a${T[]}b`;', 'type X = `a${A | B}b${C["k"]}`;', 'type X = `${infer U extends string}x`;',
