@@ -45,8 +45,14 @@ export type ScalarType = 'string' | 'number' | 'bool';
  * at getNodePos, the end of the token before it: in `[e, , f]` at the end of the first `,`; in
  * `[,]` at the end of `[`). X is a child that is always present in its scope (a required child:
  * an optional or repeated one is a load error, since it can be absent and the previous token is
- * not then X) or a bound variable. */
-export type Span = { from: string; to: string } | { after: string };
+ * not then X) or a bound variable.
+ *
+ * `{ inside: X }` is X without its DELIMITERS, where X is a part of a template literal (the
+ * `quasi` / `head` / `literal` leaves of a template reference: see TemplateView in
+ * src/shape2-eval.ts): ESTree's TemplateElement spans the text between `` ` `` / `}` and `${` /
+ * `` ` ``. The delimiters are the template token's own (its `template` config), known when the
+ * spec is loaded; any other X is a load error. */
+export type Span = { from: string; to: string } | { after: string } | { inside: string };
 
 export type Term =
   /** A constant scalar. */
@@ -159,10 +165,17 @@ export const COOK_FNS = [
   'tsNumericText',    // tsc's NumericLiteral text: the MV as a JavaScript number string (`0x1F` -> "31", `1.50` -> "1.5")
   'tsNumericLiteralFlags', // tsc's numericLiteralFlags (TokenFlags of the literal's spelling), absent when none
   'tsBigIntText',     // tsc's BigIntLiteral text: as written, `_` separators removed
-  'hasExtendedUnicodeEscape', // whether a string literal holds a `\u{...}` escape (tsc stores it on every string)
+  'hasExtendedUnicodeEscape', // whether a string literal or a template part holds a valid `\u{...}` escape (tsc stores it on every string, and on a template part only when true)
   'regexPattern',     // a RegularExpressionLiteral's body (between the slashes)
   'regexFlags',       // a RegularExpressionLiteral's flags
   'stringBody',       // a string literal's source between its quotes, escapes kept (ESTree's `directive`)
+  // A template literal's part (the token of a `quasi` / `head` / `literal` leaf, delimiters
+  // included: `` `a${ ``, `` }b` ``; the text between them is the part's body):
+  'templateCooked',   // the TV (ECMA-262 13.15.3): escapes decoded, CR / CRLF as LF; null when an escape is invalid (a tagged template's NotEscapeSequence)
+  'templateRaw',      // the TRV: the body as written, CR / CRLF as LF (ESTree `raw`)
+  'tsTemplateText',   // tsc's `text`: the TV, but an invalid escape keeps its backslash and the characters after it stay ordinary text
+  'tsTemplateRawText', // tsc's `rawText`: the body exactly as written (CR / CRLF kept)
+  'tsTemplateFlags',  // tsc's templateFlags (TokenFlags of the body's escapes: ExtendedUnicodeEscape 8, UnicodeEscape 1024, ContainsInvalidEscape 2048, HexEscape 4096), absent when none
 ] as const;
 export type CookFn = (typeof COOK_FNS)[number];
 

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createParser, type CstLeaf, type CstNode } from '../src/gen-parser.ts';
 import type { CstGrammar } from '../src/types.ts';
-import { armNameOf, dependencies, evaluate, evaluator, loadShape2, Shape2SpecError, Shape2Unmapped, type S2Value } from '../src/shape2-eval.ts';
+import { armNameOf, dependencies, evaluate, evaluator, loadShape2, Shape2SpecError, Shape2Unmapped, spineOf, type S2Value } from '../src/shape2-eval.ts';
 import {
   absent, and, armOf, branch, c, child, cook, fold, iff, inh, let_, list, map, match, node, not, or, orElse,
   dropLastIf, get, present, record, spread, syn, text, thread, typeByText, v, wrapIf, type Shape2Spec, type Term,
@@ -330,6 +330,92 @@ check('binding patterns (both fixtures, against acorn and tsc)', () => {
   }
 });
 
+// Object and array literals, spread and templates in both shapes, against their oracles: every
+// property form (init, shorthand, computed / string / number keys, methods, accessors, async and
+// generator methods, spread), holes, nested and tagged templates with invalid escapes and CR / CRLF
+// (the five template cooking functions), a hole as a fresh context (`?.` inside one is its own
+// chain), and ESTree's assignment patterns (`[a] = b`, `({a = 1} = b)`, `for ([k, v] of m)`).
+check('literals, spread, templates (both fixtures, against acorn and tsc)', () => {
+  const both = 'x = {a, b: 1, [c]: 2, "s": 3, 4: 5, 0x10: 6, 1n: 7, d(p) {}, get e() {}, set f(v) {}, async g() {}, *h() {}, async *i() {}, ...j};\n'
+    + 'y = [1, , ...z, [], [,], [a,,], {}];\nf(...a, ...[b]);\nnew F`t`;\nnew F`t`();\nq = `a${b}c${`d${e?.f}`}g`;\nr = `\\u{41}\\x41\\u0041${x}`;\n'
+    + 'String.raw`\\unicode\\01\\8${x}\\u{110000}\r\nz\r`;\nfn`a\\\r\nb\\u{g}`;\n({m() { "use strict"; }});\n'
+    + '[a, [b], {c: d = 1, e = 2, ...g}, ...h] = x;\n({a: [b.c], ...d} = e);\n[a = b = c] = d;\nfor ([k, v] of m);\nfor ({k} in o);\n[a] == b;\n({a} || b);\n';
+  const ts = `${both}z = {a?: 1, k = 2, async *m() {}, [a, b]: 3};\n`;
+  for (const [g, spec, src, oracle] of [
+    [javascript, estreeExprShape, both, () => normaliseEstree(parseEstree(both)!.tree)],
+    [typescript, tscExprShape, ts, () => { const r = tscOracle(ts, 'a.ts'); return 'tree' in r ? r.tree : assert.fail(JSON.stringify(r)); }],
+  ] as const) {
+    const root = (t: NTree): NTree => ({ kind: t.kind, start: 0, end: 0, fields: Object.fromEntries(Object.entries(t.fields).filter(([k]) => k !== 'sourceType' && k !== 'endOfFileToken')) });
+    assert.deepEqual(compareTrees(root(oracle()), root(run(g, spec, src) as NTree), 1).divergences, [], spec.name);
+  }
+  // Only ESTree's literals depend on where they sit (the pattern reading); tsc's are their subtree's.
+  const deps = dependencies(loadShape2(javascript, estreeExprShape));
+  for (const a of ['array', 'object', 'spread', 'binaryOp']) assert.deepEqual(deps[`Expr.${a}`]?.inherited, ['pattern'], `estree Expr.${a}`);
+  assert.deepEqual(deps['Expr.template']?.inherited ?? [], [], 'estree Expr.template');
+  const tdeps = dependencies(loadShape2(typescript, tscExprShape));
+  for (const a of ['array', 'object', 'template', 'led_template']) assert.deepEqual(tdeps[`Expr.${a}`]?.inherited ?? [], [], `tsc Expr.${a}`);
+});
+
+// The loader classifies every inherited equation: RIGHT-DEPENDENT when it reads a leaf to the right
+// of the child it feeds. ESTree has one (the left operand of `=`: the operator follows it); tsc has
+// none, so a parser building tsc's tree as it goes never rewrites a node it has built.
+check('right-dependent inherited equations: ESTree has exactly binaryOp.left, tsc none', () => {
+  assert.deepEqual(loadShape2(javascript, estreeExprShape).rightDependent, [{ rule: 'Expr', arm: 'binaryOp', child: 'left', attr: 'pattern', reads: ['op'] }]);
+  assert.deepEqual(loadShape2(typescript, tscExprShape).rightDependent, []);
+  // The spine a fused parser rewrites when `=` arrives: the arms reading `pattern` and the
+  // children it is passed on to.
+  assert.deepEqual(spineOf(loadShape2(javascript, estreeExprShape), 'pattern'), {
+    reads: ['Expr.array', 'Expr.binaryOp', 'Expr.object', 'Expr.spread', 'Prop.spread'],
+    copies: ['Expr.array.element', 'Expr.array.elementRest', 'Expr.object.property', 'Expr.spread.expr', 'Prop.init.value', 'Prop.spread.argument'],
+  });
+  // A constant equation and a copy are L-attributed by construction.
+  assert.deepEqual(loadShape2(javascript, { ...estreeExprShape, inherited: { ...estreeExprShape.inherited, pattern: { ...estreeExprShape.inherited!.pattern, rules: { ForHead: { of: { left: c(true) } } } } } }).rightDependent, []);
+});
+
+// The right-dependent equation gives the left operand the value it would have under a context
+// decided before it (the L-attributed `for (L of r)` head, a constant): what a fused parser that
+// builds the left in its default reading and rewrites it on `=` must produce. And under `==` (the
+// deciding leaf says no) the left is its default reading.
+check('a right-dependent equation equals the left evaluated in the context the leaf decides', () => {
+  const loaded = loadShape2(javascript, estreeExprShape);
+  const shift = (v: S2Value, by: number): S2Value => Array.isArray(v) ? v.map((x) => shift(x, by))
+    : v !== null && typeof v === 'object' && 'kind' in v ? { ...v, start: v.start - by, end: v.end - by, fields: Object.fromEntries(Object.entries(v.fields).map(([k, x]) => [k, shift(x, by)])) }
+    : v !== null && typeof v === 'object' && 'record' in v ? { record: Object.fromEntries(Object.entries(v.record).map(([k, x]) => [k, shift(x, by)])) } : v;
+  const left = (src: string, at: string): S2Value => {
+    const cst = parse(javascript, src);
+    const tree = evaluate(loaded, cst, src) as NTree;
+    const found: S2Value[] = [];
+    const walk = (x: unknown): void => {
+      if (x === null || typeof x !== 'object') return;
+      const t = x as { kind?: string; fields?: Record<string, unknown> };
+      if (t.kind && t.fields && at in t.fields && t.kind !== 'Program') found.push(t.fields[at] as S2Value);
+      Object.values(t.fields ?? (x as object)).forEach(walk);
+    };
+    walk(tree.fields);
+    return shift(found[0], src.indexOf(src.match(/[[{]/)![0]));
+  };
+  for (const L of ['[a, , ...b]', '[a = 1, [b], {c}]', '{a, b: [c] = d, ...e}', '{a = 1, "s": t, [k]: {m}}']) {
+    const rd = left(`(${L} = r);`, 'left');
+    const lattr = left(`for (${L} of r);`, 'left');
+    assert.deepEqual(rd, lattr, L);
+    assert.match((rd as NTree).kind, /Pattern$/, L);
+    const plain = left(`(${L} == r);`, 'left') as NTree;
+    assert.match(plain.kind, /Expression$/, `${L} under ==`);
+  }
+});
+
+check('the template cooking functions on their witnesses (invalid escapes, CR / CRLF), against acorn and tsc', () => {
+  const srcs = ['f`a\\u{g}\\n\\x4`;', 'f`\\01\\1x\\u{41}\\u0041\\x41\r\n\r`;', 'f`\\8\\0\\\r\nz${x}\\u{110000}`;', '`\\\u2028a\u2029`;', 'f`a\\u00g${x}b`;'];
+  for (const src of srcs) {
+    const est = normaliseEstree(parseEstree(src)!.tree);
+    const r = tscOracle(src, 'a.ts');
+    if (!('tree' in r)) assert.fail(JSON.stringify(r));
+    const root = (t: NTree): NTree => ({ kind: t.kind, start: 0, end: 0, fields: Object.fromEntries(Object.entries(t.fields).filter(([k]) => k !== 'sourceType' && k !== 'endOfFileToken')) });
+    assert.deepEqual(compareTrees(root(est), root(run(javascript, estreeExprShape, src) as NTree), 1).divergences, [], `estree ${JSON.stringify(src)}`);
+    assert.deepEqual(compareTrees(root(r.tree), root(run(typescript, tscExprShape, src) as NTree), 1).divergences, [], `tsc ${JSON.stringify(src)}`);
+  }
+});
+
 check('calc: dropLastIf drops the final element only when its condition holds; an empty list stays empty', () => {
   const spec = (cond: boolean, items: Term): Shape2Spec => ({ ...calcSpec, rules: { ...calcSpec.rules, Program: { program: node('P', { l: dropLastIf(c(cond), items) }) } } });
   assert.deepEqual(run(calc, spec(true, list(c(1), c(2))), ''), N('P', 0, 0, { l: [1] }));
@@ -416,9 +502,26 @@ rejects('a synthesized attribute reading itself', calc, one({}, { synthesized: {
 rejects('a synthesized attribute of the wrong type', calc, one({}, { synthesized: { s: { type: 'bool', default: false, rules: E({ number: text('number') }) } } }), 'has type string');
 rejects('an undeclared synthesized attribute', calc, one(E({ parenthesized: syn('nope', 'expression') })), 'no synthesized attribute nope');
 rejects('an undeclared inherited attribute', calc, one(E({ number: inh('nope') })), 'no inherited attribute nope');
-rejects('an inherited equation that is not a constant or a copy', calc, one({}, {
+rejects('an inherited equation reading into a sibling subtree (text of a node)', calc, one({}, {
   inherited: { i: { type: 'string', default: '', rules: E({ parenthesized: { expression: text('expression') } }) } },
-}), 'Expr.parenthesized.expression', 'a constant or `inh`');
+}), 'Expr.parenthesized.expression', 'expression is a node', 'own leaves only');
+rejects('an inherited equation reading a sibling node\'s arm', javascript, one({}, {
+  inherited: { i: { type: 'string', default: '', rules: E({ binaryOp: { left: armOf('right') } }) } },
+}), 'Expr.binaryOp.left', 'right is a node');
+rejects('an inherited equation reading an alternation that holds a rule node', javascript, one({}, {
+  inherited: { i: { type: 'string', default: '', rules: { Stmt: { for_: { body: armOf('alt') } } } } },
+}), 'Stmt.for_.body', 'holding a rule node');
+rejects('an inherited equation building a node', javascript, one({}, {
+  inherited: { i: { type: 'bool', default: false, rules: E({ binaryOp: { left: node('N') } }) } },
+}), 'Expr.binaryOp.left', '`node` cannot appear in an inherited equation');
+rejects('an inherited equation reading the whole arm\'s text', javascript, one({}, {
+  inherited: { i: { type: 'string', default: '', rules: E({ binaryOp: { left: text() } }) } },
+}), 'Expr.binaryOp.left', 'named leaves only');
+rejects('an inherited equation of the wrong type', javascript, one({}, {
+  inherited: { i: { type: 'bool', default: false, rules: E({ binaryOp: { left: text('op') } }) } },
+}), 'Expr.binaryOp.left', 'has type string');
+rejects('a span inside a leaf that is no template part', calc, one(E({ number: node('N', {}, { inside: 'number' }) })), 'span.inside', 'not a delimited template part');
+rejects('a span inside a template (not one of its parts)', javascript, one(E({ template: node('T', {}, { inside: 'template' }) })), 'span.inside', 'not a delimited template part');
 rejects('an inherited equation on an unknown child', calc, one({}, {
   inherited: { i: { type: 'bool', default: false, rules: E({ parenthesized: { expr: c(true) } }) } },
 }), 'no child expr');
@@ -431,7 +534,7 @@ const leadWith = (eq: unknown, extra: Record<string, unknown> = {}): Shape2Spec 
   synthesized: leadSpec.synthesized,
   inherited: { lead: { type: 'bool', default: false, rules: { Program: { program: { statement: eq, ...extra } } } } } as Shape2Spec['inherited'],
 });
-rejects('an inherited equation reading a sibling\'s attribute', calc, leadWith(syn('isLet', 'statement')), 'Program.program.statement', 'a constant or `inh`');
+rejects('an inherited equation reading a sibling\'s attribute', calc, leadWith(syn('isLet', 'statement')), 'Program.program.statement', '`syn` cannot appear in an inherited equation');
 rejects('a thread over a child that does not repeat', calc, one({}, {
   inherited: { i: { type: 'bool', default: false, rules: E({ parenthesized: { expression: thread(c(true), 'p', v('p')) } }) } },
 }), 'Expr.parenthesized.expression', 'is not repeated');

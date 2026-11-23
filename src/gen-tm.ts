@@ -1401,8 +1401,13 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
       // Listed AFTER the single-line elements so a normal `<span …>` on one line keeps its
       // tokenization; it only fires when the `<` reaches EOL with no name.
       { include: `#${K('element-multiline')}` },
-      { include: `#${K('expression')}` },
-      ...textKeys.map(k => ({ include: `#${k}` })),
+      // TEXT children (`region.text`): a hole, the scope-only text patterns, and plain text
+      // (anything else falls through to the children's contentName). CODE children (no text
+      // token: the lexer reads them by the ordinary scan): the code grammar itself, which holds
+      // the element triggers, directives, strings and holes as code does.
+      ...region.text !== undefined
+        ? [{ include: `#${K('expression')}` }, ...textKeys.map(k => ({ include: `#${k}` }))]
+        : [{ include: '$self' }],
     ],
   };
 

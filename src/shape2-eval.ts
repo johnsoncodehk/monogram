@@ -10,10 +10,10 @@
 //   evaluate(loaded, cst, src)  the value of a CST node (a Program, or any node: e.g. a Stmt)
 //   dependencies(loaded)        per (rule, arm): which inherited attributes its value reads
 import type { CstChild, CstLeaf, CstNode } from './gen-parser.ts';
-import type { CstGrammar, RuleDecl, RuleExpr } from './types.ts';
+import type { CstGrammar, RuleDecl, RuleExpr, TemplateDelimiters } from './types.ts';
 import { isKeywordLiteral } from './grammar-utils.ts';
 import { nameRule, OP_FORM_CHILDREN, type RuleNames } from './grammar-names.ts';
-import { COOK_FNS, OPERATORS, type CookFn, type InhAttr, type InhEq, type Scalar, type Shape2Spec, type Span, type Term, type ThreadEq } from './shape2-schema.ts';
+import { COOK_FNS, OPERATORS, type CookFn, type TermTag, type InhAttr, type InhEq, type Scalar, type Shape2Spec, type Span, type Term, type ThreadEq } from './shape2-schema.ts';
 
 // ── Values ──
 
@@ -34,10 +34,11 @@ export class Shape2Unmapped extends Error {
 
 // ── The static view of an arm: its named children ──
 
-type SlotKind = 'node' | 'leaf' | 'branch' | 'template';
+type SlotKind = 'node' | 'leaf' | 'branch';
 type Card = 'one' | 'opt' | 'many';
-/** A named child. `quants`: the repetitions / optionals around it inside its scope, outer first. */
-type Slot = { name: string; kind: SlotKind; rule?: string; node: RuleExpr; quants: RuleExpr[]; branches?: Map<string, ScopeInfo> };
+/** A named child. `quants`: the repetitions / optionals around it inside its scope, outer first.
+ * `delims`: a template part's opening and closing delimiters (the `{ inside }` span). */
+type Slot = { name: string; kind: SlotKind; rule?: string; node: RuleExpr; quants: RuleExpr[]; branches?: Map<string, ScopeInfo>; delims?: [string, string] };
 type ScopeInfo = { where: string; slots: Map<string, Slot> };
 type ArmInfo = ScopeInfo & { rule: string; arm: string; form?: 'binary' | 'prefix' | 'postfix'; items?: RuleExpr[] };
 
@@ -46,20 +47,57 @@ const isList = (q: RuleExpr): boolean => q.type === 'sep' || (q.type === 'quanti
 const cardOf = (quants: RuleExpr[]): Card => (quants.some(isList) ? 'many' : quants.length ? 'opt' : 'one');
 
 type GrammarView = {
-  rules: Map<string, RuleDecl>; tokens: Set<string>; templates: Set<string>; arms: Map<string, ArmInfo[]>;
+  rules: Map<string, RuleDecl>; tokens: Set<string>; templates: Map<string, TemplateDelimiters>; arms: Map<string, ArmInfo[]>;
   names: Map<string, RuleNames>;
   /** Each structural alternation's branch scopes, in branch order. */
   branchScopes: Map<RuleExpr, ScopeInfo[]>;
+  /** Each template reference's fixed scope structure (see TemplateView). */
+  templateViews: Map<RuleExpr, TemplateView>;
+  expressionRule?: string;
 };
+
+/** A TEMPLATE reference (a `template` token) is read as a fixed inline alternation:
+ *   noSubstitution   quasi (the whole token: a leaf)
+ *   substitution     head (a leaf), then one iteration per hole: expr (the hole's rule node:
+ *                    the reference's `hole` rule, else the grammar's expression rule) and part,
+ *                    an alternation `middle` / `tail` holding the leaf `literal`
+ * The nodes below are this view's own (no grammar node holds them); every part leaf carries its
+ * delimiters from the token's template config, for the `{ inside }` span. A hole is a fresh
+ * expression context: its node takes every inherited attribute's DEFAULT. */
+type TemplateView = {
+  noSub: ScopeInfo; sub: ScopeInfo; middle: ScopeInfo; tail: ScopeInfo;
+  quasi: RuleExpr; head: RuleExpr; iter: RuleExpr; expr: RuleExpr; part: RuleExpr; middleLit: RuleExpr; tailLit: RuleExpr;
+};
+function templateView(where: string, token: TemplateDelimiters, holeRule: string): TemplateView {
+  const leaf = (value: string): RuleExpr => ({ type: 'literal', value });
+  const quasi = leaf('$quasi'), head = leaf('$templateHead'), middleLit = leaf('$templateMiddle'), tailLit = leaf('$templateTail');
+  const expr: RuleExpr = { type: 'ref', name: holeRule };
+  const part: RuleExpr = { type: 'alt', items: [middleLit, tailLit] };
+  const iter: RuleExpr = { type: 'quantifier', kind: '+', body: { type: 'seq', items: [expr, part] } } as RuleExpr;
+  const slot = (name: string, node: RuleExpr, quants: RuleExpr[], delims: [string, string]): [string, Slot] => [name, { name, kind: 'leaf', node, quants, delims }];
+  const middle: ScopeInfo = { where: `${where}.substitution part.middle`, slots: new Map([slot('literal', middleLit, [], [token.interpClose, token.interpOpen])]) };
+  const tail: ScopeInfo = { where: `${where}.substitution part.tail`, slots: new Map([slot('literal', tailLit, [], [token.interpClose, token.open])]) };
+  const noSub: ScopeInfo = { where: `${where}.noSubstitution`, slots: new Map([slot('quasi', quasi, [], [token.open, token.open])]) };
+  const sub: ScopeInfo = {
+    where: `${where}.substitution`, slots: new Map<string, Slot>([
+      slot('head', head, [], [token.open, token.interpOpen]),
+      ['expr', { name: 'expr', kind: 'node', rule: holeRule, node: expr, quants: [iter] }],
+      ['part', { name: 'part', kind: 'branch', node: part, quants: [iter], branches: new Map([['middle', middle], ['tail', tail]]) }],
+    ]),
+  };
+  return { noSub, sub, middle, tail, quasi, head, iter, expr, part, middleLit, tailLit };
+}
 
 function viewOf(grammar: CstGrammar): GrammarView {
   const g: GrammarView = {
     rules: new Map(grammar.rules.map((r) => [r.name, r])),
     tokens: new Set(grammar.tokens.map((t) => t.name)),
-    templates: new Set(grammar.tokens.filter((t) => t.template).map((t) => t.name)),
+    templates: new Map(grammar.tokens.filter((t) => t.template).map((t) => [t.name, t.template!])),
     arms: new Map(),
     names: new Map(),
     branchScopes: new Map(),
+    templateViews: new Map(),
+    expressionRule: grammar.expressionRule,
   };
   for (const r of grammar.rules) g.arms.set(r.name, armsOf(g, r));
   return g;
@@ -102,10 +140,18 @@ function walk(g: GrammarView, names: RuleNames, it: RuleExpr, quants: RuleExpr[]
     scope.slots.set(slot.name, { name: slot.name, kind, rule, node: it, quants, branches });
   };
   switch (it.type) {
-    case 'ref':
-      if (g.tokens.has(it.name)) add(g.templates.has(it.name) ? 'template' : 'leaf');
+    case 'ref': {
+      const delims = g.templates.get(it.name);
+      if (delims) {
+        const holeRule = it.hole ?? g.expressionRule;
+        if (!holeRule) throw new Error(`shape2: ${scope.where}: the template ${it.name} has no hole rule (the grammar declares no expression rule)`);
+        const v = templateView(`${scope.where} ${names.childOf.get(it)?.name ?? it.name}`, delims, holeRule);
+        g.templateViews.set(it, v);
+        add('branch', undefined, new Map([['noSubstitution', v.noSub], ['substitution', v.sub]]));
+      } else if (g.tokens.has(it.name)) add('leaf');
       else add('node', it.name);
       return;
+    }
     case 'literal': add('leaf'); return;
     case 'group': walk(g, names, it.body, quants, scope); return;
     case 'seq': for (const s of it.items) walk(g, names, s, quants, scope); return;
@@ -132,9 +178,8 @@ function walk(g: GrammarView, names: RuleNames, it: RuleExpr, quants: RuleExpr[]
 // ── Matching a CST node to its arm ──
 
 type Item =
-  | { k: 'node'; node: CstNode }
+  | { k: 'node'; node: CstNode; hole?: true }
   | { k: 'leaf'; leaf: CstLeaf }
-  | { k: 'template'; of: CstChild }
   | { k: 'branch'; name: string; info: ScopeInfo; frame: Frame; start: number; end: number };
 /** What one scope (an arm, a branch, one iteration) matched: its captures by grammar node, and
  * the iterations of each repetition / optional directly inside it. */
@@ -146,8 +191,33 @@ const isLeaf = (c: CstChild | undefined): c is CstLeaf => c !== undefined && 'to
 const spanOfItem = (it: Item): { start: number; end: number } =>
   it.k === 'node' ? { start: it.node.offset, end: it.node.end }
   : it.k === 'leaf' ? { start: it.leaf.offset, end: it.leaf.end }
-  : it.k === 'template' ? { start: it.of.offset, end: it.of.end }
   : { start: it.start, end: it.end };
+
+/** A template reference's item: the fixed alternation of TemplateView over the token (a leaf: no
+ * substitution) or the `$template` node the parser builds (head, then hole / middle pairs, then
+ * the last hole and the tail). */
+function templateItem(v: TemplateView, c: CstChild): Item {
+  const frame = newFrame();
+  if (isLeaf(c)) {
+    frame.caps.set(v.quasi, { k: 'leaf', leaf: c });
+    return { k: 'branch', name: 'noSubstitution', info: v.noSub, frame, start: c.offset, end: c.end };
+  }
+  const kids = c.children;
+  frame.caps.set(v.head, { k: 'leaf', leaf: kids[0] as CstLeaf });
+  const its: Frame[] = [];
+  for (let k = 1; k < kids.length; k += 2) {
+    const it = newFrame();
+    it.caps.set(v.expr, { k: 'node', node: kids[k] as CstNode, hole: true });
+    const lit = kids[k + 1] as CstLeaf;
+    const tail = lit.tokenType === '$templateTail';
+    const pf = newFrame();
+    pf.caps.set(tail ? v.tailLit : v.middleLit, { k: 'leaf', leaf: lit });
+    it.caps.set(v.part, { k: 'branch', name: tail ? 'tail' : 'middle', info: tail ? v.tail : v.middle, frame: pf, start: lit.offset, end: lit.end });
+    its.push(it);
+  }
+  frame.iters.set(v.iter, its);
+  return { k: 'branch', name: 'substitution', info: v.sub, frame, start: c.offset, end: c.end };
+}
 
 function matchArm(g: GrammarView, n: CstNode, src: string): Matched {
   const arms = g.arms.get(n.rule);
@@ -201,7 +271,8 @@ function matchArm(g: GrammarView, n: CstNode, src: string): Matched {
         if (c === undefined) return false;
         if (g.tokens.has(e.name)) {
           if (isLeaf(c) ? c.tokenType !== e.name : !(g.templates.has(e.name) && c.rule === '$template')) return false;
-          return cap(e, f, g.templates.has(e.name) ? { k: 'template', of: c } : { k: 'leaf', leaf: c as CstLeaf }, i + 1, done);
+          const v = g.templateViews.get(e);
+          return cap(e, f, v ? templateItem(v, c) : { k: 'leaf', leaf: c as CstLeaf }, i + 1, done);
         }
         if (isLeaf(c) || c.rule !== e.name) return false;
         return cap(e, f, { k: 'node', node: c }, i + 1, done);
@@ -288,7 +359,11 @@ function collect(f: Frame, quants: RuleExpr[], node: RuleExpr): (Item | undefine
 
 // ── Loading: the static check ──
 
-export type LoadedShape2 = { spec: Shape2Spec; grammar: GrammarView };
+/** An inherited equation that reads a leaf to the RIGHT of the child it hands context to (not
+ * L-attributed): a parser that builds nodes as it goes has built that child before it reads the
+ * deciding leaf. `reads`: those leaves. */
+export type RightDependent = { rule: string; arm: string; child: string; attr: string; reads: string[] };
+export type LoadedShape2 = { spec: Shape2Spec; grammar: GrammarView; rightDependent: RightDependent[] };
 
 /** A static scope: an arm, a branch, or one iteration (`base`: the repetitions consumed to reach
  * it), with the variables bound around it. */
@@ -312,6 +387,7 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
   const inhs = spec.inherited ?? {};
   const armIn = (rule: string, arm: string): ArmInfo | undefined => g.arms.get(rule)?.find((a) => a.arm === arm);
   const known = new Set(Object.keys(OPERATORS));
+  const rightDependent: RightDependent[] = [];
   // The RECORD-VALUED rules (see `get` in shape2-schema.ts): rule -> its field names.
   const recordRules = new Map<string, Set<string>>();
   for (const [rule, arms] of Object.entries(spec.rules ?? {})) {
@@ -363,13 +439,23 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
         const e = eq as Term;
         if (e?.t === 'const') { if (!scalarOk(constTy(e.value), d.type)) err(`${w}.${kid}`, `a ${d.type} attribute's equation is ${JSON.stringify(e.value)}`); }
         else if (e?.t === 'inh') { if (!(e.attr in inhs)) err(`${w}.${kid}`, `no inherited attribute ${e.attr}`); else if (inhs[e.attr].type !== d.type) err(`${w}.${kid}`, `copies ${e.attr} (${inhs[e.attr].type}) into a ${d.type} attribute`); }
-        else err(`${w}.${kid}`, 'an inherited equation is a constant or `inh` of the parent\'s attribute (the calculus allows no other outer context)');
+        else {
+          // A scalar over the parent arm's own LEAVES and its inherited attributes (INH_EQ_OPS).
+          const reads = new Set<string>();
+          const ty = term(e, { info: a, base: [], vars: new Set() }, `${w}.${kid}`, 'inheq', a, reads);
+          if (!scalarOk(ty, d.type)) err(`${w}.${kid}`, `a ${d.type} attribute's equation has type ${ty}`);
+          if (r) {
+            const order = slotOrder(a);
+            const right = [...reads].filter((nm) => (order.get(nm) ?? -1) > (order.get(kid) ?? Infinity)).sort();
+            if (right.length) rightDependent.push({ rule: a.rule, arm: a.arm, child: kid, attr, reads: right });
+          }
+        }
       }
     });
     if (!scalarOk(constTy(d.default), d.type)) err(`inherited ${attr}`, `default ${JSON.stringify(d.default)} is not a ${d.type}`);
   }
   if (problems.length) throw new Shape2SpecError(problems);
-  return { spec, grammar: g };
+  return { spec, grammar: g, rightDependent };
 
   /** A threaded equation: on a repeated child of the arm's own scope; `init` as any inherited
    * equation; `next` a scalar of the attribute's type over the accumulator and the element. */
@@ -400,14 +486,25 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
 
   /** Check one term in a scope; returns its type. `ctx`: a value term, or a synthesized
    * attribute's equation (scalars over the subtree only). */
-  function term(raw: unknown, s: SScope, w: string, ctx: 'value' | 'syn' | 'thread', arm: ArmInfo): Ty {
+  function term(raw: unknown, s: SScope, w: string, ctx: 'value' | 'syn' | 'thread' | 'inheq', arm: ArmInfo, reads?: Set<string>): Ty {
     if (typeof raw === 'function') { err(w, 'a function is not a term: the calculus has no escape to code (v2 has no `custom`)'); return 'any'; }
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) { err(w, `${JSON.stringify(raw)} is not a term`); return 'any'; }
     const e = raw as Term;
     if (!known.has(e.t)) { err(w, `\`${String((e as { t: unknown }).t)}\` is not an operator of the calculus (${[...known].join(', ')})`); return 'any'; }
     if (ctx === 'syn' && !OPERATORS[e.t].synAttr) { err(w, `\`${e.t}\` cannot appear in a synthesized attribute's equation (scalars over the subtree only)`); return 'any'; }
     if (ctx === 'thread' && !OPERATORS[e.t].synAttr && e.t !== 'var') { err(w, `\`${e.t}\` cannot appear in a thread's next state (a scalar over the state and the element's own children only)`); return 'any'; }
-    const sub = (x: unknown, at: string, sc: SScope = s): Ty => term(x, sc, `${w} ${at}`, ctx, arm);
+    if (ctx === 'inheq' && !INH_EQ_OPS.has(e.t)) { err(w, `\`${e.t}\` cannot appear in an inherited equation (a scalar over the parent arm's own leaves and its inherited attributes: ${[...INH_EQ_OPS].join(', ')})`); return 'any'; }
+    if (ctx === 'inheq' && (e.t === 'text' || e.t === 'cook' || e.t === 'present' || e.t === 'armOf' || e.t === 'branch')) {
+      const nm = (e as { name?: string }).name;
+      const r = nm === undefined ? undefined : resolveStatic(s, nm);
+      if (nm === undefined) err(w, `${e.t} of the whole arm reads its subtrees; an inherited equation reads named leaves only`);
+      else if (r) {
+        const leafy = r.slot.kind === 'leaf' || (r.slot.kind === 'branch' && (e.t === 'armOf' || e.t === 'branch') && leavesOnly(r.slot));
+        if (!leafy) err(w, `${e.t}(${nm}): ${nm} is a ${r.slot.kind}${r.slot.kind === 'branch' ? ' holding a rule node' : ''}; an inherited equation reads the parent's own leaves only (never into a sibling subtree)`);
+        if (r.scope.info === arm) reads?.add(nm);
+      }
+    }
+    const sub = (x: unknown, at: string, sc: SScope = s): Ty => term(x, sc, `${w} ${at}`, ctx, arm, reads);
     const need = (x: unknown, at: string, want: Ty): void => {
       const ty = sub(x, at);
       if (ty !== want && ty !== 'any') err(`${w} ${at}`, `must be a ${want}, is a ${ty}`);
@@ -427,7 +524,6 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
         if (!r) return 'any';
         if (r.slot.kind === 'leaf') err(w, `child(${e.name}): ${e.name} is a leaf, which has no value of its own: use text / cook, or build a node with its span`);
         if (r.slot.kind === 'branch') err(w, `child(${e.name}): ${e.name} is an inline alternation: use branch(${e.name}, {...})`);
-        if (r.slot.kind === 'template') err(w, `child(${e.name}): template literals are not in the calculus yet`);
         if (r.slot.rule && recordRules.has(r.slot.rule)) err(w, `child(${e.name}): ${r.slot.rule} is record-valued (an interface, not a node): read its fields with get(${e.name}, field)`);
         return r.card === 'many' ? 'list' : 'any';
       }
@@ -452,7 +548,7 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
         const r = slotOf(e.name, 'cook');
         if (r && r.slot.kind !== 'leaf') err(w, `cook(${e.fn}, ${e.name}): ${e.name} is a ${r.slot.kind}; cooking reads one leaf`);
         if (r && r.card === 'many') err(w, `cook(${e.fn}, ${e.name}): ${e.name} is a list; cooking reads one leaf`);
-        return e.fn === 'numberValue' || e.fn === 'tsNumericLiteralFlags' ? 'number' : e.fn === 'hasExtendedUnicodeEscape' ? 'bool' : 'string';
+        return e.fn === 'numberValue' || e.fn === 'tsNumericLiteralFlags' || e.fn === 'tsTemplateFlags' ? 'number' : e.fn === 'hasExtendedUnicodeEscape' ? 'bool' : e.fn === 'templateCooked' ? 'any' : 'string';
       }
       case 'present': {
         const r = slotOf(e.name, 'present');
@@ -554,6 +650,15 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
     }
   }
   function span(sp: Span, s: SScope, w: string): void {
+    if (sp !== null && typeof sp === 'object' && 'inside' in sp) {
+      const nm = sp.inside;
+      if (typeof nm !== 'string') { err(w, 'span.inside is a child name'); return; }
+      const r = resolveStatic(s, nm);
+      if (!r) err(w, `span.inside: ${s.info.where} has no child ${nm}`);
+      else if (!r.slot.delims) err(w, `span.inside: ${nm} is not a delimited template part (a template's quasi / head / literal)`);
+      else if (r.card !== 'one') err(w, `span.inside: ${nm} is ${r.card === 'opt' ? 'optional' : 'a list'}`);
+      return;
+    }
     if (sp !== null && typeof sp === 'object' && 'after' in sp) {
       const nm = sp.after;
       if (typeof nm !== 'string') { err(w, 'span.after is a child or variable name'); return; }
@@ -569,6 +674,28 @@ export function loadShape2(grammar: CstGrammar, spec: Shape2Spec): LoadedShape2 
       if (!hasVar(s, nm) && !resolveStatic(s, nm)) err(w, `span.${k}: ${s.info.where} has no child or variable ${nm}`);
     }
   }
+}
+/** The operators an inherited equation may use beyond a constant / copy: a scalar over the
+ * parent arm's own LEAF children (text / cook / present, armOf / branch of an alternation of
+ * leaves) and the parent's inherited attributes. Never `syn` or anything that reads into a
+ * sibling subtree: at worst a LEAF to the right of the child decides its context. */
+const INH_EQ_OPS = new Set<TermTag>(['const', 'inh', 'text', 'cook', 'present', 'armOf', 'branch', 'match', 'if', 'and', 'or', 'not', 'orElse']);
+/** Whether every slot of a branch slot's scopes, recursively, is a leaf. */
+function leavesOnly(slot: Slot): boolean {
+  return [...slot.branches!.values()].every((b) => [...b.slots.values()].every((x) => x.kind === 'leaf' || (x.kind === 'branch' && leavesOnly(x))));
+}
+/** The order of an arm's named children as the CST holds them (a branch before the children of
+ * its branches): the left-to-right order an inherited equation is classified by. */
+function slotOrder(a: ScopeInfo): Map<string, number> {
+  const out = new Map<string, number>();
+  const visit = (sc: ScopeInfo): void => {
+    for (const sl of sc.slots.values()) {
+      if (!out.has(sl.name)) out.set(sl.name, out.size);
+      for (const b of sl.branches?.values() ?? []) visit(b);
+    }
+  };
+  visit(a);
+  return out;
 }
 const constTy = (v: unknown): Ty => (v === null ? 'null' : typeof v === 'string' ? 'string' : typeof v === 'number' ? 'number' : typeof v === 'boolean' ? 'bool' : 'any');
 const scalarOk = (ty: Ty, want: string): boolean => ty === 'any' || ty === want;
@@ -642,7 +769,7 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
         continue;
       }
       const eq = eqs?.[name] as Term | undefined;
-      out[attr] = eq === undefined ? d.default : eq.t === 'const' ? eq.value : s.inh[(eq as { attr: string }).attr];
+      out[attr] = eq === undefined ? d.default : (ev(eq, s) as Scalar);
     }
     return out;
   }
@@ -704,10 +831,9 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
     }
     const p = parents.get(n);
     let out: Inh;
-    // A template's interpolations are not in the calculus yet (`child` of a template is
-    // rejected), so a node inside one has no defined context: outside the subset.
-    if (p?.rule === '$template') throw new Shape2Unmapped('$template', 'interpolation');
-    if (p === undefined) {
+    // A template hole is a fresh expression context: every inherited attribute's default.
+    if (p?.rule === '$template') out = rootInh;
+    else if (p === undefined) {
       if (n !== root) throw new Error(`shape2: the node at ${n.offset}..${n.end} is not under the evaluator's root`);
       out = rootInh;
     } else {
@@ -734,7 +860,7 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
   function itemValue(it: Item | undefined, holder: RScope, name: string): S2Value | undefined {
     if (it === undefined) return undefined;
     if (it.k !== 'node') throw new Error(`shape2: child ${name} is a ${it.k}`);
-    return valueOf(it.node, inhFor(holder, name, it.node));
+    return valueOf(it.node, it.hole ? rootInh : inhFor(holder, name, it.node));
   }
   function spanEdge(s: RScope, name: string, edge: 'start' | 'end'): number {
     const b = lookupVar(s, name);
@@ -786,8 +912,15 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
           if (val !== undefined) fields[k] = val;
         }
         const sp = t.span;
-        const start = !sp ? s.node.offset : 'after' in sp ? spanEdge(s, sp.after, 'end') : spanEdge(s, sp.from, 'start');
-        const end = !sp ? s.node.end : 'after' in sp ? start : spanEdge(s, sp.to, 'end');
+        let start: number, end: number;
+        if (!sp) { start = s.node.offset; end = s.node.end; }
+        else if ('inside' in sp) {
+          const r = resolve(s, sp.inside);
+          const [open, close] = r.scope.info.slots.get(sp.inside)!.delims!;
+          const it = spanOfItem(r.items[0]!);
+          start = it.start + open.length; end = it.end - close.length;
+        } else if ('after' in sp) { start = end = spanEdge(s, sp.after, 'end'); }
+        else { start = spanEdge(s, sp.from, 'start'); end = spanEdge(s, sp.to, 'end'); }
         return { kind: ev(t.type, s) as string, start, end, fields };
       }
       case 'record': {
@@ -946,17 +1079,38 @@ export function dependencies(loaded: LoadedShape2): Record<string, ArmDeps> {
       if (!deps.has(key)) deps.set(key, new Set());   // an unmapped arm that hands its children context
       const info = g.arms.get(rule)!.find((a) => a.arm === arm)!;
       for (const [kid, eq] of Object.entries(kids)) {
-        const copied = eq.t === 'inh' ? eq.attr : eq.t === 'thread' && (eq.init as Term).t === 'inh' ? (eq.init as { attr: string }).attr : undefined;
-        if (copied === undefined) continue;
+        const copiedSet = new Set<string>();
+        walkT(eq.t === 'thread' ? eq.init : eq, 'inh', copiedSet);
+        for (const copied of copiedSet) {
         const rules = eq.t === 'thread'
           ? elementRules(info, (() => { const q = info.slots.get(kid)!.quants; return q.slice(0, q.map(isList).lastIndexOf(true) + 1); })())
           : slotRules(info, kid);
         if (rules.some((r) => ofRule(r).has(attr)) && !deps.get(key)!.has(copied)) { deps.get(key)!.add(copied); changed = true; }
+        }
       }
     }
   }
   const keys = [...new Set([...deps.keys(), ...threads.keys()])];
   return Object.fromEntries(keys.map((k) => [k, { inherited: [...(deps.get(k) ?? [])].sort(), ...(threads.has(k) ? { threads: threads.get(k) } : {}) }]));
+}
+
+/** The SPINE of an inherited attribute: the arms whose value reads it (`reads`: `rule.arm`) and
+ * the children it is copied into (`copies`: `rule.arm.child`, by an equation that reads the
+ * parent's own value of it). For an attribute a right-dependent equation decides, this is the
+ * set a parser that builds as it goes must rewrite when the deciding leaf arrives: the nodes
+ * reached from the decided child through `copies` whose arm is in `reads`, and nothing below a
+ * node whose arm does not pass the attribute on. */
+export function spineOf(loaded: LoadedShape2, attr: string): { reads: string[]; copies: string[] } {
+  const { spec } = loaded;
+  const hasInh = (x: unknown): boolean => x !== null && typeof x === 'object' && (((x as Term).t === 'inh' && (x as { attr: string }).attr === attr) || Object.values(x).some(hasInh));
+  const reads: string[] = [];
+  for (const [rule, arms] of Object.entries(spec.rules)) for (const [arm, t] of Object.entries(arms)) if (hasInh(t)) reads.push(`${rule}.${arm}`);
+  const copies: string[] = [];
+  const d = spec.inherited?.[attr];
+  for (const [rule, arms] of Object.entries(d?.rules ?? {})) for (const [arm, kids] of Object.entries(arms)) {
+    for (const [kid, eq] of Object.entries(kids)) if (hasInh(eq.t === 'thread' ? eq.init : eq)) copies.push(`${rule}.${arm}.${kid}`);
+  }
+  return { reads: reads.sort(), copies: copies.sort() };
 }
 
 /** The arm name the reference matcher gives a CST node (for totality checks of the matcher). */
@@ -1032,11 +1186,57 @@ function tsNumericLiteralFlags(raw: string): number | undefined {
   return f === 0 ? undefined : f;
 }
 
+/** A template part's body: its token without the delimiters (`` ` `` or `}` before it, `${` or
+ * `` ` `` after it). */
+const templateBody = (raw: string): string => raw.slice(1, raw.length - (raw.endsWith('${') ? 2 : 1));
+/** One scan of a template body: the TV (null when an escape is invalid), tsc's text (an invalid
+ * escape keeps its backslash; what follows it is read as ordinary text, as tsc's scanner does) and
+ * tsc's TokenFlags of its escapes. A CR or CRLF is one LF in both texts (ECMA-262 12.9.6 TV / TRV);
+ * a backslash before a line terminator is a line continuation (nothing). */
+function scanTemplate(raw: string): { cooked: string | null; tsText: string; flags: number } {
+  return scanEscapes(templateBody(raw));
+}
+function scanEscapes(body: string): { cooked: string | null; tsText: string; flags: number } {
+  let out = '', valid = true, flags = 0;
+  const hex = /[0-9a-fA-F]/;
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (ch === '\r') { out += '\n'; if (body[i + 1] === '\n') i++; continue; }
+    if (ch !== '\\') { out += ch; continue; }
+    const c = body[i + 1];
+    if (c === '\r') { i++; if (body[i + 1] === '\n') i++; continue; }
+    if (c === '\n' || c === '\u2028' || c === '\u2029') { i++; continue; }
+    const single: Record<string, string> = { n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v' };
+    let val: string | undefined, len = 1;
+    if (c in single) val = single[c];
+    else if (c === '0' && !/[0-9]/.test(body[i + 2] ?? '')) val = '\0';
+    else if (c >= '0' && c <= '9') val = undefined;
+    else if (c === 'x') {
+      if (hex.test(body[i + 2] ?? '') && hex.test(body[i + 3] ?? '')) { val = String.fromCharCode(parseInt(body.slice(i + 2, i + 4), 16)); len = 3; flags |= 4096; }
+    } else if (c === 'u') {
+      const braced = /^\{([0-9a-fA-F]+)\}/.exec(body.slice(i + 2));
+      const four = /^[0-9a-fA-F]{4}/.exec(body.slice(i + 2));
+      if (braced && parseInt(braced[1], 16) <= 0x10ffff) { val = String.fromCodePoint(parseInt(braced[1], 16)); len = 1 + braced[0].length; flags |= 8; }
+      else if (!braced && four) { val = String.fromCharCode(parseInt(four[0], 16)); len = 5; flags |= 1024; }
+    } else val = c;
+    if (val === undefined) { valid = false; flags |= 2048; out += '\\'; continue; }
+    out += val;
+    i += len;
+  }
+  return { cooked: valid ? out : null, tsText: out, flags };
+}
+
 const COOK: Record<CookFn, (raw: string) => Scalar | undefined> = {
+  templateCooked: (raw) => scanTemplate(raw).cooked,
+  templateRaw: (raw) => templateBody(raw).replace(/\r\n?/g, '\n'),
+  tsTemplateText: (raw) => scanTemplate(raw).tsText,
+  tsTemplateRawText: templateBody,
+  tsTemplateFlags: (raw) => scanTemplate(raw).flags || undefined,
   tsNumericText: (raw) => String(numberValue(raw)),
   tsNumericLiteralFlags,
   tsBigIntText: (raw) => raw.replace(/_/g, ''),
-  hasExtendedUnicodeEscape: (raw) => /(^|[^\\])(\\\\)*\\u\{/.test(raw),
+  // A VALID `\u{…}` escape (tsc's TokenFlags.ExtendedUnicodeEscape) in a string or a template part.
+  hasExtendedUnicodeEscape: (raw) => (scanEscapes(raw.startsWith('"') || raw.startsWith("'") ? raw.slice(1, -1) : templateBody(raw)).flags & 8) !== 0,
   identifierName: unescapeCodePoints,
   stringValue,
   numberValue,
