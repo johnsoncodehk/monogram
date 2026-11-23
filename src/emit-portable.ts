@@ -334,7 +334,7 @@ export type Commit = { lid: CommitCase[]; kid: CommitCase[] };
  *  tests, whether it has a test only the run decides, whether its steps can match nothing / fail
  *  clean, and the kinds at which it has no commit form (an interpolated template arm). */
 export type CommitCand = { first: TokenSet | null; lead: LeadTest[]; runtime: boolean; nullable: boolean; clean: boolean; frameAt?: string[] };
-type CommitTables = { kinds: string[]; kindsOf: (text: string) => ReadonlySet<string>; tokenSets: TokenSet[]; ctxWords: string[] };
+type CommitTables = { kinds: string[]; puncts: string[]; kindsOf: (text: string) => ReadonlySet<string>; tokenSets: TokenSet[]; ctxWords: string[] };
 /** The frame's Dispatch once a Commit decides some keys: a `lid` / `kid` group whose every token the
  *  commit switch returns at (it fails there, or commits with no `unless`) is never reached by the
  *  frame, so it is dropped (and `ranked` recomputed over the candidates left). */
@@ -392,13 +392,23 @@ export function commitOf(cands: CommitCand[], P: CommitTables): Commit | undefin
     for (const l of c.first?.lits ?? []) lits.add(l);
     for (const t of c.lead) { for (const l of P.tokenSets[t.set]!.lits) lits.add(l); if (t.ctx) for (const w of P.ctxWords) lits.add(w); }
   }
-  const kidActs = new Map(P.kinds.map((k) => [k, actAt([{ lit: null, kind: k }])] as const));
+  const kidActs = new Map<string, CommitCase['act']>(P.kinds.map((k) => [k, actAt([{ lit: null, kind: k }])] as const));
+  // A punctuation token always carries its literal, so the punctuation kind ('') has no token of
+  // its own to decide: its case is the action most punctuation literals take (each literal is
+  // decided by itself, read by a test or not), and only the literals that act otherwise are listed.
+  const punctAct = new Map(P.puncts.filter((p) => P.kindsOf(p).has('')).map((p) => [p, actAt([...P.kindsOf(p)].map((kind) => ({ lit: p, kind })))] as const));
+  {
+    const n = new Map<string, { act: CommitCase['act']; n: number }>();
+    for (const [p, act] of punctAct) if (P.kindsOf(p).size === 1) { const k = JSON.stringify(act); const e = n.get(k); if (e) e.n++; else n.set(k, { act, n: 1 }); }
+    const most = [...n.values()].reduce<{ act: CommitCase['act']; n: number } | null>((m, e) => (m === null || e.n > m.n ? e : m), null);
+    if (most !== null) kidActs.set('', most.act);
+  }
   const lidKeys: Array<[string, CommitCase['act']]> = [];
-  for (const l of [...lits].sort()) {
+  for (const l of [...new Set([...lits, ...punctAct.keys()])].sort()) {
     const ks = [...P.kindsOf(l)];
     if (ks.length === 0) continue;   // no token carries it
-    const act = actAt(ks.map((kind) => ({ lit: l, kind })));
-    if (ks.length === 1 && ks[0] !== '' && same(act, kidActs.get(ks[0]!) ?? 'frame')) continue;   // its kind's case decides it alike
+    const act = punctAct.get(l) ?? actAt(ks.map((kind) => ({ lit: l, kind })));
+    if (ks.length === 1 && same(act, kidActs.has(ks[0]!) ? kidActs.get(ks[0]!) as CommitCase['act'] : 'frame')) continue;   // its kind's case decides it alike
     lidKeys.push([l, act]);
   }
   const kidKeys = [...kidActs].filter(([, act]) => act !== 'frame');
@@ -1160,7 +1170,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
       }
     };
     const nullableList = (steps: Step[]): boolean => steps.every(nullableStep);
-    const P = { kinds, kindsOf, tokenSets, ctxWords };
+    const P = { kinds, puncts, kindsOf, tokenSets, ctxWords };
     for (const r of rules) {
       if (r.kind === 'rd') {
         if (r.predictive || r.alts.length < 2) continue;
@@ -1456,7 +1466,7 @@ export function commitWalk(c: Commit, ids: LexIdPlan, act: (a: CommitAct | null)
   };
   const id = (by: 'lid' | 'kid', k: string): string => {
     const n = by === 'lid' ? lidOf(ids, k) : kidOf(ids, k);
-    if (n === 0) throw new Error(`commitWalk: ${by} key ${JSON.stringify(k)} has no id`);
+    if (n === 0 && !(by === 'kid' && k === '')) throw new Error(`commitWalk: ${by} key ${JSON.stringify(k)} has no id`);
     return String(n);
   };
   const cases = (by: 'lid' | 'kid', cs: CommitCase[]) => cs.map((x) => ({ keys: x.keys.map((k) => id(by, k)), stmt: stmt(x.act) }));
