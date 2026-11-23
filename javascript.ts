@@ -436,11 +436,29 @@ export const classHeritageArms = ($, Expr, classExpression, typeArgs = []) => [
 // new MemberExpression Arguments`), and one without is a NewExpression, so `new new Foo()()` and
 // `new new Foo` chain: `newArgs` is the inner `new`'s optional Arguments, `taggedTemplate` any
 // further tagged-template form of the grammar.
-export const newTargetArms = ($, Expr, newArgs, taggedTemplate = []) => [
-  Ident,
+//
+// The other MemberExpression forms (ECMA-262 13.3), each as the expression NUD / LED writes it:
+// - PrimaryExpression: `this`, the literals (`new null()` and `new 1` are syntax; that they throw is
+//   run time), an identifier that is not a reserved word (`identGuard`, the expression NUD's: `new
+//   if()` has no derivation, and `new this` is ThisExpression, not an identifier), array and
+//   object literals (`Prop`, the grammar's property rule), function expressions (`fnExprArms`, the
+//   grammar's four forms), a template, a parenthesised expression. A class expression is the
+//   expression rule's own `new class …` arms.
+// - SuperProperty (`new super.x()`, `new super[x]`), MetaProperty (`new new.target()`, `new
+//   import.meta.x()`), and the member forms, a private name included (`new X.#f()`).
+export const newTargetArms = ($, Expr, newArgs, { identGuard, Prop, fnExprArms, taggedTemplate = [] }) => [
+  'true', 'false', 'null', 'undefined', 'this',   // before the identifier: a tie keeps the keyword
+  arm('ident', not('super'), not('new'), identGuard, Ident),
+  Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, String_, Regex_,
+  arm('superMember', field('superKeyword', 'super'), alt(['.', Ident], ['[', Expr, ']'])),
+  arm('newDotTarget', field('newKeyword', 'new'), '.', field('targetKeyword', 'target')),
+  arm('importMeta', 'import', '.', 'meta'),
   ['new', not('<'), $, newArgs],
   Template,
-  [$, '.', Ident],
+  arm('array', '[', opt(field('element', Expr)), many(',', opt(field('elementRest', Expr))), ']'),
+  arm('object', '{', sep(Prop, ','), '}'),
+  ...fnExprArms,
+  [$, '.', alt(Ident, PrivateField)],
   [$, '[', Expr, ']'],
   [$, Template],
   ...taggedTemplate,
@@ -450,7 +468,8 @@ export const newTargetArms = ($, Expr, newArgs, taggedTemplate = []) => [
 const ClassHeritage = rule($ => classHeritageArms($, Expr,
   ['class', opt(...bindingIdentifier), opt('extends', $), '{', many(ClassMember), '}']));
 
-const NewTarget = rule($ => newTargetArms($, Expr, opt('(', sep(Expr, ','), ')')));
+const NewTarget = rule($ => newTargetArms($, Expr, opt('(', sep(Expr, ','), ')'),
+  { identGuard: notReservedJsExpr, Prop, fnExprArms: fnArms([opt(...bindingName)], Block) }));
 
 const Expr = rule($ => [
   // A standalone identifier expression, but never a reserved word that has no expression

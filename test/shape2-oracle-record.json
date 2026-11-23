@@ -4,7 +4,7 @@
   "view": "expression statement",
   "units": 13292,
   "compared": 12392,
-  "identical": 12386,
+  "identical": 12392,
   "outOfSubset": 900
  },
  "estree node_modules top-level statement": {
@@ -12,7 +12,7 @@
   "view": "top-level statement",
   "units": 2478,
   "compared": 1456,
-  "identical": 1453,
+  "identical": 1456,
   "outOfSubset": 1022
  },
  "estree node_modules file": {
