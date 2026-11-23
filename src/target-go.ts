@@ -14,7 +14,7 @@ import { blockBody, elementBraceSteps, elementTokens, regionKids, portableIR, se
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './emit.ts';
-import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
+import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, unitMask, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 
@@ -2921,7 +2921,10 @@ const goLowering: Lowering = {
   cast: (_cx, r, nat) => ({ ...r, c: `${nat}(${r.c})`, nat, prec: ATOM }),
   owns: false,
   spliceInline: true,
-  charSet: (name, rs) => `var ${name} = [256]bool{${rs.flatMap(([lo, hi]) => Array.from({ length: hi - lo + 1 }, (_, k) => `${lo + k}: true`)).join(', ')}}`,
+  // Go has no compile-time construction of a table, so a [256]bool literal names every member; a
+  // cold table (tested off the hot path) is a 128-bit mask instead, a shift and a mask per test.
+  charSet: (name, rs, cold) => cold ? `var ${name} = [2]uint64{${unitMask(rs, 0)}, ${unitMask(rs, 64)}}`
+    : `var ${name} = [256]bool{${rs.flatMap(([lo, hi]) => Array.from({ length: hi - lo + 1 }, (_, k) => `${lo + k}: true`)).join(', ')}}`,
   // A byte loop: Rust's four-bytes-per-round shape measured slower here (measure-targets, PR #138:
   // go-reuse +2.9% to +3.8% on acorn / checker / gen-tm), the compiler keeps the loop tight already.
   runEndFn: `// lexRunEnd is the end of the run of bytes in set from i: the first j >= i at which s ends or s[j] is not in it.
@@ -2993,7 +2996,9 @@ ${[...ones, ...wides].join('\n')}
     len: (cx, l) => cx.atom(`len(${l.c})`, 'int', 'int'),
     code: (cx, s, i) => cx.atom(`int(${goWrap(s, ATOM)}[${i.c}])`, 'int', 'int'),
     hasAt: (cx, s, i, lit) => cx.atom(`strings.HasPrefix(${goWrap(s, ATOM)}[${i.c}:], ${goLit(lit)})`, 'bool', 'bool'),
-    inSet: (cx, set, c) => cx.atom(`${set}[${c.c}]`, 'bool', 'bool'),
+    inSet: (cx, set, c, cold) => (cold
+      ? { c: `${goWrap(c, ATOM)} < 128 && ${set}[${goWrap(c, ATOM)}>>6]>>(${goWrap(c, ATOM)}&63)&1 != 0`, ty: 'bool', nat: 'bool', prec: GO_OPS.and[1] }
+      : cx.atom(`${set}[${c.c}]`, 'bool', 'bool')),
     runEnd: (cx, set, s, i) => cx.atom(`lexRunEnd(${s.c}, ${i.c}, &${set})`, 'int', 'int'),
     find: (cx, s, i, lit) => cx.atom(`lexFind(${s.c}, ${i.c}, ${JSON.stringify(lit)})`, 'int', 'int'),
     findAny: (cx, s, i, stops) => cx.atom(`${findAnyName(stops)}(${s.c}, ${i.c})`, 'int', 'int'),

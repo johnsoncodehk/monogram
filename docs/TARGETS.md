@@ -50,6 +50,18 @@ refused when the parser is emitted (`buildIR`), not mis-lexed: `tagStart`, `text
 `rawText[].unlessBodyStarts`, directives in children, `rawText` together with a type-parameter
 `signature`, and elements in a newline-mode grammar.
 
+Known difference between the interpreter's lexer and the portable lexers (owed): an
+`identifier` token whose own pattern does not take an ASCII member of IdentifierPart
+(`src/uni-ident.ts`: `$`, also an ASCII digit or letter the pattern leaves out). After the token
+ends at such a unit and no token matches there, the interpreter extends the identifier over it
+(`LX_UNI_CONT`, the whole IdentifierPart class); the portable lexers extend only over units beyond
+ASCII (`lxExt`), and the unit begins a new identifier. Witness: an identifier `[A-Za-z_]
+[A-Za-z0-9_]*` and the text `a$` (interpreter: one `Ident` `a$`; portable: `a`, `$`). No shipped
+grammar shows it: every real identifier pattern takes `$` and all ASCII identifier characters.
+The portable side follows the stated contract (the grammar's ASCII pattern decides ASCII; the
+Unicode classes extend a token "the ASCII pattern cut short" at a unit beyond ASCII), so the
+interpreter's extension is the one to narrow.
+
 ### Element dialects: evidence and cost
 
 Parity (`test/portable-targets.ts`, every CI run; the same counts for TypeScript, Go and Rust):

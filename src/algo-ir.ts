@@ -123,7 +123,15 @@ export type CodeRange = [number, number];
 // A record type a family declares: its fields in declaration order. The lowering spells the
 // record's type and its field reads; a field's type is a number kind or bool.
 export interface RecordDecl { name: string; fields: { name: string; ty: Num | 'bool' }[] }
-export interface CharSet { name: string; ranges: CodeRange[] }
+// `cold`: tested only off the hot path (inSet, never runEnd), so a target may spell its table
+// shorter at the price of a few instructions per test.
+export interface CharSet { name: string; ranges: CodeRange[]; cold?: boolean }
+// The 64 bits from unit `base` of a cold set's 128-bit mask (its members are ASCII), as a hex literal.
+export function unitMask(rs: CodeRange[], base: number): string {
+  let m = 0n;
+  for (const [lo, hi] of rs) for (let c = Math.max(lo, base); c <= Math.min(hi, base + 63); c++) m |= 1n << BigInt(c - base);
+  return `0x${m.toString(16)}`;
+}
 
 export const ELEM: Record<Exclude<ListTy, RecListTy>, Ty> = { metas: 'meta', toks: 'tok', bools: 'bool', depths: 'depth', edits: 'edit' };
 export const isNum = (t: Ty): t is Num => t === 'int' || t === 'lid' || t === 'depth' || t === 'pos' || t === 'idx';
@@ -209,7 +217,7 @@ export interface Lowering {
   borrowList?(r: R): string;
   borrowVal?(r: R): string;
   // A module-level membership table for `inSet` and `runEnd`.
-  charSet(name: string, ranges: CodeRange[]): string;
+  charSet(name: string, ranges: CodeRange[], cold: boolean): string;
   // The runtime routines `runEnd` and `find` call, each printed once by a family that uses it.
   runEndFn: string;
   findFn: string;
@@ -223,7 +231,7 @@ export interface Lowering {
     len(cx: Cx, l: R): R;
     code(cx: Cx, s: R, i: R): R;
     hasAt(cx: Cx, s: R, i: R, lit: string): R;
-    inSet(cx: Cx, set: string, c: R): R;
+    inSet(cx: Cx, set: string, c: R, cold: boolean): R;
     runEnd(cx: Cx, set: string, s: R, i: R): R;
     find(cx: Cx, s: R, i: R, lit: string): R;
     findAny(cx: Cx, s: R, i: R, stops: number[]): R;
@@ -336,14 +344,14 @@ class Printer implements Cx {
   private mutable = new Set<string>();
   private reassigned = new Set<string>();
   private sigs: Map<string, Fn>;
-  private sets: Set<string>;
+  private sets: Map<string, CharSet>;
   private recs: Map<string, RecordDecl>;
   private L: Lowering;
 
   constructor(lowering: Lowering, fns: Fn[], sets: CharSet[], records: RecordDecl[] = []) {
     this.L = lowering;
     this.sigs = new Map(fns.map((f) => [f.name, f]));
-    this.sets = new Set(sets.map((c) => c.name));
+    this.sets = new Map(sets.map((c) => [c.name, c]));
     this.recs = new Map(records.map((r) => [r.name, r]));
   }
 
@@ -468,11 +476,14 @@ class Printer implements Cx {
       case 'hasAt': return X.hasAt(this, this.expr(e.s), this.expr(e.i), e.lit);
       case 'litLen': return this.expr({ k: 'int', v: unitLen(e.lit, this.L.units) });
       case 'inSet': {
-        if (!this.sets.has(e.set)) throw new Error(`algo-ir: undeclared char set ${e.set}`);
-        return X.inSet(this, this.id(e.set), this.expr(e.c));
+        const cs = this.sets.get(e.set);
+        if (!cs) throw new Error(`algo-ir: undeclared char set ${e.set}`);
+        return X.inSet(this, this.id(e.set), this.expr(e.c), cs.cold === true);
       }
       case 'runEnd': {
-        if (!this.sets.has(e.set)) throw new Error(`algo-ir: undeclared char set ${e.set}`);
+        const cs = this.sets.get(e.set);
+        if (!cs) throw new Error(`algo-ir: undeclared char set ${e.set}`);
+        if (cs.cold) throw new Error(`algo-ir: runEnd over the cold char set ${e.set}`);
         return X.runEnd(this, this.id(e.set), this.expr(e.s), this.expr(e.i));
       }
       case 'find': {
@@ -797,5 +808,5 @@ export function inlineFn(f: Fn, args: string[], out: string, unset: number): Stm
 
 export function printFns(lowering: Lowering, fns: Fn[], sets: CharSet[] = [], records: RecordDecl[] = []): string {
   const p = new Printer(lowering, fns, sets, records);
-  return [...sets.map((c) => lowering.charSet(lowering.ident(c.name), c.ranges)), ...fns.filter((f) => !f.extern).map((f) => p.fn(f))].join('\n');
+  return [...sets.map((c) => lowering.charSet(lowering.ident(c.name), c.ranges, c.cold === true)), ...fns.filter((f) => !f.extern).map((f) => p.fn(f))].join('\n');
 }
