@@ -167,6 +167,7 @@ const count = (f: (r: Row) => boolean) => rows.reduce((n, r) => n + (f(r) ? 1 : 
 const pct = (a: number, b: number) => (b ? (100 * a / b).toFixed(1) : '0.0');
 const area = (p: string) => p.startsWith('test/annexB/') ? `annexB/${p.split('/')[3]}` : p.split('/')[2];
 const short = (p: string) => p.replace(/^test\//, '');
+const cell = (s: string) => s.replace(/\|/g, '\\|');   // a table cell: GFM ends a cell at any unescaped pipe, inside code too
 const CELLS: Cell[] = ['agree-accept', 'agree-reject', 'we-accept', 'we-reject', 'crash'];
 
 // The record: every disagreeing file under its class, sorted.
@@ -257,7 +258,7 @@ for (const dir of ['we-reject', 'we-accept'] as const) {
     const rs = byClass.get(c.id)!;
     const step = rs.length / Math.min(3, rs.length);
     const wit = [0, 1, 2].slice(0, Math.min(3, rs.length)).map((i) => `\`${short(rs[Math.floor(i * step)].t.path)}\``).join('<br>');
-    D.push(`| \`${c.id}\`: ${c.title} | ${rs.length} | ${rs.filter((r) => r.acorn).length} | ${VERDICT_TEXT[c.verdict]} | ${wit} |`);
+    D.push(`| \`${c.id}\`: ${cell(c.title)} | ${rs.length} | ${rs.filter((r) => r.acorn).length} | ${VERDICT_TEXT[c.verdict]} | ${wit} |`);
   }
   D.push('');
   D.push('| verdict | files |');
@@ -297,7 +298,7 @@ if (tsRows.length) {
   D.push('| cell | cause | files | witness | evidence |');
   D.push('|---|---|---:|---|---|');
   for (const c of ['ts/by-design', 'ts/as-javascript', 'ts/unknown', 'ts/crash'] as const) {
-    for (const [k, xs] of groupBy(c)) D.push(`| \`${c}\` | ${c === 'ts/by-design' ? `TypeScript rejects it (JavaScript class \`${k.split(' · ')[0]}\`)` : c === 'ts/as-javascript' ? `the JavaScript class \`${k}\`` : k} | ${xs.length} | \`${short(xs[0].r.t.path)}\` | ${c === 'ts/by-design' ? xs[0].note : c === 'ts/as-javascript' ? 'tsc\'s .ts parser accepts it' : xs[0].note} |`);
+    for (const [k, xs] of groupBy(c)) D.push(`| \`${c}\` | ${c === 'ts/by-design' ? `TypeScript rejects it (JavaScript class \`${k.split(' · ')[0]}\`)` : c === 'ts/as-javascript' ? `the JavaScript class \`${k}\`` : k} | ${xs.length} | \`${short(xs[0].r.t.path)}\` | ${c === 'ts/by-design' ? cell(xs[0].note) : c === 'ts/as-javascript' ? 'tsc\'s .ts parser accepts it' : cell(xs[0].note)} |`);
   }
   D.push('');
 }
@@ -312,7 +313,7 @@ D.push('');
 D.push('| class | files | needs | what the checker reads |');
 D.push('|---|---:|---|---|');
 const early = CLASSES.filter((c) => c.checker && byClass.get(c.id)?.length).sort((a, b) => byClass.get(b.id)!.length - byClass.get(a.id)!.length || a.id.localeCompare(b.id));
-for (const c of early) D.push(`| \`${c.id}\`: ${c.title} | ${byClass.get(c.id)!.length} | ${c.checker!.needs} | ${c.checker!.reads} |`);
+for (const c of early) D.push(`| \`${c.id}\`: ${cell(c.title)} | ${byClass.get(c.id)!.length} | ${c.checker!.needs} | ${cell(c.checker!.reads)} |`);
 const earlyBy = (n: 'tree' | 'scope') => early.filter((c) => c.checker!.needs === n).reduce((s, c) => s + byClass.get(c.id)!.length, 0);
 D.push('');
 D.push(`Tree alone: ${earlyBy('tree')} files; scope analysis: ${earlyBy('scope')} files. The strict-mode and Module-goal rules (\`needs-parameter\` above) are early errors too where they forbid a name or a statement; they are counted there because they need the goal and mode first.`);
