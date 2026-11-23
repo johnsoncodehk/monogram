@@ -52,7 +52,7 @@ The loader classifies every equation (`LoadedShape2.rightDependent`):
 | spec | right-dependent equations |
 |---|---|
 | ESTree | `Expr.binaryOp.left` → `pattern`, read from the operator leaf `op` (`=`) |
-| tsc | none (the gate `shape2-eval` asserts it) |
+| tsc | none (the gate `shape2-eval` asserts it); its inherited equations are `chainTop` and `heritageElement`, constants |
 
 ESTree's `pattern` is the cover grammar. A literal on the left of `=`, or in a `for … in / of`
 head's left (a constant equation, so L-attributed), is an assignment pattern there:
@@ -65,6 +65,22 @@ The SPINE of `pattern` is derived by `spineOf`:
 
 Whether a pattern is VALID (`[a + b] = c`) is the grammar's or the early errors' business, not
 the shape's.
+
+### Classes
+
+- **ESTree.** Block is RECORD-VALUED (its `body`): a block statement, a function body and a
+  static block share the grammar's one Block rule, and each parent builds the node it needs
+  (StaticBlock holds the statements itself and spans from `static`).
+- **tsc.** A heritage element is an ExpressionWithTypeArguments around its top ClassHeritage node.
+  The inherited `heritageElement` (bool) says "top". The class arms hand it to their `base`
+  children as a constant, so it is L-attributed. The element's own `left` children take the
+  default. A method named `constructor` (the identifier, or a string with that value) is tsc's
+  Constructor: synthesized `constructorName` on MemberName. A modifier word is its keyword token
+  (`match` on the word's text), and `modifiers` is absent when it would be empty.
+- **Not yet in the subset (tsc).** A class an `export` / `declare` / outer prefix arm wraps: those
+  words sit in the outer Decl arm and need a node-valued inherited attribute (approved; it lands
+  with import / export). Also: decorators (DecoratorExpr), index signatures, types, the `new
+  class` arms, and a class expression as a heritage base.
 
 ### What a generated parser must have at hand, per operator (the parser-emit table)
 

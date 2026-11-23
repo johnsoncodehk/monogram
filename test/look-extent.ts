@@ -1,6 +1,6 @@
 // Gate: LOOKAHEAD EXTENT. An incremental Doc keeps an old top-level entry (a statement, an
 // envspec line) only when the edit starts at or after the entry's recorded extent `ext`
-// (tryReuseTop / tryReuseSeg: `ext <= prefix`). So `ext` must be at least one past the furthest
+// (the reuse driver, tryReuse: `ext <= prefix`). So `ext` must be at least one past the furthest
 // token the parse of that entry examined: an extent that is too small keeps a stale entry (the
 // tree then differs from a fresh parse only on the inputs where that token mattered), and one
 // that is too large throws away an entry the edit cannot affect.

@@ -203,7 +203,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `[`: one token: committed to array (#17) (takes a mark: it can fail after `'['`)
   - `await`: two tokens: committed to prefixOp (#11), unless ident (#6), arrowIdentifier (#22) admit the token (then the frame) (takes a mark: its operand can fail after the operator)
   - `break`, `case`, `catch`, `const`, `continue`, `debugger`, `default`, `do` and 16 more: no candidate, the list fails
-  - `class`: two tokens: committed to seq (#35), unless seq2 (#36) admits the token (then the frame) (takes a mark: it can fail after `opt((DecoratorExpr many(DecoratorExpr))…`)
+  - `class`: two tokens: committed to namedClass (#35), unless anonymousClass (#36) admits the token (then the frame) (takes a mark: it can fail after `opt((DecoratorExpr many(DecoratorExpr))…`)
   - `super`: two tokens: committed to super_ (#5), unless arrowIdentifier (#22) admits the token (then the frame) (takes a mark: it can fail after `'super'`)
   - `{`: one token: committed to object (#18) (takes a mark: it can fail after `'{'`)
   - <Ident>: two tokens: committed to ident (#6), unless arrowIdentifier (#22) admits the token (then the frame)
@@ -215,10 +215,10 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - <String>: one token: committed to string (#8)
   - <Template>: one token: committed to template (#9)
   - <Regex>: one token: committed to regex (#10)
-  - <Decorator>: two tokens: committed to seq (#35), unless seq2 (#36) admits the token (then the frame) (takes a mark: it can fail after `opt((DecoratorExpr many(DecoratorExpr))…`)
+  - <Decorator>: two tokens: committed to namedClass (#35), unless anonymousClass (#36) admits the token (then the frame) (takes a mark: it can fail after `opt((DecoratorExpr many(DecoratorExpr))…`)
   - <PrivateField>: one token: committed to privateField (#26)
   - <$templateMiddle>, <$templateTail>, punctuation: no candidate, the list fails
-  - two tokens (SECOND): asyncArrow (#19) only before '('|'<'; arrow (#20) only before ')'|'...'|'>'|'@new'|'['|'abstract'|…18; asyncArrowIdentifier (#21) only before Ident; arrowIdentifier (#22) only before '=>'; seq (#35) only before '!'|'('|'.'|'<'|'?.'|'@new'|…37; seq2 (#36) only before '!'|'('|'.'|'<'|'?.'|'@new'|…39
+  - two tokens (SECOND): asyncArrow (#19) only before '('|'<'; arrow (#20) only before ')'|'...'|'>'|'@new'|'['|'abstract'|…18; asyncArrowIdentifier (#21) only before Ident; arrowIdentifier (#22) only before '=>'; namedClass (#35) only before '!'|'('|'.'|'<'|'?.'|'@new'|…37; anonymousClass (#36) only before '!'|'('|'.'|'<'|'?.'|'@new'|…39
   - longest match: a candidate frame (a mark per new best) at `async`, `false`, `function`, `import`, `new`, `null`, `this`, `true` and 2 more, the keys above where an `unless` candidate admits the token, every token of a kind no case names, over true_ (#0), false_ (#1), null_ (#2), undefined (#3), this_ (#4), super_ (#5) and 21 more
 - Expr LED (11 connectors, 39 binary operators):
   - `<`: by attempt, in order: led_lt, led_lt2 then the binary operator (takes a builder checkpoint: led_lt: it can fail after `sep(Type, ',')`; led_lt2: it can fail after `sep(Type, ',')`)
@@ -272,64 +272,64 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Expr NUD / asyncGenerator: `sep(Param, ',')`: by attempt
 - Expr NUD / asyncGenerator: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
 - Expr NUD / asyncGenerator: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
-- Expr NUD / seq: `opt((DecoratorExpr many(DecoratorExpr)) (many(alt(… \| ……`: by attempt
-- Expr NUD / seq: `alt(alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'i…`: one token; takes a mark: branch 1: it can fail after `'default'`; branch 2: it can fail after `'export'`
-- Expr NUD / seq: `alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'accessor'\|'async'\|'dec…`
-- Expr NUD / seq: `alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'out'…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'accessor'\|'async'\|'declare…`
-- Expr NUD / seq: `alt(('static') &{'*'\|'['\|BigInt\|BinaryNumber\|…6})`: one token; takes a mark: branch 0: it can fail after `('static')`
-- Expr NUD / seq: `alt(alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'i…`: one token; takes a mark: branch 1: it can fail after `'default'`; branch 2: it can fail after `'export'`
-- Expr NUD / seq: `alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'accessor'\|'async'\|'dec…`
-- Expr NUD / seq: `alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'out'…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'accessor'\|'async'\|'declare…`
-- Expr NUD / seq: `opt((DecoratorExpr many(DecoratorExpr)) (many(alt(… \| ……`: by attempt
-- Expr NUD / seq: `alt(alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'i…`: one token; takes a mark: branch 1: it can fail after `'default'`; branch 2: it can fail after `'export'`
-- Expr NUD / seq: `alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'accessor'\|'async'\|'dec…`
-- Expr NUD / seq: `alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'out'…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'accessor'\|'async'\|'declare…`
-- Expr NUD / seq: `alt(('static') &{'*'\|'['\|BigInt\|BinaryNumber\|…6})`: one token; takes a mark: branch 0: it can fail after `('static')`
-- Expr NUD / seq: `alt(alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'i…`: one token; takes a mark: branch 1: it can fail after `'default'`; branch 2: it can fail after `'export'`
-- Expr NUD / seq: `alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'accessor'\|'async'\|'dec…`
-- Expr NUD / seq: `alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'out'…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'accessor'\|'async'\|'declare…`
-- Expr NUD / seq: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
-- Expr NUD / seq: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
-- Expr NUD / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Expr NUD / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Expr NUD / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Expr NUD / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Expr NUD / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Expr NUD / seq: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
-- Expr NUD / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Expr NUD / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Expr NUD / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Expr NUD / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Expr NUD / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Expr NUD / seq2: `opt((DecoratorExpr many(DecoratorExpr)) (many(alt(… \| ……`: by attempt
-- Expr NUD / seq2: `alt(alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'i…`: one token; takes a mark: branch 1: it can fail after `'default'`; branch 2: it can fail after `'export'`
-- Expr NUD / seq2: `alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'accessor'\|'async'\|'dec…`
-- Expr NUD / seq2: `alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'out'…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'accessor'\|'async'\|'declare…`
-- Expr NUD / seq2: `alt(('static') &{'*'\|'['\|BigInt\|BinaryNumber\|…6})`: one token; takes a mark: branch 0: it can fail after `('static')`
-- Expr NUD / seq2: `alt(alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'i…`: one token; takes a mark: branch 1: it can fail after `'default'`; branch 2: it can fail after `'export'`
-- Expr NUD / seq2: `alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'accessor'\|'async'\|'dec…`
-- Expr NUD / seq2: `alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'out'…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'accessor'\|'async'\|'declare…`
-- Expr NUD / seq2: `opt((DecoratorExpr many(DecoratorExpr)) (many(alt(… \| ……`: by attempt
-- Expr NUD / seq2: `alt(alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'i…`: one token; takes a mark: branch 1: it can fail after `'default'`; branch 2: it can fail after `'export'`
-- Expr NUD / seq2: `alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'accessor'\|'async'\|'dec…`
-- Expr NUD / seq2: `alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'out'…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'accessor'\|'async'\|'declare…`
-- Expr NUD / seq2: `alt(('static') &{'*'\|'['\|BigInt\|BinaryNumber\|…6})`: one token; takes a mark: branch 0: it can fail after `('static')`
-- Expr NUD / seq2: `alt(alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'i…`: one token; takes a mark: branch 1: it can fail after `'default'`; branch 2: it can fail after `'export'`
-- Expr NUD / seq2: `alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'accessor'\|'async'\|'dec…`
-- Expr NUD / seq2: `alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'out'…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'accessor'\|'async'\|'declare…`
-- Expr NUD / seq2: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
-- Expr NUD / seq2: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
-- Expr NUD / seq2: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Expr NUD / seq2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Expr NUD / seq2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Expr NUD / seq2: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Expr NUD / seq2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Expr NUD / seq2: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
-- Expr NUD / seq2: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Expr NUD / seq2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Expr NUD / seq2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Expr NUD / seq2: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Expr NUD / seq2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / namedClass: `opt((DecoratorExpr many(DecoratorExpr)) (many(alt(… \| ……`: by attempt
+- Expr NUD / namedClass: `alt(alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'i…`: one token; takes a mark: branch 1: it can fail after `'default'`; branch 2: it can fail after `'export'`
+- Expr NUD / namedClass: `alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'accessor'\|'async'\|'dec…`
+- Expr NUD / namedClass: `alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'out'…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'accessor'\|'async'\|'declare…`
+- Expr NUD / namedClass: `alt(('static') &{'*'\|'['\|BigInt\|BinaryNumber\|…6})`: one token; takes a mark: branch 0: it can fail after `('static')`
+- Expr NUD / namedClass: `alt(alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'i…`: one token; takes a mark: branch 1: it can fail after `'default'`; branch 2: it can fail after `'export'`
+- Expr NUD / namedClass: `alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'accessor'\|'async'\|'dec…`
+- Expr NUD / namedClass: `alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'out'…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'accessor'\|'async'\|'declare…`
+- Expr NUD / namedClass: `opt((DecoratorExpr many(DecoratorExpr)) (many(alt(… \| ……`: by attempt
+- Expr NUD / namedClass: `alt(alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'i…`: one token; takes a mark: branch 1: it can fail after `'default'`; branch 2: it can fail after `'export'`
+- Expr NUD / namedClass: `alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'accessor'\|'async'\|'dec…`
+- Expr NUD / namedClass: `alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'out'…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'accessor'\|'async'\|'declare…`
+- Expr NUD / namedClass: `alt(('static') &{'*'\|'['\|BigInt\|BinaryNumber\|…6})`: one token; takes a mark: branch 0: it can fail after `('static')`
+- Expr NUD / namedClass: `alt(alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'i…`: one token; takes a mark: branch 1: it can fail after `'default'`; branch 2: it can fail after `'export'`
+- Expr NUD / namedClass: `alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'accessor'\|'async'\|'dec…`
+- Expr NUD / namedClass: `alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'out'…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'accessor'\|'async'\|'declare…`
+- Expr NUD / namedClass: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
+- Expr NUD / namedClass: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Expr NUD / namedClass: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Expr NUD / namedClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / namedClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / namedClass: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Expr NUD / namedClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / namedClass: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Expr NUD / namedClass: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Expr NUD / namedClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / namedClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / namedClass: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Expr NUD / namedClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / anonymousClass: `opt((DecoratorExpr many(DecoratorExpr)) (many(alt(… \| ……`: by attempt
+- Expr NUD / anonymousClass: `alt(alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'i…`: one token; takes a mark: branch 1: it can fail after `'default'`; branch 2: it can fail after `'export'`
+- Expr NUD / anonymousClass: `alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'accessor'\|'async'\|'dec…`
+- Expr NUD / anonymousClass: `alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'out'…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'accessor'\|'async'\|'declare…`
+- Expr NUD / anonymousClass: `alt(('static') &{'*'\|'['\|BigInt\|BinaryNumber\|…6})`: one token; takes a mark: branch 0: it can fail after `('static')`
+- Expr NUD / anonymousClass: `alt(alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'i…`: one token; takes a mark: branch 1: it can fail after `'default'`; branch 2: it can fail after `'export'`
+- Expr NUD / anonymousClass: `alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'accessor'\|'async'\|'dec…`
+- Expr NUD / anonymousClass: `alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'out'…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'accessor'\|'async'\|'declare…`
+- Expr NUD / anonymousClass: `opt((DecoratorExpr many(DecoratorExpr)) (many(alt(… \| ……`: by attempt
+- Expr NUD / anonymousClass: `alt(alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'i…`: one token; takes a mark: branch 1: it can fail after `'default'`; branch 2: it can fail after `'export'`
+- Expr NUD / anonymousClass: `alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'accessor'\|'async'\|'dec…`
+- Expr NUD / anonymousClass: `alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'out'…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'accessor'\|'async'\|'declare…`
+- Expr NUD / anonymousClass: `alt(('static') &{'*'\|'['\|BigInt\|BinaryNumber\|…6})`: one token; takes a mark: branch 0: it can fail after `('static')`
+- Expr NUD / anonymousClass: `alt(alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'i…`: one token; takes a mark: branch 1: it can fail after `'default'`; branch 2: it can fail after `'export'`
+- Expr NUD / anonymousClass: `alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'accessor'\|'async'\|'dec…`
+- Expr NUD / anonymousClass: `alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'out'…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'accessor'\|'async'\|'declare…`
+- Expr NUD / anonymousClass: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
+- Expr NUD / anonymousClass: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Expr NUD / anonymousClass: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Expr NUD / anonymousClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / anonymousClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / anonymousClass: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Expr NUD / anonymousClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / anonymousClass: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Expr NUD / anonymousClass: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Expr NUD / anonymousClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / anonymousClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / anonymousClass: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Expr NUD / anonymousClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
 - Expr NUD / asyncArrow: `sep(Param, ',')`: by attempt
 - Expr NUD / asyncArrow: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
 - Expr NUD / asyncArrow: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
@@ -825,9 +825,9 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 ### Decl
 
 - Decl (26 alternatives):
-  - `abstract`, `accessor`, `override`, `private`, `protected`, `public`, `readonly`, `static`: two tokens: committed to seq (#13) (takes a mark: it can fail after `alt((DecoratorExpr many(DecoratorExpr))…`)
-  - `async`: two tokens: committed to asyncFunction (#2), unless asyncGenerator (#3), seq2 (#14) admit the token (then the frame) (takes a mark: it can fail after `'async'`)
-  - `class`: two tokens: committed to class_ (#6), unless class_2 (#7) admits the token (then the frame) (takes a mark: it can fail after `'class'`)
+  - `abstract`, `accessor`, `override`, `private`, `protected`, `public`, `readonly`, `static`: two tokens: committed to prefixed (#13) (takes a mark: it can fail after `alt((DecoratorExpr many(DecoratorExpr))…`)
+  - `async`: two tokens: committed to asyncFunction (#2), unless asyncGenerator (#3), seq (#14) admit the token (then the frame) (takes a mark: it can fail after `'async'`)
+  - `class`: two tokens: committed to namedClass (#6), unless anonymousClass (#7) admits the token (then the frame) (takes a mark: it can fail after `'class'`)
   - `const`: two tokens: committed to const_ (#24) (takes a mark: it can fail after `'const'`)
   - `declare`: two tokens: committed to declare4 (#12), unless declare (#9), declare2 (#10), declare3 (#11) admit the token (then the frame) (takes a mark: it can fail after `'declare'`)
   - `enum`: two tokens: committed to enum_ (#8) (takes a mark: it can fail after `'enum'`)
@@ -839,10 +839,10 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `namespace`: two tokens: committed to namespace (#15) (takes a mark: it can fail after `'namespace'`)
   - `type`: two tokens: committed to type (#5) (takes a mark: it can fail after `'type'`)
   - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <String>, <Template> and 6 more: no candidate, the list fails
-  - <Decorator>: two tokens: committed to seq (#13) (takes a mark: it can fail after `alt((DecoratorExpr many(DecoratorExpr))…`)
-  - two tokens (pairs): function_ (#0) at `function` only before Ident; generator (#1) at `function` only before '*'; asyncFunction (#2) at `async` only before 'function'; asyncGenerator (#3) at `async` only before 'function'; class_ (#6) at `class` only before Ident; class_2 (#7) at `class` only before '<'|'extends'|'implements'|'{'; declare (#9) at `declare` only before 'function'; declare2 (#10) at `declare` only before 'module'; declare3 (#11) at `declare` only before 'global'; export_ (#17) at `export` only before 'as'; export_3 (#19) at `export` only before '@new'|'default'|Decorator; export_4 (#20) at `export` only before '*'|'type'; export_5 (#21) at `export` only before '{'; export_6 (#22) at `export` only before '='; export_7 (#23) at `export` only before 'type'
-  - two tokens (SECOND): function_ (#0) only before Ident; generator (#1) only before '*'; asyncFunction (#2) only before 'function'; asyncGenerator (#3) only before 'function'; interface (#4) only before Ident; type (#5) only before Ident; class_ (#6) only before Ident; class_2 (#7) only before '<'|'extends'|'implements'|'{'; enum_ (#8) only before Ident; declare (#9) only before 'function'; declare2 (#10) only before 'module'; declare3 (#11) only before 'global'; seq (#13) only before '!'|'('|'.'|'<'|'?.'|'@new'|…46; seq2 (#14) only before '@new'|'abstract'|'accessor'|'async'|'class'|'const'|…16; namespace (#15) only before Ident; module (#16) only before Ident|String; export_ (#17) only before 'as'; export_3 (#19) only before '@new'|'default'|Decorator; export_4 (#20) only before '*'|'type'; export_5 (#21) only before '{'; export_6 (#22) only before '='; export_7 (#23) only before 'type'; const_ (#24) only before 'enum'; import_ (#25) only before '*'|'defer'|'type'|'{'|Ident|String
-  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over function_ (#0), generator (#1), asyncFunction (#2), asyncGenerator (#3), class_ (#6), class_2 (#7) and 13 more
+  - <Decorator>: two tokens: committed to prefixed (#13) (takes a mark: it can fail after `alt((DecoratorExpr many(DecoratorExpr))…`)
+  - two tokens (pairs): function_ (#0) at `function` only before Ident; generator (#1) at `function` only before '*'; asyncFunction (#2) at `async` only before 'function'; asyncGenerator (#3) at `async` only before 'function'; namedClass (#6) at `class` only before Ident; anonymousClass (#7) at `class` only before '<'|'extends'|'implements'|'{'; declare (#9) at `declare` only before 'function'; declare2 (#10) at `declare` only before 'module'; declare3 (#11) at `declare` only before 'global'; export_ (#17) at `export` only before 'as'; export_3 (#19) at `export` only before '@new'|'default'|Decorator; export_4 (#20) at `export` only before '*'|'type'; export_5 (#21) at `export` only before '{'; export_6 (#22) at `export` only before '='; export_7 (#23) at `export` only before 'type'
+  - two tokens (SECOND): function_ (#0) only before Ident; generator (#1) only before '*'; asyncFunction (#2) only before 'function'; asyncGenerator (#3) only before 'function'; interface (#4) only before Ident; type (#5) only before Ident; namedClass (#6) only before Ident; anonymousClass (#7) only before '<'|'extends'|'implements'|'{'; enum_ (#8) only before Ident; declare (#9) only before 'function'; declare2 (#10) only before 'module'; declare3 (#11) only before 'global'; prefixed (#13) only before '!'|'('|'.'|'<'|'?.'|'@new'|…46; seq (#14) only before '@new'|'abstract'|'accessor'|'async'|'class'|'const'|…16; namespace (#15) only before Ident; module (#16) only before Ident|String; export_ (#17) only before 'as'; export_3 (#19) only before '@new'|'default'|Decorator; export_4 (#20) only before '*'|'type'; export_5 (#21) only before '{'; export_6 (#22) only before '='; export_7 (#23) only before 'type'; const_ (#24) only before 'enum'; import_ (#25) only before '*'|'defer'|'type'|'{'|Ident|String
+  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over function_ (#0), generator (#1), asyncFunction (#2), asyncGenerator (#3), namedClass (#6), anonymousClass (#7) and 13 more
 - one token, no mark: 14 inline choices, 28 star, 47 opt, 7 sep
 - Decl / function_: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
 - Decl / function_: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
@@ -877,86 +877,86 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Decl / interface: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
 - Decl / interface: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
 - Decl / type: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Decl / class_: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
-- Decl / class_: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
-- Decl / class_: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / class_: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / class_: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / class_: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / class_: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / class_: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
-- Decl / class_: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / class_: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / class_: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / class_: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / class_: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / class_2: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
-- Decl / class_2: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
-- Decl / class_2: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / class_2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / class_2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / class_2: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / class_2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / class_2: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
-- Decl / class_2: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / class_2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / class_2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / class_2: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / class_2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / namedClass: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
+- Decl / namedClass: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / namedClass: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / namedClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / namedClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / namedClass: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / namedClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / namedClass: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / namedClass: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / namedClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / namedClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / namedClass: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / namedClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / anonymousClass: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
+- Decl / anonymousClass: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / anonymousClass: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / anonymousClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / anonymousClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / anonymousClass: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / anonymousClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / anonymousClass: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / anonymousClass: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / anonymousClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / anonymousClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / anonymousClass: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / anonymousClass: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
 - Decl / declare: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
 - Decl / declare: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
 - Decl / declare: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
 - Decl / declare2: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
 - Decl / declare4: `alt(Decl \| Stmt)`: by attempt
-- Decl / seq: `alt((DecoratorExpr many(DecoratorExpr)) (many(alt(… …))…`: by attempt
-- Decl / seq: `alt(alt(('abstract'\|'public'\|'private'\|'protected'\|'rea…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'public'\|'private'\|'pro…`
-- Decl / seq: `alt(('abstract'\|'public'\|'private'\|'protected'\|'readonl…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'public'\|'private'\|'protect…`
-- Decl / seq: `alt(('static') &{'*'\|'['\|BigInt\|BinaryNumber\|…6})`: one token; takes a mark: branch 0: it can fail after `('static')`
-- Decl / seq: `alt(alt(('abstract'\|'public'\|'private'\|'protected'\|'rea…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'public'\|'private'\|'pro…`
-- Decl / seq: `alt(('abstract'\|'public'\|'private'\|'protected'\|'readonl…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'public'\|'private'\|'protect…`
-- Decl / seq: `alt(alt(('abstract'\|'public'\|'private'\|'protected'\|'rea…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'public'\|'private'\|'pro…`
-- Decl / seq: `alt(('abstract'\|'public'\|'private'\|'protected'\|'readonl…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'public'\|'private'\|'protect…`
-- Decl / seq: `alt(alt(('abstract'\|'public'\|'private'\|'protected'\|'rea…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'public'\|'private'\|'pro…`
-- Decl / seq: `alt(('abstract'\|'public'\|'private'\|'protected'\|'readonl…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'public'\|'private'\|'protect…`
-- Decl / seq: `alt(('static') &{'*'\|'['\|BigInt\|BinaryNumber\|…6})`: one token; takes a mark: branch 0: it can fail after `('static')`
-- Decl / seq: `alt(alt(('abstract'\|'public'\|'private'\|'protected'\|'rea…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'public'\|'private'\|'pro…`
-- Decl / seq: `alt(('abstract'\|'public'\|'private'\|'protected'\|'readonl…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'public'\|'private'\|'protect…`
-- Decl / seq: `alt(('static') &{'*'\|'['\|BigInt\|BinaryNumber\|…6})`: one token; takes a mark: branch 0: it can fail after `('static')`
-- Decl / seq: `alt(alt(('abstract'\|'public'\|'private'\|'protected'\|'rea…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'public'\|'private'\|'pro…`
-- Decl / seq: `alt(('abstract'\|'public'\|'private'\|'protected'\|'readonl…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'public'\|'private'\|'protect…`
-- Decl / seq: `alt('class' !{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: by attempt; takes a mark: branch 0: it can fail after `'class'`; branch 1: it can fail after `'class'`; branch 3: it can fail after `('let'\|'const'\|'var')`; branch 4: it can fail after `opt('await')`
-- Decl / seq: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
-- Decl / seq: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
-- Decl / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / seq: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
-- Decl / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / seq: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
-- Decl / seq: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
-- Decl / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / seq: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
-- Decl / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / seq: `many((',' Binding))`: one token; takes a mark: it can fail after `','`
-- Decl / seq: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Decl / seq: `many((',' Binding))`: one token; takes a mark: it can fail after `','`
-- Decl / seq: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Decl / seq2: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
-- Decl / seq2: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
+- Decl / prefixed: `alt((DecoratorExpr many(DecoratorExpr)) (many(alt(… …))…`: by attempt
+- Decl / prefixed: `alt(alt(('abstract'\|'public'\|'private'\|'protected'\|'rea…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'public'\|'private'\|'pro…`
+- Decl / prefixed: `alt(('abstract'\|'public'\|'private'\|'protected'\|'readonl…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'public'\|'private'\|'protect…`
+- Decl / prefixed: `alt(('static') &{'*'\|'['\|BigInt\|BinaryNumber\|…6})`: one token; takes a mark: branch 0: it can fail after `('static')`
+- Decl / prefixed: `alt(alt(('abstract'\|'public'\|'private'\|'protected'\|'rea…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'public'\|'private'\|'pro…`
+- Decl / prefixed: `alt(('abstract'\|'public'\|'private'\|'protected'\|'readonl…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'public'\|'private'\|'protect…`
+- Decl / prefixed: `alt(alt(('abstract'\|'public'\|'private'\|'protected'\|'rea…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'public'\|'private'\|'pro…`
+- Decl / prefixed: `alt(('abstract'\|'public'\|'private'\|'protected'\|'readonl…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'public'\|'private'\|'protect…`
+- Decl / prefixed: `alt(alt(('abstract'\|'public'\|'private'\|'protected'\|'rea…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'public'\|'private'\|'pro…`
+- Decl / prefixed: `alt(('abstract'\|'public'\|'private'\|'protected'\|'readonl…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'public'\|'private'\|'protect…`
+- Decl / prefixed: `alt(('static') &{'*'\|'['\|BigInt\|BinaryNumber\|…6})`: one token; takes a mark: branch 0: it can fail after `('static')`
+- Decl / prefixed: `alt(alt(('abstract'\|'public'\|'private'\|'protected'\|'rea…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'public'\|'private'\|'pro…`
+- Decl / prefixed: `alt(('abstract'\|'public'\|'private'\|'protected'\|'readonl…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'public'\|'private'\|'protect…`
+- Decl / prefixed: `alt(('static') &{'*'\|'['\|BigInt\|BinaryNumber\|…6})`: one token; takes a mark: branch 0: it can fail after `('static')`
+- Decl / prefixed: `alt(alt(('abstract'\|'public'\|'private'\|'protected'\|'rea…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'public'\|'private'\|'pro…`
+- Decl / prefixed: `alt(('abstract'\|'public'\|'private'\|'protected'\|'readonl…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'public'\|'private'\|'protect…`
+- Decl / prefixed: `alt('class' !{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: by attempt; takes a mark: branch 0: it can fail after `'class'`; branch 1: it can fail after `'class'`; branch 3: it can fail after `('let'\|'const'\|'var')`; branch 4: it can fail after `opt('await')`
+- Decl / prefixed: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
+- Decl / prefixed: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / prefixed: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / prefixed: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / prefixed: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / prefixed: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / prefixed: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / prefixed: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / prefixed: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / prefixed: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / prefixed: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / prefixed: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / prefixed: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / prefixed: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
+- Decl / prefixed: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / prefixed: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / prefixed: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / prefixed: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / prefixed: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / prefixed: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / prefixed: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / prefixed: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / prefixed: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / prefixed: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / prefixed: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / prefixed: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / prefixed: `many((',' Binding))`: one token; takes a mark: it can fail after `','`
+- Decl / prefixed: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- Decl / prefixed: `many((',' Binding))`: one token; takes a mark: it can fail after `','`
+- Decl / prefixed: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- Decl / seq: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
+- Decl / seq: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
 - Decl / namespace: `many(('.' Ident))`: one token; takes a mark: it can fail after `'.'`
 - Decl / module: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident many(('…`: by attempt
 - Decl / module: `many(('.' Ident))`: one token; takes a mark: it can fail after `'.'`
@@ -1059,115 +1059,115 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 ### ClassMember
 
 - ClassMember (3 alternatives):
-  - `*`, `[`: one token: committed to decoratorExpr2 (#2) (takes a mark: it can fail after `many(DecoratorExpr)`)
-  - `;`: one token: committed to semi (#0)
-  - `@new`: two tokens: committed to decoratorExpr2 (#2), unless decoratorExpr (#1) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
-  - `abstract`, `accessor`, `const`, `declare`, `default`, `export`, `in`, `out` and 5 more: two tokens: committed to decoratorExpr2 (#2), unless decoratorExpr (#1) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
-  - `static`: two tokens: committed to decoratorExpr2 (#2), unless decoratorExpr (#1) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
-  - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <String>, <PrivateField>: one token: committed to decoratorExpr2 (#2) (takes a mark: it can fail after `many(DecoratorExpr)`)
+  - `*`, `[`: one token: committed to member (#2) (takes a mark: it can fail after `many(DecoratorExpr)`)
+  - `;`: one token: committed to empty (#0)
+  - `@new`: two tokens: committed to member (#2), unless staticBlock (#1) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
+  - `abstract`, `accessor`, `const`, `declare`, `default`, `export`, `in`, `out` and 5 more: two tokens: committed to member (#2), unless staticBlock (#1) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
+  - `static`: two tokens: committed to member (#2), unless staticBlock (#1) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
+  - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <String>, <PrivateField>: one token: committed to member (#2) (takes a mark: it can fail after `many(DecoratorExpr)`)
   - <Template>, <Regex>, <$templateHead>, <$templateMiddle>, <$templateTail>, punctuation: no candidate, the list fails
-  - <Decorator>: two tokens: committed to decoratorExpr2 (#2), unless decoratorExpr (#1) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
-  - two tokens (pairs): decoratorExpr (#1) at `@new` only before '!'|'('|'.'|'<'|'?.'|'@new'|…37; decoratorExpr (#1) at `abstract`, `accessor`, `const`, `declare` and 9 more only before 'abstract'|'accessor'|'const'|'declare'|'default'|'export'|…8; decoratorExpr (#1) at `static` only before 'abstract'|'accessor'|'const'|'declare'|'default'|'export'|…9
-  - two tokens (SECOND): decoratorExpr (#1) only before '!'|'('|'.'|'<'|'?.'|'@new'|…37
-  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over decoratorExpr (#1), decoratorExpr2 (#2)
+  - <Decorator>: two tokens: committed to member (#2), unless staticBlock (#1) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
+  - two tokens (pairs): staticBlock (#1) at `@new` only before '!'|'('|'.'|'<'|'?.'|'@new'|…37; staticBlock (#1) at `abstract`, `accessor`, `const`, `declare` and 9 more only before 'abstract'|'accessor'|'const'|'declare'|'default'|'export'|…8; staticBlock (#1) at `static` only before 'abstract'|'accessor'|'const'|'declare'|'default'|'export'|…9
+  - two tokens (SECOND): staticBlock (#1) only before '!'|'('|'.'|'<'|'?.'|'@new'|…37
+  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over staticBlock (#1), member (#2)
 - one token, no mark: 6 inline choices, 11 star, 15 opt, 1 sep
-- ClassMember / decoratorExpr: `alt(alt('static' \| 'export' !{'*'\|'as'} !('default' !(……`: one token; takes a mark: branch 0: it can fail after `alt('static' \| 'export' !{'*'\|'as'} !('…`
-- ClassMember / decoratorExpr: `alt('static' \| 'export' !{'*'\|'as'} !('default' !(alt(……`: one token; takes a mark: branch 1: it can fail after `'export'`; branch 2: it can fail after `'default'`; branch 3: it can fail after `('public'\|'private'\|'protected'\|'abstra…`
-- ClassMember / decoratorExpr2: `alt(alt('export' !{'*'\|'as'} !('default' !(…)) !('type'…`: one token; takes a mark: branch 0: it can fail after `alt('export' !{'*'\|'as'} !('default' !(…`
-- ClassMember / decoratorExpr2: `alt('export' !{'*'\|'as'} !('default' !(alt(… \| … … … \| …`: one token; takes a mark: branch 0: it can fail after `'export'`; branch 1: it can fail after `'default'`; branch 2: it can fail after `('public'\|'private'\|'protected'\|'abstra…`
-- ClassMember / decoratorExpr2: `alt(('static') &{'*'\|'['\|BigInt\|BinaryNumber\|…6})`: one token; takes a mark: branch 0: it can fail after `('static')`
-- ClassMember / decoratorExpr2: `alt(alt('export' !{'*'\|'as'} !('default' !(…)) !('type'…`: one token; takes a mark: branch 0: it can fail after `alt('export' !{'*'\|'as'} !('default' !(…`
-- ClassMember / decoratorExpr2: `alt('export' !{'*'\|'as'} !('default' !(alt(… \| … … … \| …`: one token; takes a mark: branch 0: it can fail after `'export'`; branch 1: it can fail after `'default'`; branch 2: it can fail after `('public'\|'private'\|'protected'\|'abstra…`
-- ClassMember / decoratorExpr2: `alt(alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|Binary…`: by attempt; takes a mark: branch 0: it can fail after `alt(alt(('async') sameLine) &{'*'\|'['\|B…`; branch 1: it can fail after `alt(alt(('async') sameLine) &{'*'\|'['\|B…`; branch 2: it can fail after `alt(alt(('async') sameLine) &{'*'\|'['\|B…`; branch 3: it can fail after `alt(alt(('async') sameLine) &{'*'\|'['\|B…`; branch 4: it can fail after `'*'`; branch 5: it can fail after `alt(alt('get' !{'*'} \| 'set' !{'*'}) &{…`; branch 6: it can fail after `opt(alt(alt(('async') sameLine) &{'*'\|'…`; branch 7: it can fail after `'constructor'`; branch 8: it can fail after `MemberName`; branch 9: it can fail after `alt(alt(('async') sameLine) &{'*'\|'['\|B…`
-- ClassMember / decoratorExpr2: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
-- ClassMember / decoratorExpr2: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
-- ClassMember / decoratorExpr2: `alt(alt('static' \| 'export' !{'*'\|'as'} !('default' !(……`: one token; takes a mark: branch 0: it can fail after `alt('static' \| 'export' !{'*'\|'as'} !('…`
-- ClassMember / decoratorExpr2: `alt('static' \| 'export' !{'*'\|'as'} !('default' !(alt(……`: one token; takes a mark: branch 1: it can fail after `'export'`; branch 2: it can fail after `'default'`; branch 3: it can fail after `('public'\|'private'\|'protected'\|'abstra…`
-- ClassMember / decoratorExpr2: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
-- ClassMember / decoratorExpr2: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
-- ClassMember / decoratorExpr2: `sep(Param, ',')`: by attempt
-- ClassMember / decoratorExpr2: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
-- ClassMember / decoratorExpr2: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
-- ClassMember / decoratorExpr2: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
-- ClassMember / decoratorExpr2: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- ClassMember / decoratorExpr2: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
-- ClassMember / decoratorExpr2: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
-- ClassMember / decoratorExpr2: `alt(alt('static' \| 'export' !{'*'\|'as'} !('default' !(……`: one token; takes a mark: branch 0: it can fail after `alt('static' \| 'export' !{'*'\|'as'} !('…`
-- ClassMember / decoratorExpr2: `alt('static' \| 'export' !{'*'\|'as'} !('default' !(alt(……`: one token; takes a mark: branch 1: it can fail after `'export'`; branch 2: it can fail after `'default'`; branch 3: it can fail after `('public'\|'private'\|'protected'\|'abstra…`
-- ClassMember / decoratorExpr2: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
-- ClassMember / decoratorExpr2: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
-- ClassMember / decoratorExpr2: `alt(alt('get' !{'*'} \| 'set' !{'*'}) &{'*'\|'['\|BigInt\|B…`: one token; takes a mark: branch 0: it can fail after `alt('get' !{'*'} \| 'set' !{'*'})`
-- ClassMember / decoratorExpr2: `alt('get' !{'*'} \| 'set' !{'*'})`: one token; takes a mark: branch 0: it can fail after `'get'`; branch 1: it can fail after `'set'`
-- ClassMember / decoratorExpr2: `opt(sep(Param, ','))`: by attempt
-- ClassMember / decoratorExpr2: `sep(Param, ',')`: by attempt
-- ClassMember / decoratorExpr2: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
-- ClassMember / decoratorExpr2: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
-- ClassMember / decoratorExpr2: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
-- ClassMember / decoratorExpr2: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- ClassMember / decoratorExpr2: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
-- ClassMember / decoratorExpr2: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
-- ClassMember / decoratorExpr2: `alt(alt('static' \| 'export' !{'*'\|'as'} !('default' !(……`: one token; takes a mark: branch 0: it can fail after `alt('static' \| 'export' !{'*'\|'as'} !('…`
-- ClassMember / decoratorExpr2: `alt('static' \| 'export' !{'*'\|'as'} !('default' !(alt(……`: one token; takes a mark: branch 1: it can fail after `'export'`; branch 2: it can fail after `'default'`; branch 3: it can fail after `('public'\|'private'\|'protected'\|'abstra…`
-- ClassMember / decoratorExpr2: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
-- ClassMember / decoratorExpr2: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
-- ClassMember / decoratorExpr2: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
-- ClassMember / decoratorExpr2: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
-- ClassMember / decoratorExpr2: `alt(alt('static' \| 'export' !{'*'\|'as'} !('default' !(……`: one token; takes a mark: branch 0: it can fail after `alt('static' \| 'export' !{'*'\|'as'} !('…`
-- ClassMember / decoratorExpr2: `alt('static' \| 'export' !{'*'\|'as'} !('default' !(alt(……`: one token; takes a mark: branch 1: it can fail after `'export'`; branch 2: it can fail after `'default'`; branch 3: it can fail after `('public'\|'private'\|'protected'\|'abstra…`
-- ClassMember / decoratorExpr2: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
-- ClassMember / decoratorExpr2: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
-- ClassMember / decoratorExpr2: `sep(Param, ',')`: by attempt
-- ClassMember / decoratorExpr2: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
-- ClassMember / decoratorExpr2: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
-- ClassMember / decoratorExpr2: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
-- ClassMember / decoratorExpr2: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- ClassMember / decoratorExpr2: `sep(Param, ',')`: by attempt
-- ClassMember / decoratorExpr2: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
-- ClassMember / decoratorExpr2: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
-- ClassMember / decoratorExpr2: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
-- ClassMember / decoratorExpr2: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- ClassMember / decoratorExpr2: `alt(alt('get' !{'*'} \| 'set' !{'*'}) &{'*'\|'['\|BigInt\|B…`: one token; takes a mark: branch 0: it can fail after `alt('get' !{'*'} \| 'set' !{'*'})`
-- ClassMember / decoratorExpr2: `alt('get' !{'*'} \| 'set' !{'*'})`: one token; takes a mark: branch 0: it can fail after `'get'`; branch 1: it can fail after `'set'`
-- ClassMember / decoratorExpr2: `opt(sep(Param, ','))`: by attempt
-- ClassMember / decoratorExpr2: `sep(Param, ',')`: by attempt
-- ClassMember / decoratorExpr2: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
-- ClassMember / decoratorExpr2: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
-- ClassMember / decoratorExpr2: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
-- ClassMember / decoratorExpr2: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- ClassMember / decoratorExpr2: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
-- ClassMember / decoratorExpr2: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
-- ClassMember / decoratorExpr2: `alt(alt('static' \| 'export' !{'*'\|'as'} !('default' !(……`: one token; takes a mark: branch 0: it can fail after `alt('static' \| 'export' !{'*'\|'as'} !('…`
-- ClassMember / decoratorExpr2: `alt('static' \| 'export' !{'*'\|'as'} !('default' !(alt(……`: one token; takes a mark: branch 1: it can fail after `'export'`; branch 2: it can fail after `'default'`; branch 3: it can fail after `('public'\|'private'\|'protected'\|'abstra…`
-- ClassMember / decoratorExpr2: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
-- ClassMember / decoratorExpr2: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
-- ClassMember / decoratorExpr2: `opt(':' Type)`: one token; takes a mark: it can fail after `':'`
-- ClassMember / decoratorExpr2: `alt(',' \| alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
-- ClassMember / decoratorExpr2: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- ClassMember / decoratorExpr2: `sep(Param, ',')`: by attempt
-- ClassMember / decoratorExpr2: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
-- ClassMember / decoratorExpr2: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
-- ClassMember / decoratorExpr2: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
-- ClassMember / decoratorExpr2: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- ClassMember / decoratorExpr2: `alt(opt('?') opt(TypeParams) '(' sep(Param, ',') ')' op…`: by attempt; takes a mark: branch 0: it can fail after `opt('?')`; branch 1: it can fail after `opt(sameLine '!')`
-- ClassMember / decoratorExpr2: `sep(Param, ',')`: by attempt
-- ClassMember / decoratorExpr2: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
-- ClassMember / decoratorExpr2: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
-- ClassMember / decoratorExpr2: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
-- ClassMember / decoratorExpr2: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- ClassMember / decoratorExpr2: `opt(sameLine '!')`: by attempt
-- ClassMember / decoratorExpr2: `opt(':' Type)`: one token; takes a mark: it can fail after `':'`
-- ClassMember / decoratorExpr2: `opt('=' Expr)`: one token; takes a mark: it can fail after `'='`
-- ClassMember / decoratorExpr2: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- ClassMember / decoratorExpr2: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
-- ClassMember / decoratorExpr2: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
-- ClassMember / decoratorExpr2: `alt(alt('static' \| 'export' !{'*'\|'as'} !('default' !(……`: one token; takes a mark: branch 0: it can fail after `alt('static' \| 'export' !{'*'\|'as'} !('…`
-- ClassMember / decoratorExpr2: `alt('static' \| 'export' !{'*'\|'as'} !('default' !(alt(……`: one token; takes a mark: branch 1: it can fail after `'export'`; branch 2: it can fail after `'default'`; branch 3: it can fail after `('public'\|'private'\|'protected'\|'abstra…`
-- ClassMember / decoratorExpr2: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
-- ClassMember / decoratorExpr2: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
-- ClassMember / decoratorExpr2: `opt(sameLine '!')`: by attempt
-- ClassMember / decoratorExpr2: `opt(':' Type)`: one token; takes a mark: it can fail after `':'`
-- ClassMember / decoratorExpr2: `opt('=' Expr)`: one token; takes a mark: it can fail after `'='`
-- ClassMember / decoratorExpr2: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- ClassMember / staticBlock: `alt(alt('static' \| 'export' !{'*'\|'as'} !('default' !(……`: one token; takes a mark: branch 0: it can fail after `alt('static' \| 'export' !{'*'\|'as'} !('…`
+- ClassMember / staticBlock: `alt('static' \| 'export' !{'*'\|'as'} !('default' !(alt(……`: one token; takes a mark: branch 1: it can fail after `'export'`; branch 2: it can fail after `'default'`; branch 3: it can fail after `('public'\|'private'\|'protected'\|'abstra…`
+- ClassMember / member: `alt(alt('export' !{'*'\|'as'} !('default' !(…)) !('type'…`: one token; takes a mark: branch 0: it can fail after `alt('export' !{'*'\|'as'} !('default' !(…`
+- ClassMember / member: `alt('export' !{'*'\|'as'} !('default' !(alt(… \| … … … \| …`: one token; takes a mark: branch 0: it can fail after `'export'`; branch 1: it can fail after `'default'`; branch 2: it can fail after `('public'\|'private'\|'protected'\|'abstra…`
+- ClassMember / member: `alt(('static') &{'*'\|'['\|BigInt\|BinaryNumber\|…6})`: one token; takes a mark: branch 0: it can fail after `('static')`
+- ClassMember / member: `alt(alt('export' !{'*'\|'as'} !('default' !(…)) !('type'…`: one token; takes a mark: branch 0: it can fail after `alt('export' !{'*'\|'as'} !('default' !(…`
+- ClassMember / member: `alt('export' !{'*'\|'as'} !('default' !(alt(… \| … … … \| …`: one token; takes a mark: branch 0: it can fail after `'export'`; branch 1: it can fail after `'default'`; branch 2: it can fail after `('public'\|'private'\|'protected'\|'abstra…`
+- ClassMember / member: `alt(alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|Binary…`: by attempt; takes a mark: branch 0: it can fail after `alt(alt(('async') sameLine) &{'*'\|'['\|B…`; branch 1: it can fail after `alt(alt(('async') sameLine) &{'*'\|'['\|B…`; branch 2: it can fail after `alt(alt(('async') sameLine) &{'*'\|'['\|B…`; branch 3: it can fail after `alt(alt(('async') sameLine) &{'*'\|'['\|B…`; branch 4: it can fail after `'*'`; branch 5: it can fail after `alt(alt('get' !{'*'} \| 'set' !{'*'}) &{…`; branch 6: it can fail after `opt(alt(alt(('async') sameLine) &{'*'\|'…`; branch 7: it can fail after `'constructor'`; branch 8: it can fail after `MemberName`; branch 9: it can fail after `alt(alt(('async') sameLine) &{'*'\|'['\|B…`
+- ClassMember / member: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
+- ClassMember / member: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
+- ClassMember / member: `alt(alt('static' \| 'export' !{'*'\|'as'} !('default' !(……`: one token; takes a mark: branch 0: it can fail after `alt('static' \| 'export' !{'*'\|'as'} !('…`
+- ClassMember / member: `alt('static' \| 'export' !{'*'\|'as'} !('default' !(alt(……`: one token; takes a mark: branch 1: it can fail after `'export'`; branch 2: it can fail after `'default'`; branch 3: it can fail after `('public'\|'private'\|'protected'\|'abstra…`
+- ClassMember / member: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
+- ClassMember / member: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
+- ClassMember / member: `sep(Param, ',')`: by attempt
+- ClassMember / member: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
+- ClassMember / member: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
+- ClassMember / member: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
+- ClassMember / member: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- ClassMember / member: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
+- ClassMember / member: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
+- ClassMember / member: `alt(alt('static' \| 'export' !{'*'\|'as'} !('default' !(……`: one token; takes a mark: branch 0: it can fail after `alt('static' \| 'export' !{'*'\|'as'} !('…`
+- ClassMember / member: `alt('static' \| 'export' !{'*'\|'as'} !('default' !(alt(……`: one token; takes a mark: branch 1: it can fail after `'export'`; branch 2: it can fail after `'default'`; branch 3: it can fail after `('public'\|'private'\|'protected'\|'abstra…`
+- ClassMember / member: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
+- ClassMember / member: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
+- ClassMember / member: `alt(alt('get' !{'*'} \| 'set' !{'*'}) &{'*'\|'['\|BigInt\|B…`: one token; takes a mark: branch 0: it can fail after `alt('get' !{'*'} \| 'set' !{'*'})`
+- ClassMember / member: `alt('get' !{'*'} \| 'set' !{'*'})`: one token; takes a mark: branch 0: it can fail after `'get'`; branch 1: it can fail after `'set'`
+- ClassMember / member: `opt(sep(Param, ','))`: by attempt
+- ClassMember / member: `sep(Param, ',')`: by attempt
+- ClassMember / member: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
+- ClassMember / member: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
+- ClassMember / member: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
+- ClassMember / member: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- ClassMember / member: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
+- ClassMember / member: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
+- ClassMember / member: `alt(alt('static' \| 'export' !{'*'\|'as'} !('default' !(……`: one token; takes a mark: branch 0: it can fail after `alt('static' \| 'export' !{'*'\|'as'} !('…`
+- ClassMember / member: `alt('static' \| 'export' !{'*'\|'as'} !('default' !(alt(……`: one token; takes a mark: branch 1: it can fail after `'export'`; branch 2: it can fail after `'default'`; branch 3: it can fail after `('public'\|'private'\|'protected'\|'abstra…`
+- ClassMember / member: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
+- ClassMember / member: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
+- ClassMember / member: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
+- ClassMember / member: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
+- ClassMember / member: `alt(alt('static' \| 'export' !{'*'\|'as'} !('default' !(……`: one token; takes a mark: branch 0: it can fail after `alt('static' \| 'export' !{'*'\|'as'} !('…`
+- ClassMember / member: `alt('static' \| 'export' !{'*'\|'as'} !('default' !(alt(……`: one token; takes a mark: branch 1: it can fail after `'export'`; branch 2: it can fail after `'default'`; branch 3: it can fail after `('public'\|'private'\|'protected'\|'abstra…`
+- ClassMember / member: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
+- ClassMember / member: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
+- ClassMember / member: `sep(Param, ',')`: by attempt
+- ClassMember / member: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
+- ClassMember / member: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
+- ClassMember / member: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
+- ClassMember / member: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- ClassMember / member: `sep(Param, ',')`: by attempt
+- ClassMember / member: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
+- ClassMember / member: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
+- ClassMember / member: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
+- ClassMember / member: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- ClassMember / member: `alt(alt('get' !{'*'} \| 'set' !{'*'}) &{'*'\|'['\|BigInt\|B…`: one token; takes a mark: branch 0: it can fail after `alt('get' !{'*'} \| 'set' !{'*'})`
+- ClassMember / member: `alt('get' !{'*'} \| 'set' !{'*'})`: one token; takes a mark: branch 0: it can fail after `'get'`; branch 1: it can fail after `'set'`
+- ClassMember / member: `opt(sep(Param, ','))`: by attempt
+- ClassMember / member: `sep(Param, ',')`: by attempt
+- ClassMember / member: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
+- ClassMember / member: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
+- ClassMember / member: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
+- ClassMember / member: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- ClassMember / member: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
+- ClassMember / member: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
+- ClassMember / member: `alt(alt('static' \| 'export' !{'*'\|'as'} !('default' !(……`: one token; takes a mark: branch 0: it can fail after `alt('static' \| 'export' !{'*'\|'as'} !('…`
+- ClassMember / member: `alt('static' \| 'export' !{'*'\|'as'} !('default' !(alt(……`: one token; takes a mark: branch 1: it can fail after `'export'`; branch 2: it can fail after `'default'`; branch 3: it can fail after `('public'\|'private'\|'protected'\|'abstra…`
+- ClassMember / member: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
+- ClassMember / member: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
+- ClassMember / member: `opt(':' Type)`: one token; takes a mark: it can fail after `':'`
+- ClassMember / member: `alt(',' \| alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
+- ClassMember / member: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- ClassMember / member: `sep(Param, ',')`: by attempt
+- ClassMember / member: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
+- ClassMember / member: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
+- ClassMember / member: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
+- ClassMember / member: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- ClassMember / member: `alt(opt('?') opt(TypeParams) '(' sep(Param, ',') ')' op…`: by attempt; takes a mark: branch 0: it can fail after `opt('?')`; branch 1: it can fail after `opt(sameLine '!')`
+- ClassMember / member: `sep(Param, ',')`: by attempt
+- ClassMember / member: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
+- ClassMember / member: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
+- ClassMember / member: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
+- ClassMember / member: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- ClassMember / member: `opt(sameLine '!')`: by attempt
+- ClassMember / member: `opt(':' Type)`: one token; takes a mark: it can fail after `':'`
+- ClassMember / member: `opt('=' Expr)`: one token; takes a mark: it can fail after `'='`
+- ClassMember / member: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- ClassMember / member: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
+- ClassMember / member: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
+- ClassMember / member: `alt(alt('static' \| 'export' !{'*'\|'as'} !('default' !(……`: one token; takes a mark: branch 0: it can fail after `alt('static' \| 'export' !{'*'\|'as'} !('…`
+- ClassMember / member: `alt('static' \| 'export' !{'*'\|'as'} !('default' !(alt(……`: one token; takes a mark: branch 1: it can fail after `'export'`; branch 2: it can fail after `'default'`; branch 3: it can fail after `('public'\|'private'\|'protected'\|'abstra…`
+- ClassMember / member: `alt(alt(('async') sameLine) &{'*'\|'['\|BigInt\|BinaryNumb…`: one token; takes a mark: branch 0: it can fail after `alt(('async') sameLine)`
+- ClassMember / member: `alt(('async') sameLine)`: one token; takes a mark: branch 0: it can fail after `('async')`
+- ClassMember / member: `opt(sameLine '!')`: by attempt
+- ClassMember / member: `opt(':' Type)`: one token; takes a mark: it can fail after `':'`
+- ClassMember / member: `opt('=' Expr)`: one token; takes a mark: it can fail after `'='`
+- ClassMember / member: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
 
 ### EnumMember
 
