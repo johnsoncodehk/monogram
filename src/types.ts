@@ -666,6 +666,7 @@ export interface CstGrammar {
   precs: PrecLevel[];
   ledPrecs?: LedPrec[];
   rules: RuleDecl[];
+  entryRule?: string;  // the rule a parse starts from (`defineGrammar`'s `entry`); absent → the last declared rule. Read it through findEntryRule, never by position
   scopeOverrides: Map<string, string[]>;
   // Highlight-only CONTEXTUAL token scopes: token T carries scope S when it appears within
   // rule R (T's immediate enclosing rule). Generators consume this at their own fidelity:

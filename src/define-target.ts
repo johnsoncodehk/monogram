@@ -6,12 +6,13 @@
 // may omit the lowering; asking it for one is then an error.
 import type { Lowering } from './algo-ir.ts';
 import type { EmitOptions, Target } from './target.ts';
-import { type LexTok, type ParserIR, buildArenaIdPlan, buildLexIdPlan, recoveryTables } from './emit-portable.ts';
+import { type LexTok, type ParserIR, buildArenaIdPlan, buildLexIdPlan, hasRebind, recoveryTables } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { EL_FRAME_FN, EL_OPENS_FN, EL_RAW_FN, EL_REACH_FN, EL_TAG_START_FN, TPL_SPAN, UNI_CLASS, UNI_IDENT, emitLexScan, hasUniPrefix, emitScanInline, scannedTokens, scannerName, templateLiterals, tokenLiterals } from './lex-family.ts';
 import { emitRelexFamily } from './relex-family.ts';
 import { emitReuseFamily } from './reuse-family.ts';
 import { emitRecoveryFamily } from './recovery-family.ts';
+import { emitRebindFamily } from './rebind-family.ts';
 
 // The shared algorithm families, printed for the defining target.
 export interface SharedAlgorithms {
@@ -24,6 +25,10 @@ export interface SharedAlgorithms {
   // `methods`: only its engine methods (true) or only the free functions (false), for a target
   // that prints its engine's methods inside the receiver's declaration.
   recoveryFamily(ir: ParserIR, methods?: boolean): string;
+  // The mixfix operand re-bind (src/rebind-family.ts) for one engine form: its free function
+  // (`free`, once per module) or its method; `L`: the engine form's lowering, where the target
+  // spells a method's receiver per form (default: the target's lowering).
+  rebindFamily(ir: ParserIR, part: 'free' | 'methods', L?: Lowering): string;
   // The token scanners, the tokens they cover, and the printed name of the scanner a dispatch
   // site calls for a token. A lowering with `spliceInline` gets the scanner's statements for its
   // dispatch site instead (`out` declared and holding the scanner's result).
@@ -80,10 +85,11 @@ export function defineParserTarget(def: TargetDefinition): PortableTarget {
       if (!lowering().record) throw new Error(`defineParserTarget: target ${def.name} supplies no record Lowering for the reuse family`);
       return emitReuseFamily(ir, lowering());
     },
+    rebindFamily: (ir, part, L) => emitRebindFamily(L ?? lowering(), buildLexIdPlan(ir), part),
     recoveryFamily: (ir, methods) => {
       if (!lowering().record || !lowering().relex) throw new Error(`defineParserTarget: target ${def.name} supplies no record and token-stream Lowering for the recovery family`);
       const ids = buildLexIdPlan(ir);
-      return emitRecoveryFamily(lowering(), recoveryTables(ir, ids, buildArenaIdPlan(ir, ids)).data, methods);
+      return emitRecoveryFamily(lowering(), recoveryTables(ir, ids, buildArenaIdPlan(ir, ids)).data, methods, hasRebind(ir), ids);
     },
     lexScan: (ir) => emitLexScan(ir, lowering()),
     scannedTokens,

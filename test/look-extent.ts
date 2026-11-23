@@ -71,7 +71,9 @@ const GUARDS: { test: string; index: string }[] = [
   { test: 'j < toks.length', index: 'j' },                 // _opLid: the tokens a '>' composes with
   { test: 'save < toks.length', index: 'save' },           // branch / finishNodeW: an empty node's offset
 ];
-const READS = new Set(['toks[pos]', 'toks[pos + 1]', 'toks[j]', 'toks[save]']);
+// `toks[i]`: the re-bind's candidate scan (_rebind), over tokens below the greedy operand's end,
+// which that operand consumed: within the extent already, so it needs no note.
+const READS = new Set(['toks[pos]', 'toks[pos + 1]', 'toks[j]', 'toks[save]', 'toks[i]']);
 function oracleSource(lib: string, shapeB: boolean): string {
   // The parse engine the oracle runs: from the parser state to the library entry (the engine
   // and its builder protocol, run with the CST builder). A grammar without '>' composites has no
