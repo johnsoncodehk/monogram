@@ -544,7 +544,7 @@ export async function prepareAll(cases: Case[] = selectedCases()): Promise<Prepa
       emitted.push({ label: 'rust', def: () => emit(rustTarget), rec: rsSrc });
       const main = rsSrc + (rustTarget.emitRunner?.(RECOVERY) ?? '');
       native.push({ label: 'rust', build: {
-        key: buildKey('rust', RUSTC_VERSION, RUSTC_PATH, main),
+        key: buildKey('rust', RUSTC_VERSION, RUSTC_PATH, 'remap-path-prefix', main),
         build: (out) => {
           const rfile = `${dir}/main.rs`;
           writeFileSync(rfile, main);
