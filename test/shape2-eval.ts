@@ -4,15 +4,19 @@
 // load-time rejection: a spec outside the calculus or not typed against the grammar must be
 // refused, naming the rule / arm / child.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createParser, type CstLeaf, type CstNode } from '../src/gen-parser.ts';
 import type { CstGrammar } from '../src/types.ts';
-import { armNameOf, dependencies, evaluate, evaluator, loadShape2, Shape2SpecError, Shape2Unmapped, spineOf, type S2Value } from '../src/shape2-eval.ts';
+import { armNameOf, dependencies, evaluateShape, evaluator, defineShape, ShapeSpecError, ShapeUnmapped, spineOf, type ShapeValue } from '../src/shape2-eval.ts';
 import {
   absent, and, armOf, branch, c, child, cook, fold, iff, inh, let_, list, map, match, node, not, or, orElse,
-  dropLastIf, get, present, record, spread, syn, text, thread, typeByText, v, wrapIf, type Shape2Spec, type Term,
+  dropLastIf, get, present, record, spread, syn, text, thread, typeByText, v, wrapIf, type ShapeSpec, type Term,
 } from '../src/shape2-schema.ts';
 import calc from './fixtures/namedcalc.ts';
+import calcExample from './fixtures/namedcalc-shape.ts';
+import { shapeCoverage, shapeSkeleton } from '../src/shape-coverage.ts';
 import { estreeExprShape } from './fixtures/shape-v2-estree-expr.ts';
 import { tscExprShape } from './fixtures/shape-v2-tsc-expr.ts';
 import { compareTrees, type NTree } from './shape-oracle.ts';
@@ -27,12 +31,12 @@ const check = (name: string, fn: () => void): void => {
   try { fn(); passed++; } catch (e) { console.error(`FAIL ${name}\n${(e as Error).stack}`); process.exitCode = 1; }
 };
 const parse = (g: CstGrammar, src: string): CstNode => createParser(g).parse(src);
-const run = (g: CstGrammar, spec: Shape2Spec, src: string): S2Value | undefined => evaluate(loadShape2(g, spec), parse(g, src), src);
-const N = (kind: string, start: number, end: number, fields: Record<string, S2Value> = {}): S2Value => ({ kind, start, end, fields });
+const run = (g: CstGrammar, spec: ShapeSpec, src: string): ShapeValue | undefined => evaluateShape(defineShape(g, spec), parse(g, src), src);
+const N = (kind: string, start: number, end: number, fields: Record<string, ShapeValue> = {}): ShapeValue => ({ kind, start, end, fields });
 
 // ── The calculus on namedcalc ──
 
-const calcSpec: Shape2Spec = {
+const calcSpec: ShapeSpec = {
   name: 'calc',
   total: true,
   rules: {
@@ -70,7 +74,7 @@ check('calc: values, P2 type by operator text, P6 pass-through, spans', () => {
 });
 
 check('calc: present / armOf / match / if / and / or / not / orElse / record / list / spread / let / map', () => {
-  const spec: Shape2Spec = {
+  const spec: ShapeSpec = {
     ...calcSpec,
     rules: {
       ...calcSpec.rules,
@@ -104,13 +108,13 @@ check('calc: present / armOf / match / if / and / or / not / orElse / record / l
   assert.deepEqual(run(calc, spec, ''), N('P', 0, 0, { count: [], any: false, pair: [1, 2, 3, null], rec: { record: { a: 'x' } }, first: [] }));
 });
 
-check('calc: an unmapped arm of a non-total spec throws Shape2Unmapped naming it', () => {
-  const spec: Shape2Spec = { name: 'partial', rules: { Program: calcSpec.rules.Program, Stmt: calcSpec.rules.Stmt, Expr: { name: node('Name') } } };
-  assert.throws(() => run(calc, spec, '1;'), (e) => e instanceof Shape2Unmapped && e.rule === 'Expr' && e.arm === 'number');
+check('calc: an unmapped arm of a non-total spec throws ShapeUnmapped naming it', () => {
+  const spec: ShapeSpec = { name: 'partial', rules: { Program: calcSpec.rules.Program, Stmt: calcSpec.rules.Stmt, Expr: { name: node('Name') } } };
+  assert.throws(() => run(calc, spec, '1;'), (e) => e instanceof ShapeUnmapped && e.rule === 'Expr' && e.arm === 'number');
 });
 
 check('calc: an inherited attribute set by a constant and passed on by a copy; its dependencies', () => {
-  const spec: Shape2Spec = {
+  const spec: ShapeSpec = {
     name: 'inh', total: true,
     inherited: { mode: { type: 'string', default: 'statement', rules: { Stmt: { letDeclaration: { initializer: c('init') } }, Expr: { parenthesized: { expression: inh('mode') } } } } },
     rules: { ...calcSpec.rules, Expr: { ...calcSpec.rules.Expr, name: node('Name', { name: text('ident'), mode: inh('mode') }) } },
@@ -118,7 +122,7 @@ check('calc: an inherited attribute set by a constant and passed on by a copy; i
   assert.deepEqual(run(calc, spec, 'let a = ((x)); y;'), N('Program', 0, 17, {
     body: [N('Let', 0, 14, { name: 'a', init: N('Name', 10, 11, { name: 'x', mode: 'init' }) }), N('ExpressionStatement', 15, 17, { expression: N('Name', 15, 16, { name: 'y', mode: 'statement' }) })],
   }));
-  const deps = dependencies(loadShape2(calc, spec));
+  const deps = dependencies(defineShape(calc, spec));
   assert.deepEqual(deps['Expr.name'], { inherited: ['mode'] });            // reads it
   assert.deepEqual(deps['Expr.parenthesized'], { inherited: ['mode'] });   // copies it to a child that reads it
   assert.deepEqual(deps['Stmt.letDeclaration'], { inherited: [] });       // hands a constant: context-free
@@ -126,7 +130,7 @@ check('calc: an inherited attribute set by a constant and passed on by a copy; i
 });
 
 // Threaded list state: the only construct by which a node's context depends on its siblings.
-const leadSpec: Shape2Spec = {
+const leadSpec: ShapeSpec = {
   ...calcSpec,
   name: 'lead',
   synthesized: { isLet: { type: 'bool', default: false, rules: { Stmt: { letDeclaration: c(true) } } } },
@@ -135,7 +139,7 @@ const leadSpec: Shape2Spec = {
   },
   rules: { ...calcSpec.rules, Stmt: { ...calcSpec.rules.Stmt, expression: node('ExpressionStatement', { expression: child('expression'), lead: inh('lead') }) } },
 };
-type Fields = { fields: Record<string, S2Value> };
+type Fields = { fields: Record<string, ShapeValue> };
 
 check('calc: a threaded state across a list (each element sees the state its left siblings made)', () => {
   const src = 'let a = 1; b; let c = 2; d;';
@@ -143,7 +147,7 @@ check('calc: a threaded state across a list (each element sees the state its lef
   assert.deepEqual(body.map((x) => x.fields.lead), [undefined, true, undefined, false]);
   // the same value for one element evaluated on its own, in the context of its root
   const cst = parse(calc, src);
-  const at = evaluator(loadShape2(calc, leadSpec), cst, src);
+  const at = evaluator(defineShape(calc, leadSpec), cst, src);
   const stmts: CstNode[] = [];
   const walk = (x: CstNode | CstLeaf): void => { if ('tokenType' in x) return; if (x.rule === 'Stmt') stmts.push(x); x.children.forEach(walk); };
   walk(cst);
@@ -155,7 +159,7 @@ check('calc: a threaded state across a list (each element sees the state its lef
 });
 
 check('calc: dependencies of a thread (the element reads the state; the parent threads it)', () => {
-  const deps = dependencies(loadShape2(calc, leadSpec));
+  const deps = dependencies(defineShape(calc, leadSpec));
   assert.deepEqual(deps['Stmt.expression'], { inherited: ['lead'] });
   assert.deepEqual(deps['Program.program'], { inherited: [], threads: [{ attr: 'lead', over: 'statement', reads: ['isLet'] }] });
   assert.deepEqual(deps['Stmt.letDeclaration'], { inherited: [] });
@@ -164,11 +168,11 @@ check('calc: dependencies of a thread (the element reads the state; the parent t
 // ── The calculus on the JavaScript expression rules ──
 
 const stmtOf = (src: string): CstNode => parse(javascript, src).children[0] as CstNode;
-const jsEval = (spec: Shape2Spec, src: string): S2Value | undefined => evaluate(loadShape2(javascript, spec), stmtOf(src), src);
+const jsEval = (spec: ShapeSpec, src: string): ShapeValue | undefined => evaluateShape(defineShape(javascript, spec), stmtOf(src), src);
 
 // A left fold (tsc's comma BinaryExpression) and a list (ESTree's SequenceExpression), an inline
 // alternation (`.` Ident | PrivateField), named conditional children, the op-form children.
-const jsBase: Shape2Spec['rules'] = {
+const jsBase: ShapeSpec['rules'] = {
   Expr: {
     ident: node('Id', { name: cook('identifierName', 'ident') }),
     number: node('Num', { value: cook('numberValue', 'number') }),
@@ -180,7 +184,7 @@ const jsBase: Shape2Spec['rules'] = {
 };
 
 check('js: fold over a repetition (left-nested comma), with the iteration scope and spans', () => {
-  const spec: Shape2Spec = {
+  const spec: ShapeSpec = {
     name: 'fold', rules: {
       ...jsBase,
       Stmt: { expr: fold('rest', child('first'), 'acc', node('Comma', { left: v('acc'), comma: node('Tok', {}, { from: 'comma', to: 'comma' }), right: child('rest') }, { from: 'acc', to: 'rest' })) },
@@ -196,7 +200,7 @@ check('js: fold over a repetition (left-nested comma), with the iteration scope 
 });
 
 check('js: list / spread / present on a repetition; span over a list child', () => {
-  const spec: Shape2Spec = {
+  const spec: ShapeSpec = {
     name: 'seq', rules: {
       ...jsBase,
       Stmt: { expr: iff(present('rest'), node('Seq', { expressions: list(child('first'), spread(child('rest'))) }, { from: 'first', to: 'rest' }), child('first')) },
@@ -209,7 +213,7 @@ check('js: list / spread / present on a repetition; span over a list child', () 
 
 // A RECORD-VALUED rule (`get`): ForHead is an interface of the `for` statement, which builds its
 // node from the head's fields and its own body.
-const forSpec: Shape2Spec = {
+const forSpec: ShapeSpec = {
   name: 'for', rules: {
     ...jsBase,
     Stmt: {
@@ -229,16 +233,16 @@ check('js: a record-valued rule projected by get (for heads)', () => {
   assert.deepEqual(jsEval(forSpec, 'for (a of b) c;'), N('ForOf', 0, 15, { left: N('Id', 5, 6, { name: 'a' }), right: N('Id', 10, 11, { name: 'b' }), body: N('Id', 13, 14, { name: 'c' }) }));
   assert.deepEqual(jsEval(forSpec, 'for (;;) c;'), N('For', 0, 11, { test: null, body: N('Id', 9, 10, { name: 'c' }) }));
   assert.deepEqual(jsEval(forSpec, 'for (; x;) c;'), N('For', 0, 13, { test: N('Id', 7, 8, { name: 'x' }), body: N('Id', 11, 12, { name: 'c' }) }));
-  assert.throws(() => jsEval(forSpec, 'for (a in b) c;'), (e: unknown) => e instanceof Shape2Unmapped && e.rule === 'ForHead' && e.arm === 'in_');
+  assert.throws(() => jsEval(forSpec, 'for (a in b) c;'), (e: unknown) => e instanceof ShapeUnmapped && e.rule === 'ForHead' && e.arm === 'in_');
   // A value depends on what its record's fields depend on: nothing here.
-  const d = dependencies(loadShape2(javascript, forSpec));
+  const d = dependencies(defineShape(javascript, forSpec));
   assert.deepEqual(d['ForHead.classic'], { inherited: [] });
   assert.deepEqual(d['Stmt.for_'], { inherited: [] });
 });
 
 // ESTree's ChainExpression: an inherited attribute (am I the top of a member / call chain?)
 // and a synthesized one (does my chain hold a `?.`?).
-const chainSpec: Shape2Spec = {
+const chainSpec: ShapeSpec = {
   name: 'chain',
   synthesized: {
     optional: { type: 'bool', default: false, rules: { Expr: { led_optChain: c(true), led_dot: syn('optional', 'left'), led_paren: syn('optional', 'left') } } },
@@ -259,13 +263,13 @@ const chainSpec: Shape2Spec = {
 };
 
 check('js: inherited + synthesized attributes (ChainExpression boundary)', () => {
-  const m = (start: number, end: number, object: S2Value, optional: boolean): S2Value => N('Member', start, end, { object, optional });
-  const id = (s: number, n: string): S2Value => N('Id', s, s + 1, { name: n });
+  const m = (start: number, end: number, object: ShapeValue, optional: boolean): ShapeValue => N('Member', start, end, { object, optional });
+  const id = (s: number, n: string): ShapeValue => N('Id', s, s + 1, { name: n });
   assert.deepEqual(jsEval(chainSpec, 'a?.b.c();'), N('Chain', 0, 8, { expression: N('Call', 0, 8, { callee: m(0, 6, m(0, 4, id(0, 'a'), true), false), args: [] }) }));
   assert.deepEqual(jsEval(chainSpec, 'a.b;'), m(0, 3, id(0, 'a'), false));
   // a parenthesis ends a chain: (a?.b).c is a member of a chain
   assert.deepEqual(jsEval(chainSpec, '(a?.b).c;'), m(0, 8, N('Chain', 1, 5, { expression: m(1, 5, id(1, 'a'), true) }), false));
-  const deps = dependencies(loadShape2(javascript, chainSpec));
+  const deps = dependencies(defineShape(javascript, chainSpec));
   assert.deepEqual(deps['Expr.led_dot'], { inherited: ['chainTop'] });
   assert.deepEqual(deps['Expr.ident'], { inherited: [] });
 });
@@ -274,10 +278,10 @@ check('js: inherited + synthesized attributes (ChainExpression boundary)', () =>
 // parenthesised string, a declaration or any other statement ends the run.
 check('js: the directive prologue (threaded state, ESTree fixture)', () => {
   const src = `'a'; "b\\n"; ('c'); 'd'; function f() { 'x'; y; 'z'; } { 'no'; } (() => { 'arrow'; });\n'late';`;
-  const loaded = loadShape2(javascript, estreeExprShape);
+  const loaded = estreeExprShape;
   const cst = parse(javascript, src);
   const at = evaluator(loaded, cst, src);
-  const got: [string, S2Value | undefined][] = [];
+  const got: [string, ShapeValue | undefined][] = [];
   const walk = (x: CstNode | CstLeaf): void => {
     if ('tokenType' in x) return;
     if (x.rule === 'Stmt' && armNameOf(loaded, x, src) === 'expr' && src[x.offset] !== '(') got.push([src.slice(x.offset, x.end), (at(x) as unknown as Fields).fields.directive]);
@@ -300,13 +304,13 @@ check('functions, arrows and parameters (both fixtures, against acorn and tsc)',
   const js = `function f(a, b = 1, ...c) { return a; }\nasync function* g() { 'use strict'; }\nx = function () {};\ny = async function h(a) {};\nz = (a, b) => a + b;\nw = async x => { 'd'; };\nv = async (a) => a;\nu = q => q;\nfunction* k(x) { yield x; }\n`;
   const ts = `${js}function t(this) {}\nfunction o(a?, b = 2) {}\nfunction ov(a);\n`;
   for (const [g, spec, src, oracle] of [
-    [javascript, estreeExprShape, js, () => normaliseEstree(parseEstree(js)!.tree)],
-    [typescript, tscExprShape, ts, () => { const r = tscOracle(ts, 'a.ts'); return 'tree' in r ? r.tree : assert.fail(JSON.stringify(r)); }],
+    [javascript, estreeExprShape.spec, js, () => normaliseEstree(parseEstree(js)!.tree)],
+    [typescript, tscExprShape.spec, ts, () => { const r = tscOracle(ts, 'a.ts'); return 'tree' in r ? r.tree : assert.fail(JSON.stringify(r)); }],
   ] as const) {
     // The root's own extent and its end-of-file leaf are not compared (shape2-oracle.ts ROOT_NOT_COMPARED).
     const root = (t: NTree): NTree => ({ kind: t.kind, start: 0, end: 0, fields: Object.fromEntries(Object.entries(t.fields).filter(([k]) => k !== 'sourceType' && k !== 'endOfFileToken')) });
     assert.deepEqual(compareTrees(root(oracle()), root(run(g, spec, src) as NTree), 1).divergences, [], spec.name);
-    const deps = dependencies(loadShape2(g, spec));
+    const deps = dependencies(defineShape(g, spec));
     for (const a of ['function_', 'generator', 'asyncFunction', 'asyncGenerator', 'arrow', 'asyncArrow', 'arrowIdentifier', 'asyncArrowIdentifier']) assert.deepEqual(deps[`Expr.${a}`]?.inherited ?? [], [], `${spec.name} Expr.${a}`);
   }
 });
@@ -321,12 +325,12 @@ check('binding patterns (both fixtures, against acorn and tsc)', () => {
     + 'function f([a, b] = q, {c} = q, ...[d]) {}\ntry {} catch ({message}) {}\nfor (const [k, v] of m);\nfor (let {a} = b;;);\n';
   const ts = `${js}var {...r2: x2 = 1} = o;\n`;
   for (const [g, spec, src, oracle] of [
-    [javascript, estreeExprShape, js, () => normaliseEstree(parseEstree(js)!.tree)],
-    [typescript, tscExprShape, ts, () => { const r = tscOracle(ts, 'a.ts'); return 'tree' in r ? r.tree : assert.fail(JSON.stringify(r)); }],
+    [javascript, estreeExprShape.spec, js, () => normaliseEstree(parseEstree(js)!.tree)],
+    [typescript, tscExprShape.spec, ts, () => { const r = tscOracle(ts, 'a.ts'); return 'tree' in r ? r.tree : assert.fail(JSON.stringify(r)); }],
   ] as const) {
     const root = (t: NTree): NTree => ({ kind: t.kind, start: 0, end: 0, fields: Object.fromEntries(Object.entries(t.fields).filter(([k]) => k !== 'sourceType' && k !== 'endOfFileToken')) });
     assert.deepEqual(compareTrees(root(oracle()), root(run(g, spec, src) as NTree), 1).divergences, [], spec.name);
-    const deps = dependencies(loadShape2(g, spec));
+    const deps = dependencies(defineShape(g, spec));
     for (const r of ['BindingPattern.object', 'BindingPattern.array', 'BindingElement.seq', 'BindingProperty.pair']) assert.deepEqual(deps[r]?.inherited ?? [], [], `${spec.name} ${r}`);
   }
 });
@@ -343,17 +347,17 @@ check('literals, spread, templates (both fixtures, against acorn and tsc)', () =
     + '[a, [b], {c: d = 1, e = 2, ...g}, ...h] = x;\n({a: [b.c], ...d} = e);\n[a = b = c] = d;\nfor ([k, v] of m);\nfor ({k} in o);\n[a] == b;\n({a} || b);\n';
   const ts = `${both}z = {a?: 1, k = 2, async *m() {}, [a, b]: 3};\n`;
   for (const [g, spec, src, oracle] of [
-    [javascript, estreeExprShape, both, () => normaliseEstree(parseEstree(both)!.tree)],
-    [typescript, tscExprShape, ts, () => { const r = tscOracle(ts, 'a.ts'); return 'tree' in r ? r.tree : assert.fail(JSON.stringify(r)); }],
+    [javascript, estreeExprShape.spec, both, () => normaliseEstree(parseEstree(both)!.tree)],
+    [typescript, tscExprShape.spec, ts, () => { const r = tscOracle(ts, 'a.ts'); return 'tree' in r ? r.tree : assert.fail(JSON.stringify(r)); }],
   ] as const) {
     const root = (t: NTree): NTree => ({ kind: t.kind, start: 0, end: 0, fields: Object.fromEntries(Object.entries(t.fields).filter(([k]) => k !== 'sourceType' && k !== 'endOfFileToken')) });
     assert.deepEqual(compareTrees(root(oracle()), root(run(g, spec, src) as NTree), 1).divergences, [], spec.name);
   }
   // Only ESTree's literals depend on where they sit (the pattern reading); tsc's are their subtree's.
-  const deps = dependencies(loadShape2(javascript, estreeExprShape));
+  const deps = dependencies(estreeExprShape);
   for (const a of ['array', 'object', 'spread', 'binaryOp']) assert.deepEqual(deps[`Expr.${a}`]?.inherited, ['pattern'], `estree Expr.${a}`);
   assert.deepEqual(deps['Expr.template']?.inherited ?? [], [], 'estree Expr.template');
-  const tdeps = dependencies(loadShape2(typescript, tscExprShape));
+  const tdeps = dependencies(tscExprShape);
   for (const a of ['array', 'object', 'template', 'led_template']) assert.deepEqual(tdeps[`Expr.${a}`]?.inherited ?? [], [], `tsc Expr.${a}`);
 });
 
@@ -366,8 +370,8 @@ check('modules (both fixtures, against acorn and tsc)', () => {
   const js = `import a, {b as c, d} from "m" with {type: "json", 'x': "y"};\nimport * as ns from "m";\nimport "x";\nimport e, * as f from "q";\nimport {"s t" as g} from "q";\nvar h, k;\nexport {h as hh, k, h as "s"};\nexport * from "m";\nexport * as q from "m";\nexport {x as xd, "y" as z} from "n" with {type: "j"};\nexport default async function* () { 'u'; }\nexport const x1 = 1, x2 = 3;\nexport function f1() { 'v'; }\nexport class C1 extends D {}\nimport.meta.url;\nimport("x").then(y);\n`;
   const ts = `import a, {b as c, type d} from "m" with {type: "json"};\nimport type T from "t";\nimport x = require("y");\nimport type {Q} from "q";\nimport defer * as n from "r";\nimport e = A.B.C;\nexport import ei = A.B;\nexport {a as b, type c as cc, "q" as "r"};\nexport {type as};\nexport {type as as x2};\nexport * as q from "m";\nexport type * as tt from "u";\nexport * from "v" with {};\nexport type {Z} from "z";\nexport function f() {}\nexport async function f2() {}\nexport const k1 = 1, k2 = 2;\nexport class C1 extends D.E {}\nexport abstract class C2 {}\nabstract class C3 {}\ndeclare var dv;\nexport declare let dl;\ndeclare export * from "w";\nexport default abstract class {}\nexport as namespace N;\nexport = a;\n`;
   for (const [g, spec, src, oracle] of [
-    [javascript, estreeExprShape, js, () => { const r = parseEstree(js); return r ? normaliseEstree(r.tree) : assert.fail('acorn rejects it'); }],
-    [typescript, tscExprShape, ts, () => { const r = tscOracle(ts, 'a.ts'); return 'tree' in r ? r.tree : assert.fail(JSON.stringify(r)); }],
+    [javascript, estreeExprShape.spec, js, () => { const r = parseEstree(js); return r ? normaliseEstree(r.tree) : assert.fail('acorn rejects it'); }],
+    [typescript, tscExprShape.spec, ts, () => { const r = tscOracle(ts, 'a.ts'); return 'tree' in r ? r.tree : assert.fail(JSON.stringify(r)); }],
   ] as const) {
     const root = (t: NTree): NTree => ({ kind: t.kind, start: 0, end: 0, fields: Object.fromEntries(Object.entries(t.fields).filter(([k]) => k !== 'sourceType' && k !== 'endOfFileToken')) });
     assert.deepEqual(compareTrees(root(oracle()), root(run(g, spec, src) as NTree), 1).divergences, [], spec.name);
@@ -383,9 +387,9 @@ check('an escaped constructor name is the constructor (both shapes; tsc against 
   const sf = tsc.createSourceFile('a.ts', src, tsc.ScriptTarget.Latest, true);
   assert.equal(tsc.SyntaxKind[(sf.statements[0] as import('typescript').ClassDeclaration).members[0].kind], 'Constructor');
   type V = { kind: string; fields: Record<string, V & V[]> };
-  const t = run(typescript, tscExprShape, src) as V;
+  const t = run(typescript, tscExprShape.spec, src) as V;
   assert.equal(t.fields.statements[0].fields.members[0].kind, 'Constructor');
-  const e = run(javascript, estreeExprShape, src) as V;
+  const e = run(javascript, estreeExprShape.spec, src) as V;
   assert.equal(e.fields.body[0].fields.body.fields.body[0].fields.kind as never, 'constructor');
 });
 
@@ -393,8 +397,8 @@ check('an escaped constructor name is the constructor (both shapes; tsc against 
 // is without them, apart from its modifiers and its start (the first inherited modifier). The
 // source is padded so that the bare declaration sits at the same offsets.
 check('tsc modifiers: the same declaration with and without wrappers differs only in modifiers and start', () => {
-  const declOf = (src: string): Record<string, S2Value> & { kind: string; start: number; end: number } => {
-    const p = run(typescript, tscExprShape, src) as { fields: { statements: S2Value[] } };
+  const declOf = (src: string): Record<string, ShapeValue> & { kind: string; start: number; end: number } => {
+    const p = run(typescript, tscExprShape.spec, src) as { fields: { statements: ShapeValue[] } };
     return p.fields.statements[0] as never;
   };
   for (const [wrapped, words] of [
@@ -407,8 +411,8 @@ check('tsc modifiers: the same declaration with and without wrappers differs onl
     const at = wrapped.search(/(function|let|var|class|async)\b/);
     const bareAt = /abstract|async/.test(wrapped) ? wrapped.search(/(abstract|async)\b/) : at;
     const bare = ' '.repeat(bareAt) + wrapped.slice(bareAt);
-    const w = declOf(wrapped) as unknown as { kind: string; start: number; end: number; fields: Record<string, S2Value> };
-    const b = declOf(bare) as unknown as { kind: string; start: number; end: number; fields: Record<string, S2Value> };
+    const w = declOf(wrapped) as unknown as { kind: string; start: number; end: number; fields: Record<string, ShapeValue> };
+    const b = declOf(bare) as unknown as { kind: string; start: number; end: number; fields: Record<string, ShapeValue> };
     assert.equal(w.start, 0, wrapped);
     assert.equal(b.start, bareAt, bare);
     assert.equal(w.end, b.end, wrapped);
@@ -420,30 +424,30 @@ check('tsc modifiers: the same declaration with and without wrappers differs onl
     assert.deepEqual(own, words.filter((k) => k === 'AbstractKeyword' || k === 'AsyncKeyword'), bare);
   }
   // The receivers read the attribute; the arms that hand it on depend on it through the copy.
-  const deps = dependencies(loadShape2(typescript, tscExprShape));
+  const deps = dependencies(tscExprShape);
   for (const k of ['Decl.function_', 'Decl.namedClass', 'Stmt.variable', 'Decl.exportDeclaration', 'Decl.declared', 'Decl.prefixed']) assert.ok(deps[k]?.inherited.includes('modifiers'), k);
 });
 
 // A node handed modifiers whose arm does not place them is outside the subset (it would build a
 // node without them): `declare x;` reaches the expression statement with [DeclareKeyword].
 check('tsc modifiers: an arm that does not place the modifiers it is handed is outside the subset', () => {
-  assert.throws(() => run(typescript, tscExprShape, 'declare x;'), (e) => e instanceof Shape2Unmapped && e.rule === 'Stmt' && e.arm === 'expr (handed modifiers)');
+  assert.throws(() => run(typescript, tscExprShape.spec, 'declare x;'), (e) => e instanceof ShapeUnmapped && e.rule === 'Stmt' && e.arm === 'expr (handed modifiers)');
 });
 
 // The loader classifies every inherited equation: RIGHT-DEPENDENT when it reads a leaf to the right
 // of the child it feeds. ESTree has one (the left operand of `=`: the operator follows it); tsc has
 // none, so a parser building tsc's tree as it goes never rewrites a node it has built.
 check('right-dependent inherited equations: ESTree has exactly binaryOp.left, tsc none', () => {
-  assert.deepEqual(loadShape2(javascript, estreeExprShape).rightDependent, [{ rule: 'Expr', arm: 'binaryOp', child: 'left', attr: 'pattern', reads: ['op'] }]);
-  assert.deepEqual(loadShape2(typescript, tscExprShape).rightDependent, []);
+  assert.deepEqual(estreeExprShape.rightDependent, [{ rule: 'Expr', arm: 'binaryOp', child: 'left', attr: 'pattern', reads: ['op'] }]);
+  assert.deepEqual(tscExprShape.rightDependent, []);
   // The spine a fused parser rewrites when `=` arrives: the arms reading `pattern` and the
   // children it is passed on to.
-  assert.deepEqual(spineOf(loadShape2(javascript, estreeExprShape), 'pattern'), {
+  assert.deepEqual(spineOf(estreeExprShape, 'pattern'), {
     reads: ['Expr.array', 'Expr.binaryOp', 'Expr.object', 'Expr.spread', 'Prop.spread'],
     copies: ['Expr.array.element', 'Expr.array.elementRest', 'Expr.object.property', 'Expr.spread.expr', 'Prop.init.value', 'Prop.spread.argument'],
   });
   // A constant equation and a copy are L-attributed by construction.
-  assert.deepEqual(loadShape2(javascript, { ...estreeExprShape, inherited: { ...estreeExprShape.inherited, pattern: { ...estreeExprShape.inherited!.pattern, rules: { ForHead: { of: { left: c(true) } } } } } }).rightDependent, []);
+  assert.deepEqual(defineShape(javascript, { ...estreeExprShape.spec, inherited: { ...estreeExprShape.spec.inherited, pattern: { ...estreeExprShape.spec.inherited!.pattern, rules: { ForHead: { of: { left: c(true) } } } } } }).rightDependent, []);
 });
 
 // The right-dependent equation gives the left operand the value it would have under a context
@@ -451,18 +455,18 @@ check('right-dependent inherited equations: ESTree has exactly binaryOp.left, ts
 // builds the left in its default reading and rewrites it on `=` must produce. And under `==` (the
 // deciding leaf says no) the left is its default reading.
 check('a right-dependent equation equals the left evaluated in the context the leaf decides', () => {
-  const loaded = loadShape2(javascript, estreeExprShape);
-  const shift = (v: S2Value, by: number): S2Value => Array.isArray(v) ? v.map((x) => shift(x, by))
+  const loaded = estreeExprShape;
+  const shift = (v: ShapeValue, by: number): ShapeValue => Array.isArray(v) ? v.map((x) => shift(x, by))
     : v !== null && typeof v === 'object' && 'kind' in v ? { ...v, start: v.start - by, end: v.end - by, fields: Object.fromEntries(Object.entries(v.fields).map(([k, x]) => [k, shift(x, by)])) }
     : v !== null && typeof v === 'object' && 'record' in v ? { record: Object.fromEntries(Object.entries(v.record).map(([k, x]) => [k, shift(x, by)])) } : v;
-  const left = (src: string, at: string): S2Value => {
+  const left = (src: string, at: string): ShapeValue => {
     const cst = parse(javascript, src);
-    const tree = evaluate(loaded, cst, src) as NTree;
-    const found: S2Value[] = [];
+    const tree = evaluateShape(loaded, cst, src) as NTree;
+    const found: ShapeValue[] = [];
     const walk = (x: unknown): void => {
       if (x === null || typeof x !== 'object') return;
       const t = x as { kind?: string; fields?: Record<string, unknown> };
-      if (t.kind && t.fields && at in t.fields && t.kind !== 'Program') found.push(t.fields[at] as S2Value);
+      if (t.kind && t.fields && at in t.fields && t.kind !== 'Program') found.push(t.fields[at] as ShapeValue);
       Object.values(t.fields ?? (x as object)).forEach(walk);
     };
     walk(tree.fields);
@@ -485,20 +489,20 @@ check('the template cooking functions on their witnesses (invalid escapes, CR / 
     const r = tscOracle(src, 'a.ts');
     if (!('tree' in r)) assert.fail(JSON.stringify(r));
     const root = (t: NTree): NTree => ({ kind: t.kind, start: 0, end: 0, fields: Object.fromEntries(Object.entries(t.fields).filter(([k]) => k !== 'sourceType' && k !== 'endOfFileToken')) });
-    assert.deepEqual(compareTrees(root(est), root(run(javascript, estreeExprShape, src) as NTree), 1).divergences, [], `estree ${JSON.stringify(src)}`);
-    assert.deepEqual(compareTrees(root(r.tree), root(run(typescript, tscExprShape, src) as NTree), 1).divergences, [], `tsc ${JSON.stringify(src)}`);
+    assert.deepEqual(compareTrees(root(est), root(run(javascript, estreeExprShape.spec, src) as NTree), 1).divergences, [], `estree ${JSON.stringify(src)}`);
+    assert.deepEqual(compareTrees(root(r.tree), root(run(typescript, tscExprShape.spec, src) as NTree), 1).divergences, [], `tsc ${JSON.stringify(src)}`);
   }
 });
 
 check('calc: dropLastIf drops the final element only when its condition holds; an empty list stays empty', () => {
-  const spec = (cond: boolean, items: Term): Shape2Spec => ({ ...calcSpec, rules: { ...calcSpec.rules, Program: { program: node('P', { l: dropLastIf(c(cond), items) }) } } });
+  const spec = (cond: boolean, items: Term): ShapeSpec => ({ ...calcSpec, rules: { ...calcSpec.rules, Program: { program: node('P', { l: dropLastIf(c(cond), items) }) } } });
   assert.deepEqual(run(calc, spec(true, list(c(1), c(2))), ''), N('P', 0, 0, { l: [1] }));
   assert.deepEqual(run(calc, spec(false, list(c(1), c(2))), ''), N('P', 0, 0, { l: [1, 2] }));
   assert.deepEqual(run(calc, spec(true, child('statement')), ''), N('P', 0, 0, { l: [] }));
 });
 
 check('calc: a span { after } is zero width at the end of its child', () => {
-  const spec: Shape2Spec = { ...calcSpec, rules: { ...calcSpec.rules, Expr: { ...calcSpec.rules.Expr, prefixOp: node('Neg', { at: node('Gap', {}, { after: 'op' }) }) } } };
+  const spec: ShapeSpec = { ...calcSpec, rules: { ...calcSpec.rules, Expr: { ...calcSpec.rules.Expr, prefixOp: node('Neg', { at: node('Gap', {}, { after: 'op' }) }) } } };
   assert.deepEqual(run(calc, spec, '- x;'), N('Program', 0, 4, { body: [N('ExpressionStatement', 0, 4, { expression: N('Neg', 0, 3, { at: N('Gap', 1, 1) }) })] }));
 });
 
@@ -507,7 +511,7 @@ check('calc: a span { after } is zero width at the end of its child', () => {
 check('the matcher is total on real files', () => {
   for (const [g, file] of [[javascript, 'node_modules/acorn/dist/acorn.js'], [typescript, 'src/shape2-eval.ts']] as const) {
     const src = readFileSync(new URL(`../${file}`, import.meta.url), 'utf-8');
-    const loaded = loadShape2(g, { name: 'none', rules: {} });
+    const loaded = defineShape(g, { name: 'none', rules: {} });
     let nodes = 0;
     const walk = (x: CstNode | CstLeaf): void => {
       if ('tokenType' in x) return;
@@ -521,19 +525,20 @@ check('the matcher is total on real files', () => {
 
 // ── Load-time rejections ──
 
-const rejects = (what: string, g: CstGrammar, spec: Shape2Spec, ...needles: string[]): void => check(`rejects: ${what}`, () => {
-  assert.throws(() => loadShape2(g, spec), (e) => {
-    if (!(e instanceof Shape2SpecError)) throw e;
+const rejects = (what: string, g: CstGrammar, spec: ShapeSpec, ...needles: string[]): void => check(`rejects: ${what}`, () => {
+  assert.throws(() => defineShape(g, spec), (e) => {
+    if (!(e instanceof ShapeSpecError)) throw e;
     for (const n of needles) if (!e.message.includes(n)) throw new Error(`message lacks ${JSON.stringify(n)}:\n${e.message}`);
     return true;
   });
 });
-const one = (rules: Shape2Spec['rules'], extra: Partial<Shape2Spec> = {}): Shape2Spec => ({ name: 'bad', rules, ...extra });
-const E = (arms: Record<string, unknown>): Shape2Spec['rules'] => ({ Expr: arms as Shape2Spec['rules'][string] });
+const one = (rules: ShapeSpec['rules'], extra: Partial<ShapeSpec> = {}): ShapeSpec => ({ name: 'bad', rules, ...extra });
+const E = (arms: Record<string, unknown>): ShapeSpec['rules'] => ({ Expr: arms as ShapeSpec['rules'][string] });
 
 rejects('an unknown rule', calc, one({ Exp: {} }), 'rules Exp', 'no rule Exp');
-rejects('an unknown arm', calc, one(E({ numbr: c(1) })), 'rules Expr.numbr', 'no arm numbr');
-rejects('an unknown child', calc, one(E({ number: child('num') })), 'Expr.number', 'no child num');
+rejects('an unknown arm', calc, one(E({ numbr: c(1) })), 'rules Expr.numbr', 'no arm numbr', 'they are: number, name, parenthesized, binaryOp, prefixOp, postfixOp');
+rejects('an unknown arm among many: the nearest names', javascript, one(E({ led_dott: c(1) })), 'no arm led_dott', 'nearest: led_dot');
+rejects('an unknown child', calc, one(E({ number: child('num') })), 'Expr.number', 'no child num', 'the only one is: number');
 rejects('child() of a leaf', calc, one(E({ number: child('number') })), 'number is a leaf');
 rejects('child() of an inline alternation', javascript, one(E({ led_dot: child('alt') })), 'Expr.led_dot', 'inline alternation');
 rejects('text() of a list', calc, one({ Program: { program: text('statement') } }), 'statement is a list');
@@ -550,7 +555,7 @@ rejects('a branch case that is not a branch', javascript, one(E({ led_dot: branc
 rejects('branch() of a node', calc, one(E({ parenthesized: branch('expression', {}) })), 'not an inline alternation');
 rejects('map over a single child', calc, one(E({ parenthesized: map('expression', c(1)) })), 'is not repeated');
 rejects('an unbound variable', calc, one(E({ number: v('x') })), 'var(x) is not bound');
-const forRules = (stmt: Shape2Spec['rules'][string], head: Shape2Spec['rules'][string]): Shape2Spec => one({ Stmt: stmt, ForHead: head });
+const forRules = (stmt: ShapeSpec['rules'][string], head: ShapeSpec['rules'][string]): ShapeSpec => one({ Stmt: stmt, ForHead: head });
 const okHead = { classic: record({ kind: c('classic'), test: absent }), of: record({ kind: c('of'), test: absent }) };
 rejects('get of a field the record-valued rule does not declare', javascript, forRules({ for_: branch('alt', { paren: get('head', 'init') }) }, okHead), 'Stmt.for_', 'get(head, init)', 'ForHead has no field init');
 rejects('get of a child whose rule is not record-valued (a node is not projectable)', javascript, forRules({ while_: get('body', 'test') }, okHead), 'Stmt.while_', 'Stmt is not record-valued');
@@ -604,9 +609,9 @@ rejects('an inherited equation on a leaf', calc, one({}, {
 }), 'only a rule node has inherited attributes');
 
 // A sibling can be read only through a thread, and a thread's next state only from its element.
-const leadWith = (eq: unknown, extra: Record<string, unknown> = {}): Shape2Spec => one({}, {
+const leadWith = (eq: unknown, extra: Record<string, unknown> = {}): ShapeSpec => one({}, {
   synthesized: leadSpec.synthesized,
-  inherited: { lead: { type: 'bool', default: false, rules: { Program: { program: { statement: eq, ...extra } } } } } as Shape2Spec['inherited'],
+  inherited: { lead: { type: 'bool', default: false, rules: { Program: { program: { statement: eq, ...extra } } } } } as ShapeSpec['inherited'],
 });
 rejects('an inherited equation reading a sibling\'s attribute', calc, leadWith(syn('isLet', 'statement')), 'Program.program.statement', '`syn` cannot appear in an inherited equation');
 rejects('a thread over a child that does not repeat', calc, one({}, {
@@ -628,8 +633,8 @@ rejects('a thread beside another equation for the same attribute', calc, leadWit
 rejects('a thread outside an inherited equation', calc, one(E({ number: thread(c(true), 'p', v('p')) as never })), '`thread` is not an operator');
 
 // A nodes attribute: L-attributed by construction, placed and never read, and only a list.
-const nodesWith = (rules: Record<string, Record<string, Record<string, unknown>>>, value: Shape2Spec['rules'] = {}, extra: Record<string, unknown> = {}): Shape2Spec =>
-  one(value, { inherited: { m: { type: 'nodes', rules, ...extra }, i: { type: 'bool', default: false, rules: {} } } as Shape2Spec['inherited'] });
+const nodesWith = (rules: Record<string, Record<string, Record<string, unknown>>>, value: ShapeSpec['rules'] = {}, extra: Record<string, unknown> = {}): ShapeSpec =>
+  one(value, { inherited: { m: { type: 'nodes', rules, ...extra }, i: { type: 'bool', default: false, rules: {} } } as ShapeSpec['inherited'] });
 const tokenAt = (leaf: string): Term => node('T', {}, { from: leaf, to: leaf });
 rejects('a nodes equation reading a leaf to the right of the child it feeds', calc, nodesWith(E({ binaryOp: { left: list(tokenAt('op')) } })), 'Expr.binaryOp.left', 'reads op, which is not to the LEFT of left');
 rejects('a nodes equation reading the child it feeds', calc, nodesWith(E({ binaryOp: { right: list(child('right')) } })), 'Expr.binaryOp.right', 'reads right, which is not to the LEFT');
@@ -643,10 +648,64 @@ rejects('a nodes attribute used as a scalar (a condition)', calc, nodesWith({}, 
 rejects('a variable bound to a nodes attribute used as a value', calc, nodesWith({}, E({ number: let_('x', inh('m'), list(v('x'))) })), 'Expr.number body [0]', 'placed only');
 rejects('present of a variable not bound to a nodes attribute', calc, one(E({ number: let_('x', c(1), present('x')) })), 'present(x)', 'not bound to a nodes attribute');
 rejects('a scalar equation copying a nodes attribute', calc, one({}, {
-  inherited: { m: { type: 'nodes', rules: {} }, i: { type: 'bool', default: false, rules: E({ binaryOp: { right: inh('m') } }) } } as Shape2Spec['inherited'],
+  inherited: { m: { type: 'nodes', rules: {} }, i: { type: 'bool', default: false, rules: E({ binaryOp: { right: inh('m') } }) } } as ShapeSpec['inherited'],
 }), 'Expr.binaryOp.right', 'copies m (nodes) into a bool attribute');
 rejects('a scalar equation given node terms', calc, one({}, {
-  inherited: { m: { type: 'nodes', rules: {} }, i: { type: 'bool', default: false, rules: E({ binaryOp: { right: list(spread(inh('m'))) } }) } } as Shape2Spec['inherited'],
+  inherited: { m: { type: 'nodes', rules: {} }, i: { type: 'bool', default: false, rules: E({ binaryOp: { right: list(spread(inh('m'))) } }) } } as ShapeSpec['inherited'],
 }), 'Expr.binaryOp.right', '`list` cannot appear in an inherited equation');
 
+// ── defineShape's surface: the documented example, coverage, the skeleton ──
+
+check('docs/SHAPE.md holds the defineShape example verbatim, and its value is the one shown', () => {
+  const doc = readFileSync(new URL('../docs/SHAPE.md', import.meta.url), 'utf8');
+  const block = (marker: string): string => {
+    const m = new RegExp(`<!-- ${marker}:start -->\\n\`\`\`\\w*\\n([\\s\\S]*?)\`\`\`\\n<!-- ${marker}:end -->`).exec(doc);
+    return m ? m[1] : assert.fail(`docs/SHAPE.md has no ${marker} block`);
+  };
+  assert.equal(block('shape-example'), readFileSync(new URL('./fixtures/namedcalc-shape.ts', import.meta.url), 'utf8'));
+  // The value block: `evaluateShape(shape, parse(<source>), <source>)` on its first line, the value as JSON after.
+  const [call, ...value] = block('shape-example-value').split('\n');
+  const text = JSON.parse(/parse\((".*")\)/.exec(call)![1]) as string;
+  assert.deepEqual(evaluateShape(calcExample, parse(calc, text), text), JSON.parse(value.join('\n').replace(/^\/\/ =>/, '')));
+});
+
+check('coverage: what a shape leaves out, and whether evaluation from the entry rule reaches it (from the grammar)', () => {
+  const cov = shapeCoverage(estreeExprShape);
+  assert.equal(cov.entry, 'Program');
+  const at = (rule: string, arm: string): [boolean, boolean] => { const a = cov.arms.find((x) => x.rule === rule && x.arm === arm)!; return [a.mapped, a.reached]; };
+  assert.deepEqual(at('Expr', 'binaryOp'), [true, true]);
+  // `switch` is a statement (reached) the ESTree shape does not map yet: an input holding one throws ShapeUnmapped.
+  assert.deepEqual(at('Stmt', 'switch_'), [false, true]);
+  assert.throws(() => run(javascript, estreeExprShape.spec, 'switch (a) {}'), (e) => e instanceof ShapeUnmapped && e.rule === 'Stmt' && e.arm === 'switch_');
+  // Evaluation stops at an unmapped arm: what only it reads is not reached.
+  const reached = (rules: ShapeSpec['rules']): string[] => shapeCoverage(defineShape(calc, { name: 'x', rules })).arms.filter((a) => !a.mapped && a.reached).map((a) => `${a.rule}.${a.arm}`);
+  assert.deepEqual(reached({ Program: { program: child('statement') }, Stmt: { letDeclaration: c(1) } }), ['Stmt.expression']);
+  assert.deepEqual(reached({ Program: { program: c(1) } }), []);
+});
+
+// The skeleton is what a user starts a shape from: every arm's term must load in the calculus
+// (alternations, repetitions of them, template parts: on every grammar the shapes are written
+// for), and the printed module must import and evaluate as it is.
+check('skeleton: every arm of calc / javascript / typescript maps to a term that loads', () => {
+  for (const g of [calc, javascript, typescript]) {
+    const rules: Record<string, Record<string, Term>> = {};
+    for (const a of shapeCoverage(defineShape(g, { name: 'empty', rules: {} })).arms) (rules[a.rule] ??= {})[a.arm] = a.skeleton;
+    defineShape(g, { name: 'skeleton', total: true, rules });
+  }
+});
+{
+  const at = join(tmpdir(), `shape-skeleton-${process.pid}.ts`);
+  writeFileSync(at, shapeSkeleton(calc, new URL('./fixtures/namedcalc.ts', import.meta.url).pathname));
+  try {
+    const sk = (await import(at)).default;
+    check('skeleton: the printed module imports and evaluates', () => {
+      const text = 'let x = (1);';
+      assert.deepEqual(evaluateShape(sk, parse(calc, text), text), N('Program.program', 0, 12, {
+        statement: [N('Stmt.letDeclaration', 0, 12, { binding: 'x', initializer: N('Expr.parenthesized', 8, 11, { expression: N('Expr.number', 9, 10, { number: '1' }) }) })],
+      }));
+    });
+  } finally { rmSync(at); }
+}
+
 console.log(`shape2-eval: ${passed} checks passed`);
+

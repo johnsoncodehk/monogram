@@ -5,6 +5,7 @@
   "exports": {
     "./api": "./src/api.ts",
     "./emit": "./src/emit.ts",
+    "./shape": "./src/shape.ts",
     "./textmate": "./src/gen-tm.ts",
     "./language-configuration": "./src/gen-vscode-config.ts",
     "./grammars/html": "./html.ts"
