@@ -16,7 +16,9 @@
 import { readFileSync } from 'node:fs';
 
 // An optional fourth argument, M's size record (docs/emit-sizes.json), adds the drift of M against
-// it: a size past test/emit-size-record.ts's tolerance is listed (that gate fails on it too).
+// it: a size past test/emit-size-record.ts's tolerance is listed as a regression. This is the one
+// place the record is compared on a landing (it is not a gate of test/check.ts: a gate made every
+// unrelated landing re-record); a landing that moves a size on purpose re-records in its own diff.
 const [resultsFile, sizesA, sizesM, sizeRecord] = process.argv.slice(2);
 if (!resultsFile || !sizesA || !sizesM) throw new Error('usage: pr-summary.ts <results.txt> <emit-sizes-A.json> <emit-sizes-M.json>');
 const kv = (s: string) => Object.fromEntries([...s.matchAll(/(\w+)=(\S+)/g)].map((m) => [m[1], m[2]]));
@@ -100,7 +102,7 @@ for (const f of files) {
 const sa = JSON.parse(readFileSync(sizesA, 'utf8')) as Record<string, Record<string, { bytes: number; sha: string }>>;
 const sm = JSON.parse(readFileSync(sizesM, 'utf8')) as Record<string, Record<string, { bytes: number; sha: string }>>;
 const sizeRows: string[][] = [];
-const RECORD_TOLERANCE = 0.25; // test/emit-size-record.ts's
+const RECORD_TOLERANCE = 0.25; // test/emit-size-record.ts's TOLERANCE
 const rec: Record<string, Record<string, number>> | null = sizeRecord ? (() => { try { return JSON.parse(readFileSync(sizeRecord, 'utf8')); } catch { return {}; } })() : null;
 for (const g of Object.keys(sm)) for (const t of Object.keys(sm[g])) {
   const a = sa[g]?.[t], m = sm[g][t];
@@ -278,7 +280,7 @@ table(['input', 'Ir A', 'Ir M', 'Ir Δ'], files.map((f) => [f, num(ir[`A.lex.${f
 say();
 say('### Emitted parser sizes (`emitParser`, bytes)');
 table(["grammar", "target", "A", "M", "Δ", "output A vs M", ...(rec ? ['record', 'M vs record'] : [])], sizeRows);
-if (rec) say(`The record is docs/emit-sizes.json of M; the gate emit-size-record fails beyond ±${RECORD_TOLERANCE}% of it (re-record with \`node test/emit-size-record.ts --write\`).`);
+if (rec) say(`The record is docs/emit-sizes.json of M; a size beyond ±${RECORD_TOLERANCE}% of it is listed as a regression above (a landing that changes the size on purpose re-records with \`node test/emit-size-record.ts --write\`).`);
 say();
 console.log(out.join('\n'));
 if (notRun.length) { console.error('NOT RUN: ' + notRun.join('; ')); process.exit(1); }
