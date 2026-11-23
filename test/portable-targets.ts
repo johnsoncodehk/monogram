@@ -1110,6 +1110,26 @@ const CASES: Case[] = [
     ],
     reject: ['component C(a) { <p>a // </p> }', 'component C(a) { <p>a /* </p> */ }', 'component C() { <p>a<//* c */b>x</b></p> }'],
   },
+  {
+    // the whole text dialect: and directives (derived openers, heads lexed as code, bodies lexed as
+    // children, continuations after a body; a code block): test/fixtures/textdialect.ts
+    grammar: 'textdialect', path: './fixtures/textdialect.ts',
+    accept: [
+      'component C(a) { <p>@if (a) {y}</p>; <p>@if x</p>; <p>@iffy (a)</p>; <p>a@if (a) {y}</p>; <p>x y@if (a) {z}</p>; }',
+      'component C(a) { <p>@for await (i of a) {y}</p>; <p>@for awaits (i)</p>; <p>@{ const q = 1; <b/> }</p>; }',
+      'component C(a) { <p>@if /* c */ (a) {y}</p>; <p>@if // c\n (a) {y}</p>; <p>a @else {b}</p>; }',
+      'component C(a) { <p>@if ({a}.a) { y }</p>; <p>@if ([{a}][0]) { y }</p>; }',
+      'component C(a) { <p>@if (a) {y} @else {n}</p>; <p>@if (a) {y} @else if (a) {m} @else {n}</p>; <p>@if (a) {y} @else x</p>; }',
+      'component C(a) { <p>@if (a) {y} @elsewhere {n}</p>; <p>@if (a) {y} t @else {n}</p>; <p>@else {n}</p>; }',
+      'component C(a) { <p>@for (i of a) {<i>{i}</i>} @empty {none} @try {t} @pending {p} @catch (e) {c} @try {t} @catch (e) {c}</p>; }',
+      'component C(a) { <p>@if (a) { <b>@for (i of a) { {i} // n\n }</b> } @else { /* c */ x }</p>; }',
+      'component C(a) { <p>@{ const q = 1; <b/> } x</p>; <p>x @if (a) { yes <b/> } @else if (a) {m} @else { no } z</p>; }',
+      'component C(a) { <p>@if (a) { <style>.a{}</style><style>{a}</style> } 1 < 2 /* c */ a // d\n</p>; }',
+      'component C(a) { <p>@if (a) {y} @else /* {n}</p>; }',
+    ],
+    reject: ['component C(a) { <p>@if (a) {y</p>; }', 'component C(a) { <p>@if (a) { </q> y }</p>; }', 'component C(a) { <p>a } b</p>; }',
+      'component C(a) { <p>@if (<b/>) {y}</p>; }'],
+  },
 ];
 // The element-region grammars' cases may be run alone: PORTABLE_GRAMMARS=a,b (a development aid;
 // the gate runs every case).
@@ -1473,6 +1493,16 @@ const FRAME_EDIT_DOCS: Record<string, (string | { doc: string; ins: string[] })[
     // the same at a run's start: the text token's failed attempt there is the read's only record
     { doc: 'component C() { <p>/*</p>; const z = 1; }', ins: ['*/', '*', '/', ' ', 'x'] },
     { doc: 'component C(a) {\n  <p k="v">1 < 2 {a} <b/>x<9 <></></p>;\n  const z = a <b;\n  return <{a}>y</{a}>;\n}', ins: TEXT_INS },
+  ],
+  // directives: edits that make and break an opener (`@if (` / `@iffy`), a head's parens and braces,
+  // a body's closer, a continuation; and an opener / a continuation made by closing a comment
+  // after the element (their tests read the comment to the end of the file)
+  textdialect: [
+    { doc: 'component C(a) {\n  <p>x @if (a) { y <b/> } @else if ({a}.a) {m} @else { n } z@for await (i of a) {{i}} @empty {e}</p>;\n}', ins: ['{', '}', '<', '/', ';', 'x', ' ', '\n', '@', '(', ')', 'e', 'f'] },
+    { doc: 'component C(a) { <p>@if /* (a) {y}</p>; const z = 1; }', ins: ['*/ (a) {y}</p>; ', '*/'] },
+    { doc: 'component C(a) { <p>@if (a) {y} @else /* {n}</p>; const z = 1; }', ins: ['*/ {n}</p>; ', '*/'] },
+    { doc: 'component C(a) {\n  <p>hi // n\n a/* c */b {a}// m\n</p>;\n  const z = 1; /* k */\n}', ins: [...TEXT_INS, '*'] },
+    { doc: 'component S() { <style>{a}</style>; <style> .x{}</style>; <script>a<b</script> }', ins: TEXT_INS },
   ],
 };
 // Edits whose relexed stream is known to differ from a fresh lex, each with its cause; the gate

@@ -447,7 +447,7 @@ function elementLexerRust(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms
   head: string; scans: string; tplFn: string; lexCodes: string[]; lexFirsts: (LexFirstBytes | null)[]; specialArms: string; nonAscii: string;
   tplCloseTest: string; tplOpenPreCheck: string; closeByte: number | null; uniIdentOrPanic: string; pavHot: string; lexStacks: string; takeStk: (f: string) => string;
 }): string {
-  const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0;
+  const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0, dirs = !!el.directives;
   const operand = el.entry === 'operand';
   if (operand && !rx) throw new Error('portable: an operand element entry needs the regex context (prevIsValue)');
   const L = tlen(el.tagOpen);
@@ -495,7 +495,7 @@ ${rx ? `        if lid == _LID_LPAREN { let (has_prev2, bp_lid) = self.prev2(); 
 ${inl}    fn refresh(&mut self) {
         let top = self.template_stack.last().copied().unwrap_or(0);
         self.hot = ${sig ? 'self.spec_on || ' : ''}top & 2 != 0;
-${rx ? '        self.value_to = if top & 3 == 2 && top & 12 != 0 { isize::MAX } else { self.el_end_at };\n' : ''}    }
+${rx ? `        self.value_to = if top & 3 == 2 && top & 12 != 0${dirs ? ' && top & 12 != 12' : ''} { isize::MAX } else { self.el_end_at };\n` : ''}    }
 ${sig ? `${inl}    fn spec_begin(&mut self, sp: &mut Spec, pos: usize) {
         sp.save((pos, self.pending_nl, self.kid1, self.lid1, self.lid2, self.el_end_at, self.tag_angle, self.last_close, self.last_bang), &self.paren_head[..], &self.template_stack[..]);
         sp.tok = self.acc.len(); sp.seen = sp.tok; sp.base = self.paren_head.len(); self.spec_on = true; self.hot = true;
@@ -556,7 +556,8 @@ ${spec}`;
   const enter = `            st.template_stack.push(6); st.refresh(); bound = 0; st.emit(pos, pos + ${L}, 0, _LID_EL_OPEN);${raw ? ' st.tag_at.push(st.acc.len() as i64 - 1);' : ''} st.tag_angle = 0; pos += ${L}; continue;\n`;
   const at = (lit: string) => startByteEq('pos', lit);
   // a tagOpen that opens no tag (tagStart) is the ordinary scan's
-  const opensTag = `${at(el.tagOpen)}${el.tagStart ? ` && ${shared.elementFn('tagStart')}(src, (pos + ${L}) as isize)` : ''}`;
+  // (in a directive head, code inside an element frame, a tagOpen opens no element)
+  const opensTag = `${at(el.tagOpen)}${el.tagStart ? ` && ${shared.elementFn('tagStart')}(src, (pos + ${L}) as isize)` : ''}${dirs ? ' && st.template_stack.last().map_or(true, |&t| t & 3 != 2)' : ''}`;
   const entry = !operand ? `        if ${opensTag} {\n${enter}        }\n`
     : !(el.head || sig) ? `        if ${opensTag} && !st.prev_is_value() {\n${enter}        }\n`
     : `        if ${opensTag}${sig ? ' && !st.spec_on && pos as isize >= st.spec_until' : ''} && !st.prev_is_value() {
@@ -579,15 +580,17 @@ ${sig ? '            if op == 2 { st.spec_begin(&mut sp, pos); bound = 0; }\n' :
   const cascade = renderLexByteDispatchRust(p.lexCodes, p.lexFirsts, '        ', p.specialArms, p.nonAscii, null, heads);
   const frameStep = `        if let Some(&fr) = st.template_stack.last() { if fr & 3 == 2 {
             let after_eq = st.acc.last().map_or(false, |t| t.lid == _LID_EQ);
-            let (fe, fk, fl, ft, fp, fa, fla) = ${shared.elementFn('frame')}(src, pos as isize, fr as isize, st.tag_angle, after_eq, st.la_end);
+            let (fe, fk, fl, ft, fp, fa, fla) = ${shared.elementFn('frame')}(src, pos as isize, fr as isize, st.tag_angle, after_eq, st.la_end${dirs ? ', st.paren_head.len() as isize' : ''});
             st.la_end = fla;
             if fe >= 0 {
-${elementSkipsText(ir) ? `                // a skipped text token (a comment in text): no token
+${dirs ? `                // a directive opener: its frame (or a code block's hole) is pushed before its token
+                if fe as usize == pos { st.template_stack.push(fp as i64);${raw ? ' if fp & 3 == 2 { st.tag_at.push(-1); }' : ''} st.refresh(); continue; }
+` : ''}${elementSkipsText(ir) ? `                // a skipped text token (a comment in text): no token
                 if fk < 0 { if _lx_has_line_term(&b[pos..fe as usize]) { st.pending_nl = true; } pos = fe as usize; continue; }
 ` : ''}                st.emit(pos, fe as usize, fk as u16, fl as u16);
 ${raw ? `                // each element frame's current tag: the index of its tagOpen token (the name is the next)
                 if fl as u16 == _LID_EL_OPEN { let at = st.acc.len() as i64 - 1; if fp == 6 { st.tag_at.push(at); } else if (fr >> 2) & 3 == 0 { *st.tag_at.last_mut().unwrap() = at; } }
-` : ''}                if ft < 0 { st.template_stack.pop();${raw ? ' st.tag_at.pop();' : ''} st.el_end_at = st.acc.len() as isize; } else { *st.template_stack.last_mut().unwrap() = ft as i64; }
+${dirs ? '                if fp == 10 { st.tag_at.push(-1); }\n' : ''}` : ''}                if ft < 0 { st.template_stack.pop();${raw ? ' st.tag_at.pop();' : ''}${dirs ? ' if ft == -1 { st.el_end_at = st.acc.len() as isize; }' : ' st.el_end_at = st.acc.len() as isize;'} } else { *st.template_stack.last_mut().unwrap() = ft as i64; }
                 if fp != 0 { st.template_stack.push(fp as i64); }
 ${raw ? `                // an open tag ended: a raw-text name gives its body to a raw frame (kind 3), lexed next
                 if fl as u16 == _LID_EL_CLOSE && (fr >> 2) & 3 == 1 && st.tag_angle == 0 {
