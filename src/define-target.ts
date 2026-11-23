@@ -1,14 +1,14 @@
-// `defineTarget`: the one entry point each portable target module calls to register itself.
+// `defineParserTarget`: the one entry point each portable target module calls to register itself.
 // A target supplies its name, its `Lowering` (how the
 // shared algorithm IR is spelled, stored, owned and sized in that language) and its own parser
 // emitter; it receives the shared algorithm families already printed with that lowering, so a
 // target never authors or re-decides those algorithms. A target that embeds no shared algorithm
 // may omit the lowering; asking it for one is then an error.
 import type { Lowering } from './algo-ir.ts';
-import type { EmitOptions, Target } from './emit.ts';
+import type { EmitOptions, Target } from './target.ts';
 import { type LexTok, type ParserIR, buildArenaIdPlan, buildLexIdPlan, recoveryTables } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
-import { EL_FRAME_FN, EL_OPENS_FN, EL_RAW_FN, EL_REACH_FN, EL_TAG_START_FN, TPL_SPAN, UNI_CLASS, emitLexScan, emitScanInline, scannedTokens, scannerName, templateLiterals, tokenLiterals } from './lex-family.ts';
+import { EL_FRAME_FN, EL_OPENS_FN, EL_RAW_FN, EL_REACH_FN, EL_TAG_START_FN, TPL_SPAN, UNI_CLASS, UNI_IDENT, emitLexScan, hasUniPrefix, emitScanInline, scannedTokens, scannerName, templateLiterals, tokenLiterals } from './lex-family.ts';
 import { emitRelexFamily } from './relex-family.ts';
 import { emitReuseFamily } from './reuse-family.ts';
 import { emitRecoveryFamily } from './recovery-family.ts';
@@ -40,6 +40,10 @@ export interface SharedAlgorithms {
   // The name the target prints the identifier escape check's Unicode identifier class under
   // (lex-family.ts), `(cp) -> int`.
   uniClass(): string;
+  // The name it prints the Unicode IdentifierName scanner under (lex-family.ts UNI_IDENT),
+  // `(s, p) -> int`: the end, or -1; null when the scanners do not call it (no identifier-like
+  // token has a prefix), so the target prints none.
+  uniIdent(ir: ParserIR): string | null;
   // The printed names of an element region's routines (lex-family.ts elementFns): the frame
   // step, the type-parameter vetoes, the read end of a signature's decision, the raw body, and
   // whether a tagOpen opens a tag (tagStart).
@@ -61,30 +65,30 @@ export interface PortableTarget extends Target {
 
 const registry = new Map<string, PortableTarget>();
 
-export function defineTarget(def: TargetDefinition): PortableTarget {
-  if (registry.has(def.name)) throw new Error(`defineTarget: target ${def.name} is already registered`);
+export function defineParserTarget(def: TargetDefinition): PortableTarget {
+  if (registry.has(def.name)) throw new Error(`defineParserTarget: target ${def.name} is already registered`);
   const lowering = (): Lowering => {
-    if (!def.lowering) throw new Error(`defineTarget: target ${def.name} supplies no Lowering for shared algorithms`);
+    if (!def.lowering) throw new Error(`defineParserTarget: target ${def.name} supplies no Lowering for shared algorithms`);
     return def.lowering;
   };
   const shared: SharedAlgorithms = {
     relexFamily: (ir) => {
-      if (!lowering().relex) throw new Error(`defineTarget: target ${def.name} supplies no token-stream Lowering for the relex family`);
+      if (!lowering().relex) throw new Error(`defineParserTarget: target ${def.name} supplies no token-stream Lowering for the relex family`);
       return emitRelexFamily(ir, lowering());
     },
     reuseFamily: (ir) => {
-      if (!lowering().record) throw new Error(`defineTarget: target ${def.name} supplies no record Lowering for the reuse family`);
+      if (!lowering().record) throw new Error(`defineParserTarget: target ${def.name} supplies no record Lowering for the reuse family`);
       return emitReuseFamily(ir, lowering());
     },
     recoveryFamily: (ir, methods) => {
-      if (!lowering().record || !lowering().relex) throw new Error(`defineTarget: target ${def.name} supplies no record and token-stream Lowering for the recovery family`);
+      if (!lowering().record || !lowering().relex) throw new Error(`defineParserTarget: target ${def.name} supplies no record and token-stream Lowering for the recovery family`);
       const ids = buildLexIdPlan(ir);
       return emitRecoveryFamily(lowering(), recoveryTables(ir, ids, buildArenaIdPlan(ir, ids)).data, methods);
     },
     lexScan: (ir) => emitLexScan(ir, lowering()),
     scannedTokens,
     scanner: (token) => {
-      if (lowering().spliceInline) throw new Error(`defineTarget: target ${def.name} splices scanners; use scanInline`);
+      if (lowering().spliceInline) throw new Error(`defineParserTarget: target ${def.name} splices scanners; use scanInline`);
       return lowering().ident(scannerName(token));
     },
     scanInline: (ir, token, at) => emitScanInline(ir, lowering(), token, at),
@@ -92,6 +96,7 @@ export function defineTarget(def: TargetDefinition): PortableTarget {
     templateLiterals,
     tplSpan: () => lowering().ident(TPL_SPAN),
     uniClass: () => lowering().ident(UNI_CLASS),
+    uniIdent: (ir) => (hasUniPrefix(ir) ? lowering().ident(UNI_IDENT) : null),
     elementFn: (which) => lowering().ident({ frame: EL_FRAME_FN, opens: EL_OPENS_FN, reach: EL_REACH_FN, raw: EL_RAW_FN, tagStart: EL_TAG_START_FN }[which]),
   };
   const target: PortableTarget = {

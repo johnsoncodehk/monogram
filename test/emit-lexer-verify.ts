@@ -14,7 +14,8 @@
 //   node test/emit-lexer-verify.ts
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { compileTokenizer, type LexSpec, type Token } from '../src/emit-lexer.ts';
-import { emitParser, jsTarget } from '../src/emit.ts';
+import { emitParser } from '../src/target.ts';
+import { jsTarget } from '../src/emit-parser.ts';
 import { gtComposites } from '../src/grammar-utils.ts';
 import { scratchDir } from './scratch.ts';
 
