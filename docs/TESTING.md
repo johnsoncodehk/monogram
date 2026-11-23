@@ -36,6 +36,42 @@ are pinned in `test/test262-record.txt` and the scoreboard in the generated `doc
 
 A gate is binary and authoritative: if `npm run check` is green, every guaranteed property holds.
 
+### The inner loop — `node test/check.ts --changed [<base>]`
+
+What an agent or a developer runs while working: only the gates whose inputs changed since `<base>`
+(default `origin/master`; committed, staged, unstaged and untracked changes all count), and only the
+gates not of tier `ci`. A gate's inputs are DERIVED from its source by `test/gate-deps.ts` (its module
+graph and every repository path a string literal in it names; a template's holes match any text),
+plus the `reads` its entry in `test/check.ts` declares; a change to `test/check.ts`, `package.json`,
+the lockfile or `tsconfig.json` runs every gate. It prints each skipped gate and why. It GUARANTEES
+that no skipped gate of the inner tier could have seen the change: CI runs every gate with
+`CHECK_TRACE_DEPS=1`, which traces the files each gate opens and fails when one is not among its
+derived inputs. It does NOT run the `ci` tier (whole-corpus crosses and gates of more than about ten
+seconds: the portable-targets corpus / edits / recovery classes, test262, tm-mutation, look-extent,
+…): those run in CI on every `land/**` push and on master, and `--changed --all` runs them too. It
+assumes the generated artifacts are current (`npm run gen`). A test-only or docs change takes
+seconds; a grammar or generator change runs most of the inner tier (see the commit message of the
+landing that introduced it for measured times).
+
+### Before adding a gate
+
+Name the real failure it would catch that no existing gate catches. Prefer widening the inputs of an
+existing check (a new row, a new corpus, a new grammar) to adding a gate; a number pinned with no
+decision attached to it is a report, not a gate.
+
+### The portable-targets gates
+
+`emit-parity/portable-targets/*` prove the portable TypeScript, Go and Rust parsers ≡ the interpreter.
+`test/portable-harness.ts` holds what the classes share (the runners, emission, the Go / Rust BUILD
+CACHE: an entry per sha-256 of the emitted sources, the build command and the toolchain, under
+`<tmpdir>/monogram-build-cache/`, built once by whichever process takes its lock, swept when unused
+for 24 h or above 3 GB); `test/portable-cases.ts` the grammars and their hand-written lists; one file
+per class: `portable-lists.ts` (lists, jsTarget on them, tok-spans, Unicode, default prefix, empty
+entry), `portable-edits.ts` (one-character edits, edit sessions), `portable-corpus.ts` (the parity
+corpus: verdict, skeleton, tokens, literal ids, Doc; sharded by grammar in `check.ts`),
+`portable-recovery.ts` (total parsing). `--grammars=a,b` (or `PORTABLE_GRAMMARS`) and
+`PORTABLE_TARGETS=go,rust` narrow a run.
+
 ## 2. Metrics — `npm run coverage:table`
 
 The COMPARATIVE numbers (Monogram **vs the official** grammar / parser) the README publishes:
