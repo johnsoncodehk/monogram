@@ -1906,6 +1906,109 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
   }
 }
 
+// ── The wide class: the pinned external corpora, WHOLE, every runner ≡ the interpreter ──
+// The parity corpus holds what the grammar derives and what someone wrote down; the interpreter is
+// also checked on two external corpora (conformance/js-corpus and conformance/test262), and the
+// portable parsers must give every file of them the interpreter's verdict and, when both accept,
+// its rule skeleton (the tree of rule nodes; the leaves are the lexer's, whose token streams the
+// parity corpus compares). Each file is one input, its text whole:
+//   - the tsc conformance corpus (/tmp/ts-repo/tests/cases/conformance, every .ts file), for the
+//     TypeScript grammar and, read as JavaScript like conformance/js-corpus does, the JavaScript one;
+//   - test262 (/tmp/test262 at test/test262.sha, every test under test/language and
+//     test/annexB/language but the _FIXTURE modules), for the JavaScript grammar, valid and
+//     invalid tests alike (the verdict to match is the interpreter's, not the front matter's).
+// An absent corpus fails the class (it never passes unrun). The inputs go in chunks so no batch's
+// CST output grows with the corpus.
+const TS_CONFORMANCE = '/tmp/ts-repo/tests/cases/conformance';
+const TEST262 = '/tmp/test262';
+const TEST262_DIRS = ['test/language', 'test/annexB/language'];
+const WIDE_CHUNK = 400;
+// PORTABLE_WIDE_DUMP=<file>: append every unlisted disagreement of the wide class (grammar, target, what, file).
+const WIDE_DUMP = process.env.PORTABLE_WIDE_DUMP;
+// PORTABLE_WIDE=0: skip the wide class (a local run that needs only the rest; CI never sets it).
+const WIDE_ON = process.env.PORTABLE_WIDE !== '0';
+// EXPECTED-FAIL, still run and counted: files of the wide corpora on which the portable parsers'
+// verdict or tree is not the interpreter's, by grammar, each with its cause (owed as its own fix).
+// A listed file that agrees again fails the class until it is removed, and so does any unlisted one.
+type WideFail = { file: string; reason: string; targets?: string[] };
+const REBIND = 'the interpreter\'s mixfix operand re-bind (gen-parser.ts matchMixfixLed) has no counterpart in the portable engine';
+const CAP_PROPAGATION = 'the interpreter\'s cap propagation (an operator whose right operand is a capped arrow admits no further led) has no counterpart in the portable binary block';
+const WIDE_EXPECTED_FAIL: Record<string, WideFail[]> = {
+  typescript: [
+    ...['types/conditional/inferTypesWithExtends1.ts', 'types/conditional/inferTypesInvalidExtendsDeclaration.ts',
+      ...[8, 9, 10, 11, 12].map((n) => `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression${n}.ts`)].map((file) => ({ file, reason: REBIND })),
+    { file: 'parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression2.ts', reason: CAP_PROPAGATION },
+  ],
+  javascript: [
+    { file: 'parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression2.ts', reason: CAP_PROPAGATION },
+  ],
+};
+const walkFiles = (d: string, ext: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap((e) => {
+  const f = `${d}/${e.name}`;
+  return e.isDirectory() ? walkFiles(f, ext) : e.name.endsWith(ext) ? [f] : [];
+});
+function wideCorpora(grammar: string): { name: string; files: string[] }[] | string {
+  if (!existsSync(TS_CONFORMANCE)) return `the tsc conformance corpus is absent at ${TS_CONFORMANCE} (provision it as CI does: .github/workflows/ci.yml, "Clone the pinned TS corpus")`;
+  const out = [{ name: 'tsc conformance', files: walkFiles(TS_CONFORMANCE, '.ts').sort() }];
+  if (grammar === 'javascript') {
+    if (!TEST262_DIRS.every((d) => existsSync(`${TEST262}/${d}`))) return `the test262 corpus is absent at ${TEST262} (CI: "Clone the pinned test262 corpus")`;
+    out.push({ name: 'test262', files: TEST262_DIRS.flatMap((d) => walkFiles(`${TEST262}/${d}`, '.js')).filter((f) => !f.endsWith('_FIXTURE.js')).sort() });
+  }
+  return out;
+}
+const wideName = (f: string) => (f.startsWith(TS_CONFORMANCE + '/') ? f.slice(TS_CONFORMANCE.length + 1) : f.slice(TEST262.length + 1));
+function wideClass(c: Case, runners: Runner[], oracle: { parse: (src: string) => unknown }): void {
+  const corpora = wideCorpora(c.grammar);
+  if (typeof corpora === 'string') { console.log(`  ${c.grammar}: wide corpora NOT RUN: ${corpora}`); failures++; return; }
+  const known = WIDE_EXPECTED_FAIL[c.grammar] ?? [];
+  for (const { name, files } of corpora) {
+    const t0 = Date.now();
+    const bad = new Map<string, string[]>(runners.map((r) => [r.label, []]));
+    const hits = new Map<string, Set<string>>(runners.map((r) => [r.label, new Set()]));
+    const ms = new Map<string, number>(runners.map((r) => [r.label, 0]));
+    let oracleMs = 0, accepted = 0;
+    for (let i = 0; i < files.length; i += WIDE_CHUNK) {
+      const chunk = files.slice(i, i + WIDE_CHUNK);
+      const srcs = chunk.map((f) => readFileSync(f, 'utf8'));
+      const o0 = Date.now();
+      const want = srcs.map((src): { ok: boolean; skel?: string; stack?: boolean } => {
+        try { return { ok: true, skel: canon(skelObj(JSON.parse(canon(oracle.parse(src))))) }; } catch (e) { return { ok: false, stack: errText(e).includes('Maximum call stack') }; }
+      });
+      oracleMs += Date.now() - o0;
+      accepted += want.filter((w) => w.ok).length;
+      for (const r of runners) {
+        const r0 = Date.now();
+        const got = r.batch(srcs);
+        ms.set(r.label, ms.get(r.label)! + Date.now() - r0);
+        chunk.forEach((f, j) => {
+          const w = want[j]!, g = got[j]!;
+          if (w.stack) return;   // the interpreter's own stack, not a verdict
+          let what = '';
+          if (w.ok !== g.ok) what = `interpreter ${w.ok ? 'accepts' : 'rejects'}, ${r.label} ${g.ok ? 'accepts' : 'rejects'}`;
+          else if (w.ok && g.ok && w.skel !== canon(skeleton(g.cst))) what = 'both accept, rule skeletons differ';
+          if (!what) return;
+          const file = wideName(f);
+          const k = known.find((e) => e.file === file && (!e.targets || e.targets.includes(r.label)));
+          if (k) { hits.get(r.label)!.add(file); return; }
+          bad.get(r.label)!.push(`${what} — ${file}`);
+        });
+      }
+    }
+    console.log(`  ${c.grammar}: wide corpus ${name}: ${files.length} files (${accepted} accepted by the interpreter, ${(oracleMs / 1000).toFixed(1)}s)`);
+    for (const r of runners) {
+      const b = bad.get(r.label)!, h = hits.get(r.label)!;
+      const mine = known.filter((e) => (!e.targets || e.targets.includes(r.label)) && (name === 'tsc conformance') === !e.file.startsWith('test/'));
+      const gone = mine.filter((e) => !h.has(e.file));
+      console.log(`  ${c.grammar}/${r.label}: wide corpus ${name}: ${files.length - b.length - h.size}/${files.length} ≡ interpreter (verdict + rule skeleton), ${h.size} expected-fail, ${(ms.get(r.label)! / 1000).toFixed(1)}s`);
+      for (const smp of b.slice(0, 12)) console.log(`      ${smp}`);
+      for (const e of gone) console.log(`      expected-fail agrees now: remove it from WIDE_EXPECTED_FAIL — ${e.file} (${e.reason})`);
+      failures += b.length + gone.length;
+      if (WIDE_DUMP && b.length) writeFileSync(WIDE_DUMP, b.map((x) => `${c.grammar}\t${r.label}\t${x}\n`).join(''), { flag: 'a' });
+    }
+    corpusMs += Date.now() - t0;
+  }
+}
+
 let failures = 0;
 for (const c of CASES) {
   if (ONLY && !ONLY.includes(c.grammar)) continue;
@@ -2353,6 +2456,7 @@ for (const c of CASES) {
     corpusMs += Date.now() - t0;
     corpusInputs += inputs.length;
     if (ECMASCRIPT.has(c.grammar)) recoveryClass(c, grammar, runners, oracleOut, [...inputs.map((i) => i.src), ...c.accept, ...c.reject, ...(c.grammar === 'typescript' ? CURATED_TS : [])], tokenize);
+    if (ECMASCRIPT.has(c.grammar) && WIDE_ON) wideClass(c, runners, oracle);
   }
 }
 console.log(`  parity corpus: ${corpusInputs} inputs over ${CASES.length} grammars, ${(corpusMs / 1000).toFixed(1)}s`);
