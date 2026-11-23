@@ -478,7 +478,7 @@ ${sig ? `${p.goBoolArr('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
   // hot: whether the loop head has work (an element or raw frame on top of the frame stack${sig ? ', or a
   // signature undecided' : ''}), kept by every change of the stack's top${sig ? ' and of the speculation' : ''}; elEndAt: the token
   // count after the token that ended an element (that token is a value).
-  const hotState = `\thot, elEndAt, valueTo := false, -1, -1
+  const hotState = `\thot, elEndAt${rx ? ', valueTo' : ''} := false, -1${rx ? ', -1' : ''}
 \tif elEnded { elEndAt = len(*acc) }
 `;
   // after the speculation's state (it reads specTok), before its rewind (which calls it)
@@ -488,9 +488,9 @@ ${sig ? `${p.goBoolArr('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
 \t\ttop := 0
 \t\tif len(templateStack) > 0 { top = templateStack[len(templateStack)-1] }
 \t\thot = ${sig ? 'specTok >= 0 || ' : ''}top&2 != 0
-\t\tvalueTo = elEndAt
+${rx ? `\t\tvalueTo = elEndAt
 \t\tif top&3 == 2 && top&12 != 0 { valueTo = 1 << 62 }
-\t}
+` : ''}\t}
 \trefresh()
 ${sig ? '\tlimit0 := limit\n' : ''}`;
   const specState = sig ? `\t// A type-parameter signature being decided: the token index of its tagOpen (-1: none), the

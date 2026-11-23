@@ -297,12 +297,11 @@ ${sig ? `${tsFlagTable('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
   // signature undecided' : ''}), kept by every change of the stack's top${sig ? ' and of the speculation' : ''}; elEndAt: the token
   // count after the token that ended an element (-1: none); valueTo: to which token count the
   // previous token is a value (in a tag: every; else the token that ended an element, while last).
-  const hotState = `  let hot = false, elEndAt = elEnded ? toks.length : -1, valueTo = -1;
+  const hotState = `  let hot = false, elEndAt = elEnded ? toks.length : -1${rx ? ', valueTo = -1' : ''};
   function refresh(): void {
     const top = templateStack.length > 0 ? templateStack[templateStack.length - 1] : 0;
     hot = ${sig ? 'specTok >= 0 || ' : ''}(top & 2) !== 0;
-    valueTo = (top & 3) === 2 && (top & 12) !== 0 ? 0x3fffffff : elEndAt;
-  }
+${rx ? '    valueTo = (top & 3) === 2 && (top & 12) !== 0 ? 0x3fffffff : elEndAt;\n' : ''}  }
 `;
   const emitFn = `  function emit(off: number, end: number, kid: number, lid: number): void {
 ${rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]; parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid]); }

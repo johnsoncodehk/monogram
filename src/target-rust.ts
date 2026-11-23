@@ -475,8 +475,7 @@ ${rx ? `        if lid == _LID_LPAREN { let (has_prev2, bp_lid) = self.prev2(); 
 ${inl}    fn refresh(&mut self) {
         let top = self.template_stack.last().copied().unwrap_or(0);
         self.hot = ${sig ? 'self.spec_on || ' : ''}top & 2 != 0;
-        self.value_to = if top & 3 == 2 && top & 12 != 0 { isize::MAX } else { self.el_end_at };
-    }
+${rx ? '        self.value_to = if top & 3 == 2 && top & 12 != 0 { isize::MAX } else { self.el_end_at };\n' : ''}    }
 ${sig ? `${inl}    fn spec_begin(&mut self, sp: &mut Spec, pos: usize) {
         sp.save((pos, self.pending_nl, self.kid1, self.lid1, self.lid2, self.el_end_at, self.tag_angle, self.last_close, self.last_bang), &self.paren_head[..], &self.template_stack[..]);
         sp.tok = self.acc.len(); sp.seen = sp.tok; sp.base = self.paren_head.len(); self.spec_on = true; self.hot = true;
@@ -530,7 +529,7 @@ impl Spec {
     }
 }
 ` : '';
-  const struct = `struct ElScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, ${rxFields}template_stack: Vec<i64>, hot: bool, el_end_at: isize, value_to: isize, tag_angle: isize, la_end: isize, spec_until: isize, ${raw ? 'tag_at: Vec<i64>, ' : ''}${specFields}}
+  const struct = `struct ElScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, ${rxFields}template_stack: Vec<i64>, hot: bool, el_end_at: isize, ${rx ? 'value_to: isize, ' : ''}tag_angle: isize, la_end: isize, spec_until: isize, ${raw ? 'tag_at: Vec<i64>, ' : ''}${specFields}}
 impl<'a> ElScan<'a> {
 ${methods}}
 ${spec}`;
@@ -611,7 +610,7 @@ ${loopBody}
     let base = acc.len();
     let mut err: Option<LexErr> = None;
     // el_end_at: the token count after the token that ended an element (-1: none)
-    let mut st = ElScan { acc, pending_nl, ${rxInit}template_stack, hot: false, el_end_at: if el_ended { base as isize } else { -1 }, value_to: -1, tag_angle, la_end, spec_until, ${raw ? 'tag_at, ' : ''}${specInit}};
+    let mut st = ElScan { acc, pending_nl, ${rxInit}template_stack, hot: false, el_end_at: if el_ended { base as isize } else { -1 }, ${rx ? 'value_to: -1, ' : ''}tag_angle, la_end, spec_until, ${raw ? 'tag_at, ' : ''}${specInit}};
     st.refresh();
 ${sig ? '    let mut sp = Spec { tok: 0, seen: 0, base: 0, closed: false, closed_at: 0, done: false, then: false, off: 0, end: 0, at: 0, has_at: false, keep: false, sv: (0, false, 0, 0, 0, 0, 0, false, false), sv_paren: Vec::new(), sv_stack: Vec::new() };\n' : ''}${loop}
     ${rxOut}(pos, st.pending_nl, ${rxRet}st.template_stack, st.acc.len() as isize == st.el_end_at, st.tag_angle, st.la_end, st.spec_until${raw ? ', st.tag_at' : ''}, err)
