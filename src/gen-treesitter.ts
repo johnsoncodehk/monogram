@@ -3776,6 +3776,19 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   const has = (set: Iterable<string>, kindLit: string) => { const s = new Set(set); return s.has(`'${kindLit}`) || (!!word && isWordLit(kindLit) && !reservedWords.has(kindLit) && s.has(word)); };
   const mask = (set: Iterable<string>) => { const s = new Set(set); let m = 0n; kindTokens.forEach((n, i) => { if (s.has(n)) m |= 1n << BigInt(i); }); return `0x${m.toString(16)}ull`; };
   const boolRow = (f: (l: string) => boolean) => `{ ${literals.map(l => (f(l) ? 1 : 0)).join(', ')} }`;
+  // A literal that a non-literal token can also begin (`/` a regex, `.` a number): which reading the
+  // lexer takes depends on the state after the zero-width token, so either reading in AFTER lets the
+  // token hold (`return /re/`: the division `/` follows no `return`, the regex does). The word token is
+  // not one of them: a keyword is read as a name by the AFTER_EXACT / AFTER passes.
+  const firstOfKind = kindTokens.map(n => n === word ? [] as CSet : tokenPatternInfo(grammar.tokens.find(t => t.name === n)!.pattern).first);
+  const litTokens = literals.map(l => {
+    if (isWordLit(l)) return 0n;
+    const c = l.codePointAt(0)!;
+    let m = 0n;
+    firstOfKind.forEach((set, i) => { if (set.some(([lo, hi]) => c >= lo && c <= hi)) m |= 1n << BigInt(i); });
+    return m;
+  });
+  H.push(`static const uint64_t ZW_LIT_TOKENS[] = { ${litTokens.map(m => `0x${m.toString(16)}ull`).join(', ')} };`);
   H.push('typedef struct { int symbol; bool line_end; bool line_break; bool after_end; uint64_t after_tok, cont_tok, ahead_tok; const bool *after_exact, *after_lit, *cont_lit, *ahead_lit; } ZeroWidth;');
   tokens.forEach(t => {
     const S = t.snake.toUpperCase();
@@ -3816,7 +3829,7 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   H.push('    bool ahead = !end && (lit >= 0 ? z->ahead_lit[lit] : (cand & z->ahead_tok) != 0);');
   H.push('    bool holds = z->line_end ? ((z->line_break && (line_break || end)) || ahead) : (!line_break && !end);');
   H.push('    if (!holds) continue;');
-  H.push('    bool after = end ? z->after_end : lit >= 0 ? (pass == 0 ? z->after_exact[lit] : z->after_lit[lit]) : (cand & z->after_tok) != 0;');
+  H.push('    bool after = end ? z->after_end : lit >= 0 ? (pass == 0 ? z->after_exact[lit] : z->after_lit[lit]) || (ZW_LIT_TOKENS[lit] & z->after_tok) != 0 : (cand & z->after_tok) != 0;');
   H.push('    bool cont = !end && (lit >= 0 ? z->cont_lit[lit] : (cand & z->cont_tok) != 0);');
   H.push('    if (after && !cont) { lexer->result_symbol = z->symbol; return 1; }');
   H.push('  }');
