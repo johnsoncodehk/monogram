@@ -85,6 +85,21 @@ const FOR_HEADS = {
     'async function f() { for await (let.x of y); }', 'async function f() { for await (let of y); }',
   ],
 };
+// A repetition whose element is one Pratt call and whose next step refuses every token a dirty
+// failure of the call stops at (emit-portable.ts, `doomed`: an argument list `(` sep(Expr) `)`)
+// takes no mark per element: an element that fails after its NUD matched (an operator that needs a
+// target) leaves the list to fail at `)`, and the call's frame undoes it. Each verdict is the
+// productions'; the rejected ones are each such a failure, in one argument or a later one.
+const CALL_ARGS = {
+  accept: [
+    'f();', 'f(a,);', 'f(a, b,);', 'f(a = b, c += d);', 'f(a)(b)(c, d);', 'new C(a, ...b);', 'f(...a, b);',
+    'f(a ? b : c, d => e, [f] = g);', 'f((a + b));', 'f(a)[b] = c;',
+  ],
+  reject: [
+    'f(a + b = c);', 'f(a, b + c = d);', 'f(a++ = b);', 'f(a, b * c = d);', 'f(-a ** b);', 'new C(a + b = c);',
+    'f(a, b, c + d += e);', 'f(a)(b + c = d);', 'f(a, b++ ++);', 'f(a + b = c,);',
+  ],
+};
 // An IdentifierReference is no reserved word: a reserved word with no expression form of its own
 // is no expression, in both grammars (`notReservedExpr`).
 const RESERVED_EXPRS = {
@@ -577,7 +592,7 @@ const CASES: Case[] = [
       'for (a in b) { d = c in e; }',
       'new a.b();', '((((x))));',
       'for (a = x + y in b) c;',
-      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...EXPORT_DECLS.accept,
+      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...CALL_ARGS.accept, ...EXPORT_DECLS.accept,
       ...CTX_CASES.javascript.accept, ...JS_DECORATORS.accept, ...TEMPLATE_STEPS.js.accept, ...JS_MODULES.accept, ...TRY_STATEMENTS.accept,
       // An assignment / update operand needs only a LeftHandSideExpression's shape; target validity is a consumer's.
       '-x++;', '(a) = 1;', 'a = b = c;', '1 = 2;', '1++;', '++1;', 'f() = 1;', 'f()++;', '++f();', 'this = 1;',
@@ -660,7 +675,7 @@ const CASES: Case[] = [
       'x\n++;', 'x\n--', '(x\n++);', 'a = [x\n++];', 'x\n++\n-y;', 'x\n++\ny++;', 'x\n++ ++y;', 'class C { p = x\n++ }', 'class C { p = x\n++\ny }',
       'for (a = (x in b)) c;',
       'for (a = b ? x in c : y in d) e;',
-      ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject,
+      ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...CALL_ARGS.reject, ...EXPORT_DECLS.reject,
       ...CTX_CASES.javascript.reject, ...TEMPLATE_STEPS.js.reject,
       // An assignment / update operand (prefix ++/-- included) without a LeftHandSideExpression's shape has no parse.
       'a + b = c;', 'a++ = 1;', '-a = 1;', '++ -x;', '++x++;', '++ ++x;',
@@ -686,7 +701,7 @@ const CASES: Case[] = [
     // agnostic emitter (types, generics, interfaces, enums, assertions, variance). ASCII.
     grammar: 'typescript', path: '../typescript.ts',
     accept: [
-      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...EXPORT_DECLS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
+      ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...CALL_ARGS.accept, ...EXPORT_DECLS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);',
       'export default /re/.test(x);', 'export default /=/;', 'switch (a) { default: /re/.test(x); }',
       // ... but as a member name a keyword is a value and a `/` after it divides, as after a private name
       // after a template's tail a `/` divides, as after a template with no substitution
@@ -877,7 +892,7 @@ const CASES: Case[] = [
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
       'type T = | | A;', 'type T = A | | B;', 'type T = A & | B;', 'type T = & & A;', 'type T = & | A;', 'f<| | A>();', 'let x: [| | A];',
-      'const f = <>() => 1;', 'const f = async <>(a) => 1;', 'const f = <in T>() => 1;', 'f(<in out T>(a) => a);', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, ...TS_DECORATORS.reject, ...TEMPLATE_STEPS.ts.reject, ...TS_MEMBER_DECORATORS.reject, ...TS_MODULES.reject, ...TRY_STATEMENTS.reject, ...TS_TRY.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
+      'const f = <>() => 1;', 'const f = async <>(a) => 1;', 'const f = <in T>() => 1;', 'f(<in out T>(a) => a);', ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...CALL_ARGS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, ...TS_DECORATORS.reject, ...TEMPLATE_STEPS.ts.reject, ...TS_MEMBER_DECORATORS.reject, ...TS_MODULES.reject, ...TRY_STATEMENTS.reject, ...TS_TRY.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '{ b(); }.x;', '{ static x }.y;', '{ static x }', '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;',
       'let[0] = 1;', '(async\nfunction f() {});',
@@ -1022,7 +1037,10 @@ const CASES: Case[] = [
       "x = <a>if (x) {'{'}</a>;", 'x = <a>return</a>;', 'x = <a>function</a>;', 'x = <a>;</a>;', 'x = <a>class</a>;',
       'x = <a>{b}if{c}</a>;', 'x = <a><b>{c};</b>)</a>;', 'x = <a>as</a> as T;', 'x = <a>,</a>, 1;',
     ],
-    reject: ['x = <a>=></a>;', 'x = <a x=<b/> />;', 'x = <a>}</a>;', 'x = <a>></a>;', 'x = <b>{x}</b>\n/re/.test(y);', 'x = <a/>\n<b/>;', 'x = <a>;', 'x = </a>;'],
+    reject: ['x = <a>=></a>;', 'x = <a x=<b/> />;', 'x = <a>}</a>;', 'x = <a>></a>;', 'x = <b>{x}</b>\n/re/.test(y);', 'x = <a/>\n<b/>;', 'x = <a>;', 'x = </a>;',
+      // lexer errors: at the last character, inside a template hole inside an element hole, inside
+      // an undecided type-parameter signature, and inside one nested in another (the outer's verdict)
+      'x = <a/>;#', 'x = <a>{`${<b>{`${"}`}</b>}`}</a>;', 'f = <T,>(x: #', 'f = <T,>(x: <U,>(#', 'f = <T,>(x: <U,>(y: `${#'],
   },
   {
     grammar: 'javascriptreact', path: '../javascriptreact.ts',
@@ -1035,7 +1053,8 @@ const CASES: Case[] = [
       "x = <a>if (x) {'{'}</a>;", 'x = <a>return</a>;', 'x = <a>function</a>;', 'x = <a>;</a>;', 'x = <a>class</a>;',
       'x = <a>{b}if{c}</a>;', 'x = <a><b>{c};</b>)</a>;', 'x = <a>,</a>, 1;',
     ],
-    reject: ['x = <a>}</a>;', 'x = <a>;', 'x = </a>;', 'f = <T,>(x) => x;', 'x = <a>=></a>;', 'x = <a>as</a> as T;'],
+    reject: ['x = <a>}</a>;', 'x = <a>;', 'x = </a>;', 'f = <T,>(x) => x;', 'x = <a>=></a>;', 'x = <a>as</a> as T;',
+      'x = <a/>;#', 'x = <a>{`${<b>{`${"}`}</b>}`}</a>;', 'x = <a b={`${#`}/>;'],
   },
   {
     // code children, and the derived entry: every `<` in code opens an element
@@ -1321,7 +1340,7 @@ const envMultiBatches: EditBatch[] = [
   [[envReuseInit.indexOf('K5=') + 'K5='.length, envReuseInit.indexOf('K5=') + 'K5='.length + 1, '7']],
   [[envReuseLastEq, envReuseLastEq + 1, '8']],
 ];
-// Shape-B adopted Seg.Ext must shift with tokDelta: insert-front (adopt suffix) then poke a later
+// Shape-B adopted entry ext must shift with tokDelta: insert-front (adopt suffix) then poke a later
 // value whose align.prefix sits in the stale-ext..shifted-ext window — unshifted Ext over-reuses.
 const envSegExtInit = Array.from({ length: 8 }, (_, i) => `K${i}=${i}`).join('\n');
 const envSegExtIns = 'Z=9\n';
@@ -1466,7 +1485,7 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: 'A=1\n\nB=2', batches: [[[4, 4, '\n']]], minReused: 1 }, // blank-line expand
     { init: envFlowInit, batches: [[[envFlowEdit, envFlowEdit + 1, 'x']]], minReused: 2 }, // mid flow stmt; sides reused
     { init: envReuseInit, batches: envMultiBatches, longSession: true, minReused: 1 },
-    // Go adopted Seg.Ext + tokDelta (pre-fix: reused 9 from stale keep-prefix watermarks).
+    // Go adopted entry Ext + tokDelta (pre-fix: reused 9 from stale keep-prefix watermarks).
     { init: envSegExtInit, batches: [[[0, 0, envSegExtIns]], [[envSegExtPoke, envSegExtPoke + 1, '9']]], reused: 8 },
     // Dropping a flow `(`: later tokens change flowDepth, so equal-text old tokens are not adopted.
     { init: 'A=fn(1,\n2)\nB=3\nC=4', batches: [[[4, 5, '']]] },
@@ -1586,6 +1605,13 @@ const UNICODE_REJECT: { src: string; lexMsg: string | null }[] = [
   { src: "'abc", lexMsg: "Unexpected character at offset 0: '''" },
   { src: 'const x = `cafe', lexMsg: 'Unterminated template literal at offset 15' },
   { src: 'const x = "abc', lexMsg: 'Unexpected character at offset 10: \'"\'' },
+  // each lexer error kind, and an error at the last character (an error ends the lex)
+  { src: 'x = 1;"', lexMsg: 'Unexpected character at offset 6: \'"\'' },
+  { src: 'a\\u002e = 1;', lexMsg: "Invalid identifier escape at offset 0: 'a\\u002e'" },
+  { src: 'x = a\\u002e', lexMsg: "Invalid identifier escape at offset 4: 'a\\u002e'" },
+  { src: 'x = `a\\xg`;', lexMsg: 'Invalid escape sequence in template at offset 6' },
+  { src: 'x = `${a}` + `\\u{`', lexMsg: 'Invalid escape sequence in template at offset 14' },
+  { src: 'x = `${`${"}`}`', lexMsg: 'Unexpected character at offset 10: \'"\'' },
   // emoji is not ID_Start; ZWSP is not JS \s — all targets must reject (messages differ in
   // encoding of the offending char across targets, so no lexMsg pin)
   { src: 'const \u{1F600} = 1;', lexMsg: null },
@@ -1608,7 +1634,7 @@ const UNICODE_EDITS: { name: string; init: string; batches: EditBatch[]; restore
 /** Primary lexer-error text shared with the generated lexer (emit-lexer.ts). */
 function primaryLexMsg(err?: string): string | null {
   if (!err) return null;
-  const u = err.match(/Unterminated template literal at offset \d+/);
+  const u = err.match(/Unterminated template literal at offset \d+|Invalid escape sequence in template at offset \d+|Invalid identifier escape at offset \d+: '[^']*'/);
   if (u) return u[0];
   const c = err.match(/Unexpected character at offset \d+: '[\s\S]'/);
   return c ? c[0] : null;

@@ -16,6 +16,17 @@
 //   • a COMMITTED choice (emit-portable.ts Commit): at a key the commit switch decides, every
 //     candidate other than the committed one (all of them, where it fails or the key fails the
 //     list) is attempted from the list's start: none may have won.
+// It also checks every MARK THE PLAN ELIDES (Step.clean: a frame over a body that fails clean takes
+// none): wherever such a body fails on a real input, the state a mark protects (position, scratch
+// list, nodes) and the context and suppress sets must be as the body found it:
+//   • a star / opt / sep body marked `clean` (a repetition of one Pratt call the next step dooms may
+//     fail dirty, but then every step that follows it must fail from where the body stopped);
+//   • an ordered / predictive branch marked clean, an rd rule marked clean (its PREDICTIVE / SINGLE
+//     entry), a committed candidate the plan runs without undo (CommitAct.clean);
+//   • a led arm marked `ledClean`: its block puts the position and the scratch list back itself, so
+//     the nodes must be as before.
+// Its mutation proof takes for clean one frame (a branch, a repetition body) that failed dirty on an
+// input: it must be reported.
 // The check runs on the IR, not on a target: guards are IR data, and each target renders a subset
 // of them (Rust leaves body guards out of Pratt arms), so one check bounds all three. Its engine is
 // an interpreter of the ParserIR that follows the portable engine step for step (the rule, Pratt
@@ -41,13 +52,15 @@ type Tok = { kid: number; lid: number; off: number; end: number; nl: boolean };
 type Cst = { rule: string; children: Cst[] } | { tokenType: string; offset: number; end: number };
 // A guard that admitted a literal where what it guards then matched (and won): the gate's own
 // proof that it detects a wrong refusal is to refuse that literal there and see it reported.
-type Found = { body?: { step: Step; lid: number }; cand?: { guard: NonNullable<Guard>; lid: number; pos: number }; commit?: { list: string; lid: number; kid: number; arm: number } };
-type Outcome = { accept: boolean; tree: Cst | null; checked: number; unsound: string[]; found: Found };
+type Found = { body?: { step: Step; lid: number }; cand?: { guard: NonNullable<Guard>; lid: number; pos: number }; commit?: { list: string; lid: number; kid: number; arm: number }; dirty?: { step: Step; i: number } };
+type Outcome = { accept: boolean; tree: Cst | null; checked: number; cleanChecked: number; unsound: string[]; found: Found };
 // The mutation: one body guard (by step) or one candidate guard (by identity, at the one list start
 // `pos` where it won: refused at every token with that literal, a nested element of the same
 // list would also be refused inside the check's own attempt) also refuses a literal,
 // or one list commits, at one token (lid and kid), to another candidate than its plan's (`commit`).
-type Mutation = { step?: Step; guard?: NonNullable<Guard>; lid: number; pos?: number; commit?: { list: string; kid: number; arm: number } } | null;
+// Or (`clean`) one frame whose body is not clean is taken for clean: a branch (`i`) of an ordered or
+// predictive choice, or a star / opt / sep body (`i` -1).
+type Mutation = { step?: Step; guard?: NonNullable<Guard>; lid: number; pos?: number; commit?: { list: string; kid: number; arm: number }; clean?: { step: Step; i: number } } | null;
 
 // ── The engine ──
 // One interpreter per grammar; run(toks) parses a token list from the entry rule.
@@ -77,7 +90,7 @@ function engine(ir: ParserIR, mut: Mutation = null) {
   type NodeRec = { rule: number; kids: number[] };
   const nodes: NodeRec[] = [];
   type Sp = { h: number };
-  let checking = 0, checked = 0;
+  let checking = 0, checked = 0, cleanChecked = 0;
   let unsound: string[] = [];
   let found: Found = {};
 
@@ -157,6 +170,45 @@ function engine(ir: ParserIR, mut: Mutation = null) {
     return end;
   }
   const bad = (msg: string) => { if (unsound.length < 20) unsound.push(msg); else unsound.length = 20; };
+  // ── elided marks ──
+  // The state a body that fails clean must leave as it found it: what a mark puts back (position,
+  // scratch list, nodes) and the context and suppress sets (their steps put them back on either
+  // outcome). capped / form / tail are not in it: they describe the last Pratt call's node, are
+  // read only right after a call that matched, and no mark puts them back.
+  const stateKey = () => `${pos},${scratch.length},${nodes.length},${ctx},${suppressNext},${suppressCur}`;
+  // The step after each step of every step list (what follows a repetition, which may doom its body).
+  const nextOf = new Map<Step, Array<Step | undefined>>();
+  {
+    const lists: Step[][] = [...ir.lookaheads];
+    for (const r of ir.rules) {
+      if (r.kind === 'rd') lists.push(...r.alts);
+      else lists.push(...r.nudBrackets.map((b) => b.steps), ...r.nudSeqs, ...r.nudCapped.map((c) => c.steps), ...r.leds.map((b) => b.steps));
+    }
+    const walk = (l: Step[]): void => l.forEach((s, k) => {
+      const a = nextOf.get(s); if (a) a.push(l[k + 1]); else nextOf.set(s, [l[k + 1]]);
+      if (s.t === 'star') walk([s.step]); else if (s.t === 'sep') walk([s.elem]);
+      else if (s.t === 'opt' || s.t === 'seq' || s.t === 'suppress' || s.t === 'ctx') walk(s.steps);
+      else if (s.t === 'alt') s.branches.forEach(walk);
+    });
+    lists.forEach(walk);
+  }
+  // `f` runs where the plan takes no mark; failing, it must leave the state it found (`what`
+  // names the site). A dirty failure of a repetition body (`rep`, the repetition) is allowed only
+  // where every step that follows the repetition fails from there: the list then fails, and the
+  // frame that runs it undoes it.
+  function elided(what: string, f: () => boolean, rep?: Step, r = false): boolean {
+    if (checking) return f();
+    const k0 = stateKey(), p0 = pos;
+    const ok = f();
+    if (ok) return true;
+    cleanChecked++;
+    if (stateKey() !== k0) {
+      const nexts = rep === undefined ? [] : nextOf.get(rep) ?? [undefined];
+      const doomed = nexts.length > 0 && nexts.every((n) => n !== undefined && attempt(() => step(n, r)) < 0);
+      if (!doomed) bad(`${what}: marked clean, it failed at ${at()} (it started at offset ${toks[p0]?.off ?? 'end'}) and left the state changed (${k0} -> ${stateKey()})`);
+    }
+    return false;
+  }
 
   // ── steps ──
   function step(s: Step, r: boolean): boolean {
@@ -183,8 +235,20 @@ function engine(ir: ParserIR, mut: Mutation = null) {
     }
   }
   const all = (steps: Step[], r: boolean) => { for (const x of steps) if (!step(x, r)) return false; return true; };
-  // A body attempt: undone when it fails.
-  const body = (f: () => boolean): boolean => { const m = mark(); if (f()) return true; reset(m); return false; };
+  // A body attempt: undone when it fails. A clean one (Step.clean) takes no mark in the targets.
+  const body = (f: () => boolean, st?: Step & { clean?: true }, r = false): boolean => {
+    const m = mark();
+    if (st === undefined) { if (f()) return true; reset(m); return false; }
+    if (st.clean || (mut?.clean?.step === st && mut.clean.i < 0) ? elided(`${st.t} body`, f, st.clean ? st : undefined, r) : noteDirty(st, -1, f)) return true;
+    reset(m); return false;
+  };
+  // A frame body that is not clean and fails dirty: noted for the mutation proof.
+  function noteDirty(st: Step, i: number, f: () => boolean): boolean {
+    if (checking || found.dirty !== undefined) return f();
+    const k0 = stateKey(), ok = f();
+    if (!ok && stateKey() !== k0) found.dirty = { step: st, i };
+    return ok;
+  }
   // A star / opt / sep body its guard refused: it must not match non-empty here.
   function bodyRefused(where: string, f: () => boolean) {
     if (checking || pos >= toks.length) return;
@@ -195,37 +259,45 @@ function engine(ir: ParserIR, mut: Mutation = null) {
   // Whether a body's guard admits the next token (no guard: always).
   const bodyAdmits = (st: Step & { guard?: number }): boolean => st.guard === undefined || (ahead(st.guard, true) && !(mut?.step === st && peek()?.lid === mut.lid));
   // A guarded body attempt; one that matched non-empty from a literal is noted for the mutation proof.
-  const guardedBody = (st: Step & { guard?: number }, f: () => boolean): boolean => {
+  const guardedBody = (st: Step & { guard?: number; clean?: true }, f: () => boolean, r = false): boolean => {
     const t = peek(), p0 = pos;
-    const ok = body(f);
+    const ok = body(f, st, r);
     if (ok && pos > p0 && st.guard !== undefined && !checking && found.body === undefined && t !== null && t.lid !== 0) found.body = { step: st, lid: t.lid };
     return ok;
   };
   function star(st: Step & { t: 'star' }, r: boolean): boolean {
     for (;;) {
       if (!bodyAdmits(st)) { bodyRefused('star', () => step(st.step, r)); break; }
-      if (!guardedBody(st, () => step(st.step, r))) break;
+      if (!guardedBody(st, () => step(st.step, r), r)) break;
     }
     return true;
   }
   function opt(st: Step & { t: 'opt' }, r: boolean): boolean {
     if (!bodyAdmits(st)) { bodyRefused('opt', () => all(st.steps, r)); return true; }
-    guardedBody(st, () => all(st.steps, r));
+    guardedBody(st, () => all(st.steps, r), r);
     return true;
   }
   function sepBy(st: Step & { t: 'sep' }, r: boolean): boolean {
     const delim = lidOf(st.delim);
     if (!bodyAdmits(st)) { bodyRefused('sep', () => step(st.elem, r)); return true; }
-    if (!guardedBody(st, () => step(st.elem, r))) return true;
+    if (!guardedBody(st, () => step(st.elem, r), r)) return true;
     // A trailing delimiter stays matched (the interpreter's matchSep).
     for (;;) {
       if (!matchLit(delim, r)) break;
-      if (!body(() => step(st.elem, r))) break;
+      if (!body(() => step(st.elem, r), st, r)) break;
     }
     return true;
   }
   // An ordered choice: the first branch that matches. A branch its FIRST set refuses must not
   // match where it would have been tried (every earlier branch failed).
+  // A branch the plan marks clean has no frame (the mutation takes one more for clean); one that
+  // is not clean and fails dirty is noted for the mutation proof.
+  const branchClean = (st: Step & { t: 'alt' }, i: number) => st.clean?.[i] === true || (mut?.clean?.step === st && mut.clean.i === i);
+  const branch = (st: Step & { t: 'alt' }, i: number, r: boolean): boolean => {
+    const f = () => all(st.branches[i]!, r);
+    if (branchClean(st, i)) return body(() => elided(`${st.predictive ? 'predictive' : 'ordered'} branch ${i}`, f));
+    return body(() => noteDirty(st, i, f));
+  };
   function altBody(st: Step & { t: 'alt' }, r: boolean): boolean {
     const fs = st.firsts ?? [], n = st.branches.length;
     const t = peek();
@@ -235,7 +307,7 @@ function engine(ir: ParserIR, mut: Mutation = null) {
         if (!checking && t !== null) { checked++; if (attempt(() => all(st.branches[i]!, r)) >= 0) bad(`ordered choice: branch ${i} refused by its FIRST set at ${at()} matches there`); }
         continue;
       }
-      if (body(() => all(st.branches[i]!, r))) return true;
+      if (branch(st, i, r)) return true;
     }
     return false;
   }
@@ -251,7 +323,7 @@ function engine(ir: ParserIR, mut: Mutation = null) {
     };
     if (sel < 0) { refusedBefore(st.branches.length); return false; }
     refusedBefore(sel);
-    if (body(() => all(st.branches[sel]!, r))) return true;
+    if (branch(st, sel, r)) return true;
     refusedBefore(st.branches.length);
     return false;
   }
@@ -346,7 +418,7 @@ function engine(ir: ParserIR, mut: Mutation = null) {
       if (t === null) return null;
       const sel = rule.alts.findIndex((_, i) => firstCond(rule.altFirst[i]!, t));
       let res: Sp | null = null, end = save;
-      if (sel >= 0 && all(rule.alts[sel]!, r)) { res = won(); end = pos; }
+      if (sel >= 0 && (rule.clean ? elided(`${rule.name} (predictive, clean)`, () => all(rule.alts[sel]!, r)) : all(rule.alts[sel]!, r))) { res = won(); end = pos; }
       else { pos = save; scratch.length = sb; restore(ck); }
       const p = pos;
       pos = save;
@@ -356,7 +428,7 @@ function engine(ir: ParserIR, mut: Mutation = null) {
     }
     if (rule.alts.length === 1) {
       const ck = checkpoint();
-      if (all(rule.alts[0]!, r)) return won();
+      if (rule.clean ? elided(`${rule.name} (clean)`, () => all(rule.alts[0]!, r)) : all(rule.alts[0]!, r)) return won();
       pos = save; scratch.length = sb; restore(ck);
       return null;
     }
@@ -371,7 +443,8 @@ function engine(ir: ParserIR, mut: Mutation = null) {
         let res: Sp | null = null, end = save;
         if (rdTest(g, act, t0)) {
           const ck = checkpoint();
-          if (all(rule.alts[i]!.slice(g?.skip ?? 0), r) && (!act.nullable || pos > save)) { res = won(); end = pos; noteCommit(rule.name, t0, i, rule.alts.length); }
+          const run = () => all(rule.alts[i]!.slice(g?.skip ?? 0), r);
+          if ((act.clean && !act.nullable ? elided(`${rule.name} (committed to ${i}, clean)`, run) : run()) && (!act.nullable || pos > save)) { res = won(); end = pos; noteCommit(rule.name, t0, i, rule.alts.length); }
           else { pos = save; scratch.length = sb; restore(ck); }
         }
         pos = save;
@@ -478,7 +551,14 @@ function engine(ir: ParserIR, mut: Mutation = null) {
           if (r.ledSuppressedIn[i]!.includes(suppressCur)) continue;
           const ledSave = pos, sb = scratch.length, ck = checkpoint();
           scratch.push(left.h);
-          if (all(r.leds[i]!.steps, false)) {
+          // A clean led arm (PrattRule.ledClean) takes no builder checkpoint: failing, it must have built no node.
+          const runLed = () => all(r.leds[i]!.steps, false);
+          const ledOk = r.ledClean[i] && !checking ? (() => {
+            const n0 = nodes.length, ok = runLed();
+            if (!ok) { cleanChecked++; if (nodes.length !== n0) bad(`${r.name} led ${i} (${r.leds[i]!.first}): marked clean, it failed at ${at()} with ${nodes.length - n0} node(s) built`); }
+            return ok;
+          })() : runLed();
+          if (ledOk) {
             left = finish(rid, sb); fm = r.ledForm[i]!; if (r.ledClosesTail[i]) tailClosed = true;
             continue outer;
           }
@@ -570,7 +650,7 @@ function engine(ir: ParserIR, mut: Mutation = null) {
             if (operand !== null) { scratch.push(operand.h); res = finish(rid, sb); f = p.form; tl = true; }
           } else {
             const steps = a.kind === 'bracket' ? r.nudBrackets[a.index]!.steps : a.kind === 'seq' ? guardSteps(r.nudSeqGuard[a.index]!, r.nudSeqs[a.index]!) : guardSteps(r.nudCappedGuard[a.index]!, r.nudCapped[a.index]!.steps);
-            if (all(steps, false) && (!act.nullable || pos > save)) {
+            if ((act.clean && !act.nullable ? elided(`${r.name} NUD (committed to ${i}, clean)`, () => all(steps, false)) : all(steps, false)) && (!act.nullable || pos > save)) {
               res = finish(rid, sb);
               tl = a.kind === 'bracket' ? r.nudBracketClosesTail[a.index]! : a.kind === 'seq' ? r.nudSeqClosesTail[a.index]! : false;
               cp = a.kind === 'capped';
@@ -659,10 +739,10 @@ function engine(ir: ParserIR, mut: Mutation = null) {
   return function run(tokens: Tok[], text: string): Outcome {
     toks = tokens; src = text;
     pos = 0; capped = false; form = 0; tail = false; suppressNext = 0; suppressCur = 0; ctx = 0;
-    scratch.length = 0; nodes.length = 0; opEnd.clear(); checked = 0; unsound = []; found = {};
+    scratch.length = 0; nodes.length = 0; opEnd.clear(); checked = 0; cleanChecked = 0; unsound = []; found = {};
     const root = parseRule(ir.entry);
     const accept = root !== null && pos === toks.length;
-    return { accept, tree: accept ? tree(root!.h) : null, checked, unsound, found };
+    return { accept, tree: accept ? tree(root!.h) : null, checked, cleanChecked, unsound, found };
   };
 }
 
@@ -719,6 +799,9 @@ const dialectTexts = [
   'component D() { <a><b>{1}</b><{t} id="d">"s"</{t}></a> }\ncomponent E() { "q" }',
   'component S() { <a><style k="v">.a { b: "c" } <i></style>"t"</a> <style></style> }',
   '@x @y component L(a, b) { @each (i of a.b(1, 2)) { <my-card on:click={!a == b}/> } @empty { "none" } <p {k}>{a + b - 1}</p> }',
+  // failures where a mark is elided (an empty argument list, a member access that does not
+  // continue) and a repetition body that fails dirty (`-` with no name after it): rejected inputs
+  'component F() { <a>{f()}{g(a, b)}{a.b}</a> }', 'component G() { <a- /> }', 'component H() { {a.} }',
 ];
 const texts = (g: string, xs: string[]): Input[] => xs.map((text, i) => ({ name: `${g}#${i}`, text }));
 const GRAMMARS: Array<[string, Input[]]> = [
@@ -739,9 +822,9 @@ for (const [g, inputs] of GRAMMARS) {
   writeFileSync(file, emitParser(grammar, tsTarget));
   const lib = await import(file) as { tokenize(s: string): Tok[]; parse(s: string): unknown };
   const run = engine(ir);
-  let n = 0, accepted = 0, checks = 0, drift = 0, bad = 0;
+  let n = 0, accepted = 0, checks = 0, cleanChecks = 0, drift = 0, bad = 0;
   type Proof = { at: string; tokens: Tok[]; text: string; m: Mutation };
-  const proof: { body?: Proof; cand?: Proof; commit?: Proof } = {};
+  const proof: { body?: Proof; cand?: Proof; commit?: Proof; clean?: Proof } = {};
   for (const input of inputs) {
     const text = typeof input === 'string' ? readFileSync(input, 'utf8') : input.text;
     let tokens: Tok[];
@@ -749,7 +832,7 @@ for (const [g, inputs] of GRAMMARS) {
     n++;
     const want = lib.parse(text);
     const got = run(tokens, text);
-    checks += got.checked;
+    checks += got.checked; cleanChecks += got.cleanChecked;
     if (got.accept) accepted++;
     const name = typeof input !== 'string' ? input.name : input.startsWith(ROOT) ? input.slice(ROOT.length) : input.slice(CORPUS.length - 'conformance'.length);
     if (got.accept !== (want !== null) || (got.accept && JSON.stringify(got.tree) !== JSON.stringify(canon(want)))) {
@@ -759,24 +842,27 @@ for (const [g, inputs] of GRAMMARS) {
     for (const u of got.unsound) { bad++; if (bad <= 12) console.log(`  FAIL ${g} ${name}: ${u}`); }
     if (!proof.body && got.found.body) proof.body = { at: name, tokens, text, m: { step: got.found.body.step, lid: got.found.body.lid } };
     if (!proof.cand && got.found.cand) proof.cand = { at: name, tokens, text, m: { guard: got.found.cand.guard, lid: got.found.cand.lid, pos: got.found.cand.pos } };
+    if (!proof.clean && got.found.dirty) proof.clean = { at: name, tokens, text, m: { lid: 0, clean: got.found.dirty } };
     if (!proof.commit && got.found.commit) { const c = got.found.commit; proof.commit = { at: name, tokens, text, m: { lid: c.lid, commit: { list: c.list, kid: c.kid, arm: c.arm } } }; }
   }
   // The mutation proof: a body guard, then a candidate guard, made to refuse a literal it admitted
   // where its body / candidate matched; the gate must report it on that input.
   const ids = buildLexIdPlan(ir);
-  const what = { body: 'guarded body', cand: 'guarded candidate', commit: 'committed choice' } as const;
-  for (const kind of ['body', 'cand', 'commit'] as const) {
+  const what = { body: 'guarded body matched from a literal', cand: 'guarded candidate matched from a literal', commit: 'committed choice matched from a literal', clean: 'branch or repetition body failed dirty' } as const;
+  for (const kind of ['body', 'cand', 'commit', 'clean'] as const) {
     const p = proof[kind];
-    if (!p) { console.log(`  FAIL ${g}: no ${what[kind]} matched from a literal: the mutation proof has nothing to mutate`); failures++; continue; }
+    if (!p) { console.log(`  FAIL ${g}: no ${what[kind]}: the mutation proof has nothing to mutate`); failures++; continue; }
     const caught = engine(ir, p.m)(p.tokens, p.text).unsound.length;
-    const did = kind === 'commit' ? `the ${p.m!.commit!.list} list that committed at ${JSON.stringify(ids.lids[p.m!.lid])} in ${p.at} made to commit to its candidate ${p.m!.commit!.arm}`
+    const did = kind === 'clean' ? `${p.m!.clean!.i < 0 ? `the ${p.m!.clean!.step.t} body` : `branch ${p.m!.clean!.i} of a choice`} that failed dirty in ${p.at} taken for clean`
+      : kind === 'commit' ? `the ${p.m!.commit!.list} list that committed at ${JSON.stringify(ids.lids[p.m!.lid])} in ${p.at} made to commit to its candidate ${p.m!.commit!.arm}`
       : `the ${kind === 'body' ? 'body guard' : 'candidate guard'} that admitted ${JSON.stringify(ids.lids[p.m!.lid])} in ${p.at} made to refuse it`;
-    console.log(`  ${g}: mutation: ${did}: ${caught} unsound refusal(s) reported`);
-    if (caught === 0) { console.log(`  FAIL ${g}: the mutated guard was not caught`); failures++; }
+    console.log(`  ${g}: mutation: ${did}: ${caught} unsound ${kind === 'clean' ? 'elided mark(s)' : 'refusal(s)'} reported`);
+    if (caught === 0) { console.log(`  FAIL ${g}: the mutated ${kind === 'clean' ? 'frame' : 'guard'} was not caught`); failures++; }
   }
   failures += drift + bad;
-  console.log(`  ${g}: ${n} inputs (${accepted} accepted), ${checks} refusals attempted, ${bad} would have changed the parse, ${drift} differ from the TS target`);
+  console.log(`  ${g}: ${n} inputs (${accepted} accepted), ${checks} refusals attempted, ${cleanChecks} failures where a mark is elided, ${bad} would have changed the parse, ${drift} differ from the TS target`);
   if (checks === 0) { console.log(`  FAIL ${g}: no refusal was attempted: the gate checks nothing`); failures++; }
+  if (cleanChecks === 0) { console.log(`  FAIL ${g}: no body failed where a mark is elided: the gate checks nothing there`); failures++; }
 }
 console.log(`guard-refused: ${((Date.now() - t0) / 1000).toFixed(1)}s, ${failures} failures`);
 process.exit(failures ? 1 : 0);

@@ -344,7 +344,7 @@ fn main() {
         let src = std::fs::read_to_string(&f).unwrap();
         let mut c = Counting::default();
         match parse_with(&src, &mut c) {
-            Some(_) => println!("{}\\t{}", tokenize(&src).len(), c.nodes),
+            Some(_) => println!("{}\\t{}", tokenize(&src).unwrap().len(), c.nodes),
             None => println!("reject"),
         }
     }

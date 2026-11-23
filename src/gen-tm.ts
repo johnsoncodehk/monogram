@@ -1386,9 +1386,39 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
     } else result[key] = { match: tokenPatternToRegex(m), name: `${t.scope}.${langName}` };
     textKeys.push(key);
   }
+  // ── text tokens (`textTokens`): scanned tokens tried in the children before the text run ──
+  // Each is the token's own pattern under its own scope. With an `after` class it stops a run
+  // only at the run's start or right after a unit of that class: a lookbehind of the class, of
+  // `tagClose` and `hole.close` (a run starts after a tag or a hole), and of the other text
+  // tokens' closing texts (or after another text token); a line start when the class holds `\n`.
+  const textTokenKeys: string[] = [];
+  for (const { token, after } of region.textTokens ?? []) {
+    const tok = grammar.tokens.find(t => t.name === token);
+    if (!tok) continue;
+    const scope = tok.scope ?? classifyToken(tok).scope;
+    let behind = '';
+    if (after !== undefined) {
+      const ends = [region.tagClose, region.hole.close];
+      for (const o of region.textTokens ?? []) {
+        const ot = o.token !== token ? grammar.tokens.find(t => t.name === o.token) : undefined;
+        const close = ot ? tokenPatternBlockDelimiters(ot)?.[1] : undefined;
+        if (close) ends.push(close);
+      }
+      const afterRe = tokenPatternToRegex(after);
+      const lineStart = new RegExp(`^(?:${afterRe})$`).test('\n');
+      behind = `(?:(?<=${afterRe})|${ends.map(e => `(?<=${escapeRegex(e)})`).join('|')}${lineStart ? '|^' : ''})`;
+    }
+    const block = tokenPatternBlockDelimiters(tok);
+    const key = K(`text-${tok.name.toLowerCase()}`);
+    result[key] = block && !behind
+      ? { name: `${scope}.${langName}`, begin: escapeRegex(block[0]), end: escapeRegex(block[1]) }
+      : { match: `${behind}${tokenPatternSource(tok)}`, name: `${scope}.${langName}` };
+    textTokenKeys.push(key);
+  }
   const childrenScope = hl.childrenScope ? `${hl.childrenScope}.${langName}` : undefined;
   result[K('children')] = {
     patterns: [
+      ...textTokenKeys.map(k => ({ include: `#${k}` })),
       // A child element — `#<name>-element` covers BOTH the self-closing `<br/>` and the
       // open `<span>…</span>` shape (its `end` matches `/>` OR `</name>`), so the
       // separate `#<name>-self-closing-element` is NOT listed here: that rule's begin
@@ -1401,8 +1431,13 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
       // Listed AFTER the single-line elements so a normal `<span …>` on one line keeps its
       // tokenization; it only fires when the `<` reaches EOL with no name.
       { include: `#${K('element-multiline')}` },
-      { include: `#${K('expression')}` },
-      ...textKeys.map(k => ({ include: `#${k}` })),
+      // TEXT children (`region.text`): a hole, the scope-only text patterns, and plain text
+      // (anything else falls through to the children's contentName). CODE children (no text
+      // token: the lexer reads them by the ordinary scan): the code grammar itself, which holds
+      // the element triggers, directives, strings and holes as code does.
+      ...region.text !== undefined
+        ? [{ include: `#${K('expression')}` }, ...textKeys.map(k => ({ include: `#${k}` }))]
+        : [{ include: '$self' }],
     ],
   };
 
@@ -1615,6 +1650,93 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
       end: exprEndLA(fragmentBody),
       patterns: [...commentIncludes, { include: `#${K('fragment')}` }],
     };
+  }
+
+  // ── <name>-dynamic-element: `<{expr} …>children</{expr}>`, when the tag-name rule has an arm
+  // that is a hole (region-view.ts `dynamicTag`). The open tag's name is the hole (code); the
+  // close tag's hole is matched one brace level deep (a TextMate `end` is one regex) and its
+  // contents re-tokenized as code.
+  if (view.dynamicTag) {
+    const ho = escapeRegex(region.hole.open), hc = escapeRegex(region.hole.close);
+    const hoC = escapeForCharClass(region.hole.open), hcC = escapeForCharClass(region.hole.close);
+    const closeHole = `(${ho})([^${hoC}${hcC}]*)(${hc})`;
+    result[K('dynamic-element')] = {
+      name: `meta.tag.${langName}`,
+      begin: `(?=(${o})\\s*${ho})`,
+      end: `(${selfCloseTok})|(${closeTok})\\s*(?:${closeHole})?\\s*(${c})`,
+      endCaptures: {
+        '1': { name: tagEnd }, '2': { name: tagBegin },
+        '3': { name: embeddedBegin }, '4': { patterns: [{ include: '$self' }] }, '5': { name: embeddedEnd },
+        '6': { name: tagEnd },
+      },
+      patterns: [
+        {
+          begin: `(${o})\\s*(?=${ho})`,
+          beginCaptures: { '1': { name: tagBegin } },
+          end: tagEndAhead,
+          patterns: [{ include: `#${K('expression')}` }, { include: `#${K('attributes')}` }],
+        },
+        childrenRegion(`(${c})`, { '1': { name: tagEnd } }),
+      ],
+    };
+    const dynamicBody = `(${o})\\s*${ho}`;
+    result[K('dynamic-element-in-expression')] = {
+      begin: exprStartLA(dynamicBody),
+      end: exprEndLA(dynamicBody),
+      patterns: [...commentIncludes, { include: `#${K('dynamic-element')}` }],
+    };
+    (result[K('children')].patterns as { include: string }[]).splice(1, 0, { include: `#${K('dynamic-element')}` });
+  }
+
+  // ── <name>-raw-element: an element whose tag name a `rawText` declaration lists. Its open tag
+  // ends with `tagClose`, then the body up to the close tag `tagOpen closeMarker name` is ONE
+  // token for the lexer: here a region whose content is the declaration's embedded language
+  // (`embed[name]`), else the raw token's own scope. A declaration's `unlessBodyStarts` is a
+  // negative lookahead on the body's begin: when the body starts with it, the element takes
+  // the ordinary children instead. Tried before the ordinary element in the children and the
+  // triggers. Case: `ignoreCase` folds the name in the open and the close tag, as the lexer does.
+  const rawKeys: string[] = [];
+  const scopeOfName = (lit: string): string => {
+    for (const e of nameEntries) if (!e.match || new RegExp(`^(?:${tokenPatternToRegex(e.match)})`).test(lit)) return `${e.scope}.${langName}`;
+    return `${ctxTagScope ?? 'entity.name.tag'}.${langName}`;
+  };
+  for (const decl of region.rawText ?? []) {
+    const tok = grammar.tokens.find(t => t.name === decl.token);
+    for (const tag of decl.tags) {
+      const tagRe = decl.ignoreCase ? caseFoldLiteral(tag) : escapeRegex(tag);
+      const emb = decl.embed?.[tag];
+      const embedScope = typeof emb === 'string' ? emb : emb?.default;
+      const nameScope = scopeOfName(tag);
+      const key = K(`raw-element-${tag}`);
+      const unless = decl.unlessBodyStarts !== undefined ? `(?!${tokenPatternToRegex(decl.unlessBodyStarts)})` : '';
+      result[key] = {
+        name: `meta.tag.${langName}`,
+        begin: `(?=(${o})\\s*(${tagRe})${tagFollow})`,
+        end: `(${selfCloseTok})|(${closeTok})\\s*(${tagRe})\\s*(${c})`,
+        endCaptures: { '1': { name: tagEnd }, '2': { name: tagBegin }, '3': { name: nameScope }, '4': { name: tagEnd } },
+        patterns: [
+          {
+            begin: `(${o})\\s*(${tagRe})`,
+            beginCaptures: { '1': { name: tagBegin }, '2': { name: nameScope } },
+            end: tagEndAhead,
+            patterns: [{ include: `#${K('attributes')}` }],
+          },
+          {
+            begin: `(${c})${unless}`,
+            beginCaptures: { '1': { name: tagEnd } },
+            end: `(?=${closeTok}\\s*${tagRe})`,
+            contentName: embedScope ?? (tok?.scope ? `${tok.scope}.${langName}` : undefined),
+            patterns: embedScope ? [{ include: embedScope }] : [],
+          },
+          ...unless ? [childrenRegion(`(${c})`, { '1': { name: tagEnd } })] : [],
+        ],
+      };
+      rawKeys.push(key);
+    }
+  }
+  if (rawKeys.length) {
+    (result[K('children')].patterns as { include: string }[]).unshift(...rawKeys.map(k => ({ include: `#${k}` })));
+    (result[K('element-in-expression')].patterns as { include: string }[]).splice(commentIncludes.length, 0, ...rawKeys.map(k => ({ include: `#${k}` })));
   }
 
   return result;
@@ -4790,7 +4912,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
     // #generic-call / #comparison): a `<` at expression-start with a tag-shaped
     // lookahead is an element, never a comparison/generic (those follow a value operand).
     // Self-closing before open before fragment (their ranks in section 7).
-    for (const [k, rank] of [['self-closing-element-in-expression', -6], ['element-in-expression', -5.5], ['fragment-in-expression', -5]] as const) {
+    for (const [k, rank] of [['self-closing-element-in-expression', -6], ['element-in-expression', -5.5], ['dynamic-element-in-expression', -5.4], ['fragment-in-expression', -5]] as const) {
       const key = `${view.name}-${k}`;
       if (!elPatterns[key]) continue;
       topPatterns.push({ include: `#${key}` });

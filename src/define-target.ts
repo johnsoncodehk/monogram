@@ -8,7 +8,7 @@ import type { Lowering } from './algo-ir.ts';
 import type { Target } from './emit.ts';
 import type { LexTok, ParserIR } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
-import { EL_FRAME_FN, EL_OPENS_FN, EL_RAW_FN, EL_REACH_FN, IDENT_ESC_ERR, TPL_SPAN, UNI_CLASS, emitLexScan, emitScanInline, scannedTokens, scannerName, templateLiterals, tokenLiterals } from './lex-family.ts';
+import { EL_FRAME_FN, EL_OPENS_FN, EL_RAW_FN, EL_REACH_FN, TPL_SPAN, UNI_CLASS, emitLexScan, emitScanInline, scannedTokens, scannerName, templateLiterals, tokenLiterals } from './lex-family.ts';
 import { emitRelexFamily } from './relex-family.ts';
 import { emitReuseFamily } from './reuse-family.ts';
 
@@ -30,11 +30,9 @@ export interface SharedAlgorithms {
   // The printed name of the template span scanner, `(s, p, strict) -> int`: the position of the
   // delimiter that ends the span, -1 when unterminated, -2 - q for a malformed escape at q.
   tplSpan(): string;
-  // The names the target prints two routines of the identifier escape check under (lex-family.ts):
-  // its Unicode identifier class, `(cp) -> int`, and its lexer error for an identifier s[p, e)
-  // whose escapes spell no IdentifierName, `(s, p, e) -> int`, which does not return.
+  // The name the target prints the identifier escape check's Unicode identifier class under
+  // (lex-family.ts), `(cp) -> int`.
   uniClass(): string;
-  identEscError(): string;
   // The printed names of an element region's routines (lex-family.ts elementFns): the frame
   // step, the type-parameter vetoes, and the read end of a signature's decision.
   elementFn(which: 'frame' | 'opens' | 'reach' | 'raw'): string;
@@ -80,7 +78,6 @@ export function defineTarget(def: TargetDefinition): PortableTarget {
     tokenLiterals,
     templateLiterals,
     tplSpan: () => lowering().ident(TPL_SPAN),
-    identEscError: () => lowering().ident(IDENT_ESC_ERR),
     uniClass: () => lowering().ident(UNI_CLASS),
     elementFn: (which) => lowering().ident({ frame: EL_FRAME_FN, opens: EL_OPENS_FN, reach: EL_REACH_FN, raw: EL_RAW_FN }[which]),
   };

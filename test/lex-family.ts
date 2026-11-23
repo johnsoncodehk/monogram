@@ -308,7 +308,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
     const f = join(dir, `regex${mod++}.ts`);
     // The escape check's two target routines, as stubs that pass every escape: the scanner's end
     // is the regex's either way (whether an escape is valid is portable-targets' corpus).
-    const stubs = gir.identLike.length ? `function ${tsTarget.shared.uniClass()}(cp: number): number { return 2; }\nfunction ${tsTarget.shared.identEscError()}(s: string, p: number, e: number): number { return e; }\n` : '';
+    const stubs = gir.identLike.length ? `function ${tsTarget.shared.uniClass()}(cp: number): number { return 2; }\n` : '';
     writeFileSync(f, `${tsTarget.shared.lexScan(gir)}\n${stubs}export { ${toks.map((t) => tsTarget.shared.scanner(t.name)).join(', ')} };\n`);
     const scan = await import(pathToFileURL(f).href) as Record<string, (s: string, p: number) => number>;
     for (const t of toks) {
@@ -393,7 +393,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
     const region = [...(e.text ? [e.text] : []), ...e.tagTokens];
     const opens = e.entry === 'operand' && (e.head || e.signature) ? [EL_OPENS_FN] : [];
     const f = join(dir, `el${mod++}.ts`);
-    const stubs = gir.identLike.length ? `function ${tsTarget.shared.uniClass()}(cp: number): number { return 2; }\nfunction ${tsTarget.shared.identEscError()}(s: string, p: number, e: number): number { return e; }\n` : '';
+    const stubs = gir.identLike.length ? `function ${tsTarget.shared.uniClass()}(cp: number): number { return 2; }\n` : '';
     writeFileSync(f, `${tsTarget.shared.lexScan(gir)}\n${stubs}export { ${[...region.map((n) => scannerName(n)), ...opens].join(', ')} };\n`);
     const m = await import(pathToFileURL(f).href) as Record<string, (s: string, p: number) => number | number[]>;
     for (const name of region) {
@@ -584,7 +584,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
     const plan = lexLookPlan(gir);
     const withEnd = new Set(plan.arms.flatMap((a) => a.cands.filter((c) => c.readEnd).map((c) => c.tok!)));
     const f = join(dir, `reads${mod++}.ts`);
-    const stubs = gir.identLike.length ? `function ${tsTarget.shared.uniClass()}(cp: number): number { return 2; }\nfunction ${tsTarget.shared.identEscError()}(s: string, p: number, e: number): number { return e; }\n` : '';
+    const stubs = gir.identLike.length ? `function ${tsTarget.shared.uniClass()}(cp: number): number { return 2; }\n` : '';
     const exps = [...toks.map((t) => tsTarget.shared.scanner(t.name)), ...[...withEnd].map(readEndName)];
     writeFileSync(f, `${tsTarget.shared.lexScan(gir)}\n${stubs}export { ${exps.join(', ')} };\n`);
     const scan = await import(pathToFileURL(f).href) as Record<string, (s: string, p: number) => number>;

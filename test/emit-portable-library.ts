@@ -104,7 +104,7 @@ else {
   writeFileSync(join(gdir, 'parser', 'parser.go'), goSrc);
   // The exported surface is the tokenizer, the Doc/builder API and the tables a custom
   // Builder needs — no generated rule helper or lexer constant.
-  const GO_API = new Set(['Tokenize', 'Token', 'LexError', 'Error', 'Tok', 'Node', 'Edit', 'Align', 'EntryMeta', 'Seg', 'Doc', 'NewDoc', 'DocWith', 'NewDocWith', 'Document',
+  const GO_API = new Set(['Tokenize', 'Token', 'LexError', 'Error', 'Tok', 'Node', 'Edit', 'Align', 'EntryMeta', 'Doc', 'NewDoc', 'DocWith', 'NewDocWith', 'Document',
     'SetValidate', 'Text', 'Root', 'Builder', 'Shifter', 'CstBuilder', 'SlimBuilder', 'Checkpoint', 'Restore', 'Leaf', 'Finish', 'SpanOf', 'HeadSpan', 'Shift',
     'ParseWith', 'CstJSONWith', 'SlimJSONWith', 'CstJSON', 'TT_NAMES', 'RULE_NAMES', 'TT_SKIP_PUNCT',
     // A builder that keeps the engine's buffers between parses (Rust: Builder::workspace_mut, Workspace).
@@ -312,22 +312,17 @@ fn main() {
     let b = ${lit(B)};
     let mut d: Doc = Doc::new(a.to_string());
     let before = d.cst_json();
-    let mut t1 = tokenize(b);
+    let mut t1 = tokenize(b).unwrap();
     t1.clear();
-    let t2 = tokenize(b);
+    let t2 = tokenize(b).unwrap();
     let unchanged = before.is_some() && d.cst_json() == before;
     d.edit(&[Edit { start: ${EDIT.start}, end: ${EDIT.end}, text: ${lit(EDIT.text)}.to_string() }]);
     let _ = tokenize(b);
     let fresh: Doc = Doc::new(${lit(EDITED)}.to_string());
     let edit_eq = d.cst_json().is_some() && d.cst_json() == fresh.cst_json();
-    std::panic::set_hook(Box::new(|_| {}));
-    let lex_msg = match std::panic::catch_unwind(|| tokenize(${lit(BAD_LEX)}).len()) {
-        Ok(_) => String::new(),
-        Err(p) => p.downcast_ref::<String>().cloned().unwrap_or_default(),
-    };
-    let _ = std::panic::take_hook();
-    let after_panic = toks_json(&tokenize(b));
-    println!("{{\\"unchanged\\":{},\\"editEq\\":{},\\"tokensA\\":{},\\"tokensB\\":{},\\"lexMsg\\":{:?},\\"afterPanic\\":{}}}", unchanged, edit_eq, toks_json(&tokenize(a)), toks_json(&t2), lex_msg, after_panic);
+    let lex_msg = match tokenize(${lit(BAD_LEX)}) { Ok(_) => String::new(), Err(e) => e.msg };
+    let after_panic = toks_json(&tokenize(b).unwrap());
+    println!("{{\\"unchanged\\":{},\\"editEq\\":{},\\"tokensA\\":{},\\"tokensB\\":{},\\"lexMsg\\":{:?},\\"afterPanic\\":{}}}", unchanged, edit_eq, toks_json(&tokenize(a).unwrap()), toks_json(&t2), lex_msg, after_panic);
 }
 `);
   try {
@@ -339,8 +334,8 @@ fn main() {
     check('rust: tokenize returns an independent Vec', json(out.tokensB) === json(ref(B)));
     check('rust: a Doc is untouched by tokenize', out.unchanged === true);
     check('rust: Doc edit with tokenize interleaved ≡ fresh Doc', out.editEq === true);
-    check('rust: tokenize panics with the lexer message on malformed input (documented)', out.lexMsg === refLexError, out.lexMsg);
-    check('rust: tokenize works after a caught lexer panic', json(out.afterPanic) === json(ref(B)));
+    check('rust: tokenize returns Err(LexError) with the lexer message on malformed input', out.lexMsg === refLexError, out.lexMsg);
+    check('rust: tokenize works after a lexer error', json(out.afterPanic) === json(ref(B)));
   } catch (e) {
     check('rust: library crate builds, links and runs', false, String((e as { stderr?: Buffer }).stderr ?? e).slice(0, 800));
   }
