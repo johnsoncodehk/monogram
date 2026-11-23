@@ -102,43 +102,40 @@ const shiftEntryMeta: Fn = {
 };
 
 // The new root's entries: the kept prefix, the re-parsed middle, and the adopted suffix from
-// adoptFrom, moved by the edit.
+// adoptFrom, moved by the edit; and the adopted entries' root kids, counted as they are moved.
 const reuseEntries: Fn = {
   name: 'reuseEntries',
   doc: '',
   params: [{ name: 'prefixMeta', ty: ENTRIES }, { name: 'midMeta', ty: ENTRIES }, { name: 'suffixMeta', ty: ENTRIES }, { name: 'adoptFrom', ty: 'idx' }, { name: 'byteDelta', ty: 'int' }, { name: 'tokDelta', ty: 'int' }],
-  ret: [ENTRIES],
+  ret: [ENTRIES, 'idx'],
   body: [
     { k: 'let', name: 'out', ty: ENTRIES, init: { k: 'newList', ty: ENTRIES, cap: bin('sub', bin('add', bin('add', len(v('prefixMeta')), len(v('midMeta'))), len(v('suffixMeta'))), v('adoptFrom')) } },
     { k: 'extend', list: 'out', from: v('prefixMeta') },
     { k: 'extend', list: 'out', from: v('midMeta') },
+    { k: 'let', name: 'kids', ty: 'idx', init: n(0) },
     { k: 'for', v: 'i', from: v('adoptFrom'), to: len(v('suffixMeta')), body: [
       { k: 'let', name: 'em', ty: ENTRY, init: { k: 'at', list: v('suffixMeta'), i: v('i') } },
       { k: 'run', call: call('shiftEntryMeta', v('em'), v('byteDelta'), v('tokDelta')) },
       { k: 'push', list: 'out', e: v('em') },
+      { k: 'set', name: 'kids', e: bin('add', v('kids'), recField(v('em'), 'kidCount')) },
     ] },
-    ret(v('out')),
+    ret(v('out'), v('kids')),
   ],
 };
 
-// The old root kids [ka, kb) of the adopted entries [at, len), given the prefix's prefixLen
-// entries and their prefixKids kids: summed over the edited middle [prefixLen, at), then over the
-// adopted entries (which the edit shifts anyway).
+// The old root kid of entry `at`, given the prefix's prefixLen entries and their prefixKids kids:
+// summed over the edited middle [prefixLen, at) only.
 const reuseKids: Fn = {
   name: 'reuseKids',
   doc: '',
   params: [{ name: 'entries', ty: ENTRIES }, { name: 'prefixLen', ty: 'idx' }, { name: 'prefixKids', ty: 'idx' }, { name: 'at', ty: 'idx' }],
-  ret: ['idx', 'idx'],
+  ret: ['idx'],
   body: [
-    { k: 'let', name: 'ka', ty: 'idx', init: v('prefixKids') },
+    { k: 'let', name: 'k', ty: 'idx', init: v('prefixKids') },
     { k: 'for', v: 'i', from: v('prefixLen'), to: v('at'), body: [
-      { k: 'set', name: 'ka', e: bin('add', v('ka'), fld('entries', v('i'), 'kidCount')) },
+      { k: 'set', name: 'k', e: bin('add', v('k'), fld('entries', v('i'), 'kidCount')) },
     ] },
-    { k: 'let', name: 'kb', ty: 'idx', init: v('ka') },
-    { k: 'for', v: 'i', from: v('at'), to: len(v('entries')), body: [
-      { k: 'set', name: 'kb', e: bin('add', v('kb'), fld('entries', v('i'), 'kidCount')) },
-    ] },
-    ret(v('ka'), v('kb')),
+    ret(v('k')),
   ],
 };
 

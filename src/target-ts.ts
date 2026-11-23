@@ -1360,10 +1360,10 @@ function tryReuseW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number)
   const midKids: H[] = [];
   const midMeta: EntryMeta[] = [];
   const finish = (adoptFrom: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
-    ${tsTake(['ka', 'kb'], 'reuseKids', 'oldEntries, prefixLen, prefixEnd, suffixStart + adoptFrom')}
-    const adoptedKids = oldRootHs.slice(ka, kb).map((h) => shift(h, byteDelta, tokDelta));
+    ${tsTake(['newEntries', 'adopted'], 'reuseEntries', 'prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta')}
+    const ka = reuseKids(oldEntries, prefixLen, prefixEnd, suffixStart + adoptFrom);
+    const adoptedKids = oldRootHs.slice(ka, ka + adopted).map((h) => shift(h, byteDelta, tokDelta));
     const children: H[] = [...prefixKids, ...midKids, ...adoptedKids];
-    const newEntries = reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta);
     ${tsTake(['offset', 'end', 'tokStart', 'tokEnd'], 'reuseSpan', 'newEntries')}
     _bSave = tokStart;
     const savePos = pos;
@@ -3184,13 +3184,13 @@ function ${findAnyName(stops)}(s: string, i: number): number {
   },
 };
 
-// A function of several numbers and booleans returns its first value and leaves the others in
-// module slots (`<fn>_r1` …, read by the caller right after the call): TypeScript has no multiple
-// return values, and an array per call is an allocation per call (the element lexer's frame step
-// runs once per element token). A slot is a `var` (no temporal-dead-zone check on each access). A
-// value that owns memory (a string, a list, a record) is returned in an array instead: a slot would
-// keep it alive past its caller.
-const tsSlotted = (ret: Ty[]): boolean => ret.length > 1 && ret.every((t) => isNum(t) || t === 'bool');
+// A function of several values whose values after the first are numbers and booleans returns its
+// first value and leaves the others in module slots (`<fn>_r1` …, read by the caller right after
+// the call): TypeScript has no multiple return values, and an array per call is an allocation per
+// call (the element lexer's frame step runs once per element token). A slot is a `var` (no
+// temporal-dead-zone check on each access). A later value that owns memory (a string, a list, a
+// record) is returned in an array instead: a slot would keep it alive past its caller.
+const tsSlotted = (ret: Ty[]): boolean => ret.length > 1 && ret.slice(1).every((t) => isNum(t) || t === 'bool');
 // The same read, printed where the hand-written runtime calls a family function of several numbers:
 // the element lexer's opens / frame / raw steps (src/lex-family.ts), the Doc's reuse bounds and
 // span (src/reuse-family.ts) and its alignment core (src/relex-family.ts).

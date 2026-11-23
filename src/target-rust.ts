@@ -1617,15 +1617,16 @@ ${shapeA ? `fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], ki
     }
 }
 ` : ''}impl<'a, B: Builder> Parser<'a, B> {
-    fn finish_reuse(&mut self, rule_id: u16, prefix_kids: &[B::H], mid_kids: &[B::H], prefix_meta: &[EntryMeta], mid_meta: &[EntryMeta], suffix_meta: &[EntryMeta], old_root: B::H, adopt_from: usize, (ka, kb): (usize, usize), byte_delta: isize) -> (B::H, usize) {
+    fn finish_reuse(&mut self, rule_id: u16, prefix_kids: &[B::H], mid_kids: &[B::H], prefix_meta: &[EntryMeta], mid_meta: &[EntryMeta], suffix_meta: &[EntryMeta], old_root: B::H, adopt_from: usize, ka: usize, byte_delta: isize) -> (B::H, usize) {
         let adopted_segs = &suffix_meta[adopt_from..];
         let mut tok_delta = 0isize;
         if !adopted_segs.is_empty() {
             let s = suffix_meta[adopt_from].tok_start as usize;
             tok_delta = self.pos as isize - s as isize;
         }
-        let mut adopted_kids: Vec<B::H> = Vec::with_capacity(kb - ka);
-        for i in ka..kb {
+        let (new_entries, adopted) = reuse_entries(prefix_meta, mid_meta, suffix_meta, adopt_from, byte_delta, tok_delta);
+        let mut adopted_kids: Vec<B::H> = Vec::with_capacity(adopted);
+        for i in ka..ka + adopted {
             let id = self.b.root_kid_at(old_root, i);
             adopted_kids.push(self.b.shift(id, byte_delta, tok_delta));
         }
@@ -1633,7 +1634,6 @@ ${shapeA ? `fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], ki
         children.extend_from_slice(prefix_kids);
         children.extend_from_slice(mid_kids);
         children.extend_from_slice(&adopted_kids);
-        let new_entries = reuse_entries(prefix_meta, mid_meta, suffix_meta, adopt_from, byte_delta, tok_delta);
         let (off, end, tok_start, tok_end) = reuse_span(&new_entries);
         let sb = self.scratch.len();
         self.scratch.extend_from_slice(&children);
