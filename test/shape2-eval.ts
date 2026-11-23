@@ -15,7 +15,7 @@ import {
   dropLastIf, get, present, record, spread, syn, text, thread, typeByText, v, wrapIf, type ShapeSpec, type Term,
 } from '../src/shape2-schema.ts';
 import calc from './fixtures/namedcalc.ts';
-import calcExample from './fixtures/namedcalc-shape.ts';
+import calcExample from './fixtures/shape-namedcalc.ts';
 import { shapeCoverage, shapeSkeleton } from '../src/shape-coverage.ts';
 import { estreeExprShape } from './fixtures/shape-v2-estree-expr.ts';
 import { tscExprShape } from './fixtures/shape-v2-tsc-expr.ts';
@@ -662,10 +662,10 @@ check('docs/SHAPE.md holds the defineShape example verbatim, and its value is th
     const m = new RegExp(`<!-- ${marker}:start -->\\n\`\`\`\\w*\\n([\\s\\S]*?)\`\`\`\\n<!-- ${marker}:end -->`).exec(doc);
     return m ? m[1] : assert.fail(`docs/SHAPE.md has no ${marker} block`);
   };
-  assert.equal(block('shape-example'), readFileSync(new URL('./fixtures/namedcalc-shape.ts', import.meta.url), 'utf8'));
+  assert.equal(block('shape-example'), readFileSync(new URL('./fixtures/shape-namedcalc.ts', import.meta.url), 'utf8'));
   // The value block: `evaluateShape(shape, parse(<source>), <source>)` on its first line, the value as JSON after.
   const [call, ...value] = block('shape-example-value').split('\n');
-  const text = JSON.parse(/parse\((".*")\)/.exec(call)![1]) as string;
+  const text = JSON.parse(/parse\(("(?:[^"\\]|\\.)*")\)/.exec(call)![1]) as string;
   assert.deepEqual(evaluateShape(calcExample, parse(calc, text), text), JSON.parse(value.join('\n').replace(/^\/\/ =>/, '')));
 });
 
@@ -695,7 +695,10 @@ check('skeleton: every arm of calc / javascript / typescript maps to a term that
 });
 {
   const at = join(tmpdir(), `shape-skeleton-${process.pid}.ts`);
-  writeFileSync(at, shapeSkeleton(calc, new URL('./fixtures/namedcalc.ts', import.meta.url).pathname));
+  // Outside the package `monogram/shape` does not resolve (Node resolves a self-reference only from
+  // inside it): the module imports the entry by its path instead.
+  const entry = new URL('../src/shape.ts', import.meta.url).pathname;
+  writeFileSync(at, shapeSkeleton(calc, new URL('./fixtures/namedcalc.ts', import.meta.url).pathname).replace("from 'monogram/shape'", `from '${entry}'`));
   try {
     const sk = (await import(at)).default;
     check('skeleton: the printed module imports and evaluates', () => {

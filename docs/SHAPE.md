@@ -27,7 +27,7 @@ the grammar's own list of them:
    and the arms it leaves out that nothing mapped reaches. `shapeCoverage(shape)` returns the same
    as data. Reachability is computed from the grammar and the spec, not from inputs.
 
-The example below is `test/fixtures/namedcalc-shape.ts`, on the grammar
+The example below is `test/fixtures/shape-namedcalc.ts`, on the grammar
 `test/fixtures/namedcalc.ts`; the gate `shape2-eval` checks that this page holds it verbatim and
 that it evaluates to the value shown.
 
