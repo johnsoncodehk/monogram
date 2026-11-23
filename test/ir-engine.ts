@@ -8,15 +8,16 @@ export type Tok = { kid: number; lid: number; off: number; end: number; nl: bool
 export type Cst = { rule: string; children: Cst[] } | { tokenType: string; offset: number; end: number };
 // A guard that admitted a literal where what it guards then matched (and won): the gate's own
 // proof that it detects a wrong refusal is to refuse that literal there and see it reported.
-export type Found = { body?: { step: Step; lid: number }; cand?: { guard: NonNullable<Guard>; lid: number; pos: number }; commit?: { list: string; lid: number; kid: number; arm: number }; dirty?: { step: Step; i: number }; pair?: { guard: NonNullable<Guard>; pos: number; lid: number } };
-export type Outcome = { accept: boolean; tree: Cst | null; checked: number; cleanChecked: number; unsound: string[]; found: Found };
+export type Found = { body?: { step: Step; lid: number }; cand?: { guard: NonNullable<Guard>; lid: number; pos: number }; commit?: { list: string; lid: number; kid: number; arm: number }; dirty?: { step: Step; i: number }; built?: { step: Step }; pair?: { guard: NonNullable<Guard>; pos: number; lid: number } };
+export type Outcome = { accept: boolean; tree: Cst | null; checked: number; cleanChecked: number; leavesChecked: number; unsound: string[]; found: Found };
 // The mutation: one body guard (by step) or one candidate guard (by identity, at the one list start
 // `pos` where it won: refused at every token with that literal, a nested element of the same
 // list would also be refused inside the check's own attempt) also refuses a literal,
 // or one list commits, at one token (lid and kid), to another candidate than its plan's (`commit`).
 // Or (`clean`) one frame whose body is not clean is taken for clean: a branch (`i`) of an ordered or
-// predictive choice, or a star / opt / sep body (`i` -1).
-export type Mutation = { step?: Step; guard?: NonNullable<Guard>; lid: number; pos?: number; commit?: { list: string; kid: number; arm: number }; clean?: { step: Step; i: number }; pair?: { guard: NonNullable<Guard>; pos: number } } | null;
+// predictive choice, or a star / opt / sep body (`i` -1). Or (`leaves`) one star / opt / sep body
+// under a full mark is taken to fail with leaves only (Step.leaves).
+export type Mutation = { step?: Step; guard?: NonNullable<Guard>; lid: number; pos?: number; commit?: { list: string; kid: number; arm: number }; clean?: { step: Step; i: number }; leaves?: Step; pair?: { guard: NonNullable<Guard>; pos: number } } | null;
 // Or (`pair`) one guard's pair tests (Guard.pairs) refuse at the one list start where they admitted the
 // candidate that won.
 
@@ -55,7 +56,7 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
   const nodes: NodeRec[] = [];
   type Sp = { h: number };
   const base = obs.check === false ? 1 : 0;   // `checking` above it: inside a check's attempt
-  let checking = base, checked = 0, cleanChecked = 0;
+  let checking = base, checked = 0, cleanChecked = 0, leavesChecked = 0;
   // The candidates of one frame that matched non-empty, with their ends: ties are those ending at the winner's end.
   const noteTies = (list: string, ends: Array<[number, number]>, bestPos: number, bi: number, save: number) => {
     if (obs.onTie === undefined || checking !== base || bi < 0) return;
@@ -205,18 +206,36 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
     }
   }
   const all = (steps: Step[], r: boolean) => { for (const x of steps) if (!step(x, r)) return false; return true; };
-  // A body attempt: undone when it fails. A clean one (Step.clean) takes no mark in the targets.
-  const body = (f: () => boolean, st?: Step & { clean?: true }, r = false): boolean => {
+  // A body attempt: undone when it fails. A clean one (Step.clean) takes no mark in the targets; one
+  // that fails with leaves only (Step.leaves) a mark of the position and the scratch list alone.
+  const body = (f: () => boolean, st?: Step & { clean?: true; leaves?: true }, r = false): boolean => {
     const m = mark();
     if (st === undefined) { if (f()) return true; reset(m); return false; }
-    if (st.clean || (mut?.clean?.step === st && mut.clean.i < 0) ? elided(`${st.t} body`, f, st.clean ? st : undefined, r) : noteDirty(st, -1, f)) return true;
+    if (st.clean || (mut?.clean?.step === st && mut.clean.i < 0) ? elided(`${st.t} body`, f, st.clean ? st : undefined, r) : st.leaves || mut?.leaves === st ? leavesOnly(st, f) : noteDirty(st, -1, f)) return true;
     reset(m); return false;
   };
+  // `f` runs under a mark that saves the position and the scratch list only (MarkForm 'leaves'):
+  // failing, it must have left everything else as it found it, the builder's nodes above all
+  // (what the full mark's checkpoint would have dropped), and the context and suppress sets.
+  function leavesOnly(st: Step, f: () => boolean): boolean {
+    if (checking) return f();
+    const key = () => `${nodes.length},${ctx},${suppressNext},${suppressCur}`;
+    const k0 = key(), n0 = nodes.length, p0 = pos, s0 = stateKey();
+    const ok = f();
+    if (ok) return true;
+    leavesChecked++;
+    if (stateKey() !== s0) found.dirty ??= { step: st, i: -1 };   // the elided-mark proof may take it for clean
+    if (key() !== k0) bad(`${st.t} body: marked to fail with leaves only, it failed at ${at()} (it started at offset ${toks[p0]?.off ?? 'end'}) with ${nodes.length - n0} node(s) built (${k0} -> ${key()})`);
+    return false;
+  }
   // A frame body that is not clean and fails dirty: noted for the mutation proof.
+  // A star / opt / sep body that is not clean and fails with a node built: noted for the
+  // mutation proof of the leaves-only mark.
   function noteDirty(st: Step, i: number, f: () => boolean): boolean {
-    if (checking || found.dirty !== undefined) return f();
-    const k0 = stateKey(), ok = f();
-    if (!ok && stateKey() !== k0) found.dirty = { step: st, i };
+    if (checking || (found.dirty !== undefined && (i >= 0 || found.built !== undefined))) return f();
+    const k0 = stateKey(), n0 = nodes.length, ok = f();
+    if (!ok && stateKey() !== k0) found.dirty ??= { step: st, i };
+    if (!ok && i < 0 && nodes.length !== n0) found.built ??= { step: st };
     return ok;
   }
   // A star / opt / sep body its guard refused: it must not match non-empty here.
@@ -725,10 +744,10 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
   return function run(tokens: Tok[], text: string, entry: string = ir.entry): Outcome {
     toks = tokens; src = text;
     pos = 0; capped = false; form = 0; tail = false; suppressNext = 0; suppressCur = 0; ctx = 0;
-    scratch.length = 0; nodes.length = 0; opEnd.clear(); checking = base; checked = 0; cleanChecked = 0; unsound = []; found = {};
+    scratch.length = 0; nodes.length = 0; opEnd.clear(); checking = base; checked = 0; cleanChecked = 0; leavesChecked = 0; unsound = []; found = {};
     const root = parseRule(entry);
     const accept = root !== null && pos === toks.length;
-    return { accept, tree: accept ? tree(root!.h) : null, checked, cleanChecked, unsound, found };
+    return { accept, tree: accept ? tree(root!.h) : null, checked, cleanChecked, leavesChecked, unsound, found };
   };
 }
 
