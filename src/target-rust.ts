@@ -4804,7 +4804,7 @@ ${arms.join('\n')}
     } else {
       // parenOrComma is a site-level decision for every arm — emit one branch.
       if (info.perArm.length === 1 && typeof info.perArm[0] === 'object' && info.perArm[0] !== null && 'parenOrComma' in (info.perArm[0] as object)) {
-        lines.push(`            ${JSON.stringify(fn)} => if arm == 7 { "MetaProperty" } else if kids.len() == 1 { kid_type(kids[0]) } else { "SequenceExpression" },`);
+        lines.push(`            ${JSON.stringify(fn)} => if arm == 6 { "MetaProperty" } else if kids.len() == 1 { kid_type(kids[0]) } else { "SequenceExpression" },`);
         continue;
       }
       const arms: string[] = [];
@@ -4814,7 +4814,7 @@ ${arms.join('\n')}
         if (typeof t === 'string') rhs = JSON.stringify(t);
         else if ('passthrough' in t) rhs = 'kid_type(kids.first().copied().unwrap_or(SVal::Null))';
         else if ('optionalChain' in t) rhs = 'optional_chain_type(kids)';
-        else rhs = 'if arm == 7 { "MetaProperty" } else if kids.len() == 1 { kid_type(kids[0]) } else { "SequenceExpression" }';
+        else rhs = 'if arm == 6 { "MetaProperty" } else if kids.len() == 1 { kid_type(kids[0]) } else { "SequenceExpression" }';
         arms.push(`                ${i} => ${rhs},`);
       });
       lines.push(`            ${JSON.stringify(fn)} => match arm {

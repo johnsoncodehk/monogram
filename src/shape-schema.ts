@@ -44,7 +44,7 @@ export type ParentFold = { tag: string; into: string };
  * generated type table resolves at event time:
  *  - passthrough: type of the first kid (TNode → its node type, Str → Identifier)
  *  - optionalChain: kids[0] is a list → CallExpression, else MemberExpression
- *  - parenOrComma: arm 7 → MetaProperty; 1 kid → its type; else SequenceExpression
+ *  - parenOrComma: arm 6 → MetaProperty; 1 kid → its type; else SequenceExpression
  */
 export type StreamType =
   | string
