@@ -107,7 +107,7 @@ writeFileSync('parser.rs', emitParser(grammar, rustTarget));  // of monogram
 | Output | How | Status |
 |---|---|---|
 | Interpreter parser (CST) | `createParser(grammar)`, [`src/gen-parser.ts`](src/gen-parser.ts) | The reference. Every other parser is gated against it. All six grammars. |
-| Portable parsers: TypeScript, Go, Rust | `emitParser(grammar, tsTarget \| goTarget \| rustTarget)` | Agree with the interpreter on accept/reject and tree on every CI run. Token-stream and newline grammars; indent (YAML) and markup (HTML) grammars are refused. |
+| Portable parsers: TypeScript, Go, Rust | `emitParser(grammar, tsTarget \| goTarget \| rustTarget)` | Agree with the interpreter on accept/reject and tree on every CI run. Token-stream and newline grammars, and grammars with element regions: TSX, JSX and code-children dialects. Refused, never mis-lexed: indent (YAML) and markup (HTML) grammars, and the region features the portable lexers do not carry yet ([TARGETS](docs/TARGETS.md#what-each-target-accepts)). |
 | Emitted JavaScript parser | `emitParser(grammar, jsTarget)` | All six grammars. To be retired once the portable TS target covers it ([ROADMAP](docs/ROADMAP.md)). |
 | Incremental `Doc` | TS `createDoc`, Go `NewDoc`, Rust `Doc`; `jsTarget`'s `createParser().edit` | Every edited re-parse equals a fresh parse, gated. |
 | Total parsing with diagnostics | `jsTarget`'s `createParser()`: a tree plus `errors` for every text | `jsTarget` only. The portable parsers reject without recovery. |
@@ -115,6 +115,11 @@ writeFileSync('parser.rs', emitParser(grammar, rustTarget));  // of monogram
 | tree-sitter grammar + highlight queries | `node src/cli.ts` | Builds to wasm in CI; TypeScript query accuracy gated. |
 | Monarch tokenizer (Monaco) | `node src/cli.ts` | Functional, bounded by JavaScript regex limits. |
 | Shape-mapped AST | `emitTs(grammar, { shape })`, `emitRust(grammar, { shape })` | TypeScript and Rust. Go not yet. |
+
+**Changed interface (Rust):** the emitted Rust parser's `tokenize(src)` returns
+`Result<Vec<Token>, LexError>` since `f5a1c3e`; before, it returned `Vec<Token>` and panicked on
+input it cannot tokenize. `parse_with`, `parse` and `Doc::new` still panic. The TS and Go
+surfaces are unchanged ([docs/TARGETS.md](docs/TARGETS.md#errors-and-tokens)).
 
 The CST holds every token, punctuation and keywords included, which is what highlighting and
 lossless source reconstruction need. Per-target API, error mechanisms and the builder-reuse
@@ -178,18 +183,26 @@ cannot express: [docs/HIGHLIGHTER-EVIDENCE.md](docs/HIGHLIGHTER-EVIDENCE.md).
   target: Rust and Go instruction counts (Callgrind), TypeScript and JavaScript block-execution
   counts, allocator calls and page faults. A change that moves one target only is listed as
   such ([docs/MEASUREMENT.md](docs/MEASUREMENT.md)).
+- TSX and JSX through the portable parsers, on `d326d65` (AMD EPYC 7763): plain TypeScript
+  parsed by the TSX parser costs 1.4% more Rust instructions per parse than by the TypeScript
+  parser (Go +1.6% direct, -0.7% builder engine; TS +0.06% blocks); a token of tsc's JSX
+  conformance code costs the Rust lexer 203.7 instructions against 142.3 on `checker.ts`
+  ([docs/MEASUREMENT.md](docs/MEASUREMENT.md#recorded-result-element-dialects-tsx-and-jsx)).
 
 ### Allocations and sizes
 
 - With a kept builder, a Go parse allocates nothing (0 allocations per parse in reuse mode,
   pinned for each input in [docs/ALLOCATIONS.md](docs/ALLOCATIONS.md), gate `alloc-work`);
   the same record pins the TS and JS targets.
-- Emitted parser sizes (`node test/emit-sizes.ts` on `0016998`):
+- Emitted parser sizes (`node test/emit-sizes.ts` on `d326d65`, recorded by the profile run
+  45129600578):
 
 | grammar | TypeScript | Go | Rust | emitted JS (`jsTarget`) |
 |---|--:|--:|--:|--:|
-| `typescript.ts` | 381,231 B | 433,406 B | 318,488 B | 1,367,345 B |
-| `javascript.ts` | 247,427 B | 282,482 B | 234,210 B | 802,009 B |
+| `typescript.ts` | 279,033 B | 510,353 B | 371,413 B | 1,462,627 B |
+| `javascript.ts` | 193,639 B | 331,230 B | 273,387 B | 869,603 B |
+| `typescriptreact.ts` | 309,794 B | 545,370 B | 408,054 B | 1,516,020 B |
+| `javascriptreact.ts` | 206,830 B | 350,928 B | 288,389 B | 921,558 B |
 
 ## Design
 
@@ -245,6 +258,41 @@ The lexer, the CST types and the highlighters come from step 1; a dialect reuses
 grammar's rules by name. The conformance and highlighter harnesses are written for the
 languages here (they call `tsc`, parse5 and VS Code's grammars); point them at your own
 reference parser. The test taxonomy (gates, metrics, ledger, benches): [docs/TESTING.md](docs/TESTING.md).
+
+### A dialect with elements
+
+A language with JSX-like elements declares them once on the grammar, as an `elements` region:
+the tag delimiters (`tagOpen`, `tagClose`, `closeMarker`), the `closeTag` and `selfClose`
+tokens and the `hole` braces, and as needed
+
+| field | what it declares |
+|---|---|
+| `text` | children are text; leave it out and children are code |
+| `tagTokens` | tokens lexed only inside a tag (attribute strings) |
+| `rawText` | tags such as `<style>` / `<script>` whose body is one raw token, with `ignoreCase`, `unlessBodyStarts` and an `embed` scope such as `source.css` |
+| `tagStart` | which characters after the tag opener open a tag; otherwise it is text |
+| `textTokens` | tokens tried before a text run (comments in text), with an `after` class |
+| `highlight` | highlighter data: tag-name scopes, patterns inside text, a children scope |
+
+Directives in children (`@if (…) { … } @else { … }`) and dynamic tags (`<{expr}>`) need no
+declaration: they are derived from the rules. How code enters an element is derived too, from
+whether the tag opener is also an operator in the grammar.
+
+From that one file the lexer tokenizes elements, and the generated TextMate grammar highlights
+tags, attributes, holes, code or text children, raw bodies in their embedded language, comments
+in text, directives and dynamic tags. JSX and TSX are declared this way
+([`javascriptreact.ts`](javascriptreact.ts)); two fixtures exercise the rest
+([`test/fixtures/elementdialect.ts`](test/fixtures/elementdialect.ts),
+[`test/fixtures/textdialect.ts`](test/fixtures/textdialect.ts)). The model, what a lexer-local
+region cannot decide, and the generators' limits with a witness each:
+[docs/REGIONS.md](docs/REGIONS.md).
+
+Not there yet: the Monarch grammar has no element layer; the tree-sitter generator still carries
+its own JSX vocabulary and reads none of the other region features; the portable parsers (TypeScript, Go, Rust) parse JSX and TSX but refuse a
+grammar that declares `tagStart`, `unlessBodyStarts`, `textTokens` or has directives.
+
+**Changed behaviour:** a grammar that declares no region gets no element layer. Elements are no
+longer guessed from a `/>` token or a rule that starts with `<`.
 
 ## Where this is going
 
