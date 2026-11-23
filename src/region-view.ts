@@ -33,6 +33,8 @@ export interface RegionView {
   attrAssign: string | null;
   /** An arm `tagOpen tagClose …`: a nameless element (JSX's fragment `<>…</>`). */
   fragment: boolean;
+  /** The tag-name rule has an arm that is a hole (`<{expr}>…</{expr}>`): a dynamic tag. */
+  dynamicTag: boolean;
   /** The rule inside a tag's type-argument list `tagOpen Name tagOpen sep(T) tagClose` (TSX), or null. */
   typeArgRule: string | null;
   /** Tokens lexed only in the region (text, close tag, self-close, tag tokens, raw-text bodies). */
@@ -109,12 +111,20 @@ export function regionView(grammar: CstGrammar): RegionView | null {
       cur = head.name;
     }
   };
-  let tagName: NameShape | null = null, attr: NameShape | null = null, attrRule: string | null = null, attrAssign: string | null = null, fragment = false, typeArgRule: string | null = null;
+  let tagName: NameShape | null = null, attr: NameShape | null = null, attrRule: string | null = null, attrAssign: string | null = null, fragment = false, dynamicTag = false, typeArgRule: string | null = null;
   for (const a of arms) {
     const n = a[1];
     if (isLit(n, region.tagClose)) fragment = true;
     if (n?.type !== 'ref' || rules.get(n.name) === undefined) continue;
     tagName ??= nameShape(n.name);
+    // an arm of the tag-name rule that begins with the hole opener (through rule references)
+    const holeHeaded = (ruleName: string, seen: Set<string>): boolean => {
+      if (seen.has(ruleName)) return false;
+      seen.add(ruleName);
+      return expandArms(rules.get(ruleName)?.body ?? { type: 'seq', items: [] }).some((x) =>
+        isLit(x[0], region.hole.open) || (x[0]?.type === 'ref' && rules.has(x[0].name) && x.length === 1 && holeHeaded(x[0].name, seen)));
+    };
+    if (holeHeaded(n.name, new Set())) dynamicTag = true;
     let i = 2;
     if (isLit(a[2], region.tagOpen) && a[3]?.type === 'sep' && isLit(a[4], region.tagClose)) {
       const el = (a[3] as { element: RuleExpr }).element;
@@ -141,7 +151,7 @@ export function regionView(grammar: CstGrammar): RegionView | null {
     closeTagText: text(region.closeTag),
     selfCloseText: text(region.selfClose),
     entry: tagOpenOnlyOpensTags(grammar, region) ? 'always' : 'operand',
-    arms, tagName, attr, attrRule, attrAssign, fragment, typeArgRule,
+    arms, tagName, attr, attrRule, attrAssign, fragment, dynamicTag, typeArgRule,
     ownTokens: new Set([region.text, region.closeTag, region.selfClose, ...region.tagTokens ?? [], ...(region.rawText ?? []).map((r) => r.token)].filter((x): x is string => x !== undefined)),
     tagTokens,
     highlight: region.highlight ?? {},
