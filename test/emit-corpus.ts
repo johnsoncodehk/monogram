@@ -8,14 +8,15 @@
 //
 //   1) a curated set of TS snippets covering every production class (small, stable, so the
 //      gate exercises constructs the repo sources happen not to use), and
-//   2) the repo's OWN hand-written .ts sources (src/** + the root grammar models) — large,
+//   2) the repo's OWN hand-written .ts sources (src/*.ts + the root grammar models, as of the pinned commit REPO_CORPUS_AT) — large,
 //      diverse, real-world TypeScript with zero vendoring and no license question.
 //
 // This is what makes the parity check CORPUS-FREE, so it runs in `npm run check` on every
 // machine and every CI run — the mechanism that forces a gen-parser change to propagate to
 // emit-parser (issue #45 A2/A4). When the optional /tmp/ts-repo corpus is also present the
 // gates additionally sweep it for breadth; absent, that sweep is skipped.
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -181,33 +182,67 @@ export const CURATED_TS_INVALID: string[] = [
   `x /*\n*/ ++;`,
 ];
 
-// ── 2) The repo's own hand-written .ts sources ──────────────────────────────────────────
-// Excludes generated artifacts (*.cst-match.ts) and caps file size so the gate stays fast
+// ── 2) The repo's own sources, PINNED ───────────────────────────────────────────────────
+// The hand-written .ts sources (src/*.ts + the root grammar models) as they were at ONE commit,
+// read from git's objects, not from the working tree. Pinned so that the corpus is an input that
+// does not move with every commit: read live, every src change was an input of every gate that
+// imports this module (`node test/check.ts --changed` ran five of them for any printer change),
+// and the corpus itself changed under the gates. What pinning gives up: new code in src/ is not
+// parsed by these gates until the pin moves; new SYNTAX is the conformance corpora's job (test262,
+// the tsc corpus, the curated lists above), not this one's. Move the pin (any commit of master)
+// when the corpus should see newer sources; the gates' counts in their output change then.
+// A checkout without the commit (CI's shallow clone) fetches it once (git fetch --depth 1); a
+// failure to get it fails the gate (no silent empty corpus).
+export const REPO_CORPUS_AT = '7b713ea0555571aa01950592125182c0d5012231';
+const git = (args: string[], input?: string): Buffer => execFileSync('git', ['-C', ROOT, ...args], { input, maxBuffer: 1 << 28 });
+function corpusCommit(): string {
+  try { git(['cat-file', '-e', `${REPO_CORPUS_AT}^{tree}`]); } catch {
+    try { git(['fetch', '-q', '--depth', '1', 'origin', REPO_CORPUS_AT]); } catch (e) {
+      throw new Error(`emit-corpus: the pinned commit ${REPO_CORPUS_AT} is not in this clone and \`git fetch --depth 1 origin ${REPO_CORPUS_AT}\` failed: ${String(e)}`);
+    }
+  }
+  return REPO_CORPUS_AT;
+}
+
 // (the byte-identical CST compare is O(tree size); a 250 KB cap keeps the rich, deeply-
 // nested sources like emit-parser.ts while dropping the multi-hundred-KB ones).
 const SIZE_CAP = 250 * 1024;
-const isGenerated = (f: string) => f.endsWith('.cst-match.ts') || f.endsWith('.d.ts');
+const GENERATED = /\.cst-match\.ts$|\.d\.ts$/;
 
-export function repoTsFiles(): string[] {
-  const out: string[] = [];
-  const take = (full: string, name: string) => {
-    if (!name.endsWith('.ts') || isGenerated(name)) return;
-    try { if (statSync(full).size <= SIZE_CAP) out.push(full); } catch { /* ignore */ }
-  };
-  for (const f of readdirSync(ROOT)) take(join(ROOT, f), f);              // root grammar models
-  for (const f of readdirSync(join(ROOT, 'src'))) take(join(ROOT, 'src', f), f);  // src/**
-  return out.sort();
+/** The pinned corpus's files: path at the commit and blob id (root *.ts and src/*.ts, generated ones and those above the cap left out). */
+export function repoTsFiles(): { name: string; blob: string }[] {
+  const at = corpusCommit();
+  const out: { name: string; blob: string }[] = [];
+  // (the directory is spelled `dir` + '/' so that test/gate-deps.ts does not read a literal 'src/'
+  // as "this gate reads every file under src/": the point of the pin)
+  const dir = 'src';
+  for (const [tree, prefix] of [[at, ''], [`${at}:${dir}`, dir + '/']] as const) {
+    for (const line of git(['ls-tree', '-l', tree]).toString('utf8').split('\n')) {
+      // <mode> blob <id> <size>\t<name>
+      const m = /^\d+ blob ([0-9a-f]+) +(\d+)\t(.+)$/.exec(line);
+      if (!m || !/\.ts$/.test(m[3]!) || GENERATED.test(m[3]!) || +m[2]! > SIZE_CAP) continue;
+      out.push({ name: prefix + m[3], blob: m[1]! });
+    }
+  }
+  return out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
-/** The full in-repo parity corpus as { name, code } — curated snippets + repo sources. */
+/** The full in-repo parity corpus as { name, code } — curated snippets + the pinned repo sources. */
 export function inRepoCorpus(): { name: string; code: string }[] {
   const out = [
     ...CURATED_TS.map((code, i) => ({ name: `curated#${i}`, code })),
     ...CURATED_TS_CST.map((code, i) => ({ name: `cst#${i}`, code })),
     ...CURATED_TS_INVALID.map((code, i) => ({ name: `invalid#${i}`, code })),
   ];
-  for (const f of repoTsFiles()) {
-    try { out.push({ name: f.slice(ROOT.length + 1), code: readFileSync(f, 'utf8') }); } catch { /* ignore */ }
+  const files = repoTsFiles();
+  // one `git cat-file --batch` for every blob: `<id> blob <size>\n<bytes>\n` per entry
+  const buf = git(['cat-file', '--batch'], files.map((f) => f.blob).join('\n') + '\n');
+  let at = 0;
+  for (const f of files) {
+    const nl = buf.indexOf(10, at);
+    const size = +buf.subarray(at, nl).toString('latin1').split(' ')[2]!;
+    out.push({ name: f.name, code: buf.subarray(nl + 1, nl + 1 + size).toString('utf8') });
+    at = nl + 1 + size + 1;
   }
   return out;
 }
