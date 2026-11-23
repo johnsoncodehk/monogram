@@ -2983,6 +2983,7 @@ function rustShapeFirstOfSteps(steps: Step[]): FirstSig {
       case 'look':
       case 'ahead':
       case 'aheadCtx':
+      case 'target':
       case 'sameLine': return 'nullable'; // zero-width: consumes nothing
       case 'opt': return walkSeq(s.steps) === 'unknown' ? 'unknown' : 'nullable';
       case 'star': return walkSeq([s.step]) === 'unknown' ? 'unknown' : 'nullable';
@@ -3271,6 +3272,7 @@ function emitRustAstRdAltSteps(
       case 'look':
       case 'ahead':
       case 'aheadCtx':
+      case 'target':
       case 'sameLine': return false;
     }
   };
@@ -3288,6 +3290,7 @@ function emitRustAstRdAltSteps(
       case 'tok':
       case 'altlit': return true;
       case 'sameLine': return true;
+      case 'target': return true;
       case 'ahead': return true;
       case 'aheadCtx': return true;
       case 'look': return true;
@@ -3346,6 +3349,7 @@ function emitRustAstRdAltSteps(
       }
       case 'seq':
         return emitSteps(s.steps, okVar);
+      case 'target': throw new Error('rust typed AST: declared target contexts not printed yet');
       case 'sameLine':
         return `if ${okVar} { match self.toks.get(self.pos) { Some(t) if !t.nl => {} _ => { ${okVar} = false; } } }`;
       case 'ahead':

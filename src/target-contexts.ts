@@ -25,7 +25,9 @@ import type { CstGrammar } from './types.ts';
 import type { RuleIR, Step, RdRule, PrattRule, TargetsIR } from './emit-portable.ts';
 import { formPass, formLast, FORM_MAX_CONTEXTS } from './emit-portable.ts';
 
-export type ArmForm = { k: 'const'; v: number } | { k: 'unit' } | { k: 'acc'; init: number; last: number };
+// acc: init, the bits the arm starts from (its container contexts' pass bits and its leaf bits); low,
+// its FORM_LOW bits; last, its last bits (kept where it passes).
+export type ArmForm = { k: 'const'; v: number } | { k: 'unit' } | { k: 'acc'; init: number; low: number; last: number };
 
 type Role = { leaf: number; acc: number; field: Map<number, string>; last: number };
 
@@ -100,6 +102,8 @@ export function planTargets(grammar: CstGrammar, rules: RuleIR[]): TargetsIR | n
         if (m !== 0) { s.acc = m; need(s.name); }
       } else if (s.t === 'lit' && s.value === ',' && (role.acc & lastCtx) !== 0) s.accSep = true;
     }
+    // a sep's delimiter: each element after one clears a pending last child (its first, none)
+    for (const s of walk(steps)) if (s.t === 'sep' && s.delim === ',' && (role.acc & lastCtx) !== 0 && [...walk([s.elem])].some((x) => (x.t === 'rule' || x.t === 'ruleBp') && x.acc !== undefined)) s.accSep = true;
     for (const [i, field] of role.field) {
       if (field === 'all') continue;
       if (![...walk(steps)].some((s) => (s.t === 'rule' || s.t === 'ruleBp') && s.field === field)) {
@@ -113,7 +117,7 @@ export function planTargets(grammar: CstGrammar, rules: RuleIR[]): TargetsIR | n
     if (role && role.acc !== 0) {
       if (steps === null) throw new Error(`targets: arm ${arm} of rule ${rule} is a container but has no steps of its own (an operator form)`);
       markAcc(rule, arm, steps, role);
-      return { k: 'acc', init: low | role.acc | role.leaf, last: role.last };
+      return { k: 'acc', init: role.acc | role.leaf, low, last: role.last };
     }
     if (role) return { k: 'const', v: low | role.leaf | role.last };
     const u = steps === null ? null : unitCall(steps);
@@ -150,14 +154,23 @@ export function planTargets(grammar: CstGrammar, rules: RuleIR[]): TargetsIR | n
     });
     r.postfixTokForm = r.postfixTokNames.map((arm) => { const f = armForm(r.name, arm, null, 0); return f.k === 'const' ? f.v : 0; });
     if (r.opNames) {
+      // The binary node's arm is the operator form (opNames.binary, every operator) or one
+      // operator, named by its text as the IR names operators (`=`: ECMAScript's AssignmentElement).
+      const leftOf = (arm: string, role: Role): number => {
+        let m = 0;
+        for (const [i, field] of role.field) {
+          if (field !== 'left') throw new Error(`targets: the binary node ${arm} of rule ${r.name} is a container only of its left operand ('left'), not ${field}`);
+          m |= formPass(i);
+        }
+        return m;
+      };
       const bin = roles.get(r.opNames.binary);
       if (bin) used.add(r.opNames.binary);
-      let accLeft = 0;
-      for (const [i, field] of bin?.field ?? []) {
-        if (field !== 'left') throw new Error(`targets: the operator form ${r.opNames.binary} of rule ${r.name} is a container only of its left operand ('left'), not ${field}`);
-        accLeft |= formPass(i);
+      r.binForm = { leaf: bin ? bin.leaf | bin.last : 0, accLeft: bin ? leftOf(r.opNames.binary, bin) : 0 };
+      for (const b of r.binary) {
+        const own = roles.get(b.op);
+        if (own) { used.add(b.op); b.accLeft = leftOf(b.op, own); if (own.leaf | own.last) throw new Error(`targets: operator ${b.op} of rule ${r.name} as a leaf: name the operator form ${r.opNames.binary}`); }
       }
-      r.binForm = { leaf: bin ? bin.leaf | bin.last : 0, accLeft };
       const post = roles.get(r.opNames.postfix), pre = roles.get(r.opNames.prefix);
       if (post) used.add(r.opNames.postfix);
       if ((post?.acc ?? 0) !== 0 || (pre?.acc ?? 0) !== 0) throw new Error(`targets: a prefix / postfix operator form of rule ${r.name} as a container is not supported`);
@@ -166,6 +179,7 @@ export function planTargets(grammar: CstGrammar, rules: RuleIR[]): TargetsIR | n
       for (const b of r.binary) {
         const ctx = grammarOpCtx(grammar, b.op);
         if (ctx !== undefined) b.needCtx = formPass(ctxIndex(ctx));
+        b.accLeft = (b.accLeft ?? 0) | r.binForm.accLeft;
       }
     }
   }
