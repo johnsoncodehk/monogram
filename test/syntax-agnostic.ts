@@ -8,7 +8,7 @@
 //   node test/syntax-agnostic.ts
 import { defineTarget } from '../src/define-target.ts';
 import { portableIR } from '../src/emit-portable.ts';
-import { relexFamilyFns, relexMode } from '../src/relex-family.ts';
+import { relexFamily, relexFamilyFns, relexMode } from '../src/relex-family.ts';
 import { lexScanFamily } from '../src/lex-family.ts';
 import { reuseFamilyFns } from '../src/reuse-family.ts';
 import { ATOM, type BinOp, type Expr, type Fn, type Lowering, type Stmt } from '../src/algo-ir.ts';
@@ -201,7 +201,7 @@ for (const path of FIXTURES) {
   let heads: Map<string, number>;
   try { heads = read(out); } catch (e) { fail(`${path}: ${(e as Error).message}`); continue; }
   const want = census(fns);
-  want.set('define-char-set', lex.sets.length);
+  want.set('define-char-set', lex.sets.length + relexFamily(relexMode(portableIR(grammar))).sets.length);
   want.set('define-runtime', (want.has('run-end') ? 1 : 0) + (want.has('find') ? 1 : 0) + lex.stopSets.length);
   for (const [k, n] of want) {
     const got = k.split('|').reduce((s, h) => s + (heads.get(h) ?? 0), 0);

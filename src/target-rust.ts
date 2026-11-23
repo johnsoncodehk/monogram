@@ -15,7 +15,7 @@ import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, t
 import { blockBody, elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
-import { ATOM, COMPARISON, findAnyName, stopBytes, isList, isNum, isOpt, isRec, isRecList, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
+import { ATOM, COMPARISON, findAnyName, stopBytes, unitMask, isList, isNum, isOpt, isRec, isRecList, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 import type {
@@ -47,7 +47,7 @@ const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
 // keyed: the candidate is reached through its Dispatch key, which already tested the first token.
 const guardCond = (g: Guard, t: string, keyed: boolean, recv = 'self'): string[] =>
   g === null ? [] : [...(keyed || g.first === null ? [] : [`in_token_set(${g.first.id}, &${t})`]), ...(g.second !== null ? [`${recv}.second_in(${g.second.id})`] : []), ...g.lead.map((l) => leadRs(l, t, recv)),
-    ...(g.pairs ?? []).map((x) => `(!in_token_set(${x.when.id}, &${t}) || ${recv}.second_in(${x.second.id}))`)];
+    ...(g.pairs ?? []).map((x) => `${recv}.pair_in(${x.when.id}, &${t}, ${x.second.id})`)];
 // A guard's lead test (emit-portable.ts LeadTest) on the buffered token t.
 const leadRs = (l: LeadTest, t: string, recv: string): string => {
   const inS = l.ctx ? `(in_token_set(${l.set}, &${t}) || (${recv}.ctx != 0 && in_ctx_words(${recv}.ctx, &${t})))` : `in_token_set(${l.set}, &${t})`;
@@ -2425,6 +2425,10 @@ impl<'a, B: Builder> Parser<'a, B> {
         if i + 1 > self.max_look { self.max_look = i + 1; }
         i < self.toks.len() && in_token_set(k, &self.toks[i])
     }
+    /// A pair test (Guard.pairs): when t is in tokenSets[w], the token after it must be in tokenSets[s].
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn pair_in(&mut self, w: usize, t: &Tok, s: usize) -> bool { !in_token_set(w, t) || self.second_in(s) }
     #[inline(always)]
     fn off_at(&self, i: usize) -> usize { if i < self.toks.len() { self.toks[i].off as usize } else { 0 } }
     #[inline(always)]
@@ -5397,11 +5401,10 @@ const rustLowering: Lowering = {
   borrowStr: (r) => (!r.owned ? r.c : /^\w+$/.test(r.c) ? `${r.c}.as_str()` : `(${r.c}).as_str()`),
   borrowList: (r) => (r.owned ? `&${r.c}` : r.c),
   borrowVal: (r) => `&${r.c}`,
-  charSet: (name, rs) => {
-    const a = Array<boolean>(256).fill(false);
-    for (const [lo, hi] of rs) for (let c = lo; c <= hi; c++) a[c] = true;
-    return `const ${name.toUpperCase()}: [bool; 256] = [${a.map((b) => (b ? 'true' : 'false')).join(', ')}];`;
-  },
+  // Rust spelling: the table is built from its ranges by a const block, evaluated at compile time
+  // (the same [bool; 256] constant as its 256 literals, a tenth of their bytes); a cold table
+  // (tested off the hot path) is a 128-bit mask, a shift and a mask per test.
+  charSet: (name, rs, cold) => cold ? `const ${name.toUpperCase()}: [u64; 2] = [${unitMask(rs, 0)}, ${unitMask(rs, 64)}];` : `const ${name.toUpperCase()}: [bool; 256] = { let r: &[(usize, usize)] = &[${rs.map(([lo, hi]) => `(${lo}, ${hi})`).join(', ')}]; let mut a = [false; 256]; let mut i = 0; while i < r.len() { let mut c = r[i].0; while c <= r[i].1 { a[c] = true; c += 1; } i += 1; } a };`,
   // Four bytes per round: one table test each, and one bounds test per round instead of per byte.
   runEndFn: `/// The end of the run of bytes in \`set\` from i: the first j >= i at which b ends or b[j] is not in it.
 #[inline(always)]
@@ -5490,7 +5493,11 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
     len: (cx, l) => cx.atom(`${rsWrap(l, ATOM)}.len()`, 'int', 'usize'),
     code: (cx, s, i) => ({ c: `${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}] as u32`, ty: 'int', nat: 'u32', prec: RS_CAST }),
     hasAt: (cx, s, i, lit) => cx.atom(`${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}..].starts_with(${J(lit)}.as_bytes())`, 'bool', 'bool'),
-    inSet: (cx, set, c) => cx.atom(`${set.toUpperCase()}[${cx.coerce(c, 'usize')}]`, 'bool', 'bool'),
+    inSet: (cx, set, c, cold) => {
+      if (!cold) return cx.atom(`${set.toUpperCase()}[${cx.coerce(c, 'usize')}]`, 'bool', 'bool');
+      const u = `(${cx.coerce(c, 'usize')})`; // `c as usize < 128` would read `<` as generic arguments
+      return cx.atom(`(${u} < 128 && ${set.toUpperCase()}[${u} >> 6] >> (${u} & 63) & 1 != 0)`, 'bool', 'bool');
+    },
     runEnd: (cx, set, s, i) => cx.atom(`lex_run_end(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')}, &${set.toUpperCase()})`, 'int', 'usize'),
     find: (cx, s, i, lit) => cx.atom(`lex_find(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')}, ${J(lit)}.as_bytes())`, 'int', 'usize'),
     findAny: (cx, s, i, stops) => cx.atom(`${findAnyName(stops)}(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')})`, 'int', 'usize'),

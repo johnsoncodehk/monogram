@@ -38,7 +38,7 @@
 import { type ParserIR, buildLexIdPlan, kidOf, lidOf, regionKids } from './emit-portable.ts';
 import { type LookPlan, lexLookPlan } from './lex-family.ts';
 import type { CSet } from './lex-match-plan.ts';
-import { type Expr, type Fn, type ListTy, type Lowering, type MetaFlag, type MetaInt, type RecordDecl, type Stmt, type TokInt, type Ty, printFns } from './algo-ir.ts';
+import { type CharSet, type Expr, type Fn, type ListTy, type Lowering, type MetaFlag, type MetaInt, type RecordDecl, type Stmt, type TokInt, type Ty, printFns } from './algo-ir.ts';
 
 // A lexer error: its kind (0 an unexpected character at off, 1 an identifier whose escapes spell
 // no IdentifierName, s[off, end), 2 an unterminated template literal, 3 an invalid escape sequence
@@ -395,6 +395,37 @@ function inUnits(c: Ex, set: CSet): Expr {
   return tests.length ? or(...tests) : F;
 }
 
+// The tables of the unit sets the reads test (relexOverEnd, relexInReach): one per distinct set of
+// ASCII units, a unit beyond ASCII a member when the set has one (as inUnits). A set of at most two
+// ranges stays a comparison: its table would be the longer spelling.
+class UnitSets {
+  sets: CharSet[] = [];
+  private byKey = new Map<string, string>();
+  test(c: Ex, set: CSet): Expr {
+    const ascii = set.filter(([a]) => a <= 127).map(([a, b]): [number, number] => [Math.max(0, a), Math.min(127, b)]);
+    if (ascii.length <= 2) return inUnits(c, set);
+    const key = JSON.stringify(ascii);
+    let name = this.byKey.get(key);
+    if (!name) {
+      name = `relexUnits${this.sets.length}`;
+      this.byKey.set(key, name);
+      this.sets.push({ name, ranges: ascii, cold: true });
+    }
+    const t: Expr = { k: 'inSet', set: name, c: x(c) };
+    return set.some(([, b]) => b >= 128) ? or(t, ge(c, I(128))) : t;
+  }
+}
+
+// Sorted units as ranges of consecutive ones.
+const unitRuns = (us: number[]): CSet => {
+  const out: [number, number][] = [];
+  for (const b of [...us].sort((p, q) => p - q)) {
+    const last = out[out.length - 1];
+    if (last && last[1] + 1 === b) last[1] = b; else out.push([b, b]);
+  }
+  return out;
+};
+
 const readsBeforeFn = (m: RelexMode): Fn => {
   const body: Stmt[] = m.look.arms.length ? [let_('r', 'int', I(0)), if_(ge('off', len('text')), [ret('r')]), let_('u', 'int', code('text', 'off'))] : [let_('r', 'int', I(0))];
   m.look.arms.forEach((arm, ai) => {
@@ -403,7 +434,7 @@ const readsBeforeFn = (m: RelexMode): Fn => {
       if (c.tok !== null) steps.push(if_(eq('kid', I(m.kidOf(c.tok))), [ret('r')]));
       if (c.readEnd) steps.push(let_(`e${ai}_${k}`, 'int', call(c.readEnd, 'text', 'off')), if_(gt(`e${ai}_${k}`, 'r'), [set('r', `e${ai}_${k}`)]));
     });
-    const test = arm.units === null ? ge('u', I(128)) : inUnits('u', arm.units.map((b): [number, number] => [b, b]));
+    const test = arm.units === null ? ge('u', I(128)) : inUnits('u', unitRuns(arm.units));
     body.push(if_(test, [...steps, ret('r')]));
   });
   body.push(ret('r'));
@@ -416,28 +447,32 @@ const readsBeforeFn = (m: RelexMode): Fn => {
   };
 };
 
-const overEndFn = (m: RelexMode): Fn => ({
+const overEndFn = (m: RelexMode, u: UnitSets): Fn => ({
   name: 'relexOverEnd',
   doc: 'Where the match of the token of kind kid that ends at e read to (exclusive), when it can be past e + 1: through the units\nits pattern can pass, from a unit its match can read further at; 0 otherwise.',
   params: [{ name: 'text', ty: 'str' }, { name: 'e', ty: 'int' }, { name: 'kid', ty: 'int' }],
   ret: ['int'],
   body: [
     ...(m.look.over.length ? [if_(ge('e', len('text')), [ret(I(0))]), let_('c', 'int', code('text', 'e'))] : []),
-    ...m.look.over.map((o) => if_(and(eq('kid', I(m.kidOf(o.tok))), inUnits('c', o.trig)), [
+    ...m.look.over.map((o) => if_(and(eq('kid', I(m.kidOf(o.tok))), u.test('c', o.trig)), [
       let_('q', 'int', 'e'),
-      while_(and(lt('q', len('text')), inUnits(code('text', 'q'), o.examined)), [set('q', add('q', I(1)))]),
+      while_(lt('q', len('text')), [
+        let_('u', 'int', code('text', 'q')),
+        if_({ k: 'not', e: u.test('u', o.examined) }, [BREAK]),
+        set('q', add('q', I(1))),
+      ]),
       ret(add('q', I(1))),
     ])),
     ret(I(0)),
   ],
 });
 
-const inReachFn = (m: RelexMode): Fn => ({
+const inReachFn = (m: RelexMode, u: UnitSets): Fn => ({
   name: 'relexInReach',
   doc: 'Whether a read past a token\'s end + 1 can pass code unit c.',
   params: [{ name: 'c', ty: 'int' }],
   ret: ['bool'],
-  body: [ret(inUnits('c', m.look.reach))],
+  body: [ret(u.test('c', m.look.reach))],
 });
 
 function windowRelexStepFn(m: RelexMode): Fn {
@@ -590,7 +625,13 @@ function relexEditsFn(m: RelexMode): Fn {
 }
 
 export function relexFamilyFns(m: RelexMode): Fn[] {
+  return relexFamily(m).fns;
+}
+
+// The family's functions and the unit tables they test (printed with them).
+export function relexFamily(m: RelexMode): { fns: Fn[]; sets: CharSet[] } {
   const fns: Fn[] = [];
+  const u = new UnitSets();
   if (!perToken(m)) fns.push(toMetaFn());
   if (m.elements) fns.push(relexDepthFn());
   fns.push(scanMetaToksFn(m), scanMetaFn(), checkStreamEqFn(), editRangeFn(), applyEditsFn());
@@ -602,14 +643,15 @@ export function relexFamilyFns(m: RelexMode): Fn[] {
       for (const name of new Set(m.look.arms.flatMap((a) => a.cands.flatMap((c) => (c.readEnd ? [c.readEnd] : []))))) {
         fns.push({ name, doc: '', params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }], ret: ['int'], body: [], extern: true });
       }
-      fns.push(readsBeforeFn(m), overEndFn(m), inReachFn(m));
+      fns.push(readsBeforeFn(m), overEndFn(m, u), inReachFn(m, u));
     }
     fns.push(windowRelexStepFn(m));
   }
   fns.push(relexEditsFn(m));
-  return fns;
+  return { fns, sets: u.sets };
 }
 
 export function emitRelexFamily(ir: ParserIR, lowering: Lowering): string {
-  return printFns(lowering, relexFamilyFns(relexMode(ir)), [], [LEX_ERR]);
+  const { fns, sets } = relexFamily(relexMode(ir));
+  return printFns(lowering, fns, sets, [LEX_ERR]);
 }
