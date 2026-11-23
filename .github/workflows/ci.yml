@@ -50,8 +50,18 @@ jobs:
       # to regenerate). Covers all grammars (sources at the repo root) + the
       # tree-sitter packages.
       - name: Generate editor artifacts (committed ones must be in sync)
+        # By changed inputs (test/gen-changed.ts): on a land/** branch or a pull request only the
+        # `npm run gen` steps whose derived inputs changed since the merge base with master run (the
+        # others' committed artifacts are what they would write); master pushes, the nightly and a
+        # dispatch regenerate everything. Every step that runs is traced: one that reads a file its
+        # derived inputs lack fails the step (what keeps a skip sound).
         run: |
-          npm run gen
+          if [ "${{ github.ref }}" = refs/heads/master ] || [ "${{ github.event_name }}" = schedule ] || [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            GEN_TRACE_DEPS=1 node test/gen-changed.ts --all
+          else
+            git fetch -q --filter=blob:none --unshallow origin master
+            GEN_TRACE_DEPS=1 node test/gen-changed.ts origin/master
+          fi
           git diff --exit-code -- '*.tmLanguage.json' '*.language-configuration.json' '*.monarch.json' '*.contributes.json' tree-sitter docs/COMPLETENESS.md docs/decisions test/fixtures/decisionsjs.decisions.md
 
       - name: Typecheck
