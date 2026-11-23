@@ -30,12 +30,12 @@
 // Go/Rust toolchains are optional: a missing `go`/`rustc` is logged and skipped (the TS
 // rendering, which needs only node, always runs).
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createParser } from '../src/gen-parser.ts';
 import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
 import { emitParser, jsTarget, tsTarget, goTarget, rustTarget } from '../src/emit.ts';
 import { objectify } from './emitted-obj.ts';
-import { buildLexIdPlan, portableIR } from '../src/emit-portable.ts';
+import { buildLexIdPlan, elementTokens, portableIR } from '../src/emit-portable.ts';
 import { asGoMain } from './go-main.ts';
 import { parityInputs, type Tok } from './parity-corpus.ts';
 import { CTX_CASES, CTX_DOCS, ctxEdits } from './context-cases.ts';
@@ -1003,8 +1003,66 @@ const CASES: Case[] = [
       'import while = require("m");', 'type T = A extends infer if ? 1 : 0;', 'type T = A extends [infer in extends string] ? 1 : 0;',
       'type T = { [if in K]: 1 };'],
   },
+  // Element regions (docs/REGIONS.md): the portable lexers' frame stack against the interpreter's
+  // lexer. Text children, attribute strings, holes, templates in holes, type arguments on a tag,
+  // nested elements after `=`, an element as a value for the regex test, and TypeScript's
+  // type-parameter vetoes: the head (`<T,>`), and the signature the lexer decides by lexing its
+  // group as code (kept: `<T>(x: T) => x`; an element: `<b>(it's)</b>`, a lex error in the group).
+  {
+    grammar: 'typescriptreact', path: '../typescriptreact.ts',
+    accept: [
+      'x = <a b="c" d={e}>t {f} <g/> h</a>;', 'x = <></>;', 'x = a < b > c;', 'x = <a>{`t${<b/>}`}</a>;',
+      'f = <T,>(x: T) => x;', 'f = <T extends U>(x: T) => x;', 'f = <T>(x: T) => x;', 'f = <T>(x): T => x;',
+      "x = <b>(it's)</b>;", 'x = <b>(x) y</b>;', 'type F = <T>(x: T) => T;', 'x = <List<string>>t</List>;',
+      'x = <a>{ {} }</a>;', 'x = <a b="\\" />;', 'if (a) <a/>; else <b></b>', 'x = <T>(x: <U>() => U) => x;',
+      'x = <a>{/* c */}</a>;', 'x = (<a/>) / 2;', 'x = <a/> / 2 / 3;', 'x = <a>{(<b/>)}</a>;', 'let f: <T>(x: T) => T;',
+      'x = <a>text\nmore</a>;', 'let m = new Map</* c */string, X>();', 'const x: number = 1;',
+      // children text that spells a literal is text, never that literal (region tokens carry no
+      // literal id): each parses differently, or not at all, where the text is taken as the literal
+      "x = <a>if (x) {'{'}</a>;", 'x = <a>return</a>;', 'x = <a>function</a>;', 'x = <a>;</a>;', 'x = <a>class</a>;',
+      'x = <a>{b}if{c}</a>;', 'x = <a><b>{c};</b>)</a>;', 'x = <a>as</a> as T;', 'x = <a>,</a>, 1;',
+    ],
+    reject: ['x = <a>=></a>;', 'x = <a x=<b/> />;', 'x = <a>}</a>;', 'x = <a>></a>;', 'x = <b>{x}</b>\n/re/.test(y);', 'x = <a/>\n<b/>;', 'x = <a>;', 'x = </a>;'],
+  },
+  {
+    grammar: 'javascriptreact', path: '../javascriptreact.ts',
+    accept: [
+      'x = <a b="c" d={e}>t {f} <g/> h</a>;', 'x = <></>;', 'x = a < b > c;', 'x = <a>{`t${<b/>}`}</a>;',
+      "x = <b>(it's)</b>;", 'x = <a>{ {} }</a>;', 'if (a) <a/>; else <b></b>', 'x = (<a/>) / 2;', 'x = <a/> / 2 / 3;',
+      "let a = <><p>It's</p>{`${<b/>}`}</>;\nx</*c*/y;", 'x = <a.b c:d="e" {...f}/>;',
+      // children text that spells a literal is text, never that literal (region tokens carry no
+      // literal id): each parses differently, or not at all, where the text is taken as the literal
+      "x = <a>if (x) {'{'}</a>;", 'x = <a>return</a>;', 'x = <a>function</a>;', 'x = <a>;</a>;', 'x = <a>class</a>;',
+      'x = <a>{b}if{c}</a>;', 'x = <a><b>{c};</b>)</a>;', 'x = <a>,</a>, 1;',
+    ],
+    reject: ['x = <a>}</a>;', 'x = <a>;', 'x = </a>;', 'f = <T,>(x) => x;', 'x = <a>=></a>;', 'x = <a>as</a> as T;'],
+  },
+  {
+    // code children, and the derived entry: every `<` in code opens an element
+    grammar: 'elementdialect', path: './fixtures/elementdialect.ts',
+    accept: [
+      'component C(a) {\n  <a k="v">@if (a) { <b/> } @else { "e" } {a}</a> "z" <c/>\n}',
+      'component D() { <a><b>{1}</b><{t} id="d">"s"</{t}></a> }\ncomponent E() { "q" }',
+      // a raw body is one token whatever it spells (a directive, a keyword, a closer, a hole), next to code children
+      'component C() { <style>@if (a) { </style> }', 'component C() { <style>component</style> <a>@if (b) { <c/> }</a> }',
+      'component C() { <a><style>}</style>"t"</a> }', 'component C() { <style>{a}</style> }', 'component C() { <style>x</STYLE></style> }',
+    ],
+    reject: ['component C() { /> }', 'component C() { </a> }', 'component C() { <a> }', 'component C() { <STYLE>x</STYLE> }', 'component C() { <style>x }'],
+  },
 ];
+// The element-region grammars' cases may be run alone: PORTABLE_GRAMMARS=a,b (a development aid;
+// the gate runs every case).
+const ONLY = process.env.PORTABLE_GRAMMARS?.split(',');
+// Likewise PORTABLE_TARGETS=go,rust: which compiled targets run (TypeScript always does).
+const TARGETS_ONLY = process.env.PORTABLE_TARGETS?.split(',');
 
+// tsc's JSX conformance cases (each `// @filename` part one input), when the pinned corpus is present.
+const JSX_GRAMMARS = new Set(['typescriptreact', 'javascriptreact']);
+const JSX_CORPUS = '/tmp/ts-repo/tests/cases/conformance/jsx';
+function jsxCorpus(): string[] {
+  if (!existsSync(JSX_CORPUS)) { console.log(`  (no ${JSX_CORPUS}: the JSX conformance parity inputs are skipped)`); return []; }
+  return readdirSync(JSX_CORPUS, { withFileTypes: true }).filter((f) => f.isFile()).map((f) => f.name).sort().flatMap((f) => readFileSync(`${JSX_CORPUS}/${f}`, 'utf8').split(/^\/\/\s*@filename:.*$/im));
+}
 const sortKeys = (o: unknown): unknown =>
   Array.isArray(o) ? o.map(sortKeys)
   : (o && typeof o === 'object') ? Object.fromEntries(Object.keys(o as object).sort().map((k) => [k, sortKeys((o as Record<string, unknown>)[k])]))
@@ -1282,6 +1340,29 @@ const CTX_EDITS: EditScenario[] = CTX_DOCS.map((init) => ({ init, batches: ctxEd
 // Documents for the exhaustive one-character edits (above the edit sessions): template holes, and
 // a `/` decided by what follows it.
 const HOLE_EDIT_GRAMMARS = new Set(['javascript', 'typescript']);
+// Element regions share the frame stack: text, tags, holes, templates in holes, a type-parameter
+// signature decided by lexing its group (an edit can flip it), an attribute string, `</*` outside
+// elements, code children with directives and a dynamic tag (as test/incremental-grammars.ts).
+const FRAME_INS = ['`', '$', '{', '}', '(', ')', '<', '>', '/', ':', ',', '=', 'x', ' ', '\n', '"', "'", '\\'];
+const FRAME_EDIT_DOCS: Record<string, string[]> = {
+  typescriptreact: [
+    "let a = <p>It's {x} 50%</p>;\nlet b = 1;",
+    'f(<a b={c > d}><i/>t</a>, `x${<b>y</b>}`);',
+    'type F = <T>(x: T) => T;\nlet g = <T,>(y: T) => <q>{y}</q>;',
+    'let h = <T>(x: T) => x; z = 1;',
+    // a head veto decided by the characters after its tagOpen: an edit there can make it an element
+    'let a = <T,>x</T>;\nlet b = <T extends U>y</T>;',
+    'let m = new Map</* c */string, X>();',
+    'let a = <a b="\\" c=\'d\ne\'>t</a>;\nlet z = "q";',
+  ],
+  javascriptreact: ['let s = `a${b}c${`${d}`}`;\nx = 1;', "let a = <><p>It's</p>{`${<b/>}`}</>;\nx</*c*/y;", 'x = <a/> / 2; y = <b c={1}>t</b>;'],
+  elementdialect: [
+    'component C(a) {\n  <a k="v">@if (a) { <b/> } @else { "e" } {a}</a> "z" <c/>\n}',
+    'component D() { <a><b>{1}</b><{t} id="d">"s"</{t}></a> }\ncomponent E() { "q" }',
+    // a raw-text element: one body token up to its close tag; edits that break or make the close tag, an empty body
+    'component S() { <a><style k="v">.a { b: "c" } <i></style>"t"</a> <style></style> }',
+  ],
+};
 // Edits whose relexed stream is known to differ from a fresh lex, each with its cause; the gate
 // fails when one passes.
 const HOLE_EDIT_EXPECTED_FAIL: { doc: string; edit: [number, number, string]; reason: string }[] = [];
@@ -1650,6 +1731,7 @@ let corpusMs = 0, corpusInputs = 0;
 
 let failures = 0;
 for (const c of CASES) {
+  if (ONLY && !ONLY.includes(c.grammar)) continue;
   const grammar: CstGrammar = (await import(c.path)).default;
   const oracle = createParser(grammar);
   const oracleOut = (src: string): Outcome => {
@@ -1678,7 +1760,7 @@ for (const c of CASES) {
     spans: { cmd: 'node', args: [tsFile, 'tok-spans'] }, utf8Edits: false,
   });
 
-  if (HAS_GO && !c.tsOnly) {
+  if (HAS_GO && !c.tsOnly && (!TARGETS_ONLY || TARGETS_ONLY.includes('go'))) {
     const gdir = `${dir}/go`; mkdirSync(gdir, { recursive: true });
     writeFileSync(`${gdir}/parser.go`, asGoMain(emitParser(grammar, goTarget)));
     writeFileSync(`${gdir}/runner.go`, goTarget.emitRunner?.() ?? '');
@@ -1692,7 +1774,7 @@ for (const c of CASES) {
       spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true,
     });
   }
-  if (HAS_RUST && !c.tsOnly) {
+  if (HAS_RUST && !c.tsOnly && (!TARGETS_ONLY || TARGETS_ONLY.includes('rust'))) {
     const rfile = `${dir}/main.rs`;
     const bin = `${dir}/pr`;
     writeFileSync(rfile, emitParser(grammar, rustTarget) + (rustTarget.emitRunner?.() ?? ''));
@@ -1876,8 +1958,8 @@ for (const c of CASES) {
     // of the edited text, on the verdict and the CST, and its own validation (stream and tree
     // against a fresh lex and parse) holds. Exhaustive, not random: a random edit rarely lands
     // inside a hole, where the relex window must not restart.
-    if (HOLE_EDIT_GRAMMARS.has(c.grammar)) {
-      const sessions = [...HOLE_EDIT_DOCS.map((doc) => ({ doc, ins: undefined })), ...LOOK_EDIT_DOCS]
+    if (HOLE_EDIT_GRAMMARS.has(c.grammar) || FRAME_EDIT_DOCS[c.grammar]) {
+      const sessions = (HOLE_EDIT_GRAMMARS.has(c.grammar) ? [...HOLE_EDIT_DOCS.map((doc) => ({ doc, ins: undefined as string[] | undefined })), ...LOOK_EDIT_DOCS] : FRAME_EDIT_DOCS[c.grammar]!.map((doc) => ({ doc, ins: FRAME_INS })))
         .flatMap(({ doc: init, ins }) => oneCharEdits(init, ins).map((e) => ({ init, e, final: init.slice(0, e[0]) + e[2] + init.slice(e[1]) })));
       const fresh = r.batch(sessions.map((x) => x.final));
       const bad: string[] = [];
@@ -1995,7 +2077,8 @@ for (const c of CASES) {
     const tokenize = compileTokenizer(lexSpecOf(grammar)) as (s: string) => Tok[];
     const inputs: { src: string; kind: string }[] = [...parityInputs(grammar, tokenize, { refusedOperands: ECMASCRIPT.has(c.grammar) }),
       ...(ECMASCRIPT.has(c.grammar) ? NON_ASCII_LEX.map((src) => ({ src, kind: 'non-ASCII lexing' })) : []),
-      ...(ECMASCRIPT.has(c.grammar) ? LINE_TERMINATORS.map((src) => ({ src, kind: 'line terminators' })) : [])];
+      ...(ECMASCRIPT.has(c.grammar) ? LINE_TERMINATORS.map((src) => ({ src, kind: 'line terminators' })) : []),
+      ...(JSX_GRAMMARS.has(c.grammar) ? jsxCorpus().map((src) => ({ src, kind: 'tsc JSX conformance' })) : [])];
     const want = inputs.map((i) => oracleOut(i.src));
     const wantToks = inputs.map((i): TokStream => {
       try { return JSON.stringify(tokenize(i.src).map((t) => [t.type, t.text, (t as unknown as { newlineBefore: boolean }).newlineBefore])); } catch { return null; }
@@ -2044,14 +2127,17 @@ for (const c of CASES) {
       // One literal id per text: the id the lexer gives a token, and the one lid_of gives the
       // same text when a Doc rebuilds that token from its metadata, are both the text's index in
       // the grammar's literal table (0: no literal) — for every token of the corpus and for
-      // every literal of the table.
+      // every literal of the table. A token of an element region's own (text, raw text, tag
+      // tokens, close / self-close) carries 0 whatever its text: it is never a literal.
+      const regionTok = new Set(elementTokens(portableIR(grammar).elements));
       const lidBad: string[] = [];
       const texts = new Set<string>(lids.slice(1));
       inputs.forEach((input, i) => {
         if (gotToks[i] === null || gotToks[i] === 'NUL') return;
         for (const [kind, text, , lid] of JSON.parse(gotToks[i]!) as [string, string, boolean, number][]) {
           texts.add(text);
-          if (lid !== lidOfText(text)) lidBad.push(`lexer gives ${kind} ${JSON.stringify(text)} lid ${lid}, the table ${lidOfText(text)} — in ${JSON.stringify(input.src.slice(0, 80))}`);
+          const want = regionTok.has(kind) ? 0 : lidOfText(text);
+          if (lid !== want) lidBad.push(`lexer gives ${kind} ${JSON.stringify(text)} lid ${lid}, its id ${want} — in ${JSON.stringify(input.src.slice(0, 80))}`);
         }
       });
       const textList = [...texts].filter((t) => !t.includes('\0'));
