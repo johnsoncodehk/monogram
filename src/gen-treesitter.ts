@@ -2258,7 +2258,9 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
 // One zero-width token is lexed per position, so a choice with several such arms (a for head:
 // `not(["let" "["])` on two arms, `not("let" | ["async" "of"])` on a third) gets one token per SET
 // of arms the input excludes (`let [` excludes all three, `let x` the third alone), each before the
-// alternatives outside its set.
+// alternatives outside its set; and one per first token, so that a token is valid only where an
+// alternative that starts with that token is (after `export` the declaration statement is a copy
+// that starts with no `{`, so no `{` marker is valid there and the export list keeps its `{`).
 // X is read as paths of at most two literals, `sameLine` between them allowed (`async` [no line
 // break] `function`, `let` `[`), or one non-literal token known by its first character (a
 // Decorator: `@`). A path with a rule reference, a longer one, or one no other alternative can
@@ -2383,7 +2385,10 @@ function planStartMarkers(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
       alt.items.forEach((b, bi) => { if (!killedArms.has(bi) && startsWith(b, cl.f)) corner(b, cl.f, sites); });
       if (!sites.length) continue;                                    // the token would end every reading
       conds.forEach((c, i) => { if (killed & (1 << i)) for (const { p } of c.paths) if (matches(p, cl)) rendered.add(p); });
-      const key = condIds.join(',') + '|' + killed;
+      // one token per first element too: a token valid where the choice is reached only through
+      // some of its alternatives (a FIRST-filtered copy: `export`'s declaration statement) must not
+      // be returned for an input those cannot start with (`export {`, the export list)
+      const key = condIds.join(',') + '|' + killed + '|' + elemKey(cl.f);
       let tok = byKey.get(key);
       if (!tok) {
         tok = { snake: `_starts_${byKey.size + 1}`, conds: condIds, killed };

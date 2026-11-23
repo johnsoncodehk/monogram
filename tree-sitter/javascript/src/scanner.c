@@ -26,6 +26,12 @@ enum TokenType {
   _STARTS_3,
   _STARTS_4,
   _STARTS_5,
+  _STARTS_6,
+  _STARTS_7,
+  _STARTS_8,
+  _STARTS_9,
+  _STARTS_10,
+  _STARTS_11,
 };
 
 // The scanner is stateless — tree-sitter's `valid_symbols` already encodes
@@ -1522,15 +1528,27 @@ static const StartPath START_PATHS[] = {
 typedef struct { int symbol; const int16_t *conds; unsigned count; uint32_t killed; } StartMarker;
 static const int16_t _STARTS_1_CONDS[] = { 1 };
 static const int16_t _STARTS_2_CONDS[] = { 2 };
-static const int16_t _STARTS_3_CONDS[] = { 3, 3, 4 };
-static const int16_t _STARTS_4_CONDS[] = { 3, 3, 4 };
-static const int16_t _STARTS_5_CONDS[] = { 5 };
+static const int16_t _STARTS_3_CONDS[] = { 2 };
+static const int16_t _STARTS_4_CONDS[] = { 2 };
+static const int16_t _STARTS_5_CONDS[] = { 2 };
+static const int16_t _STARTS_6_CONDS[] = { 2 };
+static const int16_t _STARTS_7_CONDS[] = { 2 };
+static const int16_t _STARTS_8_CONDS[] = { 3, 3, 4 };
+static const int16_t _STARTS_9_CONDS[] = { 3, 3, 4 };
+static const int16_t _STARTS_10_CONDS[] = { 3, 3, 4 };
+static const int16_t _STARTS_11_CONDS[] = { 5 };
 static const StartMarker START_MARKERS[] = {
   { _STARTS_1, _STARTS_1_CONDS, 1, 1u },
   { _STARTS_2, _STARTS_2_CONDS, 1, 1u },
-  { _STARTS_3, _STARTS_3_CONDS, 3, 4u },
-  { _STARTS_4, _STARTS_4_CONDS, 3, 7u },
+  { _STARTS_3, _STARTS_3_CONDS, 1, 1u },
+  { _STARTS_4, _STARTS_4_CONDS, 1, 1u },
   { _STARTS_5, _STARTS_5_CONDS, 1, 1u },
+  { _STARTS_6, _STARTS_6_CONDS, 1, 1u },
+  { _STARTS_7, _STARTS_7_CONDS, 1, 1u },
+  { _STARTS_8, _STARTS_8_CONDS, 3, 4u },
+  { _STARTS_9, _STARTS_9_CONDS, 3, 7u },
+  { _STARTS_10, _STARTS_10_CONDS, 3, 4u },
+  { _STARTS_11, _STARTS_11_CONDS, 1, 1u },
 };
 // The literal after the first one (past whitespace and the comments skipped here); -1: none, or a
 // comment opener to defer (the parse is then the unmarked one).
@@ -1547,7 +1565,7 @@ static int zw_second_literal(TSLexer *lexer, bool *line_break) {
 // holds where one of its paths begins the input; a second literal is read only when one is asked.
 static int scan_starts(TSLexer *lexer, const bool *valid_symbols, int lit, uint64_t cand) {
   int lit2 = -3; bool line_break2 = false;
-  for (unsigned i = 0; i < 5; i++) {
+  for (unsigned i = 0; i < 11; i++) {
     const StartMarker *m = &START_MARKERS[i];
     if (!valid_symbols[m->symbol]) continue;
     uint32_t held = 0;
@@ -1620,7 +1638,7 @@ bool tree_sitter_javascript_external_scanner_scan(void *payload, TSLexer *lexer,
   }
 
   // Zero-width tokens (a line-end alternative, a same-line marker, a start marker) where one is valid.
-  if (valid_symbols[_SAME_LINE_1] || valid_symbols[_SAME_LINE_2] || valid_symbols[_LINE_END_1] || valid_symbols[_SAME_LINE_3] || valid_symbols[_SAME_LINE_4] || valid_symbols[_SAME_LINE_5] || valid_symbols[_STARTS_1] || valid_symbols[_STARTS_2] || valid_symbols[_STARTS_3] || valid_symbols[_STARTS_4] || valid_symbols[_STARTS_5]) {
+  if (valid_symbols[_SAME_LINE_1] || valid_symbols[_SAME_LINE_2] || valid_symbols[_LINE_END_1] || valid_symbols[_SAME_LINE_3] || valid_symbols[_SAME_LINE_4] || valid_symbols[_SAME_LINE_5] || valid_symbols[_STARTS_1] || valid_symbols[_STARTS_2] || valid_symbols[_STARTS_3] || valid_symbols[_STARTS_4] || valid_symbols[_STARTS_5] || valid_symbols[_STARTS_6] || valid_symbols[_STARTS_7] || valid_symbols[_STARTS_8] || valid_symbols[_STARTS_9] || valid_symbols[_STARTS_10] || valid_symbols[_STARTS_11]) {
     int zw = scan_zero_width(lexer, valid_symbols);
     if (zw == 1) return true;
     if (zw == 0) return false;
