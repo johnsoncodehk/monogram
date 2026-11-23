@@ -76,6 +76,8 @@ export type ShapePlan = {
    * that attribute's default is true (the value a reader without an equation takes). */
   variantBit: number[];
   variantDefault: boolean[];
+  /** Slot-leaving steps with a grammar tag, and those that write it (a plan reads it). */
+  tagStats: { sites: number; tagged: number };
 };
 
 /** The engine's key for each accept site of a rule: rd `alt<i>`; Pratt `nud<i>`, `led<i>`,
@@ -193,6 +195,7 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
   const synK = new Map(synDecls.map(([n], k) => [n, k]));
   const syn = synDecls.map(([name, d]) => ({ name, dflt: d.default, fns: [] as (string | null)[] }));
   const variantBit: number[] = [], variantDefault: boolean[] = [];
+  const tagStats = { sites: 0, tagged: 0 };
   // The scalar inherited attributes each rule's arms read (in values and equations): a Pratt
   // rule's are its VARIANT attributes, an rd rule's the context its callers set.
   const kinds = new Map(ir.rules.map((r) => [r.name, r.kind]));
@@ -216,6 +219,7 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
     const sitesByKey = new Map<string, ArmSites>();
     for (const { key, arm } of armKeys(r)) {
       const id = arms.length;
+      const fnStart = fns.length;
       arms.push({ id, rule: r.name, key, arm });
       ids.set(`${r.name}|${key}`, id);
       variantBit.push(-1); variantDefault.push(false);
@@ -281,12 +285,13 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
         }
       }
       fns.push({ name: `construct${id}`, doc: where, params: ARM_PARAMS, ret: [VAL as never], body, method: true, reads: true });
+      sites.readsTag = tagsRead(fns.slice(fnStart));
     }
-    newRules.push(shapeSteps(r, tagsByKey, marked, sitesByKey, cx, reads, kinds));
+    newRules.push(shapeSteps(r, tagsByKey, marked, sitesByKey, cx, reads, kinds, tagStats));
   }
   fns.push(...EXTERNS, ...SPAN_FNS, ...ATTR_FNS, ...[...cooks].map(cookFn));
   return {
-    arms, fns, cooks: [...cooks], unsupported, syn, inh: scalarInh, variantBit, variantDefault,
+    arms, fns, cooks: [...cooks], unsupported, syn, inh: scalarInh, variantBit, variantDefault, tagStats,
     armId: (rule, key) => { const id = ids.get(`${rule}|${key}`); if (id === undefined) throw new Error(`planShape: no engine arm ${rule} ${key}`); return id; },
     ir: { ...ir, rules: newRules, reuse: null },
   };
@@ -298,7 +303,26 @@ type AttrCx = {
 };
 /** What an arm's call sites set: its equations, its children's names (by grammar node), its
  * threaded repetitions (by repetition node). */
-type ArmSites = { eqs: Eqs; childOf: Map<RuleExpr, string>; threads: Map<RuleExpr, { k: number; init: ShapeInhVal; next: string }> };
+type ArmSites = { eqs: Eqs; childOf: Map<RuleExpr, string>; threads: Map<RuleExpr, { k: number; init: ShapeInhVal; next: string }>; readsTag?: (t: number) => boolean };
+/** The slot tags an arm's functions read (slotFind ranges, a list's tag; namedEnd reads every
+ * named one): only those steps write a tag (Step.tag), the rest of the arm's slots keep -1. */
+function tagsRead(fs: Fn[]): (t: number) => boolean {
+  const ranges: [number, number][] = [];
+  let all = false;
+  const walk = (x: unknown): void => {
+    if (x === null || typeof x !== 'object') return;
+    if (Array.isArray(x)) { x.forEach(walk); return; }
+    const e = x as Expr;
+    if (e.k === 'call' && (e.fn === 'slotFind' || e.fn === 'slotFindLast')) {
+      const [, , a, b] = e.args;
+      if (a?.k === 'int' && b?.k === 'int') ranges.push([a.v, b.v]); else all = true;
+    } else if (e.k === 'call' && e.fn === 'namedEnd') all = true;
+    else if (e.k === 'bin' && e.op === 'eq' && e.a.k === 'call' && e.a.fn === 'slotTag') { if (e.b.k === 'int') ranges.push([e.b.v, e.b.v]); else all = true; }
+    for (const y of Object.values(x)) walk(y);
+  };
+  fs.forEach((f) => walk(f.body));
+  return all ? () => true : (t) => ranges.some(([a, b]) => t >= a && t <= b);
+}
 function childNames(info: ScopeInfo): Map<RuleExpr, string> {
   const out = new Map<RuleExpr, string>();
   const visit = (s: ScopeInfo): void => { for (const slot of s.slots.values()) { out.set(slot.node, slot.name); slot.branches?.forEach(visit); } };
@@ -331,7 +355,7 @@ function positional(r: RuleIR, key: string, info: ArmInfo): Map<RuleExpr, number
  * repetition body marked, every shared step printed in place; each call of an rd rule that
  * reads inherited attributes sets them (Step.inh), each threaded repetition threads its state
  * (Step.threadInit on the repetition, Step.thread on its marked body). */
-function shapeSteps(r: RuleIR, tags: Map<string, Numbering>, marked: Map<RuleExpr, number>, sites: Map<string, ArmSites>, cx: AttrCx, reads: Map<string, string[]>, kinds: Map<string, string>): RuleIR {
+function shapeSteps(r: RuleIR, tags: Map<string, Numbering>, marked: Map<RuleExpr, number>, sites: Map<string, ArmSites>, cx: AttrCx, reads: Map<string, string[]>, kinds: Map<string, string>, tagStats: { sites: number; tagged: number }): RuleIR {
   const clone = (num: Numbering, site: ArmSites | undefined) => {
     const attached = new Set<RuleExpr>();
     const bodyOf = new Map<RuleExpr, { k: number; next: string }>();
@@ -339,7 +363,7 @@ function shapeSteps(r: RuleIR, tags: Map<string, Numbering>, marked: Map<RuleExp
     const c = (s: Step, threaded: Set<number>): Step => {
       const o = { ...s } as Step & { share?: number };
       delete o.share;
-      if (s.src && (s.t === 'lit' || s.t === 'tok' || s.t === 'rule' || s.t === 'ruleBp' || s.t === 'altlit')) { const t = num.tagOf.get(s.src); if (t !== undefined) o.tag = t; }
+      if (s.src && (s.t === 'lit' || s.t === 'tok' || s.t === 'rule' || s.t === 'ruleBp' || s.t === 'altlit')) { const t = num.tagOf.get(s.src); if (t !== undefined) { tagStats.sites++; if (site?.readsTag?.(t)) { o.tag = t; tagStats.tagged++; } } }
       if (s.src && marked.has(s.src)) o.mark = marked.get(s.src)!;
       if (site && s.t === 'rule' && kinds.get(s.name) === 'rd' && reads.get(s.name)?.length) {
         const kid = s.src ? site.childOf.get(s.src) : undefined;
