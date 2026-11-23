@@ -1282,17 +1282,20 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
   const joiners = view.tagName?.joiners ?? [];
   const hasNs = joiners.includes(':');
   const hasMember = joiners.includes('.');
-  const inName = joiners.filter(j => j !== ':');
-  const nameEntries = hl.tagName ?? [];
+  // joiners within one name segment (a `.` joiner forms the member alternative instead)
+  const inName = joiners.filter(j => j !== ':' && !(j === '.' && hasMember));
+  const nameBody = `${identRegex}${inName.length ? `(?:(?:${inName.map(escapeRegex).join('|')})${identRegex})*` : ''}`;
   const ctxTagScope = view.tagName && (grammar.contextualScopes ?? []).find(s => s.within.includes(view.tagName!.rule))?.scope;
-  const nameAlts: { re: string; scope: string }[] = nameEntries.length
-    ? nameEntries.map(e => ({ re: tokenPatternToRegex(e.match), scope: `${e.scope}.${langName}` }))
-    : [{ re: `${identRegex}${inName.length ? `(?:(?:${inName.map(escapeRegex).join('|')})${identRegex})*` : ''}`, scope: `${ctxTagScope ?? 'entity.name.tag'}.${langName}` }];
+  // One alternative per `highlight.tagName` entry, its `match` a test at the name's start (an
+  // entry without `match` takes every name), then, unless the last entry takes every name, the
+  // default. The name's extent is the tag-name rule's (`nameBody`).
+  const nameEntries = hl.tagName ?? [];
+  const nameAlts: { re: string; scope: string }[] = nameEntries.map(e => ({ re: `${e.match ? `(?=${tokenPatternToRegex(e.match)})` : ''}${nameBody}`, scope: `${e.scope}.${langName}` }));
+  if (!nameEntries.length || nameEntries[nameEntries.length - 1].match) nameAlts.push({ re: nameBody, scope: `${ctxTagScope ?? 'entity.name.tag'}.${langName}` });
   const memberNameRe = `${identRegex}(?:\\.${identRegex})+`;
   const nameRe =
     (hasNs ? `(?:(${identRegex})(:))?` : '') +
-    `(?:${hasMember ? `(${memberNameRe})|` : ''}${nameAlts.map(a => `(${a.re})`).join('|')})` +
-    (nameEntries.length && inName.length ? `(?<!${inName.map(escapeRegex).join('|')})` : '');
+    `(?:${hasMember ? `(${memberNameRe})|` : ''}${nameAlts.map(a => `(${a.re})`).join('|')})`;
   const nameGroups = (hasNs ? 2 : 0) + (hasMember ? 1 : 0) + nameAlts.length;
   // Re-tokenize the dotted-member capture (#627): each qualifier segment before a
   // `.` is an object reference, each `.` an accessor, the trailing segment the

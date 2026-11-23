@@ -62,9 +62,9 @@ const typeParameterHead = seq(
 );
 // React's highlighting vocabulary, as highlighter data on the region (the lexer does not read it;
 // docs/REGIONS.md, "Highlighter data"):
-//   • a tag name whose first character is a lowercase letter is an intrinsic element (tsc's
-//     `isIntrinsicJsxName` reads the same ASCII range) → `entity.name.tag`; any other is a
-//     component → `support.class.component`, as the official TypeScriptReact grammar scopes them;
+//   • a tag name whose first character is a lowercase ASCII letter is an intrinsic element (tsc's
+//     `isIntrinsicJsxName` reads the same range) → `entity.name.tag`; any other is a component →
+//     `support.class.component`, as the official TypeScriptReact grammar scopes them;
 //   • an HTML character entity in text (`&amp;`, `&#123;`, `&#x1F600;`): one scope-only pattern,
 //     its `&` and `;` the entity punctuation (tsc does not decode entities; the text token keeps them);
 //   • the children carry `meta.jsx.children`.
@@ -72,11 +72,8 @@ const alnum = oneOf(range('a', 'z'), range('A', 'Z'), range('0', '9'));
 const hex = oneOf(range('0', '9'), range('a', 'f'), range('A', 'F'));
 const JSX_HIGHLIGHT = {
   tagName: [
-    { match: seq(range('a', 'z'), star(oneOf('-', alnum))), scope: 'entity.name.tag' },
-    { match: altPattern(
-        seq(oneOf('_', '$', range('A', 'Z')), star(oneOf('-', '_', '$', alnum, '.'))),
-        seq(idStart, star(idCont), plus(seq(oneOf('-', '.'), plus(oneOf('_', '$', alnum))))),
-      ), scope: 'support.class.component' },
+    { match: range('a', 'z'), scope: 'entity.name.tag' },
+    { scope: 'support.class.component' },
   ],
   text: [{
     match: seq('&', altPattern(seq('#', plus(range('0', '9'))), seq('#', oneOf('x', 'X'), plus(hex)), seq(oneOf(range('a', 'z'), range('A', 'Z')), star(alnum))), ';'),

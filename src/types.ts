@@ -200,9 +200,10 @@ export interface ElementRegion {
 /** Scopes of an element region's highlighting (docs/REGIONS.md, "What the generators need").
  *  Each `match` is a pattern over the text, in the grammar's own pattern language. */
 export interface ElementHighlight {
-  // A tag name's scope: the first entry whose `match` matches the whole name wins. Without any
-  // entry a tag name takes `entity.name.tag` (or the `contextualScopes` scope of its rule).
-  tagName?: { match: TokenPattern; scope: string }[];
+  // A tag name's scope: the first entry whose `match` matches at the name's start wins (an entry
+  // without `match` takes every name); the name's extent is the tag-name rule's. A name no entry
+  // takes is `entity.name.tag` (or the `contextualScopes` scope declared for the tag-name rule).
+  tagName?: { match?: TokenPattern; scope: string }[];
   // Scope-only patterns inside the children's text run (the lexer does not tokenize them, e.g. an
   // `&entity;`). `delimiters`: a scope for the pattern's leading and trailing literal.
   text?: { match: TokenPattern; scope: string; delimiters?: string }[];
