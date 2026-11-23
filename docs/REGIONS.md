@@ -80,6 +80,13 @@ elements: {
                embed?: { style: 'source.css' } }],
   tagStart?: oneOf('/', '>', '{', '$', '_', range('A', 'Z'), range('a', 'z')),  // one-unit class
   textTokens?: [{ token: 'BlockComment' }, { token: 'LineComment', after: blank }],
+  name?: 'jsx',               // the generators' prefix for the region (TextMate keys `jsx-element`, …);
+                              //   absent → the grammar's name
+  highlight?: {               // highlighter data; the lexer does not read it ("Highlighter data")
+    tagName?: [{ match: seq(range('a', 'z'), …), scope: 'entity.name.tag' }, …],
+    text?: [{ match: seq('&', …, ';'), scope: 'constant.character.entity', delimiters: 'punctuation.definition.entity' }],
+    childrenScope?: 'meta.jsx.children',
+  },
 }
 ```
 
@@ -107,6 +114,25 @@ after a unit of its `after` class when it has one. So `a //b` is text then a com
 starts there; the evaluated dialect keeps `/* a */// b` as text, its block comment not ending the
 run). A skip token is skipped, as in code; any other is pushed. An unterminated `/*` matches
 nothing, so it is text.
+
+### Highlighter data
+
+A region's highlighting comes from the region and its rules: the tag-name rule (the rule right after
+`tagOpen` in an element arm) and its name shape (its identifier and the literals joining further
+identifiers: `:` a namespace prefix, `.` a member expression), the attribute rule and its assign
+literal, the value's openers, the tag tokens' quotes, a nameless arm `tagOpen tagClose` (a fragment),
+tag type arguments. `src/region-view.ts` normalises this for every generator. What a dialect's
+highlighting adds beyond its rules is `highlight`, and a dialect that declares none gets none:
+- `tagName`: a tag name's scope, the first entry whose `match` matches the whole name. Without
+  entries a name is `entity.name.tag`, or the `contextualScopes` scope declared for the tag-name
+  rule. JSX declares React's split: a lowercase first letter (tsc's `isIntrinsicJsxName` range) is
+  `entity.name.tag`, any other name `support.class.component`.
+- `text`: scope-only patterns inside the children's text run (the lexer does not tokenize them):
+  JSX's `&entity;`, its `&` and `;` scoped by `delimiters`.
+- `childrenScope`: a scope over the children (JSX: `meta.jsx.children`).
+
+A grammar that declares no region gets no element layer in the generators, whatever tokens or
+rules it has (a `/>` token and a `<`-headed rule are no longer read as JSX).
 
 ## Frame encoding
 

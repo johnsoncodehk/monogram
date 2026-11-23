@@ -1,6 +1,7 @@
 import type { CstGrammar, RuleExpr, RuleDecl, InjectClause, TokenDecl } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
 import { analyzeGrammar } from './grammar-analysis.ts';
+import { regionView, expandArms, type RegionView } from './region-view.ts';
 import { compileTokenizer, lexSpecOf } from './emit-lexer.ts';
 import {
   tokenEscapePatternSource,
@@ -967,83 +968,6 @@ function notAfterValueWithOptionalWhitespace(valueCharClass: string, maxWhitespa
   return assertions.join('');
 }
 
-// ── JSX detection ──
-
-interface JsxInfo {
-  selfCloseTok: string;   // the literal text of the self-closing tag token (`/>`)
-  closeTok: string;       // the literal text of the close-tag-open token (`</`)
-  // The inner @type rule name a generic type-argument list on a tag carries, from
-  // the element production `'<' TagName <opt '<' sep(Type, ',') '>'> …` (TS-family
-  // JSX only; null for a type-free `.jsx` grammar, where a tag has no type args).
-  typeArgRule: string | null;
-}
-
-/**
- * Detect a JSX/TSX dialect from the grammar, structurally and agnostically: a
- * JSX grammar declares two dedicated punctuation tokens whose patterns are
- * exactly the self-closing tag `/>` and the close-tag opener `</` (a JSX grammar
- * needs these to lex `<Tag/>` / `</Tag>` atomically — see javascriptreact.ts), AND
- * a rule that uses a literal `<` immediately before a rule reference (the JSX
- * element production `'<' TagName …`). The two tokens alone are the signal; the
- * `<`-before-ref check guards against a grammar that merely happens to declare
- * those token texts for some non-JSX purpose. Returns the token texts (so the
- * emitted patterns reference the grammar's own delimiters), or null.
- *
- * A non-JSX grammar (plain TypeScript/JavaScript) declares no such tokens, so
- * this returns null and NO JSX patterns are emitted — the TS/JS TextMate output
- * is therefore byte-identical to before this feature existed.
- */
-function detectJsx(grammar: CstGrammar): JsxInfo | null {
-  let selfCloseTok: string | null = null;
-  let closeTok: string | null = null;
-  for (const tok of grammar.tokens) {
-    if (tok.flags.includes('skip') || tok.flags.includes('regex')) continue;
-    const text = tokenPatternLiteralText(tok);
-    if (text === '/>') selfCloseTok = text;
-    else if (text === '</') closeTok = text;
-  }
-  if (!selfCloseTok || !closeTok) return null;
-
-  // Confirm the JSX element production: a `<` literal directly before a rule ref, matched on the
-  // NORMALISED branches so an opt/alt/group factoring of the element production still qualifies.
-  let hasElementShape = false;
-  const walk = (e: RuleExpr): void => {
-    for (const items of expandAlts(e)) {
-      for (let i = 0; i < items.length - 1; i++) {
-        if (items[i].type === 'literal' && (items[i] as { value: string }).value === '<' &&
-            items[i + 1].type === 'ref') hasElementShape = true;
-      }
-    }
-    if (e.type === 'seq' || e.type === 'alt') e.items.forEach(walk);
-    else if (e.type === 'quantifier' || e.type === 'group') walk(e.body);
-    else if (e.type === 'sep') walk(e.element);
-  };
-  for (const rule of grammar.rules) walk(rule.body);
-  if (!hasElementShape) return null;
-
-  // Detect generic type-arguments on a tag: in an element alternative the tag
-  // name ref is followed by an optional `'<' sep(Type, ',') '>'` group. Expanding
-  // opt()/alt() surfaces the present branch as `… '<' ref(TagName) '<' sep '>' …`,
-  // so scan each flattened sequence for the `'<' ref '<' sep '>'` shape and read
-  // the sep element's ref — the @type rule scoped inside the type-arg list. Only
-  // a TS-family JSX grammar declares this (the `.jsx` base omits `typeArgs`), so a
-  // plain JS JSX grammar yields null here and emits no tag type-args patterns.
-  let typeArgRule: string | null = null;
-  const findTypeArgs = (items: RuleExpr[]): void => {
-    for (let i = 0; i + 3 < items.length; i++) {
-      if (items[i].type === 'literal' && (items[i] as { value: string }).value === '<' &&
-          items[i + 1].type === 'ref' &&
-          items[i + 2].type === 'literal' && (items[i + 2] as { value: string }).value === '<' &&
-          items[i + 3].type === 'sep') {
-        const sep = items[i + 3] as { type: 'sep'; element: RuleExpr };
-        if (sep.element.type === 'ref') typeArgRule = sep.element.name;
-      }
-    }
-  };
-  for (const rule of grammar.rules) for (const seq of expandAlts(rule.body)) findTypeArgs(seq);
-
-  return { selfCloseTok, closeTok, typeArgRule };
-}
 
 /**
  * The regex building-blocks used to disambiguate a `.tsx` generic-arrow type-param
@@ -1274,26 +1198,26 @@ function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: s
 }
 
 /**
- * Generate the JSX TextMate repository entries (TypeScriptReact vocabulary).
+ * Generate the element-region TextMate repository entries from the grammar's DECLARED region
+ * (`elements`, normalised by `regionView`, src/region-view.ts). Nothing here is an element
+ * vocabulary of its own: every delimiter, name shape and scope beyond the TextMate conventions
+ * (`meta.tag`, `punctuation.definition.tag.begin/end`, `entity.name.tag`,
+ * `entity.other.attribute-name`) comes from the region, its rules and its `highlight` data.
+ * Repository keys carry the region's name (`jsx-element`, …).
  *
- * The hard part is the `<` disambiguation: a JSX element's `<` vs comparison
- * `a < b` vs generic `f<T>()`. As in the official TypeScriptReact grammar, JSX
- * is recognised only at an EXPRESSION-START position via a lookbehind: the `<`
- * (with no preceding value operand — not after an identifier / `)` / `]` / a
- * literal, but after `=`, `(`, `,`, `?`, `:`, `=>`, `&&`, `||`, `return`,
- * `yield`, `default`, `(`, `[`, `{`, or line start) followed by a tag-shaped
- * lookahead (`<` then an identifier/`>` then attribute/`>`/`/>`). A comparison's
- * `<` always follows a value operand, so it never matches; a generic call's `<`
- * follows an identifier, so it never matches either. (The `<T>expr` prefix cast
- * doesn't exist in .tsx.)
- *
- * Tag-name scoping mirrors the official: a lowercase intrinsic tag (`div`) →
- * entity.name.tag; an uppercase / dotted component (`Foo`, `Foo.Bar`) →
- * support.class.component. Scopes are namespaced with `langName` like every
- * other emitted scope.
+ * The hard part is the `<` disambiguation when code enters an element only where an operand may
+ * start (`entry: 'operand'`, JS / TS): an element's `<` vs comparison `a < b` vs generic
+ * `f<T>()`. As in the official TypeScriptReact grammar, an element is recognised only at an
+ * EXPRESSION-START position via a lookbehind, followed by a tag-shaped lookahead. A comparison's
+ * `<` always follows a value operand, so it never matches; a generic call's `<` follows an
+ * identifier, so it never matches either. With `entry: 'always'` (a `tagOpen` only ever opens a
+ * tag) there is no lookbehind.
  */
-function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo, disambig: JsxDisambigDelims | null, commentKeys: string[] = [], blockCommentPats: string[] = []): Record<string, TmPattern> {
+function generateElementPatterns(langName: string, identRegex: string, view: RegionView, grammar: CstGrammar, disambig: JsxDisambigDelims | null, commentKeys: string[] = [], blockCommentPats: string[] = []): Record<string, TmPattern> {
   const result: Record<string, TmPattern> = {};
+  const K = (s: string) => `${view.name}-${s}`;
+  const region = view.region;
+  const hl = view.highlight;
   // Comment includes (`#linecomment`, `#blockcomment`, … — whatever the grammar
   // named its comment tokens; the keys are DERIVED via commentRepoKeys, never
   // hardcoded). A `//` line or `/* */` block comment is legal inside a JSX open
@@ -1303,20 +1227,16 @@ function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo,
   // than falling through to the tag body as plain `meta.tag` text.
   const commentIncludes: { include: string }[] = commentKeys.map(k => ({ include: `#${k}` }));
 
-  // Scope names (TypeScriptReact vocabulary, namespaced by langName).
+  // TextMate scope conventions, namespaced by langName.
   const tagBegin = `punctuation.definition.tag.begin.${langName}`;
   const tagEnd = `punctuation.definition.tag.end.${langName}`;
   const tagNs = `entity.name.tag.namespace.${langName}`;
   const tagNsSep = `punctuation.separator.namespace.${langName}`;
-  const intrinsic = `entity.name.tag.${langName}`;
-  const component = `support.class.component.${langName}`;
   // A dotted member-expression tag name (`comps.MyComp`, `a.b.C`): the leading
   // qualifier segment(s) are an object/namespace reference, the `.` a member
-  // accessor, and the final segment the referenced component. Mirrors how the
+  // accessor, and the final segment the referenced name. Mirrors how the
   // grammar scopes a value member access `a.b` elsewhere (object identifier +
-  // `punctuation.accessor` + member), and resolves #627 — where the official
-  // grammar lumps the whole dotted name into one `support.class.component` token,
-  // losing that `comps` is a reference and `.` an accessor.
+  // `punctuation.accessor` + member), and resolves #627.
   const tagObject = `variable.other.object.${langName}`;
   const tagAccessor = `punctuation.accessor.${langName}`;
   const attrName = `entity.other.attribute-name.${langName}`;
@@ -1326,406 +1246,366 @@ function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo,
   const embeddedEnd = `punctuation.section.embedded.end.${langName}`;
   const strBegin = `punctuation.definition.string.begin.${langName}`;
   const strEnd = `punctuation.definition.string.end.${langName}`;
-  // Generic type-arguments on a component tag (`<Box<number> …>`): `meta.type.parameters`
+  // Generic type-arguments on a tag (`<Box<number> …>`): `meta.type.parameters`
   // wrapper with `punctuation.definition.typeparameters.begin/end` delimiters, the
   // same scopes a generic call / declaration type-param list uses elsewhere (#1033).
   const typeParamsMeta = `meta.type.parameters.${langName}`;
   const tpBegin = `punctuation.definition.typeparameters.begin.${langName}`;
   const tpEnd = `punctuation.definition.typeparameters.end.${langName}`;
-  // An OPTIONAL balanced `<…>` type-argument group following the tag name, for the
+  const o = escapeRegex(region.tagOpen), c = escapeRegex(region.tagClose);
+  const closeTok = escapeRegex(view.closeTagText), selfCloseTok = escapeRegex(view.selfCloseText);
+  // An OPTIONAL balanced type-argument group following the tag name, for the
   // expression-position triggers' lookaheads (so `<Box<number> … />` / `<Box<A,B>>…`
   // is recognised as a tag — the type-arg `>` must not be mistaken for the tag's own
   // `>`). Oniguruma balanced-group recursion; the `?` makes it absent for a plain
-  // `<div …>`. Emitted only for a TS-family JSX grammar (jsx.typeArgRule set).
-  const optTagTypeArgs = jsx.typeArgRule
-    ? '(?:\\s*<(?<TA>[^<>]*(?:<\\g<TA>>[^<>]*)*)>)?'
+  // `<div …>`. Emitted only when an element arm carries tag type arguments.
+  const optTagTypeArgs = view.typeArgRule
+    ? `(?:\\s*${o}(?<TA>[^${escapeForCharClass(region.tagOpen)}${escapeForCharClass(region.tagClose)}]*(?:${o}\\g<TA>${c}[^${escapeForCharClass(region.tagOpen)}${escapeForCharClass(region.tagClose)}]*)*)${c})?`
     : '';
 
-  // An open tag is terminated by EITHER a plain `>` (children follow) or the
-  // self-close `/>`. Both share their last character — the self-close token (`/>`)
-  // is the open terminator (`>`) prefixed by a `/`. Derive both from the grammar's
-  // own self-close token rather than hardcoding `>`/`/`: the terminator char is its
-  // last char, the self-close prefix is everything before it. `tagEndAhead` is the
-  // zero-width "open tag ends here" lookahead `(?=/?>)` (prefix optional → matches a
-  // bare `>` or the full `/>`); a grammar whose self-close were spelled differently
-  // (e.g. a hypothetical `|>`) would yield that spelling. This lets the open-tag body
-  // stop just before the terminator, so the element's `end` can claim a self-close
-  // `/>` (no children) while a bare `>` opens the children region instead.
-  const tagEndChar = jsx.selfCloseTok.slice(-1);
-  const selfClosePrefix = jsx.selfCloseTok.slice(0, -1);
-  const tagEndAhead = `(?=${escapeRegex(selfClosePrefix)}?${escapeRegex(tagEndChar)})`;
+  // An open tag is terminated by EITHER `tagClose` (children follow) or the self-close token.
+  // `tagEndAhead` is the zero-width "open tag ends here" lookahead `(?=/?>)` (the self-close
+  // token's prefix before `tagClose` optional). This lets the open-tag body stop just before
+  // the terminator, so the element's `end` can claim a self-close (no children) while a bare
+  // `tagClose` opens the children region instead.
+  const selfClosePrefix = view.selfCloseText.endsWith(region.tagClose) ? view.selfCloseText.slice(0, -region.tagClose.length) : view.selfCloseText;
+  const tagEndAlt = view.selfCloseText.endsWith(region.tagClose) ? `${escapeRegex(selfClosePrefix)}?${c}` : `${selfCloseTok}|${c}`;
+  const tagEndAhead = `(?=${tagEndAlt})`;
 
-  // A JSX tag name: optional `ns:` prefix, then a dotted member-expression OR a
-  // lowercase-intrinsic OR a (non-dotted) component. Captures, in order:
-  //   1 namespace, 2 `:`, 3 dotted-member, 4 intrinsic-name, 5 component-name.
-  // The dotted-member alternative `Ident(?:\.Ident)+` is tried FIRST so any name
-  // containing a `.` (`comps.MyComp`, `a.b.C`, `Foo.Bar`) is taken as a member
-  // expression and re-tokenized (see `nameCaptures`) into object/accessor/
-  // component — rather than the lowercase head leaking the rest into attributes
-  // (the #627 bug) or the whole dotted name collapsing into one component token.
-  // The remaining alternatives keep the original collapse: lowercase-only ⇒
-  // intrinsic; anything else ⇒ component. The trailing `(?<!\.|-)` forbids a name
-  // ending in a joiner. `[-:]` joiners stay inside intrinsic/component (only `.`
-  // forms a member expression).
-  const memberNameRe = `${identRegex}(?:\\.${identRegex})+`;     // dotted member
+  // A tag name, from the tag-name rule's NAME SHAPE (region-view.ts): its identifier, and the
+  // literals joining further identifiers. A `:` joiner is an XML-style namespace prefix, a `.`
+  // joiner a member expression (re-tokenized into object / accessor / name), the others join
+  // within one name. The name's scope: the first `highlight.tagName` entry whose pattern matches
+  // the whole name; without entries, `entity.name.tag` (or the `contextualScopes` scope declared
+  // for the tag-name rule). Captures, in order: [namespace, `:`], [dotted member], one per entry
+  // (or the one default).
+  const joiners = view.tagName?.joiners ?? [];
+  const hasNs = joiners.includes(':');
+  const hasMember = joiners.includes('.');
+  const inName = joiners.filter(j => j !== ':');
+  const nameEntries = hl.tagName ?? [];
+  const ctxTagScope = view.tagName && (grammar.contextualScopes ?? []).find(s => s.within.includes(view.tagName!.rule))?.scope;
+  const nameAlts: { re: string; scope: string }[] = nameEntries.length
+    ? nameEntries.map(e => ({ re: tokenPatternToRegex(e.match), scope: `${e.scope}.${langName}` }))
+    : [{ re: `${identRegex}${inName.length ? `(?:(?:${inName.map(escapeRegex).join('|')})${identRegex})*` : ''}`, scope: `${ctxTagScope ?? 'entity.name.tag'}.${langName}` }];
+  const memberNameRe = `${identRegex}(?:\\.${identRegex})+`;
   const nameRe =
-    `(?:(${identRegex})(:))?` +                                   // 1 ns, 2 ':'
-    `(?:(${memberNameRe})` +                                      // 3 dotted member-expression
-    `|([[:lower:]][-[:alnum:]]*)` +                               // 4 intrinsic (lowercase head)
-    `|([_$[:upper:]][-_$[:alnum:].]*|${identRegex}(?:[-.][_$[:alnum:]]+)+))` +  // 5 component
-    `(?<!\\.|-)`;
+    (hasNs ? `(?:(${identRegex})(:))?` : '') +
+    `(?:${hasMember ? `(${memberNameRe})|` : ''}${nameAlts.map(a => `(${a.re})`).join('|')})` +
+    (nameEntries.length && inName.length ? `(?<!${inName.map(escapeRegex).join('|')})` : '');
+  const nameGroups = (hasNs ? 2 : 0) + (hasMember ? 1 : 0) + nameAlts.length;
   // Re-tokenize the dotted-member capture (#627): each qualifier segment before a
   // `.` is an object reference, each `.` an accessor, the trailing segment the
-  // referenced component. (A capture is itself a rule, so it may carry `patterns`.)
+  // referenced name (scoped as the last name alternative: a component in JSX).
   const memberPatterns: TmPattern[] = [
-    { match: `${identRegex}(?=\\s*\\.)`, name: tagObject },   // qualifier segment (before a `.`)
-    { match: '\\.', name: tagAccessor },                      // member accessor
-    { match: identRegex, name: component },                   // referenced component (final segment)
+    { match: `${identRegex}(?=\\s*\\.)`, name: tagObject },
+    { match: '\\.', name: tagAccessor },
+    { match: identRegex, name: nameAlts[nameAlts.length - 1].scope },
   ];
-  const nameCaptures = (base: number): Record<string, TmCapture> => ({
-    [String(base)]: { name: tagNs },
-    [String(base + 1)]: { name: tagNsSep },
-    [String(base + 2)]: { patterns: memberPatterns },   // dotted member: re-tokenized, no wrapper scope
-    [String(base + 3)]: { name: intrinsic },
-    [String(base + 4)]: { name: component },
-  });
+  const nameCaptures = (base: number): Record<string, TmCapture> => {
+    const caps: Record<string, TmCapture> = {};
+    let i = base;
+    if (hasNs) { caps[String(i++)] = { name: tagNs }; caps[String(i++)] = { name: tagNsSep }; }
+    if (hasMember) caps[String(i++)] = { patterns: memberPatterns };
+    for (const a of nameAlts) caps[String(i++)] = { name: a.scope };
+    return caps;
+  };
 
   // Generic-arrow carve-out (the inverse of #arrow-type-parameters' begin guard).
   // A `.tsx` generic-arrow type-param list (`<T = X,>(…) =>`, `<const T,>(…) =>`,
   // `<T extends X>(…) =>`) sits in expression position too, so its leading `<` also
-  // satisfies the expression-start lookbehind below. Unlike a JSX tag-open, it
+  // satisfies the expression-start lookbehind below. Unlike a tag-open, it
   // carries a TOP-LEVEL comma inside `<…>` (treating `{…}` opaquely) OR a top-level
   // constraint keyword (`extends`, the no-comma signal) AND its `>` is followed
-  // by an arrow-shaped `(`. We must NOT take such a `<` as JSX. The disambiguation
+  // by an arrow-shaped `(`. We must NOT take such a `<` as a tag. The disambiguation
   // can't be left to pattern order: the expression-start prefix consumes leading
-  // whitespace, so after `= <…` the JSX begin's match starts at that space — one
+  // whitespace, so after `= <…` the element begin's match starts at that space — one
   // offset LEFT of #arrow-type-parameters' `<` — and vscode-textmate always keeps
   // the leftmost match regardless of order. So the carve-out is encoded locally as
   // a negative lookahead (checked at the `<`, after the ws is consumed) that mirrors
-  // #arrow-type-parameters' positive guard exactly: same top-level type-param test
-  // (comma OR constraint keyword), same balanced-angle + arrow-param-shape confirm.
-  // JSX-only by construction (this helper is reached only for a JSX/TSX grammar).
-  // Result: after `=`, `const`-value, `return`, etc., the type-param list wins; every
-  // genuine JSX tag (no top-level comma / constraint keyword, or no trailing
-  // arrow-paren) is untouched.
-  // Only a TS-family JSX grammar (one whose `<…>` is also a generic delimiter, so
-  // #arrow-type-parameters exists) needs the carve-out. A plain JS `.jsx` grammar
-  // has no generics, so `disambig` is null there and the guard stays empty — its
-  // output is unchanged. The building-blocks (top-level type-param scan, the
-  // depth-independent arrow end-confirm) are derived from the grammar by
-  // jsxDisambigDelims and SHARED with #arrow-type-parameters' positive guard so the
-  // two can never drift.
+  // #arrow-type-parameters' positive guard exactly. Only a grammar whose `<…>` is also
+  // a generic delimiter (so #arrow-type-parameters exists) needs it; `disambig` is null
+  // otherwise. The building-blocks are derived by jsxDisambigDelims and SHARED with
+  // #arrow-type-parameters' positive guard so the two can never drift.
   const notArrowTypeParams = disambig
     ? `(?!<(?=${disambig.topTypeParam})(?=${disambig.arrowEndConfirm}))`
     : '';
 
-  // Expression-start lookbehind (JSX `<` is never preceded by a value operand).
-  // Variable-length lookbehind is supported by Oniguruma. After `++`/`--` is
-  // excluded (those produce a value). Mirrors the official jsx-tag-in-expression.
-  // The lookbehind is ZERO-WIDTH and anchored on the operator/opener BEFORE any
-  // leading comment, so the operand-vs-operator test is made at the real operator
-  // — `a /**/ <b>` (an operand `a` precedes the comment) is NOT JSX, while
-  // `= /**/ <b/>` (an operator precedes) is. (The official anchors on the block-
-  // comment CLOSE `*​/` instead, which can't see past the comment to the operator,
-  // so it wrongly flips `f /**/ <T>(x)` — a generic call — to a JSX tag.)
-  const exprBehind =
-    `(?<!\\+\\+|--)(?<=[({\\[,?=:>&|]|&&|\\|\\||=>|\\breturn|\\byield|\\bdefault|\\bcase|^)`;
+  // Expression-start lookbehind (an operand-entry element's `<` is never preceded by a value
+  // operand), only for `entry: 'operand'`. Variable-length lookbehind is supported by
+  // Oniguruma. After `++`/`--` is excluded (those produce a value). Mirrors the official
+  // jsx-tag-in-expression. The lookbehind is ZERO-WIDTH and anchored on the operator/opener
+  // BEFORE any leading comment, so the operand-vs-operator test is made at the real operator
+  // — `a /**/ <b>` (an operand `a` precedes the comment) is NOT an element, while
+  // `= /**/ <b/>` (an operator precedes) is.
+  // (Owed: this operator list is the JS family's; it is to be derived from the lexer's
+  // operand-start table, the regex / division decision.)
+  const exprBehind = view.entry === 'operand'
+    ? `(?<!\\+\\+|--)(?<=[({\\[,?=:>&|]|&&|\\|\\||=>|\\breturn|\\byield|\\bdefault|\\bcase|^)`
+    : '';
   // The leading run skipped (inside a lookahead, so zero-width) between the
   // anchoring operator and the tag's `<`: whitespace plus any number of BLOCK
-  // comments — a JSX element may legally follow a `/* … */` on the same line
+  // comments — an element may legally follow a `/* … */` on the same line
   // (#754; tsc/ScriptKind.TSX parses `= /**/ <X/>` as a JsxSelfClosingElement).
-  // The block-comment regexes are DERIVED from the grammar (blockCommentMatchers),
-  // never hardcoded; a LINE comment can't precede same-line JSX (it eats to EOL).
-  // The comment itself stays for the region's comment includes to scope.
+  // The block-comment regexes are DERIVED from the grammar (blockCommentMatchers).
   const leadComments = blockCommentPats.length
     ? `(?:(?:${blockCommentPats.join('|')})\\s*)*`
     : '';
   const leadSkip = `\\s*${leadComments}`;
-  // Combined expression-start prefix: anchor on the operator, then (in a zero-width
-  // lookahead) skip leading whitespace/comments and apply the generic-arrow
-  // carve-out at the `<`. Each region appends its own tag-shaped lookahead body.
   const exprStartLA = (tagBody: string) => `${exprBehind}(?=${leadSkip}${notArrowTypeParams}${tagBody})`;
-  // The matching region `end`: closes once the skip-run no longer reaches a tag.
   const exprEndLA = (tagBody: string) => `(?!${leadSkip}${tagBody})`;
 
-  // ── jsx-children: what may appear between `>` and `</` ──
-  // Raw text needs no pattern — anything that matches none of these falls through
-  // to the enclosing region's `meta.jsx.children` contentName, so arbitrary text
-  // punctuation (`It's 100% & more!`) is already covered. The one sub-token the
-  // official grammar lifts out of that flat text is an HTML character entity
-  // (`&nbsp;`, `&amp;`, `&#123;`, `&#x1F600;`), scoped `constant.character.entity`
-  // with `&`/`;` as `punctuation.definition.entity`. A lone `&` (no `name;` tail)
-  // matches nothing here and stays plain children text — matching official.
-  result['jsx-entity'] = {
-    match: '(&)(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*)(;)',
-    captures: {
-      '1': { name: `punctuation.definition.entity.${langName}` },
-      '2': { name: `constant.character.entity.${langName}` },
-      '3': { name: `punctuation.definition.entity.${langName}` },
-    },
-  };
-  result['jsx-children'] = {
+  // ── text patterns: scope-only patterns inside the children's text run (`highlight.text`) ──
+  // A pattern `lit … lit` with `delimiters` scopes its leading and trailing literal apart.
+  const textKeys: string[] = [];
+  for (const t of hl.text ?? []) {
+    const m = t.match;
+    const parts = typeof m !== 'string' && m.type === 'seq' ? m.items : [];
+    const first = parts[0], last = parts[parts.length - 1];
+    const key = K(t.scope.split('.').pop()!);
+    if (t.delimiters && parts.length >= 3 && typeof first === 'string' && typeof last === 'string') {
+      const mid = parts.slice(1, -1);
+      result[key] = {
+        match: `(${escapeRegex(first)})(${tokenPatternToRegex(mid.length === 1 ? mid[0] : { type: 'seq', items: mid })})(${escapeRegex(last)})`,
+        captures: {
+          '1': { name: `${t.delimiters}.${langName}` },
+          '2': { name: `${t.scope}.${langName}` },
+          '3': { name: `${t.delimiters}.${langName}` },
+        },
+      };
+    } else result[key] = { match: tokenPatternToRegex(m), name: `${t.scope}.${langName}` };
+    textKeys.push(key);
+  }
+  const childrenScope = hl.childrenScope ? `${hl.childrenScope}.${langName}` : undefined;
+  result[K('children')] = {
     patterns: [
-      // A child element — `#jsx-element` covers BOTH the self-closing `<br/>` and the
+      // A child element — `#<name>-element` covers BOTH the self-closing `<br/>` and the
       // open `<span>…</span>` shape (its `end` matches `/>` OR `</name>`), so the
-      // separate `#jsx-self-closing-element` is NOT listed here: that rule's begin
-      // (`<name`, CONSUMING — unlike `#jsx-element`'s zero-width lookahead begin)
+      // separate `#<name>-self-closing-element` is NOT listed here: that rule's begin
+      // (`<name`, CONSUMING — unlike the element's zero-width lookahead begin)
       // would greedily claim a NON-self-closing child `<span>` and, never finding a
-      // `/>`, run its region to EOF — mis-scoping the child's `>`, body and the rest
-      // of the children as tag text (the top-level `-in-expression` triggers avoid
-      // this with a `/>`-anchored lookahead, which can't be reproduced here because a
-      // child's `/>` may sit past an embedded `{…}` the lookahead can't scan).
-      { include: '#jsx-element' },
-      { include: '#jsx-fragment' },
-      // A tag whose `<` is alone at end-of-line, its NAME on a following line
-      // (#825). In children a lone `<` is unambiguously a tag opener (a bare `<`
-      // in JSX children is otherwise invalid — tsc rejects `<div>a < b</div>`),
-      // so this multi-line opener can recover the split tag the single-line
-      // `(<)\s*name` begins miss. Listed AFTER the single-line elements so a
-      // normal `<span …>` on one line keeps its existing tokenization; it only
-      // fires when the `<` reaches EOL with no name. See #jsx-element-multiline.
-      { include: '#jsx-element-multiline' },
-      { include: '#jsx-expression' },
-      { include: '#jsx-entity' },
+      // `/>`, run its region to EOF.
+      { include: `#${K('element')}` },
+      ...view.fragment ? [{ include: `#${K('fragment')}` }] : [],
+      // A tag whose `<` is alone at end-of-line, its NAME on a following line (#825).
+      // Listed AFTER the single-line elements so a normal `<span …>` on one line keeps its
+      // tokenization; it only fires when the `<` reaches EOL with no name.
+      { include: `#${K('element-multiline')}` },
+      { include: `#${K('expression')}` },
+      ...textKeys.map(k => ({ include: `#${k}` })),
     ],
   };
 
-  // ── jsx-expression: `{ … }` embedded-code container (attr value & children) ──
-  result['jsx-expression'] = {
+  // ── <name>-expression: the region's hole (attribute value & children) ──
+  result[K('expression')] = {
     name: `meta.embedded.expression.${langName}`,
-    begin: '\\{',
+    begin: escapeRegex(region.hole.open),
     beginCaptures: { '0': { name: embeddedBegin } },
-    end: '\\}',
+    end: escapeRegex(region.hole.close),
     endCaptures: { '0': { name: embeddedEnd } },
     patterns: [{ include: '$self' }],
   };
 
-  // ── jsx-string-*: attribute string values (own scope, no escapes/interp) ──
-  for (const [q, key, scope] of [['"', 'jsx-string-double-quoted', 'string.quoted.double'], ["'", 'jsx-string-single-quoted', 'string.quoted.single']] as const) {
-    result[key] = {
-      name: `${scope}.${langName}`,
-      begin: q,
-      beginCaptures: { '0': { name: strBegin } },
-      end: q,
-      endCaptures: { '0': { name: strEnd } },
-    };
+  // ── <name>-string-*: the tag tokens' quoted forms (own scope, no escapes / interpolation) ──
+  // One begin/end per delimiter of each `tagTokens` string token (JSX's `"…"` / `'…'`).
+  const stringKeys: string[] = [];
+  const quoteName = (q: string) => (q === '"' ? 'double' : q === "'" ? 'single' : 'other');
+  for (const t of view.tagTokens) {
+    for (const q of tokenPatternStringDelimiters(t)) {
+      const key = K(`string-${quoteName(q)}-quoted`);
+      result[key] = {
+        name: `string.quoted.${quoteName(q)}.${langName}`,
+        begin: escapeRegex(q),
+        beginCaptures: { '0': { name: strBegin } },
+        end: escapeRegex(q),
+        endCaptures: { '0': { name: strEnd } },
+      };
+      stringKeys.push(key);
+    }
   }
 
-  // ── jsx-attributes: name (= value)? | spread {…} ──
-  // A comment (`//` line / `/* */` block) is legal between attributes inside the
-  // open tag, so the grammar's comment entries are included FIRST (#585) — before
-  // the attribute-name match, which would otherwise swallow a `//`-led line as
-  // tag text.
-  result['jsx-attributes'] = {
-    patterns: [
-      ...commentIncludes,
-      // `name` / `ns:name` (with optional namespace) immediately before ws / `=` / `/>` / `>`.
-      {
-        match: `\\s*(?:(${identRegex})(:))?([_$[:alpha:]][-_$[:alnum:].]*)(?=\\s|=|/?>|$)`,
-        captures: {
-          '1': { name: attrNsName },
-          '2': { name: tagNsSep },
-          '3': { name: attrName },
-        },
-      },
-      // `=` assignment (only when a value follows).
-      { match: `=(?=\\s*(?:'|"|\\{))`, name: attrAssign },
-      { include: '#jsx-string-double-quoted' },
-      { include: '#jsx-string-single-quoted' },
-      { include: '#jsx-expression' },
-    ],
-  };
+  // ── <name>-attributes: name (assign value)? | a hole ──
+  // The attribute name from the attribute rule's NAME SHAPE (`:` a namespace prefix, the other
+  // joiners within the name); the assign literal and the value's openers from the rule.
+  const aj = view.attr?.joiners ?? [];
+  const aNs = aj.includes(':');
+  const aIn = aj.filter(j => j !== ':');
+  const attrNameRe = `${identRegex}${aIn.length ? `(?:(?:${aIn.map(escapeRegex).join('|')})${identRegex})*` : ''}`;
+  const valueOpeners: string[] = [];
+  const valueTokenKeys: string[] = [];
+  {
+    const rules = new Map(grammar.rules.map(r => [r.name, r]));
+    const seen = new Set<string>();
+    const firsts = (e: RuleExpr | undefined): void => {
+      if (!e) return;
+      if (e.type === 'literal') { if (!valueOpeners.includes(e.value)) valueOpeners.push(e.value); return; }
+      if (e.type !== 'ref' || seen.has(e.name)) return;
+      seen.add(e.name);
+      const tok = grammar.tokens.find(t => t.name === e.name);
+      if (tok) {
+        for (const q of tokenPatternStringDelimiters(tok)) if (!valueOpeners.includes(q)) valueOpeners.push(q);
+        if (!view.ownTokens.has(tok.name)) valueTokenKeys.push(tok.name.toLowerCase());
+        return;
+      }
+      const r = rules.get(e.name);
+      if (r) for (const arm of expandArms(r.body)) firsts(arm[0]);
+    };
+    if (view.attrRule !== null && view.attrAssign !== null) {
+      const r = rules.get(view.attrRule);
+      for (const arm of r ? expandArms(r.body) : []) {
+        const k = arm.findIndex(x => x.type === 'literal' && x.value === view.attrAssign);
+        if (k > 0 && arm[0].type === 'ref') firsts(arm[k + 1]);
+      }
+    }
+  }
+  const attrPatterns: (TmPattern | { include: string })[] = [
+    ...commentIncludes,
+    {
+      match: `\\s*${aNs ? `(?:(${identRegex})(:))?` : ''}(${attrNameRe})(?=\\s|${view.attrAssign !== null ? `${escapeRegex(view.attrAssign)}|` : ''}${tagEndAlt}|$)`,
+      captures: aNs
+        ? { '1': { name: attrNsName }, '2': { name: tagNsSep }, '3': { name: attrName } }
+        : { '1': { name: attrName } },
+    },
+  ];
+  if (view.attrAssign !== null && valueOpeners.length) {
+    attrPatterns.push({ match: `${escapeRegex(view.attrAssign)}(?=\\s*(?:${valueOpeners.map(escapeRegex).join('|')}))`, name: attrAssign });
+  }
+  attrPatterns.push(...stringKeys.map(k => ({ include: `#${k}` })), ...valueTokenKeys.map(k => ({ include: `#${k}` })), { include: `#${K('expression')}` });
+  result[K('attributes')] = { patterns: attrPatterns };
 
-  // ── jsx-tag-type-arguments: `<…>` generic type args on a component tag (#1033) ──
-  // A TS-family JSX tag may carry `<List<string>>` between the tag name and its
-  // attributes. Inside an open tag a bare `<` can only open this list (attributes
-  // never start with `<`), so a `<`/`>` begin/end region is unambiguous here. The
-  // inner types reach `#type-inner` (primitives, nested generics, unions, …), so
-  // `<number>` → support.type.primitive and `<Map<K,V>>` nests correctly — the
-  // same vocabulary the non-JSX generic-call patterns use. Emitted only when the
-  // grammar declares tag type-args (jsx.typeArgRule); the `.jsx` base omits them.
+  // ── <name>-tag-type-arguments: `<…>` generic type args on a tag (#1033) ──
+  // Inside an open tag a bare `tagOpen` can only open this list (attributes never start with
+  // it), so a begin/end region is unambiguous here. The inner types reach `#type-inner`.
   const tagTypeArgsInclude: { include: string }[] = [];
-  if (jsx.typeArgRule) {
-    result['jsx-tag-type-arguments'] = {
+  if (view.typeArgRule) {
+    result[K('tag-type-arguments')] = {
       name: typeParamsMeta,
-      begin: '(<)',
+      begin: `(${o})`,
       beginCaptures: { '1': { name: tpBegin } },
-      end: '(>)',
+      end: `(${c})`,
       endCaptures: { '1': { name: tpEnd } },
       patterns: [{ include: '#type-inner' }],
     };
-    tagTypeArgsInclude.push({ include: '#jsx-tag-type-arguments' });
+    tagTypeArgsInclude.push({ include: `#${K('tag-type-arguments')}` });
   }
 
-  // ── jsx-self-closing-element: `<Tag …/>` ──
-  result['jsx-self-closing-element'] = {
+  // ── <name>-self-closing-element: `<Tag …/>` ──
+  result[K('self-closing-element')] = {
     name: `meta.tag.${langName}`,
-    begin: `(<)\\s*${nameRe}`,
+    begin: `(${o})\\s*${nameRe}`,
     beginCaptures: { '1': { name: tagBegin }, ...nameCaptures(2) },
-    end: `(${escapeRegex(jsx.selfCloseTok)})`,
+    end: `(${selfCloseTok})`,
     endCaptures: { '1': { name: tagEnd } },
-    // type-args (if any) come right after the name, before attributes.
-    patterns: [...tagTypeArgsInclude, { include: '#jsx-attributes' }],
+    patterns: [...tagTypeArgsInclude, { include: `#${K('attributes')}` }],
   };
 
-  // ── jsx-element: `<Tag …/>` (self-closing) OR `<Tag …> children </Tag>` ──
+  // ── <name>-element: `<Tag …/>` (self-closing) OR `<Tag …> children </Tag>` ──
   // ONE region covers BOTH shapes (like the official `jsx-tag`), so the self-close-vs-
   // open decision is NOT made by a brittle lookahead at the trigger (which can't see
-  // a `>` buried in an attribute value — e.g. the `>` of an arrow `{x => …}` or a
-  // string `attr=">"` — and would mis-route such a self-closing tag to the open form,
-  // leaving `meta.jsx.children` running to EOF). Instead:
-  //   • the open-tag BODY ends at the zero-width `(?=/?>)` lookahead — it stops just
-  //     before the terminator without consuming it, so the terminator is decided here;
-  //   • the element's `end` matches the self-close `/>` FIRST (closing the whole element,
+  // a `>` buried in an attribute value). Instead:
+  //   • the open-tag BODY ends at the zero-width `(?=/?>)` lookahead;
+  //   • the element's `end` matches the self-close FIRST (closing the whole element,
   //     no children) and the `</…>` close second;
-  //   • the children region's begin is the literal `>` (consumed, scoped tag-end). A
-  //     self-close's `/>` is claimed by the element `end` before this can fire, so a
-  //     self-closing tag never opens a children region.
-  result['jsx-element'] = {
+  //   • the children region's begin is the literal `tagClose` (consumed, scoped tag-end).
+  const closeEnd = `(${selfCloseTok})|(${closeTok})\\s*(?:${nameRe})?\\s*(${c})`;
+  const closeEndCaptures: Record<string, TmCapture> = {
+    '1': { name: tagEnd },
+    '2': { name: tagBegin },
+    ...nameCaptures(3),
+    [String(3 + nameGroups)]: { name: tagEnd },
+  };
+  const tagFollow = `(?:\\s|${tagEndAlt}|${o})`;
+  const childrenRegion = (begin: string, beginCaptures?: Record<string, TmCapture>): TmPattern => ({
+    begin,
+    ...beginCaptures ? { beginCaptures } : {},
+    end: `(?=${closeTok})`,
+    ...childrenScope ? { contentName: childrenScope } : {},
+    patterns: [{ include: `#${K('children')}` }],
+  });
+  result[K('element')] = {
     name: `meta.tag.${langName}`,
-    begin: `(?=(<)\\s*${nameRe}(?:\\s|/?>|<))`,
-    // End on EITHER the self-close `/>` (capture 1) OR the `</name>` close (`</` is
-    // capture 2, the name sub-captures 3..7, the `>` capture 8). The closing tag's
-    // name is optional (our model doesn't enforce name-match, matching TS treating a
-    // mismatch as a semantic — not parse — error). Wrap the whole name in `(?:…)?` so
-    // the optional `?` attaches to the group, not to `nameRe`'s trailing `(?<!\.|-)`
+    begin: `(?=(${o})\\s*${nameRe}${tagFollow})`,
+    // The closing tag's name is optional (our model doesn't enforce name-match). Wrap the whole
+    // name in `(?:…)?` so the optional `?` attaches to the group, not to `nameRe`'s trailing
     // lookbehind (a quantified zero-width assertion is an invalid Oniguruma regex).
-    end: `(${escapeRegex(jsx.selfCloseTok)})|(${escapeRegex(jsx.closeTok)})\\s*(?:${nameRe})?\\s*(>)`,
-    endCaptures: {
-      '1': { name: tagEnd },   // self-close `/>`
-      '2': { name: tagBegin }, // close-tag `</`
-      ...nameCaptures(3),      // name sub-captures 3..7 (ns, sep, member, intrinsic, component)
-      '8': { name: tagEnd },   // close-tag `>`
-    },
+    end: closeEnd,
+    endCaptures: closeEndCaptures,
     patterns: [
-      // open tag: `<Tag …>` — type-args (if any) then attributes, ends (zero-width)
-      // just before the terminator so the element `end` decides `/>` vs `>`.
       {
-        begin: `(<)\\s*${nameRe}`,
+        begin: `(${o})\\s*${nameRe}`,
         beginCaptures: { '1': { name: tagBegin }, ...nameCaptures(2) },
         end: tagEndAhead,
-        patterns: [...tagTypeArgsInclude, { include: '#jsx-attributes' }],
+        patterns: [...tagTypeArgsInclude, { include: `#${K('attributes')}` }],
       },
-      // children region — opens on the bare `>` terminator (a self-close `/>` is
-      // taken by the element `end` first), runs to the `</…>` close.
-      {
-        begin: `(${escapeRegex(tagEndChar)})`,
-        beginCaptures: { '1': { name: tagEnd } },
-        end: `(?=${escapeRegex(jsx.closeTok)})`,
-        contentName: `meta.jsx.children.${langName}`,
-        patterns: [{ include: '#jsx-children' }],
-      },
+      childrenRegion(`(${c})`, { '1': { name: tagEnd } }),
     ],
   };
 
-  // ── jsx-element-multiline: `<` alone at EOL, tag NAME on a later line (#825) ──
-  // The single-line tag-open begins (`(<)\s*name`) can't span the `<`/name line
-  // break because a TextMate `begin` regex is matched within ONE tokenizeLine, so
-  // its `\s*` never crosses a newline. This region decouples the two: it opens on a
-  // lone `<` (one whose only same-line tail is whitespace — `(<)(?=\s*$)`), scoping
-  // it `punctuation.definition.tag.begin`, then its INNER patterns — applied
-  // per-line while the region stays open — pick up the name (with leading
-  // whitespace) when it arrives on a following line, exactly like a single-line
-  // open tag's attributes are matched line by line.
-  //
-  // Children-only and unambiguous: in JSX children a bare `<` is ALWAYS a tag
-  // opener (tsc rejects a stray `<` in children — `<div>a < b</div>` is a parse
-  // error), so a lone `<` reaching EOL here can only be a split tag-open. The
-  // `(?=\s*$)` guard means it fires ONLY when no name follows on the same line, so
-  // a normal `<span …>` / self-closing `<br/>` / close `</span>` on one line keep
-  // their existing (single-line) tokenization untouched. It lives only inside
-  // `#jsx-children`, never at expression-start, so a split comparison `a <\n b` or
-  // generic `f<\n T>` outside JSX is never reached.
-  //
-  // Handles BOTH shapes after the split: a self-closing `<\n name … />` ends at the
-  // `/>` (first `end` alternative), and an open `<\n name …> … </name>` runs through
-  // an inner open-tag-body (name + type-args + attributes up to `>`) into a children
-  // region and ends at the matching `</name>` (second `end` alternative).
-  result['jsx-element-multiline'] = {
+  // ── <name>-element-multiline: `<` alone at EOL, tag NAME on a later line (#825) ──
+  // A TextMate `begin` regex is matched within ONE line, so the single-line tag-open begins
+  // can't span the `<`/name line break. This region opens on a lone `tagOpen` (only whitespace
+  // after it on its line), then its INNER patterns pick up the name on a following line. It
+  // lives only inside the children (where a lone `tagOpen` reaching EOL can only be a split
+  // tag-open), never at expression-start.
+  result[K('element-multiline')] = {
     name: `meta.tag.${langName}`,
-    begin: '(<)(?=\\s*$)',
+    begin: `(${o})(?=\\s*$)`,
     beginCaptures: { '1': { name: tagBegin } },
-    // End on EITHER the self-close `/>` (self-closing split tag) OR the `</name>`
-    // close (open split tag). The self-close alt is first so `/>` wins over a stray
-    // `>` interpretation; its capture group is 1, the close-tag groups are 2 (`</`),
-    // 3..7 (name sub-captures), 8 (`>`).
-    end: `(?:(${escapeRegex(jsx.selfCloseTok)})|(${escapeRegex(jsx.closeTok)})\\s*(?:${nameRe})?\\s*(>))`,
-    endCaptures: {
-      '1': { name: tagEnd },
-      '2': { name: tagBegin },
-      ...nameCaptures(3),   // name sub-captures 3..7 (ns, sep, member, intrinsic, component)
-      '8': { name: tagEnd },
-    },
+    end: `(?:${closeEnd})`,
+    endCaptures: closeEndCaptures,
     patterns: [
-      // children region — entered the moment the open tag's `>` has been seen, and
-      // listed FIRST so its zero-width `(?<=>)` begin wins at the `>` boundary over
-      // the open-tag-body's name match below. This is what stops the name pattern
-      // from re-firing on a child word (e.g. `txt` in `<\n span>txt</span>`): once
-      // `>` opens this region, matching is confined to `#jsx-children` (which does
-      // NOT include the open-tag body), so a bare child word stays `meta.jsx.children`
-      // instead of being mis-scoped as a second tag name. Before any `>` this begin
-      // can't match (no preceding `>`), so the open-tag body picks up the name first.
-      {
-        begin: '(?<=>)',
-        end: `(?=${escapeRegex(jsx.closeTok)})`,
-        contentName: `meta.jsx.children.${langName}`,
-        patterns: [{ include: '#jsx-children' }],
-      },
-      // open-tag body: the NAME (on a later line, leading ws consumed) then
-      // type-args / attributes, up to — but not consuming — the `>` or `/>` (the
-      // outer `end` closes a self-close `/>`; a plain `>` opens the children above).
+      // children region — entered the moment the open tag's `tagClose` has been seen, and
+      // listed FIRST so its zero-width begin wins at that boundary over the open-tag-body's
+      // name match below.
+      childrenRegion(`(?<=${c})`),
       {
         begin: `\\s*${nameRe}`,
         beginCaptures: nameCaptures(1),
-        end: `(>)|(?=${escapeRegex(jsx.selfCloseTok)})`,
+        end: `(${c})|(?=${selfCloseTok})`,
         endCaptures: { '1': { name: tagEnd } },
-        patterns: [...tagTypeArgsInclude, { include: '#jsx-attributes' }],
+        patterns: [...tagTypeArgsInclude, { include: `#${K('attributes')}` }],
       },
     ],
   };
 
-  // ── jsx-fragment: `<> children </>` ──
-  result['jsx-fragment'] = {
-    name: `meta.tag.${langName}`,
-    begin: '(<)\\s*(>)',
-    beginCaptures: { '1': { name: tagBegin }, '2': { name: tagEnd } },
-    end: `(${escapeRegex(jsx.closeTok)})\\s*(>)`,
-    endCaptures: { '1': { name: tagBegin }, '2': { name: tagEnd } },
-    contentName: `meta.jsx.children.${langName}`,
-    patterns: [{ include: '#jsx-children' }],
-  };
+  // ── <name>-fragment: `<> children </>`, when an element arm is `tagOpen tagClose …` ──
+  if (view.fragment) {
+    result[K('fragment')] = {
+      name: `meta.tag.${langName}`,
+      begin: `(${o})\\s*(${c})`,
+      beginCaptures: { '1': { name: tagBegin }, '2': { name: tagEnd } },
+      end: `(${closeTok})\\s*(${c})`,
+      endCaptures: { '1': { name: tagBegin }, '2': { name: tagEnd } },
+      ...childrenScope ? { contentName: childrenScope } : {},
+      patterns: [{ include: `#${K('children')}` }],
+    };
+  }
 
-  // ── Top-level expression-position entries (the disambiguated triggers) ──
-  // These wrap the elements with the expression-start lookbehind so a `<` is
-  // taken as JSX only where a value can't already be standing (mutually
-  // exclusive with comparison / generic-call, whose `<` follows an operand).
-  // The lookahead consumes an optional balanced `<…>` type-arg group after the
-  // name (`<Box<number> … />`) so its inner `>` isn't mistaken for the tag's `>`,
-  // letting the self-closing trigger win over the open-element one (included
-  // first) for a self-closing tag that carries type args.
-  // Each region's tag-shaped lookahead body (the part after the skip-run, starting
-  // at the tag's `<`). Shared by the begin (zero-width, after the operator anchor +
-  // ws/comment skip) and the end (closes when the skip-run no longer reaches a tag).
-  // `commentIncludes` is prepended to `patterns` so a leading block comment skipped
-  // by the lookahead is still scoped (`comment.block`) before #jsx-* takes the tag.
-  const selfCloseBody = `(<)\\s*${nameRe}${optTagTypeArgs}[^>]*${escapeRegex(jsx.selfCloseTok)}`;
-  result['jsx-self-closing-element-in-expression'] = {
+  // ── Top-level entries (the disambiguated triggers) ──
+  // Each region's tag-shaped lookahead body (the part after the skip-run, starting at the
+  // tag's `tagOpen`) is shared by the begin (zero-width) and the end (closes when the skip-run
+  // no longer reaches a tag). `commentIncludes` is prepended so a leading block comment skipped
+  // by the lookahead is still scoped before the element takes the tag.
+  const selfCloseBody = `(${o})\\s*${nameRe}${optTagTypeArgs}[^${escapeForCharClass(region.tagClose)}]*${selfCloseTok}`;
+  result[K('self-closing-element-in-expression')] = {
     begin: exprStartLA(selfCloseBody),
     end: exprEndLA(selfCloseBody),
-    patterns: [...commentIncludes, { include: '#jsx-self-closing-element' }],
+    patterns: [...commentIncludes, { include: `#${K('self-closing-element')}` }],
   };
-  const elementBody = `(<)\\s*${nameRe}(?:\\s|/?>|<)`;
-  result['jsx-element-in-expression'] = {
+  const elementBody = `(${o})\\s*${nameRe}${tagFollow}`;
+  result[K('element-in-expression')] = {
     begin: exprStartLA(elementBody),
     end: exprEndLA(elementBody),
-    patterns: [...commentIncludes, { include: '#jsx-element' }],
+    patterns: [...commentIncludes, { include: `#${K('element')}` }],
   };
-  const fragmentBody = `(<)\\s*(>)`;
-  result['jsx-fragment-in-expression'] = {
-    begin: exprStartLA(fragmentBody),
-    end: exprEndLA(fragmentBody),
-    patterns: [...commentIncludes, { include: '#jsx-fragment' }],
-  };
+  if (view.fragment) {
+    const fragmentBody = `(${o})\\s*(${c})`;
+    result[K('fragment-in-expression')] = {
+      begin: exprStartLA(fragmentBody),
+      end: exprEndLA(fragmentBody),
+      patterns: [...commentIncludes, { include: `#${K('fragment')}` }],
+    };
+  }
 
   return result;
 }
@@ -4836,10 +4716,10 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
   // ── 1. Detect angle bracket ambiguity ──
   const angleBracket = detectAngleBracketAmbiguity(grammar);
   const angleBracketExclude = new Set(angleBracket ? ['<', '>'] : []);
-  // JSX/TSX dialect — detected here (ahead of its own section below) so its derived
-  // close-tag token (`</`) can bound the depth-independent generic-arrow end-confirm
-  // in jsxDisambigDelims. Null for a non-JSX grammar (no such token).
-  const jsx = detectJsx(grammar);
+  // The grammar's DECLARED element region (`elements`), normalised (src/region-view.ts) —
+  // read here (ahead of its own section below) so its close-tag token (`</`) can bound the
+  // depth-independent generic-arrow end-confirm in jsxDisambigDelims. Null without a region.
+  const view = regionView(grammar);
   // The `.tsx` generic-arrow ⇄ JSX-tag disambiguation building-blocks, derived ONCE
   // from the grammar's declarations (generic `<`/`>`, the `sep` `,`, the `string`
   // quotes, the JSX close-tag) and SHARED by both sides so they can't drift:
@@ -4848,7 +4728,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
   // Built only when `<…>` is a generic delimiter; null for a plain JS `.jsx` grammar
   // (no generics).
   const angleDisambig = angleBracket
-    ? jsxDisambigDelims(grammar, identPattern, angleBracket.separator, detectArrowParamDelims(grammar), angleBracket.innerRuleName, jsx?.closeTok ?? null)
+    ? jsxDisambigDelims(grammar, identPattern, angleBracket.separator, detectArrowParamDelims(grammar), angleBracket.innerRuleName, view?.closeTagText ?? null)
     : null;
 
   if (angleBracket) {
@@ -4873,34 +4753,29 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
     // comparison is added later in the ordering pass
   }
 
-  // ── 1a. Emit JSX/TSX dialect patterns ──
-  // Purely additive: emitted only when the grammar declares the JSX delimiter
-  // tokens (`/>` and `</`) plus an element production (detected as `jsx` above). A
-  // non-JSX grammar yields null, so no JSX patterns are emitted and output is unchanged.
-  // Token names whose scoping is OWNED by the JSX patterns (the `/>` and `</`
-  // delimiters are scoped as tag punctuation inside the JSX begins/ends, so they
-  // must NOT also get a flat `variable.other` token match in Section 2).
-  const jsxOwnedTokens = new Set<string>();
-  if (jsx) {
+  // ── 1a. Emit the element region's patterns ──
+  // Emitted only when the grammar declares an element region (`elements`); a grammar without
+  // one gets no element layer, whatever its tokens or rules. The region's own tokens (text,
+  // close tag, self-close, tag tokens, raw-text bodies) are lexed only inside the region, so
+  // they get no flat token match in Section 2: the element patterns scope them.
+  const regionOwnedTokens = view?.ownTokens ?? new Set<string>();
+  const elementTriggerKeys = new Map<string, number>();
+  if (view) {
     // The grammar's comment repo keys (derived, not hardcoded) so a `//` / `/* */`
-    // comment is recognised inside a JSX open tag — legal between attributes (#585).
-    const jsxPatterns = generateJsxPatterns(langName, identPattern, jsx, angleDisambig, commentRepoKeys(grammar), blockCommentMatchers(grammar));
-    for (const [key, pattern] of Object.entries(jsxPatterns)) repository[key] = pattern;
+    // comment is recognised inside an open tag — legal between attributes (#585).
+    const elPatterns = generateElementPatterns(langName, identPattern, view, grammar, angleDisambig, commentRepoKeys(grammar), blockCommentMatchers(grammar));
+    for (const [key, pattern] of Object.entries(elPatterns)) repository[key] = pattern;
     // The disambiguated, expression-position triggers go at the very top (before
     // #generic-call / #comparison): a `<` at expression-start with a tag-shaped
-    // lookahead is JSX, never a comparison/generic (those follow a value operand).
-    topPatterns.push({ include: '#jsx-self-closing-element-in-expression' });
-    topPatterns.push({ include: '#jsx-element-in-expression' });
-    topPatterns.push({ include: '#jsx-fragment-in-expression' });
-    for (const tok of grammar.tokens) {
-      const t = tokenPatternLiteralText(tok);
-      if (t === jsx.selfCloseTok || t === jsx.closeTok) jsxOwnedTokens.add(tok.name);
+    // lookahead is an element, never a comparison/generic (those follow a value operand).
+    // Self-closing before open before fragment (their ranks in section 7).
+    for (const [k, rank] of [['self-closing-element-in-expression', -6], ['element-in-expression', -5.5], ['fragment-in-expression', -5]] as const) {
+      const key = `${view.name}-${k}`;
+      if (!elPatterns[key]) continue;
+      topPatterns.push({ include: `#${key}` });
+      elementTriggerKeys.set(key, rank);
     }
   }
-  // An element region's text token is lexed only inside the region (ElementRegion): its pattern
-  // is no flat token match. (Region-aware element patterns are the generators' item; until then
-  // the children text is the fixed JSX repository's.)
-  if (grammar.elements) for (const n of [grammar.elements.text, ...grammar.elements.tagTokens ?? [], ...(grammar.elements.rawText ?? []).map(r => r.token)]) if (n !== undefined) jsxOwnedTokens.add(n);
 
   // ── 1b. Detect regex literal disambiguation ──
   const regexInfo = detectRegexLiteral(grammar, tokenNames);
@@ -4955,9 +4830,9 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
   for (const tok of grammar.tokens) {
     // Skip @regex tokens — handled by regex literal disambiguation above
     if (tok.flags.includes('regex')) continue;
-    // Skip JSX delimiter tokens (`/>`, `</`) — scoped as tag punctuation inside
-    // the JSX patterns, not as a flat `variable.other` token match.
-    if (jsxOwnedTokens.has(tok.name)) continue;
+    // Skip the element region's own tokens (`/>`, `</`, the text, the tag tokens): lexed only
+    // inside the region, scoped by the element patterns, never a flat token match.
+    if (regionOwnedTokens.has(tok.name)) continue;
 
     const classified = classifyToken(tok);
     const scope = tok.scope ?? classified.scope;  // @scope override wins
@@ -6908,7 +6783,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
         // the carve-out appended to the JSX expression-start triggers (see
         // generateJsxPatterns), so the positive guard here and its inverse there stay
         // mutually exclusive by construction.
-        const topComma = jsx ? `(?=${angleDisambig.topTypeParam})` : '';
+        const topComma = view ? `(?=${angleDisambig.topTypeParam})` : '';
         repository['arrow-type-parameters'] = {
           name: `meta.type.parameters.${langName}`,
           begin: `${arrowPos}(<)${topComma}(?=${arrowEndConfirm})`,
@@ -8630,9 +8505,8 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
     // did, so it inherits the same -7 slot (#arrow-type-parameters is now only its child).
     if (key === 'generic-arrow-function') return -7;
     if (key === 'arrow-type-parameters') return -7;
-    if (key === 'jsx-self-closing-element-in-expression') return -6;
-    if (key === 'jsx-element-in-expression') return -5.5;
-    if (key === 'jsx-fragment-in-expression') return -5;
+    const elementRank = elementTriggerKeys.get(key);
+    if (elementRank !== undefined) return elementRank;
     if (key === 'generic-call') return -3;
     if (key === 'generic-call-eol') return -2;
     if (key === 'generic-call-multiline') return -1;
