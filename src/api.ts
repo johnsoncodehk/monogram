@@ -605,13 +605,13 @@ function convertAlternatives(alts: Alternative[], names: Lowering): RuleExpr {
 
 // ── Grammar assembly ──
 
-interface GrammarConfig {
+interface GrammarConfig<R extends Record<string, RuleRef> = Record<string, RuleRef>> {
   name: string;
   scopeName?: string;
   tokens: Record<string, TokenRef>;
   prec?: PrecLevelDef[];
   ledPrec?: LedPrec[];
-  rules: Record<string, RuleRef>;
+  rules: R;
   scopes?: Record<string, string[]>;
   // Highlight-only contextual token scopes: token T carries scope S within rule R (T's
   // immediate enclosing rule) — see CstGrammar.contextualScopes for generator fidelity.
@@ -629,7 +629,17 @@ interface GrammarConfig {
   treeSitterContextualNames?: string[] | 'all';  // keywords the tree-sitter grammar also reads as names (see CstGrammar.treeSitterContextualNames)
 }
 
-export function defineGrammar(config: GrammarConfig): CstGrammar & { name: string; scopeName?: string } {
+/** A grammar as `defineGrammar` returns it: its type carries the names of its rules (`R`), so a
+ * consumer keyed by rule name (a shape: `defineShape` in src/shape.ts) is checked by TypeScript.
+ * Arm and child names are not in the type: half of them are DERIVED from the syntax at load time
+ * (src/grammar-names.ts), so their check is the consumer's load-time check. */
+export type Grammar<R extends string = string> = Omit<CstGrammar, 'rules'> & {
+  name: string;
+  scopeName?: string;
+  rules: (RuleDecl & { name: R })[];
+};
+
+export function defineGrammar<const R extends Record<string, RuleRef>>(config: GrammarConfig<R>): Grammar<keyof R & string> {
   // `indent` is the richer layer built on top of newline-significant line boundaries, so the two
   // modes are mutually exclusive — declaring both is a configuration error, not a merge.
   if (config.indent && config.newline) {
@@ -699,15 +709,15 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
   }));
 
   const lowering: Lowering = { get: (ref) => names.get(ref), expression: config.expression };
-  const rules: RuleDecl[] = Object.entries(config.rules).map(([name, r]) => {
+  const rules = Object.entries(config.rules).map(([name, r]) => {
     const alts = r.def(r);
     return {
-      name,
+      name: name as keyof R & string,
       body: convertAlternatives(alts, lowering),
       flags: r.opts.type ? ['type'] : [],
       label: r.opts.label,
     };
-  });
+  }) satisfies RuleDecl[];
 
   const scopeOverrides = new Map<string, string[]>();
   if (config.scopes) {
