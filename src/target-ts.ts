@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA } from './emit-portable.ts';
-import { blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_AMAX, RM_FAIL, RM_PROBE, RM_SP } from './recovery-family.ts';
 import type { EmitOptions } from './target.ts';
 import type { CstGrammar } from './types.ts';
@@ -15,8 +15,9 @@ import type {
 } from './shape-schema.ts';
 import { validateShapeOrThrow } from './shape-validate.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
-import { ATOM, COMPARISON, findAnyName, isNum, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, type R, type Ty } from './algo-ir.ts';
-import { UNI_ID_CONTINUE, UNI_ID_START } from './uni-ident.ts';
+import { ATOM, COMPARISON, findAnyName, isNum, isOpt, isRec, isRecList, isValList, isValTy, recName, type BinOp, type Lowering, type R, type Ty } from './algo-ir.ts';
+import type { ShapePlan } from './shape-plan.ts';
+import { cookTable } from './shape-cook.ts';
 import { type TextUnits, unitLen } from './text-units.ts';
 
 export type { ShapeSpec, ShapeIR } from './shape-schema.ts';
@@ -554,7 +555,7 @@ ${tplSpanTs('pos + ' + tlen(tpl.open), rx ? '!prevIsValue()' : 'true')}      if 
   const identNameTs = ir.identToken;
   const identKidTs = identNameTs ? kidOf(ids, identNameTs) : 0;
   const lxExtConst = ir.identLike.length
-    ? `const LX_UNI_CONT = /${UNI_ID_CONTINUE}+/uy;
+    ? `const LX_UNI_CONT = /${ir.identClasses.continue}+/uy;
 function lx_ext(src: string, e: number): number {
   if (e >= src.length || src.charCodeAt(e) < 0x80) return e;
   LX_UNI_CONT.lastIndex = e;
@@ -562,7 +563,7 @@ function lx_ext(src: string, e: number): number {
   return m ? e + m[0].length : e;
 }
 // JavaScript has the classes natively (uni-ident.ts).
-const LX_ID_START = /^${UNI_ID_START}$/u, LX_ID_PART = /^${UNI_ID_CONTINUE}$/u;
+const LX_ID_START = /^${ir.identClasses.start}$/u, LX_ID_PART = /^${ir.identClasses.continue}$/u;
 function ${shared.uniClass()}(cp: number): number {
   const ch = String.fromCodePoint(cp);
   return LX_ID_START.test(ch) ? 2 : LX_ID_PART.test(ch) ? 1 : 0;
@@ -575,7 +576,7 @@ ${shared.uniIdent(ir) ? `function ${shared.uniIdent(ir)}(s: string, p: number): 
 ` : ''}`
     : '';
   const lxUniIdentConst = (nl ? newlineParts(nl, 'emit', ids).table : '') + (shared.scannedTokens(ir).some((t) => t.skip) ? TS_HAS_LINE_TERM : '') + (identNameTs || shared.uniIdent(ir)
-    ? `const LX_UNI_IDENT = /${UNI_ID_START}${UNI_ID_CONTINUE}*/uy;\n`
+    ? `const LX_UNI_IDENT = /${ir.identClasses.start}${ir.identClasses.continue}*/uy;\n`
     : '') + lxExtConst;
   const uniIdentPushTs = stateful ? 'emit' : 'push';
   const uniIdentFallbackTs = identNameTs
@@ -733,6 +734,13 @@ function liftConst(ids: LexIdPlan, lit: string): string {
 // child stack) or recognizing ('r': nothing built). TS: a body or a step's statements are a lifted
 // module-level function (lift), so no closure is allocated where it runs.
 const SUFFIX: Record<Mode, string> = { w: 'W', r: 'R' };
+// The shape being emitted (emit option `shape`, src/shape-plan.ts), for the length of one
+// emitParser call; null: the CST builder, and every printed byte as without the option.
+let SHAPE: ShapePlan | null = null;
+// Where the engine accepts engine arm `key` of `rule`: the CST builder's node, or with a shape the
+// arm's construct plan (finS / finPS: the value over the arm's slots, src/shape-plan.ts).
+const finRTs = (rule: string, key: string, b: string, save: string): string => (SHAPE ? `finS(${SHAPE.armId(rule, key)}, ${b}, ${save})` : `finR(${J(rule)}, ${b}, ${save})`);
+const finPTs = (rule: string, key: string, b: string): string => (SHAPE ? `finPS(${SHAPE.armId(rule, key)}, ${b})` : `finP(${J(rule)}, ${b})`);
 function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
   const S = SUFFIX[m];
   const fn = (cond: string) => lift(ids, `return ${cond};`);
@@ -776,6 +784,11 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
     guarded: (first, branch) => `if (_ft !== null && ${firstCond(first, '_ft', ids)}) ${branch}`,
     choice: (peek, tries) => `${peek ? 'const _ft = peek(); ' : ''}${tries.join(' ')} return false;`,
     predictive: (arms) => `const t = peek(); if (t === null) return false; ${arms.map((a) => `if (${firstCond(a.first, 't', ids)}) ${a.branch}`).join(' else ')} return false;`,
+    // A shape's step: its slot tagged; a marked body's slots preceded by the iteration marker.
+    ...(SHAPE && m === 'w' ? { shaped: (s: Step, body: string) => {
+      const tagged = s.tag !== undefined ? `(${body} && _tag(${s.tag}))` : body;
+      return s.mark !== undefined ? `_iter(${s.mark}, ${fn(tagged)})` : tagged;
+    } } : {}),
   };
   return L;
 }
@@ -824,21 +837,21 @@ function tsRules(r: RdRule, ids: LexIdPlan, m: Mode): RuleLowering {
     ind: '  ',
     ifThen: (test, then) => `if (${test}) ${then}`,
     first: (f) => firstCond(f, 't', ids),
-    accept: () => (w ? `{ finR(${cn}, b, save); return true; }` : 'return true;'),
+    accept: (i) => (w ? `{ ${finRTs(r.name, `alt${i}`, 'b', 'save')}; return true; }` : 'return true;'),
     open: () => (w ? '  const save = pos, b = _n;' : '  const save = pos;'),
     peekOrFail: '  const t = peek(); if (t === null) return false;',
     armJoin: ' ',
     fail: (clean) => (w ? (clean ? '  return false;' : '  back(save); _n = b;\n  return false;') : '  back(save);\n  return false;'),
     openBest: (d) => (w ? `  const save = pos, b = _n;\n  let bestPos = save${biTs(d)};` : '  const save = pos;\n  let bestPos = save;'),
     peekOpt: '  const _ft = peek();',
-    cand: (d, i, cond) => candTs(d, i, m, cond, `finR(${cn}, c, save); _keep(b, c); bestPos = pos;${markTs(d, i)}`),
+    cand: (d, i, cond) => candTs(d, i, m, cond, `${finRTs(r.name, `alt${i}`, 'c', 'save')}; _keep(b, c); bestPos = pos;${markTs(d, i)}`),
     guard: (g, keyed, stmt) => { const c = guardCond(g, '_ft', keyed); return ifTs(c.length && !keyed ? ['_ft !== null', ...c] : c, stmt); },
     dispatch: dispatchTsL('_ft'),
     closeBest: w ? '  pos = bestPos;\n  return _n !== b;' : '  pos = bestPos;\n  return bestPos > save;',
     commitPeek: '  const _ft = peek();',
     guardConds: (g) => guardCond(g, '_ft', false),
-    commit: (_i, conds, cond, undo, nullable) => commitTs(conds, w
-      ? `{ const s = pos, b = _n; if (${cond}${nullable ? ' && pos > s' : ''}) { finR(${cn}, b, s); return true; }${undo ? ' back(s); _n = b;' : ''} }`
+    commit: (i, conds, cond, undo, nullable) => commitTs(conds, w
+      ? `{ const s = pos, b = _n; if (${cond}${nullable ? ' && pos > s' : ''}) { ${finRTs(r.name, `alt${i}`, 'b', 's')}; return true; }${undo ? ' back(s); _n = b;' : ''} }`
       : `{ ${undo ? 'const s = pos; ' : ''}if (${cond}${nullable ? ' && pos > s' : ''}) return true;${undo ? ' back(s);' : ''} }`, 'return false;'),
     commitFail: '{ return false; }',
     commitSw: commitSwTs('_ft'),
@@ -959,7 +972,9 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
   const d = r.nudDispatch;
   // A NUD arm that won: its node at slot c finished (`fin`), _keep moves it over the best it beat.
   const won = (i: number, fin: string, form: string, tail: boolean, capped: boolean) =>
-    `${fin}(${cn}, c${fin === 'finR' ? ', save' : ''}); _keep(b, c); bestPos = pos;${markTs(d, i)} bf = ${form}; bt = ${tail}; bc = ${capped};`;
+    `${fin === 'finR' ? finRTs(r.name, `nud${i}`, 'c', 'save') : finPTs(r.name, `nud${i}`, 'c')}; _keep(b, c); bestPos = pos;${markTs(d, i)} bf = ${form}; bt = ${tail}; bc = ${capped};`;
+  // The postfix token arm a token kind (or the template head) selects: the first one declared.
+  const postKey = (kid: number) => `post${r.postfixToks.findIndex((tok) => kidOf(ids, tok) === kid)}`;
   const L: PrattLowering = {
     steps: tsSteps(ids, 'w'),
     ifAll: ifTs,
@@ -988,16 +1003,16 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
     dispatch: dispatchTsL('t'),
     // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node (the
     // one slot at b), form, tail and capped flag; failing, no node and the frame's empty state.
-    commitLeaf: (_i, conds) => commitTs(conds, `{ const b = _n; leafSlotW(tok_kind(t), t); pos++; finP(${cn}, b); _form = 0; _tail = false; return true; }`, NUD_FAIL_TS, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitTs(conds, `{ const s = pos, b = _n; if (${cond}${nullable ? ' && pos > s' : ''}) { finR(${cn}, b, s); _capped = ${capped}; _form = 0; _tail = ${tail}; return true; }${undo ? ' back(s); _n = b;' : ''} }`, NUD_FAIL_TS),
-    commitPrefix: (_i, conds) => commitTs(conds, `{ const pbp = ${r.name}_PRE[t.lid];
+    commitLeaf: (i, conds) => commitTs(conds, `{ const b = _n; leafSlotW(tok_kind(t), t); pos++; ${finPTs(r.name, `nud${i}`, 'b')}; _form = 0; _tail = false; return true; }`, NUD_FAIL_TS, true),
+    commitSeq: (i, conds, cond, tail, capped, undo, nullable) => commitTs(conds, `{ const s = pos, b = _n; if (${cond}${nullable ? ' && pos > s' : ''}) { ${finRTs(r.name, `nud${i}`, 'b', 's')}; _capped = ${capped}; _form = 0; _tail = ${tail}; return true; }${undo ? ' back(s); _n = b;' : ''} }`, NUD_FAIL_TS),
+    commitPrefix: (i, conds) => commitTs(conds, `{ const pbp = ${r.name}_PRE[t.lid];
     if (pbp !== undefined) {
       const save = pos, b = _n;
       leafSlotW('$operator', t);
       pos++;
       if (${r.name}_bpW(pbp)) {
         if (_form !== 0 && ${r.name}_PRE_TGT.has(t.lid)) { back(save); _n = b; _capped = false; return false; }
-        finP(${cn}, b); _form = ${r.name}_PRE_FORM[t.lid]!; _tail = true; _capped = false; return true;
+        ${finPTs(r.name, `nud${i}`, 'b')}; _form = ${r.name}_PRE_FORM[t.lid]!; _tail = true; _capped = false; return true;
       }
       back(save); _n = b;
     } }`, NUD_FAIL_TS),
@@ -1012,25 +1027,26 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
       notSuppressed: (set) => `_suppressCur !== ${set}`,
       ifAll: (parts) => (parts.length ? `if (${parts.join(' && ')}) ` : ''),
     },
-    ledArm: (_i, cond, form, closes, exit) => `{
+    ledArm: (i, cond, form, closes, exit, _clean, rebind) => `{
       const ledSave = pos;
-      if (${cond}) { finP(${cn}, b); form = ${form};${closes ? ' tailClosed = true;' : ''} continue ledLoop; }
-      back(ledSave); _n = b + 1;${exit ? ' break ledLoop;' : ''}
+      if (${cond}) { ${finPTs(r.name, `led${i}`, 'b')}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue ledLoop; }
+      back(ledSave); _n = b + 1;${rebind ? `\n      if (${rebind}) { ${finPTs(r.name, `led${i}`, 'b')}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue ledLoop; }` : ''}${exit ? ' break ledLoop;' : ''}
     }`,
+    rebind: (p) => `rbScan(${rbSite(ids, [p.open, p.operand, p.sep, p.rest])}, ${p.sepLid}, 0)`,
     ledSwitch: (cases) => `    switch (t.lid) {
 ${cases.map((c) => `      case ${c.key}:\n${c.arms.map((a) => `      ${a}`).join('\n')}\n        break;`).join('\n')}
     }`,
     postfixToks: (kids) => `    switch (t.kid) {
 ${kids.map((k) => `      case ${k}:
-        if (!tailClosed) { leafSlotW(tok_kind(t), t); pos++; finP(${cn}, b); form = 0; continue ledLoop; }
+        if (!tailClosed) { leafSlotW(tok_kind(t), t); pos++; ${finPTs(r.name, postKey(k), 'b')}; form = 0; continue ledLoop; }
         break;`).join('\n')}
     }`,
     postfixTpl: (hole) => `
-    if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) { if (matchTemplateW(parse${hole}W)) { finP(${cn}, b); form = 0; continue ledLoop; } }`,
+    if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) { if (matchTemplateW(parse${hole}W)) { ${finPTs(r.name, ir.tpl ? postKey(kidOf(ids, ir.tpl.token)) : 'post0', 'b')}; form = 0; continue ledLoop; } }`,
     postfixOp: `    const post = ${r.name}_POST[t.lid];
     if (!tailClosed && post !== undefined && post > minBp${r.postfixSameLine ? ' && !t.nl' : ''}) {
       if (form !== 0 && ${r.name}_POST_TGT.has(t.lid)) { _n = b; return false; }
-      leafSlotW('$operator', t); pos++; finP(${cn}, b); tailClosed = true; form = 1; continue;
+      leafSlotW('$operator', t); pos++; ${finPTs(r.name, 'postop', 'b')}; tailClosed = true; form = 1; continue;
     }`,
     binary: `    const opLid = _opLid(t);
     const info = ${r.name}_BIN[opLid];
@@ -1040,7 +1056,7 @@ ${kids.map((k) => `      case ${k}:
     opLeafW(t, opLid);
     pos += _opN;
     if (!${r.name}_bpW(info.rbp)) { back(ledSave); _n = b + 1; break; }
-    finP(${cn}, b);
+    ${finPTs(r.name, 'bin', 'b')};
     if (_capped) { _form = 1; return true; }
     form = 1; tailClosed = true;
   }`,
@@ -1085,6 +1101,36 @@ function parse${r.name}W(): boolean {
 /** The parse engine: the builder protocol, the child stack, the step helpers in building and
  *  recognize form, and every rule in the forms its call sites need (ParserIR.forms). parse() runs
  *  it with cstBuilder, parseWith() with the caller's builder. */
+// The mixfix operand re-bind (rebind-family.ts, the one `rbScan`): each led that has one is a site,
+// its four steps (connector, operand, L2, the rest) the cases of `rbStep`. The engine's part: a mark
+// is the position and the child stack's height, the cap `toks` sliced and put back (linear, on the
+// failure path only).
+const RB_SITES = new WeakMap<LexIdPlan, string[][]>();
+function rbSite(ids: LexIdPlan, steps: string[]): number {
+  let m = RB_SITES.get(ids);
+  if (m === undefined) RB_SITES.set(ids, (m = []));
+  m.push(steps);
+  return m.length - 1;
+}
+function rebindRuntimeTs(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
+  if (!hasRebind(ir)) return '';
+  const sites = RB_SITES.get(ids) ?? [];
+  return `
+let rbMark_r1 = 0, rbMark_r2 = 0, rbMark_r3 = 0;
+function rbMark(): number { rbMark_r1 = _n; return pos; }
+function rbReset(p: number, s: number, _c: number, _e: number): void { back(p); _n = s; }
+function rbPos(): number { return pos; }
+function rbTokLid(i: number): number { return toks[i]!.lid; }
+function rbCapped(led: number, i: number, d: number): boolean { const full = toks; toks = full.slice(0, i); const ok = rbStep(led, 1, d); toks = full; return ok; }
+function rbStep(led: number, k: number, _d: number): boolean {
+  switch (led * 4 + k) {
+${sites.flatMap((st, i) => st.map((c, k) => `    case ${i * 4 + k}: return ${c};`)).join('\n')}
+  }
+  return false;
+}
+${shared.rebindFamily(ir, 'free')}
+${shared.rebindFamily(ir, 'methods')}`;
+}
 function engineRuntime(ir: ParserIR, ids: LexIdPlan): string {
   const reuse = ir.reuse;
   const ruleFns = [...ir.rules.filter((r) => ir.forms.buildRules.includes(r.name)).map((r) => {
@@ -1138,7 +1184,8 @@ let _sp = new Int32Array(_SW * 256);
 let _n = 0;
 function _slot(h: any, kind: number, off: number, end: number, tokStart: number, headOff: number, headEnd: number): void {
   const s = _n * _SW;
-  if (s === _sp.length) { const a = new Int32Array(s * 2); a.set(_sp); _sp = a; }
+  if (s === _sp.length) { const a = new Int32Array(s * 2); a.set(_sp); _sp = a; }${SHAPE ? `
+  _tg[_n] = -1;` : ''}
   _hs[_n++] = h;
   _sp[s] = off; _sp[s + 1] = end; _sp[s + 2] = tokStart; _sp[s + 3] = headOff; _sp[s + 4] = headEnd; _sp[s + 5] = kind;
 }
@@ -1186,7 +1233,8 @@ function finP(rule: string, b: number): void {
 // over the best it beat (if any: slot b, with c = b + 1).
 function _keep(b: number, c: number): void {
   if (c === b) return;
-  _hs[b] = _hs[c];
+  _hs[b] = _hs[c];${SHAPE ? `
+  _tg[b] = _tg[c]; _ar[b] = _ar[c];` : ''}
   _sp.copyWithin(b * _SW, c * _SW, c * _SW + _SW);
   _n = b + 1;
 }
@@ -3071,8 +3119,24 @@ const tsLowering: Lowering = {
   units: UNITS,
   ident: (n) => n,
   num: { int: 'number', lid: 'number', depth: 'number', pos: 'number', idx: 'number' },
-  type: (t) => (isRecList(t) ? `${recName(t)}[]` : isRec(t) ? recName(t) : isOpt(t) ? `${recName(t)} | null` : TS_TYPES[t]),
+  type: (t) => (isRecList(t) ? `${recName(t)}[]` : isRec(t) ? recName(t) : isOpt(t) ? `${recName(t)} | null` : isValList(t) ? 'ShapeValue[]' : isValTy(t) ? 'any' : TS_TYPES[t]),
   owns: false,
+  // Shape values: the evaluator's own representation (src/shape2-eval.ts ShapeValue), absent as
+  // undefined; the helpers are the shape runtime's (shapeRuntimeTs).
+  shape: {
+    vConst: (cx, val) => cx.atom(val === null ? 'null' : JSON.stringify(val), 'val_any', 'val_any'),
+    vAbsent: (cx) => cx.atom('undefined', 'val_any', 'val_any'),
+    vText: (cx, r) => cx.atom(r.c, 'val_any', 'val_any'),
+    mkNode: (cx, kind, fields, start, end) => cx.atom(`_mkNode(${kind.c}, ${start.c}, ${end.c}, ${J(fields.map(([n]) => n))}, [${fields.map(([, r]) => r.c).join(', ')}])`, 'val_any', 'val_any'),
+    mkRecord: (cx, fields) => cx.atom(`_mkRecord(${J(fields.map(([n]) => n))}, [${fields.map(([, r]) => r.c).join(', ')}])`, 'val_any', 'val_any'),
+    vList: (cx, l) => cx.atom(l.c, 'val_any', 'val_any'),
+    vItems: (cx, r) => cx.atom(`(${r.c} as ShapeValue[])`, 'vals_any', 'vals_any'),
+    vIs: (_cx, r, val) => ({ c: `${tsWrap(r, 4)} === ${val === null ? 'null' : JSON.stringify(val)}`, prec: 3 }),
+    vPresent: (_cx, r) => ({ c: `${tsWrap(r, 4)} !== undefined`, prec: 3 }),
+    vNeed: (cx, r) => cx.atom(`_need(${r.c})`, 'val_any', 'val_any'),
+    vMissing: (cx, where, why) => cx.atom(`_missing(${J(where)}, ${J(why)})`, 'val_any', 'val_any'),
+    switch: (_cx, on, cases, dflt) => [`switch (${on.c}) {`, ...cases.flatMap((c) => [`${TS_IND}case ${J(c.v)}: {`, ...tsBlock(tsBlock(c.body)), `${TS_IND}${TS_IND}break;`, `${TS_IND}}`]), `${TS_IND}default: {`, ...tsBlock(tsBlock(dflt)), `${TS_IND}}`, '}'],
+  },
   charSet: (name, rs) => `const ${name} = /*#__PURE__*/ (() => { const a = new Uint8Array(256); for (const [lo, hi] of [${rs.map(([lo, hi]) => `[${lo},${hi}]`).join(', ')}]) for (let i = lo; i <= hi; i++) a[i] = 1; return a; })();`,
   // A code unit past 255 indexes no table entry (undefined), so it ends the run.
   // A unit loop: Rust's four-per-round shape did not pay in V8 (measure-targets, PR #138: ts-parse
@@ -3230,6 +3294,13 @@ export const tsTarget = defineParserTarget({
   lowering: tsLowering,
   emitParser(grammar: CstGrammar, shared: SharedAlgorithms, opts: EmitOptions): string {
     const ir = portableIR(grammar, FACTS);
+    if (opts.shape) {
+      if (opts.recovery) throw new Error('tsTarget: a shape-building parser has no total parsing yet (emit options `shape` and `recovery` together)');
+      if (opts.shape.source !== grammar) throw new Error('tsTarget: the shape was defined on another grammar object than the one emitted');
+      const plan = shared.shapePlan(opts.shape, ir);
+      SHAPE = plan;
+      try { return emitTsLibrary(plan.ir, buildLexIdPlan(plan.ir), shared) + '\n' + shared.shapeFamily(plan); } finally { SHAPE = null; }
+    }
     return emitTsLibrary(ir, buildLexIdPlan(ir), shared) + (opts.recovery ? recoveryRegionTs(ir, shared) : '');
   },
   emitRunner,
@@ -3351,14 +3422,23 @@ function lookEnd(): number { return peekEnd > maxLook ? peekEnd : maxLook; }
 function lookReset(): void { maxLook = 0; peekEnd = 0; }
 ${tokenSetRuntime(ir, ids)}
 ${gtRuntime(ir, ids)}
-${engineRuntime(ir, ids)}
+${engineRuntime(ir, ids)}${rebindRuntimeTs(ir, ids, shared)}
 // Library entry. tokenize(src) is the lexer alone: fresh Token objects the caller owns, and no
 // parser state touched. parse(src) lexes and parses; the CST is plain objects, independent of
 // any later call. No I/O — see emitRunner() for the stdin → JSON wrapper.
 export function tokenize(src: string): Token[] {
   return lex(src).map((t) => ({ kind: tok_kind(t), text: tok_text(src, t), off: t.off, end: t.end, nl: t.nl, kid: t.kid, lid: t.lid }));
 }
-export function parse(src: string): Cst | null {
+${SHAPE ? `// A shape-building parser: parse(src) is the shape's value of the text (its entry rule's), or
+// null when the grammar rejects the text; reading an arm the shape leaves out throws.
+export function parse(src: string): ShapeValue | null {
+  _src = src;
+  toks = lex(src);
+  const root = runW(_shapeBuilder);
+  if (root instanceof _Missing) throw new ShapeMissing(root.where, root.why);
+  return root;
+}
+${shapeRuntimeTs(SHAPE)}` : `export function parse(src: string): Cst | null {
   _src = src;
   return parseTokens(lex(src));
 }
@@ -3367,7 +3447,7 @@ function parseTokens(tokens: Tok[]): Cst | null {
   toks = tokens;
   return runW(cstBuilder);
 }
-
+`}
 ${docEditBlock(ir, shared)}
 ${docRuntime(ir)}
 // The lifted steps (lift), printed after every site that names one.
@@ -3449,7 +3529,7 @@ function enHeadLid(sb: number): number { return sb < _n ? lid_of(headLeafTextW(s
 function enSt(k: number): number { return k === ${ST_CAPPED} ? (_capped ? 1 : 0) : k === ${ST_FORM} ? _form : k === ${ST_TAIL} ? (_tail ? 1 : 0) : k === ${ST_SUP_NEXT} ? _suppressNext : k === ${ST_SUP_CUR} ? _suppressCur : _ctx; }
 function enSetSt(k: number, v: number): void { if (k === ${ST_CAPPED}) _capped = v !== 0; else if (k === ${ST_FORM}) _form = v; else if (k === ${ST_TAIL}) _tail = v !== 0; else if (k === ${ST_SUP_NEXT}) _suppressNext = v; else if (k === ${ST_SUP_CUR}) _suppressCur = v; else _ctx = v; }
 function enTick(): void { _rsteps++; }
-/**
+${hasRebind(ir) ? '// The re-bind\'s capped operand, interpreted (rebind-family.ts; the marks are the native forms\'): the cap is `toks` sliced for the call.\nfunction riRbCapped(led: number, i: number, d: number): boolean { const full = toks; toks = full.slice(0, i); const ok = riRbStep(led, 1, d); toks = full; return ok; }\n' : ''}/**
  * parseInterpreted: the strict interpreter of the parse plan (the recovery family) from the entry
  * rule, \`depth\` rule levels interpreted and the native functions below: parseWith's root and
  * verdict on every input. \`steps\`: the interpreted steps it took.
@@ -3591,4 +3671,110 @@ export function emitTs(grammar: CstGrammar, opts?: { shape?: ShapeSpec }): strin
   const base = emitTsLibrary(ir, ids, tsTarget.shared);
   if (!opts?.shape) return base;
   return base + emitShapeAstAddon(ir, validateShapeOrThrow(grammar, opts.shape), ids);
+}
+
+// ── A shape-building parser's runtime (emit option `shape`, src/shape-plan.ts) ──
+// The child stack's slots also carry a TAG (_tg: the grammar node that left the slot, set by the
+// step after it; -1 on anything else; -2 - m: an iteration marker) and, for a node, its ENGINE ARM
+// (_ar). The engine methods the construct plans read (shape-plan.ts EXTERNS) read them; finS /
+// finPS are finR / finP with the arm's construct plan in place of the builder's node. The values
+// are the evaluator's (src/shape2-eval.ts ShapeValue); a MISSING value (an arm the shape leaves
+// out, or one the plan cannot build yet) fails only where it is read (`_need`).
+
+function shapeRuntimeTs(plan: ShapePlan): string {
+  return `export type ShapeNode = { kind: string; start: number; end: number; fields: Record<string, ShapeValue> };
+export type ShapeValue = ShapeNode | ShapeValue[] | string | number | boolean | null | { record: Record<string, ShapeValue> };
+/** A read of what the shape cannot give: an arm it leaves out ('unmapped') or one this parser's
+ *  plan does not build yet ('unsupported'). */
+export class ShapeMissing extends Error {
+  where: string; why: string;
+  constructor(where: string, why: string) { super(\`shape: \${why} arm \${where}\`); this.where = where; this.why = why; }
+}
+class _Missing { where: string; why: string; constructor(where: string, why: string) { this.where = where; this.why = why; } }
+function _missing(where: string, why: string): any { return new _Missing(where, why); }
+// A child read that is missing makes the reading arm's value missing too (finS catches it): only the
+// root's read, parse(), throws, as the evaluator throws when a unit's evaluation reads one.
+function _need(v: any): any { if (v instanceof _Missing) throw v; return v; }
+function _construct(id: number, b: number, off: number, end: number): any {
+  let v: any;
+  try { v = _C[id]!(b, off, end); } catch (e) { if (!(e instanceof _Missing)) throw e; v = e; }
+  if (_built !== null) _built(id, off, end, v instanceof _Missing ? new ShapeMissing(v.where, v.why) : v);
+  return v;
+}
+// A test seam: every value the construct plans build (losing candidates' too), with its engine
+// arm (shapeArms[id]) and span; a missing one as its ShapeMissing.
+let _built: ((id: number, off: number, end: number, v: any) => void) | null = null;
+export function observeBuilt(f: ((id: number, off: number, end: number, v: any) => void) | null): void { _built = f; }
+function _mkNode(kind: any, start: number, end: number, names: string[], vals: any[]): ShapeNode {
+  const fields: Record<string, ShapeValue> = {};
+  for (let i = 0; i < names.length; i++) if (vals[i] !== undefined) fields[names[i]!] = vals[i];
+  return { kind, start, end, fields };
+}
+function _mkRecord(names: string[], vals: any[]): { record: Record<string, ShapeValue> } {
+  const record: Record<string, ShapeValue> = {};
+  for (let i = 0; i < names.length; i++) if (vals[i] !== undefined) record[names[i]!] = vals[i];
+  return { record };
+}
+let _tg: number[] = [];
+let _ar: number[] = [];
+// The slot the step just left gets tag t.
+function _tag(t: number): boolean { _tg[_n - 1] = t; return true; }
+// One iteration of a marked body: when it matched, a zero-width marker (tag mt) goes before its
+// slots (with the span and head of the first of them).
+function _iter(mt: number, f: () => boolean): boolean {
+  const c = _n;
+  if (!f()) return false;
+  _slot(null, 0, 0, 0, 0, 0, 0);
+  for (let i = _n - 1; i > c; i--) { _hs[i] = _hs[i - 1]; _tg[i] = _tg[i - 1]; _ar[i] = _ar[i - 1]; }
+  _sp.copyWithin((c + 1) * _SW, c * _SW, (_n - 1) * _SW);
+  const s = c * _SW;
+  if (_n - 1 > c) { _sp[s + 1] = _sp[s]!; } else { _sp[s] = 0; _sp[s + 1] = 0; _sp[s + 2] = pos; _sp[s + 3] = 0; _sp[s + 4] = 0; }
+  _sp[s + 5] = 0;
+  _hs[c] = null; _tg[c] = mt; _ar[c] = -1;
+  return true;
+}
+const _AN: string[] = ${J(plan.arms.map((a) => a.arm))};
+export const shapeArms: { rule: string; arm: string; key: string }[] = ${J(plan.arms.map((a) => ({ rule: a.rule, arm: a.arm, key: a.key })))};
+const _C: ((b: number, off: number, end: number) => any)[] = [${plan.arms.map((a) => `construct${a.id}`).join(', ')}];
+// finR / finP with engine arm id's construct plan: its value over slots b.._n replaces them.
+function finS(id: number, b: number, save: number): void {
+  let off: number, end: number, ho: number, he: number;
+  if (_n > b) { const s = b * _SW; off = _sp[s]!; end = _sp[(_n - 1) * _SW + 1]!; ho = _sp[s + 3]!; he = _sp[s + 4]!; }
+  else { off = save < toks.length ? toks[save]!.off : 0; end = off; ho = off; he = off; }
+  const v = _construct(id, b, off, end);
+  _n = b;
+  _slot(v, 1, off, end, save, ho, he);
+  _ar[b] = id;
+}
+function finPS(id: number, b: number): void {
+  let off = 0, end = 0, ts = pos, ho = 0, he = 0;
+  if (_n > b) { const s = b * _SW; off = _sp[s]!; end = _sp[(_n - 1) * _SW + 1]!; ts = _sp[s + 2]!; ho = _sp[s + 3]!; he = _sp[s + 4]!; }
+  const v = _construct(id, b, off, end);
+  _n = b;
+  _slot(v, 1, off, end, ts, ho, he);
+  _ar[b] = id;
+}
+// The engine methods of the construct plans (src/shape-plan.ts EXTERNS).
+function slotTag(i: number): number { return _tg[i]!; }
+function slotOff(i: number): number { return _sp[i * _SW]!; }
+function slotEnd(i: number): number { return _sp[i * _SW + 1]!; }
+function slotVal(i: number): any { return _hs[i]; }
+function slotArmName(i: number): any { return _AN[_ar[i]!]; }
+function slotTop(): number { return _n; }
+function slotFind(lo: number, hi: number, t0: number, t1: number): number { for (let i = lo; i < hi; i++) { const t = _tg[i]!; if (t >= t0 && t <= t1) return i; } return -1; }
+function slotFindLast(lo: number, hi: number, t0: number, t1: number): number { for (let i = hi - 1; i >= lo; i--) { const t = _tg[i]!; if (t >= t0 && t <= t1) return i; } return -1; }
+function namedEnd(lo: number, hi: number): number { for (let i = hi - 1; i >= lo; i--) { const t = _tg[i]!; if (t >= 0 && (t & 1) === 0) return _sp[i * _SW + 1]!; } return -1; }
+function srcText(a: number, b: number): string { return _src.slice(a, b); }
+const _isNode = (x: any): x is ShapeNode => x !== null && typeof x === 'object' && !Array.isArray(x) && 'kind' in x;
+function valStart(x: any, dflt: number): number { return _isNode(x) ? x.start : Array.isArray(x) && _isNode(x[0]) && _isNode(x[x.length - 1]) ? x[0].start : dflt; }
+function valEnd(x: any, dflt: number): number { return _isNode(x) ? x.end : Array.isArray(x) && _isNode(x[0]) && _isNode(x[x.length - 1]) ? x[x.length - 1].end : dflt; }
+// The cooking functions: src/shape-cook.ts, the evaluator's own definitions.
+type CookFn = string; type Scalar = string | number | boolean | null;
+${cookTable.toString()}
+const _COOK = cookTable();
+${plan.cooks.map((c) => `function cook_${c}(s: string): any { return _COOK[${J(c)}]!(s); }`).join('\n')}
+// The builder under the construct plans: every leaf is a slot (its span is what a plan reads); an
+// interpolated template's node is the one the engine still builds with it (S1: not built).
+const _shapeBuilder: Builder<any> = { leaf: () => 0, node: (rule) => _missing(rule, 'unsupported') };
+`;
 }

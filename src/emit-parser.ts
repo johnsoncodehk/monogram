@@ -460,7 +460,7 @@ class Emitter {
     if (this.spine !== null) return this.spine;
     const a = this.a;
     const spine = new Set<string>();
-    const entryRule = a.grammar.rules[a.grammar.rules.length - 1];
+    const entryRule = a.ruleByName.get(findEntryRule(a.grammar))!;
     const walk = (x: RuleExpr): void => {
       switch (x.type) {
         case 'ref': if (a.ruleByName.has(x.name)) spine.add(x.name); return;
@@ -674,10 +674,9 @@ class Emitter {
         // A suppress-carrying group stages the LED-connector exclusion for the next
         // parseRule (the index of its connector set, grammar-analysis suppressSets), then
         // matches its body (same as matchExpr 'group').
-        const pre = (expr.suppress && expr.suppress.length)
-          ? `suppressNext = ${this.a.suppressSetOf(expr.suppress)};`
-          : ``;
-        return [pre, this.matchInto(expr.body, onFail)].filter(Boolean).join('\n');
+        // The staging ends with the group, matched or not (gen-parser.ts matchExpr 'group').
+        if (!expr.suppress || !expr.suppress.length) return this.matchInto(expr.body, onFail);
+        return [`suppressNext = ${this.a.suppressSetOf(expr.suppress)};`, this.matchInto(expr.body, `{ suppressNext = 0; ${onFail} }`), `suppressNext = 0;`].join('\n');
       }
       case 'not': {
         // Zero-width negative lookahead: succeed (no children) iff body does NOT match.

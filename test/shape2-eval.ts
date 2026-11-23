@@ -710,5 +710,54 @@ check('skeleton: every arm of calc / javascript / typescript maps to a term that
   } finally { rmSync(at); }
 }
 
+// ── The emitted shape-building parser (emit option `shape`, TypeScript; src/shape-plan.ts) ──
+// Its value of a text is the evaluator's of the interpreter's CST: on the doc example's calc
+// shape, over accepted and rejected texts. And a LOSING candidate's nodes are truncated with it:
+// in `x! y` the arm `short` of S is accepted at `x` (its node built) and then beaten by the longer
+// `long`; that node is built (observeBuilt sees it) and is in no value the parse returns.
+{
+  const { emitParser } = await import('../src/target.ts');
+  const { tsTarget } = await import('../src/target-ts.ts');
+  const { token, rule, defineGrammar, many, plus, oneOf, range, arm, field } = await import('../src/api.ts');
+  const { child, node, text } = await import('../src/shape2-schema.ts');
+  const at = join(tmpdir(), `shape2-built-${process.pid}`);
+  type AnyShape = Parameters<typeof evaluateShape>[0];
+  const emitted = async (shape: AnyShape, name: string) => {
+    const file = `${at}-${name}.ts`;
+    writeFileSync(file, emitParser(shape.source, tsTarget, { shape }));
+    try { return await import(file); } finally { rmSync(file); }
+  };
+  const same = (m: { parse(s: string): unknown }, shape: AnyShape, src: string): boolean => {
+    let got: unknown, want: unknown;
+    try { got = m.parse(src); } catch (e) { got = `throws ${(e as Error).constructor.name}`; }
+    try { want = evaluateShape(shape, createParser(shape.source).parse(src), src); } catch (e) { want = /Parse error/.test(String(e)) ? null : `throws ${(e as Error).constructor.name}`; }
+    return JSON.stringify(got) === JSON.stringify(want);
+  };
+  const calcM = await emitted(calcExample, 'calc');
+  for (const src of ['let x = 1 + 2 * y;', '-3; (a - b) / c;', 'x;', '', 'let a = -(1); b * -c - d;', '(((n)));', 'a + ;', 'let = 1;']) {
+    assert.ok(same(calcM, calcExample, src), `emitted calc shape parser ≡ evaluateShape on ${JSON.stringify(src)}`); passed++;
+  }
+  const ID = token(plus(oneOf(range('a', 'z'))), { identifier: true });
+  const WS = token(plus(oneOf(' ')), { skip: true });
+  const A = rule(() => [arm('a', ID)]);
+  const S = rule(() => [arm('short', field('head', A)), arm('long', field('head', A), '!')]);
+  const P = rule(() => [arm('program', many(field('stmt', S)))]);
+  const g = defineGrammar({ name: 'losing', tokens: { WS, ID }, rules: { A, S, P }, entry: P });
+  const shape = defineShape(g, { name: 'losing-ast', rules: {
+    A: { a: node('A', { name: text('iD') }) },
+    S: { short: node('Short', { head: child('head') }), long: node('Long', { head: child('head') }) },
+    P: { program: node('P', { body: child('stmt') }) },
+  } });
+  const m = await emitted(shape, 'losing');
+  const built: string[] = [];
+  m.observeBuilt((id: number, off: number, end: number) => built.push(`${m.shapeArms[id].rule}.${m.shapeArms[id].arm}@${off}:${end}`));
+  const v = m.parse('x! y');
+  m.observeBuilt(null);
+  assert.ok(same(m, shape, 'x! y'), 'the losing-candidate grammar: emitted ≡ evaluateShape'); passed++;
+  assert.ok(built.includes('S.short@0:1'), `the losing candidate S.short at x is built (${built.join(' ')})`); passed++;
+  assert.ok(!JSON.stringify(v).includes('"Short","start":0'), 'and is in no value the parse returns'); passed++;
+  console.log(`  emitted shape-building parser: calc ≡ evaluateShape; losing candidate built and dropped (${built.join(' ')})`);
+}
+
 console.log(`shape2-eval: ${passed} checks passed`);
 

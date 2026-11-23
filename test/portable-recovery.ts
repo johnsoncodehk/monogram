@@ -44,8 +44,12 @@ const TOTAL_K = 3;
 // The farthest-hint agreement is a floor per grammar (the count of rejects whose related location
 // is the interpreter's farthest token): it may rise, never drop below what is recorded here.
 // The mutants are drawn from the accept lists (seeded), so a list entry added or removed draws
-// another set: the floor is re-measured then.
-const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5439, typescript: 5925 };
+// another set: the floor is re-measured then (typescript 5946 → 5925 when the cap-propagation accepts
+// came; the same run without them gives 5951; 5950 with the re-bind's accepts).
+// javascript 5441 -> 5439 (land/shape-ident-reserved): `undefined` is no grammar literal any more, so the
+// mutation corpus (which substitutes grammar literals) holds other inputs (`with  undefined ) { }` mutants
+// become others): the disagreements fall 186 -> 182, the agreements 5,441 -> 5,439 (of 5,621 rejects now).
+const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5439, typescript: 5950 };
 const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // P10 EXPECTED-FAIL on `$missing`-only repairs, by class. GREEDY CAPTURE: the repair is right by
 // position (each supplied token is where the derivation needs it), but the substituted token is
