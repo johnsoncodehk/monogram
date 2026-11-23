@@ -952,12 +952,26 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
       for (const k of keys) { const x = m.get(k)!; if (x.s === null || x.len1) return null; for (const y of x.s) s.add(y); }
       return s.size ? keySet(s) : null;
     };
-    // A pair pays only where it decides the list: at some kind of second token (a name, a
-    // number: what code mostly continues with) exactly one candidate can continue. Elsewhere
-    // (`<` of the JSX elements: two candidates continue with a name) it adds a test of the second
-    // token to every attempt and decides nothing.
+    // The pair candidate i would take at literal l: its SECOND there, where another candidate
+    // admits l and can continue with a token outside it.
+    const pairAt = (i: number, l: string): TokenSet | null => {
+      const g = gs[i];
+      if (g == null || g.first === null || !g.first.lits.includes(l)) return null;
+      const sec = secAt(i, l);
+      if (sec === null) return null;
+      const others = gs.flatMap((h, j) => (j !== i && admitsLit(h, l) ? [secAt(j, l)] : []));
+      return others.some((o) => o === null || !subsetTok(o, sec)) ? sec : null;
+    };
+    // A pair pays only where it decides the list: some candidate that admits l takes no pair there
+    // (the others' pairs leave it alone where they refuse: `const x` is a variable statement), or
+    // at some kind of second token (a name, a number: what code mostly continues with) exactly one
+    // candidate continues (`function f` / `function*`). Elsewhere (`<` of the JSX elements: every
+    // candidate takes a pair and two continue with a name) it adds a test of the second token to
+    // every attempt and decides nothing.
     const decides = (l: string): boolean => {
-      const ss = gs.flatMap((h, j) => (admitsLit(h, l) ? [secAt(j, l)] : []));
+      const at = gs.flatMap((h, j) => (admitsLit(h, l) ? [j] : []));
+      if (at.some((j) => pairAt(j, l) === null)) return true;
+      const ss = at.map((j) => secAt(j, l));
       const kinds = [...new Set(ss.flatMap((x) => x?.toks ?? []))];
       return kinds.some((k) => ss.filter((x) => x === null || x.toks.includes(k)).length === 1);
     };
@@ -966,11 +980,8 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
       if (g === null || g.first === null) return g;
       const at = new Map<string, { sec: TokenSet; lits: string[] }>();
       for (const l of lits) {
-        if (!g.first.lits.includes(l)) continue;
-        const sec = secAt(i, l);
+        const sec = pairAt(i, l);
         if (sec === null) continue;
-        const others = gs.flatMap((h, j) => (j !== i && admitsLit(h, l) ? [secAt(j, l)] : []));
-        if (!others.some((o) => o === null || !subsetTok(o, sec))) continue;
         const key = JSON.stringify(sec);
         const e = at.get(key); if (e) e.lits.push(l); else at.set(key, { sec, lits: [l] });
       }
