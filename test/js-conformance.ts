@@ -255,9 +255,9 @@ const tsHeritage: { accept: string[]; reject: string[] } = {
     'class A extends B, C {}', 'class A extends B extends C {}', 'class A extends {}', 'class A extends {} {}', 'class A extends {}, B {}',
     'class A extends {} implements I {}', 'class A extends {x} {}', 'class A extends function () {} {}', 'class A extends new B {}',
     'class A extends [].x {}', 'class A extends B<T> {}', 'class A<T> extends B<T> implements C<T>, D {}', 'class A implements I, J {}',
-    'class A extends B implements I extends C {}', 'interface I extends A, B {}', 'interface I extends {} {}', 'x = class extends {} {};',
+    'class A extends B implements I extends C {}', 'class A extends B, {}', 'interface I extends A, B {}', 'interface I extends {} {}', 'x = class extends {} {};',
   ],
-  reject: ['class A extends {x}', 'class A extends {}.x {}', 'class A extends a ? b : c {}', 'class A extends async () => {} {}', 'class A extends x = y {}', 'class A extends if {}'],
+  reject: ['class A extends {x}', 'class A extends { a: T; } {}', 'class A extends {}.x {}', 'class A extends a ? b : c {}', 'class A extends async () => {} {}', 'class A extends x = y {}', 'class A extends if {}'],
 };
 
 // ── Class element words (15.7 ClassElement, MethodDefinition; decorators proposal) ──

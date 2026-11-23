@@ -433,11 +433,20 @@ const ClassHeritage = rule($ => classHeritageArms($, Expr, NewTarget,
 // element may be an object literal (a LeftHandSideExpression), and an empty one `{}` is that
 // element only where a `,`, `{`, `extends` or `implements` follows it (tsc's
 // isValidHeritageClauseObjectLiteral), so the class body is not read as a heritage element:
-// `class M extends {} {}` has the base `{}`, `class M extends {}` none.
-const heritageElement = alt([not(alt('extends', 'implements')), not(['{', '}', not(alt(',', '{', 'extends', 'implements'))]), ClassHeritage]);
+// `class M extends {} {}` has the base `{}`, `class M extends {}` none. Where a `{` starts such an
+// element (any `{` but a `{}` that none of those follows), tsc parses the element there, so the
+// list is not empty: `class M extends { a: T; } {}` has no parse (the `{` is no class body). So
+// the list is a possibly-empty one where no such `{` starts, or one that starts with an element.
+// (Stated as one list followed by a guard on its emptiness, `alt([el, many(',', el), opt(',')],
+// not(...))`, the TextMate generator runs out of memory: 2 GB heap, `npm run gen`.) tree-sitter,
+// which renders no lookahead, keeps the plain list (tsRelax): the two branches would only be one
+// more conflict there.
+const heritageFollowers = alt(',', '{', 'extends', 'implements');
+const heritageElement = alt([not(alt('extends', 'implements')), not(['{', '}', not(heritageFollowers)]), ClassHeritage]);
+const heritageList = [tsRelax(alt([not(alt(['{', not('}')], ['{', '}', heritageFollowers])), sep(heritageElement, ',')], [heritageElement, opt(',', sep(heritageElement, ','))]), sep(heritageElement, ','))];
 const heritageClauses = many(alt(
-  ['extends', sep(heritageElement, ',')],
-  ['implements', sep(heritageElement, ',')],
+  ['extends', ...heritageList],
+  ['implements', ...heritageList],
 ));
 
 // The `new` callee forms are JavaScript's (`newTargetArms`, javascript.ts); a TypeScript `new`
