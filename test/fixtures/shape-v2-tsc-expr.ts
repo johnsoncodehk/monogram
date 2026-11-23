@@ -330,10 +330,14 @@ const RUN = ['modifier', 'staticModifier', 'modifierAfterStatic'];
 const asElement = (expression: Term): Term => let_('$e', expression, iff(inh('heritageElement'), node('ExpressionWithTypeArguments', { expression: v('$e') }), v('$e')));
 /** A heritage element (ClassHeritage, valued under `heritageElement`). */
 const element = (name: string): Term => branch(name, { classHeritage: child('base') });
-const heritageClause = (kw: string): Term => node('HeritageClause', {
-  token: c(kw),
-  types: branch('elements', { list: map('elementRest', element('elementRest')), first: list(element('element'), spread(map('elementRest', element('elementRest')))) }),
-}, { from: 'keyword', to: 'elements' });
+/** A clause: from its keyword to its last element (to the keyword when it has none: `extends {`). */
+const heritageClause = (kw: string): Term => {
+  const clause = (types: Term, to: string): Term => node('HeritageClause', { token: c(kw), types }, { from: 'keyword', to });
+  return branch('elements', {
+    list: iff(present('elementRest'), clause(map('elementRest', element('elementRest')), 'elements'), clause(list(), 'keyword')),
+    first: clause(list(element('element'), spread(map('elementRest', element('elementRest')))), 'elements'),
+  });
+};
 const heritageClauses: Term = map('heritage', branch('heritage', { extends_: heritageClause('ExtendsKeyword'), implements: heritageClause('ImplementsKeyword') }));
 const classFields = (nameTerm: Term): Record<string, Term> => ({
   name: nameTerm, typeParameters: child('typeParameters'), heritageClauses: iff(present('heritage'), heritageClauses, absent), members: child('member'),
@@ -352,6 +356,11 @@ const method = (isAsync: boolean, generator: boolean): Term => node('MethodDecla
   modifiers: memberModifiers(isAsync), ...(generator ? { asteriskToken: token('AsteriskToken', 'asterisk') } : {}), name: child('key'),
   questionToken: marks.questionToken, ...memberSig,
 });
+const constructorOf = (isAsync: boolean): Term => node('Constructor', { modifiers: memberModifiers(isAsync), ...memberSig });
+/** A method named `constructor` (the identifier, or a string whose value it is) is tsc's
+ * Constructor (parseClassElement tries a constructor at either token before any other member,
+ * unless a `*` precedes it). */
+const methodOrConstructor = (isAsync: boolean): Term => iff(syn('constructorName', 'key'), constructorOf(isAsync), method(isAsync, false));
 const accessor = (isAsync: boolean): Term => node(match(text('kind'), { get: c('GetAccessor'), set: c('SetAccessor') }), { modifiers: memberModifiers(isAsync), name: child('key'), ...memberSig });
 const CLASS_RULES: Shape2Spec['rules'] = {
   ClassMember: {
@@ -360,11 +369,11 @@ const CLASS_RULES: Shape2Spec['rules'] = {
     member: branch('form', {
       asyncGeneratorMethod: method(true, true),
       asyncAccessor: accessor(true),
-      asyncMethod: method(true, false),
+      asyncMethod: methodOrConstructor(true),
       generatorMethod: method(false, true),
       accessor: accessor(false),
-      constructor: node('Constructor', { modifiers: memberModifiers(false), ...memberSig }),
-      named: branch('tail', { method: method(false, false), field: property(false) }),
+      constructor: constructorOf(false),
+      named: branch('tail', { method: methodOrConstructor(false), field: property(false) }),
       asyncField: property(true),
     }),
   },
@@ -404,6 +413,8 @@ export const tscExprShape: Shape2Spec = {
   name: 'tsc-expr',
   synthesized: {
     optional: { type: 'bool', default: false, rules: { Expr: { led_optChain: c(true), led_dot: syn('optional', 'left'), led_bracket: syn('optional', 'left'), led_paren: syn('optional', 'left'), led_bang: syn('optional', 'left') } } },
+    // A property key that names the constructor: the identifier or a string whose value it is.
+    constructorName: { type: 'bool', default: false, rules: { MemberName: { ident: match(text('ident'), { constructor: c(true) }, c(false)), string: match(cook('stringValue', 'string'), { constructor: c(true) }, c(false)) } } },
   },
   inherited: {
     // A link is the top of its chain unless it is the object / callee of another link: a
