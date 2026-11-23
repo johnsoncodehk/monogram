@@ -1510,10 +1510,8 @@ ${shapeA ? `func (p *engine) assertEntriesVsNodes(oldEntries []EntryMeta, oldRoo
 	prefixLen, suffixStart := reuseBounds(oldEntries, prefix, oldN, suffix)
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
-	prefixKids := make([]int32, 0)
-	for _, s := range prefixMeta {
-		for i := 0; i < s.KidCount; i++ { prefixKids = append(prefixKids, p.kids[old.KidStart+uint32(s.KidStart+i)]) }
-	}
+	_, prefixEnd := reuseKids(oldEntries, 0, prefixLen)
+	prefixKids := append([]int32(nil), p.kids[old.KidStart:old.KidStart+uint32(prefixEnd)]...)
 	p.src = newText
 	p.toks = toksFromMeta(newText, newMeta)
 	if prefixLen > 0 { p.pos = prefixMeta[prefixLen-1].TokEnd } else { p.pos = 0 }
@@ -1527,24 +1525,22 @@ ${shapeA ? `func (p *engine) assertEntriesVsNodes(oldEntries []EntryMeta, oldRoo
 			s := suffixMeta[adoptFrom].TokStart
 			tokDelta = p.pos - s
 		}
-		adoptedKids := make([]int32, 0)
-		for _, s := range adoptedSegs {
-			for i := 0; i < s.KidCount; i++ {
-				id := p.kids[old.KidStart+uint32(s.KidStart+i)]
-				if id < 0 {
-					ti, tt := decodeLeaf(id)
-					id = encodeLeaf(uint32(int32(ti)+int32(tokDelta)), tt)
-				} else {
-					p.shiftSubtree(id, byteDelta, tokDelta)
-				}
-				adoptedKids = append(adoptedKids, id)
+		a, b := reuseKids(suffixMeta, adoptFrom, len(suffixMeta))
+		adoptedKids := make([]int32, 0, b-a)
+		for _, id := range p.kids[old.KidStart+uint32(a) : old.KidStart+uint32(b)] {
+			if id < 0 {
+				ti, tt := decodeLeaf(id)
+				id = encodeLeaf(uint32(int32(ti)+int32(tokDelta)), tt)
+			} else {
+				p.shiftSubtree(id, byteDelta, tokDelta)
 			}
+			adoptedKids = append(adoptedKids, id)
 		}
 		children := make([]int32, 0, len(prefixKids)+len(midKids)+len(adoptedKids))
 		children = append(children, prefixKids...)
 		children = append(children, midKids...)
 		children = append(children, adoptedKids...)
-		newEntries := reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta)
+		newEntries := reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta, len(prefixKids)+len(midKids))
 		off, end, tokStart, tokEnd := reuseSpan(newEntries)
 		kidStart := len(p.kids)
 		p.kids = append(p.kids, children...)
@@ -1582,9 +1578,9 @@ ${shapeA ? `func (p *engine) assertEntriesVsNodes(oldEntries []EntryMeta, oldRoo
 			if r, n, hit := tryHit(); hit { return r, n }
 			return -1, 0
 		}
+		m.KidStart = len(prefixKids) + len(midKids)
 		midKids = append(midKids, p.scratch[sb:]...)
 		p.scratch = p.scratch[:sb]
-		m.KidStart = 0
 		midMeta = append(midMeta, m)
 		if r, rn, hit := tryHit(); hit { return r, rn }
 		if passed() { return -1, 0 }
@@ -2195,12 +2191,8 @@ func tryReuseW(b Builder, sh Shifter, oldRootHs []int32, oldEntries []EntryMeta,
 	prefixLen, suffixStart := reuseBounds(oldEntries, prefix, oldN, suffix)
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
-	prefixKids := make([]int32, 0)
-	for _, s := range prefixMeta {
-		for i := 0; i < s.KidCount; i++ {
-			prefixKids = append(prefixKids, oldRootHs[s.KidStart+i])
-		}
-	}
+	_, prefixEnd := reuseKids(oldEntries, 0, prefixLen)
+	prefixKids := append([]int32(nil), oldRootHs[:prefixEnd]...)
 	p := &parserW{cursor: cursor{toks: toksFromMeta(newText, newMeta)}, src: newText, b: b, drops: dropsOf(b), scratch: nil}
 	if prefixLen > 0 {
 		p.pos = prefixMeta[prefixLen-1].TokEnd
@@ -2216,17 +2208,16 @@ func tryReuseW(b Builder, sh Shifter, oldRootHs []int32, oldEntries []EntryMeta,
 			s := suffixMeta[adoptFrom].TokStart
 			tokDelta = p.pos - s
 		}
-		adoptedKids := make([]int32, 0)
-		for _, s := range adoptedSegs {
-			for i := 0; i < s.KidCount; i++ {
-				adoptedKids = append(adoptedKids, sh.Shift(oldRootHs[s.KidStart+i], byteDelta, tokDelta))
-			}
+		a, b := reuseKids(suffixMeta, adoptFrom, len(suffixMeta))
+		adoptedKids := make([]int32, 0, b-a)
+		for _, s := range oldRootHs[a:b] {
+			adoptedKids = append(adoptedKids, sh.Shift(s, byteDelta, tokDelta))
 		}
 		children := make([]int32, 0, len(prefixKids)+len(midKids)+len(adoptedKids))
 		children = append(children, prefixKids...)
 		children = append(children, midKids...)
 		children = append(children, adoptedKids...)
-		outE := reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta)
+		outE := reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta, len(prefixKids)+len(midKids))
 		off, end, tokStart, tokEnd := reuseSpan(outE)
 		scratch := append([]int32(nil), children...)
 		b.Node(&scratch, 0, ${entryRid}, uint32(off), uint32(end), uint32(tokStart), uint32(tokEnd))
@@ -2281,9 +2272,9 @@ func tryReuseW(b Builder, sh Shifter, oldRootHs []int32, oldEntries []EntryMeta,
 			}
 			return 0, nil, nil, 0, false
 		}
+		m.KidStart = len(prefixKids) + len(midKids)
 		midKids = append(midKids, p.scratch[sb:]...)
 		p.scratch = p.scratch[:sb]
-		m.KidStart = 0
 		midMeta = append(midMeta, m)
 		if r, e, hs, n, hit := tryHit(); hit {
 			return r, e, hs, n, true

@@ -1568,18 +1568,17 @@ ${shapeA ? `fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], ki
             let s = suffix_meta[adopt_from].tok_start as usize;
             tok_delta = self.pos as isize - s as isize;
         }
-        let mut adopted_kids: Vec<B::H> = Vec::new();
-        for s in adopted_segs {
-            for i in 0..s.kid_count as usize {
-                let id = self.b.root_kid_at(old_root, s.kid_start as usize + i);
-                adopted_kids.push(self.b.shift(id, byte_delta, tok_delta));
-            }
+        let (a, b) = reuse_kids(suffix_meta, adopt_from, suffix_meta.len());
+        let mut adopted_kids: Vec<B::H> = Vec::with_capacity(b - a);
+        for i in a..b {
+            let id = self.b.root_kid_at(old_root, i);
+            adopted_kids.push(self.b.shift(id, byte_delta, tok_delta));
         }
         let mut children: Vec<B::H> = Vec::with_capacity(prefix_kids.len() + mid_kids.len() + adopted_kids.len());
         children.extend_from_slice(prefix_kids);
         children.extend_from_slice(mid_kids);
         children.extend_from_slice(&adopted_kids);
-        let new_entries = reuse_entries(prefix_meta, mid_meta, suffix_meta, adopt_from, byte_delta, tok_delta);
+        let new_entries = reuse_entries(prefix_meta, mid_meta, suffix_meta, adopt_from, byte_delta, tok_delta, prefix_kids.len() + mid_kids.len());
         let (off, end, tok_start, tok_end) = reuse_span(&new_entries);
         let sb = self.scratch.len();
         self.scratch.extend_from_slice(&children);
@@ -1594,12 +1593,8 @@ ${shapeA ? `fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], ki
         let (prefix_len, suffix_start) = reuse_bounds(old_entries, prefix, old_n, suffix);
         let prefix_meta = &old_entries[..prefix_len];
         let suffix_meta = &old_entries[suffix_start..];
-        let mut prefix_kids: Vec<B::H> = Vec::new();
-        for s in prefix_meta {
-            for j in 0..s.kid_count as usize {
-                prefix_kids.push(self.b.root_kid_at(old_root, s.kid_start as usize + j));
-            }
-        }
+        let (_, prefix_end) = reuse_kids(old_entries, 0, prefix_len);
+        let prefix_kids: Vec<B::H> = (0..prefix_end).map(|i| self.b.root_kid_at(old_root, i)).collect();
         self.toks = new_toks;
         self.pos = if prefix_len > 0 { prefix_meta[prefix_len - 1].tok_end as usize } else { 0 };
         self.scratch.clear();
@@ -1635,9 +1630,10 @@ ${shapeA ? `fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], ki
                 None => return try_hit(self, &mid_kids, &mid_meta),
             };
             let count = self.scratch.len() - sb;
+            let kid_start = (prefix_kids.len() + mid_kids.len()) as u32;
             mid_kids.extend_from_slice(&self.scratch[sb..]);
             self.scratch.truncate(sb);
-            mid_meta.push(EntryMeta { kid_start: 0, kid_count: count as u32, tok_start: meta.tok_start, tok_end: meta.tok_end, ext: meta.ext, off: meta.off, end: meta.end });
+            mid_meta.push(EntryMeta { kid_start, kid_count: count as u32, tok_start: meta.tok_start, tok_end: meta.tok_end, ext: meta.ext, off: meta.off, end: meta.end });
             if let Some(hit) = try_hit(self, &mid_kids, &mid_meta) { return Some(hit); }
             if passed(self) { return None; }
         }

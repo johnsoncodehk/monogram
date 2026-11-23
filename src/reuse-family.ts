@@ -97,6 +97,43 @@ const shiftEntryMeta: Fn = {
   ],
 };
 
+// The new root's entries: the kept prefix, the re-parsed middle, and the adopted suffix from
+// adoptFrom, moved by the edit, their kids placed after the `kids` kids before them (the prefix
+// and middle entries already hold their places).
+const reuseEntries: Fn = {
+  name: 'reuseEntries',
+  doc: '',
+  params: [{ name: 'prefixMeta', ty: ENTRIES }, { name: 'midMeta', ty: ENTRIES }, { name: 'suffixMeta', ty: ENTRIES }, { name: 'adoptFrom', ty: 'idx' }, { name: 'byteDelta', ty: 'int' }, { name: 'tokDelta', ty: 'int' }, { name: 'kids', ty: 'idx' }],
+  ret: [ENTRIES],
+  body: [
+    { k: 'let', name: 'out', ty: ENTRIES, init: { k: 'newList', ty: ENTRIES, cap: bin('sub', bin('add', bin('add', len(v('prefixMeta')), len(v('midMeta'))), len(v('suffixMeta'))), v('adoptFrom')) } },
+    { k: 'extend', list: 'out', from: v('prefixMeta') },
+    { k: 'extend', list: 'out', from: v('midMeta') },
+    { k: 'let', name: 'kOff', ty: 'idx', init: v('kids') },
+    { k: 'for', v: 'i', from: v('adoptFrom'), to: len(v('suffixMeta')), body: [
+      { k: 'let', name: 'em', ty: ENTRY, init: { k: 'at', list: v('suffixMeta'), i: v('i') } },
+      { k: 'run', call: call('shiftEntryMeta', v('em'), v('byteDelta'), v('tokDelta')) },
+      { k: 'setField', name: 'em', f: 'kidStart', e: v('kOff') },
+      { k: 'push', list: 'out', e: v('em') },
+      { k: 'set', name: 'kOff', e: bin('add', v('kOff'), recField(v('em'), 'kidCount')) },
+    ] },
+    ret(v('out')),
+  ],
+};
+
+// The root kids of entries [from, to): an entry's kids follow the ones before it, so they are one
+// range (empty when from == to).
+const reuseKids: Fn = {
+  name: 'reuseKids',
+  doc: '',
+  params: [{ name: 'entries', ty: ENTRIES }, { name: 'from', ty: 'idx' }, { name: 'to', ty: 'idx' }],
+  ret: ['idx', 'idx'],
+  body: [
+    { k: 'if', c: bin('ge', v('from'), v('to')), then: [ret(n(0), n(0))] },
+    ret(fld('entries', v('from'), 'kidStart'), bin('add', fld('entries', bin('sub', v('to'), n(1)), 'kidStart'), fld('entries', bin('sub', v('to'), n(1)), 'kidCount'))),
+  ],
+};
+
 // The root's span over its entries: the first one's start, the last one's end (all zero without
 // entries).
 const reuseSpan: Fn = {
@@ -108,32 +145,6 @@ const reuseSpan: Fn = {
     { k: 'let', name: 'c', ty: 'idx', init: len(v('entries')) },
     { k: 'if', c: bin('eq', v('c'), n(0)), then: [ret(n(0), n(0), n(0), n(0))] },
     ret(fld('entries', n(0), 'off'), fld('entries', bin('sub', v('c'), n(1)), 'end'), fld('entries', n(0), 'tokStart'), fld('entries', bin('sub', v('c'), n(1)), 'tokEnd')),
-  ],
-};
-
-// The new root's entries: the kept prefix, the re-parsed middle and the adopted suffix from
-// adoptFrom (moved by the edit), each entry's kids placed after the ones before it.
-const segPart = (metas: string, from: Expr, shift: boolean): Stmt => ({
-  k: 'for', v: 'i', from, to: len(v(metas)), body: [
-    { k: 'let', name: 'em', ty: ENTRY, init: { k: 'at', list: v(metas), i: v('i') } },
-    ...(shift ? [{ k: 'run', call: call('shiftEntryMeta', v('em'), v('byteDelta'), v('tokDelta')) } as Stmt] : []),
-    { k: 'setField', name: 'em', f: 'kidStart', e: v('kOff') },
-    { k: 'push', list: 'outE', e: v('em') },
-    { k: 'set', name: 'kOff', e: bin('add', v('kOff'), recField(v('em'), 'kidCount')) },
-  ],
-});
-const reuseEntries: Fn = {
-  name: 'reuseEntries',
-  doc: '',
-  params: [{ name: 'prefixMeta', ty: ENTRIES }, { name: 'midMeta', ty: ENTRIES }, { name: 'suffixMeta', ty: ENTRIES }, { name: 'adoptFrom', ty: 'idx' }, { name: 'byteDelta', ty: 'int' }, { name: 'tokDelta', ty: 'int' }],
-  ret: [ENTRIES],
-  body: [
-    { k: 'let', name: 'outE', ty: ENTRIES, init: { k: 'newList', ty: ENTRIES, cap: bin('sub', bin('add', bin('add', len(v('prefixMeta')), len(v('midMeta'))), len(v('suffixMeta'))), v('adoptFrom')) } },
-    { k: 'let', name: 'kOff', ty: 'idx', init: n(0) },
-    segPart('prefixMeta', n(0), false),
-    segPart('midMeta', n(0), false),
-    segPart('suffixMeta', v('adoptFrom'), true),
-    ret(v('outE')),
   ],
 };
 
@@ -179,7 +190,7 @@ const computeAlignCore: Fn = {
   ],
 };
 
-export const REUSE_FNS: Fn[] = [reuseBounds, reuseAdoptAt, reuseGaveUp, shiftEntryMeta, reuseSpan, reuseEntries];
+export const REUSE_FNS: Fn[] = [reuseBounds, reuseAdoptAt, reuseGaveUp, shiftEntryMeta, reuseEntries, reuseKids, reuseSpan];
 
 // The functions a grammar's Doc uses: every Doc aligns the streams (computeAlignCore); the reuse
 // functions only with a reuse plan.
