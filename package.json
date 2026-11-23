@@ -21,7 +21,7 @@
     "gate:tm-diagnostics": "node test/redcmd-tm-diagnostics.ts",
     "gate:tm-guards": "node test/tm-highlight-guards.ts",
     "gate:yaml-issues": "node test/yaml-issue12-regressions.ts",
-    "gate:yaml-witnesses": "node test/yaml-depth-witnesses.ts",
+    "gate:yaml-sites": "node test/yaml-sites.ts",
     "gate:left-recursion": "node test/left-recursion.ts",
     "gate:html-lexer": "node test/html-lexer-spike.ts",
     "gate:treesitter": "(cd tree-sitter/typescript && npx tree-sitter generate && npx tree-sitter build --wasm .) && node test/treesitter-bench.ts",

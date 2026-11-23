@@ -20,7 +20,7 @@
 //
 //  Coverage is grammar×bound, not a fixed corpus — so it surfaces the depth-bug CLASS
 //  without anyone naming the shape (the motivation for #25). The named regressions
-//  (yaml-depth-witnesses.ts, *-issue-cases.ts) stay — generation replaces their
+//  (yaml-sites.ts, *-issue-cases.ts) stay — generation replaces their
 //  DISCOVERY function, not their value as documented gates.
 //
 //  Run (bare node):  node test/generative.ts            # all languages

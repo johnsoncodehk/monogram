@@ -1,5 +1,5 @@
 // raw-text-case-sites.ts — an enumerator of the RAW-TEXT element sites across LETTER CASE + a witness
-// MATRIX, mirroring depth-sites.ts's structure (the blind-spot LOCK for a bug class).
+// MATRIX, mirroring the depth-sites section of yaml-sites.ts (the blind-spot LOCK for a bug class).
 //
 // THE CLASS: HTML tag names are CASE-INSENSITIVE. A raw-text element (`<script>`/`<style>`/
 // `<textarea>`/`<title>`) scans its body VERBATIM to its close tag, so a `<x` inside the body is NOT
