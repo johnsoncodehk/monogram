@@ -24,10 +24,18 @@ import { JSX_CASES } from './curated-corpora.ts';
 import { cases as tsxIssueCases } from './tsx-issue-cases.ts';
 import { tests as issueTests } from './issue-cases.ts';
 
+// The issue cases no real-code corpus holds (the rest are implied by TypeScript src): regular
+// expression edge cases, `with`, `import defer`, a comment inside type arguments, `&` after
+// `instanceof`.
+const UNIQUE_ISSUE_INPUTS = new Set(['/\\cJ/', '/[a\\-b]/g', 'const re = /foo/v;', 'with (obj) { x; }', 'import defer * as ns from "x";',
+  'new Map</* comment */string, IArgs>()', 'if (a instanceof B & c) {}']);
+const issueInputs = issueTests.map(t => t.input).filter(i => UNIQUE_ISSUE_INPUTS.has(i));
+if (issueInputs.length !== UNIQUE_ISSUE_INPUTS.size) throw new Error(`treesitter-verdicts: ${UNIQUE_ISSUE_INPUTS.size - issueInputs.length} of the kept issue cases are no longer in test/issue-cases.ts`);
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-// JSX children with free text: valid TSX / JSX that the interpreter rejects today (no JSX-text
-// lexer region; test/tsx-conformance.ts lists the same class as known-unsupported).
+// JSX children with free text (an apostrophe, `%`, an entity, punctuation, a line break): the only
+// JSX text either real-code corpus lacks; both parsers accept them.
 const JSX_TEXT = [
   'const a = <p>Don\'t stop</p>;',
   'const b = <p>100% sure</p>;',
@@ -87,14 +95,9 @@ const LOOKAHEADS = [
   'for (let [a] of b);', 'for ([a] of b);', 'for ({a} of b);', 'for (let in a);', 'for (let of a);', 'for (async of a);', 'try {}', 'try {} finally {}',
 ];
 
-// Block comments: two comments with code between them are two comments (tree-sitter's lexer takes the
-// longest token, so a comment token must not run past its first `*/`), beside the near misses a
-// comment that swallowed code would accept.
-const COMMENTS = [
-  '/** a */\ninterface P {\n    /** b */\n}', '/* a */\nclass P {\n    /* b */\n}', '/** a */\nfunction f() {\n    /** b */\n}',
-  '/** a */ x = { /** b */ };', 'x = 1 /* a */ + /* b */ 2;', '/***/ x;', '/**/ x;', '/* a **/ x; /** b ***/ y;', '/* a * / b */ x;',
-  '/* a */ x */ y;', '/* a */ ) /* b */', 'x = /* a */ 1 */ 2;',
-];
+// Block comments: the near misses a comment token that ran past its first `*/` would accept
+// (tree-sitter's lexer takes the longest token). The valid comment forms are TypeScript src's.
+const COMMENTS = ['/* a */ x */ y;', '/* a */ ) /* b */', 'x = /* a */ 1 */ 2;'];
 
 // A continuation whose operand is another rule that continues (`x as T` then Type's own `[ ]`, `|`,
 // `&`, `<`, `?`, `.`): the operand is read whole where it continues, and the expression takes the
@@ -244,8 +247,36 @@ const NEW_ARGUMENTS = [
   'new C(x);', 'new C;', 'new C()();', 'new C(x)(y);', 'new class {}();', 'x = new C(x).y;', 'new C.d(x);', 'new C`t`;',
   'new new C()();', 'new C < d;', 'yield(x);',
 ];
-// The corpora whose trees are compared, not only their verdicts.
+// The corpora whose trees are compared, not only their verdicts, input by input (`brackets` entries).
 const SPAN_CORPORA = new Set(['operator pairs', 'type arguments', 'new arguments']);
+// The real-code corpora's trees are compared too: every file both parse without ERROR, its expression
+// spans against the interpreter's (a wrong tree with no ERROR: every top-level `function f() {}` built
+// as an expression statement holding a function expression was found there, by no ERROR count). Too
+// many files differ for an entry each, so the record holds, per corpus, the totals and the files by
+// the class of their first difference (`spans` entries); any movement fails, an improvement included.
+// A class is named by the tree-sitter node of that first difference where that is cheap, else `other`.
+function spanClass(cst: any, root: any): { missing: number; extra: number; cls: string | null } {
+  const want = new Set(exprSpans(cst));
+  const got = new Map<string, any>();
+  const visit = (n: any) => { if (n.type === 'expr') got.set(`${n.startIndex}-${n.endIndex}`, n); for (const c of n.namedChildren) visit(c); };
+  visit(root);
+  let first: [number, string] | null = null;
+  const note = (at: number, cls: string) => { if (!first || at < first[0]) first = [at, cls]; };
+  let missing = 0, extra = 0;
+  for (const k of want) if (!got.has(k)) { missing++; note(Number(k.split('-')[0]), 'other'); }
+  for (const [k, n] of got) {
+    if (want.has(k)) continue;
+    extra++;
+    const head = n.child(0)?.type, parent = n.parent;
+    const atStatement = parent?.type === 'stmt' && parent.startIndex === n.startIndex;
+    note(n.startIndex,
+      atStatement && (head === 'function' || head === 'class' || head === 'async') ? 'declaration-as-expression-statement'
+      : atStatement && head === '{' ? 'block-as-object-literal'
+      : head === '{' && n.previousSibling?.type === '=>' ? 'arrow-body-as-object-literal'
+      : 'other');
+  }
+  return { missing, extra, cls: first ? (first as [number, string])[1] : null };
+}
 const exprSpans = (n: any, out: string[] = []): string[] => {
   if (n.rule === 'Expr') out.push(`${n.offset}-${n.end}`);
   for (const c of n.children ?? []) if (c.rule) exprSpans(c, out);
@@ -295,7 +326,8 @@ function errorNodes(root: any): number {
 // direction `rejects`: tree-sitter ERROR where the interpreter accepts (a defect to fix); `accepts`:
 // tree-sitter accepts what the interpreter rejects (an over-acceptance, synthetic corpora only: real code
 // is the files the interpreter accepts); `splits`: both accept a line-break input, but its top-level
-// statements start elsewhere; `brackets`: both accept an operator pair, but tree-sitter's expression
+// statements start elsewhere; `spans`: a real-code corpus's expression-span totals and its differing
+// files by class (see spanClass); `brackets`: both accept an operator pair, but tree-sitter's expression
 // spans are not the interpreter's (a wrong tree without an ERROR). A class is the first cause (by delta debugging the input, see
 // docs/HIGHLIGHTER-EVIDENCE.md, "tree-sitter"), kept across re-records; a new entry is `unclassified`.
 const RECORD = join(ROOT, 'test/treesitter-record.txt');
@@ -316,9 +348,9 @@ let notRun = false;
 for (const { lang, mod, corpora, pairs } of [
   { lang: 'typescriptreact', mod: '../typescriptreact.ts', corpora: {
     'curated JSX': JSX_CASES, 'TSX issue cases': tsxIssueCases.map(c => c.src),
-    'TS issue cases': issueTests.map(t => t.input), 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, operands: OPERANDS, 'type arguments': TSX_TYPE_ARGUMENTS, 'new arguments': NEW_ARGUMENTS } },
+    'TS issue cases': issueInputs, 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, operands: OPERANDS, 'type arguments': TSX_TYPE_ARGUMENTS, 'new arguments': NEW_ARGUMENTS } },
   { lang: 'javascriptreact', mod: '../javascriptreact.ts', corpora: { 'curated JSX': JSX_CASES, 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, 'new arguments': NEW_ARGUMENTS } },
-  { lang: 'typescript', mod: '../typescript.ts', corpora: { 'TS issue cases': issueTests.map(t => t.input), 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, operands: OPERANDS, 'type arguments': TYPE_ARGUMENTS, 'new arguments': NEW_ARGUMENTS }, pairs: true },
+  { lang: 'typescript', mod: '../typescript.ts', corpora: { 'TS issue cases': issueInputs, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, operands: OPERANDS, 'type arguments': TYPE_ARGUMENTS, 'new arguments': NEW_ARGUMENTS }, pairs: true },
   { lang: 'javascript', mod: '../javascript.ts', corpora: { 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, 'new arguments': NEW_ARGUMENTS }, pairs: true },
 ] as { lang: string; mod: string; corpora: Record<string, string[]>; pairs?: boolean }[]) {
   const wasm = `tree-sitter/${lang}/tree-sitter-${lang}.wasm`;
@@ -345,6 +377,7 @@ for (const { lang, mod, corpora, pairs } of [
   for (const [corpus, inputs, real] of all) {
     const t0 = performance.now();
     const r: Row = { grammar: lang, corpus, inputs: inputs.length, bothAccept: 0, bothReject: 0, tsOnlyReject: 0, tsOnlyAccept: 0, splitDiffers: 0, ms: 0 };
+    const spans = { missing: 0, extra: 0, byClass: new Map<string, number>() };
     for (const { id, src } of inputs) {
       const cst = parse(src);
       if (real && !cst) { r.bothReject++; continue; }   // real code: only what the interpreter accepts
@@ -352,6 +385,11 @@ for (const { lang, mod, corpora, pairs } of [
       const ts = errorNodes(tree.rootNode) === 0;
       if (cst && ts) {
         r.bothAccept++;
+        if (real) {
+          const d = spanClass(cst, tree.rootNode);
+          spans.missing += d.missing; spans.extra += d.extra;
+          if (d.cls) { r.splitDiffers++; spans.byClass.set(d.cls, (spans.byClass.get(d.cls) ?? 0) + 1); }
+        }
         if (SPAN_CORPORA.has(corpus) && exprSpans(cst).sort().join(' ') !== tsExprSpans(tree.rootNode).sort().join(' ')) {
           r.splitDiffers++;
           const k = key(lang, corpus, 'brackets', id);
@@ -372,11 +410,16 @@ for (const { lang, mod, corpora, pairs } of [
     }
     r.ms = performance.now() - t0;
     rows.push(r);
+    if (real) {
+      const spanKey = (cls: string, what: string) => { const k = key(lang, corpus, 'spans', what); found.set(k, cls); };
+      spanKey('totals', `span-equal ${r.bothAccept - r.splitDiffers} of ${r.bothAccept}, interpreter spans missing ${spans.missing}, extra tree-sitter spans ${spans.extra}`);
+      for (const [cls, n] of spans.byClass) spanKey(cls, `files ${n}`);
+    }
   }
 }
 
 const table = [
-  '| grammar | corpus | inputs | both accept | both reject | tree-sitter-only ERROR | tree-sitter-only accept | splits / brackets differ | s |',
+  '| grammar | corpus | inputs | both accept | both reject | tree-sitter-only ERROR | tree-sitter-only accept | splits / brackets / spans differ | s |',
   '|---|---|---:|---:|---:|---:|---:|---:|---:|',
   ...rows.map(r => `| ${r.grammar} | ${r.corpus} | ${r.inputs} | ${r.bothAccept} | ${r.bothReject} | ${r.tsOnlyReject} | ${r.tsOnlyAccept} | ${r.splitDiffers} | ${(r.ms / 1000).toFixed(1)} |`),
 ].join('\n');
@@ -384,17 +427,22 @@ const table = [
 const byClass = new Map<string, number>();
 for (const [k, cls] of found) { const [g, corpus, dir] = k.split(' | '); if (dir === 'rejects' && REAL[g]?.some(c => c.name === corpus)) byClass.set(`${g} | ${corpus} | ${cls}`, (byClass.get(`${g} | ${corpus} | ${cls}`) ?? 0) + 1); }
 const classTable = ['| grammar | corpus | class | files |', '|---|---|---|---:|', ...[...byClass].sort((a, b) => b[1] - a[1]).map(([k, n]) => `| ${k} | ${n} |`)].join('\n');
+// The real-code corpora's expression spans: totals and the differing files by class.
+const spanTable = ['| grammar | corpus | class | spans |', '|---|---|---|---|',
+  ...[...found].filter(([k]) => k.split(' | ')[2] === 'spans').map(([k, cls]) => { const [g, corpus, , ...rest] = k.split(' | '); return `| ${g} | ${corpus} | ${cls} | ${rest.join(' | ')} |`; })].join('\n');
 const entering = [...found.keys()].filter(k => !recorded.has(k)).sort();
 const leaving = [...recorded.keys()].filter(k => !found.has(k) && !notRun).sort();
-console.log(table + '\n\n' + classTable);
-const moved = [...entering.map(k => `  + ${k}`), ...leaving.map(k => `  - ${k}`)];
+console.log(table + '\n\n' + classTable + '\n\n' + spanTable);
+// A moved entry is printed as its record line (`grammar | corpus | direction | class | input`).
+const asLine = (k: string, cls: string) => { const [g, corpus, dir, ...rest] = k.split(' | '); return [g, corpus, dir, cls, rest.join(' | ')].join(' | '); };
+const moved = [...entering.map(k => `  + ${asLine(k, found.get(k)!)}`), ...leaving.map(k => `  - ${asLine(k, recorded.get(k)!)}`)];
 if (moved.length) console.log(`\nAgainst test/treesitter-record.txt (+ new disagreement, - one that no longer holds):\n${moved.join('\n')}`);
 if (process.env.GITHUB_STEP_SUMMARY) {
-  appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### tree-sitter verdicts against the interpreter\n\n${table}\n\n${classTable}\n` +
+  appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### tree-sitter verdicts against the interpreter\n\n${table}\n\n${classTable}\n\n${spanTable}\n` +
     (moved.length ? `\n<details><summary>${moved.length} change(s) against the record</summary>\n\n${moved.map(d => '- `' + d.trim().replace(/`/g, "'") + '`').join('\n')}\n</details>\n` : ''));
 }
 if (WRITE && !notRun) {
-  const lines = [...found].map(([k, cls]) => { const [g, corpus, dir, ...rest] = k.split(' | '); return [g, corpus, dir, cls, rest.join(' | ')].join(' | '); }).sort();
+  const lines = [...found].map(([k, cls]) => asLine(k, cls)).sort();
   writeFileSync(RECORD, `# tree-sitter against the interpreter: every disagreement (test/treesitter-verdicts.ts --write)\n# grammar | corpus | rejects (tree-sitter ERROR, interpreter accepts) or accepts (the reverse) | class | input\n${lines.join('\n')}\n`);
   console.log(`wrote ${RECORD} (${lines.length} entries)`);
 } else if (moved.length) {
