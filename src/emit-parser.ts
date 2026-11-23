@@ -98,10 +98,11 @@ function analyze(grammar: CstGrammar) {
       if (it.length > 0 && it[0].type !== 'op' && it[0].type !== 'postfix') {
         const last = it[it.length - 1];
         const lastIsOperand = selfRefName(last, ruleName);
-        const wordConnector = it[0].type === 'literal' && /^[A-Za-z]/.test(it[0].value);
+        const conn = it[0].type === 'sameLine' ? it[1] : it[0];
+        const wordConnector = conn?.type === 'literal' && /^[A-Za-z]/.test(conn.value);
         if (!lastIsOperand && !wordConnector) isAccessTail = true;
         // Only an access tail extends an access tail; a lookahead-ended LED closes it too.
-        if (!isAccessTail || last.type === 'not') isTailClosing = true;
+        if (!isAccessTail || (last.type === 'not' && last.body.type !== 'not')) isTailClosing = true;   // a NEGATIVE lookahead (gen-parser.ts negativeLook)
       }
       accessTail.push(isAccessTail);
       tailClosing.push(isTailClosing);
@@ -2018,7 +2019,19 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
   });
   e.emit(`function ${ruleFn}_lr(_minBp: number) {`);
   e.emit(`  const saved = pos; const mark = scn;`);
-  e.emit(`  let node = -1; let bestAtomPos = saved;`);
+  // The access-tail closure parseLeftRec applies (the Pratt rule's, over the continuations): an
+  // atom ending in a fresh operand of this rule closes the tail, so does a tail-closing
+  // continuation, and an access-tail continuation extends only an open one.
+  const selfRef = (x: RuleExpr | undefined) => x?.type === 'ref' && x.name === rule.name;
+  const tailOf = (it: RuleExpr[]) => {
+    if (it.length === 0 || it[0].type === 'op' || it[0].type === 'postfix') return { access: false, closing: false };
+    const conn = it[0].type === 'sameLine' ? it[1] : it[0];
+    const last = it[it.length - 1];
+    const lastIsOperand = selfRef(last);
+    const access = !lastIsOperand && !(conn?.type === 'literal' && /^[A-Za-z]/.test(conn.value));
+    return { access, closing: !access || (last.type === 'not' && last.body.type !== 'not') };
+  };
+  e.emit(`  let node = -1; let bestAtomPos = saved; let tailClosed = false;`);
   const atomDispatch = e.altMaskDispatch(atoms, '_am');
   if (atomDispatch) e.emit(`  ${atomDispatch.maskInit}`);
   atoms.forEach((atom, i) => {
@@ -2026,7 +2039,7 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
     e.emit(`    pos = saved; scn = mark;`);
     e.emit(`    if (atom_${sanitize(rule.name)}_${i}() && pos > bestAtomPos) {`);
     e.emit(`      node = finishNode(${rid}, mark);`);
-    e.emit(`      bestAtomPos = pos;`);
+    e.emit(`      bestAtomPos = pos; tailClosed = ${selfRef((atom.type === 'seq' ? atom.items : [atom]).at(-1))};`);
     e.emit(`    }`);
     e.emit(`  }`);
   });
@@ -2039,7 +2052,7 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
     e.emit(`    pos = contSaved; scn = contMark;`);
     // notLeftLeaf head-leaf gate: skip this continuation when the LEFT node's outermost (head) leaf
     // text is in its word set (e.g. `void`/`null`/`this` can't be `.`-qualified as a type).
-    const gate = contNotLeftLeaf[i] ? `!_NLLC_${sn}_${i}.has(_headLeafText(node)) && ` : '';
+    const gate = `${tailOf(cont).access ? '!tailClosed && ' : ''}${contNotLeftLeaf[i] ? `!_NLLC_${sn}_${i}.has(_headLeafText(node)) && ` : ''}`;
     e.emit(`    { let ok = ${gate}cont_${sanitize(rule.name)}_${i}();`);
     if (contMix[i]) {
       e.emit(`      if (!ok) { pos = contSaved; scn = contMark; ok = matchMixfixLed_${sanitize(rule.name)}_cont_${i}(); }`);
@@ -2048,7 +2061,7 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
     // would never terminate this loop) — discard it or the loop spins.
     e.emit(`      if (ok && pos === contSaved) { scn = contMark; ok = false; }`);
     e.emit(`      if (ok) {`);
-    e.emit(`        node = finishWrap(${rid}, node, contMark);`);
+    e.emit(`        node = finishWrap(${rid}, node, contMark);${tailOf(cont).closing ? ' tailClosed = true;' : ''}`);
     e.emit(`        continue outer;`);
     e.emit(`      } }`);
   });
