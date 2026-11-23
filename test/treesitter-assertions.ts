@@ -39,11 +39,14 @@ const RENDERED: AssertionClass[] = ['lowered', 'reserved-set'];
 // the heritage's own reserved-guarded identifier arm is NewTarget's (reserved-set -1); JavaScript's
 // six `not('extends')` list guards are gone with its list (lookahead1 -6); in TypeScript one
 // `sameLine` moves from lowered to scanner (lowered -1, scanner +1).
+// Positive lookaheads render as FIRST-filtered copies (planFirstFilters): TypeScript's `not(not(Decorator))`
+// is exact (lookahead1 -1, lowered +1); `export`'s declaration start and the decorated `export default?
+// class` render too, but leave out the expression statement's Pratt corner, so they stay inexact.
 const PINNED: Record<string, Partial<Record<AssertionClass, number>>> = {
   javascript:      { lowered: 43,  vacuous: 6,  'reserved-set': 45, scanner: 0,  reserved: 4, lookahead1: 17, lookahead: 8 },
-  typescript:      { lowered: 132, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 4, lookahead1: 89, lookahead: 69, 'left-context': 2 },
+  typescript:      { lowered: 133, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 4, lookahead1: 88, lookahead: 69, 'left-context': 2 },
   javascriptreact: { lowered: 45,  vacuous: 6,  'reserved-set': 45, scanner: 0,  reserved: 4, lookahead1: 17, lookahead: 8 },
-  typescriptreact: { lowered: 134, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 4, lookahead1: 89, lookahead: 69, 'left-context': 2 },
+  typescriptreact: { lowered: 135, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 4, lookahead1: 88, lookahead: 69, 'left-context': 2 },
   yaml:            { lowered: 1,  scanner: 16, lookahead1: 6 },
 };
 
