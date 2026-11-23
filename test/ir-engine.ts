@@ -526,6 +526,32 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
     }
     return finish(ruleId('$template'), sb);
   }
+  // A led's mixfix operand re-bind (PrattRule.ledRebind): its steps are the connector, the operand,
+  // L2, the rest. The cap is the token stream ending at the candidate.
+  const BR_OPEN = ['(', '[', '{'].map(lidOf).filter((x) => x !== 0), BR_CLOSE = [')', ']', '}'].map(lidOf).filter((x) => x !== 0);
+  function rebind(st: Step[], sepLid: number): boolean {
+    const s = pos, ss = scratch.length, cs = checkpoint();
+    const undo = (p: number, sl: number, c: number) => { pos = p; scratch.length = sl; restore(c); };
+    if (!step(st[0]!, false)) { undo(s, ss, cs); return false; }
+    const a = pos, sa = scratch.length, ca = checkpoint();
+    if (!step(st[1]!, false) || step(st[2]!, false)) { undo(s, ss, cs); return false; }
+    const g = pos;
+    for (let i = a, depth = 0; i < g; i++) {
+      const l = toks[i]!.lid;
+      if (BR_OPEN.includes(l)) depth++;
+      else if (BR_CLOSE.includes(l)) depth--;
+      else if (depth === 0 && l === sepLid) {
+        undo(a, sa, ca);
+        const full = toks;
+        toks = full.slice(0, i);
+        const ok = step(st[1]!, false);
+        toks = full;
+        if (ok && pos === i && step(st[2]!, false) && all(st.slice(3), false)) return true;
+      }
+    }
+    undo(s, ss, cs);
+    return false;
+  }
   function prattBp(r: PrattRule, minBp: number): Sp | null {
     const rid = ruleId(r.name);
     let left = prattNud(r, minBp);
@@ -561,6 +587,12 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
             continue outer;
           }
           pos = ledSave; scratch.length = sb; restore(ck);
+          const sep = r.ledRebind[i];
+          if (sep != null) {
+            scratch.push(left.h);
+            if (rebind(r.leds[i]!.steps, lidOf(sep))) { left = finish(rid, sb); fm = r.ledForm[i]!; if (r.ledClosesTail[i]) tailClosed = true; continue outer; }
+            scratch.length = sb;
+          }
           if (!hasBin && j === g.arms.length - 1) break outer;
         }
       }

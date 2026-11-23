@@ -25,7 +25,7 @@ import vsctm from 'vscode-textmate';
 import onig from 'vscode-oniguruma';
 import YAML from 'yaml';
 import grammar from '../yaml.ts';
-import { valuePositions } from '../src/gen-tm.ts';
+import { valuePositions } from '../src/highlight-facts.ts';
 
 const { INITIAL, Registry, parseRawGrammar } = vsctm;
 const { loadWASM, OnigScanner, OnigString } = onig;

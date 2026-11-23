@@ -40,9 +40,9 @@ export function hasMarker(expr: RuleExpr): boolean {
   return false;
 }
 
-/** The entry rule is the last declared rule. */
+/** The entry rule: the declared `entry` (`CstGrammar.entryRule`), else the last declared rule. */
 export function findEntryRule(grammar: CstGrammar): string {
-  return grammar.rules[grammar.rules.length - 1].name;
+  return grammar.entryRule ?? grammar.rules[grammar.rules.length - 1].name;
 }
 
 /**

@@ -16,6 +16,8 @@
 // engine; this family decides what is reported from them, and how it is worded.
 
 import { type Expr, type Fn, type Lowering, type RecordDecl, type Stmt, printFns } from './algo-ir.ts';
+import { RI_RB_SCAN, RB_EXTERNS_INTERP, REBIND_EXTERNS, rbBracketFn } from './rebind-family.ts';
+import type { LexIdPlan } from './emit-portable.ts';
 import { REC_RD, REC_N_TOK, REC_N_BRACKET, REC_N_SEQ, REC_N_CAPPED, REC_N_PREFIX, REC_S_LIT, REC_S_COMP, REC_S_TOK, REC_S_TPLTOK, REC_S_RULE, REC_S_RULEBP, REC_S_STAR, REC_S_OPT, REC_S_SEP, REC_S_ALTLIT, REC_S_ALT, REC_S_LOOK, REC_S_AHEAD, REC_S_AHEADCTX, REC_S_SEQ, REC_S_SAMELINE, REC_S_SUPPRESS, REC_S_CTX, REC_S_SHARED } from './emit-portable.ts';
 
 export const DIAG: RecordDecl = {
@@ -468,12 +470,13 @@ const ledOk = (x: Expr): Expr => and(
   or(lt(at(x, 2), n(0)), gt(at(x, 2), v('minBp'))),
   not(and(isT(x, 3), v('nl'))),
   or(lt(at(x, 7), n(0)), not(call('riIn', atR(x, 7), v('head')))),
-  not(call('riIn', add(x, n(8)), v('sup'))),
+  not(call('riIn', add(x, n(9)), v('sup'))),
 );
 const finLed = (form: Expr): Stmt[] => [
   run('enFinLed', v('r'), v('sb'), v('leftOff'), v('start')), set('leftOff', call('enFinOff')), set('hl', call('enSh')), set('fm', form), set('prog', tru),
 ];
-const riBp = method('riBp', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d', 'int']], ['bool'], [
+// `rebind`: the grammar has a re-bind (rebind-family.ts), which a led tries where its match failed.
+const riBpOf = (rebind: boolean): Fn => method('riBp', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d', 'int']], ['bool'], [
   let_('start', call('enPos')),
   let_('sb', call('enSh')),
   { k: 'letCall', names: ['ok', 'leftOff'], call: call('riNud', v('r'), v('rec'), v('minBp'), v('d')) },
@@ -500,9 +503,14 @@ const riBp = method('riBp', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d
           run('enUnmark', v('k')),
           ...finLed(at(v('x'), 6)),
           if_(isT(v('x'), 5), [set('tc', n(1))]),
-        ], [run('enReset', v('k')), run('enUnmark', v('k'))]),
+        ], [
+          run('enReset', v('k')), run('enUnmark', v('k')),
+          ...(rebind ? [if_(ge(at(v('x'), 8), n(0)), [
+            if_(call('riRbScan', v('x'), at(v('x'), 8), v('d')), [...finLed(at(v('x'), 6)), if_(isT(v('x'), 5), [set('tc', n(1))])]),
+          ])] : []),
+        ]),
       ]),
-      inc('x', add(n(9), at(v('x'), 8))),
+      inc('x', add(n(10), at(v('x'), 9))),
       inc('j'),
     ]),
     if_(and(not(v('prog')), eq(v('tc'), n(0)), call('riIn', sec(P_POST_TOK), v('kid'))), [run('enLeafKid'), ...finLed(n(0))]),
@@ -536,12 +544,26 @@ const riBp = method('riBp', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d
   ret(tru),
 ]);
 
-export function recoveryFamilyFns(): Fn[] {
-  return [rejectDiag, diagMessage, diagRelated, riRef, riSig, riIn, riGuard, riRule, riCand, riRd, riList, riStep, riOperand, riOp, riNud, riBp, ...ENGINE_EXTERNS];
+// Step k of the led at record x for the re-bind (rebind-family.ts): 0 the connector, 1 the operand,
+// 2 L2, 3 the rest.
+const riRbStep = method('riRbStep', [['x', 'int'], ['k', 'int'], ['d', 'int']], ['bool'], [
+  let_('l', atR(v('x'), 1)),
+  if_(lt(v('k'), n(3)), [ret(call('riStep', R(add(add(v('l'), n(1)), v('k'))), v('d')))]),
+  let_('i', n(3)),
+  while_(lt(v('i'), T(v('l'))), [if_(not(call('riStep', R(add(add(v('l'), n(1)), v('i'))), v('d'))), [ret(fls)]), inc('i')]),
+  ret(tru),
+]);
+
+// `rebind`: the grammar has a re-bind (the interpreter's then calls the engine's rbBracket and
+// marks, printed with the native forms).
+export function recoveryFamilyFns(rebind: boolean, ids?: LexIdPlan): Fn[] {
+  return [rejectDiag, diagMessage, diagRelated, riRef, riSig, riIn, riGuard, riRule, riCand, riRd, riList, riStep, riOperand, riOp, riNud, riBpOf(rebind), ...ENGINE_EXTERNS,
+    ...(rebind ? [riRbStep, RI_RB_SCAN, rbBracketFn(ids!), ...REBIND_EXTERNS, ...RB_EXTERNS_INTERP] : [])];
 }
 
 // The family for a grammar: the functions, the record Diag and the plan's int table `rt`.
 // `methods`: print only the engine methods (true), only the free functions (false), or all.
-export function emitRecoveryFamily(L: Lowering, rt: number[], methods?: boolean): string {
-  return printFns(L, recoveryFamilyFns(), [], [DIAG, BEST], [{ name: 'rt', data: rt }], methods === undefined ? undefined : (f) => (f.method === true) === methods, methods !== true);
+// rbBracket is the native forms' (printed with them).
+export function emitRecoveryFamily(L: Lowering, rt: number[], methods: boolean | undefined, rebind: boolean, ids: LexIdPlan): string {
+  return printFns(L, recoveryFamilyFns(rebind, ids), [], [DIAG, BEST], [{ name: 'rt', data: rt }], (f) => f.name !== 'rbBracket' && (methods === undefined || (f.method === true) === methods), methods !== true);
 }
