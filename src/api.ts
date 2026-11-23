@@ -616,6 +616,7 @@ interface GrammarConfig<R extends Record<string, RuleRef> = Record<string, RuleR
   prec?: PrecLevelDef[];
   ledPrec?: LedPrec[];
   composeGt?: true;       // the lexer scans `>` alone and the parser composes `>`-led operators (CstGrammar.composeGt)
+  composeLt?: true;       // likewise for `<` and the `<`-led operators (CstGrammar.composeLt)
   rules: R;
   scopes?: Record<string, string[]>;
   // Highlight-only contextual token scopes: token T carries scope S within rule R (T's
@@ -752,7 +753,7 @@ export function defineGrammar<const R extends Record<string, RuleRef>>(config: G
   });
   const entryRule = config.entry ? names.get(config.entry) : undefined;   // `entry` may be omitted: findEntryRule then takes the last rule
   if (config.entry && !entryRule) throw new Error('`entry` references an undeclared rule');
-  const grammar = { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, ...(config.composeGt ? { composeGt: true as const } : {}), rules, entryRule, scopeOverrides, contextualScopes, markup: config.markup, elements: config.elements, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest, treeSitterConflicts: config.treeSitterConflicts, treeSitterContextualNames: config.treeSitterContextualNames };
+  const grammar = { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, ...(config.composeGt ? { composeGt: true as const } : {}), ...(config.composeLt ? { composeLt: true as const } : {}), rules, entryRule, scopeOverrides, contextualScopes, markup: config.markup, elements: config.elements, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest, treeSitterConflicts: config.treeSitterConflicts, treeSitterContextualNames: config.treeSitterContextualNames };
 
   // Nullable NON-ENTRY rules are a definition error: the engine never returns an empty match for a
   // rule, so such a rule's empty case is unreachable and references to it fail silently where the

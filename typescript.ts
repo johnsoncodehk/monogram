@@ -1147,6 +1147,10 @@ export default defineGrammar({
   // `>` closes type arguments (`f<A<B>>(x)`, `a as Map<K, V>>= b`), so `>>`, `>=` … are composed by
   // the parser from single `>` tokens (tsc's reScanGreaterToken).
   composeGt: true,
+  // `<` opens type arguments, and a type argument may itself open with `<` (`X<<T>(a: T) => T>`),
+  // so `<<`, `<=`, `<<=` are composed by the parser from single `<` tokens too (the split tsc's
+  // reScanLessThanToken makes).
+  composeLt: true,
 
   tokens: {
     // Comments must come before Regex_ to avoid /** ... */ being matched as regex

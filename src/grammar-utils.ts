@@ -68,27 +68,38 @@ function lookaheadLiterals(expr: RuleExpr, out: Set<string>, inNot = false): voi
  * therefore be an infix operator; one that is a rule literal is rejected. The re-scan used to be
  * INFERRED from `>` being a rule literal, which imposed TypeScript's lexing on any grammar that
  * spells `>` in a rule (docs/SECOND-LANGUAGE.md, W2).
+ * `composeLt` declares the same for `<` (an opening bracket such as type arguments, where `<<`
+ * may be two openings: `X<<T>() => T>`): then the `<`-led operators (`<<`, `<=`, `<<=`) are
+ * composed too, from single `<` tokens. The composites of both, longest first; each begins at its
+ * lead character's token (compositeLeads).
  */
 export function gtComposites(grammar: CstGrammar): string[] {
-  if (!grammar.composeGt) return [];
+  const leads = compositeLeads(grammar);
+  if (leads.length === 0) return [];
   const ruleLits = new Set<string>();
   for (const r of grammar.rules) for (const l of collectLiterals(r.body)) ruleLits.add(l);
-  const gtLed = (l: string) => l.length > 1 && l.charCodeAt(0) === 62;
+  const led = (l: string) => l.length > 1 && leads.includes(l[0]!);
   for (const l of ruleLits) {
-    if (gtLed(l)) throw new Error(`'${l}' is a rule literal, but '>'-led punctuators are composed from single '>' tokens and can only be operators`);
+    if (led(l)) throw new Error(`'${l}' is a rule literal, but '${l[0]}'-led punctuators are composed from single '${l[0]}' tokens and can only be operators`);
   }
   const ops = new Set<string>();
   for (const lv of grammar.precs) for (const o of lv.operators) {
-    if (!gtLed(o.value)) continue;
-    if (o.position !== 'infix') throw new Error(`'${o.value}' is a ${o.position} operator, but a composed '>'-led operator must be infix`);
+    if (!led(o.value)) continue;
+    if (o.position !== 'infix') throw new Error(`'${o.value}' is a ${o.position} operator, but a composed '${o.value[0]}'-led operator must be infix`);
     ops.add(o.value);
   }
   const look = new Set<string>();
   for (const r of grammar.rules) lookaheadLiterals(r.body, look);
   for (const l of look) {
-    if (gtLed(l) && !ops.has(l)) throw new Error(`'${l}' in a lookahead is a '>'-led punctuator that is not an operator, so it is never composed`);
+    if (led(l) && !ops.has(l)) throw new Error(`'${l}' in a lookahead is a '${l[0]}'-led punctuator that is not an operator, so it is never composed`);
   }
   return [...ops].sort((a, b) => b.length - a.length);
+}
+
+/** The characters whose tokens a composite operator begins at (gtComposites): `>` under
+ *  `composeGt`, `<` under `composeLt`; every one is a single-character punctuator of its own. */
+export function compositeLeads(grammar: Pick<CstGrammar, 'composeGt' | 'composeLt'>): string[] {
+  return [...grammar.composeGt ? ['>'] : [], ...grammar.composeLt ? ['<'] : []];
 }
 
 /** A literal text as regex source: every regex metacharacter escaped (the same in JavaScript's

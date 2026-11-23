@@ -1216,7 +1216,12 @@ function emitJsParser(grammar: CstGrammar): string {
   const gtComps = gtComposites(grammar);
   e.gtComps = new Set(gtComps);
   if (gtComps.length > 0) {
-    e.emit(`const PU_GT = ${st.puLitKind.get('>')};`);
+    // the composites' leads (compositeLeads: '>', '<'): PU_GT, and PU_GT2 when a second is declared
+    const leads = [...new Set(gtComps.map((c) => c[0]!))];
+    const leadNe = (x: string) => leads.length > 1 ? `${x} !== PU_GT && ${x} !== PU_GT2` : `${x} !== PU_GT`;
+    const leadNeOr = (x: string) => leads.length > 1 ? `(${leadNe(x)})` : leadNe(x);
+    e.emit(`const PU_GT = ${st.puLitKind.get(leads[0]!)};`);
+    if (leads.length > 1) e.emit(`const PU_GT2 = ${st.puLitKind.get(leads[1]!)};`);
     e.emit(`const GT_COMP = new Map<string, number>(${J(gtComps.map(c => [c, st.puLitKind.get(c)]))});`);
     e.emit(`const GT_LEN = new Map<number, number>(${J(gtComps.map(c => [st.puLitKind.get(c), c.length]))});`);
     e.emit(`// The literal id read at token i where an operator or composite literal is read: a lone`);
@@ -1224,9 +1229,9 @@ function emitJsParser(grammar: CstGrammar): string {
     e.emit(`// composite. A composite read counts its tokens as reached, so the memo/adoption watermark`);
     e.emit(`// (which admits two tokens of lookahead past frameMax) covers every token it inspected.`);
     e.emit(`function gtT(i: number): number {`);
-    e.emit(`  if (tkT[i] !== PU_GT) return tkT[i];`);
+    e.emit(`  if (${leadNe('tkT[i]')}) return tkT[i];`);
     e.emit(`  const o = toff(i);`);
-    e.emit(`  let n = 1, t = PU_GT;`);
+    e.emit(leads.length > 1 ? `  let n = 1, t = tkT[i];` : `  let n = 1, t = PU_GT;`);
     e.emit(`  while (i + n < tokN && tkK[i + n] === K_PUNCT && toff(i + n) === o + n && tend(i + n) === o + n + 1) {`);
     e.emit(`    const c = GT_COMP.get(docText(o, o + n + 1));`);
     e.emit(`    if (c === undefined) break;`);
@@ -1236,7 +1241,7 @@ function emitJsParser(grammar: CstGrammar): string {
     e.emit(`  return t;`);
     e.emit(`}`);
     e.emit(`function matchPuComp(pu: number, vs?: number) {`);
-    e.emit(`  if (pos >= cap || tkT[pos] !== PU_GT || gtT(pos) !== pu) return recovering ? missTok(pu, vs) : false;`);
+    e.emit(`  if (pos >= cap || ${leadNeOr('tkT[pos]')} || gtT(pos) !== pu) return recovering ? missTok(pu, vs) : false;`);
     e.emit(`  scPush(~(pos << 2));`);
     e.emit(`  pos += GT_LEN.get(pu)!;`);
     e.emit(`  if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }`);
@@ -1244,7 +1249,7 @@ function emitJsParser(grammar: CstGrammar): string {
     e.emit(`}`);
     e.emit(`// An operator leaf at a '>' token spans the composite read there (gtT, over document d).`);
     e.emit(`function dLeafEnd(d: Doc, entry: number, i: number): number {`);
-    e.emit(`  if (((~entry) & 3) !== 2 || d.tkT[i] !== PU_GT) return dEnd(d, i);`);
+    e.emit(`  if (((~entry) & 3) !== 2 || ${leadNeOr('d.tkT[i]')}) return dEnd(d, i);`);
     e.emit(`  const o = dOff(d, i);`);
     e.emit(`  let n = 1;`);
     e.emit(`  while (i + n < d.tokN && d.tkK[i + n] === K_PUNCT && dOff(d, i + n) === o + n && dEnd(d, i + n) === o + n + 1 && GT_COMP.has(dText(d, o, o + n + 1))) n++;`);

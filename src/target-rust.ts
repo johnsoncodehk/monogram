@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
@@ -151,13 +151,18 @@ const astGuardRs = (g: Guard, t: string): string | null =>
 // while the text stays a composite (gt_step: prefix lid × next character lid → composite lid). A
 // punct token (kid 0) is the text of its lid, and gt_step names only one-character lids, so no
 // length (which is in bytes here, not characters) is compared.
+// Whether lid expression x is (rsLeadEq) / is not (rsLeadNe) a composite's lead: GT_LID, and
+// GT_LID2 when a second lead is declared (compLeadLids: `>`, `<`).
+const rsLeadEq = (ids: LexIdPlan, x: string) => compLeadLids(ids).length > 1 ? `(${x} == GT_LID || ${x} == GT_LID2)` : `${x} == GT_LID`;
+const rsLeadNe = (ids: LexIdPlan, x: string) => compLeadLids(ids).length > 1 ? `${x} != GT_LID && ${x} != GT_LID2` : `${x} != GT_LID`;
 function gtRuntimeRust(ids: LexIdPlan): string {
   const arms = ids.gtComps.map((c) => {
     const a = lidOf(ids, c.slice(0, -1)), b = lidOf(ids, c.slice(-1)), r = lidOf(ids, c);
     if (a === 0 || b === 0 || r === 0) throw new Error(`rustTarget: composite ${J(c)} needs lids for its prefix and last character`);
     return `(${a}, ${b}) => ${r}, `;
   }).join('');
-  return `const GT_LID: u16 = ${ids.gtComps.length > 0 ? lidOf(ids, '>') : 'u16::MAX'};
+  const leads = compLeadLids(ids);
+  return `const GT_LID: u16 = ${leads.length > 0 ? leads[0] : 'u16::MAX'};${leads.length > 1 ? `\nconst GT_LID2: u16 = ${leads[1]};` : ''}
 /// The first word lid (LexIdPlan.kwLid): a literal from here on is a \`$keyword\` leaf, one before it a \`$punct\` (no leaf).
 const LID_KW: u16 = ${ids.kwLid};
 #[inline(always)] fn gt_step(a: u16, b: u16) -> u16 { match (a, b) { ${arms}_ => 0 } }
@@ -165,7 +170,7 @@ const LID_KW: u16 = ${ids.kwLid};
 fn gt_op(toks: &[Tok], i: usize) -> (u16, usize, u32) {
     let t = toks[i];
     let (mut lid, mut n, mut end) = (t.lid, 1usize, t.end);
-    if lid != GT_LID { return (lid, n, end); }
+    if ${rsLeadNe(ids, 'lid')} { return (lid, n, end); }
     let mut j = i + 1;
     while j < toks.len() {
         let u = toks[j];
@@ -2527,7 +2532,7 @@ impl<'a, B: Builder> Parser<'a, B> {
     /// read counts the tokens it inspected toward max_look.
     #[inline(always)]
     fn op_read(&mut self, t: Tok) -> (u16, usize, u32) {
-        if t.lid != GT_LID { return (t.lid, 1, t.end); }
+        if ${rsLeadNe(ids, 't.lid')} { return (t.lid, 1, t.end); }
         let r = gt_op(&self.toks, self.pos);
         if self.pos + r.1 + 1 > self.max_look { self.max_look = self.pos + r.1 + 1; }
         r
@@ -5720,7 +5725,7 @@ fn decode_leaf(v: i32) -> (u32, u8) {
 #[inline]
 fn leaf_end(toks: &[Tok], ti: u32, tt: u8) -> u32 {
     let t = &toks[ti as usize];
-    if tt == ${ttIdOf(ar, '$operator')} && t.lid == GT_LID { gt_op(toks, ti as usize).2 } else { t.end }
+    if tt == ${ttIdOf(ar, '$operator')} && ${rsLeadEq(ids, 't.lid')} { gt_op(toks, ti as usize).2 } else { t.end }
 }
 
 ${emitParserMachine(ir, ids, ar, shapeB, shared)}${hasRebind(ir) ? shared.rebindFamily(ir, 'free') : ''}

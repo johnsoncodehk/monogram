@@ -680,6 +680,11 @@ export interface CstGrammar {
   // `>>`, `>=`, `>>>=` … from adjacent single `>` tokens where it reads an operator (tsc's
   // reScanGreaterToken). Absent: `>` is an ordinary punctuator and `>=` one token. See gtComposites.
   composeGt?: true;
+  // The `<` mirror, DECLARED: `<` OPENS a bracket (TypeScript's type arguments) where a `<`-led
+  // operator could also begin (`X<<T>() => T>`: `<<` is two openings), so the lexer scans every `<`
+  // alone and the parser composes `<<`, `<=`, `<<=` from adjacent single `<` tokens where it reads
+  // an operator (what tsc's reScanLessThanToken undoes by splitting). See gtComposites.
+  composeLt?: true;
   rules: RuleDecl[];
   entryRule?: string;  // the rule a parse starts from (`defineGrammar`'s `entry`); absent → the last declared rule. Read it through findEntryRule, never by position
   scopeOverrides: Map<string, string[]>;
