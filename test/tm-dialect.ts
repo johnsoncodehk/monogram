@@ -153,10 +153,9 @@ const textSrc = [
   scopeRow('`&` in text is no operator', 'pass', undefined, g, src, '&', 0, s => !s.some(x => x.startsWith('keyword')));
   scopeRow('`<` before a blank in text is text, not a tag (tagStart)', 'pass', undefined, g, src, '< 2', 0, noTag);
   scopeRow('a hole in text is an embedded expression', 'pass', undefined, g, src, 'length}', 0, has('meta.embedded.expression'));
-  const tt = 'the children patterns do not include the region\'s `textTokens` yet (step d)';
-  scopeRow('`/* note */` in text is a block comment (textTokens)', 'xfail', tt, g, src, 'note', 0, has('comment.block'));
+  scopeRow('`/* note */` in text is a block comment (textTokens)', 'pass', undefined, g, src, 'note', 0, has('comment.block'));
   scopeRow('`a//b` in text is text (`//` only after a blank)', 'pass', undefined, g, src, '//b', 0, s => !has('comment')(s));
-  scopeRow('`// tail` after a blank is a line comment (textTokens, `after`)', 'xfail', tt, g, src, 'tail', 0, has('comment.line'));
+  scopeRow('`// tail` after a blank is a line comment (textTokens, `after`)', 'pass', undefined, g, src, 'tail', 0, has('comment.line'));
   const dir = 'the children patterns do not include the derived directive openers yet (step e)';
   scopeRow('`@if` in children is a directive keyword', 'xfail', dir, g, src, '@if', 0, s => inner(s).startsWith('keyword.control'));
   scopeRow('the `@if` head is code: `items` is a variable', 'xfail', dir, g, src, 'items.length)', 0, s => s.some(x => x.startsWith('variable')));
