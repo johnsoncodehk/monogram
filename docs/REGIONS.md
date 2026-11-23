@@ -489,6 +489,28 @@ TextMate grammar cannot express, each a limitation stated where the pattern is b
 Each row was run on the text dialect fixture (`test/fixtures/textdialect.ts`) and the committed
 TSX grammar, against the interpreter's token stream.
 
+**Monarch: built for element regions** (`src/gen-monarch.ts`, `elementLayer`, from the same
+`regionView`): one Monarch state per lexer state: `<name>_open` (the tag name by its name shape,
+a fragment's `tagClose`, a dynamic tag's hole), `<name>_tag` (attributes, the assign literal, the
+tag tokens' quoted forms, holes, tag type arguments, self-close, `tagClose`), `<name>_children`
+(the text token's class with the `highlight.text` patterns, or code), `<name>_close`,
+`<name>_hole`. Monarch's state stack is the frame stack, so nesting needs no counter: a nested
+element is pushed and pops at its end; an element entered from a base state switches into the
+`…T` variants, whose end switches to `value` (an element is a value, as `prevIsValue` reads it).
+An `operand` region is entered only in the operand-position state `root` (where a regex literal
+may start: the lexer's `!prevIsValue()`), so Monarch needs no lookbehind; an `always` region in
+both base states; the `typeParameters` vetoes are negative lookaheads on the entry. Gated by
+`test/monarch-dialect.ts` (the committed JSX / TSX artifacts, cross-checked against the
+interpreter's token stream, and the two dialect fixtures in memory). Not built yet, each its own
+step: raw text (`nextEmbedded`), `textTokens`, directives. What Monarch cannot express, each an
+expected-fail row of that gate:
+
+| limitation | witness | Monarch reads | the lexer reads |
+|---|---|---|---|
+| inside a pushed frame (a hole) Monarch is single-mode: it does not track values there | `z = <p>{a <b}</p>` | an element | a comparison |
+| a member keyword before a tag: the base states read `new` as an expression head whatever precedes it (JSX; TSX's Monarch reads `.new` as a member) | `y = x.new <b> c` | an element | a comparison |
+| the signature veto is a lookahead, which sees one line | `type G = <T>(`⏎`x: T) => T` | an element | a signature |
+
 ## Consumers (the evidence the model was built from)
 
 | consumer | where it starts | children / body | text versus code | raw text |
@@ -510,5 +532,5 @@ Directive openers and continuations are derived from the grammar ("Directives").
   refused (the signature's rewind does not restore the raw-text tag records).
 - The root region: the build order above.
 - Re-measuring the five undecidable JSX shapes on a larger TSX corpus.
-- Monarch: token-stream Monarch has no element layer yet (one Monarch state per lexer state,
-  from the same `region-view.ts`).
+- Monarch: raw text (`nextEmbedded` at the open tag's end, `@pop` at the close tag), `textTokens`
+  and directives in the element layer.

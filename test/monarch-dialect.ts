@@ -111,7 +111,9 @@ function tokenAt(mon: MonarchLanguage, src: string, at: string, nth = 0): Tok {
 const tokRow = (id: string, status: Row['status'], why: string | undefined, mon: () => MonarchLanguage, src: string, at: string, nth: number, want: (tok: string) => boolean) =>
   rows.push({ section, id, status, why, check: () => { const t = tokenAt(mon(), src, at, nth); return { ok: want(t.token), saw: `${JSON.stringify(t.text)} ${t.token || "''"}` }; } });
 const is = (k: string) => (t: string) => t === k;
-const notTag = (t: string) => t !== 'tag' && t !== 'delimiter.tag' && t !== 'attribute.name';
+// a `tagOpen` that opens no element (test it at the `<`: a component name and a type both read
+// `type.identifier`)
+const notTag = (t: string) => t !== 'delimiter.tag';
 
 // ── 1. JSX / TSX (the committed artifacts) ──
 const monOf = (file: string) => { let m: MonarchLanguage | null = null; return () => (m ??= JSON.parse(readFileSync(file, 'utf8'))); };
@@ -152,7 +154,7 @@ for (const [name, file, g] of [['jsx', 'javascriptreact.monarch.json', jsx], ['t
   tokRow('self-close `/>`', 'pass', undefined, mon, src, '/>', 1, is('delimiter.tag'));
   tokRow('fragment `<>` text', 'pass', undefined, mon, src, 'frag', 0, is(''));
   tokRow('an element inside a hole inside a fragment', 'pass', undefined, mon, src, 'bold', 0, is(''));
-  tokRow('`p < q > r` is a comparison, not a tag', 'pass', undefined, mon, src, 'q', 0, notTag);
+  tokRow('`p < q > r` is a comparison, not a tag', 'pass', undefined, mon, src, '< q', 0, notTag);
   tokRow('after `<i/>` a `/` is division, not a regex', 'pass', undefined, mon, src, '/ 2', 0, t => t === 'operator' || t === 'delimiter');
   tokRow('`return <ul>`: an element after an expression-head keyword', 'pass', undefined, mon, src, 'ul', 0, is('tag'));
   tokRow('a nested element on the next line', 'pass', undefined, mon, src, 'li key', 0, is('tag'));
@@ -161,16 +163,25 @@ for (const [name, file, g] of [['jsx', 'javascriptreact.monarch.json', jsx], ['t
   tokRow('code after the element on its last line: a comment', 'pass', undefined, mon, src, 'end', 0, is('comment'));
   tokRow('an element as an attribute value (`b=<c/>`)', 'pass', undefined, mon, src, 'c/>', 0, is('tag'));
   tokRow('after an attribute-value element the tag goes on: `/>`', 'pass', undefined, mon, src, ' />', 0, t => t === 'delimiter.tag' || t === 'white');
+  // What Monarch cannot express (docs/REGIONS.md, generator section): the wanted reading is the
+  // lexer's; each row is expected to fail, with the reason.
+  const lim = ['z = <p>{a <b}</p>;', 'y = x.new <b> c;'].join('\n');
+  tokRow('in a hole, `a <b` after a value is a comparison', 'xfail', 'Monarch is single-mode inside a pushed frame (a hole): it does not track values there, so every `<` the vetoes allow opens an element', mon, lim, '<b}', 0, notTag);
+  // TSX's Monarch reads `.new` as a member (a value), so its `<` opens no element there
+  tokRow('after a member access, `new <b` opens no element', name === 'jsx' ? 'xfail' : 'pass', name === 'jsx' ? 'the base states read `new` as an expression-head keyword whatever precedes it (no member-access state)' : undefined, mon, lim, '<b> c', 0, notTag);
   if (name === 'tsx') {
     const tsrc = [
       'const g = <T,>(x: T) => x;',
       'const h = <Box<number> v={1}/>;',
       'type F = <T>(x: T) => T;',
+      'type G = <T>(',
+      '  x: T) => T;',
     ].join('\n');
-    tokRow('generic arrow `<T,>(x: T) => x` is no element (typeParameters.head)', 'pass', undefined, mon, tsrc, 'T,', 0, notTag);
+    tokRow('generic arrow `<T,>(x: T) => x` is no element (typeParameters.head)', 'pass', undefined, mon, tsrc, '<T,', 0, notTag);
     tokRow('tag type arguments `<Box<number>`: `Box` is a component', 'pass', undefined, mon, tsrc, 'Box', 0, is('type.identifier'));
     tokRow('after tag type arguments, `v` is an attribute', 'pass', undefined, mon, tsrc, 'v=', 0, is('attribute.name'));
-    tokRow('a type-position signature `<T>(x: T) => T` is no element (typeParameters.signature)', 'pass', undefined, mon, tsrc, 'T>(x', 0, notTag);
+    tokRow('a type-position signature `<T>(x: T) => T` is no element (typeParameters.signature)', 'pass', undefined, mon, tsrc, '<T>(x', 0, notTag);
+    tokRow('a signature whose group spans lines is no element', 'xfail', 'the signature veto is a lookahead, which sees one line', mon, tsrc, '<T>(', 1, notTag);
   }
   // cross-check: each token of the region's own kinds gets its kind's Monarch token
   const kinds = new Map<string, (t: string) => boolean>([
@@ -217,7 +228,7 @@ for (const [name, file, g] of [['jsx', 'javascriptreact.monarch.json', jsx], ['t
   // the dynamic tag is a child: after `</main>` the position is a value, so a `<` there is a
   // comparison for the lexer (and for Monarch)
   const src = 'component Page(items) {\n  const z = a <b;\n  <main class="m">Hello & 1 < 2 {items.length}\n    <{tag} id="d">dyn</{tag}>\n  </main>\n}';
-  tokRow('a `<` after a value in code is a comparison', 'pass', undefined, mon, src, 'b;', 0, notTag);
+  tokRow('a `<` after a value in code is a comparison', 'pass', undefined, mon, src, '<b;', 0, notTag);
   tokRow('tag name `main`', 'pass', undefined, mon, src, 'main', 0, is('tag'));
   tokRow('attribute `class`', 'pass', undefined, mon, src, 'class', 0, is('attribute.name'));
   tokRow('children text `Hello`', 'pass', undefined, mon, src, 'Hello', 0, is(''));
@@ -230,7 +241,7 @@ for (const [name, file, g] of [['jsx', 'javascriptreact.monarch.json', jsx], ['t
   const lsrc = 'component Page() { <main>a /* note */ @if (x) { y } <style>.a { color: red; }</style></main> }';
   tokRow('`/* note */` in text is a comment (textTokens)', 'xfail', 'text tokens are not in the Monarch children yet', mon, lsrc, 'note', 0, is('comment'));
   tokRow('`@if` in children is a directive keyword', 'xfail', 'directives are not in the Monarch children yet', mon, lsrc, '@if', 0, is('keyword'));
-  tokRow('a `<style>` body is not element text (rawText)', 'xfail', 'raw text (`nextEmbedded`) is not in the Monarch element layer yet', mon, lsrc, 'color', 0, t => t !== '');
+  tokRow('a `<style>` body is raw: its `{` opens no hole (rawText)', 'xfail', 'raw text (`nextEmbedded`) is not in the Monarch element layer yet', mon, lsrc, '{ color', 0, t => t !== 'delimiter.bracket');
 }
 
 const all = process.argv.includes('--all');
