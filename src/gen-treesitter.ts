@@ -2770,6 +2770,19 @@ function bindingKeyRules(grammar: CstGrammar, identName: string): Map<string, st
 // ════════════════════════════════════════════════════════════════════════════
 
 /** Emit a C string-literal initializer for the chars of `s` (e.g. "${" → {'$','{'}). */
+/** A C condition: `v` (a code point) is in the set (UTF-16 units; a set holding surrogates holds the
+ *  non-BMP characters). */
+function cCharSetTest(set: CSet, v: string): string {
+  const parts: string[] = [];
+  for (const [lo, hi] of set) {
+    const a = Math.max(lo, 0), b = hi;
+    if (b < a) continue;
+    parts.push(a === b ? `${v} == ${a}` : `(${v} >= ${a} && ${v} <= ${b})`);
+    if (a <= 0xdfff && b >= 0xd800) parts.push(`${v} > 0xffff`);
+  }
+  return parts.length ? parts.join(' || ') : 'false';
+}
+
 // ── The scanner of the zero-width tokens (planZeroWidth) ──
 // Every table here is derived: the literals are the generated grammar's, matched longest-first (a
 // word-shaped one only when no word character follows, the word token's own characters); a token
@@ -2816,16 +2829,7 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
     if (skips.some(k => k !== skips[i] && k.closer === skips[i].closer && skips[i].opener.startsWith(k.opener))) skips.splice(i, 1);
   const kindTokens = grammar.tokens.filter(t => !t.flags.includes('skip') && !tokenPatternIsNever(t)).map(t => t.name);
   if (kindTokens.length > 64) throw new Error(`gen-treesitter: ${kindTokens.length} non-literal tokens; the zero-width scanner's token mask holds 64`);
-  const cRanges = (set: CSet, v: string) => {
-    const parts: string[] = [];
-    for (const [lo, hi] of set) {
-      const a = Math.max(lo, 0), b = hi;
-      if (b < a) continue;
-      parts.push(a === b ? `${v} == ${a}` : `(${v} >= ${a} && ${v} <= ${b})`);
-      if (a <= 0xdfff && b >= 0xd800) parts.push(`${v} > 0xffff`);   // a non-BMP character is its surrogate pair here
-    }
-    return parts.length ? parts.join(' || ') : 'false';
-  };
+  const cRanges = cCharSetTest;
   const H: string[] = [];
   H.push('// ── Zero-width tokens: line-end alternatives and same-line markers (planZeroWidth) ──');
   H.push('static bool zw_line_terminator(int32_t c) { return c == \'\\n\' || c == \'\\r\' || c == 0x2028 || c == 0x2029; }');
@@ -3716,6 +3720,12 @@ function buildScannerC(
   if (regexTok) {
     // Derive the regex literal scan from the token pattern + hints.
     const flagChars = tokenPatternTrailingCharClass(regexTok) ?? 'gimsuyd';
+    // The flags: the token's final run (`star(identPart)` in JavaScript: any identifier character, as
+    // tsc lexes them; `/foo/v` is a regex with the `v` flag). Its characters when the run is no plain
+    // class; the fixed list only for a pattern with no final run.
+    const rp = regexTok.pattern;
+    const lastItem = typeof rp !== 'string' && rp.type === 'seq' ? rp.items[rp.items.length - 1] : null;
+    const flagRun = lastItem && typeof lastItem !== 'string' && lastItem.type === 'repeat' && lastItem.min === 0 && lastItem.max === undefined ? lastItem.body : null;
     const rc = regexTok.regexContext;
     const divTexts = rc?.divisionAfterTexts ?? [];
     const regexAfter = rc?.regexAfterTexts ?? [];
@@ -3748,8 +3758,12 @@ function buildScannerC(
     L.push('    advance(lexer);');
     L.push('  }');
     L.push('  // Trailing flag characters.');
-    L.push(`  const char *flags = ${jsString(flagChars)};`);
-    L.push('  while (lexer->lookahead != 0 && strchr(flags, (char)lexer->lookahead) != NULL) advance(lexer);');
+    if (flagRun && tokenPatternTrailingCharClass(regexTok) === null) {
+      L.push(`  while (!lexer->eof(lexer) && (${cCharSetTest(tokenPatternInfo(flagRun).chars, 'lexer->lookahead')})) advance(lexer);`);
+    } else {
+      L.push(`  const char *flags = ${jsString(flagChars)};`);
+      L.push('  while (lexer->lookahead != 0 && strchr(flags, (char)lexer->lookahead) != NULL) advance(lexer);');
+    }
     L.push(`  lexer->result_symbol = ${regexSym};`);
     L.push('  lexer->mark_end(lexer);');
     L.push('  return true;');

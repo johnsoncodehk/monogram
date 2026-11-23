@@ -93,8 +93,7 @@ static bool scan_regex(TSLexer *lexer) {
     advance(lexer);
   }
   // Trailing flag characters.
-  const char *flags = "gimsuyd";
-  while (lexer->lookahead != 0 && strchr(flags, (char)lexer->lookahead) != NULL) advance(lexer);
+  while (!lexer->eof(lexer) && (lexer->lookahead == 36 || (lexer->lookahead >= 48 && lexer->lookahead <= 57) || (lexer->lookahead >= 65 && lexer->lookahead <= 90) || lexer->lookahead == 92 || lexer->lookahead == 95 || (lexer->lookahead >= 97 && lexer->lookahead <= 123) || lexer->lookahead == 125)) advance(lexer);
   lexer->result_symbol = REGEX_LITERAL;
   lexer->mark_end(lexer);
   return true;
