@@ -16,6 +16,7 @@
 //
 //   node test/define-target.ts
 import { readFileSync } from 'node:fs';
+import { QUICK } from './check-targets.ts';
 import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
@@ -315,7 +316,10 @@ function read(src: string): Map<string, number> {
 
 // `!` ends Lisp mutator names (`set!`); only a prefix `!` is C negation.
 const C_SURFACE = /[{};[\],]|&&|\|\||==|!=|(?<![\w?-])!|\/\/|:=|->|\.\w/;
-const FIXTURES = ['./fixtures/calc.ts', './fixtures/envspec.ts', './fixtures/regexjs.ts', './fixtures/templatejs.ts', '../javascript.ts', './fixtures/envtpl.ts'];
+// The quick tier's sample (CHECK_QUICK=1) leaves out the one real grammar (most of the gate's time):
+// the fixtures still reach the regex context, templates and env specs; what only a real grammar's IR
+// holds is printed in `--changed` and CI.
+const FIXTURES = ['./fixtures/calc.ts', './fixtures/envspec.ts', './fixtures/regexjs.ts', './fixtures/templatejs.ts', ...(QUICK ? [] : ['../javascript.ts']), './fixtures/envtpl.ts'];
 
 for (const path of FIXTURES) {
   const grammar = (await import(path)).default;

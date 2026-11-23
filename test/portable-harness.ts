@@ -559,7 +559,8 @@ export async function prepareAll(cases: Case[] = selectedCases()): Promise<Prepa
         build: (out) => {
           const rfile = `${dir}/main.rs`;
           writeFileSync(rfile, main);
-          execFileSync('rustc', [...RUSTC_PATH_FLAGS(dir, out), '-A', 'warnings', rfile, '-o', `${out}/pr`], { stdio: 'pipe' });
+          try { execFileSync('rustc', [...RUSTC_PATH_FLAGS(dir, out), '-A', 'warnings', rfile, '-o', `${out}/pr`], { stdio: 'pipe' }); }
+          catch (e) { throw new Error(`rustc ${rfile} failed:\n${String((e as { stderr?: Buffer }).stderr ?? e)}`); }
         },
       } });
     }

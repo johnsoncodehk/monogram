@@ -122,7 +122,8 @@ three grammars (`calc`, `templatejs`, and `javascript` on the TypeScript target 
 `QUICK_GRAMMARS` in `test/portable-harness.ts`), and `javascript` on Go too when the Go target's own
 code changed (`CHECK_QUICK_GO=1`, set by `check.ts`: only a Go compile sees a variable declared and
 not used, the commonest Go printer mistake, and a small grammar's parser may not reach the code that
-has it); edits-small runs one in three of its exhaustive one-character edits (`QUICK_EDIT_STRIDE`,
+has it); define-target prints its fixtures but not the javascript grammar; edits-small runs one in
+three of its exhaustive one-character edits (`QUICK_EDIT_STRIDE`,
 `test/portable-edits.ts`); `emit-portable-library` runs its source checks of every target's emitted library (the
 exported surface, package-level state, imports) and the TypeScript target's runtime checks, not the
 Go / Rust build and run. A gate in `QUICK_GATES` without a sample runs whole (it costs about a
@@ -131,7 +132,19 @@ second). `--quick` prints the affected gates it leaves out.
 Measured cost (`.github/workflows/measure-inner-loop.yml`, a 4-core runner, seconds, cold = empty
 build cache and Go cache / warm = the same command again; the change is the named commit's files):
 
-QUICK_TIMING_TABLE
+| change (commit) | `--quick`: gates, cold s, warm s | `--changed`: gates, cold s, warm s |
+|---|---|---|
+| docs (c6cab09) | 0, 0.6, 0.5 | 0, 0.7, 0.6 |
+| a test script (d6d12b8) | 1, 13.3, 13.2 | 1, 13.3, 13.2 |
+| Rust printer (9164d57) | 4, 4.0, 2.4 | 10, 80.1, 19.9 |
+| Go printer (11a7c70) | 5, 19.3, 2.9 | 11, 89.2, 19.9 |
+| generator (211029f) | 9, 24.2, 7.1 | 15, 100.6, 24.7 |
+| grammar (de35876) | 30, 25.6, 14.8 | 48, 151.7, 76.0 |
+
+(run 45274009651; the same table on another runner of the same kind, 45263725570, is 15-30% faster
+throughout: read the rows against each other, not as absolutes.) Cold includes Go's own build cache
+emptied; in the loop of edits the Go cache is warm and only the changed parser is compiled, so a Go
+printer edit costs between the two columns. A test script that changed runs whole, whatever its tier (here a 13 s gate).
 
 On the shared 2-core box (load about 5), warm: a Rust printer change QUICK_BOX_RUST s.
 
@@ -142,7 +155,12 @@ the failing gate and message of the original CI run): of the 12 that reproduce, 
 - a Go compile error in code only a real grammar's parser reaches (land/decisions-commit: `declared
   and not used` in the javascript grammar's Go parser; `--changed` caught it in the native gates).
   Since covered: `CHECK_QUICK_GO` compiles the javascript grammar's Go parser when the Go target's
-  code changed.
+  code changed. The failure itself no longer reproduces on today's tree (its put-back conflicts with
+  later work), so the class is shown by a mutation (measure-inner-loop's `go-unused` job, run
+  45277371255): a variable declared and not used in the relexable lexer's regex-context state, which
+  calc's and templatejs's parsers do not print, fails `--quick` in portable-targets/lists (`declared
+  and not used: unusedProbe`, the javascript grammar's Go build); edits-small, on the small
+  grammars' Go builds, passes.
 - jsTarget's emitted code under `tsc --strict` (land/regions-spec-lex-error: `emit-standalone`, a
   `--changed` gate). Left out of the quick tier on purpose: jsTarget is being retired.
 - inputs only the wide corpora hold (land/lexer-ident-ext, land/lexer-small-items: a Unicode
