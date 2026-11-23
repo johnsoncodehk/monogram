@@ -898,12 +898,12 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
     // continuation (call/member/index/generic) — bind tight.
     if (ab.startsWith(`seq($.${selfSnake}`) || ab === `$.${selfSnake}` || ab.startsWith(`seq(alias($.${selfSnake}, `)) {
       // The precedence decides at the continuation's operator; a continuation that ENDS in another
-      // rule's reference gives that last step the default precedence (see openTail).
+      // rule's reference leaves that last step out of it (see openTail).
       const tail = openTail(rule.name, atomAlts[i], ctx.grammar);
       if (tail === null) { branches.push(`prec.left(${high}, ${ab})`); continue; }
       const t = renderExpr(tail, ctx);
       if (!ab.endsWith(`, ${t})`)) throw new Error(`gen-treesitter: the continuation ${ab} does not end in its operand ${t}`);
-      branches.push(`prec.left(${high}, ${ab.slice(0, ab.length - t.length - 1)}prec(0, ${t})))`);
+      branches.push(`seq(prec.left(${high}, ${ab.slice(0, ab.length - t.length - 3)})), ${t})`);
     } else {
       branches.push(ab);
     }
@@ -916,17 +916,19 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
  * The operand a Pratt continuation ends in, when that operand is ANOTHER rule with continuations of
  * its own (TypeScript's `[$, 'as', Type]`: Type continues with `[ ]`, `|`, `&`, `<`, `.`, `?` …).
  *
- * tree-sitter takes a production's reduce precedence from its LAST step. Under the continuation's
- * high precedence, `x as T` reduced before any of Type's own continuation tokens could shift
- * (Type's productions have the default precedence), so `x as T[]` became `(x as T)[` and an
- * ERROR. The interpreter reads the operand like any rule: whole, greedily, falling back to the
- * shorter operand only where the longer one fails (`x as T < b`: no type arguments close, so `<`
- * compares). The generator's rule: a continuation's precedence decides at its operator (its
- * leading steps, which compete with the other operators); its last step, when it is a reference
- * to another rule that has continuations, takes that rule's precedence (the default), so after the
- * operand each token that continues the operand AND can follow the expression is an LR conflict
- * between the two readings, declared (deriveConflicts) and kept by GLR, which drops the one that
- * fails as the interpreter's fallback does. A token that only one reading takes needs no conflict.
+ * tree-sitter takes a production's reduce precedence and associativity from its LAST step. Under
+ * the continuation's high left precedence, `x as T` reduced before any of Type's own continuation
+ * tokens could shift (Type's productions have the default precedence), so `x as T[]` became
+ * `(x as T)[` and an ERROR. The interpreter reads the operand like any rule: whole, greedily,
+ * falling back to the shorter operand only where the longer one fails (`x as T < b`: no type
+ * arguments close, so `<` compares). The generator's rule: a continuation's precedence decides at
+ * its operator, so it covers the steps up to the operand (`seq(prec.left(N, seq($.expr, "as")),
+ * $.type)`: the shift of `as` against the other operators reads the first step); the last step,
+ * a reference to another rule that has continuations, carries neither precedence nor
+ * associativity (a nested `prec` would still inherit the outer `left`), so after the operand each
+ * token that continues the operand AND can follow the expression is an LR conflict between the two
+ * readings, declared (deriveConflicts) and kept by GLR, which drops the one that fails as the
+ * interpreter's fallback does. A token that only one reading takes needs no conflict.
  * An operand that is itself a precedence-climbing rule would carry its own levels: not modelled,
  * so it fails loudly.
  */
