@@ -4,8 +4,9 @@
 //  "is the repo healthy?" in one command + one output — instead of running a dozen
 //  scripts with a dozen output formats. See docs/TESTING.md for the report taxonomy
 //  (gate / metric / ledger / bench); this runs the GATE tier (the CI-blocking pass/fail
-//  checks). One gate, conformance/js-corpus, needs the pinned TypeScript corpus at
-//  /tmp/ts-repo; without it that gate says NOT RUN and fails, it never passes unrun.
+//  checks). Two gates need a pinned external corpus: conformance/js-corpus the TypeScript corpus
+//  at /tmp/ts-repo, conformance/test262 the test262 checkout at /tmp/test262; without it a gate
+//  says NOT RUN and fails, it never passes unrun.
 //  Metrics live in the README coverage table (`npm run coverage:table`), findings in the
 //  gap ledger (`docs/KNOWN-GAPS.md`).
 //
@@ -76,6 +77,7 @@ const GATES: Gate[] = [
   { group: 'core', name: 'env-spec-regressions', args: ['test/env-spec-regressions.ts'] },
   { group: 'conformance', name: 'js', args: ['test/js-conformance.ts'] },
   { group: 'conformance', name: 'js-corpus', args: ['test/js-conformance-corpus.ts'] },
+  { group: 'conformance', name: 'test262', args: ['test/test262.ts'] },
   { group: 'conformance', name: 'tsx', args: ['test/tsx-conformance.ts'] },
   { group: 'conformance', name: 'jsx', args: ['test/jsx-conformance.ts'] },
   { group: 'conformance', name: 'html', args: ['test/html-conformance.ts'] },
