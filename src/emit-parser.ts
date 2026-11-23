@@ -461,7 +461,7 @@ class Emitter {
     if (this.spine !== null) return this.spine;
     const a = this.a;
     const spine = new Set<string>();
-    const entryRule = a.grammar.rules[a.grammar.rules.length - 1];
+    const entryRule = a.ruleByName.get(findEntryRule(a.grammar))!;
     const walk = (x: RuleExpr): void => {
       switch (x.type) {
         case 'ref': if (a.ruleByName.has(x.name)) spine.add(x.name); return;

@@ -82,7 +82,7 @@ for (const name of ['javascript', 'typescript']) {
 }
 
 // ── 4. the names in the portable IR ──
-const IR_NAMES = new Set(['field', 'branchNames', 'altNames', 'nudNames', 'ledNames', 'ledLeftNames', 'postfixTokNames', 'opNames']);
+const IR_NAMES = new Set(['field', 'src', 'branchNames', 'altNames', 'nudNames', 'ledNames', 'ledLeftNames', 'postfixTokNames', 'opNames']);
 const irSyntax = (g: CstGrammar): string => JSON.stringify(portableIR(g), (k, v) => (IR_NAMES.has(k) ? undefined : v));
 const stepFields = (steps: readonly Step[]): string[] => steps.flatMap((s): string[] => {
   const own = s.field !== undefined ? [s.field] : [];

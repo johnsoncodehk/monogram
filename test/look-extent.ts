@@ -33,8 +33,9 @@ import { rustTarget } from '../src/target-rust.ts';
 import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
 import { asGoMain } from './go-main.ts';
 import { parityInputs, type Tok } from './parity-corpus.ts';
-import { goBuild, scratchDir } from './scratch.ts';
+import { scratchDir } from './scratch.ts';
 import type { CstGrammar } from '../src/types.ts';
+import { cachedGoBuild, cachedRustc } from './build-cache.ts';
 
 const TMP = scratchDir('look-extent');
 const ROOT = new URL('..', import.meta.url).pathname;
@@ -71,7 +72,9 @@ const GUARDS: { test: string; index: string }[] = [
   { test: 'j < toks.length', index: 'j' },                 // _opLid: the tokens a '>' composes with
   { test: 'save < toks.length', index: 'save' },           // branch / finishNodeW: an empty node's offset
 ];
-const READS = new Set(['toks[pos]', 'toks[pos + 1]', 'toks[j]', 'toks[save]']);
+// `toks[i]`: the re-bind's candidate scan (_rebind), over tokens below the greedy operand's end,
+// which that operand consumed: within the extent already, so it needs no note.
+const READS = new Set(['toks[pos]', 'toks[pos + 1]', 'toks[j]', 'toks[save]', 'toks[i]']);
 function oracleSource(lib: string, shapeB: boolean): string {
   // The parse engine the oracle runs: from the parser state to the library entry (the engine
   // and its builder protocol, run with the CST builder). A grammar without '>' composites has no
@@ -346,7 +349,7 @@ for (const g of GRAMMARS) {
     writeFileSync(`${gdir}/parser.go`, asGoMain(emitParser(grammar, goTarget)));
     writeFileSync(`${gdir}/probe.go`, GO_PROBE);
     writeFileSync(`${gdir}/go.mod`, 'module p\n\ngo 1.21\n');
-    goBuild(['-o', `${gdir}/p`, '.'], { cwd: gdir });
+    cachedGoBuild(['-o', `${gdir}/p`, '.'], { cwd: gdir });
     const out = lines(`${gdir}/p`, goPayload).map((l) => l.split('\t'));
     runners.push({ label: 'go', extOnly: false, out: (i) => out[i]![0]! }, { label: 'go/builder', extOnly: true, out: (i) => out[i]![1]! });
   }
@@ -354,7 +357,7 @@ for (const g of GRAMMARS) {
     const runner = rustTarget.emitRunner?.() ?? '';
     if (!runner.includes('\nfn main() {')) throw new Error('rust runner: no main to replace');
     writeFileSync(`${dir}/main.rs`, emitParser(grammar, rustTarget) + runner.replace('\nfn main() {', '\n#[allow(dead_code)]\nfn runner_main() {') + RUST_PROBE);
-    execFileSync('rustc', ['-A', 'warnings', `${dir}/main.rs`, '-o', `${dir}/pr`], { stdio: 'pipe' });
+    cachedRustc(['-A', 'warnings', `${dir}/main.rs`, '-o', `${dir}/pr`], { stdio: 'pipe' });
     const out = lines(`${dir}/pr`, rustPayload);
     runners.push({ label: 'rust', extOnly: false, out: (i) => out[i]! });
   }

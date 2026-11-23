@@ -87,3 +87,9 @@ export function gtComposites(grammar: CstGrammar): string[] {
   }
   return [...ops].sort((a, b) => b.length - a.length);
 }
+
+/** A literal text as regex source: every regex metacharacter escaped (the same in JavaScript's
+ *  RegExp and Oniguruma). */
+export function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
