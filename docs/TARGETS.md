@@ -46,9 +46,11 @@ portable lexers carry the region's frame stack (a3fb3a9), so
 [`typescriptreact.ts`](../typescriptreact.ts) (TSX), [`javascriptreact.ts`](../javascriptreact.ts)
 (JSX) and the code-children fixture [`test/fixtures/elementdialect.ts`](../test/fixtures/elementdialect.ts)
 emit to all three. What a region may declare that the portable lexers do not carry yet is
-refused when the parser is emitted (`buildIR`), not mis-lexed: `tagStart`, `textTokens`,
-`rawText[].unlessBodyStarts`, directives in children, `rawText` together with a type-parameter
-`signature`, and elements in a newline-mode grammar.
+refused when the parser is emitted (`buildIR`), not mis-lexed: `textTokens`, directives in
+children, `rawText` together with a type-parameter `signature`, and elements in a newline-mode
+grammar. A tag start (`tagStart`) and a raw-text body condition (`unlessBodyStarts`) are carried:
+the text dialect fixture without its text tokens and directives (`textDialect`, the case
+`textdialect-tagstart` of `test/portable-targets.ts`) emits to all three.
 
 Known difference between the interpreter's lexer and the portable lexers (owed): an
 `identifier` token whose own pattern does not take an ASCII member of IdentifierPart
@@ -112,6 +114,20 @@ listed in [ROADMAP.md](ROADMAP.md#1-one-portable-engine-one-shared-runtime-descr
   panic with the `*LexError`, Rust `parse_with` / `parse` / `Doc::new` panic with the message.
   Inside the portable lexers an error is a returned value, never a throw or panic used for
   control flow.
+- Total parsing is an emit option: `emitParser(grammar, target, { recovery: true })` appends a
+  region to the module (the default emission is unchanged and is the module's prefix, byte for
+  byte; without the option the entry below does not exist). It adds TS
+  `parseTotal(src, builder) -> { root, errors }`, Go `ParseTotal(src, b) (h, ok, errs)`, Rust
+  `parse_total(src, &mut b) -> (Option<H>, Vec<Diagnostic>)`. It never throws or panics on input:
+  an accepted text gives `parseWith`'s root and no errors; a rejected one gives no root and one
+  diagnostic `{ offset, end, message, related? }`, either the lexer error or the parse's primary
+  error. The primary error is the interpreter's: the token where the entry rule stopped
+  (`unexpected 'x'`, with `after successful parse` when the entry rule consumed tokens and input
+  is left over). Its related location is the furthest token the parse examined, when that lies
+  past the error. That token is usually the interpreter's `[farthest: …]` token, but not always:
+  the interpreter counts the tokens a match advanced past, and the engine also counts a guard's
+  read of the next token. Messages come from one formatter (`src/recovery-family.ts`). Go and
+  Rust spans are byte offsets. Recovered trees (`$error` / `$missing`) are not there yet.
 - The `tsTarget` CST carries spans only: a leaf is located by its `offset`/`end`.
 - Lexers scan every `>` alone (so `>>` closing two type-argument lists is two tokens). At an
   operator site the parser composes `>>`, `>>>`, `>=`, `>>=`, `>>>=` from adjacent `>`, `>`
