@@ -17,7 +17,10 @@
 //    needs-parameter  depends on the script / module goal, strict mode, [Return] or another parameter the
 //                  engine does not have yet (roadmap item 4: parameterised productions)
 //    early-error   a static-semantic rule ("It is a Syntax Error if …" in an Early Errors clause):
-//                  out of a syntactic grammar's scope by decision (docs/CORRECTNESS.md); recorded
+//                  not the context-free grammar's (docs/CORRECTNESS.md) but a checker's over the
+//                  tree, which is not built. Each such class states what that checker reads
+//                  (`checker`): the tree alone (a node and its ancestors) or scope analysis (the
+//                  names each scope declares); together they are the spec of that pass.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type Verdict = 'grammar-bug' | 'adding' | 'needs-parameter' | 'early-error' | 'unknown';
@@ -34,6 +37,8 @@ export interface CauseClass {
   verdict: Verdict;
   title: string;
   why: string;
+  // An early-error class only (and every one has it): what the checker that enforces it reads.
+  checker?: { needs: 'tree' | 'scope'; reads: string };
   match: (t: TestInfo) => boolean;
 }
 
@@ -199,6 +204,7 @@ const WE_ACCEPT: CauseClass[] = [
   // waiting on a parameter the engine lacks
   {
     id: 'accept/use-strict-with-non-simple-parameters', direction: 'we-accept', verdict: 'early-error',
+    checker: { needs: 'tree', reads: "a function node: its parameter list's shape and its body's directive prologue" },
     title: '"use strict" in a function with a non-simple parameter list',
     why: 'Early error: ContainsUseStrict of the body is true and IsSimpleParameterList is false.',
     match: (t) => says(t, /ContainsUseStrict|IsSimpleParameterList|non-?simple param|Use Strict Directive are not allowed to coexist/i),
@@ -224,12 +230,14 @@ const WE_ACCEPT: CauseClass[] = [
   // early errors
   {
     id: 'accept/escaped-keyword', direction: 'we-accept', verdict: 'early-error',
+    checker: { needs: 'tree', reads: "an identifier token: its escape-decoded text against the reserved words, with the enclosing function kind for `await` / `yield`" },
     title: 'a keyword written with a Unicode escape',
     why: 'Early error: an IdentifierName whose escapes spell a reserved word is neither that keyword nor an identifier (`v\\u0061r x`, `\\u0061sync function f() {}`, `yi\\u0065ld` in a generator).',
     match: (t) => ((says(t, /escape/i) || inDir(t, /escape/)) && (says(t, /keyword|reserved|contextual/i) || inDir(t, /escaped/))) || says(t, /must not contain escape sequences/),
   },
   {
     id: 'accept/await-yield-binding-identifier', direction: 'we-accept', verdict: 'early-error',
+    checker: { needs: 'tree', reads: "a binding name and its enclosing function kinds (async, generator, static block)" },
     title: '`await` / `yield` as a binding name in an async function / generator',
     why: 'Early error: BindingIdentifier derives `yield` and `await`, and "It is a Syntax Error if this production has a [Yield] / [Await] parameter". The grammar keeps them names at binding position, as tsc\'s parser does.',
     match: (t) => says(t, /\b(await|yield)\b/i) && says(t, /binding identifier|BindingIdentifier|binding name|as a parameter|as an identifier in functions nested/i),
@@ -242,96 +250,112 @@ const WE_ACCEPT: CauseClass[] = [
   },
   {
     id: 'accept/await-yield-in-parameters', direction: 'we-accept', verdict: 'early-error',
+    checker: { needs: 'tree', reads: "a parameter list: does it contain a YieldExpression / AwaitExpression outside a nested function" },
     title: 'an `await` / `yield` expression in formal parameters',
     why: 'Early error: FormalParameters Contains YieldExpression / AwaitExpression.',
     match: (t) => says(t, /(Yield|Await)Expression|contains (await|yield)|may not contain the `yield` keyword/i) && says(t, /FormalParameters|parameter/i),
   },
   {
     id: 'accept/regexp-pattern', direction: 'we-accept', verdict: 'early-error',
+    checker: { needs: 'tree', reads: "a regular-expression token: its body against the Pattern grammar, its flags against the flag set" },
     title: 'a regular expression\'s pattern or flags',
     why: 'Early error: the body must parse with the Pattern grammar (named groups, quantifiers, class escapes, `u` / `v` rules) and the flags must be known and unique. The token reads any body and flag run.',
     match: (t) => inDir(t, /^test\/language\/literals\/regexp\//) || says(t, /regular expression|RegExp/),
   },
   {
     id: 'accept/assignment-target', direction: 'we-accept', verdict: 'early-error',
+    checker: { needs: 'tree', reads: "the left side of an assignment, an update or a for-in/of head: AssignmentTargetType, and the refinement of a literal to an AssignmentPattern" },
     title: 'an invalid assignment target, or a literal that does not cover an AssignmentPattern',
     why: 'Early error: AssignmentTargetType is not simple (`1 = 2`, `a?.b = 1`, `f() += 1`, `++this`), or an ObjectLiteral / ArrayLiteral on the left of `=` / in a for-in/of head does not refine to an AssignmentPattern (`[...a, b] = c`, `({a: 1} = b)`). The parser enforces the LeftHandSideExpression shape only (docs/CORRECTNESS.md).',
     match: (t) => !says(t, /using escape/) && inDir(t, /\/assignmenttargettype\//) || !says(t, /using escape/) && says(t, /AssignmentTargetType|IsValidSimpleAssignmentTarget|assignment target|DestructuringAssignmentTarget|AssignmentRestElement|AssignmentElement|AssignmentPattern|AssignmentProperty|simple assignment|invalid (destructuring )?assignment|valid reference|write context|execution of "[^"]*=[^"]*" fails|non-simple target|Applied to (assignment|a "covered" YieldExpression)|cannot be target of assignment|AssginmentTargetType/i),
   },
   {
     id: 'accept/arguments-in-class-field', direction: 'we-accept', verdict: 'early-error',
+    checker: { needs: 'tree', reads: "a field initializer: does it contain `arguments` outside a non-arrow function" },
     title: '`arguments` in a class field initializer',
     why: 'Early error: ContainsArguments of a field\'s Initializer.',
     match: (t) => says(t, /arguments/) && says(t, /class field|field/i),
   },
   {
     id: 'accept/super-new-target', direction: 'we-accept', verdict: 'early-error',
+    checker: { needs: 'tree', reads: "a `super` / `new.target` node and its enclosing function and method kinds" },
     title: '`super` and `new.target` outside their contexts',
     why: 'Early error: SuperCall outside a derived constructor, SuperProperty outside a method, `new.target` outside a function.',
     match: (t) => says(t, /\bsuper\b|SuperCall|SuperProperty|HasDirectSuper|new\.target/i),
   },
   {
     id: 'accept/private-names', direction: 'we-accept', verdict: 'early-error',
+    checker: { needs: 'scope', reads: "the private names each class declares, resolved through the enclosing classes (duplicates, getter / setter pairing, undeclared uses), plus `delete` of a private reference" },
     title: 'private names',
     why: 'Early error: a `#name` declared twice, used without a declaration in an enclosing class, `#constructor`, `delete this.#x`.',
     match: (t) => !says(t, /`arguments` used|`super(\(\))?` used/) && says(t, /private (instance|static|name|identifier|field|member|environment|getter|setter|method.*(twice|same|duplicate|conflict))|PrivateName|PrivateIdentifier|PrivateBoundIdentifiers|AllPrivateIdentifiersValid|#constructor|delete.*private|\#\w+ (is not|not) (defined|declared)/i) || inDir(t, /early-errors\/(delete|invalid-names)\//),
   },
   {
     id: 'accept/duplicate-bindings', direction: 'we-accept', verdict: 'early-error',
+    checker: { needs: 'scope', reads: "the declared names of every block, function, switch and module scope: LexicallyDeclaredNames against themselves and against VarDeclaredNames, and parameter names" },
     title: 'duplicate or conflicting declarations',
     why: 'Early error: LexicallyDeclaredNames with a duplicate, or one that also occurs in VarDeclaredNames (`let a; var a`, `let a; let a`, a `catch (e)` with `let e` in its block, duplicate parameters where they are not allowed).',
     match: (t) => says(t, /redeclar|duplicate|BoundNames|LexicallyDeclaredNames|VarDeclaredNames|already (been )?declared|lexical shadowing|re-declare|lexically-scoped binding and function-scoped binding/i) || inDir(t, /\/redeclaration\//),
   },
   {
     id: 'accept/labels-break-continue', direction: 'we-accept', verdict: 'early-error',
+    checker: { needs: 'tree', reads: "a statement and its enclosing labels and iteration / breakable statements, stopping at function and static-block boundaries" },
     title: 'labels, `break` and `continue`',
     why: 'Early error: an undefined or duplicate label, `continue` outside an iteration, `break` outside a breakable statement, IsLabelledFunction.',
     match: (t) => says(t, /label|\bcontinue\b|\bbreak\b|IterationStatement/i) || inDir(t, /^test\/language\/statements\/(break|continue|labeled)\//),
   },
   {
     id: 'accept/class-element-names', direction: 'we-accept', verdict: 'early-error',
+    checker: { needs: 'tree', reads: "a class body: element names and kinds (`constructor`, `prototype`, a second constructor)" },
     title: 'class elements named `constructor` / `prototype`',
     why: 'Early error: a special method (getter, setter, generator, async) or field named `constructor`, a static element named `prototype`, two constructors.',
     match: (t) => says(t, /constructor|prototype/i),
   },
   {
     id: 'accept/cover-initialized-name', direction: 'we-accept', verdict: 'early-error',
+    checker: { needs: 'tree', reads: "an object literal not refined to an AssignmentPattern: does it contain a CoverInitializedName" },
     title: 'a CoverInitializedName in an object literal',
     why: 'Early error: `({ a = 1 })` is matched by the cover grammar for `({ a = 1 } = b)` and is an error unless it refines to an AssignmentPattern.',
     match: (t) => says(t, /Initialized name is explicitly barred|CoverInitializedName/i),
   },
   {
     id: 'accept/template-escape', direction: 'we-accept', verdict: 'early-error',
+    checker: { needs: 'tree', reads: "an untagged template token: does it contain a NotEscapeSequence" },
     title: 'a NotEscapeSequence in an untagged template',
     why: 'Early error: "It is a Syntax Error if the [Tagged] parameter was not set and NotEscapeSequence is matched" (`\\9`, `\\u{`, `\\x0`).',
     match: (t) => inDir(t, /\/template-literal\//) && says(t, /escape/i),
   },
   {
     id: 'accept/optional-chain-template', direction: 'we-accept', verdict: 'early-error',
+    checker: { needs: 'tree', reads: "an optional chain: is a template literal applied to it" },
     title: 'a template after an optional chain',
     why: 'Early error: `OptionalChain :: ?. TemplateLiteral` and `OptionalChain TemplateLiteral` are productions with "It is a Syntax Error if any source text is matched by this production" (`a?.b\`x\``).',
     match: (t) => inDir(t, /\/optional-chaining\//) && says(t, /template/i),
   },
   {
     id: 'accept/declaration-without-initializer', direction: 'we-accept', verdict: 'early-error',
+    checker: { needs: 'tree', reads: "a `const` / `using` binding: does it have an initializer (outside a for-in/of head)" },
     title: '`const` / `using` without an initializer',
     why: 'Early error: a LexicalBinding without an Initializer when IsConstantDeclaration (`const x;`) or IsUsingDeclaration (`using x;`).',
     match: (t) => says(t, /without (an )?initiali[sz]er|declarations mixed: (with, )?without/i),
   },
   {
     id: 'accept/static-block-contexts', direction: 'we-accept', verdict: 'early-error',
+    checker: { needs: 'tree', reads: "a class static block: does it contain `arguments` or an AwaitExpression outside a nested function" },
     title: '`arguments`, `await` and `yield` in a class static block',
     why: 'Early error: ContainsArguments / ContainsAwait of ClassStaticBlockStatementList, and `yield` / `await` reserved there by the block\'s own [~Yield, +Await] context.',
     match: (t) => says(t, /Block cannot use `arguments`|"(Await|Yield)" parsing context does not apply/),
   },
   {
     id: 'accept/using-placement', direction: 'we-accept', verdict: 'early-error',
+    checker: { needs: 'tree', reads: "a `using` declaration and its parent: a case / default clause directly" },
     title: 'a `using` declaration directly in a switch clause',
     why: 'Early error: a CaseClause / DefaultClause StatementList may not contain a UsingDeclaration or AwaitUsingDeclaration.',
     match: (t) => has(t, 'explicit-resource-management') && says(t, /switch statement/i),
   },
   {
     id: 'accept/let-as-lexical-name', direction: 'we-accept', verdict: 'early-error',
+    checker: { needs: 'tree', reads: "a lexical declaration's bound names: is one of them `let`" },
     title: '`let` as a lexically bound name',
     why: 'Early error: BoundNames of a LexicalDeclaration or ForDeclaration contains "let" (`const let = 1`, `for (let let in o)`).',
     match: (t) => says(t, /binding for `let`|\|const let\||\|let let\|/),
@@ -352,6 +376,9 @@ export const UNKNOWN: Record<'we-accept' | 'we-reject', CauseClass> = {
 };
 
 CLASSES.push(...WE_ACCEPT);
+for (const c of CLASSES) {
+  if ((c.verdict === 'early-error') !== !!c.checker) throw new Error(`${c.id}: an early-error class states its checker, and no other class does`);
+}
 
 export const classify = (t: TestInfo, direction: 'we-accept' | 'we-reject'): CauseClass =>
   CLASSES.find((c) => c.direction === direction && c.match(t)) ?? UNKNOWN[direction];
