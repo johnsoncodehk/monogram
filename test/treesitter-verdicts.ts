@@ -239,7 +239,9 @@ const NEW_ARGUMENTS = [
   'new C(x);', 'new C;', 'new C()();', 'new C(x)(y);', 'new class {}();', 'x = new C(x).y;', 'new C.d(x);', 'new C`t`;',
   'new new C()();', 'new C < d;', 'yield(x);',
 ];
-// The corpora whose trees are compared, not only their verdicts.
+// The corpora whose trees are compared, not only their verdicts: these synthetic ones and every
+// real-code corpus (a wrong tree with no ERROR on real code: every top-level `function f() {}` built
+// as an expression statement holding a function expression was found there, and by no ERROR count).
 const SPAN_CORPORA = new Set(['operator pairs', 'type arguments', 'new arguments']);
 const exprSpans = (n: any, out: string[] = []): string[] => {
   if (n.rule === 'Expr') out.push(`${n.offset}-${n.end}`);
@@ -290,7 +292,7 @@ function errorNodes(root: any): number {
 // direction `rejects`: tree-sitter ERROR where the interpreter accepts (a defect to fix); `accepts`:
 // tree-sitter accepts what the interpreter rejects (an over-acceptance, synthetic corpora only: real code
 // is the files the interpreter accepts); `splits`: both accept a line-break input, but its top-level
-// statements start elsewhere; `brackets`: both accept an operator pair, but tree-sitter's expression
+// statements start elsewhere; `brackets`: both accept a span-compared input (SPAN_CORPORA, every real-code file), but tree-sitter's expression
 // spans are not the interpreter's (a wrong tree without an ERROR). A class is the first cause (by delta debugging the input, see
 // docs/HIGHLIGHTER-EVIDENCE.md, "tree-sitter"), kept across re-records; a new entry is `unclassified`.
 const RECORD = join(ROOT, 'test/treesitter-record.txt');
@@ -303,7 +305,7 @@ if (existsSync(RECORD)) for (const line of readFileSync(RECORD, 'utf8').split('\
   recorded.set(key(g, corpus, dir, rest.join(' | ')), cls);
 }
 
-interface Row { grammar: string; corpus: string; inputs: number; bothAccept: number; bothReject: number; tsOnlyReject: number; tsOnlyAccept: number; splitDiffers: number; ms: number }
+interface Row { grammar: string; corpus: string; inputs: number; bothAccept: number; bothReject: number; tsOnlyReject: number; tsOnlyAccept: number; splitDiffers: number; spansMissing: number; spansExtra: number; ms: number }
 const rows: Row[] = [];
 const found = new Map<string, string>();   // key → class (the record's, or unclassified)
 let notRun = false;
@@ -339,7 +341,7 @@ for (const { lang, mod, corpora, pairs } of [
   const tsStarts = (root: any) => root.namedChildren.filter((c: any) => !c.isExtra).map((c: any) => c.startIndex).join(',');
   for (const [corpus, inputs, real] of all) {
     const t0 = performance.now();
-    const r: Row = { grammar: lang, corpus, inputs: inputs.length, bothAccept: 0, bothReject: 0, tsOnlyReject: 0, tsOnlyAccept: 0, splitDiffers: 0, ms: 0 };
+    const r: Row = { grammar: lang, corpus, inputs: inputs.length, bothAccept: 0, bothReject: 0, tsOnlyReject: 0, tsOnlyAccept: 0, splitDiffers: 0, spansMissing: 0, spansExtra: 0, ms: 0 };
     for (const { id, src } of inputs) {
       const cst = parse(src);
       if (real && !cst) { r.bothReject++; continue; }   // real code: only what the interpreter accepts
@@ -347,7 +349,11 @@ for (const { lang, mod, corpora, pairs } of [
       const ts = errorNodes(tree.rootNode) === 0;
       if (cst && ts) {
         r.bothAccept++;
-        if (SPAN_CORPORA.has(corpus) && exprSpans(cst).sort().join(' ') !== tsExprSpans(tree.rootNode).sort().join(' ')) {
+        const want = (real || SPAN_CORPORA.has(corpus)) ? new Set(exprSpans(cst)) : null;
+        const got = want ? new Set(tsExprSpans(tree.rootNode)) : null;
+        const missing = want ? [...want].filter(x => !got!.has(x)).length : 0, extra = got ? [...got].filter(x => !want!.has(x)).length : 0;
+        r.spansMissing += missing; r.spansExtra += extra;
+        if (missing + extra > 0) {
           r.splitDiffers++;
           const k = key(lang, corpus, 'brackets', id);
           found.set(k, recorded.get(k) ?? 'unclassified');
@@ -371,14 +377,14 @@ for (const { lang, mod, corpora, pairs } of [
 }
 
 const table = [
-  '| grammar | corpus | inputs | both accept | both reject | tree-sitter-only ERROR | tree-sitter-only accept | splits / brackets differ | s |',
-  '|---|---|---:|---:|---:|---:|---:|---:|---:|',
-  ...rows.map(r => `| ${r.grammar} | ${r.corpus} | ${r.inputs} | ${r.bothAccept} | ${r.bothReject} | ${r.tsOnlyReject} | ${r.tsOnlyAccept} | ${r.splitDiffers} | ${(r.ms / 1000).toFixed(1)} |`),
+  '| grammar | corpus | inputs | both accept | both reject | tree-sitter-only ERROR | tree-sitter-only accept | splits / brackets differ | interpreter spans tree-sitter lacks | tree-sitter spans the interpreter lacks | s |',
+  '|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
+  ...rows.map(r => `| ${r.grammar} | ${r.corpus} | ${r.inputs} | ${r.bothAccept} | ${r.bothReject} | ${r.tsOnlyReject} | ${r.tsOnlyAccept} | ${r.splitDiffers} | ${r.spansMissing} | ${r.spansExtra} | ${(r.ms / 1000).toFixed(1)} |`),
 ].join('\n');
-// The tree-sitter-only ERRORs of the real-code corpora by class.
+// The tree-sitter-only ERRORs and the wrong trees of the real-code corpora by class.
 const byClass = new Map<string, number>();
-for (const [k, cls] of found) { const [g, corpus, dir] = k.split(' | '); if (dir === 'rejects' && REAL[g]?.some(c => c.name === corpus)) byClass.set(`${g} | ${corpus} | ${cls}`, (byClass.get(`${g} | ${corpus} | ${cls}`) ?? 0) + 1); }
-const classTable = ['| grammar | corpus | class | files |', '|---|---|---|---:|', ...[...byClass].sort((a, b) => b[1] - a[1]).map(([k, n]) => `| ${k} | ${n} |`)].join('\n');
+for (const [k, cls] of found) { const [g, corpus, dir] = k.split(' | '); if ((dir === 'rejects' || dir === 'brackets') && REAL[g]?.some(c => c.name === corpus)) byClass.set(`${g} | ${corpus} | ${dir} | ${cls}`, (byClass.get(`${g} | ${corpus} | ${dir} | ${cls}`) ?? 0) + 1); }
+const classTable = ['| grammar | corpus | direction | class | files |', '|---|---|---|---|---:|', ...[...byClass].sort((a, b) => b[1] - a[1]).map(([k, n]) => `| ${k} | ${n} |`)].join('\n');
 const entering = [...found.keys()].filter(k => !recorded.has(k)).sort();
 const leaving = [...recorded.keys()].filter(k => !found.has(k) && !notRun).sort();
 console.log(table + '\n\n' + classTable);
