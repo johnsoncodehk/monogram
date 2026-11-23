@@ -17,7 +17,7 @@ import {
 } from '../src/shape2-schema.ts';
 import calc from './fixtures/namedcalc.ts';
 import calcExample from './fixtures/shape-namedcalc.ts';
-import { shapeCoverage, shapeSkeleton } from '../src/shape-coverage.ts';
+import { freeNodeKeys, shapeCoverage, shapeSkeleton } from '../src/shape-coverage.ts';
 import { estreeExprShape } from './fixtures/shape-v2-estree-expr.ts';
 import { tscExprShape } from './fixtures/shape-v2-tsc-expr.ts';
 import { compareTrees, nestValue, type NTree } from './shape-oracle.ts';
@@ -80,6 +80,8 @@ check('calc: values, P2 type by operator text, P6 pass-through, spans', () => {
 check('calc: present / armOf / match / if / and / or / not / orElse / record / list / spread / let / map', () => {
   const spec: ShapeSpec = {
     ...calcSpec,
+    // A field named `kind` (L.kind): the node's kind goes under another key.
+    node: { kind: 'type' },
     rules: {
       ...calcSpec.rules,
       Program: {
@@ -696,7 +698,7 @@ check('skeleton: every arm of calc / javascript / typescript maps to a term that
   for (const g of [calc, javascript, typescript]) {
     const rules: Record<string, Record<string, Term>> = {};
     for (const a of shapeCoverage(defineShape(g, { name: 'empty', rules: {} })).arms) (rules[a.rule] ??= {})[a.arm] = a.skeleton;
-    defineShape(g, { name: 'skeleton', total: true, rules });
+    defineShape(g, { name: 'skeleton', total: true, node: freeNodeKeys(Object.values(rules).flatMap((r) => Object.values(r))), rules });
   }
 });
 {

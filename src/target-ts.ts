@@ -3133,6 +3133,8 @@ const tsBlock = (lines: string[]): string[] => lines.map((l) => TS_IND + l);
 const SHAPE_SLOT_TS: Record<string, (a: string[]) => string> = {
   slotVal: ([i]) => `_hs[${i}]`, slotTag: ([i]) => `_tg[${i}]!`, slotTop: () => '_n',
   slotOff: ([i]) => `_sp[(${i}) * _SW]!`, slotEnd: ([i]) => `_sp[(${i}) * _SW + 1]!`, srcText: ([a, b]) => `_src.slice(${a}, ${b})`,
+  // The one-slot check (its operands are an index expression and locals: evaluated more than once).
+  slotAt: ([i, lo, hi, t0, t1]) => `((${i}) >= ${lo} && (${i}) < ${hi} && _tg[${i}]! >= ${t0} && _tg[${i}]! <= ${t1} ? ${i} : -1)`,
 };
 const tsLowering: Lowering = {
   units: UNITS,
