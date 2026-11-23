@@ -757,6 +757,7 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
         const e0 = `e${i}`;
         const seqs: Stmt[] = r.nexts.map((nx, j) => {
           const pv = `p${i}_${j}`, ok = `ok${i}_${j}`;
+          if (!nx.length) return if_(lt('hit', I(0)), [set('hit', I(i))]);
           return if_(lt('hit', I(0)), [
             let_(pv, e0), let_(ok, I(1)),
             ...nx.map((l) => if_(ne(ok, I(0)), [
