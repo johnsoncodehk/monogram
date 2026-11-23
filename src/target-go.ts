@@ -553,7 +553,7 @@ ${rx ? `\t\tif lid == lidLParen {
 `;
   // The entry from code, in the tagOpen byte's dispatch arm (outside element frames: inside one
   // the frame step lexes every tagOpen).
-  const enter = `\t\t\ttemplateStack = append(templateStack, 6); refresh(); emit(pos, pos + ${L}, 0, lidElOpen);${raw ? ' tagAt = append(tagAt, len(*acc)-1);' : ''} tagAngle = 0; pos += ${L}; continue\n`;
+  const enter = `\t\t\ttemplateStack = append(templateStack, 6); refresh(); bound = 0; emit(pos, pos + ${L}, 0, lidElOpen);${raw ? ' tagAt = append(tagAt, len(*acc)-1);' : ''} tagAngle = 0; pos += ${L}; continue\n`;
   const entry = !operand ? `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)}) {\n${enter}\t\t}\n`
     : !(el.head || sig) ? `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)}) && !prevIsValue() {\n${enter}\t\t}\n`
     : `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)})${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue() {
@@ -566,13 +566,13 @@ ${sig ? `\t\t\tif op == 2 {
 \t\t\t\tsvLastClose, svLastBang, svElEndAt, svAngle = lastClose, lastBang, elEndAt, tagAngle
 \t\t\t\tsvParen = append(svParen[:0], parenHead...)
 \t\t\t\tsvStack = append(svStack[:0], templateStack...)
-\t\t\t\tspecTok = len(*acc); specSeen = specTok; specBase = len(parenHead); specClosedAt = -1; specDone = false; hot = true
+\t\t\t\tspecTok = len(*acc); specSeen = specTok; specBase = len(parenHead); specClosedAt = -1; specDone = false; hot = true; bound = 0
 \t\t\t}
 ` : ''}\t\t}
 `;
   // An element hole's closer at brace count 0 ends it (the closer is lexed inside the frame).
   const holeClose = `\t\tif len(templateStack) > 0 && templateStack[len(templateStack)-1] == 1 && strings.HasPrefix(src[pos:], ${J(el.holeClose)}) {
-\t\t\temit(pos, pos + ${tlen(el.holeClose)}, 0, lidHoleClose); templateStack = templateStack[:len(templateStack)-1]; refresh(); pos += ${tlen(el.holeClose)}; continue
+\t\t\temit(pos, pos + ${tlen(el.holeClose)}, 0, lidHoleClose); templateStack = templateStack[:len(templateStack)-1]; refresh(); if hot { bound = 0 }; pos += ${tlen(el.holeClose)}; continue
 \t\t}
 `;
   const heads = new Map<number, string>();
@@ -611,22 +611,28 @@ ${raw ? `\t\tif len(templateStack) > 0 && templateStack[len(templateStack)-1] ==
   // Code outside element frames pays one test per round (hot); the loop condition is the plain
   // lexer's. A speculation lexes past the token limit to its verdict (the limit is tested first); one
   // that reaches the end of the input (or a lexer error, its verdict) is rewound after the loop.
-  const loopBody = `\t\tif hot {
-${sig ? '\t\tif specTok >= 0 && specStep() { pos = specRewind(false); continue }\n' : ''}${frameStep}\t\t}
+  // The plain rounds (code outside element frames) are the inner loop, whose only bound is
+  // \`bound\`: the input's end while no element work is pending, so its condition is the plain
+  // lexer's; one round (pos + 1) after the frame step lexed nothing; 0 once a round makes work (an
+  // element entered or back on top${sig ? ', a signature begun' : ''}). The work (hot, kept by every change of the
+  // frame stack's top${sig ? ' and of the speculation' : ''}) is the outer loop's, so no plain round tests it.
+  // A lexer error jumps to lexFail (goFail)${sig ? '; with a signature undecided it is the verdict' : ''}.
+  const more = `pos < n && (limit <= 0 || len(*acc)-base < limit${sig ? ' || specTok >= 0' : ''})`;
+  const loop = `${sig ? 'lexLoop:\n' : ''}\tfor {
+\t\tif !(${more}) {
+${sig ? '\t\t\tif specTok >= 0 { specStep(); pos = specRewind(false); continue }\n' : ''}\t\t\tbreak
+\t\t}
+\t\tbound := n
+\t\tif hot {
+${sig ? '\t\tif specTok >= 0 && specStep() { pos = specRewind(false); continue }\n' : ''}${frameStep}\t\tbound = pos + 1
+\t\t}
+\tfor pos < bound && (limit <= 0 || len(*acc)-base < limit${sig ? ' || specTok >= 0' : ''}) {
 \t\tc := int(src[pos])
 ${p.nlWs}${pre}${cascade}
-${p.uniIdentFallbackGo}${p.loopPanicGo}`;
-  const inner = `\tfor pos < n && (limit <= 0 || len(*acc)-base < limit${sig ? ' || specTok >= 0' : ''}) {
-${loopBody}
+${p.uniIdentFallbackGo}${p.loopPanicGo}
+\t}
 \t}
 `;
-  // A lexer error jumps to lexFail (goFail); with a signature undecided it is the verdict.
-  const loop = sig ? `lexLoop:
-\tfor {
-${inner}\tif specTok < 0 { break }
-\tspecStep(); pos = specRewind(false)
-\t}
-` : inner;
   return `${p.head}${consts}${p.scans}func lexFrom(src string, pos int, pendingNl bool, ${rxParams}templateStack []int, elEnded bool, tagAngle, laEnd, specUntil int, ${raw ? 'tagAt []int, ' : ''}acc *[]Tok, limit int) (int, bool, ${rxRet}[]int, bool, int, int, int${raw ? ', []int' : ''}, *lexErr) {
 \tn := len(src)
 \tvar err *lexErr
@@ -819,6 +825,8 @@ ${emitHooks}
   // lexer error).
   // The element lexer keeps whether the frame stack's top has work (its refresh).
   const elRefresh = ir.elements ? 'refresh(); ' : '';
+  // a closer can bring an element frame back on top: the round ends the plain rounds (bound)
+  const elRefreshClose = ir.elements ? 'refresh(); if hot { bound = 0 }; ' : '';
   const tplSpanGo = (from: string, strict: string): string => `\t\t\tq := ${shared.tplSpan()}(src, ${from}, ${strict})
 \t\t\tif q < 0 { err = lexTplErr(q, n); goto lexFail }
 \t\t\tinterp, e := strings.HasPrefix(src[q:], ${J(tpl!.interpOpen)}), q + ${tlen(tpl!.open)}
@@ -827,7 +835,7 @@ ${emitHooks}
   const tplCloseTest = tpl ? `\t\tif len(templateStack) > 0 && strings.HasPrefix(src[pos:], ${J(tpl.interpClose)}) && templateStack[len(templateStack)-1] == 0 {
 \t\t\ttemplateStack = templateStack[:len(templateStack)-1]
 ${tplSpanGo('pos + ' + tlen(tpl.interpClose), 'false')}\t\t\tif interp { emit(pos, e, ${kidOf(ids, '$templateMiddle')}, ${lidCallGo(tplLits.middle, 'src[pos:e]')}); templateStack = append(templateStack, 0) } else { emit(pos, e, ${kidOf(ids, '$templateTail')}, ${lidCallGo(tplLits.tail, 'src[pos:e]')}) }
-\t\t\t${elRefresh}pos = e; continue
+\t\t\t${elRefreshClose}pos = e; continue
 \t\t}
 ` : '';
   const tplOpenTest = tpl ? `\t\tif strings.HasPrefix(src[pos:], ${J(tpl.open)}) {

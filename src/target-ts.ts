@@ -313,7 +313,7 @@ ${rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]
 `;
   // The entry from code, in the tagOpen unit's dispatch arm (outside element frames: inside one
   // the frame step lexes every tagOpen).
-  const enter = `      templateStack.push(6); refresh(); emit(pos, pos + ${L}, 0, LID_EL_OPEN);${raw ? ' tagAt.push(toks.length - 1);' : ''} tagAngle = 0; pos += ${L}; continue;\n`;
+  const enter = `      templateStack.push(6); refresh(); bound = 0; emit(pos, pos + ${L}, 0, LID_EL_OPEN);${raw ? ' tagAt.push(toks.length - 1);' : ''} tagAngle = 0; pos += ${L}; continue;\n`;
   const entry = !operand ? `    if (src.startsWith(${J(el.tagOpen)}, pos)) {\n${enter}    }\n`
     : !(el.head || sig) ? `    if (src.startsWith(${J(el.tagOpen)}, pos) && !prevIsValue()) {\n${enter}    }\n`
     : `    if (src.startsWith(${J(el.tagOpen)}, pos)${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue()) {
@@ -326,13 +326,13 @@ ${sig ? `      if (op === 2) {
         svLastClose = lastClose; svLastBang = lastBang; svElEndAt = elEndAt; svAngle = tagAngle;
         svParen.length = 0; for (const b of parenHead) svParen.push(b);
         svStack.length = 0; for (const f of templateStack) svStack.push(f);
-        specTok = toks.length; specSeen = specTok; specBase = parenHead.length; specClosedAt = -1; specDone = false; hot = true;
+        specTok = toks.length; specSeen = specTok; specBase = parenHead.length; specClosedAt = -1; specDone = false; hot = true; bound = 0;
       }
 ` : ''}    }
 `;
   // An element hole's closer at brace count 0 ends it (the closer is lexed inside the frame).
   const holeClose = `    if (templateStack.length > 0 && templateStack[templateStack.length - 1] === 1 && src.startsWith(${J(el.holeClose)}, pos)) {
-      emit(pos, pos + ${tlen(el.holeClose)}, 0, LID_HOLE_CLOSE); templateStack.pop(); refresh(); pos += ${tlen(el.holeClose)}; continue;
+      emit(pos, pos + ${tlen(el.holeClose)}, 0, LID_HOLE_CLOSE); templateStack.pop(); refresh(); if (hot) bound = 0; pos += ${tlen(el.holeClose)}; continue;
     }
 `;
   const heads = new Map<number, string>();
@@ -367,22 +367,28 @@ ${raw ? `    if (templateStack.length > 0 && templateStack[templateStack.length 
       emit(pos, re, rk, 0); templateStack.pop(); refresh(); pos = re; continue;
     }
 ` : ''}`;
-  // Code outside element frames pays one test per round (hot); the loop condition is the plain
-  // lexer's. A speculation lexes past the token limit to its verdict (the limit is tested first); one
-  // that reaches the end of the input (or a lexer error, its verdict) is rewound after the loop.
-  const loopBody = `    if (hot) {
-${sig ? '    if (specTok >= 0 && specStep()) { pos = specRewind(); continue; }\n' : ''}${frameStep}    }
+  // The plain rounds (code outside element frames) are the inner loop, whose only bound is
+  // \`bound\`: the input's end while no element work is pending, so its condition is the plain
+  // lexer's; one round (pos + 1) after the frame step lexed nothing; 0 once a round makes work (an
+  // element entered or back on top${sig ? ', a signature begun' : ''}). The work (hot, kept by every change of the
+  // frame stack's top${sig ? ' and of the speculation' : ''}) is the outer loop's, so no plain round tests it.${sig ? `
+  // A speculation lexes past the token limit to its verdict (the limit is tested first); one that
+  // reaches the end of the input (or a lexer error, its verdict) is rewound at the head.` : ''}
+  const more = `pos < n && (limit === undefined || toks.length - base < limit${sig ? ' || specTok >= 0' : ''})`;
+  const loop = `  for (;;) {
+    if (!(${more})) {
+${sig ? '      if (specTok >= 0) { specStep(); pos = specRewind(); continue; }\n' : ''}      break;
+    }
+    let bound = n;
+    if (hot) {
+${sig ? '    if (specTok >= 0 && specStep()) { pos = specRewind(); continue; }\n' : ''}${frameStep}    bound = pos + 1;
+    }
+  while (pos < bound && (limit === undefined || toks.length - base < limit${sig ? ' || specTok >= 0' : ''})) {
     const c = src.charCodeAt(pos);
 ${p.nlWs}${pre}${cascade}
-${p.uniIdentFallbackTs}${TS_UNEXPECTED}`;
-  const inner = `  while (pos < n && (limit === undefined || toks.length - base < limit${sig ? ' || specTok >= 0' : ''})) {
-${loopBody}
+${p.uniIdentFallbackTs}${TS_UNEXPECTED}
+  }
   }`;
-  const loop = sig ? `  for (;;) {
-${inner}
-  if (specTok < 0) break;
-  specStep(); pos = specRewind();
-  }` : inner;
   return `${consts}${p.scans}function lexFrom(src: string, pos: number, pendingNl: boolean, ${rxParams}templateStack: number[], elEnded: boolean, tagAngle: number, laEnd: number, specUntil: number, ${raw ? 'tagAt: number[], ' : ''}toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; ${rxRet}templateStack: number[]; elEnded: boolean; tagAngle: number; laEnd: number; specUntil: number${raw ? '; tagAt: number[]' : ''}; err: LexErr | null } {
   const n = src.length;
   const base = toks.length;
@@ -506,6 +512,8 @@ ${emitHooks}
   // lexer error).
   // The element lexer keeps whether the frame stack's top has work (its refresh()).
   const elRefresh = ir.elements ? 'refresh(); ' : '';
+  // a closer can bring an element frame back on top: the round ends the plain rounds (bound)
+  const elRefreshClose = ir.elements ? 'refresh(); if (hot) bound = 0; ' : '';
   const tplSpanTs = (from: string, strict: string): string => `      const q = ${shared.tplSpan()}(src, ${from}, ${strict});
       if (q < 0) { err = lexTplErr(q, n); pos = n; continue; }
       const interp = src.startsWith(${J(tpl!.interpOpen)}, q), e = interp ? q + ${tlen(tpl!.interpOpen)} : q + ${tlen(tpl!.open)};
@@ -514,7 +522,7 @@ ${emitHooks}
       templateStack.pop();
 ${tplSpanTs('pos + ' + tlen(tpl.interpClose), 'false')}      if (interp) { emit(pos, e, ${kidOf(ids, '$templateMiddle')}, ${lidCallTs(tplLits.middle, 'src.slice(pos, e)')}); templateStack.push(0); }
       else { emit(pos, e, ${kidOf(ids, '$templateTail')}, ${lidCallTs(tplLits.tail, 'src.slice(pos, e)')}); }
-      ${elRefresh}pos = e; continue;
+      ${elRefreshClose}pos = e; continue;
     }
 ` : '';
   const tplOpenTest = tpl ? `    if (src.startsWith(${J(tpl.open)}, pos)) {

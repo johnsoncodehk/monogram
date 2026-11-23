@@ -551,7 +551,7 @@ impl Spec {
 impl<'a> ElScan<'a> {
 ${methods}}
 ${spec}`;
-  const enter = `            st.template_stack.push(6); st.refresh(); st.emit(pos, pos + ${L}, 0, _LID_EL_OPEN);${raw ? ' st.tag_at.push(st.acc.len() as i64 - 1);' : ''} st.tag_angle = 0; pos += ${L}; continue;\n`;
+  const enter = `            st.template_stack.push(6); st.refresh(); bound = 0; st.emit(pos, pos + ${L}, 0, _LID_EL_OPEN);${raw ? ' st.tag_at.push(st.acc.len() as i64 - 1);' : ''} st.tag_angle = 0; pos += ${L}; continue;\n`;
   const at = (lit: string) => startByteEq('pos', lit);
   const entry = !operand ? `        if ${at(el.tagOpen)} {\n${enter}        }\n`
     : !(el.head || sig) ? `        if ${at(el.tagOpen)} && !st.prev_is_value() {\n${enter}        }\n`
@@ -560,10 +560,10 @@ ${spec}`;
             ${sig ? 'if sp.has_at && pos == sp.at { op = if sp.keep { 0 } else { 1 }; sp.has_at = false; } else ' : ''}{ let (o, re) = ${shared.elementFn('opens')}(src, pos as isize); op = o; if re > st.la_end { st.la_end = re; } }
             if op == 1 {
 ${enter}            }
-${sig ? '            if op == 2 { st.spec_begin(&mut sp, pos); }\n' : ''}        }
+${sig ? '            if op == 2 { st.spec_begin(&mut sp, pos); bound = 0; }\n' : ''}        }
 `;
   const holeClose = `        if st.template_stack.last() == Some(&1) && ${at(el.holeClose)} {
-            st.emit(pos, pos + ${tlen(el.holeClose)}, 0, _LID_HOLE_CLOSE); st.template_stack.pop(); st.refresh(); pos += ${tlen(el.holeClose)}; continue;
+            st.emit(pos, pos + ${tlen(el.holeClose)}, 0, _LID_HOLE_CLOSE); st.template_stack.pop(); st.refresh(); if st.hot { bound = 0; } pos += ${tlen(el.holeClose)}; continue;
         }
 `;
   const heads = new Map<number, string>();
@@ -597,24 +597,26 @@ ${raw ? `        if st.template_stack.last() == Some(&3) {
             st.emit(pos, re as usize, rk as u16, 0); st.template_stack.pop(); st.refresh(); pos = re as usize; continue;
         }
 ` : ''}`;
-  // Code outside element frames pays one test per round (\`hot\`, kept by every change of the
-  // frame stack's top${sig ? ' and of the speculation' : ''}); the loop condition is the plain lexer's.
-  const loopBody = `        if st.hot {
-${sig ? '        if st.spec_on && st.spec_step(&mut sp) { pos = st.spec_rewind(&mut sp, src, n, false); continue; }\n' : ''}${frameStep}        }
+  // The plain rounds (code outside element frames) are the inner loop, whose only bound is
+  // \`bound\`: the input's end while no element work is pending, so its condition is the plain
+  // lexer's; one round (pos + 1) after the frame step lexed nothing; 0 once a round makes work (an
+  // element entered or back on top${sig ? ', a signature begun' : ''}). The work (\`hot\`, kept by every change of the
+  // frame stack's top${sig ? ' and of the speculation' : ''}) is the outer loop's, so no plain round tests it.
+  // ${sig ? 'A speculation lexes past the token limit to its verdict (the limit is tested first); one that\n  // reaches the end of the input (or a lexer error, its verdict) is rewound at the head.' : ''}
+  const more = `pos < n && (limit == 0 || st.acc.len() - base < limit${sig ? ' || st.spec_on' : ''})`;
+  const loop = `    loop {
+        if !(${more}) {
+${sig ? '            if st.spec_on { st.spec_step(&mut sp); pos = st.spec_rewind(&mut sp, src, n, st.err.is_some()); st.err = None; continue; }\n' : ''}            break;
+        }
+        let mut bound = n;
+        if st.hot {
+${sig ? '        if st.spec_on && st.spec_step(&mut sp) { pos = st.spec_rewind(&mut sp, src, n, false); continue; }\n' : ''}${frameStep}        bound = pos + 1;
+        }
+    while pos < bound && (limit == 0 || st.acc.len() - base < limit${sig ? ' || st.spec_on' : ''}) {
         let c = b[pos] as u32;
 ${pre}${cascade}
-${p.uniIdentOrPanic}`;
-  // A speculation lexes past the token limit to its verdict (the limit stays the loop's invariant,
-  // so a whole-input lex tests it once, as the plain lexer does); one that reaches the end of the
-  // input (or a lexer error, its verdict) is rewound after the loop.
-  const loop = sig ? `    loop {
-    while pos < n && (limit == 0 || st.acc.len() - base < limit || st.spec_on) {
-${loopBody}
+${p.uniIdentOrPanic}
     }
-    if !st.spec_on { break; }
-    st.spec_step(&mut sp); pos = st.spec_rewind(&mut sp, src, n, st.err.is_some()); st.err = None;
-    }` : `    while pos < n && (limit == 0 || st.acc.len() - base < limit) {
-${loopBody}
     }`;
   const rxParams = rx ? 'prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool, ' : '';
   const rxTy = rx ? 'u16, u16, u16, bool, bool, Vec<bool>, bool, bool, ' : '';
@@ -748,6 +750,8 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const tplOpenByte = tpl && tlen(tpl.open) === 1 ? firstUnit(tpl.open, UNITS) : null;
   // The element lexer keeps whether the frame stack's top has work (ElScan::refresh).
   const elRefresh = el ? ' st.refresh();' : '';
+  // a closer can bring an element frame back on top: the round ends the plain rounds (bound)
+  const elRefreshClose = el ? ' st.refresh(); if st.hot { bound = 0; }' : '';
   const tplLits = shared.templateLiterals(ir, ids.lids.slice(1));
   const tplOpenArm = tplOpenByte !== null ? `        ${tplOpenByte} => {
             let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl!.open)}, ${rx ? '!st.prev_is_value()' : 'true'}); if e < 0 { ${errAt} = Some(_lex_tpl_err(e, n)); pos = n; continue; } let e = e as usize;
@@ -769,7 +773,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const tplCloseTest = tpl ? `        if !st.template_stack.is_empty() && ${startByteEq('pos', tpl.interpClose)} && *st.template_stack.last().unwrap() == 0 {
             st.template_stack.pop();
             let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.interpClose)}, false); if e < 0 { ${errAt} = Some(_lex_tpl_err(e, n)); pos = n; continue; } let e = e as usize;
-            if interp { st.emit(pos, e, ${kidOf(ids, "$templateMiddle")}, ${lidCall(tplLits.middle, '&b[pos..e]')}); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, "$templateTail")}, ${lidCall(tplLits.tail, '&b[pos..e]')}); }${elRefresh}
+            if interp { st.emit(pos, e, ${kidOf(ids, "$templateMiddle")}, ${lidCall(tplLits.middle, '&b[pos..e]')}); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, "$templateTail")}, ${lidCall(tplLits.tail, '&b[pos..e]')}); }${elRefreshClose}
             pos = e; continue;
         }
 ` : '';
