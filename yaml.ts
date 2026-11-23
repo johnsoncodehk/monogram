@@ -10,7 +10,7 @@
 import {
   token, rule, defineGrammar, alt, many, many1, opt, not, noCommentBefore, noMultilineFlowBefore,
   altPattern, optPattern, seq, oneOf, noneOf, range, star, plus, repeat, followedBy, notFollowedBy,
-  precededBy, notPrecededBy, never, start, end,
+  precededBy, notPrecededBy, never, lineStart, end,
 } from './src/api.ts';
 import type { IndentConfig } from './src/types.ts';
 
@@ -35,12 +35,12 @@ const hashAfterNonSpace = seq('#', precededBy(seq(nonWhitespace, '#')));
 // `---foo` / `...bar` are plain scalars, and a `---` / `...` that OPENS A VALUE (`note: --- x`,
 // `x: ... bar`) is string content, not a marker. The parser already constrains the markers to stream
 // position structurally (DocStart / DocEnd are referenced only in the Stream grammar), so the CST is
-// unchanged; the line-start `start()` anchor carries that same column-0 constraint into the FLAT
+// unchanged; the `lineStart()` anchor carries that same column-0 constraint into the FLAT
 // derived highlighter, which otherwise retries the marker pattern at every token boundary and would
 // scope a value-leading `---` as a document marker (monogram#23). Scoped `entity.other.document.*`.
 const docMarkerEnd = followedBy(altPattern(oneOf('\t', ' '), '\r', '\n', end()));
-const DocStart = token(seq(start(), '---', docMarkerEnd), { scope: 'entity.other.document.begin' });
-const DocEnd = token(seq(start(), '...', docMarkerEnd), { scope: 'entity.other.document.end' });
+const DocStart = token(seq(lineStart(), '---', docMarkerEnd), { scope: 'entity.other.document.begin' });
+const DocEnd = token(seq(lineStart(), '...', docMarkerEnd), { scope: 'entity.other.document.end' });
 // A `#` is a comment indicator only at line start or AFTER whitespace (YAML §6.6); a `#` glued to a
 // non-space char is content, not a comment (`a#b` is a plain scalar, `%YAML 1.1#…` keeps the `#…` as
 // directive content — monogram#12 #8). The `notPrecededBy(nonWhitespace)` guard (a fixed-width, portable
