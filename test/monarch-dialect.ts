@@ -281,7 +281,55 @@ for (const [name, file, g] of [['jsx', 'javascriptreact.monarch.json', jsx], ['t
   tokRow('dynamic close tag', 'pass', undefined, mon, src, 'tag}>', 0, is('identifier'));
   // the region features of later landings (each its own step, docs/REGIONS.md "Owed")
   const lsrc = 'component Page() { <main>a /* note */ @if (x) { y } <style>.a { color: red; }</style></main> }';
-  tokRow('`/* note */` in text is a comment (textTokens)', 'xfail', 'text tokens are not in the Monarch children yet', mon, lsrc, 'note', 0, is('comment'));
+  tokRow('`/* note */` in text is a comment (textTokens)', 'pass', undefined, mon, lsrc, 'note', 0, is('comment'));
+  // text tokens (`textTokens`): tried before the text run; a run stops before one, `//` only
+  // right after a blank (its `after` class) inside a run, anywhere at a run's start
+  const tsrc = [
+    'component Page() {',
+    '  <main>a /* note */ b a//b x // tail',
+    // a line comment in text runs to the end of the line, over a close tag too
+    '    <p>// lead </p> still the comment',
+    '    </p><p>{q}// hole',
+    '    </p><p>/* c */// both',
+    '    </p>',
+    '    <p>see https://x.y and 1 <-// not a tag</p>',
+    '    <p>m /* one',
+    '      two */ after</p>',
+    '  </main>',
+    '}',
+  ].join('\n');
+  tokRow('a block comment in a text run', 'pass', undefined, mon, tsrc, 'note', 0, is('comment'));
+  tokRow('text after a block comment', 'pass', undefined, mon, tsrc, ' b', 0, is(''));
+  tokRow('`a//b` is text (`//` only after a blank)', 'pass', undefined, mon, tsrc, '//b', 0, is(''));
+  tokRow('`x // tail`: `//` after a blank is a line comment', 'pass', undefined, mon, tsrc, 'tail', 0, is('comment'));
+  tokRow('`//` at the start of the children is a line comment', 'pass', undefined, mon, tsrc, 'lead', 0, is('comment'));
+  tokRow('a line comment in text runs to the end of the line, over `</p>`', 'pass', undefined, mon, tsrc, 'still', 0, is('comment'));
+  tokRow('the close tag on the line after a line comment in text', 'pass', undefined, mon, tsrc, '</p>', 1, is('delimiter.tag'));
+  tokRow('`//` right after a hole is a line comment (a new run)', 'pass', undefined, mon, tsrc, 'hole', 0, is('comment'));
+  tokRow('`//` right after a block comment is a line comment', 'pass', undefined, mon, tsrc, 'both', 0, is('comment'));
+  tokRow('`https://x.y` is text', 'pass', undefined, mon, tsrc, '//x', 0, is(''));
+  tokRow('`<-//`: a `<` that opens no tag is text, and `//` with no blank before it too', 'pass', undefined, mon, tsrc, '// not', 0, is(''));
+  tokRow('a block comment over lines in text', 'pass', undefined, mon, tsrc, 'two', 0, is('comment'));
+  tokRow('text after a block comment over lines', 'pass', undefined, mon, tsrc, 'after', 0, is(''));
+  tokRow('an unterminated `/*` in text is text', 'xfail', 'a block comment is a pushed state: an unterminated `/*` runs to the next `*/` or the end of the file (the lexer finds no end, so it is text)', mon, 'component C() {\n  <p>a /* b</p>\n  <p>c</p>\n}', 'c</p>', 0, is(''));
+  // the interpreter's stream drops skipped tokens: a comment is a non-blank unit between two
+  // tokens (in this source every other unit, text included, is in a token)
+  rows.push({ section, id: 'the units the interpreter skips as comments are exactly the Monarch comments', status: 'pass', check: () => {
+    const lex = createParser(textDialect).tokenize(tsrc) as { type: string; text: string; offset: number }[];
+    const skipped = new Set<number>();
+    let at = 0;
+    for (const t of [...lex, { offset: tsrc.length, text: '' }]) {
+      for (let i = at; i < t.offset; i++) if (!/\s/.test(tsrc[i])) skipped.add(i);
+      at = Math.max(at, t.offset + t.text.length);
+    }
+    const commented = new Set<number>();
+    for (const x of tokenize(mon(), tsrc)) if (x.token === 'comment') for (let i = 0; i < x.text.length; i++) if (!/\s/.test(x.text[i])) commented.add(x.start + i);
+    const only = (a: Set<number>, b: Set<number>) => [...a].filter(i => !b.has(i));
+    const show = (xs: number[]) => xs.length ? JSON.stringify(xs.map(i => tsrc[i]).join('')) : '';
+    const missing = only(skipped, commented), extra = only(commented, skipped);
+    const bad = [missing.length ? `not comments in Monarch: ${show(missing)}` : '', extra.length ? `comments only in Monarch: ${show(extra)}` : ''].filter(Boolean);
+    return { ok: bad.length === 0 && skipped.size > 0, saw: bad.length ? bad.join('; ') : `${skipped.size} units` };
+  } });
   tokRow('`@if` in children is a directive keyword', 'xfail', 'directives are not in the Monarch children yet', mon, lsrc, '@if', 0, is('keyword'));
   tokRow('a `<style>` body is raw: its `{` opens no hole (rawText)', 'pass', undefined, mon, lsrc, '{ color', 0, t => t !== 'delimiter.bracket');
   // raw text (`rawText`): the body is the declared embed's language (`nextEmbedded`), up to the
