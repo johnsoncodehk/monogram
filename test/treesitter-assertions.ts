@@ -39,11 +39,14 @@ const RENDERED: AssertionClass[] = ['lowered', 'reserved-set'];
 // the heritage's own reserved-guarded identifier arm is NewTarget's (reserved-set -1); JavaScript's
 // six `not('extends')` list guards are gone with its list (lookahead1 -6); in TypeScript one
 // `sameLine` moves from lowered to scanner (lowered -1, scanner +1).
+// The expression identifier refuses every reserved word (land/shape-ident-reserved): the
+// `not('super')` / `not('new')` beside its reserved-word guard (Expr and NewTarget) are gone, those
+// words now in the guard's set (reserved -4; the set stays rendered).
 const PINNED: Record<string, Partial<Record<AssertionClass, number>>> = {
-  javascript:      { lowered: 43,  vacuous: 6,  'reserved-set': 45, scanner: 0,  reserved: 4, lookahead1: 17, lookahead: 8 },
-  typescript:      { lowered: 132, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 4, lookahead1: 89, lookahead: 69, 'left-context': 2 },
-  javascriptreact: { lowered: 45,  vacuous: 6,  'reserved-set': 45, scanner: 0,  reserved: 4, lookahead1: 17, lookahead: 8 },
-  typescriptreact: { lowered: 134, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 4, lookahead1: 89, lookahead: 69, 'left-context': 2 },
+  javascript:      { lowered: 43,  vacuous: 6,  'reserved-set': 45, scanner: 0,  reserved: 0, lookahead1: 17, lookahead: 8 },
+  typescript:      { lowered: 132, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 0, lookahead1: 89, lookahead: 69, 'left-context': 2 },
+  javascriptreact: { lowered: 45,  vacuous: 6,  'reserved-set': 45, scanner: 0,  reserved: 0, lookahead1: 17, lookahead: 8 },
+  typescriptreact: { lowered: 134, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 0, lookahead1: 89, lookahead: 69, 'left-context': 2 },
   yaml:            { lowered: 1,  scanner: 16, lookahead1: 6 },
 };
 

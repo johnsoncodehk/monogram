@@ -482,7 +482,7 @@ fn schema_for(etype: &str, alt: u32) -> &'static Schema {
         ("BinaryExpression", 10, &SC_BINARY),
         ("CallExpression", 2, &SC_CALL),
         ("CallExpression", 4, &SC_CALL4),
-        ("MetaProperty", 7, &SC_METAPROP7),
+        ("MetaProperty", 6, &SC_METAPROP6),
         ("TSInstantiationExpression", 1, &SC_TSINSTANTIATION),
         ("TSSatisfiesExpression", 11, &SC_TSSATISFIES),
         ("MemberExpression", 0, &SC_MEMBEREXPR0),
@@ -1936,7 +1936,7 @@ const SC_CALL4: Schema = Schema {
     ],
 };
 
-const SC_METAPROP7: Schema = Schema {
+const SC_METAPROP6: Schema = Schema {
     estree: "MetaProperty", no_type: false,
     kids: &[],
     any_kids: false,
