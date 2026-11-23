@@ -328,17 +328,23 @@ const modifierRun = (words: string[], opts: ModifierOpts & { treeSitterOmits?: s
   const rest = modifierWord(words.filter(w => w !== 'static'), opts);
   const shown = words.filter(w => !opts.treeSitterOmits?.includes(w));
   const tsAny = shown.length === words.length ? strictAny : modifierWord(shown, opts);
+  // The words are named: `modifier` before the `static` slot, `staticModifier`, `modifierAfterStatic`
+  // (`runNamed` names them otherwise, for a second run in one scope).
+  const runNamed = (m: string, s: string, a: string) => tsRelax([many(field(m, rest)), opt(field(s, stat), many(field(a, rest)))], many(tsAny));
   return {
-    any: tsAny === strictAny ? strictAny : tsRelax(strictAny, tsAny), stat, rest,
-    run: tsRelax([many(rest), opt(stat, many(rest))], many(tsAny)),
-    run1: tsRelax(alt([many1(rest), opt(stat, many(rest))], [stat, many(rest)]), many1(tsAny)),
+    any: tsAny === strictAny ? strictAny : tsRelax(strictAny, tsAny), stat, rest, runNamed,
+    run: runNamed('modifier', 'staticModifier', 'modifierAfterStatic'),
+    run1: tsRelax(alt(
+      arm('plain', many1(field('modifier', rest)), opt(field('staticModifier', stat), many(field('modifierAfterStatic', rest)))),
+      arm('static_', field('staticModifier', stat), many(field('modifierAfterStatic', rest))),
+    ), many1(tsAny)),
   };
 };
 
 // A class expression's decorators and modifiers (tsc's parseDecoratedExpression, entered at a
 // `@`): every modifier word but `const` (a modifier only before `enum`).
 const classExprMods = modifierRun(['abstract', 'accessor', 'async', 'declare', 'default', 'export', 'in', 'out', 'override', 'private', 'protected', 'public', 'readonly', 'static'], { secondRun: true });
-const classExprPrefix = opt(many1(DecoratorExpr), classExprMods.run, opt(many1(DecoratorExpr), classExprMods.run));
+const classExprPrefix = opt(many1(field('decorator', DecoratorExpr)), classExprMods.run, opt(many1(field('decoratorRest', DecoratorExpr)), classExprMods.runNamed('modifierRest', 'staticModifierRest', 'modifierRestAfterStatic')));
 
 // An object-literal member is tsc's parseObjectLiteralElement: a spread, or a modifier run
 // (parseModifiers) and then one member. The run is one list in which `async` is a word like the
@@ -442,12 +448,17 @@ const ClassHeritage = rule($ => classHeritageArms($, Expr, NewTarget,
 // which renders no lookahead, keeps the plain list of elements (tsRelax): the two branches and the
 // `{}` guard would only be one more conflict and dropped lookaheads there.
 const heritageFollowers = alt(',', '{', 'extends', 'implements');
-const heritageElement = alt([not(alt('extends', 'implements')), not(['{', '}', not(heritageFollowers)]), ClassHeritage]);
-const heritageList = [tsRelax(alt([not(alt(['{', not('}')], ['{', '}', heritageFollowers])), sep(heritageElement, ',')], [heritageElement, opt(',', sep(heritageElement, ','))]), sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ','))];
-const heritageClauses = many(alt(
-  ['extends', ...heritageList],
-  ['implements', ...heritageList],
-));
+// Named: each clause `heritage` (`extends_` / `implements`); its elements `element` (the first, in
+// the branch that starts with one) and `elementRest`; an element's expression `base`.
+const heritageElement = alt([not(alt('extends', 'implements')), not(['{', '}', not(heritageFollowers)]), field('base', ClassHeritage)]);
+const heritageList = [tsRelax(field('elements', alt(
+  arm('list', not(alt(['{', not('}')], ['{', '}', heritageFollowers])), sep(field('elementRest', heritageElement), ',')),
+  arm('first', field('element', heritageElement), opt(',', sep(field('elementRest', heritageElement), ','))),
+)), sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ','))];
+const heritageClauses = many(field('heritage', alt(
+  arm('extends_', field('keyword', 'extends'), ...heritageList),
+  arm('implements', field('keyword', 'implements'), ...heritageList),
+)));
 
 // The `new` callee forms are JavaScript's (`newTargetArms`, javascript.ts); a TypeScript `new`
 // may take type arguments, and so may a template's tag.
@@ -586,8 +597,8 @@ const Expr = rule($ => [
   // decorators, modifier words, a second decorator run after `export` / `default`, then `class`
   // (`x = @d @e class C {}`, `x = @d export @e class {}`, `x = @d abstract class {}`; without a
   // decorator a modifier word is an identifier, so `x = abstract class {}` has no parse).
-  [classExprPrefix, 'class', ...bindingIdentifier, opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],
-  [classExprPrefix, 'class', opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],
+  arm('namedClass', classExprPrefix, 'class', ...bindingName, opt(field('typeParameters', TypeParams)), heritageClauses, '{', many(field('member', ClassMember)), '}'),
+  arm('anonymousClass', classExprPrefix, 'class', opt(field('typeParameters', TypeParams)), heritageClauses, '{', many(field('member', ClassMember)), '}'),
   ['<', Type, '>', $],
 ]);
 
@@ -846,7 +857,7 @@ const indexSignatureStart = ['[', alt(
   [alt(modifierKindWord, bindingIdentifier), alt(':', ',', ['?', alt(':', ',', ']')])],
 )];
 const indexSignature = [not(not(indexSignatureStart)), '[', sep(typeFnParam(), ','), ']', opt(':', Type), typeMemberEnd()];
-const propertyOrMethodName = [not(indexSignatureStart), MemberName];
+const propertyOrMethodName = [not(indexSignatureStart), field('key', MemberName)];
 
 // Branched: parse the modifier list ONCE, then branch on the member kind, so a
 // member's shared `modifiers …` prefix isn't re-parsed per alternative. Inner
@@ -867,7 +878,7 @@ const accessorMod = modifierWord(['get', 'set']);
 // takes `async` as often as it can follow: `async async x() {}`, `static async async x() {}`).
 // (tree-sitter keeps its plain run of words: `async` there would be one more modifier-vs-name
 // decision against the method name `async` in its GLR table.)
-const asyncWords = tsRelax(many(alt(Modifier, asyncMod)), many(Modifier));
+const asyncWords = tsRelax(many(field('wordAfterAsync', alt(Modifier, asyncMod))), many(Modifier));
 // The single `static` slot spans the whole member, and the words go on after `async`
 // (`static async x`, `async static x`). `modRun` gives the leading run its shape; the words
 // after `async` are a plain repetition, because a second run shape there multiplies the
@@ -882,7 +893,7 @@ const staticTwice = [many(alt(classMods.rest, asyncMod)), classMods.stat, many(a
 // '@' as belonging to THIS property ("Decorators must precede the name and all keywords") —
 // `x @dec y()` and `x = 1 @dec y()` reject, `x; @dec` and newline accept. The `!` sits on the
 // name's line (tsc takes it only without a line break).
-const fieldTail = [opt(sameLine, '!'), opt('?'), opt(':', Type), opt('=', resetCtx(Expr)), asi()];
+const fieldTail = [opt(sameLine, field('exclamation', '!')), opt(field('question', '?')), opt(':', field('type', Type)), opt('=', resetCtx(field('value', Expr))), asi()];
 // Class member ( params ): T body, params+body routed to a [Await]/[Yield] family:
 // plain methods reset (a method body has its OWN, non-inherited context — the spec's
 // implicit function boundary), generators yield, async await, async-generators both.
@@ -891,10 +902,10 @@ const fieldTail = [opt(sameLine, '!'), opt('?'), opt(':', Type), opt('=', resetC
 // The body is a function declaration's (tsc's parseFunctionBlockOrSemicolon): a block, after
 // which nothing is needed (a `;` there is an empty class element of its own), or none, and
 // then the member ends as a statement does.
-const memTail = (ctx) => ['(', sep(ctx(Param), ','), ')', opt(":", ReturnType), ctx(fnBodyOrAsi())];
+const memTail = (ctx) => ['(', sep(ctx(field('parameter', Param)), ','), ')', opt(":", ReturnType), ctx(field('body', fnBodyOrAsi()))];
 const ClassMember = rule($ => [
-  ';',   // tsc's SemicolonClassElement: `class C { ; }` is parse-clean
-  [many(DecoratorExpr), many(Modifier), 'static', awaitCtx(Block)],   // static block body is [+Await] (await reserved); decorators/modifiers parse (SEMANTIC errors)
+  arm('empty', ';'),   // tsc's SemicolonClassElement: `class C { ; }` is parse-clean
+  arm('staticBlock', many(field('decorator', DecoratorExpr)), many(field('modifier', Modifier)), field('staticKeyword', 'static'), awaitCtx(field('block', Block))),   // static block body is [+Await] (await reserved); decorators/modifiers parse (SEMANTIC errors)
   // decorators PREFIX a member, before any modifier — tsc parse-rejects
   // `public @dec method()` ("Decorators are not valid here") and an orphan
   // `@dec` with no member, which a standalone sibling alternative tolerated.
@@ -903,23 +914,23 @@ const ClassMember = rule($ => [
   // takes no same-line `@` after modifier words none of which is a class-member modifier, unless
   // the member starts with a decorator) the TextMate generator runs out of memory (2 GB heap,
   // `npm run gen`), as with a second run shape after `async` (`staticTwice` below).
-  [
-    many(DecoratorExpr),
+  arm('member',
+    many(field('decorator', DecoratorExpr)),
     not(staticTwice),
     modRun,
-    alt(
+    field('form', alt(
       // `async` is order-free among modifiers (tsc parses any order; the checker
       // validates), so it carries its own inner modifier run and an async member's
       // body is [+Await]/[+Await,+Yield].
-      [asyncMod, asyncWords, '*', MemberName, opt('?'), opt(TypeParams), ...memTail(asyncGenCtx)],   // async generator method
-      [asyncMod, asyncWords, accessorMod, MemberName, opt(TypeParams), '(', opt(sep(awaitCtx(Param), ',')), ')', opt(":", ReturnType), awaitCtx(fnBodyOrAsi())],  // async accessor (semantic error; parses)
-      [asyncMod, asyncWords, 'static', awaitCtx(Block)],                              // `async static { }` (semantic error; parses)
-      [asyncMod, asyncWords, not(accessorMod), ...propertyOrMethodName, opt('?'), opt(TypeParams), ...memTail(awaitCtx)],   // async method
-      ['*', MemberName, opt('?'), opt(TypeParams), ...memTail(yieldCtx)],                // generator method
-      [accessorMod, MemberName, opt(TypeParams), '(', opt(sep(resetCtx(Param), ',')), ')', opt(":", ReturnType), resetCtx(fnBodyOrAsi())],  // accessor (type params parse; semantic error)
+      arm('asyncGeneratorMethod', field('asyncWord', asyncMod), asyncWords, field('asterisk', '*'), field('key', MemberName), opt(field('question', '?')), opt(field('typeParameters', TypeParams)), ...memTail(asyncGenCtx)),   // async generator method
+      arm('asyncAccessor', field('asyncWord', asyncMod), asyncWords, field('kind', accessorMod), field('key', MemberName), opt(field('typeParameters', TypeParams)), '(', opt(sep(awaitCtx(field('parameter', Param)), ',')), ')', opt(":", ReturnType), awaitCtx(field('body', fnBodyOrAsi()))),  // async accessor (semantic error; parses)
+      arm('asyncStaticBlock', field('asyncWord', asyncMod), asyncWords, field('staticKeyword', 'static'), awaitCtx(field('block', Block))),                              // `async static { }` (semantic error; parses)
+      arm('asyncMethod', field('asyncWord', asyncMod), asyncWords, not(accessorMod), ...propertyOrMethodName, opt(field('question', '?')), opt(field('typeParameters', TypeParams)), ...memTail(awaitCtx)),   // async method
+      arm('generatorMethod', field('asterisk', '*'), field('key', MemberName), opt(field('question', '?')), opt(field('typeParameters', TypeParams)), ...memTail(yieldCtx)),                // generator method
+      arm('accessor', field('kind', accessorMod), field('key', MemberName), opt(field('typeParameters', TypeParams)), '(', opt(sep(resetCtx(field('parameter', Param)), ',')), ')', opt(":", ReturnType), resetCtx(field('body', fnBodyOrAsi()))),  // accessor (type params parse; semantic error)
       // index signature, after any modifiers (`async` among them, as in tsc): the type member's
       // one form (`indexSignature`), so a bracket that starts one is no method or field name.
-      [opt(asyncMod, asyncWords), ...indexSignature],
+      arm('indexSignature', opt(field('asyncWord', asyncMod), asyncWords), ...indexSignature),
       // a bare identifier `constructor` member MUST be a call signature — tsc rejects a
       // `constructor` field/property ("'(' expected"): `constructor;`, `constructor = 1`,
       // `constructor: T`, even modified (`public constructor;`). TypeParams parse; `?`/`!`
@@ -927,18 +938,18 @@ const ClassMember = rule($ => [
       // so it stays a valid field (the `not('constructor')` generic arm below covers it).
       // Every constructor is this branch: bare (`constructor() {}`), decorated, modified or an
       // overload without a body.
-      ['constructor', opt(TypeParams), ...memTail(resetCtx)],
+      arm('constructor', field('constructorKeyword', 'constructor'), opt(field('typeParameters', TypeParams)), ...memTail(resetCtx)),
       // `get` / `set` before an accessor name IS the accessor keyword (tsc commits to the
       // accessor), so it is not available as a field name there: `get⏎x = 1` rejects.
-      [not('constructor'), not(accessorMod), ...propertyOrMethodName, alt(
-        [opt('?'), opt(TypeParams), ...memTail(resetCtx)],                       // method (requires `(`)
-        fieldTail,
-      )],
+      arm('named', not('constructor'), not(accessorMod), ...propertyOrMethodName, field('tail', alt(
+        arm('method', opt(field('question', '?')), opt(field('typeParameters', TypeParams)), ...memTail(resetCtx)),                       // method (requires `(`)
+        arm('field', ...fieldTail),
+      ))),
       // `async` is a modifier like any other to tsc, so it may also precede a field
       // (`async x;` parses; the checker rejects it).
-      [asyncMod, asyncWords, not('constructor'), not(accessorMod), ...propertyOrMethodName, ...fieldTail],
-    ),
-  ],
+      arm('asyncField', field('asyncWord', asyncMod), asyncWords, not('constructor'), not(accessorMod), ...propertyOrMethodName, ...fieldTail),
+    )),
+  ),
 ]);
 
 const EnumMember = rule($ => [
@@ -1014,8 +1025,8 @@ const ModuleReference = rule($ => [
 // mirroring the class-expression pair. Decl writes them once bare and once after a declaration's
 // prefix (below); gen-tm expands them to recover the `class Ident … { … }` shape for highlighting.
 const classDecls = [
-  ['class', ...bindingIdentifier, opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],
-  ['class', opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],
+  arm('namedClass', 'class', ...bindingName, opt(field('typeParameters', TypeParams)), heritageClauses, '{', many(field('member', ClassMember)), '}'),
+  arm('anonymousClass', 'class', opt(field('typeParameters', TypeParams)), heritageClauses, '{', many(field('member', ClassMember)), '}'),
 ];
 // The modifier words of a declaration's prefix, each one a modifier only where `modifierWord`
 // says so (`public @d class C {}`, `abstract @d class C {}` have no parse); the `declare`,
@@ -1079,12 +1090,12 @@ const Decl = rule($ => [
   // one or more declarations and no trailing comma (tsc's parser takes `var;` and `var a,` and its
   // checker reports them: docs/CORRECTNESS.md). The branches part at
   // the token after the prefix, so the first that matches is the only one.
-  [alt([many1(DecoratorExpr), decoratedMods.run], declMods.run1), alt(
+  arm('prefixed', field('prefix', alt(arm('decorated', many1(field('decorator', DecoratorExpr)), decoratedMods.run), arm('modified', declMods.run1))), field('declaration', alt(
     ...classDecls,
-    [not('static'), $],
+    arm('other', not('static'), field('decl', $)),
     [alt('let', 'const', 'var'), Binding, many(',', Binding), asi()],
     [opt('await'), 'using', not(alt('[', '{')), Binding, many(',', Binding), asi()],
-  )],
+  ))),
   // A leading `async` before a declaration other than a function: tsc's parser accepts it (the
   // checker rejects `async class`). `async function` MUST take the async-function arm so its
   // params/body carry the [Await] context — otherwise this lenient prefix would catch the async
