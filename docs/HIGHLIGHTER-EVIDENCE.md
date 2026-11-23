@@ -210,8 +210,21 @@ after it shift into it. `test/treesitter-verdicts.ts` parses `a OP1 c OP2 d` for
 every connector, nested both ways, with every prefix and postfix operator, and where both accept
 compares tree-sitter's expression spans with the interpreter's; the pairs still bracketed differently
 are recorded as `brackets` entries. Two classes remain: `yield a OP c` (the precedence table's prefix `yield` beside the
-`yield` expression arm) and, in TypeScript, the type-argument `<` continuation taking `-a < c` and
-`a < c < d` from the relational reading. The same corpus records over-acceptances, not defects of the
+`yield` expression arm; it stays until that entry's overlap with the arm is resolved in the engine) and,
+in TypeScript, `type-arguments-lt-over-relational` (13 pairs: `-a < c`, `typeof a < c`, `a < c < d`,
+`a in c < d`), built as `-(a < c)`. After `- a` with `<` next, one parse state holds three actions:
+reduce the prefix operator (binding power 29), shift the relational `<` (20) and shift the
+type-argument `<` (the continuations' 36). A reduce between the two shifts is unresolved, so the
+declared `[expr]` conflict forks: one fork reduces and reads `(-a) < c`; the other shifts, and since
+the shift carries the relational item with the type-argument one, it reads `-(a < c)` once the type
+arguments fail at `;`. Both trees hold the same productions, so dynamic precedence (a sum over the
+tree) cannot prefer one, and tree-sitter's tie-break picks the second. Neither number can move: a
+type-argument `<` below the prefix level builds `(a + f)<T>(x)` for `a + f<T>(x)`, a relational `<`
+above it builds `a + (b < c)`. Telling the two `<` apart needs a different token where both are valid,
+decided as tsc and the interpreter decide it (a speculative type-argument list, then the next token);
+a scanner cannot run the Type grammar, and an approximate scan is not taken. A binary left operand
+(`a - b < c`, `a * b < c`) forks the same way, but there the tie-break happens to pick the
+interpreter's tree. The same corpus records over-acceptances, not defects of the
 bracketing: an assignment whose target is not a LeftHandSideExpression (`a + c = d;`, `-a = c;`,
 `a++ ??= c;`) and a unary operand of `**` (`-a ** c;`) parse in tree-sitter (59 JavaScript and 63
 TypeScript pairs), since its CFG has no assignment-target or `noUnaryLhs` condition.
