@@ -133,7 +133,7 @@ module.exports = grammar({
       "false",
       "null",
       "this",
-      seq("super", choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq(".", choice(reserved("unreserved", $.ident), $.private_field)), seq("[", $.expr, "]"))),
+      seq("super", choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq(".", choice(reserved("unreserved", $.ident), $.private_field)), seq("[", $.expr, repeat(seq(",", $.expr)), "]"))),
       choice(reserved("reserved_1", $.ident), $._names_1),
       $.number,
       $.string,
@@ -142,8 +142,8 @@ module.exports = grammar({
       seq("...", $.expr),
       prec.left(18, seq($.expr, "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")),
       prec.left(18, seq($.expr, ".", choice(reserved("unreserved", $.ident), $.private_field))),
-      prec.left(18, seq($.expr, "?.", choice(reserved("unreserved", $.ident), $.private_field, seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("[", $.expr, "]"), $.template))),
-      prec.left(18, seq($.expr, "[", $.expr, "]")),
+      prec.left(18, seq($.expr, "?.", choice(reserved("unreserved", $.ident), $.private_field, seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("[", $.expr, repeat(seq(",", $.expr)), "]"), $.template))),
+      prec.left(18, seq($.expr, "[", $.expr, repeat(seq(",", $.expr)), "]")),
       prec.left(18, seq($.expr, "?", $.expr, ":", $.expr)),
       prec.left(18, seq($.expr, "instanceof", $.expr)),
       prec.left(18, seq($.expr, "in", $.expr)),
@@ -178,9 +178,9 @@ module.exports = grammar({
 
     member_name: $ => choice(choice(reserved("unreserved", $.ident), $._names_2), $.private_field, $.string, $.number, $.hex_number, $.octal_number, $.binary_number, $.big_int, seq("[", $.expr, "]")),
 
-    new_target: $ => choice("true", "false", "null", "this", choice(reserved("reserved_1", $.ident), $._names_3), $.number, $.hex_number, $.octal_number, $.binary_number, $.big_int, $.string, $.regex_literal, seq("super", choice(seq(".", reserved("unreserved", $.ident)), seq("[", $.expr, "]"))), seq("new", ".", "target"), seq("import", ".", "meta"), prec.right(seq("new", $.new_target, optional(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")))), $.template, seq("[", optional($.expr), repeat(seq(",", optional($.expr))), "]"), seq("{", optional(seq($.prop, repeat(seq(",", $.prop)), optional(","))), "}"), seq("function", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("function", "*", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", $._same_line_3, "function", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", $._same_line_3, "function", "*", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($.new_target, ".", choice(reserved("unreserved", $.ident), $.private_field)), seq($.new_target, "[", $.expr, "]"), seq($.new_target, $.template), seq("(", $.expr, repeat(seq(",", $.expr)), ")")),
+    new_target: $ => choice("true", "false", "null", "this", choice(reserved("reserved_1", $.ident), $._names_3), $.number, $.hex_number, $.octal_number, $.binary_number, $.big_int, $.string, $.regex_literal, seq("super", choice(seq(".", reserved("unreserved", $.ident)), seq("[", $.expr, repeat(seq(",", $.expr)), "]"))), seq("new", ".", "target"), seq("import", ".", "meta"), prec.right(seq("new", $.new_target, optional(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")))), $.template, seq("[", optional($.expr), repeat(seq(",", optional($.expr))), "]"), seq("{", optional(seq($.prop, repeat(seq(",", $.prop)), optional(","))), "}"), seq("function", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("function", "*", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", $._same_line_3, "function", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq("async", $._same_line_3, "function", "*", optional(field('name', reserved("reserved_1", $.ident))), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($.new_target, ".", choice(reserved("unreserved", $.ident), $.private_field)), seq($.new_target, "[", $.expr, repeat(seq(",", $.expr)), "]"), seq($.new_target, $.template), seq("(", $.expr, repeat(seq(",", $.expr)), ")")),
 
-    class_heritage: $ => choice($.new_target, seq("class", optional(field('name', reserved("reserved_1", $.ident))), optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}"), seq($.class_heritage, ".", choice(reserved("unreserved", $.ident), $.private_field)), seq($.class_heritage, "?.", choice(reserved("unreserved", $.ident), $.private_field, seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("[", $.expr, "]"), $.template)), seq($.class_heritage, "[", $.expr, "]"), seq($.class_heritage, "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq($.class_heritage, $.template)),
+    class_heritage: $ => choice($.new_target, seq("class", optional(field('name', reserved("reserved_1", $.ident))), optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}"), seq($.class_heritage, ".", choice(reserved("unreserved", $.ident), $.private_field)), seq($.class_heritage, "?.", choice(reserved("unreserved", $.ident), $.private_field, seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("[", $.expr, repeat(seq(",", $.expr)), "]"), $.template)), seq($.class_heritage, "[", $.expr, repeat(seq(",", $.expr)), "]"), seq($.class_heritage, "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq($.class_heritage, $.template)),
 
     stmt: $ => choice($.block, seq(choice("let", "const", "var"), $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), seq("if", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt, optional(seq("else", $.stmt))), seq("for", choice(seq("(", $.for_head, ")"), seq("await", "(", $.for_await_head, ")")), $.stmt), seq("while", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt), seq("do", $.stmt, "while", "(", $.expr, repeat(seq(",", $.expr)), ")", optional(";")), seq("switch", "(", $.expr, repeat(seq(",", $.expr)), ")", "{", repeat($.switch_case), "}"), seq("return", optional(seq($._same_line_4, $.expr, repeat(seq(",", $.expr)))), choice(";", $._line_end_1)), seq("throw", $.expr, repeat(seq(",", $.expr)), choice(";", $._line_end_1)), seq("break", optional(seq($._same_line_2, reserved("reserved_1", $.ident))), choice(";", $._line_end_1)), seq("continue", optional(seq($._same_line_2, reserved("reserved_1", $.ident))), choice(";", $._line_end_1)), seq("try", $.block, optional(seq("catch", optional(seq("(", $.catch_parameter, ")")), $.block)), optional(seq("finally", $.block))), seq(choice(reserved("reserved_1", $.ident), $._names_1), ":", $.stmt), ";", seq("debugger", choice(";", $._line_end_1)), seq("with", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt), seq(optional("await"), "using", $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), $.decl, seq($.expr, repeat(seq(",", $.expr)), choice(";", $._line_end_1))),
 
@@ -190,7 +190,7 @@ module.exports = grammar({
 
     block: $ => seq("{", repeat($.stmt), "}"),
 
-    binding_property: $ => choice(seq(choice(reserved("unreserved", $.ident), $._names_2), ":", $.binding_element), seq(choice(reserved("reserved_1", $.ident), $._names_1), optional(seq("=", $.expr))), seq(choice($.string, $.number, seq("[", $.expr, "]")), ":", $.binding_element), seq("...", choice(choice(reserved("reserved_1", $.ident), $._names_1), $.binding_pattern))),
+    binding_property: $ => choice(seq(choice(reserved("unreserved", $.ident), $._names_2), ":", $.binding_element), seq(choice(reserved("reserved_1", $.ident), $._names_1), optional(seq("=", $.expr))), seq(choice($.string, $.number, $.hex_number, $.octal_number, $.binary_number, $.big_int, seq("[", $.expr, "]")), ":", $.binding_element), seq("...", choice(choice(reserved("reserved_1", $.ident), $._names_1), $.binding_pattern))),
 
     binding_element: $ => seq(choice(choice(reserved("reserved_1", $.ident), $._names_1), $.binding_pattern), optional(seq("=", $.expr))),
 
@@ -246,13 +246,13 @@ module.exports = grammar({
 
     binary_number: $ => token(/0[bB][01]+(?:_[01]+)*n?/),
 
-    big_int: $ => token(/[0-9]+(?:_[0-9]+)*n/),
+    big_int: $ => token(/(?:0|[1-9][0-9]*(?:_[0-9]+)*)n/),
 
-    number: $ => token(/(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\.[0-9]*(?:_[0-9]+)*)?|\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\-]?[0-9]+(?:_[0-9]+)*)?/),
+    number: $ => token(/(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\.(?:[0-9]+(?:_[0-9]+)*)?|)|\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\-]?[0-9]+(?:_[0-9]+)*)?/),
 
-    string: $ => token(/"(?:[^"\\]|\\(?:u\{0*(?:[0-9A-Fa-f]{1,5}|10[0-9A-Fa-f]{4})\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|[^ux]))*"|'(?:[^'\\]|\\(?:u\{0*(?:[0-9A-Fa-f]{1,5}|10[0-9A-Fa-f]{4})\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|[^ux]))*'/),
+    string: $ => token(/"(?:[^"\\\n\r]|\\(?:u\{0*(?:[0-9A-Fa-f]{1,5}|10[0-9A-Fa-f]{4})\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|\r\n|[^ux]))*"|'(?:[^'\\\n\r]|\\(?:u\{0*(?:[0-9A-Fa-f]{1,5}|10[0-9A-Fa-f]{4})\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|\r\n|[^ux]))*'/),
 
-    decorator: $ => token(/@(?:(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[a-zA-Z0-9_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\}|\.)*)?/),
+    decorator: $ => token(/@(?:(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[a-zA-Z0-9_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\}|\.#(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})|\.)*)?/),
 
     private_field: $ => token(/#(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[a-zA-Z0-9_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})*/),
 

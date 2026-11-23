@@ -141,7 +141,7 @@ function target(alt: string): Term { return branch(alt, { ident: idOf('ident'), 
 const withDefault = (left: Term): Term => iff(present('value'), node('AssignmentPattern', { left, right: child('value') }), left);
 const patternProperty = (key: Term, value: Term, flags: { shorthand: boolean; computed: Term }): Term =>
   node('Property', { method: c(false), shorthand: c(flags.shorthand), computed: flags.computed, key, value, kind: c('init') });
-const literalKey = (leaf: string, value: Term): Term => node('Literal', { value, raw: text(leaf) }, { from: leaf, to: leaf });
+const literalKey = (leaf: string, value: Term, extra: Record<string, Term> = {}): Term => node('Literal', { value, raw: text(leaf), ...extra }, { from: leaf, to: leaf });
 /** `[ E? (, E?)* ]`: whether the final element is a hole (absent): the first one when there is
  * no `,`, else the last iteration's. Both oracles drop that final hole (`[a,]` has one element). */
 export const finalHole = (first: string, over: string, rest: string): Term => fold(over, not(present(first)), 'h', not(present(rest)));
@@ -156,8 +156,12 @@ const PATTERN_RULES: Shape2Spec['rules'] = {
     pair: patternProperty(branch('key', {
       string: literalKey('string', cook('stringValue', 'string')),
       number: literalKey('number', cook('numberValue', 'number')),
+      hexNumber: literalKey('hexNumber', cook('numberValue', 'hexNumber')),
+      octalNumber: literalKey('octalNumber', cook('numberValue', 'octalNumber')),
+      binaryNumber: literalKey('binaryNumber', cook('numberValue', 'binaryNumber')),
+      bigInt: literalKey('bigInt', cook('bigintValue', 'bigInt'), { bigint: cook('bigintText', 'bigInt') }),
       computed: child('expr'),
-    }), child('value'), { shorthand: false, computed: branch('key', { string: c(false), number: c(false), computed: c(true) }) }),
+    }), child('value'), { shorthand: false, computed: match(armOf('key'), { computed: c(true) }, c(false)) }),
     rest: node('RestElement', { argument: target('argument') }),
   },
   BindingElement: { seq: withDefault(target('name')) },
@@ -300,6 +304,7 @@ const MODULE_RULES: Shape2Spec['rules'] = {
     ),
     named: child('specifier'),
     namespace: list(namespaceSpecifier),
+    deferNamespace: list(namespaceSpecifier),
   },
   ImportSpecifier: {
     renamed: node('ImportSpecifier', { imported: idOf('imported'), local: idOf('local') }),
@@ -333,7 +338,9 @@ const MODULE_DECLARATIONS: Record<string, Term> = {
     source: iff(present('source'), moduleFields.source, c(null)), attributes: iff(present('source'), moduleFields.attributes, list()),
   }),
   importDeclaration: branch('form', {
-    clause: node('ImportDeclaration', { specifiers: child('clause'), ...moduleFields }),
+    // A phase import (Stage 3; acorn has neither) carries ESTree's `phase`, as Babel's does.
+    clause: node('ImportDeclaration', { specifiers: child('clause'), ...moduleFields, phase: match(armOf('clause'), { deferNamespace: c('defer') }, absent) }),
+    source: node('ImportDeclaration', { specifiers: list(node('ImportDefaultSpecifier', { local: idOf('name') }, { from: 'name', to: 'name' })), ...moduleFields, phase: c('source') }),
     bare: node('ImportDeclaration', { specifiers: list(), ...moduleFields }),
   }),
 };
@@ -431,13 +438,13 @@ export const estreeExprShape: Shape2Spec = {
       newTarget: child('newTarget'),
       class_: classNode('ClassExpression', classId),
       led_dot: chain(member(property(), false, false)),
-      led_bracket: chain(member(child('expr'), true, false)),
+      led_bracket: chain(member(sequenceOf('expr', 'exprRest'), true, false)),
       led_paren: chain(node('CallExpression', { callee: child('left'), arguments: child('expr'), optional: c(false) })),
       led_optChain: chain(branch('alt', {
         ident: member(idOf('ident'), false, true),
         privateField: member(privateOf('privateField'), false, true),
         paren: node('CallExpression', { callee: child('left'), arguments: child('expr'), optional: c(true) }),
-        bracket: member(child('expr'), true, true),
+        bracket: member(sequenceOf('expr', 'exprRest'), true, true),
       })),
       led_template: node('TaggedTemplateExpression', { tag: child('left'), quasi: templateLiteral('template') }),
     },
@@ -456,16 +463,16 @@ export const estreeExprShape: Shape2Spec = {
       super_: branch('alt', {
         paren: node('CallExpression', { callee: node('Super', {}, { from: 'superKeyword', to: 'superKeyword' }), arguments: child('expr'), optional: c(false) }),
         dot: node('MemberExpression', { object: node('Super', {}, { from: 'superKeyword', to: 'superKeyword' }), property: property(), computed: c(false), optional: c(false) }),
-        bracket: node('MemberExpression', { object: node('Super', {}, { from: 'superKeyword', to: 'superKeyword' }), property: child('expr'), computed: c(true), optional: c(false) }),
+        bracket: node('MemberExpression', { object: node('Super', {}, { from: 'superKeyword', to: 'superKeyword' }), property: sequenceOf('expr', 'exprRest'), computed: c(true), optional: c(false) }),
       }),
       led_dot: chain(member(property(), false, false)),
-      led_bracket: chain(member(child('expr'), true, false)),
+      led_bracket: chain(member(sequenceOf('expr', 'exprRest'), true, false)),
       led_paren: chain(node('CallExpression', { callee: child('left'), arguments: child('expr'), optional: c(false) })),
       led_optChain: chain(branch('alt', {
         ident: member(idOf('ident'), false, true),
         privateField: member(privateOf('privateField'), false, true),
         paren: node('CallExpression', { callee: child('left'), arguments: child('expr'), optional: c(true) }),
-        bracket: member(child('expr'), true, true),
+        bracket: member(sequenceOf('expr', 'exprRest'), true, true),
       })),
       led_question: node('ConditionalExpression', { test: child('left'), consequent: child('then'), alternate: child('otherwise') }),
       led_in: node('BinaryExpression', { left: child('left'), operator: c('in'), right: child('expr') }),
@@ -473,6 +480,7 @@ export const estreeExprShape: Shape2Spec = {
       newDotTarget: node('MetaProperty', { meta: idOf('newKeyword', c('new')), property: idOf('targetKeyword', c('target')) }),
       import_: branch('form', {
         call: node('ImportExpression', { source: child('source'), options: orNull('options') }),
+        phaseCall: node('ImportExpression', { source: child('source'), options: orNull('options'), phase: text('phase') }),
         meta: node('MetaProperty', { meta: idOf('importKeyword', c('import')), property: idOf('metaKeyword', c('meta')) }),
       }),
       construct: node('NewExpression', { callee: child('newTarget'), arguments: branch('alt', { paren: child('expr'), empty: list() }) }),
@@ -503,14 +511,14 @@ export const estreeExprShape: Shape2Spec = {
       ...PRIMARY,
       superMember: branch('alt', {
         dot: node('MemberExpression', { object: node('Super', {}, { from: 'superKeyword', to: 'superKeyword' }), property: idOf('ident'), computed: c(false), optional: c(false) }),
-        bracket: node('MemberExpression', { object: node('Super', {}, { from: 'superKeyword', to: 'superKeyword' }), property: child('expr'), computed: c(true), optional: c(false) }),
+        bracket: node('MemberExpression', { object: node('Super', {}, { from: 'superKeyword', to: 'superKeyword' }), property: sequenceOf('expr', 'exprRest'), computed: c(true), optional: c(false) }),
       }),
       newDotTarget: node('MetaProperty', { meta: idOf('newKeyword', c('new')), property: idOf('targetKeyword', c('target')) }),
       ...functionArms('FunctionExpression', iff(present('name'), idOf('name'), c(null))),
       ident: node('Identifier', { name: cook('identifierName', 'ident') }),
       new_: node('NewExpression', { callee: child('newTarget'), arguments: child('expr') }),
       led_dot: node('MemberExpression', { object: child('left'), property: property(), computed: c(false), optional: c(false) }),
-      led_bracket: node('MemberExpression', { object: child('left'), property: child('expr'), computed: c(true), optional: c(false) }),
+      led_bracket: node('MemberExpression', { object: child('left'), property: sequenceOf('expr', 'exprRest'), computed: c(true), optional: c(false) }),
       paren: sequence,
       array: node('ArrayExpression', { elements: arrayElements }),
       object: node('ObjectExpression', { properties: child('property') }),
