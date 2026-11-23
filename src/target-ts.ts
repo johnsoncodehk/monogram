@@ -35,7 +35,8 @@ const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
 // keyed: the candidate is reached through its Dispatch key, which already tested the first token.
 const guardCond = (g: Guard, t: string, keyed: boolean): string[] =>
   g === null ? [] : [...(keyed || g.first === null ? [] : [`inSet(${g.first.id}, ${t})`]), ...(g.second !== null ? [`secondIn(${g.second.id})`] : []),
-    ...g.lead.map((l) => { const inS = l.ctx ? `(inSet(${l.set}, ${t}) || inCtxWords(${t}))` : `inSet(${l.set}, ${t})`; return l.is ? inS : `!${inS}`; })];   // its lead tests (LeadTest) on t
+    ...g.lead.map((l) => { const inS = l.ctx ? `(inSet(${l.set}, ${t}) || inCtxWords(${t}))` : `inSet(${l.set}, ${t})`; return l.is ? inS : `!${inS}`; }),   // its lead tests (LeadTest) on t
+    ...(g.pairs ?? []).map((x) => `(!inSet(${x.when.id}, ${t}) || secondIn(${x.second.id}))`)];   // Guard.pairs
 // `if (<conds>) <body>` as one statement (just the body when there is no condition).
 const ifTs = (conds: string[], body: string) => (conds.length ? `  if (${conds.join(' && ')}) ${body}` : `  ${body}`);
 // A candidate list's Dispatch over the buffered token t: arm(i, keyed) is candidate i's statement.

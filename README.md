@@ -259,6 +259,41 @@ grammar's rules by name. The conformance and highlighter harnesses are written f
 languages here (they call `tsc`, parse5 and VS Code's grammars); point them at your own
 reference parser. The test taxonomy (gates, metrics, ledger, benches): [docs/TESTING.md](docs/TESTING.md).
 
+### A dialect with elements
+
+A language with JSX-like elements declares them once on the grammar, as an `elements` region:
+the tag delimiters (`tagOpen`, `tagClose`, `closeMarker`), the `closeTag` and `selfClose`
+tokens and the `hole` braces, and as needed
+
+| field | what it declares |
+|---|---|
+| `text` | children are text; leave it out and children are code |
+| `tagTokens` | tokens lexed only inside a tag (attribute strings) |
+| `rawText` | tags such as `<style>` / `<script>` whose body is one raw token, with `ignoreCase`, `unlessBodyStarts` and an `embed` scope such as `source.css` |
+| `tagStart` | which characters after the tag opener open a tag; otherwise it is text |
+| `textTokens` | tokens tried before a text run (comments in text), with an `after` class |
+| `highlight` | highlighter data: tag-name scopes, patterns inside text, a children scope |
+
+Directives in children (`@if (…) { … } @else { … }`) and dynamic tags (`<{expr}>`) need no
+declaration: they are derived from the rules. How code enters an element is derived too, from
+whether the tag opener is also an operator in the grammar.
+
+From that one file the lexer tokenizes elements, and the generated TextMate grammar highlights
+tags, attributes, holes, code or text children, raw bodies in their embedded language, comments
+in text, directives and dynamic tags. JSX and TSX are declared this way
+([`javascriptreact.ts`](javascriptreact.ts)); two fixtures exercise the rest
+([`test/fixtures/elementdialect.ts`](test/fixtures/elementdialect.ts),
+[`test/fixtures/textdialect.ts`](test/fixtures/textdialect.ts)). The model, what a lexer-local
+region cannot decide, and the generators' limits with a witness each:
+[docs/REGIONS.md](docs/REGIONS.md).
+
+Not there yet: the Monarch grammar has no element layer; the tree-sitter generator still carries
+its own JSX vocabulary and reads none of the other region features; the portable parsers (TypeScript, Go, Rust) parse JSX and TSX but refuse a
+grammar that declares `tagStart`, `unlessBodyStarts`, `textTokens` or has directives.
+
+**Changed behaviour:** a grammar that declares no region gets no element layer. Elements are no
+longer guessed from a `/>` token or a rule that starts with `<`.
+
 ## Where this is going
 
 [docs/ROADMAP.md](docs/ROADMAP.md), in order: one portable engine and shared runtime for all

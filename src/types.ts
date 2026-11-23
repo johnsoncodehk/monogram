@@ -209,6 +209,12 @@ export interface ElementHighlight {
   text?: { match: TokenPattern; scope: string; delimiters?: string }[];
   // A scope over an element's children (the TextMate `contentName` of the children region).
   childrenScope?: string;
+  // A literal of a tag or attribute name shape that splits the name into a PREFIX and the name
+  // (an XML namespace, `svg:rect`): `scope` is the joiner's own, and the prefix takes the name's
+  // scope with `.${prefix}` appended. Without a declaration a joiner joins within one name (a
+  // joiner that is one of the grammar's `memberAccessTexts` is a member accessor instead).
+  // At most one entry, and its `text` must be a joiner of the tag-name or the attribute rule.
+  nameJoiners?: { text: string; scope: string; prefix: string }[];
 }
 
 /**
