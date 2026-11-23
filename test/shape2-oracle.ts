@@ -171,8 +171,8 @@ export function runShape(shape: OracleShape, corpus: string, paths: string[], sa
 }
 
 /** The EMITTED shape-building parser (TypeScript target, emit option `shape`, src/shape-plan.ts)
- * against the evaluator, on every expression statement (nested ones too) of the corpus: the
- * value the parser built for the statement's node (observeBuilt: the last one built for that
+ * against the evaluator, on the expression of every expression statement (nested ones too) of the
+ * corpus: the value the parser built for the expression's node (observeBuilt: the last one built for that
  * node's arm and span) must be the evaluator's value of it. A statement the evaluator cannot give
  * (an unmapped arm) is outside the shape; one whose built value is missing as `unsupported` is
  * outside what the emitted plans build yet (the plan's reason counted); the rest are compared. */
@@ -203,11 +203,15 @@ export async function runBuilt(shape: OracleShape, corpus: string, paths: string
       x.children.forEach(walk);
     };
     walk(cst);
-    for (const n of units) {
+    for (const st of units) {
+      // The statement's EXPRESSION (its rule-node child): the ExpressionStatement node itself reads
+      // the inherited directive-prologue state, which S1's plans do not build.
+      const n = st.children.find((k): k is CstNode => !('tokenType' in k));
+      if (!n) continue;
       b.units++;
       let want: unknown;
       try { want = valueAt(n); } catch (e) { if (e instanceof ShapeUnmapped) { b.outOfShape++; continue; } throw e; }
-      const got = built.get(`Stmt.expr@${n.offset}:${n.end}`);
+      const got = built.get(`${n.rule}.${armNameOf(shape.shape, n, src)}@${n.offset}:${n.end}`);
       if (got === undefined) { b.notBuilt++; continue; }
       if (got instanceof m.ShapeMissing) {
         const g = got as { why: string; where: string };
@@ -223,7 +227,7 @@ export async function runBuilt(shape: OracleShape, corpus: string, paths: string
 }
 export function formatBuilt(b: BuiltBoard): string {
   return [
-    `${b.shape} on ${b.corpus}, emitted shape-building parser (TypeScript) vs the evaluator, unit "expression statement": ${b.files} files (${b.filesRejected} rejected by the grammar); ` +
+    `${b.shape} on ${b.corpus}, emitted shape-building parser (TypeScript) vs the evaluator, unit "an expression statement's expression": ${b.files} files (${b.filesRejected} rejected by the grammar); ` +
       `${b.units} units: ${b.outOfShape} outside the shape, ${b.unsupported} outside what the plans build yet, ${b.notBuilt} not built, ${b.compared} compared, ${b.identical} identical, ${b.compared - b.identical} diverged`,
     '  outside what the plans build yet, by reason:', ...top(b.reasons, 12),
     ...(b.samples.length ? ['  divergent samples:', ...b.samples.map((x) => `    ${x}`)] : []),
