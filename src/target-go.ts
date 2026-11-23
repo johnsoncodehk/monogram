@@ -2139,18 +2139,23 @@ func (p *${recv}) starInW(k int, once func() bool) bool {
 	return true
 }
 // A body that fails with leaves only (Step.leaves) changes nothing but the position and the
-// scratch list when it fails: its mark is those two, no builder checkpoint.
+// scratch list when it fails: its mark is those two, no builder checkpoint. Out of line, as the
+// direct engine's are (go:noinline).
+//go:noinline
 func (p *${recv}) starLW(once func() bool) bool {
 	for { sp, sb := p.pos, len(p.scratch); if !once() { p.back(sp); p.scratch = p.scratch[:sb]; break } }
 	return true
 }
+//go:noinline
 func (p *${recv}) starInLW(k int, once func() bool) bool {
 	for p.ahead(k, true) { sp, sb := p.pos, len(p.scratch); if !once() { p.back(sp); p.scratch = p.scratch[:sb]; break } }
 	return true
 }
+//go:noinline
 func (p *${recv}) optLW(body func() bool) bool {
 	sp, sb := p.pos, len(p.scratch); if !body() { p.back(sp); p.scratch = p.scratch[:sb] }; return true
 }
+//go:noinline
 func (p *${recv}) sepByLW(elem func() bool, delim uint16) bool {
 	sp0, sb0 := p.pos, len(p.scratch)
 	if !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; return true }
@@ -3281,18 +3286,24 @@ func (p *engine) starIn(k int, once func() bool) bool {
 	return true
 }
 // A body that fails with leaves only (Step.leaves) changes nothing but the position and the
-// scratch list when it fails: its mark is those two, not the arena's lengths.
+// scratch list when it fails: its mark is those two, not the arena's lengths. Out of line
+// (go:noinline) as the clean forms are: small enough to inline, they grew the frames of the large
+// rule functions (jsx-corpus.jsx, direct engine: +7.1% instructions inlined).
+//go:noinline
 func (p *engine) starL(once func() bool) bool {
 	for { sp, sb := p.pos, len(p.scratch); if !once() { p.back(sp); p.scratch = p.scratch[:sb]; break } }
 	return true
 }
+//go:noinline
 func (p *engine) starInL(k int, once func() bool) bool {
 	for p.ahead(k, true) { sp, sb := p.pos, len(p.scratch); if !once() { p.back(sp); p.scratch = p.scratch[:sb]; break } }
 	return true
 }
+//go:noinline
 func (p *engine) optL(body func() bool) bool {
 	sp, sb := p.pos, len(p.scratch); if !body() { p.back(sp); p.scratch = p.scratch[:sb] }; return true
 }
+//go:noinline
 func (p *engine) sepByL(elem func() bool, delimLid uint16) bool {
 	sp0, sb0 := p.pos, len(p.scratch)
 	if !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; return true }
