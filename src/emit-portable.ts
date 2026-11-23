@@ -197,6 +197,7 @@ export type RdRule = {
   altGuard: Guard[];        // parallel to alts: when each one is a candidate at all
   altDispatch: Dispatch;    // how a target reaches the alts a token admits (unused when predictive / one alt)
   altCommit?: Commit;       // the keys at which one alternative is left (see Commit); absent: none
+  clean: boolean;           // every alternative fails clean (Step.clean): the PREDICTIVE / SINGLE form's entry takes no builder checkpoint and its failure undoes nothing
 };
 // The candidates of a longest-match list, by what the first token must be, as sections a target
 // prints in order: a `lid` section switches on the token's literal and a `kid` section on its
@@ -925,7 +926,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
     const alts = items.map(altSteps);
     // A single alternative is no candidate (ruleShell SINGLE): it has no guard to take tests over.
     const altGuards = items.map((e, i) => altGuard(e, items.slice(0, i)));
-    return { kind: 'rd', name: r.name, alts, altNames, altFirst: [], predictive: false, altGuard: items.length > 1 ? altGuards.map((g, i) => leadOf(g, alts[i]!)) : altGuards, altDispatch: { sections: [], ranked: [] } };
+    return { kind: 'rd', name: r.name, alts, altNames, altFirst: [], predictive: false, altGuard: items.length > 1 ? altGuards.map((g, i) => leadOf(g, alts[i]!)) : altGuards, altDispatch: { sections: [], ranked: [] }, clean: false };
   });
   // Longest match never picks an alternative that advances nothing, and only the entry rule
   // may match the empty input: an entry that must CHOOSE its empty alternative has no rendering.
@@ -1198,6 +1199,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
       r.predictive = allDisjoint(r.altFirst);
       if (!r.predictive && r.alts.length > 1) r.altDispatch = dispatchOf(r.altGuard.map((g) => g?.first ?? null));
       r.alts.forEach(annotateSteps);
+      r.clean = r.alts.every(listFailsClean);
     } else {
       r.nudSeqPredictive = allDisjoint(r.nudSeqs.map((seq) => seqFirst(seq)));
       r.nudSeqs.forEach(annotateSteps);
@@ -1435,10 +1437,10 @@ export type RuleLowering = {
   ifThen(test: string, then: string): string;    // `if test then` (no indentation)
   first(f: FirstSig): string;                    // whether the buffered token starts an alternative (predictive)
   accept(i: number): string;                     // the statement returning alternative i's match
-  open: string;                                  // PREDICTIVE / SINGLE: the checkpoint at entry
+  open(clean: boolean): string;                  // PREDICTIVE / SINGLE: the checkpoint at entry (clean: RdRule.clean, only what accept reads)
   peekOrFail: string;                            // PREDICTIVE: buffer the next token; none: no match
   armJoin: string;                               // between PREDICTIVE arms
-  fail: string;                                  // undo to the checkpoint; no match
+  fail(clean: boolean): string;                  // undo to the checkpoint; no match (clean: RdRule.clean, nothing to undo)
   openBest(d: Dispatch): string;                 // LONGEST: the checkpoint and the best so far
   peekOpt: string;                               // LONGEST: buffer the next token (when a guard reads it)
   cand(d: Dispatch, i: number, cond: string): string;      // the CANDIDATE frame of alternative i
@@ -1458,9 +1460,9 @@ export function ruleShell(r: RdRule, ids: LexIdPlan, L: RuleLowering): string {
   const cond = (steps: Step[]) => conjOf(steps, L.steps);
   if (r.predictive) {
     const arm = (steps: Step[], i: number) => `${L.ind}${i === 0 ? '' : 'else '}${L.ifThen(L.first(r.altFirst[i] ?? null), `{ ${L.ifThen(cond(steps), L.accept(i))} }`)}`;
-    return L.fn([L.open, L.peekOrFail, r.alts.map(arm).join(L.armJoin), L.fail]);
+    return L.fn([L.open(r.clean), L.peekOrFail, r.alts.map(arm).join(L.armJoin), L.fail(r.clean)]);
   }
-  if (r.alts.length === 1) return L.fn([L.open, `${L.ind}${L.ifThen(cond(r.alts[0]!), L.accept(0))}`, L.fail]);
+  if (r.alts.length === 1) return L.fn([L.open(r.clean), `${L.ind}${L.ifThen(cond(r.alts[0]!), L.accept(0))}`, L.fail(r.clean)]);
   const arm = (i: number, keyed: boolean) => L.guard(r.altGuard[i]!, keyed, L.cand(r.altDispatch, i, cond(guardedSteps(r.altGuard[i]!, r.alts[i]!))));
   const needPeek = r.altGuard.some((g) => g !== null);
   const frame = [dispatchWalk(r.altDispatch, ids, arm, L.dispatch, true), L.closeBest];
