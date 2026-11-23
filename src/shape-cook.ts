@@ -6,11 +6,14 @@
 import type { CookFn, Scalar } from './shape2-schema.ts';
 
 export function cookTable(): Record<CookFn, (raw: string) => Scalar | undefined> {
+  // Built once (no closure per call); a name without an escape is its own text.
+  const codePoint = (_: string, a: string | undefined, b: string | undefined): string => String.fromCodePoint(parseInt(a ?? b!, 16));
   const unescapeCodePoints = (s: string): string =>
-    s.replace(/\\u\{([0-9a-fA-F]+)\}|\\u([0-9a-fA-F]{4})/g, (_, a, b) => String.fromCodePoint(parseInt(a ?? b, 16)));
+    (s.includes('\\') ? s.replace(/\\u\{([0-9a-fA-F]+)\}|\\u([0-9a-fA-F]{4})/g, codePoint) : s);
 
   function stringValue(raw: string): string {
     const body = raw.slice(1, -1);
+    if (!body.includes('\\')) return body;
     let out = '';
     for (let i = 0; i < body.length; i++) {
       const ch = body[i];
