@@ -35,7 +35,7 @@
 // only the unchanged text after them, so resync needs only the lexer state to match. Nothing of
 // this is recorded by the lexer: the lexers pay nothing for it.
 
-import { type ParserIR, buildLexIdPlan, kidOf, lidOf, regionKids } from './emit-portable.ts';
+import { type ParserIR, buildLexIdPlan, kidOf, lidOf, regionKids, tplEndKids } from './emit-portable.ts';
 import { type LookPlan, lexLookPlan } from './lex-family.ts';
 import type { CSet } from './lex-match-plan.ts';
 import { type CharSet, type Expr, type Fn, type ListTy, type Lowering, type MetaFlag, type MetaInt, type RecordDecl, type Stmt, type TokInt, type Ty, printFns } from './algo-ir.ts';
@@ -60,6 +60,10 @@ export interface RelexMode {
   // The kinds of the region's own tokens: they carry no literal id (emit-portable.ts regionKids).
   regionKids: number[];
   kidNl: number;
+  // The kinds of a template literal that ends at its closing delimiter (the whole literal and its
+  // tail; none without templates): it reads nothing past its end, so it may anchor a relex at the
+  // edit start.
+  kidTpl: number[];
   lidLParen: number;
   // The lexer's reads past a token's end + 1 (anchor rule (ii)); token names resolved to kids.
   look: LookPlan;
@@ -80,6 +84,7 @@ export function relexMode(ir: ParserIR): RelexMode {
     raw: window && !!ir.elements?.rawText.length,
     regionKids: regionKids(ir, ids),
     kidNl: newline ? kidOf(ids, ir.newlineCfg!.token) : -1,
+    kidTpl: tplEndKids(ir, ids),
     lidLParen: regex ? lidOf(ids, '(') : -1,
     // lexLookPlan asks relexMode only for `window`: resolved lazily, after this returns.
     get look() { return lexLookPlan(ir); },
@@ -223,7 +228,7 @@ function restoreFromAnchor(m: RelexMode): Stmt[] {
 // ---- functions ----
 
 function toMetaFn(): Fn {
-  const zero: RelexMode = { window: false, newline: false, regex: false, template: false, elements: false, raw: false, regionKids: [], kidNl: -1, lidLParen: -1, look: { arms: [], over: [], reach: [] }, kidOf: () => -1 };
+  const zero: RelexMode = { window: false, newline: false, regex: false, template: false, elements: false, raw: false, regionKids: [], kidNl: -1, kidTpl: [], lidLParen: -1, look: { arms: [], over: [], reach: [] }, kidOf: () => -1 };
   return {
     name: 'toMeta',
     doc: 'Stateless meta for tokens of a lexer whose meta carries no lexer state.',
@@ -486,12 +491,17 @@ function windowRelexStepFn(m: RelexMode): Fn {
   ];
   if (frames(m)) {
     anchorSearch.push(
-      { k: 'comment', text: 'Template depth cannot be restored from meta: resume only after a td == 0 token.' },
+      { k: 'comment', text: 'Template depth cannot be restored from meta: resume only after a td == 0 token, one that ends before the edit.' },
       if_(ge('rb', I(0)), [
         let_('rb0', 'int', 'rb'),
         set('rb', I(-1)),
         for_('i', 'rb0', len('oldToks'), [
+          // a token ending at the edit start was decided by reading the unit there (its end + 1),
+          // unless it is a template piece (it ends at its delimiter)
           if_(gt(mi(at('oldToks', 'i'), 'end'), 'start'), [BREAK]),
+          ...(m.kidTpl.length
+            ? [if_(and(eq(mi(at('oldToks', 'i'), 'end'), 'start'), ...m.kidTpl.map((k) => ne(mi(at('oldToks', 'i'), 'kid'), I(k)))), [BREAK])]
+            : [if_(eq(mi(at('oldToks', 'i'), 'end'), 'start'), [BREAK])]),
           if_(eq(mi(at('oldToks', 'i'), 'td'), I(0)), [set('rb', 'i'), BREAK]),
         ]),
       ]),
