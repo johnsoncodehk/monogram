@@ -254,3 +254,4 @@ if (process.env.GITHUB_STEP_SUMMARY) {
     (disagreements.length ? `\n<details><summary>${disagreements.length} disagreement(s)</summary>\n\n${disagreements.map(d => '- `' + d.replace(/`/g, "'") + '`').join('\n')}\n</details>\n` : ''));
 }
 if (loadFailed) process.exit(1);
+await import('./treesitter-realcode.ts');   // measurement branch only
