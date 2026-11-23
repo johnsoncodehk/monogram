@@ -1,4 +1,4 @@
-// `defineTarget`: the one entry point each portable target module calls to register itself.
+// `defineParserTarget`: the one entry point each portable target module calls to register itself.
 // A target supplies its name, its `Lowering` (how the
 // shared algorithm IR is spelled, stored, owned and sized in that language) and its own parser
 // emitter; it receives the shared algorithm families already printed with that lowering, so a
@@ -70,31 +70,31 @@ export interface PortableTarget extends Target {
 
 const registry = new Map<string, PortableTarget>();
 
-export function defineTarget(def: TargetDefinition): PortableTarget {
-  if (registry.has(def.name)) throw new Error(`defineTarget: target ${def.name} is already registered`);
+export function defineParserTarget(def: TargetDefinition): PortableTarget {
+  if (registry.has(def.name)) throw new Error(`defineParserTarget: target ${def.name} is already registered`);
   const lowering = (): Lowering => {
-    if (!def.lowering) throw new Error(`defineTarget: target ${def.name} supplies no Lowering for shared algorithms`);
+    if (!def.lowering) throw new Error(`defineParserTarget: target ${def.name} supplies no Lowering for shared algorithms`);
     return def.lowering;
   };
   const shared: SharedAlgorithms = {
     relexFamily: (ir) => {
-      if (!lowering().relex) throw new Error(`defineTarget: target ${def.name} supplies no token-stream Lowering for the relex family`);
+      if (!lowering().relex) throw new Error(`defineParserTarget: target ${def.name} supplies no token-stream Lowering for the relex family`);
       return emitRelexFamily(ir, lowering());
     },
     reuseFamily: (ir) => {
-      if (!lowering().record) throw new Error(`defineTarget: target ${def.name} supplies no record Lowering for the reuse family`);
+      if (!lowering().record) throw new Error(`defineParserTarget: target ${def.name} supplies no record Lowering for the reuse family`);
       return emitReuseFamily(ir, lowering());
     },
     rebindFamily: (ir, part, L) => emitRebindFamily(L ?? lowering(), buildLexIdPlan(ir), part),
     recoveryFamily: (ir, methods) => {
-      if (!lowering().record || !lowering().relex) throw new Error(`defineTarget: target ${def.name} supplies no record and token-stream Lowering for the recovery family`);
+      if (!lowering().record || !lowering().relex) throw new Error(`defineParserTarget: target ${def.name} supplies no record and token-stream Lowering for the recovery family`);
       const ids = buildLexIdPlan(ir);
       return emitRecoveryFamily(lowering(), recoveryTables(ir, ids, buildArenaIdPlan(ir, ids)).data, methods, hasRebind(ir), ids);
     },
     lexScan: (ir) => emitLexScan(ir, lowering()),
     scannedTokens,
     scanner: (token) => {
-      if (lowering().spliceInline) throw new Error(`defineTarget: target ${def.name} splices scanners; use scanInline`);
+      if (lowering().spliceInline) throw new Error(`defineParserTarget: target ${def.name} splices scanners; use scanInline`);
       return lowering().ident(scannerName(token));
     },
     scanInline: (ir, token, at) => emitScanInline(ir, lowering(), token, at),
