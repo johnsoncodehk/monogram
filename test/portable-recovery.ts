@@ -36,13 +36,13 @@ const RECOVERY_MUTANTS = 3, RECOVERY_SEED = 20261123;
 // become others): the disagreements fall 186 -> 182, the agreements 5,441 -> 5,439 (of 5,621 rejects now).
 // typescript 5950 -> 5946 (land/sound-cap-tail): the cap-through-a-trailing-operand accepts
 // (`a ? b : () => {};`, `[...() => {}];`, …) draw another mutant set: 5,946 of 6,842 rejects agree.
-// javascript 5439 -> 5388 (land/shape-test262-valid): the literals `defer` and `source` join the grammar,
+// javascript 5439 -> 5412 (land/shape-test262-valid): the literals `defer` and `source` join the grammar,
 // and the mutation corpus picks literals from the sorted list by a seeded index, so it is another
-// population (javascript rejects 5621 -> 5857; typescript's rises 5950 -> 5967). Most of javascript's new
+// population (javascript: 5,412 of 5,901 rejects agree; typescript's rises 5946 -> 5994). Most of javascript's new
 // disagreements are one pattern, `import` and a token neither `(` nor `.` (`import ?. ;`): the
 // interpreter's farthest is `import` itself (no hint), the engine's the token its form guard read. The
 // interpreter's message on these inputs is master's.
-const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5388, typescript: 5946 };
+const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5412, typescript: 5994 };
 // EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and
 // parseTotal alike) is not the oracle's. Not total parsing's property (parseTotal's verdict is its
 // own parse()'s, checked below); found by the mutation corpus, each owed as its own fix. When one
