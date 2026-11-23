@@ -11,7 +11,7 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
-import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
 import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
@@ -1438,6 +1438,8 @@ ${sites.flatMap((st, i) => st.map((c, k) => `            ${i * 4 + k} => ${c},`)
     }
 ${shared.rebindFamily(ir, 'methods').split('\n').map((l) => (l ? `    ${l}` : l)).join('\n')}`;
 }
+// A NUD arm's capped flag (emit-portable NodeCap): 'tail' is the flag its trailing operand left.
+const capRs = (cap: NodeCap): string => (cap === 'arm' ? 'true' : cap === 'tail' ? 'self.capped' : 'false');
 function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
   const d = r.nudDispatch;
@@ -1470,7 +1472,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
             }
             self.back(save);
         }`,
-    nudSeq: (i, cond, tail, capped) => candRs(d, i, cond, rid, `${markRs(d, i)} bf = 0; bt = ${tail}; bc = ${capped};`),
+    nudSeq: (i, cond, tail, cap) => candRs(d, i, cond, rid, `${markRs(d, i)} bf = 0; bt = ${tail}; bc = ${capRs(cap)};`),
     // An operand that parses but is not the target the operator requires fails the whole Pratt
     // call, whatever another arm matched.
     nudPrefix: (i) => `        if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
@@ -1486,7 +1488,8 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node, form,
     // tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (_i, conds) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len(); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; let n = self.finish(${rid}, sb, t.off as usize, save); self.form = 0; self.tail = false; return Some(n); }`, NUD_FAIL_RS, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitRs(conds, commitBodyRs(rid, cond, undo, nullable, `nud ${tail} ${capped}`), NUD_FAIL_RS),
+    // A 'tail' cap leaves the flag as the trailing operand set it.
+    commitSeq: (_i, conds, cond, tail, cap, undo, nullable) => commitRs(conds, commitBodyRs(rid, cond, undo, nullable, cap === 'tail' ? `{ self.form = 0; self.tail = ${tail}; }` : `nud ${tail} ${capRs(cap)}`), NUD_FAIL_RS),
     commitPrefix: (_i, conds) => commitRs(conds, `if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
             let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
@@ -1507,13 +1510,13 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
       notSuppressed: (set) => `self.suppress_cur != ${set}`,
       ifAll: (parts) => (parts.length ? `if ${parts.join(' && ')} ` : ''),
     },
-    ledArm: (_i, cond, form, closes, exit, clean, rebind) => `{
+    ledArm: (_i, cond, form, closes, exit, clean, rebind, capsFromTail) => `{
                 let led_save = self.pos; let sb = self.scratch.len();${clean ? '' : ' let ck = self.b.checkpoint();'}
                 self.scratch.push(left.h);
-                if ${cond} { left = ${fin}; form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
+                if ${cond} { left = ${fin};${capsFromTail ? ` if self.capped { self.form = ${form}; return Some(left); }` : ''} form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
                 self.back(led_save); self.scratch.truncate(sb);${clean ? '' : ' self.b.restore(ck);'}${rebind ? `
                 self.scratch.push(left.h);
-                if ${rebind} { left = ${fin}; form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
+                if ${rebind} { left = ${fin};${capsFromTail ? ` if self.capped { self.form = ${form}; return Some(left); }` : ''} form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
                 self.scratch.truncate(sb);` : ''}${exit ? ' break;' : ''}
             }`,
     rebind: (p) => `self.rb_scan(${rbSite(ids, [p.open, p.operand, p.sep, p.rest])}, ${p.sepLid}, 0)`,
@@ -4035,7 +4038,7 @@ function emitRustPrattMethod(
             let _ap_base = self.ap_stack.len();
             ${st.ok}
             if ${st.okVar} {
-                ${rule.nudBracketClosesTail[bi] ? '*pt = true; ' : ''}${finish}
+                ${rule.nudBracketClosesTail[bi] ? '*pt = true; ' : ''}${rule.nudBracketCapsFromTail[bi] ? '*pc = self.capped; ' : ''}${finish}
                 self.ap_stack.truncate(_ap_base);
             }
             self.pos = save;
@@ -4136,7 +4139,7 @@ function emitRustPrattMethod(
                 let _ap_base = self.ap_stack.len();
                 ${st.ok}
                 if ${st.okVar} {
-                    ${rule.nudSeqClosesTail[si] ? '*pt = true; ' : ''}${finish}
+                    ${rule.nudSeqClosesTail[si] ? '*pt = true; ' : ''}${rule.nudSeqCapsFromTail[si] ? '*pc = self.capped; ' : ''}${finish}
                     self.ap_stack.truncate(_ap_base);
                 }
             }
@@ -4538,7 +4541,8 @@ function emitRustPrattMethod(
                     ${st.ok}
                     if ${st.okVar} {
                         ${finish}
-                        self.ap_stack.truncate(_ap_base);
+                        self.ap_stack.truncate(_ap_base);${rule.ledCapsFromTail[i] ? `
+                        if self.capped { self.form = ${rule.ledForm[i]!}; return Some(left); }` : ''}
                         form = ${rule.ledForm[i]!};${rule.ledClosesTail[i] ? ' tail_closed = true;' : ''}
                         continue;
                     }
