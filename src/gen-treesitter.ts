@@ -3664,8 +3664,8 @@ function cCharSetTest(set: CSet, v: string): string {
 // in the same state, now after it. A line break is one of the characters that set the lexer's
 // `newlineBefore` (src/emit-lexer.ts: \n \r U+2028 U+2029) in the whitespace before the next token.
 // What the scanner cannot see: a line break inside a skipped block comment (the comment is an extra
-// already consumed when it is asked again), and a literal that is the prefix of a longer non-literal
-// token (`.` before `.5`).
+// already consumed when it is asked again), and, for CONT, a literal that is the prefix of a longer
+// non-literal token (`.` before `.5`; AFTER reads both, see ZW_LIT_TOKENS).
 function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { helpers: string[]; call: string[] } {
   const { grammar } = ctx;
   const tokens = ctx.zeroWidth.tokens;

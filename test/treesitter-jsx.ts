@@ -58,6 +58,9 @@ const LINE_BREAKS = [
   'a /* c */\nb', 'a // c\nb', 'a /*\n*/ b', 'a\n// c\nb', 'a\n/* c */ b',
   'class C { x = 1\n y = 2 }', 'class C { static\n x() {} }', 'class C { accessor\n x = 1 }', 'class C { async\n x() {} }',
   'x = y\n=> 1', 'a\n`t`', 'a\n/b/g',
+  // after a same-line marker, a token a literal begins (`/` a regex, `.` a number)
+  'function f() { return /a/; }', 'function f() { return /a/ }', 'function f() {\n return /^a/.test(x);\n}', 'function f() { return /=a/; }',
+  'function f() { return .5; }', 'function f() { return `t`; }', 'function f() { return\n/a/ }',
   // a same-line marker before a name that a keyword may be (the step's own guard decides)
   'class C { async if() {} }', 'class C { accessor if = 1 }', 'class C { get\n if() {} }', 'x = async true => 1', 'x = async if => 1',
   'a b', 'let a = 1 let b = 2', 'f() g()', 'return x y', 'a = 1 b = 2', 'x ++y', '{ a = 1 b = 2 }',
