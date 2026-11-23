@@ -1344,7 +1344,7 @@ function parseWithMeta<H>(text: string, meta: AlignMeta[], builder: Builder<H>):
 }
 ${topReuse ? `
 function tryReuseW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number) => H, oldRootHs: H[], oldEntries: EntryMeta[], newText: string, newMeta: AlignMeta[], byteDelta: number, oldN: number, newN: number, prefix: number, suffix: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null {
-  ${tsTake(['prefixLen', 'suffixStart', 'prefixEnd', 'suffixKid'], 'reuseBounds', 'oldEntries, prefix, oldN, suffix')}
+  ${tsTake(['prefixLen', 'suffixStart', 'prefixEnd'], 'reuseBounds', 'oldEntries, prefix, oldN, suffix')}
   const prefixMeta = oldEntries.slice(0, prefixLen);
   const suffixMeta = oldEntries.slice(suffixStart);
   const prefixKids = oldRootHs.slice(0, prefixEnd);
@@ -1356,7 +1356,7 @@ function tryReuseW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number)
   const midKids: H[] = [];
   const midMeta: EntryMeta[] = [];
   const finish = (adoptFrom: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
-    ${tsTake(['ka', 'kb'], 'reuseKids', 'suffixMeta, adoptFrom, suffixKid')}
+    ${tsTake(['ka', 'kb'], 'reuseKids', 'oldEntries, prefixLen, prefixEnd, suffixStart + adoptFrom')}
     const adoptedKids = oldRootHs.slice(ka, kb).map((h) => shift(h, byteDelta, tokDelta));
     const children: H[] = [...prefixKids, ...midKids, ...adoptedKids];
     const newEntries = reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta);

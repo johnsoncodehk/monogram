@@ -1574,7 +1574,7 @@ ${shapeA ? `func (p *engine) assertEntriesVsNodes(oldEntries []EntryMeta, oldRoo
 	if oldRoot < 0${shapeB ? ' || len(oldEntries) == 0' : ''} { return -1, 0 }
 	if validate { p.assertEntriesVs${shapeA ? 'Nodes' : 'Kids'}(oldEntries, oldRoot) }
 	old := p.nodes[oldRoot]
-	prefixLen, suffixStart, prefixEnd, suffixKid := reuseBounds(oldEntries, prefix, oldN, suffix)
+	prefixLen, suffixStart, prefixEnd := reuseBounds(oldEntries, prefix, oldN, suffix)
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
 	prefixKids := append([]int32(nil), p.kids[old.KidStart:old.KidStart+uint32(prefixEnd)]...)
@@ -1591,7 +1591,7 @@ ${shapeA ? `func (p *engine) assertEntriesVsNodes(oldEntries []EntryMeta, oldRoo
 			s := suffixMeta[adoptFrom].TokStart
 			tokDelta = p.pos - s
 		}
-		ka, kb := reuseKids(suffixMeta, adoptFrom, suffixKid)
+		ka, kb := reuseKids(oldEntries, prefixLen, prefixEnd, suffixStart+adoptFrom)
 		adoptedKids := make([]int32, 0, kb-ka)
 		for _, id := range p.kids[old.KidStart+uint32(ka) : old.KidStart+uint32(kb)] {
 			if id < 0 {
@@ -2254,7 +2254,7 @@ ${topReuse
   const tryReuseW = topReuse
     ? `
 func tryReuseW(b Builder, sh Shifter, oldRootHs []int32, oldEntries []EntryMeta, newText string, newMeta []alignMeta, byteDelta, oldN, prefix, suffix int) (root int32, newEntries []EntryMeta, newHs []int32, reused int, ok bool) {
-	prefixLen, suffixStart, prefixEnd, suffixKid := reuseBounds(oldEntries, prefix, oldN, suffix)
+	prefixLen, suffixStart, prefixEnd := reuseBounds(oldEntries, prefix, oldN, suffix)
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
 	prefixKids := append([]int32(nil), oldRootHs[:prefixEnd]...)
@@ -2273,7 +2273,7 @@ func tryReuseW(b Builder, sh Shifter, oldRootHs []int32, oldEntries []EntryMeta,
 			s := suffixMeta[adoptFrom].TokStart
 			tokDelta = p.pos - s
 		}
-		ka, kb := reuseKids(suffixMeta, adoptFrom, suffixKid)
+		ka, kb := reuseKids(oldEntries, prefixLen, prefixEnd, suffixStart+adoptFrom)
 		adoptedKids := make([]int32, 0, kb-ka)
 		for _, s := range oldRootHs[ka:kb] {
 			adoptedKids = append(adoptedKids, sh.Shift(s, byteDelta, tokDelta))

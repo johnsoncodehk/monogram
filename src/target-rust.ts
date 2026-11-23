@@ -1615,14 +1615,13 @@ ${shapeA ? `fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], ki
     }
 }
 ` : ''}impl<'a, B: Builder> Parser<'a, B> {
-    fn finish_reuse(&mut self, rule_id: u16, prefix_kids: &[B::H], mid_kids: &[B::H], prefix_meta: &[EntryMeta], mid_meta: &[EntryMeta], suffix_meta: &[EntryMeta], old_root: B::H, adopt_from: usize, suffix_kid: usize, byte_delta: isize) -> (B::H, usize) {
+    fn finish_reuse(&mut self, rule_id: u16, prefix_kids: &[B::H], mid_kids: &[B::H], prefix_meta: &[EntryMeta], mid_meta: &[EntryMeta], suffix_meta: &[EntryMeta], old_root: B::H, adopt_from: usize, (ka, kb): (usize, usize), byte_delta: isize) -> (B::H, usize) {
         let adopted_segs = &suffix_meta[adopt_from..];
         let mut tok_delta = 0isize;
         if !adopted_segs.is_empty() {
             let s = suffix_meta[adopt_from].tok_start as usize;
             tok_delta = self.pos as isize - s as isize;
         }
-        let (ka, kb) = reuse_kids(suffix_meta, adopt_from, suffix_kid);
         let mut adopted_kids: Vec<B::H> = Vec::with_capacity(kb - ka);
         for i in ka..kb {
             let id = self.b.root_kid_at(old_root, i);
@@ -1644,7 +1643,7 @@ ${shapeA ? `fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], ki
     }
     fn try_reuse(&mut self, old_root: B::H, old_entries: &[EntryMeta], new_toks: Vec<Tok>, byte_delta: isize, old_n: usize, prefix: usize, suffix: usize, validate: bool) -> Option<(B::H, usize)> {
         ${shapeB ? 'if old_entries.is_empty() { return None; }\n        ' : ''}if validate { self.b.validate_entries(old_entries, old_root); }
-        let (prefix_len, suffix_start, prefix_end, suffix_kid) = reuse_bounds(old_entries, prefix, old_n, suffix);
+        let (prefix_len, suffix_start, prefix_end) = reuse_bounds(old_entries, prefix, old_n, suffix);
         let prefix_meta = &old_entries[..prefix_len];
         let suffix_meta = &old_entries[suffix_start..];
         let prefix_kids: Vec<B::H> = (0..prefix_end).map(|i| self.b.root_kid_at(old_root, i)).collect();
@@ -1657,7 +1656,7 @@ ${shapeA ? `fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], ki
         let try_hit = |p: &mut Parser<'a, B>, mid_kids: &[B::H], mid_meta: &[EntryMeta]| -> Option<(B::H, usize)> {
             let at = reuse_adopt_at(suffix_meta, old_n, suffix, p.toks.len() - p.pos);
             if at < 0 { return None; }
-            Some(p.finish_reuse(rule_id, &prefix_kids, mid_kids, prefix_meta, mid_meta, suffix_meta, old_root, at as usize, suffix_kid, byte_delta))
+            Some(p.finish_reuse(rule_id, &prefix_kids, mid_kids, prefix_meta, mid_meta, suffix_meta, old_root, at as usize, reuse_kids(old_entries, prefix_len, prefix_end, suffix_start + at as usize), byte_delta))
         };
         let passed = |p: &Parser<'a, B>| reuse_gave_up(suffix_meta, old_n, p.toks.len() - p.pos);
         if let Some(hit) = try_hit(self, &mid_kids, &mid_meta) { return Some(hit); }

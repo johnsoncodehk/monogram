@@ -30,14 +30,14 @@ const ret = (...es: Expr[]): Stmt => ({ k: 'return', es });
 
 // The entries kept before the edit, [0, prefixLen): those whose parse read only the unchanged
 // prefix tokens (ext <= prefix); and where the suffix candidates start, [suffixStart, len): the
-// trailing entries (after the prefix) that start in the unchanged suffix tokens. With them, the
-// old root kids before each part: an entry's kids follow the ones before it (EntryMeta records
-// only its kidCount), so the sums run over the kept prefix and the edited middle, not the suffix.
+// trailing entries (after the prefix) that start in the unchanged suffix tokens. With them the
+// prefix's root kids: an entry's kids follow the ones before it (EntryMeta records only its
+// kidCount), summed over the entries the edit keeps.
 const reuseBounds: Fn = {
   name: 'reuseBounds',
   doc: '',
   params: [{ name: 'entries', ty: ENTRIES }, { name: 'prefix', ty: 'idx' }, { name: 'oldN', ty: 'idx' }, { name: 'suffix', ty: 'idx' }],
-  ret: ['idx', 'idx', 'idx', 'idx'],
+  ret: ['idx', 'idx', 'idx'],
   body: [
     { k: 'let', name: 'prefixLen', ty: 'idx', init: n(0) },
     { k: 'let', name: 'prefixKids', ty: 'idx', init: n(0) },
@@ -49,11 +49,7 @@ const reuseBounds: Fn = {
     { k: 'while', c: bin('and', bin('gt', v('suffixStart'), v('prefixLen')), bin('ge', fld('entries', bin('sub', v('suffixStart'), n(1)), 'tokStart'), bin('sub', v('oldN'), v('suffix')))), body: [
       { k: 'set', name: 'suffixStart', e: bin('sub', v('suffixStart'), n(1)) },
     ] },
-    { k: 'let', name: 'suffixKid', ty: 'idx', init: v('prefixKids') },
-    { k: 'for', v: 'i', from: v('prefixLen'), to: v('suffixStart'), body: [
-      { k: 'set', name: 'suffixKid', e: bin('add', v('suffixKid'), fld('entries', v('i'), 'kidCount')) },
-    ] },
-    ret(v('prefixLen'), v('suffixStart'), v('prefixKids'), v('suffixKid')),
+    ret(v('prefixLen'), v('suffixStart'), v('prefixKids')),
   ],
 };
 
@@ -125,21 +121,22 @@ const reuseEntries: Fn = {
   ],
 };
 
-// The old root kids [ka, kb) of the adopted entries suffixMeta[adoptFrom..], given first, the old
-// root kid of suffixMeta's first entry (reuseBounds' suffixKid).
+// The old root kids [ka, kb) of the adopted entries [at, len), given the prefix's prefixLen
+// entries and their prefixKids kids: summed over the edited middle [prefixLen, at), then over the
+// adopted entries (which the edit shifts anyway).
 const reuseKids: Fn = {
   name: 'reuseKids',
   doc: '',
-  params: [{ name: 'suffixMeta', ty: ENTRIES }, { name: 'adoptFrom', ty: 'idx' }, { name: 'first', ty: 'idx' }],
+  params: [{ name: 'entries', ty: ENTRIES }, { name: 'prefixLen', ty: 'idx' }, { name: 'prefixKids', ty: 'idx' }, { name: 'at', ty: 'idx' }],
   ret: ['idx', 'idx'],
   body: [
-    { k: 'let', name: 'ka', ty: 'idx', init: v('first') },
-    { k: 'for', v: 'i', from: n(0), to: v('adoptFrom'), body: [
-      { k: 'set', name: 'ka', e: bin('add', v('ka'), fld('suffixMeta', v('i'), 'kidCount')) },
+    { k: 'let', name: 'ka', ty: 'idx', init: v('prefixKids') },
+    { k: 'for', v: 'i', from: v('prefixLen'), to: v('at'), body: [
+      { k: 'set', name: 'ka', e: bin('add', v('ka'), fld('entries', v('i'), 'kidCount')) },
     ] },
     { k: 'let', name: 'kb', ty: 'idx', init: v('ka') },
-    { k: 'for', v: 'i', from: v('adoptFrom'), to: len(v('suffixMeta')), body: [
-      { k: 'set', name: 'kb', e: bin('add', v('kb'), fld('suffixMeta', v('i'), 'kidCount')) },
+    { k: 'for', v: 'i', from: v('at'), to: len(v('entries')), body: [
+      { k: 'set', name: 'kb', e: bin('add', v('kb'), fld('entries', v('i'), 'kidCount')) },
     ] },
     ret(v('ka'), v('kb')),
   ],
