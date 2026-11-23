@@ -1198,6 +1198,8 @@ type TsLib = {
   /** The library's lid_of, exported by the gate (TS_LID_OF) — the id a Doc gives a rebuilt token. */
   __lid_of(text: string): number;
   parseTotal(src: string, builder: unknown): TsTotal;
+  parseWith(src: string, builder: unknown): unknown;
+  parseInterpreted(src: string, builder: unknown, depth: number): { root: unknown; steps: number };
   cstBuilder: unknown;
 };
 // The gate's one addition to the imported ts library: its lid_of, which the runners' lid-of mode
@@ -1297,7 +1299,24 @@ type Runner = {
   utf8Edits: boolean;
   /** parseTotal over a whole corpus (the emit option `recovery`): its verdict and diagnostics, offsets in the target's units. */
   total: (srcs: string[]) => Total[];
+  /** The strict interpreter (recovery-family.ts) over a whole corpus, `depth` rule levels interpreted. */
+  interp: (srcs: string[], depth: number) => Interp[];
 };
+// One interpreted parse: its verdict, its tree (the CST JSON, as `batch` gives it), the steps it
+// interpreted, and (TS) the leaves the builder was offered by it and by the native parse.
+type Interp = { ok: boolean; cst?: string; steps: number; leaves?: [number, number] };
+function tsInterp(lib: TsLib, src: string, depth: number): Interp {
+  let leaves = 0;
+  const b = lib.cstBuilder as { leaf: (...a: unknown[]) => unknown; node: (...a: unknown[]) => unknown };
+  const counting = { leaf: (...a: unknown[]) => { leaves++; return b.leaf(...a); }, node: (...a: unknown[]) => b.node(...a) };
+  try { lib.parseWith(src, counting); } catch { /* a lexer error: no parse, and parseInterpreted rejects it */ }
+  const native = leaves;
+  leaves = 0;
+  try {
+    const r = lib.parseInterpreted(src, counting, depth);
+    return { ok: r.root !== null, cst: r.root === null ? undefined : canon(r.root), steps: r.steps, leaves: [native, leaves] };
+  } catch (e) { return { ok: false, cst: errText(e), steps: -1 }; }
+}
 // One parseTotal outcome: accepted, and each diagnostic as [off, end, message, relOff, relEnd,
 // relMessage] (relOff -1: no related location).
 type DiagRow = [number, number, string, number, number, string];
@@ -1312,6 +1331,18 @@ function totalBatch(cmd: string, srcs: string[]): Total[] {
     if (src.includes('\0')) return { ok: false, errors: [[0, 0, 'NUL', -1, -1, '']] };
     const [ok, errors] = JSON.parse(lines[li++]!) as [boolean, DiagRow[]];
     return { ok, errors };
+  });
+}
+function interpBatch(cmd: string, srcs: string[], depth: number): Interp[] {
+  const sent = srcs.filter((s) => !s.includes('\0'));
+  const r = spawnSync(cmd, ['batch-interp', String(depth)], { input: sent.join('\0'), encoding: 'utf8', maxBuffer: 1 << 30 });
+  const lines = (r.stdout ?? '').split('\n');
+  if (r.status !== 0 || lines.length !== sent.length + 1) throw new Error(`${cmd} batch-interp: exit ${r.status}, ${lines.length - 1} lines for ${sent.length} inputs\n${(r.stderr ?? '').slice(0, 2000)}`);
+  let li = 0;
+  return srcs.map((src): Interp => {
+    if (src.includes('\0')) return { ok: false, steps: 0 };
+    const [ok, steps, cst] = JSON.parse(lines[li++]!) as [boolean, number, string];
+    return ok ? { ok, steps, cst: canon(JSON.parse(cst)) } : { ok, steps };
   });
 }
 type TsTotal = { root: unknown; errors: { offset: number; end: number; message: string; related?: { offset: number; end: number; message: string } }[] };
@@ -1927,10 +1958,48 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
       });
     }
     if (knownHits !== known.length) bad.push(`expected-fail: ${knownHits} of ${known.length} listed verdict divergences remain: remove the ones that agree now`);
+    interpCheck(c, grammar, r, srcs, own, tokenize, bad);
     if (farEq < (RECOVERY_FARTHEST_FLOOR[c.grammar] ?? 0)) bad.push(`farthest agreement ${farEq} dropped below its recorded floor ${RECOVERY_FARTHEST_FLOOR[c.grammar]}`);
     console.log(`  ${c.grammar}/${r.label}: recovery ${bad.length ? `${bad.length} MISMATCH` : 'ok'} over ${srcs.length} inputs (${mutants.length} mutants): ${acc} accepted with no errors, ${rej} rejected: primary ≡ interpreter ${primary}, lexer ≡ oracle ${lexEq}; farthest ≡ the interpreter's hint on ${farEq}/${farN} (counted)`);
     for (const smp of bad.slice(0, 10)) console.log(`      ${smp}`);
     failures += bad.length;
+  }
+}
+
+// ── The strict interpreter (recovery-family.ts, stage 2) ≡ the native parse ──
+// FORCED: every rule level interpreted (INTERP_ALL), so the equality is not that of the native
+// functions with themselves, and at INTERP_MIXED levels, where interpreted frames call native ones
+// and native ones nothing interpreted. On every input of the recovery class (valid and rejected):
+// the same verdict and the same tree; in the TS target the same leaves offered to the builder (the
+// candidates tried are the native ones: the interpreter takes them in declaration order where
+// their guards admit the token; the nodes a longest match finishes depend on that order, so they
+// are reported, not compared). Go and Rust interpret exactly as TS does: the same step count on
+// every input. Termination (recovery-1/DESIGN.md): the steps of a run are at most
+// INTERP_K × (tokens + 1) × rules, with k recorded here from the measurement.
+const INTERP_ALL = 1 << 30, INTERP_MIXED = 2;
+const INTERP_K = 1;
+const interpRef = new Map<string, number[]>();
+function interpCheck(c: Case, grammar: CstGrammar, r: Runner, srcs: string[], own: Outcome[], tokenize: (s: string) => Tok[], bad: string[]): void {
+  const at = (i: number) => JSON.stringify(srcs[i]!.length > 90 ? srcs[i]!.slice(0, 90) + '…' : srcs[i]);
+  const nRules = portableIR(grammar).rules.length;
+  for (const depth of [INTERP_ALL, INTERP_MIXED]) {
+    const got = r.interp(srcs, depth);
+    const key = `${c.grammar}/${depth}`;
+    const ref = interpRef.get(key);
+    if (r.label === 'typescript') interpRef.set(key, got.map((g) => g.steps));
+    let ok = 0, rej = 0, leafEq = 0, maxK = 0;
+    got.forEach((g, i) => {
+      const o = own[i]!;
+      if (g.ok !== o.ok) { bad.push(`interpreter (depth ${depth}) ${g.ok ? 'accepts' : 'rejects'}, the native parse ${o.ok ? 'accepts' : 'rejects'} — ${at(i)}`); return; }
+      if (g.ok && g.cst !== o.cst) { bad.push(`interpreter (depth ${depth}): a tree other than the native parse's — ${at(i)}`); return; }
+      if (g.ok) ok++; else rej++;
+      if (g.leaves) { if (g.leaves[0] === g.leaves[1]) leafEq++; else bad.push(`interpreter (depth ${depth}): ${g.leaves[1]} leaves offered, the native parse ${g.leaves[0]} — ${at(i)}`); }
+      if (ref && ref[i] !== g.steps) bad.push(`interpreter (depth ${depth}): ${g.steps} steps, the TS target ${ref[i]} — ${at(i)}`);
+      const bound = (tokenize(srcs[i]!).length + 1) * nRules;
+      maxK = Math.max(maxK, g.steps / bound);
+      if (g.steps > INTERP_K * bound) bad.push(`interpreter (depth ${depth}): ${g.steps} steps, over the bound ${INTERP_K} × (tokens + 1) × ${nRules} rules — ${at(i)}`);
+    });
+    console.log(`  ${c.grammar}/${r.label}: interpreter ${depth === INTERP_ALL ? 'forced (every level)' : `${depth} levels`} ≡ native: ${ok} accepted, ${rej} rejected${r.label === 'typescript' ? `, leaves equal on ${leafEq}` : ', steps ≡ TS'}; steps ≤ ${maxK.toFixed(3)} × (tokens + 1) × rules`);
   }
 }
 
@@ -1969,6 +2038,7 @@ for (const c of CASES) {
     doc: (srcs) => srcs.map((src) => tsDoc(tsLib, src, false) as Outcome), docBuilder: (srcs) => srcs.map((src) => tsDoc(tsLib, src, true).ok), lidOf: (texts) => texts.map((t) => tsLib.__lid_of(t)),
     edit: (json, fast) => tsEditSession(tsLib, json, fast),
     spans: { cmd: 'node', args: [tsFile, 'tok-spans'] }, utf8Edits: false, total: (srcs) => srcs.map((src) => tsTotal(tsLib, src)),
+    interp: (srcs, depth) => srcs.map((src) => tsInterp(tsLib, src, depth)),
   });
 
   if (HAS_GO && !c.tsOnly && (!TARGETS_ONLY || TARGETS_ONLY.includes('go'))) {
@@ -1984,7 +2054,7 @@ for (const c of CASES) {
       label: 'go', run: (src) => runProc(bin, [], src), batch: (srcs) => runBatch(bin, srcs), tokens: (srcs) => tokBatch(bin, srcs),
       doc: (srcs) => docOutcomes(docBatch(bin, 'batch-doc', srcs)), docBuilder: (srcs) => verdicts(docBatch(bin, 'batch-doc-builder', srcs)), lidOf: (texts) => lidBatch(bin, texts),
       edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),
-      spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true, total: (srcs) => totalBatch(bin, srcs),
+      spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true, total: (srcs) => totalBatch(bin, srcs), interp: (srcs, depth) => interpBatch(bin, srcs, depth),
     });
   }
   if (HAS_RUST && !c.tsOnly && (!TARGETS_ONLY || TARGETS_ONLY.includes('rust'))) {
@@ -1998,7 +2068,7 @@ for (const c of CASES) {
       label: 'rust', run: (src) => runProc(bin, [], src), batch: (srcs) => runBatch(bin, srcs), tokens: (srcs) => tokBatch(bin, srcs),
       doc: (srcs) => docOutcomes(docBatch(bin, 'batch-doc', srcs)), lidOf: (texts) => lidBatch(bin, texts),
       edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),
-      spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true, total: (srcs) => totalBatch(bin, srcs),
+      spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true, total: (srcs) => totalBatch(bin, srcs), interp: (srcs, depth) => interpBatch(bin, srcs, depth),
     });
   }
 

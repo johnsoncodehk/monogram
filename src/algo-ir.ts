@@ -878,14 +878,15 @@ export function inlineFn(f: Fn, args: string[], out: string, unset: number): Stm
 
 // `tables`: the int tables the functions read; they and `unpackInts` are printed with them.
 // `only`: print only these of `fns` (all are callable): a target that prints its engine methods
-// apart from the free functions (inside its receiver's declaration) prints a family twice.
-export function printFns(lowering: Lowering, fns: Fn[], sets: CharSet[] = [], records: RecordDecl[] = [], tables: IntTable[] = [], only?: (f: Fn) => boolean): string {
+// apart from the free functions (inside its receiver's declaration) prints a family twice;
+// `decls`: whether this print also declares the sets and tables (once per family).
+export function printFns(lowering: Lowering, fns: Fn[], sets: CharSet[] = [], records: RecordDecl[] = [], tables: IntTable[] = [], only?: (f: Fn) => boolean, decls = true): string {
   const all = tables.length && !fns.some((f) => f.name === UNPACK_INTS.name) ? [...fns, UNPACK_INTS] : fns;
   const p = new Printer(lowering, all, sets, records, tables);
   const decl = (t: IntTable): string => {
     if (!lowering.intTable) throw new Error('algo-ir: the lowering prints no int tables');
     return lowering.intTable(t.name, packInts(t.data));
   };
-  const head = only ? [] : [...sets.map((c) => lowering.charSet(lowering.ident(c.name), c.ranges, c.cold === true)), ...tables.map(decl)];
+  const head = !decls ? [] : [...sets.map((c) => lowering.charSet(lowering.ident(c.name), c.ranges, c.cold === true)), ...tables.map(decl)];
   return [...head, ...all.filter((f) => !f.extern && (only ? only(f) : true)).map((f) => p.fn(f))].join('\n');
 }

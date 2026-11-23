@@ -114,7 +114,7 @@ const target = defineTarget({
   name: 'sexpr-syntax-probe',
   ext: 'scm',
   lowering: sexpr,
-  emitParser: (grammar, shared) => { const ir = portableIR(grammar); return shared.lexScan(ir) + '\n' + shared.relexFamily(ir) + '\n' + shared.reuseFamily(ir) + '\n' + shared.recoveryFamily(); },
+  emitParser: (grammar, shared) => { const ir = portableIR(grammar); return shared.lexScan(ir) + '\n' + shared.relexFamily(ir) + '\n' + shared.reuseFamily(ir) + '\n' + shared.recoveryFamily(ir); },
 });
 
 // IR census: what the printed forms must account for.
@@ -201,7 +201,7 @@ const fail = (msg: string) => { failures++; console.log(`  ✗ ${msg}`); };
 for (const path of FIXTURES) {
   const grammar = (await import(path)).default;
   const lex = lexScanFamily(portableIR(grammar));
-  const fns = [...lex.fns, ...relexFamilyFns(relexMode(portableIR(grammar))), ...reuseFamilyFns(portableIR(grammar)), ...recoveryFamilyFns()];
+  const fns = [...lex.fns, ...relexFamilyFns(relexMode(portableIR(grammar))), ...reuseFamilyFns(portableIR(grammar)), ...recoveryFamilyFns(), UNPACK_INTS];
   const out = target.emitParser(grammar);
   const code = out.split('\n').filter((l) => !/^\s*;;/.test(l)).join('\n').replace(/"(?:[^"\\]|\\.)*"/g, '""');
   const bad = code.match(C_SURFACE);
@@ -210,6 +210,7 @@ for (const path of FIXTURES) {
   try { heads = read(out); } catch (e) { fail(`${path}: ${(e as Error).message}`); continue; }
   const want = census(fns);
   want.set('define-char-set', lex.sets.length + relexFamily(relexMode(portableIR(grammar))).sets.length);
+  want.set('define-table', 1);
   want.set('define-runtime', (want.has('run-end') ? 1 : 0) + (want.has('find') ? 1 : 0) + lex.stopSets.length);
   for (const [k, n] of want) {
     const got = k.split('|').reduce((s, h) => s + (heads.get(h) ?? 0), 0);
