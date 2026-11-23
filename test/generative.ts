@@ -18,8 +18,8 @@
 //       incl. punctuation) so a `-` mis-painted as string is caught — the exact blind
 //       spot that hid #24 from the role-graded scope-gap metric.
 //
-//   HTML SITES (runHtmlSites, with html) — the self-close `/` site matrix against parse5 (see
-//       that section).
+//   HTML SITES (runHtmlSites, with html) — the self-close `/` site matrix against parse5, the
+//       detector's mutation proof, and the classifier lock (see that section).
 //
 //  Coverage is grammar×bound, not a fixed corpus — so it surfaces the depth-bug CLASS
 //  without anyone naming the shape (the motivation for #25). The named regressions
@@ -29,12 +29,14 @@
 //  Run (bare node):  node test/generative.ts            # all languages
 //                    node test/generative.ts yaml       # one language
 // ─────────────────────────────────────────────────────────────────────────────
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { join } from 'node:path';
 import vsctm from 'vscode-textmate';
 import onig from 'vscode-oniguruma';
 import { parseFragment } from 'parse5';
 import { createParser, type CstNode } from '../src/gen-parser.ts';
+import { scratchDir } from './scratch.ts';
 import type { CstGrammar } from '../src/types.ts';
 import { generateInputs, type GenInput } from './grammar-gen.ts';
 // The scope≡role divergence detection is factored into generative-detect.ts so the gap ledger
@@ -214,8 +216,8 @@ async function runLang(cfg: LangCfg): Promise<{ name: string; ok: boolean; viola
   return { name: cfg.name, ok: gated.length === 0 && enoughLegal && missing.length === 0, violations: gated.length, reason };
 }
 
-// ── HTML: the self-close `/` sites ───────────────────────────
-// SELF-CLOSE SITES — in a flat markup grammar the attribute VALUE context decides where a value ends,
+// ── HTML: the self-close `/` sites, and the detector's own mutation proof ───────────────────────────
+// (1) SELF-CLOSE SITES — in a flat markup grammar the attribute VALUE context decides where a value ends,
 // and a `/` GLUED right after the value is EITHER the tag's self-close punctuation (`<A A=""/>`: the value
 // ended at the quote) OR content of an UNQUOTED value (`<a href=x/>`: WHATWG lets `/` sit in an unquoted
 // value). A bug is a `/` whose context mis-classifies it (html.tmbundle#118/#124/#140360; generation
@@ -223,11 +225,19 @@ async function runLang(cfg: LangCfg): Promise<{ name: string; ok: boolean; viola
 // delimiters, self-close marker, quotes and the void class read from `grammar.markup`); the NEUTRAL
 // ORACLE parse5 says whether the `/` lies inside an attribute value's source span (→ must stay
 // `string.unquoted`) or outside every value span (→ must read tag punctuation).
+// (2) MUTATION PROOF — on a copy of the html grammar with the attribute value-context `end` rolled back
+// (the `(?<=[quotes])(?=/)` self-close release arm dropped, reintroducing the self-close gap) the
+// scope≡role detector must FIND the divergence, and on the shipped grammar it must not: the detector is
+// not blind, independent of whether the shipped grammar is currently clean.
+// (3) CLASSIFIER LOCK — a structural-literal / anchored-marker / comment divergence GATES on every
+// strategy, never conceded as a report-only "fuzz frontier limit" (fe4afc0: the concession had hidden
+// the self-close bug the generator printed).
 async function runHtmlSites(): Promise<{ name: string; ok: boolean; violations: number; reason: string }> {
   const cfg = LANGS.find((l) => l.name === 'html')!;
   const grammar = (await import(cfg.module)).default as CstGrammar;
   const m = grammar.markup!;
   const failsAt: string[] = [];
+  // (1)
   const tm = (await loadTm(cfg.scopeName, { [cfg.scopeName]: 'html.tmLanguage.json' }))!;
   const innerAt = (toks: TmTok[], pos: number): string => {
     const t = toks.find((x) => x.start <= pos && pos < x.end);
@@ -286,7 +296,40 @@ async function runHtmlSites(): Promise<{ name: string; ok: boolean; violations: 
     const got = innerAt(tmTokenize(tm, input), focus);
     if (!(wantStr ? got.startsWith('string.unquoted') : got.startsWith('punctuation.definition.tag'))) failsAt.push(`self-close ${sh.name} × ${el.kind} ${JSON.stringify(input)}: want ${wantStr ? 'string.unquoted' : 'punctuation.definition.tag'}, got ${got}`);
   }
-  console.log(`\n── html sites ──  ${cells} self-close cells vs parse5 · ${failsAt.length} wrong`);
+  // (2)
+  const { parse } = createParser(grammar);
+  const roleOf = buildRoleMap(grammar), anchored = anchoredScopes(grammar);
+  const shippedTm = (await loadTm(cfg.scopeName, { [cfg.scopeName]: cfg.tmPath, ...(cfg.tmExtra ?? {}) }))!;
+  const raw = JSON.parse(readFileSync(cfg.tmPath, 'utf8'));
+  let rolled = 0;
+  for (const p of raw.repository?.attribute?.patterns ?? []) {
+    if (typeof p.begin === 'string' && /^\(=\)/.test(p.begin) && typeof p.end === 'string' && /\(\?<=/.test(p.end)) {
+      p.end = p.end.replace(/\|\(\?<=\[[^\]]*\]\)\(\?=[^)]*\)\s*$/, '');
+      rolled++;
+    }
+  }
+  if (!rolled) failsAt.push('mutation proof: the attribute value-context `end` to roll back is not in html.tmLanguage.json (grammar shape changed?)');
+  const file = join(scratchDir('generative'), 'html-perturbed.tmLanguage.json');
+  writeFileSync(file, JSON.stringify(raw));
+  // every embed that pointed back at the html grammar (`source.css`) points at the perturbed copy too:
+  // vscode-textmate shares rule state across a recursive self-embed
+  const extra = Object.fromEntries(Object.entries(cfg.tmExtra ?? {}).map(([sn, p]) => [sn, p === cfg.tmPath ? file : p]));
+  const perturbedTm = (await loadTm(cfg.scopeName, { [cfg.scopeName]: file, ...extra }))!;
+  // the self-close `/` divergence (a structural-literal→content #24), found by token
+  const diverges = (t: vsctm.IGrammar, text: string): boolean => {
+    let cst: CstNode, toks: TmTok[];
+    try { cst = parse(text); toks = tmTokenize(t, text); } catch { return false; }
+    const leaves = leafRoles(grammar, cst, text, roleOf);
+    return collectViolations({ input: text, strategy: 'fuzz', cst, toks, leaves, anchored }).some((v) => v.text === '/');
+  };
+  const probe = '<aA aA = "a"/>';   // the generator's tight-markup shape
+  if (!diverges(perturbedTm, probe)) failsAt.push(`mutation proof: the detector does not find the self-close \`/\` divergence on ${JSON.stringify(probe)} with the rolled-back grammar`);
+  if (diverges(shippedTm, probe)) failsAt.push(`mutation proof: the shipped grammar diverges on ${JSON.stringify(probe)}`);
+  // (3)
+  for (const kind of ['#24 structural-literal→content', 'structural-literal→name', '#23 anchored-marker misfire', '#comment uncolored']) {
+    if (!isGated({ kind })) failsAt.push(`classifier lock: a \`${kind}\` divergence does not gate`);
+  }
+  console.log(`\n── html sites ──  ${cells} self-close cells vs parse5 · detector mutation proof (rolled-back + shipped) · 4 classifier-lock kinds · ${failsAt.length} wrong`);
   for (const f of failsAt) console.log(`    ✗ ${f}`);
   return { name: 'html sites', ok: failsAt.length === 0, violations: failsAt.length, reason: `${failsAt.length} wrong` };
 }
