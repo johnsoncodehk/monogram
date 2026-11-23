@@ -685,8 +685,8 @@ static _FLOW_D: [i8; ${ids.lids.length}] = [${lidDeltaTable(ids, nl.flowOpen, nl
 
 /** uni-ident.ts's identifier classes, its lookup, and the code point at a char boundary.
  *  Rust's std has `is_alphanumeric` but no ID_Start / ID_Continue query, hence the table. */
-function rsUniIdentTables(): string {
-  const p = uniIdentPlan();
+function rsUniIdentTables(ir: ParserIR): string {
+  const p = uniIdentPlan(ir.identClasses);
   // In range by construction: every index the plan's lookup forms is inside its string.
   const l = uniLookup(p, (k) => `(unsafe { *_UNI_T.get_unchecked(${k} as usize) } as u32)`);
   return `static _UNI_T: &[u8; ${p.data.length}] = b"${p.data.replace(/\\/g, '\\\\')}";
@@ -840,7 +840,7 @@ ${rsUnexpected(errAt)}`
     matches!(ch, '\\u{00A0}' | '\\u{1680}' | '\\u{2028}' | '\\u{2029}' | '\\u{202F}' | '\\u{205F}' | '\\u{3000}' | '\\u{FEFF}')
         || { let u = ch as u32; (0x2000..=0x200A).contains(&u) }
 }
-${identName || ir.identLike.length ? `${rsUniIdentTables()}// Both out of line: inlined into the dispatch loop they cost every ASCII token (register layout).
+${identName || ir.identLike.length ? `${rsUniIdentTables(ir)}// Both out of line: inlined into the dispatch loop they cost every ASCII token (register layout).
 #[inline(never)] fn _scan_uni_ident(b: &[u8], pos: usize) -> Option<usize> {
     let (cp, w) = _lx_cp(b, pos);
     if _uni_class(cp) != 2 { return None; }

@@ -16,7 +16,6 @@ import type {
 import { validateShapeOrThrow } from './shape-validate.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, findAnyName, isNum, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, type R, type Ty } from './algo-ir.ts';
-import { UNI_ID_CONTINUE, UNI_ID_START } from './uni-ident.ts';
 import { type TextUnits, unitLen } from './text-units.ts';
 
 export type { ShapeSpec, ShapeIR } from './shape-schema.ts';
@@ -554,7 +553,7 @@ ${tplSpanTs('pos + ' + tlen(tpl.open), rx ? '!prevIsValue()' : 'true')}      if 
   const identNameTs = ir.identToken;
   const identKidTs = identNameTs ? kidOf(ids, identNameTs) : 0;
   const lxExtConst = ir.identLike.length
-    ? `const LX_UNI_CONT = /${UNI_ID_CONTINUE}+/uy;
+    ? `const LX_UNI_CONT = /${ir.identClasses.continue}+/uy;
 function lx_ext(src: string, e: number): number {
   if (e >= src.length || src.charCodeAt(e) < 0x80) return e;
   LX_UNI_CONT.lastIndex = e;
@@ -562,7 +561,7 @@ function lx_ext(src: string, e: number): number {
   return m ? e + m[0].length : e;
 }
 // JavaScript has the classes natively (uni-ident.ts).
-const LX_ID_START = /^${UNI_ID_START}$/u, LX_ID_PART = /^${UNI_ID_CONTINUE}$/u;
+const LX_ID_START = /^${ir.identClasses.start}$/u, LX_ID_PART = /^${ir.identClasses.continue}$/u;
 function ${shared.uniClass()}(cp: number): number {
   const ch = String.fromCodePoint(cp);
   return LX_ID_START.test(ch) ? 2 : LX_ID_PART.test(ch) ? 1 : 0;
@@ -575,7 +574,7 @@ ${shared.uniIdent(ir) ? `function ${shared.uniIdent(ir)}(s: string, p: number): 
 ` : ''}`
     : '';
   const lxUniIdentConst = (nl ? newlineParts(nl, 'emit', ids).table : '') + (shared.scannedTokens(ir).some((t) => t.skip) ? TS_HAS_LINE_TERM : '') + (identNameTs || shared.uniIdent(ir)
-    ? `const LX_UNI_IDENT = /${UNI_ID_START}${UNI_ID_CONTINUE}*/uy;\n`
+    ? `const LX_UNI_IDENT = /${ir.identClasses.start}${ir.identClasses.continue}*/uy;\n`
     : '') + lxExtConst;
   const uniIdentPushTs = stateful ? 'emit' : 'push';
   const uniIdentFallbackTs = identNameTs

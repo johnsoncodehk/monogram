@@ -544,6 +544,13 @@ export const CASES: Case[] = [
       '¦unterminated;', '«open a;', '‖a¤⟨x‖;', '^;', '^°°;;', '°;', '^° °° ;'],
   },
   {
+    // An identifier token that declares Python's Unicode classes (see the fixture): the lexer's
+    // fallback beyond ASCII uses them, not ECMAScript's, in every target.
+    grammar: 'xidjs', path: './fixtures/xidjs.ts',
+    accept: ['℘ = a;', 'ℕ = a℘;', 'aำ = b;', 'a = bำc;', '_ำ = x;'],
+    reject: ['ͺ = a;', 'aͺ = b;', '$ = a;', 'é$ = a;', 'ำ = a;'],
+  },
+  {
     // The REAL javascript.ts grammar — the proof
     // that the target-agnostic emitter handles a full language end-to-end in ts/go/rust.
     // ASCII corpus only (byte-based go/rust use UTF-8 offsets, identical to the JS oracle's
