@@ -51,7 +51,13 @@ jobs:
       # tree-sitter packages.
       - name: Generate editor artifacts (committed ones must be in sync)
         run: |
-          npm run gen
+          # `npm run gen`, each of its commands under /usr/bin/time (report-only): wall and CPU seconds
+          # and peak memory per grammar, the generators' cost; read with
+          # `gh run view <id> --log | grep 'generate '` (the CPU line says which runner it was).
+          echo "generate runner CPU:$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2), $(nproc) cores"
+          while IFS= read -r c; do
+            /usr/bin/time -f "generate $c: %e s wall, %U s user, %M KB peak" bash -c "$c"
+          done < <(node -p "require('./package.json').scripts.gen.split(' && ').join('\\n')")
           git diff --exit-code -- '*.tmLanguage.json' '*.language-configuration.json' '*.monarch.json' '*.contributes.json' tree-sitter docs/COMPLETENESS.md docs/decisions test/fixtures/decisionsjs.decisions.md
 
       - name: Typecheck

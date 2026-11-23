@@ -1,0 +1,515 @@
+// planShape: a shape (src/shape2-eval.ts `defineShape`) compiled against the portable engine's IR
+// (src/emit-portable.ts) into what a printer needs to emit a parser that builds the shape's values
+// DIRECTLY, in the one parse, with no CST: per (rule, engine arm) a CONSTRUCT plan (an algo-ir Fn,
+// src/algo-ir.ts "Shape values") that runs where the engine accepts that arm (RuleLowering.accept /
+// cand / commit, PrattLowering's nud / led / operator sites) in place of the CST builder's node, and
+// the shape form of the IR's steps that leaves on the child stack what the plans read.
+//
+// What a construct plan reads. When arm i is accepted, its children are the child stack's slots b..n
+// (n: the height). Each slot carries a TAG: the number of the grammar node that left it, within its
+// arm (numberArm: every token / literal / rule reference / literal alternation of the arm, in
+// preorder; an even tag is a NAMED child, an odd one an unnamed leaf), set by the step that left it
+// (Step.tag; -1 on anything else). A repetition the plan iterates (map / fold) has its body's steps
+// marked (Step.mark): each iteration's slots are preceded by a zero-width MARKER slot (tag -2 - m).
+// So the plan finds a child by its tag, an inline alternation's branch by the tag range of the
+// branch's nodes, and an iteration between two markers: no matching, no backtracking, no CST.
+// Positional children are read by position instead: a Pratt rule's operator forms (left / op /
+// right, op / operand, operand / op), a led's left operand (slot b), a NUD token arm's token.
+//
+// Engine arms against grammar arms (the names a shape is written in, src/grammar-names.ts): an rd
+// rule's engine alternative i IS grammar alternative i (RdRule.altNames). A Pratt / left-recursive
+// rule's NUD arm i, led i and postfix token i are each one grammar arm (nudNames / ledNames /
+// postfixTokNames); every `prefix` / `$ op $` / `$ postfix` grammar alternative is ONE engine path
+// per form, and grammar-names gives each form ONE arm name (opNames): one to one again. A NUD or
+// postfix token arm whose token is a template token runs as two engine paths (the plain token, the
+// interpolated template) for the same arm. A shared step (ParserIR.shared) is printed once for
+// every site, so it cannot carry each site's tags: the shape form prints each site in place
+// (`share` dropped); passing the site's tag base to the shared function is the end state's answer.
+//
+// S1 (this stage) compiles synthesized-only terms: an arm whose term needs an inherited attribute,
+// a synthesized attribute, `get`, `dropLastIf`, a template's parts, or a nodes-attribute equation is
+// compiled to a MISSING value (`unsupported`), which fails only where it is read, as an unmapped arm
+// does (the evaluator's laziness: a child nobody reads is never built into anything).
+import type { Expr, Fn, Stmt } from './algo-ir.ts';
+import type { ParserIR, PrattRule, RdRule, RuleIR, Step } from './emit-portable.ts';
+import type { RuleExpr } from './types.ts';
+import { cardOf, type ArmInfo, type ScopeInfo, type Shape, type Slot } from './shape2-eval.ts';
+import type { CookFn, Term } from './shape2-schema.ts';
+
+/** One engine arm: the rule, the engine's key for it, the grammar arm (null: none maps it). */
+export type EngineArm = { id: number; rule: string; key: string; arm: string };
+export type ShapePlan = {
+  arms: EngineArm[];
+  /** The id of the engine arm `key` of `rule` (see armKeys). */
+  armId(rule: string, key: string): number;
+  /** The construct plans (`construct<id>`), and the extern functions they call. */
+  fns: Fn[];
+  /** The IR whose building steps are the shape form (tagged, marked, unshared; no reuse). */
+  ir: ParserIR;
+  /** The cooking functions the plans call. */
+  cooks: CookFn[];
+  /** Arms compiled to a missing value, with the reason. */
+  unsupported: Map<number, string>;
+};
+
+/** The engine's key for each accept site of a rule: rd `alt<i>`; Pratt `nud<i>`, `led<i>`,
+ * `post<i>` (postfix token i), `bin`, `postop`. */
+export function armKeys(r: RuleIR): { key: string; arm: string }[] {
+  if (r.kind === 'rd') return r.alts.map((_, i) => ({ key: `alt${i}`, arm: r.altNames[i]! }));
+  const out: { key: string; arm: string }[] = [];
+  r.nudOrder.forEach((_, i) => out.push({ key: `nud${i}`, arm: r.nudNames[i]! }));
+  r.leds.forEach((_, i) => out.push({ key: `led${i}`, arm: r.ledNames[i]! }));
+  r.postfixToks.forEach((_, i) => out.push({ key: `post${i}`, arm: r.postfixTokNames[i]! }));
+  // The operator sites are printed for every Pratt rule; one without operator arms (a left-recursive
+  // rule) never reaches them: no arm (NO_ARM), a plan that is never run.
+  out.push({ key: 'bin', arm: r.opNames?.binary ?? NO_ARM }); out.push({ key: 'postop', arm: r.opNames?.postfix ?? NO_ARM });
+  return out;
+}
+
+export const NO_ARM = '(no arm)';
+class Unsupported extends Error {}
+const no = (why: string): never => { throw new Unsupported(why); };
+
+// ── Tags: the grammar nodes of one arm, numbered ──
+type Numbering = { tagOf: Map<RuleExpr, number>; branchRange: Map<RuleExpr, [number, number][]>; nullableBranch: Set<RuleExpr> };
+const ZERO_WIDTH = new Set(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf']);
+function numberArm(items: RuleExpr[], named: (e: RuleExpr) => boolean): Numbering {
+  const n: Numbering = { tagOf: new Map(), branchRange: new Map(), nullableBranch: new Set() };
+  let k = 0;
+  const leaf = (e: RuleExpr) => { n.tagOf.set(e, 2 * k + (named(e) ? 0 : 1)); k++; };
+  const visit = (e: RuleExpr): void => {
+    switch (e.type) {
+      case 'ref': case 'literal': leaf(e); return;
+      case 'group': case 'quantifier': visit(e.body); return;
+      case 'seq': e.items.forEach(visit); return;
+      case 'sep': visit(e.element); return;
+      case 'alt': {
+        if (e.items.length > 0 && e.items.every((x) => x.type === 'literal')) { leaf(e); return; }
+        const rs: [number, number][] = [];
+        for (const b of e.items) { const s = k; visit(b); rs.push([2 * s, 2 * k - 1]); if (k === s) n.nullableBranch.add(e); }
+        n.branchRange.set(e, rs);
+        return;
+      }
+      default: if (!ZERO_WIDTH.has(e.type)) throw new Error(`planShape: unexpected grammar item ${e.type}`);
+    }
+  };
+  items.forEach(visit);
+  return n;
+}
+
+// ── algo-ir helpers ──
+const v = (name: string): Expr => ({ k: 'var', name });
+const int = (x: number): Expr => ({ k: 'int', v: x });
+const bin = (op: Extract<Expr, { k: 'bin' }>['op'], a: Expr, b: Expr): Expr => ({ k: 'bin', op, a, b });
+const call = (fn: string, ...args: Expr[]): Expr & { k: 'call' } => ({ k: 'call', fn, args });
+const VAL = 'val_any', VALS = 'vals_any';
+const EXTERNS: Fn[] = [
+  ['slotTag', [['i', 'idx']], 'int'], ['slotOff', [['i', 'idx']], 'pos'], ['slotEnd', [['i', 'idx']], 'pos'],
+  ['slotVal', [['i', 'idx']], VAL], ['slotArmName', [['i', 'idx']], VAL], ['slotTop', [], 'idx'],
+  ['slotFind', [['lo', 'idx'], ['hi', 'idx'], ['t0', 'int'], ['t1', 'int']], 'int'],
+  ['slotFindLast', [['lo', 'idx'], ['hi', 'idx'], ['t0', 'int'], ['t1', 'int']], 'int'],
+  ['namedEnd', [['lo', 'idx'], ['hi', 'idx']], 'int'],
+  ['srcText', [['a', 'pos'], ['b', 'pos']], 'str'],
+].map(([name, ps, ret]) => ({ name: name as string, doc: '', params: (ps as [string, string][]).map(([n, ty]) => ({ name: n, ty: ty as never })), ret: [ret as never], body: [], extern: true, method: true, reads: true }));
+// The span a value gives a `let` / fold variable: a node's, a non-empty node list's first start /
+// last end, else `dflt`.
+const SPAN_FNS: Fn[] = ['valStart', 'valEnd'].map((name) => ({ name, doc: '', params: [{ name: 'x', ty: VAL as never }, { name: 'dflt', ty: 'pos' as never }], ret: ['int' as never], body: [], extern: true }));
+const cookFn = (fn: CookFn): Fn => ({ name: `cook_${fn}`, doc: '', params: [{ name: 's', ty: 'str' }], ret: [VAL as never], body: [], extern: true });
+
+/** Compile `shape` against `ir` (built from the shape's own grammar). */
+export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
+  const arms: EngineArm[] = [];
+  const ids = new Map<string, number>();
+  const unsupported = new Map<number, string>();
+  const cooks = new Set<CookFn>();
+  const fns: Fn[] = [];
+  const newRules: RuleIR[] = [];
+  for (const r of ir.rules) {
+    const view = shape.grammar.arms.get(r.name);
+    const names = shape.grammar.names.get(r.name);
+    if (!view || !names) throw new Error(`planShape: the IR's rule ${r.name} is not in the shape's grammar (plan a shape against the grammar it was defined on)`);
+    const named = (e: RuleExpr) => names.childOf.has(e);
+    const marked = new Map<RuleExpr, number>();   // quantifier body / sep element -> marker tag
+    const tagsByKey = new Map<string, Numbering>();
+    for (const { key, arm } of armKeys(r)) {
+      const id = arms.length;
+      arms.push({ id, rule: r.name, key, arm });
+      ids.set(`${r.name}|${key}`, id);
+      if (arm === NO_ARM) {
+        tagsByKey.set(key, numberArm([], named));
+        fns.push({ name: `construct${id}`, doc: `${r.name} ${key}: no such arm`, params: [{ name: 'b', ty: 'idx' }, { name: 'off', ty: 'pos' }, { name: 'end', ty: 'pos' }], ret: [VAL as never], body: [{ k: 'return', es: [{ k: 'vMissing', where: `${r.name} ${key}`, why: 'unmapped' }] }], method: true, reads: true });
+        continue;
+      }
+      const info = view.find((a) => a.arm === arm);
+      if (!info) throw new Error(`planShape: ${r.name}: the engine arm ${key} names the arm ${arm}, which the shape's grammar view does not have`);
+      const num = numberArm(info.items ?? [], named);
+      tagsByKey.set(key, num);
+      const term = shape.spec.rules[r.name]?.[arm];
+      const where = `${r.name}.${arm}`;
+      let body: Stmt[];
+      if (term === undefined) body = [{ k: 'return', es: [{ k: 'vMissing', where, why: 'unmapped' }] }];
+      else {
+        try {
+          if (Object.values(shape.spec.inherited ?? {}).some((d) => d.type === 'nodes' && d.rules[r.name]?.[arm] !== undefined)) no('a nodes-attribute equation');
+          body = new ArmCompiler(shape, info, num, positional(r, key, info), key.startsWith('led') ? 1 : 0, marked, cooks).compile(term);
+        } catch (e) {
+          if (!(e instanceof Unsupported)) throw e;
+          unsupported.set(id, e.message);
+          body = [{ k: 'return', es: [{ k: 'vMissing', where: `${where} (${e.message})`, why: 'unsupported' }] }];
+        }
+      }
+      fns.push({ name: `construct${id}`, doc: where, params: [{ name: 'b', ty: 'idx' }, { name: 'off', ty: 'pos' }, { name: 'end', ty: 'pos' }], ret: [VAL as never], body, method: true, reads: true });
+    }
+    newRules.push(shapeSteps(r, tagsByKey, marked));
+  }
+  fns.push(...EXTERNS, ...SPAN_FNS, ...[...cooks].map(cookFn));
+  return {
+    arms, fns, cooks: [...cooks], unsupported,
+    armId: (rule, key) => { const id = ids.get(`${rule}|${key}`); if (id === undefined) throw new Error(`planShape: no engine arm ${rule} ${key}`); return id; },
+    ir: { ...ir, rules: newRules, reuse: null },
+  };
+}
+
+/** The children an engine arm reads by position (offset from slot b). */
+function positional(r: RuleIR, key: string, info: ArmInfo): Map<RuleExpr, number> {
+  const m = new Map<RuleExpr, number>();
+  if (info.form) {
+    const order = info.form === 'binary' ? ['left', 'op', 'right'] : info.form === 'prefix' ? ['op', 'operand'] : ['operand', 'op'];
+    order.forEach((nm, i) => m.set(info.slots.get(nm)!.node, i));
+    return m;
+  }
+  const items = info.items ?? [];
+  if (r.kind === 'pratt' && (key.startsWith('led') || key.startsWith('post'))) m.set(items[0]!, 0);
+  if (r.kind === 'pratt' && key.startsWith('post')) m.set(items[1]!, 1);
+  if (r.kind === 'pratt' && key.startsWith('nud') && r.nudOrder[Number(key.slice(3))]!.kind === 'tok') m.set(items[0]!, 0);
+  return m;
+}
+
+/** The shape form of a rule's building steps: each slot-leaving step tagged, each marked
+ * repetition body marked, every shared step printed in place. */
+function shapeSteps(r: RuleIR, tags: Map<string, Numbering>, marked: Map<RuleExpr, number>): RuleIR {
+  const clone = (num: Numbering) => {
+    const c = (s: Step): Step => {
+      const o = { ...s } as Step & { share?: number };
+      delete o.share;
+      if (s.src && (s.t === 'lit' || s.t === 'tok' || s.t === 'rule' || s.t === 'ruleBp' || s.t === 'altlit')) { const t = num.tagOf.get(s.src); if (t !== undefined) o.tag = t; }
+      if (s.src && marked.has(s.src)) o.mark = marked.get(s.src)!;
+      switch (o.t) {
+        case 'star': o.step = c(o.step); break;
+        case 'sep': o.elem = c(o.elem); break;
+        case 'opt': case 'seq': case 'suppress': case 'ctx': o.steps = o.steps.map(c); break;
+        case 'alt': o.branches = o.branches.map((b) => b.map(c)); break;
+      }
+      return o;
+    };
+    return (steps: Step[]) => steps.map(c);
+  };
+  const at = (key: string) => clone(tags.get(key)!);
+  if (r.kind === 'rd') return { ...r, alts: r.alts.map((a, i) => at(`alt${i}`)(a)) } as RdRule;
+  const p = r as PrattRule;
+  const nudKey = (kind: string, index: number) => `nud${p.nudOrder.findIndex((x) => x.kind === kind && 'index' in x && x.index === index)}`;
+  return {
+    ...p,
+    nudBrackets: p.nudBrackets.map((b, i) => ({ ...b, steps: at(nudKey('bracket', i))(b.steps) })),
+    nudSeqs: p.nudSeqs.map((s, i) => at(nudKey('seq', i))(s)),
+    nudCapped: p.nudCapped.map((c, i) => ({ ...c, steps: at(nudKey('capped', i))(c.steps) })),
+    leds: p.leds.map((b, i) => ({ ...b, steps: at(`led${i}`)(b.steps) })),
+  };
+}
+
+// ── Terms to construct plans ──
+// A scope: the arm, a branch, or one iteration (`base`: the repetitions consumed to reach it), over
+// the slots lo..hi (algo-ir variables), with the variables bound around it.
+type Bound = { val: string; start: string; end: string };
+type CScope = { info: ScopeInfo; base: RuleExpr[]; lo: string; hi: string; outer?: CScope; vars: Map<string, Bound>; arm: boolean };
+const startsWith = (a: RuleExpr[], p: RuleExpr[]): boolean => p.every((q, i) => a[i] === q);
+const isListQ = (q: RuleExpr): boolean => q.type === 'sep' || (q.type === 'quantifier' && q.kind !== '?');
+
+class ArmCompiler {
+  private n = 0;
+  private shape: Shape; private info: ArmInfo; private num: Numbering; private pos: Map<RuleExpr, number>; private lo0: number;
+  private marked: Map<RuleExpr, number>; private cooks: Set<CookFn>;
+  constructor(shape: Shape, info: ArmInfo, num: Numbering, pos: Map<RuleExpr, number>, lo0: number, marked: Map<RuleExpr, number>, cooks: Set<CookFn>) {
+    this.shape = shape; this.info = info; this.num = num; this.pos = pos; this.lo0 = lo0; this.marked = marked; this.cooks = cooks;
+  }
+  private tmp(): string { return `t${this.n++}`; }
+
+  compile(term: Term): Stmt[] {
+    const out: Stmt[] = [
+      { k: 'let', name: 'lo', ty: 'idx', init: bin('add', v('b'), int(this.lo0)) },
+      { k: 'let', name: 'hi', ty: 'idx', init: call('slotTop') },
+    ];
+    const s: CScope = { info: this.info, base: [], lo: 'lo', hi: 'hi', vars: new Map(), arm: true };
+    const r = this.val(term, s, out);
+    out.push({ k: 'return', es: [r] });
+    return out;
+  }
+
+  private bindVal(e: Expr, out: Stmt[]): string { const t = this.tmp(); out.push({ k: 'let', name: t, ty: VAL as never, init: e }); return t; }
+  private bindInt(e: Expr, out: Stmt[], ty: 'int' | 'idx' = 'int'): string { const t = this.tmp(); out.push({ k: 'let', name: t, ty, init: e }); return t; }
+
+  private resolve(s: CScope, name: string): { slot: Slot; rest: RuleExpr[]; scope: CScope } {
+    const slot = s.info.slots.get(name);
+    if (slot && startsWith(slot.quants, s.base)) return { slot, rest: slot.quants.slice(s.base.length), scope: s };
+    if (!s.outer) throw new Error(`planShape: no child ${name}`);
+    return this.resolve(s.outer, name);
+  }
+  private lookupVar(s: CScope, name: string): Bound | undefined { return s.vars.get(name) ?? (s.outer ? this.lookupVar(s.outer, name) : undefined); }
+  /** The tag range of a slot's items (a branch: all its branches). */
+  private range(slot: Slot): [number, number] {
+    if (slot.kind === 'branch') {
+      if (this.shape.grammar.templateViews.has(slot.node)) no('a template literal\'s parts');
+      const rs = this.num.branchRange.get(slot.node)!;
+      return [rs[0]![0], rs[rs.length - 1]![1]];
+    }
+    const t = this.num.tagOf.get(slot.node);
+    if (t === undefined) throw new Error(`planShape: ${this.info.where}: child ${slot.name} has no tag`);
+    return [t, t];
+  }
+  /** The index of the single item of `name` (-1: absent), as an int variable. */
+  private one(s: CScope, name: string, out: Stmt[]): { idx: string; slot: Slot; scope: CScope } {
+    const r = this.resolve(s, name);
+    if (r.rest.some(isListQ)) no(`one item of the repeated child ${name}`);
+    const p = this.pos.get(r.slot.node);
+    if (p !== undefined && r.scope.arm) return { idx: this.bindInt(bin('add', v('b'), int(p)), out), slot: r.slot, scope: r.scope };
+    const [t0, t1] = this.range(r.slot);
+    return { idx: this.bindInt(call('slotFind', v(r.scope.lo), v(r.scope.hi), int(t0), int(t1)), out), slot: r.slot, scope: r.scope };
+  }
+  /** Statements: `x = then` when cond, else `x = otherwise` (each compiled in its own branch). */
+  private choose(cond: Expr, then: (o: Stmt[]) => Expr, otherwise: (o: Stmt[]) => Expr, out: Stmt[]): Expr {
+    const x = this.tmp();
+    out.push({ k: 'let', name: x, ty: VAL as never, init: { k: 'vAbsent' } });
+    const a: Stmt[] = []; a.push({ k: 'set', name: x, e: then(a) });
+    const b: Stmt[] = []; b.push({ k: 'set', name: x, e: otherwise(b) });
+    out.push({ k: 'if', c: cond, then: a, else: b });
+    return v(x);
+  }
+  private boolVal(c: Expr, out: Stmt[]): Expr { return this.choose(c, () => ({ k: 'vConst', v: true }), () => ({ k: 'vConst', v: false }), out); }
+
+  private bool(t: Term, s: CScope, out: Stmt[]): Expr {
+    switch (t.t) {
+      case 'present': return this.present(s, t.name, out);
+      case 'not': return { k: 'not', e: this.bool(t.arg, s, out) };
+      case 'and': case 'or': {
+        const x = this.tmp();
+        out.push({ k: 'let', name: x, ty: 'bool', init: { k: 'bool', v: t.t === 'and' } });
+        // Short-circuit: each later argument only while the result is still undecided.
+        let level = out;
+        for (const a of t.args) {
+          const inner: Stmt[] = [];
+          inner.push({ k: 'set', name: x, e: this.bool(a, s, inner) });
+          level.push({ k: 'if', c: t.t === 'and' ? v(x) : { k: 'not', e: v(x) }, then: inner });
+          level = inner;
+        }
+        return v(x);
+      }
+      default: return { k: 'vIs', e: this.val(t, s, out), v: true };
+    }
+  }
+  private present(s: CScope, name: string, out: Stmt[]): Expr {
+    if (this.lookupVar(s, name)) no('present of a nodes variable');
+    const r = this.resolve(s, name);
+    const p = this.pos.get(r.slot.node);
+    if (p !== undefined && r.scope.arm) return { k: 'bool', v: true };
+    const [t0, t1] = this.range(r.slot);
+    return bin('ge', v(this.bindInt(call('slotFind', v(r.scope.lo), v(r.scope.hi), int(t0), int(t1)), out)), int(0));
+  }
+  private text(idx: string, slot: Slot, scope: CScope, out: Stmt[]): Expr {
+    if (slot.kind === 'branch') {
+      const [t0, t1] = this.range(slot);
+      const last = this.bindInt(call('slotFindLast', v(idx), v(scope.hi), int(t0), int(t1)), out);
+      return call('srcText', call('slotOff', v(idx)), call('slotEnd', v(last)));
+    }
+    return call('srcText', call('slotOff', v(idx)), call('slotEnd', v(idx)));
+  }
+  private spanEdge(s: CScope, name: string, edge: 'start' | 'end', out: Stmt[]): Expr {
+    const b = this.lookupVar(s, name);
+    if (b) return v(edge === 'start' ? b.start : b.end);
+    const r = this.resolve(s, name);
+    const p = this.pos.get(r.slot.node);
+    if (p !== undefined && r.scope.arm) return call(edge === 'start' ? 'slotOff' : 'slotEnd', bin('add', v('b'), int(p)));
+    const [t0, t1] = this.range(r.slot);
+    const i = this.bindInt(call(edge === 'start' ? 'slotFind' : 'slotFindLast', v(r.scope.lo), v(r.scope.hi), int(t0), int(t1)), out);
+    return call(edge === 'start' ? 'slotOff' : 'slotEnd', v(i));
+  }
+  /** The iterations of the repetition holding `over`: a loop over its markers. */
+  private iterations(s: CScope, over: string, out: Stmt[], each: (it: CScope, body: Stmt[]) => void): void {
+    const r = this.resolve(s, over);
+    const at = r.rest.map(isListQ).lastIndexOf(true);
+    if (at !== 0) no(at < 0 ? `iterations of ${over}, which repeats in no list` : `iterations of a nested repetition (${over})`);
+    const q = r.rest[0]!;
+    const body = q.type === 'sep' ? q.element : (q as { body: RuleExpr }).body;
+    if (!this.marked.has(body)) this.marked.set(body, -2 - this.marked.size);
+    const mt = this.marked.get(body)!;
+    const m = this.tmp(), nx = this.tmp(), ih = this.tmp();
+    out.push({ k: 'let', name: m, ty: 'int', init: call('slotFind', v(r.scope.lo), v(r.scope.hi), int(mt), int(mt)) });
+    const loop: Stmt[] = [
+      { k: 'let', name: nx, ty: 'int', init: call('slotFind', bin('add', v(m), int(1)), v(r.scope.hi), int(mt), int(mt)) },
+      { k: 'let', name: ih, ty: 'idx', init: v(r.scope.hi) },
+      { k: 'if', c: bin('ge', v(nx), int(0)), then: [{ k: 'set', name: ih, e: v(nx) }] },
+    ];
+    const lo = this.tmp();
+    loop.push({ k: 'let', name: lo, ty: 'idx', init: bin('add', v(m), int(1)) });
+    each({ info: r.scope.info, base: [...r.scope.base, q], lo, hi: ih, outer: s, vars: new Map(), arm: false }, loop);
+    loop.push({ k: 'set', name: m, e: v(nx) });
+    out.push({ k: 'while', c: bin('ge', v(m), int(0)), body: loop });
+  }
+
+  val(t: Term, s: CScope, out: Stmt[]): Expr {
+    switch (t.t) {
+      case 'const': return { k: 'vConst', v: t.value };
+      case 'absent': return { k: 'vAbsent' };
+      case 'inh': return no('an inherited attribute');
+      case 'syn': return no('a synthesized attribute');
+      case 'get': return no('`get` of a record-valued child');
+      case 'dropLastIf': return no('dropLastIf');
+      case 'child': {
+        const r = this.resolve(s, t.name);
+        if (r.slot.kind !== 'node') throw new Error(`planShape: ${this.info.where}: child ${t.name} is a ${r.slot.kind}`);
+        if (cardOf(r.rest) === 'many') {
+          // A list: every item, in order. An optional inside the repetition would leave holes the
+          // tags cannot show (S1: no array holes).
+          if (r.rest.some((q) => q.type === 'quantifier' && q.kind === '?')) no(`a repeated child with holes (${t.name})`);
+          const [t0] = this.range(r.slot);
+          const l = this.tmp(), i = this.tmp();
+          out.push({ k: 'let', name: l, ty: VALS as never, init: { k: 'newList', ty: VALS as never } });
+          out.push({ k: 'let', name: i, ty: 'idx', init: v(r.scope.lo) });
+          out.push({ k: 'while', c: bin('lt', v(i), v(r.scope.hi)), body: [
+            { k: 'if', c: bin('eq', call('slotTag', v(i)), int(t0)), then: [{ k: 'push', list: l, e: { k: 'vNeed', e: call('slotVal', v(i)) } }] },
+            { k: 'set', name: i, e: bin('add', v(i), int(1)) },
+          ] });
+          return { k: 'vList', e: v(l) };
+        }
+        const o = this.one(s, t.name, out);
+        return this.choose(bin('ge', v(o.idx), int(0)), () => ({ k: 'vNeed', e: call('slotVal', v(o.idx)) }), () => ({ k: 'vAbsent' }), out);
+      }
+      case 'text': {
+        if (t.name === undefined) return { k: 'vText', e: call('srcText', v('off'), v('end')) };
+        const o = this.one(s, t.name, out);
+        return this.choose(bin('ge', v(o.idx), int(0)), (b) => ({ k: 'vText', e: this.text(o.idx, o.slot, o.scope, b) }), () => ({ k: 'vAbsent' }), out);
+      }
+      case 'cook': {
+        this.cooks.add(t.fn);
+        const o = this.one(s, t.name, out);
+        return this.choose(bin('ge', v(o.idx), int(0)), (b) => call(`cook_${t.fn}`, this.text(o.idx, o.slot, o.scope, b)), () => ({ k: 'vAbsent' }), out);
+      }
+      case 'present': case 'and': case 'or': case 'not': return this.boolVal(this.bool(t, s, out), out);
+      case 'armOf': {
+        const o = this.one(s, t.name, out);
+        if (o.slot.kind === 'branch') return this.branchCase(o.slot, o.scope, out, (_bn, name) => ({ k: 'vConst', v: name }), () => ({ k: 'vAbsent' }));
+        return this.choose(bin('ge', v(o.idx), int(0)), () => call('slotArmName', v(o.idx)), () => ({ k: 'vAbsent' }), out);
+      }
+      case 'node': {
+        const kind = this.bindVal(this.val(t.type, s, out), out);
+        const fields = Object.entries(t.fields).map(([name, x]) => ({ name, e: v(this.bindVal(this.val(x, s, out), out)) }));
+        let start: Expr = v('off'), end: Expr = v('end');
+        const sp = t.span;
+        if (sp && 'inside' in sp) no('an `inside` span (template parts)');
+        else if (sp && 'after' in sp) { start = end = v(this.bindInt(this.spanEdge(s, sp.after, 'end', out), out)); }
+        else if (sp) { start = v(this.bindInt(this.spanEdge(s, sp.from, 'start', out), out)); end = v(this.bindInt(this.spanEdge(s, sp.to, 'end', out), out)); }
+        return { k: 'mkNode', kind: v(kind), fields, start, end };
+      }
+      case 'record': return { k: 'mkRecord', fields: Object.entries(t.fields).map(([name, x]) => ({ name, e: v(this.bindVal(this.val(x, s, out), out)) })) };
+      case 'list': {
+        const l = this.tmp();
+        out.push({ k: 'let', name: l, ty: VALS as never, init: { k: 'newList', ty: VALS as never } });
+        for (const x of t.items) {
+          if ('spread' in x) {
+            const sv = this.bindVal(this.val(x.spread, s, out), out), e = this.tmp();
+            out.push({ k: 'forEach', v: e, list: { k: 'vItems', e: v(sv) }, body: [{ k: 'push', list: l, e: v(e) }] });
+          } else {
+            const e = this.bindVal(this.val(x, s, out), out);
+            out.push({ k: 'if', c: { k: 'not', e: { k: 'vPresent', e: v(e) } }, then: [{ k: 'set', name: e, e: { k: 'vConst', v: null } }] });
+            out.push({ k: 'push', list: l, e: v(e) });
+          }
+        }
+        return { k: 'vList', e: v(l) };
+      }
+      case 'match': {
+        const on = this.bindVal(this.val(t.on, s, out), out);
+        const x = this.tmp();
+        out.push({ k: 'let', name: x, ty: VAL as never, init: { k: 'vAbsent' } });
+        const arm = (c: Term): Stmt[] => { const b: Stmt[] = []; b.push({ k: 'set', name: x, e: this.val(c, s, b) }); return b; };
+        const dflt: Stmt[] = t.else !== undefined ? arm(t.else) : [{ k: 'set', name: x, e: { k: 'vNeed', e: { k: 'vMissing', where: `${this.info.where}: match has no case`, why: 'unsupported' } } }];
+        out.push({ k: 'switch', on: v(on), cases: Object.entries(t.cases).map(([key, c]) => ({ v: key, body: arm(c) })), else: dflt });
+        return v(x);
+      }
+      case 'if': return this.choose(this.bool(t.cond, s, out), (b) => this.val(t.then, s, b), (b) => this.val(t.else, s, b), out);
+      case 'orElse': {
+        const x = this.bindVal(this.val(t.of, s, out), out);
+        const b: Stmt[] = []; b.push({ k: 'set', name: x, e: this.val(t.else, s, b) });
+        out.push({ k: 'if', c: { k: 'not', e: { k: 'vPresent', e: v(x) } }, then: b });
+        return v(x);
+      }
+      case 'branch': {
+        const o = this.resolve(s, t.name);
+        if (o.rest.some(isListQ)) no(`a branch of a repeated alternation (${t.name})`);
+        return this.branchCase(o.slot, o.scope, out, (bn, name, b) => {
+          const c = t.cases[name];
+          if (c === undefined) return { k: 'vNeed', e: { k: 'vMissing', where: `${s.info.where}: ${t.name}.${name}`, why: 'unmapped' } };
+          return this.val(c, { info: o.slot.branches!.get(name)!, base: [], lo: o.scope.lo, hi: o.scope.hi, outer: s, vars: new Map(), arm: false }, b);
+        }, () => ({ k: 'vAbsent' }));
+      }
+      case 'map': case 'fold': {
+        if (t.t === 'map') {
+          const l = this.tmp();
+          out.push({ k: 'let', name: l, ty: VALS as never, init: { k: 'newList', ty: VALS as never } });
+          this.iterations(s, t.over, out, (it, body) => {
+            const e = this.bindVal(this.val(t.body, it, body), body);
+            body.push({ k: 'if', c: { k: 'not', e: { k: 'vPresent', e: v(e) } }, then: [{ k: 'set', name: e, e: { k: 'vConst', v: null } }] });
+            body.push({ k: 'push', list: l, e: v(e) });
+          });
+          return { k: 'vList', e: v(l) };
+        }
+        const init = this.bindVal(this.val(t.init, s, out), out);
+        const acc: Bound = { val: init, start: this.tmp(), end: this.tmp() };
+        if (t.init.t === 'child') {
+          out.push({ k: 'let', name: acc.start, ty: 'int', init: this.spanEdge(s, t.init.name, 'start', out) });
+          out.push({ k: 'let', name: acc.end, ty: 'int', init: this.spanEdge(s, t.init.name, 'end', out) });
+        } else {
+          out.push({ k: 'let', name: acc.start, ty: 'int', init: call('valStart', v(init), v('off')) });
+          out.push({ k: 'let', name: acc.end, ty: 'int', init: call('valEnd', v(init), v('end')) });
+        }
+        this.iterations(s, t.over, out, (it, body) => {
+          it.vars.set(t.acc, acc);
+          const nv = this.val(t.body, it, body);
+          const fe = this.bindInt(call('namedEnd', v(it.lo), v(it.hi)), body);
+          body.push({ k: 'set', name: init, e: nv });
+          body.push({ k: 'if', c: bin('gt', v(fe), v(acc.end)), then: [{ k: 'set', name: acc.end, e: v(fe) }] });
+        });
+        return v(init);
+      }
+      case 'let': {
+        const x = this.bindVal(this.val(t.value, s, out), out);
+        const st = this.bindInt(call('valStart', v(x), v('off')), out), en = this.bindInt(call('valEnd', v(x), v('end')), out);
+        return this.val(t.body, { ...s, vars: new Map([...s.vars, [t.name, { val: x, start: st, end: en }]]) }, out);
+      }
+      case 'var': {
+        const b = this.lookupVar(s, t.name);
+        if (!b) throw new Error(`planShape: var ${t.name} unbound`);
+        return v(b.val);
+      }
+    }
+  }
+
+  /** Which branch of an inline alternation its items fall in: `taken` for that branch, `none`
+   * when the alternation matched nothing here (an optional one). A branch that can match
+   * nothing has no item to show it (S1: unsupported). */
+  private branchCase(slot: Slot, scope: CScope, out: Stmt[], taken: (b: number, name: string, body: Stmt[]) => Expr, none: () => Expr): Expr {
+    if (this.shape.grammar.templateViews.has(slot.node)) no('a template literal\'s parts');
+    if (this.num.nullableBranch.has(slot.node)) no(`an alternation with an empty branch (${slot.name})`);
+    const rs = this.num.branchRange.get(slot.node)!;
+    const names = [...slot.branches!.keys()];
+    const x = this.tmp();
+    out.push({ k: 'let', name: x, ty: VAL as never, init: none() });
+    let level = out;
+    rs.forEach(([t0, t1], b) => {
+      const found = this.bindInt(call('slotFind', v(scope.lo), v(scope.hi), int(t0), int(t1)), level);
+      const then: Stmt[] = []; then.push({ k: 'set', name: x, e: taken(b, names[b]!, then) });
+      const els: Stmt[] = [];
+      level.push({ k: 'if', c: bin('ge', v(found), int(0)), then, else: els });
+      level = els;
+    });
+    return v(x);
+  }
+}

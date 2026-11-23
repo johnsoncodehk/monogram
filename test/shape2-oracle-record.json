@@ -46,5 +46,13 @@
   "compared": 13,
   "identical": 13,
   "outOfSubset": 336
+ },
+ "estree node_modules built": {
+  "corpus": "node_modules",
+  "view": "expression statement",
+  "units": 13292,
+  "compared": 175,
+  "identical": 175,
+  "outOfSubset": 13086
  }
 }

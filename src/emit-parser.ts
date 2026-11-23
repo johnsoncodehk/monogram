@@ -674,10 +674,9 @@ class Emitter {
         // A suppress-carrying group stages the LED-connector exclusion for the next
         // parseRule (the index of its connector set, grammar-analysis suppressSets), then
         // matches its body (same as matchExpr 'group').
-        const pre = (expr.suppress && expr.suppress.length)
-          ? `suppressNext = ${this.a.suppressSetOf(expr.suppress)};`
-          : ``;
-        return [pre, this.matchInto(expr.body, onFail)].filter(Boolean).join('\n');
+        // The staging ends with the group, matched or not (gen-parser.ts matchExpr 'group').
+        if (!expr.suppress || !expr.suppress.length) return this.matchInto(expr.body, onFail);
+        return [`suppressNext = ${this.a.suppressSetOf(expr.suppress)};`, this.matchInto(expr.body, `{ suppressNext = 0; ${onFail} }`), `suppressNext = 0;`].join('\n');
       }
       case 'not': {
         // Zero-width negative lookahead: succeed (no children) iff body does NOT match.
@@ -1342,7 +1341,10 @@ function emitJsParser(grammar: CstGrammar): string {
   // (Member `a.b` / element `a[b]` / typed call `f<T>()` have a PUNCT leaf there, a
   // parenthesized cover has a NODE child, so those pass — `(a + b) = c` via the cover is
   // correctly accepted, like tsc.)
-  e.emit(`  if (n >= 3) { const _m = kids[cs + 1]; if (_m < 0) { if (((~_m) & 3) === 2) return true; const _mt = absTok[lhs] + ((~_m) >>> 2); if (binaryConnectors.has(docText(toff(_mt), tend(_mt)))) return true; } }`);
+  // Only a LED builds such a node: its head kid is the left operand, a node of the same rule (a NUD
+  // never starts with one), so a NUD whose second kid is a name spelled like a connector (`class as {}`)
+  // passes, as the portable engine's construct-decided form has it (gen-parser.ts notAssignTarget).
+  e.emit(`  if (n >= 3 && _h >= 0 && rowRule[_h] === rowRule[lhs]) { const _m = kids[cs + 1]; if (_m < 0) { if (((~_m) & 3) === 2) return true; const _mt = absTok[lhs] + ((~_m) >>> 2); if (binaryConnectors.has(docText(toff(_mt), tend(_mt)))) return true; } }`);
   e.emit(`  return false;`);
   e.emit(`}`);
   // Head-leaf TEXT of a node: descend the LEFTMOST-child spine to the OUTERMOST leaf and return its

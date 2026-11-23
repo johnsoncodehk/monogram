@@ -200,6 +200,8 @@ export function withJsx(base: CstGrammar, opts: { name: string; scopeName: strin
   // names natively. Pure DATA merge — gen-tm only looks them up, so the engine stays agnostic.
   return {
     ...base, name: opts.name, scopeName: opts.scopeName, rules, tokens,
+    // `>` closes a JSX tag (`<a>>b</a>`), so `>`-led operators are composed from single `>` tokens.
+    composeGt: true,
     elements: ELEMENTS(hasTypes),
     canonicalRepoNames: { ...base.canonicalRepoNames, ...JSX_CANONICAL },
     // The JSX layer's own tree-sitter GLR conflicts: `{` after a tag is a JSX expression container
