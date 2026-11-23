@@ -65,7 +65,7 @@ export const CLASSES: CauseClass[] = [
   {
     id: 'reject/annexb-html-comments', direction: 'we-reject', verdict: 'needs-parameter',
     title: 'HTML-like comments (Annex B)',
-    why: '`<!--` and a line-leading `-->` are comments in script code only; in module code they are operators (`a <!--b`, `x\n-->y`). Without the script / module goal, accepting them changes the meaning of valid module code.',
+    why: '`<!--` and a line-leading `-->` are comments in script code only; in module code they are not comments (`a <!--b` is `a < !--b` there). Without the script / module goal, accepting them changes the meaning of valid module code.',
     match: (t) => inDir(t, /^test\/annexB\/language\/comments\//),
   },
   {
@@ -158,7 +158,7 @@ const WE_ACCEPT: CauseClass[] = [
     id: 'accept/accessor-parameters', direction: 'we-accept', verdict: 'grammar-bug',
     title: 'a getter with a parameter',
     why: '`get x(a) {}`: a getter\'s parameter list is `( )`; a setter has exactly one PropertySetParameterList.',
-    match: (t) => says(t, /Get accessor method may not have a formal parameter|setter .*(exactly one|parameter)/i),
+    match: (t) => says(t, /Get accessor method may not have a formal parameter|setter .*exactly one/i),
   },
   {
     id: 'accept/coalesce-mixed-with-logical', direction: 'we-accept', verdict: 'grammar-bug',
