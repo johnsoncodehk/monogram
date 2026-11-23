@@ -558,6 +558,8 @@ export const CASES: Case[] = [
       // after a template's tail a `/` divides, as after a template with no substitution
       'x = `${a}` / 2 / 3;', 'x = `a${b}c${d}` / e / f;',
       'x = a.new / 2 / 3;', 'x = a.default / b / c;', 'x = a?.typeof / 2 / 3;', 'x = a.return / 2 / 3;', 'class C { #x = 1; m() { return this.#x / 2 / 3; } }',
+      // a private name beyond ASCII: `#` then a Unicode IdentifierName (the prefixed fallback), and one the ASCII run began
+      'class C { #℘ = 1; #a℘ = 2; m() { return this.#℘ / this.#a℘ / 2; } }',
       'function f() { return /re/.test(x); }', 'x = typeof /re/;', 'switch (a) { case /re/: break; }',
       'x.y.z++;', '(a++).b;', 'a++ instanceof B;', 'a++\n(x);',
       'for (a in b) c;',
