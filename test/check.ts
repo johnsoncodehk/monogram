@@ -58,12 +58,12 @@ const GATES: Gate[] = [
   // The portable targets ≡ the interpreter, one gate per class (test/portable-harness.ts); the
   // edits class is sharded by grammar (PORTABLE_EDIT_SHARDS). The Go / Rust builds are shared through the
   // harness's build cache, so the shards build each grammar once between them.
-  { group: 'emit-parity', name: 'portable-targets/lists', args: ['test/portable-lists.ts'] },
-  ...PORTABLE_EDIT_SHARDS.map((gs, i): Gate => ({ group: 'emit-parity', name: `portable-targets/edits-${i + 1}`, args: ['test/portable-edits.ts', `--grammars=${gs}`], tier: 'ci' })),
+  { group: 'emit-parity', name: 'portable-targets/lists', args: ['test/portable-lists.ts'], targets: true },
+  ...PORTABLE_EDIT_SHARDS.map((gs, i): Gate => ({ group: 'emit-parity', name: `portable-targets/edits-${i + 1}`, args: ['test/portable-edits.ts', `--grammars=${gs}`], tier: 'ci', targets: true })),
   // the grammars of no shard: their edit sessions (calc, envspec, …: a few seconds)
-  { group: 'emit-parity', name: 'portable-targets/edits-small', args: ['test/portable-edits.ts', `--grammars-except=${[...EDIT_GRAMMARS].join(',')}`] },
-  { group: 'emit-parity', name: 'portable-targets/corpus', args: ['test/portable-corpus.ts'], tier: 'ci' },
-  { group: 'emit-parity', name: 'portable-targets/recovery', args: ['test/portable-recovery.ts'], tier: 'ci' },
+  { group: 'emit-parity', name: 'portable-targets/edits-small', args: ['test/portable-edits.ts', `--grammars-except=${[...EDIT_GRAMMARS].join(',')}`], targets: true },
+  { group: 'emit-parity', name: 'portable-targets/corpus', args: ['test/portable-corpus.ts'], tier: 'ci', targets: true },
+  { group: 'emit-parity', name: 'portable-targets/recovery', args: ['test/portable-recovery.ts'], tier: 'ci', targets: true },
   // every file of the tsc conformance corpus and test262 (the pinned corpora at /tmp): about a minute
   { group: 'emit-parity', name: 'portable-targets/wide', args: ['test/portable-wide.ts'], tier: 'ci' },
   { group: 'emit-parity', name: 'portable-work', args: ['test/portable-work.ts'] },
