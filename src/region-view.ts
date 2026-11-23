@@ -4,7 +4,7 @@
 // Every fact here is read from the grammar: the region declaration (`elements`) and the rules
 // that use it. Nothing is a built-in element vocabulary: a grammar that declares no region gets
 // no view (null), so no element layer, whatever tokens or rules it has.
-import type { CstGrammar, ElementRegion, ElementHighlight, RuleExpr, TokenDecl } from './types.ts';
+import type { CstGrammar, ElementRegion, ElementHighlight, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
 import { tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { tokenPatternLiteralText } from './token-pattern.ts';
 
@@ -146,4 +146,107 @@ export function regionView(grammar: CstGrammar): RegionView | null {
     tagTokens,
     highlight: region.highlight ?? {},
   };
+}
+
+/** Whether a match of `p` can end with the unit `ch` (conservative: true when unsure). */
+function canEndWith(p: TokenPattern, ch: string): boolean {
+  if (typeof p === 'string') return p.endsWith(ch);
+  switch (p.type) {
+    case 'anyChar': return true;
+    case 'charClass': {
+      const inItems = p.items.some((it) => (it.type === 'char' ? it.value === ch : it.from <= ch && ch <= it.to));
+      return p.negate ? !inItems : inItems;
+    }
+    case 'seq': {
+      for (let i = p.items.length - 1; i >= 0; i--) {
+        if (canEndWith(p.items[i], ch)) return true;
+        if (!nullable(p.items[i])) return false;
+      }
+      return false;
+    }
+    case 'alt': return p.items.some((x) => canEndWith(x, ch));
+    case 'repeat': return (p.max ?? 1) > 0 && canEndWith(p.body, ch);
+    default: return false;
+  }
+}
+function nullable(p: TokenPattern): boolean {
+  if (typeof p === 'string') return p === '';
+  switch (p.type) {
+    case 'seq': return p.items.every(nullable);
+    case 'alt': return p.items.some(nullable);
+    case 'repeat': return p.min === 0 || nullable(p.body);
+    case 'lookahead': case 'lookbehind': case 'anchor': return true;
+    default: return false;
+  }
+}
+/** A pattern that runs to the end of its line: its last item a repetition of a class without `\n`. */
+function runsToLineEnd(p: TokenPattern): boolean {
+  if (typeof p === 'string' || p.type !== 'seq') return false;
+  const last = p.items[p.items.length - 1];
+  return typeof last !== 'string' && last.type === 'repeat' && typeof last.body !== 'string' && last.body.type === 'charClass'
+    && last.body.negate && last.body.items.some((it) => it.type === 'char' && it.value === '\n');
+}
+/** The literal text a pattern always ends with, or null. */
+function closingText(p: TokenPattern): string | null {
+  if (typeof p === 'string') return p || null;
+  if (p.type === 'seq') { const last = p.items[p.items.length - 1]; return typeof last === 'string' && last ? last : null; }
+  if (p.type === 'alt') { const c = p.items.map(closingText); return c.every((x) => x !== null && x === c[0]) ? c[0] : null; }
+  return null;
+}
+
+/**
+ * Where an element entered at an OPERAND position may start, as texts a highlighter tests BEFORE
+ * the `tagOpen` (docs/REGIONS.md, "Entry from code"): the complement of the lexer's `prevIsValue`
+ * (the regex / division decision, read from the grammar's `regexContext`).
+ *   - `after`: the texts after which an operand may start: every non-word literal of the rules and
+ *     operator tables that is not a value text (`divisionAfterTexts`), and the expression-head
+ *     keywords (`regexAfterTexts`);
+ *   - `notAfter`: value texts that end with one of `after` (`++` ends with `+`), and the closing
+ *     text of a skip token whose last unit is one of `after`'s (a block comment's `*` `/`);
+ *   - `dropped`: what the complement holds that a test of the text before the `tagOpen` cannot
+ *     tell from a value, each with its reason: a text that is postfix after a value and prefix
+ *     otherwise (`!`), and a text whose last unit can end a value token (`.` ends the number `1.`).
+ * A skip token that runs to its line's end (a line comment) never stands before a `tagOpen` on its
+ * own line, so it is no conflict. Null when the grammar declares no `regexContext`.
+ */
+export interface OperandEntry { after: string[]; notAfter: string[]; dropped: { text: string; reason: string }[] }
+export function operandEntry(grammar: CstGrammar): OperandEntry | null {
+  const rc = grammar.tokens.find((t) => t.regexContext)?.regexContext;
+  if (!rc) return null;
+  const lits: string[] = [];
+  const add = (s: string) => { if (!lits.includes(s)) lits.push(s); };
+  const walk = (e: RuleExpr): void => {
+    switch (e.type) {
+      case 'literal': add(e.value); return;
+      case 'seq': case 'alt': e.items.forEach(walk); return;
+      case 'quantifier': case 'group': case 'not': walk(e.body); return;
+      case 'sep': walk(e.element); add(e.delimiter); return;
+      default: return;
+    }
+  };
+  for (const r of grammar.rules) walk(r.body);
+  for (const l of grammar.precs) for (const o of l.operators) add(o.value);
+  const isWord = (s: string) => /^\w/.test(s);
+  const values = new Set(rc.divisionAfterTexts);
+  const postfix = new Set(rc.postfixAfterValueTexts ?? []);
+  const valueTokens = grammar.tokens.filter((t) => rc.divisionAfterTypes.includes(t.name));
+  const skipTokens = grammar.tokens.filter((t) => t.flags.includes('skip') && !runsToLineEnd(t.pattern));
+  const after: string[] = [], notAfter: string[] = [], dropped: { text: string; reason: string }[] = [];
+  for (const l of lits) {
+    if (isWord(l) || values.has(l)) continue;
+    if (postfix.has(l)) { dropped.push({ text: l, reason: 'postfix after a value, prefix otherwise: its reading depends on what precedes it' }); continue; }
+    const v = valueTokens.find((t) => canEndWith(t.pattern, l[l.length - 1]));
+    if (v) { dropped.push({ text: l, reason: `its last unit can end a \`${v.name}\`` }); continue; }
+    after.push(l);
+  }
+  for (const w of rc.regexAfterTexts) if (!after.includes(w)) after.push(w);
+  for (const v of values) if (!isWord(v) && after.some((a) => v.length > a.length && v.endsWith(a)) && !notAfter.includes(v)) notAfter.push(v);
+  for (const t of skipTokens) {
+    const ends = after.filter((a) => !isWord(a) && canEndWith(t.pattern, a[a.length - 1]));
+    if (!ends.length) continue;
+    const closing = closingText(t.pattern);
+    if (closing !== null) { if (!notAfter.includes(closing)) notAfter.push(closing); continue; }
+    for (const a of ends) { after.splice(after.indexOf(a), 1); dropped.push({ text: a, reason: `its last unit can end the skip token \`${t.name}\`` }); }
+  }
+  return { after, notAfter, dropped };
 }
