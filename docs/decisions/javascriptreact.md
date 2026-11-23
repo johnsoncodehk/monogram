@@ -11,15 +11,15 @@ Every choice point of the grammar and how the generated parser (the portable pla
 | rule alternatives | 18 | 5 | 4 | 0 | 9 | 12 |
 | NUD arms | 3 | 0 | 0 | 0 | 3 | 3 |
 | LED connectors | 3 | 3 | 0 | 0 | 0 | 3 |
-| inline choice | 89 | 38 | 0 | 51 | 0 | 43 |
-| star | 64 | 61 | 0 | 3 | 0 | 31 |
-| opt | 78 | 46 | 0 | 32 | 0 | 45 |
-| sep | 51 | 11 | 0 | 40 | 0 | 0 |
+| inline choice | 83 | 38 | 0 | 45 | 0 | 43 |
+| star | 57 | 54 | 0 | 3 | 0 | 30 |
+| opt | 84 | 52 | 0 | 32 | 0 | 51 |
+| sep | 45 | 11 | 0 | 34 | 0 | 0 |
 
 | finding | count |
 |:--|--:|
 | dead alternatives (never win) | 0 |
-| ties decided by declaration order (one token: 14; observed on the pinned inputs: 6) | 14 |
+| ties decided by declaration order (one token: 10; observed on the pinned inputs: 6) | 10 |
 | alternatives no token reaches | 0 |
 
 ## Findings
@@ -34,10 +34,6 @@ Two candidates of one list match the same input to the same end; the one declare
 
 | list | wins (declared first) | loses | one token | observed | witness |
 |:--|:--|:--|:--|--:|:--|
-| ClassHeritage NUD | true_ (#2) | ident (#6) | `true` |  | `true` as ClassHeritage |
-| ClassHeritage NUD | false_ (#3) | ident (#6) | `false` |  | `false` as ClassHeritage |
-| ClassHeritage NUD | null_ (#4) | ident (#6) | `null` |  | `null` as ClassHeritage |
-| ClassHeritage NUD | undefined (#5) | ident (#6) | `undefined` |  | `undefined` as ClassHeritage |
 | Expr NUD | true_ (#1) | ident (#7) | `true` | 326 | acorn/dist/acorn.mjs:54: `true }` |
 | Expr NUD | false_ (#2) | ident (#7) | `false` | 292 | acorn/dist/acorn.mjs:52: `false }` |
 | Expr NUD | null_ (#3) | ident (#7) | `null` | 158 | acorn/dist/acorn.mjs:119: `null;` |
@@ -98,7 +94,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `?`: one token: led_question (takes a builder checkpoint: led_question: it can fail after `Expr`)
   - `instanceof`: one token: led_instanceof (takes a builder checkpoint: led_instanceof: a call of Expr can fail after its operand (an operator that requires an assignment target))
   - `in`: one token: led_in (takes a builder checkpoint: led_in: a call of Expr can fail after its operand (an operator that requires an assignment target))
-- one token, no mark: 2 inline choices, 9 star, 2 opt, 3 sep
+- one token, no mark: 2 inline choices, 7 star, 2 opt, 3 sep
 - Expr NUD / super_: `alt('(' sep(Expr, ',') ')' \| '.' alt(Ident \| PrivateFie…`: one token; takes a mark: branch 0: it can fail after `'('`; branch 1: it can fail after `'.'`; branch 2: it can fail after `'['`
 - Expr NUD / super_: `sep(Expr, ',')`: by attempt
 - Expr NUD / construct: `alt('(' sep(Expr, ',') ')' \| !{'?.'})`: by attempt; takes a mark: branch 0: it can fail after `'('`
@@ -123,10 +119,8 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Expr NUD / asyncFunction: `sep(Param, ',')`: by attempt
 - Expr NUD / asyncGenerator: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
 - Expr NUD / asyncGenerator: `sep(Param, ',')`: by attempt
-- Expr NUD / decoratorExpr: `sep(alt(!{'extends'} ClassHeritage), ',')`: by attempt
-- Expr NUD / decoratorExpr: `alt(!{'extends'} ClassHeritage)`: by attempt
-- Expr NUD / decoratorExpr2: `sep(alt(!{'extends'} ClassHeritage), ',')`: by attempt
-- Expr NUD / decoratorExpr2: `alt(!{'extends'} ClassHeritage)`: by attempt
+- Expr NUD / decoratorExpr: `opt('extends' ClassHeritage)`: one token; takes a mark: it can fail after `'extends'`
+- Expr NUD / decoratorExpr2: `opt('extends' ClassHeritage)`: one token; takes a mark: it can fail after `'extends'`
 - Expr NUD / asyncArrow: `sep(Param, ',')`: by attempt
 - Expr NUD / asyncArrow: `alt(Block \| !{'{'} Expr)`: by attempt; takes a mark: branch 1: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr NUD / arrow: `alt(Block \| !{'{'} Expr)`: by attempt; takes a mark: branch 1: a call of Expr can fail after its operand (an operator that requires an assignment target)
@@ -200,23 +194,17 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 
 ### ClassHeritage
 
-- ClassHeritage NUD (9 NUD arms):
-  - `(`: one token: committed to paren (#7) (takes a mark: it can fail after `'('`)
-  - `await`, `yield`: one token: committed to ident (#6)
-  - `break`, `case`, `catch`, `const`, `continue`, `debugger`, `default`, `delete` and 20 more: no candidate, the list fails
-  - `class`: one token: committed to class_ (#8) (takes a mark: it can fail after `'class'`)
-  - <Ident>: one token: committed to ident (#6)
-  - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Template>, <JSXSelfClose>, <JSXClose>, <JSXText> and 8 more: no candidate, the list fails
-  - <Number>: one token: committed to number (#0)
-  - <String>: one token: committed to string (#1)
-  - longest match: a candidate frame (a mark per new best) at `false`, `null`, `true`, `undefined`, over true_ (#2), false_ (#3), null_ (#4), undefined (#5), ident (#6)
+- ClassHeritage NUD (2 NUD arms):
+  - `(`, `[`, `{`: one token: committed to newTarget (#0)
+  - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <String>, <Template> and 2 more: one token: committed to newTarget (#0)
+  - <JSXSelfClose>, <JSXClose>, <JSXText>, <JSXString>, <Decorator>, <PrivateField>, <$templateMiddle>, <$templateTail> and 1 more: no candidate, the list fails
+  - longest match: a candidate frame (a mark per new best) at `class`, over newTarget (#0), class_ (#1)
 - ClassHeritage LED (4 connectors, 0 binary operators):
   - `.`: one token: led_dot
   - `?.`: one token: led_optChain
   - `[`: one token: led_bracket (takes a builder checkpoint: led_bracket: it can fail after `Expr`)
   - `(`: one token: led_paren (takes a builder checkpoint: led_paren: it can fail after `sep(Expr, ',')`)
 - one token, no mark: 1 inline choice, 1 star
-- ClassHeritage NUD / paren: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
 - ClassHeritage NUD / class_: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
 - ClassHeritage NUD / class_: `opt('extends' ClassHeritage)`: one token; takes a mark: it can fail after `'extends'`
 - ClassHeritage LED / led_optChain: `alt(Ident \| PrivateField \| '(' sep(Expr, ',') ')' \| '['…`: one token; takes a mark: branch 2: it can fail after `'('`; branch 3: it can fail after `'['`
@@ -428,16 +416,14 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - two tokens (pairs): function_ (#0) at `function` only before Ident; generator (#1) at `function` only before '*'; export_2 (#7) at `export` only before 'default'; export_3 (#8) at `export` only before '*'; export_4 (#9) at `export` only before '{'
   - two tokens (SECOND): function_ (#0) only before Ident; generator (#1) only before '*'; asyncFunction (#2) only before 'function'; asyncGenerator (#3) only before 'function'; class_ (#4) only before Ident; decoratorExpr (#6) only before '('|'async'|'class'|'export'|'function'|'import'|…1; export_2 (#7) only before 'default'; export_3 (#8) only before '*'; export_4 (#9) only before '{'; import_ (#10) only before '*'|'{'|Ident|String
   - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over function_ (#0), generator (#1), asyncFunction (#2), asyncGenerator (#3), export_ (#5), export_2 (#7) and 2 more
-- one token, no mark: 11 inline choices, 11 star, 5 opt, 3 sep
+- one token, no mark: 11 inline choices, 7 star, 5 opt, 3 sep
 - Decl / generator: `sep(Param, ',')`: by attempt
 - Decl / asyncFunction: `sep(Param, ',')`: by attempt
 - Decl / asyncGenerator: `sep(Param, ',')`: by attempt
-- Decl / class_: `sep(alt(!{'extends'} ClassHeritage), ',')`: by attempt
-- Decl / class_: `alt(!{'extends'} ClassHeritage)`: by attempt
+- Decl / class_: `opt('extends' ClassHeritage)`: one token; takes a mark: it can fail after `'extends'`
 - Decl / export_: `alt(Decl \| &{'const'\|'let'\|'var'} Stmt)`: by attempt
 - Decl / decoratorExpr: `alt('class' !{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: by attempt; takes a mark: branch 0: it can fail after `'class'`
-- Decl / decoratorExpr: `sep(alt(!{'extends'} ClassHeritage), ',')`: by attempt
-- Decl / decoratorExpr: `alt(!{'extends'} ClassHeritage)`: by attempt
+- Decl / decoratorExpr: `opt('extends' ClassHeritage)`: one token; takes a mark: it can fail after `'extends'`
 - Decl / export_2: `alt('function' opt(!{'break'\|'case'\|'catch'\|'class'\|…32…`: by attempt; takes a mark: branch 0: it can fail after `'function'`; branch 1: it can fail after `'function'`; branch 2: it can fail after `'async'`; branch 3: it can fail after `'async'`; branch 4: it can fail after `many(DecoratorExpr)`; branch 5: it can fail after `many(DecoratorExpr)`; branch 6: it can fail after `Expr`
 - Decl / export_2: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
 - Decl / export_2: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
@@ -446,10 +432,8 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Decl / export_2: `sep(Param, ',')`: by attempt
 - Decl / export_2: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
 - Decl / export_2: `sep(Param, ',')`: by attempt
-- Decl / export_2: `sep(alt(!{'extends'} ClassHeritage), ',')`: by attempt
-- Decl / export_2: `alt(!{'extends'} ClassHeritage)`: by attempt
-- Decl / export_2: `sep(alt(!{'extends'} ClassHeritage), ',')`: by attempt
-- Decl / export_2: `alt(!{'extends'} ClassHeritage)`: by attempt
+- Decl / export_2: `opt('extends' ClassHeritage)`: one token; takes a mark: it can fail after `'extends'`
+- Decl / export_2: `opt('extends' ClassHeritage)`: one token; takes a mark: it can fail after `'extends'`
 - Decl / export_2: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
 - Decl / export_3: `alt('from' String opt('with' '{' opt(alt(… \| …) ':' Str…`: one token; takes a mark: branch 0: it can fail after `'from'`; branch 1: it can fail after `'as'`
 - Decl / export_3: `opt('with' '{' opt(alt(Ident \| String) ':' String many(…`: one token; takes a mark: it can fail after `'with'`

@@ -11,15 +11,15 @@ Every choice point of the grammar and how the generated parser (the portable pla
 | rule alternatives | 21 | 3 | 5 | 0 | 13 | 18 |
 | NUD arms | 5 | 0 | 0 | 0 | 5 | 5 |
 | LED connectors | 5 | 3 | 0 | 2 | 0 | 4 |
-| inline choice | 425 | 214 | 0 | 211 | 0 | 258 |
-| star | 131 | 124 | 0 | 7 | 0 | 39 |
-| opt | 290 | 249 | 0 | 41 | 0 | 133 |
-| sep | 108 | 23 | 0 | 85 | 0 | 0 |
+| inline choice | 485 | 214 | 0 | 271 | 0 | 268 |
+| star | 130 | 123 | 0 | 7 | 0 | 38 |
+| opt | 310 | 269 | 0 | 41 | 0 | 133 |
+| sep | 128 | 23 | 0 | 105 | 0 | 0 |
 
 | finding | count |
 |:--|--:|
 | dead alternatives (never win) | 5 |
-| ties decided by declaration order (one token: 20; observed on the pinned inputs: 14) | 22 |
+| ties decided by declaration order (one token: 16; observed on the pinned inputs: 14) | 18 |
 | alternatives no token reaches | 0 |
 
 ## Findings
@@ -42,10 +42,6 @@ Two candidates of one list match the same input to the same end; the one declare
 
 | list | wins (declared first) | loses | one token | observed | witness |
 |:--|:--|:--|:--|--:|:--|
-| ClassHeritage NUD | true_ (#2) | ident (#6) | `true` |  | `true` as ClassHeritage |
-| ClassHeritage NUD | false_ (#3) | ident (#6) | `false` |  | `false` as ClassHeritage |
-| ClassHeritage NUD | null_ (#4) | ident (#6) | `null` |  | `null` as ClassHeritage |
-| ClassHeritage NUD | undefined (#5) | ident (#6) | `undefined` |  | `undefined` as ClassHeritage |
 | Decl | declare (#9) | declare4 (#12) |  | 11 | typescript/lib/lib.es5.d.ts:33: `declare function eval(x: string): any;` |
 | Expr NUD | true_ (#0) | ident (#6) | `true` | 326 | acorn/dist/acorn.mjs:54: `true }` |
 | Expr NUD | false_ (#1) | ident (#6) | `false` | 292 | acorn/dist/acorn.mjs:52: `false }` |
@@ -236,7 +232,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `instanceof`: one token: led_instanceof (takes a builder checkpoint: led_instanceof: a call of Expr can fail after its operand (an operator that requires an assignment target))
   - `in`: one token: led_in (takes a builder checkpoint: led_in: a call of Expr can fail after its operand (an operator that requires an assignment target))
   - `satisfies`: one token: led_satisfies
-- one token, no mark: 4 inline choices, 19 star, 16 opt, 3 sep
+- one token, no mark: 2 inline choices, 19 star, 20 opt, 3 sep
 - Expr NUD / super_: `alt('(' sep(Expr, ',') ')' \| '.' alt(Ident \| PrivateFie…`: one token; takes a mark: branch 0: it can fail after `'('`; branch 1: it can fail after `'.'`; branch 2: it can fail after `'['`
 - Expr NUD / super_: `sep(Expr, ',')`: by attempt
 - Expr NUD / construct: `alt('<' sep(Type, ',') !(alt('>>' \| '>=' \| '>>=' \| '>>>…`: by attempt; takes a mark: branch 0: it can fail after `'<'`; branch 1: it can fail after `'('`
@@ -292,10 +288,19 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Expr NUD / seq: `alt(alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'i…`: one token; takes a mark: branch 1: it can fail after `'default'`; branch 2: it can fail after `'export'`
 - Expr NUD / seq: `alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'accessor'\|'async'\|'dec…`
 - Expr NUD / seq: `alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'out'…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'accessor'\|'async'\|'declare…`
-- Expr NUD / seq: `sep(alt(!{'extends'\|'implements'} ClassHeritage), ',')`: by attempt
-- Expr NUD / seq: `alt(!{'extends'\|'implements'} ClassHeritage)`: by attempt
-- Expr NUD / seq: `sep(alt(!{'extends'\|'implements'} ClassHeritage), ',')`: by attempt
-- Expr NUD / seq: `alt(!{'extends'\|'implements'} ClassHeritage)`: by attempt
+- Expr NUD / seq: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
+- Expr NUD / seq: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Expr NUD / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Expr NUD / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Expr NUD / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / seq: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Expr NUD / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Expr NUD / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Expr NUD / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
 - Expr NUD / seq2: `opt((DecoratorExpr many(DecoratorExpr)) (many(alt(… \| ……`: by attempt
 - Expr NUD / seq2: `alt(alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'i…`: one token; takes a mark: branch 1: it can fail after `'default'`; branch 2: it can fail after `'export'`
 - Expr NUD / seq2: `alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'accessor'\|'async'\|'dec…`
@@ -312,10 +317,19 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Expr NUD / seq2: `alt(alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'i…`: one token; takes a mark: branch 1: it can fail after `'default'`; branch 2: it can fail after `'export'`
 - Expr NUD / seq2: `alt(alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'accessor'\|'async'\|'dec…`
 - Expr NUD / seq2: `alt(('abstract'\|'accessor'\|'async'\|'declare'\|'in'\|'out'…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'accessor'\|'async'\|'declare…`
-- Expr NUD / seq2: `sep(alt(!{'extends'\|'implements'} ClassHeritage), ',')`: by attempt
-- Expr NUD / seq2: `alt(!{'extends'\|'implements'} ClassHeritage)`: by attempt
-- Expr NUD / seq2: `sep(alt(!{'extends'\|'implements'} ClassHeritage), ',')`: by attempt
-- Expr NUD / seq2: `alt(!{'extends'\|'implements'} ClassHeritage)`: by attempt
+- Expr NUD / seq2: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
+- Expr NUD / seq2: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Expr NUD / seq2: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Expr NUD / seq2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / seq2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / seq2: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Expr NUD / seq2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / seq2: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Expr NUD / seq2: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Expr NUD / seq2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / seq2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Expr NUD / seq2: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Expr NUD / seq2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
 - Expr NUD / asyncArrow: `sep(Param, ',')`: by attempt
 - Expr NUD / asyncArrow: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
 - Expr NUD / asyncArrow: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
@@ -514,16 +528,11 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 
 ### ClassHeritage
 
-- ClassHeritage NUD (9 NUD arms):
-  - `(`: one token: committed to paren (#7) (takes a mark: it can fail after `'('`)
-  - `await`, `yield`: one token: committed to ident (#6)
-  - `break`, `case`, `catch`, `const`, `continue`, `debugger`, `default`, `delete` and 20 more: no candidate, the list fails
-  - `class`: one token: committed to class_ (#8) (takes a mark: it can fail after `'class'`)
-  - <Ident>: one token: committed to ident (#6)
-  - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Template>, <Regex>, <Decorator>, <PrivateField> and 4 more: no candidate, the list fails
-  - <Number>: one token: committed to number (#0)
-  - <String>: one token: committed to string (#1)
-  - longest match: a candidate frame (a mark per new best) at `false`, `null`, `true`, `undefined`, over true_ (#2), false_ (#3), null_ (#4), undefined (#5), ident (#6)
+- ClassHeritage NUD (2 NUD arms):
+  - `(`, `[`, `{`: one token: committed to newTarget (#0)
+  - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <String>, <Template> and 2 more: one token: committed to newTarget (#0)
+  - <Decorator>, <PrivateField>, <$templateMiddle>, <$templateTail>, punctuation: no candidate, the list fails
+  - longest match: a candidate frame (a mark per new best) at `class`, over newTarget (#0), class_ (#1)
 - ClassHeritage LED (5 connectors, 0 binary operators):
   - `.`: one token: led_dot
   - `?.`: one token: led_optChain
@@ -531,7 +540,6 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `<`: one token: led_lt (takes a builder checkpoint: led_lt: it can fail after `sep(Type, ',')`)
   - `(`: one token: led_paren (takes a builder checkpoint: led_paren: it can fail after `sep(Expr, ',')`)
 - one token, no mark: 1 inline choice, 1 star, 2 opt
-- ClassHeritage NUD / paren: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
 - ClassHeritage NUD / class_: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
 - ClassHeritage NUD / class_: `opt('extends' ClassHeritage)`: one token; takes a mark: it can fail after `'extends'`
 - ClassHeritage NUD / class_: `sep(Type, ',')`: by attempt
@@ -835,7 +843,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - two tokens (pairs): function_ (#0) at `function` only before Ident; generator (#1) at `function` only before '*'; asyncFunction (#2) at `async` only before 'function'; asyncGenerator (#3) at `async` only before 'function'; class_ (#6) at `class` only before Ident; class_2 (#7) at `class` only before '<'|'extends'|'implements'|'{'; declare (#9) at `declare` only before 'function'; declare2 (#10) at `declare` only before 'module'; declare3 (#11) at `declare` only before 'global'; export_ (#17) at `export` only before 'as'; export_3 (#19) at `export` only before '@new'|'default'|Decorator; export_4 (#20) at `export` only before '*'|'type'; export_5 (#21) at `export` only before '{'; export_6 (#22) at `export` only before '='; export_7 (#23) at `export` only before 'type'
   - two tokens (SECOND): function_ (#0) only before Ident; generator (#1) only before '*'; asyncFunction (#2) only before 'function'; asyncGenerator (#3) only before 'function'; interface (#4) only before Ident; type (#5) only before Ident; class_ (#6) only before Ident; class_2 (#7) only before '<'|'extends'|'implements'|'{'; enum_ (#8) only before Ident; declare (#9) only before 'function'; declare2 (#10) only before 'module'; declare3 (#11) only before 'global'; seq (#13) only before '!'|'('|'.'|'<'|'?.'|'@new'|…46; seq2 (#14) only before '@new'|'abstract'|'accessor'|'async'|'class'|'const'|…16; namespace (#15) only before Ident; module (#16) only before Ident|String; export_ (#17) only before 'as'; export_3 (#19) only before '@new'|'default'|Decorator; export_4 (#20) only before '*'|'type'; export_5 (#21) only before '{'; export_6 (#22) only before '='; export_7 (#23) only before 'type'; const_ (#24) only before 'enum'; import_ (#25) only before '*'|'defer'|'type'|'{'|Ident|String
   - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over function_ (#0), generator (#1), asyncFunction (#2), asyncGenerator (#3), class_ (#6), class_2 (#7) and 13 more
-- one token, no mark: 22 inline choices, 28 star, 31 opt, 7 sep
+- one token, no mark: 14 inline choices, 28 star, 47 opt, 7 sep
 - Decl / function_: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
 - Decl / function_: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
 - Decl / function_: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
@@ -855,19 +863,46 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Decl / asyncGenerator: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
 - Decl / asyncGenerator: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
 - Decl / asyncGenerator: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Decl / interface: `sep(alt(!{'extends'\|'implements'} ClassHeritage), ',')`: by attempt
-- Decl / interface: `alt(!{'extends'\|'implements'} ClassHeritage)`: by attempt
-- Decl / interface: `sep(alt(!{'extends'\|'implements'} ClassHeritage), ',')`: by attempt
-- Decl / interface: `alt(!{'extends'\|'implements'} ClassHeritage)`: by attempt
+- Decl / interface: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
+- Decl / interface: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / interface: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / interface: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / interface: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / interface: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / interface: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / interface: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / interface: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / interface: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / interface: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / interface: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / interface: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
 - Decl / type: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Decl / class_: `sep(alt(!{'extends'\|'implements'} ClassHeritage), ',')`: by attempt
-- Decl / class_: `alt(!{'extends'\|'implements'} ClassHeritage)`: by attempt
-- Decl / class_: `sep(alt(!{'extends'\|'implements'} ClassHeritage), ',')`: by attempt
-- Decl / class_: `alt(!{'extends'\|'implements'} ClassHeritage)`: by attempt
-- Decl / class_2: `sep(alt(!{'extends'\|'implements'} ClassHeritage), ',')`: by attempt
-- Decl / class_2: `alt(!{'extends'\|'implements'} ClassHeritage)`: by attempt
-- Decl / class_2: `sep(alt(!{'extends'\|'implements'} ClassHeritage), ',')`: by attempt
-- Decl / class_2: `alt(!{'extends'\|'implements'} ClassHeritage)`: by attempt
+- Decl / class_: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
+- Decl / class_: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / class_: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / class_: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / class_: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / class_: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / class_: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / class_: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / class_: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / class_: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / class_: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / class_: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / class_: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / class_2: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
+- Decl / class_2: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / class_2: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / class_2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / class_2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / class_2: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / class_2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / class_2: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / class_2: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / class_2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / class_2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / class_2: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / class_2: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
 - Decl / declare: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
 - Decl / declare: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
 - Decl / declare: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
@@ -890,14 +925,32 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Decl / seq: `alt(alt(('abstract'\|'public'\|'private'\|'protected'\|'rea…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'public'\|'private'\|'pro…`
 - Decl / seq: `alt(('abstract'\|'public'\|'private'\|'protected'\|'readonl…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'public'\|'private'\|'protect…`
 - Decl / seq: `alt('class' !{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: by attempt; takes a mark: branch 0: it can fail after `'class'`; branch 1: it can fail after `'class'`; branch 3: it can fail after `('let'\|'const'\|'var')`; branch 4: it can fail after `opt('await')`
-- Decl / seq: `sep(alt(!{'extends'\|'implements'} ClassHeritage), ',')`: by attempt
-- Decl / seq: `alt(!{'extends'\|'implements'} ClassHeritage)`: by attempt
-- Decl / seq: `sep(alt(!{'extends'\|'implements'} ClassHeritage), ',')`: by attempt
-- Decl / seq: `alt(!{'extends'\|'implements'} ClassHeritage)`: by attempt
-- Decl / seq: `sep(alt(!{'extends'\|'implements'} ClassHeritage), ',')`: by attempt
-- Decl / seq: `alt(!{'extends'\|'implements'} ClassHeritage)`: by attempt
-- Decl / seq: `sep(alt(!{'extends'\|'implements'} ClassHeritage), ',')`: by attempt
-- Decl / seq: `alt(!{'extends'\|'implements'} ClassHeritage)`: by attempt
+- Decl / seq: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
+- Decl / seq: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / seq: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / seq: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
+- Decl / seq: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / seq: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / seq: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / seq: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
 - Decl / seq: `many((',' Binding))`: one token; takes a mark: it can fail after `','`
 - Decl / seq: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
 - Decl / seq: `many((',' Binding))`: one token; takes a mark: it can fail after `','`
@@ -935,18 +988,45 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Decl / export_3: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
 - Decl / export_3: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
 - Decl / export_3: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Decl / export_3: `sep(alt(!{'extends'\|'implements'} ClassHeritage), ',')`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} ClassHeritage)`: by attempt
-- Decl / export_3: `sep(alt(!{'extends'\|'implements'} ClassHeritage), ',')`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} ClassHeritage)`: by attempt
-- Decl / export_3: `sep(alt(!{'extends'\|'implements'} ClassHeritage), ',')`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} ClassHeritage)`: by attempt
-- Decl / export_3: `sep(alt(!{'extends'\|'implements'} ClassHeritage), ',')`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} ClassHeritage)`: by attempt
-- Decl / export_3: `sep(alt(!{'extends'\|'implements'} ClassHeritage), ',')`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} ClassHeritage)`: by attempt
-- Decl / export_3: `sep(alt(!{'extends'\|'implements'} ClassHeritage), ',')`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} ClassHeritage)`: by attempt
+- Decl / export_3: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
+- Decl / export_3: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / export_3: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / export_3: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
+- Decl / export_3: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / export_3: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / export_3: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
+- Decl / export_3: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / export_3: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
 - Decl / export_3: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
 - Decl / export_4: `opt('as' alt(Ident \| String))`: one token; takes a mark: it can fail after `'as'`
 - Decl / export_4: `opt('with' '{' opt(alt(Ident \| String) ':' String many(…`: one token; takes a mark: it can fail after `'with'`
