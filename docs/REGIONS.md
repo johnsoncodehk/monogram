@@ -501,9 +501,16 @@ An `operand` region is entered only in the operand-position state `root` (where 
 may start: the lexer's `!prevIsValue()`), so Monarch needs no lookbehind; an `always` region in
 both base states; the `typeParameters` vetoes are negative lookaheads on the entry. Gated by
 `test/monarch-dialect.ts` (the committed JSX / TSX artifacts, cross-checked against the
-interpreter's token stream, and the two dialect fixtures in memory). Not built yet, each its own
-step: raw text (`nextEmbedded`), `textTokens`, directives. What Monarch cannot express, each an
-expected-fail row of that gate:
+interpreter's token stream, and the two dialect fixtures in memory). Raw text: a tag name a
+`rawText` declaration lists (a `cases` dispatch on the name, ASCII case-folded under
+`ignoreCase`) has its own tag state, whose `tagClose` enters the body in the declared embed's
+language (`nextEmbedded`: the embed scope's language, `source.css` → `css`; Monaco ends the
+embedded text at the first close tag `tagOpen closeMarker name` on the line, as the lexer ends
+the raw token), or without an embed one token of the raw token's scope; `unlessBodyStarts`
+decides in a state of its own, over line breaks when the pattern begins with a repetition of a
+class holding one (`star(blank)`). The same gate re-states the static checks of Monaco's Monarch
+compiler on every Monarch grammar (Monaco itself is not run). Not built yet, each its own step:
+`textTokens`, directives. What Monarch cannot express, each an expected-fail row of that gate:
 
 | limitation | witness | Monarch reads | the lexer reads |
 |---|---|---|---|
@@ -532,5 +539,4 @@ Directive openers and continuations are derived from the grammar ("Directives").
   refused (the signature's rewind does not restore the raw-text tag records).
 - The root region: the build order above.
 - Re-measuring the five undecidable JSX shapes on a larger TSX corpus.
-- Monarch: raw text (`nextEmbedded` at the open tag's end, `@pop` at the close tag), `textTokens`
-  and directives in the element layer.
+- Monarch: `textTokens` and directives in the element layer.
