@@ -1,6 +1,8 @@
 import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
-import { regionView, expandArms, type RegionView, type NameShape } from './region-view.ts';
+import { regionView, type RegionView, type NameShape } from './region-view.ts';
 import { directivesOf } from './grammar-analysis.ts';
+import { armGraph, findWindows, hasWindow, inArmOrder } from './arm-graph.ts';
+import { classifyTokenScope, scopeToMonarch } from './highlight-roles.ts';
 import { info as patternInfo, type CSet } from './lex-match-plan.ts';
 import { collectLiterals, escapeRegex, isKeywordLiteral } from './grammar-utils.ts';
 import {
@@ -8,12 +10,10 @@ import {
   tokenEscapePatternSource,
   tokenPatternBlockDelimiterSources,
   tokenPatternBlockDelimiters,
-  tokenPatternContainsLiteral,
   tokenPatternHasStartAnchor,
   tokenPatternIdentifierExtraChars,
   tokenPatternLiteralPrefix,
   tokenPatternSource,
-  tokenPatternStartsWithDecimal,
   tokenPatternStringDelimiters,
   tokenPatternToRegex,
 } from './token-pattern.ts';
@@ -98,76 +98,6 @@ function delimStateSuffix(delim: string): string {
   return [...delim].map(c => names[c] ?? (/[a-zA-Z0-9]/.test(c) ? c : `u${c.charCodeAt(0)}`)).join('');
 }
 
-// ── TextMate-scope → Monarch-token mapping ──
-//
-// gen-tm already INFERS a TextMate scope for every construct. Monarch uses a
-// flatter, theme-oriented vocabulary (keyword, type.identifier, number.hex,
-// delimiter.*, …). We map the inferred TM scope to its closest Monarch token so
-// BOTH highlighters agree on roles while each speaks its engine's idiom. Driven
-// by scope PREFIXES — language-agnostic.
-function scopeToMonarch(scope: string): string {
-  // A space-separated scope is `ancestor… leaf`; a single Monarch token wants the LEAF (the
-  // semantic type), not the string ancestor that only supplies the TextMate chain.
-  if (scope.includes(' ')) scope = scope.slice(scope.lastIndexOf(' ') + 1);
-  if (scope.startsWith('comment')) return 'comment';
-  if (scope.startsWith('string.regexp')) return 'regexp';
-  if (scope.startsWith('string')) return 'string';
-  if (scope.startsWith('constant.numeric')) {
-    const kind = scope.slice('constant.numeric.'.length);
-    const map: Record<string, string> = {
-      hex: 'number.hex', octal: 'number.octal', binary: 'number.binary',
-      float: 'number.float', integer: 'number', bigint: 'number',
-    };
-    return map[kind] ?? 'number';
-  }
-  if (scope.startsWith('constant.language')) return 'keyword';      // true/false/null
-  if (scope.startsWith('variable.language')) return 'keyword';      // this/super
-  if (scope.startsWith('constant')) return 'constant';
-  if (scope.startsWith('storage.type.function.arrow')) return 'operator';
-  if (scope.startsWith('storage')) return 'keyword';
-  if (scope.startsWith('keyword.operator')) return 'operator';
-  if (scope.startsWith('keyword')) return 'keyword';
-  if (scope.startsWith('entity.other.document')) return 'delimiter';  // YAML --- / ... markers
-  if (scope.startsWith('entity.name.function.decorator')) return 'annotation';
-  if (scope.startsWith('entity.name.function')) return 'identifier';
-  if (scope.startsWith('entity.name.type')) return 'type.identifier';
-  if (scope.startsWith('entity')) return 'identifier';
-  if (scope.startsWith('support.type')) return 'keyword';          // primitive types
-  if (scope.startsWith('support.class')) return 'type.identifier'; // built-in classes
-  if (scope.startsWith('support.variable')) return 'variable';
-  if (scope.startsWith('support')) return 'identifier';
-  if (scope.startsWith('punctuation.bracket')) {
-    if (scope.includes('round')) return 'delimiter.parenthesis';
-    if (scope.includes('curly')) return 'delimiter.bracket';
-    if (scope.includes('square')) return 'delimiter.square';
-    if (scope.includes('angle')) return 'delimiter.angle';
-    return 'delimiter.bracket';
-  }
-  if (scope.startsWith('punctuation')) return 'delimiter';
-  if (scope.startsWith('variable')) return 'variable';
-  return 'identifier';
-}
-
-// ── Token classification (parallels gen-tm.classifyToken) ──
-//
-// Resolve the highlight role of a *declared token* from its pattern + flags +
-// any `@scope` override. Same inference gen-tm performs → consistent roles.
-function classifyTokenScope(token: TokenDecl): string {
-  if (token.scope) return token.scope;
-  if (token.flags.includes('skip')) {
-    if (tokenPatternBlockDelimiters(token)) return 'comment.block';
-    return 'comment.line';
-  }
-  if (tokenPatternStartsWithDecimal(token)) {
-    if (tokenPatternContainsLiteral(token, '.')) return 'constant.numeric.float';
-    return 'constant.numeric.integer';
-  }
-  const delimiters = tokenPatternStringDelimiters(token);
-  if (delimiters.includes('"')) return 'string.quoted.double';
-  if (delimiters.includes("'")) return 'string.quoted.single';
-  if (delimiters.includes('`')) return 'string.quoted.other.template';
-  return 'variable.other';
-}
 
 // ── Angle-bracket (generic) ambiguity detection — mirrors gen-tm ──
 //
@@ -188,9 +118,6 @@ function detectAngleBrackets(grammar: CstGrammar): AngleInfo | null {
     for (const op of level.operators) precOps.add(op.value);
   if (!precOps.has('<') || !precOps.has('>')) return null;
 
-  const confirm = new Set<string>();
-  let found = false;
-
   // Resolve the leading literal char of the item that follows `>`.
   function confirmCharOf(item: RuleExpr | undefined): string | null {
     if (!item) return null;
@@ -203,20 +130,15 @@ function detectAngleBrackets(grammar: CstGrammar): AngleInfo | null {
     return null;
   }
 
-  for (const rule of grammar.rules) {
-    for (const seq of expandArms(rule.body)) {
-      for (let i = 0; i < seq.length - 2; i++) {
-        if (seq[i].type === 'literal' && (seq[i] as { value: string }).value === '<' &&
-            seq[i + 1].type === 'sep' &&
-            seq[i + 2].type === 'literal' && (seq[i + 2] as { value: string }).value === '>') {
-          found = true;
-          const ch = confirmCharOf(seq[i + 3]);
-          if (ch && ch.length === 1) confirm.add(ch);
-        }
-      }
-    }
-  }
-  return found ? { confirmChars: [...confirm] } : null;
+  // Over the arm graph (src/arm-graph.ts): a `'<' sep '>'` window in a rule-body arm, and the confirming
+  // characters of the items after it, in the order the arms meet them.
+  const g = armGraph(grammar);
+  const isLit = (v: string) => (e: RuleExpr) => e.type === 'literal' && e.value === v;
+  const steps = [isLit('<'), (e: RuleExpr) => e.type === 'sep', isLit('>')];
+  const rules = (r: number) => g.rootKind[r] === 'rule';
+  return hasWindow(g, steps, rules) ? {
+    confirmChars: inArmOrder(g, findWindows(g, [...steps, () => true], rules).flatMap(w => { const ch = confirmCharOf(g.node[w[3]]); return ch && ch.length === 1 ? [{ value: ch, window: w }] : []; })),
+  } : null;
 }
 
 // ── Markup tokenizer (HTML/Vue) ──

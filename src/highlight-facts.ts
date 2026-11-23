@@ -13,10 +13,11 @@
 import type { CstGrammar, RuleExpr, RuleDecl, TokenDecl } from './types.ts';
 import { collectLiterals, escapeRegex, isKeywordLiteral } from './grammar-utils.ts';
 import { analyzeGrammar } from './grammar-analysis.ts';
-import { expandArms } from './region-view.ts';
-import { armGraph, armOrderKey, compareArmOrder, findWindows, hasWindow, inArmOrder, reachable, reachesThrough, sortInArmOrder, type ArmGraph } from './arm-graph.ts';
+import { expandArms } from './region-view.ts';   // small bodies only: getTypeParamElementKeywords, prefixPairKeywords
+import { armGraph, armOrderKey, compareArmOrder, findWindows, foldArmsFrom, hasWindow, inArmOrder, reachable, reachesThrough, sortInArmOrder, type ArmGraph } from './arm-graph.ts';
 import { compileTokenizer, lexSpecOf } from './emit-lexer.ts';
-import { tokenPatternBlockDelimiterSources, tokenPatternBlockDelimiters, tokenPatternEqualsPattern, tokenPatternIsNever, tokenPatternLeadingSource, tokenPatternLiteralPrefix, tokenPatternNodeContainsLiteral, tokenPatternPrefixBeforeTrailingLookahead, tokenPatternQuoteDelimAndEscape, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
+import { classifyToken } from './highlight-roles.ts';
+import { tokenPatternBlockDelimiterSources, tokenPatternBlockDelimiters, tokenPatternEqualsPattern, tokenPatternIsNever, tokenPatternLeadingSource, tokenPatternLiteralPrefix, tokenPatternNodeContainsLiteral, tokenPatternPrefixBeforeTrailingLookahead, tokenPatternQuoteDelimAndEscape, tokenPatternSource, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
 
 export interface ContextualPattern {
   keyword: string;
@@ -62,39 +63,21 @@ export function inferIdentScope(keyword: string, scopeOverrides: Map<string, str
   return null;
 }
 
-/**
- * Does a rule, when expanded, have an alternative that begins with the given
- * identifier token? Used so a `keyword Ident` pattern is still detected when the
- * identifier is reached through a rule-ref (e.g. `extends ClassHeritage`, whose
- * base alternative is `Ident`). Bounded depth guards against ref cycles.
- */
-export function ruleStartsWithIdent(
-  refName: string,
-  identTokenName: string,
-  rules: RuleDecl[],
-  seen: Set<string> = new Set(),
-): boolean {
-  if (refName === identTokenName) return true;
-  if (seen.has(refName)) return false;
-  seen.add(refName);
-  const rule = rules.find(r => r.name === refName);
-  if (!rule) return false;
-  for (const alt of expandArms(rule.body)) {
-    const head = alt[0];
-    if (!head) continue;
-    if (head.type === 'ref' && ruleStartsWithIdent(head.name, identTokenName, rules, seen)) return true;
-  }
-  return false;
+/** Whether rule `refName` is the identifier token, or begins (through rule references at its head)
+ *  with it: so a `keyword Ident` pattern is still detected when the identifier is reached through a
+ *  rule reference (e.g. `extends ClassHeritage`, whose base alternative is `Ident`). */
+export function startsWithIdent(grammar: CstGrammar, refName: string, identTokenName: string): boolean {
+  return refName === identTokenName || ruleBeginsWith(grammar, refName, (h) => h.type === 'ref' && h.name === identTokenName);
 }
 
 export function findContextualPatterns(
+  grammar: CstGrammar,
   expr: RuleExpr,
   tokenNames: Set<string>,
-  scopeOverrides: Map<string, string[]>,
-  rules: RuleDecl[],
   identTokenName: string | null,
 ): ContextualPattern[] {
-    const patterns: ContextualPattern[] = [];
+  const { scopeOverrides } = grammar;
+  const patterns: ContextualPattern[] = [];
 
   function walkSeq(items: RuleExpr[]) {
     for (let i = 0; i < items.length - 1; i++) {
@@ -107,7 +90,7 @@ export function findContextualPatterns(
       // rule-ref whose base alternative starts with the identifier token.
       const adjacent =
         tokenNames.has(b.name) ||
-        (identTokenName !== null && ruleStartsWithIdent(b.name, identTokenName, rules));
+        (identTokenName !== null && startsWithIdent(grammar, b.name, identTokenName));
       if (adjacent) patterns.push({ keyword: a.value, identScope: scope });
     }
   }
@@ -311,62 +294,7 @@ export function deriveComputedMemberCloseBrackets(grammar: CstGrammar, typeRuleN
   return [...closes];
 }
 
-// ── Token classification ──
-
-/**
- * Derive a TextMate-conventional suffix for line comment scope based on the
- * literal prefix of the regex pattern.  E.g., `//` → `double-slash`,
- * `#` → `number-sign`.
- *
- * Uses a universal character-name mapping (not language-specific).
- */
-export function lineCommentScopeSuffix(prefix: string | undefined): string {
-  if (!prefix) return '';
-  const charName: Record<string, string> = {
-    '/': 'slash', '#': 'number-sign', '-': 'dash', ';': 'semicolon',
-    '%': 'percentage', '!': 'bang', "'": 'apostrophe', '*': 'asterisk',
-  };
-  const parts = [...prefix].map(ch => charName[ch] || ch);
-  if (parts.length === 2 && parts[0] === parts[1]) {
-    return `.double-${parts[0]}`;
-  }
-  return `.${parts.join('-')}`;
-}
-
-/** The TextMate scope of a string quoted by `delim`: `"` double, `'` single; null for any other
- *  delimiter (each caller says what such a string takes). The one place this convention lives. */
-export function quoteScope(delim: string): string | null {
-  return delim === '"' ? 'string.quoted.double' : delim === "'" ? 'string.quoted.single' : null;
-}
-
-export function classifyToken(token: TokenDecl, opts?: { explicitScope?: boolean }): { scope: string; isBlock?: boolean } {
-  const useExplicitScope = opts?.explicitScope ?? true;
-  const commentLike = token.flags.includes('skip') || token.scope?.startsWith('comment.');
-  const isBlock = commentLike && !!tokenPatternBlockDelimiters(token);
-  if (useExplicitScope && token.scope) return { scope: token.scope, isBlock: isBlock || undefined };
-  if (token.flags.includes('skip')) {
-    if (isBlock) {
-      return { scope: 'comment.block', isBlock: true };
-    }
-    const suffix = lineCommentScopeSuffix(tokenPatternLiteralPrefix(token));
-    return { scope: `comment.line${suffix}` };
-  }
-
-  if (tokenPatternStartsWithDecimal(token)) {
-    // A `[0-9]`/`\d`-leading token is a base-10 (decimal) numeric. The TextMate
-    // `.decimal`/`.hex`/`.octal`/`.binary` axis names the BASE, not int-vs-float —
-    // an optional fraction/exponent does not change the base — so a single
-    // base-10 token (matching `1`, `1.5`, `1e3` alike) is `constant.numeric.decimal`.
-    // (Named bases get their scope from explicit token annotations.)
-    return { scope: 'constant.numeric.decimal' };
-  }
-
-  const delimiters = tokenPatternStringDelimiters(token);
-  for (const q of ['"', "'"]) if (delimiters.includes(q)) return { scope: quoteScope(q)! };
-  if (delimiters.includes('`')) return { scope: 'string.quoted.other.template' };
-
-  return { scope: 'variable.other' };
-}
+// ── Token lookups (the role tables are in src/highlight-roles.ts) ──
 
 // The grammar's CALLEE token: one scoped as a function name whose pattern is gated on a
 // following `(` (e.g. env-spec FUNCTION_NAME, `name(?=\s*\()`). Shared by the two derived
@@ -682,22 +610,16 @@ export function findContextualAccessibilityModifiers(grammar: CstGrammar): Set<s
  * be misread as a "constraint". So that rule is excluded from the param-rule scan.
  */
 export function detectTypeParamConstraintKeywords(grammar: CstGrammar, typeArgRule: string | null): string[] {
-  // The type-param rule is the `sep` element of a `'<' sep(X, ',') '>'` body, EXCEPT
-  // the type-argument inner rule (which has the same shape but is a type, not a param
-  // declaration). In practice the remaining element is just `TypeParam`.
+  const g = armGraph(grammar);
   const sepElementRules = new Set<string>();
-  const scanForTypeParamSep = (items: RuleExpr[]): void => {
-    for (let i = 0; i + 2 < items.length; i++) {
-      if (items[i].type === 'literal' && (items[i] as { value: string }).value === '<' &&
-          items[i + 1].type === 'sep' &&
-          items[i + 2].type === 'literal' && (items[i + 2] as { value: string }).value === '>') {
-        const sep = items[i + 1] as { type: 'sep'; element: RuleExpr };
-        if (sep.element.type === 'ref' && sep.element.name !== typeArgRule) sepElementRules.add(sep.element.name);
-      }
-    }
-  };
-  for (const rule of grammar.rules) for (const seq of expandArms(rule.body)) scanForTypeParamSep(seq);
+  for (const [, s] of findWindows(g, [isLit('<'), (e) => e.type === 'sep', isLit('>')], ruleRoots(g))) {
+    const el = (g.node[s] as { element: RuleExpr }).element;
+    if (el.type === 'ref' && el.name !== typeArgRule) sepElementRules.add(el.name);
+  }
+  return prefixPairKeywords(grammar, sepElementRules);
+}
 
+function prefixPairKeywords(grammar: CstGrammar, sepElementRules: Set<string>): string[] {
   // In each such rule, find the constraint keyword: the WORD literal that BEGINS an OPTIONAL
   // `[keyword, type…]` segment. "Optional" is read structurally from expandArms(body): the constraint
   // is exactly the segment by which one branch EXTENDS a prefix-shorter sibling — so `opt(kw, type)`
@@ -744,64 +666,30 @@ export interface AngleBracketAmbiguity {
  * tagged templates).
  */
 export function detectAngleBracketAmbiguity(grammar: CstGrammar): AngleBracketAmbiguity | null {
-  const precOps = new Set<string>();
-  for (const level of grammar.precs) {
-    for (const op of level.operators) {
-      precOps.add(op.value);
-    }
-  }
+  const precOps = new Set(grammar.precs.flatMap(l => l.operators.map(o => o.value)));
   if (!precOps.has('<') || !precOps.has('>')) return null;
-
-  let innerRuleName: string | null = null;
-  let separator: string | null = null;
-  const confirmTokens: string[] = [];
-
-  // Resolve the leading character from an item after '>'
-  function resolveConfirmChar(item: RuleExpr): string | null {
-    if (item.type === 'literal') return (item as { value: string }).value;
+  const confirmChar = (item: RuleExpr): string | null => {
+    if (item.type === 'literal') return item.value;
     if (item.type === 'ref') {
-      // If it references a token, extract its leading literal char
-      const token = grammar.tokens.find(t => t.name === (item as { name: string }).name);
-      if (token) {
-        const delimiter = tokenPatternStringDelimiters(token)[0];
-        if (delimiter && /^[`'"]/.test(delimiter)) return delimiter[0];
-      }
+      const token = grammar.tokens.find(t => t.name === item.name);
+      const delimiter = token ? tokenPatternStringDelimiters(token)[0] : undefined;
+      if (delimiter && /^[`'"]/.test(delimiter)) return delimiter[0];
     }
     return null;
+  };
+  const g = armGraph(grammar);
+  const sepOfRef = (e: RuleExpr) => e.type === 'sep' && e.element.type === 'ref';
+  let innerRuleName: string | null = null, separator: string | null = null;
+  const confirmTokens: string[] = [];
+  for (const [, s, , x] of sortInArmOrder(g, findWindows(g, [isLit('<'), sepOfRef, isLit('>'), () => true], ruleRoots(g)))) {
+    const ch = confirmChar(g.node[x]);
+    if (!ch || confirmTokens.includes(ch)) continue;
+    const sep = g.node[s] as { element: { name: string }; delimiter: string };
+    innerRuleName = sep.element.name;
+    separator = sep.delimiter;
+    confirmTokens.push(ch);
   }
-
-  function walkSeq(items: RuleExpr[]) {
-    for (let i = 0; i < items.length - 2; i++) {
-      if (items[i].type === 'literal' && (items[i] as { value: string }).value === '<' &&
-          items[i + 1].type === 'sep' &&
-          items[i + 2].type === 'literal' && (items[i + 2] as { value: string }).value === '>') {
-        const sep = items[i + 1] as { type: 'sep'; element: RuleExpr; delimiter: string };
-        const inner = sep.element.type === 'ref' ? sep.element.name : null;
-        if (inner) {
-          const nextItem = items[i + 3];
-          if (nextItem) {
-            const ch = resolveConfirmChar(nextItem);
-            if (ch && !confirmTokens.includes(ch)) {
-              innerRuleName = inner;
-              separator = sep.delimiter;   // the generic type-param list's separator
-              confirmTokens.push(ch);
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // Expand opt()/alt() so the confirm token after `>` is visible even when the
-  // alternative is written `[$, '<', sep, '>', opt(alt(['(', …], Template))]`.
-  for (const rule of grammar.rules) {
-    for (const seq of expandArms(rule.body)) walkSeq(seq);
-  }
-
-  if (innerRuleName && confirmTokens.length > 0) {
-    return { innerRuleName, confirmTokens, separator: separator ?? ',' };
-  }
-  return null;
+  return innerRuleName && confirmTokens.length > 0 ? { innerRuleName, confirmTokens, separator: separator ?? ',' } : null;
 }
 
 
@@ -811,70 +699,41 @@ export function detectAngleBracketAmbiguity(grammar: CstGrammar): AngleBracketAm
  * i.e. a literal `<`, then a single ref to a @type rule, then `>`, then a
  * following item (the operand the cast applies to). This is the TS prefix cast
  * `<Type>expr`, distinct from `'<' sep(Type) '>'` generics (whose second item is
- * a `sep`, not a bare ref). Returns the inner type rule name, or null.
+ * a `sep`, not a bare ref). Also through a CAST-HEAD rule, `[<castHeadRef>, operand]`: a rule every
+ * arm of which is exactly `'<' <typeRef> '>'` (the `<…>` hidden behind the ref boundary, resolved by
+ * name as detectCallExpression reaches its arguments through a rule of their own). Over the
+ * rule-body arms; the inner type rule name of the LAST match in arm order, or null.
  */
 export function detectAngleBracketCast(grammar: CstGrammar): string | null {
-  const typeRuleNameSet = new Set(
-    grammar.rules.filter(r => r.flags.includes('type')).map(r => r.name)
-  );
-  if (typeRuleNameSet.size === 0) return null;
-
-  const ruleByName = new Map(grammar.rules.map(r => [r.name, r] as const));
-  // a "cast head" is a rule whose EVERY expanded branch is exactly `'<' <typeRef> '>'` — the author
-  // factored the angle-cast prefix into its own rule. Recover the type name (null if not that shape).
-  // Memoized per rule: expandArms is exponential in a body's opts, and the same rule is
-  // referenced from many expanded sequences.
+  const typeRules = new Set(grammar.rules.filter(r => r.flags.includes('type')).map(r => r.name));
+  if (typeRules.size === 0) return null;
+  const g = armGraph(grammar);
+  const typeRef = (e: RuleExpr) => e.type === 'ref' && typeRules.has(e.name);
+  const lastKey = (w: number[], atStart = false) => armOrderKey(g, w, [], atStart, { atEnd: atStart, last: true });
   const castHeadMemo = new Map<string, string | null>();
   const castHeadType = (name: string): string | null => {
-    let ty = castHeadMemo.get(name);
-    if (ty === undefined) castHeadMemo.set(name, ty = castHeadShape(ruleByName.get(name)!.body));
-    return ty;
-  };
-  const castHeadShape = (body: RuleExpr): string | null => {
-    const branches = expandArms(body);
-    if (!branches.length) return null;
+    if (castHeadMemo.has(name)) return castHeadMemo.get(name)!;
+    const r = rootOfRule(g, grammar, name);
     let ty: string | null = null;
-    for (const items of branches) {
-      if (items.length === 3 && items[0].type === 'literal' && (items[0] as { value: string }).value === '<' &&
-          items[1].type === 'ref' && typeRuleNameSet.has((items[1] as { name: string }).name) &&
-          items[2].type === 'literal' && (items[2] as { value: string }).value === '>') {
-        ty = (items[1] as { name: string }).name;
-      } else return null;
+    if (r >= 0 && !g.nullable[r]) {
+      // every arm `'<' T '>'`: each first is `<` (not an end), each next a type ref (not an end),
+      // each next `>` ending the arm; the type of the last arm.
+      const arms: number[][] = [];
+      const ok = g.first[r].every(a => isLit('<')(g.node[a]) && !g.isLast[a] && g.follow[a].every(b => typeRef(g.node[b]) && !g.isLast[b]
+        && g.follow[b].every(c => { arms.push([a, b, c]); return isLit('>')(g.node[c]) && g.isLast[c] && g.follow[c].length === 0; })));
+      if (ok && arms.length) ty = (g.node[arms.map(w => ({ w, key: lastKey(w, true) })).sort((x, y) => compareArmOrder(y.key, x.key))[0].w[1]] as { name: string }).name;
     }
+    castHeadMemo.set(name, ty);
     return ty;
   };
-  let found: string | null = null;
-  const walkSeq = (items: RuleExpr[]): void => {
-    for (let i = 0; i + 1 < items.length; i++) {
-      const a = items[i];
-      // inline `'<' <type> '>' operand`
-      if (i + 3 < items.length) {
-        const b = items[i + 1], c = items[i + 2], d = items[i + 3];
-        if (a.type === 'literal' && a.value === '<' &&
-            b.type === 'ref' && typeRuleNameSet.has(b.name) &&
-            c.type === 'literal' && c.value === '>' && d /* an operand follows the cast */) {
-          found = b.name;
-        }
-      }
-      // via a cast-head RULE: `[<castHeadRef>, operand]` — the `<…>` is hidden behind the ref boundary,
-      // so resolve it by name (mirrors detectCallExpression reaching its args through a separate rule).
-      if (a.type === 'ref' && ruleByName.has(a.name)) {
-        const ty = castHeadType(a.name);
-        if (ty) found = ty;
-      }
-    }
-  };
-  for (const rule of grammar.rules) {
-    for (const seq of expandArms(rule.body)) walkSeq(seq);
+  const met: { ty: string; key: number[] }[] = [];
+  for (const w of findWindows(g, [isLit('<'), typeRef, isLit('>'), () => true], ruleRoots(g))) met.push({ ty: (g.node[w[1]] as { name: string }).name, key: lastKey(w) });
+  for (const w of findWindows(g, [(e) => e.type === 'ref' && grammar.rules.some(r => r.name === e.name), () => true], ruleRoots(g))) {
+    const ty = castHeadType((g.node[w[0]] as { name: string }).name);
+    if (ty) met.push({ ty, key: lastKey(w) });
   }
-  return found;
+  return met.sort((x, y) => compareArmOrder(y.key, x.key))[0]?.ty ?? null;
 }
-
-
-
-
-
-
 
 // ── Conditional-type detection ──
 
@@ -886,50 +745,18 @@ export function detectAngleBracketCast(grammar: CstGrammar): string | null {
  * its scope from the derived scope map (NOT hardcoded). `null` if no rule has
  * the shape, in which case no `type-conditional` region is emitted.
  *
- * Mirrors detectTernary's walk, but is gated on a type-flagged rule and a
+ * The first such window in arm order, in the arms of a type-flagged rule (or of a
+ * `sep` element within one). Like detectTernary's window, but gated on a type-flagged rule and a
  * keyword connector between the head/check types — that connector is what
  * distinguishes a conditional `?`/`:` (a ternary) from an OPTIONAL `?`
  * (`{ a?: T }`). The emitted region anchors on the connector so the inner
  * ternary scope only exists inside a conditional.
  */
 export function detectConditionalType(grammar: CstGrammar): string | null {
-  let connector: string | null = null;
-
-  function checkSeq(items: RuleExpr[]): void {
-    // window: ref KW ref '?' ref ':' ref  (7 items)
-    for (let i = 0; i + 6 < items.length; i++) {
-      const kw = items[i + 1];
-      const q = items[i + 3];
-      const colon = items[i + 5];
-      if (items[i].type === 'ref' &&
-          kw.type === 'literal' && isKeywordLiteral((kw as { value: string }).value) &&
-          items[i + 2].type === 'ref' &&
-          q.type === 'literal' && (q as { value: string }).value === '?' &&
-          items[i + 4].type === 'ref' &&
-          colon.type === 'literal' && (colon as { value: string }).value === ':' &&
-          items[i + 6].type === 'ref') {
-        connector = (kw as { value: string }).value;
-        return;
-      }
-    }
-  }
-
-  function walk(expr: RuleExpr): void {
-    if (connector) return;
-    // run the 7-window over the NORMALISED branches (mirrors detectTernary): expandArms
-    // canonicalises an opt-tail / grouped / alt-split conditional `?:` into the flat adjacency.
-    for (const items of expandArms(expr)) { checkSeq(items); if (connector) return; }
-    if (expr.type === 'seq' || expr.type === 'alt') expr.items.forEach(walk);
-    else if (expr.type === 'quantifier' || expr.type === 'group') walk(expr.body);
-    else if (expr.type === 'sep') walk(expr.element);
-  }
-
-  for (const rule of grammar.rules) {
-    if (!rule.flags.includes('type')) continue;
-    walk(rule.body);
-    if (connector) break;
-  }
-  return connector;
+  const g = armGraph(grammar);
+  const typeRoot = (r: number) => grammar.rules[g.ruleIndex[r]].flags.includes('type');
+  const w = sortInArmOrder(g, findWindows(g, [isRefItem, isKeywordItem, isRefItem, isLit('?'), isRefItem, isLit(':'), isRefItem], typeRoot))[0];
+  return w ? (g.node[w[1]] as { value: string }).value : null;
 }
 
 
@@ -1091,22 +918,21 @@ export interface DeclInfo {
   qualifiedName: boolean; // name is a dotted EntityName (e.g., `namespace A.B.C`): name followed by ('.' Ident)*
 }
 
-export function isAngleBracketSepRule(body: RuleExpr): boolean {
-  // Match on the NORMALIZED forms so an equivalent factoring — a trailing `opt(',')`, an
-  // alt-split, a group wrapper — reduces to the same `'<' sep '>'` adjacency. expandArms keeps
-  // `sep` opaque (it is in its default case), so the sep node survives the expansion.
-  return expandArms(body).some(items => {
-    if (items.length !== 3) return false;
-    const [first, second, third] = items;
-    return first.type === 'literal' && first.value === '<' &&
-           second.type === 'sep' && second.delimiter === ',' &&
-           third.type === 'literal' && third.value === '>';
-  });
+/** Whether some arm of `body` (a rule body) is exactly `'<' sep(…, ',') '>'` (a type-parameter
+ *  list rule, however factored: a trailing `opt(',')`, an alt split, a group wrapper). */
+export function isAngleBracketSepRule(grammar: CstGrammar, body: RuleExpr): boolean {
+  const g = armGraph(grammar);
+  const r = rootOfBody(g, body);
+  if (r < 0) return false;
+  return g.first[r].some(p => isLit('<')(g.node[p]) && !g.isLast[p] && g.follow[p].some(s => {
+    const e = g.node[s];
+    return e.type === 'sep' && e.delimiter === ',' && !g.isLast[s] && g.follow[s].some(t => isLit('>')(g.node[t]) && g.isLast[t]);
+  }));
 }
 
 export function getTypeParamElementKeywords(body: RuleExpr, grammar: CstGrammar): string[] {
   // Find the `'<' sep '>'` adjacency in any NORMALISED branch (so a trailing `opt(',')` or an
-  // alt-wrapped body still surfaces it — the same expansion isAngleBracketSepRule uses), then hoist
+  // alt-wrapped body still surfaces it; a small body: expandArms), then hoist
   // the element's keywords. Without this the keyword sub-pattern (the `\bextends\b` scoping inside
   // `<…>`) is dropped for those equivalent factorings even though the region itself is still emitted.
   let elementBody: RuleExpr | null = null;
@@ -1149,179 +975,108 @@ export function getTypeParamElementKeywords(body: RuleExpr, grammar: CstGrammar)
  * E.g., 'class' Ident TypeParams? ... '{' ClassMember* '}'
  *       'function' Ident TypeParams? ... '(' Param ')' ... Block
  *       'type' Ident TypeParams? '=' Type ';'?
+ *
+ * Read per rule-body arm that begins with a keyword (with a name scope), then only non-keyword
+ * literals (the mid literals: `function*`) and zero-width guards, then a token (the name). The rest
+ * of each such arm is FOLDED over the arm graph (foldArmsFrom) into what the declaration needs, so
+ * no arm is expanded: a body (a `{`, or a rule every arm of which is `{ … }`), parameters (a `(`),
+ * type parameters (the first angle-sep rule before the first literal after the name) and the
+ * literal after them (the end hint, for a body-less arm), a dotted name (`.` and a token right
+ * after the name). Per keyword the arms' facts are joined: a flag is set when some arm has it; the
+ * body is optional when one arm with parameters has a body and another has none; the
+ * type-parameter keywords, the end hint and the order (of the keywords and of the mid literals)
+ * are those of the first keyword-to-name prefix, in arm order, that has them. A keyword is a
+ * declaration when some arm has a body or type parameters.
  */
-export function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclInfo[] {
-  const results: DeclInfo[] = [];
-
-  // Memoized per rule: expandArms is exponential in a body's opts, and analyzeSeq asks about
-  // the same refs from every expanded sequence.
-  const blockRuleMemo = new Map<string, boolean>();
-  function isBlockRule(name: string): boolean {
-    let r = blockRuleMemo.get(name);
-    if (r === undefined) blockRuleMemo.set(name, r = isBlockRuleUncached(name));
-    return r;
-  }
-  function isBlockRuleUncached(name: string): boolean {
-    const rule = grammar.rules.find(r => r.name === name);
-    if (!rule) return false;
-    // A rule is a block body only if EVERY normalised branch is `{ … }`-bounded — i.e. it is
-    // ALWAYS a brace block. `.some` would over-match a rule that is only SOMETIMES a block (a
-    // `Type` whose value can be an inline object type), mis-classifying a `type X = …` alias as a
-    // brace-body declaration. `.every` recovers the alt-of-blocks factoring without that regression.
-    const branches = expandArms(rule.body);
-    return branches.length > 0 && branches.every(items =>
-      items.length >= 2 &&
-      items[0].type === 'literal' && (items[0] as { value: string }).value === '{' &&
-      items[items.length - 1].type === 'literal' && (items[items.length - 1] as { value: string }).value === '}');
-  }
-
-  function containsLiteral(expr: RuleExpr, value: string): boolean {
-    if (expr.type === 'literal') return expr.value === value;
-    if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(i => containsLiteral(i, value));
-    if (expr.type === 'quantifier' || expr.type === 'group') return containsLiteral(expr.body, value);
-    if (expr.type === 'sep') return containsLiteral(expr.element, value);
-    return false;
-  }
-
-  function containsBlockRef(expr: RuleExpr): boolean {
-    if (expr.type === 'ref') return isBlockRule(expr.name);
-    if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(containsBlockRef);
-    if (expr.type === 'quantifier' || expr.type === 'group') return containsBlockRef(expr.body);
-    if (expr.type === 'sep') return containsBlockRef(expr.element);
-    return false;
-  }
-
-  function analyzeSeq(items: RuleExpr[]) {
-    if (items.length < 2) return;
-    if (items[0]?.type !== 'literal' || !isKeywordLiteral((items[0] as { value: string }).value)) return;
-
-    // Find the Ident (token ref) — may be items[1] directly, or after
-    // intervening non-alphabetic literals (e.g., 'function' '*' Ident).
-    let nameIdx = 1;
-    while (nameIdx < items.length) {
-      const item = items[nameIdx];
-      if (item.type === 'ref' && tokenNames.has(item.name)) break;
-      if (item.type === 'literal' && !isKeywordLiteral((item as { value: string }).value)) {
-        nameIdx++;
-        continue;
-      }
-      // Zero-width guards (`not(...)` / `sameLine` / `noCommentBefore` / `noMultilineFlowBefore` /
-      // `notLeftLeaf(...)`) consume no token, so they can sit between the keyword and the name (e.g.
-      // `'type' not(reserved) Ident`) without changing the `keyword name` highlight pattern — skip past them.
-      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') {
-        nameIdx++;
-        continue;
-      }
-      return; // unexpected item type — not a declaration pattern
-    }
-    if (nameIdx >= items.length) return;
-
-    const keyword = (items[0] as { value: string }).value;
-
-    // Collect non-alphabetic literals between keyword and name (e.g., '*' in function*)
-    const midLits: string[] = [];
-    for (let m = 1; m < nameIdx; m++) {
-      if (items[m].type === 'literal') midLits.push((items[m] as { value: string }).value);
-    }
-
-    const nameScope = inferIdentScope(keyword, grammar.scopeOverrides);
-    if (!nameScope) return;
-
-    // Dotted EntityName: the name is immediately followed by a `('.' Ident)*`
-    // repetition (e.g. `namespace A.B.C { … }`, `module A.B { … }`). The whole
-    // dotted path names the declaration, so the trailing segments must read as
-    // the name scope — not fall through to value member-access. expandArms() has
-    // already flattened the `*` quantifier to a single occurrence here, so the
-    // tail surfaces as the literal `.` + Ident token-ref pair directly.
-    const dot = items[nameIdx + 1];
-    const seg = items[nameIdx + 2];
-    const qualifiedName =
-      !!dot && dot.type === 'literal' && (dot as { value: string }).value === '.' &&
-      !!seg && seg.type === 'ref' && tokenNames.has((seg as { name: string }).name);
-
-    const hasInlineBraces = items.some(i => i.type === 'literal' && (i as { value: string }).value === '{');
-    const hasBlockRef = items.some(i => containsBlockRef(i));
-    const hasBody = hasInlineBraces || hasBlockRef;
-
-    let hasTypeParams = false;
-    let typeParamKeywords: string[] = [];
-    let endHint: string | undefined;
-    for (let i = nameIdx + 1; i < items.length; i++) {
-      const item = items[i];
-      let refName: string | null = null;
-      if (item.type === 'ref' && !tokenNames.has(item.name)) refName = item.name;
-      if (item.type === 'quantifier' && item.body.type === 'ref' && !tokenNames.has(item.body.name)) {
-        refName = item.body.name;
-      }
-      if (refName) {
-        const rule = grammar.rules.find(r => r.name === refName);
-        if (rule && isAngleBracketSepRule(rule.body)) {
-          hasTypeParams = true;
-          typeParamKeywords = getTypeParamElementKeywords(rule.body, grammar);
-          if (!hasBody) {
-            for (let j = i + 1; j < items.length; j++) {
-              if (items[j].type === 'literal') {
-                endHint = (items[j] as { value: string }).value;
-                break;
-              }
-            }
-          }
-          break;
+export function detectDeclarations(grammar: CstGrammar): DeclInfo[] {
+  const g = armGraph(grammar);
+  const { tokenNames } = highlightFacts(grammar);
+  const blockMemo = new Map<string, boolean>();
+  // A rule every arm of which is `{ … }`.
+  const isBlockRule = (name: string): boolean => {
+    let b = blockMemo.get(name);
+    if (b !== undefined) return b;
+    const r = rootOfRule(g, grammar, name);
+    b = r >= 0 && !g.nullable[r] && g.first[r].every(p => isLit('{')(g.node[p]) && !g.isLast[p])
+      && rootPositions(g, r).every(p => !g.isLast[p] || isLit('}')(g.node[p]));
+    blockMemo.set(name, b);
+    return b;
+  };
+  const containsLiteral = (e: RuleExpr, value: string): boolean =>
+    e.type === 'literal' ? e.value === value
+    : e.type === 'seq' || e.type === 'alt' ? e.items.some(i => containsLiteral(i, value))
+    : e.type === 'quantifier' || e.type === 'group' ? containsLiteral(e.body, value)
+    : e.type === 'sep' ? containsLiteral(e.element, value) : false;
+  const containsBlockRef = (e: RuleExpr): boolean =>
+    e.type === 'ref' ? isBlockRule(e.name)
+    : e.type === 'seq' || e.type === 'alt' ? e.items.some(containsBlockRef)
+    : e.type === 'quantifier' || e.type === 'group' ? containsBlockRef(e.body)
+    : e.type === 'sep' ? containsBlockRef(e.element) : false;
+  const isBody = (e: RuleExpr) => isLit('{')(e) || containsBlockRef(e);
+  const isParams = (e: RuleExpr) => containsLiteral(e, '(');
+  const isGuard = (e: RuleExpr) => e.type === 'sameLine' || e.type === 'noCommentBefore' || e.type === 'noMultilineFlowBefore' || e.type === 'notLeftLeaf';
+  const tpRuleOf = (e: RuleExpr): string | null => {
+    if (e.type !== 'ref' || tokenNames.has(e.name)) return null;
+    const rule = grammar.rules.find(r => r.name === e.name);
+    return rule && isAngleBracketSepRule(grammar, rule.body) ? rule.name : null;
+  };
+  // The fold after the name. tp: 0 looking for the type-parameter rule (until a literal), 1 found
+  // (looking for the end hint: the next literal), 2 done. qual: 0 next item, 1 after `.`, 2 a
+  // dotted name, 3 not.
+  type S = { body: boolean; params: boolean; tp: 0 | 1 | 2; tpRule: string | null; endHint: string | null; qual: 0 | 1 | 2 | 3 };
+  const step = (s: S, e: RuleExpr): S => {
+    const n = { ...s, body: s.body || isBody(e), params: s.params || isParams(e) };
+    if (s.tp === 0) { const t = tpRuleOf(e); if (t) { n.tp = 1; n.tpRule = t; } else if (e.type === 'literal') n.tp = 2; }
+    else if (s.tp === 1 && e.type === 'literal') { n.tp = 2; n.endHint = e.value; }
+    n.qual = s.qual === 0 ? (isLit('.')(e) ? 1 : 3) : s.qual === 1 ? (e.type === 'ref' && tokenNames.has(e.name) ? 2 : 3) : s.qual;
+    return n;
+  };
+  const key = (s: S) => `${+s.body}${+s.params}${s.tp}${s.tpRule}\0${s.endHint}\0${s.qual}`;
+  type Prefix = { keyword: string; key: number[]; midLits: string[]; ends: S[] };
+  const prefixes: Prefix[] = [];
+  for (let r = 0; r < g.body.length; r++) {
+    if (g.rootKind[r] !== 'rule') continue;
+    for (const k of g.first[r]) {
+      const kw = g.node[k];
+      if (!isKeywordItem(kw) || !inferIdentScope(kw.value, grammar.scopeOverrides)) continue;
+      const extend = (path: number[]): void => {
+        for (const n of g.follow[path[path.length - 1]]) {
+          const e = g.node[n];
+          if (e.type === 'ref' && tokenNames.has(e.name)) {
+            const mid = path.slice(1).map(p => g.node[p]);
+            const init: S = { body: mid.some(isBody), params: mid.some(isParams), tp: 0, tpRule: null, endHint: null, qual: 0 };
+            const ends = g.isLast[n] ? [init] : [];
+            for (const f of g.follow[n]) ends.push(...foldArmsFrom(g, f, init, step, key));
+            prefixes.push({ keyword: kw.value, key: armOrderKey(g, [...path, n], [], true), midLits: mid.flatMap(e => e.type === 'literal' ? [e.value] : []), ends });
+          } else if ((e.type === 'literal' && !isKeywordLiteral(e.value)) || isGuard(e)) extend([...path, n]);
         }
-      }
-      if (item.type === 'literal') break;
+      };
+      extend([k]);
     }
-
-    const hasParams = items.some(i =>
-      (i.type === 'literal' && (i as { value: string }).value === '(') || containsLiteral(i, '(')
-    );
-
-    // The same declaration keyword may surface across several expanded sequences
-    // (e.g. async/`*`/typeParams present or absent). Merge into the existing
-    // DeclInfo, OR-ing flags so no detail is lost regardless of expansion order.
-    const existing = results.find(r => r.keyword === keyword);
-    if (existing) {
-      // A body-having expansion meeting a body-less one (or vice versa) for the same
-      // keyword ⇒ the body is optional (`function f(){}` AND overload `function f();`).
-      if (existing.hasBody !== hasBody && hasParams && existing.hasParams) existing.optionalBody = true;
-      existing.hasBody = existing.hasBody || hasBody;
-      existing.hasParams = existing.hasParams || hasParams;
-      if (hasTypeParams && !existing.hasTypeParams) {
-        existing.hasTypeParams = true;
-        existing.typeParamKeywords = typeParamKeywords;
-      }
-      if (!existing.endHint && endHint) existing.endHint = endHint;
-      for (const lit of midLits) {
-        if (!existing.midLiterals.includes(lit)) existing.midLiterals.push(lit);
-      }
-      existing.qualifiedName = existing.qualifiedName || qualifiedName;
-      return;
-    }
-
-    if (!hasBody && !hasTypeParams) return;
-
+  }
+  prefixes.sort((a, b) => compareArmOrder(a.key, b.key));
+  const results: DeclInfo[] = [];
+  const keywords = [...new Set(prefixes.filter(p => p.ends.some(s => s.body || s.tpRule)).map(p => p.keyword))];
+  for (const keyword of keywords) {
+    const mine = prefixes.filter(p => p.keyword === keyword);
+    const ends = mine.flatMap(p => p.ends);
+    const tpRule = ends.find(s => s.tpRule)?.tpRule ?? null;
+    const midLiterals: string[] = [];
+    for (const p of mine) for (const l of p.midLits) if (!midLiterals.includes(l)) midLiterals.push(l);
     results.push({
       keyword,
-      nameScope,
+      nameScope: inferIdentScope(keyword, grammar.scopeOverrides)!,
       keywordScope: getScope(grammar.scopeOverrides, keyword) ?? `storage.type.${keyword}`,
-      hasParams,
-      hasTypeParams,
-      hasBody,
-      optionalBody: false,
-      typeParamKeywords,
-      endHint,
-      midLiterals: midLits,
-      qualifiedName,
+      hasParams: ends.some(s => s.params),
+      hasTypeParams: tpRule !== null,
+      hasBody: ends.some(s => s.body),
+      optionalBody: ends.some(s => s.params && s.body) && ends.some(s => s.params && !s.body),
+      typeParamKeywords: tpRule ? getTypeParamElementKeywords(grammar.rules.find(r => r.name === tpRule)!.body, grammar) : [],
+      endHint: ends.find(s => !s.body && s.endHint !== null)?.endHint ?? undefined,
+      midLiterals,
+      qualifiedName: ends.some(s => s.qual === 2),
     });
   }
-
-  // Expand opt()/alt() so a DRY declaration like
-  // `[opt('async'),'function',opt('*'),Ident,...]` is seen in its concrete forms
-  // (the all-optionals-absent branch yields the same shape as a hand-written one).
-  for (const rule of grammar.rules) {
-    for (const seq of expandArms(rule.body)) analyzeSeq(seq);
-  }
-
   return results;
 }
 
@@ -1983,7 +1738,6 @@ export function statementStartKeywords(grammar: CstGrammar): Set<string> {
 }
 
 
-
 /** The non-identifier token the grammar's own lexer gives a whole keyword text, if any. */
 export function lexedByToken(grammar: CstGrammar): (kw: string) => TokenDecl | undefined {
   const lexKw = compileTokenizer(lexSpecOf(grammar));
@@ -2237,6 +1991,14 @@ export function defaultBindImportKeywords(grammar: CstGrammar): Set<string> {
 }
 
 
+/** The positions of a root (a root's positions are consecutive). */
+const rootPositions = (g: ArmGraph, r: number): number[] => {
+  const to = r + 1 < g.rootFrom.length ? g.rootFrom[r + 1] : g.node.length;
+  return Array.from({ length: to - g.rootFrom[r] }, (_, i) => g.rootFrom[r] + i);
+};
+const rootOfBody = (g: ArmGraph, body: RuleExpr): number => g.body.indexOf(body);
+
+
 
 // ── The facts object ──
 
@@ -2273,14 +2035,14 @@ const FACTS = {
   /** A `:` type annotation exists (some `':' <@type rule>` adjacency). */
   typeAnnotations: (g: CstGrammar) => highlightFacts(g).typeRuleNames.size > 0 && hasColonTypeAnnotation(g, highlightFacts(g).typeRuleNames),
   conditionalType: (g: CstGrammar) => detectConditionalType(g),
-  declarations: (g: CstGrammar) => detectDeclarations(g, highlightFacts(g).tokenNames),
+  declarations: (g: CstGrammar) => detectDeclarations(g),
   bindingCloseBrackets: (g: CstGrammar) => deriveBindingCloseBrackets(g, highlightFacts(g).identToken?.name),
   directParamKeywords: (g: CstGrammar) => directParamKeywords(g),
   reservedWords: (g: CstGrammar) => collectReservedWords(g),
   computedMemberCloseBrackets: (g: CstGrammar) => deriveComputedMemberCloseBrackets(g, highlightFacts(g).typeRuleNames),
   /** Every rule's keyword + identifier adjacencies, in rule order (duplicates kept). */
   contextualPatterns: (g: CstGrammar) => g.rules.flatMap(rule =>
-    findContextualPatterns(rule.body, highlightFacts(g).tokenNames, g.scopeOverrides, g.rules, highlightFacts(g).identToken?.name ?? null)),
+    findContextualPatterns(g, rule.body, highlightFacts(g).tokenNames, highlightFacts(g).identToken?.name ?? null)),
   callExpression: (g: CstGrammar) => hasCallExpression(g),
   constructorKeywords: (g: CstGrammar) => constructorKeywords(g),
   propertyAccess: (g: CstGrammar) => propertyAccess(g),

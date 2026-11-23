@@ -541,8 +541,11 @@ export const CASES: Case[] = [
     accept: [
       '', 'x: 1;', 'x:: a + 1;', 'if a;', 'if a + 1;', 'on x::1;', 'do x;', 'do x.y;', 'go a;', 'go a + b;', 'go a = b;',
       'at [a]!;', 'at [a + b]!;', 'in a;', 'in a + b;', 'x: a in b;', 'x: 1; if b; go c = d; at [e]!; do f.g;',
+      // A leftRec continuation ending in a positive lookahead leaves the tail open (the shape of
+      // python.ts's t_primary: `a.b.c[1] = x`).
+      'set a.x = 1;', 'set a[1] = 1;', 'set a.b.c[1] = x;', 'set a[1].b.c = x;', 'set a.b[2][3].c = x + 1;',
     ],
-    reject: ['if x: 1;', 'if x:: 1;', 'on x:1;', 'on x::y;', 'do 1;', 'do (x);', 'do x.;', 'go a = ;', 'at [a];', 'at [a]', 'in a in b;', 'x 1;'],
+    reject: ['if x: 1;', 'if x:: 1;', 'on x:1;', 'on x::y;', 'do 1;', 'do (x);', 'do x.;', 'go a = ;', 'at [a];', 'at [a]', 'in a in b;', 'x 1;', 'set a = x;', 'set a.b. = x;', 'set a.b.c = ;'],
   },
   {
     // Literals of every shape lid_of looks a text up by (see the fixture): a token of each must
@@ -693,7 +696,7 @@ export const CASES: Case[] = [
       'x\n++;', 'x\n--', '(x\n++);', 'a = [x\n++];', 'x\n++\n-y;', 'x\n++\ny++;', 'x\n++ ++y;', 'class C { p = x\n++ }', 'class C { p = x\n++\ny }',
       'for (a = (x in b)) c;',
       'for (a = b ? x in c : y in d) e;',
-      ...CAP_PROPAGATION.reject, ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...CALL_ARGS.reject, ...EXPORT_DECLS.reject,
+      'new a?.b;', ...CAP_PROPAGATION.reject, ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...CALL_ARGS.reject, ...EXPORT_DECLS.reject,
       ...CTX_CASES.javascript.reject, ...TEMPLATE_STEPS.js.reject,
       // An assignment / update operand (prefix ++/-- included) without a LeftHandSideExpression's shape has no parse.
       'a + b = c;', 'a++ = 1;', '-a = 1;', '++ -x;', '++x++;', '++ ++x;',
@@ -719,7 +722,7 @@ export const CASES: Case[] = [
     // agnostic emitter (types, generics, interfaces, enums, assertions, variance). ASCII.
     grammar: 'typescript', path: '../typescript.ts',
     accept: [
-      ...CAP_PROPAGATION.accept, ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...CALL_ARGS.accept, ...EXPORT_DECLS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);', ...REBIND.ts.accept,
+      'let x = f<A<B>>(c);', 'let x = f<T>;', ...CAP_PROPAGATION.accept, ...NO_IN_HEADS.accept, ...FOR_HEADS.accept, ...RESERVED_EXPRS.accept, ...CALL_ARGS.accept, ...EXPORT_DECLS.accept, 'for (let a: T of b); for (var a: T in b); for (var a: T = 1;;);', ...REBIND.ts.accept,
       'export default /re/.test(x);', 'export default /=/;', 'switch (a) { default: /re/.test(x); }',
       // ... but as a member name a keyword is a value and a `/` after it divides, as after a private name
       // after a template's tail a `/` divides, as after a template with no substitution
@@ -817,6 +820,10 @@ export const CASES: Case[] = [
       // An assignment target's shape is decided by the construct that built the node: a class
       // expression named like a connector is a PrimaryExpression, not an `as` / `satisfies` node.
       'x = class as {} = 1;', 'x = class satisfies {} = 1;', 'x = class as extends B {} = 1;',
+      // A left-recursive rule's continuations close the access tail as a Pratt rule's LEDs do: an atom
+      // ending in a fresh operand (`keyof $`) is no `.`-qualified base, while its operand takes the
+      // tail itself (`keyof (T[])`, `keyof (T.x)`); the rejects are below.
+      'type A = keyof T[];', 'type A = keyof T.x;', 'type A = keyof typeof x.y;', 'type A = unique symbol.x;',
       // A template's holes are parsed by the rule its reference declares: types in a
       // template-literal type, expressions everywhere else — the `new` callee included.
       'type X = `a${T[]}b`;', 'type X = `a${A | B}b${C["k"]}`;', 'type X = `${infer U extends string}x`;',
@@ -912,8 +919,9 @@ export const CASES: Case[] = [
     ],
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
+      'type A = keyof void.x;', 'type A = keyof null.x;',   // `(keyof void).x`: the atom closed the tail (tsc: ';' expected)
       'type T = | | A;', 'type T = A | | B;', 'type T = A & | B;', 'type T = & & A;', 'type T = & | A;', 'f<| | A>();', 'let x: [| | A];',
-      'const f = <>() => 1;', 'const f = async <>(a) => 1;', 'const f = <in T>() => 1;', 'f(<in out T>(a) => a);', ...REBIND.ts.reject, ...CAP_PROPAGATION.reject, ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...CALL_ARGS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, ...TS_DECORATORS.reject, ...TEMPLATE_STEPS.ts.reject, ...TS_MEMBER_DECORATORS.reject, ...TS_MODULES.reject, ...TRY_STATEMENTS.reject, ...TS_TRY.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
+      'const f = <>() => 1;', 'const f = async <>(a) => 1;', 'const f = <in T>() => 1;', 'f(<in out T>(a) => a);', ...REBIND.ts.reject, 'let x = f<T>.x;', 'new a?.b;', ...CAP_PROPAGATION.reject, ...NO_IN_HEADS.reject, ...FOR_HEADS.reject, ...RESERVED_EXPRS.reject, ...CALL_ARGS.reject, ...EXPORT_DECLS.reject, ...CTX_CASES.typescript.reject, ...TS_DECORATORS.reject, ...TEMPLATE_STEPS.ts.reject, ...TS_MEMBER_DECORATORS.reject, ...TS_MODULES.reject, ...TRY_STATEMENTS.reject, ...TS_TRY.reject, 'for (var a!: T;;);', 'for (let a!: T of b);',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '{ b(); }.x;', '{ static x }.y;', '{ static x }', '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;',
       'let[0] = 1;', '(async\nfunction f() {});',
