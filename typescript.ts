@@ -1199,7 +1199,8 @@ export default defineGrammar({
     ['expr', 'module_reference'],
     // A heritage base (a NewTarget) after `extends f <`: the element's type arguments
     // (`extends f<T> {}`) or a typed tagged template (`extends f<T>`x` {}`); only the token after
-    // `>` decides, and tsc accepts both.
+    // `>` decides, and tsc accepts both. And, as in JavaScript, a member tail after the base
+    // (`extends a.b {}`): NewTarget's own `.b`, or the heritage's `.b` on the base `a`.
     ['new_target', 'class_heritage'],
     // `{ readonly [` starts a mapped type, a type member with a `readonly` modifier, or (after a
     // `<` that may open type arguments or compare) an object literal's member, until `in` / `:`.

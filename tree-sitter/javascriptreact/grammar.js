@@ -69,6 +69,7 @@ module.exports = grammar({
     [$.expr, $.prop, $.export_specifier],
     [$.expr, $.export_specifier],
     [$.prop, $.export_specifier],
+    [$.new_target, $.class_heritage],
     [$.expr, $.jsxcontainer],
   ],
 

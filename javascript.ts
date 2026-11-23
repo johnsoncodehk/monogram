@@ -966,6 +966,10 @@ export default defineGrammar({
     // keeps a statement from starting with `{` is a lookahead tree-sitter drops); with the statement's
     // end a token of its own (the line-end token), both readings meet at `a` before `}`.
     ['prop', 'export_specifier'],
+    // A heritage's member tail after its NewTarget base (`extends a.b {}`): NewTarget's own `.b`, or
+    // the heritage's `.b` on the base `a`; the interpreter's NewTarget takes it (longest match), and
+    // the heritage's tails are for a call's or class expression's result (`extends f().b`).
+    ['new_target', 'class_heritage'],
   ],
 
   rules: {
