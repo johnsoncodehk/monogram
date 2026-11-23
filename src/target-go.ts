@@ -13,7 +13,7 @@ import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, typ
 import { blockBody, elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
-import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isOpt, isRec, isRecList, recName, type BinOp, type CodeRange, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
+import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, unitMask, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 
@@ -3009,12 +3009,6 @@ const GO_OPS: Record<BinOp, [string, number]> = {
 const GO_IND = '\t';
 const exported = (s: string): string => s[0].toUpperCase() + s.slice(1);
 const goWrap = (r: R, min: number): string => (r.prec < min ? `(${r.c})` : r.c);
-// The 64 bits of a cold char set's mask from unit `base` (its members are ASCII), as a hex literal.
-const goMask = (rs: CodeRange[], base: number): string => {
-  let m = 0n;
-  for (const [lo, hi] of rs) for (let c = Math.max(lo, base); c <= Math.min(hi, base + 63); c++) m |= 1n << BigInt(c - base);
-  return `0x${m.toString(16)}`;
-};
 const goBlock = (lines: string[]): string[] => lines.map((l) => GO_IND + l);
 
 // Shared-algorithm lowering: explicit conversions, slices; a list with an exact final length is
@@ -3036,7 +3030,7 @@ const goLowering: Lowering = {
   spliceInline: true,
   // Go has no compile-time construction of a table, so a [256]bool literal names every member; a
   // cold table (tested off the hot path) is a 128-bit mask instead, a shift and a mask per test.
-  charSet: (name, rs, cold) => cold ? `var ${name} = [2]uint64{${goMask(rs, 0)}, ${goMask(rs, 64)}}`
+  charSet: (name, rs, cold) => cold ? `var ${name} = [2]uint64{${unitMask(rs, 0)}, ${unitMask(rs, 64)}}`
     : `var ${name} = [256]bool{${rs.flatMap(([lo, hi]) => Array.from({ length: hi - lo + 1 }, (_, k) => `${lo + k}: true`)).join(', ')}}`,
   // A byte loop: Rust's four-bytes-per-round shape measured slower here (measure-targets, PR #138:
   // go-reuse +2.9% to +3.8% on acorn / checker / gen-tm), the compiler keeps the loop tight already.

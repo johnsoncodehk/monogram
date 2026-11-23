@@ -124,6 +124,12 @@ export interface RecordDecl { name: string; fields: { name: string; ty: Num | 'b
 // `cold`: tested only off the hot path (inSet, never runEnd), so a target may spell its table
 // shorter at the price of a few instructions per test.
 export interface CharSet { name: string; ranges: CodeRange[]; cold?: boolean }
+// The 64 bits from unit `base` of a cold set's 128-bit mask (its members are ASCII), as a hex literal.
+export function unitMask(rs: CodeRange[], base: number): string {
+  let m = 0n;
+  for (const [lo, hi] of rs) for (let c = Math.max(lo, base); c <= Math.min(hi, base + 63); c++) m |= 1n << BigInt(c - base);
+  return `0x${m.toString(16)}`;
+}
 
 export const ELEM: Record<Exclude<ListTy, RecListTy>, Ty> = { metas: 'meta', toks: 'tok', bools: 'bool', depths: 'depth', edits: 'edit' };
 export const isNum = (t: Ty): t is Num => t === 'int' || t === 'lid' || t === 'depth' || t === 'pos' || t === 'idx';
