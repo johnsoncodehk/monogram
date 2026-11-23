@@ -607,7 +607,10 @@ export function createParser(grammar: CstGrammar) {
       // LeftHandSideExpression: its MIDDLE child is an `$operator` leaf or a binary-connector
       // leaf. Member `a.b` / element `a[b]` / typed call `f<T>()` have a `$punct` leaf there, a
       // paren cover has a NODE child → those pass.
-      if (cs.length >= 3) {
+      // Only a LED builds such a node: its first child is the left operand, a node of this rule (a NUD
+      // never starts with one), so a NUD whose second child is a name spelled like a connector
+      // (`class as {}`) is decided by its construct, as the portable engine's ledForm decides it.
+      if (cs.length >= 3 && !('tokenType' in cs[0]) && cs[0].rule === node.rule) {
         const m = cs[1];
         if (m && 'tokenType' in m && (m.tokenType === '$operator' || binaryConnectors.has(source.slice(m.offset, m.end)))) return true;
       }
@@ -878,11 +881,18 @@ export function createParser(grammar: CstGrammar) {
         }
         case 'quantifier':
           return matchQuantifier(expr.body, expr.kind);
-        case 'group':
+        case 'group': {
           // A `suppress`-carrying group disables the listed LED connectors for the
-          // rule it wraps: stage them for the next parseRule to pick up.
-          if (expr.suppress && expr.suppress.length) suppressNext = new Set(expr.suppress);
-          return matchExpr(expr.body);
+          // rule it wraps: stage them for the next parseRule to pick up. The staging ends with
+          // the group: a body that never enters that rule (its FIRST set refuses the token, so
+          // `exclude('in', Expr)` before a `;` matches nothing) leaves nothing staged for the
+          // NEXT rule after the group (`for (; a in b;)` reads its `in`).
+          if (!expr.suppress || !expr.suppress.length) return matchExpr(expr.body);
+          suppressNext = new Set(expr.suppress);
+          const r = matchExpr(expr.body);
+          suppressNext = null;
+          return r;
+        }
         case 'not': {
           // Zero-width negative lookahead: succeed (no children) iff the body
           // does NOT match here; never consume input either way.

@@ -486,8 +486,10 @@ export const CASES: Case[] = [
       'for (x in y) z;', 'x in y;', 'for (a.b in c) d;', 'a in b in c;',
       'for ((x) in y) z;', 'for (x in y) a in b;', 'for (x in a in b) z;',
       '(a in b);', 'for (a in b) for (c in d) e;',
+      // a staged suppress set ends with its group, entered or not
+      'for (; a in b) z;', 'for (x; a in b) z;', 'for (; a) z;', 'for (;) z;',
     ],
-    reject: ['for (x y) z;', 'for x in y;', 'for (in y) z;', 'for (x in) z;'],
+    reject: ['for (x y) z;', 'for x in y;', 'for (in y) z;', 'for (x in) z;', 'for (x in y; a) z;'],
   },
   {
     // Longest match among a rule's alternatives, the earliest-declared on a tie
@@ -654,6 +656,8 @@ export const CASES: Case[] = [
     reject: ['function (', 'a +;', 'if x {}', '{ a: }', 'for (;;', 'a ? b ;',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;', 'let[0] = 1;', '(async\nfunction f() {});',
+      // a HashbangComment begins the text only (start()), never a later line
+      '//\n#!x', 'a;\n#!x',
       ...JS_DECORATORS.reject, ...JS_MODULES.reject, ...TRY_STATEMENTS.reject,
       // ... so no parameter list takes a reserved word as a name, `this` included (a `this`
       // parameter is TypeScript's).
@@ -801,6 +805,9 @@ export const CASES: Case[] = [
       'var x: this is this is T;', 'var x: asserts y is this is T;', 'function f(x: any): x is this is T { }',
       'function f(x: any): (this is T) { }', 'type F = (x: any) => x is T;', 'var v = (x: any): x is T => true;',
       'var x: this is\n string;', 'class C { p: this\n is: number }', 'class C { m(x): x\n is: string }', 'type A = this[];',
+      // An assignment target's shape is decided by the construct that built the node: a class
+      // expression named like a connector is a PrimaryExpression, not an `as` / `satisfies` node.
+      'x = class as {} = 1;', 'x = class satisfies {} = 1;', 'x = class as extends B {} = 1;',
       // A template's holes are parsed by the rule its reference declares: types in a
       // template-literal type, expressions everywhere else — the `new` callee included.
       'type X = `a${T[]}b`;', 'type X = `a${A | B}b${C["k"]}`;', 'type X = `${infer U extends string}x`;',
