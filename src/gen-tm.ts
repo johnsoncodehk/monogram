@@ -1620,6 +1620,42 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
     };
   }
 
+  // ── <name>-dynamic-element: `<{expr} …>children</{expr}>`, when the tag-name rule has an arm
+  // that is a hole (region-view.ts `dynamicTag`). The open tag's name is the hole (code); the
+  // close tag's hole is matched one brace level deep (a TextMate `end` is one regex) and its
+  // contents re-tokenized as code.
+  if (view.dynamicTag) {
+    const ho = escapeRegex(region.hole.open), hc = escapeRegex(region.hole.close);
+    const hoC = escapeForCharClass(region.hole.open), hcC = escapeForCharClass(region.hole.close);
+    const closeHole = `(${ho})([^${hoC}${hcC}]*)(${hc})`;
+    result[K('dynamic-element')] = {
+      name: `meta.tag.${langName}`,
+      begin: `(?=(${o})\\s*${ho})`,
+      end: `(${selfCloseTok})|(${closeTok})\\s*(?:${closeHole})?\\s*(${c})`,
+      endCaptures: {
+        '1': { name: tagEnd }, '2': { name: tagBegin },
+        '3': { name: embeddedBegin }, '4': { patterns: [{ include: '$self' }] }, '5': { name: embeddedEnd },
+        '6': { name: tagEnd },
+      },
+      patterns: [
+        {
+          begin: `(${o})\\s*(?=${ho})`,
+          beginCaptures: { '1': { name: tagBegin } },
+          end: tagEndAhead,
+          patterns: [{ include: `#${K('expression')}` }, { include: `#${K('attributes')}` }],
+        },
+        childrenRegion(`(${c})`, { '1': { name: tagEnd } }),
+      ],
+    };
+    const dynamicBody = `(${o})\\s*${ho}`;
+    result[K('dynamic-element-in-expression')] = {
+      begin: exprStartLA(dynamicBody),
+      end: exprEndLA(dynamicBody),
+      patterns: [...commentIncludes, { include: `#${K('dynamic-element')}` }],
+    };
+    (result[K('children')].patterns as { include: string }[]).splice(1, 0, { include: `#${K('dynamic-element')}` });
+  }
+
   return result;
 }
 
@@ -4782,7 +4818,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
     // #generic-call / #comparison): a `<` at expression-start with a tag-shaped
     // lookahead is an element, never a comparison/generic (those follow a value operand).
     // Self-closing before open before fragment (their ranks in section 7).
-    for (const [k, rank] of [['self-closing-element-in-expression', -6], ['element-in-expression', -5.5], ['fragment-in-expression', -5]] as const) {
+    for (const [k, rank] of [['self-closing-element-in-expression', -6], ['element-in-expression', -5.5], ['dynamic-element-in-expression', -5.4], ['fragment-in-expression', -5]] as const) {
       const key = `${view.name}-${k}`;
       if (!elPatterns[key]) continue;
       topPatterns.push({ include: `#${key}` });
