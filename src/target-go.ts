@@ -3288,6 +3288,8 @@ function recoveryRegionGo(ir: ParserIR, shared: SharedAlgorithms): string {
   return `
 // ---- recovery: the emit option { recovery: true }; generated from src/recovery-family.ts (shared by the TS / Go / Rust targets) ----
 type diag struct{ Kind, Off, End, RelOff, RelEnd int }
+// The recovery interpreter's best longest-match candidate so far (recovery-family.ts BEST).
+type bestCand struct{ Pos, Off, Won, Form, Tail, Capped int }
 ${shared.recoveryFamily(ir)}
 ${recoveryEngineGo(ir)}
 // Diagnostic is a span of the source (byte offsets), its message, and a related location or nil.
