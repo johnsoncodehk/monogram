@@ -284,22 +284,6 @@ export function tsInterp(lib: TsLib, src: string, depth: number): Interp {
     return { ok: r.root !== null, cst: r.root === null ? undefined : canon(r.root), steps: r.steps, leaves: [native, leaves] };
   } catch (e) { return { ok: false, cst: errText(e), steps: -1 }; }
 }
-// One parseTotal outcome: accepted, and each diagnostic as [off, end, message, relOff, relEnd,
-// relMessage] (relOff -1: no related location).
-type DiagRow = [number, number, string, number, number, string];
-type Total = { ok: boolean; errors: DiagRow[]; cst?: string };
-function totalBatch(cmd: string, srcs: string[]): Total[] {
-  const sent = srcs.filter((s) => !s.includes('\0'));
-  const r = spawnSync(cmd, ['batch-total'], { input: sent.join('\0'), encoding: 'utf8', maxBuffer: 1 << 30 });
-  const lines = (r.stdout ?? '').split('\n');
-  if (r.status !== 0 || lines.length !== sent.length + 1) throw new Error(`${cmd} batch-total: exit ${r.status}, ${lines.length - 1} lines for ${sent.length} inputs\n${(r.stderr ?? '').slice(0, 2000)}`);
-  let li = 0;
-  return srcs.map((src): Total => {
-    if (src.includes('\0')) return { ok: false, errors: [[0, 0, 'NUL', -1, -1, '']] };
-    const [ok, errors] = JSON.parse(lines[li++]!) as [boolean, DiagRow[]];
-    return { ok, errors };
-  });
-}
 export function interpBatch(cmd: string, srcs: string[], depth: number): Interp[] {
   const sent = srcs.filter((s) => !s.includes('\0'));
   const r = spawnSync(cmd, ['batch-interp', String(depth)], { input: sent.join('\0'), encoding: 'utf8', maxBuffer: 1 << 30 });
