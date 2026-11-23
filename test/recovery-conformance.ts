@@ -13,7 +13,8 @@
 import { writeFileSync, readFileSync } from 'node:fs';
 import { readdir } from 'fs/promises';
 import { join } from 'path';
-import { emitParser, jsTarget } from '../src/emit.ts';
+import { emitParser } from '../src/target.ts';
+import { jsTarget } from '../src/emit-parser.ts';
 import ts from 'typescript';
 import { scratchDir } from './scratch.ts';
 

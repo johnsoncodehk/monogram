@@ -1,7 +1,7 @@
 // ShapeSpec v2: the CORE CALCULUS a shape is written in. A shape maps each (rule, arm NAME) of a
 // grammar to a TERM: plain data over the arm's NAMED children (src/grammar-names.ts), closed
 // under the operators below. There is no escape to code: a spec holding a function, or a term
-// tag not listed here, is rejected when it is loaded (src/shape2-eval.ts `loadShape2`). v1
+// tag not listed here, is rejected when it is loaded (src/shape2-eval.ts `defineShape`). v1
 // (src/shape-schema.ts) binds by position and is not changed by this file.
 //
 // It is an attribute grammar in a restricted form:
@@ -185,7 +185,7 @@ export type CookFn = (typeof COOK_FNS)[number];
 
 /** A synthesized scalar attribute: an equation per (rule, arm); an arm without one takes
  * `default` (required unless every arm of every rule that is asked has an equation). */
-export type SynAttr = { type: ScalarType; default?: Scalar; rules: Record<string, Record<string, Term>> };
+export type SynAttr<R extends string = string> = { type: ScalarType; default?: Scalar; rules: ByRule<R, Record<string, Term>> };
 /** A threaded equation (see the header): on a REPEATED child of the arm's own scope. Every rule
  * node inside iteration k of the innermost repetition holding that child (the child itself, or
  * the rule nodes of the branch an alternation took there) receives state k; state 0 is `init`
@@ -197,9 +197,9 @@ export type InhEq = Term | ThreadEq;
 /** An inherited scalar attribute: per (rule, arm, child name) an equation (InhEq); every other
  * child, and the root, gets `default`. An arm holding a thread for the attribute has no other
  * equation for it. */
-export type InhAttr =
-  | { type: ScalarType; default: Scalar; rules: Record<string, Record<string, Record<string, InhEq>>> }
-  | NodesAttr;
+export type InhAttr<R extends string = string> =
+  | { type: ScalarType; default: Scalar; rules: ByRule<R, Record<string, Record<string, InhEq>>> }
+  | NodesAttr<R>;
 /** A NODE-VALUED inherited attribute: an immutable list of nodes a parent arm builds from what
  * sits to the LEFT of the child it hands them to, and that child's arm places in its own node.
  * tsc's `modifiers`: the `export` / `declare` words and the outer decorators sit in the Decl arms
@@ -214,18 +214,23 @@ export type InhAttr =
  * element's start to its last element's end, as a list-valued child does, so a receiver that
  * starts at its first inherited node says so: `let_('m', inh('modifiers'), iff(present('m'),
  * node(T, {...}, { from: 'm', to: … }), node(T, {...})))`. */
-export type NodesAttr = { type: 'nodes'; rules: Record<string, Record<string, Record<string, Term>>> };
+export type NodesAttr<R extends string = string> = { type: 'nodes'; rules: ByRule<R, Record<string, Record<string, Term>>> };
 
-export type Shape2Spec = {
+/** A table keyed by rule name: with the grammar's rule names known (`R`, from `defineGrammar`'s
+ * type), a key that is not one of them is a TypeScript error; arm and child names are strings,
+ * checked when the shape is loaded (`defineShape`). */
+export type ByRule<R extends string, X> = string extends R ? Record<string, X> : { [K in R]?: X };
+
+export type ShapeSpec<R extends string = string> = {
   name: string;
   /** Every arm of every rule in `rules` must be mapped (an unmapped arm is a load error), and
    * every `branch` must have a case for each branch. Without it, evaluating an unmapped arm
-   * throws `Shape2Unmapped` naming it. */
+   * throws `ShapeUnmapped` naming it. */
   total?: boolean;
   /** rule -> arm name -> the arm's value. */
-  rules: Record<string, Record<string, Term>>;
-  synthesized?: Record<string, SynAttr>;
-  inherited?: Record<string, InhAttr>;
+  rules: ByRule<R, Record<string, Term>>;
+  synthesized?: Record<string, SynAttr<R>>;
+  inherited?: Record<string, InhAttr<R>>;
 };
 
 // ── Constructor helpers: plain-data builders, and the survey's primitives as sugar ──

@@ -88,7 +88,20 @@ export function literals(src: string): string[] {
 }
 const globRe = (pattern: string) => new RegExp('^' + pattern.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*') + '$');
 
+let selfExports: Map<string, string> | undefined;
+/** The file a SELF-REFERENCE names (`'monogram/shape'`: the package's own name, resolved through
+ * its package.json `exports`, as Node resolves it from inside the package). */
+function selfReference(literal: string): string | undefined {
+  if (!selfExports) {
+    const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name: string; exports?: Record<string, string> };
+    selfExports = new Map(Object.entries(pkg.exports ?? {}).map(([k, v]) => [pkg.name + k.slice(1), relative(ROOT, resolve(ROOT, v)).split(sep).join('/')]));
+  }
+  return selfExports.get(literal);
+}
+
 export function candidates(literal: string, fromDir: string): string[] {
+  const self = selfReference(literal);
+  if (self) return [self];
   let text = literal.replace(/\$\{[^}]*\}/g, '*');
   if (!(/[./]/.test(text) || /^\*[A-Za-z]/.test(text)) || !/[A-Za-z]/.test(text) || text.length > 200 || text.includes('\n')) return [];
   const out: string[] = [];
@@ -143,9 +156,14 @@ export function edges(file: string): string[] {
     for (const m of src.matchAll(/^(?:export )?const ([A-Za-z_$][\w$]*) = (?:scratchDir|mkdtempSync|tmpdir)\(/gm)) consts.set(m[1]!, '\0');
     const expand = (lit: string, depth = 0): string => (depth > 3 ? lit : lit.replace(/\$\{([A-Za-z_$][\w$]*)\}/g, (h, name: string) => (consts.has(name) ? expand(consts.get(name)!, depth + 1) : '${}')));
     for (const lit of literals(src)) { const x = expand(lit); if (!x.includes('\0')) e.push(...candidates(x, dir)); }
+    // a name every binding of which is a scratch directory (`const dir = scratchDir('nl')`, at any
+    // depth): a path joined onto it is outside the repository
+    const bound = new Map<string, boolean>();
+    for (const m of src.matchAll(/^\s*(?:export )?(?:const|let) ([A-Za-z_$][\w$]*) = (.*)$/gm)) bound.set(m[1]!, (bound.get(m[1]!) ?? true) && /^(?:scratchDir|mkdtempSync|tmpdir)\(/.test(m[2]!));
     // a bare directory name joined onto a path (`join(ROOT, 'src')`): every file under it
-    for (const m of src.matchAll(/\b(?:join|resolve)\([^()]*?['"]([A-Za-z][\w-]*)['"]/g)) {
-      const d = m[1]!;
+    for (const m of src.matchAll(/\b(?:join|resolve)\(\s*([A-Za-z_$][\w$]*)?[^()]*?['"]([A-Za-z][\w-]*)['"]/g)) {
+      if (m[1] && bound.get(m[1])) continue;
+      const d = m[2]!;
       for (const base of [dir, '']) {
         const p = base ? `${base}/${d}` : d;
         try { if (statSync(join(ROOT, p)).isDirectory()) for (const f of repoFiles()) if (f.startsWith(p + '/')) e.push(f); } catch { /* not a directory */ }
@@ -158,13 +176,39 @@ export function edges(file: string): string[] {
 
 /** The repository files a gate's script reaches (itself included), plus its declared `reads`. */
 export function gateDeps(script: string, reads: string[] = []): Set<string> {
+  const { common, targets } = gateTargetDeps(script, reads);
+  for (const t of targets.values()) for (const f of t) common.add(f);
+  return common;
+}
+
+// Each emit target's module: what it reaches is that target's code. src/target.ts (the core) imports
+// none of them, so a gate of one target reaches one of them (src/emit.ts, which re-exports every
+// target, reaches all four: a gate that imports it depends on every target).
+export const TARGET_ROOTS: Record<string, string> = { js: 'src/emit-parser.ts', ts: 'src/target-ts.ts', go: 'src/target-go.ts', rust: 'src/target-rust.ts' };
+const ROOT_TARGET = new Map(Object.entries(TARGET_ROOTS).map(([t, f]) => [f, t]));
+const closure = (from: string[], stop: (f: string) => boolean = () => false): Set<string> => {
   const seen = new Set<string>();
-  const stack = [script, ...reads.flatMap((r) => candidates(r, ''))];
+  const stack = [...from];
   while (stack.length) {
     const f = stack.pop()!;
     if (seen.has(f)) continue;
     seen.add(f);
-    stack.push(...edges(f));
+    if (!stop(f)) stack.push(...edges(f));
   }
   return seen;
+};
+/**
+ * A gate's inputs split by target: `common` = what its script reaches without entering a target's
+ * module (the target roots it names included), `targets` = for each target root it reaches, what
+ * that root reaches. A change that touches no common file and only the files of targets T can
+ * change only what the gate checks of T: a gate that runs one target at a time (the entry's
+ * `targets: true` in check.ts) runs with CHECK_TARGETS=T.
+ */
+export function gateTargetDeps(script: string, reads: string[] = []): { common: Set<string>; targets: Map<string, Set<string>> } {
+  const isRoot = (f: string) => ROOT_TARGET.has(f);
+  const reached = closure([script, ...reads.flatMap((r) => candidates(r, ''))], isRoot);
+  const targets = new Map<string, Set<string>>();
+  for (const f of reached) if (isRoot(f)) targets.set(ROOT_TARGET.get(f)!, closure([f]));
+  const common = new Set([...reached].filter((f) => !isRoot(f)));
+  return { common, targets };
 }
