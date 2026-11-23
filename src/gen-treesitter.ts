@@ -1089,6 +1089,9 @@ export interface ZeroWidthToken {
   ahead: string[];
   after: Set<string>;
   cont: Set<string>;
+  /** The guards (the words each excludes) of the word-token steps that may come right after the
+   *  token: a keyword one of them does not exclude is the word token there, so AFTER holds it. */
+  afterWordGuards: Set<string>[];
 }
 interface ZeroWidthPlan {
   tokens: ZeroWidthToken[];
@@ -1098,12 +1101,43 @@ interface ZeroWidthPlan {
   lowered: Set<RuleExpr>;
 }
 
+/** Per word-token step node: the words the guards right before it exclude (reservedGuardWords of every
+ *  `not` in front of it, through the other zero-width items there). A step without one is absent. */
+function wordStepGuards(grammar: CstGrammar, word: string | undefined, isWordLiteral: (text: string) => boolean): Map<RuleExpr, Set<string>> {
+  const out = new Map<RuleExpr, Set<string>>();
+  const seen = new Set<RuleExpr>();
+  const walk = (e: RuleExpr): void => {
+    e = tsView(e);
+    if (seen.has(e)) return;
+    seen.add(e);
+    if (e.type === 'seq') {
+      e.items.forEach((item, i) => {
+        if (item.type !== 'not') return;
+        let j = i + 1;
+        while (j < e.items.length && ASSERTION_KINDS.has(tsView(e.items[j]).type)) j++;
+        const ws = reservedGuardWords(item, e.items[j], word, isWordLiteral);
+        if (!ws) return;
+        const step = tsView(e.items[j]);
+        const s = out.get(step) ?? out.set(step, new Set()).get(step)!;
+        for (const w of ws) s.add(w);
+      });
+      e.items.forEach(walk);
+    } else if (e.type === 'alt') e.items.forEach(walk);
+    else if (e.type === 'quantifier') walk(e.body);
+    else if (e.type === 'sep') walk(e.element);
+  };
+  for (const r of grammar.rules) walk(r.body);
+  for (const b of collectTsSharedRules(grammar).values()) walk(b);
+  return out;
+}
+
 function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerTokens: Set<string>, prattRules: Set<string>,
   isWordLiteral: (text: string) => boolean, reserved: Set<string>): ZeroWidthPlan {
   const plan: ZeroWidthPlan = { tokens: [], tokenOf: new Map(), lowered: new Set() };
   // A grammar with its own line handling (NEWLINE tokens, indentation) has its own scanner rules.
   if (grammar.indent || grammar.newline) return plan;
   const word = grammar.tokens.find(t => t.identifier)?.name;
+  const guards = wordStepGuards(grammar, word, isWordLiteral);
   const tokSet = (e: RuleExpr): string[] | null => {
     e = tsView(e);
     if (e.type === 'literal') return [`'${e.value}`];
@@ -1160,6 +1194,7 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
   const graph = treeSitterLeafGraph(grammar, tokenNames, scannerTokens, prattRules, termOf);
   const lr = buildLr(graph);
   const after = cands.map(() => new Set<string>()), cont = cands.map(() => new Set<string>());
+  const afterGuards = cands.map(() => new Map<string, Set<string>>());
   const idOf = (t: string) => t.startsWith('@zw') ? +t.slice(3) : -1;
   const valid = lr.states.map((_, s) => lr.valid(s));
   // The terminals that may come first after a leaf in its rule (through nullable rules).
@@ -1200,10 +1235,19 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
     }
     for (const [sym, to] of st.goto) {
       const i = idOf(sym);
-      if (i >= 0) for (const u of valid[to]) if (idOf(u) < 0) after[i].add(u);
+      if (i < 0) continue;
+      for (const u of valid[to]) if (idOf(u) < 0) after[i].add(u);
+      // The word steps that may come next, by their guards: where one lets a keyword be a name,
+      // the keyword is the word token after the token (the async arrow's parameter guard lets `true`
+      // be one in `async true => 1`; a class member name after `async` is unguarded).
+      for (const l of lr.states[to].next) {
+        if (graph.sym[l] !== word || graph.nt[l] >= 0) continue;
+        const ex = (graph.node[l] && guards.get(graph.node[l]!)) || new Set<string>();
+        afterGuards[i].set([...ex].sort().join(' '), ex);
+      }
     }
   });
-  return { after, cont };
+  return { after, cont, afterGuards };
   };
   // A keyword the word token can also lex (one no reserved set excludes from it everywhere).
   const wordShaped = (t: string) => t === word || (t.startsWith("'") && isWordLiteral(t.slice(1)) && !reserved.has(t.slice(1)));
@@ -1221,7 +1265,7 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
     for (const i of out) live.delete(i);
     res = analyze(live);
   }
-  const { after, cont } = res;
+  const { after, cont, afterGuards } = res;
   const byKey = new Map<string, ZeroWidthToken>();
   const counters = { 'line-end': 0, 'same-line': 0 };
   cands.forEach((c, i) => {
@@ -1239,12 +1283,13 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
       : [c.kind, [...after[i]].sort().join(' '), [...cont[i]].sort().join(' ')].join('|');
     let tok = byKey.get(key);
     if (!tok) {
-      tok = { snake: `_${c.kind === 'line-end' ? 'line_end' : 'same_line'}_${++counters[c.kind]}`, kind: c.kind, lineBreak: c.lineBreak, ahead: [...new Set(c.ahead)].sort(), after: new Set(), cont: new Set() };
+      tok = { snake: `_${c.kind === 'line-end' ? 'line_end' : 'same_line'}_${++counters[c.kind]}`, kind: c.kind, lineBreak: c.lineBreak, ahead: [...new Set(c.ahead)].sort(), after: new Set(), cont: new Set(), afterWordGuards: [] };
       byKey.set(key, tok);
       plan.tokens.push(tok);
     }
     for (const x of after[i]) tok.after.add(x);
     for (const x of cont[i]) tok.cont.add(x);
+    for (const ex of afterGuards[i].values()) tok.afterWordGuards.push(ex);
     plan.tokenOf.set(c.node, tok);
     for (const a of c.asserts) plan.lowered.add(a);
   });
@@ -2907,7 +2952,7 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   tokens.forEach(t => {
     const S = t.snake.toUpperCase();
     H.push(`static const bool ${S}_AFTER_EXACT[] = ${boolRow(l => exact(t.after, l))};`);
-    H.push(`static const bool ${S}_AFTER[] = ${boolRow(l => has(t.after, l))};`);
+    H.push(`static const bool ${S}_AFTER[] = ${boolRow(l => has(t.after, l) || (isWordLit(l) && t.afterWordGuards.some(ex => !ex.has(l))))};`);
     H.push(`static const bool ${S}_CONT[] = ${boolRow(l => has(t.cont, l))};`);
     H.push(`static const bool ${S}_AHEAD[] = ${boolRow(l => t.ahead.includes(`'${l}`))};`);
   });
