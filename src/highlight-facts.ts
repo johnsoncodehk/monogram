@@ -2000,6 +2000,60 @@ const rootOfBody = (g: ArmGraph, body: RuleExpr): number => g.body.indexOf(body)
 
 
 
+/** Per keyword literal of the rules: the literals that may directly follow it where it is the
+ *  keyword (the literal FIRST of each next item of its arms, through zero-width assertions), or
+ *  null when that is open: it may end an arm (what follows is its rule's context), a next item may
+ *  be empty, or it is also a precedence operator. A word followed by a literal outside a closed set
+ *  is not that keyword there: it is a name (`set:`, `const from = 1`, `(of, x)`, `else?: T`). */
+export function keywordFollowers(grammar: CstGrammar): Map<string, Set<string> | null> {
+  const g = armGraph(grammar);
+  const byName = new Map(grammar.rules.map(r => [r.name, r.body] as const));
+  const precOps = new Set(grammar.precs.flatMap(l => l.operators.map(o => o.value)));
+  const zeroWidth = (e: RuleExpr) => ['sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'not'].includes(e.type);
+  const out = new Map<string, Set<string> | null>();
+  for (let p = 0; p < g.node.length; p++) {
+    const e = g.node[p];
+    if (e.type !== 'literal' || !isKeywordLiteral(e.value)) continue;
+    const k = e.value;
+    if (out.get(k) === null) continue;
+    if (precOps.has(k)) { out.set(k, null); continue; }
+    const set = out.get(k) ?? new Set<string>();
+    let open = false;
+    const seen = new Set<number>();
+    const visit = (q: number) => {
+      if (open || seen.has(q)) return;
+      seen.add(q);
+      if (g.isLast[q]) { open = true; return; }
+      for (const n of g.follow[q]) {
+        const x = g.node[n];
+        if (zeroWidth(x)) { visit(n); continue; }
+        if (ruleIsNullable(x, byName)) { open = true; return; }
+        for (const l of firstLiterals(x, byName)) set.add(l);
+      }
+    };
+    visit(p);
+    out.set(k, open ? null : set);
+  }
+  return out;
+}
+
+/** keywordFollowers as the highlighters test it: the keywords with a closed follower set, grouped
+ *  by that set's symbolic literals (`followers`), and every symbolic literal of the grammar (rule
+ *  literals and precedence operators), longest first. A word of a group followed by a literal of
+ *  `literals` that no follower begins is a name. */
+export function keywordNameGroups(grammar: CstGrammar): { groups: { words: string[]; followers: string[] }[]; literals: string[] } {
+  const longestFirst = (xs: Iterable<string>) => [...new Set(xs)].sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
+  const literals = longestFirst([...grammar.rules.flatMap(r => [...collectLiterals(r.body)]), ...grammar.precs.flatMap(l => l.operators.map(o => o.value))].filter(l => !isKeywordLiteral(l)));
+  const byKey = new Map<string, { words: string[]; followers: string[] }>();
+  for (const [word, f] of highlightFacts(grammar).keywordFollowers) {
+    if (!f) continue;
+    const followers = longestFirst([...f].filter(l => !isKeywordLiteral(l)));
+    const key = followers.join('\0');
+    (byKey.get(key) ?? byKey.set(key, { words: [], followers }).get(key)!).words.push(word);
+  }
+  return { groups: [...byKey.values()], literals };
+}
+
 // ── The facts object ──
 
 // One entry per fact: how it is computed from the grammar. A fact that needs another reads it
@@ -2068,6 +2122,8 @@ const FACTS = {
   defaultBindImportKeywords: (g: CstGrammar) => defaultBindImportKeywords(g),
   lexedByToken: (g: CstGrammar) => lexedByToken(g),
   alwaysBeforeString: (g: CstGrammar) => alwaysBeforeString(g),
+  keywordFollowers: (g: CstGrammar) => keywordFollowers(g),
+  keywordNameGroups: (g: CstGrammar) => keywordNameGroups(g),
 };
 
 export type HighlightFacts = { readonly [K in keyof typeof FACTS]: ReturnType<(typeof FACTS)[K]> };

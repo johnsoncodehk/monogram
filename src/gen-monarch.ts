@@ -592,6 +592,22 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
     anchoredSource(identRegex),
     { cases: { ...identCasesInterp, '@default': 'identifier' } },
   ];
+  // ── A keyword word where the keyword cannot stand is a name (highlight-facts'
+  // keywordFollowers): a word whose closed follower set lacks the literal after it (`set:`,
+  // `const from = 1`, `(of, x)`, `type(…)`). Keywords sharing a follower set share a rule; a
+  // following word or token decides nothing (no rule), nor does a follower that is a prefix of
+  // the literal there (the test is conservative). Tried before the identifier rule.
+  const wordEnd = `(?![\\w${escapeForCharClass(identToken ? tokenPatternIdentifierExtraChars(identToken) : '')}])`;
+  const kwNames = highlightFacts(grammar).keywordNameGroups;
+  const anyLiteral = kwNames.literals.map(escapeRegex).join('|');
+  const keywordNameRules = (top: boolean): MonarchRule[] => anyLiteral ? kwNames.groups.flatMap(({ words, followers }) => {
+    const ws = words.filter(w => identKeywordToken.has(w));
+    if (!ws.length) return [];
+    const f = followers.map(escapeRegex).join('|');
+    return [[`(?:${ws.map(escapeRegex).join('|')})${wordEnd}${f ? `(?!\\s*(?:${f}))` : ''}(?=\\s*(?:${anyLiteral}))`, top ? toValue('identifier') : 'identifier'] as MonarchRule];
+  }) : [];
+  const identRules = [...keywordNameRules(true), identRule];
+  const identRulesInterp = [...keywordNameRules(false), identRuleInterp];
 
   // ── Operators & structural punctuation ──
   // Closers (`)`,`]`,`}`) → value position; everything else (openers, `,`, ops,
@@ -697,7 +713,7 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
     ...templateTopRules,
     ...numberRules,
     ...otherTokenRules,
-    identRule,
+    ...identRules,
     ...memberRules,
     ...symbolRules,
   ];
@@ -709,7 +725,7 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
   const el = view ? elementLayer(view, grammar, {
     identRegex, wsRule, commentRules, stringNestedRules, templateNestedRules, typeargs: !!angle,
     codeBody: templateToken?.template ? '@interpExprBody' : [
-      ...numberRules.map(stripSwitch), ...otherTokenRules.map(stripSwitch), identRuleInterp, ...interpSlashRules, ...memberRulesInterp, ...symbolRulesInterp,
+      ...numberRules.map(stripSwitch), ...otherTokenRules.map(stripSwitch), ...identRulesInterp, ...interpSlashRules, ...memberRulesInterp, ...symbolRulesInterp,
       ...angle ? [['[<>]', comparisonTok] as MonarchRule] : [],
     ],
     braces: tokenizer['bracketCounting'] ? '@bracketCounting' : null,
@@ -749,7 +765,7 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
       ...el?.entryNested ?? [],
       ...numberRules.map(stripSwitch),
       ...otherTokenRules.map(stripSwitch),
-      identRuleInterp,
+      ...identRulesInterp,
       ...interpSlashRules,
       ...memberRulesInterp,
       ...symbolRulesInterp,

@@ -5560,6 +5560,22 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       topPatterns.push({ include: '#optional-property-access' });
     }
 
+    // A keyword word where the keyword cannot stand is a name (highlight-facts' keywordNameGroups,
+    // the same fact Monarch reads): followed by a literal that none of its closed follower set
+    // begins (`{ type: … }`, `return out;`, `set('k', v)`, `const from = 1`). Scoped as the name it
+    // is (a callee as a function, else a plain variable); ranked before every keyword group.
+    const kwNames = facts.keywordNameGroups;
+    const anyLiteral = kwNames.literals.map(escapeRegex).join('|');
+    const kwNamePats: TmPattern[] = anyLiteral ? kwNames.groups.flatMap(({ words, followers }) => {
+      const f = followers.map(escapeRegex).join('|');
+      const base = `${keywordAlternation(words)}${f ? `(?!\\s*(?:${f}))` : ''}(?=\\s*(?:${anyLiteral}))`;
+      return [{ match: `${base}(?=\\s*\\()`, name: `entity.name.function.${langName}` }, { match: base, name: `variable.other.readwrite.${langName}` }];
+    }) : [];
+    if (kwNamePats.length) {
+      repository['keyword-as-name'] = { patterns: kwNamePats };
+      topPatterns.push({ include: '#keyword-as-name' });
+    }
+
     // NOTE: no dedicated optional-chain ('?.') mint. The detector's direct-ref shape
     // requirement meant this never fired for any grammar (the expression rule's '?.'
     // led targets an alt()); when a class-heritage '?.' led first activated it, the
@@ -6446,6 +6462,8 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
     // for the contextual-keyword-as-binding case; leftmost-match handles the region
     // one token to the right, this rank wins the position-0 tie.
     if (key === 'import-default-binding') return 2;
+    // A keyword word that is a name there (keyword-as-name) beats every keyword group (3 and up).
+    if (key === 'keyword-as-name') return 2.5;
     if (scope.includes('constant.numeric')) return 3; // stable sort preserves DSL token order
     if (scope.includes('keyword.operator') && key.startsWith('scope-')) return 4;
     if (scope.includes('keyword.control')) return 5;
