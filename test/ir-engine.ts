@@ -35,7 +35,7 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
   const kidOf = (k: string) => { const i = ids.kids.indexOf(k); return i >= 0 ? i : 0; };
   const ttIdOf = (tt: string) => ar.ttNames.indexOf(tt);
   const PUNCT = -1, TT_KEYWORD = ttIdOf('$keyword'), TT_OPERATOR = ttIdOf('$operator');
-  const GT_LID = ir.gtComps.length > 0 ? lidOf('>') : -1;
+  const GT_LEADS = new Set(ir.gtComps.map((c) => lidOf(c[0]!)));   // the composites' leads ('>', '<': compositeLeads)
   const gtCompSet = new Set<string>(ir.gtComps);
   const gtStep = (a: number, b: number): number => { const c = ids.lids[a]! + ids.lids[b]!; return gtCompSet.has(c) ? lidOf(c) : 0; };
   const setLid = ir.tokenSets.map((s) => { const a = new Uint8Array(ids.lids.length); for (const l of s.lits) { const i = ids.lids.indexOf(l); if (i <= 0) throw new Error('lit ' + l); a[i] = 1; } return a; });
@@ -99,7 +99,7 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
   function gtOp(i: number): [number, number] {
     const t = toks[i]!;
     let lid = t.lid, n = 1, end = t.end;
-    if (lid !== GT_LID) return [lid, n];
+    if (!GT_LEADS.has(lid)) return [lid, n];
     for (let j = i + 1; j < toks.length; j++) {
       const u = toks[j]!;
       if (u.kid !== 0 || u.off !== end) break;
@@ -617,7 +617,7 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
         const sb = scratch.length; scratch.push(left.h); pushLeaf(TT_OPERATOR, pos); pos++;
         left = finish(rid, sb); tailClosed = true; fm = 1; continue;
       }
-      const [opLid, opN] = t.lid !== GT_LID ? [t.lid, 1] : gtOp(pos);
+      const [opLid, opN] = !GT_LEADS.has(t.lid) ? [t.lid, 1] : gtOp(pos);
       const b = bin.get(r)!.get(opLid);
       if (b === undefined || b.lbp <= minBp) break;
       if ((b.requireTarget && fm !== 0) || (b.noUnaryLhs && fm === 2)) return null;
