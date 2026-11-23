@@ -30,6 +30,21 @@ case $SCOPE in full|pr) ;; *) echo "PROFILE_SCOPE must be full or pr, not $SCOPE
 OXC_TARGET=${OXC_TARGET_DIR:-$W/oxc-target}
 rm -rf "$W"; mkdir -p "$W/inputs" "$OUT/cg" "$OUT/annotate" "$OUT/regions" "$OUT/perf"
 R=$OUT/results.txt; : > "$R"
+# Every measured process runs under a time limit (PROFILE_CMD_TIMEOUT seconds, default 600; the
+# slowest single measurement, a Callgrind cache simulation of checker.ts, takes well under a minute
+# on the CI runner): a parser that does not terminate on an input is then ONE measurement recorded as
+# failed (exit 124: a CRASH / FAILED line, which the summary lists as NOT RUN), not a job cancelled at
+# its time limit with every measurement and the log lost (run 45222944792).
+CMD_TIMEOUT=${PROFILE_CMD_TIMEOUT:-600}
+lim() { timeout -k 10 "$CMD_TIMEOUT" "$@"; }
+# Where the time goes: every phase's wall-clock seconds, printed when it ends and kept in phases.txt
+# (the job summary shows them).
+PH_NAME=''; PH_T=$SECONDS
+phase() { # <id> <title>; `phase end` closes the last one
+  if [ -n "$PH_NAME" ]; then echo "PHASE $PH_NAME $((SECONDS - PH_T)) s" | tee -a "$OUT/phases.txt"; fi
+  PH_NAME=$1; PH_T=$SECONDS
+  if [ "$1" != end ]; then echo "=== $2"; else PH_NAME=''; fi
+}
 
 git fetch -q origin master
 A_SHA=$(git rev-parse "${PROFILE_A:-cbb58a0}")
@@ -43,7 +58,7 @@ grammar_of() { case $1 in *.tsx) echo typescriptreact;; *.jsx) echo javascriptre
 sfx() { [ "$1" = typescript ] || echo "-$1"; }
 mono() { echo "$W/mono-$1-$2$(sfx "$3")/target/release/mono-$1-$2$(sfx "$3")"; } # <prof|count> <variant> <grammar>
 
-echo "=== environment"
+phase environment "environment"
 lscpu | grep -E '^(Model name|Architecture|CPU\(s\)|Thread\(s\) per core|Core\(s\) per socket|L2 cache|L3 cache|CPU max MHz)' || true
 nproc; uname -a; cat /proc/loadavg
 rustc -vV; cargo -V; node --version; valgrind --version
@@ -52,7 +67,7 @@ echo "origin/master = $(git rev-parse origin/master)"
 for kv in $VARIANTS; do echo "${kv%%:*} = $(git log -1 --format='%h %ad %s' --date=iso "${kv#*:}")"; done
 echo "scope = $SCOPE"
 
-echo "=== emit and build monogram (profiled build and count build per variant)"
+phase build-monogram "emit and build monogram (profiled build and count build per variant)"
 for kv in $VARIANTS; do
   v=${kv%%:*}; c=${kv#*:}
   git worktree add -q --detach "$W/src-$v" "$c"
@@ -77,7 +92,7 @@ echo "note: RUSTFLAGS='-A warnings' on the monogram crates only silences lints; 
 
 HAVE_OXC=0; HAVE_LEX=0; HAVE_OXCCOUNT=0
 if [ "$SCOPE" = full ]; then
-echo "=== build oxc (profiled: test/oxc-parse-bench with debug = true; oxc-lex and oxc-count beside it)"
+phase build-oxc "build oxc (profiled: test/oxc-parse-bench with debug = true; oxc-lex and oxc-count beside it)"
 cp -r "$REPO/test/oxc-parse-bench" "$W/oxc"; rm -rf "$W/oxc/target"
 sed -i 's/^debug = false$/debug = true/' "$W/oxc/Cargo.toml"
 grep -A3 '^\[profile' "$W/oxc/Cargo.toml"
@@ -93,7 +108,7 @@ if (cd "$W/oxc-count" && cargo build --release -q --target-dir "$OXC_TARGET"); t
 fi
 OXC=$OXC_TARGET/release
 
-echo "=== inputs"
+phase inputs "inputs"
 cp "$REPO/node_modules/typescript/lib/typescript.d.ts" "$W/inputs/typescript.d.ts"
 cp "$REPO/node_modules/typescript/lib/typescript.js" "$W/inputs/typescript.js"
 echo "typescript npm: $(node -p 'require("./node_modules/typescript/package.json").version')"
@@ -120,53 +135,53 @@ INPUTS="$MAIN typescript.js parser.ts synth2mb.ts typescript.ts nonascii.ts dens
 (cd "$W/inputs" && wc -c $INPUTS && sha256sum $INPUTS)
 cd "$W/inputs"
 
-echo "=== acceptance and work counts (count builds; not profiled)"
+phase counts "acceptance and work counts (count builds; not profiled)"
 for f in $INPUTS; do
-  [ $HAVE_OXC = 1 ] && { "$OXC/oxc-once" --once "$f" || echo "CRASH $f oxc-once (exit $?)"; } | sed 's/^/C /' | tee -a "$R"
+  [ $HAVE_OXC = 1 ] && { lim "$OXC/oxc-once" --once "$f" || echo "CRASH $f oxc-once (exit $?)"; } | sed 's/^/C /' | tee -a "$R"
   # oxc-count overflows its stack on dense-plus.ts (a 1 MB left-deep `a+a+…`): that is a fact about
   # the reference, not a reason to lose the whole profile, so a crash here is recorded and the run goes on.
-  [ $HAVE_OXCCOUNT = 1 ] && { "$OXC/oxc-count" "$f" || echo "OXCCOUNT $f crashed (exit $?)"; } | tee -a "$R"
+  [ $HAVE_OXCCOUNT = 1 ] && { lim "$OXC/oxc-count" "$f" || echo "OXCCOUNT $f crashed (exit $?)"; } | tee -a "$R"
   for v in A M; do
-    "$(mono prof $v "$(grammar_of "$f")")" --once "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v CRASH $f" | tee -a "$R"
-    "$(mono count $v "$(grammar_of "$f")")" "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v COUNTCRASH $f" | tee -a "$R"
+    lim "$(mono prof $v "$(grammar_of "$f")")" --once "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v CRASH $f" | tee -a "$R"
+    lim "$(mono count $v "$(grammar_of "$f")")" "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v COUNTCRASH $f" | tee -a "$R"
   done
 done
 
-echo "=== page faults per parse (count builds, getrusage): first parse in a fresh process, and the warm bench loop"
+phase faults "page faults per parse (count builds, getrusage): first parse in a fresh process, and the warm bench loop"
 for f in $INPUTS; do
   for v in A M; do
     for m in cold warm reuse; do
-      "$(mono count $v "$(grammar_of "$f")")" --faults-$m "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v FAULTSCRASH $m $f" | tee -a "$R"
+      lim "$(mono count $v "$(grammar_of "$f")")" --faults-$m "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v FAULTSCRASH $m $f" | tee -a "$R"
     done
   done
   # oxc in both modes (fresh Allocator per parse; one Allocator reset between parses). A crash of the
   # reference on a pathological input is recorded, never fatal.
   if [ $HAVE_OXCCOUNT = 1 ]; then
     for m in fresh reuse; do
-      { "$OXC/oxc-count" --faults $m "$f" || echo "OXCFAULTSCRASH $m $f (exit $?)"; } | tee -a "$R"
+      { lim "$OXC/oxc-count" --faults $m "$f" || echo "OXCFAULTSCRASH $m $f (exit $?)"; } | tee -a "$R"
     done
   fi
 done
 
 if [ "$SCOPE" = full ]; then
-echo "=== native time per parse (profiled build; one run each, indicative only: the benchmark is test/bench-rust-oxc)"
+phase native-time "native time per parse (profiled build; one run each, indicative only: the benchmark is test/bench-rust-oxc)"
 for f in $MAIN; do
-  { "$OXC/oxc-parse-bench" "$f" || echo "crashed - (exit $?)"; } | awk -v f="$f" '{print "C TIME parse", f, "ms=" $3}' | tee -a "$R"
+  { lim "$OXC/oxc-parse-bench" "$f" || echo "crashed - (exit $?)"; } | awk -v f="$f" '{print "C TIME parse", f, "ms=" $3}' | tee -a "$R"
   for v in A M; do
-    "$W/mono-prof-$v/target/release/mono-prof-$v" --time "$f" | sed "s/^/$v /" | tee -a "$R"
-    "$W/mono-prof-$v/target/release/mono-prof-$v" --time-lex "$f" | sed "s/^/$v /" | tee -a "$R"
-    "$W/mono-prof-$v/target/release/mono-prof-$v" --time-reuse "$f" | sed "s/^/$v /" | tee -a "$R"
+    lim "$W/mono-prof-$v/target/release/mono-prof-$v" --time "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v TIMECRASH $f" | tee -a "$R"
+    lim "$W/mono-prof-$v/target/release/mono-prof-$v" --time-lex "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v TIMECRASH $f" | tee -a "$R"
+    lim "$W/mono-prof-$v/target/release/mono-prof-$v" --time-reuse "$f" | sed "s/^/$v /" | tee -a "$R" || echo "$v TIMECRASH $f" | tee -a "$R"
   done
 done
 fi
 
-echo "=== callgrind: one parse per process; collection limited to the measured entry point"
+phase callgrind "callgrind: one parse per process; collection limited to the measured entry point"
 CG=(valgrind --tool=callgrind --dump-instr=no --collect-jumps=no --cache-sim=no --compress-strings=no --compress-pos=no --collect-atstart=no)
 ir_of() { grep -E '^(totals|summary):' "$1" | head -1 | awk '{print $2}'; }
 cg_run() { # <tag> <toggle> <cmd...>
   local tag=$1 tog=$2; shift 2
   local out=$OUT/cg/$tag.out
-  if "${CG[@]}" --toggle-collect="$tog" --callgrind-out-file="$out" "$@" > "$OUT/cg/$tag.stdout" 2> "$OUT/cg/$tag.log"; then
+  if lim "${CG[@]}" --toggle-collect="$tog" --callgrind-out-file="$out" "$@" > "$OUT/cg/$tag.stdout" 2> "$OUT/cg/$tag.log"; then
     echo "IR $tag $(ir_of "$out")" | tee -a "$R"
   else
     echo "IR $tag FAILED"; tail -5 "$OUT/cg/$tag.log"
@@ -188,7 +203,7 @@ for f in $INPUTS; do
   done
 done
 
-echo "=== Go and TS targets: work per parse of the same inputs (Go: Callgrind instructions; TS target and emitted JS parser: V8 block executions)"
+phase go-ts-targets "Go and TS targets: work per parse of the same inputs (Go: Callgrind instructions; TS target and emitted JS parser: V8 block executions)"
 # So that a change which improves one target only shows as a move in one column of the summary.
 # Go: test/bench-targets/go-main.go count (a parse into a reused CstBuilder: the direct engine) and
 # count-builder (into a reused SlimBuilder: the builder engine), collection toggled
@@ -220,7 +235,7 @@ for f in $TINPUTS; do
     for gm in reuse builder; do
       out=$OUT/targets/$v.go-$gm.$f.cg
       cm=count; [ $gm = builder ] && cm=count-builder
-      if env GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1 "${CG[@]}" --callgrind-out-file="$out" "$W/targets-$t/go/count" $cm "$f" > "$out.stdout" 2> "$out.log" \
+      if lim env GOGC=off GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1 "${CG[@]}" --callgrind-out-file="$out" "$W/targets-$t/go/count" $cm "$f" > "$out.stdout" 2> "$out.log" \
         && gi=$(node "$REPO/test/bench-targets/go-ir.ts" "$out") \
         && node "$REPO/test/bench-targets/go-ir.ts" "$out" --map-callers > "$out.map-callers.txt"; then
         echo "GOIR $v.$gm.$f $(grep -aoE 'ACCEPT|REJECT' "$out.stdout" | head -1) $gi" | tee -a "$R"
@@ -229,7 +244,7 @@ for f in $TINPUTS; do
       fi
     done
     for tm in ts-parse js-fresh; do
-      if r=$(node "$REPO/test/bench-targets/blocks.ts" "$W/targets-$t/${tm%%-*}.mts" "$tm" "$f" "$OUT/targets/$v.$tm.$f.json"); then
+      if r=$(lim node "$REPO/test/bench-targets/blocks.ts" "$W/targets-$t/${tm%%-*}.mts" "$tm" "$f" "$OUT/targets/$v.$tm.$f.json"); then
         echo "TSBLK $v.$tm.$f $r" | tee -a "$R"
       else
         echo "TSBLK $v.$tm.$f FAILED" | tee -a "$R"
@@ -244,7 +259,7 @@ for v in A M; do
     d=$W/targets-$v$(sfx "$g")
     gf=$(for f in $TINPUTS; do if [ "$(grammar_of "$f")" = "$g" ]; then echo "$f"; fi; done)
     for tm in ts-parse js-fresh; do
-      if out=$(node "$REPO/test/bench-targets/allocs.ts" "$d/${tm%%-*}.mts" "$tm" "$d/alloc" $gf); then
+      if out=$(lim node "$REPO/test/bench-targets/allocs.ts" "$d/${tm%%-*}.mts" "$tm" "$d/alloc" $gf); then
         while read -r f rest; do echo "TSALLOC $v.$tm.$f $rest" | tee -a "$R"; done <<< "$out"
       else
         echo "TSALLOC $v.$tm.$g FAILED" | tee -a "$R"
@@ -255,12 +270,13 @@ done
 echo "Go and TS targets: $((SECONDS - T0)) s (emit, build and measure)"
 
 if [ "$SCOPE" = pr ]; then
+  phase end
   echo "=== summary"
   node "$H/summarize.ts" "$R" | tee "$OUT/summary.txt"
   exit 0
 fi
 
-echo "=== annotate and phase regions"
+phase annotate-regions "annotate and phase regions"
 for out in "$OUT"/cg/*.out; do
   tag=$(basename "$out" .out)
   callgrind_annotate --inclusive=yes --threshold=99.9 "$out" > "$OUT/annotate/$tag.inclusive.txt" 2>&1 || true
@@ -279,7 +295,7 @@ for f in $MAIN; do
   done
 done
 
-echo "=== callgrind cache and branch simulation (same entry points; explains instructions that do not cost the same time)"
+phase cache-sim "callgrind cache and branch simulation (same entry points; explains instructions that do not cost the same time)"
 # Valgrind's simulated caches (sized from the host) and branch predictor, not the hardware's:
 # counts to compare between parsers, not cycle predictions.
 mkdir -p "$OUT/sim"
@@ -291,7 +307,7 @@ for f in $MAIN; do
              "M.lex.$f:*mono_prof_lex*:$W/mono-prof-M/target/release/mono-prof-M --lex-once"; do
     t=${tag%%:*}; rest=${tag#*:}; tog=${rest%%:*}; cmd=${rest#*:}
     out=$OUT/sim/$t.out
-    if "${CG[@]}" --cache-sim=yes --branch-sim=yes --toggle-collect="$tog" --callgrind-out-file="$out" $cmd "$f" > /dev/null 2> "$OUT/sim/$t.log"; then
+    if lim "${CG[@]}" --cache-sim=yes --branch-sim=yes --toggle-collect="$tog" --callgrind-out-file="$out" $cmd "$f" > /dev/null 2> "$OUT/sim/$t.log"; then
       echo "SIM $t $(grep '^events:' "$out" | head -1) | $(grep -E '^(totals|summary):' "$out" | head -1)" | tee -a "$R"
       for ev in Bcm Bim D1mr D1mw DLmr DLmw; do
         case $t in
@@ -307,7 +323,7 @@ for f in $MAIN; do
 done
 grep -h '^desc:' "$OUT/sim/C.parse.checker.ts.out" || true; grep -h 'warning' "$OUT"/sim/*.log | sort | uniq -c | head -5 || true
 
-echo "=== perf (if the runner allows it): instructions and cycles per parse, whole process minus --noop"
+phase perf "perf (if the runner allows it): instructions and cycles per parse, whole process minus --noop"
 if command -v perf >/dev/null && sudo sysctl -q kernel.perf_event_paranoid=1 && perf stat -e instructions:u true >/dev/null 2>&1; then
   pst() { perf stat -x, -r 5 -e instructions:u,cycles:u,branch-misses:u,page-faults "$@" 2>&1 >/dev/null | awk -F, '{print $3 "=" $1}' | tr '\n' ' '; }
   for f in $MAIN; do
@@ -315,10 +331,10 @@ if command -v perf >/dev/null && sudo sysctl -q kernel.perf_event_paranoid=1 && 
     for v in A M; do
       b=$W/mono-prof-$v/target/release/mono-prof-$v
       echo "PERF $v $f once: $(pst "$b" --once "$f") lex: $(pst "$b" --lex-once "$f") noop: $(pst "$b" --noop "$f")" | tee -a "$R"
-      perf record -q -e cycles:u -F 1999 -o "$OUT/perf/$v.$f.data" "$b" --time "$f" >/dev/null 2>&1 || true
+      lim perf record -q -e cycles:u -F 1999 -o "$OUT/perf/$v.$f.data" "$b" --time "$f" >/dev/null 2>&1 || true
       perf report -i "$OUT/perf/$v.$f.data" --stdio --no-children --sort sym 2>/dev/null | grep -v '^#' | grep -v '^$' | head -40 > "$OUT/perf/$v.$f.report.txt" || true
     done
-    perf record -q -e cycles:u -F 1999 -o "$OUT/perf/C.$f.data" "$OXC/oxc-parse-bench" "$f" >/dev/null 2>&1 || true
+    lim perf record -q -e cycles:u -F 1999 -o "$OUT/perf/C.$f.data" "$OXC/oxc-parse-bench" "$f" >/dev/null 2>&1 || true
     perf report -i "$OUT/perf/C.$f.data" --stdio --no-children --sort sym 2>/dev/null | grep -v '^#' | grep -v '^$' | head -40 > "$OUT/perf/C.$f.report.txt" || true
   done
   rm -f "$OUT"/perf/*.data
@@ -331,5 +347,6 @@ else
   ls /sys/bus/event_source/devices/ 2>&1 || true
 fi
 
+phase end
 echo "=== summary"
 node "$H/summarize.ts" "$R" | tee "$OUT/summary.txt"
