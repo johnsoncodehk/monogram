@@ -134,7 +134,8 @@ const SYNTH: Array<[string, string[]]> = [
   ['function g() { return 1;', ["24:expected '}' @13:to match this '{'"]],
   ['if (x { y(); }', ["6:expected ',' or ')' @3:to match this '('"]],
   ['const y = [1, ;', ["14:expected ',' or ']' @10:to match this '['"]],
-  ['const t = obj[i;', ["15:expected ']' @13:to match this '['"]],
+  // a computed member's index is an Expression, so a ',' may go on it (`obj[i, j]`)
+  ['const t = obj[i;', ["15:expected ',' or ']' @13:to match this '['"]],
   // missing NONTERMINALS (the tsc "Expression expected" analog): required rule
   // refs failing inside the bar window mint a zero-width $missing carrying the
   // rule identity — committed optionals ('= Expr' after the real '='), operator

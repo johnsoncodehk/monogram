@@ -45,10 +45,13 @@ const RENDERED: AssertionClass[] = ['lowered', 'reserved-set'];
 // The expression identifier refuses every reserved word (land/shape-ident-reserved): the
 // `not('super')` / `not('new')` beside its reserved-word guard (Expr and NewTarget) are gone, those
 // words now in the guard's set (reserved -4; the set stays rendered).
+// JavaScript's phase imports (land/shape-test262-valid): the phase call's `( AssignmentExpression ,opt )` has
+// ImportCall's two `not('...')` (lookahead1 +2), and `import source x` / `import defer * as x` bind a
+// BindingIdentifier (reserved-set +2).
 const PINNED: Record<string, Partial<Record<AssertionClass, number>>> = {
-  javascript:      { lowered: 43,  vacuous: 6,  'reserved-set': 45, scanner: 0,  reserved: 0, lookahead1: 17, lookahead: 8 },
+  javascript:      { lowered: 43,  vacuous: 6,  'reserved-set': 47, scanner: 0,  reserved: 0, lookahead1: 19, lookahead: 8 },
   typescript:      { lowered: 133, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 0, lookahead1: 88, lookahead: 69, 'left-context': 2 },
-  javascriptreact: { lowered: 45,  vacuous: 6,  'reserved-set': 45, scanner: 0,  reserved: 0, lookahead1: 17, lookahead: 8 },
+  javascriptreact: { lowered: 45,  vacuous: 6,  'reserved-set': 47, scanner: 0,  reserved: 0, lookahead1: 19, lookahead: 8 },
   typescriptreact: { lowered: 135, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 0, lookahead1: 88, lookahead: 69, 'left-context': 2 },
   yaml:            { lowered: 1,  scanner: 16, lookahead1: 6 },
 };
