@@ -8,7 +8,7 @@
 #     <sha> is a head of land/<branch> whose CI failed for a real reason. Its change is put back onto
 #     this tree: the difference from the branch's last head (origin/land/<branch>, what was fixed
 #     and landed) back to <sha>, over the files the branch itself changed; a file that no longer
-#     applies is taken whole from <sha> and named. Then `--quick` and `--changed` run against that one change.
+#     applies is 3-way merged with the failing head's side on conflicts, and named. Then `--quick` and `--changed` run against that one change.
 #     caught: --quick fails; MISSED: --quick passes and --changed (or only `--changed --all`, the
 #     ci tier) fails; not reproduced: all three pass (not visible on this tree, or did not apply).
 set -uo pipefail
@@ -62,24 +62,33 @@ catch)
   git config user.email ci@example.invalid; git config user.name ci
   mb() { git merge-base "$1" origin/master; }
   # the files the branch changed, at the failing head and at its last head; generated artifacts and
-  # prose are regenerated or irrelevant
+  # prose are regenerated or irrelevant; the loop's own tooling (check.ts, gate-deps, this script,
+  # workflows, the size record, package.json) stays this tree's: it is what is being measured
   git diff --name-only "$(mb "$F")" "$F" > "$out/files-F.txt"
   git diff --name-only "$(mb "$L")" "$L" > "$out/files-L.txt"
-  sort -u "$out/files-F.txt" "$out/files-L.txt" | grep -vE '\.(tmLanguage|monarch|language-configuration|contributes)\.json$|^tree-sitter/|\.md$' > "$out/files.txt"
+  sort -u "$out/files-F.txt" "$out/files-L.txt" | grep -vE '\.(tmLanguage|monarch|language-configuration|contributes)\.json$|^tree-sitter/|\.md$|^test/(check|gate-deps|check-targets|inner-loop-measure)\.|^\.github/|^docs/emit-sizes\.json$|^package(-lock)?\.json$' > "$out/files.txt"
   git diff "$L" "$F" -- $(cat "$out/files.txt") > "$out/unfix.diff"
   skipped=''
   if [ ! -s "$out/unfix.diff" ]; then
     row " $B " " ${F:0:10} " ' no difference from the landed head ' '' '' ' not reproduced '; exit 0
   fi
   # file by file: a 3-way apply of that file's difference; where master moved the file too far for
-  # that, the file is taken whole from the failing head (named in the last column: master's later
-  # changes to it are then undone as well, so read that row's failing gates against the original)
+  # that, a 3-way merge (base: the landed head's file, ours: this tree's, theirs: the failing
+  # head's) whose conflicting hunks take the failing head's side (named in the last column). A file
+  # this tree no longer has but the landed head had (deleted since: nothing runs it) is skipped.
   for p in $(cat "$out/files.txt"); do
     git diff "$L" "$F" -- "$p" > "$out/one.diff"
     [ -s "$out/one.diff" ] || continue
+    if ! git cat-file -e "HEAD:$p" 2>/dev/null && git cat-file -e "$L:$p" 2>/dev/null; then continue; fi
     if ! git apply -3 --index "$out/one.diff" 2>> "$out/apply.log"; then
       if git cat-file -e "HEAD:$p" 2>/dev/null; then git checkout -q HEAD -- "$p"; else git rm -q -f --ignore-unmatch -- "$p"; rm -f -- "$p"; fi
-      if git cat-file -e "$F:$p" 2>/dev/null; then git checkout -q "$F" -- "$p"; else git rm -q -f --ignore-unmatch -- "$p"; fi
+      blob() { git show "$1:$p" 2>/dev/null || true; }
+      if git cat-file -e "$F:$p" 2>/dev/null; then
+        blob HEAD > "$out/m-ours"; blob "$L" > "$out/m-base"; blob "$F" > "$out/m-theirs"
+        mkdir -p "$(dirname "$p")"
+        git merge-file -p --theirs "$out/m-ours" "$out/m-base" "$out/m-theirs" > "$p" || true
+        git add -- "$p"
+      else git rm -q -f --ignore-unmatch -- "$p"; fi
       skipped="$skipped $p"
     fi
   done
@@ -91,8 +100,8 @@ catch)
   # the ci tier too (corpus / edits / recovery classes, test262, ...): a failure only it shows is one
   # the inner loop cannot catch at all
   node test/check.ts --changed --all HEAD~1 > "$out/all.txt" 2>&1; a=$?
-  if [ $q != 0 ]; then v=caught; elif [ $c != 0 ]; then v='MISSED (--changed catches)'; elif [ $a != 0 ]; then v='MISSED (ci tier only)'; else v='not reproduced'; fi
-  row ' branch ' ' failing head ' ' --quick failed ' ' --changed failed ' ' --changed --all failed ' ' quick s ' ' verdict ' ' files taken whole '
+  if [ $q != 0 ] && [ -z "$(failed_gates "$out/quick.txt")" ]; then v='ERROR (check.ts ran no gate)'; elif [ $q != 0 ]; then v=caught; elif [ $c != 0 ]; then v='MISSED (--changed catches)'; elif [ $a != 0 ]; then v='MISSED (ci tier only)'; else v='not reproduced'; fi
+  row ' branch ' ' failing head ' ' --quick failed ' ' --changed failed ' ' --changed --all failed ' ' quick s ' ' verdict ' ' files merged favouring the failing head '
   row '---' '---' '---' '---' '---' '---:' '---' '---'
   row " $B " " ${F:0:10} " " $(failed_gates "$out/quick.txt") " " $(failed_gates "$out/changed.txt") " " $(failed_gates "$out/all.txt") " " $(secs "$t0" "$t1") " " $v " " ${skipped:-none} "
   ;;

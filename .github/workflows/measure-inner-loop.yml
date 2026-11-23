@@ -22,6 +22,8 @@ env:
 
 jobs:
   timing:
+    # a branch named measure/inner-loop/catch-* runs the catch job only
+    if: ${{ !contains(github.ref_name, 'catch') }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
