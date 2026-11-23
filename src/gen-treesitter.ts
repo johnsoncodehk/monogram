@@ -38,6 +38,9 @@ export interface TreeSitterOutput {
    *  no lookahead, so only `lowered` is rendered; every other class is dropped, and the class says
    *  whether that drop is exact. See classifyAssertions. */
   assertions: AssertionRecord[];
+  /** The keywords the generated grammar reads both as the keyword and as the word token (contextual
+   *  keywords: renderWordStep). Absent for a grammar without a word token. */
+  contextualKeywords?: string[];
 }
 
 /** How grammar.js renders a zero-width assertion. `reserved-set`: a one-token exclusion of word-shaped
@@ -248,6 +251,18 @@ interface GrammarJsContext {
    *  grammar (tree-sitter: "Reserved word 'enum' must be a token"); a word no rule writes gets a
    *  token rule of its own (buildGrammarJs). */
   renderedLiterals: Set<string>;
+  /** The contextual-word rule of each distinct (reserved set, keyword set) of a word step, filled as
+   *  word steps render (renderWordStep) and emitted once the rules are rendered. */
+  contextualWords: Map<string, { name: string; word: string; words: string[] }>;
+  /** collectWordLiterals: the keywords of the generated grammar. */
+  wordLiterals: string[];
+  /** planContextualWords: per word-token step, the keywords it also reads as the word token. */
+  contextualPlan: Map<RuleExpr, string[]>;
+  /** The keywords some step of contextualPlan reads as the word token: only these are written through
+   *  `_keyword_<K>` (a keyword no step reads as a name stays a plain string, so it costs no symbol). */
+  identWords: Set<string>;
+  /** The keywords given both readings (buildGrammarJs fills it). */
+  bothReadings: string[];
 }
 
 function hasMarker(expr: RuleExpr): boolean {
@@ -340,10 +355,136 @@ function lowerNotBeforeOptional(expr: RuleExpr & { type: 'seq' }, onGuard?: (gua
 /** A literal token written into a rule (every rule-body literal goes through here: renderedLiterals). */
 function ruleLiteral(text: string, ctx: GrammarJsContext): string {
   ctx.renderedLiterals.add(text);
+  // A keyword some step also reads as a name is read through its own hidden rule (contextual keywords).
+  if (ctx.identWords.has(text)) return `$.${keywordRuleName(text, 'kw')}`;
   return jsString(text);
 }
 
-function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordSet?: string): string {
+// ── contextual keywords ──
+// The interpreter's word token reads every word, and a literal matches a word by its text, so a keyword
+// the grammar writes (`static`, `type`, `of`, …) is also a name wherever no guard excludes it.
+// tree-sitter's keyword extraction lexes such a word as the KEYWORD in every state where the keyword is
+// valid, so the name reading of the same text is lost there (`class C { static() {} }`). Both readings
+// are rendered where they can meet, and the parser forks between them:
+//   - a word-token step is an inlined rule `_contextual_<n>`: the word token under its reserved set,
+//     or `_ident_<K>` for every keyword K planContextualWords gives the step;
+//   - `_ident_<K>` is K aliased to the word token's node (dynamic precedence -1: where both readings
+//     parse, the keyword's is kept), `_keyword_<K>` is K itself, and every literal K in a rule is
+//     `_keyword_<K>` (only for a K some step reads as a name).
+// After K the parser holds only the two one-token items `_keyword_<K> → K •` and `_ident_<K> → K •`, so
+// every new conflict is exactly the pair [_keyword_<K>, _ident_<K>], declared for each K (GLR). Past the
+// reduction, the name reading's states repeat those after the word token, whose conflicts the grammar
+// already declares. The variants are inlined, so their reductions add no conflict of their own.
+
+/** The words a guard directly before a word-token step excludes there, and the reserved set it renders
+ *  to (null: none renders, the step is `unreserved`). */
+interface WordGuard { set: string | null; words: string[] }
+
+function keywordRuleName(word: string, kind: 'kw' | 'ident'): string {
+  return `_${kind === 'kw' ? 'keyword' : 'ident'}_${word}`;
+}
+
+/** A word-token step: the word token under its reserved set, or a keyword the plan gives the step,
+ *  read as the word token. */
+function renderWordStep(node: RuleExpr, ref: string, guard: WordGuard | undefined, ctx: GrammarJsContext): string {
+  const word = ctx.reserved.plan.sets.length ? `reserved(${jsString(guard?.set ?? UNRESERVED_SET)}, ${ref})` : ref;
+  if (!ctx.wordLiterals.length) return word;
+  const words = ctx.contextualPlan.get(node);
+  if (!words) throw new Error('gen-treesitter: a word-token step planContextualWords did not reach');
+  if (words.length === 0) return word;
+  const key = `${guard?.set ?? UNRESERVED_SET}|${words.join(' ')}`;
+  let rule = ctx.contextualWords.get(key);
+  if (!rule) {
+    rule = { name: `_contextual_${ctx.contextualWords.size + 1}`, word, words };
+    ctx.contextualWords.set(key, rule);
+  }
+  return `$.${rule.name}`;
+}
+
+// ── which keywords a word-token step must also read as a name (planContextualWords) ──
+// tree-sitter lexes a keyword's text as the word token in every state where the keyword is not valid,
+// so a word step needs `_ident_K` only where K is ALSO valid in a state that shifts the step: as a
+// shift, or as the lookahead of a reduction there. That is asked of the LR automaton of the generated
+// grammar (treeSitterLeafGraph, with the zero-width tokens as terminals: lr-automaton.ts): every LR(1)
+// state tree-sitter builds has the item core of one of its states, and a reduction's lookahead there
+// is within that core's LALR(1) lookahead, so the sets are a superset (sound: a keyword left out of a
+// step would be an ERROR on valid code). The answer feeds back (a step that reads K as a name makes K
+// valid in its states, and a K shift advances it), so the automaton is rebuilt until no set grows.
+// A keyword the guard before a step excludes (a reserved word there) is never given to it.
+function planContextualWords(grammar: CstGrammar, graph: TsLeafGraph, word: string, words: string[],
+  isWordLiteral: (text: string) => boolean): Map<RuleExpr, string[]> {
+  // The words a guard before each word step excludes (reservedGuardWords), keyed by the step's node.
+  const exclOf = new Map<RuleExpr, Set<string>>();
+  const seen = new Set<RuleExpr>();
+  const markGuards = (e: RuleExpr): void => {
+    e = tsView(e);
+    if (seen.has(e)) return;
+    seen.add(e);
+    if (e.type === 'seq') {
+      e.items.forEach((item, i) => {
+        if (item.type !== 'not') return;
+        let j = i + 1;
+        while (j < e.items.length && ASSERTION_KINDS.has(tsView(e.items[j]).type)) j++;
+        const ws = reservedGuardWords(item, e.items[j], word, isWordLiteral);
+        if (ws) exclOf.set(tsView(e.items[j]), new Set(ws));
+      });
+      e.items.forEach(markGuards);
+    } else if (e.type === 'alt') e.items.forEach(markGuards);
+    else if (e.type === 'quantifier') markGuards(e.body);
+    else if (e.type === 'sep') markGuards(e.element);
+  };
+  for (const r of grammar.rules) markGuards(r.body);
+  for (const b of collectTsSharedRules(grammar).values()) markGuards(b);
+  const steps: number[] = [];
+  for (let l = 0; l < graph.sym.length; l++) if (graph.sym[l] === word && graph.nt[l] < 0) steps.push(l);
+  const isStep = new Uint8Array(graph.sym.length);
+  for (const l of steps) isStep[l] = 1;
+  const allowed = new Map<number, Set<string>>(steps.map(l => [l, new Set()]));
+  const keywords = words.map(w => [w, `'${w}`] as const);
+  for (let grew = true; grew;) {
+    grew = false;
+    const lr = buildLr(graph, { alsoShifts: l => isStep[l] ? [...allowed.get(l)!].map(w => `'${w}`) : [] });
+    lr.states.forEach((st, s) => {
+      const here = st.next.filter(l => isStep[l]);
+      if (!here.length) return;
+      const valid = lr.valid(s);
+      for (const l of here) {
+        const a = allowed.get(l)!, ex = graph.node[l] && exclOf.get(graph.node[l]!);
+        for (const [w, t] of keywords) if (valid.has(t) && !a.has(w) && !ex?.has(w)) { a.add(w); grew = true; }
+      }
+    });
+  }
+  // A node rendered at several leaves (a shared subtree) reads the union of their sets.
+  const out = new Map<RuleExpr, Set<string>>();
+  for (const l of steps) {
+    const n = graph.node[l];
+    if (!n) continue;
+    const s = out.get(n) ?? out.set(n, new Set()).get(n)!;
+    for (const w of allowed.get(l)!) s.add(w);
+  }
+  return new Map([...out].map(([n, s]) => [n, [...s].sort()]));
+}
+
+/** Every word-shaped literal the rendered rules write (renderExpr's literal / sep / Pratt operator
+ *  cases, over the tree-sitter view of each group), sorted. buildGrammarJs checks the rendering wrote
+ *  no other. */
+function collectWordLiterals(grammar: CstGrammar, isWordLiteral: (text: string) => boolean): string[] {
+  const out = new Set<string>();
+  const walk = (e: RuleExpr): void => {
+    e = tsView(e);
+    switch (e.type) {
+      case 'literal': out.add(e.value); return;
+      case 'seq': case 'alt': e.items.forEach(walk); return;
+      case 'quantifier': walk(e.body); return;
+      case 'sep': walk(e.element); out.add(e.delimiter); return;
+    }
+  };
+  for (const r of grammar.rules) walk(r.body);
+  for (const lvl of grammar.precs) for (const o of lvl.operators) out.add(o.value);
+  return [...out].filter(isWordLiteral).sort();
+}
+
+function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuard): string {
   switch (expr.type) {
     case 'literal': {
       // A flow-collection delimiter literal (`[` `]` `{` `}`) is emitted by the external scanner (so
@@ -372,8 +513,7 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordSet?: string): st
         : `$.${ctx.ruleSnake.get(expr.name) ?? toSnake(expr.name)}`;
       // Every word-token step names its reserved set once any guard renders to one: a guarded step
       // its guard's, every other step the empty `unreserved` (planReservedSets: why all of them).
-      const word = ctx.reserved.plan.sets.length && expr.name === ctx.reserved.word
-        ? `reserved(${jsString(wordSet ?? UNRESERVED_SET)}, ${ref})` : ref;
+      const word = expr.name === ctx.reserved.word ? renderWordStep(expr, ref, wordGuard, ctx) : ref;
       // The identifier right after a definition keyword carries a `name` field so
       // highlights.scm can capture it with the standard `name:` query form.
       if (ctx.nameFieldNodes.has(expr)) return `field('name', ${word})`;
@@ -384,14 +524,13 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordSet?: string): st
       if (lowered) return renderExpr(lowered, ctx);
       // A reserved-word guard renders as its set on the word-token step it guards (the guard itself,
       // zero-width, still renders to blank()).
-      const setAt = new Map<number, string>();
+      const setAt = new Map<number, WordGuard>();
       expr.items.forEach((item, i) => {
         if (item.type !== 'not') return;
         let j = i + 1;
         while (j < expr.items.length && ASSERTION_KINDS.has(tsView(expr.items[j]).type)) j++;
         const words = reservedGuardWords(item, expr.items[j], ctx.reserved.word, ctx.reserved.isWordLiteral);
-        const name = words && ctx.reserved.plan.nameOf(words);
-        if (name) setAt.set(j, name);
+        if (words) setAt.set(j, { set: ctx.reserved.plan.nameOf(words), words });
       });
       const parts = expr.items.map((item, i) => {
         const set = setAt.get(i);
@@ -1803,6 +1942,13 @@ function buildTokenTreeSitter(grammar: CstGrammar, grammarName: string): Omit<Tr
     new Set(assertions.reservedSets.sets[0]?.words ?? []));
   for (const n of zeroWidth.lowered) for (const rec of assertions.recordOf.get(n)!) rec.cls = 'lowered';
   for (const t of zeroWidth.tokens) externalSnake.add(t.snake);
+  const wordTok = grammar.tokens.find(t => t.identifier)?.name;
+  const wordLiterals = wordTok ? collectWordLiterals(grammar, assertions.isWordLiteral) : [];
+  const contextualPlan = wordTok && wordLiterals.length
+    ? planContextualWords(grammar,
+      treeSitterLeafGraph(grammar, tokenNames, new Set(scannerTokenFor.keys()), prattRules, new Map([...zeroWidth.tokenOf].map(([n, t]) => [n, t.snake]))),
+      wordTok, wordLiterals, assertions.isWordLiteral)
+    : new Map<RuleExpr, string[]>();
   const ctx: GrammarJsContext = {
     grammar, tokenNames, ruleSnake, tokenSnake, prattRules, externalSnake, scannerTokenFor, zeroWidth,
     flowLiteralTokens,
@@ -1811,6 +1957,11 @@ function buildTokenTreeSitter(grammar: CstGrammar, grammarName: string): Omit<Tr
     classifiedAssertions: assertions.nodes,
     reserved: { word: grammar.tokens.find(t => t.identifier)?.name, isWordLiteral: assertions.isWordLiteral, plan: assertions.reservedSets },
     renderedLiterals: new Set(),
+    contextualWords: new Map(),
+    bothReadings: [],
+    wordLiterals,
+    contextualPlan,
+    identWords: new Set([...contextualPlan.values()].flat()),
     glrRules: new Set(),
     templatePlan,
     interpolationPlans,
@@ -1822,7 +1973,7 @@ function buildTokenTreeSitter(grammar: CstGrammar, grammarName: string): Omit<Tr
   const highlightsScm = buildHighlightsScm(grammar, ctx, nameFields.byRule);
   const { scannerC, externalTokens } = buildScannerC(grammar, ctx, grammarName);
 
-  return { grammarJs, highlightsScm, scannerC, externalTokens, assertions: assertions.records };
+  return { grammarJs, highlightsScm, scannerC, externalTokens, assertions: assertions.records, ...(ctx.reserved.word ? { contextualKeywords: ctx.bothReadings } : {}) };
 }
 
 function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
@@ -1876,17 +2027,10 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
     lines.push('');
   }
 
-  // ── conflicts ──
+  // ── conflicts ── (written once the rules are rendered: the contextual-keyword pairs are known then)
   const conflicts = deriveConflicts(ctx);
   for (const c of conflicts) if (c.length === 1) ctx.glrRules.add(c[0]);
-  if (conflicts.length > 0) {
-    lines.push('  conflicts: $ => [');
-    for (const c of conflicts) {
-      lines.push('    [' + c.map(n => `$.${n}`).join(', ') + '],');
-    }
-    lines.push('  ],');
-    lines.push('');
-  }
+  const conflictsAt = lines.length;
 
   // ── supertypes are skipped (would need a hand-curated list) ──
 
@@ -1987,6 +2131,40 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
   // word, so it is also its own regex). It is a keyword (word-shaped, no
   // other token matches it) that no parse state shifts, so where it is reserved it is an error,
   // and elsewhere keyword extraction gives the word token, exactly as for any keyword.
+  // ── contextual keywords (see renderWordStep): the inlined word-step variants, then per keyword its
+  // keyword and name readings and the one conflict between them ──
+  const unlisted = [...ctx.renderedLiterals].filter(w => ctx.reserved.isWordLiteral(w) && !ctx.wordLiterals.includes(w));
+  if (ctx.wordLiterals.length && unlisted.length) throw new Error(`gen-treesitter: rules wrote keyword(s) collectWordLiterals missed: ${unlisted.join(', ')}`);
+  const wordSnake = ctx.reserved.word && ctx.tokenSnake.get(ctx.reserved.word);
+  const identRead = new Set<string>();
+  for (const { name, word, words } of ctx.contextualWords.values()) {
+    ruleEntries.push(`    ${name}: $ => choice(${[word, ...words.map(w => `$.${keywordRuleName(w, 'ident')}`)].join(', ')})`);
+    for (const w of words) identRead.add(w);
+  }
+  const ruleNames = new Set([...ctx.ruleSnake.values(), ...ctx.tokenSnake.values(), ...ctx.tsSharedRules.keys()]);
+  const contextualConflicts: string[][] = [];
+  for (const w of ctx.wordLiterals) {
+    if (!identRead.has(w)) continue;
+    const kw = keywordRuleName(w, 'kw'), id = keywordRuleName(w, 'ident');
+    for (const n of [kw, id]) if (ruleNames.has(n) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(n)) throw new Error(`gen-treesitter: contextual-keyword rule name ${n} collides or is no rule name`);
+    ruleEntries.push(`    ${id}: $ => prec.dynamic(-1, alias(${jsString(w)}, $.${wordSnake}))`);
+    // A keyword some step reads as a name but no rule writes (a reserved word only a guard names)
+    // has the name reading alone: no keyword rule, no conflict.
+    if (!ctx.renderedLiterals.has(w)) { ctx.renderedLiterals.add(w); continue; }
+    ruleEntries.push(`    ${kw}: $ => ${jsString(w)}`);
+    contextualConflicts.push([kw, id]);
+    ctx.bothReadings.push(w);
+  }
+  const allConflicts = [...conflicts, ...contextualConflicts];
+  const head: string[] = [];
+  if (allConflicts.length > 0) {
+    head.push('  conflicts: $ => [');
+    for (const c of allConflicts) head.push('    [' + c.map(n => `$.${n}`).join(', ') + '],');
+    head.push('  ],', '');
+  }
+  if (ctx.contextualWords.size) head.push('  inline: $ => [', ...[...ctx.contextualWords.values()].map(r => `    $.${r.name},`), '  ],', '');
+  lines.splice(conflictsAt, 0, ...head);
+
   const reservedSets = ctx.reserved.plan.sets;
   if (reservedSets.length) {
     const ownToken = new Map<string, string>();
