@@ -12,8 +12,10 @@ export type Num = 'int' | 'lid' | 'depth' | 'pos' | 'idx';
 // A record a family declares (`RecordDecl`), and a list of such records.
 export type RecTy = `rec_${string}`;
 export type RecListTy = `recs_${string}`;
+// An optional record: one record of a declared type, or none.
+export type OptTy = `opt_${string}`;
 export type ListTy = 'metas' | 'toks' | 'bools' | 'depths' | 'edits' | RecListTy;
-export type Ty = Num | 'bool' | 'str' | 'meta' | 'tok' | 'edit' | RecTy | ListTy;
+export type Ty = Num | 'bool' | 'str' | 'meta' | 'tok' | 'edit' | RecTy | OptTy | ListTy;
 export type MetaInt = 'off' | 'end' | 'kid' | 'pd' | 'fd' | 'td';
 export type MetaFlag = 'nl' | 'lc' | 'lb' | 'hd';
 export type TokInt = 'off' | 'end' | 'kid' | 'lid';
@@ -43,6 +45,10 @@ export type Expr =
   // A field of a record the family declares; a new record of it, every field given.
   | { k: 'field'; e: Expr; f: string }
   | { k: 'mkRec'; rec: string; fields: Record<string, Expr> }
+  // An optional record (`opt_<rec>`): none, one holding the record e, and whether e holds one.
+  | { k: 'none'; rec: string }
+  | { k: 'some'; e: Expr }
+  | { k: 'isSome'; e: Expr }
   | { k: 'substr'; s: Expr; a: Expr; b: Expr }
   | { k: 'lidOf'; s: Expr }
   | ({ k: 'mkMeta' } & MkMeta)
@@ -55,7 +61,6 @@ export type Expr =
   | { k: 'newList'; ty: ListTy; cap?: Expr }
   | { k: 'falses'; n: Expr }
   | { k: 'prefix'; list: Expr; n: Expr; estimate: Expr }
-  | { k: 'lexAll'; text: Expr }
   // The code unit of s at i, 0 <= i < len(s), in the target's native string units.
   | { k: 'code'; s: Expr; i: Expr }
   // Whether the literal occurs in s at i, 0 <= i <= len(s).
@@ -94,9 +99,13 @@ export type Stmt =
   | { k: 'return'; es: Expr[] }
   | { k: 'letCall'; names: string[]; call: Expr & { k: 'call' } }
   | { k: 'setCall'; names: string[]; call: Expr & { k: 'call' } }
-  // One lexer step: `lexFrom(text, pos, ...state, out, 1)` reassigning pos and every state var.
-  // The lexer itself is emitted per target outside this IR; `state` follows its parameter order.
-  | { k: 'lexStep'; text: Expr; pos: string; out: string; state: string[] }
+  // One lexer step: `lexFrom(text, pos, ...state, out, 1)` reassigning pos and every state var,
+  // and `err` (an `opt_LexErr` local): the lexer's error, or none. The lexer itself is emitted per
+  // target outside this IR; `state` follows its parameter order.
+  | { k: 'lexStep'; text: Expr; pos: string; out: string; state: string[]; err: string }
+  // The whole text lexed: new locals `out` (the tokens) and `err` (`opt_LexErr`: the lexer's error,
+  // or none; with an error the tokens are unspecified).
+  | { k: 'lexAll'; text: Expr; out: string; err: string }
   | { k: 'comment'; text: string };
 
 // `ref`: a record the function writes, passed by reference (the caller's local is changed).
@@ -118,10 +127,11 @@ export const ELEM: Record<Exclude<ListTy, RecListTy>, Ty> = { metas: 'meta', tok
 export const isNum = (t: Ty): t is Num => t === 'int' || t === 'lid' || t === 'depth' || t === 'pos' || t === 'idx';
 export const isRec = (t: Ty): t is RecTy => t.startsWith('rec_');
 export const isRecList = (t: Ty): t is RecListTy => t.startsWith('recs_');
+export const isOpt = (t: Ty): t is OptTy => t.startsWith('opt_');
 export const isList = (t: Ty): t is ListTy => t in ELEM || isRecList(t);
 // The element type of a list type; the record name of a record or record-list type.
 export const elemOf = (t: ListTy): Ty => (isRecList(t) ? `rec_${t.slice(5)}` : ELEM[t]);
-export const recName = (t: RecTy | RecListTy): string => t.slice(t.indexOf('_') + 1);
+export const recName = (t: RecTy | RecListTy | OptTy): string => t.slice(t.indexOf('_') + 1);
 
 // Printed expression: `c` has native type `nat`. `prec` is the lowering's own binding strength
 // (the printer only compares it with ATOM, "never needs grouping"); `owned` marks values the
@@ -257,6 +267,11 @@ export interface RecordLowering {
   // A target whose records are references: a copy of the record `r`, for a local the function
   // writes (a record local is a value).
   copy?(cx: Cx, r: R): R;
+  // An optional record (`opt_<rec>`, which `type` spells): none, one holding the record r, and
+  // whether the optional r holds one.
+  none(cx: Cx, rec: string): R;
+  some(cx: Cx, rec: string, r: R): R;
+  isSome(cx: Cx, r: R): Printed;
 }
 
 export interface RelexLowering {
@@ -286,7 +301,8 @@ export interface RelexLowering {
     for(cx: Cx, v: string, from: R, to: R, body: Lines): Lines;
     forEach(v: string, list: string, body: Lines): Lines;
     destructure(cx: Cx, s: { declare: boolean; names: string[]; ids: string[]; call: string; mutable: (n: string) => boolean; reassigned: (n: string) => boolean }): Lines;
-    lexStep(cx: Cx, s: { text: R; posName: string; pos: string; out: string; state: string[] }): Lines;
+    lexStep(cx: Cx, s: { text: R; posName: string; pos: string; out: string; state: string[]; err: string }): Lines;
+    lexAll(cx: Cx, s: { text: R; out: string; err: string; mutable: boolean }): Lines;
   };
 }
 
@@ -333,7 +349,7 @@ class Printer implements Cx {
   }
 
   private checkTy(t: Ty): void {
-    if ((isRec(t) || isRecList(t)) && !this.recs.has(recName(t))) throw new Error(`algo-ir: undeclared record ${t}`);
+    if ((isRec(t) || isRecList(t) || isOpt(t)) && !this.recs.has(recName(t))) throw new Error(`algo-ir: undeclared record ${t}`);
   }
 
   private rx(): RelexLowering {
@@ -391,6 +407,19 @@ class Printer implements Cx {
         if (given.length !== d.fields.length || d.fields.some((f) => !(f.name in e.fields))) throw new Error(`algo-ir: ${e.rec} needs exactly its fields`);
         return this.recL().make(this, e.rec, d.fields.map((f) => [f.name, this.fieldVal(this.expr(e.fields[f.name]), e.rec, f.name, f.ty)]));
       }
+      case 'none':
+        this.checkTy(`opt_${e.rec}`);
+        return this.recL().none(this, e.rec);
+      case 'some': {
+        const r = this.expr(e.e);
+        if (!isRec(r.ty)) throw new Error('algo-ir: some() of a non-record');
+        return this.recL().some(this, recName(r.ty), r);
+      }
+      case 'isSome': {
+        const r = this.expr(e.e);
+        if (!isOpt(r.ty)) throw new Error('algo-ir: isSome() of a non-optional');
+        return { ...this.recL().isSome(this, r), ty: 'bool', nat: 'bool' };
+      }
       case 'field': {
         const r = this.expr(e.e);
         if (!isRec(r.ty)) throw new Error(`algo-ir: field ${e.f} of non-record`);
@@ -419,7 +448,6 @@ class Printer implements Cx {
         if (!isList(l.ty)) throw new Error('algo-ir: prefix() on non-list');
         return RX().prefix(this, l, this.expr(e.n), this.expr(e.estimate));
       }
-      case 'lexAll': return this.atom(X.call(this.id('lex'), [this.str(this.expr(e.text))]), 'toks', 'toks', { owned: true });
       case 'code': return X.code(this, this.expr(e.s), this.expr(e.i));
       case 'hasAt': return X.hasAt(this, this.expr(e.s), this.expr(e.i), e.lit);
       case 'litLen': return this.expr({ k: 'int', v: unitLen(e.lit, this.L.units) });
@@ -499,7 +527,7 @@ class Printer implements Cx {
           break;
         }
         case 'lexStep':
-          for (const n of [s.pos, ...s.state]) { this.mutable.add(n); this.reassigned.add(n); }
+          for (const n of [s.pos, ...s.state, s.err]) { this.mutable.add(n); this.reassigned.add(n); }
           this.mutable.add(s.out);
           break;
         case 'if': this.scan(s.then); if (s.else) this.scan(s.else); break;
@@ -583,6 +611,7 @@ class Printer implements Cx {
       case 'break': return S.break();
       case 'return': {
         const fn = this.cur!;
+        if (s.es.length !== fn.ret.length) throw new Error(`algo-ir: ${fn.name} returns ${fn.ret.length} values, not ${s.es.length}`);
         s.es.forEach((e, i) => {
           if (e.k !== 'var' || !this.env.get(e.name)?.owned) return;
           if (s.es.some((o, j) => j > i && refs(o).has(e.name))) throw new Error(`algo-ir: return moves ${e.name} before a later element reads it`);
@@ -607,7 +636,17 @@ class Printer implements Cx {
           mutable: (n) => this.mutable.has(n), reassigned: (n) => this.reassigned.has(n),
         });
       }
-      case 'lexStep': return this.rx().stmt.lexStep(this, { text: this.expr(s.text), posName: s.pos, pos: this.id(s.pos), out: this.id(s.out), state: s.state.map((n) => this.id(n)) });
+      case 'lexStep': {
+        if (this.env.get(s.err)?.ty !== 'opt_LexErr') throw new Error(`algo-ir: lexStep err ${s.err} is no opt_LexErr local`);
+        return this.rx().stmt.lexStep(this, { text: this.expr(s.text), posName: s.pos, pos: this.id(s.pos), out: this.id(s.out), state: s.state.map((n) => this.id(n)), err: this.id(s.err) });
+      }
+      case 'lexAll': {
+        this.checkTy('opt_LexErr');
+        const text = this.expr(s.text);
+        this.env.set(s.out, { ty: 'toks', owned: true });
+        this.env.set(s.err, { ty: 'opt_LexErr', owned: false });
+        return this.rx().stmt.lexAll(this, { text, out: this.id(s.out), err: this.id(s.err), mutable: this.mutable.has(s.out) });
+      }
     }
   }
 
