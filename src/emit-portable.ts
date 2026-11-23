@@ -119,7 +119,7 @@ type StepOp =
   | { t: 'opt'; steps: Step[]; guard?: number; clean?: true; share?: number }                 // optional sub-sequence
   | { t: 'sep'; elem: Step; delim: string; guard?: number; clean?: true; share?: number }     // elem (delim elem)*
   | { t: 'altlit'; opts: Lit[] }                                // inline alternation of literals (fast path)
-  | { t: 'alt'; branches: Step[][]; branchNames?: string[]; firsts?: FirstSig[]; predictive?: boolean; share?: number }            // inline alternation of sub-sequences (backtracking unless predictive)
+  | { t: 'alt'; branches: Step[][]; branchNames?: string[]; firsts?: FirstSig[]; predictive?: boolean; clean?: boolean[]; share?: number }            // inline alternation of sub-sequences (backtracking unless predictive); clean: parallel to branches, the branch fails clean (Step.clean) so its frame takes no mark
   | { t: 'look'; id: number; is: boolean }                     // zero-width: whether ParserIR.lookaheads[id] matches here (is) or does not (!is)
   | { t: 'ahead'; set: number; is: boolean }                    // zero-width: whether the next token is (is) or is not (!is) in ParserIR.tokenSets[set]
   | { t: 'aheadCtx'; set: number; is: boolean }                 // zero-width: the `ahead` test of tokenSets[set] plus the operator words of the context in force (ParserIR.ctxWords)
@@ -197,6 +197,7 @@ export type RdRule = {
   altGuard: Guard[];        // parallel to alts: when each one is a candidate at all
   altDispatch: Dispatch;    // how a target reaches the alts a token admits (unused when predictive / one alt)
   altCommit?: Commit;       // the keys at which one alternative is left (see Commit); absent: none
+  clean: boolean;           // every alternative fails clean (Step.clean): the PREDICTIVE / SINGLE form's entry takes no builder checkpoint and its failure undoes nothing
 };
 // The candidates of a longest-match list, by what the first token must be, as sections a target
 // prints in order: a `lid` section switches on the token's literal and a `kid` section on its
@@ -460,6 +461,7 @@ export type PrattRule = {
   ledSuppressedIn: number[][];                        // parallel to leds: the ParserIR.suppressSets that hold its connector — the led is tried only while the set in force is none of them
   ledForm: AssignForm[];                              // parallel to leds: the built node's form (a binary-connector led, `a < T >`/`a as T`, is not a target)
   ledClosesTail: boolean[];                           // parallel to leds: not an access tail, or ends in a negative lookahead (`Foo<T>` then nothing)
+  ledClean: boolean[];                                // parallel to leds: its steps after the connector fail clean (Step.clean), so a failed attempt has built no node: its block undoes the position and the scratch list only, with no builder checkpoint
   postfixToks: string[];                              // LED: a postfix token `$ X` (e.g. a tagged template), tried like a mixfix led (also an access tail)
   postfixTokNames: string[];                          // parallel to postfixToks: each arm's name
   // The names of the synthesized operator forms (a prefix / binary / postfix node); null when the
@@ -942,7 +944,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
     const alts = items.map(altSteps);
     // A single alternative is no candidate (ruleShell SINGLE): it has no guard to take tests over.
     const altGuards = items.map((e, i) => altGuard(e, items.slice(0, i)));
-    return { kind: 'rd', name: r.name, alts, altNames, altFirst: [], predictive: false, altGuard: items.length > 1 ? altGuards.map((g, i) => leadOf(g, alts[i]!)) : altGuards, altDispatch: { sections: [], ranked: [] } };
+    return { kind: 'rd', name: r.name, alts, altNames, altFirst: [], predictive: false, altGuard: items.length > 1 ? altGuards.map((g, i) => leadOf(g, alts[i]!)) : altGuards, altDispatch: { sections: [], ranked: [] }, clean: false };
   });
   // Longest match never picks an alternative that advances nothing, and only the entry rule
   // may match the empty input: an entry that must CHOOSE its empty alternative has no rendering.
@@ -1134,30 +1136,78 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   // it matches, a zero-width test never moves, an rd rule's function undoes itself on every form's
   // failure (ruleShell: the checkpoint at entry), an inline choice's branches each run in a BRANCH
   // frame, and a star / opt / sep never fails. A step list fails clean when everything before its
-  // last step is a zero-width test and its last step fails clean. Not clean: a Pratt rule's call (it
-  // can fail after its NUD matched: an operator whose operand must be a target), and any list whose
+  // last step is a zero-width test and its last step fails clean (or its later steps cannot fail,
+  // below). A Pratt rule's call fails clean
+  // when no operator of it can fail the call after its NUD matched: a NUD that matches nothing
+  // leaves the state as it found it (each arm's frame or commit undoes itself), a led or a binary
+  // operand that fails is undone by its own block and ends the loop, so the call's only failure
+  // after its NUD is an operator whose operand must be a target (requireTarget / noUnaryLhs: a
+  // binary or postfix operator returns with the left operand built; a prefix one in the NUD frame
+  // returns with the best so far built). Not clean: such a Pratt rule's call, and any list whose
   // later step can fail after an earlier one consumed.
   const zeroWidth = (s: Step): boolean => s.t === 'ahead' || s.t === 'aheadCtx' || s.t === 'sameLine' || s.t === 'look';
-  const rdRules = new Set(rules.filter((r) => r.kind === 'rd').map((r) => r.name));
+  const cleanRules = new Set(rules.filter((r) => r.kind === 'rd' || (!r.binary.some((b) => b.requireTarget || b.noUnaryLhs) && !r.postfix.some((o) => o.requireTarget) && !r.prefix.some((o) => o.requireTarget))).map((r) => r.name));
   const failsClean = (s: Step): boolean => {
     switch (s.t) {
       case 'lit': case 'tok': case 'altlit': case 'alt': case 'star': case 'opt': case 'sep': return true;
-      case 'rule': return rdRules.has(s.name);
+      case 'rule': case 'ruleBp': return cleanRules.has(s.name);
       case 'seq': case 'suppress': case 'ctx': return listFailsClean(s.steps);
       default: return zeroWidth(s);
     }
   };
-  const listFailsClean = (steps: Step[]): boolean => steps.length > 0 && steps.slice(0, -1).every(zeroWidth) && failsClean(steps[steps.length - 1]!);
+  // A list fails only where its first consuming step does when everything after that step cannot
+  // fail (a star / opt / sep, or a group of them): before it only zero-width tests, which consume
+  // nothing; so it fails clean when that step does (`[Target, opt(':' Type), opt('=' Expr)]`).
+  const neverFails = (s: Step): boolean => s.t === 'star' || s.t === 'opt' || s.t === 'sep' || ((s.t === 'seq' || s.t === 'suppress' || s.t === 'ctx') && s.steps.every(neverFails));
+  const listFailsClean = (steps: Step[]): boolean => {
+    const j = steps.findIndex((x) => !zeroWidth(x));
+    return steps.length > 0 && (j < 0 || (failsClean(steps[j]!) && steps.slice(j + 1).every(neverFails)));
+  };
+  // A list that may be empty: an empty one cannot fail. What a frame reads that has already undone
+  // the rest itself: a BRANCH frame's branch (an empty branch matches), a led arm's steps after its
+  // connector (the connector's token is the led's key; the block puts the position and the scratch
+  // list back on its own, so only a node built and then abandoned would need the builder's checkpoint).
+  const restFailsClean = (steps: Step[]): boolean => steps.length === 0 || listFailsClean(steps);
+  // A repetition whose body is one Pratt call that does NOT fail clean, followed by a one-token test
+  // (`sep(Expr, ',')` then `)`): the call fails either clean (its NUD refuses the token: nothing to
+  // undo) or dirty, and a dirty failure stops at a token of `dirtyAt` (an operator that requires a
+  // target, where a binary or postfix operator returns; or the call's first token, where a prefix
+  // one in the NUD frame returns). Where the next step refuses every such token, a dirty failure
+  // makes the list fail at that step, and every frame that runs a list with a step after a
+  // repetition undoes it (such a list never fails clean), so what the body's own mark would undo is
+  // undone there: the attempt takes no mark (`clean`, as for a body that fails clean).
+  const dirtyAt = new Map<string, Set<string>>();
+  for (const r of rules) {
+    if (r.kind !== 'pratt' || cleanRules.has(r.name)) continue;
+    const d = concrete.first1({ type: 'ref', name: r.name });
+    for (const o of [...r.binary.filter((b) => b.requireTarget || b.noUnaryLhs), ...r.postfix.filter((x) => x.requireTarget)]) d.add(gtComps.includes(o.op) ? '>' : o.op);
+    dirtyAt.set(r.name, d);
+  }
+  const refusesAll = (next: Step | undefined, d: Set<string>): boolean => {
+    const litOk = (l: string) => !d.has(l) && ![...kindsOf(l)].some((k) => d.has(KIND + k));
+    if (next === undefined) return false;
+    if (next.t === 'lit') return litOk(next.value);
+    if (next.t === 'altlit') return next.opts.every((o) => litOk(o.value));
+    if (next.t === 'tok' && next.hole === undefined) return !d.has(KIND + next.name) && ![...d].some((x) => !x.startsWith(KIND) && kindsOf(x).has(next.name));
+    return false;
+  };
+  const doomed = (body: Step[], next: Step | undefined): boolean => {
+    const x = body.length === 1 ? body[0]! : undefined;
+    const d = x !== undefined && (x.t === 'rule' || x.t === 'ruleBp') ? dirtyAt.get(x.name) : undefined;
+    return d !== undefined && refusesAll(next, d);
+  };
   const annotateSteps = (steps: Step[]): void => {
-    for (const s of steps) {
-      if (s.t === 'star') { annotateSteps([s.step]); const g = bodyGuard([s.step]); if (g !== undefined) s.guard = g; if (failsClean(s.step)) s.clean = true; }
-      else if (s.t === 'opt') { annotateSteps(s.steps); const g = bodyGuard(s.steps); if (g !== undefined) s.guard = g; if (listFailsClean(s.steps)) s.clean = true; }
+    for (const [k, s] of steps.entries()) {
+      const next = steps[k + 1];
+      if (s.t === 'star') { annotateSteps([s.step]); const g = bodyGuard([s.step]); if (g !== undefined) s.guard = g; if (failsClean(s.step) || doomed([s.step], next)) s.clean = true; }
+      else if (s.t === 'opt') { annotateSteps(s.steps); const g = bodyGuard(s.steps); if (g !== undefined) s.guard = g; if (listFailsClean(s.steps) || doomed(s.steps, next)) s.clean = true; }
       else if (s.t === 'seq' || s.t === 'suppress' || s.t === 'ctx') annotateSteps(s.steps);
-      else if (s.t === 'sep') { annotateSteps([s.elem]); const g = bodyGuard([s.elem]); if (g !== undefined) s.guard = g; if (failsClean(s.elem)) s.clean = true; }
+      else if (s.t === 'sep') { annotateSteps([s.elem]); const g = bodyGuard([s.elem]); if (g !== undefined) s.guard = g; if (failsClean(s.elem) || doomed([s.elem], next)) s.clean = true; }
       else if (s.t === 'alt') {
         s.firsts = s.branches.map((b) => seqFirst(b));
         s.predictive = allDisjoint(s.firsts);
         s.branches.forEach(annotateSteps);
+        s.clean = s.branches.map(restFailsClean);
       }
     }
   };
@@ -1167,12 +1217,14 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
       r.predictive = allDisjoint(r.altFirst);
       if (!r.predictive && r.alts.length > 1) r.altDispatch = dispatchOf(r.altGuard.map((g) => g?.first ?? null));
       r.alts.forEach(annotateSteps);
+      r.clean = r.alts.every(listFailsClean);
     } else {
       r.nudSeqPredictive = allDisjoint(r.nudSeqs.map((seq) => seqFirst(seq)));
       r.nudSeqs.forEach(annotateSteps);
       r.nudCapped.forEach((c) => annotateSteps(c.steps));
       r.nudBrackets.forEach((b) => annotateSteps(b.steps));
       r.leds.forEach((b) => annotateSteps(b.steps));
+      r.ledClean = r.leds.map((b) => restFailsClean(b.steps.slice(1)));
       r.ledSuppressedIn = r.leds.map((b) => a.suppressedIn(b.first));
     }
   }
@@ -1315,7 +1367,7 @@ export type StepLowering = {
   ret(cond: string): string;                     // statements returning cond
   suppress(set: number, cond: string): string;   // statements: cond with ParserIR.suppressSets[set] staged for the next Pratt call
   ctx(ctx: Ctx, cond: string): string;           // statements: cond in context ctx, the one in force put back after
-  branch(cond: string): string;                  // a BRANCH frame: returns true when cond matched, else undoes it
+  branch(cond: string, clean: boolean): string;  // a BRANCH frame: returns true when cond matched, else undoes it (clean: the branch fails clean, so there is nothing to undo and no mark)
   guarded(first: NonNullable<FirstSig>, branch: string): string;   // the branch, tried only when the next token is in first
   choice(peek: boolean, tries: string[]): string;                  // the tries in order, then false; peek: a guard reads the next token
   predictive(arms: { first: NonNullable<FirstSig>; branch: string }[]): string;   // the one arm the next token selects, else false
@@ -1352,11 +1404,12 @@ export function stepBody(s: Step, L: StepLowering): string {
 export function stepStmts(s: Step, L: StepLowering): string {
   switch (s.t) {
     case 'alt': {
-      if (s.predictive) return L.predictive(s.branches.map((br, i) => ({ first: s.firsts![i]!, branch: L.branch(conjOf(br, L)) })));
+      const clean = (i: number) => s.clean?.[i] === true;
+      if (s.predictive) return L.predictive(s.branches.map((br, i) => ({ first: s.firsts![i]!, branch: L.branch(conjOf(br, L), clean(i)) })));
       const firsts = s.firsts ?? [];
       const n = s.branches.length;
       const tries = s.branches.map((br, i) => {
-        const b = L.branch(conjOf(br, L));
+        const b = L.branch(conjOf(br, L), clean(i));
         const f = firsts[i] ?? null;
         return isFirstGuardable(f, n) ? L.guarded(f, b) : b;
       });
@@ -1402,10 +1455,10 @@ export type RuleLowering = {
   ifThen(test: string, then: string): string;    // `if test then` (no indentation)
   first(f: FirstSig): string;                    // whether the buffered token starts an alternative (predictive)
   accept(i: number): string;                     // the statement returning alternative i's match
-  open: string;                                  // PREDICTIVE / SINGLE: the checkpoint at entry
+  open(clean: boolean): string;                  // PREDICTIVE / SINGLE: the checkpoint at entry (clean: RdRule.clean, only what accept reads)
   peekOrFail: string;                            // PREDICTIVE: buffer the next token; none: no match
   armJoin: string;                               // between PREDICTIVE arms
-  fail: string;                                  // undo to the checkpoint; no match
+  fail(clean: boolean): string;                  // undo to the checkpoint; no match (clean: RdRule.clean, nothing to undo)
   openBest(d: Dispatch): string;                 // LONGEST: the checkpoint and the best so far
   peekOpt: string;                               // LONGEST: buffer the next token (when a guard reads it)
   cand(d: Dispatch, i: number, cond: string): string;      // the CANDIDATE frame of alternative i
@@ -1425,9 +1478,9 @@ export function ruleShell(r: RdRule, ids: LexIdPlan, L: RuleLowering): string {
   const cond = (steps: Step[]) => conjOf(steps, L.steps);
   if (r.predictive) {
     const arm = (steps: Step[], i: number) => `${L.ind}${i === 0 ? '' : 'else '}${L.ifThen(L.first(r.altFirst[i] ?? null), `{ ${L.ifThen(cond(steps), L.accept(i))} }`)}`;
-    return L.fn([L.open, L.peekOrFail, r.alts.map(arm).join(L.armJoin), L.fail]);
+    return L.fn([L.open(r.clean), L.peekOrFail, r.alts.map(arm).join(L.armJoin), L.fail(r.clean)]);
   }
-  if (r.alts.length === 1) return L.fn([L.open, `${L.ind}${L.ifThen(cond(r.alts[0]!), L.accept(0))}`, L.fail]);
+  if (r.alts.length === 1) return L.fn([L.open(r.clean), `${L.ind}${L.ifThen(cond(r.alts[0]!), L.accept(0))}`, L.fail(r.clean)]);
   const arm = (i: number, keyed: boolean) => L.guard(r.altGuard[i]!, keyed, L.cand(r.altDispatch, i, cond(guardedSteps(r.altGuard[i]!, r.alts[i]!))));
   const needPeek = r.altGuard.some((g) => g !== null);
   const frame = [dispatchWalk(r.altDispatch, ids, arm, L.dispatch, true), L.closeBest];
@@ -1585,7 +1638,7 @@ export type PrattLowering = {
   nudPrefix(i: number): string;                  // the prefix-operator arm
   dispatch: DispatchLowering;
   led: LedGuardLowering;
-  ledArm(i: number, cond: string, form: AssignForm, closesTail: boolean, exit: boolean): string;  // led i's block: its node over the left operand, else undone (and the loop left when exit)
+  ledArm(i: number, cond: string, form: AssignForm, closesTail: boolean, exit: boolean, clean: boolean): string;  // led i's block: its node over the left operand, else undone (and the loop left when exit; clean: PrattRule.ledClean, no builder checkpoint)
   ledSwitch(cases: { key: number; arms: string[] }[]): string;      // the led groups, by the token's lid
   postfixToks(kids: number[]): string;           // the postfix tokens, by the token's kid
   postfixTpl(hole: string): string;              // the postfix interpolated template
@@ -1652,7 +1705,7 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
   const leds = r.leds.length === 0 ? '' : L.ledSwitch(groupByPreserveOrder(r.leds, (b) => lidOf(ids, b.first)).map((g) => {
     const lid = g.key as number;
     return { key: lid, arms: g.members.map(({ item: b, index: i }, j) =>
-      `${ledIf(i)}${L.ledArm(i, cond(b.steps), r.ledForm[i]!, r.ledClosesTail[i]!, exits.has(lid) && j === g.members.length - 1)}`) };
+      `${ledIf(i)}${L.ledArm(i, cond(b.steps), r.ledForm[i]!, r.ledClosesTail[i]!, exits.has(lid) && j === g.members.length - 1, r.ledClean[i]!)}`) };
   }));
   const postToks = r.postfixToks.length === 0 ? ''
     : L.postfixToks(groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok)).map((g) => g.key as number)) + (r.postfixTplHole !== undefined ? L.postfixTpl(r.postfixTplHole) : '');
@@ -2088,7 +2141,7 @@ function buildPratt(
       case 'prefix': return null;
     }
   }));
-  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, nudSeqGuard, nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedGuard, nudOrder, nudNames, nudDispatch, prefix, binary, leds, ledNames, ledLeftNames, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledSuppressedIn: [], ledForm, ledClosesTail, postfixToks, postfixTokNames, postfix, postfixSameLine, opNames: names.ops ?? null, ...(nudTplHole !== undefined ? { nudTplHole } : {}), ...(postfixTplHole !== undefined ? { postfixTplHole } : {}) };
+  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, nudSeqGuard, nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedGuard, nudOrder, nudNames, nudDispatch, prefix, binary, leds, ledNames, ledLeftNames, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledSuppressedIn: [], ledForm, ledClosesTail, ledClean: [], postfixToks, postfixTokNames, postfix, postfixSameLine, opNames: names.ops ?? null, ...(nudTplHole !== undefined ? { nudTplHole } : {}), ...(postfixTplHole !== undefined ? { postfixTplHole } : {}) };
 }
 
 // ── Lex integer ids (kid = kind index, lid = text/literal index) ──

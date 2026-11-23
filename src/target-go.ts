@@ -193,7 +193,8 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: Aren
     // A `ctx` step's body is a boolean expression: no return path leaves between the two assignments.
     suppress: (set, cond) => `p.suppressNext = ${set}; _r := (${cond}); p.suppressNext = 0; return _r`,
     ctx: (ctx, cond) => `_c := p.ctx; p.ctx = ${ctx}; _r := (${cond}); p.ctx = _c; return _r`,
-    branch: (cond) => (f === 'R' ? branchGoR(cond) : f === 'W' ? branchGoW(cond, recv) : branchGo(cond)),
+    // A branch that fails clean (Step.clean) has nothing to undo: no frame.
+    branch: (cond, clean) => (clean ? `{ if ${cond} { return true } }` : f === 'R' ? branchGoR(cond) : f === 'W' ? branchGoW(cond, recv) : branchGo(cond)),
     guarded: (first, branch) => `if _ft != nil && ${firstCond(first, '_ft', ids)} ${branch}`,
     choice: (peek, tries) => `${peek ? `_ft := p.${e.peek}(); ` : ''}${tries.join('; ')}; return false`,
     // Same-line `} else if`: newlines break Go ASI.
@@ -225,9 +226,9 @@ function ruleR(r: RdRule | PrattRule, ids: LexIdPlan, e: GoEngine): string {
     steps: goSteps(ids, 'R', e.recv, e),
     fn: (lines) => `func (p *${e.recv}) rec${r.name}() bool {\n${lines.join('\n')}\n}`,
     accept: () => '{ return true }',
-    open: '\tsave := p.pos',
+    open: () => '\tsave := p.pos',
     peekOrFail: `\tt := p.${e.peek}(); if t == nil { return false }`,
-    fail: '\tp.back(save)\n\treturn false',
+    fail: () => '\tp.back(save)\n\treturn false',
     openBest: () => '\tsave := p.pos; bestPos := save',
     peekOpt: `\t_ft := p.${e.peek}()`,
     cand: (_d, _i, cond) => `{ if ${cond} && p.pos > bestPos { bestPos = p.pos }; p.back(save) }`,
@@ -1185,9 +1186,9 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
     steps: goSteps(ids, '', 'engine', ENGINE_GO),
     fn: (lines) => `func (p *engine) parse${r.name}() int32 {\n${lines.join('\n')}\n}`,
     accept: () => `{ return ${fin} }`,
-    open,
+    open: (clean) => (clean ? '\tsave := p.pos; sb := len(p.scratch)' : open),
     peekOrFail: '\tt := p.peek(); if t == nil { return -1 }',
-    fail: '\tp.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]\n\treturn -1',
+    fail: (clean) => (clean ? '\treturn -1' : '\tp.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]\n\treturn -1'),
     openBest: (d) => `${open}\n\tbest := int32(-1); bestPos := save${biGo(d)}`,
     peekOpt: '\t_ft := p.peek()',
     cand: (d, i, cond) => candGo(d, i, cond, `best = ${fin}; bestPos = p.pos;${markGo(d, i)} nb = len(p.nodes); kb = len(p.kids)`, lostGo),
@@ -1377,11 +1378,11 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
 \t\tif operand >= 0 && ${beatsGo(d, 'p.pos', i)} { p.scratch = append(p.scratch, operand); best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, 'pbp.form', true, false)} } else { ${lost} }
 \t\tp.back(save)
 \t}`,
-    ledArm: (_i, cond, form, closes, exit) => `{
-\t\t\tledSave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
+    ledArm: (_i, cond, form, closes, exit, clean) => `{
+\t\t\tledSave := p.pos; sb := len(p.scratch)${clean ? '' : '; nb := len(p.nodes); kb := len(p.kids)'}
 \t\t\tp.scratch = append(p.scratch, left)
 \t\t\tif ${cond} { left = ${fin}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
-\t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]${exit ? '; break LedLoop' : ''}
+\t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]${clean ? '' : '; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]'}${exit ? '; break LedLoop' : ''}
 \t\t}`,
     postfixToks: (kids) => `\t\tswitch t.Kid {
 ${kids.map((k) => `\t\tcase ${k}:
@@ -1889,9 +1890,9 @@ function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
     steps: goSteps(ids, 'W', recv, ENGINE_GO_W, ar),
     fn: (lines) => `func (p *${recv}) parse${r.name}W() (spanned, bool) {\n${lines.join('\n')}\n}`,
     accept: () => `{ return ${fin}, true }`,
-    open,
+    open: (clean) => (clean ? '\tsave := p.pos; sb := len(p.scratch)' : open),
     peekOrFail: '\tt := p.peek(); if t == nil { return spanned{}, false }',
-    fail: `\tp.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore()}\n\treturn spanned{}, false`,
+    fail: (clean) => (clean ? '\treturn spanned{}, false' : `\tp.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore()}\n\treturn spanned{}, false`),
     openBest: (d) => `${open}\n\tvar best spanned; found := false; bestPos := save${biGo(d)}`,
     peekOpt: '\t_ft := p.peek()',
     cand: (d, i, cond) => candGo(d, i, cond, `best = ${fin}; found = true; bestPos = p.pos;${markGo(d, i)} ${arenaMark()}`, lostGoW(recv)),
@@ -2030,11 +2031,11 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
 \t\tif ook && ${beatsGo(d, 'p.pos', i)} { if operand.present { p.scratch = append(p.scratch, operand.h) }; best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, 'pbp.form', true, false)} } else { ${lost} }
 \t\tp.back(save)
 \t}`,
-    ledArm: (_i, cond, form, closes, exit) => `{
-\t\t\tledSave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
+    ledArm: (_i, cond, form, closes, exit, clean) => `{
+\t\t\tledSave := p.pos; sb := len(p.scratch)${clean ? '' : `; ${arenaCkpt()}`}
 \t\t\tp.scratch = append(p.scratch, left.h)
 \t\t\tif ${cond} { left = ${fin}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
-\t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]; ${arenaRestore()}${exit ? '; break LedLoop' : ''}
+\t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]${clean ? '' : `; ${arenaRestore()}`}${exit ? '; break LedLoop' : ''}
 \t\t}`,
     postfixToks: (kids) => `\t\tswitch t.Kid {
 ${kids.map((k) => `\t\tcase ${k}:
