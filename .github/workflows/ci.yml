@@ -52,7 +52,7 @@ jobs:
       # tree-sitter packages.
       - name: Generate editor artifacts (committed ones must be in sync)
         run: |
-          npm run gen
+          for g in typescript javascript typescriptreact javascriptreact html yaml; do /usr/bin/time -f "gen $g %e s, peak %M KB" node src/cli.ts $g.ts > /tmp/gen-$g.log; done
           git diff --exit-code -- '*.tmLanguage.json' '*.language-configuration.json' '*.monarch.json' '*.contributes.json' tree-sitter
 
       - name: Typecheck
