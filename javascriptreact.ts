@@ -67,7 +67,8 @@ const typeParameterHead = seq(
 //     `support.class.component`, as the official TypeScriptReact grammar scopes them;
 //   • an HTML character entity in text (`&amp;`, `&#123;`, `&#x1F600;`): one scope-only pattern,
 //     its `&` and `;` the entity punctuation (tsc does not decode entities; the text token keeps them);
-//   • the children carry `meta.jsx.children`.
+//   • the children carry `meta.jsx.children`;
+//   • `:` in a tag or attribute name is an XML namespace prefix (`svg:rect`, `xlink:href`).
 const alnum = oneOf(range('a', 'z'), range('A', 'Z'), range('0', '9'));
 const hex = oneOf(range('0', '9'), range('a', 'f'), range('A', 'F'));
 const JSX_HIGHLIGHT = {
@@ -80,6 +81,7 @@ const JSX_HIGHLIGHT = {
     scope: 'constant.character.entity', delimiters: 'punctuation.definition.entity',
   }],
   childrenScope: 'meta.jsx.children',
+  nameJoiners: [{ text: ':', scope: 'punctuation.separator.namespace', prefix: 'namespace' }],
 };
 const ELEMENTS = (hasTypes: boolean): ElementRegion => ({
   tagOpen: '<', tagClose: '>', closeMarker: '/',

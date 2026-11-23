@@ -554,6 +554,91 @@ export function analyzeGrammar(grammar: CstGrammar) {
     }
   }
 
+  // ── SECOND by FIRST ──
+  // exprSecond is ONE set for every match, whatever its first token; a list whose candidates all
+  // continue with a name after their own first word (`const x` / `enum X`) has no separating
+  // second set there. exprSecondBy keeps it per first token: for each key k the expression's
+  // non-empty matches can begin with, the keys their second token can be (and whether a match of
+  // one token begins with k), by the same over-approximation as exprSecond (null: not known, a
+  // Pratt marker or a shape it does not follow). Per rule a fixpoint, as ruleSecond.
+  type SecBy = Map<string, Sec>;
+  const ruleSecondBy = new Map<string, SecBy | null>();
+  const isZeroWidth = (t: RuleExpr['type']) => t === 'not' || t === 'sameLine' || t === 'noCommentBefore' || t === 'noMultilineFlowBefore' || t === 'notLeftLeaf';
+  const addSec = (m: SecBy, k: string, x: Sec): void => {
+    const o = m.get(k);
+    if (o === undefined) m.set(k, { s: x.s === null ? null : new Set(x.s), len1: x.len1 });
+    else m.set(k, { s: o.s === null || x.s === null ? null : new Set([...o.s, ...x.s]), len1: o.len1 || x.len1 });
+  };
+  // x continued by what can follow a one-token match: `follow` (null: anything).
+  const extend = (x: Sec, follow: Set<string> | null, followNullable: boolean): Sec =>
+    !x.len1 ? x : { s: x.s === null || follow === null ? null : new Set([...x.s, ...follow]), len1: followNullable };
+  function exprSecondBy(e: RuleExpr): SecBy | null {
+    switch (e.type) {
+      case 'literal': return new Map([[e.value, { s: new Set(), len1: true }]]);
+      case 'ref':
+        if (tokenNames.has(e.name)) return new Map([[e.name, { s: new Set(), len1: true }]]);
+        return ruleSecondBy.has(e.name) ? ruleSecondBy.get(e.name)! : new Map();
+      case 'seq': {
+        const out: SecBy = new Map();
+        const items = e.items;
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i]!;
+          if (isZeroWidth(item.type)) continue;
+          if (item.type === 'op' || item.type === 'postfix' || item.type === 'prefix') return null;
+          const m = exprSecondBy(item);
+          if (m === null) return null;
+          const rf = suffixFirst(items, i + 1), rn = suffixNullable(items, i + 1);
+          for (const [k, x] of m) addSec(out, k, extend(x, rf, rn));
+          if (!exprNullable(item)) return out;
+        }
+        return out;
+      }
+      case 'alt': {
+        const out: SecBy = new Map();
+        for (const item of e.items) { const m = exprSecondBy(item); if (m === null) return null; for (const [k, x] of m) addSec(out, k, x); }
+        return out;
+      }
+      case 'quantifier': {
+        const m = exprSecondBy(e.body);
+        if (m === null || e.kind === '?') return m;
+        const bf = exprFirst(e.body);
+        const out: SecBy = new Map();
+        for (const [k, x] of m) addSec(out, k, extend(x, bf, true));
+        return out;
+      }
+      case 'group': return exprSecondBy(e.body);
+      case 'sep': {
+        const m = exprSecondBy(e.element);
+        if (m === null) return null;
+        const out: SecBy = new Map();
+        for (const [k, x] of m) addSec(out, k, extend(x, new Set([e.delimiter]), true));
+        return out;
+      }
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': return new Map();
+      default: return null;
+    }
+  }
+  const sameSecBy = (x: SecBy | null, y: SecBy | null | undefined): boolean => {
+    if (x === null || y === null || y === undefined) return x === y;
+    if (x.size !== y.size) return false;
+    for (const [k, a] of x) {
+      const b = y.get(k);
+      if (b === undefined || a.len1 !== b.len1 || (a.s === null) !== (b.s === null) || (a.s !== null && a.s.size !== b.s!.size)) return false;
+    }
+    return true;
+  };
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const rule of grammar.rules) {
+      const prev = ruleSecondBy.get(rule.name);
+      if (prev === null) continue;                               // null is terminal
+      const next = exprSecondBy(rule.body);
+      let nv: SecBy | null = next;
+      if (next !== null && prev !== undefined) { nv = new Map(prev); for (const [k, x] of next) addSec(nv, k, x); }
+      if (!sameSecBy(nv, prev)) { ruleSecondBy.set(rule.name, nv); changed = true; }
+    }
+  }
+
   // ── Suppress sets ──
   // The LED connectors a `suppress` group disables (`exclude('in', Expr)`: no `in` in a for-head)
   // are a constant of the grammar at each site, so a compiled parser never builds one at run time:
@@ -594,7 +679,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
     isLeftRecursive, leftCorner, residualCorner, cornerCycle,
     maxBp, ruleByName, leftRecSet, prattClassified, leftRecClassified,
     templateTokenName, templateTokenNames,
-    firstSets, exprFirst, ruleSecond, exprSecond,
+    firstSets, exprFirst, ruleSecond, exprSecond, exprSecondBy,
     suppressSets, suppressSetOf, suppressedIn,
   };
 }
