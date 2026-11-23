@@ -196,6 +196,30 @@ run); where it does not, the rule is outside even its syntactic layer.
 - `accept/template-escape` — Early error: "It is a Syntax Error if the [Tagged] parameter was not set and NotEscapeSequence is matched" (`\9`, `\u{`, `\x0`).
 - `accept/cover-initialized-name` — Early error: `({ a = 1 })` is matched by the cover grammar for `({ a = 1 } = b)` and is an error unless it refines to an AssignmentPattern.
 
+## TypeScript: `typescript.ts` on the valid tests
+
+TypeScript is a superset of JavaScript, so every test that must parse must parse with `typescript.ts` too,
+unless TypeScript rejects that syntax by design: then tsc's own parser, on the file as a `.ts` file, rejects it as
+well, and its diagnostic is the evidence. A file `javascript.ts` also rejects is referenced by its JavaScript
+class, not classed again. A rejection tsc does not share and the JavaScript grammar does not either would be a
+TypeScript grammar bug with no class yet (`ts/unknown`), and fails the gate. The negative tests are not asked of
+the TypeScript grammar; there it is held to tsc's parser ([CORRECTNESS.md](CORRECTNESS.md)).
+
+**20179 of 20200 valid tests parse (99.9%)** · by design 10 · as in JavaScript 11 · unclassified 0 · crash 0
+
+| cell | cause | files | witness | evidence |
+|---|---|---:|---|---|
+| `ts/by-design` | TypeScript rejects it (JavaScript class `reject/annexb-html-comments`) | 7 | `annexB/language/comments/multi-line-html-close.js` | tsc TS1109: Expression expected. |
+| `ts/by-design` | TypeScript rejects it (JavaScript class `reject/annexb-html-comments`) | 1 | `annexB/language/comments/single-line-html-open.js` | tsc TS1110: Type expected. |
+| `ts/by-design` | TypeScript rejects it (JavaScript class `reject/annexb-legacy-numeric-literals`) | 1 | `language/literals/numeric/legacy-octal-integer.js` | tsc TS1121: Octal literals are not allowed. Use the syntax '0o0'. |
+| `ts/by-design` | TypeScript rejects it (JavaScript class `reject/annexb-legacy-numeric-literals`) | 1 | `language/literals/numeric/non-octal-decimal-integer.js` | tsc TS1489: Decimals with leading zeros are not allowed. |
+| `ts/as-javascript` | the JavaScript class `reject/lexer-division-after-radix-number` | 3 | `language/expressions/division/bigint-arithmetic.js` | tsc's .ts parser accepts it |
+| `ts/as-javascript` | the JavaScript class `reject/member-bracket-comma-expression` | 3 | `language/expressions/dynamic-import/assignment-expression/call-expr-expr.js` | tsc's .ts parser accepts it |
+| `ts/as-javascript` | the JavaScript class `reject/decorator-private-member` | 2 | `language/expressions/class/decorator/syntax/class-valid/decorator-member-expr-private-identifier.js` | tsc's .ts parser accepts it |
+| `ts/as-javascript` | the JavaScript class `reject/await-context-leaks-into-function` | 1 | `language/expressions/function/static-init-await-reference.js` | tsc's .ts parser accepts it |
+| `ts/as-javascript` | the JavaScript class `reject/bigint-binding-property-key` | 1 | `language/expressions/object/literal-property-name-bigint.js` | tsc's .ts parser accepts it |
+| `ts/as-javascript` | the JavaScript class `reject/lexer-optional-chain-before-digit` | 1 | `language/expressions/optional-chaining/punctuator-decimal-lookahead.js` | tsc's .ts parser accepts it |
+
 ## Early errors: a checker over the tree, not the grammar: not built
 
 The static-semantic rules ("It is a Syntax Error if …") stay out of the context-free grammar, but not out of

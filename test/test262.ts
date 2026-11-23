@@ -130,6 +130,38 @@ for (const t of tests) {
 }
 const ms = performance.now() - t0;
 
+// ── typescript.ts on the valid tests ──
+// TypeScript is a superset of JavaScript, so every test262 test that must parse must parse with
+// `typescript.ts` too, unless TypeScript rejects that syntax by design: tsc's own parser, on the file
+// as a `.ts` file, then rejects it as well (its diagnostic is the evidence). A rejected file is one of:
+//   ts/by-design       tsc's .ts parser rejects it too (listed with tsc's diagnostic)
+//   ts/as-javascript   tsc accepts it, and `javascript.ts` rejects it as well: the JavaScript record's
+//                      class is the cause, referenced, not repeated
+//   ts/unknown         tsc accepts it and only `typescript.ts` rejects it: a TypeScript grammar bug
+//                      no class names yet; the gate fails while there is one
+// The negative tests are not asked of the TypeScript grammar: it is held to tsc's parser there.
+const tsGrammar = createParser((await import('../typescript.ts')).default);
+type TsCell = 'ts/by-design' | 'ts/as-javascript' | 'ts/unknown' | 'ts/crash';
+interface TsRow { r: Row; cell: TsCell; note: string }
+const tsRows: TsRow[] = [];
+let tsMs = 0;
+let tsValid = 0;
+for (const r of rows) {
+  if (r.t.expect !== 'accept') continue;
+  tsValid++;
+  const s = performance.now();
+  let failed: unknown = null;
+  try { tsGrammar.parse(r.t.runs[0].text); } catch (e) { failed = e ?? new Error('throw'); }
+  tsMs += performance.now() - s;
+  if (failed === null) continue;
+  if (!isInputError(failed)) { tsRows.push({ r, cell: 'ts/crash', note: `${(failed as Error)?.constructor?.name}: ${String((failed as Error)?.message ?? failed).slice(0, 120)}` }); continue; }
+  const sf = ts.createSourceFile('/t.ts', r.t.runs[0].text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const d = (sf as unknown as { parseDiagnostics: ts.Diagnostic[] }).parseDiagnostics[0];
+  if (d) tsRows.push({ r, cell: 'ts/by-design', note: `tsc TS${d.code}: ${ts.flattenDiagnosticMessageText(d.messageText, ' ')}` });
+  else if (r.cls) tsRows.push({ r, cell: 'ts/as-javascript', note: r.cls.id });
+  else tsRows.push({ r, cell: 'ts/unknown', note: 'tsc accepts it, javascript.ts accepts it' });
+}
+
 // ── render ──
 const count = (f: (r: Row) => boolean) => rows.reduce((n, r) => n + (f(r) ? 1 : 0), 0);
 const pct = (a: number, b: number) => (b ? (100 * a / b).toFixed(1) : '0.0');
@@ -148,6 +180,10 @@ for (const c of allClasses) {
   if (rs.length) R.push(`## ${c.id}`, ...rs.map((r) => short(r.t.path)));
 }
 if (crashes.length) R.push('## crash', ...crashes.map((r) => short(r.t.path)));
+for (const c of ['ts/by-design', 'ts/as-javascript', 'ts/unknown', 'ts/crash'] as const) {
+  const rs = tsRows.filter((x) => x.cell === c);
+  if (rs.length) R.push(`## ${c}`, ...rs.map((x) => short(x.r.t.path)));
+}
 const record = R.join('\n') + '\n';
 
 const VERDICT_TEXT: Record<Verdict, string> = {
@@ -240,6 +276,31 @@ if (crashes.length) {
   for (const r of crashes) D.push(`- \`${short(r.t.path)}\` — ${crashNotes.get(r.t.path)}`);
 }
 D.push('');
+D.push('## TypeScript: `typescript.ts` on the valid tests');
+D.push('');
+D.push('TypeScript is a superset of JavaScript, so every test that must parse must parse with `typescript.ts` too,');
+D.push('unless TypeScript rejects that syntax by design: then tsc\'s own parser, on the file as a `.ts` file, rejects it as');
+D.push('well, and its diagnostic is the evidence. A file `javascript.ts` also rejects is referenced by its JavaScript');
+D.push('class, not classed again. A rejection tsc does not share and the JavaScript grammar does not either would be a');
+D.push('TypeScript grammar bug with no class yet (`ts/unknown`), and fails the gate. The negative tests are not asked of');
+D.push('the TypeScript grammar; there it is held to tsc\'s parser ([CORRECTNESS.md](CORRECTNESS.md)).');
+D.push('');
+const tsCount = (c: TsCell) => tsRows.filter((x) => x.cell === c).length;
+D.push(`**${tsValid - tsRows.length} of ${tsValid} valid tests parse (${pct(tsValid - tsRows.length, tsValid)}%)** · by design ${tsCount('ts/by-design')} · as in JavaScript ${tsCount('ts/as-javascript')} · unclassified ${tsCount('ts/unknown')} · crash ${tsCount('ts/crash')}`);
+D.push('');
+const groupBy = (c: TsCell) => {
+  const m = new Map<string, TsRow[]>();
+  for (const x of tsRows.filter((y) => y.cell === c)) { const k = c === 'ts/by-design' ? `${x.r.cls?.id ?? 'javascript.ts parses it'} · ${x.note.replace(/^(tsc TS\d+).*$/, '$1')}` : x.note; if (!m.has(k)) m.set(k, []); m.get(k)!.push(x); }
+  return [...m].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+};
+if (tsRows.length) {
+  D.push('| cell | cause | files | witness | evidence |');
+  D.push('|---|---|---:|---|---|');
+  for (const c of ['ts/by-design', 'ts/as-javascript', 'ts/unknown', 'ts/crash'] as const) {
+    for (const [k, xs] of groupBy(c)) D.push(`| \`${c}\` | ${c === 'ts/by-design' ? `TypeScript rejects it (JavaScript class \`${k.split(' · ')[0]}\`)` : c === 'ts/as-javascript' ? `the JavaScript class \`${k}\`` : k} | ${xs.length} | \`${short(xs[0].r.t.path)}\` | ${c === 'ts/by-design' ? xs[0].note : c === 'ts/as-javascript' ? 'tsc\'s .ts parser accepts it' : xs[0].note} |`);
+  }
+  D.push('');
+}
 D.push('## Early errors: a checker over the tree, not the grammar: not built');
 D.push('');
 D.push('The static-semantic rules ("It is a Syntax Error if …") stay out of the context-free grammar, but not out of');
@@ -286,8 +347,10 @@ const doc = D.join('\n');
 // ── report ──
 console.log(`── javascript.ts vs test262 (${total} tests; ${(ms / 1000).toFixed(1)}s, of which the interpreter ${(oursMs / 1000).toFixed(1)}s) ──`);
 for (const c of CELLS) console.log(`  ${c.padEnd(13)} ${String(count((r) => r.cell === c)).padStart(6)}`);
-const unknown = rows.filter((r) => r.cls?.verdict === 'unknown');
-for (const r of unknown) console.log(`  ✗ unclassified ${r.cell}: ${short(r.t.path)} — read it, then add or widen a class in test/test262-classes.ts`);
+console.log(`  typescript.ts: ${tsValid - tsRows.length}/${tsValid} valid tests parse (${(tsMs / 1000).toFixed(1)}s); ${['ts/by-design', 'ts/as-javascript', 'ts/unknown', 'ts/crash'].map((c) => `${c} ${tsCount(c as TsCell)}`).join(', ')}`);
+const unknown = [...rows.filter((r) => r.cls?.verdict === 'unknown'), ...tsRows.filter((x) => x.cell === 'ts/unknown' || x.cell === 'ts/crash').map((x) => x.r)];
+for (const r of rows.filter((x) => x.cls?.verdict === 'unknown')) console.log(`  ✗ unclassified ${r.cell}: ${short(r.t.path)} — read it, then add or widen a class in test/test262-classes.ts`);
+for (const x of tsRows.filter((y) => y.cell === 'ts/unknown' || y.cell === 'ts/crash')) console.log(`  ✗ ${x.cell}: ${short(x.r.t.path)} — ${x.note}: only typescript.ts rejects this valid test`);
 
 
 // ── what moved against the committed record ──
@@ -301,7 +364,7 @@ const parseRec = (s: string) => {
   let cur = '';
   for (const l of s.split('\n')) {
     if (l.startsWith('## ')) cur = l.slice(3);
-    else if (l && !l.startsWith('#')) m.set(l, cur);
+    else if (l && !l.startsWith('#')) m.set(cur.startsWith('ts/') ? `(typescript.ts) ${l}` : l, cur);   // a file has one JavaScript and at most one TypeScript entry
   }
   return m;
 };
