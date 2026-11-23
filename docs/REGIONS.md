@@ -87,6 +87,7 @@ elements: {
     tagName?: [{ match: seq(range('a', 'z'), …), scope: 'entity.name.tag' }, …],
     text?: [{ match: seq('&', …, ';'), scope: 'constant.character.entity', delimiters: 'punctuation.definition.entity' }],
     childrenScope?: 'meta.jsx.children',
+    nameJoiners?: [{ text: ':', scope: 'punctuation.separator.namespace', prefix: 'namespace' }],
   },
 }
 ```
@@ -120,7 +121,9 @@ nothing, so it is text.
 
 A region's highlighting comes from the region and its rules: the tag-name rule (the rule right after
 `tagOpen` in an element arm) and its name shape (its identifier and the literals joining further
-identifiers: `:` a namespace prefix, `.` a member expression), the attribute rule and its assign
+identifiers: a joiner that is one of the grammar's `regexContext.memberAccessTexts` is a member
+accessor in a tag name, `.` in JSX's `a.b`; a joiner declared in `highlight.nameJoiners` splits off
+a prefix; any other joins within one name), the attribute rule and its assign
 literal, the value's openers, the tag tokens' quotes, a nameless arm `tagOpen tagClose` (a fragment),
 tag type arguments. `src/region-view.ts` normalises this for every generator. What a dialect's
 highlighting adds beyond its rules is `highlight`, and a dialect that declares none gets none:
@@ -131,6 +134,10 @@ highlighting adds beyond its rules is `highlight`, and a dialect that declares n
 - `text`: scope-only patterns inside the children's text run (the lexer does not tokenize them):
   JSX's `&entity;`, its `&` and `;` scoped by `delimiters`.
 - `childrenScope`: a scope over the children (JSX: `meta.jsx.children`).
+- `nameJoiners`: at most one joiner of the tag-name or attribute rule that splits a name into a
+  prefix and the name, with the joiner's scope and the suffix the prefix's scope takes after the
+  name's (JSX: `{ text: ':', scope: 'punctuation.separator.namespace', prefix: 'namespace' }`, the
+  XML namespace of `svg:rect`). A declared joiner that joins no name, or a second entry, is refused.
 
 A grammar that declares no region gets no element layer in the generators, whatever tokens or
 rules it has (a `/>` token and a `<`-headed rule are no longer read as JSX).
