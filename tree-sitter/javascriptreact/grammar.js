@@ -128,7 +128,7 @@ module.exports = grammar({
       prec.left(24, seq($.expr, field('operator', choice("+", "-")), $.expr)),
       prec.left(26, seq($.expr, field('operator', choice("*", "/", "%")), $.expr)),
       prec.right(28, seq($.expr, field('operator', "**"), $.expr)),
-      prec.right(29, seq(field('operator', choice("!", "~", "+", "-", "typeof", "void", "delete", "await", "yield")), $.expr)),
+      prec.right(29, seq(field('operator', choice("!", "~", "+", "-", "typeof", "void", "delete", "await")), $.expr)),
       prec.right(31, seq(field('operator', choice("++", "--")), $.expr)),
       prec.left(34, seq($.expr, $._same_line_1, field('operator', choice("++", "--")))),
       $.jsxelement,

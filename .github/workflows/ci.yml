@@ -51,12 +51,14 @@ jobs:
       # tree-sitter packages.
       - name: Generate editor artifacts (committed ones must be in sync)
         run: |
-          # `npm run gen`, each grammar under /usr/bin/time (report-only): wall and CPU seconds and
-          # peak memory per grammar, the generators' cost (read with `gh run view <id> --log | grep 'generate '`).
-          for g in $(node -p "require('./package.json').scripts.gen.match(/cli\.ts \S+/g).map(c => c.slice(7)).join(' ')"); do
-            /usr/bin/time -f "generate $g: %e s wall, %U s user, %M KB peak" node src/cli.ts "$g"
-          done
-          git diff --exit-code -- '*.tmLanguage.json' '*.language-configuration.json' '*.monarch.json' '*.contributes.json' tree-sitter
+          # `npm run gen`, each of its commands under /usr/bin/time (report-only): wall and CPU seconds
+          # and peak memory per grammar, the generators' cost; read with
+          # `gh run view <id> --log | grep 'generate '` (the CPU line says which runner it was).
+          echo "generate runner CPU:$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2), $(nproc) cores"
+          while IFS= read -r c; do
+            /usr/bin/time -f "generate $c: %e s wall, %U s user, %M KB peak" bash -c "$c"
+          done < <(node -p "require('./package.json').scripts.gen.split(' && ').join('\\n')")
+          git diff --exit-code -- '*.tmLanguage.json' '*.language-configuration.json' '*.monarch.json' '*.contributes.json' tree-sitter docs/COMPLETENESS.md docs/decisions test/fixtures/decisionsjs.decisions.md
 
       - name: Typecheck
         run: npx tsc --noEmit
@@ -190,6 +192,75 @@ jobs:
   # parser from the same grammar, beating the official hand-written one). Build its
   # wasm and gate the accuracy so the 95.9% is verified, not just claimed. The
   # tree-sitter CLI bundles its own wasm toolchain — no emscripten/docker needed.
+  # conformance/cpython: python.ts (the second language, docs/SECOND-LANGUAGE.md) against ast.parse of
+  # Python 3.10.12 over CPython's Lib/ at the pin in test/cpython.sha. Its own job, not a gate of
+  # test/check.ts: it needs a Python of exactly that version, downloaded here, and a failure to get
+  # one must not fail the `test` job. Gated on its inputs (the grammar, the engine, the harness).
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # need history to diff against the base for the path gate below
+
+      - name: Did the Python conformance inputs change?
+        id: changed
+        run: |
+          if [ "${{ github.event_name }}" != "push" ] && [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "value=true" >> "$GITHUB_OUTPUT"; echo "forced full run (${{ github.event_name }})"; exit 0
+          fi
+          if [ "${{ github.event_name }}" = "pull_request" ]; then base="${{ github.event.pull_request.base.sha }}"; else base="${{ github.event.before }}"; fi
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" != "refs/heads/master" ]; then
+            git fetch -q origin master; base="$(git merge-base origin/master HEAD || true)"
+          fi
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "value=true" >> "$GITHUB_OUTPUT"; echo "no usable base — running the check"; exit 0
+          fi
+          if git diff --name-only "$base" HEAD | grep -qE '^src/|^python\.ts$|^test/cpython|^\.github/workflows/ci\.yml$'; then
+            echo "value=true" >> "$GITHUB_OUTPUT"; echo "grammar / engine / harness changed — running the check"
+          else
+            echo "value=false" >> "$GITHUB_OUTPUT"; echo "no input of the check changed — skipping"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.changed.outputs.value == 'true'
+        with:
+          node-version: 24
+      - if: steps.changed.outputs.value == 'true'
+        run: npm ci
+
+      # The oracle. uv (astral-sh/setup-uv, pinned by commit; uv itself pinned by version) installs
+      # CPython 3.10.12 as built by python-build-standalone (github.com/astral-sh/python-build-standalone,
+      # the build uv's managed-Python list names for 3.10.12); the interpreter is cached between runs.
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2   # v10.3.3
+        if: steps.changed.outputs.value == 'true'
+        with:
+          version: '0.13.7'
+          enable-cache: true
+          cache-python: true
+      - name: Python 3.10.12
+        if: steps.changed.outputs.value == 'true'
+        run: |
+          set -euo pipefail
+          uv python install 3.10.12
+          echo "MONOGRAM_PYTHON=$(uv python find 3.10.12)" >> "$GITHUB_ENV"
+
+      - name: Clone the pinned CPython corpus
+        if: steps.changed.outputs.value == 'true'
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/cpython; mkdir -p /tmp/cpython
+          git -C /tmp/cpython init -q
+          git -C /tmp/cpython remote add origin https://github.com/python/cpython
+          git -C /tmp/cpython config core.sparseCheckout true
+          printf 'Lib/\n' > /tmp/cpython/.git/info/sparse-checkout
+          git -C /tmp/cpython fetch -q --depth 1 --filter=blob:none origin "$(cat test/cpython.sha)"
+          git -C /tmp/cpython checkout -q FETCH_HEAD
+
+      - name: conformance/cpython
+        if: steps.changed.outputs.value == 'true'
+        run: node --stack-size=7000 test/cpython.ts
+
   treesitter:
     runs-on: ubuntu-latest
     steps:
