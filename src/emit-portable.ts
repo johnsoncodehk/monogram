@@ -1141,12 +1141,41 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   // connector (the connector's token is the led's key; the block puts the position and the scratch
   // list back on its own, so only a node built and then abandoned would need the builder's checkpoint).
   const restFailsClean = (steps: Step[]): boolean => steps.length === 0 || listFailsClean(steps);
+  // A repetition whose body is one Pratt call that does NOT fail clean, followed by a one-token test
+  // (`sep(Expr, ',')` then `)`): the call fails either clean (its NUD refuses the token: nothing to
+  // undo) or dirty, and a dirty failure stops at a token of `dirtyAt` (an operator that requires a
+  // target, where a binary or postfix operator returns; or the call's first token, where a prefix
+  // one in the NUD frame returns). Where the next step refuses every such token, a dirty failure
+  // makes the list fail at that step, and every frame that runs a list with a step after a
+  // repetition undoes it (such a list never fails clean), so what the body's own mark would undo is
+  // undone there: the attempt takes no mark (`clean`, as for a body that fails clean).
+  const dirtyAt = new Map<string, Set<string>>();
+  for (const r of rules) {
+    if (r.kind !== 'pratt' || cleanRules.has(r.name)) continue;
+    const d = concrete.first1({ type: 'ref', name: r.name });
+    for (const o of [...r.binary.filter((b) => b.requireTarget || b.noUnaryLhs), ...r.postfix.filter((x) => x.requireTarget)]) d.add(gtComps.includes(o.op) ? '>' : o.op);
+    dirtyAt.set(r.name, d);
+  }
+  const refusesAll = (next: Step | undefined, d: Set<string>): boolean => {
+    const litOk = (l: string) => !d.has(l) && ![...kindsOf(l)].some((k) => d.has(KIND + k));
+    if (next === undefined) return false;
+    if (next.t === 'lit') return litOk(next.value);
+    if (next.t === 'altlit') return next.opts.every((o) => litOk(o.value));
+    if (next.t === 'tok' && next.hole === undefined) return !d.has(KIND + next.name) && ![...d].some((x) => !x.startsWith(KIND) && kindsOf(x).has(next.name));
+    return false;
+  };
+  const doomed = (body: Step[], next: Step | undefined): boolean => {
+    const x = body.length === 1 ? body[0]! : undefined;
+    const d = x !== undefined && (x.t === 'rule' || x.t === 'ruleBp') ? dirtyAt.get(x.name) : undefined;
+    return d !== undefined && refusesAll(next, d);
+  };
   const annotateSteps = (steps: Step[]): void => {
-    for (const s of steps) {
-      if (s.t === 'star') { annotateSteps([s.step]); const g = bodyGuard([s.step]); if (g !== undefined) s.guard = g; if (failsClean(s.step)) s.clean = true; }
-      else if (s.t === 'opt') { annotateSteps(s.steps); const g = bodyGuard(s.steps); if (g !== undefined) s.guard = g; if (listFailsClean(s.steps)) s.clean = true; }
+    for (const [k, s] of steps.entries()) {
+      const next = steps[k + 1];
+      if (s.t === 'star') { annotateSteps([s.step]); const g = bodyGuard([s.step]); if (g !== undefined) s.guard = g; if (failsClean(s.step) || doomed([s.step], next)) s.clean = true; }
+      else if (s.t === 'opt') { annotateSteps(s.steps); const g = bodyGuard(s.steps); if (g !== undefined) s.guard = g; if (listFailsClean(s.steps) || doomed(s.steps, next)) s.clean = true; }
       else if (s.t === 'seq' || s.t === 'suppress' || s.t === 'ctx') annotateSteps(s.steps);
-      else if (s.t === 'sep') { annotateSteps([s.elem]); const g = bodyGuard([s.elem]); if (g !== undefined) s.guard = g; if (failsClean(s.elem)) s.clean = true; }
+      else if (s.t === 'sep') { annotateSteps([s.elem]); const g = bodyGuard([s.elem]); if (g !== undefined) s.guard = g; if (failsClean(s.elem) || doomed([s.elem], next)) s.clean = true; }
       else if (s.t === 'alt') {
         s.firsts = s.branches.map((b) => seqFirst(b));
         s.predictive = allDisjoint(s.firsts);
