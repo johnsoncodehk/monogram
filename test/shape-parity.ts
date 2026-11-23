@@ -1,11 +1,13 @@
 // Gate: SH2-2 shape CST↔parseAst parity — calc+toy ≥2800, golden ≥22,
-// typescript+SH0 full emit + ≥2000 accept-parity (blocking).
+// typescript+SH0 full emit + ≥2000 accept-parity (blocking); calc shape codegen (formerly
+// shape-codegen): validateShape and its negatives, generated field types, golden parseAst ASTs.
 import { writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { emitTs } from '../src/target-ts.ts';
 import { emitParser, tsTarget } from '../src/emit.ts';
 import { calcShape } from '../src/shape-calc.ts';
+import { validateShape, validateShapeOrThrow } from '../src/shape-validate.ts';
 import type { ShapeSpec } from '../src/shape-schema.ts';
 import calcGrammar from './fixtures/calc.ts';
 import toyGrammar, {
@@ -18,6 +20,170 @@ import { CURATED_TS, CURATED_TS_INVALID } from './emit-corpus.ts';
 import { scratchDir } from './scratch.ts';
 
 const OUT = scratchDir('shape-parity');
+
+// ── calc shape codegen (formerly shape-codegen): handwritten golden parseAst ASTs (no backfill) ──
+
+const CALC_GOLDEN: { src: string; expect: Record<string, unknown> }[] = [
+  {
+    src: 'let x = 1;',
+    expect: {
+      type: 'Program',
+      body: [{ type: 'LetStatement', id: 'x', init: 1 }],
+    },
+  },
+  {
+    src: '1 + 2;',
+    expect: {
+      type: 'Program',
+      body: [{
+        type: 'ExpressionStatement',
+        expression: { type: 'BinaryExpression', left: 1, operator: '+', right: 2 },
+      }],
+    },
+  },
+  {
+    src: '1 + 2 * 3;',
+    expect: {
+      type: 'Program',
+      body: [{
+        type: 'ExpressionStatement',
+        expression: {
+          type: 'BinaryExpression', left: 1, operator: '+',
+          right: { type: 'BinaryExpression', left: 2, operator: '*', right: 3 },
+        },
+      }],
+    },
+  },
+  {
+    src: '-a;',
+    expect: {
+      type: 'Program',
+      body: [{
+        type: 'ExpressionStatement',
+        expression: { type: 'UnaryExpression', operator: '-', argument: 'a' },
+      }],
+    },
+  },
+  {
+    src: '(1);',
+    expect: {
+      type: 'Program',
+      body: [{ type: 'ExpressionStatement', expression: 1 }],
+    },
+  },
+  {
+    src: 'let a = 1; let b = 2; a + b;',
+    expect: {
+      type: 'Program',
+      body: [
+        { type: 'LetStatement', id: 'a', init: 1 },
+        { type: 'LetStatement', id: 'b', init: 2 },
+        {
+          type: 'ExpressionStatement',
+          expression: { type: 'BinaryExpression', left: 'a', operator: '+', right: 'b' },
+        },
+      ],
+    },
+  },
+  {
+    src: '1 - 2 - 3;',
+    expect: {
+      type: 'Program',
+      body: [{
+        type: 'ExpressionStatement',
+        expression: {
+          type: 'BinaryExpression',
+          left: { type: 'BinaryExpression', left: 1, operator: '-', right: 2 },
+          operator: '-',
+          right: 3,
+        },
+      }],
+    },
+  },
+  {
+    src: '-(a * b);',
+    expect: {
+      type: 'Program',
+      body: [{
+        type: 'ExpressionStatement',
+        expression: {
+          type: 'UnaryExpression', operator: '-',
+          argument: { type: 'BinaryExpression', left: 'a', operator: '*', right: 'b' },
+        },
+      }],
+    },
+  },
+  {
+    src: 'foo; bar; baz;',
+    expect: {
+      type: 'Program',
+      body: [
+        { type: 'ExpressionStatement', expression: 'foo' },
+        { type: 'ExpressionStatement', expression: 'bar' },
+        { type: 'ExpressionStatement', expression: 'baz' },
+      ],
+    },
+  },
+];
+
+// ── calc shape validator negatives ──
+
+const SHAPE_NEGATIVES: { label: string; spec: typeof calcShape; wantCode: string }[] = [
+  {
+    label: 'field-oob',
+    spec: {
+      ...calcShape,
+      rules: {
+        ...calcShape.rules,
+        Program: {
+          kind: 'node',
+          type: 'Program',
+          fields: [{ name: 'body', bind: { at: 5 }, typeHint: 'Statement' }],
+        },
+      },
+    },
+    wantCode: 'field-oob',
+  },
+  {
+    label: 'star-needs-list',
+    spec: {
+      ...calcShape,
+      rules: {
+        ...calcShape.rules,
+        Program: {
+          kind: 'node',
+          type: 'Program',
+          fields: [{ name: 'body', bind: { at: 0 }, typeHint: 'Statement' }],
+        },
+      },
+    },
+    wantCode: 'star-needs-list',
+  },
+  {
+    // `{ label }` is declared by the schema but rendered by no printer: an error, not `undefined`.
+    label: 'bind-unimplemented',
+    spec: {
+      ...calcShape,
+      rules: {
+        ...calcShape.rules,
+        Program: {
+          kind: 'node',
+          type: 'Program',
+          fields: [{ name: 'body', bind: { from: 'list', of: 0 }, typeHint: 'Statement' }, { name: 'first', bind: { label: 'stmt' } }],
+        },
+      },
+    },
+    wantCode: 'bind-unimplemented',
+  },
+  {
+    label: 'unmapped',
+    spec: {
+      ...calcShape,
+      rules: { Expr: calcShape.rules.Expr!, Stmt: calcShape.rules.Stmt! },
+    },
+    wantCode: 'unmapped',
+  },
+];
 
 function deepEq(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -1083,6 +1249,41 @@ async function main(): Promise<void> {
     accepts(toyMod, 'f(x=>1);', false) && accepts(toyMod, 'f(x=>1);', true),
     'capped nested in call LED; transaction keeps parse correct',
   );
+
+  // ── calc shape codegen (formerly shape-codegen): validateShape, generated types, golden parseAst ──
+  {
+    const vr = validateShape({ default: calcGrammar }, calcShape);
+    check(vr.ok, `validateShape calc ok${vr.ok ? ` (${vr.ir.rules.length} rules)` : ''}`, vr.ok ? undefined : JSON.stringify(vr.errors));
+    for (const neg of SHAPE_NEGATIVES) {
+      const r = validateShape({ default: calcGrammar }, neg.spec);
+      check(!r.ok && r.errors.some((e) => e.code === neg.wantCode), `negative ${neg.label} → code=${neg.wantCode}`, `got ok=${r.ok} errors=${JSON.stringify(r.errors)}`);
+    }
+    let threw = false;
+    try { validateShapeOrThrow(calcGrammar, SHAPE_NEGATIVES[0]!.spec); } catch { threw = true; }
+    check(threw, 'validateShapeOrThrow throws on field-oob');
+    // Generated types: list fields must be T[]; opText fields must be string.
+    const withShapeSrc = emitTs(calcGrammar, { shape: calcShape });
+    check(/export interface Program \{[^}]*body: Statement\[\];/.test(withShapeSrc), 'Program.body: Statement[]');
+    check(/operator: string;/.test(withShapeSrc), 'opText fields: string');
+    for (const g of CALC_GOLDEN) {
+      const got = stripSpans(calcMod.parseAst(g.src));
+      check(deepEq(got, g.expect), `calc golden parseAst ${JSON.stringify(g.src)}`, `got ${JSON.stringify(got)} want ${JSON.stringify(g.expect)}`);
+    }
+    type Ast = Record<string, unknown>;
+    const expr = (((calcMod.parseAst('2 / 3;') as Ast)?.body as Ast[])?.[0] as Ast)?.expression as Ast;
+    check(expr?.type === 'BinaryExpression' && expr.operator === '/', 'BinaryExpression.operator=/', JSON.stringify(expr));
+    const uexpr = (((calcMod.parseAst('--x;') as Ast)?.body as Ast[])?.[0] as Ast)?.expression as Ast;
+    check(uexpr?.type === 'UnaryExpression' && uexpr.operator === '-', 'UnaryExpression.operator=-', JSON.stringify(uexpr));
+    // Performance smoke: parseAst and parseWith(cstBuilder) complete on ≥1MB of calc (times printed, not pinned).
+    const chunk = 'let x = 1 + 2 * 3;\n';
+    const big = chunk.repeat(Math.ceil((1024 * 1024) / chunk.length));
+    const t0 = performance.now();
+    calcMod.parseAst(big);
+    const astMs = performance.now() - t0;
+    const t1 = performance.now();
+    calcMod.parseWith(big, (calcMod as unknown as { cstBuilder: Parameters<Emitted['parseWith']>[1] }).cstBuilder);
+    check(true, `perf smoke ${(big.length / 1024 / 1024).toFixed(2)}MB parseAst=${astMs.toFixed(1)}ms parseWith=${(performance.now() - t1).toFixed(1)}ms`);
+  }
 
   console.log(`\nshape-parity summary: toy ${toyP.cstAcc}/${toyCorpus.length} accept, calc ${calcP.cstAcc}/${calcCorpus.length} accept, corpus=${totalN}`);
   console.log(`shape-parity: ${pass}/${pass + fail} checks passed`);
