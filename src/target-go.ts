@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { blockBody, elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './emit.ts';
@@ -597,7 +597,9 @@ ${sig ? `\t\t\tif op == 2 {
 \t\t\tfe, fk, fl, ft, fp, fa, fla := ${shared.elementFn('frame')}(src, pos, fr, tagAngle, len(*acc) > 0 && (*acc)[len(*acc)-1].Lid == lidEq, laEnd)
 \t\t\tlaEnd = fla
 \t\t\tif fe >= 0 {
-\t\t\t\temit(pos, fe, uint16(fk), uint16(fl))
+${elementSkipsText(ir) ? `\t\t\t\t// a skipped text token (a comment in text): no token
+\t\t\t\tif fk < 0 { if lexHasLineTerm(src[pos:fe]) { pendingNl = true }; pos = fe; continue }
+` : ''}\t\t\t\temit(pos, fe, uint16(fk), uint16(fl))
 ${raw ? `\t\t\t\t// each element frame's current tag: the index of its tagOpen token (the name is the next)
 \t\t\t\tif uint16(fl) == lidElOpen { if fp == 6 { tagAt = append(tagAt, len(*acc)-1) } else if (fr>>2)&3 == 0 { tagAt[len(tagAt)-1] = len(*acc) - 1 } }
 ` : ''}\t\t\t\tif ft < 0 { templateStack = templateStack[:len(templateStack)-1];${raw ? ' tagAt = tagAt[:len(tagAt)-1];' : ''} elEndAt = len(*acc) } else { templateStack[len(templateStack)-1] = ft }
@@ -2799,6 +2801,16 @@ func parseWithCst(src string, b *CstBuilder) (int32, bool) {
 // arena is emptied, its token buffer (the built-in builders') and Workspace are emptied and reused
 // (capacity kept), so nothing of the previous parse stays reachable and nothing is allocated again.
 func parseWithW(src string, b Builder) (int32, bool) {
+\tp, fr, ok, err := runW(src, b)
+\tif err != nil { panic(lexError(src, err)) }
+\tok = ok && p.pos == len(p.toks)
+\tp.cursor.toks, p.src, p.b = nil, "", nil // the workspace keeps buffers, not the input or the builder
+\tif !ok { return 0, false }
+\tif !fr.present { panic(errNoRoot) }
+\treturn fr.h, true
+}
+// runW: one parse of src with b in b's workspace; the caller drops p's input and builder.
+func runW(src string, b Builder) (*parserW, spanned, bool, *lexErr) {
 \t// The built-in builders by concrete type: the runtime's interface assertion may allocate (dropsOf).
 \tvar w *Workspace
 \tif s, is := b.(*SlimBuilder); is {
@@ -2813,15 +2825,11 @@ func parseWithW(src string, b Builder) (int32, bool) {
 \tb.Restore(0, 0)
 \tp := &w.w
 \ttoks, err := lexInto(src, toksOf(b), &w.lex)
-\tif err != nil { panic(lexError(src, err)) }
+\tif err != nil { return p, spanned{}, false, err }
 \t*p = parserW{cursor: cursor{toks: toks}, src: src, b: b, drops: dropsOf(b), scratch: p.scratch[:0]${reuse ? ', entries: p.entries[:0], entryHs: p.entryHs[:0]' : ''}}
 \tfr, ok := p.parse${ir.entry}W()
 \trecordToks(b, p.toks)
-\tok = ok && p.pos == len(p.toks)
-\tp.cursor.toks, p.src, p.b = nil, "", nil // the workspace keeps buffers, not the input or the builder
-\tif !ok { return 0, false }
-\tif !fr.present { panic(errNoRoot) }
-\treturn fr.h, true
+\treturn p, fr, ok, nil
 }
 
 // errNoRoot: an accepted parse whose builder kept no node for the root (the entry rule). Accepting
@@ -3103,10 +3111,9 @@ const GO_BATCH_TOTAL = `	if len(os.Args) > 1 && os.Args[1] == "batch-total" {
 	}
 `;
 // The emit option `recovery` (src/emit.ts): total parsing's entry, a region appended to the default
-// module and touching none of it. ParseTotal runs the entry rule as parseWithW does, on the builder
-// engine for every builder (owed: one shell for both once the default emission may change); on a
-// reject the recovery family decides the diagnostic from the position the entry stopped at and the
-// tokens the parse examined.
+// module and touching none of it. ParseTotal runs the entry rule as parseWithW does (runW, the
+// builder engine, for every builder); on a reject the recovery family decides the diagnostic from
+// the position the entry stopped at and the tokens the parse examined.
 function recoveryRegionGo(ir: ParserIR, shared: SharedAlgorithms): string {
   const reuse = !!ir.reuse;
   return `
@@ -3134,27 +3141,12 @@ func diagnosticOf(src string, d diag) Diagnostic {
 // root and no errors, a rejected one ok=false and its errors (a lexer error, or the parse's primary
 // error), each with its span in the source. It does not panic on input.
 func ParseTotal(src string, b Builder) (h int32, ok bool, errs []Diagnostic) {
-\tvar w *Workspace
-\tif s, is := b.(*SlimBuilder); is {
-\t\tw = &s.ws
-\t} else if c, is := b.(*CstBuilder); is {
-\t\tw = &c.ws
-\t} else if o, is := b.(WorkspaceOwner); is {
-\t\tw = o.Workspace()
-\t} else {
-\t\tw = &Workspace{}
-\t}
-\tb.Restore(0, 0)
-\tp := &w.w
-\ttoks, err := lexInto(src, toksOf(b), &w.lex)
+\tp, fr, entryOk, err := runW(src, b)
 \tif err != nil {
 \t\tend := err.End
 \t\tif end < err.Off { end = err.Off }
 \t\treturn 0, false, []Diagnostic{{Off: err.Off, End: end, Message: lexError(src, err).Msg}}
 \t}
-\t*p = parserW{cursor: cursor{toks: toks}, src: src, b: b, drops: dropsOf(b), scratch: p.scratch[:0]${reuse ? ', entries: p.entries[:0], entryHs: p.entryHs[:0]' : ''}}
-\tfr, entryOk := p.parse${ir.entry}W()
-\trecordToks(b, p.toks)
 \tok = entryOk && p.pos == len(p.toks)
 \tif !ok {
 \t\t// The examined extent: the furthest of every top-level entry's (lookEnd holds the last one's).

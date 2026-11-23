@@ -63,6 +63,9 @@ export interface LrAnalysis {
   valid(state: number): Set<string>;
   /** The terminals valid in a state through reductions only (lookaheads of completed items). */
   lookahead(state: number): Set<string>;
+  /** The LALR(1) lookahead of each item of a state's closure (in `items` order): the terminals that
+   *  may follow its rule there. */
+  itemLookaheads(state: number): Set<string>[];
 }
 
 export function buildLr(g: LeafGraph, opts: LrOptions = {}): LrAnalysis {
@@ -198,6 +201,7 @@ export function buildLr(g: LeafGraph, opts: LrOptions = {}): LrAnalysis {
   return {
     states, terminals, terminalId,
     lookahead: s => toSet(lookaheadBits(s)),
+    itemLookaheads: s => { const la = closureLa(s); return states[s].items.map((_, i) => toSet(la.subarray(i * W, (i + 1) * W))); },
     valid: s => {
       const m = lookaheadBits(s);
       for (const l of states[s].next) if (g.nt[l] < 0) orTerm(m, 0, l);

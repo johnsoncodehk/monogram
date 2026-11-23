@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { blockBody, elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './emit.ts';
@@ -582,7 +582,9 @@ ${sig ? '            if op == 2 { st.spec_begin(&mut sp, pos); bound = 0; }\n' :
             let (fe, fk, fl, ft, fp, fa, fla) = ${shared.elementFn('frame')}(src, pos as isize, fr as isize, st.tag_angle, after_eq, st.la_end);
             st.la_end = fla;
             if fe >= 0 {
-                st.emit(pos, fe as usize, fk as u16, fl as u16);
+${elementSkipsText(ir) ? `                // a skipped text token (a comment in text): no token
+                if fk < 0 { if _lx_has_line_term(&b[pos..fe as usize]) { st.pending_nl = true; } pos = fe as usize; continue; }
+` : ''}                st.emit(pos, fe as usize, fk as u16, fl as u16);
 ${raw ? `                // each element frame's current tag: the index of its tagOpen token (the name is the next)
                 if fl as u16 == _LID_EL_OPEN { let at = st.acc.len() as i64 - 1; if fp == 6 { st.tag_at.push(at); } else if (fr >> 2) & 3 == 0 { *st.tag_at.last_mut().unwrap() = at; } }
 ` : ''}                if ft < 0 { st.template_stack.pop();${raw ? ' st.tag_at.pop();' : ''} st.el_end_at = st.acc.len() as isize; } else { *st.template_stack.last_mut().unwrap() = ft as i64; }
@@ -2726,7 +2728,9 @@ ${matchTemplate}${lookFns(ir, ids, ar)}${sharedFns(ir, ids, ar)}${ruleFns}
 function emitParseWithHelpers(ir: ParserIR, shapeB: boolean): string {
   const reuse = !!ir.reuse;
   return `
-pub fn parse_with<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> Option<B::H> {
+// Inlined: built in the caller's frame, so the parser is never moved.
+#[inline(always)]
+fn parse_begin<'x, 'a, B: Builder + Default>(src: &'a str, b: &'x mut B) -> ParseGuard<'x, 'a, B> {
     // A builder that parsed before is reused: its token buffer, arena and workspace are emptied
     // (capacity kept), so nothing of the previous parse stays reachable and nothing is allocated
     // again. The guard hands them back to the builder when the parse ends, also by a panic (input
@@ -2736,7 +2740,11 @@ pub fn parse_with<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> Option<B
     let ws = b.workspace_mut().map(std::mem::take).unwrap_or_default();
     b.restore((0, 0));
     let owned = std::mem::take(b);
-    let mut g = ParseGuard { home: b, lex: ws.lex, p: Parser { toks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src, b: owned, scratch: ws.scratch${reuse ? ', entries: ws.entries' : ''} } };
+    ParseGuard { home: b, lex: ws.lex, p: Parser { toks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src, b: owned, scratch: ws.scratch${reuse ? ', entries: ws.entries' : ''} } }
+}
+
+pub fn parse_with<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> Option<B::H> {
+    let mut g = parse_begin(src, b);
     let p = &mut g.p;
     if let Some(e) = lex_into(src, &mut p.toks, &mut g.lex) { panic!("{}", lex_error(src, e).msg); }
     p.scratch.clear();
@@ -5713,9 +5721,9 @@ ${emitParseWithHelpers(ir, shapeB)}
 }
 
 // The emit option `recovery` (src/emit.ts): total parsing's entry, a region appended to the default
-// module and touching none of it. parse_total runs the entry rule as parse_with does (owed: one
-// shell for both once the default emission may change); on a reject the recovery family decides
-// the diagnostic from the position the entry stopped at and the tokens the parse examined.
+// module and touching none of it. parse_total runs the entry rule as parse_with does (parse_begin
+// its setup); on a reject the recovery family decides the diagnostic from the position the entry
+// stopped at and the tokens the parse examined.
 function recoveryRegionRust(ir: ParserIR, shared: SharedAlgorithms): string {
   const reuse = !!ir.reuse;
   return `
@@ -5739,11 +5747,7 @@ fn diagnostic_of(src: &str, d: Diag) -> Diagnostic {
 /// no errors, a rejected one None and its errors (a lexer error, or the parse's primary error), each
 /// with its span in the source. It does not panic on input.
 pub fn parse_total<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> (Option<B::H>, Vec<Diagnostic>) {
-    let toks = b.toks_mut().map(std::mem::take).unwrap_or_default();
-    let ws = b.workspace_mut().map(std::mem::take).unwrap_or_default();
-    b.restore((0, 0));
-    let owned = std::mem::take(b);
-    let mut g = ParseGuard { home: b, lex: ws.lex, p: Parser { toks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src, b: owned, scratch: ws.scratch${reuse ? ', entries: ws.entries' : ''} } };
+    let mut g = parse_begin(src, b);
     let p = &mut g.p;
     if let Some(e) = lex_into(src, &mut p.toks, &mut g.lex) {
         let end = if e.end > e.off { e.end as usize } else { e.off as usize };
