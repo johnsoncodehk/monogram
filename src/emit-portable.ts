@@ -636,6 +636,9 @@ export type ParserIR = {
   /** The tokens that can begin a top-level entry of a reuse plan A (FIRST over concrete symbols of
    *  its rules), where total parsing's fallback resumes; null: none known. */
   entrySync: FirstSig;
+  /** The display names of rules that declare one (RuleDecl.label), by rule name: what a missing
+   *  rule's `expected …` diagnostic names (total parsing); a rule without one is named by its name. */
+  ruleLabels: Record<string, string>;
   suppressSets: string[][];    // the connector sets `suppress` steps disable, indexed by Step.set; [0] is the empty set
   regexCtx: RegexCtx | null;   // null unless the grammar has a regex token with context
   tpl: TplCfg | null;          // null unless the grammar has a template token
@@ -1478,7 +1481,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
     const f = new Set(reuse.rules.flatMap((r) => [...concrete.first1({ type: 'ref', name: r })]));
     entrySync = { lits: [...f].filter((x) => !x.startsWith(KIND)), toks: [...f].filter((x) => x.startsWith(KIND)).map((x) => x.slice(KIND.length)) };
   }
-  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse, entrySync, suppressSets, regexCtx, tpl, elements, newlineCfg, identToken, identLike, identPrefix, identClasses: identifierClassesOf(grammar.tokens) };
+  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse, entrySync, ruleLabels: Object.fromEntries(grammar.rules.flatMap((r) => (r.label === undefined ? [] : [[r.name, r.label]]))), suppressSets, regexCtx, tpl, elements, newlineCfg, identToken, identLike, identPrefix, identClasses: identifierClassesOf(grammar.tokens) };
 }
 
 // The step lists a rule runs: an rd rule's alternatives, a Pratt rule's NUD and LED arms.

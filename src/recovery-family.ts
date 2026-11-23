@@ -28,8 +28,9 @@ export const DIAG: RecordDecl = {
 // its kid) the parse supplied where it was missing, a zero-width `$missing` node; tokens the parse
 // skipped, an `$error` node over them (arg: the end of its first token; at the end of input, off).
 // The strict parse's error (stage 1, the interpreter's primary error): the entry rule failed at a
-// token; it failed with no token left; it matched and a token is left over.
-export const DK_MISS_LIT = 0, DK_MISS_TOK = 1, DK_SKIP = 2, DK_UNEXPECTED = 3, DK_EOF = 4, DK_LEFTOVER = 5;
+// token; it failed with no token left; it matched and a token is left over. A required operand of a
+// Pratt rule the parse supplied, a zero-width `$missing` node (arg: the rule's id).
+export const DK_MISS_LIT = 0, DK_MISS_TOK = 1, DK_SKIP = 2, DK_UNEXPECTED = 3, DK_EOF = 4, DK_LEFTOVER = 5, DK_MISS_RULE = 6;
 // The best candidate of a longest match so far (riCand): where it ended, its node's offset, whether
 // one won, the node's form, tail and capped flag, and where the repair memory stood when the
 // match began (h0) and where the best's repairs end (hb).
@@ -47,8 +48,9 @@ const tok = (i: Expr, f: 'off' | 'end'): Expr => ({ k: 'tokInt', t: { k: 'at', l
 const ret = (...es: Expr[]): Stmt => ({ k: 'return', es });
 const diag = (kind: Expr, off: Expr, end: Expr, relOff: Expr, relEnd: Expr, arg: Expr = n(0)): Expr => ({ k: 'mkRec', rec: 'Diag', fields: { kind, off, end, relOff, relEnd, arg } });
 
-// The message of a diagnostic of src.
-const diagMessage: Fn = {
+// The message of a diagnostic of src. A missing rule is named by its label (`rule(..., { label })`,
+// RuleDecl.label: [rule id, label] in `labels`), else by its name.
+const diagMessageOf = (labels: [number, string][]): Fn => ({
   name: 'diagMessage',
   doc: '',
   params: [{ name: 'src', ty: 'str' }, { name: 'd', ty: 'rec_Diag' }],
@@ -56,6 +58,10 @@ const diagMessage: Fn = {
   body: [
     { k: 'if', c: bin('eq', fld(v('d'), 'kind'), n(DK_MISS_LIT)), then: [ret({ k: 'cat', parts: [s("expected '"), { k: 'call', fn: 'litText', args: [fld(v('d'), 'arg')] }, s("'")] })] },
     { k: 'if', c: bin('eq', fld(v('d'), 'kind'), n(DK_MISS_TOK)), then: [ret({ k: 'cat', parts: [s('expected '), { k: 'call', fn: 'kindText', args: [fld(v('d'), 'arg')] }] })] },
+    { k: 'if', c: bin('eq', fld(v('d'), 'kind'), n(DK_MISS_RULE)), then: [
+      ...labels.map(([rid, label]): Stmt => ({ k: 'if', c: bin('eq', fld(v('d'), 'arg'), n(rid)), then: [ret(s(`expected ${label}`))] })),
+      ret({ k: 'cat', parts: [s('expected '), { k: 'call', fn: 'ruleText', args: [fld(v('d'), 'arg')] }] }),
+    ] },
     { k: 'if', c: bin('eq', fld(v('d'), 'kind'), n(DK_SKIP)), then: [
       { k: 'if', c: bin('eq', fld(v('d'), 'arg'), fld(v('d'), 'off')), then: [ret(s('unexpected end of input'))] },
       ret({ k: 'cat', parts: [s("unexpected '"), { k: 'substr', s: v('src'), a: fld(v('d'), 'off'), b: fld(v('d'), 'arg') }, s("'")] }),
@@ -65,7 +71,7 @@ const diagMessage: Fn = {
     { k: 'if', c: bin('eq', fld(v('d'), 'kind'), n(DK_LEFTOVER)), then: [ret({ k: 'cat', parts: [v('text'), s(' after successful parse')] })] },
     ret(v('text')),
   ],
-};
+});
 
 // The message of a diagnostic's related location (relOff >= 0).
 const diagRelated: Fn = {
@@ -153,15 +159,15 @@ export const ENGINE_EXTERNS: Fn[] = [
   // back to it, so the repairs a losing attempt recorded vanish with its nodes.
   extR('enRm', [['i', 'int']], ['int']), ext('enRmSet', [['i', 'int'], ['v', 'int']]), extR('enRmLen', [], ['int']), ext('enRmPush', [['v', 'int']]), ext('enRmCut', [['n', 'int']]),
   // A node of rule r with no children at the position (zero-width: at its token, or after the last
-  // token at the end of input), appended to the list.
+  // token at the end of input), appended to the list (its offset: enFinOff).
   ext('enMiss', [['r', 'int']]),
   // The examined extent (one past the furthest token examined: lookEnd), and its reset to e.
   extR('enLookEnd', [], ['int']), ext('enLookSet', [['e', 'int']]),
 ];
-// The text of a literal (by lid) and the name of a token kind (by kid): the words of a repair's
-// message (each target prints them over its own tables).
+// The text of a literal (by lid), the name of a token kind (by kid) and of a rule (by id): the
+// words of a repair's message (each target prints them over its own tables).
 const textExt = (name: string): Fn => ({ name, doc: '', params: [{ name: 'x', ty: 'int' }], ret: ['str'], body: [], extern: true });
-export const TEXT_EXTERNS: Fn[] = [textExt('litText'), textExt('kindText')];
+export const TEXT_EXTERNS: Fn[] = [textExt('litText'), textExt('kindText'), textExt('ruleText')];
 // The repair memory's layout: whether a total parse is recovering; the farthest token index a
 // required literal / token / NUD failed at in this attempt (-1: none); where the innermost probe
 // began (an optional, a repetition's element, an ordered branch: no repair before it consumed;
@@ -173,6 +179,10 @@ export const ST_CAPPED = 0, ST_FORM = 1, ST_TAIL = 2, ST_SUP_NEXT = 3, ST_SUP_CU
 const ST_ALL = [ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, ST_CTX];
 
 const T = (i: Expr): Expr => ({ k: 'tab', t: 'rt', i });
+// The trailer of the plan's table ([2 + N] holds its index): the rule ids of `$error`, `$missing`
+// and the entry rule; the top-level element (-1: the scope is the whole input); the FIRST
+// signature of a top-level entry (-1: unknown).
+const TR = (k: number): Expr => bin('add', T(bin('add', n(2), T(n(0)))), n(k));
 const add = (a: Expr, b: Expr): Expr => bin('add', a, b);
 const sub = (a: Expr, b: Expr): Expr => bin('sub', a, b);
 const eq = (a: Expr, b: Expr): Expr => bin('eq', a, b);
@@ -479,16 +489,22 @@ const nudCand = (ok: Expr, form: Expr, tail: Expr, capped: Expr, fromTail?: Expr
 ];
 // The NUD: every arm a candidate of a longest match. It returns whether one matched and the
 // offset of its node, and leaves the node's capped flag, form and tail in the engine.
+// When no arm matches (the operand a Pratt rule requires is not there) and a repair fires (riRep),
+// the operand is repaired (stage 3, the NUD repairs): the token at the position is extra (an
+// `$error` node over it, then the NUD from the token after, as a probe: no repair at its first
+// token) when that matches, else the operand is supplied, a zero-width `$missing` node and its
+// repair record `expected <rule>`, a target (form 0, so an operator that requires one takes it).
+// The one that matches ends farther, so the order is the longest match's.
 const riNud = method('riNud', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d', 'int']], ['bool', 'int'], [
   run('enSetSt', n(ST_CAPPED), n(0)),
   let_('kid', call('enPeekKid')),
-  if_(lt(v('kid'), n(0)), [ret(fls, n(0))]),
   let_('lid', call('enPeekLid')),
   let_('save', call('enPos')), let_('sb', call('enSh')),
   { k: 'let', name: 'best', ty: 'rec_BestCand', init: newBest(v('save')) },
   let_('x', add(sec(P_ARMS), n(1))),
   let_('i', n(0)),
-  while_(lt(v('i'), T(sec(P_ARMS))), [
+  // (no arm at the end of input)
+  while_(and(ge(v('kid'), n(0)), lt(v('i'), T(sec(P_ARMS)))), [
     let_('tag', T(v('x'))),
     if_(eq(v('tag'), n(REC_N_TOK)), [
       // A token arm's leaf is offered only when its one-token match would win.
@@ -533,7 +549,30 @@ const riNud = method('riNud', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], [
     ]),
     inc('i'),
   ]),
-  if_(eq(fld(v('best'), 'won'), n(0)), [run('riFail', v('save'))]),
+  if_(and(eq(fld(v('best'), 'won'), n(0)), call('riRep', v('save'))), [
+    if_(ge(v('kid'), n(0)), [
+      let_('ke', call('enMark')),
+      let_('ce', call('enSh')),
+      run('enLeafKid'),
+      run('riErrNode', v('ce'), v('save')),
+      let_('eo', call('enFinOff')),
+      ...probe('pr', [{ k: 'letCall', names: ['oke', 'o2'], call: call('riNud', v('r'), v('rec'), v('minBp'), v('d')) }]),
+      if_(v('oke'), [
+        run('enUnmark', v('ke')),
+        { k: 'setField', name: 'best', f: 'pos', e: call('enPos') },
+        { k: 'setField', name: 'best', f: 'off', e: v('eo') },
+        { k: 'setField', name: 'best', f: 'won', e: n(1) },
+        { k: 'setField', name: 'best', f: 'form', e: call('enSt', n(ST_FORM)) },
+        { k: 'setField', name: 'best', f: 'tail', e: call('enSt', n(ST_TAIL)) },
+        { k: 'setField', name: 'best', f: 'capped', e: call('enSt', n(ST_CAPPED)) },
+      ], [run('enReset', v('ke')), run('enUnmark', v('ke'))]),
+    ]),
+    if_(eq(fld(v('best'), 'won'), n(0)), [
+      run('riRepNode', T(TR(1)), n(DK_MISS_RULE), v('r')),
+      { k: 'setField', name: 'best', f: 'off', e: call('enFinOff') },
+      { k: 'setField', name: 'best', f: 'won', e: n(1) },
+    ]),
+  ]),
   // A sub-parse may leave the capped flag set: only a capped arm that won makes this node capped.
   run('enSetSt', n(ST_CAPPED), fld(v('best'), 'capped')), run('enSetSt', n(ST_FORM), fld(v('best'), 'form')), run('enSetSt', n(ST_TAIL), fld(v('best'), 'tail')),
   ...wonPos,
@@ -644,10 +683,6 @@ const riBpOf = (rebind: boolean): Fn => method('riBpIn', [['r', 'int'], ['rec', 
 // interpreted. A frame that failed is interpreted, so a failure's position is known.
 const INF = 1 << 30;
 const rm = (i: number): Expr => call('enRm', n(i));
-// The trailer of the plan's table ([2 + N] holds its index): the rule ids of `$error`, `$missing`
-// and the entry rule; the top-level element (-1: the scope is the whole input); the FIRST
-// signature of a top-level entry (-1: unknown).
-const TR = (k: number): Expr => add(T(add(n(2), T(n(0)))), n(k));
 // Cells [a, b) of the repair memory removed (the cells after them moved down).
 const riRmDrop = method('riRmDrop', [['a', 'int'], ['b', 'int']], [], [
   let_('ln', call('enRmLen')),
@@ -674,30 +709,40 @@ const riMatch = method('riMatch', [['op', 'int'], ['x', 'int']], ['bool'], [
   if_(eq(v('op'), n(REC_S_COMP)), [ret(call('enComp', v('x')))]),
   ret(call('enTok', v('x'))),
 ]);
-// A required literal or token (step op, x its lid / kid) is not at the position. When a bar is near
-// and no probe is still unconsumed it is repaired: when it is the token after, the token at the
-// position is extra (an `$error` node over it, then the match); else it is supplied (a `$missing`
-// node). Otherwise a failure.
-const riMiss = method('riMiss', [['op', 'int'], ['x', 'int']], ['bool'], [
-  let_('p', call('enPos')),
+// Whether a repair fires at token p (where a required item failed): a bar is near (in [p, p + 2])
+// and no probe is still unconsumed there; else the failure is recorded.
+const riRep = method('riRep', [['p', 'int']], ['bool'], [
   let_('pr', rm(RM_PROBE)),
   if_(or(and(ge(v('pr'), n(0)), bin('le', v('p'), v('pr'))), not(call('riBarIn', v('p'), add(v('p'), n(2))))), [run('riFail', v('p')), ret(fls)]),
+  ret(tru),
+]);
+// An `$error` node over the leaves from height c, the tokens from p to the position, and its repair.
+const riErrNode = method('riErrNode', [['c', 'int'], ['p', 'int']], [], [
+  run('enFinLed', T(TR(0)), v('c'), n(0), v('p')),
+  run('enRmPush', n(DK_SKIP)), run('enRmPush', v('p')), run('enRmPush', call('enPos')),
+]);
+// A zero-width node of rule r at the position, and its repair (kind, the position, arg).
+const riRepNode = method('riRepNode', [['r', 'int'], ['kind', 'int'], ['arg', 'int']], [], [
+  run('enMiss', v('r')),
+  run('enRmPush', v('kind')), run('enRmPush', call('enPos')), run('enRmPush', v('arg')),
+]);
+// A required literal or token (step op, x its lid / kid) is not at the position. When a repair
+// fires it is repaired: when it is the token after, the token at the position is extra (an `$error`
+// node over it, then the match); else it is supplied (a `$missing` node). Otherwise a failure.
+const riMiss = method('riMiss', [['op', 'int'], ['x', 'int']], ['bool'], [
+  let_('p', call('enPos')),
+  if_(not(call('riRep', v('p'))), [ret(fls)]),
   if_(ge(call('enPeekKid'), n(0)), [
     let_('k', call('enMark')),
     let_('c', call('enSh')),
     run('enLeafKid'),
-    run('enFinLed', T(TR(0)), v('c'), n(0), v('p')),
-    if_(call('riMatch', v('op'), v('x')), [
-      run('enUnmark', v('k')),
-      run('enRmPush', n(DK_SKIP)), run('enRmPush', v('p')), run('enRmPush', add(v('p'), n(1))),
-      ret(tru),
-    ]),
+    run('riErrNode', v('c'), v('p')),
+    if_(call('riMatch', v('op'), v('x')), [run('enUnmark', v('k')), ret(tru)]),
     run('enReset', v('k')), run('enUnmark', v('k')),
   ]),
-  run('enMiss', T(TR(1))),
   let_('kind', n(DK_MISS_LIT)),
   if_(eq(v('op'), n(REC_S_TOK)), [set('kind', n(DK_MISS_TOK))]),
-  run('enRmPush', v('kind')), run('enRmPush', v('p')), run('enRmPush', v('x')),
+  run('riRepNode', T(TR(1)), v('kind'), v('x')),
   ret(tru),
 ]);
 // Native-first (recovering only): rule r (bp < 0) or Pratt rule r at bp, natively; kept when it
@@ -780,7 +825,7 @@ const riAttempts = method('riAttempts', [['el', 'int'], ['upto', 'int']], ['bool
 const riSkip = method('riSkip', [['el', 'int'], ['sync', 'int']], [], [
   let_('p0', call('enPos')),
   let_('c', call('enSh')),
-  if_(lt(call('enPeekKid'), n(0)), [run('enMiss', T(TR(0))), run('enRmPush', n(DK_SKIP)), run('enRmPush', v('p0')), run('enRmPush', v('p0')), ret()]),
+  if_(lt(call('enPeekKid'), n(0)), [run('riRepNode', T(TR(0)), n(DK_SKIP), v('p0')), ret()]),
   run('enLeafKid'),
   while_(ge(call('enPeekKid'), n(0)), [
     if_(and(ge(v('el'), n(0)), or(lt(v('sync'), n(0)), call('riSig', v('sync')))), [
@@ -793,8 +838,7 @@ const riSkip = method('riSkip', [['el', 'int'], ['sync', 'int']], [], [
     ]),
     run('enLeafKid'),
   ]),
-  run('enFinLed', T(TR(0)), v('c'), n(0), v('p0')),
-  run('enRmPush', n(DK_SKIP)), run('enRmPush', v('p0')), run('enRmPush', call('enPos')),
+  run('riErrNode', v('c'), v('p0')),
 ]);
 // The total parse from the first token: the entry rule's node over every top-level entry (each
 // parsed by its attempts, or skipped), or over the whole input; its repairs in the repair memory
@@ -867,15 +911,15 @@ const riRbStep = method('riRbStep', [['x', 'int'], ['k', 'int'], ['d', 'int']], 
 
 // `rebind`: the grammar has a re-bind (the interpreter's then calls the engine's rbBracket and
 // marks, printed with the native forms).
-export function recoveryFamilyFns(rebind: boolean, ids?: LexIdPlan): Fn[] {
-  return [rejectDiag, repairDiag, diagMessage, diagRelated, riRef, riSig, riIn, riGuard, riGuardIn, riRule, riCand, riRd, riRdIn, riList, riStep, riOperand, riOp, riNud, riBp, riBpOf(rebind),
-    riRmDrop, riBarIn, riFail, riMatch, riMiss, riNat, riUnit, riAttempts, riSkip, riTotal, ...ENGINE_EXTERNS, ...TEXT_EXTERNS,
+export function recoveryFamilyFns(rebind: boolean, ids?: LexIdPlan, labels: [number, string][] = []): Fn[] {
+  return [rejectDiag, repairDiag, diagMessageOf(labels), diagRelated, riRef, riSig, riIn, riGuard, riGuardIn, riRule, riCand, riRd, riRdIn, riList, riStep, riOperand, riOp, riNud, riBp, riBpOf(rebind),
+    riRmDrop, riBarIn, riFail, riMatch, riRep, riErrNode, riRepNode, riMiss, riNat, riUnit, riAttempts, riSkip, riTotal, ...ENGINE_EXTERNS, ...TEXT_EXTERNS,
     ...(rebind ? [riRbStep, RI_RB_SCAN, rbBracketFn(ids!), ...REBIND_EXTERNS, ...RB_EXTERNS_INTERP] : [])];
 }
 
 // The family for a grammar: the functions, the record Diag and the plan's int table `rt`.
 // `methods`: print only the engine methods (true), only the free functions (false), or all.
 // rbBracket is the native forms' (printed with them).
-export function emitRecoveryFamily(L: Lowering, rt: number[], methods: boolean | undefined, rebind: boolean, ids: LexIdPlan): string {
-  return printFns(L, recoveryFamilyFns(rebind, ids), [], [DIAG, BEST], [{ name: 'rt', data: rt }], (f) => f.name !== 'rbBracket' && (methods === undefined || (f.method === true) === methods), methods !== true);
+export function emitRecoveryFamily(L: Lowering, rt: number[], methods: boolean | undefined, rebind: boolean, ids: LexIdPlan, labels: [number, string][] = []): string {
+  return printFns(L, recoveryFamilyFns(rebind, ids, labels), [], [DIAG, BEST], [{ name: 'rt', data: rt }], (f) => f.name !== 'rbBracket' && (methods === undefined || (f.method === true) === methods), methods !== true);
 }

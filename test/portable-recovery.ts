@@ -3,7 +3,7 @@ import type { CstGrammar } from '../src/types.ts';
 import { mutationCorpus } from './mutation-corpus.ts';
 import { CURATED_TS } from './emit-corpus.ts';
 import { ECMASCRIPT, canon, finish, gate, parityCorpus, prepareAll, selectedCases, primaryLexMsg, type Case, type DiagRow, type Outcome, type Runner, type Total } from './portable-harness.ts';
-import { checkContract, summarize, type ContractRow } from './recovery-contract.ts';
+import { checkContract, summarize, withOperandSamples, type ContractRow } from './recovery-contract.ts';
 import { RM_MAX_BARS } from '../src/recovery-family.ts';
 import type { Tok } from './parity-corpus.ts';
 import { portableIR, type PortableFacts } from '../src/emit-portable.ts';
@@ -91,9 +91,11 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
   const ascii = srcs.map((s) => /^[\x00-\x7f]*$/.test(s));
   const nRules = portableIR(grammar).rules.length;
   const lex = runners.find((r) => r.lexToks)!.lexToks!;
-  // A sample token of each kind that is no literal, for P10's `expected <Kind>` repairs.
-  const samples = new Map<string, string>();
-  for (const a of c.accept) for (const t of lex(a) ?? []) if (t.kind !== '' && t.lid === 0 && !samples.has(t.kind)) samples.set(t.kind, t.text);
+  // A sample token of each kind that is no literal, for P10's `expected <Kind>` repairs, and a
+  // minimal operand of each Pratt rule, for its `expected <Rule>` (withOperandSamples).
+  const kindSamples = new Map<string, string>();
+  for (const a of c.accept) for (const t of lex(a) ?? []) if (t.kind !== '' && t.lid === 0 && !kindSamples.has(t.kind)) kindSamples.set(t.kind, t.text);
+  const samples = withOperandSamples(portableIR(grammar), kindSamples);
   const mutantSet = new Set(mutants);
   let ref: Total[] | null = null;
   for (const r of runners) {

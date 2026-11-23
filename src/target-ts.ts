@@ -3525,11 +3525,12 @@ function enRmSet(i: number, v: number): void { _rm[i] = v; }
 function enRmLen(): number { return _rm.length; }
 function enRmPush(v: number): void { _rm.push(v); }
 function enRmCut(n: number): void { _rm.length = n; }
-function enMiss(r: number): void { const off = pos < toks.length ? toks[pos]!.off : pos > 0 ? toks[pos - 1]!.end : 0; _put(_RNAMES[r]!, _n, off, off, pos, off, off); }
+function enMiss(r: number): void { const off = pos < toks.length ? toks[pos]!.off : pos > 0 ? toks[pos - 1]!.end : 0; _put(_RNAMES[r]!, _n, off, off, pos, off, off); _rfinOff = off; }
 function enLookEnd(): number { return lookEnd(); }
 function enLookSet(e: number): void { maxLook = e; peekEnd = 0; }
 function litText(x: number): string { return _LIDS[x]!; }
 function kindText(x: number): string { return KIND_STR[x]!; }
+function ruleText(x: number): string { return _RNAMES[x]!; }
 // A fresh repair memory: not recovering, no failure, no probe, no frame, no attempt, no bar.
 function _rmFresh(): void { _rm = new Array<number>(${RM_DIAGS}).fill(0); _rm[${RM_FAIL}] = -1; _rm[${RM_PROBE}] = -1; _rm[${RM_SP}] = -1; }
 function enWin(r: number, c: number, save: number, sb: number): void { finR(_RNAMES[r]!, c, save); _rfinOff = _sp[c * _SW]!; _keep(sb, c); }
