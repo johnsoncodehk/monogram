@@ -16,7 +16,9 @@
 //
 //   node test/define-target.ts
 import { readFileSync } from 'node:fs';
-import { tsTarget, goTarget, rustTarget } from '../src/emit.ts';
+import { tsTarget } from '../src/target-ts.ts';
+import { goTarget } from '../src/target-go.ts';
+import { rustTarget } from '../src/target-rust.ts';
 import { defineTarget, registeredTargets } from '../src/define-target.ts';
 import { buildLexIdPlan, hasRebind, portableIR } from '../src/emit-portable.ts';
 import { relexFamily, relexFamilyFns, relexMode } from '../src/relex-family.ts';

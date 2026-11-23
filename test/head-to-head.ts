@@ -15,7 +15,8 @@
 // so it reads through a 16KB chunk callback (its documented large-input path).
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { emitParser, jsTarget } from '../src/emit.ts';
+import { emitParser } from '../src/target.ts';
+import { jsTarget } from '../src/emit-parser.ts';
 import { writeFileSync } from 'node:fs';
 import ts from 'typescript';
 import { scratchDir } from './scratch.ts';

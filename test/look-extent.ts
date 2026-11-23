@@ -26,7 +26,10 @@
 //   node test/look-extent.ts
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
-import { emitParser, tsTarget, goTarget, rustTarget } from '../src/emit.ts';
+import { emitParser } from '../src/target.ts';
+import { tsTarget } from '../src/target-ts.ts';
+import { goTarget } from '../src/target-go.ts';
+import { rustTarget } from '../src/target-rust.ts';
 import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
 import { asGoMain } from './go-main.ts';
 import { parityInputs, type Tok } from './parity-corpus.ts';

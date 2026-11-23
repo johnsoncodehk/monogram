@@ -6,8 +6,13 @@
 // grammar, the recovery emission's default prefix, and the refusal of an entry rule that must
 // choose its empty alternative.
 import { writeFileSync } from 'node:fs';
-import { emitParser, jsTarget, tsTarget, goTarget, rustTarget } from '../src/emit.ts';
+import { emitParser } from '../src/target.ts';
+import { jsTarget } from '../src/emit-parser.ts';
+import { tsTarget } from '../src/target-ts.ts';
+import { goTarget } from '../src/target-go.ts';
+import { rustTarget } from '../src/target-rust.ts';
 import { objectify } from './emitted-obj.ts';
+import { runsTarget } from './check-targets.ts';
 import { applyEdits, canon, errText, gate, finish, prepareAll, primaryLexMsg, runTokSpans, UNICODE_ACCEPT, skeleton, type EditBatch, type Outcome, type Runner } from './portable-harness.ts';
 
 /** Reject cases. `lexMsg` set ⇒ expect that primary lexer message (≡ oracle). */
@@ -258,7 +263,7 @@ for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll(
   // (its contract, emit-parser-verify.ts). Its suppress gates (the no-`in` for-heads of
   // NO_IN_HEADS) are compiled from the grammar analysis like the portable targets', by a
   // different emitter, so they are checked here too.
-  {
+  if (runsTarget('js')) {
     const jsFile = `${dir}/js.mts`;
     writeFileSync(jsFile, emitParser(grammar, jsTarget));
     const js = await import(jsFile);
@@ -324,7 +329,7 @@ for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll(
   const Num = token(seq(range('0', '9'), star(range('0', '9'))), { scope: 'constant.numeric' });
   const Program = rule(() => [[Num, ';'], [many(Num)]]);
   const g = defineGrammar({ name: 'emptyentry', scopeName: 'source.emptyentry', tokens: { Number: Num }, prec: [], rules: { Program } });
-  for (const [label, target] of [['typescript', tsTarget], ['go', goTarget], ['rust', rustTarget]] as const) {
+  for (const [label, target] of ([['typescript', tsTarget], ['go', goTarget], ['rust', rustTarget]] as const).filter(([l]) => l === 'typescript' || runsTarget(l))) {
     let msg = '';
     try { emitParser(g, target); } catch (e) { msg = errText(e); }
     if (/entry rule Program has several alternatives and can match the empty input/.test(msg)) continue;
