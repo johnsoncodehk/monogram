@@ -1026,6 +1026,8 @@ const CASES: Case[] = [
   {
     grammar: 'typescriptreact', path: '../typescriptreact.ts',
     accept: [
+      // a template literal type in a tag's type arguments: its closer brings the tag frame back on top
+      'x = <C<`a${string}`> />;', 'x = <C<`a${string}b`>>t</C>;',
       'x = <a b="c" d={e}>t {f} <g/> h</a>;', 'x = <></>;', 'x = a < b > c;', 'x = <a>{`t${<b/>}`}</a>;',
       'f = <T,>(x: T) => x;', 'f = <T extends U>(x: T) => x;', 'f = <T>(x: T) => x;', 'f = <T>(x): T => x;',
       "x = <b>(it's)</b>;", 'x = <b>(x) y</b>;', 'type F = <T>(x: T) => T;', 'x = <List<string>>t</List>;',
