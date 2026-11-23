@@ -5381,7 +5381,7 @@ pub fn parse_ast(src: &str) -> Option<AstRoot<'_>> {
 `;
 }
 
-const RS_ELEM: Record<Exclude<ListTy, `recs_${string}`>, string> = { metas: 'AlignMeta', toks: 'Tok', bools: 'bool', depths: 'i64', edits: 'Edit' };
+const RS_ELEM: Record<Exclude<ListTy, `recs_${string}`>, string> = { metas: 'AlignMeta', toks: 'Tok', bools: 'bool', depths: 'i64', ints: 'isize', edits: 'Edit' };
 const RS_SCALAR: Record<string, string> = { int: 'isize', lid: 'u16', depth: 'i64', pos: 'u32', idx: 'usize', bool: 'bool', meta: 'AlignMeta', tok: 'Tok' };
 const RS_META: Record<MetaInt, string> = { off: 'u32', end: 'u32', kid: 'u16', pd: 'u16', fd: 'u16', td: 'u8' };
 const RS_TOK: Record<TokInt, string> = { off: 'u32', end: 'u32', kid: 'u16', lid: 'u16' };
@@ -5507,7 +5507,8 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
         (r.prec < p || r.prec === RS_CAST || (right && r.prec === p) || ((op === 'shr' || op === 'shl') && r.prec < ATOM) || (COMPARISON.has(op) && r.prec >= 3 && r.prec <= 4) ? `(${r.c})` : r.c);
       return { c: `${side(a, false)} ${sp} ${side(b, true)}`, prec: p };
     },
-    call: (name, args) => `${name}(${args.join(', ')})`,
+    // An engine method is one of the recovery engine (`self`).
+    call: (name, args, method) => `${method ? 'self.' : ''}${name}(${args.join(', ')})`,
     len: (cx, l) => cx.atom(`${rsWrap(l, ATOM)}.len()`, 'int', 'usize'),
     code: (cx, s, i) => ({ c: `${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}] as u32`, ty: 'int', nat: 'u32', prec: RS_CAST }),
     hasAt: (cx, s, i, lit) => cx.atom(`${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}..].starts_with(${J(lit)}.as_bytes())`, 'bool', 'bool'),
@@ -5521,6 +5522,8 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
     findAny: (cx, s, i, stops) => cx.atom(`${findAnyName(stops)}(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')})`, 'int', 'usize'),
     // One allocation: format! sizes the string from its arguments (&str or String alike).
     cat: (cx, parts) => cx.atom(`format!("${'{}'.repeat(parts.length)}", ${parts.map((r) => r.c).join(', ')})`, 'str', 'str', { owned: true }),
+    // The decoded table is a field of the recovery engine (a slice of a table decoded once, OnceLock).
+    tab: (cx, name, i) => cx.atom(`self.tab_${snake(name)}[${cx.coerce(i, 'usize')}]`, 'int', 'isize'),
     own: (cx, r) => {
       if (r.ty === 'str') return cx.atom(`${rsWrap(r, ATOM)}.to_string()`, 'str', 'str', { owned: true });
       if (isList(r.ty)) return cx.atom(`${rsWrap(r, ATOM)}.to_vec()`, r.ty, r.ty, { owned: true });
@@ -5546,11 +5549,12 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
       // Out of line only: `#[cold]` on the identifier escape scanners moved lex_from's register layout
       // (+0.2% to +0.4% lexer instructions on real inputs, profile runs 45034540295 / 45035043707).
       ...(f.cold ? ['#[inline(never)]'] : []),
-      `fn ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')})${f.rets.length === 0 ? '' : ` -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`}`} {`,
+      `fn ${f.name}(${[...(f.method ? ['&mut self'] : []), ...f.params.map((p) => `${p.name}: ${p.type}`)].join(', ')})${f.rets.length === 0 ? '' : ` -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`}`} {`,
       ...rsBlock(f.body),
       '}',
     ].join('\n'),
   },
+  intTable: (name, packed) => `const TABS_${snake(name).toUpperCase()}: &str = ${J(packed)};`,
   relex: {
     index: 'usize',
     expr: {

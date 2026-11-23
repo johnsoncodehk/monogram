@@ -3044,7 +3044,7 @@ export function parseAst(src: string, opts?: { customs?: AstCustoms }): ${rootTy
 
 const TS_TYPES: Record<Ty, string> = {
   int: 'number', lid: 'number', depth: 'number', pos: 'number', idx: 'number', bool: 'boolean', str: 'string', meta: 'AlignMeta', tok: 'Tok', edit: 'Edit',
-  metas: 'AlignMeta[]', toks: 'Tok[]', bools: 'boolean[]', depths: 'number[]', edits: 'Edit[]',
+  metas: 'AlignMeta[]', toks: 'Tok[]', bools: 'boolean[]', depths: 'number[]', ints: 'number[]', edits: 'Edit[]',
 };
 // Operator spelling and binding strength; unary is 90, a negative literal 7.
 const TS_OPS: Record<BinOp, [string, number]> = {
@@ -3103,7 +3103,10 @@ function ${findAnyName(stops)}(s: string, i: number): number {
     findAny: (cx, s, i, stops) => cx.atom(`${findAnyName(stops)}(${s.c}, ${i.c})`, 'int', 'number'),
     own: (_cx, r) => r,
     cat: (_cx, parts) => ({ c: parts.map((r) => tsWrap(r, TS_OPS.add[1] + 1)).join(' + '), ty: 'str', nat: 'str', prec: TS_OPS.add[1] }),
+    // The decoded table is a module variable (the engine is the module), decoded once on first use.
+    tab: (cx, name, i) => cx.atom(`_tab_${name}[${i.c}]`, 'int', 'number'),
   },
+  intTable: (name, packed) => `const _TABS_${name} = ${J(packed)};\nlet _tab_${name}: number[] = [];`,
   stmt: {
     comment: (text) => [`// ${text}`],
     let: (cx, s) => [`${s.reassigned ? 'let' : 'const'} ${s.id}: ${cx.type(s.ty, 'local')} = ${s.r.c};`],

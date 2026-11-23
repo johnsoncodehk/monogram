@@ -2898,7 +2898,7 @@ func SlimJSONWith(b *SlimBuilder, root int32) string {
 
 const GO_TYPES: Record<Ty, string> = {
   int: 'int', lid: 'uint16', depth: 'int', pos: 'int', idx: 'int', bool: 'bool', str: 'string', meta: 'alignMeta', tok: 'Tok', edit: 'Edit',
-  metas: '[]alignMeta', toks: '[]Tok', bools: '[]bool', depths: '[]int', edits: '[]Edit',
+  metas: '[]alignMeta', toks: '[]Tok', bools: '[]bool', depths: '[]int', ints: '[]int', edits: '[]Edit',
 };
 const GO_META: Record<MetaInt, string> = { off: 'int32', end: 'int32', kid: 'uint16', pd: 'uint16', fd: 'uint16', td: 'uint8' };
 const GO_TOK: Record<TokInt, string> = { off: 'uint32', end: 'uint32', kid: 'uint16', lid: 'uint16' };
@@ -3000,7 +3000,8 @@ ${[...ones, ...wides].join('\n')}
         (r.prec < p || (right && r.prec === p) || ((op === 'shr' || op === 'shl') && r.prec < ATOM) || (COMPARISON.has(op) && r.prec >= 3 && r.prec <= 4) ? `(${r.c})` : r.c);
       return { c: `${side(a, false)} ${sp} ${side(b, true)}`, prec: p };
     },
-    call: (name, args) => `${name}(${args.join(', ')})`,
+    // An engine method is one of the recovery engine `rv *recov`.
+    call: (name, args, method) => `${method ? 'rv.' : ''}${name}(${args.join(', ')})`,
     len: (cx, l) => cx.atom(`len(${l.c})`, 'int', 'int'),
     code: (cx, s, i) => cx.atom(`int(${goWrap(s, ATOM)}[${i.c}])`, 'int', 'int'),
     hasAt: (cx, s, i, lit) => cx.atom(`strings.HasPrefix(${goWrap(s, ATOM)}[${i.c}:], ${goLit(lit)})`, 'bool', 'bool'),
@@ -3012,6 +3013,9 @@ ${[...ones, ...wides].join('\n')}
     findAny: (cx, s, i, stops) => cx.atom(`${findAnyName(stops)}(${s.c}, ${i.c})`, 'int', 'int'),
     own: (_cx, r) => r,
     cat: (cx, parts) => ({ ...cx.atom(parts.map((r) => goWrap(r, 7)).join(' + '), 'str', 'str'), prec: 6 }),
+    // The decoded table is a field of the recovery engine, decoded when a run starts: a package-level
+    // table decoded on first use would need sync.Once, and the default module imports no "sync".
+    tab: (cx, name, i) => cx.atom(`rv.tab${name}[${i.c}]`, 'int', 'int'),
   },
   stmt: {
     comment: (text) => [`// ${text}`],
@@ -3035,11 +3039,12 @@ ${[...ones, ...wides].join('\n')}
     fn: (f) => [
       ...f.doc.map((l) => `// ${l}`),
       ...(f.cold ? ['//go:noinline'] : []),
-      `func ${f.name}(${f.params.map((p) => `${p.name} ${p.type}`).join(', ')}) ${f.rets.length === 0 ? '' : f.rets.length === 1 ? `${f.rets[0]} ` : `(${f.rets.join(', ')}) `}{`,
+      `func ${f.method ? '(rv *recov) ' : ''}${f.name}(${f.params.map((p) => `${p.name} ${p.type}`).join(', ')}) ${f.rets.length === 0 ? '' : f.rets.length === 1 ? `${f.rets[0]} ` : `(${f.rets.join(', ')}) `}{`,
       ...goBlock(f.body),
       '}',
     ].join('\n'),
   },
+  intTable: (name, packed) => `const tabS${name} = ${JSON.stringify(packed)}`,
   relex: {
     index: 'int',
     expr: {
