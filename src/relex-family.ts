@@ -1,7 +1,7 @@
 // Relex / scanMeta algorithm family: the incremental token-stream algorithms of the
 // portable Doc (fresh meta scan, windowed relex with resync + suffix adoption, edit
 // application, stream equality) authored once and printed for each target through the
-// `Lowering` it registers with `defineTarget`.
+// `Lowering` it registers with `defineParserTarget`.
 //
 // Boundary: the lexer itself (`lex` / `lexFrom` / lexOne) is still emitted by each target
 // module and is NOT part of this family. The family depends on it through exactly two

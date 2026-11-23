@@ -10,7 +10,7 @@
 //
 // Targets: `jsTarget` (the optimized SoA parser, emit-parser.ts) and the portable
 // `tsTarget`/`goTarget`/`rustTarget` (emit-portable.ts + target-*.ts), each registered by its
-// own module through `defineTarget` (define-target.ts) with the Lowering of the shared algorithms.
+// own module through `defineParserTarget` (define-target.ts) with the Lowering of the shared algorithms.
 import type { CstGrammar } from './types.ts';
 
 // What a portable target emits beyond the default module. `recovery`: total parsing's entry
