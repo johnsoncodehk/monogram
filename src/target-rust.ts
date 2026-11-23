@@ -310,12 +310,12 @@ impl std::error::Error for LexError {}
     };
     LexError { off, msg }
 }
-/// lex for the entry points that panic with a lexer error.
-fn lex_or_panic(src: &str) -> Vec<Tok> {
-    match lex(src) { (toks, None) => toks, (_, Some(e)) => panic!("{}", lex_error(src, e).msg) }
+/// The tokens of src; a lexer error panics with its message.
+fn lex(src: &str) -> Vec<Tok> {
+    match lex_all(src) { (toks, None) => toks, (_, Some(e)) => panic!("{}", lex_error(src, e).msg) }
 }
 `;
-const RS_LEX_FN = `fn lex<'a>(src: &'a str) -> (Vec<Tok>, Option<LexErr>) {
+const RS_LEX_FN = `fn lex_all<'a>(src: &'a str) -> (Vec<Tok>, Option<LexErr>) {
     let mut toks = Vec::new();
     let err = lex_into(src, &mut toks, &mut LexStacks::default());
     (toks, err)
@@ -5369,7 +5369,7 @@ pub fn parse_ast_with_buf<'a, 'c, C: ShapeCustoms<'a>>(src: &'a str, customs: &'
     parse_ast_impl(src, customs, true, events_buf)
 }
 fn parse_ast_impl<'a, 'c, C: ShapeCustoms<'a>>(src: &'a str, customs: &'c C, emit_events: bool, events_buf: &mut Option<Vec<StreamEvent>>) -> Option<AstRoot<'a>> {
-    let toks = lex_or_panic(src);
+    let toks = lex(src);
     let n = toks.len();
     customs.reserve(n);
     let events_init = events_buf.take().unwrap_or_else(Vec::new);
@@ -5604,7 +5604,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
         ...s.state.map((n, i) => `${n} = lexed.${i + 1};`),
         `${s.err} = lexed.${s.state.length + 1};`,
       ],
-      lexAll: (cx, s) => [`let (${s.mutable ? 'mut ' : ''}${s.out}, ${s.err}) = lex(${cx.str(s.text)});`],
+      lexAll: (cx, s) => [`let (${s.mutable ? 'mut ' : ''}${s.out}, ${s.err}) = lex_all(${cx.str(s.text)});`],
     },
   },
   record: {
@@ -5720,7 +5720,7 @@ pub struct Token<'a> { pub kind: &'static str, pub text: &'a str, pub off: usize
 /// or the error of input the lexer cannot tokenize (its offset and message: "Unexpected character
 /// at offset …", "Unterminated template literal at offset …").
 pub fn tokenize<'a>(src: &'a str) -> Result<Vec<Token<'a>>, LexError> {
-    match lex(src) {
+    match lex_all(src) {
         (toks, None) => Ok(toks.into_iter().map(|t| Token { kind: tok_kind(&t), text: tok_text(src, &t), off: t.off as usize, end: t.end as usize, nl: t.nl, kid: t.kid, lid: t.lid }).collect()),
         (_, Some(e)) => Err(lex_error(src, e)),
     }
@@ -5728,7 +5728,7 @@ pub fn tokenize<'a>(src: &'a str) -> Result<Vec<Token<'a>>, LexError> {
 // The CST over a fresh arena that lives in the returned Parser (serialize with write_json).
 // Library callers use parse_with / Doc.
 fn parse<'a>(src: &'a str) -> Option<(Parser<'a>, i32)> {
-    let mut p = Parser { toks: lex_or_panic(src), pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
+    let mut p = Parser { toks: lex(src), pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
     match p.parse_${ir.entry}() {
         Some(fr) if p.pos == p.toks.len() => Some((p, fr.root())),
         _ => None,

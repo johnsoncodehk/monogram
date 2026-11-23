@@ -592,7 +592,7 @@ ${loopBody}
 ${prevIsValue}${specState}${emitFn}\tbase := len(*acc)
 ${loop}\treturn pos, pendingNl, ${rxNames}templateStack, elEnded, tagAngle, laEnd, specUntil${raw ? ', tagAt' : ''}, err
 }
-func lex(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
+func lexAll(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
 func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *LexErr) {
@@ -896,7 +896,7 @@ ${loopBody}
 \t}
 \treturn pos, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang, err
 }
-func lex(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
+func lexAll(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
 func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *LexErr) {
@@ -916,7 +916,7 @@ ${loopBody}
 \t}
 \treturn pos, pendingNl, templateStack, err
 }
-func lex(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
+func lexAll(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
 func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *LexErr) {
@@ -936,7 +936,7 @@ ${loopBody}
 \t}
 \treturn pos, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang, templateStack, err
 }
-func lex(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
+func lexAll(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
 func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *LexErr) {
@@ -947,7 +947,7 @@ func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *LexErr) {
 }`;
   }
   if (rxOrTpl) {
-    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lex(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
+    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexAll(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
 func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *LexErr) {
@@ -973,7 +973,7 @@ ${loopBody}
 \t}
 \treturn pos, pendingNl, flowDepth, err
 }
-func lex(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
+func lexAll(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
 func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *LexErr) {
@@ -991,7 +991,7 @@ ${loopBody}
 \t}
 \treturn pos, pendingNl, err
 }
-func lex(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
+func lexAll(src string) ([]Tok, *LexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
 func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *LexErr) {
@@ -1709,7 +1709,7 @@ func (p *engine) checkTreeEq(text string, root int32) bool {
 	// Match TS/Rust: incomplete parse (root>=0 but pos!=len) is not a tree.
 	rootOk := root >= 0 && p.pos == len(p.toks)
 	f := &engine{}
-	toks, err := lex(text)
+	toks, err := lexAll(text)
 	if err != nil { return !rootOk }
 	fresh := f.parse(text, toks)
 	freshOk := fresh >= 0 && f.pos == len(f.toks)
@@ -3190,7 +3190,7 @@ ${[...ones, ...wides].join('\n')}
       forEach: (v, l, body) => [`for _, ${v} := range ${l} {`, ...goBlock(body), '}'],
       destructure: (_cx, s) => [`${s.ids.join(', ')} ${s.declare ? ':=' : '='} ${s.call}`],
       lexStep: (_cx, s) => [`${[s.pos, ...s.state, s.err].join(', ')} = lexFrom(${s.text.c}, ${s.pos}, ${[...s.state, `&${s.out}`].join(', ')}, 1)`],
-      lexAll: (_cx, s) => [`${s.out}, ${s.err} := lex(${s.text.c})`],
+      lexAll: (_cx, s) => [`${s.out}, ${s.err} := lexAll(${s.text.c})`],
     },
   },
   record: {
@@ -3329,16 +3329,16 @@ func lexError(src string, e *LexErr) *LexError {
 \treturn &LexError{Off: e.Off, Msg: fmt.Sprintf("Invalid escape sequence in template at offset %d", e.Off)}
 }
 
-// mustLex is lex for the entry points that panic with a lexer error (*LexError).
-func mustLex(src string) []Tok {
-\ttoks, err := lex(src)
+// lex is the tokens of src; a lexer error panics (*LexError).
+func lex(src string) []Tok {
+\ttoks, err := lexAll(src)
 \tif err != nil { panic(lexError(src, err)) }
 \treturn toks
 }
 
 // Tokenize is the lexer alone: a fresh slice the caller owns.
 func Tokenize(src string) ([]Token, error) {
-\tslim, lerr := lex(src)
+\tslim, lerr := lexAll(src)
 \tif lerr != nil { return nil, lexError(src, lerr) }
 \tout := make([]Token, len(slim))
 \tfor i := range slim {
@@ -3530,9 +3530,9 @@ func main() {
 \tif len(os.Args) > 1 && !editSess {
 \t\tif iters, err := strconv.Atoi(os.Args[1]); err == nil && iters > 0 {
 \t\t\tp := &engine{}
-\t\t\tfor i := 0; i < 3; i++ { p.parse(src, mustLex(src)) }
+\t\t\tfor i := 0; i < 3; i++ { p.parse(src, lex(src)) }
 \t\t\tt0 := time.Now()
-\t\t\tfor i := 0; i < iters; i++ { p.parse(src, mustLex(src)) }
+\t\t\tfor i := 0; i < iters; i++ { p.parse(src, lex(src)) }
 \t\t\tfmt.Printf("%.4f\\n", float64(time.Since(t0).Nanoseconds())/1e6/float64(iters))
 \t\t\treturn
 \t\t}
@@ -3574,7 +3574,7 @@ func main() {
 \t\t\t\t\t}
 \t\t\t\t}()
 \t\t\t\tp := &engine{}
-\t\t\t\troot := p.parse(s, mustLex(s))
+\t\t\t\troot := p.parse(s, lex(s))
 \t\t\t\tif root < 0 || p.pos != len(p.toks) { b.WriteString("-\\n"); return }
 \t\t\t\tp.writeJSON(root, &b); b.WriteByte('\\n')
 \t\t\t}()
@@ -3627,7 +3627,7 @@ func main() {
 \t}
 \tif len(os.Args) > 1 && os.Args[1] == "tok-spans" {
 \t\tp := &engine{}
-\t\troot := p.parse(src, mustLex(src))
+\t\troot := p.parse(src, lex(src))
 \t\tif root < 0 || p.pos != len(p.toks) {
 \t\t\tfmt.Fprintf(os.Stderr, "parse error (pos %d/%d)\\n", p.pos, len(p.toks))
 \t\t\tos.Exit(1)
@@ -3647,7 +3647,7 @@ func main() {
 \t\treturn
 \t}
 \tp := &engine{}
-\troot := p.parse(src, mustLex(src))
+\troot := p.parse(src, lex(src))
 \tif root < 0 || p.pos != len(p.toks) {
 \t\tfmt.Fprintf(os.Stderr, "parse error (pos %d/%d)\\n", p.pos, len(p.toks))
 \t\tos.Exit(1)

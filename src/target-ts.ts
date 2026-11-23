@@ -137,8 +137,8 @@ function lexError(src: string, e: LexErr): Error {
 // The lexer error of a template span (-1 unterminated, -2 - q an invalid escape at q).
 function lexTplErr(q: number, n: number): LexErr { return q === -1 ? { kind: 2, off: n, end: 0 } : { kind: 3, off: -2 - q, end: 0 }; }
 // The tokens of src; a lexer error throws.
-function lexOrThrow(src: string): Tok[] {
-  const [toks, err] = lex(src);
+function lex(src: string): Tok[] {
+  const [toks, err] = lexAll(src);
   if (err !== null) throw lexError(src, err);
   return toks;
 }
@@ -364,7 +364,7 @@ ${loopBody}
 ${prevIsValue}${specState}${emitFn}${loop}
   return { pos, pendingNl, ${rxNames}templateStack, elEnded, tagAngle, laEnd, specUntil${raw ? ', tagAt' : ''}, err };
 }
-function lex(src: string): [Tok[], LexErr | null] {
+function lexAll(src: string): [Tok[], LexErr | null] {
   const toks: Tok[] = [];
   return [toks, lexFrom(src, 0, false, ${rxInit}[], false, 0, 0, 0, ${raw ? '[], ' : ''}toks).err];
 }`;
@@ -563,7 +563,7 @@ ${loopBody}
   }
   return { pos, pendingNl, prevLid, prevKid, hasPrev, bpLid, hasPrev2, parenHead, lastClose, lastBang, err };
 }
-function lex(src: string): [Tok[], LexErr | null] {
+function lexAll(src: string): [Tok[], LexErr | null] {
   const toks: Tok[] = [];
   return [toks, lexFrom(src, 0, false, 0, 0, 0, false, false, [], false, false, toks).err];
 }`;
@@ -578,7 +578,7 @@ ${loopBody}
   }
   return { pos, pendingNl, templateStack, err };
 }
-function lex(src: string): [Tok[], LexErr | null] {
+function lexAll(src: string): [Tok[], LexErr | null] {
   const toks: Tok[] = [];
   return [toks, lexFrom(src, 0, false, [], toks).err];
 }`;
@@ -593,13 +593,13 @@ ${loopBody}
   }
   return { pos, pendingNl, prevLid, prevKid, hasPrev, bpLid, hasPrev2, parenHead, lastClose, lastBang, templateStack, err };
 }
-function lex(src: string): [Tok[], LexErr | null] {
+function lexAll(src: string): [Tok[], LexErr | null] {
   const toks: Tok[] = [];
   return [toks, lexFrom(src, 0, false, 0, 0, 0, false, false, [], false, false, [], toks).err];
 }`;
   }
   if (rxOrTpl) {
-    return `${renderIdTablesTS(ids)}${lxUniIdentConst}${rxModuleConsts}${scans}function lex(src: string): [Tok[], LexErr | null] {
+    return `${renderIdTablesTS(ids)}${lxUniIdentConst}${rxModuleConsts}${scans}function lexAll(src: string): [Tok[], LexErr | null] {
   const toks: Tok[] = [];
   const n = src.length;
   let pos = 0;
@@ -621,7 +621,7 @@ ${loopBody}
   }
   return { pos, pendingNl, flowDepth, err };
 }
-function lex(src: string): [Tok[], LexErr | null] {
+function lexAll(src: string): [Tok[], LexErr | null] {
   const toks: Tok[] = [];
   return [toks, lexFrom(src, 0, false, 0, toks).err];
 }`;
@@ -635,7 +635,7 @@ ${loopBody}
   }
   return { pos, pendingNl, err };
 }
-function lex(src: string): [Tok[], LexErr | null] {
+function lexAll(src: string): [Tok[], LexErr | null] {
   const toks: Tok[] = [];
   return [toks, lexFrom(src, 0, false, toks).err];
 }`;
@@ -1270,7 +1270,7 @@ function runW<H>(builder: Builder<H>): H | null {
  */
 export function parseWith<H>(src: string, builder: Builder<H>): H | null {
   _src = src;
-  toks = lexOrThrow(src);
+  toks = lex(src);
   return runW(builder);
 }
 
@@ -3049,7 +3049,7 @@ ${emitShapeCoverageExport(cov)}
 export function parseAst(src: string, opts?: { customs?: AstCustoms }): ${rootType} | null {
   _astCustoms = opts?.customs ?? {};
   _src = src;
-  toks = lexOrThrow(src);
+  toks = lex(src);
   pos = 0;
   // The engine runs under the typed layer where it builds nothing it keeps: a dropped rule, a
   // Pratt rule inside a lookahead (ParserIR.forms).
@@ -3176,7 +3176,7 @@ function ${findAnyName(stops)}(s: string, i: number): number {
         return [`${s.names.some((n) => s.reassigned(n)) ? 'let' : 'const'} ${pat} = ${s.call};`];
       },
       lexStep: (_cx, s) => [`({ ${[s.posName === 'pos' ? 'pos' : `pos: ${s.posName}`, ...s.state, s.err === 'err' ? 'err' : `err: ${s.err}`].join(', ')} } = lexFrom(${s.text.c}, ${s.pos}, ${[...s.state, s.out].join(', ')}, 1));`],
-      lexAll: (_cx, s) => [`const [${s.out}, ${s.err}] = lex(${s.text.c});`],
+      lexAll: (_cx, s) => [`const [${s.out}, ${s.err}] = lexAll(${s.text.c});`],
     },
   },  record: {
     field: (cx, r, _rec, f, ty, nat) => cx.atom(`${tsWrap(r, ATOM)}.${f}`, ty, nat),
@@ -3329,11 +3329,11 @@ ${engineRuntime(ir, ids)}
 // parser state touched. parse(src) lexes and parses; the CST is plain objects, independent of
 // any later call. No I/O — see emitRunner() for the stdin → JSON wrapper.
 export function tokenize(src: string): Token[] {
-  return lexOrThrow(src).map((t) => ({ kind: tok_kind(t), text: tok_text(src, t), off: t.off, end: t.end, nl: t.nl, kid: t.kid, lid: t.lid }));
+  return lex(src).map((t) => ({ kind: tok_kind(t), text: tok_text(src, t), off: t.off, end: t.end, nl: t.nl, kid: t.kid, lid: t.lid }));
 }
 export function parse(src: string): Cst | null {
   _src = src;
-  return parseTokens(lexOrThrow(src));
+  return parseTokens(lex(src));
 }
 // The entry rule over a token list of the CURRENT _src, with the CST builder.
 function parseTokens(tokens: Tok[]): Cst | null {
