@@ -63,6 +63,16 @@ export function createParser(grammar: CstGrammar) {
   } = analyzeGrammar(grammar);
 
   const PROF = !!process.env.PROF;   // per-rule call profiling (diagnostic)
+  // The packrat memo's soundness, as a witness (docs/CORRECTNESS.md, the memo row): with
+  // MONOGRAM_MEMO_VERIFY=1 every memo hit is parsed again and must give the recorded end, cap and
+  // tree, or the parse throws. Off: the hit is returned.
+  const MEMO_VERIFY = process.env.MONOGRAM_MEMO_VERIFY === '1';
+  const sameCst = (a: unknown, b: unknown): boolean => {
+    if (a === b) return true;
+    if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+    const ka = Object.keys(a), kb = Object.keys(b);
+    return ka.length === kb.length && ka.every((k) => sameCst((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+  };
   const gtComps = new Set(gtComposites(grammar));
 
 
@@ -483,10 +493,8 @@ export function createParser(grammar: CstGrammar) {
       const capped = parseLimit >= 0;
       const start = pos;
       let m = memo.get(name);
-      if (!mySup && !capped) {
-        const hit = m && m.get(start);
-        if (hit !== undefined) { pos = hit.end; _prattCapped = hit.capped; return hit.node; }
-      }
+      const hit = !mySup && !capped ? m && m.get(start) : undefined;
+      if (hit !== undefined && !MEMO_VERIFY) { pos = hit.end; _prattCapped = hit.capped; return hit.node; }
 
       const prevSup = suppressCur;
       suppressCur = mySup;
@@ -495,6 +503,13 @@ export function createParser(grammar: CstGrammar) {
         result = isPratt ? parsePratt(rule, 0) : parseLeftRec(rule);
       } finally {
         suppressCur = prevSup;
+      }
+      if (hit !== undefined) {   // MEMO_VERIFY: the entry must be what the parse it stands for returns
+        const nowCapped = isPratt && result !== null && _prattCapped;
+        if (hit.end !== pos || hit.capped !== nowCapped || !sameCst(hit.node, result)) {
+          throw new Error(`memo: ${name} at token ${start} recorded {end ${hit.end}, capped ${hit.capped}} but re-parses to {end ${pos}, capped ${nowCapped}}${sameCst(hit.node, result) ? '' : ', another tree'}`);
+        }
+        return result;
       }
       if (!mySup && !capped) {
         if (!m) { m = new Map(); memo.set(name, m); }
@@ -651,6 +666,11 @@ export function createParser(grammar: CstGrammar) {
     // once, for every way `prattCore` fails: an operator check refuses its operand after the
     // operand's tokens were read, and nothing below has to remember to step back.
     function parsePratt(rule: RuleDecl, minBp: number): CstNode | null {
+      // Every minBp is 0, an operator's rbp (at most 2 * levels) or a chain's rhsBp (its lbp),
+      // all below maxBp = 2 * (levels + 1): the non-op LEDs are therefore never skipped by
+      // `maxBp <= minBp` (the skip this replaces; docs/CORRECTNESS.md). A new caller that passes
+      // more (an operator's level read by atLevel, say) fails here, loudly.
+      if (minBp >= maxBp) throw new Error(`parsePratt: ${rule.name} read at bp ${minBp}, not below maxBp ${maxBp}`);
       const saved = pos;
       const node = prattCore(rule, minBp);
       if (node === null) pos = saved;
@@ -741,7 +761,6 @@ export function createParser(grammar: CstGrammar) {
         // Check non-op LED patterns first ($ '.' Ident, $ '<' ... '>' '(', etc.)
         for (const led of leds) {
           if (led.items[0]?.type === 'op' || led.items[0]?.type === 'postfix') continue;
-          if (maxBp <= minBp) continue;
           if (tailClosed && accessTailLeds.has(led.items)) continue;   // no access tail after a postfix
           // Skip a LED whose connector is excluded in this context (e.g. `in` under
           // a no-`in` for-head) — it rebinds to the enclosing rule instead.
