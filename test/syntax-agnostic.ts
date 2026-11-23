@@ -88,7 +88,8 @@ const sexpr: Lowering = {
       for: (_cx, v, from, to, body) => [`(for (${v} ${from.c} ${to.c})`, ...nest(body), ')'],
       forEach: (v, l, body) => [`(for-each (${v} ${l})`, ...nest(body), ')'],
       destructure: (_cx, s) => [form(s.declare ? 'define-values' : 'set-values!', form(...s.ids), s.call)],
-      lexStep: (_cx, s) => [form('lex-step!', s.text.c, s.pos, ...s.state, s.out)],
+      lexStep: (_cx, s) => [form('lex-step!', s.text.c, s.pos, ...s.state, s.out, s.err)],
+      lexAll: (_cx, s) => [form('lex-all!', s.text.c, s.out, s.err)],
       shrink: (_cx, l) => [form('shrink!', l)],
     },
   },
@@ -99,6 +100,9 @@ const sexpr: Lowering = {
     refType: (rec) => form('ref', kebab(rec)),
     refArg: (r) => r.c,
     extend: (_cx, l, from) => [form('extend!', l, from.c)],
+    none: (cx, rec) => cx.atom(form('none', kebab(rec)), `opt_${rec}`, `opt_${rec}`),
+    some: (cx, rec, r) => cx.atom(form('some', r.c), `opt_${rec}`, `opt_${rec}`),
+    isSome: (_cx, r) => at(form('some?', r.c)),
   },
 };
 
@@ -113,7 +117,7 @@ const target = defineTarget({
 const HEAD: Partial<Record<Stmt['k'], string[]>> = {
   let: ['define'], set: ['set!'], setAt: ['set-nth!'], push: ['push!'], if: ['if', 'when'], while: ['while'], for: ['for'],
   forEach: ['for-each'], break: ['break'], return: ['return'], letCall: ['define-values'], setCall: ['set-values!'],
-  lexStep: ['lex-step!'], shrink: ['shrink!'], extend: ['extend!'], setField: ['set-field!'],
+  lexStep: ['lex-step!'], lexAll: ['lex-all!'], shrink: ['shrink!'], extend: ['extend!'], setField: ['set-field!'],
 };
 function census(fns: Fn[]): Map<string, number> {
   const n = new Map<string, number>();
@@ -124,6 +128,9 @@ function census(fns: Fn[]): Map<string, number> {
     if (e.k === 'at') bump('nth');
     if (e.k === 'field') bump('field');
     if (e.k === 'mkRec') { bump('make-record'); Object.values(e.fields).forEach(ex); }
+    if (e.k === 'none') bump('none');
+    if (e.k === 'some') bump('some');
+    if (e.k === 'isSome') bump('some?');
     if (e.k === 'code') bump('char-code');
     if (e.k === 'hasAt') bump('starts-at?');
     if (e.k === 'inSet') bump('in-set?');

@@ -13,7 +13,7 @@ import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, typ
 import { blockBody, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
-import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isRec, isRecList, recName, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
+import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 
@@ -401,6 +401,20 @@ ${l.steps.map((e) => `\ti = ${e}\n\tif i < ${l.uniform} { return i }\n`).join(''
 `;
 }
 
+const GO_LEX_ERR = `// lexErr is a lexer error (relex-family.ts): its kind, offset and end; lexError spells its message.
+type lexErr struct { Kind, Off, End int }
+// lexTplErr is the lexer error of a template span (-1 unterminated, -2 - q an invalid escape at q).
+func lexTplErr(q, n int) *lexErr {
+\tif q == -1 { return &lexErr{Kind: 2, Off: n} }
+\treturn &lexErr{Kind: 3, Off: -2 - q}
+}
+`;
+// A lexer error (relex-family.ts LexErr): recorded, and the lex ends: a jump to the loop's exit,
+// `lexFail` (with a type-parameter signature undecided, the exit returns to the loop, whose head
+// rewinds it). Go: an error path that continued the loop would carry err around every iteration
+// (a loop phi); the jump leaves the loop's own state as it was.
+const goFail = (kind: string, off: string, end: string): string => `err = &lexErr{Kind: ${kind}, Off: ${off}, End: ${end}}; goto lexFail`;
+
 // One token at a dispatch site: the shared scanner, spliced in, says where it ends; the lexer
 // records it.
 function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
@@ -413,7 +427,9 @@ function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: bo
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
   const ext = identLike.has(name) ? 'e = lxExt(src, e); ' : '';
   const body = shared.scanInline(ir, name, { s: 'src', p: 'pos', out: 'e' });
-  const scan = ['{', ...goBlock([...body, `if e >= 0 { ${ext}${push}pos = e; continue }`]), '}'];
+  // An identifier whose escapes spell no IdentifierName is the lexer error -2 - e (lex-family.ts).
+  const escErr = identLike.has(name) ? [`if e < -1 { ${goFail('1', 'pos', '-2 - e')} }`] : [];
+  const scan = ['{', ...goBlock([...body, `if e >= 0 { ${ext}${push}pos = e; continue }`, ...escErr]), '}'];
   const lines = rxTok !== undefined && name === rxTok ? ['if !prevIsValue() {', ...goBlock(scan), '}'] : scan;
   return lines.map((l) => `\t\t${l}`).join('\n');
 }
@@ -444,7 +460,7 @@ function buildLexCandidates(
 // is their placement in the dispatch loop, the token push, and the type-parameter signature's
 // speculation (lexed as code to its verdict, then rewound: docs/REGIONS.md).
 function elementLexerGo(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms, p: {
-  head: string; scans: string; rxStateFrom: string; tplSpanFn: string; nlWs: string; lexCodes: string[]; lexFirsts: (LexFirstBytes | null)[];
+  head: string; scans: string; rxStateFrom: string; nlWs: string; lexCodes: string[]; lexFirsts: (LexFirstBytes | null)[];
   tplCloseTest: string; tplOpenTest: string; uniIdentFallbackGo: string; loopPanicGo: string; goBoolArr: (name: string, flags: boolean[]) => string;
 }): string {
   const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0;
@@ -474,16 +490,19 @@ ${sig ? `${p.goBoolArr('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
     `if f&3 == 1 { if lid == lidHoleOpen { templateStack[len(templateStack)-1] = f + 4 } else if lid == lidHoleClose { templateStack[len(templateStack)-1] = f - 4 } }`,
   ].filter(Boolean).join(' else ');
   const specState = sig ? `\t// A type-parameter signature being decided: the token index of its tagOpen (-1: none), the
-\t// state before it, how it was decided, and the decision kept for the tagOpen it rewinds to.
+\t// state before it, how it was decided (a lexer error decides it: the head was an element), and
+\t// the decision kept for the tagOpen it rewinds to.
 \tspecTok, specBase, specClosedAt, specOff, specEnd, specAt := -1, 0, -1, 0, 0, -1
-\tspecDone, specFail, specThen, specKeep := false, false, false, false
+\tspecDone, specThen, specKeep := false, false, false
 \tsvPos, svNl, svPrevLid, svPrevKid, svBpLid, svHasPrev, svHasPrev2, svLastClose, svLastBang, svElEnded, svAngle := 0, false, uint16(0), uint16(0), uint16(0), false, false, false, false, false, 0
 \tvar svParen []bool
 \tvar svStack []int
-\tspecRewind := func() {
-\t\tkeep := specDone && !specFail && specThen
+\t// failed: a lexer error decided it (err is the loop's, not captured here: a captured variable
+\t// is not kept in a register).
+\tspecRewind := func(failed bool) {
+\t\tkeep := specDone && !failed && specThen
 \t\tre := n + 1
-\t\tif specDone && !specFail { re = ${shared.elementFn('reach')}(src, specEnd) }
+\t\tif specDone && !failed { re = ${shared.elementFn('reach')}(src, specEnd) }
 \t\tif re > laEnd { laEnd = re }
 \t\tif keep { specUntil = specOff }
 \t\tspecAt = svPos; specKeep = keep
@@ -492,7 +511,7 @@ ${sig ? `${p.goBoolArr('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
 \t\tlastClose = svLastClose; lastBang = svLastBang; elEnded = svElEnded; tagAngle = svAngle
 \t\tparenHead = append(parenHead[:0], svParen...)
 \t\ttemplateStack = append(templateStack[:0], svStack...)
-\t\tspecTok = -1; specClosedAt = -1; specDone = false; specFail = false
+\t\tspecTok = -1; specClosedAt = -1; specDone = false
 \t}
 ` : '';
   const emitFn = `\temit := func(off, end int, kid, lid uint16) {
@@ -527,7 +546,7 @@ ${sig ? `\t\t\tif op == 2 {
 \t\t\t\tsvLastClose, svLastBang, svElEnded, svAngle = lastClose, lastBang, elEnded, tagAngle
 \t\t\t\tsvParen = append(svParen[:0], parenHead...)
 \t\t\t\tsvStack = append(svStack[:0], templateStack...)
-\t\t\t\tspecTok = len(*acc); specBase = len(parenHead); specClosedAt = -1; specDone = false; specFail = false
+\t\t\t\tspecTok = len(*acc); specBase = len(parenHead); specClosedAt = -1; specDone = false
 \t\t\t}
 ` : ''}\t\t}
 `;
@@ -569,37 +588,28 @@ ${raw ? `\t\tif len(templateStack) > 0 && templateStack[len(templateStack)-1] ==
 \t\t\temit(pos, re, uint16(rk), 0); templateStack = templateStack[:len(templateStack)-1]; pos = re; continue
 \t\t}
 ` : ''}`;
-  const loopBody = `${sig ? '\t\tif specTok >= 0 && (specDone || specFail || pos >= n) { specRewind(); continue }\n' : ''}\t\tc := int(src[pos])
+  const loopBody = `${sig ? '\t\tif specTok >= 0 && (specDone || err != nil || pos >= n) { specRewind(err != nil); err = nil; continue }\n' : ''}\t\tc := int(src[pos])
 ${frameStep}${p.nlWs}${pre}${cascade}
 ${p.uniIdentFallbackGo}${p.loopPanicGo}`;
-  const loop = `\tfor ${sig ? '(pos < n || specTok >= 0) && (limit <= 0 || len(*acc)-base < limit || specTok >= 0)' : 'pos < n && (limit <= 0 || len(*acc)-base < limit)'} {
+  const loop = `${sig ? 'lexLoop:\n' : ''}\tfor ${sig ? '(pos < n || specTok >= 0) && (limit <= 0 || len(*acc)-base < limit || specTok >= 0)' : 'pos < n && (limit <= 0 || len(*acc)-base < limit)'} {
 ${loopBody}
 \t}
 `;
-  // A lex error while a signature is undecided decides it: the head was an element.
-  const body = sig ? `\trun := func() (failed bool) {
-\t\tdefer func() {
-\t\t\tif r := recover(); r != nil {
-\t\t\t\tif specTok < 0 { panic(r) }
-\t\t\t\tfailed = true
-\t\t\t}
-\t\t}()
-${loop.replace(/^/gm, '\t').replace(/\t$/, '')}\t\treturn false
-\t}
-\tfor run() { specFail = true }
-` : loop;
-  return `${p.head}${consts}${p.scans}func lexFrom(src string, pos int, pendingNl bool, ${rxParams}templateStack []int, elEnded bool, tagAngle, laEnd, specUntil int, ${raw ? 'tagAt []int, ' : ''}acc *[]Tok, limit int) (int, bool, ${rxRet}[]int, bool, int, int, int${raw ? ', []int' : ''}) {
+  return `${p.head}${consts}${p.scans}func lexFrom(src string, pos int, pendingNl bool, ${rxParams}templateStack []int, elEnded bool, tagAngle, laEnd, specUntil int, ${raw ? 'tagAt []int, ' : ''}acc *[]Tok, limit int) (int, bool, ${rxRet}[]int, bool, int, int, int${raw ? ', []int' : ''}, *lexErr) {
 \tn := len(src)
-${prevIsValue}${p.tplSpanFn}${specState}${emitFn}\tbase := len(*acc)
-${body}\treturn pos, pendingNl, ${rxNames}templateStack, elEnded, tagAngle, laEnd, specUntil${raw ? ', tagAt' : ''}
+\tvar err *lexErr
+${prevIsValue}${specState}${emitFn}\tbase := len(*acc)
+${loop}lexFail:
+${sig ? '\tif specTok >= 0 { goto lexLoop }\n' : ''}\treturn pos, pendingNl, ${rxNames}templateStack, elEnded, tagAngle, laEnd, specUntil${raw ? ', tagAt' : ''}, err
 }
-func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+func lexAll(src string) ([]Tok, *lexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
-func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
+func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *lexErr) {
 \tout := buf[:0]
-\t_, _, ${rxBlank}stk.templateStack, _, _, _, _${raw ? ', _' : ''} = lexFrom(src, 0, false, ${rxInit}stk.templateStack[:0], false, 0, 0, 0, ${raw ? 'nil, ' : ''}&out, 0)
-\treturn out
+\tvar err *lexErr
+\t_, _, ${rxBlank}stk.templateStack, _, _, _, _${raw ? ', _' : ''}, err = lexFrom(src, 0, false, ${rxInit}stk.templateStack[:0], false, 0, 0, 0, ${raw ? 'nil, ' : ''}&out, 0)
+\treturn out, err
 }`;
 }
 
@@ -700,18 +710,8 @@ const lidInterpClose uint16 = ${lidOf(ids, tpl.interpClose)}
 \t\treturn !isExprKw && !isParenHead && (_divK[prevKid] || _divT[prevLid])
 \t}
 ` : '';
-  // The span itself is the shared family's scanner; this reads which delimiter ended it.
-  const tplSpanFn = tpl ? `\tscanTplSpan := func(p int, strict bool) (bool, int) {
-\t\tq := ${shared.tplSpan()}(src, p, strict)
-\t\tif q == -1 { panic(&LexError{Off: n, Msg: fmt.Sprintf("Unterminated template literal at offset %d", n)}) }
-\t\tif q < -1 { panic(&LexError{Off: -2 - q, Msg: fmt.Sprintf("Invalid escape sequence in template at offset %d", -2 - q)}) }
-\t\tif strings.HasPrefix(src[q:], ${J(tpl.interpOpen)}) { return true, q + ${tlen(tpl.interpOpen)} }
-\t\treturn false, q + ${tlen(tpl.open)}
-\t}
-\t_ = scanTplSpan
-` : '';
   const tplState = tpl ? `\ttemplateStack := stk.templateStack[:0]
-${tplSpanFn}` : '';
+` : '';
   const emitHooks = [
     rx ? `\t\tif lid == lidLParen {
 \t\t\tisMember := hasPrev2 && _mem[bpLid]
@@ -738,7 +738,6 @@ ${emitHooks}
 \t\treturn !isExprKw && !isParenHead && (_divK[prevKid] || _divT[prevLid])
 \t}
 ` : '';
-  const tplStateFrom = tplSpanFn;
   const emitRxOnly = rx ? `\temit := func(off, end int, kid, lid uint16) {
 \t\tif lid == lidLParen {
 \t\t\tisMember := hasPrev2 && _mem[bpLid]
@@ -778,16 +777,21 @@ ${emitHooks}
   const tplHeads = new Map<number, string>();
   const tplLits = shared.templateLiterals(ir, ids.lids.slice(1));
   const headByte = (t: string) => { const b = Buffer.from(t, 'utf8')[0]!; return b < 128 && ![9, 10, 11, 12, 13, 32].includes(b) ? b : null; };
+  // The span itself is the shared family's scanner; this reads which delimiter ended it (or its
+  // lexer error).
+  const tplSpanGo = (from: string, strict: string): string => `\t\t\tq := ${shared.tplSpan()}(src, ${from}, ${strict})
+\t\t\tif q < 0 { err = lexTplErr(q, n); goto lexFail }
+\t\t\tinterp, e := strings.HasPrefix(src[q:], ${J(tpl!.interpOpen)}), q + ${tlen(tpl!.open)}
+\t\t\tif interp { e = q + ${tlen(tpl!.interpOpen)} }
+`;
   const tplCloseTest = tpl ? `\t\tif len(templateStack) > 0 && strings.HasPrefix(src[pos:], ${J(tpl.interpClose)}) && templateStack[len(templateStack)-1] == 0 {
 \t\t\ttemplateStack = templateStack[:len(templateStack)-1]
-\t\t\tinterp, e := scanTplSpan(pos + ${tlen(tpl.interpClose)}, false)
-\t\t\tif interp { emit(pos, e, ${kidOf(ids, '$templateMiddle')}, ${lidCallGo(tplLits.middle, 'src[pos:e]')}); templateStack = append(templateStack, 0) } else { emit(pos, e, ${kidOf(ids, '$templateTail')}, ${lidCallGo(tplLits.tail, 'src[pos:e]')}) }
+${tplSpanGo('pos + ' + tlen(tpl.interpClose), 'false')}\t\t\tif interp { emit(pos, e, ${kidOf(ids, '$templateMiddle')}, ${lidCallGo(tplLits.middle, 'src[pos:e]')}); templateStack = append(templateStack, 0) } else { emit(pos, e, ${kidOf(ids, '$templateTail')}, ${lidCallGo(tplLits.tail, 'src[pos:e]')}) }
 \t\t\tpos = e; continue
 \t\t}
 ` : '';
   const tplOpenTest = tpl ? `\t\tif strings.HasPrefix(src[pos:], ${J(tpl.open)}) {
-\t\t\tinterp, e := scanTplSpan(pos + ${tlen(tpl.open)}, ${rx ? '!prevIsValue()' : 'true'})
-\t\t\tif interp { emit(pos, e, ${kidOf(ids, '$templateHead')}, ${lidCallGo(tplLits.head, 'src[pos:e]')}); templateStack = append(templateStack, 0) } else { emit(pos, e, ${kidOf(ids, tpl.token)}, ${lidCallGo(tplLits.whole, 'src[pos:e]')}) }
+${tplSpanGo('pos + ' + tlen(tpl.open), rx ? '!prevIsValue()' : 'true')}\t\t\tif interp { emit(pos, e, ${kidOf(ids, '$templateHead')}, ${lidCallGo(tplLits.head, 'src[pos:e]')}); templateStack = append(templateStack, 0) } else { emit(pos, e, ${kidOf(ids, tpl.token)}, ${lidCallGo(tplLits.whole, 'src[pos:e]')}) }
 \t\t\tpos = e; continue
 \t\t}
 ` : '';
@@ -811,10 +815,6 @@ ${goUniIdentTables()}func scanUniIdent(src string, pos int) (int, bool) {
 	r, w := utf8.DecodeRuneInString(src[pos:])
 	if uniClass(r) != 2 { return pos, false }
 	return lxExtRun(src, pos+w), true
-}
-// The lexer error of an identifier whose escapes spell no IdentifierName (lex-family.ts).
-func ${shared.identEscError()}(src string, pos, e int) int {
-	panic(&LexError{Off: pos, Msg: fmt.Sprintf("Invalid identifier escape at offset %d: '%s'", pos, src[pos:e])})
 }
 func ${shared.uniClass()}(cp int) int { return int(uniClass(rune(cp))) }
 // Extend an identifier token that the ASCII pattern cut short at a non-ASCII
@@ -875,8 +875,7 @@ ${pushHooks}\t\ttoks = append(toks, mkTok(off, end, pendingNl, kid, lid)); pendi
 \t\t}
 `
     : '';
-  const loopPanicGo = `\t\tr, _ := utf8.DecodeRuneInString(src[pos:])
-\t\tpanic(&LexError{Off: pos, Msg: fmt.Sprintf("Unexpected character at offset %d: '%c'", pos, r)})`;
+  const loopPanicGo = `\t\t${goFail('0', 'pos', 'pos')}`;
   const pushTokAccFn = nl && !stateful
     ? `\tpushTok := func(off, end int, kid, lid uint16) {
 ${pushHooks}\t\t*acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendingNl = false
@@ -895,111 +894,126 @@ ${uniIdentFallbackGo}${loopPanicGo}`;
   const stkFields = [rx ? '\tparenHead []bool\n' : '', tpl || el ? '\ttemplateStack []int\n' : ''].join('');
   const lexStacks = `// lexStacks are the lexer's transient stacks, kept across lexes by a reused builder.
 type lexStacks struct {${stkFields ? `\n${stkFields}` : ''}}
-`;
-  if (el) return elementLexerGo(ir, ids, shared, { head: `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}`, scans, rxStateFrom, tplSpanFn, nlWs, lexCodes, lexFirsts, tplCloseTest, tplOpenTest, uniIdentFallbackGo, loopPanicGo, goBoolArr });
+${GO_LEX_ERR}`;
+  if (el) return elementLexerGo(ir, ids, shared, { head: `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}`, scans, rxStateFrom, nlWs, lexCodes, lexFirsts, tplCloseTest, tplOpenTest, uniIdentFallbackGo, loopPanicGo, goBoolArr });
   if (rxOnly) {
-    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool) {
+    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool, *lexErr) {
 \tn := len(src)
+\tvar err *lexErr
 ${rxStateFrom}${emitRxOnly}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
 ${loopBody}
 \t}
-\treturn pos, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang
+lexFail:
+\treturn pos, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang, err
 }
-func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+func lexAll(src string) ([]Tok, *lexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
-func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
+func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *lexErr) {
 \tout := buf[:0]
-\t_, _, _, _, _, _, _, stk.parenHead, _, _ = lexFrom(src, 0, false, 0, 0, 0, false, false, stk.parenHead[:0], false, false, &out, 0)
-\treturn out
+\tvar err *lexErr
+\t_, _, _, _, _, _, _, stk.parenHead, _, _, err = lexFrom(src, 0, false, 0, 0, 0, false, false, stk.parenHead[:0], false, false, &out, 0)
+\treturn out, err
 }`;
   }
   if (tplOnly) {
-    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, templateStack []int, acc *[]Tok, limit int) (int, bool, []int) {
+    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, templateStack []int, acc *[]Tok, limit int) (int, bool, []int, *lexErr) {
 \tn := len(src)
-${tplStateFrom}${emitTplOnly}\tbase := len(*acc)
+\tvar err *lexErr
+${emitTplOnly}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
 ${loopBody}
 \t}
-\treturn pos, pendingNl, templateStack
+lexFail:
+\treturn pos, pendingNl, templateStack, err
 }
-func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+func lexAll(src string) ([]Tok, *lexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
-func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
+func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *lexErr) {
 \tout := buf[:0]
-\t_, _, stk.templateStack = lexFrom(src, 0, false, stk.templateStack[:0], &out, 0)
-\treturn out
+\tvar err *lexErr
+\t_, _, stk.templateStack, err = lexFrom(src, 0, false, stk.templateStack[:0], &out, 0)
+\treturn out, err
 }`;
   }
   if (rxTpl) {
-    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, templateStack []int, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool, []int) {
+    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, templateStack []int, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool, []int, *lexErr) {
 \tn := len(src)
-${rxStateFrom}${tplStateFrom}${emitRxTpl}\tbase := len(*acc)
+\tvar err *lexErr
+${rxStateFrom}${emitRxTpl}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
 ${loopBody}
 \t}
-\treturn pos, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang, templateStack
+lexFail:
+\treturn pos, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang, templateStack, err
 }
-func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+func lexAll(src string) ([]Tok, *lexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
-func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
+func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *lexErr) {
 \tout := buf[:0]
-\t_, _, _, _, _, _, _, stk.parenHead, _, _, stk.templateStack = lexFrom(src, 0, false, 0, 0, 0, false, false, stk.parenHead[:0], false, false, stk.templateStack[:0], &out, 0)
-\treturn out
+\tvar err *lexErr
+\t_, _, _, _, _, _, _, stk.parenHead, _, _, stk.templateStack, err = lexFrom(src, 0, false, 0, 0, 0, false, false, stk.parenHead[:0], false, false, stk.templateStack[:0], &out, 0)
+\treturn out, err
 }`;
   }
   if (rxOrTpl) {
-    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+    return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexAll(src string) ([]Tok, *lexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
-func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
+func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *lexErr) {
 \ttoks := buf[:0]
 \tn := len(src)
 \tpos := 0
 \tpendingNl := false
 \t_ = pendingNl
+\tvar err *lexErr
 ${rxState}${tplState}${nlState}${emitFn}${pushTokFn}\tfor pos < n {
 ${loopBody}
 \t}
-${rx ? '\tstk.parenHead = parenHead\n' : ''}${tpl ? '\tstk.templateStack = templateStack\n' : ''}\treturn toks
+lexFail:
+${rx ? '\tstk.parenHead = parenHead\n' : ''}${tpl ? '\tstk.templateStack = templateStack\n' : ''}\treturn toks, err
 }`;
   }
   if (newlineOnly) {
-    return `${idTables}${lexStacks}${lexGoHelpers}${scans}func lexFrom(src string, pos int, pendingNl bool, flowDepth int, acc *[]Tok, limit int) (int, bool, int) {
+    return `${idTables}${lexStacks}${lexGoHelpers}${scans}func lexFrom(src string, pos int, pendingNl bool, flowDepth int, acc *[]Tok, limit int) (int, bool, int, *lexErr) {
 \tn := len(src)
+\tvar err *lexErr
 ${nlStateFrom}${pushTokAccFn}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
 ${loopBody}
 \t}
-\treturn pos, pendingNl, flowDepth
+lexFail:
+\treturn pos, pendingNl, flowDepth, err
 }
-func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+func lexAll(src string) ([]Tok, *lexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
-func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
+func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *lexErr) {
 \tout := buf[:0]
-\tlexFrom(src, 0, false, 0, &out, 0)
-\treturn out
+\t_, _, _, err := lexFrom(src, 0, false, 0, &out, 0)
+\treturn out, err
 }`;
   }
-  return `${idTables}${lexStacks}${lexGoHelpers}${scans}func lexFrom(src string, pos int, pendingNl bool, acc *[]Tok, limit int) (int, bool) {
+  return `${idTables}${lexStacks}${lexGoHelpers}${scans}func lexFrom(src string, pos int, pendingNl bool, acc *[]Tok, limit int) (int, bool, *lexErr) {
 \tn := len(src)
+\tvar err *lexErr
 ${pushTokAccFn}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
 ${loopBody}
 \t}
-\treturn pos, pendingNl
+lexFail:
+\treturn pos, pendingNl, err
 }
-func lex(src string) []Tok { return lexInto(src, nil, &lexStacks{}) }
+func lexAll(src string) ([]Tok, *lexErr) { return lexInto(src, nil, &lexStacks{}) }
 // lexInto lexes src into buf[:0], reusing its capacity (a reused builder's token buffer), and
 // likewise the stacks in stk.
-func lexInto(src string, buf []Tok, stk *lexStacks) []Tok {
+func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *lexErr) {
 \tout := buf[:0]
-\tlexFrom(src, 0, false, &out, 0)
-\treturn out
+\t_, _, err := lexFrom(src, 0, false, &out, 0)
+\treturn out, err
 }`;
 }
 
@@ -1411,9 +1425,10 @@ var post_${r.name} = [${ops.size}]postOp{${post}}`;
 // The relex of an edit (both Docs). A lexer error in the relex is the text's own (the relexed
 // stream equals a fresh lex: relex-family.ts): the text is rejected with no token stream, after
 // `clear` empties what the Doc keeps of its tree.
-const goEditBody = (clear: string, treeEq: boolean) => `\ttext, toks, relexed, lexed := relexOrReject(oldText, oldToks, edits)
+const goEditBody = (clear: string, treeEq: boolean) => `\ttext, toks, relexed, lerr := relexEdits(oldText, oldToks, edits)
 \td.text = text
-\tif !lexed {
+\tif lerr != nil {
+\t\td.text = applyEdits(oldText, edits)
 ${clear}
 \t\td.toks = nil
 \t\ta := &Align{OldN: len(oldToks)}
@@ -1422,19 +1437,6 @@ ${clear}
 \t\treturn -1
 \t}
 \td.toks = toks`;
-// The one panic an edit expects is the lexer's (*LexError); any other panic is a bug and propagates.
-const goLexFns = `
-// relexOrReject is relexEdits, or lexed=false when the relex meets a lexer error (*LexError).
-func relexOrReject(text string, toks []alignMeta, edits []Edit) (nt string, nm []alignMeta, n int, lexed bool) {
-	defer func() {
-		if r := recover(); r != nil {
-			if _, isLex := r.(*LexError); !isLex { panic(r) }
-			nt, nm, n, lexed = applyEdits(text, edits), nil, 0, false
-		}
-	}()
-	nt, nm, n = relexEdits(text, toks, edits)
-	return nt, nm, n, true
-}`;
 
 function docEditBlockGo(ir: ParserIR, shared: SharedAlgorithms): string {
   const topReuse = ir.reuse;
@@ -1726,7 +1728,9 @@ func (p *engine) checkTreeEq(text string, root int32) bool {
 	// Match TS/Rust: incomplete parse (root>=0 but pos!=len) is not a tree.
 	rootOk := root >= 0 && p.pos == len(p.toks)
 	f := &engine{}
-	fresh := f.parse(text, lex(text))
+	toks, err := lexAll(text)
+	if err != nil { return !rootOk }
+	fresh := f.parse(text, toks)
 	freshOk := fresh >= 0 && f.pos == len(f.toks)
 	if !rootOk || !freshOk { return rootOk == freshOk }
 	var s1, s2 strings.Builder
@@ -1774,7 +1778,7 @@ func toksFromMeta(text string, meta []alignMeta) []Tok {
 	}
 	return t
 }
-${treeEqFn}${reuseFns}${goLexFns}
+${treeEqFn}${reuseFns}
 // A Doc owns its tree: its engine (e) keeps the arena, parse stream and reuse metadata across
 // edits, and b (the caller's CstBuilder under NewDocWith) is pointed at that tree after each call.
 type Doc struct { text string; root int32; toks []alignMeta; align *Align; validate bool; b *CstBuilder; e engine${topReuse ? '; entries []EntryMeta' : ''} }
@@ -1784,7 +1788,9 @@ func newDocCst(src string, b *CstBuilder) *Doc {
 	d := &Doc{text: src, b: b}
 	defer d.publish()
 	var toks []Tok
-	d.toks, toks = scanMetaToks(src)
+	var err *lexErr
+	d.toks, toks, err = scanMetaToks(src)
+	if err != nil { panic(lexError(src, err)) }
 	// The arena grows as the parse fills it, as in ParseWith and in every target: a node or kid count
 	// estimated from the token count is neither a fit nor a bound (6183a29, PR #126).
 	d.e.nodes, d.e.kids = b.Nodes[:0], b.Kids[:0]
@@ -1811,8 +1817,8 @@ ${editBody}
 ${editParse}
 	a := &Align{OldN: oldN, NewN: newN, Prefix: prefix, Suffix: suffix, Relexed: relexed, Reused: reused}
 	if d.validate {
-		func() { defer func() { recover() }(); v := checkStreamEq(d.text, d.toks); a.StreamEq = &v }()
-		func() { defer func() { recover() }(); t := p.checkTreeEq(d.text, d.root); a.TreeEq = &t }()
+		v := checkStreamEq(d.text, d.toks); a.StreamEq = &v
+		t := p.checkTreeEq(d.text, d.root); a.TreeEq = &t
 	}
 	d.align = a
 	ret = d.root
@@ -2636,7 +2642,9 @@ func NewDocWith(src string, b Builder) Document {
 
 func newDocWith(src string, b Builder) *DocWith {
 	d := &DocWith{text: src, b: b}
-	d.toks = ${initToks}
+	var err *lexErr
+	d.toks, err = ${initToks}
+	if err != nil { panic(lexError(src, err)) }
 	${topReuse ? 'h, entries, entryHs, ok' : 'h, _, _, ok'} := parseWithMetaW(src, d.toks, b)
 	if ok {
 ${initAssign}
@@ -2658,11 +2666,8 @@ ${editBody}
 ${editReuse}
 	a := &Align{OldN: oldN, NewN: newN, Prefix: prefix, Suffix: suffix, Relexed: relexed, Reused: reused}
 	if d.validate {
-		func() {
-			defer func() { recover() }()
-			v := checkStreamEq(d.text, d.toks)
-			a.StreamEq = &v
-		}()
+		v := checkStreamEq(d.text, d.toks)
+		a.StreamEq = &v
 		// Non-CST builders: treeEq reports nil (rust SUPPORTS_TREE_EQ=false).
 	}
 	d.align = a
@@ -2949,7 +2954,9 @@ ${wMethods}
 func parseWithCst(src string, b *CstBuilder) (int32, bool) {
 \tw := &b.ws
 \tp := &engine{nodes: b.Nodes[:0], kids: b.Kids[:0], scratch: w.scratch[:0]${reuse ? ', entries: w.entries[:0]' : ''}${reuse?.kind === 'B' ? ', segs: w.segs[:0]' : ''}}
-\th := p.parse(src, lexInto(src, b.Toks, &w.lex))
+\ttoks, err := lexInto(src, b.Toks, &w.lex)
+\tif err != nil { panic(lexError(src, err)) }
+\th := p.parse(src, toks)
 \tb.Nodes, b.Kids, b.Toks, w.scratch = p.nodes, p.kids, p.toks, p.scratch${reuse ? '\n\tw.entries = p.entries' : ''}${reuse?.kind === 'B' ? '\n\tw.segs = p.segs' : ''}
 \tif h < 0 { return 0, false }
 \treturn h, true
@@ -2962,7 +2969,9 @@ func parseWithW(src string, b Builder) (int32, bool) {
 \tif o, is := b.(WorkspaceOwner); is { w = o.Workspace() } else { w = &Workspace{} }
 \tb.Restore(0, 0)
 \tp := &w.w
-\t*p = parserW{cursor: cursor{toks: lexInto(src, toksOf(b), &w.lex)}, src: src, b: b, drops: dropsOf(b), scratch: p.scratch[:0]${reuse ? ', entries: p.entries[:0], entryHs: p.entryHs[:0]' : ''}}
+\ttoks, err := lexInto(src, toksOf(b), &w.lex)
+\tif err != nil { panic(lexError(src, err)) }
+\t*p = parserW{cursor: cursor{toks: toks}, src: src, b: b, drops: dropsOf(b), scratch: p.scratch[:0]${reuse ? ', entries: p.entries[:0], entryHs: p.entryHs[:0]' : ''}}
 \tfr, ok := p.parse${ir.entry}W()
 \trecordToks(b, p.toks)
 \tok = ok && p.pos == len(p.toks)
@@ -3056,7 +3065,11 @@ const goBlock = (lines: string[]): string[] => lines.map((l) => GO_IND + l);
 
 // Shared-algorithm lowering: explicit conversions, slices; a list with an exact final length is
 // made with that capacity, any other list grows by append (no estimate is reserved: 6183a29).
-const goType = (t: Ty): string => (isRecList(t) ? `[]${recName(t)}` : isRec(t) ? recName(t) : GO_TYPES[t]);
+// Go: a type's export is its spelling, so a record outside the package API (the Doc's EntryMeta
+// and Seg are in it) is spelled unexported.
+const GO_API_RECORDS = new Set(['EntryMeta', 'Seg']);
+const goRec = (r: string): string => (GO_API_RECORDS.has(r) ? r : r[0]!.toLowerCase() + r.slice(1));
+const goType = (t: Ty): string => (isRecList(t) ? `[]${goRec(recName(t))}` : isRec(t) ? goRec(recName(t)) : isOpt(t) ? `*${goRec(recName(t))}` : GO_TYPES[t]);
 // A Go string literal; Go rejects a byte order mark inside a source file, so it is an escape.
 const goLit = (v: string): string => JSON.stringify(v).replace(/\ufeff/g, '\\uFEFF');
 const goLowering: Lowering = {
@@ -3199,16 +3212,21 @@ ${[...ones, ...wides].join('\n')}
       for: (cx, v, from, to, body) => [`for ${v} := ${cx.coerce(from, 'int')}; ${v} < ${cx.coerce(to, 'int')}; ${v}++ {`, ...goBlock(body), '}'],
       forEach: (v, l, body) => [`for _, ${v} := range ${l} {`, ...goBlock(body), '}'],
       destructure: (_cx, s) => [`${s.ids.join(', ')} ${s.declare ? ':=' : '='} ${s.call}`],
-      lexStep: (_cx, s) => [`${[s.pos, ...s.state].join(', ')} = lexFrom(${s.text.c}, ${s.pos}, ${[...s.state, `&${s.out}`].join(', ')}, 1)`],
+      lexStep: (_cx, s) => [`${[s.pos, ...s.state, s.err].join(', ')} = lexFrom(${s.text.c}, ${s.pos}, ${[...s.state, `&${s.out}`].join(', ')}, 1)`],
+      lexAll: (_cx, s) => [`${s.out}, ${s.err} := lexAll(${s.text.c})`],
     },
   },
   record: {
     field: (cx, r, _rec, f, ty, nat) => cx.atom(`${goWrap(r, ATOM)}.${exported(f)}`, ty, nat),
     setField: (id, f, val) => [`${id}.${exported(f)} = ${val}`],
-    make: (cx, rec, fs) => cx.atom(`${rec}{${fs.map(([f, v]) => `${exported(f)}: ${v}`).join(', ')}}`, `rec_${rec}`, `rec_${rec}`, { owned: true }),
-    refType: (rec) => `*${rec}`,
+    make: (cx, rec, fs) => cx.atom(`${goRec(rec)}{${fs.map(([f, v]) => `${exported(f)}: ${v}`).join(', ')}}`, `rec_${rec}`, `rec_${rec}`, { owned: true }),
+    refType: (rec) => `*${goRec(rec)}`,
     refArg: (r) => `&${r.c}`,
     extend: (_cx, l, from) => [`${l} = append(${l}, ${from.c}...)`],
+    // A typed nil: it declares a local (:=) of the optional's type.
+    none: (cx, rec) => cx.atom(`(*${goRec(rec)})(nil)`, `opt_${rec}`, `opt_${rec}`),
+    some: (cx, rec, r) => cx.atom(`&${goWrap(r, ATOM)}`, `opt_${rec}`, `opt_${rec}`),
+    isSome: (_cx, r) => ({ c: `${goWrap(r, 4)} != nil`, prec: 3 }),
   },
 };
 
@@ -3320,16 +3338,31 @@ type LexError struct {
 
 func (e *LexError) Error() string { return e.Msg }
 
+// lexError is the LexError of the lexer's error e in src.
+func lexError(src string, e *lexErr) *LexError {
+\tswitch e.Kind {
+\tcase 0:
+\t\tr, _ := utf8.DecodeRuneInString(src[e.Off:])
+\t\treturn &LexError{Off: e.Off, Msg: fmt.Sprintf("Unexpected character at offset %d: '%c'", e.Off, r)}
+\tcase 1:
+\t\treturn &LexError{Off: e.Off, Msg: fmt.Sprintf("Invalid identifier escape at offset %d: '%s'", e.Off, src[e.Off:e.End])}
+\tcase 2:
+\t\treturn &LexError{Off: e.Off, Msg: fmt.Sprintf("Unterminated template literal at offset %d", e.Off)}
+\t}
+\treturn &LexError{Off: e.Off, Msg: fmt.Sprintf("Invalid escape sequence in template at offset %d", e.Off)}
+}
+
+// lex is the tokens of src; a lexer error panics (*LexError).
+func lex(src string) []Tok {
+\ttoks, err := lexAll(src)
+\tif err != nil { panic(lexError(src, err)) }
+\treturn toks
+}
+
 // Tokenize is the lexer alone: a fresh slice the caller owns.
-func Tokenize(src string) (toks []Token, err error) {
-\tdefer func() {
-\t\tif r := recover(); r != nil {
-\t\t\tle, ok := r.(*LexError)
-\t\t\tif !ok { panic(r) }
-\t\t\ttoks, err = nil, le
-\t\t}
-\t}()
-\tslim := lex(src)
+func Tokenize(src string) ([]Token, error) {
+\tslim, lerr := lexAll(src)
+\tif lerr != nil { return nil, lexError(src, lerr) }
 \tout := make([]Token, len(slim))
 \tfor i := range slim {
 \t\tt := &slim[i]
