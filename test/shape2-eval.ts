@@ -20,6 +20,7 @@ import { normaliseEstree, parseEstree } from './shape-oracle-estree.ts';
 import { tscOracle } from './shape-oracle-tsc.ts';
 import javascript from '../javascript.ts';
 import typescript from '../typescript.ts';
+import tsc from 'typescript';
 
 let passed = 0;
 const check = (name: string, fn: () => void): void => {
@@ -356,6 +357,79 @@ check('literals, spread, templates (both fixtures, against acorn and tsc)', () =
   for (const a of ['array', 'object', 'template', 'led_template']) assert.deepEqual(tdeps[`Expr.${a}`]?.inherited ?? [], [], `tsc Expr.${a}`);
 });
 
+// Modules in both shapes, against their oracles: every import / export form (default, named,
+// namespace and string specifiers, attributes, `export *` with and without an alias, `export
+// default` of a function, a class and an expression, `import()` / `import.meta`), and in tsc the
+// type-only forms, import-equals, `export =`, `export as namespace` and the modifiers the
+// wrapping `export` / `declare` / prefix arms hand a declaration (the nodes attribute `modifiers`).
+check('modules (both fixtures, against acorn and tsc)', () => {
+  const js = `import a, {b as c, d} from "m" with {type: "json", 'x': "y"};\nimport * as ns from "m";\nimport "x";\nimport e, * as f from "q";\nimport {"s t" as g} from "q";\nvar h, k;\nexport {h as hh, k, h as "s"};\nexport * from "m";\nexport * as q from "m";\nexport {x as xd, "y" as z} from "n" with {type: "j"};\nexport default async function* () { 'u'; }\nexport const x1 = 1, x2 = 3;\nexport function f1() { 'v'; }\nexport class C1 extends D {}\nimport.meta.url;\nimport("x").then(y);\n`;
+  const ts = `import a, {b as c, type d} from "m" with {type: "json"};\nimport type T from "t";\nimport x = require("y");\nimport type {Q} from "q";\nimport defer * as n from "r";\nimport e = A.B.C;\nexport import ei = A.B;\nexport {a as b, type c as cc, "q" as "r"};\nexport {type as};\nexport {type as as x2};\nexport * as q from "m";\nexport type * as tt from "u";\nexport * from "v" with {};\nexport type {Z} from "z";\nexport function f() {}\nexport async function f2() {}\nexport const k1 = 1, k2 = 2;\nexport class C1 extends D.E {}\nexport abstract class C2 {}\nabstract class C3 {}\ndeclare var dv;\nexport declare let dl;\ndeclare export * from "w";\nexport default abstract class {}\nexport as namespace N;\nexport = a;\n`;
+  for (const [g, spec, src, oracle] of [
+    [javascript, estreeExprShape, js, () => { const r = parseEstree(js); return r ? normaliseEstree(r.tree) : assert.fail('acorn rejects it'); }],
+    [typescript, tscExprShape, ts, () => { const r = tscOracle(ts, 'a.ts'); return 'tree' in r ? r.tree : assert.fail(JSON.stringify(r)); }],
+  ] as const) {
+    const root = (t: NTree): NTree => ({ kind: t.kind, start: 0, end: 0, fields: Object.fromEntries(Object.entries(t.fields).filter(([k]) => k !== 'sourceType' && k !== 'endOfFileToken')) });
+    assert.deepEqual(compareTrees(root(oracle()), root(run(g, spec, src) as NTree), 1).divergences, [], spec.name);
+  }
+});
+
+// A method whose name is an escaped `constructor` is the constructor (ECMA-262 ClassElementKind
+// reads the PropName's StringValue). tsc's parser builds a Constructor too, with the diagnostic
+// "Keywords cannot contain escape characters", so the oracle harness skips such a file; the kind
+// is compared with tsc's parser directly.
+check('an escaped constructor name is the constructor (both shapes; tsc against its parser\'s kind)', () => {
+  const src = String.raw`class C { \u0063onstructor() {} }` + '\n';
+  const sf = tsc.createSourceFile('a.ts', src, tsc.ScriptTarget.Latest, true);
+  assert.equal(tsc.SyntaxKind[(sf.statements[0] as import('typescript').ClassDeclaration).members[0].kind], 'Constructor');
+  type V = { kind: string; fields: Record<string, V & V[]> };
+  const t = run(typescript, tscExprShape, src) as V;
+  assert.equal(t.fields.statements[0].fields.members[0].kind, 'Constructor');
+  const e = run(javascript, estreeExprShape, src) as V;
+  assert.equal(e.fields.body[0].fields.body.fields.body[0].fields.kind as never, 'constructor');
+});
+
+// The nodes attribute `modifiers` (tsc): a declaration reached through wrapping arms is the node it
+// is without them, apart from its modifiers and its start (the first inherited modifier). The
+// source is padded so that the bare declaration sits at the same offsets.
+check('tsc modifiers: the same declaration with and without wrappers differs only in modifiers and start', () => {
+  const declOf = (src: string): Record<string, S2Value> & { kind: string; start: number; end: number } => {
+    const p = run(typescript, tscExprShape, src) as { fields: { statements: S2Value[] } };
+    return p.fields.statements[0] as never;
+  };
+  for (const [wrapped, words] of [
+    ['export function f(a) { return a; }', ['ExportKeyword']],
+    ['export declare let x, y;', ['ExportKeyword', 'DeclareKeyword']],
+    ['declare var v = 1;', ['DeclareKeyword']],
+    ['export abstract class C extends B { m() {} }', ['ExportKeyword', 'AbstractKeyword']],
+    ['export async function g() {}', ['ExportKeyword', 'AsyncKeyword']],
+  ] as const) {
+    const at = wrapped.search(/(function|let|var|class|async)\b/);
+    const bareAt = /abstract|async/.test(wrapped) ? wrapped.search(/(abstract|async)\b/) : at;
+    const bare = ' '.repeat(bareAt) + wrapped.slice(bareAt);
+    const w = declOf(wrapped) as unknown as { kind: string; start: number; end: number; fields: Record<string, S2Value> };
+    const b = declOf(bare) as unknown as { kind: string; start: number; end: number; fields: Record<string, S2Value> };
+    assert.equal(w.start, 0, wrapped);
+    assert.equal(b.start, bareAt, bare);
+    assert.equal(w.end, b.end, wrapped);
+    const { modifiers: wm, ...wrest } = w.fields;
+    const { modifiers: bm, ...brest } = b.fields;
+    assert.deepEqual(wrest, brest, wrapped);
+    assert.deepEqual((wm as { kind: string }[]).map((m) => m.kind), words, wrapped);
+    const own = (bm as { kind: string }[] | undefined)?.map((m) => m.kind) ?? [];
+    assert.deepEqual(own, words.filter((k) => k === 'AbstractKeyword' || k === 'AsyncKeyword'), bare);
+  }
+  // The receivers read the attribute; the arms that hand it on depend on it through the copy.
+  const deps = dependencies(loadShape2(typescript, tscExprShape));
+  for (const k of ['Decl.function_', 'Decl.namedClass', 'Stmt.variable', 'Decl.exportDeclaration', 'Decl.declared', 'Decl.prefixed']) assert.ok(deps[k]?.inherited.includes('modifiers'), k);
+});
+
+// A node handed modifiers whose arm does not place them is outside the subset (it would build a
+// node without them): `declare x;` reaches the expression statement with [DeclareKeyword].
+check('tsc modifiers: an arm that does not place the modifiers it is handed is outside the subset', () => {
+  assert.throws(() => run(typescript, tscExprShape, 'declare x;'), (e) => e instanceof Shape2Unmapped && e.rule === 'Stmt' && e.arm === 'expr (handed modifiers)');
+});
+
 // The loader classifies every inherited equation: RIGHT-DEPENDENT when it reads a leaf to the right
 // of the child it feeds. ESTree has one (the left operand of `=`: the operator follows it); tsc has
 // none, so a parser building tsc's tree as it goes never rewrites a node it has built.
@@ -552,5 +626,27 @@ rejects('a thread whose next state reads a sibling outside the element', javascr
 }), 'Stmt.switch_.switchCase next', 'expr2 is not in the element');
 rejects('a thread beside another equation for the same attribute', calc, leadWith(thread(c(true), 'p', v('p')), { x: c(true) }), 'Program.program', 'no other equation');
 rejects('a thread outside an inherited equation', calc, one(E({ number: thread(c(true), 'p', v('p')) as never })), '`thread` is not an operator');
+
+// A nodes attribute: L-attributed by construction, placed and never read, and only a list.
+const nodesWith = (rules: Record<string, Record<string, Record<string, unknown>>>, value: Shape2Spec['rules'] = {}, extra: Record<string, unknown> = {}): Shape2Spec =>
+  one(value, { inherited: { m: { type: 'nodes', rules, ...extra }, i: { type: 'bool', default: false, rules: {} } } as Shape2Spec['inherited'] });
+const tokenAt = (leaf: string): Term => node('T', {}, { from: leaf, to: leaf });
+rejects('a nodes equation reading a leaf to the right of the child it feeds', calc, nodesWith(E({ binaryOp: { left: list(tokenAt('op')) } })), 'Expr.binaryOp.left', 'reads op, which is not to the LEFT of left');
+rejects('a nodes equation reading the child it feeds', calc, nodesWith(E({ binaryOp: { right: list(child('right')) } })), 'Expr.binaryOp.right', 'reads right, which is not to the LEFT');
+rejects('a nodes equation reading a branch that holds the child it feeds', typescript, nodesWith({ Decl: { prefixed: { decl: list(spread(branch('declaration', {}))) } } }), 'Decl.prefixed.decl', 'reads declaration, which is not to the LEFT of decl');
+rejects('a nodes equation that is not a list', calc, nodesWith(E({ binaryOp: { right: tokenAt('op') } })), 'Expr.binaryOp.right', 'is a list');
+rejects('a nodes equation reading a synthesized attribute', calc, nodesWith(E({ binaryOp: { right: list(iff(syn('s', 'left'), c(1), c(2))) } }), {}), 'Expr.binaryOp.right', '`syn` cannot appear in a nodes');
+rejects('a threaded nodes attribute', calc, nodesWith({ Program: { program: { statement: thread(c(true), 'p', v('p')) } } }), 'is not threaded');
+rejects('a nodes attribute with a default other than the empty list', calc, nodesWith({}, {}, { default: [1] }), 'inherited m', 'default is the empty list');
+rejects('a nodes attribute used as a value (a field)', calc, nodesWith({}, E({ number: node('N', { m: inh('m') }) })), 'Expr.number .m', 'placed only');
+rejects('a nodes attribute used as a scalar (a condition)', calc, nodesWith({}, E({ number: iff(inh('m') as never, c(1), c(2)) })), 'Expr.number cond', 'placed only');
+rejects('a variable bound to a nodes attribute used as a value', calc, nodesWith({}, E({ number: let_('x', inh('m'), list(v('x'))) })), 'Expr.number body [0]', 'placed only');
+rejects('present of a variable not bound to a nodes attribute', calc, one(E({ number: let_('x', c(1), present('x')) })), 'present(x)', 'not bound to a nodes attribute');
+rejects('a scalar equation copying a nodes attribute', calc, one({}, {
+  inherited: { m: { type: 'nodes', rules: {} }, i: { type: 'bool', default: false, rules: E({ binaryOp: { right: inh('m') } }) } } as Shape2Spec['inherited'],
+}), 'Expr.binaryOp.right', 'copies m (nodes) into a bool attribute');
+rejects('a scalar equation given node terms', calc, one({}, {
+  inherited: { m: { type: 'nodes', rules: {} }, i: { type: 'bool', default: false, rules: E({ binaryOp: { right: list(spread(inh('m'))) } }) } } as Shape2Spec['inherited'],
+}), 'Expr.binaryOp.right', '`list` cannot appear in an inherited equation');
 
 console.log(`shape2-eval: ${passed} checks passed`);

@@ -42,7 +42,7 @@ Two candidates of one list match the same input to the same end; the one declare
 
 | list | wins (declared first) | loses | one token | observed | witness |
 |:--|:--|:--|:--|--:|:--|
-| Decl | declare (#9) | declare4 (#12) |  | 11 | typescript/lib/lib.es5.d.ts:33: `declare function eval(x: string): any;` |
+| Decl | declare (#9) | declared (#12) |  | 11 | typescript/lib/lib.es5.d.ts:33: `declare function eval(x: string): any;` |
 | Expr NUD | true_ (#1) | ident (#7) | `true` | 326 | acorn/dist/acorn.mjs:54: `true }` |
 | Expr NUD | false_ (#2) | ident (#7) | `false` | 292 | acorn/dist/acorn.mjs:52: `false }` |
 | Expr NUD | null_ (#3) | ident (#7) | `null` | 158 | acorn/dist/acorn.mjs:119: `null;` |
@@ -829,19 +829,19 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `async`: two tokens: committed to asyncFunction (#2), unless asyncGenerator (#3), seq (#14) admit the token (then the frame) (takes a mark: it can fail after `'async'`)
   - `class`: two tokens: committed to namedClass (#6), unless anonymousClass (#7) admits the token (then the frame) (takes a mark: it can fail after `'class'`)
   - `const`: two tokens: committed to const_ (#24) (takes a mark: it can fail after `'const'`)
-  - `declare`: two tokens: committed to declare4 (#12), unless declare (#9), declare2 (#10), declare3 (#11) admit the token (then the frame) (takes a mark: it can fail after `'declare'`)
+  - `declare`: two tokens: committed to declared (#12), unless declare (#9), declare2 (#10), declare3 (#11) admit the token (then the frame) (takes a mark: it can fail after `'declare'`)
   - `enum`: two tokens: committed to enum_ (#8) (takes a mark: it can fail after `'enum'`)
-  - `export`: two tokens: committed to export_2 (#18), unless export_ (#17), export_3 (#19), export_4 (#20), export_5 (#21) and 2 more admit the token (then the frame) (takes a mark: it can fail after `'export'`)
+  - `export`: two tokens: committed to exportDeclaration (#18), unless exportAsNamespace (#17), exportDefault (#19), exportAll (#20), exportNamed (#21) and 2 more admit the token (then the frame) (takes a mark: it can fail after `'export'`)
   - `function`: two tokens: committed to function_ (#0), unless generator (#1) admits the token (then the frame) (takes a mark: it can fail after `'function'`)
-  - `import`: two tokens: committed to import_ (#25) (takes a mark: it can fail after `'import'`)
+  - `import`: two tokens: committed to importDeclaration (#25) (takes a mark: it can fail after `'import'`)
   - `interface`: two tokens: committed to interface (#4) (takes a mark: it can fail after `'interface'`)
   - `module`: two tokens: committed to module (#16) (takes a mark: it can fail after `'module'`)
   - `namespace`: two tokens: committed to namespace (#15) (takes a mark: it can fail after `'namespace'`)
   - `type`: two tokens: committed to type (#5) (takes a mark: it can fail after `'type'`)
   - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <String>, <Template> and 10 more: no candidate, the list fails
   - <Decorator>: two tokens: committed to prefixed (#13) (takes a mark: it can fail after `alt((DecoratorExpr many(DecoratorExpr))…`)
-  - two tokens (pairs): function_ (#0) at `function` only before Ident; generator (#1) at `function` only before '*'; asyncFunction (#2) at `async` only before 'function'; asyncGenerator (#3) at `async` only before 'function'; namedClass (#6) at `class` only before Ident; anonymousClass (#7) at `class` only before '<'|'extends'|'implements'|'{'; declare (#9) at `declare` only before 'function'; declare2 (#10) at `declare` only before 'module'; declare3 (#11) at `declare` only before 'global'; export_ (#17) at `export` only before 'as'; export_3 (#19) at `export` only before '@new'|'default'|Decorator; export_4 (#20) at `export` only before '*'|'type'; export_5 (#21) at `export` only before '{'; export_6 (#22) at `export` only before '='; export_7 (#23) at `export` only before 'type'
-  - two tokens (SECOND): function_ (#0) only before Ident; generator (#1) only before '*'; asyncFunction (#2) only before 'function'; asyncGenerator (#3) only before 'function'; interface (#4) only before Ident; type (#5) only before Ident; namedClass (#6) only before Ident; anonymousClass (#7) only before '<'|'extends'|'implements'|'{'; enum_ (#8) only before Ident; declare (#9) only before 'function'; declare2 (#10) only before 'module'; declare3 (#11) only before 'global'; prefixed (#13) only before '!'|'('|'.'|'<'|'?.'|'@new'|…46; seq (#14) only before '@new'|'abstract'|'accessor'|'async'|'class'|'const'|…16; namespace (#15) only before Ident; module (#16) only before Ident|String; export_ (#17) only before 'as'; export_3 (#19) only before '@new'|'default'|Decorator; export_4 (#20) only before '*'|'type'; export_5 (#21) only before '{'; export_6 (#22) only before '='; export_7 (#23) only before 'type'; const_ (#24) only before 'enum'; import_ (#25) only before '*'|'defer'|'type'|'{'|Ident|String
+  - two tokens (pairs): function_ (#0) at `function` only before Ident; generator (#1) at `function` only before '*'; asyncFunction (#2) at `async` only before 'function'; asyncGenerator (#3) at `async` only before 'function'; namedClass (#6) at `class` only before Ident; anonymousClass (#7) at `class` only before '<'|'extends'|'implements'|'{'; declare (#9) at `declare` only before 'function'; declare2 (#10) at `declare` only before 'module'; declare3 (#11) at `declare` only before 'global'; exportAsNamespace (#17) at `export` only before 'as'; exportDefault (#19) at `export` only before '@new'|'default'|Decorator; exportAll (#20) at `export` only before '*'|'type'; exportNamed (#21) at `export` only before '{'; exportEquals (#22) at `export` only before '='; exportNamedType (#23) at `export` only before 'type'
+  - two tokens (SECOND): function_ (#0) only before Ident; generator (#1) only before '*'; asyncFunction (#2) only before 'function'; asyncGenerator (#3) only before 'function'; interface (#4) only before Ident; type (#5) only before Ident; namedClass (#6) only before Ident; anonymousClass (#7) only before '<'|'extends'|'implements'|'{'; enum_ (#8) only before Ident; declare (#9) only before 'function'; declare2 (#10) only before 'module'; declare3 (#11) only before 'global'; prefixed (#13) only before '!'|'('|'.'|'<'|'?.'|'@new'|…46; seq (#14) only before '@new'|'abstract'|'accessor'|'async'|'class'|'const'|…16; namespace (#15) only before Ident; module (#16) only before Ident|String; exportAsNamespace (#17) only before 'as'; exportDefault (#19) only before '@new'|'default'|Decorator; exportAll (#20) only before '*'|'type'; exportNamed (#21) only before '{'; exportEquals (#22) only before '='; exportNamedType (#23) only before 'type'; const_ (#24) only before 'enum'; importDeclaration (#25) only before '*'|'defer'|'type'|'{'|Ident|String
   - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over function_ (#0), generator (#1), asyncFunction (#2), asyncGenerator (#3), namedClass (#6), anonymousClass (#7) and 13 more
 - one token, no mark: 14 inline choices, 28 star, 47 opt, 7 sep
 - Decl / function_: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
@@ -907,7 +907,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Decl / declare: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
 - Decl / declare: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
 - Decl / declare2: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Decl / declare4: `alt(Decl \| Stmt)`: by attempt
+- Decl / declared: `alt(Decl \| Stmt)`: by attempt
 - Decl / prefixed: `alt((DecoratorExpr many(DecoratorExpr)) (many(alt(… …))…`: by attempt
 - Decl / prefixed: `alt(alt(('abstract'\|'public'\|'private'\|'protected'\|'rea…`: one token; takes a mark: branch 0: it can fail after `alt(('abstract'\|'public'\|'private'\|'pro…`
 - Decl / prefixed: `alt(('abstract'\|'public'\|'private'\|'protected'\|'readonl…`: one token; takes a mark: branch 0: it can fail after `('abstract'\|'public'\|'private'\|'protect…`
@@ -960,101 +960,101 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Decl / namespace: `many(('.' Ident))`: one token; takes a mark: it can fail after `'.'`
 - Decl / module: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident many(('…`: by attempt
 - Decl / module: `many(('.' Ident))`: one token; takes a mark: it can fail after `'.'`
-- Decl / export_: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Decl / export_2: `alt(Decl \| &(alt('var' \| 'let' \| 'const' \| 'using' \| 'a…`: by attempt
-- Decl / export_3: `alt((DecoratorExpr many(DecoratorExpr)) alt('default' &…`: by attempt; takes a mark: branch 0: it can fail after `(DecoratorExpr many(DecoratorExpr))`
-- Decl / export_3: `alt('default' &(alt(&{'class'\|'function'\|'interface'\|De…`: one token; takes a mark: branch 0: it can fail after `'default'`
-- Decl / export_3: `alt('function' opt(!{'break'\|'case'\|'catch'\|'class'\|…32…`: by attempt; takes a mark: branch 0: it can fail after `'function'`; branch 1: it can fail after `'function'`; branch 2: it can fail after `'async'`; branch 3: it can fail after `'async'`; branch 4: it can fail after `many(DecoratorExpr)`; branch 5: it can fail after `many(DecoratorExpr)`; branch 6: it can fail after `'interface'`; branch 8: it can fail after `Expr`
-- Decl / export_3: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
-- Decl / export_3: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
-- Decl / export_3: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
-- Decl / export_3: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
-- Decl / export_3: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Decl / export_3: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
-- Decl / export_3: `sep(Param, ',')`: by attempt
-- Decl / export_3: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
-- Decl / export_3: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
-- Decl / export_3: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
-- Decl / export_3: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Decl / export_3: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
-- Decl / export_3: `sep(Param, ',')`: by attempt
-- Decl / export_3: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
-- Decl / export_3: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
-- Decl / export_3: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
-- Decl / export_3: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Decl / export_3: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
-- Decl / export_3: `sep(Param, ',')`: by attempt
-- Decl / export_3: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
-- Decl / export_3: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
-- Decl / export_3: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
-- Decl / export_3: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Decl / export_3: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
-- Decl / export_3: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
-- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / export_3: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
-- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / export_3: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
-- Decl / export_3: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
-- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / export_3: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
-- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / export_3: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
-- Decl / export_3: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
-- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / export_3: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
-- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / export_3: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
-- Decl / export_3: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
-- Decl / export_3: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Decl / export_4: `opt('as' alt(Ident \| String))`: one token; takes a mark: it can fail after `'as'`
-- Decl / export_4: `opt('with' '{' opt(alt(Ident \| String) ':' String many(…`: one token; takes a mark: it can fail after `'with'`
-- Decl / export_4: `opt(alt(Ident \| String) ':' String many((',' alt(… \| …)…`: one token; takes a mark: it can fail after `alt(Ident \| String)`
-- Decl / export_4: `many((',' alt(Ident \| String) ':' String))`: one token; takes a mark: it can fail after `','`
-- Decl / export_4: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Decl / export_5: `opt('from' String opt('with' '{' opt(alt(… \| …) ':' Str…`: one token; takes a mark: it can fail after `'from'`
-- Decl / export_5: `opt('with' '{' opt(alt(Ident \| String) ':' String many(…`: one token; takes a mark: it can fail after `'with'`
-- Decl / export_5: `opt(alt(Ident \| String) ':' String many((',' alt(… \| …)…`: one token; takes a mark: it can fail after `alt(Ident \| String)`
-- Decl / export_5: `many((',' alt(Ident \| String) ':' String))`: one token; takes a mark: it can fail after `','`
-- Decl / export_5: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Decl / export_6: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Decl / export_7: `opt('from' String opt('with' '{' opt(alt(… \| …) ':' Str…`: one token; takes a mark: it can fail after `'from'`
-- Decl / export_7: `opt('with' '{' opt(alt(Ident \| String) ':' String many(…`: one token; takes a mark: it can fail after `'with'`
-- Decl / export_7: `opt(alt(Ident \| String) ':' String many((',' alt(… \| …)…`: one token; takes a mark: it can fail after `alt(Ident \| String)`
-- Decl / export_7: `many((',' alt(Ident \| String) ':' String))`: one token; takes a mark: it can fail after `','`
-- Decl / export_7: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Decl / import_: `alt(ImportClause 'from' String opt('with' '{' opt(alt(……`: by attempt; takes a mark: branch 0: it can fail after `ImportClause`; branch 1: it can fail after `'type'`; branch 2: it can fail after `'type'`; branch 3: it can fail after `Ident`
-- Decl / import_: `opt('with' '{' opt(alt(Ident \| String) ':' String many(…`: one token; takes a mark: it can fail after `'with'`
-- Decl / import_: `opt(alt(Ident \| String) ':' String many((',' alt(… \| …)…`: one token; takes a mark: it can fail after `alt(Ident \| String)`
-- Decl / import_: `many((',' alt(Ident \| String) ':' String))`: one token; takes a mark: it can fail after `','`
-- Decl / import_: `opt('with' '{' opt(alt(Ident \| String) ':' String many(…`: one token; takes a mark: it can fail after `'with'`
-- Decl / import_: `opt(alt(Ident \| String) ':' String many((',' alt(… \| …)…`: one token; takes a mark: it can fail after `alt(Ident \| String)`
-- Decl / import_: `many((',' alt(Ident \| String) ':' String))`: one token; takes a mark: it can fail after `','`
-- Decl / import_: `opt('with' '{' opt(alt(Ident \| String) ':' String many(…`: one token; takes a mark: it can fail after `'with'`
-- Decl / import_: `opt(alt(Ident \| String) ':' String many((',' alt(… \| …)…`: one token; takes a mark: it can fail after `alt(Ident \| String)`
-- Decl / import_: `many((',' alt(Ident \| String) ':' String))`: one token; takes a mark: it can fail after `','`
-- Decl / import_: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- Decl / exportAsNamespace: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- Decl / exportDeclaration: `alt(Decl \| &(alt('var' \| 'let' \| 'const' \| 'using' \| 'a…`: by attempt
+- Decl / exportDefault: `alt((DecoratorExpr many(DecoratorExpr)) alt('default' &…`: by attempt; takes a mark: branch 0: it can fail after `(DecoratorExpr many(DecoratorExpr))`
+- Decl / exportDefault: `alt('default' &(alt(&{'class'\|'function'\|'interface'\|De…`: one token; takes a mark: branch 0: it can fail after `'default'`
+- Decl / exportDefault: `alt('function' opt(!{'break'\|'case'\|'catch'\|'class'\|…32…`: by attempt; takes a mark: branch 0: it can fail after `'function'`; branch 1: it can fail after `'function'`; branch 2: it can fail after `'async'`; branch 3: it can fail after `'async'`; branch 4: it can fail after `many(DecoratorExpr)`; branch 5: it can fail after `many(DecoratorExpr)`; branch 6: it can fail after `'interface'`; branch 8: it can fail after `Expr`
+- Decl / exportDefault: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
+- Decl / exportDefault: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
+- Decl / exportDefault: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
+- Decl / exportDefault: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
+- Decl / exportDefault: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- Decl / exportDefault: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
+- Decl / exportDefault: `sep(Param, ',')`: by attempt
+- Decl / exportDefault: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
+- Decl / exportDefault: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
+- Decl / exportDefault: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
+- Decl / exportDefault: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- Decl / exportDefault: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
+- Decl / exportDefault: `sep(Param, ',')`: by attempt
+- Decl / exportDefault: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
+- Decl / exportDefault: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
+- Decl / exportDefault: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
+- Decl / exportDefault: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- Decl / exportDefault: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
+- Decl / exportDefault: `sep(Param, ',')`: by attempt
+- Decl / exportDefault: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
+- Decl / exportDefault: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
+- Decl / exportDefault: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
+- Decl / exportDefault: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- Decl / exportDefault: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
+- Decl / exportDefault: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / exportDefault: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / exportDefault: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / exportDefault: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / exportDefault: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / exportDefault: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / exportDefault: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / exportDefault: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / exportDefault: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / exportDefault: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / exportDefault: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / exportDefault: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / exportDefault: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
+- Decl / exportDefault: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / exportDefault: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / exportDefault: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / exportDefault: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / exportDefault: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / exportDefault: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / exportDefault: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / exportDefault: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / exportDefault: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / exportDefault: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / exportDefault: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / exportDefault: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / exportDefault: `alt('extends' alt(!(alt(… … \| … … …)) sep(alt(… … …), '…`: one token; takes a mark: branch 0: it can fail after `'extends'`; branch 1: it can fail after `'implements'`
+- Decl / exportDefault: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / exportDefault: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / exportDefault: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / exportDefault: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / exportDefault: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / exportDefault: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / exportDefault: `alt(!(alt('{' !{'}'} \| '{' '}' (','\|'{'\|'extends'\|'impl…`: by attempt
+- Decl / exportDefault: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / exportDefault: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / exportDefault: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / exportDefault: `sep(alt(!{'extends'\|'implements'} !('{' '}' !{','\|'exte…`: by attempt
+- Decl / exportDefault: `alt(!{'extends'\|'implements'} !('{' '}' !{','\|'extends'…`: by attempt
+- Decl / exportDefault: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- Decl / exportAll: `opt('as' alt(Ident \| String))`: one token; takes a mark: it can fail after `'as'`
+- Decl / exportAll: `opt('with' '{' opt(alt(Ident \| String) ':' String many(…`: one token; takes a mark: it can fail after `'with'`
+- Decl / exportAll: `opt(alt(Ident \| String) ':' String many((',' alt(… \| …)…`: one token; takes a mark: it can fail after `alt(Ident \| String)`
+- Decl / exportAll: `many((',' alt(Ident \| String) ':' String))`: one token; takes a mark: it can fail after `','`
+- Decl / exportAll: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- Decl / exportNamed: `opt('from' String opt('with' '{' opt(alt(… \| …) ':' Str…`: one token; takes a mark: it can fail after `'from'`
+- Decl / exportNamed: `opt('with' '{' opt(alt(Ident \| String) ':' String many(…`: one token; takes a mark: it can fail after `'with'`
+- Decl / exportNamed: `opt(alt(Ident \| String) ':' String many((',' alt(… \| …)…`: one token; takes a mark: it can fail after `alt(Ident \| String)`
+- Decl / exportNamed: `many((',' alt(Ident \| String) ':' String))`: one token; takes a mark: it can fail after `','`
+- Decl / exportNamed: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- Decl / exportEquals: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- Decl / exportNamedType: `opt('from' String opt('with' '{' opt(alt(… \| …) ':' Str…`: one token; takes a mark: it can fail after `'from'`
+- Decl / exportNamedType: `opt('with' '{' opt(alt(Ident \| String) ':' String many(…`: one token; takes a mark: it can fail after `'with'`
+- Decl / exportNamedType: `opt(alt(Ident \| String) ':' String many((',' alt(… \| …)…`: one token; takes a mark: it can fail after `alt(Ident \| String)`
+- Decl / exportNamedType: `many((',' alt(Ident \| String) ':' String))`: one token; takes a mark: it can fail after `','`
+- Decl / exportNamedType: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- Decl / importDeclaration: `alt(ImportClause 'from' String opt('with' '{' opt(alt(……`: by attempt; takes a mark: branch 0: it can fail after `ImportClause`; branch 1: it can fail after `'type'`; branch 2: it can fail after `'type'`; branch 3: it can fail after `Ident`
+- Decl / importDeclaration: `opt('with' '{' opt(alt(Ident \| String) ':' String many(…`: one token; takes a mark: it can fail after `'with'`
+- Decl / importDeclaration: `opt(alt(Ident \| String) ':' String many((',' alt(… \| …)…`: one token; takes a mark: it can fail after `alt(Ident \| String)`
+- Decl / importDeclaration: `many((',' alt(Ident \| String) ':' String))`: one token; takes a mark: it can fail after `','`
+- Decl / importDeclaration: `opt('with' '{' opt(alt(Ident \| String) ':' String many(…`: one token; takes a mark: it can fail after `'with'`
+- Decl / importDeclaration: `opt(alt(Ident \| String) ':' String many((',' alt(… \| …)…`: one token; takes a mark: it can fail after `alt(Ident \| String)`
+- Decl / importDeclaration: `many((',' alt(Ident \| String) ':' String))`: one token; takes a mark: it can fail after `','`
+- Decl / importDeclaration: `opt('with' '{' opt(alt(Ident \| String) ':' String many(…`: one token; takes a mark: it can fail after `'with'`
+- Decl / importDeclaration: `opt(alt(Ident \| String) ':' String many((',' alt(… \| …)…`: one token; takes a mark: it can fail after `alt(Ident \| String)`
+- Decl / importDeclaration: `many((',' alt(Ident \| String) ':' String))`: one token; takes a mark: it can fail after `','`
+- Decl / importDeclaration: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
 
 ### ClassMember
 
@@ -1176,60 +1176,60 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 ### ImportClause
 
 - ImportClause (4 alternatives):
-  - `*`: two tokens: committed to star (#3) (takes a mark: it can fail after `'*'`)
+  - `*`: two tokens: committed to namespace (#3) (takes a mark: it can fail after `'*'`)
   - `break`, `case`, `catch`, `class`, `const`, `continue`, `debugger`, `default` and 28 more: no candidate, the list fails
-  - `defer`: two tokens: committed to ident (#1), unless defer (#0) admits the token (then the frame)
-  - `{`: two tokens: committed to brace (#2) (takes a mark: it can fail after `'{'`)
-  - <Ident>: one token: committed to ident (#1)
+  - `defer`: two tokens: committed to defaultBinding (#1), unless deferNamespace (#0) admits the token (then the frame)
+  - `{`: two tokens: committed to named (#2) (takes a mark: it can fail after `'{'`)
+  - <Ident>: one token: committed to defaultBinding (#1)
   - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <String>, <Template>, <JSXSelfClose> and 10 more: no candidate, the list fails
-  - two tokens (pairs): defer (#0) at `defer` only before '*'
-  - two tokens (SECOND): defer (#0) only before '*'; brace (#2) only before 'type'|'}'|Ident|String; star (#3) only before 'as'
-  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over defer (#0), ident (#1)
+  - two tokens (pairs): deferNamespace (#0) at `defer` only before '*'
+  - two tokens (SECOND): deferNamespace (#0) only before '*'; named (#2) only before 'type'|'}'|Ident|String; namespace (#3) only before 'as'
+  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over deferNamespace (#0), defaultBinding (#1)
 - one token, no mark: 2 sep
-- ImportClause / ident: `opt(',' alt('{' sep(ImportSpecifier, ',') '}' \| '*' 'as…`: one token; takes a mark: it can fail after `','`
-- ImportClause / ident: `alt('{' sep(ImportSpecifier, ',') '}' \| '*' 'as' !{'bre…`: one token; takes a mark: branch 0: it can fail after `'{'`; branch 1: it can fail after `'*'`
+- ImportClause / defaultBinding: `opt(',' alt('{' sep(ImportSpecifier, ',') '}' \| '*' 'as…`: one token; takes a mark: it can fail after `','`
+- ImportClause / defaultBinding: `alt('{' sep(ImportSpecifier, ',') '}' \| '*' 'as' !{'bre…`: one token; takes a mark: branch 0: it can fail after `'{'`; branch 1: it can fail after `'*'`
 
 ### ImportSpecifier
 
 - ImportSpecifier (3 alternatives):
-  - `type`: two tokens: committed to seq2 (#1), unless seq (#0), seq3 (#2) admit the token (then the frame) (takes a mark: it can fail after `opt('type' &(alt(!{'as'} alt(… \| …) \| '…`)
-  - <Ident>: two tokens: committed to seq2 (#1), unless seq (#0) admits the token (then the frame) (takes a mark: it can fail after `opt('type' &(alt(!{'as'} alt(… \| …) \| '…`)
+  - `type`: two tokens: committed to plain (#1), unless renamed (#0), stringRenamed (#2) admit the token (then the frame) (takes a mark: it can fail after `opt('type' &(alt(!{'as'} alt(… \| …) \| '…`)
+  - <Ident>: two tokens: committed to plain (#1), unless renamed (#0) admits the token (then the frame) (takes a mark: it can fail after `opt('type' &(alt(!{'as'} alt(… \| …) \| '…`)
   - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <Template>, <JSXSelfClose>, <JSXClose> and 9 more: no candidate, the list fails
-  - <String>: two tokens: committed to seq3 (#2) (takes a mark: it can fail after `opt('type' &(alt(!{'as'} alt(… \| …) \| '…`)
-  - two tokens (pairs): seq (#0) at `type` only before 'as'|Ident; seq3 (#2) at `type` only before String
-  - two tokens (SECOND): seq (#0) only before 'as'|Ident; seq3 (#2) only before 'as'|String
-  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over seq (#0), seq2 (#1), seq3 (#2)
-- ImportSpecifier / seq: `opt('type' &(alt(!{'as'} alt(… \| …) \| 'as' 'as' alt(… \|…`: one token; takes a mark: it can fail after `'type'`
-- ImportSpecifier / seq2: `opt('type' &(alt(!{'as'} alt(… \| …) \| 'as' 'as' alt(… \|…`: one token; takes a mark: it can fail after `'type'`
-- ImportSpecifier / seq3: `opt('type' &(alt(!{'as'} alt(… \| …) \| 'as' 'as' alt(… \|…`: one token; takes a mark: it can fail after `'type'`
+  - <String>: two tokens: committed to stringRenamed (#2) (takes a mark: it can fail after `opt('type' &(alt(!{'as'} alt(… \| …) \| '…`)
+  - two tokens (pairs): renamed (#0) at `type` only before 'as'|Ident; stringRenamed (#2) at `type` only before String
+  - two tokens (SECOND): renamed (#0) only before 'as'|Ident; stringRenamed (#2) only before 'as'|String
+  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over renamed (#0), plain (#1), stringRenamed (#2)
+- ImportSpecifier / renamed: `opt('type' &(alt(!{'as'} alt(… \| …) \| 'as' 'as' alt(… \|…`: one token; takes a mark: it can fail after `'type'`
+- ImportSpecifier / plain: `opt('type' &(alt(!{'as'} alt(… \| …) \| 'as' 'as' alt(… \|…`: one token; takes a mark: it can fail after `'type'`
+- ImportSpecifier / stringRenamed: `opt('type' &(alt(!{'as'} alt(… \| …) \| 'as' 'as' alt(… \|…`: one token; takes a mark: it can fail after `'type'`
 
 ### ExportSpecifier
 
 - ExportSpecifier (3 alternatives):
-  - `type`: two tokens: committed to ident (#2), unless type (#0), type2 (#1) admit the token (then the frame)
-  - <Ident>, <String>: one token: committed to ident (#2)
+  - `type`: two tokens: committed to specifier (#2), unless typed (#0), typedAs (#1) admit the token (then the frame)
+  - <Ident>, <String>: one token: committed to specifier (#2)
   - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <Template>, <JSXSelfClose>, <JSXClose> and 9 more: no candidate, the list fails
-  - two tokens (pairs): type (#0) at `type` only before Ident|String; type2 (#1) at `type` only before 'as'
-  - two tokens (SECOND): type (#0) only before Ident|String; type2 (#1) only before 'as'
-  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over type (#0), type2 (#1), ident (#2)
+  - two tokens (pairs): typed (#0) at `type` only before Ident|String; typedAs (#1) at `type` only before 'as'
+  - two tokens (SECOND): typed (#0) only before Ident|String; typedAs (#1) only before 'as'
+  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over typed (#0), typedAs (#1), specifier (#2)
 - one token, no mark: 5 inline choices
-- ExportSpecifier / type: `opt('as' alt(Ident \| String))`: one token; takes a mark: it can fail after `'as'`
-- ExportSpecifier / type2: `alt(!{Ident\|String} \| 'as' alt(Ident \| String))`: by attempt; takes a mark: branch 1: it can fail after `'as'`
-- ExportSpecifier / ident: `opt('as' alt(Ident \| String))`: one token; takes a mark: it can fail after `'as'`
+- ExportSpecifier / typed: `opt('as' alt(Ident \| String))`: one token; takes a mark: it can fail after `'as'`
+- ExportSpecifier / typedAs: `alt(!{Ident\|String} \| 'as' alt(Ident \| String))`: by attempt; takes a mark: branch 1: it can fail after `'as'`
+- ExportSpecifier / specifier: `opt('as' alt(Ident \| String))`: one token; takes a mark: it can fail after `'as'`
 
 ### ModuleReference
 
 - ModuleReference (2 alternatives):
   - `break`, `case`, `catch`, `class`, `const`, `continue`, `debugger`, `default` and 28 more: no candidate, the list fails
-  - `require`: two tokens: committed to ident (#1), unless require (#0) admits the token (then the frame)
-  - <Ident>: one token: committed to ident (#1)
+  - `require`: two tokens: committed to entityName (#1), unless external (#0) admits the token (then the frame)
+  - <Ident>: one token: committed to entityName (#1)
   - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <String>, <Template>, <JSXSelfClose> and 10 more: no candidate, the list fails
-  - two tokens (pairs): require (#0) at `require` only before '('
-  - two tokens (SECOND): require (#0) only before '('
-  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over require (#0), ident (#1)
-- ModuleReference / require: `alt(String \| !{String} Expr many((',' Expr)))`: by attempt; takes a mark: branch 1: it can fail after `Expr`
-- ModuleReference / require: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
-- ModuleReference / ident: `many(('.' !{'break'\|'case'\|'catch'\|'class'\|…32} Ident))`: one token; takes a mark: it can fail after `'.'`
+  - two tokens (pairs): external (#0) at `require` only before '('
+  - two tokens (SECOND): external (#0) only before '('
+  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over external (#0), entityName (#1)
+- ModuleReference / external: `alt(String \| !{String} Expr many((',' Expr)))`: by attempt; takes a mark: branch 1: it can fail after `Expr`
+- ModuleReference / external: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
+- ModuleReference / entityName: `many(('.' !{'break'\|'case'\|'catch'\|'class'\|…32} Ident))`: one token; takes a mark: it can fail after `'.'`
 
 ### TypeStart
 
