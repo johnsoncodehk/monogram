@@ -26,15 +26,30 @@
 // every site, so it cannot carry each site's tags: the shape form prints each site in place
 // (`share` dropped); passing the site's tag base to the shared function is the end state's answer.
 //
-// S1 (this stage) compiles synthesized-only terms: an arm whose term needs an inherited attribute,
-// a synthesized attribute, `get`, `dropLastIf`, a template's parts, or a nodes-attribute equation is
-// compiled to a MISSING value (`unsupported`), which fails only where it is read, as an unmapped arm
-// does (the evaluator's laziness: a child nobody reads is never built into anything).
+// ATTRIBUTES (S2). A synthesized attribute is computed at the accept site, beside the value (it
+// reads the arm's own children's synthesized attributes and leaves), and kept per slot.
+// An inherited SCALAR attribute reaches a node in one of two ways, and the plan uses each:
+// - an rd rule's node is built inside the call its parent makes, so the attribute is CONTEXT the
+//   call sets (Step.inh: the parent arm's equation for that child, a constant or a copy of its own
+//   attribute, else the default; restored after the call), and a threaded repetition sets the
+//   threaded state around each element's calls and computes the next state after each iteration
+//   (Step.threadInit / Step.thread, over the iteration's slots between its markers);
+// - VARIANTS: a Pratt rule's node can become the LEFT operand of an operator seen after it was
+//   built, and the left takes that operator's equation for `left` (or the default), not the
+//   context its call had (`a.b.c`: tsc / ESTree `chainTop` is false for `a.b`). So a Pratt arm
+//   whose value reads an inherited (bool) attribute is built under BOTH values (what does not
+//   depend on it is computed once and shared), and every READER of the node picks the variant by
+//   the value it gives the child (its equation, else the default): the led its left, an rd parent
+//   its child, parse() the root. Nothing is rebuilt and no children are kept.
+// Not yet compiled (an arm needing one is MISSING, `unsupported`, which fails only where it is
+// read, as an unmapped arm does): a nodes attribute, a template's parts, a Pratt arm reading two
+// inherited attributes or handing one down (ESTree's `pattern` spine: S3), an inherited equation at
+// a call site that reads more than a constant or a copy.
 import type { Expr, Fn, Stmt } from './algo-ir.ts';
-import type { ParserIR, PrattRule, RdRule, RuleIR, Step } from './emit-portable.ts';
+import type { ParserIR, PrattRule, RdRule, RuleIR, ShapeInhVal, Step } from './emit-portable.ts';
 import type { RuleExpr } from './types.ts';
 import { cardOf, type ArmInfo, type ScopeInfo, type Shape, type Slot } from './shape2-eval.ts';
-import type { CookFn, Term } from './shape2-schema.ts';
+import type { CookFn, InhEq, Scalar, Term, ThreadEq } from './shape2-schema.ts';
 
 /** One engine arm: the rule, the engine's key for it, the grammar arm (null: none maps it). */
 export type EngineArm = { id: number; rule: string; key: string; arm: string };
@@ -50,6 +65,19 @@ export type ShapePlan = {
   cooks: CookFn[];
   /** Arms compiled to a missing value, with the reason. */
   unsupported: Map<number, string>;
+  /** The synthesized attributes (index k): per engine arm the function computing it at the
+   * arm's accept site (`syn<k>_<id>`), null where the arm takes the default. */
+  syn: { name: string; dflt: Scalar | undefined; fns: (string | null)[] }[];
+  /** The inherited scalar attributes an rd rule reads (index k: the context the engine sets at
+   * each call of such a rule, Step.inh), with their defaults. */
+  inh: { name: string; dflt: Scalar }[];
+  /** Per engine arm: the bit (in its rule's variant attributes) of the one inherited attribute
+   * its value is built under both values of (a Pratt arm: see VARIANTS), else -1; and whether
+   * that attribute's default is true (the value a reader without an equation takes). */
+  variantBit: number[];
+  variantDefault: boolean[];
+  /** Slot-leaving steps with a grammar tag, and those that write it (a plan reads it). */
+  tagStats: { sites: number; tagged: number };
 };
 
 /** The engine's key for each accept site of a rule: rd `alt<i>`; Pratt `nud<i>`, `led<i>`,
@@ -115,6 +143,40 @@ const EXTERNS: Fn[] = [
 // last end, else `dflt`.
 const SPAN_FNS: Fn[] = ['valStart', 'valEnd'].map((name) => ({ name, doc: '', params: [{ name: 'x', ty: VAL as never }, { name: 'dflt', ty: 'pos' as never }], ret: ['int' as never], body: [], extern: true }));
 const cookFn = (fn: CookFn): Fn => ({ name: `cook_${fn}`, doc: '', params: [{ name: 's', ty: 'str' }], ret: [VAL as never], body: [], extern: true });
+// The attribute engine methods (S2): an inherited context attribute's current value; a node slot's
+// value read with the variant bits its reader gives it; a slot's synthesized attribute k; this
+// node's own (computed just before its value); the second variant of a variant arm; a record's
+// field; a list without its last element.
+const ATTR_FNS: Fn[] = ([
+  ['inhVar', [['k', 'int']], VAL, true], ['slotValV', [['i', 'idx'], ['m', 'int']], VAL, true], ['slotSyn', [['k', 'int'], ['i', 'idx']], VAL, true],
+  ['selfSyn', [['k', 'int']], VAL, true], ['altVal', [['x', VAL]], null, true], ['recGet', [['x', VAL], ['f', 'str']], VAL, false],
+  ['vDropLast', [['x', VAL], ['c', 'bool']], VAL, false],
+] as [string, [string, string][], string | null, boolean][]).map(([name, ps, ret, method]) => ({
+  name, doc: '', params: ps.map(([n, ty]) => ({ name: n, ty: ty as never })), ret: ret === null ? [] : [ret as never], body: [], extern: true,
+  ...(method ? { method: true, reads: true } : {}),
+}));
+const ARM_PARAMS = [{ name: 'b', ty: 'idx' as const }, { name: 'off', ty: 'pos' as const }, { name: 'end', ty: 'pos' as const }];
+
+/** Every term inside a term (itself included). */
+function eachTerm(t: unknown, f: (t: Term) => void): void {
+  if (t === null || typeof t !== 'object') return;
+  if (Array.isArray(t)) { t.forEach((x) => eachTerm(x, f)); return; }
+  if (typeof (t as { t?: unknown }).t === 'string') f(t as Term);
+  for (const x of Object.values(t)) eachTerm(x, f);
+}
+const inhReads = (t: unknown): Set<string> => { const out = new Set<string>(); eachTerm(t, (x) => { if (x.t === 'inh') out.add(x.attr); }); return out; };
+
+/** An arm's inherited equations: attribute -> child name -> equation. */
+type Eqs = Map<string, Map<string, InhEq>>;
+type RuleEqs = Record<string, Record<string, Record<string, InhEq>>>;
+function armEqs(shape: Shape, rule: string, arm: string): Eqs {
+  const out: Eqs = new Map();
+  for (const [attr, d] of Object.entries(shape.spec.inherited ?? {})) {
+    const kids = (d.rules as RuleEqs)[rule]?.[arm];
+    if (kids) out.set(attr, new Map(Object.entries(kids)));
+  }
+  return out;
+}
 
 /** Compile `shape` against `ir` (built from the shape's own grammar). */
 export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
@@ -124,6 +186,29 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
   const cooks = new Set<CookFn>();
   const fns: Fn[] = [];
   const newRules: RuleIR[] = [];
+  const spec = shape.spec;
+  const inhDecls = Object.entries(spec.inherited ?? {});
+  const scalarInh = inhDecls.filter(([, d]) => d.type !== 'nodes').map(([name, d]) => ({ name, dflt: (d as { default: Scalar }).default }));
+  const inhK = new Map(scalarInh.map((a, k) => [a.name, k]));
+  const nodesAttrs = new Set(inhDecls.filter(([, d]) => d.type === 'nodes').map(([n]) => n));
+  const synDecls = Object.entries(spec.synthesized ?? {});
+  const synK = new Map(synDecls.map(([n], k) => [n, k]));
+  const syn = synDecls.map(([name, d]) => ({ name, dflt: d.default, fns: [] as (string | null)[] }));
+  const variantBit: number[] = [], variantDefault: boolean[] = [];
+  const tagStats = { sites: 0, tagged: 0 };
+  // The scalar inherited attributes each rule's arms read (in values and equations): a Pratt
+  // rule's are its VARIANT attributes, an rd rule's the context its callers set.
+  const kinds = new Map(ir.rules.map((r) => [r.name, r.kind]));
+  const reads = new Map<string, string[]>();
+  for (const r of ir.rules) {
+    const got = inhReads(Object.values(spec.rules[r.name] ?? {}));
+    for (const [, d] of inhDecls) for (const kids of Object.values((d.rules as RuleEqs)[r.name] ?? {})) {
+      for (const eq of Object.values(kids)) for (const a of inhReads(eq.t === 'thread' ? (eq as ThreadEq).init : eq)) got.add(a);
+    }
+    reads.set(r.name, scalarInh.map((a) => a.name).filter((a) => got.has(a)));
+  }
+  const variants = (rule: string): string[] => (kinds.get(rule) === 'pratt' ? reads.get(rule) ?? [] : []);
+  const cx: AttrCx = { inhK, synK, scalarInh, nodesAttrs, variants };
   for (const r of ir.rules) {
     const view = shape.grammar.arms.get(r.name);
     const names = shape.grammar.names.get(r.name);
@@ -131,43 +216,124 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
     const named = (e: RuleExpr) => names.childOf.has(e);
     const marked = new Map<RuleExpr, number>();   // quantifier body / sep element -> marker tag
     const tagsByKey = new Map<string, Numbering>();
+    const sitesByKey = new Map<string, ArmSites>();
     for (const { key, arm } of armKeys(r)) {
       const id = arms.length;
+      const fnStart = fns.length;
       arms.push({ id, rule: r.name, key, arm });
       ids.set(`${r.name}|${key}`, id);
+      variantBit.push(-1); variantDefault.push(false);
+      for (const sy of syn) sy.fns.push(null);
       if (arm === NO_ARM) {
         tagsByKey.set(key, numberArm([], named));
-        fns.push({ name: `construct${id}`, doc: `${r.name} ${key}: no such arm`, params: [{ name: 'b', ty: 'idx' }, { name: 'off', ty: 'pos' }, { name: 'end', ty: 'pos' }], ret: [VAL as never], body: [{ k: 'return', es: [{ k: 'vMissing', where: `${r.name} ${key}`, why: 'unmapped' }] }], method: true, reads: true });
+        fns.push({ name: `construct${id}`, doc: `${r.name} ${key}: no such arm`, params: ARM_PARAMS, ret: [VAL as never], body: [{ k: 'return', es: [{ k: 'vMissing', where: `${r.name} ${key}`, why: 'unmapped' }] }], method: true, reads: true });
         continue;
       }
       const info = view.find((a) => a.arm === arm);
       if (!info) throw new Error(`planShape: ${r.name}: the engine arm ${key} names the arm ${arm}, which the shape's grammar view does not have`);
       const num = numberArm(info.items ?? [], named);
       tagsByKey.set(key, num);
-      const term = shape.spec.rules[r.name]?.[arm];
+      const eqs = armEqs(shape, r.name, arm);
+      const sites: ArmSites = { eqs, childOf: childNames(info), threads: new Map() };
+      sitesByKey.set(key, sites);
+      const term = spec.rules[r.name]?.[arm];
       const where = `${r.name}.${arm}`;
+      const compiler = () => new ArmCompiler(shape, info, num, positional(r, key, info), key.startsWith('led') ? 1 : 0, marked, cooks, cx, eqs);
+      // The arm's synthesized attributes and threads (a reason it cannot is the arm's reason too).
+      let attrWhy: string | undefined;
+      for (const [k, [attr, d]] of synDecls.entries()) {
+        const eq = d.rules[r.name]?.[arm];
+        if (eq === undefined) continue;
+        const name = `syn${k}_${id}`;
+        try { fns.push({ name, doc: `${where} synthesized ${attr}`, params: ARM_PARAMS, ret: [VAL as never], body: compiler().compile(eq), method: true, reads: true }); syn[k]!.fns[id] = name; }
+        catch (e) { if (!(e instanceof Unsupported)) throw e; attrWhy ??= e.message; }
+      }
+      for (const [attr, kids] of eqs) for (const [over, eq] of kids) {
+        if (eq.t !== 'thread' || !inhK.has(attr)) continue;
+        const k = inhK.get(attr)!;
+        try {
+          if (r.kind !== 'rd') no(`a thread in a Pratt arm (${attr})`);
+          const name = `thr${k}_${id}`;
+          const { q, body } = compiler().threadNext(eq as ThreadEq, over, k);
+          fns.push({ name, doc: `${where} thread ${attr}: the state after an iteration`, params: [{ name: 'lo', ty: 'idx' }, { name: 'hi', ty: 'idx' }], ret: [VAL as never], body, method: true, reads: true });
+          sites.threads.set(q, { k, init: inhVal(cx, (eq as ThreadEq).init), next: name });
+        } catch (e) { if (!(e instanceof Unsupported)) throw e; attrWhy ??= e.message; }
+      }
       let body: Stmt[];
       if (term === undefined) body = [{ k: 'return', es: [{ k: 'vMissing', where, why: 'unmapped' }] }];
       else {
         try {
-          if (Object.values(shape.spec.inherited ?? {}).some((d) => d.type === 'nodes' && d.rules[r.name]?.[arm] !== undefined)) no('a nodes-attribute equation');
-          body = new ArmCompiler(shape, info, num, positional(r, key, info), key.startsWith('led') ? 1 : 0, marked, cooks).compile(term);
+          if (attrWhy !== undefined) no(attrWhy);
+          if ([...nodesAttrs].some((n) => eqs.has(n))) no('a nodes-attribute equation');
+          const vs = variants(r.name);
+          if (vs.length) for (const kids of eqs.values()) for (const eq of kids.values()) {
+            const h = [...inhReads(eq.t === 'thread' ? (eq as ThreadEq).init : eq)].find((a) => vs.includes(a));
+            if (h !== undefined) no(`a Pratt arm handing down ${h}, which a later operator may change`);
+          }
+          const own = [...inhReads(term)].filter((a) => !nodesAttrs.has(a));
+          if (vs.length && own.length > 1) no(`a Pratt arm reading two inherited attributes (${own.join(', ')})`);
+          if (vs.length && own.length === 1) {
+            if (typeof scalarInh[inhK.get(own[0]!)!]!.dflt !== 'boolean') no(`a Pratt arm reading the non-bool inherited ${own[0]}`);
+            body = compiler().compileVariants(term, own[0]!);
+            variantBit[id] = vs.indexOf(own[0]!);
+            variantDefault[id] = scalarInh[inhK.get(own[0]!)!]!.dflt === true;
+          } else body = compiler().compile(term);
         } catch (e) {
           if (!(e instanceof Unsupported)) throw e;
           unsupported.set(id, e.message);
           body = [{ k: 'return', es: [{ k: 'vMissing', where: `${where} (${e.message})`, why: 'unsupported' }] }];
         }
       }
-      fns.push({ name: `construct${id}`, doc: where, params: [{ name: 'b', ty: 'idx' }, { name: 'off', ty: 'pos' }, { name: 'end', ty: 'pos' }], ret: [VAL as never], body, method: true, reads: true });
+      fns.push({ name: `construct${id}`, doc: where, params: ARM_PARAMS, ret: [VAL as never], body, method: true, reads: true });
+      sites.readsTag = tagsRead(fns.slice(fnStart));
     }
-    newRules.push(shapeSteps(r, tagsByKey, marked));
+    newRules.push(shapeSteps(r, tagsByKey, marked, sitesByKey, cx, reads, kinds, tagStats));
   }
-  fns.push(...EXTERNS, ...SPAN_FNS, ...[...cooks].map(cookFn));
+  fns.push(...EXTERNS, ...SPAN_FNS, ...ATTR_FNS, ...[...cooks].map(cookFn));
   return {
-    arms, fns, cooks: [...cooks], unsupported,
+    arms, fns, cooks: [...cooks], unsupported, syn, inh: scalarInh, variantBit, variantDefault, tagStats,
     armId: (rule, key) => { const id = ids.get(`${rule}|${key}`); if (id === undefined) throw new Error(`planShape: no engine arm ${rule} ${key}`); return id; },
     ir: { ...ir, rules: newRules, reuse: null },
   };
+}
+
+type AttrCx = {
+  inhK: Map<string, number>; synK: Map<string, number>; scalarInh: { name: string; dflt: Scalar }[];
+  nodesAttrs: Set<string>; variants: (rule: string) => string[];
+};
+/** What an arm's call sites set: its equations, its children's names (by grammar node), its
+ * threaded repetitions (by repetition node). */
+type ArmSites = { eqs: Eqs; childOf: Map<RuleExpr, string>; threads: Map<RuleExpr, { k: number; init: ShapeInhVal; next: string }>; readsTag?: (t: number) => boolean };
+/** The slot tags an arm's functions read (slotFind ranges, a list's tag; namedEnd reads every
+ * named one): only those steps write a tag (Step.tag), the rest of the arm's slots keep -1. */
+function tagsRead(fs: Fn[]): (t: number) => boolean {
+  const ranges: [number, number][] = [];
+  let all = false;
+  const walk = (x: unknown): void => {
+    if (x === null || typeof x !== 'object') return;
+    if (Array.isArray(x)) { x.forEach(walk); return; }
+    const e = x as Expr;
+    if (e.k === 'call' && (e.fn === 'slotFind' || e.fn === 'slotFindLast')) {
+      const [, , a, b] = e.args;
+      if (a?.k === 'int' && b?.k === 'int') ranges.push([a.v, b.v]); else all = true;
+    } else if (e.k === 'call' && e.fn === 'namedEnd') all = true;
+    else if (e.k === 'bin' && e.op === 'eq' && e.a.k === 'call' && e.a.fn === 'slotTag') { if (e.b.k === 'int') ranges.push([e.b.v, e.b.v]); else all = true; }
+    for (const y of Object.values(x)) walk(y);
+  };
+  fs.forEach((f) => walk(f.body));
+  return all ? () => true : (t) => ranges.some(([a, b]) => t >= a && t <= b);
+}
+function childNames(info: ScopeInfo): Map<RuleExpr, string> {
+  const out = new Map<RuleExpr, string>();
+  const visit = (s: ScopeInfo): void => { for (const slot of s.slots.values()) { out.set(slot.node, slot.name); slot.branches?.forEach(visit); } };
+  visit(info);
+  return out;
+}
+/** A call site's value of an inherited attribute: a constant, or a copy of the caller's own. */
+function inhVal(cx: AttrCx, eq: Term): ShapeInhVal {
+  if (eq.t === 'const') return { c: eq.value };
+  if (eq.t === 'inh' && cx.inhK.has(eq.attr)) return { copy: cx.inhK.get(eq.attr)! };
+  throw new Error(`planShape: an inherited equation at a call site is a constant or a copy of the caller's attribute (S2), not ${eq.t}`);
 }
 
 /** The children an engine arm reads by position (offset from slot b). */
@@ -186,25 +352,57 @@ function positional(r: RuleIR, key: string, info: ArmInfo): Map<RuleExpr, number
 }
 
 /** The shape form of a rule's building steps: each slot-leaving step tagged, each marked
- * repetition body marked, every shared step printed in place. */
-function shapeSteps(r: RuleIR, tags: Map<string, Numbering>, marked: Map<RuleExpr, number>): RuleIR {
-  const clone = (num: Numbering) => {
-    const c = (s: Step): Step => {
+ * repetition body marked, every shared step printed in place; each call of an rd rule that
+ * reads inherited attributes sets them (Step.inh), each threaded repetition threads its state
+ * (Step.threadInit on the repetition, Step.thread on its marked body). */
+function shapeSteps(r: RuleIR, tags: Map<string, Numbering>, marked: Map<RuleExpr, number>, sites: Map<string, ArmSites>, cx: AttrCx, reads: Map<string, string[]>, kinds: Map<string, string>, tagStats: { sites: number; tagged: number }): RuleIR {
+  const clone = (num: Numbering, site: ArmSites | undefined) => {
+    const attached = new Set<RuleExpr>();
+    const bodyOf = new Map<RuleExpr, { k: number; next: string }>();
+    // threaded: the attributes whose thread runs around this step (its calls keep the state).
+    const c = (s: Step, threaded: Set<number>): Step => {
       const o = { ...s } as Step & { share?: number };
       delete o.share;
-      if (s.src && (s.t === 'lit' || s.t === 'tok' || s.t === 'rule' || s.t === 'ruleBp' || s.t === 'altlit')) { const t = num.tagOf.get(s.src); if (t !== undefined) o.tag = t; }
+      if (s.src && (s.t === 'lit' || s.t === 'tok' || s.t === 'rule' || s.t === 'ruleBp' || s.t === 'altlit')) { const t = num.tagOf.get(s.src); if (t !== undefined) { tagStats.sites++; if (site?.readsTag?.(t)) { o.tag = t; tagStats.tagged++; } } }
       if (s.src && marked.has(s.src)) o.mark = marked.get(s.src)!;
+      if (site && s.t === 'rule' && kinds.get(s.name) === 'rd' && reads.get(s.name)?.length) {
+        const kid = s.src ? site.childOf.get(s.src) : undefined;
+        const inh: { k: number; v: ShapeInhVal }[] = [];
+        for (const attr of reads.get(s.name)!) {
+          const k = cx.inhK.get(attr)!;
+          if (threaded.has(k)) continue;
+          const eq = kid === undefined ? undefined : site.eqs.get(attr)?.get(kid);
+          // A Pratt arm handing one down is outside S2 (its construct is missing): the default.
+          const v: ShapeInhVal = eq === undefined || eq.t === 'thread' || (eq.t === 'inh' && cx.variants(r.name).includes(eq.attr)) ? { c: cx.scalarInh[k]!.dflt } : inhVal(cx, eq);
+          inh.push({ k, v });
+        }
+        if (inh.length) o.inh = inh;
+      }
+      let inner = threaded;
+      const th = site && s.src ? site.threads.get(s.src) : undefined;
+      if (th && (s.t === 'star' || s.t === 'sep')) {
+        o.threadInit = { k: th.k, v: th.init };
+        attached.add(s.src!);
+        bodyOf.set(s.t === 'star' ? s.step.src! : s.elem.src!, { k: th.k, next: th.next });
+        inner = new Set([...threaded, th.k]);
+      }
+      const bt = s.src ? bodyOf.get(s.src) : undefined;
+      if (bt) { if (o.mark === undefined) throw new Error(`planShape: ${r.name}: a threaded repetition's body is not marked`); o.thread = bt; }
       switch (o.t) {
-        case 'star': o.step = c(o.step); break;
-        case 'sep': o.elem = c(o.elem); break;
-        case 'opt': case 'seq': case 'suppress': case 'ctx': o.steps = o.steps.map(c); break;
-        case 'alt': o.branches = o.branches.map((b) => b.map(c)); break;
+        case 'star': o.step = c(o.step, inner); break;
+        case 'sep': o.elem = c(o.elem, inner); break;
+        case 'opt': case 'seq': case 'suppress': case 'ctx': o.steps = o.steps.map((x) => c(x, inner)); break;
+        case 'alt': o.branches = o.branches.map((b) => b.map((x) => c(x, inner))); break;
       }
       return o;
     };
-    return (steps: Step[]) => steps.map(c);
+    return (steps: Step[]) => {
+      const out = steps.map((x) => c(x, new Set()));
+      for (const q of site?.threads.keys() ?? []) if (!attached.has(q)) throw new Error(`planShape: ${r.name}: a threaded repetition has no repetition step`);
+      return out;
+    };
   };
-  const at = (key: string) => clone(tags.get(key)!);
+  const at = (key: string) => clone(tags.get(key)!, sites.get(key));
   if (r.kind === 'rd') return { ...r, alts: r.alts.map((a, i) => at(`alt${i}`)(a)) } as RdRule;
   const p = r as PrattRule;
   const nudKey = (kind: string, index: number) => `nud${p.nudOrder.findIndex((x) => x.kind === kind && 'index' in x && x.index === index)}`;
@@ -228,21 +426,98 @@ const isListQ = (q: RuleExpr): boolean => q.type === 'sep' || (q.type === 'quant
 class ArmCompiler {
   private n = 0;
   private shape: Shape; private info: ArmInfo; private num: Numbering; private pos: Map<RuleExpr, number>; private lo0: number;
-  private marked: Map<RuleExpr, number>; private cooks: Set<CookFn>;
-  constructor(shape: Shape, info: ArmInfo, num: Numbering, pos: Map<RuleExpr, number>, lo0: number, marked: Map<RuleExpr, number>, cooks: Set<CookFn>) {
-    this.shape = shape; this.info = info; this.num = num; this.pos = pos; this.lo0 = lo0; this.marked = marked; this.cooks = cooks;
+  private marked: Map<RuleExpr, number>; private cooks: Set<CookFn>; private cx: AttrCx; private eqs: Eqs;
+  // Variants (compileVariants): the inherited attribute fixed to a value while one variant is
+  // compiled; the values of terms that do not read it, computed once at the arm's top level.
+  private fixed: [string, boolean] | null = null;
+  private cache: Map<Term, Expr> | null = null;
+  private root: Stmt[] = [];
+  private armScope!: CScope;
+  constructor(shape: Shape, info: ArmInfo, num: Numbering, pos: Map<RuleExpr, number>, lo0: number, marked: Map<RuleExpr, number>, cooks: Set<CookFn>, cx: AttrCx, eqs: Eqs) {
+    this.shape = shape; this.info = info; this.num = num; this.pos = pos; this.lo0 = lo0; this.marked = marked; this.cooks = cooks; this.cx = cx; this.eqs = eqs;
   }
   private tmp(): string { return `t${this.n++}`; }
 
-  compile(term: Term): Stmt[] {
-    const out: Stmt[] = [
+  private open(): Stmt[] {
+    this.root = [
       { k: 'let', name: 'lo', ty: 'idx', init: bin('add', v('b'), int(this.lo0)) },
       { k: 'let', name: 'hi', ty: 'idx', init: call('slotTop') },
     ];
-    const s: CScope = { info: this.info, base: [], lo: 'lo', hi: 'hi', vars: new Map(), arm: true };
-    const r = this.val(term, s, out);
+    this.armScope = { info: this.info, base: [], lo: 'lo', hi: 'hi', vars: new Map(), arm: true };
+    return this.root;
+  }
+  compile(term: Term): Stmt[] {
+    const out = this.open();
+    const r = this.val(term, this.armScope, out);
     out.push({ k: 'return', es: [r] });
     return out;
+  }
+  /** The value under `attr` = false (returned) and = true (altVal), sharing what does not read it. */
+  compileVariants(term: Term, attr: string): Stmt[] {
+    const out = this.open();
+    this.cache = new Map();
+    this.fixed = [attr, false];
+    const f = this.bindVal(this.val(term, this.armScope, out), out);
+    this.fixed = [attr, true];
+    const t = this.bindVal(this.val(term, this.armScope, out), out);
+    out.push({ k: 'run', call: call('altVal', v(t)) });
+    out.push({ k: 'return', es: [v(f)] });
+    return out;
+  }
+  /** A thread's next state over one iteration's slots lo..hi (the state: the attribute's current
+   * value), and the repetition it threads. */
+  threadNext(eq: ThreadEq, over: string, k: number): { q: RuleExpr; body: Stmt[] } {
+    const slot = this.info.slots.get(over);
+    if (!slot) throw new Error(`planShape: ${this.info.where}: thread over ${over}: no such child`);
+    const at = slot.quants.map(isListQ).lastIndexOf(true);
+    if (at < 0) throw new Error(`planShape: ${this.info.where}: thread over ${over}, which does not repeat`);
+    if (slot.quants.slice(0, at).some(isListQ)) no(`a thread over a nested repetition (${over})`);
+    const q = slot.quants[at]!;
+    const body = q.type === 'sep' ? q.element : (q as { body: RuleExpr }).body;
+    if (!this.marked.has(body)) this.marked.set(body, -2 - this.marked.size);
+    this.root = [];
+    const out = this.root;
+    this.armScope = { info: this.info, base: [], lo: 'lo', hi: 'hi', vars: new Map(), arm: true };
+    const acc = this.bindVal(call('inhVar', int(k)), out);
+    out.push({ k: 'let', name: 'accS', ty: 'int', init: int(0) }, { k: 'let', name: 'accE', ty: 'int', init: int(0) });
+    const it: CScope = { info: this.info, base: slot.quants.slice(0, at + 1), lo: 'lo', hi: 'hi', vars: new Map([[eq.acc, { val: acc, start: 'accS', end: 'accE' }]]), arm: false };
+    out.push({ k: 'return', es: [this.val(eq.next, it, out)] });
+    return { q, body: out };
+  }
+
+  /** A statically known bool (a constant, the fixed attribute, and / or / not of them). */
+  private staticBool(t: Term): boolean | undefined {
+    switch (t.t) {
+      case 'const': return typeof t.value === 'boolean' ? t.value : undefined;
+      case 'inh': return this.fixed && this.fixed[0] === t.attr ? this.fixed[1] : undefined;
+      case 'not': { const x = this.staticBool(t.arg); return x === undefined ? undefined : !x; }
+      case 'and': case 'or': {
+        const xs = t.args.map((a) => this.staticBool(a));
+        if (t.t === 'and') return xs.includes(false) ? false : xs.every((x) => x === true) ? true : undefined;
+        return xs.includes(true) ? true : xs.every((x) => x === false) ? false : undefined;
+      }
+      default: return undefined;
+    }
+  }
+  private readsFixed(t: Term): boolean { if (!this.fixed) return false; let r = false; eachTerm(t, (x) => { if (x.t === 'inh' && x.attr === this.fixed![0]) r = true; }); return r; }
+  /** A child slot's value: with its variant bits when its rule is a Pratt rule with variants (the
+   * value this arm gives the child: its equation, else the default). */
+  private childVal(idx: Expr, slot: Slot, out: Stmt[]): Expr {
+    const vs = slot.rule ? this.cx.variants(slot.rule) : [];
+    if (!vs.length) return call('slotVal', idx);
+    let mask = 0;
+    const dyn: [number, Expr][] = [];
+    vs.forEach((attr, j) => {
+      const eq = this.eqs.get(attr)?.get(slot.name);
+      if (eq?.t === 'thread') no(`a thread handing ${attr} to a Pratt rule's node`);
+      const st = eq === undefined ? this.cx.scalarInh[this.cx.inhK.get(attr)!]!.dflt === true : this.staticBool(eq as Term);
+      if (st === true) mask |= 1 << j;
+      else if (st === undefined) dyn.push([j, this.bool(eq as Term, this.armScope, out)]);
+    });
+    if (!dyn.length) return call('slotValV', idx, int(mask));
+    const m = this.bindInt(int(mask), out);
+    for (const [j, c] of dyn) out.push({ k: 'if', c, then: [{ k: 'set', name: m, e: bin('add', v(m), int(1 << j)) }] });
+    return call('slotValV', idx, v(m));
   }
 
   private bindVal(e: Expr, out: Stmt[]): string { const t = this.tmp(); out.push({ k: 'let', name: t, ty: VAL as never, init: e }); return t; }
@@ -287,6 +562,8 @@ class ArmCompiler {
   private boolVal(c: Expr, out: Stmt[]): Expr { return this.choose(c, () => ({ k: 'vConst', v: true }), () => ({ k: 'vConst', v: false }), out); }
 
   private bool(t: Term, s: CScope, out: Stmt[]): Expr {
+    const st = this.staticBool(t);
+    if (st !== undefined) return { k: 'bool', v: st };
     switch (t.t) {
       case 'present': return this.present(s, t.name, out);
       case 'not': return { k: 'not', e: this.bool(t.arg, s, out) };
@@ -296,6 +573,7 @@ class ArmCompiler {
         // Short-circuit: each later argument only while the result is still undecided.
         let level = out;
         for (const a of t.args) {
+          if (this.staticBool(a) === (t.t === 'and')) continue;   // decides nothing
           const inner: Stmt[] = [];
           inner.push({ k: 'set', name: x, e: this.bool(a, s, inner) });
           level.push({ k: 'if', c: t.t === 'and' ? v(x) : { k: 'not', e: v(x) }, then: inner });
@@ -336,8 +614,9 @@ class ArmCompiler {
   private iterations(s: CScope, over: string, out: Stmt[], each: (it: CScope, body: Stmt[]) => void): void {
     const r = this.resolve(s, over);
     const at = r.rest.map(isListQ).lastIndexOf(true);
-    if (at !== 0) no(at < 0 ? `iterations of ${over}, which repeats in no list` : `iterations of a nested repetition (${over})`);
-    const q = r.rest[0]!;
+    // Optionals around the repetition are fine: absent, it has no iteration (no marker).
+    if (at < 0 || r.rest.slice(0, at).some(isListQ)) no(at < 0 ? `iterations of ${over}, which repeats in no list` : `iterations of a nested repetition (${over})`);
+    const q = r.rest[at]!;
     const body = q.type === 'sep' ? q.element : (q as { body: RuleExpr }).body;
     if (!this.marked.has(body)) this.marked.set(body, -2 - this.marked.size);
     const mt = this.marked.get(body)!;
@@ -350,38 +629,75 @@ class ArmCompiler {
     ];
     const lo = this.tmp();
     loop.push({ k: 'let', name: lo, ty: 'idx', init: bin('add', v(m), int(1)) });
-    each({ info: r.scope.info, base: [...r.scope.base, q], lo, hi: ih, outer: s, vars: new Map(), arm: false }, loop);
+    each({ info: r.scope.info, base: [...r.scope.base, ...r.rest.slice(0, at + 1)], lo, hi: ih, outer: s, vars: new Map(), arm: false }, loop);
     loop.push({ k: 'set', name: m, e: v(nx) });
     out.push({ k: 'while', c: bin('ge', v(m), int(0)), body: loop });
   }
 
   val(t: Term, s: CScope, out: Stmt[]): Expr {
+    // Variants: a term that does not read the fixed attribute, at the arm's top level, is
+    // computed once for both (its value is visible to everything compiled after it).
+    const top = this.cache !== null && out === this.root && s === this.armScope && t.t !== 'const' && t.t !== 'absent' && t.t !== 'var';
+    if (top && !this.readsFixed(t)) {
+      const hit = this.cache!.get(t);
+      if (hit) return hit;
+      const x = v(this.bindVal(this.val1(t, s, out), out));
+      this.cache!.set(t, x);
+      return x;
+    }
+    return this.val1(t, s, out);
+  }
+  private val1(t: Term, s: CScope, out: Stmt[]): Expr {
     switch (t.t) {
       case 'const': return { k: 'vConst', v: t.value };
       case 'absent': return { k: 'vAbsent' };
-      case 'inh': return no('an inherited attribute');
-      case 'syn': return no('a synthesized attribute');
-      case 'get': return no('`get` of a record-valued child');
-      case 'dropLastIf': return no('dropLastIf');
+      case 'inh': {
+        if (this.fixed && this.fixed[0] === t.attr) return { k: 'vConst', v: this.fixed[1] };
+        if (this.cx.nodesAttrs.has(t.attr)) return no(`the nodes attribute ${t.attr}`);
+        const k = this.cx.inhK.get(t.attr);
+        if (k === undefined) throw new Error(`planShape: no inherited attribute ${t.attr}`);
+        if (this.cx.variants(this.info.rule).length) throw new Error(`planShape: ${this.info.where}: inh(${t.attr}) outside its variants`);
+        return call('inhVar', int(k));
+      }
+      case 'syn': {
+        const k = this.cx.synK.get(t.attr);
+        if (k === undefined) throw new Error(`planShape: no synthesized attribute ${t.attr}`);
+        if (t.name === undefined) return call('selfSyn', int(k));
+        const o = this.one(s, t.name, out);
+        return this.choose(bin('ge', v(o.idx), int(0)), () => call('slotSyn', int(k), v(o.idx)), () => ({ k: 'vAbsent' }), out);
+      }
+      case 'get': {
+        const o = this.one(s, t.name, out);
+        const item = this.childVal(v(o.idx), o.slot, out);
+        return this.choose(bin('ge', v(o.idx), int(0)), () => call('recGet', { k: 'vNeed', e: item }, { k: 'str', v: t.field }), () => ({ k: 'vAbsent' }), out);
+      }
+      case 'dropLastIf': {
+        const l = this.bindVal(this.val(t.list, s, out), out);
+        return call('vDropLast', v(l), this.bool(t.cond, s, out));
+      }
       case 'child': {
         const r = this.resolve(s, t.name);
         if (r.slot.kind !== 'node') throw new Error(`planShape: ${this.info.where}: child ${t.name} is a ${r.slot.kind}`);
         if (cardOf(r.rest) === 'many') {
           // A list: every item, in order. An optional inside the repetition would leave holes the
           // tags cannot show (S1: no array holes).
-          if (r.rest.some((q) => q.type === 'quantifier' && q.kind === '?')) no(`a repeated child with holes (${t.name})`);
+          // An optional inside the repetition: one element per iteration, null where it is absent.
+          const lastList = r.rest.map(isListQ).lastIndexOf(true);
+          if (r.rest.slice(lastList + 1).some((q) => q.type === 'quantifier' && q.kind === '?')) return this.holes(s, t.name, out);
           const [t0] = this.range(r.slot);
           const l = this.tmp(), i = this.tmp();
           out.push({ k: 'let', name: l, ty: VALS as never, init: { k: 'newList', ty: VALS as never } });
           out.push({ k: 'let', name: i, ty: 'idx', init: v(r.scope.lo) });
+          const item = this.childVal(v(i), r.slot, out);
           out.push({ k: 'while', c: bin('lt', v(i), v(r.scope.hi)), body: [
-            { k: 'if', c: bin('eq', call('slotTag', v(i)), int(t0)), then: [{ k: 'push', list: l, e: { k: 'vNeed', e: call('slotVal', v(i)) } }] },
+            { k: 'if', c: bin('eq', call('slotTag', v(i)), int(t0)), then: [{ k: 'push', list: l, e: { k: 'vNeed', e: item } }] },
             { k: 'set', name: i, e: bin('add', v(i), int(1)) },
           ] });
           return { k: 'vList', e: v(l) };
         }
         const o = this.one(s, t.name, out);
-        return this.choose(bin('ge', v(o.idx), int(0)), () => ({ k: 'vNeed', e: call('slotVal', v(o.idx)) }), () => ({ k: 'vAbsent' }), out);
+        const item = this.childVal(v(o.idx), o.slot, out);
+        return this.choose(bin('ge', v(o.idx), int(0)), () => ({ k: 'vNeed', e: item }), () => ({ k: 'vAbsent' }), out);
       }
       case 'text': {
         if (t.name === undefined) return { k: 'vText', e: call('srcText', v('off'), v('end')) };
@@ -434,7 +750,11 @@ class ArmCompiler {
         out.push({ k: 'switch', on: v(on), cases: Object.entries(t.cases).map(([key, c]) => ({ v: key, body: arm(c) })), else: dflt });
         return v(x);
       }
-      case 'if': return this.choose(this.bool(t.cond, s, out), (b) => this.val(t.then, s, b), (b) => this.val(t.else, s, b), out);
+      case 'if': {
+        const st = this.staticBool(t.cond);
+        if (st !== undefined) return this.val(st ? t.then : t.else, s, out);
+        return this.choose(this.bool(t.cond, s, out), (b) => this.val(t.then, s, b), (b) => this.val(t.else, s, b), out);
+      }
       case 'orElse': {
         const x = this.bindVal(this.val(t.of, s, out), out);
         const b: Stmt[] = []; b.push({ k: 'set', name: x, e: this.val(t.else, s, b) });
@@ -492,24 +812,46 @@ class ArmCompiler {
     }
   }
 
+  /** A repeated child whose element is optional in its iteration: per iteration (its markers) the
+   * element's value, or null. */
+  private holes(s: CScope, name: string, out: Stmt[]): Expr {
+    const l = this.tmp();
+    out.push({ k: 'let', name: l, ty: VALS as never, init: { k: 'newList', ty: VALS as never } });
+    this.iterations(s, name, out, (it, body) => {
+      const r = this.resolve(it, name);
+      if (r.rest.some(isListQ)) no(`a repeated child with holes inside a nested repetition (${name})`);
+      const [t0, t1] = this.range(r.slot);
+      const i = this.bindInt(call('slotFind', v(it.lo), v(it.hi), int(t0), int(t1)), body);
+      const item = this.childVal(v(i), r.slot, body);
+      const e = this.choose(bin('ge', v(i), int(0)), () => ({ k: 'vNeed', e: item }), () => ({ k: 'vConst', v: null }), body);
+      body.push({ k: 'push', list: l, e });
+    });
+    return { k: 'vList', e: v(l) };
+  }
+
   /** Which branch of an inline alternation its items fall in: `taken` for that branch, `none`
-   * when the alternation matched nothing here (an optional one). A branch that can match
-   * nothing has no item to show it (S1: unsupported). */
+   * when the alternation matched nothing here (an optional one). A branch with no grammar node at
+   * all (`not('?.')`) has no item to show it: it is the branch taken when no other branch's item
+   * is there, if the alternation is always entered in this scope (no quantifier between them) and
+   * it is the only such branch; else unsupported. */
   private branchCase(slot: Slot, scope: CScope, out: Stmt[], taken: (b: number, name: string, body: Stmt[]) => Expr, none: () => Expr): Expr {
     if (this.shape.grammar.templateViews.has(slot.node)) no('a template literal\'s parts');
-    if (this.num.nullableBranch.has(slot.node)) no(`an alternation with an empty branch (${slot.name})`);
     const rs = this.num.branchRange.get(slot.node)!;
     const names = [...slot.branches!.keys()];
+    const empty = rs.map(([t0, t1], b) => (t0 > t1 ? b : -1)).filter((b) => b >= 0);
+    if (empty.length && (empty.length > 1 || slot.quants.length > scope.base.length)) no(`an alternation with an empty branch (${slot.name})`);
     const x = this.tmp();
     out.push({ k: 'let', name: x, ty: VAL as never, init: none() });
     let level = out;
     rs.forEach(([t0, t1], b) => {
+      if (b === empty[0]) return;
       const found = this.bindInt(call('slotFind', v(scope.lo), v(scope.hi), int(t0), int(t1)), level);
       const then: Stmt[] = []; then.push({ k: 'set', name: x, e: taken(b, names[b]!, then) });
       const els: Stmt[] = [];
       level.push({ k: 'if', c: bin('ge', v(found), int(0)), then, else: els });
       level = els;
     });
+    if (empty.length) level.push({ k: 'set', name: x, e: taken(empty[0]!, names[empty[0]!]!, level) });
     return v(x);
   }
 }
