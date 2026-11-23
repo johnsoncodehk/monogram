@@ -224,7 +224,13 @@ above it builds `a + (b < c)`. Telling the two `<` apart needs a different token
 decided as tsc and the interpreter decide it (a speculative type-argument list, then the next token);
 a scanner cannot run the Type grammar, and an approximate scan is not taken. A binary left operand
 (`a - b < c`, `a * b < c`) forks the same way, but there the tie-break happens to pick the
-interpreter's tree. The same corpus records over-acceptances, not defects of the
+interpreter's tree. The official `tree-sitter-typescript` (0.23.2) declares the same kind of GLR
+conflicts (call / instantiation / binary / unary) and no scanner token: it reads `-a < c` right, but
+`a < c < d` and `a in c < d` wrongly as ours does, and `a + f<T>(x)` as `(a + f)<T>(x)`. A second
+corpus, `type arguments`, compares the spans of calls with type arguments beside the relational
+readings; two more classes are recorded there, both wrong trees without an ERROR: a call read as two
+relational operators (`f<T>(x);` as `(f < T) > (x)`, also `a.b<T>(x)`, `new C<T>(x)`), and a call
+read as an instantiation expression then a call (`x = f<T>(x)`, `f<T>()`, `f<T>\`t\``). The same corpus records over-acceptances, not defects of the
 bracketing: an assignment whose target is not a LeftHandSideExpression (`a + c = d;`, `-a = c;`,
 `a++ ??= c;`) and a unary operand of `**` (`-a ** c;`) parse in tree-sitter (59 JavaScript and 63
 TypeScript pairs), since its CFG has no assignment-target or `noUnaryLhs` condition.

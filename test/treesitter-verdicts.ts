@@ -218,6 +218,15 @@ function operatorPairs(gr: { precs: { operators: { value: string; position: stri
   for (const f of forms) { out.add(`x = y => ${f('a', 'c')};`); out.add(`x = ${f('a', 'c')};`); out.add(`x = a ? ${f('b', 'c')} : d;`); }
   return [...out];
 }
+// Type arguments in expressions (TypeScript): a call or tagged template with type arguments, an
+// instantiation expression, and the relational `<` / `>` readings beside them. Where both accept, the
+// expression spans are compared as for the operator pairs: a wrong tree here has no ERROR either
+// (`f<T>(x);` built as `(f < T) > (x)`), and a change to the `<` rendering must not trade one reading
+// for another silently (`a + f<T>(x)` is not `(a + f)<T>(x)`).
+const TYPE_ARGUMENTS = [
+  'f<T>(x);', 'x = f<T>(x);', 'f<T, U>(x);', 'f<T>();', 'f<string>(x);', 'a.b<T>(x);', 'new C<T>(x);', 'f<T>`t`;',
+  'x = f<T>;', 'a + f<T>(x);', '-f<T>(x);', 'a < b > (c);', 'a < b;', 'a < b > c;', 'a - b < c;', 'a * b < c;',
+];
 const exprSpans = (n: any, out: string[] = []): string[] => {
   if (n.rule === 'Expr') out.push(`${n.offset}-${n.end}`);
   for (const c of n.children ?? []) if (c.rule) exprSpans(c, out);
@@ -290,7 +299,7 @@ for (const { lang, mod, corpora, pairs } of [
     'curated JSX': JSX_CASES, 'TSX issue cases': tsxIssueCases.map(c => c.src),
     'TS issue cases': issueTests.map(t => t.input), 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, operands: OPERANDS } },
   { lang: 'javascriptreact', mod: '../javascriptreact.ts', corpora: { 'curated JSX': JSX_CASES, 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS } },
-  { lang: 'typescript', mod: '../typescript.ts', corpora: { 'TS issue cases': issueTests.map(t => t.input), 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, operands: OPERANDS }, pairs: true },
+  { lang: 'typescript', mod: '../typescript.ts', corpora: { 'TS issue cases': issueTests.map(t => t.input), 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, operands: OPERANDS, 'type arguments': TYPE_ARGUMENTS }, pairs: true },
   { lang: 'javascript', mod: '../javascript.ts', corpora: { 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS }, pairs: true },
 ] as { lang: string; mod: string; corpora: Record<string, string[]>; pairs?: boolean }[]) {
   const wasm = `tree-sitter/${lang}/tree-sitter-${lang}.wasm`;
@@ -324,7 +333,7 @@ for (const { lang, mod, corpora, pairs } of [
       const ts = errorNodes(tree.rootNode) === 0;
       if (cst && ts) {
         r.bothAccept++;
-        if (corpus === 'operator pairs' && exprSpans(cst).sort().join(' ') !== tsExprSpans(tree.rootNode).sort().join(' ')) {
+        if ((corpus === 'operator pairs' || corpus === 'type arguments') && exprSpans(cst).sort().join(' ') !== tsExprSpans(tree.rootNode).sort().join(' ')) {
           r.splitDiffers++;
           const k = key(lang, corpus, 'brackets', id);
           found.set(k, recorded.get(k) ?? 'unclassified');
