@@ -5831,6 +5831,8 @@ function recoveryRegionRust(ir: ParserIR, shared: SharedAlgorithms): string {
 // ---- recovery: the emit option { recovery: true }; generated from src/recovery-family.ts (shared by the TS / Go / Rust targets) ----
 #[derive(Clone, Copy)]
 struct Diag { kind: isize, off: isize, end: isize, rel_off: isize, rel_end: isize }
+// The recovery interpreter's best longest-match candidate so far (recovery-family.ts BEST).
+struct BestCand { pos: isize, off: isize, won: isize, form: isize, tail: isize, capped: isize }
 ${shared.recoveryFamily(ir, false)}
 ${recoveryEngineRust(ir, shared)}
 /// A diagnostic: a span of the source (byte offsets), its message, and a related location.

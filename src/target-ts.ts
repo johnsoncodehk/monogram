@@ -3457,6 +3457,8 @@ function recoveryRegionTs(ir: ParserIR, shared: SharedAlgorithms): string {
   return `
 // ---- recovery: the emit option { recovery: true }; generated from src/recovery-family.ts (shared by the TS / Go / Rust targets) ----
 type Diag = { kind: number; off: number; end: number; relOff: number; relEnd: number };
+// The recovery interpreter's best longest-match candidate so far (recovery-family.ts BEST).
+type BestCand = { pos: number; off: number; won: number; form: number; tail: number; capped: number };
 ${shared.recoveryFamily(ir)}
 ${recoveryEngineTs(ir)}
 /** A diagnostic: a span of the source, its message, and a related location (relOff >= 0). */
