@@ -48,6 +48,8 @@ const GATES: Gate[] = [
   { group: 'emit-parity', name: 'emit-portable-library', args: ['test/emit-portable-library.ts'] },
   { group: 'emit-parity', name: 'emit-portable-split', args: ['test/emit-portable-split.ts'] },
   { group: 'emit-parity', name: 'portable-targets', args: ['test/portable-targets.ts'] },
+  // Every file of the tsc conformance corpus and test262 through the portable parsers (minutes: CI, not the inner loop).
+  { group: 'emit-parity', name: 'portable-targets-wide', args: ['test/portable-targets.ts', '--wide'] },
   { group: 'emit-parity', name: 'portable-work', args: ['test/portable-work.ts'] },
   { group: 'emit-parity', name: 'predictive-first', args: ['test/predictive-first.ts'] },
   { group: 'emit-parity', name: 'guard-lead', args: ['test/guard-lead.ts'] },

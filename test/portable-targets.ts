@@ -1922,27 +1922,43 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
 const TS_CONFORMANCE = '/tmp/ts-repo/tests/cases/conformance';
 const TEST262 = '/tmp/test262';
 const TEST262_DIRS = ['test/language', 'test/annexB/language'];
-const WIDE_CHUNK = 400;
-// PORTABLE_WIDE_DUMP=<file>: append every unlisted disagreement of the wide class (grammar, target, what, file).
-const WIDE_DUMP = process.env.PORTABLE_WIDE_DUMP;
-// PORTABLE_WIDE=0: skip the wide class (a local run that needs only the rest; CI never sets it).
-const WIDE_ON = process.env.PORTABLE_WIDE !== '0';
-// EXPECTED-FAIL, still run and counted: files of the wide corpora on which the portable parsers'
-// verdict or tree is not the interpreter's, by grammar, each with its cause (owed as its own fix).
-// A listed file that agrees again fails the class until it is removed, and so does any unlisted one.
-type WideFail = { file: string; reason: string; targets?: string[] };
-const REBIND = 'the interpreter\'s mixfix operand re-bind (gen-parser.ts matchMixfixLed) has no counterpart in the portable engine';
-const CAP_PROPAGATION = 'the interpreter\'s cap propagation (an operator whose right operand is a capped arrow admits no further led) has no counterpart in the portable binary block';
-const WIDE_EXPECTED_FAIL: Record<string, WideFail[]> = {
-  typescript: [
-    ...['types/conditional/inferTypesWithExtends1.ts', 'types/conditional/inferTypesInvalidExtendsDeclaration.ts',
-      ...[8, 9, 10, 11, 12].map((n) => `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression${n}.ts`)].map((file) => ({ file, reason: REBIND })),
-    { file: 'parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression2.ts', reason: CAP_PROPAGATION },
-  ],
-  javascript: [
-    { file: 'parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression2.ts', reason: CAP_PROPAGATION },
-  ],
+const WIDE_CHUNK = 2000;
+// The wide class is its own gate (check.ts `portable-targets-wide`, CI only: minutes, not the inner
+// loop): `node test/portable-targets.ts --wide` runs it, and only it (runners for the ECMAScript
+// grammars, then this class); every other run of this file leaves it out.
+const WIDE_ONLY = process.argv.includes('--wide');
+// EXPECTED-FAIL, still run and counted: the RECORD test/portable-wide-record.txt holds every file of
+// the wide corpora on which a portable parser's verdict or tree is not the interpreter's, one line
+// each: grammar, file, the targets that disagree, and its cause class (WIDE_CAUSES; each owed as its
+// own fix). The class compares the run with the record and fails on ANY difference, naming each line
+// that moved: a file that starts to disagree is a regression, one that stops is an improvement to
+// record. `node test/portable-targets.ts --wide --write` (re)writes the record; it refuses a
+// disagreement no class explains (`unknown`) and a run without all three targets.
+const WIDE_RECORD = new URL('./portable-wide-record.txt', import.meta.url).pathname;
+const WIDE_WRITE = WIDE_ONLY && process.argv.includes('--write');
+const WIDE_CAUSES: Record<string, string> = {
+  'mixfix-rebind': 'the interpreter\'s mixfix operand re-bind (gen-parser.ts matchMixfixLed: a failed `<L1> $ <L2> …` led retries its operand capped at each depth-0 L2 inside it) has no counterpart in the portable engine',
+  'cap-propagation': 'the interpreter\'s cap propagation (gen-parser.ts: an operator whose right operand is a capped arrow returns at once, so `a = () => {} || x` rejects) has no counterpart in the portable binary block',
+  'private-name-unicode': 'a private name with a non-ASCII character (`#℘`, `#ZW_\\u200C_NJ` with the ZWNJ itself): the interpreter\'s lexer takes it as one PrivateField (its Unicode fallback knows the `#` prefix), the portable lexers stop at the `#` (`#\\u2118`, the escape, lexes in both)',
+  'hashbang-not-first': 'a `#!` after the start of the text: the interpreter\'s lexer takes it as a Shebang comment, the portable lexers do not (a HashbangComment begins the source text only, so the portable verdict is the spec\'s)',
 };
+const REBIND_FILES = new Set(['types/conditional/inferTypesWithExtends1.ts', 'types/conditional/inferTypesInvalidExtendsDeclaration.ts',
+  ...[8, 9, 10, 11, 12].map((n) => `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression${n}.ts`)]);
+const CAP_FILES = new Set(['parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression2.ts']);
+// The cause of one disagreement, from what the file is ('unknown' when no class explains it).
+function wideCause(grammar: string, file: string, src: string): string {
+  if (grammar === 'typescript' && REBIND_FILES.has(file)) return 'mixfix-rebind';
+  if (CAP_FILES.has(file)) return 'cap-propagation';
+  if (/#[^\x00-\x7f]/.test(src)) return 'private-name-unicode';
+  if (src.indexOf('#!', 1) > 0) return 'hashbang-not-first';
+  return 'unknown';
+}
+type WideLine = { grammar: string; file: string; targets: string[]; cause: string };
+const wideKey = (l: { grammar: string; file: string }) => `${l.grammar}\t${l.file}`;
+const wideText = (l: WideLine) => `${l.grammar}\t${l.file}\t${l.targets.join(',')}\t${l.cause}`;
+const wideSeen: WideLine[] = [];
+const wideGrammars = new Set<string>();
+let wideTargets: string[] = [];
 const walkFiles = (d: string, ext: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap((e) => {
   const f = `${d}/${e.name}`;
   return e.isDirectory() ? walkFiles(f, ext) : e.name.endsWith(ext) ? [f] : [];
@@ -1960,12 +1976,12 @@ const wideName = (f: string) => (f.startsWith(TS_CONFORMANCE + '/') ? f.slice(TS
 function wideClass(c: Case, runners: Runner[], oracle: { parse: (src: string) => unknown }): void {
   const corpora = wideCorpora(c.grammar);
   if (typeof corpora === 'string') { console.log(`  ${c.grammar}: wide corpora NOT RUN: ${corpora}`); failures++; return; }
-  const known = WIDE_EXPECTED_FAIL[c.grammar] ?? [];
+  wideGrammars.add(c.grammar);
+  wideTargets = runners.map((r) => r.label);
   for (const { name, files } of corpora) {
     const t0 = Date.now();
-    const bad = new Map<string, string[]>(runners.map((r) => [r.label, []]));
-    const hits = new Map<string, Set<string>>(runners.map((r) => [r.label, new Set()]));
     const ms = new Map<string, number>(runners.map((r) => [r.label, 0]));
+    const off = new Map<string, number>(runners.map((r) => [r.label, 0]));
     let oracleMs = 0, accepted = 0;
     for (let i = 0; i < files.length; i += WIDE_CHUNK) {
       const chunk = files.slice(i, i + WIDE_CHUNK);
@@ -1976,42 +1992,68 @@ function wideClass(c: Case, runners: Runner[], oracle: { parse: (src: string) =>
       });
       oracleMs += Date.now() - o0;
       accepted += want.filter((w) => w.ok).length;
+      const disagree = chunk.map((): string[] => []);
       for (const r of runners) {
         const r0 = Date.now();
         const got = r.batch(srcs);
         ms.set(r.label, ms.get(r.label)! + Date.now() - r0);
-        chunk.forEach((f, j) => {
+        chunk.forEach((_f, j) => {
           const w = want[j]!, g = got[j]!;
           if (w.stack) return;   // the interpreter's own stack, not a verdict
-          let what = '';
-          if (w.ok !== g.ok) what = `interpreter ${w.ok ? 'accepts' : 'rejects'}, ${r.label} ${g.ok ? 'accepts' : 'rejects'}`;
-          else if (w.ok && g.ok && w.skel !== canon(skeleton(g.cst))) what = 'both accept, rule skeletons differ';
-          if (!what) return;
-          const file = wideName(f);
-          const k = known.find((e) => e.file === file && (!e.targets || e.targets.includes(r.label)));
-          if (k) { hits.get(r.label)!.add(file); return; }
-          bad.get(r.label)!.push(`${what} — ${file}`);
+          if (w.ok !== g.ok || (w.ok && g.ok && w.skel !== canon(skeleton(g.cst)))) { disagree[j]!.push(r.label); off.set(r.label, off.get(r.label)! + 1); }
         });
       }
+      chunk.forEach((f, j) => {
+        if (!disagree[j]!.length) return;
+        const file = wideName(f);
+        wideSeen.push({ grammar: c.grammar, file, targets: disagree[j]!, cause: wideCause(c.grammar, file, srcs[j]!) });
+      });
     }
     console.log(`  ${c.grammar}: wide corpus ${name}: ${files.length} files (${accepted} accepted by the interpreter, ${(oracleMs / 1000).toFixed(1)}s)`);
-    for (const r of runners) {
-      const b = bad.get(r.label)!, h = hits.get(r.label)!;
-      const mine = known.filter((e) => (!e.targets || e.targets.includes(r.label)) && (name === 'tsc conformance') === !e.file.startsWith('test/'));
-      const gone = mine.filter((e) => !h.has(e.file));
-      console.log(`  ${c.grammar}/${r.label}: wide corpus ${name}: ${files.length - b.length - h.size}/${files.length} ≡ interpreter (verdict + rule skeleton), ${h.size} expected-fail, ${(ms.get(r.label)! / 1000).toFixed(1)}s`);
-      for (const smp of b.slice(0, 12)) console.log(`      ${smp}`);
-      for (const e of gone) console.log(`      expected-fail agrees now: remove it from WIDE_EXPECTED_FAIL — ${e.file} (${e.reason})`);
-      failures += b.length + gone.length;
-      if (WIDE_DUMP && b.length) writeFileSync(WIDE_DUMP, b.map((x) => `${c.grammar}\t${r.label}\t${x}\n`).join(''), { flag: 'a' });
-    }
+    for (const r of runners) console.log(`  ${c.grammar}/${r.label}: wide corpus ${name}: ${files.length - off.get(r.label)!}/${files.length} ≡ interpreter (verdict + rule skeleton), ${(ms.get(r.label)! / 1000).toFixed(1)}s`);
     corpusMs += Date.now() - t0;
   }
+}
+// The run against the record (see WIDE_RECORD), for the grammars and targets this run covered.
+function wideRecordCheck(): void {
+  if (!wideGrammars.size) return;
+  const record: WideLine[] = existsSync(WIDE_RECORD) ? readFileSync(WIDE_RECORD, 'utf8').split('\n').filter((l) => l && !l.startsWith('#')).map((l) => {
+    const [grammar, file, targets, cause] = l.split('\t');
+    return { grammar: grammar!, file: file!, targets: targets!.split(','), cause: cause! };
+  }) : [];
+  const unknown = wideSeen.filter((l) => !(l.cause in WIDE_CAUSES));
+  for (const l of unknown) console.log(`  wide record: no cause class explains ${l.grammar} ${l.file} (${l.targets.join(',')}): add one to WIDE_CAUSES`);
+  failures += unknown.length;
+  const ran = (l: WideLine): WideLine => ({ ...l, targets: l.targets.filter((t) => wideTargets.includes(t)) });
+  const want = new Map(record.filter((l) => wideGrammars.has(l.grammar)).map((l) => [wideKey(l), ran(l)] as const));
+  const seen = new Map(wideSeen.map((l) => [wideKey(l), l] as const));
+  const moved: string[] = [];
+  for (const [k, l] of seen) { const w = want.get(k); if (!w || !w.targets.length) moved.push(`+ ${wideText(l)}`); else if (wideText(w) !== wideText(l)) moved.push(`~ ${wideText(w)}  →  ${wideText(l)}`); }
+  for (const [k, w] of want) if (!seen.has(k) && w.targets.length) moved.push(`- ${wideText(w)}`);
+  const byCause = new Map<string, number>();
+  for (const l of wideSeen) byCause.set(`${l.grammar} ${l.cause}`, (byCause.get(`${l.grammar} ${l.cause}`) ?? 0) + 1);
+  console.log(`  wide record: ${wideSeen.length} disagreeing files (${[...byCause].map(([k, n]) => `${k} ${n}`).join(', ') || 'none'}); ${moved.length ? `${moved.length} moved against ${WIDE_RECORD.split('/').pop()}` : 'as recorded'}`);
+  for (const m of moved.slice(0, 40)) console.log(`      ${m}`);
+  if (WIDE_WRITE) {
+    if (unknown.length || wideTargets.length < 3) { console.log('  wide record: NOT written (an unknown cause, or not all three targets ran)'); failures++; return; }
+    const keep = record.filter((l) => !wideGrammars.has(l.grammar));
+    const all = [...keep, ...wideSeen];
+    // By class (grammar, cause), each with its count and its cause's text, then its files.
+    const groups = new Map<string, WideLine[]>();
+    for (const l of all) { const k = `${l.grammar} ${l.cause}`; (groups.get(k) ?? groups.set(k, []).get(k)!).push(l); }
+    const body = [...groups.keys()].sort().map((k) => {
+      const ls = groups.get(k)!;
+      return `\n# ${k}: ${ls.length} file${ls.length === 1 ? '' : 's'}: ${WIDE_CAUSES[ls[0]!.cause]}\n${ls.map(wideText).sort().map((l) => `${l}\n`).join('')}`;
+    }).join('');
+    writeFileSync(WIDE_RECORD, `# GENERATED by node test/portable-targets.ts --wide --write: the files of the wide corpora on which a portable\n# parser is not the interpreter, by class (grammar, cause: WIDE_CAUSES), one line per file: grammar, file, the\n# targets that disagree, cause. Every line is owed as its cause's fix.\n# ${[...groups.keys()].sort().map((k) => `${k} ${groups.get(k)!.length}`).join(', ') || 'none'}\n${body}`);
+    console.log(`  wide record: written (${all.length} lines)`);
+  } else failures += moved.length;
 }
 
 let failures = 0;
 for (const c of CASES) {
   if (ONLY && !ONLY.includes(c.grammar)) continue;
+  if (WIDE_ONLY && !ECMASCRIPT.has(c.grammar)) continue;
   const grammar: CstGrammar = (await import(c.path)).default;
   const oracle = createParser(grammar);
   const oracleOut = (src: string): Outcome => {
@@ -2076,6 +2118,7 @@ for (const c of CASES) {
       spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true, total: (srcs) => totalBatch(bin, srcs),
     });
   }
+  if (WIDE_ONLY) { wideClass(c, runners, oracle); continue; }
 
   // tok-spans: top-level kids record parse-consumption [tokStart, tokEnd); cross-target
   // identity + contiguous partition of the consumed token stream. Empty accept inputs are
@@ -2456,9 +2499,10 @@ for (const c of CASES) {
     corpusMs += Date.now() - t0;
     corpusInputs += inputs.length;
     if (ECMASCRIPT.has(c.grammar)) recoveryClass(c, grammar, runners, oracleOut, [...inputs.map((i) => i.src), ...c.accept, ...c.reject, ...(c.grammar === 'typescript' ? CURATED_TS : [])], tokenize);
-    if (ECMASCRIPT.has(c.grammar) && WIDE_ON) wideClass(c, runners, oracle);
   }
 }
+wideRecordCheck();
+if (!WIDE_ONLY)
 console.log(`  parity corpus: ${corpusInputs} inputs over ${CASES.length} grammars, ${(corpusMs / 1000).toFixed(1)}s`);
 
 // A grammar the portable rendering cannot express is refused at emit time, never mis-parsed.
