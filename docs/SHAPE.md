@@ -1,11 +1,116 @@
 # Shape mapping — declarative AST on top of the CST
 
-> **v2 (in progress):** the spec language that replaces this one binds by the grammar's stable
-> NAMES (`arm` / `field`, `src/grammar-names.ts`) instead of positions, and is a closed calculus
-> with no `custom` escape: [`src/shape2-schema.ts`](../src/shape2-schema.ts) defines it,
-> [`src/shape2-eval.ts`](../src/shape2-eval.ts) is its reference interpreter (gate `shape2-eval`).
-> No printer renders v2 yet; this document describes v1, except the section "v2: the parts
-> the fused end state needs" right below.
+> **Two generations.** A v2 shape (this section and the next) binds the grammar's stable NAMES and
+> is written with `defineShape` (`monogram/shape`, [`src/shape.ts`](../src/shape.ts)); it is a
+> closed calculus of plain data ([`src/shape2-schema.ts`](../src/shape2-schema.ts)) with no escape
+> to code. **What v2 does today:** it is checked against its grammar when it is defined, and
+> EVALUATED over the interpreter's CST ([`src/shape2-eval.ts`](../src/shape2-eval.ts), the
+> reference). **What it does not do yet:** no emitted parser builds a v2 shape's AST, and no AST
+> type definitions are derived from one. `emitTs` / `emitRust` with `{ shape }` still take a v1
+> spec, which binds by POSITION; the sections from "v1: the positional ShapeSpec" down describe it.
+
+## Writing a shape with defineShape
+
+A shape maps each (rule, arm) of a grammar to a TERM over the arm's named children. Half of
+those names are derived from the syntax (`binaryOp`, `led_dot`, `left`, `expr`), so start from
+the grammar's own list of them:
+
+1. **Print the skeleton.** `node src/cli.ts calc.ts --shape-skeleton > calc-shape.ts` prints a
+   complete shape module: every arm of every rule, mapped to a node `Rule.arm` that holds its
+   named children (the CST as a shape), each arm with its children and their multiplicity in a
+   comment (`left: Expr, op: leaf, right: Expr`; `x?` optional, `x[]` a list). It loads as it is.
+2. **Fill it in.** Replace each term with the node you want; delete the arms you do not map yet.
+3. **Check it.** `node src/cli.ts calc.ts --shape calc-shape.ts` loads the shape (every problem
+   is reported at once, `<where>: <what>`, with the names that do exist: in full when there are
+   few, else the nearest) and prints its COVERAGE: the arms it maps, the arms it leaves out that
+   evaluation from the grammar's entry rule can reach (each with a skeleton term to start from),
+   and the arms it leaves out that nothing mapped reaches. `shapeCoverage(shape)` returns the same
+   as data. Reachability is computed from the grammar and the spec, not from inputs.
+
+The example below is `test/fixtures/shape-namedcalc.ts`, on the grammar
+`test/fixtures/namedcalc.ts`; the gate `shape2-eval` checks that this page holds it verbatim and
+that it evaluates to the value shown.
+
+<!-- shape-example:start -->
+```ts
+// The shape docs/SHAPE.md shows ("Writing a shape with defineShape"): the gate shape2-eval checks
+// that the document holds this file verbatim and that it evaluates to the value shown there.
+import grammar from './namedcalc.ts';
+import { defineShape, child, cook, node, text, typeByText } from 'monogram/shape';
+
+export default defineShape(grammar, {
+  name: 'calc-ast',
+  total: true,   // every arm of a mapped rule must be mapped: a left-out arm is a load error
+  rules: {
+    Program: { program: node('Program', { body: child('statement') }) },
+    Stmt: {
+      letDeclaration: node('Let', { name: text('binding'), init: child('initializer') }),
+      expression: node('ExpressionStatement', { expression: child('expression') }),
+    },
+    Expr: {
+      number: node('Num', { value: cook('numberValue', 'number') }),
+      name: node('Name', { name: text('ident') }),
+      parenthesized: child('expression'),   // pass-through: written, never implied
+      binaryOp: node(typeByText('op', { '+': 'Add', '-': 'Sub', '*': 'Mul', '/': 'Div' }), { left: child('left'), right: child('right') }),
+      prefixOp: node('Neg', { operand: child('operand') }),
+      postfixOp: child('operand'),   // calc has no postfix operator: the arm never occurs
+    },
+  },
+});
+```
+<!-- shape-example:end -->
+
+<!-- shape-example-value:start -->
+```js
+evaluateShape(shape, parse("let x = -(1 + y);"), "let x = -(1 + y);")
+// =>
+{ "kind": "Program", "start": 0, "end": 17, "fields": { "body": [
+  { "kind": "Let", "start": 0, "end": 17, "fields": { "name": "x", "init":
+    { "kind": "Neg", "start": 8, "end": 16, "fields": { "operand":
+      { "kind": "Add", "start": 10, "end": 15, "fields": {
+        "left": { "kind": "Num", "start": 10, "end": 11, "fields": { "value": 1 } },
+        "right": { "kind": "Name", "start": 14, "end": 15, "fields": { "name": "y" } } } } } } } } ] } }
+```
+<!-- shape-example-value:end -->
+
+(`parse` is the interpreter's: `createParser(grammar).parse(src)` from `src/gen-parser.ts`. The
+parenthesised `1 + y` passes through: the Add node spans `1 + y`, not its parentheses.)
+
+What is checked, and where:
+- **By TypeScript:** rule names. `defineGrammar`'s type carries its rule names (`Grammar<R>`), so
+  `Exprr: { ... }` in `rules` (or in an attribute's `rules`) is a type error. Arm and child names
+  are strings to TypeScript: half of them are derived at load time (below), and the type system
+  would have to re-run that derivation.
+- **When the shape is defined** (`defineShape` throws `ShapeSpecError`, listing every problem):
+  rule / arm / child / branch / attribute / record-field names; a term outside the calculus (a
+  function, an unknown operator or cooking function); a term reading a child the arm does not have
+  or reading it the wrong way (`child` of a leaf, `text` of a list, `present` of a required child,
+  `get` of a rule that is not record-valued); attribute types (a `bool` attribute's equation, a
+  copy of a `string` attribute into a `bool` one); an inherited equation outside its allowed forms
+  (a constant, a copy, a scalar over the parent's own leaves, a thread, or a nodes list built from
+  what is LEFT of the child); with `total: true`, a left-out arm of a mapped rule.
+- **An arm with no term is UNMAPPED**, never passed through implicitly: evaluating one throws
+  `ShapeUnmapped` naming it (a pass-through is written: `parenthesized: child('expression')`).
+  `--shape` lists every left-out arm evaluation can reach.
+
+### Names a shape depends on, and what renames them
+
+A shape is a contract against the grammar's names ([`src/grammar-names.ts`](../src/grammar-names.ts)).
+A name the grammar author WRITES, `arm('letDeclaration', ...)` or `field('binding', Ident)`, never
+changes unless the author changes it. A DERIVED name changes when:
+- an arm's first significant item changes (an arm is named from it: `if`, `led_dot` for a led
+  starting `.`, `binaryOp` / `prefixOp` / `postfixOp` for the operator forms);
+- a child's reference changes (a child is named from what it references: `expr`, `block`; a
+  keyword leading an optional group is `<kw>Tok`, a keyword alternation `<first>Kw`, a structural
+  alternation `alt`);
+- an earlier arm or child with the same derived name is added or removed: a repeated derived
+  name gets a numeric suffix (`export2`, `expr2`), which is POSITIONAL. `nameReport` in
+  `src/grammar-names.ts` lists every such name.
+
+To pin a name, write it in the grammar (`arm(name, ...)` / `field(name, item)`): naming is
+transparent (every generated parser and highlighter is byte-identical with or without names:
+gate `grammar-names-transparent`), so pinning costs nothing. A renamed name is a load error of
+every shape that uses it, with the names that exist now.
 
 ## v2: the parts the fused end state needs
 
@@ -45,7 +150,7 @@ An inherited equation (the context a parent arm hands a named child) is one of:
 It never reads `syn` of a sibling node, or anything else inside a sibling subtree. So at worst,
 ONE LEAF to the right of the child decides the child's context.
 
-The loader classifies every equation (`LoadedShape2.rightDependent`):
+The loader classifies every equation (`Shape.rightDependent`):
 - **L-attributed**: it reads nothing to the right of the child it feeds;
 - **RIGHT-DEPENDENT**: it reads a leaf that comes after the child.
 
@@ -138,6 +243,8 @@ the shape's.
 | a node-valued inherited attribute | a handle to an immutable list of nodes already built to the child's left, passed as a parameter of the child's rule function; the receiving arm places it and takes its span start from its first element. Arena: the nodes precede the child's mark, so a losing candidate's reset never frees them |
 | `present(v)` of a nodes variable, a span endpoint at it | the handle's length; its first node's start |
 | a right-dependent inherited equation | the child is built in its default reading. When the deciding leaf arrives, the parser rewrites it, walking only the spine (the arms that read the attribute, reached through the children it is copied into). It never descends below a node whose arm does not pass the attribute on |
+
+## v1: the positional ShapeSpec (what `emitTs` / `emitRust` consume today)
 
 A **shape** maps a grammar's concrete syntax tree (CST) into a consumer AST
 (types + builders). You declare the mapping once as a `ShapeSpec`;
@@ -381,7 +488,7 @@ export const calcShape: ShapeSpec = {
 };
 ```
 
-Emit → load → parse (mirrors [`test/shape-codegen.ts`](../test/shape-codegen.ts)):
+Emit → load → parse (mirrors the calc shape-codegen section of [`test/shape-parity.ts`](../test/shape-parity.ts)):
 
 ```ts
 import calcGrammar from './test/fixtures/calc.ts';
@@ -407,7 +514,6 @@ No `customs` map — every product is declarative (`node` / `choice` / `pratt` /
 
 | Gate | Question |
 |---|---|
-| [`test/shape-codegen.ts`](../test/shape-codegen.ts) | `validateShape` on calc; no-shape byte identity vs `emitParser`; golden `parseAst` ASTs for calc (handwritten expects); perf smoke. |
-| [`test/shape-parity.ts`](../test/shape-parity.ts) | CST↔`parseAst` accept/reject parity (calc + toy corpora); custom/`parentFold` spots; TypeScript shape coverage + ESTree customs. |
+| [`test/shape-parity.ts`](../test/shape-parity.ts) | CST↔`parseAst` accept/reject parity (calc + toy corpora); custom/`parentFold` spots; TypeScript shape coverage + ESTree customs; no-shape byte identity vs `emitParser`; `validateShape` on calc and its negatives; golden `parseAst` ASTs for calc (handwritten expects); perf smoke. |
 
-Both run under `npm run check` (see [`docs/TESTING.md`](TESTING.md)).
+It runs under `npm run check` (see [`docs/TESTING.md`](TESTING.md)).

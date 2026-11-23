@@ -16,16 +16,51 @@ The suite produces **four kinds of report**, each answering a different question
 
 The CI-blocking pass/fail checks. One runner, one ✓/✗ table, one
 exit code — instead of a dozen scripts with a dozen formats. Covers: sanity / agnostic /
-refactor-guard / issue-cases · conformance (js, js-corpus, tsx, jsx, html) · highlighter guards + RedCMD
-diagnostics + Monarch + HTML embed/lexer · YAML
-issue-12 + depth-witnesses · the generative **scope≡role** check + the gap-ledger selftest +
-`--check`. `node test/check.ts <substr>` runs a subset (e.g. `… yaml`).
+issue-cases · conformance (js, tsx, jsx, html, test262) · highlighter guards + RedCMD
+diagnostics + Monarch + HTML embed/lexer · YAML issue-12 + the TextMate site checks · the
+generative **scope≡role** check (with its detector's mutation proof). `node test/check.ts <substr>`
+runs a subset (e.g. `… yaml`).
 
-One gate needs an external corpus: `conformance/js-corpus` measures the JS grammar against tsc's
-JS-mode parser over the pinned TypeScript conformance corpus at `/tmp/ts-repo` (CI clones it; the
-step is in the CI workflow). Its result is pinned in the generated record `docs/JS-CONFORMANCE.md`
-(regenerate: `node test/js-conformance-corpus.ts --write`), so any file moving between cells fails
-it until recorded. Without the corpus the gate says NOT RUN and fails.
+Gates that need an external corpus (the TypeScript conformance corpus at `/tmp/ts-repo`, test262 at
+`/tmp/test262`; CI clones both) say NOT RUN without it and fail.
+
+### Records that are not gates
+
+- `docs/ALLOCATIONS.md` (what one parse allocates per target, by site) is a REPORT: `node
+  test/alloc-work.ts --write` writes it, and the README auto-regen workflow (`readme-bench.yml`)
+  rewrites it on master. The gate `alloc-work` checks only its invariants: per-token counts do not
+  grow with the input, and a reused Go builder allocates nothing.
+- `docs/emit-sizes.json` (emitted parser bytes) is compared by the `measure profile` job, which
+  lists a size more than ±0.25% from the record as a regression. A landing that changes a size on
+  purpose re-records it (`node test/emit-size-record.ts --write`).
+
+### Gate renames, merges and deletions (2026-11-23)
+
+The old gates map to new ones as follows. Cases are each gate's own count line, or ✓ lines /
+`fail(` sites where it prints none. "before" is the absorber's cases plus the absorbed gate's.
+
+| old gate | now | cases before → after (dropped) |
+|---|---|---|
+| emit-parity/ast-builder | emit-parity/builder-reuse | 343 + 115 → 448 (10: the demo ESTree golden) |
+| emit-parity/emit-tsc-gate | emit-parity/emit-standalone (also tsc --strict on js, jsx, tsx) | 83 + 6 → 86 (3 duplicate tsc runs) |
+| emit-parity/emit-tokenize | emit-parity/emit-reentrancy | 63 + 39 → 100 (2; 13 reduced to what emit-lexer-verify does not check) |
+| emit-parity/emit-ts-cst | emit-parity/emit-portable-split | 80 + 21 → 101 |
+| emit-parity/shape-codegen | emit-parity/shape-parity | 85 + 21 → 105 (1 duplicate) |
+| emit-parity/syntax-agnostic | emit-parity/define-target | 16 + 4 → 20 checks |
+| emit-parity/relex-family | emit-parity/lex-family (tier ci) | 45 + 5 → 50 checks |
+| core/incremental-verify | core/incremental-grammars | 29,109 + 256 → 29,245 steps (120 seeded random steps) |
+| core/refactor-guard | CURATED_TS_CST of test/emit-corpus.ts (emit-parser-verify, emit-reject-messages) | 112 → 107 snippets (5 exact duplicates) |
+| highlighter/html-monarch | highlighter/monarch-dialect | 150 rows + 14 checks → 164 rows |
+| highlighter/html-embed-js | highlighter/raw-text-case-sites | 16 + 7 → 16 cells + 7 checks |
+| highlighter/self-close-sites | generative/scope≡role | 6 languages, 32 cells → same |
+| generative/gap-ledger-selftest | generative/scope≡role (its mutation proof and classifier locks) | 13 → 6 moved, 7 ledger-only dropped |
+| yaml/depth-witnesses, depth-sites, flow-sites, compact-nest-sites, deepest-sibling, blockscalar-depth | yaml/tm-sites (`test/yaml-sites.ts`) | 22 + 16 + 8 + 57 + 576 + 72 → 751 |
+| emit-parity/decision-dead | emit-parity/decision-report (`--check` runs both halves) | unchanged |
+| emit-parity/portable-targets/edits-1 … edits-5 | edits-1, edits-2 | unchanged (grammars regrouped) |
+| conformance/js-corpus | deleted, with `docs/JS-CONFORMANCE.md` (test262 is JavaScript's oracle) | |
+| generative/gap-ledger-check | deleted (`npm run ledger:check` remains, for gap-issues.yml) | |
+| highlighter/tm-capture-patterns | deleted (a pinned count with no decision attached) | |
+| emit-parity/emit-size-record | not a gate: the profile job compares the record | |
 
 `conformance/test262` measures the JS grammar against test262, JavaScript's own conformance suite: every
 test under `test/language/` and `test/annexB/language/` of the checkout at `/tmp/test262` (pin:

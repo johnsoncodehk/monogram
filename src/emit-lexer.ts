@@ -669,7 +669,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   emit(`  return tokN;`);
   emit(`}`);
   // Verification of the WINDOWED path (issue #45 B2): the golden gate exercises full lexes;
-  // the windowed re-lex is checked at the tree level — incremental-verify / exhaustive-edits
+  // the windowed re-lex is checked at the tree level — incremental-grammars / exhaustive-edits
   // compare an edited parse (whose tokens come from this windowed re-lex) to a FRESH FULL
   // parse of the same text, byte-identical.
   emit(`// The lexer core, parameterized for WINDOWED re-lexing: start at startPos with`);

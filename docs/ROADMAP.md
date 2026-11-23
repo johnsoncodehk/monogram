@@ -56,8 +56,8 @@ two, and the copies drift.
 | The generated destructurers `<name>.cst-match.ts`, which read the `jsTarget` arena through its `tree` export (`src/gen-cst-match.ts`) | none |
 
 Who depends on `jsTarget` in this repository: the gates `recovery`, `multi-doc`,
-`incremental-verify`, `incremental-grammars`, `exhaustive-edits`, `diagnostic-labels`,
-`emit-parser-verify`, `emit-reject-messages`, `emit-tsc-gate`, `emit-tokenize`,
+`incremental-grammars`, `exhaustive-edits`, `diagnostic-labels`,
+`emit-parser-verify`, `emit-reject-messages`,
 `emit-reentrancy`, `emit-standalone`, `cst-match-totality`, `template-holes`,
 `nullable-rules`, `conformance/html` (engine parity), the JS rows of `alloc-work`, and the
 benches `test/head-to-head.ts` and `test/recovery-conformance.ts`. The project listed under
@@ -196,11 +196,11 @@ generated from the shared layer for all three targets and the first format is de
 
 **Why.** JavaScript syntax follows the ECMAScript productions ([CORRECTNESS.md](CORRECTNESS.md)).
 `tsc` is the oracle for TypeScript-only syntax only; measured against `tsc`'s JS-mode parser
-([JS-CONFORMANCE.md](JS-CONFORMANCE.md)) the remaining disagreements are mostly where `tsc`'s
+(the former `JS-CONFORMANCE.md` record) the remaining disagreements are mostly where `tsc`'s
 parser accepts what the specification rejects.
 
 **Done means:** a gate runs `javascript.ts` over test262's syntax tests (positive and negative
-parse cases), with a pinned record of every file in the style of `JS-CONFORMANCE.md`.
+parse cases), with a pinned record of every file in the style of the former `JS-CONFORMANCE.md`.
 
 ## 7. Every target measured on every pull request
 

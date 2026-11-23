@@ -132,8 +132,8 @@ cost model: [docs/TARGETS.md](docs/TARGETS.md). Total parsing: [docs/TOTAL-PARSI
 - **TypeScript**: the CST lowered to `tsc`'s AST equals it node by node (kind, start, end)
   on the gate's battery (`conformance/ts-ast-structure`, [`test/ts-ast-verify.ts`](test/ts-ast-verify.ts)).
 - **JavaScript**: against `tsc`'s JS-mode parser on every single-file case of the pinned
-  TypeScript conformance corpus, 4428 of 4462 files agree; the record lists every other file
-  ([docs/JS-CONFORMANCE.md](docs/JS-CONFORMANCE.md), gate `conformance/js-corpus`).
+  TypeScript conformance corpus, 4428 of 4462 files agree (measured on `c16935d`; the gate and its
+  record were retired: test262 is JavaScript's oracle, below).
 - **JavaScript against test262**: JavaScript is checked against test262, the language's conformance
   suite (24,677 syntax tests, gate `conformance/test262`, [docs/TEST262.md](docs/TEST262.md)). 98.7%
   of the 20,200 valid tests parse. 30.2% of the 4,477 invalid ones are rejected; the rest are early
@@ -200,8 +200,8 @@ cannot express: [docs/HIGHLIGHTER-EVIDENCE.md](docs/HIGHLIGHTER-EVIDENCE.md).
 ### Allocations and sizes
 
 - With a kept builder, a Go parse allocates nothing (0 allocations per parse in reuse mode,
-  pinned for each input in [docs/ALLOCATIONS.md](docs/ALLOCATIONS.md), gate `alloc-work`);
-  the same record pins the TS and JS targets.
+  checked by the gate `alloc-work`; the counts for each input are in
+  [docs/ALLOCATIONS.md](docs/ALLOCATIONS.md), a report regenerated on master, with the TS and JS targets'.
 - Emitted parser sizes (`node test/emit-sizes.ts` on `d326d65`, recorded by the profile run
   45129600578):
 
@@ -252,6 +252,73 @@ targets, checker rules) are a consumer's job, not the parser's ([docs/CORRECTNES
 **The engine knows no language.** Keywords, the identifier token, template delimiters and the
 regex-versus-division decision are declared on the grammar's tokens. [`test/agnostic.ts`](test/agnostic.ts)
 runs a grammar with none of them; [`html.ts`](html.ts) is markup on the same engine.
+
+## What languages it fits
+
+Monogram's parsing model is **recursive descent with ordered choice**: a rule tries its
+alternatives, the longest match wins and declaration order breaks a tie, operators are parsed by
+precedence climbing, and a small set of declared mechanisms covers what plain alternatives cannot
+say (line-break sensitivity, regex versus division, template holes, element regions, a capped or
+re-bound operand). It is the model most hand-written parsers of the last twenty years use
+(`tsc`, Go, Rust, Swift, C#, `javac`; CPython's grammar has been a PEG since 3.9), so a language
+whose reference parser is written that way, and that can be parsed without knowing what its
+names mean, is expected to fit.
+
+**Honest status:** every mechanism so far was added for JavaScript and TypeScript. That the
+model carries over to an unrelated language is an expectation, not a measurement; Python is the
+second language being written to measure it (how many engine changes it needs, and which of them
+are general).
+
+What it handles today, and what it does not:
+
+| | status |
+|:--|:--|
+| JavaScript, TypeScript, JSX, TSX | shipped; checked against tsc, acorn and test262 ([Conformance](#conformance)) |
+| A template dialect with JSX-like elements over a host language | one grammar file ([A dialect with elements](#a-dialect-with-elements)) |
+| HTML (markup mode), YAML (indentation) | reference parser and highlighters; the portable TypeScript / Go / Rust parsers do not have these two mechanisms yet |
+| Parameterised productions (strict mode, module goal, `[Yield]`, `[Await]`, `[Return]`) | not yet: a grammar cannot say "this rule, in this context" |
+| Early errors and other static semantics | out of scope for the parser ([docs/CORRECTNESS.md](docs/CORRECTNESS.md)) |
+
+What the model **cannot** express, and a grammar file should not be expected to:
+
+- **Parsing that depends on what a name was declared as.** C's `T * x;` is a declaration or a
+  multiplication depending on an earlier `typedef`; C++ is the same problem at scale. This needs
+  a symbol table fed back into the parser.
+- **A grammar that changes while it is being read.** Operators whose precedence and
+  associativity are declared in the source (Haskell, Prolog, Agda), reader macros (Lisp), macro
+  systems that introduce syntax, TeX.
+- **Input rewritten before or during parsing.** The C preprocessor.
+- **Layout rules defined by parse errors.** Haskell's layout rule inserts a closing brace
+  "where the parse would otherwise fail". Plain indentation (Python, YAML) is a different,
+  finite mechanism and is in reach.
+- **Delimiters named by the text itself**, such as a here-document ending at an arbitrary
+  earlier identifier (shell, Ruby, Perl): not expressible today; it needs a "remember this
+  captured text" mechanism that does not exist.
+- **Languages that need every parse.** Ordered choice returns one tree. Where a language is
+  truly ambiguous until types are known, there is nothing to choose with.
+- **Perl**, whose parsing depends on running the program.
+
+Two properties of the model to know about, because they are costs rather than limits:
+
+- **Ordered choice hides ambiguity.** When two alternatives match the same text, the model
+  silently takes one. `--decisions` reports every such tie and every alternative that can never
+  win ([Adding a language](#adding-a-language)); a grammar is not finished while it has any.
+- **A committed choice is not revisited.** If an inner rule greedily takes a token an outer rule
+  needed, plain ordered choice fails where a general parser would succeed. Where a language
+  needs it (TypeScript's `T extends infer U extends X ? A : B`), the reference parser has a
+  declared, bounded retry, and the portable parsers are gaining the same one (see the known
+  disagreements under [What you get](#what-you-get)); the generated parsers' backtracking is
+  counted and gated ([Speed](#speed)).
+
+**The tree-sitter grammar is a rendering into a weaker model.** tree-sitter is GLR with static
+and dynamic precedence. It is exact where only one reading parses, and can prefer one reading
+where the two trees differ in their productions. Where two readings both parse and differ only
+in structure (TypeScript's `-a < c`, where `<` may open type arguments), no precedence can
+choose; the upstream tree-sitter grammar for TypeScript has the same class of case and trades
+it differently. So the generated tree-sitter grammar aims for: no ERROR on valid code, the
+reference parser's tree wherever the model allows it, and every remaining difference recorded
+with its reason ([docs/HIGHLIGHTER-EVIDENCE.md](docs/HIGHLIGHTER-EVIDENCE.md)). It is not
+equivalent to the reference parser and is not claimed to be.
 
 ## Adding a language
 

@@ -192,11 +192,48 @@ official tree-sitter grammar. Last run (CI on `3a18a69`): Monogram 96.3%, offici
 
 The other derived packages are checked in the same job: every `queries/*.scm` of every
 grammar must compile against its wasm ([`test/treesitter-queries.ts`](../test/treesitter-queries.ts));
-the TSX and JSX grammars parse a corpus whose verdicts are compared with the interpreter's
-([`test/treesitter-jsx.ts`](../test/treesitter-jsx.ts), report-only); and the job summary
+every TS / JS dialect parses its corpora, synthetic and real code (TypeScript's own `src/` at the
+pinned `TS_REPO_SHA`, test262's syntax tests at `test/test262.sha`), against the interpreter's
+verdicts, with every disagreement and its class pinned in
+[`test/treesitter-record.txt`](../test/treesitter-record.txt)
+([`test/treesitter-verdicts.ts`](../test/treesitter-verdicts.ts); any movement fails); and the job summary
 records, per grammar, `tree-sitter generate` wall and CPU time, peak memory and the
 `parser.c` state and symbol counts (report-only baselines for changes to the tree-sitter
 generator).
+
+Operator precedence: tree-sitter's precedence numbers are the binding powers of the shared analysis
+(`analyzeGrammar` in `src/grammar-analysis.ts`, the table the interpreter and the portable printers
+read): an operator's left binding power, a prefix operator's right one, and a `ledPrec` continuation
+(`?:`, `in`, `instanceof`, `as`, `satisfies`) its connector's; a continuation whose last operand is read
+whole (the conditional's last branch, `as T`'s type) leaves that step unprecedenced, so the operators
+after it shift into it. `test/treesitter-verdicts.ts` parses `a OP1 c OP2 d` for one operator per level and
+every connector, nested both ways, with every prefix and postfix operator, and where both accept
+compares tree-sitter's expression spans with the interpreter's; the pairs still bracketed differently
+are recorded as `brackets` entries. Two classes remain: `yield a OP c` (the precedence table's prefix `yield` beside the
+`yield` expression arm; it stays until that entry's overlap with the arm is resolved in the engine) and,
+in TypeScript, `type-arguments-lt-over-relational` (13 pairs: `-a < c`, `typeof a < c`, `a < c < d`,
+`a in c < d`), built as `-(a < c)`. After `- a` with `<` next, one parse state holds three actions:
+reduce the prefix operator (binding power 29), shift the relational `<` (20) and shift the
+type-argument `<` (the continuations' 36). A reduce between the two shifts is unresolved, so the
+declared `[expr]` conflict forks: one fork reduces and reads `(-a) < c`; the other shifts, and since
+the shift carries the relational item with the type-argument one, it reads `-(a < c)` once the type
+arguments fail at `;`. Both trees hold the same productions, so dynamic precedence (a sum over the
+tree) cannot prefer one, and tree-sitter's tie-break picks the second. Neither number can move: a
+type-argument `<` below the prefix level builds `(a + f)<T>(x)` for `a + f<T>(x)`, a relational `<`
+above it builds `a + (b < c)`. Telling the two `<` apart needs a different token where both are valid,
+decided as tsc and the interpreter decide it (a speculative type-argument list, then the next token);
+a scanner cannot run the Type grammar, and an approximate scan is not taken. A binary left operand
+(`a - b < c`, `a * b < c`) forks the same way, but there the tie-break happens to pick the
+interpreter's tree. The official `tree-sitter-typescript` (0.23.2) declares the same kind of GLR
+conflicts (call / instantiation / binary / unary) and no scanner token: it reads `-a < c` right, but
+`a < c < d` and `a in c < d` wrongly as ours does, and `a + f<T>(x)` as `(a + f)<T>(x)`. A second
+corpus, `type arguments`, compares the spans of calls with type arguments beside the relational
+readings; two more classes are recorded there, both wrong trees without an ERROR: a call read as two
+relational operators (`f<T>(x);` as `(f < T) > (x)`, also `a.b<T>(x)`, `new C<T>(x)`), and a call
+read as an instantiation expression then a call (`x = f<T>(x)`, `f<T>()`, ``f<T>`t` ``). The same corpus records over-acceptances, not defects of the
+bracketing: an assignment whose target is not a LeftHandSideExpression (`a + c = d;`, `-a = c;`,
+`a++ ??= c;`) and a unary operand of `**` (`-a ** c;`) parse in tree-sitter (59 JavaScript and 63
+TypeScript pairs), since its CFG has no assignment-target or `noUnaryLhs` condition.
 
 A tree-sitter grammar is a CFG and has no lookahead, so the grammar's zero-width assertions
 (`not`, `sameLine`, `noCommentBefore`, `noMultilineFlowBefore`, `notLeftLeaf`) are rendered
@@ -214,7 +251,7 @@ tree-sitter `reserved` word set on that token. tree-sitter applies one set per p
 highest id), so the sets are a chain from most to least reserving and every unguarded word
 position carries the empty last set. Where a guarded and a less guarded position share a state,
 the less reserving reading wins, so the rendering never rejects more than the grammar; it is
-exact in every other state, and so not counted exact: on CI's reserved-word corpus (`test/treesitter-jsx.ts`)
+exact in every other state, and so not counted exact: on CI's reserved-word corpus (`test/treesitter-verdicts.ts`)
 the shared-state witnesses `x = { if };` (beside `x = { if: 1 }`), `import { if } from "m";` (beside
 `import { if as x }`) and `const { default } = o;` (beside `{ default: d }`) stay accepted, while
 `var if`, `function return() {}`, `catch (this)`, `x = y + break;` and the rest are rejected. Reserved
@@ -245,10 +282,10 @@ They are records, not targets; each moves only with a generator change that says
   reason; the gate fails when a passing row breaks and when an expected-fail row starts
   passing. Recorded on `86f6530`: dialect 6 pass / 11 expected-fail, agnostic 4 pass /
   8 expected-fail.
-- [`test/tm-capture-patterns.ts`](../test/tm-capture-patterns.ts): captures that carry
-  `patterns`, per committed grammar. VS Code accepts them; Sublime Text rejects a grammar that
-  has any. Recorded on `86f6530`: typescript and javascript 0, typescriptreact and
-  javascriptreact 5 each (dotted JSX tag names), html 32, yaml 22.
+- Captures that carry `patterns`, per committed grammar (VS Code accepts them; Sublime Text
+  rejects a grammar that has any), counted on `86f6530`: typescript and javascript 0,
+  typescriptreact and javascriptreact 5 each (dotted JSX tag names), html 32, yaml 22. (The
+  count was a pinned gate with no decision attached; it was retired.)
 
 ## Known differences from the official highlighter
 
