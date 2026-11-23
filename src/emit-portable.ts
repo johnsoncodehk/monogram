@@ -23,6 +23,7 @@
 // parser. This is enough to derive a real JavaScript-subset parser (test/fixtures/minijs.ts).
 import type { CstGrammar, IdentifierClasses, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
 import { identifierClassesOf } from './uni-ident.ts';
+import { planTargets, type ArmForm } from './target-contexts.ts';
 import { KIND, analyzeGrammar, concreteFirst, directivesOf, findEntryRule, tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { nameRule, syntaxKey, type RuleNames } from './grammar-names.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
@@ -124,10 +125,10 @@ export type Step = StepOp & {
   inh?: { k: number; v: ShapeInhVal }[]; threadInit?: { k: number; v: ShapeInhVal }; thread?: { k: number; next: string };
 };
 type StepOp =
-  | { t: 'lit'; value: string; ttype: '$keyword' | '$punct' }   // match a literal by text
+  | { t: 'lit'; value: string; ttype: '$keyword' | '$punct'; accSep?: true }   // match a literal by text; accSep: a container's ',' after which no `last` child may stand (target-contexts.ts)
   | { t: 'tok'; name: string; hole?: string }                   // match a token kind; a template kind (TplCfg) carries the rule that parses its `${…}` holes and also matches an interpolated template
-  | { t: 'rule'; name: string }                                 // call a rule, append its node
-  | { t: 'ruleBp'; name: string; bp: number }                   // call a Pratt rule at a given binding power (chain-rhs led trailing operand)
+  | { t: 'rule'; name: string; acc?: number }                  // call a rule, append its node; acc: a container's child (target-contexts.ts): the pass bits its form must have
+  | { t: 'ruleBp'; name: string; bp: number; acc?: number }     // call a Pratt rule at a given binding power (chain-rhs led trailing operand)
   | { t: 'star'; step: Step; guard?: number; clean?: true; leaves?: true; share?: number }                   // repeat inner 0+
   | { t: 'opt'; steps: Step[]; guard?: number; clean?: true; leaves?: true; share?: number }                 // optional sub-sequence
   | { t: 'sep'; elem: Step; delim: string; guard?: number; clean?: true; leaves?: true; share?: number }     // elem (delim elem)*
@@ -138,6 +139,7 @@ type StepOp =
   | { t: 'aheadCtx'; set: number; is: boolean }                 // zero-width: the `ahead` test of tokenSets[set] plus the operator words of the context in force (ParserIR.ctxWords)
   | { t: 'seq'; steps: Step[]; share?: number }                 // a grouped sub-sequence (e.g. a star body `(',' Expr)`)
   | { t: 'sameLine' }                                           // zero-width: the next token is on the same line (no preceding newline)
+  | { t: 'target'; ctx: string; mask?: number }                // zero-width: the node just returned passes target context ctx (its pass bit: mask; target-contexts.ts)
   | { t: 'suppress'; set: number; steps: Step[]; share?: number }  // parse the body with the LED connectors of ParserIR.suppressSets[set] disabled (no-`in` context)
   | { t: 'ctx'; ctx: Ctx; steps: Step[]; share?: number };      // parse the body in [Await]/[Yield] context `ctx`, then put back the one in force
 export type Alt = Step[];
@@ -210,6 +212,7 @@ export type RdRule = {
   altGuard: Guard[];        // parallel to alts: when each one is a candidate at all
   altDispatch: Dispatch;    // how a target reaches the alts a token admits (unused when predictive / one alt)
   altCommit?: Commit;       // the keys at which one alternative is left (see Commit); absent: none
+  altForm?: ArmForm[];      // parallel to alts: each one's form, present iff the rule is in the target closure (target-contexts.ts)
   clean: boolean;           // every alternative fails clean (Step.clean): the PREDICTIVE / SINGLE form's entry takes no builder checkpoint and its failure undoes nothing
 };
 // The candidates of a longest-match list, by what the first token must be, as sections a target
@@ -481,7 +484,7 @@ export type PrattRule = {
   // requireTarget: the operand (prefix) / left operand (binary, postfix) must have FORM_TARGET,
   // else the whole Pratt call fails; noUnaryLhs: the left operand must not have FORM_UNARY.
   prefix: Array<{ op: string; rbp: number; requireTarget: boolean; form: AssignForm }>;  // NUD: prefix op then operand at rbp; form = the node's
-  binary: Array<{ op: string; lbp: number; rbp: number; requireTarget: boolean; noUnaryLhs: boolean }>;  // LED: infix op, bind iff lbp > minBp, rhs at rbp
+  binary: Array<{ op: string; lbp: number; rbp: number; requireTarget: boolean; noUnaryLhs: boolean; needCtx?: number }>;   // needCtx: targetOps: the pass bit the left operand must have  // LED: infix op, bind iff lbp > minBp, rhs at rbp
   leds: Bracket[];                                    // LED: mixfix continuation (call/member/index), tried before operators
   ledNames: string[];                                 // parallel to leds: each arm's name
   ledLeftNames: string[];                             // parallel to leds: the name of its left operand (the self `$`; derived: `left`)
@@ -490,7 +493,15 @@ export type PrattRule = {
   ledSameLine: boolean[];                             // parallel to leds: a leading `sameLine` guard (TS type tails) — the connector must be on the operand's line
   ledNotLeftLeaf: Array<string[] | null>;             // parallel to leds: skip this led when the left node's head-leaf text is in this set (`void.x` etc.)
   ledSuppressedIn: number[][];                        // parallel to leds: the ParserIR.suppressSets that hold its connector — the led is tried only while the set in force is none of them
-  ledForm: AssignForm[];                              // parallel to leds: the built node's form (a binary-connector led, `a < T >`/`a as T`, is not a target)
+  ledForm: number[];                                  // parallel to leds: the built node's form (a binary-connector led, `a < T >`/`a as T`, is not a target; with target contexts, plus its leaf bits)
+  // Present iff the grammar declares target contexts (target-contexts.ts): each NUD arm's form
+  // (parallel to nudOrder), a postfix token arm's, the binary node's (its leaf bits; accLeft: the
+  // pass bits it takes from its left operand), the postfix operator node's, a prefix node's leaf bits.
+  nudForm?: ArmForm[];
+  postfixTokForm?: number[];
+  binForm?: { leaf: number; accLeft: number };
+  postForm?: number;
+  preLeaf?: number;
   ledClosesTail: boolean[];                           // parallel to leds: not an access tail, or ends in a negative lookahead (`Foo<T>` then nothing)
   ledCapsFromTail: boolean[];                         // parallel to leds: its trailing self operand's cap is the node's (see nudSeqCapsFromTail): the ternary's `: $`
   // parallel to leds: the MIXFIX OPERAND RE-BIND (the interpreter's matchMixfixLed). A led
@@ -520,6 +531,13 @@ export type PrattRule = {
 // `++x`) is also refused as a noUnaryLhs left operand; every other node is a target.
 export const FORM_TARGET = 0, FORM_NOT_TARGET = 1, FORM_UNARY = 2;
 export type AssignForm = typeof FORM_TARGET | typeof FORM_NOT_TARGET | typeof FORM_UNARY;
+// A grammar that declares target contexts (CstGrammar.targets; target-contexts.ts) widens the form
+// to a BITMASK, one byte in every target: FORM_LOW masks today's meaning above; context i has a
+// PASS bit (its node passes the context) and a LAST bit (its node is a `last` arm of it). A grammar
+// without contexts never sets a bit above FORM_LOW, and its printed parser tests the form as before.
+export const FORM_LOW = 3, FORM_MAX_CONTEXTS = 3;
+export const formPass = (i: number): number => 4 << (2 * i);
+export const formLast = (i: number): number => 8 << (2 * i);
 export type RuleIR = RdRule | PrattRule;
 
 // Stateful regex-vs-division disambiguation (the JS `/` problem): a `/` starts a regex
@@ -648,7 +666,11 @@ export type ParserIR = {
   identPrefix: Record<string, string>;
   /** The Unicode identifier characters of the identifier token (uni-ident.ts identifierClassesOf). */
   identClasses: IdentifierClasses;
+  /** The declared target contexts (target-contexts.ts); absent when the grammar declares none. */
+  targets?: TargetsIR;
 };
+// passes: every context's pass bit; lastCtx: the pass bits of the contexts that have `last` arms.
+export type TargetsIR = { names: string[]; passes: number; lastCtx: number };
 
 // The target-agnostic parse plan for a grammar, the IR each portable Target (ts/go/rust) renders.
 // The [Await]/[Yield] context is a word the parser holds (see Ctx), not a copy of each rule per
@@ -944,6 +966,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
       }
       case 'not': return e.reservable ? reservableOf(altSteps(e.body)) : notOf(altSteps(e.body));   // zero-width negative lookahead
       case 'sameLine': return { t: 'sameLine' };                  // zero-width no-newline assertion
+      case 'target': return { t: 'target', ctx: e.ctx };          // zero-width declared target check (target-contexts.ts)
       case 'seq': return { t: 'seq', steps: e.items.map(stepOf) };  // grouped sub-sequence (star/sep body)
       case 'sep': return { t: 'sep', elem: stepOf(e.element), delim: e.delimiter };
       case 'quantifier':
@@ -1201,7 +1224,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
       }
       case 'seq': return seqFirst(s.steps);
       case 'suppress': case 'ctx': return seqFirst(s.steps);
-      case 'look': case 'ahead': case 'aheadCtx': case 'sameLine': case 'star': case 'opt': case 'sep': return null;   // zero-width / nullable leading → unpredictable
+      case 'look': case 'ahead': case 'aheadCtx': case 'sameLine': case 'target': case 'star': case 'opt': case 'sep': return null;   // zero-width / nullable leading → unpredictable
     }
     return null;
   };
@@ -1321,7 +1344,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   // binary or postfix operator returns with the left operand built; a prefix one in the NUD frame
   // returns with the best so far built). Not clean: such a Pratt rule's call, and any list whose
   // later step can fail after an earlier one consumed.
-  const zeroWidth = (s: Step): boolean => s.t === 'ahead' || s.t === 'aheadCtx' || s.t === 'sameLine' || s.t === 'look';
+  const zeroWidth = (s: Step): boolean => s.t === 'ahead' || s.t === 'aheadCtx' || s.t === 'sameLine' || s.t === 'target' || s.t === 'look';
   const cleanRules = new Set(rules.filter((r) => r.kind === 'rd' || (!r.binary.some((b) => b.requireTarget || b.noUnaryLhs) && !r.postfix.some((o) => o.requireTarget) && !r.prefix.some((o) => o.requireTarget))).map((r) => r.name));
   const failsClean = (s: Step): boolean => {
     switch (s.t) {
@@ -1465,6 +1488,8 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
     }
   }
 
+  // Declared target contexts mark their steps before steps are shared (a marked step is another step).
+  const targets = planTargets(grammar, rules);
   const shared = shareSteps([
     ...rules.flatMap(printedBodies),
     ...lookaheads,
@@ -1472,7 +1497,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   const entry = findEntryRule(grammar);
   const forms = formsOf(rules, lookaheads, shared.length, entry);
   const identPrefix = Object.fromEntries(identLike.map((n) => [n, grammar.tokens.find((t) => t.name === n)?.identifierPrefix ?? '']));
-  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse: reusePlanOf(rules, entry), suppressSets, regexCtx, tpl, elements, newlineCfg, identToken, identLike, identPrefix, identClasses: identifierClassesOf(grammar.tokens) };
+  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse: reusePlanOf(rules, entry), suppressSets, regexCtx, tpl, elements, newlineCfg, identToken, identLike, identPrefix, identClasses: identifierClassesOf(grammar.tokens), ...(targets ? { targets } : {}) };
 }
 
 // The step lists a rule runs: an rd rule's alternatives, a Pratt rule's NUD and LED arms.

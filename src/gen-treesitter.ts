@@ -1303,7 +1303,7 @@ function computeTerminalSets(grammar: CstGrammar, tokenNames: Set<string>): Term
 function greedyTail(alt: RuleExpr, follow: Set<string>, firstOf: TerminalSets['firstOf']): boolean {
   alt = tsView(alt);
   if (alt.type !== 'seq') return false;
-  const consuming = alt.items.filter(i => { const v = tsView(i); return !(v.type === 'not' || v.type === 'sameLine' || v.type === 'noCommentBefore' || v.type === 'noMultilineFlowBefore' || v.type === 'notLeftLeaf'); });
+  const consuming = alt.items.filter(i => { const v = tsView(i); return !(v.type === 'not' || v.type === 'sameLine' || v.type === 'noCommentBefore' || v.type === 'noMultilineFlowBefore' || v.type === 'notLeftLeaf' || v.type === 'target'); });
   if (consuming.length < 2) return false;
   const tail = tsView(consuming[consuming.length - 1]);
   const starts = tail.type === 'quantifier' ? firstOf(tail.body)
@@ -1359,7 +1359,7 @@ function planReservedSets(guards: string[][]): ReservedSets {
   return { sets: chain, nameOf: words => byKey.get(words.join(' ')) ?? null };
 }
 
-const ASSERTION_KINDS = new Set<RuleExpr['type']>(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf']);
+const ASSERTION_KINDS = new Set<RuleExpr['type']>(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'target']);
 
 function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: TerminalSets): { records: AssertionRecord[]; recordOf: Map<RuleExpr, AssertionRecord[]>; nodes: Set<RuleExpr>; reservedSets: ReservedSets; isWordLiteral: (text: string) => boolean } {
   const records: AssertionRecord[] = [];

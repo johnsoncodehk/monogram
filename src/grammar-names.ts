@@ -49,7 +49,7 @@ export function syntaxKey(e: RuleExpr | readonly RuleExpr[]): string {
   return JSON.stringify(e, (k, v) => (k === 'arm' || k === 'field' ? undefined : v));
 }
 
-const ZERO_WIDTH = new Set(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf']);
+const ZERO_WIDTH = new Set(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'target']);
 
 // Name an arm from its first significant item; `sig` is self-stripped for leds.
 export function deriveArmName(items: RuleExpr[], isLed: boolean): string {

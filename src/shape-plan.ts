@@ -100,7 +100,7 @@ const no = (why: string): never => { throw new Unsupported(why); };
 
 // ── Tags: the grammar nodes of one arm, numbered ──
 type Numbering = { tagOf: Map<RuleExpr, number>; branchRange: Map<RuleExpr, [number, number][]>; nullableBranch: Set<RuleExpr> };
-const ZERO_WIDTH = new Set(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf']);
+const ZERO_WIDTH = new Set(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'target']);
 function numberArm(items: RuleExpr[], named: (e: RuleExpr) => boolean): Numbering {
   const n: Numbering = { tagOf: new Map(), branchRange: new Map(), nullableBranch: new Set() };
   let k = 0;

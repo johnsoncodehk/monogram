@@ -222,7 +222,7 @@ function analyze(grammar: CstGrammar) {
             if (kws) pending = pending ? new Set([...pending, ...kws]) : kws;
             continue;
           }
-          if (item.type === 'op' || item.type === 'postfix' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;
+          if (item.type === 'op' || item.type === 'postfix' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf' || item.type === 'target') continue;
           const f = exprFirst(item);
           if (f === null) return null;
           for (const k of f) {
@@ -243,7 +243,7 @@ function analyze(grammar: CstGrammar) {
         return acc;
       }
       case 'quantifier': case 'group': return exprFirst(e.body);
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': return new Set();
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'target': return new Set();
       case 'sep': return exprFirst(e.element);
       default: return null;
     }

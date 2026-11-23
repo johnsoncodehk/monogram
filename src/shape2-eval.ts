@@ -67,7 +67,7 @@ export type Slot = { name: string; kind: SlotKind; rule?: string; node: RuleExpr
 export type ScopeInfo = { where: string; slots: Map<string, Slot> };
 export type ArmInfo = ScopeInfo & { rule: string; arm: string; form?: 'binary' | 'prefix' | 'postfix'; items?: RuleExpr[] };
 
-const ZERO_WIDTH = new Set(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf']);
+const ZERO_WIDTH = new Set(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'target']);
 const isList = (q: RuleExpr): boolean => q.type === 'sep' || (q.type === 'quantifier' && q.kind !== '?');
 export const cardOf = (quants: RuleExpr[]): Card => (quants.some(isList) ? 'many' : quants.length ? 'opt' : 'one');
 
