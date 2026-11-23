@@ -20,7 +20,7 @@ a test that test262 runs both sloppy and strict, or only in one mode, or as a mo
 first run's text: `"use strict";` prepended for `onlyStrict`). What depends on the goal or the mode is a class
 of its own below (`needs-parameter`).
 
-**21292 of 24677 agree (86.3%).**
+**21560 of 24677 agree (87.4%).**
 
 ## Scoreboard
 
@@ -35,23 +35,23 @@ of its own below (`needs-parameter`).
 | `directive-prologue` | 62 | 51 | 0 | 11 | 0 | 0 |
 | `eval-code` | 347 | 347 | 0 | 0 | 0 | 0 |
 | `export` | 3 | 0 | 3 | 0 | 0 | 0 |
-| `expressions` | 11156 | 8952 | 720 | 1322 | 162 | 0 |
+| `expressions` | 11156 | 9111 | 720 | 1322 | 3 | 0 |
 | `function-code` | 217 | 217 | 0 | 0 | 0 | 0 |
 | `future-reserved-words` | 55 | 29 | 8 | 18 | 0 | 0 |
 | `global-code` | 42 | 28 | 0 | 14 | 0 | 0 |
 | `identifier-resolution` | 14 | 13 | 1 | 0 | 0 | 0 |
 | `identifiers` | 268 | 152 | 43 | 73 | 0 | 0 |
-| `import` | 129 | 31 | 9 | 1 | 88 | 0 |
+| `import` | 129 | 119 | 9 | 1 | 0 | 0 |
 | `keywords` | 25 | 0 | 25 | 0 | 0 | 0 |
-| `line-terminators` | 41 | 24 | 13 | 4 | 0 | 0 |
-| `literals` | 536 | 213 | 109 | 212 | 2 | 0 |
+| `line-terminators` | 41 | 24 | 17 | 0 | 0 | 0 |
+| `literals` | 536 | 215 | 122 | 199 | 0 | 0 |
 | `module-code` | 599 | 433 | 19 | 147 | 0 | 0 |
 | `punctuators` | 11 | 1 | 10 | 0 | 0 | 0 |
 | `reserved-words` | 27 | 14 | 6 | 7 | 0 | 0 |
 | `rest-parameters` | 11 | 10 | 0 | 1 | 0 | 0 |
 | `source-text` | 1 | 1 | 0 | 0 | 0 | 0 |
 | `statementList` | 80 | 80 | 0 | 0 | 0 | 0 |
-| `statements` | 9399 | 7883 | 316 | 1198 | 2 | 0 |
+| `statements` | 9399 | 7885 | 316 | 1198 | 0 | 0 |
 | `types` | 113 | 102 | 7 | 4 | 0 | 0 |
 | `white-space` | 67 | 61 | 6 | 0 | 0 | 0 |
 | `annexB/comments` | 8 | 0 | 0 | 0 | 8 | 0 |
@@ -61,7 +61,7 @@ of its own below (`needs-parameter`).
 | `annexB/global-code` | 153 | 153 | 0 | 0 | 0 | 0 |
 | `annexB/literals` | 8 | 8 | 0 | 0 | 0 | 0 |
 | `annexB/statements` | 22 | 16 | 0 | 6 | 0 | 0 |
-| **total** | **24677** | **19938** | **1354** | **3123** | **262** | **0** |
+| **total** | **24677** | **20189** | **1371** | **3106** | **11** | **0** |
 
 WE-ACCEPT: test262 says SyntaxError, the grammar parses. WE-REJECT: test262 parses, the grammar rejects.
 
@@ -80,32 +80,17 @@ run); where it does not, the rule is outside even its syntactic layer.
 
 | class | files | acorn agrees | verdict | witnesses |
 |---|---:|---:|---|---|
-| `reject/lexer-division-after-radix-number`: a `/` after a hex / octal / binary number is lexed as a regular expression | 3 | 3 | grammar bug: fix | `language/expressions/division/bigint-arithmetic.js`<br>`language/expressions/division/bigint-toprimitive.js`<br>`language/expressions/division/bigint-wrapped-values.js` |
-| `reject/member-bracket-comma-expression`: a computed member access takes an Expression, comma included | 3 | 3 | grammar bug: fix | `language/expressions/dynamic-import/assignment-expression/call-expr-expr.js`<br>`language/expressions/optional-chaining/optional-chain-prod-expression.js`<br>`language/statements/using/syntax/using-for-using-of-of.js` |
-| `reject/decorator-private-member`: a decorator member expression ending in a private name | 2 | 0 | grammar bug: fix | `language/expressions/class/decorator/syntax/class-valid/decorator-member-expr-private-identifier.js`<br>`language/statements/class/decorator/syntax/class-valid/decorator-member-expr-private-identifier.js` |
-| `reject/await-context-leaks-into-function`: a class static block's [+Await] reaches a nested function's parameters | 1 | 1 | grammar bug: fix | `language/expressions/function/static-init-await-reference.js` |
-| `reject/bigint-binding-property-key`: a BigInt as a binding pattern's property name | 1 | 1 | grammar bug: fix | `language/expressions/object/literal-property-name-bigint.js` |
+| `reject/lexer-division-after-radix-number`: a `/` after a hex / octal / binary number is lexed as a regular expression | 2 | 2 | grammar bug: fix | `language/expressions/division/bigint-toprimitive.js`<br>`language/expressions/division/bigint-wrapped-values.js` |
 | `reject/lexer-optional-chain-before-digit`: `?.` before a decimal digit is `?` and a number | 1 | 1 | grammar bug: fix | `language/expressions/optional-chaining/punctuator-decimal-lookahead.js` |
-| `reject/stage3-import-defer`: import defer (Stage 3) | 151 | 0 | syntax being added (decided) | `language/expressions/dynamic-import/catch/nested-arrow-import-catch-import-defer-specifier-tostring-abrupt-rejects.js`<br>`language/expressions/dynamic-import/syntax/valid/nested-function-return-import-defer-script-code-valid.js`<br>`language/import/import-defer/evaluation-triggers/ignore-not-exported-then-super-property-set-exported.js` |
-| `reject/stage3-source-phase-imports`: source phase imports (Stage 3) | 90 | 0 | syntax being added (decided) | `language/expressions/dynamic-import/catch/nested-arrow-import-catch-import-source-source-text-module.js`<br>`language/expressions/dynamic-import/catch/nested-do-while-import-source-source-text-module.js`<br>`language/expressions/dynamic-import/syntax/valid/nested-async-function-return-await-import-source-empty-str-is-valid-assign-expr.js` |
-| `reject/annexb-legacy-numeric-literals`: LegacyOctalIntegerLiteral / NonOctalDecimalIntegerLiteral (Annex B) | 2 | 2 | syntax being added (decided) | `language/literals/numeric/legacy-octal-integer.js`<br>`language/literals/numeric/non-octal-decimal-integer.js` |
 | `reject/annexb-html-comments`: HTML-like comments (Annex B) | 8 | 8 | needs a parameterised production the engine lacks (roadmap item 4) | `annexB/language/comments/multi-line-html-close.js`<br>`annexB/language/comments/single-line-html-close-first-line-1.js`<br>`annexB/language/comments/single-line-html-close-unicode-separators.js` |
 
 | verdict | files |
 |---|---:|
-| grammar bug: fix | 11 |
-| syntax being added (decided) | 243 |
+| grammar bug: fix | 3 |
 | needs a parameterised production the engine lacks (roadmap item 4) | 8 |
 
 - `reject/lexer-division-after-radix-number` — `x = 0x10 / 1, 'a/b'`: regexContext.divisionAfterTypes lists Number and BigInt, not HexNumber, OctalNumber or BinaryNumber (a hex BigInt lexes as HexNumber).
-- `reject/member-bracket-comma-expression` — `a[0, 1]`, `a?.[0, 1]`, `of[0, 1]`: MemberExpression `[ Expression ]` and OptionalChain `?. [ Expression ]`; the grammar reads one AssignmentExpression.
-- `reject/decorator-private-member` — `@C.#a class D {}` inside the class body: DecoratorMemberExpression `. PrivateIdentifier`.
-- `reject/await-context-leaks-into-function` — `class C { static { (function (x = await) {}) } }`: a function's FormalParameters and body are [~Await]; the parameters inherit the block's context instead.
-- `reject/bigint-binding-property-key` — `let { 1n: a } = {}`: a BindingProperty's PropertyName is a LiteralPropertyName, which includes NumericLiteral (a BigInt among them); the object literal `({ 1n: a })` already parses.
 - `reject/lexer-optional-chain-before-digit` — `true ?.30 : false`: OptionalChainingPunctuator is `?. [lookahead ∉ DecimalDigit]`.
-- `reject/stage3-import-defer` — `import defer * as ns from "m"` and `import.defer(…)`: the grammar has neither. Decided: add to the JavaScript grammar (TypeScript follows tsc).
-- `reject/stage3-source-phase-imports` — `import source x from "m"` and `import.source(…)`: the grammar has neither. Decided: add to the JavaScript grammar.
-- `reject/annexb-legacy-numeric-literals` — `01`, `08`, `019` in sloppy script code: the lexer has no such token, so `010` is refused outright. Decided: accept.
 - `reject/annexb-html-comments` — `<!--` and a line-leading `-->` are comments in script code only; in module code they are not comments (`a <!--b` is `a < !--b` there). Without the script / module goal, accepting them changes the meaning of valid module code.
 
 ### WE-ACCEPT: SyntaxErrors the grammar parses
@@ -117,18 +102,16 @@ run); where it does not, the rule is outside even its syntactic layer.
 | `accept/import-export-not-top-level`: an import / export declaration inside a statement or expression | 86 | 86 | grammar bug: fix | `language/module-code/parse-err-decl-pos-export-arrow-function.js`<br>`language/module-code/parse-err-decl-pos-export-if-else.js`<br>`language/module-code/parse-err-decl-pos-import-for-in-let.js` |
 | `accept/await-yield-identifier-reference`: `await` / `yield` as an identifier reference or a label where the context forbids it | 77 | 77 | grammar bug: fix | `language/expressions/assignment/dstr/obj-id-identifier-yield-expr.js`<br>`language/expressions/class/elements/async-private-method/await-as-label-identifier.js`<br>`language/statements/class/async-gen-method-static/yield-as-label-identifier.js` |
 | `accept/for-in-of-initializer`: an initializer in a for-in / for-of head | 32 | 32 | grammar bug: fix | `language/block-scope/syntax/for-in/disallow-initialization-assignment.js`<br>`language/statements/for-await-of/head-let-init.js`<br>`language/statements/for-of/head-await-using-init.js` |
-| `accept/numeric-literal-lexical`: a numeric literal the lexical grammar does not derive | 21 | 21 | grammar bug: fix | `language/literals/bigint/legacy-octal-like-invalid-00n.js`<br>`language/literals/bigint/numeric-separators/numeric-separator-literal-lol-00-err.js`<br>`language/literals/bigint/numeric-separators/numeric-separator-literal-nonoctal-09-err.js` |
 | `accept/restricted-production-line-break`: a line break where a production says [no LineTerminator here] | 11 | 11 | grammar bug: fix | `language/asi/S7.9_A4.js`<br>`language/expressions/arrow-function/syntax/early-errors/asi-restriction-invalid.js`<br>`language/expressions/object/method-definition/early-errors-object-method-async-lineterminator.js` |
 | `accept/let-bracket-lookahead`: `let` ⏎ `[` in statement position | 9 | 9 | grammar bug: fix | `language/statements/do-while/let-array-with-newline.js`<br>`language/statements/for-of/let-array-with-newline.js`<br>`language/statements/labeled/let-array-with-newline.js` |
 | `accept/yield-precedence`: `yield` parsed as a prefix operator | 9 | 9 | grammar bug: fix | `language/expressions/generators/yield-as-logical-or-expression.js`<br>`language/expressions/object/method-definition/yield-weak-binding.js`<br>`language/statements/class/definition/methods-gen-yield-weak-binding.js` |
 | `accept/using-binding-pattern`: a binding pattern in a `using` / `await using` declaration list | 7 | 7 | grammar bug: fix | `language/statements/await-using/syntax/await-using-invalid-arraybindingpattern-after-bindingidentifier.js`<br>`language/statements/await-using/syntax/await-using-invalid-objectbindingpattern.js`<br>`language/statements/using/syntax/using-invalid-arraybindingpattern.js` |
-| `accept/string-line-terminator`: a raw LF / CR in a string literal | 6 | 6 | grammar bug: fix | `language/line-terminators/S7.3_A2.1_T2.js`<br>`language/line-terminators/invalid-string-cr.js`<br>`language/literals/string/S7.8.4_A1.1_T2.js` |
 | `accept/coalesce-mixed-with-logical`: `??` mixed with `&&` / `\|\|` without parentheses | 4 | 4 | grammar bug: fix | `language/expressions/coalesce/cannot-chain-head-with-logical-and.js`<br>`language/expressions/coalesce/cannot-chain-head-with-logical-or.js`<br>`language/expressions/coalesce/cannot-chain-tail-with-logical-and.js` |
 | `accept/hashbang-position`: a hashbang comment that does not start the source text | 4 | 4 | grammar bug: fix | `language/comments/hashbang/preceding-directive-prologue-sc.js`<br>`language/comments/hashbang/preceding-directive-prologue.js`<br>`language/comments/hashbang/preceding-hashbang.js` |
 | `accept/accessor-parameters`: a getter with a parameter | 3 | 3 | grammar bug: fix | `language/expressions/class/getter-param-dflt.js`<br>`language/expressions/object/getter-param-dflt.js`<br>`language/statements/class/getter-param-dflt.js` |
 | `accept/in-operator-in-for-init`: `in` inside a for-statement initializer's nested expression | 3 | 3 | grammar bug: fix | `language/expressions/conditional/in-branch-2.js`<br>`language/expressions/yield/in-iteration-stmt.js`<br>`language/expressions/yield/star-in-iteration-stmt.js` |
 | `accept/switch-statement-outside-clause`: a statement in a switch body before any `case` | 1 | 1 | grammar bug: fix | `language/statements/switch/S12.11_A3_T5.js` |
-| `accept/strict-mode`: strict mode code | 387 | 387 | needs a parameterised production the engine lacks (roadmap item 4) | `language/arguments-object/10.5-1gs.js`<br>`language/expressions/delete/identifier-strict.js`<br>`language/statements/class/gen-method/yield-identifier-spread-strict.js` |
+| `accept/strict-mode`: strict mode code | 397 | 397 | needs a parameterised production the engine lacks (roadmap item 4) | `language/arguments-object/10.5-1gs.js`<br>`language/expressions/function/name-arguments-strict.js`<br>`language/statements/class/elements/gen-private-method/yield-identifier-spread-strict.js` |
 | `accept/module-goal`: module code | 36 | 36 | needs a parameterised production the engine lacks (roadmap item 4) | `language/expressions/class/class-name-ident-await-module.js`<br>`language/module-code/early-undef-continue.js`<br>`language/module-code/parse-err-syntax-2.js` |
 | `accept/return-outside-function`: `return` outside a function | 13 | 13 | needs a parameterised production the engine lacks (roadmap item 4) | `language/global-code/return.js`<br>`language/statements/return/S12.9_A1_T10.js`<br>`language/statements/return/S12.9_A1_T5.js` |
 | `accept/private-names`: private names | 346 | 346 | early error: a checker over the tree, not the grammar: not built | `language/expressions/class/elements/fields-duplicate-privatenames.js`<br>`language/expressions/class/elements/syntax/early-errors/grammar-privatename-in-computed-property-missing.js`<br>`language/statements/class/elements/syntax/early-errors/delete/field-delete-twice-covered-err-delete-call-expression-private-method-gen.js` |
@@ -153,8 +136,8 @@ run); where it does not, the rule is outside even its syntactic layer.
 
 | verdict | files |
 |---|---:|
-| grammar bug: fix | 747 |
-| needs a parameterised production the engine lacks (roadmap item 4) | 436 |
+| grammar bug: fix | 720 |
+| needs a parameterised production the engine lacks (roadmap item 4) | 446 |
 | early error: a checker over the tree, not the grammar: not built | 1940 |
 
 - `accept/rest-element-shape` — `function f(...a = 1) {}`, `function f(...a,) {}`, `var [...a, b] = c`, `({...a,} = b)` in binding position: FunctionRestParameter and BindingRestElement are `... BindingIdentifier | ... BindingPattern`, last, with no Initializer and no comma after.
@@ -162,12 +145,10 @@ run); where it does not, the rule is outside even its syntactic layer.
 - `accept/import-export-not-top-level` — `{ import v from "m"; }`, `function* g() { export default null; }`: ImportDeclaration and ExportDeclaration are ModuleItems, at a module's top level only, in no goal anywhere else. The grammar puts them in Decl, which every block reaches.
 - `accept/await-yield-identifier-reference` — IdentifierReference and LabelIdentifier are `[~Yield] yield` / `[~Await] await`, parameterised productions the engine has ([Await]/[Yield] families): `({await})` in an async function, `({yield})` in a generator, `yield: ;` in a generator, `await` in a class static block.
 - `accept/for-in-of-initializer` — `for (let x = 1 of y)`, `for (var [a] = 1 of y)`, `for (let x = 1 in o)`, `for (x = 1 in o)`: ForInOfStatement has no initializer; Annex B (B.3.5) adds only the sloppy `for (var BindingIdentifier Initializer in Expression)`.
-- `accept/numeric-literal-lexical` — `01n` (no BigInt suffix on a legacy octal), a NumericLiteralSeparator in a legacy-octal-like literal or after a leading zero: the token reads them.
 - `accept/restricted-production-line-break` — `throw⏎1`, `x⏎=> 1`, `async x⏎=> 1`: the restricted productions forbid the line break, and no ASI applies.
 - `accept/let-bracket-lookahead` — `for (;;) let⏎[a] = 0;`: an ExpressionStatement may not begin with `let [`, and a LexicalDeclaration is no Statement, so no production derives it.
 - `accept/yield-precedence` — `yield 3 + yield 4`, `yield ? a : b`, `yield = 1` in a generator: YieldExpression is an AssignmentExpression alternative, not a UnaryExpression; the grammar lists `yield` with the prefix operators.
 - `accept/using-binding-pattern` — `using x = 1, [a] = b`: a `using` LexicalBinding is a BindingIdentifier (`BindingList[~Pattern]`); only a leading `using [` is an expression (element access).
-- `accept/string-line-terminator` — DoubleStringCharacter / SingleStringCharacter exclude LF and CR. `String_` is shared with JSX attribute values, which may span lines (the expected-fail in test/js-conformance.ts).
 - `accept/coalesce-mixed-with-logical` — `0 && 0 ?? true`, `a ?? b || c`: CoalesceExpression's operands are BitwiseORExpressions, so neither side may be a bare `&&` / `||`.
 - `accept/hashbang-position` — `x⏎#!/y`: a HashbangComment is the first thing in a Script or Module only. The Shebang token's start() anchor admits any line start.
 - `accept/accessor-parameters` — `get x(a) {}`: a getter's parameter list is `( )`; a setter has exactly one PropertySetParameterList.
@@ -205,19 +186,15 @@ class, not classed again. A rejection tsc does not share and the JavaScript gram
 TypeScript grammar bug with no class yet (`ts/unknown`), and fails the gate. The negative tests are not asked of
 the TypeScript grammar; there it is held to tsc's parser ([CORRECTNESS.md](CORRECTNESS.md)).
 
-**20179 of 20200 valid tests parse (99.9%)** · by design 10 · as in JavaScript 11 · unclassified 0 · crash 0
+**20187 of 20200 valid tests parse (99.9%)** · by design 10 · as in JavaScript 3 · unclassified 0 · crash 0
 
 | cell | cause | files | witness | evidence |
 |---|---|---:|---|---|
 | `ts/by-design` | TypeScript rejects it (JavaScript class `reject/annexb-html-comments`) | 7 | `annexB/language/comments/multi-line-html-close.js` | tsc TS1109: Expression expected. |
+| `ts/by-design` | TypeScript rejects it (JavaScript class `javascript.ts parses it`) | 1 | `language/literals/numeric/legacy-octal-integer.js` | tsc TS1121: Octal literals are not allowed. Use the syntax '0o0'. |
+| `ts/by-design` | TypeScript rejects it (JavaScript class `javascript.ts parses it`) | 1 | `language/literals/numeric/non-octal-decimal-integer.js` | tsc TS1489: Decimals with leading zeros are not allowed. |
 | `ts/by-design` | TypeScript rejects it (JavaScript class `reject/annexb-html-comments`) | 1 | `annexB/language/comments/single-line-html-open.js` | tsc TS1110: Type expected. |
-| `ts/by-design` | TypeScript rejects it (JavaScript class `reject/annexb-legacy-numeric-literals`) | 1 | `language/literals/numeric/legacy-octal-integer.js` | tsc TS1121: Octal literals are not allowed. Use the syntax '0o0'. |
-| `ts/by-design` | TypeScript rejects it (JavaScript class `reject/annexb-legacy-numeric-literals`) | 1 | `language/literals/numeric/non-octal-decimal-integer.js` | tsc TS1489: Decimals with leading zeros are not allowed. |
-| `ts/as-javascript` | the JavaScript class `reject/lexer-division-after-radix-number` | 3 | `language/expressions/division/bigint-arithmetic.js` | tsc's .ts parser accepts it |
-| `ts/as-javascript` | the JavaScript class `reject/member-bracket-comma-expression` | 3 | `language/expressions/dynamic-import/assignment-expression/call-expr-expr.js` | tsc's .ts parser accepts it |
-| `ts/as-javascript` | the JavaScript class `reject/decorator-private-member` | 2 | `language/expressions/class/decorator/syntax/class-valid/decorator-member-expr-private-identifier.js` | tsc's .ts parser accepts it |
-| `ts/as-javascript` | the JavaScript class `reject/await-context-leaks-into-function` | 1 | `language/expressions/function/static-init-await-reference.js` | tsc's .ts parser accepts it |
-| `ts/as-javascript` | the JavaScript class `reject/bigint-binding-property-key` | 1 | `language/expressions/object/literal-property-name-bigint.js` | tsc's .ts parser accepts it |
+| `ts/as-javascript` | the JavaScript class `reject/lexer-division-after-radix-number` | 2 | `language/expressions/division/bigint-toprimitive.js` | tsc's .ts parser accepts it |
 | `ts/as-javascript` | the JavaScript class `reject/lexer-optional-chain-before-digit` | 1 | `language/expressions/optional-chaining/punctuator-decimal-lookahead.js` | tsc's .ts parser accepts it |
 
 ## Early errors: a checker over the tree, not the grammar: not built
@@ -263,9 +240,9 @@ declarations, labels, which tsc reports outside its parser; it includes TypeScri
 
 | parser | right | of 24677 | on the 20200 valid tests | on the 4477 parse-negative tests |
 |---|---:|---:|---:|---:|
-| `javascript.ts` (interpreter) | 21292 | 86.3% | 19938 (98.7%) | 1354 (30.2%) |
+| `javascript.ts` (interpreter) | 21560 | 87.4% | 20189 (99.9%) | 1371 (30.6%) |
 | acorn 8.16.0 | 24394 | 98.9% | 19926 (98.6%) | 4468 (99.8%) |
 | tsc 5.9.3 parser | 21391 | 86.7% | 20123 (99.6%) | 1268 (28.3%) |
 | tsc 5.9.3 parser + binder | 21829 | 88.5% | 19934 (98.7%) | 1895 (42.3%) |
 
-Of the 3123 WE-ACCEPT files, acorn also accepts 7 (in every run), tsc's parser 2701, tsc's parser + binder 2074.
+Of the 3106 WE-ACCEPT files, acorn also accepts 7 (in every run), tsc's parser 2701, tsc's parser + binder 2074.

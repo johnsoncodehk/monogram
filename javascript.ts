@@ -95,8 +95,9 @@ const BinaryNumber = token(seq('0', oneOf('b', 'B'), plus(oneOf('0', '1')), star
 // Scope is set explicitly (not inferred from a `[0-9]`-leading pattern) because the leading-dot
 // alternative makes the pattern start with `(?:` — gen-tm's decimal-numeric detector keys on a
 // `[0-9]`/`\d` prefix, so without this the token would lose its `constant.numeric` scope.
-// `. DecimalDigits?`: a separator stands between digits only (`1._5`, `1.5_` match no token).
-const fracTail = seq('.', optPattern(digits));
+// `. DecimalDigits?`: a separator stands between digits only (`1._5`, `1.5_` match no token). Written
+// with a lookahead rather than an optional DecimalDigits so the portable lexers never back up into it.
+const fracTail = seq('.', notFollowedBy('_'), star(digit), star(seq('_', plus(digit))));
 const expTail = seq(oneOf('e', 'E'), optPattern(oneOf('+', '-')), digits);
 // A decimal integer part is a single `0` or a `[1-9]`-led run — a leading `0` followed by
 // a digit (legacy octal `0123`, leading-zero decimal `09`) is NOT a decimal literal: with
@@ -126,7 +127,7 @@ const LegacyNumber = token(altPattern(
 // lexer throws — TS's exact rejection. The in-range codepoint is `0*` leading zeros
 // then 1–5 hex (0–0xFFFFF) or `10`+4 hex (0x100000–0x10FFFF).
 const codePoint = seq(star('0'), altPattern(repeat(hexDigit, 1, 5), seq('10', repeat(hexDigit, 4, 4))));
-const escape = seq('\\', altPattern(seq('u{', codePoint, '}'), seq('u', repeat(hexDigit, 4, 4)), seq('x', repeat(hexDigit, 2, 2)), '\r\n', noneOf('u', 'x')));
+const escape = seq('\\', altPattern(seq('u{', codePoint, '}'), seq('u', repeat(hexDigit, 4, 4)), seq('x', repeat(hexDigit, 2, 2)), '\r\n', seq('\r', notFollowedBy('\n')), noneOf('u', 'x', '\r')));
 const highlightedEscape = seq('\\', altPattern(
   oneOf('n', 'r', 't', 'b', 'f', 'v', '0', "'", '"', '\\'),
   seq('x', repeat(hexDigit, 2, 2)),
@@ -135,7 +136,8 @@ const highlightedEscape = seq('\\', altPattern(
 ));
 // DoubleStringCharacter / SingleStringCharacter: any code point but the quote, `\`, LF and CR (LS / PS
 // are allowed since ES2019), or an escape; a LineContinuation is `\` and a LineTerminatorSequence,
-// CR LF included. A JSX attribute value is its own token (JSXString), which may span lines.
+// CR LF included (`\` CR is a continuation only where no LF follows: each escape ends in one place,
+// which the portable lexers' scan needs). A JSX attribute value is its own token (JSXString), which may span lines.
 const String_      = token(altPattern(seq('"', star(altPattern(noneOf('"', '\\', '\n', '\r'), escape)), '"'), seq("'", star(altPattern(noneOf("'", '\\', '\n', '\r'), escape)), "'")), {
   string: true,
   escape: highlightedEscape,
