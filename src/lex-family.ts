@@ -724,7 +724,7 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
     copies.set(token, c);
     return c;
   };
-  const tts = e.textTokens.map(({ token, after }) => ({ ...scanCopy(token, 'elements.textTokens'), kid: kidOf(ids, token), skip: tokOf(token).skip, after }));
+  const tts = e.textTokens.map(({ token, after }) => ({ ...scanCopy(token, 'text token'), kid: kidOf(ids, token), skip: tokOf(token).skip, after }));
   const ttFail = (t: (typeof tts)[number], at: Ex, k: string): Stmt[] => (t.rd ? [let_(k, call(t.rd, at)), if_(gt(k, 'look'), [set('look', k)])] : []);
   const D = e.directives;
   if (D && !ir.regexCtx) throw new Error('portable: element directives need the regex context');
@@ -734,7 +734,7 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
     // Code trivia after a directive literal: whitespace and the grammar's skip tokens (a failed
     // skip attempt's read recorded, as the scan matcher's).
     const ws = b.exact(D.ws);
-    const skips = scannedTokens(ir).filter((t) => t.skip).map((t) => scanCopy(t.name, 'element directives (trivia)'));
+    const skips = scannedTokens(ir).filter((t) => t.skip).map((t) => scanCopy(t.name, 'directive trivia'));
     const body: Stmt[] = [let_('look', 'look0'), let_('p', 'p0'), let_('more', I(1)), while_(ne('more', I(0)), [
       set('more', I(0)), set('p', call(ws, 'p')),
       if_(lt('p', len('s')), [
