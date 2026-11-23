@@ -852,7 +852,7 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
   }
 
   let sawInfix = false, sawPrefix = false, sawPostfix = false;
-  const atomBranches: string[] = [];
+  const atomBranches: string[] = [], atomAlts: RuleExpr[] = [];
   // What stands between the operand and a postfix operator (`[$, sameLine, postfix]`): a same-line
   // marker renders as its zero-width token, any other assertion as nothing.
   let postfixBetween = '';
@@ -881,6 +881,7 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
     // (member access `[$, '.', Ident]`, call `[$, '(', …, ')']`, generics, etc.).
     // Render as-is; give it a baseline precedence so it doesn't outrank operators.
     atomBranches.push(renderExpr(alt, ctx));
+    atomAlts.push(alt);
   }
 
   if (sawInfix) emitOperatorBranches('infix');
@@ -892,17 +893,71 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
   // (matches the Pratt parser's maxBp for non-operator LED patterns).
   const high = nLevels + 1;
   const selfSnake = ctx.ruleSnake.get(rule.name);
-  for (const ab of atomBranches) {
+  for (const [i, ab] of atomBranches.entries()) {
     // Heuristic: a branch that starts with the self-reference is a left-recursive
     // continuation (call/member/index/generic) — bind tight.
     if (ab.startsWith(`seq($.${selfSnake}`) || ab === `$.${selfSnake}` || ab.startsWith(`seq(alias($.${selfSnake}, `)) {
-      branches.push(`prec.left(${high}, ${ab})`);
+      // The precedence decides at the continuation's operator; a continuation that ENDS in another
+      // rule's reference gives that last step the default precedence (see openTail).
+      const tail = openTail(rule.name, atomAlts[i], ctx.grammar);
+      if (tail === null) { branches.push(`prec.left(${high}, ${ab})`); continue; }
+      const t = renderExpr(tail, ctx);
+      if (!ab.endsWith(`, ${t})`)) throw new Error(`gen-treesitter: the continuation ${ab} does not end in its operand ${t}`);
+      branches.push(`prec.left(${high}, ${ab.slice(0, ab.length - t.length - 1)}prec(0, ${t})))`);
     } else {
       branches.push(ab);
     }
   }
 
   return `choice(\n      ${branches.join(',\n      ')}\n    )`;
+}
+
+/**
+ * The operand a Pratt continuation ends in, when that operand is ANOTHER rule with continuations of
+ * its own (TypeScript's `[$, 'as', Type]`: Type continues with `[ ]`, `|`, `&`, `<`, `.`, `?` …).
+ *
+ * tree-sitter takes a production's reduce precedence from its LAST step. Under the continuation's
+ * high precedence, `x as T` reduced before any of Type's own continuation tokens could shift
+ * (Type's productions have the default precedence), so `x as T[]` became `(x as T)[` and an
+ * ERROR. The interpreter reads the operand like any rule: whole, greedily, falling back to the
+ * shorter operand only where the longer one fails (`x as T < b`: no type arguments close, so `<`
+ * compares). The generator's rule: a continuation's precedence decides at its operator (its
+ * leading steps, which compete with the other operators); its last step, when it is a reference
+ * to another rule that has continuations, takes that rule's precedence (the default), so after the
+ * operand each token that continues the operand AND can follow the expression is an LR conflict
+ * between the two readings, declared (deriveConflicts) and kept by GLR, which drops the one that
+ * fails as the interpreter's fallback does. A token that only one reading takes needs no conflict.
+ * An operand that is itself a precedence-climbing rule would carry its own levels: not modelled,
+ * so it fails loudly.
+ */
+function openTail(self: string, alt: RuleExpr, grammar: CstGrammar): RuleExpr | null {
+  const leftRecursive = (e: RuleExpr, name: string) => {
+    const v = tsView(e);
+    const head = (v.type === 'seq' ? v.items : [v]).find(i => !ASSERTION_KINDS.has(i.type));
+    return head?.type === 'ref' && head.name === name;
+  };
+  if (alt.type !== 'seq' || !leftRecursive(alt, self)) return null;
+  const last = alt.items[alt.items.length - 1];
+  if (last.type !== 'ref' || last.name === self) return null;
+  const r = grammar.rules.find(x => x.name === last.name);
+  if (!r) return null;
+  const open = (r.body.type === 'alt' ? r.body.items : [r.body]).some(a => leftRecursive(a, r.name));
+  if (!open) return null;
+  if (hasMarker(r.body)) throw new Error(`gen-treesitter: the continuation of ${self} ends in ${r.name}, a precedence-climbing rule; its levels are not rendered on the last step`);
+  return last;
+}
+
+/** The [rule, operand] pairs whose continuations meet after an openTail operand (deriveConflicts). */
+function openTailConflicts(ctx: GrammarJsContext): string[][] {
+  const out: string[][] = [];
+  for (const name of ctx.prattRules) {
+    const rule = ctx.grammar.rules.find(r => r.name === name)!;
+    for (const alt of rule.body.type === 'alt' ? rule.body.items : [rule.body]) {
+      const tail = openTail(name, alt, ctx.grammar);
+      if (tail?.type === 'ref') out.push([ctx.ruleSnake.get(name)!, ctx.ruleSnake.get(tail.name)!]);
+    }
+  }
+  return out;
 }
 
 // ── Nullable-rule elimination (ε-elimination) ────────────────────────────────
@@ -2135,7 +2190,10 @@ function deriveConflicts(ctx: GrammarJsContext): string[][] {
     }
   }
 
-  // 3. The tuples the grammar declares. A symbol may be a RULE, a TOKEN (YAML's `key`/`plain` are
+  // 3. A continuation that ends in another rule meets that rule's continuations (openTail).
+  for (const c of openTailConflicts(ctx)) push(c);
+
+  // 4. The tuples the grammar declares. A symbol may be a RULE, a TOKEN (YAML's `key`/`plain` are
   //    tokens that conflict on a trailing `:`), or a shared hidden tsRelax rule (`type_fn_param`);
   //    all three are valid `$.<name>` conflict symbols. A name the grammar does not define is a
   //    declaration error, not a tuple to skip.
