@@ -149,6 +149,9 @@ const brk: Stmt = { k: 'break' };
 const tru: Expr = { k: 'bool', v: true }, fls: Expr = { k: 'bool', v: false };
 // Table cell base + k, and whether it holds 1.
 const at = (base: Expr, k: number): Expr => T(k === 0 ? base : add(base, n(k)));
+// The record a reference cell refers to (-1: none); the table holds references relative to their cell.
+const R = (c: Expr): Expr => call('riRef', c);
+const atR = (base: Expr, k: number): Expr => R(k === 0 ? base : add(base, n(k)));
 const isT = (base: Expr, k: number): Expr => eq(at(base, k), n(1));
 const inc = (name: string, k: Expr = n(1)): Stmt => set(name, add(v(name), k));
 const le0 = (name: string): Expr => bin('le', v(name), n(0));
@@ -169,6 +172,12 @@ const riSig = method('riSig', [['f', 'int']], ['bool'], [
   while_(lt(v('i'), v('nk')), [if_(eq(T(add(add(v('kb'), n(1)), v('i'))), v('kid')), [ret(tru)]), inc('i')]),
   ret(fls),
 ]);
+// The record the reference in cell c refers to (-1: none).
+const riRef: Fn = { ...method('riRef', [['c', 'int']], ['int'], [
+  let_('x', T(v('c'))),
+  if_(lt(v('x'), n(0)), [ret(n(-1))]),
+  ret(sub(v('c'), v('x'))),
+]), reads: true };
 // Whether x is in the list l ([n x*]).
 const riIn = method('riIn', [['l', 'int'], ['x', 'int']], ['bool'], [
   let_('i', n(0)),
@@ -198,7 +207,7 @@ const riGuard = method('riGuard', [['g', 'int']], ['bool'], [
     if_(and(call('enAhead', at(v('x'), 0), tru), not(call('enSecondIn', at(v('x'), 1)))), [ret(fls)]),
     inc('i'),
   ]),
-  let_('fs', T(add(add(v('pb'), n(1)), add(v('np'), v('np'))))),
+  let_('fs', R(add(add(v('pb'), n(1)), add(v('np'), v('np'))))),
   if_(and(ge(v('fs'), n(0)), not(call('riSig', v('fs')))), [ret(fls)]),
   ret(tru),
 ]);
@@ -229,10 +238,10 @@ const riRd = method('riRd', [['r', 'int'], ['rec', 'int'], ['d', 'int']], ['bool
   let_('i', n(0)),
   while_(lt(v('i'), v('na')), [
     let_('a', add(add(v('rec'), n(3)), add(v('i'), v('i')))),
-    if_(call('riGuard', at(v('a'), 0)), [
+    if_(call('riGuard', atR(v('a'), 0)), [
       let_('c', call('enSh')),
       let_('k', call('enMark')),
-      let_('ok', call('riList', at(v('a'), 1), v('d')), 'bool'),
+      let_('ok', call('riList', atR(v('a'), 1), v('d')), 'bool'),
       if_(and(v('ok'), or(v('one'), gt(call('enPos'), v('bestPos')))), [
         run('enUnmark', v('k')),
         run('enWin', v('r'), v('c'), v('save'), v('sb')),
@@ -250,7 +259,7 @@ const riRd = method('riRd', [['r', 'int'], ['rec', 'int'], ['d', 'int']], ['bool
 const riList = method('riList', [['l', 'int'], ['d', 'int']], ['bool'], [
   let_('nn', T(v('l'))),
   let_('i', n(0)),
-  while_(lt(v('i'), v('nn')), [if_(not(call('riStep', T(add(add(v('l'), n(1)), v('i'))), v('d'))), [ret(fls)]), inc('i')]),
+  while_(lt(v('i'), v('nn')), [if_(not(call('riStep', R(add(add(v('l'), n(1)), v('i'))), v('d'))), [ret(fls)]), inc('i')]),
   ret(tru),
 ]);
 // An attempt undone when it fails (a repetition body, an optional, an ordered branch).
@@ -259,7 +268,7 @@ const attempt = (ok: string, e: Expr, onFail: Stmt[] = [], onOk: Stmt[] = []): S
   if_(v(ok), [run('enUnmark', v('k')), ...onOk], [run('enReset', v('k')), run('enUnmark', v('k')), ...onFail]),
 ];
 const op = (k: number, body: Stmt[]): Stmt => if_(eq(v('op'), n(k)), body);
-const S1 = at(v('s'), 1), S2 = at(v('s'), 2), S3 = at(v('s'), 3);
+const S1 = at(v('s'), 1), S2 = at(v('s'), 2), S3 = at(v('s'), 3), S1R = atR(v('s'), 1), S2R = atR(v('s'), 2), S3R = atR(v('s'), 3);
 const guarded = (body: Stmt[]): Stmt => if_(and(ge(S1, n(0)), not(call('enAhead', S1, tru))), body);
 const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
   run('enTick'),
@@ -279,19 +288,20 @@ const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
     while_(tru, [
       guarded([brk]),
       let_('p0', call('enPos')),
-      ...attempt('ok', call('riStep', S2, v('d'))),
+      ...attempt('ok', call('riStep', S2R, v('d'))),
       if_(or(not(v('ok')), eq(call('enPos'), v('p0'))), [brk]),
     ]),
     ret(tru),
   ]),
-  op(REC_S_OPT, [guarded([ret(tru)]), ...attempt('ok', call('riList', S2, v('d'))), ret(tru)]),
+  op(REC_S_OPT, [guarded([ret(tru)]), ...attempt('ok', call('riList', S2R, v('d'))), ret(tru)]),
   // elem (delim elem)*: a trailing delimiter stays matched.
   op(REC_S_SEP, [
     guarded([ret(tru)]),
-    ...attempt('ok', call('riStep', S2, v('d')), [ret(tru)]),
+    let_('el', S2R),
+    ...attempt('ok', call('riStep', v('el'), v('d')), [ret(tru)]),
     while_(call('enLit', S3), [
       let_('k2', call('enMark')),
-      if_(not(call('riStep', S2, v('d'))), [run('enReset', v('k2')), run('enUnmark', v('k2')), brk]),
+      if_(not(call('riStep', v('el'), v('d'))), [run('enReset', v('k2')), run('enUnmark', v('k2')), brk]),
       run('enUnmark', v('k2')),
     ]),
     ret(tru),
@@ -307,8 +317,9 @@ const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
     let_('i', n(0)),
     while_(lt(v('i'), S2), [
       let_('a', add(add(v('s'), n(3)), add(v('i'), v('i')))),
-      if_(or(lt(at(v('a'), 0), n(0)), call('riSig', at(v('a'), 0))), [
-        ...attempt('ok', call('riList', at(v('a'), 1), v('d')), [], [ret(tru)]),
+      let_('f', atR(v('a'), 0)),
+      if_(or(lt(v('f'), n(0)), call('riSig', v('f'))), [
+        ...attempt('ok', call('riList', atR(v('a'), 1), v('d')), [], [ret(tru)]),
         if_(eq(S1, n(1)), [ret(fls)]),
       ]),
       inc('i'),
@@ -321,25 +332,25 @@ const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
     if_(eq(S2, n(1)), [ret(or(call('enAhead', S1, tru), call('enCtxWord')))]),
     ret(and(call('enAhead', S1, fls), not(call('enCtxWord')))),
   ]),
-  op(REC_S_SEQ, [ret(call('riList', S1, v('d')))]),
+  op(REC_S_SEQ, [ret(call('riList', S1R, v('d')))]),
   op(REC_S_SAMELINE, [ret(and(ge(call('enPeekKid'), n(0)), not(call('enPeekNl'))))]),
   op(REC_S_SUPPRESS, [
     run('enSetSt', n(ST_SUP_NEXT), S1),
-    let_('ok', call('riList', S2, v('d')), 'bool'),
+    let_('ok', call('riList', S2R, v('d')), 'bool'),
     run('enSetSt', n(ST_SUP_NEXT), n(0)),
     ret(v('ok')),
   ]),
   op(REC_S_CTX, [
     let_('c0', call('enSt', n(ST_CTX))),
     run('enSetSt', n(ST_CTX), S1),
-    let_('ok', call('riList', S2, v('d')), 'bool'),
+    let_('ok', call('riList', S2R, v('d')), 'bool'),
     run('enSetSt', n(ST_CTX), v('c0')),
     ret(v('ok')),
   ]),
   // A shared step: the native function at d = 0 (where it is printed in building form), else its body.
   op(REC_S_SHARED, [
     if_(and(le0('d'), eq(S2, n(1))), [ret(call('enShared', S1))]),
-    ret(call('riStep', S3, v('d'))),
+    ret(call('riStep', S3R, v('d'))),
   ]),
   ret(fls),
 ]);
@@ -423,13 +434,13 @@ const riNud = method('riNud', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], [
         inc('x', n(1)),
       ], [
         if_(eq(v('tag'), n(REC_N_BRACKET)), [
-          if_(eq(v('lid'), at(v('x'), 1)), nudCand(call('riList', at(v('x'), 2), v('d')), n(0), at(v('x'), 3), n(0))),
+          if_(eq(v('lid'), at(v('x'), 1)), nudCand(call('riList', atR(v('x'), 2), v('d')), n(0), at(v('x'), 3), n(0))),
         ]),
         if_(eq(v('tag'), n(REC_N_SEQ)), [
-          if_(call('riGuard', at(v('x'), 1)), nudCand(call('riList', at(v('x'), 2), v('d')), n(0), at(v('x'), 3), n(0))),
+          if_(call('riGuard', atR(v('x'), 1)), nudCand(call('riList', atR(v('x'), 2), v('d')), n(0), at(v('x'), 3), n(0))),
         ]),
         if_(eq(v('tag'), n(REC_N_CAPPED)), [
-          if_(and(lt(v('minBp'), at(v('x'), 3)), call('riGuard', at(v('x'), 1))), nudCand(call('riList', at(v('x'), 2), v('d')), n(0), n(0), n(1))),
+          if_(and(lt(v('minBp'), at(v('x'), 3)), call('riGuard', atR(v('x'), 1))), nudCand(call('riList', atR(v('x'), 2), v('d')), n(0), n(0), n(1))),
         ]),
         inc('x', n(4)),
       ]),
@@ -448,7 +459,7 @@ const ledOk = (x: Expr): Expr => and(
   not(and(isT(x, 4), eq(v('tc'), n(1)))),
   or(lt(at(x, 2), n(0)), gt(at(x, 2), v('minBp'))),
   not(and(isT(x, 3), v('nl'))),
-  or(lt(at(x, 7), n(0)), not(call('riIn', at(x, 7), v('head')))),
+  or(lt(at(x, 7), n(0)), not(call('riIn', atR(x, 7), v('head')))),
   not(call('riIn', add(x, n(8)), v('sup'))),
 );
 const finLed = (form: Expr): Stmt[] => [
@@ -477,7 +488,7 @@ const riBp = method('riBp', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d
     while_(and(lt(v('j'), T(sec(P_LED))), not(v('prog'))), [
       if_(and(eq(at(v('x'), 0), v('lid')), ledOk(v('x'))), [
         let_('k', call('enMark')),
-        if_(call('riList', at(v('x'), 1), v('d')), [
+        if_(call('riList', atR(v('x'), 1), v('d')), [
           run('enUnmark', v('k')),
           ...finLed(at(v('x'), 6)),
           if_(isT(v('x'), 5), [set('tc', n(1))]),
@@ -513,7 +524,7 @@ const riBp = method('riBp', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d
 ]);
 
 export function recoveryFamilyFns(): Fn[] {
-  return [rejectDiag, diagMessage, diagRelated, riSig, riIn, riGuard, riRule, riRd, riList, riStep, riOperand, riOp, riNud, riBp, ...ENGINE_EXTERNS];
+  return [rejectDiag, diagMessage, diagRelated, riRef, riSig, riIn, riGuard, riRule, riRd, riList, riStep, riOperand, riOp, riNud, riBp, ...ENGINE_EXTERNS];
 }
 
 // The family for a grammar: the functions, the record Diag and the plan's int table `rt`.

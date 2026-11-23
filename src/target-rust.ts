@@ -5519,8 +5519,10 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
     findAny: (cx, s, i, stops) => cx.atom(`${findAnyName(stops)}(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')})`, 'int', 'usize'),
     // One allocation: format! sizes the string from its arguments (&str or String alike).
     cat: (cx, parts) => cx.atom(`format!("${'{}'.repeat(parts.length)}", ${parts.map((r) => r.c).join(', ')})`, 'str', 'str', { owned: true }),
-    // The decoded table is a field of the recovery engine (a slice of a table decoded once, OnceLock).
-    tab: (cx, name, i) => cx.atom(`self.tab_${snake(name)}[${cx.coerce(i, 'usize')}]`, 'int', 'isize'),
+    // The decoded table is a field of the recovery engine (a slice of a table decoded once, OnceLock),
+    // read through its one-line accessor (recoveryEngineRust): Rust indexes by usize, so a read
+    // spelled in place carries the cast at every use.
+    tab: (cx, name, i) => cx.atom(`self.t_${snake(name)}(${cx.coerce(i, 'isize')})`, 'int', 'isize'),
     own: (cx, r) => {
       if (r.ty === 'str') return cx.atom(`${rsWrap(r, ATOM)}.to_string()`, 'str', 'str', { owned: true });
       if (isList(r.ty)) return cx.atom(`${rsWrap(r, ATOM)}.to_vec()`, r.ty, r.ty, { owned: true });
@@ -5546,7 +5548,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
       // Out of line only: `#[cold]` on the identifier escape scanners moved lex_from's register layout
       // (+0.2% to +0.4% lexer instructions on real inputs, profile runs 45034540295 / 45035043707).
       ...(f.cold ? ['#[inline(never)]'] : []),
-      `fn ${f.name}(${[...(f.method ? ['&mut self'] : []), ...f.params.map((p) => `${p.name}: ${p.type}`)].join(', ')})${f.rets.length === 0 ? '' : ` -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`}`} {`,
+      `fn ${f.name}(${[...(f.method ? [f.reads ? '&self' : '&mut self'] : []), ...f.params.map((p) => `${p.name}: ${p.type}`)].join(', ')})${f.rets.length === 0 ? '' : ` -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`}`} {`,
       ...rsBlock(f.body),
       '}',
     ].join('\n'),
@@ -5740,6 +5742,8 @@ struct Recov<'r, 'a, B: Builder> { p: &'r mut Parser<'a, B>, marks: Vec<Mark>, t
 /// The plan's table, decoded once, at the first interpreted parse.
 static TAB_RT: std::sync::OnceLock<Vec<isize>> = std::sync::OnceLock::new();
 impl<'r, 'a, B: Builder> Recov<'r, 'a, B> {
+    #[inline(always)]
+    fn t_rt(&self, i: isize) -> isize { self.tab_rt[i as usize] }
 ${shared.recoveryFamily(ir, true).split('\n').map((l) => (l ? `    ${l}` : l)).join('\n')}
     fn en_pos(&mut self) -> isize { self.p.pos as isize }
     fn en_set_pos(&mut self, q: isize) { self.p.pos = q as usize; }
