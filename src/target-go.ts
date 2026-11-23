@@ -394,8 +394,8 @@ func lexHasLineTerm(s string) bool {
 /** uni-ident.ts's identifier classes and their lookup. Go's `unicode` package has the general
  *  categories but no ID_Start / ID_Continue (Other_ID_Start, Pattern_Syntax), hence the table;
  *  a const string, since Go has no compile-time evaluation to decode a denser form into. */
-function goUniIdentTables(): string {
-  const p = uniIdentPlan();
+function goUniIdentTables(ir: ParserIR): string {
+  const p = uniIdentPlan(ir.identClasses);
   const l = uniLookup(p, (k) => `uint32(_uniT[${k}])`);
   return `const _uniT = "${p.data.replace(/\\/g, '\\\\')}"
 // uni-ident.ts's class of r: 0 neither, 1 IdentifierPart only, 2 IdentifierStart too.
@@ -874,7 +874,7 @@ ${tplSpanGo('pos + ' + tlen(tpl.open), rx ? '!prevIsValue()' : 'true')}\t\t\tif 
 	}
 	return r >= 0x2000 && r <= 0x200A
 }
-${goUniIdentTables()}func scanUniIdent(src string, pos int) (int, bool) {
+${goUniIdentTables(ir)}func scanUniIdent(src string, pos int) (int, bool) {
 	r, w := utf8.DecodeRuneInString(src[pos:])
 	if uniClass(r) != 2 { return pos, false }
 	return lxExtRun(src, pos+w), true

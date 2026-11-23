@@ -21,7 +21,8 @@
 // bracket NUDs (grouping, array), and mixfix LEDs (call / member / index) tried before
 // operators. buildIR THROWS on a construct outside this set rather than emit a wrong
 // parser. This is enough to derive a real JavaScript-subset parser (test/fixtures/minijs.ts).
-import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
+import type { CstGrammar, IdentifierClasses, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
+import { identifierClassesOf } from './uni-ident.ts';
 import { KIND, analyzeGrammar, concreteFirst, directivesOf, findEntryRule, tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { nameRule, syntaxKey, type RuleNames } from './grammar-names.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
@@ -617,6 +618,8 @@ export type ParserIR = {
   /** Each identLike token's identifierPrefix ('' for the bare identifier): the text before the
    *  IdentifierName an escape check reads. */
   identPrefix: Record<string, string>;
+  /** The Unicode identifier characters of the identifier token (uni-ident.ts identifierClassesOf). */
+  identClasses: IdentifierClasses;
 };
 
 // The target-agnostic parse plan for a grammar, the IR each portable Target (ts/go/rust) renders.
@@ -1437,7 +1440,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   const entry = findEntryRule(grammar);
   const forms = formsOf(rules, lookaheads, shared.length, entry);
   const identPrefix = Object.fromEntries(identLike.map((n) => [n, grammar.tokens.find((t) => t.name === n)?.identifierPrefix ?? '']));
-  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse: reusePlanOf(rules, entry), suppressSets, regexCtx, tpl, elements, newlineCfg, identToken, identLike, identPrefix };
+  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse: reusePlanOf(rules, entry), suppressSets, regexCtx, tpl, elements, newlineCfg, identToken, identLike, identPrefix, identClasses: identifierClassesOf(grammar.tokens) };
 }
 
 // The step lists a rule runs: an rd rule's alternatives, a Pratt rule's NUD and LED arms.
