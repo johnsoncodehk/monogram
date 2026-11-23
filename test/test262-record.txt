@@ -3433,3 +3433,26 @@ language/reserved-words/await-module.js
 language/statements/await-using/syntax/await-using-not-allowed-at-top-level-of-script.js
 language/statements/class/class-name-ident-await-module.js
 language/statements/using/syntax/using-not-allowed-at-top-level-of-script.js
+## ts/by-design
+language/literals/numeric/legacy-octal-integer.js
+language/literals/numeric/non-octal-decimal-integer.js
+annexB/language/comments/multi-line-html-close.js
+annexB/language/comments/single-line-html-close-asi.js
+annexB/language/comments/single-line-html-close-first-line-1.js
+annexB/language/comments/single-line-html-close-first-line-2.js
+annexB/language/comments/single-line-html-close-first-line-3.js
+annexB/language/comments/single-line-html-close-unicode-separators.js
+annexB/language/comments/single-line-html-close.js
+annexB/language/comments/single-line-html-open.js
+## ts/as-javascript
+language/expressions/class/decorator/syntax/class-valid/decorator-member-expr-private-identifier.js
+language/expressions/division/bigint-arithmetic.js
+language/expressions/division/bigint-toprimitive.js
+language/expressions/division/bigint-wrapped-values.js
+language/expressions/dynamic-import/assignment-expression/call-expr-expr.js
+language/expressions/function/static-init-await-reference.js
+language/expressions/object/literal-property-name-bigint.js
+language/expressions/optional-chaining/optional-chain-prod-expression.js
+language/expressions/optional-chaining/punctuator-decimal-lookahead.js
+language/statements/class/decorator/syntax/class-valid/decorator-member-expr-private-identifier.js
+language/statements/using/syntax/using-for-using-of-of.js

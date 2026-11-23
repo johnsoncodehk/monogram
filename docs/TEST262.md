@@ -123,7 +123,7 @@ run); where it does not, the rule is outside even its syntactic layer.
 | `accept/yield-precedence`: `yield` parsed as a prefix operator | 9 | 9 | grammar bug: fix | `language/expressions/generators/yield-as-logical-or-expression.js`<br>`language/expressions/object/method-definition/yield-weak-binding.js`<br>`language/statements/class/definition/methods-gen-yield-weak-binding.js` |
 | `accept/using-binding-pattern`: a binding pattern in a `using` / `await using` declaration list | 7 | 7 | grammar bug: fix | `language/statements/await-using/syntax/await-using-invalid-arraybindingpattern-after-bindingidentifier.js`<br>`language/statements/await-using/syntax/await-using-invalid-objectbindingpattern.js`<br>`language/statements/using/syntax/using-invalid-arraybindingpattern.js` |
 | `accept/string-line-terminator`: a raw LF / CR in a string literal | 6 | 6 | grammar bug: fix | `language/line-terminators/S7.3_A2.1_T2.js`<br>`language/line-terminators/invalid-string-cr.js`<br>`language/literals/string/S7.8.4_A1.1_T2.js` |
-| `accept/coalesce-mixed-with-logical`: `??` mixed with `&&` / `||` without parentheses | 4 | 4 | grammar bug: fix | `language/expressions/coalesce/cannot-chain-head-with-logical-and.js`<br>`language/expressions/coalesce/cannot-chain-head-with-logical-or.js`<br>`language/expressions/coalesce/cannot-chain-tail-with-logical-and.js` |
+| `accept/coalesce-mixed-with-logical`: `??` mixed with `&&` / `\|\|` without parentheses | 4 | 4 | grammar bug: fix | `language/expressions/coalesce/cannot-chain-head-with-logical-and.js`<br>`language/expressions/coalesce/cannot-chain-head-with-logical-or.js`<br>`language/expressions/coalesce/cannot-chain-tail-with-logical-and.js` |
 | `accept/hashbang-position`: a hashbang comment that does not start the source text | 4 | 4 | grammar bug: fix | `language/comments/hashbang/preceding-directive-prologue-sc.js`<br>`language/comments/hashbang/preceding-directive-prologue.js`<br>`language/comments/hashbang/preceding-hashbang.js` |
 | `accept/accessor-parameters`: a getter with a parameter | 3 | 3 | grammar bug: fix | `language/expressions/class/getter-param-dflt.js`<br>`language/expressions/object/getter-param-dflt.js`<br>`language/statements/class/getter-param-dflt.js` |
 | `accept/in-operator-in-for-init`: `in` inside a for-statement initializer's nested expression | 3 | 3 | grammar bug: fix | `language/expressions/conditional/in-branch-2.js`<br>`language/expressions/yield/in-iteration-stmt.js`<br>`language/expressions/yield/star-in-iteration-stmt.js` |
@@ -195,6 +195,30 @@ run); where it does not, the rule is outside even its syntactic layer.
 - `accept/static-block-contexts` — Early error: ContainsArguments / ContainsAwait of ClassStaticBlockStatementList, and `yield` / `await` reserved there by the block's own [~Yield, +Await] context.
 - `accept/template-escape` — Early error: "It is a Syntax Error if the [Tagged] parameter was not set and NotEscapeSequence is matched" (`\9`, `\u{`, `\x0`).
 - `accept/cover-initialized-name` — Early error: `({ a = 1 })` is matched by the cover grammar for `({ a = 1 } = b)` and is an error unless it refines to an AssignmentPattern.
+
+## TypeScript: `typescript.ts` on the valid tests
+
+TypeScript is a superset of JavaScript, so every test that must parse must parse with `typescript.ts` too,
+unless TypeScript rejects that syntax by design: then tsc's own parser, on the file as a `.ts` file, rejects it as
+well, and its diagnostic is the evidence. A file `javascript.ts` also rejects is referenced by its JavaScript
+class, not classed again. A rejection tsc does not share and the JavaScript grammar does not either would be a
+TypeScript grammar bug with no class yet (`ts/unknown`), and fails the gate. The negative tests are not asked of
+the TypeScript grammar; there it is held to tsc's parser ([CORRECTNESS.md](CORRECTNESS.md)).
+
+**20179 of 20200 valid tests parse (99.9%)** · by design 10 · as in JavaScript 11 · unclassified 0 · crash 0
+
+| cell | cause | files | witness | evidence |
+|---|---|---:|---|---|
+| `ts/by-design` | TypeScript rejects it (JavaScript class `reject/annexb-html-comments`) | 7 | `annexB/language/comments/multi-line-html-close.js` | tsc TS1109: Expression expected. |
+| `ts/by-design` | TypeScript rejects it (JavaScript class `reject/annexb-html-comments`) | 1 | `annexB/language/comments/single-line-html-open.js` | tsc TS1110: Type expected. |
+| `ts/by-design` | TypeScript rejects it (JavaScript class `reject/annexb-legacy-numeric-literals`) | 1 | `language/literals/numeric/legacy-octal-integer.js` | tsc TS1121: Octal literals are not allowed. Use the syntax '0o0'. |
+| `ts/by-design` | TypeScript rejects it (JavaScript class `reject/annexb-legacy-numeric-literals`) | 1 | `language/literals/numeric/non-octal-decimal-integer.js` | tsc TS1489: Decimals with leading zeros are not allowed. |
+| `ts/as-javascript` | the JavaScript class `reject/lexer-division-after-radix-number` | 3 | `language/expressions/division/bigint-arithmetic.js` | tsc's .ts parser accepts it |
+| `ts/as-javascript` | the JavaScript class `reject/member-bracket-comma-expression` | 3 | `language/expressions/dynamic-import/assignment-expression/call-expr-expr.js` | tsc's .ts parser accepts it |
+| `ts/as-javascript` | the JavaScript class `reject/decorator-private-member` | 2 | `language/expressions/class/decorator/syntax/class-valid/decorator-member-expr-private-identifier.js` | tsc's .ts parser accepts it |
+| `ts/as-javascript` | the JavaScript class `reject/await-context-leaks-into-function` | 1 | `language/expressions/function/static-init-await-reference.js` | tsc's .ts parser accepts it |
+| `ts/as-javascript` | the JavaScript class `reject/bigint-binding-property-key` | 1 | `language/expressions/object/literal-property-name-bigint.js` | tsc's .ts parser accepts it |
+| `ts/as-javascript` | the JavaScript class `reject/lexer-optional-chain-before-digit` | 1 | `language/expressions/optional-chaining/punctuator-decimal-lookahead.js` | tsc's .ts parser accepts it |
 
 ## Early errors: a checker over the tree, not the grammar: not built
 
