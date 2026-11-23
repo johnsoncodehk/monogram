@@ -15,6 +15,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { appendFileSync, existsSync } from 'node:fs';
 import { createParser } from '../src/gen-parser.ts';
+import { collectLiterals } from '../src/grammar-utils.ts';
 import { JSX_CASES } from './curated-corpora.ts';
 import { cases as tsxIssueCases } from './tsx-issue-cases.ts';
 import { tests as issueTests } from './issue-cases.ts';
@@ -64,6 +65,93 @@ const LINE_BREAKS = [
   'let x: T\nlet y', 'type A = B\ntype C = D', 'x!\n.y', 'x\n!y', 'let x: T\n[]', 'let x: A\n<B>(y)', 'interface I { a: T\n b: U }',
 ];
 
+// Contextual keywords: every word-shaped literal the grammar writes (`static`, `type`, `of`, `if`, ...),
+// as a name in each position class: one class per word-token step of the JavaScript and TypeScript
+// grammars (the steps gen-treesitter's planContextualWords plans a keyword set for). The word list is
+// read from the grammar, not from the generator, so a keyword the plan leaves out of a step is still
+// tried there. Only the inputs the interpreter accepts are kept (reserved words drop out where the
+// grammar excludes them), so the target is that every one parses.
+const CONTEXTUAL_POSITIONS = [
+  (w: string) => `let ${w} = 1;`,                        // binding name
+  (w: string) => `function f(${w}) {}`,                  // parameter
+  (w: string) => `x = ${w} + 1;`,                        // expression
+  (w: string) => `class C { ${w}() {} }`,                // class member name
+  (w: string) => `o.${w} = { ${w}: 1 };`,                // property access, property key
+  (w: string) => `x = { ${w} };`,                        // shorthand property
+  (w: string) => `import { ${w} } from "m";`,            // import specifier
+  (w: string) => `import ${w} from "m";`,                // default import
+  (w: string) => `export { ${w} };`,                     // export specifier
+  (w: string) => `${w}: while (1) break ${w};`,          // label
+  (w: string) => `${w}: for (;;) continue ${w};`,        // continue label
+  (w: string) => `function ${w}() {}`,                   // function declaration name
+  (w: string) => `function* ${w}() {}`,                  // generator declaration name
+  (w: string) => `class ${w} {}`,                        // class declaration name
+  (w: string) => `x = function ${w}() {};`,              // function expression name
+  (w: string) => `x = function* ${w}() {};`,             // generator expression name
+  (w: string) => `x = class ${w} {};`,                   // class expression name
+  (w: string) => `class C extends ${w} {}`,              // heritage
+  (w: string) => `x = ${w} => 1;`,                       // arrow parameter
+  (w: string) => `x = async ${w} => 1;`,                 // async arrow parameter
+  (w: string) => `x = ${w}.y;`,                          // member object
+  (w: string) => `for (const ${w} of a);`,               // for-of binding
+  (w: string) => `for (let ${w} in a);`,                 // for-in binding
+  (w: string) => `let { ${w} } = o;`,                    // shorthand binding property
+  (w: string) => `let { a: ${w} } = o;`,                 // binding property value
+  (w: string) => `let { ${w}: a } = o;`,                 // binding property key
+  (w: string) => `let { ...${w} } = o;`,                 // binding rest property
+  (w: string) => `let [${w}] = a;`,                      // array binding element
+  (w: string) => `let [...${w}] = a;`,                   // array binding rest
+  (w: string) => `function f(...${w}) {}`,               // rest parameter
+  (w: string) => `try {} catch (${w}) {}`,               // catch parameter
+  (w: string) => `import { a as ${w} } from "m";`,       // import alias
+  (w: string) => `import { ${w} as a } from "m";`,       // imported name
+  (w: string) => `import * as ${w} from "m";`,           // namespace import
+  (w: string) => `export { a as ${w} };`,                // export alias
+  (w: string) => `export { ${w} as a };`,                // exported local
+  (w: string) => `export * as ${w} from "m";`,           // namespace export
+  // TypeScript
+  (w: string) => `let x: ${w};`,                         // type reference
+  (w: string) => `let x: ${w}.T;`,                       // qualified type name
+  (w: string) => `let x: typeof ${w};`,                  // typeof query
+  (w: string) => `let x: [${w}: string];`,               // named tuple member
+  (w: string) => `let f: (${w}: number) => void;`,       // function type parameter
+  (w: string) => `let f: (...${w}: number[]) => void;`,  // function type rest parameter
+  (w: string) => `type ${w} = 1;`,                       // type alias name
+  (w: string) => `interface ${w} {}`,                    // interface name
+  (w: string) => `enum ${w} {}`,                         // enum name
+  (w: string) => `namespace ${w} {}`,                    // namespace name
+  (w: string) => `declare module ${w} {}`,               // module name
+  (w: string) => `function f<${w}>() {}`,                // type parameter
+  (w: string) => `function f<const ${w}>() {}`,          // const type parameter
+  (w: string) => `type T<in ${w}> = 1;`,                 // variance-annotated type parameter
+  (w: string) => `type T = X extends infer ${w} ? 1 : 2;`, // infer
+  (w: string) => `function f(x): asserts ${w} {}`,       // asserts predicate
+  (w: string) => `function f(x): ${w} is string {}`,     // type predicate
+  (w: string) => `interface I { ${w}: 1 }`,              // property signature
+  (w: string) => `interface I { m(${w}): void }`,        // method signature parameter
+  (w: string) => `interface I { [${w}: string]: 1 }`,    // index signature parameter
+  (w: string) => `interface I { new (${w}): I }`,        // construct signature parameter
+  (w: string) => `class C { [${w}: string]: any }`,      // class index signature
+  (w: string) => `class C { constructor(public ${w}) {} }`, // parameter property
+  (w: string) => `class C { static ${w}() {} }`,         // modified member name
+  (w: string) => `class C implements ${w} {}`,           // implements clause
+  (w: string) => `import ${w} = require("m");`,          // import-equals name
+  (w: string) => `import x = ${w}.y;`,                   // import-equals module reference
+  (w: string) => `import { type ${w} } from "m";`,       // type-only import specifier
+  (w: string) => `export { type ${w} };`,                // type-only export specifier
+  (w: string) => `export type { ${w} };`,                // type-only export clause
+  (w: string) => `@${w} class C {}`,                     // decorator
+  (w: string) => `let x = <${w}>y;`,                     // type assertion
+];
+
+/** The word-shaped literals of a grammar's rules and operators. */
+function wordLiterals(g: { rules: { body: any }[]; precs: { operators: { value: string }[] }[] }): string[] {
+  const out = new Set<string>();
+  for (const r of g.rules) for (const l of collectLiterals(r.body)) out.add(l);
+  for (const lvl of g.precs) for (const o of lvl.operators) out.add(o.value);
+  return [...out].filter(w => /^[A-Za-z_$][\w$]*$/.test(w)).sort();
+}
+
 const { Parser, Language } = await import('web-tree-sitter');
 await Parser.init();
 
@@ -90,13 +178,17 @@ for (const { lang, mod, corpora } of [
   if (!existsSync(wasm)) { console.error(`✗ ${wasm} not found (build it: cd tree-sitter/${lang} && npx tree-sitter build --wasm .)`); loadFailed = true; continue; }
   const parser = new Parser();
   parser.setLanguage(await Language.load(wasm));
-  const interp = createParser((await import(mod)).default);
+  const grammar = (await import(mod)).default;
+  const interp = createParser(grammar);
   const accepts = (src: string) => { try { interp.parse(src); return true; } catch { return false; } };
+  const words = wordLiterals(grammar);
+  const contextual = words.flatMap(w => CONTEXTUAL_POSITIONS.map(p => p(w))).filter(accepts);
+  console.log(`${lang}: ${words.length} word-shaped literals, ${contextual.length} accepted name uses`);
   // Where both accept: the top-level statements start at the same offsets (a line break ends a
   // statement where the interpreter ends it, `a\n++b` is two statements in both).
   const starts = (src: string) => (interp.parse(src) as { children: { offset: number }[] }).children.map(c => c.offset).join(',');
   const tsStarts = (root: any) => root.namedChildren.filter((c: any) => !c.isExtra).map((c: any) => c.startIndex).join(',');
-  for (const [corpus, inputs] of Object.entries(corpora)) {
+  for (const [corpus, inputs] of Object.entries({ ...corpora, 'contextual keywords': contextual })) {
     const r: Row = { grammar: lang, corpus, inputs: inputs.length, bothAccept: 0, bothReject: 0, tsOnlyReject: 0, tsOnlyAccept: 0, errorNodes: 0, splitDiffers: 0 };
     for (const src of inputs) {
       const root = parser.parse(src)!.rootNode;
