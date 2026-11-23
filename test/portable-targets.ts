@@ -1816,7 +1816,16 @@ let corpusMs = 0, corpusInputs = 0;
 const RECOVERY_MUTANTS = 3, RECOVERY_SEED = 20261123;
 // The farthest-hint agreement is a floor per grammar (the count of rejects whose related location
 // is the interpreter's farthest token): it may rise, never drop below what is recorded here.
-const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 0, typescript: 0 };
+const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5441, typescript: 5946 };
+// EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and
+// parseTotal alike) is not the oracle's. Not total parsing's property (parseTotal's verdict is its
+// own parse()'s, checked below); found by the mutation corpus, each owed as its own fix. When one
+// agrees again the gate fails until it is removed.
+const RECOVERY_VERDICT_EXPECTED_FAIL: Record<string, string[]> = {
+  // The interpreter accepts the reserved word `if` as a type (a TypeReference), the portable
+  // parsers refuse it: `T extends number ? if : "o"`.
+  typescript: ['type Cond<T> = T extends string ? "s" : T extends number ? if : "o";'],
+};
 const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // The UTF-16 offset of each UTF-8 byte offset of src that starts a character.
 function utf16Of(src: string): (b: number) => number {
@@ -1834,6 +1843,9 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
   let ref: Total[] | null = null;
   for (const r of runners) {
     const raw = r.total(srcs);
+    const own = r.batch(srcs);
+    const known = RECOVERY_VERDICT_EXPECTED_FAIL[c.grammar] ?? [];
+    let knownHits = 0;
     const got = r.utf8Edits ? raw.map((t, i): Total => {
       const u = utf16Of(srcs[i]!);
       return { ...t, errors: t.errors.map(([o, e, m, ro, re, rm]): DiagRow => [u(o), u(e), m, ro < 0 ? ro : u(ro), re < 0 ? re : u(re), rm]) };
@@ -1844,7 +1856,11 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
     got.forEach((g, i) => {
       const w = want[i]!;
       if ((w.err ?? '').includes('Maximum call stack')) return;
-      if (g.ok !== w.ok) { bad.push(`oracle ${w.ok ? 'accepts' : 'rejects'}, parseTotal ${g.ok ? 'accepts' : 'rejects'} — ${at(i)}`); return; }
+      if (g.ok !== own[i]!.ok) { bad.push(`parse ${own[i]!.ok ? 'accepts' : 'rejects'}, parseTotal ${g.ok ? 'accepts' : 'rejects'} — ${at(i)}`); return; }
+      if (g.ok !== w.ok) {
+        if (known.includes(srcs[i]!)) { knownHits++; return; }
+        bad.push(`oracle ${w.ok ? 'accepts' : 'rejects'}, parseTotal ${g.ok ? 'accepts' : 'rejects'} — ${at(i)}`); return;
+      }
       if (w.ok) {
         if (g.errors.length) bad.push(`accepted with ${g.errors.length} error(s) — ${at(i)}`);
         else acc++;
@@ -1882,8 +1898,9 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
         if (g.ok !== t.ok || rows(g) !== rows(t)) bad.push(`diagnostics differ from the TS target's: ${JSON.stringify(g.errors)} vs ${JSON.stringify(t.errors)} — ${at(i)}`);
       });
     }
-    console.log(`  ${c.grammar}/${r.label}: recovery ${bad.length ? `${bad.length} MISMATCH` : 'ok'} over ${srcs.length} inputs (${mutants.length} mutants): ${acc} accepted with no errors, ${rej} rejected: primary ≡ interpreter ${primary}, lexer ≡ oracle ${lexEq}; farthest ≡ the interpreter's hint on ${farEq}/${farN} (counted)`);
+    if (knownHits !== known.length) bad.push(`expected-fail: ${knownHits} of ${known.length} listed verdict divergences remain: remove the ones that agree now`);
     if (farEq < (RECOVERY_FARTHEST_FLOOR[c.grammar] ?? 0)) bad.push(`farthest agreement ${farEq} dropped below its recorded floor ${RECOVERY_FARTHEST_FLOOR[c.grammar]}`);
+    console.log(`  ${c.grammar}/${r.label}: recovery ${bad.length ? `${bad.length} MISMATCH` : 'ok'} over ${srcs.length} inputs (${mutants.length} mutants): ${acc} accepted with no errors, ${rej} rejected: primary ≡ interpreter ${primary}, lexer ≡ oracle ${lexEq}; farthest ≡ the interpreter's hint on ${farEq}/${farN} (counted)`);
     for (const smp of bad.slice(0, 10)) console.log(`      ${smp}`);
     failures += bad.length;
   }
