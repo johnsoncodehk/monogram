@@ -394,8 +394,9 @@ class LexScan {
     const name = `${scannerName(this.escTok)}Esc`, q = this.esc ? add('p', litLen(this.esc)) : x('p');
     if (!this.fns.some((f) => f.name === name)) {
       const uni: Stmt[] = this.esc ? [if_(hasAt('p', this.esc), [ret(call4(UNI_IDENT, 's', q))])] : [];
+      const orUni = this.esc ? `; else ${this.esc} then a Unicode IdentifierName` : '';
       this.fns.push({
-        name, cold: true, doc: `${this.escTok}: its token pattern's match, whose escapes must spell IdentifierName characters${this.esc ? `; else ${this.esc} then a Unicode IdentifierName` : ''}.`,
+        name, cold: true, doc: `${this.escTok}: its token pattern's match, whose escapes must spell IdentifierName characters${orUni}.`,
         params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }], ret: ['int'],
         body: [let_('e', call(m, 'p')), if_(gt('e', 'p'), [ret(call4(IDENT_ESC, 's', 'p', q, 'e'))]), ...uni, NONE],
       });
