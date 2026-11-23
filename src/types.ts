@@ -717,6 +717,11 @@ export interface CstGrammar {
   // exactly these (plus its structural heuristics) and rejects a name the grammar does not define;
   // nothing is inferred from rule names, so another grammar that happens to reuse a name gets none.
   treeSitterConflicts?: string[][];
+  // The keywords the generated tree-sitter grammar also reads as a NAME where the grammar allows one
+  // (`get` as a property key, `out` as a parameter): 'all' (the default) or a subset. Each one costs
+  // parse-table size; a keyword left out is lexed as the keyword where it is valid, as tree-sitter's
+  // keyword extraction does. A listed word no step reads as a name is a generation error.
+  treeSitterContextualNames?: string[] | 'all';
   // VS Code extension `contributes` data — packaging info a consumer needs to wire the
   // generated grammars into an editor (and to make Monogram's Vue a true drop-in for
   // vuejs/language-tools' files). All DATA the grammar declares; gen emits a pasteable
