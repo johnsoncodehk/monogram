@@ -1,47 +1,47 @@
 {
  "typescript": {
   "ts": 279037,
-  "ts+recovery": 319359,
+  "ts+recovery": 330461,
   "js": 1454297,
   "go": 507695,
-  "go+recovery": 547688,
+  "go+recovery": 558900,
   "rust": 367429,
-  "rust+recovery": 414588
+  "rust+recovery": 430831
  },
  "javascript": {
   "ts": 192234,
-  "ts+recovery": 222071,
+  "ts+recovery": 233123,
   "js": 845438,
   "go": 326362,
-  "go+recovery": 355085,
+  "go+recovery": 366005,
   "rust": 268829,
-  "rust+recovery": 305719
+  "rust+recovery": 321670
  },
  "typescriptreact": {
   "ts": 311739,
-  "ts+recovery": 352937,
+  "ts+recovery": 364043,
   "js": 1507769,
   "go": 542538,
-  "go+recovery": 583496,
+  "go+recovery": 594712,
   "rust": 404230,
-  "rust+recovery": 452259
+  "rust+recovery": 468506
  },
  "javascriptreact": {
   "ts": 206790,
-  "ts+recovery": 237333,
+  "ts+recovery": 248386,
   "js": 897371,
   "go": 345738,
-  "go+recovery": 375328,
+  "go+recovery": 386249,
   "rust": 284329,
-  "rust+recovery": 321923
+  "rust+recovery": 337875
  },
  "textdialect": {
   "ts": 103967,
-  "ts+recovery": 125939,
+  "ts+recovery": 136868,
   "js": 184798,
   "go": 146671,
-  "go+recovery": 167040,
+  "go+recovery": 177236,
   "rust": 168312,
-  "rust+recovery": 197504
+  "rust+recovery": 212731
  }
 }
