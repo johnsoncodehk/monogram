@@ -52,7 +52,8 @@ jobs:
       # tree-sitter packages.
       - name: Generate editor artifacts (committed ones must be in sync)
         run: |
-          npm run gen
+          nproc; free -g; lscpu | grep 'Model name'
+          for g in typescript javascript typescriptreact javascriptreact html yaml; do s=$(date +%s); node src/cli.ts $g.ts > /tmp/gen-$g.log 2>&1; echo "gen $g $(( $(date +%s) - s ))s"; done
           git diff --exit-code -- '*.tmLanguage.json' '*.language-configuration.json' '*.monarch.json' '*.contributes.json' tree-sitter
 
       - name: Typecheck
@@ -91,7 +92,9 @@ jobs:
       # METRICS (scope-gap / src-coverage) and BENCH tools need the external TS corpus / VS Code
       # grammars and run in the readme-bench workflow, not here. See docs/TESTING.md for the taxonomy.
       - name: Test
-        run: npm run check
+        run: |
+          rustc --version; go version
+          /usr/bin/time -v node test/portable-targets.ts
 
   # Engine-parity BREADTH guard. The `test` job already runs the three parity gates
   # (emit-parser-verify / emit-reject-messages / emit-lexer-verify) on the corpus-free

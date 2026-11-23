@@ -1935,6 +1935,8 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
 }
 
 let failures = 0;
+let __t = Date.now(); const __T: Record<string, number> = {};
+const lap = (g: string, k: string) => { const n = Date.now(); const d = n - __t; __t = n; __T[k] = (__T[k] ?? 0) + d; console.log(`  [time] ${g} ${k} ${d}ms`); };
 for (const c of CASES) {
   if (ONLY && !ONLY.includes(c.grammar)) continue;
   const grammar: CstGrammar = c.parts ? (await import(c.path)).textDialect(c.parts) : (await import(c.path)).default;
@@ -1943,6 +1945,7 @@ for (const c of CASES) {
     try { return { ok: true, cst: canon(oracle.parse(src)) }; } catch (e) { return { ok: false, err: errText(e) }; }
   };
 
+  lap(c.grammar, 'prev');
   const dir = `${TMP}/${c.grammar}`;
   mkdirSync(dir, { recursive: true });
   const runners: Runner[] = [];
@@ -1971,6 +1974,7 @@ for (const c of CASES) {
     spans: { cmd: 'node', args: [tsFile, 'tok-spans'] }, utf8Edits: false, total: (srcs) => srcs.map((src) => tsTotal(tsLib, src)),
   });
 
+  lap(c.grammar, 'emit-ts');
   if (HAS_GO && !c.tsOnly && (!TARGETS_ONLY || TARGETS_ONLY.includes('go'))) {
     const gdir = `${dir}/go`; mkdirSync(gdir, { recursive: true });
     const goSrc = emitParser(grammar, goTarget, RECOVERY);
@@ -1987,6 +1991,7 @@ for (const c of CASES) {
       spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true, total: (srcs) => totalBatch(bin, srcs),
     });
   }
+  lap(c.grammar, 'build-go');
   if (HAS_RUST && !c.tsOnly && (!TARGETS_ONLY || TARGETS_ONLY.includes('rust'))) {
     const rfile = `${dir}/main.rs`;
     const bin = `${dir}/pr`;
@@ -2002,6 +2007,7 @@ for (const c of CASES) {
     });
   }
 
+  lap(c.grammar, 'build-rust');
   // tok-spans: top-level kids record parse-consumption [tokStart, tokEnd); cross-target
   // identity + contiguous partition of the consumed token stream. Empty accept inputs are
   // still run (identity), but contiguous checks skip when there are no kids.
@@ -2109,6 +2115,7 @@ for (const c of CASES) {
     console.log(`  ${c.grammar}: tok-spans checked on ${cases.length} accept case(s)${c.grammar === 'calc' ? ' + trailing-punct probe' : ''}`);
   }
 
+  lap(c.grammar, 'tok-spans');
   // The jsTarget parser (emit-parser.ts, not built from the portable IR) on the same hand-written
   // lists: the oracle's verdict on each, and on each accepted input the oracle's CST byte for byte
   // (its contract, emit-parser-verify.ts). Its suppress gates (the no-`in` for-heads of
@@ -2137,6 +2144,7 @@ for (const c of CASES) {
     console.log(`  ${c.grammar}/js: ${acc}/${c.accept.length} accept ≡ oracle CST · ${rej}/${c.reject.length} reject ≡ oracle`);
   }
 
+  lap(c.grammar, 'jstarget');
   for (const r of runners) {
     let acc = 0, rej = 0, snap = 0;
     for (const src of c.accept) {
@@ -2173,6 +2181,7 @@ for (const c of CASES) {
     // of the edited text, on the verdict and the CST, and its own validation (stream and tree
     // against a fresh lex and parse) holds. Exhaustive, not random: a random edit rarely lands
     // inside a hole, where the relex window must not restart.
+    lap(c.grammar, 'lists-' + r.label);
     if (HOLE_EDIT_GRAMMARS.has(c.grammar) || FRAME_EDIT_DOCS[c.grammar]) {
       const sessions = (HOLE_EDIT_GRAMMARS.has(c.grammar) ? [...HOLE_EDIT_DOCS.map((doc) => ({ doc, ins: undefined as string[] | undefined })), ...LOOK_EDIT_DOCS] : FRAME_EDIT_DOCS[c.grammar]!.map((d) => (typeof d === 'string' ? { doc: d, ins: FRAME_INS } : d)))
         .flatMap(({ doc: init, ins }) => oneCharEdits(init, ins).map((e) => ({ init, e, final: init.slice(0, e[0]) + e[2] + init.slice(e[1]) })));
@@ -2198,6 +2207,7 @@ for (const c of CASES) {
       failures += bad.length;
     }
 
+    lap(c.grammar, 'onechar-' + r.label);
     const editScenarios = EDIT_SCENARIOS[c.grammar];
     if (editScenarios) {
       let editOk = 0, alignOk = 0, fastOk = 0;
@@ -2283,7 +2293,9 @@ for (const c of CASES) {
       console.log(`  ${c.grammar}/${r.label}: ${alignOk}/${editScenarios.length} token-alignments ≡ oracle`);
       console.log(`  ${c.grammar}/${r.label}: ${fastOk}/${editScenarios.length} fast ≡ validated`);
     }
+    lap(c.grammar, 'scenarios-' + r.label);
     if (c.grammar === 'javascript') unicodeParity(r, oracleOut);
+    lap(c.grammar, 'unicode-' + r.label);
   }
 
   // ── Parity corpus: every runner ≡ the oracle on verdict, and on the rule skeleton when both accept ──
@@ -2294,6 +2306,7 @@ for (const c of CASES) {
       ...(ECMASCRIPT.has(c.grammar) ? NON_ASCII_LEX.map((src) => ({ src, kind: 'non-ASCII lexing' })) : []),
       ...(ECMASCRIPT.has(c.grammar) ? LINE_TERMINATORS.map((src) => ({ src, kind: 'line terminators' })) : []),
       ...(JSX_GRAMMARS.has(c.grammar) ? jsxCorpus().map((src) => ({ src, kind: 'tsc JSX conformance' })) : [])];
+    lap(c.grammar, 'corpus-gen');
     const want = inputs.map((i) => oracleOut(i.src));
     const wantToks = inputs.map((i): TokStream => {
       try { return JSON.stringify(tokenize(i.src).map((t) => [t.type, t.text, (t as unknown as { newlineBefore: boolean }).newlineBefore])); } catch { return null; }
@@ -2303,10 +2316,13 @@ for (const c of CASES) {
     const lids = buildLexIdPlan(portableIR(grammar)).lids;
     const lidIndex = new Map(lids.map((t, i) => [t, i]));
     const lidOfText = (t: string) => lidIndex.get(t) ?? 0;
+    lap(c.grammar, 'corpus-oracle');
     const lexErr = inputs.map((i): string => { try { tokenize(i.src); return ''; } catch (e) { return errText(e); } });
     for (const r of runners) {
       const got = r.batch(inputs.map((i) => i.src));
+      lap(c.grammar, 'corpus-batch-' + r.label);
       const gotToks = r.tokens(inputs.map((i) => i.src));
+      lap(c.grammar, 'corpus-tokens-' + r.label);
       const by = new Map<string, number>();
       const samples: string[] = [];
       const mine = known.map((e) => !e.targets || e.targets.includes(r.label));
@@ -2344,6 +2360,7 @@ for (const c of CASES) {
       // the grammar's literal table (0: no literal) — for every token of the corpus and for
       // every literal of the table. A token of an element region's own (text, raw text, tag
       // tokens, close / self-close) carries 0 whatever its text: it is never a literal.
+      lap(c.grammar, 'corpus-compare-' + r.label);
       const regionTok = new Set(elementTokens(portableIR(grammar).elements));
       const lidBad: string[] = [];
       const texts = new Set<string>(lids.slice(1));
@@ -2361,6 +2378,7 @@ for (const c of CASES) {
       for (const smp of [...new Set(lidBad)].slice(0, 8)) console.log(`      ${smp}`);
       failures += lidBad.length;
 
+      lap(c.grammar, 'corpus-lids-' + r.label);
       // The Doc path ≡ a fresh parse: the verdict, and the CST when both accept.
       const srcs = inputs.map((i) => i.src);
       const docs = r.doc(srcs), builders = r.docBuilder?.(srcs);
@@ -2377,12 +2395,16 @@ for (const c of CASES) {
       console.log(`  ${c.grammar}/${r.label}: Doc ${docBad.length ? `${docBad.length} MISMATCH` : '≡ fresh parse'} (each input typed into an empty ${builders ? 'CST and builder Doc' : 'Doc'}: verdict${builders ? 's' : ''} + CST)`);
       for (const smp of docBad.slice(0, 8)) console.log(`      ${smp}`);
       failures += docBad.length;
+      lap(c.grammar, 'corpus-doc-' + r.label);
     }
     corpusMs += Date.now() - t0;
     corpusInputs += inputs.length;
+    lap(c.grammar, 'corpus-end');
     if (ECMASCRIPT.has(c.grammar)) recoveryClass(c, grammar, runners, oracleOut, [...inputs.map((i) => i.src), ...c.accept, ...c.reject, ...(c.grammar === 'typescript' ? CURATED_TS : [])], tokenize);
+    lap(c.grammar, 'recovery');
   }
 }
+{ const agg: Record<string, number> = {}; for (const [k, v] of Object.entries(__T)) { const kk = k.replace(/-(typescript|go|rust)$/, ''); agg[kk] = (agg[kk] ?? 0) + v; } console.log('  [time-total] ' + JSON.stringify(__T)); console.log('  [time-agg] ' + JSON.stringify(agg)); }
 console.log(`  parity corpus: ${corpusInputs} inputs over ${CASES.length} grammars, ${(corpusMs / 1000).toFixed(1)}s`);
 
 // A grammar the portable rendering cannot express is refused at emit time, never mis-parsed.
