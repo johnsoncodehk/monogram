@@ -478,7 +478,9 @@ ${sig ? `${p.goBoolArr('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
   const rxBlank = rx ? '_, _, _, _, _, stk.parenHead, _, _, ' : '';
   // Brace counting in the holes (kind 0 template, 1 element hole; step 4): a `{` deepens, a `}`
   // at a count above 0 shallows; at 0 the closer is lexed by its own test.
-  const braces = [
+  // A template hole and an element hole count the same braces when their lids agree (JSX: `{` `}`).
+  const oneBraces = !!tpl && lidOf(ids, tpl.braceOpen) === lidOf(ids, el.holeOpen) && lidOf(ids, tpl.interpClose) === lidOf(ids, el.holeClose);
+  const braces = oneBraces ? `if f&2 == 0 { if lid == lidHoleOpen { templateStack[len(templateStack)-1] = f + 4 } else if lid == lidHoleClose { templateStack[len(templateStack)-1] = f - 4 } }` : [
     tpl ? `if f&3 == 0 { if lid == lidBraceOpen { templateStack[len(templateStack)-1] = f + 4 } else if lid == lidInterpClose { templateStack[len(templateStack)-1] = f - 4 } }` : '',
     `if f&3 == 1 { if lid == lidHoleOpen { templateStack[len(templateStack)-1] = f + 4 } else if lid == lidHoleClose { templateStack[len(templateStack)-1] = f - 4 } }`,
   ].filter(Boolean).join(' else ');
