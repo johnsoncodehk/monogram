@@ -2363,7 +2363,9 @@ function buildPratt(
   const endsInOperand = (steps: Step[]): boolean => { const l = steps[steps.length - 1]; return l !== undefined && l.t === 'rule' && l.name === name; };
   const nudBracketClosesTail = nudBrackets.map((b) => endsInOperand(b.steps));
   const nudSeqClosesTail = nudSeqs.map(endsInOperand);
-  const ledClosesTail = leds.map((l, i) => { const last = l.steps[l.steps.length - 1]?.t; return !ledAccessTail[i] || last === 'look' || last === 'ahead' || last === 'aheadCtx'; });
+  // A trailing NEGATIVE lookahead closes the tail (`Foo<T>` then no `(`); a positive one asserts that a
+  // continuation follows (Python's `&t_lookahead`) and leaves it open (gen-parser.ts negativeLook).
+  const ledClosesTail = leds.map((l, i) => { const last = l.steps[l.steps.length - 1]; return !ledAccessTail[i] || ((last?.t === 'look' || last?.t === 'ahead' || last?.t === 'aheadCtx') && !last.is); });
   const capsFromTail = (steps: Step[]): boolean => nudCapped.length > 0 && endsInOperand(steps);
   const nudBracketCapsFromTail = nudBrackets.map((b) => capsFromTail(b.steps));
   const nudSeqCapsFromTail = nudSeqs.map(capsFromTail);

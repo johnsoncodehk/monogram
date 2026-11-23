@@ -42,8 +42,8 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | ts | javascript | _tsserver.js ×4 | parseWith | 19,712 | 12,553 | 64,089 | 3.25 | 5.11 | 2,115,088 | 107.3 | 168.5 | 34,686 | 1,008,393 | 1,106,695 |
 | js | typescript | acorn.js | fresh | 42,209 | 28,813 | 5,112 | 0.12 | 0.18 | 13,901,664 | 329.4 | 482.5 | - | - | - |
 | js | typescript | acorn.js | reuse | 42,209 | 28,813 | 4,950 | 0.12 | 0.17 | 233,752 | 5.5 | 8.1 | - | - | - |
-| js | typescript | lib.es5.d.ts | fresh | 13,659 | 7,694 | 7,435 | 0.54 | 0.97 | 2,789,740 | 204.2 | 362.6 | - | - | - |
-| js | typescript | lib.es5.d.ts | reuse | 13,659 | 7,694 | 7,335 | 0.54 | 0.95 | 170,884 | 12.5 | 22.2 | - | - | - |
+| js | typescript | lib.es5.d.ts | fresh | 13,659 | 7,692 | 7,007 | 0.51 | 0.91 | 2,781,116 | 203.6 | 361.6 | - | - | - |
+| js | typescript | lib.es5.d.ts | reuse | 13,659 | 7,692 | 6,907 | 0.51 | 0.90 | 162,260 | 11.9 | 21.1 | - | - | - |
 | js | typescript | _tsserver.js | fresh | 4,932 | 3,221 | 424 | 0.09 | 0.13 | 1,252,264 | 253.9 | 388.8 | - | - | - |
 | js | typescript | _tsserver.js | reuse | 4,932 | 3,221 | 330 | 0.07 | 0.10 | 15,368 | 3.1 | 4.8 | - | - | - |
 | js | typescript | _tsserver.js ×4 | fresh | 19,728 | 12,881 | 1,417 | 0.07 | 0.11 | 4,660,416 | 236.2 | 361.8 | - | - | - |
