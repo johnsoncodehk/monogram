@@ -40,6 +40,27 @@ The corpus is nearly all valid code (9 files the reference rejects), so it measu
 direction. The reject direction comes from single-token mutants of the same files, judged by
 `ast.parse` (next landing).
 
+## Work per token
+
+The interpreter counts rule invocations (`PROF=1`, `profCounts` of `src/gen-parser.ts`; memo hits
+included). It has no checkpoint or restore counters: those are the portable engine's
+(`portable-work`), which cannot take Python before M1's portable step. Measured on the same engine:
+
+| grammar | input | tokens | rule invocations | per token |
+|---|---|---:|---:|---:|
+| `python.ts` | CPython `Lib/*.py` (top level, 168 files) | 603426 | 6227033 | **10.32** |
+| `typescript.ts` | this repository's `src/*.ts` (42 files) | 388605 | 218087 | 0.56 |
+
+Python's are 18 times TypeScript's. Where they go: `BitwiseOr` 1.18 per token, `Inversion` 1.18,
+`Conjunction` 1.17, `Disjunction` 1.16 (W1: every operand descends through three rule levels that
+a Pratt loop would hold in one frame), `TPrimary` 0.86 and `SingleSubscriptAttributeTarget` 0.43 (W3:
+every expression statement is tried as an assignment head first), `Expression` 0.58, `Atom` 0.48.
+python.gram's layers were written for a PEG parser with memoisation of every rule. On this engine,
+which commits a longest match per rule and memoises only Pratt and left-recursive rules, they are
+the costly way to say it. The verdict is unaffected. W1's engine-side fix would be a prefix
+operator whose level caps where it may appear (the operand of a tighter operator may not be a
+`not …`), so that `not` / `and` / `or` join the Pratt ladder. W3's is the cover grammar.
+
 ## The table
 
 | # | kind | what | why the grammar file could not say it | general? | cost |
