@@ -1,5 +1,5 @@
 // node test/emit-sizes.ts [<monogram source tree>=.]: the byte size and a short sha256 of
-// emitParser(<grammar>, <target>) for the real grammars typescript, javascript and their element dialects and every emit target that tree exports,
+// emitParser(<grammar>, <target>) (and with each emit option, `<target>+<option>`) for the real grammars typescript, javascript and their element dialects and every emit target that tree exports,
 // as one JSON object { "<grammar>": { "<target>": { bytes, sha } } } on stdout. The measurement
 // workflow (.github/workflows/measure-profile.yml) runs it on a pull request's merge base and head
 // and reports the sizes A / M / delta (test/bench-rust-profile/pr-summary.ts); the sha says whether
@@ -24,6 +24,12 @@ for (const g of ['typescript', 'javascript', 'typescriptreact', 'javascriptreact
     // head refuses is then missing for M, which pr-summary.ts reports as NOT RUN.
     try { s = emit.emitParser(grammar, emit[t]); } catch (e) { console.error(`${g} ${t}: refused (${String(e).split('\n')[0]})`); continue; }
     out[g][t.replace(/Target$/, '')] = { bytes: Buffer.byteLength(s, 'utf8'), sha: createHash('sha256').update(s).digest('hex').slice(0, 12) };
+    // The emit option `recovery` (total parsing): the key `<target>+recovery`, for a target of a
+    // tree that has it (an older tree ignores the option and emits the default module: no row).
+    if (t === 'jsTarget') continue;
+    const r = emit.emitParser(grammar, emit[t], { recovery: true });
+    if (r === s) continue;
+    out[g][t.replace(/Target$/, '') + '+recovery'] = { bytes: Buffer.byteLength(r, 'utf8'), sha: createHash('sha256').update(r).digest('hex').slice(0, 12) };
   }
 }
 console.log(JSON.stringify(out, null, 1));
