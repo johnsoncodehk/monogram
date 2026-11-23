@@ -1521,6 +1521,10 @@ const FRAME_EDIT_DOCS: Record<string, (string | { doc: string; ins: string[] })[
   // a body's closer, a continuation; and an opener / a continuation made by closing a comment
   // after the element (their tests read the comment to the end of the file)
   'textdialect-dir': [
+    // a read through a line comment that ENDS (no failed attempt to record), past the element's
+    // close: only the opener's / continuation's own read (its far end) records it
+    { doc: 'component C(a) { <p>@if // x</p>\n; const z = 1; }', ins: ['(', '(a) {y}</p>', ' '] },
+    { doc: 'component C(a) { <p>@if (a) {y} @else // x</p>\n; const z = 1; }', ins: ['{', '{n}</p>', ' '] },
     { doc: 'component C(a) { <p>@if /* (a) {y}</p>; const z = 1; }', ins: ['*/ (a) {y}</p>; ', '*/'] },
     { doc: 'component C(a) { <p>@if (a) {y} @else /* {n}</p>; const z = 1; }', ins: ['*/ {n}</p>; ', '*/'] },
   ],
