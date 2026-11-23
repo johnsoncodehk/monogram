@@ -115,9 +115,9 @@ type StepOp =
   | { t: 'tok'; name: string; hole?: string }                   // match a token kind; a template kind (TplCfg) carries the rule that parses its `${…}` holes and also matches an interpolated template
   | { t: 'rule'; name: string }                                 // call a rule, append its node
   | { t: 'ruleBp'; name: string; bp: number }                   // call a Pratt rule at a given binding power (chain-rhs led trailing operand)
-  | { t: 'star'; step: Step; guard?: number; clean?: true; share?: number }                   // repeat inner 0+
-  | { t: 'opt'; steps: Step[]; guard?: number; clean?: true; share?: number }                 // optional sub-sequence
-  | { t: 'sep'; elem: Step; delim: string; guard?: number; clean?: true; share?: number }     // elem (delim elem)*
+  | { t: 'star'; step: Step; guard?: number; clean?: true; leaves?: true; share?: number }                   // repeat inner 0+
+  | { t: 'opt'; steps: Step[]; guard?: number; clean?: true; leaves?: true; share?: number }                 // optional sub-sequence
+  | { t: 'sep'; elem: Step; delim: string; guard?: number; clean?: true; leaves?: true; share?: number }     // elem (delim elem)*
   | { t: 'altlit'; opts: Lit[] }                                // inline alternation of literals (fast path)
   | { t: 'alt'; branches: Step[][]; branchNames?: string[]; firsts?: FirstSig[]; predictive?: boolean; clean?: boolean[]; share?: number }            // inline alternation of sub-sequences (backtracking unless predictive); clean: parallel to branches, the branch fails clean (Step.clean) so its frame takes no mark
   | { t: 'look'; id: number; is: boolean }                     // zero-width: whether ParserIR.lookaheads[id] matches here (is) or does not (!is)
@@ -1249,6 +1249,23 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   // connector (the connector's token is the led's key; the block puts the position and the scratch
   // list back on its own, so only a node built and then abandoned would need the builder's checkpoint).
   const restFailsClean = (steps: Step[]): boolean => steps.length === 0 || listFailsClean(steps);
+  // A star / opt / sep body that does not fail clean but FAILS WITH LEAVES only (`leaves`): what a
+  // failed attempt can have changed is the position and the scratch list, never the builder's
+  // nodes. A full mark saves three things, the position, the scratch list's length and the
+  // builder's checkpoint (the node arena: nodes and kids), and puts all three back; this mark saves
+  // and puts back the first two only. It holds when the steps before the body's first step that is
+  // neither a leaf nor zero-width are leaves (a literal, a literal alternation, a token: each
+  // pushes at most a leaf on the scratch list and builds no node), that step fails clean, and
+  // nothing after it can fail (`[':' Type]`, `['.', Ident]`): every failure then happens at a leaf
+  // or at that step, after leaves only. A led arm's block relies on the same fact for its
+  // connector (ledClean).
+  const isLeaf = (s: Step): boolean => s.t === 'lit' || s.t === 'altlit' || (s.t === 'tok' && s.hole === undefined);
+  const flatSeq = (steps: Step[]): Step[] => steps.flatMap((x) => (x.t === 'seq' ? flatSeq(x.steps) : [x]));
+  const listFailsLeaves = (steps0: Step[]): boolean => {
+    const steps = flatSeq(steps0);
+    const j = steps.findIndex((x) => !zeroWidth(x) && !isLeaf(x));
+    return steps.length > 0 && (j < 0 || (failsClean(steps[j]!) && steps.slice(j + 1).every(neverFails)));
+  };
   // A repetition whose body is one Pratt call that does NOT fail clean, followed by a one-token test
   // (`sep(Expr, ',')` then `)`): the call fails either clean (its NUD refuses the token: nothing to
   // undo) or dirty, and a dirty failure stops at a token of `dirtyAt` (an operator that requires a
@@ -1280,10 +1297,10 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   const annotateSteps = (steps: Step[]): void => {
     for (const [k, s] of steps.entries()) {
       const next = steps[k + 1];
-      if (s.t === 'star') { annotateSteps([s.step]); const g = bodyGuard([s.step]); if (g !== undefined) s.guard = g; if (failsClean(s.step) || doomed([s.step], next)) s.clean = true; }
-      else if (s.t === 'opt') { annotateSteps(s.steps); const g = bodyGuard(s.steps); if (g !== undefined) s.guard = g; if (listFailsClean(s.steps) || doomed(s.steps, next)) s.clean = true; }
+      if (s.t === 'star') { annotateSteps([s.step]); const g = bodyGuard([s.step]); if (g !== undefined) s.guard = g; if (failsClean(s.step) || doomed([s.step], next)) s.clean = true; else if (listFailsLeaves([s.step])) s.leaves = true; }
+      else if (s.t === 'opt') { annotateSteps(s.steps); const g = bodyGuard(s.steps); if (g !== undefined) s.guard = g; if (listFailsClean(s.steps) || doomed(s.steps, next)) s.clean = true; else if (listFailsLeaves(s.steps)) s.leaves = true; }
       else if (s.t === 'seq' || s.t === 'suppress' || s.t === 'ctx') annotateSteps(s.steps);
-      else if (s.t === 'sep') { annotateSteps([s.elem]); const g = bodyGuard([s.elem]); if (g !== undefined) s.guard = g; if (failsClean(s.elem) || doomed([s.elem], next)) s.clean = true; }
+      else if (s.t === 'sep') { annotateSteps([s.elem]); const g = bodyGuard([s.elem]); if (g !== undefined) s.guard = g; if (failsClean(s.elem) || doomed([s.elem], next)) s.clean = true; else if (listFailsLeaves([s.elem])) s.leaves = true; }
       else if (s.t === 'alt') {
         s.firsts = s.branches.map((b) => seqFirst(b));
         s.predictive = allDisjoint(s.firsts);
@@ -1434,11 +1451,12 @@ export type StepLowering = {
   rule(name: string): string;
   ruleBp(name: string, bp: number): string;      // only a Pratt rule is called at a binding power
   // body: the inner step, as a boolean expression; guard: the body is attempted only when the next
-  // token is in ParserIR.tokenSets[guard] (null: always attempted); clean: the body fails clean
-  // (Step.clean), so an attempt takes no mark and a failed one undoes nothing
-  star(body: string, guard: number | null, clean: boolean): string;
-  opt(body: string, guard: number | null, clean: boolean): string;
-  sep(elem: string, delim: string, guard: number | null, clean: boolean): string;   // guard: of the first element
+  // token is in ParserIR.tokenSets[guard] (null: always attempted); mark: the mark an attempt takes
+  // (MarkForm: none when the body fails clean, Step.clean; the position and the scratch list when it
+  // fails with leaves only, Step.leaves; else all of it)
+  star(body: string, guard: number | null, mark: MarkForm): string;
+  opt(body: string, guard: number | null, mark: MarkForm): string;
+  sep(elem: string, delim: string, guard: number | null, mark: MarkForm): string;   // guard: of the first element
   altlit(values: string[]): string;
   look(id: number, is: boolean): string;         // a lookahead runs in recognize form whatever the form around it
   ahead(set: number, is: boolean): string;
@@ -1453,6 +1471,11 @@ export type StepLowering = {
   choice(peek: boolean, tries: string[]): string;                  // the tries in order, then false; peek: a guard reads the next token
   predictive(arms: { first: NonNullable<FirstSig>; branch: string }[]): string;   // the one arm the next token selects, else false
 };
+// The mark a repetition's body attempt takes: 'none' (Step.clean: a failure undoes nothing),
+// 'leaves' (Step.leaves: the position and the scratch list's length, not the builder's checkpoint),
+// 'full' (the position, the scratch list's length and the builder's checkpoint).
+export type MarkForm = 'none' | 'leaves' | 'full';
+export const markOf = (s: { clean?: true; leaves?: true }): MarkForm => (s.clean ? 'none' : s.leaves ? 'leaves' : 'full');
 const conjOf = (steps: Step[], L: StepLowering): string => (steps.length ? steps.map((x) => stepExpr(x, L)).join(' && ') : 'true');
 /** A step as a boolean expression: a shared step's call, else the step itself (stepBody). */
 export function stepExpr(s: Step, L: StepLowering): string {
@@ -1466,9 +1489,9 @@ export function stepBody(s: Step, L: StepLowering): string {
     case 'tok': return s.hole !== undefined ? L.template(s.name, s.hole) : L.tok(s.name);
     case 'rule': return L.rule(s.name);
     case 'ruleBp': return L.ruleBp(s.name, s.bp);
-    case 'star': return L.star(stepExpr(s.step, L.inner()), s.guard ?? null, s.clean === true);
-    case 'opt': { const I = L.inner(); return L.opt(s.steps.map((x) => stepExpr(x, I)).join(' && '), s.guard ?? null, s.clean === true); }
-    case 'sep': return L.sep(stepExpr(s.elem, L.inner()), s.delim, s.guard ?? null, s.clean === true);
+    case 'star': return L.star(stepExpr(s.step, L.inner()), s.guard ?? null, markOf(s));
+    case 'opt': { const I = L.inner(); return L.opt(s.steps.map((x) => stepExpr(x, I)).join(' && '), s.guard ?? null, markOf(s)); }
+    case 'sep': return L.sep(stepExpr(s.elem, L.inner()), s.delim, s.guard ?? null, markOf(s));
     case 'altlit': return L.altlit(s.opts.map((o) => o.value));
     case 'alt': return L.inPlace('alt', stepStmts(s, L.inner()));
     case 'look': return L.look(s.id, s.is);

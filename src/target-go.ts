@@ -9,7 +9,7 @@
 // stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
-import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
+import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
 import { blockBody, elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
@@ -159,6 +159,7 @@ const branchGoR = (cond: string) => `{ sp := p.pos; if ${cond} { return true }; 
 // one recognizing ('R', ParserIR.forms; e: whose recognizers). Go: a body or a step's statements
 // are a func literal called in place.
 type GoForm = '' | 'W' | 'R';
+const markSuffixGo = (mk: MarkForm, f: GoForm): string => (mk === 'none' ? 'C' : mk === 'leaves' && f !== 'R' ? 'L' : '');
 function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: ArenaIdPlan): StepLowering {
   // A literal's leaf type (litTt, decided here): a word is a $keyword leaf, anything else $punct.
   const litTt = (lid: number) => (lid >= ids.kwLid ? ttIdOf(ar!, '$keyword') : TT_SKIP_PUNCT);
@@ -174,14 +175,16 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: Aren
     ruleBp: (name, bp) => (f === 'R' ? e.bpFound(name, bp) : f === 'W' ? `p.callRuleW(p.bpW_${name}(${bp}))` : `p.callRule(p.bp_${name}(${bp}))`),
     // A body guard (emit-portable.ts annotateSteps): opt / sep test it before their one attempt,
     // star before each attempt, so a refused attempt takes no mark. A clean body (Step.clean) is
-    // attempted without a mark (starC / optC / sepByC).
-    star: (body, g, c) => (g === null ? `p.star${c ? 'C' : ''}${f}(${fn(body)})` : `p.starIn${c ? 'C' : ''}${f}(${g}, ${fn(body)})`),
-    opt: (body, g, c) => {
-      const attempt = `p.opt${c ? 'C' : ''}${f}(${fn(body)})`;
+    // attempted without a mark (starC / optC / sepByC). A body that fails with leaves only
+    // (MarkForm 'leaves') takes the L forms when building: the position and the scratch list, no
+    // arena or builder checkpoint; recognizing, every mark is the position alone already.
+    star: (body, g, mk) => { const c = markSuffixGo(mk, f); return g === null ? `p.star${c}${f}(${fn(body)})` : `p.starIn${c}${f}(${g}, ${fn(body)})`; },
+    opt: (body, g, mk) => {
+      const attempt = `p.opt${markSuffixGo(mk, f)}${f}(${fn(body)})`;
       return g === null ? attempt : `(!p.${e.ahead}(${g}, true) || ${attempt})`;
     },
-    sep: (elem, delim, g, c) => {
-      const call = `p.sepBy${c ? 'C' : ''}${f}(${fn(elem)}, ${sepDelimLid(ids, delim)})`;
+    sep: (elem, delim, g, mk) => {
+      const call = `p.sepBy${markSuffixGo(mk, f)}${f}(${fn(elem)}, ${sepDelimLid(ids, delim)})`;
       return g === null ? call : `(!p.${e.ahead}(${g}, true) || ${call})`;
     },
     altlit: (values) => `p.altLit${f}([]uint16{${values.map((v) => lidOf(ids, v)).join(', ')}})`,
@@ -2179,6 +2182,29 @@ func (p *${recv}) starInW(k int, once func() bool) bool {
 	}
 	return true
 }
+// A body that fails with leaves only (Step.leaves) changes nothing but the position and the
+// scratch list when it fails: its mark is those two, no builder checkpoint.
+func (p *${recv}) starLW(once func() bool) bool {
+	for { sp, sb := p.pos, len(p.scratch); if !once() { p.back(sp); p.scratch = p.scratch[:sb]; break } }
+	return true
+}
+func (p *${recv}) starInLW(k int, once func() bool) bool {
+	for p.ahead(k, true) { sp, sb := p.pos, len(p.scratch); if !once() { p.back(sp); p.scratch = p.scratch[:sb]; break } }
+	return true
+}
+func (p *${recv}) optLW(body func() bool) bool {
+	sp, sb := p.pos, len(p.scratch); if !body() { p.back(sp); p.scratch = p.scratch[:sb] }; return true
+}
+func (p *${recv}) sepByLW(elem func() bool, delim uint16) bool {
+	sp0, sb0 := p.pos, len(p.scratch)
+	if !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; return true }
+	for {
+		if !(p.litW(delim) && p.takeW(litTt(delim))) { break } // a failed delimiter match changes nothing: no mark before it
+		sp2, sb2 := p.pos, len(p.scratch)
+		if !elem() { p.back(sp2); p.scratch = p.scratch[:sb2]; break }
+	}
+	return true
+}
 // A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo. Kept out of
 // line (go:noinline), as the marked forms already are by Go's inline budget: inlined, these small
 // helpers and their closures grew the frames of the large rule functions, and every call of those
@@ -3393,6 +3419,29 @@ func (p *engine) star(once func() bool) bool {
 }
 func (p *engine) starIn(k int, once func() bool) bool {
 	for p.ahead(k, true) { m := p.mark(); if !once() { p.reset(m); break } }
+	return true
+}
+// A body that fails with leaves only (Step.leaves) changes nothing but the position and the
+// scratch list when it fails: its mark is those two, not the arena's lengths.
+func (p *engine) starL(once func() bool) bool {
+	for { sp, sb := p.pos, len(p.scratch); if !once() { p.back(sp); p.scratch = p.scratch[:sb]; break } }
+	return true
+}
+func (p *engine) starInL(k int, once func() bool) bool {
+	for p.ahead(k, true) { sp, sb := p.pos, len(p.scratch); if !once() { p.back(sp); p.scratch = p.scratch[:sb]; break } }
+	return true
+}
+func (p *engine) optL(body func() bool) bool {
+	sp, sb := p.pos, len(p.scratch); if !body() { p.back(sp); p.scratch = p.scratch[:sb] }; return true
+}
+func (p *engine) sepByL(elem func() bool, delimLid uint16) bool {
+	sp0, sb0 := p.pos, len(p.scratch)
+	if !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; return true }
+	for {
+		if !p.matchLit(delimLid) { break } // a failed delimiter match changes nothing: no mark before it
+		sp2, sb2 := p.pos, len(p.scratch)
+		if !elem() { p.back(sp2); p.scratch = p.scratch[:sb2]; break }
+	}
 	return true
 }
 // A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo. Kept out of
