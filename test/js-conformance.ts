@@ -9,8 +9,7 @@
 //
 //   2. TypeScript-only syntax the JS grammar has no production for: it must reject all of them.
 //
-// The TS conformance corpus reparsed as .js is its own gate, with its pinned record:
-// test/js-conformance-corpus.ts → docs/JS-CONFORMANCE.md.
+// JavaScript as a whole is measured against test262 (test/test262.ts, the specification's suite).
 import { createParser } from '../src/gen-parser.ts';
 import ts from 'typescript';
 import { isInputError } from './input-error.ts';

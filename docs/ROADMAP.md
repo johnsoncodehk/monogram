@@ -196,11 +196,11 @@ generated from the shared layer for all three targets and the first format is de
 
 **Why.** JavaScript syntax follows the ECMAScript productions ([CORRECTNESS.md](CORRECTNESS.md)).
 `tsc` is the oracle for TypeScript-only syntax only; measured against `tsc`'s JS-mode parser
-([JS-CONFORMANCE.md](JS-CONFORMANCE.md)) the remaining disagreements are mostly where `tsc`'s
+(the former `JS-CONFORMANCE.md` record) the remaining disagreements are mostly where `tsc`'s
 parser accepts what the specification rejects.
 
 **Done means:** a gate runs `javascript.ts` over test262's syntax tests (positive and negative
-parse cases), with a pinned record of every file in the style of `JS-CONFORMANCE.md`.
+parse cases), with a pinned record of every file in the style of the former `JS-CONFORMANCE.md`.
 
 ## 7. Every target measured on every pull request
 
