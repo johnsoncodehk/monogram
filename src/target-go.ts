@@ -561,9 +561,11 @@ ${rx ? `\t\tif lid == lidLParen {
   // The entry from code, in the tagOpen byte's dispatch arm (outside element frames: inside one
   // the frame step lexes every tagOpen).
   const enter = `\t\t\ttemplateStack = append(templateStack, 6); refresh(); bound = 0; emit(pos, pos + ${L}, 0, lidElOpen);${raw ? ' tagAt = append(tagAt, len(*acc)-1);' : ''} tagAngle = 0; pos += ${L}; continue\n`;
-  const entry = !operand ? `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)}) {\n${enter}\t\t}\n`
-    : !(el.head || sig) ? `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)}) && !prevIsValue() {\n${enter}\t\t}\n`
-    : `\t\tif strings.HasPrefix(src[pos:], ${J(el.tagOpen)})${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue() {
+  // a tagOpen that opens no tag (tagStart) is the ordinary scan's
+  const opensTag = `strings.HasPrefix(src[pos:], ${J(el.tagOpen)})${el.tagStart ? ` && ${shared.elementFn('tagStart')}(src, pos + ${L})` : ''}`;
+  const entry = !operand ? `\t\tif ${opensTag} {\n${enter}\t\t}\n`
+    : !(el.head || sig) ? `\t\tif ${opensTag} && !prevIsValue() {\n${enter}\t\t}\n`
+    : `\t\tif ${opensTag}${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue() {
 \t\t\top := 0
 \t\t\t${sig ? 'if pos == specAt { op = 1; if specKeep { op = 0 }; specAt = -1 } else ' : ''}{ o, re := ${shared.elementFn('opens')}(src, pos); op = o; if re > laEnd { laEnd = re } }
 \t\t\tif op == 1 {

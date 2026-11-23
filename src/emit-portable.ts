@@ -28,6 +28,8 @@ import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils
 import { tokenPatternCharLoop, tokenPatternLiteralPrefix } from './token-pattern.ts';
 import { type TextUnits, firstUnit, oneUnit, unitLen } from './text-units.ts';
 import { scannedTokens, templateLiterals, tokenLiterals } from './lex-family.ts';
+import { info, oneChar } from './lex-match-plan.ts';
+import type { CodeRange } from './algo-ir.ts';
 
 // ── Intermediate representation (plain data; every Target renders THIS) ──
 
@@ -647,7 +649,12 @@ export type ElementPlan = {
   tagTokens: string[];        // tried in a tag (outside type arguments) before the ordinary scan
   // An open tag whose name is one of `tags` (ASCII case folded under `ignoreCase`) has a raw body:
   // one `token` up to tagOpen + closeMarker + name (or the end), lexed in a raw frame (kind 3).
-  rawText: { tags: string[]; token: string; ignoreCase: boolean }[];
+  // `unless`: a pattern tested at the body's first unit; when it matches the body is ordinary
+  // children (no raw frame). Exact-case declarations come first (the interpreter's lookup order).
+  rawText: { tags: string[]; token: string; ignoreCase: boolean; unless: TokenPattern | null }[];
+  // A tagOpen opens a tag (from code, in the children, after `=` in a tag) only when the unit
+  // after it is in these ranges (ASCII); null: always.
+  tagStart: CodeRange[] | null;
   // 'always': every tagOpen in code outside a tag opens an element (tagOpenOnlyOpensTags);
   // 'operand': only one where an operand may start, unless a veto below says otherwise.
   entry: 'always' | 'operand';
@@ -663,6 +670,15 @@ const JS_WS: TokenPattern = { type: 'charClass', negate: false, items: [
   ...Array.from({ length: 11 }, (_, i) => ({ type: 'char' as const, value: String.fromCharCode(0x2000 + i) })), ...['\u2028', '\u2029', '\u202f', '\u205f', '\u3000', '\ufeff'].map((value) => ({ type: 'char' as const, value })),
 ] };
 
+// A one-unit class as ASCII ranges: a unit beyond ASCII is more than one unit in a UTF-8 target,
+// so a class holding one has no one-unit test there (refused, not narrowed).
+function unitClassOf(p: TokenPattern, role: string): CodeRange[] {
+  if (!oneChar(p)) throw new Error(`portable: ${role}: must be a one-unit class`);
+  const rs = info(p).first;
+  if (rs.some(([, hi]) => hi > 127)) throw new Error(`portable: ${role}: a class beyond ASCII is out of scope (no one-unit test in a UTF-8 target)`);
+  return rs.map(([lo, hi]): CodeRange => [lo, hi]);
+}
+
 function elementPlanOf(grammar: CstGrammar, el: NonNullable<CstGrammar['elements']>, identToken: string | null): ElementPlan {
   const tok = (name: string, role: string): string => {
     if (!grammar.tokens.some((t) => t.name === name)) throw new Error(`portable: elements.${role}: no token named '${name}'`);
@@ -673,11 +689,9 @@ function elementPlanOf(grammar: CstGrammar, el: NonNullable<CstGrammar['elements
   const tp = el.typeParameters;
   if (always && tp) throw new Error(`portable: elements.typeParameters: this grammar uses '${el.tagOpen}' only to open tags`);
   // Not built in the portable lexers yet: refused, not lexed without them (docs/REGIONS.md, Owed).
-  if (el.tagStart) throw new Error('portable: elements.tagStart is out of scope until the portable lexers carry it');
   if (el.textTokens?.length) throw new Error('portable: elements.textTokens is out of scope until the portable lexers carry it');
   const dir = directivesOf(grammar, el);
   if (dir && (dir.openers.length || dir.continuations.length || dir.blocks.length)) throw new Error('portable: element directives are out of scope until the portable lexers carry them');
-  if (el.rawText?.some((r) => r.unlessBodyStarts)) throw new Error('portable: elements.rawText[].unlessBodyStarts is out of scope until the portable lexers carry it');
   // The signature's rewind restores the frame stack, not the raw-text tag records.
   if (tp?.signature && el.rawText?.length) throw new Error('portable: elements.rawText with typeParameters.signature is out of scope');
   let signature: ElementPlan['signature'] = null;
@@ -695,7 +709,9 @@ function elementPlanOf(grammar: CstGrammar, el: NonNullable<CstGrammar['elements
     text: el.text === undefined ? null : tok(el.text, 'text'),
     closeTag: tok(el.closeTag, 'closeTag'), selfClose: tok(el.selfClose, 'selfClose'),
     tagTokens: (el.tagTokens ?? []).map((n) => tok(n, 'tagTokens')),
-    rawText: (el.rawText ?? []).map((r) => ({ tags: [...r.tags], token: tok(r.token, 'rawText.token'), ignoreCase: !!r.ignoreCase })),
+    rawText: [...(el.rawText ?? [])].sort((a, b) => Number(!!a.ignoreCase) - Number(!!b.ignoreCase))
+      .map((r) => ({ tags: [...r.tags], token: tok(r.token, 'rawText.token'), ignoreCase: !!r.ignoreCase, unless: r.unlessBodyStarts ?? null })),
+    tagStart: el.tagStart === undefined ? null : unitClassOf(el.tagStart, 'elements.tagStart'),
     entry: always ? 'always' : 'operand',
     head: tp?.head ?? null,
     signature,

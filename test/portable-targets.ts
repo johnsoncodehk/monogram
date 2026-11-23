@@ -45,7 +45,9 @@ import { mutationCorpus } from './mutation-corpus.ts';
 import { CURATED_TS } from './emit-corpus.ts';
 import type { CstGrammar } from '../src/types.ts';
 
-type Case = { grammar: string; path: string; accept: string[]; reject: string[]; tsOnly?: boolean };
+// `parts`: the module's `textDialect(parts)` builds the grammar (a stage of the text dialect)
+// instead of its default export.
+type Case = { grammar: string; path: string; parts?: Record<string, boolean>; accept: string[]; reject: string[]; tsOnly?: boolean };
 // A for-head's no-`in` region (`exclude('in', Expr)`, a `suppress` step): it holds for the Pratt call
 // it wraps, a nested call (parentheses, arguments, an object, array or template, a function or arrow
 // block body) has `in` again, and every alternative of the head that fails inside or after it backs
@@ -1079,6 +1081,22 @@ const CASES: Case[] = [
     accept: ["<a k='v w' m=n'/>\n<b/>", "<a k=n'>{x}</a>", '<a k="s"><b/>{(y)\'}</a>\n{z\'}'],
     reject: ["<a k='v>", "<a k='v/>", "x'"],
   },
+  {
+    // the text dialect's tag start (`<` opens a tag only before a tagStart unit: in text any other
+    // is text, in code the operator) and raw text whose body condition (`unlessBodyStarts`) makes
+    // `<style>{a}</style>` an element with a hole (test/fixtures/textdialect.ts, without its text
+    // tokens and directives)
+    grammar: 'textdialect-tagstart', path: './fixtures/textdialect.ts', parts: { textTokens: false, directives: false },
+    accept: [
+      'component C(a) { <p>1 < 2 > 0</p>; <p>a<9 a <</p>; <p>< b</p>; }', 'component C(a) { <p>1<b/>2<>3</><{a}>x</{a}><_a/><$b/></p> }',
+      'component C(a) { const c = a <c; return <p>x</p>; }', 'component C(a) { <p>1 < 2 <b>x</b> a<9 <></> <{a}>y</{a}></p>; }',
+      'component C(a) { <p k={<b/>} m={a}/>; }',
+      'component C() { <style>.a { b: c } <i></style>; <style>{a}</style>; <style> \n\t{a}</style>; <style>x{a}</style> }',
+      'component C() { <style>/* c */{a}</style>; <style>  </style>; <script>{a}</script>; <SCRIPT>if (a<b) x</Script> }',
+      'component C() { <STYLE>{a}</STYLE>; <STYLE>.a</STYLE>; <style></style>; <style/>; <p><style>{a}</style></p> }',
+    ],
+    reject: ['component C(a) { const b = < p/>; }', 'component C(a) { const b = < 1; }', 'component C(a) { <a/> <b/> }', 'component C() { <style>{.a}</style> }', 'component C() { <style>.a{}', 'component C(a) { <p k=< b>x</p> }', 'component C(a) { <p k=<b/>/> }'],
+  },
 ];
 // The element-region grammars' cases may be run alone: PORTABLE_GRAMMARS=a,b (a development aid;
 // the gate runs every case).
@@ -1402,8 +1420,11 @@ const HOLE_EDIT_GRAMMARS = new Set(['javascript', 'typescript']);
 // Element regions share the frame stack: text, tags, holes, templates in holes, a type-parameter
 // signature decided by lexing its group (an edit can flip it), an attribute string, `</*` outside
 // elements, code children with directives and a dynamic tag (as test/incremental-grammars.ts).
+// the text dialect's (test/incremental-grammars.ts TEXT_INS)
+const TEXT_INS = ['{', '}', '<', '>', '/', ';', 'x', ' ', '\n', '9', '_', '.'];
 const FRAME_INS = ['`', '$', '{', '}', '(', ')', '<', '>', '/', ':', ',', '=', 'x', ' ', '\n', '"', "'", '\\'];
-const FRAME_EDIT_DOCS: Record<string, string[]> = {
+// A document is its text, or its text with the insertions it is edited with (FRAME_INS otherwise).
+const FRAME_EDIT_DOCS: Record<string, (string | { doc: string; ins: string[] })[]> = {
   typescriptreact: [
     "let a = <p>It's {x} 50%</p>;\nlet b = 1;",
     'f(<a b={c > d}><i/>t</a>, `x${<b>y</b>}`);',
@@ -1423,6 +1444,13 @@ const FRAME_EDIT_DOCS: Record<string, string[]> = {
     'component D() { <a><b>{1}</b><{t} id="d">"s"</{t}></a> }\ncomponent E() { "q" }',
     // a raw-text element: one body token up to its close tag; edits that break or make the close tag, an empty body
     'component S() { <a><style k="v">.a { b: "c" } <i></style>"t"</a> <style></style> }',
+  ],
+  // a tag start made or broken (`<` before a blank, a digit, `<`, a letter, `{`), a comparison
+  // next to an element, a `<style>` raw or not by the `{` after its open tag (as the
+  // interpreter's test/incremental-grammars.ts)
+  'textdialect-tagstart': [
+    { doc: 'component C(a) {\n  <p k="v">1 < 2 {a} <b/>x<9 <></></p>;\n  const z = a <b;\n  return <{a}>y</{a}>;\n}', ins: TEXT_INS },
+    { doc: 'component S() { <style>{a}</style>; <style> .x{}</style>; <script>a<b</script> }', ins: TEXT_INS },
   ],
 };
 // Edits whose relexed stream is known to differ from a fresh lex, each with its cause; the gate
@@ -1909,7 +1937,7 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
 let failures = 0;
 for (const c of CASES) {
   if (ONLY && !ONLY.includes(c.grammar)) continue;
-  const grammar: CstGrammar = (await import(c.path)).default;
+  const grammar: CstGrammar = c.parts ? (await import(c.path)).textDialect(c.parts) : (await import(c.path)).default;
   const oracle = createParser(grammar);
   const oracleOut = (src: string): Outcome => {
     try { return { ok: true, cst: canon(oracle.parse(src)) }; } catch (e) { return { ok: false, err: errText(e) }; }
@@ -2146,7 +2174,7 @@ for (const c of CASES) {
     // against a fresh lex and parse) holds. Exhaustive, not random: a random edit rarely lands
     // inside a hole, where the relex window must not restart.
     if (HOLE_EDIT_GRAMMARS.has(c.grammar) || FRAME_EDIT_DOCS[c.grammar]) {
-      const sessions = (HOLE_EDIT_GRAMMARS.has(c.grammar) ? [...HOLE_EDIT_DOCS.map((doc) => ({ doc, ins: undefined as string[] | undefined })), ...LOOK_EDIT_DOCS] : FRAME_EDIT_DOCS[c.grammar]!.map((doc) => ({ doc, ins: FRAME_INS })))
+      const sessions = (HOLE_EDIT_GRAMMARS.has(c.grammar) ? [...HOLE_EDIT_DOCS.map((doc) => ({ doc, ins: undefined as string[] | undefined })), ...LOOK_EDIT_DOCS] : FRAME_EDIT_DOCS[c.grammar]!.map((d) => (typeof d === 'string' ? { doc: d, ins: FRAME_INS } : d)))
         .flatMap(({ doc: init, ins }) => oneCharEdits(init, ins).map((e) => ({ init, e, final: init.slice(0, e[0]) + e[2] + init.slice(e[1]) })));
       const fresh = r.batch(sessions.map((x) => x.final));
       const bad: string[] = [];
