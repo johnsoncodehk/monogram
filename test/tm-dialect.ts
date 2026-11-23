@@ -113,10 +113,9 @@ const dialectSrc = [
   scopeRow('a directive region `{` in children is not an expression container', 'pass', undefined, g, src, '{', 6, s => !has('meta.embedded.expression')(s));
   scopeRow('control: an attribute hole `{` is an expression container', 'pass', undefined, g, src, '{', 4, has('meta.embedded.expression'));
   scopeRow('an element inside a directive region keeps tag scopes', 'pass', undefined, g, src, 'span', 0, s => inner(s).startsWith('entity.name.tag'));
-  const dyn = 'the tag-open pattern requires a name after `<`; the grammar\'s `TagName` arm `{ Expr }` is not read (item 6: rule-driven element patterns)';
-  scopeRow('dynamic tag `<{…}` opens a tag', 'xfail', dyn, g, src, '<{item.tag}', 0, s => inner(s).startsWith('punctuation.definition.tag.begin'));
-  scopeRow('attribute of a dynamic tag is an attribute name', 'xfail', dyn, g, src, 'id=', 0, s => inner(s).startsWith('entity.other.attribute-name'));
-  scopeRow('dynamic close tag `</{…}>` closes a tag', 'xfail', dyn, g, src, '</{item.tag}', 0, s => inner(s).startsWith('punctuation.definition.tag.begin'));
+  scopeRow('dynamic tag `<{…}` opens a tag', 'pass', undefined, g, src, '<{item.tag}', 0, s => inner(s).startsWith('punctuation.definition.tag.begin'));
+  scopeRow('attribute of a dynamic tag is an attribute name', 'pass', undefined, g, src, 'id=', 0, s => inner(s).startsWith('entity.other.attribute-name'));
+  scopeRow('dynamic close tag `</{…}>` closes a tag', 'pass', undefined, g, src, '</{item.tag}', 0, s => inner(s).startsWith('punctuation.definition.tag.begin'));
   scopeRow('`<style>` body is embedded CSS', 'xfail',
     'a token-stream grammar has no lexer region with an embed: the body is one token, and the JSX children patterns reach `<style>` first (item 6)',
     g, src, 'color', 0, has('source.css'));
