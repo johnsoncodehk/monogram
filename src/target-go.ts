@@ -193,7 +193,8 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: Aren
     // A `ctx` step's body is a boolean expression: no return path leaves between the two assignments.
     suppress: (set, cond) => `p.suppressNext = ${set}; _r := (${cond}); p.suppressNext = 0; return _r`,
     ctx: (ctx, cond) => `_c := p.ctx; p.ctx = ${ctx}; _r := (${cond}); p.ctx = _c; return _r`,
-    branch: (cond) => (f === 'R' ? branchGoR(cond) : f === 'W' ? branchGoW(cond, recv) : branchGo(cond)),
+    // A branch that fails clean (Step.clean) has nothing to undo: no frame.
+    branch: (cond, clean) => (clean ? `{ if ${cond} { return true } }` : f === 'R' ? branchGoR(cond) : f === 'W' ? branchGoW(cond, recv) : branchGo(cond)),
     guarded: (first, branch) => `if _ft != nil && ${firstCond(first, '_ft', ids)} ${branch}`,
     choice: (peek, tries) => `${peek ? `_ft := p.${e.peek}(); ` : ''}${tries.join('; ')}; return false`,
     // Same-line `} else if`: newlines break Go ASI.
@@ -1323,11 +1324,11 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
 \t\tif operand >= 0 && ${beatsGo(d, 'p.pos', i)} { p.scratch = append(p.scratch, operand); best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, 'pbp.form', true, false)} } else { ${lost} }
 \t\tp.back(save)
 \t}`,
-    ledArm: (_i, cond, form, closes, exit) => `{
-\t\t\tledSave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
+    ledArm: (_i, cond, form, closes, exit, clean) => `{
+\t\t\tledSave := p.pos; sb := len(p.scratch)${clean ? '' : '; nb := len(p.nodes); kb := len(p.kids)'}
 \t\t\tp.scratch = append(p.scratch, left)
 \t\t\tif ${cond} { left = ${fin}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
-\t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]${exit ? '; break LedLoop' : ''}
+\t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]${clean ? '' : '; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]'}${exit ? '; break LedLoop' : ''}
 \t\t}`,
     postfixToks: (kids) => `\t\tswitch t.Kid {
 ${kids.map((k) => `\t\tcase ${k}:
@@ -1984,11 +1985,11 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
 \t\tif ook && ${beatsGo(d, 'p.pos', i)} { if operand.present { p.scratch = append(p.scratch, operand.h) }; best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, 'pbp.form', true, false)} } else { ${lost} }
 \t\tp.back(save)
 \t}`,
-    ledArm: (_i, cond, form, closes, exit) => `{
-\t\t\tledSave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
+    ledArm: (_i, cond, form, closes, exit, clean) => `{
+\t\t\tledSave := p.pos; sb := len(p.scratch)${clean ? '' : `; ${arenaCkpt()}`}
 \t\t\tp.scratch = append(p.scratch, left.h)
 \t\t\tif ${cond} { left = ${fin}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
-\t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]; ${arenaRestore()}${exit ? '; break LedLoop' : ''}
+\t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]${clean ? '' : `; ${arenaRestore()}`}${exit ? '; break LedLoop' : ''}
 \t\t}`,
     postfixToks: (kids) => `\t\tswitch t.Kid {
 ${kids.map((k) => `\t\tcase ${k}:

@@ -101,7 +101,8 @@ const ckptRs = (p: string) => `let m = ${p}.mark();`;
 const undoRs = (p: string) => `${p}.reset(m);`;
 // BRANCH frame: one branch of an ordered choice (`alt`), over `p`: it returns true from the
 // choice when the branch matched, and undoes it when it did not (recognized, `r`: the position only).
-const branchRs = (cond: string, r = false) => r
+// A branch that fails clean (Step.clean) has nothing to undo: no frame.
+const branchRs = (cond: string, r = false, clean = false) => clean ? `{ if ${cond} { return true; } }` : r
   ? `{ let sp = p.pos; if ${cond} { return true; } p.back(sp); }`
   : `{ ${ckptRs('p')} if ${cond} { return true; } ${undoRs('p')} }`;
 // CANDIDATE frame: one candidate of a longest-match list (an rd rule's alternatives, a Pratt
@@ -1130,7 +1131,7 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
     suppress: (set, cond) => `{ ${recv}.suppress_next = ${set}; let _r = (${cond}); ${recv}.suppress_next = 0; _r }`,
     // The body is a boolean expression (no `?`, no return), so the context is put back on either outcome.
     ctx: (ctx, cond) => `{ let _c = ${recv}.ctx; ${recv}.ctx = ${ctx}; let _r = (${cond}); ${recv}.ctx = _c; _r }`,
-    branch: (cond) => branchRs(cond, r),
+    branch: (cond, clean) => branchRs(cond, r, clean),
     guarded: (first, branch) => `if let Some(t) = _ft { if ${firstCond(first, 't', ids)} ${branch} }`,
     choice: (peek, tries) => `${peek ? `let _ft = ${recv}.peek(); ` : ''}${tries.join(' ')} false`,
     // FIRST dispatch; restore pos/scratch/builder on arm half-failure (like a choice).
@@ -1392,11 +1393,11 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
       notSuppressed: (set) => `self.suppress_cur != ${set}`,
       ifAll: (parts) => (parts.length ? `if ${parts.join(' && ')} ` : ''),
     },
-    ledArm: (_i, cond, form, closes, exit) => `{
-                let led_save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
+    ledArm: (_i, cond, form, closes, exit, clean) => `{
+                let led_save = self.pos; let sb = self.scratch.len();${clean ? '' : ' let ck = self.b.checkpoint();'}
                 self.scratch.push(left.h);
                 if ${cond} { left = ${fin}; form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
-                self.back(led_save); self.scratch.truncate(sb); self.b.restore(ck);${exit ? ' break;' : ''}
+                self.back(led_save); self.scratch.truncate(sb);${clean ? '' : ' self.b.restore(ck);'}${exit ? ' break;' : ''}
             }`,
     ledSwitch: (cases) => `            match t.lid {
 ${cases.map((c) => `                ${c.key} => {\n${c.arms.map((a) => `                ${a}`).join('\n')}\n                }`).join('\n')}

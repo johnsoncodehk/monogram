@@ -119,7 +119,7 @@ type StepOp =
   | { t: 'opt'; steps: Step[]; guard?: number; clean?: true; share?: number }                 // optional sub-sequence
   | { t: 'sep'; elem: Step; delim: string; guard?: number; clean?: true; share?: number }     // elem (delim elem)*
   | { t: 'altlit'; opts: Lit[] }                                // inline alternation of literals (fast path)
-  | { t: 'alt'; branches: Step[][]; branchNames?: string[]; firsts?: FirstSig[]; predictive?: boolean; share?: number }            // inline alternation of sub-sequences (backtracking unless predictive)
+  | { t: 'alt'; branches: Step[][]; branchNames?: string[]; firsts?: FirstSig[]; predictive?: boolean; clean?: boolean[]; share?: number }            // inline alternation of sub-sequences (backtracking unless predictive); clean: parallel to branches, the branch fails clean (Step.clean) so its frame takes no mark
   | { t: 'look'; id: number; is: boolean }                     // zero-width: whether ParserIR.lookaheads[id] matches here (is) or does not (!is)
   | { t: 'ahead'; set: number; is: boolean }                    // zero-width: whether the next token is (is) or is not (!is) in ParserIR.tokenSets[set]
   | { t: 'aheadCtx'; set: number; is: boolean }                 // zero-width: the `ahead` test of tokenSets[set] plus the operator words of the context in force (ParserIR.ctxWords)
@@ -460,6 +460,7 @@ export type PrattRule = {
   ledSuppressedIn: number[][];                        // parallel to leds: the ParserIR.suppressSets that hold its connector — the led is tried only while the set in force is none of them
   ledForm: AssignForm[];                              // parallel to leds: the built node's form (a binary-connector led, `a < T >`/`a as T`, is not a target)
   ledClosesTail: boolean[];                           // parallel to leds: not an access tail, or ends in a negative lookahead (`Foo<T>` then nothing)
+  ledClean: boolean[];                                // parallel to leds: its steps after the connector fail clean (Step.clean), so a failed attempt has built no node: its block undoes the position and the scratch list only, with no builder checkpoint
   postfixToks: string[];                              // LED: a postfix token `$ X` (e.g. a tagged template), tried like a mixfix led (also an access tail)
   postfixTokNames: string[];                          // parallel to postfixToks: each arm's name
   // The names of the synthesized operator forms (a prefix / binary / postfix node); null when the
@@ -1130,6 +1131,11 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
     }
   };
   const listFailsClean = (steps: Step[]): boolean => steps.length > 0 && steps.slice(0, -1).every(zeroWidth) && failsClean(steps[steps.length - 1]!);
+  // A list that may be empty: an empty one cannot fail. What a frame reads that has already undone
+  // the rest itself: a BRANCH frame's branch (an empty branch matches), a led arm's steps after its
+  // connector (the connector's token is the led's key; the block puts the position and the scratch
+  // list back on its own, so only a node built and then abandoned would need the builder's checkpoint).
+  const restFailsClean = (steps: Step[]): boolean => steps.length === 0 || listFailsClean(steps);
   const annotateSteps = (steps: Step[]): void => {
     for (const s of steps) {
       if (s.t === 'star') { annotateSteps([s.step]); const g = bodyGuard([s.step]); if (g !== undefined) s.guard = g; if (failsClean(s.step)) s.clean = true; }
@@ -1140,6 +1146,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
         s.firsts = s.branches.map((b) => seqFirst(b));
         s.predictive = allDisjoint(s.firsts);
         s.branches.forEach(annotateSteps);
+        s.clean = s.branches.map(restFailsClean);
       }
     }
   };
@@ -1155,6 +1162,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
       r.nudCapped.forEach((c) => annotateSteps(c.steps));
       r.nudBrackets.forEach((b) => annotateSteps(b.steps));
       r.leds.forEach((b) => annotateSteps(b.steps));
+      r.ledClean = r.leds.map((b) => restFailsClean(b.steps.slice(1)));
       r.ledSuppressedIn = r.leds.map((b) => a.suppressedIn(b.first));
     }
   }
@@ -1297,7 +1305,7 @@ export type StepLowering = {
   ret(cond: string): string;                     // statements returning cond
   suppress(set: number, cond: string): string;   // statements: cond with ParserIR.suppressSets[set] staged for the next Pratt call
   ctx(ctx: Ctx, cond: string): string;           // statements: cond in context ctx, the one in force put back after
-  branch(cond: string): string;                  // a BRANCH frame: returns true when cond matched, else undoes it
+  branch(cond: string, clean: boolean): string;  // a BRANCH frame: returns true when cond matched, else undoes it (clean: the branch fails clean, so there is nothing to undo and no mark)
   guarded(first: NonNullable<FirstSig>, branch: string): string;   // the branch, tried only when the next token is in first
   choice(peek: boolean, tries: string[]): string;                  // the tries in order, then false; peek: a guard reads the next token
   predictive(arms: { first: NonNullable<FirstSig>; branch: string }[]): string;   // the one arm the next token selects, else false
@@ -1334,11 +1342,12 @@ export function stepBody(s: Step, L: StepLowering): string {
 export function stepStmts(s: Step, L: StepLowering): string {
   switch (s.t) {
     case 'alt': {
-      if (s.predictive) return L.predictive(s.branches.map((br, i) => ({ first: s.firsts![i]!, branch: L.branch(conjOf(br, L)) })));
+      const clean = (i: number) => s.clean?.[i] === true;
+      if (s.predictive) return L.predictive(s.branches.map((br, i) => ({ first: s.firsts![i]!, branch: L.branch(conjOf(br, L), clean(i)) })));
       const firsts = s.firsts ?? [];
       const n = s.branches.length;
       const tries = s.branches.map((br, i) => {
-        const b = L.branch(conjOf(br, L));
+        const b = L.branch(conjOf(br, L), clean(i));
         const f = firsts[i] ?? null;
         return isFirstGuardable(f, n) ? L.guarded(f, b) : b;
       });
@@ -1567,7 +1576,7 @@ export type PrattLowering = {
   nudPrefix(i: number): string;                  // the prefix-operator arm
   dispatch: DispatchLowering;
   led: LedGuardLowering;
-  ledArm(i: number, cond: string, form: AssignForm, closesTail: boolean, exit: boolean): string;  // led i's block: its node over the left operand, else undone (and the loop left when exit)
+  ledArm(i: number, cond: string, form: AssignForm, closesTail: boolean, exit: boolean, clean: boolean): string;  // led i's block: its node over the left operand, else undone (and the loop left when exit; clean: PrattRule.ledClean, no builder checkpoint)
   ledSwitch(cases: { key: number; arms: string[] }[]): string;      // the led groups, by the token's lid
   postfixToks(kids: number[]): string;           // the postfix tokens, by the token's kid
   postfixTpl(hole: string): string;              // the postfix interpolated template
@@ -1634,7 +1643,7 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
   const leds = r.leds.length === 0 ? '' : L.ledSwitch(groupByPreserveOrder(r.leds, (b) => lidOf(ids, b.first)).map((g) => {
     const lid = g.key as number;
     return { key: lid, arms: g.members.map(({ item: b, index: i }, j) =>
-      `${ledIf(i)}${L.ledArm(i, cond(b.steps), r.ledForm[i]!, r.ledClosesTail[i]!, exits.has(lid) && j === g.members.length - 1)}`) };
+      `${ledIf(i)}${L.ledArm(i, cond(b.steps), r.ledForm[i]!, r.ledClosesTail[i]!, exits.has(lid) && j === g.members.length - 1, r.ledClean[i]!)}`) };
   }));
   const postToks = r.postfixToks.length === 0 ? ''
     : L.postfixToks(groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok)).map((g) => g.key as number)) + (r.postfixTplHole !== undefined ? L.postfixTpl(r.postfixTplHole) : '');
@@ -2070,7 +2079,7 @@ function buildPratt(
       case 'prefix': return null;
     }
   }));
-  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, nudSeqGuard, nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedGuard, nudOrder, nudNames, nudDispatch, prefix, binary, leds, ledNames, ledLeftNames, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledSuppressedIn: [], ledForm, ledClosesTail, postfixToks, postfixTokNames, postfix, postfixSameLine, opNames: names.ops ?? null, ...(nudTplHole !== undefined ? { nudTplHole } : {}), ...(postfixTplHole !== undefined ? { postfixTplHole } : {}) };
+  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, nudSeqGuard, nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedGuard, nudOrder, nudNames, nudDispatch, prefix, binary, leds, ledNames, ledLeftNames, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledSuppressedIn: [], ledForm, ledClosesTail, ledClean: [], postfixToks, postfixTokNames, postfix, postfixSameLine, opNames: names.ops ?? null, ...(nudTplHole !== undefined ? { nudTplHole } : {}), ...(postfixTplHole !== undefined ? { postfixTplHole } : {}) };
 }
 
 // ── Lex integer ids (kid = kind index, lid = text/literal index) ──

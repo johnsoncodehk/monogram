@@ -687,7 +687,8 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
     ret: (cond) => `return ${cond};`,
     suppress: (set, cond) => `_suppressNext = ${set}; const _r = (${cond}); _suppressNext = 0; return _r;`,
     ctx: (ctx, cond) => `const _c = _ctx; _ctx = ${ctx}; const _r = (${cond}); _ctx = _c; return _r;`,
-    branch: (cond) => branchTs(cond, m),
+    // A branch that fails clean (Step.clean) has nothing to undo: no frame.
+    branch: (cond, clean) => (clean ? `{ if (${cond}) return true; }` : branchTs(cond, m)),
     guarded: (first, branch) => `if (_ft !== null && ${firstCond(first, '_ft', ids)}) ${branch}`,
     choice: (peek, tries) => `${peek ? 'const _ft = peek(); ' : ''}${tries.join(' ')} return false;`,
     predictive: (arms) => `const t = peek(); if (t === null) return false; ${arms.map((a) => `if (${firstCond(a.first, 't', ids)}) ${a.branch}`).join(' else ')} return false;`,
