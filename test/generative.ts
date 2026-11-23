@@ -18,6 +18,9 @@
 //       incl. punctuation) so a `-` mis-painted as string is caught — the exact blind
 //       spot that hid #24 from the role-graded scope-gap metric.
 //
+//   HTML SITES (runHtmlSites, with html) — the self-close `/` site matrix against parse5 (see
+//       that section).
+//
 //  Coverage is grammar×bound, not a fixed corpus — so it surfaces the depth-bug CLASS
 //  without anyone naming the shape (the motivation for #25). The named regressions
 //  (yaml-sites.ts, *-issue-cases.ts) stay — generation replaces their
@@ -30,6 +33,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import vsctm from 'vscode-textmate';
 import onig from 'vscode-oniguruma';
+import { parseFragment } from 'parse5';
 import { createParser, type CstNode } from '../src/gen-parser.ts';
 import type { CstGrammar } from '../src/types.ts';
 import { generateInputs, type GenInput } from './grammar-gen.ts';
@@ -210,14 +214,92 @@ async function runLang(cfg: LangCfg): Promise<{ name: string; ok: boolean; viola
   return { name: cfg.name, ok: gated.length === 0 && enoughLegal && missing.length === 0, violations: gated.length, reason };
 }
 
+// ── HTML: the self-close `/` sites ───────────────────────────
+// SELF-CLOSE SITES — in a flat markup grammar the attribute VALUE context decides where a value ends,
+// and a `/` GLUED right after the value is EITHER the tag's self-close punctuation (`<A A=""/>`: the value
+// ended at the quote) OR content of an UNQUOTED value (`<a href=x/>`: WHATWG lets `/` sit in an unquoted
+// value). A bug is a `/` whose context mis-classifies it (html.tmbundle#118/#124/#140360; generation
+// found it, fe4afc0). Each {value shape × element class} is realised as a minimal element (the
+// delimiters, self-close marker, quotes and the void class read from `grammar.markup`); the NEUTRAL
+// ORACLE parse5 says whether the `/` lies inside an attribute value's source span (→ must stay
+// `string.unquoted`) or outside every value span (→ must read tag punctuation).
+async function runHtmlSites(): Promise<{ name: string; ok: boolean; violations: number; reason: string }> {
+  const cfg = LANGS.find((l) => l.name === 'html')!;
+  const grammar = (await import(cfg.module)).default as CstGrammar;
+  const m = grammar.markup!;
+  const failsAt: string[] = [];
+  const tm = (await loadTm(cfg.scopeName, { [cfg.scopeName]: 'html.tmLanguage.json' }))!;
+  const innerAt = (toks: TmTok[], pos: number): string => {
+    const t = toks.find((x) => x.start <= pos && pos < x.end);
+    const s = t ? t.scopes : [];
+    return (s.length ? s[s.length - 1] : '(none)').replace(/\.html$/, '');
+  };
+  // parse5: the source offsets INSIDE an attribute VALUE span (normalised to exactly the run the parser
+  // keeps as the value: `href=x/` includes the `/`, `A="x"` does not)
+  const valueOffsets = (html: string): Set<number> => {
+    const inside = new Set<number>();
+    let doc: any;
+    try { doc = parseFragment(html, { sourceCodeLocationInfo: true }); } catch { return inside; }
+    const visit = (n: any): void => {
+      const loc = n.sourceCodeLocation;
+      if (n.tagName && loc?.startTag) {
+        const attrLocs = loc.startTag.attrs ?? {};
+        for (const a of n.attrs ?? []) {
+          const al = attrLocs[a.name] ?? attrLocs[a.name.toLowerCase()];
+          if (!al) continue;
+          const seg = html.slice(al.startOffset, al.endOffset);
+          const eq = seg.indexOf('=');
+          if (eq < 0) continue;                         // boolean attr — no value
+          let v = al.startOffset + eq + 1;
+          while (v < al.endOffset && /\s/.test(html[v])) v++;
+          let lo = v, hi = al.endOffset;
+          if (html[lo] === '"' || html[lo] === "'") { lo++; hi--; }
+          for (let i = lo; i < hi; i++) inside.add(i);
+        }
+      }
+      for (const c of n.childNodes ?? []) visit(c);
+    };
+    for (const c of doc.childNodes ?? []) visit(c);
+    return inside;
+  };
+  const SLASH = m.closeMarker ?? '/';
+  const quotes = m.attributeQuotes ?? ['"', "'"];
+  const dq = quotes[0] ?? '"', sq = quotes.find((q) => q !== dq) ?? dq;
+  const elements = [{ kind: 'void', tag: (m.voidTags ?? [])[0] ?? 'input' }, { kind: 'non-void', tag: 'A' }, { kind: 'svg', tag: 'svg' }, { kind: 'custom', tag: 'my-el' }];
+  const shapes: { name: string; make: (t: string) => string }[] = [
+    { name: 'quoted-empty', make: (t) => `<${t} a=${dq}${dq}${SLASH}>` },
+    { name: 'quoted-value', make: (t) => `<${t} a=${dq}x${dq}${SLASH}>` },
+    { name: 'single-quoted', make: (t) => `<${t} a=${sq}x${sq}${SLASH}>` },
+    { name: 'unquoted-value', make: (t) => `<${t} a=x${SLASH}>` },
+    { name: 'bare', make: (t) => `<${t}${SLASH}>` },
+    { name: 'after-space', make: (t) => `<${t} a=${dq}x${dq} ${SLASH}>` },
+    { name: 'directive-value', make: (t) => `<${t} a=${dq}x${dq} b=${dq}${dq}${SLASH}>` },  // the glued `/` after the 2nd close-quote
+    { name: 'multi-line', make: (t) => `<${t}\na=${dq}${dq}${SLASH}>` },
+  ];
+  let cells = 0;
+  for (const sh of shapes) for (const el of elements) {
+    const input = sh.make(el.tag);
+    const focus = input.lastIndexOf(SLASH, input.lastIndexOf(m.tagClose));   // the `/` right before the closing `>`
+    if (focus < 0) continue;
+    cells++;
+    const wantStr = valueOffsets(input).has(focus);
+    const got = innerAt(tmTokenize(tm, input), focus);
+    if (!(wantStr ? got.startsWith('string.unquoted') : got.startsWith('punctuation.definition.tag'))) failsAt.push(`self-close ${sh.name} × ${el.kind} ${JSON.stringify(input)}: want ${wantStr ? 'string.unquoted' : 'punctuation.definition.tag'}, got ${got}`);
+  }
+  console.log(`\n── html sites ──  ${cells} self-close cells vs parse5 · ${failsAt.length} wrong`);
+  for (const f of failsAt) console.log(`    ✗ ${f}`);
+  return { name: 'html sites', ok: failsAt.length === 0, violations: failsAt.length, reason: `${failsAt.length} wrong` };
+}
+
 const only = process.argv[2];
 const targets = only ? LANGS.filter((l) => l.name === only || (only === 'tsfamily' && /script/.test(l.name))) : LANGS;
 if (!targets.length) { console.error(`unknown language: ${only}`); process.exit(1); }
 console.log('Generative consistency — grammar-derived inputs, by-construction round-trip + scope≡role');
 const results = [];
 for (const cfg of targets) results.push(await runLang(cfg));
+if (targets.some((l) => l.name === 'html')) results.push(await runHtmlSites());
 const bad = results.filter((r) => !r.ok);
 console.log(`\n${'='.repeat(70)}`);
-console.log(`  ${results.length - bad.length}/${results.length} languages consistent` + (bad.length ? `  — FAILED: ${bad.map((b) => `${b.name} (${b.reason})`).join(', ')}` : ''));
+console.log(`  ${results.length - bad.length}/${results.length} languages (+ html sites) consistent` + (bad.length ? `  — FAILED: ${bad.map((b) => `${b.name} (${b.reason})`).join(', ')}` : ''));
 if (bad.length) { console.error('\nGENERATIVE GATE FAILED — a scope≡role inconsistency (flat highlighter ≠ parser) or too small a legal corpus.'); process.exit(1); }
 console.log('\nDone.');
