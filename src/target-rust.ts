@@ -5500,7 +5500,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
     hasAt: (cx, s, i, lit) => cx.atom(`${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}..].starts_with(${J(lit)}.as_bytes())`, 'bool', 'bool'),
     inSet: (cx, set, c, cold) => {
       if (!cold) return cx.atom(`${set.toUpperCase()}[${cx.coerce(c, 'usize')}]`, 'bool', 'bool');
-      const u = cx.coerce(c, 'usize');
+      const u = `(${cx.coerce(c, 'usize')})`; // `c as usize < 128` would read `<` as generic arguments
       return cx.atom(`(${u} < 128 && ${set.toUpperCase()}[${u} >> 6] >> (${u} & 63) & 1 != 0)`, 'bool', 'bool');
     },
     runEnd: (cx, set, s, i) => cx.atom(`lex_run_end(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')}, &${set.toUpperCase()})`, 'int', 'usize'),
