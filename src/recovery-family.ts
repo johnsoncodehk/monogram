@@ -396,12 +396,14 @@ const riOp = method('riOp', [['tb', 'int'], ['w', 'int'], ['lid', 'int']], ['int
   while_(lt(v('i'), T(v('tb'))), [if_(eq(T(v('x')), v('lid')), [ret(v('x'))]), inc('x', v('w')), inc('i')]),
   ret(n(-1)),
 ]);
-// A NUD arm tried from `save` (its children from height c, mark k): riCand.
-const nudCand = (ok: Expr, form: Expr, tail: Expr, capped: Expr): Stmt[] => [
+// A NUD arm tried from `save` (its children from height c, mark k): riCand. fromTail: the arm's
+// node takes the capped flag its trailing operand left (PrattRule.nudSeqCapsFromTail), when true.
+const nudCand = (ok: Expr, form: Expr, tail: Expr, capped: Expr, fromTail?: Expr): Stmt[] => [
   let_('c', call('enSh')),
   let_('k', call('enMark')),
   let_('ok', ok, 'bool'),
-  run('riCand', v('r'), v('sb'), v('save'), v('c'), v('k'), v('ok'), form, tail, capped, v('best')),
+  ...(fromTail === undefined ? [] : [let_('cp', capped), if_(and(fromTail, ne(call('enSt', n(ST_CAPPED)), n(0))), [set('cp', n(1))])]),
+  run('riCand', v('r'), v('sb'), v('save'), v('c'), v('k'), v('ok'), form, tail, fromTail === undefined ? capped : v('cp'), v('best')),
 ];
 // The NUD: every arm a candidate of a longest match. It returns whether one matched and the
 // offset of its node, and leaves the node's capped flag, form and tail in the engine.
@@ -444,15 +446,17 @@ const riNud = method('riNud', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], [
         inc('x', n(1)),
       ], [
         if_(eq(v('tag'), n(REC_N_BRACKET)), [
-          if_(eq(v('lid'), at(v('x'), 1)), nudCand(call('riList', atR(v('x'), 2), v('d')), n(0), at(v('x'), 3), n(0))),
+          if_(eq(v('lid'), at(v('x'), 1)), nudCand(call('riList', atR(v('x'), 2), v('d')), n(0), at(v('x'), 3), n(0), isT(v('x'), 4))),
+          inc('x', n(5)),
         ]),
         if_(eq(v('tag'), n(REC_N_SEQ)), [
-          if_(call('riGuard', atR(v('x'), 1)), nudCand(call('riList', atR(v('x'), 2), v('d')), n(0), at(v('x'), 3), n(0))),
+          if_(call('riGuard', atR(v('x'), 1)), nudCand(call('riList', atR(v('x'), 2), v('d')), n(0), at(v('x'), 3), n(0), isT(v('x'), 4))),
+          inc('x', n(5)),
         ]),
         if_(eq(v('tag'), n(REC_N_CAPPED)), [
           if_(and(lt(v('minBp'), at(v('x'), 3)), call('riGuard', atR(v('x'), 1))), nudCand(call('riList', atR(v('x'), 2), v('d')), n(0), n(0), n(1))),
+          inc('x', n(4)),
         ]),
-        inc('x', n(4)),
       ]),
     ]),
     inc('i'),
@@ -469,11 +473,18 @@ const ledOk = (x: Expr): Expr => and(
   not(and(isT(x, 4), eq(v('tc'), n(1)))),
   or(lt(at(x, 2), n(0)), gt(at(x, 2), v('minBp'))),
   not(and(isT(x, 3), v('nl'))),
-  or(lt(at(x, 7), n(0)), not(call('riIn', atR(x, 7), v('head')))),
-  not(call('riIn', add(x, n(9)), v('sup'))),
+  or(lt(at(x, 8), n(0)), not(call('riIn', atR(x, 8), v('head')))),
+  not(call('riIn', add(x, n(10)), v('sup'))),
 );
 const finLed = (form: Expr): Stmt[] => [
   run('enFinLed', v('r'), v('sb'), v('leftOff'), v('start')), set('leftOff', call('enFinOff')), set('hl', call('enSh')), set('fm', form), set('prog', tru),
+];
+// The led at record x matched: its node; capped by its trailing operand (capsFromTail), it returns
+// at once, still capped (PrattLowering.ledArm); else the tail closes when the led closes it.
+const ledWon: Stmt[] = [
+  ...finLed(at(v('x'), 7)),
+  if_(and(isT(v('x'), 6), ne(call('enSt', n(ST_CAPPED)), n(0))), [run('enSetSt', n(ST_FORM), v('fm')), ret(tru)]),
+  if_(isT(v('x'), 5), [set('tc', n(1))]),
 ];
 // `rebind`: the grammar has a re-bind (rebind-family.ts), which a led tries where its match failed.
 const riBpOf = (rebind: boolean): Fn => method('riBp', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d', 'int']], ['bool'], [
@@ -501,16 +512,15 @@ const riBpOf = (rebind: boolean): Fn => method('riBp', [['r', 'int'], ['rec', 'i
         let_('k', call('enMark')),
         if_(call('riList', atR(v('x'), 1), v('d')), [
           run('enUnmark', v('k')),
-          ...finLed(at(v('x'), 6)),
-          if_(isT(v('x'), 5), [set('tc', n(1))]),
+          ...ledWon,
         ], [
           run('enReset', v('k')), run('enUnmark', v('k')),
-          ...(rebind ? [if_(ge(at(v('x'), 8), n(0)), [
-            if_(call('riRbScan', v('x'), at(v('x'), 8), v('d')), [...finLed(at(v('x'), 6)), if_(isT(v('x'), 5), [set('tc', n(1))])]),
+          ...(rebind ? [if_(ge(at(v('x'), 9), n(0)), [
+            if_(call('riRbScan', v('x'), at(v('x'), 9), v('d')), ledWon),
           ])] : []),
         ]),
       ]),
-      inc('x', add(n(10), at(v('x'), 9))),
+      inc('x', add(n(11), at(v('x'), 10))),
       inc('j'),
     ]),
     if_(and(not(v('prog')), eq(v('tc'), n(0)), call('riIn', sec(P_POST_TOK), v('kid'))), [run('enLeafKid'), ...finLed(n(0))]),

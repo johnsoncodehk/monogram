@@ -24,10 +24,18 @@ export type Case = { grammar: string; path: string; parts?: Record<string, boole
 // Cap propagation (the interpreter's, gen-parser.ts): an ArrowFunction is an AssignmentExpression,
 // so it admits no operator after it, and an operator whose right operand is an arrow admits none
 // either (`x = () => {} || a` is no derivation); a parenthesized or nested arrow (an argument, an
-// element) does not cap what holds it. Each verdict is the productions'.
+// element) does not cap what holds it. Each verdict is the productions'. The cap also passes up
+// through any construct whose rightmost child is the arrow as a full operand: the conditional's
+// last branch, a spread (`ConditionalExpression : … ? AssignmentExpression : AssignmentExpression`,
+// `SpreadElement : ... AssignmentExpression`), so `a ? b : () => {} || x` is no derivation, and
+// after a line break the `+` begins the next statement. tsc rejects each reject; acorn accepts
+// `a ? b : () => {} ? c : d` (its defect: the arrow is the conditional's last AssignmentExpression).
 const CAP_PROPAGATION = {
-  accept: ['x = (() => {}) || a;', 'x = f(() => {}) || a;', 'x = a || f(() => {}) || c;', 'x = [() => {}] || a;', 'x = a ? () => {} : b || c;', 'x = () => {}, y;'],
-  reject: ['x = () => {} || a;', 'x = y => {} || a;', 'x = async () => {} || a;', 'x = () => {} ? a : b;', 'b = a = () => {} || c;'],
+  accept: ['x = (() => {}) || a;', 'x = f(() => {}) || a;', 'x = a || f(() => {}) || c;', 'x = [() => {}] || a;', 'x = a ? () => {} : b || c;', 'x = () => {}, y;',
+    'a ? b : () => {};', 'x = a ? b : () => {}, y;', 'x = a ? b : c => d || e;', '[...() => {}];', 'a ? b : () => {}\n+x;', 'function* g() { a ? b : yield; }'],
+  reject: ['x = () => {} || a;', 'x = y => {} || a;', 'x = async () => {} || a;', 'x = () => {} ? a : b;', 'b = a = () => {} || c;',
+    'a ? b : () => {} || x;', 'a ? b : () => {} ? c : d;', 'x = a ? b : c ? d : () => {} || e;', '[...() => {} || x];', 'f(...() => {} || x);',
+    'function* g() { a ? b : yield || x; }'],
 };
 // The mixfix operand re-bind (the interpreter's matchMixfixLed, PrattRule.ledRebind): a led
 // `<L1> $ <L2> …` whose greedy operand took the L2 it needs is retried with the operand capped at
@@ -39,8 +47,9 @@ const REBIND = {
   ts: {
     accept: ['type X<T> = T extends infer U extends string ? U : never;', 'type X<T> = T extends (infer U extends number ? 1 : 0) ? U : never;',
       'type C<T> = T extends number ? if : "o";', 'type C<T> = T extends number[] ? if : "o";', 'let v = b ? (c) : d => e;', 'let v = a ? (b) => (c): d => e;',
-      'let v = x ? y => ({ y }) : z => ({ z });', 'let v = a ? b ? c : (d) : e => f;', 'let v = a ? (b) : c => (d) : e => f;'],
-    reject: ['type X<T> = T extends infer U extends string ? U;', 'type X<T> = T extends infer U extends string ? : never;', 'let v = b ? (c) : d =>;'],
+      'let v = x ? y => ({ y }) : z => ({ z });', 'let v = a ? b ? c : (d) : e => f;', 'let v = a ? (b) : c => (d) : e => f;', 'let v = a ? (b) : c => {};'],
+    // The last: the re-bound conditional ends in a block-bodied arrow, so it is capped (CAP_PROPAGATION).
+    reject: ['type X<T> = T extends infer U extends string ? U;', 'type X<T> = T extends infer U extends string ? : never;', 'let v = b ? (c) : d =>;', 'let v = a ? (b) : c => {} || x;'],
   },
 };
 const NO_IN_HEADS = {
@@ -656,6 +665,8 @@ export const CASES: Case[] = [
     reject: ['function (', 'a +;', 'if x {}', '{ a: }', 'for (;;', 'a ? b ;',
       '{ a: 1 }.x;', '{} .b;', '{}\n.b;', '{} = b;', '{ function () {} }', 'if (a) {} = b;', 'L: {}.x;', 'do {}\n(x)\nwhile (y)',
       '@dec class {}.x;', '@dec class C {}.x;', 'class C {}.name;', 'let[0] = 1;', '(async\nfunction f() {});',
+      // a HashbangComment begins the text only (start()), never a later line
+      '//\n#!x', 'a;\n#!x',
       ...JS_DECORATORS.reject, ...JS_MODULES.reject, ...TRY_STATEMENTS.reject,
       // ... so no parameter list takes a reserved word as a name, `this` included (a `this`
       // parameter is TypeScript's).
