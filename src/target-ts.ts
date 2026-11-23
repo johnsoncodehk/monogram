@@ -3405,7 +3405,8 @@ export function parse(src: string): ShapeValue | null {
   _src = src;
   toks = lex(src);
   const root = runW(_shapeBuilder);
-  return root === null ? null : _need(root);
+  if (root instanceof _Missing) throw new ShapeMissing(root.where, root.why);
+  return root;
 }
 ${shapeRuntimeTs(SHAPE)}` : `export function parse(src: string): Cst | null {
   _src = src;
@@ -3617,7 +3618,19 @@ export class ShapeMissing extends Error {
 }
 class _Missing { where: string; why: string; constructor(where: string, why: string) { this.where = where; this.why = why; } }
 function _missing(where: string, why: string): any { return new _Missing(where, why); }
-function _need(v: any): any { if (v instanceof _Missing) throw new ShapeMissing(v.where, v.why); return v; }
+// A child read that is missing makes the reading arm's value missing too (finS catches it): only the
+// root's read, parse(), throws, as the evaluator throws when a unit's evaluation reads one.
+function _need(v: any): any { if (v instanceof _Missing) throw v; return v; }
+function _construct(id: number, b: number, off: number, end: number): any {
+  let v: any;
+  try { v = _C[id]!(b, off, end); } catch (e) { if (!(e instanceof _Missing)) throw e; v = e; }
+  if (_built !== null) _built(id, off, end, v instanceof _Missing ? new ShapeMissing(v.where, v.why) : v);
+  return v;
+}
+// A test seam: every value the construct plans build (losing candidates' too), with its engine
+// arm (shapeArms[id]) and span; a missing one as its ShapeMissing.
+let _built: ((id: number, off: number, end: number, v: any) => void) | null = null;
+export function observeBuilt(f: ((id: number, off: number, end: number, v: any) => void) | null): void { _built = f; }
 function _mkNode(kind: any, start: number, end: number, names: string[], vals: any[]): ShapeNode {
   const fields: Record<string, ShapeValue> = {};
   for (let i = 0; i < names.length; i++) if (vals[i] !== undefined) fields[names[i]!] = vals[i];
@@ -3647,13 +3660,14 @@ function _iter(mt: number, f: () => boolean): boolean {
   return true;
 }
 const _AN: string[] = ${J(plan.arms.map((a) => a.arm))};
+export const shapeArms: { rule: string; arm: string; key: string }[] = ${J(plan.arms.map((a) => ({ rule: a.rule, arm: a.arm, key: a.key })))};
 const _C: ((b: number, off: number, end: number) => any)[] = [${plan.arms.map((a) => `construct${a.id}`).join(', ')}];
 // finR / finP with engine arm id's construct plan: its value over slots b.._n replaces them.
 function finS(id: number, b: number, save: number): void {
   let off: number, end: number, ho: number, he: number;
   if (_n > b) { const s = b * _SW; off = _sp[s]!; end = _sp[(_n - 1) * _SW + 1]!; ho = _sp[s + 3]!; he = _sp[s + 4]!; }
   else { off = save < toks.length ? toks[save]!.off : 0; end = off; ho = off; he = off; }
-  const v = _C[id]!(b, off, end);
+  const v = _construct(id, b, off, end);
   _n = b;
   _slot(v, 1, off, end, save, ho, he);
   _ar[b] = id;
@@ -3661,7 +3675,7 @@ function finS(id: number, b: number, save: number): void {
 function finPS(id: number, b: number): void {
   let off = 0, end = 0, ts = pos, ho = 0, he = 0;
   if (_n > b) { const s = b * _SW; off = _sp[s]!; end = _sp[(_n - 1) * _SW + 1]!; ts = _sp[s + 2]!; ho = _sp[s + 3]!; he = _sp[s + 4]!; }
-  const v = _C[id]!(b, off, end);
+  const v = _construct(id, b, off, end);
   _n = b;
   _slot(v, 1, off, end, ts, ho, he);
   _ar[b] = id;
