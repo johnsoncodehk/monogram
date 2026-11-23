@@ -89,6 +89,15 @@ const COMMENTS = [
   '/* a */ x */ y;', '/* a */ ) /* b */', 'x = /* a */ 1 */ 2;',
 ];
 
+// A continuation whose operand is another rule that continues (`x as T` then Type's own `[ ]`, `|`,
+// `&`, `<`, `?`, `.`): the operand is read whole where it continues, and the expression takes the
+// token where the operand's continuation fails (`a as T < b`, `x as T ? a : b`).
+const OPERANDS = [
+  'x as T[];', 'x satisfies T[];', 'x as A | B;', 'x as A & B;', '<T[]>x;', 'x as T[] | U;', 'x as const;', 'a as T < b;',
+  'x as T ? a : b;', 'x as T[0];', 'x as T<U>[];', 'a as any as T[];', 'f(x as T[], y);', 'x as T | U[];', 'x as T\n[0];',
+  'y = x as T extends U ? A : B;', 'x as T < b > c;',
+];
+
 // Contextual keywords: every word-shaped literal the grammar writes (`static`, `type`, `of`, `if`, ...),
 // as a name in each position class: one class per word-token step of the JavaScript and TypeScript
 // grammars. The word list is
@@ -193,9 +202,9 @@ let loadFailed = false;
 for (const { lang, mod, corpora } of [
   { lang: 'typescriptreact', mod: '../typescriptreact.ts', corpora: {
     'curated JSX': JSX_CASES, 'TSX issue cases': tsxIssueCases.map(c => c.src),
-    'TS issue cases': issueTests.map(t => t.input), 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS } },
+    'TS issue cases': issueTests.map(t => t.input), 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, operands: OPERANDS } },
   { lang: 'javascriptreact', mod: '../javascriptreact.ts', corpora: { 'curated JSX': JSX_CASES, 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS } },
-  { lang: 'typescript', mod: '../typescript.ts', corpora: { 'TS issue cases': issueTests.map(t => t.input), 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS } },
+  { lang: 'typescript', mod: '../typescript.ts', corpora: { 'TS issue cases': issueTests.map(t => t.input), 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, operands: OPERANDS } },
   { lang: 'javascript', mod: '../javascript.ts', corpora: { 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS } },
 ]) {
   const wasm = `tree-sitter/${lang}/tree-sitter-${lang}.wasm`;
