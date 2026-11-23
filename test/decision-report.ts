@@ -12,8 +12,8 @@
 //     (with a mutation proof: removing a tie loser that is not dead must change some input).
 //
 //   node test/decision-report.ts --write    # (re)write docs/decisions/*.md and the example page
-//   node test/decision-report.ts --check    # gate: the pages are what the plan gives (drift)
-//   node test/decision-report.ts --dead     # gate: every dead alternative is dead on the corpora
+//   node test/decision-report.ts --check    # gate: the pages are what the plan gives (drift), and --dead
+//   node test/decision-report.ts --dead     # only: every dead alternative is dead on the corpora
 //   node test/decision-report.ts --observe <grammar.ts> <input>...   # any grammar: its page with the ties observed on those inputs (stdout)
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { join, basename, resolve } from 'node:path';
@@ -198,6 +198,8 @@ if (argv[0] === '--observe') {
 const mode = argv.includes('--write') ? 'write' : argv.includes('--dead') ? 'dead' : 'check';
 const t0 = Date.now();
 let failures = 0;
+// The gate (--check) runs both halves: the page drift and the witness checks, then the dead
+// alternatives (formerly the gate decision-dead: one process, the grammars' IR built once each).
 if (mode === 'dead') failures += await deadGate();
 else {
   if (mode === 'write') mkdirSync(OUT, { recursive: true });
@@ -213,6 +215,7 @@ else {
     else if (old !== text) { console.log(`  FAIL ${rel} is not what the plan gives: run \`node test/decision-report.ts --write\` and commit it`); failures++; }
     else console.log(`  ${rel}: current (${counts})`);
   }
+  if (mode === 'check') failures += await deadGate();
 }
 console.log(`decision-report${mode === 'check' ? '' : ' --' + mode}: ${((Date.now() - t0) / 1000).toFixed(1)}s, ${failures} failures`);
 process.exit(failures ? 1 : 0);
