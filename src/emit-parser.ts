@@ -28,7 +28,7 @@ import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils
 import { tokenPatternSource } from './token-pattern.ts';
 import { analyzeGrammar, findEntryRule, markupContainerOf, type MarkupContainer, type Sec } from './grammar-analysis.ts';
 import { emitLexer, emitTokenColumns, lexSpecOf } from './emit-lexer.ts';
-import type { Target } from './emit.ts';
+import type { Target } from './target.ts';
 import { withAwaitYield } from './await-yield-fork.ts';
 import { syntaxKey } from './grammar-names.ts';
 

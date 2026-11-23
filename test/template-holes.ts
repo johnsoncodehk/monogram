@@ -18,7 +18,10 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createParser } from '../src/gen-parser.ts';
-import { emitParser, jsTarget, tsTarget, goTarget } from '../src/emit.ts';
+import { emitParser } from '../src/target.ts';
+import { jsTarget } from '../src/emit-parser.ts';
+import { tsTarget } from '../src/target-ts.ts';
+import { goTarget } from '../src/target-go.ts';
 import { generateTreeSitter } from '../src/gen-treesitter.ts';
 import {
   token, rule, defineGrammar, left, op, seq, oneOf, range, star, plus, many,

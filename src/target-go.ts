@@ -13,7 +13,7 @@ import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NudRef,
 import { blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
-import type { EmitOptions } from './emit.ts';
+import type { EmitOptions } from './target.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR } from './recovery-family.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, unitMask, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
@@ -880,7 +880,12 @@ ${goUniIdentTables()}func scanUniIdent(src string, pos int) (int, bool) {
 	return lxExtRun(src, pos+w), true
 }
 func ${shared.uniClass()}(cp int) int { return int(uniClass(rune(cp))) }
-// Extend an identifier token that the ASCII pattern cut short at a non-ASCII
+${shared.uniIdent(ir) ? `func ${shared.uniIdent(ir)}(s string, p int) int {
+	if p >= len(s) { return -1 }
+	if e, ok := scanUniIdent(s, p); ok { return e }
+	return -1
+}
+` : ''}// Extend an identifier token that the ASCII pattern cut short at a non-ASCII
 // ID_Continue char (caf|é → café), mirroring emit-lexer's uniIdentContReY extension.
 func lxExt(src string, e int) int {
 	if e >= len(src) || src[e] < 0x80 { return e }

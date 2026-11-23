@@ -21,7 +21,8 @@ import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from '
 import { join } from 'node:path';
 import { createParser } from '../src/gen-parser.ts';
 import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
-import { emitParser, jsTarget } from '../src/emit.ts';
+import { emitParser } from '../src/target.ts';
+import { jsTarget } from '../src/emit-parser.ts';
 import { objectify, type TreeView } from './emitted-obj.ts';
 import { parityInputs, type Tok } from './parity-corpus.ts';
 import type { CstGrammar } from '../src/types.ts';

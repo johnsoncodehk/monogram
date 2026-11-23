@@ -41,7 +41,8 @@ import { readdirSync, readFileSync, writeFileSync, existsSync, statSync } from '
 import { join } from 'node:path';
 import { portableIR, buildLexIdPlan } from '../src/emit-portable.ts';
 import { engine, canon, type Tok, type Mutation } from './ir-engine.ts';
-import { emitParser, tsTarget } from '../src/emit.ts';
+import { emitParser } from '../src/target.ts';
+import { tsTarget } from '../src/target-ts.ts';
 import { scratchDir } from './scratch.ts';
 import type { CstGrammar } from '../src/types.ts';
 

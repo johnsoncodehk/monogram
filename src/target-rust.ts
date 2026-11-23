@@ -15,7 +15,7 @@ import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, t
 import { blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
-import type { EmitOptions } from './emit.ts';
+import type { EmitOptions } from './target.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR } from './recovery-family.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, unitMask, isList, isNum, isOpt, isRec, isRecList, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
@@ -856,7 +856,12 @@ ${identName || ir.identLike.length ? `${rsUniIdentTables()}// Both out of line: 
     (pos, 3)
 }
 #[inline(always)] fn ${uniClassRs}(cp: isize) -> isize { _uni_class(cp as u32) as isize }
-#[inline(never)] fn _lx_ext(b: &[u8], mut e: usize) -> usize {
+${shared.uniIdent(ir) ? `#[inline(never)] fn ${shared.uniIdent(ir)}(s: &str, p: isize) -> isize {
+    let (b, p) = (s.as_bytes(), p as usize);
+    if p >= b.len() { return -1; }
+    match _scan_uni_ident(b, p) { Some(e) => e as isize, None => -1 }
+}
+` : ''}#[inline(never)] fn _lx_ext(b: &[u8], mut e: usize) -> usize {
     while e < b.len() {
         let (cp, w) = _lx_cp(b, e);
         if _uni_class(cp) == 0 { break; }
