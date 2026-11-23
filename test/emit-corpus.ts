@@ -114,6 +114,33 @@ export const CURATED_TS_CST: string[] = [
   // a template's holes are parsed by the rule its reference declares: types in a
   // template-literal type, expressions in a template-literal expression, at any nesting
   `type TL = \`a\${T[]}b\${A | B}\`; const tl = \`a\${y as \`b\${T[]}\`}c\`; new \`x\${y as T[]}\`;`,
+  // The dimensions of each flattened-alternative family (formerly test/refactor-guard.ts): every
+  // combination of the optional parts must still parse after a grammar de-duplication. Kept out
+  // of CURATED_TS: in the shape corpora the Rust ESTree customs build a different tree for some of
+  // them (an arrow's return type as its body, `<const A>` as a parameter named `const`), and in the
+  // portable recovery mutation corpus one mutant of the `types` row is accepted by the interpreter
+  // and rejected by every portable target (both reported, not fixed here).
+  // arrow functions (async? typeParams? returnType?)
+  `(x) => x; (x): number => x; async (x) => x; async (x): number => x; <T>(x: T) => x; <T>(x: T): T => x; async <T>(x: T) => x; async <T>(x: T): T => x; (x) => { return x; }; x => x;`,
+  // function expressions
+  `var a = function () {}; var a = function f() {}; var a = function* () {}; var a = function* f() {}; var a = async function () {}; var a = async function* f() {}; var a = function f<T>(x: T) {};`,
+  // function declarations
+  `function f() {} function* f() {} async function f() {} async function* f() {} function f(); function f<T>(x: T): T {}`,
+  // constructor types
+  `type C = new () => X; type C = new <T>() => X; type C = abstract new () => X; type C = abstract new <T>() => X;`,
+  // class expressions (anon + extends: an optional name must NOT eat `extends`)
+  `var a = class C {}; var a = class {}; var a = class C extends B {}; var a = class C implements I {}; var a = class extends B {}; var a = class implements I {}; var a = @dec class C {}; var a = new class {}; var a = new class {}(); var a = new class C extends B {}();`,
+  // type parameters: modifiers, and names that look like modifiers (`out` is a contextual name;
+  // `in` is reserved, so `<in = any>` is a tsc parse error, dd789de)
+  `type T<A> = A; type T<A extends B> = A; type T<A extends B = C> = A; type T<A = B> = A; type T<const A> = A; type T<in A> = A; type T<out A> = A; type T<in out A> = A; type T<out A extends B> = A; type T<out> = out; interface I<out = any> {}`,
+  // declarations
+  `class C {} abstract class C {} @d class C {} @d abstract class C extends B {} declare function f(): void; declare function* f(): void; export default function f() {} export default async function f() {} export default abstract class C {} module "m" {} module M {} export { a, b }; export type { A }; export type { A } from "m";`,
+  // parameters (Ident / BindingPattern / rest, with ?/:type/=default dimensions)
+  `function f(a) {} function f(a: T) {} function f(a?) {} function f(a?: T) {} function f(a?: T = x) {} function f(a = 1) {} function f(a: T = 1) {} function f(a? = 1) {} function f(...a) {} function f(...a: T[]) {} function f(this: T) {} class C { constructor(public a: T) {} } class C { constructor(public readonly a: T) {} } function f({ a, b }) {} function f({ a }: T) {} function f({ a } = {}) {} function f(...{ a }) {} class C { m(@d a: T) {} } function f(a: T, b?: U, ...c: V[]) {}`,
+  // types
+  `type F = (a: T) => R; type F = <T>(a: T) => R; function f(x): asserts x {} function f(x): asserts x is T {} type X<T> = T extends infer U ? U : never; type X<T> = T extends infer U extends string ? U : never; type X<T> = T extends (infer U extends number ? 1 : 0) ? U : never; type C = new <T>(a: T) => R;`,
+  // class members (fields NAMED `static` / `get`, a method NAMED `async`)
+  `class C { x: T = 1; } class C { public static readonly x = 1; } class C { m() {} } class C { public static async m() {} } class C { *m() {} } class C { m<T>(a: T): T { return a; } } class C { m(): void; } class C { get x() { return 1; } } class C { set x(v) {} } class C { public static get x() { return 1; } } class C { get x(): T; } class C { constructor() {} } class C { [k: string]: T; } class C { static {} } class C { static = 1; } class C { get = 1; } class C { async() {} } class C { @d m() {} }`,
 ];
 
 // ── 1b) Deliberately malformed snippets ─────────────────────────────────────────────────
