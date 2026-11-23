@@ -9,7 +9,7 @@
 // Positions: a node's start is tsc's `getStart()` (the first token); tsc's `pos` (leading trivia
 // included) is not produced (the harness compares it only when both sides carry it).
 import {
-  absent, and, branch, c, child, cook, dropLastIf, fold, get, iff, inh, let_, map, match, node, not, orElse, present, record, syn, text, v, list, spread,
+  absent, and, branch, c, child, cook, dropLastIf, fold, get, iff, inh, let_, map, match, node, not, or, orElse, present, record, syn, text, v, list, spread,
   type Shape2Spec, type Term,
 } from '../../src/shape2-schema.ts';
 
@@ -310,6 +310,96 @@ const PRIMARY: Record<string, Term> = {
   regex: node('RegularExpressionLiteral', { text: text('regex') }),
 };
 
+// ── Classes ──
+// A modifier word is its keyword token. tsc's `modifiers` list holds the decorators and the words
+// in source order, and is absent when empty. A declaration that an `export` / `declare` / outer
+// decorator arm wraps is outside the subset: those words sit in the outer arm (import / export).
+const KEYWORDS: Record<string, string> = {
+  public: 'PublicKeyword', private: 'PrivateKeyword', protected: 'ProtectedKeyword', static: 'StaticKeyword', abstract: 'AbstractKeyword',
+  readonly: 'ReadonlyKeyword', override: 'OverrideKeyword', accessor: 'AccessorKeyword', declare: 'DeclareKeyword', export: 'ExportKeyword',
+  in: 'InKeyword', out: 'OutKeyword', const: 'ConstKeyword', default: 'DefaultKeyword', async: 'AsyncKeyword',
+};
+const keyword = (leaf: string): Term => token(match(text(leaf), Object.fromEntries(Object.entries(KEYWORDS).map(([k, x]) => [k, c(x)]))), leaf);
+/** A modifier run's words (`modifierRun`'s names). */
+const runWords = (m = 'modifier', s = 'staticModifier', a = 'modifierAfterStatic'): (Term | { spread: Term })[] =>
+  [spread(map(m, keyword(m))), spread(iff(present(s), list(keyword(s)), list())), spread(map(a, keyword(a)))];
+/** A `modifiers` list from its items, absent when none of the named children is present. */
+const modifiersOf = (names: string[], items: (Term | { spread: Term })[]): Term => iff(or(...names.map(present)), list(...items), absent);
+const RUN = ['modifier', 'staticModifier', 'modifierAfterStatic'];
+/** A heritage element's top: tsc's ExpressionWithTypeArguments around it (`heritageElement`). */
+const asElement = (expression: Term): Term => let_('$e', expression, iff(inh('heritageElement'), node('ExpressionWithTypeArguments', { expression: v('$e') }), v('$e')));
+/** A heritage element (ClassHeritage, valued under `heritageElement`). */
+const element = (name: string): Term => branch(name, { classHeritage: child('base') });
+const heritageClause = (kw: string): Term => node('HeritageClause', {
+  token: c(kw),
+  types: branch('elements', { list: map('elementRest', element('elementRest')), first: list(element('element'), spread(map('elementRest', element('elementRest')))) }),
+}, { from: 'keyword', to: 'elements' });
+const heritageClauses: Term = map('heritage', branch('heritage', { extends_: heritageClause('ExtendsKeyword'), implements: heritageClause('ImplementsKeyword') }));
+const classFields = (nameTerm: Term): Record<string, Term> => ({
+  name: nameTerm, typeParameters: child('typeParameters'), heritageClauses: iff(present('heritage'), heritageClauses, absent), members: child('member'),
+});
+const memberSig: Record<string, Term> = {
+  typeParameters: child('typeParameters'), parameters: child('parameter'), type: returnType, body: branch('body', { block: child('block'), semi: absent }),
+};
+/** A member's modifiers: its decorators (not mapped yet), the run, and the words of an `async` form. */
+const memberModifiers = (isAsync: boolean): Term => isAsync
+  ? list(spread(child('decorator')), ...runWords(), keyword('asyncWord'), spread(map('wordAfterAsync', keyword('wordAfterAsync'))))
+  : modifiersOf(['decorator', ...RUN], [spread(child('decorator')), ...runWords()]);
+const property = (isAsync: boolean): Term => node('PropertyDeclaration', {
+  modifiers: memberModifiers(isAsync), name: child('key'), ...marks, type: child('type'), initializer: child('value'),
+});
+const method = (isAsync: boolean, generator: boolean): Term => node('MethodDeclaration', {
+  modifiers: memberModifiers(isAsync), ...(generator ? { asteriskToken: token('AsteriskToken', 'asterisk') } : {}), name: child('key'),
+  questionToken: marks.questionToken, ...memberSig,
+});
+const accessor = (isAsync: boolean): Term => node(match(text('kind'), { get: c('GetAccessor'), set: c('SetAccessor') }), { modifiers: memberModifiers(isAsync), name: child('key'), ...memberSig });
+const CLASS_RULES: Shape2Spec['rules'] = {
+  ClassMember: {
+    empty: node('SemicolonClassElement'),
+    staticBlock: node('ClassStaticBlockDeclaration', { modifiers: modifiersOf(['decorator', 'modifier'], [spread(child('decorator')), spread(map('modifier', keyword('modifier')))]), body: child('block') }),
+    member: branch('form', {
+      asyncGeneratorMethod: method(true, true),
+      asyncAccessor: accessor(true),
+      asyncMethod: method(true, false),
+      generatorMethod: method(false, true),
+      accessor: accessor(false),
+      constructor: node('Constructor', { modifiers: memberModifiers(false), ...memberSig }),
+      named: branch('tail', { method: method(false, false), field: property(false) }),
+      asyncField: property(true),
+    }),
+  },
+  // A heritage element's expression; tsc wraps it in an ExpressionWithTypeArguments, with the type
+  // arguments of `Base<T>`. The member / call tails after the base are the chain's own nodes.
+  ClassHeritage: {
+    newTarget: asElement(child('newTarget')),
+    led_lt: node('ExpressionWithTypeArguments', { expression: child('left'), typeArguments: child('type') }),
+    led_dot: asElement(node('PropertyAccessExpression', { expression: child('left'), name: name() })),
+    led_bracket: asElement(node('ElementAccessExpression', { expression: child('left'), argumentExpression: child('expr') })),
+    led_paren: asElement(node('CallExpression', { expression: child('left'), arguments: child('expr') })),
+    led_template: asElement(node('TaggedTemplateExpression', { tag: child('left'), template: templateOf('template') })),
+  },
+};
+const classDeclarations = (modifiers: Term): Record<string, Term> => ({
+  namedClass: node('ClassDeclaration', { modifiers, ...classFields(idOf('name')) }),
+  anonymousClass: node('ClassDeclaration', { modifiers, ...classFields(absent) }),
+});
+const prefixWords: Term = branch('prefix', {
+  decorated: list(spread(child('decorator')), ...runWords()),
+  modified: branch('alt', { plain: list(...runWords()), static_: list(keyword('staticModifier'), spread(map('modifierAfterStatic', keyword('modifierAfterStatic')))) }),
+});
+const CLASS_DECLARATIONS: Record<string, Term> = {
+  ...classDeclarations(absent),
+  prefixed: branch('declaration', classDeclarations(prefixWords)),
+};
+const classExpressionModifiers = modifiersOf(
+  ['decorator', ...RUN, 'decoratorRest', 'modifierRest', 'staticModifierRest', 'modifierRestAfterStatic'],
+  [spread(child('decorator')), ...runWords(), spread(child('decoratorRest')), ...runWords('modifierRest', 'staticModifierRest', 'modifierRestAfterStatic')],
+);
+const CLASS_EXPRESSIONS: Record<string, Term> = {
+  namedClass: node('ClassExpression', { modifiers: classExpressionModifiers, ...classFields(idOf('name')) }),
+  anonymousClass: node('ClassExpression', { modifiers: classExpressionModifiers, ...classFields(absent) }),
+};
+
 export const tscExprShape: Shape2Spec = {
   name: 'tsc-expr',
   synthesized: {
@@ -319,6 +409,11 @@ export const tscExprShape: Shape2Spec = {
     // A link is the top of its chain unless it is the object / callee of another link: a
     // trailing `!` is a chain link (NonNullChain) only when a link follows it.
     chainTop: { type: 'bool', default: true, rules: { Expr: Object.fromEntries(['led_dot', 'led_optChain', 'led_bracket', 'led_paren', 'led_bang'].map((a) => [a, { left: c(false) }])) } },
+    // A heritage clause's element (its top ClassHeritage node) is an ExpressionWithTypeArguments.
+    heritageElement: {
+      type: 'bool', default: false,
+      rules: { Decl: { namedClass: { base: c(true) }, anonymousClass: { base: c(true) }, prefixed: { base: c(true) } }, Expr: { namedClass: { base: c(true) }, anonymousClass: { base: c(true) } } },
+    },
   },
   rules: {
     // The root: its statement list. The `endOfFileToken` and the root's extent over trailing
@@ -337,7 +432,8 @@ export const tscExprShape: Shape2Spec = {
     },
     ...PARAM_RULES,
     ...PATTERN_RULES,
-    Decl: FUNCTION_DECLARATIONS,
+    Decl: { ...FUNCTION_DECLARATIONS, ...CLASS_DECLARATIONS },
+    ...CLASS_RULES,
     CatchParameter: { ident: node('VariableDeclaration', { name: idOf('ident'), type: child('type') }), bindingPattern: node('VariableDeclaration', { name: child('bindingPattern'), type: child('type') }) },
     ...FOR_RULES,
     Expr: {
@@ -383,6 +479,7 @@ export const tscExprShape: Shape2Spec = {
       ...FUNCTION_EXPRESSIONS,
       ...ARROWS,
       ...LITERALS,
+      ...CLASS_EXPRESSIONS,
       postfixOp: node('PostfixUnaryExpression', { operand: child('operand'), operator: kindOf(PREFIX) }),
     },
     NewTarget: {
