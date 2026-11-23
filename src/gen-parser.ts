@@ -609,7 +609,10 @@ export function createParser(grammar: CstGrammar) {
       // LeftHandSideExpression: its MIDDLE child is an `$operator` leaf or a binary-connector
       // leaf. Member `a.b` / element `a[b]` / typed call `f<T>()` have a `$punct` leaf there, a
       // paren cover has a NODE child → those pass.
-      if (cs.length >= 3) {
+      // Only a LED builds such a node: its first child is the left operand, a node of this rule (a NUD
+      // never starts with one), so a NUD whose second child is a name spelled like a connector
+      // (`class as {}`) is decided by its construct, as the portable engine's ledForm decides it.
+      if (cs.length >= 3 && !('tokenType' in cs[0]) && cs[0].rule === node.rule) {
         const m = cs[1];
         if (m && 'tokenType' in m && (m.tokenType === '$operator' || binaryConnectors.has(source.slice(m.offset, m.end)))) return true;
       }
