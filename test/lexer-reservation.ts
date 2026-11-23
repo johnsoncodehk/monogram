@@ -29,7 +29,8 @@ import { join } from 'node:path';
 import { emitParser } from '../src/target.ts';
 import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
-import { goBuild, scratchDir } from './scratch.ts';
+import { scratchDir } from './scratch.ts';
+import { cachedGoBuild, cachedRustc } from './build-cache.ts';
 
 const CAP_PER_TOKEN = 2, PEAK_PER_TOKEN = 3, MIN_TOKENS = 4, STACK_BYTES = 4096;
 const DENSE = 1 << 16;
@@ -149,7 +150,7 @@ fn main() {
     }
 }
 `);
-  execFileSync('rustc', ['-A', 'warnings', rfile, '-o', join(dir, 'reserve')], { stdio: 'pipe' });
+  cachedRustc(['-A', 'warnings', rfile, '-o', join(dir, 'reserve')], { stdio: 'pipe' });
   counts.set('rust', readCounts(execFileSync(join(dir, 'reserve'), files, { encoding: 'utf8' })));
   afterFail.set('rust', readAfter(execFileSync(join(dir, 'reserve'), ['--after', ordFile, ...failFiles], { encoding: 'utf8' })));
 }
@@ -293,7 +294,7 @@ func main() {
 	}
 }
 `);
-  goBuild(['-o', 'consumer', '.'], { cwd: gdir });
+  cachedGoBuild(['-o', 'consumer', '.'], { cwd: gdir });
   console.log(`  go: ${execFileSync(join(gdir, 'consumer'), ['--version'], { encoding: 'utf8' }).trim()}`);
   counts.set('go', readCounts(execFileSync(join(gdir, 'consumer'), files, { encoding: 'utf8' })));
   afterFail.set('go', readAfter(execFileSync(join(gdir, 'consumer'), ['--after', ordFile, ...failFiles], { encoding: 'utf8' })));
