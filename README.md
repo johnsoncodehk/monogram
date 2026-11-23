@@ -178,15 +178,17 @@ cannot express: [docs/HIGHLIGHTER-EVIDENCE.md](docs/HIGHLIGHTER-EVIDENCE.md).
 - The recorded comparison is Rust against [oxc](https://github.com/oxc-project/oxc) on the
   same inputs, parsing as TypeScript, both in one CI job with alternating rounds
   ([docs/MEASUREMENT.md](docs/MEASUREMENT.md#recorded-result-rust-against-oxc)).
-- Monogram builds a CST and oxc a typed AST: not the same product, and a CST is the cheaper one
-  to build. A like-for-like figure waits for a monogram parser that builds an AST.
-- On monogram `e6cc55c`, on two AMD EPYC runner models, a parse with a kept builder takes 6%
-  to 28% less time than oxc's on the eight timed inputs (9% less on the TypeScript compiler's
-  `checker.ts`) while executing 3% to 13% more instructions on seven of them. An earlier
-  comparison on another CPU ordered one input the other way: the ratio is not a property of the
-  parsers alone.
-- Before the lexer and decision work of 2026-11-22 the same comparison had oxc ahead on most
-  inputs, with monogram at 1.42 times oxc's instructions on `checker.ts`; it is 1.03 times now.
+- Monogram builds a CST and oxc a typed AST: not the same product, so this is not yet a
+  like-for-like figure. Which of the two costs more to build has not been measured here; a
+  monogram parser that builds an AST directly (generated from a `defineShape` shape) is in
+  progress and will give that figure.
+- On monogram `bf18adc` (AMD EPYC 9V74), a parse with a kept builder takes 19% to 36% less time
+  than oxc's on the eight timed inputs (22% less on the TypeScript compiler's `checker.ts`), and
+  executes 12% fewer instructions on `checker.ts`: fewer on nine of the ten counted inputs, and
+  0.5% more on `typescript.d.ts`. Time ratios move with the CPU model (the day before, an Intel
+  runner gave 14% to 32% less for a nearby commit); instruction counts do not.
+- Three days earlier, before the lexer and decision work of 2026-11-22, the same comparison had
+  oxc ahead on most inputs, with monogram at 1.42 times oxc's instructions on `checker.ts`.
 - Every pull request that touches the parser is measured against its merge base on every
   target: Rust and Go instruction counts (Callgrind), TypeScript and JavaScript block-execution
   counts, allocator calls and page faults. A change that moves one target only is listed as

@@ -216,6 +216,8 @@ interface GrammarJsContext {
   nullableNonStart: Set<string>;
   /** FIRST/FOLLOW terminal sets of the tree-sitter view of the grammar (see greedyTail). */
   terminalSets: TerminalSets;
+  /** While one Pratt arm renders (renderGreedySuffix): the parts that carry dynamic precedence. */
+  dynamicPrecedence?: Map<RuleExpr, number>;
   /** Rules declared as a conflict of their own (`[$.rule]`): GLR keeps every parse of their
    *  productions, so no static resolution is added to them. Set when conflicts are emitted. */
   glrRules: Set<string>;
@@ -673,6 +675,11 @@ function collectWordLiterals(grammar: CstGrammar, isWordLiteral: (text: string) 
 }
 
 function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuard): string {
+  const dyn = ctx.dynamicPrecedence?.get(expr);
+  if (dyn !== undefined) {
+    ctx.dynamicPrecedence!.delete(expr);   // once: the wrapped rendering below is the same node
+    try { return `prec.dynamic(${dyn}, ${renderExpr(expr, ctx, wordGuard)})`; } finally { ctx.dynamicPrecedence!.set(expr, dyn); }
+  }
   switch (expr.type) {
     case 'literal': {
       // A flow-collection delimiter literal (`[` `]` `{` `}`) is emitted by the external scanner (so
@@ -912,14 +919,22 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
   // table does not name).
   const high = Math.max(0, ...[...bp.opTable.values()].map(o => o.lbp), ...[...bp.prefixOps.values()].map(o => o.rbp)) + 2;
   const selfSnake = ctx.ruleSnake.get(rule.name);
+  // Heuristic: a branch that starts with the self-reference is a left-recursive
+  // continuation (call/member/index/generic) — bind tight.
+  const isContinuation = (ab: string) => ab.startsWith(`seq($.${selfSnake}`) || ab === `$.${selfSnake}` || ab.startsWith(`seq(alias($.${selfSnake}, `);
+  const order = overlapOrder(rule, atomAlts, atomBranches.map(isContinuation), ctx);
   for (const [i, ab] of atomBranches.entries()) {
-    // Heuristic: a branch that starts with the self-reference is a left-recursive
-    // continuation (call/member/index/generic) — bind tight.
-    if (ab.startsWith(`seq($.${selfSnake}`) || ab === `$.${selfSnake}` || ab.startsWith(`seq(alias($.${selfSnake}, `)) {
+    if (isContinuation(ab)) {
       const alt = atomAlts[i];
       const connector = alt.type === 'seq' ? alt.items.slice(1).find(x => !ASSERTION_KINDS.has(x.type)) : undefined;
       const led = connector?.type === 'literal' ? bp.ledPrecByConnector.get(connector.value) : undefined;
       const num = led?.lbp ?? high;
+      const dyn = (b: string) => order.dynamic.has(i) ? `prec.dynamic(${order.dynamic.get(i)}, ${b})` : b;
+      if (order.yields.has(i)) {
+        if (led !== undefined || openTail(rule.name, alt, ctx.grammar) !== null) throw new Error(`gen-treesitter: the continuation ${ab} yields to an earlier one but carries an operand tail`);
+        branches.push(dyn(`prec.right(${num}, ${ab})`));
+        continue;
+      }
       // The precedence decides at the continuation's connector. Its last step keeps it when the
       // trailing operand is read at that binding power (a ledPrec `chainRhs`: `in`, `instanceof`, a
       // left-associative level); it carries none when the operand is read whole: another rule with
@@ -928,16 +943,100 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
       const last = alt.type === 'seq' ? alt.items[alt.items.length - 1] : null;
       const wholeSelf = led !== undefined && led.rhsBp === null && last?.type === 'ref' && last.name === rule.name;
       const tail = wholeSelf ? last : openTail(rule.name, alt, ctx.grammar);
-      if (tail === null) { branches.push(`prec.left(${num}, ${ab})`); continue; }
+      if (tail === null) { branches.push(dyn(`prec.left(${num}, ${ab})`)); continue; }
       const t = renderExpr(tail, ctx);
       if (!ab.endsWith(`, ${t})`)) throw new Error(`gen-treesitter: the continuation ${ab} does not end in its operand ${t}`);
-      branches.push(`seq(prec.left(${num}, ${ab.slice(0, ab.length - t.length - 3)})), ${t})`);
+      branches.push(dyn(`seq(prec.left(${num}, ${ab.slice(0, ab.length - t.length - 3)})), ${t})`));
     } else {
-      branches.push(ab);
+      branches.push(order.suffixWeight > 0 ? renderGreedySuffix(atomAlts[i], order, ctx) ?? ab : ab);
     }
   }
 
   return `choice(\n      ${branches.join(',\n      ')}\n    )`;
+}
+
+/**
+ * Where the readings of a Pratt rule overlap, the interpreter's order, rendered so tree-sitter keeps
+ * the same reading (gen-parser.ts prattCore). Its LED loop tries the continuations in grammar order
+ * before any operator, and the first that matches wins; its NUD takes the longest match, an
+ * alternative inside an arm the first that matches. Three facts follow:
+ * - `yields`: a continuation whose consuming items are a strict prefix of an EARLIER continuation's
+ *   (TypeScript's instantiation `f<T>` beside the typed call `f<T>(x)`) never wins where the earlier
+ *   one continues. Its own trailing lookahead says where it may end; when that lookahead excludes
+ *   every token the earlier continuation continues with, the interpreter never ends it there, so the
+ *   shift into the earlier one wins statically: right associativity at its number (left, the tie
+ *   reduced it before `(` and built `(f<T>)(x)`). Without such a lookahead the rendering would read
+ *   the shorter one where the interpreter backtracks to it: not modelled, so it fails loudly.
+ * - `dynamic` (continuations): a continuation whose connector is also an infix operator of the rule
+ *   (`<`) and that ends in no dropped lookahead is read where tree-sitter also finds the operator
+ *   reading of the same tokens (`f<T>(x)` beside `(f < T) > (x)`): GLR keeps both, and the
+ *   continuation's carries dynamic precedence 1 so it wins, as in the LED loop. A continuation that
+ *   ends in a lookahead the rendering drops gets none: tree-sitter also reads it where the
+ *   interpreter refuses it, so it must not outweigh the operator reading.
+ * - `suffixWeight`: an arm's trailing optional part (a `?`, or the non-empty alternatives of a choice
+ *   whose empty alternatives come last) that can begin with a token a continuation begins with is
+ *   also read, by GLR, as the arm without it followed by that continuation (`new C(x)` beside
+ *   `(new C)(x)`, `new C<T>(x)` beside `(new C)<T>(x)`). Each such part taken carries `suffixWeight`
+ *   more dynamic precedence than the reading without it, nested parts adding up; the weight is one
+ *   more than any continuation's own, so the arm's longest match outweighs the shorter arm and its
+ *   continuation together. A static shift would be wrong here: the arm's part can fail after its
+ *   first token where the continuation matches (`new C < d` is `(new C) < d`).
+ */
+interface OverlapOrder { yields: Set<number>; dynamic: Map<number, number>; suffixWeight: number; connectorFirst: Set<string> }
+function overlapOrder(rule: RuleDecl, alts: RuleExpr[], continuation: boolean[], ctx: GrammarJsContext): OverlapOrder {
+  const { firstOf } = ctx.terminalSets;
+  const consuming = (alt: RuleExpr) => (alt.type === 'seq' ? alt.items : [alt]).filter(x => !ASSERTION_KINDS.has(tsView(x).type));
+  const last = (alt: RuleExpr) => { const items = alt.type === 'seq' ? alt.items : [alt]; return tsView(items[items.length - 1]); };
+  const infix = new Set([...bindingPowers(ctx.grammar).opTable].filter(([, o]) => o.position === 'infix').map(([v]) => v));
+  const keys = alts.map(a => consuming(a).map(x => renderExpr(x, ctx)));
+  const out: OverlapOrder = { yields: new Set(), dynamic: new Map(), suffixWeight: 0, connectorFirst: new Set() };
+  for (const [j, alt] of alts.entries()) {
+    if (!continuation[j]) continue;
+    for (const t of firstOf({ type: 'seq', items: consuming(alt).slice(1) })) out.connectorFirst.add(t);
+    const earlier = alts.findIndex((_, i) => i < j && continuation[i] && keys[i].length > keys[j].length && keys[j].every((k, n) => k === keys[i][n]));
+    if (earlier !== -1) {
+      const end = last(alt);
+      const rest = firstOf(consuming(alts[earlier])[keys[j].length]);
+      const excluded = end.type === 'not' ? firstOf(end.body) : new Set<string>();
+      if (![...rest].every(t => excluded.has(t))) throw new Error(`gen-treesitter: in ${rule.name}, a continuation is a strict prefix of an earlier one and its lookahead does not exclude that one's continuation (${[...rest].join(' ')}): the interpreter's backtracking to it is not modelled`);
+      out.yields.add(j);
+      continue;
+    }
+    const connector = consuming(alt)[1];
+    if (connector?.type === 'literal' && infix.has(connector.value) && !ASSERTION_KINDS.has(last(alt).type)) out.dynamic.set(j, 1);
+  }
+  out.suffixWeight = 1 + Math.max(0, ...out.dynamic.values());
+  return out;
+}
+
+/** A NUD arm rendered with the dynamic precedence of its trailing optional parts (overlapOrder's
+ *  `suffixWeight`), or null when it has none. */
+function renderGreedySuffix(alt: RuleExpr, order: OverlapOrder, ctx: GrammarJsContext): string | null {
+  const { firstOf } = ctx.terminalSets;
+  const isEmpty = (e: RuleExpr) => { const v = tsView(e); return (v.type === 'seq' ? v.items : [v]).every(x => ASSERTION_KINDS.has(tsView(x).type)); };
+  const overlaps = (e: RuleExpr) => [...firstOf(e)].some(t => order.connectorFirst.has(t));
+  const marks = new Map<RuleExpr, number>();
+  const walk = (e: RuleExpr, depth: number): void => {
+    const v = tsView(e);
+    if (v.type === 'seq') {
+      const tail = [...v.items].reverse().find(x => !ASSERTION_KINDS.has(tsView(x).type));
+      if (tail) walk(tail, depth);
+    } else if (v.type === 'alt' && !ctx.zeroWidth.tokenOf.has(v)) {
+      const firstEmpty = v.items.findIndex(isEmpty);
+      const greedy = firstEmpty !== -1 && v.items.slice(firstEmpty).every(isEmpty);
+      for (const a of v.items) {
+        if (isEmpty(a)) continue;
+        if (greedy && overlaps(a)) { marks.set(a, (depth + 1) * order.suffixWeight); walk(a, depth + 1); } else walk(a, depth);
+      }
+    } else if (v.type === 'quantifier' && v.kind === '?' && overlaps(v.body)) {
+      marks.set(v.body, (depth + 1) * order.suffixWeight);
+      walk(v.body, depth + 1);
+    }
+  };
+  walk(alt, 0);
+  if (marks.size === 0) return null;
+  ctx.dynamicPrecedence = marks;
+  try { return renderExpr(alt, ctx); } finally { ctx.dynamicPrecedence = undefined; }
 }
 
 /**
