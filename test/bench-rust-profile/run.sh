@@ -239,7 +239,7 @@ done
 for v in A M; do
   for g in $GRAMMARS; do
     d=$W/targets-$v$(sfx "$g")
-    gf=$(for f in $TINPUTS; do [ "$(grammar_of "$f")" = "$g" ] && echo "$f"; done)
+    gf=$(for f in $TINPUTS; do if [ "$(grammar_of "$f")" = "$g" ]; then echo "$f"; fi; done)
     for tm in ts-parse js-fresh; do
       if out=$(node "$REPO/test/bench-targets/allocs.ts" "$d/${tm%%-*}.mts" "$tm" "$d/alloc" $gf); then
         while read -r f rest; do echo "TSALLOC $v.$tm.$f $rest" | tee -a "$R"; done <<< "$out"
