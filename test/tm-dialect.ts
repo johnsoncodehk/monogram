@@ -141,19 +141,21 @@ const dialectSrc = [
     name: 'anglemarkup', scopeName: 'source.anglemarkup',
     tokens: { Name, Quoted, EndOpen, EmptyEnd },
     contextualScopes: [{ token: Name, within: Label, scope: 'entity.name.tag' }],
+    // the element region, declared (a grammar that declares none gets no element layer); the
+    // hole is declared because a region has one, and no rule uses it
+    elements: { tagOpen: '<', tagClose: '>', closeMarker: '/', closeTag: 'EndOpen', selfClose: 'EmptyEnd', hole: { open: '{', close: '}' } },
     rules: { Label, Prop, Widget, Markup },
   });
   const { tm, grammar: g } = await load(angle);
   const src = '<Panel/>\n<row data.key="k">"text"</row>';
-  const vocab = '`generateJsxPatterns` emits a fixed repository with React\'s vocabulary whatever the grammar declares (item 6: rule-driven element patterns)';
-  scopeRow('capitalised tag `Panel` takes the declared `entity.name.tag`, not React\'s component scope', 'xfail', vocab, g, src, 'Panel', 0, s => inner(s).startsWith('entity.name.tag'));
-  scopeRow('lowercase tag `row` is `entity.name.tag` (by React\'s lowercase convention today, not from the declaration)', 'pass', undefined, g, src, 'row', 0, s => inner(s).startsWith('entity.name.tag'));
+  scopeRow('capitalised tag `Panel` takes the declared `entity.name.tag`, not React\'s component scope', 'pass', undefined, g, src, 'Panel', 0, s => inner(s).startsWith('entity.name.tag'));
+  scopeRow('lowercase tag `row` is `entity.name.tag` (from the declaration)', 'pass', undefined, g, src, 'row', 0, s => inner(s).startsWith('entity.name.tag'));
   for (const part of ['data', '.', 'key'])
     scopeRow(`dotted attribute name \`data.key\`: \`${part}\` is part of the attribute name`, 'pass', undefined, g, src, part === '.' ? '.key' : part, 0, s => has('entity.other.attribute-name')(s));
-  scopeRow('element children are not scoped `meta.jsx.*` in a grammar with no JSX rule', 'xfail', vocab, g, src, '"text"', 0, s => !s.some(x => x.includes('.jsx.')));
+  scopeRow('element children are not scoped `meta.jsx.*` in a grammar with no JSX rule', 'pass', undefined, g, src, '"text"', 0, s => !s.some(x => x.includes('.jsx.')));
   const repoRow = (id: string, test: (keys: string[], json: string) => boolean) =>
-    rows.push({ section, id, status: 'xfail', why: vocab, check: () => { const keys = Object.keys(tm.repository); const json = JSON.stringify(tm); return { ok: test(keys, json), saw: keys.filter(k => k.includes('jsx')).join(' ') || '(none)' }; } });
-  repoRow('repository keys come from the grammar\'s rule names (no `jsx-*` keys)', keys => !keys.some(k => k.startsWith('jsx')));
+    rows.push({ section, id, status: 'pass', check: () => { const keys = Object.keys(tm.repository); const json = JSON.stringify(tm); return { ok: test(keys, json), saw: keys.filter(k => k.includes('jsx')).join(' ') || '(none)' }; } });
+  repoRow('repository keys carry the region\'s name, the grammar\'s (no `jsx-*` keys)', keys => !keys.some(k => k.startsWith('jsx')));
   repoRow('no single-quoted attribute string: the grammar\'s only string token is `"…"`', keys => !keys.some(k => /single-quoted/.test(k)));
   repoRow('no character-entity pattern: the grammar declares no entities', keys => !keys.some(k => /entity/.test(k)));
   repoRow('no fragment `<>` pattern: no rule has `<` directly followed by `>`', keys => !keys.some(k => /fragment/.test(k)));
@@ -163,20 +165,21 @@ const dialectSrc = [
   const BName = token(seq(oneOf(range('a', 'z'), range('A', 'Z')), star(oneOf(range('a', 'z'), range('A', 'Z')))), { identifier: true });
   const BQuoted = token(seq('"', star(noneOf('"')), '"'), { string: true, scope: 'string.quoted.double' });
   const BClose = token(seq('[', '/'));
+  const BSolo = token(seq('/', ']'));
   const BTag = rule(() => [[BName]]);
-  const BElem = rule(($) => [['[', BTag, ']', many(alt($, BQuoted)), BClose, BTag, ']']]);
+  const BElem = rule(($) => [['[', BTag, BSolo], ['[', BTag, ']', many(alt($, BQuoted)), BClose, BTag, ']']]);
   const BDoc = rule(() => [many(BElem)]);
   const bracket = defineGrammar({
     name: 'bracketmarkup', scopeName: 'source.bracketmarkup',
-    tokens: { BName, BQuoted, BClose },
+    tokens: { BName, BQuoted, BClose, BSolo },
     contextualScopes: [{ token: BName, within: BTag, scope: 'entity.name.tag' }],
+    elements: { tagOpen: '[', tagClose: ']', closeMarker: '/', closeTag: 'BClose', selfClose: 'BSolo', hole: { open: '{', close: '}' } },
     rules: { BTag, BElem, BDoc },
   });
   const { grammar: bg } = await load(bracket);
   const bsrc = '[note]"hi"[/note]';
-  const ctx = '`contextualScopes` reach the TextMate output only inside the derived call-argument and comment-continuation regions; an element rule is no such region (item 6)';
-  scopeRow('`[note]`: the declared tag-name scope reaches a bracket-delimited tag', 'xfail', ctx, bg, bsrc, 'note', 0, s => inner(s).startsWith('entity.name.tag'));
-  scopeRow('`[/note]`: the declared tag-name scope reaches the close tag', 'xfail', ctx, bg, bsrc, 'note', 1, s => inner(s).startsWith('entity.name.tag'));
+  scopeRow('`[note]`: the declared tag-name scope reaches a bracket-delimited tag', 'pass', undefined, bg, bsrc, 'note', 0, s => inner(s).startsWith('entity.name.tag'));
+  scopeRow('`[/note]`: the declared tag-name scope reaches the close tag', 'pass', undefined, bg, bsrc, 'note', 1, s => inner(s).startsWith('entity.name.tag'));
 }
 
 // ── 3. the interpreter parses the dialect (its element region: code children, derived entry) ──
