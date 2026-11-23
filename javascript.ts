@@ -239,12 +239,13 @@ export const moduleSpecifier = [field('source', String_), tsRelax(opt(field('wit
 // `function* g(){ function yield(){} }` both parse). The [Await]/[Yield] reservation
 // that IS a parse error lives at expression position (notReservedExpr), where `await`
 // must be the operator and so needs an operand.
-export const notReserved = not(alt(
+export const reservedWords = [
   'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default',
   'delete', 'do', 'else', 'enum', 'export', 'extends', 'false', 'finally', 'for',
   'function', 'if', 'import', 'in', 'instanceof', 'new', 'null', 'return', 'super',
   'switch', 'this', 'throw', 'true', 'try', 'typeof', 'var', 'void', 'while', 'with',
-));
+];
+export const notReserved = not(alt(...reservedWords));
 
 // A BindingIdentifier: the name a binding introduces (a parameter, a variable, a destructured
 // or rest name) is an identifier that is not a reserved word. This is the one definition every
@@ -305,25 +306,22 @@ export const forAwaitHeadArms = (Expr, ForBinding) => [
 export const forStatement = ($, ForHead, ForAwaitHead) =>
   ['for', alt(['(', field('head', ForHead), ')'], [field('awaitKeyword', 'await'), '(', field('head', ForAwaitHead), ')']), field('body', $)];
 
-// The guard of the *expression* identifier-NUD: an IdentifierReference is no reserved word, so
-// a reserved word with no expression form of its own is no expression (`in;`, `x = default`,
-// `f(export)`, `extends;`, `const;`, `x = function;`, `void ;`, `throw ;`, a colon-less `case`,
-// `catch(x){}` with no `try`, a body-less `class`, `x = var`). A reserved word that begins an
-// expression of its own (`new`/`new.target`, `super`, `this`, `true`/`false`/`null`, `import(…)`)
-// is left out, and so is `import` with no or a spread argument (`import()`, `import(...a)`), which
-// tsc's parser reads through this fallback in files it accepts. Owed: that `import` is tsc-parser
-// tolerance, not the productions. `var` begins a variable statement or a for-head declaration
-// only, so a statement or head starting `var` is read once, as the declaration.
-const noExprReserved = [
-  'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do',
-  'else', 'enum', 'export', 'extends', 'finally', 'for', 'function', 'if', 'in', 'instanceof',
-  'return', 'switch', 'throw', 'try', 'typeof', 'var', 'void', 'while', 'with',
-];
-export const notReservedExpr = reservableNot(alt(...noExprReserved));
+// The guard of the *expression* identifier (IdentifierReference, and an arrow's lone
+// BindingIdentifier): `Identifier : IdentifierName but not ReservedWord`, so no reserved word is
+// one. A reserved word with no expression form of its own is no expression (`in;`, `x =
+// default`, `f(export)`, `const;`, `void ;`, a colon-less `case`, `x = var`); one that begins an
+// expression of its own (`this`, `true` / `false` / `null`, `super.x`, `new X`) is that
+// expression's arm alone, never also an identifier (no tie for declaration order to decide) and
+// never an arrow's parameter (`true => 1`, `this => 1`, `super => 1`). `undefined` is no reserved
+// word: an ordinary identifier. Reservable: it also refuses the context's operator words
+// (`await` / `yield`). TypeScript's guard leaves `import` out: `import` with no or a spread
+// argument (`import()`, `import(...a)`) is read through this fallback, as tsc's parser does in
+// files it accepts. Owed: that `import` is tsc-parser tolerance, not the productions.
+export const notReservedExpr = reservableNot(alt(...reservedWords.filter((w) => w !== 'import')));
 // JavaScript's: `import` is an expression only as ImportCall and `import.meta` (13.3.10
 // `ImportCall : import ( AssignmentExpression ,opt ) | import ( AssignmentExpression ,
 // AssignmentExpression ,opt )`), so `import()`, `import(a, b, c)` and `import(...a)` have no parse.
-const notReservedJsExpr = reservableNot(alt(...noExprReserved, 'import'));
+const notReservedJsExpr = reservableNot(alt(...reservedWords));
 
 // ── Precedence ladder (shared ECMAScript operator precedence) ──
 
@@ -450,8 +448,8 @@ export const classHeritageArms = ($, Expr, NewTarget, classExpression, typeArgs 
 // - SuperProperty (`new super.x()`, `new super[x]`), MetaProperty (`new new.target()`, `new
 //   import.meta.x()`), and the member forms, a private name included (`new X.#f()`).
 export const newTargetArms = ($, Expr, newArgs, { identGuard, Prop, fnExprArms, taggedTemplate = [] }) => [
-  'true', 'false', 'null', 'undefined', 'this',   // before the identifier: a tie keeps the keyword
-  arm('ident', not('super'), not('new'), identGuard, Ident),
+  'true', 'false', 'null', 'this',
+  arm('ident', identGuard, Ident),
   Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, String_, Regex_,
   arm('superMember', field('superKeyword', 'super'), alt(['.', Ident], ['[', Expr, ']'])),
   arm('newDotTarget', field('newKeyword', 'new'), '.', field('targetKeyword', 'target')),
@@ -475,19 +473,15 @@ const NewTarget = rule($ => newTargetArms($, Expr, opt('(', sep(Expr, ','), ')')
   { identGuard: notReservedJsExpr, Prop, fnExprArms: fnArms([opt(...bindingName)], Block) }));
 
 const Expr = rule($ => [
-  // A standalone identifier expression, but never a reserved word that has no expression
-  // role (see notReservedExpr). This kills the bare-identifier fallback for keywords like
-  // `catch`/`throw` and the prefix operators `void`/`typeof`/`delete`, so `catch(x){}`
-  // with no `try`, `void ;`, and `throw ;` are rejected as TS does.
-  // Keyword-valued literals come BEFORE the bare-identifier nud: a longest-match TIE
-  // (both are one token) goes to the first-listed alternative, so listing the literals
-  // first makes `this`/`true`/… arrive as $keyword leaves — the tree records what the
-  // word IS instead of the bare-identifier fallback winning the tie and stamping Ident.
-  'true', 'false', 'null', 'undefined', 'this',
+  // The keyword-valued literals and `this` (reserved words, so the identifier below refuses
+  // them: each is its own arm alone).
+  'true', 'false', 'null', 'this',
   // `super` is a CONSTRAINED primary (mirrors tsc's parseSuperExpression): MUST be
   // immediately followed by a call `(args)`, member `.name`/`.#priv`, or element `[expr]`.
   [field('superKeyword', 'super'), alt(['(', sep($, ','), ')'], ['.', alt(Ident, PrivateField)], ['[', $, ']'])],
-  [not('super'), not('new'), notReservedJsExpr, Ident],
+  // A standalone identifier expression (IdentifierReference): never a reserved word (see
+  // notReservedExpr), so `catch(x){}` with no `try`, `void ;` and `throw ;` are no expression.
+  [notReservedJsExpr, Ident],
   Number_,
   String_,
   Template,

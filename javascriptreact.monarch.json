@@ -438,10 +438,6 @@
               "token": "keyword",
               "switchTo": "@value"
             },
-            "undefined": {
-              "token": "keyword",
-              "switchTo": "@value"
-            },
             "this": {
               "token": "keyword",
               "switchTo": "@value"
@@ -629,6 +625,10 @@
             "delete": {
               "token": "operator",
               "switchTo": "@root"
+            },
+            "undefined": {
+              "token": "keyword",
+              "switchTo": "@value"
             },
             "Promise": {
               "token": "type.identifier",
@@ -1470,7 +1470,6 @@
             "true": "keyword",
             "false": "keyword",
             "null": "keyword",
-            "undefined": "keyword",
             "this": "keyword",
             "super": "keyword",
             "instanceof": "operator",
@@ -1518,6 +1517,7 @@
             "typeof": "operator",
             "void": "operator",
             "delete": "operator",
+            "undefined": "keyword",
             "Promise": "type.identifier",
             "Array": "type.identifier",
             "Map": "type.identifier",
