@@ -795,6 +795,9 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
   const synMemo = new WeakMap<CstNode, Map<string, Scalar>>();
   const threadMemo = new WeakMap<CstNode, Map<string, Map<CstNode, Scalar>>>();
   const inhMemo = new WeakMap<CstNode, Inh>();
+  const nodesAttrs = Object.entries(spec.inherited ?? {}).filter(([, d]) => d.type === 'nodes').map(([k]) => k);
+  /** The nodes attributes each node's arm has read (placed, or handed on). */
+  const placed = new WeakMap<CstNode, Set<string>>();
   const kidNames = new WeakMap<CstNode, Map<CstNode, string>>();
   let parents: WeakMap<CstNode, CstNode> | undefined;
   const inhs = spec.inherited ?? {};
@@ -814,7 +817,13 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
     const s = scopeOf(n, inh);
     const t = spec.rules[n.rule]?.[s.m.info.arm];
     if (t === undefined) throw new Shape2Unmapped(n.rule, s.m.info.arm);
-    return ev(t, s);
+    const val = ev(t, s);
+    // A node handed a non-empty nodes attribute must PLACE it (read it, or hand it on): an arm
+    // that drops it would build a node without them. Such a node is outside the mapped subset.
+    for (const attr of nodesAttrs) {
+      if ((inh[attr] as S2Value[]).length > 0 && !placed.get(n)?.has(attr)) throw new Shape2Unmapped(n.rule, `${s.m.info.arm} (handed ${attr})`);
+    }
+    return val;
   }
   function synOf(n: CstNode, attr: string): Scalar {
     let memo = synMemo.get(n);
@@ -977,7 +986,10 @@ export function evaluator(loaded: LoadedShape2, root: CstNode, src: string): (n:
         const it = one(s, t.name);
         return it === undefined ? undefined : synOf((it as { node: CstNode }).node, t.attr);
       }
-      case 'inh': return s.inh[t.attr] as S2Value;
+      case 'inh': {
+        if (nodesAttrs.includes(t.attr)) { if (!placed.has(s.node)) placed.set(s.node, new Set()); placed.get(s.node)!.add(t.attr); }
+        return s.inh[t.attr] as S2Value;
+      }
       case 'get': {
         const r = resolve(s, t.name);
         const rec = itemValue(r.items[0], r.scope, t.name) as { record: Record<string, S2Value> } | undefined;

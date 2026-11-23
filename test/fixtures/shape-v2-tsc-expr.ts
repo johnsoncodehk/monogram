@@ -1,10 +1,11 @@
 // ShapeSpec v2: a subset of tsc's AST (typescript 5.9, as test/shape-oracle-tsc.ts normalises
 // it) from typescript.ts, in the core calculus only (src/shape2-schema.ts): the expressions
 // below, the root, the statements, functions, arrows and their parameters (as in
-// shape-v2-estree-expr.ts), binding patterns, object / array literals, spread and templates.
+// shape-v2-estree-expr.ts), binding patterns, object / array literals, spread and templates,
+// classes, and modules (import / export, with the modifiers the wrapping arms hand a declaration).
 // Checked against tsc's parser by test/shape2-oracle.ts. Not total: an arm outside the subset
-// (`switch`, other declarations, classes, an object member's modifier words and decorators, type
-// syntax) is unmapped, and a unit that reaches one is reported as outside the subset, not compared.
+// (`switch`, other declarations, an object member's modifier words, decorators, type syntax) is
+// unmapped, and a unit that reaches one is reported as outside the subset, not compared.
 //
 // Positions: a node's start is tsc's `getStart()` (the first token); tsc's `pos` (leading trivia
 // included) is not produced (the harness compares it only when both sides carry it).
@@ -19,6 +20,24 @@ const idOf = (leaf: string, textOf: Term = cook('identifierName', leaf)): Term =
 const privateOf = (leaf: string): Term => node('PrivateIdentifier', { text: text(leaf) }, { from: leaf, to: leaf });
 const numeric = (leaf: string): Term => node('NumericLiteral', { text: cook('tsNumericText', leaf), numericLiteralFlags: cook('tsNumericLiteralFlags', leaf) });
 const name = (): Term => branch('alt', { ident: idOf('ident'), privateField: privateOf('privateField') });
+
+// ── Modifiers handed down (the node-valued inherited attribute `modifiers`) ──
+// tsc puts the `export` / `declare` words and the outer decorators on the INNER declaration
+// (`export declare function f(): void;` is one FunctionDeclaration whose modifiers are
+// [ExportKeyword, DeclareKeyword]); in the grammar they sit in the Decl arms that wrap it. Each
+// wrapping arm hands the declaration the list it got with its own words appended, built only
+// from what precedes the declaration; a RECEIVER places the list before its own modifiers and
+// then starts at the first inherited one.
+type Item = Term | { spread: Term };
+/** A receiver: `fields`, and `modifiers` = the inherited ones then `own` (absent when both are
+ * empty: `ownPresent` says whether `own` is). With inherited modifiers the node spans from the
+ * first of them to the end of its arm. */
+const receiver = (type: string | Term, own: Item[], ownPresent: Term, fields: Record<string, Term>): Term =>
+  let_('$modifiers', inh('modifiers'), let_('$arm', absent, iff(present('$modifiers'),
+    node(type, { modifiers: list(spread(v('$modifiers')), ...own), ...fields }, { from: '$modifiers', to: '$arm' }),
+    node(type, { modifiers: iff(ownPresent, list(...own), absent), ...fields }))));
+/** What a wrapping arm hands its declaration: what it got, then its own words. */
+const handDown = (...own: Item[]): Term => list(spread(inh('modifiers')), ...own);
 
 const BINARY: Record<string, string> = {
   '=': 'EqualsToken', '+=': 'PlusEqualsToken', '-=': 'MinusEqualsToken', '*=': 'AsteriskEqualsToken', '/=': 'SlashEqualsToken',
@@ -98,8 +117,8 @@ const FOR_RULES: Shape2Spec['rules'] = {
 /** The statements (ECMA-262 14), one node per Stmt arm. */
 const STATEMENTS: Record<string, Term> = {
   block: child('block'),
-  variable: node('VariableStatement', { declarationList: declarationList('kind', match(text('kind'), { var: absent, let: c('Let'), const: c('Const') })) }),
-  using: node('VariableStatement', {
+  variable: receiver('VariableStatement', [], c(false), { declarationList: declarationList('kind', match(text('kind'), { var: absent, let: c('Let'), const: c('Const') })) }),
+  using: receiver('VariableStatement', [], c(false), {
     declarationList: iff(present('awaitKeyword'), declarationList('awaitKeyword', c('Const|Using')), declarationList('usingKeyword', c('Using'))),
   }),
   if_: node('IfStatement', { expression: commaOf('condition'), thenStatement: child('consequence'), elseStatement: child('alternative') }),
@@ -125,21 +144,26 @@ const STATEMENTS: Record<string, Term> = {
 
 // ── Functions ──
 // Four arms per form (plain, generator, async, async generator). tsc's `modifiers` holds the
-// `async` keyword (and, on a declaration, `export` / `declare` / `default`: those come with the
-// import / export slice); `asteriskToken` the generator's `*`.
+// `async` keyword (and, on a declaration, the `export` / `declare` / `default` words the wrapping
+// arms hand it: `receiver`); `asteriskToken` the generator's `*`.
 type FnArm = 'function_' | 'generator' | 'asyncFunction' | 'asyncGenerator';
 const FUNCTIONS: FnArm[] = ['function_', 'generator', 'asyncFunction', 'asyncGenerator'];
 const asyncModifier: Term = list(token('AsyncKeyword', 'asyncKeyword'));
 /** A return type: a type, or a type predicate `x is T` (not mapped yet: types are not mapped). */
 const returnType: Term = branch('returnType', { type: child('type') });
-const fnFields = (a: FnArm, name: Term, body: Term): Record<string, Term> => ({
-  ...(a === 'asyncFunction' || a === 'asyncGenerator' ? { modifiers: asyncModifier } : {}),
+const isAsyncFn = (a: FnArm): boolean => a === 'asyncFunction' || a === 'asyncGenerator';
+const fnFields = (a: FnArm, name: Term, body: Term, modifiers = true): Record<string, Term> => ({
+  ...(modifiers && isAsyncFn(a) ? { modifiers: asyncModifier } : {}),
   ...(a === 'generator' || a === 'asyncGenerator' ? { asteriskToken: token('AsteriskToken', 'asterisk') } : {}),
   name,
   typeParameters: child('typeParameters'), parameters: child('parameter'), type: returnType, body,
 });
-// A declaration's body is a block, or none (an overload or an ambient signature).
-const FUNCTION_DECLARATIONS = Object.fromEntries(FUNCTIONS.map((a) => [a, node('FunctionDeclaration', fnFields(a, idOf('name'), branch('body', { block: child('block'), semi: absent })))]));
+// A declaration's body is a block, or none (an overload or an ambient signature). It receives the
+// modifiers of the arms that wrap it, then its own (`own`, and `async`).
+const functionDeclaration = (a: FnArm, name: Term, own: Item[] = [], ownPresent: Term = c(false)): Term => receiver('FunctionDeclaration',
+  [...own, ...(isAsyncFn(a) ? [token('AsyncKeyword', 'asyncKeyword')] : [])], isAsyncFn(a) ? c(true) : ownPresent,
+  fnFields(a, name, branch('body', { block: child('block'), semi: absent }), false));
+const FUNCTION_DECLARATIONS = Object.fromEntries(FUNCTIONS.map((a) => [a, functionDeclaration(a, idOf('name'))]));
 const FUNCTION_EXPRESSIONS = Object.fromEntries(FUNCTIONS.map((a) => [a, node('FunctionExpression', fnFields(a, iff(present('name'), idOf('name'), absent), child('body')))]));
 /** An arrow: a parenthesised parameter list (`parameter` repeats) or one identifier (a Parameter
  * over it); a block or an expression body (ConciseBody). */
@@ -312,8 +336,8 @@ const PRIMARY: Record<string, Term> = {
 
 // ── Classes ──
 // A modifier word is its keyword token. tsc's `modifiers` list holds the decorators and the words
-// in source order, and is absent when empty. A declaration that an `export` / `declare` / outer
-// decorator arm wraps is outside the subset: those words sit in the outer arm (import / export).
+// in source order, and is absent when empty. A class that an `export` / `declare` / prefix arm
+// wraps receives that arm's words first (`receiver`).
 const KEYWORDS: Record<string, string> = {
   public: 'PublicKeyword', private: 'PrivateKeyword', protected: 'ProtectedKeyword', static: 'StaticKeyword', abstract: 'AbstractKeyword',
   readonly: 'ReadonlyKeyword', override: 'OverrideKeyword', accessor: 'AccessorKeyword', declare: 'DeclareKeyword', export: 'ExportKeyword',
@@ -388,17 +412,18 @@ const CLASS_RULES: Shape2Spec['rules'] = {
     led_template: asElement(node('TaggedTemplateExpression', { tag: child('left'), template: templateOf('template') })),
   },
 };
-const classDeclarations = (modifiers: Term): Record<string, Term> => ({
-  namedClass: node('ClassDeclaration', { modifiers, ...classFields(idOf('name')) }),
-  anonymousClass: node('ClassDeclaration', { modifiers, ...classFields(absent) }),
+const classDeclarations = (own: Item[], ownPresent: Term, nameTerm: Term = idOf('name')): Record<string, Term> => ({
+  namedClass: receiver('ClassDeclaration', own, ownPresent, classFields(nameTerm)),
+  anonymousClass: receiver('ClassDeclaration', own, ownPresent, classFields(absent)),
 });
 const prefixWords: Term = branch('prefix', {
   decorated: list(spread(child('decorator')), ...runWords()),
   modified: branch('alt', { plain: list(...runWords()), static_: list(keyword('staticModifier'), spread(map('modifierAfterStatic', keyword('modifierAfterStatic')))) }),
 });
 const CLASS_DECLARATIONS: Record<string, Term> = {
-  ...classDeclarations(absent),
-  prefixed: branch('declaration', classDeclarations(prefixWords)),
+  ...classDeclarations([], c(false)),
+  // A class takes the prefix as its own; any other declaration (`other`) receives it.
+  prefixed: branch('declaration', { ...classDeclarations([spread(prefixWords)], c(true)), other: child('decl') }),
 };
 const classExpressionModifiers = modifiersOf(
   ['decorator', ...RUN, 'decoratorRest', 'modifierRest', 'staticModifierRest', 'modifierRestAfterStatic'],
@@ -409,21 +434,117 @@ const CLASS_EXPRESSIONS: Record<string, Term> = {
   anonymousClass: node('ClassExpression', { modifiers: classExpressionModifiers, ...classFields(absent) }),
 };
 
+// ── Modules ──
+// A module specifier is a StringLiteral; its attributes an ImportAttributes node from `with` to
+// `}`. A specifier's ModuleExportName is an Identifier or a StringLiteral; a renamed one holds the
+// name it reads as `propertyName`.
+const stringLiteral = (leaf: string): Term => node('StringLiteral', { text: cook('stringValue', leaf), hasExtendedUnicodeEscape: cook('hasExtendedUnicodeEscape', leaf) }, { from: leaf, to: leaf });
+const exportName = (n: string): Term => branch(n, { ident: idOf('ident'), string: stringLiteral('string') });
+const importAttribute = (key: string, value: string): Term => node('ImportAttribute', { name: exportName(key), value: stringLiteral(value) }, { from: key, to: value });
+const moduleFields: Record<string, Term> = {
+  moduleSpecifier: stringLiteral('source'),
+  attributes: iff(present('withKeyword'), node('ImportAttributes', {
+    elements: iff(present('attributeKey'), list(importAttribute('attributeKey', 'attributeValue'), spread(map('attributeKeyRest', importAttribute('attributeKeyRest', 'attributeValueRest')))), list()),
+    token: c('WithKeyword'),
+  }, { from: 'withKeyword', to: 'attributesClose' }), absent),
+};
+/** `export { … } from "m"`: the module part is optional. */
+const optionalModule: Record<string, Term> = {
+  moduleSpecifier: iff(present('source'), moduleFields.moduleSpecifier, absent), attributes: iff(present('source'), moduleFields.attributes, absent),
+};
+const namedImports: Term = node('NamedImports', { elements: child('specifier') }, { from: 'brace', to: 'braceClose' });
+const namespaceImport: Term = node('NamespaceImport', { name: idOf('namespace') }, { from: 'star', to: 'namespace' });
+const exportKeyword: Term = token('ExportKeyword', 'exportKeyword');
+const typeOnly: Term = present('typeKeyword');
+/** An import clause's parts. tsc's ImportClause also spans a `type` that the Decl arm reads, so
+ * ImportClause is RECORD-VALUED and the import arm builds the node. */
+const MODULE_RULES: Shape2Spec['rules'] = {
+  ImportClause: {
+    deferNamespace: record({ name: absent, namedBindings: namespaceImport, phaseModifier: c('DeferKeyword') }),
+    defaultBinding: record({ name: idOf('name'), namedBindings: iff(present('bindings'), branch('bindings', { named: namedImports, namespace: namespaceImport }), absent), phaseModifier: absent }),
+    named: record({ name: absent, namedBindings: namedImports, phaseModifier: absent }),
+    namespace: record({ name: absent, namedBindings: namespaceImport, phaseModifier: absent }),
+  },
+  ImportSpecifier: {
+    renamed: node('ImportSpecifier', { propertyName: idOf('imported'), name: idOf('local'), isTypeOnly: typeOnly }),
+    plain: node('ImportSpecifier', { name: idOf('local'), isTypeOnly: typeOnly }),
+    stringRenamed: node('ImportSpecifier', { propertyName: stringLiteral('imported'), name: idOf('local'), isTypeOnly: typeOnly }),
+  },
+  ExportSpecifier: {
+    typed: node('ExportSpecifier', { propertyName: iff(present('exported'), exportName('local'), absent), name: iff(present('exported'), exportName('exported'), exportName('local')), isTypeOnly: c(true) }),
+    typedAs: branch('rename', {
+      none: node('ExportSpecifier', { name: idOf('local'), isTypeOnly: c(true) }),
+      renamed: node('ExportSpecifier', { propertyName: idOf('local'), name: exportName('exported'), isTypeOnly: c(true) }),
+    }),
+    specifier: node('ExportSpecifier', { propertyName: iff(present('exported'), exportName('local'), absent), name: iff(present('exported'), exportName('exported'), exportName('local')), isTypeOnly: c(false) }),
+  },
+  // `require("m")`, or an EntityName (a left-nested QualifiedName chain). A `require` of a
+  // non-string expression (a checker error, parsed) is not mapped.
+  ModuleReference: {
+    external: branch('argument', { string: node('ExternalModuleReference', { expression: stringLiteral('string') }, { from: 'requireKeyword', to: 'parenClose' }) }),
+    entityName: fold('rest', idOf('first'), 'acc', node('QualifiedName', { left: v('acc'), right: idOf('rest') }, { from: 'acc', to: 'rest' })),
+  },
+};
+const importClause = (from: string, isTypeOnly: boolean): Term => node('ImportClause', {
+  name: get('clause', 'name'), namedBindings: get('clause', 'namedBindings'),
+  phaseModifier: isTypeOnly ? c('TypeKeyword') : get('clause', 'phaseModifier'), isTypeOnly: c(isTypeOnly),
+}, { from, to: 'clause' });
+const exportDeclaration = (fields: Record<string, Term>): Term => receiver('ExportDeclaration', [], c(false), fields);
+const namedExports: Term = node('NamedExports', { elements: child('specifier') }, { from: 'brace', to: 'braceClose' });
+const MODULE_DECLARATIONS: Record<string, Term> = {
+  // The wrapping arms: the declaration receives `export` / `declare` (inherited `modifiers`).
+  exportDeclaration: branch('declaration', { decl: child('decl'), variable: child('stmt') }),
+  declared: branch('declaration', { decl: child('decl'), statement: child('stmt') }),
+  // `export default`: its words are the declaration's own modifiers; an expression is an
+  // ExportAssignment. The decorated forms (decorators are not mapped) and an interface (types) are not.
+  exportDefault: let_('$default', branch('defaultWord', { plain: list(token('DefaultKeyword', 'defaultKeyword')) }), branch('declaration', {
+    ...Object.fromEntries(FUNCTIONS.map((a) => [a, functionDeclaration(a, iff(present('name'), idOf('name'), absent), [exportKeyword, spread(v('$default'))], c(true))])),
+    ...classDeclarations([exportKeyword, spread(v('$default')), spread(child('decorator')), spread(iff(present('abstractKeyword'), list(token('AbstractKeyword', 'abstractKeyword')), list()))], c(true)),
+    expression: receiver('ExportAssignment', [], c(false), { expression: child('expr') }),
+  })),
+  exportAll: exportDeclaration({
+    exportClause: iff(present('exported'), node('NamespaceExport', { name: exportName('exported') }, { from: 'star', to: 'exported' }), absent),
+    ...moduleFields, isTypeOnly: typeOnly,
+  }),
+  exportNamed: exportDeclaration({ exportClause: namedExports, ...optionalModule, isTypeOnly: c(false) }),
+  exportNamedType: exportDeclaration({ exportClause: namedExports, ...optionalModule, isTypeOnly: c(true) }),
+  exportEquals: receiver('ExportAssignment', [], c(false), { expression: child('expr'), isExportEquals: c(true) }),
+  exportAsNamespace: receiver('NamespaceExportDeclaration', [], c(false), { name: idOf('name') }),
+  importDeclaration: branch('form', {
+    clause: receiver('ImportDeclaration', [], c(false), { importClause: importClause('clause', false), ...moduleFields }),
+    typeClause: receiver('ImportDeclaration', [], c(false), { importClause: importClause('typeKeyword', true), ...moduleFields }),
+    bare: receiver('ImportDeclaration', [], c(false), moduleFields),
+    equals: receiver('ImportEqualsDeclaration', [], c(false), { name: idOf('name'), moduleReference: child('reference'), isTypeOnly: c(false) }),
+    typeEquals: receiver('ImportEqualsDeclaration', [], c(false), { name: idOf('name'), moduleReference: child('reference'), isTypeOnly: c(true) }),
+  }),
+};
+
 export const tscExprShape: Shape2Spec = {
   name: 'tsc-expr',
   synthesized: {
     optional: { type: 'bool', default: false, rules: { Expr: { led_optChain: c(true), led_dot: syn('optional', 'left'), led_bracket: syn('optional', 'left'), led_paren: syn('optional', 'left'), led_bang: syn('optional', 'left') } } },
-    // A property key that names the constructor: the identifier or a string whose value it is.
-    constructorName: { type: 'bool', default: false, rules: { MemberName: { ident: match(text('ident'), { constructor: c(true) }, c(false)), string: match(cook('stringValue', 'string'), { constructor: c(true) }, c(false)) } } },
+    // A property key that names the constructor: the identifier (its StringValue: an escaped spelling too) or a string whose value it is.
+    constructorName: { type: 'bool', default: false, rules: { MemberName: { ident: match(cook('identifierName', 'ident'), { constructor: c(true) }, c(false)), string: match(cook('stringValue', 'string'), { constructor: c(true) }, c(false)) } } },
   },
   inherited: {
     // A link is the top of its chain unless it is the object / callee of another link: a
     // trailing `!` is a chain link (NonNullChain) only when a link follows it.
     chainTop: { type: 'bool', default: true, rules: { Expr: Object.fromEntries(['led_dot', 'led_optChain', 'led_bracket', 'led_paren', 'led_bang'].map((a) => [a, { left: c(false) }])) } },
     // A heritage clause's element (its top ClassHeritage node) is an ExpressionWithTypeArguments.
+    // The modifiers the arms wrapping a declaration hand it (see `receiver`): L-attributed by
+    // construction (each equation reads only what precedes the declaration).
+    modifiers: {
+      type: 'nodes', rules: {
+        Decl: {
+          exportDeclaration: { decl: handDown(exportKeyword), stmt: handDown(exportKeyword) },
+          declared: { decl: handDown(token('DeclareKeyword', 'declareKeyword')), stmt: handDown(token('DeclareKeyword', 'declareKeyword')) },
+          prefixed: { decl: handDown(spread(prefixWords)) },
+        },
+      },
+    },
     heritageElement: {
       type: 'bool', default: false,
-      rules: { Decl: { namedClass: { base: c(true) }, anonymousClass: { base: c(true) }, prefixed: { base: c(true) } }, Expr: { namedClass: { base: c(true) }, anonymousClass: { base: c(true) } } },
+      rules: { Decl: { namedClass: { base: c(true) }, anonymousClass: { base: c(true) }, prefixed: { base: c(true) }, exportDefault: { base: c(true) } }, Expr: { namedClass: { base: c(true) }, anonymousClass: { base: c(true) } } },
     },
   },
   rules: {
@@ -443,7 +564,8 @@ export const tscExprShape: Shape2Spec = {
     },
     ...PARAM_RULES,
     ...PATTERN_RULES,
-    Decl: { ...FUNCTION_DECLARATIONS, ...CLASS_DECLARATIONS },
+    Decl: { ...FUNCTION_DECLARATIONS, ...CLASS_DECLARATIONS, ...MODULE_DECLARATIONS },
+    ...MODULE_RULES,
     ...CLASS_RULES,
     CatchParameter: { ident: node('VariableDeclaration', { name: idOf('ident'), type: child('type') }), bindingPattern: node('VariableDeclaration', { name: child('bindingPattern'), type: child('type') }) },
     ...FOR_RULES,
