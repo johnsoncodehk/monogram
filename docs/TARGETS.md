@@ -58,9 +58,10 @@ begin beyond ASCII, and elements in a newline-mode grammar. The text dialect's s
 
 An `identifier` token whose own pattern does not take an ASCII member of IdentifierPart
 (`src/uni-ident.ts`: `$`, also an ASCII digit or letter the pattern leaves out) ends at such a
-unit in every lexer: the interpreter extends an identifier the pattern cut short over units beyond
-ASCII only (`LX_UNI_CONT`), as the portable lexers do (`lxExt`), so the token's pattern decides
-ASCII. Witness: an identifier `[a-z_][a-z0-9_]*` and the text `a$` (every lexer: `a`, then `$`
+unit in every lexer: the interpreter extends an identifier the pattern cut short only when it stopped
+at a unit beyond ASCII (`LX_UNI_CONT`), as the portable lexers do (`lxExt`), so the token's pattern
+decides where an ASCII run ends; an extension, once begun, takes the whole IdentifierPart run
+(`na|ïve`, `aé$`). Witness: an identifier `[a-z_][a-z0-9_]*` and the text `a$` (every lexer: `a`, then `$`
 by the Unicode fallback; rows in `test/emit-lexer-verify.ts`). No shipped grammar shows it: every
 real identifier pattern takes `$` and all ASCII identifier characters.
 The portable side follows the stated contract (the grammar's ASCII pattern decides ASCII; the

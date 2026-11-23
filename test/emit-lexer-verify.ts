@@ -88,17 +88,18 @@ for (const name of ['typescript', 'typescriptreact', 'javascript', 'javascriptre
   bad += check(`emitted ${name}`, matches[0].g, m.tokenize, m, gtComposites(grammar));
 }
 
-// ── 3) an identifier the ASCII pattern cut short extends over units beyond ASCII only ──
-// (docs/TARGETS.md: the token's own pattern decides ASCII, as the portable lexers' lxExt does):
-// on a toy whose identifier pattern lacks `$`, `a$` is `a` then `$` (the Unicode fallback's
-// identifier), never one `a$`; `aé` is still one identifier.
+// ── 3) an identifier the ASCII pattern cut short extends only from a unit beyond ASCII ──
+// (docs/TARGETS.md: where the token's own pattern stops at an ASCII unit, it ends; as the portable
+// lexers' lxExt does): on a toy whose identifier pattern lacks `$`, `a$` is `a` then `$` (the
+// Unicode fallback's identifier), never one `a$`; an extension begun at `é` takes the whole
+// IdentifierPart run after it, ASCII included (`naïve`, `aé$`).
 {
   const { token, rule, defineGrammar, seq, oneOf, range, star, many } = await import('../src/api.ts');
   const { lexSpecOf } = await import('../src/emit-lexer.ts');
   const Ident = token(seq(oneOf(range('a', 'z'), '_'), star(oneOf(range('a', 'z'), range('0', '9'), '_'))), { identifier: true });
   const P = rule(() => [[many(Ident)]]);
   const tokenize = compileTokenizer(lexSpecOf(defineGrammar({ name: 'idtoy', tokens: { Ident }, rules: { P } })));
-  const rows: [string, string[]][] = [['a$', ['a', '$']], ['a$b', ['a', '$b']], ['ab1 c', ['ab1', 'c']], ['aé', ['aé']], ['aé$', ['aé', '$']], ['caf\u00e9 x', ['café', 'x']]];
+  const rows: [string, string[]][] = [['a$', ['a', '$']], ['a$b', ['a', '$b']], ['ab1 c', ['ab1', 'c']], ['aé', ['aé']], ['aé$', ['aé$']], ['naïve x', ['naïve', 'x']], ['é$ a$', ['é$', 'a', '$']], ['caf\u00e9 x', ['café', 'x']]];
   for (const [src, want] of rows) {
     const got = tokenize(src).map((t) => t.text);
     if (JSON.stringify(got) !== JSON.stringify(want)) { bad++; console.log(`✗ identifier extension ${JSON.stringify(src)}: ${JSON.stringify(got)}, want ${JSON.stringify(want)}`); }
