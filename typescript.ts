@@ -487,16 +487,9 @@ const instantiationEnd = not(alt(
 ));
 
 const Expr = rule($ => [
-  // A standalone identifier expression, but never a reserved word that has no expression
-  // role (see notReservedExpr). This kills the bare-identifier fallback for keywords like
-  // `catch`/`throw` and the prefix operators `void`/`typeof`/`delete`, so `catch(x){}`
-  // with no `try`, `void ;`, and `throw ;` are rejected as TS does. (`enum` is included —
-  // it previously had its own `not('enum')` guard for the same reason.)
-  // Keyword-valued literals come BEFORE the bare-identifier nud: a longest-match TIE
-  // (both are one token) goes to the first-listed alternative, so listing the literals
-  // first makes `this`/`true`/… arrive as $keyword leaves — the tree records what the
-  // word IS instead of the bare-identifier fallback winning the tie and stamping Ident.
-  'true', 'false', 'null', 'undefined', 'this',
+  // The keyword-valued literals and `this` (reserved words, so the identifier below refuses
+  // them: each is its own arm alone).
+  'true', 'false', 'null', 'this',
   // `super` is a CONSTRAINED primary (mirrors tsc's parseSuperExpression): it MUST be
   // immediately followed by a call `(args)`, a member `.name`/`.#priv`, or an element
   // `[expr]` access. Bare `super`, `super<T>()`, `super?.x`, a super-tagged-template, and
@@ -504,10 +497,10 @@ const Expr = rule($ => [
   // LEDs (type-arg call, optional chain, tagged template, assignment) attach and re-open
   // that whole class; further access chains off the RESULT normally (`super.x<T>()`).
   [field('superKeyword', 'super'), alt(['(', sep($, ','), ')'], ['.', alt(Ident, PrivateField)], ['[', $, ']'])],
-  // bare-identifier NUD — excludes `super` AND `new` (reserved one-token text matches
-  // handled by their own arms above; without these guards a failed `super`/`new` arm would
-  // slide the keyword in here as an Ident — e.g. `new <T>Foo()` reparsing as `(new < T) > Foo()`).
-  [not('super'), not('new'), notReservedExpr, Ident],
+  // A standalone identifier expression (IdentifierReference): never a reserved word (see
+  // notReservedExpr), so `catch(x){}` with no `try`, `void ;`, `throw ;`, and a failed `super` /
+  // `new` arm (`new <T>Foo()` is no `(new < T) > Foo()`) are no expression.
+  [notReservedExpr, Ident],
   Number_,
   String_,
   Template,
