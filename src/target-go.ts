@@ -14,6 +14,7 @@ import { blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKi
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './emit.ts';
+import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR } from './recovery-family.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, unitMask, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
@@ -2908,7 +2909,7 @@ func SlimJSONWith(b *SlimBuilder, root int32) string {
 
 const GO_TYPES: Record<Ty, string> = {
   int: 'int', lid: 'uint16', depth: 'int', pos: 'int', idx: 'int', bool: 'bool', str: 'string', meta: 'alignMeta', tok: 'Tok', edit: 'Edit',
-  metas: '[]alignMeta', toks: '[]Tok', bools: '[]bool', depths: '[]int', edits: '[]Edit',
+  metas: '[]alignMeta', toks: '[]Tok', bools: '[]bool', depths: '[]int', ints: '[]int', edits: '[]Edit',
 };
 const GO_META: Record<MetaInt, string> = { off: 'int32', end: 'int32', kid: 'uint16', pd: 'uint16', fd: 'uint16', td: 'uint8' };
 const GO_TOK: Record<TokInt, string> = { off: 'uint32', end: 'uint32', kid: 'uint16', lid: 'uint16' };
@@ -3010,7 +3011,8 @@ ${[...ones, ...wides].join('\n')}
         (r.prec < p || (right && r.prec === p) || ((op === 'shr' || op === 'shl') && r.prec < ATOM) || (COMPARISON.has(op) && r.prec >= 3 && r.prec <= 4) ? `(${r.c})` : r.c);
       return { c: `${side(a, false)} ${sp} ${side(b, true)}`, prec: p };
     },
-    call: (name, args) => `${name}(${args.join(', ')})`,
+    // An engine method is one of the recovery engine `rv *recov`.
+    call: (name, args, method) => `${method ? 'rv.' : ''}${name}(${args.join(', ')})`,
     len: (cx, l) => cx.atom(`len(${l.c})`, 'int', 'int'),
     code: (cx, s, i) => cx.atom(`int(${goWrap(s, ATOM)}[${i.c}])`, 'int', 'int'),
     hasAt: (cx, s, i, lit) => cx.atom(`strings.HasPrefix(${goWrap(s, ATOM)}[${i.c}:], ${goLit(lit)})`, 'bool', 'bool'),
@@ -3022,6 +3024,9 @@ ${[...ones, ...wides].join('\n')}
     findAny: (cx, s, i, stops) => cx.atom(`${findAnyName(stops)}(${s.c}, ${i.c})`, 'int', 'int'),
     own: (_cx, r) => r,
     cat: (cx, parts) => ({ ...cx.atom(parts.map((r) => goWrap(r, 7)).join(' + '), 'str', 'str'), prec: 6 }),
+    // The decoded table is a field of the recovery engine, decoded when a run starts: a package-level
+    // table decoded on first use would need sync.Once, and the default module imports no "sync".
+    tab: (cx, name, i) => cx.atom(`rv.tab${name}[${i.c}]`, 'int', 'int'),
   },
   stmt: {
     comment: (text) => [`// ${text}`],
@@ -3045,11 +3050,12 @@ ${[...ones, ...wides].join('\n')}
     fn: (f) => [
       ...f.doc.map((l) => `// ${l}`),
       ...(f.cold ? ['//go:noinline'] : []),
-      `func ${f.name}(${f.params.map((p) => `${p.name} ${p.type}`).join(', ')}) ${f.rets.length === 0 ? '' : f.rets.length === 1 ? `${f.rets[0]} ` : `(${f.rets.join(', ')}) `}{`,
+      `func ${f.method ? '(rv *recov) ' : ''}${f.name}(${f.params.map((p) => `${p.name} ${p.type}`).join(', ')}) ${f.rets.length === 0 ? '' : f.rets.length === 1 ? `${f.rets[0]} ` : `(${f.rets.join(', ')}) `}{`,
       ...goBlock(f.body),
       '}',
     ].join('\n'),
   },
+  intTable: (name, packed) => `const tabS${name} = ${JSON.stringify(packed)}`,
   relex: {
     index: 'int',
     expr: {
@@ -3097,10 +3103,26 @@ ${[...ones, ...wides].join('\n')}
 
 // No callee-FIRST body guards: a Go rd call refused at its dispatch costs less than the guard's test
 // on every iteration (measured: starInC 35 -> 48 instructions per call, typescript.d.ts +0.46% reuse).
-const FACTS: PortableFacts = { calleeFirstGuards: false };
+export const FACTS: PortableFacts = { calleeFirstGuards: false };
 
 // The runner's batch-total mode (emit option `recovery`): NUL-separated inputs in, one line per
 // input out: [accepted, [[off, end, message, relOff, relEnd, relMessage], ...]] (relOff -1: none).
+// batch-interp <depth>: [accepted, steps, CST JSON or ""] per input, by ParseInterpreted.
+const GO_BATCH_INTERP = `	if len(os.Args) > 2 && os.Args[1] == "batch-interp" {
+		depth, _ := strconv.Atoi(os.Args[2])
+		var b strings.Builder
+		for _, s := range strings.Split(src, "\\x00") {
+			cb := &CstBuilder{}
+			h, ok, steps := ParseInterpreted(s, cb, depth)
+			cst := ""
+			if ok { cst = CstJSONWith(cb, h) }
+			line, _ := json.Marshal([]interface{}{ok, steps, cst})
+			b.Write(line); b.WriteByte('\\n')
+		}
+		os.Stdout.WriteString(b.String())
+		return
+	}
+`;
 const GO_BATCH_TOTAL = `	if len(os.Args) > 1 && os.Args[1] == "batch-total" {
 		var b strings.Builder
 		for _, s := range strings.Split(src, "\\x00") {
@@ -3122,12 +3144,153 @@ const GO_BATCH_TOTAL = `	if len(os.Args) > 1 && os.Args[1] == "batch-total" {
 // module and touching none of it. ParseTotal runs the entry rule as parseWithW does (runW, the
 // builder engine, for every builder); on a reject the recovery family decides the diagnostic from
 // the position the entry stopped at and the tokens the parse examined.
+// The interpreter's engine (src/recovery-family.ts ENGINE_EXTERNS) over the builder engine parserW:
+// each a call of what its native functions do. recov is a struct of its own, so the default
+// module's parserW is unchanged; the native dispatch by id is a switch over the plan's ids
+// (ParserIR.forms says which functions exist in building form).
+function recoveryEngineGo(ir: ParserIR): string {
+  const ids = buildLexIdPlan(ir), ar = buildArenaIdPlan(ir, ids);
+  const sw = (on: string, cases: [number, string][]) => `switch ${on} {${cases.map(([k, c]) => `\n\tcase ${k}:\n\t\treturn ${c}`).join('')}\n\t}\n\tpanic("recovery: no native function")`;
+  const build = ir.rules.filter((r) => ir.forms.buildRules.includes(r.name));
+  const holes = ir.tpl ? tplHoleRules(ir) : [];
+  const opRead = ids.gtComps.length === 0 ? '\tlid, n, end := t.Lid, 1, t.End'
+    : `\tlid, n, end := gtOp(p.toks, p.pos)\n\tif t.Lid == ${lidOf(ids, '>')} { if e := p.pos + n + 1; e > p.maxLook { p.maxLook = e } }`;
+  return `// recov: the interpreter's engine over p, the marks it took, the plan's decoded table, the offset
+// of the node it last finished, the binary operator it last read, and the steps of the run.
+type recov struct {
+	p *parserW
+	marks []mark
+	tabrt []int
+	finOff, opN, steps int
+	opEnd uint32
+}
+func (rv *recov) enPos() int { return rv.p.pos }
+func (rv *recov) enSetPos(q int) { rv.p.pos = q }
+func (rv *recov) enBack(q int) { rv.p.back(q) }
+func (rv *recov) enPeekKid() int { t := rv.p.peek(); if t == nil { return -1 }; return int(t.Kid) }
+func (rv *recov) enPeekLid() int { t := rv.p.peek(); if t == nil { return -1 }; return int(t.Lid) }
+func (rv *recov) enPeekNl() bool { t := rv.p.peek(); return t != nil && t.Nl }
+func (rv *recov) enLit(l int) bool { return rv.p.litW(uint16(l)) && rv.p.takeW(litTt(uint16(l))) }
+func (rv *recov) enComp(l int) bool { return rv.p.matchComp(uint16(l)) }
+func (rv *recov) enTok(k int) bool { return rv.p.tokW(uint16(k)) && rv.p.takeW(uint16(k)) }
+func (rv *recov) enAhead(set int, is bool) bool { return rv.p.ahead(set, is) }
+func (rv *recov) enCtxWord() bool { return rv.p.ctxWord() }
+func (rv *recov) enSecondIn(set int) bool { return rv.p.secondIn(set) }
+func (rv *recov) enLook(id int) bool {
+	${sw('id', ir.lookaheads.map((_, i) => [i, `rv.p.look${i}()`]))}
+}
+func (rv *recov) enRule(r int) bool {
+	${sw('r', build.map((r) => [ruleIdOf(ar, r.name), `rv.p.callRuleW(rv.p.parse${r.name}W())`]))}
+}
+func (rv *recov) enBp(r, bp int) bool {
+	${sw('r', build.filter((r) => r.kind === 'pratt').map((r) => [ruleIdOf(ar, r.name), `rv.p.callRuleW(rv.p.bpW_${r.name}(bp))`]))}
+}
+func (rv *recov) enShared(i int) bool {
+	${sw('i', ir.shared.flatMap((_, i): [number, string][] => (ir.forms.buildShared[i] ? [[i, `rv.p.sub${i}W()`]] : [])))}
+}
+func (rv *recov) enTpl(hole int) bool {
+	${sw('hole', holes.map((h) => [ruleIdOf(ar, h), `rv.p.callRuleW(rv.p.matchTemplateW_${h}())`]))}
+}
+func (rv *recov) enSh() int { return len(rv.p.scratch) }
+func (rv *recov) enCut(h int) { rv.p.scratch = rv.p.scratch[:h] }
+func (rv *recov) enMark() int { rv.marks = append(rv.marks, rv.p.mark()); return len(rv.marks) - 1 }
+func (rv *recov) enReset(k int) { m := rv.marks[k]; rv.p.back(m.pos); rv.p.scratch = rv.p.scratch[:m.sb]; rv.p.b.Restore(m.nb, m.kb) }
+func (rv *recov) enUnmark(k int) { rv.marks = rv.marks[:k] }
+func (rv *recov) enWin(r, c, save, sb int) {
+	n := rv.p.finishW(uint16(r), c, rv.p.offAt(save), save)
+	rv.p.scratch = rv.p.scratch[:sb]
+	if n.present { rv.p.scratch = append(rv.p.scratch, n.h) }
+	rv.finOff = int(n.off)
+}
+func (rv *recov) enFinLed(r, sb, off, tok int) {
+	n := rv.p.finishW(uint16(r), sb, off, tok)
+	if n.present { rv.p.scratch = append(rv.p.scratch, n.h) }
+	rv.finOff = int(n.off)
+}
+func (rv *recov) enFinOff() int { return rv.finOff }
+func (rv *recov) enOpLid() int {
+	p := rv.p
+	t := p.peek()
+${opRead}
+	rv.opN, rv.opEnd = n, end
+	return int(lid)
+}
+func (rv *recov) enLeafOpN() { p := rv.p; t := &p.toks[p.pos]; p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, rv.opEnd); p.pos += rv.opN }
+func (rv *recov) enLeafOp() { p := rv.p; t := &p.toks[p.pos]; p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++ }
+func (rv *recov) enLeafKid() { p := rv.p; t := &p.toks[p.pos]; p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++ }
+func (rv *recov) enHeadLid(sb int) int {
+	if sb >= len(rv.p.scratch) { return 0 }
+	return int(lidOf(rv.p.headLeafTextW(spanned{h: rv.p.scratch[sb], present: true})))
+}
+func (rv *recov) enSt(k int) int {
+	p := rv.p
+	switch k {
+	case ${ST_CAPPED}:
+		if p.capped { return 1 }
+		return 0
+	case ${ST_FORM}:
+		return int(p.form)
+	case ${ST_TAIL}:
+		if p.tail { return 1 }
+		return 0
+	case ${ST_SUP_NEXT}:
+		return int(p.suppressNext)
+	case ${ST_SUP_CUR}:
+		return int(p.suppressCur)
+	}
+	return int(p.ctx)
+}
+func (rv *recov) enSetSt(k, v int) {
+	p := rv.p
+	switch k {
+	case ${ST_CAPPED}:
+		p.capped = v != 0
+	case ${ST_FORM}:
+		p.form = uint8(v)
+	case ${ST_TAIL}:
+		p.tail = v != 0
+	case ${ST_SUP_NEXT}:
+		p.suppressNext = uint16(v)
+	case ${ST_SUP_CUR}:
+		p.suppressCur = uint16(v)
+	default:
+		p.ctx = uint8(v)
+	}
+}
+func (rv *recov) enTick() { rv.steps++ }
+
+// ParseInterpreted is the strict interpreter of the parse plan (the recovery family) from the entry
+// rule, depth rule levels interpreted and the native functions below: ParseWith's root and verdict
+// on every input. steps: the interpreted steps it took. The native parse runs first (runW: the
+// setup and the lex); the interpreter then parses again from the first token.
+func ParseInterpreted(src string, b Builder, depth int) (h int32, ok bool, steps int) {
+	p, _, _, err := runW(src, b)
+	if err != nil { return 0, false, 0 }
+	b.Restore(0, 0)
+	p.pos = 0
+	p.scratch = p.scratch[:0]
+	p.lookReset()
+	p.capped, p.form, p.tail, p.suppressNext, p.suppressCur, p.ctx = false, 0, false, 0, 0, 0
+	rv := &recov{p: p, tabrt: unpackInts(tabSrt)}
+	ok = rv.riRule(${ruleIdOf(ar, ir.entry)}, depth) && p.pos == len(p.toks)
+	var fr int32
+	present := len(p.scratch) == 1
+	if present { fr = p.scratch[0] }
+	p.cursor.toks, p.src, p.b = nil, "", nil
+	if !ok { return 0, false, rv.steps }
+	if !present { panic(errNoRoot) }
+	return fr, true, rv.steps
+}
+`;
+}
+
 function recoveryRegionGo(ir: ParserIR, shared: SharedAlgorithms): string {
   const reuse = !!ir.reuse;
   return `
 // ---- recovery: the emit option { recovery: true }; generated from src/recovery-family.ts (shared by the TS / Go / Rust targets) ----
 type diag struct{ Kind, Off, End, RelOff, RelEnd int }
-${shared.recoveryFamily()}
+${shared.recoveryFamily(ir)}
+${recoveryEngineGo(ir)}
 // Diagnostic is a span of the source (byte offsets), its message, and a related location or nil.
 type Diagnostic struct {
 \tOff, End int
@@ -3580,7 +3743,7 @@ func main() {
 \t\tos.Stdout.WriteString(b.String())
 \t\treturn
 \t}
-${opts.recovery ? GO_BATCH_TOTAL : ''}\t// batch: NUL-separated inputs in, one line per input out — the CST JSON, "-" for an input
+${opts.recovery ? GO_BATCH_TOTAL + GO_BATCH_INTERP : ''}\t// batch: NUL-separated inputs in, one line per input out — the CST JSON, "-" for an input
 \t// the parser rejects, or "!" and the message for a lexer error. One process start for a
 \t// whole corpus.
 \tif len(os.Args) > 1 && os.Args[1] == "batch" {
