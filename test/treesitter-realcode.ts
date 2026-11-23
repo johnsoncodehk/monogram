@@ -66,12 +66,12 @@ for (const [lang, files] of Object.entries(SOURCES)) {
     if (!tree.rootNode.hasError) continue;
     tsError++;
     const e = firstError(tree.rootNode);
-    // The keyword the error is about: the first keyword-shaped word of the ERROR node's text, else
-    // the word right before it (a MISSING node or an ERROR that starts after the keyword it follows).
-    const text = src.slice(e.startIndex, Math.min(e.endIndex, e.startIndex + 200));
-    let w = (text.match(/[A-Za-z_$][\w$]*/g) ?? []).find(x => keywords.has(x));
-    if (!w) { const before = src.slice(Math.max(0, e.startIndex - 60), e.startIndex).match(/[A-Za-z_$][\w$]*/g) ?? []; w = [...before].reverse().find(x => keywords.has(x)); }
-    const k = w ?? '(no keyword)';
+    // The keyword the error is about: the first word of the ERROR node (its first leaf), or, for a
+    // MISSING node, the word right before it; a word that is no keyword of the grammar counts as none.
+    const word = (at: number) => src.slice(at).match(/^[A-Za-z_$][\w$]*/)?.[0];
+    let w = e.isMissing ? undefined : word(e.startIndex);
+    if (e.isMissing) w = (src.slice(Math.max(0, e.startIndex - 40), e.startIndex).match(/[A-Za-z_$][\w$]*/g) ?? []).pop();
+    const k = w && keywords.has(w) ? w : '(no keyword)';
     const at = src.slice(0, e.startIndex).split('\n').length;
     (byWord.get(k) ?? byWord.set(k, []).get(k)!).push(`${f}:${at} ${JSON.stringify(src.slice(Math.max(0, e.startIndex - 30), e.startIndex + 50))}`);
     tree.delete();
