@@ -124,8 +124,9 @@ export interface Param { name: string; ty: Ty; ref?: boolean }
 // `method`: a function of the target's engine (a receiver the lowering names: the state a family
 // reads and writes through its extern methods, such as a parser's position and builder). It is
 // printed and called as the lowering spells a method; a method calls any function, a non-method
-// only non-methods.
-export interface Fn { name: string; doc: string; params: Param[]; ret: Ty[]; body: Stmt[]; inline?: boolean; cold?: boolean; extern?: boolean; method?: boolean }
+// only non-methods. `reads`: a method that only reads the engine (it calls only such methods), so
+// another method's argument may call it (Rust: `&self`, which a `&mut self` call's argument may borrow).
+export interface Fn { name: string; doc: string; params: Param[]; ret: Ty[]; body: Stmt[]; inline?: boolean; cold?: boolean; extern?: boolean; method?: boolean; reads?: boolean }
 export type CodeRange = [number, number];
 // A record type a family declares: its fields in declaration order. The lowering spells the
 // record's type and its field reads; a field's type is a number kind or bool.
@@ -316,7 +317,7 @@ export interface Lowering {
     // value calls a family function (for a lowering whose language has no multiple return values
     // and stores them where a nested call could overwrite them). Go and Rust ignore it.
     return(vals: string[], fn: { name: string; ret: Ty[]; calls: boolean }): Lines;
-    fn(s: { name: string; params: { name: string; type: string }[]; rets: string[]; retTys: Ty[]; doc: string[]; body: Lines; inline: boolean; cold: boolean; method: boolean }): string;
+    fn(s: { name: string; params: { name: string; type: string }[]; rets: string[]; retTys: Ty[]; doc: string[]; body: Lines; inline: boolean; cold: boolean; method: boolean; reads: boolean }): string;
   };
   // `inline` fns are not printed as functions; each call site prints `inlineFn` of the body
   // instead (for compilers that cannot be told to inline a function).
@@ -614,9 +615,10 @@ class Printer implements Cx {
       return r.c;
     });
     if (fn.method && this.cur !== null && !this.cur.method) throw new Error(`algo-ir: ${this.cur.name} calls the engine method ${e.fn} but is no method`);
+    if (fn.method && fn.reads !== true && this.cur?.reads === true) throw new Error(`algo-ir: ${this.cur.name} only reads the engine but calls ${e.fn}`);
     // The engine is borrowed whole by a method call (Rust's &mut self), so an argument cannot call
     // another method: the family binds it to a local first.
-    const callsMethod = (x: unknown): boolean => typeof x === 'object' && x !== null && (((x as Expr).k === 'call' && this.sigs.get((x as Expr & { k: 'call' }).fn)?.method === true) || Object.values(x).some(callsMethod));
+    const callsMethod = (x: unknown): boolean => typeof x === 'object' && x !== null && (((x as Expr).k === 'call' && this.sigs.get((x as Expr & { k: 'call' }).fn)?.method === true && this.sigs.get((x as Expr & { k: 'call' }).fn)?.reads !== true) || Object.values(x).some(callsMethod));
     if (fn.method && e.args.some(callsMethod)) throw new Error(`algo-ir: an argument of the engine method ${e.fn} calls an engine method: bind it to a local first`);
     return this.L.expr.call(this.id(e.fn), args, fn.method === true);
   }
@@ -791,6 +793,7 @@ class Printer implements Cx {
       inline: f.inline === true,
       cold: f.cold === true,
       method: f.method === true,
+      reads: f.reads === true,
     });
   }
 }

@@ -15,7 +15,7 @@
 //        token suffix — this pins that splice)
 //
 //   node test/incremental-grammars.ts
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { emitParser, jsTarget } from '../src/emit.ts';
 import { generateInputs } from './grammar-gen.ts';
 import { objectify } from './emitted-obj.ts';
@@ -341,6 +341,105 @@ let deepSteps = 0;
   }
 }
 console.log(`  deep-hole edits: ${deepSteps} edits on documents with 254-300 nested template holes`);
+
+// ── TypeScript: adversarial boundary edits and arena reclamation (from incremental-verify) ──
+// A token ending exactly at the damage start can be EXTENDED under maximal munch ('b'+'x' = 'bx',
+// '='+'=' = '==', deleting a gap glues neighbours): these pairs pin the strict-< restart anchor
+// (seeded random sessions missed that hole). The first pairs pin the recovery protocol: a
+// pre-edit RECOVERY tree must not leak its probe reaches, rows or shape into the edited re-parse.
+// Each pair: parse the base, edit it to the second text (the range from a prefix/suffix diff), ≡ fresh.
+{
+  const em = (await import(`${TMP}/typescript.mts?v=` + process.pid)) as Em;
+  const session = em.createParser(), fresh = em.createParser();
+  const diffChange = (a: string, b: string): Edit => {
+    const minL = Math.min(a.length, b.length);
+    let s = 0;
+    while (s < minL && a.charCodeAt(s) === b.charCodeAt(s)) s++;
+    let e = 0;
+    while (e < minL - s && a.charCodeAt(a.length - 1 - e) === b.charCodeAt(b.length - 1 - e)) e++;
+    return { start: s, end: a.length - e, text: b.slice(s, b.length - e) };
+  };
+  const GLUE: Array<[string, string]> = [
+    ['class za {" z', 'zlass za {" z'],
+    ['funtionzaaz( a z { }', 'funtiznzaaz( a z { }'],
+    ['function \\u{0} ( (aa ) { }', 'functionx \\u{0} ( (aa ) { }'],
+    ['const x = f(1, 2);', 'const x = f(1, 2;'],
+    ['function g() { return 1; }', 'function g() { return 1;'],
+    ['const a = 1;\nconst b = 2;\n', 'const a = 1;\nconst bx = 2;\n'],
+    ['let a = b; let c = 1;\n', 'let a = b1; let c = 1;\n'],
+    ['if (a = b) { f(); }\n', 'if (a == b) { f(); }\n'],
+    ['const x = a b;\n', 'const x = ab;\n'],
+    ['const q = w / 2;\n', 'const q = w /= 2;\n'],
+    ['const t = a + b;\n', 'const t = a ++ b;\n'],
+    ['const u = x<y>(z);\n', 'const u = x<y>>(z);\n'],
+    ['f(a, b);\ng(c);\n', 'f(a, bc);\ng(c);\n'],
+    // expression-splitting ';' injections (structure breaks, not appended garbage)
+    ['const x = a + b;\n', 'const x = a; + b;\n'],
+    ['const y = (a + b) * c;\n', 'const y = (a +; b) * c;\n'],
+    ['const z = obj.m(1).n;\n', 'const z = obj.m(;1).n;\n'],
+  ];
+  for (const [base, edited] of GLUE) {
+    totalSteps++;
+    const cst = session.parse(base);
+    session.edit(cst, [diffChange(base, edited)]);
+    const fc = fresh.parse(edited);
+    if (fc.errors.length > 0) totalErr++;
+    const a = JSON.stringify(objectify(fresh.tree, (fns) => fresh.visit(fc, fns))) + JSON.stringify(fc.errors);
+    const b = JSON.stringify(objectify(session.tree, (fns) => session.visit(cst, fns))) + JSON.stringify(cst.errors);
+    if (a !== b) { fails++; if (failures.length < 10) failures.push(`typescript glue ${JSON.stringify(edited.slice(0, 30))}: edit ≠ fresh`); continue; }
+    totalEqual++;
+  }
+  console.log(`  boundary-glue edits: ${GLUE.length} TypeScript edit pairs`);
+
+  // Arena reclamation (compaction): a long edit session only APPENDS arena rows; the engine
+  // re-parses fresh when the arena outgrows the live tree, reclaiming the garbage. The budget is
+  // lowered so a handful of edits force it, on a separate module instance (the lowered budget and
+  // the counter do not leak into the sessions above); the path must fire, and every edit across
+  // the compactions ≡ fresh. Edits: inserts, deletions, replacements, statement insertions at a
+  // line boundary, appends, on an in-repo source.
+  type Stats = { compactions: number; nodeN: number; baseline: number };
+  const cMod = (await import(`${TMP}/typescript.mts?compact=` + process.pid)) as Em & { __arenaStats(): Stats; __setArenaBudget(f: number, m: number): void };
+  const cSes = cMod.createParser();
+  cMod.__setArenaBudget(1, 256);   // compact once nodeN exceeds baseline + 256
+  let cSeed = 0x2F6E2B1;
+  const cRand = (n: number) => Math.floor(((cSeed = (cSeed * 48271) % 0x7fffffff) / 0x7fffffff) * n);
+  const C_INS = ['x', '_v', '42', ' + y', '.m', '()', ' /*c*/ ', '"s"', 'await ', '!', '?', ';', '; '];
+  const C_STMTS = ['const q9 = 1;\n', 'function g9(a) { return a; }\n', 'if (x9) { y9(); }\n', '// note\n', 'type T9 = string | number;\n'];
+  const cMutate = (text: string): { next: string; edit: Edit } => {
+    switch (cRand(5)) {
+      case 0: { const at = cRand(text.length); const ins = C_INS[cRand(C_INS.length)]; return { next: text.slice(0, at) + ins + text.slice(at), edit: { start: at, end: at, text: ins } }; }
+      case 1: { const at = cRand(Math.max(1, text.length - 8)); const n = 1 + cRand(6); return { next: text.slice(0, at) + text.slice(at + n), edit: { start: at, end: at + n, text: '' } }; }
+      case 2: { const at = cRand(Math.max(1, text.length - 1)); return { next: text.slice(0, at) + 'z' + text.slice(at + 1), edit: { start: at, end: at + 1, text: 'z' } }; }
+      case 3: {
+        const lines = text.split('\n');
+        const at = cRand(lines.length);
+        const stmt = C_STMTS[cRand(C_STMTS.length)].trimEnd();
+        lines.splice(at, 0, stmt);
+        const start = at === 0 ? 0 : lines.slice(0, at).join('\n').length + 1;
+        return { next: lines.join('\n'), edit: { start, end: start, text: stmt + '\n' } };
+      }
+      default: { const stmt = '\n' + C_STMTS[cRand(C_STMTS.length)]; return { next: text + stmt, edit: { start: text.length, end: text.length, text: stmt } }; }
+    }
+  };
+  let ctext = readFileSync(new URL('../src/types.ts', import.meta.url), 'utf-8');
+  const ccst = cSes.parse(ctext);
+  let cEqual = 0;
+  for (let k = 0; k < 120; k++) {
+    const { next, edit } = cMutate(ctext);
+    totalSteps++;
+    const fc = fresh.parse(next);
+    cSes.edit(ccst, [edit]);
+    if (fc.errors.length > 0) totalErr++;
+    const a = JSON.stringify(objectify(fresh.tree, (fns) => fresh.visit(fc, fns))) + JSON.stringify(fc.errors);
+    const b = JSON.stringify(objectify(cSes.tree, (fns) => cSes.visit(ccst, fns))) + JSON.stringify(ccst.errors);
+    if (a === b) { cEqual++; totalEqual++; }
+    else { fails++; if (failures.length < 10) failures.push(`typescript compact step ${k}: edit ≠ fresh`); }
+    ctext = next;
+  }
+  const cs = cMod.__arenaStats();
+  console.log(`  arena reclamation: ${cEqual}/120 edits ≡ fresh · ${cs.compactions} compactions fired (budget 1×+256)`);
+  if (cs.compactions === 0) { fails++; failures.push('arena compaction never fired — the reclamation path went untested'); }
+}
 
 console.log(`incremental-grammars: ${totalEqual}/${totalSteps} steps equal+consistent across ${GRAMMARS.length} grammars (${totalErr} recovered with errors)`);
 for (const s of failures) console.log('  ✗ ' + s);

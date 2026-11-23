@@ -1,10 +1,14 @@
 // The emitted-size record (docs/emit-sizes.json): the bytes of emitParser(<grammar>, <target>) for
 // the grammars and targets test/emit-sizes.ts measures, as accepted by the last landing that
-// re-recorded them. The gate fails when a size is more than TOLERANCE away from its record, either
-// way, or when a grammar x target is in one and not the other; `--write` re-records.
+// re-recorded them. NOT a gate of test/check.ts: the comparison is the measure-profile job's
+// (test/bench-rust-profile/pr-summary.ts lists a size more than TOLERANCE away from its record,
+// either way, as a regression, on every landing). Run directly, this script fails on the same
+// condition, or when a grammar x target is in one and not the other; `--write` re-records, which
+// only a landing that changes a size on purpose does.
 //
-// Why a tolerance and why this one: every landing moves some emitted size, and a gate that failed
-// on any byte would make every landing re-record, which records nothing. Steps that each stay under
+// Why a tolerance and why this one: every landing moves some emitted size, and a check that failed
+// on any byte would make every landing re-record, which records nothing. (As a gate even ±0.25%
+// made unrelated landings re-record whenever master moved under them: it left check.ts.) Steps that each stay under
 // the profile summary's 1% listing added up to +18% in Go in two days (0016998 -> d326d65), seen
 // only afterwards. With ±0.25% the record is never more than 0.25% stale: a landing may move a size
 // that far unrecorded, and the landing that takes the accumulated drift past it re-records, so the

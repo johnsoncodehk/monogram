@@ -7,6 +7,10 @@
 //   3. runs there under plain `node` (no monogram source reachable) and, per sample, agrees
 //      with the runtime interpreter on accept/reject and the CST, and with the frozen lexer
 //      golden on the full token stream (or lex error).
+// The other shipped grammars (JavaScript, TypeScript React, JavaScript React) are type-checked
+// too: their emitted module alone under `tsc --strict`, in one tsc run (formerly emit-tsc-gate:
+// every grammar's emission — token width, mode-specific lexer code, empty vocab sets — stays
+// type-sound and erasable).
 //
 //   node test/emit-standalone.ts
 import { execFileSync } from 'node:child_process';
@@ -101,6 +105,25 @@ for (const c of CASES) {
     check(`${label}: tokens ≡ lexer golden for ${tag}`, wantToks !== undefined && JSON.stringify(wantToks) === JSON.stringify(streamOf(r.toks as any)),
       wantToks === undefined ? 'input not in the golden' : '');
   });
+}
+
+// The other shipped grammars: each emitted module type-checks alone under `tsc --strict`. One tsc
+// run checks all of them (each file is standalone, so its diagnostics name only that file).
+{
+  const TSC_ONLY: [string, string][] = [['javascript', '../javascript.ts'], ['typescriptreact', '../typescriptreact.ts'], ['javascriptreact', '../javascriptreact.ts']];
+  const dir = scratchDir('standalone-tsc');
+  for (const [name, path] of TSC_ONLY) writeFileSync(join(dir, `${name}.ts`), emitParser((await import(path)).default as CstGrammar, jsTarget));
+  let log = '';
+  try {
+    execFileSync(TSC, ['--strict', '--noEmit', '--target', 'ES2022', '--module', 'ES2022', '--moduleResolution', 'Bundler', '--lib', 'ES2022', ...TSC_ONLY.map(([n]) => `${n}.ts`)], { cwd: dir, stdio: 'pipe' });
+  } catch (e) { log = String((e as { stdout?: Buffer }).stdout ?? e) || String(e); }
+  // A failed run whose diagnostics name none of the files (tsc itself failed) fails every grammar.
+  const attributed = TSC_ONLY.some(([n]) => log.includes(`${n}.ts(`));
+  for (const [name] of TSC_ONLY) {
+    const errs = log.split('\n').filter((l) => l.startsWith(`${name}.ts(`));
+    check(`${name}: emitted module type-checks alone (tsc --strict)`, log === '' || (attributed && errs.length === 0),
+      errs.slice(0, 10).join('\n') || log.slice(0, 600));
+  }
 }
 
 console.log(`\n${ok}/${ok + fail} standalone-emit checks pass${fail ? '' : ' ✓'}`);

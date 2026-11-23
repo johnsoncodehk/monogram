@@ -55,7 +55,7 @@ performance claim in a pull request or in the README comes from one of these, ru
   reuse mode (a parse into the builder of a first one) is measured: a first parse into a new
   builder varied by up to 0.14% between runs in the page allocator's search
   (`runtime.(*pageAlloc).find`), with or without address randomization; a fresh parse's
-  allocations are pinned by `alloc-work`. The profile measures M twice; a Go / TS / JS cell whose
+  allocations are reported in `docs/ALLOCATIONS.md` (regenerated on master). The profile measures M twice; a Go / TS / JS cell whose
   two measurements differ by more than 0.01% is reported NOT RUN in the summary, without failing
   the job (the pull request may not touch the code it measures).
 - **The fair comparison with oxc is reuse mode on both sides**: one kept `CstBuilder`
@@ -70,7 +70,7 @@ performance claim in a pull request or in the README comes from one of these, ru
 | Go target: Callgrind instructions per parse (reuse), through the direct engine (`CstBuilder`) and the builder engine (`SlimBuilder`); TS target and emitted JS parser: V8 block executions per parse; side by side with Rust per input, single-target changes listed | the same `run.sh` (section "Go and TS targets"), `test/bench-targets/go-main.go` (`count-*` modes), `test/bench-targets/blocks.ts`; on the main inputs | in the same `measure-profile` job |
 | The same plus oxc beside A and M, native timings, phase regions, cache / branch simulation | the same `run.sh` with `PROFILE_SCOPE=full` | on demand: the `measure-profile-full` label on a pull request, or `measure-profile` workflow_dispatch with scope `full` |
 | Rust wall-clock vs oxc: alternating rounds in one job, medians and per-round ratios, one job per mode | `test/bench-rust-oxc/run.sh` (`BENCH_BASE`, `BENCH_EXTRA`, `BENCH_GRAMMAR`, `BENCH_MODE`); workflow `measure-bench` | on demand: workflow_dispatch, or the `measure-bench` label on a pull request |
-| TS target, emitted JS parser, Go: allocations and bytes per token and per node, by site, result vs overhead, pinned in `docs/ALLOCATIONS.md` | gate `alloc-work` (`test/alloc-work.ts`, `test/alloc-instrument.ts`) | every CI run (`node test/check.ts`); `--write` re-records |
+| TS target, emitted JS parser, Go: allocations and bytes per token and per node, by site, result vs overhead, reported in `docs/ALLOCATIONS.md` | `test/alloc-work.ts --write` (`test/alloc-instrument.ts`); the gate `alloc-work` checks only linearity and Go reuse = 0 | the report: the README auto-regen workflow on every master push that touches `src/**` or a grammar; the gate: every CI run |
 | TS / JS / Go wall-clock A/B: alternating rounds in one job, a fresh process per measurement, medians and per-round ratios | `test/bench-targets/run.sh` (`TARGETS_BASE`, `TARGETS_COMMIT`, `TARGETS_GRAMMAR`, `TARGETS_ONLY`); workflow `measure-targets` | on demand: workflow_dispatch, or the `measure-targets` label on a pull request |
 
 Failure policy of the pull-request profile: a measurement the harness did not produce fails the
@@ -83,10 +83,11 @@ more than 0.1% while another stays within 0.01%.
 
 Emitted sizes also have a RECORD, `docs/emit-sizes.json` (grammar × target, an emit option as
 `<target>+<option>`), so that growth made of steps each under 1% accumulates visibly (Go +18% in
-two days, 0016998 → d326d65, was seen only afterwards). The gate `emit-size-record` fails when a
-size is more than ±0.25% from its record; `node test/emit-size-record.ts --write` re-records, and
-that diff is where a landing accepts the drift so far. The profile summary prints M against the
-record beside A → M, and lists a size past ±0.25% of it.
+two days, 0016998 → d326d65, was seen only afterwards). The profile summary prints M against the
+record beside A → M and lists a size more than ±0.25% from its record as a regression; that listing
+is the check (it is not a gate of `node test/check.ts`, where it made unrelated landings re-record).
+A landing that changes a size on purpose re-records with `node test/emit-size-record.ts --write`
+and says why in its message: that diff is where the drift so far is accepted.
 
 The inputs are fixed: `checker.ts` and `parser.ts` of TypeScript at the repository's one pin
 (`TS_REPO_SHA` in the workflows), `typescript.js` / `typescript.d.ts` of the locked `typescript`
@@ -200,5 +201,5 @@ How to read it:
 
 The Go, TS and JS targets have not been compared with another parser on full TypeScript (an
 earlier Go-vs-tsgo comparison used the JavaScript grammar on repeated snippets, and its harness
-is gone). What each target allocates per parse is pinned in [ALLOCATIONS.md](ALLOCATIONS.md);
+is gone). What each target allocates per parse is reported in [ALLOCATIONS.md](ALLOCATIONS.md);
 `measure-targets` times them A/B on demand.

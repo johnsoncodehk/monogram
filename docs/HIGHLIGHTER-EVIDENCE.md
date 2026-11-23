@@ -282,10 +282,10 @@ They are records, not targets; each moves only with a generator change that says
   reason; the gate fails when a passing row breaks and when an expected-fail row starts
   passing. Recorded on `86f6530`: dialect 6 pass / 11 expected-fail, agnostic 4 pass /
   8 expected-fail.
-- [`test/tm-capture-patterns.ts`](../test/tm-capture-patterns.ts): captures that carry
-  `patterns`, per committed grammar. VS Code accepts them; Sublime Text rejects a grammar that
-  has any. Recorded on `86f6530`: typescript and javascript 0, typescriptreact and
-  javascriptreact 5 each (dotted JSX tag names), html 32, yaml 22.
+- Captures that carry `patterns`, per committed grammar (VS Code accepts them; Sublime Text
+  rejects a grammar that has any), counted on `86f6530`: typescript and javascript 0,
+  typescriptreact and javascriptreact 5 each (dotted JSX tag names), html 32, yaml 22. (The
+  count was a pinned gate with no decision attached; it was retired.)
 
 ## Known differences from the official highlighter
 
