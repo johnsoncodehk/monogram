@@ -102,6 +102,7 @@ const GATES: Gate[] = [
   { group: 'highlighter', name: 'treesitter-assertions', args: ['test/treesitter-assertions.ts'] },
   { group: 'highlighter', name: 'angle-depth', args: ['test/angle-depth-probe.ts'] },
   { group: 'highlighter', name: 'monarch-dialect', args: ['test/monarch-dialect.ts'] },
+  { group: 'highlighter', name: 'monarch-dialect/agreement', args: ['test/monarch-dialect.ts', '--agreement'], tier: 'ci' },
   { group: 'highlighter', name: 'raw-text-case-sites', args: ['test/raw-text-case-sites.ts'] },
   { group: 'core', name: 'indent-extensions', args: ['test/indent-extensions.ts'] },
   { group: 'yaml', name: 'issue12-regressions', args: ['test/yaml-issue12-regressions.ts'] },
