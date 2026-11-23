@@ -369,7 +369,6 @@ const PRIMARY: Record<string, Term> = {
   true_: literal(c(true)),
   false_: literal(c(false)),
   null_: literal(c(null)),
-  undefined: node('Identifier', { name: c('undefined') }),
   this_: node('ThisExpression'),
   ident: node('Identifier', { name: cook('identifierName', 'ident') }),
   number: literal(cook('numberValue', 'number')),
