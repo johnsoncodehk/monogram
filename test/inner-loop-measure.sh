@@ -44,7 +44,7 @@ timing)
   echo "cores: $(nproc)"
   row ' commit ' ' change ' ' mode ' ' gates ' ' cold s ' ' warm s ' ' result '
   row '---' '---' '---' '---:' '---:' '---:' '---'
-  for kv in c6cab09:docs d6d12b8:test-only 9164d57:rust-printer 211029f:generator de35876:grammar; do
+  for kv in c6cab09:docs d6d12b8:test-only 9164d57:rust-printer 11a7c70:go-printer 211029f:generator de35876:grammar; do
     c=${kv%%:*}
     for m in changed quick; do
       cold
