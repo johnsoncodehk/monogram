@@ -111,7 +111,10 @@ export function groupByPreserveOrder<T>(
 // what they call); an inline alternation carries `branchNames`, parallel to `branches`. A
 // shared step (ParserIR.shared) is its first occurrence: each occurrence in a rule body keeps
 // its own names.
-export type Step = StepOp & { field?: string };
+// `src`: the grammar node the step was lowered from (NAMES data, like `field`). `tag` / `mark`: set
+// only on a shape plan's copy of the steps (src/shape-plan.ts): the slot tag a building step gives
+// the child it leaves, and the iteration marker a repetition's body inserts before its children.
+export type Step = StepOp & { field?: string; src?: RuleExpr; tag?: number; mark?: number };
 type StepOp =
   | { t: 'lit'; value: string; ttype: '$keyword' | '$punct' }   // match a literal by text
   | { t: 'tok'; name: string; hole?: string }                   // match a token kind; a template kind (TplCfg) carries the rule that parses its `${…}` holes and also matches an interpolated template
@@ -133,7 +136,7 @@ export type Alt = Step[];
 /** A step's (or step list's) structure as a string, without its names: the key under which two
  *  equal structures are one computation (a lookahead body, a shared step). */
 export function stepKey(s: Step | readonly Step[]): string {
-  return JSON.stringify(s, (k, v) => (k === 'field' || k === 'branchNames' ? undefined : v));
+  return JSON.stringify(s, (k, v) => (k === 'field' || k === 'branchNames' || k === 'src' ? undefined : v));
 }
 // The ECMAScript [Await] / [Yield] grammar parameters: the context a body is parsed in, as one word
 // a parser holds (bit CTX_AWAIT: `await` is the operator, bit CTX_YIELD: `yield` is). The grammar
@@ -887,6 +890,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   const named = (e: RuleExpr, s: Step): Step => {
     const f = names?.childOf.get(e)?.name;
     if (f !== undefined) s.field = f;
+    s.src = e;
     // Only an alternation the deriver walks has branch names (one inside a lookahead has none:
     // zero-width, it holds no child).
     const bs = s.t === 'alt' ? names?.branches.get(e) : undefined;
@@ -1530,6 +1534,9 @@ export type StepLowering = {
   guarded(first: NonNullable<FirstSig>, branch: string): string;   // the branch, tried only when the next token is in first
   choice(peek: boolean, tries: string[]): string;                  // the tries in order, then false; peek: a guard reads the next token
   predictive(arms: { first: NonNullable<FirstSig>; branch: string }[]): string;   // the one arm the next token selects, else false
+  // A shape plan's step (Step.tag / Step.mark; only a shape-building form has it): `body`, the
+  // step printed, and then its slot's tag set / its children preceded by the iteration marker.
+  shaped?(s: Step, body: string): string;
 };
 // The mark a repetition's body attempt takes: 'none' (Step.clean: a failure undoes nothing),
 // 'leaves' (Step.leaves: the position and the scratch list's length, not the builder's checkpoint),
@@ -1540,6 +1547,7 @@ const conjOf = (steps: Step[], L: StepLowering): string => (steps.length ? steps
 /** A step as a boolean expression: a shared step's call, else the step itself (stepBody). */
 export function stepExpr(s: Step, L: StepLowering): string {
   if ('share' in s && s.share !== undefined) return L.shared(s.share);
+  if ((s.tag !== undefined || s.mark !== undefined) && L.shaped) return L.shaped(s, stepBody(s, L));
   return stepBody(s, L);
 }
 /** The step itself, printed in place (a shared step's function body; every other step's site). */
