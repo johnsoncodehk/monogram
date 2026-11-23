@@ -2017,7 +2017,9 @@ function interpCheck(c: Case, grammar: CstGrammar, r: Runner, srcs: string[], ow
       if (g.ok) ok++; else rej++;
       if (g.leaves) { if (g.leaves[0] === g.leaves[1]) leafEq++; else bad.push(`interpreter (depth ${depth}): ${g.leaves[1]} leaves offered, the native parse ${g.leaves[0]} — ${at(i)}`); }
       if (ref && ref[i] !== g.steps) bad.push(`interpreter (depth ${depth}): ${g.steps} steps, the TS target ${ref[i]} — ${at(i)}`);
-      const bound = (tokenize(srcs[i]!).length + 1) * nRules;
+      let nTok = 0;
+      try { nTok = tokenize(srcs[i]!).length; } catch { /* a lexer error: the interpreter takes no step */ }
+      const bound = (nTok + 1) * nRules;
       maxK = Math.max(maxK, g.steps / bound);
       if (g.steps > INTERP_K * bound) bad.push(`interpreter (depth ${depth}): ${g.steps} steps, over the bound ${INTERP_K} × (tokens + 1) × ${nRules} rules — ${at(i)}`);
     });
