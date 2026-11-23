@@ -116,9 +116,9 @@ const dialectSrc = [
   scopeRow('dynamic tag `<{…}` opens a tag', 'pass', undefined, g, src, '<{item.tag}', 0, s => inner(s).startsWith('punctuation.definition.tag.begin'));
   scopeRow('attribute of a dynamic tag is an attribute name', 'pass', undefined, g, src, 'id=', 0, s => inner(s).startsWith('entity.other.attribute-name'));
   scopeRow('dynamic close tag `</{…}>` closes a tag', 'pass', undefined, g, src, '</{item.tag}', 0, s => inner(s).startsWith('punctuation.definition.tag.begin'));
-  scopeRow('`<style>` body is embedded CSS', 'xfail',
-    'a token-stream grammar has no lexer region with an embed: the body is one token, and the JSX children patterns reach `<style>` first (item 6)',
-    g, src, 'color', 0, has('source.css'));
+  scopeRow('`<style>` body is embedded CSS', 'pass', undefined, g, src, 'color', 0, has('source.css'));
+  scopeRow('the `</style>` close tag is a tag, outside the embed', 'pass', undefined, g, src, 'style', 1, s => inner(s).startsWith('entity.name.tag') && !has('source.css')(s));
+  scopeRow('after the raw element the children are code again', 'pass', undefined, g, src, 'my-card', 1, s => inner(s).startsWith('entity.name.tag') && !has('source.css')(s));
 }
 
 // ── 2. agnostic element syntax ──
