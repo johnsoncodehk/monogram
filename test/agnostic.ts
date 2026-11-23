@@ -56,7 +56,7 @@ check('language-config quotes derived from grammar (~, not hardcoded \")',
 
 // 6. gen-tm's `.tsx` generic-arrow ⇄ JSX-tag disambiguation skip-set derives its
 //    opaque attribute-string delimiter from the `string`-flagged token too — NOT a
-//    hardcoded `"`/`'`. A tiny TS-family-JSX grammar (JSX `/>`/`</` tokens + `<…>`
+//    hardcoded `"`/`'`. A tiny TS-family-JSX grammar (a declared element region with `/>`/`</` tokens + `<…>`
 //    generics) whose strings are `~…~` must produce a carve-out that treats `~…~`
 //    as opaque (`~[^~]*~`) and never mentions `"[^"]*"`. Proves the JSX delimiter
 //    derivation (jsxDisambigDelims) is data-driven, like gen-vscode-config's quotes.
@@ -73,6 +73,7 @@ const gj = defineGrammar({
   tokens: { JSelfEnd, JCloseTg, JTilde, Word },
   prec: [none('<', '>')],
   rules: { JType, JGeneric, JElement, JExpr, JProgram }, entry: JProgram,
+  elements: { tagOpen: '<', tagClose: '>', closeMarker: '/', closeTag: 'JCloseTg', selfClose: 'JSelfEnd', hole: { open: '{', close: '}' }, name: 'jsx' },  // the declared element region
 });
 const jbegin = generateTmLanguage(gj).repository['jsx-self-closing-element-in-expression']?.begin ?? '';
 check('gen-tm JSX disambiguation skip-set quotes derived from grammar (~, not hardcoded \")',
@@ -104,6 +105,7 @@ const ga = defineGrammar({
   prec: [none('<', '>')],
   scopes: { 'storage.type.function': ['fn'] },  // so `fn` is a detected declaration keyword
   rules: { AType, ATP, AParam, ADecl, AArrow, ACall, AAttr, AElem, AExpr, AStmt, AProg }, entry: AProg,
+  elements: { tagOpen: '<', tagClose: '>', closeMarker: '/', closeTag: 'JCloseTg', selfClose: 'JSelfEnd', hole: { open: '{', close: '}' }, name: 'jsx' },  // the declared element region
 });
 const abegin = generateTmLanguage(ga).repository['arrow-type-parameters']?.begin ?? '';
 check('gen-tm arrow-param confirm parens derived from arrow rule (⟨⟩, not hardcoded `(`)',
@@ -136,6 +138,7 @@ const gc2 = defineGrammar({
   prec: [none('<', '>')],
   scopes: { 'storage.type.function': ['fn'] },  // so `fn` is a detected declaration keyword
   rules: { CType, CTParam, CTP, CParam, CDecl, CArrow, CCall, CAttr, CElem, CExpr, CStmt, CProg }, entry: CProg,
+  elements: { tagOpen: '<', tagClose: '>', closeMarker: '/', closeTag: 'JCloseTg', selfClose: 'JSelfEnd', hole: { open: '{', close: '}' }, name: 'jsx' },  // the declared element region
 });
 // BOTH sides of the disambiguation must carry the DERIVED keyword: the positive
 // #arrow-type-parameters begin guard AND the inverse JSX-trigger carve-out.
