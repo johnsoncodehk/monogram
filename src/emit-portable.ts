@@ -1807,11 +1807,11 @@ export type PrattLowering = {
   postfixToks(kids: number[]): string;           // the postfix tokens, by the token's kid
   postfixTpl(hole: string): string;              // the postfix interpolated template
   postfixOp: string;                             // the postfix operator
-  binary: string;                                // the binary operator, its right operand at rbp
+  binary: string;                                // the binary operator, its right operand at rbp; a CAPPED right operand (an assignment-level arrow) caps the node: it returns at once, still capped, so no further led or operator takes it, here or in an enclosing call (`a = () => {} || x` rejects: the interpreter's cap propagation)
   leftDone?: string;                             // after the loop: the left operand's finishing step (none for the CST)
   entry: string;                                 // the entry function (and the operator tables, where the target prints them beside it)
   bpOpen(label: boolean): string;                // `bp` up to the loop's buffered token (label: a led continues the loop by name)
-  bpClose: string;
+  bpClose: string;                               // `bp`'s normal return: the node is not capped (a sub-parse's capped flag, an arrow inside a call's arguments, is not its own)
   nudEnter: string;                              // `nud` up to its buffered token `t` (none: no match)
   nudOpen: string;                               // `nud`'s candidate frame, up to its candidates
   nudClose: string;
@@ -2913,4 +2913,140 @@ export function formatFirstBytes(fb: LexFirstBytes | null): string {
   }
   if (fb.nonAscii) parts.push('nonAscii');
   return parts.join(', ');
+}
+
+// ── Recovery plan: the parse plan as int tables (the emit option `recovery`) ──
+// Total parsing interprets the plan (src/recovery-family.ts, one interpreter printed by every
+// target) where the native functions cannot repair. The interpreter reads this ONE table, a
+// function of the ParserIR and its id plans; nothing here is a target's. Everything is an int:
+// a rule id is its ArenaIdPlan id, a literal / kind its LexIdPlan lid / kid, a token set its
+// ParserIR.tokenSets index, a lookahead its ParserIR.lookaheads index; -1 is "none". A record is
+// addressed by its index in the table. The plan's choices that exist only to skip work (Dispatch
+// order, Commit, elided marks) are not encoded: the interpreter tries a longest-match list's
+// candidates in declaration order, each where its Guard admits the token, which is the same match
+// (emit-portable "LONGEST MATCH"); FIRST-set guards are kept, so the candidates tried are the
+// native parser's.
+//
+// Layout: [0] the number of rules N; [1] the kid of a template head ($templateHead, or -1);
+// [2 + rid] each rule's record. Records, by their first int:
+//   RD   predictive nAlts (guard list)*         an rd rule: per alternative its Guard and steps
+//   PRATT ...                                   a Pratt rule (see pratt below)
+// A step list is [n, step*]; a step is [op, operand*] (the REC_S_* ops below). A Guard is
+// [first second nLead (set is ctx)* nPairs (when second)* firstSig], first / second token sets
+// (or -1), firstSig a FIRST signature [nLits lid* nKinds kid*] (or -1) tested as the predictive
+// and ordered choices test theirs.
+// A new kind of step or of Pratt arm is one more op / tag: the interpreter's dispatch on it is
+// an addition.
+export const REC_RD = 0, REC_PRATT = 1;
+export const REC_S_LIT = 0, REC_S_COMP = 1, REC_S_TOK = 2, REC_S_TPLTOK = 3, REC_S_RULE = 4, REC_S_RULEBP = 5, REC_S_STAR = 6, REC_S_OPT = 7,
+  REC_S_SEP = 8, REC_S_ALTLIT = 9, REC_S_ALT = 10, REC_S_LOOK = 11, REC_S_AHEAD = 12, REC_S_AHEADCTX = 13, REC_S_SEQ = 14, REC_S_SAMELINE = 15,
+  REC_S_SUPPRESS = 16, REC_S_CTX = 17, REC_S_SHARED = 18;
+// A Pratt rule's NUD arms (PrattRule.nudOrder), by tag.
+export const REC_N_TOK = 0, REC_N_BRACKET = 1, REC_N_SEQ = 2, REC_N_CAPPED = 3, REC_N_PREFIX = 4;
+export type RecoveryTables = { data: number[]; ruleAt: number[] };
+export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): RecoveryTables {
+  const data: number[] = [];
+  const rid = (name: string) => ruleIdOf(ar, name);
+  const lid = (text: string) => { const l = lidOf(ids, text); if (l === 0) throw new Error(`recoveryTables: ${JSON.stringify(text)} has no lid`); return l; };
+  // A record appended later than its referrer: the referrer holds a slot patched with its index.
+  const emit = (xs: number[]): number => { const at = data.length; data.push(...xs); return at; };
+  const firstSig = (f: FirstSig): number => (f === null ? -1 : emit([f.lits.length, ...f.lits.map((l) => lidOf(ids, l)), f.toks.length, ...f.toks.map((k) => kidOf(ids, k))]));
+  const guard = (g: Guard, sig: FirstSig = null): number => {
+    if (g === null && sig === null) return -1;
+    const fs = firstSig(sig);
+    const gg = g ?? { first: null, second: null, lead: [], skip: 0, pairs: [] };
+    return emit([gg.first?.id ?? -1, gg.second?.id ?? -1, gg.lead.length, ...gg.lead.flatMap((l) => [l.set, l.is ? 1 : 0, l.ctx ? 1 : 0]),
+      (gg.pairs ?? []).length, ...(gg.pairs ?? []).flatMap((p) => [p.when.id, p.second.id]), fs]);
+  };
+  const shared = new Map<number, number>();
+  const list = (steps: Step[]): number => { const offs = steps.map(step); return emit([offs.length, ...offs]); };
+  function step(s: Step): number {
+    const sh = 'share' in s ? s.share : undefined;
+    if (sh !== undefined) {
+      let body = shared.get(sh);
+      if (body === undefined) { const { share: _, ...plain } = s as Step & { share: number }; body = step(plain as Step); shared.set(sh, body); }
+      return emit([REC_S_SHARED, sh, ir.forms.buildShared[sh] ? 1 : 0, body]);
+    }
+    switch (s.t) {
+      case 'lit': return gtCompLit(ids, s) ? emit([REC_S_COMP, lid(s.value)]) : emit([REC_S_LIT, lid(s.value)]);
+      case 'tok': return s.hole === undefined ? emit([REC_S_TOK, kidOf(ids, s.name)]) : emit([REC_S_TPLTOK, kidOf(ids, s.name), rid(s.hole)]);
+      case 'rule': return emit([REC_S_RULE, rid(s.name)]);
+      case 'ruleBp': return emit([REC_S_RULEBP, rid(s.name), s.bp]);
+      case 'star': { const b = step(s.step); return emit([REC_S_STAR, s.guard ?? -1, b]); }
+      case 'opt': { const b = list(s.steps); return emit([REC_S_OPT, s.guard ?? -1, b]); }
+      case 'sep': { const b = step(s.elem); return emit([REC_S_SEP, s.guard ?? -1, b, sepDelimLid(ids, s.delim)]); }
+      case 'altlit': return emit([REC_S_ALTLIT, s.opts.length, ...s.opts.map((o) => lid(o.value))]);
+      case 'alt': {
+        const n = s.branches.length, fs = s.firsts ?? [];
+        const arms = s.branches.map((b, i) => {
+          const f = fs[i] ?? null;
+          return [s.predictive || isFirstGuardable(f, n) ? firstSig(f) : -1, list(b)];
+        });
+        return emit([REC_S_ALT, s.predictive ? 1 : 0, n, ...arms.flat()]);
+      }
+      case 'look': return emit([REC_S_LOOK, s.id, s.is ? 1 : 0]);
+      case 'ahead': return emit([REC_S_AHEAD, s.set, s.is ? 1 : 0]);
+      case 'aheadCtx': return emit([REC_S_AHEADCTX, s.set, s.is ? 1 : 0]);
+      case 'seq': { const b = list(s.steps); return emit([REC_S_SEQ, b]); }
+      case 'sameLine': return emit([REC_S_SAMELINE]);
+      case 'suppress': { const b = list(s.steps); return emit([REC_S_SUPPRESS, s.set, b]); }
+      case 'ctx': { const b = list(s.steps); return emit([REC_S_CTX, s.ctx, b]); }
+    }
+  }
+  const skip = (g: Guard, steps: Step[]) => guardedSteps(g, steps);
+  function rd(r: RdRule): number {
+    // The single form runs its alternative whole and unguarded; the predictive one by FIRST
+    // signature; a longest-match list each candidate after the lead tests its guard took over.
+    const alts = r.alts.map((a, i) => (r.predictive ? [guard(null, r.altFirst[i]!), list(a)] : r.alts.length === 1 ? [-1, list(a)] : [guard(r.altGuard[i]!), list(skip(r.altGuard[i]!, a))]));
+    return emit([REC_RD, r.predictive ? 1 : 0, r.alts.length, ...alts.flat()]);
+  }
+  // A Pratt rule: [PRATT nudTplHole postfixTplHole postfixSameLine, then the offsets from the
+  //   record's start of its six sections:
+  //   nArms (tag operand*)*      NUD arms in declaration order: TOK kid isTemplateToken | BRACKET
+  //                              firstLid steps closesTail | SEQ guard steps closesTail | CAPPED
+  //                              guard steps capBp | PREFIX
+  //   nPre (lid rbp requireTarget form)*  nBin (lid lbp rbp requireTarget noUnaryLhs)*
+  //   nPost (lid lbp requireTarget)*
+  //   nLed (firstLid steps lbp sameLine accessTail closesTail form notLeftLeaf nSupp set*)*
+  //                              lbp -1: none; notLeftLeaf -1 or [n lid*]
+  //   nPostTok kid*]
+  function pratt(r: PrattRule): number {
+    const arms = r.nudOrder.map((a): number[] => {
+      switch (a.kind) {
+        case 'tok': return [REC_N_TOK, kidOf(ids, r.nudToks[a.index]!), r.nudTplHole !== undefined && ir.tpl !== null && r.nudToks[a.index] === ir.tpl.token ? 1 : 0];
+        case 'bracket': return [REC_N_BRACKET, lid(r.nudBrackets[a.index]!.first), list(r.nudBrackets[a.index]!.steps), r.nudBracketClosesTail[a.index] ? 1 : 0];
+        case 'seq': { const g = r.nudSeqGuard[a.index]!; return [REC_N_SEQ, guard(g), list(skip(g, r.nudSeqs[a.index]!)), r.nudSeqClosesTail[a.index] ? 1 : 0]; }
+        case 'capped': { const g = r.nudCappedGuard[a.index]!, c = r.nudCapped[a.index]!; return [REC_N_CAPPED, guard(g), list(skip(g, c.steps)), c.capBp]; }
+        case 'prefix': return [REC_N_PREFIX];
+      }
+    });
+    const ops = prattOpTables(r, ids);
+    const leds = r.leds.map((b, i) => {
+      const nll = r.ledNotLeftLeaf[i];
+      return [lid(b.first), list(b.steps), r.ledLbp[i] ?? -1, r.ledSameLine[i] ? 1 : 0, r.ledAccessTail[i] ? 1 : 0, r.ledClosesTail[i] ? 1 : 0, r.ledForm[i]!,
+        nll ? emit([nll.length, ...nll.map(lid)]) : -1, r.ledSuppressedIn[i]!.length, ...r.ledSuppressedIn[i]!];
+    });
+    const sections = [
+      [arms.length, ...arms.flat()],
+      [ops.pre.length, ...ops.pre.flatMap((p) => [p.lid, p.rbp, p.tgt ? 1 : 0, p.form])],
+      [ops.bin.length, ...ops.bin.flatMap((b) => [b.lid, b.lbp, b.rbp, b.tgt ? 1 : 0, b.noUnary ? 1 : 0])],
+      [ops.post.length, ...ops.post.flatMap((p) => [p.lid, p.lbp, p.tgt ? 1 : 0])],
+      [leds.length, ...leds.flat()],
+      [r.postfixToks.length, ...r.postfixToks.map((k) => kidOf(ids, k))],
+    ];
+    // The header: the sections' offsets from the record's start.
+    const head = [REC_PRATT, r.nudTplHole !== undefined ? rid(r.nudTplHole) : -1, r.postfixTplHole !== undefined ? rid(r.postfixTplHole) : -1, r.postfixSameLine ? 1 : 0];
+    let rel = head.length + sections.length;
+    for (const x of sections) { head.push(rel); rel += x.length; }
+    return emit([...head, ...sections.flat()]);
+  }
+  const n = ar.ruleNames.length;
+  data.push(n, ir.tpl ? kidOf(ids, '$templateHead') : -1, ...Array.from({ length: n }, () => -1));
+  const ruleAt = Array.from({ length: n }, () => -1);
+  for (const r of ir.rules) {
+    const at = r.kind === 'rd' ? rd(r) : pratt(r);
+    ruleAt[rid(r.name)] = at;
+    data[2 + rid(r.name)] = at;
+  }
+  return { data, ruleAt };
 }

@@ -698,7 +698,7 @@ function estreeDecl(ctx: TsAstCustomCtx): unknown {
 function estreeParenOrComma(ctx: TsAstCustomCtx): unknown {
   const arm = ctx.altPath[0];
   if (arm === undefined || arm < 0 || arm > 20) return unhandledCustom('estreeParenOrComma', ctx);
-  if (arm === 7) return { type: 'MetaProperty', meta: I('new'), property: I('target') };
+  if (arm === 6) return { type: 'MetaProperty', meta: I('new'), property: I('target') };
   const parts = flatKids(ctx.kids);
   if (parts.length === 1) return parts[0];
   return { type: 'SequenceExpression', expressions: parts };

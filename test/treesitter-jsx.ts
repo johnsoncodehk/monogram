@@ -13,7 +13,7 @@
 //    cd tree-sitter/javascriptreact && npx tree-sitter generate && npx tree-sitter build --wasm .
 //  Run: node test/treesitter-jsx.ts   (appends a table to $GITHUB_STEP_SUMMARY when set)
 // ─────────────────────────────────────────────────────────────────────────────
-import { appendFileSync, existsSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createParser } from '../src/gen-parser.ts';
 import { collectLiterals } from '../src/grammar-utils.ts';
 import { JSX_CASES } from './curated-corpora.ts';
@@ -58,6 +58,10 @@ const LINE_BREAKS = [
   'a /* c */\nb', 'a // c\nb', 'a /*\n*/ b', 'a\n// c\nb', 'a\n/* c */ b',
   'class C { x = 1\n y = 2 }', 'class C { static\n x() {} }', 'class C { accessor\n x = 1 }', 'class C { async\n x() {} }',
   'x = y\n=> 1', 'a\n`t`', 'a\n/b/g',
+  // after a same-line marker, a token a literal begins (`/` a regex, `.` a number)
+  'function f() { return /a/; }', 'function f() { return /a/ }', 'function f() {\n return /^a/.test(x);\n}', 'function f() { return /=a/; }',
+  'function f() { return .5; }', 'function f() { return `t`; }', 'function f() { return\n/a/ }',
+  'if (a) { out.push(1); }', 'if (a) { x.push(1); }',
   // a same-line marker before a name that a keyword may be (the step's own guard decides)
   'class C { async if() {} }', 'class C { accessor if = 1 }', 'class C { get\n if() {} }', 'x = async true => 1', 'x = async if => 1',
   'a b', 'let a = 1 let b = 2', 'f() g()', 'return x y', 'a = 1 b = 2', 'x ++y', '{ a = 1 b = 2 }',
@@ -84,6 +88,15 @@ const COMMENTS = [
   '/** a */\ninterface P {\n    /** b */\n}', '/* a */\nclass P {\n    /* b */\n}', '/** a */\nfunction f() {\n    /** b */\n}',
   '/** a */ x = { /** b */ };', 'x = 1 /* a */ + /* b */ 2;', '/***/ x;', '/**/ x;', '/* a **/ x; /** b ***/ y;', '/* a * / b */ x;',
   '/* a */ x */ y;', '/* a */ ) /* b */', 'x = /* a */ 1 */ 2;',
+];
+
+// A continuation whose operand is another rule that continues (`x as T` then Type's own `[ ]`, `|`,
+// `&`, `<`, `?`, `.`): the operand is read whole where it continues, and the expression takes the
+// token where the operand's continuation fails (`a as T < b`, `x as T ? a : b`).
+const OPERANDS = [
+  'x as T[];', 'x satisfies T[];', 'x as A | B;', 'x as A & B;', '<T[]>x;', 'x as T[] | U;', 'x as const;', 'a as T < b;',
+  'x as T ? a : b;', 'x as T[0];', 'x as T<U>[];', 'a as any as T[];', 'f(x as T[], y);', 'x as T | U[];', 'x as T\n[0];',
+  'y = x as T extends U ? A : B;', 'x as T < b > c;',
 ];
 
 // Contextual keywords: every word-shaped literal the grammar writes (`static`, `type`, `of`, `if`, ...),
@@ -173,6 +186,46 @@ function wordLiterals(g: { rules: { body: any }[]; precs: { operators: { value: 
   return [...out].filter(w => /^[A-Za-z_$][\w$]*$/.test(w)).sort();
 }
 
+// Operator pairs: `a OP1 c OP2 d` for one operator per precedence level of the grammar's table, every
+// continuation connector it declares (ledPrec: `?:`, `in`, `instanceof`, `as`, `satisfies`) and every
+// prefix / postfix operator against each of them, nested both ways. Where both accept, tree-sitter's
+// expression nodes must span what the interpreter's do: a precedence number that disagrees with the
+// Pratt loop's binding power builds a wrong tree with no ERROR (`a ? b : c + d` as `(a ? b : c) + d`),
+// which no verdict comparison sees. The pairs that still bracket differently are pinned in
+// test/treesitter-brackets-record.txt (the run fails when that list moves; `--write` re-records).
+function operatorPairs(gr: { precs: { operators: { value: string; position: string }[] }[]; ledPrecs?: { connector: string }[] }): string[] {
+  const bin: string[] = [], pre: string[] = [], post: string[] = [];
+  for (const lvl of gr.precs) {
+    const i = lvl.operators.find(o => o.position === 'infix'); if (i) bin.push(i.value);
+    for (const o of lvl.operators) if (o.position === 'prefix' && !pre.includes(o.value)) pre.push(o.value);
+    const p = lvl.operators.find(o => o.position === 'postfix'); if (p) post.push(p.value);
+  }
+  const forms: ((l: string, r: string) => string)[] = bin.map(op => (l, r) => `${l} ${op} ${r}`);
+  for (const lp of gr.ledPrecs ?? []) {
+    if (lp.connector === '?') forms.push((l, r) => `${l} ? b : ${r}`);
+    else if (lp.connector === 'as' || lp.connector === 'satisfies') forms.push(l => `${l} ${lp.connector} T`);
+    else forms.push((l, r) => `${l} ${lp.connector} ${r}`);
+  }
+  const out = new Set<string>();
+  for (const f1 of forms) for (const f2 of forms) { out.add(f2(f1('a', 'c'), 'd') + ';'); out.add(f1('a', f2('c', 'd')) + ';'); }
+  for (const p of pre) for (const f of forms) out.add(f(/\w$/.test(p) ? `${p} a` : `${p}a`, 'c') + ';');
+  for (const p of post) for (const f of forms) out.add(f(`a${p}`, 'c') + ';');
+  for (const f of forms) { out.add(`x = y => ${f('a', 'c')};`); out.add(`x = ${f('a', 'c')};`); out.add(`x = a ? ${f('b', 'c')} : d;`); }
+  return [...out];
+}
+const exprSpans = (n: any, out: string[] = []): string[] => {
+  if (n.rule === 'Expr') out.push(`${n.offset}-${n.end}`);
+  for (const c of n.children ?? []) if (c.rule) exprSpans(c, out);
+  return out;
+};
+const tsExprSpans = (n: any, out: string[] = []): string[] => {
+  if (n.type === 'expr') out.push(`${n.startIndex}-${n.endIndex}`);
+  for (const c of n.namedChildren) tsExprSpans(c, out);
+  return out;
+};
+const BRACKETS_RECORD = 'test/treesitter-brackets-record.txt';
+const bracketsDiffer: string[] = [];
+
 const { Parser, Language } = await import('web-tree-sitter');
 await Parser.init();
 
@@ -187,13 +240,13 @@ const rows: Row[] = [];
 const disagreements: string[] = [];
 let loadFailed = false;
 
-for (const { lang, mod, corpora } of [
+for (const { lang, mod, corpora, pairs } of [
   { lang: 'typescriptreact', mod: '../typescriptreact.ts', corpora: {
     'curated JSX': JSX_CASES, 'TSX issue cases': tsxIssueCases.map(c => c.src),
-    'TS issue cases': issueTests.map(t => t.input), 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS } },
+    'TS issue cases': issueTests.map(t => t.input), 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, operands: OPERANDS } },
   { lang: 'javascriptreact', mod: '../javascriptreact.ts', corpora: { 'curated JSX': JSX_CASES, 'JSX text': JSX_TEXT, 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS } },
-  { lang: 'typescript', mod: '../typescript.ts', corpora: { 'TS issue cases': issueTests.map(t => t.input), 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS } },
-  { lang: 'javascript', mod: '../javascript.ts', corpora: { 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS } },
+  { lang: 'typescript', mod: '../typescript.ts', corpora: { 'TS issue cases': issueTests.map(t => t.input), 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS, operands: OPERANDS }, pairs: true },
+  { lang: 'javascript', mod: '../javascript.ts', corpora: { 'reserved words': RESERVED_WORDS, 'line breaks': LINE_BREAKS, lookaheads: LOOKAHEADS, comments: COMMENTS }, pairs: true },
 ]) {
   const wasm = `tree-sitter/${lang}/tree-sitter-${lang}.wasm`;
   if (!existsSync(wasm)) { console.error(`✗ ${wasm} not found (build it: cd tree-sitter/${lang} && npx tree-sitter build --wasm .)`); loadFailed = true; continue; }
@@ -209,7 +262,7 @@ for (const { lang, mod, corpora } of [
   // statement where the interpreter ends it, `a\n++b` is two statements in both).
   const starts = (src: string) => (interp.parse(src) as { children: { offset: number }[] }).children.map(c => c.offset).join(',');
   const tsStarts = (root: any) => root.namedChildren.filter((c: any) => !c.isExtra).map((c: any) => c.startIndex).join(',');
-  for (const [corpus, inputs] of Object.entries({ ...corpora, 'contextual keywords': contextual })) {
+  for (const [corpus, inputs] of Object.entries({ ...corpora, 'contextual keywords': contextual, ...(pairs ? { 'operator pairs': operatorPairs(grammar) } : {}) })) {
     const r: Row = { grammar: lang, corpus, inputs: inputs.length, bothAccept: 0, bothReject: 0, tsOnlyReject: 0, tsOnlyAccept: 0, errorNodes: 0, splitDiffers: 0 };
     for (const src of inputs) {
       const root = parser.parse(src)!.rootNode;
@@ -218,6 +271,10 @@ for (const { lang, mod, corpora } of [
       const mono = accepts(src), ts = errs === 0;
       if (mono && ts) {
         r.bothAccept++;
+        if (corpus === 'operator pairs') {
+          const a = exprSpans(interp.parse(src)).sort().join(' '), b = tsExprSpans(root).sort().join(' ');
+          if (a !== b) { r.splitDiffers++; bracketsDiffer.push(`${lang}\t${JSON.stringify(src)}`); }
+        }
         if (corpus === 'line breaks' && starts(src) !== tsStarts(root)) { r.splitDiffers++; disagreements.push(`${lang} [${corpus}] statements start at ${tsStarts(root)} in tree-sitter, ${starts(src)} in the interpreter: ${JSON.stringify(src).slice(0, 120)}`); }
       }
       else if (!mono && !ts) r.bothReject++;
@@ -231,7 +288,7 @@ for (const { lang, mod, corpora } of [
 }
 
 const table = [
-  '| grammar | corpus | inputs | both accept | both reject | tree-sitter-only ERROR | tree-sitter-only accept | ERROR/MISSING nodes | split differs |',
+  '| grammar | corpus | inputs | both accept | both reject | tree-sitter-only ERROR | tree-sitter-only accept | ERROR/MISSING nodes | split / brackets differ |',
   '|---|---|---:|---:|---:|---:|---:|---:|---:|',
   ...rows.map(r => `| ${r.grammar} | ${r.corpus} | ${r.inputs} | ${r.bothAccept} | ${r.bothReject} | ${r.tsOnlyReject} | ${r.tsOnlyAccept} | ${r.errorNodes} | ${r.splitDiffers} |`),
 ].join('\n');
@@ -240,5 +297,22 @@ if (disagreements.length) console.log('\nDisagreements:\n' + disagreements.map(d
 if (process.env.GITHUB_STEP_SUMMARY) {
   appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### tree-sitter verdicts against the interpreter (report-only)\n\n${table}\n` +
     (disagreements.length ? `\n<details><summary>${disagreements.length} disagreement(s)</summary>\n\n${disagreements.map(d => '- `' + d.replace(/`/g, "'") + '`').join('\n')}\n</details>\n` : ''));
+}
+// The pinned operator pairs that still bracket differently (the over-acceptances and the classes the
+// generator does not yet render are in docs/TREE-SITTER.md): any movement fails, in either direction.
+if (!loadFailed) {
+  const now = bracketsDiffer.sort().join('\n') + '\n';
+  if (process.argv.includes('--write')) writeFileSync(BRACKETS_RECORD, now);
+  else {
+    const was = existsSync(BRACKETS_RECORD) ? readFileSync(BRACKETS_RECORD, 'utf8') : '';
+    if (was !== now) {
+      const a = new Set(was.split('\n').filter(Boolean)), b = new Set(now.split('\n').filter(Boolean));
+      console.error(`✗ operator pairs bracketing differently moved from ${BRACKETS_RECORD} (re-record with --write if intended):`);
+      for (const x of b) if (!a.has(x)) console.error(`  + ${x}`);
+      for (const x of a) if (!b.has(x)) console.error(`  - ${x}`);
+      process.exit(1);
+    }
+    console.log(`✓ operator pairs: ${bracketsDiffer.length} bracket differently, as recorded in ${BRACKETS_RECORD}`);
+  }
 }
 if (loadFailed) process.exit(1);

@@ -435,11 +435,11 @@ fn schema_for(etype: &str, alt: u32) -> &'static Schema {
         ("MemberExpression", 5, &SC_MEMBEREXPR5),
         ("TSAsExpression", 8, &SC_TSAS),
         ("TSNonNullExpression", 6, &SC_TSNONNULL),
-        ("SequenceExpression", 8, &SC_SEQ8),
-        ("SequenceExpression", 11, &SC_SEQ11),
-        ("SequenceExpression", 14, &SC_SEQ14),
-        ("SequenceExpression", 16, &SC_SEQ16),
-        ("SequenceExpression", 20, &SC_SEQ20),
+        ("SequenceExpression", 7, &SC_SEQ8),
+        ("SequenceExpression", 10, &SC_SEQ11),
+        ("SequenceExpression", 13, &SC_SEQ14),
+        ("SequenceExpression", 15, &SC_SEQ16),
+        ("SequenceExpression", 19, &SC_SEQ20),
         ("ForStatement", 3, &SC_FORSTATEMENT),
         ("ForHead", 0, &SC_FORHEAD),
         ("ForHead", 1, &SC_FORHEAD),
@@ -482,7 +482,7 @@ fn schema_for(etype: &str, alt: u32) -> &'static Schema {
         ("BinaryExpression", 10, &SC_BINARY),
         ("CallExpression", 2, &SC_CALL),
         ("CallExpression", 4, &SC_CALL4),
-        ("MetaProperty", 7, &SC_METAPROP7),
+        ("MetaProperty", 6, &SC_METAPROP6),
         ("TSInstantiationExpression", 1, &SC_TSINSTANTIATION),
         ("TSSatisfiesExpression", 11, &SC_TSSATISFIES),
         ("MemberExpression", 0, &SC_MEMBEREXPR0),
@@ -496,7 +496,7 @@ fn schema_for(etype: &str, alt: u32) -> &'static Schema {
         ("Type", 7, &SC_TYPE7),
         ("Type", 24, &SC_TSMAPPEDTYPE),
         ("TSMethodSignature", 1, &SC_TSACCESSORSIG),
-        ("UnknownKid", 12, &SC_UNKNOWNKID12),
+        ("UnknownKid", 11, &SC_UNKNOWNKID12),
         ("UnknownKid", 15, &SC_UNKNOWNKID15),
         ("UnknownKid", 5, &SC_UNKNOWNKID5),
         ("Declaration", 8, &SC_DECL8),
@@ -1936,7 +1936,7 @@ const SC_CALL4: Schema = Schema {
     ],
 };
 
-const SC_METAPROP7: Schema = Schema {
+const SC_METAPROP6: Schema = Schema {
     estree: "MetaProperty", no_type: false,
     kids: &[],
     any_kids: false,

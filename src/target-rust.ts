@@ -12,10 +12,11 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './emit.ts';
+import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR } from './recovery-family.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, unitMask, isList, isNum, isOpt, isRec, isRecList, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
@@ -1499,6 +1500,7 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
             let rhs = match self.${r.name}_bp(rbp) { Some(r) => r, None => { self.back(led_save); self.scratch.truncate(sb); break; } };
             if rhs.present { self.scratch.push(rhs.h); }
             left = ${fin};
+            if self.capped { self.form = 1; return Some(left); }
             form = 1; tail_closed = true;
         }`,
     entry: `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
@@ -1520,7 +1522,8 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
         let mut tail_closed = self.tail;
         loop {
             let t = match self.peek() { Some(t) => t, None => break };`,
-    bpClose: `        self.form = form;
+    bpClose: `        self.capped = false;
+        self.form = form;
         Some(left)
     }`,
     nudEnter: `    fn ${r.name}_nud(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {
@@ -4242,6 +4245,7 @@ function emitRustPrattMethod(
             self.vals.push(left);
             self.vals.push(_right);
             left = ${nodeFinish(rustShapeNodeObjectExpr(binarySlot as NodeShape, '_ab', '_op', shapeIR.spans, '_off', 'self.last_end(_off)', undefined), '_ab')};
+            if self.capped { self.form = 1; return Some(left); }
             form = 1; tail_closed = true;
             continue;
         }`;
@@ -4262,6 +4266,7 @@ function emitRustPrattMethod(
                 None => { self.pos = _save; break; }
             };
             left = ${customCall(bs.fn, '&[_right]', '[]', '_off', 'self.last_end(_off)', 'left', '_op', bs.folds)};
+            if self.capped { self.form = 1; return Some(left); }
             form = 1; tail_closed = true;
             continue;
         }`;
@@ -4285,6 +4290,7 @@ function emitRustPrattMethod(
             self.vals.push(SVal::Str(_op.0, _op.1));
             self.vals.push(_right);
             left = ${keepFinish('_ab', rule.name, '_off')};
+            if self.capped { self.form = 1; return Some(left); }
             form = 1; tail_closed = true;
             continue;
         }`;
@@ -4567,6 +4573,7 @@ function emitRustPrattMethod(
             ${postfixCode}
             ${binaryBody || (hasLoop ? 'break;' : '')}
         ${hasLoop ? '}' : ''}
+        self.capped = false;
         self.form = form;
         Some(left)
     }
@@ -4797,7 +4804,7 @@ ${arms.join('\n')}
     } else {
       // parenOrComma is a site-level decision for every arm — emit one branch.
       if (info.perArm.length === 1 && typeof info.perArm[0] === 'object' && info.perArm[0] !== null && 'parenOrComma' in (info.perArm[0] as object)) {
-        lines.push(`            ${JSON.stringify(fn)} => if arm == 7 { "MetaProperty" } else if kids.len() == 1 { kid_type(kids[0]) } else { "SequenceExpression" },`);
+        lines.push(`            ${JSON.stringify(fn)} => if arm == 6 { "MetaProperty" } else if kids.len() == 1 { kid_type(kids[0]) } else { "SequenceExpression" },`);
         continue;
       }
       const arms: string[] = [];
@@ -4807,7 +4814,7 @@ ${arms.join('\n')}
         if (typeof t === 'string') rhs = JSON.stringify(t);
         else if ('passthrough' in t) rhs = 'kid_type(kids.first().copied().unwrap_or(SVal::Null))';
         else if ('optionalChain' in t) rhs = 'optional_chain_type(kids)';
-        else rhs = 'if arm == 7 { "MetaProperty" } else if kids.len() == 1 { kid_type(kids[0]) } else { "SequenceExpression" }';
+        else rhs = 'if arm == 6 { "MetaProperty" } else if kids.len() == 1 { kid_type(kids[0]) } else { "SequenceExpression" }';
         arms.push(`                ${i} => ${rhs},`);
       });
       lines.push(`            ${JSON.stringify(fn)} => match arm {
@@ -5377,7 +5384,7 @@ pub fn parse_ast(src: &str) -> Option<AstRoot<'_>> {
 `;
 }
 
-const RS_ELEM: Record<Exclude<ListTy, `recs_${string}`>, string> = { metas: 'AlignMeta', toks: 'Tok', bools: 'bool', depths: 'i64', edits: 'Edit' };
+const RS_ELEM: Record<Exclude<ListTy, `recs_${string}`>, string> = { metas: 'AlignMeta', toks: 'Tok', bools: 'bool', depths: 'i64', ints: 'isize', edits: 'Edit' };
 const RS_SCALAR: Record<string, string> = { int: 'isize', lid: 'u16', depth: 'i64', pos: 'u32', idx: 'usize', bool: 'bool', meta: 'AlignMeta', tok: 'Tok' };
 const RS_META: Record<MetaInt, string> = { off: 'u32', end: 'u32', kid: 'u16', pd: 'u16', fd: 'u16', td: 'u8' };
 const RS_TOK: Record<TokInt, string> = { off: 'u32', end: 'u32', kid: 'u16', lid: 'u16' };
@@ -5503,7 +5510,8 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
         (r.prec < p || r.prec === RS_CAST || (right && r.prec === p) || ((op === 'shr' || op === 'shl') && r.prec < ATOM) || (COMPARISON.has(op) && r.prec >= 3 && r.prec <= 4) ? `(${r.c})` : r.c);
       return { c: `${side(a, false)} ${sp} ${side(b, true)}`, prec: p };
     },
-    call: (name, args) => `${name}(${args.join(', ')})`,
+    // An engine method is one of the recovery engine (`self`).
+    call: (name, args, method) => `${method ? 'self.' : ''}${name}(${args.join(', ')})`,
     len: (cx, l) => cx.atom(`${rsWrap(l, ATOM)}.len()`, 'int', 'usize'),
     code: (cx, s, i) => ({ c: `${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}] as u32`, ty: 'int', nat: 'u32', prec: RS_CAST }),
     hasAt: (cx, s, i, lit) => cx.atom(`${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}..].starts_with(${J(lit)}.as_bytes())`, 'bool', 'bool'),
@@ -5517,6 +5525,8 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
     findAny: (cx, s, i, stops) => cx.atom(`${findAnyName(stops)}(${rsWrap(s, ATOM)}.as_bytes(), ${cx.coerce(i, 'usize')})`, 'int', 'usize'),
     // One allocation: format! sizes the string from its arguments (&str or String alike).
     cat: (cx, parts) => cx.atom(`format!("${'{}'.repeat(parts.length)}", ${parts.map((r) => r.c).join(', ')})`, 'str', 'str', { owned: true }),
+    // The decoded table is a field of the recovery engine (a slice of a table decoded once, OnceLock).
+    tab: (cx, name, i) => cx.atom(`self.tab_${snake(name)}[${cx.coerce(i, 'usize')}]`, 'int', 'isize'),
     own: (cx, r) => {
       if (r.ty === 'str') return cx.atom(`${rsWrap(r, ATOM)}.to_string()`, 'str', 'str', { owned: true });
       if (isList(r.ty)) return cx.atom(`${rsWrap(r, ATOM)}.to_vec()`, r.ty, r.ty, { owned: true });
@@ -5542,11 +5552,12 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
       // Out of line only: `#[cold]` on the identifier escape scanners moved lex_from's register layout
       // (+0.2% to +0.4% lexer instructions on real inputs, profile runs 45034540295 / 45035043707).
       ...(f.cold ? ['#[inline(never)]'] : []),
-      `fn ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')})${f.rets.length === 0 ? '' : ` -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`}`} {`,
+      `fn ${f.name}(${[...(f.method ? ['&mut self'] : []), ...f.params.map((p) => `${p.name}: ${p.type}`)].join(', ')})${f.rets.length === 0 ? '' : ` -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`}`} {`,
       ...rsBlock(f.body),
       '}',
     ].join('\n'),
   },
+  intTable: (name, packed) => `const TABS_${snake(name).toUpperCase()}: &str = ${J(packed)};`,
   relex: {
     index: 'usize',
     expr: {
@@ -5601,7 +5612,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
 
 // Callee-FIRST body guards: a Rust rd call runs its prologue before the dispatch that refuses (40-48
 // instructions per refused call, PR #184), more than the guard's test on each iteration.
-const FACTS: PortableFacts = { calleeFirstGuards: true };
+export const FACTS: PortableFacts = { calleeFirstGuards: true };
 
 export const rustTarget = defineTarget({
   name: 'rust',
@@ -5718,13 +5729,112 @@ ${emitParseWithHelpers(ir, shapeB)}
 // module and touching none of it. parse_total runs the entry rule as parse_with does (parse_begin
 // its setup); on a reject the recovery family decides the diagnostic from the position the entry
 // stopped at and the tokens the parse examined.
+// The interpreter's engine (src/recovery-family.ts ENGINE_EXTERNS) over the builder parse
+// Parser: each a call of what its native functions do. Recov is a struct of its own that borrows
+// the parser, so the default module's Parser is unchanged; the interpreter's methods are printed
+// inside its impl. The native dispatch by id is a match over the plan's ids (ParserIR.forms says
+// which functions exist in building form).
+function recoveryEngineRust(ir: ParserIR, shared: SharedAlgorithms): string {
+  const ids = buildLexIdPlan(ir), ar = buildArenaIdPlan(ir, ids);
+  const sw = (on: string, cases: [number, string][]) => `match ${on} {${cases.map(([k, c]) => ` ${k} => ${c},`).join('')} _ => panic!("recovery: no native function") }`;
+  const build = ir.rules.filter((r) => ir.forms.buildRules.includes(r.name));
+  const holes = ir.tpl ? tplHoleRules(ir) : [];
+  const op = ttIdOf(ar, '$operator');
+  return `/// The interpreter's engine over p: the marks it took, the plan's decoded table, the offset of
+/// the node it last finished, the binary operator it last read, and the steps of the run.
+struct Recov<'r, 'a, B: Builder> { p: &'r mut Parser<'a, B>, marks: Vec<Mark>, tab_rt: &'static [isize], fin_off: isize, op_n: usize, op_end: u32, steps: usize }
+/// The plan's table, decoded once, at the first interpreted parse.
+static TAB_RT: std::sync::OnceLock<Vec<isize>> = std::sync::OnceLock::new();
+impl<'r, 'a, B: Builder> Recov<'r, 'a, B> {
+${shared.recoveryFamily(ir, true).split('\n').map((l) => (l ? `    ${l}` : l)).join('\n')}
+    fn en_pos(&mut self) -> isize { self.p.pos as isize }
+    fn en_set_pos(&mut self, q: isize) { self.p.pos = q as usize; }
+    fn en_back(&mut self, q: isize) { self.p.back(q as usize); }
+    fn en_peek_kid(&mut self) -> isize { match self.p.peek() { Some(t) => t.kid as isize, None => -1 } }
+    fn en_peek_lid(&mut self) -> isize { match self.p.peek() { Some(t) => t.lid as isize, None => -1 } }
+    fn en_peek_nl(&mut self) -> bool { match self.p.peek() { Some(t) => t.nl, None => false } }
+    fn en_lit(&mut self, l: isize) -> bool { self.p.match_lit(l as u16) }
+    fn en_comp(&mut self, l: isize) -> bool { self.p.match_comp(l as u16) }
+    fn en_tok(&mut self, k: isize) -> bool { self.p.match_tok(k as u16) }
+    fn en_ahead(&mut self, set: isize, is: bool) -> bool { self.p.ahead(set as usize, is) }
+    fn en_ctx_word(&mut self) -> bool { self.p.ctx_word() }
+    fn en_second_in(&mut self, set: isize) -> bool { self.p.second_in(set as usize) }
+    fn en_look(&mut self, id: isize) -> bool { ${sw('id', ir.lookaheads.map((_, i) => [i, `self.p.look_${i}()`]))} }
+    fn en_rule(&mut self, r: isize) -> bool { ${sw('r', build.map((r) => [ruleIdOf(ar, r.name), `self.p.call_rule(Parser::parse_${r.name})`]))} }
+    fn en_bp(&mut self, r: isize, bp: isize) -> bool {
+        let n: Option<Spanned<B::H>> = ${sw('r', build.filter((r) => r.kind === 'pratt').map((r) => [ruleIdOf(ar, r.name), `self.p.${r.name}_bp(bp as i64)`]))};
+        match n { Some(fr) => { if fr.present { self.p.scratch.push(fr.h); } true } None => false }
+    }
+    fn en_shared(&mut self, i: isize) -> bool { ${sw('i', ir.shared.flatMap((_, i): [number, string][] => (ir.forms.buildShared[i] ? [[i, `self.p.sub_${i}()`]] : [])))} }
+    fn en_tpl(&mut self, hole: isize) -> bool {
+        let n: Option<Spanned<B::H>> = ${holes.length ? sw('hole', holes.map((h) => [ruleIdOf(ar, h), `self.p.match_template(Parser::parse_${h})`])) : '{ let _ = hole; panic!("recovery: no template") }'};
+        match n { Some(fr) => { if fr.present { self.p.scratch.push(fr.h); } true } None => false }
+    }
+    fn en_sh(&mut self) -> isize { self.p.scratch.len() as isize }
+    fn en_cut(&mut self, h: isize) { self.p.scratch.truncate(h as usize); }
+    fn en_mark(&mut self) -> isize { let m = self.p.mark(); self.marks.push(m); self.marks.len() as isize - 1 }
+    fn en_reset(&mut self, k: isize) { let m = self.marks[k as usize]; self.p.reset(m); }
+    fn en_unmark(&mut self, k: isize) { self.marks.truncate(k as usize); }
+    fn en_win(&mut self, r: isize, c: isize, save: isize, sb: isize) {
+        let off = self.p.off_at(save as usize);
+        let n = self.p.finish(r as u16, c as usize, off, save as usize);
+        self.p.scratch.truncate(sb as usize);
+        if n.present { self.p.scratch.push(n.h); }
+        self.fin_off = n.off as isize;
+    }
+    fn en_fin_led(&mut self, r: isize, sb: isize, off: isize, tok: isize) {
+        let n = self.p.finish(r as u16, sb as usize, off as usize, tok as usize);
+        if n.present { self.p.scratch.push(n.h); }
+        self.fin_off = n.off as isize;
+    }
+    fn en_fin_off(&mut self) -> isize { self.fin_off }
+    fn en_op_lid(&mut self) -> isize { let t = self.p.peek().unwrap(); let (lid, n, end) = self.p.op_read(t); self.op_n = n; self.op_end = end; lid as isize }
+    fn en_leaf_op_n(&mut self) { let (n, end) = (self.op_n, self.op_end); let p = &mut *self.p; let t = p.toks[p.pos]; p.push_leaf(${op}, p.pos as u32, t.off, end); p.pos += n; }
+    fn en_leaf_op(&mut self) { let p = &mut *self.p; let t = p.toks[p.pos]; p.push_leaf(${op}, p.pos as u32, t.off, t.end); p.pos += 1; }
+    fn en_leaf_kid(&mut self) { let p = &mut *self.p; let t = p.toks[p.pos]; p.push_leaf(t.kid as u16, p.pos as u32, t.off, t.end); p.pos += 1; }
+    fn en_head_lid(&mut self, sb: isize) -> isize {
+        let sb = sb as usize;
+        if sb >= self.p.scratch.len() { return 0; }
+        let f = Spanned { h: self.p.scratch[sb], off: 0, tok_start: 0, present: true };
+        lid_of(self.p.head_leaf_text(&f).as_bytes()) as isize
+    }
+    fn en_st(&mut self, k: isize) -> isize {
+        let p = &*self.p;
+        match k { ${ST_CAPPED} => p.capped as isize, ${ST_FORM} => p.form as isize, ${ST_TAIL} => p.tail as isize, ${ST_SUP_NEXT} => p.suppress_next as isize, ${ST_SUP_CUR} => p.suppress_cur as isize, _ => p.ctx as isize }
+    }
+    fn en_set_st(&mut self, k: isize, v: isize) {
+        let p = &mut *self.p;
+        match k { ${ST_CAPPED} => p.capped = v != 0, ${ST_FORM} => p.form = v as u8, ${ST_TAIL} => p.tail = v != 0, ${ST_SUP_NEXT} => p.suppress_next = v as u16, ${ST_SUP_CUR} => p.suppress_cur = v as u16, _ => p.ctx = v as u8 }
+    }
+    fn en_tick(&mut self) { self.steps += 1; }
+}
+
+/// The strict interpreter of the parse plan (the recovery family) from the entry rule, \`depth\`
+/// rule levels interpreted and the native functions below: parse_with's root and verdict on every
+/// input, and the interpreted steps it took.
+pub fn parse_interpreted<'a, B: Builder + Default>(src: &'a str, b: &mut B, depth: isize) -> (Option<B::H>, usize) {
+    let mut g = parse_begin(src, b);
+    let p = &mut g.p;
+    if lex_into(src, &mut p.toks, &mut g.lex).is_some() { return (None, 0); }
+    p.scratch.clear();
+    let tab_rt: &'static [isize] = TAB_RT.get_or_init(|| unpack_ints(TABS_RT));
+    let mut rv = Recov { p, marks: Vec::new(), tab_rt, fin_off: 0, op_n: 0, op_end: 0, steps: 0 };
+    let ok = rv.ri_rule(${ruleIdOf(ar, ir.entry)}, depth) && rv.p.pos == rv.p.toks.len();
+    let steps = rv.steps;
+    if !ok { return (None, steps); }
+    if rv.p.scratch.len() != 1 { panic!("the builder kept no node for the root rule of an accepted parse (a Builder must return one for the entry rule)"); }
+    (Some(rv.p.scratch[0]), steps)
+}`;
+}
+
 function recoveryRegionRust(ir: ParserIR, shared: SharedAlgorithms): string {
   const reuse = !!ir.reuse;
   return `
 // ---- recovery: the emit option { recovery: true }; generated from src/recovery-family.ts (shared by the TS / Go / Rust targets) ----
 #[derive(Clone, Copy)]
 struct Diag { kind: isize, off: isize, end: isize, rel_off: isize, rel_end: isize }
-${shared.recoveryFamily()}
+${shared.recoveryFamily(ir, false)}
+${recoveryEngineRust(ir, shared)}
 /// A diagnostic: a span of the source (byte offsets), its message, and a related location.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Diagnostic { pub off: usize, pub end: usize, pub message: String, pub related: Option<Related> }
@@ -5761,6 +5871,26 @@ pub fn parse_total<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> (Option
 
 // The runner's batch-total mode (emit option `recovery`): NUL-separated inputs in, one line per
 // input out: [accepted, [[off, end, message, relOff, relEnd, relMessage], ...]] (relOff -1: none).
+// batch-interp <depth>: [accepted, steps, CST JSON or ""] per input, by parse_interpreted.
+const RS_BATCH_INTERP = `    if args.get(1).map(|a| a.as_str()) == Some("batch-interp") {
+        fn js(s: &str, out: &mut String) {
+            out.push('"');
+            for c in s.chars() { match c { '"' => out.push_str("\\\\\\""), '\\\\' => out.push_str("\\\\\\\\"), c if (c as u32) < 0x20 => out.push_str(&format!("\\\\u{:04x}", c as u32)), c => out.push(c) } }
+            out.push('"');
+        }
+        let depth: isize = args[2].parse().unwrap();
+        let mut out = String::new();
+        for s in src.split('\\0') {
+            let mut b = CstBuilder::default();
+            let (root, steps) = parse_interpreted(s, &mut b, depth);
+            out.push_str(&format!("[{},{},", root.is_some(), steps));
+            match root { Some(h) => js(&cst_json_with(&b, h), &mut out), None => out.push_str("\\"\\"") }
+            out.push_str("]\\n");
+        }
+        print!("{}", out);
+        return;
+    }
+`;
 const RS_BATCH_TOTAL = `    if args.get(1).map(|a| a.as_str()) == Some("batch-total") {
         fn js(s: &str, out: &mut String) {
             out.push('"');
@@ -5954,7 +6084,7 @@ fn main() {
         println!("{:.4}", t.elapsed().as_secs_f64() * 1000.0 / iters as f64);
         return;
     }
-${opts.recovery ? RS_BATCH_TOTAL : ''}    // batch: NUL-separated inputs in, one line per input out — the CST JSON, "-" for an input
+${opts.recovery ? RS_BATCH_TOTAL + RS_BATCH_INTERP : ''}    // batch: NUL-separated inputs in, one line per input out — the CST JSON, "-" for an input
     // the parser rejects, or "!" and the message for one that panicked (a lexer error panics).
     // One process start for a whole corpus.
     if args.get(1).map(|a| a.as_str()) == Some("batch") {
