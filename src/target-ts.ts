@@ -243,7 +243,7 @@ function elementLexerTS(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms, 
   scans: string; consts: string; rxStateFrom: string; nlWs: string; lexCodes: string[]; lexFirsts: (LexFirstBytes | null)[];
   tplCloseTest: string; tplOpenTest: string; uniIdentFallbackTs: string;
 }): string {
-  const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0;
+  const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0, dirs = !!el.directives;
   const operand = el.entry === 'operand';
   if (operand && !rx) throw new Error('portable: an operand element entry needs the regex context (prevIsValue)');
   const L = tlen(el.tagOpen);
@@ -306,7 +306,7 @@ ${sig ? `${tsFlagTable('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
   function refresh(): void {
     const top = templateStack.length > 0 ? templateStack[templateStack.length - 1] : 0;
     hot = ${sig ? 'specTok >= 0 || ' : ''}(top & 2) !== 0;
-${rx ? '    valueTo = (top & 3) === 2 && (top & 12) !== 0 ? 0x3fffffff : elEndAt;\n' : ''}  }
+${rx ? `    valueTo = (top & 3) === 2 && (top & 12) !== 0${dirs ? ' && (top & 12) !== 12' : ''} ? 0x3fffffff : elEndAt;\n` : ''}  }
 `;
   const emitFn = `  function emit(off: number, end: number, kid: number, lid: number): void {
 ${rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]; parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid]); }
@@ -319,7 +319,8 @@ ${rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]
   // the frame step lexes every tagOpen).
   const enter = `      templateStack.push(6); refresh(); bound = 0; emit(pos, pos + ${L}, 0, LID_EL_OPEN);${raw ? ' tagAt.push(toks.length - 1);' : ''} tagAngle = 0; pos += ${L}; continue;\n`;
   // a tagOpen that opens no tag (tagStart) is the ordinary scan's
-  const opensTag = `src.startsWith(${J(el.tagOpen)}, pos)${el.tagStart ? ` && ${shared.elementFn('tagStart')}(src, pos + ${L})` : ''}`;
+  // (in a directive head, code inside an element frame, a tagOpen opens no element)
+  const opensTag = `src.startsWith(${J(el.tagOpen)}, pos)${el.tagStart ? ` && ${shared.elementFn('tagStart')}(src, pos + ${L})` : ''}${dirs ? ' && (templateStack.length === 0 || (templateStack[templateStack.length - 1] & 3) !== 2)' : ''}`;
   const entry = !operand ? `    if (${opensTag}) {\n${enter}    }\n`
     : !(el.head || sig) ? `    if (${opensTag} && !prevIsValue()) {\n${enter}    }\n`
     : `    if (${opensTag}${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue()) {
@@ -351,15 +352,17 @@ ${sig ? `      if (op === 2) {
   const cascade = renderLexByteDispatchTS(p.lexCodes, p.lexFirsts, '    ', heads);
   const frameStep = `    if (templateStack.length > 0 && (templateStack[templateStack.length - 1] & 3) === 2) {
       const fr = templateStack[templateStack.length - 1];
-      ${tsTake(['fe', 'fk', 'fl', 'ft', 'fp', 'fa', 'fla'], shared.elementFn('frame'), 'src, pos, fr, tagAngle, toks.length > 0 && toks[toks.length - 1].lid === LID_EQ, laEnd')}
+      ${tsTake(['fe', 'fk', 'fl', 'ft', 'fp', 'fa', 'fla'], shared.elementFn('frame'), `src, pos, fr, tagAngle, toks.length > 0 && toks[toks.length - 1].lid === LID_EQ, laEnd${dirs ? ', parenHead.length' : ''}`)}
       laEnd = fla;
       if (fe >= 0) {
-${elementSkipsText(ir) ? `        // a skipped text token (a comment in text): no token
+${dirs ? `        // a directive opener: its frame (or a code block's hole) is pushed before its token
+        if (fe === pos) { templateStack.push(fp);${raw ? ' if ((fp & 3) === 2) tagAt.push(-1);' : ''} refresh(); continue; }
+` : ''}${elementSkipsText(ir) ? `        // a skipped text token (a comment in text): no token
         if (fk < 0) { if (lexHasLineTerm(src, pos, fe)) pendingNl = true; pos = fe; continue; }
 ` : ''}        emit(pos, fe, fk, fl);
 ${raw ? `        // each element frame's current tag: the index of its tagOpen token (the name is the next)
         if (fl === LID_EL_OPEN) { if (fp === 6) tagAt.push(toks.length - 1); else if (((fr >> 2) & 3) === 0) tagAt[tagAt.length - 1] = toks.length - 1; }
-` : ''}        if (ft < 0) { templateStack.pop();${raw ? ' tagAt.pop();' : ''} elEndAt = toks.length; } else templateStack[templateStack.length - 1] = ft;
+${dirs ? '        if (fp === 10) tagAt.push(-1);\n' : ''}` : ''}        if (ft < 0) { templateStack.pop();${raw ? ' tagAt.pop();' : ''}${dirs ? ' if (ft === -1)' : ''} elEndAt = toks.length; } else templateStack[templateStack.length - 1] = ft;
         if (fp !== 0) templateStack.push(fp);
 ${raw ? `        // an open tag ended: a raw-text name gives its body to a raw frame (kind 3), lexed next
         if (fl === LID_EL_CLOSE && ((fr >> 2) & 3) === 1 && tagAngle === 0) {

@@ -55,8 +55,24 @@ export interface RegionView {
 }
 
 /** Flatten an expression into its item sequences: alt / group expanded, a repetition as zero or
- *  one occurrence (`+` as one), so adjacency scans see every combination. */
+ *  one occurrence (`+` as one), so adjacency scans see every combination. Bounded by 2^(opts) per
+ *  alternative. The ONE expansion every generator's adjacency scan uses (gen-tm, gen-monarch,
+ *  the region view): memoised per expression node, so a body is expanded once however many
+ *  detectors read it; the result is shared, so it is frozen (outer and inner arrays): a caller
+ *  that would mutate it throws instead.
+ *
+ *  KNOWN COST (measured 2026-11-23): the expansion is the full cross product of a body's options,
+ *  and the detectors match an adjacency by materialising it. TypeScript's rule bodies expand to
+ *  6,668,459 arms (Expr 2,481,621 arms holding 42.8 M items; Prop 1,995,841; ClassMember
+ *  1,787,551; Param 363,778) against JavaScript's 870 in all: generating typescript.ts takes about
+ *  48 s and 2.7 GB, nearly all of it this. A few more optional items in Expr multiply it again.
+ *  The redesign (owed): match adjacencies over the expression structure (the items that can
+ *  follow an item) instead of over every expanded sequence. */
+const expansions = new WeakMap<RuleExpr, RuleExpr[][]>();
 export function expandArms(expr: RuleExpr): RuleExpr[][] {
+  const hit = expansions.get(expr);
+  if (hit) return hit;
+  let out: RuleExpr[][];
   switch (expr.type) {
     case 'seq': {
       let acc: RuleExpr[][] = [[]];
@@ -66,14 +82,19 @@ export function expandArms(expr: RuleExpr): RuleExpr[][] {
         for (const prefix of acc) for (const b of branches) next.push([...prefix, ...b]);
         acc = next;
       }
-      return acc;
+      out = acc;
+      break;
     }
-    case 'alt': return expr.items.flatMap(expandArms);
-    case 'group': return expandArms(expr.body);
-    case 'quantifier': { const present = expandArms(expr.body); return expr.kind === '+' ? present : [[], ...present]; }
-    case 'not': return [[]];
-    default: return [[expr]];
+    case 'alt': out = expr.items.flatMap(expandArms); break;
+    case 'group': out = expandArms(expr.body); break;
+    case 'quantifier': { const present = expandArms(expr.body); out = expr.kind === '+' ? present : [[], ...present]; break; }
+    case 'not': out = [[]]; break;   // a negative lookahead consumes nothing: adjacency sees through it
+    default: out = [[expr]];   // literal, ref, sep, op, prefix, postfix
   }
+  for (const arm of out) Object.freeze(arm);
+  Object.freeze(out);
+  expansions.set(expr, out);
+  return out;
 }
 
 const isLit = (e: RuleExpr | undefined, v: string): boolean => e?.type === 'literal' && e.value === v;

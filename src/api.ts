@@ -626,6 +626,7 @@ interface GrammarConfig {
   canonicalRepoNames?: Record<string, string | string[]>;  // official repo KEY NAME → structural key(s) for the SAME construct; gen-tm RENAMES the structural key (or synthesises a union wrapper) to emit the official name natively (the 限制器; see CstGrammar.canonicalRepoNames)
   manifest?: import('./types.ts').ContributesManifest;  // VS Code `contributes` packaging (emits a pasteable snippet)
   treeSitterConflicts?: string[][];  // tree-sitter GLR conflict tuples for THIS grammar (see CstGrammar.treeSitterConflicts)
+  treeSitterContextualNames?: string[] | 'all';  // keywords the tree-sitter grammar also reads as names (see CstGrammar.treeSitterContextualNames)
 }
 
 export function defineGrammar(config: GrammarConfig): CstGrammar & { name: string; scopeName?: string } {
@@ -733,7 +734,7 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
     });
     return { token: tokenName, within, scope: entry.scope };
   });
-  const grammar = { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, rules, scopeOverrides, contextualScopes, markup: config.markup, elements: config.elements, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest, treeSitterConflicts: config.treeSitterConflicts };
+  const grammar = { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, rules, scopeOverrides, contextualScopes, markup: config.markup, elements: config.elements, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest, treeSitterConflicts: config.treeSitterConflicts, treeSitterContextualNames: config.treeSitterContextualNames };
 
   // Nullable NON-ENTRY rules are a definition error: the engine never returns an empty match for a
   // rule, so such a rule's empty case is unreachable and references to it fail silently where the

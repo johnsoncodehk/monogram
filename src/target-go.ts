@@ -470,7 +470,7 @@ function elementLexerGo(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms, 
   head: string; scans: string; rxStateFrom: string; nlWs: string; lexCodes: string[]; lexFirsts: (LexFirstBytes | null)[];
   tplCloseTest: string; tplOpenTest: string; uniIdentFallbackGo: string; loopPanicGo: string; goBoolArr: (name: string, flags: boolean[]) => string;
 }): string {
-  const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0;
+  const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0, dirs = !!el.directives;
   const operand = el.entry === 'operand';
   if (operand && !rx) throw new Error('portable: an operand element entry needs the regex context (prevIsValue)');
   const L = tlen(el.tagOpen);
@@ -503,7 +503,7 @@ ${sig ? `${p.goBoolArr('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
 \t\tif len(templateStack) > 0 { top = templateStack[len(templateStack)-1] }
 \t\thot = ${sig ? 'specTok >= 0 || ' : ''}top&2 != 0
 ${rx ? `\t\tvalueTo = elEndAt
-\t\tif top&3 == 2 && top&12 != 0 { valueTo = 1 << 62 }
+\t\tif top&3 == 2 && top&12 != 0${dirs ? ' && top&12 != 12' : ''} { valueTo = 1 << 62 }
 ` : ''}\t}
 \trefresh()
 `;
@@ -562,7 +562,8 @@ ${rx ? `\t\tif lid == lidLParen {
   // the frame step lexes every tagOpen).
   const enter = `\t\t\ttemplateStack = append(templateStack, 6); refresh(); bound = 0; emit(pos, pos + ${L}, 0, lidElOpen);${raw ? ' tagAt = append(tagAt, len(*acc)-1);' : ''} tagAngle = 0; pos += ${L}; continue\n`;
   // a tagOpen that opens no tag (tagStart) is the ordinary scan's
-  const opensTag = `strings.HasPrefix(src[pos:], ${J(el.tagOpen)})${el.tagStart ? ` && ${shared.elementFn('tagStart')}(src, pos + ${L})` : ''}`;
+  // (in a directive head, code inside an element frame, a tagOpen opens no element)
+  const opensTag = `strings.HasPrefix(src[pos:], ${J(el.tagOpen)})${el.tagStart ? ` && ${shared.elementFn('tagStart')}(src, pos + ${L})` : ''}${dirs ? ' && (len(templateStack) == 0 || templateStack[len(templateStack)-1]&3 != 2)' : ''}`;
   const entry = !operand ? `\t\tif ${opensTag} {\n${enter}\t\t}\n`
     : !(el.head || sig) ? `\t\tif ${opensTag} && !prevIsValue() {\n${enter}\t\t}\n`
     : `\t\tif ${opensTag}${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue() {
@@ -594,15 +595,17 @@ ${sig ? `\t\t\tif op == 2 {
   const cascade = renderLexByteDispatchGo(p.lexCodes, p.lexFirsts, '\t', heads);
   const frameStep = `\t\tif len(templateStack) > 0 && templateStack[len(templateStack)-1]&3 == 2 {
 \t\t\tfr := templateStack[len(templateStack)-1]
-\t\t\tfe, fk, fl, ft, fp, fa, fla := ${shared.elementFn('frame')}(src, pos, fr, tagAngle, len(*acc) > 0 && (*acc)[len(*acc)-1].Lid == lidEq, laEnd)
+\t\t\tfe, fk, fl, ft, fp, fa, fla := ${shared.elementFn('frame')}(src, pos, fr, tagAngle, len(*acc) > 0 && (*acc)[len(*acc)-1].Lid == lidEq, laEnd${dirs ? ', len(parenHead)' : ''})
 \t\t\tlaEnd = fla
 \t\t\tif fe >= 0 {
-${elementSkipsText(ir) ? `\t\t\t\t// a skipped text token (a comment in text): no token
+${dirs ? `\t\t\t\t// a directive opener: its frame (or a code block's hole) is pushed before its token
+\t\t\t\tif fe == pos { templateStack = append(templateStack, fp);${raw ? ' if fp&3 == 2 { tagAt = append(tagAt, -1) };' : ''} refresh(); continue }
+` : ''}${elementSkipsText(ir) ? `\t\t\t\t// a skipped text token (a comment in text): no token
 \t\t\t\tif fk < 0 { if lexHasLineTerm(src[pos:fe]) { pendingNl = true }; pos = fe; continue }
 ` : ''}\t\t\t\temit(pos, fe, uint16(fk), uint16(fl))
 ${raw ? `\t\t\t\t// each element frame's current tag: the index of its tagOpen token (the name is the next)
 \t\t\t\tif uint16(fl) == lidElOpen { if fp == 6 { tagAt = append(tagAt, len(*acc)-1) } else if (fr>>2)&3 == 0 { tagAt[len(tagAt)-1] = len(*acc) - 1 } }
-` : ''}\t\t\t\tif ft < 0 { templateStack = templateStack[:len(templateStack)-1];${raw ? ' tagAt = tagAt[:len(tagAt)-1];' : ''} elEndAt = len(*acc) } else { templateStack[len(templateStack)-1] = ft }
+${dirs ? '\t\t\t\tif fp == 10 { tagAt = append(tagAt, -1) }\n' : ''}` : ''}\t\t\t\tif ft < 0 { templateStack = templateStack[:len(templateStack)-1];${raw ? ' tagAt = tagAt[:len(tagAt)-1];' : ''}${dirs ? ' if ft == -1 { elEndAt = len(*acc) }' : ' elEndAt = len(*acc)'} } else { templateStack[len(templateStack)-1] = ft }
 \t\t\t\tif fp != 0 { templateStack = append(templateStack, fp) }
 ${raw ? `\t\t\t\t// an open tag ended: a raw-text name gives its body to a raw frame (kind 3), lexed next
 \t\t\t\tif uint16(fl) == lidElClose && (fr>>2)&3 == 1 && tagAngle == 0 {
@@ -3550,6 +3553,36 @@ import (
 	"time"
 )
 
+// editSession runs one edit-session payload ({init, batches}): the Doc's alignment JSON (nil when
+// it has none), its CST JSON, and whether the edited Doc accepts.
+func editSession(data []byte, fast bool) ([]byte, string, bool) {
+\td, align := editSessionDoc(data, fast)
+\tif d.Root() < 0 { return align, "", false }
+\treturn align, d.CstJSON(), true
+}
+
+// editSessionDoc: the edited Doc of a payload and its alignment JSON. A payload that does not
+// decode ends the process with status 1.
+func editSessionDoc(data []byte, fast bool) (*Doc, []byte) {
+\tvar sess struct {
+\t\tInit    string              \`json:"init"\`
+\t\tBatches [][][3]interface{}   \`json:"batches"\`
+\t}
+\tif json.Unmarshal(data, &sess) != nil { os.Exit(1) }
+\td := NewDoc(sess.Init)
+\tif !fast { d.SetValidate(true) }
+\tfor _, batch := range sess.Batches {
+\t\tedits := make([]Edit, len(batch))
+\t\tfor i, t := range batch {
+\t\t\tedits[i] = Edit{Start: int(t[0].(float64)), End: int(t[1].(float64)), Text: t[2].(string)}
+\t\t}
+\t\td.Edit(edits)
+\t}
+\tvar align []byte
+\tif a := d.Align(); a != nil { align, _ = json.Marshal(a) }
+\treturn d, align
+}
+
 func main() {
 \tdata, _ := io.ReadAll(os.Stdin)
 \tsrc := string(data)
@@ -3567,23 +3600,29 @@ func main() {
 \t\t}
 \t}
 \tif editSess {
-\t\tvar sess struct {
-\t\t\tInit    string              \`json:"init"\`
-\t\t\tBatches [][][3]interface{}   \`json:"batches"\`
-\t\t}
-\t\tif json.Unmarshal(data, &sess) != nil { os.Exit(1) }
-\t\td := NewDoc(sess.Init)
-\t\tif !editFast { d.SetValidate(true) }
-\t\tfor _, batch := range sess.Batches {
-\t\t\tedits := make([]Edit, len(batch))
-\t\t\tfor i, t := range batch {
-\t\t\t\tedits[i] = Edit{Start: int(t[0].(float64)), End: int(t[1].(float64)), Text: t[2].(string)}
-\t\t\t}
-\t\t\td.Edit(edits)
-\t\t}
-\t\tif a := d.Align(); a != nil { b, _ := json.Marshal(a); os.Stderr.Write(append(b, '\\n')) }
+\t\t// the alignment is written before the tree is read: a panic there still reports it
+\t\td, align := editSessionDoc(data, editFast)
+\t\tif align != nil { os.Stderr.Write(append(align, '\\n')) }
 \t\tif d.Root() < 0 { fmt.Fprintln(os.Stderr, "parse error"); os.Exit(1) }
 \t\tos.Stdout.WriteString(d.CstJSON())
+\t\treturn
+\t}
+\t// batch-edit-session(-fast): NUL-separated edit-session payloads in, one line per session out:
+\t// its alignment JSON (empty when it has none), a tab, then its CST JSON, or "-" when the edited
+\t// Doc rejects; "!" for a session that panicked (the caller re-runs that one alone). One process
+\t// start for a whole set of sessions.
+\tif len(os.Args) > 1 && (os.Args[1] == "batch-edit-session" || os.Args[1] == "batch-edit-session-fast") {
+\t\tfast := os.Args[1] == "batch-edit-session-fast"
+\t\tvar b strings.Builder
+\t\tfor _, s := range strings.Split(src, "\\x00") {
+\t\t\tfunc() {
+\t\t\t\tdefer func() { if r := recover(); r != nil { b.WriteString("!\\n") } }()
+\t\t\t\talign, cst, ok := editSession([]byte(s), fast)
+\t\t\t\tif !ok { cst = "-" }
+\t\t\t\tb.WriteString(string(align) + "\\t" + cst + "\\n")
+\t\t\t}()
+\t\t}
+\t\tos.Stdout.WriteString(b.String())
 \t\treturn
 \t}
 ${opts.recovery ? GO_BATCH_TOTAL : ''}\t// batch: NUL-separated inputs in, one line per input out — the CST JSON, "-" for an input
