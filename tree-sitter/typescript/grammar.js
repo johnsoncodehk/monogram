@@ -259,7 +259,7 @@ module.exports = grammar({
 
     stmt: $ => choice($.block, seq(choice("let", "const", "var"), $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), seq("if", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt, optional(seq("else", $.stmt))), seq("for", choice(seq("(", $.for_head, ")"), seq("await", "(", $.for_await_head, ")")), $.stmt), seq("while", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt), seq("do", $.stmt, "while", "(", $.expr, repeat(seq(",", $.expr)), ")", optional(";")), seq("switch", "(", $.expr, repeat(seq(",", $.expr)), ")", "{", repeat($.switch_case), "}"), seq("return", optional(seq($._same_line_10, $.expr, repeat(seq(",", $.expr)))), choice(";", $._line_end_1)), seq("throw", $.expr, repeat(seq(",", $.expr)), choice(";", $._line_end_1)), seq("break", optional(seq($._same_line_5, reserved("reserved_1", $.ident))), choice(";", $._line_end_1)), seq("continue", optional(seq($._same_line_5, reserved("reserved_1", $.ident))), choice(";", $._line_end_1)), seq("try", $.block, optional(seq("catch", optional(seq("(", $.catch_parameter, ")")), $.block)), optional(seq("finally", $.block))), seq(reserved("reserved_1", $.ident), ":", $.stmt), ";", seq("debugger", choice(";", $._line_end_1)), seq("with", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt), seq(optional("await"), "using", $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), $.decl, seq($.expr, repeat(seq(",", $.expr)), choice(";", $._line_end_1))),
 
-    _stmt_first_1: $ => choice(seq(choice("let", "const", "var"), $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), seq(alias($._ident_names_1, $.ident), ":", $.stmt), choice(seq("await", "using", $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), seq("using", $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1))), alias($._decl_first_1, $.decl)),
+    _stmt_first_1: $ => choice(seq("let", $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), seq("const", $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), seq("var", $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), seq(alias($._ident_names_1, $.ident), ":", $.stmt), seq("await", "using", $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), seq("using", $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), alias($._decl_first_1, $.decl)),
 
     block: $ => seq("{", repeat($.stmt), "}"),
 
@@ -309,7 +309,7 @@ module.exports = grammar({
 
     type_start: $ => choice(choice(reserved("reserved_1", $.ident), "void", "null", "this", "typeof", "new", "true", "false", "import", "function", $.string, $.number, $.hex_number, $.octal_number, $.binary_number, $.big_int, $.template, "{", "[", "<", "|", "&", "*", "?", "!", "..."), seq("-", choice($.number, $.hex_number, $.octal_number, $.binary_number, $.big_int)), seq("(", choice(")", $.private_field, $.decorator, "const", "default", "export", "in", $.type_start))),
 
-    _ident_names_1: $ => choice("await", "let", "using"),
+    _ident_names_1: $ => choice("let", "using"),
 
     shebang: $ => token(/#![^\n\r\u2028\u2029]*/),
 
