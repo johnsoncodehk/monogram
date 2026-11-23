@@ -1,5 +1,5 @@
 import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
-import { regionView, type RegionView, type NameShape } from './region-view.ts';
+import { regionView, expandArms, type RegionView, type NameShape } from './region-view.ts';
 import { directivesOf } from './grammar-analysis.ts';
 import { info as patternInfo, type CSet } from './lex-match-plan.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
@@ -178,36 +178,6 @@ function classifyTokenScope(token: TokenDecl): string {
 // `<` is generic-open iff it is BOTH a prec-table operator (comparison) AND a
 // rule delimiter paired with `>` around a separated inner rule (the type args).
 
-/** Expand opt()/alt()/quantifiers into flat top-level item sequences so an
- *  adjacency like `'<' sep '>'` is visible even when written via opt()/alt().
- *  Bounded by 2^(#opts) per alternative. Mirrors gen-tm.expandAlts. */
-function expandAlts(expr: RuleExpr): RuleExpr[][] {
-  switch (expr.type) {
-    case 'seq': {
-      let acc: RuleExpr[][] = [[]];
-      for (const item of expr.items) {
-        const branches = expandAlts(item);
-        const next: RuleExpr[][] = [];
-        for (const prefix of acc) for (const b of branches) next.push([...prefix, ...b]);
-        acc = next;
-      }
-      return acc;
-    }
-    case 'alt':
-      return expr.items.flatMap(expandAlts);
-    case 'group':
-      return expandAlts(expr.body);
-    case 'quantifier': {
-      const present = expandAlts(expr.body);
-      return expr.kind === '+' ? present : [[], ...present];
-    }
-    case 'not':
-      return [[]];   // a negative lookahead consumes nothing: adjacency sees through it
-    default:
-      return [[expr]];
-  }
-}
-
 interface AngleInfo {
   /** Chars that, right after a balanced `>`, CONFIRM the `<…>` was a generic
    *  argument list — e.g. `(` (a call), `` ` `` (a tagged template). Collected
@@ -238,7 +208,7 @@ function detectAngleBrackets(grammar: CstGrammar): AngleInfo | null {
   }
 
   for (const rule of grammar.rules) {
-    for (const seq of expandAlts(rule.body)) {
+    for (const seq of expandArms(rule.body)) {
       for (let i = 0; i < seq.length - 2; i++) {
         if (seq[i].type === 'literal' && (seq[i] as { value: string }).value === '<' &&
             seq[i + 1].type === 'sep' &&
