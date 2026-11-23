@@ -13,6 +13,9 @@ import { emitRelexFamily } from './relex-family.ts';
 import { emitReuseFamily } from './reuse-family.ts';
 import { emitRecoveryFamily } from './recovery-family.ts';
 import { emitRebindFamily } from './rebind-family.ts';
+import { printFns } from './algo-ir.ts';
+import { planShape, type ShapePlan } from './shape-plan.ts';
+import type { Shape } from './shape2-eval.ts';
 
 // The shared algorithm families, printed for the defining target.
 export interface SharedAlgorithms {
@@ -53,6 +56,10 @@ export interface SharedAlgorithms {
   // step, the type-parameter vetoes, the read end of a signature's decision, the raw body, and
   // whether a tagOpen opens a tag (tagStart).
   elementFn(which: 'frame' | 'opens' | 'reach' | 'raw' | 'tagStart'): string;
+  // A shape (emit option `shape`) planned against the IR built from its grammar (src/shape-plan.ts),
+  // and its construct plans printed (refused for a target whose Lowering has no `shape`).
+  shapePlan(shape: Shape, ir: ParserIR): ShapePlan;
+  shapeFamily(plan: ShapePlan): string;
 }
 
 export interface TargetDefinition {
@@ -103,6 +110,11 @@ export function defineParserTarget(def: TargetDefinition): PortableTarget {
     tplSpan: () => lowering().ident(TPL_SPAN),
     uniClass: () => lowering().ident(UNI_CLASS),
     uniIdent: (ir) => (hasUniPrefix(ir) ? lowering().ident(UNI_IDENT) : null),
+    shapePlan: planShape,
+    shapeFamily: (plan) => {
+      if (!lowering().shape) throw new Error(`defineParserTarget: target ${def.name} prints no shape values (Lowering.shape): it cannot emit a shape-building parser yet`);
+      return printFns(lowering(), plan.fns);
+    },
     elementFn: (which) => lowering().ident({ frame: EL_FRAME_FN, opens: EL_OPENS_FN, reach: EL_REACH_FN, raw: EL_RAW_FN, tagStart: EL_TAG_START_FN }[which]),
   };
   const target: PortableTarget = {
