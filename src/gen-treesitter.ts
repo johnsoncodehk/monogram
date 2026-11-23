@@ -2,7 +2,7 @@ import type { CstGrammar, RuleExpr, RuleDecl, TokenPattern } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
 import { buildLr, END, type LeafGraph, type LrAnalysis } from './lr-automaton.ts';
 import { info as tokenPatternInfo, continuesAt, type CSet } from './lex-match-plan.ts';
-import { analyzeGrammar } from './grammar-analysis.ts';
+import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
 import { tokenPatternFirstCharSet, type TokenPatternFirstSet, tokenPatternIsNever, tokenPatternLiteralPrefix, tokenPatternLiteralPrefixes, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -216,6 +216,8 @@ interface GrammarJsContext {
   nullableNonStart: Set<string>;
   /** FIRST/FOLLOW terminal sets of the tree-sitter view of the grammar (see greedyTail). */
   terminalSets: TerminalSets;
+  /** While one Pratt arm renders (renderGreedySuffix): the parts that carry dynamic precedence. */
+  dynamicPrecedence?: Map<RuleExpr, number>;
   /** Rules declared as a conflict of their own (`[$.rule]`): GLR keeps every parse of their
    *  productions, so no static resolution is added to them. Set when conflicts are emitted. */
   glrRules: Set<string>;
@@ -673,6 +675,11 @@ function collectWordLiterals(grammar: CstGrammar, isWordLiteral: (text: string) 
 }
 
 function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuard): string {
+  const dyn = ctx.dynamicPrecedence?.get(expr);
+  if (dyn !== undefined) {
+    ctx.dynamicPrecedence!.delete(expr);   // once: the wrapped rendering below is the same node
+    try { return `prec.dynamic(${dyn}, ${renderExpr(expr, ctx, wordGuard)})`; } finally { ctx.dynamicPrecedence!.set(expr, dyn); }
+  }
   switch (expr.type) {
     case 'literal': {
       // A flow-collection delimiter literal (`[` `]` `{` `}`) is emitted by the external scanner (so
@@ -912,14 +919,22 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
   // table does not name).
   const high = Math.max(0, ...[...bp.opTable.values()].map(o => o.lbp), ...[...bp.prefixOps.values()].map(o => o.rbp)) + 2;
   const selfSnake = ctx.ruleSnake.get(rule.name);
+  // Heuristic: a branch that starts with the self-reference is a left-recursive
+  // continuation (call/member/index/generic) — bind tight.
+  const isContinuation = (ab: string) => ab.startsWith(`seq($.${selfSnake}`) || ab === `$.${selfSnake}` || ab.startsWith(`seq(alias($.${selfSnake}, `);
+  const order = overlapOrder(rule, atomAlts, atomBranches.map(isContinuation), ctx);
   for (const [i, ab] of atomBranches.entries()) {
-    // Heuristic: a branch that starts with the self-reference is a left-recursive
-    // continuation (call/member/index/generic) — bind tight.
-    if (ab.startsWith(`seq($.${selfSnake}`) || ab === `$.${selfSnake}` || ab.startsWith(`seq(alias($.${selfSnake}, `)) {
+    if (isContinuation(ab)) {
       const alt = atomAlts[i];
       const connector = alt.type === 'seq' ? alt.items.slice(1).find(x => !ASSERTION_KINDS.has(x.type)) : undefined;
       const led = connector?.type === 'literal' ? bp.ledPrecByConnector.get(connector.value) : undefined;
       const num = led?.lbp ?? high;
+      const dyn = (b: string) => order.dynamic.has(i) ? `prec.dynamic(${order.dynamic.get(i)}, ${b})` : b;
+      if (order.yields.has(i)) {
+        if (led !== undefined || openTail(rule.name, alt, ctx.grammar) !== null) throw new Error(`gen-treesitter: the continuation ${ab} yields to an earlier one but carries an operand tail`);
+        branches.push(dyn(`prec.right(${num}, ${ab})`));
+        continue;
+      }
       // The precedence decides at the continuation's connector. Its last step keeps it when the
       // trailing operand is read at that binding power (a ledPrec `chainRhs`: `in`, `instanceof`, a
       // left-associative level); it carries none when the operand is read whole: another rule with
@@ -928,16 +943,100 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
       const last = alt.type === 'seq' ? alt.items[alt.items.length - 1] : null;
       const wholeSelf = led !== undefined && led.rhsBp === null && last?.type === 'ref' && last.name === rule.name;
       const tail = wholeSelf ? last : openTail(rule.name, alt, ctx.grammar);
-      if (tail === null) { branches.push(`prec.left(${num}, ${ab})`); continue; }
+      if (tail === null) { branches.push(dyn(`prec.left(${num}, ${ab})`)); continue; }
       const t = renderExpr(tail, ctx);
       if (!ab.endsWith(`, ${t})`)) throw new Error(`gen-treesitter: the continuation ${ab} does not end in its operand ${t}`);
-      branches.push(`seq(prec.left(${num}, ${ab.slice(0, ab.length - t.length - 3)})), ${t})`);
+      branches.push(dyn(`seq(prec.left(${num}, ${ab.slice(0, ab.length - t.length - 3)})), ${t})`));
     } else {
-      branches.push(ab);
+      branches.push(order.suffixWeight > 0 ? renderGreedySuffix(atomAlts[i], order, ctx) ?? ab : ab);
     }
   }
 
   return `choice(\n      ${branches.join(',\n      ')}\n    )`;
+}
+
+/**
+ * Where the readings of a Pratt rule overlap, the interpreter's order, rendered so tree-sitter keeps
+ * the same reading (gen-parser.ts prattCore). Its LED loop tries the continuations in grammar order
+ * before any operator, and the first that matches wins; its NUD takes the longest match, an
+ * alternative inside an arm the first that matches. Three facts follow:
+ * - `yields`: a continuation whose consuming items are a strict prefix of an EARLIER continuation's
+ *   (TypeScript's instantiation `f<T>` beside the typed call `f<T>(x)`) never wins where the earlier
+ *   one continues. Its own trailing lookahead says where it may end; when that lookahead excludes
+ *   every token the earlier continuation continues with, the interpreter never ends it there, so the
+ *   shift into the earlier one wins statically: right associativity at its number (left, the tie
+ *   reduced it before `(` and built `(f<T>)(x)`). Without such a lookahead the rendering would read
+ *   the shorter one where the interpreter backtracks to it: not modelled, so it fails loudly.
+ * - `dynamic` (continuations): a continuation whose connector is also an infix operator of the rule
+ *   (`<`) and that ends in no dropped lookahead is read where tree-sitter also finds the operator
+ *   reading of the same tokens (`f<T>(x)` beside `(f < T) > (x)`): GLR keeps both, and the
+ *   continuation's carries dynamic precedence 1 so it wins, as in the LED loop. A continuation that
+ *   ends in a lookahead the rendering drops gets none: tree-sitter also reads it where the
+ *   interpreter refuses it, so it must not outweigh the operator reading.
+ * - `suffixWeight`: an arm's trailing optional part (a `?`, or the non-empty alternatives of a choice
+ *   whose empty alternatives come last) that can begin with a token a continuation begins with is
+ *   also read, by GLR, as the arm without it followed by that continuation (`new C(x)` beside
+ *   `(new C)(x)`, `new C<T>(x)` beside `(new C)<T>(x)`). Each such part taken carries `suffixWeight`
+ *   more dynamic precedence than the reading without it, nested parts adding up; the weight is one
+ *   more than any continuation's own, so the arm's longest match outweighs the shorter arm and its
+ *   continuation together. A static shift would be wrong here: the arm's part can fail after its
+ *   first token where the continuation matches (`new C < d` is `(new C) < d`).
+ */
+interface OverlapOrder { yields: Set<number>; dynamic: Map<number, number>; suffixWeight: number; connectorFirst: Set<string> }
+function overlapOrder(rule: RuleDecl, alts: RuleExpr[], continuation: boolean[], ctx: GrammarJsContext): OverlapOrder {
+  const { firstOf } = ctx.terminalSets;
+  const consuming = (alt: RuleExpr) => (alt.type === 'seq' ? alt.items : [alt]).filter(x => !ASSERTION_KINDS.has(tsView(x).type));
+  const last = (alt: RuleExpr) => { const items = alt.type === 'seq' ? alt.items : [alt]; return tsView(items[items.length - 1]); };
+  const infix = new Set([...bindingPowers(ctx.grammar).opTable].filter(([, o]) => o.position === 'infix').map(([v]) => v));
+  const keys = alts.map(a => consuming(a).map(x => renderExpr(x, ctx)));
+  const out: OverlapOrder = { yields: new Set(), dynamic: new Map(), suffixWeight: 0, connectorFirst: new Set() };
+  for (const [j, alt] of alts.entries()) {
+    if (!continuation[j]) continue;
+    for (const t of firstOf({ type: 'seq', items: consuming(alt).slice(1) })) out.connectorFirst.add(t);
+    const earlier = alts.findIndex((_, i) => i < j && continuation[i] && keys[i].length > keys[j].length && keys[j].every((k, n) => k === keys[i][n]));
+    if (earlier !== -1) {
+      const end = last(alt);
+      const rest = firstOf(consuming(alts[earlier])[keys[j].length]);
+      const excluded = end.type === 'not' ? firstOf(end.body) : new Set<string>();
+      if (![...rest].every(t => excluded.has(t))) throw new Error(`gen-treesitter: in ${rule.name}, a continuation is a strict prefix of an earlier one and its lookahead does not exclude that one's continuation (${[...rest].join(' ')}): the interpreter's backtracking to it is not modelled`);
+      out.yields.add(j);
+      continue;
+    }
+    const connector = consuming(alt)[1];
+    if (connector?.type === 'literal' && infix.has(connector.value) && !ASSERTION_KINDS.has(last(alt).type)) out.dynamic.set(j, 1);
+  }
+  out.suffixWeight = 1 + Math.max(0, ...out.dynamic.values());
+  return out;
+}
+
+/** A NUD arm rendered with the dynamic precedence of its trailing optional parts (overlapOrder's
+ *  `suffixWeight`), or null when it has none. */
+function renderGreedySuffix(alt: RuleExpr, order: OverlapOrder, ctx: GrammarJsContext): string | null {
+  const { firstOf } = ctx.terminalSets;
+  const isEmpty = (e: RuleExpr) => { const v = tsView(e); return (v.type === 'seq' ? v.items : [v]).every(x => ASSERTION_KINDS.has(tsView(x).type)); };
+  const overlaps = (e: RuleExpr) => [...firstOf(e)].some(t => order.connectorFirst.has(t));
+  const marks = new Map<RuleExpr, number>();
+  const walk = (e: RuleExpr, depth: number): void => {
+    const v = tsView(e);
+    if (v.type === 'seq') {
+      const tail = [...v.items].reverse().find(x => !ASSERTION_KINDS.has(tsView(x).type));
+      if (tail) walk(tail, depth);
+    } else if (v.type === 'alt' && !ctx.zeroWidth.tokenOf.has(v)) {
+      const firstEmpty = v.items.findIndex(isEmpty);
+      const greedy = firstEmpty !== -1 && v.items.slice(firstEmpty).every(isEmpty);
+      for (const a of v.items) {
+        if (isEmpty(a)) continue;
+        if (greedy && overlaps(a)) { marks.set(a, (depth + 1) * order.suffixWeight); walk(a, depth + 1); } else walk(a, depth);
+      }
+    } else if (v.type === 'quantifier' && v.kind === '?' && overlaps(v.body)) {
+      marks.set(v.body, (depth + 1) * order.suffixWeight);
+      walk(v.body, depth + 1);
+    }
+  };
+  walk(alt, 0);
+  if (marks.size === 0) return null;
+  ctx.dynamicPrecedence = marks;
+  try { return renderExpr(alt, ctx); } finally { ctx.dynamicPrecedence = undefined; }
 }
 
 /**
@@ -1191,7 +1290,7 @@ function computeTerminalSets(grammar: CstGrammar, tokenNames: Set<string>): Term
       case 'sep': walk(e.element, union(new Set([`'${e.delimiter}`]), after)); break;
     }
   };
-  follow.get(grammar.rules[grammar.rules.length - 1].name)!.add(EOF_TERMINAL);
+  follow.get(findEntryRule(grammar))!.add(EOF_TERMINAL);
   do {
     grew = false;
     for (const r of grammar.rules) walk(r.body, follow.get(r.name)!);
@@ -1879,7 +1978,7 @@ function treeSitterLeafGraph(grammar: CstGrammar, tokenNames: Set<string>, scann
     for (const l of g.last) isLast[l] = true;
     first[i] = g.first; nullable[i] = g.nullable;
   }
-  return { sym, nt, rule, follow, isLast, first, nullable, entry: ruleOf(grammar.rules[grammar.rules.length - 1].name), node, ruleNames };
+  return { sym, nt, rule, follow, isLast, first, nullable, entry: ruleOf(findEntryRule(grammar)), node, ruleNames };
 }
 
 // ── Zero-width tokens: `sameLine` and the line-end alternatives (planZeroWidth) ──
@@ -1942,7 +2041,8 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
     return null;
   };
   // ── candidates ──
-  type Cand = { node: RuleExpr; kind: ZeroWidthToken['kind']; lineBreak: boolean; ahead: string[]; asserts: RuleExpr[] };
+  type Cand = { node: RuleExpr; kind: ZeroWidthToken['kind']; lineBreak: boolean; ahead: string[]; asserts: RuleExpr[]; owner: string };
+  let owner = '';
   const cands: Cand[] = [];
   const seen = new Set<RuleExpr>();
   const armItems = (a: RuleExpr) => { const v = tsView(a); return (v.type === 'seq' ? v.items : [v]).map(tsView); };
@@ -1954,7 +2054,7 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
       case 'seq':
         for (const i of e.items) {
           const v = tsView(i);
-          if (v.type === 'sameLine') cands.push({ node: v, kind: 'same-line', lineBreak: false, ahead: [], asserts: [v] });
+          if (v.type === 'sameLine') cands.push({ node: v, kind: 'same-line', lineBreak: false, ahead: [], asserts: [v], owner });
           else walk(i);
         }
         return;
@@ -1970,7 +2070,7 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
           if (!y) { ok = false; break; }
           ahead.push(...y);
         }
-        if (ok && lineBreak) cands.push({ node: e, kind: 'line-end', lineBreak, ahead, asserts: pure.map(a => armItems(a)[0]) });
+        if (ok && lineBreak) cands.push({ node: e, kind: 'line-end', lineBreak, ahead, asserts: pure.map(a => armItems(a)[0]), owner });
         for (const a of e.items) walk(a);
         return;
       }
@@ -1978,8 +2078,8 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
       case 'sep': return walk(e.element);
     }
   };
-  for (const r of grammar.rules) walk(r.body);
-  for (const b of collectTsSharedRules(grammar).values()) walk(b);
+  for (const r of grammar.rules) { owner = r.name; walk(r.body); }
+  for (const [n, b] of collectTsSharedRules(grammar)) { owner = n; walk(b); }
   if (!cands.length) return plan;
 
   // ── AFTER / CONT of the live candidates, over the automaton where each is its own terminal and
@@ -1989,6 +2089,7 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
   const graph = treeSitterLeafGraph(grammar, tokenNames, scannerTokens, prattRules, termOf);
   const lr = buildLr(graph);
   const after = cands.map(() => new Set<string>()), cont = cands.map(() => new Set<string>());
+  const together: number[][] = [];   // the candidates valid in one state, per state where several are
   const afterGuards = cands.map(() => new Map<string, Set<string>>());
   const idOf = (t: string) => t.startsWith('@zw') ? +t.slice(3) : -1;
   const valid = lr.states.map((_, s) => lr.valid(s));
@@ -2023,11 +2124,14 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
     // token, so there the token wins.
     const extends_ = new Set<string>();
     for (const it of st.items) if (it >= 0 && graph.nt[it] >= 0) for (const t of firstAfter(it)) extends_.add(t);
+    const here: number[] = [];
     for (const t of valid[s]) {
       const i = idOf(t);
       if (i < 0) continue;
+      here.push(i);
       for (const u of extends_) if (idOf(u) < 0) cont[i].add(u);
     }
+    if (here.length > 1) together.push(here);
     for (const [sym, to] of st.goto) {
       const i = idOf(sym);
       if (i < 0) continue;
@@ -2042,7 +2146,7 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
       }
     }
   });
-  return { after, cont, afterGuards };
+  return { after, cont, afterGuards, together };
   };
   // A keyword the word token can also lex (one no reserved set excludes from it everywhere).
   const wordShaped = (t: string) => t === word || (t.startsWith("'") && isWordLiteral(t.slice(1)) && !reserved.has(t.slice(1)));
@@ -2060,7 +2164,27 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
     for (const i of out) live.delete(i);
     res = analyze(live);
   }
-  const { after, cont, afterGuards } = res;
+  const { after, cont, afterGuards, together } = res;
+  // Same-line markers of one rule valid in one state are ONE token: the scanner returns one zero-width symbol, so
+  // where two are valid it would commit to the first whose sets admit the next token, and the parse
+  // would follow that marker's arm alone (`private readonly x` in a class: the static-block arm's
+  // modifier marker admits `readonly` after `private`, and after `readonly` admits no member name).
+  // Only within a rule: markers of different rules met in one state (`async` before an arrow, a
+  // declaration and a property) are what keeps those rules' readings apart in the LR automaton.
+  const root = cands.map((_, i) => i);
+  const find = (i: number): number => root[i] === i ? i : (root[i] = find(root[i]));
+  for (const t of together) {
+    const sl = t.filter(i => live.has(i) && cands[i].kind === 'same-line');
+    for (const i of sl) { const j = sl.find(k => cands[k].owner === cands[i].owner)!; root[find(i)] = find(j); }
+  }
+  // and, as before, markers with the same sets are one token wherever they are valid
+  const bySets = new Map<string, number>();
+  cands.forEach((c, i) => {
+    if (!live.has(i) || c.kind !== 'same-line') return;
+    const k = [[...after[i]].sort().join(' '), [...cont[i]].sort().join(' ')].join('|');
+    const j = bySets.get(k);
+    if (j === undefined) bySets.set(k, i); else root[find(i)] = find(j);
+  });
   const byKey = new Map<string, ZeroWidthToken>();
   const counters = { 'line-end': 0, 'same-line': 0 };
   cands.forEach((c, i) => {
@@ -2075,7 +2199,7 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
     // their CONT differs in what must stay possible on the same line (`return x`).
     const key = c.kind === 'line-end'
       ? [c.kind, c.lineBreak, [...c.ahead].sort().join(' ')].join('|')
-      : [c.kind, [...after[i]].sort().join(' '), [...cont[i]].sort().join(' ')].join('|');
+      : [c.kind, find(i)].join('|');
     let tok = byKey.get(key);
     if (!tok) {
       tok = { snake: `_${c.kind === 'line-end' ? 'line_end' : 'same_line'}_${++counters[c.kind]}`, kind: c.kind, lineBreak: c.lineBreak, ahead: [...new Set(c.ahead)].sort(), after: new Set(), cont: new Set(), afterWordGuards: [] };
@@ -2705,7 +2829,7 @@ function buildTokenTreeSitter(source: CstGrammar, grammarName: string): Omit<Tre
   const nameFields = collectNameFields(source);
 
   // ε-elimination set (see makeNonEmpty): the start rule is the entry rule, emitted FIRST below.
-  const entryName = grammar.rules[grammar.rules.length - 1].name;
+  const entryName = findEntryRule(grammar);
   const isTerminalName = (n: string) => tokenNames.has(n) || scannerTokenFor.has(n);
   const nullableNonStart = computeNullableNonStart(grammar, entryName, isTerminalName);
 
@@ -2820,12 +2944,11 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
 
   lines.push('  rules: {');
 
-  // The FIRST rule in tree-sitter is the start symbol. Our entry rule is the last
-  // declared one (findEntryRule). Put it first so tree-sitter uses it as start.
-  const entryName = grammar.rules[grammar.rules.length - 1].name;
+  // The FIRST rule in tree-sitter is the start symbol: put our entry rule (findEntryRule) first.
+  const entryName = findEntryRule(grammar);
   const orderedRules = [
-    grammar.rules[grammar.rules.length - 1],
-    ...grammar.rules.slice(0, grammar.rules.length - 1),
+    ...grammar.rules.filter((r) => r.name === entryName),
+    ...grammar.rules.filter((r) => r.name !== entryName),
   ];
 
   const ruleEntries: string[] = [];

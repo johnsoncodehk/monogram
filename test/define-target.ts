@@ -20,7 +20,10 @@ import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
 import { defineParserTarget, registeredTargets } from '../src/define-target.ts';
-import { portableIR } from '../src/emit-portable.ts';
+import { buildLexIdPlan, hasRebind, portableIR } from '../src/emit-portable.ts';
+import { planShape } from '../src/shape-plan.ts';
+import namedcalcShape from './fixtures/shape-namedcalc.ts';
+import { estreeExprShape } from './fixtures/shape-v2-estree-expr.ts';
 import { relexFamily, relexFamilyFns, relexMode } from '../src/relex-family.ts';
 import { lexScanFamily } from '../src/lex-family.ts';
 import { reuseFamilyFns } from '../src/reuse-family.ts';
@@ -72,7 +75,8 @@ for (const f of ['emit.ts', 'emit-portable.ts', 'emit-parser.ts', ...CORE, ...TA
 for (const t of TARGETS) {
   const s = code(src(t.file));
   if (defineCalls.get(t.file) !== 1) fail(`${t.file}: ${defineCalls.get(t.file) ?? 0} defineParserTarget calls, want 1`);
-  if (!/^const \w+Lowering: Lowering = \{/m.test(s)) fail(`${t.file}: defines no Lowering of its own`);
+  // (a lowering per receiver, `xLoweringFor = (…): Lowering => ({`, counts: Go spells a method's receiver per engine form)
+  if (!/^const \w+Lowering(?:: Lowering = \{|For = \([^)]*\): Lowering => \(\{)/m.test(s)) fail(`${t.file}: defines no Lowering of its own`);
   for (const i of imports(s)) {
     if (/\/target-/.test(i)) fail(`${t.file}: imports another target module ${i}`);
     if (/(relex|lex|reuse)-family/.test(i)) fail(`${t.file}: imports an algorithm family directly (${i}); use shared`);
@@ -202,6 +206,20 @@ const sexpr: Lowering = {
     some: (cx, rec, r) => cx.atom(form('some', r.c), `opt_${rec}`, `opt_${rec}`),
     isSome: (_cx, r) => at(form('some?', r.c)),
   },
+  shape: {
+    vConst: (cx, val) => cx.atom(form('val', val === null ? 'null' : typeof val === 'boolean' ? (val ? '#t' : '#f') : JSON.stringify(val)), 'val_any', 'val_any'),
+    vAbsent: (cx) => cx.atom(form('absent'), 'val_any', 'val_any'),
+    vText: (cx, r) => cx.atom(form('val-text', r.c), 'val_any', 'val_any'),
+    mkNode: (cx, kind, fs, a, b) => cx.atom(form('make-node', kind.c, a.c, b.c, ...fs.map(([n, r]) => form('node-field', JSON.stringify(n), r.c))), 'val_any', 'val_any'),
+    mkRecord: (cx, fs) => cx.atom(form('make-value-record', ...fs.map(([n, r]) => form('node-field', JSON.stringify(n), r.c))), 'val_any', 'val_any'),
+    vList: (cx, l) => cx.atom(form('list-value', l.c), 'val_any', 'val_any'),
+    vItems: (cx, r) => cx.atom(form('list-items', r.c), 'vals_any', 'vals_any'),
+    vIs: (_cx, r, val) => at(form('value-is?', r.c, val === null ? 'null' : typeof val === 'boolean' ? (val ? '#t' : '#f') : JSON.stringify(val))),
+    vPresent: (_cx, r) => at(form('present?', r.c)),
+    vNeed: (cx, r) => cx.atom(form('need', r.c), 'val_any', 'val_any'),
+    vMissing: (cx, where, why) => cx.atom(form('missing', JSON.stringify(where), JSON.stringify(why)), 'val_any', 'val_any'),
+    switch: (_cx, on, cases, dflt) => [`(case-of ${on.c}`, ...nest(cases.flatMap((c) => [`(when-is ${JSON.stringify(c.v)}`, ...nest(c.body), ')'])), '(otherwise', ...nest(dflt), ')', ')'],
+  },
 };
 
 // The IR of each fixture is built once (portableIR is a pure function of the grammar): the checks
@@ -244,12 +262,17 @@ function census(fns: Fn[]): Map<string, number> {
     if (e.k === 'cat') bump('string-append');
     if (e.k === 'tab') bump('table-ref');
     if (e.k === 'call' && sigs.get(e.fn)?.method) bump('send');
+    // Shape values (algo-ir's own section): each its form; a node's / record's fields one each.
+    const SHAPE_HEAD: Partial<Record<Expr['k'], string>> = { vConst: 'val', vAbsent: 'absent', vText: 'val-text', mkNode: 'make-node', mkRecord: 'make-value-record', vList: 'list-value', vItems: 'list-items', vIs: 'value-is?', vPresent: 'present?', vNeed: 'need', vMissing: 'missing' };
+    if (SHAPE_HEAD[e.k]) bump(SHAPE_HEAD[e.k]!);
+    if (e.k === 'mkNode' || e.k === 'mkRecord') for (const f of e.fields) { bump('node-field'); ex(f.e); }
     for (const v of Object.values(e)) {
       if (Array.isArray(v)) v.forEach((y) => y && typeof y === 'object' && 'k' in y && ex(y as Expr));
       else if (v && typeof v === 'object' && 'k' in v) ex(v as Expr);
     }
   };
   const st = (s: Stmt): void => {
+    if (s.k === 'switch') { bump('case-of'); ex(s.on); for (const c of s.cases) { bump('when-is'); c.body.forEach(st); } bump('otherwise'); s.else.forEach(st); return; }
     if (s.k !== 'run') bump(s.k === 'comment' ? ';;' : HEAD[s.k]!.join('|'));
     for (const [key, v] of Object.entries(s)) {
       if (key === 'then' || key === 'else' || key === 'body') (v as Stmt[] | undefined)?.forEach(st);
@@ -298,7 +321,7 @@ for (const path of FIXTURES) {
   const grammar = (await import(path)).default;
   const ir = irOf(grammar);
   const lex = lexScanFamily(ir);
-  const fns = [...lex.fns, ...relexFamilyFns(relexMode(ir)), ...reuseFamilyFns(ir), ...recoveryFamilyFns(), UNPACK_INTS];
+  const fns = [...lex.fns, ...relexFamilyFns(relexMode(ir)), ...reuseFamilyFns(ir), ...recoveryFamilyFns(hasRebind(ir), buildLexIdPlan(ir)).filter((f) => f.name !== 'rbBracket'), UNPACK_INTS];
   const out = target.emitParser(grammar);
   const code = out.split('\n').filter((l) => !/^\s*;;/.test(l)).join('\n').replace(/"(?:[^"\\]|\\.)*"/g, '""');
   const bad = code.match(C_SURFACE);
@@ -338,6 +361,27 @@ for (const path of FIXTURES) {
   for (let i = 0, val = 0, sh = 0; i < s.length; i++) { const d = s.charCodeAt(i) - 48; if (d >= 32) { val += (d - 32) << sh; sh += 5; } else { dec.push(val + (d << sh) - 1); val = 0; sh = 0; } }
   if (dec.join() !== data.join()) fail(`packInts: ${data} decodes as ${dec}`);
   console.log(`  int table probe: ${[...want.values()].reduce((a, b) => a + b, 0)} IR constructs ≡ printed forms`);
+}
+
+// A shape's construct plans (src/shape-plan.ts, algo-ir's shape-value section): the namedcalc
+// shape and the S1-supported part of the ESTree expression shape, every construct printed once.
+for (const [path, shape] of [['./fixtures/shape-namedcalc.ts', namedcalcShape], ['./fixtures/shape-v2-estree-expr.ts', estreeExprShape]] as const) {
+  const plan = planShape(shape, portableIR(shape.source));
+  const out = printFns(sexpr, plan.fns);
+  const code = out.split('\n').filter((l) => !/^\s*;;/.test(l)).join('\n').replace(/"(?:[^"\\]|\\.)*"/g, '""');
+  const bad = code.match(C_SURFACE);
+  if (bad) fail(`${path} plans: C-family surface ${JSON.stringify(bad[0])} in printed S-expressions`);
+  const heads = read(out);
+  const want = census(plan.fns);
+  for (const [k, n] of want) { const got = k.split('|').reduce((s, h) => s + (heads.get(h) ?? 0), 0); if (got !== n) fail(`${path} plans: ${k} printed ${got}×, IR holds ${n}`); }
+  for (const k of ['make-node', 'case-of', 'need']) if (!want.has(k)) fail(`${path} plans: no ${k}: the probe does not reach the shape constructs`);
+  console.log(`  ${path} construct plans: ${plan.fns.length} functions, ${[...want.values()].reduce((a, b) => a + b, 0)} IR constructs ≡ printed forms`);
+  // Go and Rust have no Lowering.shape: they refuse a shape loudly, never guess a spelling.
+  for (const t of [goTarget, rustTarget]) {
+    let msg = '';
+    try { t.emitParser(shape.source, { shape }); } catch (e) { msg = (e as Error).message; }
+    if (!/prints no shape values/.test(msg)) fail(`${t.name} with a shape: expected a refusal, got ${msg ? JSON.stringify(msg.slice(0, 80)) : 'an emission'}`);
+  }
 }
 
 if (failures > 0) {

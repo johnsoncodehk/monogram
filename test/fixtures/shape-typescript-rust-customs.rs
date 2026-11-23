@@ -428,6 +428,7 @@ fn schema_for(etype: &str, alt: u32) -> &'static Schema {
         ("AssignmentExpression", 0, &SC_ASSIGN),
         ("UpdateExpression", 0, &SC_UPDATE),
         ("UnaryExpression", 0, &SC_UNARY),
+        ("UnaryExpression", 4, &SC_UNARY),   // the capped `yield` arm (nudCapped #4)
         ("LogicalExpression", 0, &SC_LOGICAL),
         ("ConditionalExpression", 7, &SC_COND),
         ("MemberExpression", 3, &SC_MEMBEREXPR3),
@@ -435,11 +436,11 @@ fn schema_for(etype: &str, alt: u32) -> &'static Schema {
         ("MemberExpression", 5, &SC_MEMBEREXPR5),
         ("TSAsExpression", 8, &SC_TSAS),
         ("TSNonNullExpression", 6, &SC_TSNONNULL),
-        ("SequenceExpression", 7, &SC_SEQ8),
-        ("SequenceExpression", 10, &SC_SEQ11),
-        ("SequenceExpression", 13, &SC_SEQ14),
-        ("SequenceExpression", 15, &SC_SEQ16),
-        ("SequenceExpression", 19, &SC_SEQ20),
+        ("SequenceExpression", 6, &SC_SEQ8),
+        ("SequenceExpression", 9, &SC_SEQ11),
+        ("SequenceExpression", 12, &SC_SEQ14),
+        ("SequenceExpression", 14, &SC_SEQ16),
+        ("SequenceExpression", 18, &SC_SEQ20),
         ("ForStatement", 3, &SC_FORSTATEMENT),
         ("ForHead", 0, &SC_FORHEAD),
         ("ForHead", 1, &SC_FORHEAD),
@@ -498,7 +499,7 @@ fn schema_for(etype: &str, alt: u32) -> &'static Schema {
         ("TSMethodSignature", 1, &SC_TSACCESSORSIG),
         ("UnknownKid", 11, &SC_UNKNOWNKID12),
         ("UnknownKid", 15, &SC_UNKNOWNKID15),
-        ("UnknownKid", 5, &SC_UNKNOWNKID5),
+        ("UnknownKid", 4, &SC_UNKNOWNKID5),
         ("Declaration", 8, &SC_DECL8),
         ("Declaration", 9, &SC_DECL9),
         ("Declaration", 10, &SC_DECL10),
@@ -3658,7 +3659,7 @@ fn schema_for_ev(etype: &str, alt: u32, off: u32, end: u32, src: &str) -> &'stat
         ("ClassHeritage", 0) => {
             if text.contains('<') { &SC_CLASSHERITAGE_LT } else { schema_for(etype, alt) }
         }
-        ("SequenceExpression", 8) => {
+        ("SequenceExpression", 7) => {
             if text.contains('.') { &SC_SEQ8_PT }
             else if let (Some(po), Some(pc)) = (text.find('('), text.rfind(')')) {
                 if text[po + 1..pc].trim().is_empty() { &SC_SEQ8_LEAF }
@@ -3674,7 +3675,7 @@ fn schema_for_ev(etype: &str, alt: u32, off: u32, end: u32, src: &str) -> &'stat
             else if text.starts_with("asserts") { &SC_TYPE8 }
             else { &SC_TYPE8B }
         }
-        ("SequenceExpression", 11) => {
+        ("SequenceExpression", 10) => {
             let inner = text.trim_start_matches('[').trim_end_matches(']').trim();
             let toks = lex(&src[off as usize..end as usize]);
             if inner.len() > 0 && !inner.contains(',') && toks.len() <= 3 {

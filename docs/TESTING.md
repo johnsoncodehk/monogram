@@ -55,7 +55,7 @@ The old gates map to new ones as follows. Cases are each gate's own count line, 
 | highlighter/self-close-sites | generative/scope≡role | 6 languages, 32 cells → same |
 | generative/gap-ledger-selftest | generative/scope≡role (its mutation proof and classifier locks) | 13 → 6 moved, 7 ledger-only dropped |
 | yaml/depth-witnesses, depth-sites, flow-sites, compact-nest-sites, deepest-sibling, blockscalar-depth | yaml/tm-sites (`test/yaml-sites.ts`) | 22 + 16 + 8 + 57 + 576 + 72 → 751 |
-| emit-parity/decision-dead | emit-parity/decision-report (`--check` runs both halves) | unchanged |
+| emit-parity/decision-dead | emit-parity/decision-report (the witnesses, then the dead alternatives; the pages are `npm run gen` outputs) | unchanged |
 | emit-parity/portable-targets/edits-1 … edits-5 | edits-1, edits-2 | unchanged (grammars regrouped) |
 | conformance/js-corpus | deleted, with `docs/JS-CONFORMANCE.md` (test262 is JavaScript's oracle) | |
 | generative/gap-ledger-check | deleted (`npm run ledger:check` remains, for gap-issues.yml) | |
@@ -68,6 +68,14 @@ test under `test/language/` and `test/annexB/language/` of the checkout at `/tmp
 from its front matter. Every disagreement carries a cause class (`test/test262-classes.ts`); the files
 are pinned in `test/test262-record.txt` and the scoreboard in the generated `docs/TEST262.md`
 (regenerate: `node test/test262.ts --write`). A file moving in either direction fails it until recorded.
+
+`conformance/cpython` (`node test/cpython.ts`; not a gate of `check.ts` but the CI job `python`, which
+installs the oracle) measures `python.ts` (interpreter) against `ast.parse` of Python 3.10.12 over every
+`.py` file of CPython's `Lib/` at the pin in `test/cpython.sha` (the job clones it; locally
+`~/.cache/monogram-agents/restore-cpython.sh <repo>`; another Python is NOT RUN). Every
+disagreement carries a cause class (in `test/cpython.ts`); the files are pinned in
+`test/cpython-record.txt` (regenerate: `node test/cpython.ts --write`). It is the second language's
+oracle: [docs/SECOND-LANGUAGE.md](SECOND-LANGUAGE.md).
 
 A gate is binary and authoritative: if `npm run check` is green, every guaranteed property holds.
 
