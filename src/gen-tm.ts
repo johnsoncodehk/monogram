@@ -1,7 +1,7 @@
 import type { CstGrammar, RuleExpr, RuleDecl, InjectClause, TokenDecl } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
 import { analyzeGrammar } from './grammar-analysis.ts';
-import { regionView, expandArms, type RegionView } from './region-view.ts';
+import { regionView, expandArms, operandEntry, type RegionView } from './region-view.ts';
 import { compileTokenizer, lexSpecOf } from './emit-lexer.ts';
 import {
   tokenEscapePatternSource,
@@ -1334,17 +1334,22 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
     ? `(?!<(?=${disambig.topTypeParam})(?=${disambig.arrowEndConfirm}))`
     : '';
 
-  // Expression-start lookbehind (an operand-entry element's `<` is never preceded by a value
-  // operand), only for `entry: 'operand'`. Variable-length lookbehind is supported by
-  // Oniguruma. After `++`/`--` is excluded (those produce a value). Mirrors the official
-  // jsx-tag-in-expression. The lookbehind is ZERO-WIDTH and anchored on the operator/opener
+  // Expression-start lookbehind, only for `entry: 'operand'`: an element's `tagOpen` stands
+  // where an operand may start, which is where the LEXER enters the region: after a text that
+  // is not a value (`operandEntry`, src/region-view.ts: the complement of the lexer's
+  // regex / division decision, from the grammar's `regexContext`), or at a line start. Value
+  // texts that end with such a text (`++` after `+`) and a block comment's closer are excluded
+  // by a negative lookbehind. The lookbehind is ZERO-WIDTH and anchored on the operator/opener
   // BEFORE any leading comment, so the operand-vs-operator test is made at the real operator
   // — `a /**/ <b>` (an operand `a` precedes the comment) is NOT an element, while
-  // `= /**/ <b/>` (an operator precedes) is.
-  // (Owed: this operator list is the JS family's; it is to be derived from the lexer's
-  // operand-start table, the regex / division decision.)
-  const exprBehind = view.entry === 'operand'
-    ? `(?<!\\+\\+|--)(?<=[({\\[,?=:>&|]|&&|\\|\\||=>|\\breturn|\\byield|\\bdefault|\\bcase|^)`
+  // `= /**/ <b/>` (an operator precedes) is. A grammar with no `regexContext` has no value
+  // test in its lexer either (every `tagOpen` at an operand-entry position opens), so no
+  // lookbehind. What a text before the `tagOpen` cannot decide (`operandEntry().dropped`:
+  // a postfix-or-prefix `!`, a text whose last unit can end a value token) is left out.
+  const oe = view.entry === 'operand' ? operandEntry(grammar) : null;
+  const wordText = (t: string) => `${/^\w/.test(t) ? '\\b' : ''}${escapeRegex(t)}`;
+  const exprBehind = oe
+    ? `${oe.notAfter.length ? `(?<!${oe.notAfter.map(escapeRegex).join('|')})` : ''}(?<=${[...oe.after.map(wordText), '^'].join('|')})`
     : '';
   // The leading run skipped (inside a lookahead, so zero-width) between the
   // anchoring operator and the tag's `<`: whitespace plus any number of BLOCK
