@@ -16,6 +16,7 @@
 //
 //   node test/define-target.ts
 import { readFileSync } from 'node:fs';
+import { QUICK } from './check-targets.ts';
 import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
@@ -222,11 +223,16 @@ const sexpr: Lowering = {
   },
 };
 
+// The IR of each fixture is built once (portableIR is a pure function of the grammar): the checks
+// below and the probe target's printing read the same one.
+const irs = new Map<object, ReturnType<typeof portableIR>>();
+const irOf = (g: Parameters<typeof portableIR>[0]) => { let ir = irs.get(g); if (!ir) irs.set(g, (ir = portableIR(g))); return ir; };
+
 const target = defineParserTarget({
   name: 'sexpr-syntax-probe',
   ext: 'scm',
   lowering: sexpr,
-  emitParser: (grammar, shared) => { const ir = portableIR(grammar); return shared.lexScan(ir) + '\n' + shared.relexFamily(ir) + '\n' + shared.reuseFamily(ir) + '\n' + shared.recoveryFamily(ir); },
+  emitParser: (grammar, shared) => { const ir = irOf(grammar); return shared.lexScan(ir) + '\n' + shared.relexFamily(ir) + '\n' + shared.reuseFamily(ir) + '\n' + shared.recoveryFamily(ir); },
 });
 
 // IR census: what the printed forms must account for.
@@ -310,12 +316,16 @@ function read(src: string): Map<string, number> {
 
 // `!` ends Lisp mutator names (`set!`); only a prefix `!` is C negation.
 const C_SURFACE = /[{};[\],]|&&|\|\||==|!=|(?<![\w?-])!|\/\/|:=|->|\.\w/;
-const FIXTURES = ['./fixtures/calc.ts', './fixtures/envspec.ts', './fixtures/regexjs.ts', './fixtures/templatejs.ts', '../javascript.ts', './fixtures/envtpl.ts'];
+// The quick tier's sample (CHECK_QUICK=1) leaves out the one real grammar (most of the gate's time):
+// the fixtures still reach the regex context, templates and env specs; what only a real grammar's IR
+// holds is printed in `--changed` and CI.
+const FIXTURES = ['./fixtures/calc.ts', './fixtures/envspec.ts', './fixtures/regexjs.ts', './fixtures/templatejs.ts', ...(QUICK ? [] : ['../javascript.ts']), './fixtures/envtpl.ts'];
 
 for (const path of FIXTURES) {
   const grammar = (await import(path)).default;
-  const lex = lexScanFamily(portableIR(grammar));
-  const fns = [...lex.fns, ...relexFamilyFns(relexMode(portableIR(grammar))), ...reuseFamilyFns(portableIR(grammar)), ...recoveryFamilyFns(hasRebind(portableIR(grammar)), buildLexIdPlan(portableIR(grammar))).filter((f) => f.name !== 'rbBracket'), UNPACK_INTS];
+  const ir = irOf(grammar);
+  const lex = lexScanFamily(ir);
+  const fns = [...lex.fns, ...relexFamilyFns(relexMode(ir)), ...reuseFamilyFns(ir), ...recoveryFamilyFns(hasRebind(ir), buildLexIdPlan(ir)).filter((f) => f.name !== 'rbBracket'), UNPACK_INTS];
   const out = target.emitParser(grammar);
   const code = out.split('\n').filter((l) => !/^\s*;;/.test(l)).join('\n').replace(/"(?:[^"\\]|\\.)*"/g, '""');
   const bad = code.match(C_SURFACE);
@@ -323,7 +333,7 @@ for (const path of FIXTURES) {
   let heads: Map<string, number>;
   try { heads = read(out); } catch (e) { fail(`${path}: ${(e as Error).message}`); continue; }
   const want = census(fns);
-  want.set('define-char-set', lex.sets.length + relexFamily(relexMode(portableIR(grammar))).sets.length);
+  want.set('define-char-set', lex.sets.length + relexFamily(relexMode(ir)).sets.length);
   want.set('define-table', 1);
   want.set('define-runtime', (want.has('run-end') ? 1 : 0) + (want.has('find') ? 1 : 0) + lex.stopSets.length);
   for (const [k, n] of want) {

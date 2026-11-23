@@ -57,6 +57,72 @@ mean reproducing those quirks; instead it follows the productions:
 productions until the checker) is exactly why "match `tsc`" can't *be* the definition of
 correct, only the measurement oracle.
 
+## Where the oracles themselves are wrong
+
+acorn is the second oracle for JavaScript verdicts, beside tsc's JS mode. It accepts two
+inputs that the productions reject. The parser rejects both:
+
+| Input | acorn | `tsc` parser | Why it is no derivation |
+|---|:--:|:--:|---|
+| `a ? b : () => {} ? c : d` | accept | reject | `ConditionalExpression : ShortCircuitExpression ? AssignmentExpression : AssignmentExpression`. The arrow is the first conditional's last AssignmentExpression. It cannot also be the ShortCircuitExpression that heads the second conditional, because an ArrowFunction is no ShortCircuitExpression. |
+| `() => {} ? c : d`, `a => {} ** c` | accept | reject | The same: an ArrowFunction is an AssignmentExpression only, never the operand of a conditional or a binary operator. |
+
+## The engines' mechanisms, one by one
+
+Every engine runs the same plan: try a rule's alternatives, take the longest match, and on a tie take
+the earliest-declared one. The table lists each place where the interpreter (`src/gen-parser.ts`, the
+reference) does more than that. For each, it gives the IR construct in `src/emit-portable.ts`, the
+lowering member each printer implements (`src/target-{ts,go,rust}.ts`: the TS `prattRuleW`, the Go
+native and builder forms, the Rust `prattRule`; the recovery interpreter `src/recovery-family.ts`
+reads the same facts from its table, and `test/ir-engine.ts` mirrors them), and the list rows in
+`test/portable-cases.ts` that exercise it. **V** means the exercising rows are in those lists,
+which compare every target with the interpreter, verdict and CST (gate
+`emit-parity/portable-targets/lists`), and each row's verdict was checked against tsc (and acorn for
+JavaScript). **R** means the row was argued from the code: the mechanism has no portable
+counterpart, so there is nothing to compare.
+
+A change to an engine mechanism is checked on both shipped language families: JavaScript /
+TypeScript (the lists, test262, the tsc corpora) and Python (`conformance/cpython`). The first time
+the second family caught an engine defect, TypeScript had agreed by luck (the tail-closure row).
+
+The table argues that no mechanism is missing: an engine that implements every row behaves like the
+interpreter. Where that argument cannot be made for a row, the row says so.
+
+| Mechanism (interpreter) | IR construct | Printers implement | Exercising rows | How known |
+|---|---|---|---|---|
+| Longest match over a rule's alternatives, strict `pos > bestPos` (a tie goes to the earlier-declared one) | `RdRule.alts` in declaration order; `Dispatch`; candidate frames | `RuleLowering` candidate frame (`candTs` / `candGo` / `cand!`) | every list; gate `guard-refutation` | V |
+| `altMightStart` / `altMightSecond` pruning: a FIRST / SECOND over-approximation, so it can only skip an arm that cannot match | `Guard` first / second, `Dispatch` sections, `Commit` | `guardCond` in each printer | gate `guard-refutation` (every refusal re-run; none unsound) | V |
+| Ordered choice inside a sequence (`alt`: first match) | `Step alt` (`predictive` when FIRST-disjoint) | `StepLowering.alt` | every list | V |
+| `*` / `+` stop on an empty iteration; `sep` takes a trailing delimiter | `Step star` / `sep` | `StepLowering.star` / `sep` | lists (`[a, , ...b,]`) | V |
+| Zero-width tests: `not(…)`, a keyword-set fast path, `reservableNot` | `Step look` / `ahead` / `aheadCtx` | `StepLowering.look` / `ahead` | `RESERVED_EXPRS`, `conciseBody` rows (`() => { b() {} }.x`) | V |
+| Newline sensitivity: `sameLine` (restricted productions, ASI through `not(sameLine)`) | `Step sameLine`, `PrattRule.postfixSameLine`, `ledSameLine` | `StepLowering.sameLine`, `postfixOp`, `led.sameLine` | `x\n++\ny`, `async\nx => …`, `a ? b : () => {}\n+x;` | V |
+| `noCommentBefore`, `noMultilineFlowBefore`, indent, markup containers | none: refused loudly (`portable: rd construct … not in scope`; indent and markup grammars throw in `portableIR`) | — | — | R: the refusal is the argument; no portable grammar can contain them |
+| `[Await]` / `[Yield]` rule families (`withAwaitYield`) and context words | `Step ctx`, `aheadCtx`, `ctxWords` | `StepLowering.ctx` | `CTX_CASES` (generator / async rows) | V |
+| Contextual keywords: a word is an identifier except where an arm names it | literal steps over the identifier token (`identLike`), `reservableNot` | lexer id plan (`lidOf`) | `RESERVED_EXPRS`, `let;`, `for (async of => {};;)` | V |
+| Suppress staging: a `suppress` group stages its set for the next Pratt / leftRec rule call only | `Step suppress`: `_suppressNext = set; body; _suppressNext = 0`; `ledSuppressedIn` | `StepLowering.suppress`, `led.notSuppressed` | `NO_IN_HEADS`, `FOR_HEADS` | V |
+| Pratt NUD: longest match over the NUD arms | `nudOrder`, `nudDispatch`, `nudCommit` | `nudSeq` / `nudLeaf` / `commitSeq` | every expression row | V |
+| Capped NUD (`capExpr`, an arrow; the `yield` arm): a candidate only when `minBp < capBp`; once it wins, no led | `nudCapped` + `capBp`; the capped flag | `capBelow`; `bpOpen` returns at once when capped | `CAP_PROPAGATION` | V |
+| Cap propagation through a binary right operand (`a = () => {} \|\| x` rejects) | `binary` lowering | `PrattLowering.binary` | `CAP_PROPAGATION` (`b = a = () => {} \|\| c`) | V |
+| Cap propagation through a trailing operand: a node whose rightmost child is a self operand at bp 0 that returned capped is capped (`a ? b : () => {} \|\| x`, `[...() => {} \|\| x]` reject) | `ledCapsFromTail`, `nudBracketCapsFromTail`, `nudSeqCapsFromTail`; `NodeCap` | `ledArm(…, capsFromTail)`, `nudSeq` / `commitSeq` with `NodeCap` | `CAP_PROPAGATION` (`a ? b : () => {} ? c : d`, `f(...() => {} \|\| x)`), `REBIND.ts` (`let v = a ? (b) : c => {} \|\| x;`) | V |
+| The packrat memo over Pratt / leftRec rules, keyed by (rule, start); bypassed under a suppress set or a re-bind cap; the entry is {node, end, capped} | none: the portable engine has no memo (a re-parse yields the same result) | — | — | R: a pure function of (rule, start) outside suppress and cap, and now it also carries the cap that the only post-call reader (above) reads |
+| Prefix NUD and `requireTarget` (`++-x` rejects) | `prefix[]` with `requireTarget`, `form` | `nudPrefix` / `commitPrefix` | `++-x`, `++ ++x` | V |
+| Assignment-target form: an operator node is not a target; a prefix-unary node is not a `noUnaryLhs` operand; the middle-child test applies only to LED-built nodes | `AssignForm`: `ledForm`, `prefix[].form`, `FORM_*` | `binary` (`tgt` / `noUnary`), `postfixOp` | `x = class as {} = 1;`, `-x ** y`, `a + b = c` | V |
+| Non-op LEDs: the `ledPrecOf` lbp gate, a chain-rhs operand at its level's bp (`in`, `instanceof`) | `ledLbp`, `Step ruleBp` | `led.lbpAbove`, `ruleBp` step | `a == b ? c : d`, `a in b in c` | V |
+| `maxBp <= minBp` skip of the non-op LEDs | none | — | — | R: dead by arithmetic; `maxBp = (levels+1)*2` and every `minBp` is 0, an rbp (at most `2*levels`) or a chain rhsBp (at most its lbp) |
+| Access tails and tail closure: once a postfix, prefix or binary node, or a tail-closing LED, is built, no `.x` / `(…)` / `[…]` / tagged template | `ledAccessTail`, `ledClosesTail`, `nud*ClosesTail` | `led.tailOpen`, `postfixToks` | `a++.b`, `new a?.b` | V |
+| A led ending in a NEGATIVE lookahead closes the tail (`f<T>` then no `(`: `f<T>.x` rejects); a positive one (`not(not(X))`) asserts that a continuation follows and leaves it open | `ledClosesTail` (look / ahead / aheadCtx with `is` false) | as above | `let x = f<T>.x;` (reject); lookrec `set a.b.c[1] = x;` (accept) | V |
+| The tail closure for leftRec rules' continuations (`type A = keyof void.x;`) | `buildPratt` computes it for leftRec rules too | as above | `keyof void.x` rows | V |
+| `notLeftLeaf`: skip a led when the left node's head leaf is in a word set | `ledNotLeftLeaf` | `led.notLeftLeaf` | `void.x`, `null.x` type rows | V |
+| Postfix: `sameLine`, `tailClosed`, `requireTarget` | `postfix[]`, `postfixSameLine` | `postfixOp` | `x\n++\ny`, `++x++` | V |
+| Mixfix operand re-bind (`matchMixfixLed`): a failed `<L1> $ <L2> …` led retries its operand capped at each depth-0 L2 | `ledRebind`; `rbScan` (`src/rebind-family.ts`, one body for every form) | `PrattLowering.rebind` | `REBIND.ts` | V |
+| Template literals: the template token carries its hole rule; a head commits to the chain | `Step tok` with `hole`, `nudTplHole`, `postfixTplHole` | `nudTpl`, `postfixTpl`, `matchTemplate*` | `TEMPLATE_STEPS` | V |
+| `>`-composites: `>` `>` `=` are separate tokens, read as one operator where an operator is read | `gtComps`, `gtOpRead` | `_opLid` / `gt_op` | `a >>= b`, `let x = f<A<B>>(c);` | V |
+| The empty node's offset (`offset()` with no children) | unreachable: `defineGrammar` refuses nullable rules except the entry | — | `''`, `'// c'` | V |
+
+Not argued by the table: the interpreter's indent / markup / `noCommentBefore` mechanisms. Their
+grammars are refused by the portable engine, so no comparison exists. Their argument is the
+refusal, and an engine for those grammars owes its own rows.
+
 ## Where the record of each file lives
 
 - JavaScript against its specification: test262's syntax tests, file by file:

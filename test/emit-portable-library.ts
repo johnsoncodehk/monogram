@@ -28,6 +28,8 @@ import { rustTarget } from '../src/target-rust.ts';
 import { goldenStream } from './golden-lexer.ts';
 import { scratchDir } from './scratch.ts';
 import { cachedGoBuild, cachedRustc } from './build-cache.ts';
+import { QUICK } from './check-targets.ts';
+import { cachedEmit } from './emit-cache.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean, detail = '') => {
@@ -77,7 +79,7 @@ for (const [mode, path] of [['markup', '../html.ts'], ['indent', '../yaml.ts']])
 // ── TS ──
 {
   const file = join(dir, 'parser.ts');
-  writeFileSync(file, emitParser(grammar, tsTarget));
+  writeFileSync(file, cachedEmit('typescript.ts', tsTarget.name, {}, () => emitParser(grammar, tsTarget)));
   const m = await import(file);
   const tA = m.tokenize(A);
   check('ts: tokenize ≡ lexer golden', json(five(tA)) === json(ref(A)));
@@ -104,7 +106,7 @@ else {
   const gdir = join(dir, 'go');
   mkdirSync(join(gdir, 'parser'), { recursive: true });
   writeFileSync(join(gdir, 'go.mod'), 'module consumer\n\ngo 1.21\n');
-  const goSrc = emitParser(grammar, goTarget);
+  const goSrc = cachedEmit('typescript.ts', goTarget.name, {}, () => emitParser(grammar, goTarget));
   writeFileSync(join(gdir, 'parser', 'parser.go'), goSrc);
   // The exported surface is the tokenizer, the Doc/builder API and the tables a custom
   // Builder needs — no generated rule helper or lexer constant.
@@ -122,7 +124,11 @@ else {
   const pkgVars = [...goSrc.matchAll(/^var (\w+)/gm)].map((x) => x[1]!).filter((x) => !GO_TABLE.test(x));
   check('go: no package-level mutable parser/lexer state', pkgVars.length === 0 && !/^var \($/m.test(goSrc), pkgVars.slice(0, 12).join(' '));
   check('go: package parser does not import sync', !/^\s*"sync"$/m.test(goSrc));
-  writeFileSync(join(gdir, 'main.go'), `package main
+  // The quick tier (CHECK_QUICK=1) runs the source checks above and leaves the build and run
+  // below to `--changed` and CI.
+  if (QUICK) console.log('  go: build and run: not in the quick sample');
+  else {
+    writeFileSync(join(gdir, 'main.go'), `package main
 
 import (
 \t"encoding/json"
@@ -200,32 +206,32 @@ func main() {
 \t\t"isoA": isoA, "isoBig": isoBig, "ownB": ownB, "ownSrc": ownSrc, "badConc": badConc.Load()})
 }
 `);
-  try {
-    let race = true;
-    try { cachedGoBuild(['-race', '-o', 'consumer', '.'], { cwd: gdir }); }
-    catch { race = false; cachedGoBuild(['-o', 'consumer', '.'], { cwd: gdir }); }
-    const out = JSON.parse(execFileSync(join(gdir, 'consumer'), { encoding: 'utf8' }));
-    const lower = (ts: { Kind: string; Text: string; Off: number; End: number; Nl: boolean }[]) =>
-      ts.map((t) => ({ kind: t.Kind, text: t.Text, off: t.Off, end: t.End, nl: t.Nl }));
-    check('go: external package builds against parser.Tokenize / parser.ParseWith', out.ok === true);
-    check('go: a Builder parse (parserW) leaves a failed type-argument `<` to the comparison', out.ltRejected === null, json(out.ltRejected));
-    check('go: Tokenize ≡ lexer golden', json(lower(out.tokensA)) === json(ref(A)));
-    check('go: a mutated Tokenize result does not leak into the next call', json(lower(out.tokensB)) === json(ref(B)));
-    check('go: a caller-owned CstBuilder is untouched by Tokenize', out.unchanged === true);
-    check('go: ParseWith after Tokenize(other) ≡ ParseWith alone', out.same === true);
-    check('go: Tokenize returns a *LexError (nil tokens) on malformed input', out.badNil === true && out.lexMsg === refLexError && out.lexOff === BAD_LEX.indexOf('#'), `${out.lexMsg} @${out.lexOff}`);
-    check('go: a Doc edit after other Docs / ParseWith ≡ a fresh Doc, with reuse', out.isoA === true && out.isoBig === true);
-    check('go: NewDocWith(*CstBuilder) builds its tree into that builder', out.ownB === true);
-    check('go: a Doc reparsing after a rejected text reads its own source, not the last parsed one', out.ownSrc === true);
-    check(`go: Docs on concurrent goroutines ≡ sequential results (race detector ${race ? 'on' : 'unavailable'})`, out.badConc === 0, `${out.badConc} mismatches`);
-  } catch (e) {
-    check('go: external package builds and runs', false, String((e as { stderr?: Buffer }).stderr ?? e).slice(0, 800));
-  }
-  // A consumer Builder that calls back into the package from Leaf, under ParseWith and under a
-  // DocWith edit: every public entry must run independently of the parse in progress, and the
-  // outer tree must equal the same builder's tree without the nested calls.
-  mkdirSync(join(gdir, 'reenter'));
-  writeFileSync(join(gdir, 'reenter', 'main.go'), `package main
+    try {
+      let race = true;
+      try { cachedGoBuild(['-race', '-o', 'consumer', '.'], { cwd: gdir }); }
+      catch { race = false; cachedGoBuild(['-o', 'consumer', '.'], { cwd: gdir }); }
+      const out = JSON.parse(execFileSync(join(gdir, 'consumer'), { encoding: 'utf8' }));
+      const lower = (ts: { Kind: string; Text: string; Off: number; End: number; Nl: boolean }[]) =>
+        ts.map((t) => ({ kind: t.Kind, text: t.Text, off: t.Off, end: t.End, nl: t.Nl }));
+      check('go: external package builds against parser.Tokenize / parser.ParseWith', out.ok === true);
+      check('go: a Builder parse (parserW) leaves a failed type-argument `<` to the comparison', out.ltRejected === null, json(out.ltRejected));
+      check('go: Tokenize ≡ lexer golden', json(lower(out.tokensA)) === json(ref(A)));
+      check('go: a mutated Tokenize result does not leak into the next call', json(lower(out.tokensB)) === json(ref(B)));
+      check('go: a caller-owned CstBuilder is untouched by Tokenize', out.unchanged === true);
+      check('go: ParseWith after Tokenize(other) ≡ ParseWith alone', out.same === true);
+      check('go: Tokenize returns a *LexError (nil tokens) on malformed input', out.badNil === true && out.lexMsg === refLexError && out.lexOff === BAD_LEX.indexOf('#'), `${out.lexMsg} @${out.lexOff}`);
+      check('go: a Doc edit after other Docs / ParseWith ≡ a fresh Doc, with reuse', out.isoA === true && out.isoBig === true);
+      check('go: NewDocWith(*CstBuilder) builds its tree into that builder', out.ownB === true);
+      check('go: a Doc reparsing after a rejected text reads its own source, not the last parsed one', out.ownSrc === true);
+      check(`go: Docs on concurrent goroutines ≡ sequential results (race detector ${race ? 'on' : 'unavailable'})`, out.badConc === 0, `${out.badConc} mismatches`);
+    } catch (e) {
+      check('go: external package builds and runs', false, String((e as { stderr?: Buffer }).stderr ?? e).slice(0, 800));
+    }
+    // A consumer Builder that calls back into the package from Leaf, under ParseWith and under a
+    // DocWith edit: every public entry must run independently of the parse in progress, and the
+    // outer tree must equal the same builder's tree without the nested calls.
+    mkdirSync(join(gdir, 'reenter'));
+    writeFileSync(join(gdir, 'reenter', 'main.go'), `package main
 
 import (
 \t"encoding/json"
@@ -285,25 +291,27 @@ func main() {
 \tjson.NewEncoder(os.Stdout).Encode(map[string]any{"outer": outer, "docOk": docOk, "nParse": nParse, "nEdit": nested, "bad": badNest})
 }
 `);
-  try {
-    let race = true;
-    try { cachedGoBuild(['-race', '-o', 'reenter-consumer', './reenter'], { cwd: gdir }); }
-    catch { race = false; cachedGoBuild(['-o', 'reenter-consumer', './reenter'], { cwd: gdir }); }
-    const out = JSON.parse(execFileSync(join(gdir, 'reenter-consumer'), { encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] }));
-    check(`go: Tokenize / ParseWith / NewDoc+Edit from inside a Builder callback ≡ standalone (race detector ${race ? 'on' : 'unavailable'})`,
-      out.outer === true && out.docOk === true && out.nParse > 0 && out.nEdit > 0 && out.bad === 0, json(out));
-  } catch (e) {
-    const err = e as { stderr?: Buffer; signal?: string };
-    check('go: public entries are reentrant from a Builder callback', false, (err.signal ? `killed by ${err.signal}; ` : '') + String(err.stderr ?? e).slice(0, 400));
+    try {
+      let race = true;
+      try { cachedGoBuild(['-race', '-o', 'reenter-consumer', './reenter'], { cwd: gdir }); }
+      catch { race = false; cachedGoBuild(['-o', 'reenter-consumer', './reenter'], { cwd: gdir }); }
+      const out = JSON.parse(execFileSync(join(gdir, 'reenter-consumer'), { encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] }));
+      check(`go: Tokenize / ParseWith / NewDoc+Edit from inside a Builder callback ≡ standalone (race detector ${race ? 'on' : 'unavailable'})`,
+        out.outer === true && out.docOk === true && out.nParse > 0 && out.nEdit > 0 && out.bad === 0, json(out));
+    } catch (e) {
+      const err = e as { stderr?: Buffer; signal?: string };
+      check('go: public entries are reentrant from a Builder callback', false, (err.signal ? `killed by ${err.signal}; ` : '') + String(err.stderr ?? e).slice(0, 400));
+    }
   }
 }
 
 // ── Rust ──
 if (!have('rustc')) console.log('  rust: (toolchain not found — skipped)');
+else if (QUICK) console.log('  rust: build and run: not in the quick sample');
 else {
   const rdir = join(dir, 'rust');
   mkdirSync(rdir);
-  writeFileSync(join(rdir, 'parser.rs'), emitParser(grammar, rustTarget));
+  writeFileSync(join(rdir, 'parser.rs'), cachedEmit('typescript.ts', rustTarget.name, {}, () => emitParser(grammar, rustTarget)));
   writeFileSync(join(rdir, 'main.rs'), `use parser::{tokenize, Doc, Edit, Token};
 
 fn toks_json(t: &[Token]) -> String {
