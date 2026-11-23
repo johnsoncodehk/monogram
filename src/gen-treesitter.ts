@@ -1736,8 +1736,53 @@ function buildTokenBody(name: string, ctx: GrammarJsContext): string | null {
   // The tree-sitter grammar is block-context at the top level; flow collections are their own rules.
   // Block-only (no `pattern`) and dual tokens both resolve here; YAML is the only grammar with a
   // blockPattern, so every other language is unaffected (byte-identical).
-  const src = tok.blockPattern ? tokenPatternSource({ pattern: tok.blockPattern }) : tokenPatternSource(tok);
+  const src = tokenPatternSource({ pattern: shortestUntil(tok.blockPattern ?? tok.pattern, name) });
   return `token(${jsRegexLiteral(sanitizeTreeSitterRegex(src))})`;
+}
+
+// ── A non-greedy run up to a terminator, as a regular expression ──
+// tree-sitter's lexer is a DFA that takes the LONGEST token: a non-greedy repeat renders greedy and
+// its look-ahead is dropped (sanitizeTreeSitterRegex), so `'/*' (not '*/' any)*? '*/'` became
+// `/\*[\s\S]*\*\//`, which runs from the first `/*` to the LAST `*/` of the input: two block
+// comments with code between them were one comment (`/** a */ interface P { /** b */ }` an ERROR).
+// The language the pattern means, every string without the terminator and then the terminator, is
+// regular, and is written here directly: `(?:[^a]|a+[^ab])*a+b` for a two-character terminator `ab`
+// (a ≠ b), `[^a]*a` for one character. Any other non-greedy repeat has no rendering: it fails loudly.
+function shortestUntil(p: TokenPattern, token: string): TokenPattern {
+  if (typeof p === 'string') return p;
+  const lazyRun = (x: TokenPattern): string | null => {
+    if (typeof x === 'string' || x.type !== 'repeat' || x.greedy || x.min !== 0 || x.max !== undefined) return null;
+    const b = x.body;
+    if (typeof b === 'string' || b.type !== 'seq' || b.items.length !== 2) return null;
+    const [la, any] = b.items;
+    if (typeof la === 'string' || la.type !== 'lookahead' || !la.negate || typeof la.body !== 'string') return null;
+    return typeof any !== 'string' && any.type === 'anyChar' ? la.body : null;
+  };
+  const not = (...cs: string[]): TokenPattern => ({ type: 'charClass', negate: true, items: cs.map(value => ({ type: 'char' as const, value })) });
+  const plus = (c: string): TokenPattern => ({ type: 'repeat', body: c, min: 1, greedy: true });
+  switch (p.type) {
+    case 'seq': {
+      const items: TokenPattern[] = [];
+      for (let i = 0; i < p.items.length; i++) {
+        const t = lazyRun(p.items[i]);
+        if (t !== null && p.items[i + 1] === t) {
+          const [a, b] = [...t];
+          if (t.length === 1) items.push({ type: 'repeat', body: not(a), min: 0, greedy: true }, a);
+          else if (t.length === 2 && a !== b) items.push({ type: 'repeat', body: { type: 'alt', items: [not(a), { type: 'seq', items: [plus(a), not(a, b)] }] }, min: 0, greedy: true }, plus(a), b);
+          else throw new Error(`gen-treesitter: token ${token}: a non-greedy run up to ${JSON.stringify(t)} has no tree-sitter rendering`);
+          i++;
+          continue;
+        }
+        items.push(shortestUntil(p.items[i], token));
+      }
+      return { ...p, items };
+    }
+    case 'alt': return { ...p, items: p.items.map(x => shortestUntil(x, token)) };
+    case 'repeat':
+      if (!p.greedy) throw new Error(`gen-treesitter: token ${token}: a non-greedy repeat has no tree-sitter rendering (the lexer takes the longest match)`);
+      return { ...p, body: shortestUntil(p.body, token) };
+    default: return p;
+  }
 }
 
 // ── conflicts ────────────────────────────────────────────────────────────────
