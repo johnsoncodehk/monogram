@@ -296,10 +296,12 @@ function lidCall(lits: string[], bytes: string): string {
 }
 
 // One token at a dispatch site: the shared scanner says where it ends; the lexer records it.
-// A lexer error (relex-family.ts LexErr): recorded in the lexer's `err`, and the step ends the lex:
-// pos is the end of input, so the loop exits (with a type-parameter signature undecided, its head
-// rewinds it).
-const rsFail = (kind: string, off: string, end: string): string => `err = Some(LexErr { kind: ${kind}, off: ${off}, end: ${end} }); pos = n; continue;`;
+// A lexer error (relex-family.ts LexErr): recorded in the lexer's error (`at`: a local `err`, or
+// the element scan's field, which its loop head reads: a local there would be carried around every
+// iteration, +1.2% lex instructions on the TSX inputs, profile run 45113125143), and the step ends
+// the lex: pos is the end of input, so the loop exits (with a type-parameter signature undecided,
+// its head rewinds it).
+const rsFail = (at: string, kind: string, off: string, end: string): string => `${at} = Some(LexErr { kind: ${kind}, off: ${off}, end: ${end} }); pos = n; continue;`;
 const RS_LEX_ERR = `/// A lexer error (relex-family.ts LexErr): its kind, offset and end; lex_error spells its message.
 #[derive(Clone, Copy)]
 struct LexErr { kind: isize, off: isize, end: isize }
@@ -336,9 +338,9 @@ const RS_LEX_FN = `fn lex_all<'a>(src: &'a str) -> (Vec<Tok>, Option<LexErr>) {
     (toks, err)
 }
 `;
-const RS_UNEXPECTED = `        ${rsFail('0', 'pos as isize', 'pos as isize')}`;
+const rsUnexpected = (at: string): string => `        ${rsFail(at, '0', 'pos as isize', 'pos as isize')}`;
 
-function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
+function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>, errAt: string): string {
   const name = t.name;
   const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
   const kid = kidOf(ids, name);
@@ -352,7 +354,7 @@ function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: bo
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
   const ext = identLike.has(name) ? 'let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(b, e) } else { e }; ' : '';
   // An identifier whose escapes spell no IdentifierName is the lexer error -2 - e (lex-family.ts).
-  const escErr = identLike.has(name) ? ` if e < -1 { ${rsFail('1', 'pos as isize', '-2 - e')} }` : '';
+  const escErr = identLike.has(name) ? ` if e < -1 { ${rsFail(errAt, '1', 'pos as isize', '-2 - e')} }` : '';
   const scan = `{ let e = ${shared.scanner(name)}(src, pos as isize); if e >= 0 { let e = e as usize; ${ext}${push}pos = e; continue; }${escErr} }`;
   return rxTok !== undefined && name === rxTok ? `        if !st.prev_is_value() ${scan}` : `        ${scan}`;
 }
@@ -391,13 +393,13 @@ function rustMatchLabels(bytes: number[]): string {
 
 function buildLexCandidates(
   ir: ParserIR, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined,
-  punctLine: (p: string) => string,
+  punctLine: (p: string) => string, errAt: string,
 ): { codes: string[]; firsts: (LexFirstBytes | null)[] } {
   const identLike = new Set(ir.identLike);
   const codes: string[] = [];
   const firsts: (LexFirstBytes | null)[] = [];
   for (const t of shared.scannedTokens(ir)) {
-    codes.push(scanTok(ir, t, shared, stateful, ids, rxTok, identLike));
+    codes.push(scanTok(ir, t, shared, stateful, ids, rxTok, identLike, errAt));
     firsts.push(lexTokFirstBytes(t));
   }
   for (const p of ir.puncts) {
@@ -498,7 +500,8 @@ ${sig ? `    #[cold] #[inline(never)]
         self.sv_bang = (self.last_close, self.last_bang);
     }
     #[cold] #[inline(never)]
-    fn spec_rewind(&mut self, src: &str, n: usize, failed: bool) -> usize {
+    fn spec_rewind(&mut self, src: &str, n: usize) -> usize {
+        let failed = self.err.is_some();
         let keep = self.spec_done && !failed && self.spec_then;
         let re = if self.spec_done && !failed { ${shared.elementFn('reach')}(src, self.spec_end as isize) } else { n as isize + 1 };
         if re > self.la_end { self.la_end = re; }
@@ -510,11 +513,11 @@ ${sig ? `    #[cold] #[inline(never)]
         self.last_close = self.sv_bang.0; self.last_bang = self.sv_bang.1;
         self.paren_head.clear(); self.paren_head.extend_from_slice(&self.sv_paren);
         self.template_stack.clear(); self.template_stack.extend_from_slice(&self.sv_stack);
-        self.spec_on = false; self.spec_closed = false; self.spec_done = false;
+        self.spec_on = false; self.spec_closed = false; self.spec_done = false; self.err = None;
         pos
     }
 ` : ''}`;
-  const struct = `struct ElScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, ${rxFields}template_stack: Vec<i64>, el_ended: bool, tag_angle: isize, la_end: isize, spec_until: isize, ${raw ? 'tag_at: Vec<i64>, ' : ''}${specFields}${sig ? 'sv_bang: (bool, bool), ' : ''}}
+  const struct = `struct ElScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, err: Option<LexErr>, ${rxFields}template_stack: Vec<i64>, el_ended: bool, tag_angle: isize, la_end: isize, spec_until: isize, ${raw ? 'tag_at: Vec<i64>, ' : ''}${specFields}${sig ? 'sv_bang: (bool, bool), ' : ''}}
 impl<'a> ElScan<'a> {
 ${methods}}
 `;
@@ -564,7 +567,7 @@ ${raw ? `        if st.template_stack.last() == Some(&3) {
             st.emit(pos, re as usize, rk as u16, 0); st.template_stack.pop(); pos = re as usize; continue;
         }
 ` : ''}`;
-  const loopBody = `${sig ? '        if st.spec_on && (st.spec_done || err.is_some() || pos >= n) { pos = st.spec_rewind(src, n, err.is_some()); err = None; continue; }\n' : ''}        let c = b[pos] as u32;
+  const loopBody = `${sig ? '        if st.spec_on && (st.spec_done || st.err.is_some() || pos >= n) { pos = st.spec_rewind(src, n); continue; }\n' : ''}        let c = b[pos] as u32;
 ${frameStep}${pre}${cascade}
 ${p.uniIdentOrPanic}`;
   const cond = sig ? '(pos < n || st.spec_on) && (limit == 0 || st.acc.len() - base < limit || st.spec_on)' : 'pos < n && (limit == 0 || st.acc.len() - base < limit)';
@@ -578,12 +581,11 @@ ${p.uniIdentOrPanic}`;
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
-    let mut err: Option<LexErr> = None;
-    let mut st = ElScan { acc, pending_nl, ${rxInit}template_stack, el_ended, tag_angle, la_end, spec_until, ${raw ? 'tag_at, ' : ''}${specInit}};
+    let mut st = ElScan { acc, pending_nl, err: None, ${rxInit}template_stack, el_ended, tag_angle, la_end, spec_until, ${raw ? 'tag_at, ' : ''}${specInit}};
     while ${cond} {
 ${loopBody}
     }
-    ${rxOut}(pos, st.pending_nl, ${rxRet}st.template_stack, st.el_ended, st.tag_angle, st.la_end, st.spec_until${raw ? ', st.tag_at' : ''}, err)
+    ${rxOut}(pos, st.pending_nl, ${rxRet}st.template_stack, st.el_ended, st.tag_angle, st.la_end, st.spec_until${raw ? ', st.tag_at' : ''}, st.err)
 }
 ${RS_LEX_FN}/// Lexes src into toks, replacing what it held and keeping its capacity (a reused builder's buffer);
 /// the lexer error, if any.
@@ -679,6 +681,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const stateful = !!(rx || tpl || el);
   const newlineOnly = !!(nl && !rx && !tpl);
   const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
+  const errAt = el ? 'st.err' : 'err';
   // Byte-class dispatch folds whitespace/newline/template-open into the match's jump table so
   // the hot loop does one load + one match, instead of a chain of pre-checks per byte. Newline-mode
   // grammars keep the flow-aware whitespace arms (flow_depth) and do NOT use the folded arms.
@@ -686,7 +689,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const identTok0 = ir.tokens.find((t) => t.name === ir.identToken);
   const identLid0 = identTok0 ? lidCall(shared.tokenLiterals(ir, identTok0, ids.lids.slice(1)), '&b[pos..e]') : 'lid_of(&b[pos..e])';
   const nonAsciiColdCall = `        let (e, k) = _lex_non_ascii(src, pos);
-        if k == 2 { ${stateful ? `st.emit(pos, e, ${identKid0}, ${identLid0});` : `toks.push(mk_tok(pos, e, pending_nl, ${identKid0}, ${identLid0})); pending_nl = false;`} } else if k == 1 { ${nlVar} = true; } else if k == 3 { ${rsFail('0', 'pos as isize', 'pos as isize')} }
+        if k == 2 { ${stateful ? `st.emit(pos, e, ${identKid0}, ${identLid0});` : `toks.push(mk_tok(pos, e, pending_nl, ${identKid0}, ${identLid0})); pending_nl = false;`} } else if k == 1 { ${nlVar} = true; } else if k == 3 { ${rsFail(errAt, '0', 'pos as isize', 'pos as isize')} }
         pos = e; continue;
 `;
   const nonAsciiWsCheck = nlRs ? '' : `        if c >= 0xC2 { if let Some((ch, w)) = _char_at(src, pos) { if _is_js_ws(ch) { if ch == '\\u{2028}' || ch == '\\u{2029}' { ${nlVar} = true; } pos += w; continue; } } }
@@ -700,13 +703,13 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const tplOpenByte = tpl && tlen(tpl.open) === 1 ? firstUnit(tpl.open, UNITS) : null;
   const tplLits = shared.templateLiterals(ir, ids.lids.slice(1));
   const tplOpenArm = tplOpenByte !== null ? `        ${tplOpenByte} => {
-            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl!.open)}, ${rx ? '!st.prev_is_value()' : 'true'}); if e < 0 { err = Some(_lex_tpl_err(e, n)); pos = n; continue; } let e = e as usize;
+            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl!.open)}, ${rx ? '!st.prev_is_value()' : 'true'}); if e < 0 { ${errAt} = Some(_lex_tpl_err(e, n)); pos = n; continue; } let e = e as usize;
             if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, ${lidCall(tplLits.head, '&b[pos..e]')}); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl!.token)}, ${lidCall(tplLits.whole, '&b[pos..e]')}); }
             pos = e; continue;
         }
 ` : '';
   const tplOpenPreCheck = tpl && tplOpenByte === null ? `        if ${startByteEq('pos', tpl.open)} {
-            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.open)}, ${rx ? '!st.prev_is_value()' : 'true'}); if e < 0 { err = Some(_lex_tpl_err(e, n)); pos = n; continue; } let e = e as usize;
+            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.open)}, ${rx ? '!st.prev_is_value()' : 'true'}); if e < 0 { ${errAt} = Some(_lex_tpl_err(e, n)); pos = n; continue; } let e = e as usize;
             if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, ${lidCall(tplLits.head, '&b[pos..e]')}); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl.token)}, ${lidCall(tplLits.whole, '&b[pos..e]')}); }
             pos = e; continue;
         }
@@ -718,7 +721,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const closeByte = tpl && closeFirst < 128 && !specialBytes.includes(closeFirst) ? closeFirst : null;
   const tplCloseTest = tpl ? `        if !st.template_stack.is_empty() && ${startByteEq('pos', tpl.interpClose)} && *st.template_stack.last().unwrap() == 0 {
             st.template_stack.pop();
-            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.interpClose)}, false); if e < 0 { err = Some(_lex_tpl_err(e, n)); pos = n; continue; } let e = e as usize;
+            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.interpClose)}, false); if e < 0 { ${errAt} = Some(_lex_tpl_err(e, n)); pos = n; continue; } let e = e as usize;
             if interp { st.emit(pos, e, ${kidOf(ids, "$templateMiddle")}, ${lidCall(tplLits.middle, '&b[pos..e]')}); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, "$templateTail")}, ${lidCall(tplLits.tail, '&b[pos..e]')}); }
             pos = e; continue;
         }
@@ -726,7 +729,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const tplDispatch = tpl ? `${closeByte === null ? tplCloseTest : ''}${tplOpenPreCheck}` : '';
   const punctLine = (p: string) =>
     `        if ${startByteEq('pos', p)} { ${stateful ? `st.emit(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${tlen(p)}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${tlen(p)}; continue; }`;
-  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
+  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine, errAt);
   // Where no candidate can begin at a non-ASCII byte, the byte is whitespace, an identifier or an
   // error: one cold call decides, so the dispatch loop holds no Unicode code (register layout).
   const nonAsciiCold = !nlRs && !!ir.identToken && buildLexDispatchPlan(lexFirsts).fallbackIndices.length === 0;
@@ -758,8 +761,8 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
     : `toks.push(mk_tok(pos, e, pending_nl, ${identKid}, ${identLid})); pending_nl = false;`;
   const uniIdentOrPanic = identName && !nonAsciiCold
     ? `        if c >= 0x80 { if let Some(e) = _scan_uni_ident(b, pos) { ${uniIdentEmit} pos = e; continue; } }
-${RS_UNEXPECTED}`
-    : RS_UNEXPECTED;
+${rsUnexpected(errAt)}`
+    : rsUnexpected(errAt);
   // The source is a &str, so the character at a position is std's own decode of it: one boundary
   // check and the character's bytes, none past it. None where pos is no character boundary.
   const lexUtf8Helpers = `${shared.scannedTokens(ir).some((t) => t.skip) ? RS_HAS_LINE_TERM : ''}#[inline(always)] fn _char_at(s: &str, pos: usize) -> Option<(char, usize)> {
@@ -1037,7 +1040,7 @@ ${loopBody}
       .replace(/pending_nl/g, 'st.pending_nl');
     const nlUniIdentOrPanic = identName
       ? rustNlScan(uniIdentOrPanic)
-      : RS_UNEXPECTED;
+      : rsUnexpected('err');
     const nlLoopBody = `        let c = b[pos] as u32;
 ${nlRs!.wsFrom}${rustNlScan(cascade)}
 ${nlUniIdentOrPanic}`;

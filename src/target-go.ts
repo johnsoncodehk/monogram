@@ -496,10 +496,12 @@ ${sig ? `${p.goBoolArr('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
 \tsvPos, svNl, svPrevLid, svPrevKid, svBpLid, svHasPrev, svHasPrev2, svLastClose, svLastBang, svElEnded, svAngle := 0, false, uint16(0), uint16(0), uint16(0), false, false, false, false, false, 0
 \tvar svParen []bool
 \tvar svStack []int
-\tspecRewind := func() {
-\t\tkeep := specDone && err == nil && specThen
+\t// failed: a lexer error decided it (err is the loop's, not captured here: a captured variable
+\t// is not kept in a register).
+\tspecRewind := func(failed bool) {
+\t\tkeep := specDone && !failed && specThen
 \t\tre := n + 1
-\t\tif specDone && err == nil { re = ${shared.elementFn('reach')}(src, specEnd) }
+\t\tif specDone && !failed { re = ${shared.elementFn('reach')}(src, specEnd) }
 \t\tif re > laEnd { laEnd = re }
 \t\tif keep { specUntil = specOff }
 \t\tspecAt = svPos; specKeep = keep
@@ -508,7 +510,7 @@ ${sig ? `${p.goBoolArr('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
 \t\tlastClose = svLastClose; lastBang = svLastBang; elEnded = svElEnded; tagAngle = svAngle
 \t\tparenHead = append(parenHead[:0], svParen...)
 \t\ttemplateStack = append(templateStack[:0], svStack...)
-\t\tspecTok = -1; specClosedAt = -1; specDone = false; err = nil
+\t\tspecTok = -1; specClosedAt = -1; specDone = false
 \t}
 ` : '';
   const emitFn = `\temit := func(off, end int, kid, lid uint16) {
@@ -585,7 +587,7 @@ ${raw ? `\t\tif len(templateStack) > 0 && templateStack[len(templateStack)-1] ==
 \t\t\temit(pos, re, uint16(rk), 0); templateStack = templateStack[:len(templateStack)-1]; pos = re; continue
 \t\t}
 ` : ''}`;
-  const loopBody = `${sig ? '\t\tif specTok >= 0 && (specDone || err != nil || pos >= n) { specRewind(); continue }\n' : ''}\t\tc := int(src[pos])
+  const loopBody = `${sig ? '\t\tif specTok >= 0 && (specDone || err != nil || pos >= n) { specRewind(err != nil); err = nil; continue }\n' : ''}\t\tc := int(src[pos])
 ${frameStep}${p.nlWs}${pre}${cascade}
 ${p.uniIdentFallbackGo}${p.loopPanicGo}`;
   const loop = `${sig ? 'lexLoop:\n' : ''}\tfor ${sig ? '(pos < n || specTok >= 0) && (limit <= 0 || len(*acc)-base < limit || specTok >= 0)' : 'pos < n && (limit <= 0 || len(*acc)-base < limit)'} {
