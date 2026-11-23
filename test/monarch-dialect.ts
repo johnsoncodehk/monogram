@@ -35,7 +35,15 @@ function tokenize(mon: MonarchLanguage, src: string): Tok[] {
   const stack: string[] = ['root'];
   const flags = mon.ignoreCase ? 'i' : '';
   const cache = new Map<string, RegExp>();
-  const re = (s: string) => { let r = cache.get(s); if (!r) { r = new RegExp(`^(?:${s})`, flags); cache.set(s, r); } return r; };
+  // a rule's regex as Monaco's compiler reads it: `@@` is a literal `@`, `@name` the language
+  // attribute `name` (a string), else the compile throws
+  const monacoRegex = (s: string) => s.replace(/@@|@(\w+)/g, (m, a?: string) => {
+    if (m === '@@') return '@';
+    const v = (mon as unknown as Record<string, unknown>)[a!];
+    if (typeof v !== 'string') throw new Error(`/${s}/: the language has no attribute @${a}`);
+    return v ? `(?:${v})` : '';
+  });
+  const re = (s: string) => { let r = cache.get(s); if (!r) { r = new RegExp(`^(?:${monacoRegex(s)})`, flags); cache.set(s, r); } return r; };
   const rulesOf = (state: string, seen = new Set<string>()): [string, MonarchAction, string?][] => {
     const rs = mon.tokenizer[state];
     if (!rs) throw new Error(`no state \`${state}\``);
@@ -69,7 +77,7 @@ function tokenize(mon: MonarchLanguage, src: string): Tok[] {
     for (const [reSrc, a] of rulesOf(state)) {
       if (typeof a !== 'object' || Array.isArray(a) || (a as { nextEmbedded?: string }).nextEmbedded !== '@pop') continue;
       found = true;
-      const at = rest.search(new RegExp(reSrc, flags));
+      const at = rest.search(new RegExp(monacoRegex(reSrc), flags));
       if (at >= 0 && (best < 0 || at < best)) best = at;
     }
     if (!found) throw new Error(`no rule containing nextEmbedded: "@pop" in tokenizer embedded state: ${state}`);
@@ -375,6 +383,12 @@ for (const [name, file, g] of [['jsx', 'javascriptreact.monarch.json', jsx], ['t
   tokRow('`@else` not after a body is text', 'pass', undefined, mon, dsrc, '@else { y', 0, is(''));
   tokRow('`@elsewhere` after a body is text (a continuation ends at a word boundary)', 'pass', undefined, mon, dsrc, '@elsewhere', 0, is(''));
   tokRow('the close tag after the directives', 'pass', undefined, mon, dsrc, 'main>', 1, is('tag'));
+  rows.push({ section, id: 'an opener `@if` is written `@@if` in its regex (Monaco reads `@name` as an attribute)', status: 'pass', check: () => {
+    const all = Object.values(mon().tokenizer).flat().filter(Array.isArray).map(r => r[0] as string);
+    const bare = all.filter(x => /(?<!@)@(?!@)\w/.test(x.replace(/@@/g, '')));
+    const ok = bare.length === 0 && all.some(x => x.startsWith('@@if'));
+    return { ok, saw: ok ? 'escaped' : `unescaped: ${bare.slice(0, 3).join(' | ')}` };
+  } });
   tokRow('an opener and its required literal on two lines', 'xfail', 'the opener test is a lookahead, which sees one line', mon, 'component C() {\n  <p>@if\n  (x) { y }</p>\n}', '@if', 0, kw);
   rows.push({ section, id: 'the interpreter\'s directive keywords (`AtWord`) are exactly the Monarch `@` keywords', status: 'pass', check: () => {
     const lex = createParser(textDialect).tokenize(dsrc) as { type: string; text: string; offset: number }[];
