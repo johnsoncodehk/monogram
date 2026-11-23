@@ -396,7 +396,6 @@ impl Builder for SpanB {
         for i in 0..kc { let kid = self.k[(ks + i) as usize]; self.shift(kid, bd, td); }
         h
     }
-    fn root_kids(&self, root: i32) -> Vec<i32> { let (_, ks, kc, ..) = self.n[root as usize]; (0..kc).map(|i| self.k[(ks + i) as usize]).collect() }
     fn root_kid_at(&self, root: i32, idx: usize) -> i32 { self.k[self.n[root as usize].1 as usize + idx] }
     fn rule_id_of(&self, h: i32) -> u16 { self.n[h as usize].0 }
     fn checkpoint(&self) -> (usize, usize) { (self.n.len(), self.k.len()) }

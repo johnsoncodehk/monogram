@@ -1293,63 +1293,15 @@ function parseWithMeta<H>(text: string, meta: AlignMeta[], builder: Builder<H>):
   };
 }
 ${shapeA ? `
-function tryReuseTopW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number) => H, oldHs: H[], oldEntries: EntryMeta[], newText: string, newMeta: AlignMeta[], byteDelta: number, oldN: number, newN: number, prefix: number, suffix: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null {
-  const [prefixLen, suffixStart] = reuseBounds(oldEntries, prefix, oldN, suffix);
-  const prefixKids = oldHs.slice(0, prefixLen);
-  const suffixCand = oldHs.slice(suffixStart);
-  const prefixMeta = oldEntries.slice(0, prefixLen);
-  const suffixMeta = oldEntries.slice(suffixStart);
-  const tokDelta = newN - oldN;
-  _src = newText;
-  toks = toksFromMeta(newText, newMeta);
-  pos = prefixLen > 0 ? prefixMeta[prefixLen - 1]!.tokEnd : 0;
-  _builder = builder;
-  const mid: H[] = [];
-  const midMeta: EntryMeta[] = [];
-  const finish = (adoptFrom: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
-    const adopted = suffixCand.slice(adoptFrom).map((h) => shift(h, byteDelta, tokDelta));
-    const children: H[] = [...prefixKids, ...mid, ...adopted];
-    const newEntries = reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta);
-    const [offset, end, tokStart, tokEnd] = reuseSpan(newEntries);
-    _bSave = tokStart;
-    const savePos = pos;
-    pos = tokEnd;
-    const r = builder.node(${J(entryCst)}, children, offset, end);
-    pos = savePos;
-    if (r === null || Array.isArray(r)) return null;
-    return { root: r as H, entries: newEntries, entryHs: children, reused: prefixKids.length + adopted.length };
-  };
-  const tryHit = (): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
-    const at = reuseAdoptAt(suffixMeta, oldN, suffix, newN - pos);
-    return at >= 0 ? finish(at) : null;
-  };
-  {
-    const early = tryHit();
-    if (early) return early;
-    if (reuseGaveUp(suffixMeta, oldN, newN - pos)) return null;
-  }
-  for (;;) {
-    if (pos >= toks.length) {
-      return tryHit();
-    }
-    lookReset();
-    const sp = pos;
-    _n = 0;
-    const ok = parseTopOneW() && _soleOk(0);
-    const h = ok ? _sole(0) as H : null;
-    _hs.fill(null);
-    if (!ok) { back(sp); return null; }
-    const ext = Math.max(pos, lookEnd());
-    midMeta.push({ tokStart: _sp[2]!, tokEnd: pos, ext, off: _sp[0]!, end: _sp[1]!, kidStart: 0, kidCount: 1 });
-    mid.push(h!);
-    const hit = tryHit();
-    if (hit) return hit;
-    if (reuseGaveUp(suffixMeta, oldN, newN - pos)) return null;
-  }
+function parseTopEntryW(kidStart: number): EntryMeta | null {
+  lookReset();
+  const sp = pos, c = _n;
+  if (!(parseTopOneW() && _soleOk(c))) { back(sp); _n = c; return null; }
+  const s = c * _SW;
+  return { tokStart: _sp[s + 2]!, tokEnd: pos, ext: Math.max(pos, lookEnd()), off: _sp[s]!, end: _sp[s + 1]!, kidStart, kidCount: 1 };
 }
-` : ''}${shapeB ? `
-function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number) => H, oldRootHs: H[], oldEntries: EntryMeta[], newText: string, newMeta: AlignMeta[], byteDelta: number, oldN: number, newN: number, prefix: number, suffix: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null {
-  if (oldEntries.length === 0) return null;
+` : ''}${topReuse ? `
+function tryReuseW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number) => H, oldRootHs: H[], oldEntries: EntryMeta[], newText: string, newMeta: AlignMeta[], byteDelta: number, oldN: number, newN: number, prefix: number, suffix: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null {
   const [prefixLen, suffixStart] = reuseBounds(oldEntries, prefix, oldN, suffix);
   const prefixMeta = oldEntries.slice(0, prefixLen);
   const suffixMeta = oldEntries.slice(suffixStart);
@@ -1372,7 +1324,7 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
       }
     }
     const children: H[] = [...prefixKids, ...midKids, ...adoptedKids];
-    const newEntries = reuseSegEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta);
+    const newEntries = reuseEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta);
     const [offset, end, tokStart, tokEnd] = reuseSpan(newEntries);
     _bSave = tokStart;
     const savePos = pos;
@@ -1409,7 +1361,7 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
     }
     const before = midKids.length;
     _n = 0;
-    const meta = parseLoopSegW(before);
+    const meta = ${shapeA ? 'parseTopEntryW' : 'parseLoopSegW'}(before);
     for (const h of _kids(0)) midKids.push(h);
     _hs.fill(null);
     if (meta === null) {
@@ -1471,15 +1423,10 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
       const byteDelta = text.length - oldText.length;
       let reused = 0;
       let next: H | null = null;
-      const forceFresh = !supportsShift || root === null;${shapeA ? `
-      if (!forceFresh) {
-        if (validate && isCst) assertEntriesVsNodes(entries, root as unknown as Node);
-        const got = tryReuseTopW(builder, shift!, entryHs, entries, text, prevToks, byteDelta, core.oldN, core.newN, core.prefix, core.suffix);
-        if (got) { next = got.root; entries = got.entries; entryHs = got.entryHs; reused = got.reused; }
-      }` : ''}${shapeB ? `
-      if (!forceFresh && entries.length > 0) {
-        if (validate && isCst) assertEntriesVsKids(entries, root as unknown as Node);
-        const got = tryReuseSegW(builder, shift!, entryHs, entries, text, prevToks, byteDelta, core.oldN, core.newN, core.prefix, core.suffix);
+      const forceFresh = !supportsShift || root === null;${topReuse ? `
+      if (!forceFresh${shapeB ? ' && entries.length > 0' : ''}) {
+        if (validate && isCst) assertEntriesVs${shapeA ? 'Nodes' : 'Kids'}(entries, root as unknown as Node);
+        const got = tryReuseW(builder, shift!, entryHs, entries, text, prevToks, byteDelta, core.oldN, core.newN, core.prefix, core.suffix);
         if (got) { next = got.root; entries = got.entries; entryHs = got.entryHs; reused = got.reused; }
       }` : ''}
       if (next === null) {

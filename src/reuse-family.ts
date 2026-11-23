@@ -97,26 +97,6 @@ const shiftEntryMeta: Fn = {
   ],
 };
 
-// The new root's entries (one per root child): the kept prefix, the re-parsed middle, and the
-// adopted suffix from adoptFrom, moved by the edit.
-const reuseEntries: Fn = {
-  name: 'reuseEntries',
-  doc: '',
-  params: [{ name: 'prefixMeta', ty: ENTRIES }, { name: 'midMeta', ty: ENTRIES }, { name: 'suffixMeta', ty: ENTRIES }, { name: 'adoptFrom', ty: 'idx' }, { name: 'byteDelta', ty: 'int' }, { name: 'tokDelta', ty: 'int' }],
-  ret: [ENTRIES],
-  body: [
-    { k: 'let', name: 'out', ty: ENTRIES, init: { k: 'newList', ty: ENTRIES, cap: bin('sub', bin('add', bin('add', len(v('prefixMeta')), len(v('midMeta'))), len(v('suffixMeta'))), v('adoptFrom')) } },
-    { k: 'extend', list: 'out', from: v('prefixMeta') },
-    { k: 'extend', list: 'out', from: v('midMeta') },
-    { k: 'for', v: 'i', from: v('adoptFrom'), to: len(v('suffixMeta')), body: [
-      { k: 'let', name: 'em', ty: ENTRY, init: { k: 'at', list: v('suffixMeta'), i: v('i') } },
-      { k: 'run', call: call('shiftEntryMeta', v('em'), v('byteDelta'), v('tokDelta')) },
-      { k: 'push', list: 'out', e: v('em') },
-    ] },
-    ret(v('out')),
-  ],
-};
-
 // The root's span over its entries: the first one's start, the last one's end (all zero without
 // entries).
 const reuseSpan: Fn = {
@@ -131,7 +111,7 @@ const reuseSpan: Fn = {
   ],
 };
 
-// Shape B's new entries: the kept prefix, the re-parsed middle and the adopted suffix from
+// The new root's entries: the kept prefix, the re-parsed middle and the adopted suffix from
 // adoptFrom (moved by the edit), each entry's kids placed after the ones before it.
 const segPart = (metas: string, from: Expr, shift: boolean): Stmt => ({
   k: 'for', v: 'i', from, to: len(v(metas)), body: [
@@ -142,8 +122,8 @@ const segPart = (metas: string, from: Expr, shift: boolean): Stmt => ({
     { k: 'set', name: 'kOff', e: bin('add', v('kOff'), recField(v('em'), 'kidCount')) },
   ],
 });
-const reuseSegEntries: Fn = {
-  name: 'reuseSegEntries',
+const reuseEntries: Fn = {
+  name: 'reuseEntries',
   doc: '',
   params: [{ name: 'prefixMeta', ty: ENTRIES }, { name: 'midMeta', ty: ENTRIES }, { name: 'suffixMeta', ty: ENTRIES }, { name: 'adoptFrom', ty: 'idx' }, { name: 'byteDelta', ty: 'int' }, { name: 'tokDelta', ty: 'int' }],
   ret: [ENTRIES],
@@ -199,14 +179,12 @@ const computeAlignCore: Fn = {
   ],
 };
 
-export const REUSE_FNS: Fn[] = [reuseBounds, reuseAdoptAt, reuseGaveUp, shiftEntryMeta, reuseEntries, reuseSpan, reuseSegEntries];
+export const REUSE_FNS: Fn[] = [reuseBounds, reuseAdoptAt, reuseGaveUp, shiftEntryMeta, reuseSpan, reuseEntries];
 
 // The functions a grammar's Doc uses: every Doc aligns the streams (computeAlignCore); the reuse
-// functions only with a reuse plan, and the entry list of its shape (A: reuseEntries, B: reuseSegEntries).
+// functions only with a reuse plan.
 export function reuseFamilyFns(ir: ParserIR): Fn[] {
-  if (!ir.reuse) return [computeAlignCore];
-  const unused = ir.reuse.kind === 'B' ? reuseEntries : reuseSegEntries;
-  return [computeAlignCore, ...REUSE_FNS.filter((f) => f !== unused)];
+  return ir.reuse ? [computeAlignCore, ...REUSE_FNS] : [computeAlignCore];
 }
 
 export function emitReuseFamily(ir: ParserIR, lowering: Lowering): string {

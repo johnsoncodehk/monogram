@@ -1257,6 +1257,16 @@ ${topOne}
         let meta = self.b.entry_meta(h, look, &self.toks);
         self.entries.push(meta);
     }
+    fn parse_top_entry(&mut self, sb: usize) -> Option<EntryMeta> {
+        self.look_reset();
+        let sp = self.pos;
+        let fr = match self.parse_top_one() { Some(fr) if fr.present => fr, _ => { self.back(sp); return None; } };
+        let look = self.look_end() as u32;
+        let mut em = self.b.entry_meta(fr.h, look, &self.toks);
+        em.kid_start = (self.scratch.len() - sb) as u32;
+        self.scratch.push(fr.h);
+        Some(em)
+    }
     fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
         let save = self.pos; let sb = self.scratch.len();
         self.entries.clear();
@@ -1518,7 +1528,7 @@ fn shift_subtree(nodes: &mut [Node], kids: &mut [i32], id: i32, byte_delta: isiz
         }
     }
 }
-fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], old_root: i32) {
+${shapeA ? `fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], old_root: i32) {
     let old = &nodes[old_root as usize];
     assert_eq!(entries.len(), old.kid_count as usize, "entry count vs root kids");
     for i in 0..entries.len() {
@@ -1533,74 +1543,8 @@ fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], 
         assert_eq!(e.end, nd.end, "end entry {}", i);
     }
 }
-` : '';
-  const reuseFnsA = shapeA ? `${reuseShared}impl<'a, B: Builder> Parser<'a, B> {
-    fn finish_reuse(&mut self, rule_id: u16, prefix_kids: &[B::H], mid: &[B::H], suffix_cand: &[B::H], prefix_meta: &[EntryMeta], mid_meta: &[EntryMeta], suffix_meta: &[EntryMeta], adopt_from: usize, byte_delta: isize) -> (B::H, usize) {
-        let adopted = &suffix_cand[adopt_from..];
-        let mut tok_delta = 0isize;
-        if !adopted.is_empty() {
-            let s = suffix_meta[adopt_from].tok_start as usize;
-            tok_delta = self.pos as isize - s as isize;
-        }
-        let mut adopted_hs: Vec<B::H> = Vec::with_capacity(adopted.len());
-        for &s in adopted {
-            adopted_hs.push(self.b.shift(s, byte_delta, tok_delta));
-        }
-        let mut children: Vec<B::H> = Vec::with_capacity(prefix_kids.len() + mid.len() + adopted_hs.len());
-        children.extend_from_slice(prefix_kids);
-        children.extend_from_slice(mid);
-        children.extend_from_slice(&adopted_hs);
-        let new_entries = reuse_entries(prefix_meta, mid_meta, suffix_meta, adopt_from, byte_delta, tok_delta);
-        let (off, end, tok_start, tok_end) = reuse_span(&new_entries);
-        let sb = self.scratch.len();
-        self.scratch.extend_from_slice(&children);
-        self.b.node(&mut self.scratch, sb, rule_id, off, end, tok_start, tok_end);
-        let root = self.scratch.pop().expect("finish_reuse root");
-        self.entries = new_entries;
-        self.pos = self.toks.len();
-        (root, prefix_kids.len() + adopted_hs.len())
-    }
-    fn try_reuse_top(&mut self, old_root: B::H, old_entries: &[EntryMeta], new_toks: Vec<Tok>, byte_delta: isize, old_n: usize, prefix: usize, suffix: usize, validate: bool) -> Option<(B::H, usize)> {
-        if validate { self.b.validate_entries(old_entries, old_root); }
-        let old_kids = self.b.root_kids(old_root);
-        let (prefix_len, suffix_start) = reuse_bounds(old_entries, prefix, old_n, suffix);
-        let prefix_kids = old_kids[..prefix_len].to_vec();
-        let suffix_cand = old_kids[suffix_start..].to_vec();
-        let prefix_meta = &old_entries[..prefix_len];
-        let suffix_meta = &old_entries[suffix_start..];
-        self.toks = new_toks;
-        self.pos = if prefix_len > 0 { prefix_meta[prefix_len - 1].tok_end as usize } else { 0 };
-        self.scratch.clear();
-        let mut mid: Vec<B::H> = Vec::new();
-        let mut mid_meta: Vec<EntryMeta> = Vec::new();
-        let rule_id = self.b.rule_id_of(old_root);
-        let try_hit = |p: &mut Parser<'a, B>, mid: &[B::H], mid_meta: &[EntryMeta]| -> Option<(B::H, usize)> {
-            let at = reuse_adopt_at(suffix_meta, old_n, suffix, p.toks.len() - p.pos);
-            if at < 0 { return None; }
-            Some(p.finish_reuse(rule_id, &prefix_kids, mid, &suffix_cand, prefix_meta, mid_meta, suffix_meta, at as usize, byte_delta))
-        };
-        let passed = |p: &Parser<'a, B>| reuse_gave_up(suffix_meta, old_n, p.toks.len() - p.pos);
-        if let Some(hit) = try_hit(self, &mid, &mid_meta) { return Some(hit); }
-        if passed(self) { return None; }
-        loop {
-            if self.pos >= self.toks.len() {
-                return try_hit(self, &mid, &mid_meta);
-            }
-            self.look_reset();
-            let sp = self.pos;
-            let fr = match self.parse_top_one() { Some(fr) => fr, None => { self.back(sp); return None; } };
-            if !fr.present { self.back(sp); return None; }
-            let look = self.look_end() as u32;
-            let em = self.b.entry_meta(fr.h, look, &self.toks);
-            mid_meta.push(em);
-            mid.push(fr.h);
-            if let Some(hit) = try_hit(self, &mid, &mid_meta) { return Some(hit); }
-            if passed(self) { return None; }
-        }
-    }
-}
-` : '';
-  const reuseFnsB = shapeB ? `${reuseShared}fn assert_entries_vs_kids(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], old_root: i32) {
+` : ''}` : '';
+  const reuseFns = topReuse ? `${reuseShared}${shapeB ? `fn assert_entries_vs_kids(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], old_root: i32) {
     let old = &nodes[old_root as usize];
     for i in 0..entries.len() {
         let e = &entries[i];
@@ -1616,8 +1560,8 @@ fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], 
         }
     }
 }
-impl<'a, B: Builder> Parser<'a, B> {
-    fn finish_reuse_seg(&mut self, rule_id: u16, prefix_kids: &[B::H], mid_kids: &[B::H], prefix_meta: &[EntryMeta], mid_meta: &[EntryMeta], suffix_meta: &[EntryMeta], old_root: B::H, adopt_from: usize, byte_delta: isize) -> (B::H, usize) {
+` : ''}impl<'a, B: Builder> Parser<'a, B> {
+    fn finish_reuse(&mut self, rule_id: u16, prefix_kids: &[B::H], mid_kids: &[B::H], prefix_meta: &[EntryMeta], mid_meta: &[EntryMeta], suffix_meta: &[EntryMeta], old_root: B::H, adopt_from: usize, byte_delta: isize) -> (B::H, usize) {
         let adopted_segs = &suffix_meta[adopt_from..];
         let mut tok_delta = 0isize;
         if !adopted_segs.is_empty() {
@@ -1635,19 +1579,18 @@ impl<'a, B: Builder> Parser<'a, B> {
         children.extend_from_slice(prefix_kids);
         children.extend_from_slice(mid_kids);
         children.extend_from_slice(&adopted_kids);
-        let new_entries = reuse_seg_entries(prefix_meta, mid_meta, suffix_meta, adopt_from, byte_delta, tok_delta);
+        let new_entries = reuse_entries(prefix_meta, mid_meta, suffix_meta, adopt_from, byte_delta, tok_delta);
         let (off, end, tok_start, tok_end) = reuse_span(&new_entries);
         let sb = self.scratch.len();
         self.scratch.extend_from_slice(&children);
         self.b.node(&mut self.scratch, sb, rule_id, off, end, tok_start, tok_end);
-        let root = self.scratch.pop().expect("finish_reuse_seg root");
+        let root = self.scratch.pop().expect("finish_reuse root");
         self.entries = new_entries;
         self.pos = self.toks.len();
         (root, prefix_meta.len() + adopted_segs.len())
     }
-    fn try_reuse_seg(&mut self, old_root: B::H, old_entries: &[EntryMeta], new_toks: Vec<Tok>, byte_delta: isize, old_n: usize, prefix: usize, suffix: usize, validate: bool) -> Option<(B::H, usize)> {
-        if old_entries.is_empty() { return None; }
-        if validate { self.b.validate_entry_kids(old_entries, old_root); }
+    fn try_reuse(&mut self, old_root: B::H, old_entries: &[EntryMeta], new_toks: Vec<Tok>, byte_delta: isize, old_n: usize, prefix: usize, suffix: usize, validate: bool) -> Option<(B::H, usize)> {
+        ${shapeB ? 'if old_entries.is_empty() { return None; }\n        ' : ''}if validate { self.b.validate_entries(old_entries, old_root); }
         let (prefix_len, suffix_start) = reuse_bounds(old_entries, prefix, old_n, suffix);
         let prefix_meta = &old_entries[..prefix_len];
         let suffix_meta = &old_entries[suffix_start..];
@@ -1666,7 +1609,7 @@ impl<'a, B: Builder> Parser<'a, B> {
         let try_hit = |p: &mut Parser<'a, B>, mid_kids: &[B::H], mid_meta: &[EntryMeta]| -> Option<(B::H, usize)> {
             let at = reuse_adopt_at(suffix_meta, old_n, suffix, p.toks.len() - p.pos);
             if at < 0 { return None; }
-            Some(p.finish_reuse_seg(rule_id, &prefix_kids, mid_kids, prefix_meta, mid_meta, suffix_meta, old_root, at as usize, byte_delta))
+            Some(p.finish_reuse(rule_id, &prefix_kids, mid_kids, prefix_meta, mid_meta, suffix_meta, old_root, at as usize, byte_delta))
         };
         let passed = |p: &Parser<'a, B>| reuse_gave_up(suffix_meta, old_n, p.toks.len() - p.pos);
         if let Some(hit) = try_hit(self, &mid_kids, &mid_meta) { return Some(hit); }
@@ -1687,7 +1630,7 @@ impl<'a, B: Builder> Parser<'a, B> {
                 return try_hit(self, &mid_kids, &mid_meta);
             }
             let sb = self.scratch.len();
-            let meta = match self.parse_loop_seg(sb) {
+            let meta = match self.parse_${shapeA ? 'top_entry' : 'loop_seg'}(sb) {
                 Some(meta) => meta,
                 None => return try_hit(self, &mid_kids, &mid_meta),
             };
@@ -1701,7 +1644,6 @@ impl<'a, B: Builder> Parser<'a, B> {
     }
 }
 ` : '';
-  const reuseFns = reuseFnsA || reuseFnsB;
   const treeEqFn = `
 fn cmp_kid(nodes_a: &[Node], kids_a: &[i32], toks_a: &[Tok], kid_a: i32, nodes_b: &[Node], kids_b: &[i32], toks_b: &[Tok], kid_b: i32) -> bool {
     if (kid_a < 0) != (kid_b < 0) { return false; }
@@ -1758,7 +1700,7 @@ fn check_tree_eq_arena(text: &str, toks_a: &[Tok], nodes: &[Node], kids: &[i32],
             let old_entries = std::mem::take(&mut self.entries);
             let old_root = self.root.take().unwrap();
             let mut p = Parser { toks: Vec::new(), pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &text, b, scratch, entries: Vec::new() };
-            if let Some((root, n)) = p.try_reuse_${shapeA ? 'top' : 'seg'}(old_root, &old_entries, toks_from_meta(&text, &meta), byte_delta, old_n, prefix, suffix, self.validate) {
+            if let Some((root, n)) = p.try_reuse(old_root, &old_entries, toks_from_meta(&text, &meta), byte_delta, old_n, prefix, suffix, self.validate) {
                 self.root = Some(root);
                 reused = n;
                 self.last_pos = p.pos;
@@ -2021,10 +1963,7 @@ pub trait Builder {
     /// Arena node count for baseline after fresh parse. Default 0.
     #[inline(always)]
     fn arena_len(&self) -> usize { 0 }
-    /// Entry-level children of a root (shape-A reuse). Default empty.
-    #[inline(always)]
-    fn root_kids(&self, _root: Self::H) -> Vec<Self::H> { Vec::new() }
-    /// Kid at relative index under root (shape B). Default dummy.
+    /// Kid at relative index under root (the root's entries' kids). Default dummy.
     #[inline(always)]
     fn root_kid_at(&self, _root: Self::H, _idx: usize) -> Self::H { Self::dummy_h() }
     /// Rule id of a rule-node handle (reuse finish). Default 0.
@@ -2033,9 +1972,7 @@ pub trait Builder {
     /// D1 EntryMeta ↔ arena asserts (CstBuilder). Default no-op.
     #[inline(always)]
     fn validate_entries(&self, _entries: &[EntryMeta], _root: Self::H) {}
-${shapeB ? `    #[inline(always)]
-    fn validate_entry_kids(&self, _entries: &[EntryMeta], _root: Self::H) {}
-` : ``}    /// treeEq oracle (CstBuilder). Default true (unused when SUPPORTS_TREE_EQ=false).
+    /// treeEq oracle (CstBuilder). Default true (unused when SUPPORTS_TREE_EQ=false).
     #[inline(always)]
     fn check_tree_eq(&self, _text: &str, _root: Option<Self::H>) -> bool { true }
     /// Where the builder keeps the parse stream its handles' leaves index (CstBuilder and
@@ -2181,11 +2118,6 @@ ${reuse ? `    #[inline(always)]
     #[inline(always)]
     fn arena_len(&self) -> usize { self.nodes.len() }
     #[inline(always)]
-    fn root_kids(&self, root: i32) -> Vec<i32> {
-        let old = &self.nodes[root as usize];
-        (0..old.kid_count).map(|i| self.kids[old.kid_start as usize + i as usize]).collect()
-    }
-    #[inline(always)]
     fn root_kid_at(&self, root: i32, idx: usize) -> i32 {
         let old = &self.nodes[root as usize];
         self.kids[old.kid_start as usize + idx]
@@ -2194,13 +2126,9 @@ ${reuse ? `    #[inline(always)]
     fn rule_id_of(&self, h: i32) -> u16 { self.nodes[h as usize].rule_id }
     #[inline(always)]
     fn validate_entries(&self, entries: &[EntryMeta], root: i32) {
-        assert_entries_vs_nodes(entries, &self.nodes, &self.kids, root);
+        assert_entries_vs_${shapeB ? 'kids' : 'nodes'}(entries, &self.nodes, &self.kids, root);
     }
-${shapeB ? `    #[inline(always)]
-    fn validate_entry_kids(&self, entries: &[EntryMeta], root: i32) {
-        assert_entries_vs_kids(entries, &self.nodes, &self.kids, root);
-    }
-` : ``}    #[inline(always)]
+    #[inline(always)]
     fn check_tree_eq(&self, text: &str, root: Option<i32>) -> bool {
         check_tree_eq_arena(text, &self.toks, &self.nodes, &self.kids, root)
     }
@@ -2327,12 +2255,6 @@ impl Builder for SlimBuilder {
     fn arena_len(&self) -> usize { self.nodes.len() }
     #[inline(always)]
     fn rule_id_of(&self, h: i32) -> u16 { if h < 0 { 0 } else { self.nodes[h as usize].rule_id } }
-    #[inline(always)]
-    fn root_kids(&self, root: i32) -> Vec<i32> {
-        if root < 0 { return Vec::new(); }
-        let old = &self.nodes[root as usize];
-        (0..old.kid_count).map(|i| self.kids[old.kid_start as usize + i as usize]).collect()
-    }
     #[inline(always)]
     fn root_kid_at(&self, root: i32, idx: usize) -> i32 {
         let old = &self.nodes[root as usize];
