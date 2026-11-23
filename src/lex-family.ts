@@ -757,11 +757,11 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
     const join = e.tagStart ? [
       if_(and(hasAt('te', e.tagOpen), not(opensTag('te'))), [
         set('hit', I(0)), if_(gt('te', 'p'), [stopAt('te')]),
-        if_(eq('hit', I(0)), [set('te', add('te', L)), set('go', I(1))]),
+        if_(eq('hit', I(0)), [set('te', add('te', L)), set('more', I(1))]),
       ]),
     ] : [];
-    children.push(let_('te', 'p'), let_('go', I(1)), let_('hit', I(0)), while_(ne('go', I(0)), [
-      set('go', I(0)),
+    children.push(let_('te', 'p'), let_('more', I(1)), let_('hit', I(0)), while_(ne('more', I(0)), [
+      set('more', I(0)),
       let_('tm', call(scannerName(e.text), 'te')),
       let_('tr', 'te'), if_(gt('tm', 'te'), [set('tr', 'tm')]),
       let_('q', 'te'), if_(eq('te', 'p'), [set('q', add('p', I(1)))]),
