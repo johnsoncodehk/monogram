@@ -35,11 +35,15 @@ const RENDERED: AssertionClass[] = ['lowered', 'reserved-set'];
 // carries the expression NUD's guards (`not('super')`, `not('new')`: reserved +2; the reserved-word
 // guard: reserved-set +5, rendered) and its async function arms their `sameLine` (lowered +2); in
 // TypeScript a plain decorator is not `@new` (`not('@new')`: lookahead1 +1).
+// A class heritage is a LeftHandSideExpression with NewTarget as its base (land/shape-class-heritage):
+// the heritage's own reserved-guarded identifier arm is NewTarget's (reserved-set -1); JavaScript's
+// six `not('extends')` list guards are gone with its list (lookahead1 -6); in TypeScript one
+// `sameLine` moves from lowered to scanner (lowered -1, scanner +1).
 const PINNED: Record<string, Partial<Record<AssertionClass, number>>> = {
-  javascript:      { lowered: 43,  vacuous: 6,  'reserved-set': 46, scanner: 0,  reserved: 4, lookahead1: 23, lookahead: 8 },
-  typescript:      { lowered: 133, vacuous: 60, 'reserved-set': 68, scanner: 6,  reserved: 4, lookahead1: 89, lookahead: 69, 'left-context': 2 },
-  javascriptreact: { lowered: 45,  vacuous: 6,  'reserved-set': 46, scanner: 0,  reserved: 4, lookahead1: 23, lookahead: 8 },
-  typescriptreact: { lowered: 135, vacuous: 60, 'reserved-set': 68, scanner: 6,  reserved: 4, lookahead1: 89, lookahead: 69, 'left-context': 2 },
+  javascript:      { lowered: 43,  vacuous: 6,  'reserved-set': 45, scanner: 0,  reserved: 4, lookahead1: 17, lookahead: 8 },
+  typescript:      { lowered: 132, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 4, lookahead1: 89, lookahead: 69, 'left-context': 2 },
+  javascriptreact: { lowered: 45,  vacuous: 6,  'reserved-set': 45, scanner: 0,  reserved: 4, lookahead1: 17, lookahead: 8 },
+  typescriptreact: { lowered: 134, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 4, lookahead1: 89, lookahead: 69, 'left-context': 2 },
   yaml:            { lowered: 1,  scanner: 16, lookahead1: 6 },
 };
 

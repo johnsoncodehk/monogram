@@ -38,7 +38,6 @@ enum TokenType {
   _SAME_LINE_20,
   _SAME_LINE_21,
   _SAME_LINE_22,
-  _SAME_LINE_23,
 };
 
 // The scanner is stateless — tree-sitter's `valid_symbols` already encodes
@@ -2166,12 +2165,8 @@ static const bool _SAME_LINE_21_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 static const bool _SAME_LINE_21_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 static const bool _SAME_LINE_22_AFTER_EXACT[] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 static const bool _SAME_LINE_22_AFTER[] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_22_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_22_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 static const bool _SAME_LINE_22_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_23_AFTER_EXACT[] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_23_AFTER[] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_23_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_23_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 static const ZeroWidth ZERO_WIDTH[] = {
   { _SAME_LINE_1, false, false, false, 0x0ull, 0x0ull, 0x0ull, _SAME_LINE_1_AFTER_EXACT, _SAME_LINE_1_AFTER, _SAME_LINE_1_CONT, _SAME_LINE_1_AHEAD },
   { _LINE_END_1, true, true, true, 0x7ffull, 0x80ull, 0x0ull, _LINE_END_1_AFTER_EXACT, _LINE_END_1_AFTER, _LINE_END_1_CONT, _LINE_END_1_AHEAD },
@@ -2196,7 +2191,6 @@ static const ZeroWidth ZERO_WIDTH[] = {
   { _SAME_LINE_20, false, false, false, 0x47full, 0x0ull, 0x0ull, _SAME_LINE_20_AFTER_EXACT, _SAME_LINE_20_AFTER, _SAME_LINE_20_CONT, _SAME_LINE_20_AHEAD },
   { _SAME_LINE_21, false, false, false, 0x0ull, 0x0ull, 0x0ull, _SAME_LINE_21_AFTER_EXACT, _SAME_LINE_21_AFTER, _SAME_LINE_21_CONT, _SAME_LINE_21_AHEAD },
   { _SAME_LINE_22, false, false, false, 0x0ull, 0x0ull, 0x0ull, _SAME_LINE_22_AFTER_EXACT, _SAME_LINE_22_AFTER, _SAME_LINE_22_CONT, _SAME_LINE_22_AHEAD },
-  { _SAME_LINE_23, false, false, false, 0x0ull, 0x0ull, 0x0ull, _SAME_LINE_23_AFTER_EXACT, _SAME_LINE_23_AFTER, _SAME_LINE_23_CONT, _SAME_LINE_23_AHEAD },
 };
 // A line-end token where its assertion holds (a line break or the end of the input, or a lookahead
 // arm's token next); a same-line marker where no line break comes first. Either only when the next
@@ -2218,7 +2212,7 @@ static int scan_zero_width(TSLexer *lexer, const bool *valid_symbols) {
   if (lit == -2) return 0;
   // Two passes: a keyword the token names itself first, then a keyword read as the word token.
   for (int pass = 0; pass < 2; pass++)
-  for (unsigned i = 0; i < 24; i++) {
+  for (unsigned i = 0; i < 23; i++) {
     const ZeroWidth *z = &ZERO_WIDTH[i];
     if (!valid_symbols[z->symbol]) continue;
     bool ahead = !end && (lit >= 0 ? z->ahead_lit[lit] : (cand & z->ahead_tok) != 0);
@@ -2248,7 +2242,7 @@ bool tree_sitter_typescript_external_scanner_scan(void *payload, TSLexer *lexer,
   }
 
   // Zero-width tokens (a line-end alternative, a same-line marker) where one is valid.
-  if (valid_symbols[_SAME_LINE_1] || valid_symbols[_LINE_END_1] || valid_symbols[_SAME_LINE_2] || valid_symbols[_SAME_LINE_3] || valid_symbols[_SAME_LINE_4] || valid_symbols[_SAME_LINE_5] || valid_symbols[_SAME_LINE_6] || valid_symbols[_SAME_LINE_7] || valid_symbols[_SAME_LINE_8] || valid_symbols[_SAME_LINE_9] || valid_symbols[_SAME_LINE_10] || valid_symbols[_SAME_LINE_11] || valid_symbols[_SAME_LINE_12] || valid_symbols[_SAME_LINE_13] || valid_symbols[_SAME_LINE_14] || valid_symbols[_SAME_LINE_15] || valid_symbols[_SAME_LINE_16] || valid_symbols[_SAME_LINE_17] || valid_symbols[_SAME_LINE_18] || valid_symbols[_SAME_LINE_19] || valid_symbols[_SAME_LINE_20] || valid_symbols[_SAME_LINE_21] || valid_symbols[_SAME_LINE_22] || valid_symbols[_SAME_LINE_23]) {
+  if (valid_symbols[_SAME_LINE_1] || valid_symbols[_LINE_END_1] || valid_symbols[_SAME_LINE_2] || valid_symbols[_SAME_LINE_3] || valid_symbols[_SAME_LINE_4] || valid_symbols[_SAME_LINE_5] || valid_symbols[_SAME_LINE_6] || valid_symbols[_SAME_LINE_7] || valid_symbols[_SAME_LINE_8] || valid_symbols[_SAME_LINE_9] || valid_symbols[_SAME_LINE_10] || valid_symbols[_SAME_LINE_11] || valid_symbols[_SAME_LINE_12] || valid_symbols[_SAME_LINE_13] || valid_symbols[_SAME_LINE_14] || valid_symbols[_SAME_LINE_15] || valid_symbols[_SAME_LINE_16] || valid_symbols[_SAME_LINE_17] || valid_symbols[_SAME_LINE_18] || valid_symbols[_SAME_LINE_19] || valid_symbols[_SAME_LINE_20] || valid_symbols[_SAME_LINE_21] || valid_symbols[_SAME_LINE_22]) {
     int zw = scan_zero_width(lexer, valid_symbols);
     if (zw == 1) return true;
     if (zw == 0) return false;
