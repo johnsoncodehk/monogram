@@ -2724,16 +2724,16 @@ function emitParseWithHelpers(ir: ParserIR, shapeB: boolean): string {
   const reuse = !!ir.reuse;
   return `
 pub fn parse_with<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> Option<B::H> {
-    match parse_run(src, b) {
-        (_, Err(e)) => panic!("{}", lex_error(src, e).msg),
-        (g, Ok(Some(fr))) if g.p.pos == g.p.toks.len() => Some(fr.root()),
+    parse_run(src, b, |p, fr| match fr {
+        Err(e) => panic!("{}", lex_error(src, e).msg),
+        Ok(Some(fr)) if p.pos == p.toks.len() => Some(fr.root()),
         _ => None,
-    }
+    })
 }
 
-// Inlined: parse_with's one call.
+// Inlined; its outcome read in place (no move of the parser).
 #[inline(always)]
-fn parse_run<'x, 'a, B: Builder + Default>(src: &'a str, b: &'x mut B) -> (ParseGuard<'x, 'a, B>, Result<Option<Spanned<B::H>>, LexErr>) {
+fn parse_run<'a, B: Builder + Default, R>(src: &'a str, b: &mut B, k: impl FnOnce(&mut Parser<'a, B>, Result<Option<Spanned<B::H>>, LexErr>) -> R) -> R {
     // A builder that parsed before is reused: its token buffer, arena and workspace are emptied
     // (capacity kept), so nothing of the previous parse stays reachable and nothing is allocated
     // again. The guard hands them back to the builder when the parse ends, also by a panic (input
@@ -2744,10 +2744,10 @@ fn parse_run<'x, 'a, B: Builder + Default>(src: &'a str, b: &'x mut B) -> (Parse
     b.restore((0, 0));
     let owned = std::mem::take(b);
     let mut g = ParseGuard { home: b, lex: ws.lex, p: Parser { toks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src, b: owned, scratch: ws.scratch${reuse ? ', entries: ws.entries' : ''} } };
-    if let Some(e) = lex_into(src, &mut g.p.toks, &mut g.lex) { return (g, Err(e)); }
+    if let Some(e) = lex_into(src, &mut g.p.toks, &mut g.lex) { return k(&mut g.p, Err(e)); }
     g.p.scratch.clear();
     let fr = g.p.parse_${ir.entry}();
-    (g, Ok(fr))
+    k(&mut g.p, Ok(fr))
 }
 
 /// Returns a parse's buffers to the builder parse_with took them from, when the parse ends.
