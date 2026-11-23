@@ -221,9 +221,9 @@ first-error agreement 57.5%.
 
 - `test/incremental-grammars.ts` — generative inputs × seeded edits × all 6
   grammars: every step's tree+errors byte-equal to fresh, self-consistent
-  spans, no throws (610 steps).
-- `test/incremental-verify.ts`, `test/multi-doc.ts` — real-file edit scripts
-  and interleaved documents under the same byte-equality.
+  spans, no throws (610 steps); with TypeScript boundary-glue edit pairs and
+  the arena-reclamation (compaction) path on a long edit session.
+- `test/multi-doc.ts` — interleaved documents under the same byte-equality.
 - `test/recovery.ts` — strict-path identity on valid texts, totality and
   determinism on an invalid corpus, a char-by-char typing session, and
   exact-match diagnostic pins (synthesis quality must not silently regress to
