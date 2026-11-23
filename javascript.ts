@@ -751,13 +751,10 @@ export const memberWord = (words: string[], rules: Record<string, unknown[]>, ah
     ahead,
   ]);
 };
-// JavaScript's ClassElementName also starts with a LegacyNumber (its MemberName's; strict class code
-// refuses it, an early error), so its member words look for that start too.
-const jsMemberAhead = not(not(alt(memberStart, LegacyNumber)));
-const staticWord = memberWord(['static'], memberWordRules, jsMemberAhead);
-const asyncWord = memberWord(['async'], memberWordRules, jsMemberAhead);
-const accessorWord = memberWord(['accessor'], memberWordRules, jsMemberAhead);
-const getSetWord = memberWord(['get', 'set'], memberWordRules, jsMemberAhead);
+const staticWord = memberWord(['static'], memberWordRules);
+const asyncWord = memberWord(['async'], memberWordRules);
+const accessorWord = memberWord(['accessor'], memberWordRules);
+const getSetWord = memberWord(['get', 'set'], memberWordRules);
 // Class member ( params ) body, with params+body routed to a [Await]/[Yield] family:
 // plain methods reset (a method body has its OWN, non-inherited context — the spec's
 // implicit function boundary), generators yield, async await, async-generators both.
