@@ -1443,6 +1443,7 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\tif rhs < 0 { p.back(ledSave); p.scratch = p.scratch[:sb]; break }
 \t\tp.scratch = append(p.scratch, rhs)
 \t\tleft = ${fin}
+\t\tif p.capped { p.form = 1; return left }
 \t\tform = 1; tailClosed = true
 \t}`,
     entry: `${goPrattOpTables(r, ids)}
@@ -1463,7 +1464,8 @@ func (p *engine) parse${r.name}() int32 {
 ${label ? 'LedLoop:\n' : ''}\tfor {
 \t\tt := p.peek()
 \t\tif t == nil { break }`,
-    bpClose: `\tp.form = form
+    bpClose: `\tp.capped = false
+\tp.form = form
 \treturn left
 }`,
     nudEnter: `func (p *engine) nud_${r.name}(minBp int) int32 {
@@ -2008,6 +2010,7 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\tif !rok { p.back(ledSave); p.scratch = p.scratch[:sb]; break }
 \t\tif rhs.present { p.scratch = append(p.scratch, rhs.h) }
 \t\tleft = ${fin}
+\t\tif p.capped { p.form = 1; return left, true }
 \t\tform = 1; tailClosed = true
 \t}`,
     entry: `func (p *${recv}) parse${r.name}W() (spanned, bool) {
@@ -2027,7 +2030,8 @@ ${kids.map((k) => `\t\tcase ${k}:
 ${label ? 'LedLoop:\n' : ''}\tfor {
 \t\tt := p.peek()
 \t\tif t == nil { break }`,
-    bpClose: `\tp.form = form
+    bpClose: `\tp.capped = false
+\tp.form = form
 \treturn left, true
 }`,
     nudEnter: `func (p *${recv}) nudW_${r.name}(minBp int) (spanned, bool) {
