@@ -3083,9 +3083,10 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
   if (ir.reuse?.kind === 'A') {
     const rec = ruleAt[rid(ir.entry)]!;
     const lst = deref(rec + 4);
-    const star = deref(lst + 1);
-    if (data[rec] !== REC_RD || data[rec + 2] !== 1 || data[lst] !== 1 || data[star] !== REC_S_STAR) throw new Error('recoveryTables: the reuse plan\'s entry is not one repetition');
-    el = deref(star + 2);
+    let star = deref(lst + 1);
+    while (data[star] === REC_S_SHARED) star = deref(star + 3);
+    // A plan whose entry the table holds otherwise (a guarded alternative) recovers the whole input.
+    if (data[rec] === REC_RD && data[rec + 2] === 1 && data[lst] === 1 && data[star] === REC_S_STAR) el = deref(star + 2);
   }
   const sync = ir.entrySync === null ? -1 : firstSig({ lits: ir.entrySync.lits.filter((l) => lidOf(ids, l) > 0), toks: ir.entrySync.toks });
   const [errId, missId] = reservedRuleIds(ar);
