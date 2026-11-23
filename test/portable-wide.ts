@@ -4,6 +4,8 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createParser } from '../src/gen-parser.ts';
 import { canon, ECMASCRIPT, errText, finish, gate, prepareAll, selectedCases, skelObj, skeleton, type Case, type Runner } from './portable-harness.ts';
+// Every rule level interpreted (test/portable-recovery.ts INTERP_ALL).
+const INTERP_ALL = 1 << 30;
 
 // ── The wide class: the pinned external corpora, WHOLE, every runner ≡ the interpreter ──
 // The parity corpus holds what the grammar derives and what someone wrote down; the interpreter is
@@ -71,6 +73,10 @@ function wideClass(c: Case, runners: Runner[], oracle: { parse: (src: string) =>
     const ms = new Map<string, number>(runners.map((r) => [r.label, 0]));
     const off = new Map<string, number>(runners.map((r) => [r.label, 0]));
     let oracleMs = 0, accepted = 0;
+    // The fourth column: the strict interpreter of the recovery option (recovery-family.ts), every
+    // rule level interpreted, against the TS target's native parse of the same file (verdict + tree).
+    const tsr = runners.find((r) => r.label === 'typescript');
+    let interpMs = 0, interpOff = 0;
     for (let i = 0; i < files.length; i += WIDE_CHUNK) {
       const chunk = files.slice(i, i + WIDE_CHUNK);
       const srcs = chunk.map((f) => readFileSync(f, 'utf8'));
@@ -81,14 +87,25 @@ function wideClass(c: Case, runners: Runner[], oracle: { parse: (src: string) =>
       oracleMs += Date.now() - o0;
       accepted += want.filter((w) => w.ok).length;
       const disagree = chunk.map((): string[] => []);
+      let native: ReturnType<Runner['batch']> = [];
       for (const r of runners) {
         const r0 = Date.now();
         const got = r.batch(srcs);
+        if (r === tsr) native = got;
         ms.set(r.label, ms.get(r.label)! + Date.now() - r0);
         chunk.forEach((_f, j) => {
           const w = want[j]!, g = got[j]!;
           if (w.stack) return;   // the interpreter's own stack, not a verdict
           if (w.ok !== g.ok || (w.ok && g.ok && w.skel !== canon(skeleton(g.cst)))) { disagree[j]!.push(r.label); off.set(r.label, off.get(r.label)! + 1); }
+        });
+      }
+      if (tsr) {
+        const i0 = Date.now();
+        const got = tsr.interp(srcs, INTERP_ALL);
+        interpMs += Date.now() - i0;
+        got.forEach((g, j) => {
+          const nat = native[j]!;
+          if (g.ok !== nat.ok || (g.ok && g.cst !== nat.cst)) { interpOff++; if (interpOff <= 10) console.log(`      interpreter ≢ the TS target's native parse: ${wideName(chunk[j]!)}`); }
         });
       }
       chunk.forEach((f, j) => {
@@ -99,6 +116,10 @@ function wideClass(c: Case, runners: Runner[], oracle: { parse: (src: string) =>
     }
     console.log(`  ${c.grammar}: wide corpus ${name}: ${files.length} files (${accepted} accepted by the interpreter, ${(oracleMs / 1000).toFixed(1)}s)`);
     for (const r of runners) console.log(`  ${c.grammar}/${r.label}: wide corpus ${name}: ${files.length - off.get(r.label)!}/${files.length} ≡ interpreter (verdict + rule skeleton), ${(ms.get(r.label)! / 1000).toFixed(1)}s`);
+    if (tsr) {
+      console.log(`  ${c.grammar}/typescript: wide corpus ${name}: the recovery interpreter (forced) ≡ the native parse (verdict + tree) on ${files.length - interpOff}/${files.length}, ${(interpMs / 1000).toFixed(1)}s`);
+      gate.failures += interpOff;
+    }
       }
 }
 // The run against the record (see WIDE_RECORD), for the grammars and targets this run covered.
