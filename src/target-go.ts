@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { blockBody, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -70,12 +70,16 @@ const commitSwGo = (t: string): CommitLowering => ({
 type GoUndo = { take: string; undo: string; sb: string; save: string };
 const UNDO_GO: GoUndo = { take: 'm := p.mark()', undo: 'p.reset(m)', sb: 'm.sb', save: 'm.pos' };
 const undoGoWc = (recv: string): GoUndo => ({ take: `save := p.pos; sb := len(p.scratch); ${arenaCkpt()}`, undo: `p.back(save); ${lostGoW(recv)}`, sb: 'sb', save: 'save' });
+// The direct engine's node over a commit's extent (finish is not inlined: a helper around it
+// would add a call, measured by -gcflags=-m: over Go's inlining budget).
+const finGo = (rid: number) => (sb: string, save: string) => `p.finish(${rid}, ${sb}, p.offAt(${save}), ${save})`;
 const commitBodyGo = (cond: string, undo: GoUndo | null, nullable: boolean, fin: (sb: string, save: string) => string, ret: (n: string) => string) => (undo !== null
   ? `{ ${undo.take}; if ${cond}${nullable ? ` && p.pos > ${undo.save}` : ''} { ${ret(fin(undo.sb, undo.save))} }; ${undo.undo} }`
   : `{ save := p.pos; sb := len(p.scratch); if ${cond} { ${ret(fin('sb', 'save'))} } }`);
 // A committed candidate's statement: `body` when conds hold, then `fail` (unless body always returns).
+// With no condition the body's block is the statement's own (blockBody).
 const commitGo = (conds: string[], body: string, fail: string, returns = false) =>
-  `{ ${conds.length ? `if ${conds.join(' && ')} ${body.startsWith('{') ? body : `{ ${body} }`}` : body}${conds.length || !returns ? `; ${fail}` : ''} }`;
+  `{ ${conds.length ? `if ${conds.join(' && ')} ${body.startsWith('{') ? body : `{ ${body} }`}` : blockBody(body) ?? body}${conds.length || !returns ? `; ${fail}` : ''} }`;
 // Whether the candidate i that just ended at pos beats the best so far: it ends past it, or — a
 // Dispatch `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is
 // kept only in a list that has ranked candidates.
@@ -1069,12 +1073,15 @@ ${recv === 'engine'
   ? `func (p *engine) mark() mark { return mark{p.pos, len(p.scratch), len(p.nodes), len(p.kids)} }
 func (p *engine) reset(m mark) { p.back(m.pos); p.scratch = p.scratch[:m.sb]; p.nodes = p.nodes[:m.nb]; p.kids = p.kids[:m.kb] }
 // nudNone: a NUD that matched nothing, from its commit switch: the state its frame leaves then.
-func (p *engine) nudNone() int32 { p.capped = false; p.form = 0; p.tail = false; return -1 }`
+func (p *engine) nudNone() int32 { p.capped = false; p.form = 0; p.tail = false; return -1 }
+// nudOk: a committed NUD arm's node n, with the state its frame leaves for it (inlined).
+func (p *engine) nudOk(n int32, tail, capped bool) int32 { p.form = 0; p.tail = tail; p.capped = capped; return n }`
   // Written so that it fits Go's inlining budget (cost 77 of 80). A reset method around the
   // builder's Restore cannot (cost 86 and more with every form tried), and a call where the undo
   // was inline would be added work on every failed branch, so the undo stays printed in place.
   : `func (p *${recv}) mark() (m mark) { m.nb, m.kb = p.b.Checkpoint(); m.pos, m.sb = p.pos, len(p.scratch); return }
-func (p *${recv}) nudNone() (spanned, bool) { p.capped = false; p.form = 0; p.tail = false; return spanned{}, false }`}`;
+func (p *${recv}) nudNone() (spanned, bool) { p.capped = false; p.form = 0; p.tail = false; return spanned{}, false }
+func (p *${recv}) nudOk(n spanned, tail, capped bool) (spanned, bool) { p.form = 0; p.tail = tail; p.capped = capped; return n, true }`}`;
 }
 // '>'-led composite operators (LexIdPlan.gtComps): the lexer scans every '>' alone. gtOp reads the
 // operator at ts[i]: a lone '>' extends over each adjacent single-character punct token after it
@@ -1144,7 +1151,7 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
     cand: (d, i, cond) => candGo(d, i, cond, `best = ${fin}; bestPos = p.pos;${markGo(d, i)} nb = len(p.nodes); kb = len(p.kids)`, lostGo),
     closeBest: '\tp.pos = bestPos\n\treturn best',
     commitPeek: '\t_ft := p.peek()',
-    commit: (_i, conds, cond, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, (sb, save) => `p.finish(${ruleIdOf(ar, r.name)}, ${sb}, p.offAt(${save}), ${save})`, (n) => `return ${n}`), 'return -1'),
+    commit: (_i, conds, cond, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, finGo(ruleIdOf(ar, r.name)), (n) => `return ${n}`), 'return -1'),
     commitFail: '{ return -1 }',
   });
 }
@@ -1298,7 +1305,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node, form,
     // tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (_i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; n := p.finish(${rid}, sb, int(t.Off), save); p.form = 0; p.tail = false; return n }`, fail, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, (sb, save) => `p.finish(${rid}, ${sb}, p.offAt(${save}), ${save})`, (n) => `n := ${n}; p.form = 0; p.tail = ${tail}; p.capped = ${capped}; return n`), fail),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, finGo(rid), (n) => `return p.nudOk(${n}, ${tail}, ${capped})`), fail),
     commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \t\tp.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
@@ -1953,7 +1960,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
   const L: PrattLowering = {
     ...B,
     commitLeaf: (_i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; n := p.finishW(${rid}, sb, int(t.Off), save); p.form = 0; p.tail = false; return n, true }`, fail, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? undoGoWc(recv) : null, nullable, (sb, save) => `p.finishW(${rid}, ${sb}, p.offAt(${save}), ${save})`, (n) => `n := ${n}; p.form = 0; p.tail = ${tail}; p.capped = ${capped}; return n, true`), fail),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? undoGoWc(recv) : null, nullable, (sb, save) => `p.finishW(${rid}, ${sb}, p.offAt(${save}), ${save})`, (n) => `return p.nudOk(${n}, ${tail}, ${capped})`), fail),
     commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++

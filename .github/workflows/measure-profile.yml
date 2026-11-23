@@ -160,6 +160,19 @@ jobs:
 
       - run: npm ci
 
+      # The element inputs (jsx-corpus.tsx / .jsx) are built from its tests/cases
+      # (test/bench-rust-profile/element-inputs.ts); the same sparse clone as ci.yml.
+      - name: Clone the pinned TS corpus
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/ts-repo; mkdir -p /tmp/ts-repo
+          git -C /tmp/ts-repo init -q
+          git -C /tmp/ts-repo remote add origin https://github.com/microsoft/TypeScript
+          git -C /tmp/ts-repo config core.sparseCheckout true
+          printf 'tests/cases/\n' > /tmp/ts-repo/.git/info/sparse-checkout
+          git -C /tmp/ts-repo fetch -q --depth 1 --filter=blob:none origin "$TS_REPO_SHA"
+          git -C /tmp/ts-repo checkout -q FETCH_HEAD
+
       - name: Profile A and M
         run: test/bench-rust-profile/run.sh
         env:

@@ -62,7 +62,8 @@ const TypeofRef = rule($ => [
 // member after a decorator (`@dec ["m"]() {}`, `@dec [field] = 1`) is not swallowed as
 // `@dec[...]` (tsc rejects a real `@arr[0]` decorator). `many` so a whole chain is allowed.
 const DecoratorExpr = rule($ => [
-  [Decorator, many(alt(
+  // Not `@new`: `new` is a reserved word, so it names no decorator; `@new …` is the NewExpression arm below.
+  [not('@new'), Decorator, many(alt(
     ['(', sep(Expr, ','), ')'],                          // call: (args)
     [...typeArgsInExpr(), '(', sep(Expr, ','), ')'],     // typed call: <T>(args)
     '!',                                                  // non-null assertion
@@ -437,7 +438,7 @@ const heritageClauses = many(alt(
 // may take type arguments, and so may a template's tag.
 const NewTarget = rule($ => newTargetArms($, Expr,
   opt(alt([...typeArgsInExpr(), opt('(', sep(Expr, ','), ')')], ['(', sep(Expr, ','), ')'])),
-  [[$, ...typeArgsInExpr(), Template]]));
+  { identGuard: notReservedExpr, Prop, fnExprArms: tsFnArms([opt(...bindingName)], Block), taggedTemplate: [[$, ...typeArgsInExpr(), Template]] }));
 
 // Expression type arguments `<T, U>` (tsc's parseTypeArgumentsInExpression): tsc rescans the
 // closing token, so a `>>`/`>=`/`>>=`/`>>>`/`>>>=` there is not a closing `>` — `a < b >> c` is a
