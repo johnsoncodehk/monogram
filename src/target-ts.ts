@@ -6,6 +6,7 @@
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA } from './emit-portable.ts';
 import { blockBody, elementBraceSteps, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import type { EmitOptions } from './emit.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -3101,6 +3102,7 @@ function ${findAnyName(stops)}(s: string, i: number): number {
     find: (cx, s, i, lit) => cx.atom(`lexFind(${s.c}, ${i.c}, ${J(lit)})`, 'int', 'number'),
     findAny: (cx, s, i, stops) => cx.atom(`${findAnyName(stops)}(${s.c}, ${i.c})`, 'int', 'number'),
     own: (_cx, r) => r,
+    cat: (_cx, parts) => ({ c: parts.map((r) => tsWrap(r, TS_OPS.add[1] + 1)).join(' + '), ty: 'str', nat: 'str', prec: TS_OPS.add[1] }),
   },
   stmt: {
     comment: (text) => [`// ${text}`],
@@ -3211,9 +3213,9 @@ export const tsTarget = defineTarget({
   name: 'typescript',
   ext: 'ts',
   lowering: tsLowering,
-  emitParser(grammar: CstGrammar, shared: SharedAlgorithms): string {
+  emitParser(grammar: CstGrammar, shared: SharedAlgorithms, opts: EmitOptions): string {
     const ir = portableIR(grammar, FACTS);
-    return emitTsLibrary(ir, buildLexIdPlan(ir), shared);
+    return emitTsLibrary(ir, buildLexIdPlan(ir), shared) + (opts.recovery ? recoveryRegionTs(ir, shared) : '');
   },
   emitRunner,
 });
@@ -3355,6 +3357,51 @@ ${docEditBlock(ir, shared)}
 ${docRuntime(ir)}
 // The lifted steps (lift), printed after every site that names one.
 ${liftedFns(ids)}`;
+}
+
+// The emit option `recovery` (src/emit.ts): total parsing's entry, a region appended to the default
+// module and touching none of it. A rejected parse is run again for its reject facts (the cold path:
+// valid input is runW's parse alone); the recovery family decides the diagnostic and its words.
+function recoveryRegionTs(ir: ParserIR, shared: SharedAlgorithms): string {
+  const ext = ir.reuse ? '\n  for (const m of _entries) if (m.ext > look) look = m.ext;' : '';
+  return `
+// ---- recovery: the emit option { recovery: true }; generated from src/recovery-family.ts (shared by the TS / Go / Rust targets) ----
+type Diag = { kind: number; off: number; end: number; relOff: number; relEnd: number };
+${shared.recoveryFamily()}
+/** A diagnostic: a span of the source, its message, and a related location (relOff >= 0). */
+export type Diagnostic = { offset: number; end: number; message: string; related?: { offset: number; end: number; message: string } };
+function diagnosticOf(src: string, d: Diag): Diagnostic {
+  const out: Diagnostic = { offset: d.off, end: d.end, message: diagMessage(src, d) };
+  if (d.relOff >= 0) out.related = { offset: d.relOff, end: d.relEnd, message: diagRelated(d) };
+  return out;
+}
+// The reject facts of the parse over toks: the entry rule run as runW runs it, and its diagnostic.
+// The examined extent is the furthest of every top-level entry's (lookEnd() holds the last one's).
+function rejectRun<H>(src: string, builder: Builder<H>): Diag {
+  pos = 0;
+  lookReset();
+  _builder = builder;
+  _n = 0;
+  const ok = parse${ir.entry}W();
+  let look = lookEnd();${ext}
+  _hs.fill(null);
+  return rejectDiag(toks, pos, ok, look);
+}
+/**
+ * parseTotal: parseWith that also says why a text is rejected. An accepted text gives parseWith's
+ * root and no errors; a rejected one no root and its errors (a lexer error, or the parse's primary
+ * error), each with its span in the source.
+ */
+export function parseTotal<H>(src: string, builder: Builder<H>): { root: H | null; errors: Diagnostic[] } {
+  _src = src;
+  const [ts, err] = lexAll(src);
+  if (err !== null) return { root: null, errors: [{ offset: err.off, end: Math.max(err.off, err.end), message: lexError(src, err).message }] };
+  toks = ts;
+  const root = runW(builder);
+  if (root !== null) return { root, errors: [] };
+  return { root: null, errors: [diagnosticOf(src, rejectRun(src, builder))] };
+}
+`;
 }
 
 function emitRunner(): string {

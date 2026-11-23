@@ -4,6 +4,9 @@
 //  src-coverage-{ts,js,jsx,tsx} adapters: each was just a corpus + ScriptKind + grammar over the
 //  SHARED `tsFamilyAdapter` (the accept/reject oracle) and `run()` core (src-coverage.ts).
 //
+//  For ts / js / jsx / tsx the oracle is tsc's parser: the numbers are ALIGNMENT WITH tsc'S PARSER, not
+//  conformance (JavaScript's conformance oracle is test262: test/test262.ts, docs/TEST262.md).
+//
 //  Run (bare node):  node test/src-coverage-run.ts <lang> [N|all]
 //                    lang ∈ ts | js | jsx | tsx | html | yaml
 //
