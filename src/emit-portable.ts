@@ -1117,7 +1117,8 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   // it matches, a zero-width test never moves, an rd rule's function undoes itself on every form's
   // failure (ruleShell: the checkpoint at entry), an inline choice's branches each run in a BRANCH
   // frame, and a star / opt / sep never fails. A step list fails clean when everything before its
-  // last step is a zero-width test and its last step fails clean. A Pratt rule's call fails clean
+  // last step is a zero-width test and its last step fails clean (or its later steps cannot fail,
+  // below). A Pratt rule's call fails clean
   // when no operator of it can fail the call after its NUD matched: a NUD that matches nothing
   // leaves the state as it found it (each arm's frame or commit undoes itself), a led or a binary
   // operand that fails is undone by its own block and ends the loop, so the call's only failure
@@ -1135,7 +1136,14 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
       default: return zeroWidth(s);
     }
   };
-  const listFailsClean = (steps: Step[]): boolean => steps.length > 0 && steps.slice(0, -1).every(zeroWidth) && failsClean(steps[steps.length - 1]!);
+  // A list fails only where its first consuming step does when everything after that step cannot
+  // fail (a star / opt / sep, or a group of them): before it only zero-width tests, which consume
+  // nothing; so it fails clean when that step does (`[Target, opt(':' Type), opt('=' Expr)]`).
+  const neverFails = (s: Step): boolean => s.t === 'star' || s.t === 'opt' || s.t === 'sep' || ((s.t === 'seq' || s.t === 'suppress' || s.t === 'ctx') && s.steps.every(neverFails));
+  const listFailsClean = (steps: Step[]): boolean => {
+    const j = steps.findIndex((x) => !zeroWidth(x));
+    return steps.length > 0 && (j < 0 || (failsClean(steps[j]!) && steps.slice(j + 1).every(neverFails)));
+  };
   // A list that may be empty: an empty one cannot fail. What a frame reads that has already undone
   // the rest itself: a BRANCH frame's branch (an empty branch matches), a led arm's steps after its
   // connector (the connector's token is the led's key; the block puts the position and the scratch
