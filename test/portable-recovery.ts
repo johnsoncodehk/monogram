@@ -61,9 +61,21 @@ const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // for-in has nothing left. Still run and counted; when one holds again the gate fails until it is
 // removed.
 // The mutants are drawn from the accept lists (seeded), so the list is re-measured when they change.
+// typescript 'for ((async) from y);' -> 'for (() of y);' (land/recovery-stage3 merged with master
+// 1f944fcf: two accept rows added at the front of the typescript list draw another mutant set).
 const P10_GREEDY_CAPTURE: Record<string, string[]> = {
   javascript: ['for (() of x);', 'for (() of y);'],
-  typescript: ['for ((async) from y);'],
+  typescript: ['for (() of y);'],
+};
+// P10 EXPECTED-FAIL, second class: LOOKAHEAD BYPASS. A negative lookahead was decided on the
+// original tokens and a supplied token makes the repaired text one it refuses: in `async { class C {}`
+// the statement's `[lookahead ∉ { async function }]` passed (the token after `async` is `{`); the
+// parse supplied 'function', '(', ')' (an async function expression) and the closing '}', and the
+// substituted `async function () { class C {} }` is refused by that lookahead (and is no
+// declaration: it has no name). Run, counted and listed like the greedy captures (the same
+// drawing: re-measured when the lists change).
+const P10_LOOKAHEAD_BYPASS: Record<string, string[]> = {
+  typescript: ['async { class C {}'],
 };
 // EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and
 // parseTotal alike) is not the oracle's. Not total parsing's property (parseTotal's verdict is its
@@ -107,7 +119,7 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
       return { ...t, cst: t.cst === undefined ? undefined : canon(mapTree(JSON.parse(t.cst), u)), errors: t.errors.map(row), strict: t.strict ? row(t.strict) : null };
     }) : raw;
     let primary = 0, farEq = 0, farN = 0, firstEq = 0, firstBefore = 0, firstAfter = 0, farFirstEq = 0, farFirstBefore = 0, farFirstAfter = 0, p10Known = 0;
-    const greedy = P10_GREEDY_CAPTURE[c.grammar] ?? [];
+    const greedy = [...(P10_GREEDY_CAPTURE[c.grammar] ?? []), ...(P10_LOOKAHEAD_BYPASS[c.grammar] ?? [])];
     const bad: string[] = [];
     let acc = 0, rec = 0, lexEq = 0, maxK = 0, maxAtt = 0, maxScope = 0;
     const rows: (ContractRow | null)[] = [];
@@ -183,7 +195,7 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
     }
     interpCheck(c, grammar, r, srcs, own, tokenize, bad);
     if (knownHits !== known.length) bad.push(`expected-fail: ${knownHits} of ${known.length} listed verdict divergences remain: remove the ones that agree now`);
-    if (r.lexToks && p10Known !== greedy.length) bad.push(`P10 expected-fail: ${p10Known} of ${greedy.length} listed greedy captures remain: remove the ones that hold now`);
+    if (r.lexToks && p10Known !== greedy.length) bad.push(`P10 expected-fail: ${p10Known} of ${greedy.length} listed greedy captures and lookahead bypasses remain: remove the ones that hold now`);
     if (farEq < (RECOVERY_FARTHEST_FLOOR[c.grammar] ?? 0)) bad.push(`farthest agreement ${farEq} dropped below its recorded floor ${RECOVERY_FARTHEST_FLOOR[c.grammar]}`);
     console.log(`  ${c.grammar}/${r.label}: recovery ${bad.length ? `${bad.length} MISMATCH` : 'ok'} over ${srcs.length} inputs (${mutants.length} mutants): ${acc} accepted with no errors, ${rec} rejected and recovered (lexer ≡ oracle ${lexEq}; strict error ≡ interpreter ${primary}, farthest ≡ its hint on ${farEq}/${farN} (counted); the first repair at the strict error ${firstEq}, before it ${firstBefore}, after it ${firstAfter}; at its farthest token ${farFirstEq}, before ${farFirstBefore}, after ${farFirstAfter}); steps ≤ ${maxK.toFixed(3)} × attempts × (tokens + 1) × rules; attempts per input ≤ ${maxAtt}, per scope ≤ ${maxScope}`);
     if (r.lexToks) console.log(summarize(`  ${c.grammar}/${r.label} on the mutants`, rows).split('\n').map((l, j) => (j ? `    ${l}` : l)).join('\n'));
