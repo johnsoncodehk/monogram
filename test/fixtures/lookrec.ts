@@ -13,7 +13,10 @@
 //   • a `suppress` step inside a lookahead (`in`: `exclude('in', Expr)`) disables its connector (the
 //     led `[$, 'in', $]`) there as it does anywhere: `in a in b;` is refused because the lookahead's `Expr` stops
 //     before the second `in`.
-import { token, rule, defineGrammar, left, op, seq, oneOf, range, star, many, opt, not, exclude } from '../../src/api.ts';
+//   • a left-recursive rule whose continuations end in a POSITIVE lookahead (`Target`, Python's
+//     t_primary: `&t_lookahead`) asserts that a trailer follows, so the tail stays open: `set a.b.c[1] = x;`
+//     (only a trailing negative lookahead closes it: gen-parser.ts negativeLook).
+import { token, rule, defineGrammar, left, op, seq, oneOf, range, star, many, opt, not, exclude, alt } from '../../src/api.ts';
 
 const idStart = oneOf(range('a', 'z'), range('A', 'Z'), '_');
 const idCont = oneOf(range('a', 'z'), range('A', 'Z'), range('0', '9'), '_');
@@ -37,6 +40,12 @@ const Only = rule(($) => [
   ['(', $, ')'],
 ]);
 const Wrap = rule(() => [['[', Expr, ']']]);
+const trailer = alt('.', '[');
+const Target = rule(($) => [
+  [Ident, not(not(trailer))],
+  [$, '.', Ident, not(not(trailer))],
+  [$, '[', Number_, ']', not(not(trailer))],
+]);
 const Stmt = rule(() => [
   [Head, Expr, ';'],
   ['if', not(Head), Expr, ';'],
@@ -46,6 +55,7 @@ const Stmt = rule(() => [
   ['go', Expr, '=', Expr, ';'],
   ['at', not(not([Wrap, '!'])), Wrap, '!', ';'],
   ['in', not(not([exclude('in', Expr), ';'])), Expr, ';'],
+  ['set', Target, alt(['.', Ident], ['[', Number_, ']']), not(trailer), '=', Expr, ';'],
 ]);
 const Program = rule(() => [many(Stmt)]);
 
@@ -54,5 +64,5 @@ export default defineGrammar({
   scopeName: 'source.lookrec',
   tokens: { Ident, Number: Number_ },
   prec: [left('+', '-')],
-  rules: { Expr, Head, Only, Wrap, Stmt, Program },
+  rules: { Expr, Head, Only, Wrap, Target, Stmt, Program },
 });
