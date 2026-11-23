@@ -656,7 +656,9 @@ class ArmCompiler {
         if (cardOf(r.rest) === 'many') {
           // A list: every item, in order. An optional inside the repetition would leave holes the
           // tags cannot show (S1: no array holes).
-          if (r.rest.some((q) => q.type === 'quantifier' && q.kind === '?')) no(`a repeated child with holes (${t.name})`);
+          // An optional inside the repetition: one element per iteration, null where it is absent.
+          const lastList = r.rest.map(isListQ).lastIndexOf(true);
+          if (r.rest.slice(lastList + 1).some((q) => q.type === 'quantifier' && q.kind === '?')) return this.holes(s, t.name, out);
           const [t0] = this.range(r.slot);
           const l = this.tmp(), i = this.tmp();
           out.push({ k: 'let', name: l, ty: VALS as never, init: { k: 'newList', ty: VALS as never } });
@@ -785,24 +787,46 @@ class ArmCompiler {
     }
   }
 
+  /** A repeated child whose element is optional in its iteration: per iteration (its markers) the
+   * element's value, or null. */
+  private holes(s: CScope, name: string, out: Stmt[]): Expr {
+    const l = this.tmp();
+    out.push({ k: 'let', name: l, ty: VALS as never, init: { k: 'newList', ty: VALS as never } });
+    this.iterations(s, name, out, (it, body) => {
+      const r = this.resolve(it, name);
+      if (r.rest.some(isListQ)) no(`a repeated child with holes inside a nested repetition (${name})`);
+      const [t0, t1] = this.range(r.slot);
+      const i = this.bindInt(call('slotFind', v(it.lo), v(it.hi), int(t0), int(t1)), body);
+      const item = this.childVal(v(i), r.slot, body);
+      const e = this.choose(bin('ge', v(i), int(0)), () => ({ k: 'vNeed', e: item }), () => ({ k: 'vConst', v: null }), body);
+      body.push({ k: 'push', list: l, e });
+    });
+    return { k: 'vList', e: v(l) };
+  }
+
   /** Which branch of an inline alternation its items fall in: `taken` for that branch, `none`
-   * when the alternation matched nothing here (an optional one). A branch that can match
-   * nothing has no item to show it (S1: unsupported). */
+   * when the alternation matched nothing here (an optional one). A branch with no grammar node at
+   * all (`not('?.')`) has no item to show it: it is the branch taken when no other branch's item
+   * is there, if the alternation is always entered in this scope (no quantifier between them) and
+   * it is the only such branch; else unsupported. */
   private branchCase(slot: Slot, scope: CScope, out: Stmt[], taken: (b: number, name: string, body: Stmt[]) => Expr, none: () => Expr): Expr {
     if (this.shape.grammar.templateViews.has(slot.node)) no('a template literal\'s parts');
-    if (this.num.nullableBranch.has(slot.node)) no(`an alternation with an empty branch (${slot.name})`);
     const rs = this.num.branchRange.get(slot.node)!;
     const names = [...slot.branches!.keys()];
+    const empty = rs.map(([t0, t1], b) => (t0 > t1 ? b : -1)).filter((b) => b >= 0);
+    if (empty.length && (empty.length > 1 || slot.quants.length > scope.base.length)) no(`an alternation with an empty branch (${slot.name})`);
     const x = this.tmp();
     out.push({ k: 'let', name: x, ty: VAL as never, init: none() });
     let level = out;
     rs.forEach(([t0, t1], b) => {
+      if (b === empty[0]) return;
       const found = this.bindInt(call('slotFind', v(scope.lo), v(scope.hi), int(t0), int(t1)), level);
       const then: Stmt[] = []; then.push({ k: 'set', name: x, e: taken(b, names[b]!, then) });
       const els: Stmt[] = [];
       level.push({ k: 'if', c: bin('ge', v(found), int(0)), then, else: els });
       level = els;
     });
+    if (empty.length) level.push({ k: 'set', name: x, e: taken(empty[0]!, names[empty[0]!]!, level) });
     return v(x);
   }
 }
