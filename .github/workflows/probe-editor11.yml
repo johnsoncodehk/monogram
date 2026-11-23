@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        v: [typescript-vg, typescript-vh, typescriptreact-vg, javascript-vg]
+        v: [typescript-m, typescript-l, typescriptreact-m, typescriptreact-l, javascript-m, javascript-l]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
