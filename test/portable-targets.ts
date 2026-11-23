@@ -1480,6 +1480,8 @@ const FRAME_EDIT_DOCS: Record<string, (string | { doc: string; ins: string[] })[
   'textdialect-text': [
     { doc: 'component C(a) {\n  <p>hi // n\n a/* c */b {a}// m\n</p>;\n  const z = 1; /* k */\n}', ins: [...TEXT_INS, '*'] },
     { doc: 'component C() { <p>q /*</p>; const z = 1; }', ins: ['*/', '*', '/', ' ', 'x'] },
+    // the same at a run's start: the text token's failed attempt there is the read's only record
+    { doc: 'component C() { <p>/*</p>; const z = 1; }', ins: ['*/', '*', '/', ' ', 'x'] },
     { doc: 'component C(a) {\n  <p k="v">1 < 2 {a} <b/>x<9 <></></p>;\n  const z = a <b;\n  return <{a}>y</{a}>;\n}', ins: TEXT_INS },
   ],
   // directives: edits that make and break an opener (`@if (` / `@iffy`), a head's parens and braces,
