@@ -92,7 +92,7 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | .slice() → string | `_src.slice(_sp[b * _SW + N], _sp[b * _SW + N])` | 1 | 72 | 0.00 | 1,240 | 0.0% | 0 |
 | array growth | `localE.push({ tokStart: _sp[s + N]!, tokEnd: pos, ext: Math.max(pos...` | 1 | 1 | 0.00 | 76 | 0.0% | 0 |
 | array growth | `parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid])` | 1 | 1 | 0.00 | 76 | 0.0% | 0 |
-| array | `[]` | 9 | 4 | 0.00 | 64 | 0.0% | 0 |
+| array | `[]` | 10 | 4 | 0.00 | 64 | 0.0% | 0 |
 | array | `[N, N]` | 6 | 2 | 0.00 | 64 | 0.0% | 0 |
 | object | `{ pos, pendingNl, prevLid, prevKid, hasPrev, bpLid, hasPrev2, paren...` | 1 | 1 | 0.00 | 56 | 0.0% | 0 |
 
@@ -112,7 +112,7 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | .slice() → string | `_src.slice(_sp[b * _SW + N], _sp[b * _SW + N])` | 1 | 72 | 0.00 | 1,240 | 0.0% | 0 |
 | array growth | `localE.push({ tokStart: _sp[s + N]!, tokEnd: pos, ext: Math.max(pos...` | 1 | 1 | 0.00 | 76 | 0.0% | 0 |
 | array growth | `parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid])` | 1 | 1 | 0.00 | 76 | 0.0% | 0 |
-| array | `[]` | 9 | 4 | 0.00 | 64 | 0.0% | 0 |
+| array | `[]` | 10 | 4 | 0.00 | 64 | 0.0% | 0 |
 | array | `[N, N]` | 6 | 2 | 0.00 | 64 | 0.0% | 0 |
 | object | `{ pos, pendingNl, prevLid, prevKid, hasPrev, bpLid, hasPrev2, paren...` | 1 | 1 | 0.00 | 56 | 0.0% | 0 |
 
