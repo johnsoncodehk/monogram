@@ -1236,26 +1236,25 @@ func (p *engine) parse${r.name}() int32 {
 \tp.entries = localE
 \treturn p.finish(${rid}, sb, p.offAt(save), save)
 }`,
-    headSeg: (rule) => `func (p *engine) parseHeadSeg(sb int) (Seg, EntryMeta, bool) {
+    headSeg: (rule) => `func (p *engine) parseHeadSeg(sb int) (EntryMeta, bool) {
 \tp.lookReset()
 \tbefore := len(p.scratch)
 \tp.opt(func() bool { return p.callRule(p.parse${rule}()) })
-\tif len(p.scratch) == before { return Seg{}, EntryMeta{}, false }
+\tif len(p.scratch) == before { return EntryMeta{}, false }
 \tn := p.scratch[before]
 \text := p.nodes[n].TokEnd
 \tif l := uint32(p.lookEnd()); l > ext { ext = l }
-\tmeta := EntryMeta{int(p.nodes[n].TokStart), int(p.nodes[n].TokEnd), int(ext), int(p.nodes[n].Offset), int(p.nodes[n].End), before - sb, 1}
-\treturn Seg{KidStart: before - sb, KidCount: 1, TokStart: int(p.nodes[n].TokStart), TokEnd: int(p.nodes[n].TokEnd), Ext: int(ext)}, meta, true
+\treturn EntryMeta{int(p.nodes[n].TokStart), int(p.nodes[n].TokEnd), int(ext), int(p.nodes[n].Offset), int(p.nodes[n].End), before - sb, 1}, true
 }
 `,
-    headUse: `\tif h, m, ok := p.parseHeadSeg(sb); ok { local = append(local, h); localE = append(localE, m) }
+    headUse: `\tif m, ok := p.parseHeadSeg(sb); ok { localE = append(localE, m) }
 `,
-    loopSeg: (kid, rule) => `func (p *engine) parseLoopSeg(sb int) (Seg, EntryMeta, bool) {
+    loopSeg: (kid, rule) => `func (p *engine) parseLoopSeg(sb int) (EntryMeta, bool) {
 \tsp := p.pos; before := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \tp.lookReset()
 \tif !p.matchTok(${kid}) {
 \t\tp.back(sp); p.scratch = p.scratch[:before]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]
-\t\treturn Seg{}, EntryMeta{}, false
+\t\treturn EntryMeta{}, false
 \t}
 \tp.opt(func() bool { return p.callRule(p.parse${rule}()) })
 \tleaf := p.scratch[before]
@@ -1287,20 +1286,16 @@ func (p *engine) parse${r.name}() int32 {
 \t}
 \text := tokEnd
 \tif l := uint32(p.lookEnd()); l > ext { ext = l }
-\tmeta := EntryMeta{int(tokStart), int(tokEnd), int(ext), int(off), int(end), before - sb, count}
-\treturn Seg{KidStart: before - sb, KidCount: count, TokStart: int(tokStart), TokEnd: int(tokEnd), Ext: int(ext)}, meta, true
+\treturn EntryMeta{int(tokStart), int(tokEnd), int(ext), int(off), int(end), before - sb, count}, true
 }`,
-    entryB: (headSeg, headUse, loopSeg) => `type Seg struct { KidStart, KidCount, TokStart, TokEnd, Ext int }
-type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidStart, KidCount int }
+    entryB: (headSeg, headUse, loopSeg) => `type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidStart, KidCount int }
 ${headSeg}${loopSeg}
 func (p *engine) parse${r.name}() int32 {
 \tsave := p.pos; sb := len(p.scratch)
-\tlocal := p.segs[:0]
 \tlocalE := p.entries[:0]
 ${headUse}\tfor {
-\t\tif seg, m, ok := p.parseLoopSeg(sb); ok { local = append(local, seg); localE = append(localE, m) } else { break }
+\t\tif m, ok := p.parseLoopSeg(sb); ok { localE = append(localE, m) } else { break }
 \t}
-\tp.segs = local
 \tp.entries = localE
 \treturn p.finish(${rid}, sb, p.offAt(save), save)
 }`,
@@ -1609,20 +1604,11 @@ func (p *engine) tryReuseTop(oldRoot int32, oldEntries []EntryMeta, newText stri
 		if passed() { return -1, 0 }
 	}
 }
-` : ''}${shapeB ? `func (p *engine) assertEntriesVsSegs(oldEntries []EntryMeta, oldSegs []Seg, oldRoot int32) {
-	if len(oldEntries) != len(oldSegs) {
-		panic("entry count vs segs: " + fmt.Sprintf("%d", len(oldEntries)) + " vs " + fmt.Sprintf("%d", len(oldSegs)))
-	}
+` : ''}${shapeB ? `func (p *engine) assertEntriesVsKids(oldEntries []EntryMeta, oldRoot int32) {
 	old := p.nodes[oldRoot]
 	for i, e := range oldEntries {
-		s := oldSegs[i]
-		if e.TokStart != s.TokStart { panic("tok_start entry " + fmt.Sprintf("%d", i)) }
-		if e.TokEnd != s.TokEnd { panic("tok_end entry " + fmt.Sprintf("%d", i)) }
-		if e.Ext != s.Ext { panic("ext entry " + fmt.Sprintf("%d", i)) }
-		if e.KidStart != s.KidStart { panic("kid_start entry " + fmt.Sprintf("%d", i)) }
-		if e.KidCount != s.KidCount { panic("kid_count entry " + fmt.Sprintf("%d", i)) }
-		first := p.kids[old.KidStart+uint32(s.KidStart)]
-		last := p.kids[old.KidStart+uint32(s.KidStart+s.KidCount-1)]
+		first := p.kids[old.KidStart+uint32(e.KidStart)]
+		last := p.kids[old.KidStart+uint32(e.KidStart+e.KidCount-1)]
 		if first >= 0 {
 			if e.Off != int(p.nodes[first].Offset) { panic("off entry " + fmt.Sprintf("%d", i)) }
 		}
@@ -1631,17 +1617,15 @@ func (p *engine) tryReuseTop(oldRoot int32, oldEntries []EntryMeta, newText stri
 		}
 	}
 }
-func (p *engine) tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMeta, newText string, newMeta []alignMeta, byteDelta, oldN, prefix, suffix int, validate bool) (int32, int) {
-	if oldRoot < 0 || len(oldSegs) == 0 { return -1, 0 }
-	if validate { p.assertEntriesVsSegs(oldEntries, oldSegs, oldRoot) }
+func (p *engine) tryReuseSeg(oldRoot int32, oldEntries []EntryMeta, newText string, newMeta []alignMeta, byteDelta, oldN, prefix, suffix int, validate bool) (int32, int) {
+	if oldRoot < 0 || len(oldEntries) == 0 { return -1, 0 }
+	if validate { p.assertEntriesVsKids(oldEntries, oldRoot) }
 	old := p.nodes[oldRoot]
 	prefixLen, suffixStart := reuseBounds(oldEntries, prefix, oldN, suffix)
-	prefixSegs := oldSegs[:prefixLen]
-	suffixCand := oldSegs[suffixStart:]
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
 	prefixKids := make([]int32, 0)
-	for _, s := range prefixSegs {
+	for _, s := range prefixMeta {
 		for i := 0; i < s.KidCount; i++ { prefixKids = append(prefixKids, p.kids[old.KidStart+uint32(s.KidStart+i)]) }
 	}
 	p.src = newText
@@ -1649,10 +1633,9 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMet
 	if prefixLen > 0 { p.pos = prefixMeta[prefixLen-1].TokEnd } else { p.pos = 0 }
 	p.scratch = p.scratch[:0]
 	midKids := make([]int32, 0)
-	midSegs := make([]Seg, 0)
 	midMeta := make([]EntryMeta, 0)
 	finishHit := func(adoptFrom int) (int32, int) {
-		adoptedSegs := suffixCand[adoptFrom:]
+		adoptedSegs := suffixMeta[adoptFrom:]
 		tokDelta := 0
 		if len(adoptedSegs) > 0 {
 			s := suffixMeta[adoptFrom].TokStart
@@ -1675,15 +1658,14 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMet
 		children = append(children, prefixKids...)
 		children = append(children, midKids...)
 		children = append(children, adoptedKids...)
-		newSegs, newEntries := reuseSegEntries(prefixSegs, prefixMeta, midSegs, midMeta, suffixCand, suffixMeta, adoptFrom, byteDelta, tokDelta)
+		newEntries := reuseSegEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta)
 		off, end, tokStart, tokEnd := reuseSpan(newEntries)
 		kidStart := len(p.kids)
 		p.kids = append(p.kids, children...)
 		p.nodes = append(p.nodes, Node{RuleId: old.RuleId, KidStart: uint32(kidStart), KidCount: uint32(len(children)), Offset: uint32(off), End: uint32(end), TokStart: uint32(tokStart), TokEnd: uint32(tokEnd)})
-		p.segs = newSegs
 		p.entries = newEntries
 		p.pos = len(p.toks)
-		return int32(len(p.nodes) - 1), len(prefixSegs) + len(adoptedSegs)
+		return int32(len(p.nodes) - 1), prefixLen + len(adoptedSegs)
 	}
 	tryHit := func() (int32, int, bool) {
 		if at := reuseAdoptAt(suffixMeta, oldN, suffix, len(p.toks)-p.pos); at >= 0 { r, n := finishHit(at); return r, n, true }
@@ -1694,12 +1676,10 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMet
 	if passed() { return -1, 0 }
 	${hasHeadB ? `if prefixLen == 0 {
 		sb := len(p.scratch)
-		if h, m, ok := p.parseHeadSeg(sb); ok {
-			h.KidStart = 0
+		if m, ok := p.parseHeadSeg(sb); ok {
 			m.KidStart = 0
 			midKids = append(midKids, p.scratch[sb:]...)
 			p.scratch = p.scratch[:sb]
-			midSegs = append(midSegs, h)
 			midMeta = append(midMeta, m)
 			if r, rn, ok := tryHit(); ok { return r, rn }
 			if passed() { return -1, 0 }
@@ -1711,50 +1691,27 @@ func (p *engine) tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMet
 			return -1, 0
 		}
 		sb := len(p.scratch)
-		seg, m, ok := p.parseLoopSeg(sb)
+		m, ok := p.parseLoopSeg(sb)
 		if !ok {
 			if r, n, hit := tryHit(); hit { return r, n }
 			return -1, 0
 		}
-		count := len(p.scratch) - sb
 		midKids = append(midKids, p.scratch[sb:]...)
 		p.scratch = p.scratch[:sb]
 		m.KidStart = 0
-		midSegs = append(midSegs, Seg{0, count, seg.TokStart, seg.TokEnd, seg.Ext})
 		midMeta = append(midMeta, m)
 		if r, rn, hit := tryHit(); hit { return r, rn }
 		if passed() { return -1, 0 }
 	}
 }
 ` : ''}` : '';
-  const editParse = shapeA
+  const editParse = topReuse
     ? `\tbyteDelta := len(d.text) - len(oldText)
 \treused := 0
 \tforceFresh := d.root < 0 || p.shouldReclaim(d.root)
 \tif !forceFresh {
 \t\toldEntries := append([]EntryMeta(nil), d.entries...)
-\t\tif got, n := p.tryReuseTop(d.root, oldEntries, d.text, d.toks, byteDelta, oldN, prefix, suffix, d.validate); got >= 0 {
-\t\t\td.root = got
-\t\t\td.entries = append([]EntryMeta(nil), p.entries...)
-\t\t\treused = n
-\t\t} else {
-${parseFresh}
-\t\t\td.entries = append([]EntryMeta(nil), p.entries...)
-\t\t\treused = 0
-\t\t}
-\t} else {
-${parseFresh}
-\t\td.entries = append([]EntryMeta(nil), p.entries...)
-\t\treused = 0
-\t}`
-    : shapeB
-    ? `\tbyteDelta := len(d.text) - len(oldText)
-\treused := 0
-\tforceFresh := d.root < 0 || p.shouldReclaim(d.root)
-\tif !forceFresh {
-\t\toldSegs := append([]Seg(nil), p.segs...)
-\t\toldEntries := append([]EntryMeta(nil), d.entries...)
-\t\tif got, n := p.tryReuseSeg(d.root, oldSegs, oldEntries, d.text, d.toks, byteDelta, oldN, prefix, suffix, d.validate); got >= 0 {
+\t\tif got, n := p.tryReuse${shapeA ? 'Top' : 'Seg'}(d.root, oldEntries, d.text, d.toks, byteDelta, oldN, prefix, suffix, d.validate); got >= 0 {
 \t\t\td.root = got
 \t\t\td.entries = append([]EntryMeta(nil), p.entries...)
 \t\t\treused = n
@@ -2280,21 +2237,8 @@ function emitDocWithGo(
   initToks: string,
 ): string {
   const entry = ir.entry;
-  const segsField = shapeB ? '\n\tsegs []Seg' : '';
   const entriesFields = topReuse
-    ? `\n\tentries []EntryMeta\n\tentryHs []int32${segsField}`
-    : '';
-
-  const segsFromEntries = shapeB
-    ? `
-func segsFromEntries(entries []EntryMeta) []Seg {
-	out := make([]Seg, len(entries))
-	for i, e := range entries {
-		out[i] = Seg{e.KidStart, e.KidCount, e.TokStart, e.TokEnd, e.Ext}
-	}
-	return out
-}
-`
+    ? `\n\tentries []EntryMeta\n\tentryHs []int32`
     : '';
 
   const shiftHandleFn = `
@@ -2438,17 +2382,15 @@ func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, 
 
   const tryReuseSegW = shapeB
     ? `
-func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEntries []EntryMeta, newText string, newMeta []alignMeta, byteDelta, oldN, prefix, suffix int) (root int32, newSegs []Seg, newEntries []EntryMeta, newHs []int32, reused int, ok bool) {
-	if len(oldSegs) == 0 {
-		return 0, nil, nil, nil, 0, false
+func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldEntries []EntryMeta, newText string, newMeta []alignMeta, byteDelta, oldN, prefix, suffix int) (root int32, newEntries []EntryMeta, newHs []int32, reused int, ok bool) {
+	if len(oldEntries) == 0 {
+		return 0, nil, nil, 0, false
 	}
 	prefixLen, suffixStart := reuseBounds(oldEntries, prefix, oldN, suffix)
-	prefixSegs := append([]Seg(nil), oldSegs[:prefixLen]...)
-	suffixCand := append([]Seg(nil), oldSegs[suffixStart:]...)
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
 	prefixKids := make([]int32, 0)
-	for _, s := range prefixSegs {
+	for _, s := range prefixMeta {
 		for i := 0; i < s.KidCount; i++ {
 			prefixKids = append(prefixKids, oldRootHs[s.KidStart+i])
 		}
@@ -2460,10 +2402,9 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 		p.pos = 0
 	}
 	midKids := make([]int32, 0)
-	midSegs := make([]Seg, 0)
 	midMeta := make([]EntryMeta, 0)
-	finishHit := func(adoptFrom int) (int32, []Seg, []EntryMeta, []int32, int, bool) {
-		adoptedSegs := suffixCand[adoptFrom:]
+	finishHit := func(adoptFrom int) (int32, []EntryMeta, []int32, int, bool) {
+		adoptedSegs := suffixMeta[adoptFrom:]
 		tokDelta := 0
 		if len(adoptedSegs) > 0 {
 			s := suffixMeta[adoptFrom].TokStart
@@ -2479,27 +2420,27 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 		children = append(children, prefixKids...)
 		children = append(children, midKids...)
 		children = append(children, adoptedKids...)
-		outSegs, outE := reuseSegEntries(prefixSegs, prefixMeta, midSegs, midMeta, suffixCand, suffixMeta, adoptFrom, byteDelta, tokDelta)
+		outE := reuseSegEntries(prefixMeta, midMeta, suffixMeta, adoptFrom, byteDelta, tokDelta)
 		off, end, tokStart, tokEnd := reuseSpan(outE)
 		scratch := append([]int32(nil), children...)
 		b.Node(&scratch, 0, ${entryRid}, uint32(off), uint32(end), uint32(tokStart), uint32(tokEnd))
 		if len(scratch) != 1 {
-			return 0, nil, nil, nil, 0, false
+			return 0, nil, nil, 0, false
 		}
 		recordToks(b, p.toks)
-		return scratch[0], outSegs, outE, children, len(prefixSegs) + len(adoptedSegs), true
+		return scratch[0], outE, children, prefixLen + len(adoptedSegs), true
 	}
-	tryHit := func() (int32, []Seg, []EntryMeta, []int32, int, bool) {
+	tryHit := func() (int32, []EntryMeta, []int32, int, bool) {
 		if at := reuseAdoptAt(suffixMeta, oldN, suffix, len(p.toks)-p.pos); at >= 0 {
 			return finishHit(at)
 		}
-		return 0, nil, nil, nil, 0, false
+		return 0, nil, nil, 0, false
 	}
-	if r, sg, e, hs, n, hit := tryHit(); hit {
-		return r, sg, e, hs, n, true
+	if r, e, hs, n, hit := tryHit(); hit {
+		return r, e, hs, n, true
 	}
 	if reuseGaveUp(suffixMeta, oldN, len(p.toks)-p.pos) {
-		return 0, nil, nil, nil, 0, false
+		return 0, nil, nil, 0, false
 	}
 	${hasHeadB
     ? `if prefixLen == 0 {
@@ -2507,60 +2448,56 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 		if m, pok := p.parseHeadSegW(sb); pok {
 			midKids = append(midKids, p.scratch[sb:]...)
 			p.scratch = p.scratch[:sb]
-			count := len(midKids)
-			midSegs = append(midSegs, Seg{0, count, m.TokStart, m.TokEnd, m.Ext})
 			m.KidStart = 0
-			m.KidCount = count
+			m.KidCount = len(midKids)
 			midMeta = append(midMeta, m)
-			if r, sg, e, hs, n, hit := tryHit(); hit {
-				return r, sg, e, hs, n, true
+			if r, e, hs, n, hit := tryHit(); hit {
+				return r, e, hs, n, true
 			}
 			if reuseGaveUp(suffixMeta, oldN, len(p.toks)-p.pos) {
-				return 0, nil, nil, nil, 0, false
+				return 0, nil, nil, 0, false
 			}
 		}
 	}
 `
     : ''}for {
 		if p.pos >= len(p.toks) {
-			if r, sg, e, hs, n, hit := tryHit(); hit {
-				return r, sg, e, hs, n, true
+			if r, e, hs, n, hit := tryHit(); hit {
+				return r, e, hs, n, true
 			}
-			return 0, nil, nil, nil, 0, false
+			return 0, nil, nil, 0, false
 		}
 		sb := len(p.scratch)
 		m, pok := p.parseLoopSegW(sb)
 		if !pok {
-			if r, sg, e, hs, n, hit := tryHit(); hit {
-				return r, sg, e, hs, n, true
+			if r, e, hs, n, hit := tryHit(); hit {
+				return r, e, hs, n, true
 			}
-			return 0, nil, nil, nil, 0, false
+			return 0, nil, nil, 0, false
 		}
-		count := len(p.scratch) - sb
 		midKids = append(midKids, p.scratch[sb:]...)
 		p.scratch = p.scratch[:sb]
 		m.KidStart = 0
-		midSegs = append(midSegs, Seg{0, count, m.TokStart, m.TokEnd, m.Ext})
 		midMeta = append(midMeta, m)
-		if r, sg, e, hs, n, hit := tryHit(); hit {
-			return r, sg, e, hs, n, true
+		if r, e, hs, n, hit := tryHit(); hit {
+			return r, e, hs, n, true
 		}
 		if reuseGaveUp(suffixMeta, oldN, len(p.toks)-p.pos) {
-			return 0, nil, nil, nil, 0, false
+			return 0, nil, nil, 0, false
 		}
 	}
 }
 `
     : '';
 
-  const editReuse = shapeA
+  const editReuse = topReuse
     ? `\tbyteDelta := len(d.text) - len(oldText)
 \treused := 0
 \t_, hasShift := d.b.(Shifter)
-\tforceFresh := !hasShift || d.root < 0
+\tforceFresh := !hasShift || d.root < 0${shapeB ? ' || len(d.entries) == 0' : ''}
 \tif !forceFresh {
 \t\tsh := d.b.(Shifter)
-\t\tif got, ne, nhs, n, hit := tryReuseTopW(d.b, sh, d.entryHs, d.entries, d.text, d.toks, byteDelta, oldN, prefix, suffix); hit {
+\t\tif got, ne, nhs, n, hit := tryReuse${shapeA ? 'Top' : 'Seg'}W(d.b, sh, d.entryHs, d.entries, d.text, d.toks, byteDelta, oldN, prefix, suffix); hit {
 \t\t\td.root = got
 \t\t\td.entries = ne
 \t\t\td.entryHs = nhs
@@ -2588,49 +2525,6 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 \t\t\td.root = -1
 \t\t\td.entries = nil
 \t\t\td.entryHs = nil
-\t\t}
-\t\treused = 0
-\t}`
-    : shapeB
-    ? `\tbyteDelta := len(d.text) - len(oldText)
-\treused := 0
-\t_, hasShift := d.b.(Shifter)
-\tforceFresh := !hasShift || d.root < 0 || len(d.segs) == 0
-\tif !forceFresh {
-\t\tsh := d.b.(Shifter)
-\t\tif got, nsg, ne, nhs, n, hit := tryReuseSegW(d.b, sh, d.entryHs, d.segs, d.entries, d.text, d.toks, byteDelta, oldN, prefix, suffix); hit {
-\t\t\td.root = got
-\t\t\td.segs = nsg
-\t\t\td.entries = ne
-\t\t\td.entryHs = nhs
-\t\t\treused = n
-\t\t} else {
-\t\t\th, ne, nhs, ok := parseWithMetaW(d.text, d.toks, d.b)
-\t\t\tif ok {
-\t\t\t\td.root = h
-\t\t\t\td.entries = ne
-\t\t\t\td.entryHs = nhs
-\t\t\t\td.segs = segsFromEntries(ne)
-\t\t\t} else {
-\t\t\t\td.root = -1
-\t\t\t\td.entries = nil
-\t\t\t\td.entryHs = nil
-\t\t\t\td.segs = nil
-\t\t\t}
-\t\t\treused = 0
-\t\t}
-\t} else {
-\t\th, ne, nhs, ok := parseWithMetaW(d.text, d.toks, d.b)
-\t\tif ok {
-\t\t\td.root = h
-\t\t\td.entries = ne
-\t\t\td.entryHs = nhs
-\t\t\td.segs = segsFromEntries(ne)
-\t\t} else {
-\t\t\td.root = -1
-\t\t\td.entries = nil
-\t\t\td.entryHs = nil
-\t\t\td.segs = nil
 \t\t}
 \t\treused = 0
 \t}`
@@ -2644,22 +2538,17 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 
   // A text that does not lex: no tree, no entries (the next edit parses afresh).
   const lexClear = (topReuse
-    ? ['d.root = -1', 'd.entries = nil', 'd.entryHs = nil', ...(shapeB ? ['d.segs = nil'] : [])]
+    ? ['d.root = -1', 'd.entries = nil', 'd.entryHs = nil']
     : ['d.root = -1']).map((l) => `\t\t${l}`).join('\n');
   const editBody = goEditBody(lexClear, false);
 
   const initAssign = topReuse
-    ? (shapeB
-      ? `\t\td.root = h
+    ? `\t\td.root = h
 \t\td.entries = entries
-\t\td.entryHs = entryHs
-\t\td.segs = segsFromEntries(entries)`
-      : `\t\td.root = h
-\t\td.entries = entries
-\t\td.entryHs = entryHs`)
+\t\td.entryHs = entryHs`
     : `\t\td.root = h`;
 
-  return `${shiftHandleFn}${segsFromEntries}${parseWithMetaW}${tryReuseTopW}${tryReuseSegW}
+  return `${shiftHandleFn}${parseWithMetaW}${tryReuseTopW}${tryReuseSegW}
 // Document is the shared surface of NewDoc (*Doc) and NewDocWith (*DocWith).
 type Document interface {
 	SetValidate(v bool)
@@ -2849,7 +2738,7 @@ func (b *CstBuilder) Workspace() *Workspace { return &b.ws }
 // allocate them again: the Rust target's Builder::workspace_mut. Its fields are the engine's.
 type Workspace struct {
 \tscratch []int32
-${reuse ? '\tentries []EntryMeta\n' : ''}${reuse?.kind === 'B' ? '\tsegs []Seg\n' : ''}\tlex     lexStacks
+${reuse ? '\tentries []EntryMeta\n' : ''}\tlex     lexStacks
 \t// The builder engine's state, with its own scratch${reuse ? ' and entry lists' : ''}: kept here because Go's escape analysis
 \t// moves a parserW to the heap (one allocation per parse otherwise); emptied after each parse.
 \tw parserW
@@ -3001,11 +2890,11 @@ ${wMethods}
 // without paying for a second method-instantiation (Go GC-shape stenciling tax).
 func parseWithCst(src string, b *CstBuilder) (int32, bool) {
 \tw := &b.ws
-\tp := &engine{nodes: b.Nodes[:0], kids: b.Kids[:0], scratch: w.scratch[:0]${reuse ? ', entries: w.entries[:0]' : ''}${reuse?.kind === 'B' ? ', segs: w.segs[:0]' : ''}}
+\tp := &engine{nodes: b.Nodes[:0], kids: b.Kids[:0], scratch: w.scratch[:0]${reuse ? ', entries: w.entries[:0]' : ''}}
 \ttoks, err := lexInto(src, b.Toks, &w.lex)
 \tif err != nil { panic(lexError(src, err)) }
 \th := p.parse(src, toks)
-\tb.Nodes, b.Kids, b.Toks, w.scratch = p.nodes, p.kids, p.toks, p.scratch${reuse ? '\n\tw.entries = p.entries' : ''}${reuse?.kind === 'B' ? '\n\tw.segs = p.segs' : ''}
+\tb.Nodes, b.Kids, b.Toks, w.scratch = p.nodes, p.kids, p.toks, p.scratch${reuse ? '\n\tw.entries = p.entries' : ''}
 \tif h < 0 { return 0, false }
 \treturn h, true
 }
@@ -3114,8 +3003,8 @@ const goBlock = (lines: string[]): string[] => lines.map((l) => GO_IND + l);
 // Shared-algorithm lowering: explicit conversions, slices; a list with an exact final length is
 // made with that capacity, any other list grows by append (no estimate is reserved: 6183a29).
 // Go: a type's export is its spelling, so a record outside the package API (the Doc's EntryMeta
-// and Seg are in it) is spelled unexported.
-const GO_API_RECORDS = new Set(['EntryMeta', 'Seg']);
+// is in it) is spelled unexported.
+const GO_API_RECORDS = new Set(['EntryMeta']);
 const goRec = (r: string): string => (GO_API_RECORDS.has(r) ? r : r[0]!.toLowerCase() + r.slice(1));
 const goType = (t: Ty): string => (isRecList(t) ? `[]${goRec(recName(t))}` : isRec(t) ? goRec(recName(t)) : isOpt(t) ? `*${goRec(recName(t))}` : GO_TYPES[t]);
 // A Go string literal; Go rejects a byte order mark inside a source file, so it is an escape.
@@ -3362,7 +3251,7 @@ type engine struct {
 \tkids []int32
 \tscratch []int32
 \tarenaBaseline int
-${reuse ? '\tentries []EntryMeta\n' : ''}${reuse?.kind === 'B' ? '\tsegs []Seg\n' : ''}}
+${reuse ? '\tentries []EntryMeta\n' : ''}}
 const arenaCompactK = 4
 
 ${renderArenaTablesGo(ar, ids)}
