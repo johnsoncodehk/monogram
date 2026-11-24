@@ -33,15 +33,15 @@ const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
 // keyed: the candidate is reached through its Dispatch key, which already tested the first token.
 const guardCond = (g: Guard, t: string, keyed: boolean): string[] => {
   if (g === null) return [];
-  const parts = keyed || g.first === null ? [] : [`inTokenSet(${g.first.id}, ${t})`];
-  if (g.second !== null) parts.push(`p.secondIn(${g.second.id})`);
+  const parts = keyed || g.first === null ? [] : [`${goLib('inTokenSet')}(${g.first.id}, ${t})`];
+  if (g.second !== null) parts.push(`p.${goLib('secondIn')}(${g.second.id})`);
   for (const l of g.lead) {   // the guard's lead tests (parser-ir.ts LeadTest) on t
-    const inS = l.ctx ? `(inTokenSet(${l.set}, ${t}) || (p.ctx&${CTX_WORD_BITS} != 0 && inCtxWords(p.ctx, ${t})))` : `inTokenSet(${l.set}, ${t})`;
+    const inS = l.ctx ? `(${goLib('inTokenSet')}(${l.set}, ${t}) || (p.ctx&${CTX_WORD_BITS} != 0 && ${goLib('inCtxWords')}(p.ctx, ${t})))` : `${goLib('inTokenSet')}(${l.set}, ${t})`;
     parts.push(l.is ? inS : `!${inS}`);
   }
   // Guard.pairs. Spelled in place, not as a pairIn helper as the other targets do: such a helper is
   // over Go's inline budget (go build -gcflags=-m: not inlinable), so each test would become a call.
-  for (const x of g.pairs ?? []) parts.push(`(!inTokenSet(${x.when.id}, ${t}) || p.secondIn(${x.second.id}))`);
+  for (const x of g.pairs ?? []) parts.push(`(!${goLib('inTokenSet')}(${x.when.id}, ${t}) || p.${goLib('secondIn')}(${x.second.id}))`);
   return parts;
 };
 // `if <conds> <body>` as one statement line (just the body when there is no condition).
@@ -68,7 +68,7 @@ const commitSwGo = (t: string): CommitLowering => ({
 // budget); the builder engine's mark is not inlined around the builder's Checkpoint, so its
 // checkpoint and undo stay printed in place (measured: +0.27% builder instructions with mark()).
 type GoUndo = { take: string; undo: string; sb: string; save: string };
-const UNDO_GO: GoUndo = { take: 'm := p.mark()', undo: 'p.reset(m)', sb: 'm.sb', save: 'm.pos' };
+const UNDO_GO: GoUndo = { take: 'm := p.mark()', get undo() { return undoGo(); }, sb: 'm.sb', save: 'm.pos' };
 const undoGoWc = (recv: string): GoUndo => ({ take: `save := p.pos; sb := len(p.scratch); ${arenaCkpt()}`, undo: `p.back(save); ${lostGoW(recv)}`, sb: 'sb', save: 'save' });
 // The direct engine's node over a commit's extent (finish is not inlined: a helper around it
 // would add a call, measured by -gcflags=-m: over Go's inlining budget).
@@ -78,8 +78,9 @@ const commitBodyGo = (cond: string, undo: GoUndo | null, nullable: boolean, fin:
   : `{ save := p.pos; sb := len(p.scratch); if ${cond} { ${ret(fin('sb', 'save'))} } }`);
 // A committed candidate's statement: `body` when conds hold, then `fail` (unless body always returns).
 // With no condition the body's block is the statement's own (blockBody).
-const commitGo = (conds: string[], body: string, fail: string, returns = false) =>
-  `{ ${conds.length ? `if ${conds.join(' && ')} ${body.startsWith('{') ? body : `{ ${body} }`}` : blockBody(body) ?? body}${conds.length || !returns ? `; ${fail}` : ''} }`;
+// `fail` may be a thunk: it is spelled (and records what it calls, goLib) only where it is printed.
+const commitGo = (conds: string[], body: string, fail: string | (() => string), returns = false) =>
+  `{ ${conds.length ? `if ${conds.join(' && ')} ${body.startsWith('{') ? body : `{ ${body} }`}` : blockBody(body) ?? body}${conds.length || !returns ? `; ${typeof fail === 'string' ? fail : fail()}` : ''} }`;
 // Whether the candidate i that just ended at pos beats the best so far: it ends past it, or — a
 // Dispatch `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is
 // kept only in a list that has ranked candidates.
@@ -91,12 +92,12 @@ const biGo = (d: Dispatch) => (d.ranked.length ? '; bi := -1' : '');
 // checkpoint (position, scratch length, arena lengths) and the undo back to it, in the native
 // engine; the builder engine's checkpoint is the builder's (ckptGoW / undoGoW).
 const ckptGo = 'm := p.mark();';
-const undoGo = 'p.reset(m)';
+const undoGo = () => `p.${goLib('reset')}(m)`;
 const ckptGoW = (_recv: string) => 'm := p.mark()';
 const undoGoW = (_recv: string) => 'p.back(m.pos); p.scratch = p.scratch[:m.sb]; p.b.Restore(m.nb, m.kb)';
 // BRANCH frame: one branch of an ordered choice (`alt`): it returns true from the choice when the
 // branch matched, and undoes it when it did not.
-const branchGo = (cond: string) => `{ ${ckptGo} if ${cond} { return true }; ${undoGo} }`;
+const branchGo = (cond: string) => `{ ${ckptGo} if ${cond} { return true }; ${undoGo()} }`;
 const branchGoW = (cond: string, recv: string) => `{ ${ckptGoW(recv)}; if ${cond} { return true }; ${undoGoW(recv)} }`;
 // CANDIDATE frame: one candidate of a longest-match list tried from `save`: when it matched and
 // beats the best so far it becomes the best (`win` records it and moves the arena checkpoint past
@@ -136,12 +137,12 @@ const ENGINE_GO: GoEngine = {
   recv: 'engine', w: '', peek: 'peek', ahead: 'ahead', matchComp: 'matchComp',
   bpFound: (n, bp) => `(p.bp_${n}(${bp}) >= 0)`, parsed: (n) => `p.parse${n}() >= 0`,
   template: (h) => `(p.matchTemplate_${h}() >= 0)`,
-  mark: ckptGo, reset: undoGo,
+  mark: ckptGo, get reset() { return undoGo(); },
 };
 const ENGINE_GO_W: GoEngine = {
   recv: 'parserW', w: 'W', peek: 'peek', ahead: 'ahead', matchComp: 'matchComp',
-  bpFound: (n, bp) => `parsedW(p.bpW_${n}(${bp}))`, parsed: (n) => `parsedW(p.parse${n}W())`,
-  template: (h) => `parsedW(p.matchTemplateW_${h}())`,
+  bpFound: (n, bp) => `${goLib('parsedW')}(p.bpW_${n}(${bp}))`, parsed: (n) => `${goLib('parsedW')}(p.parse${n}W())`,
+  template: (h) => `${goLib('parsedW')}(p.matchTemplateW_${h}())`,
   mark: `${ckptGoW('parserW')};`, reset: undoGoW('parserW'),
 };
 // The cursor's recognizers (Forms.cursorOnly) run no building form, so nothing here is called.
@@ -170,9 +171,10 @@ const targetFieldsGo = (ir: ParserIR): string => (ir.assignTargets ? `\n\tacc, a
 function targetRuntimeGo(ir: ParserIR, recv: string, node: string): string {
   const t = ir.assignTargets;
   const ret = node === 'int32' ? 'n' : 'n, true';
-  const nudOkF = `func (p *${recv}) nudOkF(n ${node}, form uint8, tail, capped bool) (${node === 'int32' ? 'int32' : 'spanned, bool'}) { p.form = form; p.tail = tail; p.capped = capped; return ${ret} }`;
+  const w = recv === 'engine' ? '' : 'W';
+  const nudOkF = goLibFn(`nudOkF${w}`, `func (p *${recv}) nudOkF(n ${node}, form uint8, tail, capped bool) (${node === 'int32' ? 'int32' : 'spanned, bool'}) { p.form = form; p.tail = tail; p.capped = capped; return ${ret} }`);
   // Without contexts a committed prefix-shaped NUD arm (FORM_UNARY, nudLowForm) is the one with a form of its own.
-  if (!t) return hasUnaryNud(ir) ? `\n${nudOkF}` : '';
+  if (!t) return hasUnaryNud(ir) && nudOkF ? `\n${nudOkF}` : '';
   return `
 func (p *${recv}) accSwap(init uint8) uint8 { prev := p.acc; p.acc = init; return prev }
 func (p *${recv}) accEnd(prev uint8, ok bool, low, last uint8) bool {
@@ -181,28 +183,50 @@ func (p *${recv}) accEnd(prev uint8, ok bool, low, last uint8) bool {
 \treturn ok
 }
 func (p *${recv}) accK(m uint8) bool { p.acc = (p.acc &^ ((p.acc >> 1) & ${t.passes}) & (p.form | ^m) & ${t.passes}) | (p.form & (m << 1)); return true }
-func (p *${recv}) accS() bool { p.acc &^= (p.acc >> 1) & ${t.passes}; return true }
-${nudOkF}`;
+${goLibFn(`accS${w}`, `func (p *${recv}) accS() bool { p.acc &^= (p.acc >> 1) & ${t.passes}; return true }
+`)}${nudOkF}`;
 }
+// The library helpers a grammar's plan may not call (the step combinators and their recognize /
+// builder twins, the shared steps, the leaf pushes, the head-leaf words test, the alignment-meta
+// accessors) are printed by need: the emission point that spells a call records the helper
+// (goLib) and the library prints only those recorded (goNeed), so everything that may record is
+// printed before the library is (emitParser, emitParserMethodsW); a helper records what it calls
+// (GO_LIB_DEPS). The same mechanism as target-rust.ts rsLib / rsNeed, owed a merge: which
+// library forms a plan calls is target-neutral (owed in src/ir: one record both printers read).
+let goLibUses = new Set<string>();
+const GO_LIB_DEPS: Record<string, string[]> = {
+  sepByR: ['matchLitR'], sepByCR: ['matchLitR'], altLitR: ['matchLitR'], nllBlockedW: ['headLeafTextW'],
+  starInR: ['ahead'], starInCR: ['ahead'], ctxWord: ['inCtxWords'], ahead: ['inTokenSet'], secondIn: ['inTokenSet'], matchComp: ['gtOp'],
+  star: ['reset'], starIn: ['ahead', 'reset'], starInL: ['ahead'], starInC: ['ahead'], opt: ['reset'],
+  sepBy: ['reset', 'matchLit'], sepByL: ['matchLit'], sepByC: ['matchLit'], altLit: ['matchLit'],
+  starInW: ['ahead'], starInLW: ['ahead'], starInCW: ['ahead'],
+  sepByW: ['litW', 'litTt'], sepByLW: ['litW', 'litTt'], sepByCW: ['litW', 'litTt'], altLitW: ['litW', 'litTt'],
+};
+const goLib = (name: string): string => { if (!goLibUses.has(name)) { goLibUses.add(name); for (const d of GO_LIB_DEPS[name] ?? []) goLib(d); } return name; };
+const goNeed = (name: string): boolean => goLibUses.has(name);
+// A helper both engines print under one Go name (`name`), recorded per engine (`key`: the builder's ends in W).
+const goLibAs = (key: string, name: string): string => (goLib(key), name);
+// A helper's text when the plan calls it.
+const goLibFn = (name: string, text: string): string => (goNeed(name) ? text : '');
 function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: ArenaIdPlan): StepLowering {
   // A literal's leaf type (litTt, decided here): a word is a $keyword leaf, anything else $punct.
   const litTt = (lid: number) => (lid >= ids.kwLid ? ttIdOf(ar!, '$keyword') : TT_SKIP_PUNCT);
   const fn = (cond: string) => `func() bool { return ${cond} }`;
   const L: StepLowering = {
     inner: () => L,
-    shared: (id) => `p.sub${id}${f}()`,
-    lit: (s) => (gtCompLit(ids, s) ? `p.${e.matchComp}(${lidOf(ids, s.value)})` : f === 'W' ? `p.litW(${lidOf(ids, s.value)}) && p.takeW(${litTt(lidOf(ids, s.value))})` : `p.matchLit${f}(${lidOf(ids, s.value)})`),
-    tok: (name) => (f === 'W' ? `p.tokW(${kidOf(ids, name)}) && p.takeW(${kidOf(ids, name)})` : `p.matchTok${f}(${kidOf(ids, name)})`),
-    template: (name, hole) => `(${f === 'W' ? `(${L.tok(name)})` : L.tok(name)} || ${f === 'R' ? e.template(hole) : f === 'W' ? `p.callRuleW(p.matchTemplateW_${hole}())` : `p.callRule(p.matchTemplate_${hole}())`})`,
-    rule: (name) => (f === 'R' ? `p.rec${name}()` : f === 'W' ? `p.callRuleW(p.parse${name}W())` : `p.callRule(p.parse${name}())`),
+    shared: (id) => `p.${f === 'R' ? `sub${id}R` : goLib(`sub${id}${f}`)}()`,
+    lit: (s) => (gtCompLit(ids, s) ? `p.${goLib(e.matchComp)}(${lidOf(ids, s.value)})` : f === 'W' ? `p.${goLib('litW')}(${lidOf(ids, s.value)}) && p.takeW(${litTt(lidOf(ids, s.value))})` : `p.${goLib(f === 'R' ? 'matchLitR' : 'matchLit')}(${lidOf(ids, s.value)})`),
+    tok: (name) => (f === 'W' ? `p.${goLib('tokW')}(${kidOf(ids, name)}) && p.takeW(${kidOf(ids, name)})` : `p.${goLib(f === 'R' ? 'matchTokR' : 'matchTok')}(${kidOf(ids, name)})`),
+    template: (name, hole) => `(${f === 'W' ? `(${L.tok(name)})` : L.tok(name)} || ${f === 'R' ? e.template(hole) : f === 'W' ? `p.${goLib('callRuleW')}(p.matchTemplateW_${hole}())` : `p.${goLib('callRule')}(p.matchTemplate_${hole}())`})`,
+    rule: (name) => (f === 'R' ? `p.rec${name}()` : f === 'W' ? `p.${goLib('callRuleW')}(p.parse${name}W())` : `p.${goLib('callRule')}(p.parse${name}())`),
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
-    ruleBp: (name, bp) => (f === 'R' ? e.bpFound(name, bp) : f === 'W' ? `p.callRuleW(p.bpW_${name}(${bp}))` : `p.callRule(p.bp_${name}(${bp}))`),
+    ruleBp: (name, bp) => (f === 'R' ? e.bpFound(name, bp) : f === 'W' ? `p.${goLib('callRuleW')}(p.bpW_${name}(${bp}))` : `p.${goLib('callRule')}(p.bp_${name}(${bp}))`),
     // Declared target contexts (assign-targets.ts): computed only in the building forms (a
     // recognized rd rule computes no form). A container arm's steps run in a fresh accumulator:
     // accSwap's result, the enclosing one, is accEnd's argument (Go evaluates the calls of an
     // expression left to right), so it is kept in the frame, not on a stack.
     acc: (call, mask) => (f === 'R' ? call : `(${call} && p.accK(${mask}))`),
-    accSep: () => (f === 'R' ? 'true' : 'p.accS()'),
+    accSep: () => (f === 'R' ? 'true' : `p.${goLibAs(`accS${f}`, 'accS')}()`),
     // A demand twin's Pratt child (DemandIR): the position is read first (Go runs the calls of an
     // expression left to right).
     dfix: (call) => (f === 'R' ? call : `p.dfix(p.rpPos(), ${call})`),
@@ -214,19 +238,19 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: Aren
     // attempted without a mark (starC / optC / sepByC). A body that fails with leaves only
     // (MarkForm 'leaves') takes the L forms when building: the position and the scratch list, no
     // arena or builder checkpoint; recognizing, every mark is the position alone already.
-    star: (body, g, mk) => { const c = markSuffixGo(mk, f); return g === null ? `p.star${c}${f}(${fn(body)})` : `p.starIn${c}${f}(${g}, ${fn(body)})`; },
+    star: (body, g, mk) => { const c = markSuffixGo(mk, f); return g === null ? `p.${goLib(`star${c}${f}`)}(${fn(body)})` : `p.${goLib(`starIn${c}${f}`)}(${g}, ${fn(body)})`; },
     opt: (body, g, mk) => {
-      const attempt = `p.opt${markSuffixGo(mk, f)}${f}(${fn(body)})`;
-      return g === null ? attempt : `(!p.${e.ahead}(${g}, true) || ${attempt})`;
+      const attempt = `p.${goLib(`opt${markSuffixGo(mk, f)}${f}`)}(${fn(body)})`;
+      return g === null ? attempt : `(!p.${goLib(e.ahead)}(${g}, true) || ${attempt})`;
     },
     sep: (elem, delim, g, mk) => {
-      const call = `p.sepBy${markSuffixGo(mk, f)}${f}(${fn(elem)}, ${sepDelimLid(ids, delim)})`;
-      return g === null ? call : `(!p.${e.ahead}(${g}, true) || ${call})`;
+      const call = `p.${goLib(`sepBy${markSuffixGo(mk, f)}${f}`)}(${fn(elem)}, ${sepDelimLid(ids, delim)})`;
+      return g === null ? call : `(!p.${goLib(e.ahead)}(${g}, true) || ${call})`;
     },
-    altlit: (values) => `p.altLit${f}([]uint16{${values.map((v) => lidOf(ids, v)).join(', ')}})`,
+    altlit: (values) => `p.${goLib(`altLit${f}`)}([]uint16{${values.map((v) => lidOf(ids, v)).join(', ')}})`,
     look: (id, is) => `${is ? '' : '!'}p.look${id}()`,   // recognize form (lookFnsR)
-    ahead: (set, is) => `p.${e.ahead}(${set}, ${is})`,
-    aheadCtx: (set, is) => (is ? `(p.${e.ahead}(${set}, true) || p.ctxWord())` : `(p.${e.ahead}(${set}, false) && !p.ctxWord())`),
+    ahead: (set, is) => `p.${goLib(e.ahead)}(${set}, ${is})`,
+    aheadCtx: (set, is) => (is ? `(p.${goLib(e.ahead)}(${set}, true) || p.${goLib('ctxWord')}())` : `(p.${goLib(e.ahead)}(${set}, false) && !p.${goLib('ctxWord')}())`),
     sameLine: () => `func() bool { t := p.${e.peek}(); return t != nil && !t.Nl }()`,
     when: (mask, val) => `(p.ctx&${mask} == ${val})`,
     inPlace: (_kind, stmts) => `func() bool { ${stmts} }()`,
@@ -280,54 +304,54 @@ function ruleR(r: RdRule | PrattRule, ids: LexIdPlan, e: GoEngine): string {
   });
 }
 // The recognize forms of the cursor helpers (the same tokens examined, nothing built).
-const recognizeHelpersGo = (recv: string) => `func (p *${recv}) matchLitR(lid uint16) bool {
+const recognizeHelpersGo = (recv: string) => `${goLibFn('matchLitR', `func (p *${recv}) matchLitR(lid uint16) bool {
 \ti := p.pos
 \tp.peekEnd = i + 1
 \tif i >= len(p.toks) || p.toks[i].Lid != lid { return false }
 \tp.pos = i + 1
 \treturn true
 }
-func (p *${recv}) matchTokR(kid uint16) bool {
+`)}${goLibFn('matchTokR', `func (p *${recv}) matchTokR(kid uint16) bool {
 \ti := p.pos
 \tp.peekEnd = i + 1
 \tif i >= len(p.toks) || p.toks[i].Kid != kid { return false }
 \tp.pos = i + 1
 \treturn true
 }
-func (p *${recv}) starR(once func() bool) bool {
+`)}${goLibFn('starR', `func (p *${recv}) starR(once func() bool) bool {
 \tfor { sp := p.pos; if !once() { p.back(sp); break } }
 \treturn true
 }
-func (p *${recv}) starInR(k int, once func() bool) bool {
+`)}${goLibFn('starInR', `func (p *${recv}) starInR(k int, once func() bool) bool {
 	for p.ahead(k, true) { sp := p.pos; if !once() { p.back(sp); break } }
 	return true
 }
-// A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo. Kept out of
+`)}// A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo. Kept out of
 // line (go:noinline), as the marked forms already are by Go's inline budget: inlined, these small
 // helpers and their closures grew the frames of the large rule functions, and every call of those
 // paid for it on paths that never run the helper (dense-semi: parseStmtW / parseDeclW +7.5
 // instructions per call, Go builder Ir +5.3%).
-//go:noinline
+${goLibFn('starCR', `//go:noinline
 func (p *${recv}) starCR(once func() bool) bool {
 \tfor once() {}
 \treturn true
 }
-//go:noinline
+`)}${goLibFn('starInCR', `//go:noinline
 func (p *${recv}) starInCR(k int, once func() bool) bool {
 \tfor p.ahead(k, true) && once() {}
 \treturn true
 }
-//go:noinline
+`)}${goLibFn('optCR', `//go:noinline
 func (p *${recv}) optCR(body func() bool) bool { body(); return true }
-//go:noinline
+`)}${goLibFn('sepByCR', `//go:noinline
 func (p *${recv}) sepByCR(elem func() bool, delim uint16) bool {
 \tif elem() { for p.matchLitR(delim) && elem() {} }
 \treturn true
 }
-func (p *${recv}) optR(body func() bool) bool {
+`)}${goLibFn('optR', `func (p *${recv}) optR(body func() bool) bool {
 \tsp := p.pos; if !body() { p.back(sp) }; return true
 }
-func (p *${recv}) sepByR(elem func() bool, delimLid uint16) bool {
+`)}${goLibFn('sepByR', `func (p *${recv}) sepByR(elem func() bool, delimLid uint16) bool {
 \tsp0 := p.pos
 \tif !elem() { p.back(sp0); return true }
 \tfor {
@@ -337,11 +361,11 @@ func (p *${recv}) sepByR(elem func() bool, delimLid uint16) bool {
 \t}
 \treturn true
 }
-func (p *${recv}) altLitR(lids []uint16) bool {
+`)}${goLibFn('altLitR', `func (p *${recv}) altLitR(lids []uint16) bool {
 \tfor _, lid := range lids { if p.matchLitR(lid) { return true } }
 \treturn false
 }
-`;
+`)}`;
 
 /** Emit kid/lid lookup tables into generated lexer source. */
 function renderIdTablesGo(ids: LexIdPlan): string {
@@ -379,12 +403,12 @@ func lidOf(text string) uint16 {
 \tif b := text[0]; ${wordTest.join(' || ')} { return lidOfKw(text) }
 \treturn lidOfPunct(text)
 }
-// lidOfWord is lidOf for a token whose kind can equal word literals only (shared.tokenLiterals).
+${goLibFn('lidOfWord', `// lidOfWord is lidOf for a token whose kind can equal word literals only (shared.tokenLiterals).
 func lidOfWord(text string) uint16 {
 \tif !lidKeyIsLiteral(text) { return 0 }
 \treturn lidOfKw(text)
 }
-func lidOfKw(text string) uint16 {
+`)}func lidOfKw(text string) uint16 {
 \tswitch text {
 ${cases(tables.word)}\t}
 \treturn 0
@@ -408,13 +432,13 @@ const TT_SKIP_PUNCT = ${TT_SKIP_PUNCT}
 // lidKw: the first word lid (LexIdPlan.kwLid). A literal from here on is a $keyword leaf, one
 // before it a $punct (no leaf); litTt is its leaf type id.
 const lidKw = ${ids.kwLid}
-func litTt(lid uint16) uint16 { if lid >= lidKw { return ${ttIdOf(ar, '$keyword')} }; return TT_SKIP_PUNCT }
-`;
+${goLibFn('litTt', `func litTt(lid uint16) uint16 { if lid >= lidKw { return ${ttIdOf(ar, '$keyword')} }; return TT_SKIP_PUNCT }
+`)}`;
 }
 
 // The literal id of a token whose text is `text`, given the literals its kind can be
 // (shared.tokenLiterals): 0 when it can be none.
-const lidCallGo = (lits: string[], text: string): string => (lits.length === 0 ? '0' : lits.every((l) => lidWordByte(firstUnit(l, UNITS))) ? `lidOfWord(${text})` : `lidOf(${text})`);
+const lidCallGo = (lits: string[], text: string): string => (lits.length === 0 ? '0' : lits.every((l) => lidWordByte(firstUnit(l, UNITS))) ? `${goLib('lidOfWord')}(${text})` : `lidOf(${text})`);
 
 // Whether a skipped token's text holds a line terminator (LF, CR, U+2028, U+2029): byte searches,
 // no decode.
@@ -442,14 +466,14 @@ ${l.steps.map((e) => `\ti = ${e}\n\tif i < ${l.uniform} { return i }\n`).join(''
 `;
 }
 
-const GO_LEX_ERR = `// lexErr is a lexer error (relex-family.ts): its kind, offset and end; lexError spells its message.
+const goLexErr = () => `// lexErr is a lexer error (relex-family.ts): its kind, offset and end; lexError spells its message.
 type lexErr struct { Kind, Off, End int }
-// lexTplErr is the lexer error of a template span (-1 unterminated, -2 - q an invalid escape at q).
+${goLibFn('lexTplErr', `// lexTplErr is the lexer error of a template span (-1 unterminated, -2 - q an invalid escape at q).
 func lexTplErr(q, n int) *lexErr {
 \tif q == -1 { return &lexErr{Kind: 2, Off: n} }
 \treturn &lexErr{Kind: 3, Off: -2 - q}
 }
-`;
+`)}`;
 // A lexer error (relex-family.ts LexErr): recorded, and the lex ends: a jump to the loop's exit,
 // `lexFail` (with a type-parameter signature undecided, the exit returns to the loop, whose head
 // rewinds it). Go: an error path that continued the loop would carry err around every iteration
@@ -880,7 +904,7 @@ ${emitHooks}
   // a closer can bring an element frame back on top: the round ends the plain rounds (bound)
   const elRefreshClose = ir.elements ? 'refresh(); if hot { bound = 0 }; ' : '';
   const tplSpanGo = (from: string, strict: string): string => `\t\t\tq := ${shared.tplSpan(tpl!).call('src', from, strict)}
-\t\t\tif q < 0 { err = lexTplErr(q, n); goto lexFail }
+\t\t\tif q < 0 { err = ${goLib('lexTplErr')}(q, n); goto lexFail }
 \t\t\tinterp, e := strings.HasPrefix(src[q:], ${J(tpl!.interpOpen)}), q + ${tlen(tpl!.open)}
 \t\t\tif interp { e = q + ${tlen(tpl!.interpOpen)} }
 `;
@@ -916,8 +940,8 @@ ${goUniIdentTables(ir)}func scanUniIdent(src string, pos int) (int, bool) {
 	if uniClass(r) != 2 { return pos, false }
 	return lxExtRun(src, pos+w), true
 }
-func ${shared.uniClass()}(cp int) int { return int(uniClass(rune(cp))) }
-${shared.uniIdent(ir) ? `func ${shared.uniIdent(ir)}(s string, p int) int {
+${shared.uniClass(ir) ? `func ${shared.uniClass(ir)}(cp int) int { return int(uniClass(rune(cp))) }
+` : ''}${shared.uniIdent(ir) ? `func ${shared.uniIdent(ir)}(s string, p int) int {
 	if p >= len(s) { return -1 }
 	if e, ok := scanUniIdent(s, p); ok { return e }
 	return -1
@@ -999,7 +1023,7 @@ ${uniIdentFallbackGo}${loopPanicGo}`;
   const stkFields = [rx ? '\tparenHead []bool\n' : '', tpl || el ? '\ttemplateStack []int\n' : ''].join('');
   const lexStacks = `// lexStacks are the lexer's transient stacks, kept across lexes by a reused builder.
 type lexStacks struct {${stkFields ? `\n${stkFields}` : ''}}
-${GO_LEX_ERR}`;
+${goLexErr()}`;
   if (el) return elementLexerGo(ir, ids, shared, { head: `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}`, scans, rxStateFrom, nlWs, lexCodes, lexFirsts, tplCloseTest, tplOpenTest, uniIdentFallbackGo, loopPanicGo, goBoolArr });
   if (rxOnly) {
     return `${idTables}${lexStacks}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool, *lexErr) {
@@ -1154,6 +1178,8 @@ function goRowOpRead(r: PrattRule, ids: LexIdPlan, withEnd: boolean, dem: boolea
 // helpers and every recognizer that runs no building form (Forms.cursorOnly) are printed once, as
 // its methods, and called through either engine (Go promotes the embedded methods).
 function cursorGo(ir: ParserIR, ids: LexIdPlan): string {
+  // The cursor-only recognizers record what they call before the recognize helpers are printed (goLib).
+  const own = `${lookFnsR(ir, ids, CURSOR_GO, true)}${sharedFnsR(ir, ids, CURSOR_GO, true)}${ir.rules.filter((r) => ir.forms.cursorOnly.rules.includes(r.name)).map((r) => ruleR(r as RdRule, ids, CURSOR_GO) + '\n').join('')}`;
   return `type cursor struct {
 \ttoks []Tok
 \tpos, maxLook int
@@ -1174,36 +1200,37 @@ func (p *cursor) back(sp int) { if p.peekEnd > p.maxLook { p.maxLook = p.peekEnd
 func (p *cursor) lookEnd() int { if p.peekEnd > p.maxLook { return p.peekEnd }; return p.maxLook }
 // lookReset starts recording an entry's extent.
 func (p *cursor) lookReset() { p.maxLook = 0; p.peekEnd = 0 }
-func (p *cursor) ahead(k int, is bool) bool { t := p.peek(); return (t != nil && inTokenSet(k, t)) == is }
-// ctxWord: whether the next token is a word the context in force reserves; outside every context it reads nothing.
+${goLibFn('ahead', `func (p *cursor) ahead(k int, is bool) bool { t := p.peek(); return (t != nil && inTokenSet(k, t)) == is }
+`)}${goLibFn('ctxWord', `// ctxWord: whether the next token is a word the context in force reserves; outside every context it reads nothing.
 func (p *cursor) ctxWord() bool { if p.ctx&${CTX_WORD_BITS} == 0 { return false }; t := p.peek(); return t != nil && inCtxWords(p.ctx, t) }
-// secondIn: whether the token after the current one is in tokenSets[k] (a candidate's SECOND guard).
+`)}${goLibFn('secondIn', `// secondIn: whether the token after the current one is in tokenSets[k] (a candidate's SECOND guard).
 func (p *cursor) secondIn(k int) bool { i := p.pos + 1; if i >= p.maxLook { p.maxLook = i + 1 }; return i < len(p.toks) && inTokenSet(k, &p.toks[i]) }
-func (p *cursor) offAt(i int) int { if i < len(p.toks) { return int(p.toks[i].Off) }; return 0 }
-func (p *cursor) matchComp(lid uint16) bool {
+`)}func (p *cursor) offAt(i int) int { if i < len(p.toks) { return int(p.toks[i].Off) }; return 0 }
+${goLibFn('matchComp', `func (p *cursor) matchComp(lid uint16) bool {
 \tif p.peek() == nil { return false }
 \tc, n, _ := gtOp(p.toks, p.pos)
 \tif c != lid { return false }
 \tif e := p.pos + n + 1; e > p.maxLook { p.maxLook = e }
 \tp.pos += n; return true
 }
-${recognizeHelpersGo('cursor')}${lookFnsR(ir, ids, CURSOR_GO, true)}${sharedFnsR(ir, ids, CURSOR_GO, true)}${ir.rules.filter((r) => ir.forms.cursorOnly.rules.includes(r.name)).map((r) => ruleR(r as RdRule, ids, CURSOR_GO) + '\n').join('')}`;
+`)}${recognizeHelpersGo('cursor')}${own}`;
 }
 function engineMarkGo(recv: string): string {
   return `// mark: where a construct that may have to undo what it tries starts; ${recv === 'engine' ? 'reset undoes everything since (the position as back does, the scratch list and the arena).' : 'undoGoW undoes everything since.'}
 ${recv === 'engine'
   ? `func (p *engine) mark() mark { return mark{p.pos, len(p.scratch), len(p.nodes), len(p.kids)} }
-func (p *engine) reset(m mark) { p.back(m.pos); p.scratch = p.scratch[:m.sb]; p.nodes = p.nodes[:m.nb]; p.kids = p.kids[:m.kb] }
+${goLibFn('reset', `
+func (p *engine) reset(m mark) { p.back(m.pos); p.scratch = p.scratch[:m.sb]; p.nodes = p.nodes[:m.nb]; p.kids = p.kids[:m.kb] }`)}${goLibFn('nudNone', `
 // nudNone: a NUD that matched nothing, from its commit switch: the state its frame leaves then.
-func (p *engine) nudNone() int32 { p.capped = false; p.form = 0; p.tail = false; return -1 }
+func (p *engine) nudNone() int32 { p.capped = false; p.form = 0; p.tail = false; return -1 }`)}${goLibFn('nudOk', `
 // nudOk: a committed NUD arm's node n, with the state its frame leaves for it (inlined).
-func (p *engine) nudOk(n int32, tail, capped bool) int32 { p.form = 0; p.tail = tail; p.capped = capped; return n }`
+func (p *engine) nudOk(n int32, tail, capped bool) int32 { p.form = 0; p.tail = tail; p.capped = capped; return n }`)}`
   // Written so that it fits Go's inlining budget (cost 77 of 80). A reset method around the
   // builder's Restore cannot (cost 86 and more with every form tried), and a call where the undo
   // was inline would be added work on every failed branch, so the undo stays printed in place.
-  : `func (p *${recv}) mark() (m mark) { m.nb, m.kb = p.b.Checkpoint(); m.pos, m.sb = p.pos, len(p.scratch); return }
-func (p *${recv}) nudNone() (spanned, bool) { p.capped = false; p.form = 0; p.tail = false; return spanned{}, false }
-func (p *${recv}) nudOk(n spanned, tail, capped bool) (spanned, bool) { p.form = 0; p.tail = tail; p.capped = capped; return n, true }`}`;
+  : `func (p *${recv}) mark() (m mark) { m.nb, m.kb = p.b.Checkpoint(); m.pos, m.sb = p.pos, len(p.scratch); return }${goLibFn('nudNoneW', `
+func (p *${recv}) nudNone() (spanned, bool) { p.capped = false; p.form = 0; p.tail = false; return spanned{}, false }`)}${goLibFn('nudOkW', `
+func (p *${recv}) nudOk(n spanned, tail, capped bool) (spanned, bool) { p.form = 0; p.tail = tail; p.capped = capped; return n, true }`)}`}`;
 }
 // '>'-led composite operators (LexIdPlan.gtComps): the lexer scans every '>' alone. gtOp reads the
 // operator at ts[i]: a lone '>' extends over each adjacent single-character punct token after it
@@ -1218,8 +1245,8 @@ function goLeadIs(ids: LexIdPlan, x: string, inAnd = false): string {
 }
 function gtRuntimeGo(ids: LexIdPlan, ar: ArenaIdPlan): string {
   if (ids.gtComps.length === 0) {
-    return `func gtOp(ts []Tok, i int) (uint16, int, uint32) { return ts[i].Lid, 1, ts[i].End }
-func leafEnd(ts []Tok, ti uint32, tt uint8) uint32 { _ = tt; return ts[ti].End }`;
+    return `${goLibFn('gtOp', `func gtOp(ts []Tok, i int) (uint16, int, uint32) { return ts[i].Lid, 1, ts[i].End }
+`)}func leafEnd(ts []Tok, ti uint32, tt uint8) uint32 { _ = tt; return ts[ti].End }`;
   }
   const arms = ids.gtComps.map((c) => {
     const a = lidOf(ids, c.slice(0, -1)), b = lidOf(ids, c.slice(-1)), r = lidOf(ids, c);
@@ -1253,8 +1280,17 @@ func leafEnd(ts []Tok, ti uint32, tt uint8) uint32 {
 
 // ParserIR.shared, one method each: the step, run against the parser's scratch list. It undoes
 // nothing: a failed step leaves what it advanced and appended for the construct around its site.
+// Printed by need (goLib), after every caller: a shared step may call another, so until none is added.
 function sharedFns(ir: ParserIR, ids: LexIdPlan): string {
-  return ir.shared.map((s, id) => (ir.forms.buildShared[id] ? `func (p *engine) sub${id}() bool { ${walkStmts(s, goSteps(ids, '', 'engine', ENGINE_GO))} }\n` : '')).join('');
+  return sharedByNeed(ir, '', (s, id) => `func (p *engine) sub${id}() bool { ${walkStmts(s, goSteps(ids, '', 'engine', ENGINE_GO))} }\n`);
+}
+function sharedByNeed(ir: ParserIR, f: '' | 'W', print: (s: Step, id: number) => string): string {
+  const fns: string[] = [];
+  for (let added = true; added;) {
+    added = false;
+    ir.shared.forEach((s, id) => { if (ir.forms.buildShared[id] && fns[id] === undefined && goNeed(`sub${id}${f}`)) { fns[id] = print(s, id); added = true; } });
+  }
+  return ir.shared.map((_, id) => fns[id] ?? '').join('');
 }
 
 
@@ -1334,7 +1370,7 @@ func (p *engine) parse${r.name}() int32 {
     headSeg: (rule) => `func (p *engine) parseHeadSeg() (EntryMeta, bool) {
 \tp.lookReset()
 \tbefore := len(p.scratch)
-\tp.opt(func() bool { return p.callRule(p.parse${rule}()) })
+\tp.${goLib('opt')}(func() bool { return p.${goLib('callRule')}(p.parse${rule}()) })
 \tif len(p.scratch) == before { return EntryMeta{}, false }
 \tn := p.scratch[before]
 \text := p.nodes[n].TokEnd
@@ -1347,11 +1383,11 @@ func (p *engine) parse${r.name}() int32 {
     loopSeg: (kid, rule) => `func (p *engine) parseLoopSeg() (EntryMeta, bool) {
 \tsp := p.pos; before := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \tp.lookReset()
-\tif !p.matchTok(${kid}) {
+\tif !p.${goLib('matchTok')}(${kid}) {
 \t\tp.back(sp); p.scratch = p.scratch[:before]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]
 \t\treturn EntryMeta{}, false
 \t}
-\tp.opt(func() bool { return p.callRule(p.parse${rule}()) })
+\tp.${goLib('opt')}(func() bool { return p.${goLib('callRule')}(p.parse${rule}()) })
 \tleaf := p.scratch[before]
 \tvar tokStart, tokEnd uint32
 \tvar off, end uint32
@@ -1468,28 +1504,28 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     `bestPos = p.pos;${markGo(d, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; nb = len(p.nodes); kb = len(p.kids)`;
   const lost = lostGo;
   const fin = `p.finish(${rid}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart))`;
-  const B = goPrattBase(r, ids, (ws) => `!_inW(${ws}, p.headLeafText(left))`);
-  const fail = '{ return p.nudNone() }';
+  const B = goPrattBase(r, ids, (ws) => `!${goLib('_inW')}(${ws}, p.${goLib('headLeafText')}(left))`);
+  const fail = () => `{ return p.${goLib('nudNone')}() }`;
   const L: PrattLowering = {
     ...B,
     // A committed arm (parser-ir.ts Commit) leaves what the frame's close would: its node, form,
     // tail and capped flag; failing, no node and the frame's empty state.
-    commitLeaf: (i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; n := p.finish(${rid}, sb, int(t.Off), save); p.form = ${T.fm(i)}; p.tail = false; return n }`, fail, true),
-    commitSeq: (i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, finGo(rid), (n) => (T.fm(i) === '0' ? `return p.nudOk(${n}, ${tail}, ${capGo(capped)})` : `return p.nudOkF(${n}, ${T.fm(i)}, ${tail}, ${capGo(capped)})`)), fail),
+    commitLeaf: (i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.${goLib('pushLeaf')}(uint8(t.Kid), uint32(p.pos)); p.pos++; n := p.finish(${rid}, sb, int(t.Off), save); p.form = ${T.fm(i)}; p.tail = false; return n }`, fail, true),
+    commitSeq: (i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, finGo(rid), (n) => (T.fm(i) === '0' ? `return p.${goLib('nudOk')}(${n}, ${tail}, ${capGo(capped)})` : `return p.${goLib('nudOkF')}(${n}, ${T.fm(i)}, ${tail}, ${capGo(capped)})`)), fail),
     commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok${preGateGo(r, ids)} {
 \t\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
-\t\tp.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
+\t\tp.${goLib('pushLeaf')}(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
 \t\toperand := p.bp_${r.name}(pbp.rbp)
 \t\tif operand >= 0 && pbp.tgt && ${T.lf('p.form')} != 0 { p.back(save); ${lost}; p.capped = false; return -1 }
 \t\tif operand >= 0 { p.scratch = append(p.scratch, operand); n := p.finish(${rid}, sb, int(t.Off), save); p.form = pbp.form; p.tail = true; p.capped = false; return n }
 \t\tp.back(save); ${lost}
 \t}`, fail),
-    commitFail: fail,
+    get commitFail() { return fail(); },
     nudEnd: '}',
     commitSw: commitSwGo('t'),
     steps: goSteps(ids, '', 'engine', ENGINE_GO),
     nudGuard: (g, keyed) => guardCond(g, 't', keyed),
-    nudLeaf: (i) => `{ p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, T.fm(i), false, 'false')}; p.back(save) }`,
+    nudLeaf: (i) => `{ p.${goLib('pushLeaf')}(uint8(t.Kid), uint32(p.pos)); p.pos++; best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, T.fm(i), false, 'false')}; p.back(save) }`,
     nudTpl: (i, hole) => `\tif t.Kid == ${kidOf(ids, '$templateHead')} {
 \t\tnode := p.matchTemplate_${hole}()
 \t\tif node >= 0 && ${beatsGo(d, 'p.pos', i)} { p.scratch = append(p.scratch, node); best = p.finish(${rid}, sb, int(p.nodes[node].Offset), int(p.nodes[node].TokStart)); ${won(i, T.fm(i), false, 'false')} } else { ${lost} }
@@ -1499,7 +1535,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     // An operand that parses but is not the target the operator requires fails the whole Pratt
     // call, whatever another arm matched.
     nudPrefix: (i) => `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok${preGateGo(r, ids)} {
-\t\tp.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
+\t\tp.${goLib('pushLeaf')}(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
 \t\toperand := p.bp_${r.name}(pbp.rbp)
 \t\tif operand >= 0 && pbp.tgt && ${T.lf('p.form')} != 0 { p.back(save); ${lost}; p.capped = false; return -1 }
 \t\tif operand >= 0 && ${beatsGo(d, 'p.pos', i)} { p.scratch = append(p.scratch, operand); best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, 'pbp.form', true, 'false')} } else { ${lost} }
@@ -1518,7 +1554,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     postfixToks: (kids) => `\t\tswitch t.Kid {
 ${kids.map((k) => `\t\tcase ${k}:
 \t\t\tif !tailClosed {
-\t\t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left); p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++
+\t\t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left); p.${goLib('pushLeaf')}(uint8(t.Kid), uint32(p.pos)); p.pos++
 \t\t\t\tleft = ${fin}; form = ${T.postTok(k)}; continue LedLoop
 \t\t\t}`).join('\n')}
 \t\t}`,
@@ -1529,14 +1565,14 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\t}`,
     postfixOp: `\t\tif row&${OP_ROW.bpMask << OP_ROW.postShift} != 0 && int((row >> ${OP_ROW.postShift}) & ${OP_ROW.bpMask}) > minBp && !tailClosed${r.postfixSameLine ? ' && !t.Nl' : ''} {
 \t\t\tif row&${OP_ROW.postTgt} != 0 && ${T.lf('form')} != 0 { return -1 }
-\t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++; tailClosed = true
+\t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left); p.${goLib('pushLeaf')}(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++; tailClosed = true
 \t\t\tleft = ${fin}; form = ${T.post}; continue
 \t\t}`,
     noBinary: '\t\tbreak\n\t}',
     binary: `${goRowOpRead(r, ids, false, T.dem)}
 \t\tif infoTgt && ${T.tgt} || infoNoUnary && ${T.lf('form')} == 2 { return -1 }
 \t\tledSave := p.pos; sb := len(p.scratch)
-\t\tp.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos))
+\t\tp.scratch = append(p.scratch, left); p.${goLib('pushLeaf')}(${ttIdOf(ar, '$operator')}, uint32(p.pos))
 \t\tp.pos += opN
 \t\trhs := p.bp_${r.name}(infoRbp)
 \t\tif rhs < 0 { p.back(ledSave); p.scratch = p.scratch[:sb]; break }
@@ -1840,10 +1876,10 @@ func (p *engine) checkTreeEq(text string, root int32) bool {
 // Nl/Lc/Lb/Hd packed in Flags; Pd/Fd/Td are narrow depths (paren/flow/template).
 type alignMeta struct { Off, End int32; Kid, Pd, Fd uint16; Flags, Td uint8 }
 func amNl(m alignMeta) bool { return m.Flags&1 != 0 }
-func amLc(m alignMeta) bool { return m.Flags&2 != 0 }
-func amLb(m alignMeta) bool { return m.Flags&4 != 0 }
-func amHd(m alignMeta) bool { return m.Flags&8 != 0 }
-func amText(src string, m alignMeta) string { return src[m.Off:m.End] }
+${goLibFn('amLc', `func amLc(m alignMeta) bool { return m.Flags&2 != 0 }
+`)}${goLibFn('amLb', `func amLb(m alignMeta) bool { return m.Flags&4 != 0 }
+`)}${goLibFn('amHd', `func amHd(m alignMeta) bool { return m.Flags&8 != 0 }
+`)}func amText(src string, m alignMeta) string { return src[m.Off:m.End] }
 func mkAlign(off, end int32, kid uint16, nl bool, fd, pd uint16, lc, lb, hd bool, td uint8) alignMeta {
 	var flags uint8
 	if nl { flags |= 1 }
@@ -1852,10 +1888,10 @@ func mkAlign(off, end int32, kid uint16, nl bool, fd, pd uint16, lc, lb, hd bool
 	if hd { flags |= 8 }
 	return alignMeta{Off: off, End: end, Kid: kid, Pd: pd, Fd: fd, Flags: flags, Td: td}
 }
-func shiftAlign(m alignMeta, delta int) alignMeta {
+${goLibFn('shiftAlign', `func shiftAlign(m alignMeta, delta int) alignMeta {
 	return alignMeta{Off: m.Off + int32(delta), End: m.End + int32(delta), Kid: m.Kid, Pd: m.Pd, Fd: m.Fd, Flags: m.Flags, Td: m.Td}
 }
-type Align struct {
+`)}type Align struct {
 	OldN     int   \`json:"oldN"\`
 	NewN     int   \`json:"newN"\`
 	Prefix   int   \`json:"prefix"\`
@@ -1954,7 +1990,7 @@ function demandFnsGo(recv: string, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan
   if (!D) return '';
   const w = recv !== 'engine';
   const S = w ? goSteps(ids, 'W', recv, ENGINE_GO_W, ar) : goSteps(ids, '', 'engine', ENGINE_GO);
-  const reset = w ? 'p.back(q); p.scratch = p.scratch[:sb]; p.b.Restore(nb, kb)' : 'p.reset(mark{q, sb, nb, kb})';
+  const reset = w ? 'p.back(q); p.scratch = p.scratch[:sb]; p.b.Restore(nb, kb)' : `p.${goLib('reset')}(mark{q, sb, nb, kb})`;
   const twinOf = (f: string) => `int((${f}>>${DEFER_SHIFT})&7) - 1`;
   return `
 func (p *${recv}) rpMark() (int, int, int, int) { m := p.mark(); return m.pos, m.sb, m.nb, m.kb }
@@ -1998,7 +2034,7 @@ func (p *${recv}) demand_${r.name}(op, form, p0, stop int) bool {
 function rebindRuntimeGo(recv: string, ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   if (!hasRebind(ir)) return '';
   const sites = [...(RB_SITES.get(ids)?.get(recv) ?? new Map<string, number>()).keys()].map((k) => JSON.parse(k) as string[]);
-  const reset = recv === 'engine' ? 'p.reset(mark{q, sb, nb, kb})' : 'p.back(q); p.scratch = p.scratch[:sb]; p.b.Restore(nb, kb)';
+  const reset = recv === 'engine' ? `p.${goLib('reset')}(mark{q, sb, nb, kb})` : 'p.back(q); p.scratch = p.scratch[:sb]; p.b.Restore(nb, kb)';
   return `
 func (p *${recv}) rbMark() (int, int, int, int) { m := p.mark(); return m.pos, m.sb, m.nb, m.kb }
 func (p *${recv}) rbReset(q, sb, nb, kb int) { ${reset} }
@@ -2027,7 +2063,7 @@ const arenaMark = () => 'nb, kb = p.b.Checkpoint()';
 const arenaRestore = () => 'p.b.Restore(nb, kb)';
 
 function sharedFnsW(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  return ir.shared.map((s, id) => (ir.forms.buildShared[id] ? `func (p *${recv}) sub${id}W() bool { ${walkStmts(s, goSteps(ids, 'W', recv, ENGINE_GO_W, ar))} }\n` : '')).join('');
+  return sharedByNeed(ir, 'W', (s, id) => `func (p *${recv}) sub${id}W() bool { ${walkStmts(s, goSteps(ids, 'W', recv, ENGINE_GO_W, ar))} }\n`);
 }
 
 function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
@@ -2105,7 +2141,7 @@ ${close}`,
 \tp.lookReset()
 \tbefore := len(p.scratch)
 \ttokStart := p.pos
-\tp.optW(func() bool { return p.callRuleW(p.parse${rule}W()) })
+\tp.${goLib('optW')}(func() bool { return p.${goLib('callRuleW')}(p.parse${rule}W()) })
 \tif len(p.scratch) == before { return EntryMeta{}, false }
 \th := p.scratch[before]
 \to0, e1 := p.b.SpanOf(h, p.toks)
@@ -2120,11 +2156,11 @@ ${close}`,
     loopSeg: (kid, rule) => `func (p *${recv}) parseLoopSegW() (EntryMeta, bool) {
 \tsp := p.pos; before := len(p.scratch); ${arenaCkpt()}
 \tp.lookReset()
-\tif !(p.tokW(${kid}) && p.takeW(${kid})) {
+\tif !(p.${goLib('tokW')}(${kid}) && p.takeW(${kid})) {
 \t\tp.back(sp); p.scratch = p.scratch[:before]; ${arenaRestore()}
 \t\treturn EntryMeta{}, false
 \t}
-\tp.optW(func() bool { return p.callRuleW(p.parse${rule}W()) })
+\tp.${goLib('optW')}(func() bool { return p.${goLib('callRuleW')}(p.parse${rule}W()) })
 \tcount := len(p.scratch) - before
 \tif count == 0 { return EntryMeta{}, false }
 \tleaf := p.scratch[before]
@@ -2162,26 +2198,26 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
     `found = true; bestPos = p.pos;${markGo(d, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; ${arenaMark()}`;
   const lost = lostGoW(recv);
   const fin = `p.finishW(${rid}, sb, int(left.off), int(left.tokStart))`;
-  const B = goPrattBase(r, ids, (ws) => `!p.nllBlockedW(${ws}, left)`);
-  const fail = '{ return p.nudNone() }';
+  const B = goPrattBase(r, ids, (ws) => `!p.${goLib('nllBlockedW')}(${ws}, left)`);
+  const fail = () => `{ return p.${goLibAs('nudNoneW', 'nudNone')}() }`;
   const L: PrattLowering = {
     ...B,
-    commitLeaf: (i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; n := p.finishW(${rid}, sb, int(t.Off), save); p.form = ${T.fm(i)}; p.tail = false; return n, true }`, fail, true),
-    commitSeq: (i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? undoGoWc(recv) : null, nullable, (sb, save) => `p.finishW(${rid}, ${sb}, p.offAt(${save}), ${save})`, (n) => (T.fm(i) === '0' ? `return p.nudOk(${n}, ${tail}, ${capGo(capped)})` : `return p.nudOkF(${n}, ${T.fm(i)}, ${tail}, ${capGo(capped)})`)), fail),
+    commitLeaf: (i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.${goLib('pushLeafW')}(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; n := p.finishW(${rid}, sb, int(t.Off), save); p.form = ${T.fm(i)}; p.tail = false; return n, true }`, fail, true),
+    commitSeq: (i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? undoGoWc(recv) : null, nullable, (sb, save) => `p.finishW(${rid}, ${sb}, p.offAt(${save}), ${save})`, (n) => (T.fm(i) === '0' ? `return p.${goLibAs('nudOkW', 'nudOk')}(${n}, ${tail}, ${capGo(capped)})` : `return p.${goLibAs('nudOkFW', 'nudOkF')}(${n}, ${T.fm(i)}, ${tail}, ${capGo(capped)})`)), fail),
     commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok${preGateGo(r, ids)} {
 \t\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
-\t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
+\t\tp.${goLib('pushLeafW')}(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
 \t\toperand, ook := p.bpW_${r.name}(pbp.rbp)
 \t\tif ook && pbp.tgt && ${T.lf('p.form')} != 0 { p.back(save); ${lost}; p.capped = false; return spanned{}, false }
 \t\tif ook { if operand.present { p.scratch = append(p.scratch, operand.h) }; n := p.finishW(${rid}, sb, p.offAt(save), save); p.form = pbp.form; p.tail = true; p.capped = false; return n, true }
 \t\tp.back(save); ${lost}
 \t}`, fail),
-    commitFail: fail,
+    get commitFail() { return fail(); },
     nudEnd: '}',
     commitSw: commitSwGo('t'),
     steps: goSteps(ids, 'W', recv, ENGINE_GO_W, ar),
     nudGuard: (g, keyed) => guardCond(g, 't', keyed),
-    nudLeaf: (i) => `{ p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; best = p.finishW(${rid}, sb, int(t.Off), save); ${won(i, T.fm(i), false, 'false')}; p.back(save) }`,
+    nudLeaf: (i) => `{ p.${goLib('pushLeafW')}(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; best = p.finishW(${rid}, sb, int(t.Off), save); ${won(i, T.fm(i), false, 'false')}; p.back(save) }`,
     nudTpl: (i, hole) => `\tif t.Kid == ${kidOf(ids, '$templateHead')} {
 \t\tn, ok := p.matchTemplateW_${hole}()
 \t\tif ok && ${beatsGo(d, 'p.pos', i)} { if n.present { p.scratch = append(p.scratch, n.h) }; best = p.finishW(${rid}, sb, int(n.off), int(n.tokStart)); ${won(i, T.fm(i), false, 'false')} } else { ${lost} }
@@ -2189,7 +2225,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
 \t}`,
     nudSeq: (i, cond, tail, capped) => candGo(d, i, cond, `best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, T.fm(i), tail, capGo(capped))}`, lost),
     nudPrefix: (i) => `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok${preGateGo(r, ids)} {
-\t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
+\t\tp.${goLib('pushLeafW')}(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
 \t\toperand, ook := p.bpW_${r.name}(pbp.rbp)
 \t\tif ook && pbp.tgt && ${T.lf('p.form')} != 0 { p.back(save); ${lost}; p.capped = false; return spanned{}, false }
 \t\tif ook && ${beatsGo(d, 'p.pos', i)} { if operand.present { p.scratch = append(p.scratch, operand.h) }; best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, 'pbp.form', true, 'false')} } else { ${lost} }
@@ -2208,7 +2244,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
     postfixToks: (kids) => `\t\tswitch t.Kid {
 ${kids.map((k) => `\t\tcase ${k}:
 \t\t\tif !tailClosed {
-\t\t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left.h); p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++
+\t\t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left.h); p.${goLib('pushLeafW')}(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++
 \t\t\t\tleft = ${fin}; form = ${T.postTok(k)}; continue LedLoop
 \t\t\t}`).join('\n')}
 \t\t}`,
@@ -2223,14 +2259,14 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\t}`,
     postfixOp: `\t\tif row&${OP_ROW.bpMask << OP_ROW.postShift} != 0 && int((row >> ${OP_ROW.postShift}) & ${OP_ROW.bpMask}) > minBp && !tailClosed${r.postfixSameLine ? ' && !t.Nl' : ''} {
 \t\t\tif row&${OP_ROW.postTgt} != 0 && ${T.lf('form')} != 0 { return spanned{}, false }
-\t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++; tailClosed = true
+\t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left.h); p.${goLib('pushLeafW')}(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++; tailClosed = true
 \t\t\tleft = ${fin}; form = ${T.post}; continue
 \t\t}`,
     noBinary: '\t\tbreak\n\t}',
     binary: `${goRowOpRead(r, ids, true, T.dem)}
 \t\tif infoTgt && ${T.tgt} || infoNoUnary && ${T.lf('form')} == 2 { return spanned{}, false }
 \t\tledSave := p.pos; sb := len(p.scratch)
-\t\tp.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, opEnd)
+\t\tp.scratch = append(p.scratch, left.h); p.${goLib('pushLeafW')}(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, opEnd)
 \t\tp.pos += opN
 \t\trhs, rok := p.bpW_${r.name}(infoRbp)
 \t\tif !rok { p.back(ledSave); p.scratch = p.scratch[:sb]; break }
@@ -2290,15 +2326,15 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 \tt := p.peek()
 \tif t == nil || t.Kid != ${kidOf(ids, '$templateHead')} { return spanned{}, false }
 \tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
-\tp.pushLeafW(${ttIdOf(ar, '$templateHead')}, uint32(p.pos), t.Off, t.End); p.pos++
+\tp.${goLib('pushLeafW')}(${ttIdOf(ar, '$templateHead')}, uint32(p.pos), t.Off, t.End); p.pos++
 \tfor {
 \t\texpr, ok := p.parse${hole}W()
 \t\tif !ok { p.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore()}; return spanned{}, false }
 \t\tif expr.present { p.scratch = append(p.scratch, expr.h) }
 \t\tnext := p.peek()
 \t\tif next == nil { p.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore()}; return spanned{}, false }
-\t\tif next.Kid == ${kidOf(ids, '$templateMiddle')} { p.pushLeafW(${ttIdOf(ar, '$templateMiddle')}, uint32(p.pos), next.Off, next.End); p.pos++; continue }
-\t\tif next.Kid == ${kidOf(ids, '$templateTail')} { p.pushLeafW(${ttIdOf(ar, '$templateTail')}, uint32(p.pos), next.Off, next.End); p.pos++; break }
+\t\tif next.Kid == ${kidOf(ids, '$templateMiddle')} { p.${goLib('pushLeafW')}(${ttIdOf(ar, '$templateMiddle')}, uint32(p.pos), next.Off, next.End); p.pos++; continue }
+\t\tif next.Kid == ${kidOf(ids, '$templateTail')} { p.${goLib('pushLeafW')}(${ttIdOf(ar, '$templateTail')}, uint32(p.pos), next.Off, next.End); p.pos++; break }
 \t\tp.back(save); p.scratch = p.scratch[:sb]; ${arenaRestore()}; return spanned{}, false
 \t}
 \treturn p.finishW(${ruleIdOf(ar, '$template')}, sb, p.offAt(save), save), true
@@ -2325,37 +2361,44 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 \tb Builder
 \tdrops [256]bool // the leaf types b never keeps (dropsOf): such a leaf is not offered
 \tscratch []int32${entriesField}`;
+  // Everything that may call a library helper first (goLib), the library after.
+  const runtimeRest = `${rebindRuntimeGo(recv, ir, ids, shared)}${demandFnsGo(recv, ir, ids, ar, shared)}`;
+  const tail = `${matchTemplateW}${lookFnsR(ir, ids, ENGINE_GO_W, false)}`;
+  const tailR = `${sharedFnsR(ir, ids, ENGINE_GO_W, false)}${ruleFnsW}`;
+  const subs = sharedFnsW(ir, ids, ar, recv);
+  // The mark / NUD-state / target-context helpers after all that may call them.
+  const runtime = `${engineMarkGo(recv)}${targetRuntimeGo(ir, recv, 'spanned')}${runtimeRest}`;
   return `type ${recv} struct {
 ${structFields}
 }
 
-${engineMarkGo(recv)}${targetRuntimeGo(ir, recv, 'spanned')}${rebindRuntimeGo(recv, ir, ids, shared)}${demandFnsGo(recv, ir, ids, ar, shared)}
-${pushLeafW}
+${runtime}
+${goLibFn('pushLeafW', pushLeafW)}
 ${finishW}
-${headLeafTextW}
-func (p *${recv}) nllBlockedW(words []string, left spanned) bool {
+${goLibFn('headLeafTextW', headLeafTextW)}
+${goLibFn('nllBlockedW', `func (p *${recv}) nllBlockedW(words []string, left spanned) bool {
 \th := p.headLeafTextW(left)
 \tfor _, w := range words { if w == h { return true } }
 \treturn false
 }
-// litW / tokW test the token in place as the direct engine's matchLit / matchTok do (the probe is a
+`)}// litW / tokW test the token in place as the direct engine's matchLit / matchTok do (the probe is a
 // peek: peekEnd); takeW consumes the token they accepted and hands its leaf to the builder. A step
 // spells the two in a row (\`p.litW(l) && p.takeW(tt)\`, tt the literal's litTt, a constant):
 // Go's inliner charges a call 57 of its budget of 80, so one function holding both the test and
 // the builder call is not inlined (cost 132), while each half is (litW 30, takeW 74). The builder call itself is out of line
 // (offerW): spelled inside takeW, the call's arguments put takeW over the budget (104), and a
 // leaf the builder drops (p.drops) makes no call at all.
-func (p *${recv}) litW(lid uint16) bool {
+${goLibFn('litW', `func (p *${recv}) litW(lid uint16) bool {
 \ti := p.pos
 \tp.peekEnd = i + 1
 \treturn i < len(p.toks) && p.toks[i].Lid == lid
 }
-func (p *${recv}) tokW(kid uint16) bool {
+`)}${goLibFn('tokW', `func (p *${recv}) tokW(kid uint16) bool {
 \ti := p.pos
 \tp.peekEnd = i + 1
 \treturn i < len(p.toks) && p.toks[i].Kid == kid
 }
-func (p *${recv}) takeW(tt uint16) bool {
+`)}func (p *${recv}) takeW(tt uint16) bool {
 \tif !p.drops[uint8(tt)] { p.offerW(tt) }
 \tp.pos++
 \treturn true
@@ -2363,43 +2406,43 @@ func (p *${recv}) takeW(tt uint16) bool {
 func (p *${recv}) offerW(tt uint16) { i := p.pos; t := &p.toks[i]; p.b.Leaf(&p.scratch, tt, uint32(i), t.Off, t.End) }
 // callRuleW pushes the node of a rule call that matched (the call's two results, as callRule takes
 // the direct engine's: a direct call, not one through a method value).
-func (p *${recv}) callRuleW(fr spanned, ok bool) bool {
+${goLibFn('callRuleW', `func (p *${recv}) callRuleW(fr spanned, ok bool) bool {
 \tif !ok { return false }
 \tif fr.present { p.scratch = append(p.scratch, fr.h) }
 \treturn true
 }
-func (p *${recv}) starW(once func() bool) bool {
+`)}${goLibFn('starW', `func (p *${recv}) starW(once func() bool) bool {
 \tfor {
 \t\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \t\tif !once() { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore()}; break }
 \t}
 \treturn true
 }
-func (p *${recv}) starInW(k int, once func() bool) bool {
+`)}${goLibFn('starInW', `func (p *${recv}) starInW(k int, once func() bool) bool {
 	for p.ahead(k, true) {
 		sp := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 		if !once() { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore()}; break }
 	}
 	return true
 }
-// A body that fails with leaves only (Step.leaves) changes nothing but the position and the
+`)}// A body that fails with leaves only (Step.leaves) changes nothing but the position and the
 // scratch list when it fails: its mark is those two, no builder checkpoint. Out of line, as the
 // direct engine's are (go:noinline).
-//go:noinline
+${goLibFn('starLW', `//go:noinline
 func (p *${recv}) starLW(once func() bool) bool {
 	for { sp, sb := p.pos, len(p.scratch); if !once() { p.back(sp); p.scratch = p.scratch[:sb]; break } }
 	return true
 }
-//go:noinline
+`)}${goLibFn('starInLW', `//go:noinline
 func (p *${recv}) starInLW(k int, once func() bool) bool {
 	for p.ahead(k, true) { sp, sb := p.pos, len(p.scratch); if !once() { p.back(sp); p.scratch = p.scratch[:sb]; break } }
 	return true
 }
-//go:noinline
+`)}${goLibFn('optLW', `//go:noinline
 func (p *${recv}) optLW(body func() bool) bool {
 	sp, sb := p.pos, len(p.scratch); if !body() { p.back(sp); p.scratch = p.scratch[:sb] }; return true
 }
-//go:noinline
+`)}${goLibFn('sepByLW', `//go:noinline
 func (p *${recv}) sepByLW(elem func() bool, delim uint16) bool {
 	sp0, sb0 := p.pos, len(p.scratch)
 	if !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; return true }
@@ -2410,34 +2453,34 @@ func (p *${recv}) sepByLW(elem func() bool, delim uint16) bool {
 	}
 	return true
 }
-// A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo. Kept out of
+`)}// A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo. Kept out of
 // line (go:noinline), as the marked forms already are by Go's inline budget: inlined, these small
 // helpers and their closures grew the frames of the large rule functions, and every call of those
 // paid for it on paths that never run the helper (dense-semi: parseStmtW / parseDeclW +7.5
 // instructions per call, Go builder Ir +5.3%).
-//go:noinline
+${goLibFn('starCW', `//go:noinline
 func (p *${recv}) starCW(once func() bool) bool {
 \tfor once() {}
 \treturn true
 }
-//go:noinline
+`)}${goLibFn('starInCW', `//go:noinline
 func (p *${recv}) starInCW(k int, once func() bool) bool {
 \tfor p.ahead(k, true) && once() {}
 \treturn true
 }
-//go:noinline
+`)}${goLibFn('optCW', `//go:noinline
 func (p *${recv}) optCW(body func() bool) bool { body(); return true }
-//go:noinline
+`)}${goLibFn('sepByCW', `//go:noinline
 func (p *${recv}) sepByCW(elem func() bool, delim uint16) bool {
 \tif elem() { for p.litW(delim) && p.takeW(litTt(delim)) && elem() {} }
 \treturn true
 }
-func (p *${recv}) optW(body func() bool) bool {
+`)}${goLibFn('optW', `func (p *${recv}) optW(body func() bool) bool {
 \tsp := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \tif !body() { p.back(sp); p.scratch = p.scratch[:sb]; ${arenaRestore()} }
 \treturn true
 }
-func (p *${recv}) sepByW(elem func() bool, delim uint16) bool {
+`)}${goLibFn('sepByW', `func (p *${recv}) sepByW(elem func() bool, delim uint16) bool {
 \tsp0 := p.pos; sb0 := len(p.scratch); ${arenaCkpt().replace('nb, kb', 'nb0, kb0')}
 \tif !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; ${arenaRestore().replace('nb', 'nb0').replace('kb', 'kb0')}; return true }
 \tfor {
@@ -2447,15 +2490,15 @@ func (p *${recv}) sepByW(elem func() bool, delim uint16) bool {
 \t}
 \treturn true
 }
-func (p *${recv}) altLitW(lids []uint16) bool {
+`)}${goLibFn('altLitW', `func (p *${recv}) altLitW(lids []uint16) bool {
 \tfor _, lid := range lids { if p.litW(lid) && p.takeW(litTt(lid)) { return true } }
 \treturn false
 }
-
+`)}
 // found: whether a builder-engine parse matched (its node dropped: a recognize form).
-func parsedW(_ spanned, ok bool) bool { return ok }
-
-${matchTemplateW}${lookFnsR(ir, ids, ENGINE_GO_W, false)}${sharedFnsW(ir, ids, ar, recv)}${sharedFnsR(ir, ids, ENGINE_GO_W, false)}${ruleFnsW}
+${goLibFn('parsedW', `func parsedW(_ spanned, ok bool) bool { return ok }
+`)}
+${tail}${subs}${tailR}
 `;
 }
 
@@ -2758,13 +2801,13 @@ function tokenSetRuntimeGo(ir: ParserIR, ids: LexIdPlan): string {
   for (let r = 0; r * b.width < b.words.length; r++) rows.push(`{${b.words.slice(r * b.width, (r + 1) * b.width).join(', ')}}`);
   return `const _tokenSetKid = ${b.kidBase}
 var _tokenSets = [...][${b.width}]uint32{${rows.join(', ')}}
-func inTokenSet(k int, t *Tok) bool {
+${goLibFn('inTokenSet', `func inTokenSet(k int, t *Tok) bool {
 \tw := k >> 5
 \treturn (_tokenSets[t.Lid][w]|_tokenSets[_tokenSetKid+int(t.Kid)][w])&(1<<(k&31)) != 0
 }
-// inCtxWords: whether t is a word the context ctx reserves (ParserIR.ctxWords): with the \`ahead\` test
+`)}// inCtxWords: whether t is a word the context ctx reserves (ParserIR.ctxWords): with the \`ahead\` test
 // of the guard's own set, an \`aheadCtx\` test.
-func inCtxWords(ctx uint8, t *Tok) bool { return false${ctxWordLids(ir, ids).map((w) => ` || (ctx&${w.bit} != 0 && t.Lid == ${w.lid})`).join('')} }`;
+${goLibFn('inCtxWords', `func inCtxWords(ctx uint8, t *Tok) bool { return false${ctxWordLids(ir, ids).map((w) => ` || (ctx&${w.bit} != 0 && t.Lid == ${w.lid})`).join('')} }`)}`;
 }
 
 function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shared: SharedAlgorithms): string {
@@ -2835,30 +2878,6 @@ type spanned struct {
 \th int32
 \toff, tokStart uint32
 \tpresent bool
-}
-
-func builderFinishDefault(b Builder, scratch *[]int32, sb int, ruleId uint16, fallbackOff, tokStart, tokEnd uint32, toks []Tok) (int32, uint32, bool) {
-\tnn := len(*scratch)
-\tvar offset, end uint32
-\tif nn > sb {
-\t\to0, _ := b.SpanOf((*scratch)[sb], toks)
-\t\t_, e1 := b.SpanOf((*scratch)[nn-1], toks)
-\t\toffset, end = o0, e1
-\t} else {
-\t\toffset, end = fallbackOff, fallbackOff
-\t}
-\tb.Node(scratch, sb, ruleId, offset, end, tokStart, tokEnd)
-\tn := len(*scratch) - sb
-\tif n == 1 {
-\t\th := (*scratch)[len(*scratch)-1]
-\t\t*scratch = (*scratch)[:len(*scratch)-1]
-\t\treturn h, offset, true
-\t} else if n == 0 {
-\t\treturn 0, offset, false
-\t}
-\th := (*scratch)[sb]
-\t*scratch = (*scratch)[:sb]
-\treturn h, offset, true
 }
 
 // Leaves index Toks, the token stream of the builder's last tree.
@@ -2968,7 +2987,7 @@ func dropsOf(b Builder) [256]bool {
 \tif s, ok := b.(*SlimBuilder); ok { return s.dropsLeaves() }
 \treturn [256]bool{}
 }
-// Finish is builderFinishDefault with the spans read in place and Node's collapse inline, decided
+// Finish wraps the scratch entries [sb:] as one node, the spans read in place and Node's collapse inline, decided
 // before the spans are read.
 func (b *SlimBuilder) Finish(scratch *[]int32, sb int, ruleId uint16, fallbackOff, tokStart, tokEnd uint32, toks []Tok) (int32, uint32, bool) {
 \ts := *scratch
@@ -3293,7 +3312,7 @@ ${[...ones, ...wides].join('\n')}
     expr: {
       index: (l, i) => ({ c: `${goWrap(l, ATOM)}[${i.c}]`, prec: ATOM }),
       metaInt: (cx, m, f) => cx.atom(`${goWrap(m, ATOM)}.${exported(f)}`, 'int', GO_META[f]),
-      metaFlag: (cx, m, f) => cx.atom(`am${exported(f)}(${m.c})`, 'bool', 'bool'),
+      metaFlag: (cx, m, f) => cx.atom(`${goLib(`am${exported(f)}`)}(${m.c})`, 'bool', 'bool'),
       tokInt: (cx, t, f) => cx.atom(`${goWrap(t, ATOM)}.${exported(f)}`, 'int', GO_TOK[f]),
       tokNl: (cx, t) => cx.atom(`${goWrap(t, ATOM)}.Nl`, 'bool', 'bool'),
       editInt: (cx, e, f) => cx.atom(`${e.c}.${exported(f)}`, 'int', 'int'),
@@ -3302,7 +3321,7 @@ ${[...ones, ...wides].join('\n')}
       substr: (cx, s, a, b) => cx.atom(`${goWrap(s, ATOM)}[${cx.coerce(a, 'int')}:${cx.coerce(b, 'int')}]`, 'str', 'str'),
       lidOf: (cx, s) => cx.atom(`lidOf(${s.c})`, 'lid', cx.nat('lid')),
       mkMeta: (cx, fs) => cx.atom(`mkAlign(${fs.map(([f, r]) => cx.coerce(r, GO_MK[f])).join(', ')})`, 'meta', 'meta'),
-      shiftMeta: (cx, m, d) => cx.atom(`shiftAlign(${m.c}, ${cx.coerce(d, 'int')})`, 'meta', 'meta'),
+      shiftMeta: (cx, m, d) => cx.atom(`${goLib('shiftAlign')}(${m.c}, ${cx.coerce(d, 'int')})`, 'meta', 'meta'),
       metaEq: (_cx, a, b) => ({ c: `${a.c} == ${b.c}`, ty: 'bool', nat: 'bool', prec: GO_OPS.eq[1] }),
       splice: (cx, s, a, b, ins) => ({ c: `${goWrap(s, ATOM)}[:${cx.coerce(a, 'int')}] + ${ins.c} + ${goWrap(s, ATOM)}[${cx.coerce(b, 'int')}:]`, ty: 'str', nat: 'str', prec: GO_OPS.add[1] }),
       newList: (cx, ty, cap) => cx.atom(cap ? `make(${goType(ty)}, 0, ${cx.coerce(cap, 'int')})` : 'nil', ty, ty, { owned: true }),
@@ -3426,27 +3445,27 @@ func (rv *recov) enBack(q int) { rv.p.back(q) }
 func (rv *recov) enPeekKid() int { t := rv.p.peek(); if t == nil { return -1 }; return int(t.Kid) }
 func (rv *recov) enPeekLid() int { t := rv.p.peek(); if t == nil { return -1 }; return int(t.Lid) }
 func (rv *recov) enPeekNl() bool { t := rv.p.peek(); return t != nil && t.Nl }
-func (rv *recov) enLit(l int) bool { return rv.p.litW(uint16(l)) && rv.p.takeW(litTt(uint16(l))) }
-func (rv *recov) enComp(l int) bool { return rv.p.matchComp(uint16(l)) }
-func (rv *recov) enTok(k int) bool { return rv.p.tokW(uint16(k)) && rv.p.takeW(uint16(k)) }
-func (rv *recov) enAhead(set int, is bool) bool { return rv.p.ahead(set, is) }
-func (rv *recov) enCtxWord() bool { return rv.p.ctxWord() }
+func (rv *recov) enLit(l int) bool { return rv.p.${goLib('litW')}(uint16(l)) && rv.p.takeW(${goLib('litTt')}(uint16(l))) }
+func (rv *recov) enComp(l int) bool { return rv.p.${goLib('matchComp')}(uint16(l)) }
+func (rv *recov) enTok(k int) bool { return rv.p.${goLib('tokW')}(uint16(k)) && rv.p.takeW(uint16(k)) }
+func (rv *recov) enAhead(set int, is bool) bool { return rv.p.${goLib('ahead')}(set, is) }
+func (rv *recov) enCtxWord() bool { return rv.p.${goLib('ctxWord')}() }
 func (rv *recov) enWhen(mask, val int) bool { return int(rv.p.ctx)&mask == val }
-func (rv *recov) enSecondIn(set int) bool { return rv.p.secondIn(set) }
+func (rv *recov) enSecondIn(set int) bool { return rv.p.${goLib('secondIn')}(set) }
 func (rv *recov) enLook(id int) bool {
 	${disp('id', 'ntLook', 'func(*parserW) bool', nc.look, (i) => `look${i}`, (c) => c(''))}
 }
 func (rv *recov) enRule(r int) bool {
-	${disp('r', 'ntRule', 'func(*parserW) (spanned, bool)', nc.rule, (r) => `parse${r}W`, (c) => `rv.p.callRuleW(${c('')})`)}
+	${disp('r', 'ntRule', 'func(*parserW) (spanned, bool)', nc.rule, (r) => `parse${r}W`, (c) => `rv.p.${goLib('callRuleW')}(${c('')})`)}
 }
 func (rv *recov) enBp(r, bp int) bool {
-	${disp('r', 'ntBp', 'func(*parserW, int) (spanned, bool)', nc.bp, (r) => `bpW_${r}`, (c) => `rv.p.callRuleW(${c('bp')})`)}
+	${disp('r', 'ntBp', 'func(*parserW, int) (spanned, bool)', nc.bp, (r) => `bpW_${r}`, (c) => `rv.p.${goLib('callRuleW')}(${c('bp')})`)}
 }
 func (rv *recov) enShared(i int) bool {
-	${disp('i', 'ntShared', 'func(*parserW) bool', nc.shared, (i) => `sub${i}W`, (c) => c(''))}
+	${disp('i', 'ntShared', 'func(*parserW) bool', nc.shared, (i) => goLib(`sub${i}W`), (c) => c(''))}
 }
 func (rv *recov) enTpl(hole int) bool {
-	${disp('hole', 'ntTpl', 'func(*parserW) (spanned, bool)', nc.tpl, (h) => `matchTemplateW_${h}`, (c) => `rv.p.callRuleW(${c('')})`)}
+	${disp('hole', 'ntTpl', 'func(*parserW) (spanned, bool)', nc.tpl, (h) => `matchTemplateW_${h}`, (c) => `rv.p.${goLib('callRuleW')}(${c('')})`)}
 }
 func (rv *recov) enSh() int { return len(rv.p.scratch) }
 func (rv *recov) enMark() int { rv.marks = append(rv.marks, rv.p.mark()); rv.rmh = append(rv.rmh, len(rv.rm)); return len(rv.marks) - 1 }
@@ -3487,12 +3506,12 @@ ${opRead}
 	rv.opN, rv.opEnd = n, end
 	return int(lid)
 }
-func (rv *recov) enLeafOpN() { p := rv.p; t := &p.toks[p.pos]; p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, rv.opEnd); p.pos += rv.opN }
-func (rv *recov) enLeafOp() { p := rv.p; t := &p.toks[p.pos]; p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++ }
-func (rv *recov) enLeafKid() { p := rv.p; t := &p.toks[p.pos]; p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++ }
+func (rv *recov) enLeafOpN() { p := rv.p; t := &p.toks[p.pos]; p.${goLib('pushLeafW')}(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, rv.opEnd); p.pos += rv.opN }
+func (rv *recov) enLeafOp() { p := rv.p; t := &p.toks[p.pos]; p.${goLib('pushLeafW')}(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++ }
+func (rv *recov) enLeafKid() { p := rv.p; t := &p.toks[p.pos]; p.${goLib('pushLeafW')}(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++ }
 func (rv *recov) enHeadLid(sb int) int {
 	if sb >= len(rv.p.scratch) { return 0 }
-	return int(lidOf(rv.p.headLeafTextW(spanned{h: rv.p.scratch[sb], present: true})))
+	return int(lidOf(rv.p.${goLib('headLeafTextW')}(spanned{h: rv.p.scratch[sb], present: true})))
 }
 func (rv *recov) enSt(k int) int {
 	p := rv.p
@@ -3653,6 +3672,7 @@ export const goTarget = defineParserTarget({
     // A shape-building parser needs Lowering.shape, which this target does not have yet: refused.
     if (opts.shape) shared.shapeFamily(shared.shapePlan(opts.shape, ir));
     const ids = buildLexIdPlan(ir);
+    goLibUses = new Set();
     const lexText = lexer(ir, ids, shared);
     const ar = buildArenaIdPlan(ir, ids);
     const reuse = ir.reuse;
@@ -3667,20 +3687,33 @@ export const goTarget = defineParserTarget({
 \tt := p.peek()
 \tif t == nil || t.Kid != ${kidOf(ids, '$templateHead')} { return -1 }
 \tsb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids); save := p.pos
-\tp.pushLeaf(${ttIdOf(ar, '$templateHead')}, uint32(p.pos)); p.pos++
+\tp.${goLib('pushLeaf')}(${ttIdOf(ar, '$templateHead')}, uint32(p.pos)); p.pos++
 \tfor {
 \t\texpr := p.parse${hole}()
 \t\tif expr < 0 { p.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; return -1 }
 \t\tp.scratch = append(p.scratch, expr)
 \t\tnext := p.peek()
 \t\tif next == nil { p.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; return -1 }
-\t\tif next.Kid == ${kidOf(ids, '$templateMiddle')} { p.pushLeaf(${ttIdOf(ar, '$templateMiddle')}, uint32(p.pos)); p.pos++; continue }
-\t\tif next.Kid == ${kidOf(ids, '$templateTail')} { p.pushLeaf(${ttIdOf(ar, '$templateTail')}, uint32(p.pos)); p.pos++; break }
+\t\tif next.Kid == ${kidOf(ids, '$templateMiddle')} { p.${goLib('pushLeaf')}(${ttIdOf(ar, '$templateMiddle')}, uint32(p.pos)); p.pos++; continue }
+\t\tif next.Kid == ${kidOf(ids, '$templateTail')} { p.${goLib('pushLeaf')}(${ttIdOf(ar, '$templateTail')}, uint32(p.pos)); p.pos++; break }
 \t\tp.back(save); p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; return -1
 \t}
 \treturn p.finish(${ruleIdOf(ar, '$template')}, sb, int(t.Off), save)
 }
 `).join('');
+    // Everything that may call a library helper (goLib) is printed before the library is: the
+    // recovery region and the builder engine (whose own library they call), the edit blocks, the
+    // engine's rules and the runtime pieces; then the cursor (whose recognizers every engine calls).
+    const recovery = opts.recovery ? recoveryRegionGo(ir, shared) : '';
+    const builderAddon = emitBuilderAddonGo(ir, ids, ar, shared);
+    const docEdit = docEditBlockGo(ir, shared);
+    const engineRest = `${rebindRuntimeGo('engine', ir, ids, shared)}${demandFnsGo('engine', ir, ids, ar, shared)}${rebindCursorGo(ir, shared)}`;
+    const engineTail = `${matchTemplate}${lookFnsR(ir, ids, ENGINE_GO, false)}`;
+    const engineTailR = `${sharedFnsR(ir, ids, ENGINE_GO, false)}${ruleFns}`;
+    const engineSubs = sharedFns(ir, ids);
+    // The mark / NUD-state / target-context helpers after all that may call them.
+    const engineRuntime = `${engineMarkGo('engine')}${targetRuntimeGo(ir, 'engine', 'int32')}${engineRest}`;
+    const cursor = cursorGo(ir, ids);
     return `// GENERATED by parser-ir.ts (goTarget) — parser LIBRARY (package parser) for grammar "${ir.grammarName}".
 // Public API: Tokenize(src) []Token (the lexer alone, a fresh slice the caller owns), ParseWith /
 // NewDoc / NewDocWith (CST). The CLI runner (stdin → CST JSON) is goTarget.emitRunner(): the
@@ -3793,14 +3826,14 @@ func decodeLeaf(v int32) (tokIdx uint32, ttId uint8) {
 \treturn packed & ((1 << 25) - 1), uint8(packed >> 25)
 }
 ${gtRuntimeGo(ids, ar)}
-func (p *engine) pushLeaf(ttId uint8, tokIdx uint32) {
+${goLibFn('pushLeaf', `func (p *engine) pushLeaf(ttId uint8, tokIdx uint32) {
 \tif ttId == TT_SKIP_PUNCT { return }
 \tp.scratch = append(p.scratch, encodeLeaf(tokIdx, ttId))
 }
-
+`)}
 ${tokenSetRuntimeGo(ir, ids)}
-${cursorGo(ir, ids)}
-${engineMarkGo('engine')}${targetRuntimeGo(ir, 'engine', 'int32')}${rebindRuntimeGo('engine', ir, ids, shared)}${demandFnsGo('engine', ir, ids, ar, shared)}${rebindCursorGo(ir, shared)}
+${cursor}
+${engineRuntime}
 // Wrap the scratch entries [sb:] as one node's children (flattened into kids); truncate scratch.
 // tokStart is the parse-consumption start (entry pos / leftmost operand), tokEnd is pos at finish.
 func (p *engine) finish(ruleId uint16, sb, fallbackOff, tokStart int) int32 {
@@ -3828,7 +3861,7 @@ func (p *engine) finish(ruleId uint16, sb, fallbackOff, tokStart int) int32 {
 \tp.nodes = append(p.nodes, Node{RuleId: ruleId, KidStart: uint32(kidStart), KidCount: uint32(nn - sb), Offset: off, End: end, TokStart: uint32(tokStart), TokEnd: uint32(p.pos), Ext: 0})
 \treturn int32(len(p.nodes) - 1)
 }
-func (p *engine) matchLit(lid uint16) bool {
+${goLibFn('matchLit', `func (p *engine) matchLit(lid uint16) bool {
 \ti := p.pos
 \tp.peekEnd = i + 1 // the probe is a peek (TS/Rust matchLit go through peek())
 \tif i >= len(p.toks) || p.toks[i].Lid != lid { return false }
@@ -3836,7 +3869,7 @@ func (p *engine) matchLit(lid uint16) bool {
 \tp.pos = i + 1
 \treturn true
 }
-// A token kind's leaf type id is its kid (ArenaIdPlan: TT_NAMES starts with the kids).
+`)}${goLibFn('matchTok', `// A token kind's leaf type id is its kid (ArenaIdPlan: TT_NAMES starts with the kids).
 func (p *engine) matchTok(kid uint16) bool {
 \ti := p.pos
 \tp.peekEnd = i + 1
@@ -3845,39 +3878,38 @@ func (p *engine) matchTok(kid uint16) bool {
 \tp.pos = i + 1
 \treturn true
 }
-// matchComp matches a composite '>'-led literal (a lookahead operand; never a tree leaf).
-// callRule pushes the node a rule call returned (id < 0: the rule did not match).
+`)}${goLibFn('callRule', `// callRule pushes the node a rule call returned (id < 0: the rule did not match).
 func (p *engine) callRule(id int32) bool {
 \tif id < 0 { return false }
 \tp.scratch = append(p.scratch, id); return true
 }
-func (p *engine) star(once func() bool) bool {
+`)}${goLibFn('star', `func (p *engine) star(once func() bool) bool {
 \tfor { m := p.mark(); if !once() { p.reset(m); break } }
 \treturn true
 }
-func (p *engine) starIn(k int, once func() bool) bool {
+`)}${goLibFn('starIn', `func (p *engine) starIn(k int, once func() bool) bool {
 	for p.ahead(k, true) { m := p.mark(); if !once() { p.reset(m); break } }
 	return true
 }
-// A body that fails with leaves only (Step.leaves) changes nothing but the position and the
+`)}// A body that fails with leaves only (Step.leaves) changes nothing but the position and the
 // scratch list when it fails: its mark is those two, not the arena's lengths. Out of line
 // (go:noinline) as the clean forms are: small enough to inline, they grew the frames of the large
 // rule functions (jsx-corpus.jsx, direct engine: +7.1% instructions inlined).
-//go:noinline
+${goLibFn('starL', `//go:noinline
 func (p *engine) starL(once func() bool) bool {
 	for { sp, sb := p.pos, len(p.scratch); if !once() { p.back(sp); p.scratch = p.scratch[:sb]; break } }
 	return true
 }
-//go:noinline
+`)}${goLibFn('starInL', `//go:noinline
 func (p *engine) starInL(k int, once func() bool) bool {
 	for p.ahead(k, true) { sp, sb := p.pos, len(p.scratch); if !once() { p.back(sp); p.scratch = p.scratch[:sb]; break } }
 	return true
 }
-//go:noinline
+`)}${goLibFn('optL', `//go:noinline
 func (p *engine) optL(body func() bool) bool {
 	sp, sb := p.pos, len(p.scratch); if !body() { p.back(sp); p.scratch = p.scratch[:sb] }; return true
 }
-//go:noinline
+`)}${goLibFn('sepByL', `//go:noinline
 func (p *engine) sepByL(elem func() bool, delimLid uint16) bool {
 	sp0, sb0 := p.pos, len(p.scratch)
 	if !elem() { p.back(sp0); p.scratch = p.scratch[:sb0]; return true }
@@ -3888,32 +3920,32 @@ func (p *engine) sepByL(elem func() bool, delimLid uint16) bool {
 	}
 	return true
 }
-// A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo. Kept out of
+`)}// A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo. Kept out of
 // line (go:noinline), as the marked forms already are by Go's inline budget: inlined, these small
 // helpers and their closures grew the frames of the large rule functions, and every call of those
 // paid for it on paths that never run the helper (dense-semi: parseStmtW / parseDeclW +7.5
 // instructions per call, Go builder Ir +5.3%).
-//go:noinline
+${goLibFn('starC', `//go:noinline
 func (p *engine) starC(once func() bool) bool {
 \tfor once() {}
 \treturn true
 }
-//go:noinline
+`)}${goLibFn('starInC', `//go:noinline
 func (p *engine) starInC(k int, once func() bool) bool {
 \tfor p.ahead(k, true) && once() {}
 \treturn true
 }
-//go:noinline
+`)}${goLibFn('optC', `//go:noinline
 func (p *engine) optC(body func() bool) bool { body(); return true }
-//go:noinline
+`)}${goLibFn('sepByC', `//go:noinline
 func (p *engine) sepByC(elem func() bool, delim uint16) bool {
 \tif elem() { for p.matchLit(delim) && elem() {} }
 \treturn true
 }
-func (p *engine) opt(body func() bool) bool {
+`)}${goLibFn('opt', `func (p *engine) opt(body func() bool) bool {
 \tm := p.mark(); if !body() { p.reset(m) }; return true
 }
-func (p *engine) sepBy(elem func() bool, delimLid uint16) bool {
+`)}${goLibFn('sepBy', `func (p *engine) sepBy(elem func() bool, delimLid uint16) bool {
 \tm0 := p.mark()
 \tif !elem() { p.reset(m0); return true }
 \tfor {
@@ -3923,16 +3955,16 @@ func (p *engine) sepBy(elem func() bool, delimLid uint16) bool {
 \t}
 \treturn true
 }
-func (p *engine) altLit(lids []uint16) bool {
+`)}${goLibFn('altLit', `func (p *engine) altLit(lids []uint16) bool {
 \tfor _, lid := range lids { if p.matchLit(lid) { return true } }
 \treturn false
 }
-
-${matchTemplate}${lookFnsR(ir, ids, ENGINE_GO, false)}${sharedFns(ir, ids)}${sharedFnsR(ir, ids, ENGINE_GO, false)}${ruleFns}
+`)}
+${engineTail}${engineSubs}${engineTailR}
 
 func (p *engine) writeJSON(id int32, b *strings.Builder) { writeJSONWith(p.nodes, p.kids, p.toks, id, b) }
 
-func (p *engine) headLeafText(id int32) string {
+${goLibFn('headLeafText', `func (p *engine) headLeafText(id int32) string {
 \tfor {
 \t\tif id < 0 {
 \t\t\tti, _ := decodeLeaf(id)
@@ -3946,8 +3978,8 @@ func (p *engine) headLeafText(id int32) string {
 \tnd := &p.nodes[id]
 \treturn p.src[nd.Offset:nd.End]
 }
-func _inW(ws []string, s string) bool { for _, w := range ws { if w == s { return true } }; return false }
-
+`)}${goLibFn('_inW', `func _inW(ws []string, s string) bool { for _, w := range ws { if w == s { return true } }; return false }
+`)}
 // parse runs the parser over t, the tokens of src, into p's arena (internal — the public CST
 // entries are ParseWith / NewDoc). src is also the source head-leaf lookups read.
 func (p *engine) parse(src string, t []Tok) int32 {
@@ -3965,9 +3997,9 @@ func (p *engine) parse(src string, t []Tok) int32 {
 \treturn root
 }
 
-${docEditBlockGo(ir, shared)}
-${emitBuilderAddonGo(ir, ids, ar, shared)}
-${opts.recovery ? recoveryRegionGo(ir, shared) : ''}`;
+${docEdit}
+${builderAddon}
+${recovery}`;
   },
   emitRunner(opts: EmitOptions = {}): string {
     return `// CLI runner (harness only): stdin -> CST JSON + a self-bench mode. A SEPARATE file; the

@@ -402,12 +402,15 @@ class LexScan {
   // The identifier prefix of the token being scanned (null: not identifier-like), and its name.
   private esc: string | null = null;
   private escTok = '';
+  // Whether a scanner calls IDENT_ESC (escScan): the function is pushed only then.
+  escCalled = false;
   // A prefixed identifier (`#name`) whose pattern does not match: the prefix then a Unicode
   // IdentifierName (`#℘`), as the interpreter's prefixed fallback (lexer.ts), which it takes
   // where no token matches; here it is taken in the token's own scanner, before the dispatch tries
   // a later candidate, so uniPrefixAlone proves that no other token or punct can match there.
   private escScan(m: string): string {
     const name = `${scannerName(this.escTok)}Esc`, q = this.esc ? add('p', litLen(this.esc)) : x('p');
+    this.escCalled = true;
     if (!this.fns.some((f) => f.name === name)) {
       const uni: Stmt[] = this.esc ? [if_(hasAt('p', this.esc), [ret(call4(UNI_IDENT, 's', q))])] : [];
       const orUni = this.esc ? `; else ${this.esc} then a Unicode IdentifierName` : '';
@@ -1062,7 +1065,8 @@ export function lexScanFamily(ir: ParserIR): Family {
   if (!f) {
     const b = new LexScan();
     for (const t of scannedTokens(ir)) b.fns.push({ ...b.scanner(t, ir.identLike.includes(t.name) ? ir.identPrefix[t.name] ?? '' : null), inline: true });
-    if (ir.identLike.length) {
+    // Only a scanner that checks an escape (escScan) calls the escape check, and only it the class.
+    if (b.escCalled) {
       b.fns.push({ name: UNI_CLASS, doc: '', params: [{ name: 'cp', ty: 'int' }], ret: ['int'], body: [], extern: true });
       b.fns.push(b.identEsc());
     }

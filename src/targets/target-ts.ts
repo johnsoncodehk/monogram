@@ -565,11 +565,11 @@ function lx_ext(src: string, e: number): number {
 }
 // JavaScript has the classes natively (uni-ident.ts).
 const LX_ID_START = /^${ir.identClasses.start}$/u, LX_ID_PART = /^${ir.identClasses.continue}$/u;
-function ${shared.uniClass()}(cp: number): number {
+${shared.uniClass(ir) ? `function ${shared.uniClass(ir)}(cp: number): number {
   const ch = String.fromCodePoint(cp);
   return LX_ID_START.test(ch) ? 2 : LX_ID_PART.test(ch) ? 1 : 0;
 }
-${shared.uniIdent(ir) ? `function ${shared.uniIdent(ir)}(s: string, p: number): number {
+` : ''}${shared.uniIdent(ir) ? `function ${shared.uniIdent(ir)}(s: string, p: number): number {
   LX_UNI_IDENT.lastIndex = p;
   const m = LX_UNI_IDENT.exec(s);
   return m ? p + m[0].length : -1;

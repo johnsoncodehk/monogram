@@ -146,7 +146,20 @@ function unicodeParity(r: Runner, oracleOut: (src: string) => Outcome): void {
   console.log(`  javascript/unicode/${r.label}: ${editOk}/${UNICODE_EDITS.length} edit-sessions ≡ fresh`);
 }
 
-const RESERVED_NAMES = RESERVED_RULES.map((r) => `, ${JSON.stringify(r)}`).join('');
+// The unexported top-level functions and methods of an emitted Go module whose name occurs nowhere
+// but in their own declarations. Comments, string, raw-string and rune literals are blanked first,
+// so a name mentioned there does not count. The count is by name, not by type: a method name
+// declared on two receivers counts as called when either is (a dead twin hides behind a live one);
+// a call from a function that is itself uncalled counts (the check is one level deep, not reachability).
+function goUncalled(src: string): string[] {
+  const code = src.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:[^"\\\n]|\\.)*"|`[^`]*`|'(?:[^'\\\n]|\\.)+'/g, ' ');
+  const decls = new Map<string, number>();
+  for (const m of code.matchAll(/^func (?:\([^)]*\) )?([A-Za-z_]\w*)/gm)) decls.set(m[1]!, (decls.get(m[1]!) ?? 0) + 1);
+  const uses = new Map<string, number>();
+  for (const m of code.matchAll(/[A-Za-z_]\w*/g)) if (decls.has(m[0])) uses.set(m[0], (uses.get(m[0]) ?? 0) + 1);
+  return [...decls].filter(([n, k]) => !/^[A-Z]/.test(n) && n !== 'main' && n !== 'init' && uses.get(n)! <= k).map(([n]) => n);
+}
+const RESERVED_NAMES =RESERVED_RULES.map((r) => `, ${JSON.stringify(r)}`).join('');
 for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll()) {
   // Every module of this gate is emitted with total parsing (the emit option `recovery`), whose
   // region is added to the default module and changes none of it but the rule-name table, which
@@ -163,6 +176,12 @@ for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll(
     return true;
   };
   for (const e of emitted) {
+    // Go's compiler accepts a function nobody calls; the Go printer prints a helper only where the
+    // plan calls it (target-go.ts goLib), and this keeps it so, on both emissions.
+    if (e.label === 'go') for (const [mode, src] of [['default', e.def()], ['recovery', e.rec]] as const) {
+      const dead = goUncalled(src);
+      if (dead.length) { gate.failures++; console.log(`  ${c.grammar}/go ${mode}: ${dead.length} function(s) nothing calls: ${dead.join(' ')}`); }
+    }
     if (hasInOrder(e.rec.replace(RESERVED_NAMES, ''), e.def())) continue;
     gate.failures++;
     console.log(`  ${c.grammar}/${e.label}: the recovery emission does not begin with the default emission`);

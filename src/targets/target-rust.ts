@@ -878,7 +878,7 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
 ` : '';
   const identName = ir.identToken;
   const identKid = identName ? kidOf(ids, identName) : 0;
-  const uniClassRs = shared.uniClass();
+  const uniClassRs = shared.uniClass(ir);
   const identTok = ir.tokens.find((t) => t.name === identName);
   const identLid = identTok ? lidCall(shared.tokenLiterals(ir, identTok, ids.lids.slice(1)), '&b[pos..e]') : 'lid_of(&b[pos..e])';
   // Unicode ID_Start fallback (mirrors lexer uniIdentReY) before unmatched-byte panic.
@@ -914,8 +914,8 @@ ${identName || ir.identLike.length ? `${rsUniIdentTables(ir)}// Both out of line
     if let Some(e) = _scan_uni_ident(src.as_bytes(), pos) { return (e, 2); }
     (pos, 3)
 }
-#[inline(always)] fn ${uniClassRs}(cp: isize) -> isize { _uni_class(cp as u32) as isize }
-${shared.uniIdent(ir) ? `#[inline(never)] fn ${shared.uniIdent(ir)}(s: &str, p: isize) -> isize {
+${uniClassRs ? `#[inline(always)] fn ${uniClassRs}(cp: isize) -> isize { _uni_class(cp as u32) as isize }
+` : ''}${shared.uniIdent(ir) ? `#[inline(never)] fn ${shared.uniIdent(ir)}(s: &str, p: isize) -> isize {
     let (b, p) = (s.as_bytes(), p as usize);
     if p >= b.len() { return -1; }
     match _scan_uni_ident(b, p) { Some(e) => e as isize, None => -1 }
