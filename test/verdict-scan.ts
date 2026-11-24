@@ -225,7 +225,6 @@ const PY_CLASSES: Class[] = [
 ];
 const CLASSES: Class[] = [
   { id: 'arrow-body-ctx', disposition: 'grammar', note: 'an arrow ExpressionBody is [~Yield], [~Await]', test: (r) => /=> (yield|await)/.test(r.src) },
-  { id: 'logical-assign-level', disposition: 'grammar', note: '`??=` `||=` `&&=` take an AssignmentExpression', test: (r) => !r.we && /(\|\||&&|\?\?)= a [-+*/%&|^<>=]*=/.test(r.src) },
   { id: 'coalesce-mix', disposition: 'grammar', note: 'CoalesceExpression: `??` beside `||` / `&&` needs parentheses', test: (r) => /\|\| b \?\?|\?\? a \|\||&& b \?\?|\?\? a &&/.test(r.src) },
   { id: 'number-then-ident', disposition: 'lexer', note: 'a NumericLiteral directly followed by an IdentifierStart (`1.x`)', test: (r) => /(^|[ (=])1\.x/.test(r.src) },
   { id: 'regex-after-update', disposition: 'lexer', note: 'a regex after a prefix `++` / `--` read as division', test: (r) => /(\+\+|--)\/r\//.test(r.src) },
