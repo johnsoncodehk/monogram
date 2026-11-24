@@ -80,7 +80,7 @@ const LINE_BREAKS = [
   'class C { async if() {} }', 'class C { accessor if = 1 }', 'class C { get\n if() {} }', 'x = async true => 1', 'x = async if => 1',
   'a b', 'let a = 1 let b = 2', 'f() g()', 'return x y', 'a = 1 b = 2', 'x ++y', '{ a = 1 b = 2 }',
   // TypeScript
-  'let x: T\nlet y', 'type A = B\ntype C = D', 'x!\n.y', 'x\n!y', 'let x: T\n[]', 'let x: A\n<B>(y)', 'interface I { a: T\n b: U }',
+  'let x: T\nlet y', 'type A = B\ntype C = D', 'f()\n{ g() }', 'x!\n.y', 'x\n!y', 'let x: T\n[]', 'let x: A\n<B>(y)', 'interface I { a: T\n b: U }',
 ];
 
 // One-token lookaheads (`not(X)` / `not(not(Y))` before what follows): what `export` takes (a
@@ -92,7 +92,7 @@ const LOOKAHEADS = [
   'export async function f() {}', 'export class C {}',
   '{}.b;', '{} .b', '({}).b;', 'function f() {}.x;', '(function () {}).x;', 'function f(){}\n(g)()', 'class C {}.x;', '(class {}).x;',
   'x = () => {}.x;', 'x = () => ({}).x;', 'x = () => {};', 'x = async () => {}.y;', 'x = a => {}.y;',
-  'for (let [a] of b);', 'for ([a] of b);', 'for ({a} of b);', 'for (let in a);', 'for (let of a);', 'for (async of a);', 'try {}', 'try {} finally {}',
+  'for (let [a] of b);', 'for ([a] of b);', 'for ({a} of b);', 'for (let in a);', 'for (let.x in a);', 'for (let of a);', 'for (async of a);', 'try {}', 'try {} finally {}',
 ];
 
 // Block comments: the near misses a comment token that ran past its first `*/` would accept

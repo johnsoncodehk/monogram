@@ -1205,7 +1205,20 @@ class ArmCompiler {
     let level = out;
     // At a fixed position, the alternation's first slot's tag says the branch (a check of that one
     // slot per branch); else each branch's items are searched for.
-    const f = this.fixedAt({ slot, rest: slot.quants.slice(scope.base.length), scope });
+    // A branch that can begin with a repetition may have its iteration MARKER (not one of its tags)
+    // in that first slot (a repetition is marked when some plan iterates it, which can be decided
+    // after this one is compiled): then the branch is searched for (tsc's heritage `elements`).
+    const startsMarked = (e: RuleExpr): boolean => {
+      switch (e.type) {
+        case 'group': return startsMarked(e.body);
+        case 'seq': { const x = e.items.find((y) => !ZERO_WIDTH.has(y.type)); return x !== undefined && startsMarked(x); }
+        case 'quantifier': return e.kind !== '?' || startsMarked(e.body);
+        case 'sep': return true;
+        case 'alt': return e.items.some(startsMarked);
+        default: return false;
+      }
+    };
+    const f = (slot.node as Extract<RuleExpr, { type: 'alt' }>).items.some(startsMarked) ? null : this.fixedAt({ slot, rest: slot.quants.slice(scope.base.length), scope });
     rs.forEach(([t0, t1], b) => {
       if (b === empty[0]) return;
       if (f) this.reads.checked++; else this.reads.scan++;

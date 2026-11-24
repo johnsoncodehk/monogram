@@ -1,6 +1,6 @@
 // The registered highlighter back ends (src/define-highlighter.ts): TextMate, Monarch and
 // tree-sitter's highlight queries. `src/cli.ts` writes what each renders. No construct is under
-// the shared context IR yet, so none renders from one and none refuses one.
+// the shared context IR yet; Monarch lists what it declines (gen-monarch monarchRefusals).
 import { defineHighlighter } from './define-highlighter.ts';
 import { generateTmLanguage, generateMarkupInjection, generateAliasGrammar, generateContributes } from './gen-tm.ts';
 import { generateMonarch, monarchRefusals } from './gen-monarch.ts';
