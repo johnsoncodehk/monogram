@@ -101,7 +101,9 @@ const ours = (t: Test): V | 'crash' => {
 const acornRun = (r: Run): V => {
   try { acorn.parse(r.text, { ecmaVersion: 'latest', sourceType: r.goal }); return 'accept'; } catch { return 'reject'; }
 };
-const moduleIndicator = ts.getSetExternalModuleIndicator({ moduleDetection: ts.ModuleDetectionKind.Force });
+// Internal to the pinned 5.9.3 compiler (absent from its .d.ts); this is its signature there.
+const tsInternal = ts as typeof ts & { getSetExternalModuleIndicator(options: ts.CompilerOptions): (file: ts.SourceFile) => void };
+const moduleIndicator = tsInternal.getSetExternalModuleIndicator({ moduleDetection: ts.ModuleDetectionKind.Force });
 const tscRun = (r: Run): { parser: V; binder: V } => {
   const sf = ts.createSourceFile('/t.js', r.text, r.goal === 'module' ? { languageVersion: ts.ScriptTarget.Latest, setExternalModuleIndicator: moduleIndicator } : ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   const parser: V = ((sf as unknown as { parseDiagnostics: unknown[] }).parseDiagnostics.length ? 'reject' : 'accept');

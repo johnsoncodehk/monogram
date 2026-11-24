@@ -120,6 +120,7 @@ const kebab = (s: string) => s.replace(/[A-Z]/g, (m) => '-' + m.toLowerCase());
 const at = (c: string) => ({ c, prec: ATOM });
 
 const sexpr: Lowering = {
+  units: 'utf8',  // what the lowering got by omission (text-units.ts reads anything but 'utf16' as utf8)
   ident: kebab,
   num: { int: 'int', lid: 'lid', depth: 'int', pos: 'int', idx: 'int' },
   type: (t) => t,

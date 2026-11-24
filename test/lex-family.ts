@@ -141,7 +141,7 @@ for (const name of ['JSDoc', 'BlockComment']) if (kindOf(portableIR(flat), name)
 
 // ── 2. every emitted lexer defines each scanner once and calls it ──
 const HOSTS = [
-  { name: 'typescript', target: tsTarget, def: (n: string) => `function ${n}(`, use: (n: string) => `${n}(src, pos)` as string | null },
+  { name: 'typescript', target: tsTarget, def: (n: string) => `function ${n}(`, use: (n: string) => `${n}(src, pos)` },
   { name: 'go', target: goTarget, def: (n: string) => `func ${n}(`, use: null },
   { name: 'rust', target: rustTarget, def: (n: string) => `fn ${n}(`, use: (n: string) => `${n}(src, pos as isize)` },
 ];

@@ -20,7 +20,7 @@ import calcExample from './fixtures/shape-namedcalc.ts';
 import { freeNodeKeys, shapeCoverage, shapeSkeleton } from '../src/shape-coverage.ts';
 import { estreeExprShape } from './fixtures/shape-v2-estree-expr.ts';
 import { tscExprShape } from './fixtures/shape-v2-tsc-expr.ts';
-import { compareTrees, nestValue, type NTree } from './shape-oracle.ts';
+import { compareTrees, nestValue, type NTree, type NValue } from './shape-oracle.ts';
 import { normaliseEstree, parseEstree } from './shape-oracle-estree.ts';
 import { tscOracle } from './shape-oracle-tsc.ts';
 import javascript from '../javascript.ts';
@@ -491,17 +491,17 @@ check('right-dependent inherited equations: ESTree has exactly binaryOp.left, ts
 // deciding leaf says no) the left is its default reading.
 check('a right-dependent equation equals the left evaluated in the context the leaf decides', () => {
   const loaded = estreeExprShape;
-  const shift = (v: ShapeValue, by: number): ShapeValue => Array.isArray(v) ? v.map((x) => shift(x, by))
+  const shift = (v: NValue, by: number): NValue => Array.isArray(v) ? v.map((x) => shift(x, by))
     : v !== null && typeof v === 'object' && 'kind' in v ? { ...v, start: v.start - by, end: v.end - by, fields: Object.fromEntries(Object.entries(v.fields).map(([k, x]) => [k, shift(x, by)])) }
     : v !== null && typeof v === 'object' && 'record' in v ? { record: Object.fromEntries(Object.entries(v.record).map(([k, x]) => [k, shift(x, by)])) } : v;
-  const left = (src: string, at: string): ShapeValue => {
+  const left = (src: string, at: string): NValue => {
     const cst = parse(javascript, src);
     const tree = nest(loaded.spec, evaluateShape(loaded, cst, src)) as NTree;
-    const found: ShapeValue[] = [];
+    const found: NValue[] = [];
     const walk = (x: unknown): void => {
       if (x === null || typeof x !== 'object') return;
       const t = x as { kind?: string; fields?: Record<string, unknown> };
-      if (t.kind && t.fields && at in t.fields && t.kind !== 'Program') found.push(t.fields[at] as ShapeValue);
+      if (t.kind && t.fields && at in t.fields && t.kind !== 'Program') found.push(t.fields[at] as NValue);
       Object.values(t.fields ?? (x as object)).forEach(walk);
     };
     walk(tree.fields);
@@ -568,7 +568,8 @@ const rejects = (what: string, g: Grammar, spec: ShapeSpec, ...needles: string[]
   });
 });
 const one = (rules: ShapeSpec['rules'], extra: Partial<ShapeSpec> = {}): ShapeSpec => ({ name: 'bad', rules, ...extra });
-const E = (arms: Record<string, unknown>): ShapeSpec['rules'] => ({ Expr: arms as ShapeSpec['rules'][string] });
+// One rule's arms, for `Expr`: an arm's Term (a mapping, a synthesized equation) or its children's equations (inherited).
+const E = <T,>(arms: Record<string, T>): Record<string, Record<string, T>> => ({ Expr: arms });
 
 rejects('an unknown rule', calc, one({ Exp: {} }), 'rules Exp', 'no rule Exp');
 rejects('an unknown arm', calc, one(E({ numbr: c(1) })), 'rules Expr.numbr', 'no arm numbr', 'they are: number, name, parenthesized, binaryOp, prefixOp, postfixOp');

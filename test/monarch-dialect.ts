@@ -277,7 +277,7 @@ for (const [name, file, g] of [['jsx', 'javascriptreact.monarch.json', jsx], ['t
   tokRow('`@elsewhere` after a body is text (a continuation ends at a word boundary)', 'pass', undefined, mon, dsrc, '@elsewhere', 0, is(''));
   tokRow('the close tag after the directives', 'pass', undefined, mon, dsrc, 'main>', 1, is('tag'));
   rows.push({ section, id: 'an opener `@if` is written `@@if` in its regex (Monaco reads `@name` as an attribute)', status: 'pass', check: () => {
-    const all = Object.values(mon().tokenizer).flat().filter(Array.isArray).map(r => r[0] as string);
+    const all = Object.values(mon().tokenizer).flat().filter((r): r is Exclude<MonarchRule, { include: string }> => Array.isArray(r)).map(r => r[0]);
     // a bare `@name` is the language's attribute (`@ident`), else an unescaped opener
     const attrs = mon() as unknown as Record<string, unknown>;
     const bare = all.filter(x => [...x.replace(/@@/g, '').matchAll(/@(\w+)/g)].some(m => typeof attrs[m[1]] !== 'string'));

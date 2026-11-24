@@ -101,7 +101,8 @@ export const HAS_RUST = have('rustc', ['--version']);
 if (!HAS_GO) console.log('  go: (toolchain absent — skipped)');
 if (!HAS_RUST) console.log('  rust: (toolchain absent — skipped)');
 
-export type Outcome = { ok: true; cst: string } | { ok: false; err?: string };
+// Each variant says the other's field is absent, so a reader may ask either variant for it.
+export type Outcome = { ok: true; cst: string; err?: undefined } | { ok: false; err?: string; cst?: undefined };
 export function runProc(cmd: string, args: string[], src: string): Outcome {
   const r = spawnSync(cmd, args, { input: src, encoding: 'utf8', maxBuffer: 32 << 20 });
   if (r.status !== 0) return { ok: false, err: r.stderr ?? '' };
@@ -182,7 +183,7 @@ export function editSessionBatch(cmd: string, jsons: string[], fast: boolean): E
 export type TsDoc = { edit(edits: { start: number; end: number; text: string }[]): unknown; align(): unknown; root(): unknown };
 export type TsLib = {
   parse(src: string): unknown; tokenize(src: string): { kind: string; text: string; nl: boolean; lid: number; off: number; end: number }[];
-  createDoc(src: string, opts: { validate?: boolean; builder?: unknown }): TsDoc;
+  createDoc(src: string, opts?: { validate?: boolean; builder?: unknown }): TsDoc;
   /** The library's lid_of, exported by the gate (TS_LID_OF) — the id a Doc gives a rebuilt token. */
   __lid_of(text: string): number;
   /** tok-spans in process (TS_TOK_SPANS). */

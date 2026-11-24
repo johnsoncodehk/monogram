@@ -9,7 +9,7 @@
 // is empty; Monogram accept iff createParser(dialectGrammar).parse(code) doesn't throw.
 // See ./src-coverage.ts for the coverage harness + metric definitions.
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
 import ts from 'tsc-oracle';
 import { createParser } from '../src/gen-parser.ts';
@@ -22,7 +22,7 @@ const isMulti = (t: string) => /^\s*\/\/\s*@filename:/im.test(t);
 
 function walk(d: string, exts: string[]): string[] {
   let o: string[] = [];
-  let entries: ReturnType<typeof readdirSync> = [] as any;
+  let entries: Dirent[] = [];
   try { entries = readdirSync(d, { withFileTypes: true }); } catch { return o; }
   for (const e of entries) {
     const f = join(d, e.name);
