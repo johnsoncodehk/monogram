@@ -63,7 +63,8 @@ const TOTAL_K = 4;
 // javascript 5412 -> 5349, typescript 6051 -> 6098 (land/grammar-decorators): `@` joins the grammar's
 // literals and typescript's decorator list gains accepts, so both mutant sets are drawn again
 // (javascript 5,349 of 5,850 rejects agree: 91.4%, was 91.7%; typescript 6,098 of 6,537: 93.3%, was 88.1%).
-const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5349, typescript: 6098 };
+// typescript 6098 -> 6111 with land/sound-type-assertion merged in (its accept rows draw again): 6,111 of 6,540.
+const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5349, typescript: 6111 };
 const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // P10 EXPECTED-FAIL on `$missing`-only repairs, by class. GREEDY CAPTURE: the repair is right by
 // position (each supplied token is where the derivation needs it), but the substituted token is
@@ -95,20 +96,22 @@ const P10_GREEDY_CAPTURE: Record<string, string[]> = {
     // the NUD repairs): `$missing`-only repairs whose substituted text is rejected, owed to the recovery
     // lane: `( { *g() , \nh() {} })` (a supplied ',' after a body-less generator method),
     // `class C { default *  class ( ) {} }` (a field `default` then a method, no separator),
-    // `f ; (class extends a?.b , { }  () {});`
-    'f(class extends a?.b{ () {});', 'class C { default class) {} }', '( { *g()\nh() {} })'],
+    // `f ; (class extends a?.b , { }  () {});`. Redrawn by land/grammar-decorators (merged after it): the
+    // three are no longer drawn; the same two kinds are: `(class { default * \nclass ( ) {} })` (a field
+    // `default` then a method, no separator) and `class C { static export *  class (  type , \nx = 1 )  }`.
+    '(class { default\nclass) {} })', 'class C { static export class type\nx = 1 }'],
 };
 // P10 EXPECTED-FAIL, second class: LOOKAHEAD BYPASS. A lookahead was decided on the original tokens and
 // the supplied tokens make the repaired text one it refuses: typescript's `export` takes a Stmt after a
 // positive lookahead for a declaration word (`export` `not(not(alt('var', 'let', 'const', 'using',
-// ['await', 'using'])))` Stmt), so in `export await using private x = y;` the lookahead sees `await using`
-// and the Stmt is then repaired as three labels (`await :  using :  private :  x = y`), which the
+// ['await', 'using'])))` Stmt), so in `export await using meta x = y;` the lookahead sees `await using`
+// and the Stmt is then repaired as three labels (`await :  using :  meta :  x = y`), which the
 // lookahead admits but no `export` derivation does. The defect is the grammar's (`export let: x;`,
 // `export let.x = 1;` are accepted; acorn and tsc reject): it leaves with the Statement / Declaration
 // split (grammar lane: the `let` + line break item), which gives `export` the declarations themselves.
 // Listed since land/grammar-decorators (its `@` literal draws the mutant set that holds it).
 const P10_LOOKAHEAD_BYPASS: Record<string, string[]> = {
-  typescript: ['export await using private x = y;'],
+  typescript: ['export await using meta x = y;'],
 };
 // EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and
 // parseTotal alike) is not the oracle's. Not total parsing's property (parseTotal's verdict is its
