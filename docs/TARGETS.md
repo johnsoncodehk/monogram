@@ -114,8 +114,17 @@ listed in [ROADMAP.md](ROADMAP.md#1-one-portable-engine-one-shared-runtime-descr
 
 - Lexical errors: the JS/TS `tokenize` throws; Go's `Tokenize` returns a `*LexError`; Rust's
   `tokenize` returns `Err(LexError)` (since f5a1c3e; it panicked before). The parse entry points
-  keep their form: TS `parse` / `createDoc` throw, Go `ParseWith` and the `Doc` constructors
-  panic with the `*LexError`, Rust `parse_with` / `parse` / `Doc::new` panic with the message.
+  keep their form: TS `parse` throws, Go `ParseWith` panics with the `*LexError`, Rust
+  `parse_with` / `parse` panic with the message. An incremental `Doc` exists for any text: a text
+  that does not lex, at creation as after an edit, gives a Doc with no tree and no tokens whose
+  lexer error is its accessor's value (offset and message, the values `tokenize` reports), and
+  its next edit relexes the whole text. TS `createDoc`, Go `NewDoc` / `NewDocWith` and Rust
+  `Doc::new` threw / panicked on such a text before (until `land/sound-doc-total`):
+  - TS: `const d = createDoc(src);` then `d.root() === null`, `d.lexError()` → `{ off, message }` (null when it lexes);
+  - Go (`Doc` and `DocWith`, the `Document` interface): `d := NewDoc(src)` then `d.Root() < 0`, `d.LexError()` → `*LexError{Off, Msg}` (nil when it lexes);
+  - Rust: `let d = Doc::new(src)` then `d.root_handle().is_none()`, `d.lex_error()` → `Option<&LexError>` (`off`, `msg`).
+  A recovering emission (`{ recovery: true }`) does not change this: its `parseTotal` gives no
+  root and the lexer's error as its one diagnostic for such a text, and the `Doc` parses strictly.
   Inside the portable lexers an error is a returned value, never a throw or panic used for
   control flow.
 - Total parsing is an emit option: `emitParser(grammar, target, { recovery: true })` appends a
