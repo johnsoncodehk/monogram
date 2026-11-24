@@ -50,7 +50,107 @@ const RS_COOKS: Record<string, string> = {
             else { t.parse::<f64>().unwrap_or(f64::NAN) };
         w_num(x)
     }`,
+  tsNumericText: `fn cook_ts_numeric_text(&mut self, s: &str) -> W { let x = f64::from_bits(self.cook_number_value(s)); let t = js_num_str(x); self.w_own(t) }`,
+  tsNumericLiteralFlags: `fn cook_ts_numeric_literal_flags(&mut self, s: &str) -> W {
+        let b = s.as_bytes();
+        let mut f = 0u32;
+        let pre = |c: u8| b.len() > 1 && b[0] == b'0' && (b[1] | 0x20) == c;
+        if pre(b'x') { f |= 64; } else if pre(b'b') { f |= 128; } else if pre(b'o') { f |= 256; }
+        else if b.len() > 1 && b[0] == b'0' && b[1..].iter().all(|c| (b'0'..=b'7').contains(c)) { f |= 32; }
+        else { if b.len() > 1 && b[0] == b'0' && b[1].is_ascii_digit() { f |= 8192; } if b.iter().any(|&c| c == b'e' || c == b'E') { f |= 16; } }
+        if b.contains(&b'_') { f |= 512; }
+        if f == 0 { W_ABSENT } else { w_num(f as f64) }
+    }`,
+  tsBigIntText: `fn cook_ts_big_int_text(&mut self, s: &str) -> W { if s.contains('_') { let t = s.replace('_', ""); self.w_own(t) } else { self.w_text(s) } }`,
+  identifierName: `fn cook_identifier_name(&mut self, s: &str) -> W {
+        if !s.contains('\\\\') { return self.w_text(s); }
+        let mut out = String::new(); let mut units: Vec<u16> = Vec::new();
+        let b = s.as_bytes(); let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'\\\\' && b.get(i + 1) == Some(&b'u') {
+                let (cp, n) = if b.get(i + 2) == Some(&b'{') { let close = s[i..].find('}').unwrap() + i; (u32::from_str_radix(&s[i + 3..close], 16).unwrap_or(0xFFFD), close + 1 - i) } else { (u32::from_str_radix(&s[i + 2..i + 6], 16).unwrap_or(0xFFFD), 6) };
+                push_unit(&mut out, &mut units, cp); i += n;
+            } else { flush_units(&mut out, &mut units); let c = s[i..].chars().next().unwrap(); out.push(c); i += c.len_utf8(); }
+        }
+        flush_units(&mut out, &mut units);
+        self.w_own(out)
+    }`,
+  stringValue: `fn cook_string_value(&mut self, s: &str) -> W {
+        let body = &s[1..s.len() - 1];
+        if !body.contains('\\\\') { return self.w_text(body); }
+        let mut out = String::new(); let mut units: Vec<u16> = Vec::new();
+        let b = body.as_bytes(); let mut i = 0;
+        while i < b.len() {
+            if b[i] != b'\\\\' { flush_units(&mut out, &mut units); let c = body[i..].chars().next().unwrap(); out.push(c); i += c.len_utf8(); continue; }
+            i += 1;
+            let c = body[i..].chars().next().unwrap();
+            match c {
+                'n' => { flush_units(&mut out, &mut units); out.push('\\n'); i += 1; }
+                't' => { flush_units(&mut out, &mut units); out.push('\\t'); i += 1; }
+                'r' => { flush_units(&mut out, &mut units); out.push('\\r'); i += 1; }
+                'b' => { flush_units(&mut out, &mut units); out.push('\\u{8}'); i += 1; }
+                'f' => { flush_units(&mut out, &mut units); out.push('\\u{c}'); i += 1; }
+                'v' => { flush_units(&mut out, &mut units); out.push('\\u{b}'); i += 1; }
+                '\\r' => { i += 1; if b.get(i) == Some(&b'\\n') { i += 1; } }
+                '\\n' | '\\u{2028}' | '\\u{2029}' => { i += c.len_utf8(); }
+                'x' => { let v = u32::from_str_radix(&body[i + 1..i + 3], 16).unwrap_or(0xFFFD); push_unit(&mut out, &mut units, v); i += 3; }
+                'u' => {
+                    if b.get(i + 1) == Some(&b'{') { let close = body[i..].find('}').unwrap() + i; let v = u32::from_str_radix(&body[i + 2..close], 16).unwrap_or(0xFFFD); push_unit(&mut out, &mut units, v); i = close + 1; }
+                    else { let v = u32::from_str_radix(&body[i + 1..i + 5], 16).unwrap_or(0xFFFD); push_unit(&mut out, &mut units, v); i += 5; }
+                }
+                '0'..='7' => {
+                    let max = if c <= '3' { 3 } else { 2 };
+                    let mut n = 0; let mut v = 0u32;
+                    while n < max && i + n < b.len() && (b'0'..=b'7').contains(&b[i + n]) { v = v * 8 + (b[i + n] - b'0') as u32; n += 1; }
+                    push_unit(&mut out, &mut units, v); i += n;
+                }
+                c => { flush_units(&mut out, &mut units); out.push(c); i += c.len_utf8(); }
+            }
+        }
+        flush_units(&mut out, &mut units);
+        self.w_own(out)
+    }`,
+  hasExtendedUnicodeEscape: `fn cook_has_extended_unicode_escape(&mut self, s: &str) -> W {
+        let body = if s.starts_with('"') || s.starts_with('\\'') { &s[1..s.len() - 1] } else { let e = if s.ends_with("\${") { 2 } else { 1 }; &s[1..s.len() - e] };
+        let b = body.as_bytes(); let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'\\\\' {
+                if b.get(i + 1) == Some(&b'u') && b.get(i + 2) == Some(&b'{') {
+                    if let Some(close) = body[i..].find('}') { let h = &body[i + 3..i + close]; if !h.is_empty() && h.bytes().all(|c| c.is_ascii_hexdigit()) && u32::from_str_radix(h, 16).map_or(false, |v| v <= 0x10FFFF) { return W_TRUE; } }
+                }
+                i += 2;
+            } else { i += 1; }
+        }
+        W_FALSE
+    }`,
 };
+/** UTF-16 code units (a JavaScript string's escapes) into UTF-8: a pair is one character, a lone
+ * surrogate U+FFFD (a Rust string holds none). */
+const RS_UNITS = `fn push_unit(out: &mut String, units: &mut Vec<u16>, cp: u32) {
+    if cp > 0xFFFF { flush_units(out, units); out.push(char::from_u32(cp).unwrap_or('\\u{FFFD}')); } else { units.push(cp as u16); }
+}
+fn flush_units(out: &mut String, units: &mut Vec<u16>) {
+    if units.is_empty() { return; }
+    for c in char::decode_utf16(units.iter().copied()) { out.push(c.unwrap_or('\\u{FFFD}')); }
+    units.clear();
+}
+/// A number as JavaScript's Number.prototype.toString writes it (ECMA-262 Number::toString).
+fn js_num_str(x: f64) -> String {
+    if x.is_nan() { return "NaN".into(); }
+    if x == 0.0 { return "0".into(); }
+    if x.is_infinite() { return if x > 0.0 { "Infinity".into() } else { "-Infinity".into() }; }
+    let neg = x < 0.0;
+    let e = format!("{:e}", x.abs());
+    let (m, ex) = e.split_once('e').unwrap();
+    let digits: String = m.chars().filter(|c| *c != '.').collect();
+    let k = digits.len() as i32;
+    let n = ex.parse::<i32>().unwrap() + 1;
+    let s = if k <= n && n <= 21 { format!("{}{}", digits, "0".repeat((n - k) as usize)) }
+        else if 0 < n && n <= 21 { format!("{}.{}", &digits[..n as usize], &digits[n as usize..]) }
+        else if -6 < n && n <= 0 { format!("0.{}{}", "0".repeat((-n) as usize), digits) }
+        else { let t = if k == 1 { digits.clone() } else { format!("{}.{}", &digits[..1], &digits[1..]) }; format!("{}e{}{}", t, if n - 1 >= 0 { "+" } else { "-" }, (n - 1).abs()) };
+    if neg { format!("-{}", s) } else { s }
+}`;
 
 /** Begin printing `plan` (built from `shape`) as a typed Rust parser: what it refuses, its types. */
 export function beginRsShape(plan: ShapePlan, shape: Shape, entry: string): RsShape {
@@ -119,7 +219,7 @@ export const rsShapeLowering: ShapeLowering = {
 };
 
 /** Calls the Rust lowering prints as methods of the builder (`self.`): the cooking functions. */
-export const rsShapeCall = (name: string): boolean => name.startsWith('cook_');
+export const rsShapeCall = (name: string): boolean => name.startsWith('cook_') || ['val_start', 'val_end', 'v_drop_last', 'rec_get'].includes(name);
 
 // ── The typed declarations ──
 function rsType(t: TypeRef): string {
@@ -151,7 +251,7 @@ function typedDecls(st: RsShape): string {
     const name = rsTy(u.name);
     const vs = u.kinds.map((k) => ({ v: rsTy(k), ty: rsTy(k), i: st.kindIdx.get(k)! }));
     out.push(`/// One of ${u.kinds.join(' | ')}${u.missing ? ', or Missing (an arm the shape or this parser builds no value for)' : ''}.\n#[derive(Clone, Copy)]\npub enum ${name} { ${vs.map((x) => `${x.v}(Id<${x.ty}>)`).join(', ')}${u.missing ? ', Missing' : ''} }`);
-    out.push(`impl FromW for ${name} { fn from_w(_a: &Ast, w: W) -> Self { ${u.missing ? `if w & TAGM == T_MISS { return ${name}::Missing; } ` : ''}match (w >> 32) as u32 & 0xFFFF { ${vs.map((x) => `${x.i} => ${name}::${x.v}(Id(w as u32, PhantomData))`).join(', ')}, _ => panic!("shape: not a ${name}") } } }`);
+    out.push(`impl FromW for ${name} { fn from_w(_a: &Ast, w: W) -> Self { ${u.missing ? `if w & TAGM == T_MISS { return ${name}::Missing; } ` : ''}match (w >> 32) as u32 & 0xFFFF { ${vs.map((x) => `${x.i} => ${name}::${x.v}(Id(w as u32, PhantomData))`).join(', ')}, k => panic!("shape: not a ${name}: {}", sh_kind_name(k)) } } }`);
     out.push(`impl ToW for ${name} { fn to_w(&self) -> W { match self { ${vs.map((x) => `${name}::${x.v}(id) => w_node(${x.i}, id.0 as usize)`).join(', ')}${u.missing ? `, ${name}::Missing => T_MISS` : ''} } } }`);
     out.push(`impl Json for ${name} { fn json(&self, a: &Ast, out: &mut String) { match self { ${vs.map((x) => `${name}::${x.v}(id) => id.json(a, out)`).join(', ')}${u.missing ? `, ${name}::Missing => out.push_str("null")` : ''} } } }`);
   }
@@ -159,7 +259,7 @@ function typedDecls(st: RsShape): string {
     const name = rsTy(e.name);
     out.push(`/// A closed string: ${e.values.map((v) => J(v)).join(' | ')}.\n#[derive(Clone, Copy, PartialEq, Eq)]\npub enum ${name} { ${e.values.map((_, i) => `V${i}`).join(', ')} }`);
     out.push(`impl ${name} { pub fn as_str(&self) -> &'static str { match self { ${e.values.map((v, i) => `${name}::V${i} => ${J(v)}`).join(', ')} } } }`);
-    out.push(`impl FromW for ${name} { fn from_w(a: &Ast, w: W) -> Self { match a.w_str(w) { ${e.values.map((v, i) => `${J(v)} => ${name}::V${i}`).join(', ')}, _ => panic!("shape: not a ${name}") } } }`);
+    out.push(`impl FromW for ${name} { fn from_w(a: &Ast, w: W) -> Self { match a.w_str(w) { ${e.values.map((v, i) => `${J(v)} => ${name}::V${i}`).join(', ')}, s => panic!("shape: not a ${name}: {:?}", s) } } }`);
     out.push(`impl ToW for ${name} { fn to_w(&self) -> W { match self { ${e.values.map((v, i) => `${name}::V${i} => T_STRI | ${intern(st, v)}`).join(', ')} } } }`);
     out.push(`impl Json for ${name} { fn json(&self, _a: &Ast, out: &mut String) { json_str(self.as_str(), out) } }`);
   }
@@ -169,7 +269,7 @@ function typedDecls(st: RsShape): string {
     const name = rsTy(k.name);
     const ps = k.fields.map((f, j) => `f${j}: W`);
     const conv = k.fields.map((f, j) => `${rsField(f.name)}: <${rsField_(f.type)}>::from_w(self, f${j})`);
-    impls.push(`    #[inline(never)]\n    fn mk${i}(&mut self${k.record ? '' : ', start: u32, end: u32'}${ps.map((p) => `, ${p}`).join('')}) -> W { let n = ${name} {${k.record ? '' : ' start, end,'} ${conv.join(', ')} }; self.a${i}.push(n); w_node(${i}, self.a${i}.len() - 1) }`);
+    impls.push(`    #[inline(never)]\n    fn mk${i}(&mut self${k.record ? '' : ', start: u32, end: u32'}${ps.map((p) => `, ${p}`).join('')}) -> W {${k.fields.map((_, j) => ` if f${j} & TAGM == T_MISS { return f${j}; }`).join('')} let n = ${name} {${k.record ? '' : ' start, end,'} ${conv.join(', ')} }; self.a${i}.push(n); w_node(${i}, self.a${i}.len() - 1) }`);
     const body: string[] = [];
     if (k.record) body.push(`out.push_str(${rsStr('{"record":{')}); let mut first = true;`);
     else body.push(`out.push_str(${rsStr(`{${J(K.kind)}:${J(k.name)},${J(K.start)}:`)}); json_u32(n.start, out); out.push_str(${rsStr(`,${J(K.end)}:`)}); json_u32(n.end, out); let first = false;`);
@@ -221,6 +321,9 @@ macro_rules! need { ($e:expr) => {{ let x: W = $e; if x & TAGM == T_MISS { retur
 static SH_CONST: &[&str] = &[${st.consts.map((s) => rsStr(s)).join(', ')}];
 const SH_NCONST: usize = ${st.consts.length};
 const SH_ARM_NAME: [u32; ${armNames.length}] = [${armNames.join(', ')}];
+fn sh_kind_name(k: u32) -> &'static str { [${T.kinds.map((k) => rsStr(k.name)).join(', ')}].get(k as usize).copied().unwrap_or("?") }
+/// Set true by hand to trace every construct's slots (a debugging aid; false in every build).
+const SH_DEBUG: bool = false;
 const SH_SYN0: [W; ${nsyn}] = [${synDefault.join(', ')}];
 
 /// A handle to a node (or record) of kind T in its arena.
@@ -266,6 +369,7 @@ impl<T: FromW + Json> Json for List<T> {
         out.push(']');
     }
 }
+${RS_UNITS}
 fn json_u32(x: u32, out: &mut String) { use std::fmt::Write; let _ = write!(out, "{}", x); }
 fn json_str(value: &str, out: &mut String) {
     use std::fmt::Write;
@@ -298,6 +402,7 @@ pub struct Ast<'s> {
     slab: Vec<W>,
     owned: Vec<String>,
     ys: [W; ${nsyn}],
+    ws: Workspace<Slot>,
 ${T.kinds.map((k, i) => `    pub a${i}: Vec<${rsTy(k.name)}>,`).join('\n')}
 }
 impl<'s> Ast<'s> {
@@ -364,7 +469,7 @@ impl<'s> Ast<'s> {
     #[allow(unused_variables)]
     fn rec_get(&self, x: W, f: &str) -> W { let id = x as u32 as usize; match ((x >> 32) as u32 & 0xFFFF, f) { ${recFields.join(', ')}${recFields.length ? ', ' : ''}_ => W_ABSENT } }
     fn v_drop_last(&self, x: W, c: bool) -> W { if c && x & 0xFF_FFFF != 0 { x - 1 } else { x } }
-${plan.cooks.map((c) => `    ${RS_COOKS[c]}`).join('\n')}
+${[...new Set([...plan.cooks, ...(plan.cooks.includes('tsNumericText') ? ['numberValue'] : [])])].map((c) => `    ${RS_COOKS[c]}`).join('\n')}
     /// Engine arm id's value over slots b.. (its synthesized attributes first, into ys).
     fn construct(&mut self, id: usize, b: usize, off: u32, end: u32) -> W {
 ${nsyn ? `        self.ys = SH_SYN0;
@@ -387,6 +492,7 @@ impl<'s> Builder for Ast<'s> {
         std::mem::swap(&mut self.sc, scratch);
         let (ho, he) = if self.sc.len() > sb { (self.sc[sb].ho, self.sc[sb].he) } else { (off, off) };
         let id = rule_id as usize;
+        if SH_DEBUG { eprintln!("node arm {} {:?} slots {:?}", id, SH_ARM_NAME.get(id).map(|&i| SH_CONST[i as usize]), self.sc[sb..].iter().map(|x| (x.tag, x.arm, x.off, x.end)).collect::<Vec<_>>()); }
         let w = self.construct(id, sb, off, end);
         self.sc.truncate(sb);
         self.sc.push(Slot { w, tag: -1, arm: id as i32, off, end, ho, he, sy: self.ys });
@@ -397,6 +503,7 @@ impl<'s> Builder for Ast<'s> {
     #[inline(always)] fn checkpoint(&self) -> (usize, usize) { (self.slab.len(), self.owned.len()) }
     #[inline(always)] fn restore(&mut self, ck: (usize, usize)) { self.slab.truncate(ck.0); self.owned.truncate(ck.1); }
     fn dummy_h() -> Slot { Slot::default() }
+    #[inline(always)] fn workspace_mut(&mut self) -> Option<&mut Workspace<Slot>> { Some(&mut self.ws) }
     fn tok_range(&self, _h: Slot) -> (u32, u32) { (0, 0) }
     #[inline(always)] fn tag(&mut self, scratch: &mut Vec<Slot>, t: i32) { let n = scratch.len(); scratch[n - 1].tag = t; }
     fn mark(&mut self, scratch: &mut Vec<Slot>, c: usize, mt: i32) {
@@ -409,16 +516,26 @@ impl<'s> Builder for Ast<'s> {
 /// the shape leaves out, or one this parser builds no value for, was read).
 pub fn parse_shape(src: &str) -> Result<Ast<'_>, String> {
     let mut a = Ast::default();
+    parse_shape_into(src, &mut a)?;
+    Ok(a)
+}
+/** parse_shape into \`a\`, emptied first: its arenas, slab and buffers keep their capacity. */
+pub fn parse_shape_into<'s>(src: &'s str, a: &mut Ast<'s>) -> Result<(), String> {
     a.src = src;
     a.ys = SH_SYN0;
-    match parse_with(src, &mut a) {
+    a.slab.clear(); a.owned.clear();${T.kinds.map((_, i) => ` a.a${i}.clear();`).join('')}
+    match parse_with(src, a) {
         Some(h) => {
             if h.w & TAGM == T_MISS { return Err(format!("shape: {}", SH_CONST[h.w as u32 as usize])); }
             a.root = h.w;
-            Ok(a)
+            Ok(())
         }
         None => Err("syntax error".to_string()),
     }
+}
+impl<'s> Ast<'s> {
+    /// The nodes and records built (a losing candidate's included).
+    pub fn node_count(&self) -> usize { 0${T.kinds.map((_, i) => ` + self.a${i}.len()`).join('')} }
 }
 `;
   return body;

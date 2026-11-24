@@ -312,7 +312,9 @@ if (import.meta.main) {
     // The emitted shape-building parser (TypeScript) must build exactly the evaluator's values:
     // any divergence fails; fewer statements compared than recorded is a regression of what the
     // construct plans cover.
-    for (const name of ['estree', 'tsc']) for (const b of await runBuilt(await shapeOf(name), CI_CORPUS[name]!, corpusPaths(CI_CORPUS[name]!), 4)) {
+    // The tsc board also builds the witnesses the corpus does not reach (test/fixtures/shape-built-witnesses.ts).
+    const WITNESSES = new URL('./fixtures/shape-built-witnesses.ts', import.meta.url).pathname;
+    for (const name of ['estree', 'tsc']) for (const b of await runBuilt(await shapeOf(name), CI_CORPUS[name]!, [...corpusPaths(CI_CORPUS[name]!), ...(name === 'tsc' ? [WITNESSES] : [])], 4)) {
       console.log(formatBuilt(b));
       const key = `${name} ${b.corpus} built${b.view === 'expression' ? '' : ` ${b.view}`}`;
       next[key] = { corpus: b.corpus, view: b.view === 'expression' ? 'expression statement' : b.view === 'statement' ? 'top-level statement' : 'file', units: b.units, compared: b.compared, identical: b.identical, outOfSubset: b.unsupported };

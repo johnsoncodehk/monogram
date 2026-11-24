@@ -255,6 +255,33 @@ like-for-like comparison with oxc (typed structs in arenas) is the Rust printer'
 | parser.ts, covered (tsc) | 6,103 + 4,039 | 7,388 + 969 | 29,229 -> 26,166 (-10.5%) | 0.99 -> 0.87 MB | 658,496 -> 683,626 (+3.8%) |
 | typescript.js, covered (ESTree) | 182,718 + 128,787 | 202,392 + 22,745 | 871,876 -> 868,500 (-0.4%) | 28.9 -> 27.1 MB | 19,949,949 -> 21,506,871 (+7.8%) |
 
+### Rust: the first typed build (2026-11-24, measure-profile run 45308730793)
+
+The typed Rust AST build (src/rust-shape.ts: one struct per node kind in its arena) against the CST
+build of the same tree, Callgrind instructions of one parse (run.sh phase `shape`, M only), on
+checker.cov.ts (checker.ts's 4,648 outermost expression statements the shape builds: 381 KB, 12% of
+the file) under the tsc expression shape's synthesized subset (test/fixtures/shape-tsc-synthesized.ts;
+47,649 nodes built). The starting point, stated as measured: the first typed build costs 89% more
+than the CST build.
+
+| mode | CST build Ir | shape build Ir | Δ |
+| --- | --- | --- | --- |
+| fresh | 16,125,283 | 30,487,479 | +89.07% |
+| reuse | 15,523,392 | 29,149,033 | +87.77% |
+
+Where the extra 14.4M go (self instructions per function, fresh): the engine and the lexer are the
+same in both (Parser 8.96M against 9.09M; lexer 6.37M); `Ast::node` 4.56M (38k calls: a scratch
+swap, a `match` over ~400 engine arm ids, a 48-byte Slot push, and the plans LLVM inlined there);
+the other construct plans 2.08M; the typed constructors `mk<k>` 1.92M (a missing check per field,
+the FromW conversion, the arena push); identifier cooking 1.28M plus memchr 0.53M; allocator +1.27M
+and memcpy +0.72M (arena growth, Slot copies); value words 0.85M; FromW 0.36M. So the cost is the
+builder's per-node overhead (an interpreter of the construct plan: a runtime dispatch on the arm the
+accept site already knows) and identifier cooking, not the AST: the CST build writes a node per
+rule node and a leaf per token, the typed build 47.6k nodes and no leaves. The reductions follow in
+that order (direct per-arm construct calls at the accept sites, shared with the TypeScript target;
+a smaller slot; identifiers uncooked when the lexer saw no escape; constructors without checks a
+field's rule cannot need), each re-measured here.
+
 ## Recorded result: element dialects (TSX and JSX)
 
 `measure-profile` run 45129600578 (AMD EPYC 7763), M = master `d326d65`. Per token: Rust and Go
