@@ -52,18 +52,20 @@ function rbBracketFn(ids: LexIdPlan): Fn {
 
 // The re-bind of led `led` whose L2 is literal `sep`, its steps taken by `step` (an engine method
 // (led, k, d) -> bool) and its capped operand by `capped` ((led, i, d) -> bool): whether it matched
-// (the led's steps then hold their match), else nothing changed.
-export function rbScanFn(name: string, step: string, capped: string): Fn {
-  const mark = (x: string): Stmt => ({ k: 'letCall', names: [0, 1, 2, 3].map((j) => `${x}${j}`), call: call('rbMark') });
-  const reset = (x: string): Stmt => run('rbReset', ...[0, 1, 2, 3].map((j) => v(`${x}${j}`)));
+// (the led's steps then hold their match), else nothing changed. `held`: one more engine length
+// the interpreter's marks hold (its repair memory, recovery-family.ts: a repair made in an undone
+// try is undone with it), read by `held` and cut back by `cut`.
+export function rbScanFn(name: string, step: string, capped: string, held?: { len: string; cut: string }): Fn {
+  const mark = (x: string): Stmt[] => [{ k: 'letCall', names: [0, 1, 2, 3].map((j) => `${x}${j}`), call: call('rbMark') }, ...(held ? [let_(`${x}h`, call(held.len))] : [])];
+  const reset = (x: string): Stmt[] => [run('rbReset', ...[0, 1, 2, 3].map((j) => v(`${x}${j}`))), ...(held ? [run(held.cut, v(`${x}h`))] : [])];
   const st = (k: number): Expr => call(step, v('led'), n(k), v('d'));
   return {
     name, doc: '', method: true, ret: ['bool'],
     params: [{ name: 'led', ty: 'int' }, { name: 'sep', ty: 'int' }, { name: 'd', ty: 'int' }],
     body: [
-      mark('m'),
+      ...mark('m'),
       if_(st(0), [
-        mark('a'),
+        ...mark('a'),
         let_('i', call('rbPos')),
         if_(bin('and', st(1), { k: 'not', e: st(2) }), [
           let_('g', call('rbPos')),
@@ -73,7 +75,7 @@ export function rbScanFn(name: string, step: string, capped: string): Fn {
             let_('br', call('rbBracket', v('l'))),
             if_(bin('ne', v('br'), n(0)), [set('depth', bin('add', v('depth'), v('br')))], [
               if_(bin('and', bin('eq', v('depth'), n(0)), bin('eq', v('l'), v('sep'))), [
-                reset('a'),
+                ...reset('a'),
                 if_(bin('and', bin('and', call(capped, v('led'), v('i'), v('d')), bin('eq', call('rbPos'), v('i'))), bin('and', st(2), st(3))), [ret(tru)]),
               ]),
             ]),
@@ -81,7 +83,7 @@ export function rbScanFn(name: string, step: string, capped: string): Fn {
           ] },
         ]),
       ]),
-      reset('m'),
+      ...reset('m'),
       ret(fls),
     ],
   };
@@ -89,7 +91,7 @@ export function rbScanFn(name: string, step: string, capped: string): Fn {
 
 // The native forms' re-bind and the recovery interpreter's (recovery-family.ts): one body.
 export const RB_SCAN: Fn = rbScanFn('rbScan', 'rbStep', 'rbCapped');
-export const RI_RB_SCAN: Fn = rbScanFn('riRbScan', 'riRbStep', 'riRbCapped');
+export const RI_RB_SCAN: Fn = rbScanFn('riRbScan', 'riRbStep', 'riRbCapped', { len: 'enRmLen', cut: 'enRmCut' });
 export const RB_EXTERNS_NATIVE: Fn[] = [...REBIND_EXTERNS, stepExt('rbStep'), cappedExt('rbCapped')];
 export const RB_EXTERNS_INTERP: Fn[] = [cappedExt('riRbCapped')];
 export function rebindFamilyFns(ids: LexIdPlan): Fn[] {
