@@ -20,7 +20,9 @@
 // An rd rule computes its form only when it is in the TARGET CLOSURE: the rules a container calls
 // at a named child or a target step reads, and the unit arms' rules of those, transitively; a
 // Pratt rule always computes one. A grammar that declares no context gets none of this: the plan
-// is absent and every printer prints what it printed before.
+// is absent and every printer prints what it printed before. A context declared `when: 'demand'`
+// is planned by planDemand (below): this plan, made on a copy of the rules, becomes its twins, and
+// the real rules keep the forms they have without contexts.
 //
 // EVERY READER AND WRITER OF THE FORM'S LOW BITS (FORM_LOW), the one list to extend when a new
 // mechanism writes FORM_TARGET / FORM_NOT_TARGET / FORM_UNARY or tests them: with contexts
@@ -35,8 +37,8 @@
 // typed-AST forms (they refuse them by name). The interpreter computes the predicate as a CST walk
 // (declared-targets-cst.ts), not from these bits.
 import type { CstGrammar } from './types.ts';
-import type { RuleIR, Step, RdRule, PrattRule, TargetsIR } from './emit-portable.ts';
-import { formPass, formLast, FORM_MAX_CONTEXTS } from './emit-portable.ts';
+import type { RuleIR, Step, RdRule, PrattRule, TargetsIR, DemandTwin } from './emit-portable.ts';
+import { formPass, formLast, FORM_MAX_CONTEXTS, nudLowForm, DEFER_SHIFT, DEMAND_ASSIGNED, DEMAND_MAX_TWINS } from './emit-portable.ts';
 
 // acc: init, the bits the arm starts from (its container contexts' pass bits and its leaf bits); low,
 // its FORM_LOW bits; last, its last bits (kept where it passes).
@@ -75,6 +77,7 @@ export function planTargets(grammar: CstGrammar, rules: RuleIR[]): TargetsIR | n
   const names = Object.keys(decl);
   if (names.length === 0) return null;
   const ir = { rules };
+  if (names.some((n) => decl[n]!.when === 'demand')) return planDemand(grammar, rules, names);
   if (names.length > FORM_MAX_CONTEXTS) throw new Error(`targets: ${names.length} contexts declared (${names.join(', ')}); the engine's form holds at most ${FORM_MAX_CONTEXTS}`);
   let passes = 0;
   names.forEach((_, i) => { passes |= formPass(i); });
@@ -263,4 +266,105 @@ function bodies(r: RuleIR): Step[][] {
 function grammarOpCtx(g: CstGrammar, op: string): string | undefined {
   for (const level of g.precs) for (const o of level.operators) if (o.value === op && o.position === 'infix' && o.targetCtx !== undefined) return o.targetCtx;
   return undefined;
+}
+
+// THE ON-DEMAND FORM (TargetContext.when 'demand'; emit-portable.ts DemandIR). The normal parse
+// computes nothing: every arm keeps the form it has without contexts, a container arm adds its
+// twin's number (a constant), a demand operator's node ASSIGNED. Its twins are the EAGER plan of
+// the same context, made on a copy of the rules: each container arm's steps and each rd rule of
+// the eager closure, accumulating, and printed only to be run by a re-parse. So the shallow check
+// must take exactly the arms the context passes as they are: in every Pratt rule a twin reads (and
+// the demand operators' own), an arm the shallow check takes (FORM_TARGET low bits, not capped) is
+// a leaf or a container, and a leaf is such an arm; anything else is refused by name.
+function planDemand(grammar: CstGrammar, rules: RuleIR[], names: string[]): TargetsIR {
+  const ctx = names[0]!;
+  const c = grammar.targets![ctx]!;
+  if (names.length !== 1) throw new Error(`targets: the demand context ${ctx} must be the grammar's only context (declared: ${names.join(', ')})`);
+  for (const r of rules) for (const b of bodies(r)) for (const s of walk(b)) {
+    if (s.t === 'target') throw new Error(`targets: the demand context ${ctx} is read by a target('${s.ctx}') marker in rule ${r.name}: a marker reads the form the normal parse computes (declare it eager)`);
+  }
+  const clones = structuredClone(rules) as RuleIR[];
+  const eager = planTargets({ ...grammar, targets: { [ctx]: { ...c, when: 'eager' } } }, clones)!;
+  const cloneOf = new Map(clones.map((r) => [r.name, r] as const));
+  // The demand operators, then what their twins reach: each Pratt rule a twin reads the form of
+  // (its container arms are twins), each closure rd rule a twin calls (its twin), transitively.
+  const ops: Array<{ rule: string; op: string }> = [];
+  for (const r of rules) if (r.kind === 'pratt') for (const b of r.binary) if (grammarOpCtx(grammar, b.op) === ctx) { b.requireTarget = true; ops.push({ rule: r.name, op: b.op }); }
+  const twins: DemandTwin[] = [];
+  const rd: RdRule[] = [];
+  const fix = new Set<string>();
+  const seen = new Set<string>(), queue: string[] = [];
+  const reach = (name: string): void => { if (!seen.has(name)) { seen.add(name); queue.push(name); } };
+  const readAt = (s: Step & { t: 'rule' | 'ruleBp' }) => { s.dfix = s.name; fix.add(s.name); reach(s.name); };
+  // A twin calls the twins of the closure's rd rules, and reads a Pratt child's form (dfix).
+  const rewrite = (steps: Step[]): void => {
+    for (const s of walk(steps)) {
+      delete (s as { share?: number }).share;
+      if (s.t !== 'rule' && s.t !== 'ruleBp') continue;
+      const t = cloneOf.get(s.name);
+      if (t?.kind === 'rd' && t.altForm !== undefined) { reach(s.name); s.name = `${s.name}__twin`; }
+      else if (s.acc !== undefined && t?.kind === 'pratt') readAt(s);
+    }
+  };
+  for (const o of ops) reach(o.rule);
+  while (queue.length) {
+    const r = cloneOf.get(queue.shift()!)!;
+    if (r.kind === 'pratt') {
+      r.nudForm!.forEach((f, i) => {
+        if (f.k !== 'acc') return;
+        const n = r.nudOrder[i]!;
+        const steps = n.kind === 'bracket' ? r.nudBrackets[n.index]!.steps : n.kind === 'seq' ? r.nudSeqs[n.index]! : n.kind === 'capped' ? r.nudCapped[n.index]!.steps : null;
+        if (steps === null) throw new Error(`targets: container ${r.nudNames[i]} of rule ${r.name} has no steps`);
+        rewrite(steps);
+        twins.push({ k: twins.length, rule: r.name, arm: r.nudNames[i]!, steps, form: f });
+      });
+      continue;
+    }
+    r.alts.forEach((alt, i) => {
+      if (r.altForm![i]!.k !== 'unit') return;
+      const u = unitStep(alt)!;
+      if (cloneOf.get(u.name)?.kind === 'pratt') readAt(u);
+    });
+    r.alts.forEach(rewrite);
+    rd.push(r);
+  }
+  for (const r of rd) { r.twinOf = r.name; r.name = `${r.name}__twin`; }
+  if (twins.length > DEMAND_MAX_TWINS) throw new Error(`targets: the demand context ${ctx} has ${twins.length} container arms a twin reaches; the form numbers at most ${DEMAND_MAX_TWINS}`);
+  // The real rules: each container arm's twin number.
+  const byName = new Map(rules.map((r) => [r.name, r] as const));
+  for (const r of rules) {
+    if (r.kind !== 'pratt') continue;
+    const mine = twins.filter((t) => t.rule === r.name);
+    if (mine.length) r.nudForm = r.nudOrder.map((_, i) => { const t = mine.find((x) => x.arm === r.nudNames[i]); return { k: 'const', v: nudLowForm(r, i) | (t ? (t.k + 1) << DEFER_SHIFT : 0) }; });
+  }
+  if (ops.length === 0) throw new Error(`targets: no targetOps operator reads the demand context ${ctx}`);
+  const leaf = new Set(c.leaves), cont = new Set(Object.keys(c.containers ?? {}));
+  for (const a of c.last ?? []) if (!cont.has(a)) throw new Error(`targets: the last arm ${a} of the demand context ${ctx} must be a container (a leaf keeps the form it has without contexts)`);
+  const bad: string[] = [];
+  for (const name of new Set([...fix, ...ops.map((o) => o.rule)])) {
+    const r = byName.get(name) as PrattRule;
+    const check = (arm: string, shallow: boolean, capped: boolean): void => {
+      const why = cont.has(arm) ? (shallow ? null : 'is a container the shallow check refuses')
+        : leaf.has(arm) ? (!shallow ? 'is a leaf the shallow check refuses' : capped ? 'is a leaf that may be capped (a twin reads a capped node as no target)' : null)
+        : shallow && !capped ? 'is taken by the shallow check but is no leaf or container' : null;
+      if (why) bad.push(`arm ${arm} of rule ${r.name} ${why}`);
+    };
+    r.nudOrder.forEach((n, i) => {
+      const capped = n.kind === 'capped' || (n.kind === 'bracket' && r.nudBracketCapsFromTail[n.index]!) || (n.kind === 'seq' && r.nudSeqCapsFromTail[n.index]!);
+      check(r.nudNames[i]!, n.kind !== 'prefix' && nudLowForm(r, i) === 0, capped);
+    });
+    r.leds.forEach((_, i) => check(r.ledNames[i]!, (r.ledForm[i]! & 3) === 0, r.ledCapsFromTail[i]!));
+    r.postfixTokNames.forEach((arm) => check(arm, true, false));
+    if (r.opNames) { check(r.opNames.binary, false, false); check(r.opNames.postfix, false, false); }
+  }
+  if (bad.length) throw new Error(`targets: the demand context ${ctx}'s leaves must be the arms the shallow check takes: ${bad.join('; ')}`);
+  return { names, passes: eager.passes, lastCtx: eager.lastCtx, demand: { pass: formPass(0), assigned: DEMAND_ASSIGNED, defer: 7 << DEFER_SHIFT, twins, rd, fix: [...fix], ops } };
+}
+
+/** The one rule-call step of a unit arm (unitCall's step). */
+function unitStep(steps: Step[]): (Step & { t: 'rule' | 'ruleBp' }) | null {
+  const own = steps.filter((s) => !ZERO_WIDTH.has(s.t));
+  if (own.length !== 1) return null;
+  const s = own[0]!;
+  return s.t === 'rule' || s.t === 'ruleBp' ? s : s.t === 'seq' ? unitStep(s.steps) : null;
 }

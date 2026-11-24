@@ -1213,13 +1213,24 @@ export const jsTarget: Target = {
   emitParser: emitJsParser,
 };
 
+// A grammar whose every declared target context is on demand (TargetContext.when) is parsed by
+// this retiring emitter with the shallow check alone: its `targetOps` operators require a target
+// as `lhsTarget` does (a recorded divergence, docs/CORRECTNESS.md: it takes `[a + b] = x`). An
+// eager context stays refused.
+function shallowDemand(grammar: CstGrammar): CstGrammar {
+  const t = grammar.targets;
+  if (!t || !Object.keys(t).length || Object.values(t).some((c) => c.when !== 'demand')) return grammar;
+  const precs = grammar.precs.map((l) => ({ ...l, operators: l.operators.map((o) => (o.targetCtx === undefined ? o : (({ targetCtx: _, ...rest }) => ({ ...rest, requireTarget: true }))(o))) }));
+  const { targets: _t, ...rest } = grammar;
+  return { ...rest, precs };
+}
 function emitJsParser(grammar: CstGrammar): string {
   // [Await]/[Yield] context: name-fork the body-reachable rule closure into $A/$Y/$AY
   // families (see await-yield-fork.ts). No-op for a grammar with no ctx markers. Done
   // HERE (not at grammar export) so the forks exist ONLY in the parser's rule identity
   // / memo / adoption space; the derived-artifact generators see the base grammar with
   // the (transparent-group) markers and emit byte-identically.
-  grammar = withAwaitYield(grammar);
+  grammar = withAwaitYield(shallowDemand(grammar));
   const a = analyze(grammar);
   const e = new Emitter(a);
   e.litT = (v: string) => a.symtab.puLitKind.get(v) ?? -1;
