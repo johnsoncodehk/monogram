@@ -17,7 +17,7 @@
 
 import { type Expr, type Fn, type Lowering, type RecordDecl, type Stmt, printFns } from './algo-ir.ts';
 import { RI_RB_SCAN, RB_EXTERNS_INTERP, REBIND_EXTERNS, rbBracketFn } from './rebind-family.ts';
-import type { LexIdPlan } from './emit-portable.ts';
+import { type ArenaIdPlan, type LexIdPlan, type ParserIR, ruleIdOf, tplHoleRules } from './emit-portable.ts';
 import { REC_RD, REC_N_TOK, REC_N_BRACKET, REC_N_SEQ, REC_N_CAPPED, REC_N_PREFIX, REC_S_LIT, REC_S_COMP, REC_S_TOK, REC_S_TPLTOK, REC_S_RULE, REC_S_RULEBP, REC_S_STAR, REC_S_OPT, REC_S_SEP, REC_S_ALTLIT, REC_S_ALT, REC_S_LOOK, REC_S_AHEAD, REC_S_AHEADCTX, REC_S_SEQ, REC_S_SAMELINE, REC_S_SUPPRESS, REC_S_CTX, REC_S_SHARED } from './emit-portable.ts';
 
 export const DIAG: RecordDecl = {
@@ -164,6 +164,33 @@ export const ENGINE_EXTERNS: Fn[] = [
   // The examined extent (one past the furthest token examined: lookEnd), and its reset to e.
   extR('enLookEnd', [], ['int']), ext('enLookSet', [['e', 'int']]),
 ];
+// The native dispatch by id behind enLook, enRule, enBp, enShared and enTpl: per extern, the plan's
+// ids and what each calls (a lookahead's and a shared step's index, a rule's name). Every target
+// spells a case list two ways, a switch and a table of its functions indexed by id (a hole where
+// the plan has none), and prints the shorter (`shorterDispatch`).
+export interface NativeCases { look: [number, number][]; rule: [number, string][]; bp: [number, string][]; shared: [number, number][]; tpl: [number, string][] }
+export function nativeCases(ir: ParserIR, ar: ArenaIdPlan): NativeCases {
+  const build = ir.rules.filter((r) => ir.forms.buildRules.includes(r.name));
+  return {
+    look: ir.lookaheads.map((_, i) => [i, i]),
+    rule: build.map((r) => [ruleIdOf(ar, r.name), r.name]),
+    bp: build.filter((r) => r.kind === 'pratt').map((r) => [ruleIdOf(ar, r.name), r.name]),
+    shared: ir.shared.flatMap((_, i): [number, number][] => (ir.forms.buildShared[i] ? [[i, i]] : [])),
+    tpl: (ir.tpl ? tplHoleRules(ir) : []).map((h) => [ruleIdOf(ar, h), h]),
+  };
+}
+// One case list printed by a target: `sw` spells it as a switch over the cases, `table` as a
+// table of the functions `fn` names by id, as the dispatch's body and the table's declaration
+// outside it (if the target declares one there); the shorter of the two whole. `table`
+// undefined: the target has no table spelling for this list.
+export function shorterDispatch<X>(cases: [number, X][], fn: (x: X) => string, sw: (cases: [number, string][]) => string, table?: (slots: (string | undefined)[]) => { body: string; decl?: string }): { body: string; decl: string } {
+  const s = { body: sw(cases.map(([k, x]) => [k, fn(x)])), decl: '' };
+  if (!table || cases.length === 0) return s;
+  const slots: (string | undefined)[] = [];
+  for (const [k, x] of cases) slots[k] = fn(x);
+  const t = table(Array.from(slots));
+  return t.body.length + (t.decl?.length ?? 0) < s.body.length ? { body: t.body, decl: t.decl ?? '' } : s;
+}
 // The text of a literal (by lid), the name of a token kind (by kid) and of a rule (by id): the
 // words of a repair's message (each target prints them over its own tables).
 const textExt = (name: string): Fn => ({ name, doc: '', params: [{ name: 'x', ty: 'int' }], ret: ['str'], body: [], extern: true });
@@ -1009,5 +1036,5 @@ export function recoveryFamilyFns(rebind: boolean, ids?: LexIdPlan, cappedSeq = 
 // `methods`: print only the engine methods (true), only the free functions (false), or all.
 // rbBracket is the native forms' (printed with them).
 export function emitRecoveryFamily(L: Lowering, rt: number[], methods: boolean | undefined, rebind: boolean, ids: LexIdPlan, cappedSeq = false, labels: [number, string][] = []): string {
-  return printFns(L, recoveryFamilyFns(rebind, ids, cappedSeq, labels), [], [DIAG, BEST], [{ name: 'rt', data: rt }], (f) => f.name !== 'rbBracket' && (methods === undefined || (f.method === true) === methods), methods !== true);
+  return printFns({ ...L, inferLocals: true }, recoveryFamilyFns(rebind, ids, cappedSeq, labels), [], [DIAG, BEST], [{ name: 'rt', data: rt }], (f) => f.name !== 'rbBracket' && (methods === undefined || (f.method === true) === methods), methods !== true);
 }

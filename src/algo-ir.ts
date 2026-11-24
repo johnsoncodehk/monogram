@@ -334,7 +334,8 @@ export interface Lowering {
   intTable?(name: string, packed: string): string;
   stmt: {
     comment(text: string): Lines;
-    let(cx: Cx, s: { id: string; ty: Ty; r: R; owned: boolean; mutable: boolean; reassigned: boolean; emptyList: boolean }): Lines;
+    // `infer`: the local's type may be left to the target's inference (`inferLocals`).
+    let(cx: Cx, s: { id: string; ty: Ty; r: R; owned: boolean; mutable: boolean; reassigned: boolean; emptyList: boolean; infer: boolean }): Lines;
     set(id: string, val: string): Lines;
     // `inline` is the sole statement of a branch-free `if` printed on one line, when it is short.
     if(s: { c: string; then: Lines; else?: Lines; inline?: string; depth: number }): Lines;
@@ -348,6 +349,11 @@ export interface Lowering {
     return(vals: string[], fn: { name: string; ret: Ty[]; calls: boolean }): Lines;
     fn(s: { name: string; params: { name: string; type: string }[]; rets: string[]; retTys: Ty[]; doc: string[]; body: Lines; inline: boolean; cold: boolean; method: boolean; reads: boolean }): string;
   };
+  // A local int or bool may be declared without its type where the target infers the one it
+  // would print: a bool, or an int whose value is no literal (a literal's type is the target's
+  // default for it, not the local's). Only the recovery family sets it (other families' emission
+  // keeps its bytes).
+  inferLocals?: boolean;
   // `inline` fns are not printed as functions; each call site prints `inlineFn` of the body
   // instead (for compilers that cannot be told to inline a function).
   spliceInline?: boolean;
@@ -750,7 +756,8 @@ class Printer implements Cx {
         if (L.owns && isList(s.ty) && !r.owned) throw new Error(`algo-ir: let ${s.name} needs an owned list`);
         this.env.set(s.name, { ty: s.ty, owned });
         const emptyList = s.init.k === 'newList' && !s.init.cap;
-        return S.let(this, { id: this.id(s.name), ty: s.ty, r, owned, mutable: this.mutable.has(s.name), reassigned: this.reassigned.has(s.name), emptyList });
+        const infer = !!L.inferLocals && (s.ty === 'bool' || (isNum(s.ty) && !r.lit));
+        return S.let(this, { id: this.id(s.name), ty: s.ty, r, owned, mutable: this.mutable.has(s.name), reassigned: this.reassigned.has(s.name), emptyList, infer });
       }
       case 'set': {
         const v = this.env.get(s.name);

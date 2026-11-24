@@ -15,7 +15,7 @@ import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementToken
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
-import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT, RM_AMAX } from './recovery-family.ts';
+import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT, RM_AMAX, nativeCases, shorterDispatch } from './recovery-family.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, unitMask, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
@@ -3298,12 +3298,19 @@ const GO_BATCH_TOTAL = `	if len(os.Args) > 1 && os.Args[1] == "batch-total" {
 // (ParserIR.forms says which functions exist in building form).
 function recoveryEngineGo(ir: ParserIR): string {
   const ids = buildLexIdPlan(ir), ar = buildArenaIdPlan(ir, ids);
-  const sw = (on: string, cases: [number, string][]) => `switch ${on} {${cases.map(([k, c]) => `\n\tcase ${k}:\n\t\treturn ${c}`).join('')}\n\t}\n\tpanic("recovery: no native function")`;
-  const build = ir.rules.filter((r) => ir.forms.buildRules.includes(r.name));
-  const holes = ir.tpl ? tplHoleRules(ir) : [];
+  // The native dispatch (recovery-family.ts nativeCases): a switch, or a package-level table
+  // `name` of the method expressions of type `ty` (a hole: nil); `use` spells the result of the
+  // function's call with arguments a.
+  const nc = nativeCases(ir, ar), decls: string[] = [];
+  const disp = <X>(on: string, name: string, ty: string, cases: [number, X][], fn: (x: X) => string, use: (call: (a: string) => string) => string) => {
+    const d = shorterDispatch(cases, fn, (cs) => `switch ${on} {${cs.map(([k, c]) => `\n\tcase ${k}: return ${use((a) => `rv.p.${c}(${a})`)}`).join('')}\n\t}\n\tpanic("recovery: no native function")`,
+      (slots) => ({ body: `return ${use((a) => `${name}[${on}](rv.p${a ? `, ${a}` : ''})`)}`, decl: `var ${name} = [...]${ty}{${slots.map((x) => (x ? `(*parserW).${x}` : 'nil')).join(', ')}}\n` }));
+    decls.push(d.decl);
+    return d.body;
+  };
   const opRead = ids.gtComps.length === 0 ? '\tlid, n, end := t.Lid, 1, t.End'
     : `\tlid, n, end := gtOp(p.toks, p.pos)\n\tif t.Lid == ${lidOf(ids, '>')} { if e := p.pos + n + 1; e > p.maxLook { p.maxLook = e } }`;
-  return `// recov: the interpreter's engine over p, the marks it took, the plan's decoded table, the offset
+  const out = `// recov: the interpreter's engine over p, the marks it took, the plan's decoded table, the offset
 // of the node it last finished, the binary operator it last read, and the steps of the run.
 type recov struct {
 	p *parserW
@@ -3333,19 +3340,19 @@ func (rv *recov) enAhead(set int, is bool) bool { return rv.p.ahead(set, is) }
 func (rv *recov) enCtxWord() bool { return rv.p.ctxWord() }
 func (rv *recov) enSecondIn(set int) bool { return rv.p.secondIn(set) }
 func (rv *recov) enLook(id int) bool {
-	${sw('id', ir.lookaheads.map((_, i) => [i, `rv.p.look${i}()`]))}
+	${disp('id', 'ntLook', 'func(*parserW) bool', nc.look, (i) => `look${i}`, (c) => c(''))}
 }
 func (rv *recov) enRule(r int) bool {
-	${sw('r', build.map((r) => [ruleIdOf(ar, r.name), `rv.p.callRuleW(rv.p.parse${r.name}W())`]))}
+	${disp('r', 'ntRule', 'func(*parserW) (spanned, bool)', nc.rule, (r) => `parse${r}W`, (c) => `rv.p.callRuleW(${c('')})`)}
 }
 func (rv *recov) enBp(r, bp int) bool {
-	${sw('r', build.filter((r) => r.kind === 'pratt').map((r) => [ruleIdOf(ar, r.name), `rv.p.callRuleW(rv.p.bpW_${r.name}(bp))`]))}
+	${disp('r', 'ntBp', 'func(*parserW, int) (spanned, bool)', nc.bp, (r) => `bpW_${r}`, (c) => `rv.p.callRuleW(${c('bp')})`)}
 }
 func (rv *recov) enShared(i int) bool {
-	${sw('i', ir.shared.flatMap((_, i): [number, string][] => (ir.forms.buildShared[i] ? [[i, `rv.p.sub${i}W()`]] : [])))}
+	${disp('i', 'ntShared', 'func(*parserW) bool', nc.shared, (i) => `sub${i}W`, (c) => c(''))}
 }
 func (rv *recov) enTpl(hole int) bool {
-	${sw('hole', holes.map((h) => [ruleIdOf(ar, h), `rv.p.callRuleW(rv.p.matchTemplateW_${h}())`]))}
+	${disp('hole', 'ntTpl', 'func(*parserW) (spanned, bool)', nc.tpl, (h) => `matchTemplateW_${h}`, (c) => `rv.p.callRuleW(${c('')})`)}
 }
 func (rv *recov) enSh() int { return len(rv.p.scratch) }
 func (rv *recov) enCut(h int) { rv.p.scratch = rv.p.scratch[:h] }
@@ -3460,6 +3467,7 @@ func ParseInterpreted(src string, b Builder, depth int) (h int32, ok bool, steps
 	return fr, true, rv.steps
 }
 `;
+  return out + decls.join('');
 }
 
 function recoveryRegionGo(ir: ParserIR, shared: SharedAlgorithms): string {
