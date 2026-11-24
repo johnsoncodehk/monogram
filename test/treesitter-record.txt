@@ -42,6 +42,9 @@ javascript | operator pairs | accepts | unary-lhs-of-** | "void a ** c;"
 javascript | operator pairs | accepts | unary-lhs-of-** | "~a ** c;"
 javascript | reserved words | accepts | unclassified | "const { default } = o;"
 javascript | reserved words | accepts | unclassified | "import { if } from \"m\";"
+javascript | test262 | rejects | import-attributes-not-rendered | test/language/import/import-defer/deferred-namespace-object/json-module.js
+javascript | test262 | rejects | import-attributes-not-rendered | test/language/import/import-defer/syntax/import-attributes.js
+javascript | test262 | rejects | non-ascii-whitespace-not-skipped | test/language/module-code/source-phase-import/import-source-newlines_FIXTURE.js
 javascript | test262 | rejects | unclassified | test/annexB/language/statements/for-in/bare-initializer.js
 javascript | test262 | rejects | unclassified | test/annexB/language/statements/for-in/const-initializer.js
 javascript | test262 | rejects | unclassified | test/annexB/language/statements/for-in/let-initializer.js
@@ -104,8 +107,6 @@ javascript | test262 | rejects | unclassified | test/language/import/import-byte
 javascript | test262 | rejects | unclassified | test/language/import/import-bytes/bytes-from-json.js
 javascript | test262 | rejects | unclassified | test/language/import/import-bytes/bytes-from-png.js
 javascript | test262 | rejects | unclassified | test/language/import/import-bytes/bytes-from-txt.js
-javascript | test262 | rejects | unclassified | test/language/import/import-defer/deferred-namespace-object/json-module.js
-javascript | test262 | rejects | unclassified | test/language/import/import-defer/syntax/import-attributes.js
 javascript | test262 | rejects | unclassified | test/language/line-terminators/between-tokens-ls.js
 javascript | test262 | rejects | unclassified | test/language/line-terminators/between-tokens-ps.js
 javascript | test262 | rejects | unclassified | test/language/line-terminators/comment-single-ls.js
@@ -129,7 +130,6 @@ javascript | test262 | rejects | unclassified | test/language/module-code/import
 javascript | test262 | rejects | unclassified | test/language/module-code/import-attributes/import-attribute-value-string-double.js
 javascript | test262 | rejects | unclassified | test/language/module-code/import-attributes/import-attribute-value-string-single.js
 javascript | test262 | rejects | unclassified | test/language/module-code/parse-export-empty.js
-javascript | test262 | rejects | unclassified | test/language/module-code/source-phase-import/import-source-newlines_FIXTURE.js
 javascript | test262 | rejects | unclassified | test/language/statements/break/line-terminators.js
 javascript | test262 | rejects | unclassified | test/language/statements/class/elements/escaped-accessor-field-asi-before-computed-field.js
 javascript | test262 | rejects | unclassified | test/language/statements/class/elements/escaped-accessor-field-asi-before-generator.js
@@ -379,6 +379,7 @@ typescript | contextual keywords | rejects | unclassified | "x = { readonly };"
 typescript | contextual keywords | rejects | unclassified | "x = { static };"
 typescript | contextual keywords | rejects | unclassified | "yield: for (;;) continue yield;"
 typescript | contextual keywords | rejects | unclassified | "yield: while (1) break yield;"
+typescript | line breaks | rejects | scanner-offers-no-line-end-before-brace | "f()\n{ g() }"
 typescript | line breaks | rejects | unclassified | "function f() { return\n/a/ }"
 typescript | line breaks | rejects | unclassified | "let x: A\n<B>(y)"
 typescript | line breaks | rejects | unclassified | "x\n!y"
@@ -387,9 +388,10 @@ typescript | lookaheads | accepts | unclassified | "try {}"
 typescript | lookaheads | accepts | unclassified | "x = () => {}.x;"
 typescript | lookaheads | accepts | unclassified | "x = a => {}.y;"
 typescript | lookaheads | accepts | unclassified | "x = async () => {}.y;"
+typescript | lookaheads | rejects | start-marker-decided-on-let-alone | "for (let in a);"
+typescript | lookaheads | rejects | start-marker-decided-on-let-alone | "for (let.x in a);"
 typescript | lookaheads | rejects | unclassified | "export let = 1;"
 typescript | lookaheads | rejects | unclassified | "export let;"
-typescript | lookaheads | rejects | unclassified | "for (let in a);"
 typescript | new arguments | brackets | new-in-new-target-arguments | "new new C()();"
 typescript | operands | accepts | unclassified | "x as T < b > c;"
 typescript | operator pairs | accepts | assignment-target-not-checked | "!a = c;"
@@ -607,6 +609,7 @@ typescriptreact | contextual keywords | rejects | unclassified | "x = { readonly
 typescriptreact | contextual keywords | rejects | unclassified | "x = { static };"
 typescriptreact | contextual keywords | rejects | unclassified | "yield: for (;;) continue yield;"
 typescriptreact | contextual keywords | rejects | unclassified | "yield: while (1) break yield;"
+typescriptreact | line breaks | rejects | scanner-offers-no-line-end-before-brace | "f()\n{ g() }"
 typescriptreact | line breaks | rejects | unclassified | "function f() { return\n/a/ }"
 typescriptreact | line breaks | rejects | unclassified | "x\n!y"
 typescriptreact | line breaks | splits | unclassified | "let x: T\n[]"
@@ -614,9 +617,10 @@ typescriptreact | lookaheads | accepts | unclassified | "try {}"
 typescriptreact | lookaheads | accepts | unclassified | "x = () => {}.x;"
 typescriptreact | lookaheads | accepts | unclassified | "x = a => {}.y;"
 typescriptreact | lookaheads | accepts | unclassified | "x = async () => {}.y;"
+typescriptreact | lookaheads | rejects | start-marker-decided-on-let-alone | "for (let in a);"
+typescriptreact | lookaheads | rejects | start-marker-decided-on-let-alone | "for (let.x in a);"
 typescriptreact | lookaheads | rejects | unclassified | "export let = 1;"
 typescriptreact | lookaheads | rejects | unclassified | "export let;"
-typescriptreact | lookaheads | rejects | unclassified | "for (let in a);"
 typescriptreact | new arguments | brackets | new-in-new-target-arguments | "new new C()();"
 typescriptreact | operands | accepts | unclassified | "x as T < b > c;"
 typescriptreact | reserved words | accepts | unclassified | "import { if } from \"m\";"
