@@ -380,11 +380,14 @@ for (const [path, shape] of [['./fixtures/shape-namedcalc.ts', namedcalcShape], 
   for (const [k, n] of want) { const got = k.split('|').reduce((s, h) => s + (heads.get(h) ?? 0), 0); if (got !== n) fail(`${path} plans: ${k} printed ${got}×, IR holds ${n}`); }
   for (const k of ['make-node', 'case-of', 'need']) if (!want.has(k)) fail(`${path} plans: no ${k}: the probe does not reach the shape constructs`);
   console.log(`  ${path} construct plans: ${plan.fns.length} functions, ${[...want.values()].reduce((a, b) => a + b, 0)} IR constructs ≡ printed forms`);
-  // Go and Rust have no Lowering.shape: they refuse a shape loudly, never guess a spelling.
+  // Go has no Lowering.shape: it refuses a shape loudly, never guesses a spelling. Rust prints the
+  // typed form (src/rust-shape.ts) and refuses what that form does not build yet (the
+  // ESTree shape's inherited attributes).
   for (const t of [goTarget, rustTarget]) {
     let msg = '';
     try { t.emitParser(shape.source, { shape }); } catch (e) { msg = (e as Error).message; }
-    if (!/prints no shape values/.test(msg)) fail(`${t.name} with a shape: expected a refusal, got ${msg ? JSON.stringify(msg.slice(0, 80)) : 'an emission'}`);
+    const want = t === goTarget ? /prints no shape values/ : path.includes('estree') ? /the typed target/ : null;
+    if (want ? !want.test(msg) : msg !== '') fail(`${t.name} with ${path}: expected ${want ? 'a refusal' : 'an emission'}, got ${msg ? JSON.stringify(msg.slice(0, 80)) : 'an emission'}`);
   }
 }
 

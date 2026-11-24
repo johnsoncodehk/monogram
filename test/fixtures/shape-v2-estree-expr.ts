@@ -143,7 +143,7 @@ function target(alt: string): Term { return branch(alt, { ident: idOf('ident'), 
 const withDefault = (left: Term): Term => iff(present('value'), node('AssignmentPattern', { left, right: child('value') }), left);
 const patternProperty = (key: Term, value: Term, flags: { shorthand: boolean; computed: Term }): Term =>
   node('Property', { method: c(false), shorthand: c(flags.shorthand), computed: flags.computed, key, value, kind: c('init') });
-const literalKey = (leaf: string, value: Term): Term => node('Literal', { value, raw: text(leaf) }, { from: leaf, to: leaf });
+const literalKey = (leaf: string, value: Term, extra: Record<string, Term> = {}): Term => node('Literal', { value, raw: text(leaf), ...extra }, { from: leaf, to: leaf });
 /** `[ E? (, E?)* ]`: whether the final element is a hole (absent): the first one when there is
  * no `,`, else the last iteration's. Both oracles drop that final hole (`[a,]` has one element). */
 export const finalHole = (first: string, over: string, rest: string): Term => fold(over, not(present(first)), 'h', not(present(rest)));
@@ -158,8 +158,13 @@ const PATTERN_RULES: ShapeSpec['rules'] = {
     pair: patternProperty(branch('key', {
       string: literalKey('string', cook('stringValue', 'string')),
       number: literalKey('number', cook('numberValue', 'number')),
+      hexNumber: literalKey('hexNumber', cook('numberValue', 'hexNumber')),
+      octalNumber: literalKey('octalNumber', cook('numberValue', 'octalNumber')),
+      binaryNumber: literalKey('binaryNumber', cook('numberValue', 'binaryNumber')),
+      legacyNumber: literalKey('legacyNumber', cook('numberValue', 'legacyNumber')),
+      bigInt: literalKey('bigInt', cook('bigintValue', 'bigInt'), { bigint: cook('bigintText', 'bigInt') }),
       computed: child('expr'),
-    }), child('value'), { shorthand: false, computed: branch('key', { string: c(false), number: c(false), computed: c(true) }) }),
+    }), child('value'), { shorthand: false, computed: match(armOf('key'), { computed: c(true) }, c(false)) }),
     rest: node('RestElement', { argument: target('argument') }),
   },
   BindingElement: { seq: withDefault(target('name')) },
@@ -198,6 +203,7 @@ const KEY_RULES: ShapeSpec['rules'] = {
     hexNumber: literal(cook('numberValue', 'hexNumber')),
     octalNumber: literal(cook('numberValue', 'octalNumber')),
     binaryNumber: literal(cook('numberValue', 'binaryNumber')),
+    legacyNumber: literal(cook('numberValue', 'legacyNumber')),
     bigInt: literal(cook('bigintValue', 'bigInt'), { bigint: cook('bigintText', 'bigInt') }),
     computed: child('expr'),
   },
@@ -302,6 +308,7 @@ const MODULE_RULES: ShapeSpec['rules'] = {
     ),
     named: child('specifier'),
     namespace: list(namespaceSpecifier),
+    deferNamespace: list(namespaceSpecifier),
   },
   ImportSpecifier: {
     renamed: node('ImportSpecifier', { imported: idOf('imported'), local: idOf('local') }),
@@ -335,7 +342,9 @@ const MODULE_DECLARATIONS: Record<string, Term> = {
     source: iff(present('source'), moduleFields.source, c(null)), attributes: iff(present('source'), moduleFields.attributes, list()),
   }),
   importDeclaration: branch('form', {
-    clause: node('ImportDeclaration', { specifiers: child('clause'), ...moduleFields }),
+    // A phase import (Stage 3; acorn has neither) carries ESTree's `phase`, as Babel's does.
+    clause: node('ImportDeclaration', { specifiers: child('clause'), ...moduleFields, phase: match(armOf('clause'), { deferNamespace: c('defer') }, absent) }),
+    source: node('ImportDeclaration', { specifiers: list(node('ImportDefaultSpecifier', { local: idOf('name') }, { from: 'name', to: 'name' })), ...moduleFields, phase: c('source') }),
     bare: node('ImportDeclaration', { specifiers: list(), ...moduleFields }),
   }),
 };
@@ -377,6 +386,7 @@ const PRIMARY: Record<string, Term> = {
   hexNumber: literal(cook('numberValue', 'hexNumber')),
   octalNumber: literal(cook('numberValue', 'octalNumber')),
   binaryNumber: literal(cook('numberValue', 'binaryNumber')),
+  legacyNumber: literal(cook('numberValue', 'legacyNumber')),
   bigInt: literal(cook('bigintValue', 'bigInt'), { bigint: cook('bigintText', 'bigInt') }),
   string: literal(cook('stringValue', 'string')),
   regex: literal(c(null), { regex: record({ pattern: cook('regexPattern', 'regex'), flags: cook('regexFlags', 'regex') }) }),
@@ -435,7 +445,7 @@ export const estreeExprShape = defineShape(javascript, {
       newTarget: child('newTarget'),
       class_: classNode('ClassExpression', classId),
       led_dot: chain(member(property(), false, false)),
-      led_bracket: chain(member(child('expr'), true, false)),
+      led_bracket: chain(member(sequenceOf('expr', 'exprRest'), true, false)),
       led_paren: chain(node('CallExpression', { callee: child('left'), arguments: child('expr'), optional: c(false) })),
       led_optChain: chain(branch('alt', {
         ident: member(idOf('ident'), false, true),
@@ -460,10 +470,10 @@ export const estreeExprShape = defineShape(javascript, {
       super_: branch('alt', {
         paren: node('CallExpression', { callee: node('Super', {}, { from: 'superKeyword', to: 'superKeyword' }), arguments: child('expr'), optional: c(false) }),
         dot: node('MemberExpression', { object: node('Super', {}, { from: 'superKeyword', to: 'superKeyword' }), property: property(), computed: c(false), optional: c(false) }),
-        bracket: node('MemberExpression', { object: node('Super', {}, { from: 'superKeyword', to: 'superKeyword' }), property: child('expr'), computed: c(true), optional: c(false) }),
+        bracket: node('MemberExpression', { object: node('Super', {}, { from: 'superKeyword', to: 'superKeyword' }), property: sequenceOf('expr', 'exprRest'), computed: c(true), optional: c(false) }),
       }),
       led_dot: chain(member(property(), false, false)),
-      led_bracket: chain(member(child('expr'), true, false)),
+      led_bracket: chain(member(sequenceOf('expr', 'exprRest'), true, false)),
       led_paren: chain(node('CallExpression', { callee: child('left'), arguments: child('expr'), optional: c(false) })),
       led_optChain: chain(branch('alt', {
         ident: member(idOf('ident'), false, true),
@@ -477,7 +487,10 @@ export const estreeExprShape = defineShape(javascript, {
       newDotTarget: node('MetaProperty', { meta: idOf('newKeyword', c('new')), property: idOf('targetKeyword', c('target')) }),
       import_: branch('form', {
         call: node('ImportExpression', { source: child('source'), options: orNull('options') }),
-        meta: node('MetaProperty', { meta: idOf('importKeyword', c('import')), property: idOf('metaKeyword', c('meta')) }),
+        dot: branch('property', {
+          meta: node('MetaProperty', { meta: idOf('importKeyword', c('import')), property: idOf('metaKeyword', c('meta')) }),
+          phaseCall: node('ImportExpression', { source: child('source'), options: orNull('options'), phase: text('phase') }),
+        }),
       }),
       construct: node('NewExpression', { callee: child('newTarget'), arguments: branch('alt', { paren: child('expr'), empty: list() }) }),
       yield_: branch('alt', {
@@ -507,14 +520,14 @@ export const estreeExprShape = defineShape(javascript, {
       ...PRIMARY,
       superMember: branch('alt', {
         dot: node('MemberExpression', { object: node('Super', {}, { from: 'superKeyword', to: 'superKeyword' }), property: idOf('ident'), computed: c(false), optional: c(false) }),
-        bracket: node('MemberExpression', { object: node('Super', {}, { from: 'superKeyword', to: 'superKeyword' }), property: child('expr'), computed: c(true), optional: c(false) }),
+        bracket: node('MemberExpression', { object: node('Super', {}, { from: 'superKeyword', to: 'superKeyword' }), property: sequenceOf('expr', 'exprRest'), computed: c(true), optional: c(false) }),
       }),
       newDotTarget: node('MetaProperty', { meta: idOf('newKeyword', c('new')), property: idOf('targetKeyword', c('target')) }),
       ...functionArms('FunctionExpression', iff(present('name'), idOf('name'), c(null))),
       ident: node('Identifier', { name: cook('identifierName', 'ident') }),
       new_: node('NewExpression', { callee: child('newTarget'), arguments: child('expr') }),
       led_dot: node('MemberExpression', { object: child('left'), property: property(), computed: c(false), optional: c(false) }),
-      led_bracket: node('MemberExpression', { object: child('left'), property: child('expr'), computed: c(true), optional: c(false) }),
+      led_bracket: node('MemberExpression', { object: child('left'), property: sequenceOf('expr', 'exprRest'), computed: c(true), optional: c(false) }),
       paren: sequence,
       array: node('ArrayExpression', { elements: arrayElements }),
       object: node('ObjectExpression', { properties: child('property') }),
