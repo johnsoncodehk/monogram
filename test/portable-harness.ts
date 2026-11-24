@@ -530,7 +530,9 @@ export async function prepareAll(cases: Case[] = selectedCases()): Promise<Prepa
     // every emission through the emission cache (test/emit-cache.ts): keyed by the grammar's and the target's code
     const gfile = relative(ROOT_DIR, fileURLToPath(new URL(c.path, import.meta.url)));
     const emit = (t: Target, opts: EmitOptions = {}) => cachedEmit(gfile, t.name, opts, () => emitParser(grammar, t, opts), c.parts ?? null);
-    const tsLibSrc = emit(tsTarget, RECOVERY);
+    // A grammar that declares target contexts has no total parsing yet (recoveryTables refuses it).
+    const rec = grammar.targets ? {} : RECOVERY;
+    const tsLibSrc = emit(tsTarget, rec);
     const emitted: Prepared['emitted'] = [{ label: 'typescript', def: () => emit(tsTarget), rec: tsLibSrc }];
     const tsFile = `${dir}/p.ts`;
     writeFileSync(tsFile, tsLibSrc + (tsTarget.emitRunner?.() ?? ''));
@@ -546,9 +548,9 @@ export async function prepareAll(cases: Case[] = selectedCases()): Promise<Prepa
     }];
     const native: Pending['native'] = [];
     if (HAS_GO && nativeFor(c, 'go') && (!TARGETS_ONLY || TARGETS_ONLY.includes('go'))) {
-      const goSrc = emit(goTarget, RECOVERY);
+      const goSrc = emit(goTarget, rec);
       emitted.push({ label: 'go', def: () => emit(goTarget), rec: goSrc });
-      const files: Record<string, string> = { 'parser.go': asGoMain(goSrc), 'runner.go': goTarget.emitRunner?.(RECOVERY) ?? '', 'go.mod': 'module p\n\ngo 1.21\n' };
+      const files: Record<string, string> = { 'parser.go': asGoMain(goSrc), 'runner.go': goTarget.emitRunner?.(rec) ?? '', 'go.mod': 'module p\n\ngo 1.21\n' };
       native.push({ label: 'go', build: {
         key: buildKey('go', GO_VERSION, ...Object.entries(files).flat()),
         build: (out) => {
@@ -559,9 +561,9 @@ export async function prepareAll(cases: Case[] = selectedCases()): Promise<Prepa
       } });
     }
     if (HAS_RUST && nativeFor(c, 'rust') && (!TARGETS_ONLY || TARGETS_ONLY.includes('rust'))) {
-      const rsSrc = emit(rustTarget, RECOVERY);
+      const rsSrc = emit(rustTarget, rec);
       emitted.push({ label: 'rust', def: () => emit(rustTarget), rec: rsSrc });
-      const main = rsSrc + (rustTarget.emitRunner?.(RECOVERY) ?? '');
+      const main = rsSrc + (rustTarget.emitRunner?.(rec) ?? '');
       native.push({ label: 'rust', build: {
         key: buildKey('rust', RUSTC_VERSION, RUSTC_PATH, 'remap-path-prefix', main),
         build: (out) => {

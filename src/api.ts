@@ -1,4 +1,4 @@
-import type { LedPrec, CstGrammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, ElementRegion, IndentConfig, NewlineConfig, StringInterpolation, TokenPattern } from './types.ts';
+import type { LedPrec, CstGrammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, ElementRegion, IndentConfig, NewlineConfig, StringInterpolation, TokenPattern, TargetContext } from './types.ts';
 import { computeNullableRules, findEntryRule } from './grammar-analysis.ts';
 import {
   altPattern, anyChar, followedBy, never, noneOf, notFollowedBy,
@@ -122,6 +122,7 @@ interface SameLineMarker { readonly __kind: 'sameLine' }
 interface NoCommentMarker { readonly __kind: 'noCommentBefore' }
 interface NoMultilineFlowMarker { readonly __kind: 'noMultilineFlowBefore' }
 interface NotLeftLeafMarker { readonly __kind: 'notLeftLeaf'; readonly words: string[] }
+interface TargetMarker { readonly __kind: 'target'; readonly ctx: string }
 interface PrefixSlot {
   readonly __kind: 'prefix';
   (...ops: string[]): PrefixOps;
@@ -133,9 +134,9 @@ interface PostfixSlot {
 interface PrefixOps { readonly __kind: 'prefix-ops'; ops: string[]; requireTarget?: boolean; capped?: boolean }
 interface PostfixOps { readonly __kind: 'postfix-ops'; ops: string[]; requireTarget?: boolean }
 interface NoUnaryLhsOps { readonly __kind: 'no-unary-lhs-ops'; ops: string[] }
-interface LhsTargetOps { readonly __kind: 'lhs-target-ops'; ops: string[] }
+interface LhsTargetOps { readonly __kind: 'lhs-target-ops'; ops: string[]; ctx?: string }
 
-type Marker = OpMarker | PrefixSlot | PostfixSlot | SameLineMarker | NoCommentMarker | NoMultilineFlowMarker | NotLeftLeafMarker;
+type Marker = OpMarker | PrefixSlot | PostfixSlot | SameLineMarker | NoCommentMarker | NoMultilineFlowMarker | NotLeftLeafMarker | TargetMarker;
 
 export const op: OpMarker = { __kind: 'op' };
 
@@ -166,6 +167,19 @@ export const noMultilineFlowBefore: NoMultilineFlowMarker = { __kind: 'noMultili
 export function notLeftLeaf(...words: string[]): NotLeftLeafMarker {
   return { __kind: 'notLeftLeaf', words };
 }
+
+// Zero-width DECLARED ASSIGNMENT-TARGET check (CstGrammar.targets): it matches iff the node that
+// ends IMMEDIATELY BEFORE it passes the target context `ctx` (`[StarExpressions, target('star'),
+// '=', …]`): a node passes iff its arm is one of the context's leaves, or one of its containers
+// whose named children all pass (a unit node, one child and nothing else, is its child). So a head
+// is parsed once, as an expression, and checked only where the `=` tail is taken.
+export function target(ctx: string): TargetMarker {
+  return { __kind: 'target', ctx };
+}
+
+// Infix operators whose LEFT operand must pass the declared target context `ctx` (as `target(ctx)`
+// after it), in place of `lhsTarget`'s built-in shallow check: ECMAScript `=` takes a pattern.
+export const targetOps = (ctx: string, ...ops: string[]): LhsTargetOps => ({ __kind: 'lhs-target-ops' as const, ops, ctx });
 
 export const prefix: PrefixSlot = Object.assign(
   (...ops: string[]): PrefixOps => ({ __kind: 'prefix-ops' as const, ops }),
@@ -471,7 +485,7 @@ function buildPrecOps(ops: OpSpec[]): PrecOperator[] {
     } else if (o.__kind === 'postfix-ops') {
       for (const v of o.ops) result.push({ value: v, position: 'postfix', requireTarget: o.requireTarget });
     } else if (o.__kind === 'lhs-target-ops') {
-      for (const v of o.ops) result.push({ value: v, position: 'infix', requireTarget: true });
+      for (const v of o.ops) result.push({ value: v, position: 'infix', ...(o.ctx !== undefined ? { targetCtx: o.ctx } : { requireTarget: true }) });
     } else {
       for (const v of o.ops) result.push({ value: v, position: 'infix', noUnaryLhs: true });
     }
@@ -610,6 +624,7 @@ function toRuleExpr(el: Element, names: Lowering): RuleExpr {
   if (marker.__kind === 'noCommentBefore') return { type: 'noCommentBefore' };
   if (marker.__kind === 'noMultilineFlowBefore') return { type: 'noMultilineFlowBefore' };
   if (marker.__kind === 'notLeftLeaf') return { type: 'notLeftLeaf', words: marker.words };
+  if (marker.__kind === 'target') return { type: 'target', ctx: marker.ctx };
   throw new Error(`Unknown element: ${JSON.stringify(el)}`);
 }
 
@@ -638,6 +653,7 @@ interface GrammarConfig<R extends Record<string, RuleRef> = Record<string, RuleR
   tokens: Record<string, TokenRef>;
   prec?: PrecLevelDef[];
   ledPrec?: LedPrec[];
+  targets?: Record<string, TargetContext>;   // declared assignment-target contexts (CstGrammar.targets)
   composeGt?: true;       // the lexer scans `>` alone and the parser composes `>`-led operators (CstGrammar.composeGt)
   rules: R;
   scopes?: Record<string, string[]>;
@@ -775,7 +791,7 @@ export function defineGrammar<const R extends Record<string, RuleRef>>(config: G
   });
   const entryRule = config.entry ? names.get(config.entry) : undefined;   // `entry` may be omitted: findEntryRule then takes the last rule
   if (config.entry && !entryRule) throw new Error('`entry` references an undeclared rule');
-  const grammar = { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, ...(config.composeGt ? { composeGt: true as const } : {}), rules, entryRule, scopeOverrides, contextualScopes, markup: config.markup, elements: config.elements, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest, treeSitterConflicts: config.treeSitterConflicts, treeSitterContextualNames: config.treeSitterContextualNames };
+  const grammar = { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, ...(config.composeGt ? { composeGt: true as const } : {}), ...(config.targets ? { targets: config.targets } : {}), rules, entryRule, scopeOverrides, contextualScopes, markup: config.markup, elements: config.elements, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest, treeSitterConflicts: config.treeSitterConflicts, treeSitterContextualNames: config.treeSitterContextualNames };
 
   // Nullable NON-ENTRY rules are a definition error: the engine never returns an empty match for a
   // rule, so such a rule's empty case is unreachable and references to it fail silently where the
