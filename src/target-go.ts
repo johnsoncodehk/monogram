@@ -237,7 +237,7 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: Aren
     // A branch that fails clean (Step.clean) has nothing to undo: no frame.
     branch: (cond, clean) => (clean ? `{ if ${cond} { return true } }` : f === 'R' ? branchGoR(cond) : f === 'W' ? branchGoW(cond, recv) : branchGo(cond)),
     guarded: (first, branch) => `if _ft != nil && ${firstCond(first, '_ft', ids)} ${branch}`,
-    choice: (peek, tries) => `${peek ? `_ft := p.${e.peek}(); ` : ''}${tries.join('; ')}; return false`,
+    choice: (peek, tries, total) => `${peek ? `_ft := p.${e.peek}(); ` : ''}${tries.join('; ')}${total ? '' : '; return false'}`,
     // Same-line `} else if`: newlines break Go ASI.
     predictive: (arms) => `t := p.${e.peek}(); if t == nil { return false }; ${arms.map((a) => `if ${firstCond(a.first, 't', ids)} ${a.branch}`).join(' else ')}; return false`,
   };
@@ -1420,7 +1420,7 @@ const goPrattBase = (r: PrattRule, ids: LexIdPlan, leftLeaf: (words: string) => 
       ifAll: (parts: string[]) => (parts.length ? `if ${parts.join(' && ')} ` : ''),
     },
     // on the row's dense led index (cases 1..k): a jump table whatever the lids
-    ledSwitch: (cases: { key: number; idx: number; arms: string[] }[]) => `\t\tswitch row >> ${OP_ROW.ledShift} {
+    ledSwitch: (cases: { key: number; idx: number; arms: string[]; leaves: boolean }[]) => `\t\tswitch row >> ${OP_ROW.ledShift} {
 ${cases.map((c) => `\t\tcase ${c.idx}:\n${c.arms.map((a) => `\t\t\t${a}`).join('\n')}`).join('\n')}
 \t\t}`,
     nudPeek: `\tp.capped = false
@@ -1545,17 +1545,17 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\tif p.capped { p.form = ${T.bin}; return left }
 \t\tform = ${T.bin}; tailClosed = true
 \t}`,
-    entry: `${goPrattOpTables(r, ids, ir.assignTargets?.demand)}
+    entry: (bp) => `${goPrattOpTables(r, ids, ir.assignTargets?.demand)}
 func (p *engine) parse${r.name}() int32 {
 \tprev := p.suppressCur
 \tp.suppressCur = p.suppressNext
 \tp.suppressNext = 0
-\tr := p.bp_${r.name}(0)
+\tr := p.bp_${r.name}(${bp ? '0' : ''})
 \tp.suppressCur = prev
 \treturn r
 }`,
-    bpOpen: (label) => `func (p *engine) bp_${r.name}(minBp int) int32 {${T.p0}
-\tleft := p.nud_${r.name}(minBp)
+    bpOpen: (label, nudBp, bp) => `func (p *engine) bp_${r.name}(${bp ? 'minBp int' : ''}) int32 {${T.p0}
+\tleft := p.nud_${r.name}(${nudBp ? 'minBp' : ''})
 \tif left < 0 { return -1 }
 \tform := p.form
 \tif p.capped { return left }
@@ -1568,7 +1568,7 @@ ${label ? 'LedLoop:\n' : ''}\tfor {
 \tp.form = form
 \treturn left
 }`,
-    nudEnter: `func (p *engine) nud_${r.name}(minBp int) int32 {
+    nudEnter: (bp) => `func (p *engine) nud_${r.name}(${bp ? 'minBp int' : ''}) int32 {
 ${B.nudPeek}
 \tif t == nil { return -1 }`,
     nudOpen: `\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
@@ -2240,16 +2240,16 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\tif p.capped { p.form = ${T.bin}; return left, true }
 \t\tform = ${T.bin}; tailClosed = true
 \t}`,
-    entry: `func (p *${recv}) parse${r.name}W() (spanned, bool) {
+    entry: (bp) => `func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tprev := p.suppressCur
 \tp.suppressCur = p.suppressNext
 \tp.suppressNext = 0
-\tr, ok := p.bpW_${r.name}(0)
+\tr, ok := p.bpW_${r.name}(${bp ? '0' : ''})
 \tp.suppressCur = prev
 \treturn r, ok
 }`,
-    bpOpen: (label) => `func (p *${recv}) bpW_${r.name}(minBp int) (spanned, bool) {${T.p0}
-\tleft, ok := p.nudW_${r.name}(minBp)
+    bpOpen: (label, nudBp, bp) => `func (p *${recv}) bpW_${r.name}(${bp ? 'minBp int' : ''}) (spanned, bool) {${T.p0}
+\tleft, ok := p.nudW_${r.name}(${nudBp ? 'minBp' : ''})
 \tif !ok { return spanned{}, false }
 \tform := p.form
 \tif p.capped { return left, true }
@@ -2262,7 +2262,7 @@ ${label ? 'LedLoop:\n' : ''}\tfor {
 \tp.form = form
 \treturn left, true
 }`,
-    nudEnter: `func (p *${recv}) nudW_${r.name}(minBp int) (spanned, bool) {
+    nudEnter: (bp) => `func (p *${recv}) nudW_${r.name}(${bp ? 'minBp int' : ''}) (spanned, bool) {
 ${B.nudPeek}
 \tif t == nil { return spanned{}, false }`,
     nudOpen: `\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
@@ -3277,7 +3277,7 @@ ${[...ones, ...wides].join('\n')}
       if (s.inline !== undefined && GO_IND.length * s.depth + head.length + s.inline.length + 5 <= 110) return [`${head} { ${s.inline} }`];
       return [`${head} {`, ...goBlock(s.then), ...(s.else ? ['} else {', ...goBlock(s.else)] : []), '}'];
     },
-    while: (c, body) => [`for ${c} {`, ...goBlock(body), '}'],
+    while: (c, body) => [c === 'true' ? 'for {' : `for ${c} {`, ...goBlock(body), '}'],
     break: () => ['break'],
     run: (call) => call,
     return: (vals) => [`return ${vals.join(', ')}`],
@@ -3592,7 +3592,7 @@ type Related struct {
 }
 func diagnosticOf(src string, d diag) Diagnostic {
 	out := Diagnostic{Off: d.Off, End: d.End, Message: diagMessage(src, d)}
-	if d.RelOff >= 0 { out.Related = &Related{Off: d.RelOff, End: d.RelEnd, Message: diagRelated(d)} }
+	if d.RelOff >= 0 { out.Related = &Related{Off: d.RelOff, End: d.RelEnd, Message: diagRelated()} }
 	return out
 }
 

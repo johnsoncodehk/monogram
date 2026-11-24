@@ -1243,7 +1243,7 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
     ctx: (ctx, cond) => `{ let _c = ${recv}.ctx; ${recv}.ctx = ${ctx}; let _r = (${cond}); ${recv}.ctx = _c; _r }`,
     branch: (cond, clean) => branchRs(cond, r, clean),
     guarded: (first, branch) => `if let Some(t) = _ft { if ${firstCond(first, 't', ids)} ${branch} }`,
-    choice: (peek, tries) => `${peek ? `let _ft = ${recv}.peek(); ` : ''}${tries.join(' ')} false`,
+    choice: (peek, tries, total) => `${peek ? `let _ft = ${recv}.peek(); ` : ''}${tries.join(' ')}${total ? '' : ' false'}`,
     // FIRST dispatch; restore pos/scratch/builder on arm half-failure (like a choice).
     predictive: (arms) => `let t = match ${recv}.peek() { Some(t) => t, None => return false };\n${arms.map((a, i) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(a.first, 't', ids)} ${a.branch}`).join('\n')}\n        false`,
     // A shape's step (building form): its slot tagged; a marked body's slots preceded by the
@@ -1675,11 +1675,11 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
             if self.capped { self.form = ${binF}; return Some(left); }
             form = ${binF}; tail_closed = true;
         }`,
-    entry: `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
+    entry: (bp) => `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
         let prev = self.suppress_cur;
         self.suppress_cur = self.suppress_next;
         self.suppress_next = 0;
-        let r = self.${r.name}_bp(0);
+        let r = self.${r.name}_bp(${bp ? '0' : ''});
         self.suppress_cur = prev;
         r
     }
@@ -1688,8 +1688,8 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
     fn ${r.name}_pre(op: u16${preGated ? ', ctx: u8' : ''}) -> Option<(i64, bool, u8)> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
 `,
     // Rust's `loop` takes no label here: a led's `continue` / `break` are the innermost loop's.
-    bpOpen: () => `    fn ${r.name}_bp(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {${dem.length ? '\n        let p0 = self.pos as isize;' : ''}
-        let mut left = self.${r.name}_nud(min_bp)?;
+    bpOpen: (_label, nudBp, bp) => `    fn ${r.name}_bp(&mut self${bp ? ', min_bp: i64' : ''}) -> Option<Spanned<B::H>> {${dem.length ? '\n        let p0 = self.pos as isize;' : ''}
+        let mut left = self.${r.name}_nud(${nudBp ? 'min_bp' : ''})?;
         let mut form = self.form;
         if self.capped { return Some(left); }
         let mut tail_closed = self.tail;
@@ -1699,7 +1699,7 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
         self.form = form;
         Some(left)
     }`,
-    nudEnter: `    fn ${r.name}_nud(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {
+    nudEnter: (bp) => `    fn ${r.name}_nud(&mut self${bp ? ', min_bp: i64' : ''}) -> Option<Spanned<B::H>> {
         self.capped = false;
         let t = self.peek()?;`,
     nudOpen: `        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();
@@ -5631,7 +5631,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
       if (s.inline !== undefined && RS_IND.length * s.depth + head.length + s.inline.length + 5 <= 110) return [`${head} { ${s.inline} }`];
       return [`${head} {`, ...rsBlock(s.then), ...(s.else ? ['} else {', ...rsBlock(s.else)] : []), '}'];
     },
-    while: (c, body) => [`while ${c} {`, ...rsBlock(body), '}'],
+    while: (c, body) => [c === 'true' ? 'loop {' : `while ${c} {`, ...rsBlock(body), '}'],
     break: () => ['break;'],
     run: (call) => `${call};`,
     return: (vals) => [`return ${vals.length === 1 ? vals[0] : `(${vals.join(', ')})`};`],
@@ -5993,7 +5993,7 @@ pub struct Diagnostic { pub off: usize, pub end: usize, pub message: String, pub
 pub struct Related { pub off: usize, pub end: usize, pub message: String }
 #[cold]
 fn diagnostic_of(src: &str, d: Diag) -> Diagnostic {
-    let related = if d.rel_off >= 0 { Some(Related { off: d.rel_off as usize, end: d.rel_end as usize, message: diag_related(d) }) } else { None };
+    let related = if d.rel_off >= 0 { Some(Related { off: d.rel_off as usize, end: d.rel_end as usize, message: diag_related() }) } else { None };
     Diagnostic { off: d.off as usize, end: d.end as usize, message: diag_message(src, d), related }
 }
 

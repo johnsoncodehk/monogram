@@ -30,6 +30,11 @@ import { analyzeGrammar, findEntryRule, markupContainerOf, type MarkupContainer,
 import { emitLexer, emitTokenColumns, lexSpecOf } from './lexer.ts';
 import type { Target } from './target.ts';
 import { syntaxKey } from './grammar-names.ts';
+import { dropUnreferenced } from './js-unreferenced.ts';
+
+// A matcher's saved position and its restore on failure.
+const SAVE = '  const _save = pos; const _sn = scn;';
+const SAVE_FAIL = 'pos = _save; scn = _sn; return false;';
 
 // ── Static analysis ──
 // The STRUCTURAL analysis (precedence, NUD/LED + atom/continuation classification, left
@@ -584,8 +589,10 @@ class Emitter {
       // no save needed (a failing single matcher consumes nothing).
       body.push(single);
     } else {
-      body.push(`  const _save = pos; const _sn = scn;`);
-      body.push(this.matchInto(expr, `pos = _save; scn = _sn; return false;`));
+      // The save only where the match can fail (an always-matching body reads none).
+      const m = this.matchInto(expr, SAVE_FAIL);
+      if (m.includes(SAVE_FAIL)) body.push(SAVE);
+      body.push(m);
       body.push(`  return true;`);
     }
     body.push(`}`);
@@ -1463,7 +1470,7 @@ function emitJsParser(grammar: Grammar): string {
   // ── parse() driver ──
   emitDriver(e);
 
-  return e.toString();
+  return dropUnreferenced(e.toString());
 }
 
 // ── Runtime: the generic engine state + control loops, emitted verbatim ──
@@ -2356,8 +2363,8 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       // Chain-rhs led ('in'/'instanceof'): trailing self-operand at the level's bp
       // (left-chaining like a ladder op's rhs), bypassing the bp-0 rule entry.
       e.emit(`function led_${sn}_${i}() {`);
-      e.emit(`  const _save = pos; const _sn = scn;`);
-      e.emit(e.matchInto({ type: 'seq', items: led.items.slice(0, -1) } as RuleExpr, 'pos = _save; scn = _sn; return false;'));
+      e.emit(SAVE);
+      e.emit(e.matchInto({ type: 'seq', items: led.items.slice(0, -1) } as RuleExpr, SAVE_FAIL));
       e.emit(`  let _rhs = ${ruleFn}_pratt(${lp.rhsBp});`);
       e.emit(`  if (_rhs < 0 && recovering) _rhs = missRule(${rid});`);
       e.emit(`  if (_rhs < 0) { pos = _save; scn = _sn; return false; }`);
@@ -2376,8 +2383,9 @@ function emitArm(e: Emitter, a: ReturnType<typeof analyze>, ruleName: string, i:
   const mc = a.markupContainer;
   if (mc !== null && alt === mc.arm) {
     e.emit(`function arm_${sanitize(ruleName)}_${i}() {`);
-    e.emit(`  const _save = pos; const _sn = scn;`);
-    e.emit(e.markupContainerInto(mc, 'pos = _save; scn = _sn; return false;'));
+    const m = e.markupContainerInto(mc, SAVE_FAIL);
+    if (m.includes(SAVE_FAIL)) e.emit(SAVE);
+    e.emit(m);
     e.emit(`  return true;`);
     e.emit(`}`);
     return;
@@ -2427,8 +2435,9 @@ function emitArmNamed(e: Emitter, fnName: string, expr: RuleExpr) {
   if (single) {
     e.emit(single);
   } else {
-    e.emit(`  const _save = pos; const _sn = scn;`);
-    e.emit(e.matchInto(expr, 'pos = _save; scn = _sn; return false;'));
+    const m = e.matchInto(expr, SAVE_FAIL);
+    if (m.includes(SAVE_FAIL)) e.emit(SAVE);
+    e.emit(m);
     e.emit(`  return true;`);
   }
   e.emit(`}`);

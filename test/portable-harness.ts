@@ -196,7 +196,7 @@ export type TsLib = {
 // exposes for go / rust.
 export const TS_LID_OF = '\nexport const __lid_of = lid_of;\n';
 // tok-spans in process: the same builder as the TS runner's `tok-spans` mode (reading the parser
-// cursor, pos / _bSave, from inside the module), returning what that mode prints, or null where it
+// cursor, pos, from inside the module), returning what that mode prints, or null where it
 // fails; so the TypeScript target needs no node process per input.
 export const TS_TOK_SPANS = `
 export const __tok_spans = (src: string): string | null => {
@@ -204,13 +204,13 @@ export const __tok_spans = (src: string): string | null => {
   let _root: _Span | null;
   try {
     _root = parseWith<_Span>(src, {
-      leaf: (tokenType) => (tokenType === '$punct' ? null : { name: tokenType, s: pos, e: pos + 1, kids: [] }),
-      node: (rule, children) => ({ name: rule, s: _bSave, e: pos, kids: children }),
+      leaf: (tokenType) => ({ name: tokenType, s: pos, e: pos + 1, kids: [] }),
+      node: (rule, children) => ({ name: rule, s: children.length > 0 ? children[0]!.s : pos, e: pos, kids: children }),
     });
   } catch { return null; }
   if (_root === null) return null;
   let out = '';
-  for (const k of _root.kids) out += k.name + '\\t' + k.s + '\\t' + k.e + '\\n';
+  for (const k of _root.kids) if (k.name !== '$punct') out += k.name + '\\t' + k.s + '\\t' + k.e + '\\n';
   return out + 'total\\t0\\t' + pos + '\\n';
 };
 `;

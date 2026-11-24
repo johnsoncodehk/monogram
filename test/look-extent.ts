@@ -98,7 +98,7 @@ ${engine}${lib.slice(b)}
 let __headFirst = false;
 function __isHead(): boolean { return __headFirst; }
 export function __oracle(src: string): [number, number, number][] | null {
-  _src = src;
+  ${/\nlet _src\b/.test(lib) ? '_src = src;' : '// (no rule of this grammar reads the source text: the module has no _src)'}
   const all = lex(src);
   if (parseTokens(all) === null) return null;
   const ents = _entries.map((e) => ({ ...e }));
@@ -106,7 +106,7 @@ export function __oracle(src: string): [number, number, number][] | null {
   const out: [number, number, number][] = [];
   for (const e of ents) {
     toks = all; pos = e.tokStart; _seen = 0; _n = 0;
-    _capped = false; _form = 0; _tail = false; _suppressNext = null; _suppressCur = null;
+    ${[['_capped', 'false'], ['_form', '0'], ['_tail', 'false'], ['_suppressNext', 'null'], ['_suppressCur', 'null']].filter(([v]) => new RegExp(`\\nlet ${v}\\b`).test(lib)).map(([v, x]) => `${v} = ${x};`).join(' ')}
     ${reruns}
     if (!n || pos !== e.tokEnd) throw new Error('oracle: entry at token ' + e.tokStart + ' did not parse alone to token ' + e.tokEnd);
     out.push([e.tokStart, e.tokEnd, Math.max(e.tokEnd, _seen)]);

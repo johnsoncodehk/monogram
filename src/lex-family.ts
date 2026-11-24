@@ -160,9 +160,11 @@ class LexScan {
       case 'seq': {
         // Each step's position is its own local, checked to be a position in s before the
         // next step reads from it (a matcher returns -1 or a position in s).
-        const ms = p.items.map((it) => this.pattern(it));
+        // A start anchor is a test of the step's position, not a matcher (it reads nothing of s).
         let at = 'p';
-        const steps = ms.flatMap((m, k): Stmt[] => {
+        const steps = p.items.flatMap((it, k): Stmt[] => {
+          if (typeof it !== 'string' && it.type === 'anchor' && it.kind === 'start') return [if_(ne(at, I(0)), [NONE])];
+          const m = this.pattern(it);
           const q = `q${k}`, from = at;
           at = q;
           return [let_(q, call(m, from)), if_(any([lt(q, I(0)), gt(q, len('s'))]), [NONE])];
@@ -402,7 +404,7 @@ class LexScan {
       this.fns.push({
         name, cold: true, doc: `${this.escTok}: its token pattern's match, whose escapes must spell IdentifierName characters${orUni}.`,
         params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }], ret: ['int'],
-        body: [let_('e', call(m, 'p')), if_(gt('e', 'p'), [ret(call4(IDENT_ESC, 's', 'p', q, 'e'))]), ...uni, NONE],
+        body: [let_('e', call(m, 'p')), if_(gt('e', 'p'), [ret(call4(IDENT_ESC, 's', q, 'e'))]), ...uni, NONE],
       });
     }
     return name;
@@ -448,7 +450,7 @@ class LexScan {
     return {
       name: IDENT_ESC, cold: true,
       doc: 'Whether an identifier spells its escapes as IdentifierName characters: e, else the lexer error -2 - e.',
-      params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }, { name: 'q', ty: 'int' }, { name: 'e', ty: 'int' }],
+      params: [{ name: 's', ty: 'str' }, { name: 'q', ty: 'int' }, { name: 'e', ty: 'int' }],
       ret: ['int'],
       body: [
         let_('i', 'q'), let_('d', I(0)), let_('cp', I(0)), let_('lo', I(0)), let_('need', I(0)),

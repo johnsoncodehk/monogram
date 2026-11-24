@@ -20,6 +20,7 @@ import { ATOM, COMPARISON, findAnyName, isNum, isOpt, isRec, isRecList, isValLis
 import type { ShapePlan } from './shape-plan.ts';
 import { cookTable } from './shape-cook.ts';
 import { type TextUnits, unitLen } from './text-units.ts';
+import { dropUnreferenced } from './js-unreferenced.ts';
 
 export type { ShapeSpec, ShapeIR } from './shape-schema.ts';
 
@@ -811,7 +812,7 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
     // A branch that fails clean (Step.clean) has nothing to undo: no frame.
     branch: (cond, clean) => (clean ? `{ if (${cond}) return true; }` : branchTs(cond, m)),
     guarded: (first, branch) => `if (_ft !== null && ${firstCond(first, '_ft', ids)}) ${branch}`,
-    choice: (peek, tries) => `${peek ? 'const _ft = peek(); ' : ''}${tries.join(' ')} return false;`,
+    choice: (peek, tries, total) => `${peek ? 'const _ft = peek(); ' : ''}${tries.join(' ')}${total ? '' : ' return false;'}`,
     predictive: (arms) => `const t = peek(); if (t === null) return false; ${arms.map((a) => `if (${firstCond(a.first, 't', ids)}) ${a.branch}`).join(' else ')} return false;`,
     // A shape's step: its slot tagged; a marked body's slots preceded by the iteration marker.
     // A call of an rd rule that reads inherited attributes sets each (restored after the call); a
@@ -1107,7 +1108,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
     opRow: `    const row = ${r.name}_ROW[t.lid]!;`,
     // on the row's dense led index (cases 1..k)
     ledSwitch: (cases) => `    switch (row >>> ${OP_ROW.ledShift}) {
-${cases.map((c) => `      case ${c.idx}:\n${c.arms.map((a) => `      ${a}`).join('\n')}\n        break;`).join('\n')}
+${cases.map((c) => `      case ${c.idx}:\n${c.arms.map((a) => `      ${a}`).join('\n')}${c.leaves ? '' : '\n        break;'}`).join('\n')}
     }`,
     postfixToks: (kids) => `    switch (t.kid) {
 ${kids.map((k) => `      case ${k}:
@@ -1137,16 +1138,16 @@ ${kids.map((k) => `      case ${k}:
     if (_capped) { _form = ${binF}; return true; }
     form = ${binF}; tailClosed = true;
   }`,
-    entry: `${tsPrattOpTables(r, ids)}
+    entry: (bp) => `${tsPrattOpTables(r, ids)}
 function parse${r.name}W(): boolean {
   const prev = _suppressCur; _suppressCur = _suppressNext; _suppressNext = 0;
-  const r = ${r.name}_bpW(0);
+  const r = ${r.name}_bpW(${bp ? '0' : ''});
   _suppressCur = prev;
   return r;
 }`,
-    bpOpen: (label) => `function ${r.name}_bpW(minBp: number): boolean {
+    bpOpen: (label, nudBp, bp) => `function ${r.name}_bpW(${bp ? 'minBp: number' : ''}): boolean {
   const b = _n;${rsOf(r.name) ? ' const p0 = pos; let nr = 0;' : dem.length ? ' const p0 = pos;' : ''}
-  if (!${r.name}_nudW(minBp)) return false;
+  if (!${r.name}_nudW(${nudBp ? 'minBp' : ''})) return false;
   let form = _form;
   if (_capped) return true;   // an assignment-level arrow admits no led
   let tailClosed = _tail;
@@ -1157,7 +1158,7 @@ function parse${r.name}W(): boolean {
   _form = form;
   return true;
 }`,
-    nudEnter: `function ${r.name}_nudW(minBp: number): boolean {
+    nudEnter: (bp) => `function ${r.name}_nudW(${bp ? 'minBp: number' : ''}): boolean {
   _capped = false;
   const t = peek();
   if (t === null) return false;`,
@@ -1297,7 +1298,6 @@ export type Builder<H> = {
   shift?(h: H, byteDelta: number, tokDelta: number): H;
 };
 let _builder: Builder<any> = null!;
-let _bSave = 0;
 // The child stack: the children of every node under construction, one SLOT per child, slots 0.._n-1.
 // A slot holds what the builder returned for the child in _hs, and its span in _sp, _SW int32s per
 // slot: off, end, tokStart, headOff, headEnd (the first leaf's span), kind — 1: one handle, 2: an
@@ -1341,7 +1341,6 @@ function _count(c: number): number {
 // The node over slots b.._n-1 replaces them as one slot at b: the builder's node, with the span
 // from the first child to the last and the first child's head.
 function _put(rule: string, b: number, off: number, end: number, tokStart: number, headOff: number, headEnd: number): void {
-  _bSave = tokStart;
   const r = _builder.node(rule, _kids(b), off, end);
   _n = b;
   _slot(r, r === null ? 0 : Array.isArray(r) ? 2 : 1, off, end, tokStart, headOff, headEnd);
@@ -1558,8 +1557,7 @@ function tryReuseW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number)
     const ka = reuseKids(oldEntries, prefixLen, prefixEnd, suffixStart + adoptFrom);
     const adoptedKids = oldRootHs.slice(ka, ka + adopted).map((h) => shift(h, byteDelta, tokDelta));
     const children: H[] = [...prefixKids, ...midKids, ...adoptedKids];
-    ${tsTake(['offset', 'end', 'tokStart', 'tokEnd'], 'reuseSpan', 'newEntries')}
-    _bSave = tokStart;
+    ${tsTake(['offset', 'end', '', 'tokEnd'], 'reuseSpan', 'newEntries')}
     const savePos = pos;
     pos = tokEnd;
     const r = builder.node(${J(entryCst)}, children, offset, end);
@@ -3346,7 +3344,7 @@ function ${findAnyName(stops)}(s: string, i: number): number {
     break: () => ['break;'],
     run: (call) => `${call};`,
     return: (vals, fn) => {
-      if (!tsSlotted(fn.ret)) return [`return ${vals.length === 1 ? vals[0] : `[${vals.join(', ')}]`};`];
+      if (!tsSlotted(fn.ret)) return [vals.length === 0 ? 'return;' : `return ${vals.length === 1 ? vals[0] : `[${vals.join(', ')}]`};`];
       // The first value is returned, the others are left in the function's slots. When a value
       // calls a family function, every value is computed first, in order, as an array literal
       // computes them: the call (this function again, or one that calls it) would otherwise run
@@ -3357,7 +3355,7 @@ function ${findAnyName(stops)}(s: string, i: number): number {
     },
     fn: (f) => [
       ...(tsSlotted(f.retTys)
-        ? [`// ${f.name}'s values after the first (tsSlotted).`, `var ${f.rets.slice(1).map((t, i) => `${f.name}_r${i + 1}: ${t} = ${t === 'boolean' ? 'false' : '0'}`).join(', ')};`]
+        ? [`// ${f.name}'s values after the first (tsSlotted).`, f.rets.slice(1).map((t, i) => `var ${f.name}_r${i + 1}: ${t} = ${t === 'boolean' ? 'false' : '0'};`).join(' ')]
         : []),
       ...f.doc.map((l) => `// ${l}`),
       `function ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): ${f.rets.length === 0 ? 'void' : f.rets.length === 1 || tsSlotted(f.retTys) ? f.rets[0] : `[${f.rets.join(', ')}]`} {`,
@@ -3430,9 +3428,10 @@ function ${findAnyName(stops)}(s: string, i: number): number {
 const tsSlotted = (ret: Ty[]): boolean => ret.length > 1 && ret.slice(1).every((t) => isNum(t) || t === 'bool');
 // The same read, printed where the hand-written runtime calls a family function of several numbers:
 // the element lexer's opens / frame / raw steps (src/lex-family.ts), the Doc's reuse bounds and
-// span (src/reuse-family.ts) and its alignment core (src/relex-family.ts).
+// span (src/reuse-family.ts) and its alignment core (src/relex-family.ts). A result nothing
+// reads is named '' and not read (the first one is the call itself).
 const tsTake = (names: string[], fn: string, args: string): string =>
-  names.map((n, i) => `const ${n} = ${i === 0 ? `${fn}(${args})` : `${fn}_r${i}`};`).join(' ');
+  names.map((n, i) => i === 0 ? `const ${n} = ${fn}(${args});` : n === '' ? '' : `const ${n} = ${fn}_r${i};`).filter((t) => t !== '').join(' ');
 
 // No callee-FIRST body guards: a JS rd call refused at its dispatch costs less than the guard's test
 // on every iteration (measured: TS blocks +0.19% to +0.53% on the real inputs with them).
@@ -3449,9 +3448,9 @@ export const tsTarget = defineParserTarget({
       if (opts.shape.source !== grammar) throw new Error('tsTarget: the shape was defined on another grammar object than the one emitted');
       const plan = shared.shapePlan(opts.shape, ir);
       SHAPE = plan;
-      try { return emitTsLibrary(plan.ir, buildLexIdPlan(plan.ir), shared) + '\n' + shared.shapeFamily(plan); } finally { SHAPE = null; }
+      try { return dropUnreferenced(emitTsLibrary(plan.ir, buildLexIdPlan(plan.ir), shared) + '\n' + shared.shapeFamily(plan)); } finally { SHAPE = null; }
     }
-    return emitTsLibrary(ir, buildLexIdPlan(ir), shared) + (opts.recovery ? recoveryRegionTs(ir, shared) : '');
+    return dropUnreferenced(emitTsLibrary(ir, buildLexIdPlan(ir), shared) + (opts.recovery ? recoveryRegionTs(ir, shared) : ''));
   },
   emitRunner,
 });
@@ -3728,7 +3727,7 @@ ${recoveryEngineTs(ir)}
 export type Diagnostic = { offset: number; end: number; message: string; related?: { offset: number; end: number; message: string } };
 function diagnosticOf(src: string, d: Diag): Diagnostic {
   const out: Diagnostic = { offset: d.off, end: d.end, message: diagMessage(src, d) };
-  if (d.relOff >= 0) out.related = { offset: d.relOff, end: d.relEnd, message: diagRelated(d) };
+  if (d.relOff >= 0) out.related = { offset: d.relOff, end: d.relEnd, message: diagRelated() };
   return out;
 }
 // The strict parse's error over toks: the entry rule run as runW runs it, and its diagnostic. The
@@ -3806,14 +3805,15 @@ if (_editFast || process.argv.includes('edit-session')) {
   if (root === null) { process.stderr.write('parse error\\n'); process.exit(1); }
   process.stdout.write(_cstJSON(root));
 } else if (process.argv.includes('tok-spans')) {
-  // Parse-consumption spans via a builder reading the parser cursor (pos / _bSave).
+  // Parse-consumption spans via a builder reading the parser cursor (pos): a node begins at its
+  // first child (a punctuation leaf too), an empty one at the cursor.
   type _Span = { name: string; s: number; e: number; kids: _Span[] };
   const _root = parseWith<_Span>(_raw, {
-    leaf: (tokenType) => (tokenType === '$punct' ? null : { name: tokenType, s: pos, e: pos + 1, kids: [] }),
-    node: (rule, children) => ({ name: rule, s: _bSave, e: pos, kids: children }),
+    leaf: (tokenType) => ({ name: tokenType, s: pos, e: pos + 1, kids: [] }),
+    node: (rule, children) => ({ name: rule, s: children.length > 0 ? children[0]!.s : pos, e: pos, kids: children }),
   });
   if (_root === null) { process.stderr.write('parse error\\n'); process.exit(1); }
-  for (const k of _root.kids) process.stdout.write(k.name + '\\t' + k.s + '\\t' + k.e + '\\n');
+  for (const k of _root.kids) if (k.name !== '$punct') process.stdout.write(k.name + '\\t' + k.s + '\\t' + k.e + '\\n');
   process.stdout.write('total\\t0\\t' + pos + '\\n');
 } else {
   const _root = parse(_raw);
@@ -3828,8 +3828,8 @@ export function emitTs(grammar: Grammar, opts?: { shape?: ShapeSpec }): string {
   const ir = portableIR(grammar, FACTS);
   const ids = buildLexIdPlan(ir);
   const base = emitTsLibrary(ir, ids, tsTarget.shared);
-  if (!opts?.shape) return base;
-  return base + emitShapeAstAddon(ir, validateShapeOrThrow(grammar, opts.shape), ids);
+  if (!opts?.shape) return dropUnreferenced(base);
+  return dropUnreferenced(base + emitShapeAstAddon(ir, validateShapeOrThrow(grammar, opts.shape), ids));
 }
 
 // ── A shape-building parser's runtime (emit option `shape`, src/shape-plan.ts) ──

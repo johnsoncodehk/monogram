@@ -206,7 +206,8 @@ export function __denseWork(src: string) {
 `;
   const lib = emitParser(grammar, tsTarget);
   if (!lib.includes('\nfunction parseTokens(tokens: Tok[]): Cst | null {')) throw new Error('dense probe: parseTokens not found in the TS target');
-  writeFileSync(join(dir, 'dense.ts'), lib + probe);
+  // A module whose rules never read the source text has no _src (src/js-unreferenced.ts).
+  writeFileSync(join(dir, 'dense.ts'), lib + (lib.includes('\nlet _src') ? probe : probe.replace('  _src = src;\n', '')));
   const m = (await import(join(dir, 'dense.ts'))) as { __denseWork(s: string): DenseWork | null };
   const work = [DENSE_N, 4 * DENSE_N].map((n) => m.__denseWork(DENSE_LINE.repeat(n)));
   check('ts: tsTarget accepts the dense text', work.every((w) => w !== null));

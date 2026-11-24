@@ -11,6 +11,10 @@
 // too: their emitted module alone under `tsc --strict`, in one tsc run (formerly emit-tsc-gate:
 // every grammar's emission — token width, mode-specific lexer code, empty vocab sets — stays
 // type-sound and erasable).
+// The portable TypeScript target's modules (default and with total parsing) type-check alone
+// under `tsc --strict` plus noUnusedLocals, noUnusedParameters, allowUnusedLabels: false,
+// allowUnreachableCode: false: an emitted module contains nothing unused (target-js is exempt
+// from those four: see the section at the end).
 //
 //   node test/emit-standalone.ts
 import { execFileSync } from 'node:child_process';
@@ -19,6 +23,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { emitParser } from '../src/target.ts';
 import { jsTarget } from '../src/target-js.ts';
+import { tsTarget } from '../src/target-ts.ts';
 import { createParser } from '../src/interpreter.ts';
 import { goldenStream, streamOf } from './golden-lexer.ts';
 import type { Grammar } from '../src/types.ts';
@@ -124,6 +129,36 @@ for (const c of CASES) {
     const errs = log.split('\n').filter((l) => l.startsWith(`${name}.ts(`));
     check(`${name}: emitted module type-checks alone (tsc --strict)`, log === '' || (attributed && errs.length === 0),
       errs.slice(0, 10).join('\n') || log.slice(0, 600));
+  }
+}
+
+// The portable TypeScript target's module (what a user of the target builds), default and with
+// total parsing, for every grammar it emits: it type-checks alone under `tsc --strict` with the
+// options that reject anything unused (as the project's own tsconfig.json), in one tsc run.
+// target-js is exempt from these four options: it is retiring (replaced by this target) and its
+// emission still has 159 such diagnostics (112 unreachable statements after a matcher's
+// exhaustive return, 41 unused locals, 6 all-unused declarations); the exemption ends when
+// src/target-js.ts is deleted.
+{
+  const UNUSED = ['--noUnusedLocals', '--noUnusedParameters', '--allowUnusedLabels', 'false', '--allowUnreachableCode', 'false'];
+  const PORTABLE: [string, string][] = [['typescript', '../typescript.ts'], ['javascript', '../javascript.ts'], ['typescriptreact', '../typescriptreact.ts'], ['javascriptreact', '../javascriptreact.ts']];
+  const dir = scratchDir('standalone-ts-target');
+  const files: string[] = [];
+  for (const [name, path] of PORTABLE) {
+    const grammar = (await import(path)).default as Grammar;
+    for (const [suffix, opts] of [['', {}], ['-recovery', { recovery: true }]] as const) {
+      writeFileSync(join(dir, `${name}${suffix}.ts`), emitParser(grammar, tsTarget, opts));
+      files.push(`${name}${suffix}.ts`);
+    }
+  }
+  let log = '';
+  try {
+    execFileSync(TSC, ['--strict', '--noEmit', '--target', 'ES2022', '--module', 'ES2022', '--moduleResolution', 'Bundler', '--lib', 'ES2022', ...UNUSED, ...files], { cwd: dir, stdio: 'pipe' });
+  } catch (e) { log = String((e as { stdout?: Buffer }).stdout ?? e) || String(e); }
+  const attributed = files.some((f) => log.includes(`${f}(`));
+  for (const f of files) {
+    const errs = log.split('\n').filter((l) => l.startsWith(`${f}(`));
+    check(`tsTarget ${f}: type-checks alone (tsc --strict, nothing unused)`, log === '' || (attributed && errs.length === 0), errs.slice(0, 10).join('\n') || log.slice(0, 600));
   }
 }
 
