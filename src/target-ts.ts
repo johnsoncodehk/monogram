@@ -7,7 +7,7 @@
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA, type ShapeInhVal, type TargetsIR } from './emit-portable.ts';
 import { hasRebind, nudLowForm, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
-import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_AMAX, RM_FAIL, RM_PROBE, RM_SP, nativeCases, shorterDispatch } from './recovery-family.ts';
+import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_AMAX, RM_FAIL, RM_PROBE, RM_SP, DK_SEAL, nativeCases, shorterDispatch } from './recovery-family.ts';
 import type { EmitOptions } from './target.ts';
 import type { CstGrammar } from './types.ts';
 import type {
@@ -3717,7 +3717,7 @@ export function parseTotal<H>(src: string, builder: Builder<H>): { root: H | nul
   _hs.fill(null);
   if (!sole) throw new Error('the builder kept no node for the root rule of a recovered parse (a Builder must return one for the entry rule)');
   const errors: Diagnostic[] = [];
-  for (let i = ${RM_DIAGS}; i + 2 < _rm.length; i += 3) errors.push(diagnosticOf(src, repairDiag(toks, _rm[i]!, _rm[i + 1]!, _rm[i + 2]!)));
+  for (let i = ${RM_DIAGS}; i + 2 < _rm.length; i += 3) if (_rm[i] !== ${DK_SEAL}) errors.push(diagnosticOf(src, repairDiag(toks, _rm[i]!, _rm[i + 1]!, _rm[i + 2]!)));
   _rwork = [_rsteps, _rm[${RM_ATT}]!, _rm[${RM_AMAX}]!];
   return { root: rec, errors, strict };
 }

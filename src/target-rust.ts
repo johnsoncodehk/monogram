@@ -17,7 +17,7 @@ import { hasRebind, nudLowForm, blockBody, elementBraceSteps, elementSkipsText, 
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
-import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT, RM_AMAX, nativeCases, shorterDispatch } from './recovery-family.ts';
+import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT, RM_AMAX, DK_SEAL, nativeCases, shorterDispatch } from './recovery-family.ts';
 import { beginRsShape, RS_SLOT, rsIsPlanFn, rsPlanFns, rsShapeCall, rsShapeLowering, rsShapeRuntime, setRsShape, type RsShape } from './rust-shape.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, unitMask, isList, isNum, isOpt, isRec, isRecList, isValList, isValTy, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
@@ -6084,7 +6084,7 @@ pub fn parse_total_work<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> (O
     let root = rv.p.scratch[0];
     let mut errs = Vec::new();
     let mut i = ${RM_DIAGS};
-    while i + 2 < rv.rm.len() { errs.push(diagnostic_of(src, repair_diag(&rv.p.toks, rv.rm[i], rv.rm[i + 1] as usize, rv.rm[i + 2] as usize))); i += 3; }
+    while i + 2 < rv.rm.len() { if rv.rm[i] != ${DK_SEAL} { errs.push(diagnostic_of(src, repair_diag(&rv.p.toks, rv.rm[i], rv.rm[i + 1] as usize, rv.rm[i + 2] as usize))); } i += 3; }
     (Some(root), errs, Some(strict), (rv.steps, rv.rm[${RM_ATT}] as usize, rv.rm[${RM_AMAX}] as usize))
 }
 `;

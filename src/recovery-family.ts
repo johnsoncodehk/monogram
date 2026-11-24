@@ -29,8 +29,11 @@ export const DIAG: RecordDecl = {
 // skipped, an `$error` node over them (arg: the end of its first token; at the end of input, off).
 // The strict parse's error (stage 1, the interpreter's primary error): the entry rule failed at a
 // token; it failed with no token left; it matched and a token is left over. A required operand of a
-// Pratt rule the parse supplied, a zero-width `$missing` node (arg: the rule's id).
-export const DK_MISS_LIT = 0, DK_MISS_TOK = 1, DK_SKIP = 2, DK_UNEXPECTED = 3, DK_EOF = 4, DK_LEFTOVER = 5, DK_MISS_RULE = 6;
+// Pratt rule the parse supplied, a zero-width `$missing` node (arg: the rule's id). Not a
+// diagnostic: a SEAL (riSeal), the tokens [t, arg] a passed lookahead read, kept in the repair
+// memory so a losing attempt's seals vanish with its repairs; the targets skip it when they list
+// the diagnostics.
+export const DK_MISS_LIT = 0, DK_MISS_TOK = 1, DK_SKIP = 2, DK_UNEXPECTED = 3, DK_EOF = 4, DK_LEFTOVER = 5, DK_MISS_RULE = 6, DK_SEAL = 7;
 // The best candidate of a longest match so far (riCand): where it ended, its node's offset, whether
 // one won, the node's form, tail and capped flag, and where the repair memory stood when the
 // match began (h0) and where the best's repairs end (hb).
@@ -508,10 +511,30 @@ const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
     run('riFail', v('pa')),
     ret(fls),
   ]),
-  op(REC_S_LOOK, [ret(eq(call('enLook', S1), eq(S2, n(1))))]),
-  op(REC_S_AHEAD, [ret(call('enAhead', S1, eq(S2, n(1))))]),
+  // Recovering with a bar (a repair can fire), a lookahead that passed seals the tokens it read
+  // (riSeal): a positive one every token from the position, a negative one those after it (the
+  // token at the position is not what it refused, and a token supplied before it is not either).
+  op(REC_S_LOOK, [
+    if_(eq(call('enRm', n(RM_NB)), n(0)), [ret(eq(call('enLook', S1), eq(S2, n(1))))]),
+    let_('p', call('enPos')),
+    let_('lk', call('enLookEnd')),
+    run('enLookSet', n(0)),
+    let_('ok', eq(call('enLook', S1), eq(S2, n(1))), 'bool'),
+    let_('x', call('enLookEnd')),
+    if_(gt(v('lk'), v('x')), [run('enLookSet', v('lk'))], [run('enLookSet', v('x'))]),
+    if_(v('ok'), [run('riSeal', add(v('p'), sub(n(1), S2)), sub(v('x'), n(1)))]),
+    ret(v('ok')),
+  ]),
+  op(REC_S_AHEAD, [
+    let_('ok', call('enAhead', S1, eq(S2, n(1))), 'bool'),
+    if_(and(v('ok'), eq(S2, n(1))), [run('riSeal', call('enPos'), call('enPos'))]),
+    ret(v('ok')),
+  ]),
   op(REC_S_AHEADCTX, [
-    if_(eq(S2, n(1)), [ret(or(call('enAhead', S1, tru), call('enCtxWord')))]),
+    if_(eq(S2, n(1)), [
+      if_(or(call('enAhead', S1, tru), call('enCtxWord')), [run('riSeal', call('enPos'), call('enPos')), ret(tru)]),
+      ret(fls),
+    ]),
     ret(and(call('enAhead', S1, fls), not(call('enCtxWord')))),
   ]),
   op(REC_S_SEQ, [ret(call('riList', S1R, v('d')))]),
@@ -652,7 +675,7 @@ const riNudOf = (cappedSeq: boolean, unaryNud: boolean): Fn => method('riNud', [
     ]),
     inc('i'),
   ]),
-  if_(and(eq(fld(v('best'), 'won'), n(0)), or(call('riNear', sub(v('save'), n(1))), call('riRep', v('save')))), [
+  if_(and(eq(fld(v('best'), 'won'), n(0)), or(call('riNear', sub(v('save'), n(1))), call('riRep', v('save'))), not(call('riSealed', v('save')))), [
     if_(ge(v('kid'), n(0)), [
       let_('ke', call('enMark')),
       run('riErrTok', v('save')),
@@ -819,7 +842,28 @@ const riRep = method('riRep', [['p', 'int']], ['bool'], [
 // Whether a repair can fire at token p (riRep, nothing recorded).
 const riNear = method('riNear', [['p', 'int']], ['bool'], [
   let_('pr', rm(RM_PROBE)),
-  ret(and(or(lt(v('pr'), n(0)), gt(v('p'), v('pr'))), call('riBarIn', v('p'), add(v('p'), n(2))))),
+  ret(and(or(lt(v('pr'), n(0)), gt(v('p'), v('pr'))), call('riBarIn', v('p'), add(v('p'), n(2))), not(call('riSealed', v('p'))))),
+]);
+// LOOKAHEAD SEALS (P10: a repair's substituted text parses): a lookahead that passed read real
+// tokens; a token supplied among them, or one of them skipped, would make the text it judged
+// another (`class C { default class) {} }`: `default` is a modifier because `class` follows; a
+// '*' supplied before `class` breaks that, and `default *class() {}` has no parse). So the tokens
+// [lo, hi] it read are sealed: no repair fires at them while the derivation that passed it stands
+// (a seal is a record of the repair memory, undone with the attempt or candidate that made it).
+// Only where a bar is near (a repair could fire there): elsewhere a seal changes nothing.
+const riSeal = method('riSeal', [['lo', 'int'], ['hi', 'int']], [], [
+  if_(and(bin('le', v('lo'), v('hi')), call('riBarIn', v('lo'), add(v('hi'), n(2)))), [
+    run('enRmPush', n(DK_SEAL)), run('enRmPush', v('lo')), run('enRmPush', v('hi')),
+  ]),
+]);
+// Whether token p is sealed.
+const riSealed = method('riSealed', [['p', 'int']], ['bool'], [
+  let_('i', n(RM_DIAGS)),
+  while_(lt(add(v('i'), n(2)), call('enRmLen')), [
+    if_(and(eq(call('enRm', v('i')), n(DK_SEAL)), bin('le', call('enRm', add(v('i'), n(1))), v('p')), bin('le', v('p'), call('enRm', add(v('i'), n(2))))), [ret(tru)]),
+    inc('i', n(3)),
+  ]),
+  ret(fls),
 ]);
 // The token at the position, extra: an `$error` node over its leaf (the tokens from p), and its repair.
 const riErrTok = method('riErrTok', [['p', 'int']], [], [
@@ -1030,7 +1074,7 @@ const riRbStep = method('riRbStep', [['x', 'int'], ['k', 'int'], ['d', 'int']], 
 // marks, printed with the native forms).
 export function recoveryFamilyFns(rebind: boolean, ids?: LexIdPlan, cappedSeq = false, labels: [number, string][] = [], unaryNud = false): Fn[] {
   return [rejectDiag, repairDiag, diagMessageOf(labels), diagRelated, riRef, riSig, riIn, riGuard, riGuardIn, riRule, riUndo, riBestSet, riTry, riCand, riFrame, riFrameIn, riRdIn, riList, riStep, riOperand, riOp, riNudOf(cappedSeq, unaryNud), riBpOf(rebind),
-    riRmDrop, riBarIn, riFail, riMatch, riRep, riNear, riErrNode, riRepNode, riMiss, riNat, riUnit, riAttempts, riSkip, riTotal, riErrTok, ...ENGINE_EXTERNS, ...TEXT_EXTERNS,
+    riRmDrop, riBarIn, riFail, riMatch, riRep, riNear, riSeal, riSealed, riErrNode, riRepNode, riMiss, riNat, riUnit, riAttempts, riSkip, riTotal, riErrTok, ...ENGINE_EXTERNS, ...TEXT_EXTERNS,
     ...(rebind ? [riRbStep, RI_RB_SCAN, rbBracketFn(ids!), ...REBIND_EXTERNS, ...RB_EXTERNS_INTERP] : [])];
 }
 

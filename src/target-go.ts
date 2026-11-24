@@ -15,7 +15,7 @@ import { hasRebind, nudLowForm, hasUnaryNud, blockBody, elementBraceSteps, eleme
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
-import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT, RM_AMAX, nativeCases, shorterDispatch } from './recovery-family.ts';
+import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT, RM_AMAX, DK_SEAL, nativeCases, shorterDispatch } from './recovery-family.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, unitMask, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
@@ -3550,7 +3550,7 @@ func ParseTotalWork(src string, b Builder) (h int32, ok bool, errs []Diagnostic,
 	rv.riTotal()
 	if len(p.scratch) != 1 { panic(errNoRoot) }
 	h = p.scratch[0]
-	for i := ${RM_DIAGS}; i+2 < len(rv.rm); i += 3 { errs = append(errs, diagnosticOf(src, repairDiag(p.toks, rv.rm[i], rv.rm[i+1], rv.rm[i+2]))) }
+	for i := ${RM_DIAGS}; i+2 < len(rv.rm); i += 3 { if rv.rm[i] != ${DK_SEAL} { errs = append(errs, diagnosticOf(src, repairDiag(p.toks, rv.rm[i], rv.rm[i+1], rv.rm[i+2]))) } }
 	w = TotalWork{Steps: rv.steps, Attempts: rv.rm[${RM_ATT}], MaxAttempts: rv.rm[${RM_AMAX}]}
 	p.cursor.toks, p.src, p.b = nil, "", nil
 	return h, true, errs, strict, w

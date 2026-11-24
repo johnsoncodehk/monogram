@@ -6,7 +6,7 @@
 //   with no children; a node's span is its children's; P5 one diagnostic per repair node, in tree
 //   order, at its span (`expected …` for a `$missing`, `unexpected …` for an `$error`);
 //   P10 repair validity: each `$missing` replaced by its literal (or a sample token of its kind)
-//   right after the token before it, each `$error` span blanked (its white space kept, so no
+//   at its offset (the start of the token after it), each `$error` span blanked (its white space kept, so no
 //   token's line-break flag moves), the strict parser accepts the text.
 export type Tok = { off: number; end: number; kind: string; text: string };
 /** The P10 substitute of a missing operand (`expected <Rule>`, a Pratt rule's NUD repair), added to
@@ -74,9 +74,10 @@ export function checkContract(src: string, toks: Tok[], root: Node | null, error
     const kind = lit ? undefined : /^expected (\S+)$/.exec(msg)?.[1];
     const ins = lit ? lit[1]! : kind !== undefined ? samples.get(kind) : undefined;
     if (ins === undefined) { checkable = false; break; }
-    const prev = toks.filter((t) => t.end <= r.offset).pop();
-    const p = prev ? prev.end : 0;
-    text = `${text.slice(0, p)} ${ins} ${text.slice(p)}`;
+    // At the node's offset: the start of the token it precedes (after the white space before that
+    // token), so a line break before that token stays before the supplied one, as the parse saw it
+    // (`( { *g()⏎h() {} })`: the body-less `*g()` ends at the line break, then the supplied ',').
+    text = `${text.slice(0, r.offset)} ${ins} ${text.slice(r.offset)}`;
   }
   const p10: ContractRow['p10'] = !checkable ? 'unchecked' : nMiss === reps.length ? 'missing-only' : 'with-error';
   const p10ok = checkable && accepts(text);
