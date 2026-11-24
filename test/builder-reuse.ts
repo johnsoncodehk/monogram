@@ -39,7 +39,7 @@ import { goTarget } from '../src/targets/target-go.ts';
 import { rustTarget } from '../src/targets/target-rust.ts';
 import { asGoMain } from './go-main.ts';
 import { scratchDir } from './scratch.ts';
-import { cachedGoBuild, cachedRustc } from './build-cache.ts';
+import { cachedGoBuild, cachedRustc, RUSTC_LINTS } from './build-cache.ts';
 import { createParser } from '../src/interpreter/interpreter.ts';
 import type { Grammar } from '../src/grammar/types.ts';
 
@@ -265,7 +265,7 @@ fn main() {
     }
 }
 `);
-  cachedRustc(['-A', 'warnings', rfile, '-o', join(dir, 'reuse')], { stdio: 'pipe' });
+  cachedRustc([...RUSTC_LINTS, rfile, '-o', join(dir, 'reuse')], { stdio: 'pipe' });
   for (const [label, b] of [['rust', 'cst'], ['rust SlimBuilder', 'slim']] as const)
     results.set(label, readPairs(execFileSync(join(dir, 'reuse'), [b, ...seqFiles.map((fs) => fs.join(','))], { encoding: 'utf8', maxBuffer: 1 << 28 })));
   checkDropped('rust', execFileSync(join(dir, 'reuse'), ['drop', ...seqFiles.flat()], { encoding: 'utf8', maxBuffer: 1 << 28 }));
@@ -866,7 +866,7 @@ if (!haveRustc()) {
     const bin = `${RUST_TMP}/${c.grammar}`;
     writeFileSync(rfile, emitParser(grammar, rustTarget) + rustHarness);
     try {
-      cachedRustc(['-A', 'warnings', rfile, '-o', bin], { stdio: 'pipe', timeout: 120_000 });
+      cachedRustc([...RUSTC_LINTS, rfile, '-o', bin], { stdio: 'pipe', timeout: 120_000 });
     } catch (e) {
       check(`rustc ${c.grammar}`, false, String(e).slice(0, 200));
       continue;

@@ -520,8 +520,7 @@ ${escKids.length ? `    /// cook_identifier_name of one token s[a, b) of SH_ESC_
         dflt as isize
     }
     fn self_syn(&self, k: isize) -> W { self.ys[k as usize] }
-    #[allow(unused_variables)]
-    fn rec_get(&self, x: W, f: &str) -> W { let id = x as u32 as usize; match ((x >> 32) as u32 & 0xFFFF, f) { ${recFields.join(', ')}${recFields.length ? ', ' : ''}_ => W_ABSENT } }
+    fn rec_get(&self, x: W, f: &str) -> W { ${recFields.length ? 'let id = x as u32 as usize; ' : ''}match ((x >> 32) as u32 & 0xFFFF, f) { ${recFields.join(', ')}${recFields.length ? ', ' : ''}_ => W_ABSENT } }
     fn v_drop_last(&self, x: W, c: bool) -> W { if c && x & 0xFF_FFFF != 0 { x - 1 } else { x } }
 ${[...new Set([...plan.cooks, ...(plan.cooks.includes('tsNumericText') ? ['numberValue'] : [])])].map((c) => `    ${RS_COOKS[c]}`).join('\n')}
     /// Engine arm id's value over slots s[b..] (its synthesized attributes first, into ys): the

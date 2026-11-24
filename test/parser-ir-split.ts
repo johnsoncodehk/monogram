@@ -19,7 +19,7 @@ import { goTarget } from '../src/targets/target-go.ts';
 import { rustTarget } from '../src/targets/target-rust.ts';
 import { asGoMain } from './go-main.ts';
 import { scratchDir } from './scratch.ts';
-import { cachedGoBuild, cachedRustc } from './build-cache.ts';
+import { cachedGoBuild, cachedRustc, RUSTC_LINTS } from './build-cache.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean, detail = '') => {
@@ -571,7 +571,7 @@ else {
   const rdir = join(dir, 'rust');
   mkdirSync(rdir);
   writeFileSync(join(rdir, 'h.rs'), emitParser(grammar, rustTarget) + RUST_HARNESS);
-  cachedRustc(['-A', 'warnings', '--edition', '2021', 'h.rs', '-o', 'h'], { cwd: rdir, stdio: 'pipe' });
+  cachedRustc([...RUSTC_LINTS, '--edition', '2021', 'h.rs', '-o', 'h'], { cwd: rdir, stdio: 'pipe' });
   const out = JSON.parse(execFileSync(join(rdir, 'h'), { maxBuffer: 1 << 28 }).toString()) as Out;
   verify('rust', out, { doc: 'Doc::new', parseWith: 'parse_with(CstBuilder)' });
 }

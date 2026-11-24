@@ -35,7 +35,7 @@ import { asGoMain } from './go-main.ts';
 import { parityInputs, type Tok } from './parity-corpus.ts';
 import { scratchDir } from './scratch.ts';
 import type { Grammar } from '../src/grammar/types.ts';
-import { cachedGoBuild, cachedRustc } from './build-cache.ts';
+import { cachedGoBuild, cachedRustc, RUSTC_LINTS } from './build-cache.ts';
 
 const TMP = scratchDir('look-extent');
 const ROOT = new URL('..', import.meta.url).pathname;
@@ -357,7 +357,7 @@ for (const g of GRAMMARS) {
     const runner = rustTarget.emitRunner?.() ?? '';
     if (!runner.includes('\nfn main() {')) throw new Error('rust runner: no main to replace');
     writeFileSync(`${dir}/main.rs`, emitParser(grammar, rustTarget) + runner.replace('\nfn main() {', '\n#[allow(dead_code)]\nfn runner_main() {') + RUST_PROBE);
-    cachedRustc(['-A', 'warnings', `${dir}/main.rs`, '-o', `${dir}/pr`], { stdio: 'pipe' });
+    cachedRustc([...RUSTC_LINTS, `${dir}/main.rs`, '-o', `${dir}/pr`], { stdio: 'pipe' });
     const out = lines(`${dir}/pr`, rustPayload);
     runners.push({ label: 'rust', extOnly: false, out: (i) => out[i]! });
   }

@@ -528,7 +528,7 @@ ${emitHooks}
   const elRefresh = ir.elements ? 'refresh(); ' : '';
   // a closer can bring an element frame back on top: the round ends the plain rounds (bound)
   const elRefreshClose = ir.elements ? 'refresh(); if (hot) bound = 0; ' : '';
-  const tplSpanTs = (from: string, strict: string): string => `      const q = ${shared.tplSpan()}(src, ${from}, ${strict});
+  const tplSpanTs = (from: string, strict: string): string => `      const q = ${shared.tplSpan(tpl!).call('src', from, strict)};
       if (q < 0) { err = lexTplErr(q, n); pos = n; continue; }
       const interp = src.startsWith(${J(tpl!.interpOpen)}, q), e = interp ? q + ${tlen(tpl!.interpOpen)} : q + ${tlen(tpl!.open)};
 `;
@@ -1641,7 +1641,7 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
       const oldText = text, oldToks = prevToks;
       let relexed = 0;
       // A lexer error (the generator's docRuntime): the text's own.
-      [text, prevToks, relexed, lexErr] = relexEdits(oldText, oldToks, edits);
+      [text, prevToks, relexed, lexErr] = ${tsTarget.shared.relexEdits(ir, 'oldText', 'oldToks', 'edits')};
       if (lexErr !== null) {
         text = applyEdits(oldText, edits);
         prevToks = [];

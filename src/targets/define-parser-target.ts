@@ -7,9 +7,9 @@
 import type { Lowering } from '../ir/algo-ir.ts';
 import type { EmitOptions, Target } from './target.ts';
 import { type LexTok, type ParserIR, buildArenaIdPlan, buildLexIdPlan, hasCappedSeq, hasRebind, hasUnaryNud, recoveryTables } from '../ir/parser-ir.ts';
-import type { Grammar } from '../grammar/types.ts';
-import { EL_FRAME_FN, EL_OPENS_FN, EL_RAW_FN, EL_REACH_FN, EL_TAG_START_FN, TPL_SPAN, UNI_CLASS, UNI_IDENT, emitLexScan, hasUniPrefix, emitScanInline, scannedTokens, scannerName, templateLiterals, tokenLiterals } from '../ir/lex-family.ts';
-import { emitRelexFamily } from '../ir/relex-family.ts';
+import type { Grammar, TokenPattern } from '../grammar/types.ts';
+import { EL_FRAME_FN, EL_OPENS_FN, EL_RAW_FN, EL_REACH_FN, EL_TAG_START_FN, TPL_SPAN, tplSpanStrict, UNI_CLASS, UNI_IDENT, emitLexScan, hasUniPrefix, emitScanInline, scannedTokens, scannerName, templateLiterals, tokenLiterals } from '../ir/lex-family.ts';
+import { RELEX_EDITS, emitRelexFamily, relexEditsArgs } from '../ir/relex-family.ts';
 import { emitReuseFamily } from '../ir/reuse-family.ts';
 import { emitRecoveryFamily } from '../ir/recovery-family.ts';
 import { emitRebindFamily } from '../ir/rebind-family.ts';
@@ -21,6 +21,9 @@ import type { Shape } from '../shape/shape2-eval.ts';
 // The shared algorithm families, printed for the defining target.
 export interface SharedAlgorithms {
   relexFamily(ir: ParserIR): string;
+  // A call of the relex family's relexEdits over (text, toks, edits): the old tokens are passed only
+  // where the family's relex reads them (relex-family.ts relexEditsArgs).
+  relexEdits(ir: ParserIR, text: string, toks: string, edits: string): string;
   // The incremental reuse decisions over recorded top-level entries (empty without `ir.reuse`).
   reuseFamily(ir: ParserIR): string;
   // Total parsing's diagnostics and their one formatter (src/ir/recovery-family.ts), for the emit
@@ -45,9 +48,11 @@ export interface SharedAlgorithms {
   // The literals (of `lits`) a token's text may equal: none proves its literal id is 0.
   tokenLiterals(ir: ParserIR, token: LexTok, lits: readonly string[]): string[];
   templateLiterals(ir: ParserIR, lits: readonly string[]): { whole: string[]; head: string[]; middle: string[]; tail: string[] };
-  // The printed name of the template span scanner, `(s, p, strict) -> int`: the position of the
-  // delimiter that ends the span, -1 when unterminated, -2 - q for a malformed escape at q.
-  tplSpan(): string;
+  // The template span scanner of template `tpl`: `call(s, p, strict)` prints its call over s from
+  // p, `-> int`: the position of the delimiter that ends the span, -1 when unterminated, -2 - q for
+  // a malformed escape at q when strict. Only a template with an escape check takes `strict`
+  // (lex-family tplSpanStrict): `strict` says whether it does, and `call` passes it only then.
+  tplSpan(tpl: { escapeValid: TokenPattern | null }): { strict: boolean; call(s: string, p: string, strict: string): string };
   // The name the target prints the identifier escape check's Unicode identifier class under
   // (lex-family.ts), `(cp) -> int`.
   uniClass(): string;
@@ -91,6 +96,7 @@ export function defineParserTarget(def: TargetDefinition): PortableTarget {
       if (!lowering().relex) throw new Error(`defineParserTarget: target ${def.name} supplies no token-stream Lowering for the relex family`);
       return emitRelexFamily(ir, lowering());
     },
+    relexEdits: (ir, text, toks, edits) => lowering().expr.call(lowering().ident(RELEX_EDITS), relexEditsArgs(ir, text, toks, edits)),
     reuseFamily: (ir) => {
       if (!lowering().record) throw new Error(`defineParserTarget: target ${def.name} supplies no record Lowering for the reuse family`);
       return emitReuseFamily(ir, lowering());
@@ -113,7 +119,10 @@ export function defineParserTarget(def: TargetDefinition): PortableTarget {
     scanInline: (ir, token, at) => emitScanInline(ir, lowering(), token, at),
     tokenLiterals,
     templateLiterals,
-    tplSpan: () => lowering().ident(TPL_SPAN),
+    tplSpan: (tpl) => {
+      const strict = tplSpanStrict(tpl);
+      return { strict, call: (s, p, st) => lowering().expr.call(lowering().ident(TPL_SPAN), strict ? [s, p, st] : [s, p]) };
+    },
     uniClass: () => lowering().ident(UNI_CLASS),
     uniIdent: (ir) => (hasUniPrefix(ir) ? lowering().ident(UNI_IDENT) : null),
     shapePlan: planShape,

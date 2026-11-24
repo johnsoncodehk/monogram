@@ -879,7 +879,7 @@ ${emitHooks}
   const elRefresh = ir.elements ? 'refresh(); ' : '';
   // a closer can bring an element frame back on top: the round ends the plain rounds (bound)
   const elRefreshClose = ir.elements ? 'refresh(); if hot { bound = 0 }; ' : '';
-  const tplSpanGo = (from: string, strict: string): string => `\t\t\tq := ${shared.tplSpan()}(src, ${from}, ${strict})
+  const tplSpanGo = (from: string, strict: string): string => `\t\t\tq := ${shared.tplSpan(tpl!).call('src', from, strict)}
 \t\t\tif q < 0 { err = lexTplErr(q, n); goto lexFail }
 \t\t\tinterp, e := strings.HasPrefix(src[q:], ${J(tpl!.interpOpen)}), q + ${tlen(tpl!.open)}
 \t\t\tif interp { e = q + ${tlen(tpl!.interpOpen)} }
@@ -1625,7 +1625,7 @@ var pre_${r.name} = [${ops.size}]preOp{${pre}}`;
 // The relex of an edit (both Docs). A lexer error in the relex is the text's own (the relexed
 // stream equals a fresh lex: relex-family.ts): the text is rejected with no token stream, after
 // `clear` empties what the Doc keeps of its tree.
-const goEditBody = (clear: string, treeEq: boolean) => `\ttext, toks, relexed, lerr := relexEdits(oldText, oldToks, edits)
+const goEditBody = (relexCall: string, clear: string, treeEq: boolean) => `\ttext, toks, relexed, lerr := ${relexCall}
 \td.text = text
 \td.lexErr = nil
 \tif lerr != nil {
@@ -1647,7 +1647,7 @@ function docEditBlockGo(ir: ParserIR, shared: SharedAlgorithms): string {
   const hasHeadB = !!(shapeB && topReuse.kind === 'B' && topReuse.hasHead);
   const relexFamily = `\n// ---- relex family: generated from src/ir/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.relexFamily(ir)}\n`;
   const reuseFamily = `\n// ---- reuse family: generated from src/ir/reuse-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.reuseFamily(ir)}\n`;
-  const editBody = goEditBody('\t\td.root = -1', true);
+  const editBody = goEditBody(shared.relexEdits(ir, 'oldText', 'oldToks', 'edits'), '\t\td.root = -1', true);
   const parseFresh = `\td.root = p.parse(d.text, toksFromMeta(d.text, d.toks))`;
   const reuseFns = topReuse ? `
 func (p *engine) countLive(id int32) int {
@@ -2672,7 +2672,7 @@ func tryReuseW(b Builder, sh Shifter, oldRootHs []int32, oldEntries []EntryMeta,
   const lexClear = (topReuse
     ? ['d.root = -1', 'd.entries = nil', 'd.entryHs = nil']
     : ['d.root = -1']).map((l) => `\t\t${l}`).join('\n');
-  const editBody = goEditBody(lexClear, false);
+  const editBody = goEditBody(goTarget.shared.relexEdits(ir, 'oldText', 'oldToks', 'edits'), lexClear, false);
 
   const initAssign = topReuse
     ? `\t\td.root = h

@@ -27,7 +27,7 @@ import { goTarget } from '../src/targets/target-go.ts';
 import { rustTarget } from '../src/targets/target-rust.ts';
 import { goldenStream } from './golden-lexer.ts';
 import { scratchDir } from './scratch.ts';
-import { cachedGoBuild, cachedRustc } from './build-cache.ts';
+import { cachedGoBuild, cachedRustc, RUSTC_LINTS } from './build-cache.ts';
 import { QUICK } from './check-targets.ts';
 import { cachedEmit } from './emit-cache.ts';
 
@@ -351,7 +351,7 @@ fn main() {
 }
 `);
   try {
-    cachedRustc(['-A', 'warnings', '--crate-type', 'lib', '--crate-name', 'parser', 'parser.rs'], { cwd: rdir, stdio: 'pipe' });
+    cachedRustc([...RUSTC_LINTS, '--crate-type', 'lib', '--crate-name', 'parser', 'parser.rs'], { cwd: rdir, stdio: 'pipe' });
     cachedRustc(['--edition', '2021', 'main.rs', '--extern', 'parser=libparser.rlib', '-o', 'consumer'], { cwd: rdir, stdio: 'pipe' });
     const out = JSON.parse(execFileSync(join(rdir, 'consumer'), { encoding: 'utf8' }));
     check('rust: external crate links against parser::tokenize / parser::Doc', true);

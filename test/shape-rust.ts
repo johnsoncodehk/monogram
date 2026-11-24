@@ -297,6 +297,11 @@ function compileShape(name: string, source: string, main = harness, timeout = 30
   const rustFile = `${TMP}/${name}.rs`;
   const rustBin = `${TMP}/${name}`;
   writeFileSync(rustFile, source + main);
+  // The v1 shape addon (emitRust with a v1 ShapeSpec) is exempt from RUSTC_LINTS: it is retiring
+  // (replaced by the v2 typed target, which test/shape-typed-rust.ts compiles with them) and its
+  // module holds unused items no small fix removes (on calc alone: an unread ShapeParser field, an
+  // unconstructed ShapeTplSnap, unused helper methods, unread Pratt locals, unreachable code). The
+  // exemption ends when src/shape/v1/ and target-rust.ts's v1 addon (emitRustShapeAddon) are deleted.
   cachedRustc(['-A', 'warnings', rustFile, '-o', rustBin], {
     stdio: 'pipe',
     timeout,
