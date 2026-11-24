@@ -2087,6 +2087,237 @@ export function keywordNameGroups(grammar: CstGrammar): { words: string[]; follo
   return [...byKey.values()];
 }
 
+// ── Type positions ──
+
+/** One TYPE POSITION of the grammar: a reference to a `@type` rule outside the `@type` rules, as a
+ *  highlighter that sees only text reads it: what opens it, what stands before the opener, and
+ *  what may follow the type there. Computed on the arm graph. */
+export interface TypeContext {
+  /** The rule whose arm holds the reference, and the reference's arm-graph position. */
+  rule: string;
+  position: number;
+  /** The literal right before the reference (`:` `as` `=` `<` …). A reference that begins a
+   *  `sep` element is opened by the sep's predecessor (the `<` of `'<', sep(Type, ','), '>'`).
+   *  Null when no literal stands there. */
+  opener: string | null;
+  /** Per arm: the two items before the opener, nearest first, each its literal or `<Name>` (a
+   *  token or rule reference, `<sameLine>` …): `['<Ident>', …]` for `x: T`. */
+  left: string[][];
+  /** The literals that may follow the type there, through rule ends (where the rule holding the
+   *  reference may end, what follows its call sites), longest first. A `sep` element adds its
+   *  delimiter; a precedence-operator item adds every binary operator. */
+  closers: string[];
+  /** The token references and zero-width items that may follow it (`<Template>`, `<sameLine>`). */
+  closerTokens: string[];
+  /** The delimiter when the reference is a whole `sep` element (`implements A, B`, `<A, B>`):
+   *  after it another type of the list follows. */
+  delimiter: string | null;
+  /** The closers that are also CONTINUERS of the type (TypeBody.continuers): there the text alone
+   *  does not tell whether the type goes on. `type`: the parser reads the type on (a
+   *  left-recursive arm of the type rule takes the literal with no lookahead guard: its longest
+   *  reading); `closer`: the type goes on only inside a construct (a conditional type's `?` /
+   *  `:`) or behind a lookahead, so a reader of the text that does not track it ends the type. */
+  conflicts: { literal: string; reads: 'type' | 'closer' }[];
+}
+
+/** What is known of a type's own text: the literals that may follow a COMPLETE type at bracket
+ *  depth 0 (after a `@type` reference, or after an item an arm of a type rule may end with: never
+ *  the FIRST of a type, which follows only an operator), and of those the ones a left-recursive
+ *  arm reads with no lookahead guard after it. */
+export interface TypeBody { continuers: string[]; unguarded: string[] }
+
+const OPEN_CLOSE: Record<string, string> = { '(': ')', '[': ']', '{': '}', '<': '>' };
+const zeroWidthItem = (e: RuleExpr) => ['sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf'].includes(e.type);
+const longestFirstOf = (xs: Iterable<string>) => [...new Set(xs)].sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
+
+/** typeBody: see TypeBody. Null without `@type` rules. */
+export function typeBody(grammar: CstGrammar): TypeBody | null {
+  const types = highlightFacts(grammar).typeRuleNames;
+  if (!types.size) return null;
+  const g = armGraph(grammar);
+  const byName = new Map(grammar.rules.map(r => [r.name, r.body] as const));
+  const isTypeRef = (e: RuleExpr) => e.type === 'ref' && types.has(e.name);
+  const closeSet = new Set(Object.values(OPEN_CLOSE));
+  const cont = new Set<string>();
+  // the literal FIRST of the item at q, through zero-width items
+  const firstLits = (q: number, seen = new Set<number>()): void => {
+    if (seen.has(q)) return;
+    seen.add(q);
+    const x = g.node[q];
+    if (zeroWidthItem(x)) { for (const n of g.follow[q]) firstLits(n, seen); return; }
+    for (const l of firstLiterals(x, byName)) cont.add(l);
+  };
+  g.rootKind.forEach((kind, r) => {
+    if (kind !== 'rule' || !types.has(grammar.rules[g.ruleIndex[r]].name)) return;
+    const seen = new Set<string>();
+    const todo: [number, number][] = g.first[r].map(p => [p, 0]);
+    while (todo.length) {
+      const [p, d] = todo.pop()!;
+      const key = `${p},${d}`;
+      if (seen.has(key) || d > 8) continue;
+      seen.add(key);
+      const e = g.node[p];
+      const d2 = e.type === 'literal' && OPEN_CLOSE[e.value] ? d + 1 : e.type === 'literal' && closeSet.has(e.value) && d > 0 ? d - 1 : d;
+      if (d2 === 0 && (isTypeRef(e) || g.isLast[p])) for (const q of g.follow[p]) firstLits(q);
+      for (const q of g.follow[p]) todo.push([q, d2]);
+    }
+  });
+  // a left-recursive arm of a type rule (`[$, …]`): the literal after the self-reference (through
+  // zero-width items), unguarded unless a `not` lookahead after it rejects what begins an operand
+  // (a token: `T ?` before a type start is no postfix `T?`; `not('|')` after a `|` rejects none)
+  const { tokenNames } = highlightFacts(grammar);
+  const rejectsOperand = (e: RuleExpr | undefined): boolean => {
+    if (e?.type !== 'not') return false;
+    const toks = new Set<string>();
+    const walk = (x: RuleExpr, seen: Set<string>): void => {
+      if (x.type === 'ref' && tokenNames.has(x.name)) toks.add(x.name);
+      else if (x.type === 'ref' && byName.has(x.name) && !seen.has(x.name)) { seen.add(x.name); walk(byName.get(x.name)!, seen); }
+      else if (x.type === 'alt') x.items.forEach(i => walk(i, seen));
+      else if (x.type === 'seq' && x.items.length) walk(x.items[0], seen);
+      else if (x.type === 'group' || x.type === 'quantifier') walk(x.body, seen);
+    };
+    walk(e.body, new Set());
+    return toks.size > 0;
+  };
+  const unguarded = new Set<string>();
+  for (const name of types) {
+    const body = byName.get(name)!;
+    for (const arm of body.type === 'alt' ? body.items : [body]) {
+      const items = arm.type === 'seq' ? arm.items : [arm];
+      let i = 0;
+      while (i < items.length && zeroWidthItem(items[i])) i++;
+      if (!(items[i] && isTypeRef(items[i]))) continue;
+      i++;
+      while (i < items.length && zeroWidthItem(items[i])) i++;
+      const lit = items[i];
+      if (lit?.type === 'literal' && !rejectsOperand(items[i + 1])) unguarded.add(lit.value);
+    }
+  }
+  return { continuers: longestFirstOf(cont), unguarded: longestFirstOf([...unguarded].filter(l => cont.has(l))) };
+}
+
+/** The type positions of a grammar, and the keywords that open one (see TypeContext). */
+export interface TypeContexts {
+  sites: TypeContext[];
+  /** Each keyword opener (`as`, `satisfies`, `is`, `implements` …) and, where the word stands in
+   *  an arm without a type after it (`import * as ns from`, `{ a as b }`), the literals that may
+   *  follow the item after it there (`from`, `,`, `}`): a reader that cannot tell the two arms
+   *  apart ends the type at them. */
+  openerWords: { word: string; elsewhere: string[] }[];
+}
+
+/** typeContexts: see TypeContexts. Empty without `@type` rules. */
+export function typeContexts(grammar: CstGrammar): TypeContexts {
+  const body = highlightFacts(grammar).typeBody;
+  if (!body) return { sites: [], openerWords: [] };
+  const { tokenNames, typeRuleNames: types } = highlightFacts(grammar);
+  const g = armGraph(grammar);
+  const byName = new Map(grammar.rules.map(r => [r.name, r.body] as const));
+  const binary = grammar.precs.flatMap(l => l.operators.filter(o => o.position === 'infix').map(o => o.value));
+  const ruleOf = (r: number) => grammar.rules[g.ruleIndex[r]].name;
+  const preds: number[][] = g.node.map(() => []);
+  g.follow.forEach((ns, q) => { for (const n of ns) preds[n].push(q); });
+  const show = (e: RuleExpr) => e.type === 'literal' ? e.value : e.type === 'ref' ? `<${e.name}>` : `<${e.type}>`;
+  type F = { lits: Set<string>; toks: Set<string> };
+  const merge = (a: F, b: F) => { for (const l of b.lits) a.lits.add(l); for (const t of b.toks) a.toks.add(t); };
+  // where a root may end: what follows its call sites (a rule's references, a sep element's sep)
+  const followOfRoot = (r: number, seen: Set<number>): F => {
+    const out: F = { lits: new Set(), toks: new Set() };
+    if (seen.has(r)) return out;
+    seen.add(r);
+    const sep = g.rootKind[r] === 'sep' ? g.body[r] : null, name = ruleOf(r);
+    g.node.forEach((e, p) => {
+      if (sep ? !(e.type === 'sep' && e.element === sep) : !(e.type === 'ref' && e.name === name)) return;
+      if (e.type === 'sep') out.lits.add(e.delimiter);
+      merge(out, followOf(p, seen));
+    });
+    return out;
+  };
+  const followOf = (p: number, seen: Set<number>): F => {
+    const out: F = { lits: new Set(), toks: new Set() };
+    const visit = (q: number) => {
+      const x = g.node[q];
+      if (x.type === 'op') for (const o of binary) out.lits.add(o);
+      else if (x.type === 'literal') out.lits.add(x.value);
+      else if ((x.type === 'ref' && !tokenNames.has(x.name)) || x.type === 'sep') for (const l of firstLiterals(x, byName)) out.lits.add(l);
+      else out.toks.add(show(x));
+      if (zeroWidthItem(x)) for (const n of g.follow[q]) visit(n);
+    };
+    for (const q of g.follow[p]) visit(q);
+    if (g.isLast[p]) merge(out, followOfRoot(g.root[p], seen));
+    return out;
+  };
+  // the positions that may stand right before q, through zero-width items and root starts (a
+  // root's first item: what stands before its call sites; a sep element's: before the sep, or its
+  // delimiter)
+  const callSites: number[][] = g.body.map(() => []);
+  const rootOfRule = new Map<string, number>();
+  g.rootKind.forEach((k, r) => { if (k === 'rule') rootOfRule.set(ruleOf(r), r); });
+  const sepRoot = new Map(g.body.map((b, r) => [b, r] as const));
+  g.node.forEach((x, s) => {
+    if (x.type === 'sep' && sepRoot.has(x.element)) callSites[sepRoot.get(x.element)!].push(s);
+    else if (x.type === 'ref' && rootOfRule.has(x.name)) callSites[rootOfRule.get(x.name)!].push(s);
+  });
+  const beforeMemo = new Map<number, number[]>();
+  const before = (q0: number): number[] => {
+    const hit = beforeMemo.get(q0);
+    if (hit) return hit;
+    const out = new Set<number>(), seen = new Set<number>();
+    const walk = (q: number) => {
+      if (seen.has(q)) return;
+      seen.add(q);
+      if (g.first[g.root[q]].includes(q)) for (const s of callSites[g.root[q]]) walk(s);
+      for (const b of preds[q]) { if (zeroWidthItem(g.node[b])) walk(b); else out.add(b); }
+    };
+    walk(q0);
+    const res = [...out];
+    beforeMemo.set(q0, res);
+    return res;
+  };
+  const leftOf = (o: number): string[][] => {
+    const pairs = new Map<string, string[]>();
+    for (const l of before(o)) {
+      const seconds = before(l);
+      for (const m of seconds.length ? seconds : [-1]) {
+        const pair = [show(g.node[l]), ...m < 0 ? [] : [show(g.node[m])]];
+        pairs.set(pair.join('\0'), pair);
+      }
+    }
+    return [...pairs.values()];
+  };
+  const cont = new Set(body.continuers), unguarded = new Set(body.unguarded);
+  const out: TypeContext[] = [];
+  g.node.forEach((e, p) => {
+    if (!(e.type === 'ref' && types.has(e.name)) || types.has(ruleOf(g.root[p]))) return;
+    const openers = before(p).filter(q => g.node[q].type === 'literal');
+    const f = followOf(p, new Set());
+    const closers = longestFirstOf(f.lits);
+    const r = g.root[p];
+    const element = g.rootKind[r] === 'sep' && g.first[r].includes(p) && g.isLast[p];
+    const sep = element ? g.node[callSites[r][0]] as { delimiter: string } : null;
+    out.push({
+      rule: ruleOf(r), position: p,
+      opener: openers.length ? (g.node[openers[0]] as { value: string }).value : null,
+      left: openers.flatMap(leftOf),
+      closers, closerTokens: [...f.toks].sort(),
+      delimiter: sep?.delimiter ?? null,
+      conflicts: closers.filter(l => cont.has(l)).map(l => ({ literal: l, reads: unguarded.has(l) ? 'type' as const : 'closer' as const })),
+    });
+  });
+  // a keyword that opens a type position somewhere: what follows the item after it elsewhere
+  const opens = new Map<string, Set<string>>();
+  for (const c of out) if (c.opener && isKeywordLiteral(c.opener)) opens.set(c.opener, new Set());
+  g.node.forEach((e, p) => {
+    if (e.type !== 'literal' || !opens.has(e.value)) return;
+    for (const q of g.follow[p]) {
+      const x = g.node[q];
+      if (x.type === 'ref' && types.has(x.name)) continue;
+      for (const l of followOf(q, new Set()).lits) opens.get(e.value)!.add(l);
+    }
+  });
+  return { sites: out, openerWords: [...opens].map(([word, after]) => ({ word, elsewhere: longestFirstOf(after) })) };
+}
+
 // ── The facts object ──
 
 // One entry per fact: how it is computed from the grammar. A fact that needs another reads it
@@ -2157,6 +2388,8 @@ const FACTS = {
   alwaysBeforeString: (g: CstGrammar) => alwaysBeforeString(g),
   keywordFollowers: (g: CstGrammar) => keywordFollowers(g),
   keywordNameGroups: (g: CstGrammar) => keywordNameGroups(g),
+  typeBody: (g: CstGrammar) => typeBody(g),
+  typeContexts: (g: CstGrammar) => typeContexts(g),
 };
 
 export type HighlightFacts = { readonly [K in keyof typeof FACTS]: ReturnType<(typeof FACTS)[K]> };
