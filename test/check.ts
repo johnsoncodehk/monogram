@@ -93,6 +93,8 @@ const GATES: Gate[] = [
   { group: 'core', name: 'env-spec-regressions', args: ['test/env-spec-regressions.ts'] },
   { group: 'conformance', name: 'js', args: ['test/js-conformance.ts'] },
   { group: 'conformance', name: 'test262', args: ['test/test262.ts'], tier: 'ci' },
+  // the interpreter's verdict against tsc / acorn on 30k inputs generated from the grammars' tables (~15 s)
+  { group: 'conformance', name: 'verdict-scan', args: ['test/verdict-scan.ts'], tier: 'ci' },
   { group: 'conformance', name: 'tsx', args: ['test/tsx-conformance.ts'] },
   { group: 'conformance', name: 'jsx', args: ['test/jsx-conformance.ts'] },
   { group: 'conformance', name: 'html', args: ['test/html-conformance.ts'] },

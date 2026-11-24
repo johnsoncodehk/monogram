@@ -2,6 +2,7 @@
   "defaultToken": "invalid",
   "tokenPostfix": ".javascript",
   "ignoreCase": false,
+  "unicode": true,
   "brackets": [
     {
       "open": "(",
@@ -311,6 +312,46 @@
         "include": "@interpExprBody"
       }
     ],
+    "member": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "",
+        {
+          "token": "",
+          "switchTo": "@root"
+        }
+      ]
+    ],
+    "memberN": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*",
+        {
+          "token": "identifier",
+          "next": "@pop"
+        }
+      ],
+      [
+        "",
+        {
+          "token": "",
+          "next": "@pop"
+        }
+      ]
+    ],
     "exprBody": [
       [
         "[ \\t\\r\\n]+",
@@ -409,14 +450,140 @@
         }
       ],
       [
-        "#(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
+        "(?:#(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|#[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*",
         {
           "token": "variable",
           "switchTo": "@value"
         }
       ],
       [
-        "(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
+        "(?:super)(?![\\w$])(?!\\s*(?:\\(|\\.|\\[))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:instanceof|in|throw|of|case)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:new)(?![\\w$])(?!\\s*(?:\\(|\\.|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:target|meta|source|from|as)(?![\\w$])(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:class|try|finally)(?![\\w$])(?!\\s*(?:\\{))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:extends)(?![\\w$])(?!\\s*(?:\\(|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:async)(?![\\w$])(?!\\s*(?:\\(|\\*|\\[))(?=\\s*[!%&()*+,\\-/:;<=>?[\\]\\^{|}~])",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:import)(?![\\w$])(?!\\s*(?:\\(|\\*|\\.|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:defer)(?![\\w$])(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:function)(?![\\w$])(?!\\s*(?:\\(|\\*))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:get|set|accessor)(?![\\w$])(?!\\s*(?:\\[))(?=\\s*[!%&()*+,\\-/:;<=>?[\\]\\^{|}~])",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:let|const|var|using)(?![\\w$])(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:if|for|while|switch|constructor)(?![\\w$])(?!\\s*(?:\\())(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:else|do)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|;|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:catch|with)(?![\\w$])(?!\\s*(?:\\(|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:default)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|:|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:export)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|\\*|;|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:static)(?![\\w$])(?!\\s*(?:\\*|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?[\\]\\^{|}~])",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*",
         {
           "cases": {
             "true": {
@@ -631,54 +798,6 @@
               "token": "keyword",
               "switchTo": "@value"
             },
-            "Promise": {
-              "token": "type.identifier",
-              "switchTo": "@value"
-            },
-            "Array": {
-              "token": "type.identifier",
-              "switchTo": "@value"
-            },
-            "Map": {
-              "token": "type.identifier",
-              "switchTo": "@value"
-            },
-            "Set": {
-              "token": "type.identifier",
-              "switchTo": "@value"
-            },
-            "WeakMap": {
-              "token": "type.identifier",
-              "switchTo": "@value"
-            },
-            "WeakSet": {
-              "token": "type.identifier",
-              "switchTo": "@value"
-            },
-            "Error": {
-              "token": "type.identifier",
-              "switchTo": "@value"
-            },
-            "RegExp": {
-              "token": "type.identifier",
-              "switchTo": "@value"
-            },
-            "Date": {
-              "token": "type.identifier",
-              "switchTo": "@value"
-            },
-            "Object": {
-              "token": "type.identifier",
-              "switchTo": "@value"
-            },
-            "Function": {
-              "token": "type.identifier",
-              "switchTo": "@value"
-            },
-            "Symbol": {
-              "token": "type.identifier",
-              "switchTo": "@value"
-            },
             "console": {
               "token": "variable",
               "switchTo": "@value"
@@ -720,6 +839,20 @@
               "switchTo": "@value"
             }
           }
+        }
+      ],
+      [
+        "\\?\\.(?=\\s*(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*)",
+        {
+          "token": "delimiter",
+          "switchTo": "@member"
+        }
+      ],
+      [
+        "\\.(?=\\s*(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*)",
+        {
+          "token": "delimiter",
+          "switchTo": "@member"
         }
       ],
       [
@@ -833,11 +966,83 @@
         "annotation"
       ],
       [
-        "#(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
+        "(?:#(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|#[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*",
         "variable"
       ],
       [
-        "(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
+        "(?:super)(?![\\w$])(?!\\s*(?:\\(|\\.|\\[))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:instanceof|in|throw|of|case)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:new)(?![\\w$])(?!\\s*(?:\\(|\\.|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:target|meta|source|from|as)(?![\\w$])(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:class|try|finally)(?![\\w$])(?!\\s*(?:\\{))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:extends)(?![\\w$])(?!\\s*(?:\\(|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:async)(?![\\w$])(?!\\s*(?:\\(|\\*|\\[))(?=\\s*[!%&()*+,\\-/:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:import)(?![\\w$])(?!\\s*(?:\\(|\\*|\\.|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:defer)(?![\\w$])(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:function)(?![\\w$])(?!\\s*(?:\\(|\\*))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:get|set|accessor)(?![\\w$])(?!\\s*(?:\\[))(?=\\s*[!%&()*+,\\-/:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:let|const|var|using)(?![\\w$])(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:if|for|while|switch|constructor)(?![\\w$])(?!\\s*(?:\\())(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:else|do)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|;|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:catch|with)(?![\\w$])(?!\\s*(?:\\(|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:default)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|:|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:export)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|\\*|;|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:static)(?![\\w$])(?!\\s*(?:\\*|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*",
         {
           "cases": {
             "true": "keyword",
@@ -893,18 +1098,6 @@
             "void": "operator",
             "delete": "operator",
             "undefined": "keyword",
-            "Promise": "type.identifier",
-            "Array": "type.identifier",
-            "Map": "type.identifier",
-            "Set": "type.identifier",
-            "WeakMap": "type.identifier",
-            "WeakSet": "type.identifier",
-            "Error": "type.identifier",
-            "RegExp": "type.identifier",
-            "Date": "type.identifier",
-            "Object": "type.identifier",
-            "Function": "type.identifier",
-            "Symbol": "type.identifier",
             "console": "variable",
             "window": "variable",
             "document": "variable",
@@ -925,6 +1118,20 @@
       [
         "/=|/",
         "operator"
+      ],
+      [
+        "\\?\\.(?=\\s*(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*)",
+        {
+          "token": "delimiter",
+          "next": "@memberN"
+        }
+      ],
+      [
+        "\\.(?=\\s*(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*)",
+        {
+          "token": "delimiter",
+          "next": "@memberN"
+        }
       ],
       [
         "\\(|\\)",
