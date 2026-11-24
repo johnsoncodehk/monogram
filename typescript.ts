@@ -54,16 +54,17 @@ const TypeofRef = rule($ => [
 
 // ── Decorators ──
 
-// A decorator is `@ DecoratorMemberExpression`/`DecoratorCallExpression` (the `@name`
-// head already lexed by the Decorator token, dotted segments included). After the head,
-// these tail forms may follow and chain (`@x!.y`, `@x.y!`, `@x!()`): a call `(args)` /
+// A decorator is `@` and then tsc's parseDecoratorExpression: a name (any IdentifierName word: tsc
+// reads a primary expression) or a parenthesized expression, and then the tails of a
+// LeftHandSideExpression. The head is the Decorator token (`@a`: `@` and one IdentifierName), or `@`
+// and a name when trivia separates them (`@ a`); dotted segments are tokens of their own. These tail forms may follow and chain (`@x!.y`, `@x.y!`, `@x!()`): a call `(args)` /
 // typed call `<T>(args)`, a non-null `!`, and a member `.m`. ELEMENT access `[i]` is
 // deliberately EXCLUDED — TS's decorator grammar omits it precisely so a computed class
 // member after a decorator (`@dec ["m"]() {}`, `@dec [field] = 1`) is not swallowed as
 // `@dec[...]` (tsc rejects a real `@arr[0]` decorator). `many` so a whole chain is allowed.
 const DecoratorExpr = rule($ => [
   // Not `@new`: `new` is a reserved word, so it names no decorator; `@new …` is the NewExpression arm below.
-  [not('@new'), Decorator, many(alt(
+  [alt([not('@new'), Decorator], ['@', alt([notReservedExpr, Ident], ['(', Expr, many(',', Expr), ')'])]), many(alt(
     ['(', sep(Expr, ','), ')'],                          // call: (args)
     [...typeArgsInExpr(), '(', sep(Expr, ','), ')'],     // typed call: <T>(args)
     '!',                                                  // non-null assertion
@@ -74,10 +75,9 @@ const DecoratorExpr = rule($ => [
     ['?.', alt(Ident, PrivateField, ['(', sep(Expr, ','), ')'], bracketIndex(Expr))],   // `?.#y` is valid current ES (see Expr `?.` below)
     Template,                                             // tagged template: @x`…`
   ))],
-  // `@new x` — the decorator expression is a NewExpression. The lexer maximal-munches
-  // `@new` into ONE Decorator token (it cannot know `new` is reserved), so the arm is
-  // keyed on that fused token as a keyword-class literal (matched by exact text).
-  ['@new', NewTarget, opt('(', sep(Expr, ','), ')')],
+  // `@new x`: the decorator expression is a NewExpression. The lexer reads `@new` as ONE Decorator
+  // token (it cannot know `new` is reserved): the arm takes that token by its text, or `@` and `new`.
+  [alt('@new', ['@', 'new']), NewTarget, opt('(', sep(Expr, ','), ')')],
 ]);
 
 // ── Types ──
@@ -118,7 +118,7 @@ const TypeStart = rule($ => [
     '{', '[', '<', '|', '&', '*', '?', '!', '...',
   ),
   ['-', alt(Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_)],
-  ['(', alt(')', PrivateField, Decorator, 'const', 'default', 'export', 'in', $)],
+  ['(', alt(')', PrivateField, '@', Decorator, 'const', 'default', 'export', 'in', $)],
 ]);
 
 const Type = rule($ => {
@@ -130,7 +130,7 @@ const Type = rule($ => {
   // 1`, `new (@a x) => 1`, `(x, @a y) => 1`).
   // (tree-sitter renders no lookahead, so it keeps the one shape `<T>?(`.)
   const fnHead = (lead: unknown[]) => [...(lead.length ? [tsRelax(alt([TypeParams, '('], ['(', ...lead]), [opt(TypeParams), '('])] : [opt(TypeParams), '(']), sep(typeFnParam(), ','), ')', '=>', ReturnType];
-  const fnType = fnHead([not([many(paramMods.any), Decorator])]);
+  const fnType = fnHead([not([many(paramMods.any), alt('@', Decorator)])]);
   // tsc parses a type in levels (parseUnionTypeOrHigher, parseIntersectionTypeOrHigher,
   // parseTypeOperatorOrHigher): a union's constituents are intersections, an intersection's are
   // type operators, and a leading `|` / `&` belongs to the union / intersection it starts, read
@@ -280,8 +280,8 @@ const mappedTypeStart = alt([alt('+', '-'), 'readonly'], [opt('readonly'), '[', 
 // tsc's canFollowExportModifier and nextTokenCanFollowDefaultKeyword, read at the word after
 // `export` / `default`. (Each one-token alternation sits in its own double `not`, which the
 // emitted parsers test as one token set.)
-const exportAhead = [not(alt('as', '*')), not(not(alt(Decorator, memberStart)))];
-const defaultAhead = alt(not(not(alt('class', 'function', 'interface', Decorator))), ['abstract', sameLine, 'class'], ['async', sameLine, 'function']);
+const exportAhead = [not(alt('as', '*')), not(not(alt('@', Decorator, memberStart)))];
+const defaultAhead = alt(not(not(alt('class', 'function', 'interface', '@', Decorator))), ['abstract', sameLine, 'class'], ['async', sameLine, 'function']);
 // JavaScript's words (`memberWordRules`: static, get, set), extended with TypeScript's.
 const modifierExtra: Record<string, unknown[]> = {
   ...memberWordRules,
@@ -302,7 +302,7 @@ const followsDecorator: Record<string, unknown[]> = {
 // parameter (`f(public { a })`, `f(readonly ...a)`), though no member; `export` takes no `{`
 // (canFollowExportModifier), and `default` only its own followers.
 const paramStart = alt(memberStart, '{', '...');
-const paramExportAhead = [not(alt('as', '*', '{')), not(not(alt(Decorator, paramStart)))];
+const paramExportAhead = [not(alt('as', '*', '{')), not(not(alt('@', Decorator, paramStart)))];
 const paramFollows: Record<string, unknown[]> = {
   export: [not(['default', not(defaultAhead)]), not(['type', not(paramExportAhead)]), ...paramExportAhead],
   default: followsDecorator.default!,
@@ -399,12 +399,12 @@ const Prop = rule($ => {
   // generator, which expands every rule body into its sequences (gen-tm's expandAlts), runs out
   // of memory on it (2 GB heap, `npm run gen`).
   const runWord = alt(mods.any, asyncMod);
-  const decorators = [many1(DecoratorExpr), not([many(runWord), Decorator])];
+  const decorators = [many1(DecoratorExpr), not([many(runWord), alt('@', Decorator)])];
   const words = many(field('word', alt(mods.rest, decorators))), asyncWords = many(field('word', alt(mods.rest, asyncMod, decorators)));
   return [
     arm('spread', '...', field('argument', Expr)),
     arm('member', tsRelax(
-      [not(Decorator), words, field('form', alt(
+      [not(alt('@', Decorator)), words, field('form', alt(
         arm('static_', field('staticWord', mods.stat), words, field('afterStatic', alt(arm('async', field('asyncWord', asyncMod), asyncWords, withAsync), arm('plain', plain)))),
         arm('async', field('asyncWord', asyncMod), asyncWords, opt(field('staticWord', mods.stat), many(field('wordAfterStatic', alt(mods.rest, asyncMod, decorators)))), withAsync),
         arm('plain', plain),
@@ -481,7 +481,7 @@ const typeArgsInExpr = () => ['<', sep(Type, ','), not(alt('>>', '>=', '>>=', '>
 // literal does not count as starting an expression.
 const startsExprNotBinary = alt(
   [not(alt('as', 'satisfies', 'in', 'instanceof')), Ident],
-  Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, String_, PrivateField, Decorator,
+  Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, String_, PrivateField, '@', Decorator,
   '[', '{', '!', '~', '++', '--',
 );
 const instantiationEnd = not(alt(
@@ -1117,14 +1117,14 @@ const Decl = rule($ => [
   // `default` is a modifier word, so a declaration follows it (`export @d default x;` has no
   // parse), and the decorators are the second run, so no third one follows (`export @d default
   // @e class C {}` has no parse; `export default @e class C {}` is one run).
-  arm('exportDefault', field('exportKeyword', 'export'), field('defaultWord', alt(arm('decorated', many1(field('decorator', DecoratorExpr)), field('defaultKeyword', modifierWord(['default'], { secondRun: true })), not(Decorator)), arm('plain', field('defaultKeyword', 'default')))), field('declaration', alt(
+  arm('exportDefault', field('exportKeyword', 'export'), field('defaultWord', alt(arm('decorated', many1(field('decorator', DecoratorExpr)), field('defaultKeyword', modifierWord(['default'], { secondRun: true })), not(alt('@', Decorator))), arm('plain', field('defaultKeyword', 'default')))), field('declaration', alt(
     ...tsFnArms([opt(...bindingName)], fnBodyOrAsi()),  // function
     arm('namedClass', many(field('decorator', DecoratorExpr)), opt(field('abstractKeyword', 'abstract')), 'class', ...bindingName, opt(field('typeParameters', TypeParams)), heritageClauses, '{', many(field('member', ClassMember)), '}'),  // named class
     arm('anonymousClass', many(field('decorator', DecoratorExpr)), opt(field('abstractKeyword', 'abstract')), 'class', opt(field('typeParameters', TypeParams)), heritageClauses, '{', many(field('member', ClassMember)), '}'),          // anonymous class
     ['interface', ...bindingIdentifier, opt(TypeParams), heritageClauses, '{', many(TypeMember), '}'],   // export default interface (interface is not an Expr)
     // decorators after `default` prefix any declaration, as at a statement's start (tsc reads
     // `export default @d function f() {}` as one modifier list, then the keyword)
-    arm('decorated', not(not(Decorator)), field('decl', $)),
+    arm('decorated', not(not(alt('@', Decorator))), field('decl', $)),
     arm('expression', field('expr', Expr), asi()),   // catch-all: export default <expr>
   ))),
   arm('exportAll', field('exportKeyword', 'export'), opt(field('typeKeyword', 'type')), field('star', '*'), opt('as', field('exported', alt(Ident, String_))), 'from', ...moduleSpecifier, asi()),   // export (type)? * (as ns)? from "m" — alias is a ModuleExportName

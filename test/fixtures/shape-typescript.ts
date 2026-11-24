@@ -1031,9 +1031,11 @@ function estreeSwitchCase(ctx: TsAstCustomCtx): unknown {
 function estreeDecorator(ctx: TsAstCustomCtx): unknown {
   const arm = ctx.altPath[0];
   if (arm === undefined || arm < 0 || arm > 1) return unhandledCustom('estreeDecorator', ctx);
+  // `@` is its own leaf: the name follows it
   const chain = flatKids(ctx.kids);
+  if (chain[0] === '@') chain.shift();
   const head = chain[0];
-  let expr: unknown = typeof head === 'string' && head.startsWith('@') ? I(head.slice(1)) : head;
+  let expr: unknown = typeof head === 'string' ? I(head.startsWith('@') ? head.slice(1) : head) : head;
   for (let i = 1; i < chain.length; i++) {
     const step = chain[i];
     if (Array.isArray(step)) expr = callExpr(expr, step as unknown[]);
