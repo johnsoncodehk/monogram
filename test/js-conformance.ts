@@ -514,6 +514,55 @@ const p_tsDeparts: string[] = [];
 console.log('\n── statement positions ──');
 console.log(`  ${statementPositions.accept.length + statementPositions.reject.length} as the productions (JavaScript, acorn agreeing) and tsc (TypeScript; ${p_tsDeparts.length} where tsc's parser departs from the productions)${p_fail.length ? '' : ', all agree'}`);
 for (const c of p_fail) console.log('    - ' + c);
+// ── [Yield] / [Await] (15 YieldExpression, 15.8 AwaitExpression, 15.3 ArrowFunction) ──
+// `yield` is the YieldExpression operator only in a generator body, `await` the AwaitExpression
+// operator only in an async body (api.ts `when`); elsewhere each is an IdentifierReference (Script
+// goal). An arrow's ConciseBody is [~Yield] and, unless the arrow is async, [~Await]. The top level
+// reads `await` both ways (the Module goal's operator for the `module` rows, the Script goal's
+// identifier for the others) until the goals land (grammar-utils.ts CTX_PARAMS `syncFn`).
+// JavaScript: the productions, acorn agreeing. TypeScript: tsc's parser.
+const contexts: { accept: string[]; reject: string[]; module: string[] } = {
+  accept: [
+    'iter = yield();', 'var yield; yield\n* x;', 'function f() { yield(x); }', 'function* g() { () => yield; }',
+    'await = 1;', 'function f() { await(x); }', 'function* g() { yield 1; yield* a; yield\n1; }',
+    'async function f() { await a; async () => await b; }', 'async function* g() { async () => await a; }',
+    'await x;', 'const { default: d } = await import("m");',
+  ],
+  reject: [
+    'yield * x = 1', 'async function* g() { () => yield a; }', 'async function f() { () => await a; }',
+    'function* g() { () => yield a; }', 'function* g() { async () => yield a; }', 'function f() { await x; }',
+    'function* g() { function f() { yield a; } }', 'async function f() { function g() { await a; } }', '() => await a',
+  ],
+  module: ['await x;', 'const { default: d } = await import("m");', '() => await a'],
+};
+const y_fail: string[] = [];
+const y_tsDeparts: string[] = [];
+{
+  const acorn = await import('acorn');
+  const acornAccepts = (code: string) => { try { acorn.parse(code, { ecmaVersion: 'latest', sourceType: contexts.module.includes(code) ? 'module' : 'script' }); return true; } catch { return false; } };
+  const tsParse = createParser((await import('../typescript.ts')).default).parse;
+  const tsWe = (code: string) => { try { tsParse(code); return true; } catch (e) { if (isInputError(e)) return false; throw e; } };
+  const tsAccepts = (code: string) => !((ts.createSourceFile('t.ts', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS) as any).parseDiagnostics?.length);
+  // TypeScript's grammar is unchanged by `when` (step 1 gates javascript.ts only): tsc's parser
+  // reads `await` as the operator outside async functions (its error is the checker's) and
+  // refuses `yield * x = 1`, where typescript.ts reserves `await` in a nested function or arrow
+  // body and reads `yield` as the operator. Recorded divergences, owed to the TypeScript contexts
+  // step (DESIGN: step 4, `Type` resets and tsc's await / yield reading).
+  const tsRecorded = ['yield * x = 1', 'async function f() { () => await a; }', 'function f() { await x; }', 'async function f() { function g() { await a; } }', '() => await a'];
+  for (const [want, codes] of [[true, contexts.accept], [false, contexts.reject]] as const) {
+    for (const code of codes) {
+      if (acornAccepts(code) !== want) y_fail.push(`acorn ${want ? 'rejects' : 'accepts'} ${JSON.stringify(code)}: fix the case`);
+      if (weAccept(code) !== want) y_fail.push(`we ${want ? 'reject' : 'accept'} ${JSON.stringify(code)}`);
+      const tsWant = tsAccepts(code);
+      if (tsRecorded.includes(code)) { if (tsWe(code) === tsWant) y_fail.push(`${JSON.stringify(code)} (TypeScript) agrees with tsc now: remove it from tsRecorded`); }
+      else if (tsWe(code) !== tsWant) y_fail.push(`we ${tsWant ? 'reject' : 'accept'} ${JSON.stringify(code)} (TypeScript, tsc ${tsWant ? 'accepts' : 'rejects'})`);
+      if (tsWant !== want) y_tsDeparts.push(code);
+    }
+  }
+}
+console.log('\n── [Yield] / [Await] ──');
+console.log(`  ${contexts.accept.length + contexts.reject.length} as the productions (JavaScript, acorn agreeing) and tsc (TypeScript; ${y_tsDeparts.length} where tsc's parser departs from the productions)${y_fail.length ? '' : ', all agree'}`);
+for (const c of y_fail) console.log('    - ' + c);
 // Corpora 1, 2, the statement ends, the for heads, the class element words, the declaration
 // lists, the statement positions, the new targets, the class heritage and the identifier
 // references are hard gates.
@@ -529,5 +578,5 @@ for (const { code, reason } of expectedFail) {
 console.log('\n── expected-fail ──');
 console.log(`  ${expectedFail.length} accepted although the productions reject them (${new Set(expectedFail.map((e) => e.reason)).size} cause(s))${x_fail.length ? '' : ', as recorded'}`);
 for (const c of x_fail) console.log('    - ' + c);
-const gateFailed = v_fail.length + r_leak.length + s_fail.length + f_fail.length + c_fail.length + d_fail.length + n_fail.length + h_fail.length + i_fail.length + p_fail.length + x_fail.length > 0;
+const gateFailed = v_fail.length + r_leak.length + s_fail.length + f_fail.length + c_fail.length + d_fail.length + n_fail.length + h_fail.length + i_fail.length + p_fail.length + y_fail.length + x_fail.length > 0;
 if (gateFailed) process.exit(1);

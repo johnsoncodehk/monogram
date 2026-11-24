@@ -338,6 +338,18 @@ check('js: statements and declarations in their positions (ESTree fixture, again
   }
 });
 
+// [Yield] / [Await] (api.ts `when`): outside a generator `yield` is an IdentifierReference
+// (`iter = yield();` calls it), outside an async function `await` is one (Script goal), and an
+// arrow's body inherits neither (`() => yield` in a generator reads the identifier). ESTree
+// against acorn (Script goal). Not here: `await(x)` at the top level, which the one entry still
+// reads as the operator (the Module goal's reading; grammar-utils.ts CTX_PARAMS `syncFn`, owed to
+// the goals step).
+check('js: yield and await as operators only in their contexts (ESTree fixture, against acorn)', () => {
+  const src = 'iter = yield();\nawait = 1;\nfunction* g() { yield a; yield* b; () => yield; }\nasync function f() { await a; () => await; }\nfunction h() { yield(1); await(2); }\n';
+  const root = (t: NTree): NTree => ({ kind: t.kind, start: 0, end: 0, fields: Object.fromEntries(Object.entries(t.fields).filter(([k]) => k !== 'sourceType')) });
+  assert.deepEqual(compareTrees(root(normaliseEstree(parseEstree(src)!.tree)), root(run(javascript, estreeExprShape.spec, src) as NTree), 1).divergences, [], src);
+});
+
 // Binding patterns in both shapes, against their oracles: object and array patterns in variable
 // declarations, parameters, catch and for heads; shorthand with a default, identifier / string /
 // number / computed keys, nested patterns, rest; array holes, with the final hole dropped by
