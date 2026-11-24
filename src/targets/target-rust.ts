@@ -151,6 +151,11 @@ const rsNeed = (name: string): boolean => rsLibUses.has(name);
 // The Pratt frame's state (capped, form, tail, the suppress sets): read by Pratt rules, target
 // contexts and the recovery engine; a grammar with none of them has no such fields.
 const rsPrattInit = (ir: ParserIR): string => (rsNeed('pratt_state') ? ` capped: false, form: 0,${targetInitRs(ir)} tail: false, suppress_next: 0, suppress_cur: 0,` : '');
+// A finish's (handle, offset, present) as Spanned: bound by name where a Pratt rule reads the span
+// (the offset then always is), else by position, so that a module's recovery form (which reads
+// the offset) only adds tokens to it (test/portable-lists.ts, the default prefix).
+const rsFinBind = (): string => (rsNeed('span_tok') ? 'let (h, off, present)' : 'let r');
+const rsFinSpanned = (): string => (rsNeed('span_tok') ? rsSpanned('h', 'off', 'tok_start as u32', 'present') : rsSpanned('r.0', 'r.1', 'tok_start as u32', 'r.2'));
 const rsLt = (): string => (rsNeed('head_leaf_text') ? "'a, " : '');
 const rsParserInit = (src: string): string => `${rsNeed('ctx') ? ' ctx: 0,' : ''}${rsNeed('head_leaf_text') ? ` src: ${src},` : ''}`;
 const rsSpanned = (h: string, off: string, tok: string, present: string): string =>
@@ -2712,15 +2717,15 @@ ${rsNeed('ahead') ? `    #[inline(always)]
     /// finish of engine arm A (an accept site's const argument: Builder::finish_arm).
     #[inline(always)]
     fn fin<const A: u16>(&mut self, sb: usize, fallback_off: usize, tok_start: usize) -> Spanned<B::H> {
-        let (h, ${rsNeed('span_off') ? 'off' : '_'}, present) = self.b.finish_arm::<{ A }>(&mut self.scratch, sb, fallback_off as u32, tok_start as u32, self.pos as u32, &self.toks);
-        ${rsSpanned('h', 'off', 'tok_start as u32', 'present')}
+        ${rsFinBind()} = self.b.finish_arm::<{ A }>(&mut self.scratch, sb, fallback_off as u32, tok_start as u32, self.pos as u32, &self.toks);
+        ${rsFinSpanned()}
     }` : ''}
     #[inline(always)]
     fn finish(&mut self, rule_id: u16, sb: usize, fallback_off: usize, tok_start: usize) -> Spanned<B::H> {
-        let (h, ${rsNeed('span_off') ? 'off' : '_'}, present) = self.b.finish(
+        ${rsFinBind()} = self.b.finish(
             &mut self.scratch, sb, rule_id, fallback_off as u32, tok_start as u32, self.pos as u32, &self.toks,
         );
-        ${rsSpanned('h', 'off', 'tok_start as u32', 'present')}
+        ${rsFinSpanned()}
     }
 ${rsNeed('head_leaf_text') ? `    #[inline(always)]
     fn head_leaf_text(&self, f: &Spanned<B::H>) -> &'a str {
