@@ -11,7 +11,7 @@
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
-import { hasRebind, nudLowForm, hasUnaryNud, demandTwinCond, demandLids, DEFER_SHIFT, type DemandIR, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, nudLowForm, hasUnaryNud, demandTwinCond, demandLids, DEFER_SHIFT, type DemandIR, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
@@ -40,7 +40,7 @@ const guardCond = (g: Guard, t: string, w: '' | 'W', keyed: boolean): string[] =
   const parts = keyed || g.first === null ? [] : [`inTokenSet(${g.first.id}, ${t})`];
   if (g.second !== null) parts.push(`p.secondIn(${g.second.id})`);
   for (const l of g.lead) {   // the guard's lead tests (emit-portable.ts LeadTest) on t
-    const inS = l.ctx ? `(inTokenSet(${l.set}, ${t}) || (p.ctx != 0 && inCtxWords(p.ctx, ${t})))` : `inTokenSet(${l.set}, ${t})`;
+    const inS = l.ctx ? `(inTokenSet(${l.set}, ${t}) || (p.ctx&${CTX_WORD_BITS} != 0 && inCtxWords(p.ctx, ${t})))` : `inTokenSet(${l.set}, ${t})`;
     parts.push(l.is ? inS : `!${inS}`);
   }
   // Guard.pairs. Spelled in place, not as a pairIn helper as the other targets do: such a helper is
@@ -234,6 +234,7 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: Aren
     ahead: (set, is) => `p.${e.ahead}(${set}, ${is})`,
     aheadCtx: (set, is) => (is ? `(p.${e.ahead}(${set}, true) || p.ctxWord())` : `(p.${e.ahead}(${set}, false) && !p.ctxWord())`),
     sameLine: () => `func() bool { t := p.${e.peek}(); return t != nil && !t.Nl }()`,
+    when: (mask, val) => `(p.ctx&${mask} == ${val})`,
     inPlace: (_kind, stmts) => `func() bool { ${stmts} }()`,
     ret: (cond) => `return ${cond}`,
     // A `ctx` step's body is a boolean expression: no return path leaves between the two assignments.
@@ -1188,7 +1189,7 @@ func (p *cursor) lookEnd() int { if p.peekEnd > p.maxLook { return p.peekEnd }; 
 func (p *cursor) lookReset() { p.maxLook = 0; p.peekEnd = 0 }
 func (p *cursor) ahead(k int, is bool) bool { t := p.peek(); return (t != nil && inTokenSet(k, t)) == is }
 // ctxWord: whether the next token is a word the context in force reserves; outside every context it reads nothing.
-func (p *cursor) ctxWord() bool { if p.ctx == 0 { return false }; t := p.peek(); return t != nil && inCtxWords(p.ctx, t) }
+func (p *cursor) ctxWord() bool { if p.ctx&${CTX_WORD_BITS} == 0 { return false }; t := p.peek(); return t != nil && inCtxWords(p.ctx, t) }
 // secondIn: whether the token after the current one is in tokenSets[k] (a candidate's SECOND guard).
 func (p *cursor) secondIn(k int) bool { i := p.pos + 1; if i >= p.maxLook { p.maxLook = i + 1 }; return i < len(p.toks) && inTokenSet(k, &p.toks[i]) }
 func (p *cursor) offAt(i int) int { if i < len(p.toks) { return int(p.toks[i].Off) }; return 0 }
@@ -1490,7 +1491,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     // tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; n := p.finish(${rid}, sb, int(t.Off), save); p.form = ${T.fm(i)}; p.tail = false; return n }`, fail, true),
     commitSeq: (i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, finGo(rid), (n) => (T.fm(i) === '0' ? `return p.nudOk(${n}, ${tail}, ${capGo(capped)})` : `return p.nudOkF(${n}, ${T.fm(i)}, ${tail}, ${capGo(capped)})`)), fail),
-    commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok {
+    commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok${preGateGo(r, ids)} {
 \t\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \t\tp.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
 \t\toperand := p.bp_${r.name}(pbp.rbp)
@@ -1512,7 +1513,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     nudSeq: (i, cond, tail, capped) => candGo(d, i, cond, `best = p.finish(${rid}, sb, p.offAt(save), save); ${won(i, T.fm(i), tail, capGo(capped))}`, lost),
     // An operand that parses but is not the target the operator requires fails the whole Pratt
     // call, whatever another arm matched.
-    nudPrefix: (i) => `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok {
+    nudPrefix: (i) => `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok${preGateGo(r, ids)} {
 \t\tp.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
 \t\toperand := p.bp_${r.name}(pbp.rbp)
 \t\tif operand >= 0 && pbp.tgt && ${T.lf('p.form')} != 0 { p.back(save); ${lost}; p.capped = false; return -1 }
@@ -1599,6 +1600,11 @@ ${B.nudClose}
 /** A Pratt rule's operator tables (emit-portable prattOpTables) as arrays indexed by the token's
  *  lid, one entry per literal id (`ok` marks an operator): a bounds-checked load, where a
  *  map[uint16] would hash on every LED iteration and every prefix NUD. */
+/** The test that keeps a gated prefix operator (`await`, PrattRule.prefix's `when`) one only where
+ *  the context word passes, after the table found t to be a prefix operator ('' when none is gated). */
+function preGateGo(r: PrattRule, ids: LexIdPlan): string {
+  return prattOpTables(r, ids).pre.filter((p) => p.when !== undefined).map((p) => ` && !(t.Lid == ${p.lid} && p.ctx&${p.when!.mask} != ${p.when!.val})`).join('');
+}
 function goPrattOpTables(r: PrattRule, ids: LexIdPlan, D?: DemandIR): string {
   const ops = prattOpTables(r, ids);
   const pre = ops.pre.map((p) => `${p.lid}: {${p.rbp}, ${p.tgt}, ${p.form}, true}`).join(', ');
@@ -2179,7 +2185,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
     ...B,
     commitLeaf: (i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; n := p.finishW(${rid}, sb, int(t.Off), save); p.form = ${T.fm(i)}; p.tail = false; return n, true }`, fail, true),
     commitSeq: (i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? undoGoWc(recv) : null, nullable, (sb, save) => `p.finishW(${rid}, ${sb}, p.offAt(${save}), ${save})`, (n) => (T.fm(i) === '0' ? `return p.nudOk(${n}, ${tail}, ${capGo(capped)})` : `return p.nudOkF(${n}, ${T.fm(i)}, ${tail}, ${capGo(capped)})`)), fail),
-    commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok {
+    commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok${preGateGo(r, ids)} {
 \t\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
 \t\toperand, ook := p.bpW_${r.name}(pbp.rbp)
@@ -2199,7 +2205,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
 \t\tp.back(save)
 \t}`,
     nudSeq: (i, cond, tail, capped) => candGo(d, i, cond, `best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, T.fm(i), tail, capGo(capped))}`, lost),
-    nudPrefix: (i) => `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok {
+    nudPrefix: (i) => `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok${preGateGo(r, ids)} {
 \t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
 \t\toperand, ook := p.bpW_${r.name}(pbp.rbp)
 \t\tif ook && pbp.tgt && ${T.lf('p.form')} != 0 { p.back(save); ${lost}; p.capped = false; return spanned{}, false }
@@ -3443,6 +3449,7 @@ func (rv *recov) enComp(l int) bool { return rv.p.matchComp(uint16(l)) }
 func (rv *recov) enTok(k int) bool { return rv.p.tokW(uint16(k)) && rv.p.takeW(uint16(k)) }
 func (rv *recov) enAhead(set int, is bool) bool { return rv.p.ahead(set, is) }
 func (rv *recov) enCtxWord() bool { return rv.p.ctxWord() }
+func (rv *recov) enWhen(mask, val int) bool { return int(rv.p.ctx)&mask == val }
 func (rv *recov) enSecondIn(set int) bool { return rv.p.secondIn(set) }
 func (rv *recov) enLook(id int) bool {
 	${disp('id', 'ntLook', 'func(*parserW) bool', nc.look, (i) => `look${i}`, (c) => c(''))}

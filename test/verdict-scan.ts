@@ -233,7 +233,10 @@ const PY_CLASSES: Class[] = [
   { id: 'py-ann-paren-trailer', disposition: 'grammar', note: 'python.gram annotates `(\'(\' single_target \')\' | single_subscript_attribute_target) \':\'`: a PEG group commits to its first alternative, so `(a).x: int` (a parenthesized single target, then a trailer) has no parse; python.ts\'s single context admits it (it reads the trailer\'s node, not what the trailer applies to)', test: (r) => r.we && !r.tsc && /\|annTo$/.test(r.recipe) && /^\([^,]*\)[.[]/.test(r.src) },
 ];
 const CLASSES: Class[] = [
-  { id: 'arrow-body-ctx', disposition: 'grammar', note: 'an arrow ExpressionBody is [~Yield], [~Await]', test: (r) => /=> (yield|await)/.test(r.src) },
+  // JavaScript agrees with the productions since `when` gated the operators (acorn agreeing); tsc's
+  // JS mode reads them there (its error is the checker's). TypeScript: owed to its contexts step.
+  { id: 'tsc-ctx-operators', disposition: 'oracle-tolerance', note: 'tsc\'s parser reads `yield` / `await` as operators in an arrow body (the checker reports them); the productions and acorn reject', test: (r) => r.grammar === 'javascript' && !r.we && r.tsc && r.acorn === false && /=> (yield|await)/.test(r.src) },
+  { id: 'arrow-body-ctx', disposition: 'grammar', note: 'an arrow ExpressionBody is [~Yield], [~Await] (TypeScript: owed to its contexts step)', test: (r) => /=> (yield|await)/.test(r.src) },
   { id: 'coalesce-mix', disposition: 'grammar', note: 'CoalesceExpression: `??` beside `||` / `&&` needs parentheses', test: (r) => /\|\| b \?\?|\?\? a \|\||&& b \?\?|\?\? a &&/.test(r.src) },
   { id: 'number-then-ident', disposition: 'lexer', note: 'a NumericLiteral directly followed by an IdentifierStart (`1.x`)', test: (r) => /(^|[ (=])1\.x/.test(r.src) },
   { id: 'ts-type-args-commit', disposition: 'grammar', note: 'after a type reference tsc commits to `<` type arguments', test: (r) => /(as|satisfies) T <|f<T> \/=/.test(r.src) },

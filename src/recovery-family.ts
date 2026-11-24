@@ -18,7 +18,7 @@
 import { type Expr, type Fn, type Lowering, type RecordDecl, type Stmt, printFns } from './algo-ir.ts';
 import { RI_RB_SCAN, RB_EXTERNS_INTERP, REBIND_EXTERNS, rbBracketFn } from './rebind-family.ts';
 import { type ArenaIdPlan, type LexIdPlan, type ParserIR, ruleIdOf, tplHoleRules } from './emit-portable.ts';
-import { REC_RD, REC_N_TOK, REC_N_BRACKET, REC_N_SEQ, REC_N_CAPPED, REC_N_PREFIX, REC_S_LIT, REC_S_COMP, REC_S_TOK, REC_S_TPLTOK, REC_S_RULE, REC_S_RULEBP, REC_S_STAR, REC_S_OPT, REC_S_SEP, REC_S_ALTLIT, REC_S_ALT, REC_S_LOOK, REC_S_AHEAD, REC_S_AHEADCTX, REC_S_SEQ, REC_S_SAMELINE, REC_S_SUPPRESS, REC_S_CTX, REC_S_SHARED } from './emit-portable.ts';
+import { REC_RD, REC_N_TOK, REC_N_BRACKET, REC_N_SEQ, REC_N_CAPPED, REC_N_PREFIX, REC_S_LIT, REC_S_COMP, REC_S_TOK, REC_S_TPLTOK, REC_S_RULE, REC_S_RULEBP, REC_S_STAR, REC_S_OPT, REC_S_SEP, REC_S_ALTLIT, REC_S_ALT, REC_S_LOOK, REC_S_AHEAD, REC_S_AHEADCTX, REC_S_SEQ, REC_S_SAMELINE, REC_S_SUPPRESS, REC_S_CTX, REC_S_SHARED, REC_S_WHEN } from './emit-portable.ts';
 
 export const DIAG: RecordDecl = {
   name: 'Diag',
@@ -133,7 +133,7 @@ export const ENGINE_EXTERNS: Fn[] = [
   ext('enPeekKid', [], ['int']), ext('enPeekLid', [], ['int']), ext('enPeekNl', [], ['bool']),
   // The building matchers: a literal, a composed '>' literal, a token kind.
   ext('enLit', [['l', 'int']], ['bool']), ext('enComp', [['l', 'int']], ['bool']), ext('enTok', [['k', 'int']], ['bool']),
-  ext('enAhead', [['set', 'int'], ['is', 'bool']], ['bool']), ext('enCtxWord', [], ['bool']), ext('enSecondIn', [['set', 'int']], ['bool']),
+  ext('enAhead', [['set', 'int'], ['is', 'bool']], ['bool']), ext('enCtxWord', [], ['bool']), ext('enWhen', [['mask', 'int'], ['val', 'int']], ['bool']), ext('enSecondIn', [['set', 'int']], ['bool']),
   // The native functions: a lookahead body, a rule (its node appended), a Pratt rule at a binding
   // power (its node appended), a shared step, an interpolated template whose holes rule `hole` parses.
   ext('enLook', [['id', 'int']], ['bool']), ext('enRule', [['r', 'int']], ['bool']), ext('enBp', [['r', 'int'], ['bp', 'int']], ['bool']),
@@ -516,6 +516,8 @@ const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
   ]),
   op(REC_S_SEQ, [ret(call('riList', S1R, v('d')))]),
   op(REC_S_SAMELINE, [ret(and(ge(call('enPeekKid'), n(0)), not(call('enPeekNl'))))]),
+  // A `when` test: the context word in force passes (word & mask) === val (the target's enWhen).
+  op(REC_S_WHEN, [ret(call('enWhen', S1, S2))]),
   op(REC_S_SUPPRESS, [
     run('enSetSt', n(ST_SUP_NEXT), S1),
     let_('ok', call('riList', S2R, v('d')), 'bool'),
@@ -604,8 +606,10 @@ const riNudOf = (cappedSeq: boolean, unaryNud: boolean): Fn => method('riNud', [
       inc('x', n(3)),
     ], [
       if_(eq(v('tag'), n(REC_N_PREFIX)), [
-        let_('p', call('riOp', sec(P_PRE), n(4), v('lid'))),
-        if_(ge(v('p'), n(0)), [
+        // A prefix row: lid, rbp, target, form, and the gate (mask, val: a gated operator is one only
+        // where the word passes; mask 0 for every other operator).
+        let_('p', call('riOp', sec(P_PRE), n(6), v('lid'))),
+        if_(and(ge(v('p'), n(0)), call('enWhen', at(v('p'), 4), at(v('p'), 5))), [
           let_('c', call('enSh')),
           let_('k', call('enMark')),
           run('enLeafOp'),

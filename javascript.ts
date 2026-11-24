@@ -29,7 +29,7 @@ import {
   left, right, none, noUnaryLhs, lhsTarget, prefixTarget, postfixTarget,
   op, prefix, postfix, sameLine,
   sep, opt, many, many1, alt, exclude, not, reservableNot, capExpr, tsRelax, arm, field,
-  awaitCtx, yieldCtx, asyncGenCtx, resetCtx,
+  awaitCtx, yieldCtx, asyncGenCtx, resetCtx, when,
   altPattern, optPattern, seq, oneOf, noneOf, range, anyChar, star, plus, repeat, notFollowedBy, start,
 } from './src/api.ts';
 
@@ -377,7 +377,10 @@ export const jsLedPrecs = [
   { connector: 'instanceof', sameAs: '<', chainRhs: true },
 ];
 
-export const ecmaPrec = [
+// The ladder, with the `await` operator as each grammar reads it: JavaScript's is gated (jsPrec),
+// TypeScript's is tsc's parser's, an operator everywhere (ecmaPrec; the checker reports it outside
+// an async function).
+const ecmaPrecWith = (awaitOp: string | ReturnType<typeof when>) => [
   // Assignment operators require a LeftHandSideExpression target (ECMAScript
   // AssignmentTargetType): `-x = 1`, `++x = 1`, `x++ = 1` are syntax errors; `x = 1`,
   // `x.y = 1`, `(x++) = 1` (a parenthesized cover) are fine. The logical assignments are three more
@@ -396,7 +399,7 @@ export const ecmaPrec = [
   left('+', '-'),
   left('*', '/', '%'),
   right(noUnaryLhs('**')),   // `-x ** y` is a syntax error: a unary-prefix expr can't be a `**` LHS
-  right(prefix('!', '~', '+', '-', 'typeof', 'void', 'delete', 'await')),
+  right(prefix('!', '~', '+', '-', 'typeof', 'void', 'delete', awaitOp)),
   // prefix `++`/`--` (update prefixes): the spec operand is a UnaryExpression
   // (`UpdateExpression : ++ UnaryExpression`) whose AssignmentTargetType must be simple — an
   // early error, like `a + b = c`, enforced by the same target check: `++-x`, `++x++`,
@@ -409,6 +412,11 @@ export const ecmaPrec = [
   // by the grammar's own slot types: prefix operand = UnaryExpression, postfix operand = LHS.)
   left(postfixTarget('++', '--')),
 ];
+export const ecmaPrec = ecmaPrecWith('await');
+// `await` is the operator (AwaitExpression) only where [+Await] holds; elsewhere it is an
+// IdentifierReference (`await(x)` in a script is a call). `~syncFn` and not `+await`: the top
+// level reads both goals until the goals land (grammar-utils.ts CTX_PARAMS, a transition).
+const jsPrec = ecmaPrecWith(when('~syncFn', 'await'));
 
 // ── Decorators ──
 // Stage-3 / JS-real decorators: `@dec` and `@dec(args)`. The TS-only
@@ -594,7 +602,9 @@ const Expr = rule($ => [
   // the spec's [no LineTerminator here] between async and the binding identifier).
   arm('asyncArrowIdentifier', capExpr('?', field('asyncKeyword', 'async'), sameLine, awaitCtx(notReservedJsExpr, field('parameter', Ident)), field('arrow', '=>'), awaitCtx(field('body', conciseBody(Block, $))))),
   arm('arrowIdentifier', capExpr('?', notReservedJsExpr, field('parameter', Ident), field('arrow', '=>'), resetCtx(field('body', conciseBody(Block, $))))),
-  arm('yield_', capExpr('?', 'yield', alt(arm('star', sameLine, '*', $), arm('expr', opt(sameLine, $))))),   // yield e | yield* e (delegate) | yield
+  // YieldExpression is an AssignmentExpression[+Yield] only: elsewhere `yield` is an identifier
+  // (`iter = yield();` calls it; `yield * x = 1` multiplies, then fails as an assignment target).
+  arm('yield_', capExpr('?', when('+yield', 'yield', alt(arm('star', sameLine, '*', $), arm('expr', opt(sameLine, $)))))),   // yield e | yield* e (delegate) | yield
   ['(', field('first', $), many(field('comma', ','), field('rest', $)), ')'],
   // ImportCall: one or two AssignmentExpressions, no spread (the `...` arm is Arguments'), and ImportMeta.
   // A phase import call (import defer and source phase imports, Stage 3: `ImportCall : import .
@@ -1033,7 +1043,7 @@ export default defineGrammar({
     Decorator, PrivateField,
   },
 
-  prec: ecmaPrec,
+  prec: jsPrec,
   ledPrec: jsLedPrecs,
 
   // Every keyword the grammar lets be a name is also a name in the tree-sitter grammar (`get` as a

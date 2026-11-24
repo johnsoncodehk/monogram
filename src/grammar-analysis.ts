@@ -13,7 +13,7 @@
 // reserved-aware "qualKeys" variant) and every parse CONTROL loop. The interpreter keeps its
 // loops independent so it remains a genuine oracle for the emitter's loops — an oracle sharing
 // the suspect machinery could not catch bugs in it.
-import { ZERO_WIDTH_MARKERS, isZeroWidthMarker } from './grammar-utils.ts';
+import { ZERO_WIDTH_MARKERS, isZeroWidthMarker, whenTest } from './grammar-utils.ts';
 import type { CstGrammar, RuleExpr, RuleDecl, ElementRegion } from './types.ts';
 import { tokenPatternFirstCharSet } from './token-pattern.ts';
 
@@ -27,6 +27,8 @@ export interface OpInfo {
   // A capped prefix operator (PrecOperator.capped): it begins an operand only while minBp < capBp
   // (its own level's binding power).
   capBp?: number;
+  // A gated prefix operator (PrecOperator.when): it exists only where `(word & mask) === val`.
+  when?: { mask: number; val: number };
 }
 
 /** A rule's SECOND-token dispatch summary: the keys admissible as the second token (null =
@@ -159,7 +161,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
     const bp = (i + 1) * 2;
     for (const op of level.operators) {
       if (op.position === 'prefix') {
-        prefixOps.set(op.value, { lbp: 0, rbp: level.assoc === 'right' ? bp - 1 : bp, assoc: level.assoc, position: 'prefix', requireTarget: op.requireTarget, ...(op.capped ? { capBp: bp } : {}) });
+        prefixOps.set(op.value, { lbp: 0, rbp: level.assoc === 'right' ? bp - 1 : bp, assoc: level.assoc, position: 'prefix', requireTarget: op.requireTarget, ...(op.capped ? { capBp: bp } : {}), ...(op.when !== undefined ? { when: whenTest(op.when) } : {}) });
         if (op.requireTarget) requireTargetOps.add(op.value);
       } else if (op.position === 'postfix') {
         postfixOpValues.add(op.value);

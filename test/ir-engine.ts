@@ -122,7 +122,9 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
     return false;
   }
   const ahead = (k: number, is: boolean): boolean => { const t = peek(); return t !== null ? inSet(k, t) === is : !is; };
-  const ctxWordT = (t: Tok) => ctx !== 0 && ctxWordLids.some((w) => (ctx & w.bit) !== 0 && t.lid === w.lid);
+  // A prefix operator at lid; a gated one (`await`: its `when`) only where the context word passes.
+  const preAt = (r: PrattRule, lid: number) => { const p = pre.get(r)!.get(lid); return p !== undefined && p.when !== undefined && (ctx & p.when.mask) !== p.when.val ? undefined : p; };
+  const ctxWordT = (t: Tok) => (ctx & 3) !== 0 && ctxWordLids.some((w) => (ctx & w.bit) !== 0 && t.lid === w.lid);
   const ctxWord = () => { const t = peek(); return t !== null && ctxWordT(t); };
   const callRule = (x: Sp | null): boolean => { if (x === null) return false; scratch.push(x.h); return true; };
 
@@ -201,6 +203,7 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
       case 'aheadCtx': return s.is ? (ahead(s.set, true) || ctxWord()) : (ahead(s.set, false) && !ctxWord());
       case 'seq': return all(s.steps, r);
       case 'sameLine': { const t = peek(); return t !== null && !t.nl; }
+      case 'when': return (ctx & s.mask) === s.val;
       case 'suppress': { suppressNext = s.set; const ok = all(s.steps, r); suppressNext = 0; return ok; }
       case 'ctx': { const c0 = ctx; ctx = s.ctx; const ok = all(s.steps, r); ctx = c0; return ok; }
     }
@@ -664,7 +667,7 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
           case 'bracket': return all(r.nudBrackets[a.index]!.steps, false);
           case 'seq': return all(r.nudSeqs[a.index]!, false);
           case 'capped': return all(r.nudCapped[a.index]!.steps, false);
-          case 'prefix': { const p = pre.get(r)!.get(t.lid); if (p === undefined) return false; pushLeaf(TT_OPERATOR, pos); pos++; return prattBp(r, p.rbp) !== null; }
+          case 'prefix': { const p = preAt(r, t.lid); if (p === undefined) return false; pushLeaf(TT_OPERATOR, pos); pos++; return prattBp(r, p.rbp) !== null; }
         }
       };
       const test = (x: CommitTest & { all?: true }): boolean => {
@@ -674,7 +677,7 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
           case 'bracket': return !(x.first || x.all) || t.lid === lidOf(r.nudBrackets[a.index]!.first);
           case 'seq': return rdTest(r.nudSeqGuard[a.index]!, x, t);
           case 'capped': return minBp < r.nudCapped[a.index]!.capBp && rdTest(r.nudCappedGuard[a.index]!, x, t);
-          case 'prefix': return pre.get(r)!.has(t.lid);
+          case 'prefix': return (preAt(r, t.lid) !== undefined);
         }
       };
       const none = () => { capped = false; form = 0; tail = false; return null; };
@@ -686,7 +689,7 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
           const ck = checkpoint();
           if (a.kind === 'tok') { pushLeaf(t.kid, pos); pos++; res = finish(rid, sb); }
           else if (a.kind === 'prefix') {
-            const p = pre.get(r)!.get(t.lid)!;
+            const p = preAt(r, t.lid)!;
             pushLeaf(TT_OPERATOR, pos); pos++;
             const operand = prattBp(r, p.rbp);
             if (operand !== null && p.requireTarget && form !== 0) { pos = save; scratch.length = sb; restore(ck); capped = false; return null; }
@@ -749,7 +752,7 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
           break;
         }
         case 'prefix': {
-          const p = pre.get(r)!.get(t.lid);
+          const p = preAt(r, t.lid);
           if (p === undefined) break;
           pushLeaf(TT_OPERATOR, pos); pos++;
           const operand = prattBp(r, p.rbp);

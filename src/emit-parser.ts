@@ -1333,7 +1333,7 @@ function emitJsParser(grammar: CstGrammar): string {
       }
       return arr;
     };
-    e.emit(`type OpInfo = { lbp: number; rbp: number; assoc: string; position: string; requireTarget?: boolean };`);
+    e.emit(`type OpInfo = { lbp: number; rbp: number; assoc: string; position: string; requireTarget?: boolean; when?: { mask: number; val: number } };`);
     e.emit(`const OP_BY_T: (OpInfo | null)[] = ${J(byT(a.opTable))};`);
     e.emit(`const PREFIX_BY_T: (OpInfo | null)[] = ${J(byT(a.prefixOps))};`);
   }
@@ -2161,7 +2161,12 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
     if (items[0]?.type === 'prefix') {
       // prefix $ pattern: identical to parsePratt's prefix branch.
       e.emit(`    if (pos < cap) {`);
-      e.emit(`      const info = PREFIX_BY_T[tkT[pos]];`);
+      // A gated operator (`await`) exists only where its \`when\` holds in this rule's family
+      // (the fork's word, a constant here: await-yield-fork.ts).
+      const gatedOff = [...a.prefixOps.values()].some((o) => o.when !== undefined && (rule.ctx! & o.when.mask) !== o.when.val);
+      e.emit(gatedOff
+        ? `      let info = PREFIX_BY_T[tkT[pos]]; if (info && info.when !== undefined && (${rule.ctx} & info.when.mask) !== info.when.val) info = null;`
+        : `      const info = PREFIX_BY_T[tkT[pos]];`);
       e.emit(`      if (info) {`);
       e.emit(`        scPush(~((pos << 2) | 2));`);
       e.emit(`        if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }`);

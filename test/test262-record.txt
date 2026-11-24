@@ -1384,9 +1384,7 @@ language/statements/function/static-init-await-binding-invalid.js
 language/statements/generators/yield-as-binding-identifier.js
 language/statements/generators/yield-as-parameter.js
 language/statements/let/static-init-await-binding-invalid.js
-language/statements/let/syntax/let-newline-await-in-normal-function.js
 language/statements/let/syntax/let-newline-yield-in-generator-function.js
-language/statements/let/syntax/let-newline-yield-in-normal-function.js
 language/statements/try/static-init-await-binding-invalid.js
 language/statements/using/static-init-await-binding-invalid.js
 language/statements/variable/dstr/ary-ptrn-elem-id-static-init-await-invalid.js
@@ -1706,8 +1704,6 @@ language/expressions/assignmenttargettype/direct-primaryexpression-this.js
 language/expressions/assignmenttargettype/direct-shortcircuitexpression-question-assignmentexpression-else-assignmentexpression-0.js
 language/expressions/assignmenttargettype/direct-shortcircuitexpression-question-assignmentexpression-else-assignmentexpression-1.js
 language/expressions/assignmenttargettype/direct-shortcircuitexpression-question-assignmentexpression-else-assignmentexpression-2.js
-language/expressions/assignmenttargettype/direct-yieldexpression-0.js
-language/expressions/assignmenttargettype/direct-yieldexpression-1.js
 language/expressions/assignmenttargettype/parenthesized-additiveexpression-minus-multiplicativeexpression-0.js
 language/expressions/assignmenttargettype/parenthesized-additiveexpression-minus-multiplicativeexpression-1.js
 language/expressions/assignmenttargettype/parenthesized-additiveexpression-minus-multiplicativeexpression-2.js
@@ -1855,7 +1851,6 @@ language/expressions/assignmenttargettype/parenthesized-unaryexpression-void-una
 language/expressions/assignmenttargettype/parenthesized-updateexpression-star-star-exponentiationexpression-0.js
 language/expressions/assignmenttargettype/parenthesized-updateexpression-star-star-exponentiationexpression-1.js
 language/expressions/assignmenttargettype/parenthesized-updateexpression-star-star-exponentiationexpression-2.js
-language/expressions/assignmenttargettype/parenthesized-yieldexpression-0.js
 language/expressions/assignmenttargettype/parenthesized-yieldexpression-1.js
 language/expressions/async-function/early-errors-expression-not-simple-assignment-target.js
 language/expressions/async-generator/early-errors-expression-not-simple-assignment-target.js
@@ -2943,10 +2938,6 @@ language/module-code/parse-err-syntax-2.js
 language/module-code/parse-err-yield.js
 language/module-code/top-level-await/new-await.js
 language/module-code/top-level-await/no-operand.js
-language/module-code/top-level-await/syntax/early-does-not-propagate-to-fn-declaration-body.js
-language/module-code/top-level-await/syntax/early-does-not-propagate-to-fn-declaration-params.js
-language/module-code/top-level-await/syntax/early-does-not-propagate-to-fn-expr-body.js
-language/module-code/top-level-await/syntax/early-does-not-propagate-to-fn-expr-params.js
 language/reserved-words/await-module.js
 language/statements/await-using/syntax/await-using-not-allowed-at-top-level-of-script.js
 language/statements/class/class-name-ident-await-module.js

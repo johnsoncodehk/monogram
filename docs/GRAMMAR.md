@@ -171,6 +171,39 @@ every operand position (Python's, [`python.ts`](../python.ts); fixture
 
   The body must be a reference to a Pratt rule; anything else is refused by name.
 
+## Contexts: `when`
+
+A grammar's productions can depend on where they stand: ECMAScript's `[Yield]` and `[Await]`
+parameters make `yield` and `await` operators inside a generator / async body and identifiers
+elsewhere. The context is one word the parser holds; the markers `awaitCtx` / `yieldCtx` /
+`asyncGenCtx` / `resetCtx` set it for a body (a function's, an arrow's, a method's: an arrow's
+body does not inherit the context unless the arrow is async), and `when(cond, ...items)` makes
+the items exist only where the condition holds:
+
+```ts
+arm('yield_', capExpr('?', when('+yield', 'yield', alt(arm('star', sameLine, '*', $), arm('expr', opt(sameLine, $)))))),
+right(prefix('!', '~', '+', '-', 'typeof', 'void', 'delete', when('~syncFn', 'await'))),   // a gated operator
+// function* g() { yield a; }: a YieldExpression.   iter = yield();: a call of the identifier yield.
+```
+
+A condition is a conjunction of `+p` / `~p` over the parameters of
+[`src/grammar-utils.ts`](../src/grammar-utils.ts) `CTX_PARAMS` (`await`, `yield`, `syncFn`); with
+no items, `when(cond)` is a zero-width test. tree-sitter, TextMate and Monarch erase the
+condition: they render the items everywhere.
+
+**Transition** (step 1 of the declared-contexts design): the end state is one mechanism, named
+boolean parameters declared by the grammar, set / cleared at a reference (`ctx({p: true}, ...)`),
+read by `when`, held as one word in every engine (it replaces the rule fork of
+[`src/await-yield-fork.ts`](../src/await-yield-fork.ts), `reservableNot` and `exclude`). Today the
+parameters are the fixed `CTX_PARAMS`; the portable parsers test the word at run time, while the
+interpreter, the jsTarget parser and cst-match keep the fork and evaluate `when` once per rule
+family (a family is a word, so the condition is a constant there). `syncFn` stands in for the
+script / module goal: it is set in a non-async function body, so the top level reads `await` both
+ways (`await x` as in a module, `await = 1` as in a script) and `await(x)` at the top level is
+still the operator. Exit: step 2 moves the interpreter, jsTarget and cst-match onto the word and
+deletes the fork; the goals step sets `await` in the Module goal's entry word, the gate becomes
+`when('+await')` and `syncFn` is deleted.
+
 ## Declared assignment-target contexts
 
 `lhsTarget` checks only the outermost shape of an operand (no prefix or postfix operator, no binary

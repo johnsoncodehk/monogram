@@ -26,7 +26,7 @@ import { identifierClassesOf } from './uni-ident.ts';
 import { planTargets, type ArmForm } from './declared-targets.ts';
 import { KIND, analyzeGrammar, concreteFirst, directivesOf, findEntryRule, tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { nameRule, syntaxKey, type RuleNames } from './grammar-names.ts';
-import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
+import { collectLiterals, ctxWordOfMode, gtComposites, isKeywordLiteral, readsSyncFn, whenTest, type CtxMode } from './grammar-utils.ts';
 import { tokenPatternCharLoop, tokenPatternLiteralPrefix } from './token-pattern.ts';
 import { type TextUnits, firstUnit, oneUnit, unitLen } from './text-units.ts';
 import { scannedTokens, templateLiterals, tokenLiterals } from './lex-family.ts';
@@ -143,8 +143,11 @@ type StepOp =
   | { t: 'sameLine' }                                           // zero-width: the next token is on the same line (no preceding newline)
   | { t: 'target'; ctx: string; mask?: number }                // zero-width: the node just returned passes target context ctx (its pass bit: mask; declared-targets.ts)
   | { t: 'suppress'; set: number; steps: Step[]; share?: number }  // parse the body with the LED connectors of ParserIR.suppressSets[set] disabled (no-`in` context)
-  | { t: 'ctx'; ctx: Ctx; steps: Step[]; share?: number };      // parse the body in [Await]/[Yield] context `ctx`, then put back the one in force
+  | { t: 'ctx'; ctx: Ctx; steps: Step[]; share?: number }      // parse the body in [Await]/[Yield] context `ctx`, then put back the one in force
+  | { t: 'when'; mask: number; val: number };                  // zero-width: the context word in force passes `(word & mask) === val` (api.ts `when`)
 export type Alt = Step[];
+/** A `when` group (api.ts `when`) as steps: the word test, then the items (none: the test alone). */
+const whenOf = (cond: string, steps: Step[]): Step => { const w: Step = { t: 'when', ...whenTest(cond) }; return steps.length === 0 ? w : { t: 'seq', steps: [w, ...steps] }; };
 /** A step's (or step list's) structure as a string, without its names: the key under which two
  *  equal structures are one computation (a lookahead body, a shared step). */
 export function stepKey(s: Step | readonly Step[]): string {
@@ -163,11 +166,16 @@ export function stepKey(s: Step | readonly Step[]): string {
 // the entry rule's top-level entries, which are parsed in the entry's context, CTX_NONE).
 // A `ctx` step restores the context it found on success and on failure alike, so the context in
 // force is always that of the innermost enclosing body.
+// A `when` step (api.ts `when`) tests the word: an item or an arm exists only where its condition
+// holds (`yield`'s operator arm: +yield), and a gated prefix operator (`await`: PrattRule.prefix's
+// `when`) is an operator only there. The word's bits are grammar-utils.ts CTX_PARAMS: bit 4
+// (`syncFn`, transitional, see there) is set by a reset body only in a grammar that reads it.
 export const CTX_NONE = 0, CTX_AWAIT = 1, CTX_YIELD = 2;
-export type Ctx = 0 | 1 | 2 | 3;
-const CTX_OF_MODE: Record<'await' | 'yield' | 'asyncgen' | 'reset', Ctx> = { await: 1, yield: 2, asyncgen: 3, reset: 0 };
+export type Ctx = number;
 /** The operator word each context bit reserves: CTX_WORDS[i] for bit 1 << i. */
 const CTX_WORDS: readonly string[] = ['await', 'yield'];
+/** The bits of the word an `aheadCtx` test reads (those of CTX_WORDS). */
+export const CTX_WORD_BITS = 3;
 // The LED connectors a `suppress` step disables (`exclude('in', Expr)`: no `in` in a for-head) are
 // a constant of the grammar at each site, so a parser never builds one at run time. The grammar
 // analysis keeps each distinct set once (ParserIR.suppressSets, sorted; set 0 is the empty set, the
@@ -492,7 +500,7 @@ export type PrattRule = {
   nudCappedGuard: Guard[];                            // parallel to nudCapped: when each capped seq is a candidate (see Guard)
   // requireTarget: the operand (prefix) / left operand (binary, postfix) must have FORM_TARGET,
   // else the whole Pratt call fails; noUnaryLhs: the left operand must not have FORM_UNARY.
-  prefix: Array<{ op: string; rbp: number; requireTarget: boolean; form: AssignForm }>;  // NUD: prefix op then operand at rbp; form = the node's
+  prefix: Array<{ op: string; rbp: number; requireTarget: boolean; form: AssignForm; when?: { mask: number; val: number } }>;   // when: a gated operator (an operator only where the word passes)  // NUD: prefix op then operand at rbp; form = the node's
   binary: Array<{ op: string; lbp: number; rbp: number; requireTarget: boolean; noUnaryLhs: boolean; targetCtx?: true; needCtx?: number; accLeft?: number }>;   // targetCtx: a targetOps operator (it can fail the call after the NUD, as requireTarget does)   // needCtx: targetOps: the pass bit the left operand must have; accLeft: the pass bits the node takes from its left operand (declared-targets.ts)  // LED: infix op, bind iff lbp > minBp, rhs at rbp
   leds: Bracket[];                                    // LED: mixfix continuation (call/member/index), tried before operators
   ledNames: string[];                                 // parallel to leds: each arm's name
@@ -947,7 +955,8 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   // shared with the jsTarget parser of emit-parser.ts).
   const { suppressSets } = a;
   const suppressOf = (connectors: string[], steps: Step[]): Step => ({ t: 'suppress', set: a.suppressSetOf(connectors), steps });
-  const ctxOf = (mode: keyof typeof CTX_OF_MODE, steps: Step[]): Step => ({ t: 'ctx', ctx: CTX_OF_MODE[mode], steps });
+  const splitSync = readsSyncFn(grammar);
+  const ctxOf = (mode: CtxMode, steps: Step[]): Step => ({ t: 'ctx', ctx: ctxWordOfMode(mode, splitSync), steps });
   // An identifier's reserved-word guard: the one-token test of its words and, in each context, the
   // context's operator words. Its body is one token by construction (`reservableNot(alt(...))`).
   // The words' set is a constant of the site, as every `ahead` set is; only the context's words
@@ -998,6 +1007,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
         const lvl = a.atLevelBp(e);
         if (lvl !== null) return { t: 'ruleBp', name: (e.body as { name: string }).name, bp: lvl };
         const ss = altSteps(e.body);
+        if (e.when !== undefined) return whenOf(e.when, ss);                       // a context condition (api.ts when)
         if (e.ctxMode) return ctxOf(e.ctxMode, ss);                                 // [Await]/[Yield] context
         if (e.suppress && e.suppress.length) return suppressOf(e.suppress, ss);   // no-`in` context
         return ss.length === 1 ? ss[0] : { t: 'seq', steps: ss };
@@ -1262,7 +1272,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
       }
       case 'seq': return seqFirst(s.steps);
       case 'suppress': case 'ctx': return seqFirst(s.steps);
-      case 'look': case 'ahead': case 'aheadCtx': case 'sameLine': case 'target': case 'star': case 'opt': case 'sep': return null;   // zero-width / nullable leading → unpredictable
+      case 'look': case 'ahead': case 'aheadCtx': case 'sameLine': case 'when': case 'target': case 'star': case 'opt': case 'sep': return null;   // zero-width / nullable leading → unpredictable
     }
     return null;
   };
@@ -1383,7 +1393,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   // binary or postfix operator returns with the left operand built; a prefix one in the NUD frame
   // returns with the best so far built). Not clean: such a Pratt rule's call, and any list whose
   // later step can fail after an earlier one consumed.
-  const zeroWidth = (s: Step): boolean => s.t === 'ahead' || s.t === 'aheadCtx' || s.t === 'sameLine' || s.t === 'target' || s.t === 'look';
+  const zeroWidth = (s: Step): boolean => s.t === 'ahead' || s.t === 'aheadCtx' || s.t === 'sameLine' || s.t === 'when' || s.t === 'target' || s.t === 'look';
   const cleanRules = new Set(rules.filter((r) => r.kind === 'rd' || (!r.binary.some((b) => b.requireTarget || b.noUnaryLhs || b.targetCtx) && !r.postfix.some((o) => o.requireTarget) && !r.prefix.some((o) => o.requireTarget))).map((r) => r.name));
   const failsClean = (s: Step): boolean => {
     switch (s.t) {
@@ -1637,6 +1647,7 @@ export type StepLowering = {
   ahead(set: number, is: boolean): string;
   aheadCtx(set: number, is: boolean): string;
   sameLine(): string;
+  when(mask: number, val: number): string;       // the context word in force passes (word & mask) === val
   inPlace(kind: 'alt' | 'suppress' | 'ctx', stmts: string): string;  // the step's statements (stepStmts) run where the step is
   ret(cond: string): string;                     // statements returning cond
   suppress(set: number, cond: string): string;   // statements: cond with ParserIR.suppressSets[set] staged for the next Pratt call
@@ -1694,6 +1705,7 @@ export function stepBody(s: Step, L: StepLowering): string {
     case 'aheadCtx': return L.aheadCtx(s.set, s.is);
     case 'seq': return `(${conjOf(s.steps, L)})`;
     case 'sameLine': return L.sameLine();
+    case 'when': return L.when(s.mask, s.val);
     case 'target': return need(L.target, 'target')(s.mask!);
     case 'suppress': return L.inPlace('suppress', L.suppress(s.set, conjOf(s.steps, L)));
     case 'ctx': return L.inPlace('ctx', L.ctx(s.ctx, conjOf(s.steps, L)));
@@ -2416,7 +2428,7 @@ function buildPratt(
       if (items[0].type === 'literal') { nudOrder.push({ kind: 'bracket', index: nudBrackets.length }); nudNames.push(armName(alt)); nudBrackets.push({ first: items[0].value, steps: items.map((it) => stepOfPratt(it)) }); nudWritten.push(alt); continue; }
       // A single transparent group (no suppress, no context) unwraps to its body (an explicit grouping).
       let nudItems = items;
-      if (items.length === 1 && items[0].type === 'group' && !items[0].suppress && !items[0].ctxMode && items[0].atLevel === undefined) {
+      if (items.length === 1 && items[0].type === 'group' && !items[0].suppress && !items[0].ctxMode && items[0].when === undefined && items[0].atLevel === undefined) {
         nudItems = items[0].body.type === 'seq' ? items[0].body.items : [items[0].body];
       }
       nudOrder.push({ kind: 'seq', index: nudSeqs.length }); nudNames.push(armName(alt));
@@ -2467,6 +2479,7 @@ function buildPratt(
     if (e.type === 'seq') return { t: 'seq', steps: e.items.map(stepOfPratt) };
     if (e.type === 'sameLine') return { t: 'sameLine' };
     if (e.type === 'not') return (e.reservable ? reservableOf : notOf)((e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt));
+    if (e.type === 'group' && e.when !== undefined && !e.capBelow) return whenOf(e.when, (e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt));
     if (e.type === 'group' && e.ctxMode && !e.capBelow) return ctxOf(e.ctxMode, (e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt));
     if (e.type === 'group' && e.suppress && e.suppress.length) return suppressOf(e.suppress, (e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt));
     if (e.type === 'group' && !e.capBelow) {
@@ -2480,7 +2493,7 @@ function buildPratt(
     return stepOf(e);   // names its step itself (`named` again finds the same names)
   }
   const prefix = sawPrefix
-    ? [...a.prefixOps.entries()].filter(([, info]) => info.capBp === undefined).map(([op, info]) => ({ op, rbp: info.rbp, requireTarget: !!info.requireTarget, form: (a.postfixOpValues.has(op) ? FORM_NOT_TARGET : FORM_UNARY) as AssignForm }))
+    ? [...a.prefixOps.entries()].filter(([, info]) => info.capBp === undefined).map(([op, info]) => ({ op, rbp: info.rbp, requireTarget: !!info.requireTarget, form: (a.postfixOpValues.has(op) ? FORM_NOT_TARGET : FORM_UNARY) as AssignForm, ...(info.when ? { when: info.when } : {}) }))
     : [];
   const binary = sawBinary
     ? [...a.opTable.entries()].filter(([, info]) => info.position === 'infix').map(([op, info]) => ({ op, lbp: info.lbp, rbp: info.rbp, requireTarget: !!info.requireTarget, noUnaryLhs: a.noUnaryLhsOps.has(op), ...(info.targetCtx !== undefined ? { targetCtx: true as const } : {}) }))
@@ -2724,7 +2737,7 @@ export type PrattOpTables = {
   // four columns and the LED loop reads `left` only behind the table's one test bit
   // (binTestsLeft), through a switch on the few operators that have it (binLeftOps).
   bin: Array<{ lid: number; lbp: number; rbp: number; tgt: boolean; noUnary: boolean; left?: { ctx: number; acc: number } }>;
-  pre: Array<{ lid: number; rbp: number; tgt: boolean; form: number }>;
+  pre: Array<{ lid: number; rbp: number; tgt: boolean; form: number; when?: { mask: number; val: number } }>;   // when: a gated operator (PrattRule.prefix)
   post: Array<{ lid: number; lbp: number; tgt: boolean }>;
 };
 export function prattOpTables(r: PrattRule, plan: LexIdPlan): PrattOpTables {
@@ -2741,7 +2754,7 @@ export function prattOpTables(r: PrattRule, plan: LexIdPlan): PrattOpTables {
   return {
     size: plan.lids.length,
     bin: keyed('binary', r.binary, (b, lid) => ({ lid, lbp: b.lbp, rbp: b.rbp, tgt: b.requireTarget, noUnary: b.noUnaryLhs, ...(r.binForm && (b.needCtx || b.accLeft) ? { left: { ctx: b.needCtx ?? 0, acc: b.accLeft ?? 0 } } : {}) })),
-    pre: keyed('prefix', r.prefix, (p, lid) => ({ lid, rbp: p.rbp, tgt: p.requireTarget, form: p.form | (r.preLeaf ?? 0) })),
+    pre: keyed('prefix', r.prefix, (p, lid) => ({ lid, rbp: p.rbp, tgt: p.requireTarget, form: p.form | (r.preLeaf ?? 0), ...(p.when ? { when: p.when } : {}) })),
     post: keyed('postfix', r.postfix, (p, lid) => ({ lid, lbp: p.lbp, tgt: p.requireTarget })),
   };
 }
@@ -3242,7 +3255,7 @@ export function formatFirstBytes(fb: LexFirstBytes | null): string {
 export const REC_RD = 0, REC_PRATT = 1;
 export const REC_S_LIT = 0, REC_S_COMP = 1, REC_S_TOK = 2, REC_S_TPLTOK = 3, REC_S_RULE = 4, REC_S_RULEBP = 5, REC_S_STAR = 6, REC_S_OPT = 7,
   REC_S_SEP = 8, REC_S_ALTLIT = 9, REC_S_ALT = 10, REC_S_LOOK = 11, REC_S_AHEAD = 12, REC_S_AHEADCTX = 13, REC_S_SEQ = 14, REC_S_SAMELINE = 15,
-  REC_S_SUPPRESS = 16, REC_S_CTX = 17, REC_S_SHARED = 18;
+  REC_S_SUPPRESS = 16, REC_S_CTX = 17, REC_S_SHARED = 18, REC_S_WHEN = 19;
 // A Pratt rule's NUD arms (PrattRule.nudOrder), by tag.
 export const REC_N_TOK = 0, REC_N_BRACKET = 1, REC_N_SEQ = 2, REC_N_CAPPED = 3, REC_N_PREFIX = 4;
 export type RecoveryTables = { data: number[]; ruleAt: number[] };
@@ -3319,6 +3332,7 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
       case 'aheadCtx': return emit([REC_S_AHEADCTX, s.set, s.is ? 1 : 0]);
       case 'seq': { const b = list(s.steps); return emit([REC_S_SEQ, ref(b)]); }
       case 'sameLine': return emit([REC_S_SAMELINE]);
+      case 'when': return emit([REC_S_WHEN, s.mask, s.val]);
       case 'target': throw new Error('portable recovery: unreachable (recoveryTables refuses target contexts)');
       case 'suppress': { const b = list(s.steps); return emit([REC_S_SUPPRESS, s.set, ref(b)]); }
       case 'ctx': { const b = list(s.steps); return emit([REC_S_CTX, s.ctx, ref(b)]); }
@@ -3360,7 +3374,7 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
     });
     const sections: Cell[][] = [
       [arms.length, ...arms.flat()],
-      [ops.pre.length, ...ops.pre.flatMap((p) => [p.lid, p.rbp, p.tgt ? 1 : 0, p.form])],
+      [ops.pre.length, ...ops.pre.flatMap((p) => [p.lid, p.rbp, p.tgt ? 1 : 0, p.form, p.when?.mask ?? 0, p.when?.val ?? 0])],
       [ops.bin.length, ...ops.bin.flatMap((b) => [b.lid, b.lbp, b.rbp, b.tgt ? 1 : 0, b.noUnary ? 1 : 0])],
       [ops.post.length, ...ops.post.flatMap((p) => [p.lid, p.lbp, p.tgt ? 1 : 0])],
       [leds.length, ...leds.flat()],

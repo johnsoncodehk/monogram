@@ -1,5 +1,6 @@
 # test/verdict-scan.ts: class, disposition, count, shortest witness (re-record: add --write)
-arrow-body-ctx	grammar	8	"async function* g() { () => await a; }"
+tsc-ctx-operators	oracle-tolerance	4	"async function* g() { () => await a; }"
+arrow-body-ctx	grammar	2	"async function* g() { () => yield () => {}; }"
 coalesce-mix	grammar	4	"a || b ?? c;"
 number-then-ident	lexer	9	"1.x;"
 ts-type-args-commit	grammar	10	"f<T> /= c;"

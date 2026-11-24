@@ -734,7 +734,9 @@ export function createParser(grammar: CstGrammar) {
           const tok = peek();
           if (tok) {
             const key = tok.text;
-            const info = prefixOps.get(key);
+            const op = prefixOps.get(key);
+            // A gated operator (`await`) exists only where its `when` holds in the rule's family.
+            const info = op?.when !== undefined && (rule.ctx! & op.when.mask) !== op.when.val ? undefined : op;
             // A capped prefix (Python `not`) begins an operand only below its own level.
             if (info && (info.capBp === undefined || minBp < info.capBp)) {
               // A capped prefix's node is the sequence `op $` (its operator a literal leaf), as

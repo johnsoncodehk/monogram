@@ -1,5 +1,6 @@
 import type { LedPrec, CstGrammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, ElementRegion, IndentConfig, NewlineConfig, StringInterpolation, TokenPattern, TargetContext } from './types.ts';
 import { computeNullableRules, findEntryRule } from './grammar-analysis.ts';
+import { whenTest } from './grammar-utils.ts';
 import {
   altPattern, anyChar, followedBy, never, noneOf, notFollowedBy,
   notPrecededBy, oneOf, optPattern, plus, precededBy, range, repeat,
@@ -125,13 +126,13 @@ interface NotLeftLeafMarker { readonly __kind: 'notLeftLeaf'; readonly words: st
 interface TargetMarker { readonly __kind: 'target'; readonly ctx: string }
 interface PrefixSlot {
   readonly __kind: 'prefix';
-  (...ops: string[]): PrefixOps;
+  (...ops: (string | WhenNode)[]): PrefixOps;
 }
 interface PostfixSlot {
   readonly __kind: 'postfix';
   (...ops: string[]): PostfixOps;
 }
-interface PrefixOps { readonly __kind: 'prefix-ops'; ops: string[]; requireTarget?: boolean; capped?: boolean }
+interface PrefixOps { readonly __kind: 'prefix-ops'; ops: (string | WhenNode)[]; requireTarget?: boolean; capped?: boolean }
 interface PostfixOps { readonly __kind: 'postfix-ops'; ops: string[]; requireTarget?: boolean }
 interface NoUnaryLhsOps { readonly __kind: 'no-unary-lhs-ops'; ops: string[] }
 interface LhsTargetOps { readonly __kind: 'lhs-target-ops'; ops: string[]; ctx?: string }
@@ -182,7 +183,7 @@ export function target(ctx: string): TargetMarker {
 export const targetOps = (ctx: string, ...ops: string[]): LhsTargetOps => ({ __kind: 'lhs-target-ops' as const, ops, ctx });
 
 export const prefix: PrefixSlot = Object.assign(
-  (...ops: string[]): PrefixOps => ({ __kind: 'prefix-ops' as const, ops }),
+  (...ops: (string | WhenNode)[]): PrefixOps => ({ __kind: 'prefix-ops' as const, ops }),
   { __kind: 'prefix' as const },
 ) as PrefixSlot;
 
@@ -373,7 +374,7 @@ class FieldNode {
   constructor(name: string, item: Element) { this.name = name; this.item = item; }
 }
 
-type Combinator = HolesNode | SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode | NotNode | CtxNode | RelaxNode | CapExprNode | AtLevelNode | FieldNode;
+type Combinator = HolesNode | SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode | NotNode | CtxNode | WhenNode | RelaxNode | CapExprNode | AtLevelNode | FieldNode;
 
 /** A named alternative (see ArmNode). */
 export function arm(name: string, ...items: Element[]): ArmNode {
@@ -454,6 +455,19 @@ export function asyncGenCtx(...items: Element[]): CtxNode { return new CtxNode('
 // context word there).
 export function resetCtx(...items: Element[]): CtxNode { return new CtxNode('reset', items); }
 
+// The items exist only where the context condition holds: `when('+yield', 'yield', ...)` is
+// ECMAScript's `[+Yield]` (the condition: `+p` / `~p` over grammar-utils.ts CTX_PARAMS, a
+// conjunction: `'+yield ~await'`). With no items it is a zero-width test. Among a `prefix(...)`'s
+// operators, `when(cond, 'op')` gates that operator. The parsers read it; every other consumer
+// (tree-sitter, TextMate, Monarch) renders the items unconditionally.
+class WhenNode {
+  readonly __kind = 'when' as const;
+  readonly cond: string;
+  readonly items: Element[];
+  constructor(cond: string, items: Element[]) { whenTest(cond); this.cond = cond; this.items = items; }
+}
+export function when(cond: string, ...items: Element[]): WhenNode { return new WhenNode(cond, items); }
+
 // Zero-width negative lookahead: `not(x)` matches nothing and succeeds only when
 // `x` would NOT match here.
 export function not(item: Element | Element[]): NotNode {
@@ -481,7 +495,12 @@ function buildPrecOps(ops: OpSpec[]): PrecOperator[] {
     if (typeof o === 'string') {
       result.push({ value: o, position: 'infix' });
     } else if (o.__kind === 'prefix-ops') {
-      for (const v of o.ops) result.push({ value: v, position: 'prefix', requireTarget: o.requireTarget, ...(o.capped ? { capped: true } : {}) });
+      for (const v of o.ops) {
+        // `when(cond, 'op')` among the operators: the operator exists only where cond holds.
+        if (v instanceof WhenNode && (v.items.length !== 1 || typeof v.items[0] !== 'string')) throw new Error(`prefix(when(${JSON.stringify(v.cond)}, ...)): a gated operator is one literal`);
+        const value = v instanceof WhenNode ? v.items[0] as string : v;
+        result.push({ value, position: 'prefix', requireTarget: o.requireTarget, ...(o.capped ? { capped: true } : {}), ...(v instanceof WhenNode ? { when: v.cond } : {}) });
+      }
     } else if (o.__kind === 'postfix-ops') {
       for (const v of o.ops) result.push({ value: v, position: 'postfix', requireTarget: o.requireTarget });
     } else if (o.__kind === 'lhs-target-ops') {
@@ -585,6 +604,12 @@ function toRuleExpr(el: Element, names: Lowering): RuleExpr {
       ? toRuleExpr(el.items[0], names)
       : { type: 'seq' as const, items: el.items.map(i => toRuleExpr(i, names)) };
     return { type: 'group', body, ctxMode: el.mode };
+  }
+  if (el instanceof WhenNode) {
+    const body: RuleExpr = el.items.length === 1
+      ? toRuleExpr(el.items[0], names)
+      : { type: 'seq' as const, items: el.items.map(i => toRuleExpr(i, names)) };
+    return { type: 'group', body, when: el.cond };
   }
   if (el instanceof RelaxNode) {
     // Transparent group: every consumer reads `body` (strict); only gen-treesitter
