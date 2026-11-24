@@ -60,7 +60,7 @@ const TOTAL_K = 4;
 // population (javascript: 5,412 of 5,901 rejects agree; typescript's rises 5946 -> 5994). Most of javascript's new
 // disagreements are one pattern, `import` and a token neither `(` nor `.` (`import ?. ;`): the
 // interpreter's farthest is `import` itself (no hint), the engine's the token its form guard read. The
-// interpreter's message on these inputs is master's. Re-measured on master a2ba418e (land/recovery-stage3)
+// interpreter's message on these inputs is master's. Re-measured on master 6cf16d04 (land/recovery-stage3)
 // merged in: javascript 5,412 of 5,902 rejects agree, typescript 6,051 of 6,868.
 const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5412, typescript: 6051 };
 const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
@@ -72,14 +72,14 @@ const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // for-in has nothing left. Still run and counted; when one holds again the gate fails until it is
 // removed.
 // The mutants are drawn from the accept lists (seeded), so the list is re-measured when they change.
-// typescript 'for ((async) from y);' -> 'for (() of y);' (master 1f944fcf: two accept rows added at
+// typescript 'for ((async) from y);' -> 'for (() of y);' (master 54c58d2a: two accept rows added at
 // the front of the typescript list drew another mutant set). With the NUD repairs (an operand
 // supplied or an extra token before it skipped) the parse repairs these inputs another way, and
 // the greedy captures are the arrows it now builds: `for (of  y);` gets `of => y` and then 'in'
 // supplied, and `of => y in x` is again the arrow body taking the `in`. The LOOKAHEAD BYPASS of
 // stage 3 (`async { class C {}`: a supplied 'function' that the statement's
 // `[lookahead ∉ { async function }]` refuses) is repaired another way now and no longer drawn.
-// typescript + 'for (x = (y = (a in b)) declare c);' (master b8e42329, #199: its new literals draw
+// typescript + 'for (x = (y = (a in b)) declare c);' (master 69b46fa0, #199: its new literals draw
 // another set): the parse supplies '=>' twice and 'in'; in `… =>  declare =>  c in  x` the arrow
 // body takes the `in`. Re-measured on that merge: javascript unchanged.
 // typescript, land/sound-lt-compose-row (its `<` composite accept rows draw another mutant set):
