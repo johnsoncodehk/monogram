@@ -40,7 +40,8 @@ function split(src: string): { text: string; refs: Set<string> }[] {
     if (ch === '"') { for (i++; i < n && src[i] !== '"'; i++) if (src[i] === '\\') i++; i++; continue; }
     if (ch === '\'') {
       // a character literal ('x', '\n', '\u{..}'), else a lifetime ('a)
-      if (src[i + 1] === '\\') { for (i += 2; i < n && src[i] !== '\''; i++) if (src[i] === '\\') i++; i++; continue; }
+      // (past the backslash and the character it escapes: '\\' and '\'' end at the next quote)
+      if (src[i + 1] === '\\') { for (i += 3; i < n && src[i] !== '\''; i++); i++; continue; }
       const cp = src.codePointAt(i + 1)!, w = cp > 0xffff ? 2 : 1;
       if (src[i + 1 + w] === '\'') { i += 2 + w; continue; }
       i++; while (i < n && isId(src.charCodeAt(i))) i++; continue;
