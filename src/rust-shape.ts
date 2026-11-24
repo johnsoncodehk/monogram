@@ -299,7 +299,7 @@ function typedDecls(st: RsShape): string {
 
 /** The runtime: value words, the typed support, the builder and the plans' engine methods.
  * `fns`: the construct plans printed by algo-ir (methods of Ast). */
-export function rsShapeRuntime(st: RsShape, fns: string): string {
+export function rsShapeRuntime(st: RsShape, fns: string, escKids: number[]): string {
   const plan = st.plan, T = st.types;
   const nsyn = plan.syn.length;
   const tplMiss = intern(st, 'unsupported node (an interpolated template)');
@@ -339,6 +339,8 @@ fn sh_kind_name(k: u32) -> &'static str { [${T.kinds.map((k) => rsStr(k.name)).j
 /// Set true by hand to trace every construct's slots (a debugging aid; false in every build).
 const SH_DEBUG: bool = false;
 const SH_SYN0: [W; ${nsyn}] = [${synDefault.join(', ')}];
+/// The token kinds whose leaves the plans cook through cook_ident_span (ShapePlan.identCookTokens).
+const SH_ESC_KIDS: [u16; ${escKids.length}] = [${escKids.join(', ')}];
 
 /// A handle to a node (or record) of kind T in its arena.
 pub struct Id<T>(pub u32, PhantomData<T>);
@@ -421,6 +423,8 @@ pub struct Ast<'s> {
     owned: Vec<String>,
     ys: [W; ${nsyn}],
     ws: Workspace<Slot>,
+    /// No token of the kinds cook_ident_span cooks has a backslash in this source (lexed).
+    esc_none: bool,
 ${T.kinds.map((k, i) => `    pub a${i}: Vec<${rsTy(k.name)}>,`).join('\n')}
 }
 impl<'s> Ast<'s> {
@@ -457,6 +461,25 @@ impl<'s> Ast<'s> {
     fn w_items(&self, w: W) -> std::iter::Copied<std::slice::Iter<'_, W>> { let s = (w >> 24) as usize & 0xFF_FFFF; self.slab[s..s + (w as usize & 0xFF_FFFF)].iter().copied() }
     // The plans' engine methods (src/shape-plan.ts EXTERNS) other than the slot reads (RS_SLOT).
     #[inline(always)] fn src_text(&self, a: u32, b: u32) -> SrcStr<'s> { SrcStr(&self.src[a as usize..b as usize]) }
+    /// The word of the source text s[a, b): its span (w_text without the string in between).
+    #[inline(always)] fn text_span(&mut self, a: u32, b: u32) -> W { if b - a < 0x1_0000 { T_SPAN | (a as u64) << 16 | (b - a) as u64 } else { let s = self.src_text(a, b); self.w_text(s) } }
+${escKids.length ? `    /// cook_identifier_name of one token s[a, b) of SH_ESC_KIDS: its span when no such token has an escape.
+    #[inline(always)] fn cook_ident_span(&mut self, a: u32, b: u32) -> W { if self.esc_none { self.text_span(a, b) } else { self.cook_ident_slow(a, b) } }
+    #[inline(never)] fn cook_ident_slow(&mut self, a: u32, b: u32) -> W { let s = self.src_text(a, b); self.cook_identifier_name(s.as_str()) }
+` : ''}    /// Whether some token of SH_ESC_KIDS contains a backslash: each backslash of the source (memchr)
+    /// is looked up in the token table (sorted by offset); a token's other backslashes are skipped.
+    fn esc_scan(src: &str, toks: &[Tok]) -> bool {
+        let mut p = 0usize;
+        while let Some(i) = src[p..].find('\\\\') {
+            let q = p + i;
+            let t = toks.partition_point(|t| (t.end as usize) <= q);
+            if t < toks.len() && (toks[t].off as usize) <= q {
+                if SH_ESC_KIDS.contains(&toks[t].kid) { return true; }
+                p = toks[t].end as usize;
+            } else { p = q + 1; }
+        }
+        false
+    }
     fn w_span(&self, x: W) -> Option<(u32, u32)> {
         if x & TAGM != T_NODE { return None; }
         let id = x as u32 as usize;
@@ -501,6 +524,7 @@ ${fns.split('\n').map((l) => (l ? `    ${l}` : l)).join('\n')}
 }
 impl<'s> Builder for Ast<'s> {
     type H = Slot;
+    fn lexed(&mut self, src: &str, toks: &[Tok]) { self.esc_none = SH_ESC_KIDS.is_empty() || !Self::esc_scan(src, toks); }
     #[inline(always)]
     fn leaf(&mut self, scratch: &mut Vec<Slot>, _tt_id: u16, _tok_idx: u32, off: u32, end: u32) -> bool {
         scratch.push(Slot { w: W_ABSENT, tag: -1, arm: -1, off, end, ho: off, he: end, sy: SH_SYN0 });

@@ -2202,6 +2202,8 @@ pub trait Builder {
     }
     /// Token span of handle h (leaf encoding or rule node).
     fn tok_range(&self, h: Self::H) -> (u32, u32);${SHAPE_RS ? `
+    /// A shape's look at the token table, once after the lexer (rust-shape.ts: escaped identifiers).
+    #[inline(always)] fn lexed(&mut self, _src: &str, _toks: &[Tok]) {}
     /// A shape's step: the slot just left gets grammar tag t (rust-shape.ts).
     #[inline(always)] fn tag(&mut self, _scratch: &mut Vec<Self::H>, _t: i32) {}
     /// A shape's marked iteration: a marker slot with tag mt goes before its slots (from c).
@@ -2868,7 +2870,8 @@ fn parse_begin<'x, 'a, B: Builder + Default>(src: &'a str, b: &'x mut B) -> Pars
 pub fn parse_with<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> Option<B::H> {
     let mut g = parse_begin(src, b);
     let p = &mut g.p;
-    if let Some(e) = lex_into(src, &mut p.toks, &mut g.lex) { panic!("{}", lex_error(src, e).msg); }
+    if let Some(e) = lex_into(src, &mut p.toks, &mut g.lex) { panic!("{}", lex_error(src, e).msg); }${SHAPE_RS ? `
+    p.b.lexed(src, &p.toks);` : ''}
     p.scratch.clear();
     let root = match p.parse_${ir.entry}() {
         Some(fr) if p.pos == p.toks.len() => Some(fr.root()),
@@ -5763,7 +5766,9 @@ export const rustTarget = defineParserTarget({
       setRsShape(st); SHAPE_RS = st;
       try {
         const fns = shared.shapeFamily({ ...plan, fns: rsPlanFns(plan.fns, snake) });
-        return emitRustLibrary(plan.ir, buildLexIdPlan(plan.ir), shared, false) + rsShapeRuntime(st, fns);
+        const ids = buildLexIdPlan(plan.ir);
+        const escKids = plan.identCookTokens.map((t) => { const k = ids.kids.indexOf(t); if (k < 0) throw new Error(`rustTarget: the cooked token ${t} has no kind id`); return k; });
+        return emitRustLibrary(plan.ir, ids, shared, false) + rsShapeRuntime(st, fns, escKids);
       } finally { setRsShape(null); SHAPE_RS = null; }
     }
     return emitRustLibrary(ir, buildLexIdPlan(ir), shared, !!opts.recovery) + (opts.recovery ? recoveryRegionRust(ir, shared) : '');

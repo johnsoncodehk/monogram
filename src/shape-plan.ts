@@ -67,6 +67,10 @@ export type ShapePlan = {
   ir: ParserIR;
   /** The cooking functions the plans call. */
   cooks: CookFn[];
+  /** The tokens whose leaves the plans cook as IdentifierNames through `cookIdentSpan`: the
+   * printer's runtime decides, once per parse, whether any token of these kinds contains a
+   * backslash (an escape); when none does, every such cook is the leaf's span itself. */
+  identCookTokens: string[];
   /** Arms compiled to a missing value, with the reason. */
   unsupported: Map<number, string>;
   /** The synthesized attributes (index k): per engine arm the function computing it at the
@@ -249,6 +253,11 @@ const EXTERNS: Fn[] = [
   // t0..t1, else -1.
   ['slotAt', [['i', 'idx'], ['lo', 'idx'], ['hi', 'idx'], ['t0', 'int'], ['t1', 'int']], 'int'],
   ['srcText', [['a', 'pos'], ['b', 'pos']], 'str'],
+  // The text s[a, b) of the source as a value (vText of srcText, without the string in between).
+  ['textSpan', [['a', 'pos'], ['b', 'pos']], VAL],
+  // cook_identifierName of s[a, b), one token of ShapePlan.identCookTokens: the span itself when
+  // no token of those kinds in the source has a backslash.
+  ['cookIdentSpan', [['a', 'pos'], ['b', 'pos']], VAL],
 ].map(([name, ps, ret]) => ({ name: name as string, doc: '', params: (ps as [string, string][]).map(([n, ty]) => ({ name: n, ty: ty as never })), ret: [ret as never], body: [], extern: true, method: true, reads: true }));
 // The span a value gives a `let` / fold variable: a node's, a non-empty node list's first start /
 // last end, else `dflt`.
@@ -384,7 +393,7 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
   const ctxOf = (rule: string): string[] => (kinds.get(rule) === 'rd' ? reads.get(rule) ?? [] : spineAttr.has(rule) ? [spineAttr.get(rule)!] : []);
   const restarts: Restart[] = [];
   const tops: (string | null)[] = [], topDefault: boolean[] = [];
-  const cx: AttrCx = { inhK, synK, scalarInh, nodesAttrs, variants, topAttr, ctxOf, synDflt: syn.map((a) => a.dflt), synSlotRead: new Set(), needRule: new Map() };
+  const cx: AttrCx = { inhK, synK, scalarInh, nodesAttrs, variants, topAttr, ctxOf, synDflt: syn.map((a) => a.dflt), synSlotRead: new Set(), needRule: new Map(), identCook: new Set() };
   const readStats: ReadStats = { fixed: 0, checked: 0, scan: 0, list: 0 };
   for (const r of ir.rules) {
     const view = shape.grammar.arms.get(r.name);
@@ -509,7 +518,7 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
   const needs = dropNeeds(fns, arms, unsupported, cx.needRule);
   fns.push(...EXTERNS, ...SPAN_FNS, ...ATTR_FNS, ...[...cooks].map(cookFn));
   return {
-    arms, fns, cooks: [...cooks], unsupported, syn, inh: scalarInh, variantBit, variantDefault, tops, topDefault, restarts, tagStats, reads: readStats, needs, nodeKeys: nodeKeysOf(spec),
+    arms, fns, cooks: [...cooks], identCookTokens: [...cx.identCook], unsupported, syn, inh: scalarInh, variantBit, variantDefault, tops, topDefault, restarts, tagStats, reads: readStats, needs, nodeKeys: nodeKeysOf(spec),
     armId: (rule, key) => { const id = ids.get(`${rule}|${key}`); if (id === undefined) throw new Error(`planShape: no engine arm ${rule} ${key}`); return id; },
     ir: { ...ir, rules: newRules, reuse: null },
   };
@@ -560,6 +569,8 @@ type AttrCx = {
   synDflt: (Scalar | undefined)[];
   /** The synthesized attributes some arm reads off a child's slot (kept per slot: the rest are not). */
   synSlotRead: Set<number>;
+  /** The tokens of the leaves cooked by cookIdentSpan (ShapePlan.identCookTokens). */
+  identCook: Set<string>;
   /** Each child read's vNeed and the child's rule (see ArmCompiler.need). */
   needRule: Map<Expr, string | undefined>;
 };
@@ -929,7 +940,7 @@ class ArmCompiler {
     const f = this.find(r, out);
     return f.sure ? { k: 'bool', v: true } : bin('ge', v(f.idx), int(0));
   }
-  private text(idx: string, slot: Slot, scope: CScope, out: Stmt[]): Expr {
+  private text(idx: string, slot: Slot, scope: CScope, out: Stmt[]): Expr & { k: 'call' } {
     if (slot.kind === 'branch') {
       // The alternation's last slot: fixed when it ends at a fixed offset from the arm's end.
       const p = this.at?.pos.get(slot.node);
@@ -1055,13 +1066,20 @@ class ArmCompiler {
         return this.ifThere(o, () => (this.need(item, o.slot)), () => ({ k: 'vAbsent' }), out);
       }
       case 'text': {
-        if (t.name === undefined) return { k: 'vText', e: call('srcText', v('off'), v('end')) };
+        if (t.name === undefined) return call('textSpan', v('off'), v('end'));
         const o = this.one(s, t.name, out);
-        return this.ifThere(o, (b) => ({ k: 'vText', e: this.text(o.idx, o.slot, o.scope, b) }), () => ({ k: 'vAbsent' }), out);
+        return this.ifThere(o, (b) => call('textSpan', ...this.text(o.idx, o.slot, o.scope, b).args), () => ({ k: 'vAbsent' }), out);
       }
       case 'cook': {
         this.cooks.add(t.fn);
         const o = this.one(s, t.name, out);
+        // An IdentifierName of one token: its span, unless a token of its kind has an escape
+        // somewhere in the source (the runtime's once-per-parse fact; cookIdentSpan).
+        const tok = o.slot.kind === 'leaf' && o.slot.node.type === 'ref' && this.shape.grammar.tokens.has(o.slot.node.name) ? o.slot.node.name : null;
+        if (t.fn === 'identifierName' && tok !== null) {
+          this.cx.identCook.add(tok);
+          return this.ifThere(o, (b) => call('cookIdentSpan', ...this.text(o.idx, o.slot, o.scope, b).args), () => ({ k: 'vAbsent' }), out);
+        }
         return this.ifThere(o, (b) => call(`cook_${t.fn}`, this.text(o.idx, o.slot, o.scope, b)), () => ({ k: 'vAbsent' }), out);
       }
       case 'present': case 'and': case 'or': case 'not': return this.boolVal(this.bool(t, s, out), out);
