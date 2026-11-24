@@ -19,9 +19,9 @@ import { createParser } from '../src/interpreter.ts';
 import { emitParser } from '../src/target.ts';
 import { jsTarget } from '../src/target-js.ts';
 import { objectify } from './emitted-obj.ts';
-import { generateTmLanguage } from '../src/gen-tm.ts';
+import { generateTmLanguage } from '../src/gen-textmate.ts';
 import { generateMonarch } from '../src/gen-monarch.ts';
-import { generateTreeSitter } from '../src/gen-treesitter.ts';
+import { generateTreeSitter } from '../src/gen-tree-sitter.ts';
 import type { NewlineConfig } from '../src/types.ts';
 import { scratchDir } from './scratch.ts';
 
@@ -230,7 +230,7 @@ const gT = defineGrammar({
 
 // ── 9. tree-sitter on the same grammar. `Line = Stmt NEWLINE? | NEWLINE` is ambiguous as a CFG after
 //      a statement (the break joins the statement's Line, or starts a blank Line); the PEG `opt` is
-//      greedy and gen-treesitter renders that as a right-associative production, so the derived
+//      greedy and gen-tree-sitter renders that as a right-associative production, so the derived
 //      parser must generate and produce the interpreter's lines: same Line per row, same newline
 //      spans, no ERROR. ──
 if (hasCli()) {

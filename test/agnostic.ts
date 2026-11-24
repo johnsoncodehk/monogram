@@ -6,7 +6,7 @@ import { token, rule, defineGrammar, alt, many, opt, sep, none, seq, plus, oneOf
 import { tokenPatternStartsWithDecimal } from '../src/token-pattern.ts';
 import { createParser } from '../src/interpreter.ts';
 import { generateLanguageConfig } from '../src/gen-vscode-config.ts';
-import { generateTmLanguage } from '../src/gen-tm.ts';
+import { generateTmLanguage } from '../src/gen-textmate.ts';
 import { emitTokenizerModule, lexSpecOf } from '../src/lexer.ts';
 
 const Word = token(plus(range('a', 'z')), { identifier: true });   // identifier token, ASCII-only on purpose, NOT named "Ident"
@@ -54,7 +54,7 @@ const cfg = generateLanguageConfig(gc);
 check('language-config quotes derived from grammar (~, not hardcoded \")',
   !!cfg.surroundingPairs?.some(p => p[0] === '~') && !cfg.surroundingPairs?.some(p => p[0] === '"'));
 
-// 6. gen-tm's `.tsx` generic-arrow ⇄ JSX-tag disambiguation skip-set derives its
+// 6. gen-textmate's `.tsx` generic-arrow ⇄ JSX-tag disambiguation skip-set derives its
 //    opaque attribute-string delimiter from the `string`-flagged token too — NOT a
 //    hardcoded `"`/`'`. A tiny TS-family-JSX grammar (a declared element region with `/>`/`</` tokens + `<…>`
 //    generics) whose strings are `~…~` must produce a carve-out that treats `~…~`
@@ -76,10 +76,10 @@ const gj = defineGrammar({
   elements: { tagOpen: '<', tagClose: '>', closeMarker: '/', closeTag: 'JCloseTg', selfClose: 'JSelfEnd', hole: { open: '{', close: '}' }, name: 'jsx' },  // the declared element region
 });
 const jbegin = generateTmLanguage(gj).repository['jsx-self-closing-element-in-expression']?.begin ?? '';
-check('gen-tm JSX disambiguation skip-set quotes derived from grammar (~, not hardcoded \")',
+check('gen-textmate JSX disambiguation skip-set quotes derived from grammar (~, not hardcoded \")',
   jbegin.includes('~[^~]*~') && !jbegin.includes('"[^"]*"') && !jbegin.includes("'[^']*'"));
 
-// 7. gen-tm's `.tsx` generic-arrow confirm (#arrow-type-parameters' arrowParamShape)
+// 7. gen-textmate's `.tsx` generic-arrow confirm (#arrow-type-parameters' arrowParamShape)
 //    reads the arrow PARAM-LIST delimiters from the arrow rule's own
 //    `'(' sep(Param,',') ')' … '=>'` (detectArrowParamDelims) — NOT a hardcoded `(`.
 //    A TS-family-JSX grammar whose arrow params are delimited by `⟨…⟩` (with a
@@ -108,10 +108,10 @@ const ga = defineGrammar({
   elements: { tagOpen: '<', tagClose: '>', closeMarker: '/', closeTag: 'JCloseTg', selfClose: 'JSelfEnd', hole: { open: '{', close: '}' }, name: 'jsx' },  // the declared element region
 });
 const abegin = generateTmLanguage(ga).repository['arrow-type-parameters']?.begin ?? '';
-check('gen-tm arrow-param confirm parens derived from arrow rule (⟨⟩, not hardcoded `(`)',
+check('gen-textmate arrow-param confirm parens derived from arrow rule (⟨⟩, not hardcoded `(`)',
   abegin.includes('⟨') && abegin.includes('⟩') && !abegin.includes('\\('));
 
-// 8. gen-tm's `.tsx` NO-COMMA generic-arrow disambiguator reads the CONSTRAINT
+// 8. gen-textmate's `.tsx` NO-COMMA generic-arrow disambiguator reads the CONSTRAINT
 //    keyword off the type-PARAM rule (`opt('extends', Type)` in TS), NOT a hardcoded
 //    `extends`. A single no-comma type-param `<T extends X>(…)=>` is a generic arrow
 //    (vs JSX) precisely because of that keyword. A TS-family-JSX grammar whose
@@ -146,7 +146,7 @@ const ctm = generateTmLanguage(gc2);
 const cbegin = ctm.repository['arrow-type-parameters']?.begin ?? '';
 const ccarve = ctm.repository['jsx-self-closing-element-in-expression']?.begin ?? '';
 const kwOk = (s: string) => s.includes('\\bsubtypeof\\b') && !s.includes('\\bextends\\b') && !s.includes('\\bis\\b');
-check('gen-tm no-comma constraint keyword derived from type-param rule (subtypeof, not hardcoded `extends`/`is`)',
+check('gen-textmate no-comma constraint keyword derived from type-param rule (subtypeof, not hardcoded `extends`/`is`)',
   kwOk(cbegin) && kwOk(ccarve));
 
 // Element regions are grammar data: a toy markup with `[name]…[!name]` elements, `name!]`

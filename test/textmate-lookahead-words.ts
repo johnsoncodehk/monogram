@@ -18,9 +18,9 @@
 //   enum       a valid identifier; also excluded, alone, after `const` (`'const' not('enum') '{'`),
 //              where what follows is no identifier
 //
-// Run with: node test/tm-lookahead-words.ts
+// Run with: node test/textmate-lookahead-words.ts
 import { token, rule, defineGrammar, alt, many, opt, not, seq, plus, star, oneOf, range } from '../src/api.ts';
-import { generateTmLanguage } from '../src/gen-tm.ts';
+import { generateTmLanguage } from '../src/gen-textmate.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean) => { if (cond) ok++; else { fail++; console.log('  ✗', label); } };

@@ -22,7 +22,7 @@ import { emitParser } from '../src/target.ts';
 import { jsTarget } from '../src/target-js.ts';
 import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
-import { generateTreeSitter } from '../src/gen-treesitter.ts';
+import { generateTreeSitter } from '../src/gen-tree-sitter.ts';
 import {
   token, rule, defineGrammar, left, op, seq, oneOf, range, star, plus, many,
   altPattern, noneOf, notFollowedBy, withHoles, awaitCtx, reservableNot, alt,

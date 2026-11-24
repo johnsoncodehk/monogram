@@ -10,7 +10,7 @@
 //   flips the discriminating scope at d=20 (the cast did exactly this: `<` → relational at d=20).
 //   For each construct we sweep d=1,5,19,20,24,30 and assert the probe token's scope at every depth
 //   EQUALS its shallow (d=1) value — a flip anywhere is a depth cliff. Self-baselining, so it is
-//   robust to scope renames; it would have caught the cast cliff (gen-tm 1967) and the TSX arrow
+//   robust to scope renames; it would have caught the cast cliff (gen-textmate 1967) and the TSX arrow
 //   cliff (the formerly-recursive arrowEndConfirm) before they shipped.
 //
 //   PART 2 — `\g<>` CENSUS. Every Oniguruma subroutine `\g<>` reachable from a begin/match/while/end

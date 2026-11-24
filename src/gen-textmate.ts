@@ -2407,7 +2407,7 @@ function buildMarkupInjectParts(grammar: Grammar, mainScopeName: string): { repo
     // vuejs/language-tools#4410/#2666): split into `[` + inner-embedded + `]`, the inner re-tokenized
     // by `exprInclude` (so `${idx}` lights as code). A STATIC arg is a plain name. This is the
     // official's arg shape `(?:(?:(\[)([^\]]*)(\]))|([\w-]+))?`. The embed scope/include come from
-    // the `inject` config (NOT hardcoded — gen-tm stays agnostic); the only Vue-specific knowledge
+    // the `inject` config (NOT hardcoded — gen-textmate stays agnostic); the only Vue-specific knowledge
     // is "a bracketed directive arg is an expression", which is the generic markup-injection rule.
     // Returns the regex fragment + the four capture entries indexed from `base` (so a head's own
     // groups precede the arg's). `[` / `]` reuse `eqScope` (punctuation), matching the official.
@@ -2513,7 +2513,7 @@ export function generateAliasGrammar(baseScopeName: string, aliasScope: string):
 //  An expression-only embed (Vue `{{ }}`, directive values) must not treat a STATEMENT
 //  keyword at its TOP level as a keyword — `{{ const x }}` / `{{ for(…) }}` / `{{ return x }}`
 //  are invalid there. We derive the set of keywords that may appear in an EXPRESSION from
-//  the grammar's DECLARED expression rule (`grammar.expressionRule` — gen-tm stays agnostic,
+//  the grammar's DECLARED expression rule (`grammar.expressionRule` — gen-textmate stays agnostic,
 //  it reads a ref, it doesn't know "Expr"), then build a `#expression` repository entry =
 //  the top-level patterns with statement-starters removed and mixed keyword groups narrowed
 //  to their expression members. Nested blocks (`{ }`) re-enter `$self`, so a statement INSIDE
@@ -2582,7 +2582,7 @@ function rewriteRepoRefs(node: unknown, rename: Map<string, string>): void {
 }
 
 // The repository-key NAMING CONSTRAINT ("限制器"): the grammar may declare `canonicalRepoNames`,
-// a DATA map { OFFICIAL repo KEY NAME → the structural key(s) gen-tm derived for the SAME construct }.
+// a DATA map { OFFICIAL repo KEY NAME → the structural key(s) gen-textmate derived for the SAME construct }.
 // For Monogram's source.ts to be a repository-level DROP-IN, the official NAMES that external grammars
 // `#include` (`source.ts#type`, `#qstring-double`, `#comment`, …) must be the names Monogram NATIVELY
 // emits. After the repository is built under structural names, this projects each structural identity
@@ -2597,7 +2597,7 @@ function rewriteRepoRefs(node: unknown, rename: Map<string, string>): void {
 //     through the 1:1 renames first, so a renamed member is included by its FINAL name.
 // An official name that already names a real Monogram key (e.g. `namespace-declaration`, `expression`)
 // is LEFT ALONE — never clobbered. Purely a NAMING projection (no pattern bytes change), so emitted
-// tokenization is byte-identical. The NAMES are language DATA in the grammar definition; gen-tm only
+// tokenization is byte-identical. The NAMES are language DATA in the grammar definition; gen-textmate only
 // looks them up + substitutes, so the engine stays language-agnostic (a grammar declaring none is
 // unaffected — the agnostic-test grammars declare none, so no TS names leak into the engine).
 function applyCanonicalRepoNames(
@@ -3940,7 +3940,7 @@ export function generateTmLanguage(grammar: Grammar): TmGrammar {
     const P = `punctuation.${ln}`;
     // Resolve a DECLARED bare scope (from indent.flowScopes) to a full scope, or fall back to the
     // generic `P`. The grammar supplies the language-flavoured names (mapping/sequence/key-value);
-    // the engine only appends the language suffix — so gen-tm stays agnostic (no hardcoded names).
+    // the engine only appends the language suffix — so gen-textmate stays agnostic (no hardcoded names).
     const withLang = (bare: string | null): string => bare ? `${bare}.${ln}` : P;
     const kvScope = withLang(flow.keyValueScope);          // the flow-mapping `:` key/value separator
     const ekScope = withLang(flow.explicitKeyScope);       // the flow `?` explicit-key indicator

@@ -401,7 +401,7 @@ const Prop = rule($ => {
   // a word of the run here, and "once" is the lookahead after it (`{ export @d export @e m() {} }`
   // has no parse; it runs only where a decorator run was read): stating it by shape, as `static`
   // and `async` are, makes the run's stop places eight instead of four, and the TextMate
-  // generator, which expands every rule body into its sequences (gen-tm's expandAlts), runs out
+  // generator, which expands every rule body into its sequences (gen-textmate's expandAlts), runs out
   // of memory on it (2 GB heap, `npm run gen`).
   const runWord = alt(mods.any, asyncMod);
   const decorators = [many1(DecoratorExpr), not([many(runWord), alt('@', Decorator)])];
@@ -1037,7 +1037,7 @@ const ModuleReference = rule($ => [
 // statement level cleanly ("a class declaration without 'default' must have a name" is a checker
 // error). The two part at the token after `class` (a name, or `<` / a heritage clause / `{`),
 // mirroring the class-expression pair. Decl writes them once bare and once after a declaration's
-// prefix (below); gen-tm expands them to recover the `class Ident … { … }` shape for highlighting.
+// prefix (below); gen-textmate expands them to recover the `class Ident … { … }` shape for highlighting.
 const classDecls = [
   arm('namedClass', 'class', ...bindingName, opt(field('typeParameters', TypeParams)), heritageClauses, '{', many(field('member', ClassMember)), '}'),
   arm('anonymousClass', 'class', opt(field('typeParameters', TypeParams)), heritageClauses, '{', many(field('member', ClassMember)), '}'),
@@ -1286,9 +1286,9 @@ export default defineGrammar({
     'keyword.control.import': jsScopes['keyword.control.import'],
     // `defer` is the TS 5.9 deferred-import phase modifier (`import defer * as ns`).
     // It carries a keyword.control.import subtype, but — unlike `import` itself — it
-    // is NOT reserved (a valid identifier name everywhere else). gen-tm therefore
+    // is NOT reserved (a valid identifier name everywhere else). gen-textmate therefore
     // scopes it POSITIONALLY (only right before the namespace `*`, via the
-    // import-export-all pattern), never in the flat keyword match. See gen-tm's
+    // import-export-all pattern), never in the flat keyword match. See gen-textmate's
     // phase-modifier handling.
     'keyword.control.import.phase': ['defer'],
     'keyword.control.export': jsScopes['keyword.control.export'],
@@ -1341,15 +1341,15 @@ export default defineGrammar({
   // Markdown, MDX, …) `#include` the official repository keys BY NAME (`source.ts#type`,
   // `source.ts#qstring-double`, `source.ts#comment`, …). Monogram derives those keys under its OWN
   // structural names (`#type-inner`, `#string-double`, `#linecomment`/`#blockcomment`, …), so the
-  // official names wouldn't resolve and an `#include` would silently no-op. This CONSTRAINS gen-tm's
-  // key emission: it maps each OFFICIAL name → the structural key(s) gen-tm derived for the SAME
-  // construct, and gen-tm projects the repository through it at generation time, emitting the
+  // official names wouldn't resolve and an `#include` would silently no-op. This CONSTRAINS gen-textmate's
+  // key emission: it maps each OFFICIAL name → the structural key(s) gen-textmate derived for the SAME
+  // construct, and gen-textmate projects the repository through it at generation time, emitting the
   // canonical name NATIVELY (a STRING value RENAMES the structural key — its old name ceases to exist
   // — and rewrites every `#…` reference; an ARRAY value SYNTHESISES the `{patterns:[…]}` UNION the
   // official grammar itself writes, e.g. `#comment`/`#return-type`, resolving each member through the
   // 1:1 renames first). It is purely a naming projection — no `match`/`begin`/`name` changes — so the
   // emitted tokenization is byte-for-byte unchanged (verified: test/repo-compat.ts + the vue dual-host
-  // proof). gen-tm only looks up + substitutes, staying language-agnostic.
+  // proof). gen-textmate only looks up + substitutes, staying language-agnostic.
   //
   // The SHARED ECMAScript half (`type`, `qstring-*`, `punctuation-comma`/`-semicolon`/`-accessor`,
   // `new-expr`, `regex`, `directives`, `parameter-name`, `comment`/`string`/`boolean-literal`/
@@ -1357,7 +1357,7 @@ export default defineGrammar({
   // shared vocabulary) as `jsBaseCanonical`, imported and spread here; this file adds ONLY the TS-only
   // entries (the type layer: type-parameters, casts, type-object, param/return type annotations,
   // type-predicate). The structural source of an entry that doesn't exist in source.ts (none here —
-  // all verified present) would simply be SKIPPED by gen-tm. Official names that ALREADY name a real
+  // all verified present) would simply be SKIPPED by gen-textmate. Official names that ALREADY name a real
   // Monogram key are omitted: `expression`, `template`, and `namespace-declaration` (Monogram's
   // `namespace`-keyword key) already match by name. (Monogram's `module-declaration` — the legacy
   // `module X {}` form the official folds into `namespace-declaration` — stays Monogram-internal; a
@@ -1376,7 +1376,7 @@ export default defineGrammar({
   },
 
   entry: Program,
-  // The expression rule — lets gen-tm derive a `#expression` sub-grammar (used by
+  // The expression rule — lets gen-textmate derive a `#expression` sub-grammar (used by
   // expression-only embeds like Vue's `{{ }}`, where statements are invalid).
   expression: Expr,
 });

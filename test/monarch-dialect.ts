@@ -1,5 +1,5 @@
 // monarch-dialect.ts — what the Monarch generator does for an element region (docs/REGIONS.md),
-// the Monarch counterpart of test/tm-dialect.ts.
+// the Monarch counterpart of test/textmate-dialect.ts.
 //
 // Monaco is not run headless here; `tokenize` below runs the Monarch rule subset gen-monarch emits
 // as Monaco's lexer runs it (per line, rules tried in order anchored at the cursor, `include`
@@ -13,7 +13,7 @@
 //      and a cross-check against the interpreter's token stream: every token of the region's own
 //      kinds (text, close tag, self-close, tag tokens) gets the Monarch token of its kind.
 //   2. DIALECTS: rows on the Monarch generated in memory for test/fixtures/elementdialect.ts and
-//      test/fixtures/textdialect.ts, mirroring tm-dialect's rows where Monarch can express them.
+//      test/fixtures/textdialect.ts, mirroring textmate-dialect's rows where Monarch can express them.
 //   2b. HTML: rows on the COMMITTED `html.monarch.json` (tags, attributes, comments, raw-text bodies).
 //   3. MONACO-COMPILE: the static checks of Monaco's Monarch compiler on every Monarch grammar.
 // Every row states the behaviour WANTED; `xfail` marks a row the generator does not meet yet, with
@@ -21,7 +21,7 @@
 //   node test/monarch-dialect.ts           run, print failures and the counts
 //   node test/monarch-dialect.ts --all     print every row with the token it saw
 //   node test/monarch-dialect.ts --agreement [--write]   TextMate against Monarch on real code, by
-//                                          class, against test/tm-monarch-agreement.json (tier ci)
+//                                          class, against test/textmate-monarch-agreement.json (tier ci)
 import { readFileSync } from 'node:fs';
 import { generateMonarch, type MonarchLanguage, type MonarchRule, type MonarchAction } from '../src/gen-monarch.ts';
 import { createParser } from '../src/interpreter.ts';
@@ -32,8 +32,8 @@ import elementDialect from './fixtures/elementdialect.ts';
 import textDialect from './fixtures/textdialect.ts';
 import { tokenize, type Tok } from './monarch-tokenize.ts';
 
-// --agreement: TextMate against Monarch on real code, by class (test/tm-monarch-agreement.ts).
-if (process.argv.includes('--agreement')) process.exit(await (await import('./tm-monarch-agreement.ts')).agreement());
+// --agreement: TextMate against Monarch on real code, by class (test/textmate-monarch-agreement.ts).
+if (process.argv.includes('--agreement')) process.exit(await (await import('./textmate-monarch-agreement.ts')).agreement());
 
 
 interface Row { section: string; id: string; status: 'pass' | 'xfail'; why?: string; check: () => { ok: boolean; saw: string } }

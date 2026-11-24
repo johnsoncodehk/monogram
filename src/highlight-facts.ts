@@ -7,7 +7,7 @@
 // re-deriving it. A fact is a pure function of the grammar: nothing here may mutate the grammar or a
 // fact a caller holds.
 //
-// The detectors below moved here from src/gen-tm.ts unchanged (bbcaf41). Some still return
+// The detectors below moved here from src/gen-textmate.ts unchanged (bbcaf41). Some still return
 // Oniguruma regex source rather than the neutral fact (noted at each); separating the fact from its
 // spelling is owed, construct by construct, together with the readers that would spell it otherwise.
 import type { Grammar, RuleExpr, RuleDecl, TokenDecl } from './types.ts';
@@ -1185,7 +1185,7 @@ export function valuePositions(grammar: Grammar): ValuePosition[] | null {
  * itself but by a PRECEDING indicator (YAML's `?`): `? somekey` on one line, `: value` on
  * the next. The key scalar then carries no `:` and a flat per-token rule scopes it as an
  * ordinary string. The official grammar paints it as a key (entity.name.tag), so this derives
- * the shape and lets gen-tm emit a contextual rule scoping the scalar right after the
+ * the shape and lets gen-textmate emit a contextual rule scoping the scalar right after the
  * indicator as a key.
  *
  * detectExplicitKey is a PARTIAL VIEW of `valuePositions` (above): the `?` it finds is exactly the
@@ -1536,7 +1536,7 @@ export function detectFlowCollections(grammar: Grammar): {
 }
 
 
-// ── Expression keywords (read by gen-tm's rule-rooted `#expression` derivation) ──
+// ── Expression keywords (read by gen-textmate's rule-rooted `#expression` derivation) ──
 
 export const isExprKeyword = (s: string) => /^[a-zA-Z]/.test(s);
 

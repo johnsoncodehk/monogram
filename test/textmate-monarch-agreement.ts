@@ -1,6 +1,6 @@
-// tm-monarch-agreement.ts: `node test/monarch-dialect.ts --agreement [--write]`. The committed
+// textmate-monarch-agreement.ts: `node test/monarch-dialect.ts --agreement [--write]`. The committed
 // TextMate and Monarch grammars of javascript and typescript tokenize the same real code, and
-// every place they disagree is counted by CLASS against a record (test/tm-monarch-agreement.json).
+// every place they disagree is counted by CLASS against a record (test/textmate-monarch-agreement.json).
 //
 // No other check compares the two highlighters: each dialect gate grades one of them on chosen
 // rows. The failure this catches: a generator change that makes them disagree MORE on real code: a
@@ -34,7 +34,7 @@ import type { Grammar } from '../src/types.ts';
 type CstNode = { offset: number; end: number; tokenType?: string; rule?: string; children?: CstNode[] };
 
 const ROOT = join(import.meta.dirname, '..');
-const RECORD = join(ROOT, 'test/tm-monarch-agreement.json');
+const RECORD = join(ROOT, 'test/textmate-monarch-agreement.json');
 const TEST262 = '/tmp/test262';
 
 // Who is right, per class, judged by the grammar (the role the parsed construct has there), not by

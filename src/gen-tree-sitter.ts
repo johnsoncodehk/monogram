@@ -8,12 +8,12 @@ import { scopeToCapture, tokenCapture } from './highlight-roles.ts';
 import { tokenPatternFirstCharSet, type TokenPatternFirstSet, tokenPatternIsNever, tokenPatternLiteralPrefix, tokenPatternLiteralPrefixes, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
 
 // ════════════════════════════════════════════════════════════════════════════
-// gen-treesitter — derive a tree-sitter parser package from one Grammar.
+// gen-tree-sitter — derive a tree-sitter parser package from one Grammar.
 //
 // Emits three artifacts, all from grammar DATA (never hardcoded TS tokens):
 //   1. grammar.js              — the tree-sitter DSL grammar (rules + Pratt precs)
 //   2. queries/highlights.scm  — capture names inferred from rule SHAPES, the
-//                                same structural inference gen-tm.ts uses for
+//                                same structural inference gen-textmate.ts uses for
 //                                TextMate scopes, re-targeted to @keyword/@type/…
 //   3. src/scanner.c           — external-scanner scaffold for context-sensitive
 //                                lexing (regex-vs-division, template holes),
@@ -405,7 +405,7 @@ function renderWordStep(node: RuleExpr, ref: string, guard: WordGuard | undefine
   const word = ctx.reserved.plan.sets.length ? `reserved(${jsString(guard?.set ?? UNRESERVED_SET)}, ${ref})` : ref;
   if (!ctx.contextual) return word;
   const words = ctx.contextual.plan.get(node);
-  if (!words) throw new Error('gen-treesitter: a word-token step planContextualWords did not reach');
+  if (!words) throw new Error('gen-tree-sitter: a word-token step planContextualWords did not reach');
   if (words.length === 0) return word;
   const key = namesKey(words);
   let name = ctx.namesRules.get(key);
@@ -655,7 +655,7 @@ function conflictTuples(graph: TreeSitterLeafGraph, lr: LrAnalysis, alsoShifts: 
         const rs = [...rm.values()];
         const sh = [...(shifts.get(t)?.values() ?? [])];
         if (!sh.length && rs.length < 2) continue;
-        if (rs.length > 12) throw new Error(`gen-treesitter: ${rs.length} rules reduce on one lookahead (${t}); the conflict parts are enumerated`);
+        if (rs.length > 12) throw new Error(`gen-tree-sitter: ${rs.length} rules reduce on one lookahead (${t}); the conflict parts are enumerated`);
         for (let m = 1; m < 1 << rs.length; m++) {
           const part = rs.filter((_, i) => (m >> i) & 1);
           if (!sh.length && part.length < 2) continue;
@@ -762,7 +762,7 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuard
         const set = setAt.get(i);
         if (set === undefined) return renderExpr(item, ctx);
         const v = treeSitterView(item);
-        if (v !== item && item.type === 'group' && item.treeSitterRuleName) throw new Error('gen-treesitter: a reserved-word guard before a named treeSitterRelax group');
+        if (v !== item && item.type === 'group' && item.treeSitterRuleName) throw new Error('gen-tree-sitter: a reserved-word guard before a named treeSitterRelax group');
         return renderExpr(v, ctx, set);
       }).filter(p => p !== 'blank()');
       if (parts.length === 0) return 'blank()';
@@ -810,7 +810,7 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuard
       // A zero-width assertion consumes nothing and a CFG has no lookahead, so it renders to a
       // no-op. Never silently: classifyAssertions recorded it with whether the drop is exact (the
       // `assertions` ledger of the output); one it did not reach is a generator defect.
-      if (!ctx.classifiedAssertions.has(expr)) throw new Error(`gen-treesitter: ${expr.type} assertion rendered without a classification (rule walk missed it)`);
+      if (!ctx.classifiedAssertions.has(expr)) throw new Error(`gen-tree-sitter: ${expr.type} assertion rendered without a classification (rule walk missed it)`);
       return 'blank()';
     case 'sep': {
       // sep(elem, ',') = optional(seq(elem, repeat(seq(',', elem)), optional(',')))
@@ -867,7 +867,7 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
   const levelNum = (lvl: Grammar['precs'][number], position: 'infix' | 'prefix' | 'postfix'): number => {
     const v = lvl.operators.find(o => o.position === position)!.value;
     const n = position === 'prefix' ? bp.prefixOps.get(v)?.rbp : bp.opTable.get(v)?.lbp;
-    if (n === undefined) throw new Error(`gen-treesitter: ${position} operator ${v} has no binding power in the shared analysis`);
+    if (n === undefined) throw new Error(`gen-tree-sitter: ${position} operator ${v} has no binding power in the shared analysis`);
     return n;
   };
 
@@ -956,7 +956,7 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
       const num = led?.lbp ?? high;
       const dyn = (b: string) => order.dynamic.has(i) ? `prec.dynamic(${order.dynamic.get(i)}, ${b})` : b;
       if (order.yields.has(i)) {
-        if (led !== undefined || openTail(rule.name, alt, ctx.grammar) !== null) throw new Error(`gen-treesitter: the continuation ${ab} yields to an earlier one but carries an operand tail`);
+        if (led !== undefined || openTail(rule.name, alt, ctx.grammar) !== null) throw new Error(`gen-tree-sitter: the continuation ${ab} yields to an earlier one but carries an operand tail`);
         branches.push(dyn(`prec.right(${num}, ${ab})`));
         continue;
       }
@@ -970,7 +970,7 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
       const tail = wholeSelf ? last : openTail(rule.name, alt, ctx.grammar);
       if (tail === null) { branches.push(dyn(`prec.left(${num}, ${ab})`)); continue; }
       const t = renderExpr(tail, ctx);
-      if (!ab.endsWith(`, ${t})`)) throw new Error(`gen-treesitter: the continuation ${ab} does not end in its operand ${t}`);
+      if (!ab.endsWith(`, ${t})`)) throw new Error(`gen-tree-sitter: the continuation ${ab} does not end in its operand ${t}`);
       branches.push(dyn(`seq(prec.left(${num}, ${ab.slice(0, ab.length - t.length - 3)})), ${t})`));
     } else {
       branches.push(order.suffixWeight > 0 ? renderGreedySuffix(atomAlts[i], order, ctx) ?? ab : ab);
@@ -1023,7 +1023,7 @@ function overlapOrder(rule: RuleDecl, alts: RuleExpr[], continuation: boolean[],
       const end = last(alt);
       const rest = firstOf(consuming(alts[earlier])[keys[j].length]);
       const excluded = end.type === 'not' ? firstOf(end.body) : new Set<string>();
-      if (![...rest].every(t => excluded.has(t))) throw new Error(`gen-treesitter: in ${rule.name}, a continuation is a strict prefix of an earlier one and its lookahead does not exclude that one's continuation (${[...rest].join(' ')}): the interpreter's backtracking to it is not modelled`);
+      if (![...rest].every(t => excluded.has(t))) throw new Error(`gen-tree-sitter: in ${rule.name}, a continuation is a strict prefix of an earlier one and its lookahead does not exclude that one's continuation (${[...rest].join(' ')}): the interpreter's backtracking to it is not modelled`);
       out.yields.add(j);
       continue;
     }
@@ -1097,7 +1097,7 @@ function openTail(self: string, alt: RuleExpr, grammar: Grammar): RuleExpr | nul
   if (!r) return null;
   const open = (r.body.type === 'alt' ? r.body.items : [r.body]).some(a => leftRecursive(a, r.name));
   if (!open) return null;
-  if (hasMarker(r.body)) throw new Error(`gen-treesitter: the continuation of ${self} ends in ${r.name}, a precedence-climbing rule; its levels are not rendered on the last step`);
+  if (hasMarker(r.body)) throw new Error(`gen-tree-sitter: the continuation of ${self} ends in ${r.name}, a precedence-climbing rule; its levels are not rendered on the last step`);
   return last;
 }
 
@@ -2507,7 +2507,7 @@ function planStartMarkers(grammar: Grammar, tokenNames: Set<string>, sets: Termi
       if (paths.length) conds.push({ arm: ai, nots, paths });
     });
     if (!conds.length) return;
-    if (conds.length > 32) throw new Error(`gen-treesitter: ${conds.length} start conditions in one choice (${owner})`);
+    if (conds.length > 32) throw new Error(`gen-tree-sitter: ${conds.length} start conditions in one choice (${owner})`);
     // the input classes: a first element, and (for a two-literal path) the second and a line break
     type Cls = { f: StartElem; s?: string; lb: boolean };
     const classes: Cls[] = [];
@@ -2665,7 +2665,7 @@ function uniIdentConstants(grammar: Grammar): string[] {
   const cls = (rs: [number, number][]) => '[' + rs.map(([lo, hi]) => (lo === hi ? cp(lo) : `${cp(lo)}-${cp(hi)}`)).join('') + ']';
   return [
     `// The identifier classes (${jsString(idc.start)}, ${jsString(idc.continue)}) as code-point ranges, derived by`,
-    `// the generator's Unicode so tree-sitter's identifiers are the interpreter's (src/gen-treesitter.ts uniIdentTokenBody).`,
+    `// the generator's Unicode so tree-sitter's identifiers are the interpreter's (src/gen-tree-sitter.ts uniIdentTokenBody).`,
     `const ${UNI_IDENT_JS} = {`,
     `  startBeyondAscii: ${jsString(cls(uniClassRanges(idc.start, 0x80)))},`,
     `  continueBeyondAscii: ${jsString(cls(uniClassRanges(idc.continue, 0x80)))},`,
@@ -2704,7 +2704,7 @@ function shortestUntil(p: TokenPattern, token: string): TokenPattern {
           const [a, b] = [...t];
           if (t.length === 1) items.push({ type: 'repeat', body: not(a), min: 0, greedy: true }, a);
           else if (t.length === 2 && a !== b) items.push({ type: 'repeat', body: { type: 'alt', items: [not(a), { type: 'seq', items: [plus(a), not(a, b)] }] }, min: 0, greedy: true }, plus(a), b);
-          else throw new Error(`gen-treesitter: token ${token}: a non-greedy run up to ${JSON.stringify(t)} has no tree-sitter rendering`);
+          else throw new Error(`gen-tree-sitter: token ${token}: a non-greedy run up to ${JSON.stringify(t)} has no tree-sitter rendering`);
           i++;
           continue;
         }
@@ -2714,7 +2714,7 @@ function shortestUntil(p: TokenPattern, token: string): TokenPattern {
     }
     case 'alt': return { ...p, items: p.items.map(x => shortestUntil(x, token)) };
     case 'repeat':
-      if (!p.greedy) throw new Error(`gen-treesitter: token ${token}: a non-greedy repeat has no tree-sitter rendering (the lexer takes the longest match)`);
+      if (!p.greedy) throw new Error(`gen-tree-sitter: token ${token}: a non-greedy repeat has no tree-sitter rendering (the lexer takes the longest match)`);
       return { ...p, body: shortestUntil(p.body, token) };
     default: return p;
   }
@@ -3098,7 +3098,7 @@ function buildMarkupTreeSitter(grammar: Grammar, grammarName: string): Omit<Tree
   const rawNameRule = hasRaw ? `    _raw_name: $ => token(prec(2, /(${rawAlt})/i)),\n` : '';
   const rawChoice = hasRaw ? '      $.raw_element,\n' : '';
 
-  const grammarJs = `// AUTO-GENERATED by src/gen-treesitter.ts (markup path) — do not edit by hand.
+  const grammarJs = `// AUTO-GENERATED by src/gen-tree-sitter.ts (markup path) — do not edit by hand.
 // Well-formed HTML structure (tags / attributes / text / comments) + raw-text elements.
 // Raw-text element bodies (<script>/<style>) are one external \`raw_text\` token (see
 // src/scanner.c), so a literal '<' inside them is content, not markup.
@@ -3131,7 +3131,7 @@ ${rawNameRule}    text: $ => /[^${o}]+/,
 
   // tree-sitter highlight captures (the standard nvim/helix capture names).
   const highlightsScm = [
-    '; AUTO-GENERATED by src/gen-treesitter.ts (markup path) — do not edit by hand.',
+    '; AUTO-GENERATED by src/gen-tree-sitter.ts (markup path) — do not edit by hand.',
     '(tag_name) @tag',
     '(attribute_name) @attribute',
     '(quoted_attribute_value) @string',
@@ -3151,7 +3151,7 @@ ${rawNameRule}    text: $ => /[^${o}]+/,
   // raw-text tag name. Stateless — the close is the next such delimiter (well-formed input).
   // The tag-name set is DATA from markup.rawText.tags; nothing here hardcodes HTML.
   const rawTagInit = rawTags.map(t => `"${t}"`).join(', ');
-  const scannerC = `// AUTO-GENERATED by src/gen-treesitter.ts (markup path) — do not edit by hand.
+  const scannerC = `// AUTO-GENERATED by src/gen-tree-sitter.ts (markup path) — do not edit by hand.
 // Tree-sitter external scanner for raw-text element bodies (<script>/<style>/…).
 // No libc: the wasm toolchain doesn't link <ctype.h>/<string.h> (their symbols become
 // unresolved imports), so the ASCII helpers below are inlined.
@@ -3258,7 +3258,7 @@ function buildTokenTreeSitter(source: Grammar, grammarName: string): Omit<TreeSi
 
   // Find the identifier nodes that follow a declaration keyword, so we can wrap
   // them in `field('name', …)` in grammar.js AND emit standard `name:` highlight
-  // queries for them. Same shape rule gen-tm.ts uses (inferIdentScope).
+  // queries for them. Same shape rule gen-textmate.ts uses (inferIdentScope).
   const nameFields = collectNameFields(source);
 
   // ε-elimination set (see makeNonEmpty): the start rule is the entry rule, emitted FIRST below.
@@ -3414,7 +3414,7 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
   // Every start-marker site must be written: a site the rendering reached by no path (a node a
   // rewrite copied) would leave its `not` recorded as rendered while grammar.js lacks it.
   for (const site of ctx.startMarkers.markerOf.keys())
-    if (!ctx.writtenMarkers.has(site)) throw new Error(`gen-treesitter: a start-marker site was not rendered (${assertionText(site)})`);
+    if (!ctx.writtenMarkers.has(site)) throw new Error(`gen-tree-sitter: a start-marker site was not rendered (${assertionText(site)})`);
 
   // Token rules (named) — those not provided by the scanner. Skip tokens are
   // included so `extras` references resolve.
@@ -3483,12 +3483,12 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
   // ── contextual keywords (see renderWordStep): one `_names_<n>` rule per keyword set the steps
   // read as a name, and the conflicts planContextualWords derived for them ──
   const unlisted = [...ctx.renderedLiterals].filter(w => ctx.reserved.isWordLiteral(w) && !ctx.wordLiterals.includes(w));
-  if (ctx.wordLiterals.length && unlisted.length) throw new Error(`gen-treesitter: rules wrote keyword(s) collectWordLiterals missed: ${unlisted.join(', ')}`);
+  if (ctx.wordLiterals.length && unlisted.length) throw new Error(`gen-tree-sitter: rules wrote keyword(s) collectWordLiterals missed: ${unlisted.join(', ')}`);
   const wordSnake = ctx.reserved.word && ctx.tokenSnake.get(ctx.reserved.word);
   const ruleNames = new Set([...ctx.ruleSnake.values(), ...ctx.tokenSnake.values(), ...ctx.treeSitterSharedRules.keys()]);
   const nameRead = new Set<string>();
   for (const [key, name] of ctx.namesRules) {
-    if (ruleNames.has(name)) throw new Error(`gen-treesitter: contextual-keyword rule name ${name} collides with a rule`);
+    if (ruleNames.has(name)) throw new Error(`gen-tree-sitter: contextual-keyword rule name ${name} collides with a rule`);
     const ws = key.split(' ');
     const body = ws.length === 1 ? jsString(ws[0]) : `choice(${ws.map(jsString).join(', ')})`;
     ruleEntries.push(`    ${name}: $ => prec.dynamic(-1, alias(${body}, $.${wordSnake}))`);
@@ -3501,7 +3501,7 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
   const contextualConflicts: string[][] = [];
   for (const c of ctx.contextual?.conflicts ?? []) {
     const names = c.map(v => 'names' in v ? ctx.namesRules.get(v.names) : ctx.ruleSnake.get(v.rule) ?? (ctx.treeSitterSharedRules.has(v.rule) ? v.rule : undefined));
-    if (names.some(n => n === undefined)) throw new Error(`gen-treesitter: a contextual-keyword conflict names an unrendered rule: ${JSON.stringify(c.filter((_, i) => names[i] === undefined))}`);
+    if (names.some(n => n === undefined)) throw new Error(`gen-tree-sitter: a contextual-keyword conflict names an unrendered rule: ${JSON.stringify(c.filter((_, i) => names[i] === undefined))}`);
     contextualConflicts.push([...new Set(names as string[])].sort());
   }
   const allConflicts = [...conflicts, ...contextualConflicts];
@@ -3523,11 +3523,11 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
     const ownToken = new Map<string, string>();
     for (const { words } of reservedSets) for (const w of words) {
       if (ctx.renderedLiterals.has(w) || tokenBodies.has(jsString(w)) || ownToken.has(w)) continue;
-      if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(w)) throw new Error(`gen-treesitter: reserved word ${JSON.stringify(w)} is no rendered token and cannot name a token rule`);
+      if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(w)) throw new Error(`gen-tree-sitter: reserved word ${JSON.stringify(w)} is no rendered token and cannot name a token rule`);
       const name = `_reserved_${w}`;
-      if ([...ctx.ruleSnake.values(), ...ctx.tokenSnake.values()].includes(name)) throw new Error(`gen-treesitter: reserved-word token rule ${name} collides with a rule`);
+      if ([...ctx.ruleSnake.values(), ...ctx.tokenSnake.values()].includes(name)) throw new Error(`gen-tree-sitter: reserved-word token rule ${name} collides with a rule`);
       // ruleLiteral saw every rule literal: a second token for a written word would shadow it
-      if (ruleEntries.some(e => e.includes(jsString(w)))) throw new Error(`gen-treesitter: reserved word ${JSON.stringify(w)} is written by a rule that bypassed ruleLiteral`);
+      if (ruleEntries.some(e => e.includes(jsString(w)))) throw new Error(`gen-tree-sitter: reserved word ${JSON.stringify(w)} is written by a rule that bypassed ruleLiteral`);
       ownToken.set(w, name);
     }
     const word = (w: string) => ownToken.has(w) ? `$.${ownToken.get(w)}` : jsString(w);
@@ -3561,7 +3561,7 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
 // ════════════════════════════════════════════════════════════════════════════
 // 2. queries/highlights.scm
 //
-// Reuse the SAME rule-shape inference family gen-tm.ts uses, but instead of
+// Reuse the SAME rule-shape inference family gen-textmate.ts uses, but instead of
 // emitting TextMate scopes we emit tree-sitter capture names. The mapping from a
 // TextMate scope family → capture name is a small, language-agnostic table
 // (tree-sitter's standard capture vocabulary).
@@ -3578,13 +3578,13 @@ interface ScmRule {
 }
 
 /**
- * Build highlights.scm. Strategy, mirroring gen-tm.ts but for tree-sitter:
+ * Build highlights.scm. Strategy, mirroring gen-textmate.ts but for tree-sitter:
  *
  *  A. Literal-keyword captures: every keyword literal in the grammar grouped by
- *     its `scopes` entry → `[ "kw" … ] @capture`. (gen-tm's section 5.)
+ *     its `scopes` entry → `[ "kw" … ] @capture`. (gen-textmate's section 5.)
  *  B. Operator/punctuation literal captures, derived from scopes + prec table.
  *  C. Token-node captures: numbers/strings/comments/regex/templates/decorators
- *     by token classification → `(token_name) @capture`. (gen-tm's section 2.)
+ *     by token classification → `(token_name) @capture`. (gen-textmate's section 2.)
  *  D. Contextual node captures using FIELDS we emitted in grammar.js: the
  *     identifier after a definition keyword carries a `name` field, queried as
  *     `(rule name: (ident) @type)` — derived via the same inferIdentScope rule.
@@ -3730,7 +3730,7 @@ function buildHighlightsScm(
   // ── Definition names via the `name` field emitted in grammar.js ──
   // The identifier after a declaration keyword was wrapped in field('name', …),
   // so we query it with the STANDARD tree-sitter form (no custom predicate).
-  // Capture chosen by the same inferIdentScope rule gen-tm uses
+  // Capture chosen by the same inferIdentScope rule gen-textmate uses
   // (storage.type.function* → @function; storage.type.X → @type).
   if (identSnake && nameFieldsByRule.length > 0) {
     out.push(';; Declaration names (via the `name` field) → @function / @type.');
@@ -3748,7 +3748,7 @@ function buildHighlightsScm(
   // ── Type-reference positions → @type (structural, no hardcoded vocabulary) ──
   // An identifier sitting inside a `type`-flagged rule's node IS a type reference
   // (primitive, user type, or a qualified-name part — the nesting carries each one).
-  // This is the tree-sitter analogue of gen-tm's entity.name.type inference, and the
+  // This is the tree-sitter analogue of gen-textmate's entity.name.type inference, and the
   // reason builtins/primitives need no @type predicate: position decides type-ness.
   // Keyword-anchored declaration names: the generic capture above is ambiguous when
   // one decl rule is shared across kinds (a `class` name vs a `function` name look
@@ -3780,7 +3780,7 @@ function buildHighlightsScm(
     }
 
     // ── Structural member / type-param / property-access captures (derived from
-    //    rule SHAPE; the tree-sitter analogue of gen-tm's per-position inference) ──
+    //    rule SHAPE; the tree-sitter analogue of gen-textmate's per-position inference) ──
     const tokenNames = new Set(grammar.tokens.map(t => t.name));
     const identName = identTok ? identTok.name : '';
     const snake = (n: string) => ctx.ruleSnake.get(n);
@@ -3946,7 +3946,7 @@ interface NameFieldPlan {
 
 /**
  * Find every `<definition-keyword> … <Ident>` adjacency and plan a `name` field
- * for that identifier. Capture is classified the same way gen-tm.ts's
+ * for that identifier. Capture is classified the same way gen-textmate.ts's
  * inferIdentScope does:
  *   storage.type.function* → the name is a @function
  *   storage.type.X (other) → the name is a @type
@@ -4027,7 +4027,7 @@ function collectNameFields(grammar: Grammar): NameFieldPlan {
   return { nodes, byRule };
 }
 
-// ── Structural-role detectors (tree-sitter analogues of gen-tm's per-position
+// ── Structural-role detectors (tree-sitter analogues of gen-textmate's per-position
 //    scope inference). Each derives a rule's role from its grammar SHAPE — never a
 //    hardcoded rule name — so highlights.scm can capture that node's identifiers. ──
 
@@ -4248,7 +4248,7 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   const tokens = ctx.zeroWidth.tokens;
   const starts = ctx.startMarkers.tokens;
   if (!tokens.length && !starts.length) return { helpers: [], call: [] };
-  if (!tokens.length) throw new Error('gen-treesitter: start markers without zero-width tokens (the scanner reads them in scan_zero_width)');
+  if (!tokens.length) throw new Error('gen-tree-sitter: start markers without zero-width tokens (the scanner reads them in scan_zero_width)');
   const word = ctx.reserved.word;
   const isWordLit = ctx.reserved.isWordLiteral;
   // ── kinds: literals (longest match), skip openers, tokens by first character ──
@@ -4281,7 +4281,7 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   for (let i = skips.length - 1; i >= 0; i--)
     if (skips.some(k => k !== skips[i] && k.closer === skips[i].closer && skips[i].opener.startsWith(k.opener))) skips.splice(i, 1);
   const kindTokens = grammar.tokens.filter(t => !t.flags.includes('skip') && !tokenPatternIsNever(t)).map(t => t.name);
-  if (kindTokens.length > 64) throw new Error(`gen-treesitter: ${kindTokens.length} non-literal tokens; the zero-width scanner's token mask holds 64`);
+  if (kindTokens.length > 64) throw new Error(`gen-tree-sitter: ${kindTokens.length} non-literal tokens; the zero-width scanner's token mask holds 64`);
   const cRanges = cCharSetTest;
   const H: string[] = [];
   H.push('// ── Zero-width tokens: line-end alternatives and same-line markers (planZeroWidth) ──');
@@ -4431,9 +4431,9 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   const startPaths = ctx.startMarkers.conds.flatMap((ps, cond) => ps.map(p => {
     const first = 'lit' in p.first ? p.first.lit : null;
     if (first !== null && p.second !== undefined && literals.some(l => l !== first && l.startsWith(first)))
-      throw new Error(`gen-treesitter: start marker path ${first} ${p.second}: ${first} is the prefix of another literal`);
+      throw new Error(`gen-tree-sitter: start marker path ${first} ${p.second}: ${first} is the prefix of another literal`);
     const tok = 'tok' in p.first ? kindTokens.indexOf(p.first.tok) : -1;
-    if ('tok' in p.first && tok < 0) throw new Error(`gen-treesitter: start marker path token ${p.first.tok} is no candidate token`);
+    if ('tok' in p.first && tok < 0) throw new Error(`gen-tree-sitter: start marker path token ${p.first.tok} is no candidate token`);
     return { cond, lit: first === null ? -1 : litId.get(first)!, tok, second: p.second === undefined ? -1 : litId.get(p.second)!, sameLine: !!p.sameLine };
   }));
   if (starts.length) {

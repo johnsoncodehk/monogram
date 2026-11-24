@@ -1,5 +1,5 @@
 // An ELEMENT DIALECT that is not React: the highlighter generators' measuring fixture
-// (test/tm-dialect.ts). Written from scratch to exercise the mechanisms a template dialect
+// (test/textmate-dialect.ts). Written from scratch to exercise the mechanisms a template dialect
 // needs from the editor generators, under vocabulary that is NOT JSX's:
 //   • keyword literals that begin with a non-word character (`@if`, `@else`, `@each`,
 //     `@empty`), next to an annotation token (`@name`) that also begins with `@`;

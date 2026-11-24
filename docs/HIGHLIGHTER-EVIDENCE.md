@@ -185,18 +185,18 @@ derived **tree-sitter** target, a real parser over the whole tree, resolves it.
 ## tree-sitter
 
 The derived `queries/highlights.scm` is structural, read off the grammar's rules. Gate
-`npm run gate:treesitter` ([`test/treesitter-bench.ts`](../test/treesitter-bench.ts), CI job
+`npm run gate:tree-sitter` ([`test/tree-sitter-bench.ts`](../test/tree-sitter-bench.ts), CI job
 `treesitter`) grades token-family accuracy against a neutral `tsc` oracle over the
 documented-bug corpus, and fails unless the derived grammar is at least 90% and at least the
 official tree-sitter grammar. Last run (CI on `3a18a69`): Monogram 96.3%, official 92.5%.
 
 The other derived packages are checked in the same job: every `queries/*.scm` of every
-grammar must compile against its wasm ([`test/treesitter-queries.ts`](../test/treesitter-queries.ts));
+grammar must compile against its wasm ([`test/tree-sitter-queries.ts`](../test/tree-sitter-queries.ts));
 every TS / JS dialect parses its corpora, synthetic and real code (TypeScript's own `src/` at the
 pinned `TS_REPO_SHA`, test262's syntax tests at `test/test262.sha`), against the interpreter's
 verdicts, with every disagreement and its class pinned in
-[`test/treesitter-record.txt`](../test/treesitter-record.txt)
-([`test/treesitter-verdicts.ts`](../test/treesitter-verdicts.ts); any movement fails). On the real code
+[`test/tree-sitter-record.txt`](../test/tree-sitter-record.txt)
+([`test/tree-sitter-verdicts.ts`](../test/tree-sitter-verdicts.ts); any movement fails). On the real code
 the trees are compared too: in every file both parse without ERROR, tree-sitter's expression spans
 against the interpreter's, recorded per corpus as totals and as the differing files by the class of
 their first difference (`spans` entries: a wrong tree with no ERROR, which no verdict sees). On
@@ -228,7 +228,7 @@ Operator precedence: tree-sitter's precedence numbers are the binding powers of 
 read): an operator's left binding power, a prefix operator's right one, and a `ledPrec` continuation
 (`?:`, `in`, `instanceof`, `as`, `satisfies`) its connector's; a continuation whose last operand is read
 whole (the conditional's last branch, `as T`'s type) leaves that step unprecedenced, so the operators
-after it shift into it. `test/treesitter-verdicts.ts` parses `a OP1 c OP2 d` for one operator per level and
+after it shift into it. `test/tree-sitter-verdicts.ts` parses `a OP1 c OP2 d` for one operator per level and
 every connector, nested both ways, with every prefix and postfix operator, and where both accept
 compares tree-sitter's expression spans with the interpreter's; the pairs still bracketed differently
 are recorded as `brackets` entries. Two classes remain: `yield a OP c` (the precedence table's prefix `yield` beside the
@@ -253,7 +253,7 @@ conflicts (call / instantiation / binary / unary) and no scanner token: it reads
 Overlapping readings: two more corpora compare spans, `type arguments` (calls with type arguments
 beside the relational readings, TypeScript and TSX) and `new arguments` (an arm's optional arguments
 beside a call on the arm without them, every JS / TS dialect). Where two readings of the same tokens
-overlap, the generator renders the interpreter's order (`overlapOrder` in `src/gen-treesitter.ts`):
+overlap, the generator renders the interpreter's order (`overlapOrder` in `src/gen-tree-sitter.ts`):
 the LED loop tries the continuations in grammar order before any operator, the first that matches
 winning, and a NUD takes its longest match. So a continuation that is a strict prefix of an earlier one
 (the instantiation `f<T>` beside the typed call `f<T>(x)`), whose own lookahead excludes every token
@@ -277,7 +277,7 @@ TypeScript pairs), since its CFG has no assignment-target or `noUnaryLhs` condit
 A tree-sitter grammar is a CFG and has no lookahead, so the grammar's zero-width assertions
 (`not`, `sameLine`, `noCommentBefore`, `noMultilineFlowBefore`, `notLeftLeaf`) are rendered
 exactly only where a rewrite exists and are otherwise dropped. The generator records every
-occurrence with its class ([`test/treesitter-assertions.ts`](../test/treesitter-assertions.ts),
+occurrence with its class ([`test/tree-sitter-assertions.ts`](../test/tree-sitter-assertions.ts),
 also in the `test` job summary): `lowered` and `vacuous` are exact (FIRST/FOLLOW prove the
 assertion always holds where the CFG reaches it). Every other class marks a place where the
 generated grammar may accept more than the grammar does. The class names the lowering that would
@@ -290,7 +290,7 @@ tree-sitter `reserved` word set on that token. tree-sitter applies one set per p
 highest id), so the sets are a chain from most to least reserving and every unguarded word
 position carries the empty last set. Where a guarded and a less guarded position share a state,
 the less reserving reading wins, so the rendering never rejects more than the grammar; it is
-exact in every other state, and so not counted exact: on CI's reserved-word corpus (`test/treesitter-verdicts.ts`)
+exact in every other state, and so not counted exact: on CI's reserved-word corpus (`test/tree-sitter-verdicts.ts`)
 the shared-state witnesses `x = { if };` (beside `x = { if: 1 }`), `import { if } from "m";` (beside
 `import { if as x }`) and `const { default } = o;` (beside `{ default: d }`) stay accepted, while
 `var if`, `function return() {}`, `catch (this)`, `x = y + break;` and the rest are rejected. Reserved
@@ -313,7 +313,7 @@ of its own, since tree-sitter reserves only tokens. Recorded on `5a6c557`, befor
 Measures of what the generators do for a grammar that is not one of the six committed ones.
 They are records, not targets; each moves only with a generator change that says why.
 
-- [`test/tm-dialect.ts`](../test/tm-dialect.ts): scope assertions on an element dialect that is
+- [`test/textmate-dialect.ts`](../test/textmate-dialect.ts): scope assertions on an element dialect that is
   not React ([`test/fixtures/elementdialect.ts`](../test/fixtures/elementdialect.ts): `@if` /
   `@each` directive keywords beside an `@name` annotation token, directive regions, dynamic
   tags, a `<style>` body), and on element grammars whose rule names, tag-name scope and
@@ -349,13 +349,13 @@ worse. The metric counts these as differences, not defects.
 
 - [KNOWN-GAPS.md](KNOWN-GAPS.md): the generative scope-versus-role check's ledger of
   valid-input positions where the TextMate grammar and the parser disagree.
-- [COMPLETENESS.md](COMPLETENESS.md): why `gen-tm` emits every construct the grammar requires.
+- [COMPLETENESS.md](COMPLETENESS.md): why `gen-textmate` emits every construct the grammar requires.
 - [HIGHLIGHT-ISSUES-SURVEY.md](HIGHLIGHT-ISSUES-SURVEY.md): a 2026-06-03 survey of open
   highlighting issues in embedded-language formats.
 
 ### tree-sitter record: classes whose cause is the missing context
 
-`test/treesitter-record.txt` names a class for each disagreement between tree-sitter's tree and the
+`test/tree-sitter-record.txt` names a class for each disagreement between tree-sitter's tree and the
 interpreter's. Two classes share one cause: a tree-sitter grammar has no parameters, so the generated
 grammar cannot say that `yield` (or `await`) is an operator only in a generator (or async) body.
 

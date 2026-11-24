@@ -170,7 +170,7 @@ _Each hand-written **official** grammar vs Monogram's **derived** one, on the bu
 <!-- issues:end -->
 
 The derived tree-sitter queries score 96.3% token-family accuracy against a `tsc` oracle,
-the official tree-sitter grammar 92.5% (gate `gate:treesitter`, CI on `3a18a69`). The ledger
+the official tree-sitter grammar 92.5% (gate `gate:tree-sitter`, CI on `3a18a69`). The ledger
 per issue, the deliberate differences from the official grammar, and what TextMate provably
 cannot express: [docs/HIGHLIGHTER-EVIDENCE.md](docs/HIGHLIGHTER-EVIDENCE.md).
 
@@ -233,7 +233,7 @@ grammar (*.ts, src/api.ts)
    │
    ├─ emitted JS parser: src/target-js.ts + src/lexer.ts   (to be retired)
    │
-   └─ highlighters: src/gen-tm.ts (TextMate), src/gen-treesitter.ts, src/gen-monarch.ts,
+   └─ highlighters: src/gen-textmate.ts (TextMate), src/gen-tree-sitter.ts, src/gen-monarch.ts,
                     src/gen-vscode-config.ts (language configuration)
 ```
 

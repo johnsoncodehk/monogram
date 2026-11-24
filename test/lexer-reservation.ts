@@ -37,7 +37,7 @@ const DENSE = 1 << 16;
 
 const CORPORA: Record<string, string> = {
   'ordinary code (typescript.ts)': readFileSync(new URL('../typescript.ts', import.meta.url), 'utf8'),
-  'ordinary code (src/gen-tm.ts)': readFileSync(new URL('../src/gen-tm.ts', import.meta.url), 'utf8'),
+  'ordinary code (src/gen-textmate.ts)': readFileSync(new URL('../src/gen-textmate.ts', import.meta.url), 'utf8'),
   'dense one-byte tokens `;;;`': ';'.repeat(DENSE),
   'dense one-byte tokens `a+a+a`': 'a' + '+a'.repeat(DENSE / 2),
   'dense one-byte tokens `a;a;`': 'a;'.repeat(DENSE / 2),
@@ -46,7 +46,7 @@ const CORPORA: Record<string, string> = {
 
 // Inputs a parse fails on, each parsed with a builder that has parsed ORDINARY twice, before ORDINARY
 // is parsed with it again: that parse must allocate nothing either.
-const ORDINARY = CORPORA['ordinary code (src/gen-tm.ts)']!;
+const ORDINARY = CORPORA['ordinary code (src/gen-textmate.ts)']!;
 const FAILING: Record<string, string> = {
   'rejected by the parser': 'let = ;',
   'rejected with the lexer stacks non-empty (inside `${`, an open bracket)': 'x = `a${ f((',

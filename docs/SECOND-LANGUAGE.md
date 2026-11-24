@@ -170,7 +170,7 @@ needed nothing either.
 
 ## Highlighters (not in the first pass)
 
-- TextMate: colour needs no indentation, but gen-tm's indent paths are YAML's (value-position
+- TextMate: colour needs no indentation, but gen-textmate's indent paths are YAML's (value-position
   introducers from `compactIndicators`, block scalars) and must stay off for Python. Soft keywords
   (`match`, `case`) need a one-line lookahead (`match … :` at the end of the line). f-strings need
   M2 (one template token per grammar today).

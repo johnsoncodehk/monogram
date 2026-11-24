@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  tm-completeness.ts — the COMPLETENESS checker + ledger for src/gen-tm.ts.
+//  textmate-completeness.ts — the COMPLETENESS checker + ledger for src/gen-textmate.ts.
 //
 //  Issue #51: prove that the TextMate generator is COMPLETE — for every grammar
-//  shape that REQUIRES a TextMate construct, gen-tm emits it AND it is reachable.
+//  shape that REQUIRES a TextMate construct, gen-textmate emits it AND it is reachable.
 //  This is the dual of the soundness ledger (test/gap-ledger.ts, which finds
 //  WRONG paints): here we find UN-emitted / UN-reachable obligations.
 //
@@ -22,7 +22,7 @@
 //    LAYER B — OBLIGATION COVERAGE. From each grammar G we enumerate Obl(G): the
 //      finite, fixed-denominator multiset of highlighting obligations induced by G's
 //      tokens / literals / operators / shapes / config. The enumeration is an
-//      INDEPENDENT exhaustive walk of the closed algebra (NOT gen-tm's own detectors —
+//      INDEPENDENT exhaustive walk of the closed algebra (NOT gen-textmate's own detectors —
 //      a detector that misses a shape would otherwise also miss its obligation,
 //      co-blind). Each obligation must be discharged by an emitted construct that is
 //      reachable from the root patterns OR a declared export surface.
@@ -32,8 +32,8 @@
 //      export surface whose structural source is present resolves (no dangling).
 //
 //  Run (bare node):
-//    node test/tm-completeness.ts            # the gate: print the report, fail on any open gap
-//    node test/tm-completeness.ts --gen      # `npm run gen`'s step: (re)write docs/COMPLETENESS.md's
+//    node test/textmate-completeness.ts            # the gate: print the report, fail on any open gap
+//    node test/textmate-completeness.ts --gen      # `npm run gen`'s step: (re)write docs/COMPLETENESS.md's
 //                                            # ledger region (CI's artifact drift step checks it)
 // ─────────────────────────────────────────────────────────────────────────────
 import {
@@ -46,7 +46,7 @@ import {
 import { tokenPatternToRegex, tokenPatternIsNever, tokenPatternLiteralText } from '../src/token-pattern.ts';
 import { collectLiterals, isKeywordLiteral } from '../src/grammar-utils.ts';
 import type { RuleExpr, TokenPattern, Grammar } from '../src/types.ts';
-import { generateTmLanguage } from '../src/gen-tm.ts';
+import { generateTmLanguage } from '../src/gen-textmate.ts';
 import { createParser } from '../src/interpreter.ts';
 import { generateInputs } from './grammar-gen.ts';
 import { buildRoleMap, leafRoles, spanBuckets, GEN_OPTS, type TmTok, type Bucket } from './generative-detect.ts';
@@ -272,11 +272,11 @@ export function tokenCensus(g: Grammar, tmJson: TmGrammarJson): TokenCensus {
       bump('markup-region'); continue;
     }
     // An element region's text token (ElementRegion.text) is lexed only inside the region; its
-    // children text is painted by the element patterns (today gen-tm's JSX repository, whose
+    // children text is painted by the element patterns (today gen-textmate's JSX repository, whose
     // children region must exist; region-aware element patterns are the generators' item).
     if (g.elements?.text === t.name && repo['jsx-children']) { bump('element-region'); continue; }
     // ... and a tag-only token (ElementRegion.tagTokens: the attribute string) by the tag's
-    // attribute patterns (gen-tm's `jsx-attributes`, whose string patterns paint it).
+    // attribute patterns (gen-textmate's `jsx-attributes`, whose string patterns paint it).
     if (g.elements?.tagTokens?.includes(t.name) && repo['jsx-attributes']) { bump('element-region'); continue; }
     const delim = tokenPatternLiteralText(t);                          // a region owns this token's delimiter?
     if (delim && full.includes(JSON.stringify(delim).slice(1, -1))) { bump('region-owned'); continue; }
@@ -323,7 +323,7 @@ export function tmTokenize(grammar: vsctm.IGrammar, text: string): TmTok[] {
 //  beyond the bare document root, never left as inert text. The denominator is the
 //  grammar-derived obligation leaves over the deterministic corpus; the role map and the
 //  corpus are the SAME independent infrastructure the soundness checks use (no co-bias
-//  with gen-tm's own detectors). A leaf painted SOME non-root scope discharges its
+//  with gen-textmate's own detectors). A leaf painted SOME non-root scope discharges its
 //  recognise-and-scope obligation; whether that scope is the RIGHT one is soundness
 //  (test/scope-gap.ts + test/gap-ledger.ts), a separate axis.
 // ════════════════════════════════════════════════════════════════════════════
@@ -421,7 +421,7 @@ export function literalDischarge(g: Grammar, tmJson: TmGrammarJson): LiteralDisc
 // ════════════════════════════════════════════════════════════════════════════
 //  LAYER A (cont.) — the literal-collection backbone is total + drops nothing consumed
 //
-//  The flat keyword/operator scoping in gen-tm.ts is driven by the SHARED primitive
+//  The flat keyword/operator scoping in gen-textmate.ts is driven by the SHARED primitive
 //  collectLiterals (src/grammar-utils.ts), looped over every rule body. So flat keyword
 //  completeness reduces to: collectLiterals collects EVERY consumed literal — it recurses
 //  into all consuming structural constructors (seq/alt/quantifier/group/sep) and correctly
@@ -506,7 +506,7 @@ async function regionKeywordProbe(): Promise<void> {
 // ════════════════════════════════════════════════════════════════════════════
 //  SHAPE ROBUSTNESS — a shape-detector must fire on EVERY equivalent factoring
 //
-//  The ~24 shape detectors in gen-tm.ts recognise a construct (ternary / call / generic
+//  The ~24 shape detectors in gen-textmate.ts recognise a construct (ternary / call / generic
 //  type-params / …) by its structure. A detector that matches one FIXED factoring (a flat
 //  5-window ternary, an inline `(`, a 3-item `<sep>`) silently drops the SAME construct
 //  written an equivalent way (an `opt`-tail, a separate args rule, a trailing comma) — the

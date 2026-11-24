@@ -1,10 +1,10 @@
 # Total derivation: the completeness spine
 
-Why `src/gen-tm.ts` emits *every* TextMate construct the grammar requires — not by
+Why `src/gen-textmate.ts` emits *every* TextMate construct the grammar requires — not by
 testing a corpus, but because the generator's input is a **closed, finite algebra**, so
 "every obligation" is enumerable and each is discharged by a reachable emission. This is
 the dual of the soundness ledger (`KNOWN-GAPS.md`, which finds *wrong* paints); here we
-prove there are no *missing* ones. The proof is held exact by `test/tm-completeness.ts`
+prove there are no *missing* ones. The proof is held exact by `test/textmate-completeness.ts`
 and the ledger at the end.
 
 ## The contract
@@ -46,7 +46,7 @@ value of a **closed union**: `RuleExpr` has 15 constructors and `TokenPattern` h
 `aliasScopes`, `expressionRule`, `manifest`). An *obligation* is induced by a
 constructor-occurrence or a config-field-occurrence. So completeness reduces to: **for each
 obligation generator, the generator has a discharging, reachable emission** — three
-mechanically-checkable layers. Both sides are finite — a finite `G`, a finite `gen-tm(G)`, and an
+mechanically-checkable layers. Both sides are finite — a finite `G`, a finite `gen-textmate(G)`, and an
 obligation taxonomy bounded by TextMate's finite construct kinds — so completeness is a **decidable**
 property **per grammar**, checked a-priori on the emitted artifact with no corpus. The **algebra
 closure** (Layer A) is what holds ∀ G by structural induction (the lowering/compilation is total over
@@ -79,7 +79,7 @@ vacuous — `collectLiterals` already covers every nesting (`checkCollectLiteral
 
 The residual silent-drop risk therefore lives only in the **specialised region walkers** that
 do *not* use `collectLiterals` (they hoist keywords out of a derived `<…>` / region scope).
-Auditing the 48 RuleExpr walkers in `gen-tm.ts` found exactly one reachable gap:
+Auditing the 48 RuleExpr walkers in `gen-textmate.ts` found exactly one reachable gap:
 `getTypeParamElementKeywords` omitted `sep`, so a keyword inside a `sep`-list within a
 type-parameter element lost its keyword role inside `<…>`. No shipped grammar nests a keyword
 that way (TS type-param keywords are direct), so it was latent — but it is a *supported*
@@ -91,7 +91,7 @@ regression guard (it fails without the fix).
 
 ## Layer B — coverage: every obligation has a reachable discharge
 
-The obligation families, enumerated from `G`'s closed algebra **independently of gen-tm's own
+The obligation families, enumerated from `G`'s closed algebra **independently of gen-textmate's own
 detectors** (a detector that missed a shape would otherwise also miss its obligation —
 co-blind):
 
@@ -127,7 +127,7 @@ a differential witness on the soundness axis; it is not the guarantee.
 ## Measuring the detector — mutation testing
 
 A passing checker is worthless if the checker is *blind* — the corpus-trap this project has been
-bitten by. So the guarantee is not asserted, it is **measured**: `test/tm-mutation.ts` injects a
+bitten by. So the guarantee is not asserted, it is **measured**: `test/textmate-mutation.ts` injects a
 catalogue of known gaps into the emitted grammar (drop a key, drop all of a token's includes,
 neuter a scope to the bare root, add a dead key, a dangling include, mis-scope a token to a wrong
 role, reorder two disambiguation patterns) and records which detector layer — if any — kills each.
@@ -148,7 +148,7 @@ The honest, measured result:
 The line is precise — and narrower than an earlier draft of it claimed (an adversarial review of
 that draft is owed these corrections). **Completeness — every required construct PRESENT + REACHABLE
 + visually scoped — is checked structurally, no corpus**, and for a fixed `G` it is DECIDABLE (finite
-`G`, finite `gen-tm(G)`, an obligation taxonomy bounded by TextMate's finite construct kinds). Three
+`G`, finite `gen-textmate(G)`, an obligation taxonomy bounded by TextMate's finite construct kinds). Three
 honest bounds on that:
 
 - **Presence, not identity.** The discharge is *presence* — a reachable repository entry whose scope
@@ -163,7 +163,7 @@ honest bounds on that:
   EXECUTED on the six shipped grammars plus synthetic witnesses, not run as a quantified proof over all `G`.
 - **Ordering is decidable, not undecidable.** Which of two overlapping patterns *wins* is, for a fixed
   `G`, a finite index read (the emitted `patterns` list is finite, the winner is leftmost-by-order, and
-  gen-tm computes that order by a deterministic sort). It is simply **not reachable by a corpus-free
+  gen-textmate computes that order by a deterministic sort). It is simply **not reachable by a corpus-free
   structural fold over the grammar** — a measurement limit, the wording §"Measuring the detector" uses,
   NOT undecidability. (An earlier draft called ordering "undecidable"; that was the same impossibility-
   without-proof over-claim the project guards against.)
@@ -193,7 +193,7 @@ Three sites looked like TextMate impossibilities; under adversarial attack (the 
 discipline: a "can't" must survive a real attack before it is recorded), all three were
 **refuted** with constructions tested in the production engine:
 
-- **Cast/arrow "not after a value" across unbounded whitespace.** gen-tm emits a fixed-width
+- **Cast/arrow "not after a value" across unbounded whitespace.** gen-textmate emits a fixed-width
   negative-lookbehind ladder (`\s{k}`, k=0..16). The exact unbounded condition is a single
   variable-width lookbehind `(?<![\w$)\]]\s*)`, which **vscode-oniguruma compiles and runs
   correctly** (verified: suppresses `a   <b`, fires at expr-start). An Onigmo-portable
@@ -209,7 +209,7 @@ discipline: a "can't" must survive a real attack before it is recorded), all thr
 So none of these is a model impossibility. Each is (a) directly expressible in vscode-oniguruma
 — the engine VS Code actually runs — and (b) approximated by a fixed-width form *deliberately*,
 for **Onigmo portability** (RedCMD's YAML grammar runs under Onigmo, which rejects variable-width
-lookbehind; the same source must compile under both, see `test/redcmd-tm-diagnostics.ts`). And
+lookbehind; the same source must compile under both, see `test/redcmd-textmate-diagnostics.ts`). And
 each is a **soundness-precision** matter, not a completeness gap: the `<` / `/` / arrow *is*
 recognised and scoped; what is refined at the frontier is *which* role at the ambiguous boundary.
 Improving that precision (var-width forms for the `vscode-oniguruma`-only grammars, `\g<>` for the
@@ -219,10 +219,10 @@ arrow region) is a separate, soundness-gated change. **The completeness obligati
 
 Completeness is *presence*; soundness is *correctness* — does each present construct read the
 *right* scope on every input. Soundness is not decided here (`test/scope-gap.ts` / `gap-ledger`), but
-one structural question about it **is** settled: does gen-tm have a *ceiling* — a scope obligation no
+one structural question about it **is** settled: does gen-textmate have a *ceiling* — a scope obligation no
 TextMate grammar can reproduce, the wall the naive "regex < CFG" intuition predicts? By exhaustive
 audit the answer is **no ceiling on well-formed input** — and the reason is not that TextMate is
-omnipotent but that gen-tm's *obligation space* is itself TextMate-bounded:
+omnipotent but that gen-textmate's *obligation space* is itself TextMate-bounded:
 
 - **The obligation is the role map, not the parse.** A scope in Monogram is `f(token type)` [lex-time]
   or `f(literal text)` [`scopeOverrides`], plus a finite set of shape-detectors — there is no general
@@ -243,18 +243,18 @@ omnipotent but that gen-tm's *obligation space* is itself TextMate-bounded:
   d=25, generic d=60, JSX d=20, template `${}` d=20).
 
 Honest bounds: this is **well-formed-input** soundness, and **strong evidence + a structural argument,
-not a closed-form ∀-grammar proof** — it audits the channels gen-tm *emits* and infers "unbounded"
+not a closed-form ∀-grammar proof** — it audits the channels gen-textmate *emits* and infers "unbounded"
 from monotone frame growth verified to depth 60. `highlighter ≡ parser` thus holds on well-formed
 input but is **not a total equivalence**: broken/partial input still has local region-leaks where a
 regex region's heuristic boundary diverges from the parse. The audit *derived* two such over-accepts
 the corpus was blind to — an enum brace-leak and a `module`/`namespace`/`type` declaration-keyword
-over-accept — and root-caused both in gen-tm. They were fixable bugs, not ceilings.
+over-accept — and root-caused both in gen-textmate. They were fixable bugs, not ceilings.
 
 ## The proof ledger
 
 The fixed denominator is every measured obligation (token discharge + repository reachability +
 leaf painting), summed across the six grammars; the numerator is the discharged count.
-Written by `npm run gen` (`node test/tm-completeness.ts --gen`); CI's artifact drift step fails if the committed one differs.
+Written by `npm run gen` (`node test/textmate-completeness.ts --gen`); CI's artifact drift step fails if the committed one differs.
 
 <!-- COMPLETENESS-LEDGER:START — auto-generated by `npm run gen`; do not edit by hand. -->
 
@@ -274,10 +274,10 @@ Written by `npm run gen` (`node test/tm-completeness.ts --gen`); CI's artifact d
 
 ## The gates that hold this exact
 
-- `test/tm-completeness.ts` — Layer A closure (RuleExpr / TokenPattern / `collectLiterals`), the
+- `test/textmate-completeness.ts` — Layer A closure (RuleExpr / TokenPattern / `collectLiterals`), the
   `sep`-recursion regression guard, reachability, the token census (orphans + neuter), and leaf
-  coverage with a fixed denominator. `npm run completeness` (the gate `highlighter/tm-completeness`); the ledger is an output of `npm run gen`.
-- `test/tm-mutation.ts` — the **meta-gate**: injects known gaps and asserts every presence gap is
+  coverage with a fixed denominator. `npm run completeness` (the gate `highlighter/textmate-completeness`); the ledger is an output of `npm run gen`.
+- `test/textmate-mutation.ts` — the **meta-gate**: injects known gaps and asserts every presence gap is
   killed with no false alarms, measuring (not asserting) the detector's power. `npm run completeness:mutation`.
 - `test/agnostic.ts` — detector shape-completeness: the detectors fire on structure, not on TS
   names, so "every shape that bears the obligation is detected" holds for any grammar.

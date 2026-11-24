@@ -300,13 +300,13 @@ class NotNode {
 
 class RelaxNode {
   // A tree-sitter-only divergence: the PARSER (and every other generator) parses
-  // `strict`; gen-treesitter renders `relaxed`. Use when a parser-correct constraint is
+  // `strict`; gen-tree-sitter renders `relaxed`. Use when a parser-correct constraint is
   // tree-sitter-GLR-hostile and the highlighter can safely over-accept the rare malformed
   // form (see RuleExpr.group.treeSitterRelaxed). Like ctx/exclude it lowers to a transparent group.
   readonly __kind = 'relax' as const;
   readonly strict: Sequence;
   readonly relaxed: Sequence;
-  // When set, gen-treesitter emits `relaxed` ONCE as a shared rule of this name and renders
+  // When set, gen-tree-sitter emits `relaxed` ONCE as a shared rule of this name and renders
   // every reference as `$.<ruleName>`, instead of inlining `relaxed` at each site. Inlining a
   // relaxed form duplicates its states at every use; a shared rule keeps them in ONE place
   // (the difference is large — see issue #46). Visibility follows tree-sitter's `_`-prefix
@@ -613,7 +613,7 @@ function toRuleExpr(el: Element, names: Lowering): RuleExpr {
     return { type: 'group', body, when: el.cond };
   }
   if (el instanceof RelaxNode) {
-    // Transparent group: every consumer reads `body` (strict); only gen-treesitter
+    // Transparent group: every consumer reads `body` (strict); only gen-tree-sitter
     // renders `treeSitterRelaxed`.
     const build = (items: Sequence): RuleExpr => items.length === 1
       ? toRuleExpr(items[0], names)
@@ -694,7 +694,7 @@ interface GrammarConfig<R extends Record<string, RuleRef> = Record<string, RuleR
   newline?: NewlineConfig;  // opt-in NEWLINE-sensitive tokenization, independent of indent (no indent stack)
   expression?: RuleRef;   // the rule that produces an EXPRESSION: parses the `${…}` holes of every bare template-token reference (see withHoles), and enables a derived `#expression` sub-grammar (expression-only embeds)
   aliasScopes?: { scope: string; file: string }[];  // extra grammars re-exposing this one under another scopeName (e.g. text.html.derivative)
-  canonicalRepoNames?: Record<string, string | string[]>;  // official repo KEY NAME → structural key(s) for the SAME construct; gen-tm RENAMES the structural key (or synthesises a union wrapper) to emit the official name natively (the 限制器; see Grammar.canonicalRepoNames)
+  canonicalRepoNames?: Record<string, string | string[]>;  // official repo KEY NAME → structural key(s) for the SAME construct; gen-textmate RENAMES the structural key (or synthesises a union wrapper) to emit the official name natively (the 限制器; see Grammar.canonicalRepoNames)
   manifest?: import('./types.ts').ContributesManifest;  // VS Code `contributes` packaging (emits a pasteable snippet)
   treeSitterConflicts?: string[][];  // tree-sitter GLR conflict tuples for THIS grammar (see Grammar.treeSitterConflicts)
   treeSitterContextualNames?: string[] | 'all';  // keywords the tree-sitter grammar also reads as names (see Grammar.treeSitterContextualNames)

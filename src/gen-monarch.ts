@@ -29,8 +29,8 @@ import {
 // `[regex, action]` / `[regex, action, next]` / `{ include }`, using **plain
 // JavaScript RegExp** — NO Oniguruma, NO recursive subpatterns, NO `\g<…>`.
 //
-// It is a sibling of gen-tm.ts: both INFER highlight roles from the grammar's
-// token shapes + the `scopes` section. gen-tm emits TextMate (Oniguruma); this
+// It is a sibling of gen-textmate.ts: both INFER highlight roles from the grammar's
+// token shapes + the `scopes` section. gen-textmate emits TextMate (Oniguruma); this
 // emits Monarch. The scope inference is shared in spirit — we re-derive it from
 // the same data, then map each inferred TextMate scope to the closest Monarch
 // token — so the parser and both highlighters never disagree about what a token
@@ -116,7 +116,7 @@ function delimStateSuffix(delim: string): string {
 }
 
 
-// ── Angle-bracket (generic) ambiguity detection — mirrors gen-tm ──
+// ── Angle-bracket (generic) ambiguity detection — mirrors gen-textmate ──
 //
 // `<` is generic-open iff it is BOTH a prec-table operator (comparison) AND a
 // rule delimiter paired with `>` around a separated inner rule (the type args).
@@ -125,7 +125,7 @@ interface AngleInfo {
   /** Chars that, right after a balanced `>`, CONFIRM the `<…>` was a generic
    *  argument list — e.g. `(` (a call), `` ` `` (a tagged template). Collected
    *  from the item following `>` in every `'<' sep '>'` adjacency (mirrors
-   *  gen-tm's confirm-token collection). */
+   *  gen-textmate's confirm-token collection). */
   confirmChars: string[];
 }
 
@@ -306,7 +306,7 @@ function generateTokenMonarch(grammar: Grammar): MonarchLanguage {
   // Monarch idiom: match the identifier ONCE, then dispatch on its text via
   // `cases`. We precompute, for every alphabetic literal (keyword) and every
   // extra identifier that lives only in `scopes` (this/Promise/console/…), its
-  // Monarch token using the SAME scope gen-tm assigns. So `if` and `Promise`
+  // Monarch token using the SAME scope gen-textmate assigns. So `if` and `Promise`
   // colour correctly without a regex-per-word.
   //
   // We also record which words leave us in VALUE position (a following `/` is
@@ -978,7 +978,7 @@ function generateTokenMonarch(grammar: Grammar): MonarchLanguage {
 
 // ── Element layer (docs/REGIONS.md, "a region is a declared lexer state") ──
 // One Monarch state per lexer state of the region, every datum from `regionView` (region-view.ts,
-// shared with gen-tm / gen-treesitter):
+// shared with gen-textmate / gen-tree-sitter):
 //   <name>_open   after `tagOpen`: the tag name (its name shape), a fragment's `tagClose`, a
 //                 dynamic tag's hole;
 //   <name>_tag    the open tag: attributes (their name shape), the assign literal, the tag tokens'

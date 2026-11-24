@@ -15,7 +15,7 @@ performance claim in a pull request or in the README comes from one of these, ru
   instructions, in a different direction on different inputs (PR #184). So for a change to parser or
   lexer logic, read in this order: (1) the work counters: a change that removes work is durable;
   (2) the Rust totals over the real inputs as a set (`checker.ts`, `typescript.js`, `parser.ts`,
-  `typescript.d.ts`, `gen-tm.ts`, `typescript.ts`): the set must not get worse, and no real input
+  `typescript.d.ts`, `gen-textmate.ts`, `typescript.ts`): the set must not get worse, and no real input
   may rise by more than about 0.3% without an explanation; the synthetic stress inputs
   (`dense-semi`, `dense-plus`, `nonascii`, `synth2mb`) are reported and may move inside that band;
   (3) an input that moves against the counters gets the per-function Callgrind (the full-scope
@@ -139,12 +139,12 @@ and says why in its message: that diff is where the drift so far is accepted.
 
 The inputs are fixed: `checker.ts` and `parser.ts` of TypeScript at the repository's one pin
 (`TS_REPO_SHA` in the workflows), `typescript.js` / `typescript.d.ts` of the locked `typescript`
-npm package, `gen-tm.ts` and `typescript.ts` of this repository as of `2632c2c`, a 2 MB synthetic
+npm package, `gen-textmate.ts` and `typescript.ts` of this repository as of `2632c2c`, a 2 MB synthetic
 file, a non-ASCII-heavy file and two dense one-byte-token files. Three element inputs
 ([`test/bench-rust-profile/element-inputs.ts`](../test/bench-rust-profile/element-inputs.ts)):
 `jsx-corpus.tsx` and `jsx-corpus.jsx`, the element code of the pinned tsc corpus's JSX
-conformance cases, parsed by typescriptreact and javascriptreact; and `gen-tm.tsx`, the text of
-`gen-tm.ts` parsed by typescriptreact, the control: the same tokens and tree as `gen-tm.ts`
+conformance cases, parsed by typescriptreact and javascriptreact; and `gen-textmate.tsx`, the text of
+`gen-textmate.ts` parsed by typescriptreact, the control: the same tokens and tree as `gen-textmate.ts`
 through typescript, so its difference is what the element machinery costs code outside any
 element.
 
@@ -182,7 +182,7 @@ ratio). Time per parse and instructions per parse, monogram ÷ oxc (below 1: mon
 | `typescript.d.ts` (npm `typescript` 5.9.3) | 0.812 (0.809-0.821) | 0.789 | 1.005 | 1.022 |
 | 2 MB synthetic file | 0.746 (0.712-0.762) | 0.889 | 0.919 | 0.921 |
 | non-ASCII-heavy file | 0.689 (0.668-0.696) | 0.848 | 0.875 | 0.909 |
-| [`src/gen-tm.ts`](../src/gen-tm.ts) at `2632c2c` | 0.768 (0.760-0.772) | 0.980 | 0.910 | 0.929 |
+| [`src/gen-textmate.ts`](../src/gen-textmate.ts) at `2632c2c` | 0.768 (0.760-0.772) | 0.980 | 0.910 | 0.929 |
 | [`typescript.ts`](../typescript.ts) at `2632c2c` | 0.645 (0.633-0.662) | 0.481 | 0.717 | 0.780 |
 | dense `;` (1 MB of empty statements) | not timed | not timed | 0.966 | 0.968 |
 | dense `a+a+…` (1 MB) | not timed | not timed | 0.805 | 0.806 |
@@ -235,7 +235,7 @@ monogram ÷ oxc (below 1: monogram takes less):
 | `typescript.d.ts` (npm `typescript` 5.9.3) | 0.941 (0.915-0.982) | 0.839 | 1.13 |
 | 2 MB synthetic file | 0.916 (0.876-0.953) | 1.032 | 1.10 |
 | non-ASCII-heavy file | 0.733 (0.716-0.745) | 0.953 | 1.05 |
-| [`src/gen-tm.ts`](../src/gen-tm.ts) at `2632c2c` | 0.882 (0.873-0.904) | 1.048 | 1.04 |
+| [`src/gen-textmate.ts`](../src/gen-textmate.ts) at `2632c2c` | 0.882 (0.873-0.904) | 1.048 | 1.04 |
 | [`typescript.ts`](../typescript.ts) at `2632c2c` | 0.723 (0.700-0.741) | 0.549 | 0.91 |
 | dense `;` (1 MB of empty statements) | not timed | not timed | 1.34 |
 | dense `a+a+…` (1 MB) | not timed | not timed | 0.99 |
@@ -266,7 +266,7 @@ Time per parse, monogram ÷ oxc:
 | `typescript.d.ts` | 1.143 / 1.127 | 1.023 / 1.018 |
 | 2 MB synthetic file | 1.150 / 1.117 | 1.159 / 1.159 |
 | non-ASCII-heavy file | 1.435 / 1.402 | 1.360 / 1.356 |
-| `src/gen-tm.ts` | 0.995 / 1.024 | 1.144 / 1.141 |
+| `src/gen-textmate.ts` | 0.995 / 1.024 | 1.144 / 1.141 |
 | `typescript.ts` | 0.906 / 0.992 | 0.718 / 0.714 |
 
 There monogram executed 26% to 69% more instructions per parse than oxc (1.42 times on
@@ -339,21 +339,21 @@ executions of one `parse(src)`.
 | input (grammar) | tokens | Rust lexer | Rust parse | Go direct | Go builder | TS blocks |
 |:--|--:|--:|--:|--:|--:|--:|
 | `checker.ts` (typescript) | 348,866 | 142.3 | 298.9 | 463.0 | 491.2 | 87.7 |
-| `gen-tm.ts` (typescript) | 50,156 | 158.6 | 329.8 | 525.9 | 557.4 | 114.7 |
+| `gen-textmate.ts` (typescript) | 50,156 | 158.6 | 329.8 | 525.9 | 557.4 | 114.7 |
 | `jsx-corpus.tsx` (typescriptreact) | 37,054 | 203.7 | 433.5 | 755.8 | 784.5 | 130.9 |
-| control: `gen-tm.tsx` (typescriptreact) | 50,156 | 163.5 | 334.5 | 534.2 | 553.5 | 114.8 |
-| control against `gen-tm.ts` | | +3.1% | +1.4% | +1.6% | -0.7% | +0.06% |
+| control: `gen-textmate.tsx` (typescriptreact) | 50,156 | 163.5 | 334.5 | 534.2 | 553.5 | 114.8 |
+| control against `gen-textmate.ts` | | +3.1% | +1.4% | +1.6% | -0.7% | +0.06% |
 
 How to read it:
 
-- A TSX token costs the Rust lexer 45 instructions more than a `gen-tm.ts` token; about 5 of
+- A TSX token costs the Rust lexer 45 instructions more than a `gen-textmate.ts` token; about 5 of
   them are the element machinery's overhead on code (the control) and the rest is the token
   mix: text runs, tags and holes, which the frame step lexes.
 - The control's Rust lexer +3.1% is no element work: Callgrind's per-line attribution puts it on
   register moves at the merges of the lexer's loops, not on an element line. Before the plain
   rounds ran in an inner loop of their own (`25b9ec7`), the control cost +18.1% Rust lexer,
   +8.6% Rust parse, +25.1% Go direct and +21.5% Go builder (`measure-profile` run 45126133065,
-  A = `11a7c70`, AMD EPYC 9V45). The Rust lexer counts of `gen-tm.ts` and `gen-tm.tsx` are the
+  A = `11a7c70`, AMD EPYC 9V45). The Rust lexer counts of `gen-textmate.ts` and `gen-textmate.tsx` are the
   same in both runs.
 - That loop's one known cost: on element-dense JSX (`jsx-corpus.jsx`) an ordinary-scan round
   inside an element goes from the element loop to one plain round and back: +1.2% Rust lexer,

@@ -6,9 +6,9 @@
 //
 // Run with: node test/interpolation-metadata.ts
 import { defineGrammar, many, rule, token, seq, star, altPattern, oneOf, noneOf, anyChar, range, plus } from '../src/api.ts';
-import { generateTmLanguage } from '../src/gen-tm.ts';
+import { generateTmLanguage } from '../src/gen-textmate.ts';
 import { generateMonarch } from '../src/gen-monarch.ts';
-import { generateTreeSitter } from '../src/gen-treesitter.ts';
+import { generateTreeSitter } from '../src/gen-tree-sitter.ts';
 import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -80,14 +80,14 @@ check('monarch: creates interpolation state', Object.keys(monarch.tokenizer).som
 
 // ── Tree-sitter generation ──
 const ts = generateTreeSitter(grammar, 'interpolation-metadata');
-check('treesitter: re-emits DQ token as rule', ts.grammarJs.includes('dq: $ => seq('));
-check('treesitter: emits first interpolation rule', ts.grammarJs.includes('dq_interpolation_1'));
-check('treesitter: emits second interpolation rule', ts.grammarJs.includes('dq_interpolation_2'));
-check('treesitter: scanner has dq chars scan fn', ts.scannerC.includes('scan_dq_chars'));
-check('treesitter: scanner openers include ${', ts.scannerC.includes('"${"'));
-check('treesitter: scanner openers include $(', ts.scannerC.includes('"$("'));
-check('treesitter: highlights capture interpolation punctuation', ts.highlightsScm.includes('(dq_interpolation_1 "${") @punctuation.special'));
-check('treesitter: highlights capture interpolation punctuation for $(', ts.highlightsScm.includes('(dq_interpolation_2 "$(") @punctuation.special'));
+check('tree-sitter: re-emits DQ token as rule', ts.grammarJs.includes('dq: $ => seq('));
+check('tree-sitter: emits first interpolation rule', ts.grammarJs.includes('dq_interpolation_1'));
+check('tree-sitter: emits second interpolation rule', ts.grammarJs.includes('dq_interpolation_2'));
+check('tree-sitter: scanner has dq chars scan fn', ts.scannerC.includes('scan_dq_chars'));
+check('tree-sitter: scanner openers include ${', ts.scannerC.includes('"${"'));
+check('tree-sitter: scanner openers include $(', ts.scannerC.includes('"$("'));
+check('tree-sitter: highlights capture interpolation punctuation', ts.highlightsScm.includes('(dq_interpolation_1 "${") @punctuation.special'));
+check('tree-sitter: highlights capture interpolation punctuation for $(', ts.highlightsScm.includes('(dq_interpolation_2 "$(") @punctuation.special'));
 
 // ── Optional: real tree-sitter CLI — generate + parse proves scanner.c COMPILES and that the
 //    `dq_chars` external + interpolation rules actually tokenize an interpolated string. ──

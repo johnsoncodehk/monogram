@@ -17,7 +17,7 @@
 //                                    `blockPattern` (issue #44 (B)). OFF unless
 //                                    declared.
 //   5. `keyValueSeparator`         — the separator glyph the LEXER (not just
-//                                    gen-tm) reads for key-line sniffs; a non-`:`
+//                                    gen-textmate) reads for key-line sniffs; a non-`:`
 //                                    value is recognized structurally (issue
 //                                    #44 (C)). Default ':'.
 //
@@ -239,7 +239,7 @@ const Str = token(seq('"', star(noneOf('"')), '"'), { string: true });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 5. keyValueSeparator — the lexer (not just gen-tm) reads the separator glyph;
+// 5. keyValueSeparator — the lexer (not just gen-textmate) reads the separator glyph;
 //    a non-`:` separator is recognized structurally by the parser (issue #44 (C)).
 // ─────────────────────────────────────────────────────────────────────────────
 {

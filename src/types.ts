@@ -58,7 +58,7 @@ export interface TokenDecl {
   // Block-context pattern variant (indentation grammars only): the pattern the lexer uses OUTSIDE
   // flow collections (flowDepth===0), where chars that are flow indicators (`,`/`[`/`]`/`{`/`}`)
   // are ordinary scalar content. The default `pattern` is the flow-restricted form and is what
-  // gen-tm reads, so the highlighter is unaffected; only the PARSER's lexer consults this in block
+  // gen-textmate reads, so the highlighter is unaffected; only the PARSER's lexer consults this in block
   // context. (YAML plain scalars: `a,b`/`bla]keks` are one scalar in block, two tokens in flow.)
   blockPattern?: TokenPattern;
   // Block-context ONLY token (indentation grammars only): when set, the lexer matches this token
@@ -335,7 +335,7 @@ export interface MarkupConfig {
   // Markup-injection layer (Vue: directives + `{{ }}` interpolation). Because the
   // `<template>` body reuses the HTML grammar WHOLESALE (it `embed`s text.html.basic),
   // Vue syntax can't be baked into HTML — it must be INJECTED onto HTML's scopes, the
-  // same reason the official Vue grammar uses an injection grammar. gen-tm derives a
+  // same reason the official Vue grammar uses an injection grammar. gen-textmate derives a
   // separate injection grammar (injectionSelector over `into`) from this declaration.
   inject?: MarkupInject;
 }
@@ -394,7 +394,7 @@ export interface MarkupInject {
 
 /** A small TextMate-rule fragment a grammar may inline as DATA — either a reuse `include` of an
  *  existing internal repository key, or an inline `match` with a scope `name` (e.g. an attribute
- *  value sub-pattern; see `MarkupConfig.attributeEmbed.valuePatterns`). gen-tm passes it through
+ *  value sub-pattern; see `MarkupConfig.attributeEmbed.valuePatterns`). gen-textmate passes it through
  *  verbatim, so it stays language-agnostic (the engine never inspects the strings). */
 export interface RepoAlias {
   include?: string;   // e.g. '#type-inner'  (reuse an existing internal key)
@@ -421,13 +421,13 @@ export interface IndentConfig {
   flowOpen?: string[];    // punctuation that suspends indentation while open (e.g. ['[', '{'])
   flowClose?: string[];   // matching closers (e.g. [']', '}'])
   // Per-collection SCOPES for the flow structural punctuation, keyed by the OPEN bracket. The flow
-  // region the highlighter derives (gen-tm §2c) otherwise paints every `{ } [ ] ,` as a generic
+  // region the highlighter derives (gen-textmate §2c) otherwise paints every `{ } [ ] ,` as a generic
   // `punctuation.${lang}` — graded only at the FAMILY tier. Declaring a `begin`/`end`/`separator`
   // scope here lets the open/close brackets and the in-collection comma carry the SPECIFIC
   // convention (a `{…}` is a "mapping", a `[…]` a "sequence" — language-FLAVOURED names that must
   // come from the grammar, not the neutral engine). `keyValue` (optional) re-scopes the `:`
   // key/value separator inside a flow mapping, and `explicitKey` the `?` explicit-key indicator.
-  // Scope strings are WITHOUT the trailing `.${lang}` segment (gen-tm appends it, like
+  // Scope strings are WITHOUT the trailing `.${lang}` segment (gen-textmate appends it, like
   // `blockScalar.indicatorScope`). Absent → the generic `punctuation.${lang}` (legacy). A bracket
   // pair with no entry in `byOpen` likewise falls back to the generic scope, so partial
   // declarations are safe. (e.g. YAML: `{` → punctuation.definition.mapping.begin, `}` → …end,
@@ -441,7 +441,7 @@ export interface IndentConfig {
   // The mapping KEY/VALUE separator literal (YAML `:`). The ONE source of truth for "what glyph
   // separates a mapping key from its value": BOTH the lexer's key-line sniffs (`lineHasKeySeparator`,
   // `startsBlockStructuralNode`, the compact-key pairing) AND the derived highlighter's multi-line
-  // plain-scalar fold regions (gen-tm §2a′/§2a″) recognise a `key:`-led line as STRUCTURAL from this
+  // plain-scalar fold regions (gen-textmate §2a′/§2a″) recognise a `key:`-led line as STRUCTURAL from this
   // field — so parser and highlighter agree for ANY separator. Declared here (not hardcoded) so the
   // region code stays data-driven. Absent → defaults to ':'.
   keyValueSeparator?: string;
@@ -600,7 +600,7 @@ type RuleExprNode =
   // Every OTHER consumer treats this exactly like a plain transparent group (recurse
   // into `body`), so the marker is invisible outside the parsers.
   // `treeSitterRelaxed`: a TREE-SITTER-ONLY alternate rendering. The parser (and every other
-  // generator) uses `body` — the strict form; gen-treesitter renders `treeSitterRelaxed` instead.
+  // generator) uses `body` — the strict form; gen-tree-sitter renders `treeSitterRelaxed` instead.
   // Lets a PARSER-only constraint that is correct but tree-sitter-GLR-hostile (e.g.
   // at-most-one-`static`, or restricting a type predicate to return position) keep the
   // derived highlighter at its cheap status-quo shape — a highlighter may over-accept a
@@ -614,7 +614,7 @@ type RuleExprNode =
   // that level's operators and tighter ones (and the nuds their minBp admits) are read, as the
   // operand of a level-`atLevel` operator would be. Python's `'*' bitwise_or`: a starred operand
   // is never a comparison. Read only by the parsers; every other consumer sees a plain group.
-  // `treeSitterRuleName`: when a treeSitterRelaxed group carries it, gen-treesitter emits `treeSitterRelaxed` ONCE
+  // `treeSitterRuleName`: when a treeSitterRelaxed group carries it, gen-tree-sitter emits `treeSitterRelaxed` ONCE
   // as a shared rule of this name and renders each reference as `$.<name>` — sharing its
   // states instead of inlining (and duplicating) them at every use site (issue #46).
   // Visibility follows tree-sitter's `_`-prefix convention.
@@ -631,9 +631,9 @@ type RuleExprNode =
   // to highlighting / AST shape / other generators: no analysis that reads what a
   // rule matches descends into `body`. Generators read a lookahead only for what it
   // says about what FOLLOWS: the words a guard rejects alone right before the
-  // identifier token are reserved (gen-tm collectReservedWords), the `>`-led
+  // identifier token are reserved (gen-textmate collectReservedWords), the `>`-led
   // punctuators it tests (grammar-utils gtComposites), a `not(L)` before an
-  // optional `L…` (gen-treesitter's lowering).
+  // optional `L…` (gen-tree-sitter's lowering).
   // `reservable`: this is the bare-identifier reserved-word guard (notReservedExpr).
   // Every parser also refuses the words the context word in force reserves (grammar-utils.ts
   // CTX_WORDS) — so `await`/`yield` lose their identifier reading inside an async/generator
@@ -665,7 +665,7 @@ type RuleExprNode =
   // `false`/`this` are NOT qualifiable (`void.x` has no parse tree). It mirrors the AssignmentTargetType
   // gate (`_notAssignTarget`) which reads the same head leaf, but predicated on TEXT membership rather than
   // operator-tag shape. Like the other zero-width markers it consumes nothing → invisible to every
-  // generator (a no-op in the CFG): gen-treesitter renders it `blank()` and drops it from the seq,
+  // generator (a no-op in the CFG): gen-tree-sitter renders it `blank()` and drops it from the seq,
   // so the derived GLR grammar keeps the UNCONSTRAINED `.` LED (a left-leaf predicate is not
   // expressible in GLR, and a stray `void.x` is harmless for a highlighter) — no treeSitterRelax needed.
   | { type: 'notLeftLeaf'; words: string[] }
@@ -731,41 +731,41 @@ export interface Grammar<R extends string = string> {
   elements?: ElementRegion;  // opt-in element regions entered from code (JSX); absent → byte-identical lexer
   indent?: IndentConfig;  // opt-in indentation-sensitive tokenization (YAML); absent → byte-identical token stream
   newline?: NewlineConfig;  // opt-in NEWLINE-sensitive tokenization, independent of indent (no indent stack): a NEWLINE token at every block-context line break
-  expressionRule?: string;  // name of the rule that produces an EXPRESSION: the rule a template reference's `${…}` holes parse with unless the reference names another (RuleExpr ref.hole), and the rule gen-tm derives a `#expression` sub-grammar from (for expression-only embeds, e.g. Vue `{{ }}`)
+  expressionRule?: string;  // name of the rule that produces an EXPRESSION: the rule a template reference's `${…}` holes parse with unless the reference names another (RuleExpr ref.hole), and the rule gen-textmate derives a `#expression` sub-grammar from (for expression-only embeds, e.g. Vue `{{ }}`)
   // Extra TextMate grammars that just RE-EXPOSE this one under another scopeName (thin
   // `{scopeName, patterns:[{include: <this.scopeName>}]}` wrappers). HTML declares
   // text.html.derivative this way — the embedded-fragment scope Vue/markdown/pug inject onto;
-  // VS Code ships it as a separate grammar for the same reason. gen-tm emits one file each.
+  // VS Code ships it as a separate grammar for the same reason. gen-textmate emits one file each.
   aliasScopes?: { scope: string; file: string }[];
   // Repository-key NAMING CONSTRAINT ("限制器"): a DATA map { OFFICIAL key name → the structural
-  // key(s) gen-tm derived for the SAME construct }. For Monogram's source.ts to be a repository-level
+  // key(s) gen-textmate derived for the SAME construct }. For Monogram's source.ts to be a repository-level
   // DROP-IN, the key NAMES external grammars `#include` (`source.ts#type`, `#qstring-double`,
   // `#comment`, …) must be the names Monogram NATIVELY emits — not a structural name (`#type-inner`)
-  // plus an additive alias. This map CONSTRAINS gen-tm's key emission: after the repository is built
-  // with structural names, gen-tm projects the structural identity through this constraint, producing
+  // plus an additive alias. This map CONSTRAINS gen-textmate's key emission: after the repository is built
+  // with structural names, gen-textmate projects the structural identity through this constraint, producing
   // the canonical official name DIRECTLY (the structural name ceases to exist — it is RENAMED, not
   // aliased) and rewriting every `#…` reference to that key consistently, so the repository holds ONE
-  // key, natively named. Two value forms encode the two construct↔key relationships gen-tm derives:
+  // key, natively named. Two value forms encode the two construct↔key relationships gen-textmate derives:
   //   • a STRING (`'type': 'type-inner'`) → the official construct maps 1:1 to one structural key;
   //     RENAME that key (and all references) to the official name. The old name is gone.
   //   • an ARRAY (`'comment': ['jsdoc','linecomment',…]`) → the official key is a UNION the official
   //     grammar itself expresses as a `{patterns:[…]}` wrapper; Monogram derives the members as
   //     separate, independently-referenced keys, so no single rename can carry the official name.
-  //     gen-tm SYNTHESISES the wrapper key `{patterns:[{include:#member}…]}` under the official name,
+  //     gen-textmate SYNTHESISES the wrapper key `{patterns:[{include:#member}…]}` under the official name,
   //     each member resolved through any 1:1 rename above (so a renamed member is referenced by its
   //     final name). The members keep their own structural names (they are used elsewhere too).
   // It is purely a NAMING projection — no `match`/`begin`/`name`/scope changes — so the tokenization of
   // every input is byte-for-byte identical (it is a rename, not a pattern edit). An official name that
   // already exists as a real Monogram key (e.g. `namespace-declaration`, `expression`) is left ALONE
   // (never clobbered). The NAMES are language-specific DATA and live in the grammar definition
-  // (typescript.ts may know TS names, as it knows the `scopes` map); gen-tm applies the map generically
+  // (typescript.ts may know TS names, as it knows the `scopes` map); gen-textmate applies the map generically
   // (look up + substitute), so the engine stays language-agnostic — a grammar declaring none is
   // unaffected. REPLACES `repoAliases` (which left a redundant 2nd entry); this leaves none.
   canonicalRepoNames?: Record<string, string | string[]>;
   // The tree-sitter `conflicts` tuples this grammar's GLR parse needs, as tree-sitter symbol names
   // (snake rule names, token names, or shared hidden treeSitterRelax rule names). The minimal set is an
   // LR(1)-table property, so it is tree-sitter's own analysis of THIS grammar (collected with
-  // test/collect-conflicts.ts), declared as data beside the rules it is about. gen-treesitter emits
+  // test/collect-conflicts.ts), declared as data beside the rules it is about. gen-tree-sitter emits
   // exactly these (plus its structural heuristics) and rejects a name the grammar does not define;
   // nothing is inferred from rule names, so another grammar that happens to reuse a name gets none.
   treeSitterConflicts?: string[][];

@@ -91,7 +91,7 @@ d326d65):
 
 Speed, from the same run ([MEASUREMENT.md](MEASUREMENT.md#recorded-result-element-dialects-tsx-and-jsx)
 has the table): a token of tsc's JSX conformance code costs the Rust lexer 203.7 instructions,
-against 142.3 on `checker.ts` and 158.6 on `gen-tm.ts` through the typescript parser; the
+against 142.3 on `checker.ts` and 158.6 on `gen-textmate.ts` through the typescript parser; the
 difference is the token mix (text runs, tags and holes). Plain TypeScript through the
 typescriptreact parser costs, against the typescript parser, +3.1% Rust lexer, +1.4% Rust parse,
 +1.6% Go (direct engine), -0.7% Go (builder engine), +0.06% TS blocks; the Rust lexer's +3.1% is

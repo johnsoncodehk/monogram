@@ -1,6 +1,6 @@
-// treesitter-assertions.ts — the zero-width assertions (`not`, `sameLine`, `noCommentBefore`,
+// tree-sitter-assertions.ts — the zero-width assertions (`not`, `sameLine`, `noCommentBefore`,
 // `noMultilineFlowBefore`, `notLeftLeaf`) of every token-stream grammar, and what its generated
-// tree-sitter grammar does with each. A CFG has no lookahead: gen-treesitter renders an assertion
+// tree-sitter grammar does with each. A CFG has no lookahead: gen-tree-sitter renders an assertion
 // exactly only where a rewrite exists (`lowered`) and otherwise drops it to `blank()`. The drop is
 // exact when FIRST/FOLLOW prove the assertion always holds where the CFG reaches it (`vacuous`); every
 // other class is a place where the generated grammar may accept MORE than the grammar. The ledger
@@ -10,13 +10,13 @@
 // The pinned counts are the record: a change that raises a dropped or inexact count fails; a change that
 // lowers one must lower the pinned number in the same commit (the record moves with the generator).
 // Exact counts (`lowered`, `vacuous`) are pinned too, so a reclassification is visible.
-//   node test/treesitter-assertions.ts           check against the pinned counts
-//   node test/treesitter-assertions.ts --rules   also print the per-rule table
-//   node test/treesitter-assertions.ts --list    also print every assertion with its class
+//   node test/tree-sitter-assertions.ts           check against the pinned counts
+//   node test/tree-sitter-assertions.ts --rules   also print the per-rule table
+//   node test/tree-sitter-assertions.ts --list    also print every assertion with its class
 // With GITHUB_STEP_SUMMARY set, the per-grammar and per-rule tables go to the job summary.
 import { appendFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { generateTreeSitter, EXACT_ASSERTION_CLASSES, type AssertionClass, type AssertionRecord } from '../src/gen-treesitter.ts';
+import { generateTreeSitter, EXACT_ASSERTION_CLASSES, type AssertionClass, type AssertionRecord } from '../src/gen-tree-sitter.ts';
 import type { Grammar } from '../src/types.ts';
 
 const CLASSES: AssertionClass[] = ['lowered', 'vacuous', 'reserved-set', 'scanner', 'reserved', 'lookahead1', 'lookahead', 'left-context'];
@@ -89,7 +89,7 @@ const inexact = (c: Partial<Record<AssertionClass, number>>) =>
 const showRules = process.argv.includes('--rules');
 const showList = process.argv.includes('--list');
 const summary: string[] = ['### tree-sitter: zero-width assertions per grammar', '',
-  '`lowered` and `reserved-set` are rendered; `lowered` and `vacuous` are exact. Every other class is dropped and the generated grammar may accept more than the grammar (the class names the lowering that would make it exact); `reserved-set` is exact except in parse states shared with a less reserved word position. Gate: `test/treesitter-assertions.ts`.', '',
+  '`lowered` and `reserved-set` are rendered; `lowered` and `vacuous` are exact. Every other class is dropped and the generated grammar may accept more than the grammar (the class names the lowering that would make it exact); `reserved-set` is exact except in parse states shared with a less reserved word position. Gate: `test/tree-sitter-assertions.ts`.', '',
   `| grammar | ${CLASSES.join(' | ')} | dropped | inexact |`, `|---|${CLASSES.map(() => '---:').join('|')}|---:|---:|`];
 const perRule: string[] = [];
 let bad = 0;
