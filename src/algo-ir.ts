@@ -1000,10 +1000,10 @@ export function printFns(lowering: Lowering, fns: Fn[], sets: CharSet[] = [], re
 
 // ── Dead initial values (Lowering.stmt.let's deadInit / twice) ──
 // Whether some node of x (an Expr or Stmt tree) satisfies `is`.
-function mentions(x: unknown, is: (e: Expr) => boolean): boolean {
+function mentions(x: unknown, is: (e: Expr | Stmt) => boolean): boolean {
   if (typeof x !== 'object' || x === null) return false;
   if (Array.isArray(x)) return x.some((y) => mentions(y, is));
-  if ('k' in x && is(x as Expr)) return true;
+  if ('k' in x && is(x as Expr | Stmt)) return true;
   return Object.values(x).some((y) => mentions(y, is));
 }
 const readsVar = (x: unknown, v: string): boolean => mentions(x, (e) => e.k === 'var' && e.name === v);
@@ -1039,7 +1039,7 @@ function initDead(rest: Stmt[], v: string): boolean { return meet(rest, v) !== '
 // Whether a path through `rest` may assign v twice (it is declared unassigned just before them).
 // A loop that assigns it may, and so does an assignment where an earlier one may have run.
 function assignsTwice(rest: Stmt[], v: string): boolean {
-  const assigns = (x: unknown): boolean => mentions(x, (e) => ((e as Stmt).k === 'set' && (e as Stmt & { k: 'set' }).name === v) || ((e as Stmt).k === 'setCall' && (e as Stmt & { k: 'setCall' }).names.includes(v)));
+  const assigns = (x: unknown): boolean => mentions(x, (e) => (e.k === 'set' && e.name === v) || (e.k === 'setCall' && e.names.includes(v)));
   // the state after `body` from `may` (whether an assignment may have run); null: no path goes on
   let twice = false;
   const run = (body: Stmt[], may: boolean | null): boolean | null => {
