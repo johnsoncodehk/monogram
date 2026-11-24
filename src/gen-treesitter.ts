@@ -1,5 +1,5 @@
 import type { CstGrammar, RuleExpr, RuleDecl, TokenPattern } from './types.ts';
-import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
+import { collectLiterals, isKeywordLiteral, ZERO_WIDTH_MARKERS, isZeroWidthMarker } from './grammar-utils.ts';
 import { buildLr, END, type LeafGraph, type LrAnalysis } from './lr-automaton.ts';
 import { info as tokenPatternInfo, continuesAt, type CSet } from './lex-match-plan.ts';
 import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
@@ -71,7 +71,7 @@ export const EXACT_ASSERTION_CLASSES: readonly AssertionClass[] = ['lowered', 'v
 export interface AssertionRecord {
   /** grammar rule whose tree holds the assertion */
   rule: string;
-  kind: 'not' | 'sameLine' | 'noCommentBefore' | 'noMultilineFlowBefore' | 'notLeftLeaf';
+  kind: 'not' | 'sameLine' | 'noCommentBefore' | 'noMultilineFlowBefore' | 'notLeftLeaf' | 'target';
   cls: AssertionClass;
   /** the assertion, written compactly (`not("{" | Ident)`), cut at 160 characters */
   text: string;
@@ -802,6 +802,7 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuard
     case 'noCommentBefore':
     case 'noMultilineFlowBefore':
     case 'notLeftLeaf':
+    case 'target':
       // A zero-width assertion consumes nothing and a CFG has no lookahead, so it renders to a
       // no-op. Never silently: classifyAssertions recorded it with whether the drop is exact (the
       // `assertions` ledger of the output); one it did not reach is a generator defect.
@@ -1323,7 +1324,7 @@ function computeTerminalSets(grammar: CstGrammar, tokenNames: Set<string>): Term
 function greedyTail(alt: RuleExpr, follow: Set<string>, firstOf: TerminalSets['firstOf']): boolean {
   alt = tsView(alt);
   if (alt.type !== 'seq') return false;
-  const consuming = alt.items.filter(i => { const v = tsView(i); return !(v.type === 'not' || v.type === 'sameLine' || v.type === 'noCommentBefore' || v.type === 'noMultilineFlowBefore' || v.type === 'notLeftLeaf'); });
+  const consuming = alt.items.filter(i => { const v = tsView(i); return !isZeroWidthMarker(v.type); });
   if (consuming.length < 2) return false;
   const tail = tsView(consuming[consuming.length - 1]);
   const starts = tail.type === 'quantifier' ? firstOf(tail.body)
@@ -1379,7 +1380,7 @@ function planReservedSets(guards: string[][]): ReservedSets {
   return { sets: chain, nameOf: words => byKey.get(words.join(' ')) ?? null };
 }
 
-const ASSERTION_KINDS = new Set<RuleExpr['type']>(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf']);
+const ASSERTION_KINDS = ZERO_WIDTH_MARKERS;
 
 function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: TerminalSets): { records: AssertionRecord[]; recordOf: Map<RuleExpr, AssertionRecord[]>; nodes: Set<RuleExpr>; reservedSets: ReservedSets; isWordLiteral: (text: string) => boolean } {
   const records: AssertionRecord[] = [];
@@ -1434,7 +1435,7 @@ function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: 
 
   const classify = (e: RuleExpr, P: Set<string>, next: RuleExpr | undefined): AssertionClass => {
     if (e.type === 'sameLine' || e.type === 'noCommentBefore' || e.type === 'noMultilineFlowBefore') return 'scanner';
-    if (e.type === 'notLeftLeaf') return 'left-context';
+    if (e.type === 'notLeftLeaf' || e.type === 'target') return 'left-context';   // a predicate over the node to its left
     if (e.type !== 'not') throw new Error(`classifyAssertions: ${e.type} is not an assertion`);
     const body = tsView(e.body);
     if (body.type === 'sameLine') return 'scanner';                      // not(sameLine): a line terminator here
