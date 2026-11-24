@@ -87,6 +87,22 @@ failure, so a grammar landing is never stopped by an improvement it brings to th
 landing that improves the agreement on purpose re-records it (`--write`), so the record stays that
 landing's evidence.
 
+`conformance/verdict-scan` (`node test/verdict-scan.ts`, tier ci, about 15 s) measures the interpreter's
+VERDICT against the language's own parsers on small inputs generated from each grammar's operator and
+continuation tables (`verdictInputs(grammar, lang)`): every operand form as the left operand of every
+continuation and inside every operand slot, in a statement and an assignment, and for TypeScript every
+type form beside every type continuation and in every type slot. The oracles: tsc's parser for
+TypeScript, acorn and tsc's JS mode for JavaScript. It sees what no engine-against-engine gate can:
+a defect every engine shares (all engines derive from one grammar and one set of mechanisms). Each
+disagreement falls in a CLASS with a disposition (engine / grammar / lexer / policy /
+oracle-tolerance / oracle-defect); the record `test/verdict-scan-record.txt` holds each class's count
+and shortest witness. Green: no disagreement outside a class and no class growing; a class that
+shrinks or vanishes is a fix: a landing that fixes a class re-records the scan in the same landing
+(`node test/verdict-scan.ts --write`, and `--python --write` in the Python job's environment, a CPython
+3.10.12 named by `MONOGRAM_PYTHON`), and the diff of the record is the evidence. Its
+Python half (`--python`, record `test/verdict-scan-python-record.txt`) runs in the `python` CI job,
+against `ast.parse` of the same Python 3.10.12.
+
 A gate is binary and authoritative: if `npm run check` is green, every guaranteed property holds.
 
 ### The inner loop — `node test/check.ts --changed [<base>]`
