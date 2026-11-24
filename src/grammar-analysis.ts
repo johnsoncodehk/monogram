@@ -13,6 +13,7 @@
 // reserved-aware "qualKeys" variant) and every parse CONTROL loop. The interpreter keeps its
 // loops independent so it remains a genuine oracle for the emitter's loops — an oracle sharing
 // the suspect machinery could not catch bugs in it.
+import { ZERO_WIDTH_MARKERS, isZeroWidthMarker } from './grammar-utils.ts';
 import type { CstGrammar, RuleExpr, RuleDecl, ElementRegion } from './types.ts';
 import { tokenPatternFirstCharSet } from './token-pattern.ts';
 
@@ -416,7 +417,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
         const acc = new Set<string>();
         for (const item of e.items) {
           if (item.type === 'prefix') return null;               // prefix op → any operator token: give up
-          if (item.type === 'op' || item.type === 'postfix' || item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf' || item.type === 'target') continue;
+          if (item.type === 'op' || item.type === 'postfix' || isZeroWidthMarker(item.type)) continue;
           const f = exprFirst(item);
           if (f === null) return null;
           for (const k of f) acc.add(k);
@@ -467,7 +468,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
     const acc = new Set<string>();
     for (let i = j; i < items.length; i++) {
       const item = items[i];
-      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf' || item.type === 'target') continue;
+      if (isZeroWidthMarker(item.type)) continue;
       if (item.type === 'op' || item.type === 'postfix') { for (const k of opKeys) acc.add(k); return acc; }
       if (item.type === 'prefix') { for (const k of prefixOps.keys()) acc.add(k); return acc; }
       const f = exprFirst(item);
@@ -480,7 +481,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
   function suffixNullable(items: RuleExpr[], j: number): boolean {
     for (let i = j; i < items.length; i++) {
       const item = items[i];
-      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf' || item.type === 'target') continue;
+      if (isZeroWidthMarker(item.type)) continue;
       if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') return false;
       if (!exprNullable(item)) return false;
     }
@@ -498,7 +499,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
         const items = e.items;
         for (let i = 0; i < items.length; i++) {
           const item = items[i];
-          if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf' || item.type === 'target') continue;
+          if (isZeroWidthMarker(item.type)) continue;
           let isec: Sec;
           let itemNullable: boolean;
           if (item.type === 'op' || item.type === 'postfix' || item.type === 'prefix') {
@@ -582,7 +583,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
   // Pratt marker or a shape it does not follow). Per rule a fixpoint, as ruleSecond.
   type SecBy = Map<string, Sec>;
   const ruleSecondBy = new Map<string, SecBy | null>();
-  const isZeroWidth = (t: RuleExpr['type']) => t === 'not' || t === 'sameLine' || t === 'noCommentBefore' || t === 'noMultilineFlowBefore' || t === 'notLeftLeaf' || t === 'target';
+  const isZeroWidth = isZeroWidthMarker;
   const addSec = (m: SecBy, k: string, x: Sec): void => {
     const o = m.get(k);
     if (o === undefined) m.set(k, { s: x.s === null ? null : new Set(x.s), len1: x.len1 });
@@ -760,7 +761,7 @@ export function concreteFirst(grammar: CstGrammar, a: ReturnType<typeof analyzeG
     const out = new Set(m);
     return e.reservable ? (s) => !out.has(s) || lex.maybeWords.includes(s) : (s) => !out.has(s);
   };
-  const ZERO = new Set<RuleExpr['type']>(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'target', 'op', 'postfix']);
+  const ZERO = new Set<RuleExpr['type']>([...ZERO_WIDTH_MARKERS, 'op', 'postfix']);
   function seqF(items: readonly RuleExpr[]): F {
     const syms = new Set<string>();
     const keeps: Keep[] = [];

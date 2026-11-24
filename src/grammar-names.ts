@@ -18,7 +18,7 @@
 // optional group); a token or rule reference holds one child; an alternation of literals one
 // leaf; a structural alternation one child whose branches are scopes of their own.
 import type { RuleDecl, RuleExpr } from './types.ts';
-import { isKeywordLiteral } from './grammar-utils.ts';
+import { isKeywordLiteral, ZERO_WIDTH_MARKERS } from './grammar-utils.ts';
 
 const RESERVED = new Set(['arm', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger',
   'default', 'delete', 'do', 'else', 'enum', 'export', 'extends', 'false', 'finally', 'for', 'function',
@@ -49,7 +49,7 @@ export function syntaxKey(e: RuleExpr | readonly RuleExpr[]): string {
   return JSON.stringify(e, (k, v) => (k === 'arm' || k === 'field' ? undefined : v));
 }
 
-const ZERO_WIDTH = new Set(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'target']);
+const ZERO_WIDTH = ZERO_WIDTH_MARKERS;
 
 // Name an arm from its first significant item; `sig` is self-stripped for leds.
 export function deriveArmName(items: RuleExpr[], isLed: boolean): string {

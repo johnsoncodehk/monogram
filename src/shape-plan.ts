@@ -45,6 +45,7 @@
 // read, as an unmapped arm does): a nodes attribute, a template's parts, a Pratt arm reading two
 // inherited attributes or handing one down (ESTree's `pattern` spine: S3), an inherited equation at
 // a call site that reads more than a constant or a copy.
+import { ZERO_WIDTH_MARKERS } from './grammar-utils.ts';
 import type { Expr, Fn, Stmt } from './algo-ir.ts';
 import type { ParserIR, PrattRule, RdRule, RuleIR, ShapeInhVal, Step } from './emit-portable.ts';
 import type { RuleExpr } from './types.ts';
@@ -107,7 +108,7 @@ const no = (why: string): never => { throw new Unsupported(why); };
 
 // ── Tags: the grammar nodes of one arm, numbered ──
 type Numbering = { tagOf: Map<RuleExpr, number>; branchRange: Map<RuleExpr, [number, number][]>; nullableBranch: Set<RuleExpr> };
-const ZERO_WIDTH = new Set(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'target']);
+const ZERO_WIDTH = ZERO_WIDTH_MARKERS;
 function numberArm(items: RuleExpr[], named: (e: RuleExpr) => boolean): Numbering {
   const n: Numbering = { tagOf: new Map(), branchRange: new Map(), nullableBranch: new Set() };
   let k = 0;

@@ -7,6 +7,7 @@
 // rule call and nothing else, an arm of no context) is its child.
 // The interpreter records, only when the grammar declares contexts, which arm built each node and
 // which rule references produced each child node (a memoized node may be produced by several).
+import { isZeroWidthMarker } from './grammar-utils.ts';
 import type { CstGrammar, RuleDecl, RuleExpr } from './types.ts';
 import type { CstNode, CstChild } from './gen-parser.ts';
 import { nameRule } from './grammar-names.ts';
@@ -15,7 +16,6 @@ type Role = { leaf: Set<number>; field: Map<number, string>; last: Set<number> }
 /** What built a node: its arm's name, its unit-ness, and the rule references of the arm with their child names. */
 export type ArmInfo = { name: string; unit: boolean; refs: Map<RuleExpr, string> | null; op?: string };
 
-const ZERO_WIDTH = new Set(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'target']);
 
 export function targetWalker(grammar: CstGrammar, rules: Iterable<RuleDecl>, tokenNames: Set<string>) {
   const decl = grammar.targets!;
@@ -38,7 +38,7 @@ export function targetWalker(grammar: CstGrammar, rules: Iterable<RuleDecl>, tok
     if (isRule(e)) return true;
     if (e.type === 'group' && e.suppress === undefined && e.ctxMode === undefined) return unitOf(e.body);
     if (e.type !== 'seq') return false;
-    const own = e.items.filter((x) => !ZERO_WIDTH.has(x.type));
+    const own = e.items.filter((x) => !isZeroWidthMarker(x.type));
     return own.length === 1 && unitOf(own[0]!);
   };
   // The rule references of an arm (outside lookaheads), with their child names.
