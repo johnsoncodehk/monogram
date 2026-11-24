@@ -1662,7 +1662,7 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
     postfixOp: `            if row & ${OP_ROW.bpMask << OP_ROW.postShift} != 0 && ((row >> ${OP_ROW.postShift}) & ${OP_ROW.bpMask}) as i64 > min_bp && !tail_closed${r.postfixSameLine ? ' && !t.nl' : ''} { if row & ${OP_ROW.postTgt} != 0 && ${lf('form')} != 0 { return None; } let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1; left = ${finK('postop')}; tail_closed = true; form = ${r.postForm ?? 1}; continue; }`,
     noBinary: `            break;
         }`,
-    binary: `            let (op_lid, op_n, op_end, row) = if row & ${OP_ROW.lead} != 0 { let (l, n, e) = self.op_lead(); (l, n, e, ${rowAt('l')}) } else { (t.lid, 1, t.end, row) };
+    binary: `            let (op_lid, op_n, op_end, row) = if row & ${OP_ROW.lead} != 0 { let (l, n, e) = self.op_read(t); (l, n, e, ${rowAt('l')}) } else { (t.lid, 1, t.end, row) };
             let lbp = (row & ${OP_ROW.bpMask}) as i64;
             if lbp <= min_bp { break; }
             let rbp = ((row >> ${OP_ROW.rbpShift}) & ${OP_ROW.bpMask}) as i64; let tgt = row & ${OP_ROW.test} != 0; let no_unary = row & ${OP_ROW.noUnary} != 0;
@@ -2691,14 +2691,6 @@ impl<'a, B: Builder> Parser<'a, B> {
     #[inline(always)]
     fn op_read(&mut self, t: Tok) -> (u16, usize, u32) {
         if ${rsLeadNe(ids, 't.lid')} { return (t.lid, 1, t.end); }
-        self.op_lead()
-    }
-    /// The operator read at a composite lead's token (the LED loop: its row's lead bit says so).
-    /// Never inlined (a Rust codegen fact): the loop then holds one call whatever leads the grammar
-    /// declares; inlined, a second lead's compare moved the loop's registers (+4 Ir per operator
-    /// read on inputs with no lead at all).
-    #[inline(never)]
-    fn op_lead(&mut self) -> (u16, usize, u32) {
         let r = gt_op(&self.toks, self.pos);
         if self.pos + r.1 + 1 > self.max_look { self.max_look = self.pos + r.1 + 1; }
         r
