@@ -1927,6 +1927,7 @@ export type PrattLowering = {
   postfixToks(kids: number[]): string;           // the postfix tokens, by the token's kid
   postfixTpl(hole: string): string;              // the postfix interpolated template
   postfixOp: string;                             // the postfix operator
+  noBinary: string;                              // the loop's end in a rule without binary operators (the loop leaves: nothing else continues it)
   binary: string;                                // the binary operator, its right operand at rbp; a CAPPED right operand (an assignment-level arrow) caps the node: it returns at once, still capped, so no further led or operator takes it, here or in an enclosing call (`a = () => {} || x` rejects: the interpreter's cap propagation)
   leftDone?: string;                             // after the loop: the left operand's finishing step (none for the CST)
   entry: string;                                 // the entry function (and the operator tables, where the target prints them beside it)
@@ -2005,7 +2006,10 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
   }));
   const postToks = r.postfixToks.length === 0 ? ''
     : L.postfixToks(groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok)).map((g) => g.key as number)) + (r.postfixTplHole !== undefined ? L.postfixTpl(r.postfixTplHole) : '');
-  const bp = [L.bpOpen(r.leds.length > 0 || r.postfixToks.length > 0), L.opRow, leds, postToks, L.postfixOp, L.binary, ...(L.leftDone ? [L.leftDone] : []), L.bpClose].join('\n');
+  // A rule without postfix (binary) operators prints no postfix (binary) test: its row has no such
+  // field, and a test that never passes still costs its instructions on every iteration.
+  const hasBin = r.binary.length > 0, hasPost = r.postfix.length > 0;
+  const bp = [L.bpOpen(r.leds.length > 0 || r.postfixToks.length > 0), ...(r.leds.length > 0 || hasPost || hasBin ? [L.opRow] : []), leds, postToks, ...(hasPost ? [L.postfixOp] : []), hasBin ? L.binary : L.noBinary, ...(L.leftDone ? [L.leftDone] : []), L.bpClose].join('\n');
   // The committed arm's run-time tests at a key (CommitTest): its token / literal unless the key
   // decides it, its guard's remaining tests, a capped arm's binding power.
   const tests = (t: CommitTest): string[] => {
@@ -2733,7 +2737,8 @@ export function prattOpRow(r: PrattRule, plan: LexIdPlan): PrattOpRow {
     if (p.lbp < 1 || !fits(p.lbp)) throw new Error(`portable: ${r.name}: postfix lid ${p.lid}: lbp ${p.lbp} does not fit the operator row (1..${OP_ROW.bpMask})`);
     rows[p.lid] |= (p.lbp << OP_ROW.postShift) | (p.tgt ? OP_ROW.postTgt : 0);
   }
-  for (const c of plan.gtComps) {
+  // the lead bit only where the operator read can find an operator: a rule with binary operators
+  if (ops.bin.length > 0) for (const c of plan.gtComps) {
     const lead = plan.lids.indexOf(c[0]!);
     if (lead > 0) rows[lead] |= OP_ROW.lead;
   }

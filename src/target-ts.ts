@@ -1102,10 +1102,12 @@ ${kids.map((k) => `      case ${k}:
     postfixTpl: (hole) => `
     if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) { if (matchTemplateW(parse${hole}W)) { ${finPTs(r.name, ir.tpl ? postKey(kidOf(ids, ir.tpl.token)) : 'post0', 'b')}; form = ${ir.tpl ? postTokForm(kidOf(ids, ir.tpl.token)) : 0}; continue ledLoop; } }`,
     // a postfix lbp of 0 is no postfix operator (minBp >= 0)
-    postfixOp: `    if ((row >>> ${OP_ROW.postShift} & ${OP_ROW.bpMask}) > minBp && !tailClosed${r.postfixSameLine ? ' && !t.nl' : ''}) {
+    postfixOp: `    if ((row & ${OP_ROW.bpMask << OP_ROW.postShift}) !== 0 && (row >>> ${OP_ROW.postShift} & ${OP_ROW.bpMask}) > minBp && !tailClosed${r.postfixSameLine ? ' && !t.nl' : ''}) {
       if (${lf('form')} !== 0 && (row & ${OP_ROW.postTgt}) !== 0) { _n = b; return false; }
       leafSlotW('$operator', t); pos++; ${finPTs(r.name, 'postop', 'b')}; tailClosed = true; form = ${r.postForm ?? 1}; continue;
     }`,
+    noBinary: `    break;
+  }`,
     // the composite read (_opLid) only at a lead lid (the row's lead bit); an lbp of 0 is no operator
     binary: `${ids.gtComps.length === 0 ? `    const opLid = t.lid, info = row; _opN = 1; _opEnd = t.end;` : `    let opLid = t.lid, info = row;
     if ((row & ${OP_ROW.lead}) !== 0) { opLid = _opLid(t); info = ${r.name}_ROW[opLid]!; } else { _opN = 1; _opEnd = t.end; }`}

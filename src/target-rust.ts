@@ -1604,7 +1604,9 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
     postfixTpl: (hole) => `
             if !tail_closed && t.kid == ${kidOf(ids, '$templateHead')} { if let Some(n) = self.match_template(Self::parse_${hole}) { let sb = self.scratch.len(); if left.present { self.scratch.push(left.h); } if n.present { self.scratch.push(n.h); } left = ${finK(ir.tpl ? postKey(kidOf(ids, ir.tpl.token)) : 'post0')}; form = ${ir.tpl ? postTokForm(kidOf(ids, ir.tpl.token)) : 0}; continue; } }`,
     // a postfix lbp of 0 is no postfix operator (min_bp >= 0)
-    postfixOp: `            if ((row >> ${OP_ROW.postShift}) & ${OP_ROW.bpMask}) as i64 > min_bp && !tail_closed${r.postfixSameLine ? ' && !t.nl' : ''} { if row & ${OP_ROW.postTgt} != 0 && ${lf('form')} != 0 { return None; } let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1; left = ${finK('postop')}; tail_closed = true; form = ${r.postForm ?? 1}; continue; }`,
+    postfixOp: `            if row & ${OP_ROW.bpMask << OP_ROW.postShift} != 0 && ((row >> ${OP_ROW.postShift}) & ${OP_ROW.bpMask}) as i64 > min_bp && !tail_closed${r.postfixSameLine ? ' && !t.nl' : ''} { if row & ${OP_ROW.postTgt} != 0 && ${lf('form')} != 0 { return None; } let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1; left = ${finK('postop')}; tail_closed = true; form = ${r.postForm ?? 1}; continue; }`,
+    noBinary: `            break;
+        }`,
     binary: `            let (op_lid, op_n, op_end, row) = if row & ${OP_ROW.lead} != 0 { let (l, n, e) = self.op_read(t); (l, n, e, ${rowAt('l')}) } else { (t.lid, 1, t.end, row) };
             let lbp = (row & ${OP_ROW.bpMask}) as i64;
             if lbp <= min_bp { break; }

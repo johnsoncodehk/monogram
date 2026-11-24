@@ -1528,11 +1528,12 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\t\tnode := p.matchTemplate_${hole}()
 \t\t\tif node >= 0 { sb := len(p.scratch); p.scratch = append(p.scratch, left, node); left = ${fin}; form = ${T.tpl}; continue LedLoop }
 \t\t}`,
-    postfixOp: `\t\tif int((row >> ${OP_ROW.postShift}) & ${OP_ROW.bpMask}) > minBp && !tailClosed${r.postfixSameLine ? ' && !t.Nl' : ''} {
+    postfixOp: `\t\tif row&${OP_ROW.bpMask << OP_ROW.postShift} != 0 && int((row >> ${OP_ROW.postShift}) & ${OP_ROW.bpMask}) > minBp && !tailClosed${r.postfixSameLine ? ' && !t.Nl' : ''} {
 \t\t\tif row&${OP_ROW.postTgt} != 0 && ${T.lf('form')} != 0 { return -1 }
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++; tailClosed = true
 \t\t\tleft = ${fin}; form = ${T.post}; continue
 \t\t}`,
+    noBinary: '\t\tbreak\n\t}',
     binary: `${goRowOpRead(r, ids, false)}
 \t\tif infoTgt && ${T.tgt} || infoNoUnary && ${T.lf('form')} == 2 { return -1 }
 \t\tledSave := p.pos; sb := len(p.scratch)
@@ -1560,6 +1561,7 @@ func (p *engine) parse${r.name}() int32 {
 \tform := p.form
 \tif p.capped { return left }
 \ttailClosed := p.tail
+\t_ = tailClosed // Go refuses an unread local: a rule without postfix or binary operators may not read it
 ${label ? 'LedLoop:\n' : ''}\tfor {
 \t\tt := p.peek()
 \t\tif t == nil { break }`,
@@ -2165,11 +2167,12 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\t\t\tleft = ${fin}; form = ${T.tpl}; continue LedLoop
 \t\t\t}
 \t\t}`,
-    postfixOp: `\t\tif int((row >> ${OP_ROW.postShift}) & ${OP_ROW.bpMask}) > minBp && !tailClosed${r.postfixSameLine ? ' && !t.Nl' : ''} {
+    postfixOp: `\t\tif row&${OP_ROW.bpMask << OP_ROW.postShift} != 0 && int((row >> ${OP_ROW.postShift}) & ${OP_ROW.bpMask}) > minBp && !tailClosed${r.postfixSameLine ? ' && !t.Nl' : ''} {
 \t\t\tif row&${OP_ROW.postTgt} != 0 && ${T.lf('form')} != 0 { return spanned{}, false }
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++; tailClosed = true
 \t\t\tleft = ${fin}; form = ${T.post}; continue
 \t\t}`,
+    noBinary: '\t\tbreak\n\t}',
     binary: `${goRowOpRead(r, ids, true)}
 \t\tif infoTgt && ${T.tgt} || infoNoUnary && ${T.lf('form')} == 2 { return spanned{}, false }
 \t\tledSave := p.pos; sb := len(p.scratch)
@@ -2196,6 +2199,7 @@ ${kids.map((k) => `\t\tcase ${k}:
 \tform := p.form
 \tif p.capped { return left, true }
 \ttailClosed := p.tail
+\t_ = tailClosed // Go refuses an unread local: a rule without postfix or binary operators may not read it
 ${label ? 'LedLoop:\n' : ''}\tfor {
 \t\tt := p.peek()
 \t\tif t == nil { break }`,
