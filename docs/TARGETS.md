@@ -145,7 +145,7 @@ listed in [ROADMAP.md](ROADMAP.md#1-one-portable-engine-one-shared-runtime-descr
   | grammar (rejected mutants) | damage N = 1 | N = 3 | N = 5 | stable | fallback |
   |---|---|---|---|---|---|
   | javascript (787) | 25.0% | 14.0% | 8.6% | 75.3% | 33.9% |
-  | typescript (1806) | 23.2% | 12.7% | 8.2% | 76.2% | 28.2% |
+  | typescript (1827) | 22.6% | 12.7% | 7.9% | 76.8% | 28.7% |
 
   The option also carries the parse plan as one int table (`emit-portable.ts` recoveryTables) and
   ONE interpreter of it (`src/recovery-family.ts`, printed for each target), which later stages
