@@ -719,9 +719,11 @@ const riBpOf = (rebind: boolean): Fn => method('riBpIn', [['r', 'int'], ['rec', 
       let_('b', call('riOp', sec(P_BIN), n(5), v('opl'))),
       if_(or(lt(v('b'), n(0)), bin('le', at(v('b'), 1), v('minBp'))), [brk]),
       if_(or(and(isT(v('b'), 3), ne(v('fm'), n(0))), and(isT(v('b'), 4), eq(v('fm'), n(2)))), [ret(fls)]),
-      let_('ls', call('enPos')),
+      // (a mark, not a cut: an operand that fails may have recorded repairs, which go with it)
+      let_('kb', call('enMark')),
       run('enLeafOpN'),
-      if_(not(operand(at(v('b'), 2))), [run('enBack', v('ls')), run('enCut', v('hl')), brk]),
+      if_(not(operand(at(v('b'), 2))), [run('enReset', v('kb')), run('enUnmark', v('kb')), brk]),
+      run('enUnmark', v('kb')),
       ...finLed(n(1)),
       // A capped right operand caps this node: it returns at once, still capped (PrattLowering.binary).
       if_(ne(call('enSt', n(ST_CAPPED)), n(0)), [run('enSetSt', n(ST_FORM), n(1)), ret(tru)]),
