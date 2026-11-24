@@ -13,7 +13,7 @@
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
-import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, punctEmitsPlain, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
@@ -415,6 +415,14 @@ function buildLexCandidates(
   return { codes, firsts };
 }
 
+// One round of the dispatch loop whose state-free punctuators (punctEmitsPlain) break out of the
+// labeled block with (length, lid) to the one emit after it; every other path of a round continues.
+// (Rust refuses an unlabeled \`continue\` inside a labeled block, so a round is the block 'lx and
+// "continue" leaves it; no loop of a round's body has a \`continue\` of its own.)
+const rsPlainTail = (on: boolean, body: string): string => on ? `        'lx: { let (pl, pk): (usize, u16) = 'pk: {
+${body.replace(/\bcontinue;/g, "break 'lx;")}
+        };
+        st.emit_plain(pos, pos + pl, pk); pos += pl; }` : body;
 /** Shared first-byte dispatch for all lexFrom variants in this target. */
 // `armHead`: code that runs first in the arm of one ASCII byte (and nowhere else), for a test that
 // only that byte can pass.
@@ -448,7 +456,7 @@ ${indent}        }`;
 // signature is undecided is its verdict (the head was an element): the loop head rewinds.
 function elementLexerRust(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms, p: {
   head: string; scans: string; tplFn: string; lexCodes: string[]; lexFirsts: (LexFirstBytes | null)[]; specialArms: string; nonAscii: string;
-  tplCloseTest: string; tplOpenPreCheck: string; closeByte: number | null; uniIdentOrPanic: string; pavHot: string; lexStacks: string; takeStk: (f: string) => string;
+  tplCloseTest: string; tplOpenPreCheck: string; closeByte: number | null; uniIdentOrPanic: string; pavHot: string; anyPlain: boolean; lexStacks: string; takeStk: (f: string) => string;
 }): string {
   const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0, dirs = !!el.directives;
   const operand = el.entry === 'operand';
@@ -494,6 +502,9 @@ ${rx ? `        if lid == _LID_LPAREN { let (has_prev2, bp_lid) = self.prev2(); 
         else if lid == _LID_RPAREN { self.last_close = self.paren_head.pop().unwrap_or(false); }
         if ${p.pavHot} { self.last_bang = self.prev_is_value(); }
 ` : ''}        self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;${rx ? ' self.lid2 = self.lid1; self.kid1 = kid; self.lid1 = lid;' : ''}
+    }
+${inl}    fn emit_plain(&mut self, off: usize, end: usize, lid: u16) {
+        self.acc.push(mk_tok(off, end, self.pending_nl, 0, lid)); self.pending_nl = false;${rx ? ' self.lid2 = self.lid1; self.kid1 = 0; self.lid1 = lid;' : ''}
     }
     /// The frame stack's top changed: whether the loop head has work (an element or raw frame on
     /// top${sig ? ', or a signature undecided' : ''}), and to which token count the previous token is a
@@ -628,9 +639,9 @@ ${sig ? '            if st.spec_on { st.spec_step(&mut sp); pos = st.spec_rewind
 ${sig ? '        if st.spec_on && st.spec_step(&mut sp) { pos = st.spec_rewind(&mut sp, src, n, false); continue; }\n' : ''}${frameStep}        bound = pos + 1;
         }
     while pos < bound && (limit == 0 || st.acc.len() - base < limit${sig ? ' || st.spec_on' : ''}) {
-        let c = b[pos] as u32;
+${rsPlainTail(p.anyPlain, `        let c = b[pos] as u32;
 ${pre}${cascade}
-${p.uniIdentOrPanic}
+${p.uniIdentOrPanic}`)}
     }
     }`;
   const rxParams = rx ? 'prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool, ' : '';
@@ -799,7 +810,12 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
     const b = braceSteps.get(p);
     return b ? `if let Some(f) = st.template_stack.last_mut() { if ${b.kinds.length === 2 ? '*f & 2 == 0' : `*f & 3 == ${b.kinds[0]}`} { *f ${b.delta > 0 ? '+=' : '-='} ${Math.abs(b.delta)}; } } ` : '';
   };
-  const punctLine = (p: string) =>
+  // A punctuator that changes no lexer state (emit-portable punctEmitsPlain) leaves the dispatch
+  // with its (length, lid): ONE emit site for all of them (rsPlainTail), so lex_from does not grow
+  // by an inlined emit per punctuator. Rust-specific in form only: a labeled block's value.
+  const plain = (p: string) => stateful && punctEmitsPlain(ir, p);
+  const anyPlain = ir.puncts.some(plain);
+  const punctLine = (p: string) => plain(p) ? `        if ${startByteEq('pos', p)} { break 'pk (${tlen(p)}usize, ${lidOf(ids, p)}u16); }` :
     `        if ${startByteEq('pos', p)} { ${braceStep(p)}${stateful ? `st.emit(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${tlen(p)}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${tlen(p)}; continue; }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine, errAt);
   // Where no candidate can begin at a non-ASCII byte, the byte is whitespace, an identifier or an
@@ -928,6 +944,9 @@ ${prevIsValue}${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u1
 ${emitHooks}
         self.toks.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;${emitTail}
     }
+${inlAlways}    fn emit_plain(&mut self, off: usize, end: usize, lid: u16) {
+        self.toks.push(mk_tok(off, end, self.pending_nl, 0, lid)); self.pending_nl = false;${rx ? ' self.lid2 = self.lid1; self.kid1 = 0; self.lid1 = lid;' : ''}
+    }
 }
 ` : '';
   const rxScanImpl = rxOnly ? `struct RxScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, base: usize, prev0: (bool, u16, u16), bp0: (bool, u16), kid1: u16, lid1: u16, lid2: u16, paren_head: Vec<bool>, last_close: bool, last_bang: bool }
@@ -957,6 +976,9 @@ ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
         if ${pavHot} { self.last_bang = self.prev_is_value(); }
         self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false; self.lid2 = self.lid1; self.kid1 = kid; self.lid1 = lid;
     }
+${inlAlways}    fn emit_plain(&mut self, off: usize, end: usize, lid: u16) {
+        self.acc.push(mk_tok(off, end, self.pending_nl, 0, lid)); self.pending_nl = false; self.lid2 = self.lid1; self.kid1 = 0; self.lid1 = lid;
+    }
 }
 ` : '';
   const tplScanImpl = tplOnly ? `struct TplScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, template_stack: Vec<i64> }
@@ -964,6 +986,9 @@ impl<'a> TplScan<'a> {
 ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
         if !self.template_stack.is_empty() { if lid == _LID_BRACE_OPEN { *self.template_stack.last_mut().unwrap() += 1; } else if lid == _LID_INTERP_CLOSE { *self.template_stack.last_mut().unwrap() -= 1; } }
         self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;
+    }
+${inlAlways}    fn emit_plain(&mut self, off: usize, end: usize, lid: u16) {
+        self.acc.push(mk_tok(off, end, self.pending_nl, 0, lid)); self.pending_nl = false;
     }
 }
 ` : '';
@@ -995,6 +1020,9 @@ ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
         if !self.template_stack.is_empty() { if lid == _LID_BRACE_OPEN { *self.template_stack.last_mut().unwrap() += 1; } else if lid == _LID_INTERP_CLOSE { *self.template_stack.last_mut().unwrap() -= 1; } }
         self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false; self.lid2 = self.lid1; self.kid1 = kid; self.lid1 = lid;
     }
+${inlAlways}    fn emit_plain(&mut self, off: usize, end: usize, lid: u16) {
+        self.acc.push(mk_tok(off, end, self.pending_nl, 0, lid)); self.pending_nl = false; self.lid2 = self.lid1; self.kid1 = 0; self.lid1 = lid;
+    }
 }
 ` : '';
   // The lexer's bracket-head and template-depth stacks, bounded by nesting depth. lex_into takes
@@ -1017,19 +1045,19 @@ struct LexStacks {${stkFields.length ? ` ${stkFields.join(', ')} ` : ''}}
     nlRs ? nlRs.init : ''].filter(Boolean).join(', ');
   const open = stateful ? `    let mut st = LexState { ${initFields} };` : `    let mut toks: Vec<Tok> = Vec::new();\n    let mut pending_nl = false;`;
   const nlWs = nlRs ? nlRs.ws : '';
-  const loopBody = `        let c = b[pos] as u32;
+  const loopBody = rsPlainTail(anyPlain, `        let c = b[pos] as u32;
 ${nlWs}${tplDispatch}${cascade}
-${uniIdentOrPanic}`;
+${uniIdentOrPanic}`);
   if (el) {
     return elementLexerRust(ir, ids, shared, {
       head: `${renderIdTablesRust(ids)}${rxConsts}`, scans, tplFn, lexCodes, lexFirsts, specialArms: `${wsNlArms}${tplOpenArm}`,
-      nonAscii: nonAsciiCold ? nonAsciiColdCall : nonAsciiWsCheck, tplCloseTest, tplOpenPreCheck, closeByte, uniIdentOrPanic, pavHot, lexStacks, takeStk,
+      nonAscii: nonAsciiCold ? nonAsciiColdCall : nonAsciiWsCheck, tplCloseTest, tplOpenPreCheck, closeByte, uniIdentOrPanic, pavHot, anyPlain, lexStacks, takeStk,
     });
   }
   if (rxOnly) {
-    const rxLoopBody = `        let c = b[pos] as u32;
+    const rxLoopBody = rsPlainTail(anyPlain, `        let c = b[pos] as u32;
 ${nlWs}${cascade}
-${uniIdentOrPanic}`;
+${uniIdentOrPanic}`);
     return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Option<LexErr>) {
     let b = src.as_bytes();
     let n = b.len();

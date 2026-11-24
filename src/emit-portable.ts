@@ -864,6 +864,19 @@ export const regionKids = (ir: ParserIR, ids: LexIdPlan): number[] => elementTok
 // punctuation (its punct line): there the top frame is a hole or not; a closer at count 0 is the
 // hole's own closer, lexed by its own test before the punct line. Elsewhere a brace literal is an
 // element frame's own token (a hole opener in children or a tag), which counts nothing.
+
+/** Whether lexing punctuator p changes no lexer state beyond the token itself (the previous-token
+ *  record aside): it is no regex-context paren or postfix-after-value text, no template brace, no
+ *  flow delimiter of a newline grammar and no element hole brace. Such punctuators share ONE emit
+ *  site in a printer's dispatch loop: the loop's size then does not grow with their number. */
+export function punctEmitsPlain(ir: ParserIR, p: string): boolean {
+  const rx = ir.regexCtx, tpl = ir.tpl, nl = ir.newlineCfg;
+  if (rx && (p === '(' || p === ')' || rx.postfixAfterValue.includes(p))) return false;
+  if (tpl && (p === tpl.braceOpen || p === tpl.interpClose)) return false;
+  if (nl && (nl.flowOpen.includes(p) || nl.flowClose.includes(p))) return false;
+  if (ir.elements && elementBraceSteps(ir).has(p)) return false;
+  return true;
+}
 export function elementBraceSteps(ir: ParserIR): Map<string, { delta: number; kinds: number[] }> {
   const e = ir.elements!, steps = new Map<string, { delta: number; kinds: number[] }>();
   const add = (lit: string, delta: number, kind: number) => {
