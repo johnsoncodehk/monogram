@@ -51,6 +51,7 @@ import type { Expr, Fn, Stmt } from './algo-ir.ts';
 import type { ParserIR, PrattRule, RdRule, RuleIR, ShapeInhVal, Step } from './emit-portable.ts';
 import type { RuleExpr } from './types.ts';
 import { cardOf, type ArmInfo, type ScopeInfo, type Shape, type Slot } from './shape2-eval.ts';
+import { kindsOf } from './shape-types.ts';
 import { nodeKeysOf, type CookFn, type InhEq, type Scalar, type Term, type ThreadEq } from './shape2-schema.ts';
 
 /** One engine arm: the rule, the engine's key for it, the grammar arm (null: none maps it). */
@@ -1076,7 +1077,7 @@ class ArmCompiler {
         if (sp && 'inside' in sp) no('an `inside` span (template parts)');
         else if (sp && 'after' in sp) { start = end = v(this.bindInt(this.spanEdge(s, sp.after, 'end', out), out)); }
         else if (sp) { start = v(this.bindInt(this.spanEdge(s, sp.from, 'start', out), out)); end = v(this.bindInt(this.spanEdge(s, sp.to, 'end', out), out)); }
-        return { k: 'mkNode', kind, fields, start, end };
+        return { k: 'mkNode', kind, kinds: kindsOf(t.type) ?? [], fields, start, end };
       }
       case 'record': return { k: 'mkRecord', fields: Object.entries(t.fields).map(([name, x]) => ({ name, e: v(this.bindVal(this.val(x, s, out), out)) })) };
       case 'list': {
