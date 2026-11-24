@@ -686,7 +686,10 @@ export interface RuleDecl {
   label?: string;
 }
 
-export interface TargetContext { leaves: string[]; containers?: Record<string, string>; last?: string[] }
+// when: 'eager' (the default) computes the predicate in every Pratt call's form; 'demand' computes
+// nothing in the normal parse and re-parses a container on the left of a `targetOps` operator
+// (declared-targets.ts planDemand): its leaves must be the arms the shallow check takes.
+export interface TargetContext { leaves: string[]; containers?: Record<string, string>; last?: string[]; when?: 'eager' | 'demand' }
 
 export interface CstGrammar {
   tokens: TokenDecl[];

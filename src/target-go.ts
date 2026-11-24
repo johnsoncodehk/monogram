@@ -11,11 +11,11 @@
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
-import { hasRebind, nudLowForm, hasUnaryNud, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, nudLowForm, hasUnaryNud, demandTwinCond, demandLids, DEFER_SHIFT, type DemandIR, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
-import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT, RM_AMAX } from './recovery-family.ts';
+import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT, RM_AMAX, nativeCases, shorterDispatch } from './recovery-family.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, unitMask, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
@@ -172,7 +172,7 @@ const lowGo = (ir: { targets?: TargetsIR }, f: string): string => (ir.targets ? 
 // Declared target contexts' runtime on an engine type (as target-ts.ts targetRuntimeTs): the open
 // container's accumulator `acc` (an enclosing one's is in its arm's frame: accRun), `accF` the form of the container
 // arm that just matched; `nudOkF` a committed NUD arm with a form of its own.
-const targetFieldsGo = (ir: ParserIR): string => (ir.targets ? '\n\tacc, accF uint8' : '');
+const targetFieldsGo = (ir: ParserIR): string => (ir.targets ? `\n\tacc, accF uint8${ir.targets.demand ? '\n\trpAt1, rpN, rpOver int // the demand re-parse in progress (its start + 1; 0: none), the re-parses, those above the bound (src/reparse-family.ts)' : ''}` : '');
 function targetRuntimeGo(ir: ParserIR, recv: string, node: string): string {
   const t = ir.targets;
   const ret = node === 'int32' ? 'n' : 'n, true';
@@ -209,6 +209,9 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: Aren
     // expression left to right), so it is kept in the frame, not on a stack.
     acc: (call, mask) => (f === 'R' ? call : `(${call} && p.accK(${mask}))`),
     accSep: () => (f === 'R' ? 'true' : 'p.accS()'),
+    // A demand twin's Pratt child (DemandIR): the position is read first (Go runs the calls of an
+    // expression left to right).
+    dfix: (call) => (f === 'R' ? call : `p.dfix(p.rpPos(), ${call})`),
     target: (mask) => { if (f === 'R') throw new Error('go: a target() step in a recognized body'); return `(p.form & ${mask}) != 0`; },
     accRun: (cond, af) => (f === 'R' ? cond : `p.accEnd(p.accSwap(${af.init}), ${cond}, ${af.low}, ${af.last})`),
     armForm: armFormGo,
@@ -1253,7 +1256,7 @@ function rdFormGo(r: RdRule) {
   return { set, best: tf ? '; bfm := uint8(0)' : '', keep: (i: number) => (tf ? ` bfm = ${armFormGo(tf[i]!, false)};` : ''), close: tf ? '\n\tp.form = bfm' : '' };
 }
 function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  const fin = `p.finish(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save)`;
+  const fin = `p.finish(${ruleIdOf(ar, r.twinOf ?? r.name)}, sb, p.offAt(save), save)`;
   const F = rdFormGo(r);
   const open = '\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)';
   return ruleShell(r, ids, {
@@ -1269,7 +1272,7 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
     cand: (d, i, cond) => candGo(d, i, cond, `best = ${fin}; bestPos = p.pos;${markGo(d, i)}${F.keep(i)} nb = len(p.nodes); kb = len(p.kids)`, lostGo),
     closeBest: `\tp.pos = bestPos${F.close}\n\treturn best`,
     commitPeek: '\t_ft := p.peek()',
-    commit: (i, conds, cond, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, finGo(ruleIdOf(ar, r.name)), (n) => `${F.set(i)}return ${n}`), 'return -1'),
+    commit: (i, conds, cond, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, finGo(ruleIdOf(ar, r.twinOf ?? r.name)), (n) => `${F.set(i)}return ${n}`), 'return -1'),
     commitFail: '{ return -1 }',
   });
 }
@@ -1420,6 +1423,7 @@ ${cases.map((c) => `\t\tcase ${c.key}:\n${c.arms.map((a) => `\t\t\t${a}`).join('
 // template postfix's, the postfix operator node's, the binary node's (not a target, its leaf bits,
 // and those its left operand passes: info.acc); lf masks the low bits; ctx is targetOps' test.
 function prattFormGo(r: PrattRule, ir: ParserIR, ids: LexIdPlan) {
+  const D = ir.targets?.demand, dem = demandLids(r, ids, D);
   const postTok = (k: number) => r.postfixTokForm?.[r.postfixToks.findIndex((tok) => kidOf(ids, tok) === k)] ?? 0;
   return {
     fm: (i: number) => (r.nudForm ? armFormGo(r.nudForm[i]!, true) : `${nudLowForm(r, i)}`),
@@ -1429,8 +1433,11 @@ function prattFormGo(r: PrattRule, ir: ParserIR, ids: LexIdPlan) {
     // The operators a target context reads (emit-portable binLeftOps): a switch behind the table's
     // test bit (goBinLeft); every other operator tests what it did without contexts and its node's
     // form is a constant.
-    bin: r.binForm ? `${1 | r.binForm.leaf}${binLeftOps(prattOpTables(r, ids)).some((o) => o.acc) ? ` | binKeep_${r.name}(info.tgt, opLid, form)` : ''}` : '1',
-    tgt: binLeftOps(prattOpTables(r, ids)).length ? `binFail_${r.name}(opLid, form)` : `${lowGo(ir, 'form')} != 0`,
+    // A demand operator (DemandIR): its node is ASSIGNED (binDem), a left operand with a twin
+    // number goes to the cold demand_<rule> (demandFnsGo); p0 is the left operand's mark.
+    bin: r.binForm ? `${1 | r.binForm.leaf}${binLeftOps(prattOpTables(r, ids)).some((o) => o.acc) ? ` | binKeep_${r.name}(info.tgt, opLid, form)` : ''}` : dem.length ? `binDem_${r.name}(info.tgt, opLid)` : '1',
+    tgt: binLeftOps(prattOpTables(r, ids)).length ? `binFail_${r.name}(opLid, form)` : dem.length ? `(form&3 != 0 || form&${D!.defer} != 0 && !p.demand_${r.name}(int(opLid), int(form), p0, p.pos))` : `${lowGo(ir, 'form')} != 0`,
+    p0: dem.length ? '\n\tp0 := p.pos' : '',
     lf: (f: string) => lowGo(ir, f),
   };
 }
@@ -1524,7 +1531,7 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\tif p.capped { p.form = ${T.bin}; return left }
 \t\tform = ${T.bin}; tailClosed = true
 \t}`,
-    entry: `${goPrattOpTables(r, ids)}
+    entry: `${goPrattOpTables(r, ids, ir.targets?.demand)}
 func (p *engine) parse${r.name}() int32 {
 \tprev := p.suppressCur
 \tp.suppressCur = p.suppressNext
@@ -1533,7 +1540,7 @@ func (p *engine) parse${r.name}() int32 {
 \tp.suppressCur = prev
 \treturn r
 }`,
-    bpOpen: (label) => `func (p *engine) bp_${r.name}(minBp int) int32 {
+    bpOpen: (label) => `func (p *engine) bp_${r.name}(minBp int) int32 {${T.p0}
 \tleft := p.nud_${r.name}(minBp)
 \tif left < 0 { return -1 }
 \tform := p.form
@@ -1563,7 +1570,7 @@ ${B.nudClose}
 /** A Pratt rule's operator tables (emit-portable prattOpTables) as arrays indexed by the token's
  *  lid, one entry per literal id (`ok` marks an operator): a bounds-checked load, where a
  *  map[uint16] would hash on every LED iteration and every prefix NUD. */
-function goPrattOpTables(r: PrattRule, ids: LexIdPlan): string {
+function goPrattOpTables(r: PrattRule, ids: LexIdPlan, D?: DemandIR): string {
   const ops = prattOpTables(r, ids);
   const bin = ops.bin.map((b) => `${b.lid}: {${b.lbp}, ${b.rbp}, ${binTestsLeft(b)}, ${b.noUnary}, true}`).join(', ');
   const pre = ops.pre.map((p) => `${p.lid}: {${p.rbp}, ${p.tgt}, ${p.form}, true}`).join(', ');
@@ -1588,7 +1595,10 @@ func binKeep_${r.name}(tgt bool, op uint16, form uint8) uint8 {
 \t}
 \treturn 0
 }`}`;
-  return `var bin_${r.name} = [${ops.size}]bp{${bin}}${fns}
+  const dem = demandLids(r, ids, D);
+  const demFn = dem.length ? `
+func binDem_${r.name}(tgt bool, op uint16) uint8 { if tgt && (${dem.map((l) => `op == ${l}`).join(' || ')}) { return ${1 | D!.assigned} }; return 1 }` : '';
+  return `var bin_${r.name} = [${ops.size}]bp{${bin}}${fns}${demFn}
 var pre_${r.name} = [${ops.size}]preOp{${pre}}
 var post_${r.name} = [${ops.size}]postOp{${post}}`;
 }
@@ -1917,6 +1927,55 @@ function rbSite(ids: LexIdPlan, recv: string, steps: string[]): number {
   if (i === undefined) f.set(key, (i = f.size));
   return i;
 }
+// The demand form of a target context (emit-portable.ts DemandIR) on one engine (as target-ts.ts
+// demandFnsTs): the twins (twin<k>, the closure's rd rules' `__twin` functions), dfix, twinForm,
+// reparseFrom (src/reparse-family.ts) and its externs, and per rule the cold demand_<rule>.
+function demandFnsGo(recv: string, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shared: SharedAlgorithms): string {
+  const D = ir.targets?.demand;
+  if (!D) return '';
+  const w = recv !== 'engine';
+  const S = w ? goSteps(ids, 'W', recv, ENGINE_GO_W, ar) : goSteps(ids, '', 'engine', ENGINE_GO);
+  const reset = w ? 'p.back(q); p.scratch = p.scratch[:sb]; p.b.Restore(nb, kb)' : 'p.reset(mark{q, sb, nb, kb})';
+  const twinOf = (f: string) => `int((${f}>>${DEFER_SHIFT})&7) - 1`;
+  return `
+func (p *${recv}) rpMark() (int, int, int, int) { m := p.mark(); return m.pos, m.sb, m.nb, m.kb }
+func (p *${recv}) rpReset(q, sb, nb, kb int) { ${reset} }
+func (p *${recv}) rpPos() int { return p.pos }
+func (p *${recv}) rpAt() int { return p.rpAt1 - 1 }
+func (p *${recv}) rpSetAt(q int) { p.rpAt1 = q + 1 }
+func (p *${recv}) rpCount(over bool) { p.rpN++; if over { p.rpOver++ } }
+func (p *${recv}) rpTwin(k int) bool {
+\tswitch k {
+${D.twins.map((t) => `\tcase ${t.k}:\n\t\treturn p.twin${t.k}()`).join('\n')}
+\t}
+\treturn false
+}
+${D.twins.map((t) => `// twin of arm ${t.arm} of ${t.rule}\nfunc (p *${recv}) twin${t.k}() bool { return ${demandTwinCond(t, S)} }`).join('\n')}
+${D.rd.map((r) => (w ? rdRuleW(r, ids, ar, recv) : rdRule(r, ids, ar))).join('\n')}
+${shared.reparseFamily(goLoweringFor('p', recv))}
+func (p *${recv}) twinForm(k, p0, stop int) uint8 { if p.reparseFrom(p0, stop, k) { return p.accF }; return 0 }
+func (p *${recv}) dfix(q int, ok bool) bool {
+\tif !ok { return false }
+\tf := p.form
+\tswitch {
+\tcase f&${D.assigned} != 0:
+\t\tp.form = ${D.pass}
+\tcase f&${D.defer} != 0:
+\t\tp.form = p.twinForm(${twinOf('f')}, q, p.pos)
+\tcase p.capped || f&3 != 0:
+\t\tp.form = 0
+\tdefault:
+\t\tp.form = ${D.pass}
+\t}
+\treturn true
+}
+${ir.rules.filter((r): r is PrattRule => r.kind === 'pratt' && demandLids(r, ids, D).length > 0).map((r) => `// cold: reached only by a left operand with a twin number
+//go:noinline
+func (p *${recv}) demand_${r.name}(op, form, p0, stop int) bool {
+\tif ${demandLids(r, ids, D).map((l) => `op != ${l}`).join(' && ')} { return true }
+\treturn p.twinForm(int((form>>${DEFER_SHIFT})&7) - 1, p0, stop)&${D.pass} != 0
+}`).join('\n')}`;
+}
 function rebindRuntimeGo(recv: string, ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   if (!hasRebind(ir)) return '';
   const sites = [...(RB_SITES.get(ids)?.get(recv) ?? new Map<string, number>()).keys()].map((k) => JSON.parse(k) as string[]);
@@ -1954,7 +2013,7 @@ function sharedFnsW(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string)
 }
 
 function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  const fin = `p.finishW(${ruleIdOf(ar, r.name)}, sb, p.offAt(save), save)`;
+  const fin = `p.finishW(${ruleIdOf(ar, r.twinOf ?? r.name)}, sb, p.offAt(save), save)`;
   const F = rdFormGo(r);
   const open = `\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}`;
   return ruleShell(r, ids, {
@@ -1970,7 +2029,7 @@ function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
     cand: (d, i, cond) => candGo(d, i, cond, `best = ${fin}; found = true; bestPos = p.pos;${markGo(d, i)}${F.keep(i)} ${arenaMark()}`, lostGoW(recv)),
     closeBest: `\tp.pos = bestPos${F.close}\n\treturn best, found`,
     commitPeek: '\t_ft := p.peek()',
-    commit: (i, conds, cond, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? undoGoWc(recv) : null, nullable, (sb, save) => `p.finishW(${ruleIdOf(ar, r.name)}, ${sb}, p.offAt(${save}), ${save})`, (n) => `${F.set(i)}return ${n}, true`), 'return spanned{}, false'),
+    commit: (i, conds, cond, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? undoGoWc(recv) : null, nullable, (sb, save) => `p.finishW(${ruleIdOf(ar, r.twinOf ?? r.name)}, ${sb}, p.offAt(${save}), ${save})`, (n) => `${F.set(i)}return ${n}, true`), 'return spanned{}, false'),
     commitFail: '{ return spanned{}, false }',
   });
 }
@@ -2171,7 +2230,7 @@ ${kids.map((k) => `\t\tcase ${k}:
 \tp.suppressCur = prev
 \treturn r, ok
 }`,
-    bpOpen: (label) => `func (p *${recv}) bpW_${r.name}(minBp int) (spanned, bool) {
+    bpOpen: (label) => `func (p *${recv}) bpW_${r.name}(minBp int) (spanned, bool) {${T.p0}
 \tleft, ok := p.nudW_${r.name}(minBp)
 \tif !ok { return spanned{}, false }
 \tform := p.form
@@ -2253,7 +2312,7 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 ${structFields}
 }
 
-${engineMarkGo(recv)}${targetRuntimeGo(ir, recv, 'spanned')}${rebindRuntimeGo(recv, ir, ids, shared)}
+${engineMarkGo(recv)}${targetRuntimeGo(ir, recv, 'spanned')}${rebindRuntimeGo(recv, ir, ids, shared)}${demandFnsGo(recv, ir, ids, ar, shared)}
 ${pushLeafW}
 ${finishW}
 ${headLeafTextW}
@@ -3315,12 +3374,19 @@ const GO_BATCH_TOTAL = `	if len(os.Args) > 1 && os.Args[1] == "batch-total" {
 // (ParserIR.forms says which functions exist in building form).
 function recoveryEngineGo(ir: ParserIR): string {
   const ids = buildLexIdPlan(ir), ar = buildArenaIdPlan(ir, ids);
-  const sw = (on: string, cases: [number, string][]) => `switch ${on} {${cases.map(([k, c]) => `\n\tcase ${k}:\n\t\treturn ${c}`).join('')}\n\t}\n\tpanic("recovery: no native function")`;
-  const build = ir.rules.filter((r) => ir.forms.buildRules.includes(r.name));
-  const holes = ir.tpl ? tplHoleRules(ir) : [];
+  // The native dispatch (recovery-family.ts nativeCases): a switch, or a package-level table
+  // `name` of the method expressions of type `ty` (a hole: nil); `use` spells the result of the
+  // function's call with arguments a.
+  const nc = nativeCases(ir, ar), decls: string[] = [];
+  const disp = <X>(on: string, name: string, ty: string, cases: [number, X][], fn: (x: X) => string, use: (call: (a: string) => string) => string) => {
+    const d = shorterDispatch(cases, fn, (cs) => `switch ${on} {${cs.map(([k, c]) => `\n\tcase ${k}: return ${use((a) => `rv.p.${c}(${a})`)}`).join('')}\n\t}\n\tpanic("recovery: no native function")`,
+      (slots) => ({ body: `return ${use((a) => `${name}[${on}](rv.p${a ? `, ${a}` : ''})`)}`, decl: `var ${name} = [...]${ty}{${slots.map((x) => (x ? `(*parserW).${x}` : 'nil')).join(', ')}}\n` }));
+    decls.push(d.decl);
+    return d.body;
+  };
   const opRead = ids.gtComps.length === 0 ? '\tlid, n, end := t.Lid, 1, t.End'
     : `\tlid, n, end := gtOp(p.toks, p.pos)\n\tif t.Lid == ${lidOf(ids, '>')} { if e := p.pos + n + 1; e > p.maxLook { p.maxLook = e } }`;
-  return `// recov: the interpreter's engine over p, the marks it took, the plan's decoded table, the offset
+  const out = `// recov: the interpreter's engine over p, the marks it took, the plan's decoded table, the offset
 // of the node it last finished, the binary operator it last read, and the steps of the run.
 type recov struct {
 	p *parserW
@@ -3350,19 +3416,19 @@ func (rv *recov) enAhead(set int, is bool) bool { return rv.p.ahead(set, is) }
 func (rv *recov) enCtxWord() bool { return rv.p.ctxWord() }
 func (rv *recov) enSecondIn(set int) bool { return rv.p.secondIn(set) }
 func (rv *recov) enLook(id int) bool {
-	${sw('id', ir.lookaheads.map((_, i) => [i, `rv.p.look${i}()`]))}
+	${disp('id', 'ntLook', 'func(*parserW) bool', nc.look, (i) => `look${i}`, (c) => c(''))}
 }
 func (rv *recov) enRule(r int) bool {
-	${sw('r', build.map((r) => [ruleIdOf(ar, r.name), `rv.p.callRuleW(rv.p.parse${r.name}W())`]))}
+	${disp('r', 'ntRule', 'func(*parserW) (spanned, bool)', nc.rule, (r) => `parse${r}W`, (c) => `rv.p.callRuleW(${c('')})`)}
 }
 func (rv *recov) enBp(r, bp int) bool {
-	${sw('r', build.filter((r) => r.kind === 'pratt').map((r) => [ruleIdOf(ar, r.name), `rv.p.callRuleW(rv.p.bpW_${r.name}(bp))`]))}
+	${disp('r', 'ntBp', 'func(*parserW, int) (spanned, bool)', nc.bp, (r) => `bpW_${r}`, (c) => `rv.p.callRuleW(${c('bp')})`)}
 }
 func (rv *recov) enShared(i int) bool {
-	${sw('i', ir.shared.flatMap((_, i): [number, string][] => (ir.forms.buildShared[i] ? [[i, `rv.p.sub${i}W()`]] : [])))}
+	${disp('i', 'ntShared', 'func(*parserW) bool', nc.shared, (i) => `sub${i}W`, (c) => c(''))}
 }
 func (rv *recov) enTpl(hole int) bool {
-	${sw('hole', holes.map((h) => [ruleIdOf(ar, h), `rv.p.callRuleW(rv.p.matchTemplateW_${h}())`]))}
+	${disp('hole', 'ntTpl', 'func(*parserW) (spanned, bool)', nc.tpl, (h) => `matchTemplateW_${h}`, (c) => `rv.p.callRuleW(${c('')})`)}
 }
 func (rv *recov) enSh() int { return len(rv.p.scratch) }
 func (rv *recov) enCut(h int) { rv.p.scratch = rv.p.scratch[:h] }
@@ -3477,6 +3543,7 @@ func ParseInterpreted(src string, b Builder, depth int) (h int32, ok bool, steps
 	return fr, true, rv.steps
 }
 `;
+  return out + decls.join('');
 }
 
 function recoveryRegionGo(ir: ParserIR, shared: SharedAlgorithms): string {
@@ -3487,8 +3554,8 @@ type diag struct{ Kind, Off, End, RelOff, RelEnd, Arg int }
 // The recovery interpreter's best longest-match candidate so far (recovery-family.ts BEST).
 type bestCand struct{ Pos, Off, Won, Form, Tail, Capped, H0, Hb int }
 // The words of a repair's message: a literal's text (by lid), a token kind's name, a rule's name.
-var lidTexts = []string{${ids.lids.map(J).join(', ')}}
-func litText(x int) string { return lidTexts[x] }
+// (the lexer's literal table _lids)
+func litText(x int) string { return _lids[x] }
 func kindText(x int) string { return kindStr[x] }
 func ruleText(x int) string { return RULE_NAMES[x] }
 ${shared.recoveryFamily(ir)}
@@ -3717,7 +3784,7 @@ func (p *engine) pushLeaf(ttId uint8, tokIdx uint32) {
 
 ${tokenSetRuntimeGo(ir, ids)}
 ${cursorGo(ir, ids)}
-${engineMarkGo('engine')}${targetRuntimeGo(ir, 'engine', 'int32')}${rebindRuntimeGo('engine', ir, ids, shared)}${rebindCursorGo(ir, shared)}
+${engineMarkGo('engine')}${targetRuntimeGo(ir, 'engine', 'int32')}${rebindRuntimeGo('engine', ir, ids, shared)}${demandFnsGo('engine', ir, ids, ar, shared)}${rebindCursorGo(ir, shared)}
 // Wrap the scratch entries [sb:] as one node's children (flattened into kids); truncate scratch.
 // tokStart is the parse-consumption start (entry pos / leftmost operand), tokEnd is pos at finish.
 func (p *engine) finish(ruleId uint16, sb, fallbackOff, tokStart int) int32 {
