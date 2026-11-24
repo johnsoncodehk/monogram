@@ -1250,9 +1250,14 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
     ...(SHAPE_RS && !r ? { shaped: (s: Step, body: string) => {
       if (s.inh?.length || s.threadInit) throw new Error('rustTarget: inherited context attributes are not printed yet');
       const tagged = s.tag !== undefined ? `(${body} && ${recv}.sh_tag(${s.tag}))` : body;
-      if (s.mark === undefined) return tagged;
-      return `{ let c = ${recv}.scratch.len(); if ${tagged} { ${recv}.b.mark(&mut ${recv}.scratch, c, ${s.mark}); true } else { false } }`;
-    } } : {}),
+      const rec = (x: string) => (s.rec !== undefined ? `(${x} && { q${s.rec} = ${recv}.scratch.len(); true })` : x);
+      if (s.mark === undefined) return rec(tagged);
+      return rec(`{ let c = ${recv}.scratch.len(); if ${tagged} { ${recv}.b.mark(&mut ${recv}.scratch, c, ${s.mark}); true } else { false } }`);
+    },
+    // Rust: a record is a local of the condition's own block (a body is a non-capturing closure,
+    // so the block is the one frame both the step and the end of the condition are in); the
+    // builder gets them when the condition holds, right before the accept site's finish.
+    recs: (ks: number[], cond: string) => `{ ${ks.map((k) => `let mut q${k} = 0usize; `).join('')}(${cond}) && { ${ks.map((k) => `${recv}.b.rec(${k}, q${k}); `).join('')}true } }` } : {}),
   };
   return L;
 }
@@ -2264,6 +2269,9 @@ pub trait Builder {
     #[inline(always)] fn tag(&mut self, _scratch: &mut Vec<Self::H>, _t: i32) {}
     /// A shape's marked iteration: a marker slot with tag mt goes before its slots (from c).
     #[inline(always)] fn mark(&mut self, _scratch: &mut Vec<Self::H>, _c: usize, _mt: i32) {}
+    /// A shape's record k of the arm about to be finished: the child stack's length after one of
+    /// its steps (shape-plan.ts: computed positions).
+    #[inline(always)] fn rec(&mut self, _k: usize, _v: usize) {}
     /// A shape's finish of engine arm A, named at its accept site (finish's (H, off, present)).
     #[inline(always)]
     fn finish_arm<const A: u16>(&mut self, scratch: &mut Vec<Self::H>, sb: usize, fallback_off: u32, tok_start: u32, tok_end: u32, toks: &[Tok]) -> (Self::H, u32, bool) {

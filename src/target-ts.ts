@@ -759,8 +759,13 @@ const rsCheck = (rule: string, val: string, stop: string): string => {
   const rs = rsOf(rule)!;
   return `if (_bu[b] !== ${val} && _SPN_${rule}[_ar[b]!]) { if (++nr > 1) _rsOver++; _rsRun(${rs.k}, ${val}, p0, b, ${stop}, minBp, ${rule}_bpW); }`;
 };
-const finRTs = (rule: string, key: string, b: string, save: string): string => (SHAPE ? `finS(${SHAPE.armId(rule, key)}, ${b}, ${save})` : `finR(${J(rule)}, ${b}, ${save})`);
-const finPTs = (rule: string, key: string, b: string): string => (SHAPE ? `finPS(${SHAPE.armId(rule, key)}, ${b})` : `finP(${J(rule)}, ${b})`);
+// The arm's records (shape-plan.ts: computed positions), published for its construct plan. TS: a
+// record is a function-scoped `var` of the rule function (declared here, at the accept site: the
+// step that takes it is an expression of the same function, and a `var` is the one declaration an
+// expression's function can get from a statement after it).
+const recsTs = (id: number): string => SHAPE!.recs[id]!.map((k) => `var _q${k}!: number; _Q${k} = _q${k}; `).join('');
+const finRTs = (rule: string, key: string, b: string, save: string): string => (SHAPE ? `${recsTs(SHAPE.armId(rule, key))}finS(${SHAPE.armId(rule, key)}, ${b}, ${save})` : `finR(${J(rule)}, ${b}, ${save})`);
+const finPTs = (rule: string, key: string, b: string): string => (SHAPE ? `${recsTs(SHAPE.armId(rule, key))}finPS(${SHAPE.armId(rule, key)}, ${b})` : `finP(${J(rule)}, ${b})`);
 function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
   const S = SUFFIX[m];
   const fn = (cond: string) => lift(ids, `return ${cond};`);
@@ -821,8 +826,9 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
       for (const { k, v } of s.inh ?? []) core = `_ipop(${k}, _ipush(${k}, ${iv(v)}), ${core})`;
       if (s.threadInit) core = `_ipop(${s.threadInit.k}, _ipush(${s.threadInit.k}, ${iv(s.threadInit.v)}), ${core})`;
       const tagged = s.tag !== undefined ? `(${core} && _tag(${s.tag}))` : core;
-      if (s.mark === undefined) return tagged;
-      return s.thread ? `_iterT(${s.mark}, ${fn(tagged)}, ${s.thread.next}, ${s.thread.k})` : `_iter(${s.mark}, ${fn(tagged)})`;
+      const rec = (x: string) => (s.rec !== undefined ? `(${x} && (_q${s.rec} = _n, true))` : x);
+      if (s.mark === undefined) return rec(tagged);
+      return rec(s.thread ? `_iterT(${s.mark}, ${fn(tagged)}, ${s.thread.next}, ${s.thread.k})` : `_iter(${s.mark}, ${fn(tagged)})`);
     } } : {}),
   };
   return L;
@@ -3240,7 +3246,7 @@ const tsBlock = (lines: string[]): string[] => lines.map((l) => TS_IND + l);
 // A construct plan's slot reads (shape-plan.ts EXTERNS) are this target's slot arrays: printed in
 // place, as the CST builder reads them (the slot layout, _hs / _sp / _tg, is this printer's).
 const SHAPE_SLOT_TS: Record<string, (a: string[]) => string> = {
-  slotVal: ([i]) => `_hs[${i}]`, slotTag: ([i]) => `_tg[${i}]!`, slotTop: () => '_n',
+  slotVal: ([i]) => `_hs[${i}]`, slotTag: ([i]) => `_tg[${i}]!`, slotTop: () => '_n', slotRec: ([k]) => `_Q${k}`,
   slotOff: ([i]) => `_sp[(${i}) * _SW]!`, slotEnd: ([i]) => `_sp[(${i}) * _SW + 1]!`, srcText: ([a, b]) => `_src.slice(${a}, ${b})`,
   textSpan: ([a, b]) => `_src.slice(${a}, ${b})`,
   // An IdentifierName with no escape is its text (the cook's own check is the slow path's).
@@ -3273,7 +3279,9 @@ const tsLowering: Lowering = {
     vItems: (cx, r) => cx.atom(`(${r.c} as ShapeValue[])`, 'vals_any', 'vals_any'),
     vIs: (_cx, r, val) => ({ c: `${tsWrap(r, 4)} === ${val === null ? 'null' : JSON.stringify(val)}`, prec: 3 }),
     vPresent: (_cx, r) => ({ c: `${tsWrap(r, 4)} !== undefined`, prec: 3 }),
-    vNeed: (cx, r) => cx.atom(`_need(${r.c})`, 'val_any', 'val_any'),
+    // Inline: a call of _need is a function entry per child read (one V8 block each); the check is the
+    // throw's only branch.
+    vNeed: (cx, r) => cx.atom(`((_nv = ${r.c}) instanceof _Missing ? _throwM(_nv) : _nv)`, 'val_any', 'val_any'),
     vMissing: (cx, where, why) => cx.atom(`_missing(${J(where)}, ${J(why)})`, 'val_any', 'val_any'),
     switch: (_cx, on, cases, dflt) => [`switch (${on.c}) {`, ...cases.flatMap((c) => [`${TS_IND}case ${J(c.v)}: {`, ...tsBlock(tsBlock(c.body)), `${TS_IND}${TS_IND}break;`, `${TS_IND}}`]), `${TS_IND}default: {`, ...tsBlock(tsBlock(dflt)), `${TS_IND}}`, '}'],
   },
@@ -3868,6 +3876,8 @@ function _missing(where: string, why: string): any { return new _Missing(where, 
 // A child read that is missing makes the reading arm's value missing too (finS catches it): only the
 // root's read, parse(), throws, as the evaluator throws when a unit's evaluation reads one.
 function _need(v: any): any { if (v instanceof _Missing) throw v; return v; }
+let _nv: any;
+function _throwM(v: any): never { throw v; }
 // Inherited context attributes (an rd rule's: Step.inh sets them around its calls), their values
 // now; _ipush sets one and returns what it was, _ipop restores it and passes the call's result on.
 const _IV0: any[] = ${J(plan.inh.map((a) => a.dflt))};
@@ -3947,6 +3957,8 @@ let _tg: number[] = [];
 let _ar: number[] = [];
 // The slot the step just left gets tag t.
 function _tag(t: number): boolean { _tg[_n - 1] = t; return true; }
+// The records of the arm being accepted (set at its accept site, read by its plans: slotRec).
+${[...new Set(plan.recs.flat())].sort((a, b) => a - b).map((k) => `let _Q${k} = 0;`).join(' ')}
 // One iteration of a marked body: when it matched, a zero-width marker (tag mt) goes before its
 // slots (with the span and head of the first of them).
 function _iter(mt: number, f: () => boolean): boolean {
