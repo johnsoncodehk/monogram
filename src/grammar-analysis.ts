@@ -207,9 +207,16 @@ export function analyzeGrammar(grammar: CstGrammar) {
   const nudCapOf = (nud: RuleExpr): number | null =>
     nud.type === 'group' && nud.capBelow !== undefined ? connectorLbp(nud.capBelow) : null;
   // An atLevel group (`atLevel(op, R)`): the minBp R is read at, so that op's level and every
-  // tighter one bind (lbp > minBp) and every looser one does not.
-  const atLevelBp = (g: RuleExpr): number | null =>
-    g.type === 'group' && g.atLevel !== undefined ? connectorLbp(g.atLevel) - 1 : null;
+  // tighter one bind (lbp > minBp) and every looser one does not. A PREFIX operator (no infix or
+  // postfix use of its text) names its operand's level, its rbp: TypeScript's type assertion
+  // `<T>e` reads `e` as `!`'s operand would be (`<T>a++` is `<T>(a++)`, `<T>a = b` is no assignment
+  // inside the assertion).
+  const atLevelBp = (g: RuleExpr): number | null => {
+    if (g.type !== 'group' || g.atLevel === undefined) return null;
+    const pre = prefixOps.get(g.atLevel);
+    if (pre !== undefined && !opTable.has(g.atLevel) && !ledPrecByConnector.has(g.atLevel)) return pre.rbp;
+    return connectorLbp(g.atLevel) - 1;
+  };
 
   // ── Pratt vs ordinary rules ──
   const prattRules = new Set<string>();
@@ -261,6 +268,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
     const atoms: RuleExpr[] = [];
     const continuations: RuleExpr[][] = [];
     const contNotLeftLeaf: (string[] | null)[] = [];
+    const contAlts: RuleExpr[] = [];   // the arm each continuation was peeled from
     for (const alt of alts) {
       const items = alt.type === 'seq' ? alt.items : [alt];
       // A continuation may carry a leading `notLeftLeaf(...)` head-leaf guard before the self `$`.
@@ -269,9 +277,10 @@ export function analyzeGrammar(grammar: CstGrammar) {
       if (items[head]?.type === 'ref' && (items[head] as { name: string }).name === rule.name) {
         continuations.push(items.slice(head + 1));
         contNotLeftLeaf.push(guard ?? null);
+        contAlts.push(alt);
       } else atoms.push(alt);
     }
-    return { atoms, continuations, contNotLeftLeaf };
+    return { atoms, continuations, contNotLeftLeaf, contAlts };
   }
 
   // ── Left recursion = a left-corner cycle ──
