@@ -28,7 +28,7 @@
 // lowRs), a writer ORs the arm's leaf / last bits in (ArmForm, PrattRule.ledForm / postForm /
 // binForm / preLeaf). Readers: the prefix operand's requireTarget test (nudPrefix, commitPrefix),
 // the postfix operator's (postfixOp), the binary operator's requireTarget and noUnaryLhs tests
-// (binary). Writers: every NUD arm (nudLeaf, nudTpl, nudSeq, commitLeaf, commitSeq: `fm`), the
+// (binary). Writers: every NUD arm (nudLeaf, nudTpl, nudSeq, commitLeaf, commitSeq: `fm`; a prefix-shaped bracket / sequence arm, ending in an `atLevel` operand, has FORM_UNARY low bits: PrattRule.nudBracketForm / nudSeqForm, emit-portable nudLowForm), the
 // prefix node (PrattOpTables pre.form), every led (ledForm), a postfix token / template arm
 // (postfixTokForm), the postfix operator node (postForm), the binary node (binForm), an rd rule of
 // the closure (altForm). Not yet: the recovery encoding (recoveryTables refuses contexts) and the
@@ -153,8 +153,8 @@ export function planTargets(grammar: CstGrammar, rules: RuleIR[]): TargetsIR | n
       const arm = r.nudNames[i]!;
       switch (n.kind) {
         case 'tok': return armForm(r.name, arm, null, 0);
-        case 'bracket': return armForm(r.name, arm, r.nudBrackets[n.index]!.steps, 0);
-        case 'seq': return armForm(r.name, arm, r.nudSeqs[n.index]!, 0);
+        case 'bracket': return armForm(r.name, arm, r.nudBrackets[n.index]!.steps, r.nudBracketForm[n.index]!);   // FORM_UNARY when prefix-shaped
+        case 'seq': return armForm(r.name, arm, r.nudSeqs[n.index]!, r.nudSeqForm[n.index]!);
         case 'capped': return armForm(r.name, arm, r.nudCapped[n.index]!.steps, 0);
         case 'prefix': return armForm(r.name, arm, null, 0);   // its low bits are the operator's (PrattRule.prefix form)
       }
@@ -197,20 +197,47 @@ export function planTargets(grammar: CstGrammar, rules: RuleIR[]): TargetsIR | n
     }
   }
   // the closure: rd rules whose form a container or a target step reads, and unit arms' rules
-  const before = (steps: Step[]): void => {
-    steps.forEach((s, k) => {
-      if (s.t !== 'target') return;
-      const p = steps[k - 1];
-      if (p === undefined || (p.t !== 'rule' && p.t !== 'ruleBp')) throw new Error(`targets: target('${s.ctx}') must follow a rule reference in its sequence`);
-      need(p.name);
-    });
-    for (const s of steps) {
-      if (s.t === 'star') before([s.step]); else if (s.t === 'sep') before([s.elem]);
-      else if (s.t === 'opt' || s.t === 'seq' || s.t === 'suppress' || s.t === 'ctx') before(s.steps);
-      else if (s.t === 'alt') s.branches.forEach(before);
-    }
+  // A target step reads the form of the LAST RULE CALL before it (the engine's form register;
+  // the interpreter's last node). `prev` is that rule when it is known statically and nothing
+  // between it and here can have run another rule call: literals and token-set lookaheads keep
+  // it; a sequence, `exclude` or context wrapper passes it through to its end; an `opt` body
+  // and the branches of an alternation whose branches all begin with pairwise-disjoint literals
+  // (at most one gets past its first step) inherit it; anything else (a repetition, a token, a
+  // rule lookahead, another alternation, the step after an `opt`) leaves it unknown.
+  const leadLits = (b: Step[]): string[] | null => {
+    const s = b[0];
+    return s?.t === 'lit' ? [s.value] : s?.t === 'altlit' ? s.opts.map((o) => o.value) : null;
   };
-  for (const r of ir.rules) for (const b of bodies(r)) before(b);
+  const disjointLeads = (bs: Step[][]): boolean => {
+    const seen = new Set<string>();
+    for (const b of bs) {
+      const l = leadLits(b);
+      if (l === null) return false;
+      for (const v of l) { if (seen.has(v)) return false; seen.add(v); }
+    }
+    return true;
+  };
+  const before = (steps: Step[], prevIn: string | null): string | null => {
+    let prev = prevIn;
+    for (const s of steps) {
+      switch (s.t) {
+        case 'target':
+          if (prev === null) throw new Error(`targets: target('${s.ctx}') must follow a rule reference (with only literals between, in its sequence or the one enclosing its opt / alternation branch)`);
+          need(prev);
+          break;
+        case 'rule': case 'ruleBp': prev = s.name; break;
+        case 'lit': case 'altlit': case 'ahead': case 'aheadCtx': case 'sameLine': break;
+        case 'seq': case 'suppress': case 'ctx': prev = before(s.steps, prev); break;
+        case 'opt': before(s.steps, prev); prev = null; break;
+        case 'alt': { const inherit = disjointLeads(s.branches) ? prev : null; s.branches.forEach((b) => before(b, inherit)); prev = null; break; }
+        case 'star': before([s.step], null); prev = null; break;
+        case 'sep': before([s.elem], null); prev = null; break;
+        default: prev = null; break;
+      }
+    }
+    return prev;
+  };
+  for (const r of ir.rules) for (const b of bodies(r)) before(b, null);
   for (let grew = true; grew;) {
     grew = false;
     for (const name of [...closure]) {

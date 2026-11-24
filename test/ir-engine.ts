@@ -645,10 +645,10 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
     const won = (i: number, f: number, tl: boolean, cp: boolean) => { bestPos = pos; bi = i; bf = f; bt = tl; bc = cp; ck = checkpoint(); bg = null; };
     const ends: Array<[number, number]> = [];
     // fromTail: the arm takes its trailing operand's capped flag (PrattRule.nudSeqCapsFromTail).
-    const seqArm = (i: number, steps: Step[], tl: boolean, cp: boolean, g: Guard, fromTail = false) => {
+    const seqArm = (i: number, steps: Step[], tl: boolean, cp: boolean, g: Guard, fromTail = false, fm = 0) => {
       const ok = all(steps, false);
       if (ok && pos > save) ends.push([i, pos]);
-      if (ok && beats(pos, i)) { best = finish(rid, sb); won(i, 0, tl, cp || (fromTail && capped)); bg = g; }
+      if (ok && beats(pos, i)) { best = finish(rid, sb); won(i, fm, tl, cp || (fromTail && capped)); bg = g; }
       else { scratch.length = sb; restore(ck); }
       pos = save;
     };
@@ -696,6 +696,7 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
             if ((act.clean && !act.nullable ? elided(`${r.name} NUD (committed to ${i}, clean)`, () => all(steps, false)) : all(steps, false)) && (!act.nullable || pos > save)) {
               res = finish(rid, sb);
               tl = a.kind === 'bracket' ? r.nudBracketClosesTail[a.index]! : a.kind === 'seq' ? r.nudSeqClosesTail[a.index]! : false;
+              f = a.kind === 'bracket' ? r.nudBracketForm[a.index]! : a.kind === 'seq' ? r.nudSeqForm[a.index]! : 0;
               cp = a.kind === 'capped' || capped && (a.kind === 'bracket' ? r.nudBracketCapsFromTail[a.index]! : a.kind === 'seq' && r.nudSeqCapsFromTail[a.index]!);
             }
           }
@@ -730,13 +731,13 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
         case 'bracket': {
           const b = r.nudBrackets[a.index]!;
           if (!keyed && t.lid !== lidOf(b.first)) break;
-          seqArm(i, b.steps, r.nudBracketClosesTail[a.index]!, false, null, r.nudBracketCapsFromTail[a.index]!);
+          seqArm(i, b.steps, r.nudBracketClosesTail[a.index]!, false, null, r.nudBracketCapsFromTail[a.index]!, r.nudBracketForm[a.index]!);
           break;
         }
         case 'seq': {
           const g = r.nudSeqGuard[a.index]!;
           if (!guardOk(g, t, keyed)) { refused.push(i); break; }
-          seqArm(i, r.nudSeqs[a.index]!.slice(g?.skip ?? 0), r.nudSeqClosesTail[a.index]!, false, g, r.nudSeqCapsFromTail[a.index]!);
+          seqArm(i, r.nudSeqs[a.index]!.slice(g?.skip ?? 0), r.nudSeqClosesTail[a.index]!, false, g, r.nudSeqCapsFromTail[a.index]!, r.nudSeqForm[a.index]!);
           break;
         }
         case 'capped': {
