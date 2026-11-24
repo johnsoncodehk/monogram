@@ -50,7 +50,7 @@ const firstDiff = (a: unknown, b: unknown, at = ''): string | null => {
 };
 const want = (shape: AnyShape, src: string): string => {
   try { return `A\t${JSON.stringify(canon(JSON.parse(JSON.stringify(evaluateShape(shape, createParser(shape.source).parse(src), src) ?? null))))}`; }
-  catch (e) { return /Parse error/.test(String(e)) ? 'R' : 'M'; }
+  catch (e) { return /Parse error|Unexpected character/.test(String(e)) ? 'R' : 'M'; }
 };
 let failures = 0, rows = 0;
 const kinds = new Map<string, number>();
@@ -61,7 +61,8 @@ function check(name: string, shape: AnyShape, srcs: string[], quiet = false): vo
   const out = execFileSync(bin, { input: srcs.join('\0') }).toString().trimEnd().split('\n');
   srcs.forEach((src, i) => {
     const line = out[i] ?? '';
-    const got = line.startsWith('A\t') ? `A\t${JSON.stringify(canon(JSON.parse(line.slice(2))))}` : line.slice(0, 1);
+    // A lex error panics in parse_with (the interpreter throws it too): a rejection.
+    const got = /^P\tUnexpected character/.test(line) ? 'R' : line.startsWith('A\t') ? `A\t${JSON.stringify(canon(JSON.parse(line.slice(2))))}` : line.slice(0, 1);
     const w = want(shape, src);
     rows++; kinds.set(`${name} ${got.slice(0, 1)}`, (kinds.get(`${name} ${got.slice(0, 1)}`) ?? 0) + 1);
     if (got !== w) { failures++; if (quiet && failures > 20) return; console.error(`✗ ${name} ${JSON.stringify(src).slice(0, 200)}:\n    ${got[0] === 'A' && w[0] === 'A' ? firstDiff(JSON.parse(got.slice(2)), JSON.parse(w.slice(2))) : `rust ${line.slice(0, 300)}\n    eval ${w.slice(0, 300)}`}`); }

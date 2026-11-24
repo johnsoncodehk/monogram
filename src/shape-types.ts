@@ -117,6 +117,7 @@ export function shapeTypes(shape: Shape, missingArms: Set<string> = new Set()): 
   const ruleTy = new Map<string, VType>();
   type KindAcc = { record: boolean; terms: number; fields: Map<string, { ty: VType; n: number }>; order: string[]; sites: Set<string> };
   let kinds = new Map<string, KindAcc>();
+  let prevKinds = new Map<string, KindAcc>();
   let problems: string[] = [];
   const recHint = new Map<string, string>();
   const synTy = (attr: string): VType => {
@@ -174,8 +175,13 @@ export function shapeTypes(shape: Shape, missingArms: Set<string> = new Set()): 
         const r = resolve(s, t.name);
         const rt = r?.slot.rule ? ruleTy.get(r.slot.rule) : undefined;
         const out = empty();
-        for (const rec of rt?.records ?? []) { const f = kinds.get(rec)?.fields.get(t.field); if (f) Object.assign(out, join(out, f.ty)); }
-        if (rt && kinds.get([...rt.records][0] ?? '')?.fields.get(t.field)?.n !== kinds.get([...rt.records][0] ?? '')?.terms) out.absent = true;
+        // The record's field as the previous round derived it (this round may not have reached the
+        // record's own terms yet); the rounds repeat until the records are stable too.
+        for (const rec of rt?.records ?? []) {
+          const k = prevKinds.get(rec), f = k?.fields.get(t.field);
+          if (f) Object.assign(out, join(out, f.ty));
+          if (!f || f.n < k!.terms) out.absent = true;
+        }
         if (rt?.missing) out.missing = true;
         return out;
       }
@@ -232,7 +238,7 @@ export function shapeTypes(shape: Shape, missingArms: Set<string> = new Set()): 
   // The rule types to a fixpoint (recursive rules read their own type).
   const ruleNames = Object.keys(spec.rules);
   for (let round = 0; ; round++) {
-    kinds = new Map(); problems = [];
+    prevKinds = kinds; kinds = new Map(); problems = [];
     let changed = false;
     for (const rule of ruleNames) {
       const arms = g.arms.get(rule) ?? [];
@@ -246,6 +252,8 @@ export function shapeTypes(shape: Shape, missingArms: Set<string> = new Set()): 
       const next = join(...tys);
       if (key(next) !== key(ruleTy.get(rule) ?? empty())) { ruleTy.set(rule, next); changed = true; }
     }
+    const recKey = (m: Map<string, KindAcc>): string => JSON.stringify([...m].filter(([, k]) => k.record).map(([n, k]) => [n, k.terms, [...k.fields].map(([f, e]) => [f, e.n, key(e.ty)])]));
+    if (recKey(kinds) !== recKey(prevKinds)) changed = true;
     if (!changed) break;
     if (round > 40) throw new ShapeTypeError([`the rule types do not reach a fixpoint (a rule whose value nests itself in a list without end)`]);
   }

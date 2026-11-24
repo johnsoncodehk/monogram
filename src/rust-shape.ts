@@ -251,7 +251,7 @@ function typedDecls(st: RsShape): string {
     const name = rsTy(u.name);
     const vs = u.kinds.map((k) => ({ v: rsTy(k), ty: rsTy(k), i: st.kindIdx.get(k)! }));
     out.push(`/// One of ${u.kinds.join(' | ')}${u.missing ? ', or Missing (an arm the shape or this parser builds no value for)' : ''}.\n#[derive(Clone, Copy)]\npub enum ${name} { ${vs.map((x) => `${x.v}(Id<${x.ty}>)`).join(', ')}${u.missing ? ', Missing' : ''} }`);
-    out.push(`impl FromW for ${name} { fn from_w(_a: &Ast, w: W) -> Self { ${u.missing ? `if w & TAGM == T_MISS { return ${name}::Missing; } ` : ''}match (w >> 32) as u32 & 0xFFFF { ${vs.map((x) => `${x.i} => ${name}::${x.v}(Id(w as u32, PhantomData))`).join(', ')}, _ => panic!("shape: not a ${name}") } } }`);
+    out.push(`impl FromW for ${name} { fn from_w(_a: &Ast, w: W) -> Self { ${u.missing ? `if w & TAGM == T_MISS { return ${name}::Missing; } ` : ''}match (w >> 32) as u32 & 0xFFFF { ${vs.map((x) => `${x.i} => ${name}::${x.v}(Id(w as u32, PhantomData))`).join(', ')}, k => panic!("shape: not a ${name}: {}", sh_kind_name(k)) } } }`);
     out.push(`impl ToW for ${name} { fn to_w(&self) -> W { match self { ${vs.map((x) => `${name}::${x.v}(id) => w_node(${x.i}, id.0 as usize)`).join(', ')}${u.missing ? `, ${name}::Missing => T_MISS` : ''} } } }`);
     out.push(`impl Json for ${name} { fn json(&self, a: &Ast, out: &mut String) { match self { ${vs.map((x) => `${name}::${x.v}(id) => id.json(a, out)`).join(', ')}${u.missing ? `, ${name}::Missing => out.push_str("null")` : ''} } } }`);
   }
@@ -259,7 +259,7 @@ function typedDecls(st: RsShape): string {
     const name = rsTy(e.name);
     out.push(`/// A closed string: ${e.values.map((v) => J(v)).join(' | ')}.\n#[derive(Clone, Copy, PartialEq, Eq)]\npub enum ${name} { ${e.values.map((_, i) => `V${i}`).join(', ')} }`);
     out.push(`impl ${name} { pub fn as_str(&self) -> &'static str { match self { ${e.values.map((v, i) => `${name}::V${i} => ${J(v)}`).join(', ')} } } }`);
-    out.push(`impl FromW for ${name} { fn from_w(a: &Ast, w: W) -> Self { match a.w_str(w) { ${e.values.map((v, i) => `${J(v)} => ${name}::V${i}`).join(', ')}, _ => panic!("shape: not a ${name}") } } }`);
+    out.push(`impl FromW for ${name} { fn from_w(a: &Ast, w: W) -> Self { match a.w_str(w) { ${e.values.map((v, i) => `${J(v)} => ${name}::V${i}`).join(', ')}, s => panic!("shape: not a ${name}: {:?}", s) } } }`);
     out.push(`impl ToW for ${name} { fn to_w(&self) -> W { match self { ${e.values.map((v, i) => `${name}::V${i} => T_STRI | ${intern(st, v)}`).join(', ')} } } }`);
     out.push(`impl Json for ${name} { fn json(&self, _a: &Ast, out: &mut String) { json_str(self.as_str(), out) } }`);
   }
@@ -269,7 +269,7 @@ function typedDecls(st: RsShape): string {
     const name = rsTy(k.name);
     const ps = k.fields.map((f, j) => `f${j}: W`);
     const conv = k.fields.map((f, j) => `${rsField(f.name)}: <${rsField_(f.type)}>::from_w(self, f${j})`);
-    impls.push(`    #[inline(never)]\n    fn mk${i}(&mut self${k.record ? '' : ', start: u32, end: u32'}${ps.map((p) => `, ${p}`).join('')}) -> W { let n = ${name} {${k.record ? '' : ' start, end,'} ${conv.join(', ')} }; self.a${i}.push(n); w_node(${i}, self.a${i}.len() - 1) }`);
+    impls.push(`    #[inline(never)]\n    fn mk${i}(&mut self${k.record ? '' : ', start: u32, end: u32'}${ps.map((p) => `, ${p}`).join('')}) -> W {${k.fields.map((_, j) => ` if f${j} & TAGM == T_MISS { return f${j}; }`).join('')} let n = ${name} {${k.record ? '' : ' start, end,'} ${conv.join(', ')} }; self.a${i}.push(n); w_node(${i}, self.a${i}.len() - 1) }`);
     const body: string[] = [];
     if (k.record) body.push(`out.push_str(${rsStr('{"record":{')}); let mut first = true;`);
     else body.push(`out.push_str(${rsStr(`{${J(K.kind)}:${J(k.name)},${J(K.start)}:`)}); json_u32(n.start, out); out.push_str(${rsStr(`,${J(K.end)}:`)}); json_u32(n.end, out); let first = false;`);
@@ -321,6 +321,9 @@ macro_rules! need { ($e:expr) => {{ let x: W = $e; if x & TAGM == T_MISS { retur
 static SH_CONST: &[&str] = &[${st.consts.map((s) => rsStr(s)).join(', ')}];
 const SH_NCONST: usize = ${st.consts.length};
 const SH_ARM_NAME: [u32; ${armNames.length}] = [${armNames.join(', ')}];
+fn sh_kind_name(k: u32) -> &'static str { [${T.kinds.map((k) => rsStr(k.name)).join(', ')}].get(k as usize).copied().unwrap_or("?") }
+/// Set true by hand to trace every construct's slots (a debugging aid; false in every build).
+const SH_DEBUG: bool = false;
 const SH_SYN0: [W; ${nsyn}] = [${synDefault.join(', ')}];
 
 /// A handle to a node (or record) of kind T in its arena.
@@ -489,6 +492,7 @@ impl<'s> Builder for Ast<'s> {
         std::mem::swap(&mut self.sc, scratch);
         let (ho, he) = if self.sc.len() > sb { (self.sc[sb].ho, self.sc[sb].he) } else { (off, off) };
         let id = rule_id as usize;
+        if SH_DEBUG { eprintln!("node arm {} {:?} slots {:?}", id, SH_ARM_NAME.get(id).map(|&i| SH_CONST[i as usize]), self.sc[sb..].iter().map(|x| (x.tag, x.arm, x.off, x.end)).collect::<Vec<_>>()); }
         let w = self.construct(id, sb, off, end);
         self.sc.truncate(sb);
         self.sc.push(Slot { w, tag: -1, arm: id as i32, off, end, ho, he, sy: self.ys });
