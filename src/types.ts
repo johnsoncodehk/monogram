@@ -599,8 +599,8 @@ type RuleExprNode =
   // body with the context word set to the marker's (grammar-utils.ts ctxWordOfMode).
   // Every OTHER consumer treats this exactly like a plain transparent group (recurse
   // into `body`), so the marker is invisible outside the parsers.
-  // `tsRelaxed`: a TREE-SITTER-ONLY alternate rendering. The parser (and every other
-  // generator) uses `body` — the strict form; gen-treesitter renders `tsRelaxed` instead.
+  // `treeSitterRelaxed`: a TREE-SITTER-ONLY alternate rendering. The parser (and every other
+  // generator) uses `body` — the strict form; gen-treesitter renders `treeSitterRelaxed` instead.
   // Lets a PARSER-only constraint that is correct but tree-sitter-GLR-hostile (e.g.
   // at-most-one-`static`, or restricting a type predicate to return position) keep the
   // derived highlighter at its cheap status-quo shape — a highlighter may over-accept a
@@ -614,7 +614,7 @@ type RuleExprNode =
   // that level's operators and tighter ones (and the nuds their minBp admits) are read, as the
   // operand of a level-`atLevel` operator would be. Python's `'*' bitwise_or`: a starred operand
   // is never a comparison. Read only by the parsers; every other consumer sees a plain group.
-  // `tsRuleName`: when a tsRelaxed group carries it, gen-treesitter emits `tsRelaxed` ONCE
+  // `treeSitterRuleName`: when a treeSitterRelaxed group carries it, gen-treesitter emits `treeSitterRelaxed` ONCE
   // as a shared rule of this name and renders each reference as `$.<name>` — sharing its
   // states instead of inlining (and duplicating) them at every use site (issue #46).
   // Visibility follows tree-sitter's `_`-prefix convention.
@@ -622,7 +622,7 @@ type RuleExprNode =
   // exists only where it holds (`when('+yield', ...)`; an empty body is a zero-width test). The
   // parsers read it (the fork evaluates it per family, the portable IR tests the word); every
   // other consumer (tree-sitter, TextMate, Monarch, shapes) sees a transparent group: erased.
-  | { type: 'group'; body: RuleExpr; suppress?: string[]; ctxMode?: 'await' | 'yield' | 'asyncgen' | 'reset'; when?: string; tsRelaxed?: RuleExpr; tsRuleName?: string; capBelow?: string; atLevel?: string }   // suppress: LED connectors disabled while parsing body (e.g. no-`in`)
+  | { type: 'group'; body: RuleExpr; suppress?: string[]; ctxMode?: 'await' | 'yield' | 'asyncgen' | 'reset'; when?: string; treeSitterRelaxed?: RuleExpr; treeSitterRuleName?: string; capBelow?: string; atLevel?: string }   // suppress: LED connectors disabled while parsing body (e.g. no-`in`)
   // Zero-width negative lookahead: matches (consuming nothing) iff `body` does
   // NOT match at the current position. Used to express disambiguations the
   // longest-match parser can't reach by structure alone (e.g. a `<…>` type-arg
@@ -667,7 +667,7 @@ type RuleExprNode =
   // operator-tag shape. Like the other zero-width markers it consumes nothing → invisible to every
   // generator (a no-op in the CFG): gen-treesitter renders it `blank()` and drops it from the seq,
   // so the derived GLR grammar keeps the UNCONSTRAINED `.` LED (a left-leaf predicate is not
-  // expressible in GLR, and a stray `void.x` is harmless for a highlighter) — no tsRelax needed.
+  // expressible in GLR, and a stray `void.x` is harmless for a highlighter) — no treeSitterRelax needed.
   | { type: 'notLeftLeaf'; words: string[] }
   // Zero-width DECLARED ASSIGNMENT-TARGET check (api.ts `target`): the node ending immediately
   // before it must pass the target context `ctx` of Grammar.targets. Consumes nothing.
@@ -763,7 +763,7 @@ export interface Grammar<R extends string = string> {
   // unaffected. REPLACES `repoAliases` (which left a redundant 2nd entry); this leaves none.
   canonicalRepoNames?: Record<string, string | string[]>;
   // The tree-sitter `conflicts` tuples this grammar's GLR parse needs, as tree-sitter symbol names
-  // (snake rule names, token names, or shared hidden tsRelax rule names). The minimal set is an
+  // (snake rule names, token names, or shared hidden treeSitterRelax rule names). The minimal set is an
   // LR(1)-table property, so it is tree-sitter's own analysis of THIS grammar (collected with
   // test/collect-conflicts.ts), declared as data beside the rules it is about. gen-treesitter emits
   // exactly these (plus its structural heuristics) and rejects a name the grammar does not define;

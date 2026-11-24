@@ -1,7 +1,7 @@
 import {
   rule, defineGrammar,
   op, prefix, postfix, sameLine,
-  sep, opt, many, many1, alt, not, tsRelax, capExpr, atLevel, notLeftLeaf, withHoles,
+  sep, opt, many, many1, alt, not, treeSitterRelax, capExpr, atLevel, notLeftLeaf, withHoles,
   awaitCtx, yieldCtx, asyncGenCtx, resetCtx, arm, field,
 } from './src/api.ts';
 
@@ -89,7 +89,7 @@ const DecoratorExpr = rule($ => [
 // is what couples the type sub-grammar to the expression sub-grammar. That coupling is
 // the dominant driver of the tree-sitter state explosion (issue #46): a derived GLR
 // parser must keep the `type` and `expr` interpretations co-live at every `(`, because
-// a type-position param can reach an expression. `tsRelax` keeps the PARSER (and every
+// a type-position param can reach an expression. `treeSitterRelax` keeps the PARSER (and every
 // other generator) on the shared `Param` rule, but renders this lean, expression-free
 // param for tree-sitter only — making the type partition disjoint from `expr`.
 //
@@ -101,7 +101,7 @@ const DecoratorExpr = rule($ => [
 // The name is the param's own (an identifier or a destructuring pattern: `...[value]: [] | [T]`,
 // es2015.iterable.d.ts); only the `= Expr` default and the decorator, which a type never carries,
 // are left out.
-const typeFnParam = () => tsRelax(Param, [opt('...'), alt(Ident, BindingPattern), opt('?'), opt(':', Type)], 'type_fn_param');
+const typeFnParam = () => treeSitterRelax(Param, [opt('...'), alt(Ident, BindingPattern), opt('?'), opt(':', Type)], 'type_fn_param');
 
 // tsc's isStartOfType: whether the token here can begin a type, read from the tokens alone. It is
 // what decides a `T?` (parsePostfixTypeOrHigher): before a type start the `?` is a conditional
@@ -129,7 +129,7 @@ const Type = rule($ => {
   // parameters or `new`, and on every later parameter, parseParameter reads them (`<T>(@a x) =>
   // 1`, `new (@a x) => 1`, `(x, @a y) => 1`).
   // (tree-sitter renders no lookahead, so it keeps the one shape `<T>?(`.)
-  const fnHead = (lead: unknown[]) => [...(lead.length ? [tsRelax(alt([TypeParams, '('], ['(', ...lead]), [opt(TypeParams), '('])] : [opt(TypeParams), '(']), sep(typeFnParam(), ','), ')', '=>', ReturnType];
+  const fnHead = (lead: unknown[]) => [...(lead.length ? [treeSitterRelax(alt([TypeParams, '('], ['(', ...lead]), [opt(TypeParams), '('])] : [opt(TypeParams), '(']), sep(typeFnParam(), ','), ')', '=>', ReturnType];
   const fnType = fnHead([not([many(paramMods.any), alt('@', Decorator)])]);
   // tsc parses a type in levels (parseUnionTypeOrHigher, parseIntersectionTypeOrHigher,
   // parseTypeOperatorOrHigher): a union's constituents are intersections, an intersection's are
@@ -146,10 +146,10 @@ const Type = rule($ => {
     // (see ReturnType below), so in any other type slot (var/param/property annotation, cast,
     // type argument, union member, …) it is a parse error. (`this is T` and `asserts x` are
     // different — tsc's parser accepts them in EVERY type position, so they are arms of this
-    // general Type, below.) tsRelax: tree-sitter KEEPS the predicate in the general type (its
+    // general Type, below.) treeSitterRelax: tree-sitter KEEPS the predicate in the general type (its
     // status-quo shape, GLR-cheap), since a highlighter may over-accept a stray predicate
     // — adding the return-only ReturnType to ~18 slots for tree-sitter inflates its table.
-    tsRelax(Ident, [Ident, opt('is', Type)]),
+    treeSitterRelax(Ident, [Ident, opt('is', Type)]),
     [$, sameLine, '<', sep($, ','), '>'],   // type-arg application T<A> — `<` must be on the same line (no ASI), like the postfix `[`/`!` arms below
     [$, sameLine, '[', ']'],   // array type T[] — `[` must be on the same line (no ASI)
     [$, '|', unionMember, $],
@@ -202,7 +202,7 @@ const Type = rule($ => {
     // and stay qualifiable. `notLeftLeaf(...)` gates the arm on the LEFT node's head leaf; it is
     // zero-width, so tree-sitter DROPS it (the derived GLR grammar keeps the unconstrained `.`
     // LED — a left-leaf predicate is not expressible in GLR, and a stray `void.x` is harmless for
-    // a highlighter). No tsRelax wrapper is needed: the marker is itself the relaxation point.
+    // a highlighter). No treeSitterRelax wrapper is needed: the marker is itself the relaxation point.
     [notLeftLeaf('void', 'null', 'true', 'false', 'this'), $, '.', Ident],
     // ── JSDoc types — tsc parses these in NORMAL TS type positions (the checker
     // rejects them with "JSDoc types can only be used inside documentation
@@ -231,11 +231,11 @@ const Type = rule($ => {
     // object type (tsc parses them; the checker rejects them). A different TYPE from the object
     // type literal, not a member of one: in a member list `[K in T]` is a computed name. Last
     // among the arms so the shape layers' arm indices of the others stay as they were.
-    // tsRelax: tree-sitter renders no members after the mapped one (only an optional `;`). Its
+    // treeSitterRelax: tree-sitter renders no members after the mapped one (only an optional `;`). Its
     // statement end is a blank there, so `: T` would run straight into a following member
     // (`: T [k…`, `: T <U>(…`) and each such pair is an LR conflict; a highlighter missing
     // members the checker rejects anyway is harmless.
-    ['{', opt(opt(alt('+', '-')), 'readonly'), '[', ...bindingIdentifier, 'in', $, opt('as', $), ']', opt(opt(alt('+', '-')), '?'), opt(':', $), tsRelax([asi(), many(TypeMember)], [opt(';')]), '}'],
+    ['{', opt(opt(alt('+', '-')), 'readonly'), '[', ...bindingIdentifier, 'in', $, opt('as', $), ']', opt(opt(alt('+', '-')), '?'), opt(':', $), treeSitterRelax([asi(), many(TypeMember)], [opt(';')]), '}'],
   ];
 }, { type: true });
 
@@ -320,7 +320,7 @@ const modifierWord = (words: string[], { sameLineConst = false, param = false, s
 // second `static` is the member NAME, so `static static x` has no production. `run` is that
 // shape, `run1` the same with at least one word. It doubles the modifier-vs-name decision
 // points against the member arms, which explodes tree-sitter's GLR table, so tree-sitter
-// renders the plain repetition (tsRelax): a highlighter over-accepting `static static` is
+// renders the plain repetition (treeSitterRelax): a highlighter over-accepting `static static` is
 // harmless and measured. tree-sitter renders no lookahead, so a word whose modifier reading
 // only the lookahead tells from a statement keyword (`const` in an object literal or object
 // type, where `{ const [e]: 1 }` and the block `{ const [a] = b }` share a prefix, as do an
@@ -330,17 +330,17 @@ const modifierRun = (words: string[], opts: ModifierOpts & { treeSitterOmits?: s
   const strictAny = modifierWord(words, opts), stat = modifierWord(['static'], opts.param ? { param: true } : {});
   const rest = modifierWord(words.filter(w => w !== 'static'), opts);
   const shown = words.filter(w => !opts.treeSitterOmits?.includes(w));
-  const tsAny = shown.length === words.length ? strictAny : modifierWord(shown, opts);
+  const treeSitterAny = shown.length === words.length ? strictAny : modifierWord(shown, opts);
   // The words are named: `modifier` before the `static` slot, `staticModifier`, `modifierAfterStatic`
   // (`runNamed` names them otherwise, for a second run in one scope).
-  const runNamed = (m: string, s: string, a: string) => tsRelax([many(field(m, rest)), opt(field(s, stat), many(field(a, rest)))], many(tsAny));
+  const runNamed = (m: string, s: string, a: string) => treeSitterRelax([many(field(m, rest)), opt(field(s, stat), many(field(a, rest)))], many(treeSitterAny));
   return {
-    any: tsAny === strictAny ? strictAny : tsRelax(strictAny, tsAny), stat, rest, runNamed,
+    any: treeSitterAny === strictAny ? strictAny : treeSitterRelax(strictAny, treeSitterAny), stat, rest, runNamed,
     run: runNamed('modifier', 'staticModifier', 'modifierAfterStatic'),
-    run1: tsRelax(alt(
+    run1: treeSitterRelax(alt(
       arm('plain', many1(field('modifier', rest)), opt(field('staticModifier', stat), many(field('modifierAfterStatic', rest)))),
       arm('static_', field('staticModifier', stat), many(field('modifierAfterStatic', rest))),
-    ), many1(tsAny)),
+    ), many1(treeSitterAny)),
   };
 };
 
@@ -375,7 +375,7 @@ const classExprPrefix = opt(many1(field('decorator', DecoratorExpr)), classExprM
 // member needs to know: whether an `async` has been read (the body's context), and whether a
 // `static` has (whether another may come). Those are the four places a run can stop at, and
 // the members are `members(…)` at each, under the context its `async` gives. tree-sitter has no
-// [Await] context, and renders the plain repetition of `modifierRun` for the run (tsRelax).
+// [Await] context, and renders the plain repetition of `modifierRun` for the run (treeSitterRelax).
 // The inner alt() is first-match; its branches part at one token (`get`/`set` then a name, `*`,
 // a name then `?`/`!`/`<`/`(`/`:`, or a name alone), so the first that matches is the only one.
 const Prop = rule($ => {
@@ -403,7 +403,7 @@ const Prop = rule($ => {
   const words = many(field('word', alt(mods.rest, decorators))), asyncWords = many(field('word', alt(mods.rest, asyncMod, decorators)));
   return [
     arm('spread', '...', field('argument', Expr)),
-    arm('member', tsRelax(
+    arm('member', treeSitterRelax(
       [not(alt('@', Decorator)), words, field('form', alt(
         arm('static_', field('staticWord', mods.stat), words, field('afterStatic', alt(arm('async', field('asyncWord', asyncMod), asyncWords, withAsync), arm('plain', plain)))),
         arm('async', field('asyncWord', asyncMod), asyncWords, opt(field('staticWord', mods.stat), many(field('wordAfterStatic', alt(mods.rest, asyncMod, decorators)))), withAsync),
@@ -424,9 +424,9 @@ const Prop = rule($ => {
 // parses them in any type position), so a return type written that way is the Type arm below.
 // It stays TRANSPARENT (the strict side is a plain `alt`, not a rule), so a normal return is a
 // bare `Type` node — identical CST shape to a pre-predicate return slot, leaving AST lowering /
-// cst-match unaffected. tsRelax: tree-sitter renders just `Type` here (the predicate lives in
+// cst-match unaffected. treeSitterRelax: tree-sitter renders just `Type` here (the predicate lives in
 // its general type instead), so adding ReturnType to ~18 slots doesn't inflate its GLR table.
-const ReturnType = tsRelax(field('returnType', alt([notReserved, Ident, sameLine, 'is', Type], Type)), Type);   // `field` inside: a name on the tsRelax group is not taken
+const ReturnType = treeSitterRelax(field('returnType', alt([notReserved, Ident, sameLine, 'is', Type], Type)), Type);   // `field` inside: a name on the treeSitterRelax group is not taken
 
 // The heritage forms are JavaScript's (`classHeritageArms`, javascript.ts); TypeScript's class
 // expression carries type parameters and an `implements` clause, and a base may take type
@@ -448,13 +448,13 @@ const ClassHeritage = rule($ => classHeritageArms($, Expr, NewTarget,
 // the list is a possibly-empty one where no such `{` starts, or one that starts with an element.
 // (Stated as one list followed by a guard on its emptiness, `alt([el, many(',', el), opt(',')],
 // not(...))`, the TextMate generator runs out of memory: 2 GB heap, `npm run gen`.) tree-sitter,
-// which renders no lookahead, keeps the plain list of elements (tsRelax): the two branches and the
+// which renders no lookahead, keeps the plain list of elements (treeSitterRelax): the two branches and the
 // `{}` guard would only be one more conflict and dropped lookaheads there.
 const heritageFollowers = alt(',', '{', 'extends', 'implements');
 // Named: each clause `heritage` (`extends_` / `implements`); its elements `element` (the first, in
 // the branch that starts with one) and `elementRest`; an element's expression `base`.
 const heritageElement = alt([not(alt('extends', 'implements')), not(['{', '}', not(heritageFollowers)]), field('base', ClassHeritage)]);
-const heritageList = [tsRelax(field('elements', alt(
+const heritageList = [treeSitterRelax(field('elements', alt(
   arm('list', not(alt(['{', not('}')], ['{', '}', heritageFollowers])), sep(field('elementRest', heritageElement), ',')),
   arm('first', field('element', heritageElement), opt(',', sep(field('elementRest', heritageElement), ','))),
 )), sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ','))];
@@ -683,7 +683,7 @@ const Param = rule($ => {
     // `f(static export @d static x)` have no parse, `f(export @d static x)` parses. So the words
     // are read in two shapes, parted at the first run's `static`: with it, the second run takes
     // none; without it, the second run is a run of its own.
-    arm('modified', many(DecoratorExpr), tsRelax(alt(
+    arm('modified', many(DecoratorExpr), treeSitterRelax(alt(
       [many(paramMods.rest), paramMods.stat, many(paramMods.rest), opt(many1(DecoratorExpr), many(paramMods.rest))],
       [many1(paramMods.rest), opt(many1(DecoratorExpr), paramMods.run)],
     ), [many1(paramMods.any), opt(many1(DecoratorExpr), many(paramMods.rest))]), field('binding', body)),
@@ -884,7 +884,7 @@ const accessorMod = modifierWord(['get', 'set']);
 // takes `async` as often as it can follow: `async async x() {}`, `static async async x() {}`).
 // (tree-sitter keeps its plain run of words: `async` there would be one more modifier-vs-name
 // decision against the method name `async` in its GLR table.)
-const asyncWords = tsRelax(many(field('wordAfterAsync', alt(Modifier, asyncMod))), many(Modifier));
+const asyncWords = treeSitterRelax(many(field('wordAfterAsync', alt(Modifier, asyncMod))), many(Modifier));
 // The single `static` slot spans the whole member, and the words go on after `async`
 // (`static async x`, `async static x`). `modRun` gives the leading run its shape; the words
 // after `async` are a plain repetition, because a second run shape there multiplies the
