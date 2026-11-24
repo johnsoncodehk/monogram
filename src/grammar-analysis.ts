@@ -22,6 +22,9 @@ export interface OpInfo {
   assoc: 'left' | 'right' | 'none';
   position: 'infix' | 'prefix' | 'postfix';
   requireTarget?: boolean;
+  // A capped prefix operator (PrecOperator.capped): it begins an operand only while minBp < capBp
+  // (its own level's binding power).
+  capBp?: number;
 }
 
 /** A rule's SECOND-token dispatch summary: the keys admissible as the second token (null =
@@ -154,7 +157,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
     const bp = (i + 1) * 2;
     for (const op of level.operators) {
       if (op.position === 'prefix') {
-        prefixOps.set(op.value, { lbp: 0, rbp: level.assoc === 'right' ? bp - 1 : bp, assoc: level.assoc, position: 'prefix', requireTarget: op.requireTarget });
+        prefixOps.set(op.value, { lbp: 0, rbp: level.assoc === 'right' ? bp - 1 : bp, assoc: level.assoc, position: 'prefix', requireTarget: op.requireTarget, ...(op.capped ? { capBp: bp } : {}) });
         if (op.requireTarget) requireTargetOps.add(op.value);
       } else if (op.position === 'postfix') {
         postfixOpValues.add(op.value);
@@ -197,14 +200,29 @@ export function analyzeGrammar(grammar: CstGrammar) {
     if (op) return op.lbp;
     const lp = ledPrecByConnector.get(connector);
     if (lp) return lp.lbp;
-    throw new Error(`capExpr: connector ${JSON.stringify(connector)} is not a ladder operator or ledPrec connector`);
+    throw new Error(`capExpr / atLevel: connector ${JSON.stringify(connector)} is not a ladder operator or ledPrec connector`);
   };
   const nudCapOf = (nud: RuleExpr): number | null =>
     nud.type === 'group' && nud.capBelow !== undefined ? connectorLbp(nud.capBelow) : null;
+  // An atLevel group (`atLevel(op, R)`): the minBp R is read at, so that op's level and every
+  // tighter one bind (lbp > minBp) and every looser one does not.
+  const atLevelBp = (g: RuleExpr): number | null =>
+    g.type === 'group' && g.atLevel !== undefined ? connectorLbp(g.atLevel) - 1 : null;
 
   // ── Pratt vs ordinary rules ──
   const prattRules = new Set<string>();
   for (const rule of grammar.rules) if (hasMarker(rule.body)) prattRules.add(rule.name);
+  // atLevel reads a Pratt rule at a binding power: refuse it on anything else, by name.
+  const checkAtLevel = (e: RuleExpr, inRule: string): void => {
+    if (e.type === 'group' && e.atLevel !== undefined) {
+      if (e.body.type !== 'ref' || !prattRules.has(e.body.name)) throw new Error(`atLevel('${e.atLevel}', …) in rule ${inRule}: its body must be a reference to a Pratt rule`);
+      atLevelBp(e);   // the operator resolves, or this throws naming it
+    }
+    if (e.type === 'seq' || e.type === 'alt') for (const i of e.items) checkAtLevel(i, inRule);
+    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') checkAtLevel(e.body, inRule);
+    else if (e.type === 'sep') checkAtLevel(e.element, inRule);
+  };
+  for (const rule of grammar.rules) checkAtLevel(rule.body, rule.name);
 
   // For Pratt rules, split alternatives into NUD (atoms/prefix) and LED (left-recursive).
   function classifyAlts(rule: RuleDecl) {
@@ -673,7 +691,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
   return {
     tokenNames,
     opTable, prefixOps, noUnaryLhsOps, postfixOpValues, requireTargetOps,
-    ledPrecByConnector, binaryConnectors, connectorLbp, nudCapOf,
+    ledPrecByConnector, binaryConnectors, connectorLbp, nudCapOf, atLevelBp,
     prattRules, classifyAlts, classifyLeftRec,
     nullableRules, exprNullable, leftRuleRefs, altsOf, itemsOf,
     isLeftRecursive, leftCorner, residualCorner, cornerCycle,
