@@ -584,6 +584,18 @@
         "include": "@type"
       }
     ],
+    "type_1_type_object": [
+      [
+        "\\}",
+        {
+          "token": "delimiter.bracket",
+          "switchTo": "@type_1"
+        }
+      ],
+      {
+        "include": "@type_object"
+      }
+    ],
     "type_1_first": [
       [
         "[ \\t\\r\\n]+",
@@ -593,7 +605,7 @@
         "\\{",
         {
           "token": "delimiter.bracket",
-          "next": "@type_object"
+          "switchTo": "@type_1_type_object"
         }
       ],
       [
@@ -616,6 +628,18 @@
         "include": "@type"
       }
     ],
+    "type_2_type_paren": [
+      [
+        "\\)",
+        {
+          "token": "delimiter.parenthesis",
+          "switchTo": "@type_2"
+        }
+      ],
+      {
+        "include": "@type_paren"
+      }
+    ],
     "type_2_first": [
       [
         "[ \\t\\r\\n]+",
@@ -625,7 +649,7 @@
         "\\(",
         {
           "token": "delimiter.parenthesis",
-          "next": "@type_paren"
+          "switchTo": "@type_2_type_paren"
         }
       ],
       [
@@ -648,6 +672,18 @@
         "include": "@type"
       }
     ],
+    "type_3_type_paren": [
+      [
+        "\\)",
+        {
+          "token": "delimiter.parenthesis",
+          "switchTo": "@type_3"
+        }
+      ],
+      {
+        "include": "@type_paren"
+      }
+    ],
     "type_3_first": [
       [
         "[ \\t\\r\\n]+",
@@ -657,7 +693,7 @@
         "\\(",
         {
           "token": "delimiter.parenthesis",
-          "next": "@type_paren"
+          "switchTo": "@type_3_type_paren"
         }
       ],
       [
@@ -1147,21 +1183,21 @@
         }
       ],
       [
-        "\\)(?=\\s*:\\s*@ident(?:\\s*\\.\\s*@ident)*(?:\\s*<[^<>;{}()]*>)?(?:\\s*\\[\\s*\\])*(?:\\s*\\|\\s*@ident(?:\\s*\\.\\s*@ident)*(?:\\s*<[^<>;{}()]*>)?(?:\\s*\\[\\s*\\])*)*\\s*\\{)",
+        "\\)(?=\\s*:\\s*[\\w$]+(?:\\s*\\.\\s*[\\w$]+)*(?:\\s*<[^<>;{}()]*>)?(?:\\s*\\[\\s*\\])*(?:\\s*\\|\\s*[\\w$]+(?:\\s*\\.\\s*[\\w$]+)*(?:\\s*<[^<>;{}()]*>)?(?:\\s*\\[\\s*\\])*)*\\s*\\{)",
         {
           "token": "delimiter.parenthesis",
           "next": "@typelist_paren_ret"
         }
       ],
       [
-        "\\((?=\\s*(?:@ident(?:\\s*,\\s*|\\s+))*(?:\\.\\.\\.\\s*)?@ident\\s*\\??\\s*:)",
+        "\\((?=\\s*(?:[\\w$]+(?:\\s*,\\s*|\\s+))*(?:\\.\\.\\.\\s*)?@ident\\s*\\??\\s*:)",
         {
           "token": "delimiter.parenthesis",
           "next": "@typelist_paren"
         }
       ],
       [
-        "\\[(?=\\s*(?:@ident(?:\\s*,\\s*|\\s+))*(?:\\.\\.\\.\\s*)?@ident\\s*\\??\\s*:)",
+        "\\[(?=\\s*(?:[\\w$]+(?:\\s*,\\s*|\\s+))*(?:\\.\\.\\.\\s*)?@ident\\s*\\??\\s*:)",
         {
           "token": "delimiter.square",
           "next": "@typelist_square"

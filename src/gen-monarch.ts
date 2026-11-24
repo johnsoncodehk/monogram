@@ -700,10 +700,14 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
         // a closer that is a bracket beginning a type (`{` after `x is`) begins it as the type's
         // first token: the position is entered in a state that reads that bracket's group, then
         // reads on in the position's state (after a first token the bracket ends the type)
+        // (the bracket's group, read in a copy whose close bracket switches to the position's
+        // state: a group pushed from the entry state would pop back to it, and its bracket
+        // rule would read the bracket after the type, a body's `{`, as a type's)
         const firstBrackets = groups.filter(([o]) => closers.includes(o) && startsType.has(o));
+        for (const [, c, gs] of firstBrackets) tokenizer[`${st}_${gs}`] = [[escapeRegex(c), { token: tok(c), switchTo: `@${st}` }], { include: `@${gs}` }];
         if (firstBrackets.length) tokenizer[`${st}_first`] = [
           wsRule,
-          ...firstBrackets.map(([o, , gs]) => [escapeRegex(o), { token: tok(o), next: `@${gs}` }] as MonarchRule),
+          ...firstBrackets.map(([o, , gs]) => [escapeRegex(o), { token: tok(o), switchTo: `@${st}_${gs}` }] as MonarchRule),
           ['', { token: '', switchTo: `@${st}` }],
         ];
       }
@@ -786,6 +790,7 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
     //    `|` unions) on the line is a return type before a body; `): T =>` there is not read (the
     //    ternary `c ? (x) : y => z`): both refusals.
     const interp = !!templateToken?.template;
+    const plainWord = `[\\w${escapeForCharClass(identToken ? tokenPatternIdentifierExtraChars(identToken) : '')}]+`;
     const closeOf = (o: string) => groups.find(([g]) => g === o)?.[1] ?? { '(': ')', '[': ']' }[o];
     const nameFirst = (n: string) => n === idName || (isKeywordLiteral(n) && !facts.varDeclarationKeywords.has(n));
     const listBrackets = [...new Set(sites.flatMap(s => s.opener === ':' && !entered.has(s) ? s.left.filter(([n, b]) => nameFirst(n) && (b === '(' || b === '[')).map(p => p[1]) : []))].sort();
@@ -804,7 +809,9 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
       const optional = paramSites.some(s => s.left.some(([n]) => n === '?'));
       const word = `${ident}\\s*${optional ? '\\??\\s*' : ''}:`;
       const spread = paramSites.some(s => s.left.some(([n, m]) => n === idName && m === '...')) ? '(?:\\.\\.\\.\\s*)?' : '';
-      const ahead = `(?=\\s*(?:${ident}(?:\\s*,\\s*|\\s+))*${spread}${word})`;
+      // a repeated word is a plain word class: the identifier pattern splits a word in many ways,
+      // which a failing repetition of it tries all of (exponential on `f(a, b, c, …)`)
+      const ahead = `(?=\\s*(?:${plainWord}(?:\\s*,\\s*|\\s+))*${spread}${word})`;
       for (const b of listBrackets) {
         const c = closeOf(b)!, st = `typelist_${b === '(' ? 'paren' : 'square'}`;
         const ret = sites.filter(s => s.opener === ':' && s.left.some(([n]) => n === c));
@@ -815,7 +822,7 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
           rules.push([`${escapeRegex(c)}(?=\\s*:)`, { token: tok(c), switchTo: `@${st}_ret` }]);
           if (b === '(') {
             // outside a confirmed list: `): T {` on the line; in an expression position: `()`
-            const T = `${ident}(?:\\s*\\.\\s*${ident})*(?:\\s*<[^<>;{}()]*>)?(?:\\s*\\[\\s*\\])*`;
+            const T = `${plainWord}(?:\\s*\\.\\s*${plainWord})*(?:\\s*<[^<>;{}()]*>)?(?:\\s*\\[\\s*\\])*`;
             typeEntryRules.push([`\\)(?=\\s*:\\s*${T}(?:\\s*\\|\\s*${T})*\\s*\\{)`, { token: tok(')'), next: `@${st}_ret` }]);
             rootTypeRules.push([`\\((?=\\s*\\)\\s*:)`, { token: tok('('), next: `@${st}` }]);
             refuse(`return type after \`)\` + \`:\`: entered after a parameter list read as one, after \`()\` in an expression position, or before \`{\` on the line (\`c ? (x) : y => z\` is a ternary)`);
