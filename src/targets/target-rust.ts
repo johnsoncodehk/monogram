@@ -6405,6 +6405,5 @@ export function emitRust(grammar: Grammar, opts?: { shape?: ShapeSpec }): string
   const ir = portableIR(grammar, FACTS);
   const ids = buildLexIdPlan(ir);
   const base = emitRustLibrary(ir, ids, rustTarget.shared, false);
-  if (!opts?.shape) return base;
-  return base + emitRustShapeAddon(ir, validateShapeOrThrow(grammar, opts.shape), ids);
+  return dropUnreferencedRs(opts?.shape ? base + emitRustShapeAddon(ir, validateShapeOrThrow(grammar, opts.shape), ids) : base);
 }
