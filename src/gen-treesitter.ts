@@ -37,7 +37,7 @@ export interface TreeSitterOutput {
   /** names of the external tokens the scanner provides (empty if none needed) */
   externalTokens: string[];
   /** Every zero-width assertion of the grammar's rule trees (as tree-sitter sees them: the relaxed
-   *  side of a tsRelax group), one record per occurrence, with how grammar.js renders it. A CFG has
+   *  side of a treeSitterRelax group), one record per occurrence, with how grammar.js renders it. A CFG has
    *  no lookahead, so only `lowered` is rendered; every other class is dropped, and the class says
    *  whether that drop is exact. See classifyAssertions. */
   assertions: AssertionRecord[];
@@ -86,7 +86,7 @@ function assertionText(e: RuleExpr): string {
       case 'seq': return x.items.length === 1 ? f(x.items[0]) : `[${x.items.map(f).join(' ')}]`;
       case 'alt': return `(${x.items.map(f).join(' | ')})`;
       case 'quantifier': return f(x.body) + x.kind;
-      case 'group': return f(x.tsRelaxed ?? x.body);
+      case 'group': return f(x.treeSitterRelaxed ?? x.body);
       case 'sep': return `sep(${f(x.element)}, ${JSON.stringify(x.delimiter)})`;
       case 'not': return `not(${f(x.body)})`;
       case 'notLeftLeaf': return `notLeftLeaf(${x.words.join(' ')})`;
@@ -253,14 +253,14 @@ interface GrammarJsContext {
    */
   nameFieldNodes: Set<RuleExpr>;
   /**
-   * Shared rules extracted from tsRelax(..., ruleName) groups: name → relaxed body. The body
+   * Shared rules extracted from treeSitterRelax(..., ruleName) groups: name → relaxed body. The body
    * is emitted ONCE as a rule and every reference renders as `$.<name>`, so a tree-sitter-only
    * relaxed form is SHARED across all its use sites instead of inlined (and duplicated) at each
    * — the difference is large for a rule used in many type positions (the fn-type/method param,
    * issue #46). Visibility follows tree-sitter's `_`-prefix convention. Empty when the grammar
-   * uses no named tsRelax.
+   * uses no named treeSitterRelax.
    */
-  tsSharedRules: Map<string, RuleExpr>;
+  treeSitterSharedRules: Map<string, RuleExpr>;
   /** Every assertion node classifyAssertions saw. renderExpr refuses one it did not (an assertion
    *  reached by no classified path would be dropped without a record). */
   classifiedAssertions: Set<RuleExpr>;
@@ -293,17 +293,17 @@ function hasMarker(expr: RuleExpr): boolean {
   return false;
 }
 
-/** Pre-scan every rule body for named tsRelax groups (`tsRuleName`), collecting name → relaxed
+/** Pre-scan every rule body for named treeSitterRelax groups (`treeSitterRuleName`), collecting name → relaxed
  *  body. Done before conflicts/rules are emitted so the shared rule names are known to
  *  deriveConflicts (a declared tuple may name one) and the bodies can be emitted as shared rules. */
-function collectTsSharedRules(grammar: Grammar): Map<string, RuleExpr> {
+function collectTreeSitterSharedRules(grammar: Grammar): Map<string, RuleExpr> {
   const out = new Map<string, RuleExpr>();
   const walk = (e: RuleExpr): void => {
     switch (e.type) {
       case 'group':
-        if (e.tsRuleName && !out.has(e.tsRuleName)) out.set(e.tsRuleName, e.tsRelaxed ?? e.body);
+        if (e.treeSitterRuleName && !out.has(e.treeSitterRuleName)) out.set(e.treeSitterRuleName, e.treeSitterRelaxed ?? e.body);
         // Walk the relaxed subtree (what tree-sitter actually emits), not the strict body.
-        walk(e.tsRelaxed ?? e.body); break;
+        walk(e.treeSitterRelaxed ?? e.body); break;
       case 'seq': case 'alt': e.items.forEach(walk); break;
       case 'quantifier': walk(e.body); break;
       case 'sep': walk(e.element); break;
@@ -336,7 +336,7 @@ function startsWithLiteral(e: RuleExpr, lit: string): boolean {
   if (e.type === 'literal') return e.value === lit;
   if (e.type === 'seq') return e.items.length > 0 && startsWithLiteral(e.items[0], lit);
   if (e.type === 'alt') return e.items.length > 0 && e.items.every(i => startsWithLiteral(i, lit));
-  if (e.type === 'group') return startsWithLiteral(e.tsRelaxed ?? e.body, lit);
+  if (e.type === 'group') return startsWithLiteral(e.treeSitterRelaxed ?? e.body, lit);
   return false;
 }
 function optionalStartingWith(e: RuleExpr, lit: string): boolean {
@@ -438,17 +438,17 @@ function wordStepGuards(grammar: Grammar, word: string | undefined, isWordLitera
   const out = new Map<RuleExpr, Set<string>>();
   const seen = new Set<RuleExpr>();
   const walk = (e: RuleExpr): void => {
-    e = tsView(e);
+    e = treeSitterView(e);
     if (seen.has(e)) return;
     seen.add(e);
     if (e.type === 'seq') {
       e.items.forEach((item, i) => {
         if (item.type !== 'not') return;
         let j = i + 1;
-        while (j < e.items.length && ASSERTION_KINDS.has(tsView(e.items[j]).type)) j++;
+        while (j < e.items.length && ASSERTION_KINDS.has(treeSitterView(e.items[j]).type)) j++;
         const ws = reservedGuardWords(item, e.items[j], word, isWordLiteral);
         if (!ws) return;
-        const step = tsView(e.items[j]);
+        const step = treeSitterView(e.items[j]);
         const s = out.get(step) ?? out.set(step, new Set()).get(step)!;
         for (const w of ws) s.add(w);
       });
@@ -458,11 +458,11 @@ function wordStepGuards(grammar: Grammar, word: string | undefined, isWordLitera
     else if (e.type === 'sep') walk(e.element);
   };
   for (const r of grammar.rules) walk(r.body);
-  for (const b of collectTsSharedRules(grammar).values()) walk(b);
+  for (const b of collectTreeSitterSharedRules(grammar).values()) walk(b);
   return out;
 }
 
-function planContextualWords(grammar: Grammar, graph: TsLeafGraph, word: string, words: string[],
+function planContextualWords(grammar: Grammar, graph: TreeSitterLeafGraph, word: string, words: string[],
   isWordLiteral: (text: string) => boolean): ContextualPlan {
   // The words a guard before each word step excludes (wordStepGuards), keyed by the step's node.
   const exclOf = new Map<RuleExpr, Set<string>>([...wordStepGuards(grammar, word, isWordLiteral)].map(([n, ws]) => [n, new Set(ws)]));
@@ -476,26 +476,26 @@ function planContextualWords(grammar: Grammar, graph: TsLeafGraph, word: string,
   // at all when one of its places is no such alternative.
   const shadowedAt = new Map<RuleExpr, Map<RuleExpr, Set<string>>>();
   const parents = new Map<RuleExpr, Set<RuleExpr>>();
-  const noteParent = (child: RuleExpr, parent: RuleExpr) => { const c = tsView(child); (parents.get(c) ?? parents.set(c, new Set()).get(c)!).add(parent); };
+  const noteParent = (child: RuleExpr, parent: RuleExpr) => { const c = treeSitterView(child); (parents.get(c) ?? parents.set(c, new Set()).get(c)!).add(parent); };
   const wordStep = (e: RuleExpr): RuleExpr | null => {
-    const v = tsView(e);
+    const v = treeSitterView(e);
     if (v.type === 'ref') return v.name === word && v.hole === undefined ? v : null;
     if (v.type !== 'seq' || !v.items.length) return null;
-    const last = tsView(v.items[v.items.length - 1]);
-    return last.type === 'ref' && last.name === word && v.items.slice(0, -1).every(i => ASSERTION_KINDS.has(tsView(i).type)) ? last : null;
+    const last = treeSitterView(v.items[v.items.length - 1]);
+    return last.type === 'ref' && last.name === word && v.items.slice(0, -1).every(i => ASSERTION_KINDS.has(treeSitterView(i).type)) ? last : null;
   };
   const matchesWordAlone = (e: RuleExpr): string[] => {
-    const v = tsView(e);
+    const v = treeSitterView(e);
     if (v.type === 'literal') return isWordLiteral(v.value) ? [v.value] : [];
     if (v.type === 'alt') return v.items.flatMap(matchesWordAlone);
     if (v.type !== 'seq' || !v.items.length) return [];
-    const first = tsView(v.items[0]);
-    const optionalRest = v.items.slice(1).every(i => { const t = tsView(i); return t.type === 'quantifier' && t.kind !== '+'; });
+    const first = treeSitterView(v.items[0]);
+    const optionalRest = v.items.slice(1).every(i => { const t = treeSitterView(i); return t.type === 'quantifier' && t.kind !== '+'; });
     return first.type === 'literal' && isWordLiteral(first.value) && optionalRest ? [first.value] : [];
   };
   const seen = new Set<RuleExpr>();
   const markGuards = (e: RuleExpr): void => {
-    e = tsView(e);
+    e = treeSitterView(e);
     if (seen.has(e)) return;
     seen.add(e);
     if (e.type === 'seq' || e.type === 'alt') for (const i of e.items) noteParent(i, e);
@@ -514,7 +514,7 @@ function planContextualWords(grammar: Grammar, graph: TsLeafGraph, word: string,
     else if (e.type === 'sep') markGuards(e.element);
   };
   for (const r of grammar.rules) markGuards(r.body);
-  for (const b of collectTsSharedRules(grammar).values()) markGuards(b);
+  for (const b of collectTreeSitterSharedRules(grammar).values()) markGuards(b);
   for (const [step, byAlt] of shadowedAt) {
     // The step's places: its choices directly, or through the one guard sequence that holds it.
     const ps = [...parents.get(step) ?? []];
@@ -576,7 +576,7 @@ function planContextualWords(grammar: Grammar, graph: TsLeafGraph, word: string,
 // missed). Whether precedence resolves one is left to tree-sitter: it consults the declared conflicts
 // only for what precedence leaves.
 type ConflictVar = { names: string } | { rule: string };
-function conflictTuples(graph: TsLeafGraph, lr: LrAnalysis, alsoShifts: (leaf: number) => string[],
+function conflictTuples(graph: TreeSitterLeafGraph, lr: LrAnalysis, alsoShifts: (leaf: number) => string[],
   namesOf: (leaf: number, keyword: string) => string | null): Map<string, ConflictVar[]> {
   const firstOfRule = new Map<number, Set<string>>();
   const firstOf = (r: number): Set<string> => {
@@ -676,7 +676,7 @@ function conflictTuples(graph: TsLeafGraph, lr: LrAnalysis, alsoShifts: (leaf: n
 function collectWordLiterals(grammar: Grammar, isWordLiteral: (text: string) => boolean): string[] {
   const out = new Set<string>();
   const walk = (e: RuleExpr): void => {
-    e = tsView(e);
+    e = treeSitterView(e);
     switch (e.type) {
       case 'literal': out.add(e.value); return;
       case 'seq': case 'alt': e.items.forEach(walk); return;
@@ -754,15 +754,15 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuard
       expr.items.forEach((item, i) => {
         if (item.type !== 'not') return;
         let j = i + 1;
-        while (j < expr.items.length && ASSERTION_KINDS.has(tsView(expr.items[j]).type)) j++;
+        while (j < expr.items.length && ASSERTION_KINDS.has(treeSitterView(expr.items[j]).type)) j++;
         const words = reservedGuardWords(item, expr.items[j], ctx.reserved.word, ctx.reserved.isWordLiteral);
         if (words) setAt.set(j, { set: ctx.reserved.plan.nameOf(words), words });
       });
       const parts = expr.items.map((item, i) => {
         const set = setAt.get(i);
         if (set === undefined) return renderExpr(item, ctx);
-        const v = tsView(item);
-        if (v !== item && item.type === 'group' && item.tsRuleName) throw new Error('gen-treesitter: a reserved-word guard before a named tsRelax group');
+        const v = treeSitterView(item);
+        if (v !== item && item.type === 'group' && item.treeSitterRuleName) throw new Error('gen-treesitter: a reserved-word guard before a named treeSitterRelax group');
         return renderExpr(v, ctx, set);
       }).filter(p => p !== 'blank()');
       if (parts.length === 0) return 'blank()';
@@ -773,7 +773,7 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuard
       // A line-end alternative: its arms that consume nothing are its zero-width token (planZeroWidth).
       const zw = ctx.zeroWidth.tokenOf.get(expr);
       const parts = zw
-        ? [...expr.items.filter(i => { const v = tsView(i); return !(v.type === 'seq' ? v.items : [v]).every(x => ASSERTION_KINDS.has(tsView(x).type)); }).map(i => renderExpr(i, ctx)), `$.${zw.snake}`]
+        ? [...expr.items.filter(i => { const v = treeSitterView(i); return !(v.type === 'seq' ? v.items : [v]).every(x => ASSERTION_KINDS.has(treeSitterView(x).type)); }).map(i => renderExpr(i, ctx)), `$.${zw.snake}`]
         : expr.items.map(i => renderExpr(i, ctx));
       return `choice(${parts.join(', ')})`;
     }
@@ -784,15 +784,15 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuard
       return `repeat1(${body})`;
     }
     case 'group': {
-      // A tsRelax group carries a tree-sitter-only alternate rendering (a parser-strict
-      // constraint the highlighter relaxes — see RuleExpr.group.tsRelaxed). Render that
+      // A treeSitterRelax group carries a tree-sitter-only alternate rendering (a parser-strict
+      // constraint the highlighter relaxes — see RuleExpr.group.treeSitterRelaxed). Render that
       // instead of the strict body; every other consumer uses `body`.
-      const relaxed = expr.tsRelaxed ?? expr.body;
-      // Named tsRelax: emit the relaxed body ONCE as a shared rule and reference it, so its
+      const relaxed = expr.treeSitterRelaxed ?? expr.body;
+      // Named treeSitterRelax: emit the relaxed body ONCE as a shared rule and reference it, so its
       // states are shared across all use sites rather than inlined at each.
-      if (expr.tsRuleName) {
-        if (!ctx.tsSharedRules.has(expr.tsRuleName)) ctx.tsSharedRules.set(expr.tsRuleName, relaxed);
-        return `$.${expr.tsRuleName}`;
+      if (expr.treeSitterRuleName) {
+        if (!ctx.treeSitterSharedRules.has(expr.treeSitterRuleName)) ctx.treeSitterSharedRules.set(expr.treeSitterRuleName, relaxed);
+        return `$.${expr.treeSitterRuleName}`;
       }
       return renderExpr(relaxed, ctx);
     }
@@ -1010,8 +1010,8 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
 interface OverlapOrder { yields: Set<number>; dynamic: Map<number, number>; suffixWeight: number; connectorFirst: Set<string> }
 function overlapOrder(rule: RuleDecl, alts: RuleExpr[], continuation: boolean[], ctx: GrammarJsContext): OverlapOrder {
   const { firstOf } = ctx.terminalSets;
-  const consuming = (alt: RuleExpr) => (alt.type === 'seq' ? alt.items : [alt]).filter(x => !ASSERTION_KINDS.has(tsView(x).type));
-  const last = (alt: RuleExpr) => { const items = alt.type === 'seq' ? alt.items : [alt]; return tsView(items[items.length - 1]); };
+  const consuming = (alt: RuleExpr) => (alt.type === 'seq' ? alt.items : [alt]).filter(x => !ASSERTION_KINDS.has(treeSitterView(x).type));
+  const last = (alt: RuleExpr) => { const items = alt.type === 'seq' ? alt.items : [alt]; return treeSitterView(items[items.length - 1]); };
   const infix = new Set([...bindingPowers(ctx.grammar).opTable].filter(([, o]) => o.position === 'infix').map(([v]) => v));
   const keys = alts.map(a => consuming(a).map(x => renderExpr(x, ctx)));
   const out: OverlapOrder = { yields: new Set(), dynamic: new Map(), suffixWeight: 0, connectorFirst: new Set() };
@@ -1038,13 +1038,13 @@ function overlapOrder(rule: RuleDecl, alts: RuleExpr[], continuation: boolean[],
  *  `suffixWeight`), or null when it has none. */
 function renderGreedySuffix(alt: RuleExpr, order: OverlapOrder, ctx: GrammarJsContext): string | null {
   const { firstOf } = ctx.terminalSets;
-  const isEmpty = (e: RuleExpr) => { const v = tsView(e); return (v.type === 'seq' ? v.items : [v]).every(x => ASSERTION_KINDS.has(tsView(x).type)); };
+  const isEmpty = (e: RuleExpr) => { const v = treeSitterView(e); return (v.type === 'seq' ? v.items : [v]).every(x => ASSERTION_KINDS.has(treeSitterView(x).type)); };
   const overlaps = (e: RuleExpr) => [...firstOf(e)].some(t => order.connectorFirst.has(t));
   const marks = new Map<RuleExpr, number>();
   const walk = (e: RuleExpr, depth: number): void => {
-    const v = tsView(e);
+    const v = treeSitterView(e);
     if (v.type === 'seq') {
-      const tail = [...v.items].reverse().find(x => !ASSERTION_KINDS.has(tsView(x).type));
+      const tail = [...v.items].reverse().find(x => !ASSERTION_KINDS.has(treeSitterView(x).type));
       if (tail) walk(tail, depth);
     } else if (v.type === 'alt' && !ctx.zeroWidth.tokenOf.has(v)) {
       const firstEmpty = v.items.findIndex(isEmpty);
@@ -1086,7 +1086,7 @@ function renderGreedySuffix(alt: RuleExpr, order: OverlapOrder, ctx: GrammarJsCo
  */
 function openTail(self: string, alt: RuleExpr, grammar: Grammar): RuleExpr | null {
   const leftRecursive = (e: RuleExpr, name: string) => {
-    const v = tsView(e);
+    const v = treeSitterView(e);
     const head = (v.type === 'seq' ? v.items : [v]).find(i => !ASSERTION_KINDS.has(i.type));
     return head?.type === 'ref' && head.name === name;
   };
@@ -1255,7 +1255,7 @@ function refusalWinners(body: RuleExpr, ctx: GrammarJsContext): Set<RuleExpr> {
   const out = new Set<RuleExpr>();
   if (body.type !== 'alt') return out;
   const { firstOf } = ctx.terminalSets;
-  const items = (a: RuleExpr) => { const v = tsView(a); return v.type === 'seq' ? v.items.map(tsView) : [v]; };
+  const items = (a: RuleExpr) => { const v = treeSitterView(a); return v.type === 'seq' ? v.items.map(treeSitterView) : [v]; };
   for (const x of body.items) {
     const xs = items(x);
     const k = xs.findIndex(i => i.type === 'not');
@@ -1304,7 +1304,7 @@ function refusalWinners(body: RuleExpr, ctx: GrammarJsContext): Set<RuleExpr> {
  */
 function operandPrecedences(rule: RuleDecl, body: RuleExpr, ctx: GrammarJsContext): Map<RuleExpr, string> | null {
   if (body.type !== 'alt') return null;
-  const items = (a: RuleExpr) => { const v = tsView(a); return v.type === 'seq' ? v.items.map(tsView) : [v]; };
+  const items = (a: RuleExpr) => { const v = treeSitterView(a); return v.type === 'seq' ? v.items.map(treeSitterView) : [v]; };
   const isSelf = (e: RuleExpr | undefined) => e?.type === 'ref' && e.name === rule.name;
   const consuming = (a: RuleExpr) => items(a).filter(x => !ASSERTION_KINDS.has(x.type));
   if (!body.items.some(a => isSelf(consuming(a)[0]))) return null;
@@ -1339,8 +1339,8 @@ type TerminalSets = { follow: Map<string, Set<string>>; firstOf: (e: RuleExpr) =
 
 const EOF_TERMINAL = '$eof';
 
-function tsView(e: RuleExpr): RuleExpr {
-  return e.type === 'group' ? tsView(e.tsRelaxed ?? e.body) : e;
+function treeSitterView(e: RuleExpr): RuleExpr {
+  return e.type === 'group' ? treeSitterView(e.treeSitterRelaxed ?? e.body) : e;
 }
 
 function computeTerminalSets(grammar: Grammar, tokenNames: Set<string>): TerminalSets {
@@ -1350,7 +1350,7 @@ function computeTerminalSets(grammar: Grammar, tokenNames: Set<string>): Termina
   const nullable = new Set<string>();
   const follow = new Map<string, Set<string>>(grammar.rules.map(r => [r.name, new Set<string>()]));
   const nul = (e: RuleExpr): boolean => {
-    e = tsView(e);
+    e = treeSitterView(e);
     switch (e.type) {
       case 'literal': return false;
       case 'ref': return !tokenNames.has(e.name) && nullable.has(e.name);
@@ -1362,7 +1362,7 @@ function computeTerminalSets(grammar: Grammar, tokenNames: Set<string>): Termina
     }
   };
   const fst = (e: RuleExpr, out: Set<string>): Set<string> => {
-    e = tsView(e);
+    e = treeSitterView(e);
     switch (e.type) {
       case 'literal': out.add(`'${e.value}`); break;
       case 'ref': if (tokenNames.has(e.name)) out.add(e.name); else for (const t of first.get(e.name) ?? []) out.add(t); break;
@@ -1386,7 +1386,7 @@ function computeTerminalSets(grammar: Grammar, tokenNames: Set<string>): Termina
   const union = (a: Set<string>, b: Set<string>) => { const s = new Set(a); for (const x of b) s.add(x); return s; };
   let grew = false;
   const walk = (e: RuleExpr, after: Set<string>): void => {
-    e = tsView(e);
+    e = treeSitterView(e);
     switch (e.type) {
       case 'ref': {
         const f = follow.get(e.name);
@@ -1417,11 +1417,11 @@ function computeTerminalSets(grammar: Grammar, tokenNames: Set<string>): Termina
 /** The alternative ends in a greedy quantifier (after some consumed prefix) whose FIRST set meets
  *  the rule's FOLLOW set. */
 function greedyTail(alt: RuleExpr, follow: Set<string>, firstOf: TerminalSets['firstOf']): boolean {
-  alt = tsView(alt);
+  alt = treeSitterView(alt);
   if (alt.type !== 'seq') return false;
-  const consuming = alt.items.filter(i => { const v = tsView(i); return !isZeroWidthMarker(v.type); });
+  const consuming = alt.items.filter(i => { const v = treeSitterView(i); return !isZeroWidthMarker(v.type); });
   if (consuming.length < 2) return false;
-  const tail = tsView(consuming[consuming.length - 1]);
+  const tail = treeSitterView(consuming[consuming.length - 1]);
   const starts = tail.type === 'quantifier' ? firstOf(tail.body)
     : tail.type === 'sep' ? firstOf(tail).add(`'${tail.delimiter}`)   // sep may end in an optional delimiter
     : null;
@@ -1440,11 +1440,11 @@ function greedyTail(alt: RuleExpr, follow: Set<string>, firstOf: TerminalSets['f
  *  words it reserves there (sorted, distinct), else null. */
 function reservedGuardWords(guard: RuleExpr, next: RuleExpr | undefined, word: string | undefined, isWordLiteral: (text: string) => boolean): string[] | null {
   if (guard.type !== 'not' || !word) return null;
-  const v = next && tsView(next);
+  const v = next && treeSitterView(next);
   if (!v || v.type !== 'ref' || v.name !== word) return null;
   const words = new Set<string>();
   const collect = (e: RuleExpr): boolean => {
-    e = tsView(e);
+    e = treeSitterView(e);
     if (e.type === 'literal') { words.add(e.value); return isWordLiteral(e.value); }
     if (e.type === 'alt') return e.items.every(collect);
     if (e.type === 'seq' && e.items.length === 1) return collect(e.items[0]);
@@ -1513,7 +1513,7 @@ function classifyAssertions(grammar: Grammar, tokenNames: Set<string>, sets: Ter
   const meets = (xs: Set<string>, ys: Set<string>) => [...xs].some(x => [...ys].some(y => overlap(x, y)));
   // The terminals of a one-token expression (literal / token / choice of them), else null.
   const tokSet = (e: RuleExpr): Set<string> | null => {
-    e = tsView(e);
+    e = treeSitterView(e);
     if (e.type === 'literal') return new Set([`'${e.value}`]);
     if (e.type === 'ref') return tokenNames.has(e.name) ? new Set([e.name]) : null;
     if (e.type === 'seq' && e.items.length === 1) return tokSet(e.items[0]);
@@ -1532,7 +1532,7 @@ function classifyAssertions(grammar: Grammar, tokenNames: Set<string>, sets: Ter
     if (e.type === 'sameLine' || e.type === 'noCommentBefore' || e.type === 'noMultilineFlowBefore') return 'scanner';
     if (e.type === 'notLeftLeaf' || e.type === 'target') return 'left-context';   // a predicate over the node to its left
     if (e.type !== 'not') throw new Error(`classifyAssertions: ${e.type} is not an assertion`);
-    const body = tsView(e.body);
+    const body = treeSitterView(e.body);
     if (body.type === 'sameLine') return 'scanner';                      // not(sameLine): a line terminator here
     if (body.type === 'not') {                                           // positive lookahead not(not(Y))
       const S = tokSet(body.body);
@@ -1553,7 +1553,7 @@ function classifyAssertions(grammar: Grammar, tokenNames: Set<string>, sets: Ter
   // `next`: the next consuming item after `e`; `nextInSeq`: the same, when it is in e's own seq (the
   // only place renderExpr can attach a reserved set to).
   const visit = (e: RuleExpr, after: Set<string>, next?: RuleExpr, nextInSeq?: RuleExpr): void => {
-    e = tsView(e);
+    e = treeSitterView(e);
     if (ASSERTION_KINDS.has(e.type)) {
       nodes.add(e);
       const rec: AssertionRecord = { rule, kind: e.type as AssertionRecord['kind'], cls: lowered.has(e) ? 'lowered' : classify(e, after, next), text: assertionText(e) };
@@ -1573,7 +1573,7 @@ function classifyAssertions(grammar: Grammar, tokenNames: Set<string>, sets: Ter
         for (let i = e.items.length - 1; i >= 0; i--) {
           const item = e.items[i];
           visit(item, cur, nextItem, nextIn);
-          if (!ASSERTION_KINDS.has(tsView(item).type)) nextItem = nextIn = item;
+          if (!ASSERTION_KINDS.has(treeSitterView(item).type)) nextItem = nextIn = item;
           if (sets.nullable(item)) { const s = new Set(cur); for (const t of sets.firstOf(item)) s.add(t); cur = s; }
           else cur = sets.firstOf(item);
         }
@@ -1621,7 +1621,7 @@ function classifyAssertions(grammar: Grammar, tokenNames: Set<string>, sets: Ter
 //   it is left out (the generated grammar already lexes that word as the keyword there);
 // - a condition that reaches past the end of its sequence (an optional item last) is the condition on
 //   what follows the rule: rendered only where no terminal of the rule's FOLLOW is in Y (the empty rest
-//   is dropped), else left dropped; likewise a nullable rule or a named tsRelax group in a left corner.
+//   is dropped), else left dropped; likewise a nullable rule or a named treeSitterRelax group in a left corner.
 interface FirstFilterPlan {
   /** The grammar as tree-sitter renders it: the sites rewritten, the copies after their originals. */
   grammar: Grammar;
@@ -1643,7 +1643,7 @@ function planFirstFilters(grammar: Grammar, tokenNames: Set<string>, sets: Termi
   const rules = new Map(grammar.rules.map(r => [r.name, r]));
   const isWordShaped = (t: string) => t.startsWith("'") && isWordLiteral(t.slice(1));
   const tokSet = (e: RuleExpr): Set<string> | null => {
-    e = tsView(e);
+    e = treeSitterView(e);
     if (e.type === 'literal') return new Set([`'${e.value}`]);
     if (e.type === 'ref') return tokenNames.has(e.name) ? new Set([e.name]) : null;
     if (e.type === 'seq' && e.items.length === 1) return tokSet(e.items[0]);
@@ -1668,12 +1668,12 @@ function planFirstFilters(grammar: Grammar, tokenNames: Set<string>, sets: Termi
         add(next, path.slice(1));
       }
     };
-    const v0 = tsView(e);
+    const v0 = treeSitterView(e);
     for (const a of v0.type === 'alt' ? v0.items : [v0]) {
-      const v = tsView(a);
+      const v = treeSitterView(a);
       let paths: Set<string>[][] = [[]];
       for (const item of v.type === 'seq' ? v.items : [v]) {
-        const it = tsView(item);
+        const it = treeSitterView(item);
         const opt = it.type === 'quantifier' && it.kind === '?';
         const ts = tokSet(it.type === 'quantifier' && it.kind === '?' ? it.body : it);
         if (!ts) return null;
@@ -1691,7 +1691,7 @@ function planFirstFilters(grammar: Grammar, tokenNames: Set<string>, sets: Termi
   // `lookahead`: token sequences).
   const conditionOf = (e: RuleExpr): Cond | null => {
     if (e.type !== 'not') return null;
-    const b = tsView(e.body);
+    const b = treeSitterView(e.body);
     if (b.type !== 'not') return null;
     const cls = (recordOf.get(e) ?? []).map(r => r.cls);
     if (!cls.includes('lookahead1') && !cls.includes('lookahead')) return null;
@@ -1776,8 +1776,8 @@ function planFirstFilters(grammar: Grammar, tokenNames: Set<string>, sets: Termi
         return { ...e, name: copyOf(e.name, y) };
       }
       case 'group': {
-        if (e.tsRuleName) throw new FirstFilterResidual('a named tsRelax group in a left corner');
-        const v = e.tsRelaxed ?? e.body;
+        if (e.treeSitterRuleName) throw new FirstFilterResidual('a named treeSitterRelax group in a left corner');
+        const v = e.treeSitterRelaxed ?? e.body;
         const r = filt(v, y);
         return r === v ? e : r;
       }
@@ -1815,7 +1815,7 @@ function planFirstFilters(grammar: Grammar, tokenNames: Set<string>, sets: Termi
   // follow the list (its rule's FOLLOW, for an arm of the rule), else null.
   const filtItems = (items: RuleExpr[], i: number, y: Set<string>, end: Set<string> | null = null): RuleExpr[][] | null => {
     if (i >= items.length) return null;
-    const x = items[i], v = tsView(x);
+    const x = items[i], v = treeSitterView(x);
     if (ASSERTION_KINDS.has(v.type)) {
       const rest = filtItems(items, i + 1, y, end);
       return rest && rest.map(r => [x, ...r]);
@@ -1823,7 +1823,7 @@ function planFirstFilters(grammar: Grammar, tokenNames: Set<string>, sets: Termi
     if (v.type === 'ref' && v.name === word) {
       // The word step: the words its own guards (the `not`s right before it) already reserve.
       const reservedHere = new Set<string>();
-      for (let j = i - 1; j >= 0 && ASSERTION_KINDS.has(tsView(items[j]).type); j--) {
+      for (let j = i - 1; j >= 0 && ASSERTION_KINDS.has(treeSitterView(items[j]).type); j--) {
         const ws = reservedGuardWords(items[j], x, word, isWordLiteral);
         if (ws) for (const w of ws) reservedHere.add(w);
       }
@@ -1848,12 +1848,12 @@ function planFirstFilters(grammar: Grammar, tokenNames: Set<string>, sets: Termi
   // after it in the same sequence then meet (an alternative or an optional item is spread into the
   // sequence, a rule whose FIRST meets a longer path is copied under the condition). A path that would
   // run past the sequence's end is left recorded.
-  const itemsOf = (e: RuleExpr): RuleExpr[] => { const v = tsView(e); return v.type === 'seq' ? v.items : [v]; };
+  const itemsOf = (e: RuleExpr): RuleExpr[] => { const v = treeSitterView(e); return v.type === 'seq' ? v.items : [v]; };
   const deepItems = (items: RuleExpr[], i: number, c: Cond, end: Set<string> | null): RuleExpr[][] | null => {
     const y = flat(c);
     if (y) return filtItems(items, i, y, end);
     if (i >= items.length) throw new FirstFilterResidual('a token sequence runs past the end of its sequence');
-    const x = items[i], v = tsView(x), rest = items.slice(i + 1);
+    const x = items[i], v = treeSitterView(x), rest = items.slice(i + 1);
     const prefix = (r: RuleExpr[][] | null) => r && r.map(xs => [x, ...xs]);
     const spread = (arms: RuleExpr[][]) => {
       const out = arms.map(a => deepItems([...a, ...rest], 0, c, end)).filter((r): r is RuleExpr[][] => !!r).flat();
@@ -1864,7 +1864,7 @@ function planFirstFilters(grammar: Grammar, tokenNames: Set<string>, sets: Termi
       // The word step as each word of the condition its guards do not reserve: one names reading per
       // continuation (the words that end the condition share one).
       const reservedHere = new Set<string>();
-      for (let j = i - 1; j >= 0 && ASSERTION_KINDS.has(tsView(items[j]).type); j--) for (const w of reservedGuardWords(items[j], x, word, isWordLiteral) ?? []) reservedHere.add(w);
+      for (let j = i - 1; j >= 0 && ASSERTION_KINDS.has(treeSitterView(items[j]).type); j--) for (const w of reservedGuardWords(items[j], x, word, isWordLiteral) ?? []) reservedHere.add(w);
       if (c.has(word)) throw new FirstFilterResidual('a token sequence through the word token');
       const out: RuleExpr[][] = [];
       const ending = [...c].filter(([t, n]) => n === null && isWordShaped(t) && !reservedHere.has(t.slice(1))).map(([t]) => t.slice(1)).sort();
@@ -1920,20 +1920,20 @@ function planFirstFilters(grammar: Grammar, tokenNames: Set<string>, sets: Termi
         let items = e.items.map(rw);
         if (!lowerNotBeforeOptional(e)) {
           for (let i = 0; i < items.length; i++) {
-            const y0 = conditionOf(tsView(items[i]));
+            const y0 = conditionOf(treeSitterView(items[i]));
             if (!y0) continue;
             // The positive conditions up to the next consuming item (more than one meet as one-token
             // conditions only).
             let y: Cond = y0, j = i + 1;
-            const conds = [tsView(items[i])];
+            const conds = [treeSitterView(items[i])];
             let unmet = false;
-            for (; j < items.length && ASSERTION_KINDS.has(tsView(items[j]).type); j++) {
-              const c = conditionOf(tsView(items[j]));
+            for (; j < items.length && ASSERTION_KINDS.has(treeSitterView(items[j]).type); j++) {
+              const c = conditionOf(treeSitterView(items[j]));
               if (!c) continue;
               const a = flat(y), b = flat(c);
               if (a && b) y = new Map([...a].filter(t => b.has(t)).map(t => [t, null]));
               else unmet = true;
-              conds.push(tsView(items[j]));
+              conds.push(treeSitterView(items[j]));
             }
             let alts: RuleExpr[][] | null = null;
             siteInexact = false;
@@ -1952,8 +1952,8 @@ function planFirstFilters(grammar: Grammar, tokenNames: Set<string>, sets: Termi
       case 'quantifier': { const b = rw(e.body); if (b !== e.body) out = { ...e, body: b }; break; }
       case 'sep': { const el = rw(e.element); if (el !== e.element) out = { ...e, element: el }; break; }
       case 'group': {
-        if (e.tsRuleName) break;
-        if (e.tsRelaxed) { const t = rw(e.tsRelaxed); if (t !== e.tsRelaxed) out = { ...e, tsRelaxed: t }; }
+        if (e.treeSitterRuleName) break;
+        if (e.treeSitterRelaxed) { const t = rw(e.treeSitterRelaxed); if (t !== e.treeSitterRelaxed) out = { ...e, treeSitterRelaxed: t }; }
         else { const b = rw(e.body); if (b !== e.body) out = { ...e, body: b }; }
         break;
       }
@@ -1977,7 +1977,7 @@ function planFirstFilters(grammar: Grammar, tokenNames: Set<string>, sets: Termi
       case 'seq': case 'alt': e.items.forEach(reach); return;
       case 'quantifier': reach(e.body); return;
       case 'sep': reach(e.element); return;
-      case 'group': reach(e.tsRelaxed ?? e.body); return;
+      case 'group': reach(e.treeSitterRelaxed ?? e.body); return;
     }
   };
   for (const r of rewritten) reach(r.body);
@@ -1997,26 +1997,26 @@ function planFirstFilters(grammar: Grammar, tokenNames: Set<string>, sets: Termi
 // ── The tree-sitter view as Glushkov positions ───────────────────────────────
 // What an LR question about the generated grammar is asked over (lr-automaton.ts): every literal /
 // token / rule reference of a rendered rule body is one leaf. It follows renderExpr: the tree-sitter
-// view of each group (a named tsRelax group is its own rule), the lowered `not` before an optional,
+// view of each group (a named treeSitterRelax group is its own rule), the lowered `not` before an optional,
 // zero-width assertions dropped except the ones a plan renders as a zero-width external token
 // (`zeroWidth`: a `sameLine` node, or an `alt` whose pure-assertion arms become one token), and a
 // Pratt rule as its operator productions (one choice of operators per position, as buildPrattRule
 // renders them; what stands between the operand and a postfix operator is kept).
-interface TsLeafGraph extends LeafGraph {
+interface TreeSitterLeafGraph extends LeafGraph {
   /** Per leaf: the RuleExpr it was built from (null for a synthesized one). */
   node: (RuleExpr | null)[];
   ruleNames: string[];
 }
 
 function treeSitterLeafGraph(grammar: Grammar, tokenNames: Set<string>, scannerTokens: Set<string>, prattRules: Set<string>,
-  zeroWidth: Map<RuleExpr, string>, startMarkers: Map<RuleExpr, string[]> = new Map()): TsLeafGraph {
+  zeroWidth: Map<RuleExpr, string>, startMarkers: Map<RuleExpr, string[]> = new Map()): TreeSitterLeafGraph {
   const sym: string[] = [], nt: number[] = [], rule: number[] = [], follow: number[][] = [], isLast: boolean[] = [];
   const node: (RuleExpr | null)[] = [];
   const ruleNames: string[] = [];
   const ruleIdx = new Map<string, number>();
   const ruleOf = (name: string) => { let i = ruleIdx.get(name); if (i === undefined) { i = ruleNames.length; ruleNames.push(name); ruleIdx.set(name, i); } return i; };
   for (const r of grammar.rules) ruleOf(r.name);
-  const shared = collectTsSharedRules(grammar);
+  const shared = collectTreeSitterSharedRules(grammar);
   type G = { first: number[]; last: number[]; nullable: boolean };
   const EMPTY: G = { first: [], last: [], nullable: true };
   let cur = 0;
@@ -2032,19 +2032,19 @@ function treeSitterLeafGraph(grammar: Grammar, tokenNames: Set<string>, scannerT
   }, EMPTY);
   const alt = (gs: G[]): G => ({ first: gs.flatMap(g => g.first), last: gs.flatMap(g => g.last), nullable: gs.length === 0 || gs.some(g => g.nullable) });
   const star = (g: G): G => { link(g.last, g.first); return { ...g, nullable: true }; };
-  const pureAssertion = (e: RuleExpr) => { const v = tsView(e); return (v.type === 'seq' ? v.items : [v]).every(i => ASSERTION_KINDS.has(tsView(i).type)); };
+  const pureAssertion = (e: RuleExpr) => { const v = treeSitterView(e); return (v.type === 'seq' ? v.items : [v]).every(i => ASSERTION_KINDS.has(treeSitterView(i).type)); };
   // A start marker (planStartMarkers): an optional terminal before its site.
   const build = (e: RuleExpr): G => {
-    const marks = startMarkers.get(e) ?? startMarkers.get(tsView(e));
+    const marks = startMarkers.get(e) ?? startMarkers.get(treeSitterView(e));
     if (!marks) return buildSite(e);
     const m = alt(marks.map(s => leaf(s, null, -1)));
     return seq([{ ...m, nullable: true }, buildSite(e)]);
   };
   const buildSite = (e: RuleExpr): G => {
-    // A named tsRelax group is its own rule (renderExpr references it; its body renders once, from
-    // the first occurrence: collectTsSharedRules), so it is a reference here, not its body inlined.
-    if (e.type === 'group' && e.tsRuleName) return leaf(e.tsRuleName, null, ruleOf(e.tsRuleName));
-    e = tsView(e);
+    // A named treeSitterRelax group is its own rule (renderExpr references it; its body renders once, from
+    // the first occurrence: collectTreeSitterSharedRules), so it is a reference here, not its body inlined.
+    if (e.type === 'group' && e.treeSitterRuleName) return leaf(e.treeSitterRuleName, null, ruleOf(e.treeSitterRuleName));
+    e = treeSitterView(e);
     switch (e.type) {
       case 'literal': return leaf(`'${e.value}`, e, -1);
       case 'ref':
@@ -2054,9 +2054,9 @@ function treeSitterLeafGraph(grammar: Grammar, tokenNames: Set<string>, scannerT
         const low = lowerNotBeforeOptional(e);
         if (low) return build(low);
         return seq(e.items.map(i => {
-          const z = zeroWidth.get(tsView(i));
-          if (z) return leaf(z, tsView(i), -1);
-          return ASSERTION_KINDS.has(tsView(i).type) ? EMPTY : build(i);
+          const z = zeroWidth.get(treeSitterView(i));
+          if (z) return leaf(z, treeSitterView(i), -1);
+          return ASSERTION_KINDS.has(treeSitterView(i).type) ? EMPTY : build(i);
         }));
       }
       case 'alt': {
@@ -2095,7 +2095,7 @@ function treeSitterLeafGraph(grammar: Grammar, tokenNames: Set<string>, scannerT
     return { type: 'alt', items: out };
   };
   const first: number[][] = [], nullable: boolean[] = [];
-  for (let i = 0; i < ruleNames.length; i++) {   // ruleNames grows while tsRelax rules are met
+  for (let i = 0; i < ruleNames.length; i++) {   // ruleNames grows while treeSitterRelax rules are met
     cur = i;
     const g = build(bodyOf(ruleNames[i]));
     for (const l of g.last) isLast[l] = true;
@@ -2156,7 +2156,7 @@ function planZeroWidth(grammar: Grammar, tokenNames: Set<string>, scannerTokens:
   const word = grammar.tokens.find(t => t.identifier)?.name;
   const guards = wordStepGuards(grammar, word, isWordLiteral);
   const tokSet = (e: RuleExpr): string[] | null => {
-    e = tsView(e);
+    e = treeSitterView(e);
     if (e.type === 'literal') return [`'${e.value}`];
     if (e.type === 'ref') return tokenNames.has(e.name) ? [e.name] : null;
     if (e.type === 'seq' && e.items.length === 1) return tokSet(e.items[0]);
@@ -2168,15 +2168,15 @@ function planZeroWidth(grammar: Grammar, tokenNames: Set<string>, scannerTokens:
   let owner = '';
   const cands: Cand[] = [];
   const seen = new Set<RuleExpr>();
-  const armItems = (a: RuleExpr) => { const v = tsView(a); return (v.type === 'seq' ? v.items : [v]).map(tsView); };
+  const armItems = (a: RuleExpr) => { const v = treeSitterView(a); return (v.type === 'seq' ? v.items : [v]).map(treeSitterView); };
   const walk = (e: RuleExpr): void => {
-    e = tsView(e);
+    e = treeSitterView(e);
     if (seen.has(e)) return;
     seen.add(e);
     switch (e.type) {
       case 'seq':
         for (const i of e.items) {
-          const v = tsView(i);
+          const v = treeSitterView(i);
           if (v.type === 'sameLine') cands.push({ node: v, kind: 'same-line', lineBreak: false, ahead: [], asserts: [v], owner });
           else walk(i);
         }
@@ -2187,7 +2187,7 @@ function planZeroWidth(grammar: Grammar, tokenNames: Set<string>, scannerTokens:
         for (const a of pure) {
           const items = armItems(a);
           if (items.length !== 1 || items[0].type !== 'not') { ok = false; break; }
-          const body = tsView((items[0] as RuleExpr & { type: 'not' }).body);
+          const body = treeSitterView((items[0] as RuleExpr & { type: 'not' }).body);
           if (body.type === 'sameLine') { lineBreak = true; continue; }
           const y = body.type === 'not' ? tokSet(body.body) : null;
           if (!y) { ok = false; break; }
@@ -2202,7 +2202,7 @@ function planZeroWidth(grammar: Grammar, tokenNames: Set<string>, scannerTokens:
     }
   };
   for (const r of grammar.rules) { owner = r.name; walk(r.body); }
-  for (const [n, b] of collectTsSharedRules(grammar)) { owner = n; walk(b); }
+  for (const [n, b] of collectTreeSitterSharedRules(grammar)) { owner = n; walk(b); }
   if (!cands.length) return plan;
 
   // ── AFTER / CONT of the live candidates, over the automaton where each is its own terminal and
@@ -2417,16 +2417,16 @@ function planStartMarkers(grammar: Grammar, tokenNames: Set<string>, sets: Termi
   const plan: StartMarkerPlan = { tokens: [], conds: [], markerOf: new Map(), lowered: new Set(), preempts: new Map(), report: [] };
   if (grammar.indent || grammar.newline) return plan;
   const word = grammar.tokens.find(t => t.identifier)?.name;
-  const armItems = (a: RuleExpr) => { const v = tsView(a); return v.type === 'seq' ? v.items : [v]; };
-  const isAssertion = (e: RuleExpr) => ASSERTION_KINDS.has(tsView(e).type);
+  const armItems = (a: RuleExpr) => { const v = treeSitterView(a); return v.type === 'seq' ? v.items : [v]; };
+  const isAssertion = (e: RuleExpr) => ASSERTION_KINDS.has(treeSitterView(e).type);
   const elemKey = (e: StartElem) => 'lit' in e ? `'${e.lit}` : e.tok;
   const show = (p: StartPath) => ('lit' in p.first ? p.first.lit : p.first.tok) + (p.second !== undefined ? (p.sameLine ? ' [same line] ' : ' ') + p.second : '');
   // The paths of a lookahead body, or the reason it has none the scanner reads.
   const pathsOf = (body: RuleExpr): StartPath[] | string => {
     const out: StartPath[] = [];
-    const v0 = tsView(body);
+    const v0 = treeSitterView(body);
     for (const a of v0.type === 'alt' ? v0.items : [v0]) {
-      const items = armItems(a).map(tsView);
+      const items = armItems(a).map(treeSitterView);
       const els: StartElem[] = []; let sameLine = false;
       for (const it of items) {
         if (it.type === 'sameLine' && els.length === 1) { sameLine = true; continue; }
@@ -2446,7 +2446,7 @@ function planStartMarkers(grammar: Grammar, tokenNames: Set<string>, sets: Termi
   };
   // The left-corner items of `e` that can start with `f`: where the marker stands.
   const corner = (e: RuleExpr, f: StartElem, out: RuleExpr[]): void => {
-    const v = e.type === 'group' && !e.tsRuleName ? tsView(e) : e;
+    const v = e.type === 'group' && !e.treeSitterRuleName ? treeSitterView(e) : e;
     if (v.type === 'alt') { for (const i of v.items) if (startsWith(i, f)) corner(i, f, out); return; }
     if (v.type === 'seq') {
       const i = v.items.findIndex(x => !isAssertion(x));
@@ -2464,10 +2464,10 @@ function planStartMarkers(grammar: Grammar, tokenNames: Set<string>, sets: Termi
   const ruleBody = new Map(grammar.rules.map(r => [r.name, r.body]));
   const unitArms = (a: RuleExpr, seen = new Set<string>()): RuleExpr[] => {
     const items = armItems(a);
-    const r = items.length === 1 ? tsView(items[0]) : undefined;
+    const r = items.length === 1 ? treeSitterView(items[0]) : undefined;
     if (!r || r.type !== 'ref' || tokenNames.has(r.name) || seen.has(r.name) || !ruleBody.has(r.name)) return [a];
     seen.add(r.name);
-    const body = tsView(ruleBody.get(r.name)!);
+    const body = treeSitterView(ruleBody.get(r.name)!);
     return (body.type === 'alt' ? body.items : [body]).flatMap(b => unitArms(b, seen));
   };
   const byKey = new Map<string, StartMarkerToken>();
@@ -2484,9 +2484,9 @@ function planStartMarkers(grammar: Grammar, tokenNames: Set<string>, sets: Termi
       const arms = unitArms(a);
       for (const b of arms) for (const it of armItems(b)) {
         if (!isAssertion(it)) break;
-        const v = tsView(it);
+        const v = treeSitterView(it);
         if (v.type !== 'not') continue;
-        const body = tsView(v.body);
+        const body = treeSitterView(v.body);
         if (body.type === 'not' || body.type === 'sameLine') continue;        // a positive lookahead / a line condition
         const recs = recordOf.get(v) ?? [];
         if (recs.length && recs.every(r => r.cls === 'lookahead1' || r.cls === 'lookahead')) { nots.push(v); if (arms[0] !== a) viaRef.add(v); }
@@ -2585,12 +2585,12 @@ function planStartMarkers(grammar: Grammar, tokenNames: Set<string>, sets: Termi
       case 'alt': visit(e); e.items.forEach(walk); return;
       case 'seq': e.items.forEach(walk); return;
       case 'quantifier': walk(e.body); return;
-      case 'group': walk(e.tsRelaxed ?? e.body); return;
+      case 'group': walk(e.treeSitterRelaxed ?? e.body); return;
       case 'sep': walk(e.element); return;
     }
   };
   for (const r of grammar.rules) { owner = r.name; walk(r.body); }
-  for (const [n, b] of collectTsSharedRules(grammar)) { owner = n; walk(b); }
+  for (const [n, b] of collectTreeSitterSharedRules(grammar)) { owner = n; walk(b); }
   for (const [n, r] of reported) {
     if (!direct.has(n)) for (const x of viaLeft.get(n) ?? []) if (!r.rendered.includes(x) && !r.left.includes(x)) r.left.push(`${x}: no other alternative can start with it`);
     r.exact = !r.left.length;
@@ -2780,13 +2780,13 @@ function deriveConflicts(ctx: GrammarJsContext): string[][] {
   for (const c of openTailConflicts(ctx)) push(c);
 
   // 4. The tuples the grammar declares. A symbol may be a RULE, a TOKEN (YAML's `key`/`plain` are
-  //    tokens that conflict on a trailing `:`), or a shared hidden tsRelax rule (`type_fn_param`);
+  //    tokens that conflict on a trailing `:`), or a shared hidden treeSitterRelax rule (`type_fn_param`);
   //    all three are valid `$.<name>` conflict symbols. A name the grammar does not define is a
   //    declaration error, not a tuple to skip.
   const tokenSnakes = new Set(ctx.tokenSnake.values());
   const templateRules = new Set((ctx.templatePlan?.holes ?? []).flatMap(h => [h.ruleSnake, h.substRuleSnake]));
   for (const tuple of g.treeSitterConflicts ?? []) {
-    const unknown = tuple.filter(r => !ruleSnakes.has(r) && !tokenSnakes.has(r) && !ctx.tsSharedRules.has(r) && !templateRules.has(r));
+    const unknown = tuple.filter(r => !ruleSnakes.has(r) && !tokenSnakes.has(r) && !ctx.treeSitterSharedRules.has(r) && !templateRules.has(r));
     if (unknown.length) throw new Error(`${g.name}: treeSitterConflicts [${tuple.join(', ')}] names undefined symbol(s): ${unknown.join(', ')}`);
     push(tuple);
   }
@@ -2879,7 +2879,7 @@ function planTemplate(grammar: Grammar): TemplatePlan | null {
       case 'ref': if (e.hole !== undefined) holeRules.add(e.hole); return;
       case 'seq': case 'alt': e.items.forEach(walk); return;
       case 'quantifier': walk(e.body); return;
-      case 'group': walk(e.body); if (e.tsRelaxed) walk(e.tsRelaxed); return;
+      case 'group': walk(e.body); if (e.treeSitterRelaxed) walk(e.treeSitterRelaxed); return;
       case 'sep': walk(e.element); return;
       default: return;
     }
@@ -3311,7 +3311,7 @@ function buildTokenTreeSitter(source: Grammar, grammarName: string): Omit<TreeSi
     templatePlan,
     interpolationPlans,
     nameFieldNodes: nameFields.nodes,
-    tsSharedRules: collectTsSharedRules(grammar),
+    treeSitterSharedRules: collectTreeSitterSharedRules(grammar),
     firstFilters,
   };
 
@@ -3398,7 +3398,7 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
     ruleEntries.push(`    ${snake}: $ => ${body}`);
   }
 
-  // Shared rules from named tsRelax (e.g. the type-only fn-param). Emitted right AFTER the
+  // Shared rules from named treeSitterRelax (e.g. the type-only fn-param). Emitted right AFTER the
   // entry rule (index 1), never first: the entry rule must stay the start symbol, AND
   // tree-sitter's state count is sensitive to rule ORDER — placing the type-param rule EARLY
   // collapses ~2k more states than placing it last (measured, issue #46). Emitted once so
@@ -3407,7 +3407,7 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
   // type-fn-param is deliberately VISIBLE so its param-name child is not spliced into the
   // enclosing `type` node — see typescript.ts.)
   const sharedEntries: string[] = [];
-  for (const [name, body] of ctx.tsSharedRules) {
+  for (const [name, body] of ctx.treeSitterSharedRules) {
     sharedEntries.push(`    ${name}: $ => ${renderExpr(body, ctx)}`);
   }
   if (sharedEntries.length) ruleEntries.splice(1, 0, ...sharedEntries);
@@ -3485,7 +3485,7 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
   const unlisted = [...ctx.renderedLiterals].filter(w => ctx.reserved.isWordLiteral(w) && !ctx.wordLiterals.includes(w));
   if (ctx.wordLiterals.length && unlisted.length) throw new Error(`gen-treesitter: rules wrote keyword(s) collectWordLiterals missed: ${unlisted.join(', ')}`);
   const wordSnake = ctx.reserved.word && ctx.tokenSnake.get(ctx.reserved.word);
-  const ruleNames = new Set([...ctx.ruleSnake.values(), ...ctx.tokenSnake.values(), ...ctx.tsSharedRules.keys()]);
+  const ruleNames = new Set([...ctx.ruleSnake.values(), ...ctx.tokenSnake.values(), ...ctx.treeSitterSharedRules.keys()]);
   const nameRead = new Set<string>();
   for (const [key, name] of ctx.namesRules) {
     if (ruleNames.has(name)) throw new Error(`gen-treesitter: contextual-keyword rule name ${name} collides with a rule`);
@@ -3500,7 +3500,7 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
   ctx.bothReadings.push(...ctx.wordLiterals.filter(w => nameRead.has(w)));
   const contextualConflicts: string[][] = [];
   for (const c of ctx.contextual?.conflicts ?? []) {
-    const names = c.map(v => 'names' in v ? ctx.namesRules.get(v.names) : ctx.ruleSnake.get(v.rule) ?? (ctx.tsSharedRules.has(v.rule) ? v.rule : undefined));
+    const names = c.map(v => 'names' in v ? ctx.namesRules.get(v.names) : ctx.ruleSnake.get(v.rule) ?? (ctx.treeSitterSharedRules.has(v.rule) ? v.rule : undefined));
     if (names.some(n => n === undefined)) throw new Error(`gen-treesitter: a contextual-keyword conflict names an unrendered rule: ${JSON.stringify(c.filter((_, i) => names[i] === undefined))}`);
     contextualConflicts.push([...new Set(names as string[])].sort());
   }
@@ -4091,13 +4091,13 @@ function propertyNameRules(grammar: Grammar, identName: string, tokenNames: Set<
  *  rule → type-object member keys. Members may be placed by `sep`, a `*`/`+` repetition,
  *  or a bare ref, so collect the list element(s) directly between the braces. */
 // Does this rule body reference `name` itself (not through another rule), in its tree-sitter
-// rendering (a tsRelaxed group renders its relaxed form)?
+// rendering (a treeSitterRelaxed group renders its relaxed form)?
 function refsDirectly(e: RuleExpr, name: string): boolean {
   switch (e.type) {
     case 'ref': return e.name === name;
     case 'seq': case 'alt': return e.items.some(i => refsDirectly(i, name));
     case 'quantifier': return refsDirectly(e.body, name);
-    case 'group': return e.tsRuleName ? false : refsDirectly(e.tsRelaxed ?? e.body, name);   // a named tsRelaxed group is its own node
+    case 'group': return e.treeSitterRuleName ? false : refsDirectly(e.treeSitterRelaxed ?? e.body, name);   // a named treeSitterRelaxed group is its own node
     case 'sep': return refsDirectly(e.element, name);
     default: return false;
   }

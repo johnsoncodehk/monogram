@@ -38,7 +38,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import {
   token, rule, defineGrammar, sep, opt, many, many1, alt, exclude, not, reservableNot,
-  tsRelax, capExpr, awaitCtx, yieldCtx, asyncGenCtx, resetCtx, op, prefix, postfix,
+  treeSitterRelax, capExpr, awaitCtx, yieldCtx, asyncGenCtx, resetCtx, op, prefix, postfix,
   sameLine, noCommentBefore, noMultilineFlowBefore, notLeftLeaf,
   oneOf, noneOf, seq, altPattern, optPattern, star, plus, repeat,
   followedBy, notFollowedBy, precededBy, notPrecededBy, start, end, never, anyChar, range, none, left,
@@ -108,7 +108,7 @@ function checkRuleExprClosure(): void {
   const Group = rule(($: any) => [[                                    // group (4 flavours)
     exclude('in', A),                                                  //   group.suppress
     awaitCtx(A), yieldCtx(A), asyncGenCtx(A), resetCtx(A),             //   group.ctxMode
-    tsRelax(A, B),                                                     //   group.tsRelaxed
+    treeSitterRelax(A, B),                                                     //   group.treeSitterRelaxed
     capExpr('||', A),                                                  //   group.capBelow
   ]]);
   const Nots = rule(($: any) => [[not(A), reservableNot(['kw']), B]]);    // not (+ reservable)

@@ -66,7 +66,7 @@ function nameEverything(g: Grammar): Grammar {
     if (named.type === 'alt' || named.type === 'seq') (named as { items: RuleExpr[] }).items = named.items.map((x) => ({ ...visit(x), arm: `a${k++}` }) as RuleExpr);
     if ('body' in named && named.body) (named as { body: RuleExpr }).body = visit(named.body);
     if (named.type === 'sep') (named as { element: RuleExpr }).element = visit(named.element);
-    if (named.type === 'group' && named.tsRelaxed) (named as { tsRelaxed: RuleExpr }).tsRelaxed = visit(named.tsRelaxed);
+    if (named.type === 'group' && named.treeSitterRelaxed) (named as { treeSitterRelaxed: RuleExpr }).treeSitterRelaxed = visit(named.treeSitterRelaxed);
     return named;
   };
   return { ...g, rules: g.rules.map((r) => ({ ...r, body: visit(r.body) })) } as Grammar;
