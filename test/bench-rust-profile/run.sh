@@ -91,6 +91,17 @@ for kv in $VARIANTS; do
   done
 done
 echo "note: RUSTFLAGS='-A warnings' on the monogram crates only silences lints; it does not affect codegen."
+# sound8 measurement only: the code of the Pratt loop as built (the profiled binary itself, not a
+# re-compile): every function's size, and the disassembly of the Expr_bp functions with source lines.
+mkdir -p "$OUT/asm"
+for kv in $VARIANTS; do
+  v=${kv%%:*}
+  for g in $GRAMMARS; do
+    n=$v$(sfx "$g"); b=$W/mono-prof-$n/target/release/mono-prof-$n
+    nm -S -C --size-sort "$b" > "$OUT/asm/nm-$n.txt" 2>&1 || true
+    objdump -d -C -l --no-show-raw-insn "$b" | awk '/^[0-9a-f]+ <.*>:$/ { p = ($0 ~ /Expr_bp|Expr_led|Expr_nud/) } p' > "$OUT/asm/expr-$n.s" 2>&1 || true
+  done
+done
 
 HAVE_OXC=0; HAVE_LEX=0; HAVE_OXCCOUNT=0
 if [ "$SCOPE" = full ]; then
