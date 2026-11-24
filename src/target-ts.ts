@@ -3227,7 +3227,9 @@ const tsLowering: Lowering = {
     vItems: (cx, r) => cx.atom(`(${r.c} as ShapeValue[])`, 'vals_any', 'vals_any'),
     vIs: (_cx, r, val) => ({ c: `${tsWrap(r, 4)} === ${val === null ? 'null' : JSON.stringify(val)}`, prec: 3 }),
     vPresent: (_cx, r) => ({ c: `${tsWrap(r, 4)} !== undefined`, prec: 3 }),
-    vNeed: (cx, r) => cx.atom(`_need(${r.c})`, 'val_any', 'val_any'),
+    // Inline: a call of _need is a function entry per child read (one V8 block each); the check is the
+    // throw's only branch.
+    vNeed: (cx, r) => cx.atom(`((_nv = ${r.c}) instanceof _Missing ? _throwM(_nv) : _nv)`, 'val_any', 'val_any'),
     vMissing: (cx, where, why) => cx.atom(`_missing(${J(where)}, ${J(why)})`, 'val_any', 'val_any'),
     switch: (_cx, on, cases, dflt) => [`switch (${on.c}) {`, ...cases.flatMap((c) => [`${TS_IND}case ${J(c.v)}: {`, ...tsBlock(tsBlock(c.body)), `${TS_IND}${TS_IND}break;`, `${TS_IND}}`]), `${TS_IND}default: {`, ...tsBlock(tsBlock(dflt)), `${TS_IND}}`, '}'],
   },
@@ -3817,6 +3819,8 @@ function _missing(where: string, why: string): any { return new _Missing(where, 
 // A child read that is missing makes the reading arm's value missing too (finS catches it): only the
 // root's read, parse(), throws, as the evaluator throws when a unit's evaluation reads one.
 function _need(v: any): any { if (v instanceof _Missing) throw v; return v; }
+let _nv: any;
+function _throwM(v: any): never { throw v; }
 // Inherited context attributes (an rd rule's: Step.inh sets them around its calls), their values
 // now; _ipush sets one and returns what it was, _ipop restores it and passes the call's result on.
 const _IV0: any[] = ${J(plan.inh.map((a) => a.dflt))};
