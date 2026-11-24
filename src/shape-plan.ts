@@ -248,6 +248,12 @@ function slotPositions(items: RuleExpr[], gtComps: readonly string[], recordable
       default: return cur;
     }
   };
+  // The arm's own sequence through transparent groups and sequences (a group places no slot of its
+  // own, so offsets are the same either way): the engine runs such an item's parts as steps of the
+  // arm's sequence (a tsRelax group's strict side), so a record can follow each of them. An item
+  // the engine runs as one step stays one item.
+  const flat = (e: RuleExpr): RuleExpr[] => (recordable(e) ? [e] : e.type === 'group' ? flat(e.body) : e.type === 'seq' ? e.items.flatMap(flat) : [e]);
+  items = items.flatMap(flat);
   let c: number | null = 0;
   items.forEach((x, i) => {
     item = x;
@@ -618,6 +624,16 @@ type ArmSites = { eqs: Eqs; childOf: Map<RuleExpr, string>; threads: Map<RuleExp
  * null where the engine prints the arm another way (an operator form; a led with a re-bind, whose
  * steps are also the cases of the re-bind method). */
 function armTopSteps(r: RuleIR, key: string): Step[] | null {
+  const own = armSteps(r, key);
+  return own && ownSeq(own);
+}
+/** An arm's own sequence with every `seq` step spliced in: a seq only groups (the arm conjoins its
+ * steps either way), so the shape form runs its parts as the arm's steps and a record can follow
+ * each of them (a tsRelax group's strict side is one seq step). */
+function ownSeq(steps: Step[]): Step[] {
+  return steps.some((s) => s.t === 'seq') ? steps.flatMap((s) => (s.t === 'seq' ? ownSeq(s.steps) : [s])) : steps;
+}
+function armSteps(r: RuleIR, key: string): Step[] | null {
   const i = Number(key.slice(3));
   if (r.kind === 'rd') return r.alts[i] ?? null;
   if (key.startsWith('led')) return r.ledRebind[i] === null || r.ledRebind[i] === undefined ? r.leds[i]?.steps ?? null : null;
@@ -718,14 +734,14 @@ function shapeSteps(r: RuleIR, tags: Map<string, Numbering>, marked: Map<RuleExp
       }
       return o;
     };
-    return (steps: Step[]) => {
-      const out = steps.map((x) => c(x, new Set()));
+    return (steps: Step[], own: boolean) => {
+      const out = (own ? ownSeq(steps) : steps).map((x) => c(x, new Set()));
       for (const o of out) { const k = o.src ? site?.recs?.get(o.src) : undefined; if (k !== undefined) o.rec = k; }
       for (const q of site?.threads.keys() ?? []) if (!attached.has(q)) throw new Error(`planShape: ${r.name}: a threaded repetition has no repetition step`);
       return out;
     };
   };
-  const at = (key: string) => clone(tags.get(key)!, sites.get(key));
+  const at = (key: string) => (steps: Step[]) => clone(tags.get(key)!, sites.get(key))(steps, armSteps(r, key) !== null);
   if (r.kind === 'rd') return { ...r, alts: r.alts.map((a, i) => at(`alt${i}`)(a)) } as RdRule;
   const p = r as PrattRule;
   const nudKey = (kind: string, index: number) => `nud${p.nudOrder.findIndex((x) => x.kind === kind && 'index' in x && x.index === index)}`;
