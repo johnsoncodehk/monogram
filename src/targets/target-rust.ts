@@ -1944,7 +1944,7 @@ fn check_tree_eq_arena(text: &str, toks_a: &[Tok], nodes: &[Node], kids: &[i32],
 `;
   const editParseReuse = topReuse
     ? `        let byte_delta = self.text.len() as isize - old_text.len() as isize;
-        let mut reused = 0usize;
+        let reused: usize;
         let force_fresh = self.root.is_none()
             || !B::SUPPORTS_SHIFT
             || self.root.map(|r| self.b.should_reclaim(r, self.baseline)).unwrap_or(true);
@@ -2041,7 +2041,8 @@ struct AlignMeta { off: u32, end: u32, kid: u16, pd: u16, fd: u16, flags: u8, td
 #[inline(always)] fn shift_align(m: &AlignMeta, delta: isize) -> AlignMeta {
     AlignMeta { off: (m.off as isize + delta) as u32, end: (m.end as isize + delta) as u32, kid: m.kid, pd: m.pd, fd: m.fd, flags: m.flags, td: m.td }
 }
-struct Align { old_n: usize, new_n: usize, prefix: usize, suffix: usize, relexed: usize, reused: usize, stream_eq: Option<bool>, tree_eq: Option<bool> }
+/// What the last edit re-used and re-lexed (\`Doc::alignment\` returns it).
+pub struct Align { pub old_n: usize, pub new_n: usize, pub prefix: usize, pub suffix: usize, pub relexed: usize, pub reused: usize, pub stream_eq: Option<bool>, pub tree_eq: Option<bool> }
 ${relexFamily}${reuseFamily}
 fn toks_from_meta(text: &str, meta: &[AlignMeta]) -> Vec<Tok> {
     meta.iter().map(|m| { let tx = am_text(text, m); mk_tok(m.off as usize, m.end as usize, am_nl(m), m.kid, ${regionKids(ir, buildLexIdPlan(ir)).length ? `if ${regionKids(ir, buildLexIdPlan(ir)).map((k) => `m.kid == ${k}`).join(' || ')} { 0 } else { lid_of(tx.as_bytes()) }` : 'lid_of(tx.as_bytes())'}) }).collect()
@@ -2133,7 +2134,6 @@ impl Doc<CstBuilder> {
     pub fn parse(&self) -> Option<(Parser<'_>, i32)> {
         // Fresh independent parse (does not touch Doc arena) — used by non-edit callers.
         let toks = toks_from_meta(&self.text, &self.toks);
-        let n = toks.len();
         let mut p = Parser { toks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0,${targetInitRs(ir)} tail: false, suppress_next: 0, suppress_cur: 0, ctx: 0, src: &self.text, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
         match p.parse_${ir.entry}() {
             Some(fr) if p.pos == p.toks.len() => Some((p, fr.root())),
@@ -5923,7 +5923,6 @@ ${decls.join('')}${shared.recoveryFamily(ir, true).split('\n').map((l) => (l ? `
         match n { Some(fr) => { if fr.present { self.p.scratch.push(fr.h); } true } None => false }
     }
     fn en_sh(&mut self) -> isize { self.p.scratch.len() as isize }
-    fn en_cut(&mut self, h: isize) { self.p.scratch.truncate(h as usize); }
     fn en_mark(&mut self) -> isize { let m = self.p.mark(); self.marks.push((m, self.rm.len())); self.marks.len() as isize - 1 }
     fn en_reset(&mut self, k: isize) { let (m, h) = self.marks[k as usize]; self.p.reset(m); self.rm.truncate(h); }
     fn en_unmark(&mut self, k: isize) { self.marks.truncate(k as usize); }

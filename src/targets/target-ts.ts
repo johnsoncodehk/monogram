@@ -3658,7 +3658,6 @@ function enTpl(hole: number): boolean {
   ${disp('hole', nc.tpl, (h) => `parse${h}W`, (f) => `matchTemplateW(${f})`)}
 }
 function enSh(): number { return _n; }
-function enCut(h: number): void { _n = h; }
 function enMark(): number { _rmarks.push(pos, _n, _rm.length); return _rmarks.length / 3 - 1; }
 function enReset(k: number): void { back(_rmarks[3 * k]!); _n = _rmarks[3 * k + 1]!; _rm.length = _rmarks[3 * k + 2]!; }
 function enUnmark(k: number): void { _rmarks.length = 3 * k; }

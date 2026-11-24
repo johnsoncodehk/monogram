@@ -715,27 +715,38 @@ class Printer implements Cx {
     return this.L.expr.call(this.id(e.fn), args, fn.method === true);
   }
 
-  private scan(body: Stmt[]): void {
+  // Collects the locals `body` mutates (into `mutable`) and assigns (into `reassigned`): the
+  // function's whole body for the per-function facts, the rest of a block for a let's `mut`.
+  private scan(body: Stmt[], mutable = this.mutable, reassigned = this.reassigned): void {
+    const scan = (b: Stmt[]) => this.scan(b, mutable, reassigned);
     for (const s of body) {
       switch (s.k) {
-        case 'set': this.mutable.add(s.name); this.reassigned.add(s.name); break;
-        case 'setCall': for (const n of s.names) { this.mutable.add(n); this.reassigned.add(n); } break;
-        case 'setAt': case 'push': case 'extend': this.mutable.add(s.list); break;
-        case 'setField': this.mutable.add(s.name); break;
+        case 'set': mutable.add(s.name); reassigned.add(s.name); break;
+        case 'setCall': for (const n of s.names) { mutable.add(n); reassigned.add(n); } break;
+        case 'setAt': case 'push': case 'extend': mutable.add(s.list); break;
+        case 'setField': mutable.add(s.name); break;
         case 'run': {
           const fn = this.sigs.get(s.call.fn);
-          s.call.args.forEach((a, i) => { if (fn?.params[i]?.ref && a.k === 'var') this.mutable.add(a.name); });
+          s.call.args.forEach((a, i) => { if (fn?.params[i]?.ref && a.k === 'var') mutable.add(a.name); });
           break;
         }
         case 'lexStep':
-          for (const n of [s.pos, ...s.state, s.err]) { this.mutable.add(n); this.reassigned.add(n); }
-          this.mutable.add(s.out);
+          for (const n of [s.pos, ...s.state, s.err]) { mutable.add(n); reassigned.add(n); }
+          mutable.add(s.out);
           break;
-        case 'if': this.scan(s.then); if (s.else) this.scan(s.else); break;
-        case 'while': case 'for': case 'forEach': this.scan(s.body); break;
-        case 'switch': for (const c of s.cases) this.scan(c.body); this.scan(s.else); break;
+        case 'if': scan(s.then); if (s.else) scan(s.else); break;
+        case 'while': case 'for': case 'forEach': scan(s.body); break;
+        case 'switch': for (const c of s.cases) scan(c.body); scan(s.else); break;
       }
     }
+  }
+
+  // Whether the statements after a let mutate its local (a name reused by a later let counts: a
+  // `mut` too many is harmless there, one too few does not compile).
+  private mutatedIn(rest: Stmt[], v: string): boolean {
+    const m = new Set<string>();
+    this.scan(rest, m, new Set());
+    return m.has(v);
   }
 
   private block(body: Stmt[], depth: number): Lines {
@@ -761,7 +772,7 @@ class Printer implements Cx {
         const emptyList = s.init.k === 'newList' && !s.init.cap;
         const infer = !!L.inferLocals && (s.ty === 'bool' || (isNum(s.ty) && !r.lit));
         const deadInit = (isNum(s.ty) || s.ty === 'bool') && !mentions(s.init, (e) => e.k === 'call') && initDead(body.slice(at + 1), s.name);
-        return S.let(this, { id: this.id(s.name), ty: s.ty, r, owned, mutable: this.mutable.has(s.name) && JSON.stringify(body.slice(at + 1)).includes(JSON.stringify(s.name)), reassigned: this.reassigned.has(s.name), emptyList, infer, deadInit, twice: deadInit && assignsTwice(body.slice(at + 1), s.name) });
+        return S.let(this, { id: this.id(s.name), ty: s.ty, r, owned, mutable: this.mutatedIn(body.slice(at + 1), s.name), reassigned: this.reassigned.has(s.name), emptyList, infer, deadInit, twice: deadInit && assignsTwice(body.slice(at + 1), s.name) });
       }
       case 'set': {
         const v = this.env.get(s.name);
