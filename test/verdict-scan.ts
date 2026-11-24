@@ -183,14 +183,22 @@ export function verdictInputs(g: Grammar, lang: 'javascript' | 'typescript' | 'p
   const add = (src: string, recipe: string) => { if (!out.has(src)) out.set(src, recipe); };
   if (lang === 'python') {
     const forms = pyForms(g), conts = pyConts(g), slots = pySlots(g);
+    const fnWrap = (s: string, fn: PyForm['fn']) => (fn ? `${fn === 'async' ? 'async ' : ''}def g():\n    ${s}` : s);
     for (const [fid, f] of Object.entries(forms)) for (const ctx of ['stmt', 'assign'] as const) {
-      const wrap = (e: string, fn: PyForm['fn']) => {
-        const s = ctx === 'stmt' ? `${e}\n` : `x = ${e}\n`;
-        return fn ? `${fn === 'async' ? 'async ' : ''}def g():\n    ${s}` : s;
-      };
+      const wrap = (e: string, fn: PyForm['fn']) => fnWrap(ctx === 'stmt' ? `${e}\n` : `x = ${e}\n`, fn);
       add(wrap(f.src, f.fn), `form:${fid}|${ctx}`);
       for (const [cid, c] of Object.entries(conts)) add(wrap(c(f.src), f.fn), `left:${cid}|${ctx}`);
       for (const [sid, s] of Object.entries(slots)) add(wrap(s.at(f.src), s.fn ?? f.fn), `right:${sid}|${ctx}`);
+    }
+    // The target positions (python.ts's declared contexts: star, single, del), each holding a form
+    // and a form with a continuation: what a node's shape decides, so no operator slot around it.
+    const targetAt: Record<string, (e: string) => string> = {
+      assignTo: (e) => `${e} = x`, chainTo: (e) => `y = ${e} = x`, augTo: (e) => `${e} += x`, annTo: (e) => `${e}: int`,
+      del: (e) => `del ${e}`, forIn: (e) => `for ${e} in x: pass`, compFor: (e) => `[y for ${e} in x]`, withAs: (e) => `with x as ${e}: pass`,
+    };
+    for (const [fid, f] of Object.entries(forms)) for (const [tid, t] of Object.entries(targetAt)) {
+      add(fnWrap(`${t(f.src)}\n`, f.fn), `form:${fid}|${tid}`);
+      for (const [cid, c] of Object.entries(conts)) add(fnWrap(`${t(c(f.src))}\n`, f.fn), `left:${cid}|${tid}`);
     }
     return [...out].map(([src, recipe]) => ({ src, recipe }));
   }
@@ -222,6 +230,7 @@ type Side = 'js' | 'py';
 type Class = { id: string; disposition: Disposition; test: (r: Row) => boolean; note: string; side?: Side };
 const PY_CLASSES: Class[] = [
   { id: 'py-fstring-fields', disposition: 'lexer', note: 'an f-string is lexed as a plain string: its replacement fields are not parsed (python.ts header)', test: (r) => r.we && /f"\{/.test(r.src) },
+  { id: 'py-ann-paren-trailer', disposition: 'grammar', note: 'python.gram annotates `(\'(\' single_target \')\' | single_subscript_attribute_target) \':\'`: a PEG group commits to its first alternative, so `(a).x: int` (a parenthesized single target, then a trailer) has no parse; python.ts\'s single context admits it (it reads the trailer\'s node, not what the trailer applies to)', test: (r) => r.we && !r.tsc && /\|annTo$/.test(r.recipe) && /^\([^,]*\)[.[]/.test(r.src) },
 ];
 const CLASSES: Class[] = [
   { id: 'arrow-body-ctx', disposition: 'grammar', note: 'an arrow ExpressionBody is [~Yield], [~Await]', test: (r) => /=> (yield|await)/.test(r.src) },
@@ -229,7 +238,6 @@ const CLASSES: Class[] = [
   { id: 'number-then-ident', disposition: 'lexer', note: 'a NumericLiteral directly followed by an IdentifierStart (`1.x`)', test: (r) => /(^|[ (=])1\.x/.test(r.src) },
   { id: 'regex-after-update', disposition: 'lexer', note: 'a regex after a prefix `++` / `--` read as division', test: (r) => /(\+\+|--)\/r\//.test(r.src) },
   { id: 'lt-composite', disposition: 'engine', note: '`<<` opening nested type arguments (no `<` split, the mirror of the `>` re-scan)', test: (r) => /<</.test(r.src) && !r.we },
-  { id: 'ts-assertion-operand', disposition: 'grammar', note: '`<T> $` takes its operand at bp 0, not as a UnaryExpression', test: (r) => /<T>(a|\(a\))/.test(r.src) && r.we && !r.tsc },
   { id: 'ts-type-args-commit', disposition: 'grammar', note: 'after a type reference tsc commits to `<` type arguments', test: (r) => /(as|satisfies) T <|f<T> \/=/.test(r.src) },
   { id: 'ts-new-import', disposition: 'grammar', note: 'an ImportCall is no MemberExpression', test: (r) => /new import/.test(r.src) },
   { id: 'ts-cond-in-extends', disposition: 'grammar', note: 'no unparenthesized conditional type in an extends position', test: (r) => r.grammar === 'typescript' && /extends .*extends .*\?/.test(r.src) && r.we },

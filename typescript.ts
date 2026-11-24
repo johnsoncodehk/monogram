@@ -1,7 +1,7 @@
 import {
   rule, defineGrammar,
   op, prefix, postfix, sameLine,
-  sep, opt, many, many1, alt, not, tsRelax, capExpr, notLeftLeaf, withHoles,
+  sep, opt, many, many1, alt, not, tsRelax, capExpr, atLevel, notLeftLeaf, withHoles,
   awaitCtx, yieldCtx, asyncGenCtx, resetCtx, arm, field,
 } from './src/api.ts';
 
@@ -593,7 +593,11 @@ const Expr = rule($ => [
   // decorator a modifier word is an identifier, so `x = abstract class {}` has no parse).
   arm('namedClass', classExprPrefix, 'class', ...bindingName, opt(field('typeParameters', TypeParams)), heritageClauses, '{', many(field('member', ClassMember)), '}'),
   arm('anonymousClass', classExprPrefix, 'class', opt(field('typeParameters', TypeParams)), heritageClauses, '{', many(field('member', ClassMember)), '}'),
-  ['<', Type, '>', $],
+  // A type assertion `<T>e` is a UnaryExpression (tsc's parseTypeAssertion: its operand is a
+  // simple unary expression), so the operand is read at the prefix operators' level: `<T>a = c` is
+  // no `<T>(a = c)`, `c != <T>(a) => a` has no arrow operand; the node is prefix-shaped (not an
+  // assignment target, no `**` left operand: `++<T>a`, `<T>a ** b` reject, as in tsc).
+  ['<', Type, '>', atLevel('!', $)],
 ]);
 
 // ── Statements ──
