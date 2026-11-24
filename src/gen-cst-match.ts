@@ -20,7 +20,7 @@
 //
 // Validated by test/cst-match-totality.ts: every node of every generated-corpus CST
 // must be matched by exactly its rule's matcher, consuming all children.
-import type { Grammar, PrecOperator, RuleDecl, RuleExpr } from './types.ts';
+import type { Grammar, RuleDecl, RuleExpr } from './types.ts';
 import { isKeywordLiteral } from './grammar-utils.ts';
 import { nameRule, sanitizeIdent, OP_FORM_CHILDREN, type RuleNames } from './grammar-names.ts';
 
@@ -56,7 +56,6 @@ const J = (v: unknown) => JSON.stringify(v);
 export function generateCstMatch(grammar: Grammar): string {
   const tokenNames = new Set(grammar.tokens.map(t => t.name));
   const templateTokenNames = new Set(grammar.tokens.filter(t => t.template).map(t => t.name));
-  const ruleNames = new Set(grammar.rules.map(r => r.name));
   // Int worlds, replicated from target-js's symtab (same deterministic derivation
   // from the grammar; any drift is caught instantly by cst-match-totality):
   //   token TYPE kinds — '' punct = 1, $template spans = 2/3/4, named tokens from 5
@@ -113,7 +112,7 @@ export function generateCstMatch(grammar: Grammar): string {
     if (hasOps) {
       // Synthesized pratt operator forms (matching parsePratt's构造): op text via src.
       for (const form of ['binary', 'prefix', 'postfix'] as const) {
-        plans.push(opPlan(names.ops![form], OP_FORM_CHILDREN[form].map((nm) => (nm === 'op' ? opLeafCap(nm) : selfCap(nm))), self));
+        plans.push(opPlan(names.ops![form], OP_FORM_CHILDREN[form].map((nm) => (nm === 'op' ? opLeafCap(nm) : selfCap(nm)))));
       }
     }
     return plans;
@@ -124,7 +123,7 @@ export function generateCstMatch(grammar: Grammar): string {
     function opLeafCap(nm: string): Step {
       return { kind: 'tok', name: '$operator', template: false, cap: { name: nm, field: nm, tsType: 'LeafEntry', card: 'one' } };
     }
-    function opPlan(name: string, steps: Step[], _self: string): ArmPlan {
+    function opPlan(name: string, steps: Step[]): ArmPlan {
       const captures = steps.map(s => (s as { cap: Capture }).cap);
       return { name, steps, captures };
     }
@@ -250,10 +249,25 @@ export function generateCstMatch(grammar: Grammar): string {
   const emit = (s = '') => out.push(s);
   let tmpId = 0;
   const tmp = () => `_t${tmpId++}`;
+  // What the arm being rendered reads (its parameter list is exactly that), and which
+  // header helpers the whole module calls (only those are emitted).
+  let armReadsTb = false, armReadsSrc = false;
+  const helpersUsed = new Set<string>();
+  const helper = (name: string, readsTb: boolean, readsSrc: boolean): string => {
+    helpersUsed.add(name);
+    if (readsTb) armReadsTb = true;
+    if (readsSrc) armReadsSrc = true;
+    return name;
+  };
 
-  function renderArmFn(rule: RuleDecl, plan: ArmPlan): string {
+  // An arm function and the argument list its callers pass (also its parameter names).
+  interface ArmFn { name: string; args: string }
+
+  function renderArmFn(rule: RuleDecl, plan: ArmPlan): ArmFn {
     const fn = `_${sanitizeIdent(rule.name)}$${plan.name}`;
     tmpId = 0;
+    armReadsTb = false;
+    armReadsSrc = false;
     const body: string[] = [];
     const w = (line: string) => body.push(line);
     // capture slots
@@ -269,11 +283,24 @@ export function generateCstMatch(grammar: Grammar): string {
       return c.field === c.name ? c.name : `${c.field}: ${c.name}`;
     });
     w(`  return { arm: ${J(plan.name)}${fields.length ? ', ' + fields.join(', ') : ''} };`);
-    emit(`function ${fn}(t: TreeAccess, n: number, cc: number, tb: number, src: string): ${matchTypeName(rule.name)} | null {`);
+    const params = ['t: TreeAccess', 'cc: number', ...(armReadsTb ? ['tb: number'] : []), ...(armReadsSrc ? ['src: string'] : [])];
+    emit(`function ${fn}(${params.join(', ')}): ${matchTypeName(rule.name)} | null {`);
     for (const line of body) emit(line);
     emit(`}`);
-    return fn;
+    return { name: fn, args: params.map(p => p.slice(0, p.indexOf(':'))).join(', ') };
   }
+
+  // Render `body` under the failure label `lbl` (a failing step sets `ok` false and breaks
+  // out); `fallible` says whether any step emitted that break. A body that cannot fail
+  // needs no label, no ok flag and no saved position.
+  function renderGuarded(body: Step[], ind: string, ok: string, lbl: string, suffixMin: number): { lines: string[]; fallible: boolean } {
+    const lines: string[] = [];
+    let fallible = false;
+    renderSteps(body, l => lines.push(l), ind, () => { fallible = true; return `{ ${ok} = false; break ${lbl}; }`; }, suffixMin);
+    return { lines, fallible };
+  }
+  // The lines of a guarded body rendered one block deeper than an infallible body sits.
+  const outdent = (lines: string[]) => lines.map(l => l.slice(2));
 
   // Minimum children the steps WILL consume (a lower bound): a required single-child
   // step counts 1, optionals / loops 0, a branches the minimum over its branches. A
@@ -312,7 +339,7 @@ export function generateCstMatch(grammar: Grammar): string {
   }
 
   function litCond(text: string, tt: string): string {
-    return `__lit(t, cc, tb, i, src, ${J(text)}, ${tt === '$keyword' ? 1 : 0})`;
+    return `${helper('__lit', true, true)}(t, cc, tb, i, src, ${J(text)}, ${tt === '$keyword' ? 1 : 0})`;
   }
 
   function renderStep(st: Step, w: (s: string) => void, ind: string, fail: () => string, suffixMin: number): void {
@@ -325,40 +352,55 @@ export function generateCstMatch(grammar: Grammar): string {
       case 'litAlt': {
         const conds = st.texts.map((t, k) => litCond(t, st.tt[k]));
         w(`${ind}if (!(${conds.join(' || ')})) ${fail()}`);
-        if (st.cap) assign(st.cap, `src.slice(t.leafOffsetOf(__SC[i], tb), t.leafEndOf(__SC[i], tb)) as ${st.cap.tsType}`, w, ind);
+        if (st.cap) {
+          armReadsTb = armReadsSrc = true;
+          assign(st.cap, `src.slice(t.leafOffsetOf(__SC[i], tb), t.leafEndOf(__SC[i], tb)) as ${st.cap.tsType}`, w, ind);
+        }
         w(`${ind}i++;`);
         return;
       }
       case 'tok': {
         const cond = st.name === '$operator'
-          ? `__opTok(t, cc, i)`
+          ? `${helper('__opTok', false, false)}(t, cc, i)`
           : st.template
-            ? `__tok(t, cc, tb, i, ${typeKind.get(st.name)}) || __nodeOf(t, cc, i, ${cid('$template')})`
-            : `__tok(t, cc, tb, i, ${typeKind.get(st.name)})`;
+            ? `${helper('__tok', true, false)}(t, cc, tb, i, ${typeKind.get(st.name)}) || ${helper('__nodeOf', false, false)}(t, cc, i, ${cid('$template')})`
+            : `${helper('__tok', true, false)}(t, cc, tb, i, ${typeKind.get(st.name)})`;
         w(`${ind}if (!(${cond})) ${fail()}`);
         if (st.cap) assign(st.cap, `__SC[i] as ${st.cap.tsType}`, w, ind);
         w(`${ind}i++;`);
         return;
       }
       case 'node':
-        w(`${ind}if (!__nodeOf(t, cc, i, ${cid(st.rule)})) ${fail()}`);
+        w(`${ind}if (!${helper('__nodeOf', false, false)}(t, cc, i, ${cid(st.rule)})) ${fail()}`);
         if (st.cap) assign(st.cap, `__SC[i] as ${st.cap.tsType}`, w, ind);
         w(`${ind}i++;`);
         return;
       case 'opt': {
-        const save = tmp();
         const ok = tmp();
         const lbl = tmp().replace('_t', '_b');
         // a NON-required optional must not consume a child the required suffix needs
         // (the min1 first iteration is required and always attempts — the grammar
         // guarantees a real element exists or the parser would have rejected)
         w(st.min1 ? `${ind}{` : `${ind}if (cc - i > ${suffixMin}) {`);
-        w(`${ind}  const ${save} = i; let ${ok} = true;`);
-        w(`${ind}  ${lbl}: {`);
-        renderSteps(st.body, w, ind + '    ', () => `{ ${ok} = false; break ${lbl}; }`, suffixMin);
-        w(`${ind}  }`);
-        if (st.min1) w(`${ind}  if (!${ok}) ${fail()}`);
-        else w(`${ind}  if (!${ok}) i = ${save};`);
+        const b = renderGuarded(st.body, ind + '    ', ok, lbl, suffixMin);
+        if (!b.fallible) {
+          outdent(b.lines).forEach(w);
+        } else if (st.min1) {
+          // a failed required first iteration fails the enclosing context, which restores
+          // its own position: nothing to save here
+          w(`${ind}  let ${ok} = true;`);
+          w(`${ind}  ${lbl}: {`);
+          b.lines.forEach(w);
+          w(`${ind}  }`);
+          w(`${ind}  if (!${ok}) ${fail()}`);
+        } else {
+          const save = tmp();
+          w(`${ind}  const ${save} = i; let ${ok} = true;`);
+          w(`${ind}  ${lbl}: {`);
+          b.lines.forEach(w);
+          w(`${ind}  }`);
+          w(`${ind}  if (!${ok}) i = ${save};`);
+        }
         w(`${ind}}`);
         return;
       }
@@ -368,11 +410,17 @@ export function generateCstMatch(grammar: Grammar): string {
         const lbl = tmp().replace('_t', '_b');
         w(`${ind}for (;;) {`);
         if (suffixMin > 0) w(`${ind}  if (cc - i <= ${suffixMin}) break;`);  // leave children for the required suffix
-        w(`${ind}  const ${save} = i; let ${ok} = true;`);
-        w(`${ind}  ${lbl}: {`);
-        renderSteps(st.body, w, ind + '    ', () => `{ ${ok} = false; break ${lbl}; }`, suffixMin);
-        w(`${ind}  }`);
-        w(`${ind}  if (!${ok}) { i = ${save}; break; }`);
+        const b = renderGuarded(st.body, ind + '    ', ok, lbl, suffixMin);
+        if (b.fallible) {
+          w(`${ind}  const ${save} = i; let ${ok} = true;`);
+          w(`${ind}  ${lbl}: {`);
+          b.lines.forEach(w);
+          w(`${ind}  }`);
+          w(`${ind}  if (!${ok}) { i = ${save}; break; }`);
+        } else {
+          w(`${ind}  const ${save} = i;`);
+          outdent(b.lines).forEach(w);
+        }
         w(`${ind}  if (i === ${save}) break;`);  // zero-width body guard
         w(`${ind}}`);
         return;
@@ -380,25 +428,39 @@ export function generateCstMatch(grammar: Grammar): string {
       case 'sep': {
         // element (delim element)* with the parser's trailing-delimiter tolerance:
         // a consumed delimiter whose following element fails STAYS consumed.
+        const ok0 = tmp();
+        const lbl0 = tmp().replace('_t', '_b');
+        const first = renderGuarded(st.element, ind + '    ', ok0, lbl0, suffixMin);
+        const delim = `${ind}    if (!${litCond(st.delimiter, st.delimTt)}) break;`;
+        w(`${ind}{`);
+        if (!first.fallible) {
+          // the element cannot fail (the same steps render the same way in the loop)
+          outdent(first.lines).forEach(w);
+          w(`${ind}  for (;;) {`);
+          w(delim);
+          w(`${ind}    i++;`);
+          renderSteps(st.element, w, ind + '    ', fail, suffixMin);
+          w(`${ind}  }`);
+          w(`${ind}}`);
+          return;
+        }
+        const save0 = tmp();
+        w(`${ind}  const ${save0} = i; let ${ok0} = true;`);
+        w(`${ind}  ${lbl0}: {`);
+        first.lines.forEach(w);
+        w(`${ind}  }`);
+        w(`${ind}  if (!${ok0}) { i = ${save0}; }`);
+        w(`${ind}  else for (;;) {`);
+        w(delim);
+        w(`${ind}    i++;`);
         const save = tmp();
         const ok = tmp();
         const lbl = tmp().replace('_t', '_b');
-        const ok0 = tmp();
-        const lbl0 = tmp().replace('_t', '_b');
-        w(`${ind}{`);
-        w(`${ind}  const ${save} = i; let ${ok0} = true;`);
-        w(`${ind}  ${lbl0}: {`);
-        renderSteps(st.element, w, ind + '    ', () => `{ ${ok0} = false; break ${lbl0}; }`, suffixMin);
-        w(`${ind}  }`);
-        w(`${ind}  if (!${ok0}) { i = ${save}; }`);
-        w(`${ind}  else for (;;) {`);
-        w(`${ind}    if (!${litCond(st.delimiter, st.delimTt)}) break;`);
-        w(`${ind}    i++;`);
-        w(`${ind}    const ${save}2 = i; let ${ok} = true;`);
+        w(`${ind}    const ${save} = i; let ${ok} = true;`);
         w(`${ind}    ${lbl}: {`);
         renderSteps(st.element, w, ind + '      ', () => `{ ${ok} = false; break ${lbl}; }`, suffixMin);
         w(`${ind}    }`);
-        w(`${ind}    if (!${ok}) { i = ${save}2; break; }`);
+        w(`${ind}    if (!${ok}) { i = ${save}; break; }`);
         w(`${ind}  }`);
         w(`${ind}}`);
         return;
@@ -412,7 +474,6 @@ export function generateCstMatch(grammar: Grammar): string {
             w(`${ind}  if (!${done}) { ${done} = true; ${assignExpr(st.cap, `{ branch: ${J(b.tag)} }`)} }`);
             continue;
           }
-          const save = tmp();
           const ok = tmp();
           const lbl = tmp().replace('_t', '_b');
           // branch-local capture temps, prefixed to avoid cross-branch collisions
@@ -423,13 +484,21 @@ export function generateCstMatch(grammar: Grammar): string {
             if (cp.card === 'many') w(`${ind}    const ${cp.name}: (${cp.tsType})[] = [];`);
             else w(`${ind}    let ${cp.name}: (${cp.tsType}) | undefined;`);
           }
-          w(`${ind}    const ${save} = i; let ${ok} = true;`);
-          w(`${ind}    ${lbl}: {`);
-          renderSteps(renameCaps(b.steps, pfx), w, ind + '      ', () => `{ ${ok} = false; break ${lbl}; }`, suffixMin);
-          w(`${ind}    }`);
+          const g = renderGuarded(renameCaps(b.steps, pfx), ind + '      ', ok, lbl, suffixMin);
           const fields = renamed.map(cp => `${cp.field}: ${cp.name}${cp.card === 'one' ? '!' : ''}`);
-          w(`${ind}    if (${ok}) { ${done} = true; ${assignExpr(st.cap, `{ branch: ${J(b.tag)}${fields.length ? ', ' + fields.join(', ') : ''} }`)} }`);
-          w(`${ind}    else i = ${save};`);
+          const take = `${done} = true; ${assignExpr(st.cap, `{ branch: ${J(b.tag)}${fields.length ? ', ' + fields.join(', ') : ''} }`)}`;
+          if (g.fallible) {
+            const save = tmp();
+            w(`${ind}    const ${save} = i; let ${ok} = true;`);
+            w(`${ind}    ${lbl}: {`);
+            g.lines.forEach(w);
+            w(`${ind}    }`);
+            w(`${ind}    if (${ok}) { ${take} }`);
+            w(`${ind}    else i = ${save};`);
+          } else {
+            outdent(g.lines).forEach(w);
+            w(`${ind}    ${take}`);
+          }
           w(`${ind}  }`);
         }
         w(`${ind}  if (!${done}) ${fail()}`);
@@ -525,7 +594,6 @@ export function generateCstMatch(grammar: Grammar): string {
   for (const rule of grammar.rules) {
     const plans = buildArms(rule);
     const tName = matchTypeName(rule.name);
-    const nName = nodeType(rule.name);
     // Result union type
     const unionMembers = plans.map(p => {
       const fields = p.captures.map(c => {
@@ -547,7 +615,7 @@ export function generateCstMatch(grammar: Grammar): string {
     // ("always") arms appear in every bucket at their declaration position; the buckets
     // are superset filters (each arm fn re-checks exactly).
     const admits = plans.map(p => firstAdmit(p.steps));
-    const tryLine = (k: number) => `    { const m = ${fns[k]}(t, n, cc, tb, src); if (m !== null) return m; }`;
+    const tryLine = (k: number) => `    { const m = ${fns[k].name}(${fns[k].args}); if (m !== null) return m; }`;
     const bucketLines = (pred: (keys: Set<string>) => boolean): string[] =>
       plans.map((_, k) => (admits[k].keys.size === 0 || pred(admits[k].keys) ? tryLine(k) : ''))
         .filter(Boolean);
@@ -586,6 +654,7 @@ export function generateCstMatch(grammar: Grammar): string {
           else cset.add(Number(key.slice(2)));
         }
       }
+      lines.push(`${pad}let e1 = 0; let _k1 = 0;`);
       lines.push(`${pad}if (cc < 2) {`);
       lines.push(...memberIdx.map((k, i) => (restAdmit[i] === null || restAdmit[i]!.canEmpty ? pad + '  ' + tryLine(k).trim() : '')).filter(Boolean));
       lines.push(`${pad}} else if ((e1 = __SC[1]) >= 0) {`);
@@ -637,7 +706,6 @@ export function generateCstMatch(grammar: Grammar): string {
     const disp: string[] = [];
     disp.push(`export function match${sanitizeIdent(rule.name)}(t: TreeAccess, n: NodeEntry<${J(rule.name)}>, tb: number, src: string): ${tName} {`);
     disp.push(`  const cc = __load(t, n);`);
-    disp.push(`  let e1 = 0; let _k1 = 0;`);
     disp.push(`  if (cc === 0) {`);
     for (let k = 0; k < plans.length; k++) if (admits[k].canEmpty || admits[k].keys.size === 0) disp.push(tryLine(k));
     disp.push(`  } else { const e0 = __SC[0];`);
@@ -728,29 +796,41 @@ export function generateCstMatch(grammar: Grammar): string {
   header.push(`// so one bulk load replaces a childAt round-trip per probe.`);
   header.push(`const __SC: number[] = [];`);
   header.push(`const __load = (t: TreeAccess, n: number): number => t.childrenInto(n, __SC);`);
-  header.push(`// kind: 1 = '$keyword' (leaf kind bit), 0 = '$punct' (type-derived + tok-kind 1).`);
-  header.push(`const __lit = (t: TreeAccess, cc: number, tb: number, i: number, src: string, text: string, kind: number): boolean => {`);
-  header.push(`  if (i >= cc) return false;`);
-  header.push(`  const e = __SC[i];`);
-  header.push(`  if (e >= 0 || t.leafKindOf(e) !== kind || (kind === 0 && t.leafTokKindOf(e, tb) !== 1)) return false;`);
-  header.push(`  const off = t.leafOffsetOf(e, tb);`);
-  header.push(`  return t.leafEndOf(e, tb) - off === text.length && src.startsWith(text, off);`);
-  header.push(`};`);
-  header.push(`const __tok = (t: TreeAccess, cc: number, tb: number, i: number, k: number): boolean => {`);
-  header.push(`  if (i >= cc) return false;`);
-  header.push(`  const e = __SC[i];`);
-  header.push(`  return e < 0 && t.leafKindOf(e) === 0 && t.leafTokKindOf(e, tb) === k;`);
-  header.push(`};`);
-  header.push(`const __opTok = (t: TreeAccess, cc: number, i: number): boolean => {`);
-  header.push(`  if (i >= cc) return false;`);
-  header.push(`  const e = __SC[i];`);
-  header.push(`  return e < 0 && t.leafKindOf(e) === 2;`);
-  header.push(`};`);
-  header.push(`const __nodeOf = (t: TreeAccess, cc: number, i: number, rid: number): boolean => {`);
-  header.push(`  if (i >= cc) return false;`);
-  header.push(`  const e = __SC[i];`);
-  header.push(`  return e >= 0 && t.ruleIdOf(e) === rid;`);
-  header.push(`};`);
+  // The child probes, each emitted only when some arm calls it.
+  const probes: [string, string[]][] = [
+    ['__lit', [
+      `// kind: 1 = '$keyword' (leaf kind bit), 0 = '$punct' (type-derived + tok-kind 1).`,
+      `const __lit = (t: TreeAccess, cc: number, tb: number, i: number, src: string, text: string, kind: number): boolean => {`,
+      `  if (i >= cc) return false;`,
+      `  const e = __SC[i];`,
+      `  if (e >= 0 || t.leafKindOf(e) !== kind || (kind === 0 && t.leafTokKindOf(e, tb) !== 1)) return false;`,
+      `  const off = t.leafOffsetOf(e, tb);`,
+      `  return t.leafEndOf(e, tb) - off === text.length && src.startsWith(text, off);`,
+      `};`,
+    ]],
+    ['__tok', [
+      `const __tok = (t: TreeAccess, cc: number, tb: number, i: number, k: number): boolean => {`,
+      `  if (i >= cc) return false;`,
+      `  const e = __SC[i];`,
+      `  return e < 0 && t.leafKindOf(e) === 0 && t.leafTokKindOf(e, tb) === k;`,
+      `};`,
+    ]],
+    ['__opTok', [
+      `const __opTok = (t: TreeAccess, cc: number, i: number): boolean => {`,
+      `  if (i >= cc) return false;`,
+      `  const e = __SC[i];`,
+      `  return e < 0 && t.leafKindOf(e) === 2;`,
+      `};`,
+    ]],
+    ['__nodeOf', [
+      `const __nodeOf = (t: TreeAccess, cc: number, i: number, rid: number): boolean => {`,
+      `  if (i >= cc) return false;`,
+      `  const e = __SC[i];`,
+      `  return e >= 0 && t.ruleIdOf(e) === rid;`,
+      `};`,
+    ]],
+  ];
+  for (const [name, lines] of probes) if (helpersUsed.has(name)) header.push(...lines);
   header.push(``);
 
   const footer = [
