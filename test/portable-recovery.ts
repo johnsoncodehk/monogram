@@ -60,7 +60,10 @@ const TOTAL_K = 4;
 // interpreter's farthest is `import` itself (no hint), the engine's the token its form guard read. The
 // interpreter's message on these inputs is master's. Re-measured on master a2ba418e (land/recovery-stage3)
 // merged in: javascript 5,412 of 5,902 rejects agree, typescript 6,051 of 6,868.
-const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5412, typescript: 6051 };
+// javascript 5412 -> 5349, typescript 6051 -> 6098 (land/grammar-decorators): `@` joins the grammar's
+// literals and typescript's decorator list gains accepts, so both mutant sets are drawn again
+// (javascript 5,349 of 5,850 rejects agree: 91.4%, was 91.7%; typescript 6,098 of 6,537: 93.3%, was 88.1%).
+const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5349, typescript: 6098 };
 const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // P10 EXPECTED-FAIL on `$missing`-only repairs, by class. GREEDY CAPTURE: the repair is right by
 // position (each supplied token is where the derivation needs it), but the substituted token is
@@ -80,9 +83,26 @@ const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // typescript + 'for (x = (y = (a in b)) declare c);' (master b8e42329, #199: its new literals draw
 // another set): the parse supplies '=>' twice and 'in'; in `… =>  declare =>  c in  x` the arrow
 // body takes the `in`. Re-measured on that merge: javascript unchanged.
+// land/grammar-decorators (`@` joins the literals: both sets drawn again): javascript draws neither
+// 'for (from x = function () { return a in b; } in c);' nor 'for (of of async y);' and gains
+// 'for (of of as y);' (`of => of => as => y in x`: the innermost arrow body takes the `in`); typescript
+// no longer draws 'for (x = (y = (a in b)) declare c);' and gains 'for (let [a = b in c] = of d);'
+// (`of => d in x`, the same capture).
 const P10_GREEDY_CAPTURE: Record<string, string[]> = {
-  javascript: ['for (from x = function () { return a in b; } in c);', 'for (of of async y);', 'for (async of x);', 'for (async of => 1 of x);'],
-  typescript: ['for (x = () => { for (asserts a in b); } in c);', 'for (of  y);', 'for ( of x);', 'for (async of x);', 'for (async of => 1 of x);', 'for (x = (y = (a in b)) declare c);'],
+  javascript: ['for (async of x);', 'for (async of => 1 of x);', 'for (of of as y);'],
+  typescript: ['for (x = () => { for (asserts a in b); } in c);', 'for (of  y);', 'for ( of x);', 'for (async of x);', 'for (async of => 1 of x);', 'for (let [a = b in c] = of d);'],
+};
+// P10 EXPECTED-FAIL, second class: LOOKAHEAD BYPASS. A lookahead was decided on the original tokens and
+// the supplied tokens make the repaired text one it refuses: typescript's `export` takes a Stmt after a
+// positive lookahead for a declaration word (`export` `not(not(alt('var', 'let', 'const', 'using',
+// ['await', 'using'])))` Stmt), so in `export await using private x = y;` the lookahead sees `await using`
+// and the Stmt is then repaired as three labels (`await :  using :  private :  x = y`), which the
+// lookahead admits but no `export` derivation does. The defect is the grammar's (`export let: x;`,
+// `export let.x = 1;` are accepted; acorn and tsc reject): it leaves with the Statement / Declaration
+// split (grammar lane: the `let` + line break item), which gives `export` the declarations themselves.
+// Listed since land/grammar-decorators (its `@` literal draws the mutant set that holds it).
+const P10_LOOKAHEAD_BYPASS: Record<string, string[]> = {
+  typescript: ['export await using private x = y;'],
 };
 // EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and
 // parseTotal alike) is not the oracle's. Not total parsing's property (parseTotal's verdict is its
@@ -128,7 +148,8 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
       return { ...t, cst: t.cst === undefined ? undefined : canon(mapTree(JSON.parse(t.cst), u)), errors: t.errors.map(row), strict: t.strict ? row(t.strict) : null };
     }) : raw;
     let primary = 0, farEq = 0, farN = 0, firstEq = 0, firstBefore = 0, firstAfter = 0, farFirstEq = 0, farFirstBefore = 0, farFirstAfter = 0, p10Known = 0;
-    const greedy = P10_GREEDY_CAPTURE[c.grammar] ?? [];
+    const p10Failing: string[] = [];
+    const greedy = [...(P10_GREEDY_CAPTURE[c.grammar] ?? []), ...(P10_LOOKAHEAD_BYPASS[c.grammar] ?? [])];
     const bad: string[] = [];
     let acc = 0, rec = 0, lexEq = 0, maxK = 0, maxAtt = 0, maxScope = 0;
     const rows: (ContractRow | null)[] = [];
@@ -186,7 +207,7 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
         const strict = r.interp([srcs[i]!], 1 << 30)[0]!.steps;
         const row = checkContract(srcs[i]!, toks, JSON.parse(g.cst), g.errors.map((e) => [e[0], e[1], e[2]]), g.steps, g.attempts, strict, samples,
           (s) => oracleOut(s).ok, bad, (k) => k === 'missing-only' && !greedy.includes(srcs[i]!));
-        if (greedy.includes(srcs[i]!)) { if (row && row.p10 === 'missing-only' && !row.p10ok) p10Known++; }
+        if (greedy.includes(srcs[i]!)) { if (row && row.p10 === 'missing-only' && !row.p10ok) { p10Known++; p10Failing.push(srcs[i]!); } }
         if (mutantSet.has(srcs[i]!)) rows.push(row);
       }
     });
@@ -204,7 +225,7 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
     }
     interpCheck(c, grammar, r, srcs, own, tokenize, bad);
     if (knownHits !== known.length) bad.push(`expected-fail: ${knownHits} of ${known.length} listed verdict divergences remain: remove the ones that agree now`);
-    if (r.lexToks && p10Known !== greedy.length) bad.push(`P10 expected-fail: ${p10Known} of ${greedy.length} listed greedy captures remain: remove the ones that hold now`);
+    if (r.lexToks && p10Known !== greedy.length) bad.push(`P10 expected-fail: ${p10Known} of ${greedy.length} listed greedy captures and lookahead bypasses remain: remove the ones that hold now (${JSON.stringify(greedy.filter((x) => !p10Failing.includes(x)))})`);
     if (farEq < (RECOVERY_FARTHEST_FLOOR[c.grammar] ?? 0)) bad.push(`farthest agreement ${farEq} dropped below its recorded floor ${RECOVERY_FARTHEST_FLOOR[c.grammar]}`);
     console.log(`  ${c.grammar}/${r.label}: recovery ${bad.length ? `${bad.length} MISMATCH` : 'ok'} over ${srcs.length} inputs (${mutants.length} mutants): ${acc} accepted with no errors, ${rec} rejected and recovered (lexer ≡ oracle ${lexEq}; strict error ≡ interpreter ${primary}, farthest ≡ its hint on ${farEq}/${farN} (counted); the first repair at the strict error ${firstEq}, before it ${firstBefore}, after it ${firstAfter}; at its farthest token ${farFirstEq}, before ${farFirstBefore}, after ${farFirstAfter}); steps ≤ ${maxK.toFixed(3)} × attempts × (tokens + 1) × rules; attempts per input ≤ ${maxAtt}, per scope ≤ ${maxScope}`);
     if (r.lexToks) console.log(summarize(`  ${c.grammar}/${r.label} on the mutants`, rows).split('\n').map((l, j) => (j ? `    ${l}` : l)).join('\n'));
