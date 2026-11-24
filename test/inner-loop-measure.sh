@@ -62,7 +62,10 @@ timing)
   ;;
 go-unused)
   out=/tmp/go-unused; mkdir -p "$out"
-  git config user.email ci@example.invalid; git config user.name ci
+  # This script commits probes: give THOSE commits an identity through the environment. Never `git config`:
+  # a worktree shares .git/config with the main checkout, and a config written here changed the author of
+  # every commit landed from that machine (51 commits on master, 2026-11-23 20:10 to 2026-11-24 06:21 UTC).
+  export GIT_AUTHOR_NAME=ci GIT_AUTHOR_EMAIL=ci@example.invalid GIT_COMMITTER_NAME=ci GIT_COMMITTER_EMAIL=ci@example.invalid
   grep -q 'const rxStateFrom = rx ? `\\tprevIsValue := func() bool {' src/target-go.ts || { echo "go-unused: the mutation site moved"; exit 1; }
   sed -i 's/const rxStateFrom = rx ? `/&\\tunusedProbe := 0\\n/' src/target-go.ts
   git diff | grep '^[-+] '; git commit -qam 'go-unused probe'
@@ -76,7 +79,10 @@ go-unused)
 catch)
   spec=${2:?branch:sha}; B=${spec%%:*}; F=$(git rev-parse "${spec#*:}^{commit}"); L=origin/land/$B
   out=/tmp/catch-out; mkdir -p "$out"
-  git config user.email ci@example.invalid; git config user.name ci
+  # This script commits probes: give THOSE commits an identity through the environment. Never `git config`:
+  # a worktree shares .git/config with the main checkout, and a config written here changed the author of
+  # every commit landed from that machine (51 commits on master, 2026-11-23 20:10 to 2026-11-24 06:21 UTC).
+  export GIT_AUTHOR_NAME=ci GIT_AUTHOR_EMAIL=ci@example.invalid GIT_COMMITTER_NAME=ci GIT_COMMITTER_EMAIL=ci@example.invalid
   mb() { git merge-base "$1" origin/master; }
   # the files the branch changed, at the failing head and at its last head; generated artifacts and
   # prose are regenerated or irrelevant; the loop's own tooling (check.ts, gate-deps, this script,
