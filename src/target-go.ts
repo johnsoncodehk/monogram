@@ -11,7 +11,7 @@
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
-import { hasRebind, nudLowForm, hasUnaryNud, demandTwinCond, demandLids, DEFER_SHIFT, type DemandIR, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, nudLowForm, hasUnaryNud, demandTwinCond, demandLids, DEFER_SHIFT, type DemandIR, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
@@ -1153,7 +1153,7 @@ function goRowOpRead(r: PrattRule, ids: LexIdPlan, withEnd: boolean, dem: boolea
 function gtOpRead(ids: LexIdPlan, withEnd: boolean): string {
   if (ids.gtComps.length === 0) return withEnd ? `\t\topLid, opN, opEnd := t.Lid, 1, t.End` : `\t\topLid, opN := t.Lid, 1`;
   return `\t\topLid, opN, ${withEnd ? 'opEnd' : '_'} := gtOp(p.toks, p.pos)
-\t\tif t.Lid == ${lidOf(ids, '>')} { if e := p.pos + opN + 1; e > p.maxLook { p.maxLook = e } }`;
+\t\tif ${goLeadIs(ids, 't.Lid')} { if e := p.pos + opN + 1; e > p.maxLook { p.maxLook = e } }`;
 }
 // An entry's extent (EntryMeta.Ext): one past the furthest token its parse examined. A read past
 // the current token (secondIn, a composed '>') records into maxLook at once; a peek records only
@@ -1223,6 +1223,11 @@ func (p *${recv}) nudOk(n spanned, tail, capped bool) (spanned, bool) { p.form =
 // punct token (kid 0) is the text of its lid, and gtStep names only one-character lids, so no
 // length (which is in bytes here, not characters) is compared.
 // leafEnd is a leaf's end offset: an operator leaf at a '>' spans the composite read there.
+// Whether lid expression x is a composite's lead (compLeadLids: `>`, `<`); `inAnd` parenthesizes a disjunction.
+function goLeadIs(ids: LexIdPlan, x: string, inAnd = false): string {
+  const t = compLeadLids(ids).map((l) => `${x} == ${l}`);
+  return t.length > 1 && inAnd ? `(${t.join(' || ')})` : t.join(' || ');
+}
 function gtRuntimeGo(ids: LexIdPlan, ar: ArenaIdPlan): string {
   if (ids.gtComps.length === 0) {
     return `func gtOp(ts []Tok, i int) (uint16, int, uint32) { return ts[i].Lid, 1, ts[i].End }
@@ -1242,7 +1247,7 @@ ${arms.join('\n')}
 func gtOp(ts []Tok, i int) (lid uint16, n int, end uint32) {
 \tt := &ts[i]
 \tlid, n, end = t.Lid, 1, t.End
-\tif lid != ${lidOf(ids, '>')} { return }
+\tif ${compLeadLids(ids).map((l) => `lid != ${l}`).join(' && ')} { return }
 \tfor j := i + 1; j < len(ts); j++ {
 \t\tu := &ts[j]
 \t\tif u.Kid != 0 || u.Off != end { break }
@@ -1253,7 +1258,7 @@ func gtOp(ts []Tok, i int) (lid uint16, n int, end uint32) {
 \treturn
 }
 func leafEnd(ts []Tok, ti uint32, tt uint8) uint32 {
-\tif tt == ${ttIdOf(ar, '$operator')} && ts[ti].Lid == ${lidOf(ids, '>')} { _, _, e := gtOp(ts, int(ti)); return e }
+\tif tt == ${ttIdOf(ar, '$operator')} && ${goLeadIs(ids, 'ts[ti].Lid', true)} { _, _, e := gtOp(ts, int(ti)); return e }
 \treturn ts[ti].End
 }`;
 }
@@ -2808,7 +2813,7 @@ function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, share
   const docWithBlock = emitDocWithGo(ir, entryRid, shapeA, shapeB, hasHeadB, !!topReuse, initToks);
   // The span of a built-in builder's node (an arena of Nodes) from its first and last children,
   // read in place as SpanOf of each would read it; only an operator leaf at a '>' (leafEnd) needs a call.
-  const gtLeaf = ids.gtComps.length ? `; if tt == ${ttIdOf(ar, '$operator')} && t.Lid == ${lidOf(ids, '>')} { end = leafEnd(toks, ti, tt) }` : '';
+  const gtLeaf = ids.gtComps.length ? `; if tt == ${ttIdOf(ar, '$operator')} && ${goLeadIs(ids, 't.Lid', true)} { end = leafEnd(toks, ti, tt) }` : '';
   const kidsSpanGo = `\tif nn > sb {
 \t\tif first := s[sb]; first < 0 { ti, _ := decodeLeaf(first); off = toks[ti].Off } else { off = b.Nodes[first].Offset }
 \t\tif last := s[nn-1]; last < 0 { ${gtLeaf ? 'ti, tt' : 'ti, _'} := decodeLeaf(last); t := &toks[ti]; end = t.End${gtLeaf} } else { end = b.Nodes[last].End }
@@ -3409,7 +3414,7 @@ function recoveryEngineGo(ir: ParserIR): string {
     return d.body;
   };
   const opRead = ids.gtComps.length === 0 ? '\tlid, n, end := t.Lid, 1, t.End'
-    : `\tlid, n, end := gtOp(p.toks, p.pos)\n\tif t.Lid == ${lidOf(ids, '>')} { if e := p.pos + n + 1; e > p.maxLook { p.maxLook = e } }`;
+    : `\tlid, n, end := gtOp(p.toks, p.pos)\n\tif ${goLeadIs(ids, 't.Lid')} { if e := p.pos + n + 1; e > p.maxLook { p.maxLook = e } }`;
   const out = `// recov: the interpreter's engine over p, the marks it took, the plan's decoded table, the offset
 // of the node it last finished, the binary operator it last read, and the steps of the run.
 type recov struct {

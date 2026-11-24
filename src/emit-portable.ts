@@ -1051,7 +1051,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
     const lits: string[] = [], toks: string[] = [];
     for (const k of keys) {
       if (tokenNames.has(k)) { toks.push(k); if (templateTokens.has(k)) toks.push('$templateHead'); }   // an interpolated template opens with its head
-      else lits.push(gtComps.includes(k) ? '>' : k);                                                    // a composed operator begins at a '>' token
+      else lits.push(gtComps.includes(k) ? k[0]! : k);                                                   // a composed operator begins at its lead's token ('>' or '<')
     }
     return { lits, toks };
   };
@@ -1104,7 +1104,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   // are one pair. Sound as Guard.second is: every
   // match beginning with l continues with a token of the set.
   const rdItems = new Map<string, RuleExpr[]>();   // an rd rule's alternatives, for its pairs (pairsOf, once kindsOf is known)
-  const kindsOfKey = (l: string) => kindsOf(gtComps.includes(l) ? '>' : l);
+  const kindsOfKey = (l: string) => kindsOf(gtComps.includes(l) ? l[0]! : l);
   const subsetTok = (x: TokenSet, y: TokenSet) => x.toks.every((k) => y.toks.includes(k)) && x.lits.every((l) => y.lits.includes(l) || [...kindsOf(l)].some((k) => y.toks.includes(k)));
   // Whether a candidate can be tried at a token with literal l: its first set and its lead tests
   // (a context word: the context in force decides, so it can).
@@ -1251,7 +1251,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
     if (steps.length === 0) return null;
     const s = steps[0];
     switch (s.t) {
-      case 'lit': return { lits: [gtComps.includes(s.value) ? '>' : s.value], toks: [] };   // a composed operator begins at a '>' token
+      case 'lit': return { lits: [gtComps.includes(s.value) ? s.value[0]! : s.value], toks: [] };   // a composed operator begins at its lead's token
       case 'tok': return { lits: [], toks: templateTokens.has(s.name) ? [s.name, '$templateHead'] : [s.name] };   // an interpolated template opens with its head
       case 'altlit': return { lits: s.opts.map((o) => o.value), toks: [] };
       case 'rule': case 'ruleBp': { const f = ruleLead.get(s.name); return f === undefined ? null : f; }
@@ -1435,7 +1435,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   for (const r of rules) {
     if (r.kind !== 'pratt' || cleanRules.has(r.name)) continue;
     const d = concrete.first1({ type: 'ref', name: r.name });
-    for (const o of [...r.binary.filter((b) => b.requireTarget || b.noUnaryLhs), ...r.postfix.filter((x) => x.requireTarget)]) d.add(gtComps.includes(o.op) ? '>' : o.op);
+    for (const o of [...r.binary.filter((b) => b.requireTarget || b.noUnaryLhs), ...r.postfix.filter((x) => x.requireTarget)]) d.add(gtComps.includes(o.op) ? o.op[0]! : o.op);
     dirtyAt.set(r.name, d);
   }
   const refusesAll = (next: Step | undefined, d: Set<string>): boolean => {
@@ -2820,7 +2820,7 @@ export function prattLedExits(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' 
   const exits = new Set<number>();
   for (const b of r.leds) {
     const ks = kinds(b.first);
-    const later = ops.has(b.first) || (b.first === '>' && ir.gtComps.length > 0)
+    const later = ops.has(b.first) || ir.gtComps.some((c) => c[0] === b.first)
       || [...ks].some((k) => r.postfixToks.includes(k)) || (r.postfixTplHole !== undefined && ks.has('$templateHead'));
     if (!later) exits.add(lidOf(plan, b.first));
   }
@@ -2896,6 +2896,11 @@ export function sepDelimLid(plan: LexIdPlan, delim: string): number {
   if (lid >= plan.kwLid) throw new Error(`sep delimiter ${JSON.stringify(delim)} is a word: the portable targets match a delimiter as punctuation`);
   if (plan.gtComps.includes(delim)) throw new Error(`sep delimiter ${JSON.stringify(delim)} is a composed '>' literal: the portable targets match a delimiter as one token`);
   return lid;
+}
+/** The lids a composite begins at (grammar-utils compositeLeads: `>` under composeGt, `<` under
+ *  composeLt), in a fixed order; each printer tests a token's lid against these. */
+export function compLeadLids(plan: LexIdPlan): number[] {
+  return [...new Set(plan.gtComps.map((c) => c[0]!))].map((l) => lidOf(plan, l));
 }
 /** Whether a literal step is a composed '>'-led literal (LexIdPlan.gtComps), decided at generation
  *  time: it spans several tokens and is only a lookahead operand, so it is matched by the target's
