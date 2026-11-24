@@ -228,6 +228,8 @@ interface GrammarJsContext {
   nullableNonStart: Set<string>;
   /** FIRST/FOLLOW terminal sets of the tree-sitter view of the grammar (see greedyTail). */
   terminalSets: TerminalSets;
+  /** While one Pratt NUD arm renders: its trailing self operands (trailingOperands), read whole. */
+  wholeOperand?: Set<RuleExpr>;
   /** While one Pratt arm renders (renderGreedySuffix): the parts that carry dynamic precedence. */
   dynamicPrecedence?: Map<RuleExpr, number>;
   /** Rules declared as a conflict of their own (`[$.rule]`): GLR keeps every parse of their
@@ -696,6 +698,7 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuard
       return `seq(optional(${m.length === 1 ? m[0] : `choice(${m.join(', ')})`}), ${renderExpr(expr, ctx, wordGuard)})`;
     } finally { ctx.renderedMarkers.delete(expr); ctx.writtenMarkers.add(expr); }
   }
+  if (ctx.wholeOperand?.has(expr)) return `prec.right(0, ${renderExpr(expr, { ...ctx, wholeOperand: undefined }, wordGuard)})`;
   const dyn = ctx.dynamicPrecedence?.get(expr);
   if (dyn !== undefined) {
     ctx.dynamicPrecedence!.delete(expr);   // once: the wrapped rendering below is the same node
@@ -899,7 +902,7 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
   }
 
   let sawInfix = false, sawPrefix = false, sawPostfix = false;
-  const atomBranches: string[] = [], atomAlts: RuleExpr[] = [];
+  const atomBranches: string[] = [], atomAlts: RuleExpr[] = [], atomOperands: (Set<RuleExpr> | undefined)[] = [];
   // What stands between the operand and a postfix operator (`[$, sameLine, postfix]`): a same-line
   // marker renders as its zero-width token, any other assertion as nothing.
   let postfixBetween = '';
@@ -927,7 +930,10 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
     // Non-operator alternative: an atom or a left-recursive continuation
     // (member access `[$, '.', Ident]`, call `[$, '(', …, ')']`, generics, etc.).
     // Render as-is; give it a baseline precedence so it doesn't outrank operators.
-    atomBranches.push(renderExpr(alt, ctx));
+    const operand = alt.type === 'seq' && alt.items[0]?.type === 'ref' && alt.items[0].name === rule.name ? new Set<RuleExpr>() : trailingOperands(rule.name, alt);
+    atomOperands.push(operand.size ? operand : undefined);
+    ctx.wholeOperand = atomOperands[atomOperands.length - 1];
+    try { atomBranches.push(renderExpr(alt, ctx)); } finally { ctx.wholeOperand = undefined; }
     atomAlts.push(alt);
   }
 
@@ -970,11 +976,33 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
       if (!ab.endsWith(`, ${t})`)) throw new Error(`gen-treesitter: the continuation ${ab} does not end in its operand ${t}`);
       branches.push(dyn(`seq(prec.left(${num}, ${ab.slice(0, ab.length - t.length - 3)})), ${t})`));
     } else {
-      branches.push(order.suffixWeight > 0 ? renderGreedySuffix(atomAlts[i], order, ctx) ?? ab : ab);
+      ctx.wholeOperand = atomOperands[i];
+      try { branches.push(order.suffixWeight > 0 ? renderGreedySuffix(atomAlts[i], order, ctx) ?? ab : ab); } finally { ctx.wholeOperand = undefined; }
     }
   }
 
   return `choice(\n      ${branches.join(',\n      ')}\n    )`;
+}
+
+/**
+ * A Pratt rule's NUD arm that ends in the rule itself (`['yield', '*', $]`, `['...', $]`, `['<', Type,
+ * '>', $]`, an arrow's concise body) reads that operand as the interpreter reads any operand of a
+ * non-operator arm: a fresh expression at the lowest binding power, so it takes every operator and
+ * continuation that follows (`yield* a + b` is `yield* (a + b)`, `yield* g as I` is `yield* (g as
+ * I)`). Its last step renders as `prec.right(0, $.expr)`: every operator's precedence is above 0 and a
+ * continuation without one ties and shifts by the associativity, so the operand's end loses to each
+ * shift statically. Before, the production's end carried no precedence, the choice was a GLR fork in
+ * `[expr]`, and where both readings parse tree-sitter kept one by tree shape (`(yield* a) + b`). Only
+ * the last step carries it (the reduce precedence is the last step's), so no shift of the arm's own
+ * tokens elsewhere changes. An operand under a quantifier (`yield` with an optional operand) is left
+ * to its own rendering.
+ */
+function trailingOperands(self: string, e: RuleExpr, out = new Set<RuleExpr>()): Set<RuleExpr> {
+  const v = tsView(e);
+  if (v.type === 'ref') { if (v.name === self) out.add(e); }
+  else if (v.type === 'seq') { const last = [...v.items].reverse().find(x => !ASSERTION_KINDS.has(tsView(x).type)); if (last && v.items.length > 1) trailingOperands(self, last, out); }
+  else if (v.type === 'alt') for (const a of v.items) trailingOperands(self, a, out);
+  return out;
 }
 
 /**
