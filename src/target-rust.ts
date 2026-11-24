@@ -5631,7 +5631,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
       if (s.inline !== undefined && RS_IND.length * s.depth + head.length + s.inline.length + 5 <= 110) return [`${head} { ${s.inline} }`];
       return [`${head} {`, ...rsBlock(s.then), ...(s.else ? ['} else {', ...rsBlock(s.else)] : []), '}'];
     },
-    while: (c, body) => [`while ${c} {`, ...rsBlock(body), '}'],
+    while: (c, body) => [c === 'true' ? 'loop {' : `while ${c} {`, ...rsBlock(body), '}'],
     break: () => ['break;'],
     run: (call) => `${call};`,
     return: (vals) => [`return ${vals.length === 1 ? vals[0] : `(${vals.join(', ')})`};`],
@@ -5993,7 +5993,7 @@ pub struct Diagnostic { pub off: usize, pub end: usize, pub message: String, pub
 pub struct Related { pub off: usize, pub end: usize, pub message: String }
 #[cold]
 fn diagnostic_of(src: &str, d: Diag) -> Diagnostic {
-    let related = if d.rel_off >= 0 { Some(Related { off: d.rel_off as usize, end: d.rel_end as usize, message: diag_related(d) }) } else { None };
+    let related = if d.rel_off >= 0 { Some(Related { off: d.rel_off as usize, end: d.rel_end as usize, message: diag_related() }) } else { None };
     Diagnostic { off: d.off as usize, end: d.end as usize, message: diag_message(src, d), related }
 }
 

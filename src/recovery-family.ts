@@ -77,7 +77,7 @@ const diagMessageOf = (labels: [number, string][]): Fn => ({
 const diagRelated: Fn = {
   name: 'diagRelated',
   doc: '',
-  params: [{ name: 'd', ty: 'rec_Diag' }],
+  params: [],
   ret: ['str'],
   body: [ret(s('the parse reached this far'))],
 };
@@ -914,7 +914,6 @@ const riUnit = method('riUnit', [['el', 'int'], ['upto', 'int']], ['bool'], [
     if_(bin('le', v('p1'), v('p0')), [ret(fls)]),
     if_(gt(v('p1'), v('upto')), [ret(tru)]),
   ]),
-  ret(fls),
 ]);
 // The attempts at one scope: attempt 0 strict, each next one with one more bar; whether one matched
 // (its nodes and repairs kept; a failed one undone).

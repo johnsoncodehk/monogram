@@ -3344,7 +3344,7 @@ function ${findAnyName(stops)}(s: string, i: number): number {
     break: () => ['break;'],
     run: (call) => `${call};`,
     return: (vals, fn) => {
-      if (!tsSlotted(fn.ret)) return [`return ${vals.length === 1 ? vals[0] : `[${vals.join(', ')}]`};`];
+      if (!tsSlotted(fn.ret)) return [vals.length === 0 ? 'return;' : `return ${vals.length === 1 ? vals[0] : `[${vals.join(', ')}]`};`];
       // The first value is returned, the others are left in the function's slots. When a value
       // calls a family function, every value is computed first, in order, as an array literal
       // computes them: the call (this function again, or one that calls it) would otherwise run
@@ -3727,7 +3727,7 @@ ${recoveryEngineTs(ir)}
 export type Diagnostic = { offset: number; end: number; message: string; related?: { offset: number; end: number; message: string } };
 function diagnosticOf(src: string, d: Diag): Diagnostic {
   const out: Diagnostic = { offset: d.off, end: d.end, message: diagMessage(src, d) };
-  if (d.relOff >= 0) out.related = { offset: d.relOff, end: d.relEnd, message: diagRelated(d) };
+  if (d.relOff >= 0) out.related = { offset: d.relOff, end: d.relEnd, message: diagRelated() };
   return out;
 }
 // The strict parse's error over toks: the entry rule run as runW runs it, and its diagnostic. The

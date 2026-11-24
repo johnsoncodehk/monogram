@@ -3277,7 +3277,7 @@ ${[...ones, ...wides].join('\n')}
       if (s.inline !== undefined && GO_IND.length * s.depth + head.length + s.inline.length + 5 <= 110) return [`${head} { ${s.inline} }`];
       return [`${head} {`, ...goBlock(s.then), ...(s.else ? ['} else {', ...goBlock(s.else)] : []), '}'];
     },
-    while: (c, body) => [`for ${c} {`, ...goBlock(body), '}'],
+    while: (c, body) => [c === 'true' ? 'for {' : `for ${c} {`, ...goBlock(body), '}'],
     break: () => ['break'],
     run: (call) => call,
     return: (vals) => [`return ${vals.join(', ')}`],
@@ -3592,7 +3592,7 @@ type Related struct {
 }
 func diagnosticOf(src string, d diag) Diagnostic {
 	out := Diagnostic{Off: d.Off, End: d.End, Message: diagMessage(src, d)}
-	if d.RelOff >= 0 { out.Related = &Related{Off: d.RelOff, End: d.RelEnd, Message: diagRelated(d)} }
+	if d.RelOff >= 0 { out.Related = &Related{Off: d.RelOff, End: d.RelEnd, Message: diagRelated()} }
 	return out
 }
 
