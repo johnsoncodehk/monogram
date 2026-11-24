@@ -8,8 +8,10 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { emitParser } from '../src/target.ts';
 import { rustTarget } from '../src/target-rust.ts';
+import { tsTarget } from '../src/target-ts.ts';
 import { createParser } from '../src/gen-parser.ts';
 import { evaluateShape, defineShape } from '../src/shape2-eval.ts';
 import { child, node, text } from '../src/shape2-schema.ts';
@@ -96,6 +98,21 @@ check('namedcalc', calcExample, ['let x = 1 + 2 * y;', '-3; (a - b) / c;', 'x;',
     walk(dir);
     const tscSyn = (await import('./fixtures/shape-tsc-synthesized.ts')).default;
     check('tsc-synthesized', tscSyn, files.map((f) => readFileSync(f, 'utf8')), true);
+    // Escaped identifiers (the corpus has none): an IdentifierName is its span only while no
+    // identifier of the source has an escape (cookIdentSpan); backslashes in strings and regular
+    // expressions do not count, one escaped identifier anywhere sends every identifier to the cook.
+    const escRows = ['"a\\nb"; /x\\d/; abc;', '\\u0061bc; x.\\u{62}c; abc;', 'f("\\t", y); \\u{78}y = 1;'];
+    check('tsc-escapes', tscSyn, escRows, true);
+    // The TypeScript target's shape build carries the same fact (target-ts.ts escScan): its parse()
+    // on the same rows.
+    const tsFile = join(TMP, 'tsc-escapes.ts');
+    writeFileSync(tsFile, emitParser(tscSyn.source, tsTarget, { shape: tscSyn }));
+    const tsm = await import(pathToFileURL(tsFile).href);
+    for (const src of escRows) {
+      const got = `A\t${JSON.stringify(canon(JSON.parse(JSON.stringify(tsm.parse(src)))))}`, w = want(tscSyn, src);
+      rows++; kinds.set('tsc-escapes ts A', (kinds.get('tsc-escapes ts A') ?? 0) + 1);
+      if (got !== w) { failures++; console.error(`✗ tsc-escapes (ts) ${JSON.stringify(src)}:\n    ${firstDiff(JSON.parse(got.slice(2)), JSON.parse(w.slice(2)))}`); }
+    }
   } else console.log('  (conformance/expressions absent: run $SHARED/restore-corpus.sh; the tsc rows skipped)');
 }
 

@@ -299,7 +299,7 @@ function typedDecls(st: RsShape): string {
 
 /** The runtime: value words, the typed support, the builder and the plans' engine methods.
  * `fns`: the construct plans printed by algo-ir (methods of Ast). */
-export function rsShapeRuntime(st: RsShape, fns: string): string {
+export function rsShapeRuntime(st: RsShape, fns: string, escKids: number[]): string {
   const plan = st.plan, T = st.types;
   const nsyn = plan.syn.length;
   const tplMiss = intern(st, 'unsupported node (an interpolated template)');
@@ -339,6 +339,8 @@ fn sh_kind_name(k: u32) -> &'static str { [${T.kinds.map((k) => rsStr(k.name)).j
 /// Set true by hand to trace every construct's slots (a debugging aid; false in every build).
 const SH_DEBUG: bool = false;
 const SH_SYN0: [W; ${nsyn}] = [${synDefault.join(', ')}];
+/// The token kinds whose leaves the plans cook through cook_ident_span (ShapePlan.identCookTokens).
+const SH_ESC_KIDS: [u16; ${escKids.length}] = [${escKids.join(', ')}];
 
 /// A handle to a node (or record) of kind T in its arena.
 pub struct Id<T>(pub u32, PhantomData<T>);
@@ -409,6 +411,26 @@ impl Default for Slot { fn default() -> Self { Slot { w: W_ABSENT, tag: -1, arm:
 fn slot_find(s: &[Slot], lo: usize, hi: usize, t0: isize, t1: isize) -> isize { for i in lo..hi { let t = s[i].tag as isize; if t >= t0 && t <= t1 { return i as isize; } } -1 }
 fn slot_find_last(s: &[Slot], lo: usize, hi: usize, t0: isize, t1: isize) -> isize { for i in (lo..hi).rev() { let t = s[i].tag as isize; if t >= t0 && t <= t1 { return i as isize; } } -1 }
 #[inline(always)] fn slot_at(s: &[Slot], i: usize, lo: usize, hi: usize, t0: isize, t1: isize) -> isize { if i < lo || i >= hi { return -1; } let t = s[i].tag as isize; if t >= t0 && t <= t1 { i as isize } else { -1 } }
+/// The first backslash in b from i: 32 bytes per round with SSE2 where it is the baseline (x86_64; a
+/// Rust codegen fact: core's memchr does 16 bytes per round with integer words), else a byte loop.
+#[cfg(target_arch = "x86_64")]
+fn find_backslash(b: &[u8], mut i: usize) -> Option<usize> {
+    use std::arch::x86_64::*;
+    // SAFETY: SSE2 is part of the x86_64 baseline; every load reads b[i..i + 32] with i + 32 <= b.len().
+    unsafe {
+        let k = _mm_set1_epi8(b'\\\\' as i8);
+        while i + 32 <= b.len() {
+            let x = _mm_cmpeq_epi8(_mm_loadu_si128(b.as_ptr().add(i) as *const __m128i), k);
+            let y = _mm_cmpeq_epi8(_mm_loadu_si128(b.as_ptr().add(i + 16) as *const __m128i), k);
+            let m = _mm_movemask_epi8(_mm_or_si128(x, y));
+            if m != 0 { let lo = _mm_movemask_epi8(x) as u32 | (_mm_movemask_epi8(y) as u32) << 16; return Some(i + lo.trailing_zeros() as usize); }
+            i += 32;
+        }
+    }
+    b[i..].iter().position(|&c| c == b'\\\\').map(|j| i + j)
+}
+#[cfg(not(target_arch = "x86_64"))]
+fn find_backslash(b: &[u8], i: usize) -> Option<usize> { b[i..].iter().position(|&c| c == b'\\\\').map(|j| i + j) }
 fn named_end(s: &[Slot], lo: usize, hi: usize) -> isize { for i in (lo..hi).rev() { let t = s[i].tag; if t >= 0 && t & 1 == 0 { return s[i].end as isize; } } -1 }
 
 /// The shape's AST (and, while parsing, its builder): one arena per kind, the list slab, the cooked
@@ -421,6 +443,9 @@ pub struct Ast<'s> {
     owned: Vec<String>,
     ys: [W; ${nsyn}],
     ws: Workspace<Slot>,
+    /// The offsets of the tokens of SH_ESC_KIDS with a backslash in this source (lexed), ascending:
+    /// almost always none.
+    esc: Vec<u32>,
 ${T.kinds.map((k, i) => `    pub a${i}: Vec<${rsTy(k.name)}>,`).join('\n')}
 }
 impl<'s> Ast<'s> {
@@ -457,6 +482,26 @@ impl<'s> Ast<'s> {
     fn w_items(&self, w: W) -> std::iter::Copied<std::slice::Iter<'_, W>> { let s = (w >> 24) as usize & 0xFF_FFFF; self.slab[s..s + (w as usize & 0xFF_FFFF)].iter().copied() }
     // The plans' engine methods (src/shape-plan.ts EXTERNS) other than the slot reads (RS_SLOT).
     #[inline(always)] fn src_text(&self, a: u32, b: u32) -> SrcStr<'s> { SrcStr(&self.src[a as usize..b as usize]) }
+    /// The word of the source text s[a, b): its span (w_text without the string in between).
+    #[inline(always)] fn text_span(&mut self, a: u32, b: u32) -> W { if b - a < 0x1_0000 { T_SPAN | (a as u64) << 16 | (b - a) as u64 } else { let s = self.src_text(a, b); self.w_text(s) } }
+${escKids.length ? `    /// cook_identifier_name of one token s[a, b) of SH_ESC_KIDS: its span when no such token has an escape.
+    #[inline(always)] fn cook_ident_span(&mut self, a: u32, b: u32) -> W { if self.esc.is_empty() || self.esc.binary_search(&a).is_err() { self.text_span(a, b) } else { self.cook_ident_slow(a, b) } }
+    #[inline(never)] fn cook_ident_slow(&mut self, a: u32, b: u32) -> W { let s = self.src_text(a, b); self.cook_identifier_name(s.as_str()) }
+` : ''}    /// The tokens of SH_ESC_KIDS that contain a backslash, into esc: each backslash of the source
+    /// (memchr) is looked up in the token table (sorted by offset); a token's other backslashes are skipped.
+    fn esc_scan(src: &str, toks: &[Tok], esc: &mut Vec<u32>) {
+        esc.clear();
+        if SH_ESC_KIDS.is_empty() { return; }
+        let b = src.as_bytes();
+        let mut p = 0usize;
+        while let Some(q) = find_backslash(b, p) {
+            let t = toks.partition_point(|t| (t.end as usize) <= q);
+            if t < toks.len() && (toks[t].off as usize) <= q {
+                if SH_ESC_KIDS.contains(&toks[t].kid) { esc.push(toks[t].off); }
+                p = toks[t].end as usize;
+            } else { p = q + 1; }
+        }
+    }
     fn w_span(&self, x: W) -> Option<(u32, u32)> {
         if x & TAGM != T_NODE { return None; }
         let id = x as u32 as usize;
@@ -501,6 +546,7 @@ ${fns.split('\n').map((l) => (l ? `    ${l}` : l)).join('\n')}
 }
 impl<'s> Builder for Ast<'s> {
     type H = Slot;
+    fn lexed(&mut self, src: &str, toks: &[Tok]) { let mut esc = std::mem::take(&mut self.esc); Self::esc_scan(src, toks, &mut esc); self.esc = esc; }
     #[inline(always)]
     fn leaf(&mut self, scratch: &mut Vec<Slot>, _tt_id: u16, _tok_idx: u32, off: u32, end: u32) -> bool {
         scratch.push(Slot { w: W_ABSENT, tag: -1, arm: -1, off, end, ho: off, he: end, sy: SH_SYN0 });
