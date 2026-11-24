@@ -98,7 +98,7 @@ ${engine}${lib.slice(b)}
 let __headFirst = false;
 function __isHead(): boolean { return __headFirst; }
 export function __oracle(src: string): [number, number, number][] | null {
-  _src = src;
+  ${/\nlet _src\b/.test(lib) ? '_src = src;' : '// (no rule of this grammar reads the source text: the module has no _src)'}
   const all = lex(src);
   if (parseTokens(all) === null) return null;
   const ents = _entries.map((e) => ({ ...e }));
