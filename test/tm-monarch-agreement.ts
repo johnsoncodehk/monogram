@@ -42,10 +42,10 @@ const DISPOSITION: Record<string, [string, string]> = {
   'name -> keyword  (after `.`)': ['monarch', 'a name after a member-access text is a property, never a keyword (`e.type`, `m.get`)'],
   'text -> punct': ['textmate', 'TextMate gives a bracket in a type position no scope at all'],
   'name -> type': ['open', ''],
-  'name -> keyword': ['monarch', 'a contextual keyword used as a name where its follower set does not tell (`set,` after a word, `of` before a word)'],
+  'name -> keyword': ['open', 'mixed: Monarch, a contextual keyword used as a name before a word (`import defer as ns`); TextMate, a keyword it reads as a name (`super()`, `static \\u{6F}()`, `new function`)'],
   'keyword -> name': ['open', ''],
   'type -> keyword': ['monarch', 'the parser reads `const` in `as const` as a type name (Type -> Ident); Monarch has no type context after `as`'],
-  'keyword -> punct': ['monarch', '`void` in a type position is a type name to the parser (TextMate: the primitive keyword); Monarch has no type context'],
+  'keyword -> punct': ['convention', 'TextMate: `void` in a type position is its primitive keyword (the parser reads a type name; Monarch has no type context) and the `*` of `import * as` is constant.language (the official grammar\'s convention)'],
   'name -> punct': ['monarch', 'an operator word as a property name (`s.is`, `x.delete`)'],
   'text -> name': ['convention', 'a Unicode 15 identifier character: vscode-oniguruma\'s Unicode tables are older than V8\'s (both read \\p{ID_Start})'],
   'text -> invalid': ['monarch', 'a non-ASCII identifier character Monarch does not read'],
@@ -79,7 +79,9 @@ export async function agreement(): Promise<number> {
     const now = out[lang].classes, was: Record<string, number> = old[lang]?.classes ?? {};
     const wasAgree: number | undefined = old[lang]?.agree;
     if (wasAgree !== undefined && out[lang].agree < wasAgree) { bad++; console.log(`  ✗ AGREEMENT FELL    ${lang}: ${out[lang].agree}% (record ${wasAgree}%)`); }
-    for (const k of [...new Set([...Object.keys(now), ...Object.keys(was)])].sort((a, b) => (now[b] ?? 0) - (now[a] ?? 0))) {
+    // what fails first (a class that rose or appeared), then by size
+    const rank = (k: string) => (now[k] ?? 0) > (was[k] ?? 0) ? 0 : 1;
+    for (const k of [...new Set([...Object.keys(now), ...Object.keys(was)])].sort((a, b) => rank(a) - rank(b) || (now[b] ?? 0) - (now[a] ?? 0))) {
       const n = now[k] ?? 0, w = was[k] ?? 0;
       const [who, why] = DISPOSITION[k] ?? ['open', ''];
       const mark = n > w ? (k in was ? '✗ ROSE' : '✗ NEW') : n < w ? 'fell' : ' ';

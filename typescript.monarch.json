@@ -634,7 +634,7 @@
         }
       ],
       [
-        "(?:asserts|infer|interface|enum|module|namespace|from)(?![\\w$])(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        "(?:asserts|infer|target|meta|interface|enum|module|namespace|from)(?![\\w$])(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
         {
           "token": "identifier",
           "switchTo": "@value"
@@ -1281,7 +1281,7 @@
         "identifier"
       ],
       [
-        "(?:asserts|infer|interface|enum|module|namespace|from)(?![\\w$])(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        "(?:asserts|infer|target|meta|interface|enum|module|namespace|from)(?![\\w$])(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
         "identifier"
       ],
       [

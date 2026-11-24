@@ -10,7 +10,7 @@
    "type -> punct": 3,
    "text -> punct": 231,
    "keyword -> punct": 79,
-   "name -> keyword": 33,
+   "name -> keyword": 28,
    "type -> keyword": 64,
    "name -> type": 3,
    "name -> punct": 12,

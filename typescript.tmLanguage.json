@@ -2374,11 +2374,11 @@
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "\\b(asserts|infer|interface|enum|module|namespace|from)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(asserts|infer|target|meta|interface|enum|module|namespace|from)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(asserts|infer|interface|enum|module|namespace|from)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(asserts|infer|target|meta|interface|enum|module|namespace|from)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
