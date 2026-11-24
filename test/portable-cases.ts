@@ -1108,8 +1108,10 @@ export const CASES: Case[] = [
       // literal id): each parses differently, or not at all, where the text is taken as the literal
       "x = <a>if (x) {'{'}</a>;", 'x = <a>return</a>;', 'x = <a>function</a>;', 'x = <a>;</a>;', 'x = <a>class</a>;',
       'x = <a>{b}if{c}</a>;', 'x = <a><b>{c};</b>)</a>;', 'x = <a>as</a> as T;', 'x = <a>,</a>, 1;',
+      // after a member accessor (`?.`) a name follows, no operand: its `<` opens no element
+      'a?.<T>(x);', 'x = a?.<T>(x) < b;', 'x = a?.<T>(<b/>);',
     ],
-    reject: ['x = <a>=></a>;', 'x = <a x=<b/> />;', 'x = <a>}</a>;', 'x = <a>></a>;', 'x = <b>{x}</b>\n/re/.test(y);', 'x = <a/>\n<b/>;', 'x = <a>;', 'x = </a>;',
+    reject: ['a.<T>(x);', 'x = a?.<b/>;', 'x = <a>=></a>;', 'x = <a x=<b/> />;', 'x = <a>}</a>;', 'x = <a>></a>;', 'x = <b>{x}</b>\n/re/.test(y);', 'x = <a/>\n<b/>;', 'x = <a>;', 'x = </a>;',
       // lexer errors: at the last character, inside a template hole inside an element hole, inside
       // an undecided type-parameter signature, and inside one nested in another (the outer's verdict)
       'x = <a/>;#', 'x = <a>{`${<b>{`${"}`}</b>}`}</a>;', 'f = <T,>(x: #', 'f = <T,>(x: <U,>(#', 'f = <T,>(x: <U,>(y: `${#'],

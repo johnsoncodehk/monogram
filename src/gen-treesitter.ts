@@ -233,6 +233,9 @@ interface GrammarJsContext {
   /** Rules declared as a conflict of their own (`[$.rule]`): GLR keeps every parse of their
    *  productions, so no static resolution is added to them. Set when conflicts are emitted. */
   glrRules: Set<string>;
+  /** Named precedences the rules use (operandPrecedences), each list highest first: the grammar's
+   *  `precedences`. Filled while the rules render. */
+  precedenceOrders: string[][];
   /**
    * If the grammar declares an interpolated-template token, the plan for turning it
    * into a `template` RULE (delimiters + the `${ … }` hole) backed by an external
@@ -1222,10 +1225,62 @@ function buildRuleBody(rule: RuleDecl, ctx: GrammarJsContext): string {
   const follow = ctx.terminalSets.follow.get(rule.name)!;
   const glr = ctx.glrRules.has(ctx.ruleSnake.get(rule.name)!);
   const greedy = (alt: RuleExpr) => !glr && greedyTail(alt, follow, ctx.terminalSets.firstOf);
-  if (body.type === 'alt' && body.items.some(greedy)) {
-    return `choice(${body.items.map(a => greedy(a) ? `prec.right(${renderExpr(a, ctx)})` : renderExpr(a, ctx)).join(', ')})`;
+  const operand = operandPrecedences(rule, body, ctx);
+  const render = (a: RuleExpr) => {
+    const r = renderExpr(a, ctx);
+    if (greedy(a)) return `prec.right(${r})`;
+    const p = operand?.get(a);
+    return p ? `${p}, ${r})` : r;
+  };
+  if (body.type === 'alt' && (body.items.some(greedy) || operand)) return `choice(${body.items.map(render).join(', ')})`;
+  return render(body);
+}
+
+/**
+ * A rule with continuations of its own (an arm that starts with the rule: TypeScript's Type, `[$, '|',
+ * $]`, `[$, '[', ']']` …) that is not a precedence-climbing rule reads an arm's TRAILING self operand
+ * as the interpreter reads any rule: whole, its own continuation loop running before the arm ends.
+ * So in `| V | u`, `keyof T[]`, `() => V | u` the inner operand takes the continuation (`| (V | u)`),
+ * and the outer arm never does: the same continuation on the same tokens would have matched inside
+ * (the rule has no context that differs between the two depths). In the CFG the two readings are a
+ * shift/reduce conflict in the state after the trailing operand, and GLR kept both: where the rule
+ * sits under another rule's operator that shares the token (`c as | V | u`: the expression's binary
+ * `|`), a third reading joined, and tree-sitter's choice among readings of equal weight is by tree
+ * shape, not by the interpreter's order (`(c as | V) | u`).
+ * The rendering states the interpreter's order statically: each arm that ends in the self operand
+ * carries the named precedence `<rule>_operand` with right associativity, so after its operand the
+ * shift of any continuation wins (a continuation's connector has the same precedence or none, which
+ * tree-sitter's comparison counts as equal). A named precedence compares only with names of its own
+ * ordering, so every shift/reduce choice against ANOTHER rule's production (the `as` operand's end,
+ * `[expr, type]`) is unchanged: still GLR, still the fallback where the type continuation fails.
+ * One continuation is excepted: one that ends in a lookahead the rendering drops (TypeScript's
+ * postfix `T?`, taken only before a token that begins no type). The interpreter refuses it where
+ * the CFG would take it (`T extends keyof U ? X : Y`), so after an operand it must not win: it
+ * carries `<rule>_refusable`, ordered below `<rule>_operand`, so the reduce wins there (the outer
+ * arm takes such a `?`: `keyof T?` nests as `(keyof T)?`, the same tokens accepted).
+ * What the static order gives up: an input the inner operand's continuation starts but cannot
+ * finish while the enclosing expression can (`c as | V | -x`, `x as keyof T < b`): the interpreter
+ * backtracks to the shorter operand, tree-sitter shows an ERROR (tsc's parser reads a type's
+ * continuations greedily too and rejects all of them).
+ */
+function operandPrecedences(rule: RuleDecl, body: RuleExpr, ctx: GrammarJsContext): Map<RuleExpr, string> | null {
+  if (body.type !== 'alt') return null;
+  const items = (a: RuleExpr) => { const v = tsView(a); return v.type === 'seq' ? v.items.map(tsView) : [v]; };
+  const isSelf = (e: RuleExpr | undefined) => e?.type === 'ref' && e.name === rule.name;
+  const consuming = (a: RuleExpr) => items(a).filter(x => !ASSERTION_KINDS.has(x.type));
+  if (!body.items.some(a => isSelf(consuming(a)[0]))) return null;
+  const snake = ctx.ruleSnake.get(rule.name)!;
+  const out = new Map<RuleExpr, string>();
+  for (const a of body.items) {
+    const all = items(a), c = consuming(a);
+    const last = all[all.length - 1];
+    if (c.length >= 2 && isSelf(c[c.length - 1]) && last === c[c.length - 1]) out.set(a, `prec.right('${snake}_operand'`);
+    else if (isSelf(c[0]) && ASSERTION_KINDS.has(last.type) && renderExpr(last, ctx) === 'blank()') out.set(a, `prec.left('${snake}_refusable'`);
   }
-  return greedy(body) ? `prec.right(${renderExpr(body, ctx)})` : renderExpr(body, ctx);
+  if (![...out.values()].some(p => p.includes('_operand'))) return null;
+  const names = [`${snake}_operand`, ...([...out.values()].some(p => p.includes('_refusable')) ? [`${snake}_refusable`] : [])];
+  if (!ctx.precedenceOrders.some(o => o.join() === names.join())) ctx.precedenceOrders.push(names);
+  return out;
 }
 
 // ── greedy repetition tails ──────────────────────────────────────────────────
@@ -3137,6 +3192,7 @@ function buildTokenTreeSitter(source: CstGrammar, grammarName: string): Omit<Tre
     wordLiterals,
     contextual,
     glrRules: new Set(),
+    precedenceOrders: [],
     templatePlan,
     interpolationPlans,
     nameFieldNodes: nameFields.nodes,
@@ -3335,6 +3391,11 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
   }
   const allConflicts = [...conflicts, ...contextualConflicts];
   const head: string[] = [];
+  if (ctx.precedenceOrders.length > 0) {
+    head.push('  precedences: $ => [');
+    for (const o of ctx.precedenceOrders) head.push('    [' + o.map(n => `'${n}'`).join(', ') + '],');
+    head.push('  ],', '');
+  }
   if (allConflicts.length > 0) {
     head.push('  conflicts: $ => [');
     for (const c of allConflicts) head.push('    [' + c.map(n => `$.${n}`).join(', ') + '],');

@@ -25,6 +25,8 @@ export type RsShape = {
   plan: ShapePlan; types: ShapeTypes; entry: string;
   consts: string[]; constIdx: Map<string, number>;
   kindIdx: Map<string, number>;
+  /** The construct plans' printed names (rsPlanFns). */
+  planFns: Set<string>;
 };
 const J = JSON.stringify;
 /** A Rust string literal. */
@@ -168,7 +170,7 @@ export function beginRsShape(plan: ShapePlan, shape: Shape, entry: string): RsSh
   const types = shapeTypes(shape, missing);
   const kindIdx = new Map<string, number>();
   types.kinds.forEach((k, i) => kindIdx.set(k.record ? k.key : k.name, i));
-  const st: RsShape = { plan, types, entry, consts: [], constIdx: new Map(), kindIdx };
+  const st: RsShape = { plan, types, entry, consts: [], constIdx: new Map(), kindIdx, planFns: new Set() };
   for (const a of plan.arms) intern(st, a.arm);
   for (const e of types.enums) for (const v of e.values) intern(st, v);
   return st;
@@ -220,6 +222,17 @@ export const rsShapeLowering: ShapeLowering = {
 
 /** Calls the Rust lowering prints as methods of the builder (`self.`): the cooking functions. */
 export const rsShapeCall = (name: string): boolean => name.startsWith('cook_') || ['val_start', 'val_end', 'v_drop_last', 'rec_get'].includes(name);
+/** The plans' slot reads (shape-plan.ts EXTERNS), printed in place over the arm's slots: the plan's
+ * parameter `s`, the engine's child stack itself (Builder::finish_arm passes it; nothing is copied). */
+export const RS_SLOT: Record<string, (a: string[]) => string> = {
+  slot_tag: ([i]) => `(s[${i}].tag as isize)`, slot_off: ([i]) => `s[${i}].off`, slot_end: ([i]) => `s[${i}].end`,
+  slot_val: ([i]) => `s[${i}].w`, slot_top: () => 's.len()', slot_syn: ([k, i]) => `s[${i}].sy[${k} as usize]`,
+  slot_arm_name: ([i]) => `(T_STRI | SH_ARM_NAME[s[${i}].arm as usize] as u64)`,
+  slot_find: (a) => `slot_find(s, ${a.join(', ')})`, slot_find_last: (a) => `slot_find_last(s, ${a.join(', ')})`,
+  slot_at: (a) => `slot_at(s, ${a.join(', ')})`, named_end: (a) => `named_end(s, ${a.join(', ')})`,
+};
+/** Whether a function the Rust lowering prints is a construct plan (it takes the slots `s`). */
+export const rsIsPlanFn = (name: string): boolean => CUR !== null && CUR.planFns.has(name);
 
 // ── The typed declarations ──
 function rsType(t: TypeRef): string {
@@ -299,6 +312,7 @@ export function rsShapeRuntime(st: RsShape, fns: string): string {
   const recFields = T.kinds.map((k, i) => ({ k, i })).filter((x) => x.k.record).flatMap(({ k, i }) => k.fields.map((f) => `(${i}, ${J(f.name)}) => self.a${i}[id].${rsField(f.name)}.to_w()`));
   const decls = typedDecls(st);   // interns enum constants: before the const table is printed
   const armNames = plan.arms.map((a) => intern(st, a.arm));
+  const synCalls = (id: number): string => plan.syn.map((a, k) => (a.fns[id] ? `self.ys[${k}] = self.${a.fns[id]}(s, b, off, end); ` : '')).join('');
   const body = `
 // ─── Shape AST (typed; rust-shape.ts) ───
 use std::marker::PhantomData;
@@ -391,6 +405,11 @@ ${decls}
 #[derive(Clone, Copy)]
 pub struct Slot { w: W, tag: i32, arm: i32, off: u32, end: u32, ho: u32, he: u32, sy: [W; ${nsyn}] }
 impl Default for Slot { fn default() -> Self { Slot { w: W_ABSENT, tag: -1, arm: -1, off: 0, end: 0, ho: 0, he: 0, sy: SH_SYN0 } } }
+// The plans' slot searches over the arm's slots s (RS_SLOT prints the other reads in place).
+fn slot_find(s: &[Slot], lo: usize, hi: usize, t0: isize, t1: isize) -> isize { for i in lo..hi { let t = s[i].tag as isize; if t >= t0 && t <= t1 { return i as isize; } } -1 }
+fn slot_find_last(s: &[Slot], lo: usize, hi: usize, t0: isize, t1: isize) -> isize { for i in (lo..hi).rev() { let t = s[i].tag as isize; if t >= t0 && t <= t1 { return i as isize; } } -1 }
+#[inline(always)] fn slot_at(s: &[Slot], i: usize, lo: usize, hi: usize, t0: isize, t1: isize) -> isize { if i < lo || i >= hi { return -1; } let t = s[i].tag as isize; if t >= t0 && t <= t1 { i as isize } else { -1 } }
+fn named_end(s: &[Slot], lo: usize, hi: usize) -> isize { for i in (lo..hi).rev() { let t = s[i].tag; if t >= 0 && t & 1 == 0 { return s[i].end as isize; } } -1 }
 
 /// The shape's AST (and, while parsing, its builder): one arena per kind, the list slab, the cooked
 /// strings; \`root\` the entry rule's value.
@@ -398,7 +417,6 @@ impl Default for Slot { fn default() -> Self { Slot { w: W_ABSENT, tag: -1, arm:
 pub struct Ast<'s> {
     pub src: &'s str,
     root: W,
-    sc: Vec<Slot>,
     slab: Vec<W>,
     owned: Vec<String>,
     ys: [W; ${nsyn}],
@@ -437,17 +455,7 @@ impl<'s> Ast<'s> {
         T_LIST | (s as u64) << 24 | l.len() as u64
     }
     fn w_items(&self, w: W) -> std::iter::Copied<std::slice::Iter<'_, W>> { let s = (w >> 24) as usize & 0xFF_FFFF; self.slab[s..s + (w as usize & 0xFF_FFFF)].iter().copied() }
-    // The plans' engine methods (src/shape-plan.ts EXTERNS), over the slots of the arm being built.
-    #[inline(always)] fn slot_tag(&self, i: usize) -> isize { self.sc[i].tag as isize }
-    #[inline(always)] fn slot_off(&self, i: usize) -> u32 { self.sc[i].off }
-    #[inline(always)] fn slot_end(&self, i: usize) -> u32 { self.sc[i].end }
-    #[inline(always)] fn slot_val(&self, i: usize) -> W { self.sc[i].w }
-    #[inline(always)] fn slot_arm_name(&self, i: usize) -> W { T_STRI | SH_ARM_NAME[self.sc[i].arm as usize] as u64 }
-    #[inline(always)] fn slot_top(&self) -> usize { self.sc.len() }
-    fn slot_find(&self, lo: usize, hi: usize, t0: isize, t1: isize) -> isize { for i in lo..hi { let t = self.sc[i].tag as isize; if t >= t0 && t <= t1 { return i as isize; } } -1 }
-    fn slot_find_last(&self, lo: usize, hi: usize, t0: isize, t1: isize) -> isize { for i in (lo..hi).rev() { let t = self.sc[i].tag as isize; if t >= t0 && t <= t1 { return i as isize; } } -1 }
-    #[inline(always)] fn slot_at(&self, i: usize, lo: usize, hi: usize, t0: isize, t1: isize) -> isize { if i < lo || i >= hi { return -1; } let t = self.sc[i].tag as isize; if t >= t0 && t <= t1 { i as isize } else { -1 } }
-    fn named_end(&self, lo: usize, hi: usize) -> isize { for i in (lo..hi).rev() { let t = self.sc[i].tag; if t >= 0 && t & 1 == 0 { return self.sc[i].end as isize; } } -1 }
+    // The plans' engine methods (src/shape-plan.ts EXTERNS) other than the slot reads (RS_SLOT).
     #[inline(always)] fn src_text(&self, a: u32, b: u32) -> SrcStr<'s> { SrcStr(&self.src[a as usize..b as usize]) }
     fn w_span(&self, x: W) -> Option<(u32, u32)> {
         if x & TAGM != T_NODE { return None; }
@@ -465,17 +473,27 @@ impl<'s> Ast<'s> {
         dflt as isize
     }
     fn self_syn(&self, k: isize) -> W { self.ys[k as usize] }
-    fn slot_syn(&self, k: isize, i: usize) -> W { self.sc[i].sy[k as usize] }
     #[allow(unused_variables)]
     fn rec_get(&self, x: W, f: &str) -> W { let id = x as u32 as usize; match ((x >> 32) as u32 & 0xFFFF, f) { ${recFields.join(', ')}${recFields.length ? ', ' : ''}_ => W_ABSENT } }
     fn v_drop_last(&self, x: W, c: bool) -> W { if c && x & 0xFF_FFFF != 0 { x - 1 } else { x } }
 ${[...new Set([...plan.cooks, ...(plan.cooks.includes('tsNumericText') ? ['numberValue'] : [])])].map((c) => `    ${RS_COOKS[c]}`).join('\n')}
-    /// Engine arm id's value over slots b.. (its synthesized attributes first, into ys).
-    fn construct(&mut self, id: usize, b: usize, off: u32, end: u32) -> W {
+    /// Engine arm id's value over slots s[b..] (its synthesized attributes first, into ys): the
+    /// dispatch on a run-time id (Builder::node); an accept site names its arm (construct_arm).
+    fn construct(&mut self, id: usize, s: &[Slot], b: usize, off: u32, end: u32) -> W {
 ${nsyn ? `        self.ys = SH_SYN0;
-        match id { ${synArms.map((x) => `${x.id} => { ${plan.syn.map((a, k) => (a.fns[x.id] ? `self.ys[${k}] = self.${a.fns[x.id]}(b, off, end); ` : '')).join('')}}`).join(' ')} _ => {} }
+        match id { ${synArms.map((x) => `${x.id} => { ${synCalls(x.id)}}`).join(' ')} _ => {} }
 ` : ''}        match id {
-${plan.arms.map((a) => `            ${a.id} => self.construct${a.id}(b, off, end),`).join('\n')}
+${plan.arms.map((a) => `            ${a.id} => self.construct${a.id}(s, b, off, end),`).join('\n')}
+            _ => T_MISS | ${tplMiss},
+        }
+    }
+    /// construct of the arm A an accept site names: the matches fold to the arm's own calls.
+    #[inline(always)]
+    fn construct_arm<const A: u16>(&mut self, s: &[Slot], b: usize, off: u32, end: u32) -> W {
+${nsyn ? `        self.ys = SH_SYN0;
+        match A { ${synArms.map((x) => `${x.id} => { ${synCalls(x.id)}}`).join(' ')} _ => {} }
+` : ''}        match A {
+${plan.arms.map((a) => `            ${a.id} => self.construct${a.id}(s, b, off, end),`).join('\n')}
             _ => T_MISS | ${tplMiss},
         }
     }
@@ -489,14 +507,23 @@ impl<'s> Builder for Ast<'s> {
         true
     }
     fn node(&mut self, scratch: &mut Vec<Slot>, sb: usize, rule_id: u16, off: u32, end: u32, _tok_start: u32, _tok_end: u32) {
-        std::mem::swap(&mut self.sc, scratch);
-        let (ho, he) = if self.sc.len() > sb { (self.sc[sb].ho, self.sc[sb].he) } else { (off, off) };
+        let (ho, he) = if scratch.len() > sb { (scratch[sb].ho, scratch[sb].he) } else { (off, off) };
         let id = rule_id as usize;
-        if SH_DEBUG { eprintln!("node arm {} {:?} slots {:?}", id, SH_ARM_NAME.get(id).map(|&i| SH_CONST[i as usize]), self.sc[sb..].iter().map(|x| (x.tag, x.arm, x.off, x.end)).collect::<Vec<_>>()); }
-        let w = self.construct(id, sb, off, end);
-        self.sc.truncate(sb);
-        self.sc.push(Slot { w, tag: -1, arm: id as i32, off, end, ho, he, sy: self.ys });
-        std::mem::swap(&mut self.sc, scratch);
+        if SH_DEBUG { eprintln!("node arm {} {:?} slots {:?}", id, SH_ARM_NAME.get(id).map(|&i| SH_CONST[i as usize]), scratch[sb..].iter().map(|x| (x.tag, x.arm, x.off, x.end)).collect::<Vec<_>>()); }
+        let w = self.construct(id, &scratch[..], sb, off, end);
+        scratch.truncate(sb);
+        scratch.push(Slot { w, tag: -1, arm: id as i32, off, end, ho, he, sy: self.ys });
+    }
+    /// The finish of the arm A an accept site names: its construct plan reads the child stack in
+    /// place, and its slot is returned (not pushed: the caller pushes what it keeps).
+    #[inline(always)]
+    fn finish_arm<const A: u16>(&mut self, scratch: &mut Vec<Slot>, sb: usize, fallback_off: u32, _tok_start: u32, _tok_end: u32, _toks: &[Tok]) -> (Slot, u32, bool) {
+        let n = scratch.len();
+        let (off, end, ho, he) = if n > sb { (scratch[sb].off, scratch[n - 1].end, scratch[sb].ho, scratch[sb].he) } else { (fallback_off, fallback_off, fallback_off, fallback_off) };
+        if SH_DEBUG { eprintln!("node arm {} {:?} slots {:?}", A, SH_ARM_NAME.get(A as usize).map(|&i| SH_CONST[i as usize]), scratch[sb..].iter().map(|x| (x.tag, x.arm, x.off, x.end)).collect::<Vec<_>>()); }
+        let w = self.construct_arm::<{ A }>(&scratch[..], sb, off, end);
+        scratch.truncate(sb);
+        (Slot { w, tag: -1, arm: A as i32, off, end, ho, he, sy: self.ys }, off, true)
     }
     #[inline(always)] fn span_of(&self, h: Slot, _toks: &[Tok]) -> (u32, u32) { (h.off, h.end) }
     #[inline(always)] fn head_span(&self, h: Slot, _toks: &[Tok]) -> (u32, u32) { (h.ho, h.he) }
@@ -542,7 +569,8 @@ impl<'s> Ast<'s> {
 }
 
 /** The construct plans as Ast methods: every plan function takes &mut self (a node is pushed). */
-export function rsPlanFns(fns: Fn[]): Fn[] {
+export function rsPlanFns(fns: Fn[], ident: (n: string) => string): Fn[] {
+  for (const f of fns) if (!f.extern) cur().planFns.add(ident(f.name));
   return fns.map((f) => (f.extern ? f : { ...f, reads: false }));
 }
 export type { Cx, R };
