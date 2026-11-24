@@ -17,7 +17,8 @@ import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT, RM_AMAX } from './recovery-family.ts';
-import { ATOM, COMPARISON, findAnyName, stopBytes, unitMask, isList, isNum, isOpt, isRec, isRecList, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
+import { beginRsShape, rsPlanFns, rsShapeCall, rsShapeLowering, rsShapeRuntime, setRsShape, type RsShape } from './rust-shape.ts';
+import { ATOM, COMPARISON, findAnyName, stopBytes, unitMask, isList, isNum, isOpt, isRec, isRecList, isValList, isValTy, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 import type {
@@ -1159,6 +1160,12 @@ fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) 
 }`;
 }
 
+// The shape being emitted (emit option `shape`, src/rust-shape.ts), for the length of one
+// emitParser call; null: the CST builder, and every printed byte as without the option. With a
+// shape, an accept site finishes ENGINE ARM `key` of the rule (its construct plan) in place of the
+// rule's node: the builder's \`node\` receives the arm id where the CST builder receives the rule id.
+let SHAPE_RS: RsShape | null = null;
+const aid = (rule: string, key: string, rid: number): number => (SHAPE_RS ? SHAPE_RS.plan.armId(rule, key) : rid);
 // The step walk's Rust spelling (emit-portable.ts, StepLowering), over the receiver `recv`: `self`
 // at a rule's top level (children accumulate on `self.scratch`), `p` inside a closure or a method
 // that took `let p = self`; `r`: in recognize form (ParserIR.forms), advancing and building
@@ -1220,6 +1227,14 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
     choice: (peek, tries) => `${peek ? `let _ft = ${recv}.peek(); ` : ''}${tries.join(' ')} false`,
     // FIRST dispatch; restore pos/scratch/builder on arm half-failure (like a choice).
     predictive: (arms) => `let t = match ${recv}.peek() { Some(t) => t, None => return false };\n${arms.map((a, i) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(a.first, 't', ids)} ${a.branch}`).join('\n')}\n        false`,
+    // A shape's step (building form): its slot tagged; a marked body's slots preceded by the
+    // iteration marker (inserted when the body matched). Inherited context is refused before here.
+    ...(SHAPE_RS && !r ? { shaped: (s: Step, body: string) => {
+      if (s.inh?.length || s.threadInit) throw new Error('rustTarget: inherited context attributes are not printed yet');
+      const tagged = s.tag !== undefined ? `(${body} && ${recv}.sh_tag(${s.tag}))` : body;
+      if (s.mark === undefined) return tagged;
+      return `{ let c = ${recv}.scratch.len(); if ${tagged} { ${recv}.b.mark(&mut ${recv}.scratch, c, ${s.mark}); true } else { false } }`;
+    } } : {}),
   };
   return L;
 }
@@ -1301,14 +1316,14 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
     ...rsRuleBase(ids, 'self'),
     steps: rsSteps(ids, 'self', false),
     fn: (lines) => `${sig}\n${lines.join('\n')}\n    }`,
-    accept: () => `{ return Some(self.finish(${rid}, sb, self.off_at(save), save)); }`,
+    accept: (i) => `{ return Some(self.finish(${aid(r.name, `alt${i}`, rid)}, sb, self.off_at(save), save)); }`,
     open: (clean) => `        let save = self.pos; let sb = self.scratch.len();${clean ? '' : ' let ck = self.b.checkpoint();'}`,
     peekOrFail: '        let t = match self.peek() { Some(t) => t, None => return None };',
     fail: (clean) => (clean ? '        None' : '        self.back(save); self.scratch.truncate(sb); self.b.restore(ck);\n        None'),
     openBest: (d) => `        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();\n        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(d)}`,
-    cand: (d, i, cond) => candRs(d, i, cond, rid, markRs(d, i)),
+    cand: (d, i, cond) => candRs(d, i, cond, aid(r.name, `alt${i}`, rid), markRs(d, i)),
     closeBest: '        self.pos = best_pos;\n        best',
-    commit: (_i, conds, cond, undo, nullable) => commitRs(conds, commitBodyRs(rid, cond, undo, nullable), 'return None;'),
+    commit: (i, conds, cond, undo, nullable) => commitRs(conds, commitBodyRs(aid(r.name, `alt${i}`, rid), cond, undo, nullable), 'return None;'),
     commitFail: '{ return None; }',
   });
 }
@@ -1454,7 +1469,9 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
     `best_pos = self.pos;${markRs(d, i)} bf = ${form}; bt = ${tail}; bc = ${capped}; ck = self.b.checkpoint();`;
   const lost = lostRs;
-  const fin = `self.finish(${rid}, sb, left.off as usize, left.tok_start as usize)`;
+  const finK = (key: string) => `self.finish(${aid(r.name, key, rid)}, sb, left.off as usize, left.tok_start as usize)`;
+  const fin = finK('bin');
+  const postKey = (kid: number) => `post${r.postfixToks.findIndex((tok) => kidOf(ids, tok) === kid)}`;
   const L: PrattLowering = {
     steps: rsSteps(ids, 'self', false, false),   // no body guards in Pratt arms (see rsSteps)
     ifAll: ifRs,
@@ -1464,22 +1481,22 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     nudGuard: (g, keyed) => guardCond(g, 't', keyed),
     beats: (i, end) => beatsRs(d, end, i),
     leafEnd: 'save + 1',
-    nudLeaf: (i) => `{ self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; best = Some(self.finish(${rid}, sb, t.off as usize, save)); ${won(i, '0', false, false)} self.back(save); }`,
+    nudLeaf: (i) => `{ self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; best = Some(self.finish(${aid(r.name, `nud${i}`, rid)}, sb, t.off as usize, save)); ${won(i, '0', false, false)} self.back(save); }`,
     nudTpl: (i, hole) => `        if t.kid == ${kidOf(ids, '$templateHead')} {
             match self.match_template(Self::parse_${hole}) {
-                Some(n) if ${beatsRs(d, 'self.pos', i)} => { if n.present { self.scratch.push(n.h); } best = Some(self.finish(${rid}, sb, n.off as usize, n.tok_start as usize)); ${won(i, '0', false, false)} }
+                Some(n) if ${beatsRs(d, 'self.pos', i)} => { if n.present { self.scratch.push(n.h); } best = Some(self.finish(${aid(r.name, `nud${i}`, rid)}, sb, n.off as usize, n.tok_start as usize)); ${won(i, '0', false, false)} }
                 _ => { ${lost} }
             }
             self.back(save);
         }`,
-    nudSeq: (i, cond, tail, cap) => candRs(d, i, cond, rid, `${markRs(d, i)} bf = 0; bt = ${tail}; bc = ${capRs(cap)};`),
+    nudSeq: (i, cond, tail, cap) => candRs(d, i, cond, aid(r.name, `nud${i}`, rid), `${markRs(d, i)} bf = 0; bt = ${tail}; bc = ${capRs(cap)};`),
     // An operand that parses but is not the target the operator requires fails the whole Pratt
     // call, whatever another arm matched.
     nudPrefix: (i) => `        if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
             match self.${r.name}_bp(pbp) {
                 Some(_) if ptgt && self.form != 0 => { self.back(save); ${lost} self.capped = false; return None; }
-                Some(operand) if ${beatsRs(d, 'self.pos', i)} => { if operand.present { self.scratch.push(operand.h); } best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won(i, 'pform', true, false)} }
+                Some(operand) if ${beatsRs(d, 'self.pos', i)} => { if operand.present { self.scratch.push(operand.h); } best = Some(self.finish(${aid(r.name, `nud${i}`, rid)}, sb, self.off_at(save), save)); ${won(i, 'pform', true, false)} }
                 _ => { ${lost} }
             }
             self.back(save);
@@ -1487,15 +1504,15 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     dispatch: dispatchRsL('t', false),
     // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node, form,
     // tail and capped flag; failing, no node and the frame's empty state.
-    commitLeaf: (_i, conds) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len(); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; let n = self.finish(${rid}, sb, t.off as usize, save); self.form = 0; self.tail = false; return Some(n); }`, NUD_FAIL_RS, true),
+    commitLeaf: (i, conds) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len(); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; let n = self.finish(${aid(r.name, `nud${i}`, rid)}, sb, t.off as usize, save); self.form = 0; self.tail = false; return Some(n); }`, NUD_FAIL_RS, true),
     // A 'tail' cap leaves the flag as the trailing operand set it.
-    commitSeq: (_i, conds, cond, tail, cap, undo, nullable) => commitRs(conds, commitBodyRs(rid, cond, undo, nullable, cap === 'tail' ? `{ self.form = 0; self.tail = ${tail}; }` : `nud ${tail} ${capRs(cap)}`), NUD_FAIL_RS),
-    commitPrefix: (_i, conds) => commitRs(conds, `if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
+    commitSeq: (i, conds, cond, tail, cap, undo, nullable) => commitRs(conds, commitBodyRs(aid(r.name, `nud${i}`, rid), cond, undo, nullable, cap === 'tail' ? `{ self.form = 0; self.tail = ${tail}; }` : `nud ${tail} ${capRs(cap)}`), NUD_FAIL_RS),
+    commitPrefix: (i, conds) => commitRs(conds, `if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
             let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
             match self.${r.name}_bp(pbp) {
                 Some(_) if ptgt && self.form != 0 => { self.back(save); self.scratch.truncate(sb); self.b.restore(ck); self.capped = false; return None; }
-                Some(operand) => { if operand.present { self.scratch.push(operand.h); } let n = self.finish(${rid}, sb, self.off_at(save), save); self.form = pform; self.tail = true; self.capped = false; return Some(n); }
+                Some(operand) => { if operand.present { self.scratch.push(operand.h); } let n = self.finish(${aid(r.name, `nud${i}`, rid)}, sb, self.off_at(save), save); self.form = pform; self.tail = true; self.capped = false; return Some(n); }
                 None => { self.back(save); self.scratch.truncate(sb); self.b.restore(ck); }
             }
         }`, NUD_FAIL_RS),
@@ -1510,7 +1527,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
       notSuppressed: (set) => `self.suppress_cur != ${set}`,
       ifAll: (parts) => (parts.length ? `if ${parts.join(' && ')} ` : ''),
     },
-    ledArm: (_i, cond, form, closes, exit, clean, rebind, capsFromTail) => `{
+    ledArm: (i, cond, form, closes, exit, clean, rebind, capsFromTail) => { const fin = finK(`led${i}`); return `{
                 let led_save = self.pos; let sb = self.scratch.len();${clean ? '' : ' let ck = self.b.checkpoint();'}
                 self.scratch.push(left.h);
                 if ${cond} { left = ${fin};${capsFromTail ? ` if self.capped { self.form = ${form}; return Some(left); }` : ''} form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
@@ -1518,19 +1535,19 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
                 self.scratch.push(left.h);
                 if ${rebind} { left = ${fin};${capsFromTail ? ` if self.capped { self.form = ${form}; return Some(left); }` : ''} form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
                 self.scratch.truncate(sb);` : ''}${exit ? ' break;' : ''}
-            }`,
+            }`; },
     rebind: (p) => `self.rb_scan(${rbSite(ids, [p.open, p.operand, p.sep, p.rest])}, ${p.sepLid}, 0)`,
     ledSwitch: (cases) => `            match t.lid {
 ${cases.map((c) => `                ${c.key} => {\n${c.arms.map((a) => `                ${a}`).join('\n')}\n                }`).join('\n')}
                 _ => {}
             }`,
     postfixToks: (kids) => `            match t.kid {
-${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; left = ${fin}; form = 0; continue; } }`).join('\n')}
+${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; left = ${finK(postKey(k))}; form = 0; continue; } }`).join('\n')}
                 _ => {}
             }`,
     postfixTpl: (hole) => `
-            if !tail_closed && t.kid == ${kidOf(ids, '$templateHead')} { if let Some(n) = self.match_template(Self::parse_${hole}) { let sb = self.scratch.len(); if left.present { self.scratch.push(left.h); } if n.present { self.scratch.push(n.h); } left = ${fin}; form = 0; continue; } }`,
-    postfixOp: `            if let Some((plbp, ptgt)) = Self::${r.name}_post(t.lid) { if !tail_closed && plbp > min_bp${r.postfixSameLine ? ' && !t.nl' : ''} { if ptgt && form != 0 { return None; } let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1; left = ${fin}; tail_closed = true; form = 1; continue; } }`,
+            if !tail_closed && t.kid == ${kidOf(ids, '$templateHead')} { if let Some(n) = self.match_template(Self::parse_${hole}) { let sb = self.scratch.len(); if left.present { self.scratch.push(left.h); } if n.present { self.scratch.push(n.h); } left = ${finK(ir.tpl ? postKey(kidOf(ids, ir.tpl.token)) : 'post0')}; form = 0; continue; } }`,
+    postfixOp: `            if let Some((plbp, ptgt)) = Self::${r.name}_post(t.lid) { if !tail_closed && plbp > min_bp${r.postfixSameLine ? ' && !t.nl' : ''} { if ptgt && form != 0 { return None; } let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1; left = ${finK('postop')}; tail_closed = true; form = 1; continue; } }`,
     binary: `            let (op_lid, op_n, op_end) = self.op_read(t);
             let (lbp, rbp, tgt, no_unary) = match Self::${r.name}_bin(op_lid) { Some(x) => x, None => break };
             if lbp <= min_bp { break; }
@@ -2029,7 +2046,7 @@ function emitParserMachine(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shapeB
             if next.kid == ${kidOf(ids, "$templateTail")} { self.push_leaf(${ttIdOf(ar, '$templateTail')}, self.pos as u32, next.off, next.end); self.pos += 1; break; }
             self.back(save); self.scratch.truncate(sb); self.b.restore(ck); return None;
         }
-        Some(self.finish(${ruleIdOf(ar, '$template')}, sb, self.off_at(save), save))
+        Some(self.finish(${SHAPE_RS ? 0xFFFF : ruleIdOf(ar, '$template')}, sb, self.off_at(save), save))
     }
 ` : '';
 
@@ -2135,7 +2152,11 @@ pub trait Builder {
         EntryMeta { tok_start, tok_end, ext, off, end, kid_count: 1 }
     }
     /// Token span of handle h (leaf encoding or rule node).
-    fn tok_range(&self, h: Self::H) -> (u32, u32);
+    fn tok_range(&self, h: Self::H) -> (u32, u32);${SHAPE_RS ? `
+    /// A shape's step: the slot just left gets grammar tag t (rust-shape.ts).
+    #[inline(always)] fn tag(&mut self, _scratch: &mut Vec<Self::H>, _t: i32) {}
+    /// A shape's marked iteration: a marker slot with tag mt goes before its slots (from c).
+    #[inline(always)] fn mark(&mut self, _scratch: &mut Vec<Self::H>, _c: usize, _mt: i32) {}` : ''}
 }
 
 /// The engine's transient buffers — the scratch stack of handles, the top-level entry list and the
@@ -2487,7 +2508,9 @@ impl<'a, B: Builder> Parser<'a, B> {
     #[inline(always)]
     fn push_leaf(&mut self, tt_id: u16, tok_idx: u32, off: u32, end: u32) {
         let _ = self.b.leaf(&mut self.scratch, tt_id, tok_idx, off, end);
-    }
+    }${SHAPE_RS ? `
+    #[inline(always)]
+    fn sh_tag(&mut self, t: i32) -> bool { self.b.tag(&mut self.scratch, t); true }` : ''}
     #[inline(always)]
     fn finish(&mut self, rule_id: u16, sb: usize, fallback_off: usize, tok_start: usize) -> Spanned<B::H> {
         let (h, off, present) = self.b.finish(
@@ -5450,6 +5473,8 @@ const rustLowering: Lowering = {
   ident: snake,
   num: { int: 'isize', lid: 'u16', depth: 'i64', pos: 'u32', idx: 'usize' },
   type: (t, role, owned) => {
+    if (isValTy(t)) return 'W';
+    if (isValList(t)) return role === 'param' ? '&[W]' : 'Vec<W>';
     if (isList(t)) {
       const el = isRecList(t) ? recName(t) : RS_ELEM[t];
       return role === 'param' ? `&[${el}]` : `Vec<${el}>`;
@@ -5554,7 +5579,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
       return { c: `${side(a, false)} ${sp} ${side(b, true)}`, prec: p };
     },
     // An engine method is one of the recovery engine (`self`).
-    call: (name, args, method) => `${method ? 'self.' : ''}${name}(${args.join(', ')})`,
+    call: (name, args, method) => `${method || (SHAPE_RS && rsShapeCall(name)) ? 'self.' : ''}${name}(${args.join(', ')})`,
     len: (cx, l) => cx.atom(`${rsWrap(l, ATOM)}.len()`, 'int', 'usize'),
     code: (cx, s, i) => ({ c: `${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}] as u32`, ty: 'int', nat: 'u32', prec: RS_CAST }),
     hasAt: (cx, s, i, lit) => cx.atom(`${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}..].starts_with(${J(lit)}.as_bytes())`, 'bool', 'bool'),
@@ -5642,6 +5667,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
       lexAll: (cx, s) => [`let (${s.mutable ? 'mut ' : ''}${s.out}, ${s.err}) = lex_all(${cx.str(s.text)});`],
     },
   },
+  shape: rsShapeLowering,
   record: {
     field: (cx, r, _rec, f, ty, nat) => cx.atom(`${rsWrap(r, ATOM)}.${snake(f)}`, ty, nat),
     setField: (id, f, val) => [`${id}.${snake(f)} = ${val};`],
@@ -5665,8 +5691,17 @@ export const rustTarget = defineParserTarget({
   lowering: rustLowering,
   emitParser(grammar: CstGrammar, shared: SharedAlgorithms, opts: EmitOptions): string {
     const ir = portableIR(grammar, FACTS);
-    // A shape-building parser needs Lowering.shape, which this target does not have yet: refused.
-    if (opts.shape) shared.shapeFamily(shared.shapePlan(opts.shape, ir));
+    if (opts.shape) {
+      if (opts.recovery) throw new Error('rustTarget: a shape-building parser has no total parsing yet (emit options `shape` and `recovery` together)');
+      if (opts.shape.source !== grammar) throw new Error('rustTarget: the shape was defined on another grammar object than the one emitted');
+      const plan = shared.shapePlan(opts.shape, ir);
+      const st = beginRsShape(plan, opts.shape, ir.entry);
+      setRsShape(st); SHAPE_RS = st;
+      try {
+        const fns = shared.shapeFamily({ ...plan, fns: rsPlanFns(plan.fns) });
+        return emitRustLibrary(plan.ir, buildLexIdPlan(plan.ir), shared, false) + rsShapeRuntime(st, fns);
+      } finally { setRsShape(null); SHAPE_RS = null; }
+    }
     return emitRustLibrary(ir, buildLexIdPlan(ir), shared, !!opts.recovery) + (opts.recovery ? recoveryRegionRust(ir, shared) : '');
   },
   emitRunner: (opts) => emitRunner(opts),
