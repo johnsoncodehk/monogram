@@ -5,8 +5,8 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA, type ShapeInhVal } from './emit-portable.ts';
-import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
-import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR } from './recovery-family.ts';
+import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_AMAX, RM_FAIL, RM_PROBE, RM_SP } from './recovery-family.ts';
 import type { EmitOptions } from './target.ts';
 import type { CstGrammar } from './types.ts';
 import type {
@@ -3491,10 +3491,12 @@ function recoveryEngineTs(ir: ParserIR): string {
   const sw = (on: string, cases: [number, string][]) => `switch (${on}) {${cases.map(([k, c]) => ` case ${k}: return ${c};`).join('')} }\n  throw new Error('recovery: no native function ' + ${on});`;
   const build = ir.rules.filter((r) => ir.forms.buildRules.includes(r.name));
   const holes = ir.tpl ? tplHoleRules(ir) : [];
-  return `const _RNAMES: string[] = ${J(ar.ruleNames)};
-// The marks (position, children height) the interpreter takes, in pairs; the offset of the node
-// last finished; the interpreted steps of the run.
+  return `const _RNAMES: string[] = ${J(withReservedRules(ar).ruleNames)};
+// The marks (position, children height, repair memory length) the interpreter takes, in triples;
+// the repair memory (recovery-family.ts RM_*); the offset of the node last finished; the
+// interpreted steps of the run.
 let _rmarks: number[] = [];
+let _rm: number[] = [];
 let _rfinOff = 0, _rsteps = 0, _ropLid = 0;
 function enPos(): number { return pos; }
 function enSetPos(p: number): void { pos = p; }
@@ -3525,9 +3527,22 @@ function enTpl(hole: number): boolean {
 }
 function enSh(): number { return _n; }
 function enCut(h: number): void { _n = h; }
-function enMark(): number { _rmarks.push(pos, _n); return _rmarks.length / 2 - 1; }
-function enReset(k: number): void { back(_rmarks[2 * k]!); _n = _rmarks[2 * k + 1]!; }
-function enUnmark(k: number): void { _rmarks.length = 2 * k; }
+function enMark(): number { _rmarks.push(pos, _n, _rm.length); return _rmarks.length / 3 - 1; }
+function enReset(k: number): void { back(_rmarks[3 * k]!); _n = _rmarks[3 * k + 1]!; _rm.length = _rmarks[3 * k + 2]!; }
+function enUnmark(k: number): void { _rmarks.length = 3 * k; }
+function enMarkDrop(k: number): void { _rmarks.splice(3 * k, 3); }
+function enRm(i: number): number { return _rm[i]!; }
+function enRmSet(i: number, v: number): void { _rm[i] = v; }
+function enRmLen(): number { return _rm.length; }
+function enRmPush(v: number): void { _rm.push(v); }
+function enRmCut(n: number): void { _rm.length = n; }
+function enMiss(r: number): void { const off = pos < toks.length ? toks[pos]!.off : pos > 0 ? toks[pos - 1]!.end : 0; _put(_RNAMES[r]!, _n, off, off, pos, off, off); }
+function enLookEnd(): number { return lookEnd(); }
+function enLookSet(e: number): void { maxLook = e; peekEnd = 0; }
+function litText(x: number): string { return _LIDS[x]!; }
+function kindText(x: number): string { return KIND_STR[x]!; }
+// A fresh repair memory: not recovering, no failure, no probe, no frame, no attempt, no bar.
+function _rmFresh(): void { _rm = new Array<number>(${RM_DIAGS}).fill(0); _rm[${RM_FAIL}] = -1; _rm[${RM_PROBE}] = -1; _rm[${RM_SP}] = -1; }
 function enWin(r: number, c: number, save: number, sb: number): void { finR(_RNAMES[r]!, c, save); _rfinOff = _sp[c * _SW]!; _keep(sb, c); }
 function enFinLed(r: number, sb: number, _off: number, _tok: number): void { finP(_RNAMES[r]!, sb); _rfinOff = _sp[sb * _SW]!; }
 function enFinOff(): number { return _rfinOff; }
@@ -3555,6 +3570,7 @@ export function parseInterpreted<H>(src: string, builder: Builder<H>, depth: num
   _builder = builder;
   _n = 0;
   _rmarks = [];
+  _rmFresh();
   _rsteps = 0;
   const ok = riRule(${ar.ruleNames.indexOf(ir.entry)}, depth) && pos === toks.length;
   const sole = ok && _soleOk(0);
@@ -3569,9 +3585,9 @@ function recoveryRegionTs(ir: ParserIR, shared: SharedAlgorithms): string {
   const ext = ir.reuse ? '\n  for (const m of _entries) if (m.ext > look) look = m.ext;' : '';
   return `
 // ---- recovery: the emit option { recovery: true }; generated from src/recovery-family.ts (shared by the TS / Go / Rust targets) ----
-type Diag = { kind: number; off: number; end: number; relOff: number; relEnd: number };
+type Diag = { kind: number; off: number; end: number; relOff: number; relEnd: number; arg: number };
 // The recovery interpreter's best longest-match candidate so far (recovery-family.ts BEST).
-type BestCand = { pos: number; off: number; won: number; form: number; tail: number; capped: number };
+type BestCand = { pos: number; off: number; won: number; form: number; tail: number; capped: number; h0: number; hb: number };
 ${shared.recoveryFamily(ir)}
 ${recoveryEngineTs(ir)}
 /** A diagnostic: a span of the source, its message, and a related location (relOff >= 0). */
@@ -3581,9 +3597,9 @@ function diagnosticOf(src: string, d: Diag): Diagnostic {
   if (d.relOff >= 0) out.related = { offset: d.relOff, end: d.relEnd, message: diagRelated(d) };
   return out;
 }
-// The reject facts of the parse over toks: the entry rule run as runW runs it, and its diagnostic.
-// The examined extent is the furthest of every top-level entry's (lookEnd() holds the last one's).
-function rejectRun<H>(src: string, builder: Builder<H>): Diag {
+// The strict parse's error over toks: the entry rule run as runW runs it, and its diagnostic. The
+// examined extent is the furthest of every top-level entry's (lookEnd() holds the last one's).
+function rejectRun<H>(builder: Builder<H>): Diag {
   pos = 0;
   lookReset();
   _builder = builder;
@@ -3593,19 +3609,48 @@ function rejectRun<H>(src: string, builder: Builder<H>): Diag {
   _hs.fill(null);
   return rejectDiag(toks, pos, ok, look);
 }
+// The work of the last parseTotal (the gate's measurement): interpreted steps, attempts, the most
+// attempts one scope took.
+let _rwork = [0, 0, 0];
+/** The interpreted steps, the attempts and the most attempts of one scope the last parseTotal took (0 for an accepted text). */
+export function lastTotalWork(): { steps: number; attempts: number; maxAttempts: number } { return { steps: _rwork[0]!, attempts: _rwork[1]!, maxAttempts: _rwork[2]! }; }
 /**
- * parseTotal: parseWith that also says why a text is rejected. An accepted text gives parseWith's
- * root and no errors; a rejected one no root and its errors (a lexer error, or the parse's primary
- * error), each with its span in the source.
+ * parseTotal: parseWith that also parses a rejected text. An accepted text gives parseWith's root
+ * and no errors. A rejected one gives a tree all the same, with its repairs (recovery-family.ts):
+ * \`$missing\` nodes (zero-width, no children) where a literal or token the parse required is
+ * absent, \`$error\` nodes over tokens it skipped, and one diagnostic per repair, in order; and
+ * \`strict\`, the error of the strict parse (where it stopped: the interpreter's primary error,
+ * with the farthest token it examined as its related location). A repair is placed where the fix
+ * goes, which can lie before the place the strict parse noticed the error. A text the lexer refuses
+ * gives no root and the lexer's error.
  */
-export function parseTotal<H>(src: string, builder: Builder<H>): { root: H | null; errors: Diagnostic[] } {
+export function parseTotal<H>(src: string, builder: Builder<H>): { root: H | null; errors: Diagnostic[]; strict?: Diagnostic } {
   _src = src;
+  _rwork = [0, 0, 0];
   const [ts, err] = lexAll(src);
   if (err !== null) return { root: null, errors: [{ offset: err.off, end: Math.max(err.off, err.end), message: lexError(src, err).message }] };
   toks = ts;
   const root = runW(builder);
   if (root !== null) return { root, errors: [] };
-  return { root: null, errors: [diagnosticOf(src, rejectRun(src, builder))] };
+  const strict = diagnosticOf(src, rejectRun(builder));
+  if (_tab_rt.length === 0) _tab_rt = unpackInts(_TABS_rt);
+  pos = 0;
+  lookReset();
+  _builder = builder;
+  _n = 0;
+  _capped = false; _form = 0; _tail = false; _suppressNext = 0; _suppressCur = 0; _ctx = 0;
+  _rmarks = [];
+  _rmFresh();
+  _rsteps = 0;
+  riTotal();
+  const sole = _soleOk(0);
+  const rec = sole ? _sole(0) as H : null;
+  _hs.fill(null);
+  if (!sole) throw new Error('the builder kept no node for the root rule of a recovered parse (a Builder must return one for the entry rule)');
+  const errors: Diagnostic[] = [];
+  for (let i = ${RM_DIAGS}; i + 2 < _rm.length; i += 3) errors.push(diagnosticOf(src, repairDiag(toks, _rm[i]!, _rm[i + 1]!, _rm[i + 2]!)));
+  _rwork = [_rsteps, _rm[${RM_ATT}]!, _rm[${RM_AMAX}]!];
+  return { root: rec, errors, strict };
 }
 `;
 }
