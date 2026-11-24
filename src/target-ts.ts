@@ -759,8 +759,13 @@ const rsCheck = (rule: string, val: string, stop: string): string => {
   const rs = rsOf(rule)!;
   return `if (_bu[b] !== ${val} && _SPN_${rule}[_ar[b]!]) { if (++nr > 1) _rsOver++; _rsRun(${rs.k}, ${val}, p0, b, ${stop}, minBp, ${rule}_bpW); }`;
 };
-const finRTs = (rule: string, key: string, b: string, save: string): string => (SHAPE ? `finS(${SHAPE.armId(rule, key)}, ${b}, ${save})` : `finR(${J(rule)}, ${b}, ${save})`);
-const finPTs = (rule: string, key: string, b: string): string => (SHAPE ? `finPS(${SHAPE.armId(rule, key)}, ${b})` : `finP(${J(rule)}, ${b})`);
+// The arm's records (shape-plan.ts: computed positions), published for its construct plan. TS: a
+// record is a function-scoped `var` of the rule function (declared here, at the accept site: the
+// step that takes it is an expression of the same function, and a `var` is the one declaration an
+// expression's function can get from a statement after it).
+const recsTs = (id: number): string => SHAPE!.recs[id]!.map((k) => `var _q${k}!: number; _Q${k} = _q${k}; `).join('');
+const finRTs = (rule: string, key: string, b: string, save: string): string => (SHAPE ? `${recsTs(SHAPE.armId(rule, key))}finS(${SHAPE.armId(rule, key)}, ${b}, ${save})` : `finR(${J(rule)}, ${b}, ${save})`);
+const finPTs = (rule: string, key: string, b: string): string => (SHAPE ? `${recsTs(SHAPE.armId(rule, key))}finPS(${SHAPE.armId(rule, key)}, ${b})` : `finP(${J(rule)}, ${b})`);
 function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
   const S = SUFFIX[m];
   const fn = (cond: string) => lift(ids, `return ${cond};`);
@@ -819,8 +824,9 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
       for (const { k, v } of s.inh ?? []) core = `_ipop(${k}, _ipush(${k}, ${iv(v)}), ${core})`;
       if (s.threadInit) core = `_ipop(${s.threadInit.k}, _ipush(${s.threadInit.k}, ${iv(s.threadInit.v)}), ${core})`;
       const tagged = s.tag !== undefined ? `(${core} && _tag(${s.tag}))` : core;
-      if (s.mark === undefined) return tagged;
-      return s.thread ? `_iterT(${s.mark}, ${fn(tagged)}, ${s.thread.next}, ${s.thread.k})` : `_iter(${s.mark}, ${fn(tagged)})`;
+      const rec = (x: string) => (s.rec !== undefined ? `(${x} && (_q${s.rec} = _n, true))` : x);
+      if (s.mark === undefined) return rec(tagged);
+      return rec(s.thread ? `_iterT(${s.mark}, ${fn(tagged)}, ${s.thread.next}, ${s.thread.k})` : `_iter(${s.mark}, ${fn(tagged)})`);
     } } : {}),
   };
   return L;
@@ -3194,7 +3200,7 @@ const tsBlock = (lines: string[]): string[] => lines.map((l) => TS_IND + l);
 // A construct plan's slot reads (shape-plan.ts EXTERNS) are this target's slot arrays: printed in
 // place, as the CST builder reads them (the slot layout, _hs / _sp / _tg, is this printer's).
 const SHAPE_SLOT_TS: Record<string, (a: string[]) => string> = {
-  slotVal: ([i]) => `_hs[${i}]`, slotTag: ([i]) => `_tg[${i}]!`, slotTop: () => '_n',
+  slotVal: ([i]) => `_hs[${i}]`, slotTag: ([i]) => `_tg[${i}]!`, slotTop: () => '_n', slotRec: ([k]) => `_Q${k}`,
   slotOff: ([i]) => `_sp[(${i}) * _SW]!`, slotEnd: ([i]) => `_sp[(${i}) * _SW + 1]!`, srcText: ([a, b]) => `_src.slice(${a}, ${b})`,
   textSpan: ([a, b]) => `_src.slice(${a}, ${b})`,
   // An IdentifierName with no escape is its text (the cook's own check is the slow path's).
@@ -3900,6 +3906,8 @@ let _tg: number[] = [];
 let _ar: number[] = [];
 // The slot the step just left gets tag t.
 function _tag(t: number): boolean { _tg[_n - 1] = t; return true; }
+// The records of the arm being accepted (set at its accept site, read by its plans: slotRec).
+${[...new Set(plan.recs.flat())].sort((a, b) => a - b).map((k) => `let _Q${k} = 0;`).join(' ')}
 // One iteration of a marked body: when it matched, a zero-width marker (tag mt) goes before its
 // slots (with the span and head of the first of them).
 function _iter(mt: number, f: () => boolean): boolean {

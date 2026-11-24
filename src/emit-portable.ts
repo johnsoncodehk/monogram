@@ -119,9 +119,11 @@ export function groupByPreserveOrder<T>(
 // `inh` / `threadInit` / `thread` (shape plans only): the inherited context a rule call sets (each
 // attribute k to a constant or a copy of attribute `copy`, restored after the call), the state a
 // threaded repetition starts from, and the function giving the next state after each iteration.
+// `rec` (shape plans only, a step of an arm's own sequence): the child stack's length right after
+// the step is record `rec` of the arm (shape-plan.ts: computed positions).
 export type ShapeInhVal = { c: string | number | boolean | null } | { copy: number };
 export type Step = StepOp & {
-  field?: string; src?: RuleExpr; tag?: number; mark?: number;
+  field?: string; src?: RuleExpr; tag?: number; mark?: number; rec?: number;
   inh?: { k: number; v: ShapeInhVal }[]; threadInit?: { k: number; v: ShapeInhVal }; thread?: { k: number; next: string };
 };
 type StepOp =
@@ -1625,6 +1627,9 @@ export type StepLowering = {
   // A shape plan's step (Step.tag / Step.mark; only a shape-building form has it): `body`, the
   // step printed, and then its slot's tag set / its children preceded by the iteration marker.
   shaped?(s: Step, body: string): string;
+  // An arm's condition whose steps take the records ks (Step.rec): with what the target needs
+  // around it to hold them until the accept site (absent: the accept site itself does it).
+  recs?(ks: number[], cond: string): string;
 };
 // The mark a repetition's body attempt takes: 'none' (Step.clean: a failure undoes nothing),
 // 'leaves' (Step.leaves: the position and the scratch list's length, not the builder's checkpoint),
@@ -1632,10 +1637,15 @@ export type StepLowering = {
 export type MarkForm = 'none' | 'leaves' | 'full';
 export const markOf = (s: { clean?: true; leaves?: true }): MarkForm => (s.clean ? 'none' : s.leaves ? 'leaves' : 'full');
 const conjOf = (steps: Step[], L: StepLowering): string => (steps.length ? steps.map((x) => stepExpr(x, L)).join(' && ') : 'true');
+/** An arm's own sequence as its accept site's condition (its records taken, when it has any). */
+const armConj = (steps: Step[], L: StepLowering): string => {
+  const ks = L.shaped ? steps.flatMap((x) => (x.rec !== undefined ? [x.rec] : [])) : [];
+  return ks.length && L.recs ? L.recs(ks, conjOf(steps, L)) : conjOf(steps, L);
+};
 /** A step as a boolean expression: a shared step's call, else the step itself (stepBody). */
 export function stepExpr(s: Step, L: StepLowering): string {
   if ('share' in s && s.share !== undefined) return L.shared(s.share);
-  if ((s.tag !== undefined || s.mark !== undefined || s.inh !== undefined || s.threadInit !== undefined) && L.shaped) return L.shaped(s, stepBody(s, L));
+  if ((s.tag !== undefined || s.mark !== undefined || s.inh !== undefined || s.threadInit !== undefined || s.rec !== undefined) && L.shaped) return L.shaped(s, stepBody(s, L));
   return stepBody(s, L);
 }
 // A target-context step (declared-targets.ts) printed by a target that does not print them yet.
@@ -1746,7 +1756,7 @@ function accCond(f: ArmForm | undefined, cond: string, S: StepLowering): string 
 /** An rd rule's function in the form `L` spells. */
 export function ruleShell(r: RdRule, ids: LexIdPlan, L: RuleLowering): string {
   // A container arm of a target context (RdRule.altForm) runs its steps inside its accumulator.
-  const condAt = (i: number, steps: Step[], S = L.steps) => accCond(r.altForm?.[i], conjOf(steps, S), S);
+  const condAt = (i: number, steps: Step[], S = L.steps) => accCond(r.altForm?.[i], armConj(steps, S), S);
   if (r.predictive) {
     const arm = (steps: Step[], i: number) => `${L.ind}${i === 0 ? '' : 'else '}${L.ifThen(L.first(r.altFirst[i] ?? null), `{ ${L.ifThen(condAt(i, steps), L.accept(i))} }`)}`;
     return L.fn([L.open(r.clean), L.peekOrFail, r.alts.map(arm).join(L.armJoin), L.fail(r.clean)]);
@@ -1943,7 +1953,7 @@ export type PrattLowering = {
 };
 /** A Pratt rule's functions in the form `L` spells. */
 export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | 'elements' | 'identToken' | 'identLike' | 'puncts' | 'gtComps'>, ids: LexIdPlan, L: PrattLowering): string {
-  const cond = (steps: Step[]) => conjOf(steps, L.steps);
+  const cond = (steps: Step[]) => armConj(steps, L.steps);
   const armCond = (i: number, steps: Step[]) => accCond(r.nudForm?.[i], cond(steps), L.steps);
   const tailCap = (fromTail: boolean): NodeCap => (fromTail ? 'tail' : 'none');
   const d = r.nudDispatch;

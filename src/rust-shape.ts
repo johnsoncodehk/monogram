@@ -226,7 +226,7 @@ export const rsShapeCall = (name: string): boolean => name.startsWith('cook_') |
  * parameter `s`, the engine's child stack itself (Builder::finish_arm passes it; nothing is copied). */
 export const RS_SLOT: Record<string, (a: string[]) => string> = {
   slot_tag: ([i]) => `(s[${i}].tag as isize)`, slot_off: ([i]) => `s[${i}].off`, slot_end: ([i]) => `s[${i}].end`,
-  slot_val: ([i]) => `s[${i}].w`, slot_top: () => 's.len()', slot_syn: ([k, i]) => `s[${i}].sy[${k} as usize]`,
+  slot_val: ([i]) => `s[${i}].w`, slot_top: () => 's.len()', slot_rec: ([k]) => `self.q[${k} as usize]`, slot_syn: ([k, i]) => `s[${i}].sy[${k} as usize]`,
   slot_arm_name: ([i]) => `(T_STRI | SH_ARM_NAME[s[${i}].arm as usize] as u64)`,
   slot_find: (a) => `slot_find(s, ${a.join(', ')})`, slot_find_last: (a) => `slot_find_last(s, ${a.join(', ')})`,
   slot_at: (a) => `slot_at(s, ${a.join(', ')})`, named_end: (a) => `named_end(s, ${a.join(', ')})`,
@@ -442,6 +442,8 @@ pub struct Ast<'s> {
     slab: Vec<W>,
     owned: Vec<String>,
     ys: [W; ${nsyn}],
+    /// The records of the arm being finished (Builder::rec; the plans' slot_rec).
+    q: [usize; ${Math.max(0, ...plan.recs.flat()) + 1}],
     ws: Workspace<Slot>,
     /// The offsets of the tokens of SH_ESC_KIDS with a backslash in this source (lexed), ascending:
     /// almost always none.
@@ -579,6 +581,7 @@ impl<'s> Builder for Ast<'s> {
     #[inline(always)] fn workspace_mut(&mut self) -> Option<&mut Workspace<Slot>> { Some(&mut self.ws) }
     fn tok_range(&self, _h: Slot) -> (u32, u32) { (0, 0) }
     #[inline(always)] fn tag(&mut self, scratch: &mut Vec<Slot>, t: i32) { let n = scratch.len(); scratch[n - 1].tag = t; }
+    #[inline(always)] fn rec(&mut self, k: usize, v: usize) { self.q[k] = v; }
     fn mark(&mut self, scratch: &mut Vec<Slot>, c: usize, mt: i32) {
         let mut m = if scratch.len() > c { scratch[c] } else { Slot { ho: 0, he: 0, ..Slot::default() } };
         m.w = W_ABSENT; m.tag = mt; m.arm = -1; m.end = m.off; m.sy = SH_SYN0;
