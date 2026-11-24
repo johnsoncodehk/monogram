@@ -3072,8 +3072,14 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
   // A cell is an int or a reference to a record already appended (-1: none), held relative.
   type Cell = number | { ref: number };
   const ref = (at: number): Cell => ({ ref: at });
+  // Records are read only, so one with the same cells as an earlier one is that one.
+  const seen = new Map<string, number>();
   const emit = (xs: Cell[]): number => {
+    const key = xs.map((x) => (typeof x === 'number' ? x : `r${x.ref}`)).join(',');
+    const old = seen.get(key);
+    if (old !== undefined) return old;
     const at = data.length;
+    seen.set(key, at);
     xs.forEach((x, j) => {
       if (typeof x === 'number') { data.push(x); return; }
       if (x.ref >= at + j) throw new Error('recoveryTables: a reference to a record not yet appended');
