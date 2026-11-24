@@ -805,6 +805,9 @@ export const CASES: Case[] = [
       'f<A>>(x);', 'x = a<b>>>c;', 'new A<B>>(c);', 'f<A<B>>(x);', 'a < B<C>> c;',
       // Every '>' is its own token; operators compose from adjacent ones.
       'x = a >>>= b >>= c >= d >> e >>> f;', 'let t: A<B<C<D<E>>>> = a >>> b;',
+      // Every '<' is its own token too: a type argument may open with `<` (`X<<T>…`, tsc's
+      // reScanLessThanToken), and `<<`, `<=`, `<<=` compose from adjacent ones.
+      'let x: X<<T>(a: T) => T>;', 'type Y = A<<T>() => T, B>;', 'f<<T>(x: T) => T>(y);', 'x = a <<= b << c <= d;', 'x = a<<b>c;', 'a <<\nb;',
       // A typed call / instantiation is a LeftHandSideExpression: its `<` is not an operator.
       'f<T>() = 1;', 'x = B<C> = 1;', 'x = B<C> += 1;', 'f<T>`x` = 1;', 'f<T>()++;', 'f<T>().x = 1;',
       '++(-x);', '++x.y;', '++f<T>();',
@@ -992,6 +995,7 @@ export const CASES: Case[] = [
       '[x++ ++];', 'f(a, x++ --);', '[-x = 1];', 'f(a + b = 1);', '[-x ** 2];', 'f(a, typeof x ** 2);', 'x = { a: ++ ++y };', 'class C { p = ++ ++y }',
       'f(class extends a + b {});', 'f(class extends void a {});', 'f(class extends class {});', 'f(class extends if {});',
       'a > > b;', 'a >> = b;', 'a >\n= b;', 'a >>>>= b;',
+      'a < < b;', 'a < = b;', 'a <\n= b;', 'a <<<= b;', 'let x: X< <T>(a: T) => T;',
       // Once a word is the member's name, nothing but the member's own tail may follow it.
       'class C { static static x; }', 'class C { public static<T> x; }', 'class C { public static?!: T; }', 'class C { public static x y; }', 'class C { public static = ; }',
       'x = { public static x y };', 'x = { public static: };', 'x = { public static() x };', 'x = { static public: 1 2 };',
