@@ -45,14 +45,19 @@ const RENDERED: AssertionClass[] = ['lowered', 'reserved-set'];
 // The expression identifier refuses every reserved word (land/shape-ident-reserved): the
 // `not('super')` / `not('new')` beside its reserved-word guard (Expr and NewTarget) are gone, those
 // words now in the guard's set (reserved -4; the set stays rendered).
+// JavaScript's phase imports (land/shape-test262-valid): the phase call's `( AssignmentExpression ,opt )` has
+// ImportCall's two `not('...')` (lookahead1 +2), and `import source x` / `import defer * as x` bind a
+// BindingIdentifier (reserved-set +2). A LegacyNumber is a MemberName but no member start (`memberStart`, shared
+// with TypeScript; in a class, strict code, it is an early error anyway), so ClassMember's two member-start
+// lookaheads are no longer vacuous (vacuous -2, lookahead1 +2).
 // A negative lookahead at an alternative's start renders as a zero-width start marker before the
 // other alternatives that can start as it excludes (planStartMarkers: the expression statement's,
 // the concise body's, the for heads', TypeScript's `constructor` member and module reference string):
 // js / jsx lowered +10 (lookahead1 -6, lookahead -4), ts / tsx lowered +12 (lookahead1 -8, lookahead -4).
 const PINNED: Record<string, Partial<Record<AssertionClass, number>>> = {
-  javascript:      { lowered: 53,  vacuous: 6,  'reserved-set': 45, scanner: 0,  reserved: 0, lookahead1: 11, lookahead: 4 },
+  javascript:      { lowered: 53,  vacuous: 4,  'reserved-set': 47, scanner: 0,  reserved: 0, lookahead1: 15, lookahead: 4 },
   typescript:      { lowered: 145, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 0, lookahead1: 80, lookahead: 65, 'left-context': 2 },
-  javascriptreact: { lowered: 55,  vacuous: 6,  'reserved-set': 45, scanner: 0,  reserved: 0, lookahead1: 11, lookahead: 4 },
+  javascriptreact: { lowered: 55,  vacuous: 4,  'reserved-set': 47, scanner: 0,  reserved: 0, lookahead1: 15, lookahead: 4 },
   typescriptreact: { lowered: 147, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 0, lookahead1: 80, lookahead: 65, 'left-context': 2 },
   yaml:            { lowered: 1,  scanner: 16, lookahead1: 6 },
 };

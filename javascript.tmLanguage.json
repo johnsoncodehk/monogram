@@ -94,6 +94,9 @@
       "include": "#number"
     },
     {
+      "include": "#legacynumber"
+    },
+    {
       "include": "#scope-keyword-operator-expression"
     },
     {
@@ -977,11 +980,15 @@
     },
     "bigint": {
       "name": "constant.numeric.bigint.js",
-      "match": "[0-9]+(?:_[0-9]+)*n(?![0-9A-Za-z_$\\\\])"
+      "match": "(?:0|[1-9][0-9]*(?:_[0-9]+)*)n(?![0-9A-Za-z_$\\\\])"
     },
     "number": {
       "name": "constant.numeric.decimal.js",
-      "match": "(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\\.[0-9]*(?:_[0-9]+)*)?|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])"
+      "match": "(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\\.(?!_)[0-9]*(?:_[0-9]+)*)?|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])"
+    },
+    "legacynumber": {
+      "name": "constant.numeric.decimal.js",
+      "match": "0[0-7]*[89][0-9]*(?:\\.(?!_)[0-9]*(?:_[0-9]+)*)?(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])|0[0-7]+(?![0-9A-Za-z_$\\\\])"
     },
     "template": {
       "name": "string.quoted.other.template.js",
@@ -1026,7 +1033,7 @@
     },
     "decorator": {
       "name": "entity.name.function.decorator.js",
-      "match": "@(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\}|\\.)*)?"
+      "match": "@(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\}|\\.#(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})|\\.)*)?"
     },
     "privatefield": {
       "name": "variable.other.property.js",
@@ -1540,12 +1547,15 @@
       ]
     },
     "import-export-all": {
-      "match": "\\b(import)\\s+(\\*)",
+      "match": "\\b(?:(import)\\s+(?:(defer)\\s+)?(\\*))",
       "captures": {
         "1": {
           "name": "keyword.control.import.js"
         },
         "2": {
+          "name": "keyword.control.import.phase.js"
+        },
+        "3": {
           "name": "constant.language.import-export-all.js"
         }
       }
@@ -1689,7 +1699,7 @@
       "name": "keyword.control.loop.js"
     },
     "scope-keyword-other": {
-      "match": "\\b(target|meta|as)\\b",
+      "match": "\\b(target|meta|source|as)\\b",
       "name": "keyword.other.js"
     },
     "scope-storage-type-class": {
@@ -1931,7 +1941,7 @@
       "name": "keyword.control.flow.js"
     },
     "expr-scope-keyword-other": {
-      "match": "\\b(target|meta)\\b",
+      "match": "\\b(target|meta|source)\\b",
       "name": "keyword.other.js"
     },
     "expression": {
@@ -2013,6 +2023,9 @@
         },
         {
           "include": "#number"
+        },
+        {
+          "include": "#legacynumber"
         },
         {
           "include": "#scope-keyword-operator-expression"
@@ -2295,6 +2308,9 @@
         },
         {
           "include": "#number"
+        },
+        {
+          "include": "#legacynumber"
         },
         {
           "include": "#bigint"
