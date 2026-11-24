@@ -62,6 +62,50 @@ performance claim in a pull request or in the README comes from one of these, ru
   (`parse_with`) against one `Allocator` `reset()` before each parse. Fresh mode (a new builder /
   allocator per parse) is reported beside it.
 
+### What moves the Pratt loop's instruction count
+The Rust LED loop (`Expr_bp`, and `Expr_bp'2`, Callgrind's name for its recursive calls) moved by
+1-5% between builds that did nearly the same work. Per-line Callgrind and objdump of the profiled
+binaries (2026-11-24; full profiles 45324707067, 45324710405, 45324753624, tools
+`$SHARED/scratch/sound-8/cgfn.py` / `cgdiff.py`) found three causes. None of them is noise: each
+repeats exactly.
+1. **An inlining flip.** `Expr_bin(op)` (the binary-operator `match`) was inlined while it had one
+   call site. A second call site (a composite-lead helper) made LLVM call it instead: +10 Ir per
+   operator read, 102,865 calls on checker.ts, net +0.72%. Callgrind shows the function as a new
+   callee.
+2. **Lid renumbering.** Adding one literal shifts every lid. `Expr_post`'s `match op { 27 | 28 }`
+   became `{ 24 | 25 }`, which LLVM lowers as `(op & 0xfffe) == 24` folded branch-free into the
+   neighbouring conditions: 8 instructions where `op - 27 < 2` + `jae` was 5. That is +4 Ir per
+   operator read (dense-plus +4.2M, typescript.js +1.7M) with no change in work.
+3. **A real compare on every read.** A second composite lead compared in the operator read
+   (`t.lid != GT_LID && t.lid != GT_LID2`) costs +3 Ir on every operator read, not only on `<`.
+How to read a +1% in this function: compare the callee lists (a new callee is an inlining flip),
+then the per-line delta keyed by source text (cgdiff.py). Lines that only exist in one build, or
+"line 0" (spills) moving against them, are codegen. A rise on a line the change did not touch,
+with identical call counts, is renumbering or register allocation.
+The remedy is the operator row (emit-portable `prattOpRow`): one masked table load per LED
+iteration, whatever the lids and however many call sites there are. The row also carries the led
+group's dense index, so the led switch is a match on `row >> 27` (cases 1..k, a jump table) rather
+than on the lid: a first version that kept `match t.lid` there cost typescript.d.ts +0.87%, because
+LLVM had folded the small rules' binary `match` into that lid jump table and the row added a second
+dispatch. A rule without postfix (binary) operators prints no postfix (binary) test at all. A test
+that can never pass still costs its instructions on every iteration: `Type_bp` paid +213k on
+typescript.d.ts for tests of fields its row never sets. What remains is one masked load per
+iteration (`Expr_bp'2` on checker.ts: +397k), partly offset by the composite-lead compare it
+replaces (-136k).
+
+### Large functions at the edge of the register budget
+The same symptom showed in the lexer. Making `@` a punctuator (one more punctuator site in
+`lex_from`) cost +0.35% of a checker.ts parse with identical work and token counts. Per line, the
+growth was "line 0" +322k and the whitespace arm +120k. In objdump, the dispatch was one jump table
+in both builds, but the input length `n`, kept in `%r14` in A, was spilled and reloaded inside the
+whitespace loop in M (stack references 755 -> 791). In the emitted Rust, a very large function
+(the lexer loop with about 70 inlined `emit` sites; a Pratt loop with its led arms inlined) sits at
+the edge of the register allocator's budget, so one more site spills a long-lived value somewhere
+else. How to recognise it: identical work counters, and the extra Ir in line 0 (spills) or on lines
+the change did not touch. The cure is structural, never a local tweak: make the varying part data
+instead of code (the operator row; punctuators as a table with one emit site), and move cold paths
+out of line so the hot loop stays small whatever the grammar declares.
+
 ## The harnesses
 
 | What | Where | When |
