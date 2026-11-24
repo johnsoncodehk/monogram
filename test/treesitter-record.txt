@@ -44,6 +44,8 @@ javascript | reserved words | accepts | unclassified | "const { default } = o;"
 javascript | reserved words | accepts | unclassified | "import { if } from \"m\";"
 javascript | test262 | rejects | import-attributes-not-rendered | test/language/import/import-defer/deferred-namespace-object/json-module.js
 javascript | test262 | rejects | import-attributes-not-rendered | test/language/import/import-defer/syntax/import-attributes.js
+javascript | test262 | rejects | marker-wins-over-marker-free-reading | test/language/statements/await-using/syntax/await-using-declaring-let-split-across-two-lines.js
+javascript | test262 | rejects | marker-wins-over-marker-free-reading | test/language/statements/generators/yield-as-generator-declaration-binding-identifier.js
 javascript | test262 | rejects | non-ascii-whitespace-not-skipped | test/language/module-code/source-phase-import/import-source-newlines_FIXTURE.js
 javascript | test262 | rejects | unclassified | test/annexB/language/statements/for-in/bare-initializer.js
 javascript | test262 | rejects | unclassified | test/annexB/language/statements/for-in/const-initializer.js
@@ -172,8 +174,8 @@ javascript | test262 | rejects | unclassified | test/language/white-space/after-
 javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-three-per-em-space.js
 javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-zwnbsp.js
 javascript | test262 | rejects | unclassified | test/language/white-space/between-nbsp.js
-javascript | test262 | spans | other | files 51
-javascript | test262 | spans | totals | span-equal 23360 of 23411, interpreter spans missing 12, extra tree-sitter spans 78
+javascript | test262 | spans | other | files 42
+javascript | test262 | spans | totals | span-equal 23362 of 23404, interpreter spans missing 4, extra tree-sitter spans 60
 javascriptreact | line breaks | rejects | unclassified | "function f() { return\n/a/ }"
 javascriptreact | lookaheads | accepts | unclassified | "try {}"
 javascriptreact | lookaheads | accepts | unclassified | "x = () => {}.x;"
@@ -196,8 +198,8 @@ typescript | TypeScript src | rejects | unclassified | src/lib/decorators.d.ts
 typescript | TypeScript src | rejects | unclassified | src/lib/dom.generated.d.ts
 typescript | TypeScript src | rejects | unclassified | src/lib/es5.d.ts
 typescript | TypeScript src | rejects | unclassified | src/services/codefixes/generateAccessors.ts
-typescript | TypeScript src | spans | other | files 3
-typescript | TypeScript src | spans | totals | span-equal 693 of 696, interpreter spans missing 3, extra tree-sitter spans 8
+typescript | TypeScript src | spans | other | files 2
+typescript | TypeScript src | spans | totals | span-equal 694 of 696, interpreter spans missing 1, extra tree-sitter spans 4
 typescript | contextual keywords | rejects | unclassified | "abstract: for (;;) continue abstract;"
 typescript | contextual keywords | rejects | unclassified | "abstract: while (1) break abstract;"
 typescript | contextual keywords | rejects | unclassified | "accessor: for (;;) continue accessor;"
