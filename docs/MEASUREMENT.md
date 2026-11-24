@@ -149,11 +149,29 @@ How to read it:
   0.680 to 0.860 in reuse mode (run 45222935238; `checker.ts` 0.805). Compare time ratios only
   within one job; the instruction columns are the stable ones.
 - The products differ (CST against AST), as stated above; this is not a like-for-like claim.
-- Not in the table: the TSX and JSX inputs. The oxc side of the harness parsed every file as
-  plain TypeScript, so oxc rejected both, and a ratio printed for them would compare a parse
-  with a rejection. The harness is being changed to take the source type from the file
-  extension and to print a ratio only when both parsers accept; those rows are recorded after
-  that.
+#### The element inputs (TSX and JSX)
+
+`measure-profile` full scope, run 45276033027, monogram at `908ed1e` (with only the input change of
+the harness on top), AMD EPYC runner; Callgrind instructions per parse. The inputs
+([`element-inputs.ts`](../test/bench-rust-profile/element-inputs.ts)) are the tsc conformance
+corpus's element code filtered to the parts BOTH parsers accept (and tsc's parser): 319 TSX parts of
+the 425 that contain a tag (tsc's parser accepts 364, the interpreter 360 of those, oxc rejects 2 of
+them, 39 left out for repeating an earlier part's export), 67 JSX parts of the 366 that tsc's parser
+accepts (the interpreter 85, 18 left out for a repeated export); each input joins its parts. Both
+parsers accept every part and each joined input.
+
+| input | bytes | parts | oxc, reuse | monogram, reuse | ÷ oxc | oxc, fresh | monogram, fresh | ÷ oxc |
+|:--|--:|--:|--:|--:|--:|--:|--:|--:|
+| `jsx-corpus.tsx` (typescriptreact) | 168,466 | 319 | 10,380,015 | 13,982,077 | 1.347 | 10,366,486 | 14,436,673 | 1.393 |
+| `jsx-corpus.jsx` (javascriptreact) | 9,335 | 67 | 503,319 | 613,844 | 1.220 | 503,660 | 643,825 | 1.278 |
+
+On element code monogram executes 22% to 39% more instructions than oxc, where on plain TypeScript
+it executes fewer (the table above). Per token of `jsx-corpus.tsx` (33,089 tokens) monogram runs
+422.6 instructions (reuse) against 297.1 on `checker.ts` in the same run, oxc 313.7 against 334.5:
+monogram's cost per token rises by 42% on element code and oxc's falls by 6%. Of monogram's
++125.5 per token, the lexer alone accounts for +48.5 (190.8 against 142.3: the element frames,
+text runs and holes of the section "Recorded result: element dialects" below, where the same
+lexer figure was 203.7 on an earlier corpus), the rest is the parse.
 
 ### monogram `e6cc55c` (2026-11-22)
 
@@ -208,6 +226,34 @@ There monogram executed 26% to 69% more instructions per parse than oxc (1.42 ti
 
 These tables are hand-written from on-demand runs and are not regenerated. In reuse mode
 monogram makes no allocator call per parse and neither parser takes a page fault.
+
+## Building the AST directly against building the CST
+
+TypeScript target; 2026-11-24; measured on the part of each real input that the shape covers: the
+outermost expression statements the shape builds, concatenated: checker.ts 11.4% and parser.ts
+8.8% under the tsc expression shape, typescript.js 17.2% under the ESTree shape; V8 precise block
+counts of one parse (test/bench-targets/blocks.ts) and exact allocation counts (alloc-instrument).
+The fused shape-building parser (a construct plan per arm, slot positions fixed at generation time,
+one flat object literal per node under the keys the shape declares) allocates fewer objects than
+the CST build: checker.ts 159,507 against 177,232 (-10%, 5.52 against 6.15 MB), parser.ts 26,166
+against 29,229 (-10.5%), typescript.js 868,500 against 871,876 (-0.4%, 27.1 against 28.9 MB). It
+still executes 3.6% (checker.ts), 3.8% (parser.ts) and 7.8% (typescript.js) more V8 blocks: the
+engine's share is the same, and the builder's share is 631k blocks against the CST builder's 474k
+on checker.ts. Part of that gap belongs to the slot-stack form: slot tags and iteration markers,
+and a missing-value check on each child read, which a partial shape needs and a total one does
+not. The rest is work an AST has and a CST does not: cooked strings (names and values; about 22k
+objects on checker.ts), attribute equations (tsc `optional` / `constructorName`; ESTree
+`directive`, `optional`, `stringBody`, `constructorName`), and, under ESTree's `chainTop`, one of
+the two variants built for each chain link and then discarded (64,555 pairs on typescript.js, 103
+on checker.ts with the tsc shape). For comparison, before the fused plan (the uniform
+intermediate, S2) the shape build cost 24-36% more blocks and about twice the allocations. The
+like-for-like comparison with oxc (typed structs in arenas) is the Rust printer's.
+
+| input (shape) | CST nodes + leaves | shape nodes + lists | allocations CST -> shape | bytes CST -> shape | V8 blocks CST -> shape |
+| --- | --- | --- | --- | --- | --- |
+| checker.ts, covered (tsc) | 36,260 + 25,736 | 45,216 + 5,011 | 177,232 -> 159,507 (-10.0%) | 6.15 -> 5.52 MB | 4,139,750 -> 4,288,390 (+3.6%) |
+| parser.ts, covered (tsc) | 6,103 + 4,039 | 7,388 + 969 | 29,229 -> 26,166 (-10.5%) | 0.99 -> 0.87 MB | 658,496 -> 683,626 (+3.8%) |
+| typescript.js, covered (ESTree) | 182,718 + 128,787 | 202,392 + 22,745 | 871,876 -> 868,500 (-0.4%) | 28.9 -> 27.1 MB | 19,949,949 -> 21,506,871 (+7.8%) |
 
 ## Recorded result: element dialects (TSX and JSX)
 
