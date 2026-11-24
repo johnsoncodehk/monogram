@@ -3545,7 +3545,14 @@ ${liftedFns(ids)}`;
 // functions exist in building form).
 function recoveryEngineTs(ir: ParserIR): string {
   const ids = buildLexIdPlan(ir), ar = buildArenaIdPlan(ir, ids);
-  const sw = (on: string, cases: [number, string][]) => `switch (${on}) {${cases.map(([k, c]) => ` case ${k}: return ${c};`).join('')} }\n  throw new Error('recovery: no native function ' + ${on});`;
+  // A dispatch whose every case calls a function with no argument is a table of the functions (shorter).
+  const sw = (on: string, cases: [number, string][]) => {
+    const none = `\n  throw new Error('recovery: no native function ' + ${on});`;
+    if (cases.length === 0 || !cases.every(([, c]) => /^\w+\(\)$/.test(c))) return `switch (${on}) {${cases.map(([k, c]) => ` case ${k}: return ${c};`).join('')} }${none}`;
+    const slots: string[] = [];
+    for (const [k, c] of cases) slots[k] = c.slice(0, -2);
+    return `const f = [${Array.from(slots, (x) => x ?? '').join(', ')}][${on}];\n  if (f !== undefined) return f();${none}`;
+  };
   const build = ir.rules.filter((r) => ir.forms.buildRules.includes(r.name));
   const holes = ir.tpl ? tplHoleRules(ir) : [];
   return `const _RNAMES: string[] = ${J(withReservedRules(ar).ruleNames)};
