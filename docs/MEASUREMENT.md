@@ -87,7 +87,24 @@ iteration, whatever the lids and however many call sites there are. The row also
 group's dense index, so the led switch is a match on `row >> 27` (cases 1..k, a jump table) rather
 than on the lid: a first version that kept `match t.lid` there cost typescript.d.ts +0.87%, because
 LLVM had folded the small rules' binary `match` into that lid jump table and the row added a second
-dispatch.
+dispatch. A rule without postfix (binary) operators prints no postfix (binary) test at all. A test
+that can never pass still costs its instructions on every iteration: `Type_bp` paid +213k on
+typescript.d.ts for tests of fields its row never sets. What remains is one masked load per
+iteration (`Expr_bp'2` on checker.ts: +397k), partly offset by the composite-lead compare it
+replaces (-136k).
+
+### Large functions at the edge of the register budget
+The same symptom showed in the lexer. Making `@` a punctuator (one more punctuator site in
+`lex_from`) cost +0.35% of a checker.ts parse with identical work and token counts. Per line, the
+growth was "line 0" +322k and the whitespace arm +120k. In objdump, the dispatch was one jump table
+in both builds, but the input length `n`, kept in `%r14` in A, was spilled and reloaded inside the
+whitespace loop in M (stack references 755 -> 791). In the emitted Rust, a very large function
+(the lexer loop with about 70 inlined `emit` sites; a Pratt loop with its led arms inlined) sits at
+the edge of the register allocator's budget, so one more site spills a long-lived value somewhere
+else. How to recognise it: identical work counters, and the extra Ir in line 0 (spills) or on lines
+the change did not touch. The cure is structural, never a local tweak: make the varying part data
+instead of code (the operator row; punctuators as a table with one emit site), and move cold paths
+out of line so the hot loop stays small whatever the grammar declares.
 
 ## The harnesses
 
