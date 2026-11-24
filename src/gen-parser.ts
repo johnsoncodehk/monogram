@@ -159,6 +159,12 @@ export function createParser(grammar: CstGrammar) {
   function selfRefName(e: RuleExpr | undefined, ruleName: string): boolean {
     return !!e && e.type === 'ref' && e.name === ruleName;
   }
+  // An operand of this rule read at an operator's level (`atLevel(op, $)`): a NUD ending in one is
+  // PREFIX-SHAPED (the type assertion `<T>e`, a capped prefix `not e`): its node closes the tail and
+  // has the prefix-unary form (not a target, no noUnaryLhs left operand), as emit-portable derives.
+  function selfAtLevel(e: RuleExpr | undefined, ruleName: string): boolean {
+    return !!e && e.type === 'group' && e.atLevel !== undefined && selfRefName(e.body, ruleName);
+  }
   type MixfixInfo = { openLit: string; sepLit: string };
   // A continuation `<lit L1> $self <lit L2> …` whose inner `$self` operand can
   // over-consume the `L2` the operator needs (e.g. ternary `? $ : $`, conditional
@@ -428,6 +434,9 @@ export function createParser(grammar: CstGrammar) {
     // parsePratt (operator RHS) inherit it; a nested parseRule (bracketed group,
     // operand of a non-op LED) resets it — matching the spec's [~In] propagation.
     let suppressNext: Set<string> | null = null;
+    // The node before the item the current sequence is matching, for a target check that opens an
+    // opt / alternation branch (matchSeqTargets); undefined at a rule's start.
+    let targetPrev: CstChild | undefined;
     let suppressCur: Set<string> | null = null;
 
     // A reference to the template token, matched at the current position: the token itself (a
@@ -565,7 +574,7 @@ export function createParser(grammar: CstGrammar) {
 
     // Left-recursive rule without Pratt: parse atom then try continuations
     function parseLeftRec(rule: RuleDecl): CstNode | null {
-      const { atoms, continuations } = leftRecClassified.get(rule.name)!;
+      const { atoms, continuations, contAlts } = leftRecClassified.get(rule.name)!;
       const saved = pos;
 
       // Parse atom (longest match)
@@ -585,6 +594,7 @@ export function createParser(grammar: CstGrammar) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
           node = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
+          tw?.built(node, atom);
           bestAtomPos = pos;
           const items = atom.type === 'seq' ? atom.items : [atom];
           tailClosed = selfRefName(items[items.length - 1], rule.name);
@@ -596,7 +606,7 @@ export function createParser(grammar: CstGrammar) {
       // Try continuations repeatedly
       outer: while (true) {
         const contSaved = pos;
-        for (const cont of continuations) {
+        for (const [ci, cont] of continuations.entries()) {
           // notLeftLeaf head-leaf gate: skip this continuation when the LEFT node's outermost (head)
           // leaf text is in its word set (e.g. `void`/`null`/`this` can't be `.`-qualified as a type).
           if (tailClosed && accessTailLeds.has(cont)) continue;
@@ -620,6 +630,7 @@ export function createParser(grammar: CstGrammar) {
               offset: node.offset,
               end: children.length > 0 ? childEnd(children[children.length - 1]) : node.end,
             };
+            tw?.built(node, contAlts[ci]!);
             if (tailClosingLeds.has(cont)) tailClosed = true;
             continue outer;
           }
@@ -631,12 +642,15 @@ export function createParser(grammar: CstGrammar) {
       return node;
     }
 
+    // The nodes a prefix-shaped NUD built (selfAtLevel): their form is the prefix-unary one.
+    const unaryNodes = new WeakSet<CstNode>();
     // Assignment-target shape test (ECMAScript AssignmentTargetType): a node is NOT a valid
     // LHS target iff its outermost form is a prefix-op (prefix-unary OR prefix-update `++x`)
     // — head child is an `$operator` leaf in prefixOps — or a postfix-update (`x++`) — tail
     // child is an `$operator` leaf in postfixOpValues. A parenthesized cover / member /
     // element / call / non-null (`!`) tail has no `$operator` leaf at head or tail → passes.
     const notAssignTarget = (node: CstNode): boolean => {
+      if (unaryNodes.has(node)) return true;
       const cs = node.children;
       if (cs.length === 0) return false;
       const head = cs[0];
@@ -736,6 +750,7 @@ export function createParser(grammar: CstGrammar) {
               if (rhs && info.requireTarget && notAssignTarget(rhs)) return null;
               if (rhs && pos > bestNudPos) {
                 lhs = { rule: (rule.canon ?? rule.name), children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end };
+                if (info.capBp !== undefined) unaryNodes.add(lhs);
                 tw?.op(lhs, rule.name, 'prefix', key);
                 bestNudPos = pos;
                 nudClosed = true;
@@ -753,10 +768,13 @@ export function createParser(grammar: CstGrammar) {
           lhs = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
           tw?.built(lhs, nud);
           bestNudPos = pos;
-          nudClosed = selfRefName(items[items.length - 1], rule.name);
+          const endsSelf = selfRefName(items[items.length - 1], rule.name);
+          const unary = selfAtLevel(items[items.length - 1], rule.name);
+          nudClosed = endsSelf || unary;
+          if (unary) unaryNodes.add(lhs);
           // The LONGEST match wins; record whether it is capped: a capped arm, or one whose
           // trailing self operand returned capped (`...() => {}`: CAP PROPAGATION, below).
-          capped = capBp !== null || (nudClosed && _prattCapped);
+          capped = capBp !== null || (endsSelf && _prattCapped);
         }
       }
       if (!lhs) return null;
@@ -876,6 +894,7 @@ export function createParser(grammar: CstGrammar) {
             // identifier splitting the statement). `(-x) ** y` is unaffected: lhs is then
             // a parenthesized node, not a prefix node.
             if (noUnaryLhsOps.has(tokKey) && 'children' in lhs) {
+              if (unaryNodes.has(lhs)) return null;
               const head = lhs.children[0];
               if (head !== undefined && 'tokenType' in head && head.tokenType === '$operator'
                   && prefixOps.has(source.slice(head.offset, head.end)) && !postfixOpValues.has(source.slice(head.offset, head.end))) {
@@ -937,7 +956,9 @@ export function createParser(grammar: CstGrammar) {
           // match empty) — avoids speculatively parsing+failing rules like
           // DecoratorExpr/TypeParams at every position.
           if (!ruleMightStart(expr.name, peek())) return null;
+          const outerPrev = targetPrev; targetPrev = undefined;   // a rule's body starts with no node before it
           const node = parseRule(expr.name);
+          targetPrev = outerPrev;
           if (node && tw) tw.produced(node, expr);
           return node ? [node] : null;
         }
@@ -962,7 +983,9 @@ export function createParser(grammar: CstGrammar) {
           if (lvl !== null) {
             const r = (expr.body as { name: string }).name;
             if (!ruleMightStart(r, peek())) return null;
+            const outerPrev = targetPrev; targetPrev = undefined;
             const node = parsePratt(ruleByName.get(r)!, lvl);
+            targetPrev = outerPrev;
             return node ? [node] : null;
           }
           // A `suppress`-carrying group disables the listed LED connectors for the
@@ -1026,15 +1049,36 @@ export function createParser(grammar: CstGrammar) {
     function matchSeq(items: RuleExpr[]): CstChild[] | null {
       const saved = pos;
       const children: CstChild[] = [];
+      if (tw) return matchSeqTargets(items, saved, children);
       for (const item of items) {
         // Skip op/prefix/postfix markers in sequence (handled by Pratt)
         if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') continue;
-        // A declared target check (CstGrammar.targets): the node just before it passes the context.
+        const result = matchExpr(item);
+        if (result === null) { pos = saved; return null; }
+        children.push(...result);
+      }
+      return children;
+    }
+    // matchSeq in a grammar that declares target contexts (CstGrammar.targets): a target check
+    // reads the last NODE before it, in this sequence or, through an opt / alternation branch /
+    // group, in the one enclosing it (`targetPrev`: what the enclosing sequence had matched when
+    // it entered the item this sequence belongs to). declared-targets.ts admits a target only
+    // where that node is statically one rule's and the portable engine's form register holds it.
+    function matchSeqTargets(items: RuleExpr[], saved: number, children: CstChild[]): CstChild[] | null {
+      const outer = targetPrev;
+      const last = (): CstChild | undefined => {
+        for (let k = children.length - 1; k >= 0; k--) if (!('tokenType' in children[k]!)) return children[k];
+        return outer;
+      };
+      for (const item of items) {
+        if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') continue;
         if (item.type === 'target') {
-          if (!tw!.passes(children[children.length - 1], item.ctx, source)) { pos = saved; return null; }
+          if (!tw!.passes(last(), item.ctx, source)) { pos = saved; return null; }
           continue;
         }
+        targetPrev = last();
         const result = matchExpr(item);
+        targetPrev = outer;
         if (result === null) { pos = saved; return null; }
         children.push(...result);
       }

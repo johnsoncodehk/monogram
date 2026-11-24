@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA, type ShapeInhVal, type TargetsIR } from './emit-portable.ts';
-import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, nudLowForm, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_AMAX, RM_FAIL, RM_PROBE, RM_SP } from './recovery-family.ts';
 import type { EmitOptions } from './target.ts';
@@ -260,6 +260,10 @@ ${sig ? `${tsFlagTable('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
   const prevIsValue = p.rxStateFrom.replace('function prevIsValue(): boolean {\n', `function prevIsValue(): boolean {
     if (toks.length <= valueTo) return true;
 `);
+  // where an operand may start (an operand element entry): not after a value, nor after a member
+  // accessor (regexContext.memberAccessTexts: a name follows it, so \`a?.<T>(x)\` opens no element)
+  const operandStarts = operand ? `function operandStarts(): boolean { return !prevIsValue() && !(hasPrev && !!_mem[prevLid]); }
+` : '';
   const rxParams = rx ? 'prevLid: number, prevKid: number, bpLid: number, hasPrev: boolean, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, ' : '';
   const rxRet = rx ? 'prevLid: number; prevKid: number; hasPrev: boolean; bpLid: number; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean; ' : '';
   const rxNames = rx ? 'prevLid, prevKid, hasPrev, bpLid, hasPrev2, parenHead, lastClose, lastBang, ' : '';
@@ -325,8 +329,8 @@ ${rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]
   // (in a directive head, code inside an element frame, a tagOpen opens no element)
   const opensTag = `src.startsWith(${J(el.tagOpen)}, pos)${el.tagStart ? ` && ${shared.elementFn('tagStart')}(src, pos + ${L})` : ''}${dirs ? ' && (templateStack.length === 0 || (templateStack[templateStack.length - 1] & 3) !== 2)' : ''}`;
   const entry = !operand ? `    if (${opensTag}) {\n${enter}    }\n`
-    : !(el.head || sig) ? `    if (${opensTag} && !prevIsValue()) {\n${enter}    }\n`
-    : `    if (${opensTag}${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue()) {
+    : !(el.head || sig) ? `    if (${opensTag} && operandStarts()) {\n${enter}    }\n`
+    : `    if (${opensTag}${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && operandStarts()) {
       let op: number;
       ${sig ? 'if (pos === specAt) { op = specKeep ? 0 : 1; specAt = -1; } else ' : ''}{ ${tsTake(['o', 're'], shared.elementFn('opens'), 'src, pos')} op = o; if (re > laEnd) laEnd = re; }
       if (op === 1) {
@@ -407,7 +411,7 @@ ${p.uniIdentFallbackTs}${TS_UNEXPECTED}
   const n = src.length;
   const base = toks.length;
   let err: LexErr | null = null;
-${prevIsValue}${hotState}${specState}${emitFn}  refresh();
+${prevIsValue}${operandStarts}${hotState}${specState}${emitFn}  refresh();
 ${loop}
   return { pos, pendingNl, ${rxNames}templateStack, elEnded: toks.length === elEndAt, tagAngle, laEnd, specUntil${raw ? ', tagAt' : ''}, err };
 }
@@ -1009,7 +1013,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
   const cn = J(r.name);
   const d = r.nudDispatch;
   // Each arm's form (declared-targets.ts; without target contexts every one but the prefix arm's is 0).
-  const fm = (i: number) => (r.nudForm ? armFormTs(r.nudForm[i]!, true) : '0');
+  const fm = (i: number) => (r.nudForm ? armFormTs(r.nudForm[i]!, true) : `${nudLowForm(r, i)}`);
   const postTokForm = (k: number) => r.postfixTokForm?.[r.postfixToks.findIndex((tok) => kidOf(ids, tok) === k)] ?? 0;
   const lf = (f: string) => lowTs(ir, f);
   // The binary node's form: not a target, plus its leaf bits and those its left operand passes.
@@ -2492,7 +2496,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
         const _sk: unknown[] = [];
         const _ap: number[] = [];
         if (_shapeTxn(_sk, _ap, () => ${inner}) && pos > bestPos) {
-          ${r.nudBracketClosesTail[bi] ? 'pt = true; ' : ''}${r.nudBracketCapsFromTail[bi] ? 'pc = _capped; ' : ''}${finish}
+          ${r.nudBracketForm[bi] ? `pf = ${r.nudBracketForm[bi]}; ` : ''}${r.nudBracketClosesTail[bi] ? 'pt = true; ' : ''}${r.nudBracketCapsFromTail[bi] ? 'pc = _capped; ' : ''}${finish}
         }
         pos = save;
       }`;
@@ -2583,7 +2587,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
       } else {
         finish = `return ${keepFinish('_sk', 'save')} as ${retType};`;
       }
-      return `  { const save = pos; const _sk: unknown[] = []; const _ap: number[] = []; if (_shapeTxn(_sk, _ap, () => ${inner}) && pos > bestPos) { ${r.nudSeqClosesTail[si] ? 'pt = true; ' : ''}${r.nudSeqCapsFromTail[si] ? 'pc = _capped; ' : ''}${finish} } pos = save; }`;
+      return `  { const save = pos; const _sk: unknown[] = []; const _ap: number[] = []; if (_shapeTxn(_sk, _ap, () => ${inner}) && pos > bestPos) { ${r.nudSeqForm[si] ? `pf = ${r.nudSeqForm[si]}; ` : ''}${r.nudSeqClosesTail[si] ? 'pt = true; ' : ''}${r.nudSeqCapsFromTail[si] ? 'pc = _capped; ' : ''}${finish} } pos = save; }`;
     });
   }
 

@@ -13,7 +13,7 @@
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
-import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, nudLowForm, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
@@ -486,7 +486,10 @@ ${inl}    fn prev_is_value(&self) -> bool {
         let is_paren_head = prev_lid == _LID_RPAREN && self.last_close;
         !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'prev_kid')} || ${rsFlag('_DIVT', 'prev_lid')})
     }
-` : ''}${inl}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
+${operand ? `    /// Where an operand may start (an operand element entry): not after a value, nor after a member
+    /// accessor (regexContext.memberAccessTexts: a name follows it, so \`a?.<T>(x)\` opens no element).
+    fn operand_starts(&self) -> bool { if self.prev_is_value() { return false; } let (has_prev, _, prev_lid) = self.prev(); !(has_prev && ${rsFlag('_MEM', 'prev_lid')}) }
+` : ''}` : ''}${inl}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
 ${rx ? `        if lid == _LID_LPAREN { let (has_prev2, bp_lid) = self.prev2(); let (_, prev_kid, prev_lid) = self.prev(); let is_member = has_prev2 && ${rsFlag('_MEM', 'bp_lid')}; self.paren_head.push(!is_member && prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'prev_lid')}); }
         else if lid == _LID_RPAREN { self.last_close = self.paren_head.pop().unwrap_or(false); }
         if ${p.pavHot} { self.last_bang = self.prev_is_value(); }
@@ -562,8 +565,8 @@ ${spec}`;
   // (in a directive head, code inside an element frame, a tagOpen opens no element)
   const opensTag = `${at(el.tagOpen)}${el.tagStart ? ` && ${shared.elementFn('tagStart')}(src, (pos + ${L}) as isize)` : ''}${dirs ? ' && st.template_stack.last().map_or(true, |&t| t & 3 != 2)' : ''}`;
   const entry = !operand ? `        if ${opensTag} {\n${enter}        }\n`
-    : !(el.head || sig) ? `        if ${opensTag} && !st.prev_is_value() {\n${enter}        }\n`
-    : `        if ${opensTag}${sig ? ' && !st.spec_on && pos as isize >= st.spec_until' : ''} && !st.prev_is_value() {
+    : !(el.head || sig) ? `        if ${opensTag} && st.operand_starts() {\n${enter}        }\n`
+    : `        if ${opensTag}${sig ? ' && !st.spec_on && pos as isize >= st.spec_until' : ''} && st.operand_starts() {
             let op;
             ${sig ? 'if sp.has_at && pos == sp.at { op = if sp.keep { 0 } else { 1 }; sp.has_at = false; } else ' : ''}{ let (o, re) = ${shared.elementFn('opens')}(src, pos as isize); op = o; if re > st.la_end { st.la_end = re; } }
             if op == 1 {
@@ -1500,7 +1503,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   const ops = prattOpTables(r, ids);
   const binArms = ops.bin.map((b) => `${b.lid} => Some((${b.lbp}, ${b.rbp}, ${binTestsLeft(b)}, ${b.noUnary}))`).join(', ');
   // Each arm's form (declared-targets.ts; without target contexts every one but the prefix arm's is 0).
-  const fm = (i: number) => (r.nudForm ? armFormRs(r.nudForm[i]!, true) : '0');
+  const fm = (i: number) => (r.nudForm ? armFormRs(r.nudForm[i]!, true) : `${nudLowForm(r, i)}`);
   const postTokForm = (k: number) => r.postfixTokForm?.[r.postfixToks.findIndex((tok) => kidOf(ids, tok) === k)] ?? 0;
   const lf = (f: string) => lowRs(ir, f);
   // The binary node's form: not a target, plus its leaf bits and those its left operand passes.
@@ -4128,7 +4131,7 @@ function emitRustPrattMethod(
             let _ap_base = self.ap_stack.len();
             ${st.ok}
             if ${st.okVar} {
-                ${rule.nudBracketClosesTail[bi] ? '*pt = true; ' : ''}${rule.nudBracketCapsFromTail[bi] ? '*pc = self.capped; ' : ''}${finish}
+                ${rule.nudBracketForm[bi] ? `*pf = ${rule.nudBracketForm[bi]}; ` : ''}${rule.nudBracketClosesTail[bi] ? '*pt = true; ' : ''}${rule.nudBracketCapsFromTail[bi] ? '*pc = self.capped; ' : ''}${finish}
                 self.ap_stack.truncate(_ap_base);
             }
             self.pos = save;
@@ -4229,7 +4232,7 @@ function emitRustPrattMethod(
                 let _ap_base = self.ap_stack.len();
                 ${st.ok}
                 if ${st.okVar} {
-                    ${rule.nudSeqClosesTail[si] ? '*pt = true; ' : ''}${rule.nudSeqCapsFromTail[si] ? '*pc = self.capped; ' : ''}${finish}
+                    ${rule.nudSeqForm[si] ? `*pf = ${rule.nudSeqForm[si]}; ` : ''}${rule.nudSeqClosesTail[si] ? '*pt = true; ' : ''}${rule.nudSeqCapsFromTail[si] ? '*pc = self.capped; ' : ''}${finish}
                     self.ap_stack.truncate(_ap_base);
                 }
             }

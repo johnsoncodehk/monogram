@@ -1,9 +1,9 @@
 // Gate class of the portable targets (test/portable-harness.ts): TOTAL PARSING.
 import type { CstGrammar } from '../src/types.ts';
-import { mutationCorpus } from './mutation-corpus.ts';
+import { mutationEdits, type Mutant } from './mutation-corpus.ts';
 import { CURATED_TS } from './emit-corpus.ts';
 import { ECMASCRIPT, canon, finish, gate, parityCorpus, prepareAll, selectedCases, primaryLexMsg, type Case, type DiagRow, type Outcome, type Runner, type Total } from './portable-harness.ts';
-import { checkContract, summarize, withOperandSamples, type ContractRow } from './recovery-contract.ts';
+import { checkContract, damage, summarize, withOperandSamples, type ContractRow } from './recovery-contract.ts';
 import { RM_MAX_BARS } from '../src/recovery-family.ts';
 import type { Tok } from './parity-corpus.ts';
 import { portableIR, type PortableFacts } from '../src/emit-portable.ts';
@@ -37,8 +37,10 @@ import { FACTS as RS_FACTS } from '../src/target-rust.ts';
 //   - Go and Rust give the TS target's tree and diagnostics (P6), their byte offsets mapped to
 //     UTF-16 units over the input itself; the TS target gives the same outcome twice.
 // The measurements the coordinator asked for (fallback share, `$error` spans, attempts, the steps
-// of a recovery against a strict interpretation of the same input, P10's checkable share) are
-// printed for the TS target.
+// of a recovery against a strict interpretation of the same input, P10's checkable share, each
+// mutant's DAMAGE and STABILITY against its original: recovery-contract.ts damage) are printed for
+// the TS target; docs/TARGETS.md records them. Not gated: the seeded mutants are redrawn whenever a
+// grammar literal or an accept row changes, so a floor would be re-measured on every such change.
 const RECOVERY_MUTANTS = 3, RECOVERY_SEED = 20261123;
 // 3 -> 4 (the NUD, list and choice repairs): measured max 3.07 (typescript, `export @aa  true`: a
 // short input, where the attempts' fixed work dominates); javascript 1.11.
@@ -82,7 +84,13 @@ const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // body takes the `in`. Re-measured on that merge: javascript unchanged.
 const P10_GREEDY_CAPTURE: Record<string, string[]> = {
   javascript: ['for (from x = function () { return a in b; } in c);', 'for (of of async y);', 'for (async of x);', 'for (async of => 1 of x);'],
-  typescript: ['for (x = () => { for (asserts a in b); } in c);', 'for (of  y);', 'for ( of x);', 'for (async of x);', 'for (async of => 1 of x);', 'for (x = (y = (a in b)) declare c);'],
+  typescript: ['for (x = () => { for (asserts a in b); } in c);', 'for (of  y);', 'for ( of x);', 'for (async of x);', 'for (async of => 1 of x);', 'for (x = (y = (a in b)) declare c);',
+    // drawn when the type-assertion rows joined the list (land/sound-type-assertion on master 46214e1c,
+    // the NUD repairs): `$missing`-only repairs whose substituted text is rejected, owed to the recovery
+    // lane: `( { *g() , \nh() {} })` (a supplied ',' after a body-less generator method),
+    // `class C { default *  class ( ) {} }` (a field `default` then a method, no separator),
+    // `f ; (class extends a?.b , { }  () {});`
+    'f(class extends a?.b{ () {});', 'class C { default class) {} }', '( { *g()\nh() {} })'],
 };
 // EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and
 // parseTotal alike) is not the oracle's. Not total parsing's property (parseTotal's verdict is its
@@ -104,8 +112,13 @@ const mapTree = (x: unknown, u: (b: number) => number): unknown => {
   return Object.fromEntries(Object.entries(x).map(([k, y]) => [k, k === 'offset' || k === 'end' ? u(y as number) : mapTree(y, u)]));
 };
 function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOut: (src: string) => Outcome, base: string[], tokenize: (s: string) => Tok[]): void {
-  const mutants = mutationCorpus(grammar, (s) => tokenize(s).map((t) => ({ offset: t.offset, text: t.text })), [...c.accept, ...(c.grammar === 'typescript' ? CURATED_TS : [])], RECOVERY_MUTANTS, RECOVERY_SEED);
-  const srcs = [...new Set([...base, ...mutants])].filter((s) => !s.includes('\0'));
+  const edits = mutationEdits(grammar, (s) => tokenize(s).map((t) => ({ offset: t.offset, text: t.text })), [...c.accept, ...(c.grammar === 'typescript' ? CURATED_TS : [])], RECOVERY_MUTANTS, RECOVERY_SEED);
+  const mutants = edits.map((m) => m.src);
+  // (a mutant drawn twice: its first edit)
+  const editOf = new Map<string, Mutant>();
+  for (const m of edits) if (!editOf.has(m.src)) editOf.set(m.src, m);
+  const srcs = [...new Set([...base, ...mutants, ...edits.map((m) => m.orig)])].filter((s) => !s.includes('\0'));
+  const index = new Map(srcs.map((s, i) => [s, i]));
   const want = srcs.map((s) => oracleOut(s));
   const ascii = srcs.map((s) => /^[\x00-\x7f]*$/.test(s));
   const nRules = portableIR(grammar).rules.length;
@@ -187,6 +200,8 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
         const row = checkContract(srcs[i]!, toks, JSON.parse(g.cst), g.errors.map((e) => [e[0], e[1], e[2]]), g.steps, g.attempts, strict, samples,
           (s) => oracleOut(s).ok, bad, (k) => k === 'missing-only' && !greedy.includes(srcs[i]!));
         if (greedy.includes(srcs[i]!)) { if (row && row.p10 === 'missing-only' && !row.p10ok) p10Known++; }
+        const m = editOf.get(srcs[i]!), o = m && got[index.get(m.orig) ?? -1];
+        if (row && m && o?.ok && o.cst !== undefined) Object.assign(row, damage(JSON.parse(g.cst), JSON.parse(o.cst), toks, m.at, m.ins, srcs[i]!.length - m.orig.length));
         if (mutantSet.has(srcs[i]!)) rows.push(row);
       }
     });

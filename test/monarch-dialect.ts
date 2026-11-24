@@ -120,7 +120,8 @@ for (const [name, file, g] of [['jsx', 'javascriptreact.monarch.json', jsx], ['t
     tokRow('tag type arguments `<Box<number>`: `Box` is a component', 'pass', undefined, mon, tsrc, 'Box', 0, is('type.identifier'));
     tokRow('after tag type arguments, `v` is an attribute', 'pass', undefined, mon, tsrc, 'v=', 0, is('attribute.name'));
     tokRow('a type-position signature `<T>(x: T) => T` is no element (typeParameters.signature)', 'pass', undefined, mon, tsrc, '<T>(x', 0, notTag);
-    tokRow('a signature whose group spans lines is no element', 'xfail', 'the signature veto is a lookahead, which sees one line', mon, tsrc, '<T>(', 1, notTag);
+    // after `type G =` the position is a type (typeContexts): its `<` opens type parameters, never a tag
+    tokRow('a signature whose group spans lines is no element', 'pass', undefined, mon, tsrc, '<T>(', 1, notTag);
   }
   // cross-check: each token of the region's own kinds gets its kind's Monarch token
   const kinds = new Map<string, (t: string) => boolean>([
@@ -277,7 +278,9 @@ for (const [name, file, g] of [['jsx', 'javascriptreact.monarch.json', jsx], ['t
   tokRow('the close tag after the directives', 'pass', undefined, mon, dsrc, 'main>', 1, is('tag'));
   rows.push({ section, id: 'an opener `@if` is written `@@if` in its regex (Monaco reads `@name` as an attribute)', status: 'pass', check: () => {
     const all = Object.values(mon().tokenizer).flat().filter(Array.isArray).map(r => r[0] as string);
-    const bare = all.filter(x => /(?<!@)@(?!@)\w/.test(x.replace(/@@/g, '')));
+    // a bare `@name` is the language's attribute (`@ident`), else an unescaped opener
+    const attrs = mon() as unknown as Record<string, unknown>;
+    const bare = all.filter(x => [...x.replace(/@@/g, '').matchAll(/@(\w+)/g)].some(m => typeof attrs[m[1]] !== 'string'));
     const ok = bare.length === 0 && all.some(x => x.startsWith('@@if'));
     return { ok, saw: ok ? 'escaped' : `unescaped: ${bare.slice(0, 3).join(' | ')}` };
   } });
