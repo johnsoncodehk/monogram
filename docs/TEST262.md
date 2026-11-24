@@ -20,7 +20,7 @@ a test that test262 runs both sloppy and strict, or only in one mode, or as a mo
 first run's text: `"use strict";` prepended for `onlyStrict`). What depends on the goal or the mode is a class
 of its own below (`needs-parameter`).
 
-**21593 of 24677 agree (87.5%).**
+**21598 of 24677 agree (87.5%).**
 
 ## Scoreboard
 
@@ -35,7 +35,7 @@ of its own below (`needs-parameter`).
 | `directive-prologue` | 62 | 51 | 0 | 11 | 0 | 0 |
 | `eval-code` | 347 | 347 | 0 | 0 | 0 | 0 |
 | `export` | 3 | 0 | 3 | 0 | 0 | 0 |
-| `expressions` | 11156 | 9110 | 739 | 1303 | 4 | 0 |
+| `expressions` | 11156 | 9110 | 742 | 1300 | 4 | 0 |
 | `function-code` | 217 | 217 | 0 | 0 | 0 | 0 |
 | `future-reserved-words` | 55 | 29 | 8 | 18 | 0 | 0 |
 | `global-code` | 42 | 28 | 0 | 14 | 0 | 0 |
@@ -51,7 +51,7 @@ of its own below (`needs-parameter`).
 | `rest-parameters` | 11 | 10 | 0 | 1 | 0 | 0 |
 | `source-text` | 1 | 1 | 0 | 0 | 0 | 0 |
 | `statementList` | 80 | 80 | 0 | 0 | 0 | 0 |
-| `statements` | 9399 | 7885 | 330 | 1184 | 0 | 0 |
+| `statements` | 9399 | 7885 | 332 | 1182 | 0 | 0 |
 | `types` | 113 | 102 | 7 | 4 | 0 | 0 |
 | `white-space` | 67 | 61 | 6 | 0 | 0 | 0 |
 | `annexB/comments` | 8 | 0 | 0 | 0 | 8 | 0 |
@@ -61,7 +61,7 @@ of its own below (`needs-parameter`).
 | `annexB/global-code` | 153 | 153 | 0 | 0 | 0 | 0 |
 | `annexB/literals` | 8 | 8 | 0 | 0 | 0 | 0 |
 | `annexB/statements` | 22 | 16 | 0 | 6 | 0 | 0 |
-| **total** | **24677** | **20188** | **1405** | **3072** | **12** | **0** |
+| **total** | **24677** | **20188** | **1410** | **3067** | **12** | **0** |
 
 WE-ACCEPT: test262 says SyntaxError, the grammar parses. WE-REJECT: test262 parses, the grammar rejects.
 
@@ -104,9 +104,9 @@ run); where it does not, the rule is outside even its syntactic layer.
 | `accept/import-export-not-top-level`: an import / export declaration inside a statement or expression | 86 | 86 | grammar bug: fix | `language/module-code/parse-err-decl-pos-export-arrow-function.js`<br>`language/module-code/parse-err-decl-pos-export-if-else.js`<br>`language/module-code/parse-err-decl-pos-import-for-in-let.js` |
 | `accept/await-yield-identifier-reference`: `await` / `yield` as an identifier reference or a label where the context forbids it | 53 | 53 | grammar bug: fix | `language/expressions/assignment/dstr/obj-id-identifier-yield-expr.js`<br>`language/expressions/class/elements/async-gen-private-method/yield-as-label-identifier.js`<br>`language/statements/class/async-gen-method-static/yield-as-label-identifier.js` |
 | `accept/for-in-of-initializer`: an initializer in a for-in / for-of head | 32 | 32 | grammar bug: fix | `language/block-scope/syntax/for-in/disallow-initialization-assignment.js`<br>`language/statements/for-await-of/head-let-init.js`<br>`language/statements/for-of/head-await-using-init.js` |
-| `accept/restricted-production-line-break`: a line break where a production says [no LineTerminator here] | 11 | 11 | grammar bug: fix | `language/asi/S7.9_A4.js`<br>`language/expressions/arrow-function/syntax/early-errors/asi-restriction-invalid.js`<br>`language/expressions/object/method-definition/early-errors-object-method-async-lineterminator.js` |
 | `accept/let-bracket-lookahead`: `let` ⏎ `[` in statement position | 9 | 9 | grammar bug: fix | `language/statements/do-while/let-array-with-newline.js`<br>`language/statements/for-of/let-array-with-newline.js`<br>`language/statements/labeled/let-array-with-newline.js` |
 | `accept/using-binding-pattern`: a binding pattern in a `using` / `await using` declaration list | 7 | 7 | grammar bug: fix | `language/statements/await-using/syntax/await-using-invalid-arraybindingpattern-after-bindingidentifier.js`<br>`language/statements/await-using/syntax/await-using-invalid-objectbindingpattern.js`<br>`language/statements/using/syntax/using-invalid-arraybindingpattern.js` |
+| `accept/restricted-production-line-break`: a line break where a production says [no LineTerminator here] | 6 | 6 | grammar bug: fix | `language/asi/S7.9_A4.js`<br>`language/expressions/arrow-function/syntax/early-errors/asi-restriction-invalid-parenless-parameters.js`<br>`language/expressions/async-arrow-function/early-errors-arrow-formals-lineterminator.js` |
 | `accept/coalesce-mixed-with-logical`: `??` mixed with `&&` / `\|\|` without parentheses | 4 | 4 | grammar bug: fix | `language/expressions/coalesce/cannot-chain-head-with-logical-and.js`<br>`language/expressions/coalesce/cannot-chain-head-with-logical-or.js`<br>`language/expressions/coalesce/cannot-chain-tail-with-logical-and.js` |
 | `accept/accessor-parameters`: a getter with a parameter | 3 | 3 | grammar bug: fix | `language/expressions/class/getter-param-dflt.js`<br>`language/expressions/object/getter-param-dflt.js`<br>`language/statements/class/getter-param-dflt.js` |
 | `accept/in-operator-in-for-init`: `in` inside a for-statement initializer's nested expression | 3 | 3 | grammar bug: fix | `language/expressions/conditional/in-branch-2.js`<br>`language/expressions/yield/in-iteration-stmt.js`<br>`language/expressions/yield/star-in-iteration-stmt.js` |
@@ -137,7 +137,7 @@ run); where it does not, the rule is outside even its syntactic layer.
 
 | verdict | files |
 |---|---:|
-| grammar bug: fix | 686 |
+| grammar bug: fix | 681 |
 | needs a parameterised production the engine lacks (roadmap item 4) | 446 |
 | early error: a checker over the tree, not the grammar: not built | 1940 |
 
@@ -146,9 +146,9 @@ run); where it does not, the rule is outside even its syntactic layer.
 - `accept/import-export-not-top-level` — `{ import v from "m"; }`, `function* g() { export default null; }`: ImportDeclaration and ExportDeclaration are ModuleItems, at a module's top level only, in no goal anywhere else. The grammar puts them in Decl, which every block reaches.
 - `accept/await-yield-identifier-reference` — IdentifierReference and LabelIdentifier are `[~Yield] yield` / `[~Await] await`, parameterised productions the engine has ([Await]/[Yield] families): `({await})` in an async function, `({yield})` in a generator, `yield: ;` in a generator, `await` in a class static block.
 - `accept/for-in-of-initializer` — `for (let x = 1 of y)`, `for (var [a] = 1 of y)`, `for (let x = 1 in o)`, `for (x = 1 in o)`: ForInOfStatement has no initializer; Annex B (B.3.5) adds only the sloppy `for (var BindingIdentifier Initializer in Expression)`.
-- `accept/restricted-production-line-break` — `throw⏎1`, `x⏎=> 1`, `async x⏎=> 1`: the restricted productions forbid the line break, and no ASI applies.
 - `accept/let-bracket-lookahead` — `for (;;) let⏎[a] = 0;`: an ExpressionStatement may not begin with `let [`, and a LexicalDeclaration is no Statement, so no production derives it.
 - `accept/using-binding-pattern` — `using x = 1, [a] = b`: a `using` LexicalBinding is a BindingIdentifier (`BindingList[~Pattern]`); only a leading `using [` is an expression (element access).
+- `accept/restricted-production-line-break` — `throw⏎1`, `x⏎=> 1`, `async x⏎=> 1`: the restricted productions forbid the line break, and no ASI applies.
 - `accept/coalesce-mixed-with-logical` — `0 && 0 ?? true`, `a ?? b || c`: CoalesceExpression's operands are BitwiseORExpressions, so neither side may be a bare `&&` / `||`.
 - `accept/accessor-parameters` — `get x(a) {}`: a getter's parameter list is `( )`; a setter has exactly one PropertySetParameterList.
 - `accept/in-operator-in-for-init` — `for (true ? 0 : 0 in {};;)`: the initializer is an Expression[~In] and ConditionalExpression passes ?In to both branches.
@@ -241,9 +241,9 @@ declarations, labels, which tsc reports outside its parser; it includes TypeScri
 
 | parser | right | of 24677 | on the 20200 valid tests | on the 4477 parse-negative tests |
 |---|---:|---:|---:|---:|
-| `javascript.ts` (interpreter) | 21593 | 87.5% | 20188 (99.9%) | 1405 (31.4%) |
+| `javascript.ts` (interpreter) | 21598 | 87.5% | 20188 (99.9%) | 1410 (31.5%) |
 | acorn 8.16.0 | 24394 | 98.9% | 19926 (98.6%) | 4468 (99.8%) |
 | tsc 5.9.3 parser | 21391 | 86.7% | 20123 (99.6%) | 1268 (28.3%) |
 | tsc 5.9.3 parser + binder | 21829 | 88.5% | 19934 (98.7%) | 1895 (42.3%) |
 
-Of the 3072 WE-ACCEPT files, acorn also accepts 7 (in every run), tsc's parser 2701, tsc's parser + binder 2074.
+Of the 3067 WE-ACCEPT files, acorn also accepts 7 (in every run), tsc's parser 2701, tsc's parser + binder 2074.
