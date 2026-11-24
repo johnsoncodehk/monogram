@@ -59,6 +59,11 @@ const kinds = new Map<string, number>();
 function check(name: string, shape: AnyShape, srcs: string[], quiet = false): void {
   const file = join(TMP, `${name}.rs`), bin = join(TMP, name);
   writeFileSync(file, emitParser(shape.source, rustTarget, { shape }) + MAIN);
+  // OWED: compiled without RUSTC_LINTS for now. The shape-building module (emit option `shape`)
+  // still holds unused code: 26 findings on namedcalc, 1399 on tsc-synthesized (2026-11-24), nearly
+  // all from the shape family's arm constructors (unread lo / hi / off / end, per-arm temporaries
+  // assigned and never read), plus Parser methods (look_end, look_reset, sh_tag, finish), EntryMeta's
+  // fields and Ast helpers the shape plan does not call. This line takes RUSTC_LINTS when they are 0.
   cachedRustc(['-A', 'warnings', '-C', 'opt-level=1', file, '-o', bin], { timeout: 600_000 });
   const out = execFileSync(bin, { input: srcs.join('\0') }).toString().trimEnd().split('\n');
   srcs.forEach((src, i) => {

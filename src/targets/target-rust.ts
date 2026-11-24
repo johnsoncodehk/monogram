@@ -4350,16 +4350,16 @@ function emitRustPrattMethod(
     ).join('\n                ');
     if (binarySlot.kind === 'node') {
       binaryBody = `{
-            let (_lbp, _rbp, _tgt, _no_unary) = match self.peek_op_lid() {
+            let (lbp, rbp, tgt, no_unary) = match self.peek_op_lid() {
                 ${binaryArms}
                 _ => break,
             };
-            if _lbp <= min_bp { break; }
-            if _tgt && form != 0 || _no_unary && form == 2 { return None; }
+            if lbp <= min_bp { break; }
+            if tgt && form != 0 || no_unary && form == 2 { return None; }
             let _save = self.pos;
             let _op = self.op_span();
             self.pos += self.op_len();
-            let _right = match self.parse_ast_${rule.name}_bp(_rbp) {
+            let _right = match self.parse_ast_${rule.name}_bp(rbp) {
                 Some(v) => v,
                 None => { self.pos = _save; break; }
             };
@@ -4374,16 +4374,16 @@ function emitRustPrattMethod(
     } else if (binarySlot.kind === 'custom') {
       const bs = binarySlot as CustomShape;
       binaryBody = `{
-            let (_lbp, _rbp, _tgt, _no_unary) = match self.peek_op_lid() {
+            let (lbp, rbp, tgt, no_unary) = match self.peek_op_lid() {
                 ${binaryArms}
                 _ => break,
             };
-            if _lbp <= min_bp { break; }
-            if _tgt && form != 0 || _no_unary && form == 2 { return None; }
+            if lbp <= min_bp { break; }
+            if tgt && form != 0 || no_unary && form == 2 { return None; }
             let _save = self.pos;
             let _op = self.op_text();
             self.pos += self.op_len();
-            let _right = match self.parse_ast_${rule.name}_bp(_rbp) {
+            let _right = match self.parse_ast_${rule.name}_bp(rbp) {
                 Some(v) => v,
                 None => { self.pos = _save; break; }
             };
@@ -4394,16 +4394,16 @@ function emitRustPrattMethod(
         }`;
     } else {
       binaryBody = `{
-            let (_lbp, _rbp, _tgt, _no_unary) = match self.peek_op_lid() {
+            let (lbp, rbp, tgt, no_unary) = match self.peek_op_lid() {
                 ${binaryArms}
                 _ => break,
             };
-            if _lbp <= min_bp { break; }
-            if _tgt && form != 0 || _no_unary && form == 2 { return None; }
+            if lbp <= min_bp { break; }
+            if tgt && form != 0 || no_unary && form == 2 { return None; }
             let _save = self.pos;
             let _op = self.op_span();
             self.pos += self.op_len();
-            let _right = match self.parse_ast_${rule.name}_bp(_rbp) {
+            let _right = match self.parse_ast_${rule.name}_bp(rbp) {
                 Some(v) => v,
                 None => { self.pos = _save; break; }
             };
@@ -4511,7 +4511,6 @@ function emitRustPrattMethod(
                     ${postfixTokSlot.kind === 'custom' ? 'let op_owned = tok_text(self.src, &t);' : ''}
                     let leaf_value = ${rustShapeLeafAstExpr(policy, 't.off', 't.end - t.off')};
                     self.pos += 1;
-                    #[allow(unused_mut)]
                     let mut leaf = ${tpl && tokName === tpl.token && templateSlot
         ? templateFinish('&[leaf_value]', 't.off as usize', 't.end as usize')
         : 'leaf_value'};
@@ -4538,7 +4537,6 @@ function emitRustPrattMethod(
                 let node_off = self.current_off();
                 if let Some((_tm_kids, _tm_save)) = self.${tplAstFn(rule.postfixTplHole!)}() {
                     let node_end = self.last_end(node_off);
-                    #[allow(unused_mut)]
                     let mut node = ${templateFinish('&_tm_kids', 'node_off', 'node_end')};
                     ${postfixTokSlot.kind === 'custom' ? 'let op_owned = &self.src[node_off..node_end];' : ''}
                     ${tplFinish}
@@ -4686,7 +4684,6 @@ function emitRustPrattMethod(
     fn parse_ast_${rule.name}_bp(&mut self, min_bp: i64) -> Option<${ret}> {
         let _off = self.current_off();
         let mut left = self.parse_ast_${rule.name}_nud(min_bp)?;
-        #[allow(unused_mut, unused_variables)]
         let mut form = self.form;
         if self.capped { return Some(left); }
         let mut tail_closed = self.tail;

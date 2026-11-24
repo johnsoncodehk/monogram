@@ -30,7 +30,7 @@ import { emitParser } from '../src/targets/target.ts';
 import { goTarget } from '../src/targets/target-go.ts';
 import { rustTarget } from '../src/targets/target-rust.ts';
 import { scratchDir } from './scratch.ts';
-import { cachedGoBuild, cachedRustc } from './build-cache.ts';
+import { cachedGoBuild, cachedRustc, RUSTC_LINTS } from './build-cache.ts';
 
 const CAP_PER_TOKEN = 2, PEAK_PER_TOKEN = 3, MIN_TOKENS = 4, STACK_BYTES = 4096;
 const DENSE = 1 << 16;
@@ -150,7 +150,7 @@ fn main() {
     }
 }
 `);
-  cachedRustc(['-A', 'warnings', rfile, '-o', join(dir, 'reserve')], { stdio: 'pipe' });
+  cachedRustc([...RUSTC_LINTS, rfile, '-o', join(dir, 'reserve')], { stdio: 'pipe' });
   counts.set('rust', readCounts(execFileSync(join(dir, 'reserve'), files, { encoding: 'utf8' })));
   afterFail.set('rust', readAfter(execFileSync(join(dir, 'reserve'), ['--after', ordFile, ...failFiles], { encoding: 'utf8' })));
 }

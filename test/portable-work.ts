@@ -28,7 +28,7 @@ import { tsTarget } from '../src/targets/target-ts.ts';
 import { goTarget } from '../src/targets/target-go.ts';
 import { rustTarget } from '../src/targets/target-rust.ts';
 import { scratchDir } from './scratch.ts';
-import { cachedGoBuild, cachedRustc } from './build-cache.ts';
+import { cachedGoBuild, cachedRustc, RUSTC_LINTS } from './build-cache.ts';
 
 const DEEP = 8, GROWTH = 2;
 
@@ -354,7 +354,7 @@ fn main() {
     }
 }
 `);
-    cachedRustc(['-A', 'warnings', rfile, '-o', join(dir, 'work')], { stdio: 'pipe' });
+    cachedRustc([...RUSTC_LINTS, rfile, '-o', join(dir, 'work')], { stdio: 'pipe' });
     counts.set('rust', readCounts(execFileSync(join(dir, 'work'), files, { encoding: 'utf8' })));
   }
   return counts;

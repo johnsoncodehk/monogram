@@ -100,6 +100,12 @@ export const GO_VERSION = toolVersion('go', ['version']), RUSTC_VERSION = toolVe
 // The Rust build reads the wrapper or toolchain `rustc` resolves to: its path is part of the key.
 export const RUSTC_PATH = toolVersion('sh', ['-c', 'command -v rustc']);
 
+/** rustc's lint flags for every emitted Rust parser a gate compiles: anything unused is an error
+ * (the `unused` group: dead code, unused variables / assignments / mut, unreachable code ...).
+ * Allowed and owed: the two style lints of the group, unused_parens and unused_braces (the printer
+ * still writes redundant parentheses and braces). */
+export const RUSTC_LINTS = ['-D', 'unused', '-A', 'unused_parens', '-A', 'unused_braces'];
+
 /** rustc flags that make its output independent of the build's directories (see below). */
 export const RUSTC_PATH_FLAGS = (...dirs: string[]): string[] => [...new Set(dirs)].map((d) => `--remap-path-prefix=${d}=.`);
 
