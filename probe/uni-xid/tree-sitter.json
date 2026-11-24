@@ -1,0 +1,13 @@
+{
+  "grammars": [
+    {
+      "name": "unixid",
+      "scope": "source.unixid",
+      "path": "."
+    }
+  ],
+  "metadata": {
+    "version": "0.0.0",
+    "license": "MIT"
+  }
+}

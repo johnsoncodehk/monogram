@@ -1,7 +1,7 @@
-name: probe (editor13, measurement only)
+name: probe (editor14, measurement only)
 on:
   push:
-    branches: ['editor13/probe']
+    branches: ['editor14/probe']
 permissions:
   contents: read
 jobs:
