@@ -183,6 +183,9 @@ export const BUILT_VIEWS = ['expression', 'statement', 'file'] as const;
 export type BuiltBoard = {
   shape: string; corpus: string; view: (typeof BUILT_VIEWS)[number]; files: number; filesRejected: number; units: number; outOfShape: number; unsupported: number;
   notBuilt: number; compared: number; identical: number; reasons: Record<string, number>; samples: string[];
+  // Re-parses on demand (src/shape-plan.ts Restart), and Pratt invocations with more than one: the
+  // bound is one per invocation in a valid program (a led's left is re-parsed at most once).
+  restarts: number; restartsOverBound: number;
 };
 export async function runBuilt(shape: OracleShape, corpus: string, paths: string[], samples = 6): Promise<BuiltBoard[]> {
   const file = join(scratchDir('shape2-oracle'), `built-${shape.name}.ts`);
@@ -190,7 +193,7 @@ export async function runBuilt(shape: OracleShape, corpus: string, paths: string
   const m = await import(file);
   const arms = m.shapeArms as { rule: string; arm: string }[];
   const parser = createParser(shape.grammar);
-  const boards = BUILT_VIEWS.map((view): BuiltBoard => ({ shape: shape.name, corpus, view, files: paths.length, filesRejected: 0, units: 0, outOfShape: 0, unsupported: 0, notBuilt: 0, compared: 0, identical: 0, reasons: {}, samples: [] }));
+  const boards = BUILT_VIEWS.map((view): BuiltBoard => ({ shape: shape.name, corpus, view, files: paths.length, filesRejected: 0, units: 0, outOfShape: 0, unsupported: 0, notBuilt: 0, compared: 0, identical: 0, reasons: {}, samples: [], restarts: 0, restartsOverBound: 0 }));
   for (const path of paths) {
     const src = readFileSync(path, 'utf-8');
     let cst: CstNode;
@@ -230,12 +233,14 @@ export async function runBuilt(shape: OracleShape, corpus: string, paths: string
     }
     score(boards[2]!, cst, root);
   }
+  const rs = (m.shapeRestarts?.() ?? { restarts: 0, overBound: 0 }) as { restarts: number; overBound: number };
+  for (const b of boards) { b.restarts = rs.restarts; b.restartsOverBound = rs.overBound; }
   return boards;
 }
 export function formatBuilt(b: BuiltBoard): string {
   return [
     `${b.shape} on ${b.corpus}, emitted shape-building parser (TypeScript) vs the evaluator, unit "${b.view}": ${b.files} files (${b.filesRejected} rejected by the grammar); ` +
-      `${b.units} units: ${b.outOfShape} outside the shape, ${b.unsupported} outside what the plans build yet, ${b.notBuilt} not built, ${b.compared} compared, ${b.identical} identical, ${b.compared - b.identical} diverged`,
+      `${b.units} units: ${b.outOfShape} outside the shape, ${b.unsupported} outside what the plans build yet, ${b.notBuilt} not built, ${b.compared} compared, ${b.identical} identical, ${b.compared - b.identical} diverged; ${b.restarts} re-parses on demand (${b.restartsOverBound} invocations above the bound of one)`,
     '  outside what the plans build yet, by reason:', ...top(b.reasons, 12),
     ...(b.samples.length ? ['  divergent samples:', ...b.samples.map((x) => `    ${x}`)] : []),
   ].join('\n');
@@ -313,6 +318,7 @@ if (import.meta.main) {
       next[key] = { corpus: b.corpus, view: b.view === 'expression' ? 'expression statement' : b.view === 'statement' ? 'top-level statement' : 'file', units: b.units, compared: b.compared, identical: b.identical, outOfSubset: b.unsupported };
       if (b.identical !== b.compared) problems.push(`${key}: ${b.compared - b.identical} units built differently from the evaluator`);
       if (b.notBuilt) problems.push(`${key}: ${b.notBuilt} units the evaluator gives a value the parser did not build`);
+      if (b.restartsOverBound) problems.push(`${key}: ${b.restartsOverBound} Pratt invocations re-parsed their left more than once (the bound is one)`);
       const was = record[key];
       if (!was) problems.push(`${key}: no record (run with --check --write)`);
       else if (b.compared < was.compared) problems.push(`${key}: compared ${was.compared} -> ${b.compared}`);

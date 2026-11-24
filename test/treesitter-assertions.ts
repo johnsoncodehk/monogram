@@ -45,11 +45,15 @@ const RENDERED: AssertionClass[] = ['lowered', 'reserved-set'];
 // The expression identifier refuses every reserved word (land/shape-ident-reserved): the
 // `not('super')` / `not('new')` beside its reserved-word guard (Expr and NewTarget) are gone, those
 // words now in the guard's set (reserved -4; the set stays rendered).
+// A negative lookahead at an alternative's start renders as a zero-width start marker before the
+// other alternatives that can start as it excludes (planStartMarkers: the expression statement's,
+// the concise body's, the for heads', TypeScript's `constructor` member and module reference string):
+// js / jsx lowered +10 (lookahead1 -6, lookahead -4), ts / tsx lowered +12 (lookahead1 -8, lookahead -4).
 const PINNED: Record<string, Partial<Record<AssertionClass, number>>> = {
-  javascript:      { lowered: 43,  vacuous: 6,  'reserved-set': 45, scanner: 0,  reserved: 0, lookahead1: 17, lookahead: 8 },
-  typescript:      { lowered: 133, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 0, lookahead1: 88, lookahead: 69, 'left-context': 2 },
-  javascriptreact: { lowered: 45,  vacuous: 6,  'reserved-set': 45, scanner: 0,  reserved: 0, lookahead1: 17, lookahead: 8 },
-  typescriptreact: { lowered: 135, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 0, lookahead1: 88, lookahead: 69, 'left-context': 2 },
+  javascript:      { lowered: 53,  vacuous: 6,  'reserved-set': 45, scanner: 0,  reserved: 0, lookahead1: 11, lookahead: 4 },
+  typescript:      { lowered: 145, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 0, lookahead1: 80, lookahead: 65, 'left-context': 2 },
+  javascriptreact: { lowered: 55,  vacuous: 6,  'reserved-set': 45, scanner: 0,  reserved: 0, lookahead1: 11, lookahead: 4 },
+  typescriptreact: { lowered: 147, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 0, lookahead1: 80, lookahead: 65, 'left-context': 2 },
   yaml:            { lowered: 1,  scanner: 16, lookahead1: 6 },
 };
 
