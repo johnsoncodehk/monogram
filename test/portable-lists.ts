@@ -268,7 +268,7 @@ for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll(
 
   // The jsTarget parser (target-js.ts, not built from the portable IR) on the same hand-written
   // lists: the oracle's verdict on each, and on each accepted input the oracle's CST byte for byte
-  // (its contract, emit-parser-verify.ts). Its suppress gates (the no-`in` for-heads of
+  // (its contract, target-js-verify.ts). Its suppress gates (the no-`in` for-heads of
   // NO_IN_HEADS) are compiled from the grammar analysis like the portable targets', by a
   // different emitter, so they are checked here too.
   // A grammar using a mechanism the retiring jsTarget refuses BY NAME (cappedPrefix, atLevel) is

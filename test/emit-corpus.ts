@@ -1,5 +1,5 @@
 // emit-corpus.ts — the IN-REPO TypeScript corpus for the three engine-parity gates
-// (emit-parser-verify / emit-reject-messages / emit-lexer-verify).
+// (target-js-verify / emit-reject-messages / emit-lexer-verify).
 //
 // The parity gates only need the two engines to AGREE — accept-identically (and produce
 // the byte-identical CST / token stream) or reject-identically (same error message). A

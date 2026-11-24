@@ -9,7 +9,7 @@
 // leaves, every leaf one token or a composed '>' operator, TS Docs ≡ a fresh parse (formerly
 // emit-ts-cst).
 //
-//   node test/emit-portable-split.ts
+//   node test/parser-ir-split.ts
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';

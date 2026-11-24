@@ -4,7 +4,7 @@
 // a COMPLETE, self-contained parser in the target's language from the same Grammar the
 // TS engine uses. It is the agnosticism proof: ONE analysis → ONE intermediate form (IR)
 // → N language renderings that accept/reject the same inputs as the interpreter (see
-// test/portable-targets.ts: accept/reject parity plus a rule-skeleton guard on tiny inputs).
+// test/portable-harness.ts and test/portable-cases.ts: accept/reject parity plus a rule-skeleton guard on tiny inputs).
 //
 // SHARED + target-agnostic (here): the grammar ANALYSIS (reused from grammar-analysis.ts),
 // the LEXER specs (derived from token-pattern.ts's structural recognizers — char runs,

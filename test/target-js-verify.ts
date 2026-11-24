@@ -8,9 +8,9 @@
 // mechanism that forces a interpreter change to propagate to target-js (issue #45).
 // When the optional /tmp/ts-repo corpus is present it is ALSO swept for breadth.
 //
-//   node test/emit-parser-verify.ts            # in-repo corpus (+ /tmp/ts-repo if present)
-//   node test/emit-parser-verify.ts all        # also sweep EVERY external file (no stride)
-//   node test/emit-parser-verify.ts <N>        # external sweep stride N (default ~400 files)
+//   node test/target-js-verify.ts            # in-repo corpus (+ /tmp/ts-repo if present)
+//   node test/target-js-verify.ts all        # also sweep EVERY external file (no stride)
+//   node test/target-js-verify.ts <N>        # external sweep stride N (default ~400 files)
 import { objectify } from './emitted-obj.ts';
 import { createParser } from '../src/interpreter.ts';
 import { emitParser } from '../src/target.ts';
@@ -19,7 +19,7 @@ import { inRepoCorpus, externalTsFiles } from './emit-corpus.ts';
 import { readFileSync, writeFileSync } from 'fs';
 import { scratchDir } from './scratch.ts';
 
-const TMP = scratchDir('emit-parser-verify');
+const TMP = scratchDir('target-js-verify');
 
 const grammar = (await import('../typescript.ts')).default;
 const oracle = createParser(grammar);

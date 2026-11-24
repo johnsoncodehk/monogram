@@ -14,7 +14,7 @@
 //   4. a test-only S-expression target prints the lex-scan / relex / reuse / recovery families with
 //      no C-family surface, and every IR construct comes out as its own printed form.
 //
-//   node test/define-target.ts
+//   node test/define-parser-target.ts
 import { readFileSync } from 'node:fs';
 import { QUICK } from './check-targets.ts';
 import { tsTarget } from '../src/target-ts.ts';

@@ -1,5 +1,5 @@
 // Error-MESSAGE parity gate for the EMITTED parser against the RUNTIME INTERPRETER
-// (createParser) — the oracle. emit-parser-verify.ts gates accept/reject parity and
+// (createParser) — the oracle. target-js-verify.ts gates accept/reject parity and
 // byte-identical CSTs but deliberately ignores error text; this gate pins the text.
 //
 // The PRIMARY error (offset + reason) is the consumer-facing contract and must be EQUAL for
@@ -7,7 +7,7 @@
 // exploration HIGH-WATER mark: the two engines run deliberately-independent control loops
 // (Layer B — e.g. the interpreter prunes some inline alts the emitter still tries, issue #45
 // D1), so they can reach it differently in rare error cases WITHOUT any CST or primary-error
-// difference. emit-parser-verify proves CST parity across the whole corpus, so a farthest-only
+// difference. target-js-verify proves CST parity across the whole corpus, so a farthest-only
 // difference is benign — report it, but pin only the primary message. (Across the 18,805-file
 // TS corpus exactly one file, the multi-file bigintPropertyName.ts, differs this way.)
 //
@@ -48,7 +48,7 @@ function sweep(samples: { name: string; code: string }[]) {
     if (o === null) continue;
     if (o.includes('Maximum call stack')) continue; // oracle capacity, not a verdict
     const e = errOf(emitted.parse as (s: string) => unknown, code);
-    if (e === null) continue; // accept/reject parity is emit-parser-verify's gate
+    if (e === null) continue; // accept/reject parity is target-js-verify's gate
     bothReject++;
     if (o === e) continue;
     if (primary(o) === primary(e)) { farthestOnly++; if (fout.length < 5) fout.push({ name, oracle: o, emit: e }); continue; }
