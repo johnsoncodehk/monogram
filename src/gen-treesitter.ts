@@ -2212,7 +2212,7 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
   const graph = treeSitterLeafGraph(grammar, tokenNames, scannerTokens, prattRules, termOf, startMarkers);
   const lr = buildLr(graph);
   const after = cands.map(() => new Set<string>()), cont = cands.map(() => new Set<string>());
-  const together: number[][] = [];   // the candidates valid in one state, per state where several are
+  const together: number[][] = [];   // the candidates SHIFTED in one state, per state where several are
   const afterGuards = cands.map(() => new Map<string, Set<string>>());
   const idOf = (t: string) => t.startsWith('@zw') ? +t.slice(3) : -1;
   const valid = lr.states.map((_, s) => lr.valid(s));
@@ -2247,14 +2247,13 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
     // token, so there the token wins.
     const extends_ = new Set<string>();
     for (const it of st.items) if (it >= 0 && graph.nt[it] >= 0) for (const t of firstAfter(it)) extends_.add(t);
-    const here: number[] = [];
     for (const t of valid[s]) {
       const i = idOf(t);
       if (i < 0) continue;
-      here.push(i);
       for (const u of extends_) if (idOf(u) < 0) cont[i].add(u);
     }
-    if (here.length > 1) together.push(here);
+    const shifted = [...st.goto.keys()].map(idOf).filter(i => i >= 0);
+    if (shifted.length > 1) together.push(shifted);
     for (const [sym, to] of st.goto) {
       const i = idOf(sym);
       if (i < 0) continue;
@@ -2288,10 +2287,17 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
     res = analyze(live);
   }
   const { after, cont, afterGuards, together } = res;
-  // Same-line markers of one rule valid in one state are ONE token: the scanner returns one zero-width symbol, so
-  // where two are valid it would commit to the first whose sets admit the next token, and the parse
-  // would follow that marker's arm alone (`private readonly x` in a class: the static-block arm's
-  // modifier marker admits `readonly` after `private`, and after `readonly` admits no member name).
+  // A same-line token is returned where the next token is in its AFTER and not in its CONT, so a
+  // token's sets decide for every site it renders: a site's accepted continuations are its token's.
+  // Two kinds of merge, in this order:
+  // (1) Forced: same-line markers of one rule SHIFTED in one state are ONE token. The scanner returns
+  // one zero-width symbol, so with two it would commit to the first whose sets admit the next token
+  // and the parse would follow that marker's arm alone (`private readonly x` in a class: the
+  // static-block arm's modifier marker admits `readonly` after `private`, and after `readonly` admits
+  // no member name); one token shifted keeps both arms. Its sets are the union over its sites: the
+  // price of one symbol per position, paid only by the sites that meet in a state. A marker valid
+  // there only as a reduction's LOOKAHEAD (a postfix `++` after an expression that `yield` ends) is
+  // not kept alive by sharing the token (shifting it is the other arm's reading): it stays apart.
   // Only within a rule: markers of different rules met in one state (`async` before an arrow, a
   // declaration and a property) are what keeps those rules' readings apart in the LR automaton.
   const root = cands.map((_, i) => i);
@@ -2300,14 +2306,26 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
     const sl = t.filter(i => live.has(i) && cands[i].kind === 'same-line');
     for (const i of sl) { const j = sl.find(k => cands[k].owner === cands[i].owner)!; root[find(i)] = find(j); }
   }
-  // and, as before, markers with the same sets are one token wherever they are valid
-  const bySets = new Map<string, number>();
+  // (2) Free: tokens of (1) whose sets are EQUAL are one token. Equal sets give equal decisions and
+  // their union is the same sets, so this changes no site's continuations. It is decided on the
+  // tokens' sets, not on one site's: a site equal to one member of a forced token would take the
+  // token's other members' sets (`return`'s marker equal to `yield`'s operand marker would take the
+  // `*` of `yield*`).
+  const groupSets = new Map<number, { after: Set<string>; cont: Set<string> }>();
   cands.forEach((c, i) => {
     if (!live.has(i) || c.kind !== 'same-line') return;
-    const k = [[...after[i]].sort().join(' '), [...cont[i]].sort().join(' ')].join('|');
-    const j = bySets.get(k);
-    if (j === undefined) bySets.set(k, i); else root[find(i)] = find(j);
+    const r = find(i);
+    let g = groupSets.get(r);
+    if (!g) groupSets.set(r, g = { after: new Set(), cont: new Set() });
+    for (const x of after[i]) g.after.add(x);
+    for (const x of cont[i]) g.cont.add(x);
   });
+  const bySets = new Map<string, number>();
+  for (const [r, g] of groupSets) {
+    const k = [[...g.after].sort().join(' '), [...g.cont].sort().join(' ')].join('|');
+    const j = bySets.get(k);
+    if (j === undefined) bySets.set(k, r); else root[find(r)] = find(j);
+  }
   const byKey = new Map<string, ZeroWidthToken>();
   const counters = { 'line-end': 0, 'same-line': 0 };
   cands.forEach((c, i) => {
