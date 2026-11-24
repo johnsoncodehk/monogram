@@ -56,8 +56,9 @@ const TOTAL_K = 3;
 // population (javascript: 5,412 of 5,901 rejects agree; typescript's rises 5946 -> 5994). Most of javascript's new
 // disagreements are one pattern, `import` and a token neither `(` nor `.` (`import ?. ;`): the
 // interpreter's farthest is `import` itself (no hint), the engine's the token its form guard read. The
-// interpreter's message on these inputs is master's.
-const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5439, typescript: 5946 };
+// interpreter's message on these inputs is master's. Re-measured on master a2ba418e (land/recovery-stage3)
+// merged in: javascript 5,412 of 5,902 rejects agree, typescript 6,051 of 6,868.
+const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5412, typescript: 6051 };
 const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // P10 EXPECTED-FAIL on `$missing`-only repairs, by class. GREEDY CAPTURE: the repair is right by
 // position (each supplied token is where the derivation needs it), but the substituted token is
@@ -69,9 +70,11 @@ const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // The mutants are drawn from the accept lists (seeded), so the list is re-measured when they change.
 // typescript 'for ((async) from y);' -> 'for (() of y);' (land/recovery-stage3 merged with master
 // 1f944fcf: two accept rows added at the front of the typescript list draw another mutant set).
+// typescript + 'for (x = (y = (a in b)) declare c);' (land/shape-test262-valid: its new literals draw
+// another set): the parse supplies '=>' and 'in'; in `… =>  declare in  c` the arrow body takes `in c`.
 const P10_GREEDY_CAPTURE: Record<string, string[]> = {
   javascript: ['for (() of x);', 'for (() of y);'],
-  typescript: ['for (() of y);'],
+  typescript: ['for (() of y);', 'for (x = (y = (a in b)) declare c);'],
 };
 // P10 EXPECTED-FAIL, second class: LOOKAHEAD BYPASS. A negative lookahead was decided on the
 // original tokens and a supplied token makes the repaired text one it refuses: in `async { class C {}`
