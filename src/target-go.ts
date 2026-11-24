@@ -1594,8 +1594,10 @@ var post_${r.name} = [${ops.size}]postOp{${post}}`;
 // `clear` empties what the Doc keeps of its tree.
 const goEditBody = (clear: string, treeEq: boolean) => `\ttext, toks, relexed, lerr := relexEdits(oldText, oldToks, edits)
 \td.text = text
+\td.lexErr = nil
 \tif lerr != nil {
 \t\td.text = applyEdits(oldText, edits)
+\t\td.lexErr = lexError(d.text, lerr)
 ${clear}
 \t\td.toks = nil
 \t\ta := &Align{OldN: len(oldToks)}
@@ -1842,7 +1844,7 @@ func toksFromMeta(text string, meta []alignMeta) []Tok {
 ${treeEqFn}${reuseFns}
 // A Doc owns its tree: its engine (e) keeps the arena, parse stream and reuse metadata across
 // edits, and b (the caller's CstBuilder under NewDocWith) is pointed at that tree after each call.
-type Doc struct { text string; root int32; toks []alignMeta; align *Align; validate bool; b *CstBuilder; e engine${topReuse ? '; entries []EntryMeta' : ''} }
+type Doc struct { text string; root int32; toks []alignMeta; lexErr *LexError; align *Align; validate bool; b *CstBuilder; e engine${topReuse ? '; entries []EntryMeta' : ''} }
 func (d *Doc) publish() { d.b.Nodes, d.b.Kids, d.b.Toks = d.e.nodes, d.e.kids, d.e.toks }
 func NewDoc(src string) *Doc { return newDocCst(src, &CstBuilder{}) }
 func newDocCst(src string, b *CstBuilder) *Doc {
@@ -1851,7 +1853,9 @@ func newDocCst(src string, b *CstBuilder) *Doc {
 	var toks []Tok
 	var err *lexErr
 	d.toks, toks, err = scanMetaToks(src)
-	if err != nil { panic(lexError(src, err)) }
+	// A text that does not lex: the state an edit to it leaves (no tokens, no tree; the next edit
+	// relexes it all), so the Doc reaches every later text an edit makes (edited ≡ fresh).
+	if err != nil { d.toks = nil; d.root = -1; d.lexErr = lexError(src, err); return d }
 	// The arena grows as the parse fills it, as in ParseWith and in every target: a node or kid count
 	// estimated from the token count is neither a fit nor a bound (6183a29, PR #126).
 	d.e.nodes, d.e.kids = b.Nodes[:0], b.Kids[:0]
@@ -1869,6 +1873,8 @@ func (d *Doc) SetValidate(v bool) { d.validate = v }
 func (d *Doc) Text() string { return d.text }
 func (d *Doc) Root() int32 { return d.root }
 func (d *Doc) Align() *Align { return d.align }
+// LexError is the lexer error of the current text (nil when it lexes): the Doc then has no tree.
+func (d *Doc) LexError() *LexError { return d.lexErr }
 func (d *Doc) Edit(edits []Edit) (ret int32) {
 	p := &d.e
 	defer d.publish()
@@ -2601,6 +2607,8 @@ type Document interface {
 	Text() string
 	Root() int32
 	Align() *Align
+	// The lexer error of the current text (nil when it lexes): the Doc then has no tree.
+	LexError() *LexError
 	Edit(edits []Edit) int32
 }
 
@@ -2609,6 +2617,7 @@ type DocWith struct {
 	text     string
 	root     int32
 	toks     []alignMeta
+	lexErr   *LexError
 	align    *Align
 	validate bool
 	b        Builder${entriesFields}
@@ -2627,7 +2636,8 @@ func newDocWith(src string, b Builder) *DocWith {
 	d := &DocWith{text: src, b: b}
 	var err *lexErr
 	d.toks, err = ${initToks}
-	if err != nil { panic(lexError(src, err)) }
+	// A text that does not lex: the state an edit to it leaves (as newDocCst).
+	if err != nil { d.toks = nil; d.root = -1; d.lexErr = lexError(src, err); return d }
 	${topReuse ? 'h, entries, entryHs, ok' : 'h, _, _, ok'} := parseWithMetaW(src, d.toks, b)
 	if ok {
 ${initAssign}
@@ -2641,6 +2651,7 @@ func (d *DocWith) SetValidate(v bool) { d.validate = v }
 func (d *DocWith) Text() string       { return d.text }
 func (d *DocWith) Root() int32        { return d.root }
 func (d *DocWith) Align() *Align      { return d.align }
+func (d *DocWith) LexError() *LexError { return d.lexErr }
 
 func (d *DocWith) Edit(edits []Edit) (ret int32) {
 	oldText, oldToks := d.text, d.toks
