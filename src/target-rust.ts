@@ -11,6 +11,7 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
+import { dropUnreferencedRs } from './rs-unreferenced.ts';
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type LexTok, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type AssignTargetsIR } from './parser-ir.ts';
 import type { ArmForm } from './assign-targets.ts';
 import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, gtCompLit, compLeadLids, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './parser-ir.ts';
@@ -5745,10 +5746,10 @@ export const rustTarget = defineParserTarget({
         const fns = shared.shapeFamily({ ...plan, fns: rsPlanFns(plan.fns, snake) });
         const ids = buildLexIdPlan(plan.ir);
         const escKids = plan.identCookTokens.map((t) => { const k = ids.kids.indexOf(t); if (k < 0) throw new Error(`rustTarget: the cooked token ${t} has no kind id`); return k; });
-        return emitRustLibrary(plan.ir, ids, shared, false) + rsShapeRuntime(st, fns, escKids);
+        return dropUnreferencedRs(emitRustLibrary(plan.ir, ids, shared, false) + rsShapeRuntime(st, fns, escKids));
       } finally { setRsShape(null); SHAPE_RS = null; }
     }
-    return emitRustLibrary(ir, buildLexIdPlan(ir), shared, !!opts.recovery) + (opts.recovery ? recoveryRegionRust(ir, shared) : '');
+    return dropUnreferencedRs(emitRustLibrary(ir, buildLexIdPlan(ir), shared, !!opts.recovery) + (opts.recovery ? recoveryRegionRust(ir, shared) : ''));
   },
   emitRunner: (opts) => emitRunner(opts),
 });
