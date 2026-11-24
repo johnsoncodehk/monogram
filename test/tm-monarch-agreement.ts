@@ -90,9 +90,11 @@ export async function agreement(): Promise<number> {
     // the constructs a highlighter declines (src/define-highlighter.ts): recorded like a class
     for (const [hl, now] of Object.entries(out[lang].refusals)) {
       const was: string[] = old[lang]?.refusals?.[hl] ?? [];
-      const moved = now.join('\n') !== was.join('\n');
-      if (moved) bad++;
-      console.log(`  ${(moved ? '✗ MOVED' : ' ').padEnd(19)} ${hl} refuses ${now.length ? now.join('; ') : 'nothing'}`);
+      // one-sided, as the classes: a new refusal fails, a refusal that went away passes
+      const added = now.filter(r => !was.includes(r)), gone = was.filter(r => !now.includes(r));
+      if (added.length) bad++;
+      if (gone.length) fell++;
+      console.log(`  ${(added.length ? '✗ NEW REFUSAL' : gone.length ? 'fell' : ' ').padEnd(19)} ${hl} refuses ${now.length ? now.join('; ') : 'nothing'}`);
     }
   }
   if (write) { writeFileSync(RECORD, JSON.stringify(out, null, 1) + '\n'); console.log(`wrote ${RECORD}`); return 0; }
