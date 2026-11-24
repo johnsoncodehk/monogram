@@ -1222,10 +1222,50 @@ function buildRuleBody(rule: RuleDecl, ctx: GrammarJsContext): string {
   const follow = ctx.terminalSets.follow.get(rule.name)!;
   const glr = ctx.glrRules.has(ctx.ruleSnake.get(rule.name)!);
   const greedy = (alt: RuleExpr) => !glr && greedyTail(alt, follow, ctx.terminalSets.firstOf);
-  if (body.type === 'alt' && body.items.some(greedy)) {
-    return `choice(${body.items.map(a => greedy(a) ? `prec.right(${renderExpr(a, ctx)})` : renderExpr(a, ctx)).join(', ')})`;
+  const refused = refusalWinners(body, ctx);
+  const render = (a: RuleExpr) => {
+    const r = renderExpr(a, ctx);
+    if (greedy(a)) return `prec.right(${r})`;
+    return refused.has(a) ? `prec.dynamic(1, ${r})` : r;
+  };
+  if (body.type === 'alt' && (body.items.some(greedy) || refused.size > 0)) return `choice(${body.items.map(render).join(', ')})`;
+  return render(body);
+}
+
+/**
+ * The arms that win where an arm's dropped refusal would have refused it. An arm that reads a
+ * prefix and then refuses a lookahead (TypeScript's object type literal `['{', not(mappedTypeStart),
+ * …]`: no literal where a mapped type starts) renders without the refusal (a CFG has no lookahead),
+ * so tree-sitter also reads it where the interpreter does not: `{ [K in D]: n }` is both the mapped
+ * type and a literal whose member has the computed name `K in D`, both parse, and GLR kept the
+ * literal. Another arm of the same rule that reads the same prefix and then begins as the refused
+ * lookahead does (the mapped type: `{`, then `readonly`, `+`, `-` or `[`) is the reading the
+ * interpreter takes there: it carries dynamic precedence 1, so where both readings parse the same
+ * tokens it is kept. Where the lookahead does not hold, that arm does not parse the tokens the
+ * refused arm parses (it begins as the lookahead and reads it whole: a mapped type needs its
+ * `[ name in`), so no tie arises and the weight decides nothing.
+ */
+function refusalWinners(body: RuleExpr, ctx: GrammarJsContext): Set<RuleExpr> {
+  const out = new Set<RuleExpr>();
+  if (body.type !== 'alt') return out;
+  const { firstOf } = ctx.terminalSets;
+  const items = (a: RuleExpr) => { const v = tsView(a); return v.type === 'seq' ? v.items.map(tsView) : [v]; };
+  for (const x of body.items) {
+    const xs = items(x);
+    const k = xs.findIndex(i => i.type === 'not');
+    // (A reservable refusal is no drop: it renders as the identifier's reserved word set.)
+    if (k <= 0 || (xs[k] as { reservable?: boolean }).reservable || renderExpr(xs[k], ctx) !== 'blank()' || xs.slice(0, k).some(i => i.type !== 'literal')) continue;
+    const prefix = xs.slice(0, k).map(i => renderExpr(i, ctx));
+    const refusedFirst = firstOf((xs[k] as Extract<RuleExpr, { type: 'not' }>).body);
+    for (const y of body.items) {
+      if (y === x) continue;
+      const ys = items(y);
+      if (ys.length <= k || prefix.some((p, n) => renderExpr(ys[n], ctx) !== p)) continue;
+      const rest: RuleExpr = { type: 'seq', items: ys.slice(k) };
+      if ([...firstOf(rest)].some(t => refusedFirst.has(t))) out.add(y);
+    }
   }
-  return greedy(body) ? `prec.right(${renderExpr(body, ctx)})` : renderExpr(body, ctx);
+  return out;
 }
 
 // ── greedy repetition tails ──────────────────────────────────────────────────
