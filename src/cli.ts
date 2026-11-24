@@ -170,6 +170,7 @@ function formatExpr(expr: RuleExpr): string {
     case 'group': return `(${formatExpr(expr.body)})`;
     case 'not': return `not(${formatExpr(expr.body)})`;
     case 'sameLine': return 'sameLine';
+    case 'target': return `target('${expr.ctx}')`;
     case 'noCommentBefore': return 'noCommentBefore';
     case 'noMultilineFlowBefore': return 'noMultilineFlowBefore';
     case 'notLeftLeaf': return `notLeftLeaf(${expr.words.map(w => `'${w}'`).join(', ')})`;

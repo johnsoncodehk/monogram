@@ -12,9 +12,9 @@ Every choice point of the grammar and how the generated parser (the portable pla
 | NUD arms | 5 | 0 | 0 | 0 | 5 | 5 |
 | LED connectors | 5 | 3 | 0 | 2 | 0 | 4 |
 | inline choice | 485 | 214 | 0 | 271 | 0 | 268 |
-| star | 130 | 123 | 0 | 7 | 0 | 38 |
+| star | 136 | 129 | 0 | 7 | 0 | 44 |
 | opt | 310 | 269 | 0 | 41 | 0 | 133 |
-| sep | 128 | 23 | 0 | 105 | 0 | 0 |
+| sep | 128 | 19 | 0 | 109 | 0 | 0 |
 
 | finding | count |
 |:--|--:|
@@ -171,6 +171,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - DecoratorExpr / decorator: `sep(Expr, ',')`: by attempt
 - DecoratorExpr / decorator: `alt(Ident \| PrivateField \| '(' sep(Expr, ',') ')' \| '['…`: one token; takes a mark: branch 2: it can fail after `'('`; branch 3: it can fail after `'['`
 - DecoratorExpr / decorator: `sep(Expr, ',')`: by attempt
+- DecoratorExpr / decorator: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
 - DecoratorExpr / _new: `opt('(' sep(Expr, ',') ')')`: one token; takes a mark: it can fail after `'('`
 - DecoratorExpr / _new: `sep(Expr, ',')`: by attempt
 
@@ -227,9 +228,10 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `instanceof`: one token: led_instanceof (takes a builder checkpoint: led_instanceof: a call of Expr can fail after its operand (an operator that requires an assignment target))
   - `in`: one token: led_in (takes a builder checkpoint: led_in: a call of Expr can fail after its operand (an operator that requires an assignment target))
   - `satisfies`: one token: led_satisfies
-- one token, no mark: 2 inline choices, 19 star, 20 opt, 3 sep
+- one token, no mark: 2 inline choices, 19 star, 20 opt, 2 sep
 - Expr NUD / super_: `alt('(' sep(Expr, ',') ')' \| '.' alt(Ident \| PrivateFie…`: one token; takes a mark: branch 0: it can fail after `'('`; branch 1: it can fail after `'.'`; branch 2: it can fail after `'['`
 - Expr NUD / super_: `sep(Expr, ',')`: by attempt
+- Expr NUD / super_: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
 - Expr NUD / construct: `alt('<' sep(Type, ',') !(alt('>>' \| '>=' \| '>>=' \| '>>>…`: by attempt; takes a mark: branch 0: it can fail after `'<'`; branch 1: it can fail after `'('`
 - Expr NUD / construct: `sep(Type, ',')`: by attempt
 - Expr NUD / construct: `alt('(' sep(Expr, ',') ')' \| !{'?.'})`: by attempt; takes a mark: branch 0: it can fail after `'('`
@@ -246,11 +248,12 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Expr NUD / array: `opt(Expr)`: by attempt; takes a mark: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr NUD / array: `opt(Expr)`: by attempt; takes a mark: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr NUD / paren: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
-- Expr NUD / import_: `alt('(' Expr ')' \| '.' 'meta' \| '<' sep(Type, ',') !(al…`: one token; takes a mark: branch 0: it can fail after `'('`; branch 1: it can fail after `'.'`; branch 2: it can fail after `'<'`
+- Expr NUD / import_: `alt('(' Expr ')' \| '.' ('meta'\|'defer'\|'source') \| '<' …`: one token; takes a mark: branch 0: it can fail after `'('`; branch 1: it can fail after `'.'`; branch 2: it can fail after `'<'`
 - Expr NUD / import_: `sep(Type, ',')`: by attempt
 - Expr NUD / import_: `opt('(' sep(Expr, ',') ')')`: one token; takes a mark: it can fail after `'('`
 - Expr NUD / import_: `sep(Expr, ',')`: by attempt
 - Expr NUD / function_: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
+- Expr NUD / function_: `sep(Param, ',')`: by attempt
 - Expr NUD / function_: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
 - Expr NUD / function_: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
 - Expr NUD / generator: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
@@ -343,6 +346,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Expr LED / led_optChain: `sep(Expr, ',')`: by attempt
 - Expr LED / led_optChain: `sep(Type, ',')`: by attempt
 - Expr LED / led_optChain: `sep(Expr, ',')`: by attempt
+- Expr LED / led_bracket: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
 
 ### Prop
 
@@ -498,8 +502,9 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `.`: one token: led_dot
   - `[`: one token: led_bracket (takes a builder checkpoint: led_bracket: it can fail after `Expr`)
   - `<`: one token: led_lt (takes a builder checkpoint: led_lt: it can fail after `sep(Type, ',')`)
-- one token, no mark: 1 inline choice, 1 star, 5 opt, 2 sep
-- NewTarget NUD / superMember: `alt('.' Ident \| '[' Expr ']')`: one token; takes a mark: branch 0: it can fail after `'.'`; branch 1: it can fail after `'['`
+- one token, no mark: 1 inline choice, 1 star, 5 opt, 1 sep
+- NewTarget NUD / superMember: `alt('.' Ident \| '[' Expr many((',' Expr)) ']')`: one token; takes a mark: branch 0: it can fail after `'.'`; branch 1: it can fail after `'['`
+- NewTarget NUD / superMember: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
 - NewTarget NUD / new_: `alt('<' sep(Type, ',') !(alt('>>' \| '>=' \| '>>=' \| '>>>…`: one token; takes a mark: branch 0: it can fail after `'<'`; branch 1: it can fail after `'('`
 - NewTarget NUD / new_: `sep(Type, ',')`: by attempt
 - NewTarget NUD / new_: `opt('(' sep(Expr, ',') ')')`: one token; takes a mark: it can fail after `'('`
@@ -508,6 +513,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - NewTarget NUD / array: `opt(Expr)`: by attempt; takes a mark: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - NewTarget NUD / array: `opt(Expr)`: by attempt; takes a mark: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - NewTarget NUD / function_: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
+- NewTarget NUD / function_: `sep(Param, ',')`: by attempt
 - NewTarget NUD / function_: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
 - NewTarget NUD / function_: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
 - NewTarget NUD / generator: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
@@ -523,6 +529,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - NewTarget NUD / asyncGenerator: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
 - NewTarget NUD / asyncGenerator: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
 - NewTarget NUD / paren: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
+- NewTarget LED / led_bracket: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
 - NewTarget LED / led_lt: `sep(Type, ',')`: by attempt
 
 ### ClassHeritage
@@ -544,6 +551,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - ClassHeritage NUD / class_: `sep(Type, ',')`: by attempt
 - ClassHeritage LED / led_optChain: `alt(Ident \| PrivateField \| '(' sep(Expr, ',') ')' \| '['…`: one token; takes a mark: branch 2: it can fail after `'('`; branch 3: it can fail after `'['`
 - ClassHeritage LED / led_optChain: `sep(Expr, ',')`: by attempt
+- ClassHeritage LED / led_bracket: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
 - ClassHeritage LED / led_lt: `sep(Type, ',')`: by attempt
 - ClassHeritage LED / led_paren: `sep(Expr, ',')`: by attempt
 
@@ -621,15 +629,15 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 
 - BindingProperty (4 alternatives):
   - `...`: two tokens: committed to rest (#3) (takes a mark: it can fail after `'...'`)
-  - `[`: one token: committed to pair (#2) (takes a mark: it can fail after `alt(String \| Number \| '[' Expr ']')`)
+  - `[`: one token: committed to pair (#2) (takes a mark: it can fail after `alt(String \| Number \| HexNumber \| Octal…`)
   - `break`, `case`, `catch`, `class`, `const`, `continue`, `debugger`, `default` and 28 more: two tokens: committed to identPair (#0) (takes a mark: it can fail after `Ident`)
   - <Ident>: two tokens: committed to shorthand (#1), unless identPair (#0) admits the token (then the frame)
-  - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Template>, <Regex>, <Decorator>, <PrivateField> and 4 more: no candidate, the list fails
-  - <Number>, <String>: one token: committed to pair (#2) (takes a mark: it can fail after `alt(String \| Number \| '[' Expr ']')`)
+  - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <String>: one token: committed to pair (#2) (takes a mark: it can fail after `alt(String \| Number \| HexNumber \| Octal…`)
+  - <Template>, <Regex>, <Decorator>, <PrivateField>, <$templateHead>, <$templateMiddle>, <$templateTail>, punctuation: no candidate, the list fails
   - two tokens (SECOND): identPair (#0) only before ':'; rest (#3) only before '['|'{'|Ident
   - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over identPair (#0), shorthand (#1), pair (#2)
 - BindingProperty / shorthand: `opt('=' Expr)`: one token; takes a mark: it can fail after `'='`
-- BindingProperty / pair: `alt(String \| Number \| '[' Expr ']')`: one token; takes a mark: branch 2: it can fail after `'['`
+- BindingProperty / pair: `alt(String \| Number \| HexNumber \| OctalNumber \| BinaryN…`: one token; takes a mark: branch 6: it can fail after `'['`
 - BindingProperty / rest: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident \| Bindi…`: by attempt
 - BindingProperty / rest: `opt(':' BindingElement)`: one token; takes a mark: it can fail after `':'`
 - BindingProperty / rest: `opt('=' Expr)`: one token; takes a mark: it can fail after `'='`
@@ -731,7 +739,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `break`, `case`, `catch`, `class`, `const`, `continue`, `debugger`, `default` and 28 more: no candidate, the list fails
   - <Ident>: one token: committed to ident (#0)
   - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <String>, <Template>, <Regex> and 6 more: no candidate, the list fails
-  - two tokens (SECOND): bindingPattern (#1) only before ','|'...'|'['|']'|'{'|'}'|…3
+  - two tokens (SECOND): bindingPattern (#1) only before ','|'...'|'['|']'|'{'|'}'|…7
 - CatchParameter / ident: `opt(':' Type)`: one token; takes a mark: it can fail after `':'`
 - CatchParameter / bindingPattern: `opt(':' Type)`: one token; takes a mark: it can fail after `':'`
 
@@ -842,7 +850,8 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - two tokens (pairs): function_ (#0) at `function` only before Ident; generator (#1) at `function` only before '*'; asyncFunction (#2) at `async` only before 'function'; asyncGenerator (#3) at `async` only before 'function'; namedClass (#6) at `class` only before Ident; anonymousClass (#7) at `class` only before '<'|'extends'|'implements'|'{'; declare (#9) at `declare` only before 'function'; declare2 (#10) at `declare` only before 'module'; declare3 (#11) at `declare` only before 'global'; exportAsNamespace (#17) at `export` only before 'as'; exportDefault (#19) at `export` only before '@new'|'default'|Decorator; exportAll (#20) at `export` only before '*'|'type'; exportNamed (#21) at `export` only before '{'; exportEquals (#22) at `export` only before '='; exportNamedType (#23) at `export` only before 'type'
   - two tokens (SECOND): function_ (#0) only before Ident; generator (#1) only before '*'; asyncFunction (#2) only before 'function'; asyncGenerator (#3) only before 'function'; interface (#4) only before Ident; type (#5) only before Ident; namedClass (#6) only before Ident; anonymousClass (#7) only before '<'|'extends'|'implements'|'{'; enum_ (#8) only before Ident; declare (#9) only before 'function'; declare2 (#10) only before 'module'; declare3 (#11) only before 'global'; prefixed (#13) only before '!'|'('|'.'|'<'|'?.'|'@new'|…45; seq (#14) only before '@new'|'abstract'|'accessor'|'async'|'class'|'const'|…16; namespace (#15) only before Ident; module (#16) only before Ident|String; exportAsNamespace (#17) only before 'as'; exportDefault (#19) only before '@new'|'default'|Decorator; exportAll (#20) only before '*'|'type'; exportNamed (#21) only before '{'; exportEquals (#22) only before '='; exportNamedType (#23) only before 'type'; const_ (#24) only before 'enum'; importDeclaration (#25) only before '*'|'defer'|'type'|'{'|Ident|String
   - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over function_ (#0), generator (#1), asyncFunction (#2), asyncGenerator (#3), namedClass (#6), anonymousClass (#7) and 13 more
-- one token, no mark: 14 inline choices, 28 star, 47 opt, 7 sep
+- one token, no mark: 14 inline choices, 28 star, 47 opt, 5 sep
+- Decl / function_: `sep(Param, ',')`: by attempt
 - Decl / function_: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
 - Decl / function_: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
 - Decl / function_: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt
@@ -965,6 +974,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Decl / exportDefault: `alt('default' &(alt(&{'class'\|'function'\|'interface'\|De…`: one token; takes a mark: branch 0: it can fail after `'default'`
 - Decl / exportDefault: `alt('function' opt(!{'break'\|'case'\|'catch'\|'class'\|…32…`: by attempt; takes a mark: branch 0: it can fail after `'function'`; branch 1: it can fail after `'function'`; branch 2: it can fail after `'async'`; branch 3: it can fail after `'async'`; branch 4: it can fail after `many(DecoratorExpr)`; branch 5: it can fail after `many(DecoratorExpr)`; branch 6: it can fail after `'interface'`; branch 8: it can fail after `Expr`
 - Decl / exportDefault: `opt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident)`: by attempt
+- Decl / exportDefault: `sep(Param, ',')`: by attempt
 - Decl / exportDefault: `opt(':' alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: one token; takes a mark: it can fail after `':'`
 - Decl / exportDefault: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident sameLin…`: by attempt; takes a mark: branch 0: it can fail after `Ident`
 - Decl / exportDefault: `alt(Block \| !{'{'} alt(';' \| !(sameLine) \| &{'}'}))`: by attempt

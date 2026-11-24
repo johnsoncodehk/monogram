@@ -12,7 +12,7 @@
 //   dependencies(shape)            per (rule, arm): which inherited attributes its value reads
 import type { CstChild, CstLeaf, CstNode } from './gen-parser.ts';
 import type { CstGrammar, RuleDecl, RuleExpr, TemplateDelimiters } from './types.ts';
-import { isKeywordLiteral } from './grammar-utils.ts';
+import { isKeywordLiteral, ZERO_WIDTH_MARKERS } from './grammar-utils.ts';
 import { nameRule, OP_FORM_CHILDREN, type RuleNames } from './grammar-names.ts';
 import { COOK } from './shape-cook.ts';
 import { COOK_FNS, OPERATORS, nodeKeysOf, type CookFn, type TermTag, type InhAttr, type InhEq, type Scalar, type ShapeSpec, type Span, type Term, type ThreadEq } from './shape2-schema.ts';
@@ -68,7 +68,7 @@ export type Slot = { name: string; kind: SlotKind; rule?: string; node: RuleExpr
 export type ScopeInfo = { where: string; slots: Map<string, Slot> };
 export type ArmInfo = ScopeInfo & { rule: string; arm: string; form?: 'binary' | 'prefix' | 'postfix'; items?: RuleExpr[] };
 
-const ZERO_WIDTH = new Set(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf']);
+const ZERO_WIDTH = ZERO_WIDTH_MARKERS;
 const isList = (q: RuleExpr): boolean => q.type === 'sep' || (q.type === 'quantifier' && q.kind !== '?');
 export const cardOf = (quants: RuleExpr[]): Card => (quants.some(isList) ? 'many' : quants.length ? 'opt' : 'one');
 

@@ -460,12 +460,6 @@ for (const c of i_fail) console.log('    - ' + c);
 // ── Expected-fail: inputs the productions reject that the grammar accepts today, each with its
 // cause. The gate fails when one of them is rejected (remove it then) or tsc stops rejecting it.
 const expectedFail: { code: string; reason: string }[] = [
-  // DoubleStringCharacter / SingleStringCharacter exclude LF and CR (LS / PS are allowed since
-  // ES2019); tsc's parser reports "Unterminated string literal". `String_` admits them because
-  // the JSX grammars reuse `String_` for attribute values, and a JSX attribute string MAY span
-  // lines (JSXDoubleStringCharacters). Owed: a string token of the JSX tag region, then `String_`
-  // excludes LF / CR.
-  ...['"a\nb"', '"a\rb"', "'a\nb'", "'a\r\nb'"].map((q) => ({ code: `x = ${q};`, reason: 'a raw LF / CR inside a string literal (String_ is shared with JSX attribute values)' })),
 ];
 const x_fail: string[] = [];
 for (const { code, reason } of expectedFail) {
