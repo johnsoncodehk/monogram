@@ -3777,6 +3777,21 @@ const buStoreTs = (plan: ShapePlan): string => {
 };
 function shapeRuntimeTs(plan: ShapePlan): string {
   const K = plan.nodeKeys;
+  // The value of arm id over slots b.._n (a variant arm's second variant in _alt), after its
+  // synthesized attributes (_ys): printed in finS and finPS themselves (a call less per node).
+  const construct = `  let v: any;${plan.syn.some((a) => a.fns.some((f) => f !== null)) ? `
+  const sf = _SYF[id]!;
+  if (sf !== null) sf(b, off, end);` : ''}
+  _alt = undefined; _tbit = false;
+  try { v = _C[id]!(b, off, end); } catch (e) { if (!(e instanceof _Missing)) throw e; v = e; }
+  if (v instanceof _Missing) _alt = v;
+  if (_built !== null) {
+    let w = _VB[id]! >= 0 && _VD[id] ? _alt : v;
+    const t = _WR[id]!;
+    if (t !== null && _WD[id] && _tbit && !(w instanceof _Missing)) { try { w = t(w, off, end); } catch (e) { if (!(e instanceof _Missing)) throw e; w = e; } }
+    _built(id, off, end, w instanceof _Missing ? new ShapeMissing(w.where, w.why) : w);
+  }
+`;
   return `export type ShapeNode = { [key: string]: ShapeValue };
 export type ShapeValue = ShapeNode | ShapeValue[] | string | number | boolean | null | { record: Record<string, ShapeValue> };
 /** A read of what the shape cannot give: an arm it leaves out ('unmapped') or one this parser's
@@ -3790,22 +3805,6 @@ function _missing(where: string, why: string): any { return new _Missing(where, 
 // A child read that is missing makes the reading arm's value missing too (finS catches it): only the
 // root's read, parse(), throws, as the evaluator throws when a unit's evaluation reads one.
 function _need(v: any): any { if (v instanceof _Missing) throw v; return v; }
-// An arm's value (a variant arm's second variant in _alt), after its synthesized attributes (_ys).
-function _construct(id: number, b: number, off: number, end: number): any {
-  let v: any;${plan.syn.some((a) => a.fns.some((f) => f !== null)) ? `
-  const sf = _SYF[id]!;
-  if (sf !== null) sf(b, off, end);` : ''}
-  _alt = undefined; _tbit = false;
-  try { v = _C[id]!(b, off, end); } catch (e) { if (!(e instanceof _Missing)) throw e; v = e; }
-  if (v instanceof _Missing) _alt = v;
-  if (_built !== null) {
-    let w = _VB[id]! >= 0 && _VD[id] ? _alt : v;
-    const t = _WR[id]!;
-    if (t !== null && _WD[id] && _tbit && !(w instanceof _Missing)) { try { w = t(w, off, end); } catch (e) { if (!(e instanceof _Missing)) throw e; w = e; } }
-    _built(id, off, end, w instanceof _Missing ? new ShapeMissing(w.where, w.why) : w);
-  }
-  return v;
-}
 // Inherited context attributes (an rd rule's: Step.inh sets them around its calls), their values
 // now; _ipush sets one and returns what it was, _ipop restores it and passes the call's result on.
 const _IV0: any[] = ${J(plan.inh.map((a) => a.dflt))};
@@ -3907,16 +3906,14 @@ function finS(id: number, b: number, save: number): void {
   let off: number, end: number, ho: number, he: number;
   if (_n > b) { const s = b * _SW; off = _sp[s]!; end = _sp[(_n - 1) * _SW + 1]!; ho = _sp[s + 3]!; he = _sp[s + 4]!; }
   else { off = save < toks.length ? toks[save]!.off : 0; end = off; ho = off; he = off; }
-  const v = _construct(id, b, off, end);
-  _n = b;
+${construct}  _n = b;
   _slot(v, 1, off, end, save, ho, he);
   _ar[b] = id; _h1[b] = _alt; _tb[b] = _tbit;${buStoreTs(plan)}${synKept(plan).map((k) => ` if (_SYE[${k}]![id]) _sy[${k}]![b] = _ys[${k}];`).join('')}
 }
 function finPS(id: number, b: number): void {
   let off = 0, end = 0, ts = pos, ho = 0, he = 0;
   if (_n > b) { const s = b * _SW; off = _sp[s]!; end = _sp[(_n - 1) * _SW + 1]!; ts = _sp[s + 2]!; ho = _sp[s + 3]!; he = _sp[s + 4]!; }
-  const v = _construct(id, b, off, end);
-  _n = b;
+${construct}  _n = b;
   _slot(v, 1, off, end, ts, ho, he);
   _ar[b] = id; _h1[b] = _alt; _tb[b] = _tbit;${buStoreTs(plan)}${synKept(plan).map((k) => ` if (_SYE[${k}]![id]) _sy[${k}]![b] = _ys[${k}];`).join('')}
 }

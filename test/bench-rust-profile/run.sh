@@ -237,7 +237,7 @@ if [ -f "$W/src-M/test/fixtures/shape-tsc-synthesized.ts" ] && [ -f "$H/shape-ta
     cg_run "M.shape.$f" '*mono_prof_shape*' "$sb" --once "$f"
     cg_run "M.shape-reuse.$f" '*mono_prof_shape_reuse*' "$sb" --once-reuse "$f"
     for m in shape shape-reuse parse parse-reuse; do
-      callgrind_annotate --inclusive=no "$OUT/cg/M.$m.$f.out" 2>/dev/null | grep -E '^ *[0-9,]+ ' | head -30 > "$OUT/cg/M.$m.$f.top.txt" || true
+      lim node "$H/cg-self.ts" "$OUT/cg/M.$m.$f.out" 30 > "$OUT/cg/M.$m.$f.top.txt" || true
       echo "--- top functions M.$m.$f"; cat "$OUT/cg/M.$m.$f.top.txt"
     done
     irof() { grep -E "^IR M\.$1\.$f " "$R" | tail -1 | awk '{print $3}'; }
