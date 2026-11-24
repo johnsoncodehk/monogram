@@ -466,6 +466,12 @@ export type PrattRule = {
   // extend. Prefix and binary nodes always close the tail.
   nudBracketClosesTail: boolean[];                    // parallel to nudBrackets: ends in a fresh operand (`... $`)
   nudSeqClosesTail: boolean[];                        // parallel to nudSeqs: ends in a fresh operand
+  // PREFIX-SHAPED NUDs: an arm ending in an operand of this rule read at an operator's level (a
+  // ruleBp step: `atLevel(op, $)`, a capped prefix's `op $`) builds a node of the prefix-unary form
+  // (FORM_UNARY: not a target, no noUnaryLhs left operand) and closes the tail, as a prefix
+  // operator's does: TypeScript's type assertion `<T>e`. Every other bracket / sequence arm: FORM_TARGET.
+  nudBracketForm: AssignForm[];                       // parallel to nudBrackets
+  nudSeqForm: AssignForm[];                           // parallel to nudSeqs
   // CAP PROPAGATION through a trailing operand: a node whose rightmost child is a self operand
   // parsed as a full expression (bp 0) takes that operand's cap, so `...() => {}` and
   // `a ? b : () => {}` are capped and a trailing `|| x` / `? :` stays unconsumed (the binary
@@ -2429,11 +2435,13 @@ function buildPratt(
     : [];
   const ledForm = leds.map((l): AssignForm => a.binaryConnectors.has(l.first) ? FORM_NOT_TARGET : FORM_TARGET);
   const endsInOperand = (steps: Step[]): boolean => { const l = steps[steps.length - 1]; return l !== undefined && l.t === 'rule' && l.name === name; };
-  const nudBracketClosesTail = nudBrackets.map((b) => endsInOperand(b.steps));
-  // A capped prefix operator's arm (`op operand`, the operand a ruleBp step) closes the tail by its
-  // own mark, as the prefix arm does (a NUD: ledClosesTail below decides only leds).
-  const cappedSeqs = new Set(nudOrder.flatMap((a) => (a.kind === 'seq' && a.capBp !== undefined ? [a.index] : [])));
-  const nudSeqClosesTail = nudSeqs.map((st, i) => cappedSeqs.has(i) || endsInOperand(st));
+  // A NUD ending in an operand read at an operator's level (a capped prefix operator's `op operand`,
+  // a type assertion's `<T> operand`) is prefix-shaped: it closes the tail and has the prefix form.
+  const endsInLevelOperand = (steps: Step[]): boolean => { const l = steps[steps.length - 1]; return l !== undefined && l.t === 'ruleBp' && l.name === name; };
+  const nudBracketClosesTail = nudBrackets.map((b) => endsInOperand(b.steps) || endsInLevelOperand(b.steps));
+  const nudSeqClosesTail = nudSeqs.map((st) => endsInOperand(st) || endsInLevelOperand(st));
+  const nudBracketForm = nudBrackets.map((b): AssignForm => (endsInLevelOperand(b.steps) ? FORM_UNARY : FORM_TARGET));
+  const nudSeqForm = nudSeqs.map((st): AssignForm => (endsInLevelOperand(st) ? FORM_UNARY : FORM_TARGET));
   // A trailing NEGATIVE lookahead closes the tail (`Foo<T>` then no `(`); a positive one asserts that a
   // continuation follows (Python's `&t_lookahead`) and leaves it open (gen-parser.ts negativeLook).
   const ledClosesTail = leds.map((l, i) => { const last = l.steps[l.steps.length - 1]; return !ledAccessTail[i] || ((last?.t === 'look' || last?.t === 'ahead' || last?.t === 'aheadCtx') && !last.is); });
@@ -2451,7 +2459,7 @@ function buildPratt(
       case 'prefix': return null;
     }
   }));
-  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, nudSeqGuard, nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudBracketCapsFromTail, nudSeqCapsFromTail, nudCapped, nudCappedGuard, nudOrder, nudNames, nudDispatch, prefix, binary, leds, ledNames, ledLeftNames, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledSuppressedIn: [], ledForm, ledClosesTail, ledCapsFromTail, ledRebind, ledClean: [], postfixToks, postfixTokNames, postfix, postfixSameLine, opNames: names.ops ?? null, ...(nudTplHole !== undefined ? { nudTplHole } : {}), ...(postfixTplHole !== undefined ? { postfixTplHole } : {}) };
+  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, nudSeqGuard, nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudBracketForm, nudSeqForm, nudBracketCapsFromTail, nudSeqCapsFromTail, nudCapped, nudCappedGuard, nudOrder, nudNames, nudDispatch, prefix, binary, leds, ledNames, ledLeftNames, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledSuppressedIn: [], ledForm, ledClosesTail, ledCapsFromTail, ledRebind, ledClean: [], postfixToks, postfixTokNames, postfix, postfixSameLine, opNames: names.ops ?? null, ...(nudTplHole !== undefined ? { nudTplHole } : {}), ...(postfixTplHole !== undefined ? { postfixTplHole } : {}) };
 }
 
 // ── Lex integer ids (kid = kind index, lid = text/literal index) ──
@@ -2632,6 +2640,14 @@ export function lidOf(plan: LexIdPlan, text: string): number {
  *  one re-bind function. */
 /** The grammar has a capped prefix operator: a NUD sequence arm with a cap (NudRef.capBp). */
 export const hasCappedSeq = (ir: Pick<ParserIR, 'rules'>): boolean => ir.rules.some((r) => r.kind === 'pratt' && r.nudOrder.some((a) => a.kind === 'seq' && a.capBp !== undefined));
+/** NUD arm i's (PrattRule.nudOrder) form without declared contexts: FORM_UNARY for a prefix-shaped
+ *  bracket / sequence arm (nudBracketForm / nudSeqForm), else FORM_TARGET (a prefix arm's is its operator's). */
+export const nudLowForm = (r: PrattRule, i: number): AssignForm => {
+  const a = r.nudOrder[i]!;
+  return a.kind === 'bracket' ? r.nudBracketForm[a.index]! : a.kind === 'seq' ? r.nudSeqForm[a.index]! : FORM_TARGET;
+};
+/** The grammar has a prefix-shaped NUD bracket or sequence arm (PrattRule.nudSeqForm): its form is not FORM_TARGET. */
+export const hasUnaryNud = (ir: Pick<ParserIR, 'rules'>): boolean => ir.rules.some((r) => r.kind === 'pratt' && (r.nudBracketForm.some((f) => f !== FORM_TARGET) || r.nudSeqForm.some((f) => f !== FORM_TARGET)));
 export const hasRebind = (ir: Pick<ParserIR, 'rules'>): boolean => ir.rules.some((r) => r.kind === 'pratt' && r.ledRebind.some((x) => x !== null));
 /** The re-bind's brackets (the interpreter's matchMixfixLed counts `( [ {` against `) ] }`): the
  *  literal ids of those that are the grammar's literals (a text no literal has is no token's). */
@@ -3136,6 +3152,7 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
   if (ir.targets) throw new Error(`portable recovery: grammar ${ir.grammarName} declares target contexts (CstGrammar.targets), which total parsing does not encode yet`);
   const data: number[] = [];
   const cappedSeq = hasCappedSeq(ir);   // REC_N_SEQ entries carry their cap (recovery-family riNudOf)
+  const unaryNud = hasUnaryNud(ir);     // REC_N_BRACKET / REC_N_SEQ entries carry their form (likewise)
   const rid = (name: string) => ruleIdOf(ar, name);
   const lid = (text: string) => { const l = lidOf(ids, text); if (l === 0) throw new Error(`recoveryTables: ${JSON.stringify(text)} has no lid`); return l; };
   // A cell is an int or a reference to a record already appended (-1: none), held relative.
@@ -3216,8 +3233,8 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
     const arms = r.nudOrder.map((a): Cell[] => {
       switch (a.kind) {
         case 'tok': return [REC_N_TOK, kidOf(ids, r.nudToks[a.index]!), r.nudTplHole !== undefined && ir.tpl !== null && r.nudToks[a.index] === ir.tpl.token ? 1 : 0];
-        case 'bracket': return [REC_N_BRACKET, lid(r.nudBrackets[a.index]!.first), ref(list(r.nudBrackets[a.index]!.steps)), r.nudBracketClosesTail[a.index] ? 1 : 0, r.nudBracketCapsFromTail[a.index] ? 1 : 0];
-        case 'seq': { const g = r.nudSeqGuard[a.index]!; return [REC_N_SEQ, ref(guard(g)), ref(list(skip(g, r.nudSeqs[a.index]!))), r.nudSeqClosesTail[a.index] ? 1 : 0, r.nudSeqCapsFromTail[a.index] ? 1 : 0, ...(cappedSeq ? [a.capBp ?? -1] : [])]; }
+        case 'bracket': return [REC_N_BRACKET, lid(r.nudBrackets[a.index]!.first), ref(list(r.nudBrackets[a.index]!.steps)), r.nudBracketClosesTail[a.index] ? 1 : 0, r.nudBracketCapsFromTail[a.index] ? 1 : 0, ...(unaryNud ? [r.nudBracketForm[a.index]!] : [])];
+        case 'seq': { const g = r.nudSeqGuard[a.index]!; return [REC_N_SEQ, ref(guard(g)), ref(list(skip(g, r.nudSeqs[a.index]!))), r.nudSeqClosesTail[a.index] ? 1 : 0, r.nudSeqCapsFromTail[a.index] ? 1 : 0, ...(cappedSeq ? [a.capBp ?? -1] : []), ...(unaryNud ? [r.nudSeqForm[a.index]!] : [])]; }
         case 'capped': { const g = r.nudCappedGuard[a.index]!, c = r.nudCapped[a.index]!; return [REC_N_CAPPED, ref(guard(g)), ref(list(skip(g, c.steps))), c.capBp]; }
         case 'prefix': return [REC_N_PREFIX];
       }
