@@ -23,6 +23,7 @@
 // parser. This is enough to derive a real JavaScript-subset parser (test/fixtures/minijs.ts).
 import type { CstGrammar, IdentifierClasses, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
 import { identifierClassesOf } from './uni-ident.ts';
+import { planTargets, type ArmForm } from './declared-targets.ts';
 import { KIND, analyzeGrammar, concreteFirst, directivesOf, findEntryRule, tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { nameRule, syntaxKey, type RuleNames } from './grammar-names.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
@@ -124,13 +125,13 @@ export type Step = StepOp & {
   inh?: { k: number; v: ShapeInhVal }[]; threadInit?: { k: number; v: ShapeInhVal }; thread?: { k: number; next: string };
 };
 type StepOp =
-  | { t: 'lit'; value: string; ttype: '$keyword' | '$punct' }   // match a literal by text
+  | { t: 'lit'; value: string; ttype: '$keyword' | '$punct'; accSep?: true }   // match a literal by text; accSep: a container's ',' after which no `last` child may stand (declared-targets.ts)
   | { t: 'tok'; name: string; hole?: string }                   // match a token kind; a template kind (TplCfg) carries the rule that parses its `${…}` holes and also matches an interpolated template
-  | { t: 'rule'; name: string }                                 // call a rule, append its node
-  | { t: 'ruleBp'; name: string; bp: number }                   // call a Pratt rule at a given binding power (chain-rhs led trailing operand)
+  | { t: 'rule'; name: string; acc?: number }                  // call a rule, append its node; acc: a container's child (declared-targets.ts): the pass bits its form must have
+  | { t: 'ruleBp'; name: string; bp: number; acc?: number }     // call a Pratt rule at a given binding power (chain-rhs led trailing operand)
   | { t: 'star'; step: Step; guard?: number; clean?: true; leaves?: true; share?: number }                   // repeat inner 0+
   | { t: 'opt'; steps: Step[]; guard?: number; clean?: true; leaves?: true; share?: number }                 // optional sub-sequence
-  | { t: 'sep'; elem: Step; delim: string; guard?: number; clean?: true; leaves?: true; share?: number }     // elem (delim elem)*
+  | { t: 'sep'; elem: Step; delim: string; guard?: number; clean?: true; leaves?: true; share?: number; accSep?: true }   // accSep: as a lit step's, for each delimiter (declared-targets.ts)     // elem (delim elem)*
   | { t: 'altlit'; opts: Lit[] }                                // inline alternation of literals (fast path)
   | { t: 'alt'; branches: Step[][]; branchNames?: string[]; firsts?: FirstSig[]; predictive?: boolean; clean?: boolean[]; share?: number }            // inline alternation of sub-sequences (backtracking unless predictive); clean: parallel to branches, the branch fails clean (Step.clean) so its frame takes no mark
   | { t: 'look'; id: number; is: boolean }                     // zero-width: whether ParserIR.lookaheads[id] matches here (is) or does not (!is)
@@ -138,6 +139,7 @@ type StepOp =
   | { t: 'aheadCtx'; set: number; is: boolean }                 // zero-width: the `ahead` test of tokenSets[set] plus the operator words of the context in force (ParserIR.ctxWords)
   | { t: 'seq'; steps: Step[]; share?: number }                 // a grouped sub-sequence (e.g. a star body `(',' Expr)`)
   | { t: 'sameLine' }                                           // zero-width: the next token is on the same line (no preceding newline)
+  | { t: 'target'; ctx: string; mask?: number }                // zero-width: the node just returned passes target context ctx (its pass bit: mask; declared-targets.ts)
   | { t: 'suppress'; set: number; steps: Step[]; share?: number }  // parse the body with the LED connectors of ParserIR.suppressSets[set] disabled (no-`in` context)
   | { t: 'ctx'; ctx: Ctx; steps: Step[]; share?: number };      // parse the body in [Await]/[Yield] context `ctx`, then put back the one in force
 export type Alt = Step[];
@@ -210,6 +212,7 @@ export type RdRule = {
   altGuard: Guard[];        // parallel to alts: when each one is a candidate at all
   altDispatch: Dispatch;    // how a target reaches the alts a token admits (unused when predictive / one alt)
   altCommit?: Commit;       // the keys at which one alternative is left (see Commit); absent: none
+  altForm?: ArmForm[];      // parallel to alts: each one's form, present iff the rule is in the target closure (declared-targets.ts)
   clean: boolean;           // every alternative fails clean (Step.clean): the PREDICTIVE / SINGLE form's entry takes no builder checkpoint and its failure undoes nothing
 };
 // The candidates of a longest-match list, by what the first token must be, as sections a target
@@ -481,7 +484,7 @@ export type PrattRule = {
   // requireTarget: the operand (prefix) / left operand (binary, postfix) must have FORM_TARGET,
   // else the whole Pratt call fails; noUnaryLhs: the left operand must not have FORM_UNARY.
   prefix: Array<{ op: string; rbp: number; requireTarget: boolean; form: AssignForm }>;  // NUD: prefix op then operand at rbp; form = the node's
-  binary: Array<{ op: string; lbp: number; rbp: number; requireTarget: boolean; noUnaryLhs: boolean }>;  // LED: infix op, bind iff lbp > minBp, rhs at rbp
+  binary: Array<{ op: string; lbp: number; rbp: number; requireTarget: boolean; noUnaryLhs: boolean; needCtx?: number; accLeft?: number }>;   // needCtx: targetOps: the pass bit the left operand must have; accLeft: the pass bits the node takes from its left operand (declared-targets.ts)  // LED: infix op, bind iff lbp > minBp, rhs at rbp
   leds: Bracket[];                                    // LED: mixfix continuation (call/member/index), tried before operators
   ledNames: string[];                                 // parallel to leds: each arm's name
   ledLeftNames: string[];                             // parallel to leds: the name of its left operand (the self `$`; derived: `left`)
@@ -490,7 +493,15 @@ export type PrattRule = {
   ledSameLine: boolean[];                             // parallel to leds: a leading `sameLine` guard (TS type tails) — the connector must be on the operand's line
   ledNotLeftLeaf: Array<string[] | null>;             // parallel to leds: skip this led when the left node's head-leaf text is in this set (`void.x` etc.)
   ledSuppressedIn: number[][];                        // parallel to leds: the ParserIR.suppressSets that hold its connector — the led is tried only while the set in force is none of them
-  ledForm: AssignForm[];                              // parallel to leds: the built node's form (a binary-connector led, `a < T >`/`a as T`, is not a target)
+  ledForm: number[];                                  // parallel to leds: the built node's form (a binary-connector led, `a < T >`/`a as T`, is not a target; with target contexts, plus its leaf bits)
+  // Present iff the grammar declares target contexts (declared-targets.ts): each NUD arm's form
+  // (parallel to nudOrder), a postfix token arm's, the binary node's (its leaf bits; accLeft: the
+  // pass bits it takes from its left operand), the postfix operator node's, a prefix node's leaf bits.
+  nudForm?: ArmForm[];
+  postfixTokForm?: number[];
+  binForm?: { leaf: number; accLeft: number };   // accLeft: what every operator's node takes (PrattRule.binary accLeft: each one's)
+  postForm?: number;
+  preLeaf?: number;
   ledClosesTail: boolean[];                           // parallel to leds: not an access tail, or ends in a negative lookahead (`Foo<T>` then nothing)
   ledCapsFromTail: boolean[];                         // parallel to leds: its trailing self operand's cap is the node's (see nudSeqCapsFromTail): the ternary's `: $`
   // parallel to leds: the MIXFIX OPERAND RE-BIND (the interpreter's matchMixfixLed). A led
@@ -520,6 +531,13 @@ export type PrattRule = {
 // `++x`) is also refused as a noUnaryLhs left operand; every other node is a target.
 export const FORM_TARGET = 0, FORM_NOT_TARGET = 1, FORM_UNARY = 2;
 export type AssignForm = typeof FORM_TARGET | typeof FORM_NOT_TARGET | typeof FORM_UNARY;
+// A grammar that declares target contexts (CstGrammar.targets; declared-targets.ts) widens the form
+// to a BITMASK, one byte in every target: FORM_LOW masks today's meaning above; context i has a
+// PASS bit (its node passes the context) and a LAST bit (its node is a `last` arm of it). A grammar
+// without contexts never sets a bit above FORM_LOW, and its printed parser tests the form as before.
+export const FORM_LOW = 3, FORM_MAX_CONTEXTS = 3;
+export const formPass = (i: number): number => 4 << (2 * i);
+export const formLast = (i: number): number => 8 << (2 * i);
 export type RuleIR = RdRule | PrattRule;
 
 // Stateful regex-vs-division disambiguation (the JS `/` problem): a `/` starts a regex
@@ -651,7 +669,11 @@ export type ParserIR = {
   identPrefix: Record<string, string>;
   /** The Unicode identifier characters of the identifier token (uni-ident.ts identifierClassesOf). */
   identClasses: IdentifierClasses;
+  /** The declared target contexts (declared-targets.ts); absent when the grammar declares none. */
+  targets?: TargetsIR;
 };
+// passes: every context's pass bit; lastCtx: the pass bits of the contexts that have `last` arms.
+export type TargetsIR = { names: string[]; passes: number; lastCtx: number };
 
 // The target-agnostic parse plan for a grammar, the IR each portable Target (ts/go/rust) renders.
 // The [Await]/[Yield] context is a word the parser holds (see Ctx), not a copy of each rule per
@@ -947,6 +969,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
       }
       case 'not': return e.reservable ? reservableOf(altSteps(e.body)) : notOf(altSteps(e.body));   // zero-width negative lookahead
       case 'sameLine': return { t: 'sameLine' };                  // zero-width no-newline assertion
+      case 'target': return { t: 'target', ctx: e.ctx };          // zero-width declared target check (declared-targets.ts)
       case 'seq': return { t: 'seq', steps: e.items.map(stepOf) };  // grouped sub-sequence (star/sep body)
       case 'sep': return { t: 'sep', elem: stepOf(e.element), delim: e.delimiter };
       case 'quantifier':
@@ -1204,7 +1227,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
       }
       case 'seq': return seqFirst(s.steps);
       case 'suppress': case 'ctx': return seqFirst(s.steps);
-      case 'look': case 'ahead': case 'aheadCtx': case 'sameLine': case 'star': case 'opt': case 'sep': return null;   // zero-width / nullable leading → unpredictable
+      case 'look': case 'ahead': case 'aheadCtx': case 'sameLine': case 'target': case 'star': case 'opt': case 'sep': return null;   // zero-width / nullable leading → unpredictable
     }
     return null;
   };
@@ -1324,7 +1347,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   // binary or postfix operator returns with the left operand built; a prefix one in the NUD frame
   // returns with the best so far built). Not clean: such a Pratt rule's call, and any list whose
   // later step can fail after an earlier one consumed.
-  const zeroWidth = (s: Step): boolean => s.t === 'ahead' || s.t === 'aheadCtx' || s.t === 'sameLine' || s.t === 'look';
+  const zeroWidth = (s: Step): boolean => s.t === 'ahead' || s.t === 'aheadCtx' || s.t === 'sameLine' || s.t === 'target' || s.t === 'look';
   const cleanRules = new Set(rules.filter((r) => r.kind === 'rd' || (!r.binary.some((b) => b.requireTarget || b.noUnaryLhs) && !r.postfix.some((o) => o.requireTarget) && !r.prefix.some((o) => o.requireTarget))).map((r) => r.name));
   const failsClean = (s: Step): boolean => {
     switch (s.t) {
@@ -1468,6 +1491,8 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
     }
   }
 
+  // Declared target contexts mark their steps before steps are shared (a marked step is another step).
+  const targets = planTargets(grammar, rules);
   const shared = shareSteps([
     ...rules.flatMap(printedBodies),
     ...lookaheads,
@@ -1481,7 +1506,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
     const f = new Set(reuse.rules.flatMap((r) => [...concrete.first1({ type: 'ref', name: r })]));
     entrySync = { lits: [...f].filter((x) => !x.startsWith(KIND)), toks: [...f].filter((x) => x.startsWith(KIND)).map((x) => x.slice(KIND.length)) };
   }
-  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse, entrySync, suppressSets, regexCtx, tpl, elements, newlineCfg, identToken, identLike, identPrefix, identClasses: identifierClassesOf(grammar.tokens) };
+  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse, entrySync, suppressSets, regexCtx, tpl, elements, newlineCfg, identToken, identLike, identPrefix, identClasses: identifierClassesOf(grammar.tokens), ...(targets ? { targets } : {}) };
 }
 
 // The step lists a rule runs: an rd rule's alternatives, a Pratt rule's NUD and LED arms.
@@ -1554,6 +1579,15 @@ export type StepLowering = {
   template(name: string, hole: string): string;  // the template kind `name`: its token, or an interpolated template whose holes `hole` parses (a building form, recognized or not: its node is dropped when recognizing)
   rule(name: string): string;
   ruleBp(name: string, bp: number): string;      // only a Pratt rule is called at a binding power
+  // Declared target contexts (declared-targets.ts; absent: the target does not print them): a
+  // container's child call `call` whose form must have the pass bits `mask`; the call that clears a
+  // pending `last` child (after a ',', or before a sep element), returning true; the test of the
+  // pass bit `mask` on the form of the node just returned.
+  acc?(call: string, mask: number): string;
+  accSep?(): string;
+  target?(mask: number): string;
+  accRun?(cond: string, f: ArmForm & { k: 'acc' }): string;   // a container arm's steps `cond` in a fresh accumulator; matched, the arm's form is `armForm` of it
+  armForm?(f: ArmForm, pratt: boolean): string;  // an arm's form when it won (a Pratt arm keeps its own low bits over a unit arm's)
   // body: the inner step, as a boolean expression; guard: the body is attempted only when the next
   // token is in ParserIR.tokenSets[guard] (null: always attempted); mark: the mark an attempt takes
   // (MarkForm: none when the body fails clean, Step.clean; the position and the scratch list when it
@@ -1590,16 +1624,21 @@ export function stepExpr(s: Step, L: StepLowering): string {
   if ((s.tag !== undefined || s.mark !== undefined || s.inh !== undefined || s.threadInit !== undefined) && L.shaped) return L.shaped(s, stepBody(s, L));
   return stepBody(s, L);
 }
+// A target-context step (declared-targets.ts) printed by a target that does not print them yet.
+function need<F>(f: F | undefined, what: string): F {
+  if (f === undefined) throw new Error(`portable: this target does not print declared target contexts yet (step ${what})`);
+  return f;
+}
 /** The step itself, printed in place (a shared step's function body; every other step's site). */
 export function stepBody(s: Step, L: StepLowering): string {
   switch (s.t) {
-    case 'lit': return L.lit(s);
+    case 'lit': return s.accSep ? `(${L.lit(s)} && ${need(L.accSep, 'accSep')()})` : L.lit(s);
     case 'tok': return s.hole !== undefined ? L.template(s.name, s.hole) : L.tok(s.name);
-    case 'rule': return L.rule(s.name);
-    case 'ruleBp': return L.ruleBp(s.name, s.bp);
+    case 'rule': return s.acc !== undefined ? need(L.acc, 'acc')(L.rule(s.name), s.acc) : L.rule(s.name);
+    case 'ruleBp': return s.acc !== undefined ? need(L.acc, 'acc')(L.ruleBp(s.name, s.bp), s.acc) : L.ruleBp(s.name, s.bp);
     case 'star': return L.star(stepExpr(s.step, L.inner()), s.guard ?? null, markOf(s));
     case 'opt': { const I = L.inner(); return L.opt(s.steps.map((x) => stepExpr(x, I)).join(' && '), s.guard ?? null, markOf(s)); }
-    case 'sep': return L.sep(stepExpr(s.elem, L.inner()), s.delim, s.guard ?? null, markOf(s));
+    case 'sep': { const I = L.inner(); return L.sep(`${s.accSep ? `${need(I.accSep, 'accSep')()} && ` : ''}${stepExpr(s.elem, I)}`, s.delim, s.guard ?? null, markOf(s)); }
     case 'altlit': return L.altlit(s.opts.map((o) => o.value));
     case 'alt': return L.inPlace('alt', stepStmts(s, L.inner()));
     case 'look': return L.look(s.id, s.is);
@@ -1607,6 +1646,7 @@ export function stepBody(s: Step, L: StepLowering): string {
     case 'aheadCtx': return L.aheadCtx(s.set, s.is);
     case 'seq': return `(${conjOf(s.steps, L)})`;
     case 'sameLine': return L.sameLine();
+    case 'target': return need(L.target, 'target')(s.mask!);
     case 'suppress': return L.inPlace('suppress', L.suppress(s.set, conjOf(s.steps, L)));
     case 'ctx': return L.inPlace('ctx', L.ctx(s.ctx, conjOf(s.steps, L)));
   }
@@ -1685,22 +1725,27 @@ export type RuleLowering = {
   commitFail: string;                            // no match, from the switch
   commitSw: CommitLowering;
 };
+// The steps `cond` of an arm, in its target-context accumulator when it is a container (ArmForm 'acc').
+function accCond(f: ArmForm | undefined, cond: string, S: StepLowering): string {
+  return f?.k === 'acc' ? need(S.accRun, 'accRun')(cond, f) : cond;
+}
 /** An rd rule's function in the form `L` spells. */
 export function ruleShell(r: RdRule, ids: LexIdPlan, L: RuleLowering): string {
-  const cond = (steps: Step[]) => conjOf(steps, L.steps);
+  // A container arm of a target context (RdRule.altForm) runs its steps inside its accumulator.
+  const condAt = (i: number, steps: Step[], S = L.steps) => accCond(r.altForm?.[i], conjOf(steps, S), S);
   if (r.predictive) {
-    const arm = (steps: Step[], i: number) => `${L.ind}${i === 0 ? '' : 'else '}${L.ifThen(L.first(r.altFirst[i] ?? null), `{ ${L.ifThen(cond(steps), L.accept(i))} }`)}`;
+    const arm = (steps: Step[], i: number) => `${L.ind}${i === 0 ? '' : 'else '}${L.ifThen(L.first(r.altFirst[i] ?? null), `{ ${L.ifThen(condAt(i, steps), L.accept(i))} }`)}`;
     return L.fn([L.open(r.clean), L.peekOrFail, r.alts.map(arm).join(L.armJoin), L.fail(r.clean)]);
   }
-  if (r.alts.length === 1) return L.fn([L.open(r.clean), `${L.ind}${L.ifThen(cond(r.alts[0]!), L.accept(0))}`, L.fail(r.clean)]);
-  const arm = (i: number, keyed: boolean) => L.guard(r.altGuard[i]!, keyed, L.cand(r.altDispatch, i, cond(guardedSteps(r.altGuard[i]!, r.alts[i]!))));
+  if (r.alts.length === 1) return L.fn([L.open(r.clean), `${L.ind}${L.ifThen(condAt(0, r.alts[0]!), L.accept(0))}`, L.fail(r.clean)]);
+  const arm = (i: number, keyed: boolean) => L.guard(r.altGuard[i]!, keyed, L.cand(r.altDispatch, i, condAt(i, guardedSteps(r.altGuard[i]!, r.alts[i]!))));
   const needPeek = r.altGuard.some((g) => g !== null);
   const frame = [dispatchWalk(r.altDispatch, ids, arm, L.dispatch, true), L.closeBest];
   if (r.altCommit === undefined) return L.fn([L.openBest(r.altDispatch), ...(needPeek ? [L.peekOpt] : []), ...frame]);
   const S = L.commitSteps ?? L.steps;
   const tests = (t: CommitTest) => L.guardConds(commitGuard(r.altGuard[t.arm]!, t));
   const act = (a: CommitAct | null) => (a === null ? L.commitFail
-    : L.commit(a.arm, tests(a), conjOf(guardedSteps(r.altGuard[a.arm]!, r.alts[a.arm]!), S), !a.clean || a.nullable, a.nullable));
+    : L.commit(a.arm, tests(a), condAt(a.arm, guardedSteps(r.altGuard[a.arm]!, r.alts[a.arm]!), S), !a.clean || a.nullable, a.nullable));
   // A frame left with no candidate (the switch decides every key it could reach) matches nothing.
   const rest = dispatchArms(r.altDispatch).size === 0 ? [`${L.ind}${L.commitFail}`] : [L.openBest(r.altDispatch), ...frame];
   return L.fn([L.commitPeek, L.dispatch.nil(commitWalk(r.altCommit, ids, act, tests, L.commitSw)), ...rest]);
@@ -1854,7 +1899,7 @@ export type PrattLowering = {
   nudPrefix(i: number): string;                  // the prefix-operator arm
   dispatch: DispatchLowering;
   led: LedGuardLowering;
-  ledArm(i: number, cond: string, form: AssignForm, closesTail: boolean, exit: boolean, clean: boolean, rebind: string | null, capsFromTail: boolean): string;  // capsFromTail: PrattRule.ledCapsFromTail (matched with the capped flag set, the node returns at once, still capped, with form: as `binary`); rebind: the call of led i's re-bind (PrattRule.ledRebind), tried after cond failed and was undone; it undoes itself when it fails
+  ledArm(i: number, cond: string, form: number, closesTail: boolean, exit: boolean, clean: boolean, rebind: string | null, capsFromTail: boolean): string;  // capsFromTail: PrattRule.ledCapsFromTail (matched with the capped flag set, the node returns at once, still capped, with form: as `binary`); rebind: the call of led i's re-bind (PrattRule.ledRebind), tried after cond failed and was undone; it undoes itself when it fails
   // The call of a led's re-bind (PrattRule.ledRebind), the runtime's one re-bind function (its
   // spelling per target, rebindBrackets its bracket ids): open, operand, sep, rest are the led's
   // steps as conditions in the inner lowering (the connector, the self operand, L2, the rest), sepLid
@@ -1885,6 +1930,7 @@ export type PrattLowering = {
 /** A Pratt rule's functions in the form `L` spells. */
 export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | 'elements' | 'identToken' | 'identLike' | 'puncts' | 'gtComps'>, ids: LexIdPlan, L: PrattLowering): string {
   const cond = (steps: Step[]) => conjOf(steps, L.steps);
+  const armCond = (i: number, steps: Step[]) => accCond(r.nudForm?.[i], cond(steps), L.steps);
   const tailCap = (fromTail: boolean): NodeCap => (fromTail ? 'tail' : 'none');
   const d = r.nudDispatch;
   const nudArm = (i: number, keyed: boolean): string => {
@@ -1897,16 +1943,16 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
       }
       case 'bracket': {
         const b = r.nudBrackets[a.index]!;
-        return L.ifAll(keyed ? [] : [L.lidIs(lidOf(ids, b.first))], L.nudSeq(i, cond(b.steps), r.nudBracketClosesTail[a.index]!, tailCap(r.nudBracketCapsFromTail[a.index]!)));
+        return L.ifAll(keyed ? [] : [L.lidIs(lidOf(ids, b.first))], L.nudSeq(i, armCond(i, b.steps), r.nudBracketClosesTail[a.index]!, tailCap(r.nudBracketCapsFromTail[a.index]!)));
       }
       case 'seq': {
         const g = r.nudSeqGuard[a.index]!;
-        return L.ifAll([...(a.capBp !== undefined ? [L.capBelow(a.capBp)] : []), ...L.nudGuard(g, keyed)], L.nudSeq(i, cond(guardedSteps(g, r.nudSeqs[a.index]!)), r.nudSeqClosesTail[a.index]!, tailCap(r.nudSeqCapsFromTail[a.index]!)));
+        return L.ifAll([...(a.capBp !== undefined ? [L.capBelow(a.capBp)] : []), ...L.nudGuard(g, keyed)], L.nudSeq(i, armCond(i, guardedSteps(g, r.nudSeqs[a.index]!)), r.nudSeqClosesTail[a.index]!, tailCap(r.nudSeqCapsFromTail[a.index]!)));
       }
       case 'capped': {
         const c = r.nudCapped[a.index]!;
         const g = r.nudCappedGuard[a.index]!;
-        return L.ifAll([L.capBelow(c.capBp), ...L.nudGuard(g, keyed)], L.nudSeq(i, cond(guardedSteps(g, c.steps)), false, 'arm'));
+        return L.ifAll([L.capBelow(c.capBp), ...L.nudGuard(g, keyed)], L.nudSeq(i, armCond(i, guardedSteps(g, c.steps)), false, 'arm'));
       }
       case 'prefix': return L.nudPrefix(i);
     }
@@ -1958,9 +2004,9 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
     const a = r.nudOrder[c.arm]!, undo = !c.clean || c.nullable;
     switch (a.kind) {
       case 'tok': return L.commitLeaf(c.arm, tests(c));
-      case 'bracket': return L.commitSeq(c.arm, tests(c), cond(r.nudBrackets[a.index]!.steps), r.nudBracketClosesTail[a.index]!, tailCap(r.nudBracketCapsFromTail[a.index]!), undo, c.nullable);
-      case 'seq': return L.commitSeq(c.arm, tests(c), cond(guardedSteps(r.nudSeqGuard[a.index]!, r.nudSeqs[a.index]!)), r.nudSeqClosesTail[a.index]!, tailCap(r.nudSeqCapsFromTail[a.index]!), undo, c.nullable);
-      case 'capped': return L.commitSeq(c.arm, tests(c), cond(guardedSteps(r.nudCappedGuard[a.index]!, r.nudCapped[a.index]!.steps)), false, 'arm', undo, c.nullable);
+      case 'bracket': return L.commitSeq(c.arm, tests(c), armCond(c.arm, r.nudBrackets[a.index]!.steps), r.nudBracketClosesTail[a.index]!, tailCap(r.nudBracketCapsFromTail[a.index]!), undo, c.nullable);
+      case 'seq': return L.commitSeq(c.arm, tests(c), armCond(c.arm, guardedSteps(r.nudSeqGuard[a.index]!, r.nudSeqs[a.index]!)), r.nudSeqClosesTail[a.index]!, tailCap(r.nudSeqCapsFromTail[a.index]!), undo, c.nullable);
+      case 'capped': return L.commitSeq(c.arm, tests(c), armCond(c.arm, guardedSteps(r.nudCappedGuard[a.index]!, r.nudCapped[a.index]!.steps)), false, 'arm', undo, c.nullable);
       case 'prefix': return L.commitPrefix(c.arm, tests(c));
     }
   };
@@ -2597,8 +2643,8 @@ export function rebindBrackets(ids: LexIdPlan): { opens: number[]; closes: numbe
  *  token's lid as its index. */
 export type PrattOpTables = {
   size: number;
-  bin: Array<{ lid: number; lbp: number; rbp: number; tgt: boolean; noUnary: boolean }>;
-  pre: Array<{ lid: number; rbp: number; tgt: boolean; form: AssignForm }>;
+  bin: Array<{ lid: number; lbp: number; rbp: number; tgt: boolean; noUnary: boolean; ctx?: number; acc?: number }>;   // ctx: targetOps' pass bit; acc: the pass bits the node takes from its left operand (both only in a grammar with target contexts)
+  pre: Array<{ lid: number; rbp: number; tgt: boolean; form: number }>;
   post: Array<{ lid: number; lbp: number; tgt: boolean }>;
 };
 export function prattOpTables(r: PrattRule, plan: LexIdPlan): PrattOpTables {
@@ -2614,8 +2660,8 @@ export function prattOpTables(r: PrattRule, plan: LexIdPlan): PrattOpTables {
   };
   return {
     size: plan.lids.length,
-    bin: keyed('binary', r.binary, (b, lid) => ({ lid, lbp: b.lbp, rbp: b.rbp, tgt: b.requireTarget, noUnary: b.noUnaryLhs })),
-    pre: keyed('prefix', r.prefix, (p, lid) => ({ lid, rbp: p.rbp, tgt: p.requireTarget, form: p.form })),
+    bin: keyed('binary', r.binary, (b, lid) => ({ lid, lbp: b.lbp, rbp: b.rbp, tgt: b.requireTarget, noUnary: b.noUnaryLhs, ...(r.binForm ? { ctx: b.needCtx ?? 0, acc: b.accLeft ?? 0 } : {}) })),
+    pre: keyed('prefix', r.prefix, (p, lid) => ({ lid, rbp: p.rbp, tgt: p.requireTarget, form: p.form | (r.preLeaf ?? 0) })),
     post: keyed('postfix', r.postfix, (p, lid) => ({ lid, lbp: p.lbp, tgt: p.requireTarget })),
   };
 }
@@ -3062,6 +3108,9 @@ export const reservedRuleIds = (ar: ArenaIdPlan): [number, number] => [ar.ruleNa
 // The id plan of a module emitted with the option: the reserved names after the grammar's.
 export const withReservedRules = (ar: ArenaIdPlan): ArenaIdPlan => ({ ...ar, ruleNames: [...ar.ruleNames, ...RESERVED_RULES] });
 export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): RecoveryTables {
+  // Declared target contexts are not in the recovery encoding yet (the interpreter would ignore
+  // their checks and accept what the parser rejects): refused by name.
+  if (ir.targets) throw new Error(`portable recovery: grammar ${ir.grammarName} declares target contexts (CstGrammar.targets), which total parsing does not encode yet`);
   const data: number[] = [];
   const cappedSeq = hasCappedSeq(ir);   // REC_N_SEQ entries carry their cap (recovery-family riNudOf)
   const rid = (name: string) => ruleIdOf(ar, name);
@@ -3117,6 +3166,7 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
       case 'aheadCtx': return emit([REC_S_AHEADCTX, s.set, s.is ? 1 : 0]);
       case 'seq': { const b = list(s.steps); return emit([REC_S_SEQ, ref(b)]); }
       case 'sameLine': return emit([REC_S_SAMELINE]);
+      case 'target': throw new Error('portable recovery: unreachable (recoveryTables refuses target contexts)');
       case 'suppress': { const b = list(s.steps); return emit([REC_S_SUPPRESS, s.set, ref(b)]); }
       case 'ctx': { const b = list(s.steps); return emit([REC_S_CTX, s.ctx, ref(b)]); }
     }
