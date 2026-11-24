@@ -62,7 +62,10 @@ const TOTAL_K = 4;
 // interpreter's farthest is `import` itself (no hint), the engine's the token its form guard read. The
 // interpreter's message on these inputs is master's. Re-measured on master a2ba418e (land/recovery-stage3)
 // merged in: javascript 5,412 of 5,902 rejects agree, typescript 6,051 of 6,868.
-const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5412, typescript: 6051 };
+// javascript 5412 -> 5349, typescript 6051 -> 6120 (land/grammar-decorators-2): `@` joins the grammar's
+// literals and typescript's decorator list gains accepts, so both mutant sets are drawn again
+// (javascript 5,349 of 5,850 rejects agree: 91.4%, was 91.7%; typescript 6,120 of 6,540: 93.6%, was 88.1%).
+const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5349, typescript: 6120 };
 const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // P10 EXPECTED-FAIL on `$missing`-only repairs, by class. GREEDY CAPTURE: the repair is right by
 // position (each supplied token is where the derivation needs it), but the substituted token is
@@ -82,9 +85,15 @@ const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // typescript + 'for (x = (y = (a in b)) declare c);' (master b8e42329, #199: its new literals draw
 // another set): the parse supplies '=>' twice and 'in'; in `… =>  declare =>  c in  x` the arrow
 // body takes the `in`. Re-measured on that merge: javascript unchanged.
+// land/grammar-decorators-2 (`@` joins the literals: both sets drawn again): javascript draws neither
+// 'for (from x = function () { return a in b; } in c);' nor 'for (of of async y);' and draws
+// 'for (of of as y);' (`of => of => as => y in x`: the innermost arrow body takes the `in`); typescript no longer draws
+// 'for (x = (y = (a in b)) declare c);' and draws 'for (let [a = b in c] = of d);' (`of => d in x`, the
+// same capture) and 'class C { static export class type\nx = 1 }' (repaired as `static export * class ( type , x = 1 )`, which is rejected: the
+// class-member kind land/sound-type-assertion listed, owed to the recovery lane).
 const P10_GREEDY_CAPTURE: Record<string, string[]> = {
-  javascript: ['for (from x = function () { return a in b; } in c);', 'for (of of async y);', 'for (async of x);', 'for (async of => 1 of x);'],
-  typescript: ['for (x = () => { for (asserts a in b); } in c);', 'for (of  y);', 'for ( of x);', 'for (async of x);', 'for (async of => 1 of x);', 'for (x = (y = (a in b)) declare c);'],
+  javascript: ['for (async of x);', 'for (async of => 1 of x);', 'for (of of as y);'],
+  typescript: ['for (x = () => { for (asserts a in b); } in c);', 'for (of  y);', 'for ( of x);', 'for (async of x);', 'for (async of => 1 of x);', 'for (let [a = b in c] = of d);', 'class C { static export class type\nx = 1 }'],
 };
 // LOOKAHEAD BYPASS: a lookahead passed on the real tokens, and a repair then supplied a token among
 // the tokens it read, so the substituted text is not the one it judged. `class C { default class)
@@ -101,8 +110,15 @@ const P10_GREEDY_CAPTURE: Record<string, string[]> = {
 // -> 14.4%; stable 76.8% -> 76.6%; 39 mutants worse, 3 better; javascript 14.0% -> 14.1%): the
 // member-start lookaheads read past what they match, so the extent seals the member. The seal must
 // be the span the lookahead MATCHED, which the native lookahead functions do not report.
+// Redrawn by land/grammar-decorators-2: those two are no longer drawn; typescript's `export await using
+// meta x = y;` is: `export` takes a Stmt after a positive lookahead for a declaration word (`export`
+// `not(not(alt('var', 'let', 'const', 'using', ['await', 'using'])))` Stmt); the lookahead sees `await
+// using` and the Stmt is then repaired as three labels (`await :  using :  meta :  x = y`), which the
+// lookahead admits and no `export` derivation does. The defect is the grammar's (`export let: x;`,
+// `export let.x = 1;` are accepted; acorn and tsc reject): it leaves with the Statement / Declaration
+// split, which gives `export` the declarations themselves.
 const P10_LOOKAHEAD_BYPASS: Record<string, string[]> = {
-  typescript: ['class C { default class) {} }', 'f(class extends a?.b{ () {});'],
+  typescript: ['export await using meta x = y;'],
 };
 const P10_EXPECTED: [string, Record<string, string[]>][] = [['greedy captures', P10_GREEDY_CAPTURE], ['lookahead bypasses', P10_LOOKAHEAD_BYPASS]];
 // EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and
