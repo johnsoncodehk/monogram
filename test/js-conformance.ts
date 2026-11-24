@@ -56,6 +56,8 @@ const validJs: string[] = [
   `const g2 = a?.[b]?.(c);`,
   `const h2 = a ** b ** c;`,
   `x ??= y; x ||= y; x &&= y; x **= 2;`,
+  // after a prefix `++` / `--` an operand starts: `/` opens a regex (a postfix one is followed by division)
+  `++/r/.lastIndex; --/r/.lastIndex; x = ++/r/.y; a++ / 2; a-- / 2 / 3;`,
   // a logical assignment's right operand is an AssignmentExpression
   `c ||= a = b; c ??= a += b; a = b &&= c;`,
   `const cond = a ? b : c ? d : e;`,
