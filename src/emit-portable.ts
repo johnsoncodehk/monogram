@@ -2643,7 +2643,14 @@ export function rebindBrackets(ids: LexIdPlan): { opens: number[]; closes: numbe
  *  token's lid as its index. */
 export type PrattOpTables = {
   size: number;
-  bin: Array<{ lid: number; lbp: number; rbp: number; tgt: boolean; noUnary: boolean; ctx?: number; acc?: number }>;   // ctx: targetOps' pass bit; acc: the pass bits the node takes from its left operand (both only in a grammar with target contexts)
+  /** ctx: targetOps' pass bit; acc: the pass bits the node takes from its left operand (both only
+   *  in a grammar with target contexts). lead: the lid begins a composite operator (a '>' token
+   *  while the grammar composes; LexIdPlan.gtComps): the binary read looks the token's own lid up
+   *  FIRST and reads the composite only on a lead row, so a token that is no operator (the led
+   *  loop's usual exit) pays no composite test. When a composite of the table has its lead missing
+   *  from it, the lead gets a LEAD-ONLY row (lbp -1: no operator; minBp >= 0 ends the loop on it):
+   *  the composite read still happens there, and the lead alone is still no operator. */
+  bin: Array<{ lid: number; lbp: number; rbp: number; tgt: boolean; noUnary: boolean; lead: boolean; ctx?: number; acc?: number }>;
   pre: Array<{ lid: number; rbp: number; tgt: boolean; form: number }>;
   post: Array<{ lid: number; lbp: number; tgt: boolean }>;
 };
@@ -2658,9 +2665,15 @@ export function prattOpTables(r: PrattRule, plan: LexIdPlan): PrattOpTables {
       return f(x, lid);
     });
   };
+  const leads = new Set(plan.gtComps.map((c) => c[0]!));
+  const bin = keyed('binary', r.binary, (b, lid) => ({ lid, lbp: b.lbp, rbp: b.rbp, tgt: b.requireTarget, noUnary: b.noUnaryLhs, lead: leads.has(b.op), ...(r.binForm ? { ctx: b.needCtx ?? 0, acc: b.accLeft ?? 0 } : {}) }));
+  for (const l of leads) {
+    if (r.binary.some((b) => b.op === l) || !r.binary.some((b) => plan.gtComps.includes(b.op) && b.op[0] === l)) continue;
+    bin.push({ lid: lidOf(plan, l), lbp: -1, rbp: 0, tgt: false, noUnary: false, lead: true, ...(r.binForm ? { ctx: 0, acc: 0 } : {}) });
+  }
   return {
     size: plan.lids.length,
-    bin: keyed('binary', r.binary, (b, lid) => ({ lid, lbp: b.lbp, rbp: b.rbp, tgt: b.requireTarget, noUnary: b.noUnaryLhs, ...(r.binForm ? { ctx: b.needCtx ?? 0, acc: b.accLeft ?? 0 } : {}) })),
+    bin,
     pre: keyed('prefix', r.prefix, (p, lid) => ({ lid, rbp: p.rbp, tgt: p.requireTarget, form: p.form | (r.preLeaf ?? 0) })),
     post: keyed('postfix', r.postfix, (p, lid) => ({ lid, lbp: p.lbp, tgt: p.requireTarget })),
   };
@@ -3200,6 +3213,7 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
       }
     });
     const ops = prattOpTables(r, ids);
+    ops.bin = ops.bin.filter((b) => b.lbp >= 0);   // a lead-only row is the hot read's; the recovery reader reads the composite first
     const leds = r.leds.map((b, i): Cell[] => {
       const nll = r.ledNotLeftLeaf[i];
       return [lid(b.first), ref(list(b.steps)), r.ledLbp[i] ?? -1, r.ledSameLine[i] ? 1 : 0, r.ledAccessTail[i] ? 1 : 0, r.ledClosesTail[i] ? 1 : 0, r.ledCapsFromTail[i] ? 1 : 0, r.ledForm[i]!,

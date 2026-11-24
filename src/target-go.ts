@@ -1114,12 +1114,24 @@ func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *lexErr) {
 }`;
 }
 
-// The binary operator read at p.pos (t = p.toks[p.pos]): opLid, its token count opN and (withEnd)
-// its end offset opEnd. A '>' read counts the tokens it inspected toward maxLook.
-function gtOpRead(ids: LexIdPlan, withEnd: boolean): string {
-  if (ids.gtComps.length === 0) return withEnd ? `\t\topLid, opN, opEnd := t.Lid, 1, t.End` : `\t\topLid, opN := t.Lid, 1`;
-  return `\t\topLid, opN, ${withEnd ? 'opEnd' : '_'} := gtOp(p.toks, p.pos)
-\t\tif t.Lid == ${lidOf(ids, '>')} { if e := p.pos + opN + 1; e > p.maxLook { p.maxLook = e } }`;
+// The binary operator read at p.pos (t = p.toks[p.pos]): its row info, its token count opN and
+// (withEnd) its end offset opEnd; a token whose lid has no row ends the loop. The token's own lid
+// is looked up first (prattOpTables' lead): only a lead row reads the composite there (gtOp), whose
+// inspected tokens count toward maxLook, and looks the composite's row up.
+function binReadGo(r: PrattRule, ids: LexIdPlan, withEnd: boolean): string {
+  const tail = `\t\tinfo := bin_${r.name}[opLid]
+\t\tif !info.ok || info.lbp <= minBp { break }`;
+  if (!prattOpTables(r, ids).bin.some((b) => b.lead)) return `${withEnd ? `\t\topLid, opN, opEnd := t.Lid, 1, t.End` : `\t\topLid, opN := t.Lid, 1`}\n${tail}`;
+  return `\t\tinfo := bin_${r.name}[t.Lid]
+\t\tif !info.ok { break }
+\t\topN${withEnd ? ', opEnd' : ''} := 1${withEnd ? ', t.End' : ''}
+\t\tif info.lead {
+\t\t\tvar c uint16
+\t\t\tc, opN, ${withEnd ? 'opEnd' : '_'} = gtOp(p.toks, p.pos)
+\t\t\tif e := p.pos + opN + 1; e > p.maxLook { p.maxLook = e }
+\t\t\tif info = bin_${r.name}[c]; !info.ok { break }
+\t\t}
+\t\tif info.lbp <= minBp { break }`;
 }
 // An entry's extent (EntryMeta.Ext): one past the furthest token its parse examined. A read past
 // the current token (secondIn, a composed '>') records into maxLook at once; a peek records only
@@ -1497,9 +1509,7 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++; tailClosed = true
 \t\t\tleft = ${fin}; form = ${T.post}; continue
 \t\t}`,
-    binary: `${gtOpRead(ids, false)}
-\t\tinfo := bin_${r.name}[opLid]
-\t\tif !info.ok || info.lbp <= minBp { break }
+    binary: `${binReadGo(r, ids, false)}
 \t\tif info.tgt && ${T.lf('form')} != 0 || info.noUnary && ${T.lf('form')} == 2${T.ctx} { return -1 }
 \t\tledSave := p.pos; sb := len(p.scratch)
 \t\tp.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos))
@@ -1552,7 +1562,7 @@ ${B.nudClose}
  *  map[uint16] would hash on every LED iteration and every prefix NUD. */
 function goPrattOpTables(r: PrattRule, ids: LexIdPlan): string {
   const ops = prattOpTables(r, ids);
-  const bin = ops.bin.map((b) => `${b.lid}: {${b.lbp}, ${b.rbp}, ${b.tgt}, ${b.noUnary}, true${b.ctx !== undefined ? `, ${b.ctx}, ${b.acc ?? 0}` : ''}}`).join(', ');
+  const bin = ops.bin.map((b) => `${b.lid}: {${b.lbp}, ${b.rbp}, ${b.tgt}, ${b.noUnary}, true${ids.gtComps.length ? `, ${b.lead}` : ''}${b.ctx !== undefined ? `, ${b.ctx}, ${b.acc ?? 0}` : ''}}`).join(', ');
   const pre = ops.pre.map((p) => `${p.lid}: {${p.rbp}, ${p.tgt}, ${p.form}, true}`).join(', ');
   const post = ops.post.map((p) => `${p.lid}: {${p.lbp}, ${p.tgt}, true}`).join(', ');
   return `var bin_${r.name} = [${ops.size}]bp{${bin}}
@@ -2110,9 +2120,7 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++; tailClosed = true
 \t\t\tleft = ${fin}; form = ${T.post}; continue
 \t\t}`,
-    binary: `${gtOpRead(ids, true)}
-\t\tinfo := bin_${r.name}[opLid]
-\t\tif !info.ok || info.lbp <= minBp { break }
+    binary: `${binReadGo(r, ids, true)}
 \t\tif info.tgt && ${T.lf('form')} != 0 || info.noUnary && ${T.lf('form')} == 2${T.ctx} { return spanned{}, false }
 \t\tledSave := p.pos; sb := len(p.scratch)
 \t\tp.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, opEnd)
@@ -3576,7 +3584,7 @@ type Node struct {
 \tRuleId uint16
 \tKidStart, KidCount, Offset, End, TokStart, TokEnd, Ext uint32
 }
-type bp struct{ lbp, rbp int; tgt, noUnary, ok bool${ir.targets ? '; ctx, acc uint8' : ''} }
+type bp struct{ lbp, rbp int; tgt, noUnary, ok${ir.gtComps.length ? ', lead' : ''} bool${ir.targets ? '; ctx, acc uint8' : ''} }
 type preOp struct{ rbp int; tgt bool; form uint8; ok bool }
 type postOp struct{ lbp int; tgt bool; ok bool }
 

@@ -1497,7 +1497,10 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   // on the lid returning constants to a lookup table, no hashing.
   const ops = prattOpTables(r, ids);
   const ctxT = r.binForm !== undefined;
-  const binArms = ops.bin.map((b) => `${b.lid} => Some((${b.lbp}, ${b.rbp}, ${b.tgt}, ${b.noUnary}${ctxT ? `, ${b.ctx ?? 0}, ${b.acc ?? 0}` : ''}))`).join(', ');
+  // A rule with a lead row (prattOpTables: a '>' that composes) carries the lead flag as the row's
+  // last field; one without reads the token's lid alone.
+  const leadT = ops.bin.some((b) => b.lead);
+  const binArms = ops.bin.map((b) => `${b.lid} => Some((${b.lbp}, ${b.rbp}, ${b.tgt}, ${b.noUnary}${ctxT ? `, ${b.ctx ?? 0}, ${b.acc ?? 0}` : ''}${leadT ? `, ${b.lead}` : ''}))`).join(', ');
   // Each arm's form (declared-targets.ts; without target contexts every one but the prefix arm's is 0).
   const fm = (i: number) => (r.nudForm ? armFormRs(r.nudForm[i]!, true) : '0');
   const postTokForm = (k: number) => r.postfixTokForm?.[r.postfixToks.findIndex((tok) => kidOf(ids, tok) === k)] ?? 0;
@@ -1590,8 +1593,11 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
     postfixTpl: (hole) => `
             if !tail_closed && t.kid == ${kidOf(ids, '$templateHead')} { if let Some(n) = self.match_template(Self::parse_${hole}) { let sb = self.scratch.len(); if left.present { self.scratch.push(left.h); } if n.present { self.scratch.push(n.h); } left = ${finK(ir.tpl ? postKey(kidOf(ids, ir.tpl.token)) : 'post0')}; form = ${ir.tpl ? postTokForm(kidOf(ids, ir.tpl.token)) : 0}; continue; } }`,
     postfixOp: `            if let Some((plbp, ptgt)) = Self::${r.name}_post(t.lid) { if !tail_closed && plbp > min_bp${r.postfixSameLine ? ' && !t.nl' : ''} { if ptgt && ${lf('form')} != 0 { return None; } let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1; left = ${finK('postop')}; tail_closed = true; form = ${r.postForm ?? 1}; continue; } }`,
-    binary: `            let (op_lid, op_n, op_end) = self.op_read(t);
-            let (lbp, rbp, tgt, no_unary${ctxT ? ', bctx, bacc' : ''}) = match Self::${r.name}_bin(op_lid) { Some(x) => x, None => break };
+    binary: `${leadT ? `            let mut row = match Self::${r.name}_bin(t.lid) { Some(x) => x, None => break };
+            let (mut op_n, mut op_end) = (1usize, t.end);
+            if row.${ctxT ? 6 : 4} { let (c, n, e) = self.op_read(t); op_n = n; op_end = e; row = match Self::${r.name}_bin(c) { Some(x) => x, None => break }; }
+            let (lbp, rbp, tgt, no_unary${ctxT ? ', bctx, bacc' : ''}, _) = row;` : `            let (op_n, op_end) = (1usize, t.end);
+            let (lbp, rbp, tgt, no_unary${ctxT ? ', bctx, bacc' : ''}) = match Self::${r.name}_bin(t.lid) { Some(x) => x, None => break };`}
             if lbp <= min_bp { break; }
             if tgt && ${lf('form')} != 0 || no_unary && ${lf('form')} == 2${ctxT ? ' || (form & bctx) != bctx' : ''} { return None; }
             let led_save = self.pos;
@@ -1612,7 +1618,7 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
         self.suppress_cur = prev;
         r
     }
-    fn ${r.name}_bin(op: u16) -> Option<(i64, i64, bool, bool${ctxT ? ', u8, u8' : ''})> { match op { ${binArms}${binArms ? ', ' : ''}_ => None } }
+    fn ${r.name}_bin(op: u16) -> Option<(i64, i64, bool, bool${ctxT ? ', u8, u8' : ''}${leadT ? ', bool' : ''})> { match op { ${binArms}${binArms ? ', ' : ''}_ => None } }
     fn ${r.name}_pre(op: u16) -> Option<(i64, bool, u8)> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
     fn ${r.name}_post(op: u16) -> Option<(i64, bool)> { match op { ${postArms}${postArms ? ', ' : ''}_ => None } }`,
     // Rust's `loop` takes no label here: a led's `continue` / `break` are the innermost loop's.

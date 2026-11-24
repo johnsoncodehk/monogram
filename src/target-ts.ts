@@ -989,7 +989,8 @@ function tsPrattOpTables(r: PrattRule, ids: LexIdPlan): string {
   const rec = <T extends { lid: number }>(xs: T[], v: (x: T) => string | number) => `{ ${xs.map((x) => `${x.lid}: ${v(x)}`).join(', ')} }`;
   const set = <T extends { lid: number; tgt: boolean }>(xs: T[]) => `new Set<number>([${xs.filter((x) => x.tgt).map((x) => x.lid).join(', ')}])`;
   const ctx = r.binForm !== undefined;
-  return `const ${r.name}_BIN: Record<number, { lbp: number; rbp: number; tgt: boolean; noUnary: boolean${ctx ? '; ctx: number; acc: number' : ''} }> = ${rec(ops.bin, (b) => `{ lbp: ${b.lbp}, rbp: ${b.rbp}, tgt: ${b.tgt}, noUnary: ${b.noUnary}${ctx ? `, ctx: ${b.ctx ?? 0}, acc: ${b.acc ?? 0}` : ''} }`)};
+  const lead = ops.bin.some((b) => b.lead);
+  return `const ${r.name}_BIN: Record<number, { lbp: number; rbp: number; tgt: boolean; noUnary: boolean${ctx ? '; ctx: number; acc: number' : ''}${lead ? '; lead: boolean' : ''} }> = ${rec(ops.bin, (b) => `{ lbp: ${b.lbp}, rbp: ${b.rbp}, tgt: ${b.tgt}, noUnary: ${b.noUnary}${ctx ? `, ctx: ${b.ctx ?? 0}, acc: ${b.acc ?? 0}` : ''}${lead ? `, lead: ${b.lead}` : ''} }`)};
 const ${r.name}_PRE: Record<number, number> = ${rec(ops.pre, (p) => p.rbp)};
 const ${r.name}_PRE_FORM: Record<number, number> = ${rec(ops.pre, (p) => p.form)};
 const ${r.name}_PRE_TGT = ${set(ops.pre)};
@@ -1097,9 +1098,13 @@ ${kids.map((k) => `      case ${k}:
       if (${lf('form')} !== 0 && ${r.name}_POST_TGT.has(t.lid)) { _n = b; return false; }
       leafSlotW('$operator', t); pos++; ${finPTs(r.name, 'postop', 'b')}; tailClosed = true; form = ${r.postForm ?? 1}; continue;
     }`,
-    binary: `    const opLid = _opLid(t);
+    // The token's own lid is looked up first (prattOpTables' lead): only a lead row reads the composite.
+    binary: `${prattOpTables(r, ids).bin.some((b) => b.lead) ? `    let opLid = t.lid, info = ${r.name}_BIN[opLid];
+    if (info === undefined) break;
+    if (info.lead) { opLid = _opLid(t); info = ${r.name}_BIN[opLid]; if (info === undefined) break; } else { _opN = 1; _opEnd = t.end; }
+    if (info.lbp <= minBp) break;` : `    const opLid = _opLid(t);
     const info = ${r.name}_BIN[opLid];
-    if (info === undefined || info.lbp <= minBp) break;
+    if (info === undefined || info.lbp <= minBp) break;`}
     if (info.tgt && ${lf('form')} !== 0 || info.noUnary && ${lf('form')} === 2${r.binForm ? ' || (form & info.ctx) !== info.ctx' : ''}) { _n = b; return false; }
     const ledSave = pos;
     opLeafW(t, opLid);
