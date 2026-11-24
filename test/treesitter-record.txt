@@ -1,16 +1,10 @@
 # tree-sitter against the interpreter: every disagreement (test/treesitter-verdicts.ts --write)
 # grammar | corpus | rejects (tree-sitter ERROR, interpreter accepts) or accepts (the reverse) | class | input
-javascript | line breaks | accepts | unclassified | "x = async\nfunction () {}"
 javascript | line breaks | rejects | unclassified | "function f() { return\n/a/ }"
-javascript | lookaheads | accepts | unclassified | "class C {}.x;"
-javascript | lookaheads | accepts | unclassified | "for (let of a);"
-javascript | lookaheads | accepts | unclassified | "function f() {}.x;"
 javascript | lookaheads | accepts | unclassified | "try {}"
 javascript | lookaheads | accepts | unclassified | "x = () => {}.x;"
 javascript | lookaheads | accepts | unclassified | "x = a => {}.y;"
 javascript | lookaheads | accepts | unclassified | "x = async () => {}.y;"
-javascript | lookaheads | accepts | unclassified | "{} .b"
-javascript | lookaheads | accepts | unclassified | "{}.b;"
 javascript | lookaheads | rejects | unclassified | "export let = 1;"
 javascript | lookaheads | rejects | unclassified | "export let;"
 javascript | operator pairs | accepts | assignment-target-not-checked | "!a = c;"
@@ -82,8 +76,6 @@ javascript | test262 | rejects | unclassified | test/annexB/language/statements/
 javascript | test262 | rejects | unclassified | test/annexB/language/statements/for-in/var-arraybindingpattern-initializer.js
 javascript | test262 | rejects | unclassified | test/annexB/language/statements/for-in/var-objectbindingpattern-initializer.js
 javascript | test262 | rejects | unclassified | test/language/block-scope/syntax/for-in/disallow-initialization-assignment.js
-javascript | test262 | rejects | unclassified | test/language/comments/hashbang/line-terminator-line-separator.js
-javascript | test262 | rejects | unclassified | test/language/comments/hashbang/line-terminator-paragraph-separator.js
 javascript | test262 | rejects | unclassified | test/language/expressions/assignment/white-space.js
 javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-gen-grammar-privatename-identifier-semantics-stringvalue.js
 javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-gen-rs-private-getter-alt.js
@@ -781,28 +773,18 @@ javascript | test262 | rejects | unclassified | test/language/white-space/after-
 javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-three-per-em-space.js
 javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-zwnbsp.js
 javascript | test262 | rejects | unclassified | test/language/white-space/between-nbsp.js
-javascript | test262 | spans | arrow-body-as-object-literal | files 9
-javascript | test262 | spans | block-as-object-literal | files 85
-javascript | test262 | spans | declaration-as-expression-statement | files 6651
-javascript | test262 | spans | other | files 55
-javascript | test262 | spans | totals | span-equal 15780 of 22580, interpreter spans missing 46, extra tree-sitter spans 8189
-javascriptreact | line breaks | accepts | unclassified | "x = async\nfunction () {}"
+javascript | test262 | spans | other | files 49
+javascript | test262 | spans | totals | span-equal 22533 of 22582, interpreter spans missing 8, extra tree-sitter spans 77
 javascriptreact | line breaks | rejects | unclassified | "function f() { return\n/a/ }"
-javascriptreact | lookaheads | accepts | unclassified | "class C {}.x;"
-javascriptreact | lookaheads | accepts | unclassified | "for (let of a);"
-javascriptreact | lookaheads | accepts | unclassified | "function f() {}.x;"
 javascriptreact | lookaheads | accepts | unclassified | "try {}"
 javascriptreact | lookaheads | accepts | unclassified | "x = () => {}.x;"
 javascriptreact | lookaheads | accepts | unclassified | "x = a => {}.y;"
 javascriptreact | lookaheads | accepts | unclassified | "x = async () => {}.y;"
-javascriptreact | lookaheads | accepts | unclassified | "{} .b"
-javascriptreact | lookaheads | accepts | unclassified | "{}.b;"
 javascriptreact | lookaheads | rejects | unclassified | "export let = 1;"
 javascriptreact | lookaheads | rejects | unclassified | "export let;"
 javascriptreact | reserved words | accepts | unclassified | "const { default } = o;"
 javascriptreact | reserved words | accepts | unclassified | "import { if } from \"m\";"
 typescript | TypeScript src | rejects | unclassified | src/compiler/checker.ts
-typescript | TypeScript src | rejects | unclassified | src/compiler/commandLineParser.ts
 typescript | TypeScript src | rejects | unclassified | src/compiler/expressionToTypeNode.ts
 typescript | TypeScript src | rejects | unclassified | src/compiler/factory/emitHelpers.ts
 typescript | TypeScript src | rejects | unclassified | src/compiler/scanner.ts
@@ -819,11 +801,8 @@ typescript | TypeScript src | rejects | unclassified | src/lib/es2018.asyncgener
 typescript | TypeScript src | rejects | unclassified | src/lib/es2018.asynciterable.d.ts
 typescript | TypeScript src | rejects | unclassified | src/lib/es5.d.ts
 typescript | TypeScript src | rejects | unclassified | src/services/codefixes/generateAccessors.ts
-typescript | TypeScript src | spans | arrow-body-as-object-literal | files 2
-typescript | TypeScript src | spans | block-as-object-literal | files 9
-typescript | TypeScript src | spans | declaration-as-expression-statement | files 363
-typescript | TypeScript src | spans | other | files 3
-typescript | TypeScript src | spans | totals | span-equal 314 of 691, interpreter spans missing 1346, extra tree-sitter spans 7582
+typescript | TypeScript src | spans | other | files 37
+typescript | TypeScript src | spans | totals | span-equal 655 of 692, interpreter spans missing 3, extra tree-sitter spans 299
 typescript | contextual keywords | rejects | unclassified | "abstract: for (;;) continue abstract;"
 typescript | contextual keywords | rejects | unclassified | "abstract: while (1) break abstract;"
 typescript | contextual keywords | rejects | unclassified | "accessor: for (;;) continue accessor;"
@@ -1001,19 +980,14 @@ typescript | contextual keywords | rejects | unclassified | "x = { readonly };"
 typescript | contextual keywords | rejects | unclassified | "x = { static };"
 typescript | contextual keywords | rejects | unclassified | "yield: for (;;) continue yield;"
 typescript | contextual keywords | rejects | unclassified | "yield: while (1) break yield;"
-typescript | line breaks | accepts | unclassified | "x = async\nfunction () {}"
 typescript | line breaks | rejects | unclassified | "function f() { return\n/a/ }"
 typescript | line breaks | rejects | unclassified | "let x: A\n<B>(y)"
 typescript | line breaks | rejects | unclassified | "x\n!y"
 typescript | line breaks | splits | unclassified | "let x: T\n[]"
-typescript | lookaheads | accepts | unclassified | "class C {}.x;"
-typescript | lookaheads | accepts | unclassified | "function f() {}.x;"
 typescript | lookaheads | accepts | unclassified | "try {}"
 typescript | lookaheads | accepts | unclassified | "x = () => {}.x;"
 typescript | lookaheads | accepts | unclassified | "x = a => {}.y;"
 typescript | lookaheads | accepts | unclassified | "x = async () => {}.y;"
-typescript | lookaheads | accepts | unclassified | "{} .b"
-typescript | lookaheads | accepts | unclassified | "{}.b;"
 typescript | lookaheads | rejects | unclassified | "export let = 1;"
 typescript | lookaheads | rejects | unclassified | "export let;"
 typescript | lookaheads | rejects | unclassified | "for (let in a);"
@@ -1262,18 +1236,13 @@ typescriptreact | contextual keywords | rejects | unclassified | "x = { readonly
 typescriptreact | contextual keywords | rejects | unclassified | "x = { static };"
 typescriptreact | contextual keywords | rejects | unclassified | "yield: for (;;) continue yield;"
 typescriptreact | contextual keywords | rejects | unclassified | "yield: while (1) break yield;"
-typescriptreact | line breaks | accepts | unclassified | "x = async\nfunction () {}"
 typescriptreact | line breaks | rejects | unclassified | "function f() { return\n/a/ }"
 typescriptreact | line breaks | rejects | unclassified | "x\n!y"
 typescriptreact | line breaks | splits | unclassified | "let x: T\n[]"
-typescriptreact | lookaheads | accepts | unclassified | "class C {}.x;"
-typescriptreact | lookaheads | accepts | unclassified | "function f() {}.x;"
 typescriptreact | lookaheads | accepts | unclassified | "try {}"
 typescriptreact | lookaheads | accepts | unclassified | "x = () => {}.x;"
 typescriptreact | lookaheads | accepts | unclassified | "x = a => {}.y;"
 typescriptreact | lookaheads | accepts | unclassified | "x = async () => {}.y;"
-typescriptreact | lookaheads | accepts | unclassified | "{} .b"
-typescriptreact | lookaheads | accepts | unclassified | "{}.b;"
 typescriptreact | lookaheads | rejects | unclassified | "export let = 1;"
 typescriptreact | lookaheads | rejects | unclassified | "export let;"
 typescriptreact | lookaheads | rejects | unclassified | "for (let in a);"
