@@ -8,7 +8,7 @@ import { createParser } from '../src/gen-parser.ts';
 import { directivesOf } from '../src/grammar-analysis.ts';
 import { lexSpecOf } from '../src/emit-lexer.ts';
 import { token, rule, defineGrammar, seq, oneOf, range, star, plus, noneOf, many, alt } from '../src/api.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 import dialect from './fixtures/textdialect.ts';
 
 type Row = { section: string; id: string; status: 'pass' | 'xfail'; why?: string; check: () => { ok: boolean; saw: string } };
@@ -125,7 +125,7 @@ tokens('with no directive before it, `@else {n}` is text and a hole', C('<p>@els
   const Txt = token(plus(noneOf('<', '{', '}')));
   const Shut = token(seq('<', '/'));
   const Solo = token(seq('/', '>'));
-  const toy = (arms: (B: unknown) => unknown[]): CstGrammar => {
+  const toy = (arms: (B: unknown) => unknown[]): Grammar => {
     const Body = rule(() => [['{', many(Txt), '}']]);
     const Dir = rule(() => arms(Body) as never);
     const El = rule(() => [['<', Ident, '>', many(alt(Txt, Dir)), Shut, Ident, '>']]);
@@ -133,7 +133,7 @@ tokens('with no directive before it, `@else {n}` is text and a hole', C('<p>@els
     return defineGrammar({ name: 'dirtoy', tokens: { Ident, AtW, Txt, Shut, Solo }, rules: { Body, Dir, El, Prog }, entry: Prog,
       elements: { tagOpen: '<', tagClose: '>', closeMarker: '/', text: 'Txt', closeTag: 'Shut', selfClose: 'Solo', hole: { open: '{', close: '}' } } });
   };
-  const refusal = (id: string, g: () => CstGrammar, want: RegExp) => rows.push({ section, id: `refused by name: ${id}`, status: 'pass', check: () => {
+  const refusal = (id: string, g: () => Grammar, want: RegExp) => rows.push({ section, id: `refused by name: ${id}`, status: 'pass', check: () => {
     const gr = g(); const d = directivesOf(gr, gr.elements!)!;
     let threw = ''; try { lexSpecOf(gr); } catch (e) { threw = (e as Error).message; }
     const r = d.refused.map((x) => `${x.arm}: ${x.reason}`).join(' / ');

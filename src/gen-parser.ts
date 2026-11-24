@@ -1,4 +1,4 @@
-import type { CstGrammar, RuleExpr, RuleDecl } from './types.ts';
+import type { Grammar, RuleExpr, RuleDecl } from './types.ts';
 import { CTX_SPAN, ctxReserves, ctxWordOfMode, gtComposites, isKeywordLiteral, readsSyncFn, whenTest } from './grammar-utils.ts';
 import { analyzeGrammar, findEntryRule, markupContainerOf } from './grammar-analysis.ts';
 import { compileTokenizer, lexSpecOf, type Token } from './emit-lexer.ts';
@@ -31,9 +31,9 @@ export function getText(node: { offset: number; end: number }, source: string): 
 }
 
 // The lexer is the generated one (emit-lexer.ts), compiled in-process once per grammar.
-const tokenizers = new WeakMap<CstGrammar, (source: string) => Token[]>();
+const tokenizers = new WeakMap<Grammar, (source: string) => Token[]>();
 
-export function createParser(grammar: CstGrammar) {
+export function createParser(grammar: Grammar) {
   let lex = tokenizers.get(grammar);
   if (lex === undefined) {
     lex = compileTokenizer(lexSpecOf(grammar));
@@ -892,7 +892,7 @@ export function createParser(grammar: CstGrammar) {
             // A target-requiring infix (`=`/`+=`/…) needs a LeftHandSideExpression LEFT operand
             // (`-x = 1`, `++x = 1`, `x++ = 1` are syntax errors). Fail hard like noUnaryLhs.
             if (info.requireTarget && 'children' in lhs && notAssignTarget(lhs)) return null;
-            // A `targetOps` infix (CstGrammar.targets): its left operand must pass the declared context.
+            // A `targetOps` infix (Grammar.targets): its left operand must pass the declared context.
             if (info.targetCtx !== undefined && !tw!.passes(lhs, info.targetCtx, source)) return null;
             // A `noUnaryLhs` op (e.g. `**`) may not take a bare unary-prefix expression
             // (`-x`, `typeof x` — a prefix-op node whose op is NOT also a postfix, i.e.
@@ -1075,7 +1075,7 @@ export function createParser(grammar: CstGrammar) {
       }
       return children;
     }
-    // matchSeq in a grammar that declares target contexts (CstGrammar.targets): a target check
+    // matchSeq in a grammar that declares target contexts (Grammar.targets): a target check
     // reads the last NODE before it, in this sequence or, through an opt / alternation branch /
     // group, in the one enclosing it (`targetPrev`: what the enclosing sequence had matched when
     // it entered the item this sequence belongs to). declared-targets.ts admits a target only

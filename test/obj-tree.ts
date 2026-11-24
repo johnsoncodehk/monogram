@@ -7,7 +7,7 @@
 // the kind bit first), where the object leaf's tokenType IS the token name (or
 // '$punct') — so the name→type-kind map (same derivation as the engine: punct 1,
 // template spans 2-4, named tokens from 5 in declaration order) is complete.
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 
 type Leafish = { tokenType: string; offset: number; end: number };
 type Nodeish = { rule: string; children: (Leafish | Nodeish)[]; offset: number; end: number };
@@ -30,7 +30,7 @@ export interface ObjTree {
   leafTokenType(entry: number): string;
 }
 
-export function objTree(root: Nodeish, grammar: CstGrammar): ObjTree {
+export function objTree(root: Nodeish, grammar: Grammar): ObjTree {
   const typeKind = new Map<string, number>([['', 1], ['$punct', 1], ['$templateHead', 2], ['$templateMiddle', 3], ['$templateTail', 4]]);
   { let next = 5; for (const t of grammar.tokens) if (!typeKind.has(t.name)) typeKind.set(t.name, next++); }
   const ruleIdM = new Map<string, number>(grammar.rules.map((r, i) => [r.name, i]));

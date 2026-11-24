@@ -1,4 +1,4 @@
-// A Pratt grammar whose `=` takes an ECMAScript-style PATTERN (CstGrammar.targets; api.ts
+// A Pratt grammar whose `=` takes an ECMAScript-style PATTERN (Grammar.targets; api.ts
 // targetOps): the portable proof of declared target contexts with containers, a field, and a
 // `last` arm (docs/SECOND-LANGUAGE.md, M5). An array or object literal on the left of `=` is a
 // pattern whose elements pass the context: an element may carry an initializer (`[a = 1] = x`:

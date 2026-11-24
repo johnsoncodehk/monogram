@@ -14,7 +14,7 @@
 // test/portable-targets.ts (interpreter ≡ portable ts / go / rust parsers).
 import { generateInputs } from './grammar-gen.ts';
 import { tokenEdgeTexts } from './token-edges.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 
 export type Tok = { offset: number; text: string; type: string };
 export type ParityInput = {
@@ -52,7 +52,7 @@ const HOLES = [
 /** Every parity input of a grammar, in a fixed order. A generated input that does not lex is
  *  dropped with its mutants; a mutant that does not lex is yielded with `toks: null`. */
 export function* parityInputs(
-  grammar: CstGrammar, tokenize: (src: string) => Tok[], opts: { refusedOperands: boolean },
+  grammar: Grammar, tokenize: (src: string) => Tok[], opts: { refusedOperands: boolean },
 ): Generator<ParityInput> {
   const lex = (src: string): Tok[] | null => { try { return tokenize(src); } catch { return null; } };
   // Per token type, the shortest generated input holding it, and where (the token edges' context).

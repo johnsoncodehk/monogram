@@ -547,7 +547,7 @@ export interface PrecOperator {
   // postfix `++`/`--`). A parenthesized cover or member/element/call/non-null tail passes.
   requireTarget?: boolean;
   // An infix operator whose left operand must pass the declared target context of this name
-  // (CstGrammar.targets; api.ts targetOps) in place of requireTarget's shallow check.
+  // (Grammar.targets; api.ts targetOps) in place of requireTarget's shallow check.
   targetCtx?: string;
   // A prefix operator CAPPED at its own level (`cappedPrefix`): it may begin an operand only where
   // the enclosing Pratt minBp is looser than its level, so it is never the operand of a tighter
@@ -670,7 +670,7 @@ type RuleExprNode =
   // expressible in GLR, and a stray `void.x` is harmless for a highlighter) — no tsRelax needed.
   | { type: 'notLeftLeaf'; words: string[] }
   // Zero-width DECLARED ASSIGNMENT-TARGET check (api.ts `target`): the node ending immediately
-  // before it must pass the target context `ctx` of CstGrammar.targets. Consumes nothing.
+  // before it must pass the target context `ctx` of Grammar.targets. Consumes nothing.
   | { type: 'target'; ctx: string }
   | { type: 'sep'; element: RuleExpr; delimiter: string }
   | { type: 'op' }
@@ -690,7 +690,11 @@ export interface RuleDecl {
 // (declared-targets.ts planDemand): its leaves must be the arms the shallow check takes.
 export interface TargetContext { leaves: string[]; containers?: Record<string, string>; last?: string[]; when?: 'eager' | 'demand' }
 
-export interface CstGrammar {
+/** The grammar data every generator takes (what `defineGrammar` returns). Its type carries the names of its rules (`R`), so a
+ * consumer keyed by rule name (a shape: `defineShape` in src/shape.ts) is checked by TypeScript.
+ * Arm and child names are not in the type: half of them are DERIVED from the syntax at load time
+ * (src/grammar-names.ts), so their check is the consumer's load-time check. */
+export interface Grammar<R extends string = string> {
   tokens: TokenDecl[];
   precs: PrecLevel[];
   ledPrecs?: LedPrec[];
@@ -712,7 +716,7 @@ export interface CstGrammar {
   // child with no ',' after it (an ECMAScript rest element). Absent: no context; the shallow
   // `lhsTarget` check is the grammar's only target rule.
   targets?: Record<string, TargetContext>;
-  rules: RuleDecl[];
+  rules: (RuleDecl & { name: R })[];
   entryRule?: string;  // the rule a parse starts from (`defineGrammar`'s `entry`); absent → the last declared rule. Read it through findEntryRule, never by position
   scopeOverrides: Map<string, string[]>;
   // Highlight-only CONTEXTUAL token scopes: token T carries scope S when it appears within
@@ -721,7 +725,7 @@ export interface CstGrammar {
   // the override inside its derived bracket-construct regions (call args, continuation
   // brackets) — the flat top-level rules keep the token's declared scope.
   contextualScopes?: { token: string; within: string[]; scope: string }[];  // literal → scope overrides from `scopes` section (multiple if keyword appears in multiple groups)
-  name?: string;
+  name: string;
   scopeName?: string;  // declared TextMate scope name (e.g. source.ts); its suffix drives every scope's language tag
   markup?: MarkupConfig;  // opt-in markup-mode tokenization (HTML/Vue); absent for token-stream languages
   elements?: ElementRegion;  // opt-in element regions entered from code (JSX); absent → byte-identical lexer

@@ -15,7 +15,7 @@
 // a newline-mode NEWLINE spans its line break).
 // Flag bits: 1 newlineBefore, 2 commentBefore, 4 multilineFlowBefore, 8 '(' heads a control
 // group. test/emit-lexer-verify.ts gates the output against the golden token streams.
-import type { CstGrammar, ElementRegion, IndentConfig, MarkupConfig, NewlineConfig, TokenDecl, TokenPattern } from './types.ts';
+import type { Grammar, ElementRegion, IndentConfig, MarkupConfig, NewlineConfig, TokenDecl, TokenPattern } from './types.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { type Directives, directivesOf, tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { identifierClassesOf } from './uni-ident.ts';
@@ -58,7 +58,7 @@ export interface LexSpec {
   newline?: NewlineConfig | null;
 }
 
-export function lexSpecOf(grammar: CstGrammar): LexSpec {
+export function lexSpecOf(grammar: Grammar): LexSpec {
   const lits = new Set<string>();
   for (const rule of grammar.rules) for (const l of collectLiterals(rule.body)) lits.add(l);
   for (const level of grammar.precs) for (const op of level.operators) lits.add(op.value);
@@ -66,7 +66,7 @@ export function lexSpecOf(grammar: CstGrammar): LexSpec {
     ...(grammar.elements ? { elements: grammar.elements, ...(tagOpenOnlyOpensTags(grammar, grammar.elements) ? { elementEntry: 'always' as const } : {}), ...directivesSpec(grammar, grammar.elements) } : {}), indent: grammar.indent, newline: grammar.newline };
 }
 // The derived directives, or a loud refusal of every arm the lexer could not find in text.
-function directivesSpec(grammar: CstGrammar, region: ElementRegion): { elementDirectives?: Directives } {
+function directivesSpec(grammar: Grammar, region: ElementRegion): { elementDirectives?: Directives } {
   const d = directivesOf(grammar, region);
   if (d === null) return {};
   if (d.refused.length) throw new Error(`elements: ${d.refused.length} directive arm(s) the lexer cannot find in text (docs/REGIONS.md, "Directives"):\n${d.refused.map(r => `  ${r.arm}: ${r.reason}`).join('\n')}`);

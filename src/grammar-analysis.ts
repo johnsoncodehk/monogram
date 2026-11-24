@@ -1,5 +1,5 @@
 // grammar-analysis.ts — the STRUCTURAL static analysis both parser engines derive from a
-// CstGrammar, single-sourced. createParser (gen-parser.ts, the runtime interpreter / oracle)
+// Grammar, single-sourced. createParser (gen-parser.ts, the runtime interpreter / oracle)
 // and emitParser (emit-parser.ts, the standalone compiler) must agree on precedence/binding
 // power, NUD/LED (Pratt) and atom/continuation (left-rec) classification, nullability, and —
 // critically — what counts as left-recursive. These are pure functions of the grammar, so a
@@ -14,7 +14,7 @@
 // loops independent so it remains a genuine oracle for the emitter's loops — an oracle sharing
 // the suspect machinery could not catch bugs in it.
 import { ZERO_WIDTH_MARKERS, ctxObserves, isZeroWidthMarker, whenTest } from './grammar-utils.ts';
-import type { CstGrammar, RuleExpr, RuleDecl, ElementRegion } from './types.ts';
+import type { Grammar, RuleExpr, RuleDecl, ElementRegion } from './types.ts';
 import { tokenPatternFirstCharSet } from './token-pattern.ts';
 
 export interface OpInfo {
@@ -44,8 +44,8 @@ export function hasMarker(expr: RuleExpr): boolean {
   return false;
 }
 
-/** The entry rule: the declared `entry` (`CstGrammar.entryRule`), else the last declared rule. */
-export function findEntryRule(grammar: CstGrammar): string {
+/** The entry rule: the declared `entry` (`Grammar.entryRule`), else the last declared rule. */
+export function findEntryRule(grammar: Grammar): string {
   return grammar.entryRule ?? grammar.rules[grammar.rules.length - 1].name;
 }
 
@@ -64,7 +64,7 @@ export function findEntryRule(grammar: CstGrammar): string {
  * [[many(NL)]])` rejects every `Stmt`). The entry rule is exempt (an empty document is handled
  * by the driver).
  */
-export function computeNullableRules(grammar: CstGrammar): { nullableRules: Set<string>; exprNullable: (e: RuleExpr) => boolean } {
+export function computeNullableRules(grammar: Grammar): { nullableRules: Set<string>; exprNullable: (e: RuleExpr) => boolean } {
   const tokenNames = new Set(grammar.tokens.map(t => t.name));
   const nullableRules = new Set<string>();
   function exprNullable(e: RuleExpr): boolean {
@@ -108,7 +108,7 @@ export interface MarkupContainer {
   nameTokens: Set<string>;  // token name(s) that carry an element name (e.g. Name)
   optionalEnd: Map<string, Set<string>>;  // lowercased name → lowercased trigger start-tag names
 }
-export function markupContainerOf(grammar: CstGrammar): MarkupContainer | null {
+export function markupContainerOf(grammar: Grammar): MarkupContainer | null {
   const markup = grammar.markup;
   if (!markup?.optionalEndTags) return null;
   const optionalEnd = new Map<string, Set<string>>();
@@ -144,7 +144,7 @@ export function markupContainerOf(grammar: CstGrammar): MarkupContainer | null {
   return null;
 }
 
-export function analyzeGrammar(grammar: CstGrammar) {
+export function analyzeGrammar(grammar: Grammar) {
   const tokenNames = new Set(grammar.tokens.map(t => t.name));
 
   // ── Precedence table ──
@@ -738,7 +738,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
 // or KIND + a token kind's name.
 export const KIND = '\u0000';
 export type ConcreteLex = { kindsOf: (lit: string) => readonly string[]; gtComps: readonly string[]; maybeWords: readonly string[] };
-export function concreteFirst(grammar: CstGrammar, a: ReturnType<typeof analyzeGrammar>, lex: ConcreteLex) {
+export function concreteFirst(grammar: Grammar, a: ReturnType<typeof analyzeGrammar>, lex: ConcreteLex) {
   const literals = new Set<string>();
   const collect = (e: RuleExpr): void => {
     if (e.type === 'literal') literals.add(e.value);
@@ -833,7 +833,7 @@ export function concreteFirst(grammar: CstGrammar, a: ReturnType<typeof analyzeG
  *     could never be lexed at a code position. The region's own tokens are not scanned in code.
  * A pure function of the grammar; the lexer reads it once (lexSpecOf).
  */
-export function tagOpenOnlyOpensTags(grammar: CstGrammar, region: ElementRegion): boolean {
+export function tagOpenOnlyOpensTags(grammar: Grammar, region: ElementRegion): boolean {
   const lit = region.tagOpen;
   if (grammar.precs.some((l) => l.operators.some((o) => o.value.startsWith(lit)))) return false;
   const closers = new Set([region.closeTag, region.selfClose]);
@@ -891,7 +891,7 @@ export type Directives = {
  * is REFUSED by name, with the reason. Null for a region without `text` (code children lex a
  * directive as code).
  */
-export function directivesOf(grammar: CstGrammar, region: ElementRegion): Directives | null {
+export function directivesOf(grammar: Grammar, region: ElementRegion): Directives | null {
   if (region.text === undefined) return null;
   const rules = new Map(grammar.rules.map((r) => [r.name, r]));
   const out: Directives = { openers: [], continuations: [], blocks: [], refused: [] };

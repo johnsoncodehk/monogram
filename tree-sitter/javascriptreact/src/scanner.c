@@ -3,7 +3,7 @@
 // COMPLETE — the regex-literal scan and the template-literal scan are both
 // wired from the grammar's token hints (`regexContext` and `template`).
 //
-// All language-specific data below is DERIVED from the CstGrammar, not
+// All language-specific data below is DERIVED from the Grammar, not
 // hardcoded: the regex flag chars and the template delimiters all come from
 // the grammar's token hints.
 

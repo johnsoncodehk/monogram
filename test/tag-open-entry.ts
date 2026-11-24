@@ -10,7 +10,7 @@
 import { token, rule, defineGrammar, seq, oneOf, range, star, plus, many, opt, sep, left, op, not, noneOf } from '../src/api.ts';
 import { tagOpenOnlyOpensTags } from '../src/grammar-analysis.ts';
 import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
-import type { CstGrammar, ElementRegion } from '../src/types.ts';
+import type { Grammar, ElementRegion } from '../src/types.ts';
 import javascript from '../javascript.ts';
 import typescript from '../typescript.ts';
 import javascriptreact from '../javascriptreact.ts';
@@ -37,7 +37,7 @@ const Ident = token(seq(oneOf(range('a', 'z')), star(oneOf(range('a', 'z')))), {
 const Shut = token(seq('<', '/'));
 const Solo = token(seq('/', '>'));
 const region: ElementRegion = { tagOpen: '<', tagClose: '>', closeMarker: '/', closeTag: 'Shut', selfClose: 'Solo', hole: { open: '{', close: '}' } };
-function toy(extra: { expr?: (E: unknown) => unknown[]; tokens?: Record<string, ReturnType<typeof token>>; prec?: unknown[] } = {}): CstGrammar {
+function toy(extra: { expr?: (E: unknown) => unknown[]; tokens?: Record<string, ReturnType<typeof token>>; prec?: unknown[] } = {}): Grammar {
   const Expr = rule(($) => [Ident, ...(extra.expr?.($) ?? [])] as never);
   const Elem = rule(($) => [['<', Ident, Solo], ['<', Ident, '>', many($), Shut, Ident, '>']]);
   const Prog = rule(() => [[many(Elem), opt(Expr)]]);

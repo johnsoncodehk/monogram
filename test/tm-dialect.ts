@@ -25,7 +25,7 @@ import onig from 'vscode-oniguruma';
 import { token, rule, defineGrammar, seq, oneOf, range, star, sep, opt, many, alt, noneOf } from '../src/api.ts';
 import { generateTmLanguage } from '../src/gen-tm.ts';
 import { createParser } from '../src/gen-parser.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 import dialect from './fixtures/elementdialect.ts';
 import textDialect from './fixtures/textdialect.ts';
 
@@ -39,7 +39,7 @@ await onig.loadWASM(wasmBin.buffer.slice(wasmBin.byteOffset, wasmBin.byteOffset 
 const cssStub = { scopeName: 'source.css', patterns: [{ match: '[a-z-]+(?=\\s*:)', name: 'support.type.property-name.css' }] };
 const jsStub = { scopeName: 'source.js', patterns: [{ match: '\\blet\\b', name: 'storage.type.js' }] };
 
-async function load(g: CstGrammar) {
+async function load(g: Grammar) {
   const tm = generateTmLanguage(g);
   const reg = new Registry({
     onigLib: Promise.resolve({ createOnigScanner: (p: string[]) => new onig.OnigScanner(p), createOnigString: (s: string) => new onig.OnigString(s) }),

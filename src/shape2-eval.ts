@@ -11,7 +11,7 @@
 //   shapeCoverage(shape)           which (rule, arm) pairs the spec maps; what a left-out one does
 //   dependencies(shape)            per (rule, arm): which inherited attributes its value reads
 import type { CstChild, CstLeaf, CstNode } from './gen-parser.ts';
-import type { CstGrammar, RuleDecl, RuleExpr, TemplateDelimiters } from './types.ts';
+import type { Grammar, RuleDecl, RuleExpr, TemplateDelimiters } from './types.ts';
 import { isKeywordLiteral, ZERO_WIDTH_MARKERS } from './grammar-utils.ts';
 import { nameRule, OP_FORM_CHILDREN, type RuleNames } from './grammar-names.ts';
 import { COOK } from './shape-cook.ts';
@@ -114,7 +114,7 @@ function templateView(where: string, token: TemplateDelimiters, holeRule: string
   return { noSub, sub, middle, tail, quasi, head, iter, expr, part, middleLit, tailLit };
 }
 
-function viewOf(grammar: CstGrammar): GrammarView {
+function viewOf(grammar: Grammar): GrammarView {
   const g: GrammarView = {
     rules: new Map(grammar.rules.map((r) => [r.name, r])),
     tokens: new Set(grammar.tokens.map((t) => t.name)),
@@ -392,7 +392,7 @@ export type RightDependent = { rule: string; arm: string; child: string; attr: s
 /** A shape: its spec, checked once against its grammar (`defineShape`). Every consumer (the
  * evaluator, coverage, the dependency analysis, and the emitted builders next) reads this, never
  * an unchecked spec. */
-export type Shape = { spec: ShapeSpec; source: CstGrammar; grammar: GrammarView; rightDependent: RightDependent[] };
+export type Shape = { spec: ShapeSpec; source: Grammar; grammar: GrammarView; rightDependent: RightDependent[] };
 
 /** A static scope: an arm, a branch, or one iteration (`base`: the repetitions consumed to reach
  * it), with the variables bound around it. */
@@ -422,8 +422,8 @@ type Ty = 'string' | 'number' | 'bool' | 'null' | 'node' | 'list' | 'nodes' | 'r
  * reported at once (ShapeSpecError). An arm the spec leaves out is UNMAPPED: evaluating it throws
  * ShapeUnmapped (it is never passed through implicitly: a pass-through is written `child(x)`);
  * with `total: true` a left-out arm of a mapped rule is a load error instead. */
-export function defineShape<const R extends string>(grammar: CstGrammar & { rules: readonly { name: R }[] }, spec: ShapeSpec<NoInfer<R>>): Shape;
-export function defineShape(grammar: CstGrammar, spec: ShapeSpec): Shape {
+export function defineShape<const R extends string>(grammar: Grammar & { rules: readonly { name: R }[] }, spec: ShapeSpec<NoInfer<R>>): Shape;
+export function defineShape(grammar: Grammar, spec: ShapeSpec): Shape {
   const keys = nodeKeysOf(spec);
   const nodeKeyNames = [keys.kind, keys.start, keys.end];
   const g = viewOf(grammar);
@@ -503,7 +503,7 @@ export function defineShape(grammar: CstGrammar, spec: ShapeSpec): Shape {
   }
   // A scalar attribute's `inh` copy or thread init of a nodes attribute fails the type check above
   // (`copies modifiers (nodes) into a bool attribute`).
-  if (problems.length) throw new ShapeSpecError(spec.name, grammar.name ?? '(unnamed)', problems);
+  if (problems.length) throw new ShapeSpecError(spec.name, grammar.name, problems);
   return { spec, source: grammar, grammar: g, rightDependent };
 
   /** A node-valued attribute (NodesAttr): every equation is a list built from children strictly

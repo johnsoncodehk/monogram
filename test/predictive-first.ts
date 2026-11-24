@@ -22,7 +22,7 @@
 import { readdirSync } from 'node:fs';
 import { portableIR, type ParserIR, type Step, type FirstSig } from '../src/emit-portable.ts';
 import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const paths = [
@@ -34,7 +34,7 @@ let failures = 0, lists = 0, grammars = 0, bodies = 0;
 const fail = (msg: string) => { failures++; console.log(`  FAIL ${msg}`); };
 
 for (const path of paths) {
-  const grammar: CstGrammar = (await import(path)).default;
+  const grammar: Grammar = (await import(path)).default;
   let ir: ParserIR;
   try { ir = portableIR(grammar); } catch (e) {
     if (/out of scope|not in scope/.test((e as Error).message)) continue;   // a grammar the portable targets do not take

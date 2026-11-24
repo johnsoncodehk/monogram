@@ -1,7 +1,7 @@
 // ── emit-portable ──
 //
 // The target-agnostic emitter (issue #6). `emitParser(grammar, target)` (see emit.ts) derives
-// a COMPLETE, self-contained parser in the target's language from the same CstGrammar the
+// a COMPLETE, self-contained parser in the target's language from the same Grammar the
 // TS engine uses. It is the agnosticism proof: ONE analysis → ONE intermediate form (IR)
 // → N language renderings that accept/reject the same inputs as the interpreter (see
 // test/portable-targets.ts: accept/reject parity plus a rule-skeleton guard on tiny inputs).
@@ -21,7 +21,7 @@
 // bracket NUDs (grouping, array), and mixfix LEDs (call / member / index) tried before
 // operators. buildIR THROWS on a construct outside this set rather than emit a wrong
 // parser. This is enough to derive a real JavaScript-subset parser (test/fixtures/minijs.ts).
-import type { CstGrammar, IdentifierClasses, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
+import type { Grammar, IdentifierClasses, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
 import { identifierClassesOf } from './uni-ident.ts';
 import { planTargets, type ArmForm } from './declared-targets.ts';
 import { KIND, analyzeGrammar, concreteFirst, directivesOf, findEntryRule, tagOpenOnlyOpensTags } from './grammar-analysis.ts';
@@ -546,7 +546,7 @@ export type PrattRule = {
 // `++x`) is also refused as a noUnaryLhs left operand; every other node is a target.
 export const FORM_TARGET = 0, FORM_NOT_TARGET = 1, FORM_UNARY = 2;
 export type AssignForm = typeof FORM_TARGET | typeof FORM_NOT_TARGET | typeof FORM_UNARY;
-// A grammar that declares target contexts (CstGrammar.targets; declared-targets.ts) widens the form
+// A grammar that declares target contexts (Grammar.targets; declared-targets.ts) widens the form
 // to a BITMASK, one byte in every target: FORM_LOW masks today's meaning above; context i has a
 // PASS bit (its node passes the context) and a LAST bit (its node is a `last` arm of it). A grammar
 // without contexts never sets a bit above FORM_LOW, and its printed parser tests the form as before.
@@ -717,7 +717,7 @@ export const DEFER_SHIFT = 4, DEMAND_ASSIGNED = 128, DEMAND_MAX_TWINS = 7;
 // `facts`: what a target's compiler makes a step cost, where the plan's choice depends on it (each
 // printer states its facts with the measurement behind them). Omitted: every step the analysis
 // proves, the plan the soundness gates check.
-export function portableIR(grammar: CstGrammar, facts: PortableFacts = { calleeFirstGuards: true }): ParserIR {
+export function portableIR(grammar: Grammar, facts: PortableFacts = { calleeFirstGuards: true }): ParserIR {
   return buildIR(grammar, facts);
 }
 /**
@@ -789,7 +789,7 @@ function unitClassOf(p: TokenPattern, role: string): CodeRange[] {
   return rs.map(([lo, hi]): CodeRange => [lo, hi]);
 }
 
-function elementPlanOf(grammar: CstGrammar, el: NonNullable<CstGrammar['elements']>, identToken: string | null): ElementPlan {
+function elementPlanOf(grammar: Grammar, el: NonNullable<Grammar['elements']>, identToken: string | null): ElementPlan {
   const tok = (name: string, role: string): string => {
     if (!grammar.tokens.some((t) => t.name === name)) throw new Error(`portable: elements.${role}: no token named '${name}'`);
     return name;
@@ -890,7 +890,7 @@ function isNeverPat(p: TokenPattern): boolean {
   return typeof p !== 'string' && p.type === 'never';
 }
 
-function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
+function buildIR(grammar: Grammar, facts: PortableFacts): ParserIR {
   if (grammar.indent) {
     throw new Error('portable: indent-sensitive grammars are out of scope (use the interpreter path); declare `newline` without `indent` for line-boundary-only mode');
   }
@@ -1550,7 +1550,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
     const f = new Set(reuse.rules.flatMap((r) => [...concrete.first1({ type: 'ref', name: r })]));
     entrySync = { lits: [...f].filter((x) => !x.startsWith(KIND)), toks: [...f].filter((x) => x.startsWith(KIND)).map((x) => x.slice(KIND.length)) };
   }
-  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse, entrySync, ruleLabels: Object.fromEntries(grammar.rules.flatMap((r) => (r.label === undefined ? [] : [[r.name, r.label]]))), suppressSets, regexCtx, tpl, elements, newlineCfg, identToken, identLike, identPrefix, identClasses: identifierClassesOf(grammar.tokens), ...(targets ? { targets } : {}) };
+  return { grammarName: grammar.name, entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse, entrySync, ruleLabels: Object.fromEntries(grammar.rules.flatMap((r) => (r.label === undefined ? [] : [[r.name, r.label]]))), suppressSets, regexCtx, tpl, elements, newlineCfg, identToken, identLike, identPrefix, identClasses: identifierClassesOf(grammar.tokens), ...(targets ? { targets } : {}) };
 }
 
 // The step lists a rule runs: an rd rule's alternatives, a Pratt rule's NUD and LED arms.
@@ -3267,7 +3267,7 @@ export const withReservedRules = (ar: ArenaIdPlan): ArenaIdPlan => ({ ...ar, rul
 export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): RecoveryTables {
   // Declared target contexts are not in the recovery encoding yet (the interpreter would ignore
   // their checks and accept what the parser rejects): refused by name.
-  if (ir.targets) throw new Error(`portable recovery: grammar ${ir.grammarName} declares target contexts (CstGrammar.targets), which total parsing does not encode yet`);
+  if (ir.targets) throw new Error(`portable recovery: grammar ${ir.grammarName} declares target contexts (Grammar.targets), which total parsing does not encode yet`);
   const data: number[] = [];
   const cappedSeq = hasCappedSeq(ir);   // REC_N_SEQ entries carry their cap (recovery-family riNudOf)
   const unaryNud = hasUnaryNud(ir);     // REC_N_BRACKET / REC_N_SEQ entries carry their form (likewise)

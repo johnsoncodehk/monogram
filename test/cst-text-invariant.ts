@@ -25,7 +25,7 @@ import { emitParser } from '../src/target.ts';
 import { jsTarget } from '../src/emit-parser.ts';
 import { objectify, type TreeView } from './emitted-obj.ts';
 import { parityInputs, type Tok } from './parity-corpus.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 import { scratchDir } from './scratch.ts';
 
 const GRAMMARS = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'yaml', 'html'];
@@ -100,7 +100,7 @@ type Emitted = {
 };
 
 for (const name of GRAMMARS) {
-  const grammar: CstGrammar = (await import(`../${name}.ts`)).default;
+  const grammar: Grammar = (await import(`../${name}.ts`)).default;
   const parser = createParser(grammar);
   const tokenize = compileTokenizer(lexSpecOf(grammar)) as (s: string) => Tok[];
   const emPath = `${TMP}/${name}.mts`;
@@ -150,7 +150,7 @@ if (existsSync(corpus)) {
     }
   })(corpus);
   files.sort();
-  const grammar: CstGrammar = (await import('../typescript.ts')).default;
+  const grammar: Grammar = (await import('../typescript.ts')).default;
   const parser = createParser(grammar);
   const tokenize = compileTokenizer(lexSpecOf(grammar)) as (s: string) => Tok[];
   const stride = Math.max(1, Math.floor(files.length / 300));

@@ -17,7 +17,7 @@
 import { appendFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { generateTreeSitter, EXACT_ASSERTION_CLASSES, type AssertionClass, type AssertionRecord } from '../src/gen-treesitter.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 
 const CLASSES: AssertionClass[] = ['lowered', 'vacuous', 'reserved-set', 'scanner', 'reserved', 'lookahead1', 'lookahead', 'left-context'];
 // Rendered into grammar.js (every other class is dropped to blank()).
@@ -94,7 +94,7 @@ const summary: string[] = ['### tree-sitter: zero-width assertions per grammar',
 const perRule: string[] = [];
 let bad = 0;
 for (const [name, pinned] of Object.entries(PINNED)) {
-  const grammar = (await import(resolve(`${name}.ts`))).default as CstGrammar;
+  const grammar = (await import(resolve(`${name}.ts`))).default as Grammar;
   const records = generateTreeSitter(grammar, name).assertions;
   const got = count(records);
   const diffs = CLASSES.filter(k => (got[k] ?? 0) !== (pinned[k] ?? 0));

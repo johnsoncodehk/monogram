@@ -44,7 +44,7 @@ import { engine, canon, type Tok, type Mutation } from './ir-engine.ts';
 import { emitParser } from '../src/target.ts';
 import { tsTarget } from '../src/target-ts.ts';
 import { scratchDir } from './scratch.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const CORPUS = '/tmp/ts-repo/tests/cases/conformance';
@@ -133,7 +133,7 @@ const t0 = Date.now();
 let leavesProved = 0;
 const dir = scratchDir('guard-refused');
 for (const [g, inputs] of GRAMMARS) {
-  const grammar: CstGrammar = (await import(`${ROOT}${g}.ts`)).default;
+  const grammar: Grammar = (await import(`${ROOT}${g}.ts`)).default;
   const ir = portableIR(grammar);
   const file = `${dir}/${g.replace(/\//g, '_')}.ts`;
   writeFileSync(file, emitParser(grammar, tsTarget));

@@ -41,7 +41,7 @@ import { asGoMain } from './go-main.ts';
 import { scratchDir } from './scratch.ts';
 import { cachedGoBuild, cachedRustc } from './build-cache.ts';
 import { createParser } from '../src/gen-parser.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 
 const LONG = readFileSync(new URL('../typescript.ts', import.meta.url), 'utf8');
 const SHORT = 'let x = f(1, "a") + y;\n';
@@ -469,7 +469,7 @@ type Builder<H> = {
   shift?(h: H, byteDelta: number, tokDelta: number): H;
 };
 
-async function loadMod(grammar: CstGrammar, name: string): Promise<Mod> {
+async function loadMod(grammar: Grammar, name: string): Promise<Mod> {
   const out = `${TMP}/${name}.mts`;
   writeFileSync(out, emitParser(grammar, tsTarget));
   return await import(out + '?t=' + Date.now()) as Mod;
@@ -521,7 +521,7 @@ function assert(cond: unknown, msg: string): asserts cond {
 // ─── 1. Default equivalence: 16 grammars × ≥300 variants ────────────────────
 console.log('builder-api: cstBuilder ≡ parse()');
 for (const c of CASES) {
-  const grammar: CstGrammar = (await import(c.path)).default;
+  const grammar: Grammar = (await import(c.path)).default;
   const mod = await loadMod(grammar, c.grammar);
   const inputs = variants(c.seeds, 300);
   assert(inputs.length >= 300, `${c.grammar}: need ≥300, got ${inputs.length}`);
@@ -542,7 +542,7 @@ for (const c of CASES) {
 
 // ─── 3. CST emit prefix identity tip (additive marker present) ──────────────
 {
-  const grammar: CstGrammar = (await import('./fixtures/calc.ts')).default;
+  const grammar: Grammar = (await import('./fixtures/calc.ts')).default;
   const emitted = emitParser(grammar, tsTarget);
   check('builder addon marker present', emitted.includes('// ─── Builder API'));
   check('exports parseWith + cstBuilder + Builder',
@@ -557,7 +557,7 @@ for (const c of CASES) {
 // ─── 3b. TS Doc + optional shift (D2 semantics on createDoc) ─────────────────
 console.log('\nbuilder-api: ts createDoc builder / shift contracts');
 {
-  const grammar: CstGrammar = (await import('./fixtures/calc.ts')).default;
+  const grammar: Grammar = (await import('./fixtures/calc.ts')).default;
   const mod = await loadMod(grammar, 'calc-doc-shift');
   const init = '1+2;\n3+4;\n5+6;';
 
@@ -848,7 +848,7 @@ if (!haveRustc()) {
 } else {
   // Additive marker + prefix tip on calc
   {
-    const grammar: CstGrammar = (await import('./fixtures/calc.ts')).default;
+    const grammar: Grammar = (await import('./fixtures/calc.ts')).default;
     const emitted = emitParser(grammar, rustTarget);
     check('rust builder addon marker', emitted.includes('// ─── Builder API'));
     check('rust exports parse_with + CstBuilder + Builder',
@@ -862,7 +862,7 @@ if (!haveRustc()) {
   // their modes on these same binaries.
   const rustBins = new Map<string, string>();
   for (const c of CASES) {
-    const grammar: CstGrammar = (await import(c.path)).default;
+    const grammar: Grammar = (await import(c.path)).default;
     const rfile = `${RUST_TMP}/${c.grammar}.rs`;
     const bin = `${RUST_TMP}/${c.grammar}`;
     writeFileSync(rfile, emitParser(grammar, rustTarget) + rustHarness);
@@ -1227,7 +1227,7 @@ if (!haveGo()) {
   check('go toolchain present', false, 'go missing — go builder gates skipped');
 } else {
   {
-    const grammar: CstGrammar = (await import('./fixtures/calc.ts')).default;
+    const grammar: Grammar = (await import('./fixtures/calc.ts')).default;
     const emitted = emitParser(grammar, goTarget);
     check('go builder addon marker', emitted.includes('// ─── Builder API'));
     check('go exports ParseWith + CstBuilder + Builder',
@@ -1241,7 +1241,7 @@ if (!haveGo()) {
 
   const goBins = new Map<string, string>();
   for (const c of CASES) {
-    const grammar: CstGrammar = (await import(c.path)).default;
+    const grammar: Grammar = (await import(c.path)).default;
     const gfile = `${GO_TMP}/${c.grammar}.go`;
     const hfile = `${GO_TMP}/${c.grammar}_harness.go`;
     const bin = `${GO_TMP}/${c.grammar}`;

@@ -7,7 +7,7 @@ import type {
   ShapeSpec, ShapeIR, ShapeIRRule, ShapeDiag, RuleShape, NodeShape, ChoiceShape,
   PrattShape, FieldDecl, TokenLeafPolicy,
 } from './shape-schema.ts';
-import type { CstGrammar } from './types.ts';
+import type { Grammar } from './types.ts';
 
 export type ValidateResult = { ok: boolean; ir: ShapeIR; errors: ShapeDiag[]; warns: ShapeDiag[] };
 
@@ -512,7 +512,7 @@ function checkUnimplementedBinds(ruleName: string, shape: RuleShape | undefined,
   }
 }
 
-export function validateShape(grammarModule: { default: CstGrammar }, spec: ShapeSpec): ValidateResult {
+export function validateShape(grammarModule: { default: Grammar }, spec: ShapeSpec): ValidateResult {
   const pir = portableIR(grammarModule.default);
   const diags: ShapeDiag[] = [];
   const rulesOut: ShapeIRRule[] = [];
@@ -572,7 +572,7 @@ export function validateShape(grammarModule: { default: CstGrammar }, spec: Shap
   };
 }
 
-export function validateShapeOrThrow(grammar: CstGrammar, spec: ShapeSpec): ShapeIR {
+export function validateShapeOrThrow(grammar: Grammar, spec: ShapeSpec): ShapeIR {
   const result = validateShape({ default: grammar }, spec);
   if (!result.ok) {
     throw new Error(result.errors.map((e) => `[${e.code}]${e.rule ? ` ${e.rule}:` : ''} ${e.message}`).join('; '));

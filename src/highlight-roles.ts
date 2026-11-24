@@ -5,7 +5,7 @@
 // src/highlight-facts.ts, src/gen-monarch.ts and src/gen-treesitter.ts; where the three disagree
 // (numbers: TextMate `constant.numeric.decimal`, Monarch float / integer; a regex token) the
 // disagreement is theirs, kept as it was, and now visible side by side.
-import type { CstGrammar, TokenDecl } from './types.ts';
+import type { Grammar, TokenDecl } from './types.ts';
 import { tokenPatternBlockDelimiters, tokenPatternContainsLiteral, tokenPatternLiteralPrefix, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters } from './token-pattern.ts';
 
 // ── TextMate ──
@@ -212,7 +212,7 @@ export function scopeToCapture(scope: string): string | null {
  * `scopes` section — for numbers/strings/comments that don't appear there.
  * Mirrors gen-tm.ts's classifyToken families but emits captures.
  */
-export function tokenCapture(token: CstGrammar['tokens'][number]): string | null {
+export function tokenCapture(token: Grammar['tokens'][number]): string | null {
   if (token.scope) {
     const cap = scopeToCapture(token.scope);
     if (cap) return cap;

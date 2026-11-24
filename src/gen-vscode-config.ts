@@ -1,4 +1,4 @@
-import type { CstGrammar } from './types.ts';
+import type { Grammar } from './types.ts';
 import { collectLiterals } from './grammar-utils.ts';
 import { tokenPatternBlockDelimiters, tokenPatternHasStartAnchor, tokenPatternLiteralPrefix, tokenPatternSource, tokenPatternStringDelimiters } from './token-pattern.ts';
 
@@ -27,7 +27,7 @@ export interface LanguageConfig {
 const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const escClass = (s: string) => s.replace(/[\]^\\-]/g, '\\$&');
 
-export function generateLanguageConfig(grammar: CstGrammar): LanguageConfig {
+export function generateLanguageConfig(grammar: Grammar): LanguageConfig {
   const config: LanguageConfig = {};
 
   // Rule-body literals — to detect generic `<…>` brackets and the `:` separator.

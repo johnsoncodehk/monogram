@@ -9,7 +9,7 @@
 // (src/highlight-facts.ts and src/highlight-roles.ts) and, for the constructs moved into it, from
 // the shared context IR (`ir`), and lists every construct it declines (`refusals`), each with its
 // reason: a refusal is recorded (the agreement record prints them), never a silent omission.
-import type { CstGrammar } from './types.ts';
+import type { Grammar } from './types.ts';
 import { highlightFacts, type HighlightFacts } from './highlight-facts.ts';
 import * as roles from './highlight-roles.ts';
 
@@ -40,7 +40,7 @@ export interface HighlighterCapabilities {
 /** What a renderer reads: the grammar, its highlight facts (computed once per grammar), the role
  *  and classifier tables. */
 export interface HighlighterInput {
-  grammar: CstGrammar;
+  grammar: Grammar;
   /** The grammar's name (the file stem when it declares none). */
   name: string;
   facts: HighlightFacts;
@@ -88,6 +88,6 @@ export function registeredHighlighters(): HighlighterDefinition[] {
 }
 
 /** The input every back end of one grammar reads. */
-export function highlighterInput(grammar: CstGrammar, name: string): HighlighterInput {
+export function highlighterInput(grammar: Grammar, name: string): HighlighterInput {
   return { grammar, name, facts: highlightFacts(grammar), roles };
 }

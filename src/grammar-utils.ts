@@ -6,7 +6,7 @@
 // (FIRST sets, left-recursion, Pratt classification) answers "how to parse";
 // gen-tm's shape detection answers "how to emit TextMate regexes". Those change
 // for different reasons and must not be coupled.
-import type { CstGrammar, RuleExpr } from './types.ts';
+import type { Grammar, RuleExpr } from './types.ts';
 
 /** The ZERO-WIDTH MARKERS of the grammar language: assertions that consume nothing and build no
  *  child (a negative lookahead, the line and comment conditions, the left-leaf gate, a declared
@@ -38,7 +38,7 @@ export function whenTest(cond: string): { mask: number; val: number } {
 /** Whether some `when` of the grammar (an item or an operator) reads `syncFn`: only then does a
  *  reset body differ from the top level (the bit is set there), so a grammar that never reads it
  *  keeps one context for both. */
-export function readsSyncFn(g: Pick<CstGrammar, 'rules' | 'precs'>): boolean {
+export function readsSyncFn(g: Pick<Grammar, 'rules' | 'precs'>): boolean {
   const bit = 1 << CTX_PARAMS.indexOf('syncFn');
   const reads = (c: string | undefined): boolean => c !== undefined && (whenTest(c).mask & bit) !== 0;
   if (g.precs.some((l) => l.operators.some((o) => reads(o.when)))) return true;
@@ -78,7 +78,7 @@ export function ctxReserves(word: number, text: string): boolean {
  *  marker in between (a marker sets the whole word, so what lies under it reads the marker's word,
  *  not the caller's). A rule's parse is a function of (position, word & observes): the key a memo
  *  entry or a reused row needs beside the rule. */
-export function ctxObserves(g: Pick<CstGrammar, 'rules' | 'precs'>, prattRules: ReadonlySet<string>): Map<string, number> {
+export function ctxObserves(g: Pick<Grammar, 'rules' | 'precs'>, prattRules: ReadonlySet<string>): Map<string, number> {
   const gatedOps = g.precs.reduce((m, l) => l.operators.reduce((n, o) => (o.when !== undefined ? n | whenTest(o.when).mask : n), m), 0);
   const direct = new Map<string, number>(), reaches = new Map<string, Set<string>>();
   for (const r of g.rules) {
@@ -176,7 +176,7 @@ function lookaheadLiterals(expr: RuleExpr, out: Set<string>, inNot = false): voi
  * composed too, from single `<` tokens. The composites of both, longest first; each begins at its
  * lead character's token (compositeLeads).
  */
-export function gtComposites(grammar: CstGrammar): string[] {
+export function gtComposites(grammar: Grammar): string[] {
   const leads = compositeLeads(grammar);
   if (leads.length === 0) return [];
   const ruleLits = new Set<string>();
@@ -201,7 +201,7 @@ export function gtComposites(grammar: CstGrammar): string[] {
 
 /** The characters whose tokens a composite operator begins at (gtComposites): `>` under
  *  `composeGt`, `<` under `composeLt`; every one is a single-character punctuator of its own. */
-export function compositeLeads(grammar: Pick<CstGrammar, 'composeGt' | 'composeLt'>): string[] {
+export function compositeLeads(grammar: Pick<Grammar, 'composeGt' | 'composeLt'>): string[] {
   return [...grammar.composeGt ? ['>'] : [], ...grammar.composeLt ? ['<'] : []];
 }
 

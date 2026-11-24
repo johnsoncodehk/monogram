@@ -1,4 +1,4 @@
-import type { LedPrec, CstGrammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, ElementRegion, IndentConfig, NewlineConfig, StringInterpolation, TokenPattern, TargetContext } from './types.ts';
+import type { LedPrec, Grammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, ElementRegion, IndentConfig, NewlineConfig, StringInterpolation, TokenPattern, TargetContext } from './types.ts';
 import { computeNullableRules, findEntryRule } from './grammar-analysis.ts';
 import { whenTest } from './grammar-utils.ts';
 import {
@@ -169,7 +169,7 @@ export function notLeftLeaf(...words: string[]): NotLeftLeafMarker {
   return { __kind: 'notLeftLeaf', words };
 }
 
-// Zero-width DECLARED ASSIGNMENT-TARGET check (CstGrammar.targets): it matches iff the node that
+// Zero-width DECLARED ASSIGNMENT-TARGET check (Grammar.targets): it matches iff the node that
 // ends IMMEDIATELY BEFORE it passes the target context `ctx` (`[StarExpressions, target('star'),
 // '=', …]`): a node passes iff its arm is one of the context's leaves, or one of its containers
 // whose named children all pass (a unit node, one child and nothing else, is its child). So a head
@@ -676,13 +676,13 @@ interface GrammarConfig<R extends Record<string, RuleRef> = Record<string, RuleR
   tokens: Record<string, TokenRef>;
   prec?: PrecLevelDef[];
   ledPrec?: LedPrec[];
-  targets?: Record<string, TargetContext>;   // declared assignment-target contexts (CstGrammar.targets)
-  composeGt?: true;       // the lexer scans `>` alone and the parser composes `>`-led operators (CstGrammar.composeGt)
-  composeLt?: true;       // likewise for `<` and the `<`-led operators (CstGrammar.composeLt)
+  targets?: Record<string, TargetContext>;   // declared assignment-target contexts (Grammar.targets)
+  composeGt?: true;       // the lexer scans `>` alone and the parser composes `>`-led operators (Grammar.composeGt)
+  composeLt?: true;       // likewise for `<` and the `<`-led operators (Grammar.composeLt)
   rules: R;
   scopes?: Record<string, string[]>;
   // Highlight-only contextual token scopes: token T carries scope S within rule R (T's
-  // immediate enclosing rule) — see CstGrammar.contextualScopes for generator fidelity.
+  // immediate enclosing rule) — see Grammar.contextualScopes for generator fidelity.
   contextualScopes?: { token: TokenRef; within: RuleRef | RuleRef[]; scope: string }[];
   entry: RuleRef;
   markup?: MarkupConfig;  // opt-in markup-mode tokenization (HTML/Vue)
@@ -691,21 +691,13 @@ interface GrammarConfig<R extends Record<string, RuleRef> = Record<string, RuleR
   newline?: NewlineConfig;  // opt-in NEWLINE-sensitive tokenization, independent of indent (no indent stack)
   expression?: RuleRef;   // the rule that produces an EXPRESSION: parses the `${…}` holes of every bare template-token reference (see withHoles), and enables a derived `#expression` sub-grammar (expression-only embeds)
   aliasScopes?: { scope: string; file: string }[];  // extra grammars re-exposing this one under another scopeName (e.g. text.html.derivative)
-  canonicalRepoNames?: Record<string, string | string[]>;  // official repo KEY NAME → structural key(s) for the SAME construct; gen-tm RENAMES the structural key (or synthesises a union wrapper) to emit the official name natively (the 限制器; see CstGrammar.canonicalRepoNames)
+  canonicalRepoNames?: Record<string, string | string[]>;  // official repo KEY NAME → structural key(s) for the SAME construct; gen-tm RENAMES the structural key (or synthesises a union wrapper) to emit the official name natively (the 限制器; see Grammar.canonicalRepoNames)
   manifest?: import('./types.ts').ContributesManifest;  // VS Code `contributes` packaging (emits a pasteable snippet)
-  treeSitterConflicts?: string[][];  // tree-sitter GLR conflict tuples for THIS grammar (see CstGrammar.treeSitterConflicts)
-  treeSitterContextualNames?: string[] | 'all';  // keywords the tree-sitter grammar also reads as names (see CstGrammar.treeSitterContextualNames)
+  treeSitterConflicts?: string[][];  // tree-sitter GLR conflict tuples for THIS grammar (see Grammar.treeSitterConflicts)
+  treeSitterContextualNames?: string[] | 'all';  // keywords the tree-sitter grammar also reads as names (see Grammar.treeSitterContextualNames)
 }
 
-/** A grammar as `defineGrammar` returns it: its type carries the names of its rules (`R`), so a
- * consumer keyed by rule name (a shape: `defineShape` in src/shape.ts) is checked by TypeScript.
- * Arm and child names are not in the type: half of them are DERIVED from the syntax at load time
- * (src/grammar-names.ts), so their check is the consumer's load-time check. */
-export type Grammar<R extends string = string> = Omit<CstGrammar, 'rules'> & {
-  name: string;
-  scopeName?: string;
-  rules: (RuleDecl & { name: R })[];
-};
+export type { Grammar };
 
 export function defineGrammar<const R extends Record<string, RuleRef>>(config: GrammarConfig<R>): Grammar<keyof R & string> {
   // `indent` is the richer layer built on top of newline-significant line boundaries, so the two

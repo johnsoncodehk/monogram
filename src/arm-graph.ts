@@ -19,7 +19,7 @@
 //  seq / alt / quantifier / group / sep (kind 'sep': expandArms keeps a sep as one item, so the
 //  detectors that recurse into a sep's element see its arms as arms of their own).
 // ─────────────────────────────────────────────────────────────────────────────
-import type { CstGrammar, RuleExpr } from './types.ts';
+import type { Grammar, RuleExpr } from './types.ts';
 
 export interface ArmGraph {
   /** Per position: the item it stands for (an expandArms arm holds these same objects). */
@@ -44,10 +44,10 @@ export interface ArmGraph {
   ruleIndex: number[];
 }
 
-const graphs = new WeakMap<CstGrammar, ArmGraph>();
+const graphs = new WeakMap<Grammar, ArmGraph>();
 
 /** The arm graph of a grammar, built once per grammar. */
-export function armGraph(grammar: CstGrammar): ArmGraph {
+export function armGraph(grammar: Grammar): ArmGraph {
   const hit = graphs.get(grammar);
   if (hit) return hit;
   const node: RuleExpr[] = [], root: number[] = [], follow: number[][] = [], isLast: boolean[] = [];

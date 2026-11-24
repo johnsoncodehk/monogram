@@ -5,7 +5,7 @@ import { defineHighlighter } from './define-highlighter.ts';
 import { generateTmLanguage, generateMarkupInjection, generateAliasGrammar, generateContributes } from './gen-tm.ts';
 import { generateMonarch, monarchRefusals } from './gen-monarch.ts';
 import { generateTreeSitter } from './gen-treesitter.ts';
-import type { CstGrammar } from './types.ts';
+import type { Grammar } from './types.ts';
 
 const json = (v: unknown) => JSON.stringify(v, null, 2) + '\n';
 
@@ -45,8 +45,8 @@ export const monarch = defineHighlighter({
 
 // tree-sitter's generator writes the parser (grammar.js, scanner, package files: the tree-sitter
 // lane's, written by src/cli.ts) and the highlight queries in one pass: computed once per grammar.
-const treeSitterOf = new WeakMap<CstGrammar, ReturnType<typeof generateTreeSitter>>();
-export function treeSitterFiles(grammar: CstGrammar, name: string): ReturnType<typeof generateTreeSitter> {
+const treeSitterOf = new WeakMap<Grammar, ReturnType<typeof generateTreeSitter>>();
+export function treeSitterFiles(grammar: Grammar, name: string): ReturnType<typeof generateTreeSitter> {
   let ts = treeSitterOf.get(grammar);
   if (!ts) treeSitterOf.set(grammar, ts = generateTreeSitter(grammar, name));
   return ts;

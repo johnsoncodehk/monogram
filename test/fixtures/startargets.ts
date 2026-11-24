@@ -1,4 +1,4 @@
-// Python's three target contexts in miniature (CstGrammar.targets; api.ts target): the portable
+// Python's three target contexts in miniature (Grammar.targets; api.ts target): the portable
 // proof of several declared contexts in one grammar (docs/SECOND-LANGUAGE.md, M5). A statement's
 // head is parsed once, as expressions, and checked where its tail is taken: `=` takes STAR targets
 // (a name, an attribute, a subscript, and tuples, lists, parenthesized and starred ones of them),

@@ -3,7 +3,7 @@
 // token's end, element regions) and by the edit sessions below gives a fresh parse's verdict and
 // CST, its relexed stream aligns with the old one as the oracle lexer's does, and the fast
 // (unvalidated) session reports what the validated one does.
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
 import { HOLE_EDIT_DOCS, LOOK_EDIT_DOCS } from './relex-edit-docs.ts';
 import { CTX_DOCS, ctxEdits } from './context-cases.ts';
@@ -15,13 +15,13 @@ const QUICK_EDIT_STRIDE = 3;
 type AlignMeta = { kind: string; off: number; end: number; nl: boolean };
 // The oracle lexer is compiled once per grammar, and the oracle's alignment of an edit is computed
 // once for all the runners that are compared with it (a lexer error is cached and thrown again).
-const tokenizers = new WeakMap<CstGrammar, ReturnType<typeof compileTokenizer>>();
-const oracleToks = (g: CstGrammar, src: string): AlignMeta[] => {
+const tokenizers = new WeakMap<Grammar, ReturnType<typeof compileTokenizer>>();
+const oracleToks = (g: Grammar, src: string): AlignMeta[] => {
   let tokenize = tokenizers.get(g);
   if (!tokenize) tokenizers.set(g, (tokenize = compileTokenizer(lexSpecOf(g))));
   return tokenize(src).map((t) => ({ kind: t.type, off: t.offset, end: t.offset + t.text.length, nl: t.newlineBefore }));
 };
-const aligns = new WeakMap<CstGrammar, Map<string, { align: Align } | { error: unknown }>>();
+const aligns = new WeakMap<Grammar, Map<string, { align: Align } | { error: unknown }>>();
 const computeAlign = (oldText: string, oldToks: AlignMeta[], newText: string, newToks: AlignMeta[]): Align => {
   const oldN = oldToks.length, newN = newToks.length;
   let prefix = 0;
@@ -42,7 +42,7 @@ const computeAlign = (oldText: string, oldToks: AlignMeta[], newText: string, ne
   }
   return { oldN, newN, prefix, suffix };
 };
-const expectAlign = (g: CstGrammar, init: string, batches: EditBatch[]): Align => {
+const expectAlign = (g: Grammar, init: string, batches: EditBatch[]): Align => {
   let memo = aligns.get(g);
   if (!memo) aligns.set(g, (memo = new Map()));
   const key = JSON.stringify([init, batches]);
@@ -54,7 +54,7 @@ const expectAlign = (g: CstGrammar, init: string, batches: EditBatch[]): Align =
   if ('error' in hit) throw hit.error;
   return { ...hit.align };
 };
-const computeExpectAlign = (g: CstGrammar, init: string, batches: EditBatch[]): Align => {
+const computeExpectAlign = (g: Grammar, init: string, batches: EditBatch[]): Align => {
   let text = init;
   for (let i = 0; i < batches.length - 1; i++) for (const [s, e, r] of batches[i]) text = text.slice(0, s) + r + text.slice(e);
   const oldText = text;

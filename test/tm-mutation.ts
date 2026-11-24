@@ -26,7 +26,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { generateTmLanguage } from '../src/gen-tm.ts';
 import { createParser } from '../src/gen-parser.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 import { generateInputs } from './grammar-gen.ts';
 import { buildRoleMap, leafRoles, spanBuckets, scopeAt, GEN_OPTS, type TmTok, type Bucket } from './generative-detect.ts';
 import {
@@ -96,7 +96,7 @@ function buildCatalogue(tm: any, paintKey: (w: string, leaf: string) => string |
 
 // ── detectors ──────────────────────────────────────────────────────────────────────
 // corpus-FREE structural detectors (the ones whose guarantee is a-priori, not sampled)
-function structuralCatches(g: CstGrammar, mutated: TmGrammarJson): string[] {
+function structuralCatches(g: Grammar, mutated: TmGrammarJson): string[] {
   const hits: string[] = [];
   const r = checkReachability(g, mutated);
   if (r.dead.length) hits.push(`reachability:dead(${r.dead.join(',')})`);
@@ -138,7 +138,7 @@ function bucketsAt(tm: any, text: string, start: number, len: number): Set<Bucke
 interface Row { grammar: string; label: string; cls: MutClass; equivalent: boolean; killedBy: string[]; survived: boolean; skipped: boolean }
 
 async function runGrammar(name: string, module: string, scope: string): Promise<Row[]> {
-  const g = (await import(module)).default as CstGrammar;
+  const g = (await import(module)).default as Grammar;
   const base = generateTmLanguage(g) as any;
   if (base.scopeName) scope = base.scopeName;
   const baseTm = await loadTmFromObject(scope, { [scope]: base });

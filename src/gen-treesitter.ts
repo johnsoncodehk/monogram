@@ -1,4 +1,4 @@
-import type { CstGrammar, RuleExpr, RuleDecl, TokenPattern } from './types.ts';
+import type { Grammar, RuleExpr, RuleDecl, TokenPattern } from './types.ts';
 import { collectLiterals, isKeywordLiteral, ZERO_WIDTH_MARKERS, isZeroWidthMarker } from './grammar-utils.ts';
 import { buildLr, END, type LeafGraph, type LrAnalysis } from './lr-automaton.ts';
 import { info as tokenPatternInfo, continuesAt, type CSet } from './lex-match-plan.ts';
@@ -8,7 +8,7 @@ import { scopeToCapture, tokenCapture } from './highlight-roles.ts';
 import { tokenPatternFirstCharSet, type TokenPatternFirstSet, tokenPatternIsNever, tokenPatternLiteralPrefix, tokenPatternLiteralPrefixes, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
 
 // ════════════════════════════════════════════════════════════════════════════
-// gen-treesitter — derive a tree-sitter parser package from one CstGrammar.
+// gen-treesitter — derive a tree-sitter parser package from one Grammar.
 //
 // Emits three artifacts, all from grammar DATA (never hardcoded TS tokens):
 //   1. grammar.js              — the tree-sitter DSL grammar (rules + Pratt precs)
@@ -197,7 +197,7 @@ function sanitizeTreeSitterRegex(pattern: string): string {
 // ════════════════════════════════════════════════════════════════════════════
 
 interface GrammarJsContext {
-  grammar: CstGrammar;
+  grammar: Grammar;
   tokenNames: Set<string>;
   /** rule name → snake_case rule name */
   ruleSnake: Map<string, string>;
@@ -296,7 +296,7 @@ function hasMarker(expr: RuleExpr): boolean {
 /** Pre-scan every rule body for named tsRelax groups (`tsRuleName`), collecting name → relaxed
  *  body. Done before conflicts/rules are emitted so the shared rule names are known to
  *  deriveConflicts (a declared tuple may name one) and the bodies can be emitted as shared rules. */
-function collectTsSharedRules(grammar: CstGrammar): Map<string, RuleExpr> {
+function collectTsSharedRules(grammar: Grammar): Map<string, RuleExpr> {
   const out = new Map<string, RuleExpr>();
   const walk = (e: RuleExpr): void => {
     switch (e.type) {
@@ -434,7 +434,7 @@ interface ContextualPlan {
 
 /** Per word-token step node: the words the guards right before it exclude (reservedGuardWords of every
  *  `not` in front of it, through the other zero-width items there). A step without one is absent. */
-function wordStepGuards(grammar: CstGrammar, word: string | undefined, isWordLiteral: (text: string) => boolean): Map<RuleExpr, Set<string>> {
+function wordStepGuards(grammar: Grammar, word: string | undefined, isWordLiteral: (text: string) => boolean): Map<RuleExpr, Set<string>> {
   const out = new Map<RuleExpr, Set<string>>();
   const seen = new Set<RuleExpr>();
   const walk = (e: RuleExpr): void => {
@@ -462,7 +462,7 @@ function wordStepGuards(grammar: CstGrammar, word: string | undefined, isWordLit
   return out;
 }
 
-function planContextualWords(grammar: CstGrammar, graph: TsLeafGraph, word: string, words: string[],
+function planContextualWords(grammar: Grammar, graph: TsLeafGraph, word: string, words: string[],
   isWordLiteral: (text: string) => boolean): ContextualPlan {
   // The words a guard before each word step excludes (wordStepGuards), keyed by the step's node.
   const exclOf = new Map<RuleExpr, Set<string>>([...wordStepGuards(grammar, word, isWordLiteral)].map(([n, ws]) => [n, new Set(ws)]));
@@ -673,7 +673,7 @@ function conflictTuples(graph: TsLeafGraph, lr: LrAnalysis, alsoShifts: (leaf: n
 /** Every word-shaped literal the rendered rules write (renderExpr's literal / sep / Pratt operator
  *  cases, over the tree-sitter view of each group), sorted. buildGrammarJs checks the rendering wrote
  *  no other. */
-function collectWordLiterals(grammar: CstGrammar, isWordLiteral: (text: string) => boolean): string[] {
+function collectWordLiterals(grammar: Grammar, isWordLiteral: (text: string) => boolean): string[] {
   const out = new Set<string>();
   const walk = (e: RuleExpr): void => {
     e = tsView(e);
@@ -846,8 +846,8 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuard
  * given a baseline precedence so atoms don't fight with operators.
  */
 // The shared analysis once per grammar (buildPrattRule runs for every Pratt rule and its copies).
-const bindingPowerCache = new WeakMap<CstGrammar, ReturnType<typeof analyzeGrammar>>();
-function bindingPowers(g: CstGrammar): ReturnType<typeof analyzeGrammar> {
+const bindingPowerCache = new WeakMap<Grammar, ReturnType<typeof analyzeGrammar>>();
+function bindingPowers(g: Grammar): ReturnType<typeof analyzeGrammar> {
   let a = bindingPowerCache.get(g);
   if (!a) bindingPowerCache.set(g, a = analyzeGrammar(g));
   return a;
@@ -864,7 +864,7 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
   const levels = ctx.grammar.precs;
   const nLevels = levels.length;
   const bp = bindingPowers(ctx.grammar);
-  const levelNum = (lvl: CstGrammar['precs'][number], position: 'infix' | 'prefix' | 'postfix'): number => {
+  const levelNum = (lvl: Grammar['precs'][number], position: 'infix' | 'prefix' | 'postfix'): number => {
     const v = lvl.operators.find(o => o.position === position)!.value;
     const n = position === 'prefix' ? bp.prefixOps.get(v)?.rbp : bp.opTable.get(v)?.lbp;
     if (n === undefined) throw new Error(`gen-treesitter: ${position} operator ${v} has no binding power in the shared analysis`);
@@ -1084,7 +1084,7 @@ function renderGreedySuffix(alt: RuleExpr, order: OverlapOrder, ctx: GrammarJsCo
  * An operand that is itself a precedence-climbing rule would carry its own levels: not modelled,
  * so it fails loudly.
  */
-function openTail(self: string, alt: RuleExpr, grammar: CstGrammar): RuleExpr | null {
+function openTail(self: string, alt: RuleExpr, grammar: Grammar): RuleExpr | null {
   const leftRecursive = (e: RuleExpr, name: string) => {
     const v = tsView(e);
     const head = (v.type === 'seq' ? v.items : [v]).find(i => !ASSERTION_KINDS.has(i.type));
@@ -1125,7 +1125,7 @@ function openTailConflicts(ctx: GrammarJsContext): string[][] {
 // `generate`s (no such rules) is byte-identical.
 
 /** Non-start rules whose body can derive ε. `isTerminal` flags tokens / external symbols (never nullable). */
-function computeNullableNonStart(grammar: CstGrammar, startName: string, isTerminal: (name: string) => boolean): Set<string> {
+function computeNullableNonStart(grammar: Grammar, startName: string, isTerminal: (name: string) => boolean): Set<string> {
   const ruleNames = new Set(grammar.rules.map(r => r.name));
   const nullable = new Set<string>();
   const exprNullable = (e: RuleExpr): boolean => {
@@ -1343,7 +1343,7 @@ function tsView(e: RuleExpr): RuleExpr {
   return e.type === 'group' ? tsView(e.tsRelaxed ?? e.body) : e;
 }
 
-function computeTerminalSets(grammar: CstGrammar, tokenNames: Set<string>): TerminalSets {
+function computeTerminalSets(grammar: Grammar, tokenNames: Set<string>): TerminalSets {
   const ops = { op: new Set<string>(), prefix: new Set<string>(), postfix: new Set<string>() };
   for (const lvl of grammar.precs) for (const o of lvl.operators) ops[o.position === 'prefix' ? 'prefix' : o.position === 'postfix' ? 'postfix' : 'op'].add(`'${o.value}`);
   const first = new Map<string, Set<string>>(grammar.rules.map(r => [r.name, new Set<string>()]));
@@ -1477,7 +1477,7 @@ function planReservedSets(guards: string[][]): ReservedSets {
 
 const ASSERTION_KINDS = ZERO_WIDTH_MARKERS;
 
-function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: TerminalSets): { records: AssertionRecord[]; recordOf: Map<RuleExpr, AssertionRecord[]>; nodes: Set<RuleExpr>; reservedSets: ReservedSets; isWordLiteral: (text: string) => boolean } {
+function classifyAssertions(grammar: Grammar, tokenNames: Set<string>, sets: TerminalSets): { records: AssertionRecord[]; recordOf: Map<RuleExpr, AssertionRecord[]>; nodes: Set<RuleExpr>; reservedSets: ReservedSets; isWordLiteral: (text: string) => boolean } {
   const records: AssertionRecord[] = [];
   const recordOf = new Map<RuleExpr, AssertionRecord[]>();
   const nodes = new Set<RuleExpr>();
@@ -1624,7 +1624,7 @@ function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: 
 //   is dropped), else left dropped; likewise a nullable rule or a named tsRelax group in a left corner.
 interface FirstFilterPlan {
   /** The grammar as tree-sitter renders it: the sites rewritten, the copies after their originals. */
-  grammar: CstGrammar;
+  grammar: Grammar;
   /** A copy rule → the rule (or, for a names rule, the word token) whose node it renders as. */
   aliasOf: Map<string, string>;
   /** A copy rule → its hidden snake name. */
@@ -1636,7 +1636,7 @@ interface FirstFilterPlan {
 }
 class FirstFilterResidual extends Error {}
 
-function planFirstFilters(grammar: CstGrammar, tokenNames: Set<string>, sets: TerminalSets, word: string | undefined,
+function planFirstFilters(grammar: Grammar, tokenNames: Set<string>, sets: TerminalSets, word: string | undefined,
   isWordLiteral: (text: string) => boolean, recordOf: Map<RuleExpr, AssertionRecord[]>): FirstFilterPlan {
   const plan: FirstFilterPlan = { grammar, aliasOf: new Map(), snakeOf: new Map(), lowered: new Set(), stepOf: new Map() };
   if (grammar.indent || grammar.newline) return plan;
@@ -2008,7 +2008,7 @@ interface TsLeafGraph extends LeafGraph {
   ruleNames: string[];
 }
 
-function treeSitterLeafGraph(grammar: CstGrammar, tokenNames: Set<string>, scannerTokens: Set<string>, prattRules: Set<string>,
+function treeSitterLeafGraph(grammar: Grammar, tokenNames: Set<string>, scannerTokens: Set<string>, prattRules: Set<string>,
   zeroWidth: Map<RuleExpr, string>, startMarkers: Map<RuleExpr, string[]> = new Map()): TsLeafGraph {
   const sym: string[] = [], nt: number[] = [], rule: number[] = [], follow: number[][] = [], isLast: boolean[] = [];
   const node: (RuleExpr | null)[] = [];
@@ -2148,7 +2148,7 @@ interface ZeroWidthPlan {
 }
 
 
-function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerTokens: Set<string>, prattRules: Set<string>,
+function planZeroWidth(grammar: Grammar, tokenNames: Set<string>, scannerTokens: Set<string>, prattRules: Set<string>,
   isWordLiteral: (text: string) => boolean, reserved: Set<string>, startMarkers: Pick<StartMarkerPlan, 'markerOf' | 'preempts'>): ZeroWidthPlan {
   const plan: ZeroWidthPlan = { tokens: [], tokenOf: new Map(), lowered: new Set() };
   // A grammar with its own line handling (NEWLINE tokens, indentation) has its own scanner rules.
@@ -2412,7 +2412,7 @@ interface StartMarkerPlan {
   report: { rule: string; text: string; rendered: string[]; left: string[]; exact: boolean }[];
 }
 
-function planStartMarkers(grammar: CstGrammar, tokenNames: Set<string>, sets: TerminalSets,
+function planStartMarkers(grammar: Grammar, tokenNames: Set<string>, sets: TerminalSets,
   recordOf: Map<RuleExpr, AssertionRecord[]>, isWordLiteral: (text: string) => boolean): StartMarkerPlan {
   const plan: StartMarkerPlan = { tokens: [], conds: [], markerOf: new Map(), lowered: new Set(), preempts: new Map(), report: [] };
   if (grammar.indent || grammar.newline) return plan;
@@ -2659,7 +2659,7 @@ function uniIdentTokenBody(ascii: string, prefix: string): string {
   return `token(new RustRegex(${jsString(`(?:${ascii})(?:`)} + ${u('continueBeyondAscii')} + ${u('continue')} + ${jsString(`*)?|${pfx}`)} + ${u('startBeyondAscii')} + ${u('continue')} + '*'))`;
 }
 /** The grammar.js constants uniIdentTokenBody reads: each class as one Rust-regex character class. */
-function uniIdentConstants(grammar: CstGrammar): string[] {
+function uniIdentConstants(grammar: Grammar): string[] {
   const idc = identifierClassesOf(grammar.tokens);
   const cp = (c: number) => `\\u{${c.toString(16)}}`;
   const cls = (rs: [number, number][]) => '[' + rs.map(([lo, hi]) => (lo === hi ? cp(lo) : `${cp(lo)}-${cp(hi)}`)).join('') + ']';
@@ -2787,7 +2787,7 @@ function deriveConflicts(ctx: GrammarJsContext): string[][] {
   const templateRules = new Set((ctx.templatePlan?.holes ?? []).flatMap(h => [h.ruleSnake, h.substRuleSnake]));
   for (const tuple of g.treeSitterConflicts ?? []) {
     const unknown = tuple.filter(r => !ruleSnakes.has(r) && !tokenSnakes.has(r) && !ctx.tsSharedRules.has(r) && !templateRules.has(r));
-    if (unknown.length) throw new Error(`${g.name ?? 'grammar'}: treeSitterConflicts [${tuple.join(', ')}] names undefined symbol(s): ${unknown.join(', ')}`);
+    if (unknown.length) throw new Error(`${g.name}: treeSitterConflicts [${tuple.join(', ')}] names undefined symbol(s): ${unknown.join(', ')}`);
     push(tuple);
   }
 
@@ -2868,7 +2868,7 @@ interface TemplatePlan {
   holes: Array<{ rule: string; ruleSnake: string; substRuleSnake: string }>;
 }
 
-function planTemplate(grammar: CstGrammar): TemplatePlan | null {
+function planTemplate(grammar: Grammar): TemplatePlan | null {
   const tok = grammar.tokens.find(t => t.template);
   if (!tok || !tok.template) return null;
   const ruleSnake = toSnake(tok.name);
@@ -2890,7 +2890,7 @@ function planTemplate(grammar: CstGrammar): TemplatePlan | null {
     if (rule === grammar.expressionRule) return { rule, ruleSnake, substRuleSnake };
     const prefixed = `${toSnake(rule)}_${ruleSnake}`;
     if (taken.has(prefixed) || taken.has(`${prefixed}_substitution`)) {
-      throw new Error(`${grammar.name ?? 'grammar'}: the tree-sitter rule for '${tok.name}' with '${rule}' holes would be named '${prefixed}', which the grammar already defines`);
+      throw new Error(`${grammar.name}: the tree-sitter rule for '${tok.name}' with '${rule}' holes would be named '${prefixed}', which the grammar already defines`);
     }
     return { rule, ruleSnake: prefixed, substRuleSnake: `${prefixed}_substitution` };
   });
@@ -2921,7 +2921,7 @@ interface InterpolationPlan {
   regions: { ruleSnake: string; open: string; close: string }[]; // one sub-rule per interpolation entry
 }
 
-function planInterpolations(grammar: CstGrammar): InterpolationPlan[] {
+function planInterpolations(grammar: Grammar): InterpolationPlan[] {
   const plans: InterpolationPlan[] = [];
   for (const tok of grammar.tokens) {
     if (!tok.interpolation?.length) continue;
@@ -2949,7 +2949,7 @@ function planInterpolations(grammar: CstGrammar): InterpolationPlan[] {
  *  (`:(?=\S)`, `#`-after-space) is a look-around a tree-sitter token DFA can't honour, and a typed
  *  value emitted by the regex lexer would not carry the key-vs-value decision the GLR parser needs to
  *  chain top-level mapping entries. Any field may be absent. */
-function planPlainScalarTokens(grammar: CstGrammar): { plain?: string; key?: string; num?: string; boolnull?: string } {
+function planPlainScalarTokens(grammar: Grammar): { plain?: string; key?: string; num?: string; boolnull?: string } {
   if (!grammar.indent) return {};
   // Every token carrying a `blockPattern` is a block-context scalar; emitting num/bool-null from the
   // scanner too (classified by shape) — not via a regex token + decline — keeps every scalar an
@@ -2978,7 +2978,7 @@ function planPlainScalarTokens(grammar: CstGrammar): { plain?: string; key?: str
 const FLOW_CHAR_NAMES: Record<string, string> = {
   '[': 'lbracket', ']': 'rbracket', '{': 'lbrace', '}': 'rbrace', '(': 'lparen', ')': 'rparen',
 };
-function flowSyntheticTokens(grammar: CstGrammar): { sym: string; char: string; open: boolean }[] {
+function flowSyntheticTokens(grammar: Grammar): { sym: string; char: string; open: boolean }[] {
   const ind = grammar.indent;
   if (!ind || !(ind.flowOpen?.length || ind.flowClose?.length)) return [];
   const name = (c: string) => `_flow_${FLOW_CHAR_NAMES[c] ?? `u${c.charCodeAt(0)}`}`;
@@ -2995,7 +2995,7 @@ function flowSyntheticTokens(grammar: CstGrammar): { sym: string; char: string; 
  * INTERNAL tokens; see planScannerTokens). Longest glyph first (so a 3-char glyph beats a prefix of
  * it). Empty unless the grammar declares documentMarkers.
  */
-function documentMarkerGlyphs(grammar: CstGrammar): string[] {
+function documentMarkerGlyphs(grammar: Grammar): string[] {
   const markers = grammar.indent?.blockScalar?.documentMarkers;
   if (!markers || markers.length === 0) return [];
   const out = new Set<string>();
@@ -3007,7 +3007,7 @@ function documentMarkerGlyphs(grammar: CstGrammar): string[] {
 }
 
 /** Determine which tokens the external scanner must provide. */
-function planScannerTokens(grammar: CstGrammar): Map<string, string> {
+function planScannerTokens(grammar: Grammar): Map<string, string> {
   const map = new Map<string, string>();
   // A newline-sensitive grammar's NEWLINE token is engine-emitted; in tree-sitter it becomes a
   // stateless external token (the scanner emits it at each significant line boundary). Listed
@@ -3077,7 +3077,7 @@ function externalSymbols(ctx: GrammarJsContext): string[] {
 // supported yet (a generated external scanner is the next increment). No external
 // tokens → no scanner.c. Void elements use a higher-precedence `_void_name` token so
 // `<br>` never enters the container branch (the same idea as the parser's VoidName).
-function buildMarkupTreeSitter(grammar: CstGrammar, grammarName: string): Omit<TreeSitterOutput, 'treeSitterJson'> {
+function buildMarkupTreeSitter(grammar: Grammar, grammarName: string): Omit<TreeSitterOutput, 'treeSitterJson'> {
   const m = grammar.markup!;
   const idTok = grammar.tokens.find(t => t.identifier);
   const namePat = idTok ? tokenPatternSource(idTok) : '[a-zA-Z][\\w:.-]*';
@@ -3214,8 +3214,8 @@ bool tree_sitter_${grammarName}_external_scanner_scan(void *payload, TSLexer *le
   return { grammarJs, highlightsScm, scannerC, externalTokens: ['raw_text'], assertions: [] };
 }
 
-export function generateTreeSitter(grammar: CstGrammar, langName?: string): TreeSitterOutput {
-  const name = (langName ?? (grammar as { name?: string }).name ?? 'language');
+export function generateTreeSitter(grammar: Grammar, langName?: string): TreeSitterOutput {
+  const name = (langName ?? grammar.name);
   const grammarName = toSnake(name);
   // Markup languages (HTML/Vue) get the purpose-built markup grammar, not the token-stream one.
   const out = grammar.markup ? buildMarkupTreeSitter(grammar, grammarName) : buildTokenTreeSitter(grammar, grammarName);
@@ -3225,14 +3225,14 @@ export function generateTreeSitter(grammar: CstGrammar, langName?: string): Tree
 /** tree-sitter.json, the package's tree-sitter metadata. `tree-sitter generate` emits ABI 15 only
  *  for a package that has one (it reads `metadata.version`); without it the parser is ABI 14, which
  *  has no reserved word sets: a 0.26 CLI then drops grammar.js's `reserved` silently. */
-function buildTreeSitterJson(grammar: CstGrammar, grammarName: string): string {
+function buildTreeSitterJson(grammar: Grammar, grammarName: string): string {
   return JSON.stringify({
     grammars: [{ name: grammarName, scope: grammar.scopeName ?? `source.${grammarName}`, path: '.', highlights: 'queries/highlights.scm' }],
     metadata: { version: '0.0.0', license: 'MIT' },
   }, null, 2);
 }
 
-function buildTokenTreeSitter(source: CstGrammar, grammarName: string): Omit<TreeSitterOutput, 'treeSitterJson'> {
+function buildTokenTreeSitter(source: Grammar, grammarName: string): Omit<TreeSitterOutput, 'treeSitterJson'> {
   const tokenNames = new Set(source.tokens.map(t => t.name));
   // The ledger is the source grammar's; the one-token lookaheads it leaves dropped render as
   // FIRST-filtered copies (planFirstFilters), and everything below renders the grammar with them.
@@ -3291,7 +3291,7 @@ function buildTokenTreeSitter(source: CstGrammar, grammarName: string): Omit<Tre
   if (Array.isArray(declared)) {
     const read = new Set([...contextual?.plan.values() ?? []].flat());
     const idle = declared.filter(w => !read.has(w));
-    if (idle.length) throw new Error(`${grammar.name ?? 'grammar'}: treeSitterContextualNames lists ${idle.join(', ')}, which no word step reads as a name`);
+    if (idle.length) throw new Error(`${grammar.name}: treeSitterContextualNames lists ${idle.join(', ')}, which no word step reads as a name`);
   }
   const ctx: GrammarJsContext = {
     grammar, tokenNames, ruleSnake, tokenSnake, prattRules, externalSnake, scannerTokenFor, zeroWidth,
@@ -3327,7 +3327,7 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
   const lines: string[] = [];
 
   lines.push('/**');
-  lines.push(' * @file Tree-sitter grammar generated by monogram from a single CstGrammar.');
+  lines.push(' * @file Tree-sitter grammar generated by monogram from a single Grammar.');
   lines.push(' * @license MIT');
   lines.push(' *');
   lines.push(' * GENERATED — do not edit by hand. Regenerate from the source grammar.');
@@ -3594,7 +3594,7 @@ interface ScmRule {
  * identifier fallback.
  */
 function buildHighlightsScm(
-  grammar: CstGrammar,
+  grammar: Grammar,
   ctx: GrammarJsContext,
   nameFieldsByRule: { rule: string; capture: string; keyword: string }[],
 ): string {
@@ -3956,7 +3956,7 @@ interface NameFieldPlan {
  * may be separated from the keyword by non-keyword literals (e.g. `function *`),
  * mirroring detectDeclarations' nameIdx scan.
  */
-function collectNameFields(grammar: CstGrammar): NameFieldPlan {
+function collectNameFields(grammar: Grammar): NameFieldPlan {
   const tokenNames = new Set(grammar.tokens.map(t => t.name));
   const identName = grammar.tokens.find(t => t.identifier)?.name;
   const ruleSnake = new Map(grammar.rules.map(r => [r.name, toSnake(r.name)]));
@@ -4039,7 +4039,7 @@ function ruleBranches(body: RuleExpr): RuleExpr[][] {
 }
 
 /** Rules whose elements are separated/placed inside `< … >` — type params and args. */
-function angleTypeRules(grammar: CstGrammar): Set<string> {
+function angleTypeRules(grammar: Grammar): Set<string> {
   const out = new Set<string>();
   const walk = (e: RuleExpr): void => {
     if (e.type === 'seq') {
@@ -4074,7 +4074,7 @@ function isNameForm(item: RuleExpr, tokenNames: Set<string>): boolean {
 }
 
 /** Rules that are a pure alternation of name forms — the PropertyName / member-key rule. */
-function propertyNameRules(grammar: CstGrammar, identName: string, tokenNames: Set<string>): Set<string> {
+function propertyNameRules(grammar: Grammar, identName: string, tokenNames: Set<string>): Set<string> {
   const out = new Set<string>();
   for (const r of grammar.rules) {
     if (r.body.type !== 'alt') continue; // a property-name rule is an ALTERNATION of name forms
@@ -4103,7 +4103,7 @@ function refsDirectly(e: RuleExpr, name: string): boolean {
   }
 }
 
-function typeMemberRules(grammar: CstGrammar): Set<string> {
+function typeMemberRules(grammar: Grammar): Set<string> {
   const ruleNames = new Set(grammar.rules.map(r => r.name));
   const typeFlagged = new Set(grammar.rules.filter(r => r.flags.includes('type')).map(r => r.name));
   const out = new Set<string>();
@@ -4138,7 +4138,7 @@ function typeMemberRules(grammar: CstGrammar): Set<string> {
 /** Rules whose EVERY branch is `[ nameRule, opt(…) ]` → exclusively value members
  *  (an enum body), as opposed to a class body that merely has such a branch among
  *  methods/accessors. Maps rule → its nameRule. */
-function valueMemberRules(grammar: CstGrammar, propNameRules: Set<string>): Map<string, string> {
+function valueMemberRules(grammar: Grammar, propNameRules: Set<string>): Map<string, string> {
   const out = new Map<string, string>();
   for (const r of grammar.rules) {
     const branches = ruleBranches(r.body);
@@ -4158,7 +4158,7 @@ function valueMemberRules(grammar: CstGrammar, propNameRules: Set<string>): Map<
 }
 
 /** Does the grammar have a `.`/`?.` property access (literal followed by the identifier token)? */
-function hasPropertyAccess(grammar: CstGrammar, identName: string): boolean {
+function hasPropertyAccess(grammar: Grammar, identName: string): boolean {
   let found = false;
   const walk = (e: RuleExpr): void => {
     if (e.type === 'seq') {
@@ -4179,7 +4179,7 @@ function hasPropertyAccess(grammar: CstGrammar, identName: string): boolean {
  *  KEY is a property name. The trailing rule ref distinguishes it from a shorthand
  *  binding (`{ a }`, where the identifier IS the binding), so the capture is anchored
  *  on that element. Returns rule → the element-rule that must follow the key. */
-function bindingKeyRules(grammar: CstGrammar, identName: string): Map<string, string> {
+function bindingKeyRules(grammar: Grammar, identName: string): Map<string, string> {
   const out = new Map<string, string>();
   for (const r of grammar.rules) {
     for (const b of ruleBranches(r.body)) {
@@ -4555,7 +4555,7 @@ function cCharList(s: string): string {
 // struct and is (de)serialized for incremental re-parsing. Block-scalar bodies are scanned verbatim
 // up to the first line at or below the parent indentation. All language data (the comment introducer,
 // the block-scalar introducer chars, the document markers) is DERIVED from `grammar.indent`.
-function buildIndentScannerC(grammar: CstGrammar, ctx: GrammarJsContext, grammarName: string): { scannerC: string; externalTokens: string[] } {
+function buildIndentScannerC(grammar: Grammar, ctx: GrammarJsContext, grammarName: string): { scannerC: string; externalTokens: string[] } {
   const ind = grammar.indent!;
   const externalTokens = externalSymbols(ctx); // order MUST match grammar.js externals
   const sym = (tokenName: string) => ctx.scannerTokenFor.get(tokenName)!.toUpperCase();
@@ -5195,7 +5195,7 @@ ${flowTokens.map(t => `    if (fc == ${charLit(t.char)} && valid_symbols[${t.sym
 }
 
 function buildScannerC(
-  grammar: CstGrammar,
+  grammar: Grammar,
   ctx: GrammarJsContext,
   grammarName: string,
 ): { scannerC: string; externalTokens: string[] } {
@@ -5214,7 +5214,7 @@ function buildScannerC(
   L.push('// COMPLETE — the regex-literal scan and the template-literal scan are both');
   L.push('// wired from the grammar\'s token hints (`regexContext` and `template`).');
   L.push('//');
-  L.push('// All language-specific data below is DERIVED from the CstGrammar, not');
+  L.push('// All language-specific data below is DERIVED from the Grammar, not');
   L.push('// hardcoded: the regex flag chars and the template delimiters all come from');
   L.push('// the grammar\'s token hints.');
   L.push('');

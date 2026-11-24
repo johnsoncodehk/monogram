@@ -36,7 +36,7 @@
 
 import { token, rule, defineGrammar, sameLine, sep, opt, many, alt, seq, plus, star, noneOf, oneOf, range, altPattern, optPattern, notFollowedBy } from './src/api.ts';
 import javascript, { Ident, Number_, String_ } from './javascript.ts';
-import type { CstGrammar, RuleDecl, TokenDecl, RuleExpr, ElementRegion } from './src/types.ts';
+import type { Grammar, RuleDecl, TokenDecl, RuleExpr, ElementRegion } from './src/types.ts';
 
 // The element region's own tokens (see ELEMENTS below): each exists only inside an element.
 // `/>` ends a self-closing tag, `</` opens a close tag in the children, and a children text run
@@ -162,7 +162,7 @@ const isLiteral = (e: RuleExpr, v: string): boolean => e.type === 'literal' && e
 
 /** Turn an ECMAScript-family base grammar into its React/JSX dialect. Imported by
  *  typescriptreact.ts. See the file header for why this post-processes the built grammar. */
-export function withJsx(base: CstGrammar, opts: { name: string; scopeName: string }): CstGrammar {
+export function withJsx(base: Grammar, opts: { name: string; scopeName: string }): Grammar {
   const hasTypes = base.rules.some(r => r.name === 'Type');
   const jsx = buildJsxDecls(hasTypes);
 

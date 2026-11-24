@@ -9,7 +9,7 @@ import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBo
 import type { ArmForm } from './declared-targets.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_AMAX, RM_FAIL, RM_PROBE, RM_SP, nativeCases, shorterDispatch } from './recovery-family.ts';
 import type { EmitOptions } from './target.ts';
-import type { CstGrammar } from './types.ts';
+import type { Grammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
   RuleShape, TokenLeafPolicy, ShapeIRRule, CustomShape, KeepShape,
@@ -3452,7 +3452,7 @@ export const tsTarget = defineParserTarget({
   name: 'typescript',
   ext: 'ts',
   lowering: tsLowering,
-  emitParser(grammar: CstGrammar, shared: SharedAlgorithms, opts: EmitOptions): string {
+  emitParser(grammar: Grammar, shared: SharedAlgorithms, opts: EmitOptions): string {
     const ir = portableIR(grammar, FACTS);
     if (opts.shape) {
       if (opts.recovery) throw new Error('tsTarget: a shape-building parser has no total parsing yet (emit options `shape` and `recovery` together)');
@@ -3834,7 +3834,7 @@ if (_editFast || process.argv.includes('edit-session')) {
 }
 
 /** Emit TS parser; optional shape appends AST types + specialized parseAst. Without shape, byte-identical to tsTarget.emitParser(grammar). */
-export function emitTs(grammar: CstGrammar, opts?: { shape?: ShapeSpec }): string {
+export function emitTs(grammar: Grammar, opts?: { shape?: ShapeSpec }): string {
   const ir = portableIR(grammar, FACTS);
   const ids = buildLexIdPlan(ir);
   const base = emitTsLibrary(ir, ids, tsTarget.shared);

@@ -45,7 +45,7 @@ import {
 } from '../src/api.ts';
 import { tokenPatternToRegex, tokenPatternIsNever, tokenPatternLiteralText } from '../src/token-pattern.ts';
 import { collectLiterals, isKeywordLiteral } from '../src/grammar-utils.ts';
-import type { RuleExpr, TokenPattern, CstGrammar } from '../src/types.ts';
+import type { RuleExpr, TokenPattern, Grammar } from '../src/types.ts';
 import { generateTmLanguage } from '../src/gen-tm.ts';
 import { createParser } from '../src/gen-parser.ts';
 import { generateInputs } from './grammar-gen.ts';
@@ -118,7 +118,7 @@ function checkRuleExprClosure(): void {
   const Pratt = rule(($: any) => [[$, op, $], [prefix, $], [$, postfix]]); // op/prefix/postfix
   const Entry = rule(($: any) => [[many(alt(Leaf, Refs, Quant, Alt, Sep, Group, Nots, Markers, Pratt))]]);
 
-  let threw = false; let g: CstGrammar;
+  let threw = false; let g: Grammar;
   try {
     g = defineGrammar({
       name: 'closure', tokens: { A, B },
@@ -186,7 +186,7 @@ export interface TmGrammarJson { patterns?: unknown[]; repository?: Record<strin
 // not from the root but by an explicit `<scope>#<key>` include: the #expression sub-grammar
 // (expressionRule) and the canonicalRepoNames OFFICIAL keys (and aliasScopes, which re-expose
 // the whole grammar). These are root-UNreachable BY DESIGN (a public repository API).
-function exportSurfaceKeys(g: CstGrammar): string[] {
+function exportSurfaceKeys(g: Grammar): string[] {
   const out: string[] = [];
   if (g.expressionRule) out.push('expression');
   for (const k of Object.keys(g.canonicalRepoNames ?? {})) out.push(k);
@@ -195,7 +195,7 @@ function exportSurfaceKeys(g: CstGrammar): string[] {
 
 export interface ReachResult { repoKeys: number; reached: number; dead: string[]; danglingWithSource: string[] }
 
-export function checkReachability(g: CstGrammar, tm: TmGrammarJson): ReachResult {
+export function checkReachability(g: Grammar, tm: TmGrammarJson): ReachResult {
   const scope = tm.scopeName ?? g.scopeName ?? `source.${g.name}`;
   const repo = tm.repository ?? {};
   const reached = new Set<string>();
@@ -243,7 +243,7 @@ export function checkReachability(g: CstGrammar, tm: TmGrammarJson): ReachResult
 //  owns the token's delimiter (the JSX `/>` / `</` punctuation, scoped inside the JSX patterns).
 //  An ORPHAN — a non-skip token with no discharge path — is an emitter-completeness gap.
 export interface TokenCensus { total: number; skip: number; byPath: Record<string, number>; orphans: string[]; neutered: string[] }
-export function tokenCensus(g: CstGrammar, tmJson: TmGrammarJson): TokenCensus {
+export function tokenCensus(g: Grammar, tmJson: TmGrammarJson): TokenCensus {
   const repo = tmJson.repository ?? {};
   const root = tmJson.scopeName ?? `source.${g.name}`;
   const full = JSON.stringify(tmJson);
@@ -335,7 +335,7 @@ export interface CoverageResult { den: number; painted: number; uncovered: { tex
 // under test — compute once, then check any number of TM grammars against them.
 export interface LeafObligations { text: string; leaves: { text: string; start: number; end: number; want: string }[] }
 
-export function contentObligations(grammar: CstGrammar, opts = GEN_OPTS): LeafObligations[] {
+export function contentObligations(grammar: Grammar, opts = GEN_OPTS): LeafObligations[] {
   const { parse } = createParser(grammar);
   const roleOf = buildRoleMap(grammar);
   const out: LeafObligations[] = [];
@@ -375,7 +375,7 @@ export function leafCoverage(tm: vsctm.IGrammar, obligations: LeafObligations[])
 const KEYWORD_FAMILY = /^(keyword|storage|constant\.language|support\.(type|class|function|constant)|variable\.language|entity\.name\.(type|tag)|punctuation\.definition\.keyword)/;
 
 // every reachable pattern NODE (root ∪ export surfaces), the same closure as checkReachability
-function reachableNodes(g: CstGrammar, tmJson: TmGrammarJson): any[] {
+function reachableNodes(g: Grammar, tmJson: TmGrammarJson): any[] {
   const scope = tmJson.scopeName ?? `source.${g.name}`;
   const repo = (tmJson.repository ?? {}) as Record<string, any>;
   const reached = new Set<string>(); const queue: string[] = []; const out: any[] = [];
@@ -408,7 +408,7 @@ function scopedAtoms(nodes: any[]): Set<string> {
   return out;
 }
 export interface LiteralDischarge { obl: number; gaps: string[] }
-export function literalDischarge(g: CstGrammar, tmJson: TmGrammarJson): LiteralDischarge {
+export function literalDischarge(g: Grammar, tmJson: TmGrammarJson): LiteralDischarge {
   const scoped = scopedAtoms(reachableNodes(g, tmJson));
   const lits = new Set<string>();
   for (const r of g.rules) for (const l of collectLiterals(r.body)) if (isKeywordLiteral(l)) lits.add(l.replace(/^@/, ''));
@@ -777,7 +777,7 @@ interface LedgerRow {
   keyObl: number; keyReach: number;            // repository keys, each → reachable
   leafObl: number; leafPaint: number;          // empirical content/keyword leaves (the corpus cross-check)
 }
-function ledgerRow(name: string, g: CstGrammar, r: ReachResult, tc: TokenCensus, ld: LiteralDischarge, cov: CoverageResult): LedgerRow {
+function ledgerRow(name: string, g: Grammar, r: ReachResult, tc: TokenCensus, ld: LiteralDischarge, cov: CoverageResult): LedgerRow {
   const nonSkip = g.tokens.filter(t => !t.flags.includes('skip')).length;
   return {
     name,
@@ -844,7 +844,7 @@ async function main(): Promise<void> {
   const rows: LedgerRow[] = [];
   for (const cfg of GRAMMARS) {
     if (!existsSync(cfg.tm)) { console.log(`  ${cfg.name}: (no emitted grammar)`); continue; }
-    const g = (await import(cfg.module)).default as CstGrammar;
+    const g = (await import(cfg.module)).default as Grammar;
     const tmJson = JSON.parse(readFileSync(cfg.tm, 'utf8')) as TmGrammarJson;
     const r = checkReachability(g, tmJson);
     check(`reachability(${cfg.name}): no dead repository keys`, r.dead.length === 0, r.dead.join(', '));
