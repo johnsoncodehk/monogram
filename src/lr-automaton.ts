@@ -43,6 +43,9 @@ export interface LrOptions {
   /** Further terminals that also shift a terminal leaf (a keyword the grammar reads as the word
    *  token there): the leaf is advanced by each of them too, and each is valid where it is. */
   alsoShifts?: (leaf: number) => Iterable<string>;
+  /** A terminal the lexer returns before the ones listed (a zero-width token its scanner returns
+   *  wherever it is valid and one of them comes next): a state that shifts it shifts none of them. */
+  preempts?: ReadonlyMap<string, readonly string[]>;
 }
 
 export interface LrState {
@@ -146,9 +149,11 @@ export function buildLr(g: LeafGraph, opts: LrOptions = {}): LrAnalysis {
       add(g.sym[l], l);
       if (g.nt[l] < 0) for (const t of also(l)) add(t, l);
     }
+    const gone = new Set<string>();
+    for (const [z, ts] of opts.preempts ?? []) if (bySym.has(z)) for (const t of ts) if (bySym.delete(t)) gone.add(t);
     const goto = new Map<string, number>();
     for (const [sym, ls] of bySym) goto.set(sym, intern([...ls].sort((a, b) => a - b)));
-    states.push({ items, next: [...new Set(next)], goto });
+    states.push({ items, next: [...new Set(next)].filter(l => !gone.has(g.sym[l])), goto });
   }
 
   // ── LALR(1) lookaheads of the kernel items, to a fixpoint ──
@@ -179,7 +184,8 @@ export function buildLr(g: LeafGraph, opts: LrOptions = {}): LrAnalysis {
     const { items, goto } = states[s];
     const la = closureLa(s);
     const push = (sym: string, l: number, i: number) => {
-      const t = goto.get(sym)!;
+      const t = goto.get(sym);
+      if (t === undefined) return;   // a preempted terminal: not shifted here
       if (orInto(kla[t], kernelPos[t].get(l)! * W, la, i * W) && !queued[t]) { queued[t] = 1; work.push(t); }
     };
     for (let i = 0; i < items.length; i++) for (const l of nextOf(items[i])) {

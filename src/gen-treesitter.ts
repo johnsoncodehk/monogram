@@ -2149,7 +2149,7 @@ interface ZeroWidthPlan {
 
 
 function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerTokens: Set<string>, prattRules: Set<string>,
-  isWordLiteral: (text: string) => boolean, reserved: Set<string>, startMarkers: Map<RuleExpr, string[]>): ZeroWidthPlan {
+  isWordLiteral: (text: string) => boolean, reserved: Set<string>, startMarkers: Pick<StartMarkerPlan, 'markerOf' | 'preempts'>): ZeroWidthPlan {
   const plan: ZeroWidthPlan = { tokens: [], tokenOf: new Map(), lowered: new Set() };
   // A grammar with its own line handling (NEWLINE tokens, indentation) has its own scanner rules.
   if (grammar.indent || grammar.newline) return plan;
@@ -2209,8 +2209,8 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
   // every other candidate renders as nothing (as a dropped one will) ──
   const analyze = (live: Set<number>) => {
   const termOf = new Map(cands.flatMap((c, i) => live.has(i) ? [[c.node, `@zw${i}`] as [RuleExpr, string]] : []));
-  const graph = treeSitterLeafGraph(grammar, tokenNames, scannerTokens, prattRules, termOf, startMarkers);
-  const lr = buildLr(graph);
+  const graph = treeSitterLeafGraph(grammar, tokenNames, scannerTokens, prattRules, termOf, startMarkers.markerOf);
+  const lr = buildLr(graph, { preempts: startMarkers.preempts });
   const after = cands.map(() => new Set<string>()), cont = cands.map(() => new Set<string>());
   const together: number[][] = [];   // the candidates SHIFTED in one state, per state where several are
   const afterGuards = cands.map(() => new Map<string, Set<string>>());
@@ -2400,13 +2400,15 @@ interface StartMarkerPlan {
   markerOf: Map<RuleExpr, string[]>;
   /** The `not` nodes rendered exactly (the ledger's `lowered`). */
   lowered: Set<RuleExpr>;
+  /** A marker its first token alone decides → that token (the zero-width analysis's `preempts`). */
+  preempts: Map<string, string[]>;
   /** Per `not` node met at an alternative's start: the paths rendered and the ones left (why). */
   report: { rule: string; text: string; rendered: string[]; left: string[]; exact: boolean }[];
 }
 
 function planStartMarkers(grammar: CstGrammar, tokenNames: Set<string>, sets: TerminalSets,
   recordOf: Map<RuleExpr, AssertionRecord[]>, isWordLiteral: (text: string) => boolean): StartMarkerPlan {
-  const plan: StartMarkerPlan = { tokens: [], conds: [], markerOf: new Map(), lowered: new Set(), report: [] };
+  const plan: StartMarkerPlan = { tokens: [], conds: [], markerOf: new Map(), lowered: new Set(), preempts: new Map(), report: [] };
   if (grammar.indent || grammar.newline) return plan;
   const word = grammar.tokens.find(t => t.identifier)?.name;
   const armItems = (a: RuleExpr) => { const v = tsView(a); return v.type === 'seq' ? v.items : [v]; };
@@ -2587,6 +2589,18 @@ function planStartMarkers(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
     if (!direct.has(n)) for (const x of viaLeft.get(n) ?? []) if (!r.rendered.includes(x) && !r.left.includes(x)) r.left.push(`${x}: no other alternative can start with it`);
     r.exact = !r.left.length;
     if (r.exact) plan.lowered.add(n);
+  }
+  // A marker returned wherever it is valid and its first token comes next (each condition it stands
+  // for holds on that token alone, and no other condition of its choice can hold there): scan_starts
+  // runs before every other token, so a parse state that shifts the marker never shifts that token
+  // itself. Without this the zero-width analysis reads the marker-free reading of the token there
+  // (`function` after `if (x)` as an expression statement's function expression, merged with the
+  // Annex B declaration's state), which no input reaches.
+  for (const t of plan.tokens) {
+    const k = elemKey(t.first);
+    const holds = (c: number) => plan.conds[c].some(p => elemKey(p.first) === k && p.second === undefined);
+    const may = (c: number) => plan.conds[c].some(p => elemKey(p.first) === k);
+    if (t.conds.every((c, j) => t.killed & (1 << j) ? holds(c) : !may(c))) plan.preempts.set(t.snake, [k]);
   }
   return plan;
 }
@@ -3254,7 +3268,7 @@ function buildTokenTreeSitter(source: CstGrammar, grammarName: string): Omit<Tre
   for (const n of startMarkers.lowered) for (const rec of assertions.recordOf.get(n)!) rec.cls = 'lowered';
   for (const t of startMarkers.tokens) externalSnake.add(t.snake);
   const zeroWidth = planZeroWidth(grammar, tokenNames, new Set(scannerTokenFor.keys()), prattRules, assertions.isWordLiteral,
-    new Set(assertions.reservedSets.sets[0]?.words ?? []), startMarkers.markerOf);
+    new Set(assertions.reservedSets.sets[0]?.words ?? []), startMarkers);
   for (const n of zeroWidth.lowered) for (const rec of assertions.recordOf.get(n)!) rec.cls = 'lowered';
   for (const t of zeroWidth.tokens) externalSnake.add(t.snake);
   const wordTok = grammar.tokens.find(t => t.identifier)?.name;
