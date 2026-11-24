@@ -79,7 +79,9 @@ reads the same facts from its table, and `test/ir-engine.ts` mirrors them), and 
 which compare every target with the interpreter, verdict and CST (gate
 `emit-parity/portable-targets/lists`), and each row's verdict was checked against tsc (and acorn for
 JavaScript). **R** means the row was argued from the code: the mechanism has no portable
-counterpart, so there is nothing to compare.
+counterpart, so there is nothing to compare. **W** means the argument has a witness that fails if
+it is wrong (a verify mode run over the corpora); **A** means it is an assertion the engine checks on
+every parse.
 
 A change to an engine mechanism is checked on both shipped language families: JavaScript /
 TypeScript (the lists, test262, the tsc corpora) and Python (`conformance/cpython`). The first time
@@ -104,11 +106,11 @@ interpreter. Where that argument cannot be made for a row, the row says so.
 | Capped NUD (`capExpr`, an arrow; the `yield` arm): a candidate only when `minBp < capBp`; once it wins, no led | `nudCapped` + `capBp`; the capped flag | `capBelow`; `bpOpen` returns at once when capped | `CAP_PROPAGATION` | V |
 | Cap propagation through a binary right operand (`a = () => {} \|\| x` rejects) | `binary` lowering | `PrattLowering.binary` | `CAP_PROPAGATION` (`b = a = () => {} \|\| c`) | V |
 | Cap propagation through a trailing operand: a node whose rightmost child is a self operand at bp 0 that returned capped is capped (`a ? b : () => {} \|\| x`, `[...() => {} \|\| x]` reject) | `ledCapsFromTail`, `nudBracketCapsFromTail`, `nudSeqCapsFromTail`; `NodeCap` | `ledArm(…, capsFromTail)`, `nudSeq` / `commitSeq` with `NodeCap` | `CAP_PROPAGATION` (`a ? b : () => {} ? c : d`, `f(...() => {} \|\| x)`), `REBIND.ts` (`let v = a ? (b) : c => {} \|\| x;`) | V |
-| The packrat memo over Pratt / leftRec rules, keyed by (rule, start); bypassed under a suppress set or a re-bind cap; the entry is {node, end, capped} | none: the portable engine has no memo (a re-parse yields the same result) | — | — | R: a pure function of (rule, start) outside suppress and cap, and now it also carries the cap that the only post-call reader (above) reads |
+| The packrat memo over Pratt / leftRec rules, keyed by (rule, start); bypassed under a suppress set or a re-bind cap; the entry is {node, end, capped} | none: the portable engine has no memo (a re-parse yields the same result) | — | `MONOGRAM_MEMO_VERIFY=1`: every hit is parsed again and must give the recorded end, cap and tree, or the parse throws; run over the tsc conformance corpus, test262 `language/` and CPython `Lib/`: no assertion (2026-11-24) | W: a pure function of (rule, start) outside suppress and cap, and it carries the cap that the only post-call reader (above) reads; the witness re-checks it on any corpus |
 | Prefix NUD and `requireTarget` (`++-x` rejects) | `prefix[]` with `requireTarget`, `form` | `nudPrefix` / `commitPrefix` | `++-x`, `++ ++x` | V |
 | Assignment-target form: an operator node is not a target; a prefix-unary node is not a `noUnaryLhs` operand; the middle-child test applies only to LED-built nodes | `AssignForm`: `ledForm`, `prefix[].form`, `FORM_*` | `binary` (`tgt` / `noUnary`), `postfixOp` | `x = class as {} = 1;`, `-x ** y`, `a + b = c` | V |
 | Non-op LEDs: the `ledPrecOf` lbp gate, a chain-rhs operand at its level's bp (`in`, `instanceof`) | `ledLbp`, `Step ruleBp` | `led.lbpAbove`, `ruleBp` step | `a == b ? c : d`, `a in b in c` | V |
-| `maxBp <= minBp` skip of the non-op LEDs | none | — | — | R: dead by arithmetic; `maxBp = (levels+1)*2` and every `minBp` is 0, an rbp (at most `2*levels`) or a chain rhsBp (at most its lbp) |
+| `minBp < maxBp` at every Pratt call (it was a `maxBp <= minBp` skip of the non-op LEDs, dead by arithmetic, now removed) | none | — | `parsePratt` throws when a caller passes `minBp >= maxBp`; every corpus parse checks it | A: `maxBp = (levels+1)*2` and every `minBp` is 0, an rbp (at most `2*levels`) or a chain rhsBp (at most its lbp); an assertion, not a branch |
 | Access tails and tail closure: once a postfix, prefix or binary node, or a tail-closing LED, is built, no `.x` / `(…)` / `[…]` / tagged template | `ledAccessTail`, `ledClosesTail`, `nud*ClosesTail` | `led.tailOpen`, `postfixToks` | `a++.b`, `new a?.b` | V |
 | A led ending in a NEGATIVE lookahead closes the tail (`f<T>` then no `(`: `f<T>.x` rejects); a positive one (`not(not(X))`) asserts that a continuation follows and leaves it open | `ledClosesTail` (look / ahead / aheadCtx with `is` false) | as above | `let x = f<T>.x;` (reject); lookrec `set a.b.c[1] = x;` (accept) | V |
 | The tail closure for leftRec rules' continuations (`type A = keyof void.x;`) | `buildPratt` computes it for leftRec rules too | as above | `keyof void.x` rows | V |
@@ -121,7 +123,9 @@ interpreter. Where that argument cannot be made for a row, the row says so.
 
 Not argued by the table: the interpreter's indent / markup / `noCommentBefore` mechanisms. Their
 grammars are refused by the portable engine, so no comparison exists. Their argument is the
-refusal, and an engine for those grammars owes its own rows.
+refusal, and an engine for those grammars owes its own rows. Indent becomes checkable when the
+Python lane's offside layer reaches the portable engine: from then on its row is a V row, compared
+on `python.ts` (the lists and conformance/cpython) as the others are.
 
 ## Where the record of each file lives
 

@@ -345,6 +345,7 @@ export function createParser(grammar: CstGrammar) {
     // cap (`_prattCapped`): a hit restores it, so a construct that reads it after a
     // trailing self operand (cap propagation) sees the same flag as a fresh parse.
     const memo = new Map<string, Map<number, { node: CstNode | null; end: number; capped: boolean }>>();
+    let memoVerifying = false;   // inside a MEMO_VERIFY re-parse
 
     // Bounded-parse cap (token index). When >= 0, no token at index >= parseLimit
     // may be consumed — i.e. a sub-parse is forced to stop before that token. Used
@@ -494,17 +495,23 @@ export function createParser(grammar: CstGrammar) {
       const start = pos;
       let m = memo.get(name);
       const hit = !mySup && !capped ? m && m.get(start) : undefined;
-      if (hit !== undefined && !MEMO_VERIFY) { pos = hit.end; _prattCapped = hit.capped; return hit.node; }
+      // A hit met inside a verifying re-parse is returned: verifying it too would re-parse every
+      // nesting level again (exponential in depth); each entry is still verified where it is hit
+      // outside one.
+      const verify = hit !== undefined && MEMO_VERIFY && !memoVerifying;
+      if (hit !== undefined && !verify) { pos = hit.end; _prattCapped = hit.capped; return hit.node; }
 
       const prevSup = suppressCur;
       suppressCur = mySup;
       let result: CstNode | null;
+      if (verify) memoVerifying = true;
       try {
         result = isPratt ? parsePratt(rule, 0) : parseLeftRec(rule);
       } finally {
         suppressCur = prevSup;
+        if (verify) memoVerifying = false;
       }
-      if (hit !== undefined) {   // MEMO_VERIFY: the entry must be what the parse it stands for returns
+      if (verify) {   // MEMO_VERIFY: the entry must be what the parse it stands for returns
         const nowCapped = isPratt && result !== null && _prattCapped;
         if (hit.end !== pos || hit.capped !== nowCapped || !sameCst(hit.node, result)) {
           throw new Error(`memo: ${name} at token ${start} recorded {end ${hit.end}, capped ${hit.capped}} but re-parses to {end ${pos}, capped ${nowCapped}}${sameCst(hit.node, result) ? '' : ', another tree'}`);
