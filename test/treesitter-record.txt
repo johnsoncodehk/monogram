@@ -5,8 +5,6 @@ javascript | lookaheads | accepts | unclassified | "try {}"
 javascript | lookaheads | accepts | unclassified | "x = () => {}.x;"
 javascript | lookaheads | accepts | unclassified | "x = a => {}.y;"
 javascript | lookaheads | accepts | unclassified | "x = async () => {}.y;"
-javascript | lookaheads | rejects | unclassified | "export let = 1;"
-javascript | lookaheads | rejects | unclassified | "export let;"
 javascript | operator pairs | accepts | assignment-target-not-checked | "!a = c;"
 javascript | operator pairs | accepts | assignment-target-not-checked | "++a = c;"
 javascript | operator pairs | accepts | assignment-target-not-checked | "+a = c;"
@@ -174,15 +172,13 @@ javascript | test262 | rejects | unclassified | test/language/white-space/after-
 javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-three-per-em-space.js
 javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-zwnbsp.js
 javascript | test262 | rejects | unclassified | test/language/white-space/between-nbsp.js
-javascript | test262 | spans | other | files 42
-javascript | test262 | spans | totals | span-equal 23362 of 23404, interpreter spans missing 4, extra tree-sitter spans 60
+javascript | test262 | spans | other | files 28
+javascript | test262 | spans | totals | span-equal 23210 of 23238, interpreter spans missing 12, extra tree-sitter spans 28
 javascriptreact | line breaks | rejects | unclassified | "function f() { return\n/a/ }"
 javascriptreact | lookaheads | accepts | unclassified | "try {}"
 javascriptreact | lookaheads | accepts | unclassified | "x = () => {}.x;"
 javascriptreact | lookaheads | accepts | unclassified | "x = a => {}.y;"
 javascriptreact | lookaheads | accepts | unclassified | "x = async () => {}.y;"
-javascriptreact | lookaheads | rejects | unclassified | "export let = 1;"
-javascriptreact | lookaheads | rejects | unclassified | "export let;"
 javascriptreact | reserved words | accepts | unclassified | "const { default } = o;"
 javascriptreact | reserved words | accepts | unclassified | "import { if } from \"m\";"
 typescript | TypeScript src | rejects | unclassified | src/compiler/checker.ts
@@ -388,8 +384,6 @@ typescript | lookaheads | accepts | unclassified | "x = a => {}.y;"
 typescript | lookaheads | accepts | unclassified | "x = async () => {}.y;"
 typescript | lookaheads | rejects | start-marker-decided-on-let-alone | "for (let in a);"
 typescript | lookaheads | rejects | start-marker-decided-on-let-alone | "for (let.x in a);"
-typescript | lookaheads | rejects | unclassified | "export let = 1;"
-typescript | lookaheads | rejects | unclassified | "export let;"
 typescript | new arguments | brackets | new-in-new-target-arguments | "new new C()();"
 typescript | operands | accepts | unclassified | "x as T < b > c;"
 typescript | operands | brackets | type-continuation-across-line-break | "x as T\n[0];"
@@ -618,7 +612,6 @@ typescriptreact | lookaheads | accepts | unclassified | "x = a => {}.y;"
 typescriptreact | lookaheads | accepts | unclassified | "x = async () => {}.y;"
 typescriptreact | lookaheads | rejects | start-marker-decided-on-let-alone | "for (let in a);"
 typescriptreact | lookaheads | rejects | start-marker-decided-on-let-alone | "for (let.x in a);"
-typescriptreact | lookaheads | rejects | unclassified | "export let = 1;"
 typescriptreact | lookaheads | rejects | unclassified | "export let;"
 typescriptreact | new arguments | brackets | new-in-new-target-arguments | "new new C()();"
 typescriptreact | operands | accepts | unclassified | "x as T < b > c;"
