@@ -11,7 +11,7 @@
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
-import { hasRebind, nudLowForm, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, hasUnaryNud, nudLowForm, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
@@ -175,15 +175,17 @@ const lowGo = (ir: { targets?: TargetsIR }, f: string): string => (ir.targets ? 
 const targetFieldsGo = (ir: ParserIR): string => (ir.targets ? '\n\tacc, accF uint8\n\taccSt []uint8' : '');
 function targetRuntimeGo(ir: ParserIR, recv: string, node: string): string {
   const t = ir.targets;
-  if (!t) return '';
   const ret = node === 'int32' ? 'n' : 'n, true';
+  const nudOkF = `func (p *${recv}) nudOkF(n ${node}, form uint8, tail, capped bool) (${node === 'int32' ? 'int32' : 'spanned, bool'}) { p.form = form; p.tail = tail; p.capped = capped; return ${ret} }`;
+  // Without contexts a committed prefix-shaped NUD arm (FORM_UNARY, nudLowForm) is the one with a form of its own.
+  if (!t) return hasUnaryNud(ir) ? `\n${nudOkF}` : '';
   return `
 func (p *${recv}) accIn(init uint8) bool { p.accSt = append(p.accSt, p.acc); p.acc = init; return true }
 func (p *${recv}) accOut(low, last uint8) bool { q := p.acc & ${t.passes}; p.accF = q | low | ((q << 1) & last); p.accNo(); return true }
 func (p *${recv}) accNo() bool { k := len(p.accSt) - 1; p.acc = p.accSt[k]; p.accSt = p.accSt[:k]; return false }
 func (p *${recv}) accK(m uint8) bool { p.acc = (p.acc &^ ((p.acc >> 1) & ${t.passes}) & (p.form | ^m) & ${t.passes}) | (p.form & (m << 1)); return true }
 func (p *${recv}) accS() bool { p.acc &^= (p.acc >> 1) & ${t.passes}; return true }
-func (p *${recv}) nudOkF(n ${node}, form uint8, tail, capped bool) (${node === 'int32' ? 'int32' : 'spanned, bool'}) { p.form = form; p.tail = tail; p.capped = capped; return ${ret} }`;
+${nudOkF}`;
 }
 function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: ArenaIdPlan): StepLowering {
   // A literal's leaf type (litTt, decided here): a word is a $keyword leaf, anything else $punct.
