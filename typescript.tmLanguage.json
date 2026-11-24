@@ -1204,11 +1204,11 @@
     },
     "bigint": {
       "name": "constant.numeric.bigint.ts",
-      "match": "[0-9]+(?:_[0-9]+)*n(?![0-9A-Za-z_$\\\\])"
+      "match": "(?:0|[1-9][0-9]*(?:_[0-9]+)*)n(?![0-9A-Za-z_$\\\\])"
     },
     "number": {
       "name": "constant.numeric.decimal.ts",
-      "match": "(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\\.[0-9]*(?:_[0-9]+)*)?|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])"
+      "match": "(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\\.(?!_)[0-9]*(?:_[0-9]+)*)?|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])"
     },
     "hole-brackets": {
       "begin": "\\{",
@@ -1278,7 +1278,7 @@
     },
     "decorator": {
       "name": "entity.name.function.decorator.ts",
-      "match": "@(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\}|\\.)*)?"
+      "match": "@(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\}|\\.#(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})|\\.)*)?"
     },
     "privatefield": {
       "name": "variable.other.property.ts",
@@ -2806,7 +2806,7 @@
       "name": "support.type.primitive.ts"
     },
     "scope-keyword-other": {
-      "match": "\\b(unique|out|target|meta)\\b",
+      "match": "\\b(unique|out|target|meta|source)\\b",
       "name": "keyword.other.ts"
     },
     "scope-keyword-control-import": {
@@ -3066,7 +3066,7 @@
       "name": "keyword.control.flow.ts"
     },
     "expr-scope-keyword-other": {
-      "match": "\\b(out|target|meta)\\b",
+      "match": "\\b(out|target|meta|source)\\b",
       "name": "keyword.other.ts"
     },
     "expr-scope-storage-type-namespace-decl": {

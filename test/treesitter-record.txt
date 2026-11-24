@@ -454,6 +454,8 @@ javascript | test262 | rejects | unclassified | test/language/import/import-byte
 javascript | test262 | rejects | unclassified | test/language/import/import-bytes/bytes-from-json.js
 javascript | test262 | rejects | unclassified | test/language/import/import-bytes/bytes-from-png.js
 javascript | test262 | rejects | unclassified | test/language/import/import-bytes/bytes-from-txt.js
+javascript | test262 | rejects | unclassified | test/language/import/import-defer/deferred-namespace-object/json-module.js
+javascript | test262 | rejects | unclassified | test/language/import/import-defer/syntax/import-attributes.js
 javascript | test262 | rejects | unclassified | test/language/line-terminators/between-tokens-ls.js
 javascript | test262 | rejects | unclassified | test/language/line-terminators/between-tokens-ps.js
 javascript | test262 | rejects | unclassified | test/language/line-terminators/comment-single-ls.js
@@ -478,6 +480,7 @@ javascript | test262 | rejects | unclassified | test/language/module-code/import
 javascript | test262 | rejects | unclassified | test/language/module-code/import-attributes/import-attribute-value-string-single.js
 javascript | test262 | rejects | unclassified | test/language/module-code/namespace/internals/own-property-keys-sort.js
 javascript | test262 | rejects | unclassified | test/language/module-code/parse-export-empty.js
+javascript | test262 | rejects | unclassified | test/language/module-code/source-phase-import/import-source-newlines_FIXTURE.js
 javascript | test262 | rejects | unclassified | test/language/statements/break/line-terminators.js
 javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-gen-grammar-privatename-identifier-semantics-stringvalue.js
 javascript | test262 | rejects | unclassified | test/language/statements/class/elements/after-same-line-gen-rs-private-getter-alt.js
@@ -773,8 +776,8 @@ javascript | test262 | rejects | unclassified | test/language/white-space/after-
 javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-three-per-em-space.js
 javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-zwnbsp.js
 javascript | test262 | rejects | unclassified | test/language/white-space/between-nbsp.js
-javascript | test262 | spans | other | files 49
-javascript | test262 | spans | totals | span-equal 22533 of 22582, interpreter spans missing 8, extra tree-sitter spans 77
+javascript | test262 | spans | other | files 51
+javascript | test262 | spans | totals | span-equal 22782 of 22833, interpreter spans missing 12, extra tree-sitter spans 78
 javascriptreact | line breaks | rejects | unclassified | "function f() { return\n/a/ }"
 javascriptreact | lookaheads | accepts | unclassified | "try {}"
 javascriptreact | lookaheads | accepts | unclassified | "x = () => {}.x;"

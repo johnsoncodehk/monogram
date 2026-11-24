@@ -1734,11 +1734,11 @@
     },
     "bigint": {
       "name": "constant.numeric.bigint.tsx",
-      "match": "[0-9]+(?:_[0-9]+)*n(?![0-9A-Za-z_$\\\\])"
+      "match": "(?:0|[1-9][0-9]*(?:_[0-9]+)*)n(?![0-9A-Za-z_$\\\\])"
     },
     "number": {
       "name": "constant.numeric.decimal.tsx",
-      "match": "(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\\.[0-9]*(?:_[0-9]+)*)?|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])"
+      "match": "(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\\.(?!_)[0-9]*(?:_[0-9]+)*)?|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])"
     },
     "template": {
       "name": "string.quoted.other.template.tsx",
@@ -1786,7 +1786,7 @@
     },
     "decorator": {
       "name": "entity.name.function.decorator.tsx",
-      "match": "@(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\}|\\.)*)?"
+      "match": "@(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\}|\\.#(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})|\\.)*)?"
     },
     "privatefield": {
       "name": "variable.other.property.tsx",
@@ -3314,7 +3314,7 @@
       "name": "support.type.primitive.tsx"
     },
     "scope-keyword-other": {
-      "match": "\\b(unique|out|target|meta)\\b",
+      "match": "\\b(unique|out|target|meta|source)\\b",
       "name": "keyword.other.tsx"
     },
     "scope-keyword-control-import": {
@@ -3574,7 +3574,7 @@
       "name": "keyword.control.flow.tsx"
     },
     "expr-scope-keyword-other": {
-      "match": "\\b(out|target|meta)\\b",
+      "match": "\\b(out|target|meta|source)\\b",
       "name": "keyword.other.tsx"
     },
     "expr-scope-storage-type-namespace-decl": {
