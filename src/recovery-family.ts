@@ -217,14 +217,7 @@ const riSig = method('riSig', [['f', 'int']], ['bool'], [
   let_('kid', call('enPeekKid')),
   if_(lt(v('kid'), n(0)), [ret(fls)]),
   let_('lid', call('enPeekLid')),
-  let_('nl', T(v('f'))),
-  let_('i', n(0)),
-  while_(lt(v('i'), v('nl')), [if_(eq(T(add(add(v('f'), n(1)), v('i'))), v('lid')), [ret(tru)]), inc('i')]),
-  let_('kb', add(add(v('f'), n(1)), v('nl'))),
-  let_('nk', T(v('kb'))),
-  set('i', n(0)),
-  while_(lt(v('i'), v('nk')), [if_(eq(T(add(add(v('kb'), n(1)), v('i'))), v('kid')), [ret(tru)]), inc('i')]),
-  ret(fls),
+  ret(or(call('riIn', v('f'), v('lid')), call('riIn', add(add(v('f'), n(1)), T(v('f'))), v('kid')))),
 ]);
 // The record the reference in cell c refers to (-1: none).
 const riRef: Fn = { ...method('riRef', [['c', 'int']], ['int'], [
@@ -280,13 +273,13 @@ const riRule = method('riRule', [['r', 'int'], ['d', 'int']], ['bool'], [
   if_(le0('d'), [ret(call('enRule', v('r')))]),
   if_(call('riNat', v('r'), n(-1)), [ret(tru)]),
   let_('rec', T(add(n(2), v('r')))),
-  if_(eq(T(v('rec')), n(REC_RD)), [ret(call('riRd', v('r'), v('rec'), sub(v('d'), n(1))))]),
+  if_(eq(T(v('rec')), n(REC_RD)), [ret(call('riFrame', v('r'), v('rec'), n(0), sub(v('d'), n(1))))]),
   // A Pratt rule called fresh: the suppress set staged for it becomes the one in force.
   let_('prev', call('enSt', n(ST_SUP_CUR))),
   let_('next', call('enSt', n(ST_SUP_NEXT))),
   run('enSetSt', n(ST_SUP_CUR), v('next')),
   run('enSetSt', n(ST_SUP_NEXT), n(0)),
-  let_('ok', call('riBp', v('r'), v('rec'), n(0), sub(v('d'), n(1))), 'bool'),
+  let_('ok', call('riFrame', v('r'), v('rec'), n(0), sub(v('d'), n(1))), 'bool'),
   run('enSetSt', n(ST_SUP_CUR), v('prev')),
   ret(v('ok')),
 ]);
@@ -530,7 +523,7 @@ const operand = (bp: Expr): Expr => ({ k: 'call', fn: 'riOperand', args: [v('r')
 const riOperand = method('riOperand', [['r', 'int'], ['rec', 'int'], ['bp', 'int'], ['d', 'int']], ['bool'], [
   if_(le0('d'), [ret(call('enBp', v('r'), v('bp')))]),
   if_(call('riNat', v('r'), v('bp')), [ret(tru)]),
-  ret(call('riBp', v('r'), v('rec'), v('bp'), sub(v('d'), n(1)))),
+  ret(call('riFrame', v('r'), v('rec'), v('bp'), sub(v('d'), n(1)))),
 ]);
 // The entry of an operator table (tables[i] = [n (lid field*)*], `w` ints each) for lid, or -1.
 const riOp = method('riOp', [['tb', 'int'], ['w', 'int'], ['lid', 'int']], ['int'], [
@@ -705,15 +698,12 @@ const riBpOf = (rebind: boolean): Fn => method('riBpIn', [['r', 'int'], ['rec', 
     while_(and(lt(v('j'), T(sec(P_LED))), not(v('prog'))), [
       if_(and(eq(at(v('x'), 0), v('lid')), ledOk(v('x'))), [
         let_('k', call('enMark')),
-        if_(call('riList', atR(v('x'), 1), v('d')), [
-          run('enUnmark', v('k')),
-          ...ledWon,
-        ], [
+        let_('won', call('riList', atR(v('x'), 1), v('d')), 'bool'),
+        if_(v('won'), [run('enUnmark', v('k'))], [
           undo('k'),
-          ...(rebind ? [if_(ge(at(v('x'), 9), n(0)), [
-            if_(call('riRbScan', v('x'), at(v('x'), 9), v('d')), ledWon),
-          ])] : []),
+          ...(rebind ? [if_(ge(at(v('x'), 9), n(0)), [set('won', call('riRbScan', v('x'), at(v('x'), 9), v('d')))])] : []),
         ]),
+        if_(v('won'), ledWon),
       ]),
       inc('x', add(n(11), at(v('x'), 10))),
       inc('j'),
@@ -861,8 +851,14 @@ const riNat = method('riNat', [['r', 'int'], ['bp', 'int']], ['bool'], [
 // Termination T2 (recovering only): the interpreted rd / Pratt frames entered at one position with
 // nothing consumed are at most 2N + 2 deep (a strict parse never re-enters a rule there with the
 // same state, so a deeper chain is a repair's recursion).
-const t2 = (name: string, inner: string, params: [string, Ty0][]): Fn => method(name, params, ['bool'], [
-  if_(eq(rm(RM_REC), n(0)), [ret(call(inner, ...params.map(([pn]) => v(pn))))]),
+// An interpreted frame of rule r (record rec: an rd rule, or a Pratt rule at minBp).
+const frame: Expr = { k: 'call', fn: 'riFrameIn', args: [v('r'), v('rec'), v('minBp'), v('d')] };
+const riFrameIn = method('riFrameIn', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d', 'int']], ['bool'], [
+  if_(eq(T(v('rec')), n(REC_RD)), [ret(call('riRdIn', v('r'), v('rec'), v('d')))]),
+  ret(call('riBpIn', v('r'), v('rec'), v('minBp'), v('d'))),
+]);
+const riFrame = method('riFrame', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d', 'int']], ['bool'], [
+  if_(eq(rm(RM_REC), n(0)), [ret(frame)]),
   let_('p', call('enPos')),
   let_('sp', rm(RM_SP)),
   let_('sd', rm(RM_SD)),
@@ -870,12 +866,10 @@ const t2 = (name: string, inner: string, params: [string, Ty0][]): Fn => method(
   if_(eq(v('sp'), v('p')), [set('nd', add(v('sd'), n(1)))]),
   if_(gt(v('nd'), add(add(T(n(0)), T(n(0))), n(2))), [ret(fls)]),
   run('enRmSet', n(RM_SP), v('p')), run('enRmSet', n(RM_SD), v('nd')),
-  let_('ok', call(inner, ...params.map(([pn]) => v(pn))), 'bool'),
+  let_('ok', frame, 'bool'),
   run('enRmSet', n(RM_SP), v('sp')), run('enRmSet', n(RM_SD), v('sd')),
   ret(v('ok')),
 ]);
-const riRd = t2('riRd', 'riRdIn', [['r', 'int'], ['rec', 'int'], ['d', 'int']]);
-const riBp = t2('riBp', 'riBpIn', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d', 'int']]);
 // One attempt at the scope from the position: top-level elements el, each consuming, until the
 // position passes upto (one element when upto is the position), or the entry rule over the whole
 // input (el < 0).
@@ -1006,7 +1000,7 @@ const riRbStep = method('riRbStep', [['x', 'int'], ['k', 'int'], ['d', 'int']], 
 // `rebind`: the grammar has a re-bind (the interpreter's then calls the engine's rbBracket and
 // marks, printed with the native forms).
 export function recoveryFamilyFns(rebind: boolean, ids?: LexIdPlan, cappedSeq = false, labels: [number, string][] = []): Fn[] {
-  return [rejectDiag, repairDiag, diagMessageOf(labels), diagRelated, riRef, riSig, riIn, riGuard, riGuardIn, riRule, riUndo, riBestSet, riTry, riCand, riRd, riRdIn, riList, riStep, riOperand, riOp, riNudOf(cappedSeq), riBp, riBpOf(rebind),
+  return [rejectDiag, repairDiag, diagMessageOf(labels), diagRelated, riRef, riSig, riIn, riGuard, riGuardIn, riRule, riUndo, riBestSet, riTry, riCand, riFrame, riFrameIn, riRdIn, riList, riStep, riOperand, riOp, riNudOf(cappedSeq), riBpOf(rebind),
     riRmDrop, riBarIn, riFail, riMatch, riRep, riNear, riErrNode, riRepNode, riMiss, riNat, riUnit, riAttempts, riSkip, riTotal, ...ENGINE_EXTERNS, ...TEXT_EXTERNS,
     ...(rebind ? [riRbStep, RI_RB_SCAN, rbBracketFn(ids!), ...REBIND_EXTERNS, ...RB_EXTERNS_INTERP] : [])];
 }
