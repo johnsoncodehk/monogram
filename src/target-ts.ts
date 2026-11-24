@@ -1102,7 +1102,9 @@ ${kids.map((k) => `      case ${k}:
     binary: `${prattOpTables(r, ids).bin.some((b) => b.lead) ? `    let opLid = t.lid, info = ${r.name}_BIN[opLid];
     if (info === undefined) break;
     if (info.lead) { opLid = _opLid(t); info = ${r.name}_BIN[opLid]; if (info === undefined) break; } else { _opN = 1; _opEnd = t.end; }
-    if (info.lbp <= minBp) break;` : `    const opLid = _opLid(t);
+    if (info.lbp <= minBp) break;` : ids.gtComps.length ? `    const opLid = t.lid, info = ${r.name}_BIN[opLid];
+    if (info === undefined || info.lbp <= minBp) break;
+    _opN = 1; _opEnd = t.end;` : `    const opLid = _opLid(t);
     const info = ${r.name}_BIN[opLid];
     if (info === undefined || info.lbp <= minBp) break;`}
     if (info.tgt && ${lf('form')} !== 0 || info.noUnary && ${lf('form')} === 2${r.binForm ? ' || (form & info.ctx) !== info.ctx' : ''}) { _n = b; return false; }
