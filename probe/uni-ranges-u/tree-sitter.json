@@ -1,0 +1,13 @@
+{
+  "grammars": [
+    {
+      "name": "unirangesu",
+      "scope": "source.unirangesu",
+      "path": "."
+    }
+  ],
+  "metadata": {
+    "version": "0.0.0",
+    "license": "MIT"
+  }
+}

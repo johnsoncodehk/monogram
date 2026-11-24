@@ -1,0 +1,13 @@
+{
+  "grammars": [
+    {
+      "name": "uniandrust",
+      "scope": "source.uniandrust",
+      "path": "."
+    }
+  ],
+  "metadata": {
+    "version": "0.0.0",
+    "license": "MIT"
+  }
+}
