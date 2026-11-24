@@ -99,7 +99,7 @@ for kv in $VARIANTS; do
   for g in $GRAMMARS; do
     n=$v$(sfx "$g"); b=$W/mono-prof-$n/target/release/mono-prof-$n
     nm -S -C --size-sort "$b" > "$OUT/asm/nm-$n.txt" 2>&1 || true
-    objdump -d -C -l --no-show-raw-insn "$b" | awk '/^[0-9a-f]+ <.*>:$/ { p = ($0 ~ /Expr_bp|Expr_led|Expr_nud/) } p' > "$OUT/asm/expr-$n.s" 2>&1 || true
+    objdump -d -C -l --no-show-raw-insn "$b" | awk '/^[0-9a-f]+ <.*>:$/ { p = ($0 ~ /Expr_bp|Expr_led|Expr_nud|lex_into|lex_from|lex_all|lex_find|lex_run_end|lex_error|lexer|Lexer|::lex/) } p' > "$OUT/asm/expr-$n.s" 2>&1 || true
   done
 done
 
