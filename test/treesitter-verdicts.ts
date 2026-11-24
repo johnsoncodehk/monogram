@@ -101,11 +101,14 @@ const COMMENTS = ['/* a */ x */ y;', '/* a */ ) /* b */', 'x = /* a */ 1 */ 2;']
 
 // A continuation whose operand is another rule that continues (`x as T` then Type's own `[ ]`, `|`,
 // `&`, `<`, `?`, `.`): the operand is read whole where it continues, and the expression takes the
-// token where the operand's continuation fails (`a as T < b`, `x as T ? a : b`).
+// token where the operand's continuation fails (`a as T < b`, `x as T ? a : b`). An operand that ends
+// in a type of its own (`| A`, `keyof A`, `() => A`) takes the continuations too (`x as | A | B` is not
+// `(x as | A) | B`): spans compared, as a wrong tree here has no ERROR.
 const OPERANDS = [
   'x as T[];', 'x satisfies T[];', 'x as A | B;', 'x as A & B;', '<T[]>x;', 'x as T[] | U;', 'x as const;', 'a as T < b;',
   'x as T ? a : b;', 'x as T[0];', 'x as T<U>[];', 'a as any as T[];', 'f(x as T[], y);', 'x as T | U[];', 'x as T\n[0];',
   'y = x as T extends U ? A : B;', 'x as T < b > c;',
+  'x as | A | B;', '(x as | A | B).y;', 'x as & A.B;', 'x as () => A | B;', 'x as keyof A | B;', 'x as keyof A ? b : c;',
 ];
 
 // Contextual keywords: every word-shaped literal the grammar writes (`static`, `type`, `of`, `if`, ...),
@@ -248,7 +251,7 @@ const NEW_ARGUMENTS = [
   'new new C()();', 'new C < d;', 'yield(x);',
 ];
 // The corpora whose trees are compared, not only their verdicts, input by input (`brackets` entries).
-const SPAN_CORPORA = new Set(['operator pairs', 'type arguments', 'new arguments']);
+const SPAN_CORPORA = new Set(['operator pairs', 'type arguments', 'new arguments', 'operands']);
 // The real-code corpora's trees are compared too: every file both parse without ERROR, its expression
 // spans against the interpreter's (a wrong tree with no ERROR: every top-level `function f() {}` built
 // as an expression statement holding a function expression was found there, by no ERROR count). Too
