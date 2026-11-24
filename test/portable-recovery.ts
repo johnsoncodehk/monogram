@@ -82,9 +82,13 @@ const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // typescript + 'for (x = (y = (a in b)) declare c);' (master b8e42329, #199: its new literals draw
 // another set): the parse supplies '=>' twice and 'in'; in `… =>  declare =>  c in  x` the arrow
 // body takes the `in`. Re-measured on that merge: javascript unchanged.
+// typescript, land/sound-lt-compose-row (its `<` composite accept rows draw another mutant set):
+// the `asserts` and `declare` entries are no longer drawn; drawn instead, the same class:
+// 'for (x = () => { for (accessor a in b); } in c);' (`accessor => a in b in x`) and
+// 'for (global of of x);' (`global => of => of => x in x`).
 const P10_GREEDY_CAPTURE: Record<string, string[]> = {
   javascript: ['for (from x = function () { return a in b; } in c);', 'for (of of async y);', 'for (async of x);', 'for (async of => 1 of x);'],
-  typescript: ['for (x = () => { for (asserts a in b); } in c);', 'for (of  y);', 'for ( of x);', 'for (async of x);', 'for (async of => 1 of x);', 'for (x = (y = (a in b)) declare c);'],
+  typescript: ['for (of  y);', 'for ( of x);', 'for (async of x);', 'for (async of => 1 of x);', 'for (x = () => { for (accessor a in b); } in c);', 'for (global of of x);'],
 };
 // LOOKAHEAD BYPASS: a lookahead passed on the real tokens, and a repair then supplied a token among
 // the tokens it read, so the substituted text is not the one it judged. `class C { default class)
@@ -102,9 +106,18 @@ const P10_GREEDY_CAPTURE: Record<string, string[]> = {
 // member-start lookaheads read past what they match, so the extent seals the member. The seal must
 // be the span the lookahead MATCHED, which the native lookahead functions do not report.
 const P10_LOOKAHEAD_BYPASS: Record<string, string[]> = {
-  typescript: ['class C { default class) {} }', 'f(class extends a?.b{ () {});'],
+  typescript: ['f(class extends a?.b{ () {});'],
 };
-const P10_EXPECTED: [string, Record<string, string[]>][] = [['greedy captures', P10_GREEDY_CAPTURE], ['lookahead bypasses', P10_LOOKAHEAD_BYPASS]];
+// NOT YET CLASSIFIED: drawn for the first time by the mutant set of land/sound-lt-compose-row (none
+// holds a `<`, so that change does not touch their tokens or their parse: only the draw moved; the
+// `default class)` lookahead bypass above left the draw with it). `class C { static export case
+// type\nx = 1 }` is repaired to `static export * case ( type\n ,\nx = 1 ) }` and
+// `export await using from x = y;` to `export await : using : from : x = y;`; the repaired texts
+// are rejected. Owed to the recovery lane: name each one's class (or fix it) and move it.
+const P10_UNCLASSIFIED: Record<string, string[]> = {
+  typescript: ['class C { static export case type\nx = 1 }', 'export await using from x = y;', 'export await using meta x = y;'],
+};
+const P10_EXPECTED: [string, Record<string, string[]>][] = [['greedy captures', P10_GREEDY_CAPTURE], ['lookahead bypasses', P10_LOOKAHEAD_BYPASS], ['unclassified redrawn mutants', P10_UNCLASSIFIED]];
 // EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and
 // parseTotal alike) is not the oracle's. Not total parsing's property (parseTotal's verdict is its
 // own parse()'s, checked below); found by the mutation corpus, each owed as its own fix. When one
