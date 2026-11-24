@@ -186,11 +186,13 @@ const Regex_       = token(seq('/', regexFirstChar, star(regexChar), '/', star(i
     postfixAfterValueTexts: ['!', '++', '--'],
   },
 });
-// `@name` / `@ns.name` / `@ns.#name` — each dotted segment is an IdentifierName, so it admits the
-// same `\u`-escape forms as `Ident` (`@℘`, `@ZW_‌_NJ`), and a segment may be a PrivateIdentifier
-// (`DecoratorMemberExpression : DecoratorMemberExpression . PrivateIdentifier`); the parser owns
-// the `(args)` tail.
-const Decorator    = token(seq('@', optPattern(seq(identStart, star(altPattern(identPart, seq('.#', identStart), '.'))))), { scope: 'entity.name.function.decorator' });
+// `@name`: the `@` of a decorator and its first IdentifierName, one token so the highlighters scope
+// it as a decorator. It admits the `\u`-escape forms of `Ident`; a name with a character beyond ASCII
+// (`@℘`, `@a℘`) is no Decorator token (the lookahead), so it lexes as `@` and an Ident, which reads
+// it whole by the lexer's Unicode fallback. The dotted
+// segments, the arguments and a `@` that trivia separates from its name (`@ a`) are the parser's
+// (DecoratorExpr).
+const Decorator    = token(seq('@', identStart, star(identPart)), { scope: 'entity.name.function.decorator' });
 // PrivateIdentifier: `#` + an IdentifierName, so it admits the same `\u`-escape forms as `Ident`
 // (`#\u{6F}_`). A non-ASCII literal `#name` (`#℘`, `#ZWNJ`) is handled by the lexer's Unicode
 // fallback, which recognises this token's leading `#` as a name prefix.
@@ -221,7 +223,7 @@ export {
 // parseDeclaration. Both grammars' expression statement is this one arm; an expression elsewhere
 // (`({}).x`, `f({}.x)`, `x = @dec class {}`) is not restricted.
 export const expressionStatement = (Expr) => [
-  not(alt('{', 'function', 'class', Decorator)), not(alt(['async', sameLine, 'function'], ['let', '['])),
+  not(alt('{', 'function', 'class', '@', Decorator)), not(alt(['async', sameLine, 'function'], ['let', '['])),
   field('first', Expr), many(field('comma', ','), field('rest', Expr)), asi(),
 ];
 // An arrow's body (`ConciseBody : [lookahead ≠ {] ExpressionBody | { FunctionBody }`): after `=>`
@@ -404,8 +406,17 @@ export const ecmaPrec = [
 // Stage-3 / JS-real decorators: `@dec` and `@dec(args)`. The TS-only
 // `@dec<T>(args)` type-argument form is dropped.
 
+// The decorators proposal's productions: `Decorator : @ DecoratorMemberExpression | @
+// DecoratorParenthesizedExpression | @ DecoratorCallExpression`, `DecoratorMemberExpression :
+// IdentifierReference | DecoratorMemberExpression . IdentifierName | DecoratorMemberExpression .
+// PrivateIdentifier`, `DecoratorCallExpression : DecoratorMemberExpression Arguments`,
+// `DecoratorParenthesizedExpression : ( Expression )`. The head is the Decorator token (`@a`), or a
+// `@` and an Ident when trivia separates them (`@ a`); the dotted segments are tokens of their own
+// (`@a . b`, `@a.℘`; `@a.` has no parse).
+const decoratorHead = alt(Decorator, ['@', notReservedJsExpr, Ident]);
 const DecoratorExpr = rule($ => [
-  [Decorator, opt('(', sep(Expr, ','), ')')],   // @dec | @dec(args)
+  ['@', '(', Expr, many(',', Expr), ')'],   // @(expr)
+  [decoratorHead, many('.', alt(Ident, PrivateField)), opt('(', sep(Expr, ','), ')')],   // @dec | @a.b.#c | @dec(args)
 ]);
 
 // ── Expressions ──
