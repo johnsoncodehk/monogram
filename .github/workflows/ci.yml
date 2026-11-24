@@ -216,7 +216,7 @@ jobs:
           if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
             echo "value=true" >> "$GITHUB_OUTPUT"; echo "no usable base — running the check"; exit 0
           fi
-          if git diff --name-only "$base" HEAD | grep -qE '^src/|^python\.ts$|^test/cpython|^\.github/workflows/ci\.yml$'; then
+          if git diff --name-only "$base" HEAD | grep -qE '^src/|^python\.ts$|^test/cpython|^test/verdict-scan|^\.github/workflows/ci\.yml$'; then
             echo "value=true" >> "$GITHUB_OUTPUT"; echo "grammar / engine / harness changed — running the check"
           else
             echo "value=false" >> "$GITHUB_OUTPUT"; echo "no input of the check changed — skipping"
@@ -260,6 +260,13 @@ jobs:
       - name: conformance/cpython
         if: steps.changed.outputs.value == 'true'
         run: node --stack-size=7000 test/cpython.ts
+
+      # conformance/verdict-scan, its Python half: python.ts's verdict against ast.parse on inputs
+      # generated from its operator tables (test/verdict-scan.ts --python; the JS / TS half is a gate
+      # of test/check.ts). Here because it needs the same oracle.
+      - name: conformance/verdict-scan (python)
+        if: steps.changed.outputs.value == 'true'
+        run: node --stack-size=7000 test/verdict-scan.ts --python
 
   treesitter:
     runs-on: ubuntu-latest
