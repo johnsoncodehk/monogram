@@ -700,7 +700,8 @@ interface GrammarConfig<R extends Record<string, RuleRef> = Record<string, RuleR
   treeSitterContextualNames?: string[] | 'all';  // keywords the tree-sitter grammar also reads as names (see Grammar.treeSitterContextualNames)
 }
 
-export type { Grammar };
+// The DSL's own vocabulary, for a grammar file's helpers to name what they take and return.
+export type { Grammar, Element, Sequence, Alternative };
 
 export function defineGrammar<const R extends Record<string, RuleRef>>(config: GrammarConfig<R>): Grammar<keyof R & string> {
   // `indent` is the richer layer built on top of newline-significant line boundaries, so the two

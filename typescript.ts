@@ -3,6 +3,7 @@ import {
   op, prefix, postfix, sameLine,
   sep, opt, many, many1, alt, not, treeSitterRelax, capExpr, atLevel, notLeftLeaf, withHoles,
   awaitCtx, yieldCtx, asyncGenCtx, resetCtx, arm, field,
+  type Element,
 } from './src/api.ts';
 
 // Build the four async×generator arms of a TypeScript `function` form, routing each
@@ -11,7 +12,7 @@ import {
 // annotation are NOT [Await]/[Yield]-parameterized, so they stay plain. `nameParts`
 // is spread in after `function` (and `*`); `body` is the function body element.
 // Param/Block/Type/TypeParams resolve at thunk-eval time (defined below).
-function tsFnArms(nameParts, body) {
+function tsFnArms(nameParts: Element[], body: Element) {
   return [
     arm('function_', 'function', ...nameParts, opt(field('typeParameters', TypeParams)), '(', sep(resetCtx(field('parameter', Param)), ','), ')', opt(":", ReturnType), resetCtx(field('body', body))),
     arm('generator', 'function', field('asterisk', '*'), ...nameParts, opt(field('typeParameters', TypeParams)), '(', sep(yieldCtx(field('parameter', Param)), ','), ')', opt(":", ReturnType), yieldCtx(field('body', body))),
@@ -129,7 +130,7 @@ const Type = rule($ => {
   // parameters or `new`, and on every later parameter, parseParameter reads them (`<T>(@a x) =>
   // 1`, `new (@a x) => 1`, `(x, @a y) => 1`).
   // (tree-sitter renders no lookahead, so it keeps the one shape `<T>?(`.)
-  const fnHead = (lead: unknown[]) => [...(lead.length ? [treeSitterRelax(alt([TypeParams, '('], ['(', ...lead]), [opt(TypeParams), '('])] : [opt(TypeParams), '(']), sep(typeFnParam(), ','), ')', '=>', ReturnType];
+  const fnHead = (lead: Element[]) => [...(lead.length ? [treeSitterRelax(alt([TypeParams, '('], ['(', ...lead]), [opt(TypeParams), '('])] : [opt(TypeParams), '(']), sep(typeFnParam(), ','), ')', '=>', ReturnType];
   const fnType = fnHead([not([many(paramMods.any), alt('@', Decorator)])]);
   // tsc parses a type in levels (parseUnionTypeOrHigher, parseIntersectionTypeOrHigher,
   // parseTypeOperatorOrHigher): a union's constituents are intersections, an intersection's are
@@ -283,7 +284,7 @@ const mappedTypeStart = alt([alt('+', '-'), 'readonly'], [opt('readonly'), '[', 
 const exportAhead = [not(alt('as', '*')), not(not(alt('@', Decorator, memberStart)))];
 const defaultAhead = alt(not(not(alt('class', 'function', 'interface', '@', Decorator))), ['abstract', sameLine, 'class'], ['async', sameLine, 'function']);
 // JavaScript's words (`memberWordRules`: static, get, set), extended with TypeScript's.
-const modifierExtra: Record<string, unknown[]> = {
+const modifierExtra: Record<string, Element[]> = {
   ...memberWordRules,
   export: [not(alt('as', '*')), not(['default', not(defaultAhead)]), not(['type', not(exportAhead)])],
   default: [not(not(defaultAhead))],
@@ -294,7 +295,7 @@ const { const: _const, ...classBodyExtra } = modifierExtra;
 // follower in full: a member start or a decorator. Elsewhere a decorator after them is no
 // member's (class and object-literal members read no second run: see ClassMember), so the word
 // is the member's name there (`class C { export⏎@d x() {} }` is a field `export`, then a member).
-const followsDecorator: Record<string, unknown[]> = {
+const followsDecorator: Record<string, Element[]> = {
   export: [not(['default', not(defaultAhead)]), not(['type', not(exportAhead)]), ...exportAhead],
   default: [not(not(defaultAhead))],
 };
@@ -303,17 +304,21 @@ const followsDecorator: Record<string, unknown[]> = {
 // (canFollowExportModifier), and `default` only its own followers.
 const paramStart = alt(memberStart, '{', '...');
 const paramExportAhead = [not(alt('as', '*', '{')), not(not(alt('@', Decorator, paramStart)))];
-const paramFollows: Record<string, unknown[]> = {
+const paramFollows: Record<string, Element[]> = {
   export: [not(['default', not(defaultAhead)]), not(['type', not(paramExportAhead)]), ...paramExportAhead],
   default: followsDecorator.default!,
 };
 type ModifierOpts = { sameLineConst?: boolean; param?: boolean; secondRun?: boolean };
-const modifierWord = (words: string[], { sameLineConst = false, param = false, secondRun = false }: ModifierOpts = {}) => {
-  const follows: Record<string, unknown[]> = param ? paramFollows : secondRun ? followsDecorator : {};
+const modifierWord = (words: string[], { sameLineConst = false, param = false, secondRun = false }: ModifierOpts = {}): Element => {
+  const follows: Record<string, Element[]> = param ? paramFollows : secondRun ? followsDecorator : {};
   const rest = words.filter(w => !(w in follows));
   const own = words.filter(w => w in follows).map(w => [w, ...follows[w]!]);
-  const plain = rest.length ? memberWord(rest, sameLineConst ? classBodyExtra : modifierExtra, param ? not(not(paramStart)) : undefined) : null;
-  return own.length ? alt(...(plain ? [plain] : []), ...own) : plain;
+  const plain = () => memberWord(rest, sameLineConst ? classBodyExtra : modifierExtra, param ? not(not(paramStart)) : undefined);
+  if (!own.length) {
+    if (!rest.length) throw new Error('modifierWord: a modifier reading needs at least one word');
+    return plain();
+  }
+  return alt(...(rest.length ? [plain()] : []), ...own);
 };
 // A modifier run holds AT MOST ONE `static` (tsc stops taking `static` as a modifier once it
 // has one; ECMAScript's ClassElement has a single `static` slot): the only reading of a
@@ -381,9 +386,9 @@ const classExprPrefix = opt(many1(field('decorator', DecoratorExpr)), classExprM
 const Prop = rule($ => {
   const mods = modifierRun(['public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'export', 'declare', 'in', 'out', 'const', 'default'], { treeSitterOmits: ['const'], secondRun: true });
   const asyncMod = modifierWord(['async']);
-  const sig = (ctx) => [opt(field('typeParameters', TypeParams)), '(', sep(ctx(field('parameter', Param)), ','), ')', opt(':', ReturnType), ctx(field('body', fnBodyOrAsi()))];
+  const sig = (ctx: (...items: Element[]) => Element) => [opt(field('typeParameters', TypeParams)), '(', sep(ctx(field('parameter', Param)), ','), ')', opt(':', ReturnType), ctx(field('body', fnBodyOrAsi()))];
   const marks = [opt(field('question', '?')), opt(field('exclamation', '!'))];
-  const members = (generator, method) => field('member', alt(
+  const members = (generator: (...items: Element[]) => Element, method: (...items: Element[]) => Element) => field('member', alt(
     arm('accessor', field('kind', alt('get', 'set')), field('key', MemberName), ...sig(resetCtx)),
     arm('generatorMethod', field('asterisk', '*'), field('key', MemberName), ...marks, ...sig(generator)),
     arm('named', field('key', MemberName), ...marks, field('tail', alt(arm('method', ...sig(method)), arm('init', ':', field('value', Expr))))),
@@ -908,7 +913,7 @@ const fieldTail = [opt(sameLine, field('exclamation', '!')), opt(field('question
 // The body is a function declaration's (tsc's parseFunctionBlockOrSemicolon): a block, after
 // which nothing is needed (a `;` there is an empty class element of its own), or none, and
 // then the member ends as a statement does.
-const memTail = (ctx) => ['(', sep(ctx(field('parameter', Param)), ','), ')', opt(":", ReturnType), ctx(field('body', fnBodyOrAsi()))];
+const memTail = (ctx: (...items: Element[]) => Element) => ['(', sep(ctx(field('parameter', Param)), ','), ')', opt(":", ReturnType), ctx(field('body', fnBodyOrAsi()))];
 const ClassMember = rule($ => [
   arm('empty', ';'),   // tsc's SemicolonClassElement: `class C { ; }` is parse-clean
   arm('staticBlock', many(field('decorator', DecoratorExpr)), many(field('modifier', Modifier)), field('staticKeyword', 'static'), awaitCtx(field('block', Block))),   // static block body is [+Await] (await reserved); decorators/modifiers parse (SEMANTIC errors)
