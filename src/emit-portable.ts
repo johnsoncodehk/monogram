@@ -727,6 +727,11 @@ export type ElementPlan = {
   } | null;
   // 'always': every tagOpen in code outside a tag opens an element (tagOpenOnlyOpensTags);
   // 'operand': only one where an operand may start, unless a veto below says otherwise.
+  // "Where an operand may start" is ONE predicate every lexer spells over its own state: not
+  // after a value (prevIsValue) and not after a member accessor (regexContext.memberAccessTexts,
+  // the _mem / LX_MEMBER table: `a?.<T>(x)` opens no element). It is lxOperandStarts in
+  // src/emit-lexer.ts, operandStarts in target-ts.ts and target-go.ts, operand_starts in
+  // target-rust.ts; a new target writes it beside its prevIsValue.
   entry: 'always' | 'operand';
   head: TokenPattern | null;  // after tagOpen: a type-parameter list, never an element
   // `tagOpen Name tagClose (`: decided by lexing the group as code; kept when its closer is
