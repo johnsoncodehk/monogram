@@ -237,11 +237,7 @@ if [ -f "$W/src-M/test/fixtures/shape-tsc-synthesized.ts" ] && [ -f "$H/shape-ta
     cg_run "M.shape.$f" '*mono_prof_shape*' "$sb" --once "$f"
     cg_run "M.shape-reuse.$f" '*mono_prof_shape_reuse*' "$sb" --once-reuse "$f"
     for m in shape shape-reuse parse parse-reuse; do
-      # callgrind_annotate lists a function once per source file its instructions come from (its
-      # inlined callees' files apart): summed per function here, self instructions.
-      callgrind_annotate --inclusive=no --threshold=100 "$OUT/cg/M.$m.$f.out" 2>/dev/null | grep -E '^ *[0-9,]+ \(' | grep -v 'PROGRAM TOTALS' \
-        | awk '{ n = $1; gsub(",", "", n); $1 = ""; $2 = ""; sub(/^ +/, ""); sub(/^[^:]*:/, ""); sub(/ \[[^]]*\]$/, ""); s[$0] += n } END { for (k in s) printf "%11d  %s\n", s[k], k }' \
-        | sort -rn | head -30 > "$OUT/cg/M.$m.$f.top.txt" || true
+      lim node "$H/cg-self.ts" "$OUT/cg/M.$m.$f.out" 30 > "$OUT/cg/M.$m.$f.top.txt" || true
       echo "--- top functions M.$m.$f"; cat "$OUT/cg/M.$m.$f.top.txt"
     done
     irof() { grep -E "^IR M\.$1\.$f " "$R" | tail -1 | awk '{print $3}'; }
