@@ -771,7 +771,7 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
     // Declared target contexts: built only in the building form (a recognized rd rule computes no form).
     acc: (call, mask) => (m === 'w' ? `(${call} && _accK(${mask}))` : call),
     accSep: () => (m === 'w' ? '_accS()' : 'true'),
-    target: (mask) => { if (m !== 'w') throw new Error('ts: a target() step in a recognized body'); return `(_form & ${mask}) !== 0`; },
+    target: (mask) => { if (m !== 'w') throw new Error('ts: a target() step in a recognized body'); return `(_form & ${mask}) === 0`; },
     accRun: (cond, f) => (m === 'w' ? `_accEnd(_accSwap(${f.init}), ${cond}, ${f.low}, ${f.last})` : cond),
     armForm: armFormTs,
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
@@ -1016,9 +1016,10 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
   // The operators a target context reads (emit-portable binLeftOps) are a switch behind the table's
   // test bit: every other operator tests what it did without contexts and its node's form is a constant.
   const leftOps = binLeftOps(prattOpTables(r, ids));
-  const tgtFail = `(${leftOps.map((o) => `opLid === ${o.lid} ? ${o.ctx ? `(form & ${o.ctx}) !== ${o.ctx}` : 'false'} : `).join('')}${lf('form')} !== 0)`;
+  const tgtFail = `(${leftOps.map((o) => `opLid === ${o.lid} ? ${o.ctx ? `(form & ${o.ctx}) !== 0` : 'false'} : `).join('')}${lf('form')} !== 0)`;
   const keep = leftOps.filter((o) => o.acc);
-  const binF = r.binForm ? `${1 | r.binForm.leaf}${keep.length ? ` | (info.tgt ? ${keep.map((o) => `opLid === ${o.lid} ? form & ${o.acc} : `).join('')}0 : 0)` : ''}` : '1';
+  const bc = r.binForm?.form ?? 1;
+  const binF = keep.length ? `(info.tgt ? ${keep.map((o) => `opLid === ${o.lid} ? ${bc & ~o.acc} | (form & ${o.acc}) : `).join('')}${bc} : ${bc})` : `${bc}`;
   // A NUD arm that won: its node at slot c finished (`fin`), _keep moves it over the best it beat.
   const won = (i: number, fin: string, form: string, tail: boolean, capped: string) =>
     `${fin === 'finR' ? finRTs(r.name, `nud${i}`, 'c', 'save') : finPTs(r.name, `nud${i}`, 'c')}; _keep(b, c); bestPos = pos;${markTs(d, i)} bf = ${form}; bt = ${tail}; bc = ${capped};`;
@@ -1191,8 +1192,8 @@ ${shared.rebindFamily(ir, 'methods')}`;
 function targetRuntimeTs(t: TargetsIR): string {
   return `let _acc = 0, _accF = 0;
 function _accSwap(init: number): number { const prev = _acc; _acc = init; return prev; }
-function _accEnd(prev: number, ok: boolean, low: number, last: number): boolean { if (ok) { const p = _acc & ${t.passes}; _accF = p | low | ((p << 1) & last); } _acc = prev; return ok; }
-function _accK(m: number): boolean { _acc = (_acc & ~((_acc >> 1) & ${t.passes}) & (_form | ~m) & ${t.passes}) | (_form & (m << 1)); return true; }
+function _accEnd(prev: number, ok: boolean, low: number, last: number): boolean { if (ok) { const p = _acc & ${t.passes}; _accF = (~p & ${t.passes}) | low | ((p << 1) & last); } _acc = prev; return ok; }
+function _accK(m: number): boolean { _acc = (_acc & ~((_acc >> 1) & ${t.passes}) & ~(_form & m) & ${t.passes}) | (_form & (m << 1)); return true; }
 function _accS(): boolean { _acc &= ~((_acc >> 1) & ${t.passes}); return true; }
 `;
 }
