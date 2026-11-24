@@ -362,7 +362,7 @@ for (const path of FIXTURES) {
   for (const [k, n] of want) { const got = k.split('|').reduce((s, h) => s + (heads.get(h) ?? 0), 0); if (got !== n) fail(`int table probe: ${k} printed ${got}×, IR holds ${n}`); }
   // The packing round-trips through the decoder's arithmetic.
   const s = packInts(data), dec: number[] = [];
-  for (let i = 0, val = 0, sh = 0; i < s.length; i++) { const d = s.charCodeAt(i) - 48; if (d >= 32) { val += (d - 32) << sh; sh += 5; } else { dec.push(val + (d << sh) - 1); val = 0; sh = 0; } }
+  for (let i = 0, val = 0, sh = 0; i < s.length; i++) { const d = s.charCodeAt(i); if (d >= 93) { val += (d - 93) << sh; sh += 5; } else { dec.push(val + ((d - 35) << sh) - 1); val = 0; sh = 0; } }
   if (dec.join() !== data.join()) fail(`packInts: ${data} decodes as ${dec}`);
   console.log(`  int table probe: ${[...want.values()].reduce((a, b) => a + b, 0)} IR constructs ≡ printed forms`);
 }
