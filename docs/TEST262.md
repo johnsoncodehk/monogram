@@ -20,7 +20,7 @@ a test that test262 runs both sloppy and strict, or only in one mode, or as a mo
 first run's text: `"use strict";` prepended for `onlyStrict`). What depends on the goal or the mode is a class
 of its own below (`needs-parameter`).
 
-**21764 of 24677 agree (88.2%).**
+**21773 of 24677 agree (88.2%).**
 
 ## Scoreboard
 
@@ -35,7 +35,7 @@ of its own below (`needs-parameter`).
 | `directive-prologue` | 62 | 51 | 0 | 11 | 0 | 0 |
 | `eval-code` | 347 | 347 | 0 | 0 | 0 | 0 |
 | `export` | 3 | 0 | 3 | 0 | 0 | 0 |
-| `expressions` | 11156 | 9110 | 742 | 1300 | 4 | 0 |
+| `expressions` | 11156 | 9110 | 745 | 1297 | 4 | 0 |
 | `function-code` | 217 | 217 | 0 | 0 | 0 | 0 |
 | `future-reserved-words` | 55 | 29 | 8 | 18 | 0 | 0 |
 | `global-code` | 42 | 28 | 0 | 14 | 0 | 0 |
@@ -45,13 +45,13 @@ of its own below (`needs-parameter`).
 | `keywords` | 25 | 0 | 25 | 0 | 0 | 0 |
 | `line-terminators` | 41 | 24 | 17 | 0 | 0 | 0 |
 | `literals` | 536 | 215 | 119 | 202 | 0 | 0 |
-| `module-code` | 599 | 433 | 53 | 113 | 0 | 0 |
+| `module-code` | 599 | 433 | 57 | 109 | 0 | 0 |
 | `punctuators` | 11 | 1 | 10 | 0 | 0 | 0 |
 | `reserved-words` | 27 | 14 | 6 | 7 | 0 | 0 |
 | `rest-parameters` | 11 | 10 | 0 | 1 | 0 | 0 |
 | `source-text` | 1 | 1 | 0 | 0 | 0 | 0 |
 | `statementList` | 80 | 80 | 0 | 0 | 0 | 0 |
-| `statements` | 9399 | 7885 | 461 | 1053 | 0 | 0 |
+| `statements` | 9399 | 7885 | 463 | 1051 | 0 | 0 |
 | `types` | 113 | 102 | 7 | 4 | 0 | 0 |
 | `white-space` | 67 | 61 | 6 | 0 | 0 | 0 |
 | `annexB/comments` | 8 | 0 | 0 | 0 | 8 | 0 |
@@ -61,7 +61,7 @@ of its own below (`needs-parameter`).
 | `annexB/global-code` | 153 | 153 | 0 | 0 | 0 | 0 |
 | `annexB/literals` | 8 | 8 | 0 | 0 | 0 | 0 |
 | `annexB/statements` | 22 | 16 | 0 | 6 | 0 | 0 |
-| **total** | **24677** | **20188** | **1576** | **2901** | **12** | **0** |
+| **total** | **24677** | **20188** | **1585** | **2892** | **12** | **0** |
 
 WE-ACCEPT: test262 says SyntaxError, the grammar parses. WE-REJECT: test262 parses, the grammar rejects.
 
@@ -112,16 +112,16 @@ run); where it does not, the rule is outside even its syntactic layer.
 | `accept/numeric-literal-lexical`: a numeric literal the lexical grammar does not derive | 3 | 3 | grammar bug: fix | `language/literals/numeric/numeric-separators/numeric-separator-literal-dil-dot-nsl-dd-err.js`<br>`language/literals/numeric/numeric-separators/numeric-separator-literal-dil-dot-nsl-ep-err.js`<br>`language/literals/numeric/numeric-separators/numeric-separator-literal-dil-dot-nsl-err.js` |
 | `accept/switch-statement-outside-clause`: a statement in a switch body before any `case` | 1 | 1 | grammar bug: fix | `language/statements/switch/S12.11_A3_T5.js` |
 | `accept/strict-mode`: strict mode code | 397 | 397 | needs a parameterised production the engine lacks (roadmap item 4) | `language/arguments-object/10.5-1gs.js`<br>`language/expressions/function/name-arguments-strict.js`<br>`language/statements/class/elements/gen-private-method/yield-identifier-spread-strict.js` |
-| `accept/module-goal`: module code | 36 | 36 | needs a parameterised production the engine lacks (roadmap item 4) | `language/expressions/class/class-name-ident-await-module.js`<br>`language/module-code/early-undef-continue.js`<br>`language/module-code/parse-err-syntax-2.js` |
+| `accept/module-goal`: module code | 32 | 32 | needs a parameterised production the engine lacks (roadmap item 4) | `language/expressions/class/class-name-ident-await-module.js`<br>`language/module-code/early-new-target.js`<br>`language/module-code/export-expname-unpaired-surrogate.js` |
 | `accept/return-outside-function`: `return` outside a function | 13 | 13 | needs a parameterised production the engine lacks (roadmap item 4) | `language/global-code/return.js`<br>`language/statements/return/S12.9_A1_T10.js`<br>`language/statements/return/S12.9_A1_T5.js` |
 | `accept/private-names`: private names | 346 | 346 | early error: a checker over the tree, not the grammar: not built | `language/expressions/class/elements/fields-duplicate-privatenames.js`<br>`language/expressions/class/elements/syntax/early-errors/grammar-privatename-in-computed-property-missing.js`<br>`language/statements/class/elements/syntax/early-errors/delete/field-delete-twice-covered-err-delete-call-expression-private-method-gen.js` |
-| `accept/assignment-target`: an invalid assignment target, or a literal that does not cover an AssignmentPattern | 322 | 322 | early error: a checker over the tree, not the grammar: not built | `language/expressions/assignment/dstr/array-elem-nested-array-invalid.js`<br>`language/expressions/assignmenttargettype/parenthesized-equalityexpression-abstract-not-equal-relationalexpression-1.js`<br>`language/expressions/assignmenttargettype/parenthesized-updateexpression-star-star-exponentiationexpression-1.js` |
+| `accept/assignment-target`: an invalid assignment target, or a literal that does not cover an AssignmentPattern | 319 | 319 | early error: a checker over the tree, not the grammar: not built | `language/expressions/assignment/dstr/array-elem-nested-array-invalid.js`<br>`language/expressions/assignmenttargettype/parenthesized-equalityexpression-abstract-not-equal-relationalexpression-2.js`<br>`language/expressions/assignmenttargettype/parenthesized-updateexpression-star-star-exponentiationexpression-1.js` |
 | `accept/escaped-keyword`: a keyword written with a Unicode escape | 304 | 304 | early error: a checker over the tree, not the grammar: not built | `language/expressions/arrow-function/dstr/syntax-error-ident-ref-break-escaped.js`<br>`language/expressions/class/async-gen-method/yield-as-identifier-reference-escaped.js`<br>`language/identifiers/val-in-via-escape-hex4.js` |
 | `accept/duplicate-bindings`: duplicate or conflicting declarations | 248 | 248 | early error: a checker over the tree, not the grammar: not built | `language/block-scope/syntax/redeclaration/async-function-name-redeclaration-attempt-with-async-function.js`<br>`language/block-scope/syntax/redeclaration/var-name-redeclaration-attempt-with-generator.js`<br>`language/statements/class/syntax/early-errors/class-definition-evaluation-block-duplicate-binding.js` |
 | `accept/regexp-pattern`: a regular expression's pattern or flags | 170 | 170 | early error: a checker over the tree, not the grammar: not built | `language/literals/regexp/early-err-arithmetic-modifiers-add-remove-i.js`<br>`language/literals/regexp/early-err-arithmetic-modifiers-should-not-unicode-case-fold-i.js`<br>`language/literals/regexp/named-groups/invalid-incomplete-groupname-2.js` |
 | `accept/super-new-target`: `super` and `new.target` outside their contexts | 154 | 154 | early error: a checker over the tree, not the grammar: not built | `language/expressions/assignment/target-cover-newtarget.js`<br>`language/expressions/class/elements/syntax/early-errors/grammar-special-meth-contains-super-private-method.js`<br>`language/statements/class/elements/nested-comp-name-init-err-contains-super.js` |
 | `accept/use-strict-with-non-simple-parameters`: "use strict" in a function with a non-simple parameter list | 110 | 110 | early error: a checker over the tree, not the grammar: not built | `language/expressions/arrow-function/array-destructuring-param-strict-body.js`<br>`language/expressions/class/gen-method-static/rest-param-strict-body.js`<br>`language/statements/async-function/rest-param-strict-body.js` |
-| `accept/await-yield-binding-identifier`: `await` / `yield` as a binding name in an async function / generator | 74 | 74 | early error: a checker over the tree, not the grammar: not built | `language/expressions/async-arrow-function/await-as-binding-identifier.js`<br>`language/expressions/class/elements/gen-private-method-static/yield-as-binding-identifier.js`<br>`language/statements/class/definition/methods-gen-yield-as-parameter.js` |
+| `accept/await-yield-binding-identifier`: `await` / `yield` as a binding name in an async function / generator | 72 | 72 | early error: a checker over the tree, not the grammar: not built | `language/expressions/async-arrow-function/await-as-binding-identifier.js`<br>`language/expressions/class/elements/gen-private-method-static/yield-as-binding-identifier.js`<br>`language/statements/class/async-method/await-as-binding-identifier.js` |
 | `accept/arguments-in-class-field`: `arguments` in a class field initializer | 58 | 58 | early error: a checker over the tree, not the grammar: not built | `language/expressions/class/elements/arrow-fnc-init-err-contains-arguments.js`<br>`language/expressions/class/elements/private-literal-name-init-err-contains-arguments.js`<br>`language/statements/class/elements/nested-private-ternary-init-err-contains-arguments.js` |
 | `accept/labels-break-continue`: labels, `break` and `continue` | 53 | 53 | early error: a checker over the tree, not the grammar: not built | `language/expressions/async-generator/early-errors-expression-label-name-await.js`<br>`language/statements/continue/S12.7_A1_T2.js`<br>`language/statements/for-of/labelled-fn-stmt-lhs.js` |
 | `accept/class-element-names`: class elements named `constructor` / `prototype` | 44 | 44 | early error: a checker over the tree, not the grammar: not built | `language/expressions/class/elements/fields-literal-name-propname-constructor.js`<br>`language/expressions/class/elements/syntax/early-errors/grammar-static-gen-meth-prototype.js`<br>`language/statements/class/elements/syntax/early-errors/grammar-special-meth-ctor-async-gen.js` |
@@ -137,8 +137,8 @@ run); where it does not, the rule is outside even its syntactic layer.
 | verdict | files |
 |---|---:|
 | grammar bug: fix | 515 |
-| needs a parameterised production the engine lacks (roadmap item 4) | 446 |
-| early error: a checker over the tree, not the grammar: not built | 1940 |
+| needs a parameterised production the engine lacks (roadmap item 4) | 442 |
+| early error: a checker over the tree, not the grammar: not built | 1935 |
 
 - `accept/rest-element-shape` — `function f(...a = 1) {}`, `function f(...a,) {}`, `var [...a, b] = c`, `({...a,} = b)` in binding position: FunctionRestParameter and BindingRestElement are `... BindingIdentifier | ... BindingPattern`, last, with no Initializer and no comma after.
 - `accept/await-yield-identifier-reference` — IdentifierReference and LabelIdentifier are `[~Yield] yield` / `[~Await] await`, parameterised productions the engine has ([Await]/[Yield] families): `({await})` in an async function, `({yield})` in a generator, `yield: ;` in a generator, `await` in a class static block.
@@ -207,13 +207,13 @@ means the pass must collect the names each scope (or class) declares.
 | class | files | needs | what the checker reads |
 |---|---:|---|---|
 | `accept/private-names`: private names | 346 | scope | the private names each class declares, resolved through the enclosing classes (duplicates, getter / setter pairing, undeclared uses), plus `delete` of a private reference |
-| `accept/assignment-target`: an invalid assignment target, or a literal that does not cover an AssignmentPattern | 322 | tree | the left side of an assignment, an update or a for-in/of head: AssignmentTargetType, and the refinement of a literal to an AssignmentPattern |
+| `accept/assignment-target`: an invalid assignment target, or a literal that does not cover an AssignmentPattern | 319 | tree | the left side of an assignment, an update or a for-in/of head: AssignmentTargetType, and the refinement of a literal to an AssignmentPattern |
 | `accept/escaped-keyword`: a keyword written with a Unicode escape | 304 | tree | an identifier token: its escape-decoded text against the reserved words, with the enclosing function kind for `await` / `yield` |
 | `accept/duplicate-bindings`: duplicate or conflicting declarations | 248 | scope | the declared names of every block, function, switch and module scope: LexicallyDeclaredNames against themselves and against VarDeclaredNames, and parameter names |
 | `accept/regexp-pattern`: a regular expression's pattern or flags | 170 | tree | a regular-expression token: its body against the Pattern grammar, its flags against the flag set |
 | `accept/super-new-target`: `super` and `new.target` outside their contexts | 154 | tree | a `super` / `new.target` node and its enclosing function and method kinds |
 | `accept/use-strict-with-non-simple-parameters`: "use strict" in a function with a non-simple parameter list | 110 | tree | a function node: its parameter list's shape and its body's directive prologue |
-| `accept/await-yield-binding-identifier`: `await` / `yield` as a binding name in an async function / generator | 74 | tree | a binding name and its enclosing function kinds (async, generator, static block) |
+| `accept/await-yield-binding-identifier`: `await` / `yield` as a binding name in an async function / generator | 72 | tree | a binding name and its enclosing function kinds (async, generator, static block) |
 | `accept/arguments-in-class-field`: `arguments` in a class field initializer | 58 | tree | a field initializer: does it contain `arguments` outside a non-arrow function |
 | `accept/labels-break-continue`: labels, `break` and `continue` | 53 | tree | a statement and its enclosing labels and iteration / breakable statements, stopping at function and static-block boundaries |
 | `accept/class-element-names`: class elements named `constructor` / `prototype` | 44 | tree | a class body: element names and kinds (`constructor`, `prototype`, a second constructor) |
@@ -226,7 +226,7 @@ means the pass must collect the names each scope (or class) declares.
 | `accept/template-escape`: a NotEscapeSequence in an untagged template | 3 | tree | an untagged template token: does it contain a NotEscapeSequence |
 | `accept/cover-initialized-name`: a CoverInitializedName in an object literal | 1 | tree | an object literal not refined to an AssignmentPattern: does it contain a CoverInitializedName |
 
-Tree alone: 1346 files; scope analysis: 594 files. The strict-mode and Module-goal rules (`needs-parameter` above) are early errors too where they forbid a name or a statement; they are counted there because they need the goal and mode first.
+Tree alone: 1341 files; scope analysis: 594 files. The strict-mode and Module-goal rules (`needs-parameter` above) are early errors too where they forbid a name or a statement; they are counted there because they need the goal and mode first.
 
 ## Calibration: production parsers on the same files
 
@@ -239,9 +239,9 @@ declarations, labels, which tsc reports outside its parser; it includes TypeScri
 
 | parser | right | of 24677 | on the 20200 valid tests | on the 4477 parse-negative tests |
 |---|---:|---:|---:|---:|
-| `javascript.ts` (interpreter) | 21764 | 88.2% | 20188 (99.9%) | 1576 (35.2%) |
+| `javascript.ts` (interpreter) | 21773 | 88.2% | 20188 (99.9%) | 1585 (35.4%) |
 | acorn 8.16.0 | 24394 | 98.9% | 19926 (98.6%) | 4468 (99.8%) |
 | tsc 5.9.3 parser | 21391 | 86.7% | 20123 (99.6%) | 1268 (28.3%) |
 | tsc 5.9.3 parser + binder | 21829 | 88.5% | 19934 (98.7%) | 1895 (42.3%) |
 
-Of the 2901 WE-ACCEPT files, acorn also accepts 0 (in every run), tsc's parser 2535, tsc's parser + binder 1908.
+Of the 2892 WE-ACCEPT files, acorn also accepts 0 (in every run), tsc's parser 2529, tsc's parser + binder 1902.
