@@ -13,12 +13,13 @@
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
-import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT, RM_AMAX } from './recovery-family.ts';
-import { ATOM, COMPARISON, findAnyName, stopBytes, unitMask, isList, isNum, isOpt, isRec, isRecList, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
+import { beginRsShape, rsPlanFns, rsShapeCall, rsShapeLowering, rsShapeRuntime, setRsShape, type RsShape } from './rust-shape.ts';
+import { ATOM, COMPARISON, findAnyName, stopBytes, unitMask, isList, isNum, isOpt, isRec, isRecList, isValList, isValTy, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 import type {
@@ -1160,6 +1161,12 @@ fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) 
 }`;
 }
 
+// The shape being emitted (emit option `shape`, src/rust-shape.ts), for the length of one
+// emitParser call; null: the CST builder, and every printed byte as without the option. With a
+// shape, an accept site finishes ENGINE ARM `key` of the rule (its construct plan) in place of the
+// rule's node: the builder's \`node\` receives the arm id where the CST builder receives the rule id.
+let SHAPE_RS: RsShape | null = null;
+const aid = (rule: string, key: string, rid: number): number => (SHAPE_RS ? SHAPE_RS.plan.armId(rule, key) : rid);
 // The step walk's Rust spelling (emit-portable.ts, StepLowering), over the receiver `recv`: `self`
 // at a rule's top level (children accumulate on `self.scratch`), `p` inside a closure or a method
 // that took `let p = self`; `r`: in recognize form (ParserIR.forms), advancing and building
@@ -1179,12 +1186,12 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (r ? `${recv}.${name}_bp(${bp}).is_some()` : `${recv}.call_rule(|p| p.${name}_bp(${bp}))`),
     // Declared target contexts (declared-targets.ts): computed only in the building form (a
-    // recognized rd rule computes no form). A container arm's steps run in a fresh accumulator:
-    // `acc_no` returns false, so the arm fails as its steps did.
+    // recognized rd rule computes no form). A container arm's steps run in a fresh accumulator,
+    // the enclosing one kept in a local of the frame (no stack: nothing allocated per parse).
     acc: (call, mask) => (r ? call : `(${call} && ${recv}.acc_k(${mask}))`),
     accSep: () => (r ? 'true' : `${recv}.acc_s()`),
     target: (mask) => { if (r) throw new Error('rust: a target() step in a recognized body'); return `(${recv}.form & ${mask}) != 0`; },
-    accRun: (cond, af) => (r ? cond : `(${recv}.acc_in(${af.init}) && ${cond} && ${recv}.acc_out(${af.low}, ${af.last}) || ${recv}.acc_no())`),
+    accRun: (cond, af) => (r ? cond : `{ let _a = ${recv}.acc; ${recv}.acc = ${af.init}; let _r = (${cond}); if _r { ${recv}.acc_out(${af.low}, ${af.last}); } ${recv}.acc = _a; _r }`),
     armForm: armFormRs,
     // A body guard (emit-portable.ts annotateSteps): star tests it before each attempt inside an
     // out-of-line loop (`star_in`); opt / sep test it here and make their attempt out of line
@@ -1229,6 +1236,14 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
     choice: (peek, tries) => `${peek ? `let _ft = ${recv}.peek(); ` : ''}${tries.join(' ')} false`,
     // FIRST dispatch; restore pos/scratch/builder on arm half-failure (like a choice).
     predictive: (arms) => `let t = match ${recv}.peek() { Some(t) => t, None => return false };\n${arms.map((a, i) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(a.first, 't', ids)} ${a.branch}`).join('\n')}\n        false`,
+    // A shape's step (building form): its slot tagged; a marked body's slots preceded by the
+    // iteration marker (inserted when the body matched). Inherited context is refused before here.
+    ...(SHAPE_RS && !r ? { shaped: (s: Step, body: string) => {
+      if (s.inh?.length || s.threadInit) throw new Error('rustTarget: inherited context attributes are not printed yet');
+      const tagged = s.tag !== undefined ? `(${body} && ${recv}.sh_tag(${s.tag}))` : body;
+      if (s.mark === undefined) return tagged;
+      return `{ let c = ${recv}.scratch.len(); if ${tagged} { ${recv}.b.mark(&mut ${recv}.scratch, c, ${s.mark}); true } else { false } }`;
+    } } : {}),
   };
   return L;
 }
@@ -1238,16 +1253,14 @@ const armFormRs = (af: ArmForm, pratt: boolean): string => (af.k === 'const' ? `
 // The low bits of a form (FORM_LOW), in a grammar with target contexts; the form itself otherwise.
 const lowRs = (ir: { targets?: TargetsIR }, f: string): string => (ir.targets ? `(${f} & 3)` : f);
 // Declared target contexts' state on the parser (as target-ts.ts targetRuntimeTs): the open
-// container's accumulator, the enclosing ones' on acc_st, acc_f the form of the container arm that just matched.
-const targetFieldsRs = (ir: ParserIR): string => (ir.targets ? '\n    acc: u8,\n    acc_f: u8,\n    acc_st: Vec<u8>,' : '');
-const targetInitRs = (ir: ParserIR): string => (ir.targets ? ' acc: 0, acc_f: 0, acc_st: Vec::new(),' : '');
+// container's accumulator (an enclosing one's is a local of its arm: accRun), acc_f the form of the container arm that just matched.
+const targetFieldsRs = (ir: ParserIR): string => (ir.targets ? '\n    acc: u8,\n    acc_f: u8,' : '');
+const targetInitRs = (ir: ParserIR): string => (ir.targets ? ' acc: 0, acc_f: 0,' : '');
 function targetRuntimeRs(ir: ParserIR): string {
   const t = ir.targets;
   if (!t) return '';
   return `
-    fn acc_in(&mut self, init: u8) -> bool { self.acc_st.push(self.acc); self.acc = init; true }
-    fn acc_out(&mut self, low: u8, last: u8) -> bool { let q = self.acc & ${t.passes}; self.acc_f = q | low | ((q << 1) & last); self.acc_no(); true }
-    fn acc_no(&mut self) -> bool { self.acc = self.acc_st.pop().unwrap_or(0); false }
+    fn acc_out(&mut self, low: u8, last: u8) { let q = self.acc & ${t.passes}; self.acc_f = q | low | ((q << 1) & last); }
     fn acc_k(&mut self, m: u8) -> bool { self.acc = (self.acc & !((self.acc >> 1) & ${t.passes}) & (self.form | !m) & ${t.passes}) | (self.form & (m << 1)); true }
     fn acc_s(&mut self) -> bool { self.acc &= !((self.acc >> 1) & ${t.passes}); true }`;
 }
@@ -1336,14 +1349,14 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
     ...rsRuleBase(ids, 'self'),
     steps: rsSteps(ids, 'self', false),
     fn: (lines) => `${sig}\n${lines.join('\n')}\n    }`,
-    accept: (i) => `{ ${F.set(i)}return Some(self.finish(${rid}, sb, self.off_at(save), save)); }`,
+    accept: (i) => `{ ${F.set(i)}return Some(self.finish(${aid(r.name, `alt${i}`, rid)}, sb, self.off_at(save), save)); }`,
     open: (clean) => `        let save = self.pos; let sb = self.scratch.len();${clean ? '' : ' let ck = self.b.checkpoint();'}`,
     peekOrFail: '        let t = match self.peek() { Some(t) => t, None => return None };',
     fail: (clean) => (clean ? '        None' : '        self.back(save); self.scratch.truncate(sb); self.b.restore(ck);\n        None'),
     openBest: (d) => `        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();\n        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(d)}${F.best}`,
-    cand: (d, i, cond) => candRs(d, i, cond, rid, `${markRs(d, i)}${F.keep(i)}`),
+    cand: (d, i, cond) => candRs(d, i, cond, aid(r.name, `alt${i}`, rid), `${markRs(d, i)}${F.keep(i)}`),
     closeBest: `        self.pos = best_pos;${F.close}\n        best`,
-    commit: (i, conds, cond, undo, nullable) => commitRs(conds, commitBodyRs(rid, cond, undo, nullable, F.set(i) ? `{ ${F.set(i)}}` : undefined), 'return None;'),
+    commit: (i, conds, cond, undo, nullable) => commitRs(conds, commitBodyRs(aid(r.name, `alt${i}`, rid), cond, undo, nullable, F.set(i) ? `{ ${F.set(i)}}` : undefined), 'return None;'),
     commitFail: '{ return None; }',
   });
 }
@@ -1481,14 +1494,19 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   // The operator tables (emit-portable prattOpTables) as `match` functions: LLVM compiles a match
   // on the lid returning constants to a lookup table, no hashing.
   const ops = prattOpTables(r, ids);
-  const ctxT = r.binForm !== undefined;
-  const binArms = ops.bin.map((b) => `${b.lid} => Some((${b.lbp}, ${b.rbp}, ${b.tgt}, ${b.noUnary}${ctxT ? `, ${b.ctx ?? 0}, ${b.acc ?? 0}` : ''}))`).join(', ');
+  const binArms = ops.bin.map((b) => `${b.lid} => Some((${b.lbp}, ${b.rbp}, ${binTestsLeft(b)}, ${b.noUnary}))`).join(', ');
   // Each arm's form (declared-targets.ts; without target contexts every one but the prefix arm's is 0).
   const fm = (i: number) => (r.nudForm ? armFormRs(r.nudForm[i]!, true) : '0');
   const postTokForm = (k: number) => r.postfixTokForm?.[r.postfixToks.findIndex((tok) => kidOf(ids, tok) === k)] ?? 0;
   const lf = (f: string) => lowRs(ir, f);
   // The binary node's form: not a target, plus its leaf bits and those its left operand passes.
-  const binF = r.binForm ? `${1 | r.binForm.leaf}${r.binary.some((b) => b.accLeft) ? ' | (form & bacc)' : ''}` : '1';
+  // The operators a target context reads (emit-portable binLeftOps) are a switch behind the table's
+  // test bit: every other operator tests what it did without contexts and its node's form is a constant.
+  const leftOps = binLeftOps(ops);
+  const tgtFail = leftOps.length === 0 ? `${lf('form')} != 0`
+    : `match op_lid { ${leftOps.map((o) => `${o.lid} => ${o.ctx ? `(form & ${o.ctx}) != ${o.ctx}` : 'false'}, `).join('')}_ => ${lf('form')} != 0 }`;
+  const keep = leftOps.filter((o) => o.acc);
+  const binF = r.binForm ? `${1 | r.binForm.leaf}${keep.length ? ` | (if tgt { match op_lid { ${keep.map((o) => `${o.lid} => form & ${o.acc}, `).join('')}_ => 0 } } else { 0 })` : ''}` : '1';
   const preArms = ops.pre.map((p) => `${p.lid} => Some((${p.rbp}, ${p.tgt}, ${p.form}))`).join(', ');
   const postArms = ops.post.map((p) => `${p.lid} => Some((${p.lbp}, ${p.tgt}))`).join(', ');
   // `won` records the node just finished as the best so far and moves `ck` past it; `lost` drops
@@ -1496,7 +1514,9 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
     `best_pos = self.pos;${markRs(d, i)} bf = ${form}; bt = ${tail}; bc = ${capped}; ck = self.b.checkpoint();`;
   const lost = lostRs;
-  const fin = `self.finish(${rid}, sb, left.off as usize, left.tok_start as usize)`;
+  const finK = (key: string) => `self.finish(${aid(r.name, key, rid)}, sb, left.off as usize, left.tok_start as usize)`;
+  const fin = finK('bin');
+  const postKey = (kid: number) => `post${r.postfixToks.findIndex((tok) => kidOf(ids, tok) === kid)}`;
   const L: PrattLowering = {
     steps: rsSteps(ids, 'self', false, false),   // no body guards in Pratt arms (see rsSteps)
     ifAll: ifRs,
@@ -1506,22 +1526,22 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     nudGuard: (g, keyed) => guardCond(g, 't', keyed),
     beats: (i, end) => beatsRs(d, end, i),
     leafEnd: 'save + 1',
-    nudLeaf: (i) => `{ self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; best = Some(self.finish(${rid}, sb, t.off as usize, save)); ${won(i, fm(i), false, false)} self.back(save); }`,
+    nudLeaf: (i) => `{ self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; best = Some(self.finish(${aid(r.name, `nud${i}`, rid)}, sb, t.off as usize, save)); ${won(i, fm(i), false, false)} self.back(save); }`,
     nudTpl: (i, hole) => `        if t.kid == ${kidOf(ids, '$templateHead')} {
             match self.match_template(Self::parse_${hole}) {
-                Some(n) if ${beatsRs(d, 'self.pos', i)} => { if n.present { self.scratch.push(n.h); } best = Some(self.finish(${rid}, sb, n.off as usize, n.tok_start as usize)); ${won(i, fm(i), false, false)} }
+                Some(n) if ${beatsRs(d, 'self.pos', i)} => { if n.present { self.scratch.push(n.h); } best = Some(self.finish(${aid(r.name, `nud${i}`, rid)}, sb, n.off as usize, n.tok_start as usize)); ${won(i, fm(i), false, false)} }
                 _ => { ${lost} }
             }
             self.back(save);
         }`,
-    nudSeq: (i, cond, tail, cap) => candRs(d, i, cond, rid, `${markRs(d, i)} bf = ${fm(i)}; bt = ${tail}; bc = ${capRs(cap)};`),
+    nudSeq: (i, cond, tail, cap) => candRs(d, i, cond, aid(r.name, `nud${i}`, rid), `${markRs(d, i)} bf = ${fm(i)}; bt = ${tail}; bc = ${capRs(cap)};`),
     // An operand that parses but is not the target the operator requires fails the whole Pratt
     // call, whatever another arm matched.
     nudPrefix: (i) => `        if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
             match self.${r.name}_bp(pbp) {
                 Some(_) if ptgt && ${lf('self.form')} != 0 => { self.back(save); ${lost} self.capped = false; return None; }
-                Some(operand) if ${beatsRs(d, 'self.pos', i)} => { if operand.present { self.scratch.push(operand.h); } best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won(i, 'pform', true, false)} }
+                Some(operand) if ${beatsRs(d, 'self.pos', i)} => { if operand.present { self.scratch.push(operand.h); } best = Some(self.finish(${aid(r.name, `nud${i}`, rid)}, sb, self.off_at(save), save)); ${won(i, 'pform', true, false)} }
                 _ => { ${lost} }
             }
             self.back(save);
@@ -1529,15 +1549,15 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     dispatch: dispatchRsL('t', false),
     // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node, form,
     // tail and capped flag; failing, no node and the frame's empty state.
-    commitLeaf: (i, conds) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len(); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; let n = self.finish(${rid}, sb, t.off as usize, save); self.form = ${fm(i)}; self.tail = false; return Some(n); }`, NUD_FAIL_RS, true),
+    commitLeaf: (i, conds) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len(); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; let n = self.finish(${aid(r.name, `nud${i}`, rid)}, sb, t.off as usize, save); self.form = ${fm(i)}; self.tail = false; return Some(n); }`, NUD_FAIL_RS, true),
     // A 'tail' cap leaves the flag as the trailing operand set it.
-    commitSeq: (i, conds, cond, tail, cap, undo, nullable) => commitRs(conds, commitBodyRs(rid, cond, undo, nullable, cap === 'tail' ? `{ self.form = ${fm(i)}; self.tail = ${tail}; }` : fm(i) === '0' ? `nud ${tail} ${capRs(cap)}` : `{ self.form = ${fm(i)}; self.tail = ${tail}; self.capped = ${capRs(cap)}; }`), NUD_FAIL_RS),
-    commitPrefix: (_i, conds) => commitRs(conds, `if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
+    commitSeq: (i, conds, cond, tail, cap, undo, nullable) => commitRs(conds, commitBodyRs(aid(r.name, `nud${i}`, rid), cond, undo, nullable, cap === 'tail' ? `{ self.form = ${fm(i)}; self.tail = ${tail}; }` : fm(i) === '0' ? `nud ${tail} ${capRs(cap)}` : `{ self.form = ${fm(i)}; self.tail = ${tail}; self.capped = ${capRs(cap)}; }`), NUD_FAIL_RS),
+    commitPrefix: (i, conds) => commitRs(conds, `if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
             let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
             match self.${r.name}_bp(pbp) {
                 Some(_) if ptgt && ${lf('self.form')} != 0 => { self.back(save); self.scratch.truncate(sb); self.b.restore(ck); self.capped = false; return None; }
-                Some(operand) => { if operand.present { self.scratch.push(operand.h); } let n = self.finish(${rid}, sb, self.off_at(save), save); self.form = pform; self.tail = true; self.capped = false; return Some(n); }
+                Some(operand) => { if operand.present { self.scratch.push(operand.h); } let n = self.finish(${aid(r.name, `nud${i}`, rid)}, sb, self.off_at(save), save); self.form = pform; self.tail = true; self.capped = false; return Some(n); }
                 None => { self.back(save); self.scratch.truncate(sb); self.b.restore(ck); }
             }
         }`, NUD_FAIL_RS),
@@ -1552,7 +1572,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
       notSuppressed: (set) => `self.suppress_cur != ${set}`,
       ifAll: (parts) => (parts.length ? `if ${parts.join(' && ')} ` : ''),
     },
-    ledArm: (_i, cond, form, closes, exit, clean, rebind, capsFromTail) => `{
+    ledArm: (i, cond, form, closes, exit, clean, rebind, capsFromTail) => { const fin = finK(`led${i}`); return `{
                 let led_save = self.pos; let sb = self.scratch.len();${clean ? '' : ' let ck = self.b.checkpoint();'}
                 self.scratch.push(left.h);
                 if ${cond} { left = ${fin};${capsFromTail ? ` if self.capped { self.form = ${form}; return Some(left); }` : ''} form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
@@ -1560,23 +1580,23 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
                 self.scratch.push(left.h);
                 if ${rebind} { left = ${fin};${capsFromTail ? ` if self.capped { self.form = ${form}; return Some(left); }` : ''} form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
                 self.scratch.truncate(sb);` : ''}${exit ? ' break;' : ''}
-            }`,
+            }`; },
     rebind: (p) => `self.rb_scan(${rbSite(ids, [p.open, p.operand, p.sep, p.rest])}, ${p.sepLid}, 0)`,
     ledSwitch: (cases) => `            match t.lid {
 ${cases.map((c) => `                ${c.key} => {\n${c.arms.map((a) => `                ${a}`).join('\n')}\n                }`).join('\n')}
                 _ => {}
             }`,
     postfixToks: (kids) => `            match t.kid {
-${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; left = ${fin}; form = ${postTokForm(k)}; continue; } }`).join('\n')}
+${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; left = ${finK(postKey(k))}; form = ${postTokForm(k)}; continue; } }`).join('\n')}
                 _ => {}
             }`,
     postfixTpl: (hole) => `
-            if !tail_closed && t.kid == ${kidOf(ids, '$templateHead')} { if let Some(n) = self.match_template(Self::parse_${hole}) { let sb = self.scratch.len(); if left.present { self.scratch.push(left.h); } if n.present { self.scratch.push(n.h); } left = ${fin}; form = ${ir.tpl ? postTokForm(kidOf(ids, ir.tpl.token)) : 0}; continue; } }`,
-    postfixOp: `            if let Some((plbp, ptgt)) = Self::${r.name}_post(t.lid) { if !tail_closed && plbp > min_bp${r.postfixSameLine ? ' && !t.nl' : ''} { if ptgt && ${lf('form')} != 0 { return None; } let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1; left = ${fin}; tail_closed = true; form = ${r.postForm ?? 1}; continue; } }`,
+            if !tail_closed && t.kid == ${kidOf(ids, '$templateHead')} { if let Some(n) = self.match_template(Self::parse_${hole}) { let sb = self.scratch.len(); if left.present { self.scratch.push(left.h); } if n.present { self.scratch.push(n.h); } left = ${finK(ir.tpl ? postKey(kidOf(ids, ir.tpl.token)) : 'post0')}; form = ${ir.tpl ? postTokForm(kidOf(ids, ir.tpl.token)) : 0}; continue; } }`,
+    postfixOp: `            if let Some((plbp, ptgt)) = Self::${r.name}_post(t.lid) { if !tail_closed && plbp > min_bp${r.postfixSameLine ? ' && !t.nl' : ''} { if ptgt && ${lf('form')} != 0 { return None; } let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1; left = ${finK('postop')}; tail_closed = true; form = ${r.postForm ?? 1}; continue; } }`,
     binary: `            let (op_lid, op_n, op_end) = self.op_read(t);
-            let (lbp, rbp, tgt, no_unary${ctxT ? ', bctx, bacc' : ''}) = match Self::${r.name}_bin(op_lid) { Some(x) => x, None => break };
+            let (lbp, rbp, tgt, no_unary) = match Self::${r.name}_bin(op_lid) { Some(x) => x, None => break };
             if lbp <= min_bp { break; }
-            if tgt && ${lf('form')} != 0 || no_unary && ${lf('form')} == 2${ctxT ? ' || (form & bctx) != bctx' : ''} { return None; }
+            if tgt && ${tgtFail} || no_unary && ${lf('form')} == 2 { return None; }
             let led_save = self.pos;
             let sb = self.scratch.len(); self.scratch.push(left.h);
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, op_end);
@@ -1585,7 +1605,7 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
             if rhs.present { self.scratch.push(rhs.h); }
             left = ${fin};
             if self.capped { self.form = ${binF}; return Some(left); }
-            form = ${binF}; tail_closed = true;${ctxT && !binF.includes('bacc') ? ' let _ = bacc;' : ''}
+            form = ${binF}; tail_closed = true;
         }`,
     entry: `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
         let prev = self.suppress_cur;
@@ -1595,7 +1615,7 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
         self.suppress_cur = prev;
         r
     }
-    fn ${r.name}_bin(op: u16) -> Option<(i64, i64, bool, bool${ctxT ? ', u8, u8' : ''})> { match op { ${binArms}${binArms ? ', ' : ''}_ => None } }
+    fn ${r.name}_bin(op: u16) -> Option<(i64, i64, bool, bool)> { match op { ${binArms}${binArms ? ', ' : ''}_ => None } }
     fn ${r.name}_pre(op: u16) -> Option<(i64, bool, u8)> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
     fn ${r.name}_post(op: u16) -> Option<(i64, bool)> { match op { ${postArms}${postArms ? ', ' : ''}_ => None } }`,
     // Rust's `loop` takes no label here: a led's `continue` / `break` are the innermost loop's.
@@ -2071,7 +2091,7 @@ function emitParserMachine(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shapeB
             if next.kid == ${kidOf(ids, "$templateTail")} { self.push_leaf(${ttIdOf(ar, '$templateTail')}, self.pos as u32, next.off, next.end); self.pos += 1; break; }
             self.back(save); self.scratch.truncate(sb); self.b.restore(ck); return None;
         }
-        Some(self.finish(${ruleIdOf(ar, '$template')}, sb, self.off_at(save), save))
+        Some(self.finish(${SHAPE_RS ? 0xFFFF : ruleIdOf(ar, '$template')}, sb, self.off_at(save), save))
     }
 ` : '';
 
@@ -2177,7 +2197,11 @@ pub trait Builder {
         EntryMeta { tok_start, tok_end, ext, off, end, kid_count: 1 }
     }
     /// Token span of handle h (leaf encoding or rule node).
-    fn tok_range(&self, h: Self::H) -> (u32, u32);
+    fn tok_range(&self, h: Self::H) -> (u32, u32);${SHAPE_RS ? `
+    /// A shape's step: the slot just left gets grammar tag t (rust-shape.ts).
+    #[inline(always)] fn tag(&mut self, _scratch: &mut Vec<Self::H>, _t: i32) {}
+    /// A shape's marked iteration: a marker slot with tag mt goes before its slots (from c).
+    #[inline(always)] fn mark(&mut self, _scratch: &mut Vec<Self::H>, _c: usize, _mt: i32) {}` : ''}
 }
 
 /// The engine's transient buffers — the scratch stack of handles, the top-level entry list and the
@@ -2529,7 +2553,9 @@ impl<'a, B: Builder> Parser<'a, B> {
     #[inline(always)]
     fn push_leaf(&mut self, tt_id: u16, tok_idx: u32, off: u32, end: u32) {
         let _ = self.b.leaf(&mut self.scratch, tt_id, tok_idx, off, end);
-    }
+    }${SHAPE_RS ? `
+    #[inline(always)]
+    fn sh_tag(&mut self, t: i32) -> bool { self.b.tag(&mut self.scratch, t); true }` : ''}
     #[inline(always)]
     fn finish(&mut self, rule_id: u16, sb: usize, fallback_off: usize, tok_start: usize) -> Spanned<B::H> {
         let (h, off, present) = self.b.finish(
@@ -5496,6 +5522,8 @@ const rustLowering: Lowering = {
   ident: snake,
   num: { int: 'isize', lid: 'u16', depth: 'i64', pos: 'u32', idx: 'usize' },
   type: (t, role, owned) => {
+    if (isValTy(t)) return 'W';
+    if (isValList(t)) return role === 'param' ? '&[W]' : 'Vec<W>';
     if (isList(t)) {
       const el = isRecList(t) ? recName(t) : RS_ELEM[t];
       return role === 'param' ? `&[${el}]` : `Vec<${el}>`;
@@ -5600,7 +5628,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
       return { c: `${side(a, false)} ${sp} ${side(b, true)}`, prec: p };
     },
     // An engine method is one of the recovery engine (`self`).
-    call: (name, args, method) => `${method ? 'self.' : ''}${name}(${args.join(', ')})`,
+    call: (name, args, method) => `${method || (SHAPE_RS && rsShapeCall(name)) ? 'self.' : ''}${name}(${args.join(', ')})`,
     len: (cx, l) => cx.atom(`${rsWrap(l, ATOM)}.len()`, 'int', 'usize'),
     code: (cx, s, i) => ({ c: `${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}] as u32`, ty: 'int', nat: 'u32', prec: RS_CAST }),
     hasAt: (cx, s, i, lit) => cx.atom(`${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}..].starts_with(${J(lit)}.as_bytes())`, 'bool', 'bool'),
@@ -5688,6 +5716,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
       lexAll: (cx, s) => [`let (${s.mutable ? 'mut ' : ''}${s.out}, ${s.err}) = lex_all(${cx.str(s.text)});`],
     },
   },
+  shape: rsShapeLowering,
   record: {
     field: (cx, r, _rec, f, ty, nat) => cx.atom(`${rsWrap(r, ATOM)}.${snake(f)}`, ty, nat),
     setField: (id, f, val) => [`${id}.${snake(f)} = ${val};`],
@@ -5711,8 +5740,17 @@ export const rustTarget = defineParserTarget({
   lowering: rustLowering,
   emitParser(grammar: CstGrammar, shared: SharedAlgorithms, opts: EmitOptions): string {
     const ir = portableIR(grammar, FACTS);
-    // A shape-building parser needs Lowering.shape, which this target does not have yet: refused.
-    if (opts.shape) shared.shapeFamily(shared.shapePlan(opts.shape, ir));
+    if (opts.shape) {
+      if (opts.recovery) throw new Error('rustTarget: a shape-building parser has no total parsing yet (emit options `shape` and `recovery` together)');
+      if (opts.shape.source !== grammar) throw new Error('rustTarget: the shape was defined on another grammar object than the one emitted');
+      const plan = shared.shapePlan(opts.shape, ir);
+      const st = beginRsShape(plan, opts.shape, ir.entry);
+      setRsShape(st); SHAPE_RS = st;
+      try {
+        const fns = shared.shapeFamily({ ...plan, fns: rsPlanFns(plan.fns) });
+        return emitRustLibrary(plan.ir, buildLexIdPlan(plan.ir), shared, false) + rsShapeRuntime(st, fns);
+      } finally { setRsShape(null); SHAPE_RS = null; }
+    }
     return emitRustLibrary(ir, buildLexIdPlan(ir), shared, !!opts.recovery) + (opts.recovery ? recoveryRegionRust(ir, shared) : '');
   },
   emitRunner: (opts) => emitRunner(opts),
@@ -5883,6 +5921,7 @@ ${shared.recoveryFamily(ir, true).split('\n').map((l) => (l ? `    ${l}` : l)).j
         let off = if p.pos < p.toks.len() { p.toks[p.pos].off as usize } else if p.pos > 0 { p.toks[p.pos - 1].end as usize } else { 0 };
         let n = p.finish(r as u16, p.scratch.len(), off, p.pos);
         if n.present { p.scratch.push(n.h); }
+        self.fin_off = off as isize;
     }
     fn en_look_end(&self) -> isize { self.p.look_end() as isize }
     fn en_look_set(&mut self, e: isize) { self.p.max_look = e as usize; self.p.peek_end = 0; }
@@ -5952,10 +5991,11 @@ function recoveryRegionRust(ir: ParserIR, shared: SharedAlgorithms): string {
 struct Diag { kind: isize, off: isize, end: isize, rel_off: isize, rel_end: isize, arg: isize }
 // The recovery interpreter's best longest-match candidate so far (recovery-family.ts BEST).
 struct BestCand { pos: isize, off: isize, won: isize, form: isize, tail: isize, capped: isize, h0: isize, hb: isize }
-// The words of a repair's message: a literal's text (by lid), a token kind's name.
+// The words of a repair's message: a literal's text (by lid), a token kind's name, a rule's name.
 const LID_TEXTS: &[&str] = &[${ids.lids.map(J).join(', ')}];
 fn lit_text(x: isize) -> &'static str { LID_TEXTS[x as usize] }
 fn kind_text(x: isize) -> &'static str { KIND_STR[x as usize] }
+fn rule_text(x: isize) -> &'static str { RULE_NAMES[x as usize] }
 ${shared.recoveryFamily(ir, false)}
 ${recoveryEngineRust(ir, shared)}
 /// A diagnostic: a span of the source (byte offsets), its message, and a related location.

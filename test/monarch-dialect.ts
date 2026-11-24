@@ -412,7 +412,7 @@ function monacoCompileProblems(lang: MonarchLanguage): string[] {
     if (!Array.isArray(r)) { const inc = (r as { include: string }).include; if (!exists(inc)) bad.push(`${st}: include ${inc} is not a state`); continue; }
     const [reSrc, action, next] = r as [string, unknown, string?];
     let rx: RegExp;
-    try { rx = new RegExp(`^(?:${expand(reSrc)})`, lang.ignoreCase ? 'i' : ''); } catch (e) { bad.push(`${st}: /${reSrc}/ does not compile: ${(e as Error).message}`); continue; }
+    try { rx = new RegExp(`^(?:${expand(reSrc)})`, (lang.ignoreCase ? 'i' : '') + (lang.unicode ? 'u' : '')); } catch (e) { bad.push(`${st}: /${reSrc}/ does not compile: ${(e as Error).message}`); continue; }
     if (Array.isArray(action)) {
       const groups = new RegExp(`${rx.source}|`).exec('')!.length - 1;
       if (groups !== action.length) bad.push(`${st}: /${reSrc}/ has ${groups} groups, ${action.length} actions`);

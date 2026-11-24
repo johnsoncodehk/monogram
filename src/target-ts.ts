@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA, type ShapeInhVal, type TargetsIR } from './emit-portable.ts';
-import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_AMAX, RM_FAIL, RM_PROBE, RM_SP } from './recovery-family.ts';
 import type { EmitOptions } from './target.ts';
@@ -772,7 +772,7 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
     acc: (call, mask) => (m === 'w' ? `(${call} && _accK(${mask}))` : call),
     accSep: () => (m === 'w' ? '_accS()' : 'true'),
     target: (mask) => { if (m !== 'w') throw new Error('ts: a target() step in a recognized body'); return `(_form & ${mask}) !== 0`; },
-    accRun: (cond, f) => (m === 'w' ? `(_accIn(${f.init}) && ${cond} ? _accOut(${f.low}, ${f.last}) : _accNo())` : cond),
+    accRun: (cond, f) => (m === 'w' ? `_accEnd(_accSwap(${f.init}), ${cond}, ${f.low}, ${f.last})` : cond),
     armForm: armFormTs,
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (m === 'r' ? `_drop(_n, ${name}_bpW(${bp}))` : `${name}_bpW(${bp})`),
@@ -988,8 +988,7 @@ function tsPrattOpTables(r: PrattRule, ids: LexIdPlan): string {
   const ops = prattOpTables(r, ids);
   const rec = <T extends { lid: number }>(xs: T[], v: (x: T) => string | number) => `{ ${xs.map((x) => `${x.lid}: ${v(x)}`).join(', ')} }`;
   const set = <T extends { lid: number; tgt: boolean }>(xs: T[]) => `new Set<number>([${xs.filter((x) => x.tgt).map((x) => x.lid).join(', ')}])`;
-  const ctx = r.binForm !== undefined;
-  return `const ${r.name}_BIN: Record<number, { lbp: number; rbp: number; tgt: boolean; noUnary: boolean${ctx ? '; ctx: number; acc: number' : ''} }> = ${rec(ops.bin, (b) => `{ lbp: ${b.lbp}, rbp: ${b.rbp}, tgt: ${b.tgt}, noUnary: ${b.noUnary}${ctx ? `, ctx: ${b.ctx ?? 0}, acc: ${b.acc ?? 0}` : ''} }`)};
+  return `const ${r.name}_BIN: Record<number, { lbp: number; rbp: number; tgt: boolean; noUnary: boolean }> = ${rec(ops.bin, (b) => `{ lbp: ${b.lbp}, rbp: ${b.rbp}, tgt: ${binTestsLeft(b)}, noUnary: ${b.noUnary} }`)};
 const ${r.name}_PRE: Record<number, number> = ${rec(ops.pre, (p) => p.rbp)};
 const ${r.name}_PRE_FORM: Record<number, number> = ${rec(ops.pre, (p) => p.form)};
 const ${r.name}_PRE_TGT = ${set(ops.pre)};
@@ -1014,7 +1013,12 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
   const postTokForm = (k: number) => r.postfixTokForm?.[r.postfixToks.findIndex((tok) => kidOf(ids, tok) === k)] ?? 0;
   const lf = (f: string) => lowTs(ir, f);
   // The binary node's form: not a target, plus its leaf bits and those its left operand passes.
-  const binF = r.binForm ? `${1 | r.binForm.leaf}${r.binary.some((b) => b.accLeft) ? ' | (form & info.acc)' : ''}` : '1';
+  // The operators a target context reads (emit-portable binLeftOps) are a switch behind the table's
+  // test bit: every other operator tests what it did without contexts and its node's form is a constant.
+  const leftOps = binLeftOps(prattOpTables(r, ids));
+  const tgtFail = `(${leftOps.map((o) => `opLid === ${o.lid} ? ${o.ctx ? `(form & ${o.ctx}) !== ${o.ctx}` : 'false'} : `).join('')}${lf('form')} !== 0)`;
+  const keep = leftOps.filter((o) => o.acc);
+  const binF = r.binForm ? `${1 | r.binForm.leaf}${keep.length ? ` | (info.tgt ? ${keep.map((o) => `opLid === ${o.lid} ? form & ${o.acc} : `).join('')}0 : 0)` : ''}` : '1';
   // A NUD arm that won: its node at slot c finished (`fin`), _keep moves it over the best it beat.
   const won = (i: number, fin: string, form: string, tail: boolean, capped: string) =>
     `${fin === 'finR' ? finRTs(r.name, `nud${i}`, 'c', 'save') : finPTs(r.name, `nud${i}`, 'c')}; _keep(b, c); bestPos = pos;${markTs(d, i)} bf = ${form}; bt = ${tail}; bc = ${capped};`;
@@ -1100,7 +1104,7 @@ ${kids.map((k) => `      case ${k}:
     binary: `    const opLid = _opLid(t);
     const info = ${r.name}_BIN[opLid];
     if (info === undefined || info.lbp <= minBp) break;
-    if (info.tgt && ${lf('form')} !== 0 || info.noUnary && ${lf('form')} === 2${r.binForm ? ' || (form & info.ctx) !== info.ctx' : ''}) { _n = b; return false; }
+    if (info.tgt && ${leftOps.length ? tgtFail : `${lf('form')} !== 0`} || info.noUnary && ${lf('form')} === 2) { _n = b; return false; }
     const ledSave = pos;
     opLeafW(t, opLid);
     pos += _opN;${rsOf(r.name) ? `
@@ -1182,14 +1186,12 @@ ${shared.rebindFamily(ir, 'free')}
 ${shared.rebindFamily(ir, 'methods')}`;
 }
 // Declared target contexts (declared-targets.ts): the open container's accumulator `_acc` (its pass
-// bits and the last bits of a child that must stay final), the enclosing ones' on `_accSt`, and
-// `_accF`, the form of the container arm that just matched.
+// bits and the last bits of a child that must stay final; an enclosing one's is an argument in its
+// arm's frame: _accSwap's result passed to _accEnd), and `_accF`, the form of the container arm that just matched.
 function targetRuntimeTs(t: TargetsIR): string {
   return `let _acc = 0, _accF = 0;
-const _accSt: number[] = [];
-function _accIn(init: number): boolean { _accSt.push(_acc); _acc = init; return true; }
-function _accOut(low: number, last: number): boolean { const p = _acc & ${t.passes}; _accF = p | low | ((p << 1) & last); _acc = _accSt.pop()!; return true; }
-function _accNo(): boolean { _acc = _accSt.pop()!; return false; }
+function _accSwap(init: number): number { const prev = _acc; _acc = init; return prev; }
+function _accEnd(prev: number, ok: boolean, low: number, last: number): boolean { if (ok) { const p = _acc & ${t.passes}; _accF = p | low | ((p << 1) & last); } _acc = prev; return ok; }
 function _accK(m: number): boolean { _acc = (_acc & ~((_acc >> 1) & ${t.passes}) & (_form | ~m) & ${t.passes}) | (_form & (m << 1)); return true; }
 function _accS(): boolean { _acc &= ~((_acc >> 1) & ${t.passes}); return true; }
 `;
@@ -3593,11 +3595,12 @@ function enRmSet(i: number, v: number): void { _rm[i] = v; }
 function enRmLen(): number { return _rm.length; }
 function enRmPush(v: number): void { _rm.push(v); }
 function enRmCut(n: number): void { _rm.length = n; }
-function enMiss(r: number): void { const off = pos < toks.length ? toks[pos]!.off : pos > 0 ? toks[pos - 1]!.end : 0; _put(_RNAMES[r]!, _n, off, off, pos, off, off); }
+function enMiss(r: number): void { const off = pos < toks.length ? toks[pos]!.off : pos > 0 ? toks[pos - 1]!.end : 0; _put(_RNAMES[r]!, _n, off, off, pos, off, off); _rfinOff = off; }
 function enLookEnd(): number { return lookEnd(); }
 function enLookSet(e: number): void { maxLook = e; peekEnd = 0; }
 function litText(x: number): string { return _LIDS[x]!; }
 function kindText(x: number): string { return KIND_STR[x]!; }
+function ruleText(x: number): string { return _RNAMES[x]!; }
 // A fresh repair memory: not recovering, no failure, no probe, no frame, no attempt, no bar.
 function _rmFresh(): void { _rm = new Array<number>(${RM_DIAGS}).fill(0); _rm[${RM_FAIL}] = -1; _rm[${RM_PROBE}] = -1; _rm[${RM_SP}] = -1; }
 function enWin(r: number, c: number, save: number, sb: number): void { finR(_RNAMES[r]!, c, save); _rfinOff = _sp[c * _SW]!; _keep(sb, c); }

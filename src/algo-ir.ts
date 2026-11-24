@@ -96,7 +96,8 @@ export type Expr =
   | { k: 'vConst'; v: string | number | boolean | null }
   | { k: 'vAbsent' }
   | { k: 'vText'; e: Expr }
-  | { k: 'mkNode'; kind: Expr; fields: { name: string; e: Expr }[]; start: Expr; end: Expr }
+  // `kinds`: every constant kind `kind` can be (src/shape-types.ts kindsOf), for a typed printer.
+  | { k: 'mkNode'; kind: Expr; kinds: string[]; fields: { name: string; e: Expr }[]; start: Expr; end: Expr }
   | { k: 'mkRecord'; fields: { name: string; e: Expr }[] }
   | { k: 'vList'; e: Expr }
   // The elements of a list value (a value list; a spread item reads it).
@@ -363,7 +364,7 @@ export interface ShapeLowering {
   vConst(cx: Cx, v: string | number | boolean | null): R;
   vAbsent(cx: Cx): R;
   vText(cx: Cx, s: R): R;
-  mkNode(cx: Cx, kind: R, fields: [string, R][], start: R, end: R): R;
+  mkNode(cx: Cx, kind: R, fields: [string, R][], start: R, end: R, kinds: string[]): R;
   mkRecord(cx: Cx, fields: [string, R][]): R;
   vList(cx: Cx, l: R): R;
   vItems(cx: Cx, e: R): R;
@@ -632,7 +633,7 @@ class Printer implements Cx {
       case 'mkNode': {
         const kind = this.valR(e.kind), start = this.expr(e.start), end = this.expr(e.end);
         if (!isNum(start.ty) || !isNum(end.ty)) throw new Error('algo-ir: mkNode span of a non-number');
-        return this.shapeL().mkNode(this, kind, e.fields.map((f) => [f.name, this.valR(f.e)]), start, end);
+        return this.shapeL().mkNode(this, kind, e.fields.map((f) => [f.name, this.valR(f.e)]), start, end, e.kinds);
       }
       case 'mkRecord': return this.shapeL().mkRecord(this, e.fields.map((f) => [f.name, this.valR(f.e)]));
       case 'vList': {

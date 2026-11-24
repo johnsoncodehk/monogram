@@ -9,6 +9,20 @@
 //   right after the token before it, each `$error` span blanked (its white space kept, so no
 //   token's line-break flag moves), the strict parser accepts the text.
 export type Tok = { off: number; end: number; kind: string; text: string };
+/** The P10 substitute of a missing operand (`expected <Rule>`, a Pratt rule's NUD repair), added to
+ *  `samples` (a sample token per kind) by rule name: a minimal operand of the rule, the grammar's
+ *  identifier token (ParserIR.identToken: every operand rule of the ECMAScript grammars admits a
+ *  name: a reference, a type reference) when the lists hold a sample of it, else the rule's first
+ *  NUD token arm (`nudToks`) that has one. */
+export function withOperandSamples(ir: { identToken: string | null; rules: { kind: string; name: string; nudToks?: string[] }[] }, samples: Map<string, string>): Map<string, string> {
+  const out = new Map(samples);
+  for (const r of ir.rules) {
+    if (r.kind !== 'pratt' || out.has(r.name)) continue;
+    const k = [ir.identToken, ...(r.nudToks ?? [])].find((x) => x !== null && samples.has(x));
+    if (k) out.set(r.name, samples.get(k)!);
+  }
+  return out;
+}
 type Node = { rule?: string; tokenType?: string; children?: Node[]; offset: number; end: number };
 export type ContractRow = {
   missing: number; errors: number; fallbacks: number; errSpans: number[]; errShare: number[]; attempts: number; steps: number; strictSteps: number;
