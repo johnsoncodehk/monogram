@@ -145,6 +145,9 @@
       "include": "#satisfies-typekw"
     },
     {
+      "include": "#keyword-as-name"
+    },
+    {
       "include": "#hexnumber"
     },
     {
@@ -277,6 +280,9 @@
       "include": "#property-access"
     },
     {
+      "include": "#optional-property-access"
+    },
+    {
       "include": "#operator-overrides"
     },
     {
@@ -325,7 +331,7 @@
   "repository": {
     "generic-call": {
       "name": "meta.generic.tsx",
-      "begin": "(?<=[\\w$\\]\\)])(<)(?=\\s*[\\w$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}<>,\\s]*>\\s*[\\(`>])",
+      "begin": "(?<=[\\w$\\]\\)])(<)(?=\\s*[\\w$$\\u200c\\u200d\\p{ID_Continue}<>,\\s]*>\\s*[\\(`>])",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.typeparameters.begin.tsx"
@@ -345,7 +351,7 @@
     },
     "generic-call-eol": {
       "name": "meta.generic.tsx",
-      "begin": "(?<=[\\w$\\]\\)])(<)(?=\\s*[\\w$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}<>,\\s]*>\\s*$)",
+      "begin": "(?<=[\\w$\\]\\)])(<)(?=\\s*[\\w$$\\u200c\\u200d\\p{ID_Continue}<>,\\s]*>\\s*$)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.typeparameters.begin.tsx"
@@ -388,7 +394,7 @@
           "include": "#generic-type"
         },
         {
-          "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?=\\s*[,>])",
+          "match": "(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?=\\s*[,>])",
           "name": "entity.name.type.tsx"
         },
         {
@@ -411,7 +417,7 @@
           "include": "#generic-type"
         },
         {
-          "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?=\\s*[,>]|\\s*$)",
+          "match": "(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?=\\s*[,>]|\\s*$)",
           "name": "entity.name.type.tsx"
         },
         {
@@ -425,7 +431,7 @@
     },
     "generic-type": {
       "name": "meta.type.generic.tsx",
-      "begin": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(<)",
+      "begin": "((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(<)",
       "beginCaptures": {
         "1": {
           "name": "entity.name.type.tsx"
@@ -447,12 +453,34 @@
       ]
     },
     "simple-type": {
-      "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
+      "match": "(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
       "name": "entity.name.type.tsx"
     },
     "comparison": {
       "match": "[<>]",
       "name": "keyword.operator.relational.tsx"
+    },
+    "hole-brackets": {
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.bracket.curly.tsx"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.bracket.curly.tsx"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#hole-brackets"
+        },
+        {
+          "include": "$self"
+        }
+      ]
     },
     "jsx-children": {
       "patterns": [
@@ -488,6 +516,9 @@
         }
       },
       "patterns": [
+        {
+          "include": "#hole-brackets"
+        },
         {
           "include": "$self"
         }
@@ -541,7 +572,7 @@
           "include": "#blockcomment"
         },
         {
-          "match": "\\s*(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:\\.|-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)(?=\\s|=|/?>|$)",
+          "match": "\\s*(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:\\.|-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)(?=\\s|=|/?>|$)",
           "captures": {
             "1": {
               "name": "entity.other.attribute-name.namespace.tsx"
@@ -591,7 +622,7 @@
     },
     "jsx-self-closing-element": {
       "name": "meta.tag.tsx",
-      "begin": "(<)\\s*(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:\\.(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)+)|((?=[a-z])(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)|((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*))",
+      "begin": "(<)\\s*(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:\\.(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)+)|((?=[a-z])(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)|((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*))",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.tsx"
@@ -605,7 +636,7 @@
         "4": {
           "patterns": [
             {
-              "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?=\\s*\\.)",
+              "match": "(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?=\\s*\\.)",
               "name": "variable.other.object.tsx"
             },
             {
@@ -613,7 +644,7 @@
               "name": "punctuation.accessor.tsx"
             },
             {
-              "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
+              "match": "(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
               "name": "support.class.component.tsx"
             }
           ]
@@ -642,8 +673,8 @@
     },
     "jsx-element": {
       "name": "meta.tag.tsx",
-      "begin": "(?=(<)\\s*(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:\\.(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)+)|((?=[a-z])(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)|((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*))(?:\\s|/?>|<))",
-      "end": "(/>)|(</)\\s*(?:(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:\\.(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)+)|((?=[a-z])(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)|((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)))?\\s*(>)",
+      "begin": "(?=(<)\\s*(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:\\.(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)+)|((?=[a-z])(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)|((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*))(?:\\s|/?>|<))",
+      "end": "(/>)|(</)\\s*(?:(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:\\.(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)+)|((?=[a-z])(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)|((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)))?\\s*(>)",
       "endCaptures": {
         "1": {
           "name": "punctuation.definition.tag.end.tsx"
@@ -660,7 +691,7 @@
         "5": {
           "patterns": [
             {
-              "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?=\\s*\\.)",
+              "match": "(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?=\\s*\\.)",
               "name": "variable.other.object.tsx"
             },
             {
@@ -668,7 +699,7 @@
               "name": "punctuation.accessor.tsx"
             },
             {
-              "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
+              "match": "(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
               "name": "support.class.component.tsx"
             }
           ]
@@ -685,7 +716,7 @@
       },
       "patterns": [
         {
-          "begin": "(<)\\s*(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:\\.(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)+)|((?=[a-z])(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)|((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*))",
+          "begin": "(<)\\s*(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:\\.(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)+)|((?=[a-z])(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)|((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*))",
           "beginCaptures": {
             "1": {
               "name": "punctuation.definition.tag.begin.tsx"
@@ -699,7 +730,7 @@
             "4": {
               "patterns": [
                 {
-                  "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?=\\s*\\.)",
+                  "match": "(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?=\\s*\\.)",
                   "name": "variable.other.object.tsx"
                 },
                 {
@@ -707,7 +738,7 @@
                   "name": "punctuation.accessor.tsx"
                 },
                 {
-                  "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
+                  "match": "(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
                   "name": "support.class.component.tsx"
                 }
               ]
@@ -754,7 +785,7 @@
           "name": "punctuation.definition.tag.begin.tsx"
         }
       },
-      "end": "(?:(/>)|(</)\\s*(?:(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:\\.(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)+)|((?=[a-z])(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)|((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)))?\\s*(>))",
+      "end": "(?:(/>)|(</)\\s*(?:(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:\\.(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)+)|((?=[a-z])(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)|((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)))?\\s*(>))",
       "endCaptures": {
         "1": {
           "name": "punctuation.definition.tag.end.tsx"
@@ -771,7 +802,7 @@
         "5": {
           "patterns": [
             {
-              "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?=\\s*\\.)",
+              "match": "(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?=\\s*\\.)",
               "name": "variable.other.object.tsx"
             },
             {
@@ -779,7 +810,7 @@
               "name": "punctuation.accessor.tsx"
             },
             {
-              "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
+              "match": "(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
               "name": "support.class.component.tsx"
             }
           ]
@@ -806,7 +837,7 @@
           ]
         },
         {
-          "begin": "\\s*(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:\\.(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)+)|((?=[a-z])(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)|((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*))",
+          "begin": "\\s*(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:\\.(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)+)|((?=[a-z])(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)|((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*))",
           "beginCaptures": {
             "1": {
               "name": "entity.name.tag.namespace.tsx"
@@ -817,7 +848,7 @@
             "3": {
               "patterns": [
                 {
-                  "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?=\\s*\\.)",
+                  "match": "(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?=\\s*\\.)",
                   "name": "variable.other.object.tsx"
                 },
                 {
@@ -825,7 +856,7 @@
                   "name": "punctuation.accessor.tsx"
                 },
                 {
-                  "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
+                  "match": "(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
                   "name": "support.class.component.tsx"
                 }
               ]
@@ -882,8 +913,8 @@
       ]
     },
     "jsx-self-closing-element-in-expression": {
-      "begin": "(?<!\\+\\+|--|\\*/)(?:(?<=<|,|>|\\[|\\||&|\\(|\\*|\\{|=>|\\?|:|\\+|-|;|=|>>|>=|>>=|>>>|>>>=|~|\\+=|-=|\\*=|/=|%=|\\*\\*=|<<=|&=|\\|=|\\^=|\\?\\?=|\\|\\|=|&&=|\\?\\?|\\|\\||&&|\\^|==|!=|===|!==|<=|<<|/|%|\\*\\*|^)|(?<=\\bin|\\bof|\\binstanceof|\\btypeof|\\bdelete|\\bvoid|\\bawait|\\byield|\\bthrow|\\breturn|\\bcase|\\bdo|\\belse|\\bnew|\\bdefault)(?<!\\.in|\\?\\.in|\\.of|\\?\\.of|\\.instanceof|\\?\\.instanceof|\\.typeof|\\?\\.typeof|\\.delete|\\?\\.delete|\\.void|\\?\\.void|\\.await|\\?\\.await|\\.yield|\\?\\.yield|\\.throw|\\?\\.throw|\\.return|\\?\\.return|\\.case|\\?\\.case|\\.do|\\?\\.do|\\.else|\\?\\.else|\\.new|\\?\\.new|\\.default|\\?\\.default))(?=\\s*(?:(?:/\\*\\*(?!/)(?:(?!\\*/)[\\s\\S])*?\\*/|/\\*(?:(?!\\*/)[\\s\\S])*?\\*/)\\s*)*(?!<(?=(?:(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*,|(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*\\bextends\\b\\s*(?!=)))(?=(?:(?!</)[^>])*(?:>(?:(?!</)[^>])*)*?>\\s*\\(\\s*(?:\\)|\\.\\.\\.|(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\s*[:,?)]|[{\\[]|$)))(<)\\s*(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:\\.(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)+)|((?=[a-z])(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)|((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*))(?:\\s*<(?<TA>[^<>]*(?:<\\g<TA>>[^<>]*)*)>)?[^>]*/>)",
-      "end": "(?!\\s*(?:(?:/\\*\\*(?!/)(?:(?!\\*/)[\\s\\S])*?\\*/|/\\*(?:(?!\\*/)[\\s\\S])*?\\*/)\\s*)*(<)\\s*(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:\\.(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)+)|((?=[a-z])(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)|((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*))(?:\\s*<(?<TA>[^<>]*(?:<\\g<TA>>[^<>]*)*)>)?[^>]*/>)",
+      "begin": "(?<!\\+\\+|--|\\*/)(?:(?<=<|,|>|\\[|\\||&|\\(|\\*|\\{|=>|\\?|:|\\+|-|;|=|>>|>=|>>=|>>>|>>>=|~|\\+=|-=|\\*=|/=|%=|\\*\\*=|<<=|&=|\\|=|\\^=|\\?\\?=|\\|\\|=|&&=|\\?\\?|\\|\\||&&|\\^|==|!=|===|!==|<=|<<|/|%|\\*\\*|^)|(?<=\\bin|\\bof|\\binstanceof|\\btypeof|\\bdelete|\\bvoid|\\bawait|\\byield|\\bthrow|\\breturn|\\bcase|\\bdo|\\belse|\\bnew|\\bdefault)(?<!\\.in|\\?\\.in|\\.of|\\?\\.of|\\.instanceof|\\?\\.instanceof|\\.typeof|\\?\\.typeof|\\.delete|\\?\\.delete|\\.void|\\?\\.void|\\.await|\\?\\.await|\\.yield|\\?\\.yield|\\.throw|\\?\\.throw|\\.return|\\?\\.return|\\.case|\\?\\.case|\\.do|\\?\\.do|\\.else|\\?\\.else|\\.new|\\?\\.new|\\.default|\\?\\.default))(?=\\s*(?:(?:/\\*\\*(?!/)(?:(?!\\*/)[\\s\\S])*?\\*/|/\\*(?:(?!\\*/)[\\s\\S])*?\\*/)\\s*)*(?!<(?=(?:(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*,|(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*\\bextends\\b\\s*(?!=)))(?=(?:(?!</)[^>])*(?:>(?:(?!</)[^>])*)*?>\\s*\\(\\s*(?:\\)|\\.\\.\\.|(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\s*[:,?)]|[{\\[]|$)))(<)\\s*(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:\\.(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)+)|((?=[a-z])(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)|((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*))(?:\\s*<(?<TA>[^<>]*(?:<\\g<TA>>[^<>]*)*)>)?[^>]*/>)",
+      "end": "(?!\\s*(?:(?:/\\*\\*(?!/)(?:(?!\\*/)[\\s\\S])*?\\*/|/\\*(?:(?!\\*/)[\\s\\S])*?\\*/)\\s*)*(<)\\s*(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:\\.(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)+)|((?=[a-z])(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)|((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*))(?:\\s*<(?<TA>[^<>]*(?:<\\g<TA>>[^<>]*)*)>)?[^>]*/>)",
       "patterns": [
         {
           "include": "#shebang"
@@ -906,8 +937,8 @@
       ]
     },
     "jsx-element-in-expression": {
-      "begin": "(?<!\\+\\+|--|\\*/)(?:(?<=<|,|>|\\[|\\||&|\\(|\\*|\\{|=>|\\?|:|\\+|-|;|=|>>|>=|>>=|>>>|>>>=|~|\\+=|-=|\\*=|/=|%=|\\*\\*=|<<=|&=|\\|=|\\^=|\\?\\?=|\\|\\|=|&&=|\\?\\?|\\|\\||&&|\\^|==|!=|===|!==|<=|<<|/|%|\\*\\*|^)|(?<=\\bin|\\bof|\\binstanceof|\\btypeof|\\bdelete|\\bvoid|\\bawait|\\byield|\\bthrow|\\breturn|\\bcase|\\bdo|\\belse|\\bnew|\\bdefault)(?<!\\.in|\\?\\.in|\\.of|\\?\\.of|\\.instanceof|\\?\\.instanceof|\\.typeof|\\?\\.typeof|\\.delete|\\?\\.delete|\\.void|\\?\\.void|\\.await|\\?\\.await|\\.yield|\\?\\.yield|\\.throw|\\?\\.throw|\\.return|\\?\\.return|\\.case|\\?\\.case|\\.do|\\?\\.do|\\.else|\\?\\.else|\\.new|\\?\\.new|\\.default|\\?\\.default))(?=\\s*(?:(?:/\\*\\*(?!/)(?:(?!\\*/)[\\s\\S])*?\\*/|/\\*(?:(?!\\*/)[\\s\\S])*?\\*/)\\s*)*(?!<(?=(?:(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*,|(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*\\bextends\\b\\s*(?!=)))(?=(?:(?!</)[^>])*(?:>(?:(?!</)[^>])*)*?>\\s*\\(\\s*(?:\\)|\\.\\.\\.|(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\s*[:,?)]|[{\\[]|$)))(<)\\s*(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:\\.(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)+)|((?=[a-z])(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)|((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*))(?:\\s|/?>|<))",
-      "end": "(?!\\s*(?:(?:/\\*\\*(?!/)(?:(?!\\*/)[\\s\\S])*?\\*/|/\\*(?:(?!\\*/)[\\s\\S])*?\\*/)\\s*)*(<)\\s*(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:\\.(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)+)|((?=[a-z])(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)|((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*))(?:\\s|/?>|<))",
+      "begin": "(?<!\\+\\+|--|\\*/)(?:(?<=<|,|>|\\[|\\||&|\\(|\\*|\\{|=>|\\?|:|\\+|-|;|=|>>|>=|>>=|>>>|>>>=|~|\\+=|-=|\\*=|/=|%=|\\*\\*=|<<=|&=|\\|=|\\^=|\\?\\?=|\\|\\|=|&&=|\\?\\?|\\|\\||&&|\\^|==|!=|===|!==|<=|<<|/|%|\\*\\*|^)|(?<=\\bin|\\bof|\\binstanceof|\\btypeof|\\bdelete|\\bvoid|\\bawait|\\byield|\\bthrow|\\breturn|\\bcase|\\bdo|\\belse|\\bnew|\\bdefault)(?<!\\.in|\\?\\.in|\\.of|\\?\\.of|\\.instanceof|\\?\\.instanceof|\\.typeof|\\?\\.typeof|\\.delete|\\?\\.delete|\\.void|\\?\\.void|\\.await|\\?\\.await|\\.yield|\\?\\.yield|\\.throw|\\?\\.throw|\\.return|\\?\\.return|\\.case|\\?\\.case|\\.do|\\?\\.do|\\.else|\\?\\.else|\\.new|\\?\\.new|\\.default|\\?\\.default))(?=\\s*(?:(?:/\\*\\*(?!/)(?:(?!\\*/)[\\s\\S])*?\\*/|/\\*(?:(?!\\*/)[\\s\\S])*?\\*/)\\s*)*(?!<(?=(?:(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*,|(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*\\bextends\\b\\s*(?!=)))(?=(?:(?!</)[^>])*(?:>(?:(?!</)[^>])*)*?>\\s*\\(\\s*(?:\\)|\\.\\.\\.|(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\s*[:,?)]|[{\\[]|$)))(<)\\s*(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:\\.(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)+)|((?=[a-z])(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)|((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*))(?:\\s|/?>|<))",
+      "end": "(?!\\s*(?:(?:/\\*\\*(?!/)(?:(?!\\*/)[\\s\\S])*?\\*/|/\\*(?:(?!\\*/)[\\s\\S])*?\\*/)\\s*)*(<)\\s*(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(:))?(?:((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:\\.(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)+)|((?=[a-z])(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)|((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?:(?:-)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*))(?:\\s|/?>|<))",
       "patterns": [
         {
           "include": "#shebang"
@@ -930,7 +961,7 @@
       ]
     },
     "jsx-fragment-in-expression": {
-      "begin": "(?<!\\+\\+|--|\\*/)(?:(?<=<|,|>|\\[|\\||&|\\(|\\*|\\{|=>|\\?|:|\\+|-|;|=|>>|>=|>>=|>>>|>>>=|~|\\+=|-=|\\*=|/=|%=|\\*\\*=|<<=|&=|\\|=|\\^=|\\?\\?=|\\|\\|=|&&=|\\?\\?|\\|\\||&&|\\^|==|!=|===|!==|<=|<<|/|%|\\*\\*|^)|(?<=\\bin|\\bof|\\binstanceof|\\btypeof|\\bdelete|\\bvoid|\\bawait|\\byield|\\bthrow|\\breturn|\\bcase|\\bdo|\\belse|\\bnew|\\bdefault)(?<!\\.in|\\?\\.in|\\.of|\\?\\.of|\\.instanceof|\\?\\.instanceof|\\.typeof|\\?\\.typeof|\\.delete|\\?\\.delete|\\.void|\\?\\.void|\\.await|\\?\\.await|\\.yield|\\?\\.yield|\\.throw|\\?\\.throw|\\.return|\\?\\.return|\\.case|\\?\\.case|\\.do|\\?\\.do|\\.else|\\?\\.else|\\.new|\\?\\.new|\\.default|\\?\\.default))(?=\\s*(?:(?:/\\*\\*(?!/)(?:(?!\\*/)[\\s\\S])*?\\*/|/\\*(?:(?!\\*/)[\\s\\S])*?\\*/)\\s*)*(?!<(?=(?:(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*,|(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*\\bextends\\b\\s*(?!=)))(?=(?:(?!</)[^>])*(?:>(?:(?!</)[^>])*)*?>\\s*\\(\\s*(?:\\)|\\.\\.\\.|(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\s*[:,?)]|[{\\[]|$)))(<)\\s*(>))",
+      "begin": "(?<!\\+\\+|--|\\*/)(?:(?<=<|,|>|\\[|\\||&|\\(|\\*|\\{|=>|\\?|:|\\+|-|;|=|>>|>=|>>=|>>>|>>>=|~|\\+=|-=|\\*=|/=|%=|\\*\\*=|<<=|&=|\\|=|\\^=|\\?\\?=|\\|\\|=|&&=|\\?\\?|\\|\\||&&|\\^|==|!=|===|!==|<=|<<|/|%|\\*\\*|^)|(?<=\\bin|\\bof|\\binstanceof|\\btypeof|\\bdelete|\\bvoid|\\bawait|\\byield|\\bthrow|\\breturn|\\bcase|\\bdo|\\belse|\\bnew|\\bdefault)(?<!\\.in|\\?\\.in|\\.of|\\?\\.of|\\.instanceof|\\?\\.instanceof|\\.typeof|\\?\\.typeof|\\.delete|\\?\\.delete|\\.void|\\?\\.void|\\.await|\\?\\.await|\\.yield|\\?\\.yield|\\.throw|\\?\\.throw|\\.return|\\?\\.return|\\.case|\\?\\.case|\\.do|\\?\\.do|\\.else|\\?\\.else|\\.new|\\?\\.new|\\.default|\\?\\.default))(?=\\s*(?:(?:/\\*\\*(?!/)(?:(?!\\*/)[\\s\\S])*?\\*/|/\\*(?:(?!\\*/)[\\s\\S])*?\\*/)\\s*)*(?!<(?=(?:(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*,|(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*\\bextends\\b\\s*(?!=)))(?=(?:(?!</)[^>])*(?:>(?:(?!</)[^>])*)*?>\\s*\\(\\s*(?:\\)|\\.\\.\\.|(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\s*[:,?)]|[{\\[]|$)))(<)\\s*(>))",
       "end": "(?!\\s*(?:(?:/\\*\\*(?!/)(?:(?!\\*/)[\\s\\S])*?\\*/|/\\*(?:(?!\\*/)[\\s\\S])*?\\*/)\\s*)*(<)\\s*(>))",
       "patterns": [
         {
@@ -1687,7 +1718,7 @@
     },
     "ident": {
       "name": "variable.other.readwrite.tsx",
-      "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*"
+      "match": "(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*"
     },
     "hexnumber": {
       "name": "constant.numeric.hex.tsx",
@@ -1744,6 +1775,9 @@
           "name": "meta.embedded.expression.tsx",
           "patterns": [
             {
+              "include": "#hole-brackets"
+            },
+            {
               "include": "$self"
             }
           ]
@@ -1756,7 +1790,7 @@
     },
     "privatefield": {
       "name": "variable.other.property.tsx",
-      "match": "#(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*"
+      "match": "#(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*"
     },
     "type-paren": {
       "begin": "\\(",
@@ -1788,7 +1822,7 @@
       },
       "patterns": [
         {
-          "match": "(?<=\\[)\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)\\s+(in)\\b",
+          "match": "(?<=\\[)\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)\\s+(in)\\b",
           "captures": {
             "1": {
               "name": "entity.name.type.tsx"
@@ -1799,7 +1833,7 @@
           }
         },
         {
-          "match": "(?<=\\[)\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\s*:)",
+          "match": "(?<=\\[)\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\s*:)",
           "captures": {
             "1": {
               "name": "variable.parameter.tsx"
@@ -1816,7 +1850,7 @@
     },
     "type-object-member": {
       "name": "meta.type.annotation.member.tsx",
-      "begin": "(#?(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\??)(\\s*:)",
+      "begin": "(#?(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\??)(\\s*:)",
       "beginCaptures": {
         "1": {
           "name": "variable.object.property.tsx"
@@ -1968,6 +2002,15 @@
       "end": "(?=[{;]|=>)",
       "patterns": [
         {
+          "begin": "(?<=[:|&])(?=\\s*\\{)",
+          "end": "(?<=\\})",
+          "patterns": [
+            {
+              "include": "#type-object"
+            }
+          ]
+        },
+        {
           "include": "#type"
         }
       ]
@@ -2006,7 +2049,7 @@
     },
     "arrow-type-parameters": {
       "name": "meta.type.parameters.tsx",
-      "begin": "(?:(?<=\\basync\\s)|(?<![\\w$)\\]}])(?<![\\w$)\\]}]\\s)(?<![\\w$)\\]}]\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s))(<)(?=(?:(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*,|(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*\\bextends\\b\\s*(?!=)))(?=(?:(?!</)[^>])*(?:>(?:(?!</)[^>])*)*?>\\s*\\(\\s*(?:\\)|\\.\\.\\.|(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\s*[:,?)]|[{\\[]|$))",
+      "begin": "(?:(?<=\\basync\\s)|(?<![\\w$)\\]}])(?<![\\w$)\\]}]\\s)(?<![\\w$)\\]}]\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s))(<)(?=(?:(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*,|(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*\\bextends\\b\\s*(?!=)))(?=(?:(?!</)[^>])*(?:>(?:(?!</)[^>])*)*?>\\s*\\(\\s*(?:\\)|\\.\\.\\.|(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\s*[:,?)]|[{\\[]|$))",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.typeparameters.begin.tsx"
@@ -2064,7 +2107,7 @@
       ]
     },
     "generic-arrow-function": {
-      "begin": "(?:(?<=\\basync\\s)|(?<![\\w$)\\]}])(?<![\\w$)\\]}]\\s)(?<![\\w$)\\]}]\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s))(?=<(?=(?:(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*,|(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*\\bextends\\b\\s*(?!=)))(?:(?!</)[^>])*(?:>(?:(?!</)[^>])*)*?>\\s*\\(\\s*(?:\\)|\\.\\.\\.|(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\s*[:,?)]|[{\\[]|$))",
+      "begin": "(?:(?<=\\basync\\s)|(?<![\\w$)\\]}])(?<![\\w$)\\]}]\\s)(?<![\\w$)\\]}]\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s))(?=<(?=(?:(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*,|(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*\\bextends\\b\\s*(?!=)))(?:(?!</)[^>])*(?:>(?:(?!</)[^>])*)*?>\\s*\\(\\s*(?:\\)|\\.\\.\\.|(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\s*[:,?)]|[{\\[]|$))",
       "end": "(?<=\\))",
       "patterns": [
         {
@@ -2077,7 +2120,7 @@
     },
     "function-declaration": {
       "name": "meta.function.tsx",
-      "begin": "\\b(function)\\s*(\\*)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+      "begin": "\\b(function)\\s*(\\*)?\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
       "beginCaptures": {
         "1": {
           "name": "storage.type.function.tsx"
@@ -2140,7 +2183,7 @@
     },
     "class-declaration": {
       "name": "meta.class.tsx",
-      "begin": "\\b(class)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+      "begin": "\\b(class)\\s+((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
       "beginCaptures": {
         "1": {
           "name": "storage.type.class.tsx"
@@ -2164,7 +2207,7 @@
     },
     "interface-declaration": {
       "name": "meta.interface.tsx",
-      "begin": "\\b(interface)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+      "begin": "\\b(interface)\\s+((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
       "beginCaptures": {
         "1": {
           "name": "storage.type.interface.tsx"
@@ -2202,7 +2245,7 @@
       ]
     },
     "enum-member": {
-      "match": "(?<=[{,])\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*[=,}])",
+      "match": "(?<=[{,])\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*[=,}])",
       "captures": {
         "1": {
           "name": "variable.other.enummember.tsx"
@@ -2236,7 +2279,7 @@
     },
     "enum-declaration": {
       "name": "meta.enum.tsx",
-      "begin": "\\b(enum)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+      "begin": "\\b(enum)\\s+((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
       "beginCaptures": {
         "1": {
           "name": "storage.type.enum.tsx"
@@ -2257,7 +2300,7 @@
     },
     "namespace-declaration": {
       "name": "meta.namespace.tsx",
-      "begin": "\\b(namespace)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)((?:\\s*\\.\\s*(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)",
+      "begin": "\\b(namespace)\\s+((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)((?:\\s*\\.\\s*(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)",
       "beginCaptures": {
         "1": {
           "name": "storage.type.namespace.tsx"
@@ -2281,7 +2324,7 @@
     },
     "module-declaration": {
       "name": "meta.module.tsx",
-      "begin": "\\b(module)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)((?:\\s*\\.\\s*(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)",
+      "begin": "\\b(module)\\s+((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)((?:\\s*\\.\\s*(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)",
       "beginCaptures": {
         "1": {
           "name": "storage.type.namespace.tsx"
@@ -2329,7 +2372,7 @@
     },
     "method-signature": {
       "name": "meta.method.tsx",
-      "begin": "\\b((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\?)?\\s*(?=[<(])",
+      "begin": "\\b((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\?)?\\s*(?=[<(])",
       "beginCaptures": {
         "1": {
           "name": "entity.name.function.tsx"
@@ -2359,7 +2402,7 @@
     },
     "member-type-annotation": {
       "name": "meta.type.annotation.member.tsx",
-      "begin": "(#?(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\??)(\\s*:)",
+      "begin": "(#?(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\??)(\\s*:)",
       "beginCaptures": {
         "1": {
           "name": "variable.object.property.tsx"
@@ -2411,7 +2454,7 @@
       ]
     },
     "extends-definition": {
-      "match": "\\b(extends)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+      "match": "\\b(extends)\\s+((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
       "captures": {
         "1": {
           "name": "keyword.other.extends.tsx"
@@ -2442,7 +2485,7 @@
           "name": "keyword.operator.rest.tsx"
         },
         {
-          "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\s*)(:)",
+          "match": "((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\s*)(:)",
           "captures": {
             "1": {
               "name": "variable.object.property.tsx"
@@ -2462,7 +2505,7 @@
           "include": "#const-bind-array"
         },
         {
-          "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+          "match": "((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
           "name": "variable.other.constant.tsx"
         },
         {
@@ -2487,7 +2530,7 @@
           "include": "#const-bind-array"
         },
         {
-          "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+          "match": "((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
           "name": "variable.other.constant.tsx"
         },
         {
@@ -2541,7 +2584,7 @@
           "name": "keyword.operator.rest.tsx"
         },
         {
-          "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\s*)(:)",
+          "match": "((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\s*)(:)",
           "captures": {
             "1": {
               "name": "variable.object.property.tsx"
@@ -2561,7 +2604,7 @@
           "include": "#mut-bind-array"
         },
         {
-          "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+          "match": "((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
           "name": "variable.other.readwrite.tsx"
         },
         {
@@ -2586,7 +2629,7 @@
           "include": "#mut-bind-array"
         },
         {
-          "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+          "match": "((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
           "name": "variable.other.readwrite.tsx"
         },
         {
@@ -2651,7 +2694,7 @@
       ]
     },
     "const-binding": {
-      "match": "\\b(const)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*[=:;,]|\\s*$)",
+      "match": "\\b(const)\\s+((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*[=:;,]|\\s*$)",
       "captures": {
         "1": {
           "name": "storage.type.tsx"
@@ -2727,7 +2770,7 @@
       }
     },
     "import-default-binding": {
-      "match": "\\b(import)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*(?:(?:from)\\b|,))",
+      "match": "\\b(import)\\s+((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*(?:(?:from)\\b|,))",
       "captures": {
         "1": {
           "name": "keyword.control.import.tsx"
@@ -2738,7 +2781,7 @@
       }
     },
     "function-call": {
-      "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*\\()",
+      "match": "((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*\\()",
       "captures": {
         "1": {
           "name": "entity.name.function.tsx"
@@ -2746,7 +2789,7 @@
       }
     },
     "object-method-key": {
-      "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*:\\s*(?:\\w+\\s+)?[\\(])",
+      "match": "((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*:\\s*(?:\\w+\\s+)?[\\(])",
       "captures": {
         "1": {
           "name": "entity.name.function.tsx"
@@ -2754,7 +2797,7 @@
       }
     },
     "method-call": {
-      "match": "(?<=[\\w$\\]\\)])(\\.)\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*\\()",
+      "match": "(?<=[\\w$\\]\\)])(\\.)\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*\\()",
       "captures": {
         "1": {
           "name": "punctuation.accessor.tsx"
@@ -2776,7 +2819,7 @@
       }
     },
     "property-access": {
-      "match": "(?<=[\\w$\\]\\)])(\\.)\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+      "match": "(?<=[\\w$\\]\\)])(\\.)\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
       "captures": {
         "1": {
           "name": "punctuation.accessor.tsx"
@@ -2786,8 +2829,198 @@
         }
       }
     },
+    "optional-property-access": {
+      "patterns": [
+        {
+          "match": "(?<=[\\w$\\]\\)])(\\?\\.)\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*\\()",
+          "captures": {
+            "1": {
+              "name": "punctuation.accessor.optional.tsx"
+            },
+            "2": {
+              "name": "entity.name.function.tsx"
+            }
+          }
+        },
+        {
+          "match": "(?<=[\\w$\\]\\)])(\\?\\.)\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+          "captures": {
+            "1": {
+              "name": "punctuation.accessor.optional.tsx"
+            },
+            "2": {
+              "name": "variable.other.readwrite.tsx"
+            }
+          }
+        }
+      ]
+    },
+    "keyword-as-name": {
+      "patterns": [
+        {
+          "match": "\\b(keyof|is|unique|satisfies)\\b(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "\\b(keyof|is|unique|satisfies)\\b(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        },
+        {
+          "match": "\\b(readonly)\\b(?!\\s*(?:\\.\\.\\.|!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "\\b(readonly)\\b(?!\\s*(?:\\.\\.\\.|!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        },
+        {
+          "match": "\\b(abstract|public|private|protected|override|accessor|out|static)\\b(?!\\s*(?:\\.\\.\\.|\\*|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "\\b(abstract|public|private|protected|override|accessor|out|static)\\b(?!\\s*(?:\\.\\.\\.|\\*|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        },
+        {
+          "match": "\\b(asserts|infer|target|meta|source|interface|enum|module|namespace|from)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "\\b(asserts|infer|target|meta|source|interface|enum|module|namespace|from)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        },
+        {
+          "match": "\\b(extends|implements)\\b(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "\\b(extends|implements)\\b(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        },
+        {
+          "match": "\\b(get|set)\\b(?!\\s*(?:\\[))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "\\b(get|set)\\b(?!\\s*(?:\\[))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        },
+        {
+          "match": "\\b(declare)\\b(?!\\s*(?:\\.\\.\\.|\\(|\\*|;|<|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "\\b(declare)\\b(?!\\s*(?:\\.\\.\\.|\\(|\\*|;|<|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        },
+        {
+          "match": "\\b(async)\\b(?!\\s*(?:\\.\\.\\.|\\(|\\*|<|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "\\b(async)\\b(?!\\s*(?:\\.\\.\\.|\\(|\\*|<|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        },
+        {
+          "match": "(@new\\b)(?!\\s*(?:\\(|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "(@new\\b)(?!\\s*(?:\\(|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        },
+        {
+          "match": "\\b(super)\\b(?!\\s*(?:\\(|\\.|\\[))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "\\b(super)\\b(?!\\s*(?:\\(|\\.|\\[))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        },
+        {
+          "match": "\\b(instanceof|throw|of|case)\\b(?!\\s*(?:\\.\\.\\.|\\(|<|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "\\b(instanceof|throw|of|case)\\b(?!\\s*(?:\\.\\.\\.|\\(|<|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        },
+        {
+          "match": "\\b(class)\\b(?!\\s*(?:<|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "\\b(class)\\b(?!\\s*(?:<|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        },
+        {
+          "match": "\\b(defer)\\b(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "\\b(defer)\\b(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        },
+        {
+          "match": "\\b(let|var|using)\\b(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "\\b(let|var|using)\\b(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        },
+        {
+          "match": "\\b(if|for|while|switch|require)\\b(?!\\s*(?:\\())(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "\\b(if|for|while|switch|require)\\b(?!\\s*(?:\\())(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        },
+        {
+          "match": "\\b(else|do)\\b(?!\\s*(?:\\.\\.\\.|\\(|;|<|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "\\b(else|do)\\b(?!\\s*(?:\\.\\.\\.|\\(|;|<|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        },
+        {
+          "match": "\\b(try|finally|global)\\b(?!\\s*(?:\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "\\b(try|finally|global)\\b(?!\\s*(?:\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        },
+        {
+          "match": "\\b(catch|with)\\b(?!\\s*(?:\\(|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "\\b(catch|with)\\b(?!\\s*(?:\\(|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        },
+        {
+          "match": "\\b(type)\\b(?!\\s*(?:\\*|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "\\b(type)\\b(?!\\s*(?:\\*|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        },
+        {
+          "match": "\\b(constructor)\\b(?!\\s*(?:\\(|<))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "\\b(constructor)\\b(?!\\s*(?:\\(|<))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        }
+      ]
+    },
     "arrow-parameter": {
-      "match": "\\b((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)\\s*(?==>)",
+      "match": "\\b((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)\\s*(?==>)",
       "captures": {
         "1": {
           "name": "variable.parameter.tsx"
@@ -2816,7 +3049,7 @@
           "include": "#param-bind-type-annotation"
         },
         {
-          "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*[,:)?=])",
+          "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*[,:)?=])",
           "captures": {
             "1": {
               "name": "keyword.operator.spread.tsx"
@@ -2856,7 +3089,7 @@
           "include": "#param-bind-type-annotation"
         },
         {
-          "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*[,:)?=])",
+          "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*[,:)?=])",
           "captures": {
             "1": {
               "name": "keyword.operator.spread.tsx"
@@ -2989,7 +3222,7 @@
     },
     "type-annotation-var": {
       "name": "meta.type.annotation.tsx",
-      "begin": "\\b(const|let|var|using)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\s*:)",
+      "begin": "\\b(const|let|var|using)\\s+((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\s*:)",
       "beginCaptures": {
         "1": {
           "name": "storage.type.tsx"
@@ -3018,6 +3251,15 @@
       },
       "end": "(?=[{;]|=>)",
       "patterns": [
+        {
+          "begin": "(?<=[:|&])(?=\\s*\\{)",
+          "end": "(?<=\\})",
+          "patterns": [
+            {
+              "include": "#type-object"
+            }
+          ]
+        },
         {
           "include": "#type"
         }
@@ -3453,6 +3695,9 @@
           "include": "#satisfies-typekw"
         },
         {
+          "include": "#keyword-as-name"
+        },
+        {
           "include": "#hexnumber"
         },
         {
@@ -3556,6 +3801,9 @@
         },
         {
           "include": "#property-access"
+        },
+        {
+          "include": "#optional-property-access"
         },
         {
           "include": "#operator-overrides"
@@ -3806,13 +4054,13 @@
           "include": "#regex"
         },
         {
-          "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
+          "match": "(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
           "name": "entity.name.function.tsx"
         }
       ]
     },
     "parameter-name": {
-      "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*[,)=])",
+      "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*[,)=])",
       "captures": {
         "1": {
           "name": "keyword.operator.spread.tsx"
@@ -3895,7 +4143,7 @@
     },
     "type-alias-declaration": {
       "name": "meta.type.tsx",
-      "begin": "\\b(type)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+      "begin": "\\b(type)\\s+((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
       "beginCaptures": {
         "1": {
           "name": "storage.type.type.tsx"
@@ -3915,7 +4163,7 @@
           "include": "$self"
         }
       ],
-      "while": "^(?=\\s*(?:[<,\\[|&(...?:{\\-.!*+;]|(?:keyof|typeof|readonly|is|abstract|new|asserts|extends|infer|true|false|null|undefined|void|this|unique|in|as)\\b|//|/\\*|[>\\])}](?:\\s*[>\\])}])*\\s*(?=[<,\\[|&(...?:{\\-.!*+;=])|(?!(?:if|else|switch|case|default|for|while|do|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set)\\b)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\b(?!\\s*[.(])))"
+      "while": "^(?=\\s*(?:[<,\\[|&(...?:{\\-.!*+;]|(?:keyof|typeof|readonly|is|abstract|new|asserts|extends|infer|true|false|null|undefined|void|this|unique|in|as)\\b|//|/\\*|[>\\])}](?:\\s*[>\\])}])*\\s*(?=[<,\\[|&(...?:{\\-.!*+;=])|(?!(?:if|else|switch|case|default|for|while|do|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set)\\b)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\b(?!\\s*[.(])))"
     },
     "type-object": {
       "name": "meta.object-type.tsx",
@@ -3949,7 +4197,7 @@
     },
     "parameter-type-annotation": {
       "name": "meta.type.annotation.parameter.tsx",
-      "begin": "(\\.\\.\\.)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\??)(\\s*:)",
+      "begin": "(\\.\\.\\.)?\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\??)(\\s*:)",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.spread.tsx"

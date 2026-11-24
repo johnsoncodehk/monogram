@@ -7,7 +7,7 @@ export interface Tok { start: number; text: string; token: string }
 export function tokenize(mon: MonarchLanguage, src: string): Tok[] {
   const out: Tok[] = [];
   const stack: string[] = ['root'];
-  const flags = mon.ignoreCase ? 'i' : '';
+  const flags = (mon.ignoreCase ? 'i' : '') + (mon.unicode ? 'u' : '');
   const cache = new Map<string, RegExp>();
   // a rule's regex as Monaco's compiler reads it: `@@` is a literal `@`, `@name` the language
   // attribute `name` (a string), else the compile throws

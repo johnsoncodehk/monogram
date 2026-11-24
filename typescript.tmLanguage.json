@@ -139,6 +139,9 @@
       "include": "#satisfies-typekw"
     },
     {
+      "include": "#keyword-as-name"
+    },
+    {
       "include": "#hexnumber"
     },
     {
@@ -271,6 +274,9 @@
       "include": "#property-access"
     },
     {
+      "include": "#optional-property-access"
+    },
+    {
       "include": "#operator-overrides"
     },
     {
@@ -319,7 +325,7 @@
   "repository": {
     "generic-call": {
       "name": "meta.generic.ts",
-      "begin": "(?<=[\\w$\\]\\)])(<)(?=\\s*[\\w$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}<>,\\s]*>\\s*[\\(`])",
+      "begin": "(?<=[\\w$\\]\\)])(<)(?=\\s*[\\w$$\\u200c\\u200d\\p{ID_Continue}<>,\\s]*>\\s*[\\(`])",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.typeparameters.begin.ts"
@@ -339,7 +345,7 @@
     },
     "generic-call-eol": {
       "name": "meta.generic.ts",
-      "begin": "(?<=[\\w$\\]\\)])(<)(?=\\s*[\\w$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}<>,\\s]*>\\s*$)",
+      "begin": "(?<=[\\w$\\]\\)])(<)(?=\\s*[\\w$$\\u200c\\u200d\\p{ID_Continue}<>,\\s]*>\\s*$)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.typeparameters.begin.ts"
@@ -382,7 +388,7 @@
           "include": "#generic-type"
         },
         {
-          "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?=\\s*[,>])",
+          "match": "(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?=\\s*[,>])",
           "name": "entity.name.type.ts"
         },
         {
@@ -405,7 +411,7 @@
           "include": "#generic-type"
         },
         {
-          "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?=\\s*[,>]|\\s*$)",
+          "match": "(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?=\\s*[,>]|\\s*$)",
           "name": "entity.name.type.ts"
         },
         {
@@ -419,7 +425,7 @@
     },
     "generic-type": {
       "name": "meta.type.generic.ts",
-      "begin": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(<)",
+      "begin": "((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(<)",
       "beginCaptures": {
         "1": {
           "name": "entity.name.type.ts"
@@ -441,7 +447,7 @@
       ]
     },
     "simple-type": {
-      "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
+      "match": "(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
       "name": "entity.name.type.ts"
     },
     "comparison": {
@@ -1182,7 +1188,7 @@
     },
     "ident": {
       "name": "variable.other.readwrite.ts",
-      "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*"
+      "match": "(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*"
     },
     "hexnumber": {
       "name": "constant.numeric.hex.ts",
@@ -1203,6 +1209,28 @@
     "number": {
       "name": "constant.numeric.decimal.ts",
       "match": "(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\\.(?!_)[0-9]*(?:_[0-9]+)*)?|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])"
+    },
+    "hole-brackets": {
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.bracket.curly.ts"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.bracket.curly.ts"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#hole-brackets"
+        },
+        {
+          "include": "$self"
+        }
+      ]
     },
     "template": {
       "name": "string.quoted.other.template.ts",
@@ -1239,6 +1267,9 @@
           "name": "meta.embedded.expression.ts",
           "patterns": [
             {
+              "include": "#hole-brackets"
+            },
+            {
               "include": "$self"
             }
           ]
@@ -1251,7 +1282,7 @@
     },
     "privatefield": {
       "name": "variable.other.property.ts",
-      "match": "#(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*"
+      "match": "#(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*"
     },
     "type-paren": {
       "begin": "\\(",
@@ -1283,7 +1314,7 @@
       },
       "patterns": [
         {
-          "match": "(?<=\\[)\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)\\s+(in)\\b",
+          "match": "(?<=\\[)\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)\\s+(in)\\b",
           "captures": {
             "1": {
               "name": "entity.name.type.ts"
@@ -1294,7 +1325,7 @@
           }
         },
         {
-          "match": "(?<=\\[)\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\s*:)",
+          "match": "(?<=\\[)\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\s*:)",
           "captures": {
             "1": {
               "name": "variable.parameter.ts"
@@ -1311,7 +1342,7 @@
     },
     "type-object-member": {
       "name": "meta.type.annotation.member.ts",
-      "begin": "(#?(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\??)(\\s*:)",
+      "begin": "(#?(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\??)(\\s*:)",
       "beginCaptures": {
         "1": {
           "name": "variable.object.property.ts"
@@ -1463,6 +1494,15 @@
       "end": "(?=[{;]|=>)",
       "patterns": [
         {
+          "begin": "(?<=[:|&])(?=\\s*\\{)",
+          "end": "(?<=\\})",
+          "patterns": [
+            {
+              "include": "#type-object"
+            }
+          ]
+        },
+        {
           "include": "#type"
         }
       ]
@@ -1501,7 +1541,7 @@
     },
     "arrow-type-parameters": {
       "name": "meta.type.parameters.ts",
-      "begin": "(?:(?<=\\basync\\s)|(?<![\\w$)\\]}])(?<![\\w$)\\]}]\\s)(?<![\\w$)\\]}]\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s))(<)(?=[^>]*(?:>[^>]*)*?>\\s*\\(\\s*(?:\\)|\\.\\.\\.|(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\s*[:,?)]|[{\\[]|$))",
+      "begin": "(?:(?<=\\basync\\s)|(?<![\\w$)\\]}])(?<![\\w$)\\]}]\\s)(?<![\\w$)\\]}]\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s))(<)(?=[^>]*(?:>[^>]*)*?>\\s*\\(\\s*(?:\\)|\\.\\.\\.|(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\s*[:,?)]|[{\\[]|$))",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.typeparameters.begin.ts"
@@ -1559,7 +1599,7 @@
       ]
     },
     "generic-arrow-function": {
-      "begin": "(?:(?<=\\basync\\s)|(?<![\\w$)\\]}])(?<![\\w$)\\]}]\\s)(?<![\\w$)\\]}]\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s))(?=<[^>]*(?:>[^>]*)*?>\\s*\\(\\s*(?:\\)|\\.\\.\\.|(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\s*[:,?)]|[{\\[]|$))",
+      "begin": "(?:(?<=\\basync\\s)|(?<![\\w$)\\]}])(?<![\\w$)\\]}]\\s)(?<![\\w$)\\]}]\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s))(?=<[^>]*(?:>[^>]*)*?>\\s*\\(\\s*(?:\\)|\\.\\.\\.|(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\s*[:,?)]|[{\\[]|$))",
       "end": "(?<=\\))",
       "patterns": [
         {
@@ -1572,7 +1612,7 @@
     },
     "function-declaration": {
       "name": "meta.function.ts",
-      "begin": "\\b(function)\\s*(\\*)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+      "begin": "\\b(function)\\s*(\\*)?\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
       "beginCaptures": {
         "1": {
           "name": "storage.type.function.ts"
@@ -1635,7 +1675,7 @@
     },
     "class-declaration": {
       "name": "meta.class.ts",
-      "begin": "\\b(class)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+      "begin": "\\b(class)\\s+((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
       "beginCaptures": {
         "1": {
           "name": "storage.type.class.ts"
@@ -1659,7 +1699,7 @@
     },
     "interface-declaration": {
       "name": "meta.interface.ts",
-      "begin": "\\b(interface)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+      "begin": "\\b(interface)\\s+((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
       "beginCaptures": {
         "1": {
           "name": "storage.type.interface.ts"
@@ -1697,7 +1737,7 @@
       ]
     },
     "enum-member": {
-      "match": "(?<=[{,])\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*[=,}])",
+      "match": "(?<=[{,])\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*[=,}])",
       "captures": {
         "1": {
           "name": "variable.other.enummember.ts"
@@ -1731,7 +1771,7 @@
     },
     "enum-declaration": {
       "name": "meta.enum.ts",
-      "begin": "\\b(enum)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+      "begin": "\\b(enum)\\s+((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
       "beginCaptures": {
         "1": {
           "name": "storage.type.enum.ts"
@@ -1752,7 +1792,7 @@
     },
     "namespace-declaration": {
       "name": "meta.namespace.ts",
-      "begin": "\\b(namespace)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)((?:\\s*\\.\\s*(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)",
+      "begin": "\\b(namespace)\\s+((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)((?:\\s*\\.\\s*(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)",
       "beginCaptures": {
         "1": {
           "name": "storage.type.namespace.ts"
@@ -1776,7 +1816,7 @@
     },
     "module-declaration": {
       "name": "meta.module.ts",
-      "begin": "\\b(module)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)((?:\\s*\\.\\s*(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)",
+      "begin": "\\b(module)\\s+((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)((?:\\s*\\.\\s*(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)*)",
       "beginCaptures": {
         "1": {
           "name": "storage.type.namespace.ts"
@@ -1824,7 +1864,7 @@
     },
     "method-signature": {
       "name": "meta.method.ts",
-      "begin": "\\b((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\?)?\\s*(?=[<(])",
+      "begin": "\\b((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\?)?\\s*(?=[<(])",
       "beginCaptures": {
         "1": {
           "name": "entity.name.function.ts"
@@ -1854,7 +1894,7 @@
     },
     "member-type-annotation": {
       "name": "meta.type.annotation.member.ts",
-      "begin": "(#?(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\??)(\\s*:)",
+      "begin": "(#?(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\??)(\\s*:)",
       "beginCaptures": {
         "1": {
           "name": "variable.object.property.ts"
@@ -1906,7 +1946,7 @@
       ]
     },
     "extends-definition": {
-      "match": "\\b(extends)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+      "match": "\\b(extends)\\s+((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
       "captures": {
         "1": {
           "name": "keyword.other.extends.ts"
@@ -1937,7 +1977,7 @@
           "name": "keyword.operator.rest.ts"
         },
         {
-          "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\s*)(:)",
+          "match": "((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\s*)(:)",
           "captures": {
             "1": {
               "name": "variable.object.property.ts"
@@ -1957,7 +1997,7 @@
           "include": "#const-bind-array"
         },
         {
-          "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+          "match": "((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
           "name": "variable.other.constant.ts"
         },
         {
@@ -1982,7 +2022,7 @@
           "include": "#const-bind-array"
         },
         {
-          "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+          "match": "((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
           "name": "variable.other.constant.ts"
         },
         {
@@ -2036,7 +2076,7 @@
           "name": "keyword.operator.rest.ts"
         },
         {
-          "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\s*)(:)",
+          "match": "((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\s*)(:)",
           "captures": {
             "1": {
               "name": "variable.object.property.ts"
@@ -2056,7 +2096,7 @@
           "include": "#mut-bind-array"
         },
         {
-          "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+          "match": "((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
           "name": "variable.other.readwrite.ts"
         },
         {
@@ -2081,7 +2121,7 @@
           "include": "#mut-bind-array"
         },
         {
-          "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+          "match": "((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
           "name": "variable.other.readwrite.ts"
         },
         {
@@ -2146,7 +2186,7 @@
       ]
     },
     "const-binding": {
-      "match": "\\b(const)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*[=:;,]|\\s*$)",
+      "match": "\\b(const)\\s+((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*[=:;,]|\\s*$)",
       "captures": {
         "1": {
           "name": "storage.type.ts"
@@ -2222,7 +2262,7 @@
       }
     },
     "import-default-binding": {
-      "match": "\\b(import)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*(?:(?:from)\\b|,))",
+      "match": "\\b(import)\\s+((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*(?:(?:from)\\b|,))",
       "captures": {
         "1": {
           "name": "keyword.control.import.ts"
@@ -2233,7 +2273,7 @@
       }
     },
     "function-call": {
-      "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*\\()",
+      "match": "((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*\\()",
       "captures": {
         "1": {
           "name": "entity.name.function.ts"
@@ -2241,7 +2281,7 @@
       }
     },
     "object-method-key": {
-      "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*:\\s*(?:\\w+\\s+)?[\\(])",
+      "match": "((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*:\\s*(?:\\w+\\s+)?[\\(])",
       "captures": {
         "1": {
           "name": "entity.name.function.ts"
@@ -2249,7 +2289,7 @@
       }
     },
     "method-call": {
-      "match": "(?<=[\\w$\\]\\)])(\\.)\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*\\()",
+      "match": "(?<=[\\w$\\]\\)])(\\.)\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*\\()",
       "captures": {
         "1": {
           "name": "punctuation.accessor.ts"
@@ -2271,7 +2311,7 @@
       }
     },
     "property-access": {
-      "match": "(?<=[\\w$\\]\\)])(\\.)\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+      "match": "(?<=[\\w$\\]\\)])(\\.)\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
       "captures": {
         "1": {
           "name": "punctuation.accessor.ts"
@@ -2281,8 +2321,198 @@
         }
       }
     },
+    "optional-property-access": {
+      "patterns": [
+        {
+          "match": "(?<=[\\w$\\]\\)])(\\?\\.)\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*\\()",
+          "captures": {
+            "1": {
+              "name": "punctuation.accessor.optional.ts"
+            },
+            "2": {
+              "name": "entity.name.function.ts"
+            }
+          }
+        },
+        {
+          "match": "(?<=[\\w$\\]\\)])(\\?\\.)\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+          "captures": {
+            "1": {
+              "name": "punctuation.accessor.optional.ts"
+            },
+            "2": {
+              "name": "variable.other.readwrite.ts"
+            }
+          }
+        }
+      ]
+    },
+    "keyword-as-name": {
+      "patterns": [
+        {
+          "match": "\\b(keyof|is|unique|satisfies)\\b(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "\\b(keyof|is|unique|satisfies)\\b(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": "\\b(readonly)\\b(?!\\s*(?:\\.\\.\\.|!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "\\b(readonly)\\b(?!\\s*(?:\\.\\.\\.|!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": "\\b(abstract|public|private|protected|override|accessor|out|static)\\b(?!\\s*(?:\\.\\.\\.|\\*|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "\\b(abstract|public|private|protected|override|accessor|out|static)\\b(?!\\s*(?:\\.\\.\\.|\\*|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": "\\b(asserts|infer|target|meta|source|interface|enum|module|namespace|from)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "\\b(asserts|infer|target|meta|source|interface|enum|module|namespace|from)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": "\\b(extends|implements)\\b(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "\\b(extends|implements)\\b(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": "\\b(get|set)\\b(?!\\s*(?:\\[))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "\\b(get|set)\\b(?!\\s*(?:\\[))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": "\\b(declare)\\b(?!\\s*(?:\\.\\.\\.|\\(|\\*|;|<|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "\\b(declare)\\b(?!\\s*(?:\\.\\.\\.|\\(|\\*|;|<|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": "\\b(async)\\b(?!\\s*(?:\\.\\.\\.|\\(|\\*|<|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "\\b(async)\\b(?!\\s*(?:\\.\\.\\.|\\(|\\*|<|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": "(@new\\b)(?!\\s*(?:\\(|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "(@new\\b)(?!\\s*(?:\\(|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": "\\b(super)\\b(?!\\s*(?:\\(|\\.|\\[))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "\\b(super)\\b(?!\\s*(?:\\(|\\.|\\[))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": "\\b(instanceof|throw|of|case)\\b(?!\\s*(?:\\.\\.\\.|\\(|<|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "\\b(instanceof|throw|of|case)\\b(?!\\s*(?:\\.\\.\\.|\\(|<|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": "\\b(class)\\b(?!\\s*(?:<|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "\\b(class)\\b(?!\\s*(?:<|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": "\\b(defer)\\b(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "\\b(defer)\\b(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": "\\b(let|var|using)\\b(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "\\b(let|var|using)\\b(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": "\\b(if|for|while|switch|require)\\b(?!\\s*(?:\\())(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "\\b(if|for|while|switch|require)\\b(?!\\s*(?:\\())(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": "\\b(else|do)\\b(?!\\s*(?:\\.\\.\\.|\\(|;|<|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "\\b(else|do)\\b(?!\\s*(?:\\.\\.\\.|\\(|;|<|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": "\\b(try|finally|global)\\b(?!\\s*(?:\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "\\b(try|finally|global)\\b(?!\\s*(?:\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": "\\b(catch|with)\\b(?!\\s*(?:\\(|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "\\b(catch|with)\\b(?!\\s*(?:\\(|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": "\\b(type)\\b(?!\\s*(?:\\*|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "\\b(type)\\b(?!\\s*(?:\\*|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": "\\b(constructor)\\b(?!\\s*(?:\\(|<))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "\\b(constructor)\\b(?!\\s*(?:\\(|<))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        }
+      ]
+    },
     "arrow-parameter": {
-      "match": "\\b((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)\\s*(?==>)",
+      "match": "\\b((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)\\s*(?==>)",
       "captures": {
         "1": {
           "name": "variable.parameter.ts"
@@ -2311,7 +2541,7 @@
           "include": "#param-bind-type-annotation"
         },
         {
-          "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*[,:)?=])",
+          "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*[,:)?=])",
           "captures": {
             "1": {
               "name": "keyword.operator.spread.ts"
@@ -2351,7 +2581,7 @@
           "include": "#param-bind-type-annotation"
         },
         {
-          "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*[,:)?=])",
+          "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*[,:)?=])",
           "captures": {
             "1": {
               "name": "keyword.operator.spread.ts"
@@ -2484,7 +2714,7 @@
     },
     "type-annotation-var": {
       "name": "meta.type.annotation.ts",
-      "begin": "\\b(const|let|var|using)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\s*:)",
+      "begin": "\\b(const|let|var|using)\\s+((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\s*:)",
       "beginCaptures": {
         "1": {
           "name": "storage.type.ts"
@@ -2513,6 +2743,15 @@
       },
       "end": "(?=[{;]|=>)",
       "patterns": [
+        {
+          "begin": "(?<=[:|&])(?=\\s*\\{)",
+          "end": "(?<=\\})",
+          "patterns": [
+            {
+              "include": "#type-object"
+            }
+          ]
+        },
         {
           "include": "#type"
         }
@@ -2942,6 +3181,9 @@
           "include": "#satisfies-typekw"
         },
         {
+          "include": "#keyword-as-name"
+        },
+        {
           "include": "#hexnumber"
         },
         {
@@ -3045,6 +3287,9 @@
         },
         {
           "include": "#property-access"
+        },
+        {
+          "include": "#optional-property-access"
         },
         {
           "include": "#operator-overrides"
@@ -3295,13 +3540,13 @@
           "include": "#regex"
         },
         {
-          "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
+          "match": "(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
           "name": "entity.name.function.ts"
         }
       ]
     },
     "parameter-name": {
-      "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*[,)=])",
+      "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?=\\s*[,)=])",
       "captures": {
         "1": {
           "name": "keyword.operator.spread.ts"
@@ -3384,7 +3629,7 @@
     },
     "type-alias-declaration": {
       "name": "meta.type.ts",
-      "begin": "\\b(type)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
+      "begin": "\\b(type)\\s+((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
       "beginCaptures": {
         "1": {
           "name": "storage.type.type.ts"
@@ -3404,7 +3649,7 @@
           "include": "$self"
         }
       ],
-      "while": "^(?=\\s*(?:[<,\\[|&(...?:{\\-.!*+;]|(?:keyof|typeof|readonly|is|abstract|new|asserts|extends|infer|true|false|null|undefined|void|this|unique|in|as)\\b|//|/\\*|[>\\])}](?:\\s*[>\\])}])*\\s*(?=[<,\\[|&(...?:{\\-.!*+;=])|(?!(?:if|else|switch|case|default|for|while|do|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set)\\b)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\b(?!\\s*[.(])))"
+      "while": "^(?=\\s*(?:[<,\\[|&(...?:{\\-.!*+;]|(?:keyof|typeof|readonly|is|abstract|new|asserts|extends|infer|true|false|null|undefined|void|this|unique|in|as)\\b|//|/\\*|[>\\])}](?:\\s*[>\\])}])*\\s*(?=[<,\\[|&(...?:{\\-.!*+;=])|(?!(?:if|else|switch|case|default|for|while|do|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set)\\b)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\b(?!\\s*[.(])))"
     },
     "type-object": {
       "name": "meta.object-type.ts",
@@ -3458,7 +3703,7 @@
     },
     "parameter-type-annotation": {
       "name": "meta.type.annotation.parameter.ts",
-      "begin": "(\\.\\.\\.)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\??)(\\s*:)",
+      "begin": "(\\.\\.\\.)?\\s*((?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\??)(\\s*:)",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.spread.ts"
