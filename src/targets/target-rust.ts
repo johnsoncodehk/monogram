@@ -125,6 +125,11 @@ const rsMacro = (form: 'cand' | 'cand_last' | 'undo' | 'undo_ne' | 'clean' | 'nu
   rsMacroUses.add(form);
   return form === 'cand' ? '' : form === 'cand_last' ? 'last ' : form;
 };
+// The Parser library's combinators (star / opt / sep_by and their forms) likewise: the step lowering
+// records each one it spells (rsLib), and the library prints only those (rsNeed).
+let rsLibUses = new Set<string>();
+const rsLib = (name: string): string => { rsLibUses.add(name); return name; };
+const rsNeed = (name: string): boolean => rsLibUses.has(name);
 const ckLetRs = (d: Dispatch) => `let ${d.sections.some((sec) => (sec.by === 'rest' ? sec.arms : sec.groups.flatMap((g) => g.arms)).some((i) => !d.final.includes(i))) ? 'mut ' : ''}ck = self.b.checkpoint();`;
 // The candidate frame as a macro, not a method: a helper over the list's state was measured to
 // cost instructions (+2 to +9%: LLVM does not treat the call as it treats the frame in place),
@@ -1239,15 +1244,15 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
     // no builder checkpoint; recognizing, every mark is the position alone already (`_r`).
     star: (body, g, mk) => {
       const C = mk === 'none' ? '_c' : mk === 'leaves' && !r ? '_l' : R;
-      return g === null || !guards ? `${recv}.star${C}(|p| ${body})` : `${recv}.star_in${C}(${g}, |p| ${body})`;
+      return g === null || !guards ? `${recv}.${rsLib(`star${C}`)}(|p| ${body})` : `${recv}.${rsLib(`star_in${C}`)}(${g}, |p| ${body})`;
     },
     opt: (body, g, mk) => {
       const C = mk === 'none' ? '_c' : mk === 'leaves' && !r ? '_l' : R;
-      return g === null || !guards ? `${recv}.opt${C}(|p| ${body})` : `(!${recv}.ahead(${g}, true) || ${recv}.opt_out${C}(|p| ${body}))`;
+      return g === null || !guards ? `${recv}.${rsLib(`opt${C}`)}(|p| ${body})` : `(!${recv}.ahead(${g}, true) || ${recv}.${rsLib(`opt_out${C}`)}(|p| ${body}))`;
     },
     sep: (elem, delim, g, mk) => {
       const C = mk === 'none' ? `_c${R}` : mk === 'leaves' && !r ? '_l' : R;
-      return g === null || !guards ? `${recv}.sep_by${C}(|p| ${elem}, ${sepDelimLid(ids, delim)})` : `(!${recv}.ahead(${g}, true) || ${recv}.sep_by_out${C}(|p| ${elem}, ${sepDelimLid(ids, delim)}))`;
+      return g === null || !guards ? `${recv}.${rsLib(`sep_by${C}`)}(|p| ${elem}, ${sepDelimLid(ids, delim)})` : `(!${recv}.ahead(${g}, true) || ${recv}.${rsLib(`sep_by_out${C}`)}(|p| ${elem}, ${sepDelimLid(ids, delim)}))`;
     },
     altlit: (values) => `${recv}.alt_lit${R}(&[${values.map((v) => lidOf(ids, v)).join(', ')}])`,
     look: (id, is) => `${is ? '' : '!'}${recv}.look_${id}()`,
@@ -1441,7 +1446,7 @@ ${topOne}
     headSeg: (rule) => `    fn parse_head_seg(&mut self) -> Option<EntryMeta> {
         self.look_reset();
         let before = self.scratch.len();
-        self.opt(|p| p.call_rule(Parser::parse_${rule}));
+        self.${rsLib('opt')}(|p| p.call_rule(Parser::parse_${rule}));
         if self.scratch.len() == before { return None; }
         let n = self.scratch[before];
         let (tok_start, tok_end) = self.b.tok_range(n);
@@ -1461,7 +1466,7 @@ ${topOne}
             self.back(sp); self.scratch.truncate(before); self.b.restore(ck);
             return None;
         }
-        self.opt(|p| p.call_rule(Parser::parse_${rule}));
+        self.${rsLib('opt')}(|p| p.call_rule(Parser::parse_${rule}));
         let leaf = self.scratch[before];
         let (tok_start, mut tok_end) = self.b.tok_range(leaf);
         let count = self.scratch.len() - before;
@@ -1706,8 +1711,8 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
     }
     /// The operator row per lid (parser-ir prattOpRow: binary lbp / rbp / flags, postfix lbp / target, composite lead, led index).
     const ${r.name}_ROW: [u32; ${row.size}] = [${row.rows.join(', ')}];
-    fn ${r.name}_pre(op: u16${preGated ? ', ctx: u8' : ''}) -> Option<(i64, bool, u8)> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
-`,
+${preArms ? `    fn ${r.name}_pre(op: u16${preGated ? ', ctx: u8' : ''}) -> Option<(i64, bool, u8)> { match op { ${preArms}, _ => None } }
+` : '' /* no prefix operator: no prefix arm calls it */}`,
     // Rust's `loop` takes no label here: a led's `continue` / `break` are the innermost loop's.
     bpOpen: (_label, nudBp, bp, closesTail) => `    fn ${r.name}_bp(&mut self${bp ? ', min_bp: i64' : ''}) -> Option<Spanned<B::H>> {${dem.length ? '\n        let p0 = self.pos as isize;' : ''}
         let mut left = self.${r.name}_nud(${nudBp ? 'min_bp' : ''})?;
@@ -2170,11 +2175,14 @@ function emitParserMachine(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shapeB
   const reuse = ir.reuse;
   const entriesField = reuse ? '\n    entries: Vec<EntryMeta>,' : '';
   rsMacroUses = new Set();
+  rsLibUses = new Set();
   const ruleFns = [...ir.rules.filter((r) => ir.forms.buildRules.includes(r.name)).map((r) => {
     if (r.kind === 'pratt') return prattRule(r, ir, ids, ar);
     if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids, ar);
     return rdRule(r, ids, ar);
   }), ...ir.rules.filter((r) => ir.forms.recognizeRules.includes(r.name)).map((r) => ruleR(r, ids))].join('\n\n');
+  // before the library: their steps record the combinators they call (rsLib)
+  const lookSharedFns = lookFns(ir, ids, ar) + sharedFns(ir, ids, ar);
   const matchTemplate = ir.tpl ? `    // interp: the rule that parses each \`\${…}\` hole — the one the matching reference declares
     // (the grammar's expression rule, or the rule a withHoles reference names).
     fn match_template(&mut self, interp: fn(&mut Parser<'a, B>) -> Option<Spanned<B::H>>) -> Option<Spanned<B::H>> {
@@ -2730,7 +2738,7 @@ impl<'a, B: Builder> Parser<'a, B> {
             None => false
         }
     }
-    #[inline(always)]
+${rsNeed('star') ? `    #[inline(always)]
     fn star(&mut self, once: fn(&mut Parser<'a, B>) -> bool) -> bool {
         loop {
             let m = self.mark();
@@ -2738,13 +2746,13 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
         true
     }
-    #[inline(always)]
+` : ''}${rsNeed('opt') ? `    #[inline(always)]
     fn opt(&mut self, body: fn(&mut Parser<'a, B>) -> bool) -> bool {
         let m = self.mark();
         if !body(self) { self.reset(m); }
         true
     }
-    #[inline(always)]
+` : ''}${rsNeed('sep_by') ? `    #[inline(always)]
     fn sep_by(&mut self, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
         let m0 = self.mark();
         if !elem(self) { self.reset(m0); return true; }
@@ -2755,10 +2763,9 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
         true
     }
-    // The guarded forms: the body is attempted only where the next token is in tokenSets[k]. Out of
+` : ''}${rsNeed('star_in') ? `    // The guarded forms: the body is attempted only where the next token is in tokenSets[k]. Out of
     // line and generic over the body, so each site is its own small function with the body inlined.
     #[inline(never)]
-    #[allow(dead_code)]
     fn star_in<F: Fn(&mut Self) -> bool>(&mut self, k: usize, once: F) -> bool {
         while self.ahead(k, true) {
             let m = self.mark();
@@ -2766,14 +2773,12 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
         true
     }
-    // The attempt of a guarded opt / sep whose guard the caller tested: out of line, per site.
+` : ''}${rsNeed('opt_out') ? `    // The attempt of a guarded opt / sep whose guard the caller tested: out of line, per site.
     #[inline(never)]
-    #[allow(dead_code)]
     fn opt_out<F: Fn(&mut Self) -> bool>(&mut self, body: F) -> bool {
         let m = self.mark(); if !body(self) { self.reset(m); } true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('sep_by_out') ? `    #[inline(never)]
     fn sep_by_out<F: Fn(&mut Self) -> bool>(&mut self, elem: F, delim: u16) -> bool {
         let m0 = self.mark();
         if !elem(self) { self.reset(m0); return true; }
@@ -2784,13 +2789,11 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
         true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('opt_out_r') ? `    #[inline(never)]
     fn opt_out_r<F: Fn(&mut Self) -> bool>(&mut self, body: F) -> bool {
         let sp = self.pos; if !body(self) { self.back(sp); } true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('sep_by_out_r') ? `    #[inline(never)]
     fn sep_by_out_r<F: Fn(&mut Self) -> bool>(&mut self, elem: F, delim: u16) -> bool {
         let sp0 = self.pos;
         if !elem(self) { self.back(sp0); return true; }
@@ -2801,73 +2804,61 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
         true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('star_in_r') ? `    #[inline(never)]
     fn star_in_r<F: Fn(&mut Self) -> bool>(&mut self, k: usize, once: F) -> bool {
         while self.ahead(k, true) { let sp = self.pos; if !once(self) { self.back(sp); break; } }
         true
     }
-    // A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo; the same
+` : ''}${rsNeed('star_c') ? `    // A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo; the same
     // code builds or recognizes (the body is the form's own), except a delimiter's match.
     #[inline(always)]
-    #[allow(dead_code)]
     fn star_c(&mut self, once: fn(&mut Parser<'a, B>) -> bool) -> bool { while once(self) {} true }
-    #[inline(always)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('opt_c') ? `    #[inline(always)]
     fn opt_c(&mut self, body: fn(&mut Parser<'a, B>) -> bool) -> bool { body(self); true }
-    #[inline(always)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('sep_by_c') ? `    #[inline(always)]
     fn sep_by_c(&mut self, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
         if elem(self) { while self.match_lit(delim) && elem(self) {} }
         true
     }
-    #[inline(always)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('sep_by_c_r') ? `    #[inline(always)]
     fn sep_by_c_r(&mut self, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
         if elem(self) { while self.match_lit_r(delim) && elem(self) {} }
         true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('star_in_c') ? `    #[inline(never)]
     fn star_in_c<F: Fn(&mut Self) -> bool>(&mut self, k: usize, once: F) -> bool {
         while self.ahead(k, true) && once(self) {}
         true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('opt_out_c') ? `    #[inline(never)]
     fn opt_out_c<F: Fn(&mut Self) -> bool>(&mut self, body: F) -> bool { body(self); true }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('sep_by_out_c') ? `    #[inline(never)]
     fn sep_by_out_c<F: Fn(&mut Self) -> bool>(&mut self, elem: F, delim: u16) -> bool {
         if elem(self) { while self.match_lit(delim) && elem(self) {} }
         true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('sep_by_out_c_r') ? `    #[inline(never)]
     fn sep_by_out_c_r<F: Fn(&mut Self) -> bool>(&mut self, elem: F, delim: u16) -> bool {
         if elem(self) { while self.match_lit_r(delim) && elem(self) {} }
         true
     }
-    #[inline(always)]
+` : ''}    #[inline(always)]
     fn alt_lit(&mut self, lids: &[u16]) -> bool {
         for lid in lids { if self.match_lit(*lid) { return true; } }
         false
     }
-    // A body that fails with leaves only (Step.leaves) changes nothing but the position and the
+${rsNeed('star_l') ? `    // A body that fails with leaves only (Step.leaves) changes nothing but the position and the
     // scratch list when it fails: its mark is those two, with no builder checkpoint.
     #[inline(always)]
-    #[allow(dead_code)]
     fn star_l(&mut self, once: fn(&mut Parser<'a, B>) -> bool) -> bool {
         loop { let sp = self.pos; let sb = self.scratch.len(); if !once(self) { self.back(sp); self.scratch.truncate(sb); break; } }
         true
     }
-    #[inline(always)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('opt_l') ? `    #[inline(always)]
     fn opt_l(&mut self, body: fn(&mut Parser<'a, B>) -> bool) -> bool {
         let sp = self.pos; let sb = self.scratch.len(); if !body(self) { self.back(sp); self.scratch.truncate(sb); } true
     }
-    #[inline(always)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('sep_by_l') ? `    #[inline(always)]
     fn sep_by_l(&mut self, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
         let sp0 = self.pos; let sb0 = self.scratch.len();
         if !elem(self) { self.back(sp0); self.scratch.truncate(sb0); return true; }
@@ -2878,19 +2869,16 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
         true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('star_in_l') ? `    #[inline(never)]
     fn star_in_l<F: Fn(&mut Self) -> bool>(&mut self, k: usize, once: F) -> bool {
         while self.ahead(k, true) { let sp = self.pos; let sb = self.scratch.len(); if !once(self) { self.back(sp); self.scratch.truncate(sb); break; } }
         true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('opt_out_l') ? `    #[inline(never)]
     fn opt_out_l<F: Fn(&mut Self) -> bool>(&mut self, body: F) -> bool {
         let sp = self.pos; let sb = self.scratch.len(); if !body(self) { self.back(sp); self.scratch.truncate(sb); } true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('sep_by_out_l') ? `    #[inline(never)]
     fn sep_by_out_l<F: Fn(&mut Self) -> bool>(&mut self, elem: F, delim: u16) -> bool {
         let sp0 = self.pos; let sb0 = self.scratch.len();
         if !elem(self) { self.back(sp0); self.scratch.truncate(sb0); return true; }
@@ -2901,7 +2889,7 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
         true
     }
-    // The recognize forms (ParserIR.forms): the same tokens examined, nothing built.
+` : ''}    // The recognize forms (ParserIR.forms): the same tokens examined, nothing built.
     #[inline(always)]
     #[allow(dead_code)]
     fn match_lit_r(&mut self, lid: u16) -> bool {
@@ -2912,19 +2900,16 @@ impl<'a, B: Builder> Parser<'a, B> {
     fn match_tok_r(&mut self, kid: u16) -> bool {
         match self.peek() { Some(t) if t.kid == kid => { self.pos += 1; true } _ => false }
     }
-    #[inline(always)]
-    #[allow(dead_code)]
+${rsNeed('star_r') ? `    #[inline(always)]
     fn star_r(&mut self, once: fn(&mut Parser<'a, B>) -> bool) -> bool {
         loop { let sp = self.pos; if !once(self) { self.back(sp); break; } }
         true
     }
-    #[inline(always)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('opt_r') ? `    #[inline(always)]
     fn opt_r(&mut self, body: fn(&mut Parser<'a, B>) -> bool) -> bool {
         let sp = self.pos; if !body(self) { self.back(sp); } true
     }
-    #[inline(always)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('sep_by_r') ? `    #[inline(always)]
     fn sep_by_r(&mut self, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
         let sp0 = self.pos;
         if !elem(self) { self.back(sp0); return true; }
@@ -2935,14 +2920,14 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
         true
     }
-    #[inline(always)]
+` : ''}    #[inline(always)]
     #[allow(dead_code)]
     fn alt_lit_r(&mut self, lids: &[u16]) -> bool {
         for lid in lids { if self.match_lit_r(*lid) { return true; } }
         false
     }
 
-${matchTemplate}${lookFns(ir, ids, ar)}${sharedFns(ir, ids, ar)}${ruleFns}
+${matchTemplate}${lookSharedFns}${ruleFns}
 }
 `;
 }
