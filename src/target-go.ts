@@ -514,6 +514,10 @@ ${sig ? `${p.goBoolArr('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
   const prevIsValue = p.rxStateFrom.replace('\tprevIsValue := func() bool {\n', `\tprevIsValue := func() bool {
 \t\tif len(*acc) <= valueTo { return true }
 `);
+  // where an operand may start (an operand element entry): not after a value, nor after a member
+  // accessor (regexContext.memberAccessTexts: a name follows it, so \`a?.<T>(x)\` opens no element)
+  const operandStarts = operand ? `\toperandStarts := func() bool { return !prevIsValue() && !(hasPrev && _mem[prevLid]) }
+` : '';
   const rxParams = rx ? 'prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, ' : '';
   const rxRet = rx ? 'uint16, uint16, uint16, bool, bool, []bool, bool, bool, ' : '';
   const rxNames = rx ? 'prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang, ' : '';
@@ -595,8 +599,8 @@ ${rx ? `\t\tif lid == lidLParen {
   // (in a directive head, code inside an element frame, a tagOpen opens no element)
   const opensTag = `strings.HasPrefix(src[pos:], ${J(el.tagOpen)})${el.tagStart ? ` && ${shared.elementFn('tagStart')}(src, pos + ${L})` : ''}${dirs ? ' && (len(templateStack) == 0 || templateStack[len(templateStack)-1]&3 != 2)' : ''}`;
   const entry = !operand ? `\t\tif ${opensTag} {\n${enter}\t\t}\n`
-    : !(el.head || sig) ? `\t\tif ${opensTag} && !prevIsValue() {\n${enter}\t\t}\n`
-    : `\t\tif ${opensTag}${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue() {
+    : !(el.head || sig) ? `\t\tif ${opensTag} && operandStarts() {\n${enter}\t\t}\n`
+    : `\t\tif ${opensTag}${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && operandStarts() {
 \t\t\top := 0
 \t\t\t${sig ? 'if pos == specAt { op = 1; if specKeep { op = 0 }; specAt = -1 } else ' : ''}{ o, re := ${shared.elementFn('opens')}(src, pos); op = o; if re > laEnd { laEnd = re } }
 \t\t\tif op == 1 {
@@ -680,7 +684,7 @@ ${p.uniIdentFallbackGo}${p.loopPanicGo}
   return `${p.head}${consts}${p.scans}func lexFrom(src string, pos int, pendingNl bool, ${rxParams}templateStack []int, elEnded bool, tagAngle, laEnd, specUntil int, ${raw ? 'tagAt []int, ' : ''}acc *[]Tok, limit int) (int, bool, ${rxRet}[]int, bool, int, int, int${raw ? ', []int' : ''}, *lexErr) {
 \tn := len(src)
 \tvar err *lexErr
-${hotState}${prevIsValue}${sig ? '' : refreshFn}${specState}${emitFn}\tbase := len(*acc)
+${hotState}${prevIsValue}${operandStarts}${sig ? '' : refreshFn}${specState}${emitFn}\tbase := len(*acc)
 ${loop}lexFail:
 ${sig ? '\tif specTok >= 0 { specStep(); pos = specRewind(err != nil); err = nil; goto lexLoop }\n' : ''}\treturn pos, pendingNl, ${rxNames}templateStack, len(*acc) == elEndAt, tagAngle, laEnd, specUntil${raw ? ', tagAt' : ''}, err
 }

@@ -260,6 +260,10 @@ ${sig ? `${tsFlagTable('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
   const prevIsValue = p.rxStateFrom.replace('function prevIsValue(): boolean {\n', `function prevIsValue(): boolean {
     if (toks.length <= valueTo) return true;
 `);
+  // where an operand may start (an operand element entry): not after a value, nor after a member
+  // accessor (regexContext.memberAccessTexts: a name follows it, so \`a?.<T>(x)\` opens no element)
+  const operandStarts = operand ? `function operandStarts(): boolean { return !prevIsValue() && !(hasPrev && !!_mem[prevLid]); }
+` : '';
   const rxParams = rx ? 'prevLid: number, prevKid: number, bpLid: number, hasPrev: boolean, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, ' : '';
   const rxRet = rx ? 'prevLid: number; prevKid: number; hasPrev: boolean; bpLid: number; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean; ' : '';
   const rxNames = rx ? 'prevLid, prevKid, hasPrev, bpLid, hasPrev2, parenHead, lastClose, lastBang, ' : '';
@@ -325,8 +329,8 @@ ${rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]
   // (in a directive head, code inside an element frame, a tagOpen opens no element)
   const opensTag = `src.startsWith(${J(el.tagOpen)}, pos)${el.tagStart ? ` && ${shared.elementFn('tagStart')}(src, pos + ${L})` : ''}${dirs ? ' && (templateStack.length === 0 || (templateStack[templateStack.length - 1] & 3) !== 2)' : ''}`;
   const entry = !operand ? `    if (${opensTag}) {\n${enter}    }\n`
-    : !(el.head || sig) ? `    if (${opensTag} && !prevIsValue()) {\n${enter}    }\n`
-    : `    if (${opensTag}${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue()) {
+    : !(el.head || sig) ? `    if (${opensTag} && operandStarts()) {\n${enter}    }\n`
+    : `    if (${opensTag}${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && operandStarts()) {
       let op: number;
       ${sig ? 'if (pos === specAt) { op = specKeep ? 0 : 1; specAt = -1; } else ' : ''}{ ${tsTake(['o', 're'], shared.elementFn('opens'), 'src, pos')} op = o; if (re > laEnd) laEnd = re; }
       if (op === 1) {
@@ -407,7 +411,7 @@ ${p.uniIdentFallbackTs}${TS_UNEXPECTED}
   const n = src.length;
   const base = toks.length;
   let err: LexErr | null = null;
-${prevIsValue}${hotState}${specState}${emitFn}  refresh();
+${prevIsValue}${operandStarts}${hotState}${specState}${emitFn}  refresh();
 ${loop}
   return { pos, pendingNl, ${rxNames}templateStack, elEnded: toks.length === elEndAt, tagAngle, laEnd, specUntil${raw ? ', tagAt' : ''}, err };
 }
