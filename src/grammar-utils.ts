@@ -8,6 +8,12 @@
 // for different reasons and must not be coupled.
 import type { CstGrammar, RuleExpr } from './types.ts';
 
+/** The ZERO-WIDTH MARKERS of the grammar language: assertions that consume nothing and build no
+ *  child (a negative lookahead, the line and comment conditions, the left-leaf gate, a declared
+ *  target check). Every reader that skips or names them asks this one set. */
+export const ZERO_WIDTH_MARKERS: ReadonlySet<RuleExpr['type']> = new Set<RuleExpr['type']>(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'target']);
+export const isZeroWidthMarker = (t: RuleExpr['type']): boolean => ZERO_WIDTH_MARKERS.has(t);
+
 /** True if `code` is an identifier-start character: a-z, A-Z, `_`, or `$`. */
 export function isIdentStartCode(code: number): boolean {
   return (code >= 97 && code <= 122) || (code >= 65 && code <= 90) || code === 95 || code === 36;
