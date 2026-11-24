@@ -96,6 +96,10 @@ check('namedcalc', calcExample, ['let x = 1 + 2 * y;', '-3; (a - b) / c;', 'x;',
     walk(dir);
     const tscSyn = (await import('./fixtures/shape-tsc-synthesized.ts')).default;
     check('tsc-synthesized', tscSyn, files.map((f) => readFileSync(f, 'utf8')), true);
+    // Escaped identifiers (the corpus has none): an IdentifierName is its span only while no
+    // identifier of the source has an escape (cookIdentSpan); backslashes in strings and regular
+    // expressions do not count, one escaped identifier anywhere sends every identifier to the cook.
+    check('tsc-escapes', tscSyn, ['"a\\nb"; /x\\d/; abc;', '\\u0061bc; x.\\u{62}c; abc;', 'f("\\t", y); \\u{78}y = 1;'], true);
   } else console.log('  (conformance/expressions absent: run $SHARED/restore-corpus.sh; the tsc rows skipped)');
 }
 
