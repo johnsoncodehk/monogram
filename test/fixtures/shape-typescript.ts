@@ -648,6 +648,11 @@ function estreeDecl(ctx: TsAstCustomCtx): unknown {
   const arm = ctx.altPath[0];
   const k = Array.isArray(ctx.kids) ? ctx.kids : [ctx.kids];
   if (arm === 17) return { type: 'ExportNamedDeclaration', declaration: k[0] };
+  // `export` and a VariableStatement (branch 1: var / let / const, 2: [await] using): the
+  // statement's declarators are the arm's own children since the export arm reads the declaring
+  // productions themselves (land/grammar-statement-declaration), one flat list as the Rust rebuild
+  // packs them (v1 binds arms by position: this is the fragility the v2 shapes retire).
+  if (arm === 18 && (ctx.altPath[1] === 1 || ctx.altPath[1] === 2)) return { type: 'ExportNamedDeclaration', specifiers: flatKids(k).flatMap((x) => flatKids(x)) };
   if (arm === 18) return { type: 'ExportNamedDeclaration', specifiers: flatKids(k) };
   if (arm === 19) return { type: 'ExportDefaultDeclaration', declaration: k[0] };
   if (arm === 20) return { type: 'ImportDeclaration', specifiers: flatKids(k[1] ?? k), source: k[2] ?? k[1] };

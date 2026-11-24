@@ -2446,37 +2446,55 @@ function planStartMarkers(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
     }
     if (!out.includes(v)) out.push(v);
   };
+  // The arms an alternative stands for: itself, or, where it is a bare reference to a rule (a unit
+  // alternative: nothing before or after the reference), that rule's alternatives, transitively. A
+  // dropped `not(X)` leading one of them is decided against the choice's OTHER alternatives too: the
+  // StatementListItem `Statement | Declaration` holds the expression statement's `not('function' |
+  // 'class' | …)` one rule down, beside the declarations it excludes. The marker stands where it
+  // would stand for a sibling (the other alternatives' left corners); the referenced rule's own
+  // choice is planned on its own.
+  const ruleBody = new Map(grammar.rules.map(r => [r.name, r.body]));
+  const unitArms = (a: RuleExpr, seen = new Set<string>()): RuleExpr[] => {
+    const items = armItems(a);
+    const r = items.length === 1 ? tsView(items[0]) : undefined;
+    if (!r || r.type !== 'ref' || tokenNames.has(r.name) || seen.has(r.name) || !ruleBody.has(r.name)) return [a];
+    seen.add(r.name);
+    const body = tsView(ruleBody.get(r.name)!);
+    return (body.type === 'alt' ? body.items : [body]).flatMap(b => unitArms(b, seen));
+  };
   const byKey = new Map<string, StartMarkerToken>();
   const condByKey = new Map<string, number>();
-  const reported = new Set<RuleExpr>();
+  const reported = new Map<RuleExpr, StartMarkerPlan['report'][number]>();
   const unstartable = new Map<RuleExpr, string[]>();
   let owner = '';
   const visit = (alt: RuleExpr & { type: 'alt' }) => {
     // the conditions: per arm, its leading dropped negative lookaheads' paths
     const conds: { arm: number; nots: RuleExpr[]; paths: { p: StartPath; not: RuleExpr }[] }[] = [];
+    const viaRef = new Set<RuleExpr>();   // the nots of a rule a unit alternative refers to: planned in its own choice too
     alt.items.forEach((a, ai) => {
       const nots: RuleExpr[] = [];
-      for (const it of armItems(a)) {
+      const arms = unitArms(a);
+      for (const b of arms) for (const it of armItems(b)) {
         if (!isAssertion(it)) break;
         const v = tsView(it);
         if (v.type !== 'not') continue;
         const body = tsView(v.body);
         if (body.type === 'not' || body.type === 'sameLine') continue;        // a positive lookahead / a line condition
         const recs = recordOf.get(v) ?? [];
-        if (recs.length && recs.every(r => r.cls === 'lookahead1' || r.cls === 'lookahead')) nots.push(v);
+        if (recs.length && recs.every(r => r.cls === 'lookahead1' || r.cls === 'lookahead')) { nots.push(v); if (arms[0] !== a) viaRef.add(v); }
       }
       const paths: { p: StartPath; not: RuleExpr }[] = [];
       for (const n of nots) {
         const ps = pathsOf((n as RuleExpr & { type: 'not' }).body);
-        if (typeof ps === 'string') { if (!reported.has(n)) { reported.add(n); plan.report.push({ rule: owner, text: assertionText(n), rendered: [], left: [ps], exact: false }); } continue; }
+        if (typeof ps === 'string') { if (!viaRef.has(n)) report(n, [], [ps]); continue; }
         // Only what the alternative itself can start with: a path it cannot (a lookahead before an
         // arm that consumes nothing there, `[not('{'), asi()]`, `not('this' | 'new')` alone) guards
         // its zero-width arms, which no start marker decides; it stays recorded.
         for (const p of ps) {
           if (startsWith(a, p.first)) paths.push({ p, not: n });
-          else unstartable.set(n, [...unstartable.get(n) ?? [], `${show(p)}: the alternative cannot start with it`]);
+          else if (!viaRef.has(n)) unstartable.set(n, [...unstartable.get(n) ?? [], `${show(p)}: the alternative cannot start with it`]);
         }
-        if (!paths.some(x => x.not === n) && !reported.has(n)) { reported.add(n); plan.report.push({ rule: owner, text: assertionText(n), rendered: [], left: unstartable.get(n)!, exact: false }); }
+        if (!paths.some(x => x.not === n) && !viaRef.has(n)) report(n, [], unstartable.get(n)!);
       }
       if (paths.length) conds.push({ arm: ai, nots, paths });
     });
@@ -2526,15 +2544,30 @@ function planStartMarkers(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
         plan.markerOf.set(s, l);
       }
     }
+    const done = new Set<RuleExpr>();
     for (const c of conds) for (const n of c.nots) {
-      if (reported.has(n)) continue;
-      reported.add(n);
+      if (done.has(n)) continue;
+      done.add(n);
       const mine = c.paths.filter(x => x.not === n).map(x => x.p);
-      const left = [...unstartable.get(n) ?? [], ...mine.filter(p => !rendered.has(p)).map(p => `${show(p)}: no other alternative can start with it`)];
-      const exact = !left.length;
-      if (exact) plan.lowered.add(n);
-      plan.report.push({ rule: owner, text: assertionText(n), rendered: mine.filter(p => rendered.has(p)).map(show), left, exact });
+      // Through a unit alternative only what this choice renders counts: a path it leaves has its
+      // competitor inside the referenced rule, whose own choice decides it.
+      if (viaRef.has(n)) report(n, mine.filter(p => rendered.has(p)).map(show), [], mine.filter(p => !rendered.has(p)).map(show));
+      else report(n, mine.filter(p => rendered.has(p)).map(show), [...unstartable.get(n) ?? [], ...mine.filter(p => !rendered.has(p)).map(p => `${show(p)}: no other alternative can start with it`)]);
     }
+  };
+  // A `not` met in several choices (its own, and those that reach it through a unit alternative):
+  // one report, the paths rendered in any of them and the ones left in any; exact when none is left
+  // (a path left in one choice is not decided there, whatever another choice renders).
+  // A `not` met only through unit alternatives (its own rule is no choice) is exact only when every
+  // path of it rendered somewhere (`viaLeft`: the ones such a choice left).
+  const direct = new Set<RuleExpr>();
+  const viaLeft = new Map<RuleExpr, Set<string>>();
+  const report = (n: RuleExpr, rendered: string[], left: string[], via?: string[]) => {
+    let r = reported.get(n);
+    if (!r) { reported.set(n, r = { rule: owner, text: assertionText(n), rendered: [], left: [], exact: false }); plan.report.push(r); }
+    for (const x of rendered) if (!r.rendered.includes(x)) r.rendered.push(x);
+    for (const x of left) if (!r.left.includes(x)) r.left.push(x);
+    if (via) { const l = viaLeft.get(n) ?? new Set(); for (const x of via) l.add(x); viaLeft.set(n, l); } else direct.add(n);
   };
   const walked = new Set<RuleExpr>();
   const walk = (e: RuleExpr): void => {
@@ -2550,6 +2583,11 @@ function planStartMarkers(grammar: CstGrammar, tokenNames: Set<string>, sets: Te
   };
   for (const r of grammar.rules) { owner = r.name; walk(r.body); }
   for (const [n, b] of collectTsSharedRules(grammar)) { owner = n; walk(b); }
+  for (const [n, r] of reported) {
+    if (!direct.has(n)) for (const x of viaLeft.get(n) ?? []) if (!r.rendered.includes(x) && !r.left.includes(x)) r.left.push(`${x}: no other alternative can start with it`);
+    r.exact = !r.left.length;
+    if (r.exact) plan.lowered.add(n);
+  }
   return plan;
 }
 

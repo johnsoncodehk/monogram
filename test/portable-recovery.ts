@@ -68,8 +68,12 @@ const TOTAL_K = 4;
 // javascript 5349 -> 5329, typescript 6388 -> 6372 (land/grammar-statement-declaration): no literal
 // changes, but the mutants' verdicts do (a declaration in a sub-statement position, `export` and a
 // statement that begins with a declaration word, no longer parse): javascript 5,329 of 5,991 rejects
-// agree (88.9%, was 91.4% of 5,850), typescript 6,372 of 6,847 (93.1%). The javascript share falls:
-// the new rejects' farthest hints are not yet classified (owed to the recovery lane).
+// agree (88.9%, was 91.4% of 5,850), typescript 6,372 of 6,847 (93.1%). The javascript share falls
+// (owed to the recovery lane): of the 662 disagreements 355 begin with `import` (the pattern above),
+// 207 with `const` / `var` / `let` / `export` and 40 with `for` / `if`: inputs whose statement now
+// nests (Stmt -> Statement) or whose `export` reads the declaring production itself, where one side
+// names no related location (`let }aa ;`: the interpreter's farthest 5, the engine none; `export  ,aa ;`:
+// the interpreter none, the engine 8).
 const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5329, typescript: 6372 };
 const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // P10 EXPECTED-FAIL on `$missing`-only repairs, by class. GREEDY CAPTURE: the repair is right by

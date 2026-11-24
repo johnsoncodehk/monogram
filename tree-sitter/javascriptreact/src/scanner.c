@@ -37,6 +37,8 @@ enum TokenType {
   _STARTS_8,
   _STARTS_9,
   _STARTS_10,
+  _STARTS_11,
+  _STARTS_12,
 };
 
 // The scanner is stateless — tree-sitter's `valid_symbols` already encodes
@@ -1763,10 +1765,12 @@ static const int16_t _STARTS_3_CONDS[] = { 1 };
 static const int16_t _STARTS_4_CONDS[] = { 1 };
 static const int16_t _STARTS_5_CONDS[] = { 1 };
 static const int16_t _STARTS_6_CONDS[] = { 1 };
-static const int16_t _STARTS_7_CONDS[] = { 2, 2, 3 };
-static const int16_t _STARTS_8_CONDS[] = { 2, 2, 3 };
+static const int16_t _STARTS_7_CONDS[] = { 1 };
+static const int16_t _STARTS_8_CONDS[] = { 1 };
 static const int16_t _STARTS_9_CONDS[] = { 2, 2, 3 };
-static const int16_t _STARTS_10_CONDS[] = { 4 };
+static const int16_t _STARTS_10_CONDS[] = { 2, 2, 3 };
+static const int16_t _STARTS_11_CONDS[] = { 2, 2, 3 };
+static const int16_t _STARTS_12_CONDS[] = { 4 };
 static const StartMarker START_MARKERS[] = {
   { _STARTS_1, 103, -1, _STARTS_1_CONDS, 1, 1u },
   { _STARTS_2, 103, -1, _STARTS_2_CONDS, 1, 1u },
@@ -1774,10 +1778,12 @@ static const StartMarker START_MARKERS[] = {
   { _STARTS_4, 58, -1, _STARTS_4_CONDS, 1, 1u },
   { _STARTS_5, 53, -1, _STARTS_5_CONDS, 1, 1u },
   { _STARTS_6, 80, -1, _STARTS_6_CONDS, 1, 1u },
-  { _STARTS_7, 80, -1, _STARTS_7_CONDS, 3, 4u },
-  { _STARTS_8, 80, -1, _STARTS_8_CONDS, 3, 7u },
-  { _STARTS_9, 53, -1, _STARTS_9_CONDS, 3, 4u },
-  { _STARTS_10, 80, -1, _STARTS_10_CONDS, 1, 1u },
+  { _STARTS_7, 46, -1, _STARTS_7_CONDS, 1, 1u },
+  { _STARTS_8, -1, 14, _STARTS_8_CONDS, 1, 1u },
+  { _STARTS_9, 80, -1, _STARTS_9_CONDS, 3, 4u },
+  { _STARTS_10, 80, -1, _STARTS_10_CONDS, 3, 7u },
+  { _STARTS_11, 53, -1, _STARTS_11_CONDS, 3, 4u },
+  { _STARTS_12, 80, -1, _STARTS_12_CONDS, 1, 1u },
 };
 // The literal after the first one (past whitespace and the comments skipped here); -1: none, or a
 // comment opener to defer (the parse is then the unmarked one).
@@ -1794,7 +1800,7 @@ static int zw_second_literal(TSLexer *lexer, bool *line_break) {
 // holds where one of its paths begins the input; a second literal is read only when one is asked.
 static int scan_starts(TSLexer *lexer, const bool *valid_symbols, int lit, uint64_t cand) {
   int lit2 = -3; bool line_break2 = false;
-  for (unsigned i = 0; i < 10; i++) {
+  for (unsigned i = 0; i < 12; i++) {
     const StartMarker *m = &START_MARKERS[i];
     if (!valid_symbols[m->symbol]) continue;
     if (m->lit >= 0 ? m->lit != lit : (lit >= 0 || !((cand >> m->tok) & 1))) continue;   // its first token
@@ -1827,7 +1833,7 @@ static int scan_zero_width(TSLexer *lexer, const bool *valid_symbols) {
     if (valid_symbols[REGEX_LITERAL] && lexer->lookahead == '/') return 2;
     end = lexer->eof(lexer);
     cand = 0; lit = -1;
-    if (valid_symbols[_STARTS_1] || valid_symbols[_STARTS_2] || valid_symbols[_STARTS_3] || valid_symbols[_STARTS_4] || valid_symbols[_STARTS_5] || valid_symbols[_STARTS_6] || valid_symbols[_STARTS_7] || valid_symbols[_STARTS_8] || valid_symbols[_STARTS_9] || valid_symbols[_STARTS_10]) lexer->mark_end(lexer);
+    if (valid_symbols[_STARTS_1] || valid_symbols[_STARTS_2] || valid_symbols[_STARTS_3] || valid_symbols[_STARTS_4] || valid_symbols[_STARTS_5] || valid_symbols[_STARTS_6] || valid_symbols[_STARTS_7] || valid_symbols[_STARTS_8] || valid_symbols[_STARTS_9] || valid_symbols[_STARTS_10] || valid_symbols[_STARTS_11] || valid_symbols[_STARTS_12]) lexer->mark_end(lexer);
     if (!end) { cand = zw_token_candidates(lexer->lookahead); lit = zw_literal(lexer); }
     if (lit > -10) break;
     if (!zw_skip_comment(lexer, -10 - lit, &line_break)) return 0;
@@ -1869,7 +1875,7 @@ bool tree_sitter_javascriptreact_external_scanner_scan(void *payload, TSLexer *l
   }
 
   // Zero-width tokens (a line-end alternative, a same-line marker, a start marker) where one is valid.
-  if (valid_symbols[_SAME_LINE_1] || valid_symbols[_SAME_LINE_2] || valid_symbols[_SAME_LINE_3] || valid_symbols[_SAME_LINE_4] || valid_symbols[_LINE_END_1] || valid_symbols[_SAME_LINE_5] || valid_symbols[_SAME_LINE_6] || valid_symbols[_SAME_LINE_7] || valid_symbols[_SAME_LINE_8] || valid_symbols[_SAME_LINE_9] || valid_symbols[_SAME_LINE_10] || valid_symbols[_SAME_LINE_11] || valid_symbols[_STARTS_1] || valid_symbols[_STARTS_2] || valid_symbols[_STARTS_3] || valid_symbols[_STARTS_4] || valid_symbols[_STARTS_5] || valid_symbols[_STARTS_6] || valid_symbols[_STARTS_7] || valid_symbols[_STARTS_8] || valid_symbols[_STARTS_9] || valid_symbols[_STARTS_10]) {
+  if (valid_symbols[_SAME_LINE_1] || valid_symbols[_SAME_LINE_2] || valid_symbols[_SAME_LINE_3] || valid_symbols[_SAME_LINE_4] || valid_symbols[_LINE_END_1] || valid_symbols[_SAME_LINE_5] || valid_symbols[_SAME_LINE_6] || valid_symbols[_SAME_LINE_7] || valid_symbols[_SAME_LINE_8] || valid_symbols[_SAME_LINE_9] || valid_symbols[_SAME_LINE_10] || valid_symbols[_SAME_LINE_11] || valid_symbols[_STARTS_1] || valid_symbols[_STARTS_2] || valid_symbols[_STARTS_3] || valid_symbols[_STARTS_4] || valid_symbols[_STARTS_5] || valid_symbols[_STARTS_6] || valid_symbols[_STARTS_7] || valid_symbols[_STARTS_8] || valid_symbols[_STARTS_9] || valid_symbols[_STARTS_10] || valid_symbols[_STARTS_11] || valid_symbols[_STARTS_12]) {
     int zw = scan_zero_width(lexer, valid_symbols);
     if (zw == 1) return true;
     if (zw == 0) return false;
