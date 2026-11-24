@@ -2012,7 +2012,7 @@ export function keywordFollowers(grammar: CstGrammar): Map<string, { literals: S
   const byName = new Map(grammar.rules.map(r => [r.name, r.body] as const));
   const { tokenNames } = highlightFacts(grammar);
   const precOps = new Set(grammar.precs.flatMap(l => l.operators.map(o => o.value)));
-  const zeroWidth = (e: RuleExpr) => ['sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'not'].includes(e.type);
+  const zeroWidth = (e: RuleExpr) => ['sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'target', 'not'].includes(e.type);
   // the token references that may begin an expression (refs followed at start positions only)
   const firstTokens = (e: RuleExpr, out: Set<string>, seen = new Set<string>()): void => {
     switch (e.type) {
