@@ -67,7 +67,7 @@ export type ShapePlan = {
   unsupported: Map<number, string>;
   /** The synthesized attributes (index k): per engine arm the function computing it at the
    * arm's accept site (`syn<k>_<id>`), null where the arm takes the default. */
-  syn: { name: string; dflt: Scalar | undefined; fns: (string | null)[] }[];
+  syn: { name: string; dflt: Scalar | undefined; fns: (string | null)[]; slotRead: boolean }[];
   /** The inherited scalar attributes an rd rule reads (index k: the context the engine sets at
    * each call of such a rule, Step.inh), with their defaults. */
   inh: { name: string; dflt: Scalar }[];
@@ -78,6 +78,8 @@ export type ShapePlan = {
   variantDefault: boolean[];
   /** Slot-leaving steps with a grammar tag, and those that write it (a plan reads it). */
   tagStats: { sites: number; tagged: number };
+  /** How the plans' slot reads are compiled (FUSED positions; counted per compiled read site). */
+  reads: ReadStats;
 };
 
 /** The engine's key for each accept site of a rule: rd `alt<i>`; Pratt `nud<i>`, `led<i>`,
@@ -125,6 +127,84 @@ function numberArm(items: RuleExpr[], named: (e: RuleExpr) => boolean): Numberin
   return n;
 }
 
+// ── Positions: where the arm's structure fixes a grammar node's slot (the FUSED reads) ──
+// Every grammar leaf and rule reference the parse matches leaves exactly one slot, in order (a
+// literal the lexer composes from several tokens, ParserIR.gtComps, leaves none in a TS parser:
+// its width is unknown here). So within one SCOPE (the arm, whose slots start at b; or one
+// iteration of a repetition, whose slots start past its marker) a node's slot is at a fixed offset
+// from the scope's first slot when every item before it leaves a fixed number of slots, and (the
+// arm only: an iteration's upper bound may hold a delimiter or what follows the repetition) at a
+// fixed offset from the arm's last slot when every item after it does. `conds`: the optionals and
+// alternation branches between the scope and the node (it is there for sure when every branch in
+// it is one the reading scope knows is taken, and no optional). A node met twice in one arm (a
+// grammar object referenced twice) has no fixed offset.
+type Pos = { lo: number | null; hi: number | null; conds: RuleExpr[] };
+type Positions = { pos: Map<RuleExpr, Pos>; width: (e: RuleExpr) => number | null };
+function slotPositions(items: RuleExpr[], gtComps: readonly string[]): Positions {
+  const pos = new Map<RuleExpr, Pos>();
+  const widths = new Map<RuleExpr, number | null>();
+  const width = (e: RuleExpr): number | null => {
+    if (widths.has(e)) return widths.get(e)!;
+    let w: number | null;
+    switch (e.type) {
+      case 'ref': w = 1; break;
+      case 'literal': w = gtComps.includes(e.value) ? null : 1; break;
+      case 'group': w = width(e.body); break;
+      case 'seq': { w = 0; for (const x of e.items) { const y = width(x); w = w === null || y === null ? null : w + y; } break; }
+      case 'quantifier': w = width(e.body) === 0 ? 0 : null; break;
+      case 'sep': w = width(e.element) === 0 ? 0 : null; break;
+      case 'alt': {
+        if (e.items.length > 0 && e.items.every((x) => x.type === 'literal')) { w = e.items.some((x) => gtComps.includes((x as { value: string }).value)) ? null : 1; break; }
+        const ws = e.items.map(width);
+        w = ws.length > 0 && ws.every((x) => x !== null && x === ws[0]) ? ws[0]! : null;
+        break;
+      }
+      default: w = 0;
+    }
+    widths.set(e, w);
+    return w;
+  };
+  const twice = new Set<RuleExpr>();
+  const at = (e: RuleExpr, lo: number | null, conds: RuleExpr[]) => { if (pos.has(e)) twice.add(e); pos.set(e, { lo, hi: null, conds }); };
+  const leafLike = (e: RuleExpr) => e.type === 'ref' || e.type === 'literal' || (e.type === 'alt' && e.items.length > 0 && e.items.every((x) => x.type === 'literal'));
+  const plus = (c: number | null, w: number | null) => (c === null || w === null ? null : c + w);
+  // Forward: offsets from the scope's first slot; a repetition's body is a scope of its own.
+  const fw = (e: RuleExpr, cur: number | null, conds: RuleExpr[]): number | null => {
+    if (leafLike(e)) { at(e, cur, conds); return plus(cur, width(e)); }
+    switch (e.type) {
+      case 'group': return fw(e.body, cur, conds);
+      case 'seq': { let c = cur; for (const x of e.items) c = fw(x, c, conds); return c; }
+      case 'quantifier':
+        if (e.kind === '?') { at(e, cur, conds); fw(e.body, cur, [...conds, e]); return plus(cur, width(e)); }
+        at(e, cur, conds); fw(e.body, 0, []); return plus(cur, width(e));
+      case 'sep': at(e, cur, conds); fw(e.element, 0, []); return plus(cur, width(e));
+      case 'alt': at(e, cur, conds); e.items.forEach((b) => fw(b, cur, [...conds, b])); return plus(cur, width(e));
+      default: return cur;
+    }
+  };
+  // Backward, the arm's scope only: offsets from the arm's last slot.
+  const bw = (e: RuleExpr, cur: number | null): number | null => {
+    const p = pos.get(e);
+    if (leafLike(e)) { if (p) p.hi = cur; return plus(cur, width(e)); }
+    switch (e.type) {
+      case 'group': return bw(e.body, cur);
+      case 'seq': { let c = cur; for (let i = e.items.length - 1; i >= 0; i--) c = bw(e.items[i]!, c); return c; }
+      case 'quantifier': case 'sep':
+        if (p) p.hi = cur;
+        if (e.type === 'quantifier' && e.kind === '?') bw(e.body, cur);
+        return plus(cur, width(e));
+      case 'alt': if (p) p.hi = cur; e.items.forEach((b) => bw(b, cur)); return plus(cur, width(e));
+      default: return cur;
+    }
+  };
+  let c: number | null = 0;
+  for (const x of items) c = fw(x, c, []);
+  c = 0;
+  for (let i = items.length - 1; i >= 0; i--) c = bw(items[i]!, c);
+  for (const e of twice) pos.set(e, { lo: null, hi: null, conds: [] });
+  return { pos, width };
+}
+
 // ── algo-ir helpers ──
 const v = (name: string): Expr => ({ k: 'var', name });
 const int = (x: number): Expr => ({ k: 'int', v: x });
@@ -137,6 +217,9 @@ const EXTERNS: Fn[] = [
   ['slotFind', [['lo', 'idx'], ['hi', 'idx'], ['t0', 'int'], ['t1', 'int']], 'int'],
   ['slotFindLast', [['lo', 'idx'], ['hi', 'idx'], ['t0', 'int'], ['t1', 'int']], 'int'],
   ['namedEnd', [['lo', 'idx'], ['hi', 'idx']], 'int'],
+  // The fused read of a slot that may not be there: slot i when lo <= i < hi and its tag is in
+  // t0..t1, else -1.
+  ['slotAt', [['i', 'idx'], ['lo', 'idx'], ['hi', 'idx'], ['t0', 'int'], ['t1', 'int']], 'int'],
   ['srcText', [['a', 'pos'], ['b', 'pos']], 'str'],
 ].map(([name, ps, ret]) => ({ name: name as string, doc: '', params: (ps as [string, string][]).map(([n, ty]) => ({ name: n, ty: ty as never })), ret: [ret as never], body: [], extern: true, method: true, reads: true }));
 // The span a value gives a `let` / fold variable: a node's, a non-empty node list's first start /
@@ -193,7 +276,7 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
   const nodesAttrs = new Set(inhDecls.filter(([, d]) => d.type === 'nodes').map(([n]) => n));
   const synDecls = Object.entries(spec.synthesized ?? {});
   const synK = new Map(synDecls.map(([n], k) => [n, k]));
-  const syn = synDecls.map(([name, d]) => ({ name, dflt: d.default, fns: [] as (string | null)[] }));
+  const syn = synDecls.map(([name, d]) => ({ name, dflt: d.default, fns: [] as (string | null)[], slotRead: false }));
   const variantBit: number[] = [], variantDefault: boolean[] = [];
   const tagStats = { sites: 0, tagged: 0 };
   // The scalar inherited attributes each rule's arms read (in values and equations): a Pratt
@@ -208,7 +291,8 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
     reads.set(r.name, scalarInh.map((a) => a.name).filter((a) => got.has(a)));
   }
   const variants = (rule: string): string[] => (kinds.get(rule) === 'pratt' ? reads.get(rule) ?? [] : []);
-  const cx: AttrCx = { inhK, synK, scalarInh, nodesAttrs, variants };
+  const cx: AttrCx = { inhK, synK, scalarInh, nodesAttrs, variants, synDflt: syn.map((a) => a.dflt), synSlotRead: new Set() };
+  const readStats: ReadStats = { fixed: 0, checked: 0, scan: 0, list: 0 };
   for (const r of ir.rules) {
     const view = shape.grammar.arms.get(r.name);
     const names = shape.grammar.names.get(r.name);
@@ -238,7 +322,9 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
       sitesByKey.set(key, sites);
       const term = spec.rules[r.name]?.[arm];
       const where = `${r.name}.${arm}`;
-      const compiler = () => new ArmCompiler(shape, info, num, positional(r, key, info), key.startsWith('led') ? 1 : 0, marked, cooks, cx, eqs);
+      const at = info.form ? null : slotPositions(info.items ?? [], ir.gtComps);
+      const ownSyn = new Set(synDecls.flatMap(([, d], k) => (d.rules[r.name]?.[arm] !== undefined ? [k] : [])));
+      const compiler = () => new ArmCompiler(shape, info, num, positional(r, key, info), key.startsWith('led') ? 1 : 0, marked, cooks, cx, eqs, at, readStats, ownSyn);
       // The arm's synthesized attributes and threads (a reason it cannot is the arm's reason too).
       let attrWhy: string | undefined;
       for (const [k, [attr, d]] of synDecls.entries()) {
@@ -289,9 +375,10 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
     }
     newRules.push(shapeSteps(r, tagsByKey, marked, sitesByKey, cx, reads, kinds, tagStats));
   }
+  for (const k of cx.synSlotRead) syn[k]!.slotRead = true;
   fns.push(...EXTERNS, ...SPAN_FNS, ...ATTR_FNS, ...[...cooks].map(cookFn));
   return {
-    arms, fns, cooks: [...cooks], unsupported, syn, inh: scalarInh, variantBit, variantDefault, tagStats,
+    arms, fns, cooks: [...cooks], unsupported, syn, inh: scalarInh, variantBit, variantDefault, tagStats, reads: readStats,
     armId: (rule, key) => { const id = ids.get(`${rule}|${key}`); if (id === undefined) throw new Error(`planShape: no engine arm ${rule} ${key}`); return id; },
     ir: { ...ir, rules: newRules, reuse: null },
   };
@@ -299,8 +386,15 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
 
 type AttrCx = {
   inhK: Map<string, number>; synK: Map<string, number>; scalarInh: { name: string; dflt: Scalar }[];
-  nodesAttrs: Set<string>; variants: (rule: string) => string[];
+  nodesAttrs: Set<string>; variants: (rule: string) => string[]; synDflt: (Scalar | undefined)[];
+  /** The synthesized attributes some arm reads off a child's slot (kept per slot: the rest are not). */
+  synSlotRead: Set<number>;
 };
+/** How a plan's reads of slots are compiled: at a fixed position (fixed), a check of the one slot
+ * at a fixed position (checked: an optional item, a branch, a marker), a scan of the scope's slots
+ * (scan: what a repetition or an optional before the item makes dynamic), a walk over a
+ * repetition's slots (list: a repeated child's items, a fold's iteration end). */
+export type ReadStats = { fixed: number; checked: number; scan: number; list: number };
 /** What an arm's call sites set: its equations, its children's names (by grammar node), its
  * threaded repetitions (by repetition node). */
 type ArmSites = { eqs: Eqs; childOf: Map<RuleExpr, string>; threads: Map<RuleExpr, { k: number; init: ShapeInhVal; next: string }>; readsTag?: (t: number) => boolean };
@@ -313,8 +407,8 @@ function tagsRead(fs: Fn[]): (t: number) => boolean {
     if (x === null || typeof x !== 'object') return;
     if (Array.isArray(x)) { x.forEach(walk); return; }
     const e = x as Expr;
-    if (e.k === 'call' && (e.fn === 'slotFind' || e.fn === 'slotFindLast')) {
-      const [, , a, b] = e.args;
+    if (e.k === 'call' && (e.fn === 'slotFind' || e.fn === 'slotFindLast' || e.fn === 'slotAt')) {
+      const [a, b] = e.fn === 'slotAt' ? e.args.slice(3) : e.args.slice(2);
       if (a?.k === 'int' && b?.k === 'int') ranges.push([a.v, b.v]); else all = true;
     } else if (e.k === 'call' && e.fn === 'namedEnd') all = true;
     else if (e.k === 'bin' && e.op === 'eq' && e.a.k === 'call' && e.a.fn === 'slotTag') { if (e.b.k === 'int') ranges.push([e.b.v, e.b.v]); else all = true; }
@@ -419,7 +513,10 @@ function shapeSteps(r: RuleIR, tags: Map<string, Numbering>, marked: Map<RuleExp
 // A scope: the arm, a branch, or one iteration (`base`: the repetitions consumed to reach it), over
 // the slots lo..hi (algo-ir variables), with the variables bound around it.
 type Bound = { val: string; start: string; end: string };
-type CScope = { info: ScopeInfo; base: RuleExpr[]; lo: string; hi: string; outer?: CScope; vars: Map<string, Bound>; arm: boolean };
+// `origin`: the variable a fixed offset (Pos.lo) counts from (the arm's slot b; an iteration's first
+// slot); `hiOk`: hi is the arm's last slot + 1 (Pos.hi counts back from it); `taken`: the branches
+// (grammar items) known taken in this scope (a branch case's).
+type CScope = { info: ScopeInfo; base: RuleExpr[]; lo: string; hi: string; outer?: CScope; vars: Map<string, Bound>; arm: boolean; origin: string; hiOk: boolean; taken: Set<RuleExpr> };
 const startsWith = (a: RuleExpr[], p: RuleExpr[]): boolean => p.every((q, i) => a[i] === q);
 const isListQ = (q: RuleExpr): boolean => q.type === 'sep' || (q.type === 'quantifier' && q.kind !== '?');
 
@@ -433,8 +530,10 @@ class ArmCompiler {
   private cache: Map<Term, Expr> | null = null;
   private root: Stmt[] = [];
   private armScope!: CScope;
-  constructor(shape: Shape, info: ArmInfo, num: Numbering, pos: Map<RuleExpr, number>, lo0: number, marked: Map<RuleExpr, number>, cooks: Set<CookFn>, cx: AttrCx, eqs: Eqs) {
+  private at: Positions | null; private reads: ReadStats; private ownSyn: Set<number>;
+  constructor(shape: Shape, info: ArmInfo, num: Numbering, pos: Map<RuleExpr, number>, lo0: number, marked: Map<RuleExpr, number>, cooks: Set<CookFn>, cx: AttrCx, eqs: Eqs, at: Positions | null, reads: ReadStats, ownSyn: Set<number>) {
     this.shape = shape; this.info = info; this.num = num; this.pos = pos; this.lo0 = lo0; this.marked = marked; this.cooks = cooks; this.cx = cx; this.eqs = eqs;
+    this.at = at; this.reads = reads; this.ownSyn = ownSyn;
   }
   private tmp(): string { return `t${this.n++}`; }
 
@@ -443,7 +542,7 @@ class ArmCompiler {
       { k: 'let', name: 'lo', ty: 'idx', init: bin('add', v('b'), int(this.lo0)) },
       { k: 'let', name: 'hi', ty: 'idx', init: call('slotTop') },
     ];
-    this.armScope = { info: this.info, base: [], lo: 'lo', hi: 'hi', vars: new Map(), arm: true };
+    this.armScope = { info: this.info, base: [], lo: 'lo', hi: 'hi', vars: new Map(), arm: true, origin: 'b', hiOk: true, taken: new Set() };
     return this.root;
   }
   compile(term: Term): Stmt[] {
@@ -477,10 +576,10 @@ class ArmCompiler {
     if (!this.marked.has(body)) this.marked.set(body, -2 - this.marked.size);
     this.root = [];
     const out = this.root;
-    this.armScope = { info: this.info, base: [], lo: 'lo', hi: 'hi', vars: new Map(), arm: true };
+    this.armScope = { info: this.info, base: [], lo: 'lo', hi: 'hi', vars: new Map(), arm: true, origin: 'b', hiOk: true, taken: new Set() };
     const acc = this.bindVal(call('inhVar', int(k)), out);
     out.push({ k: 'let', name: 'accS', ty: 'int', init: int(0) }, { k: 'let', name: 'accE', ty: 'int', init: int(0) });
-    const it: CScope = { info: this.info, base: slot.quants.slice(0, at + 1), lo: 'lo', hi: 'hi', vars: new Map([[eq.acc, { val: acc, start: 'accS', end: 'accE' }]]), arm: false };
+    const it: CScope = { info: this.info, base: slot.quants.slice(0, at + 1), lo: 'lo', hi: 'hi', vars: new Map([[eq.acc, { val: acc, start: 'accS', end: 'accE' }]]), arm: false, origin: 'lo', hiOk: false, taken: new Set() };
     out.push({ k: 'return', es: [this.val(eq.next, it, out)] });
     return { q, body: out };
   }
@@ -514,7 +613,7 @@ class ArmCompiler {
       if (st === true) mask |= 1 << j;
       else if (st === undefined) dyn.push([j, this.bool(eq as Term, this.armScope, out)]);
     });
-    if (!dyn.length) return call('slotValV', idx, int(mask));
+    if (!dyn.length) return mask === 0 ? call('slotVal', idx) : call('slotValV', idx, int(mask));
     const m = this.bindInt(int(mask), out);
     for (const [j, c] of dyn) out.push({ k: 'if', c, then: [{ k: 'set', name: m, e: bin('add', v(m), int(1 << j)) }] });
     return call('slotValV', idx, v(m));
@@ -541,14 +640,41 @@ class ArmCompiler {
     if (t === undefined) throw new Error(`planShape: ${this.info.where}: child ${slot.name} has no tag`);
     return [t, t];
   }
-  /** The index of the single item of `name` (-1: absent), as an int variable. */
-  private one(s: CScope, name: string, out: Stmt[]): { idx: string; slot: Slot; scope: CScope } {
+  /** Where the arm's structure fixes the slot of `r` (FUSED: Pos), as an index expression, and
+   * whether the item is there for sure in the reading scope; null: its position is dynamic. */
+  private fixedAt(r: { slot: Slot; rest: RuleExpr[]; scope: CScope }, node: RuleExpr = r.slot.node): { idx: Expr; sure: boolean } | null {
+    if (r.rest.some(isListQ)) return null;
+    const p0 = this.pos.get(node);
+    if (p0 !== undefined && r.scope.arm) return { idx: bin('add', v('b'), int(p0)), sure: true };
+    const p = this.at?.pos.get(node);
+    if (!p) return null;
+    const sure = p.conds.every((c) => r.scope.taken.has(c));
+    if (p.lo !== null) return { idx: p.lo === 0 ? v(r.scope.origin) : bin('add', v(r.scope.origin), int(p.lo)), sure };
+    // From the end: the slot's last slot, so only for an item of one slot.
+    if (p.hi !== null && r.scope.hiOk && this.at!.width(node) === 1) return { idx: bin('sub', v(r.scope.hi), int(p.hi + 1)), sure };
+    return null;
+  }
+  /** The index of the first slot in lo..hi with a tag in t0..t1 (-1: none): at the fixed position
+   * when there is one (a check of that one slot when the item may be absent), else a scan. */
+  private find(r: { slot: Slot; rest: RuleExpr[]; scope: CScope }, out: Stmt[]): { idx: string; sure: boolean } {
+    const f = this.fixedAt(r);
+    if (f && f.sure) { this.reads.fixed++; return { idx: this.bindInt(f.idx, out), sure: true }; }
+    const [t0, t1] = this.range(r.slot);
+    if (f) { this.reads.checked++; return { idx: this.bindInt(call('slotAt', f.idx, v(r.scope.lo), v(r.scope.hi), int(t0), int(t1)), out), sure: false }; }
+    this.reads.scan++;
+    return { idx: this.bindInt(call('slotFind', v(r.scope.lo), v(r.scope.hi), int(t0), int(t1)), out), sure: false };
+  }
+  /** The index of the single item of `name` (-1: absent), as an int variable; `sure`: never -1. */
+  private one(s: CScope, name: string, out: Stmt[]): { idx: string; slot: Slot; scope: CScope; sure: boolean } {
     const r = this.resolve(s, name);
     if (r.rest.some(isListQ)) no(`one item of the repeated child ${name}`);
-    const p = this.pos.get(r.slot.node);
-    if (p !== undefined && r.scope.arm) return { idx: this.bindInt(bin('add', v('b'), int(p)), out), slot: r.slot, scope: r.scope };
-    const [t0, t1] = this.range(r.slot);
-    return { idx: this.bindInt(call('slotFind', v(r.scope.lo), v(r.scope.hi), int(t0), int(t1)), out), slot: r.slot, scope: r.scope };
+    const f = this.find(r, out);
+    return { idx: f.idx, slot: r.slot, scope: r.scope, sure: f.sure };
+  }
+  /** `then` when the item `o` is there, else `otherwise`; just `then` when it is there for sure. */
+  private ifThere(o: { idx: string; sure: boolean }, then: (o: Stmt[]) => Expr, otherwise: (o: Stmt[]) => Expr, out: Stmt[]): Expr {
+    if (o.sure) return then(out);
+    return this.choose(bin('ge', v(o.idx), int(0)), then, otherwise, out);
   }
   /** Statements: `x = then` when cond, else `x = otherwise` (each compiled in its own branch). */
   private choose(cond: Expr, then: (o: Stmt[]) => Expr, otherwise: (o: Stmt[]) => Expr, out: Stmt[]): Expr {
@@ -587,14 +713,19 @@ class ArmCompiler {
   private present(s: CScope, name: string, out: Stmt[]): Expr {
     if (this.lookupVar(s, name)) no('present of a nodes variable');
     const r = this.resolve(s, name);
-    const p = this.pos.get(r.slot.node);
-    if (p !== undefined && r.scope.arm) return { k: 'bool', v: true };
-    const [t0, t1] = this.range(r.slot);
-    return bin('ge', v(this.bindInt(call('slotFind', v(r.scope.lo), v(r.scope.hi), int(t0), int(t1)), out)), int(0));
+    const f = this.find(r, out);
+    return f.sure ? { k: 'bool', v: true } : bin('ge', v(f.idx), int(0));
   }
   private text(idx: string, slot: Slot, scope: CScope, out: Stmt[]): Expr {
     if (slot.kind === 'branch') {
+      // The alternation's last slot: fixed when it ends at a fixed offset from the arm's end.
+      const p = this.at?.pos.get(slot.node);
+      if (p && p.hi !== null && scope.hiOk && !slot.quants.slice(scope.base.length).some(isListQ)) {
+        this.reads.fixed++;
+        return call('srcText', call('slotOff', v(idx)), call('slotEnd', bin('sub', v(scope.hi), int(p.hi + 1))));
+      }
       const [t0, t1] = this.range(slot);
+      this.reads.scan++;
       const last = this.bindInt(call('slotFindLast', v(idx), v(scope.hi), int(t0), int(t1)), out);
       return call('srcText', call('slotOff', v(idx)), call('slotEnd', v(last)));
     }
@@ -604,9 +735,10 @@ class ArmCompiler {
     const b = this.lookupVar(s, name);
     if (b) return v(edge === 'start' ? b.start : b.end);
     const r = this.resolve(s, name);
-    const p = this.pos.get(r.slot.node);
-    if (p !== undefined && r.scope.arm) return call(edge === 'start' ? 'slotOff' : 'slotEnd', bin('add', v('b'), int(p)));
+    const f = this.fixedAt(r);
+    if (f && f.sure && r.slot.kind !== 'branch') { this.reads.fixed++; return call(edge === 'start' ? 'slotOff' : 'slotEnd', f.idx); }
     const [t0, t1] = this.range(r.slot);
+    this.reads.scan++;
     const i = this.bindInt(call(edge === 'start' ? 'slotFind' : 'slotFindLast', v(r.scope.lo), v(r.scope.hi), int(t0), int(t1)), out);
     return call(edge === 'start' ? 'slotOff' : 'slotEnd', v(i));
   }
@@ -621,15 +753,22 @@ class ArmCompiler {
     if (!this.marked.has(body)) this.marked.set(body, -2 - this.marked.size);
     const mt = this.marked.get(body)!;
     const m = this.tmp(), nx = this.tmp(), ih = this.tmp();
-    out.push({ k: 'let', name: m, ty: 'int', init: call('slotFind', v(r.scope.lo), v(r.scope.hi), int(mt), int(mt)) });
+    // The first marker: at the repetition's fixed position when it has one (absent: no iteration);
+    // the next: past one iteration's slots when the body leaves a fixed number (and a separated
+    // list's delimiter), else a scan of the iteration's slots.
+    const f = this.fixedAt({ slot: r.slot, rest: r.rest.slice(0, at), scope: r.scope }, q);
+    if (f) this.reads.checked++; else this.reads.scan++;
+    out.push({ k: 'let', name: m, ty: 'int', init: f ? call('slotAt', f.idx, v(r.scope.lo), v(r.scope.hi), int(mt), int(mt)) : call('slotFind', v(r.scope.lo), v(r.scope.hi), int(mt), int(mt)) });
+    const w = this.at?.width(body) ?? null;
+    if (w !== null) this.reads.checked++; else this.reads.scan++;
     const loop: Stmt[] = [
-      { k: 'let', name: nx, ty: 'int', init: call('slotFind', bin('add', v(m), int(1)), v(r.scope.hi), int(mt), int(mt)) },
+      { k: 'let', name: nx, ty: 'int', init: w !== null ? call('slotAt', bin('add', v(m), int(1 + w + (q.type === 'sep' ? 1 : 0))), v(r.scope.lo), v(r.scope.hi), int(mt), int(mt)) : call('slotFind', bin('add', v(m), int(1)), v(r.scope.hi), int(mt), int(mt)) },
       { k: 'let', name: ih, ty: 'idx', init: v(r.scope.hi) },
       { k: 'if', c: bin('ge', v(nx), int(0)), then: [{ k: 'set', name: ih, e: v(nx) }] },
     ];
     const lo = this.tmp();
     loop.push({ k: 'let', name: lo, ty: 'idx', init: bin('add', v(m), int(1)) });
-    each({ info: r.scope.info, base: [...r.scope.base, ...r.rest.slice(0, at + 1)], lo, hi: ih, outer: s, vars: new Map(), arm: false }, loop);
+    each({ info: r.scope.info, base: [...r.scope.base, ...r.rest.slice(0, at + 1)], lo, hi: ih, outer: s, vars: new Map(), arm: false, origin: lo, hiOk: false, taken: new Set() }, loop);
     loop.push({ k: 'set', name: m, e: v(nx) });
     out.push({ k: 'while', c: bin('ge', v(m), int(0)), body: loop });
   }
@@ -662,14 +801,16 @@ class ArmCompiler {
       case 'syn': {
         const k = this.cx.synK.get(t.attr);
         if (k === undefined) throw new Error(`planShape: no synthesized attribute ${t.attr}`);
-        if (t.name === undefined) return call('selfSyn', int(k));
+        // The node's own: computed only by an arm with an equation; any other has the default.
+        if (t.name === undefined) return this.ownSyn.has(k) ? call('selfSyn', int(k)) : { k: 'vConst', v: (this.cx.synDflt[k] ?? null) as Scalar };
         const o = this.one(s, t.name, out);
-        return this.choose(bin('ge', v(o.idx), int(0)), () => call('slotSyn', int(k), v(o.idx)), () => ({ k: 'vAbsent' }), out);
+        this.cx.synSlotRead.add(k);
+        return this.ifThere(o, () => call('slotSyn', int(k), v(o.idx)), () => ({ k: 'vAbsent' }), out);
       }
       case 'get': {
         const o = this.one(s, t.name, out);
         const item = this.childVal(v(o.idx), o.slot, out);
-        return this.choose(bin('ge', v(o.idx), int(0)), () => call('recGet', { k: 'vNeed', e: item }, { k: 'str', v: t.field }), () => ({ k: 'vAbsent' }), out);
+        return this.ifThere(o, () => call('recGet', { k: 'vNeed', e: item }, { k: 'str', v: t.field }), () => ({ k: 'vAbsent' }), out);
       }
       case 'dropLastIf': {
         const l = this.bindVal(this.val(t.list, s, out), out);
@@ -685,6 +826,7 @@ class ArmCompiler {
           const lastList = r.rest.map(isListQ).lastIndexOf(true);
           if (r.rest.slice(lastList + 1).some((q) => q.type === 'quantifier' && q.kind === '?')) return this.holes(s, t.name, out);
           const [t0] = this.range(r.slot);
+          this.reads.list++;
           const l = this.tmp(), i = this.tmp();
           out.push({ k: 'let', name: l, ty: VALS as never, init: { k: 'newList', ty: VALS as never } });
           out.push({ k: 'let', name: i, ty: 'idx', init: v(r.scope.lo) });
@@ -697,33 +839,33 @@ class ArmCompiler {
         }
         const o = this.one(s, t.name, out);
         const item = this.childVal(v(o.idx), o.slot, out);
-        return this.choose(bin('ge', v(o.idx), int(0)), () => ({ k: 'vNeed', e: item }), () => ({ k: 'vAbsent' }), out);
+        return this.ifThere(o, () => ({ k: 'vNeed', e: item }), () => ({ k: 'vAbsent' }), out);
       }
       case 'text': {
         if (t.name === undefined) return { k: 'vText', e: call('srcText', v('off'), v('end')) };
         const o = this.one(s, t.name, out);
-        return this.choose(bin('ge', v(o.idx), int(0)), (b) => ({ k: 'vText', e: this.text(o.idx, o.slot, o.scope, b) }), () => ({ k: 'vAbsent' }), out);
+        return this.ifThere(o, (b) => ({ k: 'vText', e: this.text(o.idx, o.slot, o.scope, b) }), () => ({ k: 'vAbsent' }), out);
       }
       case 'cook': {
         this.cooks.add(t.fn);
         const o = this.one(s, t.name, out);
-        return this.choose(bin('ge', v(o.idx), int(0)), (b) => call(`cook_${t.fn}`, this.text(o.idx, o.slot, o.scope, b)), () => ({ k: 'vAbsent' }), out);
+        return this.ifThere(o, (b) => call(`cook_${t.fn}`, this.text(o.idx, o.slot, o.scope, b)), () => ({ k: 'vAbsent' }), out);
       }
       case 'present': case 'and': case 'or': case 'not': return this.boolVal(this.bool(t, s, out), out);
       case 'armOf': {
         const o = this.one(s, t.name, out);
         if (o.slot.kind === 'branch') return this.branchCase(o.slot, o.scope, out, (_bn, name) => ({ k: 'vConst', v: name }), () => ({ k: 'vAbsent' }));
-        return this.choose(bin('ge', v(o.idx), int(0)), () => call('slotArmName', v(o.idx)), () => ({ k: 'vAbsent' }), out);
+        return this.ifThere(o, () => call('slotArmName', v(o.idx)), () => ({ k: 'vAbsent' }), out);
       }
       case 'node': {
-        const kind = this.bindVal(this.val(t.type, s, out), out);
+        const kind = t.type.t === 'const' ? this.val(t.type, s, out) : v(this.bindVal(this.val(t.type, s, out), out));
         const fields = Object.entries(t.fields).map(([name, x]) => ({ name, e: v(this.bindVal(this.val(x, s, out), out)) }));
         let start: Expr = v('off'), end: Expr = v('end');
         const sp = t.span;
         if (sp && 'inside' in sp) no('an `inside` span (template parts)');
         else if (sp && 'after' in sp) { start = end = v(this.bindInt(this.spanEdge(s, sp.after, 'end', out), out)); }
         else if (sp) { start = v(this.bindInt(this.spanEdge(s, sp.from, 'start', out), out)); end = v(this.bindInt(this.spanEdge(s, sp.to, 'end', out), out)); }
-        return { k: 'mkNode', kind: v(kind), fields, start, end };
+        return { k: 'mkNode', kind, fields, start, end };
       }
       case 'record': return { k: 'mkRecord', fields: Object.entries(t.fields).map(([name, x]) => ({ name, e: v(this.bindVal(this.val(x, s, out), out)) })) };
       case 'list': {
@@ -767,7 +909,9 @@ class ArmCompiler {
         return this.branchCase(o.slot, o.scope, out, (bn, name, b) => {
           const c = t.cases[name];
           if (c === undefined) return { k: 'vNeed', e: { k: 'vMissing', where: `${s.info.where}: ${t.name}.${name}`, why: 'unmapped' } };
-          return this.val(c, { info: o.slot.branches!.get(name)!, base: [], lo: o.scope.lo, hi: o.scope.hi, outer: s, vars: new Map(), arm: false }, b);
+          const bi = this.shape.grammar.branchScopes.get(o.slot.node)!.indexOf(o.slot.branches!.get(name)!);
+          const taken = new Set([...o.scope.taken, (o.slot.node as { items: RuleExpr[] }).items[bi]!]);
+          return this.val(c, { info: o.slot.branches!.get(name)!, base: [], lo: o.scope.lo, hi: o.scope.hi, outer: s, vars: new Map(), arm: false, origin: o.scope.origin, hiOk: o.scope.hiOk, taken }, b);
         }, () => ({ k: 'vAbsent' }));
       }
       case 'map': case 'fold': {
@@ -793,6 +937,7 @@ class ArmCompiler {
         this.iterations(s, t.over, out, (it, body) => {
           it.vars.set(t.acc, acc);
           const nv = this.val(t.body, it, body);
+          this.reads.list++;
           const fe = this.bindInt(call('namedEnd', v(it.lo), v(it.hi)), body);
           body.push({ k: 'set', name: init, e: nv });
           body.push({ k: 'if', c: bin('gt', v(fe), v(acc.end)), then: [{ k: 'set', name: acc.end, e: v(fe) }] });
@@ -801,7 +946,10 @@ class ArmCompiler {
       }
       case 'let': {
         const x = this.bindVal(this.val(t.value, s, out), out);
-        const st = this.bindInt(call('valStart', v(x), v('off')), out), en = this.bindInt(call('valEnd', v(x), v('end')), out);
+        // Its span only where the body reads it (a span endpoint naming it).
+        let spanRead = false;
+        eachTerm(t.body, (y) => { const sp = y.t === 'node' ? y.span as Record<string, unknown> | undefined : undefined; if (sp && Object.values(sp).includes(t.name)) spanRead = true; });
+        const st = spanRead ? this.bindInt(call('valStart', v(x), v('off')), out) : 'off', en = spanRead ? this.bindInt(call('valEnd', v(x), v('end')), out) : 'end';
         return this.val(t.body, { ...s, vars: new Map([...s.vars, [t.name, { val: x, start: st, end: en }]]) }, out);
       }
       case 'var': {
@@ -820,10 +968,9 @@ class ArmCompiler {
     this.iterations(s, name, out, (it, body) => {
       const r = this.resolve(it, name);
       if (r.rest.some(isListQ)) no(`a repeated child with holes inside a nested repetition (${name})`);
-      const [t0, t1] = this.range(r.slot);
-      const i = this.bindInt(call('slotFind', v(it.lo), v(it.hi), int(t0), int(t1)), body);
-      const item = this.childVal(v(i), r.slot, body);
-      const e = this.choose(bin('ge', v(i), int(0)), () => ({ k: 'vNeed', e: item }), () => ({ k: 'vConst', v: null }), body);
+      const o = this.find(r, body);
+      const item = this.childVal(v(o.idx), r.slot, body);
+      const e = this.ifThere(o, () => ({ k: 'vNeed', e: item }), () => ({ k: 'vConst', v: null }), body);
       body.push({ k: 'push', list: l, e });
     });
     return { k: 'vList', e: v(l) };
@@ -843,12 +990,16 @@ class ArmCompiler {
     const x = this.tmp();
     out.push({ k: 'let', name: x, ty: VAL as never, init: none() });
     let level = out;
+    // At a fixed position, the alternation's first slot's tag says the branch (a check of that one
+    // slot per branch); else each branch's items are searched for.
+    const f = this.fixedAt({ slot, rest: slot.quants.slice(scope.base.length), scope });
     rs.forEach(([t0, t1], b) => {
       if (b === empty[0]) return;
-      const found = this.bindInt(call('slotFind', v(scope.lo), v(scope.hi), int(t0), int(t1)), level);
+      if (f) this.reads.checked++; else this.reads.scan++;
+      const c = bin('ge', v(this.bindInt(f ? call('slotAt', f.idx, v(scope.lo), v(scope.hi), int(t0), int(t1)) : call('slotFind', v(scope.lo), v(scope.hi), int(t0), int(t1)), level)), int(0));
       const then: Stmt[] = []; then.push({ k: 'set', name: x, e: taken(b, names[b]!, then) });
       const els: Stmt[] = [];
-      level.push({ k: 'if', c: bin('ge', v(found), int(0)), then, else: els });
+      level.push({ k: 'if', c, then, else: els });
       level = els;
     });
     if (empty.length) level.push({ k: 'set', name: x, e: taken(empty[0]!, names[empty[0]!]!, level) });

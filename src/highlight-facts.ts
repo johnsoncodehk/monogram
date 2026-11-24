@@ -16,7 +16,8 @@ import { analyzeGrammar } from './grammar-analysis.ts';
 import { expandArms } from './region-view.ts';   // small bodies only: getTypeParamElementKeywords, prefixPairKeywords
 import { armGraph, armOrderKey, compareArmOrder, findWindows, foldArmsFrom, hasWindow, inArmOrder, reachable, reachesThrough, sortInArmOrder, type ArmGraph } from './arm-graph.ts';
 import { compileTokenizer, lexSpecOf } from './emit-lexer.ts';
-import { tokenPatternBlockDelimiterSources, tokenPatternBlockDelimiters, tokenPatternEqualsPattern, tokenPatternIsNever, tokenPatternLeadingSource, tokenPatternLiteralPrefix, tokenPatternNodeContainsLiteral, tokenPatternPrefixBeforeTrailingLookahead, tokenPatternQuoteDelimAndEscape, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
+import { classifyToken } from './highlight-roles.ts';
+import { tokenPatternBlockDelimiterSources, tokenPatternBlockDelimiters, tokenPatternEqualsPattern, tokenPatternIsNever, tokenPatternLeadingSource, tokenPatternLiteralPrefix, tokenPatternNodeContainsLiteral, tokenPatternPrefixBeforeTrailingLookahead, tokenPatternQuoteDelimAndEscape, tokenPatternSource, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
 
 export interface ContextualPattern {
   keyword: string;
@@ -293,62 +294,7 @@ export function deriveComputedMemberCloseBrackets(grammar: CstGrammar, typeRuleN
   return [...closes];
 }
 
-// ── Token classification ──
-
-/**
- * Derive a TextMate-conventional suffix for line comment scope based on the
- * literal prefix of the regex pattern.  E.g., `//` → `double-slash`,
- * `#` → `number-sign`.
- *
- * Uses a universal character-name mapping (not language-specific).
- */
-export function lineCommentScopeSuffix(prefix: string | undefined): string {
-  if (!prefix) return '';
-  const charName: Record<string, string> = {
-    '/': 'slash', '#': 'number-sign', '-': 'dash', ';': 'semicolon',
-    '%': 'percentage', '!': 'bang', "'": 'apostrophe', '*': 'asterisk',
-  };
-  const parts = [...prefix].map(ch => charName[ch] || ch);
-  if (parts.length === 2 && parts[0] === parts[1]) {
-    return `.double-${parts[0]}`;
-  }
-  return `.${parts.join('-')}`;
-}
-
-/** The TextMate scope of a string quoted by `delim`: `"` double, `'` single; null for any other
- *  delimiter (each caller says what such a string takes). The one place this convention lives. */
-export function quoteScope(delim: string): string | null {
-  return delim === '"' ? 'string.quoted.double' : delim === "'" ? 'string.quoted.single' : null;
-}
-
-export function classifyToken(token: TokenDecl, opts?: { explicitScope?: boolean }): { scope: string; isBlock?: boolean } {
-  const useExplicitScope = opts?.explicitScope ?? true;
-  const commentLike = token.flags.includes('skip') || token.scope?.startsWith('comment.');
-  const isBlock = commentLike && !!tokenPatternBlockDelimiters(token);
-  if (useExplicitScope && token.scope) return { scope: token.scope, isBlock: isBlock || undefined };
-  if (token.flags.includes('skip')) {
-    if (isBlock) {
-      return { scope: 'comment.block', isBlock: true };
-    }
-    const suffix = lineCommentScopeSuffix(tokenPatternLiteralPrefix(token));
-    return { scope: `comment.line${suffix}` };
-  }
-
-  if (tokenPatternStartsWithDecimal(token)) {
-    // A `[0-9]`/`\d`-leading token is a base-10 (decimal) numeric. The TextMate
-    // `.decimal`/`.hex`/`.octal`/`.binary` axis names the BASE, not int-vs-float —
-    // an optional fraction/exponent does not change the base — so a single
-    // base-10 token (matching `1`, `1.5`, `1e3` alike) is `constant.numeric.decimal`.
-    // (Named bases get their scope from explicit token annotations.)
-    return { scope: 'constant.numeric.decimal' };
-  }
-
-  const delimiters = tokenPatternStringDelimiters(token);
-  for (const q of ['"', "'"]) if (delimiters.includes(q)) return { scope: quoteScope(q)! };
-  if (delimiters.includes('`')) return { scope: 'string.quoted.other.template' };
-
-  return { scope: 'variable.other' };
-}
+// ── Token lookups (the role tables are in src/highlight-roles.ts) ──
 
 // The grammar's CALLEE token: one scoped as a function name whose pattern is gated on a
 // following `(` (e.g. env-spec FUNCTION_NAME, `name(?=\s*\()`). Shared by the two derived
@@ -1792,7 +1738,6 @@ export function statementStartKeywords(grammar: CstGrammar): Set<string> {
 }
 
 
-
 /** The non-identifier token the grammar's own lexer gives a whole keyword text, if any. */
 export function lexedByToken(grammar: CstGrammar): (kw: string) => TokenDecl | undefined {
   const lexKw = compileTokenizer(lexSpecOf(grammar));
@@ -2046,17 +1991,12 @@ export function defaultBindImportKeywords(grammar: CstGrammar): Set<string> {
 }
 
 
-
-
 /** The positions of a root (a root's positions are consecutive). */
 const rootPositions = (g: ArmGraph, r: number): number[] => {
   const to = r + 1 < g.rootFrom.length ? g.rootFrom[r + 1] : g.node.length;
   return Array.from({ length: to - g.rootFrom[r] }, (_, i) => g.rootFrom[r] + i);
 };
 const rootOfBody = (g: ArmGraph, body: RuleExpr): number => g.body.indexOf(body);
-
-
-
 
 
 
