@@ -84,7 +84,7 @@ const commitGo = (conds: string[], body: string, fail: string, returns = false) 
 // Dispatch `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is
 // kept only in a list that has ranked candidates.
 const beatsGo = (d: Dispatch, pos: string, i: number) => d.ranked.includes(i) ? `(${pos} > bestPos || ${pos} == bestPos && ${i} < bi)` : `${pos} > bestPos`;
-const markGo = (d: Dispatch, i: number) => (d.ranked.length ? ` bi = ${i};` : '');
+const markGo = (d: Dispatch, i: number) => (d.marked.includes(i) ? ` bi = ${i};` : '');
 const biGo = (d: Dispatch) => (d.ranked.length ? '; bi := -1' : '');
 // ── The two frames of a construct that may have to undo what it tried ──
 // Every one is printed by one of these, so what a frame costs in the output is decided here. The
@@ -3451,7 +3451,6 @@ func (rv *recov) enTpl(hole int) bool {
 	${disp('hole', 'ntTpl', 'func(*parserW) (spanned, bool)', nc.tpl, (h) => `matchTemplateW_${h}`, (c) => `rv.p.callRuleW(${c('')})`)}
 }
 func (rv *recov) enSh() int { return len(rv.p.scratch) }
-func (rv *recov) enCut(h int) { rv.p.scratch = rv.p.scratch[:h] }
 func (rv *recov) enMark() int { rv.marks = append(rv.marks, rv.p.mark()); rv.rmh = append(rv.rmh, len(rv.rm)); return len(rv.marks) - 1 }
 func (rv *recov) enReset(k int) { m := rv.marks[k]; rv.p.back(m.pos); rv.p.scratch = rv.p.scratch[:m.sb]; rv.p.b.Restore(m.nb, m.kb); rv.rm = rv.rm[:rv.rmh[k]] }
 func (rv *recov) enUnmark(k int) { rv.marks = rv.marks[:k]; rv.rmh = rv.rmh[:k] }

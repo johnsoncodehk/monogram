@@ -53,6 +53,8 @@ const while_ = (c: Ex, body: Stmt[]): Stmt => ({ k: 'while', c: x(c), body });
 const ret = (e: Ex): Stmt => ({ k: 'return', es: [x(e)] });
 const BREAK: Stmt = { k: 'break' };
 const NONE = ret(I(-1));
+// Ordered alternation over matchers: the first one's match; `r` holds each try and starts at the first.
+const alts = (ms: string[]): Stmt[] => [...ms.flatMap((m, i) => [i === 0 ? let_('r', call(m, 'p')) : set('r', call(m, 'p')), if_(ge('r', I(0)), [ret('r')])]), NONE];
 
 const inRanges = (v: Ex, rs: CodeRange[]): Expr => any(rs.map(([lo, hi]) => (lo === hi ? eq(v, I(lo)) : and(ge(v, I(lo)), le(v, I(hi))))));
 // A class's ASCII ranges, compared with one code unit, and its non-ASCII characters, matched as
@@ -173,7 +175,7 @@ class LexScan {
       }
       case 'alt': {
         const ms = p.items.map((it) => this.pattern(it));
-        return [let_('r', I(-1)), ...ms.flatMap((m) => [set('r', call(m, 'p')), if_(ge('r', I(0)), [ret('r')])]), NONE];
+        return alts(ms);
       }
       case 'repeat': {
         if (!p.greedy) throw new Error('lex-family: lazy repeat unsupported');
@@ -224,7 +226,7 @@ class LexScan {
         return p.items.length === 0 ? this.exact('', k) : this.exact(p.items[0], [...p.items.slice(1), ...k]);
       case 'alt': {
         const ms = p.items.map((it) => this.exact(it, k));
-        return this.fnFor(['alt', p, k], () => [let_('r', I(-1)), ...ms.flatMap((m) => [set('r', call(m, 'p')), if_(ge('r', I(0)), [ret('r')])]), NONE]);
+        return this.fnFor(['alt', p, k], () => alts(ms));
       }
       case 'lookahead': {
         const m = this.exact(p.body);
@@ -357,7 +359,12 @@ class LexScan {
         const stop = intersect(complement(ex), [[0, 0xffff]]);
         const stopUnits = stop.flatMap(([a, b]) => (b - a < 8 ? Array.from({ length: b - a + 1 }, (_, i) => a + i) : [-1]));
         if (stop.length === 0 && k === 0) return mk([ret(end1)]);
-        if (stop.length === 0) body.push(ret(end1));
+        if (stop.length === 0) {
+          // the read runs to the end: the advance past the last prefix item is never read
+          const last = body.pop();
+          if (last?.k !== 'set' || last.name !== 'q') throw new Error(`lex-family: ${name}: expected the advance of q last`);
+          body.push(ret(end1));
+        }
         else if (stopUnits.length <= 4 && stopUnits.every((c) => c >= 0 && (c < 0xd800 || c > 0xdfff))) body.push(ret(add(this.findAny('q', stopUnits), I(1))));
         else {
           // The run of the units it can pass: an ASCII unit by its table (one per distinct set, shared
@@ -431,14 +438,14 @@ class LexScan {
     // The escape at i (`\uXXXX` or `\u{X...}`, as the token pattern matched it) into v; i moves
     // past it. A braced value stops growing past U+10FFFF, so it cannot overflow.
     const hex = (v: string): Stmt[] => [
-      set('d', code('i')),
+      let_('d', code('i')),
       if_(ge('d', I(97)), [set('d', sub('d', I(87)))], [if_(ge('d', I(65)), [set('d', sub('d', I(55)))], [set('d', sub('d', I(48)))])]),
       if_(le(v, I(0x10ffff)), [set(v, add(shl(v, I(4)), 'd'))]),
       set('i', add('i', I(1))),
     ];
     const escape = (v: string): Stmt[] => [
       set('i', add('i', I(2))),
-      set(v, I(0)),
+      let_(v, I(0)),
       if_(eq(code('i'), I(123)), [
         set('i', add('i', I(1))),
         while_(ne(code('i'), I(125)), hex(v)),
@@ -453,10 +460,10 @@ class LexScan {
       params: [{ name: 's', ty: 'str' }, { name: 'q', ty: 'int' }, { name: 'e', ty: 'int' }],
       ret: ['int'],
       body: [
-        let_('i', 'q'), let_('d', I(0)), let_('cp', I(0)), let_('lo', I(0)), let_('need', I(0)),
+        let_('i', 'q'),
         while_(lt('i', 'e'), [
           if_(eq(code('i'), I(92)), [
-            set('need', I(1)),
+            let_('need', I(1)),
             if_(eq('i', 'q'), [set('need', I(2))]),
             ...escape('cp'),
             if_(and(inR('cp', 0xd800, 0xdbff), and(lt('i', 'e'), eq(code('i'), I(92)))), [
@@ -777,10 +784,11 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
           if (!nx.length) return if_(lt('hit', I(0)), [set('hit', I(i))]);
           return if_(lt('hit', I(0)), [
             let_(pv, e0), let_(ok, I(1)),
-            ...nx.map((l) => if_(ne(ok, I(0)), [
+            // the position moves past each literal but the last (nothing reads it after that)
+            ...nx.map((l, k) => if_(ne(ok, I(0)), [
               { k: 'setCall', names: [pv, 'look'], call: { k: 'call', fn: EL_TRIVIA_FN, args: [x('s'), x(pv), x('look')] } } as Stmt,
               if_(gt(add(add(pv, litLen(l.lit)), I(1)), 'far'), [set('far', add(add(pv, litLen(l.lit)), I(1)))]),
-              if_(l.word ? or(not(hasAt(pv, l.lit)), idc(add(pv, litLen(l.lit)))) : not(hasAt(pv, l.lit)), [set(ok, I(0))], [set(pv, add(pv, litLen(l.lit)))]),
+              if_(l.word ? or(not(hasAt(pv, l.lit)), idc(add(pv, litLen(l.lit)))) : not(hasAt(pv, l.lit)), [set(ok, I(0))], k < nx.length - 1 ? [set(pv, add(pv, litLen(l.lit)))] : undefined),
             ])),
             if_(ne(ok, I(0)), [set('hit', I(i))]),
           ]);

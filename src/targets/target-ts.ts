@@ -66,7 +66,7 @@ const commitTs = (conds: string[], body: string, fail: string, returns = false) 
 // `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is kept only
 // in a list that has ranked candidates.
 const beatsTs = (d: Dispatch, pos: string, i: number) => d.ranked.includes(i) ? `(${pos} > bestPos || ${pos} === bestPos && ${i} < bi)` : `${pos} > bestPos`;
-const markTs = (d: Dispatch, i: number) => (d.ranked.length ? ` bi = ${i};` : '');
+const markTs = (d: Dispatch, i: number) => (d.marked.includes(i) ? ` bi = ${i};` : '');
 const biTs = (d: Dispatch) => (d.ranked.length ? ', bi = -1' : '');
 // How a step is printed: 'w' builds through the builder (onto the engine's child stack, see
 // engineRuntime), 'r' only recognizes (ParserIR.forms: advances, builds nothing).
@@ -3658,7 +3658,6 @@ function enTpl(hole: number): boolean {
   ${disp('hole', nc.tpl, (h) => `parse${h}W`, (f) => `matchTemplateW(${f})`)}
 }
 function enSh(): number { return _n; }
-function enCut(h: number): void { _n = h; }
 function enMark(): number { _rmarks.push(pos, _n, _rm.length); return _rmarks.length / 3 - 1; }
 function enReset(k: number): void { back(_rmarks[3 * k]!); _n = _rmarks[3 * k + 1]!; _rm.length = _rmarks[3 * k + 2]!; }
 function enUnmark(k: number): void { _rmarks.length = 3 * k; }

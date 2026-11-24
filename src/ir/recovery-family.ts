@@ -140,7 +140,7 @@ export const ENGINE_EXTERNS: Fn[] = [
   ext('enShared', [['i', 'int']], ['bool']), ext('enTpl', [['hole', 'int']], ['bool']),
   // The children list's height and a cut back to h (nothing else undone); a mark of the position,
   // the list and the builder, undone to (kept) and dropped (with every later one).
-  ext('enSh', [], ['int']), ext('enCut', [['h', 'int']]), ext('enMark', [], ['int']), ext('enReset', [['k', 'int']]), ext('enUnmark', [['k', 'int']]),
+  ext('enSh', [], ['int']), ext('enMark', [], ['int']), ext('enReset', [['k', 'int']]), ext('enUnmark', [['k', 'int']]),
   // Mark k dropped alone (the later ones keep their order, one index lower).
   ext('enMarkDrop', [['k', 'int']]),
   // A candidate tried from token `save`, its children from height c, won: its node replaces the
@@ -693,8 +693,9 @@ const ledOk = (x: Expr): Expr => and(
   or(lt(at(x, 8), n(0)), not(call('riIn', atR(x, 8), v('head')))),
   not(call('riIn', add(x, n(10)), v('sup'))),
 );
-const finLed = (form: Expr): Stmt[] => [
-  run('enFinLed', v('r'), v('sb'), v('leftOff'), v('start')), set('leftOff', call('enFinOff')), set('fm', form), set('prog', tru),
+// `progRead`: a later test of this iteration reads `prog` (the binary arm is the last: it does not set it).
+const finLed = (form: Expr, progRead = true): Stmt[] => [
+  run('enFinLed', v('r'), v('sb'), v('leftOff'), v('start')), set('leftOff', call('enFinOff')), set('fm', form), ...(progRead ? [set('prog', tru)] : []),
 ];
 // The led at record x matched: its node; capped by its trailing operand (capsFromTail), it returns
 // at once, still capped (PrattLowering.ledArm); else the tail closes when the led closes it.
@@ -757,7 +758,7 @@ const riBpOf = (rebind: boolean): Fn => method('riBpIn', [['r', 'int'], ['rec', 
       run('enLeafOpN'),
       if_(not(operand(at(v('b'), 2))), [undo('kb'), brk]),
       run('enUnmark', v('kb')),
-      ...finLed(n(1)),
+      ...finLed(n(1), false),
       // A capped right operand caps this node: it returns at once, still capped (PrattLowering.binary).
       if_(ne(call('enSt', n(ST_CAPPED)), n(0)), [run('enSetSt', n(ST_FORM), n(1)), ret(tru)]),
       set('tc', n(1)),

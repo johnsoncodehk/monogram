@@ -458,7 +458,8 @@ const overEndFn = (m: RelexMode, u: UnitSets): Fn => ({
   params: [{ name: 'text', ty: 'str' }, { name: 'e', ty: 'int' }, { name: 'kid', ty: 'int' }],
   ret: ['int'],
   body: [
-    ...(m.look.over.length ? [if_(ge('e', len('text')), [ret(I(0))]), let_('c', 'int', code('text', 'e'))] : []),
+    if_(ge('e', len('text')), [ret(I(0))]),
+    let_('c', 'int', code('text', 'e')),
     ...m.look.over.map((o) => if_(and(eq('kid', I(m.kidOf(o.tok))), u.test('c', o.trig)), [
       let_('q', 'int', 'e'),
       while_(lt('q', len('text')), [
@@ -515,10 +516,11 @@ function windowRelexStepFn(m: RelexMode): Fn {
       let_('w', 'int', 'rb'),
       while_(and(ge('w', I(0)), gt(mi(at('oldToks', 'w'), 'off'), 'z')), [
         let_('wt', 'meta', at('oldToks', 'w')),
-        if_(or(
+        // relexOverEnd exists only for a mode with a token whose match can read past its end + 1
+        if_(m.look.over.length ? or(
           gt(call('relexReadsBefore', 'oldText', mi('wt', 'off'), mi('wt', 'kid')), 'start'),
           gt(call('relexOverEnd', 'oldText', mi('wt', 'end'), mi('wt', 'kid')), 'start'),
-        ), [set('rb', sub('w', I(1)))]),
+        ) : gt(call('relexReadsBefore', 'oldText', mi('wt', 'off'), mi('wt', 'kid')), 'start'), [set('rb', sub('w', I(1)))]),
         set('w', sub('w', I(1))),
       ]),
     );
@@ -653,7 +655,7 @@ export function relexFamily(m: RelexMode): { fns: Fn[]; sets: CharSet[] } {
       for (const name of new Set(m.look.arms.flatMap((a) => a.cands.flatMap((c) => (c.readEnd ? [c.readEnd] : []))))) {
         fns.push({ name, doc: '', params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }], ret: ['int'], body: [], extern: true });
       }
-      fns.push(readsBeforeFn(m), overEndFn(m, u), inReachFn(m, u));
+      fns.push(readsBeforeFn(m), ...(m.look.over.length ? [overEndFn(m, u)] : []), inReachFn(m, u));
     }
     fns.push(windowRelexStepFn(m));
   }
