@@ -58,6 +58,8 @@ const validJs: string[] = [
   `x ??= y; x ||= y; x &&= y; x **= 2;`,
   // a logical assignment's right operand is an AssignmentExpression
   `c ||= a = b; c ??= a += b; a = b &&= c;`,
+  // a decorator's `@`, name and dotted segments are tokens of their own (trivia between them)
+  `@ a class C {} @a . b class D {} @℘ class E {} @a.℘ class F {} @(a, b) class G {}`,
   `const cond = a ? b : c ? d : e;`,
   `const cmp = a < b > c;`,
   `const t2 = tag\`a\${b}c\${d}e\`;`,

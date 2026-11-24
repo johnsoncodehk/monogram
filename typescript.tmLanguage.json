@@ -456,7 +456,7 @@
     },
     "regex-literal-prefix-ops": {
       "name": "string.regexp.ts",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;])|(?<=\\b@new)(?<!\\.@new|\\?\\.@new)|(?<=\\binstanceof)(?<!\\.instanceof|\\?\\.instanceof)|(?<=\\bin)(?<!\\.in|\\?\\.in)|(?<=\\bnew)(?<!\\.new|\\?\\.new)|(?<=\\bextends)(?<!\\.extends|\\?\\.extends)|(?<=\\byield)(?<!\\.yield|\\?\\.yield)|(?<=\\bimplements)(?<!\\.implements|\\?\\.implements)|(?<=\\belse)(?<!\\.else|\\?\\.else)|(?<=\\bdo)(?<!\\.do|\\?\\.do)|(?<=\\breturn)(?<!\\.return|\\?\\.return)|(?<=\\bthrow)(?<!\\.throw|\\?\\.throw)|(?<=\\bof)(?<!\\.of|\\?\\.of)|(?<=\\bcase)(?<!\\.case|\\?\\.case)|(?<=\\bdeclare)(?<!\\.declare|\\?\\.declare)|(?<=\\bexport)(?<!\\.export|\\?\\.export)|(?<=\\bdefault)(?<!\\.default|\\?\\.default)|(?<=\\btypeof)(?<!\\.typeof|\\?\\.typeof)|(?<=\\bvoid)(?<!\\.void|\\?\\.void)|(?<=\\bdelete)(?<!\\.delete|\\?\\.delete)|(?<=\\bawait)(?<!\\.await|\\?\\.await)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;@])|(?<=\\b@new)(?<!\\.@new|\\?\\.@new)|(?<=\\bnew)(?<!\\.new|\\?\\.new)|(?<=\\binstanceof)(?<!\\.instanceof|\\?\\.instanceof)|(?<=\\bin)(?<!\\.in|\\?\\.in)|(?<=\\bextends)(?<!\\.extends|\\?\\.extends)|(?<=\\byield)(?<!\\.yield|\\?\\.yield)|(?<=\\bimplements)(?<!\\.implements|\\?\\.implements)|(?<=\\belse)(?<!\\.else|\\?\\.else)|(?<=\\bdo)(?<!\\.do|\\?\\.do)|(?<=\\breturn)(?<!\\.return|\\?\\.return)|(?<=\\bthrow)(?<!\\.throw|\\?\\.throw)|(?<=\\bof)(?<!\\.of|\\?\\.of)|(?<=\\bcase)(?<!\\.case|\\?\\.case)|(?<=\\bdeclare)(?<!\\.declare|\\?\\.declare)|(?<=\\bexport)(?<!\\.export|\\?\\.export)|(?<=\\bdefault)(?<!\\.default|\\?\\.default)|(?<=\\btypeof)(?<!\\.typeof|\\?\\.typeof)|(?<=\\bvoid)(?<!\\.void|\\?\\.void)|(?<=\\bdelete)(?<!\\.delete|\\?\\.delete)|(?<=\\bawait)(?<!\\.await|\\?\\.await)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.logical.prefix.ts"
@@ -1278,7 +1278,7 @@
     },
     "decorator": {
       "name": "entity.name.function.decorator.ts",
-      "match": "@(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\}|\\.#(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})|\\.)*)?"
+      "match": "@(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*"
     },
     "privatefield": {
       "name": "variable.other.property.ts",
@@ -2350,163 +2350,163 @@
     "keyword-as-name": {
       "patterns": [
         {
-          "match": "\\b(keyof|is|unique|satisfies)\\b(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(keyof|is|unique|satisfies)\\b(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?@\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(keyof|is|unique|satisfies)\\b(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(keyof|is|unique|satisfies)\\b(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?@\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "\\b(readonly)\\b(?!\\s*(?:\\.\\.\\.|!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(readonly)\\b(?!\\s*(?:\\.\\.\\.|!|&|\\(|\\*|-|<|\\?|@|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(readonly)\\b(?!\\s*(?:\\.\\.\\.|!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(readonly)\\b(?!\\s*(?:\\.\\.\\.|!|&|\\(|\\*|-|<|\\?|@|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "\\b(abstract|public|private|protected|override|accessor|out|static)\\b(?!\\s*(?:\\.\\.\\.|\\*|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(abstract|public|private|protected|override|accessor|out|static)\\b(?!\\s*(?:\\.\\.\\.|\\*|@|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(abstract|public|private|protected|override|accessor|out|static)\\b(?!\\s*(?:\\.\\.\\.|\\*|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(abstract|public|private|protected|override|accessor|out|static)\\b(?!\\s*(?:\\.\\.\\.|\\*|@|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "\\b(asserts|infer|target|meta|source|interface|enum|module|namespace|from)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(asserts|infer|target|meta|source|interface|enum|module|namespace|from)\\b(?=\\s*[!%&()*+,\\-./:;<=>?@\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(asserts|infer|target|meta|source|interface|enum|module|namespace|from)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(asserts|infer|target|meta|source|interface|enum|module|namespace|from)\\b(?=\\s*[!%&()*+,\\-./:;<=>?@\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "\\b(extends|implements)\\b(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(extends|implements)\\b(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-:;<=>?@\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(extends|implements)\\b(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(extends|implements)\\b(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-:;<=>?@\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "\\b(get|set)\\b(?!\\s*(?:\\[))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(get|set)\\b(?!\\s*(?:\\[))(?=\\s*[!%&()*+,\\-/:;<=>?@\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(get|set)\\b(?!\\s*(?:\\[))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(get|set)\\b(?!\\s*(?:\\[))(?=\\s*[!%&()*+,\\-/:;<=>?@\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "\\b(declare)\\b(?!\\s*(?:\\.\\.\\.|\\(|\\*|;|<|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(declare)\\b(?!\\s*(?:\\.\\.\\.|\\(|\\*|;|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(declare)\\b(?!\\s*(?:\\.\\.\\.|\\(|\\*|;|<|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(declare)\\b(?!\\s*(?:\\.\\.\\.|\\(|\\*|;|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "\\b(async)\\b(?!\\s*(?:\\.\\.\\.|\\(|\\*|<|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(async)\\b(?!\\s*(?:\\.\\.\\.|\\(|\\*|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(async)\\b(?!\\s*(?:\\.\\.\\.|\\(|\\*|<|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(async)\\b(?!\\s*(?:\\.\\.\\.|\\(|\\*|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "(@new\\b)(?!\\s*(?:\\(|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "(@new\\b)(?!\\s*(?:\\(|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?@\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "(@new\\b)(?!\\s*(?:\\(|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])",
+          "match": "(@new\\b)(?!\\s*(?:\\(|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?@\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "\\b(super)\\b(?!\\s*(?:\\(|\\.|\\[))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(super)\\b(?!\\s*(?:\\(|\\.|\\[))(?=\\s*[!%&()*+,\\-./:;<=>?@\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(super)\\b(?!\\s*(?:\\(|\\.|\\[))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(super)\\b(?!\\s*(?:\\(|\\.|\\[))(?=\\s*[!%&()*+,\\-./:;<=>?@\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "\\b(instanceof|throw|of|case)\\b(?!\\s*(?:\\.\\.\\.|\\(|<|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(instanceof|throw|of|case)\\b(?!\\s*(?:\\.\\.\\.|\\(|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(instanceof|throw|of|case)\\b(?!\\s*(?:\\.\\.\\.|\\(|<|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(instanceof|throw|of|case)\\b(?!\\s*(?:\\.\\.\\.|\\(|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "\\b(class)\\b(?!\\s*(?:<|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(class)\\b(?!\\s*(?:<|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(class)\\b(?!\\s*(?:<|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(class)\\b(?!\\s*(?:<|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "\\b(defer)\\b(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(defer)\\b(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?@\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(defer)\\b(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(defer)\\b(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?@\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "\\b(let|var|using)\\b(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(let|var|using)\\b(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(let|var|using)\\b(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(let|var|using)\\b(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "\\b(if|for|while|switch|require)\\b(?!\\s*(?:\\())(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(if|for|while|switch|require)\\b(?!\\s*(?:\\())(?=\\s*[!%&()*+,\\-./:;<=>?@\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(if|for|while|switch|require)\\b(?!\\s*(?:\\())(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(if|for|while|switch|require)\\b(?!\\s*(?:\\())(?=\\s*[!%&()*+,\\-./:;<=>?@\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "\\b(else|do)\\b(?!\\s*(?:\\.\\.\\.|\\(|;|<|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(else|do)\\b(?!\\s*(?:\\.\\.\\.|\\(|;|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(else|do)\\b(?!\\s*(?:\\.\\.\\.|\\(|;|<|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(else|do)\\b(?!\\s*(?:\\.\\.\\.|\\(|;|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "\\b(try|finally|global)\\b(?!\\s*(?:\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(try|finally|global)\\b(?!\\s*(?:\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(try|finally|global)\\b(?!\\s*(?:\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(try|finally|global)\\b(?!\\s*(?:\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "\\b(catch|with)\\b(?!\\s*(?:\\(|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(catch|with)\\b(?!\\s*(?:\\(|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(catch|with)\\b(?!\\s*(?:\\(|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(catch|with)\\b(?!\\s*(?:\\(|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "\\b(type)\\b(?!\\s*(?:\\*|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(type)\\b(?!\\s*(?:\\*|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(type)\\b(?!\\s*(?:\\*|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(type)\\b(?!\\s*(?:\\*|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "\\b(constructor)\\b(?!\\s*(?:\\(|<))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(constructor)\\b(?!\\s*(?:\\(|<))(?=\\s*[!%&()*+,\\-./:;<=>?@\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(constructor)\\b(?!\\s*(?:\\(|<))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(constructor)\\b(?!\\s*(?:\\(|<))(?=\\s*[!%&()*+,\\-./:;<=>?@\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         }
       ]
@@ -3050,7 +3050,7 @@
       "name": "punctuation.accessor.optional.ts"
     },
     "punctuation": {
-      "match": "\\?|:",
+      "match": "\\?|:|@",
       "name": "punctuation.ts"
     },
     "expr-scope-keyword-control-loop": {
@@ -3502,7 +3502,7 @@
     },
     "regex": {
       "name": "string.regexp.ts",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;])|(?<=\\b@new)(?<!\\.@new|\\?\\.@new)|(?<=\\binstanceof)(?<!\\.instanceof|\\?\\.instanceof)|(?<=\\bin)(?<!\\.in|\\?\\.in)|(?<=\\bnew)(?<!\\.new|\\?\\.new)|(?<=\\bextends)(?<!\\.extends|\\?\\.extends)|(?<=\\byield)(?<!\\.yield|\\?\\.yield)|(?<=\\bimplements)(?<!\\.implements|\\?\\.implements)|(?<=\\belse)(?<!\\.else|\\?\\.else)|(?<=\\bdo)(?<!\\.do|\\?\\.do)|(?<=\\breturn)(?<!\\.return|\\?\\.return)|(?<=\\bthrow)(?<!\\.throw|\\?\\.throw)|(?<=\\bof)(?<!\\.of|\\?\\.of)|(?<=\\bcase)(?<!\\.case|\\?\\.case)|(?<=\\bdeclare)(?<!\\.declare|\\?\\.declare)|(?<=\\bexport)(?<!\\.export|\\?\\.export)|(?<=\\bdefault)(?<!\\.default|\\?\\.default)|(?<=\\btypeof)(?<!\\.typeof|\\?\\.typeof)|(?<=\\bvoid)(?<!\\.void|\\?\\.void)|(?<=\\bdelete)(?<!\\.delete|\\?\\.delete)|(?<=\\bawait)(?<!\\.await|\\?\\.await)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;@])|(?<=\\b@new)(?<!\\.@new|\\?\\.@new)|(?<=\\bnew)(?<!\\.new|\\?\\.new)|(?<=\\binstanceof)(?<!\\.instanceof|\\?\\.instanceof)|(?<=\\bin)(?<!\\.in|\\?\\.in)|(?<=\\bextends)(?<!\\.extends|\\?\\.extends)|(?<=\\byield)(?<!\\.yield|\\?\\.yield)|(?<=\\bimplements)(?<!\\.implements|\\?\\.implements)|(?<=\\belse)(?<!\\.else|\\?\\.else)|(?<=\\bdo)(?<!\\.do|\\?\\.do)|(?<=\\breturn)(?<!\\.return|\\?\\.return)|(?<=\\bthrow)(?<!\\.throw|\\?\\.throw)|(?<=\\bof)(?<!\\.of|\\?\\.of)|(?<=\\bcase)(?<!\\.case|\\?\\.case)|(?<=\\bdeclare)(?<!\\.declare|\\?\\.declare)|(?<=\\bexport)(?<!\\.export|\\?\\.export)|(?<=\\bdefault)(?<!\\.default|\\?\\.default)|(?<=\\btypeof)(?<!\\.typeof|\\?\\.typeof)|(?<=\\bvoid)(?<!\\.void|\\?\\.void)|(?<=\\bdelete)(?<!\\.delete|\\?\\.delete)|(?<=\\bawait)(?<!\\.await|\\?\\.await)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "comment.block.ts"

@@ -158,6 +158,8 @@ const TEMPLATE_STEPS = {
 // only where tsc's nextTokenCanFollowModifier says so, and a run holds one `static` at most.
 const TS_DECORATORS = {
   accept: [
+    // `@` and the name are two tokens when trivia or a character beyond ASCII separates them
+    '@ a class C {}', '@a . b class C {}', '@℘ class C {}', '@a.℘ class C {}', '@ new Foo class C {}', '@(a, b) class C {}',
     '@d class C {}', '@d export class C {}', '@d export @e class C {}', 'export @d class C {}', 'public export @d class C {}',
     '@d export default @e class {}', '@d export {a};', '@d export = x;', '@d interface I {}', '@d enum E {}', '@d const enum E {}',
     '@d declare class C {}', '@d declare override class C {}', '@d export override class C {}', '@d override class C {}',
@@ -179,7 +181,7 @@ const TS_DECORATORS = {
     '@new Foo() class C {}', '@new Foo class C {}', 'class C { @new Foo() m() {} }',
   ],
   reject: [
-    '@new class C {}', '@new Foo()() class C {}',
+    '@new class C {}', '@new Foo()() class C {}', '@a. class C {}', '@ class C {}', '@() class C {}',
     'public @d class C {}', 'abstract @d class C {}', '@d public @e class C {}', '@d export abstract @e class C {}',
     'export abstract @d class C {}', 'static static class C {}', '@d static static class C {}', '@d default x;', '@d default @e @f x;',
     'x = abstract class {};', 'x = @d const class {};', 'x = @d static static class {};', 'x = @d export @e export @f class {};',
