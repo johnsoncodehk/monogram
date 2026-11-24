@@ -739,6 +739,21 @@ const SUFFIX: Record<Mode, string> = { w: 'W', r: 'R' };
 let SHAPE: ShapePlan | null = null;
 // Where the engine accepts engine arm `key` of `rule`: the CST builder's node, or with a shape the
 // arm's construct plan (finS / finPS: the value over the arm's slots, src/shape-plan.ts).
+// Re-parse on demand (shape-plan.ts Restart): a Pratt rule's spine attribute set around its
+// operand calls; the check at a led / the binary operator / the loop's exit: when the left slot was
+// built under another value than the one its reader gives it and its arm is a spine arm, the left
+// is parsed again under that value (_rsRun), up to the reader's token.
+const rsOf = (rule: string) => SHAPE?.restarts.find((x) => x.rule === rule);
+const rsCall = (rule: string, which: 'right' | 'operand', callExpr: string): string => {
+  const rs = rsOf(rule);
+  if (!rs) return callExpr;
+  const x = rs[which];
+  return `_ipop(${rs.k}, _ipush(${rs.k}, ${'copy' in x ? `_iv[${x.copy}]` : J(x.c)}), ${callExpr})`;
+};
+const rsCheck = (rule: string, val: string, stop: string): string => {
+  const rs = rsOf(rule)!;
+  return `if (_bu[b] !== ${val} && _SPN_${rule}[_ar[b]!]) { if (++nr > 1) _rsOver++; _rsRun(${rs.k}, ${val}, p0, b, ${stop}, minBp, ${rule}_bpW); }`;
+};
 const finRTs = (rule: string, key: string, b: string, save: string): string => (SHAPE ? `finS(${SHAPE.armId(rule, key)}, ${b}, ${save})` : `finR(${J(rule)}, ${b}, ${save})`);
 const finPTs = (rule: string, key: string, b: string): string => (SHAPE ? `finPS(${SHAPE.armId(rule, key)}, ${b})` : `finP(${J(rule)}, ${b})`);
 function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
@@ -1003,7 +1018,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
       const c = _n;
       leafSlotW('$operator', t);
       pos++;
-      if (${r.name}_bpW(pbp)) {
+      if (${rsCall(r.name, 'operand', `${r.name}_bpW(pbp)`)}) {
         if (_form !== 0 && ${r.name}_PRE_TGT.has(t.lid)) { back(save); _n = b; _capped = false; return false; }
         if (${beatsTs(d, 'pos', i)}) { ${won(i, 'finP', `${r.name}_PRE_FORM[t.lid]!`, true, 'false')} } else _n = c;
       } else _n = c;
@@ -1019,7 +1034,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
       const save = pos, b = _n;
       leafSlotW('$operator', t);
       pos++;
-      if (${r.name}_bpW(pbp)) {
+      if (${rsCall(r.name, 'operand', `${r.name}_bpW(pbp)`)}) {
         if (_form !== 0 && ${r.name}_PRE_TGT.has(t.lid)) { back(save); _n = b; _capped = false; return false; }
         ${finPTs(r.name, `nud${i}`, 'b')}; _form = ${r.name}_PRE_FORM[t.lid]!; _tail = true; _capped = false; return true;
       }
@@ -1039,7 +1054,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
     ledArm: (i, cond, form, closes, exit, _clean, rebind, capsFromTail) => {
       // Matched: the node over the left operand; capped by its trailing operand, it returns at once (as `binary`).
       const ok = `${finPTs(r.name, `led${i}`, 'b')};${capsFromTail ? ` if (_capped) { _form = ${form}; return true; }` : ''} form = ${form};${closes ? ' tailClosed = true;' : ''} continue ledLoop;`;
-      return `{
+      return `{${rsOf(r.name) ? `\n      ${rsCheck(r.name, J(rsOf(r.name)!.leds[i] ?? false), 'pos')}` : ''}
       const ledSave = pos;
       if (${cond}) { ${ok} }
       back(ledSave); _n = b + 1;${rebind ? `\n      if (${rebind}) { ${ok} }` : ''}${exit ? ' break ledLoop;' : ''}
@@ -1067,8 +1082,9 @@ ${kids.map((k) => `      case ${k}:
     if (info.tgt && form !== 0 || info.noUnary && form === 2) { _n = b; return false; }
     const ledSave = pos;
     opLeafW(t, opLid);
-    pos += _opN;
-    if (!${r.name}_bpW(info.rbp)) { back(ledSave); _n = b + 1; break; }
+    pos += _opN;${rsOf(r.name) ? `
+    { const lv = ${(() => { const bn = rsOf(r.name)!.bin; return 'fn' in bn ? `${bn.fn}(b, 0, 0)` : J(bn.c); })()}; ${rsCheck(r.name, 'lv', 'ledSave').replace(/\}$/, ' _opLid(t); opLeafW(t, opLid); pos += _opN; }')} }` : ''}
+    if (!${rsCall(r.name, 'right', `${r.name}_bpW(info.rbp)`)}) { back(ledSave); _n = b + 1; break; }
     ${finPTs(r.name, 'bin', 'b')};
     if (_capped) { _form = 1; return true; }
     form = 1; tailClosed = true;
@@ -1081,15 +1097,15 @@ function parse${r.name}W(): boolean {
   return r;
 }`,
     bpOpen: (label) => `function ${r.name}_bpW(minBp: number): boolean {
-  const b = _n;
+  const b = _n;${rsOf(r.name) ? ' const p0 = pos; let nr = 0;' : ''}
   if (!${r.name}_nudW(minBp)) return false;
   let form = _form;
   if (_capped) return true;   // an assignment-level arrow admits no led
   let tailClosed = _tail;
   ${label ? 'ledLoop: ' : ''}for (;;) {
     const t = peek();
-    if (t === null) break;`,
-    bpClose: `  _capped = false;
+    if (t === null) break;${rsOf(r.name) ? '\n    if (pos === _stop) break;' : ''}`,
+    bpClose: `${rsOf(r.name) ? `  ${rsCheck(r.name, `_iv[${rsOf(r.name)!.k}]`, 'pos')}\n` : ''}  _capped = false;
   _form = form;
   return true;
 }`,
@@ -3134,6 +3150,9 @@ const SHAPE_SLOT_TS: Record<string, (a: string[]) => string> = {
   slotVal: ([i]) => `_hs[${i}]`, slotTag: ([i]) => `_tg[${i}]!`, slotTop: () => '_n',
   slotOff: ([i]) => `_sp[(${i}) * _SW]!`, slotEnd: ([i]) => `_sp[(${i}) * _SW + 1]!`, srcText: ([a, b]) => `_src.slice(${a}, ${b})`,
   // The one-slot check (its operands are an index expression and locals: evaluated more than once).
+  // A reader-applied top's read under the attribute = true (its operands are an index expression
+  // and an int: evaluated more than once).
+  slotValT: ([i, m]) => `(_tb[${i}] ? _topR(${i}, ${m === '0' ? `_hs[${i}]` : `slotValV(${i}, ${m})`}) : ${m === '0' ? `_hs[${i}]` : `slotValV(${i}, ${m})`})`,
   slotAt: ([i, lo, hi, t0, t1]) => `((${i}) >= ${lo} && (${i}) < ${hi} && _tg[${i}]! >= ${t0} && _tg[${i}]! <= ${t1} ? ${i} : -1)`,
 };
 const tsLowering: Lowering = {
@@ -3663,7 +3682,7 @@ export function emitTs(grammar: CstGrammar, opts?: { shape?: ShapeSpec }): strin
 
 // _keep's copy of a slot's variant and synthesized attributes.
 const synKept = (plan: ShapePlan): number[] => plan.syn.flatMap((a, k) => (a.slotRead ? [k] : []));
-const shapeKeepTs = (plan: ShapePlan): string => ` _h1[b] = _h1[c];${synKept(plan).map((k) => ` _sy[${k}]![b] = _sy[${k}]![c];`).join('')}`;
+const shapeKeepTs = (plan: ShapePlan): string => ` _h1[b] = _h1[c]; _tb[b] = _tb[c];${synKept(plan).map((k) => ` _sy[${k}]![b] = _sy[${k}]![c];`).join('')}`;
 function shapeRuntimeTs(plan: ShapePlan): string {
   const K = plan.nodeKeys;
   return `export type ShapeNode = { [key: string]: ShapeValue };
@@ -3684,10 +3703,15 @@ function _construct(id: number, b: number, off: number, end: number): any {
   let v: any;${plan.syn.some((a) => a.fns.some((f) => f !== null)) ? `
   const sf = _SYF[id]!;
   if (sf !== null) sf(b, off, end);` : ''}
-  _alt = undefined;
+  _alt = undefined; _tbit = false;
   try { v = _C[id]!(b, off, end); } catch (e) { if (!(e instanceof _Missing)) throw e; v = e; }
   if (v instanceof _Missing) _alt = v;
-  if (_built !== null) { const w = _VB[id]! >= 0 && _VD[id] ? _alt : v; _built(id, off, end, w instanceof _Missing ? new ShapeMissing(w.where, w.why) : w); }
+  if (_built !== null) {
+    let w = _VB[id]! >= 0 && _VD[id] ? _alt : v;
+    const t = _WR[id]!;
+    if (t !== null && _WD[id] && _tbit && !(w instanceof _Missing)) { try { w = t(w, off, end); } catch (e) { if (!(e instanceof _Missing)) throw e; w = e; } }
+    _built(id, off, end, w instanceof _Missing ? new ShapeMissing(w.where, w.why) : w);
+  }
   return v;
 }
 // Inherited context attributes (an rd rule's: Step.inh sets them around its calls), their values
@@ -3712,6 +3736,38 @@ const _VB: number[] = ${J(plan.variantBit)};
 const _VD: boolean[] = ${J(plan.variantDefault)};
 function altVal(x: any): void { _alt = x; }
 function slotValV(i: number, m: number): any { const j = _VB[_ar[i]!]!; return j >= 0 && ((m >> j) & 1) !== 0 ? _h1[i] : _hs[i]; }
+// Re-parse on demand (shape-plan.ts Restart): per arm the spine attribute its rule re-parses under
+// (-1: none), per slot the value it was built under (_bu), per such rule its spine arms. _rsRun
+// parses the left operand at b again from the invocation's mark p0 under v, up to the token at
+// stop (_stop: the led loop breaks there). The counts: re-parses, and invocations with more than
+// one (the bound: one per invocation in a valid program; the gates assert none above it).
+const _BK: number[] = ${J(plan.arms.map((a) => plan.restarts.find((x) => x.rule === a.rule)?.k ?? -1))};
+let _bu: any[] = [];
+${plan.restarts.map((x) => `const _SPN_${x.rule}: boolean[] = ${J(plan.arms.map((a) => x.spine[a.id] === true))};`).join('\n')}
+let _stop = -1, _rsCount = 0, _rsOver = 0;
+export function shapeRestarts(): { restarts: number; overBound: number } { return { restarts: _rsCount, overBound: _rsOver }; }
+function _rsRun(k: number, v: any, p0: number, b: number, stop: number, minBp: number, f: (m: number) => boolean): void {
+  _n = b; back(p0);
+  const o = _iv[k], s = _stop;
+  _iv[k] = v; _stop = stop;
+  const ok = f(minBp);
+  _iv[k] = o; _stop = s;
+  if (!ok || pos !== stop || _n !== b + 1) throw new Error('shape: the re-parse of a left operand (' + p0 + '..' + stop + ') did not end at the token of its reader');
+  _rsCount++;
+}
+// Reader-applied tops (shape-plan.ts topForm): per arm the function building its top layer's node
+// over its value (null: none) and whether the attribute's default is true; per slot the arm's
+// condition under the attribute = true (_tb, set by topBit). A reader giving true reads the slot
+// through the layer when its bit is set (slotValT, printed in place).
+const _WR: (((x: any, off: number, end: number) => any) | null)[] = [${plan.tops.map((t) => t ?? 'null').join(', ')}];
+const _WD: boolean[] = ${J(plan.topDefault)};
+let _tbit = false;
+let _tb: boolean[] = [];
+function topBit(c: boolean): void { _tbit = c; }
+function _topR(i: number, x: any): any {
+  if (x instanceof _Missing) return x;
+  try { return _WR[_ar[i]!]!(x, _sp[i * _SW]!, _sp[i * _SW + 1]!); } catch (e) { if (!(e instanceof _Missing)) throw e; return e; }
+}
 // Synthesized attributes: computed only by an arm with an equation, before its value (_SYF: per
 // arm the function setting its own, _ys, read as selfSyn; an arm without one reads its default as a
 // constant), and kept per slot (_sy) only for an attribute some arm reads off a child (slotSyn: the
@@ -3743,12 +3799,12 @@ function _iter(mt: number, f: () => boolean): boolean {
   const c = _n;
   if (!f()) return false;
   _slot(null, 0, 0, 0, 0, 0, 0);
-  for (let i = _n - 1; i > c; i--) { _hs[i] = _hs[i - 1]; _tg[i] = _tg[i - 1]; _ar[i] = _ar[i - 1]; _h1[i] = _h1[i - 1];${synKept(plan).map((k) => ` _sy[${k}]![i] = _sy[${k}]![i - 1];`).join('')} }
+  for (let i = _n - 1; i > c; i--) { _hs[i] = _hs[i - 1]; _tg[i] = _tg[i - 1]; _ar[i] = _ar[i - 1]; _h1[i] = _h1[i - 1]; _tb[i] = _tb[i - 1];${synKept(plan).map((k) => ` _sy[${k}]![i] = _sy[${k}]![i - 1];`).join('')} }
   _sp.copyWithin((c + 1) * _SW, c * _SW, (_n - 1) * _SW);
   const s = c * _SW;
   if (_n - 1 > c) { _sp[s + 1] = _sp[s]!; } else { _sp[s] = 0; _sp[s + 1] = 0; _sp[s + 2] = pos; _sp[s + 3] = 0; _sp[s + 4] = 0; }
   _sp[s + 5] = 0;
-  _hs[c] = null; _tg[c] = mt; _ar[c] = -1;
+  _hs[c] = null; _tg[c] = mt; _ar[c] = -1; _tb[c] = false;
   return true;
 }
 const _AN: string[] = ${J(plan.arms.map((a) => a.arm))};
@@ -3762,7 +3818,7 @@ function finS(id: number, b: number, save: number): void {
   const v = _construct(id, b, off, end);
   _n = b;
   _slot(v, 1, off, end, save, ho, he);
-  _ar[b] = id; _h1[b] = _alt;${synKept(plan).map((k) => ` if (_SYE[${k}]![id]) _sy[${k}]![b] = _ys[${k}];`).join('')}
+  _ar[b] = id; _h1[b] = _alt; _tb[b] = _tbit;${plan.restarts.length ? ' { const k = _BK[id]!; if (k >= 0) _bu[b] = _iv[k]; }' : ''}${synKept(plan).map((k) => ` if (_SYE[${k}]![id]) _sy[${k}]![b] = _ys[${k}];`).join('')}
 }
 function finPS(id: number, b: number): void {
   let off = 0, end = 0, ts = pos, ho = 0, he = 0;
@@ -3770,7 +3826,7 @@ function finPS(id: number, b: number): void {
   const v = _construct(id, b, off, end);
   _n = b;
   _slot(v, 1, off, end, ts, ho, he);
-  _ar[b] = id; _h1[b] = _alt;${synKept(plan).map((k) => ` if (_SYE[${k}]![id]) _sy[${k}]![b] = _ys[${k}];`).join('')}
+  _ar[b] = id; _h1[b] = _alt; _tb[b] = _tbit;${plan.restarts.length ? ' { const k = _BK[id]!; if (k >= 0) _bu[b] = _iv[k]; }' : ''}${synKept(plan).map((k) => ` if (_SYE[${k}]![id]) _sy[${k}]![b] = _ys[${k}];`).join('')}
 }
 // The engine methods of the construct plans (src/shape-plan.ts EXTERNS).
 function slotTag(i: number): number { return _tg[i]!; }

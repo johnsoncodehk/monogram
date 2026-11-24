@@ -201,6 +201,34 @@ The SPINE of `pattern` is derived by `spineOf`:
 Whether a pattern is VALID (`[a + b] = c`) is the grammar's or the early errors' business, not
 the shape's.
 
+### How a generated parser builds the two Pratt-left attributes (no variants)
+
+The left operand of a led is built before the led is seen, so an inherited attribute a led hands
+its LEFT is not known when the left is built. The plan (`src/shape-plan.ts`) derives one of two
+treatments from the spec; neither is a term the author writes:
+
+- **A reader-applied top** (`topForm`; ESTree `chainTop`, tsc `heritageElement`'s form). An
+  inherited attribute read only in a term's outermost layer `iff(c, W[X], X)`, with X not reading
+  it and c, W reading only it, the arm's own synthesized attributes and X: the construct builds X
+  (and keeps c under the attribute = true, one bit per slot); each reader of the slot applies the
+  layer with its own equation value. It is legal because the layer is a function of what the
+  reader knows (its equation value) and of what the child synthesized (X and its attributes), so
+  the attribute's last use moves up into the reader: the same L-attributed question answered from
+  the other side. A chain link is built once (`a?.b.c`: `.c` reads `a?.b` with `chainTop` false,
+  the statement reads `a?.b.c` with true and wraps it in ChainExpression).
+- **Re-parse on demand** (ESTree `pattern`, which the literals copy into their elements: a spine,
+  not a top). The attribute is context, as an rd rule's is: set at every call of the rule, read
+  where an arm reads it. At a led (or the binary operator) whose value for its left differs from
+  the value the left was built under, and whose left's arm reads or copies the attribute (a SPINE
+  arm), the parser restores to the Pratt invocation's mark and parses the left again under the
+  led's value, up to the led's token, then goes on. Only destructuring assignments pay: 7 of 8,908
+  `=` in the real JavaScript corpus have a literal on their left (72 constructions rebuilt, against
+  26,622 pairs if both readings of every spine node were built). Bound: one re-parse per Pratt
+  invocation in a valid program (nested destructuring re-parses once per nesting level); the gate
+  `shape2-oracle` fails when an invocation re-parses more than once. The trigger "the left's arm is a
+  spine arm" is one plan predicate per led (`Restart.spine`); the engine's assignment-target form
+  bits (`form & formPass(i)`) are the exact form of the same test.
+
 ### Classes
 
 - **ESTree.** Block is RECORD-VALUED (its `body`): a block statement, a function body and a
@@ -247,7 +275,8 @@ the shape's.
 | an L-attributed inherited equation | its scalar, computed at the call site from leaves already consumed and the parent's attributes |
 | a node-valued inherited attribute | a handle to an immutable list of nodes already built to the child's left, passed as a parameter of the child's rule function; the receiving arm places it and takes its span start from its first element. Arena: the nodes precede the child's mark, so a losing candidate's reset never frees them |
 | `present(v)` of a nodes variable, a span endpoint at it | the handle's length; its first node's start |
-| a right-dependent inherited equation | the child is built in its default reading. When the deciding leaf arrives, the parser rewrites it, walking only the spine (the arms that read the attribute, reached through the children it is copied into). It never descends below a node whose arm does not pass the attribute on |
+| a right-dependent inherited equation | the child is built under the invocation's context. When the deciding leaf arrives and the value differs and the child's arm is a spine arm, the parser re-parses the child under the new value (above: re-parse on demand) |
+| an inherited attribute read only in the top layer | the child's value without the layer and the layer's condition bit; the reader applies the layer (above: a reader-applied top) |
 
 ## v1: the positional ShapeSpec (what `emitTs` / `emitRust` consume today)
 
