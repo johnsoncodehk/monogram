@@ -260,6 +260,10 @@ ${sig ? `${tsFlagTable('_elThen', lidFlagTable(ids, sig.then))}\n` : ''}`;
   const prevIsValue = p.rxStateFrom.replace('function prevIsValue(): boolean {\n', `function prevIsValue(): boolean {
     if (toks.length <= valueTo) return true;
 `);
+  // where an operand may start (an operand element entry): not after a value, nor after a member
+  // accessor (regexContext.memberAccessTexts: a name follows it, so \`a?.<T>(x)\` opens no element)
+  const operandStarts = operand ? `function operandStarts(): boolean { return !prevIsValue() && !(hasPrev && !!_mem[prevLid]); }
+` : '';
   const rxParams = rx ? 'prevLid: number, prevKid: number, bpLid: number, hasPrev: boolean, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, ' : '';
   const rxRet = rx ? 'prevLid: number; prevKid: number; hasPrev: boolean; bpLid: number; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean; ' : '';
   const rxNames = rx ? 'prevLid, prevKid, hasPrev, bpLid, hasPrev2, parenHead, lastClose, lastBang, ' : '';
@@ -325,8 +329,8 @@ ${rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]
   // (in a directive head, code inside an element frame, a tagOpen opens no element)
   const opensTag = `src.startsWith(${J(el.tagOpen)}, pos)${el.tagStart ? ` && ${shared.elementFn('tagStart')}(src, pos + ${L})` : ''}${dirs ? ' && (templateStack.length === 0 || (templateStack[templateStack.length - 1] & 3) !== 2)' : ''}`;
   const entry = !operand ? `    if (${opensTag}) {\n${enter}    }\n`
-    : !(el.head || sig) ? `    if (${opensTag} && !prevIsValue()) {\n${enter}    }\n`
-    : `    if (${opensTag}${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && !prevIsValue()) {
+    : !(el.head || sig) ? `    if (${opensTag} && operandStarts()) {\n${enter}    }\n`
+    : `    if (${opensTag}${sig ? ' && specTok < 0 && pos >= specUntil' : ''} && operandStarts()) {
       let op: number;
       ${sig ? 'if (pos === specAt) { op = specKeep ? 0 : 1; specAt = -1; } else ' : ''}{ ${tsTake(['o', 're'], shared.elementFn('opens'), 'src, pos')} op = o; if (re > laEnd) laEnd = re; }
       if (op === 1) {
@@ -407,7 +411,7 @@ ${p.uniIdentFallbackTs}${TS_UNEXPECTED}
   const n = src.length;
   const base = toks.length;
   let err: LexErr | null = null;
-${prevIsValue}${hotState}${specState}${emitFn}  refresh();
+${prevIsValue}${operandStarts}${hotState}${specState}${emitFn}  refresh();
 ${loop}
   return { pos, pendingNl, ${rxNames}templateStack, elEnded: toks.length === elEndAt, tagAngle, laEnd, specUntil${raw ? ', tagAt' : ''}, err };
 }
@@ -3782,6 +3786,21 @@ const buStoreTs = (plan: ShapePlan): string => {
 };
 function shapeRuntimeTs(plan: ShapePlan): string {
   const K = plan.nodeKeys;
+  // The value of arm id over slots b.._n (a variant arm's second variant in _alt), after its
+  // synthesized attributes (_ys): printed in finS and finPS themselves (a call less per node).
+  const construct = `  let v: any;${plan.syn.some((a) => a.fns.some((f) => f !== null)) ? `
+  const sf = _SYF[id]!;
+  if (sf !== null) sf(b, off, end);` : ''}
+  _alt = undefined; _tbit = false;
+  try { v = _C[id]!(b, off, end); } catch (e) { if (!(e instanceof _Missing)) throw e; v = e; }
+  if (v instanceof _Missing) _alt = v;
+  if (_built !== null) {
+    let w = _VB[id]! >= 0 && _VD[id] ? _alt : v;
+    const t = _WR[id]!;
+    if (t !== null && _WD[id] && _tbit && !(w instanceof _Missing)) { try { w = t(w, off, end); } catch (e) { if (!(e instanceof _Missing)) throw e; w = e; } }
+    _built(id, off, end, w instanceof _Missing ? new ShapeMissing(w.where, w.why) : w);
+  }
+`;
   return `export type ShapeNode = { [key: string]: ShapeValue };
 export type ShapeValue = ShapeNode | ShapeValue[] | string | number | boolean | null | { record: Record<string, ShapeValue> };
 /** A read of what the shape cannot give: an arm it leaves out ('unmapped') or one this parser's
@@ -3795,22 +3814,6 @@ function _missing(where: string, why: string): any { return new _Missing(where, 
 // A child read that is missing makes the reading arm's value missing too (finS catches it): only the
 // root's read, parse(), throws, as the evaluator throws when a unit's evaluation reads one.
 function _need(v: any): any { if (v instanceof _Missing) throw v; return v; }
-// An arm's value (a variant arm's second variant in _alt), after its synthesized attributes (_ys).
-function _construct(id: number, b: number, off: number, end: number): any {
-  let v: any;${plan.syn.some((a) => a.fns.some((f) => f !== null)) ? `
-  const sf = _SYF[id]!;
-  if (sf !== null) sf(b, off, end);` : ''}
-  _alt = undefined; _tbit = false;
-  try { v = _C[id]!(b, off, end); } catch (e) { if (!(e instanceof _Missing)) throw e; v = e; }
-  if (v instanceof _Missing) _alt = v;
-  if (_built !== null) {
-    let w = _VB[id]! >= 0 && _VD[id] ? _alt : v;
-    const t = _WR[id]!;
-    if (t !== null && _WD[id] && _tbit && !(w instanceof _Missing)) { try { w = t(w, off, end); } catch (e) { if (!(e instanceof _Missing)) throw e; w = e; } }
-    _built(id, off, end, w instanceof _Missing ? new ShapeMissing(w.where, w.why) : w);
-  }
-  return v;
-}
 // Inherited context attributes (an rd rule's: Step.inh sets them around its calls), their values
 // now; _ipush sets one and returns what it was, _ipop restores it and passes the call's result on.
 const _IV0: any[] = ${J(plan.inh.map((a) => a.dflt))};
@@ -3912,16 +3915,14 @@ function finS(id: number, b: number, save: number): void {
   let off: number, end: number, ho: number, he: number;
   if (_n > b) { const s = b * _SW; off = _sp[s]!; end = _sp[(_n - 1) * _SW + 1]!; ho = _sp[s + 3]!; he = _sp[s + 4]!; }
   else { off = save < toks.length ? toks[save]!.off : 0; end = off; ho = off; he = off; }
-  const v = _construct(id, b, off, end);
-  _n = b;
+${construct}  _n = b;
   _slot(v, 1, off, end, save, ho, he);
   _ar[b] = id; _h1[b] = _alt; _tb[b] = _tbit;${buStoreTs(plan)}${synKept(plan).map((k) => ` if (_SYE[${k}]![id]) _sy[${k}]![b] = _ys[${k}];`).join('')}
 }
 function finPS(id: number, b: number): void {
   let off = 0, end = 0, ts = pos, ho = 0, he = 0;
   if (_n > b) { const s = b * _SW; off = _sp[s]!; end = _sp[(_n - 1) * _SW + 1]!; ts = _sp[s + 2]!; ho = _sp[s + 3]!; he = _sp[s + 4]!; }
-  const v = _construct(id, b, off, end);
-  _n = b;
+${construct}  _n = b;
   _slot(v, 1, off, end, ts, ho, he);
   _ar[b] = id; _h1[b] = _alt; _tb[b] = _tbit;${buStoreTs(plan)}${synKept(plan).map((k) => ` if (_SYE[${k}]![id]) _sy[${k}]![b] = _ys[${k}];`).join('')}
 }

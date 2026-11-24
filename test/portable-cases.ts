@@ -614,8 +614,8 @@ export const CASES: Case[] = [
     // Three declared contexts in one grammar (see the fixture): star targets for `=`, a single
     // target for `+=`, del targets for `del`, each checked by a target() marker after the head.
     grammar: 'startargets', path: './fixtures/startargets.ts',
-    accept: ['a = 1;', 'a, b = x;', 'a, *b = x;', '[a, *b] = x;', '(a, b) = x;', 'a.b, c[0] = x;', 'a += 1;', 'a.b += 1;', '(a) += 1;', 'del a;', 'del a, b.c;', 'del [a, (b)];', 'a + b;', 'f();', '*a, b;', 'a, = x;', 'x = a, *b;'],
-    reject: ['a + b = x;', 'f() = x;', '[a, b] += x;', '*a += x;', 'a, b += x;', 'del *a;', 'del a + b;', 'del f();', '1 = x;', '[a + 1] = x;', '(a, f()) = x;', 'del (*a);'],
+    accept: ['a = 1;', 'a, b = x;', 'a, *b = x;', '[a, *b] = x;', '(a, b) = x;', 'a.b, c[0] = x;', 'a += 1;', 'a.b += 1;', '(a) += 1;', 'del a;', 'del a, b.c;', 'del [a, (b)];', 'a + b;', 'f();', '*a, b;', 'a, = x;', 'x = a, *b;', 'a = b.c = x;', 'a, b = [c] = x;'],
+    reject: ['a + b = x;', 'f() = x;', '[a, b] += x;', '*a += x;', 'a, b += x;', 'del *a;', 'del a + b;', 'del f();', '1 = x;', '[a + 1] = x;', '(a, f()) = x;', 'del (*a);', 'a = f() = x;', 'a = b += x;', 'a += b = x;'],
   },
   {
     // The REAL javascript.ts grammar — the proof
@@ -1106,8 +1106,10 @@ export const CASES: Case[] = [
       // literal id): each parses differently, or not at all, where the text is taken as the literal
       "x = <a>if (x) {'{'}</a>;", 'x = <a>return</a>;', 'x = <a>function</a>;', 'x = <a>;</a>;', 'x = <a>class</a>;',
       'x = <a>{b}if{c}</a>;', 'x = <a><b>{c};</b>)</a>;', 'x = <a>as</a> as T;', 'x = <a>,</a>, 1;',
+      // after a member accessor (`?.`) a name follows, no operand: its `<` opens no element
+      'a?.<T>(x);', 'x = a?.<T>(x) < b;', 'x = a?.<T>(<b/>);',
     ],
-    reject: ['x = <a>=></a>;', 'x = <a x=<b/> />;', 'x = <a>}</a>;', 'x = <a>></a>;', 'x = <b>{x}</b>\n/re/.test(y);', 'x = <a/>\n<b/>;', 'x = <a>;', 'x = </a>;',
+    reject: ['a.<T>(x);', 'x = a?.<b/>;', 'x = <a>=></a>;', 'x = <a x=<b/> />;', 'x = <a>}</a>;', 'x = <a>></a>;', 'x = <b>{x}</b>\n/re/.test(y);', 'x = <a/>\n<b/>;', 'x = <a>;', 'x = </a>;',
       // lexer errors: at the last character, inside a template hole inside an element hole, inside
       // an undecided type-parameter signature, and inside one nested in another (the outer's verdict)
       'x = <a/>;#', 'x = <a>{`${<b>{`${"}`}</b>}`}</a>;', 'f = <T,>(x: #', 'f = <T,>(x: <U,>(#', 'f = <T,>(x: <U,>(y: `${#'],
