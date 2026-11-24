@@ -222,7 +222,6 @@ type Side = 'js' | 'py';
 type Class = { id: string; disposition: Disposition; test: (r: Row) => boolean; note: string; side?: Side };
 const PY_CLASSES: Class[] = [
   { id: 'py-fstring-fields', disposition: 'lexer', note: 'an f-string is lexed as a plain string: its replacement fields are not parsed (python.ts header)', test: (r) => r.we && /f"\{/.test(r.src) },
-  { id: 'py-star-operand-level', disposition: 'grammar', note: '`*` takes a bitwise_or, not a comparison (`*a < b`): atLevel, land/python-m4-capped-prefix', test: (r) => r.we && /\*a (==|!=|<|<=|>|>=|in|not in|is|is not) /.test(r.src) },
 ];
 const CLASSES: Class[] = [
   { id: 'arrow-body-ctx', disposition: 'grammar', note: 'an arrow ExpressionBody is [~Yield], [~Await]', test: (r) => /=> (yield|await)/.test(r.src) },
