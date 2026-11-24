@@ -2213,6 +2213,7 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
   const lr = buildLr(graph, { preempts: startMarkers.preempts });
   const after = cands.map(() => new Set<string>()), cont = cands.map(() => new Set<string>());
   const together: number[][] = [];   // the candidates SHIFTED in one state, per state where several are
+  const reached = new Set<number>();   // the candidates valid in some state
   const afterGuards = cands.map(() => new Map<string, Set<string>>());
   const idOf = (t: string) => t.startsWith('@zw') ? +t.slice(3) : -1;
   const valid = lr.states.map((_, s) => lr.valid(s));
@@ -2250,6 +2251,7 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
     for (const t of valid[s]) {
       const i = idOf(t);
       if (i < 0) continue;
+      reached.add(i);
       for (const u of extends_) if (idOf(u) < 0) cont[i].add(u);
     }
     const shifted = [...st.goto.keys()].map(idOf).filter(i => i >= 0);
@@ -2268,14 +2270,18 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
       }
     }
   });
-  return { after, cont, afterGuards, together };
+  return { after, cont, afterGuards, together, reached };
   };
   // A keyword the word token can also lex (one no reserved set excludes from it everywhere).
   const wordShaped = (t: string) => t === word || (t.startsWith("'") && isWordLiteral(t.slice(1)) && !reserved.has(t.slice(1)));
   const meets = (a: Set<string>, b: Set<string>) =>
     [...a].some(t => b.has(t)) || (!!word && ((a.has(word) && [...b].some(wordShaped)) || (b.has(word) && [...a].some(wordShaped))));
-  const rejects = (i: number, r: ReturnType<typeof analyze>) =>
-    !r.after[i].size || (cands[i].kind === 'same-line' ? meets(r.after[i], r.cont[i]) : (!!word && r.cont[i].has(word)));
+  // A candidate valid in no state sits in an arm no input reaches (one a start marker shadows:
+  // TypeScript's `declare function` arm, which `declare` + marker + declaration takes): its token
+  // is rendered and never returned, as the arm is never taken; dropping it would render the arm
+  // without its line end.
+  const rejects = (i: number, r: ReturnType<typeof analyze>) => r.reached.has(i) && (
+    !r.after[i].size || (cands[i].kind === 'same-line' ? meets(r.after[i], r.cont[i]) : (!!word && r.cont[i].has(word))));
   // A dropped candidate renders as nothing, which changes what the others can see (a postfix `!`
   // whose marker is dropped is a direct continuation): analyze again until nothing more drops.
   const live = new Set(cands.map((_, i) => i));
