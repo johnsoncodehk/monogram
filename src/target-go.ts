@@ -1959,7 +1959,9 @@ func (p *${recv}) dfix(q int, ok bool) bool {
 \t}
 \treturn true
 }
-${ir.rules.filter((r): r is PrattRule => r.kind === 'pratt' && demandLids(r, ids, D).length > 0).map((r) => `func (p *${recv}) demand_${r.name}(op, form, p0, stop int) bool {
+${ir.rules.filter((r): r is PrattRule => r.kind === 'pratt' && demandLids(r, ids, D).length > 0).map((r) => `// cold: reached only by a left operand with a twin number
+//go:noinline
+func (p *${recv}) demand_${r.name}(op, form, p0, stop int) bool {
 \tif ${demandLids(r, ids, D).map((l) => `op != ${l}`).join(' && ')} { return true }
 \treturn p.twinForm(int((form>>${DEFER_SHIFT})&7) - 1, p0, stop)&${D.pass} != 0
 }`).join('\n')}`;
