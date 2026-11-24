@@ -20,7 +20,7 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createParser } from '../src/interpreter.ts';
-import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
+import { compileTokenizer, lexSpecOf } from '../src/lexer.ts';
 import { emitParser } from '../src/target.ts';
 import { jsTarget } from '../src/target-js.ts';
 import { objectify, type TreeView } from './emitted-obj.ts';

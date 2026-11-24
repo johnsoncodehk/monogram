@@ -14,7 +14,7 @@ import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import vm from 'node:vm';
 import { token, rule, defineGrammar, many, opt, alt, sep, seq, plus, oneOf, range, star, noneOf, never } from '../src/api.ts';
-import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
+import { compileTokenizer, lexSpecOf } from '../src/lexer.ts';
 import { createParser } from '../src/interpreter.ts';
 import { emitParser } from '../src/target.ts';
 import { jsTarget } from '../src/target-js.ts';

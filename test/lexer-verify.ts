@@ -1,4 +1,4 @@
-// Gate: the generated lexer (emit-lexer.ts — the only lexer implementation) reproduces
+// Gate: the generated lexer (lexer.ts — the only lexer implementation) reproduces
 // the frozen behavioural baseline in test/golden/lexer/. Each golden file holds one lexer
 // spec (tokens, literals, markup / indent / newline config) and the token streams — or the
 // exact error message — the former data-driven lexer (createLexer) produced for every input the
@@ -11,15 +11,15 @@
 //      lexer scans every '>' alone where its grammar composes '>'-led operators in the parser
 //      (gtComposites), so a golden token holding such an operator is expected as one single-
 //      character punctuation token per character, the first carrying the golden flags.
-//   node test/emit-lexer-verify.ts
+//   node test/lexer-verify.ts
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { compileTokenizer, type LexSpec, type Token } from '../src/emit-lexer.ts';
+import { compileTokenizer, type LexSpec, type Token } from '../src/lexer.ts';
 import { emitParser } from '../src/target.ts';
 import { jsTarget } from '../src/target-js.ts';
 import { gtComposites } from '../src/grammar-utils.ts';
 import { scratchDir } from './scratch.ts';
 
-const TMP = scratchDir('emit-lexer-verify');
+const TMP = scratchDir('lexer-verify');
 
 type Golden = { spec: LexSpec & { name: string | null }; types: string[]; cases: [string, number[] | string][] };
 const DIR = new URL('./golden/lexer/', import.meta.url);
@@ -96,7 +96,7 @@ for (const name of ['typescript', 'typescriptreact', 'javascript', 'javascriptre
 // IdentifierPart run after it, ASCII included (`naïve`, `aé$`).
 {
   const { token, rule, defineGrammar, seq, oneOf, range, star, many } = await import('../src/api.ts');
-  const { lexSpecOf } = await import('../src/emit-lexer.ts');
+  const { lexSpecOf } = await import('../src/lexer.ts');
   const Ident = token(seq(oneOf(range('a', 'z'), '_'), star(oneOf(range('a', 'z'), range('0', '9'), '_'))), { identifier: true });
   const P = rule(() => [[many(Ident)]]);
   const tokenize = compileTokenizer(lexSpecOf(defineGrammar({ name: 'idtoy', tokens: { Ident }, rules: { P } })));

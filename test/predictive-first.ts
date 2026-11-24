@@ -21,7 +21,7 @@
 //   node test/predictive-first.ts
 import { readdirSync } from 'node:fs';
 import { portableIR, type ParserIR, type Step, type FirstSig } from '../src/parser-ir.ts';
-import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
+import { compileTokenizer, lexSpecOf } from '../src/lexer.ts';
 import type { Grammar } from '../src/types.ts';
 
 const ROOT = new URL('..', import.meta.url).pathname;

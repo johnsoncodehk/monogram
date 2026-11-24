@@ -102,7 +102,7 @@ static bool scan_regex(TSLexer *lexer) {
 // ── Template-literal scan ───────────────────────────────────────
 // Scans the literal run of characters inside a template, stopping just
 // before the closing delimiter or before an interpolation hole, so a
-// `${ … }` hole re-enters the expression grammar (mirrors emit-lexer.ts's
+// `${ … }` hole re-enters the expression grammar (mirrors lexer.ts's
 // scanTemplateSpan). The closing delimiter, the hole opener, and the hole
 // closer are ordinary anonymous tokens matched by the CFG.
 //

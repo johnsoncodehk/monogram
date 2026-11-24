@@ -37,7 +37,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createParser } from '../src/interpreter.ts';
-import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
+import { compileTokenizer, lexSpecOf } from '../src/lexer.ts';
 import { emitParser, type EmitOptions, type Target } from '../src/target.ts';
 import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
@@ -463,7 +463,7 @@ export const LINE_TERMINATORS: string[] = ['\n', '\r', '\u2028', '\u2029', '\r\n
   `x${t}++y`, `a = \`x${t}y\`;`, `a = \`\${b // c${t}}\`;`, `/* c${t} */ x`,
 ]);
 
-/** Primary lexer-error text shared with the generated lexer (emit-lexer.ts). */
+/** Primary lexer-error text shared with the generated lexer (lexer.ts). */
 export function primaryLexMsg(err?: string): string | null {
   if (!err) return null;
   const u = err.match(/Unterminated template literal at offset \d+|Invalid escape sequence in template at offset \d+|Invalid identifier escape at offset \d+: '[^']*'/);

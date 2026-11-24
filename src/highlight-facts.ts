@@ -15,7 +15,7 @@ import { collectLiterals, escapeRegex, isKeywordLiteral } from './grammar-utils.
 import { analyzeGrammar } from './grammar-analysis.ts';
 import { expandArms } from './region-view.ts';   // small bodies only: getTypeParamElementKeywords, prefixPairKeywords
 import { armGraph, armOrderKey, compareArmOrder, findWindows, foldArmsFrom, hasWindow, inArmOrder, reachable, reachesThrough, sortInArmOrder, type ArmGraph } from './arm-graph.ts';
-import { compileTokenizer, lexSpecOf } from './emit-lexer.ts';
+import { compileTokenizer, lexSpecOf } from './lexer.ts';
 import { classifyToken } from './highlight-roles.ts';
 import { info as patternInfo, type CSet } from './lex-match-plan.ts';
 import { tokenPatternBlockDelimiterSources, tokenPatternBlockDelimiters, tokenPatternEqualsPattern, tokenPatternIsNever, tokenPatternLeadingSource, tokenPatternLiteralPrefix, tokenPatternNodeContainsLiteral, tokenPatternPrefixBeforeTrailingLookahead, tokenPatternQuoteDelimAndEscape, tokenPatternSource, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';

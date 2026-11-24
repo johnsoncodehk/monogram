@@ -7,7 +7,7 @@ import { tokenPatternStartsWithDecimal } from '../src/token-pattern.ts';
 import { createParser } from '../src/interpreter.ts';
 import { generateLanguageConfig } from '../src/gen-vscode-config.ts';
 import { generateTmLanguage } from '../src/gen-tm.ts';
-import { emitTokenizerModule, lexSpecOf } from '../src/emit-lexer.ts';
+import { emitTokenizerModule, lexSpecOf } from '../src/lexer.ts';
 
 const Word = token(plus(range('a', 'z')), { identifier: true });   // identifier token, ASCII-only on purpose, NOT named "Ident"
 const digit = range('0', '9');

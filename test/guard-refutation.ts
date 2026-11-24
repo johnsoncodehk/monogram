@@ -20,7 +20,7 @@
 import { readdirSync } from 'node:fs';
 import { portableIR, buildLexIdPlan, type ParserIR, type Guard, type TokenSet } from '../src/parser-ir.ts';
 import { analyzeGrammar, hasMarker } from '../src/grammar-analysis.ts';
-import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
+import { compileTokenizer, lexSpecOf } from '../src/lexer.ts';
 import { createParser } from '../src/interpreter.ts';
 import { collectLiterals } from '../src/grammar-utils.ts';
 import type { Grammar, RuleExpr, RuleDecl } from '../src/types.ts';

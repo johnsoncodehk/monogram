@@ -4,7 +4,7 @@
 // token with the characters below: a run starting at a non-ASCII ID_Start character is an
 // identifier, and an ID_Continue run extends an identifier the ASCII pattern cut short
 // (caf|é → café). The two classes are defined once, here, as RegExp sources: the interpreter's
-// lexer (emit-lexer.ts) and the TS target compile them; Go and Rust print `uniIdentPlan()`,
+// lexer (lexer.ts) and the TS target compile them; Go and Rust print `uniIdentPlan()`,
 // a table derived from the same classes by Node's own Unicode property support at generation
 // time, so no character data is kept by hand and every target follows the interpreter's Unicode.
 // A grammar may declare other classes on its identifier token (`identifierClasses`, e.g. Python's

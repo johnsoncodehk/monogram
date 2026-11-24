@@ -17,7 +17,7 @@ in the [README](../README.md#what-you-get).
 
 **Why.** There are two execution paths today besides the interpreter (`src/interpreter.ts`, the
 reference): the emitted JavaScript parser (`jsTarget`: `src/target-js.ts`, with the lexer
-emitter in `src/emit-lexer.ts`) and the portable targets (`tsTarget`, `goTarget`,
+emitter in `src/lexer.ts`) and the portable targets (`tsTarget`, `goTarget`,
 `rustTarget`: `src/parser-ir.ts` plus one printer each in `src/target-*.ts`). The shared
 layer of the portable targets covers the analysis, the parse plan (`ParserIR`), the token
 scanners (`src/lex-family.ts`, `src/lex-match-plan.ts`) and the re-lex family
@@ -62,7 +62,7 @@ Who depends on `jsTarget` in this repository: the gates `recovery`, `multi-doc`,
 `nullable-rules`, `conformance/html` (engine parity), the JS rows of `alloc-work`, and the
 benches `test/head-to-head.ts` and `test/recovery-conformance.ts`. The project listed under
 "Used by" ships the TextMate grammars and the language configuration, not a parser. The
-interpreter and several gates use `compileTokenizer` from `src/emit-lexer.ts` as their lexer,
+interpreter and several gates use `compileTokenizer` from `src/lexer.ts` as their lexer,
 so that part of the file is not retired with `jsTarget`.
 
 **Done means:** the three printers hold only their language's spelling (syntax, type spelling,
