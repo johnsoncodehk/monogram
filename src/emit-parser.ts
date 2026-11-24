@@ -697,8 +697,8 @@ class Emitter {
         // level, as a prefix operator's operand is (gen-parser.ts matchExpr 'group').
         const lvl = this.a.atLevelBp(expr);
         if (lvl !== null) {
-          const name = (expr.body as { name: string }).name, v = this.id();
-          return `{ let ${v} = ${this.ruleFn(name)}_pratt(${lvl}); if (${v} < 0 && recovering) ${v} = missRule(${this.a.grammar.rules.findIndex((r) => r.name === name)}); if (${v} < 0) { ${onFail} } scPush(${v}); }`;
+          const name = (expr.body as { name: string }).name;
+          return `if (!parseRuleEntry(${this.memoIndex(name)}, ${this.a.grammar.rules.findIndex((r) => r.name === name)}, ${this.ruleFn(name)}_pratt, ${lvl})) { ${onFail} }`;
         }
         // A suppress-carrying group stages the LED-connector exclusion for the next
         // parseRule (the index of its connector set, grammar-analysis suppressSets), then
@@ -2454,10 +2454,12 @@ function emitDriver(e: Emitter, a: ReturnType<typeof analyze>, entry: string) {
 // and SECOND-token reads past it. Left-to-right parsing keeps the watermark near the
 // current frontier, so the value is tight on the dominant flow and only OVER-
 // invalidates (soundly) near big-backtrack clusters.
-function parseRuleEntry(idx: number, rid: number, core: (minBp: number) => number) {
+// bp > 0: the rule read at an operator's level (atLevel): no memo (it is keyed by position only),
+// the enclosing frame's no-in context kept, the recovery cycle refusal as for any entry.
+function parseRuleEntry(idx: number, rid: number, core: (minBp: number) => number, bp = 0) {
   const mySup = suppressNext;
   suppressNext = 0;
-  const capped = parseLimit >= 0;
+  const capped = parseLimit >= 0 || bp !== 0;
   const start = pos;
   let me = memoEnd[idx];
   let mn = memoNode[idx];
@@ -2564,14 +2566,14 @@ function parseRuleEntry(idx: number, rid: number, core: (minBp: number) => numbe
     recRunning.set(recKey, mySerial);
   }
   const prevSup = suppressCur;
-  suppressCur = mySup;
+  if (bp === 0) suppressCur = mySup;
   const fm0 = frameMax;
   frameMax = start;
   const cm0 = cycleMinSerial;
   if (recKey >= 0) cycleMinSerial = 0x7fffffff;
   let result;
   try {
-    result = core(0);
+    result = core(bp);
   } finally {
     suppressCur = prevSup;
     if (recKey >= 0) recRunning.delete(recKey);
