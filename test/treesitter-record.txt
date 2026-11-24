@@ -628,4 +628,3 @@ typescriptreact | operands | brackets | type-continuation-across-line-break | "x
 typescriptreact | reserved words | accepts | unclassified | "import { if } from \"m\";"
 typescriptreact | reserved words | accepts | unclassified | "x = { if };"
 typescriptreact | reserved words | rejects | unclassified | "class C { static() {} }"
-typescriptreact | type arguments | accepts | optional-typed-call-interpreter-rejects-in-tsx | "a?.<T>(x);"
