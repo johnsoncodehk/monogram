@@ -226,7 +226,8 @@ export const rsShapeCall = (name: string): boolean => name.startsWith('cook_') |
  * parameter `s`, the engine's child stack itself (Builder::finish_arm passes it; nothing is copied). */
 export const RS_SLOT: Record<string, (a: string[]) => string> = {
   slot_tag: ([i]) => `(s[${i}].tag as isize)`, slot_off: ([i]) => `s[${i}].off`, slot_end: ([i]) => `s[${i}].end`,
-  slot_val: ([i]) => `s[${i}].w`, slot_top: () => 's.len()', slot_syn: ([k, i]) => `s[${i}].sy[${k} as usize]`,
+  slot_val: ([i]) => `s[${i}].w`, slot_top: () => 's.len()',
+  slot_syn: ([k, i]) => { const j = cur().plan.syn.filter((a, x) => x < +k! && a.slotRead).length; if (!/^\d+$/.test(k!) || !cur().plan.syn[+k!]?.slotRead) throw new Error(`rust shape: slot_syn of attribute ${k}, not kept per slot`); return `s[${i}].sy[${j}]`; },
   slot_arm_name: ([i]) => `(T_STRI | SH_ARM_NAME[s[${i}].arm as usize] as u64)`,
   slot_find: (a) => `slot_find(s, ${a.join(', ')})`, slot_find_last: (a) => `slot_find_last(s, ${a.join(', ')})`,
   slot_at: (a) => `slot_at(s, ${a.join(', ')})`, named_end: (a) => `named_end(s, ${a.join(', ')})`,
@@ -302,6 +303,14 @@ function typedDecls(st: RsShape): string {
 export function rsShapeRuntime(st: RsShape, fns: string): string {
   const plan = st.plan, T = st.types;
   const nsyn = plan.syn.length;
+  // A slot keeps only what a plan reads off it: the synthesized attributes some arm reads off a
+  // child (slotRead), the arm only when a plan reads its name.
+  const kept = plan.syn.flatMap((a, k) => (a.slotRead ? [k] : []));
+  const armRead = fns.includes('SH_ARM_NAME[s[');
+  const syF = kept.length ? `, sy: [W; ${kept.length}]` : '';
+  const syOf = (ys: string): string => (kept.length ? `, sy: [${kept.map((k) => `${ys}[${k}]`).join(', ')}]` : '');
+  const syDflt = kept.length ? `, sy: [${kept.map((k) => `SH_SYN0[${k}]`).join(', ')}]` : '';
+  const armOf = (a: string): string => (armRead ? `, arm: ${a}` : '');
   const tplMiss = intern(st, 'unsupported node (an interpolated template)');
   const synDefault = plan.syn.map((a) => (a.dflt === undefined || a.dflt === null ? 'W_NULL' : typeof a.dflt === 'string' ? `(T_STRI | ${intern(st, a.dflt)})` : typeof a.dflt === 'number' ? `w_num(${f64Lit(a.dflt)})` : a.dflt ? 'W_TRUE' : 'W_FALSE'));
   const synArms = plan.arms.filter((x) => plan.syn.some((a) => a.fns[x.id] !== null));
@@ -400,11 +409,12 @@ fn json_str(value: &str, out: &mut String) {
 }
 ${decls}
 
-/// One child-stack slot: its value word, grammar tag (-1: none), engine arm (-1: a leaf or marker),
-/// span, head span and synthesized attributes.
+/// One child-stack slot: its value word, grammar tag (-1: none), span and head end (the head starts
+/// where the slot does), and only what a plan reads off it: its engine arm (-1: a leaf or marker)
+/// and the synthesized attributes read off a child.
 #[derive(Clone, Copy)]
-pub struct Slot { w: W, tag: i32, arm: i32, off: u32, end: u32, ho: u32, he: u32, sy: [W; ${nsyn}] }
-impl Default for Slot { fn default() -> Self { Slot { w: W_ABSENT, tag: -1, arm: -1, off: 0, end: 0, ho: 0, he: 0, sy: SH_SYN0 } } }
+pub struct Slot { w: W${syF}, off: u32, end: u32, he: u32, tag: i32${armRead ? ', arm: i32' : ''} }
+impl Default for Slot { fn default() -> Self { Slot { w: W_ABSENT${syDflt}, off: 0, end: 0, he: 0, tag: -1${armOf('-1')} } } }
 // The plans' slot searches over the arm's slots s (RS_SLOT prints the other reads in place).
 fn slot_find(s: &[Slot], lo: usize, hi: usize, t0: isize, t1: isize) -> isize { for i in lo..hi { let t = s[i].tag as isize; if t >= t0 && t <= t1 { return i as isize; } } -1 }
 fn slot_find_last(s: &[Slot], lo: usize, hi: usize, t0: isize, t1: isize) -> isize { for i in (lo..hi).rev() { let t = s[i].tag as isize; if t >= t0 && t <= t1 { return i as isize; } } -1 }
@@ -503,30 +513,30 @@ impl<'s> Builder for Ast<'s> {
     type H = Slot;
     #[inline(always)]
     fn leaf(&mut self, scratch: &mut Vec<Slot>, _tt_id: u16, _tok_idx: u32, off: u32, end: u32) -> bool {
-        scratch.push(Slot { w: W_ABSENT, tag: -1, arm: -1, off, end, ho: off, he: end, sy: SH_SYN0 });
+        scratch.push(Slot { w: W_ABSENT${syDflt}, off, end, he: end, tag: -1${armOf('-1')} });
         true
     }
     fn node(&mut self, scratch: &mut Vec<Slot>, sb: usize, rule_id: u16, off: u32, end: u32, _tok_start: u32, _tok_end: u32) {
-        let (ho, he) = if scratch.len() > sb { (scratch[sb].ho, scratch[sb].he) } else { (off, off) };
+        let he = if scratch.len() > sb { scratch[sb].he } else { off };
         let id = rule_id as usize;
-        if SH_DEBUG { eprintln!("node arm {} {:?} slots {:?}", id, SH_ARM_NAME.get(id).map(|&i| SH_CONST[i as usize]), scratch[sb..].iter().map(|x| (x.tag, x.arm, x.off, x.end)).collect::<Vec<_>>()); }
+        if SH_DEBUG { eprintln!("node arm {} {:?} slots {:?}", id, SH_ARM_NAME.get(id).map(|&i| SH_CONST[i as usize]), scratch[sb..].iter().map(|x| (x.tag, x.off, x.end)).collect::<Vec<_>>()); }
         let w = self.construct(id, &scratch[..], sb, off, end);
         scratch.truncate(sb);
-        scratch.push(Slot { w, tag: -1, arm: id as i32, off, end, ho, he, sy: self.ys });
+        scratch.push(Slot { w${syOf('self.ys')}, off, end, he, tag: -1${armOf('id as i32')} });
     }
     /// The finish of the arm A an accept site names: its construct plan reads the child stack in
     /// place, and its slot is returned (not pushed: the caller pushes what it keeps).
     #[inline(always)]
     fn finish_arm<const A: u16>(&mut self, scratch: &mut Vec<Slot>, sb: usize, fallback_off: u32, _tok_start: u32, _tok_end: u32, _toks: &[Tok]) -> (Slot, u32, bool) {
         let n = scratch.len();
-        let (off, end, ho, he) = if n > sb { (scratch[sb].off, scratch[n - 1].end, scratch[sb].ho, scratch[sb].he) } else { (fallback_off, fallback_off, fallback_off, fallback_off) };
-        if SH_DEBUG { eprintln!("node arm {} {:?} slots {:?}", A, SH_ARM_NAME.get(A as usize).map(|&i| SH_CONST[i as usize]), scratch[sb..].iter().map(|x| (x.tag, x.arm, x.off, x.end)).collect::<Vec<_>>()); }
+        let (off, end, he) = if n > sb { (scratch[sb].off, scratch[n - 1].end, scratch[sb].he) } else { (fallback_off, fallback_off, fallback_off) };
+        if SH_DEBUG { eprintln!("node arm {} {:?} slots {:?}", A, SH_ARM_NAME.get(A as usize).map(|&i| SH_CONST[i as usize]), scratch[sb..].iter().map(|x| (x.tag, x.off, x.end)).collect::<Vec<_>>()); }
         let w = self.construct_arm::<{ A }>(&scratch[..], sb, off, end);
         scratch.truncate(sb);
-        (Slot { w, tag: -1, arm: A as i32, off, end, ho, he, sy: self.ys }, off, true)
+        (Slot { w${syOf('self.ys')}, off, end, he, tag: -1${armOf('A as i32')} }, off, true)
     }
     #[inline(always)] fn span_of(&self, h: Slot, _toks: &[Tok]) -> (u32, u32) { (h.off, h.end) }
-    #[inline(always)] fn head_span(&self, h: Slot, _toks: &[Tok]) -> (u32, u32) { (h.ho, h.he) }
+    #[inline(always)] fn head_span(&self, h: Slot, _toks: &[Tok]) -> (u32, u32) { (h.off, h.he) }
     #[inline(always)] fn checkpoint(&self) -> (usize, usize) { (self.slab.len(), self.owned.len()) }
     #[inline(always)] fn restore(&mut self, ck: (usize, usize)) { self.slab.truncate(ck.0); self.owned.truncate(ck.1); }
     fn dummy_h() -> Slot { Slot::default() }
@@ -534,8 +544,8 @@ impl<'s> Builder for Ast<'s> {
     fn tok_range(&self, _h: Slot) -> (u32, u32) { (0, 0) }
     #[inline(always)] fn tag(&mut self, scratch: &mut Vec<Slot>, t: i32) { let n = scratch.len(); scratch[n - 1].tag = t; }
     fn mark(&mut self, scratch: &mut Vec<Slot>, c: usize, mt: i32) {
-        let mut m = if scratch.len() > c { scratch[c] } else { Slot { ho: 0, he: 0, ..Slot::default() } };
-        m.w = W_ABSENT; m.tag = mt; m.arm = -1; m.end = m.off; m.sy = SH_SYN0;
+        let mut m = if scratch.len() > c { scratch[c] } else { Slot::default() };
+        m.w = W_ABSENT; m.tag = mt;${armRead ? ' m.arm = -1;' : ''} m.end = m.off;${kept.length ? ` m.sy = [${kept.map((k) => `SH_SYN0[${k}]`).join(', ')}];` : ''}
         scratch.insert(c, m);
     }
 }
