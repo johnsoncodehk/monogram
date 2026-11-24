@@ -89,10 +89,11 @@ function analyze(grammar: CstGrammar) {
       if (it.length > 0 && it[0].type !== 'op' && it[0].type !== 'postfix') {
         const last = it[it.length - 1];
         const lastIsOperand = selfRefName(last, ruleName);
-        const wordConnector = it[0].type === 'literal' && /^[A-Za-z]/.test(it[0].value);
+        const conn = it[0].type === 'sameLine' ? it[1] : it[0];
+        const wordConnector = conn?.type === 'literal' && /^[A-Za-z]/.test(conn.value);
         if (!lastIsOperand && !wordConnector) isAccessTail = true;
         // Only an access tail extends an access tail; a lookahead-ended LED closes it too.
-        if (!isAccessTail || last.type === 'not') isTailClosing = true;
+        if (!isAccessTail || (last.type === 'not' && last.body.type !== 'not')) isTailClosing = true;   // a NEGATIVE lookahead (gen-parser.ts negativeLook)
       }
       accessTail.push(isAccessTail);
       tailClosing.push(isTailClosing);
@@ -1544,6 +1545,10 @@ let rowNF = new Int32Array(8192).fill(0x7fffffff);
 // 'succeed' over broken text and wipe its diagnostics). Recovering passes adopt
 // these rows freely.
 let rowRM = new Uint8Array(8192);
+// Per row of a Pratt rule's result: 1 iff the node is CAPPED (_prattCapped at its return). A memo
+// hit or an adopted row restores the flag from here, so a construct that reads it after a
+// trailing self operand (cap propagation) sees what a fresh parse would.
+let rowCapped = new Uint8Array(8192);
 function ktr(p: number, k: number) { const v = kidTokRel[k]; return v < 0 ? v + rowTokLen[p] + 1 : v; }
 function kcr(p: number, k: number) { const v = kidRel[k]; return v < 0 ? v + rowLen[p] + 1 : v; }
 // transient BUILD coordinates (absolute), valid for rows completed in the current
@@ -1589,6 +1594,7 @@ function growRows() {
   const kc = new Uint8Array(rowCap); kc.set(rowKC); rowKC = kc;
   const nf = new Int32Array(rowCap).fill(0x7fffffff); nf.set(rowNF.subarray(0, nodeN)); rowNF = nf;
   const rm = new Uint8Array(rowCap); rm.set(rowRM.subarray(0, nodeN)); rowRM = rm;
+  const cp = new Uint8Array(rowCap); cp.set(rowCapped.subarray(0, nodeN)); rowCapped = cp;
   const ac = new Int32Array(rowCap); ac.set(absChar); absChar = ac;
   const at = new Int32Array(rowCap); at.set(absTok); absTok = at;
 }
@@ -1648,6 +1654,7 @@ function finishNode(rid: number, mark: number) {
   rowKC[id] = 0;
   rowNF[id] = 0x7fffffff;
   rowRM[id] = 0;
+  rowCapped[id] = 0;
   // recovery-made propagation: STRUCTURAL, bitwise — bit 1: a kid is (or contains)
   // an $error row; bit 2: a kid's result is context-tainted (the cycle sentinel)
   // and must not be reused outside its own parse. Batch parses never enter this.
@@ -1700,6 +1707,7 @@ function finishWrap(rid: number, lhsId: number, mark: number) {
   rowKC[id] = 0;
   rowNF[id] = 0x7fffffff;
   rowRM[id] = 0;
+  rowCapped[id] = 0;
   // recovery-made propagation: STRUCTURAL, bitwise — bit 1: a kid is (or contains)
   // an $error row; bit 2: a kid's result is context-tainted (the cycle sentinel)
   // and must not be reused outside its own parse. Batch parses never enter this.
@@ -2002,7 +2010,19 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
   });
   e.emit(`function ${ruleFn}_lr(_minBp: number) {`);
   e.emit(`  const saved = pos; const mark = scn;`);
-  e.emit(`  let node = -1; let bestAtomPos = saved;`);
+  // The access-tail closure parseLeftRec applies (the Pratt rule's, over the continuations): an
+  // atom ending in a fresh operand of this rule closes the tail, so does a tail-closing
+  // continuation, and an access-tail continuation extends only an open one.
+  const selfRef = (x: RuleExpr | undefined) => x?.type === 'ref' && x.name === rule.name;
+  const tailOf = (it: RuleExpr[]) => {
+    if (it.length === 0 || it[0].type === 'op' || it[0].type === 'postfix') return { access: false, closing: false };
+    const conn = it[0].type === 'sameLine' ? it[1] : it[0];
+    const last = it[it.length - 1];
+    const lastIsOperand = selfRef(last);
+    const access = !lastIsOperand && !(conn?.type === 'literal' && /^[A-Za-z]/.test(conn.value));
+    return { access, closing: !access || (last.type === 'not' && last.body.type !== 'not') };
+  };
+  e.emit(`  let node = -1; let bestAtomPos = saved; let tailClosed = false;`);
   const atomDispatch = e.altMaskDispatch(atoms, '_am');
   if (atomDispatch) e.emit(`  ${atomDispatch.maskInit}`);
   atoms.forEach((atom, i) => {
@@ -2010,7 +2030,7 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
     e.emit(`    pos = saved; scn = mark;`);
     e.emit(`    if (atom_${sanitize(rule.name)}_${i}() && pos > bestAtomPos) {`);
     e.emit(`      node = finishNode(${rid}, mark);`);
-    e.emit(`      bestAtomPos = pos;`);
+    e.emit(`      bestAtomPos = pos; tailClosed = ${selfRef((atom.type === 'seq' ? atom.items : [atom]).at(-1))};`);
     e.emit(`    }`);
     e.emit(`  }`);
   });
@@ -2023,7 +2043,7 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
     e.emit(`    pos = contSaved; scn = contMark;`);
     // notLeftLeaf head-leaf gate: skip this continuation when the LEFT node's outermost (head) leaf
     // text is in its word set (e.g. `void`/`null`/`this` can't be `.`-qualified as a type).
-    const gate = contNotLeftLeaf[i] ? `!_NLLC_${sn}_${i}.has(_headLeafText(node)) && ` : '';
+    const gate = `${tailOf(cont).access ? '!tailClosed && ' : ''}${contNotLeftLeaf[i] ? `!_NLLC_${sn}_${i}.has(_headLeafText(node)) && ` : ''}`;
     e.emit(`    { let ok = ${gate}cont_${sanitize(rule.name)}_${i}();`);
     if (contMix[i]) {
       e.emit(`      if (!ok) { pos = contSaved; scn = contMark; ok = matchMixfixLed_${sanitize(rule.name)}_cont_${i}(); }`);
@@ -2032,7 +2052,7 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
     // would never terminate this loop) — discard it or the loop spins.
     e.emit(`      if (ok && pos === contSaved) { scn = contMark; ok = false; }`);
     e.emit(`      if (ok) {`);
-    e.emit(`        node = finishWrap(${rid}, node, contMark);`);
+    e.emit(`        node = finishWrap(${rid}, node, contMark);${tailOf(cont).closing ? ' tailClosed = true;' : ''}`);
     e.emit(`        continue outer;`);
     e.emit(`      } }`);
   });
@@ -2114,8 +2134,10 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       e.emit(`      bestNudPos = pos;`);
       // A NUD ending in a fresh operand of this rule (`... $`) closes the access tail.
       e.emit(`      nudClosed = ${items[items.length - 1]?.type === 'ref' && (items[items.length - 1] as { name: string }).name === rule.name};`);
-      // The LONGEST match wins; record whether THAT winner is capped.
-      if (anyCapped) e.emit(`      capped = ${capBp !== null ? 'true' : 'false'};`);
+      // The LONGEST match wins; record whether THAT winner is capped: a capped arm, or one whose
+      // trailing self operand returned capped (`...() => {}`: cap propagation, as the led below).
+      const endsSelf = items[items.length - 1]?.type === 'ref' && (items[items.length - 1] as { name: string }).name === rule.name;
+      if (anyCapped) e.emit(`      capped = ${capBp !== null ? 'true' : endsSelf ? '_prattCapped' : 'false'};`);
       e.emit(`    }`);
     }
     e.emit(`  }`);
@@ -2125,7 +2147,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`  pos = bestNudPos;`);
   // A capped NUD (assignment-level arrow) admits no led: return it as-is so a trailing
   // tighter operator stays unconsumed and the enclosing parse rejects (`() => {} || a`).
-  if (anyCapped) e.emit(`  if (capped) { _prattCapped = true; return lhs; }`);
+  if (anyCapped) e.emit(`  if (capped) { _prattCapped = true; rowCapped[lhs] = 1; return lhs; }`);
   e.emit(`  let tailClosed = nudClosed;`);
   e.emit(`  while (true) {`);
   e.emit(`    if (pos >= cap) break;`);
@@ -2167,6 +2189,12 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       e.emit(`      if (ok && pos === ledSaved) { scn = ledMark; ok = false; }`);
       e.emit(`      if (ok) {`);
       e.emit(`        lhs = finishWrap(${rid}, lhs, ledMark);`);
+      // CAP PROPAGATION through a trailing operand: a led ending in a self operand parsed as a full
+      // expression (not a chain-rhs one) that returned capped is itself capped (`a ? b : () => {} || x`).
+      const last = led.items[led.items.length - 1];
+      if (anyCapped && !(meta.prec[i] && meta.prec[i]!.rhsBp !== null) && last?.type === 'ref' && last.name === rule.name) {
+        e.emit(`        if (_prattCapped) { rowCapped[lhs] = 1; return lhs; }`);
+      }
       if (meta.tailClosing[i]) e.emit(`        tailClosed = true;`);
       e.emit(`        matched = true;`);
       e.emit(`      }`);
@@ -2219,7 +2247,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   // ArrowFunction) is ITSELF capped — `a = () => {}` admits no further led, so a trailing
   // `|| x` / `? :` stays unconsumed and the parse rejects (`a = () => {} || x`). `return lhs`
   // keeps `_prattCapped` true so an enclosing operator refuses it too (`b = a = arrow`).
-  if (anyCapped) e.emit(`        if (rhs >= 0 && _prattCapped) { scPush(rhs); lhs = finishWrap(${rid}, lhs, ledMark); return lhs; }`);
+  if (anyCapped) e.emit(`        if (rhs >= 0 && _prattCapped) { scPush(rhs); lhs = finishWrap(${rid}, lhs, ledMark); rowCapped[lhs] = 1; return lhs; }`);
   e.emit(`        if (rhs >= 0) { scPush(rhs); lhs = finishWrap(${rid}, lhs, ledMark); tailClosed = true; matched = true; }`);
   e.emit(`        else { pos = ledSaved; scn = ledMark; }`);
   e.emit(`      }`);
@@ -2433,6 +2461,7 @@ function parseRuleEntry(idx: number, rid: number, core: (minBp: number) => numbe
         absTok[id] = start;
         absChar[id] = start < tokN ? toff(start) : (tokN > 0 ? tend(tokN - 1) : 0);
         scPush(id);
+        _prattCapped = rowCapped[id] !== 0;
         return true;
       }
       return false;
@@ -2480,6 +2509,7 @@ function parseRuleEntry(idx: number, rid: number, core: (minBp: number) => numbe
         mx[start] = ext;
         mg[start] = memoGenCur;
         scPush(aid);
+        _prattCapped = rowCapped[aid] !== 0;
         return true;
       }
     }
@@ -2519,7 +2549,7 @@ function parseRuleEntry(idx: number, rid: number, core: (minBp: number) => numbe
     tainted = cycleMinSerial < mySerial;
     if (cm0 < cycleMinSerial) cycleMinSerial = cm0;
   }
-  if (result < 0 && recovering) result = missRule(rid);
+  if (result < 0 && recovering) { result = missRule(rid); _prattCapped = false; }   // a synthesized $missing is no capped node
   if (mySup === 0 && !capped) {
     if (me === undefined || me.length < tokN + 1) {
       me = new Array(tokN + 1);
@@ -3445,7 +3475,7 @@ type Doc = {
   tkK: typeof tkK; tkT: typeof tkT; tkOff: typeof tkOff; tkEnd: typeof tkEnd; tkFl: typeof tkFl; tkDp: typeof tkDp; tkPd: typeof tkPd;
   tkCap: number; tokN: number; srcLenP1: number; negFrom: number;
   rowRule: typeof rowRule; rowLen: typeof rowLen; rowTokLen: typeof rowTokLen; rowStart: typeof rowStart; rowCount: typeof rowCount; rowExt: typeof rowExt;
-  rowOK: typeof rowOK; rowKC: typeof rowKC; rowNF: typeof rowNF; rowRM: typeof rowRM; absChar: typeof absChar; absTok: typeof absTok;
+  rowOK: typeof rowOK; rowKC: typeof rowKC; rowNF: typeof rowNF; rowRM: typeof rowRM; rowCapped: typeof rowCapped; absChar: typeof absChar; absTok: typeof absTok;
   rowCap: number; nodeN: number;
   kids: typeof kids; kidRel: typeof kidRel; kidTokRel: typeof kidTokRel; kidCap: number; kidN: number;
   memoNode: number[][]; memoEnd: number[][]; memoExt: number[][]; memoGen: Int32Array[]; memoGenCur: number;
@@ -3470,7 +3500,7 @@ function makeDoc(rows = 8192): Doc {
     rowStart: new Int32Array(rows), rowCount: new Int32Array(rows), rowExt: new Int32Array(rows),
     rowOK: new Uint8Array(rows), rowKC: new Uint8Array(rows),
     rowNF: new Int32Array(rows).fill(0x7fffffff),
-    rowRM: new Uint8Array(rows),
+    rowRM: new Uint8Array(rows), rowCapped: new Uint8Array(rows),
     absChar: new Int32Array(rows), absTok: new Int32Array(rows),
     rowCap: rows, nodeN: 0,
     kids: new Int32Array(rows * 2), kidRel: new Int32Array(rows * 2), kidTokRel: new Int32Array(rows * 2),
@@ -3490,7 +3520,7 @@ function saveDoc(d: Doc) {
   d.tkDp = tkDp; d.tkPd = tkPd; d.tkCap = tkCap; d.tokN = tokN;
   d.srcLenP1 = srcLenP1; d.negFrom = negFrom;
   d.rowRule = rowRule; d.rowLen = rowLen; d.rowTokLen = rowTokLen; d.rowStart = rowStart;
-  d.rowCount = rowCount; d.rowExt = rowExt; d.rowOK = rowOK; d.rowKC = rowKC; d.rowNF = rowNF; d.rowRM = rowRM;
+  d.rowCount = rowCount; d.rowExt = rowExt; d.rowOK = rowOK; d.rowKC = rowKC; d.rowNF = rowNF; d.rowRM = rowRM; d.rowCapped = rowCapped;
   d.absChar = absChar; d.absTok = absTok; d.rowCap = rowCap; d.nodeN = nodeN;
   d.kids = kids; d.kidRel = kidRel; d.kidTokRel = kidTokRel; d.kidCap = kidCap; d.kidN = kidN;
   d.memoNode = memoNode; d.memoEnd = memoEnd; d.memoExt = memoExt; d.memoGen = memoGen;
@@ -3508,7 +3538,7 @@ function loadDoc(d: Doc) {
   tkDp = d.tkDp; tkPd = d.tkPd; tkCap = d.tkCap; tokN = d.tokN;
   srcLenP1 = d.srcLenP1; negFrom = d.negFrom;
   rowRule = d.rowRule; rowLen = d.rowLen; rowTokLen = d.rowTokLen; rowStart = d.rowStart;
-  rowCount = d.rowCount; rowExt = d.rowExt; rowOK = d.rowOK; rowKC = d.rowKC; rowNF = d.rowNF; rowRM = d.rowRM;
+  rowCount = d.rowCount; rowExt = d.rowExt; rowOK = d.rowOK; rowKC = d.rowKC; rowNF = d.rowNF; rowRM = d.rowRM; rowCapped = d.rowCapped;
   absChar = d.absChar; absTok = d.absTok; rowCap = d.rowCap; nodeN = d.nodeN;
   kids = d.kids; kidRel = d.kidRel; kidTokRel = d.kidTokRel; kidCap = d.kidCap; kidN = d.kidN;
   memoNode = d.memoNode; memoEnd = d.memoEnd; memoExt = d.memoExt; memoGen = d.memoGen;

@@ -9,12 +9,12 @@
 // stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
-import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
+import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
-import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR } from './recovery-family.ts';
+import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT, RM_AMAX } from './recovery-family.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, unitMask, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
@@ -1368,12 +1368,14 @@ ${cases.map((c) => `\t\tcase ${c.key}:\n${c.arms.map((a) => `\t\t\t${a}`).join('
   };
 };
 
+// A NUD arm's capped flag (emit-portable NodeCap): 'tail' is the flag its trailing operand left.
+const capGo = (cap: NodeCap): string => (cap === 'arm' ? 'true' : cap === 'tail' ? 'p.capped' : 'false');
 function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   // The native engine. `won` records the node just finished as the best so far and moves nb/kb
   // past it; `lost` drops what the arm built.
   const rid = ruleIdOf(ar, r.name);
   const d = r.nudDispatch;
-  const won = (i: number, form: string, tail: boolean, capped: boolean) =>
+  const won = (i: number, form: string, tail: boolean, capped: string) =>
     `bestPos = p.pos;${markGo(d, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; nb = len(p.nodes); kb = len(p.kids)`;
   const lost = lostGo;
   const fin = `p.finish(${rid}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart))`;
@@ -1384,7 +1386,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node, form,
     // tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (_i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; n := p.finish(${rid}, sb, int(t.Off), save); p.form = 0; p.tail = false; return n }`, fail, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, finGo(rid), (n) => `return p.nudOk(${n}, ${tail}, ${capped})`), fail),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, finGo(rid), (n) => `return p.nudOk(${n}, ${tail}, ${capGo(capped)})`), fail),
     commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \t\tp.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
@@ -1398,29 +1400,29 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     commitSw: commitSwGo('t'),
     steps: goSteps(ids, '', 'engine', ENGINE_GO),
     nudGuard: (g, keyed) => guardCond(g, 't', '', keyed),
-    nudLeaf: (i) => `{ p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, '0', false, false)}; p.back(save) }`,
+    nudLeaf: (i) => `{ p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, '0', false, 'false')}; p.back(save) }`,
     nudTpl: (i, hole) => `\tif t.Kid == ${kidOf(ids, '$templateHead')} {
 \t\tnode := p.matchTemplate_${hole}()
-\t\tif node >= 0 && ${beatsGo(d, 'p.pos', i)} { p.scratch = append(p.scratch, node); best = p.finish(${rid}, sb, int(p.nodes[node].Offset), int(p.nodes[node].TokStart)); ${won(i, '0', false, false)} } else { ${lost} }
+\t\tif node >= 0 && ${beatsGo(d, 'p.pos', i)} { p.scratch = append(p.scratch, node); best = p.finish(${rid}, sb, int(p.nodes[node].Offset), int(p.nodes[node].TokStart)); ${won(i, '0', false, 'false')} } else { ${lost} }
 \t\tp.back(save)
 \t}`,
-    nudSeq: (i, cond, tail, capped) => candGo(d, i, cond, `best = p.finish(${rid}, sb, p.offAt(save), save); ${won(i, '0', tail, capped)}`, lost),
+    nudSeq: (i, cond, tail, capped) => candGo(d, i, cond, `best = p.finish(${rid}, sb, p.offAt(save), save); ${won(i, '0', tail, capGo(capped))}`, lost),
     // An operand that parses but is not the target the operator requires fails the whole Pratt
     // call, whatever another arm matched.
     nudPrefix: (i) => `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tp.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
 \t\toperand := p.bp_${r.name}(pbp.rbp)
 \t\tif operand >= 0 && pbp.tgt && p.form != 0 { p.back(save); ${lost}; p.capped = false; return -1 }
-\t\tif operand >= 0 && ${beatsGo(d, 'p.pos', i)} { p.scratch = append(p.scratch, operand); best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, 'pbp.form', true, false)} } else { ${lost} }
+\t\tif operand >= 0 && ${beatsGo(d, 'p.pos', i)} { p.scratch = append(p.scratch, operand); best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, 'pbp.form', true, 'false')} } else { ${lost} }
 \t\tp.back(save)
 \t}`,
-    ledArm: (_i, cond, form, closes, exit, clean, rebind) => `{
+    ledArm: (_i, cond, form, closes, exit, clean, rebind, capsFromTail) => `{
 \t\t\tledSave := p.pos; sb := len(p.scratch)${clean ? '' : '; nb := len(p.nodes); kb := len(p.kids)'}
 \t\t\tp.scratch = append(p.scratch, left)
-\t\t\tif ${cond} { left = ${fin}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
+\t\t\tif ${cond} { left = ${fin};${capsFromTail ? ` if p.capped { p.form = ${form}; return left };` : ''} form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
 \t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]${clean ? '' : '; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]'}${rebind ? `
 \t\t\tp.scratch = append(p.scratch, left)
-\t\t\tif ${rebind} { left = ${fin}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
+\t\t\tif ${rebind} { left = ${fin};${capsFromTail ? ` if p.capped { p.form = ${form}; return left };` : ''} form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
 \t\t\tp.scratch = p.scratch[:sb]` : ''}${exit ? '; break LedLoop' : ''}
 \t\t}`,
     rebind: (p) => `p.rbScan(${rbSite(ids, 'engine', [p.open, p.operand, p.sep, p.rest])}, ${p.sepLid}, 0)`,
@@ -1984,7 +1986,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
   // The builder engine: as prattRule, over spanned handles and the builder's checkpoint.
   const rid = ruleIdOf(ar, r.name);
   const d = r.nudDispatch;
-  const won = (i: number, form: string, tail: boolean, capped: boolean) =>
+  const won = (i: number, form: string, tail: boolean, capped: string) =>
     `found = true; bestPos = p.pos;${markGo(d, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; ${arenaMark()}`;
   const lost = lostGoW(recv);
   const fin = `p.finishW(${rid}, sb, int(left.off), int(left.tokStart))`;
@@ -1993,7 +1995,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
   const L: PrattLowering = {
     ...B,
     commitLeaf: (_i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; n := p.finishW(${rid}, sb, int(t.Off), save); p.form = 0; p.tail = false; return n, true }`, fail, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? undoGoWc(recv) : null, nullable, (sb, save) => `p.finishW(${rid}, ${sb}, p.offAt(${save}), ${save})`, (n) => `return p.nudOk(${n}, ${tail}, ${capped})`), fail),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? undoGoWc(recv) : null, nullable, (sb, save) => `p.finishW(${rid}, ${sb}, p.offAt(${save}), ${save})`, (n) => `return p.nudOk(${n}, ${tail}, ${capGo(capped)})`), fail),
     commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
@@ -2007,27 +2009,27 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
     commitSw: commitSwGo('t'),
     steps: goSteps(ids, 'W', recv, ENGINE_GO_W, ar),
     nudGuard: (g, keyed) => guardCond(g, 't', 'W', keyed),
-    nudLeaf: (i) => `{ p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; best = p.finishW(${rid}, sb, int(t.Off), save); ${won(i, '0', false, false)}; p.back(save) }`,
+    nudLeaf: (i) => `{ p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; best = p.finishW(${rid}, sb, int(t.Off), save); ${won(i, '0', false, 'false')}; p.back(save) }`,
     nudTpl: (i, hole) => `\tif t.Kid == ${kidOf(ids, '$templateHead')} {
 \t\tn, ok := p.matchTemplateW_${hole}()
-\t\tif ok && ${beatsGo(d, 'p.pos', i)} { if n.present { p.scratch = append(p.scratch, n.h) }; best = p.finishW(${rid}, sb, int(n.off), int(n.tokStart)); ${won(i, '0', false, false)} } else { ${lost} }
+\t\tif ok && ${beatsGo(d, 'p.pos', i)} { if n.present { p.scratch = append(p.scratch, n.h) }; best = p.finishW(${rid}, sb, int(n.off), int(n.tokStart)); ${won(i, '0', false, 'false')} } else { ${lost} }
 \t\tp.back(save)
 \t}`,
-    nudSeq: (i, cond, tail, capped) => candGo(d, i, cond, `best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, '0', tail, capped)}`, lost),
+    nudSeq: (i, cond, tail, capped) => candGo(d, i, cond, `best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, '0', tail, capGo(capped))}`, lost),
     nudPrefix: (i) => `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
 \t\toperand, ook := p.bpW_${r.name}(pbp.rbp)
 \t\tif ook && pbp.tgt && p.form != 0 { p.back(save); ${lost}; p.capped = false; return spanned{}, false }
-\t\tif ook && ${beatsGo(d, 'p.pos', i)} { if operand.present { p.scratch = append(p.scratch, operand.h) }; best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, 'pbp.form', true, false)} } else { ${lost} }
+\t\tif ook && ${beatsGo(d, 'p.pos', i)} { if operand.present { p.scratch = append(p.scratch, operand.h) }; best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, 'pbp.form', true, 'false')} } else { ${lost} }
 \t\tp.back(save)
 \t}`,
-    ledArm: (_i, cond, form, closes, exit, clean, rebind) => `{
+    ledArm: (_i, cond, form, closes, exit, clean, rebind, capsFromTail) => `{
 \t\t\tledSave := p.pos; sb := len(p.scratch)${clean ? '' : `; ${arenaCkpt()}`}
 \t\t\tp.scratch = append(p.scratch, left.h)
-\t\t\tif ${cond} { left = ${fin}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
+\t\t\tif ${cond} { left = ${fin};${capsFromTail ? ` if p.capped { p.form = ${form}; return left, true };` : ''} form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
 \t\t\tp.back(ledSave); p.scratch = p.scratch[:sb]${clean ? '' : `; ${arenaRestore()}`}${rebind ? `
 \t\t\tp.scratch = append(p.scratch, left.h)
-\t\t\tif ${rebind} { left = ${fin}; form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
+\t\t\tif ${rebind} { left = ${fin};${capsFromTail ? ` if p.capped { p.form = ${form}; return left, true };` : ''} form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
 \t\t\tp.scratch = p.scratch[:sb]` : ''}${exit ? '; break LedLoop' : ''}
 \t\t}`,
     rebind: (p) => `p.rbScan(${rbSite(ids, recv, [p.open, p.operand, p.sep, p.rest])}, ${p.sepLid}, 0)`,
@@ -3181,14 +3183,22 @@ const GO_BATCH_INTERP = `	if len(os.Args) > 2 && os.Args[1] == "batch-interp" {
 const GO_BATCH_TOTAL = `	if len(os.Args) > 1 && os.Args[1] == "batch-total" {
 		var b strings.Builder
 		for _, s := range strings.Split(src, "\\x00") {
-			_, ok, errs := ParseTotal(s, &CstBuilder{})
+			cb := &CstBuilder{}
+			h, ok, errs, strict, w := ParseTotalWork(s, cb)
 			rows := make([][]interface{}, 0, len(errs))
 			for _, e := range errs {
 				row := []interface{}{e.Off, e.End, e.Message, -1, -1, ""}
 				if e.Related != nil { row[3], row[4], row[5] = e.Related.Off, e.Related.End, e.Related.Message }
 				rows = append(rows, row)
 			}
-			line, _ := json.Marshal([]interface{}{ok, rows})
+			cst := ""
+			if ok { cst = CstJSONWith(cb, h) }
+			var srow []interface{}
+			if strict != nil {
+				srow = []interface{}{strict.Off, strict.End, strict.Message, -1, -1, ""}
+				if strict.Related != nil { srow[3], srow[4], srow[5] = strict.Related.Off, strict.Related.End, strict.Related.Message }
+			}
+			line, _ := json.Marshal([]interface{}{ok, rows, cst, w.Steps, w.Attempts, w.MaxAttempts, srow})
 			b.Write(line); b.WriteByte('\\n')
 		}
 		os.Stdout.WriteString(b.String())
@@ -3215,9 +3225,17 @@ function recoveryEngineGo(ir: ParserIR): string {
 type recov struct {
 	p *parserW
 	marks []mark
+	rmh []int
+	rm []int
 	tabrt []int
 	finOff, opN, steps int
 	opEnd uint32
+}
+// A fresh repair memory (recovery-family.ts RM_*): not recovering, no failure, no probe, no frame.
+func newRecov(p *parserW) *recov {
+	rm := make([]int, ${RM_DIAGS}, ${RM_DIAGS} + 64)
+	rm[${RM_FAIL}], rm[${RM_PROBE}], rm[${RM_SP}] = -1, -1, -1
+	return &recov{p: p, rm: rm, tabrt: unpackInts(tabSrt)}
 }
 func (rv *recov) enPos() int { return rv.p.pos }
 func (rv *recov) enSetPos(q int) { rv.p.pos = q }
@@ -3248,9 +3266,24 @@ func (rv *recov) enTpl(hole int) bool {
 }
 func (rv *recov) enSh() int { return len(rv.p.scratch) }
 func (rv *recov) enCut(h int) { rv.p.scratch = rv.p.scratch[:h] }
-func (rv *recov) enMark() int { rv.marks = append(rv.marks, rv.p.mark()); return len(rv.marks) - 1 }
-func (rv *recov) enReset(k int) { m := rv.marks[k]; rv.p.back(m.pos); rv.p.scratch = rv.p.scratch[:m.sb]; rv.p.b.Restore(m.nb, m.kb) }
-func (rv *recov) enUnmark(k int) { rv.marks = rv.marks[:k] }
+func (rv *recov) enMark() int { rv.marks = append(rv.marks, rv.p.mark()); rv.rmh = append(rv.rmh, len(rv.rm)); return len(rv.marks) - 1 }
+func (rv *recov) enReset(k int) { m := rv.marks[k]; rv.p.back(m.pos); rv.p.scratch = rv.p.scratch[:m.sb]; rv.p.b.Restore(m.nb, m.kb); rv.rm = rv.rm[:rv.rmh[k]] }
+func (rv *recov) enUnmark(k int) { rv.marks = rv.marks[:k]; rv.rmh = rv.rmh[:k] }
+func (rv *recov) enMarkDrop(k int) { rv.marks = append(rv.marks[:k], rv.marks[k+1:]...); rv.rmh = append(rv.rmh[:k], rv.rmh[k+1:]...) }
+func (rv *recov) enRm(i int) int { return rv.rm[i] }
+func (rv *recov) enRmSet(i, v int) { rv.rm[i] = v }
+func (rv *recov) enRmLen() int { return len(rv.rm) }
+func (rv *recov) enRmPush(v int) { rv.rm = append(rv.rm, v) }
+func (rv *recov) enRmCut(n int) { rv.rm = rv.rm[:n] }
+func (rv *recov) enMiss(r int) {
+	p := rv.p
+	off := 0
+	if p.pos < len(p.toks) { off = int(p.toks[p.pos].Off) } else if p.pos > 0 { off = int(p.toks[p.pos-1].End) }
+	n := p.finishW(uint16(r), len(p.scratch), off, p.pos)
+	if n.present { p.scratch = append(p.scratch, n.h) }
+}
+func (rv *recov) enLookEnd() int { return rv.p.lookEnd() }
+func (rv *recov) enLookSet(e int) { rv.p.maxLook, rv.p.peekEnd = e, 0 }
 func (rv *recov) enWin(r, c, save, sb int) {
 	n := rv.p.finishW(uint16(r), c, rv.p.offAt(save), save)
 	rv.p.scratch = rv.p.scratch[:sb]
@@ -3332,7 +3365,7 @@ func ParseInterpreted(src string, b Builder, depth int) (h int32, ok bool, steps
 	p.scratch = p.scratch[:0]
 	p.lookReset()
 	p.capped, p.form, p.tail, p.suppressNext, p.suppressCur, p.ctx = false, 0, false, 0, 0, 0
-	rv := &recov{p: p, tabrt: unpackInts(tabSrt)}
+	rv := newRecov(p)
 	ok = rv.riRule(${ruleIdOf(ar, ir.entry)}, depth) && p.pos == len(p.toks)
 	var fr int32
 	present := len(p.scratch) == 1
@@ -3346,12 +3379,16 @@ func ParseInterpreted(src string, b Builder, depth int) (h int32, ok bool, steps
 }
 
 function recoveryRegionGo(ir: ParserIR, shared: SharedAlgorithms): string {
-  const reuse = !!ir.reuse;
+  const ids = buildLexIdPlan(ir);
   return `
 // ---- recovery: the emit option { recovery: true }; generated from src/recovery-family.ts (shared by the TS / Go / Rust targets) ----
-type diag struct{ Kind, Off, End, RelOff, RelEnd int }
+type diag struct{ Kind, Off, End, RelOff, RelEnd, Arg int }
 // The recovery interpreter's best longest-match candidate so far (recovery-family.ts BEST).
-type bestCand struct{ Pos, Off, Won, Form, Tail, Capped int }
+type bestCand struct{ Pos, Off, Won, Form, Tail, Capped, H0, Hb int }
+// The words of a repair's message: a literal's text (by lid), a token kind's name.
+var lidTexts = []string{${ids.lids.map(J).join(', ')}}
+func litText(x int) string { return lidTexts[x] }
+func kindText(x int) string { return kindStr[x] }
 ${shared.recoveryFamily(ir)}
 ${recoveryEngineGo(ir)}
 // Diagnostic is a span of the source (byte offsets), its message, and a related location or nil.
@@ -3366,31 +3403,58 @@ type Related struct {
 \tMessage  string
 }
 func diagnosticOf(src string, d diag) Diagnostic {
-\tout := Diagnostic{Off: d.Off, End: d.End, Message: diagMessage(src, d)}
-\tif d.RelOff >= 0 { out.Related = &Related{Off: d.RelOff, End: d.RelEnd, Message: diagRelated(d)} }
-\treturn out
+	out := Diagnostic{Off: d.Off, End: d.End, Message: diagMessage(src, d)}
+	if d.RelOff >= 0 { out.Related = &Related{Off: d.RelOff, End: d.RelEnd, Message: diagRelated(d)} }
+	return out
 }
 
-// ParseTotal is ParseWith that also says why a text is rejected: an accepted text gives ParseWith's
-// root and no errors, a rejected one ok=false and its errors (a lexer error, or the parse's primary
-// error), each with its span in the source. It does not panic on input.
-func ParseTotal(src string, b Builder) (h int32, ok bool, errs []Diagnostic) {
-\tp, fr, entryOk, err := runW(src, b)
-\tif err != nil {
-\t\tend := err.End
-\t\tif end < err.Off { end = err.Off }
-\t\treturn 0, false, []Diagnostic{{Off: err.Off, End: end, Message: lexError(src, err).Msg}}
-\t}
-\tok = entryOk && p.pos == len(p.toks)
-\tif !ok {
-\t\t// The examined extent: the furthest of every top-level entry's (lookEnd holds the last one's).
-\t\tlook := p.lookEnd()${reuse ? '\n\t\tfor _, m := range p.entries { if m.Ext > look { look = m.Ext } }' : ''}
-\t\terrs = []Diagnostic{diagnosticOf(src, rejectDiag(p.toks, p.pos, entryOk, look))}
-\t}
-\tp.cursor.toks, p.src, p.b = nil, "", nil // the workspace keeps buffers, not the input or the builder
-\tif !ok { return 0, false, errs }
-\tif !fr.present { panic(errNoRoot) }
-\treturn fr.h, true, nil
+// TotalWork is the work of a parse ParseTotalWork recovered: the steps it interpreted, the attempts
+// it made, the most attempts one scope took.
+type TotalWork struct{ Steps, Attempts, MaxAttempts int }
+
+// ParseTotal is ParseWith that also parses a rejected text: an accepted text gives ParseWith's root
+// and no errors; a rejected one gives a tree all the same (ok), with its repairs (recovery-family.ts):
+// $missing nodes (zero-width, no children) where a literal or token the parse required is absent,
+// $error nodes over tokens it skipped, and one diagnostic per repair, in order; and strict, the
+// error of the strict parse (where it stopped: the interpreter's primary error, with the farthest
+// token it examined as its related location; nil for an accepted text). A repair is placed where
+// the fix goes, which can lie before the place the strict parse noticed the error. A text the
+// lexer refuses gives ok=false and the lexer's error. It does not panic on input.
+func ParseTotal(src string, b Builder) (h int32, ok bool, errs []Diagnostic, strict *Diagnostic) {
+	h, ok, errs, strict, _ = ParseTotalWork(src, b)
+	return
+}
+
+// ParseTotalWork is ParseTotal and the work its recovery took (zero for an accepted text).
+func ParseTotalWork(src string, b Builder) (h int32, ok bool, errs []Diagnostic, strict *Diagnostic, w TotalWork) {
+	p, fr, entryOk, err := runW(src, b)
+	if err != nil {
+		end := err.End
+		if end < err.Off { end = err.Off }
+		return 0, false, []Diagnostic{{Off: err.Off, End: end, Message: lexError(src, err).Msg}}, nil, w
+	}
+	if entryOk && p.pos == len(p.toks) {
+		p.cursor.toks, p.src, p.b = nil, "", nil // the workspace keeps buffers, not the input or the builder
+		if !fr.present { panic(errNoRoot) }
+		return fr.h, true, nil, nil, w
+	}
+	// The examined extent: the furthest of every top-level entry's (lookEnd holds the last one's).
+	look := p.lookEnd()${ir.reuse ? '\n\tfor _, m := range p.entries { if m.Ext > look { look = m.Ext } }' : ''}
+	sd := diagnosticOf(src, rejectDiag(p.toks, p.pos, entryOk, look))
+	strict = &sd
+	b.Restore(0, 0)
+	p.pos = 0
+	p.scratch = p.scratch[:0]
+	p.lookReset()
+	p.capped, p.form, p.tail, p.suppressNext, p.suppressCur, p.ctx = false, 0, false, 0, 0, 0
+	rv := newRecov(p)
+	rv.riTotal()
+	if len(p.scratch) != 1 { panic(errNoRoot) }
+	h = p.scratch[0]
+	for i := ${RM_DIAGS}; i+2 < len(rv.rm); i += 3 { errs = append(errs, diagnosticOf(src, repairDiag(p.toks, rv.rm[i], rv.rm[i+1], rv.rm[i+2]))) }
+	w = TotalWork{Steps: rv.steps, Attempts: rv.rm[${RM_ATT}], MaxAttempts: rv.rm[${RM_AMAX}]}
+	p.cursor.toks, p.src, p.b = nil, "", nil
+	return h, true, errs, strict, w
 }
 `;
 }
@@ -3480,7 +3544,7 @@ type engine struct {
 ${reuse ? '\tentries []EntryMeta\n' : ''}}
 const arenaCompactK = 4
 
-${renderArenaTablesGo(ar, ids)}
+${renderArenaTablesGo(opts.recovery ? withReservedRules(ar) : ar, ids)}
 
 ${lexText}
 

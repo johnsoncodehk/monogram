@@ -11,12 +11,12 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
-import { type ParserIR, type RdRule, type PrattRule, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
-import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB } from './emit-portable.ts';
+import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
-import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR } from './recovery-family.ts';
+import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT, RM_AMAX } from './recovery-family.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, unitMask, isList, isNum, isOpt, isRec, isRecList, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
@@ -1438,6 +1438,8 @@ ${sites.flatMap((st, i) => st.map((c, k) => `            ${i * 4 + k} => ${c},`)
     }
 ${shared.rebindFamily(ir, 'methods').split('\n').map((l) => (l ? `    ${l}` : l)).join('\n')}`;
 }
+// A NUD arm's capped flag (emit-portable NodeCap): 'tail' is the flag its trailing operand left.
+const capRs = (cap: NodeCap): string => (cap === 'arm' ? 'true' : cap === 'tail' ? 'self.capped' : 'false');
 function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
   const d = r.nudDispatch;
@@ -1470,7 +1472,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
             }
             self.back(save);
         }`,
-    nudSeq: (i, cond, tail, capped) => candRs(d, i, cond, rid, `${markRs(d, i)} bf = 0; bt = ${tail}; bc = ${capped};`),
+    nudSeq: (i, cond, tail, cap) => candRs(d, i, cond, rid, `${markRs(d, i)} bf = 0; bt = ${tail}; bc = ${capRs(cap)};`),
     // An operand that parses but is not the target the operator requires fails the whole Pratt
     // call, whatever another arm matched.
     nudPrefix: (i) => `        if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
@@ -1486,7 +1488,8 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node, form,
     // tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (_i, conds) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len(); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; let n = self.finish(${rid}, sb, t.off as usize, save); self.form = 0; self.tail = false; return Some(n); }`, NUD_FAIL_RS, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitRs(conds, commitBodyRs(rid, cond, undo, nullable, `nud ${tail} ${capped}`), NUD_FAIL_RS),
+    // A 'tail' cap leaves the flag as the trailing operand set it.
+    commitSeq: (_i, conds, cond, tail, cap, undo, nullable) => commitRs(conds, commitBodyRs(rid, cond, undo, nullable, cap === 'tail' ? `{ self.form = 0; self.tail = ${tail}; }` : `nud ${tail} ${capRs(cap)}`), NUD_FAIL_RS),
     commitPrefix: (_i, conds) => commitRs(conds, `if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
             let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
@@ -1507,13 +1510,13 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
       notSuppressed: (set) => `self.suppress_cur != ${set}`,
       ifAll: (parts) => (parts.length ? `if ${parts.join(' && ')} ` : ''),
     },
-    ledArm: (_i, cond, form, closes, exit, clean, rebind) => `{
+    ledArm: (_i, cond, form, closes, exit, clean, rebind, capsFromTail) => `{
                 let led_save = self.pos; let sb = self.scratch.len();${clean ? '' : ' let ck = self.b.checkpoint();'}
                 self.scratch.push(left.h);
-                if ${cond} { left = ${fin}; form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
+                if ${cond} { left = ${fin};${capsFromTail ? ` if self.capped { self.form = ${form}; return Some(left); }` : ''} form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
                 self.back(led_save); self.scratch.truncate(sb);${clean ? '' : ' self.b.restore(ck);'}${rebind ? `
                 self.scratch.push(left.h);
-                if ${rebind} { left = ${fin}; form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
+                if ${rebind} { left = ${fin};${capsFromTail ? ` if self.capped { self.form = ${form}; return Some(left); }` : ''} form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
                 self.scratch.truncate(sb);` : ''}${exit ? ' break;' : ''}
             }`,
     rebind: (p) => `self.rb_scan(${rbSite(ids, [p.open, p.operand, p.sep, p.rest])}, ${p.sepLid}, 0)`,
@@ -4035,7 +4038,7 @@ function emitRustPrattMethod(
             let _ap_base = self.ap_stack.len();
             ${st.ok}
             if ${st.okVar} {
-                ${rule.nudBracketClosesTail[bi] ? '*pt = true; ' : ''}${finish}
+                ${rule.nudBracketClosesTail[bi] ? '*pt = true; ' : ''}${rule.nudBracketCapsFromTail[bi] ? '*pc = self.capped; ' : ''}${finish}
                 self.ap_stack.truncate(_ap_base);
             }
             self.pos = save;
@@ -4136,7 +4139,7 @@ function emitRustPrattMethod(
                 let _ap_base = self.ap_stack.len();
                 ${st.ok}
                 if ${st.okVar} {
-                    ${rule.nudSeqClosesTail[si] ? '*pt = true; ' : ''}${finish}
+                    ${rule.nudSeqClosesTail[si] ? '*pt = true; ' : ''}${rule.nudSeqCapsFromTail[si] ? '*pc = self.capped; ' : ''}${finish}
                     self.ap_stack.truncate(_ap_base);
                 }
             }
@@ -4538,7 +4541,8 @@ function emitRustPrattMethod(
                     ${st.ok}
                     if ${st.okVar} {
                         ${finish}
-                        self.ap_stack.truncate(_ap_base);
+                        self.ap_stack.truncate(_ap_base);${rule.ledCapsFromTail[i] ? `
+                        if self.capped { self.form = ${rule.ledForm[i]!}; return Some(left); }` : ''}
                         form = ${rule.ledForm[i]!};${rule.ledClosesTail[i] ? ' tail_closed = true;' : ''}
                         continue;
                     }
@@ -5663,19 +5667,19 @@ export const rustTarget = defineParserTarget({
     const ir = portableIR(grammar, FACTS);
     // A shape-building parser needs Lowering.shape, which this target does not have yet: refused.
     if (opts.shape) shared.shapeFamily(shared.shapePlan(opts.shape, ir));
-    return emitRustLibrary(ir, buildLexIdPlan(ir), shared) + (opts.recovery ? recoveryRegionRust(ir, shared) : '');
+    return emitRustLibrary(ir, buildLexIdPlan(ir), shared, !!opts.recovery) + (opts.recovery ? recoveryRegionRust(ir, shared) : '');
   },
   emitRunner: (opts) => emitRunner(opts),
 });
 
-function emitRustLibrary(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
+function emitRustLibrary(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms, recovery: boolean): string {
     const ar = buildArenaIdPlan(ir, ids);
     const reuse = ir.reuse;
     const shapeB = reuse?.kind === 'B';
     const reuseInit = reuse ? ', entries: Vec::new()' : '';
     // EntryMeta is always emitted — Builder::entry_meta returns it (even when the side table is unused).
     const entryMetaStruct = `\n#[derive(Clone, Copy)]\nstruct EntryMeta { tok_start: u32, tok_end: u32, ext: u32, off: u32, end: u32, kid_count: u32 }\n`;
-    const arenaIdTables = renderArenaIdTablesRust(ar);
+    const arenaIdTables = renderArenaIdTablesRust(recovery ? withReservedRules(ar) : ar);
     return `// GENERATED by emit-portable.ts (rustTarget) — parser library for grammar "${ir.grammarName}".
 // Public API: tokenize(src) -> Result<Vec<Token>, LexError> (the lexer alone; tokens borrow only src), parse_with /
 // Doc (CST). Compile as a library (rustc --crate-type lib) or include via \`mod\`.
@@ -5785,14 +5789,16 @@ function recoveryEngineRust(ir: ParserIR, shared: SharedAlgorithms): string {
   const op = ttIdOf(ar, '$operator');
   return `/// The interpreter's engine over p: the marks it took, the plan's decoded table, the offset of
 /// the node it last finished, the binary operator it last read, and the steps of the run.
-struct Recov<'r, 'a, B: Builder> { p: &'r mut Parser<'a, B>, marks: Vec<Mark>, tab_rt: &'static [isize], fin_off: isize, op_n: usize, op_end: u32, steps: usize }
+struct Recov<'r, 'a, B: Builder> { p: &'r mut Parser<'a, B>, marks: Vec<(Mark, usize)>, rm: Vec<isize>, tab_rt: &'static [isize], fin_off: isize, op_n: usize, op_end: u32, steps: usize }
+/// A fresh repair memory (recovery-family.ts RM_*): not recovering, no failure, no probe, no frame.
+fn fresh_rm() -> Vec<isize> { let mut rm = vec![0isize; ${RM_DIAGS}]; rm[${RM_FAIL}] = -1; rm[${RM_PROBE}] = -1; rm[${RM_SP}] = -1; rm }
 /// The plan's table, decoded once, at the first interpreted parse.
 static TAB_RT: std::sync::OnceLock<Vec<isize>> = std::sync::OnceLock::new();
 impl<'r, 'a, B: Builder> Recov<'r, 'a, B> {
     #[inline(always)]
     fn t_rt(&self, i: isize) -> isize { self.tab_rt[i as usize] }
 ${shared.recoveryFamily(ir, true).split('\n').map((l) => (l ? `    ${l}` : l)).join('\n')}
-    fn en_pos(&mut self) -> isize { self.p.pos as isize }
+    fn en_pos(&self) -> isize { self.p.pos as isize }
     fn en_set_pos(&mut self, q: isize) { self.p.pos = q as usize; }
     fn en_back(&mut self, q: isize) { self.p.back(q as usize); }
     fn en_peek_kid(&mut self) -> isize { match self.p.peek() { Some(t) => t.kid as isize, None => -1 } }
@@ -5817,9 +5823,23 @@ ${shared.recoveryFamily(ir, true).split('\n').map((l) => (l ? `    ${l}` : l)).j
     }
     fn en_sh(&mut self) -> isize { self.p.scratch.len() as isize }
     fn en_cut(&mut self, h: isize) { self.p.scratch.truncate(h as usize); }
-    fn en_mark(&mut self) -> isize { let m = self.p.mark(); self.marks.push(m); self.marks.len() as isize - 1 }
-    fn en_reset(&mut self, k: isize) { let m = self.marks[k as usize]; self.p.reset(m); }
+    fn en_mark(&mut self) -> isize { let m = self.p.mark(); self.marks.push((m, self.rm.len())); self.marks.len() as isize - 1 }
+    fn en_reset(&mut self, k: isize) { let (m, h) = self.marks[k as usize]; self.p.reset(m); self.rm.truncate(h); }
     fn en_unmark(&mut self, k: isize) { self.marks.truncate(k as usize); }
+    fn en_mark_drop(&mut self, k: isize) { self.marks.remove(k as usize); }
+    fn en_rm(&self, i: isize) -> isize { self.rm[i as usize] }
+    fn en_rm_set(&mut self, i: isize, v: isize) { self.rm[i as usize] = v; }
+    fn en_rm_len(&self) -> isize { self.rm.len() as isize }
+    fn en_rm_push(&mut self, v: isize) { self.rm.push(v); }
+    fn en_rm_cut(&mut self, n: isize) { self.rm.truncate(n as usize); }
+    fn en_miss(&mut self, r: isize) {
+        let p = &mut *self.p;
+        let off = if p.pos < p.toks.len() { p.toks[p.pos].off as usize } else if p.pos > 0 { p.toks[p.pos - 1].end as usize } else { 0 };
+        let n = p.finish(r as u16, p.scratch.len(), off, p.pos);
+        if n.present { p.scratch.push(n.h); }
+    }
+    fn en_look_end(&self) -> isize { self.p.look_end() as isize }
+    fn en_look_set(&mut self, e: isize) { self.p.max_look = e as usize; self.p.peek_end = 0; }
     fn en_win(&mut self, r: isize, c: isize, save: isize, sb: isize) {
         let off = self.p.off_at(save as usize);
         let n = self.p.finish(r as u16, c as usize, off, save as usize);
@@ -5869,7 +5889,7 @@ pub fn parse_interpreted<'a, B: Builder + Default>(src: &'a str, b: &mut B, dept
     if lex_into(src, &mut p.toks, &mut g.lex).is_some() { return (None, 0); }
     p.scratch.clear();
     let tab_rt: &'static [isize] = TAB_RT.get_or_init(|| unpack_ints(TABS_RT));
-    let mut rv = Recov { p, marks: Vec::new(), tab_rt, fin_off: 0, op_n: 0, op_end: 0, steps: 0 };
+    let mut rv = Recov { p, marks: Vec::new(), rm: fresh_rm(), tab_rt, fin_off: 0, op_n: 0, op_end: 0, steps: 0 };
     let ok = rv.ri_rule(${ruleIdOf(ar, ir.entry)}, depth) && rv.p.pos == rv.p.toks.len();
     let steps = rv.steps;
     if !ok { return (None, steps); }
@@ -5879,13 +5899,17 @@ pub fn parse_interpreted<'a, B: Builder + Default>(src: &'a str, b: &mut B, dept
 }
 
 function recoveryRegionRust(ir: ParserIR, shared: SharedAlgorithms): string {
-  const reuse = !!ir.reuse;
+  const ids = buildLexIdPlan(ir);
   return `
 // ---- recovery: the emit option { recovery: true }; generated from src/recovery-family.ts (shared by the TS / Go / Rust targets) ----
 #[derive(Clone, Copy)]
-struct Diag { kind: isize, off: isize, end: isize, rel_off: isize, rel_end: isize }
+struct Diag { kind: isize, off: isize, end: isize, rel_off: isize, rel_end: isize, arg: isize }
 // The recovery interpreter's best longest-match candidate so far (recovery-family.ts BEST).
-struct BestCand { pos: isize, off: isize, won: isize, form: isize, tail: isize, capped: isize }
+struct BestCand { pos: isize, off: isize, won: isize, form: isize, tail: isize, capped: isize, h0: isize, hb: isize }
+// The words of a repair's message: a literal's text (by lid), a token kind's name.
+const LID_TEXTS: &[&str] = &[${ids.lids.map(J).join(', ')}];
+fn lit_text(x: isize) -> &'static str { LID_TEXTS[x as usize] }
+fn kind_text(x: isize) -> &'static str { KIND_STR[x as usize] }
 ${shared.recoveryFamily(ir, false)}
 ${recoveryEngineRust(ir, shared)}
 /// A diagnostic: a span of the source (byte offsets), its message, and a related location.
@@ -5900,24 +5924,49 @@ fn diagnostic_of(src: &str, d: Diag) -> Diagnostic {
     Diagnostic { off: d.off as usize, end: d.end as usize, message: diag_message(src, d), related }
 }
 
-/// parse_with that also says why a text is rejected: an accepted text gives parse_with's root and
-/// no errors, a rejected one None and its errors (a lexer error, or the parse's primary error), each
-/// with its span in the source. It does not panic on input.
-pub fn parse_total<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> (Option<B::H>, Vec<Diagnostic>) {
+/// parse_with that also parses a rejected text: an accepted text gives parse_with's root and no
+/// errors; a rejected one gives a tree all the same, with its repairs (recovery-family.ts):
+/// \`$missing\` nodes (zero-width, no children) where a literal or token the parse required is
+/// absent, \`$error\` nodes over tokens it skipped, and one diagnostic per repair, in order; and the
+/// error of the strict parse (where it stopped: the interpreter's primary error, with the farthest
+/// token it examined as its related location; None for an accepted text). A repair is placed where
+/// the fix goes, which can lie before the place the strict parse noticed the error. A text the lexer
+/// refuses gives None and the lexer's error. It does not panic on input.
+pub fn parse_total<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> (Option<B::H>, Vec<Diagnostic>, Option<Diagnostic>) {
+    let (h, errs, strict, _) = parse_total_work(src, b);
+    (h, errs, strict)
+}
+/// parse_total and the work its recovery took: the steps it interpreted, the attempts it made, the
+/// most attempts one scope took.
+pub fn parse_total_work<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> (Option<B::H>, Vec<Diagnostic>, Option<Diagnostic>, (usize, usize, usize)) {
     let mut g = parse_begin(src, b);
     let p = &mut g.p;
     if let Some(e) = lex_into(src, &mut p.toks, &mut g.lex) {
         let end = if e.end > e.off { e.end as usize } else { e.off as usize };
         let le = lex_error(src, e);
-        return (None, vec![Diagnostic { off: le.off, end, message: le.msg, related: None }]);
+        return (None, vec![Diagnostic { off: le.off, end, message: le.msg, related: None }], None, (0, 0, 0));
     }
     p.scratch.clear();
+    let ck = p.b.checkpoint();
     let fr = p.parse_${ir.entry}();
-    if let Some(fr) = &fr { if p.pos == p.toks.len() { return (Some(fr.root()), Vec::new()); } }
+    if let Some(fr) = &fr { if p.pos == p.toks.len() { return (Some(fr.root()), Vec::new(), None, (0, 0, 0)); } }
     // The examined extent: the furthest of every top-level entry's (look_end holds the last one's).
-    let mut look = p.look_end();${reuse ? '\n    for m in &p.entries { if m.ext as usize > look { look = m.ext as usize; } }' : ''}
-    let d = reject_diag(&p.toks, p.pos, fr.is_some(), look);
-    (None, vec![diagnostic_of(src, d)])
+    let mut look = p.look_end();${ir.reuse ? '\n    for m in &p.entries { if m.ext as usize > look { look = m.ext as usize; } }' : ''}
+    let strict = diagnostic_of(src, reject_diag(&p.toks, p.pos, fr.is_some(), look));
+    p.b.restore(ck);
+    p.scratch.clear();
+    p.pos = 0;
+    p.look_reset();
+    p.capped = false; p.form = 0; p.tail = false; p.suppress_next = 0; p.suppress_cur = 0; p.ctx = 0;
+    let tab_rt: &'static [isize] = TAB_RT.get_or_init(|| unpack_ints(TABS_RT));
+    let mut rv = Recov { p, marks: Vec::new(), rm: fresh_rm(), tab_rt, fin_off: 0, op_n: 0, op_end: 0, steps: 0 };
+    rv.ri_total();
+    if rv.p.scratch.len() != 1 { panic!("the builder kept no node for the root rule of a recovered parse (a Builder must return one for the entry rule)"); }
+    let root = rv.p.scratch[0];
+    let mut errs = Vec::new();
+    let mut i = ${RM_DIAGS};
+    while i + 2 < rv.rm.len() { errs.push(diagnostic_of(src, repair_diag(&rv.p.toks, rv.rm[i], rv.rm[i + 1] as usize, rv.rm[i + 2] as usize))); i += 3; }
+    (Some(root), errs, Some(strict), (rv.steps, rv.rm[${RM_ATT}] as usize, rv.rm[${RM_AMAX}] as usize))
 }
 `;
 }
@@ -5952,7 +6001,8 @@ const RS_BATCH_TOTAL = `    if args.get(1).map(|a| a.as_str()) == Some("batch-to
         }
         let mut out = String::new();
         for s in src.split('\\0') {
-            let (root, errs) = parse_total(s, &mut CstBuilder::default());
+            let mut b = CstBuilder::default();
+            let (root, errs, strict, (steps, attempts, amax)) = parse_total_work(s, &mut b);
             out.push_str(if root.is_some() { "[true,[" } else { "[false,[" });
             for (i, e) in errs.iter().enumerate() {
                 if i > 0 { out.push(','); }
@@ -5960,7 +6010,18 @@ const RS_BATCH_TOTAL = `    if args.get(1).map(|a| a.as_str()) == Some("batch-to
                 match &e.related { Some(r) => { out.push_str(&format!(",{},{},", r.off, r.end)); js(&r.message, &mut out); } None => out.push_str(",-1,-1,\\"\\""), }
                 out.push(']');
             }
-            out.push_str("]]\\n");
+            out.push_str("],");
+            match root { Some(h) => js(&cst_json_with(&b, h), &mut out), None => out.push_str("\\"\\"") }
+            out.push_str(&format!(",{},{},{},", steps, attempts, amax));
+            match &strict {
+                Some(e) => {
+                    out.push_str(&format!("[{},{},", e.off, e.end)); js(&e.message, &mut out);
+                    match &e.related { Some(r) => { out.push_str(&format!(",{},{},", r.off, r.end)); js(&r.message, &mut out); } None => out.push_str(",-1,-1,\\"\\""), }
+                    out.push(']');
+                }
+                None => out.push_str("null"),
+            }
+            out.push_str("]\\n");
         }
         print!("{}", out);
         return;
@@ -6257,7 +6318,7 @@ ${opts.recovery ? RS_BATCH_TOTAL + RS_BATCH_INTERP : ''}    // batch: NUL-separa
 export function emitRust(grammar: CstGrammar, opts?: { shape?: ShapeSpec }): string {
   const ir = portableIR(grammar, FACTS);
   const ids = buildLexIdPlan(ir);
-  const base = emitRustLibrary(ir, ids, rustTarget.shared);
+  const base = emitRustLibrary(ir, ids, rustTarget.shared, false);
   if (!opts?.shape) return base;
   return base + emitRustShapeAddon(ir, validateShapeOrThrow(grammar, opts.shape), ids);
 }

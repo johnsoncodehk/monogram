@@ -29,7 +29,8 @@ import { scratchDir } from './scratch.ts';
 import { createParser, type CstLeaf, type CstNode } from '../src/gen-parser.ts';
 import type { CstGrammar } from '../src/types.ts';
 import { armNameOf, evaluator, ShapeUnmapped, type Shape, type ShapeNode } from '../src/shape2-eval.ts';
-import { compareTrees, conformanceFiles, type Divergence, type NTree, type NValue } from './shape-oracle.ts';
+import { nodeKeysOf } from '../src/shape2-schema.ts';
+import { compareTrees, conformanceFiles, nestValue, type Divergence, type NTree, type NValue } from './shape-oracle.ts';
 
 export const REALJS_LIST = '/home/linuxuser/.cache/monogram-agents/scratch/fix-grammar-queue-2/realjs-files.txt';
 const RECORD = new URL('./shape2-oracle-record.json', import.meta.url);
@@ -141,7 +142,7 @@ export function runShape(shape: OracleShape, corpus: string, paths: string[], sa
       r.units++;
       if (!n) { r.unpaired++; return; }
       let value;
-      try { value = valueAt(n) as ShapeNode; } catch (e) {
+      try { value = nestValue(valueAt(n), nodeKeysOf(loaded.spec)) as unknown as ShapeNode; } catch (e) {
         if (e instanceof ShapeUnmapped) { r.outOfSubset++; bump(r.unmapped, `${e.rule}.${e.arm}`); return; }
         r.evalErrors++; bump(r.unmapped, `ERROR ${(e as Error).message.slice(0, 80)}`); return;
       }
@@ -171,30 +172,34 @@ export function runShape(shape: OracleShape, corpus: string, paths: string[], sa
 }
 
 /** The EMITTED shape-building parser (TypeScript target, emit option `shape`, src/shape-plan.ts)
- * against the evaluator, on the expression of every expression statement (nested ones too) of the
- * corpus: the value the parser built for the expression's node (observeBuilt: the last one built for that
- * node's arm and span) must be the evaluator's value of it. A statement the evaluator cannot give
- * (an unmapped arm) is outside the shape; one whose built value is missing as `unsupported` is
- * outside what the emitted plans build yet (the plan's reason counted); the rest are compared. */
+ * against the evaluator, in three views: the EXPRESSION of every expression statement (nested ones
+ * too), every expression STATEMENT itself (nested ones too), and the whole FILE (parse()'s root).
+ * The value the parser built for a unit's node (observeBuilt: the last one built for that node's
+ * arm and span; the file: what parse() returns) must be the evaluator's value of it. A unit the
+ * evaluator cannot give (an unmapped arm) is outside the shape; one whose built value is missing
+ * as `unsupported` is outside what the emitted plans build yet (the plan's reason counted); the
+ * rest are compared. */
+export const BUILT_VIEWS = ['expression', 'statement', 'file'] as const;
 export type BuiltBoard = {
-  shape: string; corpus: string; files: number; filesRejected: number; units: number; outOfShape: number; unsupported: number;
+  shape: string; corpus: string; view: (typeof BUILT_VIEWS)[number]; files: number; filesRejected: number; units: number; outOfShape: number; unsupported: number;
   notBuilt: number; compared: number; identical: number; reasons: Record<string, number>; samples: string[];
 };
-export async function runBuilt(shape: OracleShape, corpus: string, paths: string[], samples = 6): Promise<BuiltBoard> {
+export async function runBuilt(shape: OracleShape, corpus: string, paths: string[], samples = 6): Promise<BuiltBoard[]> {
   const file = join(scratchDir('shape2-oracle'), `built-${shape.name}.ts`);
   writeFileSync(file, emitParser(shape.grammar, tsTarget, { shape: shape.shape }));
   const m = await import(file);
   const arms = m.shapeArms as { rule: string; arm: string }[];
   const parser = createParser(shape.grammar);
-  const b: BuiltBoard = { shape: shape.name, corpus, files: paths.length, filesRejected: 0, units: 0, outOfShape: 0, unsupported: 0, notBuilt: 0, compared: 0, identical: 0, reasons: {}, samples: [] };
+  const boards = BUILT_VIEWS.map((view): BuiltBoard => ({ shape: shape.name, corpus, view, files: paths.length, filesRejected: 0, units: 0, outOfShape: 0, unsupported: 0, notBuilt: 0, compared: 0, identical: 0, reasons: {}, samples: [] }));
   for (const path of paths) {
     const src = readFileSync(path, 'utf-8');
     let cst: CstNode;
-    try { cst = parser.parse(src); } catch { b.filesRejected++; continue; }
+    try { cst = parser.parse(src); } catch { for (const b of boards) b.filesRejected++; continue; }
     const valueAt = evaluator(shape.shape, cst, src);
     const built = new Map<string, unknown>();
     m.observeBuilt((id: number, off: number, end: number, v: unknown) => { const a = arms[id]!; built.set(`${a.rule}.${a.arm}@${off}:${end}`, v); });
-    try { m.parse(src); } catch (e) { if (!(e instanceof m.ShapeMissing)) throw e; }
+    let root: unknown;
+    try { root = m.parse(src); } catch (e) { if (!(e instanceof m.ShapeMissing)) throw e; root = e; }
     m.observeBuilt(null);
     const units: CstNode[] = [];
     const walk = (x: CstNode | CstLeaf): void => {
@@ -203,31 +208,33 @@ export async function runBuilt(shape: OracleShape, corpus: string, paths: string
       x.children.forEach(walk);
     };
     walk(cst);
-    for (const st of units) {
-      // The statement's EXPRESSION (its rule-node child): the ExpressionStatement node itself reads
-      // the inherited directive-prologue state, which S1's plans do not build.
-      const n = st.children.find((k): k is CstNode => !('tokenType' in k));
-      if (!n) continue;
+    const score = (b: BuiltBoard, n: CstNode, got: unknown): void => {
       b.units++;
       let want: unknown;
-      try { want = valueAt(n); } catch (e) { if (e instanceof ShapeUnmapped) { b.outOfShape++; continue; } throw e; }
-      const got = built.get(`${n.rule}.${armNameOf(shape.shape, n, src)}@${n.offset}:${n.end}`);
-      if (got === undefined) { b.notBuilt++; continue; }
+      try { want = valueAt(n); } catch (e) { if (e instanceof ShapeUnmapped) { b.outOfShape++; return; } throw e; }
+      if (got === undefined) { b.notBuilt++; return; }
       if (got instanceof m.ShapeMissing) {
         const g = got as { why: string; where: string };
-        if (g.why === 'unsupported') { b.unsupported++; bump(b.reasons, g.where.replace(/^[^(]*\(/, '(')); continue; }
-        b.notBuilt++; bump(b.reasons, `UNMAPPED but evaluated: ${g.where}`); continue;
+        if (g.why === 'unsupported') { b.unsupported++; bump(b.reasons, g.where.replace(/^[^(]*\(/, '(')); return; }
+        b.notBuilt++; bump(b.reasons, `UNMAPPED but evaluated: ${g.where}`); return;
       }
       b.compared++;
       if (JSON.stringify(got) === JSON.stringify(want)) b.identical++;
       else if (b.samples.length < samples) b.samples.push(`${path}@${n.offset} ${JSON.stringify(src.slice(n.offset, Math.min(n.end, n.offset + 80)))}\n      built ${JSON.stringify(got).slice(0, 300)}\n      eval  ${JSON.stringify(want).slice(0, 300)}`);
+    };
+    const builtOf = (n: CstNode): unknown => built.get(`${n.rule}.${armNameOf(shape.shape, n, src)}@${n.offset}:${n.end}`);
+    for (const st of units) {
+      const n = st.children.find((k): k is CstNode => !('tokenType' in k));
+      if (n) score(boards[0]!, n, builtOf(n));
+      score(boards[1]!, st, builtOf(st));
     }
+    score(boards[2]!, cst, root);
   }
-  return b;
+  return boards;
 }
 export function formatBuilt(b: BuiltBoard): string {
   return [
-    `${b.shape} on ${b.corpus}, emitted shape-building parser (TypeScript) vs the evaluator, unit "an expression statement's expression": ${b.files} files (${b.filesRejected} rejected by the grammar); ` +
+    `${b.shape} on ${b.corpus}, emitted shape-building parser (TypeScript) vs the evaluator, unit "${b.view}": ${b.files} files (${b.filesRejected} rejected by the grammar); ` +
       `${b.units} units: ${b.outOfShape} outside the shape, ${b.unsupported} outside what the plans build yet, ${b.notBuilt} not built, ${b.compared} compared, ${b.identical} identical, ${b.compared - b.identical} diverged`,
     '  outside what the plans build yet, by reason:', ...top(b.reasons, 12),
     ...(b.samples.length ? ['  divergent samples:', ...b.samples.map((x) => `    ${x}`)] : []),
@@ -300,13 +307,12 @@ if (import.meta.main) {
     // The emitted shape-building parser (TypeScript) must build exactly the evaluator's values:
     // any divergence fails; fewer statements compared than recorded is a regression of what the
     // construct plans cover.
-    {
-      const b = await runBuilt(await shapeOf('estree'), CI_CORPUS.estree!, corpusPaths(CI_CORPUS.estree!), 4);
+    for (const name of ['estree', 'tsc']) for (const b of await runBuilt(await shapeOf(name), CI_CORPUS[name]!, corpusPaths(CI_CORPUS[name]!), 4)) {
       console.log(formatBuilt(b));
-      const key = `estree ${b.corpus} built`;
-      next[key] = { corpus: b.corpus, view: 'expression statement', units: b.units, compared: b.compared, identical: b.identical, outOfSubset: b.unsupported };
-      if (b.identical !== b.compared) problems.push(`${key}: ${b.compared - b.identical} statements built differently from the evaluator`);
-      if (b.notBuilt) problems.push(`${key}: ${b.notBuilt} statements the evaluator gives a value the parser did not build`);
+      const key = `${name} ${b.corpus} built${b.view === 'expression' ? '' : ` ${b.view}`}`;
+      next[key] = { corpus: b.corpus, view: b.view === 'expression' ? 'expression statement' : b.view === 'statement' ? 'top-level statement' : 'file', units: b.units, compared: b.compared, identical: b.identical, outOfSubset: b.unsupported };
+      if (b.identical !== b.compared) problems.push(`${key}: ${b.compared - b.identical} units built differently from the evaluator`);
+      if (b.notBuilt) problems.push(`${key}: ${b.notBuilt} units the evaluator gives a value the parser did not build`);
       const was = record[key];
       if (!was) problems.push(`${key}: no record (run with --check --write)`);
       else if (b.compared < was.compared) problems.push(`${key}: compared ${was.compared} -> ${b.compared}`);
@@ -316,7 +322,7 @@ if (import.meta.main) {
     else console.log('shape2-oracle: no regression against the record');
   } else if (args[0] === '--built') {
     const shape = await shapeOf(args[1] ?? '');
-    for (const c of args.slice(2).length ? args.slice(2) : [CI_CORPUS[shape.name]!]) console.log(formatBuilt(await runBuilt(shape, c, corpusPaths(c))));
+    for (const c of args.slice(2).length ? args.slice(2) : [CI_CORPUS[shape.name]!]) for (const b of await runBuilt(shape, c, corpusPaths(c))) console.log(formatBuilt(b));
   } else {
     const shape = await shapeOf(args.shift() ?? '');
     const samples = args.indexOf('--samples') >= 0 ? Number(args.splice(args.indexOf('--samples'), 2)[1]) : 12;
