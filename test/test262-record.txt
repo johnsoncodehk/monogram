@@ -162,12 +162,7 @@ language/expressions/arrow-function/syntax/early-errors/asi-restriction-invalid-
 language/expressions/arrow-function/syntax/early-errors/asi-restriction-invalid-parenless-parameters.js
 language/expressions/arrow-function/syntax/early-errors/asi-restriction-invalid.js
 language/expressions/async-arrow-function/early-errors-arrow-formals-lineterminator.js
-language/expressions/async-generator/early-errors-expression-yield-star-after-newline.js
-language/expressions/generators/yield-star-after-newline.js
 language/expressions/object/method-definition/early-errors-object-method-async-lineterminator.js
-language/expressions/object/method-definition/yield-star-after-newline.js
-language/statements/class/definition/methods-gen-yield-star-after-newline.js
-language/statements/generators/yield-star-after-newline.js
 ## accept/rest-element-shape
 language/expressions/arrow-function/dflt-params-rest.js
 language/expressions/arrow-function/dstr/ary-ptrn-rest-not-final-ary.js

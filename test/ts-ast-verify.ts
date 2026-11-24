@@ -111,6 +111,9 @@ export const SNIPPETS: [string, string][] = [
   ['regex-div', 'const r = /ab+c/g; const q = a / b / c;'],
   ['elem-access', 'a[0] = b["k"];'],
   ['comma-empty', ';;'],
+  // `yield [no LineTerminator here] AssignmentExpression` and `using [no LineTerminator here]
+  // BindingList`: across a line break `yield` ends (ASI) and `using` is an identifier statement.
+  ['no-line-terminator', 'function* g() { yield\n 1; yield *\n 2 }\n{ using\n l = " " }\nasync function f() { await using\n x = y; }'],
 ];
 
 export const CORPUS_FILES = [

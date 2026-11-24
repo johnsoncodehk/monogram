@@ -186,6 +186,8 @@ const forHeads: { accept: string[]; reject: string[]; tscDeparts: string[] } = {
     'for (using a, b of c);', 'for (using a in b);', 'for (using {a} of b);', 'async function f() { for await (a in b); }', 'async function f() { for await (;;); }',
     'async function f() { for await (let.x of y); }', 'async function f() { for await (let of y); }',
     'for (var of x);', 'for (var in x);', 'for (var;;);', 'for (var of of);',
+    // ForDeclaration: `using [no LineTerminator here] ForBinding`, `await [no LineTerminator here] using …`
+    'for (using\n x of y);', 'async function f() { for (await using\n x of y); }',
   ],
   tscDeparts: [
     'for (var of x);', 'for (var in x);', 'for (var;;);', 'for (var of of);',
@@ -203,13 +205,15 @@ const forHeads: { accept: string[]; reject: string[]; tscDeparts: string[] } = {
 // of `with ( Expression )` is an Expression, a comma list included.
 const declarationLists: { accept: string[]; reject: string[]; tscDeparts: string[] } = {
   accept: [
-    'let;', 'let', 'let\nx = 1;', 'var a, b;', 'let a = 1, b;', 'const a = 1, b = 2;', 'using;', 'using\nx;',
+    'let;', 'let', 'let\nx = 1;', 'var a, b;', 'let a = 1, b;', 'const a = 1, b = 2;', 'using;', 'using\nx;', 'using\nx = 1;',
     'with (a, b) c;', 'with (a) c;', 'with (a, b, c) {}',
   ],
   reject: [
     'var;', 'const;', 'var a,', 'var a,;', 'let a,;', 'const a = 1,;', 'var\n;', 'with () c;', 'with (a,) c;',
+    // `await [no LineTerminator here] using`: across the break `await using` is an await expression
+    'async function f() { await\n using x = y; }',
   ],
-  tscDeparts: ['var;', 'const;', 'var a,', 'var a,;', 'let a,;', 'const a = 1,;', 'var\n;'],
+  tscDeparts: ['async function f() { await\n using x = y; }', 'var;', 'const;', 'var a,', 'var a,;', 'let a,;', 'const a = 1,;', 'var\n;'],
 };
 
 // ── `new` targets (13.3 MemberExpression) ──

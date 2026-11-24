@@ -300,7 +300,7 @@ export const forBindingArms = (BindingPattern, Expr, annotation = []) => [
 // `using` one: both grammars' heads parse it once and then branch.
 const forDeclaration = (ForBinding, tails, usingTails) => alt(
   [field('kind', alt('let', 'const', 'var')), field('binding', ForBinding), field('tail', alt(...tails))],
-  [not(['using', 'of', 'of']), field('kind', alt('using', ['await', 'using'])), not(alt('[', '{')), field('binding', ForBinding), field('tail', alt(...usingTails))],
+  [not(['using', 'of', 'of']), field('kind', alt('using', ['await', sameLine, 'using'])), sameLine, not(alt('[', '{')), field('binding', ForBinding), field('tail', alt(...usingTails))],
 );
 // The head inside `for ( … )`:
 // - `for ( [lookahead ≠ let [] Expression[~In]opt ; Expression opt ; Expression opt )` and the
@@ -586,7 +586,7 @@ const Expr = rule($ => [
   // the spec's [no LineTerminator here] between async and the binding identifier).
   arm('asyncArrowIdentifier', capExpr('?', field('asyncKeyword', 'async'), sameLine, awaitCtx(notReservedJsExpr, field('parameter', Ident)), field('arrow', '=>'), awaitCtx(field('body', conciseBody(Block, $))))),
   arm('arrowIdentifier', capExpr('?', notReservedJsExpr, field('parameter', Ident), field('arrow', '=>'), resetCtx(field('body', conciseBody(Block, $))))),
-  arm('yield_', capExpr('?', 'yield', alt(['*', $], [opt($)]))),   // yield e | yield* e (delegate) | yield
+  arm('yield_', capExpr('?', 'yield', alt(arm('star', sameLine, '*', $), arm('expr', opt(sameLine, $))))),   // yield e | yield* e (delegate) | yield
   ['(', field('first', $), many(field('comma', ','), field('rest', $)), ')'],
   // ImportCall: one or two AssignmentExpressions, no spread (the `...` arm is Arguments'), and ImportMeta.
   // A phase import call (import defer and source phase imports, Stage 3: `ImportCall : import .
@@ -714,7 +714,7 @@ const Stmt = rule($ => [
   ['debugger', asi()],
   // `with ( Expression ) Statement` (14.11): the object is an Expression, a comma list included.
   ['with', '(', field('object', Expr), many(field('objectComma', ','), field('objectRest', Expr)), ')', field('body', $)],
-  arm('using', opt(field('awaitKeyword', 'await')), field('usingKeyword', 'using'), field('binding', Binding), many(field('bindingComma', ','), field('bindingRest', Binding)), asi()),
+  arm('using', opt(field('awaitKeyword', 'await'), sameLine), field('usingKeyword', 'using'), sameLine, field('binding', Binding), many(field('bindingComma', ','), field('bindingRest', Binding)), asi()),
   Decl,
   // Not after a start that begins a block or a declaration (`expressionStatement`): without the
   // lookahead, longest match lets the expression reading win wherever a tail makes it longer
