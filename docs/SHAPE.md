@@ -555,6 +555,8 @@ No `customs` map — every product is declarative (`node` / `choice` / `pratt` /
 
 | Gate | Question |
 |---|---|
+| [`test/shape2-oracle.ts`](../test/shape2-oracle.ts) `--check` (built boards) | The TypeScript shape-building parser ≡ the evaluator, per expression statement, top-level statement and file, on node_modules (ESTree) and conformance/expressions (tsc). What the tsc board does NOT reach: every class / function declaration and import (the `modifiers` nodes attribute is not built yet, so they are outside what the plans build), and templates; the witnesses the corpus misses are in [`test/fixtures/shape-built-witnesses.ts`](../test/fixtures/shape-built-witnesses.ts) (a class expression's heritage clause). |
+| [`test/shape-typed-rust.ts`](../test/shape-typed-rust.ts) | The typed Rust AST ≡ the evaluator: namedcalc, a losing candidate, and the tsc expression shape's synthesized subset (every inherited attribute at its default: [`test/fixtures/shape-tsc-synthesized.ts`](../test/fixtures/shape-tsc-synthesized.ts)) on conformance/expressions files (whole files: most hold a type annotation, which the shape does not map, so they compare as missing on both sides). |
 | [`test/shape-parity.ts`](../test/shape-parity.ts) | CST↔`parseAst` accept/reject parity (calc + toy corpora); custom/`parentFold` spots; TypeScript shape coverage + ESTree customs; no-shape byte identity vs `emitParser`; `validateShape` on calc and its negatives; golden `parseAst` ASTs for calc (handwritten expects); perf smoke. |
 
 It runs under `npm run check` (see [`docs/TESTING.md`](TESTING.md)).
