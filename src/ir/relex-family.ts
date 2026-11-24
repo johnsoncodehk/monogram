@@ -601,12 +601,18 @@ function windowRelexStepFn(m: RelexMode): Fn {
   };
 }
 
+/** The arguments of a relexEdits call: the old tokens only in a mode with a windowed relex (the one that reads them). */
+export const relexEditsArgs = (ir: ParserIR, text: string, toks: string, edits: string): string[] => (relexMode(ir).window ? [text, toks, edits] : [text, edits]);
+
+export const RELEX_EDITS = 'relexEdits';
 function relexEditsFn(m: RelexMode): Fn {
   const doc = 'Apply edits to (text, meta): returns (new text, new meta, tokens relexed, the lexer error or none).\nWith a lexer error the text and meta are unspecified.';
   const params = [{ name: 'text', ty: 'str' as Ty }, { name: 'toks', ty: 'metas' as Ty }, { name: 'edits', ty: 'edits' as Ty }];
   if (!m.window) {
+    // the old tokens are not read: the call passes none (relexEditsArgs)
+    params.splice(1, 1);
     return {
-      name: 'relexEdits', doc: `${doc}\nThis lexer mode has no windowed relex: the whole text is re-lexed.`, params, ret: ['str', 'metas', 'int', ERR],
+      name: RELEX_EDITS, doc: `${doc}\nThis lexer mode has no windowed relex: the whole text is re-lexed.`, params, ret: ['str', 'metas', 'int', ERR],
       body: [
         let_('next', 'str', call('applyEdits', 'text', 'edits')),
         { k: 'letCall', names: ['meta', 'err'], call: call('scanMeta', 'next') },
@@ -616,7 +622,7 @@ function relexEditsFn(m: RelexMode): Fn {
     };
   }
   return {
-    name: 'relexEdits', doc, params, ret: ['str', 'metas', 'int', ERR],
+    name: RELEX_EDITS, doc, params, ret: ['str', 'metas', 'int', ERR],
     body: [
       let_('curText', 'str', { k: 'own', e: x('text') }),
       let_('curToks', 'metas', { k: 'own', e: x('toks') }),

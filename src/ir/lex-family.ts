@@ -89,6 +89,8 @@ export const UNI_CLASS = 'lexUniClass';
 export const UNI_IDENT = 'lexUniIdent';
 /** The template span scanner (see `tplSpan`). */
 export const TPL_SPAN = 'lexTplSpan';
+/** Whether the template span scanner takes `strict`: only a template with an escape check reads it. */
+export const tplSpanStrict = (t: { escapeValid: TokenPattern | null }): boolean => t.escapeValid !== null;
 
 const sig = (name: string, doc: string, body: Stmt[]): Fn => ({ name, doc, params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }], ret: ['int'], body });
 
@@ -303,6 +305,7 @@ class LexScan {
   // or -2 - q when `strict` and the backslash at q begins no well-formed escape. A backslash
   // otherwise takes the next character.
   tplSpan(t: { open: string; interpOpen: string; escapeValid: TokenPattern | null }): Fn {
+    const strict = tplSpanStrict(t);
     const esc = t.escapeValid === null ? null : this.exact(t.escapeValid);
     const skip = set('q', add('q', I(2)));
     const escape = esc === null ? [skip] : [if_('strict', [
@@ -313,7 +316,7 @@ class LexScan {
     return {
       name: TPL_SPAN,
       doc: 'A template span: the position of the delimiter ending it, -1 when unterminated, -2 - q for a malformed escape at q (strict).',
-      params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }, { name: 'strict', ty: 'bool' }],
+      params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }, ...(strict ? [{ name: 'strict', ty: 'bool' as const }] : [])],
       ret: ['int'],
       body: [
         let_('q', 'p'),
