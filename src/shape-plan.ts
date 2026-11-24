@@ -41,10 +41,12 @@
 //   depend on it is computed once and shared), and every READER of the node picks the variant by
 //   the value it gives the child (its equation, else the default): the led its left, an rd parent
 //   its child, parse() the root. Nothing is rebuilt and no children are kept.
-// Not yet compiled (an arm needing one is MISSING, `unsupported`, which fails only where it is
-// read, as an unmapped arm does): a nodes attribute, a template's parts, a Pratt arm reading two
-// inherited attributes or handing one down (ESTree's `pattern` spine: S3), an inherited equation at
-// a call site that reads more than a constant or a copy.
+// S3: an attribute a Pratt arm reads only in its top layer is READER-APPLIED (topForm: no
+// variants), and one a Pratt rule's arms copy into children (a spine: ESTree `pattern`) is CONTEXT
+// with RE-PARSE ON DEMAND (Restart). Not yet compiled (an arm needing one is MISSING,
+// `unsupported`, which fails only where it is read, as an unmapped arm does): a nodes attribute, a
+// template's parts, a Pratt arm reading two variant attributes or handing one down, an inherited
+// equation at a call site that reads more than a constant or a copy.
 import type { Expr, Fn, Stmt } from './algo-ir.ts';
 import type { ParserIR, PrattRule, RdRule, RuleIR, ShapeInhVal, Step } from './emit-portable.ts';
 import type { RuleExpr } from './types.ts';
@@ -76,6 +78,14 @@ export type ShapePlan = {
    * that attribute's default is true (the value a reader without an equation takes). */
   variantBit: number[];
   variantDefault: boolean[];
+  /** Per engine arm: the function applying its READER-APPLIED TOP layer (topForm) to its value
+   * (`top<id>(x, off, end)`: the layer's node, applied where the arm's kept condition under the
+   * attribute = true holds, topBit), else null; and whether the attribute's default is true (an observer of the
+   * arm's accept sees the default reading). */
+  tops: (string | null)[];
+  topDefault: boolean[];
+  /** The Pratt rules that re-parse a left operand on demand (Restart). */
+  restarts: Restart[];
   /** Slot-leaving steps with a grammar tag, and those that write it (a plan reads it). */
   tagStats: { sites: number; tagged: number };
   /** How the plans' slot reads are compiled (FUSED positions; counted per compiled read site). */
@@ -85,6 +95,17 @@ export type ShapePlan = {
   /** The keys a node holds its kind and span under, before its fields (ShapeSpec.node): one flat
    * object per node. */
   nodeKeys: { kind: string; start: string; end: string };
+};
+
+/** RE-PARSE ON DEMAND for a Pratt rule's spine attribute k (see planShape): per engine arm whether
+ * it is a SPINE arm (it reads the attribute or copies it into a child: the trigger's "the left
+ * depends on it"; M5's `form & formPass(i)` is the exact form of the same test); the value the
+ * binary operator gives its left (a constant, or the function `fn(b, off, end)` over the operator
+ * slot just pushed at b + 1); per led its left's value; the context the binary operator's right
+ * operand and the prefix operator's operand are called with. */
+export type Restart = {
+  rule: string; k: number; spine: boolean[];
+  bin: { c: Scalar } | { fn: string }; leds: Scalar[]; right: ShapeInhVal; operand: ShapeInhVal;
 };
 
 /** The engine's key for each accept site of a rule: rd `alt<i>`; Pratt `nud<i>`, `led<i>`,
@@ -239,6 +260,9 @@ const ATTR_FNS: Fn[] = ([
   ['inhVar', [['k', 'int']], VAL, true], ['slotValV', [['i', 'idx'], ['m', 'int']], VAL, true], ['slotSyn', [['k', 'int'], ['i', 'idx']], VAL, true],
   ['selfSyn', [['k', 'int']], VAL, true], ['altVal', [['x', VAL]], null, true], ['recGet', [['x', VAL], ['f', 'str']], VAL, false],
   ['vDropLast', [['x', VAL], ['c', 'bool']], VAL, false],
+  // A reader-applied top (topForm): a slot's value read under the attribute = true (its arm's top
+  // layer applied when its kept condition holds; m: the variant bits), and the arm's condition kept.
+  ['slotValT', [['i', 'idx'], ['m', 'int']], VAL, true], ['topBit', [['c', 'bool']], null, true],
 ] as [string, [string, string][], string | null, boolean][]).map(([name, ps, ret, method]) => ({
   name, doc: '', params: ps.map(([n, ty]) => ({ name: n, ty: ty as never })), ret: ret === null ? [] : [ret as never], body: [], extern: true,
   ...(method ? { method: true, reads: true } : {}),
@@ -253,6 +277,35 @@ function eachTerm(t: unknown, f: (t: Term) => void): void {
   for (const x of Object.values(t)) eachTerm(x, f);
 }
 const inhReads = (t: unknown): Set<string> => { const out = new Set<string>(); eachTerm(t, (x) => { if (x.t === 'inh') out.add(x.attr); }); return out; };
+
+/** A READER-APPLIED TOP (docs/SHAPE.md "Inherited equations"): an arm term `let(x, X, iff(c, W[x],
+ * x))` (what `wrapIf` writes) whose inherited attribute `attr` is read only in that outermost
+ * layer: X reads no inherited attribute, c is a bool over `attr`, the arm's own synthesized
+ * attributes and constants, and W is a node of a constant kind over x and constants, spanning the
+ * arm. The construct then builds X alone (and keeps c under `attr` = true per slot), and each
+ * reader of the slot applies the layer (`wrap`, over the variable `name`) with its own equation
+ * value of `attr`: no variants. Null: not that form. */
+export function topForm(t: Term, attr: string): { inner: Term; name: string; cond: Term; wrap: Term } | null {
+  if (t.t !== 'let' || t.body.t !== 'if') return null;
+  const { name, value, body } = t;
+  const { cond, then, else: els } = body as Extract<Term, { t: 'if' }>;
+  if (els.t !== 'var' || els.name !== name) return null;
+  if (inhReads(value).size > 0) return null;
+  const condOk = (c: Term): boolean => {
+    switch (c.t) {
+      case 'const': return typeof c.value === 'boolean';
+      case 'inh': return c.attr === attr;
+      case 'syn': return c.name === undefined;
+      case 'not': return condOk(c.arg);
+      case 'and': case 'or': return c.args.every(condOk);
+      default: return false;
+    }
+  };
+  if (!condOk(cond) || !inhReads(cond).has(attr)) return null;
+  if (then.t !== 'node' || then.type.t !== 'const' || then.span !== undefined) return null;
+  if (!Object.values(then.fields).every((f) => f.t === 'const' || f.t === 'absent' || (f.t === 'var' && f.name === name))) return null;
+  return { inner: value, name, cond, wrap: then };
+}
 
 /** An arm's inherited equations: attribute -> child name -> equation. */
 type Eqs = Map<string, Map<string, InhEq>>;
@@ -295,8 +348,41 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
     }
     reads.set(r.name, scalarInh.map((a) => a.name).filter((a) => got.has(a)));
   }
-  const variants = (rule: string): string[] => (kinds.get(rule) === 'pratt' ? reads.get(rule) ?? [] : []);
-  const cx: AttrCx = { inhK, synK, scalarInh, nodesAttrs, variants, synDflt: syn.map((a) => a.dflt), synSlotRead: new Set(), needRule: new Map() };
+  // READER-APPLIED TOPS (topForm): a Pratt rule's bool attribute that every arm reading it reads
+  // only in its top layer, and that no equation of the rule's arms reads (one per rule). Its
+  // readers apply the layer; it is not a variant attribute.
+  const topAttr = new Map<string, string>();
+  for (const r of ir.rules) {
+    if (r.kind !== 'pratt') continue;
+    const terms = Object.values(spec.rules[r.name] ?? {});
+    const eqReads = new Set<string>();
+    for (const [, d] of inhDecls) for (const kids of Object.values((d.rules as RuleEqs)[r.name] ?? {})) for (const eq of Object.values(kids)) for (const a of inhReads(eq.t === 'thread' ? (eq as ThreadEq).init : eq)) eqReads.add(a);
+    for (const [, d] of synDecls) for (const eq of Object.values(d.rules[r.name] ?? {})) for (const a of inhReads(eq)) eqReads.add(a);
+    const ts = (reads.get(r.name) ?? []).filter((a) => typeof scalarInh[inhK.get(a)!]!.dflt === 'boolean' && !eqReads.has(a)
+      && terms.some((t) => inhReads(t).has(a)) && terms.every((t) => !inhReads(t).has(a) || topForm(t, a) !== null));
+    if (ts.length === 1) topAttr.set(r.name, ts[0]!);
+  }
+  // SPINE attributes (RE-PARSE ON DEMAND): a Pratt rule's attribute some arm of the rule copies
+  // into a child (ESTree `pattern`: the literals hand it to their elements) is CONTEXT, as an rd
+  // rule's is (set at every call of the rule, read as inhVar). A led's equation for its LEFT is
+  // known only once the led is seen, after the left was built under the invocation's context: when
+  // the two differ and the left's arm reads or copies the attribute (a SPINE arm), the engine
+  // re-parses the left under the led's value (restore to the invocation's mark, parse again up to
+  // the led's token) and goes on. One per rule.
+  const spineAttr = new Map<string, string>();
+  for (const r of ir.rules) {
+    if (r.kind !== 'pratt') continue;
+    const copies = new Set<string>();
+    for (const [attr, d] of inhDecls) for (const kids of Object.values((d.rules as RuleEqs)[r.name] ?? {})) for (const eq of Object.values(kids)) if (eq.t === 'inh' && eq.attr === attr) copies.add(attr);
+    const ss = (reads.get(r.name) ?? []).filter((a) => copies.has(a) && topAttr.get(r.name) !== a && typeof scalarInh[inhK.get(a)!]!.dflt === 'boolean');
+    if (ss.length === 1) spineAttr.set(r.name, ss[0]!);
+  }
+  const variants = (rule: string): string[] => (kinds.get(rule) === 'pratt' ? (reads.get(rule) ?? []).filter((a) => topAttr.get(rule) !== a && spineAttr.get(rule) !== a) : []);
+  // The context attributes a call of `rule` sets (Step.inh).
+  const ctxOf = (rule: string): string[] => (kinds.get(rule) === 'rd' ? reads.get(rule) ?? [] : spineAttr.has(rule) ? [spineAttr.get(rule)!] : []);
+  const restarts: Restart[] = [];
+  const tops: (string | null)[] = [], topDefault: boolean[] = [];
+  const cx: AttrCx = { inhK, synK, scalarInh, nodesAttrs, variants, topAttr, ctxOf, synDflt: syn.map((a) => a.dflt), synSlotRead: new Set(), needRule: new Map() };
   const readStats: ReadStats = { fixed: 0, checked: 0, scan: 0, list: 0 };
   for (const r of ir.rules) {
     const view = shape.grammar.arms.get(r.name);
@@ -311,7 +397,7 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
       const fnStart = fns.length;
       arms.push({ id, rule: r.name, key, arm });
       ids.set(`${r.name}|${key}`, id);
-      variantBit.push(-1); variantDefault.push(false);
+      variantBit.push(-1); variantDefault.push(false); tops.push(null); topDefault.push(false);
       for (const sy of syn) sy.fns.push(null);
       if (arm === NO_ARM) {
         tagsByKey.set(key, numberArm([], named));
@@ -325,7 +411,32 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
       const eqs = armEqs(shape, r.name, arm);
       const sites: ArmSites = { eqs, childOf: childNames(info), threads: new Map() };
       sitesByKey.set(key, sites);
-      const term = spec.rules[r.name]?.[arm];
+      const sa = spineAttr.get(r.name);
+      if (sa !== undefined) {
+        let rs = restarts.find((x) => x.rule === r.name);
+        if (!rs) { rs = { rule: r.name, k: inhK.get(sa)!, spine: [], bin: { c: false }, leds: [], right: { c: false }, operand: { c: false } }; restarts.push(rs); }
+        const dflt = scalarInh[inhK.get(sa)!]!.dflt;
+        const kids = eqs.get(sa);
+        const t0 = spec.rules[r.name]?.[arm];
+        rs.spine[id] = (t0 !== undefined && inhReads(t0).has(sa)) || [...(kids?.values() ?? [])].some((e) => e.t === 'inh' && e.attr === sa);
+        const left = kids?.get('left');
+        const ctxVal = (e: InhEq | undefined): ShapeInhVal => (e === undefined ? { c: dflt } : inhVal(cx, e as Term));
+        if (key.startsWith('led')) {
+          if (left !== undefined && left.t !== 'const') throw new Error(`planShape: ${r.name}.${arm}: the left's ${sa} at a led is a constant (re-parse on demand), not ${left.t}`);
+          rs.leds[Number(key.slice(3))] = left === undefined ? dflt : (left as { value: Scalar }).value;
+        }
+        if (key === 'bin') {
+          rs.right = ctxVal(kids?.get('right'));
+          if (left === undefined || left.t === 'const') rs.bin = { c: left === undefined ? dflt : (left as { value: Scalar }).value };
+          else {
+            const fnName = `leq${id}`;
+            fns.push({ name: fnName, doc: `${r.name}.${arm}: the left's ${sa} (its operator just pushed)`, params: ARM_PARAMS, ret: [VAL as never], body: new ArmCompiler(shape, info, num, positional(r, key, info), 0, marked, cooks, cx, eqs, null, readStats, new Set()).compile(left as Term), method: true, reads: true });
+            rs.bin = { fn: fnName };
+          }
+        }
+        if (info.form === 'prefix') rs.operand = ctxVal(kids?.get('operand'));
+      }
+      let term = spec.rules[r.name]?.[arm];
       const where = `${r.name}.${arm}`;
       const at = info.form ? null : slotPositions(info.items ?? [], ir.gtComps);
       const ownSyn = new Set(synDecls.flatMap(([, d], k) => (d.rules[r.name]?.[arm] !== undefined ? [k] : [])));
@@ -361,17 +472,29 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
             const h = [...inhReads(eq.t === 'thread' ? (eq as ThreadEq).init : eq)].find((a) => vs.includes(a));
             if (h !== undefined) no(`a Pratt arm handing down ${h}, which a later operator may change`);
           }
-          const own = [...inhReads(term)].filter((a) => !nodesAttrs.has(a));
+          const ta = topAttr.get(r.name);
+          let topBody: Stmt[] | undefined;
+          if (ta !== undefined && inhReads(term).has(ta)) {
+            // A reader-applied top: the construct builds the inner value; top<id> the layer.
+            const tf = topForm(term, ta)!;
+            fns.push({ name: `top${id}`, doc: `${where}: the top layer (applied by a reader giving ${ta} = true)`, params: [{ name: 'x', ty: VAL as never }, { name: 'off', ty: 'pos' }, { name: 'end', ty: 'pos' }], ret: [VAL as never], body: compiler().compileTop(tf), method: true, reads: true });
+            tops[id] = `top${id}`;
+            topDefault[id] = scalarInh[inhK.get(ta)!]!.dflt === true;
+            topBody = compiler().compileWithTop(tf, ta);
+            term = tf.inner;
+          }
+          const own = [...inhReads(term)].filter((a) => vs.includes(a));
           if (vs.length && own.length > 1) no(`a Pratt arm reading two inherited attributes (${own.join(', ')})`);
           if (vs.length && own.length === 1) {
             if (typeof scalarInh[inhK.get(own[0]!)!]!.dflt !== 'boolean') no(`a Pratt arm reading the non-bool inherited ${own[0]}`);
             body = compiler().compileVariants(term, own[0]!);
             variantBit[id] = vs.indexOf(own[0]!);
             variantDefault[id] = scalarInh[inhK.get(own[0]!)!]!.dflt === true;
-          } else body = compiler().compile(term);
+          } else body = topBody ?? compiler().compile(term);
         } catch (e) {
           if (!(e instanceof Unsupported)) throw e;
           unsupported.set(id, e.message);
+          tops[id] = null;
           body = [{ k: 'return', es: [{ k: 'vMissing', where: `${where} (${e.message})`, why: 'unsupported' }] }];
         }
       }
@@ -384,7 +507,7 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
   const needs = dropNeeds(fns, arms, unsupported, cx.needRule);
   fns.push(...EXTERNS, ...SPAN_FNS, ...ATTR_FNS, ...[...cooks].map(cookFn));
   return {
-    arms, fns, cooks: [...cooks], unsupported, syn, inh: scalarInh, variantBit, variantDefault, tagStats, reads: readStats, needs, nodeKeys: nodeKeysOf(spec),
+    arms, fns, cooks: [...cooks], unsupported, syn, inh: scalarInh, variantBit, variantDefault, tops, topDefault, restarts, tagStats, reads: readStats, needs, nodeKeys: nodeKeysOf(spec),
     armId: (rule, key) => { const id = ids.get(`${rule}|${key}`); if (id === undefined) throw new Error(`planShape: no engine arm ${rule} ${key}`); return id; },
     ir: { ...ir, rules: newRules, reuse: null },
   };
@@ -427,7 +550,12 @@ function dropNeeds(fns: Fn[], arms: EngineArm[], unsupported: Map<number, string
 
 type AttrCx = {
   inhK: Map<string, number>; synK: Map<string, number>; scalarInh: { name: string; dflt: Scalar }[];
-  nodesAttrs: Set<string>; variants: (rule: string) => string[]; synDflt: (Scalar | undefined)[];
+  nodesAttrs: Set<string>; variants: (rule: string) => string[];
+  /** Per Pratt rule, its reader-applied top attribute (topForm), if any. */
+  topAttr: Map<string, string>;
+  /** The context attributes a call of a rule sets (an rd rule's, a Pratt rule's spine one). */
+  ctxOf: (rule: string) => string[];
+  synDflt: (Scalar | undefined)[];
   /** The synthesized attributes some arm reads off a child's slot (kept per slot: the rest are not). */
   synSlotRead: Set<number>;
   /** Each child read's vNeed and the child's rule (see ArmCompiler.need). */
@@ -502,10 +630,10 @@ function shapeSteps(r: RuleIR, tags: Map<string, Numbering>, marked: Map<RuleExp
       delete o.share;
       if (s.src && (s.t === 'lit' || s.t === 'tok' || s.t === 'rule' || s.t === 'ruleBp' || s.t === 'altlit')) { const t = num.tagOf.get(s.src); if (t !== undefined) { tagStats.sites++; if (site?.readsTag?.(t)) { o.tag = t; tagStats.tagged++; } } }
       if (s.src && marked.has(s.src)) o.mark = marked.get(s.src)!;
-      if (site && s.t === 'rule' && kinds.get(s.name) === 'rd' && reads.get(s.name)?.length) {
+      if (site && (s.t === 'rule' || s.t === 'ruleBp') && cx.ctxOf(s.name).length) {
         const kid = s.src ? site.childOf.get(s.src) : undefined;
         const inh: { k: number; v: ShapeInhVal }[] = [];
-        for (const attr of reads.get(s.name)!) {
+        for (const attr of cx.ctxOf(s.name)) {
           const k = cx.inhK.get(attr)!;
           if (threaded.has(k)) continue;
           const eq = kid === undefined ? undefined : site.eqs.get(attr)?.get(kid);
@@ -606,6 +734,28 @@ class ArmCompiler {
     out.push({ k: 'return', es: [v(f)] });
     return out;
   }
+  /** A reader-applied top's construct (topForm): the inner value, and the layer's condition under
+   * the attribute = true (topBit: kept per slot; a reader giving true applies the layer when it is
+   * set). The condition under false must be false (a reader giving false reads the value). */
+  compileWithTop(tf: { inner: Term; cond: Term }, attr: string): Stmt[] {
+    const out = this.open();
+    const r = this.bindVal(this.val(tf.inner, this.armScope, out), out);
+    this.fixed = [attr, false];
+    if (this.staticBool(tf.cond) !== false) no(`a reader-applied ${attr} whose layer applies under ${attr} = false`);
+    this.fixed = [attr, true];
+    out.push({ k: 'run', call: call('topBit', this.bool(tf.cond, this.armScope, out)) });
+    this.fixed = null;
+    out.push({ k: 'return', es: [v(r)] });
+    return out;
+  }
+  /** A reader-applied top's layer node over the arm's value `x` spanning off..end. */
+  compileTop(tf: { name: string; wrap: Term }): Stmt[] {
+    this.root = [];
+    const out = this.root;
+    this.armScope = { info: this.info, base: [], lo: 'off', hi: 'end', vars: new Map([[tf.name, { val: 'x', start: 'off', end: 'end' }]]), arm: true, origin: 'off', hiOk: false, taken: new Set() };
+    out.push({ k: 'return', es: [this.val(tf.wrap, this.armScope, out)] });
+    return out;
+  }
   /** A thread's next state over one iteration's slots lo..hi (the state: the attribute's current
    * value), and the repetition it threads. */
   threadNext(eq: ThreadEq, over: string, k: number): { q: RuleExpr; body: Stmt[] } {
@@ -646,7 +796,22 @@ class ArmCompiler {
    * value this arm gives the child: its equation, else the default). */
   private childVal(idx: Expr, slot: Slot, out: Stmt[]): Expr {
     const vs = slot.rule ? this.cx.variants(slot.rule) : [];
+    // A reader-applied top: under the value this arm gives the child (its equation, else the
+    // default) = true, the read applies the slot's arm's top layer (slotValT).
+    const ta = slot.rule ? this.cx.topAttr.get(slot.rule) : undefined;
+    if (ta !== undefined) {
+      const eq = this.eqs.get(ta)?.get(slot.name);
+      if (eq?.t === 'thread') no(`a thread handing ${ta} to a Pratt rule's node`);
+      const st = eq === undefined ? this.cx.scalarInh[this.cx.inhK.get(ta)!]!.dflt === true : this.staticBool(eq as Term);
+      if (st === undefined) no(`a computed equation for the reader-applied ${ta}`);
+      if (st) { const m = this.variantMask(vs, slot, out); return call('slotValT', idx, m); }
+    }
     if (!vs.length) return call('slotVal', idx);
+    const m = this.variantMask(vs, slot, out);
+    return m.k === 'int' && m.v === 0 ? call('slotVal', idx) : call('slotValV', idx, m);
+  }
+  /** The variant bits this arm gives a child of a rule with variant attributes `vs`. */
+  private variantMask(vs: string[], slot: Slot, out: Stmt[]): Expr {
     let mask = 0;
     const dyn: [number, Expr][] = [];
     vs.forEach((attr, j) => {
@@ -656,10 +821,10 @@ class ArmCompiler {
       if (st === true) mask |= 1 << j;
       else if (st === undefined) dyn.push([j, this.bool(eq as Term, this.armScope, out)]);
     });
-    if (!dyn.length) return mask === 0 ? call('slotVal', idx) : call('slotValV', idx, int(mask));
+    if (!dyn.length) return int(mask);
     const m = this.bindInt(int(mask), out);
     for (const [j, c] of dyn) out.push({ k: 'if', c, then: [{ k: 'set', name: m, e: bin('add', v(m), int(1 << j)) }] });
-    return call('slotValV', idx, v(m));
+    return v(m);
   }
 
   /** A child's value read as a child (vNeed), its rule noted: the check is dropped where that
@@ -841,7 +1006,7 @@ class ArmCompiler {
         if (this.cx.nodesAttrs.has(t.attr)) return no(`the nodes attribute ${t.attr}`);
         const k = this.cx.inhK.get(t.attr);
         if (k === undefined) throw new Error(`planShape: no inherited attribute ${t.attr}`);
-        if (this.cx.variants(this.info.rule).length) throw new Error(`planShape: ${this.info.where}: inh(${t.attr}) outside its variants`);
+        if (this.cx.variants(this.info.rule).includes(t.attr)) throw new Error(`planShape: ${this.info.where}: inh(${t.attr}) outside its variants`);
         return call('inhVar', int(k));
       }
       case 'syn': {
