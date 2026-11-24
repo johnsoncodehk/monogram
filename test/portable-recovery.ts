@@ -65,7 +65,16 @@ const TOTAL_K = 4;
 // javascript 5412 -> 5349, typescript 6051 -> 6388 (land/grammar-decorators-2, on master 3587831d): `@`
 // joins the grammar's literals and typescript's decorator list gains accepts, so both mutant sets are
 // drawn again: javascript 5,349 of 5,850 rejects agree (91.4%, was 91.7%), typescript 6,388 of 6,845 (93.3%).
-const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5349, typescript: 6388 };
+// javascript 5349 -> 5329, typescript 6388 -> 6372 (land/grammar-statement-declaration): no literal
+// changes, but the mutants' verdicts do (a declaration in a sub-statement position, `export` and a
+// statement that begins with a declaration word, no longer parse): javascript 5,329 of 5,991 rejects
+// agree (88.9%, was 91.4% of 5,850), typescript 6,372 of 6,847 (93.1%). The javascript share falls
+// (owed to the recovery lane): of the 662 disagreements 355 begin with `import` (the pattern above),
+// 207 with `const` / `var` / `let` / `export` and 40 with `for` / `if`: inputs whose statement now
+// nests (Stmt -> Statement) or whose `export` reads the declaring production itself, where one side
+// names no related location (`let }aa ;`: the interpreter's farthest 5, the engine none; `export  ,aa ;`:
+// the interpreter none, the engine 8).
+const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5329, typescript: 6372 };
 const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // P10 EXPECTED-FAIL on `$missing`-only repairs, by class. GREEDY CAPTURE: the repair is right by
 // position (each supplied token is where the derivation needs it), but the substituted token is
@@ -121,8 +130,9 @@ const P10_LOOKAHEAD_BYPASS: Record<string, string[]> = {};
 // type\nx = 1 }` is repaired to `static export * case ( type\n ,\nx = 1 ) }` and
 // `export await using from x = y;` to `export await : using : from : x = y;`; the repaired texts
 // are rejected. Owed to the recovery lane: name each one's class (or fix it) and move it.
-// land/grammar-decorators-2's draw holds none of the three (the `export await using …` kind is the
-// grammar's `export` lookahead admitting a Stmt; it leaves with the Statement / Declaration split).
+// land/grammar-decorators-2's draw holds none of the three. The `export await using …` kind was the
+// grammar's `export` lookahead admitting a Stmt: since land/grammar-statement-declaration `export`
+// reads the declaring productions themselves, so that repair is no derivation any more.
 const P10_UNCLASSIFIED: Record<string, string[]> = {};
 const P10_EXPECTED: [string, Record<string, string[]>][] = [['greedy captures', P10_GREEDY_CAPTURE], ['lookahead bypasses', P10_LOOKAHEAD_BYPASS], ['unclassified redrawn mutants', P10_UNCLASSIFIED]];
 // EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and

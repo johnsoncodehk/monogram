@@ -174,7 +174,8 @@ check('calc: dependencies of a thread (the element reads the state; the parent t
 
 // ── The calculus on the JavaScript expression rules ──
 
-const stmtOf = (src: string): CstNode => parse(javascript, src).children[0] as CstNode;
+// The first statement: a list's Stmt (StatementListItem) holds a Statement node.
+const stmtOf = (src: string): CstNode => { const item = parse(javascript, src).children[0] as CstNode; const s = item.children[0] as CstNode; return 'rule' in s && s.rule === 'Statement' ? s : item; };
 const jsEval = (spec: ShapeSpec, src: string): ShapeValue | undefined => nest(spec, evaluateShape(defineShape(javascript, spec), stmtOf(src), src));
 
 // A left fold (tsc's comma BinaryExpression) and a list (ESTree's SequenceExpression), an inline
@@ -194,7 +195,7 @@ check('js: fold over a repetition (left-nested comma), with the iteration scope 
   const spec: ShapeSpec = {
     name: 'fold', rules: {
       ...jsBase,
-      Stmt: { expr: fold('rest', child('first'), 'acc', node('Comma', { left: v('acc'), comma: node('Tok', {}, { from: 'comma', to: 'comma' }), right: child('rest') }, { from: 'acc', to: 'rest' })) },
+      Statement: { expr: fold('rest', child('first'), 'acc', node('Comma', { left: v('acc'), comma: node('Tok', {}, { from: 'comma', to: 'comma' }), right: child('rest') }, { from: 'acc', to: 'rest' })) },
     },
   };
   const src = 'a, b.c, 1;';
@@ -210,7 +211,7 @@ check('js: list / spread / present on a repetition; span over a list child', () 
   const spec: ShapeSpec = {
     name: 'seq', rules: {
       ...jsBase,
-      Stmt: { expr: iff(present('rest'), node('Seq', { expressions: list(child('first'), spread(child('rest'))) }, { from: 'first', to: 'rest' }), child('first')) },
+      Statement: { expr: iff(present('rest'), node('Seq', { expressions: list(child('first'), spread(child('rest'))) }, { from: 'first', to: 'rest' }), child('first')) },
     },
   };
   assert.deepEqual(jsEval(spec, 'x ? 1 : "\\x41", y;'), N('Seq', 0, 17, {
@@ -223,7 +224,7 @@ check('js: list / spread / present on a repetition; span over a list child', () 
 const forSpec: ShapeSpec = {
   name: 'for', rules: {
     ...jsBase,
-    Stmt: {
+    Statement: {
       expr: child('first'),
       for_: branch('alt', { paren: match(get('head', 'kind'), {
         classic: node('For', { test: orElse(get('head', 'test'), c(null)), body: child('body') }),
@@ -244,7 +245,7 @@ check('js: a record-valued rule projected by get (for heads)', () => {
   // A value depends on what its record's fields depend on: nothing here.
   const d = dependencies(defineShape(javascript, forSpec));
   assert.deepEqual(d['ForHead.classic'], { inherited: [] });
-  assert.deepEqual(d['Stmt.for_'], { inherited: [] });
+  assert.deepEqual(d['Statement.for_'], { inherited: [] });
 });
 
 // ESTree's ChainExpression: an inherited attribute (am I the top of a member / call chain?)
@@ -258,7 +259,7 @@ const chainSpec: ShapeSpec = {
     chainTop: { type: 'bool', default: true, rules: { Expr: { led_dot: { left: c(false) }, led_optChain: { left: c(false) }, led_paren: { left: c(false) } } } },
   },
   rules: {
-    Stmt: { expr: child('first') },
+    Statement: { expr: child('first') },
     Expr: {
       ident: node('Id', { name: text('ident') }),
       paren: child('first'),
@@ -292,13 +293,13 @@ check('js: the directive prologue (threaded state, ESTree fixture)', () => {
   const got: [string, ShapeValue | undefined][] = [];
   const walk = (x: CstNode | CstLeaf): void => {
     if ('tokenType' in x) return;
-    if (x.rule === 'Stmt' && armNameOf(loaded, x, src) === 'expr' && src[x.offset] !== '(') got.push([src.slice(x.offset, x.end), (at(x) as unknown as Fields).fields.directive]);
+    if (x.rule === 'Statement' && armNameOf(loaded, x, src) === 'expr' && src[x.offset] !== '(') got.push([src.slice(x.offset, x.end), (at(x) as unknown as Fields).fields.directive]);
     x.children.forEach(walk);
   };
   walk(cst);
   assert.deepEqual(got, [["'a';", 'a'], ['"b\\n";', 'b\\n'], ["'d';", undefined], ["'x';", 'x'], ['y;', undefined], ["'z';", undefined], ["'no';", undefined], ["'arrow';", 'arrow'], ["'late';", undefined]]);
   const deps = dependencies(loaded);
-  assert.deepEqual(deps['Stmt.expr'].inherited, ['prologue']);
+  assert.deepEqual(deps['Statement.expr'].inherited, ['prologue']);
   assert.deepEqual(deps['Block.brace'], { inherited: ['functionBody'], threads: [{ attr: 'prologue', over: 'stmt', reads: ['directive'] }] });
   assert.deepEqual(deps['Program.decl'], { inherited: [], threads: [{ attr: 'prologue', over: 'alt', reads: ['directive'] }] });
 });
@@ -320,6 +321,20 @@ check('functions, arrows and parameters (both fixtures, against acorn and tsc)',
     assert.deepEqual(compareTrees(root(oracle()), root(run(g, spec, src) as NTree), 1).divergences, [], spec.name);
     const deps = dependencies(defineShape(g, spec));
     for (const a of ['function_', 'generator', 'asyncFunction', 'asyncGenerator', 'arrow', 'asyncArrow', 'arrowIdentifier', 'asyncArrowIdentifier']) assert.deepEqual(deps[`Expr.${a}`]?.inherited ?? [], [], `${spec.name} Expr.${a}`);
+  }
+});
+
+// A sub-statement is a Statement (14), never a Declaration: there `let` is the identifier, so
+// `if (f) let \n{}` is `if (f) let;` and a block; an `if` clause (Annex B) and a LabelledItem
+// take a plain FunctionDeclaration. `export` takes a VariableStatement / LexicalDeclaration
+// itself. ESTree against acorn (Script goal for the first, Module for the second).
+check('js: statements and declarations in their positions (ESTree fixture, against acorn)', () => {
+  for (const src of [
+    'if (f) let \n{}\nwhile (f) let \n{}\na: let\n{}\nif (x) function f() {} else function g() {}\nb: function h() {}\nlet\nx = 1;\nvar v = 1;\n',
+    'export var a = 1;\nexport let b;\nexport const c = 2, d = 3;\n',
+  ]) {
+    const root = (t: NTree): NTree => ({ kind: t.kind, start: 0, end: 0, fields: Object.fromEntries(Object.entries(t.fields).filter(([k]) => k !== 'sourceType')) });
+    assert.deepEqual(compareTrees(root(normaliseEstree(parseEstree(src)!.tree)), root(run(javascript, estreeExprShape.spec, src) as NTree), 1).divergences, [], src);
   }
 });
 
@@ -563,18 +578,18 @@ rejects('a branch case that is not a branch', javascript, one(E({ led_dot: branc
 rejects('branch() of a node', calc, one(E({ parenthesized: branch('expression', {}) })), 'not an inline alternation');
 rejects('map over a single child', calc, one(E({ parenthesized: map('expression', c(1)) })), 'is not repeated');
 rejects('an unbound variable', calc, one(E({ number: v('x') })), 'var(x) is not bound');
-const forRules = (stmt: ShapeSpec['rules'][string], head: ShapeSpec['rules'][string]): ShapeSpec => one({ Stmt: stmt, ForHead: head });
+const forRules = (stmt: ShapeSpec['rules'][string], head: ShapeSpec['rules'][string]): ShapeSpec => one({ Statement: stmt, ForHead: head });
 const okHead = { classic: record({ kind: c('classic'), test: absent }), of: record({ kind: c('of'), test: absent }) };
-rejects('get of a field the record-valued rule does not declare', javascript, forRules({ for_: branch('alt', { paren: get('head', 'init') }) }, okHead), 'Stmt.for_', 'get(head, init)', 'ForHead has no field init');
-rejects('get of a child whose rule is not record-valued (a node is not projectable)', javascript, forRules({ while_: get('body', 'test') }, okHead), 'Stmt.while_', 'Stmt is not record-valued');
+rejects('get of a field the record-valued rule does not declare', javascript, forRules({ for_: branch('alt', { paren: get('head', 'init') }) }, okHead), 'Statement.for_', 'get(head, init)', 'ForHead has no field init');
+rejects('get of a child whose rule is not record-valued (a node is not projectable)', javascript, forRules({ while_: get('body', 'test') }, okHead), 'Statement.while_', 'Statement is not record-valued');
 rejects('get of a leaf', javascript, forRules({ break_: get('label', 'x') }, okHead), 'get(label, x)', 'label is a leaf');
-rejects('child() of a record-valued rule (an interface, not a node)', javascript, forRules({ for_: branch('alt', { paren: child('head') }) }, okHead), 'Stmt.for_', 'ForHead is record-valued');
+rejects('child() of a record-valued rule (an interface, not a node)', javascript, forRules({ for_: branch('alt', { paren: child('head') }) }, okHead), 'Statement.for_', 'ForHead is record-valued');
 rejects('a record-valued rule with an arm that is not a record', javascript, forRules({}, { classic: record({ kind: c('classic') }), of: node('X') }), 'rules ForHead', 'every arm to a record', 'of is not');
 rejects('a record-valued rule whose arms have different fields', javascript, forRules({}, { classic: record({ kind: c('classic') }), of: record({ kind: c('of'), left: absent }) }), 'rules ForHead.of', 'the same fields');
 rejects('dropLastIf with a condition that is not a bool', calc, one({ Program: { program: dropLastIf(text('statement' as never) as never, child('statement')) } }), 'cond');
 rejects('dropLastIf with a condition that is a string', calc, one(E({ parenthesized: dropLastIf(armOf('expression'), list()) })), 'cond', 'must be a bool');
 rejects('dropLastIf of a value that is not a list', calc, one(E({ parenthesized: dropLastIf(c(true), child('expression')) })), 'Expr.parenthesized list', 'takes a list');
-rejects('a span after an optional child (it can be absent)', javascript, one({ Stmt: { return_: node('R', {}, { after: 'argument' }) } }), 'span.after', 'argument is optional');
+rejects('a span after an optional child (it can be absent)', javascript, one({ Statement: { return_: node('R', {}, { after: 'argument' }) } }), 'span.after', 'argument is optional');
 rejects('a span after a list (it can be empty)', calc, one({ Program: { program: node('P', {}, { after: 'statement' }) } }), 'span.after', 'statement is a list');
 rejects('a span after an unknown name', calc, one(E({ number: node('N', {}, { after: 'nope' }) })), 'span.after', 'no child or variable nope');
 rejects('a span over an unknown name', calc, one(E({ number: node('N', {}, { from: 'number', to: 'nope' }) })), 'span.to', 'nope');
@@ -596,8 +611,8 @@ rejects('an inherited equation reading a sibling node\'s arm', javascript, one({
   inherited: { i: { type: 'string', default: '', rules: E({ binaryOp: { left: armOf('right') } }) } },
 }), 'Expr.binaryOp.left', 'right is a node');
 rejects('an inherited equation reading an alternation that holds a rule node', javascript, one({}, {
-  inherited: { i: { type: 'string', default: '', rules: { Stmt: { for_: { body: armOf('alt') } } } } },
-}), 'Stmt.for_.body', 'holding a rule node');
+  inherited: { i: { type: 'string', default: '', rules: { Statement: { for_: { body: armOf('alt') } } } } },
+}), 'Statement.for_.body', 'holding a rule node');
 rejects('an inherited equation building a node', javascript, one({}, {
   inherited: { i: { type: 'bool', default: false, rules: E({ binaryOp: { left: node('N') } }) } },
 }), 'Expr.binaryOp.left', '`node` cannot appear in an inherited equation');
@@ -635,8 +650,8 @@ rejects('a thread whose next state reads inherited context', calc, leadWith(thre
 rejects('a thread whose next state builds a node', calc, leadWith(thread(c(true), 'p', node('N'))), 'next', '`node` cannot appear in a thread');
 rejects('a thread whose next state reads the parent\'s own attribute', calc, leadWith(thread(c(true), 'p', syn('isLet'))), 'next', 'the element\'s own children only');
 rejects('a thread whose next state reads a sibling outside the element', javascript, one({}, {
-  inherited: { i: { type: 'bool', default: false, rules: { Stmt: { switch_: { switchCase: thread(c(true), 'p', present('expr2')) } } } } },
-}), 'Stmt.switch_.switchCase next', 'expr2 is not in the element');
+  inherited: { i: { type: 'bool', default: false, rules: { Statement: { switch_: { switchCase: thread(c(true), 'p', present('expr2')) } } } } },
+}), 'Statement.switch_.switchCase next', 'expr2 is not in the element');
 rejects('a thread beside another equation for the same attribute', calc, leadWith(thread(c(true), 'p', v('p')), { x: c(true) }), 'Program.program', 'no other equation');
 rejects('a thread outside an inherited equation', calc, one(E({ number: thread(c(true), 'p', v('p')) as never })), '`thread` is not an operator');
 
@@ -683,8 +698,8 @@ check('coverage: what a shape leaves out, and whether evaluation from the entry 
   const at = (rule: string, arm: string): [boolean, boolean] => { const a = cov.arms.find((x) => x.rule === rule && x.arm === arm)!; return [a.mapped, a.reached]; };
   assert.deepEqual(at('Expr', 'binaryOp'), [true, true]);
   // `switch` is a statement (reached) the ESTree shape does not map yet: an input holding one throws ShapeUnmapped.
-  assert.deepEqual(at('Stmt', 'switch_'), [false, true]);
-  assert.throws(() => run(javascript, estreeExprShape.spec, 'switch (a) {}'), (e) => e instanceof ShapeUnmapped && e.rule === 'Stmt' && e.arm === 'switch_');
+  assert.deepEqual(at('Statement', 'switch_'), [false, true]);
+  assert.throws(() => run(javascript, estreeExprShape.spec, 'switch (a) {}'), (e) => e instanceof ShapeUnmapped && e.rule === 'Statement' && e.arm === 'switch_');
   // Evaluation stops at an unmapped arm: what only it reads is not reached.
   const reached = (rules: ShapeSpec['rules']): string[] => shapeCoverage(defineShape(calc, { name: 'x', rules })).arms.filter((a) => !a.mapped && a.reached).map((a) => `${a.rule}.${a.arm}`);
   assert.deepEqual(reached({ Program: { program: child('statement') }, Stmt: { letDeclaration: c(1) } }), ['Stmt.expression']);

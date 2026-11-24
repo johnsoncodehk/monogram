@@ -231,11 +231,19 @@ export const expressionStatement = (Expr) => [
 export const conciseBody = (Block, Expr) => alt(arm('block', Block), arm('expression', not('{'), Expr));
 // `export Declaration` / `export VariableStatement` (16.2.3 ExportDeclaration): what follows
 // `export` is a declaration, never another statement, so `export if (x) {}`, `export x;`,
-// `export ;` have no parse and `export { a }` is the export list, not `export` and a block. A
-// declaration is `Decl` (`$`) or one of the statements that declare (`var` / `let` / `const`, and
-// in TypeScript `using`, which tsc's parser takes there; `declarationWords`).
-export const exportDeclaration = ($, Stmt, declarationWords) =>
-  arm('exportDeclaration', field('exportKeyword', 'export'), field('declaration', alt(arm('decl', field('decl', $)), arm('variable', not(not(alt(...declarationWords))), field('stmt', Stmt)))));
+// `export ;`, `export let: x;` (a labelled statement), `export let.x = 1;` (an expression) have
+// no parse and `export { a }` is the export list, not `export` and a block. A declaration is
+// `Decl` (`$`) or one of the declaring productions themselves (`forms`: `var` / `let` / `const`,
+// and in TypeScript `using`, which tsc's parser takes there), never a statement that merely
+// begins with their word.
+export const exportDeclaration = ($, forms) =>
+  arm('exportDeclaration', field('exportKeyword', 'export'), field('declaration', alt(arm('decl', field('decl', $)), ...forms)));
+// VariableStatement / LexicalDeclaration (14.3): a VariableDeclarationList / BindingList has one
+// or more declarations and no trailing comma, so `var;`, `const;` and `var a,` have no parse.
+// `kinds` are the words (`var` is a Statement, `let` / `const` a Declaration); `Binding` is the
+// grammar's.
+export const variableDeclaration = (kinds: string[], Binding) =>
+  [field('kind', alt(...kinds)), field('binding', Binding), many(field('bindingComma', ','), field('bindingRest', Binding)), asi()];
 // A module specifier and its import attributes (16.2.2 `FromClause : from ModuleSpecifier`,
 // `WithClause : with { } | with { WithEntries ,opt }`, `WithEntries : AttributeKey : StringLiteral`,
 // `AttributeKey : IdentifierName | StringLiteral`): the specifier and every attribute value are
@@ -685,13 +693,19 @@ const CatchParameter = rule($ => [
   BindingPattern,
 ]);
 
-const Stmt = rule($ => [
+// Statement (14): what a sub-statement position holds (the body of `if` / `else`, of a loop, of
+// `with`, after a label), and one kind of StatementListItem (`Stmt`). It holds no Declaration:
+// there `let` is the identifier, so `if (f) let \n{}` is the expression statement `let` (ended by
+// ASI) and then a block, and `if (x) let y = 1;`, `while (x) class C {}` have no parse. The one
+// declaration a clause takes is a plain FunctionDeclaration: after a label (LabelledItem) and, in
+// an `if` clause, by Annex B (B.3.3; sloppy mode only, and strictness is not tracked here, so it
+// is accepted everywhere); no generator, async function or class (`a: function* g() {}`).
+const clause = ($) => alt(arm('statement', $), fnArms(bindingName, Block)[0]);
+const Statement = rule($ => [
   Block,
-  // VariableStatement / LexicalDeclaration (14.3): a VariableDeclarationList / BindingList has one
-  // or more declarations and no trailing comma, so `var;`, `const;` and `var a,` have no parse,
-  // and `let;` is the expression statement of the identifier `let` (sloppy mode).
-  arm('variable', field('kind', alt('let', 'const', 'var')), field('binding', Binding), many(field('bindingComma', ','), field('bindingRest', Binding)), asi()),
-  ['if', '(', field('condition', Expr), many(field('conditionComma', ','), field('conditionRest', Expr)), ')', field('consequence', $), opt('else', field('alternative', $))],
+  // A VariableStatement; `let;` is the expression statement of the identifier `let` (sloppy mode).
+  arm('variable', ...variableDeclaration(['var'], Binding)),
+  ['if', '(', field('condition', Expr), many(field('conditionComma', ','), field('conditionRest', Expr)), ')', field('consequence', clause($)), opt('else', field('alternative', clause($)))],
   forStatement($, ForHead, ForAwaitHead),
   ['while', '(', field('condition', Expr), many(field('conditionComma', ','), field('conditionRest', Expr)), ')', field('body', $)],
   // A do-while's `;` is optional even on its line (12.10.1: a `;` is inserted after the `)`
@@ -709,17 +723,27 @@ const Stmt = rule($ => [
   ['continue', opt(sameLine, notReserved, field('label', Ident)), asi()],
   // TryStatement (14.15): a Catch, a Finally, or both, so `try {}` has no parse.
   ['try', field('body', Block), not(not(alt('catch', 'finally'))), opt('catch', opt('(', field('parameter', CatchParameter), ')'), field('handler', Block)), opt('finally', field('finalizer', Block))],
-  arm('labelled', notReserved, field('label', Ident), ':', field('body', $)),
+  arm('labelled', notReserved, field('label', Ident), ':', field('item', clause($))),   // LabelledItem
   arm('empty', ';'),
   ['debugger', asi()],
   // `with ( Expression ) Statement` (14.11): the object is an Expression, a comma list included.
   ['with', '(', field('object', Expr), many(field('objectComma', ','), field('objectRest', Expr)), ')', field('body', $)],
-  arm('using', opt(field('awaitKeyword', 'await'), sameLine), field('usingKeyword', 'using'), sameLine, field('binding', Binding), many(field('bindingComma', ','), field('bindingRest', Binding)), asi()),
-  Decl,
   // Not after a start that begins a block or a declaration (`expressionStatement`): without the
   // lookahead, longest match lets the expression reading win wherever a tail makes it longer
   // (`{} .b`, `function f(){}\n(g)()`, `@dec class {}.x`).
   expressionStatement(Expr),
+]);
+
+// StatementListItem (14.2: `Statement | Declaration`): an element of a block's, a case clause's
+// or the program's list. The Declarations a list adds to the Statements: a LexicalDeclaration
+// (`let` / `const`, and `using` / `await using` from explicit resource management) and `Decl`
+// (functions, classes, and the module items). Where both readings start with `let`, the longer
+// is the derivation (`let\nx = 1` declares; `let;` is the identifier).
+const Stmt = rule($ => [
+  Statement,
+  arm('variable', ...variableDeclaration(['let', 'const'], Binding)),
+  arm('using', opt(field('awaitKeyword', 'await'), sameLine), field('usingKeyword', 'using'), sameLine, field('binding', Binding), many(field('bindingComma', ','), field('bindingRest', Binding)), asi()),
+  Decl,
 ]);
 
 // ── Declarations ──
@@ -855,7 +879,7 @@ const Decl = rule($ => [
   // as a declaration + arrow rather than longest-matching `function f(){}()` (IIFE).
   ...fnArms(bindingName, Block),
   classDecl,   // a class with no decorator; with them, the decorator arm below
-  exportDeclaration($, Stmt, ['var', 'let', 'const']),
+  exportDeclaration($, [arm('variable', ...variableDeclaration(['var', 'let', 'const'], Binding))]),
   // A declaration's decorators, parsed ONCE, then what they decorate. Under the decorators
   // proposal a DecoratorList belongs to a class: ClassDeclaration takes it (`@dec class C {}` is
   // one declaration), and so does an exported class, written before `export` or after it, not
@@ -1036,12 +1060,17 @@ export default defineGrammar({
     // the heritage's `.b` on the base `a`; the interpreter's NewTarget takes it (longest match), and
     // the heritage's tails are for a call's or class expression's result (`extends f().b`).
     ['new_target', 'class_heritage'],
+    // The Statement rule (a sub-statement; one kind of list item, Stmt): where Stmt's tuples met a
+    // statement form, Statement's meet it now (`{ a:` is a block's label or an object's key;
+    // guessed without the CLI: owed a `node test/collect-conflicts.ts` run).
+    ['statement'], ['member_name', 'statement'], ['program', 'statement'], ['statement', 'param'],
+    ['stmt', 'statement'], ['expr', 'statement'], ['statement', 'block'],
   ],
 
   rules: {
     DecoratorExpr,
     Expr, Prop, MemberName, NewTarget, ClassHeritage,
-    Stmt, Block,
+    Statement, Stmt, Block,
     BindingProperty, BindingElement, ArrayBindingElement, BindingPattern,
     Binding, ForBinding, Param, CatchParameter, ForHead, ForAwaitHead, SwitchCase,
     Decl, ClassMember,

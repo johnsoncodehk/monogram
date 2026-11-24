@@ -48,7 +48,8 @@ const ARROWS = ['arrow', 'asyncArrow', 'arrowIdentifier', 'asyncArrowIdentifier'
 const FUNCTION_BODIES: Record<string, Record<string, string>> = {
   Expr: { ...Object.fromEntries(FUNCTIONS.map((a) => [a, 'body'])), ...Object.fromEntries(ARROWS.map((a) => [a, 'block'])) },   // function expressions, arrows (a block body)
   NewTarget: Object.fromEntries(FUNCTIONS.map((a) => [a, 'body'])),                                                                    // a function expression as a `new` callee
-  Decl: { ...Object.fromEntries(FUNCTIONS.map((a) => [a, 'body'])), exportDefault: 'body' },                                        // declarations, `export default function`
+  Decl: { ...Object.fromEntries(FUNCTIONS.map((a) => [a, 'body'])), exportDefault: 'body' },
+  Statement: { if_: 'body', labelled: 'body' },                                                                                     // a plain function in an `if` clause (Annex B) or after a label                                        // declarations, `export default function`
   Prop: Object.fromEntries(['accessor', 'asyncGeneratorMethod', 'asyncMethod', 'generatorMethod', 'method'].map((a) => [a, 'body'])),   // object methods / accessors
   ClassMember: { member: 'body' },                                                                                              // constructor, methods, accessors
 };
@@ -65,6 +66,11 @@ const label: Term = iff(present('label'), idOf('label'), c(null));
 
 /** A declaration list's bindings: the first and the rest. */
 const bindings: Term = list(child('binding'), spread(child('bindingRest')));
+/** A VariableStatement / LexicalDeclaration (`var` a Statement arm, `let` / `const` a Stmt arm). */
+const variableDeclaration = (span?: { from: string; to: string }): Term => node('VariableDeclaration', { declarations: bindings, kind: text('kind') }, span);
+/** A sub-statement that may be a plain FunctionDeclaration (an `if` clause by Annex B, a
+ * LabelledItem): the Statement, or the declaration spanning its branch. */
+const clause = (name: string): Term => branch(name, { statement: child('statement'), function_: fn('FunctionDeclaration', idOf('name'), false, false, { from: name, to: name }) });
 
 // ── `for` (ECMA-262 14.7.4, 14.7.5) ──
 // The grammar factors a `for` statement's `( … )` into ForHead / ForAwaitHead, whose node is not
@@ -323,7 +329,7 @@ const MODULE_RULES: ShapeSpec['rules'] = {
 const ownSpan = { from: 'declaration', to: 'declaration' };
 const MODULE_DECLARATIONS: Record<string, Term> = {
   exportDeclaration: node('ExportNamedDeclaration', {
-    declaration: branch('declaration', { decl: child('decl'), variable: child('stmt') }), specifiers: list(), source: c(null), attributes: list(),
+    declaration: branch('declaration', { decl: child('decl'), variable: variableDeclaration({ from: 'declaration', to: 'declaration' }) }), specifiers: list(), source: c(null), attributes: list(),
   }),
   exportDefault: node('ExportDefaultDeclaration', {
     declaration: branch('declaration', {
@@ -349,12 +355,11 @@ const MODULE_DECLARATIONS: Record<string, Term> = {
   }),
 };
 
-/** The statements (ECMA-262 14), one node per Stmt arm. */
+/** The statements (ECMA-262 14), one node per Statement arm. */
 const STATEMENTS: Record<string, Term> = {
   block: blockOf('block'),
-  variable: node('VariableDeclaration', { declarations: bindings, kind: text('kind') }),
-  using: node('VariableDeclaration', { declarations: bindings, kind: iff(present('awaitKeyword'), c('await using'), c('using')) }),
-  if_: node('IfStatement', { test: sequenceOf('condition', 'conditionRest'), consequent: child('consequence'), alternate: orNull('alternative') }),
+  variable: variableDeclaration(),
+  if_: node('IfStatement', { test: sequenceOf('condition', 'conditionRest'), consequent: clause('consequence'), alternate: iff(present('alternative'), clause('alternative'), c(null)) }),
   while_: node('WhileStatement', { test: sequenceOf('condition', 'conditionRest'), body: child('body') }),
   do_: node('DoWhileStatement', { body: child('body'), test: sequenceOf('condition', 'conditionRest') }),
   return_: node('ReturnStatement', { argument: iff(present('argument'), sequenceOf('argument', 'argumentRest'), c(null)) }),
@@ -367,12 +372,11 @@ const STATEMENTS: Record<string, Term> = {
     handler: iff(present('handler'), node('CatchClause', { param: orNull('parameter'), body: blockOf('handler') }, { from: 'catchTok', to: 'handler' }), c(null)),
     finalizer: iff(present('finalizer'), blockOf('finalizer'), c(null)),
   }),
-  labelled: node('LabeledStatement', { body: child('body'), label: idOf('label') }),
+  labelled: node('LabeledStatement', { body: clause('item'), label: idOf('label') }),
   empty: node('EmptyStatement'),
   debugger_: node('DebuggerStatement'),
   with_: node('WithStatement', { object: sequenceOf('object', 'objectRest'), body: child('body') }),
   for_: branch('alt', { paren: forStatement(false), await_: forStatement(true) }),
-  decl: child('decl'),
 };
 
 /** The PrimaryExpression arms Expr and NewTarget (a `new` callee) share: the literals and `this`. */
@@ -397,7 +401,7 @@ export const estreeExprShape = defineShape(javascript, {
   // Real ESTree nodes: the kind is the field `type`.
   node: { kind: 'type', start: 'start', end: 'end' },
   synthesized: {
-    directive: { type: 'bool', default: false, rules: { Stmt: { expr: and(not(present('rest')), match(armOf('first'), { string: c(true) }, c(false))) } } },
+    directive: { type: 'bool', default: false, rules: { Statement: { expr: and(not(present('rest')), match(armOf('first'), { string: c(true) }, c(false))) }, Stmt: { statement: syn('directive', 'statement') } } },
     stringBody: { type: 'string', rules: { Expr: { string: cook('stringBody', 'string') } } },
     optional: { type: 'bool', default: false, rules: Object.fromEntries(['Expr', 'ClassHeritage'].map((r) => [r, { led_optChain: c(true), led_dot: syn('optional', 'left'), led_bracket: syn('optional', 'left'), led_paren: syn('optional', 'left') }])) },
     // A property key that names the constructor: the identifier or the string `constructor`.
@@ -422,6 +426,7 @@ export const estreeExprShape = defineShape(javascript, {
       type: 'bool', default: false, rules: {
         Program: { decl: { alt: thread(c(true), 'p', and(v('p'), branch('alt', { decl: c(false), stmt: syn('directive', 'stmt') }))) } },
         Block: { brace: { stmt: prologue(inh('functionBody')) } },
+        Stmt: { statement: { statement: inh('prologue') } },
       },
     },
     chainTop: { type: 'bool', default: true, rules: Object.fromEntries(['Expr', 'ClassHeritage'].map((r) => [r, Object.fromEntries(LINKS.map((a) => [a, { left: c(false) }]))])) },
@@ -430,7 +435,11 @@ export const estreeExprShape = defineShape(javascript, {
     // The root: its statement list. acorn's `sourceType` (the goal acorn was run with) and the
     // root's extent over trailing trivia are not produced (test/shape2-oracle.ts ROOT_NOT_COMPARED).
     Program: { decl: node('Program', { body: map('alt', branch('alt', { decl: child('decl'), stmt: child('stmt') })) }) },
-    Stmt: { ...STATEMENTS, expr: node('ExpressionStatement', { expression: sequence, directive: iff(and(inh('prologue'), syn('directive')), syn('stringBody', 'first'), absent) }) },
+    Stmt: {
+      statement: child('statement'), variable: variableDeclaration(), decl: child('decl'),
+      using: node('VariableDeclaration', { declarations: bindings, kind: iff(present('awaitKeyword'), c('await using'), c('using')) }),
+    },
+    Statement: { ...STATEMENTS, expr: node('ExpressionStatement', { expression: sequence, directive: iff(and(inh('prologue'), syn('directive')), syn('stringBody', 'first'), absent) }) },
     Block: { brace: record({ body: child('stmt') }) },
     // A binding: an identifier or a pattern.
     Binding: { seq: node('VariableDeclarator', { id: target('name'), init: orNull('value') }) },

@@ -116,13 +116,14 @@ const FOR_RULES: ShapeSpec['rules'] = {
   ForBinding: { seq: node('VariableDeclaration', { name: target('name'), type: child('type'), initializer: child('value') }) },
 };
 
+/** A VariableStatement's list: `var` / `let` / `const`, or `[await] using` (Stmt's arms and `export`'s). */
+const variableList = (): Term => declarationList('kind', match(text('kind'), { var: absent, let: c('Let'), const: c('Const') }));
+const usingList = (): Term => iff(present('awaitKeyword'), declarationList('awaitKeyword', c('Const|Using')), declarationList('usingKeyword', c('Using')));
 /** The statements (ECMA-262 14), one node per Stmt arm. */
 const STATEMENTS: Record<string, Term> = {
   block: child('block'),
-  variable: receiver('VariableStatement', [], c(false), { declarationList: declarationList('kind', match(text('kind'), { var: absent, let: c('Let'), const: c('Const') })) }),
-  using: receiver('VariableStatement', [], c(false), {
-    declarationList: iff(present('awaitKeyword'), declarationList('awaitKeyword', c('Const|Using')), declarationList('usingKeyword', c('Using'))),
-  }),
+  variable: receiver('VariableStatement', [], c(false), { declarationList: variableList() }),
+  using: receiver('VariableStatement', [], c(false), { declarationList: usingList() }),
   if_: node('IfStatement', { expression: commaOf('condition'), thenStatement: child('consequence'), elseStatement: child('alternative') }),
   while_: node('WhileStatement', { expression: commaOf('condition'), statement: child('body') }),
   do_: node('DoStatement', { statement: child('body'), expression: commaOf('condition') }),
@@ -498,7 +499,12 @@ const exportDeclaration = (fields: Record<string, Term>): Term => receiver('Expo
 const namedExports: Term = node('NamedExports', { elements: child('specifier') }, { from: 'brace', to: 'braceClose' });
 const MODULE_DECLARATIONS: Record<string, Term> = {
   // The wrapping arms: the declaration receives `export` / `declare` (inherited `modifiers`).
-  exportDeclaration: branch('declaration', { decl: child('decl'), variable: child('stmt') }),
+  // `export` and a VariableStatement: the statement is the arm, `export` its modifier.
+  exportDeclaration: branch('declaration', {
+    decl: child('decl'),
+    variable: node('VariableStatement', { modifiers: handDown(exportKeyword), declarationList: variableList() }),
+    using: node('VariableStatement', { modifiers: handDown(exportKeyword), declarationList: usingList() }),
+  }),
   declared: branch('declaration', { decl: child('decl'), statement: child('stmt') }),
   // `export default`: its words are the declaration's own modifiers; an expression is an
   // ExportAssignment. The decorated forms (decorators are not mapped) and an interface (types) are not.
@@ -541,7 +547,7 @@ export const tscExprShape = defineShape(typescript, {
     modifiers: {
       type: 'nodes', rules: {
         Decl: {
-          exportDeclaration: { decl: handDown(exportKeyword), stmt: handDown(exportKeyword) },
+          exportDeclaration: { decl: handDown(exportKeyword) },
           declared: { decl: handDown(token('DeclareKeyword', 'declareKeyword')), stmt: handDown(token('DeclareKeyword', 'declareKeyword')) },
           prefixed: { decl: handDown(spread(prefixWords)) },
         },
