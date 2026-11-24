@@ -40,19 +40,19 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | ts | javascript | _tsserver.js | parseWith | 4,928 | 3,411 | 16,587 | 3.37 | 4.86 | 555,420 | 112.7 | 162.8 | 9,217 | 267,394 | 288,026 |
 | ts | javascript | _tsserver.js ×4 | parse | 19,712 | 13,641 | 66,269 | 3.36 | 4.86 | 2,176,128 | 110.4 | 159.5 | 36,862 | 1,069,439 | 1,106,689 |
 | ts | javascript | _tsserver.js ×4 | parseWith | 19,712 | 13,641 | 66,269 | 3.36 | 4.86 | 2,176,128 | 110.4 | 159.5 | 36,862 | 1,069,439 | 1,106,689 |
-| js | typescript | acorn.js | fresh | 42,251 | 28,813 | 5,154 | 0.12 | 0.18 | 13,909,056 | 329.2 | 482.7 | - | - | - |
+| js | typescript | acorn.js | fresh | 42,251 | 28,813 | 5,157 | 0.12 | 0.18 | 13,966,692 | 330.6 | 484.7 | - | - | - |
 | js | typescript | acorn.js | reuse | 42,251 | 28,813 | 4,992 | 0.12 | 0.17 | 234,424 | 5.5 | 8.1 | - | - | - |
-| js | typescript | lib.es5.d.ts | fresh | 13,659 | 7,692 | 7,007 | 0.51 | 0.91 | 2,781,116 | 203.6 | 361.6 | - | - | - |
+| js | typescript | lib.es5.d.ts | fresh | 13,659 | 7,692 | 7,008 | 0.51 | 0.91 | 2,789,472 | 204.2 | 362.6 | - | - | - |
 | js | typescript | lib.es5.d.ts | reuse | 13,659 | 7,692 | 6,907 | 0.51 | 0.90 | 162,260 | 11.9 | 21.1 | - | - | - |
-| js | typescript | _tsserver.js | fresh | 4,932 | 3,221 | 424 | 0.09 | 0.13 | 1,252,264 | 253.9 | 388.8 | - | - | - |
+| js | typescript | _tsserver.js | fresh | 4,932 | 3,221 | 425 | 0.09 | 0.13 | 1,260,620 | 255.6 | 391.4 | - | - | - |
 | js | typescript | _tsserver.js | reuse | 4,932 | 3,221 | 330 | 0.07 | 0.10 | 15,368 | 3.1 | 4.8 | - | - | - |
-| js | typescript | _tsserver.js ×4 | fresh | 19,728 | 12,881 | 1,417 | 0.07 | 0.11 | 4,660,416 | 236.2 | 361.8 | - | - | - |
+| js | typescript | _tsserver.js ×4 | fresh | 19,728 | 12,881 | 1,419 | 0.07 | 0.11 | 4,685,220 | 237.5 | 363.7 | - | - | - |
 | js | typescript | _tsserver.js ×4 | reuse | 19,728 | 12,881 | 1,293 | 0.07 | 0.10 | 60,512 | 3.1 | 4.7 | - | - | - |
-| js | javascript | acorn.js | fresh | 42,051 | 32,559 | 4,781 | 0.11 | 0.15 | 12,525,060 | 297.9 | 384.7 | - | - | - |
+| js | javascript | acorn.js | fresh | 42,051 | 32,559 | 4,792 | 0.11 | 0.15 | 13,928,904 | 331.2 | 427.8 | - | - | - |
 | js | javascript | acorn.js | reuse | 42,051 | 32,559 | 4,627 | 0.11 | 0.14 | 228,444 | 5.4 | 7.0 | - | - | - |
-| js | javascript | _tsserver.js | fresh | 4,928 | 3,535 | 408 | 0.08 | 0.12 | 1,172,544 | 237.9 | 331.7 | - | - | - |
+| js | javascript | _tsserver.js | fresh | 4,928 | 3,535 | 421 | 0.09 | 0.12 | 1,418,172 | 287.8 | 401.2 | - | - | - |
 | js | javascript | _tsserver.js | reuse | 4,928 | 3,535 | 318 | 0.06 | 0.09 | 15,176 | 3.1 | 4.3 | - | - | - |
-| js | javascript | _tsserver.js ×4 | fresh | 19,712 | 14,137 | 1,368 | 0.07 | 0.10 | 5,128,856 | 260.2 | 362.8 | - | - | - |
+| js | javascript | _tsserver.js ×4 | fresh | 19,712 | 14,137 | 1,382 | 0.07 | 0.10 | 6,100,564 | 309.5 | 431.5 | - | - | - |
 | js | javascript | _tsserver.js ×4 | reuse | 19,712 | 14,137 | 1,245 | 0.06 | 0.09 | 59,744 | 3.0 | 4.2 | - | - | - |
 | go | typescript | acorn.js | fresh | 42,251 | 28,638 | 83 | 0.00 | 0.00 | 9,249,920 | 218.9 | 323.0 | 3 | 2,072,576 | 7,177,344 |
 | go | typescript | acorn.js | reuse | 42,251 | 28,638 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
@@ -120,21 +120,21 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 
 | kind | site (literals folded) | in functions | allocations | per token | modeled bytes | share | in result |
 |:--|:--|--:|--:|--:|--:|--:|--:|
-| new Array → array | `new Array(tokN + N)` | 1 | 30 | 0.00 | 5,070,960 | 36.5% | - |
-| new Int32Array → typed array | `new Int32Array(kidCap)` | 1 | 9 | 0.00 | 2,753,088 | 19.8% | - |
-| new Int32Array → typed array | `new Int32Array(tokN + N)` | 1 | 10 | 0.00 | 1,690,720 | 12.2% | - |
+| new Array → array | `new Array(tokN + N)` | 1 | 30 | 0.00 | 5,070,960 | 36.3% | - |
+| new Int32Array → typed array | `new Int32Array(kidCap)` | 1 | 9 | 0.00 | 2,753,088 | 19.7% | - |
+| new Int32Array → typed array | `new Int32Array(tokN + N)` | 1 | 10 | 0.00 | 1,690,720 | 12.1% | - |
 | new Int32Array → typed array | `new Int32Array(rowCap)` | 1 | 16 | 0.00 | 1,573,888 | 11.3% | - |
-| new Int32Array → typed array | `new Int32Array(tkCap)` | 2 | 8 | 0.00 | 983,552 | 7.1% | - |
+| new Int32Array → typed array | `new Int32Array(tkCap)` | 2 | 8 | 0.00 | 983,552 | 7.0% | - |
 | new Uint8Array → typed array | `new Uint8Array(tkCap)` | 2 | 16 | 0.00 | 492,544 | 3.5% | - |
 | new Int32Array → typed array | `new Int32Array(rows)` | 1 | 8 | 0.00 | 262,656 | 1.9% | - |
+| new Uint8Array → typed array | `new Uint8Array(rowCap)` | 1 | 10 | 0.00 | 246,400 | 1.8% | - |
 | new Uint16Array → typed array | `new Uint16Array(tkCap)` | 2 | 4 | 0.00 | 246,016 | 1.8% | - |
-| new Uint8Array → typed array | `new Uint8Array(rowCap)` | 1 | 8 | 0.00 | 197,120 | 1.4% | - |
 | new Int32Array → typed array | `new Int32Array(rows * N)` | 1 | 3 | 0.00 | 196,800 | 1.4% | - |
 | new Uint16Array → typed array | `new Uint16Array(rowCap)` | 1 | 2 | 0.00 | 98,432 | 0.7% | - |
 | .exec() → array | `LXRE_10_Number.exec(source)` | 1 | 1,719 | 0.04 | 96,280 | 0.7% | - |
 | .exec() → array | `LXRE_3_LineComment.exec(source)` | 1 | 784 | 0.02 | 46,972 | 0.3% | - |
 | .exec() → array | `LXRE_11_String.exec(source)` | 1 | 738 | 0.02 | 44,016 | 0.3% | - |
-| new Uint8Array → typed array | `new Uint8Array(rows)` | 1 | 4 | 0.00 | 33,024 | 0.2% | - |
+| new Uint8Array → typed array | `new Uint8Array(rows)` | 1 | 5 | 0.00 | 41,280 | 0.3% | - |
 
 ## Where: js target, reuse, typescript grammar, acorn.js (top 15 of 15 sites by bytes)
 
@@ -149,7 +149,7 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | .exec() → array | `LXRE_12_Regex.exec(source)` | 1 | 15 | 0.00 | 888 | 0.4% | - |
 | .exec() → array | `LXRE_1_JSDoc.exec(source)` | 1 | 2 | 0.00 | 120 | 0.1% | - |
 | array growth | `parenHeadStack.push(_ph)` | 1 | 1 | 0.00 | 76 | 0.0% | - |
-| array | `[]` | 15 | 2 | 0.00 | 32 | 0.0% | - |
+| array | `[]` | 9 | 2 | 0.00 | 32 | 0.0% | - |
 | closure | `prevIsValue` | 1 | 1 | 0.00 | 32 | 0.0% | - |
 | closure | `tkPush` | 1 | 1 | 0.00 | 32 | 0.0% | - |
 | array | `[N]` | 2 | 1 | 0.00 | 28 | 0.0% | - |
