@@ -316,6 +316,18 @@ const realFiles = (c: RealCorpus): { id: string; src: string }[] | string => {
 const { Parser, Language } = await import('web-tree-sitter');
 await Parser.init();
 
+// web-tree-sitter (0.26.9) copies a string input into a 10 KiB buffer of UTF-16 units per read
+// (stringToUTF16 in _tree_sitter_parse_callback: 5119 units and a terminator), so a surrogate pair
+// across that boundary reaches the lexer as two lone surrogates and a valid astral identifier is an
+// ERROR (test262's start-unicode-*.js: U+D87B at offset 5114). Native tree-sitter reads UTF-8 and has
+// no such boundary: the input is handed over in chunks that end before a high surrogate.
+const CHUNK = 4096;
+const tsParse = (parser: any, src: string) => parser.parse((i: number) => {
+  let e = Math.min(src.length, i + CHUNK);
+  if (e < src.length && (src.charCodeAt(e - 1) & 0xfc00) === 0xd800) e--;
+  return src.slice(i, e);
+});
+
 function errorNodes(root: any): number {
   let n = 0; const stack = [root];
   while (stack.length) { const x = stack.pop(); if (x.type === 'ERROR' || x.isMissing) n++; stack.push(...x.children); }
@@ -381,7 +393,7 @@ for (const { lang, mod, corpora, pairs } of [
     for (const { id, src } of inputs) {
       const cst = parse(src);
       if (real && !cst) { r.bothReject++; continue; }   // real code: only what the interpreter accepts
-      const tree = parser.parse(src)!;
+      const tree = tsParse(parser, src)!;
       const ts = errorNodes(tree.rootNode) === 0;
       if (cst && ts) {
         r.bothAccept++;

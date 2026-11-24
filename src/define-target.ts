@@ -96,7 +96,9 @@ export function defineParserTarget(def: TargetDefinition): PortableTarget {
     recoveryFamily: (ir, methods) => {
       if (!lowering().record || !lowering().relex) throw new Error(`defineParserTarget: target ${def.name} supplies no record and token-stream Lowering for the recovery family`);
       const ids = buildLexIdPlan(ir);
-      return emitRecoveryFamily(lowering(), recoveryTables(ir, ids, buildArenaIdPlan(ir, ids)).data, methods, hasRebind(ir), ids, hasCappedSeq(ir), hasUnaryNud(ir));
+      const ar = buildArenaIdPlan(ir, ids);
+      const labels = Object.entries(ir.ruleLabels).flatMap(([name, label]): [number, string][] => { const r = ar.ruleNames.indexOf(name); return r < 0 ? [] : [[r, label]]; });
+      return emitRecoveryFamily(lowering(), recoveryTables(ir, ids, ar).data, methods, hasRebind(ir), ids, hasCappedSeq(ir), labels, hasUnaryNud(ir));
     },
     lexScan: (ir) => emitLexScan(ir, lowering()),
     scannedTokens,

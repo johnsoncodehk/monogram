@@ -17,6 +17,7 @@ import { expandArms } from './region-view.ts';   // small bodies only: getTypePa
 import { armGraph, armOrderKey, compareArmOrder, findWindows, foldArmsFrom, hasWindow, inArmOrder, reachable, reachesThrough, sortInArmOrder, type ArmGraph } from './arm-graph.ts';
 import { compileTokenizer, lexSpecOf } from './emit-lexer.ts';
 import { classifyToken } from './highlight-roles.ts';
+import { info as patternInfo, type CSet } from './lex-match-plan.ts';
 import { tokenPatternBlockDelimiterSources, tokenPatternBlockDelimiters, tokenPatternEqualsPattern, tokenPatternIsNever, tokenPatternLeadingSource, tokenPatternLiteralPrefix, tokenPatternNodeContainsLiteral, tokenPatternPrefixBeforeTrailingLookahead, tokenPatternQuoteDelimAndEscape, tokenPatternSource, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
 
 export interface ContextualPattern {
@@ -894,7 +895,7 @@ export function detectRegexLiteral(grammar: CstGrammar, tokenNames: Set<string>)
     }
   }
 
-  return { flagsPattern, preceedingKeywords, precedingChars, postfixAmbiguousChars, commentSecondChars, blockComments, memberAccessTexts: regexCtx?.memberAccessTexts ?? [] };
+  return { flagsPattern, preceedingKeywords, precedingChars, postfixAmbiguousChars, commentSecondChars, blockComments, memberAccessTexts: highlightFacts(grammar).memberAccessTexts };
 }
 
 // ── Declaration pattern detection ──
@@ -2000,6 +2001,92 @@ const rootOfBody = (g: ArmGraph, body: RuleExpr): number => g.body.indexOf(body)
 
 
 
+/** Per keyword literal of the rules: what may directly follow it where it is the keyword (the
+ *  literal FIRST and the token FIRST of each next item of its arms, through zero-width
+ *  assertions), or null when that is open: it may end an arm (what follows is its rule's context),
+ *  a next item may be empty, or it is also a precedence operator. A word followed by something
+ *  outside a closed set is not that keyword there: it is a name (`set:`, `const from = 1`,
+ *  `(of, x)`, `else?: T`). */
+export function keywordFollowers(grammar: CstGrammar): Map<string, { literals: Set<string>; tokens: Set<string> } | null> {
+  const g = armGraph(grammar);
+  const byName = new Map(grammar.rules.map(r => [r.name, r.body] as const));
+  const { tokenNames } = highlightFacts(grammar);
+  const precOps = new Set(grammar.precs.flatMap(l => l.operators.map(o => o.value)));
+  const zeroWidth = (e: RuleExpr) => ['sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'target', 'not'].includes(e.type);
+  // the token references that may begin an expression (refs followed at start positions only)
+  const firstTokens = (e: RuleExpr, out: Set<string>, seen = new Set<string>()): void => {
+    switch (e.type) {
+      case 'ref':
+        if (tokenNames.has(e.name)) out.add(e.name);
+        else if (!seen.has(e.name) && byName.has(e.name)) { seen.add(e.name); firstTokens(byName.get(e.name)!, out, seen); }
+        break;
+      case 'alt': for (const i of e.items) firstTokens(i, out, seen); break;
+      case 'seq': for (const i of e.items) { firstTokens(i, out, seen); if (!ruleIsNullable(i, byName)) break; } break;
+      case 'quantifier': case 'group': firstTokens(e.body, out, seen); break;
+      case 'sep': firstTokens(e.element, out, seen); break;
+    }
+  };
+  // A word right after a member-access text (`import.source`, `new.target`) is a name there (the
+  // member rule reads it), not the keyword: such an occurrence says nothing about what follows
+  // the keyword.
+  const member = new Set(highlightFacts(grammar).memberAccessTexts);
+  const preds: number[][] = g.node.map(() => []);
+  g.follow.forEach((ns, q) => { for (const n of ns) preds[n].push(q); });
+  const atStart = new Set(g.first.flat());
+  const afterMember = (p: number) => !atStart.has(p) && preds[p].length > 0
+    && preds[p].every(q => { const x = g.node[q]; return x.type === 'literal' && member.has(x.value); });
+  const out = new Map<string, { literals: Set<string>; tokens: Set<string> } | null>();
+  for (let p = 0; p < g.node.length; p++) {
+    const e = g.node[p];
+    if (e.type !== 'literal' || !isKeywordLiteral(e.value)) continue;
+    const k = e.value;
+    if (out.get(k) === null) continue;
+    if (afterMember(p)) { if (!out.has(k)) out.set(k, { literals: new Set(), tokens: new Set() }); continue; }
+    if (precOps.has(k)) { out.set(k, null); continue; }
+    const f = out.get(k) ?? { literals: new Set<string>(), tokens: new Set<string>() };
+    let open = false;
+    const seen = new Set<number>();
+    const visit = (q: number) => {
+      if (open || seen.has(q)) return;
+      seen.add(q);
+      if (g.isLast[q]) { open = true; return; }
+      for (const n of g.follow[q]) {
+        const x = g.node[n];
+        if (zeroWidth(x)) { visit(n); continue; }
+        if (ruleIsNullable(x, byName)) { open = true; return; }
+        for (const l of firstLiterals(x, byName)) f.literals.add(l);
+        firstTokens(x, f.tokens);
+      }
+    };
+    visit(p);
+    out.set(k, open ? null : f);
+  }
+  return out;
+}
+
+/** keywordFollowers as the highlighters test it: the keywords with a closed follower set, grouped
+ *  by `followers` (the set's symbolic literals, longest first) and `starts` (the characters that
+ *  begin a symbolic literal of the grammar, rule literal or precedence operator, and no token that
+ *  may follow). A word of a group followed by a character of `starts` where no follower begins is
+ *  a name. */
+export function keywordNameGroups(grammar: CstGrammar): { words: string[]; followers: string[]; starts: string[] }[] {
+  const longestFirst = (xs: Iterable<string>) => [...new Set(xs)].sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
+  const literals = [...grammar.rules.flatMap(r => [...collectLiterals(r.body)]), ...grammar.precs.flatMap(l => l.operators.map(o => o.value))].filter(l => !isKeywordLiteral(l));
+  const litStarts = [...new Set(literals.map(l => l[0]))].sort();
+  const tokenFirst = new Map(grammar.tokens.map(t => [t.name, patternInfo(t.pattern).first] as const));
+  const inSet = (set: CSet, c: string) => { const u = c.charCodeAt(0); return set.some(([lo, hi]) => lo <= u && u <= hi); };
+  const byKey = new Map<string, { words: string[]; followers: string[]; starts: string[] }>();
+  for (const [word, f] of highlightFacts(grammar).keywordFollowers) {
+    if (!f) continue;
+    const followers = longestFirst([...f.literals].filter(l => !isKeywordLiteral(l)));
+    const starts = litStarts.filter(c => ![...f.tokens].some(t => inSet(tokenFirst.get(t) ?? [], c)));
+    if (!starts.length) continue;
+    const key = `${followers.join('\0')}\u0001${starts.join('')}`;
+    (byKey.get(key) ?? byKey.set(key, { words: [], followers, starts }).get(key)!).words.push(word);
+  }
+  return [...byKey.values()];
+}
+
 // ── The facts object ──
 
 // One entry per fact: how it is computed from the grammar. A fact that needs another reads it
@@ -2016,6 +2103,9 @@ const FACTS = {
   identToken: (g: CstGrammar): TokenDecl | undefined => g.tokens.find(t => t.identifier)
     ?? g.tokens.find(t => classifyToken(t, { explicitScope: false }).scope === 'variable.other'
       && classifyToken(t).scope === 'variable.other'),
+  /** The member-access texts (`.`, `?.`: the lexer's `regexContext.memberAccessTexts`): a word
+   *  right after one is a property name, never a keyword (the lexer's LX_MEMBER rule). */
+  memberAccessTexts: (g: CstGrammar): string[] => g.tokens.find(t => t.regexContext)?.regexContext?.memberAccessTexts ?? [],
   /** The `@regex` token's name, if any. */
   regexTokenName: (g: CstGrammar) => g.tokens.find(t => t.flags.includes('regex'))?.name,
   contextualOperatorKeywords: (g: CstGrammar) => findContextualOperatorKeywords(g),
@@ -2065,6 +2155,8 @@ const FACTS = {
   defaultBindImportKeywords: (g: CstGrammar) => defaultBindImportKeywords(g),
   lexedByToken: (g: CstGrammar) => lexedByToken(g),
   alwaysBeforeString: (g: CstGrammar) => alwaysBeforeString(g),
+  keywordFollowers: (g: CstGrammar) => keywordFollowers(g),
+  keywordNameGroups: (g: CstGrammar) => keywordNameGroups(g),
 };
 
 export type HighlightFacts = { readonly [K in keyof typeof FACTS]: ReturnType<(typeof FACTS)[K]> };

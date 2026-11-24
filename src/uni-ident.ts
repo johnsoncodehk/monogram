@@ -151,6 +151,24 @@ export function uniIdentPlan(c: IdentifierClasses = ECMASCRIPT_IDENTIFIER): UniI
   return plan;
 }
 
+/**
+ * The code points of one class (`c.start` or `c.continue`, a RegExp source) as sorted inclusive
+ * ranges, derived by Node's Unicode like uniIdentPlan: for a target whose regular expressions take
+ * ranges but whose Unicode tables are its own (tree-sitter's), so it follows the interpreter's
+ * Unicode, not another version. `from` drops the code points below it (0x80: beyond ASCII).
+ */
+export function uniClassRanges(cls: string, from = 0): [number, number][] {
+  const re = new RegExp(`^${cls}$`, 'u');
+  const out: [number, number][] = [];
+  let lo = -1;
+  for (let cp = from; cp <= 0x110000; cp++) {
+    const ok = cp < 0x110000 && !(cp >= 0xd800 && cp < 0xe000) && re.test(String.fromCodePoint(cp));
+    if (ok && lo < 0) lo = cp;
+    else if (!ok && lo >= 0) { out.push([lo, cp - 1]); lo = -1; }
+  }
+  return out;
+}
+
 const entryWidth = (count: number): 1 | 2 => {
   if (count > 1 << 12) throw new Error(`uni-ident: ${count} ids need more than two symbols`);
   return count > 1 << 6 ? 2 : 1;

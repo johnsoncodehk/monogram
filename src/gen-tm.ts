@@ -1,3 +1,4 @@
+import { identifierClassesOf } from './uni-ident.ts';
 import type { CstGrammar, RuleExpr, InjectClause, TokenDecl } from './types.ts';
 import { collectLiterals, escapeRegex, isKeywordLiteral } from './grammar-utils.ts';
 import { analyzeGrammar, directivesOf } from './grammar-analysis.ts';
@@ -187,10 +188,21 @@ function identExtraClass(token: TokenDecl | undefined): string {
   return token ? [...tokenPatternIdentifierExtraChars(token)].map(escapeForCharClass).join('') : '';
 }
 
-// Unicode identifier classes (the same set the parser's lexer accepts for non-ASCII
-// identifiers): `\p{L}\p{Nl}` start, plus `\p{Nd}\p{Mn}\p{Mc}\p{Pc}` continue.
-const UNICODE_ID_START = '\\p{L}\\p{Nl}';
-const UNICODE_ID_CONTINUE = '\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}';
+// Unicode identifier classes, as Oniguruma class CONTENTS (start; continue): the lexer's own
+// (uni-ident.ts identifierClassesOf: the identifier token's declared classes, else ECMAScript's
+// ID_Start / ID_Continue with `$`, `_`, ZWNJ, ZWJ) when the grammar declares an identifier token.
+// A grammar without one has no Unicode identifier in its lexer; its name tokens are widened by the
+// older letter classes (`\p{L}\p{Nl}`, `+ \p{Nd}\p{Mn}\p{Mc}\p{Pc}`), a TextMate convention.
+function unicodeIdentClasses(grammar: CstGrammar): { start: string; cont: string } {
+  if (!grammar.tokens.some(t => t.identifier)) return { start: '\\p{L}\\p{Nl}', cont: '\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}' };
+  const c = identifierClassesOf(grammar.tokens);
+  const inner = (cls: string) => {
+    const m = /^\[([^\]]*)\]$/.exec(cls);
+    if (!m || m[1].startsWith('^')) throw new Error(`identifier class ${cls}: TextMate widens a name class by the contents of one positive class`);
+    return m[1];
+  };
+  return { start: inner(c.start), cont: inner(c.continue) };
+}
 
 /**
  * Widen an ASCII-only identifier regex so the emitted TextMate (Oniguruma) pattern
@@ -207,10 +219,11 @@ const UNICODE_ID_CONTINUE = '\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}';
  * ONLY the TextMate emitter, never the lexer (which compiles the original ASCII token
  * pattern). If no identifier class is found, the pattern is returned unchanged.
  */
-function unicodeWidenIdentPattern(identRegex: string): string {
+function unicodeWidenIdentPattern(identRegex: string, grammar: CstGrammar): string {
+  const uni = unicodeIdentClasses(grammar);
   return identRegex.replace(/\[[^\]]*\]/g, cls => {
     if (!/[_$]/.test(cls)) return cls;                   // not an identifier class (e.g. hex) — leave alone
-    const add = /0-9/.test(cls) ? UNICODE_ID_CONTINUE : UNICODE_ID_START;
+    const add = /0-9/.test(cls) ? uni.cont : uni.start;
     return cls.slice(0, -1) + add + ']';                 // insert before the closing `]`
   });
 }
@@ -441,7 +454,14 @@ function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: s
  * identifier, so it never matches either. With `entry: 'always'` (a `tagOpen` only ever opens a
  * tag) there is no lookbehind.
  */
-function generateElementPatterns(langName: string, identRegex: string, view: RegionView, grammar: CstGrammar, disambig: JsxDisambigDelims | null, commentKeys: string[] = [], blockCommentPats: string[] = []): Record<string, TmPattern> {
+// The literals of each scope (a scope's literals in the `scopes` section's order).
+function byScopeLiterals(overrides: Map<string, string[]>): Map<string, string[]> {
+  const byScope = new Map<string, string[]>();
+  for (const [lit, scopes] of overrides) for (const s of scopes) (byScope.get(s) ?? byScope.set(s, []).get(s)!).push(lit);
+  return byScope;
+}
+
+function generateElementPatterns(langName: string, identRegex: string, view: RegionView, grammar: CstGrammar, disambig: JsxDisambigDelims | null, commentKeys: string[] = [], blockCommentPats: string[] = [], holeBraces: { include: string }[] = []): Record<string, TmPattern> {
   const result: Record<string, TmPattern> = {};
   const K = (s: string) => `${view.name}-${s}`;
   const region = view.region;
@@ -579,7 +599,7 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
   // lexer's LX_MEMBER rule, as for keywords): after `.` / `?.` the same word is a property name,
   // a value, so `x.new <b> c` is no element. Oniguruma's lookbehind takes alternatives of
   // different lengths only at its top level, so each (accessor, word) pair is an alternative.
-  const members: string[] = grammar.tokens.find(t => t.regexContext)?.regexContext?.memberAccessTexts ?? [];
+  const members: string[] = highlightFacts(grammar).memberAccessTexts;
   const afterWords = oe ? oe.after.filter(t => /^\w/.test(t)) : [];
   const exprBehind = !oe ? '' : `${oe.notAfter.length ? `(?<!${oe.notAfter.map(escapeRegex).join('|')})` : ''}` + (members.length && afterWords.length
     ? `(?:(?<=${[...oe.after.filter(t => !/^\w/.test(t)).map(wordText), '^'].join('|')})|(?<=${afterWords.map(wordText).join('|')})(?<!${afterWords.flatMap(w => members.map(m => escapeRegex(m + w))).join('|')}))`
@@ -742,7 +762,7 @@ function generateElementPatterns(langName: string, identRegex: string, view: Reg
     beginCaptures: { '0': { name: embeddedBegin } },
     end: escapeRegex(region.hole.close),
     endCaptures: { '0': { name: embeddedEnd } },
-    patterns: [{ include: '$self' }],
+    patterns: [...holeBraces, { include: '$self' }],
   };
 
   // ── <name>-string-*: the tag tokens' quoted forms (own scope, no escapes / interpolation) ──
@@ -1084,7 +1104,7 @@ function generateAngleBracketPatterns(
   // discrimination identical to the recursive form (verified), only the depth cap is gone.
   const idExtra = identExtraClass(identToken);
   const sepClass = escapeForCharClass(ambiguity.separator);
-  const typeArgScanClass = `[\\w${idExtra}${UNICODE_ID_CONTINUE}<>${sepClass}\\s]`;
+  const typeArgScanClass = `[\\w${idExtra}${unicodeIdentClasses(grammar).cont}<>${sepClass}\\s]`;
   const typeArgConfirm = `${typeArgScanClass}*>`;
 
   // Lookbehind: generic '<' must follow identifier / ] / )
@@ -1948,7 +1968,7 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
 
   // Tag / attribute name pattern = the grammar's identifier token (widened for Unicode).
   const identTok = grammar.tokens.find(t => t.identifier);
-  const namePat = identTok ? unicodeWidenIdentPattern(tokenPatternSource(identTok)) : '[a-zA-Z][\\w:.-]*';
+  const namePat = identTok ? unicodeWidenIdentPattern(tokenPatternSource(identTok), grammar) : '[a-zA-Z][\\w:.-]*';
 
   // Punctuation scope for the tag delimiters is declared in the grammar (`<`,`>`,`/` →
   // punctuation.definition.tag); begin/end leaves follow the TextMate convention.
@@ -2657,7 +2677,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
   // Widen the identifier pattern so non-ASCII names (`Ω`, Cyrillic `А`) are scoped,
   // matching the parser lexer's Unicode fallback. This widened form is used only in
   // TextMate (Oniguruma) output, never by the lexer.
-  const identPattern = identToken ? unicodeWidenIdentPattern(tokenPatternSource(identToken)) : '[a-zA-Z_]\\w*';
+  const identPattern = identToken ? unicodeWidenIdentPattern(tokenPatternSource(identToken), grammar) : '[a-zA-Z_]\\w*';
 
   // Contextual operator keywords (e.g. `as`/`keyof`/`is`/`satisfies`/`infer`):
   // keyword.operator.expression words that double as identifiers, so they are a
@@ -2751,10 +2771,34 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
   // they get no flat token match in Section 2: the element patterns scope them.
   const regionOwnedTokens = view?.ownTokens ?? new Set<string>();
   const elementTriggerKeys = new Map<string, number>();
+  // A code hole (a template literal's interpolation, an element region's hole) ends at its closer
+  // at bracket depth 0: an object literal or block inside it (`${f({ a: 1 })}`, `${xs.map(x => {
+  // … })}`) must not end it at its own `}`. The bracket pair whose close is the hole's closer (a
+  // `punctuation.bracket.*` scope naming exactly two literals, the pairs Monarch's `brackets`
+  // read) becomes a region nested in itself, listed before `$self`; no pair, no region.
+  const holeBraceKeys = new Map<string, string>();
+  const holeBraces = (close: string): { include: string }[] => {
+    let key = holeBraceKeys.get(close);
+    if (!key) {
+      const pair = [...byScopeLiterals(scopeOverrides)].find(([sc, lits]) => sc.startsWith('punctuation.bracket.') && lits.length === 2 && lits[1] === close);
+      if (!pair) return [];
+      const [scope, [open]] = pair;
+      key = `hole-brackets${holeBraceKeys.size ? `-${holeBraceKeys.size + 1}` : ''}`;
+      holeBraceKeys.set(close, key);
+      repository[key] = {
+        begin: escapeRegex(open),
+        beginCaptures: { '0': { name: `${scope}.${langName}` } },
+        end: escapeRegex(close),
+        endCaptures: { '0': { name: `${scope}.${langName}` } },
+        patterns: [{ include: `#${key}` }, { include: '$self' }],
+      };
+    }
+    return [{ include: `#${key}` }];
+  };
   if (view) {
     // The grammar's comment repo keys (derived, not hardcoded) so a `//` / `/* */`
     // comment is recognised inside an open tag — legal between attributes (#585).
-    const elPatterns = generateElementPatterns(langName, identPattern, view, grammar, angleDisambig, facts.commentRepoKeys, facts.blockCommentMatchers);
+    const elPatterns = generateElementPatterns(langName, identPattern, view, grammar, angleDisambig, facts.commentRepoKeys, facts.blockCommentMatchers, holeBraces(view.region.hole.close));
     for (const [key, pattern] of Object.entries(elPatterns)) repository[key] = pattern;
     // The disambiguated, expression-position triggers go at the very top (before
     // #generic-call / #comparison): a `<` at expression-start with a tag-shaped
@@ -2843,7 +2887,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
           end: escapeRegex(tok.template.interpClose),
           endCaptures: { '0': { name: `punctuation.definition.template-expression.end.${langName}` } },
           name: `meta.embedded.expression.${langName}`,
-          patterns: [{ include: '$self' }],
+          patterns: [...holeBraces(tok.template.interpClose), { include: '$self' }],
         });
       }
       repository[key] = {
@@ -3135,8 +3179,9 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
         // scalar that resolves to a constant) becomes a multi-scope TM name — each part namespaced
         // with `langName` independently. No-op for the common single-scope case.
         name: emittedScope.split(' ').map(s => `${s}.${langName}`).join(' '),
-        // The bare-identifier rule must scope non-ASCII names too (`Ω`, Cyrillic `А`).
-        match: tok === identToken ? identPattern : tokenPatternSource(tok),
+        // The bare-identifier rule must scope non-ASCII names too (`Ω`, Cyrillic `А`), and so must a
+        // prefixed identifier (`#℘`: `identifierPrefix`, whose name the lexer reads as the identifier).
+        match: tok === identToken ? identPattern : tok.identifierPrefix ? unicodeWidenIdentPattern(tokenPatternSource(tok), grammar) : tokenPatternSource(tok),
       };
       topPatterns.push({ include: `#${key}` });
       // Numeric-literal tokens (decimal/hex/octal/binary/bigint) land here — record
@@ -3523,7 +3568,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       const kvSepIsValuePos = !!vps?.some(v => v.source === 'keyValueSeparator');
       const keyScope = facts.explicitKey?.keyScope;
       const blockKeyTok = grammar.tokens.find(t => t.scope === keyScope && !t.string && t.blockPattern && tokenPatternPrefixBeforeTrailingLookahead(t));
-      const keyBlockMatch = blockKeyTok ? unicodeWidenIdentPattern(tokenBlockPatternSource(blockKeyTok)!) : undefined;
+      const keyBlockMatch = blockKeyTok ? unicodeWidenIdentPattern(tokenBlockPatternSource(blockKeyTok)!, grammar) : undefined;
       const keyColonGuard = (kvSepIsValuePos && keyBlockMatch) ? `(?!${keyBlockMatch})` : '';
       // Value-position lookahead: after the node indent is stripped, the line must carry an INLINE
       // BLOCK plain value — either `<key>: <plain>` (mapping value) or a `-`/`?` indicator + `<plain>`
@@ -4309,6 +4354,20 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
 
   if (hasTypeAnnotations) repository['type-inner'] = { patterns: typeInnerPats };
 
+  // A return-type region ends before the body's `{`, but a `{` where a type OPERAND begins (right
+  // after the annotation's `:` or a union / intersection operator) opens an object type:
+  // `f(): { a: number } { … }`. Without this the object type was read as the body and the body as
+  // a class member (every statement of it a method). A zero-width region entered at that position,
+  // before the end's lookahead can fire on the `{`, holds the object type.
+  const returnTypePatterns: (TmPattern | { include: string })[] = [
+    ...repository['type-object-type'] ? [{
+      begin: `(?<=[${[':', ...typeUnionOps].map(escapeForCharClass).join('')}])(?=\\s*\\{)`,
+      end: '(?<=\\})',
+      patterns: [{ include: '#type-object-type' }],
+    }] : [],
+    { include: '#type-inner' },
+  ];
+
   // Wire up deferred type-paren pattern (basic wiring; patched after type injections)
   if (repository['type-paren']) {
     repository['type-paren'].patterns = [{ include: '#type-inner' }];
@@ -4577,7 +4636,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
             '1': { name: `keyword.operator.type.annotation.${langName}` },
           },
           end: '(?=[{;]|=>)',
-          patterns: [{ include: '#type-inner' }],
+          patterns: returnTypePatterns,
         };
       }
 
@@ -5424,7 +5483,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       kw,
       kwScope: `${kwScope}.${langName}`,
       wordEnd: true,
-      notAfter: grammar.tokens.find(t => t.regexContext)?.regexContext?.memberAccessTexts ?? [],
+      notAfter: facts.memberAccessTexts,
       end: ctorEnd,
       patterns: [
         ...(calleeRegex ? [{ include: '#regex-literal' }] : []),
@@ -5497,6 +5556,37 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
         },
       };
       topPatterns.push({ include: '#property-access' });
+    }
+
+    // A word after any other member-access text (`?.`: highlight-facts' memberAccessTexts, the
+    // lexer's LX_MEMBER rule) is a name, never a keyword (`a?.type`, `m?.get(k)`): scoped as the
+    // name it is everywhere else after `?.` (a call's callee as a function, else a plain
+    // variable), the contract the note below keeps.
+    const otherMembers = facts.memberAccessTexts.filter(t => t !== '.' && allLiterals.has(t));
+    if (otherMembers.length) {
+      const accScope = (t: string) => { const sc = getScope(scopeOverrides, t) ?? `punctuation.accessor.${langName}`; return sc.includes(langName) ? sc : `${sc}.${langName}`; };
+      repository['optional-property-access'] = {
+        patterns: otherMembers.flatMap(t => [
+          { match: `${propLookbehind}(${escapeRegex(t)})\\s*(${identPattern})(?=\\s*\\()`, captures: { '1': { name: accScope(t) }, '2': { name: `entity.name.function.${langName}` } } },
+          { match: `${propLookbehind}(${escapeRegex(t)})\\s*(${identPattern})`, captures: { '1': { name: accScope(t) }, '2': { name: `variable.other.readwrite.${langName}` } } },
+        ]),
+      };
+      topPatterns.push({ include: '#optional-property-access' });
+    }
+
+    // A keyword word where the keyword cannot stand is a name (highlight-facts' keywordNameGroups,
+    // the same fact Monarch reads): followed by a literal that none of its closed follower set
+    // begins (`{ type: … }`, `return out;`, `set('k', v)`, `const from = 1`). Scoped as the name it
+    // is (a callee as a function, else a plain variable); ranked before every keyword group.
+    const kwNames = facts.keywordNameGroups;
+    const kwNamePats: TmPattern[] = kwNames.flatMap(({ words, followers, starts }) => {
+      const f = followers.map(escapeRegex).join('|');
+      const base = `${keywordAlternation(words)}${f ? `(?!\\s*(?:${f}))` : ''}(?=\\s*[${starts.map(escapeForCharClass).join('')}])`;
+      return [{ match: `${base}(?=\\s*\\()`, name: `entity.name.function.${langName}` }, { match: base, name: `variable.other.readwrite.${langName}` }];
+    });
+    if (kwNamePats.length) {
+      repository['keyword-as-name'] = { patterns: kwNamePats };
+      topPatterns.push({ include: '#keyword-as-name' });
     }
 
     // NOTE: no dedicated optional-chain ('?.') mint. The detector's direct-ref shape
@@ -5723,7 +5813,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
           '1': { name: `keyword.operator.type.annotation.${langName}` },
         },
         end: '(?=[{;]|=>)',
-        patterns: [{ include: '#type-inner' }],
+        patterns: returnTypePatterns,
       };
       topPatterns.push({ include: '#type-annotation-return' });
     }
@@ -6385,6 +6475,8 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
     // for the contextual-keyword-as-binding case; leftmost-match handles the region
     // one token to the right, this rank wins the position-0 tie.
     if (key === 'import-default-binding') return 2;
+    // A keyword word that is a name there (keyword-as-name) beats every keyword group (3 and up).
+    if (key === 'keyword-as-name') return 2.5;
     if (scope.includes('constant.numeric')) return 3; // stable sort preserves DSL token order
     if (scope.includes('keyword.operator') && key.startsWith('scope-')) return 4;
     if (scope.includes('keyword.control')) return 5;

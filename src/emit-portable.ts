@@ -660,6 +660,9 @@ export type ParserIR = {
   /** The tokens that can begin a top-level entry of a reuse plan A (FIRST over concrete symbols of
    *  its rules), where total parsing's fallback resumes; null: none known. */
   entrySync: FirstSig;
+  /** The display names of rules that declare one (RuleDecl.label), by rule name: what a missing
+   *  rule's `expected …` diagnostic names (total parsing); a rule without one is named by its name. */
+  ruleLabels: Record<string, string>;
   suppressSets: string[][];    // the connector sets `suppress` steps disable, indexed by Step.set; [0] is the empty set
   regexCtx: RegexCtx | null;   // null unless the grammar has a regex token with context
   tpl: TplCfg | null;          // null unless the grammar has a template token
@@ -1512,7 +1515,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
     const f = new Set(reuse.rules.flatMap((r) => [...concrete.first1({ type: 'ref', name: r })]));
     entrySync = { lits: [...f].filter((x) => !x.startsWith(KIND)), toks: [...f].filter((x) => x.startsWith(KIND)).map((x) => x.slice(KIND.length)) };
   }
-  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse, entrySync, suppressSets, regexCtx, tpl, elements, newlineCfg, identToken, identLike, identPrefix, identClasses: identifierClassesOf(grammar.tokens), ...(targets ? { targets } : {}) };
+  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse, entrySync, ruleLabels: Object.fromEntries(grammar.rules.flatMap((r) => (r.label === undefined ? [] : [[r.name, r.label]]))), suppressSets, regexCtx, tpl, elements, newlineCfg, identToken, identLike, identPrefix, identClasses: identifierClassesOf(grammar.tokens), ...(targets ? { targets } : {}) };
 }
 
 // The step lists a rule runs: an rd rule's alternatives, a Pratt rule's NUD and LED arms.
@@ -2659,7 +2662,13 @@ export function rebindBrackets(ids: LexIdPlan): { opens: number[]; closes: numbe
  *  token's lid as its index. */
 export type PrattOpTables = {
   size: number;
-  bin: Array<{ lid: number; lbp: number; rbp: number; tgt: boolean; noUnary: boolean; ctx?: number; acc?: number }>;   // ctx: targetOps' pass bit; acc: the pass bits the node takes from its left operand (both only in a grammar with target contexts)
+  // left: in a grammar with target contexts, an operator whose left operand's form is read (ctx:
+  // targetOps' pass bit, which the left must have; acc: the pass bits the node takes from it).
+  // Decided per operator here, at generation time: an operator without `left` tests no form
+  // beyond tgt / noUnary and its node's form is a constant, so the printers' tables keep their
+  // four columns and the LED loop reads `left` only behind the table's one test bit
+  // (binTestsLeft), through a switch on the few operators that have it (binLeftOps).
+  bin: Array<{ lid: number; lbp: number; rbp: number; tgt: boolean; noUnary: boolean; left?: { ctx: number; acc: number } }>;
   pre: Array<{ lid: number; rbp: number; tgt: boolean; form: number }>;
   post: Array<{ lid: number; lbp: number; tgt: boolean }>;
 };
@@ -2676,10 +2685,24 @@ export function prattOpTables(r: PrattRule, plan: LexIdPlan): PrattOpTables {
   };
   return {
     size: plan.lids.length,
-    bin: keyed('binary', r.binary, (b, lid) => ({ lid, lbp: b.lbp, rbp: b.rbp, tgt: b.requireTarget, noUnary: b.noUnaryLhs, ...(r.binForm ? { ctx: b.needCtx ?? 0, acc: b.accLeft ?? 0 } : {}) })),
+    bin: keyed('binary', r.binary, (b, lid) => ({ lid, lbp: b.lbp, rbp: b.rbp, tgt: b.requireTarget, noUnary: b.noUnaryLhs, ...(r.binForm && (b.needCtx || b.accLeft) ? { left: { ctx: b.needCtx ?? 0, acc: b.accLeft ?? 0 } } : {}) })),
     pre: keyed('prefix', r.prefix, (p, lid) => ({ lid, rbp: p.rbp, tgt: p.requireTarget, form: p.form | (r.preLeaf ?? 0) })),
     post: keyed('postfix', r.postfix, (p, lid) => ({ lid, lbp: p.lbp, tgt: p.requireTarget })),
   };
+}
+
+/** The table's test bit of a binary operator: its left operand's form is read (requireTarget, or a
+ *  declared target context's `left`); an operator without it reads nothing more. */
+export const binTestsLeft = (b: PrattOpTables['bin'][number]): boolean => b.tgt || b.left !== undefined;
+/** The operators whose left operand a target context reads (PrattOpTables bin `left`), for the
+ *  printers' switch behind the test bit; an operator of the switch is never also requireTarget
+ *  (targetOps and lhsTarget are exclusive: api.ts). */
+export function binLeftOps(ops: PrattOpTables): Array<{ lid: number; ctx: number; acc: number }> {
+  return ops.bin.flatMap((b) => {
+    if (b.left === undefined) return [];
+    if (b.tgt) throw new Error(`portable: operator lid ${b.lid} both requires a target and is read by a target context`);
+    return [{ lid: b.lid, ...b.left }];
+  });
 }
 
 /** The LED loop's exits: the literal ids of a Pratt rule's led groups (its leds by first literal)

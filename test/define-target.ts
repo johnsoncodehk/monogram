@@ -325,7 +325,7 @@ for (const path of FIXTURES) {
   const grammar = (await import(path)).default;
   const ir = irOf(grammar);
   const lex = lexScanFamily(ir);
-  const fns = [...lex.fns, ...relexFamilyFns(relexMode(ir)), ...reuseFamilyFns(ir), ...recoveryFamilyFns(hasRebind(ir), buildLexIdPlan(ir), hasCappedSeq(ir), hasUnaryNud(ir)).filter((f) => f.name !== 'rbBracket'), UNPACK_INTS];
+  const fns = [...lex.fns, ...relexFamilyFns(relexMode(ir)), ...reuseFamilyFns(ir), ...recoveryFamilyFns(hasRebind(ir), buildLexIdPlan(ir), hasCappedSeq(ir), [], hasUnaryNud(ir)).filter((f) => f.name !== 'rbBracket'), UNPACK_INTS];
   const out = target.emitParser(grammar);
   const code = out.split('\n').filter((l) => !/^\s*;;/.test(l)).join('\n').replace(/"(?:[^"\\]|\\.)*"/g, '""');
   const bad = code.match(C_SURFACE);
