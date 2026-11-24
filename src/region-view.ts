@@ -263,7 +263,7 @@ function closingText(p: TokenPattern): string | null {
  *   - `after`: the texts after which an operand may start: every non-word literal of the rules and
  *     operator tables that is not a value text (`divisionAfterTexts`), and the expression-head
  *     keywords (`regexAfterTexts`);
- *   - `notAfter`: value texts that end with one of `after` (`++` ends with `+`), and the closing
+ *   - `notAfter`: value and postfix-after-value texts that end with one of `after` (`++` ends with `+`), and the closing
  *     text of a skip token whose last unit is one of `after`'s (a block comment's `*` `/`);
  *   - `dropped`: what the complement holds that a test of the text before the `tagOpen` cannot
  *     tell from a value, each with its reason: a text that is postfix after a value and prefix
@@ -302,7 +302,9 @@ export function operandEntry(grammar: CstGrammar): OperandEntry | null {
     after.push(l);
   }
   for (const w of rc.regexAfterTexts) if (!after.includes(w)) after.push(w);
-  for (const v of values) if (!isWord(v) && after.some((a) => v.length > a.length && v.endsWith(a)) && !notAfter.includes(v)) notAfter.push(v);
+  // a postfix-or-prefix text that ends with one of `after` (`++` after a value) is a value text as often as not:
+  // an element must not open after it either (`i++ <n`)
+  for (const v of [...values, ...postfix]) if (!isWord(v) && after.some((a) => v.length > a.length && v.endsWith(a)) && !notAfter.includes(v)) notAfter.push(v);
   for (const t of skipTokens) {
     const ends = after.filter((a) => !isWord(a) && canEndWith(t.pattern, a[a.length - 1]));
     if (!ends.length) continue;
